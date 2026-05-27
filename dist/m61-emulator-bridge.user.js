@@ -720,6 +720,17 @@ var M61EmulatorBundle = (() => {
   }
 
   // src/core/parser.ts
+  var V2_RESERVED_RULE_NAMES = /* @__PURE__ */ new Set([
+    "challenge",
+    "else",
+    "if",
+    "match",
+    "move",
+    "otherwise",
+    "read",
+    "show",
+    "stop"
+  ]);
   var ParseError = class extends Error {
     line;
     constructor(message, line) {
@@ -1019,6 +1030,9 @@ var M61EmulatorBundle = (() => {
       const header = this.next();
       const match = /^rule\s+([A-Za-z_][\w]*)(?:\s+(.+?))?\s*\{$/u.exec(text);
       if (!match) throw new ParseError("Rule must look like 'rule name {' or 'rule name arg {'", header.line);
+      if (V2_RESERVED_RULE_NAMES.has(match[1])) {
+        throw new ParseError(`Rule name '${match[1]}' is reserved`, header.line);
+      }
       const params = match[2] ? parseIdentifierList(match[2]) : [];
       for (const param of params) {
         if (!/^[A-Za-z_][\w]*$/u.test(param)) {
@@ -1289,7 +1303,7 @@ var M61EmulatorBundle = (() => {
     if (text.startsWith("stop ")) {
       return { kind: "v2_stop", value: text.slice("stop ".length).trim(), line };
     }
-    const move = /^move\s+([A-Za-z_][\w]*)(?:\s+(north|south|east|west|up|down)|\s+by\s+(.+?))$/u.exec(text);
+    const move = /^move\s+([A-Za-z_][\w]*)\s+(north|south|east|west|up|down)$/u.exec(text);
     if (move) {
       const statement = {
         kind: "v2_move",
@@ -1297,8 +1311,10 @@ var M61EmulatorBundle = (() => {
         line
       };
       if (move[2] !== void 0) statement.direction = parseV2MoveDirection(move[2], line);
-      if (move[3] !== void 0) statement.expr = move[3].trim();
       return statement;
+    }
+    if (text.startsWith("move ")) {
+      throw new ParseError("Move must look like 'move pos north'. Use 'pos += expr' for computed movement", line);
     }
     const step = /^([A-Za-z_][\w]*)\s*(\+\+|--)$/u.exec(text);
     if (step) {
@@ -1987,7 +2003,7 @@ var M61EmulatorBundle = (() => {
     ];
   }
   function lowerV2Move(statement, context) {
-    const delta = statement.expr ?? namedMoveDelta(statement.target, statement.direction, statement.line, context);
+    const delta = namedMoveDelta(statement.target, statement.direction, statement.line, context);
     const move = {
       kind: "assign",
       target: statement.target,
@@ -2002,7 +2018,7 @@ var M61EmulatorBundle = (() => {
     return [move];
   }
   function namedMoveDelta(target, direction, line, context) {
-    if (direction === void 0) throw new ParseError("Move must specify a direction or 'by expr'", line);
+    if (direction === void 0) throw new ParseError("Move must specify a direction", line);
     return context.moveDeltas.get(target)?.[direction] ?? moveDeltasForEncoding(void 0)[direction] ?? "0";
   }
   function parseV2MoveDirection(text, line) {
@@ -2160,11 +2176,8 @@ var M61EmulatorBundle = (() => {
         }
         return substituted;
       }
-      case "v2_move": {
-        const substituted = { ...statement };
-        if (statement.expr !== void 0) substituted.expr = substituteV2Text(statement.expr, replacements);
-        return substituted;
-      }
+      case "v2_move":
+        return statement;
       case "v2_match": {
         const substituted = {
           ...statement,
@@ -5202,9 +5215,6 @@ var M61EmulatorBundle = (() => {
           }
           visit(statement.successBody);
           if (statement.failureBody) visit(statement.failureBody);
-        }
-        if (statement.kind === "v2_move" && statement.expr !== void 0 && !isSimpleCompilerExpression(statement.expr)) {
-          unsupported.push({ text: `move ${statement.target} by ${statement.expr}`, line: statement.line });
         }
         if (statement.kind === "v2_match") {
           for (const matchCase of statement.cases) visit([matchCase.action]);
