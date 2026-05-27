@@ -58,7 +58,7 @@ contexts:
       scope: invalid.illegal.low-level-hint.m61
 
   top-level-keywords:
-    - match: '^\s*(target|machine|budget|optimize|benchmark|preload|allow)\b'
+    - match: '^\s*(target|machine|budget|optimize|reference|preload|allow)\b'
       scope: keyword.control.toplevel.m61
     - match: '\b(mk61|mk61_exact|steps|cells|hard|size|manual|loader|hex)\b'
       scope: constant.language.m61

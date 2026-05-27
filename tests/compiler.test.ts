@@ -32,14 +32,14 @@ describe("M61 compiler", () => {
     expect(result.report.cellRoles.some((cell) => cell.roles.includes("dark-entry"))).toBe(true);
   });
 
-  it("keeps the full cave benchmark high-level and compiles its semantic domains", () => {
-    const benchmark = source("examples/cave-treasure-full.m61");
+  it("keeps the full cave reference high-level and compiles its semantic domains", () => {
+    const reference = source("examples/cave-treasure-full.m61");
 
-    expect(benchmark).not.toMatch(/\brecipe\b/iu);
-    expect(benchmark).not.toMatch(/\ballow\b/iu);
-    expect(benchmark).not.toMatch(/core\s+exact/iu);
-    expect(benchmark).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
-    const result = compileM61(benchmark);
+    expect(reference).not.toMatch(/\brecipe\b/iu);
+    expect(reference).not.toMatch(/\ballow\b/iu);
+    expect(reference).not.toMatch(/core\s+exact/iu);
+    expect(reference).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
+    const result = compileM61(reference);
 
     expect(result.report.steps).toBe(105);
     expect(result.report.reference?.parity).toBe("equal");
@@ -114,16 +114,16 @@ program SimpleRules {
     expect(result.report.proofs.some((proof) => proof.id === "value-ranges")).toBe(true);
   });
 
-  it("compiles the full cave benchmark through generic semantic lowerers", () => {
-    const benchmark = source("examples/cave-treasure.m61");
+  it("compiles the full cave reference through generic semantic lowerers", () => {
+    const reference = source("examples/cave-treasure.m61");
 
-    expect(benchmark).not.toMatch(/\ballow\b/iu);
-    expect(benchmark).not.toMatch(/core\s+exact/iu);
-    expect(benchmark).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
-    expect(benchmark).toMatch(/fight robber/u);
-    expect(benchmark).toMatch(/cache search/u);
-    expect(benchmark).toMatch(/capital_walls immutable/u);
-    const result = compileM61(benchmark);
+    expect(reference).not.toMatch(/\ballow\b/iu);
+    expect(reference).not.toMatch(/core\s+exact/iu);
+    expect(reference).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
+    expect(reference).toMatch(/world cave: grid/u);
+    expect(reference).toMatch(/generated random/u);
+    expect(reference).toMatch(/terminal at 0 show main/u);
+    const result = compileM61(reference);
     const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
     const features = new Set(result.report.machineFeaturesUsed.map((feature) => feature.id));
 
@@ -156,19 +156,95 @@ program SimpleRules {
     expect(compilerSource).not.toMatch(/cave_treasure/iu);
   });
 
-  it("treats benchmark metadata as report-only, not as codegen input", () => {
-    const benchmark = source("examples/cave-treasure.m61");
-    const renamed = benchmark.replace(/^benchmark .+$/mu, "benchmark renamed_metadata_only");
-    const unbenchmarked = benchmark.replace(/^benchmark .+\n/mu, "");
-    const original = compileM61(benchmark);
+  it("treats reference metadata as report-only, not as codegen input", () => {
+    const reference = source("examples/cave-treasure.m61");
+    const renamed = reference.replace(/^reference .+$/mu, "reference renamed_metadata_only");
+    const unreferenced = reference.replace(/^reference .+\n/mu, "");
+    const original = compileM61(reference);
     const changed = compileM61(renamed);
-    const anonymous = compileM61(unbenchmarked);
+    const anonymous = compileM61(unreferenced);
     const originalHex = original.steps.map((step) => step.hex);
 
     expect(changed.steps.map((step) => step.hex)).toEqual(originalHex);
     expect(anonymous.steps.map((step) => step.hex)).toEqual(originalHex);
     expect(changed.report.reference?.name).toBe("renamed_metadata_only");
-    expect(changed.report.warnings.join("\n")).toMatch(/benchmark metadata did not affect code generation/u);
+    expect(changed.report.warnings.join("\n")).toMatch(/reference metadata did not affect code generation/u);
+  });
+
+  it("keeps the demo-page MK-61 tricks active in the v2 game optimizer", () => {
+    const result = compileM61(source("examples/cave-treasure.m61"));
+    const optimizations = new Set(result.report.optimizations.map((optimization) => optimization.name));
+    const activeCapabilities = new Set(
+      result.report.optimizer.capabilities
+        .filter((capability) => capability.status === "active")
+        .map((capability) => capability.id),
+    );
+    const features = new Set(result.report.machineFeaturesUsed.map((feature) => feature.id));
+    const roleNotes = result.report.cellRoles.map((cell) => cell.note).join("\n");
+    const comments = result.steps.map((step) => step.comment ?? "").join("\n");
+
+    for (const name of [
+      "indirect-register-flow",
+      "constants-dual-use",
+      "cyclic-address-layout",
+      "shared-tail-layout",
+      "code-data-overlay",
+      "x2-display-byte-scheduling",
+      "vp-fraction-restore",
+      "hex-mantissa-arithmetic",
+      "fractional-indirect-addressing",
+      "r0-indirect-counter",
+      "kzn-double",
+      "kor-digit-test",
+      "kmax-zero-through",
+      "return-zero-jump",
+    ]) {
+      expect(optimizations.has(name)).toBe(true);
+    }
+
+    for (const id of [
+      "address-constant-overlay",
+      "cyclic-address-layout",
+      "constants-dual-use",
+      "dark-entry-layout",
+      "super-dark-dispatch",
+      "r0-alias-indirect",
+      "r0-fractional-sentinel",
+      "x2-display-register",
+      "vp-fraction-restore",
+      "hex-mantissa-arithmetic",
+      "fractional-indirect-addressing",
+      "kzn-double",
+      "kor-digit-test",
+      "kmax-zero-through",
+      "return-zero-jump",
+    ]) {
+      expect(activeCapabilities.has(id)).toBe(true);
+    }
+
+    for (const id of [
+      "return-empty-stack-jump",
+      "indirect-flow",
+      "dark-entries",
+      "address-constants",
+      "x2-register",
+      "x2-restore-boundaries",
+      "display-bytes",
+      "r0-fractional-sentinel",
+      "r0-t-alias",
+      "code-data-overlay",
+      "super-dark-dispatch",
+    ]) {
+      expect(features.has(id)).toBe(true);
+    }
+
+    expect(roleNotes).toMatch(/address\/data overlay selected/u);
+    expect(roleNotes).toMatch(/formal\/dark entry participates/u);
+    expect(roleNotes).toMatch(/X2\/display-byte boundary/u);
+    expect(comments).toMatch(/К ЗН as one-cell doubling/u);
+    expect(comments).toMatch(/К∨ digit\/boundary test/u);
+    expect(comments).toMatch(/К max zero-through transform/u);
+    expect(comments).toMatch(/indirect recall truncates fractional address/u);
   });
 
   it("applies the same spatial/resource tactic pipeline to non-cave games", () => {
@@ -252,7 +328,7 @@ program SimpleRules {
     expect(MK61_EXACT_PROFILE.emulatorFacts.find((fact) => fact.id === "r0-star-f-aliases")?.detail).toMatch(/do not preserve R0/u);
   });
 
-  it("safe mode refuses the full cave benchmark and explains required exact-machine lowerings", () => {
+  it("safe mode refuses the full cave reference and explains required exact-machine lowerings", () => {
     expect(() => compileM61(source("examples/cave-treasure.m61"), { opt: "safe" })).toThrow(/mk61_exact tactics/u);
   });
 

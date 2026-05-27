@@ -80,10 +80,8 @@ entry main {
     const ast = parseProgram(`
 target mk61
 preload R9 = random_seed()
-program Demo {
-  turn {
-    stop 0
-  }
+entry main {
+  halt 0
 }
 `);
 
@@ -92,10 +90,8 @@ program Demo {
       parseProgram(`
 target mk61
 preload R9 = random_seed
-program Bad {
-  turn {
-    stop 0
-  }
+entry main {
+  halt 0
 }
 `),
     ).toThrow(/bare name/u);
@@ -103,10 +99,8 @@ program Bad {
       parseProgram(`
 target mk61
 preload R9 = random_seed + 1
-program BadExpr {
-  turn {
-    stop 0
-  }
+entry main {
+  halt 0
 }
 `),
     ).toThrow(/literal or an explicit function call/u);
@@ -151,6 +145,95 @@ program Demo {
     expect(turn?.kind).toBe("loop");
     if (turn?.kind !== "loop") throw new Error("expected turn loop");
     expect(turn.body.some((statement) => statement.kind === "dispatch")).toBe(true);
+  });
+
+  it("parses v2 world, block-configured state, encounters, and reference metadata", () => {
+    const ast = parseProgram(`
+target mk61
+budget 105 cells
+optimize size
+reference demo_reference
+
+program Demo {
+  input key: digit
+  state {
+    [displayed] pos: coord(floor 1..3, x 0..7) = 1
+    [displayed] strength: resource 0..99 = 40 {
+      terminal at 0 show error
+    }
+    score: score 0..9 = 0 {
+      reward skeleton 1
+    }
+    plans: bitset {
+      generated random
+      cleared when creature defeated
+    }
+  }
+  world demo_world: hall {
+    position pos {
+      floors 1..3
+      rooms 0..7
+      display decimal_player
+      start 1
+    }
+    generated random
+    player decimal_point
+    door symbol 8 costs strength 1
+    wall symbol 8 blocks forward costs strength 7
+    vertical wrap 1 -> 2 -> 3 -> 1
+  }
+  screen main {
+    show pos, strength
+    style compact digits
+  }
+  turn {
+    encounter(key)
+  }
+  encounters key {
+    0 empty {
+      show main
+    }
+    3 skeleton {
+      score += 1
+    }
+  }
+}
+`);
+
+    expect(ast.reference).toBe("demo_reference");
+    expect(ast.v2?.worlds[0]?.name).toBe("demo_world");
+    expect(ast.v2?.state.find((field) => field.name === "strength")?.terminal).toMatchObject({ at: "0", show: "error" });
+    expect(ast.v2?.state.find((field) => field.name === "plans")?.clearedWhen).toBe("creature defeated");
+    expect(ast.v2?.encounters[0]?.cases.map((encounterCase) => encounterCase.name)).toEqual(["empty", "skeleton"]);
+    expect(ast.domains.some((domain) => domain.domainKind === "maze" && domain.name === "demo_world")).toBe(true);
+    expect(ast.procs.some((proc) => proc.name === "encounter")).toBe(true);
+  });
+
+  it("rejects old v2 top-level implementation blocks", () => {
+    expect(() =>
+      parseProgram(`
+target mk61
+preload R9 = random_seed()
+program Bad {
+  turn {
+    stop 0
+  }
+}
+`),
+    ).toThrow(/v2 source must not use preload/u);
+    expect(() =>
+      parseProgram(`
+target mk61
+resource strength {
+  register Ra
+}
+program Bad {
+  turn {
+    stop 0
+  }
+}
+`),
+    ).toThrow(/Move v2 domain intent/u);
   });
 
   it("parses challenge blocks as game intent", () => {

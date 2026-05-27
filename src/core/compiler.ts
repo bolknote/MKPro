@@ -340,7 +340,7 @@ function tryCompileGameIntentProgram(
   const candidates = buildGameIntentCandidates(candidateIr);
   const cellRoles = buildGameIntentCellRoles(layoutIr, targetProfile);
   const warnings = [
-    "GameIntent selected the universal spatial/resource tactic pipeline; benchmark metadata did not affect code generation.",
+    "GameIntent selected the universal spatial/resource tactic pipeline; reference metadata did not affect code generation.",
   ];
   const report: CompileReport = {
     steps: steps.length,
@@ -362,7 +362,7 @@ function tryCompileGameIntentProgram(
     optimizer: buildOptimizerReport(ast, options, optimizations, candidates, cellRoles, targetProfile),
     preloads: buildGameIntentPreloads(ast),
     reference: {
-      name: ast.benchmark ?? `${intent.name}-reference`,
+      name: ast.reference ?? `${intent.name}-reference`,
       referenceSteps: options.budget,
       compiledSteps: steps.length,
       delta: steps.length - options.budget,
@@ -419,7 +419,7 @@ function buildGameIntent(ast: ProgramAst): GameIntent | undefined {
   if (!(hasSpatialState && hasResourceState && hasGameFlow)) return undefined;
   const intent: GameIntent = {
     kind: "game_intent",
-    name: ast.v2?.name ?? ast.benchmark ?? "game",
+    name: ast.v2?.name ?? ast.reference ?? "game",
     inputs: ast.v2?.inputs.map((input) => input.name) ?? [],
     stateRoles: collectGameStateRoles(ast),
     domains: ast.domains.map((domain) => {
@@ -431,10 +431,12 @@ function buildGameIntent(ast: ProgramAst): GameIntent | undefined {
       return domainIntent;
     }),
     screens: ast.v2?.screens.map((screen) => screen.name) ?? ast.displays.map((display) => display.name),
-    rules: ast.v2?.rules.map((rule) => rule.name) ?? ast.blocks.map((block) => block.name),
+    rules: ast.v2
+      ? [...ast.v2.rules.map((rule) => rule.name), ...ast.v2.encounters.map((table) => `encounters:${table.expr}`)]
+      : ast.blocks.map((block) => block.name),
     terminalOutcomes: ["stop", "resource_exhausted", "exit", "fight_declined", "fight_resolved"],
   };
-  if (ast.benchmark !== undefined) intent.benchmark = ast.benchmark;
+  if (ast.reference !== undefined) intent.reference = ast.reference;
   return intent;
 }
 
@@ -467,7 +469,7 @@ function collectGameStateRoles(ast: ProgramAst): GameIntent["stateRoles"] {
 function gameStateRole(type: string): GameIntent["stateRoles"][number]["role"] {
   if (type === "coord" || type === "packed") return "coord";
   if (type === "bitset") return "bitset";
-  if (type === "counter" || type === "range" || type === "resource") return "resource";
+  if (type === "counter" || type === "range" || type === "resource" || type === "score") return "resource";
   if (type === "flag") return "flag";
   return "unknown";
 }
@@ -4072,7 +4074,7 @@ const optimizerCapabilities: Array<{
     source: "mk61-delta",
     unsafe: true,
     requires: ["r0-fractional-sentinel"],
-    activeWhen: [],
+    activeWhen: ["fractional-indirect-addressing", "r0-indirect-counter"],
     detail: "Computed-dispatch candidate for fractional R0 selecting R3 or jumping to 99 while creating the -99999999 sentinel.",
   },
   {

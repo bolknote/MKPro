@@ -1,151 +1,119 @@
-machine mk61
-benchmark cave_treasure_full
-budget steps <= 105 hard
+target mk61
+budget 105 cells
+optimize size
+reference cave_treasure_full
 
-preload R4 = 2
-preload R5 = 10
-preload R6 = ГE-02
-preload R7 = 5E-1
-preload R8 = -52
-preload R9 = 4,_3E-08
+program CaveTreasure {
+  input key: digit
+  input fight_key: digit
 
-state Input {
-  command: digit = 0
-}
+  state {
+    [displayed] pos: coord(floor 1..3, x 1..7, y 1..4) = input.X
 
-coord packed player {
-  register Ra
-  floor 1..3
-  column 1..7
-  row 1..4
-  display packed_decimal_zero_run
-  start from X
-}
-
-maze cave {
-  floors 3
-  columns 7
-  rows 4
-  wall_bitsets R1 R2 R3
-  generated_by calculator_random
-  exit left_of 3.8 floor 3
-}
-
-bitset caches {
-  register R0
-  generated_by calculator_random
-  shared_between_floors true
-}
-
-resource food {
-  register Re
-  initial from Y
-  cost_per_command 1
-}
-
-resource dynamite {
-  register Rd
-  initial 4
-  break_cost 2
-}
-
-resource treasure {
-  register Rc
-  initial 0
-  cache_reward floor3 +1
-}
-
-event movement {
-  command 2 move down
-  command 4 move left
-  command 6 move right
-  command 8 move up
-  command 5 move floor_up
-  command -5 move floor_down
-  failed_move displays 0 and stores blocked_target
-}
-
-event wall_break {
-  command 0
-  uses blocked_target
-  spends dynamite
-  success moves_player_and_removes_wall
-  invalid displays 0
-}
-
-cache search {
-  command 10
-  floor1 reward food +9
-  floor2 reward dynamite +4
-  floor3 reward treasure +1
-  success removes_cache_and_spawns_robber
-}
-
-fight robber {
-  accept_key В↑
-  decline_key 0
-  random_outcome changes_current_reward
-}
-
-table packed code_overlay cave_tables {
-  walls may_overlay address_cells
-  cache_masks may_overlay command_cells
-  resource_increments may_use_hex_mantissa
-}
-
-clobber X2
-clobber return_stack
-uses display_bytes
-
-display packed cave_screen {
-  mode digits_letters_hex_status
-  source player, food, dynamite, treasure
-}
-
-entry main at 44 {
-  show cave_screen
-  command = input digit
-
-  dispatch command as cave_command {
-    case 2 {
-      call move
+    [persistent] walls: bitset {
+      generated random
     }
-    case 4 {
-      call move
+
+    [persistent] caches: bitset {
+      generated random
+      cleared when cache searched
     }
-    case 6 {
-      call move
+
+    [displayed] food: resource 0..99 = input.Y {
+      terminal at 0 show main
     }
-    case 8 {
-      call move
+
+    [persistent] dynamite: resource 0..9 = 4
+    [persistent] treasure: score 0..9 = 0 {
+      reward cache 1
     }
-    case 5 {
-      call move_floor
+
+    [temporary] blocked: coord optional
+    [temporary] robber: flag = 0
+    [temporary] exit_reached: flag = 0
+  }
+
+  world cave: grid {
+    position pos {
+      floors 1..3
+      rooms 1..7
+      display packed_decimal_zero_run
+      start input.X
     }
-    case 0 {
-      call break_wall
-    }
-    case 10 {
-      call search_cache
-    }
-    default {
-      halt 0
+
+    generated random
+    player decimal_point
+    door symbol 8 costs food 1
+    wall symbol 8 blocks forward costs dynamite 2
+    vertical wrap 1 -> 2 -> 3 -> 1
+  }
+
+  screen main {
+    show pos, food, dynamite, treasure
+    style compact digits letters hex
+  }
+
+  turn {
+    show main
+    read key
+    food -= 1
+
+    match key {
+      2, 4, 6, 8, 5, -5 => move(direction(key))
+      0 => break_wall
+      10 => search
+      otherwise => stop 0
     }
   }
-}
 
-shared tail move {
-  player = player + command
-}
+  [hot] rule move(dir) {
+    let next = pos + dir
+    if exit_reached == 1 {
+      stop 1
+    }
+    if walls has next {
+      blocked = next
+      show 0
+    }
+    else {
+      pos = next
+    }
+  }
 
-shared tail move_floor {
-  player = player + command
-}
+  rule break_wall {
+    require blocked exists else show 0
+    require dynamite >= 2 else show 0
+    walls clear blocked
+    pos = blocked
+    dynamite -= 2
+  }
 
-shared tail break_wall {
-  dynamite = dynamite - 2
-}
+  rule search {
+    if caches has pos {
+      caches clear pos
+      reward by pos.floor
+      robber = 1
+      fight
+    }
+  }
 
-shared tail search_cache {
-  treasure = treasure + 1
+  rule fight {
+    show main
+    read fight_key
+    match fight_key {
+      0 => decline_fight
+      10 => accept_fight
+      otherwise => stop 0
+    }
+  }
+
+  rule decline_fight {
+    robber = 0
+    show 0
+  }
+
+  rule accept_fight {
+    robber = 0
+    reward by random()
+  }
 }

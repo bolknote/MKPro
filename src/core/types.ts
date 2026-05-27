@@ -65,7 +65,7 @@ export interface ProgramAst {
   machine: "mk61";
   targetProfile: TargetProfileId;
   budget?: number;
-  benchmark?: string;
+  reference?: string;
   optimize?: "size";
   v2?: V2ProgramAst;
   preloads: PreloadAst[];
@@ -82,7 +82,7 @@ export interface ProgramAst {
 export interface GameIntent {
   kind: "game_intent";
   name: string;
-  benchmark?: string;
+  reference?: string;
   inputs: string[];
   stateRoles: GameStateRole[];
   domains: GameDomainIntent[];
@@ -245,6 +245,8 @@ export interface V2ProgramAst {
   inputs: V2InputAst[];
   state: V2StateFieldAst[];
   screens: V2ScreenAst[];
+  worlds: V2WorldAst[];
+  encounters: V2EncounterTableAst[];
   turn?: V2TurnAst;
   rules: V2RuleAst[];
   line: number;
@@ -261,13 +263,78 @@ export interface V2InputAst {
 export interface V2StateFieldAst {
   kind: "v2_state_field";
   name: string;
-  type: "digit" | "flag" | "counter" | "coord" | "bitset" | "enum" | "packed" | "addr" | "resource";
+  type: "digit" | "flag" | "counter" | "coord" | "bitset" | "enum" | "packed" | "addr" | "resource" | "score";
   spec?: string;
   min?: number;
   max?: number;
   optional: boolean;
   generated?: "random";
   initial?: string;
+  terminal?: V2TerminalAst;
+  clearedWhen?: string;
+  rewards: V2RewardRuleAst[];
+  hints: SemanticHint[];
+  line: number;
+}
+
+export interface V2TerminalAst {
+  at: string;
+  show: string;
+}
+
+export interface V2RewardRuleAst {
+  name: string;
+  value: string;
+}
+
+export interface V2WorldAst {
+  kind: "v2_world";
+  name: string;
+  worldType: string;
+  position?: V2WorldPositionAst;
+  generated?: "random";
+  player?: string;
+  door?: V2DoorRuleAst;
+  wall?: V2WallRuleAst;
+  verticalWrap?: string[];
+  hints: SemanticHint[];
+  line: number;
+}
+
+export interface V2WorldPositionAst {
+  name: string;
+  floors?: string;
+  rooms?: string;
+  display?: string;
+  start?: string;
+  line: number;
+}
+
+export interface V2DoorRuleAst {
+  symbol: string;
+  resource: string;
+  cost: string;
+}
+
+export interface V2WallRuleAst {
+  symbol: string;
+  resource: string;
+  cost: string;
+  behavior: string;
+}
+
+export interface V2EncounterTableAst {
+  kind: "v2_encounters";
+  expr: string;
+  cases: V2EncounterCaseAst[];
+  hints: SemanticHint[];
+  line: number;
+}
+
+export interface V2EncounterCaseAst {
+  value: string;
+  name: string;
+  body: V2StatementAst[];
   hints: SemanticHint[];
   line: number;
 }

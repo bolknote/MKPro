@@ -2,7 +2,7 @@ machine mk61
 budget steps <= 105 hard
 
 // Incomplete sketch baseline. Use cave-treasure-full.m61 for the hard
-// high-level benchmark.
+// high-level reference.
 
 state Cave {
   player: packed = 1

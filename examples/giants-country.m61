@@ -1,68 +1,75 @@
 target mk61
 budget 105 cells
 optimize size
-benchmark lordbss_pmk198_giants_country
+reference lordbss_pmk198_giants_country
 
 // "Giants Country" is based on Lord_BSS pmk198 by Vladimir Trofimchuk.
-// This source describes the game rules, not the original opcode listing.
-// The compiler is expected to choose MK-61 storage, layout, and hacks itself.
-
-// Preloaded values model the original setup constants. They do not count
-// against official program cells and may be reallocated by a stronger backend.
-preload R4 = 2
-preload R5 = 10
-preload R6 = 55555557
-preload R7 = 1
-preload R8 = 7
-preload R9 = random_seed()
+// The source describes game rules; MK-61 storage and layout are compiler choices.
 
 program GiantsCountry {
-  // The player either advances with any non-zero key or jumps floors with 0.
   input action: digit
-
-  // Encounters ask the player to remember and re-enter a generated number.
   input answer: number
 
   state {
-    // The original game shows an eight-symbol hall window. The player is
-    // represented by a decimal point, while monsters/items use display glyphs.
     [displayed] pos: coord(floor 1..3, x 0..7, y 0..0) = 1
     [displayed] view: packed = 0
 
-    // Strength is the main life resource. The game ends when it reaches zero.
-    [displayed] strength: counter 0..99 = 40
+    [displayed] strength: resource 0..99 = 40 {
+      terminal at 0 show error
+    }
 
-    // Persistent progress through the cave.
     [persistent] floor: counter 1..3 = 1
     [persistent] room: counter 0..7 = 0
-    [persistent] score: counter 0..99 = 0
-    [persistent] plans: bitset generated random
 
-    // Short-lived values used inside one turn or encounter.
+    [persistent] score: score 0..99 = 0 {
+      reward skeleton 1
+      reward trap 2
+      reward vampire 3
+      reward head 4
+      reward dragon 6
+      reward giant 7
+    }
+
+    [persistent] plans: bitset {
+      generated random
+      cleared when creature defeated
+    }
+
     [temporary] tile: enum = 0
     [temporary] challenge: packed = 0
     [temporary] warning_pattern: packed = 70000008
   }
 
-  // Main game display: hall view plus current strength in Y-like context.
+  world giant_country: hall {
+    position pos {
+      floors 1..3
+      rooms 0..7
+      display decimal_player
+      start 1
+    }
+
+    generated random
+    player decimal_point
+    door symbol 8 costs strength 1
+    wall symbol 8 blocks forward costs strength 7
+    vertical wrap 1 -> 2 -> 3 -> 1
+  }
+
   screen cave {
     show view, strength
     style compact digits letters sign hex
   }
 
-  // Warning screen shown before the memory number appears.
   screen warning {
     show warning_pattern
     style compact digits letters sign
   }
 
-  // The generated number the player must memorize.
   screen memory {
     show challenge
     style compact digits
   }
 
-  // One turn either jumps vertically or moves forward in the current hall.
   turn {
     show cave
     read action
@@ -74,16 +81,13 @@ program GiantsCountry {
   }
 
   [hot] rule advance {
-    // Opening the next room door costs one strength point.
     strength -= 1
     tile = cell_at(pos)
 
     if tile == 8 {
-      // A wall blocks movement and costs extra strength.
       hit_wall
     }
     else {
-      // Any other tile is processed as an item or monster, then we move right.
       encounter(tile)
       room += 1
       pos = pos + 1
@@ -93,7 +97,6 @@ program GiantsCountry {
   }
 
   rule jump_floor {
-    // Vertical jumps cycle 1 -> 2 -> 3 -> 1 with floor-specific costs.
     match floor {
       1 => jump_to_2
       2 => jump_to_3
@@ -119,141 +122,117 @@ program GiantsCountry {
   }
 
   rule hit_wall {
-    // Inner walls do not move the player forward.
     strength -= 7
     show cave
   }
 
-  rule encounter(kind) {
-    // Glyph classes are normalized to semantic encounter names.
-    match kind {
-      0 => empty
-      1 => ladder
-      2 => jug
-      3 => skeleton
-      4 => trap
-      5 => vampire
-      6 => head
-      7 => dragon
-      9 => giant
-      otherwise => empty
+  encounters tile {
+    0 empty {
+      show cave
     }
-  }
 
-  rule empty {
-    show cave
-  }
-
-  rule ladder {
-    // Ladders are helpful on success and harmful on failure.
-    challenge tile {
-      success {
-        reward_ladder
-      }
-      failure {
-        strength -= 1
+    1 ladder {
+      challenge tile {
+        success {
+          reward_ladder
+        }
+        failure {
+          strength -= 1
+        }
       }
     }
-  }
 
-  rule jug {
-    // The jug gives living water when the memory challenge is solved.
-    challenge tile {
-      success {
-        strength += 2
-        plans clear pos
-      }
-      failure {
-        strength -= 2
+    2 jug {
+      challenge tile {
+        success {
+          strength += 2
+          plans clear pos
+        }
+        failure {
+          strength -= 2
+        }
       }
     }
-  }
 
-  rule skeleton {
-    // Weak enemy: small reward and small penalty.
-    challenge tile {
-      success {
-        strength += 1
-        score += 1
-        plans clear pos
-      }
-      failure {
-        strength -= 3
+    3 skeleton {
+      challenge tile {
+        success {
+          strength += 1
+          score += 1
+          plans clear pos
+        }
+        failure {
+          strength -= 3
+        }
       }
     }
-  }
 
-  rule trap {
-    // A trap gives score only if the player solves the challenge.
-    challenge tile {
-      success {
-        score += 2
-        plans clear pos
-      }
-      failure {
-        strength -= 4
+    4 trap {
+      challenge tile {
+        success {
+          score += 2
+          plans clear pos
+        }
+        failure {
+          strength -= 4
+        }
       }
     }
-  }
 
-  rule vampire {
-    // Stronger enemies cost strength even on victory.
-    challenge tile {
-      success {
-        strength -= 1
-        score += 3
-        plans clear pos
-      }
-      failure {
-        strength -= 5
+    5 vampire {
+      challenge tile {
+        success {
+          strength -= 1
+          score += 3
+          plans clear pos
+        }
+        failure {
+          strength -= 5
+        }
       }
     }
-  }
 
-  rule head {
-    // Ogre head encounter: higher reward, higher risk.
-    challenge tile {
-      success {
-        strength -= 2
-        score += 4
-        plans clear pos
-      }
-      failure {
-        strength -= 6
+    6 head {
+      challenge tile {
+        success {
+          strength -= 2
+          score += 4
+          plans clear pos
+        }
+        failure {
+          strength -= 6
+        }
       }
     }
-  }
 
-  rule dragon {
-    // Dragon encounter: severe strength loss on either outcome.
-    challenge tile {
-      success {
-        strength -= 4
-        score += 6
-        plans clear pos
-      }
-      failure {
-        strength -= 8
+    7 dragon {
+      challenge tile {
+        success {
+          strength -= 4
+          score += 6
+          plans clear pos
+        }
+        failure {
+          strength -= 8
+        }
       }
     }
-  }
 
-  rule giant {
-    // Final high-value monster class.
-    challenge tile {
-      success {
-        strength -= 5
-        score += 7
-        plans clear pos
-      }
-      failure {
-        strength -= 9
+    9 giant {
+      challenge tile {
+        success {
+          strength -= 5
+          score += 7
+          plans clear pos
+        }
+        failure {
+          strength -= 9
+        }
       }
     }
   }
 
   rule reward_ladder {
-    // A successful ladder encounter changes floors and gives a floor bonus.
     match floor {
       1 => ladder_floor_1
       2 => ladder_floor_2
@@ -277,99 +256,4 @@ program GiantsCountry {
     strength += 1
     floor = 1
   }
-}
-
-// Packed coordinate domain for an eight-room one-row hall on three floors.
-coord packed pos {
-  floor 1..3
-  column 0..7
-  row 0..0
-  display hall_window_with_decimal_player
-  start lower_hall
-}
-
-// Cave topology and display semantics. The backend may pack these plans into
-// registers, mantissa masks, display bytes, or overlaid address cells.
-maze giant_country {
-  floors 3
-  rooms_per_floor 8
-  plans R1 R2 R3
-  generated_by calculator_random
-  player_display decimal_point
-  door_before_each_room symbol 8 cost strength 1
-  inner_wall symbol 8 blocks_forward cost strength 7
-  vertical_wrap 1_to_2_to_3_to_1
-}
-
-// The mutable cave plan. Defeated creatures are removed from the plan.
-bitset plans {
-  registers R1 R2 R3
-  generated_by calculator_random
-  cleared_when_creature_defeated true
-}
-
-// Main life resource.
-resource strength {
-  register Ra
-  initial 40
-  terminal_at 0
-  terminal_display error
-}
-
-// Score is the number of defeated evil creatures, weighted by difficulty.
-resource score {
-  register R6
-  initial 0
-  reward skeleton 1
-  reward trap 2
-  reward vampire 3
-  reward head 4
-  reward dragon 6
-  reward giant 7
-}
-
-// Forward movement is the hot path: door, tile lookup, encounter, then advance.
-event forward {
-  command nonzero
-  door_cost strength 1
-  wall_cost strength 7 and stay
-  creature_starts_memory_challenge true
-  after_challenge_move_one_room_right true
-}
-
-// Vertical movement is the alternate player command.
-event vertical_jump {
-  command 0
-  from_floor_1 cost 2 to_floor 2
-  from_floor_2 cost 3 to_floor 3
-  from_floor_3 cost 1 to_floor 1
-}
-
-// The memory challenge encodes the original "remember the flashing number"
-// mechanic. The source describes semantics; the backend chooses compact output.
-event memory_challenge {
-  warning_display 700-----8
-  input answer number
-  answer_correct clears_creature
-  answer_wrong keeps_or_penalizes
-  min_digits 3
-  max_digits 6
-  easier_for ladder jug skeleton
-  harder_for vampire head dragon giant
-}
-
-// Pseudo-random generation of hall contents and memory values.
-random cave_generation {
-  seed from R9
-  room_symbols empty ladder jug skeleton trap vampire head dragon giant wall
-  view_register R8
-}
-
-// Dense implementation permission expressed as data roles, not low-level
-// instructions. The optimizer chooses whether overlay/hex/display forms apply.
-table packed code_overlay giant_country_tables {
-  floor_plans may_overlay address_cells
-  room_symbols may_use_display_bytes
-  memory_codes may_use_hex_mantissa
-  branch_addresses may_be_constants
 }
