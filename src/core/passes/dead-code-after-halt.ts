@@ -2,19 +2,6 @@ import type { IrOp } from "../types.ts";
 import { computeLiveness } from "./liveness-analysis.ts";
 import { type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
 
-function buildLabelTargets(ops: readonly IrOp[]): Set<string> {
-  const set = new Set<string>();
-  for (const op of ops) {
-    if (
-      (op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") &&
-      typeof op.target === "string"
-    ) {
-      set.add(op.target);
-    }
-  }
-  return set;
-}
-
 function reachableFromEntry(ops: readonly IrOp[]): Set<number> {
   const labelIndex = new Map<string, number>();
   for (let i = 0; i < ops.length; i += 1) {

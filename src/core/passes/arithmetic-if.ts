@@ -1,5 +1,5 @@
 import type { IrOp } from "../types.ts";
-import { type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
+import { type IrPass, type IrPassFn } from "./helpers.ts";
 
 const run: IrPassFn = (ops) => {
   // Arithmetic-if rewriting currently happens at the AST level via the V2/V1

@@ -91,12 +91,12 @@ describe("ir round-trip", () => {
       "loop",
       "return",
     ]);
-    expect(ir[2]!.kind === "cjump" && ir[2]!.condition === "!=0").toBe(true);
-    expect(ir[3]!.kind === "cjump" && ir[3]!.condition === ">=0").toBe(true);
-    expect(ir[4]!.kind === "cjump" && ir[4]!.condition === "<0").toBe(true);
-    expect(ir[5]!.kind === "cjump" && ir[5]!.condition === "==0").toBe(true);
-    expect(ir[6]!.kind === "loop" && ir[6]!.counter === "L2").toBe(true);
-    expect(ir[7]!.kind === "loop" && ir[7]!.counter === "L1").toBe(true);
+    expect(ir[2]?.kind === "cjump" && ir[2].condition === "!=0").toBe(true);
+    expect(ir[3]?.kind === "cjump" && ir[3].condition === ">=0").toBe(true);
+    expect(ir[4]?.kind === "cjump" && ir[4].condition === "<0").toBe(true);
+    expect(ir[5]?.kind === "cjump" && ir[5].condition === "==0").toBe(true);
+    expect(ir[6]?.kind === "loop" && ir[6].counter === "L2").toBe(true);
+    expect(ir[7]?.kind === "loop" && ir[7].counter === "L1").toBe(true);
   });
 
   it("identifies store and recall direct and indirect variants", () => {
@@ -113,10 +113,10 @@ describe("ir round-trip", () => {
       "indirect-store",
       "indirect-recall",
     ]);
-    expect(ir[0]!.kind === "store" && ir[0]!.register === "1").toBe(true);
-    expect(ir[1]!.kind === "recall" && ir[1]!.register === "5").toBe(true);
-    expect(ir[2]!.kind === "indirect-store" && ir[2]!.register === "3").toBe(true);
-    expect(ir[3]!.kind === "indirect-recall" && ir[3]!.register === "7").toBe(true);
+    expect(ir[0]?.kind === "store" && ir[0].register === "1").toBe(true);
+    expect(ir[1]?.kind === "recall" && ir[1].register === "5").toBe(true);
+    expect(ir[2]?.kind === "indirect-store" && ir[2].register === "3").toBe(true);
+    expect(ir[3]?.kind === "indirect-recall" && ir[3].register === "7").toBe(true);
   });
 
   it("identifies indirect jump, call, and cond-jump variants", () => {
@@ -137,8 +137,8 @@ describe("ir round-trip", () => {
       "indirect-cjump",
       "indirect-cjump",
     ]);
-    expect(ir[2]!.kind === "indirect-cjump" && ir[2]!.condition === "!=0").toBe(true);
-    expect(ir[5]!.kind === "indirect-cjump" && ir[5]!.condition === "==0").toBe(true);
+    expect(ir[2]?.kind === "indirect-cjump" && ir[2].condition === "!=0").toBe(true);
+    expect(ir[5]?.kind === "indirect-cjump" && ir[5].condition === "==0").toBe(true);
   });
 
   it("round-trips LayoutIrCell cell-by-cell for GameIntent-shaped output", () => {
@@ -154,7 +154,7 @@ describe("ir round-trip", () => {
     const lowered = lowerIrToLayout(ir);
     expect(lowered.cells.map((c) => c.opcode)).toEqual(cells.map((c) => c.opcode));
     expect(lowered.cells.map((c) => c.address)).toEqual(cells.map((c) => c.address));
-    expect(ir[1]!.kind === "jump" && ir[1]!.target === 0x10).toBe(true);
+    expect(ir[1]?.kind === "jump" && ir[1].target === 0x10).toBe(true);
   });
 
   it("preserves comments, source lines, raw and unsafe flags through round trip", () => {

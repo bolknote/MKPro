@@ -1,6 +1,6 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import { computeLiveness } from "./liveness-analysis.ts";
-import { hasUnsafe, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
+import { hasUnsafe, type IrPass, type IrPassFn } from "./helpers.ts";
 
 function gatherUsedRegisters(ops: readonly IrOp[]): Set<RegisterName> {
   const set = new Set<RegisterName>();
