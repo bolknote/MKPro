@@ -67,13 +67,14 @@ describe("M61 compiler", () => {
     expect(result.report.ir.v2).toBe(true);
     expect(result.report.targetProfile).toBe("mk61_exact");
     expect(result.report.steps).toBeLessThanOrEqual(105);
-    expect(result.report.steps).toBe(35);
+    expect(result.report.steps).toBe(30);
     expect(result.report.candidates.some((candidate) => candidate.variant === "dark-indirect-table")).toBe(true);
     expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "code-data-overlay")).toBe(true);
     expect(result.report.proofs.some((proof) => proof.id === "value-ranges")).toBe(true);
     expect(result.report.optimizations.some((optimization) => optimization.name === "dispatch-source-register")).toBe(true);
     expect(result.report.optimizations.some((optimization) => optimization.name === "show-read-fusion")).toBe(true);
     expect(result.report.optimizations.some((optimization) => optimization.name === "fl-unit-decrement")).toBe(true);
+    expect(result.report.optimizations.some((optimization) => optimization.name === "redundant-prologue-elimination")).toBe(true);
   });
 
   it("rejects removed low-level calculator syntax", () => {

@@ -17,11 +17,13 @@ import type { IrPass } from "./helpers.ts";
 import { jumpThread } from "./jump-thread.ts";
 import { jumpToNextThreading } from "./jump-to-next.ts";
 import { lastXReuse } from "./last-x-reuse.ts";
+import { redundantPrologueElimination } from "./redundant-prologue.ts";
 import { registerCoalesce } from "./register-coalesce.ts";
 import { returnZeroJump } from "./return-zero-jump.ts";
 import { storeRecallPeephole } from "./store-recall-peephole.ts";
 
 const PASS_PIPELINE: ReadonlyArray<IrPass> = [
+  redundantPrologueElimination,
   returnZeroJump,
   storeRecallPeephole,
   jumpToNextThreading,
