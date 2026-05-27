@@ -616,6 +616,12 @@ The pipeline currently contains:
   tails into a shared exit.
 - **return-zero-jump** — replaces `БП 01` with `В/О` only when the return
   stack is provably empty.
+- **redundant-prologue-elimination** — when a `display + С/П` block
+  immediately precedes `БП main_loop` and the loop head begins with the same
+  byte-identical block, the trailing copy is removed. The display the user
+  actually sees is the one at the loop head; observable behavior is preserved.
+  This is what shrinks `human.m61` 35→30 and `tiny-game.m61` 30→26 without
+  touching the source.
 
 A round-trip emulator regression suite (`tests/emulator/regression.test.ts`)
 loads each of the 16 examples into the headless MK-61 emulator and runs a

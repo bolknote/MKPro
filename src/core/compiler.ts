@@ -4790,6 +4790,15 @@ const optimizerCapabilities: Array<{
     activeWhen: ["arithmetic-if-pass"],
     detail: "IR-level seat for branchless arithmetic-if rewriting; current size-gated rewriting still happens at the AST select stage and feeds this pass via the candidate ledger.",
   },
+  {
+    id: "redundant-prologue-elimination",
+    category: "flow",
+    source: "documented",
+    unsafe: false,
+    requires: [],
+    activeWhen: ["redundant-prologue-elimination"],
+    detail: "Removes a display/halt prologue that immediately precedes БП to a label whose forward prologue is byte-identical, since the user only ever observes the one display performed by the loop head.",
+  },
 ];
 
 function buildPreloadReport(ast: ProgramAst, allocation: RegisterAllocation): PreloadReport[] {
