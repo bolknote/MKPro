@@ -10,6 +10,8 @@ program TreasureHunter2 {
   input action: digit
 
   state {
+    // Position is shown as a compact floor/room view, while floor and room are
+    // kept separately so movement rules can name the original game's structure.
     [displayed] pos: coord(floor 1..9, x 0..6, y 0..0) = 9
     [displayed] floor_view: packed = 0
     [displayed] treasure: score 0..99 = 0 {
@@ -18,6 +20,8 @@ program TreasureHunter2 {
 
     [persistent] floor: counter 1..9 = 9
     [persistent] room: counter 0..6 = 0
+    // "known_floors" doubles as the generated world table: clearing a bit means
+    // this floor/position has been resolved by play.
     [persistent] known_floors: bitset {
       generated random
       cleared when floor visited
@@ -27,6 +31,8 @@ program TreasureHunter2 {
   }
 
   world cave: vertical_maze {
+    // The world is mostly vertical. Horizontal motion searches rooms on a floor;
+    // holes and ladders shift the player through the nine-floor stack.
     position pos {
       floors 1..9
       rooms 0..6
@@ -70,6 +76,8 @@ program TreasureHunter2 {
   }
 
   rule move_left {
+    // The left edge of floor 1 is the only exit. Other left moves are just
+    // ordinary exploration and still inspect the resulting cell.
     if floor == 1 {
       if room == 0 {
         win escaped
@@ -102,11 +110,15 @@ program TreasureHunter2 {
   }
 
   rule punch_hole {
+    // Digging a hole turns uncertainty into a forced descent; it is the player's
+    // way to make progress when the generated map is unhelpful.
     known_floors clear pos
     descend
   }
 
   rule inspect_cell {
+    // Tile numbers are semantic, not visual decoration: treasure, hole, ladder,
+    // or empty passage decide the next rule.
     tile = cell from cave at pos
 
     match tile {

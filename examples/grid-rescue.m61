@@ -3,6 +3,10 @@ budget 105 cells
 optimize size
 reference grid_rescue_v2
 
+// Rescue sketch for the generic grid pipeline. It mixes blocked movement,
+// expendable wall charges, collectible beacons, and a second input mode for an
+// ambush decision.
+
 program GridRescue {
   input key: digit
   input fight_key: digit
@@ -10,6 +14,8 @@ program GridRescue {
   state {
     [displayed] pos: coord(floor 1..2, x 1..5, y 1..5) = input.X
 
+    // Walls and beacons are generated independently: the same room can be a
+    // navigation problem, a rescue target, both, or neither.
     [persistent] walls: bitset {
       generated random
     }
@@ -59,6 +65,8 @@ program GridRescue {
   turn {
     show main
     read key
+    // Every turn costs energy before the command pays off; this makes dithering
+    // and failed routes part of the player's risk budget.
     energy -= 1
 
     match key {
@@ -72,6 +80,8 @@ program GridRescue {
   [hot] rule move(dir) {
     let next = pos + dir
     if walls has next {
+      // Remember the blocked cell so "open_wall" can be a deliberate follow-up
+      // action instead of an automatic door tax.
       blocked = next
       show 0
     }
@@ -92,6 +102,8 @@ program GridRescue {
     if beacons has pos {
       beacons clear pos
       rescued += 1
+      // A rescued beacon may still draw trouble; scoring and survival are not
+      // the same objective.
       ambush
     }
   }

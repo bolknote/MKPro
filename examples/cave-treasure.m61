@@ -3,11 +3,16 @@ budget 105 cells
 optimize size
 reference cave_treasure_full_v2
 
+// Full Cave Treasure in the current M61 surface: compact source intent, with the
+// MK-61-specific overlay and dispatch choices left to compiler reports.
+
 program CaveTreasure {
   input key: digit
   input fight_key: digit
 
   state {
+    // The visible position is also the key into generated wall/cache masks. The
+    // source does not prescribe how those masks are packed into registers.
     [displayed] pos: coord(floor 1..3, x 1..7, y 1..4) = input.X
 
     [persistent] walls: bitset {
@@ -23,6 +28,8 @@ program CaveTreasure {
       terminal at 0 show main
     }
 
+    // Food is the clock, dynamite is the route override, treasure is the score;
+    // keeping them separate is what gives the tiny cave meaningful choices.
     [persistent] dynamite: resource 0..9 = 4
     [persistent] treasure: score 0..9 = 0 {
       reward cache 1
@@ -34,6 +41,8 @@ program CaveTreasure {
   }
 
   world cave: grid {
+    // Doors tax food on ordinary movement, while walls require an explicit
+    // break action. That split mirrors how the original cave creates decisions.
     position pos {
       floors 1..3
       rooms 1..7
@@ -80,6 +89,8 @@ program CaveTreasure {
       win exit_found
     }
     if walls has next {
+      // Bumping into a wall records intent: the next break_wall command knows
+      // which obstacle the player chose to spend dynamite on.
       blocked = next
       show 0
     }
@@ -99,6 +110,8 @@ program CaveTreasure {
   rule search {
     if caches has pos {
       caches clear pos
+      // Deeper floors matter: reward by floor lets one compact rule express
+      // "farther from safety, better loot".
       reward by pos.floor
       robber = 1
       fight
@@ -106,6 +119,8 @@ program CaveTreasure {
   }
 
   rule fight {
+    // Robber encounters are a second decision surface after treasure discovery;
+    // the cache is already consumed, so refusing is safe but unprofitable.
     show main
     read fight_key
     match fight_key {

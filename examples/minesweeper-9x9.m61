@@ -11,10 +11,14 @@ program Minesweeper9x9 {
   input mine_count: number
 
   board minefield: 9x9 {
+    // The original uses two-digit cell names from 11 to 99; preserving that
+    // convention keeps the player's mental board aligned with the listing.
     coordinate two_digit 11..99
   }
 
   state {
+    // Mines are generated once and never shown. Opened cells are tracked so the
+    // source names the semantic idea even if a compact backend can encode it away.
     [persistent] mines: bitset {
       generated random
       cleared when game restarted
@@ -57,6 +61,8 @@ program Minesweeper9x9 {
   }
 
   rule reveal_safe_cell {
+    // A safe probe earns information, not just survival: the clue is the count
+    // of mines in the eight surrounding cells.
     opened set probe
     safe_left -= 1
     clue = count neighbors from mines around probe

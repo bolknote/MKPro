@@ -10,18 +10,24 @@ program SeaBattle {
   input response: number
 
   board ocean: 10x10 {
+    // Shots are flat two-digit cells. The player's own fleet is not modeled as a
+    // hidden bitset: the human reports calculator hits with a negative response.
     coordinate two_digit 00..99
   }
 
   state {
     [displayed] calculator_shot: coord(x 0..9, y 0..9) = 0
     [temporary] player_shot: coord(x 0..9, y 0..9) optional
+    // own_ships is a trust boundary between human and calculator. The source
+    // records ship count only; the player's private layout stays off-machine.
     [displayed] own_ships: resource 0..99 = input.X {
       terminal at 0 show enemy_win
     }
   }
 
   fleet enemy_fleet on ocean {
+    // The calculator's fleet is the only hidden fleet the program can actually
+    // test and clear.
     ships enemy_ships 0..99 = input.X
     generated random
     cleared when player hit
@@ -54,6 +60,8 @@ program SeaBattle {
   }
 
   rule calculator_turn {
+    // The calculator reveals a target cell, then waits for the player to report
+    // whether that shot hit.
     calculator_shot = int(random() * 100)
     show battle
   }
@@ -73,6 +81,8 @@ program SeaBattle {
     player_shot = response
 
     if enemy_fleet has player_shot {
+      // Player hits are verifiable because enemy_fleet is stored by the program;
+      // a hit removes exactly that cell from future play.
       enemy_fleet clear player_shot
       enemy_ships -= 1
 

@@ -11,10 +11,14 @@ program FoxHunt100 {
   input fox_count: number
 
   board field: 10x10 {
+    // Decimal-pair coordinates keep the radio-orienteering feel of the original:
+    // the player thinks in x.y cells, not in a flat index.
     coordinate decimal_pair 0.0..9.9
   }
 
   fleet foxes on field {
+    // A fleet can hold more than one hidden target per board relation; the
+    // "remaining_foxes" resource is the truth the display reports after hits.
     ships remaining_foxes 1..100 = input.Y
     generated random
     cleared when fox found
@@ -48,6 +52,8 @@ program FoxHunt100 {
   }
 
   rule found_fox {
+    // A direct hit suppresses the bearing clue and instead reports progress as a
+    // negative remaining count, matching the original game's feedback style.
     foxes clear cell
     remaining_foxes -= 1
 
@@ -61,6 +67,8 @@ program FoxHunt100 {
   }
 
   rule scan_from_cell {
+    // The clue is not distance. It is the number of foxes aligned with this cell
+    // by row, column, or either diagonal.
     bearing = count lines from foxes at cell
     show report
   }

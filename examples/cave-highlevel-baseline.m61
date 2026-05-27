@@ -10,6 +10,8 @@ program CaveHighlevelBaseline {
   input command: digit
 
   state {
+    // This baseline keeps the classic cave contract explicit: the player sees a
+    // packed room display, while walls and caches live as generated hidden masks.
     [displayed] player: coord(floor 1..3, x 1..7, y 1..4) = 1.0000001
 
     [persistent] walls: bitset {
@@ -24,6 +26,8 @@ program CaveHighlevelBaseline {
     [displayed] food: resource 0..99 = input.Y {
       terminal at 0 show cave_screen
     }
+    // Dynamite is intentionally scarcer than food; it turns blocked movement
+    // into a strategic choice instead of a simple delay.
     [persistent] dynamite: resource 0..9 = 6
     [persistent] treasure: score 0..9 = 0 {
       reward cache 1
@@ -34,6 +38,8 @@ program CaveHighlevelBaseline {
   }
 
   world cave: grid {
+    // The vertical wrap makes the cave feel larger than the display: climbing
+    // cycles floors while the room-row presentation stays compact.
     position player {
       floors 1..3
       rooms 1..7
@@ -60,6 +66,8 @@ program CaveHighlevelBaseline {
   turn {
     show cave_screen
     read command
+    // Food is the global turn clock. All useful actions spend the same survival
+    // resource, which is what keeps the tiny program game-like.
     food -= 1
 
     match command {
@@ -100,6 +108,8 @@ program CaveHighlevelBaseline {
   }
 
   rule break_wall {
+    // A failed blast still consumes the player's scarce explosive budget; the
+    // screen response is the feedback, not a separate error language.
     dynamite -= 2
     if dynamite < 0 {
       show cave_screen
@@ -110,6 +120,8 @@ program CaveHighlevelBaseline {
 
   rule search_cache {
     if caches has player {
+      // Searching consumes the cache so repeated probing cannot farm score from
+      // one lucky room.
       caches clear player
       treasure += 1
       show cave_screen

@@ -2,6 +2,10 @@ target mk61
 budget 105 cells
 optimize size
 
+// A deliberately human-sized control-flow example: one key grows score, another
+// spends food. It keeps the syntax approachable while still exercising displayed
+// state, persistent state, match dispatch, and a hot rule.
+
 program CounterGame {
   input key: digit
 
@@ -20,6 +24,8 @@ program CounterGame {
   }
 
   turn {
+    // Invalid keys end quietly; the example is about state transitions, not
+    // input validation ceremony.
     show main
     read key
 
@@ -31,6 +37,8 @@ program CounterGame {
   }
 
   [hot] rule gain {
+    // Marked hot because "gain" is the common happy path in the optimizer
+    // examples that inspect rule metadata.
     score += 1
     show main
   }

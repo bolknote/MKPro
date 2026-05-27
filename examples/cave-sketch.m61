@@ -9,6 +9,8 @@ program CaveSketch {
   input command: digit
 
   state {
+    // The sketch keeps only the core cave pressures: where you are, how long
+    // you can keep searching, how many walls you can break, and what you found.
     [displayed] player: coord(floor 1..1, x 1..7, y 1..4) = 1
     [displayed] food: resource 0..99 = 9 {
       terminal at 0 show cave_screen
@@ -21,6 +23,8 @@ program CaveSketch {
   }
 
   world cave: grid {
+    // One floor is enough here; the example is a readable stepping stone before
+    // the full three-floor treasure program.
     position player {
       floors 1..1
       rooms 1..7
@@ -45,6 +49,8 @@ program CaveSketch {
   turn {
     show cave_screen
     read command
+    // Time pressure is food pressure. Movement and searching share the same
+    // clock, so the player cannot inspect forever.
     food -= 1
 
     match command {
@@ -75,6 +81,8 @@ program CaveSketch {
   }
 
   rule break_wall {
+    // This sketch trusts "blocked" to be meaningful; the full cave examples add
+    // guards so failed wall breaks are observable instead of implicit.
     dynamite -= 2
     player = blocked
   }

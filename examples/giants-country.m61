@@ -11,6 +11,8 @@ program GiantsCountry {
   input answer: number
 
   state {
+    // The visible cave is a one-dimensional hall on each floor; the danger comes
+    // from what the generated room table says is waiting there.
     [displayed] pos: coord(floor 1..3, x 0..7, y 0..0) = 1
     [displayed] view: packed = 0
 
@@ -18,6 +20,8 @@ program GiantsCountry {
       terminal at 0 show error
     }
 
+    // Score values are deliberately uneven: larger monsters are not just harder
+    // walls, they change the reward curve.
     [persistent] floor: counter 1..3 = 1
     [persistent] room: counter 0..7 = 0
 
@@ -31,6 +35,8 @@ program GiantsCountry {
     }
 
     [persistent] plans: bitset {
+      // Plans represent learned/defeated encounters. Clearing them marks that a
+      // room's scripted danger has been resolved by the player.
       generated random
       cleared when creature defeated
     }
@@ -41,6 +47,8 @@ program GiantsCountry {
   }
 
   world giant_country: hall {
+    // A hall, not a free grid: most turns advance forward, while floor jumps are
+    // paid shortcuts through a dangerous generated sequence.
     position pos {
       floors 1..3
       rooms 0..7
@@ -85,6 +93,8 @@ program GiantsCountry {
   }
 
   [hot] rule advance {
+    // Advancing spends strength before the room is understood, which makes even
+    // empty rooms part of the attrition game.
     strength -= 1
     tile = cell_at(pos)
 
@@ -131,6 +141,8 @@ program GiantsCountry {
   }
 
   encounters tile {
+    // Encounters all share the same shape: remember a challenge, then convert
+    // success into score or mobility and failure into strength loss.
     0 empty {
       show cave
     }
@@ -237,6 +249,8 @@ program GiantsCountry {
   }
 
   rule reward_ladder {
+    // Ladders are rewards, not free movement commands. Their benefit depends on
+    // which floor the player earned them on.
     match floor {
       1 => ladder_floor_1
       2 => ladder_floor_2

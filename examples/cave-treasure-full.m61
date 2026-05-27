@@ -3,11 +3,16 @@ budget 105 cells
 optimize size
 reference cave_treasure_full
 
+// The named compactness reference for Cave Treasure. It intentionally stays at
+// game-rule level so compiler changes can be judged against the same source.
+
 program CaveTreasure {
   input key: digit
   input fight_key: digit
 
   state {
+    // Position is visible to the player and meaningful to the hidden masks: one
+    // coordinate names both the display room and generated cave contents.
     [displayed] pos: coord(floor 1..3, x 1..7, y 1..4) = input.X
 
     [persistent] walls: bitset {
@@ -23,6 +28,8 @@ program CaveTreasure {
       terminal at 0 show main
     }
 
+    // Three resources carry three different anxieties: hunger, route control,
+    // and the question of whether another search is worth the risk.
     [persistent] dynamite: resource 0..9 = 4
     [persistent] treasure: score 0..9 = 0 {
       reward cache 1
@@ -34,6 +41,8 @@ program CaveTreasure {
   }
 
   world cave: grid {
+    // The world block says what the cave means, not how to store it. The backend
+    // is free to use packed mantissas, overlays, or a future layout.
     position pos {
       floors 1..3
       rooms 1..7
@@ -80,6 +89,8 @@ program CaveTreasure {
       win exit_found
     }
     if walls has next {
+      // A wall hit is remembered rather than immediately resolved; spending
+      // dynamite is a separate player commitment.
       blocked = next
       show 0
     }
@@ -99,6 +110,8 @@ program CaveTreasure {
   rule search {
     if caches has pos {
       caches clear pos
+      // Cache value follows floor depth, matching the "riskier rooms pay better"
+      // shape without spelling out three separate search rules.
       reward by pos.floor
       robber = 1
       fight
@@ -106,6 +119,8 @@ program CaveTreasure {
   }
 
   rule fight {
+    // The robber prompt creates a short memory test/choice after treasure is
+    // found; the search result has already been committed.
     show main
     read fight_key
     match fight_key {

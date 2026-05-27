@@ -3,6 +3,9 @@ budget 105 cells
 optimize size
 reference resource_raid_v2
 
+// A sibling of GridRescue tuned as a robbery: oxygen is the clock, keys are the
+// route budget, and cargo is valuable enough that alarms can be worth forcing.
+
 program ResourceRaid {
   input key: digit
   input alarm_key: digit
@@ -10,6 +13,8 @@ program ResourceRaid {
   state {
     [displayed] pos: coord(floor 1..3, x 1..4, y 1..4) = input.X
 
+    // Doors define the uncertain topology; stashes define the reason to spend
+    // time in that topology.
     [persistent] doors: bitset {
       generated random
     }
@@ -59,6 +64,8 @@ program ResourceRaid {
   turn {
     show main
     read key
+    // Oxygen drains before the chosen action, so even checking a wrong route has
+    // a cost the player can feel.
     oxygen -= 1
 
     match key {
@@ -81,6 +88,8 @@ program ResourceRaid {
   }
 
   rule unlock {
+    // Unlocking consumes a remembered obstruction. The player must first bump
+    // into the door, then decide it is worth a key.
     require blocked exists else show 0
     require keys >= 1 else show 0
     doors clear blocked
@@ -97,6 +106,8 @@ program ResourceRaid {
   }
 
   rule alarm {
+    // The alarm branch is the little moral hazard of the example: hide and lose
+    // air, or force the stash for extra cargo and still pay oxygen.
     show main
     read alarm_key
     match alarm_key {

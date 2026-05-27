@@ -10,6 +10,8 @@ program Labyrinth777 {
   input action: digit
 
   state {
+    // Labyrinth777 is about orientation in volume: floor, row, and room all
+    // matter, but the calculator can only afford a compact row-like display.
     [displayed] pos: coord(floor 1..7, row 1..7, room 1..7) = 444
     [displayed] row_view: packed = 0
 
@@ -17,11 +19,15 @@ program Labyrinth777 {
       terminal at 0 show drained
     }
 
+    // Separate counters make boundary rules readable. The packed coordinate is
+    // for the screen and masks; these fields express player intent.
     [persistent] floor: counter 1..7 = 4
     [persistent] row: counter 1..7 = 4
     [persistent] room: counter 1..7 = 4
 
     [persistent] jumper: bitset {
+      // The personal jumper is hidden until found; clearing it records that the
+      // search has converged, not that a visible item was picked up.
       generated random
       cleared when found
     }
@@ -30,6 +36,8 @@ program Labyrinth777 {
   }
 
   world maze: vertical_maze {
+    // The maze is seven floors of seven-room rows. Local jumpers are room
+    // effects, while ordinary movement stays inside the current row/floor.
     position pos {
       floors 1..7
       rooms 1..7
@@ -125,6 +133,8 @@ program Labyrinth777 {
   }
 
   rule use_local_jumper {
+    // Key 5 is intentionally contextual: the same command climbs, drops, wins,
+    // or merely inspects depending on the room's generated tile.
     apply_exit_cost
     require energy > 0 else lose drained
 
@@ -157,6 +167,8 @@ program Labyrinth777 {
   }
 
   rule apply_exit_cost {
+    // Leaving a room is what costs energy. Entering a bad room is survivable;
+    // deciding to move out of it is where the suit pays the price.
     tile = cell_at(pos)
 
     match tile {
@@ -184,6 +196,8 @@ program Labyrinth777 {
   }
 
   rule inspect_room {
+    // Most rooms only update the display. The one special tile that matters
+    // immediately is the lost personal jumper.
     tile = cell_at(pos)
 
     match tile {

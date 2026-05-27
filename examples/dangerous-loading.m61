@@ -10,6 +10,8 @@ program DangerousLoading {
   input move: digit
 
   state {
+    // The display is a compact lane drama: boat position, telegraphed threat,
+    // remaining cargo, and hulls left.
     [displayed] boat: coord(floor 1..1, x 1..8, y 0..0) = 8
     [displayed] threat: coord(floor 1..1, x 1..8, y 0..0) = 3
     [displayed] cargo_left: resource 0..9 = 9 {
@@ -22,6 +24,8 @@ program DangerousLoading {
   }
 
   world harbor: lane {
+    // The eight-room lane encodes shore-to-ship travel. Room 1 loads cargo,
+    // room 8 unloads it, and the threat chooses a new water cell each turn.
     position boat {
       floors 1..1
       rooms 1..8
@@ -76,6 +80,8 @@ program DangerousLoading {
   }
 
   rule resolve_turn {
+    // Threat resolution happens before dock handling: a boat caught by the
+    // monster loses the trip even if it was about to deliver.
     if boat == threat {
       lose_boat
     }
@@ -88,6 +94,8 @@ program DangerousLoading {
   }
 
   rule handle_dock {
+    // Loading is a flag, not cargo movement per cell. The player must complete a
+    // full round trip before cargo_left decreases.
     if boat == 1 {
       loaded = 1
     }
@@ -103,6 +111,7 @@ program DangerousLoading {
   }
 
   rule lose_boat {
+    // A lost boat also loses any crate in transit and restarts at the ship side.
     boats_left -= 1
     loaded = 0
     boat = 8

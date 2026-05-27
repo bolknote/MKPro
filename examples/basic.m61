@@ -3,6 +3,10 @@ budget 105 cells
 optimize size
 reference basic_sum
 
+// Smallest useful program shape: two inputs become one displayed value. It is
+// intentionally boring so parser, allocator, and screen lowering have a stable
+// smoke test that is easy to inspect.
+
 program BasicSum {
   input x: digit
   input y: digit
@@ -17,6 +21,8 @@ program BasicSum {
   }
 
   turn {
+    // The whole observable story is "enter two digits, see their sum"; there is
+    // no persistent game state hidden behind the screen.
     read x
     read y
     result = x + y
