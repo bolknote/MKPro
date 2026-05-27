@@ -76,7 +76,6 @@ function metaFromOp(op: MachineOp): IrMeta {
   const meta: IrMeta = { mnemonic: op.mnemonic };
   if (op.comment !== undefined) meta.comment = op.comment;
   if (op.sourceLine !== undefined) meta.sourceLine = op.sourceLine;
-  if (op.unsafeReason !== undefined) meta.unsafeReason = op.unsafeReason;
   if (op.raw === true) meta.raw = true;
   return meta;
 }
@@ -85,7 +84,6 @@ function targetMetaFromAddress(item: Extract<MachineItem, { kind: "address" }>):
   const meta: IrTargetMeta = {};
   if (item.comment !== undefined) meta.comment = item.comment;
   if (item.sourceLine !== undefined) meta.sourceLine = item.sourceLine;
-  if (item.unsafeReason !== undefined) meta.unsafeReason = item.unsafeReason;
   return meta;
 }
 
@@ -251,7 +249,6 @@ function machineOpFromMeta(opcode: number, meta: IrMeta): MachineOp {
   };
   if (meta.comment !== undefined) op.comment = meta.comment;
   if (meta.sourceLine !== undefined) op.sourceLine = meta.sourceLine;
-  if (meta.unsafeReason !== undefined) op.unsafeReason = meta.unsafeReason;
   if (meta.raw === true) op.raw = true;
   return op;
 }
@@ -260,7 +257,6 @@ function machineAddressFromMeta(target: string | number, meta: IrTargetMeta): Ma
   const ref: Extract<MachineItem, { kind: "address" }> = { kind: "address", target };
   if (meta.comment !== undefined) ref.comment = meta.comment;
   if (meta.sourceLine !== undefined) ref.sourceLine = meta.sourceLine;
-  if (meta.unsafeReason !== undefined) ref.unsafeReason = meta.unsafeReason;
   return ref;
 }
 
@@ -502,7 +498,6 @@ export function machineItemsEqual(a: MachineItem, b: MachineItem): boolean {
       a.mnemonic === b.mnemonic &&
       (a.comment ?? undefined) === (b.comment ?? undefined) &&
       (a.sourceLine ?? undefined) === (b.sourceLine ?? undefined) &&
-      (a.unsafeReason ?? undefined) === (b.unsafeReason ?? undefined) &&
       (a.raw ?? false) === (b.raw ?? false)
     );
   }
@@ -510,8 +505,7 @@ export function machineItemsEqual(a: MachineItem, b: MachineItem): boolean {
     return (
       a.target === b.target &&
       (a.comment ?? undefined) === (b.comment ?? undefined) &&
-      (a.sourceLine ?? undefined) === (b.sourceLine ?? undefined) &&
-      (a.unsafeReason ?? undefined) === (b.unsafeReason ?? undefined)
+      (a.sourceLine ?? undefined) === (b.sourceLine ?? undefined)
     );
   }
   return false;

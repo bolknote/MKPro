@@ -1,5 +1,5 @@
 import type { IrOp } from "../types.ts";
-import { hasUnsafe, type IrPass, type IrPassFn } from "./helpers.ts";
+import { hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
 
 function isShowDisplayOp(op: IrOp): boolean {
   if (op.kind === "recall") return true;
@@ -29,12 +29,12 @@ function collectForwardPrologue(ops: readonly IrOp[], from: number): PrologueSeg
       i += 1;
       continue;
     }
-    if (isShowDisplayOp(op) && !hasUnsafe(op)) {
+    if (isShowDisplayOp(op) && !hasRewriteBarrier(op)) {
       collected.push(op);
       i += 1;
       continue;
     }
-    if (isShowStop(op) && !hasUnsafe(op)) {
+    if (isShowStop(op) && !hasRewriteBarrier(op)) {
       collected.push(op);
       return { ops: collected };
     }
@@ -60,7 +60,7 @@ function collectBackwardPrologue(ops: readonly IrOp[], beforeIndex: number): Bac
       continue;
     }
     if (!sawStop) {
-      if (isShowStop(op) && !hasUnsafe(op)) {
+      if (isShowStop(op) && !hasRewriteBarrier(op)) {
         collected.push(op);
         sawStop = true;
         i -= 1;
@@ -68,7 +68,7 @@ function collectBackwardPrologue(ops: readonly IrOp[], beforeIndex: number): Bac
       }
       return { ops: [], startIndex: -1 };
     }
-    if (isShowDisplayOp(op) && !hasUnsafe(op)) {
+    if (isShowDisplayOp(op) && !hasRewriteBarrier(op)) {
       collected.push(op);
       i -= 1;
       continue;
@@ -87,7 +87,7 @@ function collectBackwardPrologue(ops: readonly IrOp[], beforeIndex: number): Bac
   while (scan >= 0 && ops[scan]!.kind === "label") scan -= 1;
   if (scan >= 0) {
     const prior = ops[scan]!;
-    if (prior.kind === "store" && !hasUnsafe(prior)) {
+    if (prior.kind === "store" && !hasRewriteBarrier(prior)) {
       virtualHeadRegister = prior.register;
     }
   }
@@ -128,7 +128,7 @@ const run: IrPassFn = (ops) => {
     const op = ops[i]!;
     if (op.kind !== "jump") continue;
     if (typeof op.target !== "string") continue;
-    if (hasUnsafe(op)) continue;
+    if (hasRewriteBarrier(op)) continue;
     const labelAt = labelIndex.get(op.target);
     if (labelAt === undefined) continue;
     const headForward = collectForwardPrologue(ops, labelAt);
@@ -177,7 +177,7 @@ const run: IrPassFn = (ops) => {
   }
 
   if (applied === 0) {
-    return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+    return { ops: [...ops], applied: 0, optimizations: [] };
   }
   const shouldRemove = new Array<boolean>(ops.length).fill(false);
   for (const range of removeRanges) {
@@ -195,10 +195,8 @@ const run: IrPassFn = (ops) => {
       {
         name: "redundant-prologue-elimination",
         detail: `Removed ${applied} display/halt prologue(s) immediately before a jump to their identical loop head (${totalCells} cells).`,
-        unsafe: false,
       },
     ],
-    unsafeUnverified: [],
   };
 };
 

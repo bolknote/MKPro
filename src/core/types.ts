@@ -16,15 +16,12 @@ export type RegisterName =
   | "e";
 
 export type DeliveryMode = "manual" | "loader" | "hex";
-export type OptLevel = "safe" | "max";
 export type OutputMode = "listing" | "hex" | "json" | "all";
 export type TargetProfileId = "mk61_exact";
 
 export interface CompileOptions {
-  opt: OptLevel;
   delivery: DeliveryMode;
   budget: number;
-  warnUnsafe: boolean;
 }
 
 export interface Diagnostic {
@@ -37,7 +34,6 @@ export interface Diagnostic {
 export interface AppliedOptimization {
   name: string;
   detail: string;
-  unsafe: boolean;
 }
 
 export interface OpcodeInfo {
@@ -56,7 +52,6 @@ export interface ProgramAst {
   targetProfile: TargetProfileId;
   budget?: number;
   reference?: string;
-  optimize?: "size";
   v2?: V2ProgramAst;
   preloads: PreloadAst[];
   domains: DomainAst[];
@@ -809,7 +804,6 @@ export interface MachineOp {
   mnemonic: string;
   comment?: string;
   sourceLine?: number;
-  unsafeReason?: string;
   raw?: boolean;
 }
 
@@ -818,14 +812,12 @@ export interface MachineAddressRef {
   target: string | number;
   comment?: string;
   sourceLine?: number;
-  unsafeReason?: string;
 }
 
 export interface IrMeta {
   mnemonic: string;
   comment?: string;
   sourceLine?: number;
-  unsafeReason?: string;
   raw?: boolean;
   roles?: readonly CellRole[];
   tactic?: string;
@@ -834,7 +826,6 @@ export interface IrMeta {
 export interface IrTargetMeta {
   comment?: string;
   sourceLine?: number;
-  unsafeReason?: string;
   roles?: readonly CellRole[];
 }
 
@@ -982,7 +973,6 @@ export interface ResolvedStep {
   hex: string;
   mnemonic: string;
   comment?: string;
-  unsafeReason?: string;
 }
 
 export interface CompileReport {
@@ -993,9 +983,7 @@ export interface CompileReport {
   labels: Record<string, string>;
   optimizations: AppliedOptimization[];
   warnings: string[];
-  unsafeUnverified: string[];
   delivery: DeliveryMode;
-  opt: OptLevel;
   optimizer: OptimizerReport;
   preloads: PreloadReport[];
   reference?: ReferenceReport;
@@ -1032,7 +1020,6 @@ export interface OptimizerReport {
   active: number;
   considered: number;
   candidate: number;
-  blocked: number;
   planned: number;
   capabilities: OptimizerCapabilityReport[];
 }
@@ -1041,8 +1028,7 @@ export interface OptimizerCapabilityReport {
   id: string;
   category: "stack" | "flow" | "layout" | "data" | "display" | "trap" | "verification";
   source: "documented" | "mk61-delta" | "undocumented";
-  status: "active" | "considered" | "candidate" | "blocked" | "planned";
-  unsafe: boolean;
+  status: "active" | "considered" | "candidate" | "planned";
   detail: string;
   requires: string[];
 }
@@ -1062,7 +1048,6 @@ export interface CellRoleReport {
   hex: string;
   roles: CellRole[];
   note?: string;
-  unsafe?: boolean;
 }
 
 export interface CandidateReport {
@@ -1071,7 +1056,6 @@ export interface CandidateReport {
   steps: number;
   selected: boolean;
   reason: string;
-  unsafe: boolean;
 }
 
 export interface MachineFeatureUseReport {

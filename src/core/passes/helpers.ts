@@ -13,7 +13,6 @@ export interface PassResult {
   readonly ops: IrOp[];
   readonly applied: number;
   readonly optimizations: AppliedOptimization[];
-  readonly unsafeUnverified: string[];
 }
 
 export type IrPassFn = (ops: readonly IrOp[], context: PassContext) => PassResult;
@@ -25,7 +24,7 @@ export interface IrPass {
 }
 
 export function emptyResult(ops: readonly IrOp[]): PassResult {
-  return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+  return { ops: [...ops], applied: 0, optimizations: [] };
 }
 
 export function cellsPerOp(op: IrOp): number {
@@ -69,7 +68,6 @@ export function withTargetMeta(meta: IrTargetMeta): IrTargetMeta {
   const out: IrTargetMeta = {};
   if (meta.comment !== undefined) out.comment = meta.comment;
   if (meta.sourceLine !== undefined) out.sourceLine = meta.sourceLine;
-  if (meta.unsafeReason !== undefined) out.unsafeReason = meta.unsafeReason;
   return out;
 }
 
@@ -87,12 +85,6 @@ export function findOpForward<T extends IrOp>(
   return undefined;
 }
 
-export function hasUnsafe(op: IrOp): boolean {
-  if (op.kind === "label") return false;
-  if (op.kind === "orphan-address") return op.meta.unsafeReason !== undefined;
-  if ("meta" in op && (op.meta.unsafeReason !== undefined || op.meta.raw === true)) return true;
-  if ((op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") && op.targetMeta.unsafeReason !== undefined) {
-    return true;
-  }
+export function hasRewriteBarrier(_op: IrOp): boolean {
   return false;
 }

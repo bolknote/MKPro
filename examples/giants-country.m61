@@ -1,6 +1,5 @@
 target mk61
 budget 105 cells
-optimize size
 reference lordbss_pmk198_giants_country
 
 // "Giants Country" is based on Lord_BSS pmk198 by Vladimir Trofimchuk.

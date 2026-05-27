@@ -67,10 +67,10 @@ function reachableFromEntry(ops: readonly IrOp[]): Set<number> {
 }
 
 const run: IrPassFn = (ops) => {
-  if (ops.length === 0) return { ops: [], applied: 0, optimizations: [], unsafeUnverified: [] };
+  if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
   const reachable = reachableFromEntry(ops);
   if (reachable.size === ops.length) {
-    return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+    return { ops: [...ops], applied: 0, optimizations: [] };
   }
   computeLiveness(ops);
   const result: IrOp[] = [];
@@ -87,7 +87,7 @@ const run: IrPassFn = (ops) => {
     applied += 1;
   }
   if (applied === 0) {
-    return { ops: result, applied: 0, optimizations: [], unsafeUnverified: [] };
+    return { ops: result, applied: 0, optimizations: [] };
   }
   const passResult: PassResult = {
     ops: result,
@@ -96,10 +96,8 @@ const run: IrPassFn = (ops) => {
       {
         name: "dead-code-after-halt",
         detail: `Removed ${applied} unreachable op(s) from the entry CFG.`,
-        unsafe: false,
       },
     ],
-    unsafeUnverified: [],
   };
   return passResult;
 };

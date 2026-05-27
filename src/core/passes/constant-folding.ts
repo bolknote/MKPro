@@ -48,7 +48,7 @@ const run: IrPassFn = (ops) => {
     result.push(op);
   }
   if (applied === 0) {
-    return { ops: result, applied: 0, optimizations: [], unsafeUnverified: [] };
+    return { ops: result, applied: 0, optimizations: [] };
   }
   const passResult: PassResult = {
     ops: result,
@@ -57,10 +57,8 @@ const run: IrPassFn = (ops) => {
       {
         name: "constant-folding",
         detail: `Dropped ${applied} identity arithmetic operation(s) (0+ or 1*).`,
-        unsafe: false,
       },
     ],
-    unsafeUnverified: [],
   };
   return passResult;
 };

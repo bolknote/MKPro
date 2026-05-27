@@ -13,7 +13,6 @@ import {
 import type {
   CompileOptions,
   DeliveryMode,
-  OptLevel,
   OutputMode,
 } from "./core/index.ts";
 
@@ -86,8 +85,6 @@ function parseArgs(argv: string[]): CliArgs {
     const arg = argv[i]!;
     if (arg === "--out") {
       out = parseOutput(nextValue(argv, ++i, "--out"));
-    } else if (arg === "--opt") {
-      options.opt = parseOpt(nextValue(argv, ++i, "--opt"));
     } else if (arg === "--delivery") {
       options.delivery = parseDelivery(nextValue(argv, ++i, "--delivery"));
     } else if (arg === "--budget") {
@@ -96,8 +93,6 @@ function parseArgs(argv: string[]): CliArgs {
         throw new Error("--budget must be a positive integer.");
       }
       options.budget = budget;
-    } else if (arg === "--no-warn-unsafe") {
-      options.warnUnsafe = false;
     } else if (arg.startsWith("-")) {
       throw new Error(`Unknown flag '${arg}'.`);
     } else if (!file) {
@@ -125,11 +120,6 @@ function parseOutput(value: string): OutputMode {
   throw new Error("--out must be listing, hex, json, or all.");
 }
 
-function parseOpt(value: string): OptLevel {
-  if (value === "safe" || value === "max") return value;
-  throw new Error("--opt must be safe or max.");
-}
-
 function parseDelivery(value: string): DeliveryMode {
   if (value === "manual" || value === "loader" || value === "hex") return value;
   throw new Error("--delivery must be manual, loader, or hex.");
@@ -143,10 +133,8 @@ Usage:
   m61c explain file.m61
 
 Flags:
-  --opt safe|max              default: max
   --delivery manual|loader|hex default: hex
   --budget N                  default: 105
-  --no-warn-unsafe            hide unsafe markers in listings and JSON
 `;
 }
 

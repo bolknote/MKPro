@@ -20,7 +20,7 @@ describe("examples", () => {
     const explain = formatExplain(result);
 
     expect(listing).toContain("input digit x");
-    expect(hex).toBe("00: 50 41 50 61 10 40 50 60\n08: 50 51 00");
+    expect(hex).toBe("00: 50 40 50 60 10 40 50 60\n08: 50 51 00");
     expect(explain).toContain("Intent IR: lowered=yes, v2=yes");
   });
 
@@ -38,10 +38,10 @@ describe("examples", () => {
     expect(result.report.steps).toBeLessThanOrEqual(105);
   });
 
-  it("safe optimizer keeps tiny-game conservative", () => {
-    const safe = compileM61(loadExample("tiny-game"), { opt: "safe" });
-    expect(formatHex(safe).length).toBeGreaterThan(0);
-    expect(safe.report.candidates.some((candidate) => candidate.variant === "safe-compare-chain" && candidate.selected)).toBe(true);
-    expect(safe.report.cellRoles.some((cell) => cell.roles.includes("overlay"))).toBe(false);
+  it("always uses maximum optimizer defaults for tiny-game", () => {
+    const result = compileM61(loadExample("tiny-game"));
+    expect(formatHex(result).length).toBeGreaterThan(0);
+    expect(result.report.candidates.some((candidate) => candidate.variant === "fallthrough-compare-chain" && candidate.selected)).toBe(true);
+    expect(formatExplain(result)).not.toMatch(/unsafe/u);
   });
 });

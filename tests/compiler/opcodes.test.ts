@@ -27,7 +27,7 @@ describe("opcode catalog", () => {
     expect(findOpcodeName("50")?.code).toBe(0x50);
   });
 
-  it("marks undocumented opcodes as unsafe", () => {
+  it("keeps historical opcode risk metadata descriptive", () => {
     const undoc = opcodeByCode.get(0xf7);
     expect(undoc?.risk).toBe("undocumented");
     expect(undoc?.enterable).not.toContain("manual");

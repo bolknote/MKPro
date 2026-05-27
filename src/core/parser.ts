@@ -74,7 +74,6 @@ class M61Parser {
     let machine: "mk61" | undefined;
     let budget: number | undefined;
     let reference: string | undefined;
-    let optimize: "size" | undefined;
     let v2: V2ProgramAst | undefined;
     const preloads: PreloadAst[] = [];
     const domains: DomainAst[] = [];
@@ -99,9 +98,6 @@ class M61Parser {
         this.index += 1;
       } else if (line.text.startsWith("budget ")) {
         budget = parseBudget(line);
-        this.index += 1;
-      } else if (line.text === "optimize size") {
-        optimize = "size";
         this.index += 1;
       } else if (line.text.startsWith("reference ")) {
         reference = line.text.slice("reference ".length).trim();
@@ -142,7 +138,6 @@ class M61Parser {
     };
     if (budget !== undefined) program.budget = budget;
     if (reference !== undefined) program.reference = reference;
-    if (optimize !== undefined) program.optimize = optimize;
     if (v2 !== undefined) program.v2 = v2;
     return program;
   }

@@ -1,6 +1,17 @@
 import type { IrOp, RegisterName } from "../types.ts";
+import { getOpcode, registerIndex } from "../opcodes.ts";
 import { computeLiveness } from "./liveness-analysis.ts";
-import { hasUnsafe, type IrPass, type IrPassFn } from "./helpers.ts";
+import { hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
+
+const DIRECT_STORE_BASE = 0x40;
+const DIRECT_RECALL_BASE = 0x60;
+
+const LOOP_COUNTER_REGISTER: Record<string, RegisterName> = {
+  L0: "0",
+  L1: "1",
+  L2: "2",
+  L3: "3",
+};
 
 function gatherUsedRegisters(ops: readonly IrOp[]): Set<RegisterName> {
   const set = new Set<RegisterName>();
@@ -15,6 +26,7 @@ function gatherUsedRegisters(ops: readonly IrOp[]): Set<RegisterName> {
     ) {
       set.add(op.register);
     }
+    if (op.kind === "loop") set.add(LOOP_COUNTER_REGISTER[op.counter]!);
   }
   return set;
 }
@@ -61,43 +73,85 @@ function usesIndirectAccess(ops: readonly IrOp[], register: RegisterName): boole
   return false;
 }
 
+function usesLoopCounter(ops: readonly IrOp[], register: RegisterName): boolean {
+  return ops.some((op) => op.kind === "loop" && LOOP_COUNTER_REGISTER[op.counter] === register);
+}
+
+function unionInto(target: Set<number>, source: ReadonlySet<number>): void {
+  for (const value of source) target.add(value);
+}
+
+function coalescedOpcode(kind: "store" | "recall", register: RegisterName): number {
+  const base = kind === "store" ? DIRECT_STORE_BASE : DIRECT_RECALL_BASE;
+  return base + registerIndex(register);
+}
+
+function rewriteRegisterOp(op: IrOp, register: RegisterName): IrOp {
+  if (op.kind !== "store" && op.kind !== "recall") return op;
+  const opcode = coalescedOpcode(op.kind, register);
+  return {
+    ...op,
+    register,
+    opcode,
+    meta: {
+      ...op.meta,
+      mnemonic: getOpcode(opcode).name,
+    },
+  };
+}
+
 const run: IrPassFn = (ops) => {
-  if (ops.length === 0) return { ops: [], applied: 0, optimizations: [], unsafeUnverified: [] };
-  if (ops.some((op) => hasUnsafe(op))) {
-    return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+  if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
+  if (ops.some((op) => hasRewriteBarrier(op))) {
+    return { ops: [...ops], applied: 0, optimizations: [] };
   }
   const registers = gatherUsedRegisters(ops);
   if (registers.size <= 1) {
-    return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+    return { ops: [...ops], applied: 0, optimizations: [] };
   }
+  const liveness = computeLiveness(ops);
+  const liveAtEntry = liveness.liveIn[0] ?? new Set<RegisterName>();
   const ranges = liveRangePerRegister(ops, registers);
   const ordered = [...registers].sort();
   const mapping = new Map<RegisterName, RegisterName>();
   for (let i = 0; i < ordered.length; i += 1) {
     const a = ordered[i]!;
     if (mapping.has(a)) continue;
+    if (liveAtEntry.has(a)) continue;
     if (usesIndirectAccess(ops, a)) continue;
+    if (usesLoopCounter(ops, a)) continue;
     for (let j = i + 1; j < ordered.length; j += 1) {
       const b = ordered[j]!;
       if (mapping.has(b)) continue;
+      if (liveAtEntry.has(b)) continue;
       if (usesIndirectAccess(ops, b)) continue;
+      if (usesLoopCounter(ops, b)) continue;
       const rangeA = ranges.get(a)!;
       const rangeB = ranges.get(b)!;
       if (intersects(rangeA, rangeB)) continue;
-      // Safety net: skip — coalescing would also need to rewrite stores/recalls and
-      // we lack the address-rewrite plumbing here. The pass remains structural for
-      // capability accounting; concrete rewriting can be added once Phase 4 IR
-      // emitter is in place.
       mapping.set(b, a);
+      unionInto(rangeA, rangeB);
       break;
     }
   }
-  // The pass currently never rewrites the program; it only reports an opportunity
-  // when it finds at least one non-overlapping pair.
   if (mapping.size === 0) {
-    return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+    return { ops: [...ops], applied: 0, optimizations: [] };
   }
-  return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+  const result = ops.map((op) => {
+    if (op.kind !== "store" && op.kind !== "recall") return op;
+    const replacement = mapping.get(op.register);
+    return replacement === undefined ? op : rewriteRegisterOp(op, replacement);
+  });
+  return {
+    ops: result,
+    applied: mapping.size,
+    optimizations: [
+      {
+        name: "register-coalesce",
+        detail: `Coalesced ${mapping.size} non-overlapping register live range(s).`,
+      },
+    ],
+  };
 };
 
 export const registerCoalesce: IrPass = {

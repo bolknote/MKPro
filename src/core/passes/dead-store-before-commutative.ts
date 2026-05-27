@@ -1,5 +1,5 @@
 import type { IrOp, RegisterName } from "../types.ts";
-import { hasUnsafe, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
+import { hasRewriteBarrier, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
 
 function registerReadBeforeNextWrite(
   ops: readonly IrOp[],
@@ -31,9 +31,9 @@ const run: IrPassFn = (ops) => {
       next?.kind === "recall" &&
       after !== undefined &&
       isCommutativeAlu(after) &&
-      !hasUnsafe(current) &&
-      !hasUnsafe(next) &&
-      !hasUnsafe(after) &&
+      !hasRewriteBarrier(current) &&
+      !hasRewriteBarrier(next) &&
+      !hasRewriteBarrier(after) &&
       !registerReadBeforeNextWrite(ops, i + 3, current.register)
     ) {
       applied += 1;
@@ -50,11 +50,9 @@ const run: IrPassFn = (ops) => {
             {
               name: "dead-temp-store",
               detail: `Removed ${applied} temp store(s) whose X value was consumed directly by stack scheduling.`,
-              unsafe: false,
             },
           ]
         : [],
-    unsafeUnverified: [],
   };
   return passResult;
 };

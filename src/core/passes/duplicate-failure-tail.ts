@@ -1,5 +1,5 @@
 import type { IrOp, IrTargetMeta } from "../types.ts";
-import { hasUnsafe, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
+import { hasRewriteBarrier, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
 
 function isZeroDigit(op: IrOp): boolean {
   return op.kind === "plain" && op.opcode === 0x00;
@@ -46,11 +46,11 @@ const run: IrPassFn = (ops) => {
       isPauseLike(secondPause) &&
       endLabel?.kind === "label" &&
       trampolineJump.target === endLabel.name &&
-      !hasUnsafe(firstZero) &&
-      !hasUnsafe(firstPause) &&
-      !hasUnsafe(trampolineJump) &&
-      !hasUnsafe(secondZero) &&
-      !hasUnsafe(secondPause)
+      !hasRewriteBarrier(firstZero) &&
+      !hasRewriteBarrier(firstPause) &&
+      !hasRewriteBarrier(trampolineJump) &&
+      !hasRewriteBarrier(secondZero) &&
+      !hasRewriteBarrier(secondPause)
     ) {
       rewrite.set(firstLabel.name, secondLabel.name);
       rewrite.set(trampolineLabel.name, endLabel.name);
@@ -61,7 +61,7 @@ const run: IrPassFn = (ops) => {
   }
 
   if (applied === 0) {
-    return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+    return { ops: [...ops], applied: 0, optimizations: [] };
   }
 
   const result: IrOp[] = [];
@@ -77,7 +77,6 @@ const run: IrPassFn = (ops) => {
         const targetMeta: IrTargetMeta = {};
         if (op.targetMeta.comment !== undefined) targetMeta.comment = op.targetMeta.comment;
         if (op.targetMeta.sourceLine !== undefined) targetMeta.sourceLine = op.targetMeta.sourceLine;
-        if (op.targetMeta.unsafeReason !== undefined) targetMeta.unsafeReason = op.targetMeta.unsafeReason;
         result.push({ ...op, target: replacement, targetMeta });
         continue;
       }
@@ -92,10 +91,8 @@ const run: IrPassFn = (ops) => {
       {
         name: "duplicate-failure-tail-merge",
         detail: `Merged ${applied} duplicate pause-0 failure tail(s).`,
-        unsafe: false,
       },
     ],
-    unsafeUnverified: [],
   };
   return passResult;
 };

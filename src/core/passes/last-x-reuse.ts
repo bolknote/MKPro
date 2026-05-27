@@ -1,5 +1,5 @@
 import type { IrOp, RegisterName } from "../types.ts";
-import { hasUnsafe, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
+import { hasRewriteBarrier, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
 
 function clobbersX(op: IrOp): boolean {
   switch (op.kind) {
@@ -40,11 +40,11 @@ const run: IrPassFn = (ops) => {
       continue;
     }
     if (op.kind === "store") {
-      if (!hasUnsafe(op)) xHolds = op.register;
+      if (!hasRewriteBarrier(op)) xHolds = op.register;
       else xHolds = undefined;
       continue;
     }
-    if (op.kind === "recall" && !hasUnsafe(op) && xHolds === op.register) {
+    if (op.kind === "recall" && !hasRewriteBarrier(op) && xHolds === op.register) {
       removed.add(i);
       continue;
     }
@@ -67,7 +67,7 @@ const run: IrPassFn = (ops) => {
     if (clobbersX(op)) xHolds = undefined;
   }
   if (removed.size === 0) {
-    return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+    return { ops: [...ops], applied: 0, optimizations: [] };
   }
   const result: IrOp[] = [];
   for (let i = 0; i < ops.length; i += 1) {
@@ -80,10 +80,8 @@ const run: IrPassFn = (ops) => {
       {
         name: "last-x-reuse",
         detail: `Dropped ${removed.size} recall(s) whose register value was already in X.`,
-        unsafe: false,
       },
     ],
-    unsafeUnverified: [],
   };
   return passResult;
 };

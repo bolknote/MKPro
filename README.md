@@ -4,10 +4,9 @@
 Elektronika MK-61 program listings.
 
 This milestone focuses on the translator. The repo also contains emulator
-smoke/regression tests, but not a full semantic verifier for every optimizer
-rewrite yet. Optimizations that rely on undocumented target behavior are
-reported as `unsafe-unverified` so you can see what still depends on
-target-profile facts.
+smoke/regression tests. The `mk61_exact` target profile is the authoritative
+execution model for optimizer proofs, including documented, undocumented, and
+dark-entry machine behavior.
 
 ## Run
 
@@ -30,15 +29,9 @@ m61c explain file.m61
 
 Flags:
 
-- `--opt safe|max` (default `max`). `safe` lowers conservatively. `max` keeps
-  automatic intent/lowering tactics and reports unverified target-profile
-  choices explicitly.
-- `--delivery manual|loader|hex` (default `hex`) controls which opcodes are
-  considered enterable. Anything outside that delivery is reported as
-  `unsafe-unverified`.
+- `--delivery manual|loader|hex` (default `hex`) controls opcode delivery
+  metadata for listings.
 - `--budget N` (default `105`). Hard error if exceeded.
-- `--no-warn-unsafe` strips `unsafe-unverified` annotations from listings
-  and JSON output.
 
 ## Browser Bridge
 
@@ -64,7 +57,6 @@ entries, overlays, X2/display bytes, or other MK-61 tricks.
 ```m61
 target mk61
 budget 105 cells
-optimize size
 
 program TinyGame {
   input key: digit
@@ -95,12 +87,11 @@ program TinyGame {
 }
 ```
 
-`--opt safe` lowers conservatively. `--opt max` uses the `mk61_exact` target
-profile and automatic proofs to select aggressive tactics: indirect flow,
-super-dark dispatch, branch removal, shared tails, cyclic layout, code/data
-overlay, X2/`ВП`, display-byte packing, hexadecimal mantissa data, R0 edge
-cases, and Danilov-style error-stop idioms when the source semantics allows
-them.
+The compiler always uses the `mk61_exact` target profile and automatic proofs
+to select the strongest available tactics: indirect flow, super-dark dispatch,
+branch removal, shared tails, cyclic layout, code/data overlay, X2/`ВП`,
+display-byte packing, hexadecimal mantissa data, R0 edge cases, and
+Danilov-style error-stop idioms when the source semantics allows them.
 
 All `examples/*.m61` programs are written in the human DSL. They cover:
 
@@ -147,8 +138,8 @@ program reports, and the headless emulator loader smoke test.
 - JSON reports include IR stats, layout cell roles, candidate lowerings, and
   a budget summary.
 - JSON/explain reports include an automatic optimizer capability matrix:
-  implemented rules, candidates, safe-mode blocks, and planned verifier hooks
-  for Danilov-era MK-61 quirks.
+  active rules, considered candidates, and planned verifier hooks for
+  Danilov-era MK-61 quirks.
 - Const expressions detect simple cycles.
 - Implicit allocation for an undeclared assign/ask target produces a warning,
   not a silent allocation.

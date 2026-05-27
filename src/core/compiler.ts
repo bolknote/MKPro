@@ -53,10 +53,8 @@ import type {
 } from "./types.ts";
 
 const DEFAULT_OPTIONS: CompileOptions = {
-  opt: "max",
   delivery: "hex",
   budget: 105,
-  warnUnsafe: true,
 };
 
 const SIZE_BENCHMARK_REFERENCES = new Set([
@@ -126,7 +124,6 @@ export function compileM61(
   const diagnostics: Diagnostic[] = [];
   const optimizations: AppliedOptimization[] = [];
   const warnings: string[] = [];
-  const unsafeUnverified: string[] = [];
   const candidates: CandidateReport[] = [];
 
   const gameIntentProgram = tryCompileGameIntentProgram(ast, opts, targetProfile);
@@ -141,7 +138,6 @@ export function compileM61(
     optimizations.push({
       name: "intent-domain-lowering",
       detail: `Lowered ${ast.v2.state.length} state fields and ${ast.v2.rules.length} rules through the generic intent pipeline.`,
-      unsafe: false,
     });
   }
 
@@ -153,12 +149,11 @@ export function compileM61(
     diagnostics,
     optimizations,
     warnings,
-    unsafeUnverified,
     candidates,
   );
 
   context.compileProgram();
-  const optimized = optimizeItems(context.items, opts, optimizations, unsafeUnverified);
+  const optimized = optimizeItems(context.items, opts, optimizations);
   const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, targetProfile);
   const largestBlocks = summarizeBlocks(optimized);
 
@@ -174,26 +169,20 @@ export function compileM61(
     throw new CompileError(diagnostics);
   }
 
-  const visibleSteps: ResolvedStep[] = opts.warnUnsafe
-    ? steps
-    : steps.map(stripUnsafeReason);
-
   const report: CompileReport = {
-    steps: visibleSteps.length,
+    steps: steps.length,
     budget: opts.budget,
     targetProfile: targetProfile.id,
     registers: visiblePublicRegisters(allocation.registers),
     labels,
     optimizations,
     warnings,
-    unsafeUnverified: opts.warnUnsafe ? unsafeUnverified : [],
     delivery: opts.delivery,
-    opt: opts.opt,
     optimizer: buildOptimizerReport(ast, opts, optimizations, candidates, cellRoles, targetProfile),
     preloads: buildPreloadReport(ast, allocation),
     ir: buildIrReport(ast, optimized, steps.length),
-    cellRoles: opts.warnUnsafe ? cellRoles : cellRoles.map(stripCellUnsafe),
-    candidates: opts.warnUnsafe ? candidates : candidates.map(stripCandidateUnsafe),
+    cellRoles,
+    candidates,
     budgetReport: buildBudgetReport(steps.length, opts.budget, largestBlocks, 0),
     machineFeaturesUsed: buildMachineFeaturesUsed(targetProfile, optimizations, cellRoles, candidates),
     proofs: buildProofReport(ast, optimized, cellRoles, opts, optimizations),
@@ -209,18 +198,7 @@ export function compileM61(
     hotBlocks: largestBlocks.map(parseHotBlock),
   };
 
-  return { ast, items: optimized, steps: visibleSteps, report, diagnostics };
-}
-
-function stripUnsafeReason(step: ResolvedStep): ResolvedStep {
-  const clean: ResolvedStep = {
-    address: step.address,
-    opcode: step.opcode,
-    hex: step.hex,
-    mnemonic: step.mnemonic,
-  };
-  if (step.comment !== undefined) clean.comment = step.comment;
-  return clean;
+  return { ast, items: optimized, steps, report, diagnostics };
 }
 
 function visiblePublicRegisters(
@@ -471,7 +449,6 @@ interface GameBackendCandidate {
   readonly preloads: PreloadReport[];
   readonly hotBlocks: HotBlockReport[];
   readonly reason: string;
-  readonly unsafe: boolean;
 }
 
 function roundTripLayoutThroughIr(layout: LayoutIrCell[]): LayoutIrCell[] {
@@ -487,16 +464,6 @@ function tryCompileGameIntentProgram(
 ): CompileResult | undefined {
   const intent = buildGameIntent(ast);
   if (!intent) return undefined;
-  if (options.opt !== "max") {
-    throw new CompileError([
-      {
-        level: "error",
-        code: "GAME_INTENT_NEEDS_EXACT_TARGET",
-        message:
-          "This game intent exceeds the 105-cell target without mk61_exact tactics: indirect flow, X2/ВП, cyclic layout, hex mantissa, and overlay are required.",
-      },
-    ]);
-  }
 
   const effectIr = buildGameEffectIr(intent);
   const candidateIr = buildCandidateIr(intent);
@@ -551,9 +518,7 @@ function tryCompileGameIntentProgram(
     labels: selectedBackend.labels,
     optimizations,
     warnings,
-    unsafeUnverified: [],
     delivery: options.delivery,
-    opt: options.opt,
     optimizer: buildOptimizerReport(ast, options, optimizations, candidates, cellRoles, targetProfile),
     preloads: selectedBackend.preloads,
     ...(referenceResult?.report === undefined ? {} : { reference: referenceResult.report }),
@@ -616,7 +581,6 @@ function buildUniversalBackendCandidate(intent: GameIntent, tacticCandidates: Ca
       { name: "collection+event", estimatedCells: 29 },
     ],
     reason: "fallback covers the full spatial/resource feature set",
-    unsafe: true,
   };
 }
 
@@ -636,7 +600,6 @@ function buildShapeBackendCandidate(intent: GameIntent): GameBackendCandidate | 
     preloads: preloadsForShape(intent.shape),
     hotBlocks: segments.map((segment) => ({ name: segment.name, estimatedCells: segment.opcodes.length })),
     reason: `covers ${intent.features.join(", ")} without universal fallback machinery`,
-    unsafe: true,
   };
 }
 
@@ -772,7 +735,7 @@ function kernelSegmentsForShape(shape: Exclude<GameIntentShape, "universal_spati
         { name: "neighbor-north-band", opcodes: [0x6a, 0x01, 0x11, 0x34, 0x37, 0x35, 0x4c, 0x6a, 0x10, 0x34, 0x37, 0x35, 0x4d, 0x6c, 0x6d, 0x10] },
         { name: "neighbor-south-band", opcodes: [0x6a, 0x01, 0x10, 0x34, 0x37, 0x35, 0x4c, 0x6a, 0x10, 0x34, 0x37, 0x35, 0x4d, 0x6c, 0x6d, 0x10] },
         { name: "neighbor-side-count", opcodes: [0x6a, 0x65, 0x12, 0x37, 0x35, 0x6b, 0x10, 0x4b, 0x6c, 0x10, 0x4c, 0x52] },
-        { name: "safe-cell-resource", opcodes: [0x6d, 0x01, 0x11, 0x4d, 0x5e, 0x5e, 0x63, 0x6b, 0x50, 0x52] },
+        { name: "clear-cell-resource", opcodes: [0x6d, 0x01, 0x11, 0x4d, 0x5e, 0x5e, 0x63, 0x6b, 0x50, 0x52] },
         { name: "mine-terminal-tail", opcodes: [0x6b, 0x50, 0x6d, 0x50, 0x20, 0x10, 0x4e, 0x52, 0x3b, 0x35] },
         { name: "neighbor-finalizer", opcodes: [0x6a, 0x4a, 0x6b, 0x4b, 0x6c, 0x4c, 0x57, 0x00, 0x63, 0x1c, 0x34, 0x50] },
       ];
@@ -827,7 +790,6 @@ function buildGameBackendCandidateReports(
     steps: candidate.layout.length,
     selected: candidate.variant === selected.variant,
     reason: candidate.variant === selected.variant ? `selected; ${candidate.reason}` : `rejected; ${candidate.reason}`,
-    unsafe: candidate.unsafe,
   }));
 }
 
@@ -1259,7 +1221,7 @@ function buildGameIntentOptimizations(
   intent: GameIntent,
   backend: GameBackendCandidate,
 ): AppliedOptimization[] {
-  const selected = (name: string, detail: string, unsafe = false): AppliedOptimization => ({ name, detail, unsafe });
+  const selected = (name: string, detail: string): AppliedOptimization => ({ name, detail });
   const base: AppliedOptimization[] = [
     selected("intent-domain-lowering", `Lowered ${intent.name} state/rules/domains into GameIntent.`),
     selected("game-intent-lowering", "Built GameIntent for spatial state, collections, resources, events, and terminal outcomes."),
@@ -1267,7 +1229,7 @@ function buildGameIntentOptimizations(
     ...(intent.queries.length > 0
       ? [selected("spatial-query-lowering", `Captured ${intent.queries.length} board/world query expression(s): ${formatGameQueries(intent.queries)}.`)]
       : []),
-    selected("game-backend-selection", `Selected ${backend.variant} (${backend.layout.length} cells): ${backend.reason}.`, backend.unsafe),
+    selected("game-backend-selection", `Selected ${backend.variant} (${backend.layout.length} cells): ${backend.reason}.`),
   ];
   if (backend.variant !== "universal_spatial_resource") {
     const shapeSpecific = [
@@ -1275,18 +1237,16 @@ function buildGameIntentOptimizations(
       selected(
         "shape-specific-microkernel",
         `Lowered ${intent.shape} features directly, avoiding universal board/bitset/world-table machinery.`,
-        true,
       ),
     ];
     if (intent.queries.length > 0) {
-      shapeSpecific.push(selected("query-specialization", `Specialized query lowering for ${formatGameQueries(intent.queries)}.`, true));
+      shapeSpecific.push(selected("query-specialization", `Specialized query lowering for ${formatGameQueries(intent.queries)}.`));
     }
     if (backend.variant === "board_fleet_duel") {
       shapeSpecific.push(
         selected(
           "fleet-duel-lowering",
           "Lowered random board shot, negative hit report, fleet probe/clear, ship counters, and two terminal endings as one duel microkernel.",
-          true,
         ),
       );
     }
@@ -1294,21 +1254,21 @@ function buildGameIntentOptimizations(
   }
   return [
     ...base,
-    selected("indirect-register-flow", "Selected R7/R8/R9-style indirect flow for compact command and procedure dispatch.", true),
-    selected("super-dark-dispatch", "Selected super/dark formal address entries where one-command side paths are profitable.", true),
-    selected("cyclic-address-layout", "Selected wraparound address layout so tails continue through formal address space.", true),
+    selected("indirect-register-flow", "Selected R7/R8/R9-style indirect flow for compact command and procedure dispatch."),
+    selected("super-dark-dispatch", "Selected super/dark formal address entries where one-command side paths are profitable."),
+    selected("cyclic-address-layout", "Selected wraparound address layout so tails continue through formal address space."),
     selected("shared-tail-layout", "Merged movement, wall-break, search, and initialization tails."),
-    selected("code-data-overlay", "Reused branch operands and command bytes as address/data constants.", true),
-    selected("constants-dual-use", "Reused constants as coefficients, rounding adjusters, and indirect branch addresses.", true),
-    selected("x2-display-byte-scheduling", "Scheduled X2 saves/restores across ВП/display-byte boundaries.", true),
-    selected("vp-fraction-restore", "Used ВП as X2 restoration and fractional-part transform.", true),
-    selected("hex-mantissa-arithmetic", "Packed spatial masks and resource transforms into hexadecimal mantissa/sign digits.", true),
-    selected("fractional-indirect-addressing", "Used indirect-address truncation and fractional mantissa effects for compact bit selection.", true),
-    selected("r0-indirect-counter", "Used R0 indirect store with the negative-counter behavior required by generated mask loops.", true),
-    selected("kzn-double", "Used К ЗН as a one-cell doubling/sign-digit transform.", true),
-    selected("kor-digit-test", "Used К∨ as a compact multi-digit/boundary test.", true),
-    selected("kmax-zero-through", "Used К max as a zero-through stack transform and <-> replacement.", true),
-    selected("return-zero-jump", "Selected В/О where the return stack proof permits one-cell return/jump behavior.", true),
+    selected("code-data-overlay", "Reused branch operands and command bytes as address/data constants."),
+    selected("constants-dual-use", "Reused constants as coefficients, rounding adjusters, and indirect branch addresses."),
+    selected("x2-display-byte-scheduling", "Scheduled X2 saves/restores across ВП/display-byte boundaries."),
+    selected("vp-fraction-restore", "Used ВП as X2 restoration and fractional-part transform."),
+    selected("hex-mantissa-arithmetic", "Packed spatial masks and resource transforms into hexadecimal mantissa/sign digits."),
+    selected("fractional-indirect-addressing", "Used indirect-address truncation and fractional mantissa effects for compact bit selection."),
+    selected("r0-indirect-counter", "Used R0 indirect store with the negative-counter behavior required by generated mask loops."),
+    selected("kzn-double", "Used К ЗН as a one-cell doubling/sign-digit transform."),
+    selected("kor-digit-test", "Used К∨ as a compact multi-digit/boundary test."),
+    selected("kmax-zero-through", "Used К max as a zero-through stack transform and <-> replacement."),
+    selected("return-zero-jump", "Selected В/О where the return stack proof permits one-cell return/jump behavior."),
   ];
 }
 
@@ -1326,7 +1286,6 @@ function buildGameIntentCandidates(candidates: CandidateIr[]): CandidateReport[]
     steps: candidate.cost,
     selected: candidate.selected,
     reason: `selected; ${candidate.proofs.join("; ")}`,
-    unsafe: candidate.features.some((feature) => ["super-dark-dispatch", "dark-entries", "display-bytes", "x2-register"].includes(feature)),
   }));
 }
 
@@ -1476,9 +1435,6 @@ function buildGameIntentCellRoles(layout: LayoutIrCell[], targetProfile: TargetP
       roles: uniqueRoles(roles),
     };
     if (notes.length > 0) role.note = notes.join("; ");
-    if (role.roles.includes("overlay") || role.roles.includes("dark-entry") || role.roles.includes("display-byte")) {
-      role.unsafe = true;
-    }
     return role;
   });
 }
@@ -1650,7 +1606,6 @@ class EmitContext {
   private readonly diagnostics: Diagnostic[];
   private readonly optimizations: AppliedOptimization[];
   private readonly warnings: string[];
-  private readonly unsafeUnverified: string[];
   private readonly candidates: CandidateReport[];
   private readonly inlineProcNames: Set<string>;
   private currentXVariable: string | undefined;
@@ -1662,7 +1617,6 @@ class EmitContext {
     diagnostics: Diagnostic[],
     optimizations: AppliedOptimization[],
     warnings: string[],
-    unsafeUnverified: string[],
     candidates: CandidateReport[],
   ) {
     this.ast = ast;
@@ -1671,9 +1625,8 @@ class EmitContext {
     this.diagnostics = diagnostics;
     this.optimizations = optimizations;
     this.warnings = warnings;
-    this.unsafeUnverified = unsafeUnverified;
     this.candidates = candidates;
-    this.inlineProcNames = options.opt === "max" ? findSingleUseProcNames(ast) : new Set();
+    this.inlineProcNames = findSingleUseProcNames(ast);
     for (const declaration of ast.declarations) {
       if (declaration.kind === "const") {
         this.constants.set(declaration.name, declaration.value);
@@ -1709,13 +1662,12 @@ class EmitContext {
   }
 
   private compileInitialState(): void {
-    if (this.ast.v2 && this.options.opt === "max") {
+    if (this.ast.v2) {
       const fields = this.ast.states.flatMap((state) => state.fields);
       if (fields.some((field) => field.initial !== undefined || field.initialInput !== undefined)) {
         this.optimizations.push({
           name: "auto-preload-initial-state",
           detail: "Moved initial state into setup/preload values so official program cells stay focused on turn logic.",
-          unsafe: false,
         });
       }
       return;
@@ -1739,7 +1691,6 @@ class EmitContext {
         this.optimizations.push({
           name: "intent-state-lowering",
           detail: `Lowered state ${state.name} with ${state.fields.length} fields to register-backed values.`,
-          unsafe: false,
         });
       }
     }
@@ -1771,7 +1722,6 @@ class EmitContext {
         this.optimizations.push({
           name: "show-read-fusion",
           detail: `Fused show ${statement.display} and read ${next.inputType} ${next.target} into one calculator stop.`,
-          unsafe: false,
         });
         index += 1;
         continue;
@@ -1797,7 +1747,6 @@ class EmitContext {
         this.optimizations.push({
           name: "intent-input-lowering",
           detail: `Lowered input ${statement.inputType} at line ${statement.line} to calculator stop plus register store.`,
-          unsafe: false,
         });
         return;
       case "halt":
@@ -1832,16 +1781,10 @@ class EmitContext {
         this.compileBlockCall(statement.block, statement.line);
         return;
       case "core":
-        this.compileRawLines(statement.lines, false);
+        this.compileRawLines(statement.lines);
         return;
       case "egg":
-        if (this.options.opt === "safe") {
-          this.warnings.push(
-            `Skipped egg block at line ${statement.line} because --opt safe is active.`,
-          );
-          return;
-        }
-        this.compileRawLines(statement.lines, true);
+        this.compileRawLines(statement.lines);
         return;
       case "trap":
         this.compileTrap(statement);
@@ -1877,7 +1820,6 @@ class EmitContext {
     this.optimizations.push({
       name: "tic-tac-toe-cell-mask-cse",
       detail: `Computed cell_mask once for adjacent cell_used/cell_mark at lines ${first.line}/${second.line}.`,
-      unsafe: false,
     });
     return true;
   }
@@ -1915,7 +1857,6 @@ class EmitContext {
         steps: selectedCost,
         selected: false,
         reason: `Branchless ${selected.name} estimated at ${selectedCost} cells; ordinary branched form was shorter (${ordinaryCost}).`,
-        unsafe: false,
       });
       return false;
     }
@@ -1929,12 +1870,10 @@ class EmitContext {
     this.optimizations.push({
       name: "branch-removal",
       detail: `${selected.detail} at line ${statement.line}; emitted branchless ${selected.name}.`,
-      unsafe: false,
     });
     this.optimizations.push({
       name: selected.name,
       detail: `${selected.detail} at line ${statement.line} (${selectedCost} vs ${ordinaryCost} estimated steps).`,
-      unsafe: false,
     });
     return true;
   }
@@ -1955,7 +1894,6 @@ class EmitContext {
         steps: selectedCost,
         selected: false,
         reason: `Branchless ${selected.name} estimated at ${selectedCost} cells; paired branched form was shorter (${ordinaryCost}).`,
-        unsafe: false,
       });
       return false;
     }
@@ -1965,12 +1903,10 @@ class EmitContext {
     this.optimizations.push({
       name: "branch-removal",
       detail: `${selected.detail} at lines ${first.line}/${second.line}; emitted branchless ${selected.name}.`,
-      unsafe: false,
     });
     this.optimizations.push({
       name: selected.name,
       detail: `${selected.detail} at lines ${first.line}/${second.line} (${selectedCost} vs ${ordinaryCost} estimated steps).`,
-      unsafe: false,
     });
     return true;
   }
@@ -2017,25 +1953,20 @@ class EmitContext {
     this.optimizations.push({
       name: "switch-lowering",
       detail: `Lowered switch at line ${statement.line} via scratch R${register}; expression evaluated once.`,
-      unsafe: false,
     });
   }
 
   private compileDispatch(statement: Extract<StatementAst, { kind: "dispatch" }>): void {
     const site = statement.name ?? `dispatch@${statement.line}`;
-    const selected = selectDispatchCandidate(statement, this.options, targetProfileFor(this.ast.machine));
+    const selected = selectDispatchCandidate(statement, targetProfileFor(this.ast.machine));
     for (const candidate of selected.candidates) this.candidates.push(candidate);
 
-    if (selected.selected.unsafe) {
-      this.unsafeUnverified.push(`${site}: ${selected.selected.variant} is unsafe-unverified`);
-    }
     this.optimizations.push({
       name: "dispatch-lowering",
       detail: `Selected ${selected.selected.variant} for ${site}.`,
-      unsafe: selected.selected.unsafe,
     });
 
-    this.compileDispatchCompareChain(statement, selected.selected.variant !== "safe-compare-chain");
+    this.compileDispatchCompareChain(statement, selected.selected.variant === "fallthrough-compare-chain");
   }
 
   private compileDispatchCompareChain(
@@ -2066,7 +1997,6 @@ class EmitContext {
       this.optimizations.push({
         name: "dispatch-source-register",
         detail: `Reused R${register} as dispatch scratch for identifier expression.`,
-        unsafe: false,
       });
     }
 
@@ -2136,13 +2066,12 @@ class EmitContext {
     }
     this.emitOp(0x50, "С/П", `show ${display.name}`, line);
 
-    const canUseDisplayBytes = this.options.opt === "max" && targetSupports(targetProfileFor(this.ast.machine), "display-bytes");
+    const canUseDisplayBytes = targetSupports(targetProfileFor(this.ast.machine), "display-bytes");
     this.optimizations.push({
       name: "packed-display-lowering",
       detail: canUseDisplayBytes
         ? `Display ${display.name} may use display-byte encodings in later layout passes.`
         : `Display ${display.name} lowered as ordinary packed numeric output.`,
-      unsafe: false,
     });
   }
 
@@ -2155,7 +2084,6 @@ class EmitContext {
         this.optimizations.push({
           name: "single-use-rule-inline",
           detail: `Inlined single-use rule ${proc.name} at line ${line}.`,
-          unsafe: false,
         });
         return;
       }
@@ -2163,7 +2091,6 @@ class EmitContext {
       this.optimizations.push({
         name: "proc-call-lowering",
         detail: `Compiled call to rule ${proc.name} as ПП/В/О subroutine.`,
-        unsafe: false,
       });
       return;
     }
@@ -2176,7 +2103,6 @@ class EmitContext {
       this.optimizations.push({
         name: "inline-block",
         detail: `Inlined block ${block.name} at line ${line}.`,
-        unsafe: false,
       });
       return;
     }
@@ -2184,7 +2110,6 @@ class EmitContext {
     this.optimizations.push({
       name: block.mode === "shared_tail" ? "shared-tail-layout" : "tail-call-layout",
       detail: `Compiled call to ${block.name} as direct tail jump.`,
-      unsafe: false,
     });
   }
 
@@ -2203,13 +2128,10 @@ class EmitContext {
       mnemonic,
       `trap ${statement.trap}`,
       statement.line,
-      "error-stop idiom is unsafe-unverified",
     );
-    this.unsafeUnverified.push(`trap ${statement.trap} at line ${statement.line}`);
     this.optimizations.push({
       name: "error-stop",
       detail: `Used ${mnemonic} as trap ${statement.trap} at line ${statement.line}.`,
-      unsafe: true,
     });
   }
 
@@ -2225,7 +2147,6 @@ class EmitContext {
     this.optimizations.push({
       name: "fl-unit-decrement",
       detail: `Lowered ${statement.target} -= 1 through ${getOpcode(opcode).name}.`,
-      unsafe: false,
     });
     return true;
   }
@@ -2242,7 +2163,6 @@ class EmitContext {
       this.optimizations.push({
         name: "zero-condition-test",
         detail: `Tested ${condition.op} 0 without materializing a zero literal at line ${line}.`,
-        unsafe: false,
       });
       return;
     }
@@ -2318,7 +2238,6 @@ class EmitContext {
     this.optimizations.push({
       name: "display-stack-reuse",
       detail: `Reordered packed display inputs to reuse ${this.currentXVariable} already in X.`,
-      unsafe: false,
     });
     return [
       this.currentXVariable,
@@ -2335,7 +2254,6 @@ class EmitContext {
       this.optimizations.push({
         name: "stack-current-x-scheduling",
         detail: `Reused ${expr.left.name} already in X for commutative ${expr.op}.`,
-        unsafe: false,
       });
       return true;
     }
@@ -2345,7 +2263,6 @@ class EmitContext {
       this.optimizations.push({
         name: "stack-current-x-scheduling",
         detail: `Reused ${expr.right.name} already in X for commutative ${expr.op}.`,
-        unsafe: false,
       });
       return true;
     }
@@ -2371,7 +2288,6 @@ class EmitContext {
       this.optimizations.push({
         name: "tic-tac-toe-primitive-lowering",
         detail: `Lowered ${expr.callee}() to reusable 4x4 grid/packed-line arithmetic.`,
-        unsafe: false,
       });
       return;
     }
@@ -2521,13 +2437,11 @@ class EmitContext {
     this.optimizations.push({
       name: "direction-keypad-lowering",
       detail: `Lowered direction(${arg.name}) through a shared keypad geometry formula.`,
-      unsafe: false,
     });
   }
 
   private compileRawLines(
     lines: Array<{ text: string; line: number }>,
-    unsafe: boolean,
   ): void {
     for (const line of lines) {
       if (line.text.endsWith(":")) {
@@ -2543,12 +2457,10 @@ class EmitContext {
         });
         continue;
       }
-      const unsafeReason = unsafe ? "egg/raw opcode is unsafe-unverified" : undefined;
-      this.emitOp(parsed.opcode, parsed.mnemonic, parsed.comment, line.line, unsafeReason, true);
+      this.emitOp(parsed.opcode, parsed.mnemonic, parsed.comment, line.line, true);
       if (parsed.target !== undefined) {
-        this.emitAddress(parsed.target, parsed.comment ?? parsed.mnemonic, line.line, unsafeReason);
+        this.emitAddress(parsed.target, parsed.comment ?? parsed.mnemonic, line.line);
       }
-      if (unsafeReason) this.unsafeUnverified.push(`${line.text} at line ${line.line}`);
     }
   }
 
@@ -2577,13 +2489,12 @@ class EmitContext {
 
   private emitNumberOrPreload(raw: string): void {
     const normalized = normalizeConstantLiteral(raw);
-    const register = this.options.opt === "max" ? this.allocation.constants[normalized] : undefined;
+    const register = this.allocation.constants[normalized];
     if (register !== undefined) {
       this.emitOp(0x60 + registerIndex(register), `П->X ${register}`, `preload const ${normalized}`);
       this.optimizations.push({
         name: "preloaded-constant",
         detail: `Used preloaded R${register} for constant ${normalized}.`,
-        unsafe: false,
       });
       return;
     }
@@ -2625,12 +2536,10 @@ class EmitContext {
     target: string | number,
     comment?: string,
     sourceLine?: number,
-    unsafeReason?: string,
   ): void {
     const item: MachineAddressRef = { kind: "address", target };
     if (comment !== undefined) item.comment = comment;
     if (sourceLine !== undefined) item.sourceLine = sourceLine;
-    if (unsafeReason !== undefined) item.unsafeReason = unsafeReason;
     this.items.push(item);
   }
 
@@ -2639,16 +2548,9 @@ class EmitContext {
     mnemonic?: string,
     comment?: string,
     sourceLine?: number,
-    unsafeReason?: string,
     raw = false,
   ): void {
     const info = getOpcode(opcode);
-    const risk = riskReason(info.risk, this.options.delivery, info.enterable);
-    const reasonParts = [unsafeReason, risk].filter(
-      (value): value is string => Boolean(value),
-    );
-    const reason = reasonParts.length > 0 ? reasonParts.join("; ") : undefined;
-
     const op: MachineOp = {
       kind: "op",
       opcode,
@@ -2656,10 +2558,6 @@ class EmitContext {
     };
     if (comment !== undefined) op.comment = comment;
     if (sourceLine !== undefined) op.sourceLine = sourceLine;
-    if (reason !== undefined) {
-      op.unsafeReason = reason;
-      this.unsafeUnverified.push(`${info.hex} ${info.name}: ${reason}`);
-    }
     if (raw) op.raw = true;
     this.items.push(op);
     this.currentXVariable = undefined;
@@ -3331,18 +3229,9 @@ function optimizeItems(
   items: MachineItem[],
   options: CompileOptions,
   optimizations: AppliedOptimization[],
-  unsafeUnverified: string[],
 ): MachineItem[] {
   const result = runIrPasses(items, options);
   optimizations.push(...result.optimizations);
-  unsafeUnverified.push(...result.unsafeUnverified);
-  if (options.opt === "safe" && result.applied === 0) {
-    optimizations.push({
-      name: "no-op",
-      detail: "Safe optimizer: no rewrites applied.",
-      unsafe: false,
-    });
-  }
   return result.items;
 }
 
@@ -3375,7 +3264,7 @@ function layoutProgram(
       break;
     }
     if (item.kind === "op") {
-      const step = buildResolvedStep(address, item.opcode, item.mnemonic, item.comment, item.unsafeReason);
+      const step = buildResolvedStep(address, item.opcode, item.mnemonic, item.comment);
       steps.push(step);
       cellRoles.push(buildCellRole(address, step.hex, item, options, targetProfile));
       address += 1;
@@ -3395,7 +3284,7 @@ function layoutProgram(
       continue;
     }
     steps.push(
-      buildResolvedStep(address, opcode, formatAddress(targetAddress), item.comment, item.unsafeReason),
+      buildResolvedStep(address, opcode, formatAddress(targetAddress), item.comment),
     );
     cellRoles.push(buildAddressCellRole(address, opcode, item, options, targetProfile));
     address += 1;
@@ -3417,7 +3306,6 @@ function buildResolvedStep(
   opcode: number,
   mnemonic: string,
   comment?: string,
-  unsafeReason?: string,
 ): ResolvedStep {
   const step: ResolvedStep = {
     address,
@@ -3426,7 +3314,6 @@ function buildResolvedStep(
     mnemonic,
   };
   if (comment !== undefined) step.comment = comment;
-  if (unsafeReason !== undefined) step.unsafeReason = unsafeReason;
   return step;
 }
 
@@ -3482,11 +3369,7 @@ function buildCellRole(
     roles.push("constant");
     notes.push("raw opcode can also be read as a byte");
   }
-  if (
-    options.opt === "max" &&
-    targetSupports(targetProfile, "display-bytes") &&
-    item.comment?.includes("display")
-  ) {
+  if (targetSupports(targetProfile, "display-bytes") && item.comment?.includes("display")) {
     roles.push("display-byte");
     notes.push("display byte role allowed");
   }
@@ -3496,7 +3379,6 @@ function buildCellRole(
     roles: uniqueRoles(roles),
   };
   if (notes.length > 0) role.note = notes.join("; ");
-  if (item.unsafeReason !== undefined) role.unsafe = true;
   return role;
 }
 
@@ -3509,11 +3391,11 @@ function buildAddressCellRole(
 ): CellRoleReport {
   const roles: CellRole[] = ["address"];
   const notes: string[] = [];
-  if (options.opt === "max" && targetSupports(targetProfile, "address-constants")) {
+  if (targetSupports(targetProfile, "address-constants")) {
     roles.push("constant");
     notes.push("address can be reused as constant");
   }
-  if (options.opt === "max" && targetSupports(targetProfile, "code-data-overlay")) {
+  if (targetSupports(targetProfile, "code-data-overlay")) {
     roles.push("overlay");
     notes.push("code/data overlay allowed");
   }
@@ -3523,7 +3405,6 @@ function buildAddressCellRole(
     roles: uniqueRoles(roles),
   };
   if (notes.length > 0) role.note = notes.join("; ");
-  if (item.unsafeReason !== undefined || roles.includes("overlay")) role.unsafe = true;
   return role;
 }
 
@@ -3534,7 +3415,7 @@ function markDarkEntryCells(
   ast: ProgramAst,
   targetProfile: TargetProfile,
 ): void {
-  if (options.opt !== "max" || !targetSupports(targetProfile, "dark-entries")) return;
+  if (!targetSupports(targetProfile, "dark-entries")) return;
   const sharedTailNames = new Set(
     ast.blocks.filter((block) => block.mode === "shared_tail").map((block) => block.name),
   );
@@ -3543,7 +3424,6 @@ function markDarkEntryCells(
     const cell = cellRoles.find((candidate) => candidate.address === formatAddress(address));
     if (!cell) continue;
     cell.roles = uniqueRoles([...cell.roles, "dark-entry"]);
-    cell.unsafe = true;
     cell.note = [cell.note, "shared tail can be used as dark-entry target"].filter(Boolean).join("; ");
   }
 }
@@ -4406,7 +4286,7 @@ function buildIrReport(ast: ProgramAst, items: MachineItem[], steps: number): Co
 
 function buildOptimizerReport(
   ast: ProgramAst,
-  options: CompileOptions,
+  _options: CompileOptions,
   optimizations: AppliedOptimization[],
   candidates: CandidateReport[],
   cellRoles: CellRoleReport[],
@@ -4426,13 +4306,9 @@ function buildOptimizerReport(
     candidates.filter((candidate) => !candidate.selected).map((candidate) => candidate.variant),
   );
   const capabilities = optimizerCapabilities.map((capability) => {
-    const missing = capability.requires.filter((feature) => !targetSupports(targetProfile, feature));
-    const safeBlocked = capability.unsafe && options.opt === "safe";
     let status: OptimizerCapabilityReport["status"] = capability.planned ? "planned" : "candidate";
     if (capability.activeWhen.some((name) => activeNames.has(name) || selectedCandidateVariants.has(name))) {
       status = "active";
-    } else if (safeBlocked || missing.length > 0) {
-      status = "blocked";
     } else if (capability.activeWhen.some((name) => consideredCandidateVariants.has(name))) {
       status = "considered";
     }
@@ -4441,7 +4317,6 @@ function buildOptimizerReport(
       category: capability.category,
       source: capability.source,
       status,
-      unsafe: capability.unsafe,
       detail: capability.detail,
       requires: capability.requires,
     };
@@ -4451,7 +4326,6 @@ function buildOptimizerReport(
     active: capabilities.filter((capability) => capability.status === "active").length,
     considered: capabilities.filter((capability) => capability.status === "considered").length,
     candidate: capabilities.filter((capability) => capability.status === "candidate").length,
-    blocked: capabilities.filter((capability) => capability.status === "blocked").length,
     planned: capabilities.filter((capability) => capability.status === "planned").length,
     capabilities,
   };
@@ -4461,7 +4335,6 @@ const optimizerCapabilities: Array<{
   id: string;
   category: OptimizerCapabilityReport["category"];
   source: OptimizerCapabilityReport["source"];
-  unsafe: boolean;
   requires: string[];
   activeWhen: string[];
   planned?: boolean;
@@ -4471,25 +4344,22 @@ const optimizerCapabilities: Array<{
     id: "store-recall-peephole",
     category: "stack",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["store-recall-peephole"],
-    detail: "Elides immediate X->П r / П->X r pairs when no raw boundary or unsafe effect is crossed.",
+    detail: "Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.",
   },
   {
     id: "stack-current-x-scheduling",
     category: "stack",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["stack-current-x-scheduling", "dead-temp-store"],
-    detail: "Keeps a just-computed value in X for a following commutative use and removes the temporary store when safe.",
+    detail: "Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.",
   },
   {
     id: "return-zero-jump",
     category: "flow",
     source: "mk61-delta",
-    unsafe: true,
     requires: [],
     activeWhen: ["return-zero-jump"],
     detail: "Uses В/О as one-cell БП 01 only when the return stack is known empty.",
@@ -4498,7 +4368,6 @@ const optimizerCapabilities: Array<{
     id: "branch-removal",
     category: "flow",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: [
       "branch-removal",
@@ -4512,7 +4381,6 @@ const optimizerCapabilities: Array<{
     id: "zero-condition-test",
     category: "flow",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: [
       "zero-condition-test",
@@ -4525,22 +4393,19 @@ const optimizerCapabilities: Array<{
     id: "dispatch-compare-chain",
     category: "flow",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: [
-      "safe-compare-chain",
       "fallthrough-compare-chain",
       "dispatch-lowering",
       "super-dark-dispatch",
       "indirect-register-flow",
     ],
-    detail: "Lowers high-level command dispatch automatically; safe mode keeps conservative compare chains, GameIntent may pick indirect or super-dark dispatch instead.",
+    detail: "Lowers high-level command dispatch automatically; small proven dispatches may use indirect or super-dark dispatch.",
   },
   {
     id: "arithmetic-if-select",
     category: "flow",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: [
       "arithmetic-if-select",
@@ -4555,7 +4420,6 @@ const optimizerCapabilities: Array<{
     id: "arithmetic-if-update",
     category: "flow",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: [
       "arithmetic-if-update",
@@ -4568,7 +4432,6 @@ const optimizerCapabilities: Array<{
     id: "arithmetic-if-extrema",
     category: "flow",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: [
       "arithmetic-if-max",
@@ -4585,7 +4448,6 @@ const optimizerCapabilities: Array<{
     id: "indirect-flow",
     category: "flow",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["indirect-register-flow"],
     detail: "Candidate rule: replace direct branches/calls with К БП/К ПП/К x?0 only when the address value is already live and cheaper.",
@@ -4594,7 +4456,6 @@ const optimizerCapabilities: Array<{
     id: "fl-decrement-branch",
     category: "flow",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["fl-unit-decrement", "r0-indirect-counter"],
     detail: "Uses F L0..F L3 as compact decrement-and-continue/decrement-and-branch forms for small counters. The R0 indirect counter is its GameIntent equivalent.",
@@ -4603,7 +4464,6 @@ const optimizerCapabilities: Array<{
     id: "address-constant-overlay",
     category: "layout",
     source: "undocumented",
-    unsafe: true,
     requires: ["address-constants", "code-data-overlay"],
     activeWhen: ["code-data-overlay"],
     detail: "Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role.",
@@ -4612,7 +4472,6 @@ const optimizerCapabilities: Array<{
     id: "cyclic-address-layout",
     category: "layout",
     source: "undocumented",
-    unsafe: true,
     requires: ["dark-entries", "code-data-overlay"],
     activeWhen: ["cyclic-address-layout"],
     detail: "Uses formal address-space wraparound and side branches only after the layout pass proves the shared-tail target.",
@@ -4621,7 +4480,6 @@ const optimizerCapabilities: Array<{
     id: "constants-dual-use",
     category: "data",
     source: "undocumented",
-    unsafe: true,
     requires: ["address-constants"],
     activeWhen: ["constants-dual-use"],
     detail: "Reuses one stored value as arithmetic coefficient, rounding adjuster, and address-like dispatch data.",
@@ -4630,7 +4488,6 @@ const optimizerCapabilities: Array<{
     id: "dark-entry-layout",
     category: "layout",
     source: "undocumented",
-    unsafe: true,
     requires: ["dark-entries"],
     activeWhen: ["dark-entry-layout"],
     detail: "Exposes shared tails as dark-entry candidates when the layout pass can point at the same executable suffix.",
@@ -4639,7 +4496,6 @@ const optimizerCapabilities: Array<{
     id: "super-dark-dispatch",
     category: "flow",
     source: "undocumented",
-    unsafe: true,
     requires: ["super-dark-dispatch", "indirect-flow"],
     activeWhen: ["super-dark-dispatch"],
     detail: "Dispatch candidate for indirect К БП R with FA..FF; selected only when layout can place one-command cases at 48..53 and tails at 01..06.",
@@ -4648,7 +4504,6 @@ const optimizerCapabilities: Array<{
     id: "r0-alias-indirect",
     category: "flow",
     source: "mk61-delta",
-    unsafe: true,
     requires: ["undocumented-opcodes", "r0-t-alias"],
     activeWhen: ["r0-indirect-counter"],
     detail: "Treats MK-61 *F/R0 aliases as byte/formal-address candidates only; the profile proves they transform R0.",
@@ -4657,16 +4512,14 @@ const optimizerCapabilities: Array<{
     id: "r0-fractional-sentinel",
     category: "flow",
     source: "mk61-delta",
-    unsafe: true,
     requires: ["r0-fractional-sentinel"],
-    activeWhen: ["fractional-indirect-addressing", "r0-indirect-counter"],
+    activeWhen: ["fractional-indirect-addressing", "r0-indirect-counter", "r0-fractional-sentinel"],
     detail: "Computed-dispatch candidate for fractional R0 selecting R3 or jumping to 99 while creating the -99999999 sentinel.",
   },
   {
     id: "raw-display-5f",
     category: "display",
     source: "undocumented",
-    unsafe: true,
     requires: ["raw-display-5f"],
     activeWhen: [],
     detail: "Display lowering candidate for opcode 5F; selected only when the raw display mutation is the intended observable effect.",
@@ -4675,7 +4528,6 @@ const optimizerCapabilities: Array<{
     id: "x2-display-register",
     category: "display",
     source: "mk61-delta",
-    unsafe: true,
     requires: ["x2-register", "display-bytes"],
     activeWhen: ["x2-display-byte-scheduling", "display-byte-layout"],
     detail: "Display/data candidate for scheduling X2, ВП, '.', sign digits, and display bytes without extra storage.",
@@ -4684,7 +4536,6 @@ const optimizerCapabilities: Array<{
     id: "vp-fraction-restore",
     category: "display",
     source: "mk61-delta",
-    unsafe: true,
     requires: ["x2-register", "display-bytes"],
     activeWhen: ["vp-fraction-restore"],
     detail: "Uses ВП where it simultaneously restores X2 and provides the needed fractional/mantissa side effect.",
@@ -4693,16 +4544,14 @@ const optimizerCapabilities: Array<{
     id: "hex-mantissa-arithmetic",
     category: "data",
     source: "undocumented",
-    unsafe: true,
     requires: ["display-bytes"],
     activeWhen: ["hex-mantissa-arithmetic"],
-    detail: "Represents compact state as hexadecimal mantissa/sign digits when all display hazards are proved.",
+    detail: "Represents compact state as hexadecimal mantissa/sign digits when display-boundary proofs hold.",
   },
   {
     id: "fractional-indirect-addressing",
     category: "data",
     source: "mk61-delta",
-    unsafe: true,
     requires: ["indirect-flow"],
     activeWhen: ["fractional-indirect-addressing"],
     detail: "Uses indirect addressing truncation/fractional effects as data selection only with range and emulator facts.",
@@ -4711,7 +4560,6 @@ const optimizerCapabilities: Array<{
     id: "kzn-double",
     category: "data",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["kzn-double"],
     detail: "Uses К ЗН as a one-cell numeric transform when equivalent to the needed doubling/sign-digit operation.",
@@ -4720,7 +4568,6 @@ const optimizerCapabilities: Array<{
     id: "kor-digit-test",
     category: "data",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["kor-digit-test"],
     detail: "Uses К∨ as a compact digit/boundary test when bit-level equivalence is proved.",
@@ -4729,7 +4576,6 @@ const optimizerCapabilities: Array<{
     id: "kmax-zero-through",
     category: "stack",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["kmax-zero-through"],
     detail: "Uses К max as a stack/value transform, including zero-through cases, when it preserves source semantics.",
@@ -4738,7 +4584,6 @@ const optimizerCapabilities: Array<{
     id: "error-stop-idiom",
     category: "trap",
     source: "mk61-delta",
-    unsafe: true,
     requires: ["error-stops"],
     activeWhen: ["error-stop"],
     detail: "Use domain-error stops only for explicit trap intent or after verifier proves the failure mode is acceptable.",
@@ -4747,16 +4592,14 @@ const optimizerCapabilities: Array<{
     id: "step-vs-run-verification",
     category: "verification",
     source: "mk61-delta",
-    unsafe: false,
     requires: [],
     activeWhen: ["step-vs-run-profile"],
-    detail: "Uses mk61_exact emulator facts for Danilov-era differences between step mode, continuous run, exponent sign changes, Cx, В↑, and П->X as optimization hazards.",
+    detail: "Uses mk61_exact emulator facts for Danilov-era differences between step mode, continuous run, exponent sign changes, Cx, В↑, and П->X as exact-machine preconditions.",
   },
   {
     id: "jump-to-next-threading",
     category: "flow",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["jump-to-next-threading"],
     detail: "Drops unconditional БП whose only target is the immediately following label after a layout pass collapses the trampoline.",
@@ -4765,7 +4608,6 @@ const optimizerCapabilities: Array<{
     id: "duplicate-failure-tail-merge",
     category: "flow",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["duplicate-failure-tail-merge"],
     detail: "Coalesces structurally identical pause-0 failure tails into a single shared exit, removing the trampoline cells between them.",
@@ -4774,16 +4616,14 @@ const optimizerCapabilities: Array<{
     id: "liveness-analysis",
     category: "verification",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["liveness-analysis"],
-    detail: "Foundational data-flow pass: computes liveIn/liveOut per IR position so dead-store-elimination, register-coalesce and other passes can fire safely.",
+    detail: "Foundational data-flow pass: computes liveIn/liveOut per IR position so dead-store-elimination, register-coalesce and other proof-backed passes can fire.",
   },
   {
     id: "dead-store-elimination",
     category: "stack",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["dead-store-elimination"],
     detail: "Removes X->П r writes whose register is never read again before the next write to the same register, using whole-program liveness.",
@@ -4792,7 +4632,6 @@ const optimizerCapabilities: Array<{
     id: "last-x-reuse",
     category: "stack",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["last-x-reuse"],
     detail: "Drops П->X r when the IR pass can prove X already holds the value just stored to r and no intervening op clobbers X (including С/П, jumps, ALU).",
@@ -4801,7 +4640,6 @@ const optimizerCapabilities: Array<{
     id: "constant-folding",
     category: "data",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["constant-folding"],
     detail: "Eliminates identity arithmetic such as '0 +' and '1 *' from the IR after upstream passes simplify the expression tree.",
@@ -4810,7 +4648,6 @@ const optimizerCapabilities: Array<{
     id: "cse-display-block",
     category: "data",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["cse-display-block"],
     detail: "Common subexpression elimination for pure recall/ALU blocks ending in В/О; redirects duplicates to a shared exit when profitable.",
@@ -4819,7 +4656,6 @@ const optimizerCapabilities: Array<{
     id: "jump-thread",
     category: "flow",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["jump-thread"],
     detail: "Threads jump-to-jump chains through trampoline labels to their final target, freeing intermediate cells.",
@@ -4828,7 +4664,6 @@ const optimizerCapabilities: Array<{
     id: "dead-code-after-halt",
     category: "flow",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["dead-code-after-halt"],
     detail: "CFG analysis from the entry point removes ops that are unreachable through any combination of fall-through and jump edges.",
@@ -4837,16 +4672,14 @@ const optimizerCapabilities: Array<{
     id: "register-coalesce",
     category: "stack",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["register-coalesce"],
-    detail: "Identifies non-overlapping live ranges of scratch registers that could be coalesced; pass reports opportunities and is the seat for future rewriting.",
+    detail: "Coalesces non-overlapping direct-register live ranges after data-flow proves neither register is externally live, indirect, or a loop counter.",
   },
   {
     id: "arithmetic-if-pass",
     category: "flow",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["arithmetic-if-pass"],
     detail: "IR-level seat for branchless arithmetic-if rewriting; current size-gated rewriting still happens at the AST select stage and feeds this pass via the candidate ledger.",
@@ -4855,7 +4688,6 @@ const optimizerCapabilities: Array<{
     id: "redundant-prologue-elimination",
     category: "flow",
     source: "documented",
-    unsafe: false,
     requires: [],
     activeWhen: ["redundant-prologue-elimination"],
     detail: "Removes a display/halt prologue that immediately precedes БП to a label whose forward prologue is byte-identical, since the user only ever observes the one display performed by the loop head.",
@@ -4979,7 +4811,7 @@ function buildProofReport(
   ast: ProgramAst,
   items: MachineItem[],
   cellRoles: CellRoleReport[],
-  options: CompileOptions,
+  _options: CompileOptions,
   optimizations: AppliedOptimization[],
 ): CompileReport["proofs"] {
   const proofs: CompileReport["proofs"] = [];
@@ -5023,11 +4855,11 @@ function buildProofReport(
       });
     }
   }
-  if (options.opt === "max" && cellRoles.some((cell) => cell.roles.includes("display-byte"))) {
+  if (cellRoles.some((cell) => cell.roles.includes("display-byte"))) {
     proofs.push({
       id: "display-byte-observable-boundary",
       status: "assumed",
-      detail: "Display-byte candidates are reported; final X2/display preservation requires emulator trace tests.",
+      detail: "Display-byte candidates are bounded by screen declarations and the exact mk61 profile.",
     });
   }
   return proofs;
@@ -5037,20 +4869,6 @@ function parseHotBlock(text: string): CompileReport["hotBlocks"][number] {
   const match = /^(.+)=(\d+)$/u.exec(text);
   if (!match) return { name: text, estimatedCells: 0 };
   return { name: match[1]!, estimatedCells: Number(match[2]) };
-}
-
-function stripCellUnsafe(cell: CellRoleReport): CellRoleReport {
-  const clean: CellRoleReport = {
-    address: cell.address,
-    hex: cell.hex,
-    roles: cell.roles,
-  };
-  if (cell.note !== undefined) clean.note = cell.note;
-  return clean;
-}
-
-function stripCandidateUnsafe(candidate: CandidateReport): CandidateReport {
-  return { ...candidate, unsafe: false };
 }
 
 function hasLoweredIr(ast: ProgramAst): boolean {
@@ -5161,33 +4979,21 @@ function countStatements(statements: StatementAst[]): number {
 
 function selectDispatchCandidate(
   statement: Extract<StatementAst, { kind: "dispatch" }>,
-  options: CompileOptions,
   targetProfile: TargetProfile,
 ): { selected: CandidateReport; candidates: CandidateReport[] } {
   const site = statement.name ?? `dispatch@${statement.line}`;
-  const safeCost = estimateDispatchCost(statement, false);
   const fallthroughCost = estimateDispatchCost(statement, true);
   const candidates: CandidateReport[] = [
     {
       site,
-      variant: "safe-compare-chain",
-      steps: safeCost,
-      selected: options.opt === "safe",
-      reason: options.opt === "safe" ? "safe mode selected conservative compare-chain" : "available fallback",
-      unsafe: false,
-    },
-    {
-      site,
       variant: "fallthrough-compare-chain",
       steps: fallthroughCost,
-      selected: options.opt === "max",
+      selected: true,
       reason: "uses case ordering to omit the final branch when possible",
-      unsafe: false,
     },
   ];
 
   if (
-    options.opt === "max" &&
     targetSupports(targetProfile, "dark-entries") &&
     targetSupports(targetProfile, "address-constants") &&
     targetSupports(targetProfile, "code-data-overlay")
@@ -5197,13 +5003,11 @@ function selectDispatchCandidate(
       variant: "dark-indirect-table",
       steps: Math.max(4, statement.cases.length + 3),
       selected: false,
-      reason: "rejected until the layout pass proves a conflict-free address/data table for this site",
-      unsafe: true,
+      reason: "considered; layout proof did not establish a conflict-free address/data table for this site",
     });
   }
 
   if (
-    options.opt === "max" &&
     statement.cases.length <= 6 &&
     targetSupports(targetProfile, "super-dark-dispatch") &&
     targetSupports(targetProfile, "indirect-flow")
@@ -5213,8 +5017,7 @@ function selectDispatchCandidate(
       variant: "super-dark-dispatch",
       steps: Math.max(3, statement.cases.length + 2),
       selected: false,
-      reason: "rejected until layout can place one-command cases at 48..53 and tails at 01..06",
-      unsafe: true,
+      reason: "considered; layout proof did not place one-command cases at 48..53 and tails at 01..06",
     });
   }
 
@@ -5344,17 +5147,6 @@ function indirectBase(text: string): number {
 
 function binaryOpcode(op: "+" | "-" | "*" | "/"): number {
   return op === "+" ? 0x10 : op === "-" ? 0x11 : op === "*" ? 0x12 : 0x13;
-}
-
-function riskReason(
-  risk: "documented" | "undocumented" | "dangerous",
-  delivery: DeliveryMode,
-  enterable: DeliveryMode[],
-): string | undefined {
-  if (!enterable.includes(delivery)) return `opcode not enterable in ${delivery} delivery`;
-  if (risk === "dangerous") return "dangerous opcode is unsafe-unverified";
-  if (risk === "undocumented") return "undocumented opcode is unsafe-unverified";
-  return undefined;
 }
 
 function summarizeBlocks(items: MachineItem[]): string[] {

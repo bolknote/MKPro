@@ -1,5 +1,5 @@
 import type { IrOp } from "../types.ts";
-import { hasUnsafe, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
+import { hasRewriteBarrier, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
 
 const run: IrPassFn = (ops) => {
   const result: IrOp[] = [];
@@ -9,7 +9,7 @@ const run: IrPassFn = (ops) => {
     if (
       current.kind === "jump" &&
       typeof current.target === "string" &&
-      !hasUnsafe(current)
+      !hasRewriteBarrier(current)
     ) {
       let cursor = i + 1;
       let threaded = false;
@@ -37,11 +37,9 @@ const run: IrPassFn = (ops) => {
             {
               name: "jump-to-next-threading",
               detail: `Removed ${applied} unconditional branch to the immediately following label.`,
-              unsafe: false,
             },
           ]
         : [],
-    unsafeUnverified: [],
   };
   return passResult;
 };

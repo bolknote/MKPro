@@ -7,7 +7,6 @@ import type {
 export interface TargetProfile {
   id: TargetProfileId;
   machine: "mk61";
-  optimizationObjective: "size";
   features: MachineFeatureUseReport[];
   emulatorFacts: EmulatorFactReport[];
 }
@@ -15,7 +14,6 @@ export interface TargetProfile {
 export const MK61_EXACT_PROFILE: TargetProfile = {
   id: "mk61_exact",
   machine: "mk61",
-  optimizationObjective: "size",
   features: [
     {
       id: "branch-removal",
@@ -35,7 +33,7 @@ export const MK61_EXACT_PROFILE: TargetProfile = {
     {
       id: "undocumented-opcodes",
       source: "target-profile",
-      detail: "F0..FF and undocumented aliases are available when their hazard checks pass.",
+      detail: "F0..FF and undocumented aliases are available when exact-machine preconditions are proved.",
     },
     {
       id: "dark-entries",
@@ -132,12 +130,12 @@ export const MK61_EXACT_PROFILE: TargetProfile = {
     {
       id: "x2-restore-boundaries",
       status: "probed",
-      detail: "ВП, '.', '/-/', and digit-entry X2 restoration boundaries are modeled as display hazards.",
+      detail: "ВП, '.', '/-/', and digit-entry X2 restoration boundaries are modeled as display-state boundaries.",
     },
     {
       id: "step-vs-run-delta",
       status: "probed",
-      detail: "Continuous-run behavior is the default profile; step-only divergences remain hazards.",
+      detail: "Continuous-run behavior is the default profile; step-only divergences are explicit exact-machine facts.",
     },
     {
       id: "raw-display-5f",

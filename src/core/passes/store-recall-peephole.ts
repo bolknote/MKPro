@@ -1,5 +1,5 @@
 import type { IrOp } from "../types.ts";
-import { hasUnsafe, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
+import { hasRewriteBarrier, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
 
 const run: IrPassFn = (ops) => {
   const result: IrOp[] = [];
@@ -11,8 +11,8 @@ const run: IrPassFn = (ops) => {
       current.kind === "store" &&
       next?.kind === "recall" &&
       current.register === next.register &&
-      !hasUnsafe(current) &&
-      !hasUnsafe(next)
+      !hasRewriteBarrier(current) &&
+      !hasRewriteBarrier(next)
     ) {
       result.push(current);
       applied += 1;
@@ -30,11 +30,9 @@ const run: IrPassFn = (ops) => {
             {
               name: "store-recall-peephole",
               detail: `Dropped ${applied} redundant П->X immediately after X->П to the same register.`,
-              unsafe: false,
             },
           ]
         : [],
-    unsafeUnverified: [],
   };
   return passResult;
 };

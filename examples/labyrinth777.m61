@@ -1,6 +1,5 @@
 target mk61
 budget 105 cells
-optimize size
 reference anvarov_labyrinth777
 
 // Based on Serge Anvarov's "Labyrinth777": a 7x7x7 maze where the player

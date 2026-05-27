@@ -81,7 +81,6 @@ program Comments {
     const ast = parseProgram(`
 target mk61
 budget 105 cells
-optimize size
 
 program Demo {
   input key: digit
@@ -107,7 +106,6 @@ program Demo {
 }
 `);
     expect(ast.targetProfile).toBe("mk61_exact");
-    expect(ast.optimize).toBe("size");
     expect(ast.v2?.name).toBe("Demo");
     expect(ast.v2?.inputs[1]?.inputType).toBe("number");
     expect(ast.v2?.state[0]?.hints).toContain("displayed");
@@ -122,7 +120,6 @@ program Demo {
     const ast = parseProgram(`
 target mk61
 budget 105 cells
-optimize size
 reference demo_reference
 
 program Demo {

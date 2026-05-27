@@ -157,7 +157,7 @@ describe("ir round-trip", () => {
     expect(ir[1]?.kind === "jump" && ir[1].target === 0x10).toBe(true);
   });
 
-  it("preserves comments, source lines, raw and unsafe flags through round trip", () => {
+  it("preserves comments, source lines, and raw flags through round trip", () => {
     const items: MachineItem[] = [
       { kind: "label", name: "loop" },
       {
@@ -166,7 +166,6 @@ describe("ir round-trip", () => {
         mnemonic: "X->П 1",
         comment: "store value",
         sourceLine: 12,
-        unsafeReason: "demo unsafe",
         raw: true,
       },
       {

@@ -1,5 +1,5 @@
 import type { IrOp } from "../types.ts";
-import { hasUnsafe, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
+import { hasRewriteBarrier, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
 
 function labelTargets(ops: readonly IrOp[]): Map<string, number> {
   const map = new Map<string, number>();
@@ -26,7 +26,7 @@ function followLabel(
     const next = ops[cursor];
     if (next?.kind !== "jump") return current;
     if (typeof next.target !== "string") return current;
-    if (hasUnsafe(next)) return current;
+    if (hasRewriteBarrier(next)) return current;
     current = next.target;
   }
   return current;
@@ -40,7 +40,7 @@ const run: IrPassFn = (ops) => {
     if (
       (op.kind === "jump" || op.kind === "cjump") &&
       typeof op.target === "string" &&
-      !hasUnsafe(op)
+      !hasRewriteBarrier(op)
     ) {
       const final = followLabel(ops, labels, op.target, new Set<string>());
       if (final !== undefined && final !== op.target) {
@@ -52,7 +52,7 @@ const run: IrPassFn = (ops) => {
     result.push(op);
   }
   if (applied === 0) {
-    return { ops: result, applied: 0, optimizations: [], unsafeUnverified: [] };
+    return { ops: result, applied: 0, optimizations: [] };
   }
   const passResult: PassResult = {
     ops: result,
@@ -61,10 +61,8 @@ const run: IrPassFn = (ops) => {
       {
         name: "jump-thread",
         detail: `Threaded ${applied} jump(s) through trampoline labels to the final target.`,
-        unsafe: false,
       },
     ],
-    unsafeUnverified: [],
   };
   return passResult;
 };

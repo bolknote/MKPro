@@ -1,6 +1,5 @@
 target mk61
 budget 105 cells
-optimize size
 reference tiny_dial_game
 
 // A toy "dial" game used to show resource exhaustion and success endings in a

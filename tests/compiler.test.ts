@@ -96,7 +96,6 @@ entry main {
     const result = compileM61(`
 target mk61
 budget 105 cells
-optimize size
 
 program SimpleRules {
   input key: digit
@@ -462,17 +461,29 @@ program SimpleRules {
     expect(MK61_EXACT_PROFILE.emulatorFacts.find((fact) => fact.id === "r0-star-f-aliases")?.detail).toMatch(/do not preserve R0/u);
   });
 
-  it("safe mode refuses the full cave reference and explains required exact-machine lowerings", () => {
-    expect(() => compileM61(source("examples/cave-treasure.m61"), { opt: "safe" })).toThrow(/mk61_exact tactics/u);
+  it("always uses exact-machine lowerings for the full cave reference", () => {
+    const result = compileM61(source("examples/cave-treasure.m61"));
+    const applied = new Set(result.report.optimizations.map((optimization) => optimization.name));
+    expect(applied.has("super-dark-dispatch")).toBe(true);
+    expect(applied.has("x2-display-byte-scheduling")).toBe(true);
+    expect(result.report.steps).toBeLessThanOrEqual(105);
   });
 
-  it("uses conservative dispatch lowering in safe mode", () => {
-    const result = compileM61(source("examples/tiny-game.m61"), { opt: "safe" });
+  it("uses maximum dispatch lowering by default", () => {
+    const result = compileM61(source("examples/tiny-game.m61"));
     const selected = result.report.candidates.find((candidate) => candidate.selected);
 
-    expect(selected?.variant).toBe("safe-compare-chain");
-    expect(result.report.cellRoles.some((cell) => cell.roles.includes("overlay"))).toBe(false);
-    expect(result.report.cellRoles.some((cell) => cell.roles.includes("dark-entry"))).toBe(false);
+    expect(selected?.variant).toBe("fallthrough-compare-chain");
+    expect(result.report.optimizer.capabilities.some((capability) => capability.status === "active")).toBe(true);
+  });
+
+  it("considers generic dark dispatch only through proof-backed candidates", () => {
+    const result = compileM61(source("examples/human.m61"));
+    const dark = result.report.candidates.find((candidate) => candidate.variant === "super-dark-dispatch");
+
+    expect(dark?.selected).toBe(false);
+    expect(dark?.reason).toMatch(/layout proof/u);
+    expect(dark?.reason).not.toMatch(/unsafe|blocked/u);
   });
 
   it("can load compiled output into the headless emulator wrapper", () => {
@@ -486,11 +497,10 @@ program SimpleRules {
     expect(calc.readProgramCodes(codes.length)).toEqual(codes);
   });
 
-  it("blocks unsafe optimizer capabilities in safe mode", () => {
-    const result = compileM61(source("examples/tiny-game.m61"), { opt: "safe", budget: 999 });
-    const unsafeCapabilities = result.report.optimizer.capabilities.filter((capability) => capability.unsafe);
-
-    expect(unsafeCapabilities.some((capability) => capability.status === "blocked")).toBe(true);
-    expect(result.report.cellRoles.some((cell) => cell.roles.includes("overlay"))).toBe(false);
+  it("does not expose unsafe optimizer fields", () => {
+    const result = compileM61(source("examples/tiny-game.m61"), { budget: 999 });
+    const json = JSON.stringify(result.report);
+    expect(json).not.toMatch(/unsafe|unsafe-unverified/u);
+    expect(result.report.optimizer.capabilities.every((capability) => capability.status !== "planned" || capability.detail.length > 0)).toBe(true);
   });
 });

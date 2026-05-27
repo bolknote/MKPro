@@ -63,9 +63,9 @@ function freshLabel(): string {
 }
 
 const run: IrPassFn = (ops) => {
-  if (ops.length === 0) return { ops: [], applied: 0, optimizations: [], unsafeUnverified: [] };
+  if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
   const blocks = collectCseCandidates(ops);
-  if (blocks.length < 2) return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+  if (blocks.length < 2) return { ops: [...ops], applied: 0, optimizations: [] };
   const bySignature = new Map<string, Block[]>();
   for (const block of blocks) {
     const sig = blockSignature(block);
@@ -96,7 +96,7 @@ const run: IrPassFn = (ops) => {
       applied += 1;
     }
   }
-  if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+  if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
   const result: IrOp[] = [];
   let i = 0;
   while (i < ops.length) {
@@ -126,10 +126,8 @@ const run: IrPassFn = (ops) => {
       {
         name: "cse-display-block",
         detail: `Deduplicated ${applied} display block(s) by redirecting to a shared exit.`,
-        unsafe: false,
       },
     ],
-    unsafeUnverified: [],
   };
   return passResult;
 };

@@ -20,7 +20,9 @@ import { lastXReuse } from "./last-x-reuse.ts";
 import { redundantPrologueElimination } from "./redundant-prologue.ts";
 import { registerCoalesce } from "./register-coalesce.ts";
 import { returnZeroJump } from "./return-zero-jump.ts";
+import { r0FractionalSentinel } from "./r0-fractional-sentinel.ts";
 import { storeRecallPeephole } from "./store-recall-peephole.ts";
+import { vpX2Peephole } from "./vp-x2-peephole.ts";
 
 const PASS_PIPELINE: ReadonlyArray<IrPass> = [
   redundantPrologueElimination,
@@ -31,6 +33,8 @@ const PASS_PIPELINE: ReadonlyArray<IrPass> = [
   deadStoreBeforeCommutative,
   deadStoreElimination,
   lastXReuse,
+  r0FractionalSentinel,
+  vpX2Peephole,
   constantFolding,
   duplicateFailureTail,
   cseDisplayBlock,
@@ -45,7 +49,6 @@ export interface RunPassesResult {
   items: MachineItem[];
   applied: number;
   optimizations: AppliedOptimization[];
-  unsafeUnverified: string[];
   passCounts: Record<string, number>;
 }
 
@@ -61,13 +64,11 @@ function runPassesOnIr(
   ops: IrOp[];
   applied: number;
   optimizations: AppliedOptimization[];
-  unsafeUnverified: string[];
   passCounts: Record<string, number>;
 } {
   let current = initial;
   let totalApplied = 0;
   const optimizations: AppliedOptimization[] = [];
-  const unsafeUnverified: string[] = [];
   const passCounts: Record<string, number> = {};
   let changedInIteration = true;
   let iteration = 0;
@@ -89,14 +90,11 @@ function runPassesOnIr(
             optimizations.push({ ...opt });
           }
         }
-        for (const reason of result.unsafeUnverified) {
-          if (!unsafeUnverified.includes(reason)) unsafeUnverified.push(reason);
-        }
       }
       current = result.ops;
     }
   }
-  return { ops: current, applied: totalApplied, optimizations, unsafeUnverified, passCounts };
+  return { ops: current, applied: totalApplied, optimizations, passCounts };
 }
 
 export function runIrPasses(items: MachineItem[], options: CompileOptions): RunPassesResult {
@@ -106,7 +104,6 @@ export function runIrPasses(items: MachineItem[], options: CompileOptions): RunP
     items: lowerIrToMachine(result.ops),
     applied: result.applied,
     optimizations: result.optimizations,
-    unsafeUnverified: result.unsafeUnverified,
     passCounts: result.passCounts,
   };
 }
@@ -115,7 +112,6 @@ export interface RunLayoutPassesResult {
   cells: LayoutIrCell[];
   applied: number;
   optimizations: AppliedOptimization[];
-  unsafeUnverified: string[];
   passCounts: Record<string, number>;
 }
 
@@ -130,7 +126,6 @@ export function runIrPassesOnLayout(
     cells: lowered.cells,
     applied: result.applied,
     optimizations: result.optimizations,
-    unsafeUnverified: result.unsafeUnverified,
     passCounts: result.passCounts,
   };
 }

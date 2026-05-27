@@ -1,16 +1,20 @@
 import { describe, expect, it } from "vitest";
 import { lowerIrToMachine } from "../../src/core/ir.ts";
+import { arithmeticIfPass } from "../../src/core/passes/arithmetic-if.ts";
 import { deadCodeAfterHalt } from "../../src/core/passes/dead-code-after-halt.ts";
 import { deadStoreElimination } from "../../src/core/passes/dead-store-elimination.ts";
 import { jumpThread } from "../../src/core/passes/jump-thread.ts";
 import { jumpToNextThreading } from "../../src/core/passes/jump-to-next.ts";
 import { lastXReuse } from "../../src/core/passes/last-x-reuse.ts";
 import { computeLiveness } from "../../src/core/passes/liveness-analysis.ts";
+import { r0FractionalSentinel } from "../../src/core/passes/r0-fractional-sentinel.ts";
 import { redundantPrologueElimination } from "../../src/core/passes/redundant-prologue.ts";
+import { registerCoalesce } from "../../src/core/passes/register-coalesce.ts";
 import { storeRecallPeephole } from "../../src/core/passes/store-recall-peephole.ts";
+import { vpX2Peephole } from "../../src/core/passes/vp-x2-peephole.ts";
 import type { IrOp, RegisterName } from "../../src/core/types.ts";
 
-const noopOptions = { opt: "max" as const, delivery: "manual" as const, budget: 105, warnUnsafe: false };
+const noopOptions = { delivery: "manual" as const, budget: 105 };
 const ctx = { options: noopOptions };
 
 const REGISTER_INDEX: Record<RegisterName, number> = {
@@ -60,6 +64,35 @@ function jump(target: string): IrOp {
     opcode: 0x51,
     meta: { mnemonic: "БП" },
     targetMeta: {},
+  };
+}
+
+function cjump(target: string): IrOp {
+  return {
+    kind: "cjump",
+    condition: "==0",
+    target,
+    opcode: 0x5e,
+    meta: { mnemonic: "F x=0" },
+    targetMeta: {},
+  };
+}
+
+function indirectRecall(register: RegisterName): IrOp {
+  return {
+    kind: "indirect-recall",
+    register,
+    opcode: 0xd0 + REGISTER_INDEX[register],
+    meta: { mnemonic: `К П->X ${register}` },
+  };
+}
+
+function indirectStore(register: RegisterName): IrOp {
+  return {
+    kind: "indirect-store",
+    register,
+    opcode: 0xb0 + REGISTER_INDEX[register],
+    meta: { mnemonic: `К X->П ${register}` },
   };
 }
 
@@ -221,17 +254,122 @@ describe("ir passes on synthetic programs", () => {
     expect(jumps.length).toBe(0);
   });
 
-  it("dead-store-elimination ignores stores guarded by unsafeReason", () => {
-    const guarded: IrOp = {
-      kind: "store",
-      register: "1",
-      opcode: 0x41,
-      meta: { mnemonic: "X->П 1", unsafeReason: "raw opcode" },
-    };
-    const program: IrOp[] = [guarded, halt()];
-    const result = deadStoreElimination.run(program, ctx);
+  it("register-coalesce rewrites non-overlapping direct register live ranges", () => {
+    const program: IrOp[] = [
+      store("1"),
+      recall("1"),
+      halt(),
+      store("2"),
+      recall("2"),
+    ];
+    const result = registerCoalesce.run(program, ctx);
+    expect(result.applied).toBe(1);
+    expect(result.ops.some((op) => (op.kind === "store" || op.kind === "recall") && op.register === "2")).toBe(false);
+  });
+
+  it("register-coalesce refuses registers live at entry", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      recall("2"),
+    ];
+    const result = registerCoalesce.run(program, ctx);
     expect(result.applied).toBe(0);
-    expect(result.ops.length).toBe(2);
+  });
+
+  it("arithmetic-if-pass collapses byte-identical simplified branches", () => {
+    const program: IrOp[] = [
+      cjump("else"),
+      plain(0x01, "1"),
+      halt(),
+      jump("end"),
+      label("else"),
+      plain(0x01, "1"),
+      halt(),
+      label("end"),
+    ];
+    const result = arithmeticIfPass.run(program, ctx);
+    expect(result.applied).toBe(1);
+    expect(result.ops.find((op) => op.kind === "cjump")).toBeUndefined();
+    expect(result.ops.filter((op) => op.kind === "stop").length).toBe(1);
+  });
+
+  it("arithmetic-if-pass refuses branches whose effects differ", () => {
+    const program: IrOp[] = [
+      cjump("else"),
+      plain(0x01, "1"),
+      halt(),
+      jump("end"),
+      label("else"),
+      plain(0x02, "2"),
+      halt(),
+      label("end"),
+    ];
+    const result = arithmeticIfPass.run(program, ctx);
+    expect(result.applied).toBe(0);
+  });
+
+  it("r0-fractional-sentinel removes redundant direct R3 recall after indirect R0 recall", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      store("0"),
+      indirectRecall("0"),
+      recall("3"),
+    ];
+    const result = r0FractionalSentinel.run(program, ctx);
+    expect(result.applied).toBe(1);
+    expect(result.ops.at(-1)?.kind).toBe("indirect-recall");
+  });
+
+  it("r0-fractional-sentinel refuses when R0 is live after the indirect access", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      store("0"),
+      indirectRecall("0"),
+      recall("3"),
+      recall("0"),
+    ];
+    const result = r0FractionalSentinel.run(program, ctx);
+    expect(result.applied).toBe(0);
+  });
+
+  it("r0-fractional-sentinel removes redundant direct R3 store after indirect R0 store", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      store("0"),
+      indirectStore("0"),
+      store("3"),
+    ];
+    const result = r0FractionalSentinel.run(program, ctx);
+    expect(result.applied).toBe(1);
+    expect(result.ops.at(-1)?.kind).toBe("indirect-store");
+  });
+
+  it("vp-x2-peephole removes fractional op already supplied by a display ВП boundary", () => {
+    const program: IrOp[] = [
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "display X2 boundary" } },
+      { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", comment: "display frac" } },
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+    expect(result.applied).toBe(1);
+    expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x35)).toBe(false);
+  });
+
+  it("vp-x2-peephole refuses ordinary exponent ВП boundaries", () => {
+    const program: IrOp[] = [
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "exponent entry" } },
+      { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", comment: "frac" } },
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+    expect(result.applied).toBe(0);
   });
 
   it("redundant-prologue-elimination drops a duplicated display+halt before a jump back to its loop head", () => {

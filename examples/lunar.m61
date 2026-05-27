@@ -1,6 +1,5 @@
 target mk61
 budget 105 cells
-optimize size
 reference lunar_lander
 
 // Numeric example rather than a map game: the player trades fuel for acceleration

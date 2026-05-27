@@ -11,10 +11,7 @@ export function formatListing(result: CompileResult): string {
   for (const step of result.steps) {
     const address = formatAddress(step.address).padStart(4, " ");
     const command = step.mnemonic.padEnd(23, " ");
-    const comments = [
-      step.comment,
-      step.unsafeReason ? `unsafe-unverified: ${step.unsafeReason}` : undefined,
-    ]
+    const comments = [step.comment]
       .filter((value): value is string => Boolean(value))
       .join("; ");
     lines.push(` ${address} |  ${step.hex}  | ${command} | ${comments}`);
@@ -59,9 +56,9 @@ export function formatExplain(result: CompileResult): string {
     `M61 compile report`,
     `Steps: ${result.report.steps}/${result.report.budget}`,
     `Delivery: ${result.report.delivery}`,
-    `Optimizer: ${result.report.opt}`,
+    `Optimizer: exact maximum`,
     `Target profile: ${result.report.targetProfile}`,
-    `Optimizer rules: automatic=${result.report.optimizer.automatic ? "yes" : "no"}; active=${result.report.optimizer.active}, candidates=${result.report.optimizer.candidate}, blocked=${result.report.optimizer.blocked}, planned=${result.report.optimizer.planned}`,
+    `Optimizer rules: automatic=${result.report.optimizer.automatic ? "yes" : "no"}; active=${result.report.optimizer.active}, considered=${result.report.optimizer.considered}, candidates=${result.report.optimizer.candidate}, planned=${result.report.optimizer.planned}`,
     `Budget: official=${result.report.budgetReport.officialSteps}, extra=${result.report.budgetReport.extraCells}, physical=${result.report.budgetReport.totalPhysicalCells}`,
     `Intent IR: lowered=${result.report.ir.lowered ? "yes" : "no"}, v2=${result.report.ir.v2 ? "yes" : "no"}; intent=${result.report.ir.intentNodes}, effects=${result.report.ir.effectOps}, cells=${result.report.ir.layoutCells}`,
   ];
@@ -94,27 +91,21 @@ export function formatExplain(result: CompileResult): string {
 
   lines.push("", "Optimizations:");
   for (const optimization of result.report.optimizations) {
-    lines.push(
-      `  - ${optimization.name}: ${optimization.detail}${optimization.unsafe ? " [unsafe-unverified]" : ""}`,
-    );
+    lines.push(`  - ${optimization.name}: ${optimization.detail}`);
   }
 
   if (result.report.candidates.length > 0) {
     lines.push("", "Candidates:");
     for (const candidate of result.report.candidates) {
       const marker = candidate.selected ? "*" : "-";
-      lines.push(
-        `  ${marker} ${candidate.site}/${candidate.variant}: ${candidate.steps} steps; ${candidate.reason}${candidate.unsafe ? " [unsafe-unverified]" : ""}`,
-      );
+      lines.push(`  ${marker} ${candidate.site}/${candidate.variant}: ${candidate.steps} steps; ${candidate.reason}`);
     }
   }
 
   if ((result.report.ir.lowered || result.report.ir.v2) && result.report.optimizer.capabilities.length > 0) {
     lines.push("", "Optimizer Capabilities:");
     for (const capability of result.report.optimizer.capabilities.slice(0, 12)) {
-      lines.push(
-        `  - ${capability.id}: ${capability.status}; ${capability.detail}${capability.unsafe ? " [unsafe-unverified]" : ""}`,
-      );
+      lines.push(`  - ${capability.id}: ${capability.status}; ${capability.detail}`);
     }
   }
 
@@ -140,7 +131,7 @@ export function formatExplain(result: CompileResult): string {
   }
 
   if (result.report.cellRoles.length > 0) {
-    const interesting = result.report.cellRoles.filter((cell) => cell.roles.length > 1 || cell.unsafe).slice(0, 12);
+    const interesting = result.report.cellRoles.filter((cell) => cell.roles.length > 1).slice(0, 12);
     if (interesting.length > 0) {
       lines.push("", "Cell Roles:");
       for (const cell of interesting) {
@@ -152,10 +143,6 @@ export function formatExplain(result: CompileResult): string {
   if (result.report.warnings.length > 0) {
     lines.push("", "Warnings:");
     for (const warning of result.report.warnings) lines.push(`  - ${warning}`);
-  }
-  if (result.report.unsafeUnverified.length > 0) {
-    lines.push("", "Unsafe/unverified:");
-    for (const item of result.report.unsafeUnverified) lines.push(`  - ${item}`);
   }
   return lines.join("\n");
 }

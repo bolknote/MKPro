@@ -15,7 +15,6 @@ calculator listing syntax is not part of the language.
 ```m61
 target mk61
 budget 105 cells
-optimize size
 
 program CounterGame {
   input key: digit
@@ -82,7 +81,6 @@ Only compilation metadata belongs outside `program`:
 
 - `target mk61`
 - `budget 105 cells`
-- `optimize size`
 - `reference name`
 
 Game meaning belongs inside `program`. Resource, bitset, maze, event, random,
@@ -356,11 +354,12 @@ layout.
 
 ## Optimizer Contract
 
-The default target profile is `mk61_exact`. In `--opt max`, the compiler
-automatically considers stack scheduling, indirect flow, `FL0`..`FL3`,
-arithmetic branch removal, tail merging, `В/О` as one-cell `БП 01`, code/data
-overlay, address constants, dark entries, R0/T aliases, X2/display-byte packing,
-hex/sign mantissa forms, safe `F0`..`FF` no-ops, and error-stop idioms.
+The default target profile is `mk61_exact`. The compiler always runs the
+maximum optimizer and automatically considers stack scheduling, indirect flow,
+`FL0`..`FL3`, arithmetic branch removal, tail merging, `В/О` as one-cell
+`БП 01`, code/data overlay, address constants, dark entries, R0/T aliases,
+X2/display-byte packing, hex/sign mantissa forms, `F0`..`FF` no-ops, and
+error-stop idioms.
 Opcode `5F` is modeled separately from filler no-ops: in `mk61_exact` it is a
 raw display-state transform, not a hang and not a generic filler.
 
@@ -507,7 +506,7 @@ Current scalar lowerings are still deliberately small and auditable:
 - `coord` is represented as a packed numeric value; `pos.floor` lowers to
   `int(pos / 100)`, with `100` automatically placed in setup state when
   that is cheaper than entering three digits.
-- `bitset generated random` is moved to reported setup state in `--opt max`.
+- `bitset generated random` is moved to reported setup state by the optimizer.
 - `collection has item` currently lowers to a compact range-style mask test
   (`collection >= item`) until the full bitset solver lands.
 - `reward by expr` updates `treasure` when that state field exists.
@@ -589,10 +588,10 @@ so the pipeline is byte-identical on every checkpoint.
 
 The pass driver in `src/core/passes/` runs the registered passes to a fixed
 point (with a bounded iteration cap) and aggregates their `applied` counts
-into the optimizer report. Passes that are not safe for already-laid-out
-layouts (anything that changes cell count or label addresses) are filtered
-out when the GameIntent backend invokes the driver, so the layout's pinned
-addresses, dark-entries, and overlays are preserved.
+into the optimizer report. Passes that would move already-laid-out cells
+(anything that changes cell count or label addresses) are filtered out when
+the GameIntent backend invokes the driver, so the layout's pinned addresses,
+dark-entries, and overlays are preserved.
 
 The pipeline currently contains:
 
@@ -611,15 +610,18 @@ The pipeline currently contains:
 - **dead-code-after-halt** — CFG reachability from the entry removes ops
   that no fall-through or jump edge reaches.
 - **constant-folding** — strips `0 +` and `1 *` identities.
+- **r0-fractional-sentinel** — removes redundant direct `R3` accesses after
+  fractional `R0` indirect access when liveness proves `R0` is dead afterward.
+- **vp-x2-peephole** — drops a `К {x}` immediately after a proved display
+  `ВП`/X2 boundary when `ВП` already supplies the fractional transform.
 - **cse-display-block** — coalesces structurally identical pure recall/ALU
   blocks that terminate with `В/О`, redirecting duplicates through a single
   shared exit.
-- **register-coalesce** — identifies non-overlapping live ranges as
-  coalescing candidates (reporting capability; the actual rewrite is staged
-  for follow-up).
-- **arithmetic-if-pass** — IR seat for branchless rewrites; current
-  cost-gated rewriting still runs at the AST select stage and reports via
-  the candidate ledger.
+- **register-coalesce** — rewrites direct store/recall opcodes when
+  non-overlapping live ranges can share a physical register.
+- **arithmetic-if-pass** — removes duplicated branch bodies after earlier
+  simplifications prove both sides are byte-identical and the result is
+  shorter.
 - **duplicate-failure-tail-merge** — merges duplicate `show 0` failure
   tails into a shared exit.
 - **return-zero-jump** — replaces `БП 01` with `В/О` only when the return

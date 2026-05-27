@@ -2,17 +2,16 @@ import type { IrOp } from "../types.ts";
 import {
   calculateLabelAddresses,
   cellsPerOp,
-  hasUnsafe,
+  hasRewriteBarrier,
   targetAddress,
   type IrPass,
   type IrPassFn,
   type PassResult,
 } from "./helpers.ts";
 
-const run: IrPassFn = (ops, ctx) => {
-  if (ctx.options.opt !== "max") return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+const run: IrPassFn = (ops) => {
   const usesCall = ops.some((op) => op.kind === "call" || op.kind === "indirect-call");
-  if (usesCall) return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+  if (usesCall) return { ops: [...ops], applied: 0, optimizations: [] };
   const labels = calculateLabelAddresses(ops);
   const result: IrOp[] = [];
   let applied = 0;
@@ -22,7 +21,7 @@ const run: IrPassFn = (ops, ctx) => {
       result.push(op);
       continue;
     }
-    if (op.kind === "jump" && !hasUnsafe(op)) {
+    if (op.kind === "jump" && !hasRewriteBarrier(op)) {
       const resolved = targetAddress(op.target, labels);
       const targetsBackward =
         typeof op.target === "number"
@@ -35,7 +34,6 @@ const run: IrPassFn = (ops, ctx) => {
           meta: {
             mnemonic: "В/О",
             comment: "optimized БП 01",
-            unsafeReason: "empty return stack assumed",
           },
         });
         applied += 1;
@@ -55,12 +53,9 @@ const run: IrPassFn = (ops, ctx) => {
             {
               name: "return-zero-jump",
               detail: `Replaced ${applied} БП 01 sequence with В/О under empty-return-stack assumption.`,
-              unsafe: true,
             },
           ]
         : [],
-    unsafeUnverified:
-      applied > 0 ? ["В/О as БП 01 assumes the return stack is empty."] : [],
   };
   return passResult;
 };

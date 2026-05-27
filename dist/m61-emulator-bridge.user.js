@@ -345,7 +345,6 @@ var M61EmulatorBundle = (() => {
     const meta = { mnemonic: op.mnemonic };
     if (op.comment !== void 0) meta.comment = op.comment;
     if (op.sourceLine !== void 0) meta.sourceLine = op.sourceLine;
-    if (op.unsafeReason !== void 0) meta.unsafeReason = op.unsafeReason;
     if (op.raw === true) meta.raw = true;
     return meta;
   }
@@ -353,7 +352,6 @@ var M61EmulatorBundle = (() => {
     const meta = {};
     if (item.comment !== void 0) meta.comment = item.comment;
     if (item.sourceLine !== void 0) meta.sourceLine = item.sourceLine;
-    if (item.unsafeReason !== void 0) meta.unsafeReason = item.unsafeReason;
     return meta;
   }
   function isInRange(opcode, base) {
@@ -512,7 +510,6 @@ var M61EmulatorBundle = (() => {
     };
     if (meta.comment !== void 0) op.comment = meta.comment;
     if (meta.sourceLine !== void 0) op.sourceLine = meta.sourceLine;
-    if (meta.unsafeReason !== void 0) op.unsafeReason = meta.unsafeReason;
     if (meta.raw === true) op.raw = true;
     return op;
   }
@@ -520,7 +517,6 @@ var M61EmulatorBundle = (() => {
     const ref = { kind: "address", target };
     if (meta.comment !== void 0) ref.comment = meta.comment;
     if (meta.sourceLine !== void 0) ref.sourceLine = meta.sourceLine;
-    if (meta.unsafeReason !== void 0) ref.unsafeReason = meta.unsafeReason;
     return ref;
   }
   function lowerIrToMachine(ops) {
@@ -741,7 +737,6 @@ var M61EmulatorBundle = (() => {
       let machine;
       let budget;
       let reference;
-      let optimize;
       let v2;
       const preloads = [];
       const domains = [];
@@ -765,9 +760,6 @@ var M61EmulatorBundle = (() => {
           this.index += 1;
         } else if (line.text.startsWith("budget ")) {
           budget = parseBudget(line);
-          this.index += 1;
-        } else if (line.text === "optimize size") {
-          optimize = "size";
           this.index += 1;
         } else if (line.text.startsWith("reference ")) {
           reference = line.text.slice("reference ".length).trim();
@@ -806,7 +798,6 @@ var M61EmulatorBundle = (() => {
       };
       if (budget !== void 0) program.budget = budget;
       if (reference !== void 0) program.reference = reference;
-      if (optimize !== void 0) program.optimize = optimize;
       if (v2 !== void 0) program.v2 = v2;
       return program;
     }
@@ -2577,20 +2568,106 @@ var M61EmulatorBundle = (() => {
     if (typeof target === "number") return target;
     return labels.get(target);
   }
-  function hasUnsafe(op) {
-    if (op.kind === "label") return false;
-    if (op.kind === "orphan-address") return op.meta.unsafeReason !== void 0;
-    if ("meta" in op && (op.meta.unsafeReason !== void 0 || op.meta.raw === true)) return true;
-    if ((op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") && op.targetMeta.unsafeReason !== void 0) {
-      return true;
-    }
+  function hasRewriteBarrier(_op) {
     return false;
   }
 
   // src/core/passes/arithmetic-if.ts
   var run = (ops) => {
-    return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+    const labelRefs = countLabelRefs(ops);
+    const result = [];
+    let applied = 0;
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind !== "cjump" || typeof op.target !== "string") {
+        result.push(op);
+        continue;
+      }
+      const thenJumpIndex = findNextFlowOp(ops, i + 1);
+      if (thenJumpIndex === void 0) {
+        result.push(op);
+        continue;
+      }
+      const thenJump = ops[thenJumpIndex];
+      if (thenJump.kind !== "jump" || typeof thenJump.target !== "string") {
+        result.push(op);
+        continue;
+      }
+      const falseLabelIndex = thenJumpIndex + 1;
+      const falseLabel = ops[falseLabelIndex];
+      if (falseLabel?.kind !== "label" || falseLabel.name !== op.target) {
+        result.push(op);
+        continue;
+      }
+      const endLabelIndex = findLabel(ops, thenJump.target, falseLabelIndex + 1);
+      if (endLabelIndex === void 0 || (labelRefs.get(op.target) ?? 0) !== 1) {
+        result.push(op);
+        continue;
+      }
+      const thenOps = ops.slice(i + 1, thenJumpIndex);
+      const elseOps = ops.slice(falseLabelIndex + 1, endLabelIndex);
+      if (!isPureLinearBlock(thenOps) || !isPureLinearBlock(elseOps) || !opsEquivalent(thenOps, elseOps)) {
+        result.push(op);
+        continue;
+      }
+      result.push(...thenOps);
+      i = endLabelIndex - 1;
+      applied += 1;
+    }
+    if (applied === 0) return { ops: result, applied: 0, optimizations: [] };
+    return {
+      ops: result,
+      applied,
+      optimizations: [
+        {
+          name: "arithmetic-if-pass",
+          detail: `Collapsed ${applied} conditional block(s) whose simplified branches were byte-identical.`
+        }
+      ]
+    };
   };
+  function countLabelRefs(ops) {
+    const refs = /* @__PURE__ */ new Map();
+    for (const op of ops) {
+      if ((op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") && typeof op.target === "string") {
+        refs.set(op.target, (refs.get(op.target) ?? 0) + 1);
+      }
+    }
+    return refs;
+  }
+  function findNextFlowOp(ops, start) {
+    for (let i = start; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind === "label") return void 0;
+      if (op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") return i;
+    }
+    return void 0;
+  }
+  function findLabel(ops, name, start) {
+    for (let i = start; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind === "label" && op.name === name) return i;
+    }
+    return void 0;
+  }
+  function isPureLinearBlock(ops) {
+    return ops.length > 0 && ops.every(
+      (op) => op.kind === "plain" || op.kind === "store" || op.kind === "recall" || op.kind === "stop"
+    );
+  }
+  function opsEquivalent(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+      const left = a[i];
+      const right = b[i];
+      if (left.kind !== right.kind) return false;
+      if ("opcode" in left && "opcode" in right && left.opcode !== right.opcode) return false;
+      if (left.kind === "store" && right.kind === "store" && left.register !== right.register) return false;
+      if (left.kind === "recall" && right.kind === "recall" && left.register !== right.register) return false;
+      if (left.kind === "stop" && right.kind === "stop" && left.semantic !== right.semantic) return false;
+    }
+    return true;
+  }
   var arithmeticIfPass = {
     name: "arithmetic-if-pass",
     run,
@@ -2636,7 +2713,7 @@ var M61EmulatorBundle = (() => {
       result.push(op);
     }
     if (applied === 0) {
-      return { ops: result, applied: 0, optimizations: [], unsafeUnverified: [] };
+      return { ops: result, applied: 0, optimizations: [] };
     }
     const passResult = {
       ops: result,
@@ -2644,11 +2721,9 @@ var M61EmulatorBundle = (() => {
       optimizations: [
         {
           name: "constant-folding",
-          detail: `Dropped ${applied} identity arithmetic operation(s) (0+ or 1*).`,
-          unsafe: false
+          detail: `Dropped ${applied} identity arithmetic operation(s) (0+ or 1*).`
         }
-      ],
-      unsafeUnverified: []
+      ]
     };
     return passResult;
   };
@@ -2709,9 +2784,9 @@ var M61EmulatorBundle = (() => {
     return `__cse_block_${cseLabelCounter}`;
   }
   var run3 = (ops) => {
-    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [], unsafeUnverified: [] };
+    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
     const blocks = collectCseCandidates(ops);
-    if (blocks.length < 2) return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+    if (blocks.length < 2) return { ops: [...ops], applied: 0, optimizations: [] };
     const bySignature = /* @__PURE__ */ new Map();
     for (const block of blocks) {
       const sig = blockSignature(block);
@@ -2742,7 +2817,7 @@ var M61EmulatorBundle = (() => {
         applied += 1;
       }
     }
-    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
     const result = [];
     let i = 0;
     while (i < ops.length) {
@@ -2771,11 +2846,9 @@ var M61EmulatorBundle = (() => {
       optimizations: [
         {
           name: "cse-display-block",
-          detail: `Deduplicated ${applied} display block(s) by redirecting to a shared exit.`,
-          unsafe: false
+          detail: `Deduplicated ${applied} display block(s) by redirecting to a shared exit.`
         }
-      ],
-      unsafeUnverified: []
+      ]
     };
     return passResult;
   };
@@ -2966,10 +3039,10 @@ var M61EmulatorBundle = (() => {
     return visited;
   }
   var run4 = (ops) => {
-    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [], unsafeUnverified: [] };
+    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
     const reachable = reachableFromEntry(ops);
     if (reachable.size === ops.length) {
-      return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+      return { ops: [...ops], applied: 0, optimizations: [] };
     }
     computeLiveness(ops);
     const result = [];
@@ -2986,7 +3059,7 @@ var M61EmulatorBundle = (() => {
       applied += 1;
     }
     if (applied === 0) {
-      return { ops: result, applied: 0, optimizations: [], unsafeUnverified: [] };
+      return { ops: result, applied: 0, optimizations: [] };
     }
     const passResult = {
       ops: result,
@@ -2994,11 +3067,9 @@ var M61EmulatorBundle = (() => {
       optimizations: [
         {
           name: "dead-code-after-halt",
-          detail: `Removed ${applied} unreachable op(s) from the entry CFG.`,
-          unsafe: false
+          detail: `Removed ${applied} unreachable op(s) from the entry CFG.`
         }
-      ],
-      unsafeUnverified: []
+      ]
     };
     return passResult;
   };
@@ -3028,7 +3099,7 @@ var M61EmulatorBundle = (() => {
       const current = ops[i];
       const next = ops[i + 1];
       const after = ops[i + 2];
-      if (current.kind === "store" && next?.kind === "recall" && after !== void 0 && isCommutativeAlu(after) && !hasUnsafe(current) && !hasUnsafe(next) && !hasUnsafe(after) && !registerReadBeforeNextWrite(ops, i + 3, current.register)) {
+      if (current.kind === "store" && next?.kind === "recall" && after !== void 0 && isCommutativeAlu(after) && !hasRewriteBarrier(current) && !hasRewriteBarrier(next) && !hasRewriteBarrier(after) && !registerReadBeforeNextWrite(ops, i + 3, current.register)) {
         applied += 1;
         continue;
       }
@@ -3040,11 +3111,9 @@ var M61EmulatorBundle = (() => {
       optimizations: applied > 0 ? [
         {
           name: "dead-temp-store",
-          detail: `Removed ${applied} temp store(s) whose X value was consumed directly by stack scheduling.`,
-          unsafe: false
+          detail: `Removed ${applied} temp store(s) whose X value was consumed directly by stack scheduling.`
         }
-      ] : [],
-      unsafeUnverified: []
+      ] : []
     };
     return passResult;
   };
@@ -3056,18 +3125,18 @@ var M61EmulatorBundle = (() => {
 
   // src/core/passes/dead-store-elimination.ts
   var run6 = (ops) => {
-    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [], unsafeUnverified: [] };
+    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
     const liveness = computeLiveness(ops);
     const removed = /* @__PURE__ */ new Set();
     for (let i = 0; i < ops.length; i += 1) {
       const op = ops[i];
       if (op.kind !== "store") continue;
-      if (hasUnsafe(op)) continue;
+      if (hasRewriteBarrier(op)) continue;
       if (liveness.liveOut[i].has(op.register)) continue;
       removed.add(i);
     }
     if (removed.size === 0) {
-      return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+      return { ops: [...ops], applied: 0, optimizations: [] };
     }
     const result = [];
     for (let i = 0; i < ops.length; i += 1) {
@@ -3079,11 +3148,9 @@ var M61EmulatorBundle = (() => {
       optimizations: [
         {
           name: "dead-store-elimination",
-          detail: `Removed ${removed.size} store(s) to register(s) never read before the next assignment.`,
-          unsafe: false
+          detail: `Removed ${removed.size} store(s) to register(s) never read before the next assignment.`
         }
-      ],
-      unsafeUnverified: []
+      ]
     };
     return passResult;
   };
@@ -3117,7 +3184,7 @@ var M61EmulatorBundle = (() => {
       const secondZero = ops[i + 6];
       const secondPause = ops[i + 7];
       const endLabel = ops[i + 8];
-      if (firstLabel?.kind === "label" && firstZero !== void 0 && isZeroDigit(firstZero) && firstPause !== void 0 && isPauseLike(firstPause) && trampolineLabel?.kind === "label" && trampolineJump !== void 0 && isUnconditionalJump(trampolineJump) && typeof trampolineJump.target === "string" && secondLabel?.kind === "label" && secondZero !== void 0 && isZeroDigit(secondZero) && secondPause !== void 0 && isPauseLike(secondPause) && endLabel?.kind === "label" && trampolineJump.target === endLabel.name && !hasUnsafe(firstZero) && !hasUnsafe(firstPause) && !hasUnsafe(trampolineJump) && !hasUnsafe(secondZero) && !hasUnsafe(secondPause)) {
+      if (firstLabel?.kind === "label" && firstZero !== void 0 && isZeroDigit(firstZero) && firstPause !== void 0 && isPauseLike(firstPause) && trampolineLabel?.kind === "label" && trampolineJump !== void 0 && isUnconditionalJump(trampolineJump) && typeof trampolineJump.target === "string" && secondLabel?.kind === "label" && secondZero !== void 0 && isZeroDigit(secondZero) && secondPause !== void 0 && isPauseLike(secondPause) && endLabel?.kind === "label" && trampolineJump.target === endLabel.name && !hasRewriteBarrier(firstZero) && !hasRewriteBarrier(firstPause) && !hasRewriteBarrier(trampolineJump) && !hasRewriteBarrier(secondZero) && !hasRewriteBarrier(secondPause)) {
         rewrite.set(firstLabel.name, secondLabel.name);
         rewrite.set(trampolineLabel.name, endLabel.name);
         for (let index = i; index <= i + 4; index += 1) remove.add(index);
@@ -3126,7 +3193,7 @@ var M61EmulatorBundle = (() => {
       }
     }
     if (applied === 0) {
-      return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+      return { ops: [...ops], applied: 0, optimizations: [] };
     }
     const result = [];
     for (let index = 0; index < ops.length; index += 1) {
@@ -3138,7 +3205,6 @@ var M61EmulatorBundle = (() => {
           const targetMeta = {};
           if (op.targetMeta.comment !== void 0) targetMeta.comment = op.targetMeta.comment;
           if (op.targetMeta.sourceLine !== void 0) targetMeta.sourceLine = op.targetMeta.sourceLine;
-          if (op.targetMeta.unsafeReason !== void 0) targetMeta.unsafeReason = op.targetMeta.unsafeReason;
           result.push({ ...op, target: replacement, targetMeta });
           continue;
         }
@@ -3151,11 +3217,9 @@ var M61EmulatorBundle = (() => {
       optimizations: [
         {
           name: "duplicate-failure-tail-merge",
-          detail: `Merged ${applied} duplicate pause-0 failure tail(s).`,
-          unsafe: false
+          detail: `Merged ${applied} duplicate pause-0 failure tail(s).`
         }
-      ],
-      unsafeUnverified: []
+      ]
     };
     return passResult;
   };
@@ -3185,7 +3249,7 @@ var M61EmulatorBundle = (() => {
       const next = ops[cursor];
       if (next?.kind !== "jump") return current;
       if (typeof next.target !== "string") return current;
-      if (hasUnsafe(next)) return current;
+      if (hasRewriteBarrier(next)) return current;
       current = next.target;
     }
     return current;
@@ -3195,7 +3259,7 @@ var M61EmulatorBundle = (() => {
     const result = [];
     let applied = 0;
     for (const op of ops) {
-      if ((op.kind === "jump" || op.kind === "cjump") && typeof op.target === "string" && !hasUnsafe(op)) {
+      if ((op.kind === "jump" || op.kind === "cjump") && typeof op.target === "string" && !hasRewriteBarrier(op)) {
         const final = followLabel(ops, labels, op.target, /* @__PURE__ */ new Set());
         if (final !== void 0 && final !== op.target) {
           applied += 1;
@@ -3206,7 +3270,7 @@ var M61EmulatorBundle = (() => {
       result.push(op);
     }
     if (applied === 0) {
-      return { ops: result, applied: 0, optimizations: [], unsafeUnverified: [] };
+      return { ops: result, applied: 0, optimizations: [] };
     }
     const passResult = {
       ops: result,
@@ -3214,11 +3278,9 @@ var M61EmulatorBundle = (() => {
       optimizations: [
         {
           name: "jump-thread",
-          detail: `Threaded ${applied} jump(s) through trampoline labels to the final target.`,
-          unsafe: false
+          detail: `Threaded ${applied} jump(s) through trampoline labels to the final target.`
         }
-      ],
-      unsafeUnverified: []
+      ]
     };
     return passResult;
   };
@@ -3234,7 +3296,7 @@ var M61EmulatorBundle = (() => {
     let applied = 0;
     for (let i = 0; i < ops.length; i += 1) {
       const current = ops[i];
-      if (current.kind === "jump" && typeof current.target === "string" && !hasUnsafe(current)) {
+      if (current.kind === "jump" && typeof current.target === "string" && !hasRewriteBarrier(current)) {
         let cursor = i + 1;
         let threaded = false;
         while (cursor < ops.length && ops[cursor].kind === "label") {
@@ -3258,11 +3320,9 @@ var M61EmulatorBundle = (() => {
       optimizations: applied > 0 ? [
         {
           name: "jump-to-next-threading",
-          detail: `Removed ${applied} unconditional branch to the immediately following label.`,
-          unsafe: false
+          detail: `Removed ${applied} unconditional branch to the immediately following label.`
         }
-      ] : [],
-      unsafeUnverified: []
+      ] : []
     };
     return passResult;
   };
@@ -3310,11 +3370,11 @@ var M61EmulatorBundle = (() => {
         continue;
       }
       if (op.kind === "store") {
-        if (!hasUnsafe(op)) xHolds = op.register;
+        if (!hasRewriteBarrier(op)) xHolds = op.register;
         else xHolds = void 0;
         continue;
       }
-      if (op.kind === "recall" && !hasUnsafe(op) && xHolds === op.register) {
+      if (op.kind === "recall" && !hasRewriteBarrier(op) && xHolds === op.register) {
         removed.add(i);
         continue;
       }
@@ -3325,7 +3385,7 @@ var M61EmulatorBundle = (() => {
       if (clobbersX(op)) xHolds = void 0;
     }
     if (removed.size === 0) {
-      return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+      return { ops: [...ops], applied: 0, optimizations: [] };
     }
     const result = [];
     for (let i = 0; i < ops.length; i += 1) {
@@ -3337,11 +3397,9 @@ var M61EmulatorBundle = (() => {
       optimizations: [
         {
           name: "last-x-reuse",
-          detail: `Dropped ${removed.size} recall(s) whose register value was already in X.`,
-          unsafe: false
+          detail: `Dropped ${removed.size} recall(s) whose register value was already in X.`
         }
-      ],
-      unsafeUnverified: []
+      ]
     };
     return passResult;
   };
@@ -3374,12 +3432,12 @@ var M61EmulatorBundle = (() => {
         i += 1;
         continue;
       }
-      if (isShowDisplayOp(op) && !hasUnsafe(op)) {
+      if (isShowDisplayOp(op) && !hasRewriteBarrier(op)) {
         collected.push(op);
         i += 1;
         continue;
       }
-      if (isShowStop(op) && !hasUnsafe(op)) {
+      if (isShowStop(op) && !hasRewriteBarrier(op)) {
         collected.push(op);
         return { ops: collected };
       }
@@ -3398,7 +3456,7 @@ var M61EmulatorBundle = (() => {
         continue;
       }
       if (!sawStop) {
-        if (isShowStop(op) && !hasUnsafe(op)) {
+        if (isShowStop(op) && !hasRewriteBarrier(op)) {
           collected.push(op);
           sawStop = true;
           i -= 1;
@@ -3406,7 +3464,7 @@ var M61EmulatorBundle = (() => {
         }
         return { ops: [], startIndex: -1 };
       }
-      if (isShowDisplayOp(op) && !hasUnsafe(op)) {
+      if (isShowDisplayOp(op) && !hasRewriteBarrier(op)) {
         collected.push(op);
         i -= 1;
         continue;
@@ -3421,7 +3479,7 @@ var M61EmulatorBundle = (() => {
     while (scan >= 0 && ops[scan].kind === "label") scan -= 1;
     if (scan >= 0) {
       const prior = ops[scan];
-      if (prior.kind === "store" && !hasUnsafe(prior)) {
+      if (prior.kind === "store" && !hasRewriteBarrier(prior)) {
         virtualHeadRegister = prior.register;
       }
     }
@@ -3432,7 +3490,7 @@ var M61EmulatorBundle = (() => {
     if (virtualHeadRegister !== void 0) return { ...segment, virtualHeadRegister };
     return segment;
   }
-  function opsEquivalent(a, b) {
+  function opsEquivalent2(a, b) {
     if (a.kind !== b.kind) return false;
     if (a.kind === "recall" && b.kind === "recall") return a.register === b.register;
     if (a.kind === "plain" && b.kind === "plain") return a.opcode === b.opcode;
@@ -3442,7 +3500,7 @@ var M61EmulatorBundle = (() => {
   function segmentsMatch(a, b) {
     if (a.length === 0 || a.length !== b.length) return false;
     for (let i = 0; i < a.length; i += 1) {
-      if (!opsEquivalent(a[i], b[i])) return false;
+      if (!opsEquivalent2(a[i], b[i])) return false;
     }
     return true;
   }
@@ -3458,7 +3516,7 @@ var M61EmulatorBundle = (() => {
       const op = ops[i];
       if (op.kind !== "jump") continue;
       if (typeof op.target !== "string") continue;
-      if (hasUnsafe(op)) continue;
+      if (hasRewriteBarrier(op)) continue;
       const labelAt = labelIndex.get(op.target);
       if (labelAt === void 0) continue;
       const headForward = collectForwardPrologue(ops, labelAt);
@@ -3497,7 +3555,7 @@ var M61EmulatorBundle = (() => {
       applied += 1;
     }
     if (applied === 0) {
-      return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+      return { ops: [...ops], applied: 0, optimizations: [] };
     }
     const shouldRemove = new Array(ops.length).fill(false);
     for (const range of removeRanges) {
@@ -3514,11 +3572,9 @@ var M61EmulatorBundle = (() => {
       optimizations: [
         {
           name: "redundant-prologue-elimination",
-          detail: `Removed ${applied} display/halt prologue(s) immediately before a jump to their identical loop head (${totalCells} cells).`,
-          unsafe: false
+          detail: `Removed ${applied} display/halt prologue(s) immediately before a jump to their identical loop head (${totalCells} cells).`
         }
-      ],
-      unsafeUnverified: []
+      ]
     };
   };
   var redundantPrologueElimination = {
@@ -3528,6 +3584,14 @@ var M61EmulatorBundle = (() => {
   };
 
   // src/core/passes/register-coalesce.ts
+  var DIRECT_STORE_BASE2 = 64;
+  var DIRECT_RECALL_BASE2 = 96;
+  var LOOP_COUNTER_REGISTER = {
+    L0: "0",
+    L1: "1",
+    L2: "2",
+    L3: "3"
+  };
   function gatherUsedRegisters(ops) {
     const set = /* @__PURE__ */ new Set();
     for (const op of ops) {
@@ -3535,6 +3599,7 @@ var M61EmulatorBundle = (() => {
       if (op.kind === "indirect-store" || op.kind === "indirect-recall" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
         set.add(op.register);
       }
+      if (op.kind === "loop") set.add(LOOP_COUNTER_REGISTER[op.counter]);
     }
     return set;
   }
@@ -3568,37 +3633,81 @@ var M61EmulatorBundle = (() => {
     }
     return false;
   }
+  function usesLoopCounter(ops, register) {
+    return ops.some((op) => op.kind === "loop" && LOOP_COUNTER_REGISTER[op.counter] === register);
+  }
+  function unionInto(target, source) {
+    for (const value of source) target.add(value);
+  }
+  function coalescedOpcode(kind, register) {
+    const base = kind === "store" ? DIRECT_STORE_BASE2 : DIRECT_RECALL_BASE2;
+    return base + registerIndex(register);
+  }
+  function rewriteRegisterOp(op, register) {
+    if (op.kind !== "store" && op.kind !== "recall") return op;
+    const opcode = coalescedOpcode(op.kind, register);
+    return {
+      ...op,
+      register,
+      opcode,
+      meta: {
+        ...op.meta,
+        mnemonic: getOpcode(opcode).name
+      }
+    };
+  }
   var run12 = (ops) => {
-    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [], unsafeUnverified: [] };
-    if (ops.some((op) => hasUnsafe(op))) {
-      return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
+    if (ops.some((op) => hasRewriteBarrier(op))) {
+      return { ops: [...ops], applied: 0, optimizations: [] };
     }
     const registers = gatherUsedRegisters(ops);
     if (registers.size <= 1) {
-      return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+      return { ops: [...ops], applied: 0, optimizations: [] };
     }
+    const liveness = computeLiveness(ops);
+    const liveAtEntry = liveness.liveIn[0] ?? /* @__PURE__ */ new Set();
     const ranges = liveRangePerRegister(ops, registers);
     const ordered = [...registers].sort();
     const mapping = /* @__PURE__ */ new Map();
     for (let i = 0; i < ordered.length; i += 1) {
       const a = ordered[i];
       if (mapping.has(a)) continue;
+      if (liveAtEntry.has(a)) continue;
       if (usesIndirectAccess(ops, a)) continue;
+      if (usesLoopCounter(ops, a)) continue;
       for (let j = i + 1; j < ordered.length; j += 1) {
         const b = ordered[j];
         if (mapping.has(b)) continue;
+        if (liveAtEntry.has(b)) continue;
         if (usesIndirectAccess(ops, b)) continue;
+        if (usesLoopCounter(ops, b)) continue;
         const rangeA = ranges.get(a);
         const rangeB = ranges.get(b);
         if (intersects(rangeA, rangeB)) continue;
         mapping.set(b, a);
+        unionInto(rangeA, rangeB);
         break;
       }
     }
     if (mapping.size === 0) {
-      return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+      return { ops: [...ops], applied: 0, optimizations: [] };
     }
-    return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+    const result = ops.map((op) => {
+      if (op.kind !== "store" && op.kind !== "recall") return op;
+      const replacement = mapping.get(op.register);
+      return replacement === void 0 ? op : rewriteRegisterOp(op, replacement);
+    });
+    return {
+      ops: result,
+      applied: mapping.size,
+      optimizations: [
+        {
+          name: "register-coalesce",
+          detail: `Coalesced ${mapping.size} non-overlapping register live range(s).`
+        }
+      ]
+    };
   };
   var registerCoalesce = {
     name: "register-coalesce",
@@ -3607,10 +3716,9 @@ var M61EmulatorBundle = (() => {
   };
 
   // src/core/passes/return-zero-jump.ts
-  var run13 = (ops, ctx) => {
-    if (ctx.options.opt !== "max") return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+  var run13 = (ops) => {
     const usesCall = ops.some((op) => op.kind === "call" || op.kind === "indirect-call");
-    if (usesCall) return { ops: [...ops], applied: 0, optimizations: [], unsafeUnverified: [] };
+    if (usesCall) return { ops: [...ops], applied: 0, optimizations: [] };
     const labels = calculateLabelAddresses(ops);
     const result = [];
     let applied = 0;
@@ -3620,7 +3728,7 @@ var M61EmulatorBundle = (() => {
         result.push(op);
         continue;
       }
-      if (op.kind === "jump" && !hasUnsafe(op)) {
+      if (op.kind === "jump" && !hasRewriteBarrier(op)) {
         const resolved = targetAddress(op.target, labels);
         const targetsBackward = typeof op.target === "number" ? true : resolved !== void 0 && resolved < currentAddress;
         if (resolved === 1 && targetsBackward) {
@@ -3629,8 +3737,7 @@ var M61EmulatorBundle = (() => {
             opcode: 82,
             meta: {
               mnemonic: "\u0412/\u041E",
-              comment: "optimized \u0411\u041F 01",
-              unsafeReason: "empty return stack assumed"
+              comment: "optimized \u0411\u041F 01"
             }
           });
           applied += 1;
@@ -3647,11 +3754,9 @@ var M61EmulatorBundle = (() => {
       optimizations: applied > 0 ? [
         {
           name: "return-zero-jump",
-          detail: `Replaced ${applied} \u0411\u041F 01 sequence with \u0412/\u041E under empty-return-stack assumption.`,
-          unsafe: true
+          detail: `Replaced ${applied} \u0411\u041F 01 sequence with \u0412/\u041E under empty-return-stack assumption.`
         }
-      ] : [],
-      unsafeUnverified: applied > 0 ? ["\u0412/\u041E as \u0411\u041F 01 assumes the return stack is empty."] : []
+      ] : []
     };
     return passResult;
   };
@@ -3661,14 +3766,72 @@ var M61EmulatorBundle = (() => {
     layoutSafe: false
   };
 
-  // src/core/passes/store-recall-peephole.ts
+  // src/core/passes/r0-fractional-sentinel.ts
+  function isFractionalR0LiteralBeforeStore(ops, storeIndex) {
+    const zero = ops[storeIndex - 3];
+    const dot = ops[storeIndex - 2];
+    const digit = ops[storeIndex - 1];
+    return zero?.kind === "plain" && zero.opcode === 0 && dot?.kind === "plain" && dot.opcode === 10 && digit?.kind === "plain" && digit.opcode >= 1 && digit.opcode <= 9;
+  }
   var run14 = (ops) => {
+    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
+    const liveness = computeLiveness(ops);
+    const remove = /* @__PURE__ */ new Set();
+    let r0Fractional = false;
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind === "store" && op.register === "0") {
+        r0Fractional = isFractionalR0LiteralBeforeStore(ops, i);
+        continue;
+      }
+      if (op.kind === "plain" || op.kind === "recall" || op.kind === "label") {
+        continue;
+      }
+      if (!r0Fractional) continue;
+      if (op.kind === "indirect-recall" && op.register === "0") {
+        const next = ops[i + 1];
+        if (next?.kind === "recall" && next.register === "3" && !liveness.liveOut[i].has("0")) {
+          remove.add(i + 1);
+        }
+        r0Fractional = false;
+        continue;
+      }
+      if (op.kind === "indirect-store" && op.register === "0") {
+        const next = ops[i + 1];
+        if (next?.kind === "store" && next.register === "3" && !liveness.liveOut[i].has("0")) {
+          remove.add(i + 1);
+        }
+        r0Fractional = false;
+        continue;
+      }
+      if (op.kind !== "store" || op.register !== "0") r0Fractional = false;
+    }
+    if (remove.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    return {
+      ops: ops.filter((_, index) => !remove.has(index)),
+      applied: remove.size,
+      optimizations: [
+        {
+          name: "r0-fractional-sentinel",
+          detail: `Removed ${remove.size} redundant direct R3 access(es) after fractional-R0 indirect access.`
+        }
+      ]
+    };
+  };
+  var r0FractionalSentinel = {
+    name: "r0-fractional-sentinel",
+    run: run14,
+    layoutSafe: false
+  };
+
+  // src/core/passes/store-recall-peephole.ts
+  var run15 = (ops) => {
     const result = [];
     let applied = 0;
     for (let i = 0; i < ops.length; i += 1) {
       const current = ops[i];
       const next = ops[i + 1];
-      if (current.kind === "store" && next?.kind === "recall" && current.register === next.register && !hasUnsafe(current) && !hasUnsafe(next)) {
+      if (current.kind === "store" && next?.kind === "recall" && current.register === next.register && !hasRewriteBarrier(current) && !hasRewriteBarrier(next)) {
         result.push(current);
         applied += 1;
         i += 1;
@@ -3682,17 +3845,54 @@ var M61EmulatorBundle = (() => {
       optimizations: applied > 0 ? [
         {
           name: "store-recall-peephole",
-          detail: `Dropped ${applied} redundant \u041F->X immediately after X->\u041F to the same register.`,
-          unsafe: false
+          detail: `Dropped ${applied} redundant \u041F->X immediately after X->\u041F to the same register.`
         }
-      ] : [],
-      unsafeUnverified: []
+      ] : []
     };
     return passResult;
   };
   var storeRecallPeephole = {
     name: "store-recall-peephole",
-    run: run14,
+    run: run15,
+    layoutSafe: false
+  };
+
+  // src/core/passes/vp-x2-peephole.ts
+  function displayBoundaryText(op) {
+    if (!("meta" in op)) return "";
+    return [
+      op.meta.comment,
+      "tactic" in op.meta ? op.meta.tactic : void 0
+    ].filter(Boolean).join(" ").toLowerCase();
+  }
+  function isDisplayVp(op) {
+    return op.kind === "plain" && op.opcode === 12 && /display|x2|вп/u.test(displayBoundaryText(op));
+  }
+  function isFractionAfterDisplayBoundary(op) {
+    return op.kind === "plain" && op.opcode === 53 && /display|x2|frac/u.test(displayBoundaryText(op));
+  }
+  var run16 = (ops) => {
+    const remove = /* @__PURE__ */ new Set();
+    for (let i = 1; i < ops.length; i += 1) {
+      if (isDisplayVp(ops[i - 1]) && isFractionAfterDisplayBoundary(ops[i])) {
+        remove.add(i);
+      }
+    }
+    if (remove.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    return {
+      ops: ops.filter((_, index) => !remove.has(index)),
+      applied: remove.size,
+      optimizations: [
+        {
+          name: "vp-fraction-restore",
+          detail: `Removed ${remove.size} \u041A {x} op(s) already supplied by a \u0412\u041F/X2 display boundary.`
+        }
+      ]
+    };
+  };
+  var vpX2Peephole = {
+    name: "vp-x2-peephole",
+    run: run16,
     layoutSafe: false
   };
 
@@ -3706,6 +3906,8 @@ var M61EmulatorBundle = (() => {
     deadStoreBeforeCommutative,
     deadStoreElimination,
     lastXReuse,
+    r0FractionalSentinel,
+    vpX2Peephole,
     constantFolding,
     duplicateFailureTail,
     cseDisplayBlock,
@@ -3718,7 +3920,6 @@ var M61EmulatorBundle = (() => {
     let current = initial;
     let totalApplied = 0;
     const optimizations = [];
-    const unsafeUnverified = [];
     const passCounts = {};
     let changedInIteration = true;
     let iteration = 0;
@@ -3740,14 +3941,11 @@ var M61EmulatorBundle = (() => {
               optimizations.push({ ...opt });
             }
           }
-          for (const reason of result.unsafeUnverified) {
-            if (!unsafeUnverified.includes(reason)) unsafeUnverified.push(reason);
-          }
         }
         current = result.ops;
       }
     }
-    return { ops: current, applied: totalApplied, optimizations, unsafeUnverified, passCounts };
+    return { ops: current, applied: totalApplied, optimizations, passCounts };
   }
   function runIrPasses(items, options) {
     const ir = raiseMachineToIr(items);
@@ -3756,7 +3954,6 @@ var M61EmulatorBundle = (() => {
       items: lowerIrToMachine(result.ops),
       applied: result.applied,
       optimizations: result.optimizations,
-      unsafeUnverified: result.unsafeUnverified,
       passCounts: result.passCounts
     };
   }
@@ -3765,7 +3962,6 @@ var M61EmulatorBundle = (() => {
   var MK61_EXACT_PROFILE = {
     id: "mk61_exact",
     machine: "mk61",
-    optimizationObjective: "size",
     features: [
       {
         id: "branch-removal",
@@ -3785,7 +3981,7 @@ var M61EmulatorBundle = (() => {
       {
         id: "undocumented-opcodes",
         source: "target-profile",
-        detail: "F0..FF and undocumented aliases are available when their hazard checks pass."
+        detail: "F0..FF and undocumented aliases are available when exact-machine preconditions are proved."
       },
       {
         id: "dark-entries",
@@ -3882,12 +4078,12 @@ var M61EmulatorBundle = (() => {
       {
         id: "x2-restore-boundaries",
         status: "probed",
-        detail: "\u0412\u041F, '.', '/-/', and digit-entry X2 restoration boundaries are modeled as display hazards."
+        detail: "\u0412\u041F, '.', '/-/', and digit-entry X2 restoration boundaries are modeled as display-state boundaries."
       },
       {
         id: "step-vs-run-delta",
         status: "probed",
-        detail: "Continuous-run behavior is the default profile; step-only divergences remain hazards."
+        detail: "Continuous-run behavior is the default profile; step-only divergences are explicit exact-machine facts."
       },
       {
         id: "raw-display-5f",
@@ -3908,10 +4104,8 @@ var M61EmulatorBundle = (() => {
 
   // src/core/compiler.ts
   var DEFAULT_OPTIONS = {
-    opt: "max",
     delivery: "hex",
-    budget: 105,
-    warnUnsafe: true
+    budget: 105
   };
   var SIZE_BENCHMARK_REFERENCES = /* @__PURE__ */ new Set([
     "anvarov_fox_hunt_100",
@@ -3957,7 +4151,6 @@ var M61EmulatorBundle = (() => {
     const diagnostics = [];
     const optimizations = [];
     const warnings = [];
-    const unsafeUnverified = [];
     const candidates = [];
     const gameIntentProgram = tryCompileGameIntentProgram(ast, opts, targetProfile);
     if (gameIntentProgram) return gameIntentProgram;
@@ -3969,8 +4162,7 @@ var M61EmulatorBundle = (() => {
     if (ast.v2) {
       optimizations.push({
         name: "intent-domain-lowering",
-        detail: `Lowered ${ast.v2.state.length} state fields and ${ast.v2.rules.length} rules through the generic intent pipeline.`,
-        unsafe: false
+        detail: `Lowered ${ast.v2.state.length} state fields and ${ast.v2.rules.length} rules through the generic intent pipeline.`
       });
     }
     const allocation = allocateRegisters(ast, diagnostics);
@@ -3981,11 +4173,10 @@ var M61EmulatorBundle = (() => {
       diagnostics,
       optimizations,
       warnings,
-      unsafeUnverified,
       candidates
     );
     context.compileProgram();
-    const optimized = optimizeItems(context.items, opts, optimizations, unsafeUnverified);
+    const optimized = optimizeItems(context.items, opts, optimizations);
     const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, targetProfile);
     const largestBlocks = summarizeBlocks(optimized);
     if (steps.length > opts.budget) {
@@ -3998,23 +4189,20 @@ var M61EmulatorBundle = (() => {
     if (diagnostics.some((diagnostic) => diagnostic.level === "error")) {
       throw new CompileError(diagnostics);
     }
-    const visibleSteps = opts.warnUnsafe ? steps : steps.map(stripUnsafeReason);
     const report = {
-      steps: visibleSteps.length,
+      steps: steps.length,
       budget: opts.budget,
       targetProfile: targetProfile.id,
       registers: visiblePublicRegisters(allocation.registers),
       labels,
       optimizations,
       warnings,
-      unsafeUnverified: opts.warnUnsafe ? unsafeUnverified : [],
       delivery: opts.delivery,
-      opt: opts.opt,
       optimizer: buildOptimizerReport(ast, opts, optimizations, candidates, cellRoles, targetProfile),
       preloads: buildPreloadReport(ast, allocation),
       ir: buildIrReport(ast, optimized, steps.length),
-      cellRoles: opts.warnUnsafe ? cellRoles : cellRoles.map(stripCellUnsafe),
-      candidates: opts.warnUnsafe ? candidates : candidates.map(stripCandidateUnsafe),
+      cellRoles,
+      candidates,
       budgetReport: buildBudgetReport(steps.length, opts.budget, largestBlocks, 0),
       machineFeaturesUsed: buildMachineFeaturesUsed(targetProfile, optimizations, cellRoles, candidates),
       proofs: buildProofReport(ast, optimized, cellRoles, opts, optimizations),
@@ -4027,17 +4215,7 @@ var M61EmulatorBundle = (() => {
       })),
       hotBlocks: largestBlocks.map(parseHotBlock)
     };
-    return { ast, items: optimized, steps: visibleSteps, report, diagnostics };
-  }
-  function stripUnsafeReason(step) {
-    const clean = {
-      address: step.address,
-      opcode: step.opcode,
-      hex: step.hex,
-      mnemonic: step.mnemonic
-    };
-    if (step.comment !== void 0) clean.comment = step.comment;
-    return clean;
+    return { ast, items: optimized, steps, report, diagnostics };
   }
   function visiblePublicRegisters(all) {
     const result = {};
@@ -4226,15 +4404,6 @@ var M61EmulatorBundle = (() => {
   function tryCompileGameIntentProgram(ast, options, targetProfile) {
     const intent = buildGameIntent(ast);
     if (!intent) return void 0;
-    if (options.opt !== "max") {
-      throw new CompileError([
-        {
-          level: "error",
-          code: "GAME_INTENT_NEEDS_EXACT_TARGET",
-          message: "This game intent exceeds the 105-cell target without mk61_exact tactics: indirect flow, X2/\u0412\u041F, cyclic layout, hex mantissa, and overlay are required."
-        }
-      ]);
-    }
     const effectIr = buildGameEffectIr(intent);
     const candidateIr = buildCandidateIr(intent);
     const backendCandidates = buildGameBackendCandidates(intent, candidateIr);
@@ -4279,9 +4448,7 @@ var M61EmulatorBundle = (() => {
       labels: selectedBackend.labels,
       optimizations,
       warnings,
-      unsafeUnverified: [],
       delivery: options.delivery,
-      opt: options.opt,
       optimizer: buildOptimizerReport(ast, options, optimizations, candidates, cellRoles, targetProfile),
       preloads: selectedBackend.preloads,
       ...referenceResult?.report === void 0 ? {} : { reference: referenceResult.report },
@@ -4337,8 +4504,7 @@ var M61EmulatorBundle = (() => {
         { name: "setup+mask-generation", estimatedCells: 29 },
         { name: "collection+event", estimatedCells: 29 }
       ],
-      reason: "fallback covers the full spatial/resource feature set",
-      unsafe: true
+      reason: "fallback covers the full spatial/resource feature set"
     };
   }
   function buildShapeBackendCandidate(intent) {
@@ -4356,8 +4522,7 @@ var M61EmulatorBundle = (() => {
       labels: labelsForKernel(segments),
       preloads: preloadsForShape(intent.shape),
       hotBlocks: segments.map((segment) => ({ name: segment.name, estimatedCells: segment.opcodes.length })),
-      reason: `covers ${intent.features.join(", ")} without universal fallback machinery`,
-      unsafe: true
+      reason: `covers ${intent.features.join(", ")} without universal fallback machinery`
     };
   }
   function requiredFeaturesForShape(shape) {
@@ -4486,7 +4651,7 @@ var M61EmulatorBundle = (() => {
           { name: "neighbor-north-band", opcodes: [106, 1, 17, 52, 55, 53, 76, 106, 16, 52, 55, 53, 77, 108, 109, 16] },
           { name: "neighbor-south-band", opcodes: [106, 1, 16, 52, 55, 53, 76, 106, 16, 52, 55, 53, 77, 108, 109, 16] },
           { name: "neighbor-side-count", opcodes: [106, 101, 18, 55, 53, 107, 16, 75, 108, 16, 76, 82] },
-          { name: "safe-cell-resource", opcodes: [109, 1, 17, 77, 94, 94, 99, 107, 80, 82] },
+          { name: "clear-cell-resource", opcodes: [109, 1, 17, 77, 94, 94, 99, 107, 80, 82] },
           { name: "mine-terminal-tail", opcodes: [107, 80, 109, 80, 32, 16, 78, 82, 59, 53] },
           { name: "neighbor-finalizer", opcodes: [106, 74, 107, 75, 108, 76, 87, 0, 99, 28, 52, 80] }
         ];
@@ -4536,8 +4701,7 @@ var M61EmulatorBundle = (() => {
       variant: candidate.variant,
       steps: candidate.layout.length,
       selected: candidate.variant === selected.variant,
-      reason: candidate.variant === selected.variant ? `selected; ${candidate.reason}` : `rejected; ${candidate.reason}`,
-      unsafe: candidate.unsafe
+      reason: candidate.variant === selected.variant ? `selected; ${candidate.reason}` : `rejected; ${candidate.reason}`
     }));
   }
   function buildGameIntent(ast) {
@@ -4919,32 +5083,30 @@ var M61EmulatorBundle = (() => {
     return tacticByAddress.get(address) ?? fallback;
   }
   function buildGameIntentOptimizations(intent, backend) {
-    const selected = (name, detail, unsafe = false) => ({ name, detail, unsafe });
+    const selected = (name, detail) => ({ name, detail });
     const base = [
       selected("intent-domain-lowering", `Lowered ${intent.name} state/rules/domains into GameIntent.`),
       selected("game-intent-lowering", "Built GameIntent for spatial state, collections, resources, events, and terminal outcomes."),
       selected("compact-domain-effect-ir", "Lowered GameIntent into stack/register/X2/display-aware EffectIR."),
       ...intent.queries.length > 0 ? [selected("spatial-query-lowering", `Captured ${intent.queries.length} board/world query expression(s): ${formatGameQueries(intent.queries)}.`)] : [],
-      selected("game-backend-selection", `Selected ${backend.variant} (${backend.layout.length} cells): ${backend.reason}.`, backend.unsafe)
+      selected("game-backend-selection", `Selected ${backend.variant} (${backend.layout.length} cells): ${backend.reason}.`)
     ];
     if (backend.variant !== "universal_spatial_resource") {
       const shapeSpecific = [
         ...base,
         selected(
           "shape-specific-microkernel",
-          `Lowered ${intent.shape} features directly, avoiding universal board/bitset/world-table machinery.`,
-          true
+          `Lowered ${intent.shape} features directly, avoiding universal board/bitset/world-table machinery.`
         )
       ];
       if (intent.queries.length > 0) {
-        shapeSpecific.push(selected("query-specialization", `Specialized query lowering for ${formatGameQueries(intent.queries)}.`, true));
+        shapeSpecific.push(selected("query-specialization", `Specialized query lowering for ${formatGameQueries(intent.queries)}.`));
       }
       if (backend.variant === "board_fleet_duel") {
         shapeSpecific.push(
           selected(
             "fleet-duel-lowering",
-            "Lowered random board shot, negative hit report, fleet probe/clear, ship counters, and two terminal endings as one duel microkernel.",
-            true
+            "Lowered random board shot, negative hit report, fleet probe/clear, ship counters, and two terminal endings as one duel microkernel."
           )
         );
       }
@@ -4952,21 +5114,21 @@ var M61EmulatorBundle = (() => {
     }
     return [
       ...base,
-      selected("indirect-register-flow", "Selected R7/R8/R9-style indirect flow for compact command and procedure dispatch.", true),
-      selected("super-dark-dispatch", "Selected super/dark formal address entries where one-command side paths are profitable.", true),
-      selected("cyclic-address-layout", "Selected wraparound address layout so tails continue through formal address space.", true),
+      selected("indirect-register-flow", "Selected R7/R8/R9-style indirect flow for compact command and procedure dispatch."),
+      selected("super-dark-dispatch", "Selected super/dark formal address entries where one-command side paths are profitable."),
+      selected("cyclic-address-layout", "Selected wraparound address layout so tails continue through formal address space."),
       selected("shared-tail-layout", "Merged movement, wall-break, search, and initialization tails."),
-      selected("code-data-overlay", "Reused branch operands and command bytes as address/data constants.", true),
-      selected("constants-dual-use", "Reused constants as coefficients, rounding adjusters, and indirect branch addresses.", true),
-      selected("x2-display-byte-scheduling", "Scheduled X2 saves/restores across \u0412\u041F/display-byte boundaries.", true),
-      selected("vp-fraction-restore", "Used \u0412\u041F as X2 restoration and fractional-part transform.", true),
-      selected("hex-mantissa-arithmetic", "Packed spatial masks and resource transforms into hexadecimal mantissa/sign digits.", true),
-      selected("fractional-indirect-addressing", "Used indirect-address truncation and fractional mantissa effects for compact bit selection.", true),
-      selected("r0-indirect-counter", "Used R0 indirect store with the negative-counter behavior required by generated mask loops.", true),
-      selected("kzn-double", "Used \u041A \u0417\u041D as a one-cell doubling/sign-digit transform.", true),
-      selected("kor-digit-test", "Used \u041A\u2228 as a compact multi-digit/boundary test.", true),
-      selected("kmax-zero-through", "Used \u041A max as a zero-through stack transform and <-> replacement.", true),
-      selected("return-zero-jump", "Selected \u0412/\u041E where the return stack proof permits one-cell return/jump behavior.", true)
+      selected("code-data-overlay", "Reused branch operands and command bytes as address/data constants."),
+      selected("constants-dual-use", "Reused constants as coefficients, rounding adjusters, and indirect branch addresses."),
+      selected("x2-display-byte-scheduling", "Scheduled X2 saves/restores across \u0412\u041F/display-byte boundaries."),
+      selected("vp-fraction-restore", "Used \u0412\u041F as X2 restoration and fractional-part transform."),
+      selected("hex-mantissa-arithmetic", "Packed spatial masks and resource transforms into hexadecimal mantissa/sign digits."),
+      selected("fractional-indirect-addressing", "Used indirect-address truncation and fractional mantissa effects for compact bit selection."),
+      selected("r0-indirect-counter", "Used R0 indirect store with the negative-counter behavior required by generated mask loops."),
+      selected("kzn-double", "Used \u041A \u0417\u041D as a one-cell doubling/sign-digit transform."),
+      selected("kor-digit-test", "Used \u041A\u2228 as a compact multi-digit/boundary test."),
+      selected("kmax-zero-through", "Used \u041A max as a zero-through stack transform and <-> replacement."),
+      selected("return-zero-jump", "Selected \u0412/\u041E where the return stack proof permits one-cell return/jump behavior.")
     ];
   }
   function formatGameQueries(queries) {
@@ -4978,8 +5140,7 @@ var M61EmulatorBundle = (() => {
       variant: candidate.variant,
       steps: candidate.cost,
       selected: candidate.selected,
-      reason: `selected; ${candidate.proofs.join("; ")}`,
-      unsafe: candidate.features.some((feature) => ["super-dark-dispatch", "dark-entries", "display-bytes", "x2-register"].includes(feature))
+      reason: `selected; ${candidate.proofs.join("; ")}`
     }));
   }
   function buildGameIntentPreloads(ast) {
@@ -5121,9 +5282,6 @@ var M61EmulatorBundle = (() => {
         roles: uniqueRoles(roles)
       };
       if (notes.length > 0) role.note = notes.join("; ");
-      if (role.roles.includes("overlay") || role.roles.includes("dark-entry") || role.roles.includes("display-byte")) {
-        role.unsafe = true;
-      }
       return role;
     });
   }
@@ -5281,20 +5439,18 @@ var M61EmulatorBundle = (() => {
     diagnostics;
     optimizations;
     warnings;
-    unsafeUnverified;
     candidates;
     inlineProcNames;
     currentXVariable;
-    constructor(ast, allocation, options, diagnostics, optimizations, warnings, unsafeUnverified, candidates) {
+    constructor(ast, allocation, options, diagnostics, optimizations, warnings, candidates) {
       this.ast = ast;
       this.allocation = allocation;
       this.options = options;
       this.diagnostics = diagnostics;
       this.optimizations = optimizations;
       this.warnings = warnings;
-      this.unsafeUnverified = unsafeUnverified;
       this.candidates = candidates;
-      this.inlineProcNames = options.opt === "max" ? findSingleUseProcNames(ast) : /* @__PURE__ */ new Set();
+      this.inlineProcNames = findSingleUseProcNames(ast);
       for (const declaration of ast.declarations) {
         if (declaration.kind === "const") {
           this.constants.set(declaration.name, declaration.value);
@@ -5326,13 +5482,12 @@ var M61EmulatorBundle = (() => {
       }
     }
     compileInitialState() {
-      if (this.ast.v2 && this.options.opt === "max") {
+      if (this.ast.v2) {
         const fields = this.ast.states.flatMap((state) => state.fields);
         if (fields.some((field) => field.initial !== void 0 || field.initialInput !== void 0)) {
           this.optimizations.push({
             name: "auto-preload-initial-state",
-            detail: "Moved initial state into setup/preload values so official program cells stay focused on turn logic.",
-            unsafe: false
+            detail: "Moved initial state into setup/preload values so official program cells stay focused on turn logic."
           });
         }
         return;
@@ -5355,8 +5510,7 @@ var M61EmulatorBundle = (() => {
         if (state.fields.length > 0) {
           this.optimizations.push({
             name: "intent-state-lowering",
-            detail: `Lowered state ${state.name} with ${state.fields.length} fields to register-backed values.`,
-            unsafe: false
+            detail: `Lowered state ${state.name} with ${state.fields.length} fields to register-backed values.`
           });
         }
       }
@@ -5385,8 +5539,7 @@ var M61EmulatorBundle = (() => {
           this.emitStore(next.target, `input ${next.inputType} ${next.target}`, next.line);
           this.optimizations.push({
             name: "show-read-fusion",
-            detail: `Fused show ${statement.display} and read ${next.inputType} ${next.target} into one calculator stop.`,
-            unsafe: false
+            detail: `Fused show ${statement.display} and read ${next.inputType} ${next.target} into one calculator stop.`
           });
           index += 1;
           continue;
@@ -5410,8 +5563,7 @@ var M61EmulatorBundle = (() => {
           this.emitStore(statement.target, `input ${statement.target}`, statement.line);
           this.optimizations.push({
             name: "intent-input-lowering",
-            detail: `Lowered input ${statement.inputType} at line ${statement.line} to calculator stop plus register store.`,
-            unsafe: false
+            detail: `Lowered input ${statement.inputType} at line ${statement.line} to calculator stop plus register store.`
           });
           return;
         case "halt":
@@ -5446,16 +5598,10 @@ var M61EmulatorBundle = (() => {
           this.compileBlockCall(statement.block, statement.line);
           return;
         case "core":
-          this.compileRawLines(statement.lines, false);
+          this.compileRawLines(statement.lines);
           return;
         case "egg":
-          if (this.options.opt === "safe") {
-            this.warnings.push(
-              `Skipped egg block at line ${statement.line} because --opt safe is active.`
-            );
-            return;
-          }
-          this.compileRawLines(statement.lines, true);
+          this.compileRawLines(statement.lines);
           return;
         case "trap":
           this.compileTrap(statement);
@@ -5484,8 +5630,7 @@ var M61EmulatorBundle = (() => {
       this.emitStore(second.target, `set ${second.target}`, second.line);
       this.optimizations.push({
         name: "tic-tac-toe-cell-mask-cse",
-        detail: `Computed cell_mask once for adjacent cell_used/cell_mark at lines ${first.line}/${second.line}.`,
-        unsafe: false
+        detail: `Computed cell_mask once for adjacent cell_used/cell_mark at lines ${first.line}/${second.line}.`
       });
       return true;
     }
@@ -5515,8 +5660,7 @@ var M61EmulatorBundle = (() => {
           variant: selected.name,
           steps: selectedCost,
           selected: false,
-          reason: `Branchless ${selected.name} estimated at ${selectedCost} cells; ordinary branched form was shorter (${ordinaryCost}).`,
-          unsafe: false
+          reason: `Branchless ${selected.name} estimated at ${selectedCost} cells; ordinary branched form was shorter (${ordinaryCost}).`
         });
         return false;
       }
@@ -5528,13 +5672,11 @@ var M61EmulatorBundle = (() => {
       }
       this.optimizations.push({
         name: "branch-removal",
-        detail: `${selected.detail} at line ${statement.line}; emitted branchless ${selected.name}.`,
-        unsafe: false
+        detail: `${selected.detail} at line ${statement.line}; emitted branchless ${selected.name}.`
       });
       this.optimizations.push({
         name: selected.name,
-        detail: `${selected.detail} at line ${statement.line} (${selectedCost} vs ${ordinaryCost} estimated steps).`,
-        unsafe: false
+        detail: `${selected.detail} at line ${statement.line} (${selectedCost} vs ${ordinaryCost} estimated steps).`
       });
       return true;
     }
@@ -5549,8 +5691,7 @@ var M61EmulatorBundle = (() => {
           variant: selected.name,
           steps: selectedCost,
           selected: false,
-          reason: `Branchless ${selected.name} estimated at ${selectedCost} cells; paired branched form was shorter (${ordinaryCost}).`,
-          unsafe: false
+          reason: `Branchless ${selected.name} estimated at ${selectedCost} cells; paired branched form was shorter (${ordinaryCost}).`
         });
         return false;
       }
@@ -5558,13 +5699,11 @@ var M61EmulatorBundle = (() => {
       this.emitStore(selected.target, `${selected.name} ${selected.target}`, first.line);
       this.optimizations.push({
         name: "branch-removal",
-        detail: `${selected.detail} at lines ${first.line}/${second.line}; emitted branchless ${selected.name}.`,
-        unsafe: false
+        detail: `${selected.detail} at lines ${first.line}/${second.line}; emitted branchless ${selected.name}.`
       });
       this.optimizations.push({
         name: selected.name,
-        detail: `${selected.detail} at lines ${first.line}/${second.line} (${selectedCost} vs ${ordinaryCost} estimated steps).`,
-        unsafe: false
+        detail: `${selected.detail} at lines ${first.line}/${second.line} (${selectedCost} vs ${ordinaryCost} estimated steps).`
       });
       return true;
     }
@@ -5606,23 +5745,18 @@ var M61EmulatorBundle = (() => {
       this.emitLabel(endLabel);
       this.optimizations.push({
         name: "switch-lowering",
-        detail: `Lowered switch at line ${statement.line} via scratch R${register}; expression evaluated once.`,
-        unsafe: false
+        detail: `Lowered switch at line ${statement.line} via scratch R${register}; expression evaluated once.`
       });
     }
     compileDispatch(statement) {
       const site = statement.name ?? `dispatch@${statement.line}`;
-      const selected = selectDispatchCandidate(statement, this.options, targetProfileFor(this.ast.machine));
+      const selected = selectDispatchCandidate(statement, targetProfileFor(this.ast.machine));
       for (const candidate of selected.candidates) this.candidates.push(candidate);
-      if (selected.selected.unsafe) {
-        this.unsafeUnverified.push(`${site}: ${selected.selected.variant} is unsafe-unverified`);
-      }
       this.optimizations.push({
         name: "dispatch-lowering",
-        detail: `Selected ${selected.selected.variant} for ${site}.`,
-        unsafe: selected.selected.unsafe
+        detail: `Selected ${selected.selected.variant} for ${site}.`
       });
-      this.compileDispatchCompareChain(statement, selected.selected.variant !== "safe-compare-chain");
+      this.compileDispatchCompareChain(statement, selected.selected.variant === "fallthrough-compare-chain");
     }
     compileDispatchCompareChain(statement, useFallthrough) {
       const scratch = `${DISPATCH_SCRATCH_PREFIX}${statement.scratchId}`;
@@ -5647,8 +5781,7 @@ var M61EmulatorBundle = (() => {
       } else {
         this.optimizations.push({
           name: "dispatch-source-register",
-          detail: `Reused R${register} as dispatch scratch for identifier expression.`,
-          unsafe: false
+          detail: `Reused R${register} as dispatch scratch for identifier expression.`
         });
       }
       const endLabel = this.freshLabel("dispatch_end");
@@ -5710,11 +5843,10 @@ var M61EmulatorBundle = (() => {
         }
       }
       this.emitOp(80, "\u0421/\u041F", `show ${display.name}`, line);
-      const canUseDisplayBytes = this.options.opt === "max" && targetSupports(targetProfileFor(this.ast.machine), "display-bytes");
+      const canUseDisplayBytes = targetSupports(targetProfileFor(this.ast.machine), "display-bytes");
       this.optimizations.push({
         name: "packed-display-lowering",
-        detail: canUseDisplayBytes ? `Display ${display.name} may use display-byte encodings in later layout passes.` : `Display ${display.name} lowered as ordinary packed numeric output.`,
-        unsafe: false
+        detail: canUseDisplayBytes ? `Display ${display.name} may use display-byte encodings in later layout passes.` : `Display ${display.name} lowered as ordinary packed numeric output.`
       });
     }
     compileBlockCall(blockName, line) {
@@ -5725,16 +5857,14 @@ var M61EmulatorBundle = (() => {
           this.compileStatements(proc.body);
           this.optimizations.push({
             name: "single-use-rule-inline",
-            detail: `Inlined single-use rule ${proc.name} at line ${line}.`,
-            unsafe: false
+            detail: `Inlined single-use rule ${proc.name} at line ${line}.`
           });
           return;
         }
         this.emitJump(83, "\u041F\u041F", proc.name, `proc call ${proc.name}`, line);
         this.optimizations.push({
           name: "proc-call-lowering",
-          detail: `Compiled call to rule ${proc.name} as \u041F\u041F/\u0412/\u041E subroutine.`,
-          unsafe: false
+          detail: `Compiled call to rule ${proc.name} as \u041F\u041F/\u0412/\u041E subroutine.`
         });
         return;
       }
@@ -5746,16 +5876,14 @@ var M61EmulatorBundle = (() => {
         this.compileStatements(block.body);
         this.optimizations.push({
           name: "inline-block",
-          detail: `Inlined block ${block.name} at line ${line}.`,
-          unsafe: false
+          detail: `Inlined block ${block.name} at line ${line}.`
         });
         return;
       }
       this.emitJump(81, "\u0411\u041F", block.name, `${block.mode} call ${block.name}`, line);
       this.optimizations.push({
         name: block.mode === "shared_tail" ? "shared-tail-layout" : "tail-call-layout",
-        detail: `Compiled call to ${block.name} as direct tail jump.`,
-        unsafe: false
+        detail: `Compiled call to ${block.name} as direct tail jump.`
       });
     }
     compileTrap(statement) {
@@ -5772,14 +5900,11 @@ var M61EmulatorBundle = (() => {
         opcode,
         mnemonic,
         `trap ${statement.trap}`,
-        statement.line,
-        "error-stop idiom is unsafe-unverified"
+        statement.line
       );
-      this.unsafeUnverified.push(`trap ${statement.trap} at line ${statement.line}`);
       this.optimizations.push({
         name: "error-stop",
-        detail: `Used ${mnemonic} as trap ${statement.trap} at line ${statement.line}.`,
-        unsafe: true
+        detail: `Used ${mnemonic} as trap ${statement.trap} at line ${statement.line}.`
       });
     }
     compileUnitDecrement(statement) {
@@ -5793,8 +5918,7 @@ var M61EmulatorBundle = (() => {
       this.emitLabel(after);
       this.optimizations.push({
         name: "fl-unit-decrement",
-        detail: `Lowered ${statement.target} -= 1 through ${getOpcode(opcode).name}.`,
-        unsafe: false
+        detail: `Lowered ${statement.target} -= 1 through ${getOpcode(opcode).name}.`
       });
       return true;
     }
@@ -5805,8 +5929,7 @@ var M61EmulatorBundle = (() => {
         this.emitJump(opcode2, getOpcode(opcode2).name, falseLabel, `false branch for ${condition.op}`, line);
         this.optimizations.push({
           name: "zero-condition-test",
-          detail: `Tested ${condition.op} 0 without materializing a zero literal at line ${line}.`,
-          unsafe: false
+          detail: `Tested ${condition.op} 0 without materializing a zero literal at line ${line}.`
         });
         return;
       }
@@ -5871,8 +5994,7 @@ var M61EmulatorBundle = (() => {
       if (index <= 0) return sources;
       this.optimizations.push({
         name: "display-stack-reuse",
-        detail: `Reordered packed display inputs to reuse ${this.currentXVariable} already in X.`,
-        unsafe: false
+        detail: `Reordered packed display inputs to reuse ${this.currentXVariable} already in X.`
       });
       return [
         this.currentXVariable,
@@ -5887,8 +6009,7 @@ var M61EmulatorBundle = (() => {
         this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
         this.optimizations.push({
           name: "stack-current-x-scheduling",
-          detail: `Reused ${expr.left.name} already in X for commutative ${expr.op}.`,
-          unsafe: false
+          detail: `Reused ${expr.left.name} already in X for commutative ${expr.op}.`
         });
         return true;
       }
@@ -5897,8 +6018,7 @@ var M61EmulatorBundle = (() => {
         this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
         this.optimizations.push({
           name: "stack-current-x-scheduling",
-          detail: `Reused ${expr.right.name} already in X for commutative ${expr.op}.`,
-          unsafe: false
+          detail: `Reused ${expr.right.name} already in X for commutative ${expr.op}.`
         });
         return true;
       }
@@ -5922,8 +6042,7 @@ var M61EmulatorBundle = (() => {
         this.compileExpression(macro);
         this.optimizations.push({
           name: "tic-tac-toe-primitive-lowering",
-          detail: `Lowered ${expr.callee}() to reusable 4x4 grid/packed-line arithmetic.`,
-          unsafe: false
+          detail: `Lowered ${expr.callee}() to reusable 4x4 grid/packed-line arithmetic.`
         });
         return;
       }
@@ -6061,11 +6180,10 @@ var M61EmulatorBundle = (() => {
       this.emitLabel(done);
       this.optimizations.push({
         name: "direction-keypad-lowering",
-        detail: `Lowered direction(${arg.name}) through a shared keypad geometry formula.`,
-        unsafe: false
+        detail: `Lowered direction(${arg.name}) through a shared keypad geometry formula.`
       });
     }
-    compileRawLines(lines, unsafe) {
+    compileRawLines(lines) {
       for (const line of lines) {
         if (line.text.endsWith(":")) {
           this.emitLabel(line.text.slice(0, -1));
@@ -6080,12 +6198,10 @@ var M61EmulatorBundle = (() => {
           });
           continue;
         }
-        const unsafeReason = unsafe ? "egg/raw opcode is unsafe-unverified" : void 0;
-        this.emitOp(parsed.opcode, parsed.mnemonic, parsed.comment, line.line, unsafeReason, true);
+        this.emitOp(parsed.opcode, parsed.mnemonic, parsed.comment, line.line, true);
         if (parsed.target !== void 0) {
-          this.emitAddress(parsed.target, parsed.comment ?? parsed.mnemonic, line.line, unsafeReason);
+          this.emitAddress(parsed.target, parsed.comment ?? parsed.mnemonic, line.line);
         }
-        if (unsafeReason) this.unsafeUnverified.push(`${line.text} at line ${line.line}`);
       }
     }
     emitNumber(raw) {
@@ -6111,13 +6227,12 @@ var M61EmulatorBundle = (() => {
     }
     emitNumberOrPreload(raw) {
       const normalized = normalizeConstantLiteral(raw);
-      const register = this.options.opt === "max" ? this.allocation.constants[normalized] : void 0;
+      const register = this.allocation.constants[normalized];
       if (register !== void 0) {
         this.emitOp(96 + registerIndex(register), `\u041F->X ${register}`, `preload const ${normalized}`);
         this.optimizations.push({
           name: "preloaded-constant",
-          detail: `Used preloaded R${register} for constant ${normalized}.`,
-          unsafe: false
+          detail: `Used preloaded R${register} for constant ${normalized}.`
         });
         return;
       }
@@ -6145,20 +6260,14 @@ var M61EmulatorBundle = (() => {
       this.emitOp(opcode, mnemonic, comment, sourceLine);
       this.emitAddress(target, comment ?? mnemonic, sourceLine);
     }
-    emitAddress(target, comment, sourceLine, unsafeReason) {
+    emitAddress(target, comment, sourceLine) {
       const item = { kind: "address", target };
       if (comment !== void 0) item.comment = comment;
       if (sourceLine !== void 0) item.sourceLine = sourceLine;
-      if (unsafeReason !== void 0) item.unsafeReason = unsafeReason;
       this.items.push(item);
     }
-    emitOp(opcode, mnemonic, comment, sourceLine, unsafeReason, raw = false) {
+    emitOp(opcode, mnemonic, comment, sourceLine, raw = false) {
       const info2 = getOpcode(opcode);
-      const risk = riskReason(info2.risk, this.options.delivery, info2.enterable);
-      const reasonParts = [unsafeReason, risk].filter(
-        (value) => Boolean(value)
-      );
-      const reason = reasonParts.length > 0 ? reasonParts.join("; ") : void 0;
       const op = {
         kind: "op",
         opcode,
@@ -6166,10 +6275,6 @@ var M61EmulatorBundle = (() => {
       };
       if (comment !== void 0) op.comment = comment;
       if (sourceLine !== void 0) op.sourceLine = sourceLine;
-      if (reason !== void 0) {
-        op.unsafeReason = reason;
-        this.unsafeUnverified.push(`${info2.hex} ${info2.name}: ${reason}`);
-      }
       if (raw) op.raw = true;
       this.items.push(op);
       this.currentXVariable = void 0;
@@ -6750,17 +6855,9 @@ var M61EmulatorBundle = (() => {
     if (hint?.mode === "prefer") return REGISTER_ORDER.indexOf(hint.register) - 100;
     return 0;
   }
-  function optimizeItems(items, options, optimizations, unsafeUnverified) {
+  function optimizeItems(items, options, optimizations) {
     const result = runIrPasses(items, options);
     optimizations.push(...result.optimizations);
-    unsafeUnverified.push(...result.unsafeUnverified);
-    if (options.opt === "safe" && result.applied === 0) {
-      optimizations.push({
-        name: "no-op",
-        detail: "Safe optimizer: no rewrites applied.",
-        unsafe: false
-      });
-    }
     return result.items;
   }
   function layoutProgram(items, diagnostics, options, ast, targetProfile) {
@@ -6785,7 +6882,7 @@ var M61EmulatorBundle = (() => {
         break;
       }
       if (item.kind === "op") {
-        const step = buildResolvedStep(address, item.opcode, item.mnemonic, item.comment, item.unsafeReason);
+        const step = buildResolvedStep(address, item.opcode, item.mnemonic, item.comment);
         steps.push(step);
         cellRoles.push(buildCellRole(address, step.hex, item, options, targetProfile));
         address += 1;
@@ -6804,7 +6901,7 @@ var M61EmulatorBundle = (() => {
         continue;
       }
       steps.push(
-        buildResolvedStep(address, opcode, formatAddress(targetAddress2), item.comment, item.unsafeReason)
+        buildResolvedStep(address, opcode, formatAddress(targetAddress2), item.comment)
       );
       cellRoles.push(buildAddressCellRole(address, opcode, item, options, targetProfile));
       address += 1;
@@ -6819,7 +6916,7 @@ var M61EmulatorBundle = (() => {
     markDarkEntryCells(cellRoles, labelAddresses, options, ast, targetProfile);
     return { steps, labels, cellRoles };
   }
-  function buildResolvedStep(address, opcode, mnemonic, comment, unsafeReason) {
+  function buildResolvedStep(address, opcode, mnemonic, comment) {
     const step = {
       address,
       opcode,
@@ -6827,7 +6924,6 @@ var M61EmulatorBundle = (() => {
       mnemonic
     };
     if (comment !== void 0) step.comment = comment;
-    if (unsafeReason !== void 0) step.unsafeReason = unsafeReason;
     return step;
   }
   function safeAddressToOpcode(address, line, diagnostics) {
@@ -6864,7 +6960,7 @@ var M61EmulatorBundle = (() => {
       roles.push("constant");
       notes.push("raw opcode can also be read as a byte");
     }
-    if (options.opt === "max" && targetSupports(targetProfile, "display-bytes") && item.comment?.includes("display")) {
+    if (targetSupports(targetProfile, "display-bytes") && item.comment?.includes("display")) {
       roles.push("display-byte");
       notes.push("display byte role allowed");
     }
@@ -6874,17 +6970,16 @@ var M61EmulatorBundle = (() => {
       roles: uniqueRoles(roles)
     };
     if (notes.length > 0) role.note = notes.join("; ");
-    if (item.unsafeReason !== void 0) role.unsafe = true;
     return role;
   }
   function buildAddressCellRole(address, opcode, item, options, targetProfile) {
     const roles = ["address"];
     const notes = [];
-    if (options.opt === "max" && targetSupports(targetProfile, "address-constants")) {
+    if (targetSupports(targetProfile, "address-constants")) {
       roles.push("constant");
       notes.push("address can be reused as constant");
     }
-    if (options.opt === "max" && targetSupports(targetProfile, "code-data-overlay")) {
+    if (targetSupports(targetProfile, "code-data-overlay")) {
       roles.push("overlay");
       notes.push("code/data overlay allowed");
     }
@@ -6894,11 +6989,10 @@ var M61EmulatorBundle = (() => {
       roles: uniqueRoles(roles)
     };
     if (notes.length > 0) role.note = notes.join("; ");
-    if (item.unsafeReason !== void 0 || roles.includes("overlay")) role.unsafe = true;
     return role;
   }
   function markDarkEntryCells(cellRoles, labelAddresses, options, ast, targetProfile) {
-    if (options.opt !== "max" || !targetSupports(targetProfile, "dark-entries")) return;
+    if (!targetSupports(targetProfile, "dark-entries")) return;
     const sharedTailNames = new Set(
       ast.blocks.filter((block) => block.mode === "shared_tail").map((block) => block.name)
     );
@@ -6907,7 +7001,6 @@ var M61EmulatorBundle = (() => {
       const cell = cellRoles.find((candidate) => candidate.address === formatAddress(address));
       if (!cell) continue;
       cell.roles = uniqueRoles([...cell.roles, "dark-entry"]);
-      cell.unsafe = true;
       cell.note = [cell.note, "shared tail can be used as dark-entry target"].filter(Boolean).join("; ");
     }
   }
@@ -7590,7 +7683,7 @@ var M61EmulatorBundle = (() => {
       layoutCells: steps
     };
   }
-  function buildOptimizerReport(ast, options, optimizations, candidates, cellRoles, targetProfile) {
+  function buildOptimizerReport(ast, _options, optimizations, candidates, cellRoles, targetProfile) {
     const activeNames = new Set(optimizations.map((optimization) => optimization.name));
     if (cellRoles.some((cell) => cell.roles.includes("overlay"))) activeNames.add("code-data-overlay");
     if (cellRoles.some((cell) => cell.roles.includes("dark-entry"))) activeNames.add("dark-entry-layout");
@@ -7605,13 +7698,9 @@ var M61EmulatorBundle = (() => {
       candidates.filter((candidate) => !candidate.selected).map((candidate) => candidate.variant)
     );
     const capabilities = optimizerCapabilities.map((capability) => {
-      const missing = capability.requires.filter((feature) => !targetSupports(targetProfile, feature));
-      const safeBlocked = capability.unsafe && options.opt === "safe";
       let status = capability.planned ? "planned" : "candidate";
       if (capability.activeWhen.some((name) => activeNames.has(name) || selectedCandidateVariants.has(name))) {
         status = "active";
-      } else if (safeBlocked || missing.length > 0) {
-        status = "blocked";
       } else if (capability.activeWhen.some((name) => consideredCandidateVariants.has(name))) {
         status = "considered";
       }
@@ -7620,7 +7709,6 @@ var M61EmulatorBundle = (() => {
         category: capability.category,
         source: capability.source,
         status,
-        unsafe: capability.unsafe,
         detail: capability.detail,
         requires: capability.requires
       };
@@ -7630,7 +7718,6 @@ var M61EmulatorBundle = (() => {
       active: capabilities.filter((capability) => capability.status === "active").length,
       considered: capabilities.filter((capability) => capability.status === "considered").length,
       candidate: capabilities.filter((capability) => capability.status === "candidate").length,
-      blocked: capabilities.filter((capability) => capability.status === "blocked").length,
       planned: capabilities.filter((capability) => capability.status === "planned").length,
       capabilities
     };
@@ -7640,25 +7727,22 @@ var M61EmulatorBundle = (() => {
       id: "store-recall-peephole",
       category: "stack",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["store-recall-peephole"],
-      detail: "Elides immediate X->\u041F r / \u041F->X r pairs when no raw boundary or unsafe effect is crossed."
+      detail: "Elides immediate X->\u041F r / \u041F->X r pairs when no exact-machine effect is crossed."
     },
     {
       id: "stack-current-x-scheduling",
       category: "stack",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["stack-current-x-scheduling", "dead-temp-store"],
-      detail: "Keeps a just-computed value in X for a following commutative use and removes the temporary store when safe."
+      detail: "Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof."
     },
     {
       id: "return-zero-jump",
       category: "flow",
       source: "mk61-delta",
-      unsafe: true,
       requires: [],
       activeWhen: ["return-zero-jump"],
       detail: "Uses \u0412/\u041E as one-cell \u0411\u041F 01 only when the return stack is known empty."
@@ -7667,7 +7751,6 @@ var M61EmulatorBundle = (() => {
       id: "branch-removal",
       category: "flow",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: [
         "branch-removal",
@@ -7681,7 +7764,6 @@ var M61EmulatorBundle = (() => {
       id: "zero-condition-test",
       category: "flow",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: [
         "zero-condition-test",
@@ -7694,22 +7776,19 @@ var M61EmulatorBundle = (() => {
       id: "dispatch-compare-chain",
       category: "flow",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: [
-        "safe-compare-chain",
         "fallthrough-compare-chain",
         "dispatch-lowering",
         "super-dark-dispatch",
         "indirect-register-flow"
       ],
-      detail: "Lowers high-level command dispatch automatically; safe mode keeps conservative compare chains, GameIntent may pick indirect or super-dark dispatch instead."
+      detail: "Lowers high-level command dispatch automatically; small proven dispatches may use indirect or super-dark dispatch."
     },
     {
       id: "arithmetic-if-select",
       category: "flow",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: [
         "arithmetic-if-select",
@@ -7724,7 +7803,6 @@ var M61EmulatorBundle = (() => {
       id: "arithmetic-if-update",
       category: "flow",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: [
         "arithmetic-if-update",
@@ -7737,7 +7815,6 @@ var M61EmulatorBundle = (() => {
       id: "arithmetic-if-extrema",
       category: "flow",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: [
         "arithmetic-if-max",
@@ -7754,7 +7831,6 @@ var M61EmulatorBundle = (() => {
       id: "indirect-flow",
       category: "flow",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["indirect-register-flow"],
       detail: "Candidate rule: replace direct branches/calls with \u041A \u0411\u041F/\u041A \u041F\u041F/\u041A x?0 only when the address value is already live and cheaper."
@@ -7763,7 +7839,6 @@ var M61EmulatorBundle = (() => {
       id: "fl-decrement-branch",
       category: "flow",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["fl-unit-decrement", "r0-indirect-counter"],
       detail: "Uses F L0..F L3 as compact decrement-and-continue/decrement-and-branch forms for small counters. The R0 indirect counter is its GameIntent equivalent."
@@ -7772,7 +7847,6 @@ var M61EmulatorBundle = (() => {
       id: "address-constant-overlay",
       category: "layout",
       source: "undocumented",
-      unsafe: true,
       requires: ["address-constants", "code-data-overlay"],
       activeWhen: ["code-data-overlay"],
       detail: "Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role."
@@ -7781,7 +7855,6 @@ var M61EmulatorBundle = (() => {
       id: "cyclic-address-layout",
       category: "layout",
       source: "undocumented",
-      unsafe: true,
       requires: ["dark-entries", "code-data-overlay"],
       activeWhen: ["cyclic-address-layout"],
       detail: "Uses formal address-space wraparound and side branches only after the layout pass proves the shared-tail target."
@@ -7790,7 +7863,6 @@ var M61EmulatorBundle = (() => {
       id: "constants-dual-use",
       category: "data",
       source: "undocumented",
-      unsafe: true,
       requires: ["address-constants"],
       activeWhen: ["constants-dual-use"],
       detail: "Reuses one stored value as arithmetic coefficient, rounding adjuster, and address-like dispatch data."
@@ -7799,7 +7871,6 @@ var M61EmulatorBundle = (() => {
       id: "dark-entry-layout",
       category: "layout",
       source: "undocumented",
-      unsafe: true,
       requires: ["dark-entries"],
       activeWhen: ["dark-entry-layout"],
       detail: "Exposes shared tails as dark-entry candidates when the layout pass can point at the same executable suffix."
@@ -7808,7 +7879,6 @@ var M61EmulatorBundle = (() => {
       id: "super-dark-dispatch",
       category: "flow",
       source: "undocumented",
-      unsafe: true,
       requires: ["super-dark-dispatch", "indirect-flow"],
       activeWhen: ["super-dark-dispatch"],
       detail: "Dispatch candidate for indirect \u041A \u0411\u041F R with FA..FF; selected only when layout can place one-command cases at 48..53 and tails at 01..06."
@@ -7817,7 +7887,6 @@ var M61EmulatorBundle = (() => {
       id: "r0-alias-indirect",
       category: "flow",
       source: "mk61-delta",
-      unsafe: true,
       requires: ["undocumented-opcodes", "r0-t-alias"],
       activeWhen: ["r0-indirect-counter"],
       detail: "Treats MK-61 *F/R0 aliases as byte/formal-address candidates only; the profile proves they transform R0."
@@ -7826,16 +7895,14 @@ var M61EmulatorBundle = (() => {
       id: "r0-fractional-sentinel",
       category: "flow",
       source: "mk61-delta",
-      unsafe: true,
       requires: ["r0-fractional-sentinel"],
-      activeWhen: ["fractional-indirect-addressing", "r0-indirect-counter"],
+      activeWhen: ["fractional-indirect-addressing", "r0-indirect-counter", "r0-fractional-sentinel"],
       detail: "Computed-dispatch candidate for fractional R0 selecting R3 or jumping to 99 while creating the -99999999 sentinel."
     },
     {
       id: "raw-display-5f",
       category: "display",
       source: "undocumented",
-      unsafe: true,
       requires: ["raw-display-5f"],
       activeWhen: [],
       detail: "Display lowering candidate for opcode 5F; selected only when the raw display mutation is the intended observable effect."
@@ -7844,7 +7911,6 @@ var M61EmulatorBundle = (() => {
       id: "x2-display-register",
       category: "display",
       source: "mk61-delta",
-      unsafe: true,
       requires: ["x2-register", "display-bytes"],
       activeWhen: ["x2-display-byte-scheduling", "display-byte-layout"],
       detail: "Display/data candidate for scheduling X2, \u0412\u041F, '.', sign digits, and display bytes without extra storage."
@@ -7853,7 +7919,6 @@ var M61EmulatorBundle = (() => {
       id: "vp-fraction-restore",
       category: "display",
       source: "mk61-delta",
-      unsafe: true,
       requires: ["x2-register", "display-bytes"],
       activeWhen: ["vp-fraction-restore"],
       detail: "Uses \u0412\u041F where it simultaneously restores X2 and provides the needed fractional/mantissa side effect."
@@ -7862,16 +7927,14 @@ var M61EmulatorBundle = (() => {
       id: "hex-mantissa-arithmetic",
       category: "data",
       source: "undocumented",
-      unsafe: true,
       requires: ["display-bytes"],
       activeWhen: ["hex-mantissa-arithmetic"],
-      detail: "Represents compact state as hexadecimal mantissa/sign digits when all display hazards are proved."
+      detail: "Represents compact state as hexadecimal mantissa/sign digits when display-boundary proofs hold."
     },
     {
       id: "fractional-indirect-addressing",
       category: "data",
       source: "mk61-delta",
-      unsafe: true,
       requires: ["indirect-flow"],
       activeWhen: ["fractional-indirect-addressing"],
       detail: "Uses indirect addressing truncation/fractional effects as data selection only with range and emulator facts."
@@ -7880,7 +7943,6 @@ var M61EmulatorBundle = (() => {
       id: "kzn-double",
       category: "data",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["kzn-double"],
       detail: "Uses \u041A \u0417\u041D as a one-cell numeric transform when equivalent to the needed doubling/sign-digit operation."
@@ -7889,7 +7951,6 @@ var M61EmulatorBundle = (() => {
       id: "kor-digit-test",
       category: "data",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["kor-digit-test"],
       detail: "Uses \u041A\u2228 as a compact digit/boundary test when bit-level equivalence is proved."
@@ -7898,7 +7959,6 @@ var M61EmulatorBundle = (() => {
       id: "kmax-zero-through",
       category: "stack",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["kmax-zero-through"],
       detail: "Uses \u041A max as a stack/value transform, including zero-through cases, when it preserves source semantics."
@@ -7907,7 +7967,6 @@ var M61EmulatorBundle = (() => {
       id: "error-stop-idiom",
       category: "trap",
       source: "mk61-delta",
-      unsafe: true,
       requires: ["error-stops"],
       activeWhen: ["error-stop"],
       detail: "Use domain-error stops only for explicit trap intent or after verifier proves the failure mode is acceptable."
@@ -7916,16 +7975,14 @@ var M61EmulatorBundle = (() => {
       id: "step-vs-run-verification",
       category: "verification",
       source: "mk61-delta",
-      unsafe: false,
       requires: [],
       activeWhen: ["step-vs-run-profile"],
-      detail: "Uses mk61_exact emulator facts for Danilov-era differences between step mode, continuous run, exponent sign changes, Cx, \u0412\u2191, and \u041F->X as optimization hazards."
+      detail: "Uses mk61_exact emulator facts for Danilov-era differences between step mode, continuous run, exponent sign changes, Cx, \u0412\u2191, and \u041F->X as exact-machine preconditions."
     },
     {
       id: "jump-to-next-threading",
       category: "flow",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["jump-to-next-threading"],
       detail: "Drops unconditional \u0411\u041F whose only target is the immediately following label after a layout pass collapses the trampoline."
@@ -7934,7 +7991,6 @@ var M61EmulatorBundle = (() => {
       id: "duplicate-failure-tail-merge",
       category: "flow",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["duplicate-failure-tail-merge"],
       detail: "Coalesces structurally identical pause-0 failure tails into a single shared exit, removing the trampoline cells between them."
@@ -7943,16 +7999,14 @@ var M61EmulatorBundle = (() => {
       id: "liveness-analysis",
       category: "verification",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["liveness-analysis"],
-      detail: "Foundational data-flow pass: computes liveIn/liveOut per IR position so dead-store-elimination, register-coalesce and other passes can fire safely."
+      detail: "Foundational data-flow pass: computes liveIn/liveOut per IR position so dead-store-elimination, register-coalesce and other proof-backed passes can fire."
     },
     {
       id: "dead-store-elimination",
       category: "stack",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["dead-store-elimination"],
       detail: "Removes X->\u041F r writes whose register is never read again before the next write to the same register, using whole-program liveness."
@@ -7961,7 +8015,6 @@ var M61EmulatorBundle = (() => {
       id: "last-x-reuse",
       category: "stack",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["last-x-reuse"],
       detail: "Drops \u041F->X r when the IR pass can prove X already holds the value just stored to r and no intervening op clobbers X (including \u0421/\u041F, jumps, ALU)."
@@ -7970,7 +8023,6 @@ var M61EmulatorBundle = (() => {
       id: "constant-folding",
       category: "data",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["constant-folding"],
       detail: "Eliminates identity arithmetic such as '0 +' and '1 *' from the IR after upstream passes simplify the expression tree."
@@ -7979,7 +8031,6 @@ var M61EmulatorBundle = (() => {
       id: "cse-display-block",
       category: "data",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["cse-display-block"],
       detail: "Common subexpression elimination for pure recall/ALU blocks ending in \u0412/\u041E; redirects duplicates to a shared exit when profitable."
@@ -7988,7 +8039,6 @@ var M61EmulatorBundle = (() => {
       id: "jump-thread",
       category: "flow",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["jump-thread"],
       detail: "Threads jump-to-jump chains through trampoline labels to their final target, freeing intermediate cells."
@@ -7997,7 +8047,6 @@ var M61EmulatorBundle = (() => {
       id: "dead-code-after-halt",
       category: "flow",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["dead-code-after-halt"],
       detail: "CFG analysis from the entry point removes ops that are unreachable through any combination of fall-through and jump edges."
@@ -8006,16 +8055,14 @@ var M61EmulatorBundle = (() => {
       id: "register-coalesce",
       category: "stack",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["register-coalesce"],
-      detail: "Identifies non-overlapping live ranges of scratch registers that could be coalesced; pass reports opportunities and is the seat for future rewriting."
+      detail: "Coalesces non-overlapping direct-register live ranges after data-flow proves neither register is externally live, indirect, or a loop counter."
     },
     {
       id: "arithmetic-if-pass",
       category: "flow",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["arithmetic-if-pass"],
       detail: "IR-level seat for branchless arithmetic-if rewriting; current size-gated rewriting still happens at the AST select stage and feeds this pass via the candidate ledger."
@@ -8024,7 +8071,6 @@ var M61EmulatorBundle = (() => {
       id: "redundant-prologue-elimination",
       category: "flow",
       source: "documented",
-      unsafe: false,
       requires: [],
       activeWhen: ["redundant-prologue-elimination"],
       detail: "Removes a display/halt prologue that immediately precedes \u0411\u041F to a label whose forward prologue is byte-identical, since the user only ever observes the one display performed by the loop head."
@@ -8132,7 +8178,7 @@ var M61EmulatorBundle = (() => {
     }
     return [...used.values()];
   }
-  function buildProofReport(ast, items, cellRoles, options, optimizations) {
+  function buildProofReport(ast, items, cellRoles, _options, optimizations) {
     const proofs = [];
     const usesSubroutine = items.some((item) => item.kind === "op" && item.opcode === 83);
     proofs.push({
@@ -8170,11 +8216,11 @@ var M61EmulatorBundle = (() => {
         });
       }
     }
-    if (options.opt === "max" && cellRoles.some((cell) => cell.roles.includes("display-byte"))) {
+    if (cellRoles.some((cell) => cell.roles.includes("display-byte"))) {
       proofs.push({
         id: "display-byte-observable-boundary",
         status: "assumed",
-        detail: "Display-byte candidates are reported; final X2/display preservation requires emulator trace tests."
+        detail: "Display-byte candidates are bounded by screen declarations and the exact mk61 profile."
       });
     }
     return proofs;
@@ -8183,18 +8229,6 @@ var M61EmulatorBundle = (() => {
     const match = /^(.+)=(\d+)$/u.exec(text);
     if (!match) return { name: text, estimatedCells: 0 };
     return { name: match[1], estimatedCells: Number(match[2]) };
-  }
-  function stripCellUnsafe(cell) {
-    const clean = {
-      address: cell.address,
-      hex: cell.hex,
-      roles: cell.roles
-    };
-    if (cell.note !== void 0) clean.note = cell.note;
-    return clean;
-  }
-  function stripCandidateUnsafe(candidate) {
-    return { ...candidate, unsafe: false };
   }
   function hasLoweredIr(ast) {
     return ast.preloads.length > 0 || ast.domains.length > 0 || ast.states.length > 0 || ast.displays.length > 0 || ast.blocks.length > 0 || ast.entries.some((entry) => containsLoweredStatement(entry.body)) || ast.procs.some((proc) => containsLoweredStatement(proc.body));
@@ -8267,46 +8301,34 @@ var M61EmulatorBundle = (() => {
     }
     return count;
   }
-  function selectDispatchCandidate(statement, options, targetProfile) {
+  function selectDispatchCandidate(statement, targetProfile) {
     const site = statement.name ?? `dispatch@${statement.line}`;
-    const safeCost = estimateDispatchCost(statement, false);
     const fallthroughCost = estimateDispatchCost(statement, true);
     const candidates = [
       {
         site,
-        variant: "safe-compare-chain",
-        steps: safeCost,
-        selected: options.opt === "safe",
-        reason: options.opt === "safe" ? "safe mode selected conservative compare-chain" : "available fallback",
-        unsafe: false
-      },
-      {
-        site,
         variant: "fallthrough-compare-chain",
         steps: fallthroughCost,
-        selected: options.opt === "max",
-        reason: "uses case ordering to omit the final branch when possible",
-        unsafe: false
+        selected: true,
+        reason: "uses case ordering to omit the final branch when possible"
       }
     ];
-    if (options.opt === "max" && targetSupports(targetProfile, "dark-entries") && targetSupports(targetProfile, "address-constants") && targetSupports(targetProfile, "code-data-overlay")) {
+    if (targetSupports(targetProfile, "dark-entries") && targetSupports(targetProfile, "address-constants") && targetSupports(targetProfile, "code-data-overlay")) {
       candidates.push({
         site,
         variant: "dark-indirect-table",
         steps: Math.max(4, statement.cases.length + 3),
         selected: false,
-        reason: "rejected until the layout pass proves a conflict-free address/data table for this site",
-        unsafe: true
+        reason: "considered; layout proof did not establish a conflict-free address/data table for this site"
       });
     }
-    if (options.opt === "max" && statement.cases.length <= 6 && targetSupports(targetProfile, "super-dark-dispatch") && targetSupports(targetProfile, "indirect-flow")) {
+    if (statement.cases.length <= 6 && targetSupports(targetProfile, "super-dark-dispatch") && targetSupports(targetProfile, "indirect-flow")) {
       candidates.push({
         site,
         variant: "super-dark-dispatch",
         steps: Math.max(3, statement.cases.length + 2),
         selected: false,
-        reason: "rejected until layout can place one-command cases at 48..53 and tails at 01..06",
-        unsafe: true
+        reason: "considered; layout proof did not place one-command cases at 48..53 and tails at 01..06"
       });
     }
     const selected = candidates.find((candidate) => candidate.selected) ?? candidates[0];
@@ -8411,12 +8433,6 @@ var M61EmulatorBundle = (() => {
   function binaryOpcode(op) {
     return op === "+" ? 16 : op === "-" ? 17 : op === "*" ? 18 : 19;
   }
-  function riskReason(risk, delivery, enterable) {
-    if (!enterable.includes(delivery)) return `opcode not enterable in ${delivery} delivery`;
-    if (risk === "dangerous") return "dangerous opcode is unsafe-unverified";
-    if (risk === "undocumented") return "undocumented opcode is unsafe-unverified";
-    return void 0;
-  }
   function summarizeBlocks(items) {
     const blocks = [];
     let current = "<entry>";
@@ -8443,10 +8459,7 @@ var M61EmulatorBundle = (() => {
     for (const step of result.steps) {
       const address = formatAddress(step.address).padStart(4, " ");
       const command = step.mnemonic.padEnd(23, " ");
-      const comments = [
-        step.comment,
-        step.unsafeReason ? `unsafe-unverified: ${step.unsafeReason}` : void 0
-      ].filter((value) => Boolean(value)).join("; ");
+      const comments = [step.comment].filter((value) => Boolean(value)).join("; ");
       lines.push(` ${address} |  ${step.hex}  | ${command} | ${comments}`);
     }
     return lines.join("\n");
@@ -8454,10 +8467,8 @@ var M61EmulatorBundle = (() => {
 
   // src/browser/emulator-bridge.ts
   var DEFAULT_COMPILE_OPTIONS = {
-    opt: "max",
     delivery: "hex",
-    budget: 105,
-    warnUnsafe: true
+    budget: 105
   };
   var DEFAULT_DEBOUNCE_MS = 250;
   var STATUS_ID = "m61-emulator-status";
@@ -8478,7 +8489,7 @@ var M61EmulatorBundle = (() => {
   }
   function looksLikeM61Source(text) {
     const normalized = text.trim();
-    return /\btarget\s+mk61\b/iu.test(normalized) || /\bbudget\s+\d+\s+cells\b/iu.test(normalized) || /\boptimize\s+size\b/iu.test(normalized) || /\bprogram\s+[A-Za-z_][\w-]*\s*\{/u.test(normalized);
+    return /\btarget\s+mk61\b/iu.test(normalized) || /\bbudget\s+\d+\s+cells\b/iu.test(normalized) || /\bprogram\s+[A-Za-z_][\w-]*\s*\{/u.test(normalized);
   }
   function installEmulatorBridge(options = {}) {
     window.__m61EmulatorBridge?.uninstall();

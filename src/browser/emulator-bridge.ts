@@ -2,10 +2,8 @@ import { CompileError, compileM61, formatListing } from "../core/index.ts";
 import type { CompileOptions, CompileResult } from "../core/index.ts";
 
 const DEFAULT_COMPILE_OPTIONS: CompileOptions = {
-  opt: "max",
   delivery: "hex",
   budget: 105,
-  warnUnsafe: true,
 };
 
 const DEFAULT_DEBOUNCE_MS = 250;
@@ -78,7 +76,6 @@ export function looksLikeM61Source(text: string): boolean {
   return (
     /\btarget\s+mk61\b/iu.test(normalized) ||
     /\bbudget\s+\d+\s+cells\b/iu.test(normalized) ||
-    /\boptimize\s+size\b/iu.test(normalized) ||
     /\bprogram\s+[A-Za-z_][\w-]*\s*\{/u.test(normalized)
   );
 }
