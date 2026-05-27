@@ -119,6 +119,61 @@ program BranchlessStop {
     expect(result.report.optimizations.some((item) => item.name === "arithmetic-if-terminal-select")).toBe(true);
   });
 
+  it("extends terminal-select to comparison conditions when branchless is shorter", () => {
+    const result = compileOk(`
+target mk61
+budget 999 cells
+program BranchlessCompare {
+  state {
+    counter: counter 0..9 = 0
+  }
+  turn {
+    if counter > 0 {
+      stop 1
+    }
+    else {
+      stop 0
+    }
+  }
+}
+`);
+    const applied = result.report.optimizations.filter((item) => item.name === "arithmetic-if-terminal-select");
+    expect(applied.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("records branchless terminal-select as considered when the branched form wins", () => {
+    const result = compileOk(`
+target mk61
+budget 999 cells
+program LunarLike {
+  state {
+    speed: counter -99..99 = 0
+  }
+  turn {
+    if abs(speed) <= 5 {
+      stop 777
+    }
+    else {
+      stop 666
+    }
+  }
+}
+`);
+    const applied = result.report.optimizations.filter((item) => item.name === "arithmetic-if-terminal-select");
+    expect(applied.length).toBe(0);
+
+    const rejected = result.report.rejectedCandidates.find(
+      (entry) => entry.variant === "arithmetic-if-terminal-select",
+    );
+    expect(rejected).toBeDefined();
+    expect(rejected!.reason).toMatch(/branched form was shorter/u);
+
+    const capability = result.report.optimizer.capabilities.find(
+      (entry) => entry.id === "arithmetic-if-select",
+    );
+    expect(capability?.status).toBe("considered");
+  });
+
   it("surfaces budget exceeded as a hard error for V2 programs", () => {
     const body = Array.from({ length: 60 }, () => "    x = x + 1234567").join("\n");
     expect(() =>
