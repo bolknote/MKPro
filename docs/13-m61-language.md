@@ -556,7 +556,15 @@ candidates:
 - `В/О` replaces literal or label-resolved `БП 01` when the return stack is
   proven empty;
 - explicit `trap` lowers to Danilov-style domain-error stops only when the
-  source semantics names a trap outcome.
+  source semantics names a trap outcome;
+- redundant-prologue elimination: when a rule ends with the same `display +
+  С/П` block that the loop head opens with and then jumps to the head, the
+  trailing copy is removed — the user only ever observes the show performed
+  by the loop head. With the X-state tracker the pass also matches the
+  "partial" backward prologue produced by `stack-current-X scheduling` against
+  the loop head's full prologue (a virtual `П->X r` is prepended when the
+  preceding op is `X->П r`). This is what shrinks `human.m61` 35→28 and
+  `tiny-game.m61` 30→26 without any source edits.
 
 The spatial/resource backend selects super-dark FA..FF dispatch, dark tables,
 X2 display-byte scheduling, fractional-R0 sentinels, and branch-removal
@@ -618,10 +626,13 @@ The pipeline currently contains:
   stack is provably empty.
 - **redundant-prologue-elimination** — when a `display + С/П` block
   immediately precedes `БП main_loop` and the loop head begins with the same
-  byte-identical block, the trailing copy is removed. The display the user
-  actually sees is the one at the loop head; observable behavior is preserved.
-  This is what shrinks `human.m61` 35→30 and `tiny-game.m61` 30→26 without
-  touching the source.
+  byte-identical block, the trailing copy is removed. With the X-state tracker
+  it also matches the "partial" backward prologue left behind by AST-level
+  `stack-current-X scheduling`: when the op preceding the backward prologue
+  is `X->П r`, the pass virtually prepends a `П->X r` and matches against the
+  loop head's full prologue. The display the user actually sees is the one
+  at the loop head; observable behavior is preserved. This is what shrinks
+  `human.m61` 35→28 and `tiny-game.m61` 30→26 without touching the source.
 
 A round-trip emulator regression suite (`tests/emulator/regression.test.ts`)
 loads each of the 16 examples into the headless MK-61 emulator and runs a

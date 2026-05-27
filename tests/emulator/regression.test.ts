@@ -43,6 +43,7 @@ interface Scenario {
   expectStop?: boolean;
   expectDisplayMatches?: RegExp;
   expectPc?: string | number;
+  expectRegister?: { name: string; matches: RegExp };
   maxFrames?: number;
 }
 
@@ -71,6 +72,27 @@ const SCENARIOS: Scenario[] = [
     name: "human.m61 boots and stops awaiting first action",
     example: "human.m61",
     keys: ["В/О", "С/П"],
+    expectStop: true,
+  },
+  {
+    name: "human.m61 train (key=2) keeps program stable after prologue-elimination",
+    example: "human.m61",
+    registers: { "1": "0", "2": "5" },
+    keys: ["В/О", "С/П", "2", "С/П", "С/П"],
+    expectStop: true,
+  },
+  {
+    name: "human.m61 spend (key=8) keeps program stable after prologue-elimination",
+    example: "human.m61",
+    registers: { "1": "3", "2": "5" },
+    keys: ["В/О", "С/П", "8", "С/П", "С/П"],
+    expectStop: true,
+  },
+  {
+    name: "tiny-game.m61 drain (key=4) keeps program stable after prologue-elimination",
+    example: "tiny-game.m61",
+    registers: { "0": "80000078", "2": "8" },
+    keys: ["В/О", "С/П", "4", "С/П", "С/П"],
     expectStop: true,
   },
   {
@@ -133,6 +155,9 @@ describe("emulator regression", () => {
       }
       if (scenario.expectPc !== undefined) {
         expect(calc.programCounter()).toBe(scenario.expectPc);
+      }
+      if (scenario.expectRegister) {
+        expect(calc.readRegister(scenario.expectRegister.name)).toMatch(scenario.expectRegister.matches);
       }
     });
   }

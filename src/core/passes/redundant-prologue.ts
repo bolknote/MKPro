@@ -43,7 +43,13 @@ function collectForwardPrologue(ops: readonly IrOp[], from: number): PrologueSeg
   return { ops: [] };
 }
 
-function collectBackwardPrologue(ops: readonly IrOp[], beforeIndex: number): PrologueSegment {
+interface BackwardSegment {
+  readonly ops: readonly IrOp[];
+  readonly startIndex: number; // index of the first op of the backward prologue
+  readonly virtualHeadRegister?: import("../types.ts").RegisterName;
+}
+
+function collectBackwardPrologue(ops: readonly IrOp[], beforeIndex: number): BackwardSegment {
   const collected: IrOp[] = [];
   let i = beforeIndex - 1;
   let sawStop = false;
@@ -60,7 +66,7 @@ function collectBackwardPrologue(ops: readonly IrOp[], beforeIndex: number): Pro
         i -= 1;
         continue;
       }
-      return { ops: [] };
+      return { ops: [], startIndex: -1 };
     }
     if (isShowDisplayOp(op) && !hasUnsafe(op)) {
       collected.push(op);
@@ -69,7 +75,27 @@ function collectBackwardPrologue(ops: readonly IrOp[], beforeIndex: number): Pro
     }
     break;
   }
-  return { ops: sawStop ? collected.slice().reverse() : [] };
+  if (!sawStop) return { ops: [], startIndex: -1 };
+  // Walk past leading labels to find the true first op of the backward prologue.
+  let startIndex = i + 1;
+  while (startIndex < beforeIndex && ops[startIndex]!.kind === "label") startIndex += 1;
+  // If the op immediately preceding the backward prologue is X->П r, then X
+  // already holds r's value at the start of the prologue, equivalent to
+  // virtually prepending a П->X r.
+  let virtualHeadRegister: import("../types.ts").RegisterName | undefined;
+  let scan = i;
+  while (scan >= 0 && ops[scan]!.kind === "label") scan -= 1;
+  if (scan >= 0) {
+    const prior = ops[scan]!;
+    if (prior.kind === "store" && !hasUnsafe(prior)) {
+      virtualHeadRegister = prior.register;
+    }
+  }
+  return {
+    ops: collected.slice().reverse(),
+    startIndex,
+    virtualHeadRegister,
+  };
 }
 
 function opsEquivalent(a: IrOp, b: IrOp): boolean {
@@ -108,9 +134,25 @@ const run: IrPassFn = (ops) => {
     if (headForward.ops.length === 0) continue;
     const headBackward = collectBackwardPrologue(ops, i);
     if (headBackward.ops.length === 0) continue;
-    if (!segmentsMatch(headBackward.ops, headForward.ops)) continue;
-    const removeLength = headBackward.ops.length;
-    const start = i - removeLength;
+    let backwardOps = headBackward.ops;
+    let matched = segmentsMatch(backwardOps, headForward.ops);
+    if (!matched && headBackward.virtualHeadRegister !== undefined) {
+      const firstForward = headForward.ops[0];
+      if (
+        firstForward !== undefined &&
+        firstForward.kind === "recall" &&
+        firstForward.register === headBackward.virtualHeadRegister
+      ) {
+        // The forward prologue starts with a П->X r whose value X already
+        // holds (because the prior op stored r). Match against the suffix.
+        const suffix = headForward.ops.slice(1);
+        if (segmentsMatch(backwardOps, suffix)) {
+          matched = true;
+        }
+      }
+    }
+    if (!matched) continue;
+    const start = headBackward.startIndex;
     const end = i;
     // Refuse to fire when the backward prologue would overlap with — or even
     // touch — the forward prologue at the loop head. Otherwise we'd be
