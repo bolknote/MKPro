@@ -54,7 +54,7 @@ Hints describe semantics, not implementation:
 - `[temporary]`, `[persistent]` describe liveness across turns.
 - `[wrap]`, `[saturate]`, `[trap]` describe overflow/error policy.
 - `[unordered]`, `[approx]`, `[exact]` describe legal rewrites.
-- `[manual_entry]`, `[preload]` describe values supplied outside program cells.
+- `[manual_entry]` describes values supplied by the player before the game loop.
 
 Low-level hints such as `use_X2`, `use_dark_entries`, `put_in_R0`, or
 `overlay_here` are rejected. The compiler owns those choices.
@@ -68,19 +68,102 @@ M61 accepts line and trailing comments with either `//` or `#`:
 input key: digit  # A trailing comment.
 ```
 
-## Preloads
+## Top Level
 
-`preload` describes setup values supplied before the program starts. Values are
-either literals or explicit builtin function calls:
+Only compilation metadata belongs outside `program`:
+
+- `target mk61`
+- `budget 105 cells`
+- `optimize size`
+- `reference name`
+
+Game meaning belongs inside `program`. Top-level resource, bitset, maze, event,
+random, or packed-table blocks are compatibility-era notation; in the main M61
+language they should become `state`, `world`, `encounters`, rules, screens, and
+semantic hints. The compiler report shows which registers, overlays, setup
+constants, hex mantissas, random initialization, or other implementation tactics
+were selected.
+
+## State Configuration
+
+State fields can carry their own game configuration:
 
 ```m61
-preload R4 = 2
-preload R9 = random_seed()
+state {
+  [displayed] strength: resource 0..99 = 40 {
+    terminal at 0 show error
+  }
+
+  [persistent] score: score 0..99 = 0 {
+    reward skeleton 1
+    reward dragon 6
+  }
+
+  [persistent] plans: bitset {
+    generated random
+    cleared when creature defeated
+  }
+}
 ```
 
-Bare symbolic values such as `preload R9 = random_seed` are rejected. If a value
-is computed, it must look like a call so the source reads as an expression, not
-as a magic identifier.
+Use `resource` for consumable values, `score` for accumulated rewards, and
+`bitset` for generated map or encounter masks. Register placement and compact
+packing are compiler decisions.
+
+## World Blocks
+
+`world` describes spatial rules in one place:
+
+```m61
+world giant_country: hall {
+  position pos {
+    floors 1..3
+    rooms 0..7
+    display decimal_player
+    start 1
+  }
+
+  generated random
+  player decimal_point
+  door symbol 8 costs strength 1
+  wall symbol 8 blocks forward costs strength 7
+  vertical wrap 1 -> 2 -> 3 -> 1
+}
+```
+
+This is intentionally about world rules, not storage. The compiler lowers it to
+the GameIntent pipeline and reports whether it used shared tails, code/data
+overlay, constants as branch targets, X2, display-byte packing, or other MK-61
+features.
+
+## Encounter Tables
+
+Use `encounters expr` when a tile or event code selects one of several rules:
+
+```m61
+encounters tile {
+  0 empty {
+    show cave
+  }
+
+  3 skeleton {
+    challenge tile {
+      success {
+        strength += 1
+        score += 1
+        plans clear pos
+      }
+      failure {
+        strength -= 3
+      }
+    }
+  }
+}
+```
+
+The parser lowers this to a generated `encounter(kind)` procedure with compact
+dispatch. The author writes encounter meaning; the compiler chooses dispatch
+layout.
 
 ## Optimizer Contract
 
@@ -109,9 +192,9 @@ Unsupported high-level effects fail compilation instead of becoming comments.
 The current production path recognizes a general spatial/resource game intent:
 packed coordinates, generated bitsets, resources, events, dispatch, screens,
 and terminal outcomes. `examples/cave-treasure.m61` is now just one
-benchmark source; the same universal pipeline also compiles
+reference source; the same universal pipeline also compiles
 `examples/grid-rescue.m61` and `examples/resource-raid.m61` to the same
-105-cell target. `benchmark` is report metadata only and must not change code
+105-cell target. `reference` is report metadata only and must not change code
 generation.
 
 For these programs the report marks selected tactics, not source switches:
@@ -202,10 +285,9 @@ success/failure effects, or route it through a GameIntent/EffectIR lowering.
 Current scalar lowerings are still deliberately small and auditable:
 
 - `coord` is represented as a packed numeric value; `pos.floor` lowers to
-  `int(pos / 100)`, with `100` automatically placed in a preload register when
+  `int(pos / 100)`, with `100` automatically placed in setup state when
   that is cheaper than entering three digits.
-- `bitset generated random` is moved to reported preload/setup state in
-  `--opt max`.
+- `bitset generated random` is moved to reported setup state in `--opt max`.
 - `collection has item` currently lowers to a compact range-style mask test
   (`collection >= item`) until the full bitset solver lands.
 - `reward by expr` updates `treasure` when that state field exists.
@@ -220,10 +302,10 @@ candidates:
 - store/recall peephole: removes immediate `X->П r ; П->X r`;
 - branch-removal umbrella: replaces matched conditionals with branchless
   arithmetic, `К max`, `К |x|`, sign transforms, or boolean-masked updates;
-- auto-preload initial state: moves setup values outside official program
-  cells and records the required registers in the report;
-- automatic preloaded constants: reserves spare registers for expensive
-  constants such as `10`, `20`, and `100`;
+- setup-state extraction: moves setup values outside official program cells and
+  records the required calculator state in the report;
+- automatic constants: reserves spare registers for expensive constants such as
+  `10`, `20`, and `100`;
 - show/read fusion: `show screen` followed by `read key` uses one calculator
   stop, not two;
 - direction dispatch: groups many direction-key cases into one default

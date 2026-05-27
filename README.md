@@ -97,11 +97,11 @@ overlay, X2/`ВП`, display-byte packing, hexadecimal mantissa data, R0 edge
 cases, and Danilov-style error-stop idioms when the source semantics allows
 them.
 
-Current benchmark examples include:
+Current reference examples include:
 
-- `examples/cave-treasure.m61`: full high-level compactness benchmark.
-- `examples/grid-rescue.m61`: grid/bitset benchmark.
-- `examples/resource-raid.m61`: resource/dispatch benchmark.
+- `examples/cave-treasure.m61`: full high-level compactness reference.
+- `examples/grid-rescue.m61`: grid/bitset reference.
+- `examples/resource-raid.m61`: resource/dispatch reference.
 - `examples/giants-country.m61`: commented high-level game port.
 - `examples/cave-sketch.m61`: older compact sketch kept as compatibility coverage.
 
