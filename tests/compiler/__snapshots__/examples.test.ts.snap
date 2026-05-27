@@ -35,14 +35,14 @@ Optimizer Capabilities:
   - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no raw boundary or unsafe effect is crossed.
   - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following commutative use and removes the temporary store when safe.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty. [unsafe-unverified]
-  - branch-removal: candidate; Umbrella rule for replacing provably equivalent conditionals with branchless arithmetic, sign, extrema, or masked updates.
-  - zero-condition-test: candidate; Uses direct F x?0 tests when one side of a condition is a proved zero, avoiding a zero literal and subtraction.
-  - dispatch-compare-chain: candidate; Lowers high-level command dispatch automatically; safe mode keeps conservative compare chains.
-  - arithmetic-if-select: candidate; Replaces simple boolean if/else assignments, stops, and conditional moves with arithmetic selection when shorter.
-  - arithmetic-if-update: candidate; Replaces conditional +=/-= and sign toggles guarded by a proved boolean with masked arithmetic.
-  - arithmetic-if-extrema: candidate; Replaces simple extrema, sign, clamp, comparison-mask, and boolean-algebra branches when shorter.
+  - branch-removal: candidate; Umbrella rule for replacing provably equivalent conditionals with branchless arithmetic, sign, extrema, or masked updates. Also marked active when the GameIntent backend selects К max / К ЗН / К∨ as semantic equivalents.
+  - zero-condition-test: candidate; Uses direct F x?0 tests when one side of a condition is a proved zero, avoiding a zero literal and subtraction. Also marked active when GameIntent proves zero/digit boundaries through fractional indirect addressing or К∨.
+  - dispatch-compare-chain: candidate; Lowers high-level command dispatch automatically; safe mode keeps conservative compare chains, GameIntent may pick indirect or super-dark dispatch instead.
+  - arithmetic-if-select: candidate; Replaces simple boolean if/else assignments, stops, and conditional moves with arithmetic selection when shorter. Counts К max/К ЗН as the GameIntent-equivalent selection.
+  - arithmetic-if-update: candidate; Replaces conditional +=/-= and sign toggles guarded by a proved boolean with masked arithmetic. GameIntent's hex-mantissa updates count as the masked-update equivalent.
+  - arithmetic-if-extrema: candidate; Replaces simple extrema, sign, clamp, comparison-mask, and boolean-algebra branches when shorter. К max zero-through counts as the extrema selection.
   - indirect-flow: candidate; Candidate rule: replace direct branches/calls with К БП/К ПП/К x?0 only when the address value is already live and cheaper.
-  - fl-decrement-branch: candidate; Uses F L0..F L3 as compact decrement-and-continue/decrement-and-branch forms for small counters.
+  - fl-decrement-branch: candidate; Uses F L0..F L3 as compact decrement-and-continue/decrement-and-branch forms for small counters. The R0 indirect counter is its GameIntent equivalent.
   - address-constant-overlay: active; Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role. [unsafe-unverified]
 
 Machine Features Used:

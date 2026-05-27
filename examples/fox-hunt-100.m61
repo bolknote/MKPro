@@ -61,7 +61,7 @@ program FoxHunt100 {
   }
 
   rule scan_from_cell {
-    bearing = line_count(foxes, cell)
+    bearing = count lines from foxes at cell
     show report
   }
 }

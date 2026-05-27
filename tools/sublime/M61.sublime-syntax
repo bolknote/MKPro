@@ -78,15 +78,15 @@ contexts:
       scope: storage.modifier.block.m61
 
   control-keywords:
-    - match: '\b(input|show|style|read|match|otherwise|if|else|require|exists|stop|pause|ask|halt|loop|switch|dispatch|as|core|egg|unsafe|asm|trap|let|reward|by|call|move|remember|end|win|lose)\b'
+    - match: '\b(input|show|style|read|match|otherwise|if|else|require|exists|stop|pause|ask|halt|loop|switch|dispatch|as|core|egg|unsafe|asm|trap|let|reward|by|call|move|remember|end|win|lose|count)\b'
       scope: keyword.control.m61
-    - match: '\b(and|or|not|has|clear|set|from|to|in|north|south|east|west|up|down)\b'
+    - match: '\b(and|or|not|has|clear|set|from|to|in|around|north|south|east|west|up|down)\b'
       scope: keyword.operator.word.m61
 
   domain-keywords:
-    - match: '\b(digit|number|flag|counter|coord|bitset|enum|packed|addr|resource|optional|generated|random|floor|floors|column|columns|row|rows|board|fleet|ships|coordinate|terminal|cleared|when|command|cost|reward|style|display|start|seed|symbol|true|false)\b'
+    - match: '\b(digit|number|flag|counter|coord|bitset|enum|packed|addr|resource|optional|generated|random|floor|floors|column|columns|row|rows|line|lines|neighbor|neighbors|cell|position|board|fleet|ships|coordinate|terminal|cleared|when|command|cost|reward|style|display|start|seed|symbol|true|false)\b'
       scope: storage.type.domain.m61
-    - match: '\b(calculator_random|random_seed|input\.X|input\.Y|direction|memory_code|cell_at|nonzero)\b'
+    - match: '\b(calculator_random|random_seed|input\.X|input\.Y|direction|memory_code|cell_at|line_count|neighbor_count|random_cell|nonzero)\b'
       scope: support.function.domain.m61
 
   storage-keywords:

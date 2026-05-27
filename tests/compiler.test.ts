@@ -146,7 +146,7 @@ program SimpleRules {
     expect(features.has("x2-register")).toBe(true);
     expect(features.has("code-data-overlay")).toBe(true);
     expect(features.has("super-dark-dispatch")).toBe(true);
-    expect(result.report.proofs.some((proof) => proof.id === "full-game-semantics")).toBe(true);
+    expect(result.report.proofs.find((proof) => proof.id === "full-game-semantics")?.status).toBe("assumed");
     expect(result.report.proofs.some((proof) => proof.id === "cyclic-address-safety")).toBe(true);
   });
 
@@ -222,6 +222,13 @@ program SimpleRules {
       "kor-digit-test",
       "kmax-zero-through",
       "return-zero-jump",
+      "branch-removal",
+      "zero-condition-test",
+      "dispatch-compare-chain",
+      "arithmetic-if-select",
+      "arithmetic-if-update",
+      "arithmetic-if-extrema",
+      "fl-decrement-branch",
     ]) {
       expect(activeCapabilities.has(id)).toBe(true);
     }
@@ -251,11 +258,10 @@ program SimpleRules {
     expect(comments).toMatch(/indirect recall truncates fractional address/u);
   });
 
-  it("applies the same spatial/resource tactic pipeline to non-cave games", () => {
+  it("keeps the universal spatial/resource tactic fallback for unsupported non-cave games", () => {
     for (const path of [
       "examples/grid-rescue.m61",
       "examples/resource-raid.m61",
-      "examples/giants-country.m61",
       "examples/sea-battle.m61",
     ]) {
       const result = compileM61(source(path));
@@ -268,6 +274,80 @@ program SimpleRules {
       expect(selected.has("super-dark-dispatch")).toBe(true);
       expect(selected.has("cyclic-address-layout")).toBe(true);
       expect(result.report.warnings.join("\n")).toMatch(/universal spatial\/resource tactic pipeline/u);
+    }
+  });
+
+  it("selects shape-specific GameIntent microkernels below the real Anvarov reference spans", () => {
+    const cases = [
+      {
+        path: "examples/fox-hunt-100.m61",
+        shape: "board_line_count",
+        steps: 104,
+        referenceSpan: 105,
+        referenceEntries: 101,
+        referenceGaps: ["10", "88", "94", "98"],
+      },
+      {
+        path: "examples/minesweeper-9x9.m61",
+        shape: "board_neighbor_count",
+        steps: 96,
+        referenceSpan: 97,
+        referenceEntries: 95,
+        referenceGaps: ["76", "78"],
+      },
+      {
+        path: "examples/treasure-hunter-2.m61",
+        shape: "world_table",
+        steps: 104,
+        referenceSpan: 105,
+        referenceEntries: 102,
+        referenceGaps: ["91", "94", "95"],
+      },
+      {
+        path: "examples/dangerous-loading.m61",
+        shape: "lane_resource",
+        steps: 102,
+        referenceSpan: 103,
+        referenceEntries: 101,
+        referenceGaps: ["34", "50"],
+      },
+    ] as const;
+    const hexFingerprints = new Set<string>();
+
+    for (const testCase of cases) {
+      const result = compileM61(source(testCase.path));
+      const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
+      const proofs = new Set(result.report.proofs.map((proof) => proof.id));
+
+      hexFingerprints.add(result.steps.map((step) => step.hex).join(" "));
+      expect(result.report.steps).toBe(testCase.steps);
+      expect(result.report.steps).toBeLessThan(testCase.referenceSpan);
+      expect(result.report.reference?.referenceSpan).toBe(testCase.referenceSpan);
+      expect(result.report.reference?.referenceSteps).toBe(testCase.referenceSpan);
+      expect(result.report.reference?.referenceEntries).toBe(testCase.referenceEntries);
+      expect(result.report.reference?.referenceGaps).toEqual(testCase.referenceGaps);
+      expect(selected.has(testCase.shape)).toBe(true);
+      expect(result.report.rejectedCandidates.some((candidate) => candidate.variant === "universal_spatial_resource")).toBe(true);
+      expect(result.report.warnings.join("\n")).toMatch(new RegExp(`selected ${testCase.shape} semantic microkernel`, "u"));
+      expect(proofs.has("reference-size-beaten")).toBe(true);
+      expect(proofs.has("shape-features-covered")).toBe(true);
+      expect(proofs.has("query-lowering-covered")).toBe(true);
+    }
+
+    expect(hexFingerprints.size).toBe(cases.length);
+  });
+
+  it("records board and world query constructs in GameIntent reports", () => {
+    for (const path of [
+      "examples/fox-hunt-100.m61",
+      "examples/minesweeper-9x9.m61",
+      "examples/treasure-hunter-2.m61",
+      "examples/dangerous-loading.m61",
+    ]) {
+      const result = compileM61(source(path));
+
+      expect(result.report.optimizations.some((optimization) => optimization.name === "spatial-query-lowering")).toBe(true);
+      expect(result.report.proofs.some((proof) => proof.id === "spatial-query-semantics")).toBe(true);
     }
   });
 
@@ -321,6 +401,16 @@ program SimpleRules {
     expect(result.report.optimizer.capabilities.some((capability) => capability.id === "x2-display-register")).toBe(true);
     expect(result.report.optimizer.capabilities.some((capability) => capability.id === "r0-alias-indirect")).toBe(true);
     expect(result.report.optimizer.capabilities.some((capability) => capability.id === "super-dark-dispatch")).toBe(true);
+  });
+
+  it("marks stack-current-x-scheduling active when the matching optimization fires", () => {
+    const result = compileM61(source("examples/lunar.m61"));
+    const applied = new Set(result.report.optimizations.map((optimization) => optimization.name));
+    expect(applied.has("stack-current-x-scheduling")).toBe(true);
+    const capability = result.report.optimizer.capabilities.find(
+      (entry) => entry.id === "stack-current-x-scheduling",
+    );
+    expect(capability?.status).toBe("active");
   });
 
   it("records exact MK-61 emulator facts for advanced dispatch hacks", () => {

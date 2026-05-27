@@ -70,7 +70,7 @@ export function formatExplain(result: CompileResult): string {
     lines.splice(
       4,
       0,
-      `Reference: ${reference.name}; reference=${reference.referenceSteps}, compiled=${reference.compiledSteps}, delta=${reference.delta}, parity=${reference.parity}`,
+      `Reference: ${reference.name}; span=${reference.referenceSpan}, entries=${reference.referenceEntries}, gaps=${reference.referenceGaps.length > 0 ? reference.referenceGaps.join(",") : "none"}, compiled=${reference.compiledSteps}, delta=${reference.delta}, parity=${reference.parity}`,
     );
   }
   if (result.report.preloads.length > 0) {

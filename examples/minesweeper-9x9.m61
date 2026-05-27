@@ -59,7 +59,7 @@ program Minesweeper9x9 {
   rule reveal_safe_cell {
     opened set probe
     safe_left -= 1
-    clue = neighbor_count(mines, probe)
+    clue = count neighbors from mines around probe
     show result
 
     require safe_left > 0 else win cleared_all

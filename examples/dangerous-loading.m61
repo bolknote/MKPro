@@ -83,7 +83,7 @@ program DangerousLoading {
       handle_dock
     }
 
-    threat = int(random() * 8) + 1
+    threat = random position in harbor
     show water
   }
 

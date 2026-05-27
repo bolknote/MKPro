@@ -2092,12 +2092,40 @@ function lowerV2Reward(statement: V2RewardStatementAst): StatementAst[] {
 }
 
 function lowerV2Expression(text: string, line: number): ExpressionAst {
-  const normalized = text
+  const normalized = normalizeV2ExpressionText(text);
+  return parseExpression(normalized, line);
+}
+
+export function normalizeV2ExpressionText(text: string): string {
+  const query = normalizeV2QueryExpression(text.trim());
+  return (query ?? text)
     .trim()
     .replace(/\b([A-Za-z_][\w]*)\.floor\b/gu, "int($1 / 100)")
     .replace(/\binput\.X\b/gu, "0")
     .replace(/\binput\.Y\b/gu, "0");
-  return parseExpression(normalized, line);
+}
+
+function normalizeV2QueryExpression(text: string): string | undefined {
+  const lineCount = /^count\s+lines\s+(?:from|in)\s+([A-Za-z_][\w]*)\s+at\s+(.+)$/u.exec(text);
+  if (lineCount) return `line_count(${lineCount[1]}, ${lineCount[2]!.trim()})`;
+
+  const neighborCount = /^count\s+neighbou?rs\s+(?:from|in)\s+([A-Za-z_][\w]*)\s+(?:around|at)\s+(.+)$/u.exec(text);
+  if (neighborCount) return `neighbor_count(${neighborCount[1]}, ${neighborCount[2]!.trim()})`;
+
+  const cell = /^(?:cell|tile)\s+from\s+([A-Za-z_][\w]*)\s+at\s+(.+)$/u.exec(text);
+  if (cell) return `cell_at(${cell[1]}, ${cell[2]!.trim()})`;
+
+  const randomCell = /^random\s+(?:position|cell)\s+(?:from|in|on)\s+([A-Za-z_][\w]*)$/u.exec(text);
+  if (randomCell) return `random_cell(${randomCell[1]})`;
+
+  const randomRange = /^random\s+range\s+(.+?)\.\.(.+)$/u.exec(text);
+  if (randomRange) {
+    const min = randomRange[1]!.trim();
+    const max = randomRange[2]!.trim();
+    return `int(random() * ((${max}) - (${min}) + 1)) + (${min})`;
+  }
+
+  return undefined;
 }
 
 function parseInputSource(text: string): "X" | "Y" | undefined {

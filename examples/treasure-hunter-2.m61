@@ -107,7 +107,7 @@ program TreasureHunter2 {
   }
 
   rule inspect_cell {
-    tile = cell_at(cave, pos)
+    tile = cell from cave at pos
 
     match tile {
       1 => collect_treasure

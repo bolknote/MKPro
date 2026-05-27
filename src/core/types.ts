@@ -83,13 +83,35 @@ export interface GameIntent {
   kind: "game_intent";
   name: string;
   reference?: string;
+  shape: GameIntentShape;
+  features: GameIntentFeature[];
   inputs: string[];
   stateRoles: GameStateRole[];
   domains: GameDomainIntent[];
+  queries: GameQueryIntent[];
   screens: string[];
   rules: string[];
   terminalOutcomes: string[];
 }
+
+export type GameIntentShape =
+  | "board_line_count"
+  | "board_neighbor_count"
+  | "world_table"
+  | "lane_resource"
+  | "universal_spatial_resource";
+
+export type GameIntentFeature =
+  | "movement"
+  | "board"
+  | "fleet"
+  | "bitset"
+  | "line_count"
+  | "neighbor_count"
+  | "cell_at"
+  | "random_cell"
+  | "resources"
+  | "endings";
 
 export interface GameStateRole {
   name: string;
@@ -102,6 +124,14 @@ export interface GameDomainIntent {
   kind: string;
   name?: string;
   facts: Record<string, string>;
+}
+
+export interface GameQueryIntent {
+  kind: "line_count" | "neighbor_count" | "cell_at" | "random_cell";
+  source: string;
+  target?: string;
+  at?: string;
+  line: number;
 }
 
 export interface EffectIrOp {
@@ -841,6 +871,9 @@ export interface PreloadReport {
 export interface ReferenceReport {
   name: string;
   referenceSteps: number;
+  referenceSpan: number;
+  referenceEntries: number;
+  referenceGaps: string[];
   compiledSteps: number;
   delta: number;
   parity: "smaller" | "equal" | "larger";

@@ -302,6 +302,46 @@ entry main {
     expect(opcodes).not.toContain("51");
   });
 
+  it("extends terminal-select to comparison conditions when branchless is shorter", () => {
+    const result = compileOk(`
+machine mk61
+state {
+  counter: range 0..9 = 0
+}
+entry main {
+  if counter > 0 {
+    halt 1
+  }
+  else {
+    halt 0
+  }
+}
+`);
+    const applied = result.report.optimizations.filter((item) => item.name === "arithmetic-if-terminal-select");
+    expect(applied.length).toBe(1);
+    const opcodes = result.steps.map((step) => step.hex);
+    expect(opcodes).not.toContain("51");
+  });
+
+  it("rejects branchless terminal-select when the branched form is shorter", () => {
+    const result = compileOk(`
+machine mk61
+state {
+  speed: range -99..99 = 0
+}
+entry main {
+  if abs(speed) <= 5 {
+    halt 777
+  }
+  else {
+    halt 666
+  }
+}
+`);
+    const applied = result.report.optimizations.filter((item) => item.name === "arithmetic-if-terminal-select");
+    expect(applied.length).toBe(0);
+  });
+
   it("replaces conditional move, sign toggle, and saturating updates", () => {
     const result = compileOk(`
 machine mk61

@@ -214,6 +214,23 @@ occupied cells plus the resource that counts remaining pieces. This keeps games
 such as Sea Battle, Minesweeper, fox hunting, or board puzzles from pretending
 to be hallway movement games.
 
+Board queries should name the geometric operation directly:
+
+```m61
+rule scan_foxes {
+  bearing = count lines from foxes at cell
+}
+
+rule reveal_safe_cell {
+  clue = count neighbors from mines around probe
+}
+```
+
+`count lines from fleet at cell` is the fox-hunt style row/column/diagonal
+count. `count neighbors from bitset around cell` is the Minesweeper-style
+8-neighbor count. These lower to spatial query intent; the optimizer chooses
+whether to use masks, decimal digits, or a shared query tail.
+
 ## Example Programs
 
 The repository examples are grouped by the game shape they exercise:
@@ -278,6 +295,22 @@ sources wrote by hand, while generic grid movement uses integer deltas. `move po
 by expr` is available when the movement amount is deliberately computed.
 `remember name` stores the proposed destination before assigning it, which keeps
 collision and wall rules readable.
+
+World queries use the same expression position as ordinary formulas:
+
+```m61
+rule inspect_cell {
+  tile = cell from cave at pos
+}
+
+rule move_monster {
+  threat = random position in harbor
+}
+```
+
+`cell from world at pos` reads the generated tile/event code for a world
+position. `random position in world` asks the compiler for a compact random
+coordinate inside that world's declared range.
 
 ## Formulas
 
@@ -345,19 +378,43 @@ The source only states what is allowed semantically. The report explains:
 - budget and hot blocks.
 
 Unsupported high-level effects fail compilation instead of becoming comments.
-The current production path recognizes a general spatial/resource game intent:
-packed coordinates, generated bitsets, resources, events, dispatch, screens,
-and terminal outcomes. `examples/cave-treasure.m61` is now just one
-reference source; the same universal pipeline also compiles
-`examples/grid-rescue.m61` and `examples/resource-raid.m61` to the same
-105-cell target. `reference` is report metadata only and must not change code
-generation.
+The current production path first classifies `GameIntent` by shape and features,
+then selects the smallest valid backend candidate. Shape-specific microkernels
+cover:
+
+- `board_line_count` for fox-hunt row/column/diagonal probes;
+- `board_neighbor_count` for Minesweeper-style 8-neighbor probes;
+- `world_table` for compact generated-world tile lookup;
+- `lane_resource` for one-dimensional movement with random hazards/resources.
+
+The universal spatial/resource backend remains the fallback for mixed or
+unsupported shapes: packed coordinates, generated bitsets, resources, events,
+dispatch, screens, and terminal outcomes. `examples/cave-treasure.m61` is now
+just one reference source; `examples/grid-rescue.m61`,
+`examples/resource-raid.m61`, and `examples/sea-battle.m61` continue compiling
+through this fallback when no shape-specific backend covers the features.
+
+`reference` is report metadata only and must not change code generation. For
+known `games/*` references, the report resolves the original listing, counts the
+real addressed span (`max(address)+1`), occupied entries, and gaps, and keeps
+`referenceSteps` equal to that span for compatibility. Missing listings fall
+back to the budget with a warning.
 
 For these programs the report marks selected tactics, not source switches:
 indirect register flow, super-dark dispatch, cyclic/dark layout, code/data
 overlay, X2/`ВП`, hex-mantissa data packing, R0 indirect behavior, `К ЗН`,
 `К∨`, and `К max` are emitted as chosen lowerings through `GameIntent`,
 `EffectIR`, `CandidateIR`, and `LayoutIR`.
+
+Documented capabilities such as `branch-removal`, `arithmetic-if-*`,
+`zero-condition-test`, `dispatch-compare-chain`, and `fl-decrement-branch` are
+reported `active` not only when their literal rewrite fired, but also when the
+GameIntent backend picked a semantic equivalent. `К max` zero-through counts as
+the extrema selection, `К∨` and fractional indirect addressing count as the
+zero/digit test, `super-dark dispatch` counts as the dispatch lowering,
+`r0-indirect-counter` counts as the decrement-branch loop, and hex-mantissa
+arithmetic counts as the masked conditional update. This keeps the capability
+report honest about the optimizer's effective behavior across both backends.
 
 ## Current Generic Intent Nodes
 
@@ -372,12 +429,17 @@ The parser keeps these high-level statements as typed intent:
 - `collection set item`
 - `reward by expr`
 - `challenge expr { success { ... } failure { ... } }`
+- `move pos direction`
+- `win|lose|end outcome`
 - `match input { values => action }`
+- query expressions: `count lines from set at cell`, `count neighbors from set
+  around cell`, `cell from world at pos`, and `random position in world`
 
 Numeric `let`, assignment, update, `exists`, comparison predicates,
 `collection has`, `collection clear/set`, rule parameters, rule calls, and
-`reward by expr` lower through the generic backend. A `turn` is a real loop,
-and `rule` blocks compile as `ПП`/`В/О` procedures unless later cost-model
+`reward by expr` lower through the generic backend. Query expressions are
+captured as spatial query intent before code generation. A `turn` is a real
+loop, and `rule` blocks compile as `ПП`/`В/О` procedures unless later cost-model
 passes decide to inline them.
 
 ## Human-Facing Game Sugar

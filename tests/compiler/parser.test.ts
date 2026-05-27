@@ -252,6 +252,45 @@ program Demo {
     ]));
   });
 
+  it("parses human board and world query expressions", () => {
+    const ast = parseProgram(`
+target mk61
+program Queries {
+  state {
+    pos: coord optional
+    foxes: bitset generated random
+    mines: bitset generated random
+    bearing: counter 0..8 = 0
+    clue: counter 0..8 = 0
+    tile: enum = 0
+    threat: coord optional
+  }
+  world cave: grid {
+    position pos {
+      floors 1..1
+      rooms 1..8
+      start 1
+    }
+    generated random
+  }
+  turn {
+    bearing = count lines from foxes at pos
+    clue = count neighbors from mines around pos
+    tile = cell from cave at pos
+    threat = random position in cave
+  }
+}
+`);
+    const loop = ast.entries[0]?.body[0];
+    expect(loop?.kind).toBe("loop");
+    if (loop?.kind !== "loop") throw new Error("expected loop");
+    const calls = loop.body
+      .filter((statement) => statement.kind === "assign")
+      .map((statement) => statement.kind === "assign" && statement.expr.kind === "call" ? statement.expr.callee : undefined);
+
+    expect(calls).toEqual(["line_count", "neighbor_count", "cell_at", "random_cell"]);
+  });
+
   it("rejects unknown and duplicate v2 endings", () => {
     expect(() =>
       parseProgram(`
