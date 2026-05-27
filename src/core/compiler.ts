@@ -10,7 +10,9 @@ import {
   registerFromText,
   registerIndex,
 } from "./opcodes.ts";
+import { lowerIrToLayout, raiseLayoutToIr } from "./ir.ts";
 import { normalizeV2ExpressionText, parseExpression, parseProgram } from "./parser.ts";
+import { runIrPasses } from "./passes/index.ts";
 import { targetProfileFor, targetSupports, type TargetProfile } from "./targetProfile.ts";
 import type {
   AppliedOptimization,
@@ -411,6 +413,12 @@ interface GameBackendCandidate {
   readonly unsafe: boolean;
 }
 
+function roundTripLayoutThroughIr(layout: LayoutIrCell[]): LayoutIrCell[] {
+  const ir = raiseLayoutToIr(layout);
+  const lowered = lowerIrToLayout(ir);
+  return lowered.cells;
+}
+
 function tryCompileGameIntentProgram(
   ast: ProgramAst,
   options: CompileOptions,
@@ -433,7 +441,8 @@ function tryCompileGameIntentProgram(
   const candidateIr = buildCandidateIr(intent);
   const backendCandidates = buildGameBackendCandidates(intent, candidateIr);
   const selectedBackend = selectGameBackendCandidate(backendCandidates);
-  const layoutIr = selectedBackend.layout;
+  const rawLayoutIr = selectedBackend.layout;
+  const layoutIr = roundTripLayoutThroughIr(rawLayoutIr);
   const steps = layoutIr.map((cell) =>
     buildResolvedStep(cell.address, cell.opcode, getOpcode(cell.opcode).name, gameTacticComment(cell)),
   );
@@ -3263,305 +3272,17 @@ function optimizeItems(
   optimizations: AppliedOptimization[],
   unsafeUnverified: string[],
 ): MachineItem[] {
-  let result = items;
-  const returnJump = applyReturnZeroJump(result, options);
-  result = returnJump.items;
-  if (returnJump.applied > 0) {
-    optimizations.push({
-      name: "return-zero-jump",
-      detail: `Replaced ${returnJump.applied} БП 01 sequence with В/О under empty-return-stack assumption.`,
-      unsafe: true,
-    });
-    unsafeUnverified.push("В/О as БП 01 assumes the return stack is empty.");
-  }
-
-  const { items: peepholed, applied: peepholeApplied } = applyStoreRecallPeephole(result);
-  if (peepholeApplied > 0) {
-    optimizations.push({
-      name: "store-recall-peephole",
-      detail: `Dropped ${peepholeApplied} redundant П->X immediately after X->П to the same register.`,
-    unsafe: false,
-    });
-  }
-
-  const { items: jumpThreaded, applied: jumpThreadApplied } = applyJumpToNextThreading(peepholed);
-  if (jumpThreadApplied > 0) {
-    optimizations.push({
-      name: "jump-to-next-threading",
-      detail: `Removed ${jumpThreadApplied} unconditional branch to the immediately following label.`,
-      unsafe: false,
-    });
-  }
-
-  const { items: deadStoresRemoved, applied: deadStoreApplied } = applyDeadStoreBeforeCommutativeUse(jumpThreaded);
-  if (deadStoreApplied > 0) {
-    optimizations.push({
-      name: "dead-temp-store",
-      detail: `Removed ${deadStoreApplied} temp store(s) whose X value was consumed directly by stack scheduling.`,
-      unsafe: false,
-    });
-  }
-
-  const { items: mergedFailureTails, applied: failureTailApplied } = applyDuplicatePauseFailureTail(deadStoresRemoved);
-  if (failureTailApplied > 0) {
-    optimizations.push({
-      name: "duplicate-failure-tail-merge",
-      detail: `Merged ${failureTailApplied} duplicate pause-0 failure tail(s).`,
-      unsafe: false,
-    });
-  }
-
-  if (
-    options.opt === "safe" &&
-    peepholeApplied === 0 &&
-    jumpThreadApplied === 0 &&
-    deadStoreApplied === 0 &&
-    failureTailApplied === 0
-  ) {
+  const result = runIrPasses(items, options);
+  optimizations.push(...result.optimizations);
+  unsafeUnverified.push(...result.unsafeUnverified);
+  if (options.opt === "safe" && result.applied === 0) {
     optimizations.push({
       name: "no-op",
       detail: "Safe optimizer: no rewrites applied.",
       unsafe: false,
     });
   }
-
-  return mergedFailureTails;
-}
-
-function applyReturnZeroJump(
-  items: MachineItem[],
-  options: CompileOptions,
-): { items: MachineItem[]; applied: number } {
-  if (options.opt !== "max") return { items, applied: 0 };
-  const usesSubroutine = items.some((item) => item.kind === "op" && item.opcode === 0x53);
-  if (usesSubroutine) return { items, applied: 0 };
-  const labelAddresses = calculateLabelAddresses(items);
-  const result: MachineItem[] = [];
-  let applied = 0;
-  let currentAddress = 0;
-  for (let i = 0; i < items.length; i += 1) {
-    const current = items[i]!;
-    const next = items[i + 1];
-    if (current.kind === "label") {
-      result.push(current);
-      continue;
-    }
-    const targetAddress =
-      next?.kind === "address"
-        ? typeof next.target === "number"
-          ? next.target
-          : labelAddresses.get(next.target)
-        : undefined;
-    if (
-      current.kind === "op" &&
-      current.opcode === 0x51 &&
-      next?.kind === "address" &&
-      targetAddress === 1 &&
-      (typeof next.target === "number" || targetAddress < currentAddress) &&
-      !current.raw
-    ) {
-      result.push({
-        kind: "op",
-        opcode: 0x52,
-        mnemonic: "В/О",
-        comment: "optimized БП 01",
-        unsafeReason: "empty return stack assumed",
-      });
-      applied += 1;
-      i += 1;
-      currentAddress += 2;
-      continue;
-    }
-    result.push(current);
-    currentAddress += 1;
-  }
-  return { items: result, applied };
-}
-
-function calculateLabelAddresses(items: MachineItem[]): Map<string, number> {
-  const addresses = new Map<string, number>();
-  let address = 0;
-  for (const item of items) {
-    if (item.kind === "label") {
-      addresses.set(item.name, address);
-    } else {
-      address += 1;
-    }
-  }
-  return addresses;
-}
-
-function applyStoreRecallPeephole(items: MachineItem[]): {
-  items: MachineItem[];
-  applied: number;
-} {
-  const result: MachineItem[] = [];
-  let applied = 0;
-  for (let i = 0; i < items.length; i += 1) {
-    const current = items[i]!;
-    const next = items[i + 1];
-    if (
-      current.kind === "op" &&
-      next?.kind === "op" &&
-      current.opcode >= 0x40 &&
-      current.opcode <= 0x4e &&
-      next.opcode === current.opcode + 0x20 &&
-      current.unsafeReason === undefined &&
-      next.unsafeReason === undefined &&
-      !current.raw &&
-      !next.raw
-    ) {
-      result.push(current);
-      applied += 1;
-      i += 1;
-      continue;
-    }
-    result.push(current);
-  }
-  return { items: result, applied };
-}
-
-function applyJumpToNextThreading(items: MachineItem[]): {
-  items: MachineItem[];
-  applied: number;
-} {
-  const result: MachineItem[] = [];
-  let applied = 0;
-  for (let i = 0; i < items.length; i += 1) {
-    const current = items[i]!;
-    const operand = items[i + 1];
-    if (
-      current.kind === "op" &&
-      current.opcode === 0x51 &&
-      operand?.kind === "address" &&
-      typeof operand.target === "string" &&
-      current.unsafeReason === undefined &&
-      operand.unsafeReason === undefined
-    ) {
-      let j = i + 2;
-      let branchesToNext = false;
-      while (items[j]?.kind === "label") {
-        const label = items[j]!;
-        if (label.kind === "label" && label.name === operand.target) {
-          branchesToNext = true;
-          break;
-        }
-        j += 1;
-      }
-      if (branchesToNext) {
-        applied += 1;
-        i += 1;
-        continue;
-      }
-    }
-    result.push(current);
-  }
-  return { items: result, applied };
-}
-
-function applyDeadStoreBeforeCommutativeUse(items: MachineItem[]): {
-  items: MachineItem[];
-  applied: number;
-} {
-  const result: MachineItem[] = [];
-  let applied = 0;
-  for (let i = 0; i < items.length; i += 1) {
-    const current = items[i]!;
-    const next = items[i + 1];
-    const op = items[i + 2];
-    if (
-      current.kind === "op" &&
-      next?.kind === "op" &&
-      op?.kind === "op" &&
-      current.opcode >= 0x40 &&
-      current.opcode <= 0x4e &&
-      next.opcode >= 0x60 &&
-      next.opcode <= 0x6e &&
-      (op.opcode === 0x10 || op.opcode === 0x12) &&
-      current.unsafeReason === undefined &&
-      next.unsafeReason === undefined &&
-      op.unsafeReason === undefined &&
-      !current.raw &&
-      !next.raw &&
-      !op.raw &&
-      !registerReadBeforeNextWrite(items, i + 3, current.opcode - 0x40)
-    ) {
-      applied += 1;
-      continue;
-    }
-    result.push(current);
-  }
-  return { items: result, applied };
-}
-
-function registerReadBeforeNextWrite(items: MachineItem[], start: number, register: number): boolean {
-  for (let i = start; i < items.length; i += 1) {
-    const item = items[i]!;
-    if (item.kind !== "op") continue;
-    if (item.opcode === 0x60 + register) return true;
-    if (item.opcode === 0x40 + register) return false;
-  }
-  return false;
-}
-
-function applyDuplicatePauseFailureTail(items: MachineItem[]): {
-  items: MachineItem[];
-  applied: number;
-} {
-  const rewrite = new Map<string, string>();
-  const remove = new Set<number>();
-  let applied = 0;
-
-  for (let i = 0; i + 9 < items.length; i += 1) {
-    const firstLabel = items[i];
-    const firstZero = items[i + 1];
-    const firstPause = items[i + 2];
-    const trampolineLabel = items[i + 3];
-    const trampolineJump = items[i + 4];
-    const trampolineTarget = items[i + 5];
-    const secondLabel = items[i + 6];
-    const secondZero = items[i + 7];
-    const secondPause = items[i + 8];
-    const endLabel = items[i + 9];
-    if (
-      firstLabel?.kind === "label" &&
-      firstZero?.kind === "op" &&
-      firstZero.opcode === 0x00 &&
-      firstPause?.kind === "op" &&
-      firstPause.opcode === 0x50 &&
-      trampolineLabel?.kind === "label" &&
-      trampolineJump?.kind === "op" &&
-      trampolineJump.opcode === 0x51 &&
-      trampolineTarget?.kind === "address" &&
-      typeof trampolineTarget.target === "string" &&
-      secondLabel?.kind === "label" &&
-      secondZero?.kind === "op" &&
-      secondZero.opcode === 0x00 &&
-      secondPause?.kind === "op" &&
-      secondPause.opcode === 0x50 &&
-      endLabel?.kind === "label" &&
-      trampolineTarget.target === endLabel.name
-    ) {
-      rewrite.set(firstLabel.name, secondLabel.name);
-      rewrite.set(trampolineLabel.name, endLabel.name);
-      for (let index = i; index <= i + 5; index += 1) remove.add(index);
-      applied += 1;
-      i += 5;
-    }
-  }
-
-  if (applied === 0) return { items, applied };
-  const result: MachineItem[] = [];
-  for (let index = 0; index < items.length; index += 1) {
-    if (remove.has(index)) continue;
-    const item = items[index]!;
-    if (item.kind === "address" && typeof item.target === "string") {
-      result.push({ ...item, target: rewrite.get(item.target) ?? item.target });
-    } else {
-      result.push(item);
-    }
-  }
-  return { items: result, applied };
+  return result.items;
 }
 
 function layoutProgram(
@@ -4969,6 +4690,105 @@ const optimizerCapabilities: Array<{
     requires: [],
     activeWhen: ["step-vs-run-profile"],
     detail: "Uses mk61_exact emulator facts for Danilov-era differences between step mode, continuous run, exponent sign changes, Cx, В↑, and П->X as optimization hazards.",
+  },
+  {
+    id: "jump-to-next-threading",
+    category: "flow",
+    source: "documented",
+    unsafe: false,
+    requires: [],
+    activeWhen: ["jump-to-next-threading"],
+    detail: "Drops unconditional БП whose only target is the immediately following label after a layout pass collapses the trampoline.",
+  },
+  {
+    id: "duplicate-failure-tail-merge",
+    category: "flow",
+    source: "documented",
+    unsafe: false,
+    requires: [],
+    activeWhen: ["duplicate-failure-tail-merge"],
+    detail: "Coalesces structurally identical pause-0 failure tails into a single shared exit, removing the trampoline cells between them.",
+  },
+  {
+    id: "liveness-analysis",
+    category: "verification",
+    source: "documented",
+    unsafe: false,
+    requires: [],
+    activeWhen: ["liveness-analysis"],
+    detail: "Foundational data-flow pass: computes liveIn/liveOut per IR position so dead-store-elimination, register-coalesce and other passes can fire safely.",
+  },
+  {
+    id: "dead-store-elimination",
+    category: "stack",
+    source: "documented",
+    unsafe: false,
+    requires: [],
+    activeWhen: ["dead-store-elimination"],
+    detail: "Removes X->П r writes whose register is never read again before the next write to the same register, using whole-program liveness.",
+  },
+  {
+    id: "last-x-reuse",
+    category: "stack",
+    source: "documented",
+    unsafe: false,
+    requires: [],
+    activeWhen: ["last-x-reuse"],
+    detail: "Drops П->X r when the IR pass can prove X already holds the value just stored to r and no intervening op clobbers X (including С/П, jumps, ALU).",
+  },
+  {
+    id: "constant-folding",
+    category: "data",
+    source: "documented",
+    unsafe: false,
+    requires: [],
+    activeWhen: ["constant-folding"],
+    detail: "Eliminates identity arithmetic such as '0 +' and '1 *' from the IR after upstream passes simplify the expression tree.",
+  },
+  {
+    id: "cse-display-block",
+    category: "data",
+    source: "documented",
+    unsafe: false,
+    requires: [],
+    activeWhen: ["cse-display-block"],
+    detail: "Common subexpression elimination for pure recall/ALU blocks ending in В/О; redirects duplicates to a shared exit when profitable.",
+  },
+  {
+    id: "jump-thread",
+    category: "flow",
+    source: "documented",
+    unsafe: false,
+    requires: [],
+    activeWhen: ["jump-thread"],
+    detail: "Threads jump-to-jump chains through trampoline labels to their final target, freeing intermediate cells.",
+  },
+  {
+    id: "dead-code-after-halt",
+    category: "flow",
+    source: "documented",
+    unsafe: false,
+    requires: [],
+    activeWhen: ["dead-code-after-halt"],
+    detail: "CFG analysis from the entry point removes ops that are unreachable through any combination of fall-through and jump edges.",
+  },
+  {
+    id: "register-coalesce",
+    category: "stack",
+    source: "documented",
+    unsafe: false,
+    requires: [],
+    activeWhen: ["register-coalesce"],
+    detail: "Identifies non-overlapping live ranges of scratch registers that could be coalesced; pass reports opportunities and is the seat for future rewriting.",
+  },
+  {
+    id: "arithmetic-if-pass",
+    category: "flow",
+    source: "documented",
+    unsafe: false,
+    requires: [],
+    activeWhen: ["arithmetic-if-pass"],
+    detail: "IR-level seat for branchless arithmetic-if rewriting; current size-gated rewriting still happens at the AST select stage and feeds this pass via the candidate ledger.",
   },
 ];
 

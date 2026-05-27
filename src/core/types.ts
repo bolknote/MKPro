@@ -821,6 +821,161 @@ export interface MachineAddressRef {
   unsafeReason?: string;
 }
 
+export interface IrMeta {
+  mnemonic: string;
+  comment?: string;
+  sourceLine?: number;
+  unsafeReason?: string;
+  raw?: boolean;
+  roles?: readonly CellRole[];
+  tactic?: string;
+}
+
+export interface IrTargetMeta {
+  comment?: string;
+  sourceLine?: number;
+  unsafeReason?: string;
+  roles?: readonly CellRole[];
+}
+
+export type IrCondition = "==0" | "!=0" | "<0" | ">=0";
+
+export type IrLoopCounter = "L0" | "L1" | "L2" | "L3";
+
+export type IrStopSemantic = "halt" | "pause" | "show" | "ask" | "input" | "unknown";
+
+export interface IrLabel {
+  kind: "label";
+  name: string;
+}
+
+export interface IrStore {
+  kind: "store";
+  register: RegisterName;
+  opcode: number;
+  meta: IrMeta;
+}
+
+export interface IrRecall {
+  kind: "recall";
+  register: RegisterName;
+  opcode: number;
+  meta: IrMeta;
+}
+
+export interface IrIndirectStore {
+  kind: "indirect-store";
+  register: RegisterName;
+  opcode: number;
+  meta: IrMeta;
+}
+
+export interface IrIndirectRecall {
+  kind: "indirect-recall";
+  register: RegisterName;
+  opcode: number;
+  meta: IrMeta;
+}
+
+export interface IrJump {
+  kind: "jump";
+  target: string | number;
+  opcode: number;
+  meta: IrMeta;
+  targetMeta: IrTargetMeta;
+}
+
+export interface IrCondJump {
+  kind: "cjump";
+  condition: IrCondition;
+  target: string | number;
+  opcode: number;
+  meta: IrMeta;
+  targetMeta: IrTargetMeta;
+}
+
+export interface IrCall {
+  kind: "call";
+  target: string | number;
+  opcode: number;
+  meta: IrMeta;
+  targetMeta: IrTargetMeta;
+}
+
+export interface IrLoop {
+  kind: "loop";
+  counter: IrLoopCounter;
+  target: string | number;
+  opcode: number;
+  meta: IrMeta;
+  targetMeta: IrTargetMeta;
+}
+
+export interface IrIndirectJump {
+  kind: "indirect-jump";
+  register: RegisterName;
+  opcode: number;
+  meta: IrMeta;
+}
+
+export interface IrIndirectCall {
+  kind: "indirect-call";
+  register: RegisterName;
+  opcode: number;
+  meta: IrMeta;
+}
+
+export interface IrIndirectCondJump {
+  kind: "indirect-cjump";
+  condition: IrCondition;
+  register: RegisterName;
+  opcode: number;
+  meta: IrMeta;
+}
+
+export interface IrReturn {
+  kind: "return";
+  opcode: number;
+  meta: IrMeta;
+}
+
+export interface IrStop {
+  kind: "stop";
+  opcode: number;
+  semantic: IrStopSemantic;
+  meta: IrMeta;
+}
+
+export interface IrPlainOp {
+  kind: "plain";
+  opcode: number;
+  meta: IrMeta;
+}
+
+export interface IrOrphanAddress {
+  kind: "orphan-address";
+  target: string | number;
+  meta: IrTargetMeta;
+}
+
+export type IrOp =
+  | IrLabel
+  | IrStore
+  | IrRecall
+  | IrIndirectStore
+  | IrIndirectRecall
+  | IrJump
+  | IrCondJump
+  | IrCall
+  | IrLoop
+  | IrIndirectJump
+  | IrIndirectCall
+  | IrIndirectCondJump
+  | IrReturn
+  | IrStop
+  | IrPlainOp
+  | IrOrphanAddress;
+
 export interface ResolvedStep {
   address: number;
   opcode: number;

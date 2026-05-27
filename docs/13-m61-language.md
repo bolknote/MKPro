@@ -563,3 +563,61 @@ arithmetic from the tactic registry automatically when the IR proves the
 required layout, liveness, observability, and emulator-profile facts. Raw `5F`
 display transforms remain modeled as target-profile capabilities and are only
 legal when display semantics explicitly permit that raw display state.
+
+## Unified IR Pipeline
+
+Since the unified IR refactor, every program — both the simple V1/V2 path and
+the GameIntent layout backend — flows through a single typed intermediate
+representation (`IrOp[]`) before final cell resolution. The IR captures
+semantic kinds (`store`, `recall`, `jump`, `cjump`, `call`, `loop`, `stop`,
+`return`, `plain` …) rather than raw opcodes, so passes no longer guess
+behavior from opcode ranges.
+
+`lowerIrToMachine` and `raiseMachineToIr` round-trip `MachineItem[]`
+losslessly; `raiseLayoutToIr` and `lowerIrToLayout` do the same for
+`LayoutIrCell[]`. Both round trips are property-tested across the 16 examples,
+so the pipeline is byte-identical on every checkpoint.
+
+The pass driver in `src/core/passes/` runs the registered passes to a fixed
+point (with a bounded iteration cap) and aggregates their `applied` counts
+into the optimizer report. Passes that are not safe for already-laid-out
+layouts (anything that changes cell count or label addresses) are filtered
+out when the GameIntent backend invokes the driver, so the layout's pinned
+addresses, dark-entries, and overlays are preserved.
+
+The pipeline currently contains:
+
+- **store-recall-peephole** — drops adjacent `X->П r ; П->X r`.
+- **stack-current-X / dead-temp-store** — eliminates the temp store when the
+  current X value can be consumed directly by a following commutative op.
+- **dead-store-elimination** — whole-program liveness-driven DSE: removes
+  `X->П r` when liveOut at that point excludes `r`.
+- **last-x-reuse** — drops `П->X r` when the IR proves X already holds the
+  value last stored to `r` and no intervening op (С/П, jump, ALU, …) clobbers
+  X. С/П acts as a barrier because the user may overwrite X during pause.
+- **liveness-analysis** — foundational dataflow used by DSE, register
+  coalescing, and dead-code analysis.
+- **jump-to-next-threading** — drops `БП label` immediately before `label`.
+- **jump-thread** — chases jump-to-jump trampolines to the final target.
+- **dead-code-after-halt** — CFG reachability from the entry removes ops
+  that no fall-through or jump edge reaches.
+- **constant-folding** — strips `0 +` and `1 *` identities.
+- **cse-display-block** — coalesces structurally identical pure recall/ALU
+  blocks that terminate with `В/О`, redirecting duplicates through a single
+  shared exit.
+- **register-coalesce** — identifies non-overlapping live ranges as
+  coalescing candidates (reporting capability; the actual rewrite is staged
+  for follow-up).
+- **arithmetic-if-pass** — IR seat for branchless rewrites; current
+  cost-gated rewriting still runs at the AST select stage and reports via
+  the candidate ledger.
+- **duplicate-failure-tail-merge** — merges duplicate `show 0` failure
+  tails into a shared exit.
+- **return-zero-jump** — replaces `БП 01` with `В/О` only when the return
+  stack is provably empty.
+
+A round-trip emulator regression suite (`tests/emulator/regression.test.ts`)
+loads each of the 16 examples into the headless MK-61 emulator and runs a
+small set of scenarios (input cycles, terminal stops, expected PC). The suite
+runs at every phase of the IR pipeline as a regression gate, ensuring that
+optimizations never break observable program behavior.
