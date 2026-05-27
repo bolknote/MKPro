@@ -1,48 +1,37 @@
-target mk61
-budget 105 cells
 reference anvarov_fox_hunt_100
 
 // Based on Serge Anvarov's "Fox Hunt 100": find hidden foxes on a 10x10 board.
 // A probe returns how many foxes share a row, column, or diagonal with the cell.
 
 program FoxHunt100 {
-  input probe: number
-  input fox_count: number
-
   board field: 10x10 {
     // Decimal-pair coordinates keep the radio-orienteering feel of the original:
     // the player thinks in x.y cells, not in a flat index.
-    coordinate decimal_pair 0.0..9.9
   }
 
   fleet foxes on field {
     // A fleet can hold more than one hidden target per board relation; the
-    // "remaining_foxes" resource is the truth the display reports after hits.
-    ships remaining_foxes 1..100 = input.Y
-    generated random
-    cleared when fox found
-    terminal at 0 show all_found
+    // "remaining_foxes" is the truth the display reports after hits.
+    ships remaining_foxes 1..100 = stack.Y
   }
 
   state {
-    [displayed] bearing: counter 0..8 = 0
-    [temporary] cell: coord(x 0..9, y 0..9) optional
+    bearing: counter 0..8 = 0
+    cell: coord
   }
 
   screen report {
     show cell, bearing, remaining_foxes
-    style compact digits sign
   }
 
-  ending all_found {
-    show -8
+  rule all_found {
+    stop -8
   }
 
   turn {
-    read probe
-    cell = probe
+    read cell
 
-    if foxes has cell {
+    if foxes >= cell {
       found_fox
     }
     else {
@@ -53,14 +42,14 @@ program FoxHunt100 {
   rule found_fox {
     // A direct hit suppresses the bearing clue and instead reports progress as a
     // negative remaining count, matching the original game's feedback style.
-    foxes clear cell
-    remaining_foxes -= 1
+    foxes -= cell
+    remaining_foxes--
 
     if remaining_foxes <= 0 {
-      win all_found
+      all_found
     }
     else {
-      bearing = 0 - remaining_foxes
+      bearing = -remaining_foxes
       show report
     }
   }
@@ -68,7 +57,7 @@ program FoxHunt100 {
   rule scan_from_cell {
     // The clue is not distance. It is the number of foxes aligned with this cell
     // by row, column, or either diagonal.
-    bearing = count lines from foxes at cell
+    bearing = line_count(foxes, cell)
     show report
   }
 }

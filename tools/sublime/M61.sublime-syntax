@@ -14,8 +14,6 @@ variables:
 contexts:
   main:
     - include: comments
-    - include: illegal-low-level-hints
-    - include: hints
     - include: raw-rows
     - include: section-declarations
     - include: top-level-keywords
@@ -35,50 +33,28 @@ contexts:
     - match: '#.*$'
       scope: comment.line.number-sign.m61
 
-  hints:
-    - match: '(\[)(\s*)(hot|rare|cold|displayed|hidden|temporary|persistent|wrap|saturate|trap|unordered|approx|exact|manual_entry)(?=[,\]\s])'
-      captures:
-        1: punctuation.section.brackets.begin.m61
-        3: storage.modifier.semantic-hint.m61
-      push: hint-tail
-
-  hint-tail:
-    - meta_scope: meta.semantic-hints.m61
-    - match: '\]'
-      scope: punctuation.section.brackets.end.m61
-      pop: true
-    - match: ','
-      scope: punctuation.separator.sequence.m61
-    - match: '\b(hot|rare|cold|displayed|hidden|temporary|persistent|wrap|saturate|trap|unordered|approx|exact|manual_entry)\b'
-      scope: storage.modifier.semantic-hint.m61
-    - include: illegal-low-level-hints
-
-  illegal-low-level-hints:
-    - match: '\b(use_dark_entries|use_X2|use_x2|put_in_R0|put_in_r0|overlay_here|use_overlay|use_display_bytes|use_error_stop|use_5f)\b'
-      scope: invalid.illegal.low-level-hint.m61
-
   top-level-keywords:
-    - match: '^\s*(target|budget|optimize|reference)\b'
+    - match: '^\s*(reference)\b'
       scope: keyword.control.toplevel.m61
-    - match: '\b(mk61|mk61_exact|steps|cells|hard|size|manual|loader|hex)\b'
+    - match: '\b(mk61|manual|loader|hex)\b'
       scope: constant.language.m61
 
   section-declarations:
-    - match: '^\s*(program|state|screen|ending|turn|rule|board|fleet|world|encounters)\b'
+    - match: '^\s*(program|state|screen|turn|rule|board|fleet|world|encounters)\b'
       scope: keyword.declaration.block.m61
     - match: '\b(exact|inline|at)\b'
       scope: storage.modifier.block.m61
 
   control-keywords:
-    - match: '\b(input|show|style|read|match|otherwise|if|else|require|exists|stop|as|trap|let|reward|by|move|remember|end|win|lose|count|challenge|success|failure)\b'
+    - match: '\b(show|read|match|otherwise|if|else|stop|as|move|challenge|success|failure)\b'
       scope: keyword.control.m61
-    - match: '\b(and|or|not|has|clear|set|from|to|in|around|north|south|east|west|up|down)\b'
+    - match: '\b(and|or|not|north|south|east|west|up|down)\b'
       scope: keyword.operator.word.m61
 
   domain-keywords:
-    - match: '\b(digit|number|flag|counter|coord|bitset|enum|packed|addr|resource|optional|generated|random|floor|floors|column|columns|row|rows|line|lines|neighbor|neighbors|cell|position|board|fleet|ships|coordinate|terminal|cleared|when|command|cost|reward|style|display|start|seed|symbol|true|false)\b'
+    - match: '\b(flag|counter|coord|bitset|packed|position|board|fleet|ships|encoding|true|false)\b'
       scope: storage.type.domain.m61
-    - match: '\b(calculator_random|random_seed|input\.X|input\.Y|direction|memory_code|cell_at|line_count|neighbor_count|random_cell|nonzero)\b'
+    - match: '\b(calculator_random|random_seed|stack\.X|stack\.Y|random|direction|memory_code|cell_at|line_count|neighbor_count|random_cell|nonzero)\b'
       scope: support.function.domain.m61
 
   storage-keywords:
@@ -120,7 +96,7 @@ contexts:
       scope: constant.numeric.m61
 
   operators:
-    - match: '=>|==|!=|<=|>=|\+=|-=|[-+*/=<>]'
+    - match: '=>|==|!=|<=|>=|\+\+|--|\+=|-=|[-+*/=<>]'
       scope: keyword.operator.m61
     - match: '\.\.'
       scope: keyword.operator.range.m61

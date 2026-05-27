@@ -1,67 +1,49 @@
-target mk61
-budget 105 cells
 reference anvarov_labyrinth777
 
 // Based on Serge Anvarov's "Labyrinth777": a 7x7x7 maze where the player
 // searches for a personal jumper while managing suit energy.
 
 program Labyrinth777 {
-  input action: digit
-
   state {
     // Labyrinth777 is about orientation in volume: floor, row, and room all
     // matter, but the calculator can only afford a compact row-like display.
-    [displayed] pos: coord(floor 1..7, row 1..7, room 1..7) = 444
-    [displayed] row_view: packed = 0
+    pos: coord = 444
+    row_view: packed = 0
 
-    [displayed] energy: resource 0..9 = 9 {
-      terminal at 0 show drained
-    }
+    energy: counter 0..9 = 9
 
     // Separate counters make boundary rules readable. The packed coordinate is
     // for the screen and masks; these fields express player intent.
-    [persistent] floor: counter 1..7 = 4
-    [persistent] row: counter 1..7 = 4
-    [persistent] room: counter 1..7 = 4
+    floor: counter 1..7 = 4
+    row: counter 1..7 = 4
+    room: counter 1..7 = 4
 
-    [persistent] jumper: bitset {
-      // The personal jumper is hidden until found; clearing it records that the
-      // search has converged, not that a visible item was picked up.
-      generated random
-      cleared when found
-    }
+    // The personal jumper is hidden until found; clearing it records that the
+    // search has converged, not that a visible item was picked up.
+    jumper: bitset = random()
 
-    [temporary] tile: enum = 0
+    tile: counter 0..9 = 0
   }
 
-  world maze: vertical_maze {
+  world maze {
     // The maze is seven floors of seven-room rows. Local jumpers are room
     // effects, while ordinary movement stays inside the current row/floor.
     position pos {
-      floors 1..7
-      rooms 1..7
-      display row_scan
-      start 444
+      encoding row_scan
     }
 
-    generated random
-    player decimal_point
-    door symbol 0 costs energy 0
-    wall symbol 8 blocks edge costs energy 0
-    vertical wrap 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 1
   }
 
   screen maze {
     show pos, row_view, energy
-    style compact digits letters sign
   }
 
-  ending escaped {
-    show 7777777
+  rule escaped {
+    stop 7777777
   }
 
-  ending drained {
-    show -777
+  rule drained {
+    stop -777
   }
 
   turn {
@@ -80,71 +62,91 @@ program Labyrinth777 {
 
   rule move_left {
     apply_exit_cost
-    require energy > 0 else lose drained
 
-    if room > 1 {
-      room -= 1
-      move pos west
+    if energy > 0 {
+      if room > 1 {
+        room--
+        move pos west
+      }
+
+      inspect_room
     }
-
-    inspect_room
+    else {
+      drained
+    }
   }
 
   rule move_right {
     apply_exit_cost
-    require energy > 0 else lose drained
 
-    if room < 7 {
-      room += 1
-      move pos east
+    if energy > 0 {
+      if room < 7 {
+        room++
+        move pos east
+      }
+
+      inspect_room
     }
-
-    inspect_room
+    else {
+      drained
+    }
   }
 
   rule move_forward {
     apply_exit_cost
-    require energy > 0 else lose drained
 
-    if row < 7 {
-      row += 1
-      move pos north
+    if energy > 0 {
+      if row < 7 {
+        row++
+        move pos north
+      }
+
+      inspect_room
     }
-
-    inspect_room
+    else {
+      drained
+    }
   }
 
   rule move_back {
     apply_exit_cost
-    require energy > 0 else lose drained
 
-    if row > 1 {
-      row -= 1
-      move pos south
+    if energy > 0 {
+      if row > 1 {
+        row--
+        move pos south
+      }
+
+      inspect_room
     }
-
-    inspect_room
+    else {
+      drained
+    }
   }
 
   rule use_local_jumper {
     // Key 5 is intentionally contextual: the same command climbs, drops, wins,
     // or merely inspects depending on the room's generated tile.
     apply_exit_cost
-    require energy > 0 else lose drained
 
-    tile = cell_at(pos)
+    if energy > 0 {
+      tile = cell_at(pos)
 
-    match tile {
-      2 => climb
-      3 => descend
-      7 => found_jumper
-      otherwise => inspect_room
+      match tile {
+        2 => climb
+        3 => descend
+        7 => found_jumper
+        otherwise => inspect_room
+      }
+    }
+    else {
+      drained
     }
   }
 
   rule climb {
     if floor < 7 {
-      floor += 1
+      floor++
       move pos up
     }
 
@@ -153,7 +155,7 @@ program Labyrinth777 {
 
   rule descend {
     if floor > 1 {
-      floor -= 1
+      floor--
       move pos down
     }
 
@@ -174,7 +176,7 @@ program Labyrinth777 {
   }
 
   rule clear_exit {
-    energy += 1
+    energy++
   }
 
   rule pool_exit {
@@ -201,7 +203,7 @@ program Labyrinth777 {
   }
 
   rule found_jumper {
-    jumper clear pos
-    win escaped
+    jumper -= pos
+    escaped
   }
 }

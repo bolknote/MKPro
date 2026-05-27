@@ -57,7 +57,7 @@ export function formatExplain(result: CompileResult): string {
     `Steps: ${result.report.steps}/${result.report.budget}`,
     `Delivery: ${result.report.delivery}`,
     `Optimizer: exact maximum`,
-    `Target profile: ${result.report.targetProfile}`,
+    `Machine: ${result.report.machine}`,
     `Optimizer rules: automatic=${result.report.optimizer.automatic ? "yes" : "no"}; active=${result.report.optimizer.active}, considered=${result.report.optimizer.considered}, candidates=${result.report.optimizer.candidate}, planned=${result.report.optimizer.planned}`,
     `Budget: official=${result.report.budgetReport.officialSteps}, extra=${result.report.budgetReport.extraCells}, physical=${result.report.budgetReport.totalPhysicalCells}`,
     `Intent IR: lowered=${result.report.ir.lowered ? "yes" : "no"}, v2=${result.report.ir.v2 ? "yes" : "no"}; intent=${result.report.ir.intentNodes}, effects=${result.report.ir.effectOps}, cells=${result.report.ir.layoutCells}`,

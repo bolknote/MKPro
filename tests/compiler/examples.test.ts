@@ -19,14 +19,14 @@ describe("examples", () => {
     const hex = formatHex(result);
     const explain = formatExplain(result);
 
-    expect(listing).toContain("input digit x");
-    expect(hex).toBe("00: 50 40 50 60 10 40 50 60\n08: 50 51 00");
+    expect(listing).toContain("read x");
+    expect(hex).toBe("00: 50 41 50 61 10 50 51 00");
     expect(explain).toContain("Intent IR: lowered=yes, v2=yes");
   });
 
   it("compiles tiny-game.m61 under budget", () => {
     const result = compileM61(loadExample("tiny-game"));
-    expect(formatListing(result)).toContain("input digit key");
+    expect(formatListing(result)).toContain("read key");
     expect(formatHex(result).length).toBeGreaterThan(0);
     expect(result.report.steps).toBeLessThanOrEqual(105);
   });

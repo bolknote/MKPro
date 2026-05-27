@@ -10,7 +10,7 @@ import {
 import { lowerIrToLayout, raiseLayoutToIr } from "./ir.ts";
 import { normalizeV2ExpressionText, parseExpression, parseProgram } from "./parser.ts";
 import { runIrPasses } from "./passes/index.ts";
-import { targetProfileFor, targetSupports, type TargetProfile } from "./targetProfile.ts";
+import { MK61_PROFILE, machineSupports, type MachineProfile } from "./machineProfile.ts";
 import type {
   AppliedOptimization,
   BudgetReport,
@@ -21,7 +21,6 @@ import type {
   CompileReport,
   CompileResult,
   ConditionAst,
-  DeliveryMode,
   Diagnostic,
   ExpressionAst,
   CandidateIr,
@@ -117,16 +116,13 @@ export function compileM61(
 ): CompileResult {
   const ast = parseProgram(source);
   const opts: CompileOptions = { ...DEFAULT_OPTIONS, ...options };
-  const targetProfile = targetProfileFor(ast.machine);
-  if (options.budget === undefined && ast.budget !== undefined) {
-    opts.budget = ast.budget;
-  }
+  const machineProfile = MK61_PROFILE;
   const diagnostics: Diagnostic[] = [];
   const optimizations: AppliedOptimization[] = [];
   const warnings: string[] = [];
   const candidates: CandidateReport[] = [];
 
-  const gameIntentProgram = tryCompileGameIntentProgram(ast, opts, targetProfile);
+  const gameIntentProgram = tryCompileGameIntentProgram(ast, opts, machineProfile);
   if (gameIntentProgram) return gameIntentProgram;
 
   validateSemanticDomains(ast, diagnostics);
@@ -146,6 +142,7 @@ export function compileM61(
     ast,
     allocation,
     opts,
+    machineProfile,
     diagnostics,
     optimizations,
     warnings,
@@ -154,7 +151,7 @@ export function compileM61(
 
   context.compileProgram();
   const optimized = optimizeItems(context.items, opts, optimizations);
-  const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, targetProfile);
+  const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, machineProfile);
   const largestBlocks = summarizeBlocks(optimized);
 
   if (steps.length > opts.budget) {
@@ -172,21 +169,21 @@ export function compileM61(
   const report: CompileReport = {
     steps: steps.length,
     budget: opts.budget,
-    targetProfile: targetProfile.id,
+    machine: machineProfile.id,
     registers: visiblePublicRegisters(allocation.registers),
     labels,
     optimizations,
     warnings,
     delivery: opts.delivery,
-    optimizer: buildOptimizerReport(ast, opts, optimizations, candidates, cellRoles, targetProfile),
+    optimizer: buildOptimizerReport(ast, opts, optimizations, candidates, cellRoles, machineProfile),
     preloads: buildPreloadReport(ast, allocation),
     ir: buildIrReport(ast, optimized, steps.length),
     cellRoles,
     candidates,
     budgetReport: buildBudgetReport(steps.length, opts.budget, largestBlocks, 0),
-    machineFeaturesUsed: buildMachineFeaturesUsed(targetProfile, optimizations, cellRoles, candidates),
+    machineFeaturesUsed: buildMachineFeaturesUsed(machineProfile, optimizations, cellRoles, candidates),
     proofs: buildProofReport(ast, optimized, cellRoles, opts, optimizations),
-    emulatorFacts: targetProfile.emulatorFacts,
+    emulatorFacts: machineProfile.emulatorFacts,
     rejectedCandidates: candidates
       .filter((candidate) => !candidate.selected)
       .map((candidate) => ({
@@ -460,7 +457,7 @@ function roundTripLayoutThroughIr(layout: LayoutIrCell[]): LayoutIrCell[] {
 function tryCompileGameIntentProgram(
   ast: ProgramAst,
   options: CompileOptions,
-  targetProfile: TargetProfile,
+  machineProfile: MachineProfile,
 ): CompileResult | undefined {
   const intent = buildGameIntent(ast);
   if (!intent) return undefined;
@@ -505,21 +502,21 @@ function tryCompileGameIntentProgram(
     ...buildGameBackendCandidateReports(backendCandidates, selectedBackend),
     ...buildGameIntentCandidates(candidateIr),
   ];
-  const cellRoles = buildGameIntentCellRoles(layoutIr, targetProfile);
+  const cellRoles = buildGameIntentCellRoles(layoutIr, machineProfile);
   const warnings = selectedBackend.variant === "universal_spatial_resource"
-    ? ["GameIntent selected the universal spatial/resource tactic pipeline; reference metadata did not affect code generation."]
+    ? ["GameIntent selected the universal spatial/counter tactic pipeline; reference metadata did not affect code generation."]
     : [`GameIntent selected ${selectedBackend.variant} semantic microkernel; reference metadata did not affect code generation.`];
   if (referenceResult?.warning !== undefined) warnings.push(referenceResult.warning);
   const report: CompileReport = {
     steps: steps.length,
     budget: options.budget,
-    targetProfile: targetProfile.id,
+    machine: machineProfile.id,
     registers: selectedBackend.registers,
     labels: selectedBackend.labels,
     optimizations,
     warnings,
     delivery: options.delivery,
-    optimizer: buildOptimizerReport(ast, options, optimizations, candidates, cellRoles, targetProfile),
+    optimizer: buildOptimizerReport(ast, options, optimizations, candidates, cellRoles, machineProfile),
     preloads: selectedBackend.preloads,
     ...(referenceResult?.report === undefined ? {} : { reference: referenceResult.report }),
     ir: {
@@ -532,9 +529,9 @@ function tryCompileGameIntentProgram(
     cellRoles,
     candidates,
     budgetReport: buildBudgetReport(steps.length, options.budget, selectedBackend.hotBlocks.map((block) => `${block.name}=${block.estimatedCells}`), 0),
-    machineFeaturesUsed: buildMachineFeaturesUsed(targetProfile, optimizations, cellRoles, candidates),
+    machineFeaturesUsed: buildMachineFeaturesUsed(machineProfile, optimizations, cellRoles, candidates),
     proofs: buildGameIntentProofs(intent, selectedBackend, referenceResult?.report),
-    emulatorFacts: targetProfile.emulatorFacts,
+    emulatorFacts: machineProfile.emulatorFacts,
     rejectedCandidates: candidates
       .filter((candidate) => !candidate.selected)
       .map((candidate) => ({
@@ -580,7 +577,7 @@ function buildUniversalBackendCandidate(intent: GameIntent, tacticCandidates: Ca
       { name: "setup+mask-generation", estimatedCells: 29 },
       { name: "collection+event", estimatedCells: 29 },
     ],
-    reason: "fallback covers the full spatial/resource feature set",
+    reason: "fallback covers the full spatial/counter feature set",
   };
 }
 
@@ -623,15 +620,15 @@ function requiredFeaturesForShape(shape: GameIntentShape): GameIntentFeature[] |
 function coveredFeaturesForShape(shape: Exclude<GameIntentShape, "universal_spatial_resource">): GameIntentFeature[] {
   switch (shape) {
     case "board_line_count":
-      return ["bitset", "board", "endings", "fleet", "fleet_probe", "fleet_clear", "line_count", "resources"];
+      return ["bitset", "board", "fleet", "fleet_probe", "fleet_clear", "line_count", "resources"];
     case "board_neighbor_count":
-      return ["bitset", "board", "endings", "neighbor_count", "resources"];
+      return ["bitset", "board", "neighbor_count", "resources"];
     case "board_fleet_duel":
-      return ["bitset", "board", "endings", "fleet", "fleet_probe", "fleet_clear", "hit_report", "random_board_cell", "resources"];
+      return ["bitset", "board", "fleet", "fleet_probe", "fleet_clear", "hit_report", "random_board_cell", "resources"];
     case "world_table":
-      return ["bitset", "cell_at", "endings", "movement", "resources"];
+      return ["bitset", "cell_at", "movement", "resources"];
     case "lane_resource":
-      return ["endings", "movement", "random_cell", "resources"];
+      return ["movement", "random_cell", "resources"];
   }
 }
 
@@ -804,7 +801,6 @@ function buildGameIntent(ast: ProgramAst): GameIntent | undefined {
   const hasResourceState =
     domainKinds.has("resource") ||
     v2Types.has("counter") ||
-    v2Types.has("resource") ||
     ast.states.some((state) => state.fields.some((field) => gameStateRole(field.type) === "resource"));
   const hasGameFlow =
     domainKinds.has("event") ||
@@ -820,7 +816,7 @@ function buildGameIntent(ast: ProgramAst): GameIntent | undefined {
     name: ast.v2?.name ?? ast.reference ?? "game",
     shape: classifyGameIntentShape(features),
     features,
-    inputs: ast.v2?.inputs.map((input) => input.name) ?? [],
+    inputs: collectV2InputNames(ast.v2),
     stateRoles: collectGameStateRoles(ast),
     domains: ast.domains.map((domain) => {
       const domainIntent: GameIntent["domains"][number] = {
@@ -845,7 +841,7 @@ function collectGameIntentFeatures(ast: ProgramAst, queries: GameQueryIntent[]):
   const features = new Set<GameIntentFeature>();
   const v2 = ast.v2;
   const fleetNames = new Set(v2?.fleets.map((fleet) => fleet.name) ?? []);
-  const inputNames = new Set(v2?.inputs.map((input) => input.name) ?? []);
+  const inputNames = new Set(collectV2InputNames(v2));
   const boardCellCounts = new Set(v2?.boards.map((board) => board.width * board.height) ?? []);
 
   if ((v2?.boards.length ?? 0) > 0) features.add("board");
@@ -855,11 +851,10 @@ function collectGameIntentFeatures(ast: ProgramAst, queries: GameQueryIntent[]):
     features.add("resources");
   }
   if ((v2?.worlds.length ?? 0) > 0) features.add("movement");
-  if ((v2?.endings.length ?? 0) > 0) features.add("endings");
 
   for (const field of v2?.state ?? []) {
     if (field.type === "bitset") features.add("bitset");
-    if (field.type === "counter" || field.type === "resource" || field.type === "score") features.add("resources");
+    if (field.type === "counter") features.add("resources");
   }
   for (const state of ast.states) {
     for (const field of state.fields) {
@@ -871,7 +866,11 @@ function collectGameIntentFeatures(ast: ProgramAst, queries: GameQueryIntent[]):
   }
 
   const addPredicateFeatures = (predicate: V2PredicateAst): void => {
-    if (predicate.kind === "v2_collection_has" && fleetNames.has(predicate.collection)) {
+    if (
+      predicate.kind === "v2_compare" &&
+      predicate.op === ">=" &&
+      fleetNames.has(predicate.left.trim())
+    ) {
       features.add("fleet_probe");
     }
     if (isNegativeInputReportPredicate(predicate, inputNames)) {
@@ -885,17 +884,13 @@ function collectGameIntentFeatures(ast: ProgramAst, queries: GameQueryIntent[]):
       if (statement.kind === "v2_assign" && isRandomBoardCellExpression(statement.expr, boardCellCounts)) {
         features.add("random_board_cell");
       }
-      if (statement.kind === "v2_collection" && statement.op === "clear" && fleetNames.has(statement.collection)) {
+      if (statement.kind === "v2_update" && statement.op === "-=" && fleetNames.has(statement.target)) {
         features.add("fleet_clear");
       }
       if (statement.kind === "v2_if") {
         addPredicateFeatures(statement.predicate);
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
-      }
-      if (statement.kind === "v2_require") {
-        addPredicateFeatures(statement.predicate);
-        if (statement.elseAction) visit([statement.elseAction]);
       }
       if (statement.kind === "v2_challenge") {
         visit(statement.successBody);
@@ -969,9 +964,6 @@ function collectGameQueryIntents(v2: V2ProgramAst | undefined): GameQueryIntent[
   const visit = (statements: V2StatementAst[]): void => {
     for (const statement of statements) {
       switch (statement.kind) {
-        case "v2_let":
-          addExpression(statement.expr, statement.line, statement.name);
-          break;
         case "v2_assign":
           addExpression(statement.expr, statement.line, statement.target);
           break;
@@ -986,10 +978,6 @@ function collectGameQueryIntents(v2: V2ProgramAst | undefined): GameQueryIntent[
           visit(statement.thenBody);
           if (statement.elseBody) visit(statement.elseBody);
           break;
-        case "v2_require":
-          addExpression(formatV2Predicate(statement.predicate), statement.line);
-          if (statement.elseAction) visit([statement.elseAction]);
-          break;
         case "v2_challenge":
           addExpression(statement.expr, statement.line, statement.challengeTarget);
           visit(statement.successBody);
@@ -1000,20 +988,12 @@ function collectGameQueryIntents(v2: V2ProgramAst | undefined): GameQueryIntent[
           for (const matchCase of statement.cases) visit([matchCase.action]);
           if (statement.otherwise) visit([statement.otherwise]);
           break;
-        case "v2_collection":
-          addExpression(statement.item, statement.line, statement.collection);
-          break;
-        case "v2_reward":
-          addExpression(statement.expr, statement.line);
-          break;
         case "v2_invoke":
           for (const arg of statement.args) addExpression(arg, statement.line);
           break;
         case "v2_show":
         case "v2_read":
         case "v2_move":
-        case "v2_end":
-        case "v2_raw":
           break;
       }
     }
@@ -1081,15 +1061,17 @@ function expressionToIntentText(expr: ExpressionAst): string {
 
 function collectGameStateRoles(ast: ProgramAst): GameIntent["stateRoles"] {
   const roles: GameIntent["stateRoles"] = [];
-  for (const input of ast.v2?.inputs ?? []) {
-    roles.push({ name: input.name, role: "input", displayed: false, persistent: false });
+  const displayedV2State = new Set((ast.v2?.screens ?? []).flatMap((screen) => screen.sources));
+  const declaredV2State = new Set((ast.v2?.state ?? []).map((field) => field.name));
+  for (const input of collectV2InputNames(ast.v2)) {
+    if (!declaredV2State.has(input)) roles.push({ name: input, role: "input", displayed: false, persistent: false });
   }
   for (const field of ast.v2?.state ?? []) {
     roles.push({
       name: field.name,
       role: gameStateRole(field.type),
-      displayed: field.hints.includes("displayed"),
-      persistent: field.hints.includes("persistent"),
+      displayed: displayedV2State.has(field.name),
+      persistent: true,
     });
   }
   for (const state of ast.states) {
@@ -1105,10 +1087,38 @@ function collectGameStateRoles(ast: ProgramAst): GameIntent["stateRoles"] {
   return roles;
 }
 
+function collectV2InputNames(v2: V2ProgramAst | undefined): string[] {
+  const names = new Set<string>();
+  const visit = (statements: V2StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "v2_read") names.add(statement.target);
+      if (statement.kind === "v2_challenge") {
+        names.add(statement.answerInput);
+        visit(statement.successBody);
+        if (statement.failureBody) visit(statement.failureBody);
+      }
+      if (statement.kind === "v2_if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "v2_match") {
+        for (const matchCase of statement.cases) visit([matchCase.action]);
+        if (statement.otherwise) visit([statement.otherwise]);
+      }
+    }
+  };
+  if (v2?.turn !== undefined) visit(v2.turn.body);
+  for (const rule of v2?.rules ?? []) visit(rule.body);
+  for (const table of v2?.encounters ?? []) {
+    for (const encounterCase of table.cases) visit(encounterCase.body);
+  }
+  return [...names];
+}
+
 function gameStateRole(type: string): GameIntent["stateRoles"][number]["role"] {
   if (type === "coord" || type === "packed") return "coord";
   if (type === "bitset") return "bitset";
-  if (type === "counter" || type === "range" || type === "resource" || type === "score") return "resource";
+  if (type === "counter" || type === "range") return "resource";
   if (type === "flag") return "flag";
   return "unknown";
 }
@@ -1246,7 +1256,7 @@ function buildGameIntentOptimizations(
       shapeSpecific.push(
         selected(
           "fleet-duel-lowering",
-          "Lowered random board shot, negative hit report, fleet probe/clear, ship counters, and two terminal endings as one duel microkernel.",
+          "Lowered random board shot, negative hit report, fleet probe/clear, ship counters, and terminal stops as one duel microkernel.",
         ),
       );
     }
@@ -1348,7 +1358,7 @@ function buildGameIntentProofs(
         id: "fleet-duel-lowering-covered",
         status: "proved",
         detail:
-          "Board-fleet duel microkernel covers random calculator shots, negative hit reports, enemy fleet probe/clear, ship counters, and both terminal endings.",
+          "Board-fleet duel microkernel covers random calculator shots, negative hit reports, enemy fleet probe/clear, ship counters, and terminal stops.",
       });
     }
     if (reference !== undefined) {
@@ -1364,7 +1374,7 @@ function buildGameIntentProofs(
     {
       id: "full-game-semantics",
       status: "assumed",
-      detail: `Universal fallback lowers ${intent.name} with the previous spatial/resource tactic template; no shape verifier is attached.`,
+      detail: `Universal fallback lowers ${intent.name} with the previous spatial/counter tactic template; no shape verifier is attached.`,
     },
     {
       id: "return-stack-empty",
@@ -1402,7 +1412,7 @@ function buildGameIntentProofs(
   return proofs;
 }
 
-function buildGameIntentCellRoles(layout: LayoutIrCell[], targetProfile: TargetProfile): CellRoleReport[] {
+function buildGameIntentCellRoles(layout: LayoutIrCell[], machineProfile: MachineProfile): CellRoleReport[] {
   const addressOperandCells = new Set<number>();
   for (let address = 0; address < layout.length - 1; address += 1) {
     if (getOpcode(layout[address]!.opcode).takesAddress) addressOperandCells.add(address + 1);
@@ -1413,19 +1423,19 @@ function buildGameIntentCellRoles(layout: LayoutIrCell[], targetProfile: TargetP
     const { address, opcode: code } = cell;
     const roles: CellRole[] = addressOperandCells.has(address) ? ["address"] : ["exec"];
     const notes: string[] = [];
-    if (addressOperandCells.has(address) && targetSupports(targetProfile, "address-constants")) {
+    if (addressOperandCells.has(address) && machineSupports(machineProfile, "address-constants")) {
       roles.push("constant");
       notes.push("address operand reused as compact data");
     }
-    if (addressOperandCells.has(address) && targetSupports(targetProfile, "code-data-overlay")) {
+    if (addressOperandCells.has(address) && machineSupports(machineProfile, "code-data-overlay")) {
       roles.push("overlay");
       notes.push("address/data overlay selected");
     }
-    if (darkEntryCells.has(address) && targetSupports(targetProfile, "dark-entries")) {
+    if (darkEntryCells.has(address) && machineSupports(machineProfile, "dark-entries")) {
       roles.push("dark-entry");
       notes.push("formal/dark entry participates in cyclic shared-tail layout");
     }
-    if (displayByteCells.has(address) && targetSupports(targetProfile, "display-bytes")) {
+    if (displayByteCells.has(address) && machineSupports(machineProfile, "display-bytes")) {
       roles.push("display-byte");
       notes.push("X2/display-byte boundary");
     }
@@ -1498,12 +1508,6 @@ function collectUnsupportedV2Statements(ast: NonNullable<ProgramAst["v2"]>): Arr
   const unsupported: Array<{ text: string; line: number }> = [];
   const visit = (statements: V2StatementAst[]): void => {
     for (const statement of statements) {
-      if (statement.kind === "v2_raw") {
-        unsupported.push({ text: statement.text, line: statement.line });
-      }
-      if (statement.kind === "v2_let" && !isSimpleCompilerExpression(statement.expr)) {
-        unsupported.push({ text: `let ${statement.name} = ${statement.expr}`, line: statement.line });
-      }
       if (statement.kind === "v2_assign" && !isSimpleCompilerExpression(statement.expr)) {
         unsupported.push({ text: `${statement.target} = ${statement.expr}`, line: statement.line });
       }
@@ -1517,31 +1521,12 @@ function collectUnsupportedV2Statements(ast: NonNullable<ProgramAst["v2"]>): Arr
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
-      if (statement.kind === "v2_require") {
-        if (!isLowerableV2Predicate(statement.predicate)) {
-          unsupported.push({ text: `require ${formatV2Predicate(statement.predicate)}`, line: statement.line });
-        }
-        if (statement.elseAction) visit([statement.elseAction]);
-      }
       if (statement.kind === "v2_challenge") {
         if (!isSimpleCompilerExpression(statement.expr)) {
           unsupported.push({ text: `challenge ${statement.expr}`, line: statement.line });
         }
         visit(statement.successBody);
         if (statement.failureBody) visit(statement.failureBody);
-      }
-      if (statement.kind === "v2_move" && statement.expr !== undefined && !isSimpleCompilerExpression(statement.expr)) {
-        unsupported.push({ text: `move ${statement.target} by ${statement.expr}`, line: statement.line });
-      }
-      if (statement.kind === "v2_collection") {
-        if (!isSimpleCompilerExpression(statement.item)) {
-          unsupported.push({ text: `${statement.collection} ${statement.op} ${statement.item}`, line: statement.line });
-        }
-      }
-      if (statement.kind === "v2_reward") {
-        if (!isSimpleCompilerExpression(statement.expr)) {
-          unsupported.push({ text: `reward by ${statement.expr}`, line: statement.line });
-        }
       }
       if (statement.kind === "v2_match") {
         for (const matchCase of statement.cases) visit([matchCase.action]);
@@ -1558,25 +1543,11 @@ function isLowerableV2Predicate(predicate: V2PredicateAst): boolean {
   if (predicate.kind === "v2_compare") {
     return isSimpleCompilerExpression(predicate.left) && isSimpleCompilerExpression(predicate.right);
   }
-  if (predicate.kind === "v2_collection_has") {
-    return isSimpleCompilerExpression(predicate.item);
-  }
-  return predicate.kind === "v2_exists";
+  return false;
 }
 
 function formatV2Predicate(predicate: V2PredicateAst): string {
-  switch (predicate.kind) {
-    case "v2_compare":
-      return `${predicate.left} ${predicate.op} ${predicate.right}`;
-    case "v2_exists":
-      return `${predicate.target} exists`;
-    case "v2_collection_has":
-      return `${predicate.collection} has ${predicate.item}`;
-    case "v2_raw_predicate":
-      return predicate.text;
-    default:
-      return "unknown";
-  }
+  return `${predicate.left} ${predicate.op} ${predicate.right}`;
 }
 
 function isSimpleCompilerExpression(text: string): boolean {
@@ -1603,6 +1574,7 @@ class EmitContext {
   private readonly ast: ProgramAst;
   private readonly allocation: RegisterAllocation;
   private readonly options: CompileOptions;
+  private readonly machineProfile: MachineProfile;
   private readonly diagnostics: Diagnostic[];
   private readonly optimizations: AppliedOptimization[];
   private readonly warnings: string[];
@@ -1614,6 +1586,7 @@ class EmitContext {
     ast: ProgramAst,
     allocation: RegisterAllocation,
     options: CompileOptions,
+    machineProfile: MachineProfile,
     diagnostics: Diagnostic[],
     optimizations: AppliedOptimization[],
     warnings: string[],
@@ -1622,6 +1595,7 @@ class EmitContext {
     this.ast = ast;
     this.allocation = allocation;
     this.options = options;
+    this.machineProfile = machineProfile;
     this.diagnostics = diagnostics;
     this.optimizations = optimizations;
     this.warnings = warnings;
@@ -1640,7 +1614,7 @@ class EmitContext {
     this.compileInitialState();
     this.compileInitialStores();
     this.compileStatements(main.body);
-    if (!(this.ast.v2 && statementsTerminate(main.body))) {
+    if (!(this.ast.v2 && this.statementsTerminate(main.body))) {
       this.emitOp(0x50, "С/П", "implicit final stop");
     }
 
@@ -1648,14 +1622,16 @@ class EmitContext {
       if (this.inlineProcNames.has(proc.name)) continue;
       this.emitLabel(proc.name);
       this.compileStatements(proc.body);
-      this.emitOp(0x52, "В/О", "implicit return from proc");
+      if (!this.statementsTerminate(proc.body)) {
+        this.emitOp(0x52, "В/О", "implicit return from proc");
+      }
     }
 
     for (const block of this.ast.blocks) {
       if (block.mode === "inline") continue;
       this.emitLabel(block.name);
       this.compileStatements(block.body);
-      if (!statementsTerminate(block.body)) {
+      if (!this.statementsTerminate(block.body)) {
         this.emitOp(0x50, "С/П", `implicit stop for ${block.mode} block ${block.name}`, block.line);
       }
     }
@@ -1664,7 +1640,7 @@ class EmitContext {
   private compileInitialState(): void {
     if (this.ast.v2) {
       const fields = this.ast.states.flatMap((state) => state.fields);
-      if (fields.some((field) => field.initial !== undefined || field.initialInput !== undefined)) {
+      if (fields.some((field) => field.initial !== undefined || field.initialStack !== undefined)) {
         this.optimizations.push({
           name: "auto-preload-initial-state",
           detail: "Moved initial state into setup/preload values so official program cells stay focused on turn logic.",
@@ -1673,16 +1649,16 @@ class EmitContext {
       return;
     }
     for (const state of this.ast.states) {
-      for (const field of state.fields.filter((candidate) => candidate.initialInput === "Y")) {
-        this.emitOp(0x14, "X↔Y", `init ${state.name}.${field.name} from input.Y`, field.line);
+      for (const field of state.fields.filter((candidate) => candidate.initialStack === "Y")) {
+        this.emitOp(0x14, "X↔Y", `init ${state.name}.${field.name} from stack.Y`, field.line);
         this.emitStore(field.name, `init ${state.name}.${field.name}`, field.line);
-        this.emitOp(0x14, "X↔Y", `restore input.X after ${field.name}`, field.line);
+        this.emitOp(0x14, "X↔Y", `restore stack.X after ${field.name}`, field.line);
       }
-      for (const field of state.fields.filter((candidate) => candidate.initialInput === "X")) {
+      for (const field of state.fields.filter((candidate) => candidate.initialStack === "X")) {
         this.emitStore(field.name, `init ${state.name}.${field.name}`, field.line);
       }
       for (const field of state.fields) {
-        if (field.initialInput !== undefined) continue;
+        if (field.initialStack !== undefined) continue;
         if (field.initial === undefined) continue;
         this.compileExpression(field.initial);
         this.emitStore(field.name, `init ${state.name}.${field.name}`, field.line);
@@ -1718,10 +1694,10 @@ class EmitContext {
       }
       if (statement.kind === "show" && next?.kind === "input") {
         this.compileShow(statement.display, statement.line);
-        this.emitStore(next.target, `input ${next.inputType} ${next.target}`, next.line);
+        this.emitStore(next.target, `read ${next.target}`, next.line);
         this.optimizations.push({
           name: "show-read-fusion",
-          detail: `Fused show ${statement.display} and read ${next.inputType} ${next.target} into one calculator stop.`,
+          detail: `Fused show ${statement.display} and read ${next.target} into one calculator stop.`,
         });
         index += 1;
         continue;
@@ -1742,11 +1718,11 @@ class EmitContext {
         this.emitStore(statement.target, `input ${statement.target}`, statement.line);
         return;
       case "input":
-        this.emitOp(0x50, "С/П", `input ${statement.inputType} ${statement.target}`, statement.line);
-        this.emitStore(statement.target, `input ${statement.target}`, statement.line);
+        this.emitOp(0x50, "С/П", `read ${statement.target}`, statement.line);
+        this.emitStore(statement.target, `read ${statement.target}`, statement.line);
         this.optimizations.push({
-          name: "intent-input-lowering",
-          detail: `Lowered input ${statement.inputType} at line ${statement.line} to calculator stop plus register store.`,
+          name: "intent-read-lowering",
+          detail: `Lowered read at line ${statement.line} to calculator stop plus register store.`,
         });
         return;
       case "halt":
@@ -1781,7 +1757,7 @@ class EmitContext {
         this.compileBlockCall(statement.block, statement.line);
         return;
       case "core":
-        this.compileRawLines(statement.lines);
+        this.compileRawStatement(statement);
         return;
       case "egg":
         this.compileRawLines(statement.lines);
@@ -1796,8 +1772,8 @@ class EmitContext {
     first: Extract<StatementAst, { kind: "assign" }>,
     second: Extract<StatementAst, { kind: "assign" }>,
   ): boolean {
-    const used = matchCellHelperCall(first.expr, "cell_used");
-    const mark = matchCellHelperCall(second.expr, "cell_mark");
+    const used = matchCellHelperCall(first.expr, ["cell_used", "cell_has"]);
+    const mark = matchCellHelperCall(second.expr, ["cell_mark", "cell_set"]);
     if (!used || !mark) return false;
     if (!expressionEquals(used.mask, mark.mask) || !expressionEquals(used.x, mark.x) || !expressionEquals(used.y, mark.y)) {
       return false;
@@ -1811,15 +1787,15 @@ class EmitContext {
     this.emitStore(scratch, "4x4 cell mask scratch", first.line);
     this.compileExpression(used.mask);
     this.emitRecall(scratch, "reuse 4x4 cell mask", first.line);
-    this.emitOp(0x37, "К ∧", "cell_used with reused mask", first.line);
+    this.emitOp(0x37, "К ∧", "cell_has with reused mask", first.line);
     this.emitStore(first.target, `set ${first.target}`, first.line);
     this.compileExpression(mark.mask);
     this.emitRecall(scratch, "reuse 4x4 cell mask", second.line);
-    this.emitOp(0x38, "К ∨", "cell_mark with reused mask", second.line);
+    this.emitOp(0x38, "К ∨", "cell_set with reused mask", second.line);
     this.emitStore(second.target, `set ${second.target}`, second.line);
     this.optimizations.push({
       name: "tic-tac-toe-cell-mask-cse",
-      detail: `Computed cell_mask once for adjacent cell_used/cell_mark at lines ${first.line}/${second.line}.`,
+      detail: `Computed cell_mask once for adjacent cell_has/cell_set at lines ${first.line}/${second.line}.`,
     });
     return true;
   }
@@ -1848,7 +1824,7 @@ class EmitContext {
     const selected = buildBranchRemovalCandidate(statement, this.ast);
     if (!selected) return false;
 
-    const ordinaryCost = estimateOrdinaryIfCost(statement);
+    const ordinaryCost = estimateOrdinaryIfCost(statement, this.ast);
     const selectedCost = estimateExpressionCost(selected.expr) + 1;
     if (selectedCost >= ordinaryCost) {
       this.candidates.push({
@@ -1885,7 +1861,7 @@ class EmitContext {
     const selected = buildDoubleClampCandidate(first, second);
     if (!selected) return false;
 
-    const ordinaryCost = estimateOrdinaryIfCost(first) + estimateOrdinaryIfCost(second);
+    const ordinaryCost = estimateOrdinaryIfCost(first, this.ast) + estimateOrdinaryIfCost(second, this.ast);
     const selectedCost = estimateExpressionCost(selected.expr) + 1;
     if (selectedCost >= ordinaryCost) {
       this.candidates.push({
@@ -1958,7 +1934,7 @@ class EmitContext {
 
   private compileDispatch(statement: Extract<StatementAst, { kind: "dispatch" }>): void {
     const site = statement.name ?? `dispatch@${statement.line}`;
-    const selected = selectDispatchCandidate(statement, targetProfileFor(this.ast.machine));
+    const selected = selectDispatchCandidate(statement, this.machineProfile);
     for (const candidate of selected.candidates) this.candidates.push(candidate);
 
     this.optimizations.push({
@@ -2038,11 +2014,34 @@ class EmitContext {
   }
 
   private statementsTerminate(statements: StatementAst[]): boolean {
+    return this.statementListTerminates(statements, new Set());
+  }
+
+  private statementListTerminates(statements: StatementAst[], seenProcs: Set<string>): boolean {
     const last = statements.at(-1);
     if (!last) return false;
-    if (last.kind !== "call") return statementsTerminate(statements);
-    const block = this.ast.blocks.find((candidate) => candidate.name === last.block);
-    return block !== undefined && block.mode !== "inline";
+    return this.statementTerminates(last, seenProcs);
+  }
+
+  private statementTerminates(statement: StatementAst, seenProcs: Set<string>): boolean {
+    if (statement.kind === "halt" || statement.kind === "loop" || statement.kind === "trap") return true;
+    if (statement.kind === "if") {
+      return statement.elseBody !== undefined &&
+        this.statementListTerminates(statement.thenBody, new Set(seenProcs)) &&
+        this.statementListTerminates(statement.elseBody, new Set(seenProcs));
+    }
+    if (statement.kind === "dispatch") {
+      return statement.defaultBody !== undefined &&
+        this.statementListTerminates(statement.defaultBody, new Set(seenProcs)) &&
+        statement.cases.every((dispatchCase) => this.statementListTerminates(dispatchCase.body, new Set(seenProcs)));
+    }
+    if (statement.kind !== "call") return false;
+    const block = this.ast.blocks.find((candidate) => candidate.name === statement.block);
+    if (block !== undefined) return block.mode !== "inline";
+    const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
+    if (proc === undefined || seenProcs.has(proc.name)) return false;
+    seenProcs.add(proc.name);
+    return this.statementListTerminates(proc.body, seenProcs);
   }
 
   private compileShow(displayName: string, line: number): void {
@@ -2066,7 +2065,7 @@ class EmitContext {
     }
     this.emitOp(0x50, "С/П", `show ${display.name}`, line);
 
-    const canUseDisplayBytes = targetSupports(targetProfileFor(this.ast.machine), "display-bytes");
+    const canUseDisplayBytes = machineSupports(this.machineProfile, "display-bytes");
     this.optimizations.push({
       name: "packed-display-lowering",
       detail: canUseDisplayBytes
@@ -2084,6 +2083,14 @@ class EmitContext {
         this.optimizations.push({
           name: "single-use-rule-inline",
           detail: `Inlined single-use rule ${proc.name} at line ${line}.`,
+        });
+        return;
+      }
+      if (this.statementsTerminate(proc.body)) {
+        this.emitJump(0x51, "БП", proc.name, `terminal rule ${proc.name}`, line);
+        this.optimizations.push({
+          name: "terminal-rule-tail-call",
+          detail: `Compiled terminal rule ${proc.name} as a direct jump instead of a subroutine call.`,
         });
         return;
       }
@@ -2156,35 +2163,43 @@ class EmitContext {
     falseLabel: string,
     line: number,
   ): void {
-    if (isZeroExpression(condition.right) && canTestAgainstZeroDirectly(condition.op)) {
-      this.compileExpression(condition.left);
-      const opcode = directTestOpcode(condition.op);
+    const selected = selectCheaperEquivalentCondition(condition, this.ast);
+    if (selected.changed) {
+      this.optimizations.push({
+        name: "comparison-boundary-normalization",
+        detail: `Normalized ${conditionToText(condition)} to ${conditionToText(selected.condition)} at line ${line}.`,
+      });
+    }
+    const compiledCondition = selected.condition;
+    if (isZeroExpression(compiledCondition.right) && canTestAgainstZeroDirectly(compiledCondition.op)) {
+      this.compileExpression(compiledCondition.left);
+      const opcode = directTestOpcode(compiledCondition.op);
       this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${condition.op}`, line);
       this.optimizations.push({
         name: "zero-condition-test",
-        detail: `Tested ${condition.op} 0 without materializing a zero literal at line ${line}.`,
+        detail: `Tested ${compiledCondition.op} 0 without materializing a zero literal at line ${line}.`,
       });
       return;
     }
-    if (condition.op === ">" || condition.op === "<=") {
-      this.compileExpression(condition.right);
-      this.compileExpression(condition.left);
+    if (compiledCondition.op === ">" || compiledCondition.op === "<=") {
+      this.compileExpression(compiledCondition.right);
+      this.compileExpression(compiledCondition.left);
     } else {
-      this.compileExpression(condition.left);
-      this.compileExpression(condition.right);
+      this.compileExpression(compiledCondition.left);
+      this.compileExpression(compiledCondition.right);
     }
     this.emitOp(0x11, "-", "condition compare", line);
 
     const opcode =
-      condition.op === "<" || condition.op === ">"
+      compiledCondition.op === "<" || compiledCondition.op === ">"
         ? 0x5c
-        : condition.op === ">=" || condition.op === "<="
+        : compiledCondition.op === ">=" || compiledCondition.op === "<="
           ? 0x59
-          : condition.op === "=="
+          : compiledCondition.op === "=="
             ? 0x5e
             : 0x57;
     const mnemonic = getOpcode(opcode).name;
-    this.emitJump(opcode, mnemonic, falseLabel, `false branch for ${condition.op}`, line);
+    this.emitJump(opcode, mnemonic, falseLabel, `false branch for ${compiledCondition.op}`, line);
   }
 
   private compileExpression(expr: ExpressionAst): void {
@@ -2306,6 +2321,20 @@ class EmitContext {
         return;
       }
       this.emitOp(zeroArgOpcode[0], zeroArgOpcode[1], `${expr.callee}()`);
+      return;
+    }
+
+    if (name === "pow") {
+      if (expr.args.length !== 2) {
+        this.diagnostics.push({
+          level: "error",
+          message: "Function pow expects two arguments.",
+        });
+        return;
+      }
+      this.compileExpression(expr.args[1]!);
+      this.compileExpression(expr.args[0]!);
+      this.emitOp(0x24, "F x^y", `${expr.callee}()`);
       return;
     }
 
@@ -2440,8 +2469,36 @@ class EmitContext {
     });
   }
 
+  private compileRawStatement(statement: Extract<StatementAst, { kind: "core" }>): void {
+    const inputs = statement.inputs ?? [];
+    const outputs = statement.outputs ?? [];
+
+    for (const input of orderRawInputs(inputs)) {
+      this.compileExpression(input.expr);
+    }
+
+    this.compileRawLines(statement.lines, statement.strict ?? false);
+
+    for (const output of outputs) {
+      this.emitStore(output.target, `raw returns ${output.slot}`, output.line);
+    }
+
+    if (
+      inputs.length > 0 ||
+      outputs.length > 0 ||
+      statement.clobbers !== undefined ||
+      statement.preserves !== undefined
+    ) {
+      this.optimizations.push({
+        name: "raw-block-contract",
+        detail: formatRawContractDetail(statement),
+      });
+    }
+  }
+
   private compileRawLines(
     lines: Array<{ text: string; line: number }>,
+    strict = false,
   ): void {
     for (const line of lines) {
       if (line.text.endsWith(":")) {
@@ -2451,7 +2508,7 @@ class EmitContext {
       const parsed = parseRawInstruction(line.text);
       if (!parsed) {
         this.diagnostics.push({
-          level: "warning",
+          level: strict ? "error" : "warning",
           message: `Unknown raw instruction '${line.text}'`,
           line: line.line,
         });
@@ -3140,8 +3197,8 @@ function isReusableCellMaskPair(
   first: Extract<StatementAst, { kind: "assign" }>,
   second: Extract<StatementAst, { kind: "assign" }>,
 ): boolean {
-  const used = matchCellHelperCall(first.expr, "cell_used");
-  const mark = matchCellHelperCall(second.expr, "cell_mark");
+  const used = matchCellHelperCall(first.expr, ["cell_used", "cell_has"]);
+  const mark = matchCellHelperCall(second.expr, ["cell_mark", "cell_set"]);
   return Boolean(
     used &&
     mark &&
@@ -3216,6 +3273,109 @@ function directTestOpcode(op: ConditionAst["op"]): number {
   }
 }
 
+function selectCheaperEquivalentCondition(condition: ConditionAst, ast: ProgramAst): { condition: ConditionAst; changed: boolean } {
+  let best = condition;
+  let bestCost = conditionCompileCost(condition);
+  for (const candidate of equivalentConditionCandidates(condition, ast)) {
+    const cost = conditionCompileCost(candidate);
+    if (cost < bestCost) {
+      best = candidate;
+      bestCost = cost;
+    }
+  }
+  return { condition: best, changed: !conditionEquals(best, condition) };
+}
+
+function equivalentConditionCandidates(condition: ConditionAst, ast: ProgramAst): ConditionAst[] {
+  const candidates: ConditionAst[] = [];
+  const add = (candidate: ConditionAst): void => {
+    if (!candidates.some((existing) => conditionEquals(existing, candidate))) candidates.push(candidate);
+  };
+  add(condition);
+  const flipped = flipNumericLeftCondition(condition);
+  if (flipped !== undefined) add(flipped);
+  for (const candidate of [...candidates]) {
+    for (const boundary of integerBoundaryCandidates(candidate, ast)) add(boundary);
+  }
+  return candidates;
+}
+
+function flipNumericLeftCondition(condition: ConditionAst): ConditionAst | undefined {
+  if (condition.left.kind !== "number") return undefined;
+  return {
+    left: condition.right,
+    op: flipComparisonOp(condition.op),
+    right: condition.left,
+  };
+}
+
+function flipComparisonOp(op: ConditionAst["op"]): ConditionAst["op"] {
+  switch (op) {
+    case "<":
+      return ">";
+    case "<=":
+      return ">=";
+    case ">":
+      return "<";
+    case ">=":
+      return "<=";
+    case "==":
+    case "!=":
+      return op;
+  }
+}
+
+function integerBoundaryCandidates(condition: ConditionAst, ast: ProgramAst): ConditionAst[] {
+  if (!isKnownIntegerExpression(condition.left, ast)) return [];
+  const value = numericLiteralValue(condition.right);
+  if (value === undefined || !Number.isSafeInteger(value)) return [];
+  const shifted = shiftedIntegerBoundary(condition.op, value);
+  if (shifted === undefined) return [];
+  return [{
+    left: condition.left,
+    op: shifted.op,
+    right: numberExpression(shifted.value),
+  }];
+}
+
+function shiftedIntegerBoundary(
+  op: ConditionAst["op"],
+  value: number,
+): { op: ConditionAst["op"]; value: number } | undefined {
+  switch (op) {
+    case "<":
+      return Number.isSafeInteger(value - 1) ? { op: "<=", value: value - 1 } : undefined;
+    case "<=":
+      return Number.isSafeInteger(value + 1) ? { op: "<", value: value + 1 } : undefined;
+    case ">":
+      return Number.isSafeInteger(value + 1) ? { op: ">=", value: value + 1 } : undefined;
+    case ">=":
+      return Number.isSafeInteger(value - 1) ? { op: ">", value: value - 1 } : undefined;
+    case "==":
+    case "!=":
+      return undefined;
+  }
+}
+
+function isKnownIntegerExpression(expr: ExpressionAst, ast: ProgramAst): boolean {
+  return expr.kind === "identifier" && integerRangeFor(expr.name, ast) !== undefined;
+}
+
+function conditionCompileCost(condition: ConditionAst): number {
+  if (isZeroExpression(condition.right) && canTestAgainstZeroDirectly(condition.op)) {
+    return estimateExpressionCost(condition.left) + 2;
+  }
+  return estimateExpressionCost(condition.left) + estimateExpressionCost(condition.right) + 3;
+}
+
+function conditionEquals(left: ConditionAst, right: ConditionAst): boolean {
+  return left.op === right.op && expressionEquals(left.left, right.left) && expressionEquals(left.right, right.right);
+}
+
+function conditionToText(condition: ConditionAst): string {
+  return `${expressionToIntentText(condition.left)} ${condition.op} ${expressionToIntentText(condition.right)}`;
+}
+
 function priority(
   variable: string,
   hints: Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>,
@@ -3240,7 +3400,7 @@ function layoutProgram(
   diagnostics: Diagnostic[],
   options: CompileOptions,
   ast: ProgramAst,
-  targetProfile: TargetProfile,
+  machineProfile: MachineProfile,
 ): { steps: ResolvedStep[]; labels: Record<string, string>; cellRoles: CellRoleReport[] } {
   const labelAddresses = new Map<string, number>();
   let address = 0;
@@ -3266,7 +3426,7 @@ function layoutProgram(
     if (item.kind === "op") {
       const step = buildResolvedStep(address, item.opcode, item.mnemonic, item.comment);
       steps.push(step);
-      cellRoles.push(buildCellRole(address, step.hex, item, options, targetProfile));
+      cellRoles.push(buildCellRole(address, step.hex, item, options, machineProfile));
       address += 1;
       continue;
     }
@@ -3286,7 +3446,7 @@ function layoutProgram(
     steps.push(
       buildResolvedStep(address, opcode, formatAddress(targetAddress), item.comment),
     );
-    cellRoles.push(buildAddressCellRole(address, opcode, item, options, targetProfile));
+    cellRoles.push(buildAddressCellRole(address, opcode, item, options, machineProfile));
     address += 1;
   }
 
@@ -3297,7 +3457,7 @@ function layoutProgram(
   for (const [label, labelAddress] of sortedLabels) {
     labels[label] = safeFormatAddress(labelAddress);
   }
-  markDarkEntryCells(cellRoles, labelAddresses, options, ast, targetProfile);
+  markDarkEntryCells(cellRoles, labelAddresses, options, ast, machineProfile);
   return { steps, labels, cellRoles };
 }
 
@@ -3361,7 +3521,7 @@ function buildCellRole(
   hex: string,
   item: MachineOp,
   options: CompileOptions,
-  targetProfile: TargetProfile,
+  machineProfile: MachineProfile,
 ): CellRoleReport {
   const roles: CellRole[] = ["exec"];
   const notes: string[] = [];
@@ -3369,7 +3529,7 @@ function buildCellRole(
     roles.push("constant");
     notes.push("raw opcode can also be read as a byte");
   }
-  if (targetSupports(targetProfile, "display-bytes") && item.comment?.includes("display")) {
+  if (machineSupports(machineProfile, "display-bytes") && item.comment?.includes("display")) {
     roles.push("display-byte");
     notes.push("display byte role allowed");
   }
@@ -3387,15 +3547,15 @@ function buildAddressCellRole(
   opcode: number,
   item: MachineAddressRef,
   options: CompileOptions,
-  targetProfile: TargetProfile,
+  machineProfile: MachineProfile,
 ): CellRoleReport {
   const roles: CellRole[] = ["address"];
   const notes: string[] = [];
-  if (targetSupports(targetProfile, "address-constants")) {
+  if (machineSupports(machineProfile, "address-constants")) {
     roles.push("constant");
     notes.push("address can be reused as constant");
   }
-  if (targetSupports(targetProfile, "code-data-overlay")) {
+  if (machineSupports(machineProfile, "code-data-overlay")) {
     roles.push("overlay");
     notes.push("code/data overlay allowed");
   }
@@ -3413,9 +3573,9 @@ function markDarkEntryCells(
   labelAddresses: Map<string, number>,
   options: CompileOptions,
   ast: ProgramAst,
-  targetProfile: TargetProfile,
+  machineProfile: MachineProfile,
 ): void {
-  if (!targetSupports(targetProfile, "dark-entries")) return;
+  if (!machineSupports(machineProfile, "dark-entries")) return;
   const sharedTailNames = new Set(
     ast.blocks.filter((block) => block.mode === "shared_tail").map((block) => block.name),
   );
@@ -3929,7 +4089,6 @@ function integerRangeFor(name: string, ast: ProgramAst): { min?: number; max?: n
   for (const state of ast.states) {
     const field = state.fields.find((candidate) => candidate.name === name);
     if (!field) continue;
-    if (field.type === "digit") return { min: 0, max: 9 };
     if (field.type === "flag") return { min: 0, max: 1 };
     if (field.type === "range" && Number.isInteger(field.min) && Number.isInteger(field.max)) {
       const range: { min?: number; max?: number } = {};
@@ -3972,11 +4131,23 @@ function ticTacToeMacroArity(name: string): number | undefined {
   const arities: Record<string, number> = {
     norm4: 1,
     grid4_norm: 1,
+    bit_mask: 1,
+    bit_has: 2,
+    bit_set: 2,
+    bit_clear: 2,
+    bit_toggle: 2,
     diag_left_index: 2,
     diag_right_index: 2,
     cell_mask: 2,
+    cell_has: 3,
+    cell_set: 3,
+    cell_clear: 3,
+    cell_toggle: 3,
     cell_used: 3,
     cell_mark: 3,
+    digit_at: 2,
+    digit_add: 3,
+    digit_set: 3,
     packed4_add: 3,
     packed4_digit: 2,
     packed4_score: 2,
@@ -3989,21 +4160,42 @@ function ticTacToeExpressionMacro(name: string, args: ExpressionAst[]): Expressi
     case "norm4":
     case "grid4_norm":
       return norm4Expression(args[0]!);
+    case "bit_mask":
+      return bitMaskExpression(args[0]!);
+    case "bit_has":
+      return bitAndExpression(args[0]!, bitMaskExpression(args[1]!));
+    case "bit_set":
+      return bitOrExpression(args[0]!, bitMaskExpression(args[1]!));
+    case "bit_clear":
+      return bitAndExpression(args[0]!, bitNotExpression(bitMaskExpression(args[1]!)));
+    case "bit_toggle":
+      return bitXorExpression(args[0]!, bitMaskExpression(args[1]!));
     case "diag_left_index":
       return norm4Expression(addExpressions(args[0]!, args[1]!));
     case "diag_right_index":
       return norm4Expression(subtractExpressions(args[0]!, args[1]!));
     case "cell_mask":
       return cellMaskExpression(args[0]!, args[1]!);
+    case "cell_has":
     case "cell_used":
-      return { kind: "call", callee: "bit_and", args: [args[0]!, cellMaskExpression(args[1]!, args[2]!)] };
+      return bitAndExpression(args[0]!, cellMaskExpression(args[1]!, args[2]!));
+    case "cell_set":
     case "cell_mark":
-      return { kind: "call", callee: "bit_or", args: [args[0]!, cellMaskExpression(args[1]!, args[2]!)] };
+      return bitOrExpression(args[0]!, cellMaskExpression(args[1]!, args[2]!));
+    case "cell_clear":
+      return bitAndExpression(args[0]!, bitNotExpression(cellMaskExpression(args[1]!, args[2]!)));
+    case "cell_toggle":
+      return bitXorExpression(args[0]!, cellMaskExpression(args[1]!, args[2]!));
+    case "digit_at":
+      return packed4DigitExpression(args[0]!, args[1]!);
+    case "digit_add":
     case "packed4_add":
       return addExpressions(
         args[0]!,
-        multiplyExpressions(args[2]!, pow10Expression(subtractExpressions(args[1]!, numberExpression(1)))),
+        multiplyExpressions(args[2]!, digitPlaceExpression(args[1]!)),
       );
+    case "digit_set":
+      return digitSetExpression(args[0]!, args[1]!, args[2]!);
     case "packed4_digit":
       return packed4DigitExpression(args[0]!, args[1]!);
     case "packed4_score":
@@ -4023,8 +4215,10 @@ interface CellHelperCall {
   y: ExpressionAst;
 }
 
-function matchCellHelperCall(expr: ExpressionAst, name: "cell_used" | "cell_mark"): CellHelperCall | undefined {
-  if (expr.kind !== "call" || expr.callee.toLowerCase() !== name || expr.args.length !== 3) return undefined;
+type CellHelperName = "cell_used" | "cell_has" | "cell_mark" | "cell_set";
+
+function matchCellHelperCall(expr: ExpressionAst, names: readonly CellHelperName[]): CellHelperCall | undefined {
+  if (expr.kind !== "call" || !names.includes(expr.callee.toLowerCase() as CellHelperName) || expr.args.length !== 3) return undefined;
   return {
     mask: expr.args[0]!,
     x: expr.args[1]!,
@@ -4050,6 +4244,15 @@ function cellMaskExpression(x: ExpressionAst, y: ExpressionAst): ExpressionAst {
   );
 }
 
+function bitMaskExpression(index: ExpressionAst): ExpressionAst {
+  const nibble = intExpression(divideExpressions(index, numberExpression(4)));
+  const offset = subtractExpressions(index, multiplyExpressions(nibble, numberExpression(4)));
+  return multiplyExpressions(
+    powExpression(numberExpression(2), offset),
+    pow10Expression(nibble),
+  );
+}
+
 function packed4DigitExpression(lines: ExpressionAst, index: ExpressionAst): ExpressionAst {
   return {
     kind: "call",
@@ -4061,6 +4264,18 @@ function packed4DigitExpression(lines: ExpressionAst, index: ExpressionAst): Exp
       ),
     ],
   };
+}
+
+function digitSetExpression(value: ExpressionAst, index: ExpressionAst, digit: ExpressionAst): ExpressionAst {
+  const place = digitPlaceExpression(index);
+  return addExpressions(
+    subtractExpressions(value, multiplyExpressions(packed4DigitExpression(value, index), place)),
+    multiplyExpressions(digit, place),
+  );
+}
+
+function digitPlaceExpression(index: ExpressionAst): ExpressionAst {
+  return pow10Expression(subtractExpressions(index, numberExpression(1)));
 }
 
 function oneMinus(expr: ExpressionAst): ExpressionAst {
@@ -4101,6 +4316,10 @@ function pow10Expression(expr: ExpressionAst): ExpressionAst {
   return { kind: "call", callee: "pow10", args: [expr] };
 }
 
+function powExpression(base: ExpressionAst, exponent: ExpressionAst): ExpressionAst {
+  return { kind: "call", callee: "pow", args: [base, exponent] };
+}
+
 function maxExpression(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
   return { kind: "call", callee: "max", args: [left, right] };
 }
@@ -4113,8 +4332,28 @@ function absExpression(expr: ExpressionAst): ExpressionAst {
   return { kind: "call", callee: "abs", args: [expr] };
 }
 
+function intExpression(expr: ExpressionAst): ExpressionAst {
+  return { kind: "call", callee: "int", args: [expr] };
+}
+
 function signExpression(expr: ExpressionAst): ExpressionAst {
   return { kind: "call", callee: "sign", args: [expr] };
+}
+
+function bitAndExpression(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
+  return { kind: "call", callee: "bit_and", args: [left, right] };
+}
+
+function bitOrExpression(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
+  return { kind: "call", callee: "bit_or", args: [left, right] };
+}
+
+function bitXorExpression(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
+  return { kind: "call", callee: "bit_xor", args: [left, right] };
+}
+
+function bitNotExpression(expr: ExpressionAst): ExpressionAst {
+  return { kind: "call", callee: "bit_not", args: [expr] };
 }
 
 function signToggleExpression(current: ExpressionAst, selector: ExpressionAst): ExpressionAst {
@@ -4195,22 +4434,26 @@ function isNumericValue(expr: ExpressionAst, value: number): boolean {
 }
 
 function numericLiteralValue(expr: ExpressionAst): number | undefined {
+  if (expr.kind === "unary" && expr.op === "-") {
+    const value = numericLiteralValue(expr.expr);
+    return value === undefined ? undefined : -value;
+  }
   if (expr.kind !== "number") return undefined;
   const value = Number(expr.raw);
   return Number.isFinite(value) ? value : undefined;
 }
 
-function estimateOrdinaryIfCost(statement: Extract<StatementAst, { kind: "if" }>): number {
+function estimateOrdinaryIfCost(statement: Extract<StatementAst, { kind: "if" }>, ast: ProgramAst): number {
   const thenStatement = statement.thenBody[0];
   if (statement.thenBody.length !== 1 || !thenStatement) return Number.POSITIVE_INFINITY;
   const thenCost = estimateSimpleStatementCost(thenStatement);
   if (!Number.isFinite(thenCost)) return Number.POSITIVE_INFINITY;
-  if (!statement.elseBody) return estimateConditionCost(statement.condition) + thenCost;
+  if (!statement.elseBody) return estimateConditionCost(statement.condition, ast) + thenCost;
   const elseStatement = statement.elseBody[0];
   if (statement.elseBody.length !== 1 || !elseStatement) return Number.POSITIVE_INFINITY;
   const elseCost = estimateSimpleStatementCost(elseStatement);
   if (!Number.isFinite(elseCost)) return Number.POSITIVE_INFINITY;
-  return estimateConditionCost(statement.condition) + thenCost + 2 + elseCost;
+  return estimateConditionCost(statement.condition, ast) + thenCost + 2 + elseCost;
 }
 
 function estimateSimpleStatementCost(statement: StatementAst): number {
@@ -4225,8 +4468,8 @@ function estimateSimpleStatementCost(statement: StatementAst): number {
   }
 }
 
-function estimateConditionCost(condition: ConditionAst): number {
-  return estimateExpressionCost(condition.left) + estimateExpressionCost(condition.right) + 1 + 2;
+function estimateConditionCost(condition: ConditionAst, ast: ProgramAst): number {
+  return conditionCompileCost(selectCheaperEquivalentCondition(condition, ast).condition);
 }
 
 function estimateExpressionCost(expr: ExpressionAst): number {
@@ -4249,6 +4492,11 @@ function estimateCallCost(expr: Extract<ExpressionAst, { kind: "call" }>): numbe
   const macro = ticTacToeExpressionMacro(name, expr.args);
   if (macro !== undefined) return estimateExpressionCost(macro);
   if (name === "random" || name === "pi") return 1;
+  if (name === "pow") {
+    return (expr.args[0] ? estimateExpressionCost(expr.args[0]) : 0) +
+      (expr.args[1] ? estimateExpressionCost(expr.args[1]) : 0) +
+      1;
+  }
   if (["max", "bit_and", "bit_or", "bit_xor"].includes(name)) {
     return (expr.args[0] ? estimateExpressionCost(expr.args[0]) : 0) +
       (expr.args[1] ? estimateExpressionCost(expr.args[1]) : 0) +
@@ -4290,13 +4538,13 @@ function buildOptimizerReport(
   optimizations: AppliedOptimization[],
   candidates: CandidateReport[],
   cellRoles: CellRoleReport[],
-  targetProfile: TargetProfile,
+  machineProfile: MachineProfile,
 ): OptimizerReport {
   const activeNames = new Set(optimizations.map((optimization) => optimization.name));
   if (cellRoles.some((cell) => cell.roles.includes("overlay"))) activeNames.add("code-data-overlay");
   if (cellRoles.some((cell) => cell.roles.includes("dark-entry"))) activeNames.add("dark-entry-layout");
   if (cellRoles.some((cell) => cell.roles.includes("display-byte"))) activeNames.add("display-byte-layout");
-  if (targetProfile.emulatorFacts.some((fact) => fact.id === "step-vs-run-delta")) {
+  if (machineProfile.emulatorFacts.some((fact) => fact.id === "step-vs-run-delta")) {
     activeNames.add("step-vs-run-profile");
   }
   const selectedCandidateVariants = new Set(
@@ -4594,7 +4842,7 @@ const optimizerCapabilities: Array<{
     source: "mk61-delta",
     requires: [],
     activeWhen: ["step-vs-run-profile"],
-    detail: "Uses mk61_exact emulator facts for Danilov-era differences between step mode, continuous run, exponent sign changes, Cx, В↑, and П->X as exact-machine preconditions.",
+    detail: "Uses mk61 emulator facts for Danilov-era differences between step mode, continuous run, exponent sign changes, Cx, В↑, and П->X as exact-machine preconditions.",
   },
   {
     id: "jump-to-next-threading",
@@ -4705,10 +4953,7 @@ function buildPreloadReport(ast: ProgramAst, allocation: RegisterAllocation): Pr
     for (const field of ast.v2.state) {
       const register = allocation.registers[field.name];
       if (!register) continue;
-      const value =
-        field.initial ??
-        (field.generated === "random" ? "random() * 999" : undefined) ??
-        (field.optional ? "0" : undefined);
+      const value = field.initial;
       if (value === undefined) continue;
       synthetic.push({
         register,
@@ -4739,14 +4984,14 @@ function buildBudgetReport(used: number, limit: number, largestBlocks: string[],
 }
 
 function buildMachineFeaturesUsed(
-  targetProfile: TargetProfile,
+  machineProfile: MachineProfile,
   optimizations: AppliedOptimization[],
   cellRoles: CellRoleReport[],
   candidates: CandidateReport[],
 ): MachineFeatureUseReport[] {
   const used = new Map<string, MachineFeatureUseReport>();
   const add = (id: string, detail: string, source: MachineFeatureUseReport["source"]): void => {
-    const targetDetail = targetProfile.features.find((feature) => feature.id === id)?.detail;
+    const targetDetail = machineProfile.features.find((feature) => feature.id === id)?.detail;
     used.set(id, {
       id,
       source,
@@ -4924,7 +5169,6 @@ function countV2IntentNodes(ast: ProgramAst): number {
   if (!v2) return 0;
   return (
     1 +
-    v2.inputs.length +
     v2.state.length +
     v2.screens.length +
     (v2.turn ? 1 + countV2Statements(v2.turn.body) : 0) +
@@ -4945,12 +5189,12 @@ function countV2Statements(statements: V2StatementAst[]): number {
       count += countV2Statements(statement.thenBody);
       if (statement.elseBody) count += countV2Statements(statement.elseBody);
     }
-    if (statement.kind === "v2_require" && statement.elseAction) {
-      count += countV2Statements([statement.elseAction]);
-    }
     if (statement.kind === "v2_challenge") {
       count += countV2Statements(statement.successBody);
       if (statement.failureBody) count += countV2Statements(statement.failureBody);
+    }
+    if (statement.kind === "v2_raw") {
+      count += statement.inputs.length + statement.outputs.length + statement.lines.length;
     }
   }
   return count;
@@ -4979,7 +5223,7 @@ function countStatements(statements: StatementAst[]): number {
 
 function selectDispatchCandidate(
   statement: Extract<StatementAst, { kind: "dispatch" }>,
-  targetProfile: TargetProfile,
+  machineProfile: MachineProfile,
 ): { selected: CandidateReport; candidates: CandidateReport[] } {
   const site = statement.name ?? `dispatch@${statement.line}`;
   const fallthroughCost = estimateDispatchCost(statement, true);
@@ -4994,9 +5238,9 @@ function selectDispatchCandidate(
   ];
 
   if (
-    targetSupports(targetProfile, "dark-entries") &&
-    targetSupports(targetProfile, "address-constants") &&
-    targetSupports(targetProfile, "code-data-overlay")
+    machineSupports(machineProfile, "dark-entries") &&
+    machineSupports(machineProfile, "address-constants") &&
+    machineSupports(machineProfile, "code-data-overlay")
   ) {
     candidates.push({
       site,
@@ -5009,8 +5253,8 @@ function selectDispatchCandidate(
 
   if (
     statement.cases.length <= 6 &&
-    targetSupports(targetProfile, "super-dark-dispatch") &&
-    targetSupports(targetProfile, "indirect-flow")
+    machineSupports(machineProfile, "super-dark-dispatch") &&
+    machineSupports(machineProfile, "indirect-flow")
   ) {
     candidates.push({
       site,
@@ -5035,10 +5279,28 @@ function estimateDispatchCost(
   return 2 + statement.cases.length * 5 + jumpsAfterCases * 2 + bodyCost + defaultCost;
 }
 
-function statementsTerminate(statements: StatementAst[]): boolean {
-  const last = statements.at(-1);
-  if (!last) return false;
-  return last.kind === "halt" || last.kind === "loop" || last.kind === "trap";
+function orderRawInputs(
+  inputs: NonNullable<Extract<StatementAst, { kind: "core" }>["inputs"]>,
+): NonNullable<Extract<StatementAst, { kind: "core" }>["inputs"]> {
+  const order = new Map([
+    ["T", 0],
+    ["Z", 1],
+    ["Y", 2],
+    ["X", 3],
+  ]);
+  return [...inputs].sort((left, right) => order.get(left.slot)! - order.get(right.slot)!);
+}
+
+function formatRawContractDetail(statement: Extract<StatementAst, { kind: "core" }>): string {
+  const inputs = statement.inputs?.length
+    ? `takes ${orderRawInputs(statement.inputs).map((input) => `${input.slot}=${expressionToIntentText(input.expr)}`).join(", ")}`
+    : "takes none";
+  const outputs = statement.outputs?.length
+    ? `returns ${statement.outputs.map((output) => `${output.slot}->${output.target}`).join(", ")}`
+    : "returns none";
+  const clobbers = `clobbers ${(statement.clobbers ?? ["unknown"]).join(", ")}`;
+  const preserves = `preserves ${(statement.preserves ?? ["unknown"]).join(", ")}`;
+  return `Inserted raw MK-61 block at line ${statement.line}: ${inputs}; ${outputs}; ${clobbers}; ${preserves}.`;
 }
 
 function parseRawInstruction(
@@ -5050,7 +5312,7 @@ function parseRawInstruction(
     return { opcode, mnemonic: getOpcode(opcode).name, comment: "raw hex" };
   }
 
-  const direct = /^(БП|ПП|F\s*x<0|F\s*x=0|F\s*x!=0|F\s*x>=0|F\s*L[0-3])\s+([A-Za-z_][\w]*|[0-9A-Fa-f]{2})$/u.exec(text);
+  const direct = /^(БП|ПП|F\s*x<0|F\s*x=0|F\s*x(?:!=|≠)0|F\s*x(?:>=|≥)0|F\s*L[0-3])\s+([A-Za-z_][\w]*|[0-9A-Fa-f]{2})$/u.exec(text);
   if (direct) {
     const opcode = directOpcode(direct[1]!);
     return {
@@ -5072,17 +5334,18 @@ function parseRawInstruction(
     return { opcode: 0x60 + registerIndex(register), mnemonic: `П->X ${register}` };
   }
 
-  const directMemory = /^(X->П|П->X)\s+R?([0-9a-eавсде])$/iu.exec(text);
+  const directMemory = /^(X(?:->|→)П|П(?:->|→)X)\s+R?([0-9a-eавсде])$/iu.exec(text);
   if (directMemory) {
     const register = registerFromText(directMemory[2]!);
-    const base = directMemory[1]!.startsWith("X") ? 0x40 : 0x60;
+    const op = directMemory[1]!.replaceAll("→", "->");
+    const base = op.startsWith("X") ? 0x40 : 0x60;
     return {
       opcode: base + registerIndex(register),
-      mnemonic: `${directMemory[1]} ${register}`,
+      mnemonic: `${op} ${register}`,
     };
   }
 
-  const indirect = /^(К\s*)?(БП|ПП|X->П|П->X|x!=0|x>=0|x<0|x=0)\s*R?([0-9a-eавсде])$/iu.exec(text);
+  const indirect = /^(К\s*)?(БП|ПП|X(?:->|→)П|П(?:->|→)X|x(?:!=|≠)0|x(?:>=|≥)0|x<0|x=0)\s*R?([0-9a-eавсде])$/iu.exec(text);
   if (indirect?.[1]) {
     const register = registerFromText(indirect[3]!);
     return {
@@ -5118,7 +5381,7 @@ function parseTarget(text: string): string | number {
 }
 
 function directOpcode(text: string): number {
-  const normalized = text.replace(/\s+/g, " ");
+  const normalized = text.replace(/\s+/g, " ").replaceAll("≠", "!=").replaceAll("≥", ">=");
   if (normalized === "БП") return 0x51;
   if (normalized === "ПП") return 0x53;
   if (normalized === "F x<0") return 0x5c;
@@ -5133,7 +5396,7 @@ function directOpcode(text: string): number {
 }
 
 function indirectBase(text: string): number {
-  const normalized = text.toLowerCase();
+  const normalized = text.toLowerCase().replaceAll("→", "->").replaceAll("≠", "!=").replaceAll("≥", ">=");
   if (normalized === "x!=0") return 0x70;
   if (normalized === "бп") return 0x80;
   if (normalized === "x>=0") return 0x90;

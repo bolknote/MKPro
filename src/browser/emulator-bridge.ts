@@ -74,8 +74,6 @@ export function compileToProgramText(
 export function looksLikeM61Source(text: string): boolean {
   const normalized = text.trim();
   return (
-    /\btarget\s+mk61\b/iu.test(normalized) ||
-    /\bbudget\s+\d+\s+cells\b/iu.test(normalized) ||
     /\bprogram\s+[A-Za-z_][\w-]*\s*\{/u.test(normalized)
   );
 }

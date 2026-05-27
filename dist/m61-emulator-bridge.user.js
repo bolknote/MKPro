@@ -272,8 +272,11 @@ var M61EmulatorBundle = (() => {
       item.name.replaceAll("X->\u041F", "\u0445\u041F")
     ]);
     if (item.name === "\u041A \u2227") aliases.add("K\u039B");
+    if (item.name === "\u041A \u2227") aliases.add("\u041A AND");
     if (item.name === "\u041A \u2228") aliases.add("KV");
+    if (item.name === "\u041A \u2228") aliases.add("\u041A OR");
     if (item.name === "\u041A \u2295") aliases.add("K\u2295");
+    if (item.name === "\u041A \u2295") aliases.add("\u041A XOR");
     if (item.name === "\u041A \u0418\u041D\u0412") aliases.add("\u041A\u0438\u043D\u0432");
     if (item.name === "\u041A \u0417\u041D") aliases.add("\u041A\u0437\u043D");
     if (item.name === "\u041A |x|") aliases.add("K|x|");
@@ -284,7 +287,7 @@ var M61EmulatorBundle = (() => {
     return [...aliases].map(normalizeName);
   }
   function normalizeName(name) {
-    return name.trim().replace(/\s+/g, " ").replaceAll("\xD7", "*").replaceAll("\xF7", "/").replaceAll("\u2212", "-").replaceAll("\u0425", "X").replaceAll("K", "\u041A").replaceAll("k", "\u043A").toLowerCase();
+    return name.trim().replaceAll("\u2190\u2192", "<->").replaceAll("\u2192", "->").replaceAll("\u2190", "<-").replace(/\^\{([^}]+)\}/gu, "^$1").replaceAll("\u03C0", "pi").replaceAll("\u221A", "sqrt").replaceAll("\u21BB", "reverse").replaceAll("\u2260", "!=").replaceAll("\u2265", ">=").replaceAll("\u2264", "<=").replaceAll("\xD7", "*").replaceAll("\xF7", "/").replaceAll("\u2212", "-").replaceAll("\u2223", "|").replaceAll("\u0425", "X").replaceAll("\u0445", "x").replaceAll("K", "\u041A").replaceAll("k", "\u043A").replace(/^([FfКк])(?=\S)/u, "$1 ").replace(/\s+/g, " ").toLowerCase();
   }
 
   // src/core/ir.ts
@@ -367,7 +370,7 @@ var M61EmulatorBundle = (() => {
     if (lower.startsWith("pause")) return "pause";
     if (lower.startsWith("show")) return "show";
     if (lower.startsWith("ask")) return "ask";
-    if (lower.startsWith("input")) return "input";
+    if (lower.startsWith("input") || lower.startsWith("read")) return "input";
     if (lower.startsWith("implicit final stop")) return "halt";
     if (lower.includes("implicit stop")) return "halt";
     return "unknown";
@@ -734,8 +737,6 @@ var M61EmulatorBundle = (() => {
       this.lines = source.split(/\r?\n/u).map((text, offset) => ({ text: stripComment(text).trim(), line: offset + 1 })).filter((line) => line.text.length > 0);
     }
     parseProgram() {
-      let machine;
-      let budget;
       let reference;
       let v2;
       const preloads = [];
@@ -751,21 +752,9 @@ var M61EmulatorBundle = (() => {
         if (line.text === "}") {
           throw new ParseError("Unexpected closing brace", line.line);
         }
-        if (line.text.startsWith("target ")) {
-          const value = line.text.slice("target ".length).trim().toLowerCase();
-          if (value !== "mk61") {
-            throw new ParseError(`Unsupported target '${value}'`, line.line);
-          }
-          machine = "mk61";
-          this.index += 1;
-        } else if (line.text.startsWith("budget ")) {
-          budget = parseBudget(line);
-          this.index += 1;
-        } else if (line.text.startsWith("reference ")) {
+        if (line.text.startsWith("reference ")) {
           reference = line.text.slice("reference ".length).trim();
           this.index += 1;
-        } else if (line.text.startsWith("benchmark ")) {
-          throw new ParseError("Use 'reference name' instead of deprecated benchmark metadata", line.line);
         } else if (line.text.startsWith("program ")) {
           if (v2 !== void 0) {
             throw new ParseError("Only one program block is supported", line.line);
@@ -782,11 +771,8 @@ var M61EmulatorBundle = (() => {
           throw new ParseError(`Unexpected top-level line '${line.text}'`, line.line);
         }
       }
-      if (!machine) throw new ParseError("Missing 'target mk61'", 1);
       if (v2 === void 0) throw new ParseError("Program must contain one V2 program block", 1);
       const program = {
-        machine,
-        targetProfile: "mk61_exact",
         preloads,
         domains,
         states,
@@ -796,7 +782,6 @@ var M61EmulatorBundle = (() => {
         procs,
         blocks
       };
-      if (budget !== void 0) program.budget = budget;
       if (reference !== void 0) program.reference = reference;
       if (v2 !== void 0) program.v2 = v2;
       return program;
@@ -805,10 +790,8 @@ var M61EmulatorBundle = (() => {
       const header = this.next();
       const match = /^program\s+([A-Za-z_][\w]*)\s*\{$/u.exec(header.text);
       if (!match) throw new ParseError("Program must look like 'program Name {'", header.line);
-      const inputs = [];
       const state = [];
       const screens = [];
-      const endings = [];
       const boards = [];
       const fleets = [];
       const worlds = [];
@@ -822,10 +805,8 @@ var M61EmulatorBundle = (() => {
           const program = {
             kind: "v2_program",
             name: match[1],
-            inputs,
             state,
             screens,
-            endings,
             boards,
             fleets,
             worlds,
@@ -836,54 +817,43 @@ var M61EmulatorBundle = (() => {
           if (turn !== void 0) program.turn = turn;
           return program;
         }
-        const hinted = parseLeadingHints(line);
-        if (hinted.text.startsWith("input ")) {
-          inputs.push(parseV2Input(hinted, line.line));
-          this.index += 1;
-          continue;
-        }
-        if (hinted.text === "state {") {
+        if (line.text === "state {") {
           this.index += 1;
           state.push(...this.parseV2StateBlock());
           continue;
         }
-        if (hinted.text.startsWith("screen ")) {
-          screens.push(this.parseV2Screen(hinted));
+        if (line.text.startsWith("screen ")) {
+          screens.push(this.parseV2Screen(line.text));
           continue;
         }
-        if (hinted.text.startsWith("ending ")) {
-          endings.push(this.parseV2Ending(hinted));
+        if (line.text.startsWith("board ")) {
+          boards.push(this.parseV2Board(line.text));
           continue;
         }
-        if (hinted.text.startsWith("board ")) {
-          boards.push(this.parseV2Board(hinted));
+        if (line.text.startsWith("fleet ")) {
+          fleets.push(this.parseV2Fleet(line.text));
           continue;
         }
-        if (hinted.text.startsWith("fleet ")) {
-          fleets.push(this.parseV2Fleet(hinted));
+        if (line.text.startsWith("world ")) {
+          worlds.push(this.parseV2World(line.text));
           continue;
         }
-        if (hinted.text.startsWith("world ")) {
-          worlds.push(this.parseV2World(hinted));
+        if (line.text.startsWith("encounters ")) {
+          encounters.push(this.parseV2Encounters(line.text));
           continue;
         }
-        if (hinted.text.startsWith("encounters ")) {
-          encounters.push(this.parseV2Encounters(hinted));
-          continue;
-        }
-        if (hinted.text === "turn {") {
+        if (line.text === "turn {") {
           if (turn !== void 0) throw new ParseError("Only one turn block is supported", line.line);
           this.index += 1;
           turn = {
             kind: "v2_turn",
             body: this.parseV2StatementBlock(),
-            hints: hinted.hints,
             line: line.line
           };
           continue;
         }
-        if (hinted.text.startsWith("rule ")) {
-          rules.push(this.parseV2Rule(hinted));
+        if (line.text.startsWith("rule ")) {
+          rules.push(this.parseV2Rule(line.text));
           continue;
         }
         throw new ParseError(`Unexpected program line '${line.text}'`, line.line);
@@ -899,50 +869,16 @@ var M61EmulatorBundle = (() => {
           return fields;
         }
         this.index += 1;
-        if (line.text.endsWith("{")) {
-          const field = parseV2StateField({ text: line.text.slice(0, -1).trim(), line: line.line });
-          this.parseV2StateFieldConfig(field);
-          fields.push(field);
-          continue;
-        }
         if (line.text === "}") return fields;
         fields.push(parseV2StateField(line));
       }
       throw new ParseError("Unclosed state block", this.lines.at(-1)?.line ?? 1);
     }
-    parseV2StateFieldConfig(field) {
-      while (!this.done()) {
-        const line = this.next();
-        if (line.text === "}") return;
-        if (line.text === "generated random") {
-          field.generated = "random";
-          continue;
-        }
-        const terminal = /^terminal\s+at\s+(.+?)\s+show\s+(.+)$/u.exec(line.text);
-        if (terminal) {
-          field.terminal = { at: terminal[1].trim(), show: terminal[2].trim() };
-          continue;
-        }
-        const cleared = /^cleared\s+when\s+(.+)$/u.exec(line.text);
-        if (cleared) {
-          field.clearedWhen = cleared[1].trim();
-          continue;
-        }
-        const reward = /^reward\s+([A-Za-z_][\w]*)\s+(.+)$/u.exec(line.text);
-        if (reward) {
-          field.rewards.push({ name: reward[1], value: reward[2].trim() });
-          continue;
-        }
-        throw new ParseError("State field config must contain generated/terminal/cleared/reward lines", line.line);
-      }
-      throw new ParseError("Unclosed state field config block", field.line);
-    }
-    parseV2Screen(hinted) {
+    parseV2Screen(text) {
       const header = this.next();
-      const match = /^screen\s+([A-Za-z_][\w]*)\s*\{$/u.exec(hinted.text);
+      const match = /^screen\s+([A-Za-z_][\w]*)\s*\{$/u.exec(text);
       if (!match) throw new ParseError("Screen must look like 'screen name {'", header.line);
       let sources = [];
-      let style = [];
       while (!this.done()) {
         const line = this.next();
         if (line.text === "}") {
@@ -950,84 +886,44 @@ var M61EmulatorBundle = (() => {
             kind: "v2_screen",
             name: match[1],
             sources,
-            style,
-            hints: hinted.hints,
-            line: header.line
-          };
-        }
-        const body = parseLeadingHints(line);
-        if (body.text.startsWith("show ")) {
-          sources = parseIdentifierList(body.text.slice("show ".length));
-          continue;
-        }
-        if (body.text.startsWith("style ")) {
-          style = body.text.slice("style ".length).split(/\s+/u).filter(Boolean);
-          continue;
-        }
-        throw new ParseError("Screen block must contain show/style lines", line.line);
-      }
-      throw new ParseError("Unclosed screen block", header.line);
-    }
-    parseV2Ending(hinted) {
-      const header = this.next();
-      const match = /^ending\s+([A-Za-z_][\w]*)\s*\{$/u.exec(hinted.text);
-      if (!match) throw new ParseError("Ending must look like 'ending name {'", header.line);
-      let show;
-      while (!this.done()) {
-        const line = this.next();
-        if (line.text === "}") {
-          if (show === void 0) throw new ParseError("Ending block must contain show line", header.line);
-          return {
-            kind: "v2_ending",
-            name: match[1],
-            show,
-            hints: hinted.hints,
             line: header.line
           };
         }
         if (line.text.startsWith("show ")) {
-          show = line.text.slice("show ".length).trim();
+          sources = parseIdentifierList(line.text.slice("show ".length));
           continue;
         }
-        throw new ParseError("Ending block must contain show lines", line.line);
+        throw new ParseError(`Unexpected screen line '${line.text}'`, line.line);
       }
-      throw new ParseError("Unclosed ending block", header.line);
+      throw new ParseError("Unclosed screen block", header.line);
     }
-    parseV2Board(hinted) {
+    parseV2Board(text) {
       const header = this.next();
-      const match = /^board\s+([A-Za-z_][\w]*)\s*:\s*(\d+)x(\d+)\s*\{$/u.exec(hinted.text);
+      const match = /^board\s+([A-Za-z_][\w]*)\s*:\s*(\d+)x(\d+)\s*\{$/u.exec(text);
       if (!match) throw new ParseError("Board must look like 'board name: 10x10 {'", header.line);
       const board = {
         kind: "v2_board",
         name: match[1],
         width: Number(match[2]),
         height: Number(match[3]),
-        hints: hinted.hints,
         line: header.line
       };
       while (!this.done()) {
         const line = this.next();
         if (line.text === "}") return board;
-        const coordinate = /^coordinate\s+([A-Za-z_][\w]*)(?:\s+(.+))?$/u.exec(line.text);
-        if (coordinate) {
-          board.coordinateStyle = coordinate[1];
-          if (coordinate[2] !== void 0) board.coordinateRange = coordinate[2].trim();
-          continue;
-        }
-        throw new ParseError("Board block must contain coordinate lines", line.line);
+        throw new ParseError("Board block does not support body lines", line.line);
       }
       throw new ParseError("Unclosed board block", header.line);
     }
-    parseV2Fleet(hinted) {
+    parseV2Fleet(text) {
       const header = this.next();
-      const match = /^fleet\s+([A-Za-z_][\w]*)\s+on\s+([A-Za-z_][\w]*)\s*\{$/u.exec(hinted.text);
+      const match = /^fleet\s+([A-Za-z_][\w]*)\s+on\s+([A-Za-z_][\w]*)\s*\{$/u.exec(text);
       if (!match) throw new ParseError("Fleet must look like 'fleet name on board {'", header.line);
       let ships;
       const fleet = {
         kind: "v2_fleet",
         name: match[1],
         board: match[2],
-        hints: hinted.hints,
         line: header.line
       };
       while (!this.done()) {
@@ -1043,33 +939,17 @@ var M61EmulatorBundle = (() => {
           if (shipsMatch[3] !== void 0) ships.max = Number(shipsMatch[3]);
           continue;
         }
-        if (line.text === "generated random") {
-          fleet.generated = "random";
-          continue;
-        }
-        const cleared = /^cleared\s+when\s+(.+)$/u.exec(line.text);
-        if (cleared) {
-          fleet.clearedWhen = cleared[1].trim();
-          continue;
-        }
-        const terminal = /^terminal\s+at\s+(.+?)\s+show\s+(.+)$/u.exec(line.text);
-        if (terminal) {
-          fleet.terminal = { at: terminal[1].trim(), show: terminal[2].trim() };
-          continue;
-        }
-        throw new ParseError("Fleet block must contain ships/generated/cleared/terminal lines", line.line);
+        throw new ParseError(`Unexpected fleet line '${line.text}'`, line.line);
       }
       throw new ParseError("Unclosed fleet block", header.line);
     }
-    parseV2World(hinted) {
+    parseV2World(text) {
       const header = this.next();
-      const match = /^world\s+([A-Za-z_][\w]*)\s*:\s*([A-Za-z_][\w]*)\s*\{$/u.exec(hinted.text);
-      if (!match) throw new ParseError("World must look like 'world name: type {'", header.line);
+      const match = /^world\s+([A-Za-z_][\w]*)\s*\{$/u.exec(text);
+      if (!match) throw new ParseError("World must look like 'world name {'", header.line);
       const world = {
         kind: "v2_world",
         name: match[1],
-        worldType: match[2],
-        hints: hinted.hints,
         line: header.line
       };
       while (!this.done()) {
@@ -1079,30 +959,7 @@ var M61EmulatorBundle = (() => {
           world.position = this.parseV2WorldPosition(line);
           continue;
         }
-        if (line.text === "generated random") {
-          world.generated = "random";
-          continue;
-        }
-        if (line.text.startsWith("player ")) {
-          world.player = line.text.slice("player ".length).trim();
-          continue;
-        }
-        const door = /^door\s+symbol\s+(.+?)\s+costs\s+([A-Za-z_][\w]*)\s+(.+)$/u.exec(line.text);
-        if (door) {
-          world.door = { symbol: door[1].trim(), resource: door[2], cost: door[3].trim() };
-          continue;
-        }
-        const wall = /^wall\s+symbol\s+(.+?)\s+blocks\s+(.+?)\s+costs\s+([A-Za-z_][\w]*)\s+(.+)$/u.exec(line.text);
-        if (wall) {
-          world.wall = { symbol: wall[1].trim(), behavior: wall[2].trim(), resource: wall[3], cost: wall[4].trim() };
-          continue;
-        }
-        const vertical = /^vertical\s+wrap\s+(.+)$/u.exec(line.text);
-        if (vertical) {
-          world.verticalWrap = vertical[1].split("->").map((part) => part.trim()).filter(Boolean);
-          continue;
-        }
-        throw new ParseError("World block must contain position/generated/player/door/wall/vertical lines", line.line);
+        throw new ParseError("World block only supports position blocks", line.line);
       }
       throw new ParseError("Unclosed world block", header.line);
     }
@@ -1113,27 +970,17 @@ var M61EmulatorBundle = (() => {
       while (!this.done()) {
         const line = this.next();
         if (line.text === "}") return position;
-        const range = /^(floors|rooms)\s+(.+)$/u.exec(line.text);
-        if (range) {
-          if (range[1] === "floors") position.floors = range[2].trim();
-          else position.rooms = range[2].trim();
+        if (line.text.startsWith("encoding ")) {
+          position.encoding = line.text.slice("encoding ".length).trim();
           continue;
         }
-        if (line.text.startsWith("display ")) {
-          position.display = line.text.slice("display ".length).trim();
-          continue;
-        }
-        if (line.text.startsWith("start ")) {
-          position.start = line.text.slice("start ".length).trim();
-          continue;
-        }
-        throw new ParseError("World position must contain floors/rooms/display/start lines", line.line);
+        throw new ParseError(`Unexpected world position line '${line.text}'`, line.line);
       }
       throw new ParseError("Unclosed world position block", header.line);
     }
-    parseV2Encounters(hinted) {
+    parseV2Encounters(text) {
       const header = this.next();
-      const match = /^encounters\s+(.+?)\s*\{$/u.exec(hinted.text);
+      const match = /^encounters\s+(.+?)\s*\{$/u.exec(text);
       if (!match) throw new ParseError("Encounter table must look like 'encounters expr {'", header.line);
       const cases = [];
       while (!this.done()) {
@@ -1144,46 +991,45 @@ var M61EmulatorBundle = (() => {
             kind: "v2_encounters",
             expr: match[1].trim(),
             cases,
-            hints: hinted.hints,
             line: header.line
           };
         }
-        const caseHints = parseLeadingHints(line);
-        const inline = /^(\S+)\s+([A-Za-z_][\w]*)\s*\{\s*(.*?)\s*\}$/u.exec(caseHints.text);
+        const inline = /^(\S+)\s*\{\s*(.*?)\s*\}$/u.exec(line.text);
         if (inline) {
           this.index += 1;
           cases.push({
             value: inline[1],
-            name: inline[2],
-            body: inline[3].split(";").map((part) => part.trim()).filter(Boolean).map((text) => parseV2InlineStatement(text, [], line.line)),
-            hints: caseHints.hints,
+            body: inline[2].split(";").map((part) => part.trim()).filter(Boolean).map((text2) => parseV2InlineStatement(text2, line.line)),
             line: line.line
           });
           continue;
         }
-        const caseMatch = /^(\S+)\s+([A-Za-z_][\w]*)\s*\{$/u.exec(caseHints.text);
-        if (!caseMatch) throw new ParseError("Encounter case must look like 'value name {'", line.line);
+        const caseMatch = /^(\S+)\s*\{$/u.exec(line.text);
+        if (!caseMatch) throw new ParseError("Encounter case must look like 'value {'", line.line);
         this.index += 1;
         cases.push({
           value: caseMatch[1],
-          name: caseMatch[2],
           body: this.parseV2StatementBlock(),
-          hints: caseHints.hints,
           line: line.line
         });
       }
       throw new ParseError("Unclosed encounter table", header.line);
     }
-    parseV2Rule(hinted) {
+    parseV2Rule(text) {
       const header = this.next();
-      const match = /^rule\s+([A-Za-z_][\w]*)(?:\(([^)]*)\))?\s*\{$/u.exec(hinted.text);
-      if (!match) throw new ParseError("Rule must look like 'rule name {' or 'rule name(arg) {'", header.line);
+      const match = /^rule\s+([A-Za-z_][\w]*)(?:\s+(.+?))?\s*\{$/u.exec(text);
+      if (!match) throw new ParseError("Rule must look like 'rule name {' or 'rule name arg {'", header.line);
+      const params = match[2] ? parseIdentifierList(match[2]) : [];
+      for (const param of params) {
+        if (!/^[A-Za-z_][\w]*$/u.test(param)) {
+          throw new ParseError(`Invalid rule parameter '${param}'`, header.line);
+        }
+      }
       return {
         kind: "v2_rule",
         name: match[1],
-        params: match[2] ? parseIdentifierList(match[2]) : [],
+        params,
         body: this.parseV2StatementBlock(),
-        hints: hinted.hints,
         line: header.line
       };
     }
@@ -1201,14 +1047,13 @@ var M61EmulatorBundle = (() => {
     }
     parseV2Statement() {
       const line = this.peek();
-      const hinted = parseLeadingHints(line);
-      if (hinted.text.startsWith("match ") && hinted.text.endsWith("{")) {
+      if (line.text.startsWith("match ") && line.text.endsWith("{")) {
         this.index += 1;
-        return this.parseV2Match(hinted.text, hinted.hints, line.line);
+        return this.parseV2Match(line.text, line.line);
       }
-      if (hinted.text.startsWith("if ") && hinted.text.endsWith("{")) {
+      if (line.text.startsWith("if ") && line.text.endsWith("{")) {
         this.index += 1;
-        const predicate = parseV2Predicate(hinted.text.slice("if ".length, -1).trim());
+        const predicate = parseV2Predicate(line.text.slice("if ".length, -1).trim(), line.line);
         const thenBody = this.parseV2StatementBlock();
         let elseBody;
         const next = this.peekOptional();
@@ -1220,20 +1065,99 @@ var M61EmulatorBundle = (() => {
           kind: "v2_if",
           predicate,
           thenBody,
-          hints: hinted.hints,
           line: line.line
         };
         if (elseBody !== void 0) statement.elseBody = elseBody;
         return statement;
       }
-      if (hinted.text.startsWith("challenge ") && hinted.text.endsWith("{")) {
+      if (line.text.startsWith("challenge ") && line.text.endsWith("{")) {
         this.index += 1;
-        return this.parseV2Challenge(hinted.text, hinted.hints, line.line);
+        return this.parseV2Challenge(line.text, line.line);
+      }
+      if (line.text === "raw {") {
+        this.index += 1;
+        return this.parseV2Raw(line.line);
       }
       this.index += 1;
-      return parseV2InlineStatement(hinted.text, hinted.hints, line.line);
+      return parseV2InlineStatement(line.text, line.line);
     }
-    parseV2Challenge(text, hints, line) {
+    parseV2Raw(line) {
+      const inputs = [];
+      const outputs = [];
+      let clobbers;
+      let preserves;
+      let code;
+      while (!this.done()) {
+        const bodyLine = this.peek();
+        if (bodyLine.text === "}") {
+          this.index += 1;
+          if (code === void 0) throw new ParseError("Raw block must contain code { ... }", line);
+          if (clobbers === void 0) throw new ParseError("Raw block must declare clobbers", line);
+          if (preserves === void 0 || !preserves.includes("state")) {
+            throw new ParseError("Raw block must declare preserves state", line);
+          }
+          if (clobbers.includes("state")) {
+            throw new ParseError("Raw block cannot clobber high-level state; return values through returns X -> name", line);
+          }
+          validateV2RawInputs(inputs, line);
+          return {
+            kind: "v2_raw",
+            inputs,
+            outputs,
+            clobbers,
+            preserves,
+            lines: code,
+            line
+          };
+        }
+        if (bodyLine.text.startsWith("takes ")) {
+          this.index += 1;
+          for (const input of parseV2RawInputs(bodyLine.text.slice("takes ".length), bodyLine.line)) {
+            if (inputs.some((existing) => existing.slot === input.slot)) {
+              throw new ParseError(`Raw input for ${input.slot} is declared more than once`, input.line);
+            }
+            inputs.push(input);
+          }
+          continue;
+        }
+        if (bodyLine.text.startsWith("returns ")) {
+          this.index += 1;
+          if (outputs.length > 0) throw new ParseError("Raw block currently supports one return value", bodyLine.line);
+          outputs.push(parseV2RawOutput(bodyLine.text.slice("returns ".length), bodyLine.line));
+          continue;
+        }
+        if (bodyLine.text.startsWith("clobbers ")) {
+          this.index += 1;
+          if (clobbers !== void 0) throw new ParseError("Raw block must declare clobbers only once", bodyLine.line);
+          clobbers = parseV2RawContractList(bodyLine.text.slice("clobbers ".length), bodyLine.line);
+          continue;
+        }
+        if (bodyLine.text.startsWith("preserves ")) {
+          this.index += 1;
+          if (preserves !== void 0) throw new ParseError("Raw block must declare preserves only once", bodyLine.line);
+          preserves = parseV2RawContractList(bodyLine.text.slice("preserves ".length), bodyLine.line);
+          continue;
+        }
+        if (bodyLine.text === "code {") {
+          this.index += 1;
+          if (code !== void 0) throw new ParseError("Raw block must contain only one code block", bodyLine.line);
+          code = this.parseRawCodeBlock(bodyLine.line);
+          continue;
+        }
+        throw new ParseError(`Unexpected raw line '${bodyLine.text}'`, bodyLine.line);
+      }
+      throw new ParseError("Unclosed raw block", line);
+    }
+    parseRawCodeBlock(line) {
+      const lines = [];
+      while (!this.done()) {
+        const rawLine = this.next();
+        if (rawLine.text === "}") return lines;
+        lines.push({ text: rawLine.text, line: rawLine.line });
+      }
+      throw new ParseError("Unclosed raw code block", line);
+    }
+    parseV2Challenge(text, line) {
       const match = /^challenge\s+(.+?)\s+as\s+([A-Za-z_][\w]*)\s+using\s+([A-Za-z_][\w]*),\s*([A-Za-z_][\w]*),\s*([A-Za-z_][\w]*)\s*\{$/u.exec(
         text
       );
@@ -1255,19 +1179,17 @@ var M61EmulatorBundle = (() => {
             warningScreen: match[3],
             memoryScreen: match[4],
             answerInput: match[5],
-            hints,
             line
           };
           if (failureBody !== void 0) statement.failureBody = failureBody;
           return statement;
         }
-        const hinted = parseLeadingHints(bodyLine);
-        if (hinted.text === "success {") {
+        if (bodyLine.text === "success {") {
           this.index += 1;
           successBody = this.parseV2StatementBlock();
           continue;
         }
-        if (hinted.text === "failure {") {
+        if (bodyLine.text === "failure {") {
           this.index += 1;
           failureBody = this.parseV2StatementBlock();
           continue;
@@ -1276,7 +1198,7 @@ var M61EmulatorBundle = (() => {
       }
       throw new ParseError("Unclosed challenge block", line);
     }
-    parseV2Match(text, hints, line) {
+    parseV2Match(text, line) {
       const match = /^match\s+(.+?)\s*\{$/u.exec(text);
       if (!match) throw new ParseError("Match must look like 'match expr {'", line);
       const cases = [];
@@ -1288,24 +1210,21 @@ var M61EmulatorBundle = (() => {
             kind: "v2_match",
             expr: match[1].trim(),
             cases,
-            hints,
             line
           };
           if (otherwise !== void 0) statement.otherwise = otherwise;
           return statement;
         }
-        const hinted = parseLeadingHints(bodyLine);
-        const arrow = /^(.+?)\s*=>\s*(.+)$/u.exec(hinted.text);
+        const arrow = /^(.+?)\s*=>\s*(.+)$/u.exec(bodyLine.text);
         if (!arrow) throw new ParseError("Match cases must look like 'value => action'", bodyLine.line);
         const left = arrow[1].trim();
-        const action = parseV2InlineStatement(arrow[2].trim(), hinted.hints, bodyLine.line);
+        const action = parseV2InlineStatement(arrow[2].trim(), bodyLine.line);
         if (left === "otherwise") {
           otherwise = action;
         } else {
           cases.push({
             values: left.split(",").map((part) => part.trim()).filter(Boolean),
             action,
-            hints: hinted.hints,
             line: bodyLine.line
           });
         }
@@ -1329,176 +1248,65 @@ var M61EmulatorBundle = (() => {
       return line;
     }
   };
-  function parseBudget(line) {
-    const match = /^budget\s+steps\s*<=\s*(\d+)(?:\s+hard)?$/u.exec(line.text) ?? /^budget\s+(\d+)\s+cells(?:\s+hard)?$/u.exec(line.text);
-    if (!match) {
-      throw new ParseError("Budget must look like 'budget steps <= 105' or 'budget 105 cells'", line.line);
-    }
-    return Number(match[1]);
-  }
-  var semanticHints = [
-    "hot",
-    "rare",
-    "cold",
-    "displayed",
-    "hidden",
-    "temporary",
-    "persistent",
-    "wrap",
-    "saturate",
-    "trap",
-    "unordered",
-    "approx",
-    "exact",
-    "manual_entry"
-  ];
-  var forbiddenLowLevelHints = /* @__PURE__ */ new Set([
-    "use_dark_entries",
-    "use_x2",
-    "put_in_r0",
-    "overlay_here",
-    "use_overlay",
-    "use_display_bytes",
-    "use_error_stop",
-    "use_5f"
-  ]);
-  function parseLeadingHints(line) {
-    let text = line.text;
-    const hints = [];
-    while (text.startsWith("[")) {
-      const end = text.indexOf("]");
-      if (end < 0) throw new ParseError("Unclosed hint list", line.line);
-      const rawHints = text.slice(1, end).split(",").map((part) => part.trim()).filter(Boolean);
-      for (const rawHint of rawHints) {
-        const normalized = rawHint.replace(/-/gu, "_").toLowerCase();
-        if (forbiddenLowLevelHints.has(normalized)) {
-          throw new ParseError(`Low-level implementation hint '${rawHint}' is not allowed in M61`, line.line);
-        }
-        if (!semanticHints.includes(normalized)) {
-          throw new ParseError(`Unknown semantic hint '${rawHint}'`, line.line);
-        }
-        hints.push(normalized);
-      }
-      text = text.slice(end + 1).trim();
-    }
-    return { text, hints };
-  }
-  function parseV2Input(hinted, line) {
-    const match = /^input\s+([A-Za-z_][\w]*)\s*:\s*(digit|number)$/u.exec(hinted.text);
-    if (!match) throw new ParseError("Input must look like 'input key: digit' or 'input answer: number'", line);
-    return {
-      kind: "v2_input",
-      name: match[1],
-      inputType: match[2],
-      hints: hinted.hints,
-      line
-    };
-  }
   function parseV2StateField(line) {
-    const hinted = parseLeadingHints(line);
-    const match = /^([A-Za-z_][\w]*)\s*:\s*([A-Za-z_][\w]*)(?:\(([^)]*)\))?(.*)$/u.exec(hinted.text);
+    const match = /^([A-Za-z_][\w]*)\s*:\s*([A-Za-z_][\w]*)(.*)$/u.exec(line.text);
     if (!match) {
       throw new ParseError("State field must look like 'name: counter 0..9 = 0'", line.line);
     }
     const typeText = match[2].toLowerCase();
-    if (!["digit", "flag", "counter", "coord", "bitset", "enum", "packed", "addr", "resource", "score"].includes(typeText)) {
+    if (!["flag", "counter", "coord", "bitset", "packed"].includes(typeText)) {
       throw new ParseError(`Unknown state type '${match[2]}'`, line.line);
     }
-    const tail = match[4].trim();
-    const initialMatch = /(?:^|\s)=\s*(.+)$/u.exec(tail);
-    const rangeMatch = /(-?\d+)\.\.(-?\d+)/u.exec(tail);
+    const tail = match[3].trim();
+    const tailMatch = /^(?:(-?\d+)\.\.(-?\d+))?(?:\s*=\s*(.+))?$/u.exec(tail);
+    if (!tailMatch) {
+      throw new ParseError("State field must look like 'name: counter 0..9 = 0'", line.line);
+    }
     const field = {
       kind: "v2_state_field",
       name: match[1],
       type: typeText,
-      optional: /\boptional\b/u.test(tail),
-      rewards: [],
-      hints: hinted.hints,
       line: line.line
     };
-    if (match[3] !== void 0) field.spec = match[3].trim();
-    if (rangeMatch) {
-      field.min = Number(rangeMatch[1]);
-      field.max = Number(rangeMatch[2]);
+    if (tailMatch[1] !== void 0) {
+      field.min = Number(tailMatch[1]);
+      field.max = Number(tailMatch[2]);
     }
-    if (/\bgenerated\s+random\b/u.test(tail)) field.generated = "random";
-    if (initialMatch) field.initial = initialMatch[1].trim();
+    if (tailMatch[3] !== void 0) field.initial = tailMatch[3].trim();
     return field;
   }
-  function parseV2InlineStatement(text, hints, line) {
-    if (text.startsWith("let ")) {
-      const match = /^let\s+([A-Za-z_][\w]*)\s*=\s*(.+)$/u.exec(text);
-      if (!match) throw new ParseError("Let must look like 'let name = expr'", line);
-      return {
-        kind: "v2_let",
-        name: match[1],
-        expr: match[2].trim(),
-        hints,
-        line
-      };
-    }
+  function parseV2InlineStatement(text, line) {
     if (text.startsWith("show ")) {
-      return { kind: "v2_show", target: text.slice("show ".length).trim(), hints, line };
+      return { kind: "v2_show", target: text.slice("show ".length).trim(), line };
+    }
+    const read = /^read\s+([A-Za-z_][\w]*)$/u.exec(text);
+    if (read) {
+      return { kind: "v2_read", target: read[1], line };
     }
     if (text.startsWith("read ")) {
-      return { kind: "v2_read", target: text.slice("read ".length).trim(), hints, line };
+      throw new ParseError("Read must look like 'read name'", line);
     }
     if (text.startsWith("stop ")) {
-      return { kind: "v2_stop", value: text.slice("stop ".length).trim(), hints, line };
+      return { kind: "v2_stop", value: text.slice("stop ".length).trim(), line };
     }
-    if (text.startsWith("require ")) {
-      const match = /^require\s+(.+?)(?:\s+else\s+(.+))?$/u.exec(text);
-      if (!match) throw new ParseError("Require must look like 'require condition [else action]'", line);
-      const statement = {
-        kind: "v2_require",
-        predicate: parseV2Predicate(match[1].trim()),
-        hints,
-        line
-      };
-      if (match[2] !== void 0) {
-        statement.elseAction = parseV2InlineStatement(match[2].trim(), hints, line);
-      }
-      return statement;
-    }
-    const collection = /^([A-Za-z_][\w]*)\s+(clear|set)\s+(.+)$/u.exec(text);
-    if (collection) {
-      return {
-        kind: "v2_collection",
-        collection: collection[1],
-        op: collection[2],
-        item: collection[3].trim(),
-        hints,
-        line
-      };
-    }
-    if (text.startsWith("reward by ")) {
-      return {
-        kind: "v2_reward",
-        expr: text.slice("reward by ".length).trim(),
-        hints,
-        line
-      };
-    }
-    const move = /^move\s+([A-Za-z_][\w]*)(?:\s+(north|south|east|west|up|down)|\s+by\s+(.+?))(?:\s+remember\s+([A-Za-z_][\w]*))?$/u.exec(text);
+    const move = /^move\s+([A-Za-z_][\w]*)(?:\s+(north|south|east|west|up|down)|\s+by\s+(.+?))$/u.exec(text);
     if (move) {
       const statement = {
         kind: "v2_move",
         target: move[1],
-        hints,
         line
       };
       if (move[2] !== void 0) statement.direction = parseV2MoveDirection(move[2], line);
       if (move[3] !== void 0) statement.expr = move[3].trim();
-      if (move[4] !== void 0) statement.remember = move[4];
       return statement;
     }
-    const end = /^(end|win|lose)\s+([A-Za-z_][\w]*)$/u.exec(text);
-    if (end) {
+    const step = /^([A-Za-z_][\w]*)\s*(\+\+|--)$/u.exec(text);
+    if (step) {
       return {
-        kind: "v2_end",
-        mode: end[1],
-        outcome: end[2],
-        hints,
+        kind: "v2_update",
+        target: step[1],
+        op: step[2] === "++" ? "+=" : "-=",
+        expr: "1",
         line
       };
     }
@@ -1509,7 +1317,6 @@ var M61EmulatorBundle = (() => {
         target: update[1],
         op: update[2],
         expr: update[3].trim(),
-        hints,
         line
       };
     }
@@ -1519,35 +1326,21 @@ var M61EmulatorBundle = (() => {
         kind: "v2_assign",
         target: assignment[1],
         expr: assignment[2].trim(),
-        hints,
         line
       };
     }
-    const invoke = /^([A-Za-z_][\w]*)(?:\((.*)\))?$/u.exec(text);
+    const invoke = /^([A-Za-z_][\w]*)(?:\s+(.+))?$/u.exec(text);
     if (invoke) {
       return {
         kind: "v2_invoke",
         name: invoke[1],
         args: invoke[2] ? splitArgs(invoke[2]) : [],
-        hints,
         line
       };
     }
-    return { kind: "v2_raw", text, hints, line };
+    throw new ParseError(`Unexpected statement '${text}'`, line);
   }
-  function parseV2Predicate(text) {
-    const exists = /^([A-Za-z_][\w]*)\s+exists$/u.exec(text);
-    if (exists) {
-      return { kind: "v2_exists", target: exists[1] };
-    }
-    const has = /^([A-Za-z_][\w]*)\s+has\s+(.+)$/u.exec(text);
-    if (has) {
-      return {
-        kind: "v2_collection_has",
-        collection: has[1],
-        item: has[2].trim()
-      };
-    }
+  function parseV2Predicate(text, line) {
     const compare = /^(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)$/u.exec(text);
     if (compare) {
       return {
@@ -1557,49 +1350,198 @@ var M61EmulatorBundle = (() => {
         right: compare[3].trim()
       };
     }
-    return { kind: "v2_raw_predicate", text };
+    throw new ParseError(`Predicate must look like 'left op right'`, line);
+  }
+  function parseV2RawInputs(text, line) {
+    return splitArgs(text).map((part) => {
+      const match = /^(X|Y|Z|T)\s*=\s*(.+)$/iu.exec(part);
+      if (!match) throw new ParseError("Raw input must look like 'takes X = expr'", line);
+      return {
+        slot: match[1].toUpperCase(),
+        expr: match[2].trim(),
+        line
+      };
+    });
+  }
+  function parseV2RawOutput(text, line) {
+    const explicit = /^X\s*->\s*([A-Za-z_][\w]*)$/iu.exec(text.trim());
+    const shorthand = /^([A-Za-z_][\w]*)$/u.exec(text.trim());
+    const target = explicit?.[1] ?? shorthand?.[1];
+    if (target === void 0) throw new ParseError("Raw output must look like 'returns X -> name'", line);
+    return { slot: "X", target, line };
+  }
+  function parseV2RawContractList(text, line) {
+    const values = parseIdentifierList(text).map((item) => normalizeV2RawContractItem(item, line));
+    if (values.length === 0) throw new ParseError("Raw contract list must not be empty", line);
+    if (values.includes("none") && values.length > 1) {
+      throw new ParseError("Raw contract item 'none' cannot be combined with other items", line);
+    }
+    return [...new Set(values)];
+  }
+  function normalizeV2RawContractItem(text, line) {
+    const trimmed = text.trim();
+    if (/^(none|state|stack|display|flags|memory)$/iu.test(trimmed)) return trimmed.toLowerCase();
+    if (/^(X|Y|Z|T|X1)$/iu.test(trimmed)) return trimmed.toUpperCase();
+    const register = /^R?([0-9a-eавсде])$/iu.exec(trimmed);
+    if (register) return `R${register[1].toLowerCase()}`;
+    throw new ParseError(`Unknown raw contract item '${text}'`, line);
+  }
+  function validateV2RawInputs(inputs, line) {
+    const slots = new Set(inputs.map((input) => input.slot));
+    if (slots.has("T") && (!slots.has("Z") || !slots.has("Y") || !slots.has("X"))) {
+      throw new ParseError("Raw input T requires Z, Y, and X inputs", line);
+    }
+    if (slots.has("Z") && (!slots.has("Y") || !slots.has("X"))) {
+      throw new ParseError("Raw input Z requires Y and X inputs", line);
+    }
+    if (slots.has("Y") && !slots.has("X")) {
+      throw new ParseError("Raw input Y requires an X input", line);
+    }
   }
   function splitArgs(text) {
-    return text.split(",").map((part) => part.trim()).filter(Boolean);
+    const args = [];
+    let start = 0;
+    let depth = 0;
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index];
+      if (char === "(") depth += 1;
+      if (char === ")") depth = Math.max(0, depth - 1);
+      if (char === "," && depth === 0) {
+        args.push(text.slice(start, index).trim());
+        start = index + 1;
+      }
+    }
+    args.push(text.slice(start).trim());
+    return args.filter(Boolean);
   }
   function lowerV2Program(v2) {
-    const endings = collectV2Endings(v2);
-    const inputTypes = collectV2InputTypes(v2);
     const screens = collectV2Screens(v2);
-    validateV2References(v2, { endings, inputTypes, screens });
+    const ruleParams = collectV2RuleParams(v2);
+    const rules = collectV2Rules(v2);
+    const specializedRules = selectV2RuleSpecializations(v2, rules);
+    validateV2References(v2, { screens, ruleParams });
     const context = {
-      ruleParams: new Map(v2.rules.map((rule) => [rule.name, rule.params])),
-      endings,
-      inputTypes,
+      ruleParams,
+      rules,
+      specializedRules,
       moveDeltas: collectV2MoveDeltas(v2)
     };
-    for (const table of v2.encounters) {
-      context.ruleParams.set("encounter", [encounterParamName(table.expr)]);
-    }
     return {
       domains: lowerV2Domains(v2),
-      states: lowerV2State(v2),
+      states: lowerV2State(v2, specializedRules),
       displays: v2.screens.map(lowerV2Screen),
       entries: [lowerV2Entry(v2, context)],
-      procs: [...v2.rules.map((rule) => lowerV2Rule(rule, context)), ...lowerV2EncounterRules(v2, context)],
+      procs: [
+        ...v2.rules.filter((rule) => !specializedRules.has(rule.name)).map((rule) => lowerV2Rule(rule, context)),
+        ...lowerV2EncounterRules(v2, context)
+      ],
       blocks: []
     };
   }
-  function collectV2Endings(v2) {
-    const endings = /* @__PURE__ */ new Map();
-    for (const ending of v2.endings) {
-      if (endings.has(ending.name)) throw new ParseError(`Duplicate ending '${ending.name}'`, ending.line);
-      endings.set(ending.name, ending);
+  function collectV2RuleParams(v2) {
+    const ruleParams = /* @__PURE__ */ new Map();
+    for (const rule of v2.rules) {
+      if (ruleParams.has(rule.name)) throw new ParseError(`Duplicate rule '${rule.name}'`, rule.line);
+      ruleParams.set(rule.name, rule.params);
     }
-    return endings;
+    for (const table of v2.encounters) {
+      if (ruleParams.has("encounter")) throw new ParseError("Duplicate rule 'encounter'", table.line);
+      ruleParams.set("encounter", [encounterParamName(table.expr)]);
+    }
+    return ruleParams;
   }
-  function collectV2InputTypes(v2) {
-    const inputTypes = /* @__PURE__ */ new Map();
-    for (const input of v2.inputs) {
-      if (inputTypes.has(input.name)) throw new ParseError(`Duplicate input '${input.name}'`, input.line);
-      inputTypes.set(input.name, input.inputType);
+  function collectV2Rules(v2) {
+    return new Map(v2.rules.map((rule) => [rule.name, rule]));
+  }
+  function selectV2RuleSpecializations(v2, rules) {
+    const invocations = collectV2Invocations(v2);
+    const selected = /* @__PURE__ */ new Set();
+    for (const rule of v2.rules) {
+      if (rule.params.length === 0 || !isSpecializableRuleBody(rule)) continue;
+      const sites = invocations.filter((site) => site.statement.name === rule.name);
+      if (sites.length < 2) continue;
+      if (sites.some((site) => site.currentRule === rule.name)) continue;
+      if (!sites.every((site) => site.statement.args.length === rule.params.length && site.statement.args.every(isSpecializationArg))) {
+        continue;
+      }
+      const genericCost = estimateV2Statements(rule.body) + 1 + sites.reduce((sum, site) => sum + estimateV2InvokeSetupCost(site.statement) + 2, 0);
+      const inlineCost = sites.reduce((sum, site) => {
+        const replacements = invokeReplacements(rule, site.statement.args);
+        return sum + estimateV2Statements(rule.body, replacements);
+      }, 0);
+      if (inlineCost < genericCost && rules.has(rule.name)) selected.add(rule.name);
     }
-    return inputTypes;
+    return selected;
+  }
+  function collectV2Invocations(v2) {
+    const sites = [];
+    const visit = (statements, currentRule) => {
+      for (const statement of statements) {
+        if (statement.kind === "v2_invoke") {
+          const site = { statement };
+          if (currentRule !== void 0) site.currentRule = currentRule;
+          sites.push(site);
+        }
+        if (statement.kind === "v2_if") {
+          visit(statement.thenBody, currentRule);
+          if (statement.elseBody) visit(statement.elseBody, currentRule);
+        }
+        if (statement.kind === "v2_match") {
+          for (const matchCase of statement.cases) visit([matchCase.action], currentRule);
+          if (statement.otherwise) visit([statement.otherwise], currentRule);
+        }
+        if (statement.kind === "v2_challenge") {
+          visit(statement.successBody, currentRule);
+          if (statement.failureBody) visit(statement.failureBody, currentRule);
+        }
+      }
+    };
+    if (v2.turn !== void 0) visit(v2.turn.body);
+    for (const rule of v2.rules) visit(rule.body, rule.name);
+    for (const table of v2.encounters) {
+      for (const encounterCase of table.cases) visit(encounterCase.body);
+    }
+    return sites;
+  }
+  function isSpecializableRuleBody(rule) {
+    const params = new Set(rule.params);
+    return rule.body.length > 0 && rule.body.every((statement) => {
+      if (statement.kind !== "v2_assign" && statement.kind !== "v2_update") return false;
+      return !params.has(statement.target);
+    });
+  }
+  function isSpecializationArg(arg) {
+    return isNumericLiteralText(arg.trim());
+  }
+  function invokeReplacements(rule, args) {
+    const replacements = /* @__PURE__ */ new Map();
+    for (let index = 0; index < rule.params.length; index += 1) {
+      replacements.set(rule.params[index], args[index].trim());
+    }
+    return replacements;
+  }
+  function estimateV2InvokeSetupCost(statement) {
+    return statement.args.reduce((sum, arg) => sum + estimateV2ExpressionText(arg) + 1, 0);
+  }
+  function estimateV2Statements(statements, replacements = /* @__PURE__ */ new Map()) {
+    return statements.reduce((sum, statement) => sum + estimateV2Statement(statement, replacements), 0);
+  }
+  function estimateV2Statement(statement, replacements) {
+    switch (statement.kind) {
+      case "v2_assign":
+        return estimateV2ExpressionText(substituteV2Text(statement.expr, replacements)) + 1;
+      case "v2_update":
+        return estimateV2ExpressionText(statement.target) + estimateV2ExpressionText(substituteV2Text(statement.expr, replacements)) + 2;
+      default:
+        return 99;
+    }
+  }
+  function estimateV2ExpressionText(text) {
+    const trimmed = text.trim();
+    if (isNumericLiteralText(trimmed) || /^[A-Za-z_][\w]*$/u.test(trimmed)) return 1;
+    const operators = trimmed.match(/[+\-*/]/gu)?.length ?? 0;
+    const calls = trimmed.match(/[A-Za-z_][\w]*\s*\(/gu)?.length ?? 0;
+    return 1 + operators + calls + Math.ceil(trimmed.length / 12);
   }
   function collectV2Screens(v2) {
     const screens = /* @__PURE__ */ new Map();
@@ -1610,22 +1552,6 @@ var M61EmulatorBundle = (() => {
     return screens;
   }
   function validateV2References(v2, context) {
-    const canShowTerminalTarget = (target) => isNumericLiteralText(target) || context.screens.has(target) || context.endings.has(target);
-    for (const ending of v2.endings) {
-      if (!isNumericLiteralText(ending.show) && !context.screens.has(ending.show)) {
-        throw new ParseError(`Unknown ending display target '${ending.show}'`, ending.line);
-      }
-    }
-    for (const field of v2.state) {
-      if (field.terminal !== void 0 && !canShowTerminalTarget(field.terminal.show)) {
-        throw new ParseError(`Unknown terminal target '${field.terminal.show}'`, field.line);
-      }
-    }
-    for (const fleet of v2.fleets) {
-      if (fleet.terminal !== void 0 && !canShowTerminalTarget(fleet.terminal.show)) {
-        throw new ParseError(`Unknown terminal target '${fleet.terminal.show}'`, fleet.line);
-      }
-    }
     const visit = (statements) => {
       for (const statement of statements) {
         validateV2Statement(statement, context, visit);
@@ -1644,14 +1570,18 @@ var M61EmulatorBundle = (() => {
           throw new ParseError(`Unknown screen '${statement.target}'`, statement.line);
         }
         return;
-      case "v2_read":
-        if (!context.inputTypes.has(statement.target)) {
-          throw new ParseError(`Unknown input '${statement.target}'`, statement.line);
+      case "v2_invoke":
+        if (!context.ruleParams.has(statement.name)) {
+          throw new ParseError(`Unknown rule '${statement.name}'`, statement.line);
         }
-        return;
-      case "v2_end":
-        if (!context.endings.has(statement.outcome)) {
-          throw new ParseError(`Unknown ending '${statement.outcome}'`, statement.line);
+        {
+          const expected = context.ruleParams.get(statement.name).length;
+          if (statement.args.length !== expected) {
+            throw new ParseError(
+              `Rule '${statement.name}' expects ${expected} argument${expected === 1 ? "" : "s"}, got ${statement.args.length}`,
+              statement.line
+            );
+          }
         }
         return;
       case "v2_challenge":
@@ -1661,9 +1591,6 @@ var M61EmulatorBundle = (() => {
         if (!context.screens.has(statement.memoryScreen)) {
           throw new ParseError(`Unknown challenge memory screen '${statement.memoryScreen}'`, statement.line);
         }
-        if (!context.inputTypes.has(statement.answerInput)) {
-          throw new ParseError(`Unknown challenge answer input '${statement.answerInput}'`, statement.line);
-        }
         visit(statement.successBody);
         if (statement.failureBody) visit(statement.failureBody);
         return;
@@ -1671,11 +1598,7 @@ var M61EmulatorBundle = (() => {
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
         return;
-      case "v2_require":
-        if (statement.elseAction) visit([statement.elseAction]);
-        return;
       case "v2_match":
-        validateV2MatchValues(statement, context.inputTypes);
         for (const matchCase of statement.cases) visit([matchCase.action]);
         if (statement.otherwise) visit([statement.otherwise]);
         return;
@@ -1683,28 +1606,16 @@ var M61EmulatorBundle = (() => {
         return;
     }
   }
-  function validateV2MatchValues(statement, inputTypes) {
-    if (inputTypes.get(statement.expr.trim()) !== "digit") return;
-    for (const matchCase of statement.cases) {
-      for (const value of matchCase.values) {
-        if (!isNumericLiteralText(value)) continue;
-        const numeric = Number(value);
-        if (!Number.isInteger(numeric) || numeric < 0 || numeric > 9) {
-          throw new ParseError(`Input '${statement.expr}' is digit, but match case '${value}' is not a digit`, matchCase.line);
-        }
-      }
-    }
-  }
   function collectV2MoveDeltas(v2) {
     const deltas = /* @__PURE__ */ new Map();
     for (const world of v2.worlds) {
       if (world.position === void 0) continue;
-      deltas.set(world.position.name, moveDeltasForDisplay(world.position.display));
+      deltas.set(world.position.name, moveDeltasForEncoding(world.position.encoding));
     }
     return deltas;
   }
-  function moveDeltasForDisplay(display) {
-    if (display === "packed_decimal_zero_run") {
+  function moveDeltasForEncoding(encoding) {
+    if (encoding === "packed_decimal_zero_run") {
       return {
         south: "0.0000002",
         north: "-0.0000002",
@@ -1730,8 +1641,6 @@ var M61EmulatorBundle = (() => {
         { text: `columns ${board.width}`, line: board.line },
         { text: `rows ${board.height}`, line: board.line }
       ];
-      if (board.coordinateStyle !== void 0) lines.push({ text: `coordinate ${board.coordinateStyle}`, line: board.line });
-      if (board.coordinateRange !== void 0) lines.push({ text: `range ${board.coordinateRange}`, line: board.line });
       domains.push({
         kind: "domain",
         domainKind: "maze",
@@ -1744,10 +1653,7 @@ var M61EmulatorBundle = (() => {
     for (const world of v2.worlds) {
       if (world.position !== void 0) {
         const lines = [];
-        if (world.position.floors !== void 0) lines.push({ text: `floor ${world.position.floors}`, line: world.position.line });
-        if (world.position.rooms !== void 0) lines.push({ text: `column ${world.position.rooms}`, line: world.position.line });
-        if (world.position.display !== void 0) lines.push({ text: `display ${world.position.display}`, line: world.position.line });
-        if (world.position.start !== void 0) lines.push({ text: `start ${world.position.start}`, line: world.position.line });
+        if (world.position.encoding !== void 0) lines.push({ text: `encoding ${world.position.encoding}`, line: world.position.line });
         domains.push({
           kind: "domain",
           domainKind: "coord",
@@ -1758,19 +1664,6 @@ var M61EmulatorBundle = (() => {
         });
       }
       const worldLines = [];
-      if (world.position?.floors !== void 0) worldLines.push({ text: `floors ${rangeUpperBound(world.position.floors)}`, line: world.line });
-      if (world.position?.rooms !== void 0) worldLines.push({ text: `rooms_per_floor ${rangeSize(world.position.rooms)}`, line: world.line });
-      if (world.generated !== void 0) worldLines.push({ text: "generated_by compiler_random", line: world.line });
-      if (world.player !== void 0) worldLines.push({ text: `player_display ${world.player}`, line: world.line });
-      if (world.door !== void 0) {
-        worldLines.push({ text: `door_before_each_room symbol ${world.door.symbol} cost ${world.door.resource} ${world.door.cost}`, line: world.line });
-      }
-      if (world.wall !== void 0) {
-        worldLines.push({ text: `inner_wall symbol ${world.wall.symbol} blocks_${world.wall.behavior} cost ${world.wall.resource} ${world.wall.cost}`, line: world.line });
-      }
-      if (world.verticalWrap !== void 0) {
-        worldLines.push({ text: `vertical_wrap ${world.verticalWrap.join("_to_")}`, line: world.line });
-      }
       domains.push({
         kind: "domain",
         domainKind: "maze",
@@ -1782,32 +1675,12 @@ var M61EmulatorBundle = (() => {
     }
     for (const field of v2.state) {
       if (field.type === "bitset") {
-        const lines = [];
-        if (field.generated !== void 0) lines.push({ text: "generated_by compiler_random", line: field.line });
-        if (field.clearedWhen !== void 0) lines.push({ text: `cleared_when ${field.clearedWhen}`, line: field.line });
         domains.push({
           kind: "domain",
           domainKind: "bitset",
           name: field.name,
           header: `bitset ${field.name}`,
-          lines,
-          line: field.line
-        });
-      }
-      if (field.type === "resource" || field.type === "score") {
-        const lines = [];
-        if (field.initial !== void 0) lines.push({ text: `initial ${field.initial}`, line: field.line });
-        if (field.terminal !== void 0) {
-          lines.push({ text: `terminal_at ${field.terminal.at}`, line: field.line });
-          lines.push({ text: `terminal_display ${field.terminal.show}`, line: field.line });
-        }
-        for (const reward of field.rewards) lines.push({ text: `reward ${reward.name} ${reward.value}`, line: field.line });
-        domains.push({
-          kind: "domain",
-          domainKind: "resource",
-          name: field.name,
-          header: `resource ${field.name}`,
-          lines,
+          lines: [],
           line: field.line
         });
       }
@@ -1819,9 +1692,7 @@ var M61EmulatorBundle = (() => {
         name: fleet.name,
         header: `fleet ${fleet.name}`,
         lines: [
-          { text: `board ${fleet.board}`, line: fleet.line },
-          ...fleet.generated !== void 0 ? [{ text: "generated_by compiler_random", line: fleet.line }] : [],
-          ...fleet.clearedWhen !== void 0 ? [{ text: `cleared_when ${fleet.clearedWhen}`, line: fleet.line }] : []
+          { text: `board ${fleet.board}`, line: fleet.line }
         ],
         line: fleet.line
       });
@@ -1829,10 +1700,6 @@ var M61EmulatorBundle = (() => {
         { text: `initial ${fleet.ships.initial}`, line: fleet.line },
         { text: `fleet ${fleet.name}`, line: fleet.line }
       ];
-      if (fleet.terminal !== void 0) {
-        resourceLines.push({ text: `terminal_at ${fleet.terminal.at}`, line: fleet.line });
-        resourceLines.push({ text: `terminal_display ${fleet.terminal.show}`, line: fleet.line });
-      }
       domains.push({
         kind: "domain",
         domainKind: "resource",
@@ -1849,7 +1716,7 @@ var M61EmulatorBundle = (() => {
         name: "encounters",
         header: "event encounters",
         lines: v2.encounters.flatMap((table) => table.cases.map((encounterCase) => ({
-          text: `${encounterCase.value} ${encounterCase.name}`,
+          text: encounterCase.value,
           line: encounterCase.line
         }))),
         line: v2.encounters[0].line
@@ -1857,15 +1724,8 @@ var M61EmulatorBundle = (() => {
     }
     return domains;
   }
-  function lowerV2State(v2) {
+  function lowerV2State(v2, specializedRules) {
     const fields = [];
-    for (const input of v2.inputs) {
-      fields.push({
-        name: input.name,
-        type: input.inputType === "digit" ? "digit" : "packed",
-        line: input.line
-      });
-    }
     for (const field of v2.state) {
       const lowered = {
         name: field.name,
@@ -1875,30 +1735,26 @@ var M61EmulatorBundle = (() => {
       if (field.min !== void 0) lowered.min = field.min;
       if (field.max !== void 0) lowered.max = field.max;
       if (field.initial !== void 0) {
-        const inputSource = parseInputSource(field.initial);
-        if (inputSource !== void 0) {
-          lowered.initialInput = inputSource;
+        const stackSource = parseStackSource(field.initial, field.line);
+        if (stackSource !== void 0) {
+          lowered.initialStack = stackSource;
         } else {
-          lowered.initial = lowerV2Expression(field.initial, field.line);
+          lowered.initial = lowerV2InitialExpression(field);
         }
-      } else if (field.generated === "random") {
-        lowered.initial = lowerV2Expression("random() * 999", field.line);
-      } else if (field.optional) {
-        lowered.initial = parseExpression("0", field.line);
       }
       fields.push(lowered);
     }
     for (const fleet of v2.fleets) {
       const ships = {
         name: fleet.ships.name,
-        type: "resource",
+        type: "range",
         line: fleet.line
       };
       if (fleet.ships.min !== void 0) ships.min = fleet.ships.min;
       if (fleet.ships.max !== void 0) ships.max = fleet.ships.max;
-      const inputSource = parseInputSource(fleet.ships.initial);
-      if (inputSource !== void 0) {
-        ships.initialInput = inputSource;
+      const stackSource = parseStackSource(fleet.ships.initial, fleet.line);
+      if (stackSource !== void 0) {
+        ships.initialStack = stackSource;
       } else {
         ships.initial = lowerV2Expression(fleet.ships.initial, fleet.line);
       }
@@ -1906,25 +1762,27 @@ var M61EmulatorBundle = (() => {
       fields.push({
         name: fleet.name,
         type: "packed",
-        initial: fleet.generated === "random" ? lowerV2Expression("random() * 999", fleet.line) : parseExpression("0", fleet.line),
+        initial: lowerV2Expression("random() * 999", fleet.line),
         line: fleet.line
       });
     }
     const declared = new Set(fields.map((field) => field.name));
-    for (const scratch of collectV2ScratchFields(v2)) {
+    for (const scratch of collectV2ScratchFields(v2, specializedRules)) {
       if (declared.has(scratch.name)) continue;
       declared.add(scratch.name);
       fields.push(scratch);
     }
     return fields.length > 0 ? [{ kind: "state", name: v2.name, fields, line: v2.line }] : [];
   }
-  function collectV2ScratchFields(v2) {
+  function collectV2ScratchFields(v2, specializedRules) {
     const fields = [];
     const add = (name, line) => {
       fields.push({ name, type: "packed", line });
     };
     for (const rule of v2.rules) {
-      for (const param of rule.params) add(param, rule.line);
+      if (!specializedRules.has(rule.name)) {
+        for (const param of rule.params) add(param, rule.line);
+      }
       visit(rule.body);
     }
     if (v2.turn !== void 0) visit(v2.turn.body);
@@ -1935,7 +1793,6 @@ var M61EmulatorBundle = (() => {
     return fields;
     function visit(statements) {
       for (const statement of statements) {
-        if (statement.kind === "v2_let") add(statement.name, statement.line);
         if (statement.kind === "v2_if") {
           visit(statement.thenBody);
           if (statement.elseBody) visit(statement.elseBody);
@@ -1944,40 +1801,36 @@ var M61EmulatorBundle = (() => {
           for (const matchCase of statement.cases) visit([matchCase.action]);
           if (statement.otherwise) visit([statement.otherwise]);
         }
-        if (statement.kind === "v2_require" && statement.elseAction) visit([statement.elseAction]);
         if (statement.kind === "v2_challenge") {
           add(statement.challengeTarget, statement.line);
+          add(statement.answerInput, statement.line);
           visit(statement.successBody);
           if (statement.failureBody) visit(statement.failureBody);
         }
-        if (statement.kind === "v2_move" && statement.remember !== void 0) add(statement.remember, statement.line);
+        if (statement.kind === "v2_read") add(statement.target, statement.line);
       }
     }
   }
+  function lowerV2InitialExpression(field) {
+    const initial = field.initial ?? "0";
+    if (field.type === "bitset" && initial.trim() === "random()") {
+      return lowerV2Expression("random() * 999", field.line);
+    }
+    return lowerV2Expression(initial, field.line);
+  }
   function lowerV2StateFieldType(type) {
     if (type === "counter") return "range";
-    if (type === "coord" || type === "bitset" || type === "enum") return "packed";
-    if (type === "resource" || type === "score") return "resource";
+    if (type === "coord" || type === "bitset") return "packed";
     return type;
   }
-  function rangeUpperBound(range) {
-    return range.split("..").at(-1)?.trim() ?? range.trim();
-  }
-  function rangeSize(range) {
-    const [minText, maxText] = range.split("..").map((part) => Number(part.trim()));
-    if (Number.isFinite(minText) && Number.isFinite(maxText)) return String(maxText - minText + 1);
-    return range.trim();
-  }
   function lowerV2Screen(screen) {
-    const display = {
+    return {
       kind: "display",
       name: screen.name,
       format: "packed",
       sources: screen.sources,
       line: screen.line
     };
-    if (screen.style.length > 0) display.mode = screen.style.join("_");
-    return display;
   }
   function lowerV2Entry(v2, context) {
     return {
@@ -2023,19 +1876,6 @@ var M61EmulatorBundle = (() => {
     const lowered = [];
     for (let index = 0; index < statements.length; index += 1) {
       const statement = statements[index];
-      if (statement.kind === "v2_require") {
-        const condition = lowerV2Predicate(statement.predicate, statement.line);
-        const thenBody = lowerV2Statements(statements.slice(index + 1), context);
-        const elseBody = statement.elseAction ? lowerV2Statements([statement.elseAction], context) : [{ kind: "pause", expr: parseExpression("0", statement.line), line: statement.line }];
-        lowered.push({
-          kind: "if",
-          condition,
-          thenBody,
-          elseBody,
-          line: statement.line
-        });
-        return lowered;
-      }
       lowered.push(...lowerV2Statement(statement, context));
     }
     return lowered;
@@ -2050,14 +1890,11 @@ var M61EmulatorBundle = (() => {
       case "v2_read":
         return [{
           kind: "input",
-          inputType: context.inputTypes.get(statement.target) ?? "number",
           target: statement.target,
           line: statement.line
         }];
       case "v2_stop":
         return [{ kind: "halt", expr: lowerV2Expression(statement.value, statement.line), line: statement.line }];
-      case "v2_let":
-        return [{ kind: "assign", target: statement.name, expr: lowerV2Expression(statement.expr, statement.line), line: statement.line }];
       case "v2_invoke":
         return lowerV2Invoke(statement, context);
       case "v2_if": {
@@ -2071,14 +1908,10 @@ var M61EmulatorBundle = (() => {
         if (statement.elseBody !== void 0) lowered.elseBody = lowerV2Statements(statement.elseBody, context);
         return [lowered];
       }
-      case "v2_require":
-        return [];
       case "v2_challenge":
         return lowerV2Challenge(statement, context);
       case "v2_move":
         return lowerV2Move(statement, context);
-      case "v2_end":
-        return lowerV2End(statement, context);
       case "v2_assign":
         return [{ kind: "assign", target: statement.target, expr: lowerV2Expression(statement.expr, statement.line), line: statement.line }];
       case "v2_update": {
@@ -2094,47 +1927,38 @@ var M61EmulatorBundle = (() => {
           line: statement.line
         }];
       }
+      case "v2_raw":
+        return [{
+          kind: "core",
+          inputs: statement.inputs.map((input) => ({
+            slot: input.slot,
+            expr: lowerV2Expression(input.expr, input.line),
+            line: input.line
+          })),
+          outputs: statement.outputs.map((output) => ({
+            slot: output.slot,
+            target: output.target,
+            line: output.line
+          })),
+          clobbers: statement.clobbers,
+          preserves: statement.preserves,
+          lines: statement.lines,
+          strict: true,
+          line: statement.line
+        }];
       case "v2_match":
         return [lowerV2Match(statement, context)];
-      case "v2_collection":
-        return [lowerV2Collection(statement)];
-      case "v2_reward":
-        return lowerV2Reward(statement);
-      case "v2_raw":
-        return [];
     }
   }
   function lowerV2Predicate(predicate, line) {
-    switch (predicate.kind) {
-      case "v2_compare":
-        return {
-          left: lowerV2Expression(predicate.left, line),
-          op: predicate.op,
-          right: lowerV2Expression(predicate.right, line)
-        };
-      case "v2_exists":
-        return {
-          left: lowerV2Expression(predicate.target, line),
-          op: "!=",
-          right: parseExpression("0", line)
-        };
-      case "v2_collection_has": {
-        return {
-          left: { kind: "identifier", name: predicate.collection },
-          op: ">=",
-          right: lowerV2Expression(predicate.item, line)
-        };
-      }
-      case "v2_raw_predicate":
-        return {
-          left: parseExpression("0", line),
-          op: "!=",
-          right: parseExpression("0", line)
-        };
-    }
+    return {
+      left: lowerV2Expression(predicate.left, line),
+      op: predicate.op,
+      right: lowerV2Expression(predicate.right, line)
+    };
   }
   function lowerV2Challenge(statement, context) {
-    const failureBody = statement.failureBody ?? [{ kind: "v2_show", target: "0", hints: [], line: statement.line }];
+    const failureBody = statement.failureBody ?? [{ kind: "v2_show", target: "0", line: statement.line }];
     return [
       {
         kind: "assign",
@@ -2146,7 +1970,6 @@ var M61EmulatorBundle = (() => {
       { kind: "show", display: statement.memoryScreen, line: statement.line },
       {
         kind: "input",
-        inputType: context.inputTypes.get(statement.answerInput) ?? "number",
         target: statement.answerInput,
         line: statement.line
       },
@@ -2176,38 +1999,11 @@ var M61EmulatorBundle = (() => {
       },
       line: statement.line
     };
-    if (statement.remember === void 0) return [move];
-    return [
-      {
-        kind: "assign",
-        target: statement.remember,
-        expr: move.expr,
-        line: statement.line
-      },
-      {
-        kind: "assign",
-        target: statement.target,
-        expr: { kind: "identifier", name: statement.remember },
-        line: statement.line
-      }
-    ];
-  }
-  function lowerV2End(statement, context) {
-    const ending = context.endings.get(statement.outcome);
-    if (ending === void 0) {
-      throw new ParseError(`Unknown ending '${statement.outcome}'`, statement.line);
-    }
-    if (isNumericLiteralText(ending.show)) {
-      return [{ kind: "halt", expr: parseExpression(ending.show, statement.line), line: statement.line }];
-    }
-    return [
-      { kind: "show", display: ending.show, line: statement.line },
-      { kind: "halt", expr: parseExpression("0", statement.line), line: statement.line }
-    ];
+    return [move];
   }
   function namedMoveDelta(target, direction, line, context) {
     if (direction === void 0) throw new ParseError("Move must specify a direction or 'by expr'", line);
-    return context.moveDeltas.get(target)?.[direction] ?? moveDeltasForDisplay(void 0)[direction] ?? "0";
+    return context.moveDeltas.get(target)?.[direction] ?? moveDeltasForEncoding(void 0)[direction] ?? "0";
   }
   function parseV2MoveDirection(text, line) {
     switch (text) {
@@ -2296,6 +2092,11 @@ var M61EmulatorBundle = (() => {
   }
   function lowerV2MatchAction(action, context, matchExpr, matchValue, line) {
     if (action.kind !== "v2_invoke") return lowerV2Statement(action, context);
+    const rule = context.rules.get(action.name);
+    if (rule !== void 0 && context.specializedRules.has(rule.name)) {
+      const args = action.args.map((arg) => resolveV2InvokeArg(arg, matchExpr, matchValue));
+      return lowerV2Statements(substituteV2Statements(rule.body, invokeReplacements(rule, args)), context);
+    }
     const params = context.ruleParams.get(action.name) ?? [];
     const statements = [];
     for (let index = 0; index < Math.min(params.length, action.args.length); index += 1) {
@@ -2311,6 +2112,10 @@ var M61EmulatorBundle = (() => {
     return statements;
   }
   function lowerV2Invoke(statement, context) {
+    const rule = context.rules.get(statement.name);
+    if (rule !== void 0 && context.specializedRules.has(rule.name)) {
+      return lowerV2Statements(substituteV2Statements(rule.body, invokeReplacements(rule, statement.args)), context);
+    }
     const params = context.ruleParams.get(statement.name) ?? [];
     const statements = [];
     for (let index = 0; index < Math.min(params.length, statement.args.length); index += 1) {
@@ -2324,6 +2129,88 @@ var M61EmulatorBundle = (() => {
     statements.push({ kind: "call", block: statement.name, line: statement.line });
     return statements;
   }
+  function substituteV2Statements(statements, replacements) {
+    return statements.map((statement) => substituteV2Statement(statement, replacements));
+  }
+  function substituteV2Statement(statement, replacements) {
+    switch (statement.kind) {
+      case "v2_assign":
+        return { ...statement, expr: substituteV2Text(statement.expr, replacements) };
+      case "v2_update":
+        return { ...statement, expr: substituteV2Text(statement.expr, replacements) };
+      case "v2_if": {
+        const substituted = {
+          ...statement,
+          predicate: substituteV2Predicate(statement.predicate, replacements),
+          thenBody: substituteV2Statements(statement.thenBody, replacements)
+        };
+        if (statement.elseBody !== void 0) {
+          substituted.elseBody = substituteV2Statements(statement.elseBody, replacements);
+        }
+        return substituted;
+      }
+      case "v2_challenge": {
+        const substituted = {
+          ...statement,
+          expr: substituteV2Text(statement.expr, replacements),
+          successBody: substituteV2Statements(statement.successBody, replacements)
+        };
+        if (statement.failureBody !== void 0) {
+          substituted.failureBody = substituteV2Statements(statement.failureBody, replacements);
+        }
+        return substituted;
+      }
+      case "v2_move": {
+        const substituted = { ...statement };
+        if (statement.expr !== void 0) substituted.expr = substituteV2Text(statement.expr, replacements);
+        return substituted;
+      }
+      case "v2_match": {
+        const substituted = {
+          ...statement,
+          expr: substituteV2Text(statement.expr, replacements),
+          cases: statement.cases.map((matchCase) => ({
+            ...matchCase,
+            values: matchCase.values.map((value) => substituteV2Text(value, replacements)),
+            action: substituteV2Statement(matchCase.action, replacements)
+          }))
+        };
+        if (statement.otherwise !== void 0) {
+          substituted.otherwise = substituteV2Statement(statement.otherwise, replacements);
+        }
+        return substituted;
+      }
+      case "v2_invoke":
+        return { ...statement, args: statement.args.map((arg) => substituteV2Text(arg, replacements)) };
+      case "v2_stop":
+        return { ...statement, value: substituteV2Text(statement.value, replacements) };
+      default:
+        return statement;
+    }
+  }
+  function substituteV2Predicate(predicate, replacements) {
+    return {
+      ...predicate,
+      left: substituteV2Text(predicate.left, replacements),
+      right: substituteV2Text(predicate.right, replacements)
+    };
+  }
+  function substituteV2Text(text, replacements) {
+    let result = text;
+    for (const [name, value] of replacements) {
+      const escaped = escapeRegExp(name);
+      const replacement = isSimpleSubstitutionAtom(value) ? value : `(${value})`;
+      result = result.replace(new RegExp(`\\b${escaped}\\b`, "gu"), replacement);
+    }
+    return result;
+  }
+  function isSimpleSubstitutionAtom(value) {
+    const trimmed = value.trim();
+    return isNumericLiteralText(trimmed) || /^[A-Za-z_][\w]*$/u.test(trimmed);
+  }
+  function escapeRegExp(text) {
+    return text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  }
   function resolveV2InvokeArg(arg, matchExpr, matchValue) {
     const direction = /^direction\((.+)\)$/u.exec(arg.trim());
     if (direction && direction[1].trim() === matchExpr.trim()) {
@@ -2332,59 +2219,19 @@ var M61EmulatorBundle = (() => {
     }
     return arg;
   }
-  function lowerV2Collection(statement) {
-    return {
-      kind: "assign",
-      target: statement.collection,
-      expr: {
-        kind: "binary",
-        op: statement.op === "clear" ? "-" : "+",
-        left: { kind: "identifier", name: statement.collection },
-        right: lowerV2Expression(statement.item, statement.line)
-      },
-      line: statement.line
-    };
-  }
-  function lowerV2Reward(statement) {
-    return [{
-      kind: "assign",
-      target: "treasure",
-      expr: {
-        kind: "binary",
-        op: "+",
-        left: { kind: "identifier", name: "treasure" },
-        right: lowerV2Expression(statement.expr, statement.line)
-      },
-      line: statement.line
-    }];
-  }
   function lowerV2Expression(text, line) {
     const normalized = normalizeV2ExpressionText(text);
     return parseExpression(normalized, line);
   }
   function normalizeV2ExpressionText(text) {
-    const query = normalizeV2QueryExpression(text.trim());
-    return (query ?? text).trim().replace(/\b([A-Za-z_][\w]*)\.floor\b/gu, "int($1 / 100)").replace(/\binput\.X\b/gu, "0").replace(/\binput\.Y\b/gu, "0");
+    return text.trim().replace(/\b([A-Za-z_][\w]*)\.floor\b/gu, "int($1 / 100)");
   }
-  function normalizeV2QueryExpression(text) {
-    const lineCount = /^count\s+lines\s+(?:from|in)\s+([A-Za-z_][\w]*)\s+at\s+(.+)$/u.exec(text);
-    if (lineCount) return `line_count(${lineCount[1]}, ${lineCount[2].trim()})`;
-    const neighborCount = /^count\s+neighbou?rs\s+(?:from|in)\s+([A-Za-z_][\w]*)\s+(?:around|at)\s+(.+)$/u.exec(text);
-    if (neighborCount) return `neighbor_count(${neighborCount[1]}, ${neighborCount[2].trim()})`;
-    const cell = /^(?:cell|tile)\s+from\s+([A-Za-z_][\w]*)\s+at\s+(.+)$/u.exec(text);
-    if (cell) return `cell_at(${cell[1]}, ${cell[2].trim()})`;
-    const randomCell = /^random\s+(?:position|cell)\s+(?:from|in|on)\s+([A-Za-z_][\w]*)$/u.exec(text);
-    if (randomCell) return `random_cell(${randomCell[1]})`;
-    const randomRange = /^random\s+range\s+(.+?)\.\.(.+)$/u.exec(text);
-    if (randomRange) {
-      const min = randomRange[1].trim();
-      const max = randomRange[2].trim();
-      return `int(random() * ((${max}) - (${min}) + 1)) + (${min})`;
+  function parseStackSource(text, line) {
+    const trimmed = text.trim();
+    if (/^input\.(X|Y)$/u.test(trimmed)) {
+      throw new ParseError(`Use '${trimmed.replace("input.", "stack.")}' for startup stack values`, line);
     }
-    return void 0;
-  }
-  function parseInputSource(text) {
-    const match = /^input\.(X|Y)$/u.exec(text.trim());
+    const match = /^stack\.(X|Y)$/u.exec(trimmed);
     return match?.[1];
   }
   function directionDelta(text) {
@@ -3958,89 +3805,88 @@ var M61EmulatorBundle = (() => {
     };
   }
 
-  // src/core/targetProfile.ts
-  var MK61_EXACT_PROFILE = {
-    id: "mk61_exact",
-    machine: "mk61",
+  // src/core/machineProfile.ts
+  var MK61_PROFILE = {
+    id: "mk61",
     features: [
       {
         id: "branch-removal",
-        source: "target-profile",
+        source: "machine",
         detail: "Documented arithmetic, sign, extrema, and zero-test opcodes can replace provably equivalent branches."
       },
       {
         id: "fl-decrement-branch",
-        source: "target-profile",
+        source: "machine",
         detail: "F L0..F L3 are available for compact decrement-and-continue/decrement-and-branch forms."
       },
       {
         id: "return-empty-stack-jump",
-        source: "target-profile",
+        source: "machine",
         detail: "\u0412/\u041E can be used as \u0411\u041F 01 when static control-flow proves that no return frame is pending."
       },
       {
         id: "undocumented-opcodes",
-        source: "target-profile",
+        source: "machine",
         detail: "F0..FF and undocumented aliases are available when exact-machine preconditions are proved."
       },
       {
         id: "dark-entries",
-        source: "target-profile",
+        source: "machine",
         detail: "Formal dark/super-dark entry addresses are available to the layout solver."
       },
       {
         id: "super-dark-dispatch",
-        source: "target-profile",
+        source: "machine",
         detail: "Indirect \u041A \u0411\u041F R to FA..FF can execute one command at 48..53 and continue at 01..06."
       },
       {
         id: "indirect-flow",
-        source: "target-profile",
+        source: "machine",
         detail: "\u041A \u0411\u041F/\u041A \u041F\u041F/\u041A x?0 indirect flow commands are available to the optimizer."
       },
       {
         id: "code-data-overlay",
-        source: "target-profile",
+        source: "machine",
         detail: "Address operands, constants, opcodes, and display bytes may share cells after conflict checks."
       },
       {
         id: "address-constants",
-        source: "target-profile",
+        source: "machine",
         detail: "Address cells may double as constants for indirect flow and data transforms."
       },
       {
         id: "display-bytes",
-        source: "target-profile",
+        source: "machine",
         detail: "Packed display bytes, hexadecimal mantissa digits, and sign-digit forms are available."
       },
       {
         id: "x2-register",
-        source: "target-profile",
+        source: "machine",
         detail: "The hidden X2 display register can be scheduled when observable display semantics are preserved."
       },
       {
         id: "extra-cells",
-        source: "target-profile",
+        source: "machine",
         detail: "Extra physical cells are tracked separately from official program cells."
       },
       {
         id: "error-stops",
-        source: "target-profile",
+        source: "machine",
         detail: "Domain-error stops are available only when the source semantics permits trap-like termination."
       },
       {
         id: "r0-t-alias",
-        source: "target-profile",
+        source: "machine",
         detail: "R0/T and *F alias behavior is available, including normal R0 transformation; aliases do not preserve R0."
       },
       {
         id: "r0-fractional-sentinel",
-        source: "target-profile",
+        source: "machine",
         detail: "Fractional positive R0 states can select R3 or jump to 99 while leaving the -99999999 sentinel."
       },
       {
         id: "raw-display-5f",
-        source: "target-profile",
+        source: "machine",
         detail: "Opcode 5F is a display/raw-state transform in this ROM, not a hang."
       }
     ],
@@ -4092,13 +3938,7 @@ var M61EmulatorBundle = (() => {
       }
     ]
   };
-  function targetProfileFor(machine) {
-    if (machine !== "mk61") {
-      throw new Error(`Unsupported target machine '${machine}'`);
-    }
-    return MK61_EXACT_PROFILE;
-  }
-  function targetSupports(profile, featureId) {
+  function machineSupports(profile, featureId) {
     return profile.features.some((feature) => feature.id === featureId);
   }
 
@@ -4144,15 +3984,12 @@ var M61EmulatorBundle = (() => {
   function compileM61(source, options = {}) {
     const ast = parseProgram(source);
     const opts = { ...DEFAULT_OPTIONS, ...options };
-    const targetProfile = targetProfileFor(ast.machine);
-    if (options.budget === void 0 && ast.budget !== void 0) {
-      opts.budget = ast.budget;
-    }
+    const machineProfile = MK61_PROFILE;
     const diagnostics = [];
     const optimizations = [];
     const warnings = [];
     const candidates = [];
-    const gameIntentProgram = tryCompileGameIntentProgram(ast, opts, targetProfile);
+    const gameIntentProgram = tryCompileGameIntentProgram(ast, opts, machineProfile);
     if (gameIntentProgram) return gameIntentProgram;
     validateSemanticDomains(ast, diagnostics);
     validateV2Intent(ast, diagnostics);
@@ -4170,6 +4007,7 @@ var M61EmulatorBundle = (() => {
       ast,
       allocation,
       opts,
+      machineProfile,
       diagnostics,
       optimizations,
       warnings,
@@ -4177,7 +4015,7 @@ var M61EmulatorBundle = (() => {
     );
     context.compileProgram();
     const optimized = optimizeItems(context.items, opts, optimizations);
-    const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, targetProfile);
+    const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, machineProfile);
     const largestBlocks = summarizeBlocks(optimized);
     if (steps.length > opts.budget) {
       diagnostics.push({
@@ -4192,21 +4030,21 @@ var M61EmulatorBundle = (() => {
     const report = {
       steps: steps.length,
       budget: opts.budget,
-      targetProfile: targetProfile.id,
+      machine: machineProfile.id,
       registers: visiblePublicRegisters(allocation.registers),
       labels,
       optimizations,
       warnings,
       delivery: opts.delivery,
-      optimizer: buildOptimizerReport(ast, opts, optimizations, candidates, cellRoles, targetProfile),
+      optimizer: buildOptimizerReport(ast, opts, optimizations, candidates, cellRoles, machineProfile),
       preloads: buildPreloadReport(ast, allocation),
       ir: buildIrReport(ast, optimized, steps.length),
       cellRoles,
       candidates,
       budgetReport: buildBudgetReport(steps.length, opts.budget, largestBlocks, 0),
-      machineFeaturesUsed: buildMachineFeaturesUsed(targetProfile, optimizations, cellRoles, candidates),
+      machineFeaturesUsed: buildMachineFeaturesUsed(machineProfile, optimizations, cellRoles, candidates),
       proofs: buildProofReport(ast, optimized, cellRoles, opts, optimizations),
-      emulatorFacts: targetProfile.emulatorFacts,
+      emulatorFacts: machineProfile.emulatorFacts,
       rejectedCandidates: candidates.filter((candidate) => !candidate.selected).map((candidate) => ({
         site: candidate.site,
         variant: candidate.variant,
@@ -4401,7 +4239,7 @@ var M61EmulatorBundle = (() => {
     const lowered = lowerIrToLayout(ir);
     return lowered.cells;
   }
-  function tryCompileGameIntentProgram(ast, options, targetProfile) {
+  function tryCompileGameIntentProgram(ast, options, machineProfile) {
     const intent = buildGameIntent(ast);
     if (!intent) return void 0;
     const effectIr = buildGameEffectIr(intent);
@@ -4437,19 +4275,19 @@ var M61EmulatorBundle = (() => {
       ...buildGameBackendCandidateReports(backendCandidates, selectedBackend),
       ...buildGameIntentCandidates(candidateIr)
     ];
-    const cellRoles = buildGameIntentCellRoles(layoutIr, targetProfile);
-    const warnings = selectedBackend.variant === "universal_spatial_resource" ? ["GameIntent selected the universal spatial/resource tactic pipeline; reference metadata did not affect code generation."] : [`GameIntent selected ${selectedBackend.variant} semantic microkernel; reference metadata did not affect code generation.`];
+    const cellRoles = buildGameIntentCellRoles(layoutIr, machineProfile);
+    const warnings = selectedBackend.variant === "universal_spatial_resource" ? ["GameIntent selected the universal spatial/counter tactic pipeline; reference metadata did not affect code generation."] : [`GameIntent selected ${selectedBackend.variant} semantic microkernel; reference metadata did not affect code generation.`];
     if (referenceResult?.warning !== void 0) warnings.push(referenceResult.warning);
     const report = {
       steps: steps.length,
       budget: options.budget,
-      targetProfile: targetProfile.id,
+      machine: machineProfile.id,
       registers: selectedBackend.registers,
       labels: selectedBackend.labels,
       optimizations,
       warnings,
       delivery: options.delivery,
-      optimizer: buildOptimizerReport(ast, options, optimizations, candidates, cellRoles, targetProfile),
+      optimizer: buildOptimizerReport(ast, options, optimizations, candidates, cellRoles, machineProfile),
       preloads: selectedBackend.preloads,
       ...referenceResult?.report === void 0 ? {} : { reference: referenceResult.report },
       ir: {
@@ -4462,9 +4300,9 @@ var M61EmulatorBundle = (() => {
       cellRoles,
       candidates,
       budgetReport: buildBudgetReport(steps.length, options.budget, selectedBackend.hotBlocks.map((block) => `${block.name}=${block.estimatedCells}`), 0),
-      machineFeaturesUsed: buildMachineFeaturesUsed(targetProfile, optimizations, cellRoles, candidates),
+      machineFeaturesUsed: buildMachineFeaturesUsed(machineProfile, optimizations, cellRoles, candidates),
       proofs: buildGameIntentProofs(intent, selectedBackend, referenceResult?.report),
-      emulatorFacts: targetProfile.emulatorFacts,
+      emulatorFacts: machineProfile.emulatorFacts,
       rejectedCandidates: candidates.filter((candidate) => !candidate.selected).map((candidate) => ({
         site: candidate.site,
         variant: candidate.variant,
@@ -4504,7 +4342,7 @@ var M61EmulatorBundle = (() => {
         { name: "setup+mask-generation", estimatedCells: 29 },
         { name: "collection+event", estimatedCells: 29 }
       ],
-      reason: "fallback covers the full spatial/resource feature set"
+      reason: "fallback covers the full spatial/counter feature set"
     };
   }
   function buildShapeBackendCandidate(intent) {
@@ -4544,15 +4382,15 @@ var M61EmulatorBundle = (() => {
   function coveredFeaturesForShape(shape) {
     switch (shape) {
       case "board_line_count":
-        return ["bitset", "board", "endings", "fleet", "fleet_probe", "fleet_clear", "line_count", "resources"];
+        return ["bitset", "board", "fleet", "fleet_probe", "fleet_clear", "line_count", "resources"];
       case "board_neighbor_count":
-        return ["bitset", "board", "endings", "neighbor_count", "resources"];
+        return ["bitset", "board", "neighbor_count", "resources"];
       case "board_fleet_duel":
-        return ["bitset", "board", "endings", "fleet", "fleet_probe", "fleet_clear", "hit_report", "random_board_cell", "resources"];
+        return ["bitset", "board", "fleet", "fleet_probe", "fleet_clear", "hit_report", "random_board_cell", "resources"];
       case "world_table":
-        return ["bitset", "cell_at", "endings", "movement", "resources"];
+        return ["bitset", "cell_at", "movement", "resources"];
       case "lane_resource":
-        return ["endings", "movement", "random_cell", "resources"];
+        return ["movement", "random_cell", "resources"];
     }
   }
   function emitKernelSegments(segments) {
@@ -4708,7 +4546,7 @@ var M61EmulatorBundle = (() => {
     const domainKinds = new Set(ast.domains.map((domain) => domain.domainKind));
     const v2Types = new Set(ast.v2?.state.map((field) => field.type.split("(")[0].trim()) ?? []);
     const hasSpatialState = domainKinds.has("maze") || domainKinds.has("coord") || v2Types.has("coord") || v2Types.has("bitset");
-    const hasResourceState = domainKinds.has("resource") || v2Types.has("counter") || v2Types.has("resource") || ast.states.some((state) => state.fields.some((field) => gameStateRole(field.type) === "resource"));
+    const hasResourceState = domainKinds.has("resource") || v2Types.has("counter") || ast.states.some((state) => state.fields.some((field) => gameStateRole(field.type) === "resource"));
     const hasGameFlow = domainKinds.has("event") || domainKinds.has("cache_search") || domainKinds.has("fight") || ast.v2?.turn !== void 0 || (ast.v2?.rules.length ?? 0) > 0;
     if (!(hasSpatialState && hasResourceState && hasGameFlow)) return void 0;
     const queries = collectGameQueryIntents(ast.v2);
@@ -4718,7 +4556,7 @@ var M61EmulatorBundle = (() => {
       name: ast.v2?.name ?? ast.reference ?? "game",
       shape: classifyGameIntentShape(features),
       features,
-      inputs: ast.v2?.inputs.map((input) => input.name) ?? [],
+      inputs: collectV2InputNames(ast.v2),
       stateRoles: collectGameStateRoles(ast),
       domains: ast.domains.map((domain) => {
         const domainIntent = {
@@ -4740,7 +4578,7 @@ var M61EmulatorBundle = (() => {
     const features = /* @__PURE__ */ new Set();
     const v2 = ast.v2;
     const fleetNames = new Set(v2?.fleets.map((fleet) => fleet.name) ?? []);
-    const inputNames = new Set(v2?.inputs.map((input) => input.name) ?? []);
+    const inputNames = new Set(collectV2InputNames(v2));
     const boardCellCounts = new Set(v2?.boards.map((board) => board.width * board.height) ?? []);
     if ((v2?.boards.length ?? 0) > 0) features.add("board");
     if ((v2?.fleets.length ?? 0) > 0) {
@@ -4749,10 +4587,9 @@ var M61EmulatorBundle = (() => {
       features.add("resources");
     }
     if ((v2?.worlds.length ?? 0) > 0) features.add("movement");
-    if ((v2?.endings.length ?? 0) > 0) features.add("endings");
     for (const field of v2?.state ?? []) {
       if (field.type === "bitset") features.add("bitset");
-      if (field.type === "counter" || field.type === "resource" || field.type === "score") features.add("resources");
+      if (field.type === "counter") features.add("resources");
     }
     for (const state of ast.states) {
       for (const field of state.fields) {
@@ -4763,7 +4600,7 @@ var M61EmulatorBundle = (() => {
       features.add(query.kind);
     }
     const addPredicateFeatures = (predicate) => {
-      if (predicate.kind === "v2_collection_has" && fleetNames.has(predicate.collection)) {
+      if (predicate.kind === "v2_compare" && predicate.op === ">=" && fleetNames.has(predicate.left.trim())) {
         features.add("fleet_probe");
       }
       if (isNegativeInputReportPredicate(predicate, inputNames)) {
@@ -4776,17 +4613,13 @@ var M61EmulatorBundle = (() => {
         if (statement.kind === "v2_assign" && isRandomBoardCellExpression(statement.expr, boardCellCounts)) {
           features.add("random_board_cell");
         }
-        if (statement.kind === "v2_collection" && statement.op === "clear" && fleetNames.has(statement.collection)) {
+        if (statement.kind === "v2_update" && statement.op === "-=" && fleetNames.has(statement.target)) {
           features.add("fleet_clear");
         }
         if (statement.kind === "v2_if") {
           addPredicateFeatures(statement.predicate);
           visit(statement.thenBody);
           if (statement.elseBody) visit(statement.elseBody);
-        }
-        if (statement.kind === "v2_require") {
-          addPredicateFeatures(statement.predicate);
-          if (statement.elseAction) visit([statement.elseAction]);
         }
         if (statement.kind === "v2_challenge") {
           visit(statement.successBody);
@@ -4844,9 +4677,6 @@ var M61EmulatorBundle = (() => {
     const visit = (statements) => {
       for (const statement of statements) {
         switch (statement.kind) {
-          case "v2_let":
-            addExpression(statement.expr, statement.line, statement.name);
-            break;
           case "v2_assign":
             addExpression(statement.expr, statement.line, statement.target);
             break;
@@ -4861,10 +4691,6 @@ var M61EmulatorBundle = (() => {
             visit(statement.thenBody);
             if (statement.elseBody) visit(statement.elseBody);
             break;
-          case "v2_require":
-            addExpression(formatV2Predicate(statement.predicate), statement.line);
-            if (statement.elseAction) visit([statement.elseAction]);
-            break;
           case "v2_challenge":
             addExpression(statement.expr, statement.line, statement.challengeTarget);
             visit(statement.successBody);
@@ -4875,20 +4701,12 @@ var M61EmulatorBundle = (() => {
             for (const matchCase of statement.cases) visit([matchCase.action]);
             if (statement.otherwise) visit([statement.otherwise]);
             break;
-          case "v2_collection":
-            addExpression(statement.item, statement.line, statement.collection);
-            break;
-          case "v2_reward":
-            addExpression(statement.expr, statement.line);
-            break;
           case "v2_invoke":
             for (const arg of statement.args) addExpression(arg, statement.line);
             break;
           case "v2_show":
           case "v2_read":
           case "v2_move":
-          case "v2_end":
-          case "v2_raw":
             break;
         }
       }
@@ -4951,15 +4769,17 @@ var M61EmulatorBundle = (() => {
   }
   function collectGameStateRoles(ast) {
     const roles = [];
-    for (const input of ast.v2?.inputs ?? []) {
-      roles.push({ name: input.name, role: "input", displayed: false, persistent: false });
+    const displayedV2State = new Set((ast.v2?.screens ?? []).flatMap((screen) => screen.sources));
+    const declaredV2State = new Set((ast.v2?.state ?? []).map((field) => field.name));
+    for (const input of collectV2InputNames(ast.v2)) {
+      if (!declaredV2State.has(input)) roles.push({ name: input, role: "input", displayed: false, persistent: false });
     }
     for (const field of ast.v2?.state ?? []) {
       roles.push({
         name: field.name,
         role: gameStateRole(field.type),
-        displayed: field.hints.includes("displayed"),
-        persistent: field.hints.includes("persistent")
+        displayed: displayedV2State.has(field.name),
+        persistent: true
       });
     }
     for (const state of ast.states) {
@@ -4974,10 +4794,37 @@ var M61EmulatorBundle = (() => {
     }
     return roles;
   }
+  function collectV2InputNames(v2) {
+    const names = /* @__PURE__ */ new Set();
+    const visit = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "v2_read") names.add(statement.target);
+        if (statement.kind === "v2_challenge") {
+          names.add(statement.answerInput);
+          visit(statement.successBody);
+          if (statement.failureBody) visit(statement.failureBody);
+        }
+        if (statement.kind === "v2_if") {
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "v2_match") {
+          for (const matchCase of statement.cases) visit([matchCase.action]);
+          if (statement.otherwise) visit([statement.otherwise]);
+        }
+      }
+    };
+    if (v2?.turn !== void 0) visit(v2.turn.body);
+    for (const rule of v2?.rules ?? []) visit(rule.body);
+    for (const table of v2?.encounters ?? []) {
+      for (const encounterCase of table.cases) visit(encounterCase.body);
+    }
+    return [...names];
+  }
   function gameStateRole(type) {
     if (type === "coord" || type === "packed") return "coord";
     if (type === "bitset") return "bitset";
-    if (type === "counter" || type === "range" || type === "resource" || type === "score") return "resource";
+    if (type === "counter" || type === "range") return "resource";
     if (type === "flag") return "flag";
     return "unknown";
   }
@@ -5106,7 +4953,7 @@ var M61EmulatorBundle = (() => {
         shapeSpecific.push(
           selected(
             "fleet-duel-lowering",
-            "Lowered random board shot, negative hit report, fleet probe/clear, ship counters, and two terminal endings as one duel microkernel."
+            "Lowered random board shot, negative hit report, fleet probe/clear, ship counters, and terminal stops as one duel microkernel."
           )
         );
       }
@@ -5196,7 +5043,7 @@ var M61EmulatorBundle = (() => {
         proofs2.push({
           id: "fleet-duel-lowering-covered",
           status: "proved",
-          detail: "Board-fleet duel microkernel covers random calculator shots, negative hit reports, enemy fleet probe/clear, ship counters, and both terminal endings."
+          detail: "Board-fleet duel microkernel covers random calculator shots, negative hit reports, enemy fleet probe/clear, ship counters, and terminal stops."
         });
       }
       if (reference !== void 0) {
@@ -5212,7 +5059,7 @@ var M61EmulatorBundle = (() => {
       {
         id: "full-game-semantics",
         status: "assumed",
-        detail: `Universal fallback lowers ${intent.name} with the previous spatial/resource tactic template; no shape verifier is attached.`
+        detail: `Universal fallback lowers ${intent.name} with the previous spatial/counter tactic template; no shape verifier is attached.`
       },
       {
         id: "return-stack-empty",
@@ -5249,7 +5096,7 @@ var M61EmulatorBundle = (() => {
     }
     return proofs;
   }
-  function buildGameIntentCellRoles(layout, targetProfile) {
+  function buildGameIntentCellRoles(layout, machineProfile) {
     const addressOperandCells = /* @__PURE__ */ new Set();
     for (let address = 0; address < layout.length - 1; address += 1) {
       if (getOpcode(layout[address].opcode).takesAddress) addressOperandCells.add(address + 1);
@@ -5260,19 +5107,19 @@ var M61EmulatorBundle = (() => {
       const { address, opcode: code } = cell;
       const roles = addressOperandCells.has(address) ? ["address"] : ["exec"];
       const notes = [];
-      if (addressOperandCells.has(address) && targetSupports(targetProfile, "address-constants")) {
+      if (addressOperandCells.has(address) && machineSupports(machineProfile, "address-constants")) {
         roles.push("constant");
         notes.push("address operand reused as compact data");
       }
-      if (addressOperandCells.has(address) && targetSupports(targetProfile, "code-data-overlay")) {
+      if (addressOperandCells.has(address) && machineSupports(machineProfile, "code-data-overlay")) {
         roles.push("overlay");
         notes.push("address/data overlay selected");
       }
-      if (darkEntryCells.has(address) && targetSupports(targetProfile, "dark-entries")) {
+      if (darkEntryCells.has(address) && machineSupports(machineProfile, "dark-entries")) {
         roles.push("dark-entry");
         notes.push("formal/dark entry participates in cyclic shared-tail layout");
       }
-      if (displayByteCells.has(address) && targetSupports(targetProfile, "display-bytes")) {
+      if (displayByteCells.has(address) && machineSupports(machineProfile, "display-bytes")) {
         roles.push("display-byte");
         notes.push("X2/display-byte boundary");
       }
@@ -5336,12 +5183,6 @@ var M61EmulatorBundle = (() => {
     const unsupported = [];
     const visit = (statements) => {
       for (const statement of statements) {
-        if (statement.kind === "v2_raw") {
-          unsupported.push({ text: statement.text, line: statement.line });
-        }
-        if (statement.kind === "v2_let" && !isSimpleCompilerExpression(statement.expr)) {
-          unsupported.push({ text: `let ${statement.name} = ${statement.expr}`, line: statement.line });
-        }
         if (statement.kind === "v2_assign" && !isSimpleCompilerExpression(statement.expr)) {
           unsupported.push({ text: `${statement.target} = ${statement.expr}`, line: statement.line });
         }
@@ -5355,12 +5196,6 @@ var M61EmulatorBundle = (() => {
           visit(statement.thenBody);
           if (statement.elseBody) visit(statement.elseBody);
         }
-        if (statement.kind === "v2_require") {
-          if (!isLowerableV2Predicate(statement.predicate)) {
-            unsupported.push({ text: `require ${formatV2Predicate(statement.predicate)}`, line: statement.line });
-          }
-          if (statement.elseAction) visit([statement.elseAction]);
-        }
         if (statement.kind === "v2_challenge") {
           if (!isSimpleCompilerExpression(statement.expr)) {
             unsupported.push({ text: `challenge ${statement.expr}`, line: statement.line });
@@ -5370,16 +5205,6 @@ var M61EmulatorBundle = (() => {
         }
         if (statement.kind === "v2_move" && statement.expr !== void 0 && !isSimpleCompilerExpression(statement.expr)) {
           unsupported.push({ text: `move ${statement.target} by ${statement.expr}`, line: statement.line });
-        }
-        if (statement.kind === "v2_collection") {
-          if (!isSimpleCompilerExpression(statement.item)) {
-            unsupported.push({ text: `${statement.collection} ${statement.op} ${statement.item}`, line: statement.line });
-          }
-        }
-        if (statement.kind === "v2_reward") {
-          if (!isSimpleCompilerExpression(statement.expr)) {
-            unsupported.push({ text: `reward by ${statement.expr}`, line: statement.line });
-          }
         }
         if (statement.kind === "v2_match") {
           for (const matchCase of statement.cases) visit([matchCase.action]);
@@ -5395,24 +5220,10 @@ var M61EmulatorBundle = (() => {
     if (predicate.kind === "v2_compare") {
       return isSimpleCompilerExpression(predicate.left) && isSimpleCompilerExpression(predicate.right);
     }
-    if (predicate.kind === "v2_collection_has") {
-      return isSimpleCompilerExpression(predicate.item);
-    }
-    return predicate.kind === "v2_exists";
+    return false;
   }
   function formatV2Predicate(predicate) {
-    switch (predicate.kind) {
-      case "v2_compare":
-        return `${predicate.left} ${predicate.op} ${predicate.right}`;
-      case "v2_exists":
-        return `${predicate.target} exists`;
-      case "v2_collection_has":
-        return `${predicate.collection} has ${predicate.item}`;
-      case "v2_raw_predicate":
-        return predicate.text;
-      default:
-        return "unknown";
-    }
+    return `${predicate.left} ${predicate.op} ${predicate.right}`;
   }
   function isSimpleCompilerExpression(text) {
     let normalized = normalizeV2ExpressionText(text);
@@ -5436,16 +5247,18 @@ var M61EmulatorBundle = (() => {
     ast;
     allocation;
     options;
+    machineProfile;
     diagnostics;
     optimizations;
     warnings;
     candidates;
     inlineProcNames;
     currentXVariable;
-    constructor(ast, allocation, options, diagnostics, optimizations, warnings, candidates) {
+    constructor(ast, allocation, options, machineProfile, diagnostics, optimizations, warnings, candidates) {
       this.ast = ast;
       this.allocation = allocation;
       this.options = options;
+      this.machineProfile = machineProfile;
       this.diagnostics = diagnostics;
       this.optimizations = optimizations;
       this.warnings = warnings;
@@ -5463,20 +5276,22 @@ var M61EmulatorBundle = (() => {
       this.compileInitialState();
       this.compileInitialStores();
       this.compileStatements(main.body);
-      if (!(this.ast.v2 && statementsTerminate(main.body))) {
+      if (!(this.ast.v2 && this.statementsTerminate(main.body))) {
         this.emitOp(80, "\u0421/\u041F", "implicit final stop");
       }
       for (const proc of this.ast.procs) {
         if (this.inlineProcNames.has(proc.name)) continue;
         this.emitLabel(proc.name);
         this.compileStatements(proc.body);
-        this.emitOp(82, "\u0412/\u041E", "implicit return from proc");
+        if (!this.statementsTerminate(proc.body)) {
+          this.emitOp(82, "\u0412/\u041E", "implicit return from proc");
+        }
       }
       for (const block of this.ast.blocks) {
         if (block.mode === "inline") continue;
         this.emitLabel(block.name);
         this.compileStatements(block.body);
-        if (!statementsTerminate(block.body)) {
+        if (!this.statementsTerminate(block.body)) {
           this.emitOp(80, "\u0421/\u041F", `implicit stop for ${block.mode} block ${block.name}`, block.line);
         }
       }
@@ -5484,7 +5299,7 @@ var M61EmulatorBundle = (() => {
     compileInitialState() {
       if (this.ast.v2) {
         const fields = this.ast.states.flatMap((state) => state.fields);
-        if (fields.some((field) => field.initial !== void 0 || field.initialInput !== void 0)) {
+        if (fields.some((field) => field.initial !== void 0 || field.initialStack !== void 0)) {
           this.optimizations.push({
             name: "auto-preload-initial-state",
             detail: "Moved initial state into setup/preload values so official program cells stay focused on turn logic."
@@ -5493,16 +5308,16 @@ var M61EmulatorBundle = (() => {
         return;
       }
       for (const state of this.ast.states) {
-        for (const field of state.fields.filter((candidate) => candidate.initialInput === "Y")) {
-          this.emitOp(20, "X\u2194Y", `init ${state.name}.${field.name} from input.Y`, field.line);
+        for (const field of state.fields.filter((candidate) => candidate.initialStack === "Y")) {
+          this.emitOp(20, "X\u2194Y", `init ${state.name}.${field.name} from stack.Y`, field.line);
           this.emitStore(field.name, `init ${state.name}.${field.name}`, field.line);
-          this.emitOp(20, "X\u2194Y", `restore input.X after ${field.name}`, field.line);
+          this.emitOp(20, "X\u2194Y", `restore stack.X after ${field.name}`, field.line);
         }
-        for (const field of state.fields.filter((candidate) => candidate.initialInput === "X")) {
+        for (const field of state.fields.filter((candidate) => candidate.initialStack === "X")) {
           this.emitStore(field.name, `init ${state.name}.${field.name}`, field.line);
         }
         for (const field of state.fields) {
-          if (field.initialInput !== void 0) continue;
+          if (field.initialStack !== void 0) continue;
           if (field.initial === void 0) continue;
           this.compileExpression(field.initial);
           this.emitStore(field.name, `init ${state.name}.${field.name}`, field.line);
@@ -5536,10 +5351,10 @@ var M61EmulatorBundle = (() => {
         }
         if (statement.kind === "show" && next?.kind === "input") {
           this.compileShow(statement.display, statement.line);
-          this.emitStore(next.target, `input ${next.inputType} ${next.target}`, next.line);
+          this.emitStore(next.target, `read ${next.target}`, next.line);
           this.optimizations.push({
             name: "show-read-fusion",
-            detail: `Fused show ${statement.display} and read ${next.inputType} ${next.target} into one calculator stop.`
+            detail: `Fused show ${statement.display} and read ${next.target} into one calculator stop.`
           });
           index += 1;
           continue;
@@ -5559,11 +5374,11 @@ var M61EmulatorBundle = (() => {
           this.emitStore(statement.target, `input ${statement.target}`, statement.line);
           return;
         case "input":
-          this.emitOp(80, "\u0421/\u041F", `input ${statement.inputType} ${statement.target}`, statement.line);
-          this.emitStore(statement.target, `input ${statement.target}`, statement.line);
+          this.emitOp(80, "\u0421/\u041F", `read ${statement.target}`, statement.line);
+          this.emitStore(statement.target, `read ${statement.target}`, statement.line);
           this.optimizations.push({
-            name: "intent-input-lowering",
-            detail: `Lowered input ${statement.inputType} at line ${statement.line} to calculator stop plus register store.`
+            name: "intent-read-lowering",
+            detail: `Lowered read at line ${statement.line} to calculator stop plus register store.`
           });
           return;
         case "halt":
@@ -5598,7 +5413,7 @@ var M61EmulatorBundle = (() => {
           this.compileBlockCall(statement.block, statement.line);
           return;
         case "core":
-          this.compileRawLines(statement.lines);
+          this.compileRawStatement(statement);
           return;
         case "egg":
           this.compileRawLines(statement.lines);
@@ -5609,8 +5424,8 @@ var M61EmulatorBundle = (() => {
       }
     }
     compileTicTacToeCellMaskReuse(first, second) {
-      const used = matchCellHelperCall(first.expr, "cell_used");
-      const mark = matchCellHelperCall(second.expr, "cell_mark");
+      const used = matchCellHelperCall(first.expr, ["cell_used", "cell_has"]);
+      const mark = matchCellHelperCall(second.expr, ["cell_mark", "cell_set"]);
       if (!used || !mark) return false;
       if (!expressionEquals(used.mask, mark.mask) || !expressionEquals(used.x, mark.x) || !expressionEquals(used.y, mark.y)) {
         return false;
@@ -5622,15 +5437,15 @@ var M61EmulatorBundle = (() => {
       this.emitStore(scratch, "4x4 cell mask scratch", first.line);
       this.compileExpression(used.mask);
       this.emitRecall(scratch, "reuse 4x4 cell mask", first.line);
-      this.emitOp(55, "\u041A \u2227", "cell_used with reused mask", first.line);
+      this.emitOp(55, "\u041A \u2227", "cell_has with reused mask", first.line);
       this.emitStore(first.target, `set ${first.target}`, first.line);
       this.compileExpression(mark.mask);
       this.emitRecall(scratch, "reuse 4x4 cell mask", second.line);
-      this.emitOp(56, "\u041A \u2228", "cell_mark with reused mask", second.line);
+      this.emitOp(56, "\u041A \u2228", "cell_set with reused mask", second.line);
       this.emitStore(second.target, `set ${second.target}`, second.line);
       this.optimizations.push({
         name: "tic-tac-toe-cell-mask-cse",
-        detail: `Computed cell_mask once for adjacent cell_used/cell_mark at lines ${first.line}/${second.line}.`
+        detail: `Computed cell_mask once for adjacent cell_has/cell_set at lines ${first.line}/${second.line}.`
       });
       return true;
     }
@@ -5652,7 +5467,7 @@ var M61EmulatorBundle = (() => {
     compileArithmeticIfSelect(statement) {
       const selected = buildBranchRemovalCandidate(statement, this.ast);
       if (!selected) return false;
-      const ordinaryCost = estimateOrdinaryIfCost(statement);
+      const ordinaryCost = estimateOrdinaryIfCost(statement, this.ast);
       const selectedCost = estimateExpressionCost(selected.expr) + 1;
       if (selectedCost >= ordinaryCost) {
         this.candidates.push({
@@ -5683,7 +5498,7 @@ var M61EmulatorBundle = (() => {
     compileDoubleBranchRemoval(first, second) {
       const selected = buildDoubleClampCandidate(first, second);
       if (!selected) return false;
-      const ordinaryCost = estimateOrdinaryIfCost(first) + estimateOrdinaryIfCost(second);
+      const ordinaryCost = estimateOrdinaryIfCost(first, this.ast) + estimateOrdinaryIfCost(second, this.ast);
       const selectedCost = estimateExpressionCost(selected.expr) + 1;
       if (selectedCost >= ordinaryCost) {
         this.candidates.push({
@@ -5750,7 +5565,7 @@ var M61EmulatorBundle = (() => {
     }
     compileDispatch(statement) {
       const site = statement.name ?? `dispatch@${statement.line}`;
-      const selected = selectDispatchCandidate(statement, targetProfileFor(this.ast.machine));
+      const selected = selectDispatchCandidate(statement, this.machineProfile);
       for (const candidate of selected.candidates) this.candidates.push(candidate);
       this.optimizations.push({
         name: "dispatch-lowering",
@@ -5818,11 +5633,28 @@ var M61EmulatorBundle = (() => {
       this.emitLabel(endLabel);
     }
     statementsTerminate(statements) {
+      return this.statementListTerminates(statements, /* @__PURE__ */ new Set());
+    }
+    statementListTerminates(statements, seenProcs) {
       const last = statements.at(-1);
       if (!last) return false;
-      if (last.kind !== "call") return statementsTerminate(statements);
-      const block = this.ast.blocks.find((candidate) => candidate.name === last.block);
-      return block !== void 0 && block.mode !== "inline";
+      return this.statementTerminates(last, seenProcs);
+    }
+    statementTerminates(statement, seenProcs) {
+      if (statement.kind === "halt" || statement.kind === "loop" || statement.kind === "trap") return true;
+      if (statement.kind === "if") {
+        return statement.elseBody !== void 0 && this.statementListTerminates(statement.thenBody, new Set(seenProcs)) && this.statementListTerminates(statement.elseBody, new Set(seenProcs));
+      }
+      if (statement.kind === "dispatch") {
+        return statement.defaultBody !== void 0 && this.statementListTerminates(statement.defaultBody, new Set(seenProcs)) && statement.cases.every((dispatchCase) => this.statementListTerminates(dispatchCase.body, new Set(seenProcs)));
+      }
+      if (statement.kind !== "call") return false;
+      const block = this.ast.blocks.find((candidate) => candidate.name === statement.block);
+      if (block !== void 0) return block.mode !== "inline";
+      const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
+      if (proc === void 0 || seenProcs.has(proc.name)) return false;
+      seenProcs.add(proc.name);
+      return this.statementListTerminates(proc.body, seenProcs);
     }
     compileShow(displayName, line) {
       const display = this.ast.displays.find((candidate) => candidate.name === displayName);
@@ -5843,7 +5675,7 @@ var M61EmulatorBundle = (() => {
         }
       }
       this.emitOp(80, "\u0421/\u041F", `show ${display.name}`, line);
-      const canUseDisplayBytes = targetSupports(targetProfileFor(this.ast.machine), "display-bytes");
+      const canUseDisplayBytes = machineSupports(this.machineProfile, "display-bytes");
       this.optimizations.push({
         name: "packed-display-lowering",
         detail: canUseDisplayBytes ? `Display ${display.name} may use display-byte encodings in later layout passes.` : `Display ${display.name} lowered as ordinary packed numeric output.`
@@ -5858,6 +5690,14 @@ var M61EmulatorBundle = (() => {
           this.optimizations.push({
             name: "single-use-rule-inline",
             detail: `Inlined single-use rule ${proc.name} at line ${line}.`
+          });
+          return;
+        }
+        if (this.statementsTerminate(proc.body)) {
+          this.emitJump(81, "\u0411\u041F", proc.name, `terminal rule ${proc.name}`, line);
+          this.optimizations.push({
+            name: "terminal-rule-tail-call",
+            detail: `Compiled terminal rule ${proc.name} as a direct jump instead of a subroutine call.`
           });
           return;
         }
@@ -5923,27 +5763,35 @@ var M61EmulatorBundle = (() => {
       return true;
     }
     compileCondition(condition, falseLabel, line) {
-      if (isZeroExpression(condition.right) && canTestAgainstZeroDirectly(condition.op)) {
-        this.compileExpression(condition.left);
-        const opcode2 = directTestOpcode(condition.op);
+      const selected = selectCheaperEquivalentCondition(condition, this.ast);
+      if (selected.changed) {
+        this.optimizations.push({
+          name: "comparison-boundary-normalization",
+          detail: `Normalized ${conditionToText(condition)} to ${conditionToText(selected.condition)} at line ${line}.`
+        });
+      }
+      const compiledCondition = selected.condition;
+      if (isZeroExpression(compiledCondition.right) && canTestAgainstZeroDirectly(compiledCondition.op)) {
+        this.compileExpression(compiledCondition.left);
+        const opcode2 = directTestOpcode(compiledCondition.op);
         this.emitJump(opcode2, getOpcode(opcode2).name, falseLabel, `false branch for ${condition.op}`, line);
         this.optimizations.push({
           name: "zero-condition-test",
-          detail: `Tested ${condition.op} 0 without materializing a zero literal at line ${line}.`
+          detail: `Tested ${compiledCondition.op} 0 without materializing a zero literal at line ${line}.`
         });
         return;
       }
-      if (condition.op === ">" || condition.op === "<=") {
-        this.compileExpression(condition.right);
-        this.compileExpression(condition.left);
+      if (compiledCondition.op === ">" || compiledCondition.op === "<=") {
+        this.compileExpression(compiledCondition.right);
+        this.compileExpression(compiledCondition.left);
       } else {
-        this.compileExpression(condition.left);
-        this.compileExpression(condition.right);
+        this.compileExpression(compiledCondition.left);
+        this.compileExpression(compiledCondition.right);
       }
       this.emitOp(17, "-", "condition compare", line);
-      const opcode = condition.op === "<" || condition.op === ">" ? 92 : condition.op === ">=" || condition.op === "<=" ? 89 : condition.op === "==" ? 94 : 87;
+      const opcode = compiledCondition.op === "<" || compiledCondition.op === ">" ? 92 : compiledCondition.op === ">=" || compiledCondition.op === "<=" ? 89 : compiledCondition.op === "==" ? 94 : 87;
       const mnemonic = getOpcode(opcode).name;
-      this.emitJump(opcode, mnemonic, falseLabel, `false branch for ${condition.op}`, line);
+      this.emitJump(opcode, mnemonic, falseLabel, `false branch for ${compiledCondition.op}`, line);
     }
     compileExpression(expr) {
       switch (expr.kind) {
@@ -6060,6 +5908,19 @@ var M61EmulatorBundle = (() => {
           return;
         }
         this.emitOp(zeroArgOpcode[0], zeroArgOpcode[1], `${expr.callee}()`);
+        return;
+      }
+      if (name === "pow") {
+        if (expr.args.length !== 2) {
+          this.diagnostics.push({
+            level: "error",
+            message: "Function pow expects two arguments."
+          });
+          return;
+        }
+        this.compileExpression(expr.args[1]);
+        this.compileExpression(expr.args[0]);
+        this.emitOp(36, "F x^y", `${expr.callee}()`);
         return;
       }
       const binaryOpcodes = {
@@ -6183,7 +6044,24 @@ var M61EmulatorBundle = (() => {
         detail: `Lowered direction(${arg.name}) through a shared keypad geometry formula.`
       });
     }
-    compileRawLines(lines) {
+    compileRawStatement(statement) {
+      const inputs = statement.inputs ?? [];
+      const outputs = statement.outputs ?? [];
+      for (const input of orderRawInputs(inputs)) {
+        this.compileExpression(input.expr);
+      }
+      this.compileRawLines(statement.lines, statement.strict ?? false);
+      for (const output of outputs) {
+        this.emitStore(output.target, `raw returns ${output.slot}`, output.line);
+      }
+      if (inputs.length > 0 || outputs.length > 0 || statement.clobbers !== void 0 || statement.preserves !== void 0) {
+        this.optimizations.push({
+          name: "raw-block-contract",
+          detail: formatRawContractDetail(statement)
+        });
+      }
+    }
+    compileRawLines(lines, strict = false) {
       for (const line of lines) {
         if (line.text.endsWith(":")) {
           this.emitLabel(line.text.slice(0, -1));
@@ -6192,7 +6070,7 @@ var M61EmulatorBundle = (() => {
         const parsed = parseRawInstruction(line.text);
         if (!parsed) {
           this.diagnostics.push({
-            level: "warning",
+            level: strict ? "error" : "warning",
             message: `Unknown raw instruction '${line.text}'`,
             line: line.line
           });
@@ -6797,8 +6675,8 @@ var M61EmulatorBundle = (() => {
     for (const block of ast.blocks) visit(block.body);
   }
   function isReusableCellMaskPair(first, second) {
-    const used = matchCellHelperCall(first.expr, "cell_used");
-    const mark = matchCellHelperCall(second.expr, "cell_mark");
+    const used = matchCellHelperCall(first.expr, ["cell_used", "cell_has"]);
+    const mark = matchCellHelperCall(second.expr, ["cell_mark", "cell_set"]);
     return Boolean(
       used && mark && used.mask.kind === "identifier" && second.target === used.mask.name && expressionEquals(used.mask, mark.mask) && expressionEquals(used.x, mark.x) && expressionEquals(used.y, mark.y)
     );
@@ -6850,6 +6728,96 @@ var M61EmulatorBundle = (() => {
         throw new Error(`No direct zero-test opcode for ${op}`);
     }
   }
+  function selectCheaperEquivalentCondition(condition, ast) {
+    let best = condition;
+    let bestCost = conditionCompileCost(condition);
+    for (const candidate of equivalentConditionCandidates(condition, ast)) {
+      const cost = conditionCompileCost(candidate);
+      if (cost < bestCost) {
+        best = candidate;
+        bestCost = cost;
+      }
+    }
+    return { condition: best, changed: !conditionEquals(best, condition) };
+  }
+  function equivalentConditionCandidates(condition, ast) {
+    const candidates = [];
+    const add = (candidate) => {
+      if (!candidates.some((existing) => conditionEquals(existing, candidate))) candidates.push(candidate);
+    };
+    add(condition);
+    const flipped = flipNumericLeftCondition(condition);
+    if (flipped !== void 0) add(flipped);
+    for (const candidate of [...candidates]) {
+      for (const boundary of integerBoundaryCandidates(candidate, ast)) add(boundary);
+    }
+    return candidates;
+  }
+  function flipNumericLeftCondition(condition) {
+    if (condition.left.kind !== "number") return void 0;
+    return {
+      left: condition.right,
+      op: flipComparisonOp(condition.op),
+      right: condition.left
+    };
+  }
+  function flipComparisonOp(op) {
+    switch (op) {
+      case "<":
+        return ">";
+      case "<=":
+        return ">=";
+      case ">":
+        return "<";
+      case ">=":
+        return "<=";
+      case "==":
+      case "!=":
+        return op;
+    }
+  }
+  function integerBoundaryCandidates(condition, ast) {
+    if (!isKnownIntegerExpression(condition.left, ast)) return [];
+    const value = numericLiteralValue(condition.right);
+    if (value === void 0 || !Number.isSafeInteger(value)) return [];
+    const shifted = shiftedIntegerBoundary(condition.op, value);
+    if (shifted === void 0) return [];
+    return [{
+      left: condition.left,
+      op: shifted.op,
+      right: numberExpression(shifted.value)
+    }];
+  }
+  function shiftedIntegerBoundary(op, value) {
+    switch (op) {
+      case "<":
+        return Number.isSafeInteger(value - 1) ? { op: "<=", value: value - 1 } : void 0;
+      case "<=":
+        return Number.isSafeInteger(value + 1) ? { op: "<", value: value + 1 } : void 0;
+      case ">":
+        return Number.isSafeInteger(value + 1) ? { op: ">=", value: value + 1 } : void 0;
+      case ">=":
+        return Number.isSafeInteger(value - 1) ? { op: ">", value: value - 1 } : void 0;
+      case "==":
+      case "!=":
+        return void 0;
+    }
+  }
+  function isKnownIntegerExpression(expr, ast) {
+    return expr.kind === "identifier" && integerRangeFor(expr.name, ast) !== void 0;
+  }
+  function conditionCompileCost(condition) {
+    if (isZeroExpression(condition.right) && canTestAgainstZeroDirectly(condition.op)) {
+      return estimateExpressionCost(condition.left) + 2;
+    }
+    return estimateExpressionCost(condition.left) + estimateExpressionCost(condition.right) + 3;
+  }
+  function conditionEquals(left, right) {
+    return left.op === right.op && expressionEquals(left.left, right.left) && expressionEquals(left.right, right.right);
+  }
+  function conditionToText(condition) {
+    return `${expressionToIntentText(condition.left)} ${condition.op} ${expressionToIntentText(condition.right)}`;
+  }
   function priority(variable, hints) {
     const hint = hints.get(variable);
     if (hint?.mode === "prefer") return REGISTER_ORDER.indexOf(hint.register) - 100;
@@ -6860,7 +6828,7 @@ var M61EmulatorBundle = (() => {
     optimizations.push(...result.optimizations);
     return result.items;
   }
-  function layoutProgram(items, diagnostics, options, ast, targetProfile) {
+  function layoutProgram(items, diagnostics, options, ast, machineProfile) {
     const labelAddresses = /* @__PURE__ */ new Map();
     let address = 0;
     for (const item of items) {
@@ -6884,7 +6852,7 @@ var M61EmulatorBundle = (() => {
       if (item.kind === "op") {
         const step = buildResolvedStep(address, item.opcode, item.mnemonic, item.comment);
         steps.push(step);
-        cellRoles.push(buildCellRole(address, step.hex, item, options, targetProfile));
+        cellRoles.push(buildCellRole(address, step.hex, item, options, machineProfile));
         address += 1;
         continue;
       }
@@ -6903,7 +6871,7 @@ var M61EmulatorBundle = (() => {
       steps.push(
         buildResolvedStep(address, opcode, formatAddress(targetAddress2), item.comment)
       );
-      cellRoles.push(buildAddressCellRole(address, opcode, item, options, targetProfile));
+      cellRoles.push(buildAddressCellRole(address, opcode, item, options, machineProfile));
       address += 1;
     }
     const labels = {};
@@ -6913,7 +6881,7 @@ var M61EmulatorBundle = (() => {
     for (const [label, labelAddress] of sortedLabels) {
       labels[label] = safeFormatAddress(labelAddress);
     }
-    markDarkEntryCells(cellRoles, labelAddresses, options, ast, targetProfile);
+    markDarkEntryCells(cellRoles, labelAddresses, options, ast, machineProfile);
     return { steps, labels, cellRoles };
   }
   function buildResolvedStep(address, opcode, mnemonic, comment) {
@@ -6953,14 +6921,14 @@ var M61EmulatorBundle = (() => {
     if (code !== void 0) diagnostic.code = code;
     return diagnostic;
   }
-  function buildCellRole(address, hex2, item, options, targetProfile) {
+  function buildCellRole(address, hex2, item, options, machineProfile) {
     const roles = ["exec"];
     const notes = [];
     if (item.raw) {
       roles.push("constant");
       notes.push("raw opcode can also be read as a byte");
     }
-    if (targetSupports(targetProfile, "display-bytes") && item.comment?.includes("display")) {
+    if (machineSupports(machineProfile, "display-bytes") && item.comment?.includes("display")) {
       roles.push("display-byte");
       notes.push("display byte role allowed");
     }
@@ -6972,14 +6940,14 @@ var M61EmulatorBundle = (() => {
     if (notes.length > 0) role.note = notes.join("; ");
     return role;
   }
-  function buildAddressCellRole(address, opcode, item, options, targetProfile) {
+  function buildAddressCellRole(address, opcode, item, options, machineProfile) {
     const roles = ["address"];
     const notes = [];
-    if (targetSupports(targetProfile, "address-constants")) {
+    if (machineSupports(machineProfile, "address-constants")) {
       roles.push("constant");
       notes.push("address can be reused as constant");
     }
-    if (targetSupports(targetProfile, "code-data-overlay")) {
+    if (machineSupports(machineProfile, "code-data-overlay")) {
       roles.push("overlay");
       notes.push("code/data overlay allowed");
     }
@@ -6991,8 +6959,8 @@ var M61EmulatorBundle = (() => {
     if (notes.length > 0) role.note = notes.join("; ");
     return role;
   }
-  function markDarkEntryCells(cellRoles, labelAddresses, options, ast, targetProfile) {
-    if (!targetSupports(targetProfile, "dark-entries")) return;
+  function markDarkEntryCells(cellRoles, labelAddresses, options, ast, machineProfile) {
+    if (!machineSupports(machineProfile, "dark-entries")) return;
     const sharedTailNames = new Set(
       ast.blocks.filter((block) => block.mode === "shared_tail").map((block) => block.name)
     );
@@ -7384,7 +7352,6 @@ var M61EmulatorBundle = (() => {
     for (const state of ast.states) {
       const field = state.fields.find((candidate) => candidate.name === name);
       if (!field) continue;
-      if (field.type === "digit") return { min: 0, max: 9 };
       if (field.type === "flag") return { min: 0, max: 1 };
       if (field.type === "range" && Number.isInteger(field.min) && Number.isInteger(field.max)) {
         const range = {};
@@ -7418,11 +7385,23 @@ var M61EmulatorBundle = (() => {
     const arities = {
       norm4: 1,
       grid4_norm: 1,
+      bit_mask: 1,
+      bit_has: 2,
+      bit_set: 2,
+      bit_clear: 2,
+      bit_toggle: 2,
       diag_left_index: 2,
       diag_right_index: 2,
       cell_mask: 2,
+      cell_has: 3,
+      cell_set: 3,
+      cell_clear: 3,
+      cell_toggle: 3,
       cell_used: 3,
       cell_mark: 3,
+      digit_at: 2,
+      digit_add: 3,
+      digit_set: 3,
       packed4_add: 3,
       packed4_digit: 2,
       packed4_score: 2
@@ -7434,21 +7413,42 @@ var M61EmulatorBundle = (() => {
       case "norm4":
       case "grid4_norm":
         return norm4Expression(args[0]);
+      case "bit_mask":
+        return bitMaskExpression(args[0]);
+      case "bit_has":
+        return bitAndExpression(args[0], bitMaskExpression(args[1]));
+      case "bit_set":
+        return bitOrExpression(args[0], bitMaskExpression(args[1]));
+      case "bit_clear":
+        return bitAndExpression(args[0], bitNotExpression(bitMaskExpression(args[1])));
+      case "bit_toggle":
+        return bitXorExpression(args[0], bitMaskExpression(args[1]));
       case "diag_left_index":
         return norm4Expression(addExpressions(args[0], args[1]));
       case "diag_right_index":
         return norm4Expression(subtractExpressions(args[0], args[1]));
       case "cell_mask":
         return cellMaskExpression(args[0], args[1]);
+      case "cell_has":
       case "cell_used":
-        return { kind: "call", callee: "bit_and", args: [args[0], cellMaskExpression(args[1], args[2])] };
+        return bitAndExpression(args[0], cellMaskExpression(args[1], args[2]));
+      case "cell_set":
       case "cell_mark":
-        return { kind: "call", callee: "bit_or", args: [args[0], cellMaskExpression(args[1], args[2])] };
+        return bitOrExpression(args[0], cellMaskExpression(args[1], args[2]));
+      case "cell_clear":
+        return bitAndExpression(args[0], bitNotExpression(cellMaskExpression(args[1], args[2])));
+      case "cell_toggle":
+        return bitXorExpression(args[0], cellMaskExpression(args[1], args[2]));
+      case "digit_at":
+        return packed4DigitExpression(args[0], args[1]);
+      case "digit_add":
       case "packed4_add":
         return addExpressions(
           args[0],
-          multiplyExpressions(args[2], pow10Expression(subtractExpressions(args[1], numberExpression(1))))
+          multiplyExpressions(args[2], digitPlaceExpression(args[1]))
         );
+      case "digit_set":
+        return digitSetExpression(args[0], args[1], args[2]);
       case "packed4_digit":
         return packed4DigitExpression(args[0], args[1]);
       case "packed4_score":
@@ -7461,8 +7461,8 @@ var M61EmulatorBundle = (() => {
         return void 0;
     }
   }
-  function matchCellHelperCall(expr, name) {
-    if (expr.kind !== "call" || expr.callee.toLowerCase() !== name || expr.args.length !== 3) return void 0;
+  function matchCellHelperCall(expr, names) {
+    if (expr.kind !== "call" || !names.includes(expr.callee.toLowerCase()) || expr.args.length !== 3) return void 0;
     return {
       mask: expr.args[0],
       x: expr.args[1],
@@ -7485,6 +7485,14 @@ var M61EmulatorBundle = (() => {
       { kind: "call", callee: "int", args: [multiplyExpressions(pow10Expression(y), numberExpression(0.22600029))] }
     );
   }
+  function bitMaskExpression(index) {
+    const nibble = intExpression(divideExpressions(index, numberExpression(4)));
+    const offset = subtractExpressions(index, multiplyExpressions(nibble, numberExpression(4)));
+    return multiplyExpressions(
+      powExpression(numberExpression(2), offset),
+      pow10Expression(nibble)
+    );
+  }
   function packed4DigitExpression(lines, index) {
     return {
       kind: "call",
@@ -7496,6 +7504,16 @@ var M61EmulatorBundle = (() => {
         )
       ]
     };
+  }
+  function digitSetExpression(value, index, digit) {
+    const place = digitPlaceExpression(index);
+    return addExpressions(
+      subtractExpressions(value, multiplyExpressions(packed4DigitExpression(value, index), place)),
+      multiplyExpressions(digit, place)
+    );
+  }
+  function digitPlaceExpression(index) {
+    return pow10Expression(subtractExpressions(index, numberExpression(1)));
   }
   function oneMinus(expr) {
     if (isNumericValue(expr, 0)) return numberExpression(1);
@@ -7529,6 +7547,9 @@ var M61EmulatorBundle = (() => {
   function pow10Expression(expr) {
     return { kind: "call", callee: "pow10", args: [expr] };
   }
+  function powExpression(base, exponent) {
+    return { kind: "call", callee: "pow", args: [base, exponent] };
+  }
   function maxExpression(left, right) {
     return { kind: "call", callee: "max", args: [left, right] };
   }
@@ -7538,8 +7559,23 @@ var M61EmulatorBundle = (() => {
   function absExpression(expr) {
     return { kind: "call", callee: "abs", args: [expr] };
   }
+  function intExpression(expr) {
+    return { kind: "call", callee: "int", args: [expr] };
+  }
   function signExpression(expr) {
     return { kind: "call", callee: "sign", args: [expr] };
+  }
+  function bitAndExpression(left, right) {
+    return { kind: "call", callee: "bit_and", args: [left, right] };
+  }
+  function bitOrExpression(left, right) {
+    return { kind: "call", callee: "bit_or", args: [left, right] };
+  }
+  function bitXorExpression(left, right) {
+    return { kind: "call", callee: "bit_xor", args: [left, right] };
+  }
+  function bitNotExpression(expr) {
+    return { kind: "call", callee: "bit_not", args: [expr] };
   }
   function signToggleExpression(current, selector) {
     return multiplyExpressions(
@@ -7604,21 +7640,25 @@ var M61EmulatorBundle = (() => {
     return parsed !== void 0 && parsed === value;
   }
   function numericLiteralValue(expr) {
+    if (expr.kind === "unary" && expr.op === "-") {
+      const value2 = numericLiteralValue(expr.expr);
+      return value2 === void 0 ? void 0 : -value2;
+    }
     if (expr.kind !== "number") return void 0;
     const value = Number(expr.raw);
     return Number.isFinite(value) ? value : void 0;
   }
-  function estimateOrdinaryIfCost(statement) {
+  function estimateOrdinaryIfCost(statement, ast) {
     const thenStatement = statement.thenBody[0];
     if (statement.thenBody.length !== 1 || !thenStatement) return Number.POSITIVE_INFINITY;
     const thenCost = estimateSimpleStatementCost(thenStatement);
     if (!Number.isFinite(thenCost)) return Number.POSITIVE_INFINITY;
-    if (!statement.elseBody) return estimateConditionCost(statement.condition) + thenCost;
+    if (!statement.elseBody) return estimateConditionCost(statement.condition, ast) + thenCost;
     const elseStatement = statement.elseBody[0];
     if (statement.elseBody.length !== 1 || !elseStatement) return Number.POSITIVE_INFINITY;
     const elseCost = estimateSimpleStatementCost(elseStatement);
     if (!Number.isFinite(elseCost)) return Number.POSITIVE_INFINITY;
-    return estimateConditionCost(statement.condition) + thenCost + 2 + elseCost;
+    return estimateConditionCost(statement.condition, ast) + thenCost + 2 + elseCost;
   }
   function estimateSimpleStatementCost(statement) {
     switch (statement.kind) {
@@ -7631,8 +7671,8 @@ var M61EmulatorBundle = (() => {
         return Number.POSITIVE_INFINITY;
     }
   }
-  function estimateConditionCost(condition) {
-    return estimateExpressionCost(condition.left) + estimateExpressionCost(condition.right) + 1 + 2;
+  function estimateConditionCost(condition, ast) {
+    return conditionCompileCost(selectCheaperEquivalentCondition(condition, ast).condition);
   }
   function estimateExpressionCost(expr) {
     switch (expr.kind) {
@@ -7653,6 +7693,9 @@ var M61EmulatorBundle = (() => {
     const macro = ticTacToeExpressionMacro(name, expr.args);
     if (macro !== void 0) return estimateExpressionCost(macro);
     if (name === "random" || name === "pi") return 1;
+    if (name === "pow") {
+      return (expr.args[0] ? estimateExpressionCost(expr.args[0]) : 0) + (expr.args[1] ? estimateExpressionCost(expr.args[1]) : 0) + 1;
+    }
     if (["max", "bit_and", "bit_or", "bit_xor"].includes(name)) {
       return (expr.args[0] ? estimateExpressionCost(expr.args[0]) : 0) + (expr.args[1] ? estimateExpressionCost(expr.args[1]) : 0) + 1;
     }
@@ -7683,12 +7726,12 @@ var M61EmulatorBundle = (() => {
       layoutCells: steps
     };
   }
-  function buildOptimizerReport(ast, _options, optimizations, candidates, cellRoles, targetProfile) {
+  function buildOptimizerReport(ast, _options, optimizations, candidates, cellRoles, machineProfile) {
     const activeNames = new Set(optimizations.map((optimization) => optimization.name));
     if (cellRoles.some((cell) => cell.roles.includes("overlay"))) activeNames.add("code-data-overlay");
     if (cellRoles.some((cell) => cell.roles.includes("dark-entry"))) activeNames.add("dark-entry-layout");
     if (cellRoles.some((cell) => cell.roles.includes("display-byte"))) activeNames.add("display-byte-layout");
-    if (targetProfile.emulatorFacts.some((fact) => fact.id === "step-vs-run-delta")) {
+    if (machineProfile.emulatorFacts.some((fact) => fact.id === "step-vs-run-delta")) {
       activeNames.add("step-vs-run-profile");
     }
     const selectedCandidateVariants = new Set(
@@ -7977,7 +8020,7 @@ var M61EmulatorBundle = (() => {
       source: "mk61-delta",
       requires: [],
       activeWhen: ["step-vs-run-profile"],
-      detail: "Uses mk61_exact emulator facts for Danilov-era differences between step mode, continuous run, exponent sign changes, Cx, \u0412\u2191, and \u041F->X as exact-machine preconditions."
+      detail: "Uses mk61 emulator facts for Danilov-era differences between step mode, continuous run, exponent sign changes, Cx, \u0412\u2191, and \u041F->X as exact-machine preconditions."
     },
     {
       id: "jump-to-next-threading",
@@ -8087,7 +8130,7 @@ var M61EmulatorBundle = (() => {
       for (const field of ast.v2.state) {
         const register = allocation.registers[field.name];
         if (!register) continue;
-        const value = field.initial ?? (field.generated === "random" ? "random() * 999" : void 0) ?? (field.optional ? "0" : void 0);
+        const value = field.initial;
         if (value === void 0) continue;
         synthetic.push({
           register,
@@ -8115,10 +8158,10 @@ var M61EmulatorBundle = (() => {
       totalPhysicalCells: used + extraCells
     };
   }
-  function buildMachineFeaturesUsed(targetProfile, optimizations, cellRoles, candidates) {
+  function buildMachineFeaturesUsed(machineProfile, optimizations, cellRoles, candidates) {
     const used = /* @__PURE__ */ new Map();
     const add = (id, detail, source) => {
-      const targetDetail = targetProfile.features.find((feature) => feature.id === id)?.detail;
+      const targetDetail = machineProfile.features.find((feature) => feature.id === id)?.detail;
       used.set(id, {
         id,
         source,
@@ -8256,7 +8299,7 @@ var M61EmulatorBundle = (() => {
   function countV2IntentNodes(ast) {
     const v2 = ast.v2;
     if (!v2) return 0;
-    return 1 + v2.inputs.length + v2.state.length + v2.screens.length + (v2.turn ? 1 + countV2Statements(v2.turn.body) : 0) + v2.rules.reduce((sum, rule) => sum + 1 + countV2Statements(rule.body), 0);
+    return 1 + v2.state.length + v2.screens.length + (v2.turn ? 1 + countV2Statements(v2.turn.body) : 0) + v2.rules.reduce((sum, rule) => sum + 1 + countV2Statements(rule.body), 0);
   }
   function countV2Statements(statements) {
     let count = 0;
@@ -8271,12 +8314,12 @@ var M61EmulatorBundle = (() => {
         count += countV2Statements(statement.thenBody);
         if (statement.elseBody) count += countV2Statements(statement.elseBody);
       }
-      if (statement.kind === "v2_require" && statement.elseAction) {
-        count += countV2Statements([statement.elseAction]);
-      }
       if (statement.kind === "v2_challenge") {
         count += countV2Statements(statement.successBody);
         if (statement.failureBody) count += countV2Statements(statement.failureBody);
+      }
+      if (statement.kind === "v2_raw") {
+        count += statement.inputs.length + statement.outputs.length + statement.lines.length;
       }
     }
     return count;
@@ -8301,7 +8344,7 @@ var M61EmulatorBundle = (() => {
     }
     return count;
   }
-  function selectDispatchCandidate(statement, targetProfile) {
+  function selectDispatchCandidate(statement, machineProfile) {
     const site = statement.name ?? `dispatch@${statement.line}`;
     const fallthroughCost = estimateDispatchCost(statement, true);
     const candidates = [
@@ -8313,7 +8356,7 @@ var M61EmulatorBundle = (() => {
         reason: "uses case ordering to omit the final branch when possible"
       }
     ];
-    if (targetSupports(targetProfile, "dark-entries") && targetSupports(targetProfile, "address-constants") && targetSupports(targetProfile, "code-data-overlay")) {
+    if (machineSupports(machineProfile, "dark-entries") && machineSupports(machineProfile, "address-constants") && machineSupports(machineProfile, "code-data-overlay")) {
       candidates.push({
         site,
         variant: "dark-indirect-table",
@@ -8322,7 +8365,7 @@ var M61EmulatorBundle = (() => {
         reason: "considered; layout proof did not establish a conflict-free address/data table for this site"
       });
     }
-    if (statement.cases.length <= 6 && targetSupports(targetProfile, "super-dark-dispatch") && targetSupports(targetProfile, "indirect-flow")) {
+    if (statement.cases.length <= 6 && machineSupports(machineProfile, "super-dark-dispatch") && machineSupports(machineProfile, "indirect-flow")) {
       candidates.push({
         site,
         variant: "super-dark-dispatch",
@@ -8340,10 +8383,21 @@ var M61EmulatorBundle = (() => {
     const jumpsAfterCases = Math.max(0, statement.cases.length - (fallthrough && !statement.defaultBody ? 1 : 0));
     return 2 + statement.cases.length * 5 + jumpsAfterCases * 2 + bodyCost + defaultCost;
   }
-  function statementsTerminate(statements) {
-    const last = statements.at(-1);
-    if (!last) return false;
-    return last.kind === "halt" || last.kind === "loop" || last.kind === "trap";
+  function orderRawInputs(inputs) {
+    const order = /* @__PURE__ */ new Map([
+      ["T", 0],
+      ["Z", 1],
+      ["Y", 2],
+      ["X", 3]
+    ]);
+    return [...inputs].sort((left, right) => order.get(left.slot) - order.get(right.slot));
+  }
+  function formatRawContractDetail(statement) {
+    const inputs = statement.inputs?.length ? `takes ${orderRawInputs(statement.inputs).map((input) => `${input.slot}=${expressionToIntentText(input.expr)}`).join(", ")}` : "takes none";
+    const outputs = statement.outputs?.length ? `returns ${statement.outputs.map((output) => `${output.slot}->${output.target}`).join(", ")}` : "returns none";
+    const clobbers = `clobbers ${(statement.clobbers ?? ["unknown"]).join(", ")}`;
+    const preserves = `preserves ${(statement.preserves ?? ["unknown"]).join(", ")}`;
+    return `Inserted raw MK-61 block at line ${statement.line}: ${inputs}; ${outputs}; ${clobbers}; ${preserves}.`;
   }
   function parseRawInstruction(text) {
     const hex2 = /^[0-9A-Fa-f]{2}$/u.exec(text);
@@ -8351,7 +8405,7 @@ var M61EmulatorBundle = (() => {
       const opcode = Number.parseInt(text, 16);
       return { opcode, mnemonic: getOpcode(opcode).name, comment: "raw hex" };
     }
-    const direct = /^(БП|ПП|F\s*x<0|F\s*x=0|F\s*x!=0|F\s*x>=0|F\s*L[0-3])\s+([A-Za-z_][\w]*|[0-9A-Fa-f]{2})$/u.exec(text);
+    const direct = /^(БП|ПП|F\s*x<0|F\s*x=0|F\s*x(?:!=|≠)0|F\s*x(?:>=|≥)0|F\s*L[0-3])\s+([A-Za-z_][\w]*|[0-9A-Fa-f]{2})$/u.exec(text);
     if (direct) {
       const opcode = directOpcode(direct[1]);
       return {
@@ -8371,16 +8425,17 @@ var M61EmulatorBundle = (() => {
       const register = registerFromText(compactRecall[1]);
       return { opcode: 96 + registerIndex(register), mnemonic: `\u041F->X ${register}` };
     }
-    const directMemory = /^(X->П|П->X)\s+R?([0-9a-eавсде])$/iu.exec(text);
+    const directMemory = /^(X(?:->|→)П|П(?:->|→)X)\s+R?([0-9a-eавсде])$/iu.exec(text);
     if (directMemory) {
       const register = registerFromText(directMemory[2]);
-      const base = directMemory[1].startsWith("X") ? 64 : 96;
+      const op = directMemory[1].replaceAll("\u2192", "->");
+      const base = op.startsWith("X") ? 64 : 96;
       return {
         opcode: base + registerIndex(register),
-        mnemonic: `${directMemory[1]} ${register}`
+        mnemonic: `${op} ${register}`
       };
     }
-    const indirect = /^(К\s*)?(БП|ПП|X->П|П->X|x!=0|x>=0|x<0|x=0)\s*R?([0-9a-eавсде])$/iu.exec(text);
+    const indirect = /^(К\s*)?(БП|ПП|X(?:->|→)П|П(?:->|→)X|x(?:!=|≠)0|x(?:>=|≥)0|x<0|x=0)\s*R?([0-9a-eавсде])$/iu.exec(text);
     if (indirect?.[1]) {
       const register = registerFromText(indirect[3]);
       return {
@@ -8405,7 +8460,7 @@ var M61EmulatorBundle = (() => {
     return /^[0-9A-Fa-f]{2}$/u.test(text) ? codeToAddress(Number.parseInt(text, 16)) : text;
   }
   function directOpcode(text) {
-    const normalized = text.replace(/\s+/g, " ");
+    const normalized = text.replace(/\s+/g, " ").replaceAll("\u2260", "!=").replaceAll("\u2265", ">=");
     if (normalized === "\u0411\u041F") return 81;
     if (normalized === "\u041F\u041F") return 83;
     if (normalized === "F x<0") return 92;
@@ -8419,7 +8474,7 @@ var M61EmulatorBundle = (() => {
     throw new Error(`Unknown direct opcode ${text}`);
   }
   function indirectBase(text) {
-    const normalized = text.toLowerCase();
+    const normalized = text.toLowerCase().replaceAll("\u2192", "->").replaceAll("\u2260", "!=").replaceAll("\u2265", ">=");
     if (normalized === "x!=0") return 112;
     if (normalized === "\u0431\u043F") return 128;
     if (normalized === "x>=0") return 144;
@@ -8489,7 +8544,7 @@ var M61EmulatorBundle = (() => {
   }
   function looksLikeM61Source(text) {
     const normalized = text.trim();
-    return /\btarget\s+mk61\b/iu.test(normalized) || /\bbudget\s+\d+\s+cells\b/iu.test(normalized) || /\bprogram\s+[A-Za-z_][\w-]*\s*\{/u.test(normalized);
+    return /\bprogram\s+[A-Za-z_][\w-]*\s*\{/u.test(normalized);
   }
   function installEmulatorBridge(options = {}) {
     window.__m61EmulatorBridge?.uninstall();

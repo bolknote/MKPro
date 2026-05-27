@@ -1,5 +1,3 @@
-target mk61
-budget 105 cells
 reference grid_rescue_v2
 
 // Rescue sketch for the generic grid pipeline. It mixes blocked movement,
@@ -7,58 +5,37 @@ reference grid_rescue_v2
 // ambush decision.
 
 program GridRescue {
-  input key: number
-  input fight_key: number
-
   state {
-    [displayed] pos: coord(floor 1..2, x 1..5, y 1..5) = input.X
+    pos: coord = stack.X
 
     // Walls and beacons are generated independently: the same room can be a
     // navigation problem, a rescue target, both, or neither.
-    [persistent] walls: bitset {
-      generated random
-    }
+    walls: bitset = random()
 
-    [persistent] beacons: bitset {
-      generated random
-      cleared when beacon rescued
-    }
+    beacons: bitset = random()
 
-    [displayed] energy: resource 0..99 = input.Y {
-      terminal at 0 show main
-    }
+    energy: counter 0..99 = stack.Y
 
-    [persistent] charges: resource 0..9 = 3
-    [persistent] rescued: score 0..9 = 0 {
-      reward beacon 1
-      reward ambush 1
-    }
+    charges: counter 0..9 = 3
+    rescued: counter 0..9 = 0
 
-    [temporary] blocked: coord optional
+    blocked: coord
+    next: coord
   }
 
-  world station: grid {
+  world station {
     position pos {
-      floors 1..2
-      rooms 1..5
-      display packed_decimal_zero_run
-      start input.X
+      encoding packed_decimal_zero_run
     }
 
-    generated random
-    player decimal_point
-    door symbol 8 costs energy 1
-    wall symbol 8 blocks forward costs charges 1
-    vertical wrap 1 -> 2 -> 1
   }
 
   screen main {
     show pos, energy, charges, rescued
-    style compact digits letters hex
   }
 
-  ending ignored {
-    show 0
+  rule ignored {
+    stop 0
   }
 
   turn {
@@ -66,19 +43,19 @@ program GridRescue {
     read key
     // Every turn costs energy before the command pays off; this makes dithering
     // and failed routes part of the player's risk budget.
-    energy -= 1
+    energy--
 
     match key {
-      2, 4, 6, 8, 5, -5 => move(direction(key))
+      2, 4, 6, 8, 5, -5 => go direction(key)
       0 => open_wall
       10 => scan
-      otherwise => end ignored
+      otherwise => ignored
     }
   }
 
-  [hot] rule move(dir) {
-    let next = pos + dir
-    if walls has next {
+  rule go dir {
+    next = pos + dir
+    if walls >= next {
       // Remember the blocked cell so "open_wall" can be a deliberate follow-up
       // action instead of an automatic door tax.
       blocked = next
@@ -90,17 +67,25 @@ program GridRescue {
   }
 
   rule open_wall {
-    require blocked exists else show 0
-    require charges >= 1 else show 0
-    walls clear blocked
-    pos = blocked
-    charges -= 1
+    if blocked != 0 {
+      if charges >= 1 {
+        walls -= blocked
+        pos = blocked
+        charges--
+      }
+      else {
+        show 0
+      }
+    }
+    else {
+      show 0
+    }
   }
 
   rule scan {
-    if beacons has pos {
-      beacons clear pos
-      rescued += 1
+    if beacons >= pos {
+      beacons -= pos
+      rescued++
       // A rescued beacon may still draw trouble; scoring and survival are not
       // the same objective.
       ambush
@@ -113,7 +98,7 @@ program GridRescue {
     match fight_key {
       0 => retreat
       10 => engage
-      otherwise => end ignored
+      otherwise => ignored
     }
   }
 
@@ -122,6 +107,6 @@ program GridRescue {
   }
 
   rule engage {
-    rescued += 1
+    rescued++
   }
 }

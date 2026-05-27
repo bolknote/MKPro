@@ -38,7 +38,7 @@ On B3-34, register commands accept a `T` (arrow) pseudo-name meaning **R0**:
 **Critical B3-34 behavior:** for indirect **flow** commands through `T`, `R0`
 is **not** decremented/modified the way it is when you write `К БП 0` explicitly.
 
-On the `mk61_exact` emulator profile used by this project, the `*F`
+On the `mk61` emulator model used by this project, the `*F`
 undocumented aliases (`4F`, `6F`, `7F`, …) correspond to using `R0` in those
 slots, but they behave like the corresponding `*0` commands, including normal
 `R0` transformation. They are **not** a shortcut for using `R0` without changing
@@ -84,7 +84,7 @@ When **`R0` holds a positive value less than 1**, B3-34 behavior of **`К П->X 
 can subtract from the **last mantissa digit** each time instead of a normal
 recall. Tsvetkov and Epanichnikov used this in random-number programs.
 
-On the `mk61_exact` emulator profile, fractional positive `R0` has two useful
+On the `mk61` emulator model, fractional positive `R0` has two useful
 special cases: `К БП 0` jumps to `99` and leaves `R0 = -99999999`; `К П->X 0`
 and `К X->П 0` access `R3` and leave the same sentinel. Use these as computed
 dispatch/sentinel facts, not as a shorter replacement for direct `R3` access.

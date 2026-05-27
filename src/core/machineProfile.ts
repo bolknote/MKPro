@@ -1,98 +1,96 @@
 import type {
   EmulatorFactReport,
   MachineFeatureUseReport,
-  TargetProfileId,
+  MachineId,
 } from "./types.ts";
 
-export interface TargetProfile {
-  id: TargetProfileId;
-  machine: "mk61";
+export interface MachineProfile {
+  id: MachineId;
   features: MachineFeatureUseReport[];
   emulatorFacts: EmulatorFactReport[];
 }
 
-export const MK61_EXACT_PROFILE: TargetProfile = {
-  id: "mk61_exact",
-  machine: "mk61",
+export const MK61_PROFILE: MachineProfile = {
+  id: "mk61",
   features: [
     {
       id: "branch-removal",
-      source: "target-profile",
+      source: "machine",
       detail: "Documented arithmetic, sign, extrema, and zero-test opcodes can replace provably equivalent branches.",
     },
     {
       id: "fl-decrement-branch",
-      source: "target-profile",
+      source: "machine",
       detail: "F L0..F L3 are available for compact decrement-and-continue/decrement-and-branch forms.",
     },
     {
       id: "return-empty-stack-jump",
-      source: "target-profile",
+      source: "machine",
       detail: "В/О can be used as БП 01 when static control-flow proves that no return frame is pending.",
     },
     {
       id: "undocumented-opcodes",
-      source: "target-profile",
+      source: "machine",
       detail: "F0..FF and undocumented aliases are available when exact-machine preconditions are proved.",
     },
     {
       id: "dark-entries",
-      source: "target-profile",
+      source: "machine",
       detail: "Formal dark/super-dark entry addresses are available to the layout solver.",
     },
     {
       id: "super-dark-dispatch",
-      source: "target-profile",
+      source: "machine",
       detail: "Indirect К БП R to FA..FF can execute one command at 48..53 and continue at 01..06.",
     },
     {
       id: "indirect-flow",
-      source: "target-profile",
+      source: "machine",
       detail: "К БП/К ПП/К x?0 indirect flow commands are available to the optimizer.",
     },
     {
       id: "code-data-overlay",
-      source: "target-profile",
+      source: "machine",
       detail: "Address operands, constants, opcodes, and display bytes may share cells after conflict checks.",
     },
     {
       id: "address-constants",
-      source: "target-profile",
+      source: "machine",
       detail: "Address cells may double as constants for indirect flow and data transforms.",
     },
     {
       id: "display-bytes",
-      source: "target-profile",
+      source: "machine",
       detail: "Packed display bytes, hexadecimal mantissa digits, and sign-digit forms are available.",
     },
     {
       id: "x2-register",
-      source: "target-profile",
+      source: "machine",
       detail: "The hidden X2 display register can be scheduled when observable display semantics are preserved.",
     },
     {
       id: "extra-cells",
-      source: "target-profile",
+      source: "machine",
       detail: "Extra physical cells are tracked separately from official program cells.",
     },
     {
       id: "error-stops",
-      source: "target-profile",
+      source: "machine",
       detail: "Domain-error stops are available only when the source semantics permits trap-like termination.",
     },
     {
       id: "r0-t-alias",
-      source: "target-profile",
+      source: "machine",
       detail: "R0/T and *F alias behavior is available, including normal R0 transformation; aliases do not preserve R0.",
     },
     {
       id: "r0-fractional-sentinel",
-      source: "target-profile",
+      source: "machine",
       detail: "Fractional positive R0 states can select R3 or jump to 99 while leaving the -99999999 sentinel.",
     },
     {
       id: "raw-display-5f",
-      source: "target-profile",
+      source: "machine",
       detail: "Opcode 5F is a display/raw-state transform in this ROM, not a hang.",
     },
   ],
@@ -145,13 +143,6 @@ export const MK61_EXACT_PROFILE: TargetProfile = {
   ],
 };
 
-export function targetProfileFor(machine: string): TargetProfile {
-  if (machine !== "mk61") {
-    throw new Error(`Unsupported target machine '${machine}'`);
-  }
-  return MK61_EXACT_PROFILE;
-}
-
-export function targetSupports(profile: TargetProfile, featureId: string): boolean {
+export function machineSupports(profile: MachineProfile, featureId: string): boolean {
   return profile.features.some((feature) => feature.id === featureId);
 }

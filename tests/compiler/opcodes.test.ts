@@ -27,6 +27,40 @@ describe("opcode catalog", () => {
     expect(findOpcodeName("50")?.code).toBe(0x50);
   });
 
+  it("accepts command-page notation aliases", () => {
+    const aliases: Array<[string, number]> = [
+      ["←→", 0x14],
+      ["F 10^{x}", 0x15],
+      ["F e^{x}", 0x16],
+      ["F sin^{-1}", 0x19],
+      ["F cos^{-1}", 0x1a],
+      ["F tg^{-1}", 0x1b],
+      ["F π", 0x20],
+      ["F√", 0x21],
+      ["F x^{2}", 0x22],
+      ["F x^{y}", 0x24],
+      ["F↻", 0x25],
+      ["К°→′", 0x26],
+      ["К−", 0x27],
+      ["К×", 0x28],
+      ["К÷", 0x29],
+      ["К°→′\"", 0x2a],
+      ["К°←′\"", 0x30],
+      ["К∣x∣", 0x31],
+      ["К°←′", 0x33],
+      ["К∧", 0x37],
+      ["К∨", 0x38],
+      ["F x≠0", 0x57],
+      ["F x≥0", 0x59],
+      ["К x≠0 0", 0x70],
+      ["К x≥0 e", 0x9e],
+    ];
+
+    for (const [name, code] of aliases) {
+      expect(findOpcodeName(name)?.code, name).toBe(code);
+    }
+  });
+
   it("keeps historical opcode risk metadata descriptive", () => {
     const undoc = opcodeByCode.get(0xf7);
     expect(undoc?.risk).toBe("undocumented");

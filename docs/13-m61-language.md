@@ -1,37 +1,30 @@
 # M61 Language
 
-M61 describes a compact calculator program in human terms: state, input,
-screen output, rules, and semantic hints. It does not ask the author to enable
-dark entries, X2 tricks, overlays, or undocumented opcodes. Those are target
-profile capabilities of `mk61_exact`, and the optimizer may use them whenever
+M61 describes a compact calculator program in human terms: state, reads,
+screen output, and rules. It does not ask the author to enable
+dark entries, X2 tricks, overlays, or undocumented opcodes. Those are MK-61
+machine capabilities, and the optimizer may use them whenever
 its effect checks and emulator facts allow the rewrite.
 
 The examples in `examples/*.m61` are intentionally written in this V2 human
-DSL. M61 source starts with `target mk61` and one `program` block; raw
-calculator listing syntax is not part of the language.
+DSL. M61 source is one `program` block, plus optional report metadata; standalone
+raw calculator listing syntax is not part of the language.
 
 ## Shape
 
 ```m61
-target mk61
-budget 105 cells
-
 program CounterGame {
-  input key: digit
-  input answer: number
-
   state {
-    [displayed] score: counter 0..9 = 0
-    [persistent] food: counter 0..9 = 5
+    score: counter 0..9 = 0
+    food: counter 0..9 = 5
   }
 
   screen main {
     show score, food
-    style compact digits letters hex
   }
 
-  ending game_over {
-    show 0
+  rule game_over {
+    stop 0
   }
 
   turn {
@@ -41,30 +34,28 @@ program CounterGame {
     match key {
       2 => gain
       8 => spend
-      otherwise => end game_over
+      otherwise => game_over
     }
   }
 
-  [hot] rule gain {
-    score += 1
+  rule gain {
+    score++
+    show main
+  }
+
+  rule spend {
+    food--
     show main
   }
 }
 ```
 
-## Hints
+## No Hints
 
-Hints describe semantics, not implementation:
-
-- `[hot]`, `[rare]`, `[cold]` guide fallthrough and layout pressure.
-- `[displayed]`, `[hidden]` describe observability.
-- `[temporary]`, `[persistent]` describe liveness across turns.
-- `[wrap]`, `[saturate]`, `[trap]` describe overflow/error policy.
-- `[unordered]`, `[approx]`, `[exact]` describe legal rewrites.
-- `[manual_entry]` describes values supplied by the player before the game loop.
-
-Low-level hints such as `use_X2`, `use_dark_entries`, `put_in_R0`, or
-`overlay_here` are rejected. The compiler owns those choices.
+M61 has no bracket hint syntax. If a word does not change the lowered program,
+validation, or optimizer choices, it belongs in a comment, not in the language.
+The compiler owns implementation choices such as X2, dark entries, overlays,
+register placement, display bytes, and undocumented opcodes.
 
 ## Comments
 
@@ -72,20 +63,18 @@ M61 accepts line and trailing comments with either `//` or `#`:
 
 ```m61
 // A whole-line comment.
-input key: digit  # A trailing comment.
+read key  # A trailing comment.
 ```
 
 ## Top Level
 
-Only compilation metadata belongs outside `program`:
+Only optional report metadata belongs outside `program`:
 
-- `target mk61`
-- `budget 105 cells`
 - `reference name`
 
-Game meaning belongs inside `program`. Resource, bitset, maze, event, random,
+Game meaning belongs inside `program`. Counters, bitsets, maps, events, random,
 or packed-table facts should become `state`, `world`, `encounters`, rules,
-screens, and semantic hints. The compiler report shows which registers, overlays, setup
+and screens. The compiler report shows which registers, overlays, setup
 constants, hex mantissas, random initialization, or other implementation tactics
 were selected.
 
@@ -93,100 +82,98 @@ were selected.
 
 The current human DSL surface inside `program` is:
 
-- `input name: digit|number` for values read from the player.
-- `state { ... }` for game state, resources, scores, masks, coordinates, and
+- `state { ... }` for game state, counters, masks, coordinates, and
   scratch fields.
-- `screen name { show ...; style ... }` for reusable display layouts.
-- `ending name { show ... }` for named terminal outcomes.
+- `screen name { show ... }` for reusable display layouts.
 - `board` and `fleet` for fixed-board games such as Sea Battle.
-- `world` for movement games with coordinates, generated rooms, doors, walls,
-  and vertical wrapping.
+- `world` for movement games with coordinates and generated rooms.
 - `encounters expr { ... }` for event tables.
 - `turn { ... }` for the main game loop and `rule name { ... }` for named
   actions.
+- `read name` inside a turn or rule for a player-entered value.
 
-Rules should stay at the level of game actions: `move player south`, `win
-safe_landing`, `plans clear pos`, `reward by value`, and normal formulas. The
+Rules should stay at the level of game actions: `move player south`,
+`safe_landing`, normal assignments, comparisons, dispatch, and stops. The
 lowerer turns those into assignments, display commands, dispatch, and stops.
 
 Do not write setup or storage tactics as top-level implementation blocks:
 
 ```m61
 preload R9 = random_seed()
-resource strength { register Ra initial 40 terminal_at 0 }
-bitset plans { registers R1 R2 R3 generated_by calculator_random }
 table packed code_overlay giant_country_tables { floor_plans may_overlay address_cells }
 ```
 
-M61 keeps those facts in the game language:
+M61 keeps real game facts in the game language:
 
 ```m61
-[displayed] strength: resource 0..99 = 40 {
-  terminal at 0 show error
-}
+strength: counter 0..99 = 40
 
-[persistent] plans: bitset {
-  generated random
-  cleared when creature defeated
-}
+plans: bitset = random()
 ```
 
 ## State Configuration
 
-State fields can carry their own game configuration:
+State fields carry only data that affects the program:
 
 ```m61
 state {
-  [displayed] strength: resource 0..99 = 40 {
-    terminal at 0 show error
-  }
+  strength: counter 0..99 = 40
+  score: counter 0..99 = 0
 
-  [persistent] score: score 0..99 = 0 {
-    reward skeleton 1
-    reward dragon 6
-  }
-
-  [persistent] plans: bitset {
-    generated random
-    cleared when creature defeated
-  }
+  plans: bitset = random()
 }
 ```
 
-Use `resource` for consumable values, `score` for accumulated rewards, and
-`bitset` for generated map or encounter masks. Register placement and compact
-packing are compiler decisions.
+Use `counter` for bounded numeric values, including consumables, scores, fuel,
+and remaining-piece counts. Use `bitset` for generated map or encounter masks.
+The complete canonical state set is `flag`, `counter`, `coord`, `bitset`, and
+`packed`. Register placement, address storage, and compact packing are compiler
+decisions.
 
-## Endings
-
-Use `ending` for named outcomes instead of scattering stop-display numbers
-through rules:
+Initial values can come from the startup stack registers `stack.X` and
+`stack.Y`, for games where the player enters setup values before running the
+program:
 
 ```m61
-ending safe_landing {
-  show 777
+state {
+  pos: coord = stack.X
+  food: counter 0..99 = stack.Y
+}
+```
+
+This is a startup convention, not general register binding. Memory registers
+`R0`..`Re` are allocated by the compiler; source code should not name them for
+state placement.
+
+## Terminal Rules
+
+Terminal outcomes are ordinary rules. Put the final display/stop sequence in a
+named rule and call that rule like any other action:
+
+```m61
+rule safe_landing {
+  stop 777
 }
 
-ending crash {
-  show 666
+rule crash {
+  stop 666
 }
 
 rule touchdown {
   if abs(speed) <= 5 {
-    win safe_landing
+    safe_landing
   }
   else {
-    lose crash
+    crash
   }
 }
 ```
 
-`win name`, `lose name`, and `end name` lower to the ending's display/stop
-sequence. The names carry the game meaning; the number stays in one declaration.
-If the ending's `show` value is numeric, the compiler can lower it directly to a
-terminal value; otherwise it shows the named display and stops.
-Ending names must be unique, and `win`/`lose`/`end` must reference a declared
-ending. A typo is a parse error, not an implicit `stop 0`.
+Use `stop value` when the terminal display is a value. Use `show screen` followed
+by `stop 0` when the terminal display is a screen. Single-use terminal rules are
+inlined, and shared terminal rules can be lowered as direct jumps by the
+optimizer, so authors do not need a separate terminal form for layout reasons.
+Rule names must be unique, and a call must reference a declared rule.
 
 ## Board And Fleet Blocks
 
@@ -195,19 +182,15 @@ rather than movement through a world:
 
 ```m61
 board ocean: 10x10 {
-  coordinate two_digit 00..99
 }
 
 fleet enemy_fleet on ocean {
-  ships enemy_ships 0..99 = input.X
-  generated random
-  cleared when player hit
-  terminal at 0 show player_win
+  ships enemy_ships 0..99 = stack.X
 }
 ```
 
 `board` describes the coordinate system. `fleet` describes a generated set of
-occupied cells plus the resource that counts remaining pieces. This keeps games
+occupied cells plus the counter that counts remaining pieces. This keeps games
 such as Sea Battle, Minesweeper, fox hunting, or board puzzles from pretending
 to be hallway movement games.
 
@@ -215,17 +198,17 @@ Board queries should name the geometric operation directly:
 
 ```m61
 rule scan_foxes {
-  bearing = count lines from foxes at cell
+  bearing = line_count(foxes, cell)
 }
 
 rule reveal_safe_cell {
-  clue = count neighbors from mines around probe
+  clue = neighbor_count(mines, probe)
 }
 ```
 
-`count lines from fleet at cell` is the fox-hunt style row/column/diagonal
-count. `count neighbors from bitset around cell` is the Minesweeper-style
-8-neighbor count. These lower to spatial query intent; the optimizer chooses
+`line_count(fleet, cell)` is the fox-hunt style row/column/diagonal count.
+`neighbor_count(bitset, cell)` is the Minesweeper-style 8-neighbor count. These
+lower to spatial query intent; the optimizer chooses
 whether to use masks, decimal digits, or a shared query tail.
 
 ## Example Programs
@@ -234,12 +217,12 @@ The repository examples are grouped by the game shape they exercise:
 
 - `basic.m61`, `human.m61`, and `tiny-game.m61` are small syntax and control-flow
   examples.
-- `lunar.m61` is a numeric resource game with touchdown rules.
+- `lunar.m61` is a numeric counter game with touchdown rules.
 - `cave-sketch.m61`, `cave-highlevel-baseline.m61`, `cave-treasure.m61`,
   `cave-treasure-full.m61`, and `labyrinth777.m61` show increasingly complete
   cave/grid games.
 - `grid-rescue.m61`, `resource-raid.m61`, and `giants-country.m61` exercise
-  spatial resources, generated masks, encounters, and challenge blocks.
+  spatial counters, generated masks, encounters, and challenge blocks.
 - `sea-battle.m61` demonstrates `board` and `fleet` for non-movement board
   games.
 - `fox-hunt-100.m61`, `minesweeper-9x9.m61`, `treasure-hunter-2.m61`, and
@@ -248,22 +231,13 @@ The repository examples are grouped by the game shape they exercise:
 
 ## World Blocks
 
-`world` describes spatial rules in one place:
+`world` declares the coordinate used by movement rules:
 
 ```m61
-world giant_country: hall {
+world giant_country {
   position pos {
-    floors 1..3
-    rooms 0..7
-    display decimal_player
-    start 1
+    encoding decimal_player
   }
-
-  generated random
-  player decimal_point
-  door symbol 8 costs strength 1
-  wall symbol 8 blocks forward costs strength 7
-  vertical wrap 1 -> 2 -> 3 -> 1
 }
 ```
 
@@ -277,38 +251,47 @@ arithmetic:
 
 ```m61
 rule move_south {
-  move player south remember blocked
+  move player south
   show cave_screen
 }
 
-rule move_up {
-  move player up remember blocked
+rule move_dir dir {
+  next = player + dir
+  if walls >= next {
+    blocked = next
+    show 0
+  }
+  else {
+    player = next
+  }
 }
 ```
 
 `move pos north/south/east/west/up/down` lowers to the current compact coordinate
-update for the position's world display format. For example,
+update for the position's encoding. For example,
 `packed_decimal_zero_run` uses the same small fractional deltas that older cave
-sources wrote by hand, while generic grid movement uses integer deltas. `move pos
-by expr` is available when the movement amount is deliberately computed.
-`remember name` stores the proposed destination before assigning it, which keeps
-collision and wall rules readable.
+sources wrote by hand, while generic grid movement uses integer deltas. When the
+movement amount is deliberately computed, use the ordinary update form:
+`pos += expr`.
+If a rule needs to remember a blocked destination, write that as normal state:
+`next = player + dir`, then assign `blocked = next` only in the branch where a
+wall was actually hit.
 
 World queries use the same expression position as ordinary formulas:
 
 ```m61
 rule inspect_cell {
-  tile = cell from cave at pos
+  tile = cell_at(cave, pos)
 }
 
 rule move_monster {
-  threat = random position in harbor
+  threat = random_cell(harbor)
 }
 ```
 
-`cell from world at pos` reads the generated tile/event code for a world
-position. `random position in world` asks the compiler for a compact random
-coordinate inside that world's declared range.
+`cell_at(world, pos)` reads the generated tile/event code for a world position.
+`random_cell(world)` asks the compiler for a compact random coordinate for that
+world backend.
 
 ## Formulas
 
@@ -323,22 +306,142 @@ The compiler validates that an expression can be lowered before it enters the
 game-intent path. It no longer rejects formulas simply because a decimal literal
 appears next to variables or operators.
 
+Formula helpers expose useful calculator-shaped operations without requiring
+raw opcodes:
+
+```m61
+height = pow(base, exponent)
+probe = bit_has(walls, 5)
+walls = bit_set(walls, 5)
+walls = bit_clear(walls, 5)
+walls = bit_toggle(walls, 5)
+
+probe = cell_has(walls, x, y)
+walls = cell_set(walls, x, y)
+walls = cell_clear(walls, x, y)
+walls = cell_toggle(walls, x, y)
+
+code = digit_at(screen, 2)
+screen = digit_add(screen, 1, 7)
+screen = digit_set(screen, 2, 9)
+```
+
+`pow(base, exponent)` lowers to the MK-61 `F x^y` command. `bit_mask(index)`
+builds a zero-based packed bit mask: index `0` is `1`, `1` is `2`, `2` is `4`,
+`3` is `8`, and `4` starts the next mantissa digit as `10`. `bit_has`,
+`cell_has`, and the corresponding `clear`, `set`, and `toggle` helpers lower to
+the blue logical operations where profitable. The `has` helpers return zero or
+the matching mask, so tests should compare them with zero.
+
+Packed digit helpers use one-based indexes from the right: `digit_at(value, 1)`
+is the units digit, `digit_at(value, 2)` is the tens digit. `digit_add` adds a
+digit at that position, while `digit_set` first removes the old digit at that
+position and then inserts the new one.
+
+## Raw Blocks
+
+Use `raw` only when a program really needs a calculator command sequence that
+does not yet have a semantic helper. A raw block is allowed inside `turn`, `rule`,
+`if`, `match`, and `challenge` bodies, but it must declare its contract:
+
+```m61
+rule invert_sum {
+  raw {
+    takes Y = left, X = right
+    returns X -> result
+    clobbers X, Y, X1
+    preserves state
+    code {
+      +
+      К ИНВ
+    }
+  }
+}
+```
+
+`takes` loads stack inputs before the raw code. Stack inputs must be contiguous
+from `X`: `Y` requires `X`, `Z` requires `Y` and `X`, and `T` requires `Z`, `Y`,
+and `X`. The compiler loads them bottom-to-top, so `takes Y = left, X = right`
+enters the raw code with `X = right` and `Y = left`.
+
+`returns X -> name` stores the final `X` value into a declared state field after
+the raw code. `clobbers` records the stack/register/display side effects that the
+author expects. `preserves state` is required: raw code must not mutate
+compiler-owned state registers directly. Return high-level values through
+`returns`, not by guessing register allocation.
+
+Inside `code`, lines are MK-61 commands or two-digit hex opcodes understood by
+the raw instruction parser, plus local labels written as `label:`. Unknown raw
+commands are compile errors in contracted raw blocks. Raw instructions are an
+optimizer barrier for the values they touch; the report records the contract and
+marks raw cells as byte-readable constants.
+
+The raw parser accepts the full `00`..`FF` opcode range as two-digit hex. It
+also accepts documented command names and the common Anvarov command-reference
+notation:
+
+```m61
+code {
+  F π
+  F√
+  F x^{2}
+  F x^{y}
+  F↻
+  ←→
+  К°→′
+  К°→′"
+  К°←′"
+  К∣x∣
+  К∧
+  К∨
+  К⊕
+}
+```
+
+ASCII spellings are equivalent where they are clearer in source control:
+`F pi`, `F sqrt`, `F x^2`, `F x^y`, `F reverse`, `<->`, `К °->′`,
+`К °<-′"`, `К |x|`, `К *`, and `К /`. Comparison aliases are normalized too:
+`F x!=0` may be written as `F x≠0`, and `F x>=0` as `F x≥0`.
+
+Branch raw commands take a following label or two-digit address:
+
+```m61
+code {
+  F x≠0 retry
+  БП done
+retry:
+  К БП 7
+done:
+  С/П
+}
+```
+
+Memory commands accept canonical and compact forms. `X->П 3`, `X→П R3`, and
+`хП3` are the same direct store; `П->X 3`, `П→X R3`, and `Пх3` are the same
+recall. Indirect forms use the blue prefix, for example `К БП 7`, `К x≥0 e`,
+`К X→П R4`, or compact `КБП7`, `КхП4`, `КПх4`.
+
+For undocumented aliases and not-normally-entered commands, use the hex opcode
+directly: `1F`, `2F`, `3D`, `3E`, `4F`, `5F`, `6F`, `7F`..`EF`, and
+`F0`..`FF`. See `docs/03-command-reference.md` for the command catalog and
+machine notes.
+
 ## Encounter Tables
 
 Use `encounters expr` when a tile or event code selects one of several rules:
 
 ```m61
 encounters tile {
-  0 empty {
+  0 {
     show cave
   }
 
-  3 skeleton {
+  3 {
     challenge tile {
       success {
-        strength += 1
-        score += 1
-        plans clear pos
+        strength++
+        score++
+        plans -= pos
       }
       failure {
         strength -= 3
@@ -348,19 +451,19 @@ encounters tile {
 }
 ```
 
-The parser lowers this to a generated `encounter(kind)` procedure with compact
+The parser lowers this to a generated `encounter kind` procedure with compact
 dispatch. The author writes encounter meaning; the compiler chooses dispatch
 layout.
 
 ## Optimizer Contract
 
-The default target profile is `mk61_exact`. The compiler always runs the
-maximum optimizer and automatically considers stack scheduling, indirect flow,
+The machine model is `mk61`. The compiler always runs the maximum optimizer and
+automatically considers stack scheduling, indirect flow,
 `FL0`..`FL3`, arithmetic branch removal, tail merging, `В/О` as one-cell
 `БП 01`, code/data overlay, address constants, dark entries, R0/T aliases,
 X2/display-byte packing, hex/sign mantissa forms, `F0`..`FF` no-ops, and
 error-stop idioms.
-Opcode `5F` is modeled separately from filler no-ops: in `mk61_exact` it is a
+Opcode `5F` is modeled separately from filler no-ops: in `mk61` it is a
 raw display-state transform, not a hang and not a generic filler.
 
 The optimizer is automatic. Source code never says "use dark entry" or "use
@@ -372,9 +475,9 @@ The source only states what is allowed semantically. The report explains:
 
 - machine features actually used,
 - static proofs and assumptions,
-- emulator facts from the target profile,
+- emulator facts from the MK-61 model,
 - rejected shorter candidates,
-- budget and hot blocks.
+- external budget and hot blocks.
 
 Unsupported high-level effects fail compilation instead of becoming comments.
 The current production path first classifies `GameIntent` by shape and features,
@@ -386,10 +489,10 @@ cover:
 - `board_fleet_duel` for Sea Battle-style hidden fleet probes, hit reports,
   random board shots, and ship counters;
 - `world_table` for compact generated-world tile lookup;
-- `lane_resource` for one-dimensional movement with random hazards/resources.
+- `lane_resource` for one-dimensional movement with random hazards and counters.
 
-The universal spatial/resource backend remains the fallback for mixed or
-unsupported shapes: packed coordinates, generated bitsets, resources, events,
+The universal spatial/counter backend remains the fallback for mixed or
+unsupported shapes: packed coordinates, generated bitsets, counters, events,
 dispatch, screens, and terminal outcomes. `examples/cave-treasure.m61` is now
 just one reference source; `examples/grid-rescue.m61`,
 and `examples/resource-raid.m61` continue compiling through this fallback when
@@ -421,27 +524,54 @@ report honest about the optimizer's effective behavior across both backends.
 
 The parser keeps these high-level statements as typed intent:
 
-- `input name: digit`
-- `input name: number`
-- `let name = expr`
+- `read name`
+- `name = expr`
+- `name += expr`
+- `name -= expr`
+- `name++`
+- `name--`
 - `if predicate { ... } else { ... }`
-- `require predicate else action`
-- `collection clear item`
-- `collection set item`
-- `reward by expr`
 - `challenge expr { success { ... } failure { ... } }`
 - `move pos direction`
-- `win|lose|end outcome`
-- `match input { values => action }`
-- query expressions: `count lines from set at cell`, `count neighbors from set
-  around cell`, `cell from world at pos`, and `random position in world`
+- `rule_name` or `rule_name arg1, arg2`
+- `match expr { values => action }`
+- query expressions: `line_count(set, cell)`, `neighbor_count(set, cell)`,
+  `cell_at(world, pos)`, and `random_cell(world)`
+- formula helpers: `pow`, `bit_mask`, `bit_has`, `bit_set`, `bit_clear`,
+  `bit_toggle`, `cell_mask`, `cell_has`, `cell_set`, `cell_clear`,
+  `cell_toggle`, `digit_at`, `digit_add`, and `digit_set`
+- contracted `raw { ... }` blocks for explicit MK-61 command sequences
 
-Numeric `let`, assignment, update, `exists`, comparison predicates,
-`collection has`, `collection clear/set`, rule parameters, rule calls, and
-`reward by expr` lower through the generic backend. Query expressions are
-captured as spatial query intent before code generation. A `turn` is a real
-loop, and `rule` blocks compile as `ПП`/`В/О` procedures unless later cost-model
-passes decide to inline them.
+Assignments, updates, comparison predicates, rule parameters, and rule calls
+lower through the generic backend. Query expressions are captured as spatial
+query intent before code generation. A `turn` is a real loop, and `rule` blocks
+compile as `ПП`/`В/О` procedures, direct terminal jumps, or inline code depending
+on the compiler's cost model and termination analysis. Calls must pass exactly
+the parameters declared by the rule.
+
+```m61
+rule jump_to floor {
+  current_floor = floor
+  strength -= floor
+}
+
+rule jump_floor {
+  match current_floor {
+    1 => jump_to 2
+    2 => jump_to 3
+    3 => jump_to 1
+  }
+}
+```
+
+When all calls to a small parameterized rule use literal values and duplicating
+the body is cheaper than storing the parameter and calling a shared subroutine,
+the lowerer specializes those calls automatically.
+
+Statement-level actions do not use parentheses. Parentheses are reserved for
+expressions and expression functions: write `go direction(key)`, not
+`go(direction(key))`, because `go` is a rule call and `direction(key)` is an
+expression. Built-in statement words such as `move` cannot be used as rule names.
 
 ## Human-Facing Game Sugar
 
@@ -455,9 +585,9 @@ then apply success/failure effects” pattern:
 rule skeleton {
   challenge tile {
     success {
-      strength += 1
-      score += 1
-      plans clear pos
+      strength++
+      score++
+      plans -= pos
     }
     failure {
       strength -= 3
@@ -486,13 +616,13 @@ The default names are deliberately conventional:
 - generated value: `challenge`
 - warning screen: `warning`
 - memory screen: `memory`
-- player answer input: `answer`
+- player answer: `answer`
 
 If the generated value needs a different temporary, use `as`:
 
 ```m61
 challenge tile as monster_code {
-  success { score += 1 }
+  success { score++ }
   failure { strength -= 3 }
 }
 ```
@@ -506,10 +636,10 @@ Current scalar lowerings are still deliberately small and auditable:
 - `coord` is represented as a packed numeric value; `pos.floor` lowers to
   `int(pos / 100)`, with `100` automatically placed in setup state when
   that is cheaper than entering three digits.
-- `bitset generated random` is moved to reported setup state by the optimizer.
-- `collection has item` currently lowers to a compact range-style mask test
-  (`collection >= item`) until the full bitset solver lands.
-- `reward by expr` updates `treasure` when that state field exists.
+- `bitset = random()` is moved to reported setup state by the optimizer.
+- bitset membership currently uses ordinary comparisons such as
+  `collection >= item` until the full bitset solver lands.
+- rewards are ordinary updates such as `treasure += expr`.
 - `direction(key)` lowers through a shared keypad geometry decoder. It no
   longer treats the key value itself as the movement delta.
 
@@ -546,7 +676,7 @@ candidates:
 - stack-current-X scheduling and dead-temp-store elimination: consumes the
   current `X` value directly when a commutative expression permits it;
 - `F L0`..`F L3` unit decrement: counters assigned to `R0`..`R3` can lower
-  `counter -= 1` to a two-cell decrement-and-continue form;
+  `counter--` to a two-cell decrement-and-continue form;
 - duplicate failure-tail merge: identical `show 0` failure tails are shared;
 - display stack reuse: packed display sources are reordered when the current
   `X` value is already one of the displayed values;
@@ -565,11 +695,11 @@ candidates:
   preceding op is `X->П r`). This is what shrinks `human.m61` 35→28 and
   `tiny-game.m61` 30→26 without any source edits.
 
-The spatial/resource backend selects super-dark FA..FF dispatch, dark tables,
+The spatial/counter backend selects super-dark FA..FF dispatch, dark tables,
 X2 display-byte scheduling, fractional-R0 sentinels, and branch-removal
 arithmetic from the tactic registry automatically when the IR proves the
-required layout, liveness, observability, and emulator-profile facts. Raw `5F`
-display transforms remain modeled as target-profile capabilities and are only
+required layout, liveness, observability, and emulator facts. Raw `5F`
+display transforms remain modeled as machine capabilities and are only
 legal when display semantics explicitly permit that raw display state.
 
 ## Unified IR Pipeline

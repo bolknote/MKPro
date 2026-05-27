@@ -1,48 +1,32 @@
-target mk61
-budget 105 cells
 reference cave_sketch
 
 // Small readable sketch. Use cave-treasure.m61 for the full compact game intent.
 
 program CaveSketch {
-  input command: number
-
   state {
     // The sketch keeps only the core cave pressures: where you are, how long
     // you can keep searching, how many walls you can break, and what you found.
-    [displayed] player: coord(floor 1..1, x 1..7, y 1..4) = 1
-    [displayed] food: resource 0..99 = 9 {
-      terminal at 0 show cave_screen
-    }
-    [persistent] dynamite: resource 0..9 = 4
-    [persistent] treasure: score 0..9 = 0 {
-      reward cache 1
-    }
-    [temporary] blocked: coord optional
+    food: counter 0..99 = 9
+    dynamite: counter 0..9 = 4
+    treasure: counter 0..9 = 0
+    blocked: coord
   }
 
-  world cave: grid {
+  world cave {
     // One floor is enough here; the example is a readable stepping stone before
     // the full three-floor treasure program.
     position player {
-      floors 1..1
-      rooms 1..7
-      display packed_decimal_zero_run
-      start 1
+      encoding packed_decimal_zero_run
     }
 
-    generated random
-    player decimal_point
-    wall symbol 8 blocks forward costs dynamite 2
   }
 
   screen cave_screen {
     show player, food, dynamite, treasure
-    style compact digits letters
   }
 
-  ending ignored {
-    show 0
+  rule ignored {
+    stop 0
   }
 
   turn {
@@ -50,7 +34,7 @@ program CaveSketch {
     read command
     // Time pressure is food pressure. Movement and searching share the same
     // clock, so the player cannot inspect forever.
-    food -= 1
+    food--
 
     match command {
       2 => move_south
@@ -59,7 +43,7 @@ program CaveSketch {
       8 => move_north
       0 => break_wall
       10 => search_cache
-      otherwise => end ignored
+      otherwise => ignored
     }
   }
 
@@ -83,11 +67,10 @@ program CaveSketch {
     // This sketch trusts "blocked" to be meaningful; the full cave examples add
     // guards so failed wall breaks are observable instead of implicit.
     dynamite -= 2
-    player = blocked
   }
 
   rule search_cache {
-    treasure += 1
+    treasure++
     show cave_screen
   }
 }

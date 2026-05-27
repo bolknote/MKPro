@@ -1,63 +1,45 @@
-target mk61
-budget 105 cells
 reference anvarov_treasure_hunter_2
 
 // Based on Serge Anvarov's "Treasure Hunter 2": generated nine-floor maze,
 // treasures, holes, ladders, and a left-wall exit on the first floor.
 
 program TreasureHunter2 {
-  input action: digit
-
   state {
     // Position is shown as a compact floor/room view, while floor and room are
     // kept separately so movement rules can name the original game's structure.
-    [displayed] pos: coord(floor 1..9, x 0..6, y 0..0) = 9
-    [displayed] floor_view: packed = 0
-    [displayed] treasure: score 0..99 = 0 {
-      reward treasure 1
-    }
+    pos: coord = 9
+    floor_view: packed = 0
+    treasure: counter 0..99 = 0
 
-    [persistent] floor: counter 1..9 = 9
-    [persistent] room: counter 0..6 = 0
+    floor: counter 1..9 = 9
+    room: counter 0..6 = 0
     // "known_floors" doubles as the generated world table: clearing a bit means
     // this floor/position has been resolved by play.
-    [persistent] known_floors: bitset {
-      generated random
-      cleared when floor visited
-    }
+    known_floors: bitset = random()
 
-    [temporary] tile: enum = 0
+    tile: counter 0..9 = 0
   }
 
-  world cave: vertical_maze {
+  world cave {
     // The world is mostly vertical. Horizontal motion searches rooms on a floor;
     // holes and ladders shift the player through the nine-floor stack.
     position pos {
-      floors 1..9
-      rooms 0..6
-      display floor_plan
-      start 9
+      encoding floor_plan
     }
 
-    generated random
-    player decimal_point
-    door symbol 0 costs treasure 0
-    wall symbol 8 blocks left costs treasure 0
-    vertical wrap 9 -> 8 -> 7 -> 6 -> 5 -> 4 -> 3 -> 2 -> 1
   }
 
   screen maze {
     show pos, floor_view, treasure
-    style compact digits letters sign
   }
 
   screen exit {
     show treasure
-    style compact digits sign
   }
 
-  ending escaped {
+  rule escaped {
     show exit
+    stop 0
   }
 
   turn {
@@ -79,31 +61,31 @@ program TreasureHunter2 {
     // ordinary exploration and still inspect the resulting cell.
     if floor == 1 {
       if room == 0 {
-        win escaped
+        escaped
       }
     }
 
-    room -= 1
-    move pos by -1
+    room--
+    pos--
     inspect_cell
   }
 
   rule move_right {
-    room += 1
-    move pos by 1
+    room++
+    pos++
     inspect_cell
   }
 
   rule climb {
     if tile == 3 {
-      floor += 1
+      floor++
       move pos up
     }
     show maze
   }
 
   rule descend {
-    floor -= 1
+    floor--
     move pos down
     inspect_cell
   }
@@ -111,14 +93,14 @@ program TreasureHunter2 {
   rule punch_hole {
     // Digging a hole turns uncertainty into a forced descent; it is the player's
     // way to make progress when the generated map is unhelpful.
-    known_floors clear pos
+    known_floors -= pos
     descend
   }
 
   rule inspect_cell {
     // Tile numbers are semantic, not visual decoration: treasure, hole, ladder,
     // or empty passage decide the next rule.
-    tile = cell from cave at pos
+    tile = cell_at(cave, pos)
 
     match tile {
       1 => collect_treasure
@@ -129,8 +111,8 @@ program TreasureHunter2 {
   }
 
   rule collect_treasure {
-    treasure += 1
-    known_floors clear pos
+    treasure++
+    known_floors -= pos
     show maze
   }
 }

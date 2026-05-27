@@ -1,62 +1,45 @@
-target mk61
-budget 105 cells
 reference anvarov_dangerous_loading
 
 // Based on Serge Anvarov's "Dangerous Loading": ferry nine crates while a
 // monster telegraphs and then attacks one cell of the water lane.
 
 program DangerousLoading {
-  input move: digit
-
   state {
     // The display is a compact lane drama: boat position, telegraphed threat,
     // remaining cargo, and hulls left.
-    [displayed] boat: coord(floor 1..1, x 1..8, y 0..0) = 8
-    [displayed] threat: coord(floor 1..1, x 1..8, y 0..0) = 3
-    [displayed] cargo_left: resource 0..9 = 9 {
-      terminal at 0 show delivered
-    }
-    [displayed] boats_left: resource 0..3 = 3 {
-      terminal at 0 show sunk
-    }
-    [persistent] loaded: flag = 0
+    boat: coord = 8
+    threat: coord = 3
+    cargo_left: counter 0..9 = 9
+    boats_left: counter 0..3 = 3
+    loaded: flag = 0
   }
 
-  world harbor: lane {
+  world harbor {
     // The eight-room lane encodes shore-to-ship travel. Room 1 loads cargo,
     // room 8 unloads it, and the threat chooses a new water cell each turn.
     position boat {
-      floors 1..1
-      rooms 1..8
-      display pier_to_ship
-      start 8
+      encoding pier_to_ship
     }
 
-    generated random
-    player decimal_point
-    door symbol 8 costs boats_left 1
-    wall symbol 0 blocks edge costs boats_left 0
-    vertical wrap 1 -> 1
   }
 
   screen water {
     show cargo_left, boat, threat, boats_left
-    style compact digits letters sign
   }
 
-  ending delivered {
-    show 777
+  rule delivered {
+    stop 777
   }
 
-  ending sunk {
-    show -999
+  rule sunk {
+    stop -999
   }
 
   turn {
     show water
-    read move
+    read command
 
-    match move {
+    match command {
       4 => row_left
       6 => row_right
       5 => wait
@@ -65,12 +48,12 @@ program DangerousLoading {
   }
 
   rule row_left {
-    move boat by -1
+    boat--
     resolve_turn
   }
 
   rule row_right {
-    move boat by 1
+    boat++
     resolve_turn
   }
 
@@ -88,7 +71,7 @@ program DangerousLoading {
       handle_dock
     }
 
-    threat = random position in harbor
+    threat = random_cell(harbor)
     show water
   }
 
@@ -101,19 +84,23 @@ program DangerousLoading {
 
     if boat == 8 {
       if loaded == 1 {
-        cargo_left -= 1
+        cargo_left--
         loaded = 0
       }
     }
 
-    require cargo_left > 0 else win delivered
+    if cargo_left <= 0 {
+      delivered
+    }
   }
 
   rule lose_boat {
     // A lost boat also loses any crate in transit and restarts at the ship side.
-    boats_left -= 1
+    boats_left--
     loaded = 0
     boat = 8
-    require boats_left > 0 else lose sunk
+    if boats_left <= 0 {
+      sunk
+    }
   }
 }

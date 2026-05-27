@@ -1,33 +1,26 @@
-target mk61
-budget 105 cells
 reference tiny_dial_game
 
-// A toy "dial" game used to show resource exhaustion and success endings in a
+// A toy "dial" game used to show counter exhaustion and terminal rules in a
 // file small enough to read in one glance.
 
 program TinyDialGame {
-  input key: digit
-
   state {
-    [displayed] dial: packed = 80000078
+    dial: packed = 80000078
     // Charge is the only pressure in the game: the left key wastes it, the
     // right key escapes before the dial goes dead.
-    [displayed] charge: resource 0..9 = 8 {
-      terminal at 0 show dial_screen
-    }
+    charge: counter 0..9 = 8
   }
 
   screen dial_screen {
     show dial, charge
-    style compact digits sign
   }
 
-  ending ignored {
-    show 0
+  rule ignored {
+    stop 0
   }
 
-  ending success {
-    show 6
+  rule success {
+    stop 6
   }
 
   turn {
@@ -36,19 +29,16 @@ program TinyDialGame {
 
     match key {
       4 => drain
-      6 => win
-      otherwise => end ignored
+      6 => success
+      otherwise => ignored
     }
   }
 
   rule drain {
-    // Losing charge is visible but not fatal until the resource's own terminal
+    // Losing charge is visible but not fatal until the counter's own terminal
     // declaration fires.
-    charge -= 1
+    charge--
     show dial_screen
   }
 
-  rule win {
-    win success
-  }
 }

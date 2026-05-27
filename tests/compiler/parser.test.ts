@@ -2,39 +2,16 @@ import { describe, expect, it } from "vitest";
 import { ParseError, parseProgram } from "../../src/core/index.ts";
 
 describe("parser", () => {
-  it("requires 'target mk61'", () => {
-    expect(() =>
-      parseProgram(`
-program MissingTarget {
-  turn {
-    stop 0
-  }
-}
-`),
-    ).toThrow(/Missing 'target mk61'/u);
-  });
-
   it("requires one V2 program block", () => {
-    expect(() => parseProgram("target mk61\n")).toThrow(/one V2 program block/u);
+    expect(() => parseProgram("")).toThrow(/one V2 program block/u);
   });
 
-  it("rejects unsupported target names", () => {
-    expect(() =>
-      parseProgram(`
-target bk0010
-program Bad {
-  turn {
-    stop 0
-  }
-}
-`),
-    ).toThrow(
-      /Unsupported target/u,
-    );
-  });
-
-  it("rejects removed low-level top-level syntax", () => {
+  it("rejects unknown top-level syntax", () => {
     for (const source of [
+      "target mk61",
+      "target bk0010",
+      "budget 105 cells",
+      "budget steps <= 20",
       "machine mk61",
       "entry main {",
       "store x = 1",
@@ -42,14 +19,13 @@ program Bad {
       "allow undocumented",
       "resource strength {",
     ]) {
-      expect(() => parseProgram(`target mk61\n${source}\n`)).toThrow(/Unexpected top-level line/u);
+      expect(() => parseProgram(`${source}\n`)).toThrow(/Unexpected top-level line/u);
     }
   });
 
   it("rejects extra tokens in expressions", () => {
     expect(() =>
       parseProgram(`
-target mk61
 program BadExpression {
   state {
     score: counter 0..9 = 0
@@ -66,7 +42,6 @@ program BadExpression {
 
   it("strips comments", () => {
     const ast = parseProgram(`
-target mk61 // top
 # also a comment
 program Comments {
   turn {
@@ -74,23 +49,17 @@ program Comments {
   }
 }
 `);
-    expect(ast.machine).toBe("mk61");
+    expect(ast.v2?.name).toBe("Comments");
   });
 
   it("parses human-centered M61 programs", () => {
     const ast = parseProgram(`
-target mk61
-budget 105 cells
-
 program Demo {
-  input key: digit
-  input answer: number
   state {
-    [displayed] score: counter 0..9 = 0
+    score: counter 0..9 = 0
   }
   screen main {
     show score
-    style compact digits
   }
   turn {
     show main
@@ -100,152 +69,294 @@ program Demo {
       otherwise => stop 0
     }
   }
-  [hot] rule inc {
-    score += 1
+  rule inc {
+    score++
   }
 }
 `);
-    expect(ast.targetProfile).toBe("mk61_exact");
     expect(ast.v2?.name).toBe("Demo");
-    expect(ast.v2?.inputs[1]?.inputType).toBe("number");
-    expect(ast.v2?.state[0]?.hints).toContain("displayed");
-    expect(ast.v2?.rules[0]?.hints).toContain("hot");
+    expect(ast.states[0]?.fields.some((field) => field.name === "key")).toBe(true);
     const turn = ast.entries[0]?.body[0];
     expect(turn?.kind).toBe("loop");
     if (turn?.kind !== "loop") throw new Error("expected turn loop");
     expect(turn.body.some((statement) => statement.kind === "dispatch")).toBe(true);
   });
 
+  it("parses command-style rule calls with expression arguments", () => {
+    const ast = parseProgram(`
+program Demo {
+  state {
+    pos: coord = 1
+    delta: counter -100..100 = 0
+  }
+  turn {
+    step direction(key)
+  }
+  rule step delta {
+    pos += delta
+  }
+}
+`);
+    expect(ast.v2?.rules[0]?.params).toEqual(["delta"]);
+    const loop = ast.entries[0]?.body[0];
+    expect(loop?.kind).toBe("loop");
+    if (loop?.kind !== "loop") throw new Error("expected turn loop");
+    expect(loop.body).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "assign", target: "delta" }),
+      expect.objectContaining({ kind: "call", block: "step" }),
+    ]));
+  });
+
+  it("rejects rule calls with the wrong arity", () => {
+    expect(() =>
+      parseProgram(`
+program BadMissingArg {
+  turn {
+    jump_to
+  }
+  rule jump_to floor {
+    stop floor
+  }
+}
+`),
+    ).toThrow(/Rule 'jump_to' expects 1 argument, got 0/u);
+
+    expect(() =>
+      parseProgram(`
+program BadExtraArg {
+  turn {
+    done 1
+  }
+  rule done {
+    stop 0
+  }
+}
+`),
+    ).toThrow(/Rule 'done' expects 0 arguments, got 1/u);
+  });
+
+  it("specializes constant rule arguments when that is cheaper than a shared parameter proc", () => {
+    const ast = parseProgram(`
+program Jump {
+  state {
+    floor: counter 1..3 = 1
+    strength: counter 0..9 = 9
+  }
+  turn {
+    match floor {
+      1 => jump_to 2
+      2 => jump_to 3
+      3 => jump_to 1
+    }
+  }
+  rule jump_to f {
+    floor = f
+    strength -= f
+  }
+}
+`);
+    expect(ast.procs.some((proc) => proc.name === "jump_to")).toBe(false);
+    expect(ast.states[0]?.fields.some((field) => field.name === "f")).toBe(false);
+    const loop = ast.entries[0]?.body[0];
+    expect(loop?.kind).toBe("loop");
+    if (loop?.kind !== "loop") throw new Error("expected turn loop");
+    const dispatch = loop.body[0];
+    expect(dispatch?.kind).toBe("dispatch");
+    if (dispatch?.kind !== "dispatch") throw new Error("expected dispatch");
+    expect(dispatch.cases[0]?.body).toEqual([
+      expect.objectContaining({ kind: "assign", target: "floor" }),
+      expect.objectContaining({ kind: "assign", target: "strength" }),
+    ]);
+    const floorAssign = dispatch.cases[0]?.body[0];
+    expect(floorAssign?.kind).toBe("assign");
+    if (floorAssign?.kind !== "assign") throw new Error("expected floor assignment");
+    expect(floorAssign.expr).toMatchObject({ kind: "number", raw: "2" });
+  });
+
+  it("parses unary minus in normal expressions", () => {
+    const ast = parseProgram(`
+program Demo {
+  state {
+    value: counter -9..9 = 3
+    result: counter -9..9 = 0
+  }
+  turn {
+    result = -value
+  }
+}
+`);
+    const loop = ast.entries[0]?.body[0];
+    expect(loop?.kind).toBe("loop");
+    if (loop?.kind !== "loop") throw new Error("expected turn loop");
+    const assignment = loop.body.find((statement) => statement.kind === "assign" && statement.target === "result");
+    expect(assignment?.kind).toBe("assign");
+    if (assignment?.kind !== "assign") throw new Error("expected result assignment");
+    expect(assignment.expr.kind).toBe("unary");
+    if (assignment.expr.kind !== "unary") throw new Error("expected unary expression");
+    expect(assignment.expr.op).toBe("-");
+    expect(assignment.expr.expr).toMatchObject({ kind: "identifier", name: "value" });
+  });
+
+  it("parses increment and decrement sugar as unit updates", () => {
+    const ast = parseProgram(`
+program Demo {
+  state {
+    score: counter 0..9 = 0
+    food: counter 0..9 = 5
+  }
+  turn {
+    score++
+    food--
+  }
+}
+`);
+    expect(ast.v2?.turn?.body).toEqual([
+      expect.objectContaining({ kind: "v2_update", target: "score", op: "+=", expr: "1" }),
+      expect.objectContaining({ kind: "v2_update", target: "food", op: "-=", expr: "1" }),
+    ]);
+  });
+
+  it("rejects non-canonical rule syntax", () => {
+    expect(() =>
+      parseProgram(`
+program Bad {
+  turn {
+    step direction(key)
+  }
+  rule step(delta) {
+    stop 0
+  }
+}
+`),
+    ).toThrow(/Rule must look/u);
+
+    expect(() =>
+      parseProgram(`
+program Bad {
+  turn {
+    step(direction(key))
+  }
+  rule step delta {
+    stop 0
+  }
+}
+`),
+    ).toThrow(/Unexpected statement 'step\(direction\(key\)\)'/u);
+
+    expect(() =>
+      parseProgram(`
+program Bad {
+  rule move delta {
+    stop 0
+  }
+  turn {
+    stop 0
+  }
+}
+`),
+    ).toThrow(/Rule name 'move' is reserved/u);
+  });
+
   it("parses v2 world, boards, fleets, state config, encounters, and reference metadata", () => {
     const ast = parseProgram(`
-target mk61
-budget 105 cells
 reference demo_reference
 
 program Demo {
-  input key: digit
   board ocean: 10x10 {
-    coordinate two_digit 00..99
   }
   state {
-    [displayed] pos: coord(floor 1..3, x 0..7) = 1
-    [displayed] strength: resource 0..99 = 40 {
-      terminal at 0 show main
-    }
-    score: score 0..9 = 0 {
-      reward skeleton 1
-    }
-    plans: bitset {
-      generated random
-      cleared when creature defeated
-    }
+    pos: coord = 1
+    strength: counter 0..99 = 40
+    points: counter 0..9 = 0
+    plans: bitset = random()
   }
-  world demo_world: hall {
+  world demo_world {
     position pos {
-      floors 1..3
-      rooms 0..7
-      display decimal_player
-      start 1
+      encoding decimal_player
     }
-    generated random
-    player decimal_point
-    door symbol 8 costs strength 1
-    wall symbol 8 blocks forward costs strength 7
-    vertical wrap 1 -> 2 -> 3 -> 1
   }
   fleet enemy_fleet on ocean {
-    ships enemy_ships 0..99 = input.X
-    generated random
-    cleared when player hit
-    terminal at 0 show main
+    ships enemy_ships 0..99 = stack.X
   }
   screen main {
     show pos, strength
-    style compact digits
   }
   turn {
-    encounter(key)
+    encounter key
   }
   encounters key {
-    0 empty {
+    0 {
       show main
     }
-    3 skeleton {
-      score += 1
+    3 {
+      points++
     }
   }
 }
 `);
 
     expect(ast.reference).toBe("demo_reference");
-    expect(ast.v2?.boards[0]).toMatchObject({ name: "ocean", width: 10, height: 10, coordinateStyle: "two_digit" });
-    expect(ast.v2?.fleets[0]?.ships).toMatchObject({ name: "enemy_ships", initial: "input.X", min: 0, max: 99 });
+    expect(ast.v2?.boards[0]).toMatchObject({ name: "ocean", width: 10, height: 10 });
+    expect(ast.v2?.fleets[0]?.ships).toMatchObject({ name: "enemy_ships", initial: "stack.X", min: 0, max: 99 });
     expect(ast.v2?.worlds[0]?.name).toBe("demo_world");
-    expect(ast.v2?.state.find((field) => field.name === "strength")?.terminal).toMatchObject({ at: "0", show: "main" });
-    expect(ast.v2?.state.find((field) => field.name === "plans")?.clearedWhen).toBe("creature defeated");
-    expect(ast.v2?.encounters[0]?.cases.map((encounterCase) => encounterCase.name)).toEqual(["empty", "skeleton"]);
+    expect(ast.v2?.encounters[0]?.cases.map((encounterCase) => encounterCase.value)).toEqual(["0", "3"]);
     expect(ast.domains.some((domain) => domain.domainKind === "maze" && domain.name === "ocean")).toBe(true);
     expect(ast.domains.some((domain) => domain.domainKind === "bitset" && domain.name === "enemy_fleet")).toBe(true);
-    expect(ast.states[0]?.fields.some((field) => field.name === "enemy_ships" && field.type === "resource")).toBe(true);
+    expect(ast.states[0]?.fields.some((field) => field.name === "enemy_ships" && field.type === "range")).toBe(true);
     expect(ast.domains.some((domain) => domain.domainKind === "maze" && domain.name === "demo_world")).toBe(true);
     expect(ast.procs.some((proc) => proc.name === "encounter")).toBe(true);
   });
 
-  it("parses and lowers v2 move statements and named endings", () => {
+  it("parses and lowers v2 move statements and named terminal rules", () => {
     const ast = parseProgram(`
-target mk61
 program Demo {
   state {
-    pos: coord optional
-    blocked: coord optional
+    pos: coord
   }
-  ending escaped {
-    show 777
+  rule escaped {
+    stop 777
   }
   turn {
-    move pos east remember blocked
-    win escaped
+    move pos east
+    escaped
   }
 }
 `);
 
-    expect(ast.v2?.endings[0]).toMatchObject({ name: "escaped", show: "777" });
+    expect(ast.v2?.rules[0]).toMatchObject({ name: "escaped" });
+    expect(ast.procs.find((proc) => proc.name === "escaped")?.body).toEqual([
+      expect.objectContaining({ kind: "halt" }),
+    ]);
     const loop = ast.entries[0]?.body[0];
     expect(loop?.kind).toBe("loop");
     if (loop?.kind !== "loop") throw new Error("expected loop");
     expect(loop.body).toEqual(expect.arrayContaining([
-      expect.objectContaining({ kind: "assign", target: "blocked" }),
       expect.objectContaining({ kind: "assign", target: "pos" }),
-      expect.objectContaining({ kind: "halt" }),
+      expect.objectContaining({ kind: "call", block: "escaped" }),
     ]));
   });
 
   it("parses human board and world query expressions", () => {
     const ast = parseProgram(`
-target mk61
 program Queries {
   state {
-    pos: coord optional
-    foxes: bitset generated random
-    mines: bitset generated random
+    pos: coord
+    foxes: bitset = random()
+    mines: bitset = random()
     bearing: counter 0..8 = 0
     clue: counter 0..8 = 0
-    tile: enum = 0
-    threat: coord optional
+    tile: counter 0..9 = 0
+    threat: coord
   }
-  world cave: grid {
+  world cave {
     position pos {
-      floors 1..1
-      rooms 1..8
-      start 1
     }
-    generated random
   }
   turn {
-    bearing = count lines from foxes at pos
-    clue = count neighbors from mines around pos
-    tile = cell from cave at pos
-    threat = random position in cave
+    bearing = line_count(foxes, pos)
+    clue = neighbor_count(mines, pos)
+    tile = cell_at(cave, pos)
+    threat = random_cell(cave)
   }
 }
 `);
@@ -259,40 +370,60 @@ program Queries {
     expect(calls).toEqual(["line_count", "neighbor_count", "cell_at", "random_cell"]);
   });
 
-  it("rejects unknown and duplicate v2 endings", () => {
+  it("rejects unknown program syntax and unknown rules", () => {
     expect(() =>
       parseProgram(`
-target mk61
 program Bad {
   turn {
-    win missing
+    end missing
   }
 }
 `),
-    ).toThrow(/Unknown ending 'missing'/u);
+    ).toThrow(/Unknown rule 'end'/u);
 
     expect(() =>
       parseProgram(`
-target mk61
 program Bad {
   ending done {
     show 1
   }
-  ending done {
-    show 2
-  }
   turn {
-    end done
+    done
   }
 }
 `),
-    ).toThrow(/Duplicate ending 'done'/u);
-  });
+    ).toThrow(/Unexpected program line 'ending done \{'/u);
 
-  it("rejects removed setup and domain implementation blocks", () => {
     expect(() =>
       parseProgram(`
-target mk61
+program Bad {
+  rule done {
+    stop 1
+  }
+  rule done {
+    stop 2
+  }
+  turn {
+    done
+  }
+}
+`),
+    ).toThrow(/Duplicate rule 'done'/u);
+
+    expect(() =>
+      parseProgram(`
+program Bad {
+  turn {
+    missing
+  }
+}
+`),
+    ).toThrow(/Unknown rule 'missing'/u);
+  });
+
+  it("rejects unknown setup and domain implementation blocks", () => {
+    expect(() =>
+      parseProgram(`
 preload R9 = random_seed()
 program Bad {
   turn {
@@ -303,7 +434,6 @@ program Bad {
     ).toThrow(/Unexpected top-level line 'preload R9 = random_seed\(\)'/u);
     expect(() =>
       parseProgram(`
-target mk61
 resource strength {
   register Ra
 }
@@ -318,26 +448,22 @@ program Bad {
 
   it("parses challenge blocks as game intent", () => {
     const ast = parseProgram(`
-target mk61
 program Demo {
-  input answer: number
   state {
-    tile: enum = 0
+    tile: counter 0..9 = 0
     score: counter 0..9 = 0
     strength: counter 0..9 = 9
   }
   screen warning {
     show tile
-    style compact digits
   }
   screen memory {
     show tile
-    style compact digits
   }
   turn {
     challenge tile as challenge using warning, memory, answer {
       success {
-        score += 1
+        score++
       }
       failure {
         strength -= 3
@@ -353,63 +479,40 @@ program Demo {
     expect(loop.body.some((statement) => statement.kind === "if")).toBe(true);
   });
 
-  it("rejects misleading v2 input and target references", () => {
+  it("rejects old input declarations and bad target references", () => {
     expect(() =>
       parseProgram(`
-target mk61
-program BadDigit {
+program OldInput {
   input key: digit
-  turn {
-    match key {
-      10 => stop 1
-      otherwise => stop 0
-    }
-  }
-}
-`),
-    ).toThrow(/Input 'key' is digit, but match case '10' is not a digit/u);
-
-    expect(() =>
-      parseProgram(`
-target mk61
-program BadEndingShow {
-  ending done {
-    show missing_screen
-  }
-  turn {
-    end done
-  }
-}
-`),
-    ).toThrow(/Unknown ending display target 'missing_screen'/u);
-
-    expect(() =>
-      parseProgram(`
-target mk61
-program BadTerminal {
-  state {
-    fuel: resource 0..9 = 1 {
-      terminal at 0 show missing
-    }
-  }
   turn {
     stop 0
   }
 }
 `),
-    ).toThrow(/Unknown terminal target 'missing'/u);
+    ).toThrow(/Unexpected program line 'input key: digit'/u);
 
     expect(() =>
       parseProgram(`
-target mk61
+program BadEndingShow {
+  rule done {
+    show missing_screen
+    stop 0
+  }
+  turn {
+    done
+  }
+}
+`),
+    ).toThrow(/Unknown screen 'missing_screen'/u);
+
+    expect(() =>
+      parseProgram(`
 program BadChallenge {
-  input answer: number
   state {
-    tile: enum = 0
+    tile: counter 0..9 = 0
   }
   screen warning {
     show tile
-    style compact digits
   }
   turn {
     challenge tile as challenge using warning, memory, answer {
@@ -423,12 +526,10 @@ program BadChallenge {
     ).toThrow(/Unknown challenge memory screen 'memory'/u);
   });
 
-  it("rejects low-level implementation hints", () => {
+  it("rejects unknown state field syntax", () => {
     expect(() =>
       parseProgram(`
-target mk61
 program Bad {
-  input key: digit
   state {
     [use_X2] score: counter 0..9 = 0
   }
@@ -437,50 +538,237 @@ program Bad {
   }
 }
 `),
-    ).toThrow(/Low-level implementation hint/u);
+    ).toThrow(/State field must look/u);
   });
 
-  it("keeps rule semantics typed instead of raw text", () => {
+  it("keeps canonical rule semantics typed instead of raw text", () => {
     const ast = parseProgram(`
-target mk61
 program Demo {
-  input key: digit
   state {
-    pos: coord(x 1..7) = 1
-    walls: bitset generated random
+    pos: coord = 1
+    next: coord
+    walls: bitset = random()
   }
   turn {
     stop 0
   }
-  rule move {
-    let next = pos + 1
-    if walls has next {
+  rule advance {
+    next = pos + 1
+    if walls >= next {
       show 0
     }
     else {
       pos = next
     }
-    require pos exists else show 0
-    walls clear pos
-    reward by pos
+    if pos != 0 {
+      walls -= pos
+      pos++
+    }
+    else {
+      show 0
+    }
   }
 }
 `);
     const rule = ast.v2?.rules[0];
     expect(rule?.body.map((statement) => statement.kind)).toEqual([
-      "v2_let",
+      "v2_assign",
       "v2_if",
-      "v2_require",
-      "v2_collection",
-      "v2_reward",
+      "v2_if",
     ]);
     const conditional = rule?.body[1];
     expect(conditional?.kind).toBe("v2_if");
     if (conditional?.kind !== "v2_if") throw new Error("expected v2_if");
     expect(conditional.predicate).toMatchObject({
-      kind: "v2_collection_has",
-      collection: "walls",
-      item: "next",
+      kind: "v2_compare",
+      left: "walls",
+      op: ">=",
+      right: "next",
     });
+  });
+
+  it("parses raw blocks with an explicit stack and state contract", () => {
+    const ast = parseProgram(`
+program RawDemo {
+  state {
+    value: packed = 2
+    result: packed = 0
+  }
+  turn {
+    raw {
+      takes Y = value, X = 3
+      returns X -> result
+      clobbers X, Y, X1
+      preserves state
+      code {
+        +
+        К ИНВ
+      }
+    }
+    stop result
+  }
+}
+`);
+    const raw = ast.v2?.turn?.body[0];
+    expect(raw?.kind).toBe("v2_raw");
+    if (raw?.kind !== "v2_raw") throw new Error("expected v2_raw");
+    expect(raw.inputs.map((input) => [input.slot, input.expr])).toEqual([
+      ["Y", "value"],
+      ["X", "3"],
+    ]);
+    expect(raw.outputs.map((output) => [output.slot, output.target])).toEqual([["X", "result"]]);
+
+    const core = ast.entries[0]?.body[0]?.kind === "loop" ? ast.entries[0].body[0].body[0] : undefined;
+    expect(core?.kind).toBe("core");
+    if (core?.kind !== "core") throw new Error("expected core");
+    expect(core.strict).toBe(true);
+    expect(core.clobbers).toEqual(["X", "Y", "X1"]);
+    expect(core.preserves).toEqual(["state"]);
+  });
+
+  it("rejects raw blocks without a state preservation contract", () => {
+    expect(() =>
+      parseProgram(`
+program BadRaw {
+  turn {
+    raw {
+      clobbers X
+      code {
+        +
+      }
+    }
+  }
+}
+`),
+    ).toThrow(/Raw block must declare preserves state/u);
+  });
+
+  it("rejects unknown statement syntax", () => {
+    expect(() =>
+      parseProgram(`
+program Bad {
+  turn {
+    require pos != 0 else show 0
+  }
+}
+`),
+    ).toThrow(/Unknown rule 'require'/u);
+  });
+
+  it("rejects unknown screen lines", () => {
+    expect(() =>
+      parseProgram(`
+program Bad {
+  state {
+    score: counter 0..9 = 0
+  }
+  screen main {
+    show score
+    style compact digits
+  }
+  turn {
+    show main
+  }
+}
+`),
+    ).toThrow(/Unexpected screen line 'style compact digits'/u);
+  });
+
+  it("rejects unknown state and fleet config syntax", () => {
+    expect(() =>
+      parseProgram(`
+program Bad {
+  state {
+    walls: bitset generated random
+  }
+  turn {
+    stop 0
+  }
+}
+`),
+    ).toThrow(/State field must look/u);
+
+    expect(() =>
+      parseProgram(`
+program Bad {
+  state {
+    walls: bitset {
+      generated random
+    }
+  }
+  turn {
+    stop 0
+  }
+}
+`),
+    ).toThrow(/State field must look/u);
+
+    expect(() =>
+      parseProgram(`
+program Bad {
+  board ocean: 10x10 {
+  }
+  fleet enemy_fleet on ocean {
+    ships enemy_ships 0..99 = stack.X
+    generated random
+  }
+  turn {
+    stop 0
+  }
+}
+`),
+    ).toThrow(/Unexpected fleet line 'generated random'/u);
+  });
+
+  it("rejects unknown state field tails", () => {
+    expect(() =>
+      parseProgram(`
+program Bad {
+  state {
+    blocked: coord optional
+  }
+  turn {
+    stop 0
+  }
+}
+`),
+    ).toThrow(/State field must look/u);
+  });
+
+  it("rejects old input.X/input.Y startup stack syntax", () => {
+    expect(() =>
+      parseProgram(`
+program Bad {
+  state {
+    pos: coord = input.X
+  }
+  turn {
+    stop 0
+  }
+}
+`),
+    ).toThrow(/Use 'stack.X' for startup stack values/u);
+  });
+
+  it("rejects unknown state types", () => {
+    for (const [field, message] of [
+      ["code: digit = 0", /Unknown state type 'digit'/u],
+      ["fuel: resource 0..9 = 4", /Unknown state type 'resource'/u],
+      ["tile: enum = 0", /Unknown state type 'enum'/u],
+      ["jump: addr = 0", /Unknown state type 'addr'/u],
+    ] as const) {
+      expect(() =>
+        parseProgram(`
+program Bad {
+  state {
+    ${field}
+  }
+  turn {
+    stop 0
+  }
+}
+`),
+      ).toThrow(message);
+    }
   });
 });

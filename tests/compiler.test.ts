@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { compileM61, MK61_EXACT_PROFILE } from "../src/core/index.ts";
+import { compileM61, MK61_PROFILE } from "../src/core/index.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -15,7 +15,7 @@ describe("M61 compiler", () => {
 
     expect(result.report.ir.v2).toBe(true);
     expect(result.report.steps).toBeLessThanOrEqual(105);
-    expect(result.report.optimizations.some((optimization) => optimization.name === "intent-input-lowering")).toBe(true);
+    expect(result.report.optimizations.some((optimization) => optimization.name === "intent-read-lowering")).toBe(true);
   });
 
   it("keeps every checked example within the 105-cell ceiling", () => {
@@ -65,7 +65,7 @@ describe("M61 compiler", () => {
     const result = compileM61(source("examples/human.m61"));
 
     expect(result.report.ir.v2).toBe(true);
-    expect(result.report.targetProfile).toBe("mk61_exact");
+    expect(result.report.machine).toBe("mk61");
     expect(result.report.steps).toBeLessThanOrEqual(105);
     expect(result.report.steps).toBe(28);
     expect(result.report.candidates.some((candidate) => candidate.variant === "dark-indirect-table")).toBe(true);
@@ -92,19 +92,15 @@ entry main {
     ).toThrow(/Unexpected top-level line 'machine mk61'/u);
   });
 
-  it("lowers simple let and if rules through generic intent", () => {
+  it("lowers simple assignment and if rules through generic intent", () => {
     const result = compileM61(`
-target mk61
-budget 105 cells
-
 program SimpleRules {
-  input key: digit
   state {
     score: counter 0..9 = 1
+    next: counter 0..9 = 0
   }
   screen main {
     show score
-    style compact digits
   }
   turn {
     read key
@@ -112,7 +108,7 @@ program SimpleRules {
     show main
   }
   rule inc {
-    let next = score + 1
+    next = score + 1
     if next >= 3 {
       score = next
     }
@@ -132,9 +128,8 @@ program SimpleRules {
 
     expect(reference).not.toMatch(/core\s+exact/iu);
     expect(reference).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
-    expect(reference).toMatch(/world cave: grid/u);
-    expect(reference).toMatch(/generated random/u);
-    expect(reference).toMatch(/terminal at 0 show main/u);
+    expect(reference).toMatch(/world cave/u);
+    expect(reference).toMatch(/bitset = random\(\)/u);
     const result = compileM61(reference);
     const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
     const features = new Set(result.report.machineFeaturesUsed.map((feature) => feature.id));
@@ -266,7 +261,7 @@ program SimpleRules {
     expect(comments).toMatch(/indirect recall truncates fractional address/u);
   });
 
-  it("keeps the universal spatial/resource tactic fallback for unsupported non-cave games", () => {
+  it("keeps the universal spatial/counter tactic fallback for unsupported non-cave games", () => {
     for (const path of [
       "examples/grid-rescue.m61",
       "examples/resource-raid.m61",
@@ -280,7 +275,7 @@ program SimpleRules {
       expect(selected.has("indirect-register-flow")).toBe(true);
       expect(selected.has("super-dark-dispatch")).toBe(true);
       expect(selected.has("cyclic-address-layout")).toBe(true);
-      expect(result.report.warnings.join("\n")).toMatch(/universal spatial\/resource tactic pipeline/u);
+      expect(result.report.warnings.join("\n")).toMatch(/universal spatial\/counter tactic pipeline/u);
     }
   });
 
@@ -293,7 +288,7 @@ program SimpleRules {
     const warnings = result.report.warnings.join("\n");
 
     expect(seaBattle).not.toMatch(/\bown_fleet\b/u);
-    expect(seaBattle).toMatch(/\bown_ships:\s+resource\b/u);
+    expect(seaBattle).toMatch(/\bown_ships:\s+counter\b/u);
     expect(result.report.steps).toBe(101);
     expect(result.report.steps).toBeLessThan(102);
     expect(result.report.reference?.referenceSpan).toBe(102);
@@ -303,7 +298,7 @@ program SimpleRules {
     expect(selected.has("board_fleet_duel")).toBe(true);
     expect(result.report.rejectedCandidates.some((candidate) => candidate.variant === "universal_spatial_resource")).toBe(true);
     expect(warnings).toMatch(/selected board_fleet_duel semantic microkernel/u);
-    expect(warnings).not.toMatch(/universal spatial\/resource tactic pipeline/u);
+    expect(warnings).not.toMatch(/universal spatial\/counter tactic pipeline/u);
     expect(proofs.has("reference-size-beaten")).toBe(true);
     expect(proofs.has("shape-features-covered")).toBe(true);
     expect(proofs.has("fleet-duel-lowering-covered")).toBe(true);
@@ -448,8 +443,8 @@ program SimpleRules {
   });
 
   it("records exact MK-61 emulator facts for advanced dispatch hacks", () => {
-    const factIds = new Set(MK61_EXACT_PROFILE.emulatorFacts.map((fact) => fact.id));
-    const featureIds = new Set(MK61_EXACT_PROFILE.features.map((feature) => feature.id));
+    const factIds = new Set(MK61_PROFILE.emulatorFacts.map((fact) => fact.id));
+    const featureIds = new Set(MK61_PROFILE.features.map((feature) => feature.id));
 
     expect(featureIds.has("super-dark-dispatch")).toBe(true);
     expect(featureIds.has("r0-fractional-sentinel")).toBe(true);
@@ -458,7 +453,7 @@ program SimpleRules {
     expect(factIds.has("r0-fractional-jump-99")).toBe(true);
     expect(factIds.has("r0-fractional-selects-r3")).toBe(true);
     expect(factIds.has("raw-display-5f")).toBe(true);
-    expect(MK61_EXACT_PROFILE.emulatorFacts.find((fact) => fact.id === "r0-star-f-aliases")?.detail).toMatch(/do not preserve R0/u);
+    expect(MK61_PROFILE.emulatorFacts.find((fact) => fact.id === "r0-star-f-aliases")?.detail).toMatch(/do not preserve R0/u);
   });
 
   it("always uses exact-machine lowerings for the full cave reference", () => {

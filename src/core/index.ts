@@ -18,5 +18,5 @@ export {
   formatJson,
   formatListing,
 } from "./format.ts";
-export { MK61_EXACT_PROFILE, targetProfileFor, targetSupports } from "./targetProfile.ts";
+export { MK61_PROFILE, machineSupports } from "./machineProfile.ts";
 export type * from "./types.ts";

@@ -1,84 +1,56 @@
-target mk61
-budget 105 cells
 reference lordbss_pmk198_giants_country
 
 // "Giants Country" is based on Lord_BSS pmk198 by Vladimir Trofimchuk.
 // The source describes game rules; MK-61 storage and layout are compiler choices.
 
 program GiantsCountry {
-  input action: digit
-  input answer: number
-
   state {
     // The visible cave is a one-dimensional hall on each floor; the danger comes
     // from what the generated room table says is waiting there.
-    [displayed] pos: coord(floor 1..3, x 0..7, y 0..0) = 1
-    [displayed] view: packed = 0
+    pos: coord = 1
+    view: packed = 0
 
-    [displayed] strength: resource 0..99 = 40 {
-      terminal at 0 show exhausted
-    }
+    strength: counter 0..99 = 40
 
     // Score values are deliberately uneven: larger monsters are not just harder
     // walls, they change the reward curve.
-    [persistent] floor: counter 1..3 = 1
-    [persistent] room: counter 0..7 = 0
+    floor: counter 1..3 = 1
+    room: counter 0..7 = 0
 
-    [persistent] score: score 0..99 = 0 {
-      reward skeleton 1
-      reward trap 2
-      reward vampire 3
-      reward head 4
-      reward dragon 6
-      reward giant 7
-    }
+    score: counter 0..99 = 0
 
-    [persistent] plans: bitset {
-      // Plans represent learned/defeated encounters. Clearing them marks that a
-      // room's scripted danger has been resolved by the player.
-      generated random
-      cleared when creature defeated
-    }
+    // Plans represent learned/defeated encounters. Clearing them marks that a
+    // room's scripted danger has been resolved by the player.
+    plans: bitset = random()
 
-    [temporary] tile: enum = 0
-    [temporary] challenge: packed = 0
-    [temporary] warning_pattern: packed = 70000008
+    tile: counter 0..9 = 0
+    challenge: packed = 0
+    warning_pattern: packed = 70000008
   }
 
-  world giant_country: hall {
+  world giant_country {
     // A hall, not a free grid: most turns advance forward, while floor jumps are
     // paid shortcuts through a dangerous generated sequence.
     position pos {
-      floors 1..3
-      rooms 0..7
-      display decimal_player
-      start 1
+      encoding decimal_player
     }
 
-    generated random
-    player decimal_point
-    door symbol 8 costs strength 1
-    wall symbol 8 blocks forward costs strength 7
-    vertical wrap 1 -> 2 -> 3 -> 1
   }
 
   screen cave {
     show view, strength
-    style compact digits letters sign hex
   }
 
   screen warning {
     show warning_pattern
-    style compact digits letters sign
   }
 
   screen memory {
     show challenge
-    style compact digits
   }
 
-  ending exhausted {
-    show 0
+  rule exhausted {
+    stop 0
   }
 
   turn {
@@ -91,47 +63,41 @@ program GiantsCountry {
     }
   }
 
-  [hot] rule advance {
+  rule advance {
     // Advancing spends strength before the room is understood, which makes even
     // empty rooms part of the attrition game.
-    strength -= 1
+    strength--
     tile = cell_at(pos)
 
     if tile == 8 {
       hit_wall
     }
     else {
-      encounter(tile)
-      room += 1
-      pos = pos + 1
+      encounter tile
+      room++
+      pos++
     }
 
-    require strength > 0 else end exhausted
+    if strength <= 0 {
+      exhausted
+    }
   }
 
   rule jump_floor {
     match floor {
-      1 => jump_to_2
-      2 => jump_to_3
-      3 => jump_to_1
+      1 => jump_to 2
+      2 => jump_to 3
+      3 => jump_to 1
       otherwise => show cave
     }
-    require strength > 0 else end exhausted
+    if strength <= 0 {
+      exhausted
+    }
   }
 
-  rule jump_to_2 {
-    floor = 2
-    strength -= 2
-  }
-
-  rule jump_to_3 {
-    floor = 3
-    strength -= 3
-  }
-
-  rule jump_to_1 {
-    floor = 1
-    strength -= 1
+  rule jump_to f {
+    floor = f
+    strength -= f
   }
 
   rule hit_wall {
@@ -142,26 +108,26 @@ program GiantsCountry {
   encounters tile {
     // Encounters all share the same shape: remember a challenge, then convert
     // success into score or mobility and failure into strength loss.
-    0 empty {
+    0 {
       show cave
     }
 
-    1 ladder {
+    1 {
       challenge tile as challenge using warning, memory, answer {
         success {
           reward_ladder
         }
         failure {
-          strength -= 1
+          strength--
         }
       }
     }
 
-    2 jug {
+    2 {
       challenge tile as challenge using warning, memory, answer {
         success {
           strength += 2
-          plans clear pos
+          plans -= pos
         }
         failure {
           strength -= 2
@@ -169,12 +135,12 @@ program GiantsCountry {
       }
     }
 
-    3 skeleton {
+    3 {
       challenge tile as challenge using warning, memory, answer {
         success {
-          strength += 1
-          score += 1
-          plans clear pos
+          strength++
+          score++
+          plans -= pos
         }
         failure {
           strength -= 3
@@ -182,11 +148,11 @@ program GiantsCountry {
       }
     }
 
-    4 trap {
+    4 {
       challenge tile as challenge using warning, memory, answer {
         success {
           score += 2
-          plans clear pos
+          plans -= pos
         }
         failure {
           strength -= 4
@@ -194,12 +160,12 @@ program GiantsCountry {
       }
     }
 
-    5 vampire {
+    5 {
       challenge tile as challenge using warning, memory, answer {
         success {
-          strength -= 1
+          strength--
           score += 3
-          plans clear pos
+          plans -= pos
         }
         failure {
           strength -= 5
@@ -207,12 +173,12 @@ program GiantsCountry {
       }
     }
 
-    6 head {
+    6 {
       challenge tile as challenge using warning, memory, answer {
         success {
           strength -= 2
           score += 4
-          plans clear pos
+          plans -= pos
         }
         failure {
           strength -= 6
@@ -220,12 +186,12 @@ program GiantsCountry {
       }
     }
 
-    7 dragon {
+    7 {
       challenge tile as challenge using warning, memory, answer {
         success {
           strength -= 4
           score += 6
-          plans clear pos
+          plans -= pos
         }
         failure {
           strength -= 8
@@ -233,12 +199,12 @@ program GiantsCountry {
       }
     }
 
-    9 giant {
+    9 {
       challenge tile as challenge using warning, memory, answer {
         success {
           strength -= 5
           score += 7
-          plans clear pos
+          plans -= pos
         }
         failure {
           strength -= 9
@@ -256,7 +222,7 @@ program GiantsCountry {
       3 => ladder_floor_3
       otherwise => show cave
     }
-    plans clear pos
+    plans -= pos
   }
 
   rule ladder_floor_1 {
@@ -270,7 +236,7 @@ program GiantsCountry {
   }
 
   rule ladder_floor_3 {
-    strength += 1
+    strength++
     floor = 1
   }
 }

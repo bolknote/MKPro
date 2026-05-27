@@ -102,7 +102,7 @@ function stopSemanticFromComment(comment: string | undefined): IrStopSemantic {
   if (lower.startsWith("pause")) return "pause";
   if (lower.startsWith("show")) return "show";
   if (lower.startsWith("ask")) return "ask";
-  if (lower.startsWith("input")) return "input";
+  if (lower.startsWith("input") || lower.startsWith("read")) return "input";
   if (lower.startsWith("implicit final stop")) return "halt";
   if (lower.includes("implicit stop")) return "halt";
   return "unknown";

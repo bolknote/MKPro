@@ -1,5 +1,3 @@
-target mk61
-budget 105 cells
 reference basic_sum
 
 // Smallest useful program shape: two inputs become one displayed value. It is
@@ -7,16 +5,8 @@ reference basic_sum
 // smoke test that is easy to inspect.
 
 program BasicSum {
-  input x: digit
-  input y: digit
-
   state {
-    [displayed] result: counter 0..99 = 0
-  }
-
-  screen answer {
-    show result
-    style compact digits
+    result: counter 0..99 = 0
   }
 
   turn {
@@ -25,7 +15,6 @@ program BasicSum {
     read x
     read y
     result = x + y
-    show answer
     stop result
   }
 }

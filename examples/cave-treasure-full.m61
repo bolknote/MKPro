@@ -1,93 +1,71 @@
-target mk61
-budget 105 cells
 reference cave_treasure_full
 
 // The named compactness reference for Cave Treasure. It intentionally stays at
 // game-rule level so compiler changes can be judged against the same source.
 
 program CaveTreasure {
-  input key: number
-  input fight_key: number
-
   state {
     // Position is visible to the player and meaningful to the hidden masks: one
     // coordinate names both the display room and generated cave contents.
-    [displayed] pos: coord(floor 1..3, x 1..7, y 1..4) = input.X
+    pos: coord = stack.X
 
-    [persistent] walls: bitset {
-      generated random
-    }
+    walls: bitset = random()
 
-    [persistent] caches: bitset {
-      generated random
-      cleared when cache searched
-    }
+    caches: bitset = random()
 
-    [displayed] food: resource 0..99 = input.Y {
-      terminal at 0 show main
-    }
+    food: counter 0..99 = stack.Y
 
-    // Three resources carry three different anxieties: hunger, route control,
+    // Three counters carry three different anxieties: hunger, route control,
     // and the question of whether another search is worth the risk.
-    [persistent] dynamite: resource 0..9 = 4
-    [persistent] treasure: score 0..9 = 0 {
-      reward cache 1
-    }
+    dynamite: counter 0..9 = 4
+    treasure: counter 0..9 = 0
 
-    [temporary] blocked: coord optional
-    [temporary] robber: flag = 0
-    [temporary] exit_reached: flag = 0
+    blocked: coord
+    next: coord
+    robber: flag = 0
+    exit_reached: flag = 0
   }
 
-  world cave: grid {
+  world cave {
     // The world block says what the cave means, not how to store it. The backend
     // is free to use packed mantissas, overlays, or a future layout.
     position pos {
-      floors 1..3
-      rooms 1..7
-      display packed_decimal_zero_run
-      start input.X
+      encoding packed_decimal_zero_run
     }
 
-    generated random
-    player decimal_point
-    door symbol 8 costs food 1
-    wall symbol 8 blocks forward costs dynamite 2
-    vertical wrap 1 -> 2 -> 3 -> 1
   }
 
   screen main {
     show pos, food, dynamite, treasure
-    style compact digits letters hex
   }
 
-  ending ignored {
-    show 0
+  rule ignored {
+    stop 0
   }
 
-  ending exit_found {
-    show 1
+  rule exit_found {
+    stop 1
   }
 
   turn {
     show main
     read key
-    food -= 1
+    food--
 
     match key {
-      2, 4, 6, 8, 5, -5 => move(direction(key))
+      2, 4, 6, 8, 5, -5 => go direction(key)
       0 => break_wall
       10 => search
-      otherwise => end ignored
+      otherwise => ignored
     }
   }
 
-  [hot] rule move(dir) {
-    let next = pos + dir
+  rule go dir {
+    next = pos + dir
     if exit_reached == 1 {
-      win exit_found
+      exit_found
     }
-    if walls has next {
+    if walls >= next {
       // A wall hit is remembered rather than immediately resolved; spending
       // dynamite is a separate player commitment.
       blocked = next
@@ -99,19 +77,27 @@ program CaveTreasure {
   }
 
   rule break_wall {
-    require blocked exists else show 0
-    require dynamite >= 2 else show 0
-    walls clear blocked
-    pos = blocked
-    dynamite -= 2
+    if blocked != 0 {
+      if dynamite >= 2 {
+        walls -= blocked
+        pos = blocked
+        dynamite -= 2
+      }
+      else {
+        show 0
+      }
+    }
+    else {
+      show 0
+    }
   }
 
   rule search {
-    if caches has pos {
-      caches clear pos
+    if caches >= pos {
+      caches -= pos
       // Cache value follows floor depth, matching the "riskier rooms pay better"
       // shape without spelling out three separate search rules.
-      reward by pos.floor
+      treasure += pos.floor
       robber = 1
       fight
     }
@@ -125,7 +111,7 @@ program CaveTreasure {
     match fight_key {
       0 => decline_fight
       10 => accept_fight
-      otherwise => end ignored
+      otherwise => ignored
     }
   }
 
@@ -136,6 +122,6 @@ program CaveTreasure {
 
   rule accept_fight {
     robber = 0
-    reward by random()
+    treasure += random()
   }
 }

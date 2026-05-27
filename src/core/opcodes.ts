@@ -278,8 +278,11 @@ function normalizeAliases(item: OpcodeInfo): string[] {
   ]);
 
   if (item.name === "К ∧") aliases.add("KΛ");
+  if (item.name === "К ∧") aliases.add("К AND");
   if (item.name === "К ∨") aliases.add("KV");
+  if (item.name === "К ∨") aliases.add("К OR");
   if (item.name === "К ⊕") aliases.add("K⊕");
+  if (item.name === "К ⊕") aliases.add("К XOR");
   if (item.name === "К ИНВ") aliases.add("Кинв");
   if (item.name === "К ЗН") aliases.add("Кзн");
   if (item.name === "К |x|") aliases.add("K|x|");
@@ -294,12 +297,25 @@ function normalizeAliases(item: OpcodeInfo): string[] {
 function normalizeName(name: string): string {
   return name
     .trim()
-    .replace(/\s+/g, " ")
+    .replaceAll("←→", "<->")
+    .replaceAll("→", "->")
+    .replaceAll("←", "<-")
+    .replace(/\^\{([^}]+)\}/gu, "^$1")
+    .replaceAll("π", "pi")
+    .replaceAll("√", "sqrt")
+    .replaceAll("↻", "reverse")
+    .replaceAll("≠", "!=")
+    .replaceAll("≥", ">=")
+    .replaceAll("≤", "<=")
     .replaceAll("×", "*")
     .replaceAll("÷", "/")
     .replaceAll("−", "-")
+    .replaceAll("∣", "|")
     .replaceAll("Х", "X")
+    .replaceAll("х", "x")
     .replaceAll("K", "К")
     .replaceAll("k", "к")
+    .replace(/^([FfКк])(?=\S)/u, "$1 ")
+    .replace(/\s+/g, " ")
     .toLowerCase();
 }

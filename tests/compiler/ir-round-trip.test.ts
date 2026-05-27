@@ -50,7 +50,7 @@ describe("ir round-trip", () => {
       { kind: "op", opcode: 0x50, mnemonic: "С/П", comment: "pause" },
       { kind: "op", opcode: 0x50, mnemonic: "С/П", comment: "show main" },
       { kind: "op", opcode: 0x50, mnemonic: "С/П", comment: "ask key" },
-      { kind: "op", opcode: 0x50, mnemonic: "С/П", comment: "input digit x" },
+      { kind: "op", opcode: 0x50, mnemonic: "С/П", comment: "read x" },
       { kind: "op", opcode: 0x50, mnemonic: "С/П", comment: "implicit final stop" },
       { kind: "op", opcode: 0x50, mnemonic: "С/П" },
     ];

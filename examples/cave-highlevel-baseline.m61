@@ -1,73 +1,51 @@
-target mk61
-budget 105 cells
 reference cave_highlevel_baseline
 
 // Early readable Cave Treasure baseline kept as a compactness comparison.
 // The source is now game intent; register plans and raw return tricks live in reports.
 
 program CaveHighlevelBaseline {
-  input command: number
-
   state {
     // This baseline keeps the classic cave contract explicit: the player sees a
     // packed room display, while walls and caches live as generated hidden masks.
-    [displayed] player: coord(floor 1..3, x 1..7, y 1..4) = 1.0000001
 
-    [persistent] walls: bitset {
-      generated random
-    }
+    walls: bitset = random()
 
-    [persistent] caches: bitset {
-      generated random
-      cleared when cache searched
-    }
+    caches: bitset = random()
 
-    [displayed] food: resource 0..99 = input.Y {
-      terminal at 0 show cave_screen
-    }
+    food: counter 0..99 = stack.Y
     // Dynamite is intentionally scarcer than food; it turns blocked movement
     // into a strategic choice instead of a simple delay.
-    [persistent] dynamite: resource 0..9 = 6
-    [persistent] treasure: score 0..9 = 0 {
-      reward cache 1
-    }
+    dynamite: counter 0..9 = 6
+    treasure: counter 0..9 = 0
 
-    [temporary] blocked: coord optional
-    [temporary] loot: packed = 0
+    blocked: coord
+    next: coord
+    loot: packed = 0
   }
 
-  world cave: grid {
+  world cave {
     // The vertical wrap makes the cave feel larger than the display: climbing
     // cycles floors while the room-row presentation stays compact.
     position player {
-      floors 1..3
-      rooms 1..7
-      display packed_decimal_zero_run
-      start input.X
+      encoding packed_decimal_zero_run
     }
 
-    generated random
-    player decimal_point
-    door symbol 8 costs food 1
-    wall symbol 8 blocks forward costs dynamite 2
-    vertical wrap 1 -> 2 -> 3 -> 1
   }
 
   screen cave_screen {
     show player, food, dynamite, treasure
-    style compact digits letters hex
   }
 
-  ending ignored {
-    show 0
+  rule ignored {
+    stop 0
   }
 
   turn {
     show cave_screen
     read command
     // Food is the global turn clock. All useful actions spend the same survival
-    // resource, which is what keeps the tiny program game-like.
-    food -= 1
+    // counter, which is what keeps the tiny program game-like.
+    food--
 
     match command {
       2 => move_south
@@ -77,51 +55,70 @@ program CaveHighlevelBaseline {
       5 => move_up
       0 => break_wall
       10 => search_cache
-      otherwise => end ignored
+      otherwise => ignored
     }
   }
 
   rule move_south {
-    move player south remember blocked
-    show cave_screen
+    next = player + 0.0000002
+    try_move
   }
 
   rule move_west {
-    move player west remember blocked
-    show cave_screen
+    next = player + 0.000001
+    try_move
   }
 
   rule move_east {
-    move player east remember blocked
-    show cave_screen
+    next = player - 0.000001
+    try_move
   }
 
   rule move_north {
-    move player north remember blocked
-    show cave_screen
+    next = player - 0.0000002
+    try_move
   }
 
   rule move_up {
-    move player up remember blocked
-    show cave_screen
+    next = player + 1
+    try_move
+  }
+
+  rule try_move {
+    if walls >= next {
+      blocked = next
+      show 0
+    }
+    else {
+      player = next
+      blocked = 0
+      show cave_screen
+    }
   }
 
   rule break_wall {
     // Blasting only commits when the remembered wall and enough dynamite exist;
     // the screen response is the feedback, not a separate error language.
-    require blocked exists else show cave_screen
-    require dynamite >= 2 else show cave_screen
-    dynamite -= 2
-    player = blocked
-    show cave_screen
+    if blocked != 0 {
+      if dynamite >= 2 {
+        dynamite -= 2
+        show cave_screen
+      }
+      else {
+        show cave_screen
+      }
+    }
+    else {
+      show cave_screen
+    }
   }
 
   rule search_cache {
-    if caches has player {
+    if caches >= player {
       // Searching consumes the cache so repeated probing cannot farm score from
       // one lucky room.
-      caches clear player
-      treasure += 1
+      caches -= player
+      treasure++
       show cave_screen
     }
   }

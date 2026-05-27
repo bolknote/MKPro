@@ -1,25 +1,18 @@
-target mk61
-budget 105 cells
-
-// A deliberately human-sized control-flow example: one key grows score, another
 // spends food. It keeps the syntax approachable while still exercising displayed
 // state, persistent state, match dispatch, and a hot rule.
 
 program CounterGame {
-  input key: digit
-
   state {
-    [displayed] score: counter 0..9 = 0
-    [persistent] food: counter 0..9 = 5
+    score: counter 0..9 = 0
+    food: counter 0..9 = 5
   }
 
   screen main {
     show score, food
-    style compact digits letters hex
   }
 
-  ending ignored {
-    show 0
+  rule ignored {
+    stop 0
   }
 
   turn {
@@ -31,19 +24,19 @@ program CounterGame {
     match key {
       2 => gain
       8 => spend
-      otherwise => end ignored
+      otherwise => ignored
     }
   }
 
-  [hot] rule gain {
+  rule gain {
     // Marked hot because "gain" is the common happy path in the optimizer
     // examples that inspect rule metadata.
-    score += 1
+    score++
     show main
   }
 
   rule spend {
-    food -= 1
+    food--
     show main
   }
 }

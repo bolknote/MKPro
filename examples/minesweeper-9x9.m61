@@ -1,58 +1,43 @@
-target mk61
-budget 105 cells
 reference anvarov_minesweeper_9x9
 
 // Based on Serge Anvarov's "Minesweeper 9x9": the calculator owns the hidden
 // mine mask and reports the number of mines adjacent to each requested cell.
 
 program Minesweeper9x9 {
-  input cell: number
-  input mine_count: number
-
   board minefield: 9x9 {
     // The original uses two-digit cell names from 11 to 99; preserving that
     // convention keeps the player's mental board aligned with the listing.
-    coordinate two_digit 11..99
   }
 
   state {
     // Mines are generated once and never shown. Opened cells are tracked so the
     // source names the semantic idea even if a compact backend can encode it away.
-    [persistent] mines: bitset {
-      generated random
-      cleared when game restarted
-    }
+    mines: bitset = random()
 
-    [persistent] opened: bitset {
-      cleared when game restarted
-    }
+    opened: bitset
 
-    [displayed] probe: coord(x 1..9, y 1..9) optional
-    [displayed] clue: counter 0..8 = 0
-    [displayed] safe_left: resource 0..81 = 81 {
-      terminal at 0 show cleared_all
-    }
+    probe: coord
+    clue: counter 0..8 = 0
+    safe_left: counter 0..81 = 81
   }
 
   screen result {
     show probe, clue, safe_left
-    style compact digits sign
   }
 
-  ending exploded {
-    show -999
+  rule exploded {
+    stop -999
   }
 
-  ending cleared_all {
-    show 777
+  rule cleared_all {
+    stop 777
   }
 
   turn {
-    read cell
-    probe = cell
+    read probe
 
-    if mines has probe {
-      lose exploded
+    if mines >= probe {
+      exploded
     }
     else {
       reveal_safe_cell
@@ -62,11 +47,13 @@ program Minesweeper9x9 {
   rule reveal_safe_cell {
     // A safe probe earns information, not just survival: the clue is the count
     // of mines in the eight surrounding cells.
-    opened set probe
-    safe_left -= 1
-    clue = count neighbors from mines around probe
+    opened += probe
+    safe_left--
+    clue = neighbor_count(mines, probe)
     show result
 
-    require safe_left > 0 else win cleared_all
+    if safe_left <= 0 {
+      cleared_all
+    }
   }
 }

@@ -17,7 +17,7 @@ export type RegisterName =
 
 export type DeliveryMode = "manual" | "loader" | "hex";
 export type OutputMode = "listing" | "hex" | "json" | "all";
-export type TargetProfileId = "mk61_exact";
+export type MachineId = "mk61";
 
 export interface CompileOptions {
   delivery: DeliveryMode;
@@ -48,9 +48,6 @@ export interface OpcodeInfo {
 }
 
 export interface ProgramAst {
-  machine: "mk61";
-  targetProfile: TargetProfileId;
-  budget?: number;
   reference?: string;
   v2?: V2ProgramAst;
   preloads: PreloadAst[];
@@ -99,8 +96,7 @@ export type GameIntentFeature =
   | "fleet_clear"
   | "random_board_cell"
   | "hit_report"
-  | "resources"
-  | "endings";
+  | "resources";
 
 export interface GameStateRole {
   name: string;
@@ -213,7 +209,7 @@ export interface ProcAst {
   line: number;
 }
 
-export type StateFieldType = "digit" | "flag" | "range" | "packed" | "resource" | "addr";
+export type StateFieldType = "flag" | "range" | "packed" | "addr";
 
 export interface StateAst {
   kind: "state";
@@ -228,7 +224,7 @@ export interface StateFieldAst {
   min?: number;
   max?: number;
   initial?: ExpressionAst;
-  initialInput?: "X" | "Y";
+  initialStack?: "X" | "Y";
   line: number;
 }
 
@@ -236,34 +232,15 @@ export interface DisplayAst {
   kind: "display";
   name: string;
   format: "packed";
-  mode?: string;
   sources: string[];
   line: number;
 }
 
-export type SemanticHint =
-  | "hot"
-  | "rare"
-  | "cold"
-  | "displayed"
-  | "hidden"
-  | "temporary"
-  | "persistent"
-  | "wrap"
-  | "saturate"
-  | "trap"
-  | "unordered"
-  | "approx"
-  | "exact"
-  | "manual_entry";
-
 export interface V2ProgramAst {
   kind: "v2_program";
   name: string;
-  inputs: V2InputAst[];
   state: V2StateFieldAst[];
   screens: V2ScreenAst[];
-  endings: V2EndingAst[];
   boards: V2BoardAst[];
   fleets: V2FleetAst[];
   worlds: V2WorldAst[];
@@ -273,39 +250,14 @@ export interface V2ProgramAst {
   line: number;
 }
 
-export interface V2InputAst {
-  kind: "v2_input";
-  name: string;
-  inputType: "digit" | "number";
-  hints: SemanticHint[];
-  line: number;
-}
-
 export interface V2StateFieldAst {
   kind: "v2_state_field";
   name: string;
-  type: "digit" | "flag" | "counter" | "coord" | "bitset" | "enum" | "packed" | "addr" | "resource" | "score";
-  spec?: string;
+  type: "flag" | "counter" | "coord" | "bitset" | "packed";
   min?: number;
   max?: number;
-  optional: boolean;
-  generated?: "random";
   initial?: string;
-  terminal?: V2TerminalAst;
-  clearedWhen?: string;
-  rewards: V2RewardRuleAst[];
-  hints: SemanticHint[];
   line: number;
-}
-
-export interface V2TerminalAst {
-  at: string;
-  show: string;
-}
-
-export interface V2RewardRuleAst {
-  name: string;
-  value: string;
 }
 
 export interface V2BoardAst {
@@ -313,9 +265,6 @@ export interface V2BoardAst {
   name: string;
   width: number;
   height: number;
-  coordinateStyle?: string;
-  coordinateRange?: string;
-  hints: SemanticHint[];
   line: number;
 }
 
@@ -324,10 +273,6 @@ export interface V2FleetAst {
   name: string;
   board: string;
   ships: V2FleetShipsAst;
-  generated?: "random";
-  clearedWhen?: string;
-  terminal?: V2TerminalAst;
-  hints: SemanticHint[];
   line: number;
 }
 
@@ -338,63 +283,29 @@ export interface V2FleetShipsAst {
   initial: string;
 }
 
-export interface V2EndingAst {
-  kind: "v2_ending";
-  name: string;
-  show: string;
-  hints: SemanticHint[];
-  line: number;
-}
-
 export interface V2WorldAst {
   kind: "v2_world";
   name: string;
-  worldType: string;
   position?: V2WorldPositionAst;
-  generated?: "random";
-  player?: string;
-  door?: V2DoorRuleAst;
-  wall?: V2WallRuleAst;
-  verticalWrap?: string[];
-  hints: SemanticHint[];
   line: number;
 }
 
 export interface V2WorldPositionAst {
   name: string;
-  floors?: string;
-  rooms?: string;
-  display?: string;
-  start?: string;
+  encoding?: string;
   line: number;
-}
-
-export interface V2DoorRuleAst {
-  symbol: string;
-  resource: string;
-  cost: string;
-}
-
-export interface V2WallRuleAst {
-  symbol: string;
-  resource: string;
-  cost: string;
-  behavior: string;
 }
 
 export interface V2EncounterTableAst {
   kind: "v2_encounters";
   expr: string;
   cases: V2EncounterCaseAst[];
-  hints: SemanticHint[];
   line: number;
 }
 
 export interface V2EncounterCaseAst {
   value: string;
-  name: string;
   body: V2StatementAst[];
-  hints: SemanticHint[];
   line: number;
 }
 
@@ -402,15 +313,12 @@ export interface V2ScreenAst {
   kind: "v2_screen";
   name: string;
   sources: string[];
-  style: string[];
-  hints: SemanticHint[];
   line: number;
 }
 
 export interface V2TurnAst {
   kind: "v2_turn";
   body: V2StatementAst[];
-  hints: SemanticHint[];
   line: number;
 }
 
@@ -419,7 +327,6 @@ export interface V2RuleAst {
   name: string;
   params: string[];
   body: V2StatementAst[];
-  hints: SemanticHint[];
   line: number;
 }
 
@@ -427,46 +334,30 @@ export type V2StatementAst =
   | V2ShowStatementAst
   | V2ReadStatementAst
   | V2StopStatementAst
-  | V2LetStatementAst
   | V2IfStatementAst
-  | V2RequireStatementAst
   | V2ChallengeStatementAst
   | V2MoveStatementAst
-  | V2EndStatementAst
   | V2MatchStatementAst
   | V2InvokeStatementAst
   | V2AssignStatementAst
   | V2UpdateStatementAst
-  | V2CollectionStatementAst
-  | V2RewardStatementAst
   | V2RawStatementAst;
 
 export interface V2ShowStatementAst {
   kind: "v2_show";
   target: string;
-  hints: SemanticHint[];
   line: number;
 }
 
 export interface V2ReadStatementAst {
   kind: "v2_read";
   target: string;
-  hints: SemanticHint[];
   line: number;
 }
 
 export interface V2StopStatementAst {
   kind: "v2_stop";
   value: string;
-  hints: SemanticHint[];
-  line: number;
-}
-
-export interface V2LetStatementAst {
-  kind: "v2_let";
-  name: string;
-  expr: string;
-  hints: SemanticHint[];
   line: number;
 }
 
@@ -475,15 +366,6 @@ export interface V2IfStatementAst {
   predicate: V2PredicateAst;
   thenBody: V2StatementAst[];
   elseBody?: V2StatementAst[];
-  hints: SemanticHint[];
-  line: number;
-}
-
-export interface V2RequireStatementAst {
-  kind: "v2_require";
-  predicate: V2PredicateAst;
-  elseAction?: V2StatementAst;
-  hints: SemanticHint[];
   line: number;
 }
 
@@ -496,7 +378,6 @@ export interface V2ChallengeStatementAst {
   warningScreen: string;
   memoryScreen: string;
   answerInput: string;
-  hints: SemanticHint[];
   line: number;
 }
 
@@ -504,17 +385,6 @@ export interface V2MoveStatementAst {
   kind: "v2_move";
   target: string;
   direction?: "north" | "south" | "east" | "west" | "up" | "down";
-  expr?: string;
-  remember?: string;
-  hints: SemanticHint[];
-  line: number;
-}
-
-export interface V2EndStatementAst {
-  kind: "v2_end";
-  outcome: string;
-  mode: "end" | "win" | "lose";
-  hints: SemanticHint[];
   line: number;
 }
 
@@ -522,7 +392,6 @@ export interface V2InvokeStatementAst {
   kind: "v2_invoke";
   name: string;
   args: string[];
-  hints: SemanticHint[];
   line: number;
 }
 
@@ -530,7 +399,6 @@ export interface V2AssignStatementAst {
   kind: "v2_assign";
   target: string;
   expr: string;
-  hints: SemanticHint[];
   line: number;
 }
 
@@ -539,23 +407,30 @@ export interface V2UpdateStatementAst {
   target: string;
   op: "+=" | "-=";
   expr: string;
-  hints: SemanticHint[];
   line: number;
 }
 
-export interface V2CollectionStatementAst {
-  kind: "v2_collection";
-  collection: string;
-  op: "clear" | "set";
-  item: string;
-  hints: SemanticHint[];
-  line: number;
-}
+export type RawStackSlot = "X" | "Y" | "Z" | "T";
 
-export interface V2RewardStatementAst {
-  kind: "v2_reward";
+export interface V2RawInputAst {
+  slot: RawStackSlot;
   expr: string;
-  hints: SemanticHint[];
+  line: number;
+}
+
+export interface V2RawOutputAst {
+  slot: "X";
+  target: string;
+  line: number;
+}
+
+export interface V2RawStatementAst {
+  kind: "v2_raw";
+  inputs: V2RawInputAst[];
+  outputs: V2RawOutputAst[];
+  clobbers: string[];
+  preserves: string[];
+  lines: RawBlockLine[];
   line: number;
 }
 
@@ -564,51 +439,22 @@ export interface V2MatchStatementAst {
   expr: string;
   cases: V2MatchCaseAst[];
   otherwise?: V2StatementAst;
-  hints: SemanticHint[];
   line: number;
 }
 
 export interface V2MatchCaseAst {
   values: string[];
   action: V2StatementAst;
-  hints: SemanticHint[];
   line: number;
 }
 
-export interface V2RawStatementAst {
-  kind: "v2_raw";
-  text: string;
-  hints: SemanticHint[];
-  line: number;
-}
-
-export type V2PredicateAst =
-  | V2ComparePredicateAst
-  | V2ExistsPredicateAst
-  | V2CollectionHasPredicateAst
-  | V2RawPredicateAst;
+export type V2PredicateAst = V2ComparePredicateAst;
 
 export interface V2ComparePredicateAst {
   kind: "v2_compare";
   left: string;
   op: "==" | "!=" | "<" | "<=" | ">" | ">=";
   right: string;
-}
-
-export interface V2ExistsPredicateAst {
-  kind: "v2_exists";
-  target: string;
-}
-
-export interface V2CollectionHasPredicateAst {
-  kind: "v2_collection_has";
-  collection: string;
-  item: string;
-}
-
-export interface V2RawPredicateAst {
-  kind: "v2_raw_predicate";
-  text: string;
 }
 
 export interface BlockAst {
@@ -650,7 +496,6 @@ export interface AskStatementAst {
 
 export interface InputStatementAst {
   kind: "input";
-  inputType: "digit" | "number";
   target: string;
   line: number;
 }
@@ -728,6 +573,11 @@ export interface CallBlockStatementAst {
 export interface CoreStatementAst {
   kind: "core";
   lines: RawBlockLine[];
+  inputs?: RawInputAst[];
+  outputs?: RawOutputAst[];
+  clobbers?: string[];
+  preserves?: string[];
+  strict?: boolean;
   line: number;
 }
 
@@ -739,6 +589,18 @@ export interface EggStatementAst {
 
 export interface RawBlockLine {
   text: string;
+  line: number;
+}
+
+export interface RawInputAst {
+  slot: RawStackSlot;
+  expr: ExpressionAst;
+  line: number;
+}
+
+export interface RawOutputAst {
+  slot: "X";
+  target: string;
   line: number;
 }
 
@@ -978,7 +840,7 @@ export interface ResolvedStep {
 export interface CompileReport {
   steps: number;
   budget: number;
-  targetProfile: TargetProfileId;
+  machine: MachineId;
   registers: Record<string, RegisterName>;
   labels: Record<string, string>;
   optimizations: AppliedOptimization[];
@@ -1060,7 +922,7 @@ export interface CandidateReport {
 
 export interface MachineFeatureUseReport {
   id: string;
-  source: "target-profile" | "optimizer" | "layout" | "emulator";
+  source: "machine" | "optimizer" | "layout" | "emulator";
   detail: string;
 }
 

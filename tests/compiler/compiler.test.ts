@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { CompileError, compileM61 } from "../../src/core/index.ts";
+import type { CompileOptions } from "../../src/core/index.ts";
 
-function compileOk(source: string) {
-  return compileM61(source);
+function compileOk(source: string, options: Partial<CompileOptions> = { budget: 999 }) {
+  return compileM61(source, options);
 }
 
 describe("compiler semantics", () => {
-  it("compiles only the V2 target/program surface", () => {
+  it("compiles only the V2 program surface", () => {
     expect(() =>
       compileM61(`
 machine mk61
@@ -19,7 +20,6 @@ entry main {
 
   it("emits a final stop for a minimal V2 program", () => {
     const result = compileOk(`
-target mk61
 program Minimal {
   turn {
     stop 0
@@ -32,33 +32,106 @@ program Minimal {
 
   it("lowers MK-61 primitive functions from V2 formulas", () => {
     const result = compileOk(`
-target mk61
-budget 999 cells
 program FormulaPrimitives {
   state {
     value: packed = 0
   }
   turn {
-    value = max(pi(), sqr(2)) + inv(2) + bit_and(1, 2) + bit_or(1, 2) + bit_xor(1, 2) + bit_not(1)
+    value = max(pi(), sqr(2)) + inv(2) + pow(2, 3) + bit_and(1, 2) + bit_or(1, 2) + bit_xor(1, 2) + bit_not(1)
     stop value
   }
 }
 `);
     const opcodes = result.steps.map((step) => step.hex);
 
-    for (const opcode of ["20", "22", "23", "36", "37", "38", "39", "3A"]) {
+    for (const opcode of ["20", "22", "23", "24", "36", "37", "38", "39", "3A"]) {
       expect(opcodes).toContain(opcode);
     }
   });
 
+  it("lowers mask, cell, and packed digit helpers from V2 formulas", () => {
+    const result = compileOk(`
+program FormulaHelpers {
+  state {
+    mask: packed = 0
+    value: packed = 0
+  }
+  turn {
+    value = bit_mask(5) + bit_has(mask, 5)
+    mask = bit_set(mask, 5)
+    value = value + bit_clear(mask, 5) + bit_toggle(mask, 5)
+    value = value + cell_mask(1, 2) + cell_has(mask, 1, 2)
+    mask = cell_set(mask, 1, 2)
+    value = value + cell_clear(mask, 1, 2) + cell_toggle(mask, 1, 2)
+    value = value + digit_at(1234, 2) + digit_add(1000, 1, 7) + digit_set(1234, 2, 9)
+    stop value
+  }
+}
+`);
+    const opcodes = result.steps.map((step) => step.hex);
+
+    for (const opcode of ["15", "24", "34", "35", "37", "38", "39", "3A"]) {
+      expect(opcodes).toContain(opcode);
+    }
+  });
+
+  it("lowers contracted raw blocks inside V2 rules", () => {
+    const result = compileOk(`
+program RawRule {
+  state {
+    value: packed = 2
+    result: packed = 0
+  }
+  turn {
+    hack
+    stop result
+  }
+  rule hack {
+    raw {
+      takes Y = value, X = 3
+      returns X -> result
+      clobbers X, Y, X1
+      preserves state
+      code {
+        +
+        К ИНВ
+      }
+    }
+  }
+}
+`);
+    const opcodes = result.steps.map((step) => step.hex);
+
+    expect(opcodes).toContain("10");
+    expect(opcodes).toContain("3A");
+    expect(result.report.optimizations.some((item) => item.name === "raw-block-contract")).toBe(true);
+    expect(result.report.cellRoles.some((cell) => cell.note?.includes("raw opcode"))).toBe(true);
+  });
+
+  it("reports unknown instructions in contracted raw blocks as compile errors", () => {
+    expect(() =>
+      compileOk(`
+program BadRawOpcode {
+  turn {
+    raw {
+      clobbers X
+      preserves state
+      code {
+        definitely_not_an_opcode
+      }
+    }
+  }
+}
+`),
+    ).toThrow(CompileError);
+  });
+
   it("accepts decimal constants inside V2 formulas", () => {
     const result = compileOk(`
-target mk61
-budget 999 cells
 program DecimalFormula {
-  input burn: number
   state {
-    fuel: resource 0..999 = 140
+    burn: counter 0..99 = 0
+    fuel: counter 0..999 = 140
     accel: packed = 0
   }
   turn {
@@ -73,8 +146,6 @@ program DecimalFormula {
 
   it("removes branchy boolean V2 assignments when arithmetic selection is shorter", () => {
     const result = compileOk(`
-target mk61
-budget 999 cells
 program BranchlessAssignment {
   state {
     flag: flag = 0
@@ -97,10 +168,47 @@ program BranchlessAssignment {
     expect(result.report.proofs.some((item) => item.id === "branch-equivalence")).toBe(true);
   });
 
+  it("uses counter ranges for saturating unit updates", () => {
+    const result = compileOk(`
+program ResourceRange {
+  state {
+    fuel: counter 0..9 = 4
+  }
+  turn {
+    if fuel > 0 {
+      fuel--
+    }
+    stop fuel
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "arithmetic-if-max")).toBe(true);
+    expect(result.report.proofs.some((item) => item.id === "value-ranges")).toBe(true);
+  });
+
+  it("normalizes adjacent integer comparison bounds when it enables a zero test", () => {
+    const result = compileOk(`
+program BoundaryNormalize {
+  state {
+    fuel: counter 0..9 = 4
+  }
+  turn {
+    if fuel <= -1 {
+      fuel--
+      show 0
+    }
+    stop fuel
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "comparison-boundary-normalization")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "zero-condition-test")).toBe(true);
+  });
+
   it("replaces boolean-selected V2 stops with terminal selection", () => {
     const result = compileOk(`
-target mk61
-budget 999 cells
 program BranchlessStop {
   state {
     flag: flag = 0
@@ -121,8 +229,6 @@ program BranchlessStop {
 
   it("extends terminal-select to comparison conditions when branchless is shorter", () => {
     const result = compileOk(`
-target mk61
-budget 999 cells
 program BranchlessCompare {
   state {
     counter: counter 0..9 = 0
@@ -143,8 +249,6 @@ program BranchlessCompare {
 
   it("records branchless terminal-select as considered when the branched form wins", () => {
     const result = compileOk(`
-target mk61
-budget 999 cells
 program LunarLike {
   state {
     speed: counter -99..99 = 0
@@ -178,8 +282,6 @@ program LunarLike {
     const body = Array.from({ length: 60 }, () => "    x = x + 1234567").join("\n");
     expect(() =>
       compileM61(`
-target mk61
-budget steps <= 20
 program TooLarge {
   state {
     x: counter 0..999999 = 0
@@ -189,13 +291,12 @@ ${body}
     stop x
   }
 }
-`),
+`, { budget: 20 }),
     ).toThrow(CompileError);
   });
 
   it("keeps the default V2 budget at 105 cells", () => {
-    const result = compileOk(`
-target mk61
+    const result = compileM61(`
 program DefaultBudget {
   turn {
     stop 1

@@ -4,9 +4,9 @@
 Elektronika MK-61 program listings.
 
 This milestone focuses on the translator. The repo also contains emulator
-smoke/regression tests. The `mk61_exact` target profile is the authoritative
-execution model for optimizer proofs, including documented, undocumented, and
-dark-entry machine behavior.
+smoke/regression tests. The `mk61` machine model is the authoritative execution
+model for optimizer proofs, including documented, undocumented, and dark-entry
+machine behavior.
 
 ## Run
 
@@ -50,25 +50,19 @@ write-to-memory handler runs, so the page only sees MK-61 hex opcodes.
 ## M61 Language
 
 M61 is a single V2 language for game/application intent. Programs describe
-state, input, screens, rules, tables, and semantic hints. The compiler decides
+state, reads, screens, rules, and tables. The compiler decides
 whether that becomes registers, stack scheduling, address constants, dark
 entries, overlays, X2/display bytes, or other MK-61 tricks.
 
 ```m61
-target mk61
-budget 105 cells
-
 program TinyGame {
-  input key: digit
-
   state {
-    [displayed] player: coord(floor 1..3, x 1..7, y 1..4) = input.X
+    player: coord = 1
     food: counter 0..9 = 5
   }
 
   screen main {
     show player, food
-    style compact digits letters hex
   }
 
   turn {
@@ -76,19 +70,24 @@ program TinyGame {
     read key
 
     match key {
-      2, 4, 6, 8 => move(direction(key))
-      otherwise => end game_over
+      2, 4, 6, 8 => go direction(key)
+      otherwise => game_over
     }
   }
 
-  ending game_over {
-    show 0
+  rule go delta {
+    player += delta
+    show main
+  }
+
+  rule game_over {
+    stop 0
   }
 }
 ```
 
-The compiler always uses the `mk61_exact` target profile and automatic proofs
-to select the strongest available tactics: indirect flow, super-dark dispatch,
+The compiler always uses the `mk61` machine model and automatic proofs to select
+the strongest available tactics: indirect flow, super-dark dispatch,
 branch removal, shared tails, cyclic layout, code/data overlay, X2/`ВП`,
 display-byte packing, hexadecimal mantissa data, R0 edge cases, and
 Danilov-style error-stop idioms when the source semantics allows them.
@@ -97,14 +96,14 @@ All `examples/*.m61` programs are written in the human DSL. They cover:
 
 - `examples/basic.m61`: minimal input/output and arithmetic.
 - `examples/tiny-game.m61`: tiny menu-style loop.
-- `examples/lunar.m61`: numeric landing game with resources and touchdown rules.
+- `examples/lunar.m61`: numeric landing game with counters and touchdown rules.
 - `examples/human.m61`: small counter game used as syntax smoke test.
 - `examples/cave-sketch.m61`: compact cave sketch in game intent form.
 - `examples/cave-highlevel-baseline.m61`: readable Cave Treasure baseline.
 - `examples/cave-treasure.m61`: full high-level compactness reference.
 - `examples/cave-treasure-full.m61`: full reference metadata variant.
 - `examples/grid-rescue.m61`: grid/bitset reference.
-- `examples/resource-raid.m61`: resource/dispatch reference.
+- `examples/resource-raid.m61`: counter/dispatch reference.
 - `examples/giants-country.m61`: commented high-level game port.
 - `examples/sea-battle.m61`: turn-based fleet duel port from the games archive.
 
@@ -132,8 +131,8 @@ program reports, and the headless emulator loader smoke test.
   jumps to the address".
 - Peephole optimization for redundant `X->П r ; П->X r` pairs at synthetic
   boundaries in compiler-generated lowering.
-- M61 lowers high-level `program`, `state`, `screen`, `input`, `match`,
-  `challenge`, resource updates, and rule calls through an
+- M61 lowers high-level `program`, `state`, `screen`, `read`, `match`,
+  `challenge`, counter updates, and rule calls through an
   intent/effect/layout report.
 - JSON reports include IR stats, layout cell roles, candidate lowerings, and
   a budget summary.

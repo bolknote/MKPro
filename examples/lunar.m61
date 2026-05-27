@@ -1,40 +1,32 @@
-target mk61
-budget 105 cells
 reference lunar_lander
 
 // Numeric example rather than a map game: the player trades fuel for acceleration
 // and tries to arrive near height zero with a survivable vertical speed.
 
 program LunarLander {
-  input burn: number
-
   state {
-    [displayed] height: resource 0..999 = 100 {
-      terminal at 0 show landed
-    }
-    [displayed] fuel: resource 0..999 = 140
+    height: counter 0..999 = 100
+    fuel: counter 0..999 = 140
     // Speed is signed: falling and braking are both first-class states, not
     // display tricks.
-    [displayed] speed: counter -99..99 = 0
-    [temporary] accel: packed = 0
+    speed: counter -99..99 = 0
+    accel: packed = 0
   }
 
   screen flight {
     show height, speed, fuel
-    style compact digits sign
   }
 
   screen landed {
     show height, speed
-    style compact digits sign
   }
 
-  ending safe_landing {
-    show 777
+  rule safe_landing {
+    stop 777
   }
 
-  ending crash {
-    show 666
+  rule crash {
+    stop 666
   }
 
   turn {
@@ -58,10 +50,10 @@ program LunarLander {
     // remains visible whether the pilot survives or not.
     show landed
     if abs(speed) <= 5 {
-      win safe_landing
+      safe_landing
     }
     else {
-      lose crash
+      crash
     }
   }
 }
