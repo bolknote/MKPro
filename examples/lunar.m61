@@ -1,0 +1,34 @@
+machine mk61
+budget steps <= 105
+
+store height = 100 prefer R1
+store fuel = 140 prefer R2
+store speed = 0 prefer R3
+store burn
+store accel
+
+const mass = 10
+const g = 9.8
+const dt = 1
+
+entry main {
+  loop {
+    pause height
+    pause speed
+    burn = ask fuel
+
+    accel = burn * mass / fuel - g
+    height = height - speed * dt - accel * dt * dt / 2
+    speed = speed + accel * dt
+    fuel = fuel - burn * dt
+
+    if height < 2 {
+      if abs(speed) <= 5 {
+        halt 777
+      }
+      else {
+        halt 666
+      }
+    }
+  }
+}

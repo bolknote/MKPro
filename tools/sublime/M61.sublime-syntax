@@ -1,0 +1,142 @@
+%YAML 1.2
+---
+name: M61
+file_extensions:
+  - m61
+scope: source.m61
+version: 2
+
+variables:
+  ident: '[A-Za-z_][A-Za-z0-9_]*'
+  register: '(?:R[0-9A-Ea-eАВСДЕавсде]|R[abcdexyzABCDXYZ]|[XYZT])'
+  number: '(?:-?(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[EeЕеГг][+-]?\d+)?|-?[0-9A-Fa-fА-Яа-я],[0-9A-Fa-fА-Яа-я]+(?:[EeЕеГг][+-]?\d+)?)'
+
+contexts:
+  main:
+    - include: comments
+    - include: illegal-low-level-hints
+    - include: hints
+    - include: raw-rows
+    - include: section-declarations
+    - include: top-level-keywords
+    - include: control-keywords
+    - include: domain-keywords
+    - include: storage-keywords
+    - include: mk61-commands
+    - include: registers
+    - include: constants
+    - include: operators
+    - include: punctuation
+    - include: identifiers
+
+  comments:
+    - match: '//.*$'
+      scope: comment.line.double-slash.m61
+    - match: '#.*$'
+      scope: comment.line.number-sign.m61
+
+  hints:
+    - match: '(\[)(\s*)(hot|rare|cold|displayed|hidden|temporary|persistent|wrap|saturate|trap|unordered|approx|exact|manual_entry|preload)(?=[,\]\s])'
+      captures:
+        1: punctuation.section.brackets.begin.m61
+        3: storage.modifier.semantic-hint.m61
+      push: hint-tail
+
+  hint-tail:
+    - meta_scope: meta.semantic-hints.m61
+    - match: '\]'
+      scope: punctuation.section.brackets.end.m61
+      pop: true
+    - match: ','
+      scope: punctuation.separator.sequence.m61
+    - match: '\b(hot|rare|cold|displayed|hidden|temporary|persistent|wrap|saturate|trap|unordered|approx|exact|manual_entry|preload)\b'
+      scope: storage.modifier.semantic-hint.m61
+    - include: illegal-low-level-hints
+
+  illegal-low-level-hints:
+    - match: '\b(use_dark_entries|use_X2|use_x2|put_in_R0|put_in_r0|overlay_here|use_overlay|use_display_bytes|use_error_stop|use_5f)\b'
+      scope: invalid.illegal.low-level-hint.m61
+
+  top-level-keywords:
+    - match: '^\s*(target|machine|budget|optimize|benchmark|preload|allow)\b'
+      scope: keyword.control.toplevel.m61
+    - match: '\b(mk61|mk61_exact|steps|cells|hard|size|manual|loader|hex)\b'
+      scope: constant.language.m61
+
+  section-declarations:
+    - match: '^\s*(program|state|screen|turn|rule|entry|proc|block|coord|maze|bitset|resource|event|random|fight|table|display)\b'
+      scope: keyword.declaration.block.m61
+    - match: '^\s*(shared)\s+(tail)\b'
+      captures:
+        1: keyword.declaration.block.m61
+        2: keyword.declaration.block.m61
+    - match: '^\s*(cache)\s+(search)\b'
+      captures:
+        1: keyword.declaration.block.m61
+        2: keyword.declaration.block.m61
+    - match: '\b(packed|code_overlay|exact|inline|tail|nohalt|at)\b'
+      scope: storage.modifier.block.m61
+
+  control-keywords:
+    - match: '\b(input|show|style|read|match|otherwise|if|else|require|exists|stop|pause|ask|halt|loop|switch|dispatch|as|core|egg|unsafe|asm|trap|let|reward|by|call)\b'
+      scope: keyword.control.m61
+    - match: '\b(and|or|not|has|clear|set|from|to|in)\b'
+      scope: keyword.operator.word.m61
+
+  domain-keywords:
+    - match: '\b(digit|number|flag|counter|coord|bitset|enum|packed|addr|resource|optional|generated|random|floor|floors|column|columns|row|rows|register|registers|initial|terminal_at|terminal_display|command|cost|reward|style|display|start|seed|symbol|true|false)\b'
+      scope: storage.type.domain.m61
+    - match: '\b(calculator_random|random_seed|input\.X|input\.Y|direction|memory_code|cell_at|nonzero)\b'
+      scope: support.function.domain.m61
+
+  storage-keywords:
+    - match: '\b(store|temp|const|fixed|prefer)\b'
+      scope: storage.type.m61
+
+  raw-rows:
+    - match: '^\s*(row)\s+([0-9A-Fa-f]{2})\s*(:)'
+      captures:
+        1: keyword.declaration.row.m61
+        2: constant.numeric.address.m61
+        3: punctuation.separator.key-value.m61
+      push:
+        - meta_scope: meta.raw-opcode-row.m61
+        - match: '$'
+          pop: true
+        - match: '\b[0-9A-Fa-f]{2}\b'
+          scope: constant.numeric.opcode.hex.m61
+        - include: comments
+
+  mk61-commands:
+    - match: '(?:С/П|В/О|БП|ПП|В↑|ВП|Сx|Cx|П->X|X->П|Пх|хП|КПП|КБП|КПх|КхП|FL[0-3])'
+      scope: support.function.mk61.m61
+    - match: '\bF\s*[A-Za-zА-Яа-я0-9^]+'
+      scope: support.function.mk61.m61
+    - match: '\bК\s*[^{}\[\](),:#/\n]+'
+      scope: support.function.mk61.m61
+
+  registers:
+    - match: '\b{{register}}\b'
+      scope: variable.other.register.m61
+    - match: '\bR[abcedABCEDe]\b'
+      scope: variable.other.register.m61
+
+  constants:
+    - match: '\b[0-9A-Fa-f]{2}(?=\s|$)'
+      scope: constant.numeric.hex.m61
+    - match: '{{number}}'
+      scope: constant.numeric.m61
+
+  operators:
+    - match: '=>|==|!=|<=|>=|\+=|-=|[-+*/=<>]'
+      scope: keyword.operator.m61
+    - match: '\.\.'
+      scope: keyword.operator.range.m61
+
+  punctuation:
+    - match: '[{}()\[\],:]'
+      scope: punctuation.separator.m61
+
+  identifiers:
+    - match: '\b{{ident}}\b'
+      scope: variable.other.identifier.m61

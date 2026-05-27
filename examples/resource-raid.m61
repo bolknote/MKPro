@@ -1,0 +1,168 @@
+target mk61
+budget 105 cells
+optimize size
+benchmark resource_raid_v2
+
+preload R4 = 2
+preload R5 = 10
+preload R6 = ГE-02
+preload R7 = 5E-1
+preload R8 = -52
+preload R9 = 4,_3E-08
+
+program ResourceRaid {
+  input key: digit
+  input alarm_key: digit
+
+  state {
+    [displayed] pos: coord(floor 1..3, x 1..4, y 1..4) = input.X
+    doors: bitset generated random
+    stashes: bitset generated random
+    [persistent] oxygen: counter 0..99 = input.Y
+    [persistent] keys: counter 0..9 = 2
+    [persistent] cargo: counter 0..9 = 0
+    [temporary] blocked: coord optional
+  }
+
+  screen main {
+    show pos, oxygen, keys, cargo
+    style compact digits letters hex
+  }
+
+  turn {
+    show main
+    read key
+    oxygen -= 1
+
+    match key {
+      2, 4, 6, 8, 5, -5 => move(direction(key))
+      0 => unlock
+      10 => loot
+      otherwise => stop 0
+    }
+  }
+
+  [hot] rule move(dir) {
+    let next = pos + dir
+    if doors has next {
+      blocked = next
+      show 0
+    }
+    else {
+      pos = next
+    }
+  }
+
+  rule unlock {
+    require blocked exists else show 0
+    require keys >= 1 else show 0
+    doors clear blocked
+    pos = blocked
+    keys -= 1
+  }
+
+  rule loot {
+    if stashes has pos {
+      stashes clear pos
+      cargo += 1
+      alarm
+    }
+  }
+
+  rule alarm {
+    show main
+    read alarm_key
+    match alarm_key {
+      0 => hide
+      10 => force
+      otherwise => stop 0
+    }
+  }
+
+  rule hide {
+    oxygen -= 2
+  }
+
+  rule force {
+    cargo += 1
+    oxygen -= 1
+  }
+}
+
+coord packed pos {
+  floor 1..3
+  column 1..4
+  row 1..4
+  display packed_decimal_zero_run
+  start from X
+}
+
+maze vault {
+  floors 3
+  columns 4
+  rows 4
+  wall_bitsets R1 R2 R3
+  generated_by calculator_random
+  start_not_wall true
+}
+
+bitset stashes {
+  register R0
+  generated_by calculator_random
+  shared_between_floors true
+}
+
+resource oxygen {
+  register Re
+  initial from Y
+  cost_per_command 1
+  terminal_at 0
+}
+
+resource keys {
+  register Rd
+  initial 2
+  break_cost 1
+}
+
+resource cargo {
+  register Rc
+  initial 0
+  stash_reward +1
+}
+
+event movement {
+  command 2 move down
+  command 4 move left
+  command 6 move right
+  command 8 move up
+  command 5 move floor_up
+  command -5 move floor_down
+  failed_move displays 0 and stores blocked_target
+}
+
+event wall_break {
+  command 0
+  uses blocked_target
+  spends keys
+  success moves_player_and_removes_wall
+  invalid displays 0
+}
+
+cache search {
+  command 10
+  success clears_stash_and_adds_cargo
+}
+
+fight alarm {
+  accept_key В↑
+  decline_key 0
+  random_outcome changes_oxygen_or_cargo
+}
+
+table packed code_overlay vault_tables {
+  doors may_overlay address_cells
+  stash_masks may_overlay command_cells
+  resource_increments may_use_hex_mantissa
+  branch_addresses may_be_constants
+}

@@ -1,0 +1,151 @@
+machine mk61
+benchmark cave_treasure_full
+budget steps <= 105 hard
+
+preload R4 = 2
+preload R5 = 10
+preload R6 = ГE-02
+preload R7 = 5E-1
+preload R8 = -52
+preload R9 = 4,_3E-08
+
+state Input {
+  command: digit = 0
+}
+
+coord packed player {
+  register Ra
+  floor 1..3
+  column 1..7
+  row 1..4
+  display packed_decimal_zero_run
+  start from X
+}
+
+maze cave {
+  floors 3
+  columns 7
+  rows 4
+  wall_bitsets R1 R2 R3
+  generated_by calculator_random
+  exit left_of 3.8 floor 3
+}
+
+bitset caches {
+  register R0
+  generated_by calculator_random
+  shared_between_floors true
+}
+
+resource food {
+  register Re
+  initial from Y
+  cost_per_command 1
+}
+
+resource dynamite {
+  register Rd
+  initial 4
+  break_cost 2
+}
+
+resource treasure {
+  register Rc
+  initial 0
+  cache_reward floor3 +1
+}
+
+event movement {
+  command 2 move down
+  command 4 move left
+  command 6 move right
+  command 8 move up
+  command 5 move floor_up
+  command -5 move floor_down
+  failed_move displays 0 and stores blocked_target
+}
+
+event wall_break {
+  command 0
+  uses blocked_target
+  spends dynamite
+  success moves_player_and_removes_wall
+  invalid displays 0
+}
+
+cache search {
+  command 10
+  floor1 reward food +9
+  floor2 reward dynamite +4
+  floor3 reward treasure +1
+  success removes_cache_and_spawns_robber
+}
+
+fight robber {
+  accept_key В↑
+  decline_key 0
+  random_outcome changes_current_reward
+}
+
+table packed code_overlay cave_tables {
+  walls may_overlay address_cells
+  cache_masks may_overlay command_cells
+  resource_increments may_use_hex_mantissa
+}
+
+clobber X2
+clobber return_stack
+uses display_bytes
+
+display packed cave_screen {
+  mode digits_letters_hex_status
+  source player, food, dynamite, treasure
+}
+
+entry main at 44 {
+  show cave_screen
+  command = input digit
+
+  dispatch command as cave_command {
+    case 2 {
+      call move
+    }
+    case 4 {
+      call move
+    }
+    case 6 {
+      call move
+    }
+    case 8 {
+      call move
+    }
+    case 5 {
+      call move_floor
+    }
+    case 0 {
+      call break_wall
+    }
+    case 10 {
+      call search_cache
+    }
+    default {
+      halt 0
+    }
+  }
+}
+
+shared tail move {
+  player = player + command
+}
+
+shared tail move_floor {
+  player = player + command
+}
+
+shared tail break_wall {
+  dynamite = dynamite - 2
+}
+
+shared tail search_cache {
+  treasure = treasure + 1
+}

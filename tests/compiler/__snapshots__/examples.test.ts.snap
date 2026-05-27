@@ -1,0 +1,197 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`examples > compiles basic.m61 deterministically > basic.explain 1`] = `
+"M61 compile report
+Steps: 9/105
+Delivery: hex
+Optimizer: max
+Target profile: mk61_exact
+Optimizer rules: automatic=yes; active=3, candidates=25, blocked=0, planned=0
+Budget: official=9, extra=0, physical=9
+Intent IR: compact=no, highLevel=no; intent=4, effects=9, cells=9
+
+Registers:
+  x: R0
+  y: R1
+
+Labels:
+  main: 00
+
+Optimizations:
+  - stack-current-x-scheduling: Reused y already in X for commutative +.
+  - store-recall-peephole: Dropped 2 redundant П->X immediately after X->П to the same register.
+  - dead-temp-store: Removed 1 temp store(s) whose X value was consumed directly by stack scheduling.
+
+Proofs:
+  - return-stack-empty: proved; No ПП opcodes were emitted; empty return stack precondition holds for В/О-as-БП01 rewrites."
+`;
+
+exports[`examples > compiles basic.m61 deterministically > basic.hex 1`] = `
+"00: 00 50 40 50 60 10 41 50
+08: 50"
+`;
+
+exports[`examples > compiles basic.m61 deterministically > basic.listing 1`] = `
+" Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  00  | 0                       | 
+   01 |  50  | С/П                     | ask x
+   02 |  40  | X->П 0                  | input x
+   03 |  50  | С/П                     | ask y
+   04 |  60  | П->X 0                  | recall x
+   05 |  10  | +                       | expr +
+   06 |  41  | X->П 1                  | set y
+   07 |  50  | С/П                     | pause
+   08 |  50  | С/П                     | implicit final stop"
+`;
+
+exports[`examples > compiles lunar.m61 deterministically > lunar.hex 1`] = `
+"00: 01 00 00 41 01 04 00 42
+08: 00 43 61 50 63 50 62 50
+16: 44 01 00 12 62 13 09 0A
+24: 08 11 40 61 63 01 12 11
+32: 60 01 12 01 12 02 13 11
+40: 41 63 60 01 12 10 43 62
+48: 64 01 12 11 42 61 02 11
+56: 5C 70 05 63 31 11 59 68
+64: 6E 50 51 70 6D 50 51 10
+72: 50"
+`;
+
+exports[`examples > compiles lunar.m61 deterministically > lunar.listing 1`] = `
+" Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  01  | 1                       | 
+   01 |  00  | 0                       | 
+   02 |  00  | 0                       | 
+   03 |  41  | X->П 1                  | init height
+   04 |  01  | 1                       | 
+   05 |  04  | 4                       | 
+   06 |  00  | 0                       | 
+   07 |  42  | X->П 2                  | init fuel
+   08 |  00  | 0                       | 
+   09 |  43  | X->П 3                  | init speed
+   10 |  61  | П->X 1                  | recall height
+   11 |  50  | С/П                     | pause
+   12 |  63  | П->X 3                  | recall speed
+   13 |  50  | С/П                     | pause
+   14 |  62  | П->X 2                  | recall fuel
+   15 |  50  | С/П                     | ask burn
+   16 |  44  | X->П 4                  | input burn
+   17 |  01  | 1                       | 
+   18 |  00  | 0                       | 
+   19 |  12  | *                       | expr *
+   20 |  62  | П->X 2                  | recall fuel
+   21 |  13  | /                       | expr /
+   22 |  09  | 9                       | 
+   23 |  0A  | .                       | 
+   24 |  08  | 8                       | 
+   25 |  11  | -                       | expr -
+   26 |  40  | X->П 0                  | set accel
+   27 |  61  | П->X 1                  | recall height
+   28 |  63  | П->X 3                  | recall speed
+   29 |  01  | 1                       | 
+   30 |  12  | *                       | expr *
+   31 |  11  | -                       | expr -
+   32 |  60  | П->X 0                  | recall accel
+   33 |  01  | 1                       | 
+   34 |  12  | *                       | expr *
+   35 |  01  | 1                       | 
+   36 |  12  | *                       | expr *
+   37 |  02  | 2                       | 
+   38 |  13  | /                       | expr /
+   39 |  11  | -                       | expr -
+   40 |  41  | X->П 1                  | set height
+   41 |  63  | П->X 3                  | recall speed
+   42 |  60  | П->X 0                  | recall accel
+   43 |  01  | 1                       | 
+   44 |  12  | *                       | expr *
+   45 |  10  | +                       | expr +
+   46 |  43  | X->П 3                  | set speed
+   47 |  62  | П->X 2                  | recall fuel
+   48 |  64  | П->X 4                  | recall burn
+   49 |  01  | 1                       | 
+   50 |  12  | *                       | expr *
+   51 |  11  | -                       | expr -
+   52 |  42  | X->П 2                  | set fuel
+   53 |  61  | П->X 1                  | recall height
+   54 |  02  | 2                       | 
+   55 |  11  | -                       | condition compare
+   56 |  5C  | F x<0                   | false branch for <
+   57 |  70  | 70                      | false branch for <
+   58 |  05  | 5                       | 
+   59 |  63  | П->X 3                  | recall speed
+   60 |  31  | К |x|                   | abs()
+   61 |  11  | -                       | condition compare
+   62 |  59  | F x>=0                  | false branch for <=
+   63 |  68  | 68                      | false branch for <=
+   64 |  6E  | П->X e                  | preload const 777
+   65 |  50  | С/П                     | halt
+   66 |  51  | БП                      | if end
+   67 |  70  | 70                      | if end
+   68 |  6D  | П->X d                  | preload const 666
+   69 |  50  | С/П                     | halt
+   70 |  51  | БП                      | loop back
+   71 |  10  | 10                      | loop back
+   72 |  50  | С/П                     | implicit final stop"
+`;
+
+exports[`examples > compiles tiny-game.m61 deterministically > tiny-game.hex 1`] = `
+"00: 08 0A 00 00 00 00 00 07
+08: 08 4D 6D 50 40 4E 04 11
+16: 5E 24 60 01 11 40 51 36
+24: 6E 06 11 5E 34 F7 06 50
+32: 51 36 00 50 51 10 50"
+`;
+
+exports[`examples > compiles tiny-game.m61 deterministically > tiny-game.listing 1`] = `
+" Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  08  | 8                       | 
+   01 |  0A  | .                       | 
+   02 |  00  | 0                       | 
+   03 |  00  | 0                       | 
+   04 |  00  | 0                       | 
+   05 |  00  | 0                       | 
+   06 |  00  | 0                       | 
+   07 |  07  | 7                       | 
+   08 |  08  | 8                       | 
+   09 |  4D  | X->П d                  | init screen
+   10 |  6D  | П->X d                  | recall screen
+   11 |  50  | С/П                     | ask key
+   12 |  40  | X->П 0                  | input key
+   13 |  4E  | X->П e                  | switch scratch
+   14 |  04  | 4                       | 
+   15 |  11  | -                       | switch compare
+   16 |  5E  | F x=0                   | case mismatch
+   17 |  24  | 24                      | case mismatch
+   18 |  60  | П->X 0                  | 
+   19 |  01  | 1                       | 
+   20 |  11  | -                       | 
+   21 |  40  | X->П 0                  | 
+   22 |  51  | БП                      | switch end
+   23 |  36  | 36                      | switch end
+   24 |  6E  | П->X e                  | switch scratch recall
+   25 |  06  | 6                       | 
+   26 |  11  | -                       | switch compare
+   27 |  5E  | F x=0                   | case mismatch
+   28 |  34  | 34                      | case mismatch
+   29 |  F7  | F* empty F7             | raw hex; unsafe-unverified: egg/raw opcode is unsafe-unverified; undocumented opcode is unsafe-unverified
+   30 |  06  | 6                       | 
+   31 |  50  | С/П                     | halt
+   32 |  51  | БП                      | switch end
+   33 |  36  | 36                      | switch end
+   34 |  00  | 0                       | 
+   35 |  50  | С/П                     | halt
+   36 |  51  | БП                      | loop back
+   37 |  10  | 10                      | loop back
+   38 |  50  | С/П                     | implicit final stop"
+`;
+
+exports[`examples > safe optimizer keeps egg blocks out > tiny-game.safe.hex 1`] = `
+"00: 08 0A 00 00 00 00 00 07
+08: 08 4D 6D 50 40 4E 04 11
+16: 5E 24 60 01 11 40 51 35
+24: 6E 06 11 5E 33 06 50 51
+32: 35 00 50 51 10 50"
+`;

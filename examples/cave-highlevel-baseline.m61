@@ -1,0 +1,73 @@
+machine mk61
+budget steps <= 105
+
+// A first compileable M61 sketch of the classic "Cave Treasure" idea.
+// This is intentionally written in the current surface language, before
+// adding domain constructs such as position/mask/resource/recipe.
+
+store command fixed R8
+store treasures = 0 fixed R0
+store walls1 fixed R1
+store walls2 fixed R2
+store walls3 fixed R3
+store player = 1.0000001 fixed Ra
+store blocked fixed Rb
+store loot = 0 fixed Rc
+store dynamite = 6 fixed Rd
+store food fixed Re
+
+entry main {
+  loop {
+    command = ask player
+    food = food - 1
+
+    if food < 0 {
+      core {
+        В/О
+      }
+    }
+
+    switch command {
+      case 2 {
+        blocked = player + 0.0000002
+        player = blocked
+        pause player
+      }
+      case 4 {
+        blocked = player + 0.000001
+        player = blocked
+        pause player
+      }
+      case 6 {
+        blocked = player - 0.000001
+        player = blocked
+        pause player
+      }
+      case 8 {
+        blocked = player - 0.0000002
+        player = blocked
+        pause player
+      }
+      case 5 {
+        blocked = player + 1
+        player = blocked
+        pause player
+      }
+      case 0 {
+        dynamite = dynamite - 2
+        if dynamite < 0 {
+          pause dynamite
+        }
+        player = blocked
+        pause player
+      }
+      case 10 {
+        loot = loot + 1
+        pause loot
+      }
+      default {
+        halt 0
+      }
+    }
+  }
+}

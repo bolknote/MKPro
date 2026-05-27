@@ -1,0 +1,38 @@
+target mk61
+budget 105 cells
+optimize size
+
+program CounterGame {
+  input key: digit
+
+  state {
+    [displayed] score: counter 0..9 = 0
+    [persistent] food: counter 0..9 = 5
+  }
+
+  screen main {
+    show score, food
+    style compact digits letters hex
+  }
+
+  turn {
+    show main
+    read key
+
+    match key {
+      2 => gain
+      8 => spend
+      otherwise => stop 0
+    }
+  }
+
+  [hot] rule gain {
+    score += 1
+    show main
+  }
+
+  rule spend {
+    food -= 1
+    show main
+  }
+}

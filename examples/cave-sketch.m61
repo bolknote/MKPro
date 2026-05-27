@@ -1,0 +1,75 @@
+machine mk61
+budget steps <= 105 hard
+
+// Incomplete sketch baseline. Use cave-treasure-full.m61 for the hard
+// high-level benchmark.
+
+state Cave {
+  player: packed = 1
+  command: digit = 0
+  food: resource = 9
+  dynamite: resource = 4
+  treasure: resource = 0
+}
+
+display packed cave_screen {
+  mode digits_and_letters
+  source player
+}
+
+entry main {
+  loop {
+    show cave_screen
+    command = input digit
+    food = food - 1
+
+    dispatch command as movement {
+      case 2 {
+        call move_south
+      }
+      case 4 {
+        call move_west
+      }
+      case 6 {
+        call move_east
+      }
+      case 8 {
+        call move_north
+      }
+      case 0 {
+        call break_wall
+      }
+      case 10 {
+        call search_cache
+      }
+      default {
+        halt 0
+      }
+    }
+  }
+}
+
+block tail move_south {
+  player = player + 2
+}
+
+block tail move_west {
+  player = player + 4
+}
+
+block tail move_east {
+  player = player + 6
+}
+
+block tail move_north {
+  player = player + 8
+}
+
+block tail break_wall {
+  dynamite = dynamite - 2
+}
+
+shared tail search_cache {
+  treasure = treasure + 1
+  show cave_screen
+}

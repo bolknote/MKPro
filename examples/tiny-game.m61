@@ -1,0 +1,30 @@
+machine mk61
+budget steps <= 105
+
+store screen = 8.0000078 prefer Rd  // hand-packed digit pattern for the dial
+store key prefer R0
+
+entry main {
+  loop {
+    key = ask screen
+    switch key {
+      case 4 {
+        core {
+          Пх0
+          1
+          -
+          хП0
+        }
+      }
+      case 6 {
+        egg {
+          F7
+        }
+        halt 6
+      }
+      default {
+        halt 0
+      }
+    }
+  }
+}

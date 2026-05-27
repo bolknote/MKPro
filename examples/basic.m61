@@ -1,0 +1,12 @@
+machine mk61
+budget steps <= 105
+
+store x prefer R0
+store y prefer R1
+
+entry main {
+  x = ask 0
+  y = ask x
+  set y = x + y
+  pause y
+}

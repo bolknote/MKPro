@@ -1,0 +1,166 @@
+target mk61
+budget 105 cells
+optimize size
+benchmark grid_rescue_v2
+
+preload R4 = 2
+preload R5 = 10
+preload R6 = ГE-02
+preload R7 = 5E-1
+preload R8 = -52
+preload R9 = 4,_3E-08
+
+program GridRescue {
+  input key: digit
+  input fight_key: digit
+
+  state {
+    [displayed] pos: coord(floor 1..2, x 1..5, y 1..5) = input.X
+    walls: bitset generated random
+    beacons: bitset generated random
+    [persistent] energy: counter 0..99 = input.Y
+    [persistent] charges: counter 0..9 = 3
+    [persistent] rescued: counter 0..9 = 0
+    [temporary] blocked: coord optional
+  }
+
+  screen main {
+    show pos, energy, charges, rescued
+    style compact digits letters hex
+  }
+
+  turn {
+    show main
+    read key
+    energy -= 1
+
+    match key {
+      2, 4, 6, 8, 5, -5 => move(direction(key))
+      0 => open_wall
+      10 => scan
+      otherwise => stop 0
+    }
+  }
+
+  [hot] rule move(dir) {
+    let next = pos + dir
+    if walls has next {
+      blocked = next
+      show 0
+    }
+    else {
+      pos = next
+    }
+  }
+
+  rule open_wall {
+    require blocked exists else show 0
+    require charges >= 1 else show 0
+    walls clear blocked
+    pos = blocked
+    charges -= 1
+  }
+
+  rule scan {
+    if beacons has pos {
+      beacons clear pos
+      rescued += 1
+      ambush
+    }
+  }
+
+  rule ambush {
+    show main
+    read fight_key
+    match fight_key {
+      0 => retreat
+      10 => engage
+      otherwise => stop 0
+    }
+  }
+
+  rule retreat {
+    show 0
+  }
+
+  rule engage {
+    rescued += 1
+  }
+}
+
+coord packed pos {
+  floor 1..2
+  column 1..5
+  row 1..5
+  display packed_decimal_zero_run
+  start from X
+}
+
+maze station {
+  floors 2
+  columns 5
+  rows 5
+  wall_bitsets R1 R2
+  generated_by calculator_random
+  start_not_wall true
+}
+
+bitset beacons {
+  register R0
+  generated_by calculator_random
+  shared_between_floors true
+}
+
+resource energy {
+  register Re
+  initial from Y
+  cost_per_command 1
+  terminal_at 0
+}
+
+resource charges {
+  register Rd
+  initial 3
+  break_cost 1
+}
+
+resource rescued {
+  register Rc
+  initial 0
+  beacon_reward +1
+}
+
+event movement {
+  command 2 move down
+  command 4 move left
+  command 6 move right
+  command 8 move up
+  command 5 move floor_up
+  command -5 move floor_down
+  failed_move displays 0 and stores blocked_target
+}
+
+event wall_break {
+  command 0
+  uses blocked_target
+  spends charges
+  success moves_player_and_removes_wall
+  invalid displays 0
+}
+
+cache search {
+  command 10
+  success clears_beacon_and_adds_rescue
+}
+
+fight ambush {
+  accept_key В↑
+  decline_key 0
+  random_outcome changes_rescue_reward
+}
+
+table packed code_overlay station_tables {
+  walls may_overlay address_cells
+  beacon_masks may_overlay command_cells
+  branch_addresses may_be_constants
+}
