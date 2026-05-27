@@ -8,8 +8,8 @@ reference grid_rescue_v2
 // ambush decision.
 
 program GridRescue {
-  input key: digit
-  input fight_key: digit
+  input key: number
+  input fight_key: number
 
   state {
     [displayed] pos: coord(floor 1..2, x 1..5, y 1..5) = input.X

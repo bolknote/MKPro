@@ -655,7 +655,7 @@ export interface AskStatementAst {
 
 export interface InputStatementAst {
   kind: "input";
-  inputType: "digit";
+  inputType: "digit" | "number";
   target: string;
   line: number;
 }

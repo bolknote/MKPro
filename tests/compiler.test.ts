@@ -285,7 +285,7 @@ program SimpleRules {
     }
   });
 
-  it("lowers Sea Battle through the board-fleet duel microkernel below Anvarov's span", () => {
+  it("lowers Sea Battle through the board-fleet duel microkernel below the reference span", () => {
     const seaBattle = source("examples/sea-battle.m61");
     const result = compileM61(seaBattle);
     const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
@@ -311,7 +311,7 @@ program SimpleRules {
     expect(optimizations.has("fleet-duel-lowering")).toBe(true);
   });
 
-  it("selects shape-specific GameIntent microkernels below the real Anvarov reference spans", () => {
+  it("selects shape-specific GameIntent microkernels below the real reference spans", () => {
     const cases = [
       {
         path: "examples/fox-hunt-100.m61",

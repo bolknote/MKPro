@@ -17,7 +17,7 @@ program GiantsCountry {
     [displayed] view: packed = 0
 
     [displayed] strength: resource 0..99 = 40 {
-      terminal at 0 show error
+      terminal at 0 show exhausted
     }
 
     // Score values are deliberately uneven: larger monsters are not just harder
@@ -148,7 +148,7 @@ program GiantsCountry {
     }
 
     1 ladder {
-      challenge tile {
+      challenge tile as challenge using warning, memory, answer {
         success {
           reward_ladder
         }
@@ -159,7 +159,7 @@ program GiantsCountry {
     }
 
     2 jug {
-      challenge tile {
+      challenge tile as challenge using warning, memory, answer {
         success {
           strength += 2
           plans clear pos
@@ -171,7 +171,7 @@ program GiantsCountry {
     }
 
     3 skeleton {
-      challenge tile {
+      challenge tile as challenge using warning, memory, answer {
         success {
           strength += 1
           score += 1
@@ -184,7 +184,7 @@ program GiantsCountry {
     }
 
     4 trap {
-      challenge tile {
+      challenge tile as challenge using warning, memory, answer {
         success {
           score += 2
           plans clear pos
@@ -196,7 +196,7 @@ program GiantsCountry {
     }
 
     5 vampire {
-      challenge tile {
+      challenge tile as challenge using warning, memory, answer {
         success {
           strength -= 1
           score += 3
@@ -209,7 +209,7 @@ program GiantsCountry {
     }
 
     6 head {
-      challenge tile {
+      challenge tile as challenge using warning, memory, answer {
         success {
           strength -= 2
           score += 4
@@ -222,7 +222,7 @@ program GiantsCountry {
     }
 
     7 dragon {
-      challenge tile {
+      challenge tile as challenge using warning, memory, answer {
         success {
           strength -= 4
           score += 6
@@ -235,7 +235,7 @@ program GiantsCountry {
     }
 
     9 giant {
-      challenge tile {
+      challenge tile as challenge using warning, memory, answer {
         success {
           strength -= 5
           score += 7

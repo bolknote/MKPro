@@ -1,4 +1,4 @@
-export { compileM61, CompileError } from "./compiler.ts";
+export { compileM61, CompileError, setReferenceMetricsResolver } from "./compiler.ts";
 export { parseProgram, parseExpression, ParseError } from "./parser.ts";
 export {
   opcodeCatalog,

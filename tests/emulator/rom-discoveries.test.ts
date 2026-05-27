@@ -174,7 +174,7 @@ describe("emulator ROM discoveries", () => {
     expect(sync4(ROM.ИК1302.команды[0x80]!)).toBeGreaterThan(31);
   });
 
-  it("executes formal side-branch addresses through Anvarov's address-space map", () => {
+  it("executes formal side-branch addresses through the dark-address space map", () => {
     for (const { formal, actual } of [
       { formal: 0xa8, actual: 3 },
       { formal: 0xc5, actual: 13 },

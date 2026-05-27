@@ -57,11 +57,6 @@ program Labyrinth777 {
     style compact digits letters sign
   }
 
-  screen result {
-    show energy
-    style compact digits sign
-  }
-
   ending escaped {
     show 7777777
   }

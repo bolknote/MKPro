@@ -7,8 +7,8 @@ reference cave_treasure_full_v2
 // MK-61-specific overlay and dispatch choices left to compiler reports.
 
 program CaveTreasure {
-  input key: digit
-  input fight_key: digit
+  input key: number
+  input fight_key: number
 
   state {
     // The visible position is also the key into generated wall/cache masks. The

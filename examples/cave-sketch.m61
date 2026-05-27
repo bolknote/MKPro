@@ -6,7 +6,7 @@ reference cave_sketch
 // Small readable sketch. Use cave-treasure.m61 for the full compact game intent.
 
 program CaveSketch {
-  input command: digit
+  input command: number
 
   state {
     // The sketch keeps only the core cave pressures: where you are, how long

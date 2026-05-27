@@ -153,4 +153,4 @@ for (let i = 98; i < 105; i++) {
   const [chip, addr] = commandAddress(i, 1);
   console.log(`  logical ${String(i).padStart(3)} -> chip ${chip} addr ${addr}`);
 }
-console.log('  Formal addresses above A4 are branch operands; see Anvarov address-space mapping.');
+console.log('  Formal addresses above A4 are branch operands; see the dark-address space mapping.');

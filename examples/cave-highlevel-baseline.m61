@@ -7,7 +7,7 @@ reference cave_highlevel_baseline
 // The source is now game intent; register plans and raw return tricks live in reports.
 
 program CaveHighlevelBaseline {
-  input command: digit
+  input command: number
 
   state {
     // This baseline keeps the classic cave contract explicit: the player sees a
@@ -108,12 +108,11 @@ program CaveHighlevelBaseline {
   }
 
   rule break_wall {
-    // A failed blast still consumes the player's scarce explosive budget; the
-    // screen response is the feedback, not a separate error language.
+    // Blasting only commits when the remembered wall and enough dynamite exist;
+    // the screen response is the feedback, not a separate error language.
+    require blocked exists else show cave_screen
+    require dynamite >= 2 else show cave_screen
     dynamite -= 2
-    if dynamite < 0 {
-      show cave_screen
-    }
     player = blocked
     show cave_screen
   }

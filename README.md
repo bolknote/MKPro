@@ -40,6 +40,20 @@ Flags:
 - `--no-warn-unsafe` strips `unsafe-unverified` annotations from listings
   and JSON output.
 
+## Browser Bridge
+
+To load M61 source directly into Serge Anvarov's browser emulator:
+
+```sh
+npm run build:browser
+npm run serve:browser
+```
+
+Then paste the console loader from
+[docs/19-anvarov-browser-bridge.md](./docs/19-anvarov-browser-bridge.md) into
+the emulator page. The bridge compiles `#program` before the emulator's own
+write-to-memory handler runs, so the page only sees MK-61 hex opcodes.
+
 ## M61 Language
 
 M61 is a single V2 language for game/application intent. Programs describe

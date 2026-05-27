@@ -7,8 +7,8 @@ reference resource_raid_v2
 // route budget, and cargo is valuable enough that alarms can be worth forcing.
 
 program ResourceRaid {
-  input key: digit
-  input alarm_key: digit
+  input key: number
+  input alarm_key: number
 
   state {
     [displayed] pos: coord(floor 1..3, x 1..4, y 1..4) = input.X

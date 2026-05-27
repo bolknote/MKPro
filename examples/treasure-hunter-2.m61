@@ -58,7 +58,7 @@ program TreasureHunter2 {
   }
 
   ending escaped {
-    show treasure
+    show exit
   }
 
   turn {

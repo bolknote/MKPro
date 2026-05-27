@@ -91,11 +91,12 @@ function collectBackwardPrologue(ops: readonly IrOp[], beforeIndex: number): Bac
       virtualHeadRegister = prior.register;
     }
   }
-  return {
+  const segment: BackwardSegment = {
     ops: collected.slice().reverse(),
     startIndex,
-    virtualHeadRegister,
   };
+  if (virtualHeadRegister !== undefined) return { ...segment, virtualHeadRegister };
+  return segment;
 }
 
 function opsEquivalent(a: IrOp, b: IrOp): boolean {
@@ -134,7 +135,7 @@ const run: IrPassFn = (ops) => {
     if (headForward.ops.length === 0) continue;
     const headBackward = collectBackwardPrologue(ops, i);
     if (headBackward.ops.length === 0) continue;
-    let backwardOps = headBackward.ops;
+    const backwardOps = headBackward.ops;
     let matched = segmentsMatch(backwardOps, headForward.ops);
     if (!matched && headBackward.virtualHeadRegister !== undefined) {
       const firstForward = headForward.ops[0];

@@ -3,6 +3,9 @@ node_modules/
 
 # Build and coverage output
 dist/
+!dist/
+dist/*
+!dist/m61-anvarov.user.js
 build/
 coverage/
 *.tsbuildinfo

@@ -1,6 +1,3 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   addressToOpcode,
   codeToAddress,
@@ -62,7 +59,6 @@ const DEFAULT_OPTIONS: CompileOptions = {
   warnUnsafe: true,
 };
 
-const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const SIZE_BENCHMARK_REFERENCES = new Set([
   "anvarov_fox_hunt_100",
   "anvarov_minesweeper_9x9",
@@ -70,6 +66,21 @@ const SIZE_BENCHMARK_REFERENCES = new Set([
   "anvarov_dangerous_loading",
   "anvarov_sea_battle",
 ]);
+
+interface NodeFsModule {
+  existsSync(path: string): boolean;
+  readFileSync(path: string, encoding: "utf8"): string;
+}
+
+interface NodePathModule {
+  resolve(...paths: string[]): string;
+  dirname(path: string): string;
+}
+
+interface NodeProcessLike {
+  cwd?: () => string;
+  getBuiltinModule?: (specifier: string) => unknown;
+}
 
 const REGISTER_ORDER: RegisterName[] = [
   "0",
@@ -234,6 +245,16 @@ interface ReferenceMetrics {
   readonly gaps: string[];
 }
 
+type ReferenceMetricsResolver = (referenceName: string) => ReferenceMetrics | undefined;
+
+let customReferenceMetricsResolver: ReferenceMetricsResolver | undefined;
+
+export function setReferenceMetricsResolver(
+  resolver: ReferenceMetricsResolver | undefined,
+): void {
+  customReferenceMetricsResolver = resolver;
+}
+
 function buildReferenceReport(
   referenceName: string,
   compiledSteps: number,
@@ -258,29 +279,69 @@ function buildReferenceReport(
 }
 
 function resolveReferenceMetrics(referenceName: string): ReferenceMetrics | undefined {
+  const customMetrics = customReferenceMetricsResolver?.(referenceName);
+  if (customMetrics !== undefined) return customMetrics;
+
+  const fs = nodeBuiltin<NodeFsModule>("node:fs");
+  const path = nodeBuiltin<NodePathModule>("node:path");
+  const repoRoot = findRepoRoot(fs, path);
+  if (fs === undefined || path === undefined || repoRoot === undefined) return undefined;
+
   const reference = /^([A-Za-z0-9]+)_(.+)$/u.exec(referenceName);
   if (!reference) return undefined;
   const collection = reference[1]!;
   const slug = reference[2]!.replace(/_/gu, "-");
-  const directory = resolve(REPO_ROOT, "games", collection);
-  const manifestPath = resolve(directory, "manifest.tsv");
+  const directory = path.resolve(repoRoot, "games", collection);
+  const manifestPath = path.resolve(directory, "manifest.tsv");
   let programFile = `${slug}.txt`;
 
-  if (existsSync(manifestPath)) {
-    const rows = readFileSync(manifestPath, "utf8").split(/\r?\n/u).slice(1);
+  if (fs.existsSync(manifestPath)) {
+    const rows = fs.readFileSync(manifestPath, "utf8").split(/\r?\n/u).slice(1);
     const manifestProgram = rows
       .map((row) => row.split("\t")[0]?.trim())
       .find((program) => program === programFile);
     if (manifestProgram !== undefined) programFile = manifestProgram;
   }
 
-  const programPath = resolve(directory, programFile);
-  if (!existsSync(programPath)) return undefined;
-  return readReferenceListingMetrics(programPath);
+  const programPath = path.resolve(directory, programFile);
+  if (!fs.existsSync(programPath)) return undefined;
+  return readReferenceListingMetrics(programPath, fs);
 }
 
-function readReferenceListingMetrics(path: string): ReferenceMetrics | undefined {
-  const addresses = readFileSync(path, "utf8")
+function nodeBuiltin<T>(specifier: string): T | undefined {
+  const processLike = (globalThis as typeof globalThis & { process?: NodeProcessLike }).process;
+  const value = processLike?.getBuiltinModule?.(specifier);
+  if (value !== undefined) return value as T;
+  if (specifier.startsWith("node:")) {
+    return processLike?.getBuiltinModule?.(specifier.slice("node:".length)) as T | undefined;
+  }
+  return undefined;
+}
+
+function findRepoRoot(
+  fs: NodeFsModule | undefined,
+  path: NodePathModule | undefined,
+): string | undefined {
+  const cwd = (globalThis as typeof globalThis & { process?: NodeProcessLike }).process?.cwd?.();
+  if (fs === undefined || path === undefined || cwd === undefined) return undefined;
+
+  let current = path.resolve(cwd);
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (
+      fs.existsSync(path.resolve(current, "package.json")) &&
+      fs.existsSync(path.resolve(current, "games"))
+    ) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return undefined;
+}
+
+function readReferenceListingMetrics(path: string, fs: NodeFsModule): ReferenceMetrics | undefined {
+  const addresses = fs.readFileSync(path, "utf8")
     .split(/\r?\n/u)
     .map((line) => line.trim())
     .filter(Boolean)
@@ -1706,10 +1767,10 @@ class EmitContext {
       }
       if (statement.kind === "show" && next?.kind === "input") {
         this.compileShow(statement.display, statement.line);
-        this.emitStore(next.target, `input ${next.target}`, next.line);
+        this.emitStore(next.target, `input ${next.inputType} ${next.target}`, next.line);
         this.optimizations.push({
           name: "show-read-fusion",
-          detail: `Fused show ${statement.display} and read ${next.target} into one calculator stop.`,
+          detail: `Fused show ${statement.display} and read ${next.inputType} ${next.target} into one calculator stop.`,
           unsafe: false,
         });
         index += 1;

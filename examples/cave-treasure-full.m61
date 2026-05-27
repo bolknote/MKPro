@@ -7,8 +7,8 @@ reference cave_treasure_full
 // game-rule level so compiler changes can be judged against the same source.
 
 program CaveTreasure {
-  input key: digit
-  input fight_key: digit
+  input key: number
+  input fight_key: number
 
   state {
     // Position is visible to the player and meaningful to the hidden masks: one

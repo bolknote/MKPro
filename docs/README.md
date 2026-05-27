@@ -27,6 +27,7 @@ steps.
 | 15 | [17-sign-digits-and-zeroes.md](./17-sign-digits-and-zeroes.md) | Sign-digits and non-normal zeroes |
 | 16 | [18-f-opcodes-and-demo-program.md](./18-f-opcodes-and-demo-program.md) | F-opcode insertion and demo-program lessons |
 | 17 | [13-m61-language.md](./13-m61-language.md) | The M61 language, human DSL, and automatic max optimization |
+| 18 | [19-anvarov-browser-bridge.md](./19-anvarov-browser-bridge.md) | Browser-console bridge for Serge Anvarov's emulator |
 
 Hardware internals and chip-level detail live separately in
 [00-hardware.md](./00-hardware.md).
@@ -53,6 +54,7 @@ Hardware internals and chip-level detail live separately in
 | [16-hexadecimal-arithmetic.md](./16-hexadecimal-arithmetic.md) | Hex-like mantissa arithmetic and logical bit masks |
 | [17-sign-digits-and-zeroes.md](./17-sign-digits-and-zeroes.md) | Sign-digits, negative zero, and non-normal zeroes |
 | [18-f-opcodes-and-demo-program.md](./18-f-opcodes-and-demo-program.md) | F-opcode insertion methods and compact-game lessons |
+| [19-anvarov-browser-bridge.md](./19-anvarov-browser-bridge.md) | Browser-console bundle and emulator field interception |
 
 ## Primary Sources
 

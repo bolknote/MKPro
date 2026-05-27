@@ -20,6 +20,12 @@ export default tseslint.config(
     },
   },
   {
+    files: ["tools/anvarov-console-loader.js"],
+    languageOptions: {
+      globals: globals.browser,
+    },
+  },
+  {
     files: ["**/*.cjs"],
     languageOptions: {
       sourceType: "commonjs",
@@ -41,6 +47,12 @@ export default tseslint.config(
         "error",
         { argsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" },
       ],
+    },
+  },
+  {
+    files: ["src/browser/**/*.ts"],
+    languageOptions: {
+      globals: globals.browser,
     },
   },
 );

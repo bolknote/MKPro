@@ -26,7 +26,7 @@ describe("examples", () => {
 
   it("compiles tiny-game.m61 under budget", () => {
     const result = compileM61(loadExample("tiny-game"));
-    expect(formatListing(result)).toContain("input key");
+    expect(formatListing(result)).toContain("input digit key");
     expect(formatHex(result).length).toBeGreaterThan(0);
     expect(result.report.steps).toBeLessThanOrEqual(105);
   });

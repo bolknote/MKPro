@@ -77,8 +77,6 @@ export function parseProgram(source: string): ProgramAst {
 class M61Parser {
   private readonly lines: SourceLine[];
   private index = 0;
-  private switchCounter = 0;
-  private dispatchCounter = 0;
 
   constructor(source: string) {
     this.lines = source
@@ -611,8 +609,13 @@ class M61Parser {
   }
 
   private parseV2Challenge(text: string, hints: SemanticHint[], line: number): V2StatementAst {
-    const match = /^challenge\s+(.+?)(?:\s+as\s+([A-Za-z_][\w]*))?\s*\{$/u.exec(text);
-    if (!match) throw new ParseError("Challenge must look like 'challenge expr {'", line);
+    const match =
+      /^challenge\s+(.+?)\s+as\s+([A-Za-z_][\w]*)\s+using\s+([A-Za-z_][\w]*),\s*([A-Za-z_][\w]*),\s*([A-Za-z_][\w]*)\s*\{$/u.exec(
+        text,
+      );
+    if (!match) {
+      throw new ParseError("Challenge must look like 'challenge expr as memory_var using warning_screen, memory_screen, answer_input {'", line);
+    }
     let successBody: V2StatementAst[] | undefined;
     let failureBody: V2StatementAst[] | undefined;
     while (!this.done()) {
@@ -624,10 +627,10 @@ class M61Parser {
           kind: "v2_challenge",
           expr: match[1]!.trim(),
           successBody,
-          challengeTarget: match[2] ?? "challenge",
-          warningScreen: "warning",
-          memoryScreen: "memory",
-          answerInput: "answer",
+          challengeTarget: match[2]!,
+          warningScreen: match[3]!,
+          memoryScreen: match[4]!,
+          answerInput: match[5]!,
           hints,
           line,
         };
@@ -685,333 +688,6 @@ class M61Parser {
       }
     }
     throw new ParseError("Unclosed match block", line);
-  }
-
-  private parseDomain(): DomainAst {
-    const header = this.next();
-    const parsed = parseDomainHeader(header);
-    if (!header.text.endsWith("{")) {
-      return { kind: "domain", ...parsed, lines: [], line: header.line };
-    }
-    return {
-      kind: "domain",
-      ...parsed,
-      lines: this.parseRawBlock(),
-      line: header.line,
-    };
-  }
-
-  private parseState(): StateAst {
-    const header = this.next();
-    const match = /^state(?:\s+([A-Za-z_][\w]*))?\s*\{$/u.exec(header.text);
-    if (!match) throw new ParseError("State must look like 'state Name {'", header.line);
-    const fields: StateFieldAst[] = [];
-    while (!this.done()) {
-      const line = this.next();
-      if (line.text === "}") {
-        return {
-          kind: "state",
-          name: match[1] ?? "State",
-          fields,
-          line: header.line,
-        };
-      }
-      fields.push(parseStateField(line));
-    }
-    throw new ParseError("Unclosed state block", header.line);
-  }
-
-  private parseDisplay(): DisplayAst {
-    const header = this.next();
-    const match = /^display\s+packed\s+([A-Za-z_][\w]*)(?:\s+from\s+(.+?))?\s*\{$/u.exec(header.text);
-    if (!match) {
-      throw new ParseError("Display must look like 'display packed name {'", header.line);
-    }
-    let mode: string | undefined;
-    let sources = match[2] ? parseIdentifierList(match[2]) : [];
-
-    while (!this.done()) {
-      const line = this.next();
-      if (line.text === "}") {
-        const display: DisplayAst = {
-          kind: "display",
-          name: match[1]!,
-          format: "packed",
-          sources,
-          line: header.line,
-        };
-        if (mode !== undefined) display.mode = mode;
-        return display;
-      }
-      if (line.text.startsWith("mode ")) {
-        mode = line.text.slice("mode ".length).trim();
-        continue;
-      }
-      if (line.text.startsWith("source ")) {
-        sources = parseIdentifierList(line.text.slice("source ".length));
-        continue;
-      }
-      if (line.text.startsWith("sources ")) {
-        sources = parseIdentifierList(line.text.slice("sources ".length));
-        continue;
-      }
-      throw new ParseError("Display block must contain mode/source lines", line.line);
-    }
-    throw new ParseError("Unclosed display block", header.line);
-  }
-
-  private parseDeclaration(): DeclarationAst {
-    const line = this.next();
-    if (line.text.startsWith("const ")) {
-      const match = /^const\s+([A-Za-z_][\w]*)\s*=\s*(.+)$/u.exec(line.text);
-      if (!match) throw new ParseError("Invalid const declaration", line.line);
-      const declaration: ConstDeclarationAst = {
-        kind: "const",
-        name: match[1]!,
-        value: parseExpression(match[2]!, line.line),
-        line: line.line,
-      };
-      return declaration;
-    }
-
-    const match =
-      /^(store|temp)\s+([A-Za-z_][\w]*)(?:\s*:\s*[A-Za-z_][\w]*)?(?:\s*=\s*(.*?))?(?:\s+(prefer|fixed)\s+R?([0-9a-eавсде]))?$/iu.exec(
-        line.text,
-      );
-    if (!match) {
-      throw new ParseError("Invalid store/temp declaration", line.line);
-    }
-
-    const hint = parseStorageHint(match[4], match[5]);
-    if (match[1] === "store") {
-      const declaration: StoreDeclarationAst = {
-        kind: "store",
-        name: match[2]!,
-        line: line.line,
-      };
-      if (match[3]?.trim()) declaration.value = parseExpression(match[3].trim(), line.line);
-      if (hint) declaration.storage = hint;
-      return declaration;
-    }
-
-    const declaration: TempDeclarationAst = {
-      kind: "temp",
-      name: match[2]!,
-      line: line.line,
-    };
-    if (hint) declaration.storage = hint;
-    return declaration;
-  }
-
-  private parseEntry(): EntryAst {
-    const line = this.next();
-    const match = /^entry(?:\s+([A-Za-z_][\w]*))?(?:\s+at\s+([0-9A-Fa-f]{1,2}|A[0-4]))?\s*\{$/u.exec(line.text);
-    if (!match) throw new ParseError("Entry must look like 'entry name {'", line.line);
-    const entry: EntryAst = {
-      kind: "entry",
-      name: match[1] ?? "main",
-      body: this.parseStatementBlock(),
-      line: line.line,
-    };
-    if (match[2] !== undefined) entry.at = parseFormalAddress(match[2], line.line);
-    return entry;
-  }
-
-  private parseProc(): ProcAst {
-    const line = this.next();
-    const match = /^proc\s+([A-Za-z_][\w]*)[^{]*\{$/u.exec(line.text);
-    if (!match) throw new ParseError("Proc must look like 'proc name {'", line.line);
-    return {
-      kind: "proc",
-      name: match[1]!,
-      body: this.parseStatementBlock(),
-      line: line.line,
-    };
-  }
-
-  private parseBlock(): BlockAst {
-    const line = this.next();
-    const match = /^(?:block\s+(inline|tail)\s+([A-Za-z_][\w]*)|shared\s+tail\s+([A-Za-z_][\w]*))\s*\{$/u.exec(
-      line.text,
-    );
-    if (!match) {
-      throw new ParseError("Block must look like 'block inline name {' or 'shared tail name {'", line.line);
-    }
-    const mode = match[3] ? "shared_tail" : (match[1] as "inline" | "tail");
-    return {
-      kind: "block",
-      name: match[2] ?? match[3]!,
-      mode,
-      body: this.parseStatementBlock(),
-      line: line.line,
-    };
-  }
-
-  private parseStatementBlock(): StatementAst[] {
-    const statements: StatementAst[] = [];
-    while (!this.done()) {
-      const line = this.peek();
-      if (line.text === "}") {
-        this.index += 1;
-        return statements;
-      }
-      statements.push(this.parseStatement());
-    }
-    throw new ParseError("Unclosed block", this.lines.at(-1)?.line ?? 1);
-  }
-
-  private parseStatement(): StatementAst {
-    const line = this.peek();
-
-    if (line.text === "loop {") {
-      this.index += 1;
-      const loop: LoopStatementAst = {
-        kind: "loop",
-        body: this.parseStatementBlock(),
-        line: line.line,
-      };
-      return loop;
-    }
-
-    if (line.text.startsWith("if ") && line.text.endsWith("{")) {
-      this.index += 1;
-      const conditionText = line.text.slice(3, -1).trim();
-      const thenBody = this.parseStatementBlock();
-      const statement: IfStatementAst = {
-        kind: "if",
-        condition: parseCondition(conditionText, line.line),
-        thenBody,
-        line: line.line,
-      };
-      const next = this.peekOptional();
-      if (next?.text === "else {") {
-        this.index += 1;
-        statement.elseBody = this.parseStatementBlock();
-      }
-      return statement;
-    }
-
-    if (line.text.startsWith("switch ") && line.text.endsWith("{")) {
-      this.index += 1;
-      return this.parseSwitch(line);
-    }
-
-    if (line.text.startsWith("dispatch ") && line.text.endsWith("{")) {
-      this.index += 1;
-      return this.parseDispatch(line);
-    }
-
-    if (line.text === "core {") {
-      this.index += 1;
-      return { kind: "core", lines: this.parseRawBlock(), line: line.line };
-    }
-
-    if (line.text === "egg {" || line.text === "unsafe asm {") {
-      this.index += 1;
-      const statement: EggStatementAst = {
-        kind: "egg",
-        lines: this.parseRawBlock(),
-        line: line.line,
-      };
-      return statement;
-    }
-
-    this.index += 1;
-    return parseSimpleStatement(line);
-  }
-
-  private parseSwitch(header: SourceLine): StatementAst {
-    const exprText = header.text.slice("switch ".length, -1).trim();
-    const cases: SwitchCaseAst[] = [];
-    let defaultBody: StatementAst[] | undefined;
-    const scratchId = this.switchCounter++;
-
-    while (!this.done()) {
-      const line = this.peek();
-      if (line.text === "}") {
-        this.index += 1;
-        const statement: SwitchStatementAst = {
-          kind: "switch",
-          expr: parseExpression(exprText, header.line),
-          cases,
-          line: header.line,
-          scratchId,
-        };
-        if (defaultBody !== undefined) statement.defaultBody = defaultBody;
-        return statement;
-      }
-      if (line.text.startsWith("case ") && line.text.endsWith("{")) {
-        this.index += 1;
-        cases.push({
-          value: parseExpression(line.text.slice("case ".length, -1).trim(), line.line),
-          body: this.parseStatementBlock(),
-          line: line.line,
-        });
-        continue;
-      }
-      if (line.text === "default {") {
-        this.index += 1;
-        defaultBody = this.parseStatementBlock();
-        continue;
-      }
-      throw new ParseError("Switch body must contain case/default blocks", line.line);
-    }
-
-    throw new ParseError("Unclosed switch block", header.line);
-  }
-
-  private parseDispatch(header: SourceLine): StatementAst {
-    const match = /^dispatch\s+(.+?)(?:\s+as\s+([A-Za-z_][\w]*))?\s*\{$/u.exec(header.text);
-    if (!match) {
-      throw new ParseError("Dispatch must look like 'dispatch expr {'", header.line);
-    }
-    const cases: DispatchCaseAst[] = [];
-    let defaultBody: StatementAst[] | undefined;
-    const scratchId = this.dispatchCounter++;
-
-    while (!this.done()) {
-      const line = this.peek();
-      if (line.text === "}") {
-        this.index += 1;
-        const statement: DispatchStatementAst = {
-          kind: "dispatch",
-          expr: parseExpression(match[1]!.trim(), header.line),
-          cases,
-          line: header.line,
-          scratchId,
-        };
-        if (match[2] !== undefined) statement.name = match[2];
-        if (defaultBody !== undefined) statement.defaultBody = defaultBody;
-        return statement;
-      }
-      if (line.text.startsWith("case ") && line.text.endsWith("{")) {
-        this.index += 1;
-        cases.push({
-          value: parseExpression(line.text.slice("case ".length, -1).trim(), line.line),
-          body: this.parseStatementBlock(),
-          line: line.line,
-        });
-        continue;
-      }
-      if (line.text === "default {") {
-        this.index += 1;
-        defaultBody = this.parseStatementBlock();
-        continue;
-      }
-      throw new ParseError("Dispatch body must contain case/default blocks", line.line);
-    }
-
-    throw new ParseError("Unclosed dispatch block", header.line);
-  }
-
-  private parseRawBlock(): RawBlockLine[] {
-    const lines: RawBlockLine[] = [];
-    while (!this.done()) {
-      const line = this.next();
-      if (line.text === "}") return lines;
-      lines.push({ text: line.text, line: line.line });
-    }
-    throw new ParseError("Unclosed raw block", this.lines.at(-1)?.line ?? 1);
   }
 
   private done(): boolean {
@@ -1292,6 +968,7 @@ function splitArgs(text: string): string[] {
 interface V2LoweringContext {
   ruleParams: Map<string, string[]>;
   endings: Map<string, V2EndingAst>;
+  inputTypes: Map<string, V2InputAst["inputType"]>;
   moveDeltas: Map<string, Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>>>;
 }
 
@@ -1304,9 +981,13 @@ function lowerV2Program(v2: V2ProgramAst): {
   blocks: BlockAst[];
 } {
   const endings = collectV2Endings(v2);
+  const inputTypes = collectV2InputTypes(v2);
+  const screens = collectV2Screens(v2);
+  validateV2References(v2, { endings, inputTypes, screens });
   const context: V2LoweringContext = {
     ruleParams: new Map(v2.rules.map((rule) => [rule.name, rule.params])),
     endings,
+    inputTypes,
     moveDeltas: collectV2MoveDeltas(v2),
   };
   for (const table of v2.encounters) {
@@ -1329,6 +1010,133 @@ function collectV2Endings(v2: V2ProgramAst): V2LoweringContext["endings"] {
     endings.set(ending.name, ending);
   }
   return endings;
+}
+
+function collectV2InputTypes(v2: V2ProgramAst): V2LoweringContext["inputTypes"] {
+  const inputTypes = new Map<string, V2InputAst["inputType"]>();
+  for (const input of v2.inputs) {
+    if (inputTypes.has(input.name)) throw new ParseError(`Duplicate input '${input.name}'`, input.line);
+    inputTypes.set(input.name, input.inputType);
+  }
+  return inputTypes;
+}
+
+function collectV2Screens(v2: V2ProgramAst): Map<string, V2ScreenAst> {
+  const screens = new Map<string, V2ScreenAst>();
+  for (const screen of v2.screens) {
+    if (screens.has(screen.name)) throw new ParseError(`Duplicate screen '${screen.name}'`, screen.line);
+    screens.set(screen.name, screen);
+  }
+  return screens;
+}
+
+function validateV2References(
+  v2: V2ProgramAst,
+  context: {
+    endings: Map<string, V2EndingAst>;
+    inputTypes: Map<string, V2InputAst["inputType"]>;
+    screens: Map<string, V2ScreenAst>;
+  },
+): void {
+  const canShowTerminalTarget = (target: string): boolean =>
+    isNumericLiteralText(target) || context.screens.has(target) || context.endings.has(target);
+  for (const ending of v2.endings) {
+    if (!isNumericLiteralText(ending.show) && !context.screens.has(ending.show)) {
+      throw new ParseError(`Unknown ending display target '${ending.show}'`, ending.line);
+    }
+  }
+  for (const field of v2.state) {
+    if (field.terminal !== undefined && !canShowTerminalTarget(field.terminal.show)) {
+      throw new ParseError(`Unknown terminal target '${field.terminal.show}'`, field.line);
+    }
+  }
+  for (const fleet of v2.fleets) {
+    if (fleet.terminal !== undefined && !canShowTerminalTarget(fleet.terminal.show)) {
+      throw new ParseError(`Unknown terminal target '${fleet.terminal.show}'`, fleet.line);
+    }
+  }
+
+  const visit = (statements: V2StatementAst[]): void => {
+    for (const statement of statements) {
+      validateV2Statement(statement, context, visit);
+    }
+  };
+  if (v2.turn) visit(v2.turn.body);
+  for (const rule of v2.rules) visit(rule.body);
+  for (const table of v2.encounters) {
+    for (const encounterCase of table.cases) visit(encounterCase.body);
+  }
+}
+
+function validateV2Statement(
+  statement: V2StatementAst,
+  context: {
+    endings: Map<string, V2EndingAst>;
+    inputTypes: Map<string, V2InputAst["inputType"]>;
+    screens: Map<string, V2ScreenAst>;
+  },
+  visit: (statements: V2StatementAst[]) => void,
+): void {
+  switch (statement.kind) {
+    case "v2_show":
+      if (!isNumericLiteralText(statement.target) && !context.screens.has(statement.target)) {
+        throw new ParseError(`Unknown screen '${statement.target}'`, statement.line);
+      }
+      return;
+    case "v2_read":
+      if (!context.inputTypes.has(statement.target)) {
+        throw new ParseError(`Unknown input '${statement.target}'`, statement.line);
+      }
+      return;
+    case "v2_end":
+      if (!context.endings.has(statement.outcome)) {
+        throw new ParseError(`Unknown ending '${statement.outcome}'`, statement.line);
+      }
+      return;
+    case "v2_challenge":
+      if (!context.screens.has(statement.warningScreen)) {
+        throw new ParseError(`Unknown challenge warning screen '${statement.warningScreen}'`, statement.line);
+      }
+      if (!context.screens.has(statement.memoryScreen)) {
+        throw new ParseError(`Unknown challenge memory screen '${statement.memoryScreen}'`, statement.line);
+      }
+      if (!context.inputTypes.has(statement.answerInput)) {
+        throw new ParseError(`Unknown challenge answer input '${statement.answerInput}'`, statement.line);
+      }
+      visit(statement.successBody);
+      if (statement.failureBody) visit(statement.failureBody);
+      return;
+    case "v2_if":
+      visit(statement.thenBody);
+      if (statement.elseBody) visit(statement.elseBody);
+      return;
+    case "v2_require":
+      if (statement.elseAction) visit([statement.elseAction]);
+      return;
+    case "v2_match":
+      validateV2MatchValues(statement, context.inputTypes);
+      for (const matchCase of statement.cases) visit([matchCase.action]);
+      if (statement.otherwise) visit([statement.otherwise]);
+      return;
+    default:
+      return;
+  }
+}
+
+function validateV2MatchValues(
+  statement: V2MatchStatementAst,
+  inputTypes: Map<string, V2InputAst["inputType"]>,
+): void {
+  if (inputTypes.get(statement.expr.trim()) !== "digit") return;
+  for (const matchCase of statement.cases) {
+    for (const value of matchCase.values) {
+      if (!isNumericLiteralText(value)) continue;
+      const numeric = Number(value);
+      if (!Number.isInteger(numeric) || numeric < 0 || numeric > 9) {
+        throw new ParseError(`Input '${statement.expr}' is digit, but match case '${value}' is not a digit`, matchCase.line);
+      }
+    }
+  }
 }
 
 function collectV2MoveDeltas(v2: V2ProgramAst): V2LoweringContext["moveDeltas"] {
@@ -1704,7 +1512,12 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
       }
       return [{ kind: "show", display: statement.target, line: statement.line }];
     case "v2_read":
-      return [{ kind: "input", inputType: "digit", target: statement.target, line: statement.line }];
+      return [{
+        kind: "input",
+        inputType: context.inputTypes.get(statement.target) ?? "number",
+        target: statement.target,
+        line: statement.line,
+      }];
     case "v2_stop":
       return [{ kind: "halt", expr: lowerV2Expression(statement.value, statement.line), line: statement.line }];
     case "v2_let":
@@ -1800,7 +1613,12 @@ function lowerV2Challenge(
     },
     { kind: "show", display: statement.warningScreen, line: statement.line },
     { kind: "show", display: statement.memoryScreen, line: statement.line },
-    { kind: "input", inputType: "digit", target: statement.answerInput, line: statement.line },
+    {
+      kind: "input",
+      inputType: context.inputTypes.get(statement.answerInput) ?? "number",
+      target: statement.answerInput,
+      line: statement.line,
+    },
     {
       kind: "if",
       condition: {
@@ -2101,187 +1919,11 @@ function isNumericLiteralText(text: string): boolean {
   return /^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/iu.test(text.trim());
 }
 
-function parseDomainHeader(line: SourceLine): Omit<DomainAst, "kind" | "lines" | "line"> {
-  const text = line.text.endsWith("{") ? line.text.slice(0, -1).trim() : line.text;
-  const match = /^(cache\s+search|coord|maze|bitset|resource|event|random|fight|table|clobber|uses)(?:\s+([A-Za-z_][\w]*))?/u.exec(
-    text,
-  );
-  if (!match) throw new ParseError(`Invalid domain declaration '${line.text}'`, line.line);
-  const domain: Omit<DomainAst, "kind" | "lines" | "line"> = {
-    domainKind: match[1]!.replace(/\s+/gu, "_"),
-    header: text,
-  };
-  if (match[2] !== undefined) domain.name = match[2];
-  return domain;
-}
-
-function parseFormalAddress(text: string, line: number): number {
-  const normalized = text.toUpperCase();
-  if (/^A[0-4]$/u.test(normalized)) return 100 + Number(normalized.slice(1));
-  if (/^[0-9A-F]{1,2}$/u.test(normalized)) {
-    const code = Number.parseInt(normalized, 16);
-    const high = code >> 4;
-    const low = code & 0x0f;
-    if (high <= 9 && low <= 9) return high * 10 + low;
-  }
-  throw new ParseError(`Invalid formal address '${text}'`, line);
-}
-
-function parseStateField(line: SourceLine): StateFieldAst {
-  const match =
-    /^([A-Za-z_][\w]*)\s*:\s*(digit|flag|range|packed|resource|addr)(?:\s+(-?\d+)\.\.(-?\d+))?(?:\s*=\s*(.+))?$/u.exec(
-      line.text,
-    );
-  if (!match) {
-    throw new ParseError("State field must look like 'name: digit = 1' or 'name: range 1..3'", line.line);
-  }
-  const type = match[2] as StateFieldType;
-  const field: StateFieldAst = {
-    name: match[1]!,
-    type,
-    line: line.line,
-  };
-  if (match[3] !== undefined) field.min = Number(match[3]);
-  if (match[4] !== undefined) field.max = Number(match[4]);
-  if (match[5] !== undefined) field.initial = parseExpression(match[5], line.line);
-  return field;
-}
-
 function parseIdentifierList(text: string): string[] {
   return text
     .split(",")
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
-}
-
-function parseStorageHint(mode?: string, register?: string): StorageHint | undefined {
-  if (!mode || !register) return undefined;
-  return {
-    mode: mode.toLowerCase() as "prefer" | "fixed",
-    register: registerFromText(register),
-  };
-}
-
-function parseSimpleStatement(line: SourceLine): StatementAst {
-  const inputAssignment = /^([A-Za-z_][\w]*)\s*=\s*input\s+digit$/u.exec(line.text);
-  if (inputAssignment) {
-    const statement: InputStatementAst = {
-      kind: "input",
-      inputType: "digit",
-      target: inputAssignment[1]!,
-      line: line.line,
-    };
-    return statement;
-  }
-
-  const inputStatement = /^input\s+digit\s+([A-Za-z_][\w]*)$/u.exec(line.text);
-  if (inputStatement) {
-    const statement: InputStatementAst = {
-      kind: "input",
-      inputType: "digit",
-      target: inputStatement[1]!,
-      line: line.line,
-    };
-    return statement;
-  }
-
-  const showStatement = /^(?:show|display)\s+([A-Za-z_][\w]*)$/u.exec(line.text);
-  if (showStatement) {
-    return { kind: "show", display: showStatement[1]!, line: line.line };
-  }
-
-  const callStatement = /^call\s+([A-Za-z_][\w]*)$/u.exec(line.text);
-  if (callStatement) {
-    const statement: CallBlockStatementAst = {
-      kind: "call",
-      block: callStatement[1]!,
-      line: line.line,
-    };
-    return statement;
-  }
-
-  if (line.text.startsWith("pause ")) {
-    const statement: PauseStatementAst = {
-      kind: "pause",
-      expr: parseExpression(line.text.slice("pause ".length).trim(), line.line),
-      line: line.line,
-    };
-    return statement;
-  }
-
-  if (line.text.startsWith("halt ")) {
-    const statement: HaltStatementAst = {
-      kind: "halt",
-      expr: parseExpression(line.text.slice("halt ".length).trim(), line.line),
-      line: line.line,
-    };
-    return statement;
-  }
-
-  if (line.text.startsWith("trap ")) {
-    return parseTrap(line);
-  }
-
-  if (line.text.startsWith("ask ")) {
-    const match = /^ask\s+([A-Za-z_][\w]*)(?:\s+from\s+(.+))?$/u.exec(line.text);
-    if (!match) throw new ParseError("Invalid ask statement", line.line);
-    const statement: AskStatementAst = {
-      kind: "ask",
-      target: match[1]!,
-      line: line.line,
-    };
-    if (match[2]) statement.prompt = parseExpression(match[2], line.line);
-    return statement;
-  }
-
-  const askAssignment = /^([A-Za-z_][\w]*)\s*=\s*ask(?:\s+(.+))?$/u.exec(line.text);
-  if (askAssignment) {
-    const statement: AskStatementAst = {
-      kind: "ask",
-      target: askAssignment[1]!,
-      line: line.line,
-    };
-    if (askAssignment[2]) statement.prompt = parseExpression(askAssignment[2], line.line);
-    return statement;
-  }
-
-  const assignment = /^(?:set\s+)?([A-Za-z_][\w]*)\s*=\s*(.+)$/u.exec(line.text);
-  if (assignment) {
-    const statement: AssignStatementAst = {
-      kind: "assign",
-      target: assignment[1]!,
-      expr: parseExpression(assignment[2]!, line.line),
-      line: line.line,
-    };
-    return statement;
-  }
-
-  throw new ParseError(`Unknown statement '${line.text}'`, line.line);
-}
-
-function parseTrap(line: SourceLine): TrapStatementAst {
-  const match = /^trap\s+(zero|nonpositive|negative|gt_one|ge_100)\s+(.+)$/u.exec(line.text);
-  if (!match) {
-    throw new ParseError("Trap must look like 'trap zero expr'", line.line);
-  }
-  return {
-    kind: "trap",
-    trap: match[1] as TrapStatementAst["trap"],
-    expr: parseExpression(match[2]!, line.line),
-    line: line.line,
-  };
-}
-
-function parseCondition(text: string, line: number): ConditionAst {
-  const match = /^(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)$/u.exec(text);
-  if (!match) {
-    throw new ParseError("Invalid condition", line);
-  }
-  return {
-    left: parseExpression(match[1]!.trim(), line),
-    op: match[2] as ConditionAst["op"],
-    right: parseExpression(match[3]!.trim(), line),
-  };
 }
 
 export function parseExpression(text: string, line = 0): ExpressionAst {

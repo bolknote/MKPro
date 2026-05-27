@@ -133,7 +133,7 @@ program Demo {
   state {
     [displayed] pos: coord(floor 1..3, x 0..7) = 1
     [displayed] strength: resource 0..99 = 40 {
-      terminal at 0 show error
+      terminal at 0 show main
     }
     score: score 0..9 = 0 {
       reward skeleton 1
@@ -184,7 +184,7 @@ program Demo {
     expect(ast.v2?.boards[0]).toMatchObject({ name: "ocean", width: 10, height: 10, coordinateStyle: "two_digit" });
     expect(ast.v2?.fleets[0]?.ships).toMatchObject({ name: "enemy_ships", initial: "input.X", min: 0, max: 99 });
     expect(ast.v2?.worlds[0]?.name).toBe("demo_world");
-    expect(ast.v2?.state.find((field) => field.name === "strength")?.terminal).toMatchObject({ at: "0", show: "error" });
+    expect(ast.v2?.state.find((field) => field.name === "strength")?.terminal).toMatchObject({ at: "0", show: "main" });
     expect(ast.v2?.state.find((field) => field.name === "plans")?.clearedWhen).toBe("creature defeated");
     expect(ast.v2?.encounters[0]?.cases.map((encounterCase) => encounterCase.name)).toEqual(["empty", "skeleton"]);
     expect(ast.domains.some((domain) => domain.domainKind === "maze" && domain.name === "ocean")).toBe(true);
@@ -338,7 +338,7 @@ program Demo {
     style compact digits
   }
   turn {
-    challenge tile {
+    challenge tile as challenge using warning, memory, answer {
       success {
         score += 1
       }
@@ -354,6 +354,76 @@ program Demo {
     if (loop?.kind !== "loop") throw new Error("expected turn loop");
     expect(loop.body.some((statement) => statement.kind === "assign")).toBe(true);
     expect(loop.body.some((statement) => statement.kind === "if")).toBe(true);
+  });
+
+  it("rejects misleading v2 input and target references", () => {
+    expect(() =>
+      parseProgram(`
+target mk61
+program BadDigit {
+  input key: digit
+  turn {
+    match key {
+      10 => stop 1
+      otherwise => stop 0
+    }
+  }
+}
+`),
+    ).toThrow(/Input 'key' is digit, but match case '10' is not a digit/u);
+
+    expect(() =>
+      parseProgram(`
+target mk61
+program BadEndingShow {
+  ending done {
+    show missing_screen
+  }
+  turn {
+    end done
+  }
+}
+`),
+    ).toThrow(/Unknown ending display target 'missing_screen'/u);
+
+    expect(() =>
+      parseProgram(`
+target mk61
+program BadTerminal {
+  state {
+    fuel: resource 0..9 = 1 {
+      terminal at 0 show missing
+    }
+  }
+  turn {
+    stop 0
+  }
+}
+`),
+    ).toThrow(/Unknown terminal target 'missing'/u);
+
+    expect(() =>
+      parseProgram(`
+target mk61
+program BadChallenge {
+  input answer: number
+  state {
+    tile: enum = 0
+  }
+  screen warning {
+    show tile
+    style compact digits
+  }
+  turn {
+    challenge tile as challenge using warning, memory, answer {
+      success {
+        stop 1
+      }
+    }
+  }
+}
+`),
+    ).toThrow(/Unknown challenge memory screen 'memory'/u);
   });
 
   it("rejects low-level implementation hints", () => {
