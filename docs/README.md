@@ -27,7 +27,6 @@ steps.
 | 15 | [17-sign-digits-and-zeroes.md](./17-sign-digits-and-zeroes.md) | Sign-digits and non-normal zeroes |
 | 16 | [18-f-opcodes-and-demo-program.md](./18-f-opcodes-and-demo-program.md) | F-opcode insertion and demo-program lessons |
 | 17 | [13-m61-language.md](./13-m61-language.md) | The M61 language, human DSL, and automatic max optimization |
-| 18 | [06-m61-compatibility.md](./06-m61-compatibility.md) | Low-level compatibility notes for older compact sources |
 
 Hardware internals and chip-level detail live separately in
 [00-hardware.md](./00-hardware.md).
@@ -42,7 +41,6 @@ Hardware internals and chip-level detail live separately in
 | [03-command-reference.md](./03-command-reference.md) | Full MK-61 opcode table and timings |
 | [04-programming-cookbook.md](./04-programming-cookbook.md) | Stack recipes, branch/loop templates, debugging checklist |
 | [05-reading-lordbss-games.md](./05-reading-lordbss-games.md) | Lord_BSS listing notation and reverse-engineering workflow |
-| [06-m61-compatibility.md](./06-m61-compatibility.md) | Low-level compatibility surface and compact-source notes |
 | [07-flowcharts.md](./07-flowcharts.md) | Block diagrams and branch layout |
 | [08-numerical-errors.md](./08-numerical-errors.md) | Absolute/relative error, PMK precision |
 | [09-debugging-and-service.md](./09-debugging-and-service.md) | Program inspection, step mode, ЕГГОГ, UX |

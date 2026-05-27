@@ -5,9 +5,9 @@ Elektronika MK-61 program listings.
 
 This milestone focuses on the translator. The repo also contains emulator
 smoke/regression tests, but not a full semantic verifier for every optimizer
-rewrite yet. Optimizations and `egg` constructs that rely on undocumented
-behavior are reported as `unsafe-unverified` so you can see what still depends
-on target-profile facts.
+rewrite yet. Optimizations that rely on undocumented target behavior are
+reported as `unsafe-unverified` so you can see what still depends on
+target-profile facts.
 
 ## Run
 
@@ -30,9 +30,9 @@ m61c explain file.m61
 
 Flags:
 
-- `--opt safe|max` (default `max`). `safe` skips `egg` blocks. `max` keeps
-  low-level compatibility blocks, enables automatic intent/lowering tactics,
-  and reports unverified eggology choices explicitly.
+- `--opt safe|max` (default `max`). `safe` lowers conservatively. `max` keeps
+  automatic intent/lowering tactics and reports unverified target-profile
+  choices explicitly.
 - `--delivery manual|loader|hex` (default `hex`) controls which opcodes are
   considered enterable. Anything outside that delivery is reported as
   `unsafe-unverified`.
@@ -42,19 +42,15 @@ Flags:
 
 ## M61 Language
 
-M61 is a single language with a high-level game/application surface and a
-low-level compatibility surface for handwritten calculator code. New programs
-should describe intent: state, input, screens, rules, tables, and semantic
-hints. The compiler decides whether that becomes registers, stack scheduling,
-address constants, dark entries, overlays, X2/display bytes, or other MK-61
-tricks.
+M61 is a single V2 language for game/application intent. Programs describe
+state, input, screens, rules, tables, and semantic hints. The compiler decides
+whether that becomes registers, stack scheduling, address constants, dark
+entries, overlays, X2/display bytes, or other MK-61 tricks.
 
 ```m61
 target mk61
 budget 105 cells
 optimize size
-
-preload R9 = random_seed()
 
 program TinyGame {
   input key: digit
@@ -75,16 +71,15 @@ program TinyGame {
 
     match key {
       2, 4, 6, 8 => move(direction(key))
-      otherwise => stop 0
+      otherwise => end game_over
     }
+  }
+
+  ending game_over {
+    show 0
   }
 }
 ```
-
-Handwritten `machine`/`entry`/`core`/`egg` programs still compile as the
-low-level compatibility surface, but they are not a second public language.
-They exist for listings, experiments, and cases where we intentionally want to
-drop to raw calculator commands.
 
 `--opt safe` lowers conservatively. `--opt max` uses the `mk61_exact` target
 profile and automatic proofs to select aggressive tactics: indirect flow,
@@ -121,11 +116,8 @@ npm run typecheck
 npm test
 ```
 
-The test suite covers the parser, the opcode catalog, high-level lowering,
-low-level compatibility programs, the headless emulator loader smoke test, and
-snapshots of the example programs.
-Snapshots live in
-`tests/compiler/__snapshots__/`.
+The test suite covers the parser, the opcode catalog, V2 lowering, example
+program reports, and the headless emulator loader smoke test.
 
 ## Status
 
@@ -134,7 +126,7 @@ Snapshots live in
 - Conditional branches follow the MK-61 convention "true falls through, false
   jumps to the address".
 - Peephole optimization for redundant `X->П r ; П->X r` pairs at synthetic
-  boundaries; raw items from `core { }` and `egg { }` blocks are skipped.
+  boundaries in compiler-generated lowering.
 - M61 lowers high-level `program`, `state`, `screen`, `input`, `match`,
   `challenge`, resource updates, and rule calls through an
   intent/effect/layout report.

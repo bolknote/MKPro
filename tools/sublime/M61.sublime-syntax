@@ -36,7 +36,7 @@ contexts:
       scope: comment.line.number-sign.m61
 
   hints:
-    - match: '(\[)(\s*)(hot|rare|cold|displayed|hidden|temporary|persistent|wrap|saturate|trap|unordered|approx|exact|manual_entry|preload)(?=[,\]\s])'
+    - match: '(\[)(\s*)(hot|rare|cold|displayed|hidden|temporary|persistent|wrap|saturate|trap|unordered|approx|exact|manual_entry)(?=[,\]\s])'
       captures:
         1: punctuation.section.brackets.begin.m61
         3: storage.modifier.semantic-hint.m61
@@ -49,7 +49,7 @@ contexts:
       pop: true
     - match: ','
       scope: punctuation.separator.sequence.m61
-    - match: '\b(hot|rare|cold|displayed|hidden|temporary|persistent|wrap|saturate|trap|unordered|approx|exact|manual_entry|preload)\b'
+    - match: '\b(hot|rare|cold|displayed|hidden|temporary|persistent|wrap|saturate|trap|unordered|approx|exact|manual_entry)\b'
       scope: storage.modifier.semantic-hint.m61
     - include: illegal-low-level-hints
 
@@ -58,27 +58,19 @@ contexts:
       scope: invalid.illegal.low-level-hint.m61
 
   top-level-keywords:
-    - match: '^\s*(target|machine|budget|optimize|reference|preload|allow)\b'
+    - match: '^\s*(target|budget|optimize|reference)\b'
       scope: keyword.control.toplevel.m61
     - match: '\b(mk61|mk61_exact|steps|cells|hard|size|manual|loader|hex)\b'
       scope: constant.language.m61
 
   section-declarations:
-    - match: '^\s*(program|state|screen|ending|turn|rule|entry|proc|block|board|fleet|coord|maze|bitset|resource|event|random|fight|table|display)\b'
+    - match: '^\s*(program|state|screen|ending|turn|rule|board|fleet|world|encounters)\b'
       scope: keyword.declaration.block.m61
-    - match: '^\s*(shared)\s+(tail)\b'
-      captures:
-        1: keyword.declaration.block.m61
-        2: keyword.declaration.block.m61
-    - match: '^\s*(cache)\s+(search)\b'
-      captures:
-        1: keyword.declaration.block.m61
-        2: keyword.declaration.block.m61
-    - match: '\b(packed|code_overlay|exact|inline|tail|nohalt|at)\b'
+    - match: '\b(exact|inline|at)\b'
       scope: storage.modifier.block.m61
 
   control-keywords:
-    - match: '\b(input|show|style|read|match|otherwise|if|else|require|exists|stop|pause|ask|halt|loop|switch|dispatch|as|core|egg|unsafe|asm|trap|let|reward|by|call|move|remember|end|win|lose|count)\b'
+    - match: '\b(input|show|style|read|match|otherwise|if|else|require|exists|stop|as|trap|let|reward|by|move|remember|end|win|lose|count|challenge|success|failure)\b'
       scope: keyword.control.m61
     - match: '\b(and|or|not|has|clear|set|from|to|in|around|north|south|east|west|up|down)\b'
       scope: keyword.operator.word.m61

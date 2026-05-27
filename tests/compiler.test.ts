@@ -40,7 +40,6 @@ describe("M61 compiler", () => {
     const reference = source("examples/cave-treasure-full.m61");
 
     expect(reference).not.toMatch(/\brecipe\b/iu);
-    expect(reference).not.toMatch(/\ballow\b/iu);
     expect(reference).not.toMatch(/core\s+exact/iu);
     expect(reference).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
     const result = compileM61(reference);
@@ -50,14 +49,13 @@ describe("M61 compiler", () => {
     expect(result.report.optimizations.some((optimization) => optimization.name === "game-intent-lowering")).toBe(true);
   });
 
-  it("compiles human-centered M61 without source allow switches", () => {
+  it("compiles human-centered M61 without source implementation switches", () => {
     const result = compileM61(source("examples/human.m61"));
 
     expect(result.report.ir.v2).toBe(true);
     expect(result.report.targetProfile).toBe("mk61_exact");
     expect(result.report.steps).toBeLessThanOrEqual(105);
     expect(result.report.steps).toBe(35);
-    expect(result.report.warnings.some((warning) => warning.includes("Deprecated allow-list"))).toBe(false);
     expect(result.report.candidates.some((candidate) => candidate.variant === "dark-indirect-table")).toBe(true);
     expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "code-data-overlay")).toBe(true);
     expect(result.report.proofs.some((proof) => proof.id === "value-ranges")).toBe(true);
@@ -66,8 +64,9 @@ describe("M61 compiler", () => {
     expect(result.report.optimizations.some((optimization) => optimization.name === "fl-unit-decrement")).toBe(true);
   });
 
-  it("removes unconditional jumps to the immediately following label", () => {
-    const result = compileM61(`
+  it("rejects removed low-level calculator syntax", () => {
+    expect(() =>
+      compileM61(`
 machine mk61
 entry main {
   core {
@@ -76,10 +75,8 @@ entry main {
     1
   }
 }
-`);
-
-    expect(result.steps.some((step) => step.comment === "next")).toBe(false);
-    expect(result.report.optimizations.some((optimization) => optimization.name === "jump-to-next-threading")).toBe(true);
+`),
+    ).toThrow(/Unexpected top-level line 'machine mk61'/u);
   });
 
   it("lowers simple let and if rules through generic intent", () => {
@@ -121,7 +118,6 @@ program SimpleRules {
   it("compiles the full cave reference through generic semantic lowerers", () => {
     const reference = source("examples/cave-treasure.m61");
 
-    expect(reference).not.toMatch(/\ballow\b/iu);
     expect(reference).not.toMatch(/core\s+exact/iu);
     expect(reference).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
     expect(reference).toMatch(/world cave: grid/u);
@@ -393,10 +389,11 @@ program SimpleRules {
     expect(calc.readRegister("e")).toBe("43,");
   });
 
-  it("reports automatic optimizer capabilities for compact programs", () => {
+  it("reports automatic optimizer capabilities for V2 programs", () => {
     const result = compileM61(source("examples/cave-sketch.m61"));
 
-    expect(result.report.ir.v1).toBe(true);
+    expect(result.report.ir.lowered).toBe(true);
+    expect(result.report.ir.v2).toBe(true);
     expect(result.report.optimizer.automatic).toBe(true);
     expect(result.report.optimizer.capabilities.some((capability) => capability.id === "x2-display-register")).toBe(true);
     expect(result.report.optimizer.capabilities.some((capability) => capability.id === "r0-alias-indirect")).toBe(true);

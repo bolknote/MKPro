@@ -162,7 +162,11 @@ Known effects include:
 - Some operations treat sign-digit numbers as positive, negative, or zero depending on the operation, so they are useful but fragile.
 - Special numbers with visually negative zero exponents can exist in more than one internal form. Many X2-affecting operations immediately destroy them by normalization.
 
-These tricks are usually for extreme memory savings, display effects, or compatibility with classic "eggolology" programs rather than everyday numerical work. See [16-hexadecimal-arithmetic.md](./16-hexadecimal-arithmetic.md) and [17-sign-digits-and-zeroes.md](./17-sign-digits-and-zeroes.md) for the detailed notes.
+These tricks are usually for extreme memory savings, display effects, or classic
+"eggolology" programs rather than everyday numerical work. See
+[16-hexadecimal-arithmetic.md](./16-hexadecimal-arithmetic.md) and
+[17-sign-digits-and-zeroes.md](./17-sign-digits-and-zeroes.md) for the detailed
+notes.
 
 ## Undocumented `F*` Opcodes
 

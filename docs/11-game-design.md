@@ -15,7 +15,7 @@ Games are not a distraction from serious programming. They train:
 - user I/O through `С/П` stops,
 - reading numeric output as symbols.
 
-They are also the stress test for emulator compatibility: classic listings assume
+They are also the stress test for emulator fidelity: classic listings assume
 specific stack, random, and display side effects.
 
 ## Two Game Architectures
@@ -163,7 +163,7 @@ Smoke tests for packaged games live under `tests/emulator/`.
 | `games/lordbss/` | Cleaned Lord_BSS listings + per-game `.md` |
 | `games/kei/` | OCR-derived treasure-cave material |
 | `examples/tiny-game.m61` | Minimal M61 game sketch |
-| `examples/cave-sketch.m61` | older compact sketch/baseline kept for compatibility |
+| `examples/cave-sketch.m61` | compact V2 cave sketch/baseline |
 | `examples/cave-treasure-full.m61` | hard high-level compactness reference |
 
 ## Sources

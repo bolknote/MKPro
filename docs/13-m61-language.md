@@ -6,9 +6,9 @@ dark entries, X2 tricks, overlays, or undocumented opcodes. Those are target
 profile capabilities of `mk61_exact`, and the optimizer may use them whenever
 its effect checks and emulator facts allow the rewrite.
 
-The examples in `examples/*.m61` are intentionally written in this human DSL.
-Older `machine`/`entry`/`core` syntax remains available for compatibility and
-experiments, but it is not the recommended style for new game sources.
+The examples in `examples/*.m61` are intentionally written in this V2 human
+DSL. M61 source starts with `target mk61` and one `program` block; raw
+calculator listing syntax is not part of the language.
 
 ## Shape
 
@@ -85,10 +85,9 @@ Only compilation metadata belongs outside `program`:
 - `optimize size`
 - `reference name`
 
-Game meaning belongs inside `program`. Top-level resource, bitset, maze, event,
-random, or packed-table blocks are compatibility-era notation; in the main M61
-language they should become `state`, `world`, `encounters`, rules, screens, and
-semantic hints. The compiler report shows which registers, overlays, setup
+Game meaning belongs inside `program`. Resource, bitset, maze, event, random,
+or packed-table facts should become `state`, `world`, `encounters`, rules,
+screens, and semantic hints. The compiler report shows which registers, overlays, setup
 constants, hex mantissas, random initialization, or other implementation tactics
 were selected.
 
@@ -112,7 +111,7 @@ Rules should stay at the level of game actions: `move player south`, `win
 safe_landing`, `plans clear pos`, `reward by value`, and normal formulas. The
 lowerer turns those into assignments, display commands, dispatch, and stops.
 
-Old v2 drafts mixed game facts with MK-61 tactics:
+Do not write setup or storage tactics as top-level implementation blocks:
 
 ```m61
 preload R9 = random_seed()
@@ -121,7 +120,7 @@ bitset plans { registers R1 R2 R3 generated_by calculator_random }
 table packed code_overlay giant_country_tables { floor_plans may_overlay address_cells }
 ```
 
-Current M61 keeps that in the game language:
+M61 keeps those facts in the game language:
 
 ```m61
 [displayed] strength: resource 0..99 = 40 {
@@ -397,8 +396,8 @@ through this fallback when no shape-specific backend covers the features.
 `reference` is report metadata only and must not change code generation. For
 known `games/*` references, the report resolves the original listing, counts the
 real addressed span (`max(address)+1`), occupied entries, and gaps, and keeps
-`referenceSteps` equal to that span for compatibility. Missing listings fall
-back to the budget with a warning.
+`referenceSteps` equal to that span for existing report consumers. Missing
+listings fall back to the budget with a warning.
 
 For these programs the report marks selected tactics, not source switches:
 indirect register flow, super-dark dispatch, cyclic/dark layout, code/data
@@ -520,6 +519,14 @@ candidates:
 - store/recall peephole: removes immediate `X->П r ; П->X r`;
 - branch-removal umbrella: replaces matched conditionals with branchless
   arithmetic, `К max`, `К |x|`, sign transforms, or boolean-masked updates;
+  `arithmetic-if-terminal-select` covers both boolean-flag `==`/`!=` forms
+  and full six-operator comparisons (`==`/`!=`/`<`/`<=`/`>`/`>=`) by lowering
+  the predicate to a `0..1` selector via `sign`/`max`/`abs`. A cost gate keeps
+  the branched form whenever it is shorter, so the rewrite never increases
+  size. When the branchless form is rejected by the cost gate, the report
+  records the rejection in `rejectedCandidates` (with branchless vs branched
+  cell counts) and marks the matching capability `considered` rather than
+  `candidate`, making it clear the rewrite was tried and not profitable;
 - setup-state extraction: moves setup values outside official program cells and
   records the required calculator state in the report;
 - automatic constants: reserves spare registers for expensive constants such as

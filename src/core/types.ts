@@ -40,16 +40,6 @@ export interface AppliedOptimization {
   unsafe: boolean;
 }
 
-export type AllowFeature =
-  | "undocumented"
-  | "dark_entries"
-  | "code_data_overlay"
-  | "address_constants"
-  | "display_bytes"
-  | "x2_clobber"
-  | "extra_cells"
-  | "error_stops";
-
 export interface OpcodeInfo {
   code: number;
   hex: string;
@@ -70,7 +60,6 @@ export interface ProgramAst {
   v2?: V2ProgramAst;
   preloads: PreloadAst[];
   domains: DomainAst[];
-  allows: AllowFeature[];
   states: StateAst[];
   displays: DisplayAst[];
   declarations: DeclarationAst[];
@@ -266,8 +255,7 @@ export type SemanticHint =
   | "unordered"
   | "approx"
   | "exact"
-  | "manual_entry"
-  | "preload";
+  | "manual_entry";
 
 export interface V2ProgramAst {
   kind: "v2_program";
@@ -882,6 +870,7 @@ export interface ReferenceReport {
 export interface OptimizerReport {
   automatic: boolean;
   active: number;
+  considered: number;
   candidate: number;
   blocked: number;
   planned: number;
@@ -892,16 +881,15 @@ export interface OptimizerCapabilityReport {
   id: string;
   category: "stack" | "flow" | "layout" | "data" | "display" | "trap" | "verification";
   source: "documented" | "mk61-delta" | "undocumented";
-  status: "active" | "candidate" | "blocked" | "planned";
+  status: "active" | "considered" | "candidate" | "blocked" | "planned";
   unsafe: boolean;
   detail: string;
   requires: string[];
 }
 
 export interface IrReport {
-  v1: boolean;
+  lowered: boolean;
   v2: boolean;
-  allowed: AllowFeature[];
   intentNodes: number;
   effectOps: number;
   layoutCells: number;

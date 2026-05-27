@@ -40,8 +40,8 @@ export function formatJson(result: CompileResult): string {
       report: {
         ...report,
         ir: {
-          compact: ir.v1,
-          highLevel: ir.v2,
+          lowered: ir.lowered,
+          v2: ir.v2,
           intentNodes: ir.intentNodes,
           effectOps: ir.effectOps,
           layoutCells: ir.layoutCells,
@@ -63,7 +63,7 @@ export function formatExplain(result: CompileResult): string {
     `Target profile: ${result.report.targetProfile}`,
     `Optimizer rules: automatic=${result.report.optimizer.automatic ? "yes" : "no"}; active=${result.report.optimizer.active}, candidates=${result.report.optimizer.candidate}, blocked=${result.report.optimizer.blocked}, planned=${result.report.optimizer.planned}`,
     `Budget: official=${result.report.budgetReport.officialSteps}, extra=${result.report.budgetReport.extraCells}, physical=${result.report.budgetReport.totalPhysicalCells}`,
-    `Intent IR: compact=${result.report.ir.v1 ? "yes" : "no"}, highLevel=${result.report.ir.v2 ? "yes" : "no"}; intent=${result.report.ir.intentNodes}, effects=${result.report.ir.effectOps}, cells=${result.report.ir.layoutCells}`,
+    `Intent IR: lowered=${result.report.ir.lowered ? "yes" : "no"}, v2=${result.report.ir.v2 ? "yes" : "no"}; intent=${result.report.ir.intentNodes}, effects=${result.report.ir.effectOps}, cells=${result.report.ir.layoutCells}`,
   ];
   if (result.report.reference) {
     const reference = result.report.reference;
@@ -109,7 +109,7 @@ export function formatExplain(result: CompileResult): string {
     }
   }
 
-  if ((result.report.ir.v1 || result.report.ir.v2) && result.report.optimizer.capabilities.length > 0) {
+  if ((result.report.ir.lowered || result.report.ir.v2) && result.report.optimizer.capabilities.length > 0) {
     lines.push("", "Optimizer Capabilities:");
     for (const capability of result.report.optimizer.capabilities.slice(0, 12)) {
       lines.push(

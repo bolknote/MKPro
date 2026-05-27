@@ -143,7 +143,6 @@ export function compileM61(
     candidates,
   );
 
-  collectV1Warnings(ast, opts, warnings);
   context.compileProgram();
   const optimized = optimizeItems(context.items, opts, optimizations, unsafeUnverified);
   const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, targetProfile);
@@ -488,9 +487,8 @@ function tryCompileGameIntentProgram(
     preloads: selectedBackend.preloads,
     ...(referenceResult?.report === undefined ? {} : { reference: referenceResult.report }),
     ir: {
-      v1: ast.domains.length > 0,
+      lowered: true,
       v2: ast.v2 !== undefined,
-      allowed: ast.allows,
       intentNodes: intent.stateRoles.length + intent.domains.length + intent.rules.length,
       effectOps: effectIr.length,
       layoutCells: steps.length,
@@ -1741,7 +1739,17 @@ class EmitContext {
 
     const ordinaryCost = estimateOrdinaryIfCost(statement);
     const selectedCost = estimateExpressionCost(selected.expr) + 1;
-    if (selectedCost >= ordinaryCost) return false;
+    if (selectedCost >= ordinaryCost) {
+      this.candidates.push({
+        site: `if@${statement.line}`,
+        variant: selected.name,
+        steps: selectedCost,
+        selected: false,
+        reason: `Branchless ${selected.name} estimated at ${selectedCost} cells; ordinary branched form was shorter (${ordinaryCost}).`,
+        unsafe: false,
+      });
+      return false;
+    }
 
     this.compileExpression(selected.expr);
     if (selected.kind === "assign") {
@@ -1771,7 +1779,17 @@ class EmitContext {
 
     const ordinaryCost = estimateOrdinaryIfCost(first) + estimateOrdinaryIfCost(second);
     const selectedCost = estimateExpressionCost(selected.expr) + 1;
-    if (selectedCost >= ordinaryCost) return false;
+    if (selectedCost >= ordinaryCost) {
+      this.candidates.push({
+        site: `if@${first.line}+${second.line}`,
+        variant: selected.name,
+        steps: selectedCost,
+        selected: false,
+        reason: `Branchless ${selected.name} estimated at ${selectedCost} cells; paired branched form was shorter (${ordinaryCost}).`,
+        unsafe: false,
+      });
+      return false;
+    }
 
     this.compileExpression(selected.expr);
     this.emitStore(selected.target, `${selected.name} ${selected.target}`, first.line);
@@ -3653,19 +3671,6 @@ function uniqueRoles(roles: CellRole[]): CellRole[] {
   return [...new Set(roles)];
 }
 
-function collectV1Warnings(ast: ProgramAst, options: CompileOptions, warnings: string[]): void {
-  if (!hasV1(ast)) return;
-  if (ast.allows.length > 0) {
-    warnings.push("Deprecated allow-list ignored: mk61_exact exposes machine features automatically and the verifier gates their use.");
-  }
-  if (options.opt === "safe") {
-    warnings.push("--opt safe is a diagnostic mode; production size optimization uses mk61_exact features automatically.");
-  }
-  if (options.opt === "max") {
-    warnings.push("M61 optimizer now treats machine tricks as target-profile capabilities; unproved high-level effects are rejected.");
-  }
-}
-
 type BranchRemovalCandidate = BranchAssignCandidate | BranchTerminalCandidate;
 
 interface BranchAssignCandidate {
@@ -4510,9 +4515,8 @@ function estimateNumberCost(raw: string): number {
 
 function buildIrReport(ast: ProgramAst, items: MachineItem[], steps: number): CompileReport["ir"] {
   return {
-    v1: hasV1(ast),
+    lowered: hasLoweredIr(ast),
     v2: ast.v2 !== undefined,
-    allowed: ast.allows,
     intentNodes: countIntentNodes(ast),
     effectOps: items.filter((item) => item.kind !== "label").length,
     layoutCells: steps,
@@ -4537,6 +4541,9 @@ function buildOptimizerReport(
   const selectedCandidateVariants = new Set(
     candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant),
   );
+  const consideredCandidateVariants = new Set(
+    candidates.filter((candidate) => !candidate.selected).map((candidate) => candidate.variant),
+  );
   const capabilities = optimizerCapabilities.map((capability) => {
     const missing = capability.requires.filter((feature) => !targetSupports(targetProfile, feature));
     const safeBlocked = capability.unsafe && options.opt === "safe";
@@ -4545,6 +4552,8 @@ function buildOptimizerReport(
       status = "active";
     } else if (safeBlocked || missing.length > 0) {
       status = "blocked";
+    } else if (capability.activeWhen.some((name) => consideredCandidateVariants.has(name))) {
+      status = "considered";
     }
     return {
       id: capability.id,
@@ -4559,6 +4568,7 @@ function buildOptimizerReport(
   return {
     automatic: true,
     active: capabilities.filter((capability) => capability.status === "active").length,
+    considered: capabilities.filter((capability) => capability.status === "considered").length,
     candidate: capabilities.filter((capability) => capability.status === "candidate").length,
     blocked: capabilities.filter((capability) => capability.status === "blocked").length,
     planned: capabilities.filter((capability) => capability.status === "planned").length,
@@ -5054,20 +5064,19 @@ function stripCandidateUnsafe(candidate: CandidateReport): CandidateReport {
   return { ...candidate, unsafe: false };
 }
 
-function hasV1(ast: ProgramAst): boolean {
+function hasLoweredIr(ast: ProgramAst): boolean {
   return (
     ast.preloads.length > 0 ||
     ast.domains.length > 0 ||
-    ast.allows.length > 0 ||
     ast.states.length > 0 ||
     ast.displays.length > 0 ||
     ast.blocks.length > 0 ||
-    ast.entries.some((entry) => containsV1Statement(entry.body)) ||
-    ast.procs.some((proc) => containsV1Statement(proc.body))
+    ast.entries.some((entry) => containsLoweredStatement(entry.body)) ||
+    ast.procs.some((proc) => containsLoweredStatement(proc.body))
   );
 }
 
-function containsV1Statement(statements: StatementAst[]): boolean {
+function containsLoweredStatement(statements: StatementAst[]): boolean {
   for (const statement of statements) {
     if (
       statement.kind === "input" ||
@@ -5077,14 +5086,14 @@ function containsV1Statement(statements: StatementAst[]): boolean {
     ) {
       return true;
     }
-    if (statement.kind === "loop" && containsV1Statement(statement.body)) return true;
+    if (statement.kind === "loop" && containsLoweredStatement(statement.body)) return true;
     if (statement.kind === "if") {
-      if (containsV1Statement(statement.thenBody)) return true;
-      if (statement.elseBody && containsV1Statement(statement.elseBody)) return true;
+      if (containsLoweredStatement(statement.thenBody)) return true;
+      if (statement.elseBody && containsLoweredStatement(statement.elseBody)) return true;
     }
     if (statement.kind === "switch") {
-      if (statement.cases.some((switchCase) => containsV1Statement(switchCase.body))) return true;
-      if (statement.defaultBody && containsV1Statement(statement.defaultBody)) return true;
+      if (statement.cases.some((switchCase) => containsLoweredStatement(switchCase.body))) return true;
+      if (statement.defaultBody && containsLoweredStatement(statement.defaultBody)) return true;
     }
   }
   return false;
@@ -5093,7 +5102,6 @@ function containsV1Statement(statements: StatementAst[]): boolean {
 function countIntentNodes(ast: ProgramAst): number {
   return (
     countV2IntentNodes(ast) +
-    ast.allows.length +
     ast.preloads.length +
     ast.domains.reduce((sum, domain) => sum + 1 + domain.lines.length, 0) +
     ast.states.reduce((sum, state) => sum + 1 + state.fields.length, 0) +

@@ -2,108 +2,79 @@ import { describe, expect, it } from "vitest";
 import { ParseError, parseProgram } from "../../src/core/index.ts";
 
 describe("parser", () => {
-  it("requires 'machine mk61'", () => {
-    expect(() => parseProgram("entry main {\n}")).toThrow(ParseError);
+  it("requires 'target mk61'", () => {
+    expect(() =>
+      parseProgram(`
+program MissingTarget {
+  turn {
+    stop 0
+  }
+}
+`),
+    ).toThrow(/Missing 'target mk61'/u);
   });
 
-  it("requires at least one entry", () => {
-    expect(() => parseProgram("machine mk61\n")).toThrow(ParseError);
+  it("requires one V2 program block", () => {
+    expect(() => parseProgram("target mk61\n")).toThrow(/one V2 program block/u);
   });
 
-  it("rejects unsupported machine names", () => {
-    expect(() => parseProgram("machine bk0010\nentry main {\n}")).toThrow(
-      /Unsupported machine/u,
+  it("rejects unsupported target names", () => {
+    expect(() =>
+      parseProgram(`
+target bk0010
+program Bad {
+  turn {
+    stop 0
+  }
+}
+`),
+    ).toThrow(
+      /Unsupported target/u,
     );
   });
 
-  it("parses storage hints with prefer/fixed and Latin/Cyrillic registers", () => {
-    const ast = parseProgram(`
-machine mk61
-store x = 1 prefer R3
-store y fixed Re
-entry main {
-  pause x
-}
-`);
-    expect(ast.declarations[0]).toMatchObject({
-      name: "x",
-      storage: { mode: "prefer", register: "3" },
-    });
-    expect(ast.declarations[1]).toMatchObject({
-      name: "y",
-      storage: { mode: "fixed", register: "e" },
-    });
+  it("rejects removed low-level top-level syntax", () => {
+    for (const source of [
+      "machine mk61",
+      "entry main {",
+      "store x = 1",
+      "preload R9 = random_seed()",
+      "allow undocumented",
+      "resource strength {",
+    ]) {
+      expect(() => parseProgram(`target mk61\n${source}\n`)).toThrow(/Unexpected top-level line/u);
+    }
   });
 
   it("rejects extra tokens in expressions", () => {
-    expect(() => parseProgram("machine mk61\nstore x = 1 2\nentry main {\n pause x\n}")).toThrow(
+    expect(() =>
+      parseProgram(`
+target mk61
+program BadExpression {
+  state {
+    score: counter 0..9 = 0
+  }
+  turn {
+    score = 1 2
+  }
+}
+`),
+    ).toThrow(
       ParseError,
     );
   });
 
-  it("assigns unique scratchIds to nested switches", () => {
+  it("strips comments", () => {
     const ast = parseProgram(`
-machine mk61
-entry main {
-  switch 1 {
-    case 1 {
-      switch 2 {
-        case 2 {
-          halt 1
-        }
-      }
-    }
+target mk61 // top
+# also a comment
+program Comments {
+  turn {
+    stop 1 // trailing
   }
 }
 `);
-    const outer = ast.entries[0]?.body[0];
-    expect(outer?.kind).toBe("switch");
-    if (outer?.kind !== "switch") throw new Error("expected switch");
-    const inner = outer.cases[0]?.body[0];
-    expect(inner?.kind).toBe("switch");
-    if (inner?.kind !== "switch") throw new Error("expected nested switch");
-    expect(outer.scratchId).not.toBe(inner.scratchId);
-  });
-
-  it("strips comments", () => {
-    const ast = parseProgram(`
-machine mk61 // top
-# also a comment
-entry main {
-  pause 1 // trailing
-}
-`);
     expect(ast.machine).toBe("mk61");
-  });
-
-  it("parses preload function calls and rejects bare preload names", () => {
-    const ast = parseProgram(`
-target mk61
-preload R9 = random_seed()
-entry main {
-  halt 0
-}
-`);
-
-    expect(ast.preloads[0]).toMatchObject({ register: "9", value: "random_seed()" });
-    expect(() =>
-      parseProgram(`
-target mk61
-preload R9 = random_seed
-entry main {
-  halt 0
-}
-`),
-    ).toThrow(/bare name/u);
-    expect(() =>
-      parseProgram(`
-target mk61
-preload R9 = random_seed + 1
-entry main {
-  halt 0
-}
-`),
-    ).toThrow(/literal or an explicit function call/u);
   });
 
   it("parses human-centered M61 programs", () => {
@@ -321,7 +292,7 @@ program Bad {
     ).toThrow(/Duplicate ending 'done'/u);
   });
 
-  it("rejects old v2 top-level implementation blocks", () => {
+  it("rejects removed setup and domain implementation blocks", () => {
     expect(() =>
       parseProgram(`
 target mk61
@@ -332,7 +303,7 @@ program Bad {
   }
 }
 `),
-    ).toThrow(/v2 source must not use preload/u);
+    ).toThrow(/Unexpected top-level line 'preload R9 = random_seed\(\)'/u);
     expect(() =>
       parseProgram(`
 target mk61
@@ -345,7 +316,7 @@ program Bad {
   }
 }
 `),
-    ).toThrow(/Move v2 domain intent/u);
+    ).toThrow(/Unexpected top-level line 'resource strength \{'/u);
   });
 
   it("parses challenge blocks as game intent", () => {

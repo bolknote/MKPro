@@ -1,5 +1,4 @@
 import type {
-  AllowFeature,
   AskStatementAst,
   AssignStatementAst,
   BlockAst,
@@ -90,14 +89,12 @@ class M61Parser {
 
   parseProgram(): ProgramAst {
     let machine: "mk61" | undefined;
-    let targetProfile: "mk61_exact" | undefined;
     let budget: number | undefined;
     let reference: string | undefined;
     let optimize: "size" | undefined;
     let v2: V2ProgramAst | undefined;
     const preloads: PreloadAst[] = [];
     const domains: DomainAst[] = [];
-    const allows: AllowFeature[] = [];
     const states: StateAst[] = [];
     const displays: DisplayAst[] = [];
     const declarations: DeclarationAst[] = [];
@@ -116,15 +113,6 @@ class M61Parser {
           throw new ParseError(`Unsupported target '${value}'`, line.line);
         }
         machine = "mk61";
-        targetProfile = "mk61_exact";
-        this.index += 1;
-      } else if (line.text.startsWith("machine ")) {
-        const value = line.text.slice("machine ".length).trim().toLowerCase();
-        if (value !== "mk61") {
-          throw new ParseError(`Unsupported machine '${value}'`, line.line);
-        }
-        machine = "mk61";
-        targetProfile ??= "mk61_exact";
         this.index += 1;
       } else if (line.text.startsWith("budget ")) {
         budget = parseBudget(line);
@@ -137,13 +125,6 @@ class M61Parser {
         this.index += 1;
       } else if (line.text.startsWith("benchmark ")) {
         throw new ParseError("Use 'reference name' instead of deprecated benchmark metadata", line.line);
-      } else if (line.text.startsWith("preload ")) {
-        if (v2 !== undefined) throw new ParseError("Move setup intent into program/state; v2 source must not use preload", line.line);
-        preloads.push(parsePreload(line));
-        this.index += 1;
-      } else if (line.text.startsWith("allow ")) {
-        allows.push(...parseAllow(line));
-        this.index += 1;
       } else if (line.text.startsWith("program ")) {
         if (v2 !== undefined) {
           throw new ParseError("Only one program block is supported", line.line);
@@ -156,49 +137,19 @@ class M61Parser {
         entries.push(...lowered.entries);
         procs.push(...lowered.procs);
         blocks.push(...lowered.blocks);
-      } else if (isDomainHeader(line.text)) {
-        if (v2 !== undefined) {
-          throw new ParseError("Move v2 domain intent into program world/state/encounters blocks", line.line);
-        }
-        domains.push(this.parseDomain());
-      } else if (line.text.startsWith("state")) {
-        states.push(this.parseState());
-      } else if (line.text.startsWith("display packed")) {
-        displays.push(this.parseDisplay());
-      } else if (
-        line.text.startsWith("store ") ||
-        line.text.startsWith("temp ") ||
-        line.text.startsWith("const ")
-      ) {
-        declarations.push(this.parseDeclaration());
-      } else if (line.text.startsWith("entry")) {
-        entries.push(this.parseEntry());
-      } else if (line.text.startsWith("proc")) {
-        procs.push(this.parseProc());
-      } else if (line.text.startsWith("block ") || line.text.startsWith("shared tail")) {
-        blocks.push(this.parseBlock());
       } else {
         throw new ParseError(`Unexpected top-level line '${line.text}'`, line.line);
       }
     }
 
-    if (!machine) throw new ParseError("Missing 'machine mk61' or 'target mk61'", 1);
-    if (v2 !== undefined && preloads.length > 0) {
-      throw new ParseError("Move setup intent into program/state; v2 source must not use preload", preloads[0]!.line);
-    }
-    if (v2 !== undefined && domains.some((domain) => domain.line < v2.line)) {
-      throw new ParseError("Move v2 domain intent into program world/state/encounters blocks", domains[0]!.line);
-    }
-    if (entries.length === 0) {
-      throw new ParseError("Program must contain at least one entry block", 1);
-    }
+    if (!machine) throw new ParseError("Missing 'target mk61'", 1);
+    if (v2 === undefined) throw new ParseError("Program must contain one V2 program block", 1);
 
     const program: ProgramAst = {
       machine,
-      targetProfile: targetProfile ?? "mk61_exact",
+      targetProfile: "mk61_exact",
       preloads,
       domains,
-      allows: uniqueAllows(allows),
       states,
       displays,
       declarations,
@@ -1109,7 +1060,6 @@ const semanticHints: SemanticHint[] = [
   "approx",
   "exact",
   "manual_entry",
-  "preload",
 ];
 
 const forbiddenLowLevelHints = new Set([
@@ -2151,46 +2101,6 @@ function isNumericLiteralText(text: string): boolean {
   return /^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/iu.test(text.trim());
 }
 
-function isPreloadLiteralText(text: string): boolean {
-  const trimmed = text.trim();
-  return (
-    isNumericLiteralText(trimmed) ||
-    /^[+-]?(?=.*[0-9A-FА-ЕГа-еГг])[\dA-FА-ЕГа-еГгEe.,_+-]+$/u.test(trimmed)
-  );
-}
-
-function isPreloadCallText(text: string): boolean {
-  return /^[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)?\([^()]*\)$/u.test(text.trim());
-}
-
-function parsePreload(line: SourceLine): PreloadAst {
-  const match = /^preload\s+R?([0-9A-Ea-eАВСДЕавсдеXYZTxyz t]+)\s*=\s*(.+)$/u.exec(line.text);
-  if (!match) throw new ParseError("Preload must look like 'preload R4 = 2'", line.line);
-  const value = match[2]!.trim();
-  if (/^[A-Za-z_][\w]*$/u.test(value)) {
-    throw new ParseError(
-      `Preload value '${value}' looks like a bare name; use a literal or a function call such as '${value}()'`,
-      line.line,
-    );
-  }
-  if (!isPreloadLiteralText(value) && !isPreloadCallText(value)) {
-    throw new ParseError(
-      `Preload value '${value}' must be a calculator literal or an explicit function call`,
-      line.line,
-    );
-  }
-  return {
-    kind: "preload",
-    register: match[1]!.replace(/\s+/gu, ""),
-    value,
-    line: line.line,
-  };
-}
-
-function isDomainHeader(text: string): boolean {
-  return /^(coord|maze|bitset|resource|event|random|fight|cache\s+search|table|clobber|uses)\b/u.test(text);
-}
-
 function parseDomainHeader(line: SourceLine): Omit<DomainAst, "kind" | "lines" | "line"> {
   const text = line.text.endsWith("{") ? line.text.slice(0, -1).trim() : line.text;
   const match = /^(cache\s+search|coord|maze|bitset|resource|event|random|fight|table|clobber|uses)(?:\s+([A-Za-z_][\w]*))?/u.exec(
@@ -2215,35 +2125,6 @@ function parseFormalAddress(text: string, line: number): number {
     if (high <= 9 && low <= 9) return high * 10 + low;
   }
   throw new ParseError(`Invalid formal address '${text}'`, line);
-}
-
-function parseAllow(line: SourceLine): AllowFeature[] {
-  return line.text
-    .slice("allow ".length)
-    .split(",")
-    .flatMap((part) => part.trim().split(/\s+/u))
-    .filter((part) => part.length > 0)
-    .map((part) => parseAllowFeature(part, line.line));
-}
-
-function parseAllowFeature(text: string, line: number): AllowFeature {
-  const normalized = text.replace(/-/gu, "_").toLowerCase();
-  const allowed: AllowFeature[] = [
-    "undocumented",
-    "dark_entries",
-    "code_data_overlay",
-    "address_constants",
-    "display_bytes",
-    "x2_clobber",
-    "extra_cells",
-    "error_stops",
-  ];
-  if (allowed.includes(normalized as AllowFeature)) return normalized as AllowFeature;
-  throw new ParseError(`Unknown allow feature '${text}'`, line);
-}
-
-function uniqueAllows(allows: AllowFeature[]): AllowFeature[] {
-  return [...new Set(allows)];
 }
 
 function parseStateField(line: SourceLine): StateFieldAst {
