@@ -6,6 +6,7 @@ import { jumpThread } from "../../src/core/passes/jump-thread.ts";
 import { jumpToNextThreading } from "../../src/core/passes/jump-to-next.ts";
 import { lastXReuse } from "../../src/core/passes/last-x-reuse.ts";
 import { computeLiveness } from "../../src/core/passes/liveness-analysis.ts";
+import { redundantPrologueElimination } from "../../src/core/passes/redundant-prologue.ts";
 import { storeRecallPeephole } from "../../src/core/passes/store-recall-peephole.ts";
 import type { IrOp, RegisterName } from "../../src/core/types.ts";
 
@@ -231,6 +232,54 @@ describe("ir passes on synthetic programs", () => {
     const result = deadStoreElimination.run(program, ctx);
     expect(result.applied).toBe(0);
     expect(result.ops.length).toBe(2);
+  });
+
+  it("redundant-prologue-elimination drops a duplicated display+halt before a jump back to its loop head", () => {
+    const program: IrOp[] = [
+      label("main"),
+      recall("1"),
+      recall("2"),
+      plain(0x10, "+"),
+      halt(),
+      recall("3"),
+      store("3"),
+      recall("1"),
+      recall("2"),
+      plain(0x10, "+"),
+      halt(),
+      jump("main"),
+    ];
+    const result = redundantPrologueElimination.run(program, ctx);
+    expect(result.applied).toBe(1);
+    expect(result.ops.length).toBe(program.length - 4);
+    expect(result.ops[result.ops.length - 1]!.kind).toBe("jump");
+  });
+
+  it("redundant-prologue-elimination refuses to fire when the only body is the duplicate prologue", () => {
+    const program: IrOp[] = [
+      label("main"),
+      plain(0x00, "0"),
+      halt(),
+      jump("main"),
+    ];
+    const result = redundantPrologueElimination.run(program, ctx);
+    expect(result.applied).toBe(0);
+    expect(result.ops.length).toBe(program.length);
+  });
+
+  it("redundant-prologue-elimination refuses when prologues differ on a recall", () => {
+    const program: IrOp[] = [
+      label("main"),
+      recall("1"),
+      halt(),
+      recall("3"),
+      store("3"),
+      recall("2"),
+      halt(),
+      jump("main"),
+    ];
+    const result = redundantPrologueElimination.run(program, ctx);
+    expect(result.applied).toBe(0);
   });
 
   it("return acts as a true terminator that breaks fall-through analysis", () => {
