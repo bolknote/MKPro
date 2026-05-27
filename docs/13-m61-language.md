@@ -112,6 +112,28 @@ Rules should stay at the level of game actions: `move player south`, `win
 safe_landing`, `plans clear pos`, `reward by value`, and normal formulas. The
 lowerer turns those into assignments, display commands, dispatch, and stops.
 
+Old v2 drafts mixed game facts with MK-61 tactics:
+
+```m61
+preload R9 = random_seed()
+resource strength { register Ra initial 40 terminal_at 0 }
+bitset plans { registers R1 R2 R3 generated_by calculator_random }
+table packed code_overlay giant_country_tables { floor_plans may_overlay address_cells }
+```
+
+Current M61 keeps that in the game language:
+
+```m61
+[displayed] strength: resource 0..99 = 40 {
+  terminal at 0 show error
+}
+
+[persistent] plans: bitset {
+  generated random
+  cleared when creature defeated
+}
+```
+
 ## State Configuration
 
 State fields can carry their own game configuration:
