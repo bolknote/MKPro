@@ -238,7 +238,7 @@ class IK13 {
       case 27: this.s = acc.sigma; break;
       case 28: this.s = this.s1 | acc.sigma; break;
       case 29: this.s1 = acc.sigma; break;
-      case 30: this.s1 = this.s1; break;
+      case 30: break;
       case 31: this.s1 = this.s1 | acc.sigma; break;
       case 32:
         this.stack[(this.tickIndex + 2) % 42] = this.stack[(this.tickIndex + 1) % 42];

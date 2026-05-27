@@ -25,12 +25,19 @@ program LunarLander {
     style compact digits sign
   }
 
+  ending safe_landing {
+    show 777
+  }
+
+  ending crash {
+    show 666
+  }
+
   turn {
     show flight
     read burn
 
-    // Integer-gravity approximation keeps this example inside today's generic lowerer.
-    accel = burn * 10 / fuel - 10
+    accel = burn * 10 / fuel - 9.8
     height = height - speed - accel / 2
     speed = speed + accel
     fuel -= burn
@@ -43,10 +50,10 @@ program LunarLander {
   rule touchdown {
     show landed
     if abs(speed) <= 5 {
-      stop 777
+      win safe_landing
     }
     else {
-      stop 666
+      lose crash
     }
   }
 }

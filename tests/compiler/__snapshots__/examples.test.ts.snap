@@ -83,13 +83,13 @@ exports[`examples > compiles basic.m61 deterministically > basic.listing 1`] = `
 `;
 
 exports[`examples > compiles lunar.m61 deterministically > lunar.hex 1`] = `
-"00: 63 64 10 62 10 50 41 6C
-08: 12 62 13 6C 11 40 63 64
+"00: 63 64 10 62 10 50 41 6B
+08: 12 62 13 6E 11 40 63 64
 16: 11 60 02 13 11 43 64 60
 24: 10 44 62 61 11 42 63 02
 32: 11 5C 51 63 64 10 50 05
-40: 64 31 11 59 49 6E 50 51
-48: 51 6D 50 51 00"
+40: 64 31 11 59 49 6D 50 51
+48: 51 6C 50 51 00"
 `;
 
 exports[`examples > compiles lunar.m61 deterministically > lunar.listing 1`] = `
@@ -102,11 +102,11 @@ exports[`examples > compiles lunar.m61 deterministically > lunar.listing 1`] = `
    04 |  10  | +                       | packed display combine
    05 |  50  | С/П                     | show flight
    06 |  41  | X->П 1                  | input burn
-   07 |  6C  | П->X c                  | preload const 10
+   07 |  6B  | П->X b                  | preload const 10
    08 |  12  | *                       | expr *
    09 |  62  | П->X 2                  | recall fuel
    10 |  13  | /                       | expr /
-   11 |  6C  | П->X c                  | preload const 10
+   11 |  6E  | П->X e                  | preload const 9.8
    12 |  11  | -                       | expr -
    13 |  40  | X->П 0                  | set accel
    14 |  63  | П->X 3                  | recall height
@@ -140,11 +140,11 @@ exports[`examples > compiles lunar.m61 deterministically > lunar.listing 1`] = `
    42 |  11  | -                       | condition compare
    43 |  59  | F x>=0                  | false branch for <=
    44 |  49  | 49                      | false branch for <=
-   45 |  6E  | П->X e                  | preload const 777
+   45 |  6D  | П->X d                  | preload const 777
    46 |  50  | С/П                     | halt
    47 |  51  | БП                      | if end
    48 |  51  | 51                      | if end
-   49 |  6D  | П->X d                  | preload const 666
+   49 |  6C  | П->X c                  | preload const 666
    50 |  50  | С/П                     | halt
    51 |  51  | БП                      | loop back
    52 |  00  | 00                      | loop back"

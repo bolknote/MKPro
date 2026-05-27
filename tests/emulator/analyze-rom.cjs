@@ -26,10 +26,6 @@ function syncProgramFingerprint(syncRom, addr) {
   return { addr, cells: cells.join(','), nonzero: nz.length, head: nz.slice(0, 4).join(',') };
 }
 
-function microSeq(microRom, indices) {
-  return indices.map((i) => microRom[i]).join('|');
-}
-
 // User opcode -> ROM command index = low_nibble + 16*high_nibble = opcode itself
 // when r[36]=low, r[39]=high of program byte
 for (const [chipName, chip] of CHIPS) {

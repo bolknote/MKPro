@@ -52,6 +52,10 @@ program GridRescue {
     style compact digits letters hex
   }
 
+  ending ignored {
+    show 0
+  }
+
   turn {
     show main
     read key
@@ -61,7 +65,7 @@ program GridRescue {
       2, 4, 6, 8, 5, -5 => move(direction(key))
       0 => open_wall
       10 => scan
-      otherwise => stop 0
+      otherwise => end ignored
     }
   }
 
@@ -98,7 +102,7 @@ program GridRescue {
     match fight_key {
       0 => retreat
       10 => engage
-      otherwise => stop 0
+      otherwise => end ignored
     }
   }
 

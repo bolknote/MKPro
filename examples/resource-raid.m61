@@ -52,6 +52,10 @@ program ResourceRaid {
     style compact digits letters hex
   }
 
+  ending ignored {
+    show 0
+  }
+
   turn {
     show main
     read key
@@ -61,7 +65,7 @@ program ResourceRaid {
       2, 4, 6, 8, 5, -5 => move(direction(key))
       0 => unlock
       10 => loot
-      otherwise => stop 0
+      otherwise => end ignored
     }
   }
 
@@ -98,7 +102,7 @@ program ResourceRaid {
     match alarm_key {
       0 => hide
       10 => force
-      otherwise => stop 0
+      otherwise => end ignored
     }
   }
 

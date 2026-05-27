@@ -15,6 +15,10 @@ program CounterGame {
     style compact digits letters hex
   }
 
+  ending ignored {
+    show 0
+  }
+
   turn {
     show main
     read key
@@ -22,7 +26,7 @@ program CounterGame {
     match key {
       2 => gain
       8 => spend
-      otherwise => stop 0
+      otherwise => end ignored
     }
   }
 

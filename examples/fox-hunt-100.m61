@@ -1,0 +1,67 @@
+target mk61
+budget 105 cells
+optimize size
+reference anvarov_fox_hunt_100
+
+// Based on Serge Anvarov's "Fox Hunt 100": find hidden foxes on a 10x10 board.
+// A probe returns how many foxes share a row, column, or diagonal with the cell.
+
+program FoxHunt100 {
+  input probe: number
+  input fox_count: number
+
+  board field: 10x10 {
+    coordinate decimal_pair 0.0..9.9
+  }
+
+  fleet foxes on field {
+    ships remaining_foxes 1..100 = input.Y
+    generated random
+    cleared when fox found
+    terminal at 0 show all_found
+  }
+
+  state {
+    [displayed] bearing: counter 0..8 = 0
+    [temporary] cell: coord(x 0..9, y 0..9) optional
+  }
+
+  screen report {
+    show cell, bearing, remaining_foxes
+    style compact digits sign
+  }
+
+  ending all_found {
+    show -8
+  }
+
+  turn {
+    read probe
+    cell = probe
+
+    if foxes has cell {
+      found_fox
+    }
+    else {
+      scan_from_cell
+    }
+  }
+
+  rule found_fox {
+    foxes clear cell
+    remaining_foxes -= 1
+
+    if remaining_foxes <= 0 {
+      win all_found
+    }
+    else {
+      bearing = 0 - remaining_foxes
+      show report
+    }
+  }
+
+  rule scan_from_cell {
+    bearing = line_count(foxes, cell)
+    show report
+  }
+}

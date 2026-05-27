@@ -7,13 +7,18 @@
     "m61c": "./bin/m61c.mjs"
   },
   "scripts": {
+    "lint": "eslint .",
     "m61c": "node ./bin/m61c.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^24.0.0",
+    "eslint": "^10.4.0",
+    "globals": "^17.6.0",
     "typescript": "^5.9.0",
+    "typescript-eslint": "^8.60.0",
     "vitest": "^3.2.0"
   }
 }

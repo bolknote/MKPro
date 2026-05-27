@@ -70,6 +70,10 @@ program GiantsCountry {
     style compact digits
   }
 
+  ending exhausted {
+    show 0
+  }
+
   turn {
     show cave
     read action
@@ -93,7 +97,7 @@ program GiantsCountry {
       pos = pos + 1
     }
 
-    require strength > 0 else stop 0
+    require strength > 0 else end exhausted
   }
 
   rule jump_floor {
@@ -103,7 +107,7 @@ program GiantsCountry {
       3 => jump_to_1
       otherwise => show cave
     }
-    require strength > 0 else stop 0
+    require strength > 0 else end exhausted
   }
 
   rule jump_to_2 {

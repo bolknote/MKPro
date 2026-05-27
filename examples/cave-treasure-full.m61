@@ -53,6 +53,14 @@ program CaveTreasure {
     style compact digits letters hex
   }
 
+  ending ignored {
+    show 0
+  }
+
+  ending exit_found {
+    show 1
+  }
+
   turn {
     show main
     read key
@@ -62,14 +70,14 @@ program CaveTreasure {
       2, 4, 6, 8, 5, -5 => move(direction(key))
       0 => break_wall
       10 => search
-      otherwise => stop 0
+      otherwise => end ignored
     }
   }
 
   [hot] rule move(dir) {
     let next = pos + dir
     if exit_reached == 1 {
-      stop 1
+      win exit_found
     }
     if walls has next {
       blocked = next
@@ -103,7 +111,7 @@ program CaveTreasure {
     match fight_key {
       0 => decline_fight
       10 => accept_fight
-      otherwise => stop 0
+      otherwise => end ignored
     }
   }
 

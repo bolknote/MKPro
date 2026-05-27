@@ -31,6 +31,10 @@ program CounterGame {
     style compact digits letters hex
   }
 
+  ending game_over {
+    show 0
+  }
+
   turn {
     show main
     read key
@@ -38,7 +42,7 @@ program CounterGame {
     match key {
       2 => gain
       8 => spend
-      otherwise => stop 0
+      otherwise => end game_over
     }
   }
 
@@ -88,6 +92,26 @@ semantic hints. The compiler report shows which registers, overlays, setup
 constants, hex mantissas, random initialization, or other implementation tactics
 were selected.
 
+## Program Blocks
+
+The current human DSL surface inside `program` is:
+
+- `input name: digit|number` for values read from the player.
+- `state { ... }` for game state, resources, scores, masks, coordinates, and
+  scratch fields.
+- `screen name { show ...; style ... }` for reusable display layouts.
+- `ending name { show ... }` for named terminal outcomes.
+- `board` and `fleet` for fixed-board games such as Sea Battle.
+- `world` for movement games with coordinates, generated rooms, doors, walls,
+  and vertical wrapping.
+- `encounters expr { ... }` for event tables.
+- `turn { ... }` for the main game loop and `rule name { ... }` for named
+  actions.
+
+Rules should stay at the level of game actions: `move player south`, `win
+safe_landing`, `plans clear pos`, `reward by value`, and normal formulas. The
+lowerer turns those into assignments, display commands, dispatch, and stops.
+
 ## State Configuration
 
 State fields can carry their own game configuration:
@@ -113,6 +137,37 @@ state {
 Use `resource` for consumable values, `score` for accumulated rewards, and
 `bitset` for generated map or encounter masks. Register placement and compact
 packing are compiler decisions.
+
+## Endings
+
+Use `ending` for named outcomes instead of scattering stop-display numbers
+through rules:
+
+```m61
+ending safe_landing {
+  show 777
+}
+
+ending crash {
+  show 666
+}
+
+rule touchdown {
+  if abs(speed) <= 5 {
+    win safe_landing
+  }
+  else {
+    lose crash
+  }
+}
+```
+
+`win name`, `lose name`, and `end name` lower to the ending's display/stop
+sequence. The names carry the game meaning; the number stays in one declaration.
+If the ending's `show` value is numeric, the compiler can lower it directly to a
+terminal value; otherwise it shows the named display and stops.
+Ending names must be unique, and `win`/`lose`/`end` must reference a declared
+ending. A typo is a parse error, not an implicit `stop 0`.
 
 ## Board And Fleet Blocks
 
@@ -150,6 +205,9 @@ The repository examples are grouped by the game shape they exercise:
   spatial resources, generated masks, encounters, and challenge blocks.
 - `sea-battle.m61` demonstrates `board` and `fleet` for non-movement board
   games.
+- `fox-hunt-100.m61`, `minesweeper-9x9.m61`, `treasure-hunter-2.m61`, and
+  `dangerous-loading.m61` are larger Anvarov ports used to check how well the
+  human DSL covers dense 105-cell MK-61 games.
 
 ## World Blocks
 
@@ -176,6 +234,41 @@ This is intentionally about world rules, not storage. The compiler lowers it to
 the GameIntent pipeline and reports whether it used shared tails, code/data
 overlay, constants as branch targets, X2, display-byte packing, or other MK-61
 features.
+
+Movement rules should use `move` when they mean movement rather than coordinate
+arithmetic:
+
+```m61
+rule move_south {
+  move player south remember blocked
+  show cave_screen
+}
+
+rule move_up {
+  move player up remember blocked
+}
+```
+
+`move pos north/south/east/west/up/down` lowers to the current compact coordinate
+update for the position's world display format. For example,
+`packed_decimal_zero_run` uses the same small fractional deltas that older cave
+sources wrote by hand, while generic grid movement uses integer deltas. `move pos
+by expr` is available when the movement amount is deliberately computed.
+`remember name` stores the proposed destination before assigning it, which keeps
+collision and wall rules readable.
+
+## Formulas
+
+V2 formulas use the same expression parser as the compiler backend. Decimal
+constants are valid inside larger formulas, so numeric games can write:
+
+```m61
+accel = burn * 10 / fuel - 9.8
+```
+
+The compiler validates that an expression can be lowered before it enters the
+game-intent path. It no longer rejects formulas simply because a decimal literal
+appears next to variables or operators.
 
 ## Encounter Tables
 

@@ -147,7 +147,7 @@ export const MK61_EXACT_PROFILE: TargetProfile = {
   ],
 };
 
-export function targetProfileFor(machine: "mk61"): TargetProfile {
+export function targetProfileFor(machine: string): TargetProfile {
   if (machine !== "mk61") {
     throw new Error(`Unsupported target machine '${machine}'`);
   }

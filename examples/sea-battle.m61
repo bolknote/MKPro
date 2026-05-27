@@ -37,14 +37,12 @@ program SeaBattle {
     style compact digits sign
   }
 
-  screen enemy_win {
+  ending enemy_win {
     show 33333331
-    style compact digits
   }
 
-  screen player_win {
+  ending player_win {
     show -8
-    style compact digits letters sign
   }
 
   turn {
@@ -69,8 +67,7 @@ program SeaBattle {
     own_ships -= 1
 
     if own_ships <= 0 {
-      show enemy_win
-      stop 33333331
+      lose enemy_win
     }
     else {
       calculator_turn
@@ -85,8 +82,7 @@ program SeaBattle {
       enemy_ships -= 1
 
       if enemy_ships <= 0 {
-        show player_win
-        stop -8
+        win player_win
       }
       else {
         show battle

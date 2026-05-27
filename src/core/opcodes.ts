@@ -1,6 +1,5 @@
 import type { DeliveryMode, OpcodeInfo, RegisterName } from "./types.ts";
 
-const HEX = "0123456789ABCDEF";
 const REGISTERS: RegisterName[] = [
   "0",
   "1",

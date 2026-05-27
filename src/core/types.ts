@@ -245,6 +245,7 @@ export interface V2ProgramAst {
   inputs: V2InputAst[];
   state: V2StateFieldAst[];
   screens: V2ScreenAst[];
+  endings: V2EndingAst[];
   boards: V2BoardAst[];
   fleets: V2FleetAst[];
   worlds: V2WorldAst[];
@@ -317,6 +318,14 @@ export interface V2FleetShipsAst {
   min?: number;
   max?: number;
   initial: string;
+}
+
+export interface V2EndingAst {
+  kind: "v2_ending";
+  name: string;
+  show: string;
+  hints: SemanticHint[];
+  line: number;
 }
 
 export interface V2WorldAst {
@@ -404,6 +413,8 @@ export type V2StatementAst =
   | V2IfStatementAst
   | V2RequireStatementAst
   | V2ChallengeStatementAst
+  | V2MoveStatementAst
+  | V2EndStatementAst
   | V2MatchStatementAst
   | V2InvokeStatementAst
   | V2AssignStatementAst
@@ -467,6 +478,24 @@ export interface V2ChallengeStatementAst {
   warningScreen: string;
   memoryScreen: string;
   answerInput: string;
+  hints: SemanticHint[];
+  line: number;
+}
+
+export interface V2MoveStatementAst {
+  kind: "v2_move";
+  target: string;
+  direction?: "north" | "south" | "east" | "west" | "up" | "down";
+  expr?: string;
+  remember?: string;
+  hints: SemanticHint[];
+  line: number;
+}
+
+export interface V2EndStatementAst {
+  kind: "v2_end";
+  outcome: string;
+  mode: "end" | "win" | "lose";
   hints: SemanticHint[];
   line: number;
 }

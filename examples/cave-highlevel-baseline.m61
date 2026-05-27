@@ -53,6 +53,10 @@ program CaveHighlevelBaseline {
     style compact digits letters hex
   }
 
+  ending ignored {
+    show 0
+  }
+
   turn {
     show cave_screen
     read command
@@ -66,37 +70,32 @@ program CaveHighlevelBaseline {
       5 => move_up
       0 => break_wall
       10 => search_cache
-      otherwise => stop 0
+      otherwise => end ignored
     }
   }
 
   rule move_south {
-    blocked = player + 0.0000002
-    player = blocked
+    move player south remember blocked
     show cave_screen
   }
 
   rule move_west {
-    blocked = player + 0.000001
-    player = blocked
+    move player west remember blocked
     show cave_screen
   }
 
   rule move_east {
-    blocked = player - 0.000001
-    player = blocked
+    move player east remember blocked
     show cave_screen
   }
 
   rule move_north {
-    blocked = player - 0.0000002
-    player = blocked
+    move player north remember blocked
     show cave_screen
   }
 
   rule move_up {
-    blocked = player + 1
-    player = blocked
+    move player up remember blocked
     show cave_screen
   }
 

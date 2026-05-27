@@ -1,0 +1,125 @@
+target mk61
+budget 105 cells
+optimize size
+reference anvarov_treasure_hunter_2
+
+// Based on Serge Anvarov's "Treasure Hunter 2": generated nine-floor maze,
+// treasures, holes, ladders, and a left-wall exit on the first floor.
+
+program TreasureHunter2 {
+  input action: digit
+
+  state {
+    [displayed] pos: coord(floor 1..9, x 0..6, y 0..0) = 9
+    [displayed] floor_view: packed = 0
+    [displayed] treasure: score 0..99 = 0 {
+      reward treasure 1
+    }
+
+    [persistent] floor: counter 1..9 = 9
+    [persistent] room: counter 0..6 = 0
+    [persistent] known_floors: bitset {
+      generated random
+      cleared when floor visited
+    }
+
+    [temporary] tile: enum = 0
+  }
+
+  world cave: vertical_maze {
+    position pos {
+      floors 1..9
+      rooms 0..6
+      display floor_plan
+      start 9
+    }
+
+    generated random
+    player decimal_point
+    door symbol 0 costs treasure 0
+    wall symbol 8 blocks left costs treasure 0
+    vertical wrap 9 -> 8 -> 7 -> 6 -> 5 -> 4 -> 3 -> 2 -> 1
+  }
+
+  screen maze {
+    show pos, floor_view, treasure
+    style compact digits letters sign
+  }
+
+  screen exit {
+    show treasure
+    style compact digits sign
+  }
+
+  ending escaped {
+    show treasure
+  }
+
+  turn {
+    show maze
+    read action
+
+    match action {
+      4 => move_left
+      6 => move_right
+      8 => climb
+      2 => descend
+      0 => punch_hole
+      otherwise => show maze
+    }
+  }
+
+  rule move_left {
+    if floor == 1 {
+      if room == 0 {
+        win escaped
+      }
+    }
+
+    room -= 1
+    move pos by -1
+    inspect_cell
+  }
+
+  rule move_right {
+    room += 1
+    move pos by 1
+    inspect_cell
+  }
+
+  rule climb {
+    if tile == 3 {
+      floor += 1
+      move pos up
+    }
+    show maze
+  }
+
+  rule descend {
+    floor -= 1
+    move pos down
+    inspect_cell
+  }
+
+  rule punch_hole {
+    known_floors clear pos
+    descend
+  }
+
+  rule inspect_cell {
+    tile = cell_at(cave, pos)
+
+    match tile {
+      1 => collect_treasure
+      2 => descend
+      3 => show maze
+      otherwise => show maze
+    }
+  }
+
+  rule collect_treasure {
+    treasure += 1
+    known_floors clear pos
+    show maze
+  }
+}

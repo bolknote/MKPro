@@ -2,8 +2,32 @@ import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
-const ROM = require("./rom.cjs");
-const { MK61 } = require("./mk61.cjs");
+
+interface ChipRom {
+  команды: number[];
+}
+
+type RomModule = Record<"ИК1302" | "ИК1303" | "ИК1306", ChipRom>;
+
+interface RunResult {
+  stopped: boolean;
+  frames: number;
+}
+
+interface Mk61Instance {
+  setRegister(register: string, value: string): void;
+  loadProgram(codes: number[]): void;
+  press(key: string): void;
+  runUntilStable(options: { maxFrames: number; stableFrames: number }): RunResult;
+  displayText(): string;
+  readRegister(register: string): string;
+  programCounter(): number;
+}
+
+type Mk61Constructor = new (options?: { extended?: boolean }) => Mk61Instance;
+
+const ROM = require("./rom.cjs") as RomModule;
+const { MK61 } = require("./mk61.cjs") as { MK61: Mk61Constructor };
 
 const CHIP_NAMES = ["ИК1302", "ИК1303", "ИК1306"] as const;
 
@@ -19,7 +43,9 @@ function runSingleOpcode(
   code: number,
   options: { extended?: boolean; x?: string; y?: string } = {},
 ) {
-  const calc = new MK61({ extended: options.extended });
+  const calc = options.extended === undefined
+    ? new MK61()
+    : new MK61({ extended: options.extended });
   calc.setRegister("x", options.x ?? "5");
   if (options.y) calc.setRegister("y", options.y);
   calc.loadProgram([code, 0x50]);
@@ -133,8 +159,8 @@ describe("emulator ROM discoveries", () => {
     const extensionWords = new Set<number>();
 
     for (let opcode = 0xf0; opcode <= 0xff; opcode += 1) {
-      dispatcherWords.add(ROM.ИК1302.команды[opcode]);
-      extensionWords.add(ROM.ИК1306.команды[opcode]);
+      dispatcherWords.add(ROM.ИК1302.команды[opcode]!);
+      extensionWords.add(ROM.ИК1306.команды[opcode]!);
       expect(ROM.ИК1302.команды[opcode]).not.toBe(ROM.ИК1306.команды[opcode]);
     }
 
@@ -143,9 +169,9 @@ describe("emulator ROM discoveries", () => {
   });
 
   it("marks control-flow opcodes with the wide sync4 path used by dark-address handling", () => {
-    expect(sync4(ROM.ИК1302.команды[0x51])).toBeGreaterThan(31);
-    expect(sync4(ROM.ИК1302.команды[0x52])).toBeGreaterThan(31);
-    expect(sync4(ROM.ИК1302.команды[0x80])).toBeGreaterThan(31);
+    expect(sync4(ROM.ИК1302.команды[0x51]!)).toBeGreaterThan(31);
+    expect(sync4(ROM.ИК1302.команды[0x52]!)).toBeGreaterThan(31);
+    expect(sync4(ROM.ИК1302.команды[0x80]!)).toBeGreaterThan(31);
   });
 
   it("executes formal side-branch addresses through Anvarov's address-space map", () => {
@@ -153,7 +179,7 @@ describe("emulator ROM discoveries", () => {
       { formal: 0xa8, actual: 3 },
       { formal: 0xc5, actual: 13 },
     ]) {
-      const program = new Array(105).fill(0x50);
+      const program = Array<number>(105).fill(0x50);
       program[0] = 0x51;
       program[1] = formal;
       program[actual] = 0x07;
@@ -167,7 +193,7 @@ describe("emulator ROM discoveries", () => {
   });
 
   it("executes only one command at super-dark formal addresses before the extra address", () => {
-    const program = new Array(105).fill(0x50);
+    const program = Array<number>(105).fill(0x50);
     program[0] = 0x51;
     program[1] = 0xfb;
     // FB maps to actual address 49, then goes to extra address 02.

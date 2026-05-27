@@ -64,7 +64,7 @@ contexts:
       scope: constant.language.m61
 
   section-declarations:
-    - match: '^\s*(program|state|screen|turn|rule|entry|proc|block|board|fleet|coord|maze|bitset|resource|event|random|fight|table|display)\b'
+    - match: '^\s*(program|state|screen|ending|turn|rule|entry|proc|block|board|fleet|coord|maze|bitset|resource|event|random|fight|table|display)\b'
       scope: keyword.declaration.block.m61
     - match: '^\s*(shared)\s+(tail)\b'
       captures:
@@ -78,9 +78,9 @@ contexts:
       scope: storage.modifier.block.m61
 
   control-keywords:
-    - match: '\b(input|show|style|read|match|otherwise|if|else|require|exists|stop|pause|ask|halt|loop|switch|dispatch|as|core|egg|unsafe|asm|trap|let|reward|by|call)\b'
+    - match: '\b(input|show|style|read|match|otherwise|if|else|require|exists|stop|pause|ask|halt|loop|switch|dispatch|as|core|egg|unsafe|asm|trap|let|reward|by|call|move|remember|end|win|lose)\b'
       scope: keyword.control.m61
-    - match: '\b(and|or|not|has|clear|set|from|to|in)\b'
+    - match: '\b(and|or|not|has|clear|set|from|to|in|north|south|east|west|up|down)\b'
       scope: keyword.operator.word.m61
 
   domain-keywords:

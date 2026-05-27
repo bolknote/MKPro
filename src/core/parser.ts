@@ -36,12 +36,14 @@ import type {
   SemanticHint,
   V2BoardAst,
   V2CollectionStatementAst,
+  V2EndingAst,
   V2EncounterTableAst,
   V2FleetAst,
   V2InputAst,
   V2InvokeStatementAst,
   V2MatchCaseAst,
   V2MatchStatementAst,
+  V2MoveStatementAst,
   V2PredicateAst,
   V2ProgramAst,
   V2RewardStatementAst,
@@ -218,6 +220,7 @@ class M61Parser {
     const inputs: V2InputAst[] = [];
     const state: V2StateFieldAst[] = [];
     const screens: V2ScreenAst[] = [];
+    const endings: V2EndingAst[] = [];
     const boards: V2BoardAst[] = [];
     const fleets: V2FleetAst[] = [];
     const worlds: V2WorldAst[] = [];
@@ -235,6 +238,7 @@ class M61Parser {
           inputs,
           state,
           screens,
+          endings,
           boards,
           fleets,
           worlds,
@@ -258,6 +262,10 @@ class M61Parser {
       }
       if (hinted.text.startsWith("screen ")) {
         screens.push(this.parseV2Screen(hinted));
+        continue;
+      }
+      if (hinted.text.startsWith("ending ")) {
+        endings.push(this.parseV2Ending(hinted));
         continue;
       }
       if (hinted.text.startsWith("board ")) {
@@ -375,6 +383,32 @@ class M61Parser {
       throw new ParseError("Screen block must contain show/style lines", line.line);
     }
     throw new ParseError("Unclosed screen block", header.line);
+  }
+
+  private parseV2Ending(hinted: { text: string; hints: SemanticHint[] }): V2EndingAst {
+    const header = this.next();
+    const match = /^ending\s+([A-Za-z_][\w]*)\s*\{$/u.exec(hinted.text);
+    if (!match) throw new ParseError("Ending must look like 'ending name {'", header.line);
+    let show: string | undefined;
+    while (!this.done()) {
+      const line = this.next();
+      if (line.text === "}") {
+        if (show === undefined) throw new ParseError("Ending block must contain show line", header.line);
+        return {
+          kind: "v2_ending",
+          name: match[1]!,
+          show,
+          hints: hinted.hints,
+          line: header.line,
+        };
+      }
+      if (line.text.startsWith("show ")) {
+        show = line.text.slice("show ".length).trim();
+        continue;
+      }
+      throw new ParseError("Ending block must contain show lines", line.line);
+    }
+    throw new ParseError("Unclosed ending block", header.line);
   }
 
   private parseV2Board(hinted: { text: string; hints: SemanticHint[] }): V2BoardAst {
@@ -1216,6 +1250,29 @@ function parseV2InlineStatement(
       line,
     };
   }
+  const move = /^move\s+([A-Za-z_][\w]*)(?:\s+(north|south|east|west|up|down)|\s+by\s+(.+?))(?:\s+remember\s+([A-Za-z_][\w]*))?$/u.exec(text);
+  if (move) {
+    const statement: V2MoveStatementAst = {
+      kind: "v2_move",
+      target: move[1]!,
+      hints,
+      line,
+    };
+    if (move[2] !== undefined) statement.direction = parseV2MoveDirection(move[2], line);
+    if (move[3] !== undefined) statement.expr = move[3].trim();
+    if (move[4] !== undefined) statement.remember = move[4]!;
+    return statement;
+  }
+  const end = /^(end|win|lose)\s+([A-Za-z_][\w]*)$/u.exec(text);
+  if (end) {
+    return {
+      kind: "v2_end",
+      mode: end[1] as "end" | "win" | "lose",
+      outcome: end[2]!,
+      hints,
+      line,
+    };
+  }
   const update = /^([A-Za-z_][\w]*)\s*(\+=|-=)\s*(.+)$/u.exec(text);
   if (update) {
     return {
@@ -1284,6 +1341,8 @@ function splitArgs(text: string): string[] {
 
 interface V2LoweringContext {
   ruleParams: Map<string, string[]>;
+  endings: Map<string, V2EndingAst>;
+  moveDeltas: Map<string, Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>>>;
 }
 
 function lowerV2Program(v2: V2ProgramAst): {
@@ -1294,8 +1353,11 @@ function lowerV2Program(v2: V2ProgramAst): {
   procs: ProcAst[];
   blocks: BlockAst[];
 } {
+  const endings = collectV2Endings(v2);
   const context: V2LoweringContext = {
     ruleParams: new Map(v2.rules.map((rule) => [rule.name, rule.params])),
+    endings,
+    moveDeltas: collectV2MoveDeltas(v2),
   };
   for (const table of v2.encounters) {
     context.ruleParams.set("encounter", [encounterParamName(table.expr)]);
@@ -1307,6 +1369,45 @@ function lowerV2Program(v2: V2ProgramAst): {
     entries: [lowerV2Entry(v2, context)],
     procs: [...v2.rules.map((rule) => lowerV2Rule(rule, context)), ...lowerV2EncounterRules(v2, context)],
     blocks: [],
+  };
+}
+
+function collectV2Endings(v2: V2ProgramAst): V2LoweringContext["endings"] {
+  const endings = new Map<string, V2EndingAst>();
+  for (const ending of v2.endings) {
+    if (endings.has(ending.name)) throw new ParseError(`Duplicate ending '${ending.name}'`, ending.line);
+    endings.set(ending.name, ending);
+  }
+  return endings;
+}
+
+function collectV2MoveDeltas(v2: V2ProgramAst): V2LoweringContext["moveDeltas"] {
+  const deltas = new Map<string, Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>>>();
+  for (const world of v2.worlds) {
+    if (world.position === undefined) continue;
+    deltas.set(world.position.name, moveDeltasForDisplay(world.position.display));
+  }
+  return deltas;
+}
+
+function moveDeltasForDisplay(display: string | undefined): Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>> {
+  if (display === "packed_decimal_zero_run") {
+    return {
+      south: "0.0000002",
+      north: "-0.0000002",
+      west: "0.000001",
+      east: "-0.000001",
+      up: "1",
+      down: "-1",
+    };
+  }
+  return {
+    south: "1",
+    north: "-1",
+    east: "10",
+    west: "-10",
+    up: "100",
+    down: "-100",
   };
 }
 
@@ -1540,6 +1641,7 @@ function collectV2ScratchFields(v2: V2ProgramAst): StateFieldAst[] {
         visit(statement.successBody);
         if (statement.failureBody) visit(statement.failureBody);
       }
+      if (statement.kind === "v2_move" && statement.remember !== undefined) add(statement.remember, statement.line);
     }
   }
 }
@@ -1674,6 +1776,10 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
       return [];
     case "v2_challenge":
       return lowerV2Challenge(statement, context);
+    case "v2_move":
+      return lowerV2Move(statement, context);
+    case "v2_end":
+      return lowerV2End(statement, context);
     case "v2_assign":
       return [{ kind: "assign", target: statement.target, expr: lowerV2Expression(statement.expr, statement.line), line: statement.line }];
     case "v2_update": {
@@ -1757,6 +1863,74 @@ function lowerV2Challenge(
       line: statement.line,
     },
   ];
+}
+
+function lowerV2Move(statement: V2MoveStatementAst, context: V2LoweringContext): StatementAst[] {
+  const delta = statement.expr ?? namedMoveDelta(statement.target, statement.direction, statement.line, context);
+  const move: AssignStatementAst = {
+    kind: "assign",
+    target: statement.target,
+    expr: {
+      kind: "binary",
+      op: "+",
+      left: { kind: "identifier", name: statement.target },
+      right: lowerV2Expression(delta, statement.line),
+    },
+    line: statement.line,
+  };
+  if (statement.remember === undefined) return [move];
+  return [
+    {
+      kind: "assign",
+      target: statement.remember,
+      expr: move.expr,
+      line: statement.line,
+    },
+    {
+      kind: "assign",
+      target: statement.target,
+      expr: { kind: "identifier", name: statement.remember },
+      line: statement.line,
+    },
+  ];
+}
+
+function lowerV2End(statement: Extract<V2StatementAst, { kind: "v2_end" }>, context: V2LoweringContext): StatementAst[] {
+  const ending = context.endings.get(statement.outcome);
+  if (ending === undefined) {
+    throw new ParseError(`Unknown ending '${statement.outcome}'`, statement.line);
+  }
+  if (isNumericLiteralText(ending.show)) {
+    return [{ kind: "halt", expr: parseExpression(ending.show, statement.line), line: statement.line }];
+  }
+  return [
+    { kind: "show", display: ending.show, line: statement.line },
+    { kind: "halt", expr: parseExpression("0", statement.line), line: statement.line },
+  ];
+}
+
+function namedMoveDelta(
+  target: string,
+  direction: V2MoveStatementAst["direction"],
+  line: number,
+  context: V2LoweringContext,
+): string {
+  if (direction === undefined) throw new ParseError("Move must specify a direction or 'by expr'", line);
+  return context.moveDeltas.get(target)?.[direction] ?? moveDeltasForDisplay(undefined)[direction] ?? "0";
+}
+
+function parseV2MoveDirection(text: string, line: number): NonNullable<V2MoveStatementAst["direction"]> {
+  switch (text) {
+    case "north":
+    case "south":
+    case "east":
+    case "west":
+    case "up":
+    case "down":
+      return text;
+    default:
+      throw new ParseError("Move direction must be north, south, east, west, up, or down", line);
+  }
 }
 
 function lowerV2Match(statement: V2MatchStatementAst, context: V2LoweringContext): DispatchStatementAst {

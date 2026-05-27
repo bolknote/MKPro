@@ -223,6 +223,65 @@ program Demo {
     expect(ast.procs.some((proc) => proc.name === "encounter")).toBe(true);
   });
 
+  it("parses and lowers v2 move statements and named endings", () => {
+    const ast = parseProgram(`
+target mk61
+program Demo {
+  state {
+    pos: coord optional
+    blocked: coord optional
+  }
+  ending escaped {
+    show 777
+  }
+  turn {
+    move pos east remember blocked
+    win escaped
+  }
+}
+`);
+
+    expect(ast.v2?.endings[0]).toMatchObject({ name: "escaped", show: "777" });
+    const loop = ast.entries[0]?.body[0];
+    expect(loop?.kind).toBe("loop");
+    if (loop?.kind !== "loop") throw new Error("expected loop");
+    expect(loop.body).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "assign", target: "blocked" }),
+      expect.objectContaining({ kind: "assign", target: "pos" }),
+      expect.objectContaining({ kind: "halt" }),
+    ]));
+  });
+
+  it("rejects unknown and duplicate v2 endings", () => {
+    expect(() =>
+      parseProgram(`
+target mk61
+program Bad {
+  turn {
+    win missing
+  }
+}
+`),
+    ).toThrow(/Unknown ending 'missing'/u);
+
+    expect(() =>
+      parseProgram(`
+target mk61
+program Bad {
+  ending done {
+    show 1
+  }
+  ending done {
+    show 2
+  }
+  turn {
+    end done
+  }
+}
+`),
+    ).toThrow(/Duplicate ending 'done'/u);
+  });
+
   it("rejects old v2 top-level implementation blocks", () => {
     expect(() =>
       parseProgram(`

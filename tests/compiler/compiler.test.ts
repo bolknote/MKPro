@@ -78,6 +78,26 @@ entry main {
     }
   });
 
+  it("accepts decimal constants inside v2 formulas", () => {
+    const result = compileOk(`
+target mk61
+budget 999 cells
+program DecimalFormula {
+  input burn: number
+  state {
+    fuel: resource 0..999 = 140
+    accel: packed = 0
+  }
+  turn {
+    accel = burn * 10 / fuel - 9.8
+    stop 0
+  }
+}
+`);
+
+    expect(result.steps.length).toBeGreaterThan(0);
+  });
+
   it("lowers 4x4 grid and packed-line helpers for tic-tac-toe style games", () => {
     const result = compileOk(`
 machine mk61

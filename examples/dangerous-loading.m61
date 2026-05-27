@@ -1,0 +1,111 @@
+target mk61
+budget 105 cells
+optimize size
+reference anvarov_dangerous_loading
+
+// Based on Serge Anvarov's "Dangerous Loading": ferry nine crates while a
+// monster telegraphs and then attacks one cell of the water lane.
+
+program DangerousLoading {
+  input move: digit
+
+  state {
+    [displayed] boat: coord(floor 1..1, x 1..8, y 0..0) = 8
+    [displayed] threat: coord(floor 1..1, x 1..8, y 0..0) = 3
+    [displayed] cargo_left: resource 0..9 = 9 {
+      terminal at 0 show delivered
+    }
+    [displayed] boats_left: resource 0..3 = 3 {
+      terminal at 0 show sunk
+    }
+    [persistent] loaded: flag = 0
+  }
+
+  world harbor: lane {
+    position boat {
+      floors 1..1
+      rooms 1..8
+      display pier_to_ship
+      start 8
+    }
+
+    generated random
+    player decimal_point
+    door symbol 8 costs boats_left 1
+    wall symbol 0 blocks edge costs boats_left 0
+    vertical wrap 1 -> 1
+  }
+
+  screen water {
+    show cargo_left, boat, threat, boats_left
+    style compact digits letters sign
+  }
+
+  ending delivered {
+    show 777
+  }
+
+  ending sunk {
+    show -999
+  }
+
+  turn {
+    show water
+    read move
+
+    match move {
+      4 => row_left
+      6 => row_right
+      5 => wait
+      otherwise => wait
+    }
+  }
+
+  rule row_left {
+    move boat by -1
+    resolve_turn
+  }
+
+  rule row_right {
+    move boat by 1
+    resolve_turn
+  }
+
+  rule wait {
+    resolve_turn
+  }
+
+  rule resolve_turn {
+    if boat == threat {
+      lose_boat
+    }
+    else {
+      handle_dock
+    }
+
+    threat = int(random() * 8) + 1
+    show water
+  }
+
+  rule handle_dock {
+    if boat == 1 {
+      loaded = 1
+    }
+
+    if boat == 8 {
+      if loaded == 1 {
+        cargo_left -= 1
+        loaded = 0
+      }
+    }
+
+    require cargo_left > 0 else win delivered
+  }
+
+  rule lose_boat {
+    boats_left -= 1
+    loaded = 0
+    boat = 8
+    require boats_left > 0 else lose sunk
+  }
+}

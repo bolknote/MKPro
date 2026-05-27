@@ -38,6 +38,10 @@ program CaveSketch {
     style compact digits letters
   }
 
+  ending ignored {
+    show 0
+  }
+
   turn {
     show cave_screen
     read command
@@ -50,24 +54,24 @@ program CaveSketch {
       8 => move_north
       0 => break_wall
       10 => search_cache
-      otherwise => stop 0
+      otherwise => end ignored
     }
   }
 
   rule move_south {
-    player += 2
+    move player south
   }
 
   rule move_west {
-    player += 4
+    move player west
   }
 
   rule move_east {
-    player += 6
+    move player east
   }
 
   rule move_north {
-    player += 8
+    move player north
   }
 
   rule break_wall {

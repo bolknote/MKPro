@@ -18,6 +18,14 @@ program TinyDialGame {
     style compact digits sign
   }
 
+  ending ignored {
+    show 0
+  }
+
+  ending success {
+    show 6
+  }
+
   turn {
     show dial_screen
     read key
@@ -25,7 +33,7 @@ program TinyDialGame {
     match key {
       4 => drain
       6 => win
-      otherwise => stop 0
+      otherwise => end ignored
     }
   }
 
@@ -35,6 +43,6 @@ program TinyDialGame {
   }
 
   rule win {
-    stop 6
+    win success
   }
 }

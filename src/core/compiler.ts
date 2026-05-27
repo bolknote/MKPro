@@ -7,7 +7,7 @@ import {
   registerFromText,
   registerIndex,
 } from "./opcodes.ts";
-import { parseProgram } from "./parser.ts";
+import { parseExpression, parseProgram } from "./parser.ts";
 import { targetProfileFor, targetSupports, type TargetProfile } from "./targetProfile.ts";
 import type {
   AppliedOptimization,
@@ -787,6 +787,9 @@ function collectUnsupportedV2Statements(ast: NonNullable<ProgramAst["v2"]>): Arr
         visit(statement.successBody);
         if (statement.failureBody) visit(statement.failureBody);
       }
+      if (statement.kind === "v2_move" && statement.expr !== undefined && !isSimpleCompilerExpression(statement.expr)) {
+        unsupported.push({ text: `move ${statement.target} by ${statement.expr}`, line: statement.line });
+      }
       if (statement.kind === "v2_collection") {
         if (!isSimpleCompilerExpression(statement.item)) {
           unsupported.push({ text: `${statement.collection} ${statement.op} ${statement.item}`, line: statement.line });
@@ -839,8 +842,12 @@ function isSimpleCompilerExpression(text: string): boolean {
     .replace(/\binput\.[XY]\b/gu, "0");
   const direction = /^direction\((.+)\)$/u.exec(normalized.trim());
   if (direction) normalized = direction[1]!;
-  if (/\./u.test(normalized) && !/^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/iu.test(normalized)) return false;
-  return true;
+  try {
+    parseExpression(normalized);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function formatDomainName(domain: ProgramAst["domains"][number]): string {

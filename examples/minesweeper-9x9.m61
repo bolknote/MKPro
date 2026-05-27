@@ -1,0 +1,67 @@
+target mk61
+budget 105 cells
+optimize size
+reference anvarov_minesweeper_9x9
+
+// Based on Serge Anvarov's "Minesweeper 9x9": the calculator owns the hidden
+// mine mask and reports the number of mines adjacent to each requested cell.
+
+program Minesweeper9x9 {
+  input cell: number
+  input mine_count: number
+
+  board minefield: 9x9 {
+    coordinate two_digit 11..99
+  }
+
+  state {
+    [persistent] mines: bitset {
+      generated random
+      cleared when game restarted
+    }
+
+    [persistent] opened: bitset {
+      cleared when game restarted
+    }
+
+    [displayed] probe: coord(x 1..9, y 1..9) optional
+    [displayed] clue: counter 0..8 = 0
+    [displayed] safe_left: resource 0..81 = 81 {
+      terminal at 0 show cleared_all
+    }
+  }
+
+  screen result {
+    show probe, clue, safe_left
+    style compact digits sign
+  }
+
+  ending exploded {
+    show -999
+  }
+
+  ending cleared_all {
+    show 777
+  }
+
+  turn {
+    read cell
+    probe = cell
+
+    if mines has probe {
+      lose exploded
+    }
+    else {
+      reveal_safe_cell
+    }
+  }
+
+  rule reveal_safe_cell {
+    opened set probe
+    safe_left -= 1
+    clue = neighbor_count(mines, probe)
+    show result
+
+    require safe_left > 0 else win cleared_all
+  }
+}
