@@ -20,7 +20,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["tools/anvarov-console-loader.js"],
+    files: ["tools/emulator-console-loader.js"],
     languageOptions: {
       globals: globals.browser,
     },

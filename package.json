@@ -7,7 +7,7 @@
     "m61c": "./bin/m61c.mjs"
   },
   "scripts": {
-    "build:browser": "esbuild src/browser/anvarov.ts --bundle --format=iife --global-name=M61AnvarovBundle --platform=browser --target=es2022 --outfile=dist/m61-anvarov.user.js",
+    "build:browser": "esbuild src/browser/emulator-bridge.ts --bundle --format=iife --global-name=M61EmulatorBundle --platform=browser --target=es2022 --outfile=dist/m61-emulator-bridge.user.js",
     "lint": "eslint .",
     "m61c": "node ./bin/m61c.mjs",
     "serve:browser": "vite --host 127.0.0.1 --port 4173",

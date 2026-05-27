@@ -1,4 +1,4 @@
-# Anvarov Browser Bridge
+# Emulator Browser Bridge
 
 The browser bundle lets the Serge Anvarov MK-61 emulator accept M61 source in
 its program field. The emulator still receives ordinary MK-61 hex opcodes: the
@@ -15,7 +15,7 @@ npm run serve:browser
 This serves the bundle at:
 
 ```text
-http://127.0.0.1:4173/dist/m61-anvarov.user.js
+http://127.0.0.1:4173/dist/m61-emulator-bridge.user.js
 ```
 
 ## Console Bootstrap
@@ -24,13 +24,13 @@ Open the emulator page, then paste this into the browser console:
 
 ```js
 (() => {
-  const defaultUrl = "http://127.0.0.1:4173/dist/m61-anvarov.user.js";
-  const url = window.M61_ANVAROV_URL || defaultUrl;
-  const oldScript = document.querySelector("script[data-m61-anvarov-loader]");
+  const defaultUrl = "http://127.0.0.1:4173/dist/m61-emulator-bridge.user.js";
+  const url = window.M61_EMULATOR_URL || defaultUrl;
+  const oldScript = document.querySelector("script[data-m61-emulator-loader]");
   oldScript?.remove();
 
   const script = document.createElement("script");
-  script.dataset.m61AnvarovLoader = "true";
+  script.dataset.m61EmulatorLoader = "true";
   script.src = `${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`;
   script.onload = () => console.info("[M61] loaded", url);
   script.onerror = () => console.error("[M61] cannot load", url);
@@ -38,7 +38,7 @@ Open the emulator page, then paste this into the browser console:
 })();
 ```
 
-The same snippet lives in `tools/anvarov-console-loader.js` for copying.
+The same snippet lives in `tools/emulator-console-loader.js` for copying.
 
 ## Use
 
@@ -54,11 +54,11 @@ Useful console helpers:
 
 ```js
 M61.compile(source).programText
-M61Anvarov.compileField()
-M61Anvarov.writeFieldToMemory()
-M61Anvarov.restoreSource()
-M61Anvarov.getLastResult()?.listing
+M61Emulator.compileField()
+M61Emulator.writeFieldToMemory()
+M61Emulator.restoreSource()
+M61Emulator.getLastResult()?.listing
 ```
 
-To load from a different host, set `window.M61_ANVAROV_URL` before running the
-loader snippet.
+To load from a different host, set `window.M61_EMULATOR_URL` before running
+the loader snippet.

@@ -17,7 +17,7 @@ Programs: **21** (20 catalog entries + the Treasure Cave demo).
 Re-import from the live site:
 
 ```sh
-node scripts/import-anvarov.cjs
+node scripts/import-emulator-listings.cjs
 ```
 
 ## Overlap with Lord_BSS

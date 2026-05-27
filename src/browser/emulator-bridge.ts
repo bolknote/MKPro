@@ -9,7 +9,7 @@ const DEFAULT_COMPILE_OPTIONS: CompileOptions = {
 };
 
 const DEFAULT_DEBOUNCE_MS = 250;
-const STATUS_ID = "m61-anvarov-status";
+const STATUS_ID = "m61-emulator-status";
 
 export interface BrowserCompileOutput {
   source: string;
@@ -20,13 +20,13 @@ export interface BrowserCompileOutput {
   diagnostics: CompileResult["diagnostics"];
 }
 
-export interface AnvarovBridgeOptions {
+export interface EmulatorBridgeOptions {
   compilerOptions?: Partial<CompileOptions>;
   debounceMs?: number;
   autoWriteOnPaste?: boolean;
 }
 
-export interface AnvarovBridge {
+export interface EmulatorBridge {
   compileField(): BrowserCompileOutput | undefined;
   writeFieldToMemory(): BrowserCompileOutput | undefined;
   restoreSource(): boolean;
@@ -37,16 +37,16 @@ export interface AnvarovBridge {
 
 export interface M61BrowserApi {
   compile(source: string, options?: Partial<CompileOptions>): BrowserCompileOutput;
-  compileToAnvarovText(source: string, options?: Partial<CompileOptions>): string;
-  installAnvarovBridge(options?: AnvarovBridgeOptions): AnvarovBridge;
+  compileToProgramText(source: string, options?: Partial<CompileOptions>): string;
+  installEmulatorBridge(options?: EmulatorBridgeOptions): EmulatorBridge;
   looksLikeM61Source(text: string): boolean;
 }
 
 declare global {
   interface Window {
     M61?: M61BrowserApi;
-    M61Anvarov?: AnvarovBridge;
-    __m61AnvarovBridge?: AnvarovBridge;
+    M61Emulator?: EmulatorBridge;
+    __m61EmulatorBridge?: EmulatorBridge;
   }
 }
 
@@ -66,7 +66,7 @@ export function compileForBrowser(
   };
 }
 
-export function compileToAnvarovText(
+export function compileToProgramText(
   source: string,
   options: Partial<CompileOptions> = {},
 ): string {
@@ -83,10 +83,10 @@ export function looksLikeM61Source(text: string): boolean {
   );
 }
 
-export function installAnvarovBridge(
-  options: AnvarovBridgeOptions = {},
-): AnvarovBridge {
-  window.__m61AnvarovBridge?.uninstall();
+export function installEmulatorBridge(
+  options: EmulatorBridgeOptions = {},
+): EmulatorBridge {
+  window.__m61EmulatorBridge?.uninstall();
 
   const program = document.getElementById("program");
   const writeButton = document.getElementById("text_to_program");
@@ -144,15 +144,15 @@ export function installAnvarovBridge(
     if (previewTimer !== undefined) window.clearTimeout(previewTimer);
     for (const cleanup of cleanups.splice(0)) cleanup();
     statusElement.remove();
-    if (window.__m61AnvarovBridge === bridge) {
-      delete window.__m61AnvarovBridge;
+    if (window.__m61EmulatorBridge === bridge) {
+      delete window.__m61EmulatorBridge;
     }
-    if (window.M61Anvarov === bridge) {
-      delete window.M61Anvarov;
+    if (window.M61Emulator === bridge) {
+      delete window.M61Emulator;
     }
   };
 
-  const bridge: AnvarovBridge = {
+  const bridge: EmulatorBridge = {
     compileField,
     writeFieldToMemory,
     restoreSource,
@@ -207,8 +207,8 @@ export function installAnvarovBridge(
   cleanups.push(() => program.removeEventListener("paste", afterPaste));
 
   setStatus("M61 bridge ready. Paste M61 source, then click Write.");
-  window.__m61AnvarovBridge = bridge;
-  window.M61Anvarov = bridge;
+  window.__m61EmulatorBridge = bridge;
+  window.M61Emulator = bridge;
   return bridge;
 }
 
@@ -265,17 +265,17 @@ function errorToStatus(error: unknown): string {
 
 const api: M61BrowserApi = {
   compile: compileForBrowser,
-  compileToAnvarovText,
-  installAnvarovBridge,
+  compileToProgramText,
+  installEmulatorBridge,
   looksLikeM61Source,
 };
 
 if (typeof window !== "undefined") {
   window.M61 = api;
   try {
-    installAnvarovBridge();
-    console.info("[M61] Anvarov bridge installed.");
+    installEmulatorBridge();
+    console.info("[M61] Emulator bridge installed.");
   } catch (error) {
-    console.warn("[M61] Compiler loaded, but Anvarov bridge was not installed.", error);
+    console.warn("[M61] Compiler loaded, but the emulator bridge was not installed.", error);
   }
 }

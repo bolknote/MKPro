@@ -1,23 +1,15 @@
 import type {
-  AskStatementAst,
   AssignStatementAst,
   BlockAst,
-  CallBlockStatementAst,
   ConditionAst,
-  ConstDeclarationAst,
   DeclarationAst,
   DomainAst,
   DispatchCaseAst,
   DispatchStatementAst,
   DisplayAst,
-  EggStatementAst,
   EntryAst,
   ExpressionAst,
-  HaltStatementAst,
-  InputStatementAst,
   IfStatementAst,
-  LoopStatementAst,
-  PauseStatementAst,
   PreloadAst,
   ProgramAst,
   ProcAst,
@@ -26,12 +18,6 @@ import type {
   StateAst,
   StateFieldAst,
   StateFieldType,
-  StorageHint,
-  StoreDeclarationAst,
-  SwitchCaseAst,
-  SwitchStatementAst,
-  TempDeclarationAst,
-  TrapStatementAst,
   SemanticHint,
   V2BoardAst,
   V2CollectionStatementAst,
@@ -54,7 +40,6 @@ import type {
   V2WorldAst,
   V2WorldPositionAst,
 } from "./types.ts";
-import { registerFromText } from "./opcodes.ts";
 
 interface SourceLine {
   text: string;

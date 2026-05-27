@@ -1,5 +1,5 @@
 "use strict";
-var M61AnvarovBundle = (() => {
+var M61EmulatorBundle = (() => {
   var __defProp = Object.defineProperty;
   var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
   var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -18,12 +18,12 @@ var M61AnvarovBundle = (() => {
   };
   var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-  // src/browser/anvarov.ts
-  var anvarov_exports = {};
-  __export(anvarov_exports, {
+  // src/browser/emulator-bridge.ts
+  var emulator_bridge_exports = {};
+  __export(emulator_bridge_exports, {
     compileForBrowser: () => compileForBrowser,
-    compileToAnvarovText: () => compileToAnvarovText,
-    installAnvarovBridge: () => installAnvarovBridge,
+    compileToProgramText: () => compileToProgramText,
+    installEmulatorBridge: () => installEmulatorBridge,
     looksLikeM61Source: () => looksLikeM61Source
   });
 
@@ -734,8 +734,6 @@ var M61AnvarovBundle = (() => {
   var M61Parser = class {
     lines;
     index = 0;
-    switchCounter = 0;
-    dispatchCounter = 0;
     constructor(source) {
       this.lines = source.split(/\r?\n/u).map((text, offset) => ({ text: stripComment(text).trim(), line: offset + 1 })).filter((line) => line.text.length > 0);
     }
@@ -1322,305 +1320,6 @@ var M61AnvarovBundle = (() => {
         }
       }
       throw new ParseError("Unclosed match block", line);
-    }
-    parseDomain() {
-      const header = this.next();
-      const parsed = parseDomainHeader(header);
-      if (!header.text.endsWith("{")) {
-        return { kind: "domain", ...parsed, lines: [], line: header.line };
-      }
-      return {
-        kind: "domain",
-        ...parsed,
-        lines: this.parseRawBlock(),
-        line: header.line
-      };
-    }
-    parseState() {
-      const header = this.next();
-      const match = /^state(?:\s+([A-Za-z_][\w]*))?\s*\{$/u.exec(header.text);
-      if (!match) throw new ParseError("State must look like 'state Name {'", header.line);
-      const fields = [];
-      while (!this.done()) {
-        const line = this.next();
-        if (line.text === "}") {
-          return {
-            kind: "state",
-            name: match[1] ?? "State",
-            fields,
-            line: header.line
-          };
-        }
-        fields.push(parseStateField(line));
-      }
-      throw new ParseError("Unclosed state block", header.line);
-    }
-    parseDisplay() {
-      const header = this.next();
-      const match = /^display\s+packed\s+([A-Za-z_][\w]*)(?:\s+from\s+(.+?))?\s*\{$/u.exec(header.text);
-      if (!match) {
-        throw new ParseError("Display must look like 'display packed name {'", header.line);
-      }
-      let mode;
-      let sources = match[2] ? parseIdentifierList(match[2]) : [];
-      while (!this.done()) {
-        const line = this.next();
-        if (line.text === "}") {
-          const display = {
-            kind: "display",
-            name: match[1],
-            format: "packed",
-            sources,
-            line: header.line
-          };
-          if (mode !== void 0) display.mode = mode;
-          return display;
-        }
-        if (line.text.startsWith("mode ")) {
-          mode = line.text.slice("mode ".length).trim();
-          continue;
-        }
-        if (line.text.startsWith("source ")) {
-          sources = parseIdentifierList(line.text.slice("source ".length));
-          continue;
-        }
-        if (line.text.startsWith("sources ")) {
-          sources = parseIdentifierList(line.text.slice("sources ".length));
-          continue;
-        }
-        throw new ParseError("Display block must contain mode/source lines", line.line);
-      }
-      throw new ParseError("Unclosed display block", header.line);
-    }
-    parseDeclaration() {
-      const line = this.next();
-      if (line.text.startsWith("const ")) {
-        const match2 = /^const\s+([A-Za-z_][\w]*)\s*=\s*(.+)$/u.exec(line.text);
-        if (!match2) throw new ParseError("Invalid const declaration", line.line);
-        const declaration2 = {
-          kind: "const",
-          name: match2[1],
-          value: parseExpression(match2[2], line.line),
-          line: line.line
-        };
-        return declaration2;
-      }
-      const match = /^(store|temp)\s+([A-Za-z_][\w]*)(?:\s*:\s*[A-Za-z_][\w]*)?(?:\s*=\s*(.*?))?(?:\s+(prefer|fixed)\s+R?([0-9a-eавсде]))?$/iu.exec(
-        line.text
-      );
-      if (!match) {
-        throw new ParseError("Invalid store/temp declaration", line.line);
-      }
-      const hint = parseStorageHint(match[4], match[5]);
-      if (match[1] === "store") {
-        const declaration2 = {
-          kind: "store",
-          name: match[2],
-          line: line.line
-        };
-        if (match[3]?.trim()) declaration2.value = parseExpression(match[3].trim(), line.line);
-        if (hint) declaration2.storage = hint;
-        return declaration2;
-      }
-      const declaration = {
-        kind: "temp",
-        name: match[2],
-        line: line.line
-      };
-      if (hint) declaration.storage = hint;
-      return declaration;
-    }
-    parseEntry() {
-      const line = this.next();
-      const match = /^entry(?:\s+([A-Za-z_][\w]*))?(?:\s+at\s+([0-9A-Fa-f]{1,2}|A[0-4]))?\s*\{$/u.exec(line.text);
-      if (!match) throw new ParseError("Entry must look like 'entry name {'", line.line);
-      const entry = {
-        kind: "entry",
-        name: match[1] ?? "main",
-        body: this.parseStatementBlock(),
-        line: line.line
-      };
-      if (match[2] !== void 0) entry.at = parseFormalAddress(match[2], line.line);
-      return entry;
-    }
-    parseProc() {
-      const line = this.next();
-      const match = /^proc\s+([A-Za-z_][\w]*)[^{]*\{$/u.exec(line.text);
-      if (!match) throw new ParseError("Proc must look like 'proc name {'", line.line);
-      return {
-        kind: "proc",
-        name: match[1],
-        body: this.parseStatementBlock(),
-        line: line.line
-      };
-    }
-    parseBlock() {
-      const line = this.next();
-      const match = /^(?:block\s+(inline|tail)\s+([A-Za-z_][\w]*)|shared\s+tail\s+([A-Za-z_][\w]*))\s*\{$/u.exec(
-        line.text
-      );
-      if (!match) {
-        throw new ParseError("Block must look like 'block inline name {' or 'shared tail name {'", line.line);
-      }
-      const mode = match[3] ? "shared_tail" : match[1];
-      return {
-        kind: "block",
-        name: match[2] ?? match[3],
-        mode,
-        body: this.parseStatementBlock(),
-        line: line.line
-      };
-    }
-    parseStatementBlock() {
-      const statements = [];
-      while (!this.done()) {
-        const line = this.peek();
-        if (line.text === "}") {
-          this.index += 1;
-          return statements;
-        }
-        statements.push(this.parseStatement());
-      }
-      throw new ParseError("Unclosed block", this.lines.at(-1)?.line ?? 1);
-    }
-    parseStatement() {
-      const line = this.peek();
-      if (line.text === "loop {") {
-        this.index += 1;
-        const loop = {
-          kind: "loop",
-          body: this.parseStatementBlock(),
-          line: line.line
-        };
-        return loop;
-      }
-      if (line.text.startsWith("if ") && line.text.endsWith("{")) {
-        this.index += 1;
-        const conditionText = line.text.slice(3, -1).trim();
-        const thenBody = this.parseStatementBlock();
-        const statement = {
-          kind: "if",
-          condition: parseCondition(conditionText, line.line),
-          thenBody,
-          line: line.line
-        };
-        const next = this.peekOptional();
-        if (next?.text === "else {") {
-          this.index += 1;
-          statement.elseBody = this.parseStatementBlock();
-        }
-        return statement;
-      }
-      if (line.text.startsWith("switch ") && line.text.endsWith("{")) {
-        this.index += 1;
-        return this.parseSwitch(line);
-      }
-      if (line.text.startsWith("dispatch ") && line.text.endsWith("{")) {
-        this.index += 1;
-        return this.parseDispatch(line);
-      }
-      if (line.text === "core {") {
-        this.index += 1;
-        return { kind: "core", lines: this.parseRawBlock(), line: line.line };
-      }
-      if (line.text === "egg {" || line.text === "unsafe asm {") {
-        this.index += 1;
-        const statement = {
-          kind: "egg",
-          lines: this.parseRawBlock(),
-          line: line.line
-        };
-        return statement;
-      }
-      this.index += 1;
-      return parseSimpleStatement(line);
-    }
-    parseSwitch(header) {
-      const exprText = header.text.slice("switch ".length, -1).trim();
-      const cases = [];
-      let defaultBody;
-      const scratchId = this.switchCounter++;
-      while (!this.done()) {
-        const line = this.peek();
-        if (line.text === "}") {
-          this.index += 1;
-          const statement = {
-            kind: "switch",
-            expr: parseExpression(exprText, header.line),
-            cases,
-            line: header.line,
-            scratchId
-          };
-          if (defaultBody !== void 0) statement.defaultBody = defaultBody;
-          return statement;
-        }
-        if (line.text.startsWith("case ") && line.text.endsWith("{")) {
-          this.index += 1;
-          cases.push({
-            value: parseExpression(line.text.slice("case ".length, -1).trim(), line.line),
-            body: this.parseStatementBlock(),
-            line: line.line
-          });
-          continue;
-        }
-        if (line.text === "default {") {
-          this.index += 1;
-          defaultBody = this.parseStatementBlock();
-          continue;
-        }
-        throw new ParseError("Switch body must contain case/default blocks", line.line);
-      }
-      throw new ParseError("Unclosed switch block", header.line);
-    }
-    parseDispatch(header) {
-      const match = /^dispatch\s+(.+?)(?:\s+as\s+([A-Za-z_][\w]*))?\s*\{$/u.exec(header.text);
-      if (!match) {
-        throw new ParseError("Dispatch must look like 'dispatch expr {'", header.line);
-      }
-      const cases = [];
-      let defaultBody;
-      const scratchId = this.dispatchCounter++;
-      while (!this.done()) {
-        const line = this.peek();
-        if (line.text === "}") {
-          this.index += 1;
-          const statement = {
-            kind: "dispatch",
-            expr: parseExpression(match[1].trim(), header.line),
-            cases,
-            line: header.line,
-            scratchId
-          };
-          if (match[2] !== void 0) statement.name = match[2];
-          if (defaultBody !== void 0) statement.defaultBody = defaultBody;
-          return statement;
-        }
-        if (line.text.startsWith("case ") && line.text.endsWith("{")) {
-          this.index += 1;
-          cases.push({
-            value: parseExpression(line.text.slice("case ".length, -1).trim(), line.line),
-            body: this.parseStatementBlock(),
-            line: line.line
-          });
-          continue;
-        }
-        if (line.text === "default {") {
-          this.index += 1;
-          defaultBody = this.parseStatementBlock();
-          continue;
-        }
-        throw new ParseError("Dispatch body must contain case/default blocks", line.line);
-      }
-      throw new ParseError("Unclosed dispatch block", header.line);
-    }
-    parseRawBlock() {
-      const lines = [];
-      while (!this.done()) {
-        const line = this.next();
-        if (line.text === "}") return lines;
-        lines.push({ text: line.text, line: line.line });
-      }
-      throw new ParseError("Unclosed raw block", this.lines.at(-1)?.line ?? 1);
     }
     done() {
       return this.index >= this.lines.length;
@@ -2713,166 +2412,8 @@ var M61AnvarovBundle = (() => {
   function isNumericLiteralText(text) {
     return /^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/iu.test(text.trim());
   }
-  function parseDomainHeader(line) {
-    const text = line.text.endsWith("{") ? line.text.slice(0, -1).trim() : line.text;
-    const match = /^(cache\s+search|coord|maze|bitset|resource|event|random|fight|table|clobber|uses)(?:\s+([A-Za-z_][\w]*))?/u.exec(
-      text
-    );
-    if (!match) throw new ParseError(`Invalid domain declaration '${line.text}'`, line.line);
-    const domain = {
-      domainKind: match[1].replace(/\s+/gu, "_"),
-      header: text
-    };
-    if (match[2] !== void 0) domain.name = match[2];
-    return domain;
-  }
-  function parseFormalAddress(text, line) {
-    const normalized = text.toUpperCase();
-    if (/^A[0-4]$/u.test(normalized)) return 100 + Number(normalized.slice(1));
-    if (/^[0-9A-F]{1,2}$/u.test(normalized)) {
-      const code = Number.parseInt(normalized, 16);
-      const high = code >> 4;
-      const low = code & 15;
-      if (high <= 9 && low <= 9) return high * 10 + low;
-    }
-    throw new ParseError(`Invalid formal address '${text}'`, line);
-  }
-  function parseStateField(line) {
-    const match = /^([A-Za-z_][\w]*)\s*:\s*(digit|flag|range|packed|resource|addr)(?:\s+(-?\d+)\.\.(-?\d+))?(?:\s*=\s*(.+))?$/u.exec(
-      line.text
-    );
-    if (!match) {
-      throw new ParseError("State field must look like 'name: digit = 1' or 'name: range 1..3'", line.line);
-    }
-    const type = match[2];
-    const field = {
-      name: match[1],
-      type,
-      line: line.line
-    };
-    if (match[3] !== void 0) field.min = Number(match[3]);
-    if (match[4] !== void 0) field.max = Number(match[4]);
-    if (match[5] !== void 0) field.initial = parseExpression(match[5], line.line);
-    return field;
-  }
   function parseIdentifierList(text) {
     return text.split(",").map((part) => part.trim()).filter((part) => part.length > 0);
-  }
-  function parseStorageHint(mode, register) {
-    if (!mode || !register) return void 0;
-    return {
-      mode: mode.toLowerCase(),
-      register: registerFromText(register)
-    };
-  }
-  function parseSimpleStatement(line) {
-    const inputAssignment = /^([A-Za-z_][\w]*)\s*=\s*input\s+digit$/u.exec(line.text);
-    if (inputAssignment) {
-      const statement = {
-        kind: "input",
-        inputType: "digit",
-        target: inputAssignment[1],
-        line: line.line
-      };
-      return statement;
-    }
-    const inputStatement = /^input\s+digit\s+([A-Za-z_][\w]*)$/u.exec(line.text);
-    if (inputStatement) {
-      const statement = {
-        kind: "input",
-        inputType: "digit",
-        target: inputStatement[1],
-        line: line.line
-      };
-      return statement;
-    }
-    const showStatement = /^(?:show|display)\s+([A-Za-z_][\w]*)$/u.exec(line.text);
-    if (showStatement) {
-      return { kind: "show", display: showStatement[1], line: line.line };
-    }
-    const callStatement = /^call\s+([A-Za-z_][\w]*)$/u.exec(line.text);
-    if (callStatement) {
-      const statement = {
-        kind: "call",
-        block: callStatement[1],
-        line: line.line
-      };
-      return statement;
-    }
-    if (line.text.startsWith("pause ")) {
-      const statement = {
-        kind: "pause",
-        expr: parseExpression(line.text.slice("pause ".length).trim(), line.line),
-        line: line.line
-      };
-      return statement;
-    }
-    if (line.text.startsWith("halt ")) {
-      const statement = {
-        kind: "halt",
-        expr: parseExpression(line.text.slice("halt ".length).trim(), line.line),
-        line: line.line
-      };
-      return statement;
-    }
-    if (line.text.startsWith("trap ")) {
-      return parseTrap(line);
-    }
-    if (line.text.startsWith("ask ")) {
-      const match = /^ask\s+([A-Za-z_][\w]*)(?:\s+from\s+(.+))?$/u.exec(line.text);
-      if (!match) throw new ParseError("Invalid ask statement", line.line);
-      const statement = {
-        kind: "ask",
-        target: match[1],
-        line: line.line
-      };
-      if (match[2]) statement.prompt = parseExpression(match[2], line.line);
-      return statement;
-    }
-    const askAssignment = /^([A-Za-z_][\w]*)\s*=\s*ask(?:\s+(.+))?$/u.exec(line.text);
-    if (askAssignment) {
-      const statement = {
-        kind: "ask",
-        target: askAssignment[1],
-        line: line.line
-      };
-      if (askAssignment[2]) statement.prompt = parseExpression(askAssignment[2], line.line);
-      return statement;
-    }
-    const assignment = /^(?:set\s+)?([A-Za-z_][\w]*)\s*=\s*(.+)$/u.exec(line.text);
-    if (assignment) {
-      const statement = {
-        kind: "assign",
-        target: assignment[1],
-        expr: parseExpression(assignment[2], line.line),
-        line: line.line
-      };
-      return statement;
-    }
-    throw new ParseError(`Unknown statement '${line.text}'`, line.line);
-  }
-  function parseTrap(line) {
-    const match = /^trap\s+(zero|nonpositive|negative|gt_one|ge_100)\s+(.+)$/u.exec(line.text);
-    if (!match) {
-      throw new ParseError("Trap must look like 'trap zero expr'", line.line);
-    }
-    return {
-      kind: "trap",
-      trap: match[1],
-      expr: parseExpression(match[2], line.line),
-      line: line.line
-    };
-  }
-  function parseCondition(text, line) {
-    const match = /^(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)$/u.exec(text);
-    if (!match) {
-      throw new ParseError("Invalid condition", line);
-    }
-    return {
-      left: parseExpression(match[1].trim(), line),
-      op: match[2],
-      right: parseExpression(match[3].trim(), line)
-    };
   }
   function parseExpression(text, line = 0) {
     return new ExpressionParser(text, line).parse();
@@ -3924,7 +3465,7 @@ var M61AnvarovBundle = (() => {
       if (headForward.ops.length === 0) continue;
       const headBackward = collectBackwardPrologue(ops, i);
       if (headBackward.ops.length === 0) continue;
-      let backwardOps = headBackward.ops;
+      const backwardOps = headBackward.ops;
       let matched = segmentsMatch(backwardOps, headForward.ops);
       if (!matched && headBackward.virtualHeadRegister !== void 0) {
         const firstForward = headForward.ops[0];
@@ -8911,7 +8452,7 @@ var M61AnvarovBundle = (() => {
     return lines.join("\n");
   }
 
-  // src/browser/anvarov.ts
+  // src/browser/emulator-bridge.ts
   var DEFAULT_COMPILE_OPTIONS = {
     opt: "max",
     delivery: "hex",
@@ -8919,7 +8460,7 @@ var M61AnvarovBundle = (() => {
     warnUnsafe: true
   };
   var DEFAULT_DEBOUNCE_MS = 250;
-  var STATUS_ID = "m61-anvarov-status";
+  var STATUS_ID = "m61-emulator-status";
   function compileForBrowser(source, options = {}) {
     const result = compileM61(source, { ...DEFAULT_COMPILE_OPTIONS, ...options });
     const programText = formatProgramTokens(result.steps.map((step) => step.hex));
@@ -8932,15 +8473,15 @@ var M61AnvarovBundle = (() => {
       diagnostics: result.diagnostics
     };
   }
-  function compileToAnvarovText(source, options = {}) {
+  function compileToProgramText(source, options = {}) {
     return compileForBrowser(source, options).programText;
   }
   function looksLikeM61Source(text) {
     const normalized = text.trim();
     return /\btarget\s+mk61\b/iu.test(normalized) || /\bbudget\s+\d+\s+cells\b/iu.test(normalized) || /\boptimize\s+size\b/iu.test(normalized) || /\bprogram\s+[A-Za-z_][\w-]*\s*\{/u.test(normalized);
   }
-  function installAnvarovBridge(options = {}) {
-    window.__m61AnvarovBridge?.uninstall();
+  function installEmulatorBridge(options = {}) {
+    window.__m61EmulatorBridge?.uninstall();
     const program = document.getElementById("program");
     const writeButton = document.getElementById("text_to_program");
     if (!(program instanceof HTMLElement)) {
@@ -8990,11 +8531,11 @@ var M61AnvarovBundle = (() => {
       if (previewTimer !== void 0) window.clearTimeout(previewTimer);
       for (const cleanup of cleanups.splice(0)) cleanup();
       statusElement.remove();
-      if (window.__m61AnvarovBridge === bridge) {
-        delete window.__m61AnvarovBridge;
+      if (window.__m61EmulatorBridge === bridge) {
+        delete window.__m61EmulatorBridge;
       }
-      if (window.M61Anvarov === bridge) {
-        delete window.M61Anvarov;
+      if (window.M61Emulator === bridge) {
+        delete window.M61Emulator;
       }
     };
     const bridge = {
@@ -9046,8 +8587,8 @@ var M61AnvarovBundle = (() => {
     cleanups.push(() => program.removeEventListener("input", schedulePreview));
     cleanups.push(() => program.removeEventListener("paste", afterPaste));
     setStatus("M61 bridge ready. Paste M61 source, then click Write.");
-    window.__m61AnvarovBridge = bridge;
-    window.M61Anvarov = bridge;
+    window.__m61EmulatorBridge = bridge;
+    window.M61Emulator = bridge;
     return bridge;
   }
   function formatProgramTokens(tokens) {
@@ -9090,18 +8631,18 @@ var M61AnvarovBundle = (() => {
   }
   var api = {
     compile: compileForBrowser,
-    compileToAnvarovText,
-    installAnvarovBridge,
+    compileToProgramText,
+    installEmulatorBridge,
     looksLikeM61Source
   };
   if (typeof window !== "undefined") {
     window.M61 = api;
     try {
-      installAnvarovBridge();
-      console.info("[M61] Anvarov bridge installed.");
+      installEmulatorBridge();
+      console.info("[M61] Emulator bridge installed.");
     } catch (error) {
-      console.warn("[M61] Compiler loaded, but Anvarov bridge was not installed.", error);
+      console.warn("[M61] Compiler loaded, but the emulator bridge was not installed.", error);
     }
   }
-  return __toCommonJS(anvarov_exports);
+  return __toCommonJS(emulator_bridge_exports);
 })();

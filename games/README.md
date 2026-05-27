@@ -46,7 +46,7 @@ Programs: **21** (catalog games/utilities plus the Treasure Cave demo).
 Re-import:
 
 ```sh
-node scripts/import-anvarov.cjs
+node scripts/import-emulator-listings.cjs
 ```
 
 The Treasure Cave demo in `anvarov/demo.txt` is a modified showcase program. The KEI column

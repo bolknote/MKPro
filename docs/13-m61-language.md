@@ -575,9 +575,9 @@ legal when display semantics explicitly permit that raw display state.
 
 ## Unified IR Pipeline
 
-Since the unified IR refactor, every program — both the simple V1/V2 path and
-the GameIntent layout backend — flows through a single typed intermediate
-representation (`IrOp[]`) before final cell resolution. The IR captures
+Since the unified IR refactor, every program — both the regular intent
+backend and the GameIntent layout backend — flows through a single typed
+intermediate representation (`IrOp[]`) before final cell resolution. The IR captures
 semantic kinds (`store`, `recall`, `jump`, `cjump`, `call`, `loop`, `stop`,
 `return`, `plain` …) rather than raw opcodes, so passes no longer guess
 behavior from opcode ranges.

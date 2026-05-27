@@ -5,7 +5,7 @@ node_modules/
 dist/
 !dist/
 dist/*
-!dist/m61-anvarov.user.js
+!dist/m61-emulator-bridge.user.js
 build/
 coverage/
 *.tsbuildinfo
