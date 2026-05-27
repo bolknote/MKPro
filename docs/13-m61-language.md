@@ -237,8 +237,9 @@ The repository examples are grouped by the game shape they exercise:
 - `basic.m61`, `human.m61`, and `tiny-game.m61` are small syntax and control-flow
   examples.
 - `lunar.m61` is a numeric resource game with touchdown rules.
-- `cave-sketch.m61`, `cave-highlevel-baseline.m61`, `cave-treasure.m61`, and
-  `cave-treasure-full.m61` show increasingly complete cave/grid games.
+- `cave-sketch.m61`, `cave-highlevel-baseline.m61`, `cave-treasure.m61`,
+  `cave-treasure-full.m61`, and `labyrinth777.m61` show increasingly complete
+  cave/grid games.
 - `grid-rescue.m61`, `resource-raid.m61`, and `giants-country.m61` exercise
   spatial resources, generated masks, encounters, and challenge blocks.
 - `sea-battle.m61` demonstrates `board` and `fleet` for non-movement board

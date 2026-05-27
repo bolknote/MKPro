@@ -1,0 +1,199 @@
+target mk61
+budget 105 cells
+optimize size
+reference anvarov_labyrinth777
+
+// Based on Serge Anvarov's "Labyrinth777": a 7x7x7 maze where the player
+// searches for a personal jumper while managing suit energy.
+
+program Labyrinth777 {
+  input action: digit
+
+  state {
+    [displayed] pos: coord(floor 1..7, row 1..7, room 1..7) = 444
+    [displayed] row_view: packed = 0
+
+    [displayed] energy: resource 0..9 = 9 {
+      terminal at 0 show drained
+    }
+
+    [persistent] floor: counter 1..7 = 4
+    [persistent] row: counter 1..7 = 4
+    [persistent] room: counter 1..7 = 4
+
+    [persistent] jumper: bitset {
+      generated random
+      cleared when found
+    }
+
+    [temporary] tile: enum = 0
+  }
+
+  world maze: vertical_maze {
+    position pos {
+      floors 1..7
+      rooms 1..7
+      display row_scan
+      start 444
+    }
+
+    generated random
+    player decimal_point
+    door symbol 0 costs energy 0
+    wall symbol 8 blocks edge costs energy 0
+    vertical wrap 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 1
+  }
+
+  screen maze {
+    show pos, row_view, energy
+    style compact digits letters sign
+  }
+
+  screen result {
+    show energy
+    style compact digits sign
+  }
+
+  ending escaped {
+    show 7777777
+  }
+
+  ending drained {
+    show -777
+  }
+
+  turn {
+    show maze
+    read action
+
+    match action {
+      4 => move_left
+      6 => move_right
+      8 => move_forward
+      2 => move_back
+      5 => use_local_jumper
+      otherwise => show maze
+    }
+  }
+
+  rule move_left {
+    apply_exit_cost
+    require energy > 0 else lose drained
+
+    if room > 1 {
+      room -= 1
+      move pos west
+    }
+
+    inspect_room
+  }
+
+  rule move_right {
+    apply_exit_cost
+    require energy > 0 else lose drained
+
+    if room < 7 {
+      room += 1
+      move pos east
+    }
+
+    inspect_room
+  }
+
+  rule move_forward {
+    apply_exit_cost
+    require energy > 0 else lose drained
+
+    if row < 7 {
+      row += 1
+      move pos north
+    }
+
+    inspect_room
+  }
+
+  rule move_back {
+    apply_exit_cost
+    require energy > 0 else lose drained
+
+    if row > 1 {
+      row -= 1
+      move pos south
+    }
+
+    inspect_room
+  }
+
+  rule use_local_jumper {
+    apply_exit_cost
+    require energy > 0 else lose drained
+
+    tile = cell_at(pos)
+
+    match tile {
+      2 => climb
+      3 => descend
+      7 => found_jumper
+      otherwise => inspect_room
+    }
+  }
+
+  rule climb {
+    if floor < 7 {
+      floor += 1
+      move pos up
+    }
+
+    inspect_room
+  }
+
+  rule descend {
+    if floor > 1 {
+      floor -= 1
+      move pos down
+    }
+
+    inspect_room
+  }
+
+  rule apply_exit_cost {
+    tile = cell_at(pos)
+
+    match tile {
+      1 => pool_exit
+      2 => ladder_exit
+      3 => shaft_exit
+      otherwise => clear_exit
+    }
+  }
+
+  rule clear_exit {
+    energy += 1
+  }
+
+  rule pool_exit {
+    energy = 0
+  }
+
+  rule ladder_exit {
+    energy -= 5
+  }
+
+  rule shaft_exit {
+    energy -= 6
+  }
+
+  rule inspect_room {
+    tile = cell_at(pos)
+
+    match tile {
+      7 => found_jumper
+      otherwise => show maze
+    }
+  }
+
+  rule found_jumper {
+    jumper clear pos
+    win escaped
+  }
+}
