@@ -10,24 +10,28 @@ function source(path: string): string {
 }
 
 describe("M61 compiler", () => {
-  it("keeps low-level examples compiling", () => {
+  it("keeps the smallest human DSL example compiling", () => {
     const result = compileM61(source("examples/basic.m61"));
 
-    expect(result.report.ir.v1).toBe(false);
+    expect(result.report.ir.v2).toBe(true);
     expect(result.report.steps).toBeLessThanOrEqual(105);
-    expect(result.report.registers.x).toBe("0");
+    expect(result.report.optimizations.some((optimization) => optimization.name === "intent-input-lowering")).toBe(true);
   });
 
-  it("honors the source budget when no CLI budget overrides it", () => {
-    expect(() => compileM61(source("examples/cave-highlevel-baseline.m61"))).toThrow(/budget is 105/u);
+  it("keeps the high-level cave baseline within the 105-cell budget", () => {
+    const result = compileM61(source("examples/cave-highlevel-baseline.m61"));
+
+    expect(result.report.ir.v2).toBe(true);
+    expect(result.report.steps).toBeLessThanOrEqual(105);
+    expect(result.report.optimizations.some((optimization) => optimization.name === "game-intent-lowering")).toBe(true);
   });
 
   it("lowers the compact cave DSL under the 105-step target", () => {
     const result = compileM61(source("examples/cave-sketch.m61"));
 
-    expect(result.report.ir.v1).toBe(true);
+    expect(result.report.ir.v2).toBe(true);
     expect(result.report.steps).toBeLessThanOrEqual(105);
-    expect(result.report.candidates.some((candidate) => candidate.variant === "dark-indirect-table")).toBe(true);
+    expect(result.report.candidates.some((candidate) => candidate.variant === "indirect-register-flow")).toBe(true);
     expect(result.report.cellRoles.some((cell) => cell.roles.includes("overlay"))).toBe(true);
     expect(result.report.cellRoles.some((cell) => cell.roles.includes("dark-entry"))).toBe(true);
   });
@@ -248,7 +252,12 @@ program SimpleRules {
   });
 
   it("applies the same spatial/resource tactic pipeline to non-cave games", () => {
-    for (const path of ["examples/grid-rescue.m61", "examples/resource-raid.m61", "examples/giants-country.m61"]) {
+    for (const path of [
+      "examples/grid-rescue.m61",
+      "examples/resource-raid.m61",
+      "examples/giants-country.m61",
+      "examples/sea-battle.m61",
+    ]) {
       const result = compileM61(source(path));
       const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
 
@@ -333,7 +342,7 @@ program SimpleRules {
   });
 
   it("uses conservative dispatch lowering in safe mode", () => {
-    const result = compileM61(source("examples/cave-sketch.m61"), { opt: "safe" });
+    const result = compileM61(source("examples/tiny-game.m61"), { opt: "safe" });
     const selected = result.report.candidates.find((candidate) => candidate.selected);
 
     expect(selected?.variant).toBe("safe-compare-chain");
@@ -353,7 +362,7 @@ program SimpleRules {
   });
 
   it("blocks unsafe optimizer capabilities in safe mode", () => {
-    const result = compileM61(source("examples/cave-sketch.m61"), { opt: "safe", budget: 999 });
+    const result = compileM61(source("examples/tiny-game.m61"), { opt: "safe", budget: 999 });
     const unsafeCapabilities = result.report.optimizer.capabilities.filter((capability) => capability.unsafe);
 
     expect(unsafeCapabilities.some((capability) => capability.status === "blocked")).toBe(true);

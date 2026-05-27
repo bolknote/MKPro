@@ -2,196 +2,201 @@
 
 exports[`examples > compiles basic.m61 deterministically > basic.explain 1`] = `
 "M61 compile report
-Steps: 9/105
+Steps: 11/105
 Delivery: hex
 Optimizer: max
 Target profile: mk61_exact
 Optimizer rules: automatic=yes; active=3, candidates=25, blocked=0, planned=0
-Budget: official=9, extra=0, physical=9
-Intent IR: compact=no, highLevel=no; intent=4, effects=9, cells=9
+Budget: official=11, extra=0, physical=11
+Intent IR: compact=yes, highLevel=yes; intent=22, effects=11, cells=11
+
+Preloads:
+  R0: 0 (outside program cells)
 
 Registers:
-  x: R0
-  y: R1
+  result: R0
+  x: R1
+  y: R2
 
 Labels:
   main: 00
+  __loop_0: 00
 
 Optimizations:
+  - intent-domain-lowering: Lowered 1 state fields and 0 rules through the generic intent pipeline.
+  - auto-preload-initial-state: Moved initial state into setup/preload values so official program cells stay focused on turn logic.
+  - intent-input-lowering: Lowered input digit at line 20 to calculator stop plus register store.
+  - intent-input-lowering: Lowered input digit at line 21 to calculator stop plus register store.
   - stack-current-x-scheduling: Reused y already in X for commutative +.
-  - store-recall-peephole: Dropped 2 redundant П->X immediately after X->П to the same register.
+  - packed-display-lowering: Display answer may use display-byte encodings in later layout passes.
   - dead-temp-store: Removed 1 temp store(s) whose X value was consumed directly by stack scheduling.
 
+Optimizer Capabilities:
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no raw boundary or unsafe effect is crossed.
+  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following commutative use and removes the temporary store when safe.
+  - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty. [unsafe-unverified]
+  - branch-removal: candidate; Umbrella rule for replacing provably equivalent conditionals with branchless arithmetic, sign, extrema, or masked updates.
+  - zero-condition-test: candidate; Uses direct F x?0 tests when one side of a condition is a proved zero, avoiding a zero literal and subtraction.
+  - dispatch-compare-chain: candidate; Lowers high-level command dispatch automatically; safe mode keeps conservative compare chains.
+  - arithmetic-if-select: candidate; Replaces simple boolean if/else assignments, stops, and conditional moves with arithmetic selection when shorter.
+  - arithmetic-if-update: candidate; Replaces conditional +=/-= and sign toggles guarded by a proved boolean with masked arithmetic.
+  - arithmetic-if-extrema: candidate; Replaces simple extrema, sign, clamp, comparison-mask, and boolean-algebra branches when shorter.
+  - indirect-flow: candidate; Candidate rule: replace direct branches/calls with К БП/К ПП/К x?0 only when the address value is already live and cheaper.
+  - fl-decrement-branch: candidate; Uses F L0..F L3 as compact decrement-and-continue/decrement-and-branch forms for small counters.
+  - address-constant-overlay: active; Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role. [unsafe-unverified]
+
+Machine Features Used:
+  - code-data-overlay: Layout marked address cells as reusable code/data overlay candidates.; Address operands, constants, opcodes, and display bytes may share cells after conflict checks.
+  - address-constants: Layout marked address cells as reusable constants.; Address cells may double as constants for indirect flow and data transforms.
+
 Proofs:
-  - return-stack-empty: proved; No ПП opcodes were emitted; empty return stack precondition holds for В/О-as-БП01 rewrites."
+  - return-stack-empty: proved; No ПП opcodes were emitted; empty return stack precondition holds for В/О-as-БП01 rewrites.
+  - value-ranges: proved; Collected source ranges for result.
+  - observability: proved; Visible state is limited by screen declarations: result.
+
+Cell Roles:
+  10: 00 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+
+Warnings:
+  - M61 optimizer now treats machine tricks as target-profile capabilities; unproved high-level effects are rejected."
 `;
 
 exports[`examples > compiles basic.m61 deterministically > basic.hex 1`] = `
-"00: 00 50 40 50 60 10 41 50
-08: 50"
+"00: 50 41 50 61 10 40 50 60
+08: 50 51 00"
 `;
 
 exports[`examples > compiles basic.m61 deterministically > basic.listing 1`] = `
 " Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  00  | 0                       | 
-   01 |  50  | С/П                     | ask x
-   02 |  40  | X->П 0                  | input x
-   03 |  50  | С/П                     | ask y
-   04 |  60  | П->X 0                  | recall x
-   05 |  10  | +                       | expr +
-   06 |  41  | X->П 1                  | set y
-   07 |  50  | С/П                     | pause
-   08 |  50  | С/П                     | implicit final stop"
+   00 |  50  | С/П                     | input digit x
+   01 |  41  | X->П 1                  | input x
+   02 |  50  | С/П                     | input digit y
+   03 |  61  | П->X 1                  | recall x
+   04 |  10  | +                       | expr +
+   05 |  40  | X->П 0                  | set result
+   06 |  50  | С/П                     | show answer
+   07 |  60  | П->X 0                  | recall result
+   08 |  50  | С/П                     | halt
+   09 |  51  | БП                      | loop back
+   10 |  00  | 00                      | loop back"
 `;
 
 exports[`examples > compiles lunar.m61 deterministically > lunar.hex 1`] = `
-"00: 01 00 00 41 01 04 00 42
-08: 00 43 61 50 63 50 62 50
-16: 44 01 00 12 62 13 09 0A
-24: 08 11 40 61 63 01 12 11
-32: 60 01 12 01 12 02 13 11
-40: 41 63 60 01 12 10 43 62
-48: 64 01 12 11 42 61 02 11
-56: 5C 70 05 63 31 11 59 68
-64: 6E 50 51 70 6D 50 51 10
-72: 50"
+"00: 63 64 10 62 10 50 41 6C
+08: 12 62 13 6C 11 40 63 64
+16: 11 60 02 13 11 43 64 60
+24: 10 44 62 61 11 42 63 02
+32: 11 5C 51 63 64 10 50 05
+40: 64 31 11 59 49 6E 50 51
+48: 51 6D 50 51 00"
 `;
 
 exports[`examples > compiles lunar.m61 deterministically > lunar.listing 1`] = `
 " Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  01  | 1                       | 
-   01 |  00  | 0                       | 
-   02 |  00  | 0                       | 
-   03 |  41  | X->П 1                  | init height
-   04 |  01  | 1                       | 
-   05 |  04  | 4                       | 
-   06 |  00  | 0                       | 
-   07 |  42  | X->П 2                  | init fuel
-   08 |  00  | 0                       | 
-   09 |  43  | X->П 3                  | init speed
-   10 |  61  | П->X 1                  | recall height
-   11 |  50  | С/П                     | pause
-   12 |  63  | П->X 3                  | recall speed
-   13 |  50  | С/П                     | pause
-   14 |  62  | П->X 2                  | recall fuel
-   15 |  50  | С/П                     | ask burn
-   16 |  44  | X->П 4                  | input burn
-   17 |  01  | 1                       | 
-   18 |  00  | 0                       | 
-   19 |  12  | *                       | expr *
-   20 |  62  | П->X 2                  | recall fuel
-   21 |  13  | /                       | expr /
-   22 |  09  | 9                       | 
-   23 |  0A  | .                       | 
-   24 |  08  | 8                       | 
-   25 |  11  | -                       | expr -
-   26 |  40  | X->П 0                  | set accel
-   27 |  61  | П->X 1                  | recall height
-   28 |  63  | П->X 3                  | recall speed
-   29 |  01  | 1                       | 
-   30 |  12  | *                       | expr *
-   31 |  11  | -                       | expr -
-   32 |  60  | П->X 0                  | recall accel
-   33 |  01  | 1                       | 
-   34 |  12  | *                       | expr *
-   35 |  01  | 1                       | 
-   36 |  12  | *                       | expr *
-   37 |  02  | 2                       | 
-   38 |  13  | /                       | expr /
-   39 |  11  | -                       | expr -
-   40 |  41  | X->П 1                  | set height
-   41 |  63  | П->X 3                  | recall speed
-   42 |  60  | П->X 0                  | recall accel
-   43 |  01  | 1                       | 
-   44 |  12  | *                       | expr *
-   45 |  10  | +                       | expr +
-   46 |  43  | X->П 3                  | set speed
-   47 |  62  | П->X 2                  | recall fuel
-   48 |  64  | П->X 4                  | recall burn
-   49 |  01  | 1                       | 
-   50 |  12  | *                       | expr *
-   51 |  11  | -                       | expr -
-   52 |  42  | X->П 2                  | set fuel
-   53 |  61  | П->X 1                  | recall height
-   54 |  02  | 2                       | 
-   55 |  11  | -                       | condition compare
-   56 |  5C  | F x<0                   | false branch for <
-   57 |  70  | 70                      | false branch for <
-   58 |  05  | 5                       | 
-   59 |  63  | П->X 3                  | recall speed
-   60 |  31  | К |x|                   | abs()
-   61 |  11  | -                       | condition compare
-   62 |  59  | F x>=0                  | false branch for <=
-   63 |  68  | 68                      | false branch for <=
-   64 |  6E  | П->X e                  | preload const 777
-   65 |  50  | С/П                     | halt
-   66 |  51  | БП                      | if end
-   67 |  70  | 70                      | if end
-   68 |  6D  | П->X d                  | preload const 666
-   69 |  50  | С/П                     | halt
-   70 |  51  | БП                      | loop back
-   71 |  10  | 10                      | loop back
-   72 |  50  | С/П                     | implicit final stop"
+   00 |  63  | П->X 3                  | display flight source
+   01 |  64  | П->X 4                  | display flight source
+   02 |  10  | +                       | packed display combine
+   03 |  62  | П->X 2                  | display flight source
+   04 |  10  | +                       | packed display combine
+   05 |  50  | С/П                     | show flight
+   06 |  41  | X->П 1                  | input burn
+   07 |  6C  | П->X c                  | preload const 10
+   08 |  12  | *                       | expr *
+   09 |  62  | П->X 2                  | recall fuel
+   10 |  13  | /                       | expr /
+   11 |  6C  | П->X c                  | preload const 10
+   12 |  11  | -                       | expr -
+   13 |  40  | X->П 0                  | set accel
+   14 |  63  | П->X 3                  | recall height
+   15 |  64  | П->X 4                  | recall speed
+   16 |  11  | -                       | expr -
+   17 |  60  | П->X 0                  | recall accel
+   18 |  02  | 2                       | 
+   19 |  13  | /                       | expr /
+   20 |  11  | -                       | expr -
+   21 |  43  | X->П 3                  | set height
+   22 |  64  | П->X 4                  | recall speed
+   23 |  60  | П->X 0                  | recall accel
+   24 |  10  | +                       | expr +
+   25 |  44  | X->П 4                  | set speed
+   26 |  62  | П->X 2                  | recall fuel
+   27 |  61  | П->X 1                  | recall burn
+   28 |  11  | -                       | expr -
+   29 |  42  | X->П 2                  | set fuel
+   30 |  63  | П->X 3                  | recall height
+   31 |  02  | 2                       | 
+   32 |  11  | -                       | condition compare
+   33 |  5C  | F x<0                   | false branch for <
+   34 |  51  | 51                      | false branch for <
+   35 |  63  | П->X 3                  | display landed source
+   36 |  64  | П->X 4                  | display landed source
+   37 |  10  | +                       | packed display combine
+   38 |  50  | С/П                     | show landed
+   39 |  05  | 5                       | 
+   40 |  64  | П->X 4                  | recall speed
+   41 |  31  | К |x|                   | abs()
+   42 |  11  | -                       | condition compare
+   43 |  59  | F x>=0                  | false branch for <=
+   44 |  49  | 49                      | false branch for <=
+   45 |  6E  | П->X e                  | preload const 777
+   46 |  50  | С/П                     | halt
+   47 |  51  | БП                      | if end
+   48 |  51  | 51                      | if end
+   49 |  6D  | П->X d                  | preload const 666
+   50 |  50  | С/П                     | halt
+   51 |  51  | БП                      | loop back
+   52 |  00  | 00                      | loop back"
 `;
 
 exports[`examples > compiles tiny-game.m61 deterministically > tiny-game.hex 1`] = `
-"00: 08 0A 00 00 00 00 00 07
-08: 08 4D 6D 50 40 4E 04 11
-16: 5E 24 60 01 11 40 51 36
-24: 6E 06 11 5E 34 F7 06 50
-32: 51 36 00 50 51 10 50"
+"00: 60 62 10 50 41 04 11 5E
+08: 17 58 11 60 62 10 50 51
+16: 28 61 06 11 5E 26 06 50
+24: 51 28 00 50 51 00"
 `;
 
 exports[`examples > compiles tiny-game.m61 deterministically > tiny-game.listing 1`] = `
 " Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  08  | 8                       | 
-   01 |  0A  | .                       | 
-   02 |  00  | 0                       | 
-   03 |  00  | 0                       | 
-   04 |  00  | 0                       | 
-   05 |  00  | 0                       | 
-   06 |  00  | 0                       | 
-   07 |  07  | 7                       | 
-   08 |  08  | 8                       | 
-   09 |  4D  | X->П d                  | init screen
-   10 |  6D  | П->X d                  | recall screen
-   11 |  50  | С/П                     | ask key
-   12 |  40  | X->П 0                  | input key
-   13 |  4E  | X->П e                  | switch scratch
-   14 |  04  | 4                       | 
-   15 |  11  | -                       | switch compare
-   16 |  5E  | F x=0                   | case mismatch
-   17 |  24  | 24                      | case mismatch
-   18 |  60  | П->X 0                  | 
-   19 |  01  | 1                       | 
-   20 |  11  | -                       | 
-   21 |  40  | X->П 0                  | 
-   22 |  51  | БП                      | switch end
-   23 |  36  | 36                      | switch end
-   24 |  6E  | П->X e                  | switch scratch recall
-   25 |  06  | 6                       | 
-   26 |  11  | -                       | switch compare
-   27 |  5E  | F x=0                   | case mismatch
-   28 |  34  | 34                      | case mismatch
-   29 |  F7  | F* empty F7             | raw hex; unsafe-unverified: egg/raw opcode is unsafe-unverified; undocumented opcode is unsafe-unverified
-   30 |  06  | 6                       | 
-   31 |  50  | С/П                     | halt
-   32 |  51  | БП                      | switch end
-   33 |  36  | 36                      | switch end
-   34 |  00  | 0                       | 
-   35 |  50  | С/П                     | halt
-   36 |  51  | БП                      | loop back
-   37 |  10  | 10                      | loop back
-   38 |  50  | С/П                     | implicit final stop"
+   00 |  60  | П->X 0                  | display dial_screen source
+   01 |  62  | П->X 2                  | display dial_screen source
+   02 |  10  | +                       | packed display combine
+   03 |  50  | С/П                     | show dial_screen
+   04 |  41  | X->П 1                  | input key
+   05 |  04  | 4                       | 
+   06 |  11  | -                       | dispatch compare
+   07 |  5E  | F x=0                   | case mismatch
+   08 |  17  | 17                      | case mismatch
+   09 |  58  | F L2                    | decrement charge
+   10 |  11  | 11                      | decrement charge
+   11 |  60  | П->X 0                  | display dial_screen source
+   12 |  62  | П->X 2                  | display dial_screen source
+   13 |  10  | +                       | packed display combine
+   14 |  50  | С/П                     | show dial_screen
+   15 |  51  | БП                      | dispatch end
+   16 |  28  | 28                      | dispatch end
+   17 |  61  | П->X 1                  | dispatch scratch recall
+   18 |  06  | 6                       | 
+   19 |  11  | -                       | dispatch compare
+   20 |  5E  | F x=0                   | case mismatch
+   21 |  26  | 26                      | case mismatch
+   22 |  06  | 6                       | 
+   23 |  50  | С/П                     | halt
+   24 |  51  | БП                      | dispatch end
+   25 |  28  | 28                      | dispatch end
+   26 |  00  | 0                       | 
+   27 |  50  | С/П                     | halt
+   28 |  51  | БП                      | loop back
+   29 |  00  | 00                      | loop back"
 `;
 
-exports[`examples > safe optimizer keeps egg blocks out > tiny-game.safe.hex 1`] = `
-"00: 08 0A 00 00 00 00 00 07
-08: 08 4D 6D 50 40 4E 04 11
-16: 5E 24 60 01 11 40 51 35
-24: 6E 06 11 5E 33 06 50 51
-32: 35 00 50 51 10 50"
+exports[`examples > safe optimizer keeps tiny-game conservative > tiny-game.safe.hex 1`] = `
+"00: 08 00 00 00 00 00 07 08
+08: 40 08 42 60 10 50 41 04
+16: 11 5E 23 53 36 51 34 61
+24: 06 11 5E 32 53 43 51 34
+32: 00 50 51 11 58 38 60 62
+40: 10 50 52 06 50 52"
 `;

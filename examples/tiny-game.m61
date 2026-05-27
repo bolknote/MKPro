@@ -1,30 +1,40 @@
-machine mk61
-budget steps <= 105
+target mk61
+budget 105 cells
+optimize size
+reference tiny_dial_game
 
-store screen = 8.0000078 prefer Rd  // hand-packed digit pattern for the dial
-store key prefer R0
+program TinyDialGame {
+  input key: digit
 
-entry main {
-  loop {
-    key = ask screen
-    switch key {
-      case 4 {
-        core {
-          Пх0
-          1
-          -
-          хП0
-        }
-      }
-      case 6 {
-        egg {
-          F7
-        }
-        halt 6
-      }
-      default {
-        halt 0
-      }
+  state {
+    [displayed] dial: packed = 80000078
+    [displayed] charge: resource 0..9 = 8 {
+      terminal at 0 show dial_screen
     }
+  }
+
+  screen dial_screen {
+    show dial, charge
+    style compact digits sign
+  }
+
+  turn {
+    show dial_screen
+    read key
+
+    match key {
+      4 => drain
+      6 => win
+      otherwise => stop 0
+    }
+  }
+
+  rule drain {
+    charge -= 1
+    show dial_screen
+  }
+
+  rule win {
+    stop 6
   }
 }

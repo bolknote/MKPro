@@ -81,10 +81,6 @@ program TinyGame {
 }
 ```
 
-`preload` values are either literals or explicit function calls. For example,
-`preload R9 = random_seed()` is valid; `preload R9 = random_seed` is rejected
-because a bare symbolic value would read like compiler magic.
-
 Handwritten `machine`/`entry`/`core`/`egg` programs still compile as the
 low-level compatibility surface, but they are not a second public language.
 They exist for listings, experiments, and cases where we intentionally want to
@@ -97,13 +93,20 @@ overlay, X2/`ВП`, display-byte packing, hexadecimal mantissa data, R0 edge
 cases, and Danilov-style error-stop idioms when the source semantics allows
 them.
 
-Current reference examples include:
+All `examples/*.m61` programs are written in the human DSL. They cover:
 
+- `examples/basic.m61`: minimal input/output and arithmetic.
+- `examples/tiny-game.m61`: tiny menu-style loop.
+- `examples/lunar.m61`: numeric landing game with resources and touchdown rules.
+- `examples/human.m61`: small counter game used as syntax smoke test.
+- `examples/cave-sketch.m61`: compact cave sketch in game intent form.
+- `examples/cave-highlevel-baseline.m61`: readable Cave Treasure baseline.
 - `examples/cave-treasure.m61`: full high-level compactness reference.
+- `examples/cave-treasure-full.m61`: full reference metadata variant.
 - `examples/grid-rescue.m61`: grid/bitset reference.
 - `examples/resource-raid.m61`: resource/dispatch reference.
 - `examples/giants-country.m61`: commented high-level game port.
-- `examples/cave-sketch.m61`: older compact sketch kept as compatibility coverage.
+- `examples/sea-battle.m61`: turn-based fleet duel port from the games archive.
 
 ## Documentation
 

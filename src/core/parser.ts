@@ -34,8 +34,10 @@ import type {
   TempDeclarationAst,
   TrapStatementAst,
   SemanticHint,
+  V2BoardAst,
   V2CollectionStatementAst,
   V2EncounterTableAst,
+  V2FleetAst,
   V2InputAst,
   V2InvokeStatementAst,
   V2MatchCaseAst,
@@ -182,7 +184,7 @@ class M61Parser {
     if (v2 !== undefined && preloads.length > 0) {
       throw new ParseError("Move setup intent into program/state; v2 source must not use preload", preloads[0]!.line);
     }
-    if (v2 !== undefined && domains.some((domain) => domain.line < v2!.line)) {
+    if (v2 !== undefined && domains.some((domain) => domain.line < v2.line)) {
       throw new ParseError("Move v2 domain intent into program world/state/encounters blocks", domains[0]!.line);
     }
     if (entries.length === 0) {
@@ -216,6 +218,8 @@ class M61Parser {
     const inputs: V2InputAst[] = [];
     const state: V2StateFieldAst[] = [];
     const screens: V2ScreenAst[] = [];
+    const boards: V2BoardAst[] = [];
+    const fleets: V2FleetAst[] = [];
     const worlds: V2WorldAst[] = [];
     const encounters: V2EncounterTableAst[] = [];
     const rules: V2RuleAst[] = [];
@@ -231,6 +235,8 @@ class M61Parser {
           inputs,
           state,
           screens,
+          boards,
+          fleets,
           worlds,
           encounters,
           rules,
@@ -252,6 +258,14 @@ class M61Parser {
       }
       if (hinted.text.startsWith("screen ")) {
         screens.push(this.parseV2Screen(hinted));
+        continue;
+      }
+      if (hinted.text.startsWith("board ")) {
+        boards.push(this.parseV2Board(hinted));
+        continue;
+      }
+      if (hinted.text.startsWith("fleet ")) {
+        fleets.push(this.parseV2Fleet(hinted));
         continue;
       }
       if (hinted.text.startsWith("world ")) {
@@ -361,6 +375,76 @@ class M61Parser {
       throw new ParseError("Screen block must contain show/style lines", line.line);
     }
     throw new ParseError("Unclosed screen block", header.line);
+  }
+
+  private parseV2Board(hinted: { text: string; hints: SemanticHint[] }): V2BoardAst {
+    const header = this.next();
+    const match = /^board\s+([A-Za-z_][\w]*)\s*:\s*(\d+)x(\d+)\s*\{$/u.exec(hinted.text);
+    if (!match) throw new ParseError("Board must look like 'board name: 10x10 {'", header.line);
+    const board: V2BoardAst = {
+      kind: "v2_board",
+      name: match[1]!,
+      width: Number(match[2]),
+      height: Number(match[3]),
+      hints: hinted.hints,
+      line: header.line,
+    };
+    while (!this.done()) {
+      const line = this.next();
+      if (line.text === "}") return board;
+      const coordinate = /^coordinate\s+([A-Za-z_][\w]*)(?:\s+(.+))?$/u.exec(line.text);
+      if (coordinate) {
+        board.coordinateStyle = coordinate[1]!;
+        if (coordinate[2] !== undefined) board.coordinateRange = coordinate[2].trim();
+        continue;
+      }
+      throw new ParseError("Board block must contain coordinate lines", line.line);
+    }
+    throw new ParseError("Unclosed board block", header.line);
+  }
+
+  private parseV2Fleet(hinted: { text: string; hints: SemanticHint[] }): V2FleetAst {
+    const header = this.next();
+    const match = /^fleet\s+([A-Za-z_][\w]*)\s+on\s+([A-Za-z_][\w]*)\s*\{$/u.exec(hinted.text);
+    if (!match) throw new ParseError("Fleet must look like 'fleet name on board {'", header.line);
+    let ships: V2FleetAst["ships"] | undefined;
+    const fleet: Omit<V2FleetAst, "ships"> = {
+      kind: "v2_fleet",
+      name: match[1]!,
+      board: match[2]!,
+      hints: hinted.hints,
+      line: header.line,
+    };
+    while (!this.done()) {
+      const line = this.next();
+      if (line.text === "}") {
+        if (ships === undefined) throw new ParseError("Fleet block must contain ships line", header.line);
+        return { ...fleet, ships };
+      }
+      const shipsMatch = /^ships\s+([A-Za-z_][\w]*)(?:\s+(-?\d+)\.\.(-?\d+))?\s*=\s*(.+)$/u.exec(line.text);
+      if (shipsMatch) {
+        ships = { name: shipsMatch[1]!, initial: shipsMatch[4]!.trim() };
+        if (shipsMatch[2] !== undefined) ships.min = Number(shipsMatch[2]);
+        if (shipsMatch[3] !== undefined) ships.max = Number(shipsMatch[3]);
+        continue;
+      }
+      if (line.text === "generated random") {
+        fleet.generated = "random";
+        continue;
+      }
+      const cleared = /^cleared\s+when\s+(.+)$/u.exec(line.text);
+      if (cleared) {
+        fleet.clearedWhen = cleared[1]!.trim();
+        continue;
+      }
+      const terminal = /^terminal\s+at\s+(.+?)\s+show\s+(.+)$/u.exec(line.text);
+      if (terminal) {
+        fleet.terminal = { at: terminal[1]!.trim(), show: terminal[2]!.trim() };
+        continue;
+      }
+      throw new ParseError("Fleet block must contain ships/generated/cleared/terminal lines", line.line);
+    }
+    throw new ParseError("Unclosed fleet block", header.line);
   }
 
   private parseV2World(hinted: { text: string; hints: SemanticHint[] }): V2WorldAst {
@@ -1064,7 +1148,7 @@ function parseV2StateField(line: SourceLine): V2StateFieldAst {
     hints: hinted.hints,
     line: line.line,
   };
-  if (match[3] !== undefined) field.spec = match[3]!.trim();
+  if (match[3] !== undefined) field.spec = match[3].trim();
   if (rangeMatch) {
     field.min = Number(rangeMatch[1]);
     field.max = Number(rangeMatch[2]);
@@ -1109,7 +1193,7 @@ function parseV2InlineStatement(
       line,
     };
     if (match[2] !== undefined) {
-      statement.elseAction = parseV2InlineStatement(match[2]!.trim(), hints, line);
+      statement.elseAction = parseV2InlineStatement(match[2].trim(), hints, line);
     }
     return statement;
   }
@@ -1228,6 +1312,22 @@ function lowerV2Program(v2: V2ProgramAst): {
 
 function lowerV2Domains(v2: V2ProgramAst): DomainAst[] {
   const domains: DomainAst[] = [];
+  for (const board of v2.boards) {
+    const lines: RawBlockLine[] = [
+      { text: `columns ${board.width}`, line: board.line },
+      { text: `rows ${board.height}`, line: board.line },
+    ];
+    if (board.coordinateStyle !== undefined) lines.push({ text: `coordinate ${board.coordinateStyle}`, line: board.line });
+    if (board.coordinateRange !== undefined) lines.push({ text: `range ${board.coordinateRange}`, line: board.line });
+    domains.push({
+      kind: "domain",
+      domainKind: "maze",
+      name: board.name,
+      header: `board ${board.name}`,
+      lines,
+      line: board.line,
+    });
+  }
   for (const world of v2.worlds) {
     if (world.position !== undefined) {
       const lines: RawBlockLine[] = [];
@@ -1299,6 +1399,36 @@ function lowerV2Domains(v2: V2ProgramAst): DomainAst[] {
       });
     }
   }
+  for (const fleet of v2.fleets) {
+    domains.push({
+      kind: "domain",
+      domainKind: "bitset",
+      name: fleet.name,
+      header: `fleet ${fleet.name}`,
+      lines: [
+        { text: `board ${fleet.board}`, line: fleet.line },
+        ...(fleet.generated !== undefined ? [{ text: "generated_by compiler_random", line: fleet.line }] : []),
+        ...(fleet.clearedWhen !== undefined ? [{ text: `cleared_when ${fleet.clearedWhen}`, line: fleet.line }] : []),
+      ],
+      line: fleet.line,
+    });
+    const resourceLines: RawBlockLine[] = [
+      { text: `initial ${fleet.ships.initial}`, line: fleet.line },
+      { text: `fleet ${fleet.name}`, line: fleet.line },
+    ];
+    if (fleet.terminal !== undefined) {
+      resourceLines.push({ text: `terminal_at ${fleet.terminal.at}`, line: fleet.line });
+      resourceLines.push({ text: `terminal_display ${fleet.terminal.show}`, line: fleet.line });
+    }
+    domains.push({
+      kind: "domain",
+      domainKind: "resource",
+      name: fleet.ships.name,
+      header: `fleet ships ${fleet.ships.name}`,
+      lines: resourceLines,
+      line: fleet.line,
+    });
+  }
   if (v2.encounters.length > 0) {
     domains.push({
       kind: "domain",
@@ -1345,6 +1475,28 @@ function lowerV2State(v2: V2ProgramAst): StateAst[] {
       lowered.initial = parseExpression("0", field.line);
     }
     fields.push(lowered);
+  }
+  for (const fleet of v2.fleets) {
+    const ships: StateFieldAst = {
+      name: fleet.ships.name,
+      type: "resource",
+      line: fleet.line,
+    };
+    if (fleet.ships.min !== undefined) ships.min = fleet.ships.min;
+    if (fleet.ships.max !== undefined) ships.max = fleet.ships.max;
+    const inputSource = parseInputSource(fleet.ships.initial);
+    if (inputSource !== undefined) {
+      ships.initialInput = inputSource;
+    } else {
+      ships.initial = lowerV2Expression(fleet.ships.initial, fleet.line);
+    }
+    fields.push(ships);
+    fields.push({
+      name: fleet.name,
+      type: "packed",
+      initial: fleet.generated === "random" ? lowerV2Expression("random() * 999", fleet.line) : parseExpression("0", fleet.line),
+      line: fleet.line,
+    });
   }
   const declared = new Set(fields.map((field) => field.name));
   for (const scratch of collectV2ScratchFields(v2)) {

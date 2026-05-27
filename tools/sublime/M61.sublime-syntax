@@ -64,7 +64,7 @@ contexts:
       scope: constant.language.m61
 
   section-declarations:
-    - match: '^\s*(program|state|screen|turn|rule|entry|proc|block|coord|maze|bitset|resource|event|random|fight|table|display)\b'
+    - match: '^\s*(program|state|screen|turn|rule|entry|proc|block|board|fleet|coord|maze|bitset|resource|event|random|fight|table|display)\b'
       scope: keyword.declaration.block.m61
     - match: '^\s*(shared)\s+(tail)\b'
       captures:
@@ -84,7 +84,7 @@ contexts:
       scope: keyword.operator.word.m61
 
   domain-keywords:
-    - match: '\b(digit|number|flag|counter|coord|bitset|enum|packed|addr|resource|optional|generated|random|floor|floors|column|columns|row|rows|register|registers|initial|terminal_at|terminal_display|command|cost|reward|style|display|start|seed|symbol|true|false)\b'
+    - match: '\b(digit|number|flag|counter|coord|bitset|enum|packed|addr|resource|optional|generated|random|floor|floors|column|columns|row|rows|board|fleet|ships|coordinate|terminal|cleared|when|command|cost|reward|style|display|start|seed|symbol|true|false)\b'
       scope: storage.type.domain.m61
     - match: '\b(calculator_random|random_seed|input\.X|input\.Y|direction|memory_code|cell_at|nonzero)\b'
       scope: support.function.domain.m61

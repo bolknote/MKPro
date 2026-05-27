@@ -1,73 +1,119 @@
-machine mk61
-budget steps <= 105
+target mk61
+budget 105 cells
+optimize size
+reference cave_highlevel_baseline
 
-// A first compileable M61 sketch of the classic "Cave Treasure" idea.
-// This is intentionally written in the current surface language, before
-// adding domain constructs such as position/mask/resource/recipe.
+// Early readable Cave Treasure baseline kept as a compactness comparison.
+// The source is now game intent; register plans and raw return tricks live in reports.
 
-store command fixed R8
-store treasures = 0 fixed R0
-store walls1 fixed R1
-store walls2 fixed R2
-store walls3 fixed R3
-store player = 1.0000001 fixed Ra
-store blocked fixed Rb
-store loot = 0 fixed Rc
-store dynamite = 6 fixed Rd
-store food fixed Re
+program CaveHighlevelBaseline {
+  input command: digit
 
-entry main {
-  loop {
-    command = ask player
-    food = food - 1
+  state {
+    [displayed] player: coord(floor 1..3, x 1..7, y 1..4) = 1.0000001
 
-    if food < 0 {
-      core {
-        В/О
-      }
+    [persistent] walls: bitset {
+      generated random
     }
 
-    switch command {
-      case 2 {
-        blocked = player + 0.0000002
-        player = blocked
-        pause player
-      }
-      case 4 {
-        blocked = player + 0.000001
-        player = blocked
-        pause player
-      }
-      case 6 {
-        blocked = player - 0.000001
-        player = blocked
-        pause player
-      }
-      case 8 {
-        blocked = player - 0.0000002
-        player = blocked
-        pause player
-      }
-      case 5 {
-        blocked = player + 1
-        player = blocked
-        pause player
-      }
-      case 0 {
-        dynamite = dynamite - 2
-        if dynamite < 0 {
-          pause dynamite
-        }
-        player = blocked
-        pause player
-      }
-      case 10 {
-        loot = loot + 1
-        pause loot
-      }
-      default {
-        halt 0
-      }
+    [persistent] caches: bitset {
+      generated random
+      cleared when cache searched
+    }
+
+    [displayed] food: resource 0..99 = input.Y {
+      terminal at 0 show cave_screen
+    }
+    [persistent] dynamite: resource 0..9 = 6
+    [persistent] treasure: score 0..9 = 0 {
+      reward cache 1
+    }
+
+    [temporary] blocked: coord optional
+    [temporary] loot: packed = 0
+  }
+
+  world cave: grid {
+    position player {
+      floors 1..3
+      rooms 1..7
+      display packed_decimal_zero_run
+      start input.X
+    }
+
+    generated random
+    player decimal_point
+    door symbol 8 costs food 1
+    wall symbol 8 blocks forward costs dynamite 2
+    vertical wrap 1 -> 2 -> 3 -> 1
+  }
+
+  screen cave_screen {
+    show player, food, dynamite, treasure
+    style compact digits letters hex
+  }
+
+  turn {
+    show cave_screen
+    read command
+    food -= 1
+
+    match command {
+      2 => move_south
+      4 => move_west
+      6 => move_east
+      8 => move_north
+      5 => move_up
+      0 => break_wall
+      10 => search_cache
+      otherwise => stop 0
+    }
+  }
+
+  rule move_south {
+    blocked = player + 0.0000002
+    player = blocked
+    show cave_screen
+  }
+
+  rule move_west {
+    blocked = player + 0.000001
+    player = blocked
+    show cave_screen
+  }
+
+  rule move_east {
+    blocked = player - 0.000001
+    player = blocked
+    show cave_screen
+  }
+
+  rule move_north {
+    blocked = player - 0.0000002
+    player = blocked
+    show cave_screen
+  }
+
+  rule move_up {
+    blocked = player + 1
+    player = blocked
+    show cave_screen
+  }
+
+  rule break_wall {
+    dynamite -= 2
+    if dynamite < 0 {
+      show cave_screen
+    }
+    player = blocked
+    show cave_screen
+  }
+
+  rule search_cache {
+    if caches has player {
+      caches clear player
+      treasure += 1
+      show cave_screen
     }
   }
 }

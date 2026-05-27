@@ -147,7 +147,7 @@ program Demo {
     expect(turn.body.some((statement) => statement.kind === "dispatch")).toBe(true);
   });
 
-  it("parses v2 world, block-configured state, encounters, and reference metadata", () => {
+  it("parses v2 world, boards, fleets, state config, encounters, and reference metadata", () => {
     const ast = parseProgram(`
 target mk61
 budget 105 cells
@@ -156,6 +156,9 @@ reference demo_reference
 
 program Demo {
   input key: digit
+  board ocean: 10x10 {
+    coordinate two_digit 00..99
+  }
   state {
     [displayed] pos: coord(floor 1..3, x 0..7) = 1
     [displayed] strength: resource 0..99 = 40 {
@@ -182,6 +185,12 @@ program Demo {
     wall symbol 8 blocks forward costs strength 7
     vertical wrap 1 -> 2 -> 3 -> 1
   }
+  fleet enemy_fleet on ocean {
+    ships enemy_ships 0..99 = input.X
+    generated random
+    cleared when player hit
+    terminal at 0 show main
+  }
   screen main {
     show pos, strength
     style compact digits
@@ -201,10 +210,15 @@ program Demo {
 `);
 
     expect(ast.reference).toBe("demo_reference");
+    expect(ast.v2?.boards[0]).toMatchObject({ name: "ocean", width: 10, height: 10, coordinateStyle: "two_digit" });
+    expect(ast.v2?.fleets[0]?.ships).toMatchObject({ name: "enemy_ships", initial: "input.X", min: 0, max: 99 });
     expect(ast.v2?.worlds[0]?.name).toBe("demo_world");
     expect(ast.v2?.state.find((field) => field.name === "strength")?.terminal).toMatchObject({ at: "0", show: "error" });
     expect(ast.v2?.state.find((field) => field.name === "plans")?.clearedWhen).toBe("creature defeated");
     expect(ast.v2?.encounters[0]?.cases.map((encounterCase) => encounterCase.name)).toEqual(["empty", "skeleton"]);
+    expect(ast.domains.some((domain) => domain.domainKind === "maze" && domain.name === "ocean")).toBe(true);
+    expect(ast.domains.some((domain) => domain.domainKind === "bitset" && domain.name === "enemy_fleet")).toBe(true);
+    expect(ast.states[0]?.fields.some((field) => field.name === "enemy_ships" && field.type === "resource")).toBe(true);
     expect(ast.domains.some((domain) => domain.domainKind === "maze" && domain.name === "demo_world")).toBe(true);
     expect(ast.procs.some((proc) => proc.name === "encounter")).toBe(true);
   });

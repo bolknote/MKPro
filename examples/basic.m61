@@ -1,12 +1,26 @@
-machine mk61
-budget steps <= 105
+target mk61
+budget 105 cells
+optimize size
+reference basic_sum
 
-store x prefer R0
-store y prefer R1
+program BasicSum {
+  input x: digit
+  input y: digit
 
-entry main {
-  x = ask 0
-  y = ask x
-  set y = x + y
-  pause y
+  state {
+    [displayed] result: counter 0..99 = 0
+  }
+
+  screen answer {
+    show result
+    style compact digits
+  }
+
+  turn {
+    read x
+    read y
+    result = x + y
+    show answer
+    stop result
+  }
 }

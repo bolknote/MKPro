@@ -1,0 +1,99 @@
+target mk61
+budget 105 cells
+optimize size
+reference anvarov_sea_battle
+
+// Based on Serge Anvarov's "Sea Battle": a 10x10 one-deck fleet duel.
+// The player and the calculator start with the same ship count.
+
+program SeaBattle {
+  input response: number
+
+  board ocean: 10x10 {
+    coordinate two_digit 00..99
+  }
+
+  state {
+    [displayed] calculator_shot: coord(x 0..9, y 0..9) = 0
+    [temporary] player_shot: coord(x 0..9, y 0..9) optional
+  }
+
+  fleet own_fleet on ocean {
+    ships own_ships 0..99 = input.X
+    generated random
+    cleared when calculator hit
+    terminal at 0 show enemy_win
+  }
+
+  fleet enemy_fleet on ocean {
+    ships enemy_ships 0..99 = input.X
+    generated random
+    cleared when player hit
+    terminal at 0 show player_win
+  }
+
+  screen battle {
+    show calculator_shot, own_ships, enemy_ships
+    style compact digits sign
+  }
+
+  screen enemy_win {
+    show 33333331
+    style compact digits
+  }
+
+  screen player_win {
+    show -8
+    style compact digits letters sign
+  }
+
+  turn {
+    calculator_turn
+    read response
+
+    if response < 0 {
+      calculator_hit
+    }
+    else {
+      player_fire
+    }
+  }
+
+  rule calculator_turn {
+    calculator_shot = int(random() * 100)
+    show battle
+  }
+
+  rule calculator_hit {
+    own_fleet clear calculator_shot
+    own_ships -= 1
+
+    if own_ships <= 0 {
+      show enemy_win
+      stop 33333331
+    }
+    else {
+      calculator_turn
+    }
+  }
+
+  rule player_fire {
+    player_shot = response
+
+    if enemy_fleet has player_shot {
+      enemy_fleet clear player_shot
+      enemy_ships -= 1
+
+      if enemy_ships <= 0 {
+        show player_win
+        stop -8
+      }
+      else {
+        show battle
+      }
+    }
+    else {
+      show battle
+    }
+  }
+}

@@ -245,6 +245,8 @@ export interface V2ProgramAst {
   inputs: V2InputAst[];
   state: V2StateFieldAst[];
   screens: V2ScreenAst[];
+  boards: V2BoardAst[];
+  fleets: V2FleetAst[];
   worlds: V2WorldAst[];
   encounters: V2EncounterTableAst[];
   turn?: V2TurnAst;
@@ -285,6 +287,36 @@ export interface V2TerminalAst {
 export interface V2RewardRuleAst {
   name: string;
   value: string;
+}
+
+export interface V2BoardAst {
+  kind: "v2_board";
+  name: string;
+  width: number;
+  height: number;
+  coordinateStyle?: string;
+  coordinateRange?: string;
+  hints: SemanticHint[];
+  line: number;
+}
+
+export interface V2FleetAst {
+  kind: "v2_fleet";
+  name: string;
+  board: string;
+  ships: V2FleetShipsAst;
+  generated?: "random";
+  clearedWhen?: string;
+  terminal?: V2TerminalAst;
+  hints: SemanticHint[];
+  line: number;
+}
+
+export interface V2FleetShipsAst {
+  name: string;
+  min?: number;
+  max?: number;
+  initial: string;
 }
 
 export interface V2WorldAst {

@@ -33,9 +33,10 @@ describe("examples", () => {
     expect(result.report.steps).toBeLessThanOrEqual(105);
   });
 
-  it("safe optimizer keeps egg blocks out", () => {
+  it("safe optimizer keeps tiny-game conservative", () => {
     const safe = compileM61(loadExample("tiny-game"), { opt: "safe" });
     expect(formatHex(safe)).toMatchSnapshot("tiny-game.safe.hex");
-    expect(safe.report.warnings.some((w) => w.includes("Skipped egg"))).toBe(true);
+    expect(safe.report.candidates.some((candidate) => candidate.variant === "safe-compare-chain" && candidate.selected)).toBe(true);
+    expect(safe.report.cellRoles.some((cell) => cell.roles.includes("overlay"))).toBe(false);
   });
 });

@@ -6,6 +6,10 @@ dark entries, X2 tricks, overlays, or undocumented opcodes. Those are target
 profile capabilities of `mk61_exact`, and the optimizer may use them whenever
 its effect checks and emulator facts allow the rewrite.
 
+The examples in `examples/*.m61` are intentionally written in this human DSL.
+Older `machine`/`entry`/`core` syntax remains available for compatibility and
+experiments, but it is not the recommended style for new game sources.
+
 ## Shape
 
 ```m61
@@ -109,6 +113,43 @@ state {
 Use `resource` for consumable values, `score` for accumulated rewards, and
 `bitset` for generated map or encounter masks. Register placement and compact
 packing are compiler decisions.
+
+## Board And Fleet Blocks
+
+Use `board` when a game is about probes, shots, or pieces on a fixed board
+rather than movement through a world:
+
+```m61
+board ocean: 10x10 {
+  coordinate two_digit 00..99
+}
+
+fleet enemy_fleet on ocean {
+  ships enemy_ships 0..99 = input.X
+  generated random
+  cleared when player hit
+  terminal at 0 show player_win
+}
+```
+
+`board` describes the coordinate system. `fleet` describes a generated set of
+occupied cells plus the resource that counts remaining pieces. This keeps games
+such as Sea Battle, Minesweeper, fox hunting, or board puzzles from pretending
+to be hallway movement games.
+
+## Example Programs
+
+The repository examples are grouped by the game shape they exercise:
+
+- `basic.m61`, `human.m61`, and `tiny-game.m61` are small syntax and control-flow
+  examples.
+- `lunar.m61` is a numeric resource game with touchdown rules.
+- `cave-sketch.m61`, `cave-highlevel-baseline.m61`, `cave-treasure.m61`, and
+  `cave-treasure-full.m61` show increasingly complete cave/grid games.
+- `grid-rescue.m61`, `resource-raid.m61`, and `giants-country.m61` exercise
+  spatial resources, generated masks, encounters, and challenge blocks.
+- `sea-battle.m61` demonstrates `board` and `fleet` for non-movement board
+  games.
 
 ## World Blocks
 
