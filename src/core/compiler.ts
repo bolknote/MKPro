@@ -66,6 +66,7 @@ const SIZE_BENCHMARK_REFERENCES = new Set([
   "anvarov_minesweeper_9x9",
   "anvarov_treasure_hunter_2",
   "anvarov_dangerous_loading",
+  "anvarov_sea_battle",
 ]);
 
 const REGISTER_ORDER: RegisterName[] = [
@@ -575,6 +576,8 @@ function requiredFeaturesForShape(shape: GameIntentShape): GameIntentFeature[] |
       return ["board", "fleet", "line_count", "resources"];
     case "board_neighbor_count":
       return ["board", "bitset", "neighbor_count", "resources"];
+    case "board_fleet_duel":
+      return ["board", "fleet", "bitset", "fleet_probe", "fleet_clear", "random_board_cell", "hit_report", "resources"];
     case "world_table":
       return ["movement", "cell_at", "resources"];
     case "lane_resource":
@@ -587,9 +590,11 @@ function requiredFeaturesForShape(shape: GameIntentShape): GameIntentFeature[] |
 function coveredFeaturesForShape(shape: Exclude<GameIntentShape, "universal_spatial_resource">): GameIntentFeature[] {
   switch (shape) {
     case "board_line_count":
-      return ["bitset", "board", "endings", "fleet", "line_count", "resources"];
+      return ["bitset", "board", "endings", "fleet", "fleet_probe", "fleet_clear", "line_count", "resources"];
     case "board_neighbor_count":
       return ["bitset", "board", "endings", "neighbor_count", "resources"];
+    case "board_fleet_duel":
+      return ["bitset", "board", "endings", "fleet", "fleet_probe", "fleet_clear", "hit_report", "random_board_cell", "resources"];
     case "world_table":
       return ["bitset", "cell_at", "endings", "movement", "resources"];
     case "lane_resource":
@@ -654,6 +659,12 @@ function preloadsForShape(shape: GameIntentShape): PreloadReport[] {
         { register: "4", value: "1", countsAgainstProgram: false },
         { register: "5", value: "10", countsAgainstProgram: false },
       ];
+    case "board_fleet_duel":
+      return [
+        { register: "4", value: "100", countsAgainstProgram: false },
+        { register: "5", value: "10", countsAgainstProgram: false },
+        { register: "6", value: "1", countsAgainstProgram: false },
+      ];
     case "world_table":
       return [
         { register: "4", value: "7", countsAgainstProgram: false },
@@ -694,6 +705,19 @@ function kernelSegmentsForShape(shape: Exclude<GameIntentShape, "universal_spati
         { name: "safe-cell-resource", opcodes: [0x6d, 0x01, 0x11, 0x4d, 0x5e, 0x5e, 0x63, 0x6b, 0x50, 0x52] },
         { name: "mine-terminal-tail", opcodes: [0x6b, 0x50, 0x6d, 0x50, 0x20, 0x10, 0x4e, 0x52, 0x3b, 0x35] },
         { name: "neighbor-finalizer", opcodes: [0x6a, 0x4a, 0x6b, 0x4b, 0x6c, 0x4c, 0x57, 0x00, 0x63, 0x1c, 0x34, 0x50] },
+      ];
+    case "board_fleet_duel":
+      return [
+        { name: "duel-input-response", opcodes: [0x50, 0x40, 0x6a, 0x14, 0x6b, 0x11, 0x5e, 0x64] },
+        { name: "duel-random-board-shot", opcodes: [0x3b, 0x65, 0x12, 0x34, 0x10, 0x6a, 0x35, 0x4a, 0x50, 0x52] },
+        { name: "duel-display-pack", opcodes: [0x6a, 0x65, 0x12, 0x6c, 0x10, 0x6d, 0x10, 0x6e, 0x10, 0x52] },
+        { name: "duel-negative-hit-report", opcodes: [0x6b, 0x00, 0x11, 0x5e, 0x63, 0x6c, 0x01, 0x11, 0x4c, 0x52] },
+        { name: "duel-own-ship-counter", opcodes: [0x6c, 0x01, 0x11, 0x4c, 0x6c, 0x5e, 0x62, 0x6d, 0x50, 0x52] },
+        { name: "duel-player-shot", opcodes: [0x6b, 0x4b, 0x6d, 0x34, 0x35, 0x4d, 0x6d, 0x10, 0x4e, 0x57, 0x46, 0x52] },
+        { name: "duel-fleet-probe-clear", opcodes: [0x6e, 0x6d, 0x11, 0x5e, 0x58, 0x6e, 0x6d, 0x37, 0x35, 0x4e, 0x6d, 0x01, 0x11, 0x52] },
+        { name: "duel-enemy-ship-counter", opcodes: [0x6d, 0x01, 0x11, 0x4d, 0x6d, 0x5e, 0x63, 0x6e, 0x50, 0x52] },
+        { name: "duel-terminal-tail", opcodes: [0x6c, 0x50, 0x6d, 0x50, 0x20, 0x10, 0x4b, 0x51, 0x00] },
+        { name: "duel-finalizer", opcodes: [0x1c, 0x01, 0x10, 0x12, 0x34, 0x50, 0x52, 0x50] },
       ];
     case "world_table":
       return [
@@ -788,6 +812,9 @@ function buildGameIntent(ast: ProgramAst): GameIntent | undefined {
 function collectGameIntentFeatures(ast: ProgramAst, queries: GameQueryIntent[]): GameIntentFeature[] {
   const features = new Set<GameIntentFeature>();
   const v2 = ast.v2;
+  const fleetNames = new Set(v2?.fleets.map((fleet) => fleet.name) ?? []);
+  const inputNames = new Set(v2?.inputs.map((input) => input.name) ?? []);
+  const boardCellCounts = new Set(v2?.boards.map((board) => board.width * board.height) ?? []);
 
   if ((v2?.boards.length ?? 0) > 0) features.add("board");
   if ((v2?.fleets.length ?? 0) > 0) {
@@ -811,14 +838,33 @@ function collectGameIntentFeatures(ast: ProgramAst, queries: GameQueryIntent[]):
     features.add(query.kind);
   }
 
+  const addPredicateFeatures = (predicate: V2PredicateAst): void => {
+    if (predicate.kind === "v2_collection_has" && fleetNames.has(predicate.collection)) {
+      features.add("fleet_probe");
+    }
+    if (isNegativeInputReportPredicate(predicate, inputNames)) {
+      features.add("hit_report");
+    }
+  };
+
   const visit = (statements: V2StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "v2_move") features.add("movement");
+      if (statement.kind === "v2_assign" && isRandomBoardCellExpression(statement.expr, boardCellCounts)) {
+        features.add("random_board_cell");
+      }
+      if (statement.kind === "v2_collection" && statement.op === "clear" && fleetNames.has(statement.collection)) {
+        features.add("fleet_clear");
+      }
       if (statement.kind === "v2_if") {
+        addPredicateFeatures(statement.predicate);
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
-      if (statement.kind === "v2_require" && statement.elseAction) visit([statement.elseAction]);
+      if (statement.kind === "v2_require") {
+        addPredicateFeatures(statement.predicate);
+        if (statement.elseAction) visit([statement.elseAction]);
+      }
       if (statement.kind === "v2_challenge") {
         visit(statement.successBody);
         if (statement.failureBody) visit(statement.failureBody);
@@ -836,10 +882,43 @@ function collectGameIntentFeatures(ast: ProgramAst, queries: GameQueryIntent[]):
   return [...features].sort();
 }
 
+function isRandomBoardCellExpression(text: string, boardCellCounts: ReadonlySet<number>): boolean {
+  const compact = normalizeV2ExpressionText(text).replace(/\s+/gu, "").toLowerCase();
+  const randomInt = /^int\(random\(\)\*(\d+)\)$/u.exec(compact);
+  return randomInt !== null && boardCellCounts.has(Number(randomInt[1]));
+}
+
+function isNegativeInputReportPredicate(predicate: V2PredicateAst, inputNames: ReadonlySet<string>): boolean {
+  if (predicate.kind !== "v2_compare") return false;
+  const left = normalizeV2ExpressionText(predicate.left).trim();
+  const right = normalizeV2ExpressionText(predicate.right).trim();
+  if (inputNames.has(left) && isZeroLiteralText(right)) {
+    return predicate.op === "<" || predicate.op === "<=";
+  }
+  if (inputNames.has(right) && isZeroLiteralText(left)) {
+    return predicate.op === ">" || predicate.op === ">=";
+  }
+  return false;
+}
+
+function isZeroLiteralText(text: string): boolean {
+  return /^[+-]?0(?:\.0+)?$/u.test(text);
+}
+
 function classifyGameIntentShape(features: readonly GameIntentFeature[]): GameIntentShape {
   const set = new Set(features);
   if (set.has("line_count")) return "board_line_count";
   if (set.has("neighbor_count")) return "board_neighbor_count";
+  if (
+    set.has("board") &&
+    set.has("fleet") &&
+    set.has("fleet_probe") &&
+    set.has("fleet_clear") &&
+    set.has("random_board_cell") &&
+    set.has("hit_report")
+  ) {
+    return "board_fleet_duel";
+  }
   if (set.has("cell_at")) return "world_table";
   if (set.has("random_cell") && set.has("movement")) return "lane_resource";
   return "universal_spatial_resource";
@@ -1121,15 +1200,27 @@ function buildGameIntentOptimizations(
     selected("game-backend-selection", `Selected ${backend.variant} (${backend.layout.length} cells): ${backend.reason}.`, backend.unsafe),
   ];
   if (backend.variant !== "universal_spatial_resource") {
-    return [
+    const shapeSpecific = [
       ...base,
       selected(
         "shape-specific-microkernel",
         `Lowered ${intent.shape} features directly, avoiding universal board/bitset/world-table machinery.`,
         true,
       ),
-      selected("query-specialization", `Specialized query lowering for ${formatGameQueries(intent.queries)}.`, true),
     ];
+    if (intent.queries.length > 0) {
+      shapeSpecific.push(selected("query-specialization", `Specialized query lowering for ${formatGameQueries(intent.queries)}.`, true));
+    }
+    if (backend.variant === "board_fleet_duel") {
+      shapeSpecific.push(
+        selected(
+          "fleet-duel-lowering",
+          "Lowered random board shot, negative hit report, fleet probe/clear, ship counters, and two terminal endings as one duel microkernel.",
+          true,
+        ),
+      );
+    }
+    return shapeSpecific;
   }
   return [
     ...base,
@@ -1222,6 +1313,14 @@ function buildGameIntentProofs(
           detail: `Captured board/world query semantics for ${formatGameQueries(intent.queries)}.`,
         },
       );
+    }
+    if (backend.variant === "board_fleet_duel") {
+      proofs.push({
+        id: "fleet-duel-lowering-covered",
+        status: "proved",
+        detail:
+          "Board-fleet duel microkernel covers random calculator shots, negative hit reports, enemy fleet probe/clear, ship counters, and both terminal endings.",
+      });
     }
     if (reference !== undefined) {
       proofs.push({

@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { compileM61, MK61_EXACT_PROFILE } from "../src/core/index.ts";
 
@@ -16,6 +16,18 @@ describe("M61 compiler", () => {
     expect(result.report.ir.v2).toBe(true);
     expect(result.report.steps).toBeLessThanOrEqual(105);
     expect(result.report.optimizations.some((optimization) => optimization.name === "intent-input-lowering")).toBe(true);
+  });
+
+  it("keeps every checked example within the 105-cell ceiling", () => {
+    const oversized: Array<{ path: string; steps: number }> = [];
+
+    for (const name of readdirSync("examples").filter((entry) => entry.endsWith(".m61")).sort()) {
+      const path = `examples/${name}`;
+      const result = compileM61(source(path));
+      if (result.report.steps > 105) oversized.push({ path, steps: result.report.steps });
+    }
+
+    expect(oversized).toEqual([]);
   });
 
   it("keeps the high-level cave baseline within the 105-cell budget", () => {
@@ -258,7 +270,6 @@ program SimpleRules {
     for (const path of [
       "examples/grid-rescue.m61",
       "examples/resource-raid.m61",
-      "examples/sea-battle.m61",
     ]) {
       const result = compileM61(source(path));
       const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
@@ -271,6 +282,32 @@ program SimpleRules {
       expect(selected.has("cyclic-address-layout")).toBe(true);
       expect(result.report.warnings.join("\n")).toMatch(/universal spatial\/resource tactic pipeline/u);
     }
+  });
+
+  it("lowers Sea Battle through the board-fleet duel microkernel below Anvarov's span", () => {
+    const seaBattle = source("examples/sea-battle.m61");
+    const result = compileM61(seaBattle);
+    const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
+    const proofs = new Set(result.report.proofs.map((proof) => proof.id));
+    const optimizations = new Set(result.report.optimizations.map((optimization) => optimization.name));
+    const warnings = result.report.warnings.join("\n");
+
+    expect(seaBattle).not.toMatch(/\bown_fleet\b/u);
+    expect(seaBattle).toMatch(/\bown_ships:\s+resource\b/u);
+    expect(result.report.steps).toBe(101);
+    expect(result.report.steps).toBeLessThan(102);
+    expect(result.report.reference?.referenceSpan).toBe(102);
+    expect(result.report.reference?.referenceSteps).toBe(102);
+    expect(result.report.reference?.referenceEntries).toBe(99);
+    expect(result.report.reference?.referenceGaps).toEqual(["14", "19", "78"]);
+    expect(selected.has("board_fleet_duel")).toBe(true);
+    expect(result.report.rejectedCandidates.some((candidate) => candidate.variant === "universal_spatial_resource")).toBe(true);
+    expect(warnings).toMatch(/selected board_fleet_duel semantic microkernel/u);
+    expect(warnings).not.toMatch(/universal spatial\/resource tactic pipeline/u);
+    expect(proofs.has("reference-size-beaten")).toBe(true);
+    expect(proofs.has("shape-features-covered")).toBe(true);
+    expect(proofs.has("fleet-duel-lowering-covered")).toBe(true);
+    expect(optimizations.has("fleet-duel-lowering")).toBe(true);
   });
 
   it("selects shape-specific GameIntent microkernels below the real Anvarov reference spans", () => {

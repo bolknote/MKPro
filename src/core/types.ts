@@ -86,6 +86,7 @@ export interface GameIntent {
 export type GameIntentShape =
   | "board_line_count"
   | "board_neighbor_count"
+  | "board_fleet_duel"
   | "world_table"
   | "lane_resource"
   | "universal_spatial_resource";
@@ -99,6 +100,10 @@ export type GameIntentFeature =
   | "neighbor_count"
   | "cell_at"
   | "random_cell"
+  | "fleet_probe"
+  | "fleet_clear"
+  | "random_board_cell"
+  | "hit_report"
   | "resources"
   | "endings";
 

@@ -383,6 +383,8 @@ cover:
 
 - `board_line_count` for fox-hunt row/column/diagonal probes;
 - `board_neighbor_count` for Minesweeper-style 8-neighbor probes;
+- `board_fleet_duel` for Sea Battle-style hidden fleet probes, hit reports,
+  random board shots, and ship counters;
 - `world_table` for compact generated-world tile lookup;
 - `lane_resource` for one-dimensional movement with random hazards/resources.
 
@@ -390,8 +392,8 @@ The universal spatial/resource backend remains the fallback for mixed or
 unsupported shapes: packed coordinates, generated bitsets, resources, events,
 dispatch, screens, and terminal outcomes. `examples/cave-treasure.m61` is now
 just one reference source; `examples/grid-rescue.m61`,
-`examples/resource-raid.m61`, and `examples/sea-battle.m61` continue compiling
-through this fallback when no shape-specific backend covers the features.
+and `examples/resource-raid.m61` continue compiling through this fallback when
+no shape-specific backend covers the features.
 
 `reference` is report metadata only and must not change code generation. For
 known `games/*` references, the report resolves the original listing, counts the
