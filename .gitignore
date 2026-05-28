@@ -36,3 +36,7 @@ Thumbs.db
 
 # Sublime local workspace state
 *.sublime-workspace
+
+# Downloaded docs
+docs/reference/
+

@@ -14,6 +14,7 @@ import {
 import { foldProgramConstants } from "./constant-folder.ts";
 import { normalizeV2ExpressionText, parseExpression, parseProgram } from "./parser.ts";
 import { runIrPasses } from "./passes/index.ts";
+import { optimizePostLayoutIndirectFlow } from "./post-layout-indirect-flow.ts";
 import { verifySuperDarkSuffixLayout } from "./super-dark-layout.ts";
 import { MK61_PROFILE, machineSupports, type MachineProfile } from "./machineProfile.ts";
 import type {
@@ -189,11 +190,18 @@ function compileMKProOnce(
 
   context.compileProgram();
   const optimizedResult = optimizeItems(context.items, opts, optimizations);
-  const optimized = optimizedResult.items;
+  const postLayoutFlow = optimizePostLayoutIndirectFlow(
+    optimizedResult.items,
+    opts,
+    opts.indirectFlowRescueAbove,
+  );
+  const optimized = postLayoutFlow.items;
+  optimizations.push(...postLayoutFlow.optimizations);
   const preloads = [
     ...buildPreloadReport(ast, allocation),
     ...buildNegativeZeroDegreePreloadReport(allocation, optimizations),
     ...optimizedResult.preloads,
+    ...postLayoutFlow.preloads,
   ];
   appendOptimizationCandidateReports(optimizations, candidates);
   const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, machineProfile);
@@ -909,6 +917,11 @@ class EmitContext {
   private readonly terminalTailHelpers: Array<{ body: StatementAst[]; label: string; line: number }> = [];
   private currentXVariable: string | undefined;
   private currentXKnownZero = false;
+  // True when the machine is mid number-entry, so the next number literal would
+  // concatenate digits (e.g. 1 then 3 -> 13) instead of starting a new value.
+  // Set by digit-building ops and by С/П reads (the user-typed value stays in
+  // entry mode until a finalizing op lifts/uses it).
+  private machineEntryOpen = false;
   private emittingExpressionHelper = false;
 
   constructor(
@@ -1130,6 +1143,10 @@ class EmitContext {
         continue;
       }
       if (statement.kind === "assign" && next?.kind === "assign" && this.compileBitSetMaskReuse(statement, next)) {
+        index += 1;
+        continue;
+      }
+      if (statement.kind === "assign" && next?.kind === "assign" && this.compileIntFracSharedTail(statement, next)) {
         index += 1;
         continue;
       }
@@ -2389,6 +2406,9 @@ class EmitContext {
       negative: [0x21, "F sqrt"],
       gt_one: [0x19, "F sin^-1"],
       ge_100: [0x15, "F 10^x"],
+      // К °->′" rejects a fractional part >= 0.6 (no valid minutes/seconds),
+      // making it a one-cell trap for that domain.
+      frac_ge_06: [0x2a, "К °->′\""],
     };
     const [opcode, mnemonic] = mapping[statement.trap];
     this.emitOp(
@@ -2626,6 +2646,9 @@ class EmitContext {
         if ((expr.op === "+" || expr.op === "*") && this.compileCommutativeWithCurrentX(expr)) {
           return;
         }
+        if (this.compileStackDuplicatedBinary(expr)) {
+          return;
+        }
         this.compileExpression(expr.left);
         this.compileExpression(expr.right);
         this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
@@ -2672,6 +2695,65 @@ class EmitContext {
       return true;
     }
     return false;
+  }
+
+  // Stack-duplicate a repeated pure operand: `e op e` becomes compute(e), В↑,
+  // op, so the shared value is reused from the stack (Y) instead of recomputed.
+  // Only applies to pure operands (so one evaluation equals two) and only when it
+  // actually saves cells versus recomputing the operand.
+  private compileStackDuplicatedBinary(expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
+    if (!expressionEquals(expr.left, expr.right)) return false;
+    if (!isPureExpression(expr.left)) return false;
+    // В↑ costs one cell, so duplication only pays off when recomputing the
+    // operand would cost more than one cell.
+    if (estimateExpressionCost(expr.left) <= 1) return false;
+    this.compileExpression(expr.left);
+    this.emitOp(0x0e, "В↑", "duplicate repeated operand through stack");
+    this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
+    this.optimizations.push({
+      name: "stack-current-x-scheduling",
+      detail: `Duplicated ${expressionToIntentText(expr.left)} through the stack (В↑) for ${expr.op} instead of recomputing it.`,
+    });
+    return true;
+  }
+
+  // Shared tail for the integer/fractional parts of one pure operand. When two
+  // adjacent assignments take int(e) and frac(e) of the same pure expression e,
+  // compute e once, duplicate it through the stack (В↑), take К [x] for the
+  // integer target, swap the saved copy back with X↔Y, and take К {x} for the
+  // fractional target. Both parts are produced by their own opcodes (identical
+  // behavior, including the -0 fractional result of negative integers), and the
+  // operand is evaluated once instead of twice.
+  private compileIntFracSharedTail(
+    first: Extract<StatementAst, { kind: "assign" }>,
+    second: Extract<StatementAst, { kind: "assign" }>,
+  ): boolean {
+    const a = matchIntOrFracCall(first.expr);
+    const b = matchIntOrFracCall(second.expr);
+    if (a === undefined || b === undefined) return false;
+    if (a.fn === b.fn) return false;
+    if (!expressionEquals(a.arg, b.arg)) return false;
+    if (!expressionPureForSubstitution(a.arg)) return false;
+    if (first.target === second.target) return false;
+    // В↑ + X↔Y add two cells over a single part, so the shared tail only wins
+    // when recomputing the operand would cost more than that.
+    if (estimateExpressionCost(a.arg) <= 2) return false;
+
+    const intStatement = a.fn === "int" ? first : second;
+    const fracStatement = a.fn === "frac" ? first : second;
+
+    this.compileExpression(a.arg);
+    this.emitOp(0x0e, "В↑", "duplicate operand for shared int/frac tail");
+    this.emitOp(0x34, "К [x]", "int()");
+    this.emitStore(intStatement.target, `set ${intStatement.target}`, intStatement.line);
+    this.emitOp(0x14, "XY", "restore saved operand for frac()");
+    this.emitOp(0x35, "К {x}", "frac()");
+    this.emitStore(fracStatement.target, `set ${fracStatement.target}`, fracStatement.line);
+    this.optimizations.push({
+      name: "int-frac-shared-tail",
+      detail: `Computed ${expressionToIntentText(a.arg)} once and derived int()/frac() through a shared В↑/X↔Y tail.`,
+    });
+    return true;
   }
 
   private compileRemainderByConstant(expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
@@ -3382,6 +3464,12 @@ class EmitContext {
   private emitNumber(raw: string): void {
     this.currentXVariable = undefined;
     this.currentXKnownZero = false;
+    // If the machine is still in number-entry mode, a fresh literal would
+    // concatenate onto the previous value (1 then 3 -> 13) or onto a just-read
+    // input. Push the previous value with В↑ so the new number starts clean.
+    if (this.machineEntryOpen) {
+      this.emitOp(0x0e, "В↑", "separate adjacent number entry");
+    }
     const normalized = raw.trim().toLowerCase();
     const negative = normalized.startsWith("-");
     const unsigned = negative ? normalized.slice(1) : normalized;
@@ -3507,6 +3595,9 @@ class EmitContext {
     this.items.push(op);
     this.currentXVariable = undefined;
     this.currentXKnownZero = false;
+    // Digit / '.' / sign / ВП opcodes (0x00..0x0c) keep the machine in
+    // number-entry mode; every other op finalizes it.
+    this.machineEntryOpen = opcode <= 0x0c;
   }
 
   private emitLabel(name: string): void {
@@ -6522,6 +6613,31 @@ function expressionEquals(left: ExpressionAst, right: ExpressionAst): boolean {
   }
 }
 
+// An expression is pure when evaluating it twice yields the same value with no
+// observable effect. Calls (random, read, macros) may be non-idempotent or have
+// side effects, so they are conservatively impure. Purity makes it sound to
+// compute a repeated operand once and duplicate it through the stack.
+function isPureExpression(expr: ExpressionAst): boolean {
+  switch (expr.kind) {
+    case "number":
+    case "identifier":
+      return true;
+    case "unary":
+      return isPureExpression(expr.expr);
+    case "binary":
+      return isPureExpression(expr.left) && isPureExpression(expr.right);
+    case "call":
+      return false;
+  }
+}
+
+function matchIntOrFracCall(expr: ExpressionAst): { fn: "int" | "frac"; arg: ExpressionAst } | undefined {
+  if (expr.kind !== "call" || expr.args.length !== 1) return undefined;
+  const name = expr.callee.toLowerCase();
+  if (name !== "int" && name !== "frac") return undefined;
+  return { fn: name, arg: expr.args[0]! };
+}
+
 function optimizeDispatchDefaultCases(
   statement: Extract<StatementAst, { kind: "dispatch" }>,
 ): { statement: Extract<StatementAst, { kind: "dispatch" }>; removed: number; reordered: number } {
@@ -7036,6 +7152,38 @@ const optimizerCapabilities: Array<{
     detail: "Uses В/О as one-cell БП 01 only when the return stack is known empty.",
   },
   {
+    id: "vo-return-body-reorder",
+    category: "flow",
+    source: "mk61-delta",
+    requires: [],
+    activeWhen: ["vo-return-body-reorder"],
+    detail: "Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.",
+  },
+  {
+    id: "super-number-deferred-normalization",
+    category: "data",
+    source: "undocumented",
+    requires: [],
+    activeWhen: ["super-number-deferred-normalization"],
+    detail: "Candidate: keep an un-normalized super-number (extra hidden mantissa digits) to defer a range/error check. The reference emulator models only the 8 visible mantissa digits, so the hidden-digit behavior the idiom relies on cannot be reproduced or safely proven, and no language construct produces it.",
+  },
+  {
+    id: "packed-position-type",
+    category: "data",
+    source: "undocumented",
+    requires: ["constants-dual-use"],
+    activeWhen: ["packed-position-type"],
+    detail: "Candidate: a language-level packed position type N.0000H carrying an integer position plus packed (hex) fractional sub-coordinates. The dual-use round-trip (К [x] recovers the position, К {x} recovers the packed fraction) is already exploited by constants-dual-use; a dedicated type would only add language surface that no current program consumes.",
+  },
+  {
+    id: "dual-constant-sign-digit",
+    category: "data",
+    source: "undocumented",
+    requires: ["negative-zero-threshold-selector"],
+    activeWhen: ["dual-constant-sign-digit"],
+    detail: "Candidate: a language intent for a dual constant 1.|-00 plus compact sign-digits (2N..9N) and their comparison semantics. The negative-zero comparison behavior is already active through the negative-zero-threshold family; no current program needs the additional sign-digit literal surface.",
+  },
+  {
     id: "branch-removal",
     category: "flow",
     source: "documented",
@@ -7237,8 +7385,8 @@ const optimizerCapabilities: Array<{
     category: "display",
     source: "mk61-delta",
     requires: ["x2-register", "display-bytes"],
-    activeWhen: ["vp-fraction-restore"],
-    detail: "Uses ВП where it simultaneously restores X2 and provides the needed fractional/mantissa side effect.",
+    activeWhen: ["vp-fraction-restore", "vp-exponent-splice"],
+    detail: "Uses ВП where it simultaneously restores X2 and provides the needed fractional/mantissa side effect, and collapses redundant ВП ВП / КНОП ВП exponent-entry splices.",
   },
   {
     id: "hex-mantissa-arithmetic",
@@ -7311,6 +7459,14 @@ const optimizerCapabilities: Array<{
     requires: [],
     activeWhen: ["duplicate-failure-tail-merge"],
     detail: "Coalesces structurally identical pause-0 failure tails into a single shared exit, removing the trampoline cells between them.",
+  },
+  {
+    id: "subroutine-part-shared-tail",
+    category: "flow",
+    source: "undocumented",
+    requires: [],
+    activeWhen: ["int-frac-shared-tail"],
+    detail: "Computes a shared pure operand once and derives both its integer (К [x]) and fractional (К {x}) parts through a single В↑ / X↔Y stack tail instead of recomputing the operand for each part.",
   },
   {
     id: "liveness-analysis",

@@ -354,7 +354,17 @@ function buildLinearExpression(form: LinearForm): ExpressionAst | undefined {
   if (signedTerms.length === 0) return decimalNumberExpression(constant);
 
   const hasPositiveTerm = signedTerms.some((term) => !term.negative);
-  const startWithConstant = constantSign > 0 || (constantSign < 0 && !hasPositiveTerm);
+  // Leading with the constant would place its digits right before the first
+  // term. If that term also begins with a number literal (e.g. a coefficient),
+  // the two literals concatenate on the real MK-61 (1 then 3 -> 13). In that
+  // case emit the terms first and fold the constant in at the end instead.
+  const firstTerm = signedTerms[0];
+  const firstTermLeadsWithLiteral = firstTerm !== undefined &&
+    expressionBeginsWithNumberEntry(
+      firstTerm.negative ? { kind: "unary", op: "-", expr: firstTerm.expr } : firstTerm.expr,
+    );
+  const startWithConstant =
+    (constantSign > 0 || (constantSign < 0 && !hasPositiveTerm)) && !firstTermLeadsWithLiteral;
   let result: ExpressionAst | undefined;
 
   if (startWithConstant && constantSign !== 0) {
@@ -371,12 +381,32 @@ function buildLinearExpression(form: LinearForm): ExpressionAst | undefined {
   }
 
   if (result === undefined) return decimalNumberExpression(constant);
-  if (!startWithConstant && constantSign < 0) {
+  if (!startWithConstant && constantSign !== 0) {
     const constantExpr = decimalNumberExpression(absDecimal(constant));
     if (constantExpr === undefined) return undefined;
-    result = subtractExpressions(result, constantExpr);
+    result = constantSign < 0
+      ? subtractExpressions(result, constantExpr)
+      : addExpressions(result, constantExpr);
   }
   return result;
+}
+
+// Conservatively reports whether compiling expr begins with a digit/number
+// entry (rather than a recall or operation). Used to avoid placing two number
+// literals next to each other, which would concatenate on the MK-61.
+function expressionBeginsWithNumberEntry(expr: ExpressionAst): boolean {
+  switch (expr.kind) {
+    case "number":
+      return true;
+    case "identifier":
+      return false;
+    case "unary":
+      return expr.expr.kind === "number" || expressionBeginsWithNumberEntry(expr.expr);
+    case "binary":
+      return expressionBeginsWithNumberEntry(expr.left);
+    case "call":
+      return expr.args.length > 0 && expressionBeginsWithNumberEntry(expr.args[0]!);
+  }
 }
 
 function signedTermExpression(term: LinearTerm): { expr: ExpressionAst; negative: boolean } | undefined {

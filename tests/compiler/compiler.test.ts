@@ -104,7 +104,10 @@ program ConstantDistribute {
 `);
     const opcodes = result.steps.map((step) => step.hex);
 
-    expect(opcodes.slice(2, 7)).toEqual(["04", "02", "61", "12", "10"]);
+    // 2 * (2 + x) distributes to 2*x + 4. The terms are emitted before the
+    // constant so the two literals (2 and 4) never sit next to each other (which
+    // would concatenate to 24 on the MK-61); x stays live in X from the read.
+    expect(opcodes.slice(2, 6)).toEqual(["02", "12", "04", "10"]);
     expect(result.report.optimizations.some((item) => item.name === "expression-constant-folder")).toBe(true);
   });
 

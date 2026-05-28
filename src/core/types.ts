@@ -23,6 +23,12 @@ export interface CompileOptions {
   delivery: DeliveryMode;
   budget: number;
   analysis: boolean;
+  // Cell-count threshold above which the post-layout indirect-flow rescue may
+  // trade a direct branch (2 cells) for a preloaded indirect one (1 cell + a
+  // setup-time register preload). Defaults to the official 105-cell window so
+  // in-budget programs keep their direct branches; lower it to rescue space
+  // more aggressively.
+  indirectFlowRescueAbove?: number;
 }
 
 export interface Diagnostic {
@@ -541,7 +547,7 @@ export interface RawOutputAst {
 
 export interface TrapStatementAst {
   kind: "trap";
-  trap: "zero" | "nonpositive" | "negative" | "gt_one" | "ge_100";
+  trap: "zero" | "nonpositive" | "negative" | "gt_one" | "ge_100" | "frac_ge_06";
   expr: ExpressionAst;
   line: number;
 }
