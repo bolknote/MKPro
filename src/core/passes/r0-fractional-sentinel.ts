@@ -1,5 +1,5 @@
 import type { IrOp } from "../types.ts";
-import { type IrPass, type IrPassFn } from "./helpers.ts";
+import { hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
 import { computeLiveness } from "./liveness-analysis.ts";
 
 function isFractionalR0LiteralBeforeStore(ops: readonly IrOp[], storeIndex: number): boolean {
@@ -26,6 +26,10 @@ const run: IrPassFn = (ops) => {
 
   for (let i = 0; i < ops.length; i += 1) {
     const op = ops[i]!;
+    if (hasRewriteBarrier(op)) {
+      r0Fractional = false;
+      continue;
+    }
     if (op.kind === "store" && op.register === "0") {
       r0Fractional = isFractionalR0LiteralBeforeStore(ops, i);
       continue;

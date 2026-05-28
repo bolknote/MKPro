@@ -10,12 +10,12 @@ describe("super-dark layout verifier", () => {
   it("proves the exact FA..FF entry and continuation matrix", () => {
     const layout = Array.from({ length: 60 }, (_, address) => cell(address, address % 10));
     layout.push({ address: 60, opcode: 0x87, roles: ["exec"], tactic: "super-dark indirect dispatch" });
-    const proof = verifySuperDarkSuffixLayout(layout);
+    const proof = verifySuperDarkSuffixLayout(layout, { selectorValues: { "7": "FA..FF" } });
 
     expect(proof.proved).toBe(true);
     expect(proof.reasons).toEqual([]);
     expect(proof.dispatchCells).toEqual([
-      { address: 60, opcode: 0x87, register: "7", tactic: "super-dark indirect dispatch" },
+      { address: 60, opcode: 0x87, register: "7", tactic: "super-dark indirect dispatch", selectorValue: "FA..FF" },
     ]);
     expect(proof.pairs.map((pair) => [pair.formal, pair.entryAddress, pair.continuationAddress])).toEqual([
       [0xfa, 48, 1],
@@ -27,6 +27,17 @@ describe("super-dark layout verifier", () => {
     ]);
   });
 
+  it("proves a single FA entry when the selector value is exact", () => {
+    const layout = Array.from({ length: 60 }, (_, address) => cell(address, address % 10));
+    layout.push({ address: 60, opcode: 0x87, roles: ["exec"], tactic: "preloaded super-dark indirect flow" });
+    const proof = verifySuperDarkSuffixLayout(layout, { selectorValues: { "7": "FA" } });
+
+    expect(proof.proved).toBe(true);
+    expect(proof.pairs.map((pair) => [pair.formal, pair.entryAddress, pair.continuationAddress])).toEqual([
+      [0xfa, 48, 1],
+    ]);
+  });
+
   it("rejects a suffix-compatible matrix without an actual super-dark dispatcher", () => {
     const layout = Array.from({ length: 60 }, (_, address) => cell(address, address % 10));
     const proof = verifySuperDarkSuffixLayout(layout);
@@ -35,11 +46,21 @@ describe("super-dark layout verifier", () => {
     expect(proof.reasons.join("\n")).toMatch(/no super-dark К БП R dispatch cell/u);
   });
 
+  it("rejects a dispatcher whose selector is not proved as FA..FF", () => {
+    const layout = Array.from({ length: 60 }, (_, address) => cell(address, address % 10));
+    layout.push({ address: 60, opcode: 0x87, roles: ["exec"], tactic: "super-dark indirect dispatch" });
+    const proof = verifySuperDarkSuffixLayout(layout, { selectorValues: { "7": "12" } });
+
+    expect(proof.proved).toBe(false);
+    expect(proof.dispatchCells[0]).toMatchObject({ register: "7", selectorValue: "12" });
+    expect(proof.reasons.join("\n")).toMatch(/no super-dark dispatch register has a proved FA\.\.FF selector/u);
+  });
+
   it("rejects entries that would consume a second address cell", () => {
     const layout = Array.from({ length: 60 }, (_, address) => cell(address, address % 10));
     layout.push({ address: 60, opcode: 0x87, roles: ["exec"], tactic: "super-dark indirect dispatch" });
     layout[50] = cell(50, 0x51);
-    const proof = verifySuperDarkSuffixLayout(layout);
+    const proof = verifySuperDarkSuffixLayout(layout, { selectorValues: { "7": "FA..FF" } });
 
     expect(proof.proved).toBe(false);
     expect(proof.reasons.join("\n")).toMatch(/FC entry 50 is a two-cell address-taking command/u);
@@ -49,7 +70,7 @@ describe("super-dark layout verifier", () => {
     const layout = Array.from({ length: 60 }, (_, address) => cell(address, address % 10));
     layout.push({ address: 60, opcode: 0x87, roles: ["exec"], tactic: "super-dark indirect dispatch" });
     layout[4] = cell(4, 0x04, ["address"]);
-    const proof = verifySuperDarkSuffixLayout(layout);
+    const proof = verifySuperDarkSuffixLayout(layout, { selectorValues: { "7": "FA..FF" } });
 
     expect(proof.proved).toBe(false);
     expect(proof.reasons.join("\n")).toMatch(/FD continuation 4 is not executable/u);

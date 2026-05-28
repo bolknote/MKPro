@@ -8,6 +8,7 @@ import { jumpThread } from "../../src/core/passes/jump-thread.ts";
 import { jumpToNextThreading } from "../../src/core/passes/jump-to-next.ts";
 import { lastXReuse } from "../../src/core/passes/last-x-reuse.ts";
 import { computeLiveness } from "../../src/core/passes/liveness-analysis.ts";
+import { preloadedIndirectFlow } from "../../src/core/passes/preloaded-indirect-flow.ts";
 import { r0FractionalSentinel } from "../../src/core/passes/r0-fractional-sentinel.ts";
 import { redundantPrologueElimination } from "../../src/core/passes/redundant-prologue.ts";
 import { registerCoalesce } from "../../src/core/passes/register-coalesce.ts";
@@ -280,6 +281,49 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops[3]?.kind).toBe("jump");
   });
 
+  it("preloaded-indirect-flow rewrites address-stable backward numeric branches through formal alias selectors", () => {
+    const program: IrOp[] = [
+      ...Array.from({ length: 13 }, () => plain(0x00, "0")),
+      halt(),
+      numericJump(13),
+    ];
+    const result = preloadedIndirectFlow.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops.at(-1)).toMatchObject({ kind: "indirect-jump", register: "7", opcode: 0x87 });
+    expect(result.preloads).toEqual([{ register: "7", value: "C5", countsAgainstProgram: false }]);
+    expect(result.optimizations[0]?.name).toBe("preloaded-indirect-flow");
+  });
+
+  it("preloaded-indirect-flow refuses forward rewrites that would shift numeric target addresses", () => {
+    const program: IrOp[] = [
+      numericJump(48),
+      halt(),
+    ];
+    const result = preloadedIndirectFlow.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops[0]?.kind).toBe("jump");
+  });
+
+  it("preloaded-indirect-flow selects FA..FF only for proved one-command continuations", () => {
+    const program: IrOp[] = [
+      ...Array.from({ length: 48 }, () => plain(0x00, "0")),
+      plain(0x09, "9"),
+      numericJump(1),
+      numericJump(48),
+    ];
+    const result = preloadedIndirectFlow.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops.at(-1)).toMatchObject({ kind: "indirect-jump", register: "8", opcode: 0x88 });
+    expect(result.preloads).toEqual([
+      { register: "7", value: "B3", countsAgainstProgram: false },
+      { register: "8", value: "FA", countsAgainstProgram: false },
+    ]);
+    expect(result.optimizations.some((optimization) => optimization.name === "preloaded-super-dark-flow")).toBe(true);
+  });
+
   it("stable-indirect-flow drops selector knowledge after calls", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -321,6 +365,25 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = deadCodeAfterHalt.run(program, ctx);
     expect(result.applied).toBeGreaterThanOrEqual(2);
+  });
+
+  it("dead-code-after-halt keeps compiler-known indirect jump targets", () => {
+    const program: IrOp[] = [
+      {
+        kind: "indirect-jump",
+        register: "7",
+        opcode: 0x87,
+        meta: { mnemonic: "К БП 7", comment: "preloaded R7=C5 indirect-target=4 indirect flow" },
+      },
+      plain(0x09, "9"),
+      plain(0x08, "8"),
+      plain(0x07, "7"),
+      halt(),
+    ];
+    const result = deadCodeAfterHalt.run(program, ctx);
+
+    expect(result.ops.some((op) => op.kind === "stop")).toBe(true);
+    expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x09)).toBe(false);
   });
 
   it("store-recall-peephole drops the П->X immediately after X->П to the same register", () => {

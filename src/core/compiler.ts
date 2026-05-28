@@ -155,7 +155,9 @@ export function compileM61(
   );
 
   context.compileProgram();
-  const optimized = optimizeItems(context.items, opts, optimizations);
+  const optimizedResult = optimizeItems(context.items, opts, optimizations);
+  const optimized = optimizedResult.items;
+  const preloads = [...buildPreloadReport(ast, allocation), ...optimizedResult.preloads];
   appendOptimizationCandidateReports(optimizations, candidates);
   const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, machineProfile);
   const largestBlocks = summarizeBlocks(optimized);
@@ -186,14 +188,14 @@ export function compileM61(
     warnings,
     delivery: opts.delivery,
     optimizer: buildOptimizerReport(ast, opts, optimizations, candidates, cellRoles, machineProfile),
-    preloads: buildPreloadReport(ast, allocation),
+    preloads,
     ...(referenceResult?.report === undefined ? {} : { reference: referenceResult.report }),
     ir: buildIrReport(ast, optimized, steps.length),
     cellRoles,
     candidates,
     budgetReport: buildBudgetReport(steps.length, opts.budget, largestBlocks, 0),
     machineFeaturesUsed: buildMachineFeaturesUsed(machineProfile, optimizations, cellRoles, candidates),
-    proofs: buildProofReport(ast, optimized, cellRoles, opts, optimizations),
+    proofs: buildProofReport(ast, optimized, cellRoles, opts, optimizations, preloads),
     emulatorFacts: machineProfile.emulatorFacts,
     rejectedCandidates: candidates
       .filter((candidate) => !candidate.selected)
@@ -231,6 +233,8 @@ function appendOptimizationCandidateReports(
 ): void {
   const selectedPassCandidates: Array<[string, string, number]> = [
     ["stable-indirect-flow", "stable-register indirect branch/call selected by IR data-flow proof", 1],
+    ["preloaded-indirect-flow", "compiler-owned address preload selected for one-cell indirect branch/call", 1],
+    ["preloaded-super-dark-flow", "compiler-owned FA..FF preloaded one-command dispatch selected after layout proof", 1],
     ["indirect-memory-table", "stable selector reused for indirect memory access", 0],
     ["r0-fractional-sentinel", "fractional R0 selector side effect reused after liveness proof", 0],
   ];
@@ -535,7 +539,7 @@ function tryCompileGameIntentProgram(
     ...buildGameBackendCandidateReports(backendCandidates, selectedBackend),
     ...buildGameIntentCandidates(candidateIr, selectedBackend),
   ];
-  const cellRoles = buildGameIntentCellRoles(layoutIr, machineProfile);
+  const cellRoles = buildGameIntentCellRoles(layoutIr, selectedBackend.preloads, machineProfile);
   const warnings = selectedBackend.variant === "universal_spatial_resource"
     ? ["GameIntent selected the universal spatial/counter tactic pipeline; reference metadata did not affect code generation."]
     : [`GameIntent selected ${selectedBackend.variant} semantic microkernel; reference metadata did not affect code generation.`];
@@ -1295,7 +1299,9 @@ function buildGameIntentOptimizations(
     }
     return shapeSpecific;
   }
-  const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout);
+  const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout, {
+    selectorValues: superDarkSelectorValues(backend.preloads),
+  });
   const formalAddressOptimizations = superDarkLayoutProof.proved
     ? [
       selected("super-dark-dispatch", "Selected super/dark formal address entries where one-command side paths are profitable."),
@@ -1333,7 +1339,9 @@ function buildGameIntentCandidates(
   backend: GameBackendCandidate,
 ): CandidateReport[] {
   const usesUniversalTactics = backend.variant === "universal_spatial_resource";
-  const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout);
+  const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout, {
+    selectorValues: superDarkSelectorValues(backend.preloads),
+  });
   const superDarkLayoutProved = usesUniversalTactics && superDarkLayoutProof.proved;
   return candidates.map((candidate) => ({
     site: candidate.site,
@@ -1355,7 +1363,7 @@ function gameIntentCandidateReason(
     return `rejected; ${backend.variant} backend is shorter, so universal ${candidate.variant} tactics were not emitted`;
   }
   if (["super-dark-dispatch", "cyclic-address-layout"].includes(candidate.variant) && !superDarkLayoutProof.proved) {
-    return `rejected; layout proof did not establish FA..FF entries at 48..53 with suffix continuations 01..06 (${superDarkLayoutProof.reasons.join("; ")})`;
+    return `rejected; layout proof did not establish FA..FF entries at 48..53, suffix continuations 01..06, and a proved FA..FF selector (${superDarkLayoutProof.reasons.join("; ")})`;
   }
   return `selected; ${candidate.proofs.join("; ")}`;
 }
@@ -1375,6 +1383,15 @@ function buildGameIntentPreloads(ast?: ProgramAst): PreloadReport[] {
     { register: "R8", value: "-52", countsAgainstProgram: false },
     { register: "R9", value: "4,_3E-08", countsAgainstProgram: false },
   ];
+}
+
+function superDarkSelectorValues(preloads: readonly PreloadReport[]): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const preload of preloads) {
+    const register = preload.register.replace(/^R/iu, "").toLowerCase();
+    values[register] = preload.value;
+  }
+  return values;
 }
 
 function buildGameIntentProofs(
@@ -1431,7 +1448,9 @@ function buildGameIntentProofs(
     }
     return proofs;
   }
-  const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout);
+  const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout, {
+    selectorValues: superDarkSelectorValues(backend.preloads),
+  });
   const proofs: CompileReport["proofs"] = [
     {
       id: "full-game-semantics",
@@ -1488,12 +1507,18 @@ function buildGameIntentProofs(
   return proofs;
 }
 
-function buildGameIntentCellRoles(layout: LayoutIrCell[], machineProfile: MachineProfile): CellRoleReport[] {
+function buildGameIntentCellRoles(
+  layout: LayoutIrCell[],
+  preloads: readonly PreloadReport[],
+  machineProfile: MachineProfile,
+): CellRoleReport[] {
   const addressOperandCells = new Set<number>();
   for (let address = 0; address < layout.length - 1; address += 1) {
     if (getOpcode(layout[address]!.opcode).takesAddress) addressOperandCells.add(address + 1);
   }
-  const superDarkProof = verifySuperDarkSuffixLayout(layout);
+  const superDarkProof = verifySuperDarkSuffixLayout(layout, {
+    selectorValues: superDarkSelectorValues(preloads),
+  });
   const darkEntryCells = superDarkProof.proved
     ? new Set(superDarkProof.pairs.flatMap((pair) => [pair.entryAddress, pair.continuationAddress]))
     : new Set<number>();
@@ -3482,10 +3507,10 @@ function optimizeItems(
   items: MachineItem[],
   options: CompileOptions,
   optimizations: AppliedOptimization[],
-): MachineItem[] {
+): { items: MachineItem[]; preloads: PreloadReport[] } {
   const result = runIrPasses(items, options);
   optimizations.push(...result.optimizations);
-  return result.items;
+  return { items: result.items, preloads: result.preloads };
 }
 
 function layoutProgram(
@@ -4804,8 +4829,8 @@ const optimizerCapabilities: Array<{
     category: "flow",
     source: "documented",
     requires: [],
-    activeWhen: ["indirect-register-flow", "stable-indirect-flow"],
-    detail: "Candidate rule: replace direct branches/calls with К БП/К ПП/К x?0 only when the address value is already live and cheaper.",
+    activeWhen: ["indirect-register-flow", "stable-indirect-flow", "preloaded-indirect-flow", "preloaded-super-dark-flow"],
+    detail: "Candidate rule: replace direct branches/calls with К БП/К ПП/К x?0 when the address value is already live, or when a compiler-owned preload is cheaper.",
   },
   {
     id: "indirect-memory-table",
@@ -4860,8 +4885,8 @@ const optimizerCapabilities: Array<{
     category: "flow",
     source: "undocumented",
     requires: ["super-dark-dispatch", "indirect-flow"],
-    activeWhen: ["super-dark-dispatch"],
-    detail: "Dispatch candidate for indirect К БП R with FA..FF; selected only when layout can place one-command cases at 48..53 and tails at 01..06.",
+    activeWhen: ["super-dark-dispatch", "preloaded-super-dark-flow"],
+    detail: "Dispatch candidate for indirect К БП R with FA..FF; selected only when layout can place one-command cases at 48..53, tails at 01..06, and prove the selector register contains FA..FF.",
   },
   {
     id: "r0-alias-indirect",
@@ -5122,7 +5147,14 @@ function buildMachineFeaturesUsed(
   if (optimizations.some((optimization) => optimization.name === "fl-unit-decrement")) {
     add("fl-decrement-branch", "Optimizer selected F L0..F L3 for a unit decrement.", "optimizer");
   }
-  if (optimizations.some((optimization) => optimization.name === "indirect-register-flow" || optimization.name === "stable-indirect-flow")) {
+  if (
+    optimizations.some((optimization) =>
+      optimization.name === "indirect-register-flow" ||
+      optimization.name === "stable-indirect-flow" ||
+      optimization.name === "preloaded-indirect-flow" ||
+      optimization.name === "preloaded-super-dark-flow"
+    )
+  ) {
     add("indirect-flow", "Optimizer selected register-held branch addresses for one-cell indirect flow.", "optimizer");
   }
   if (optimizations.some((optimization) => optimization.name === "indirect-memory-table")) {
@@ -5171,10 +5203,41 @@ function buildMachineFeaturesUsed(
   if (cellRoles.some((cell) => cell.roles.includes("address") && cell.roles.includes("constant"))) {
     add("address-constants", "Layout marked address cells as reusable constants.", "layout");
   }
-  if (candidates.some((candidate) => candidate.variant === "super-dark-dispatch" && candidate.selected)) {
-    add("super-dark-dispatch", "Dispatch solver selected FA..FF indirect one-command cases.", "optimizer");
+  if (
+    candidates.some((candidate) =>
+      (candidate.variant === "super-dark-dispatch" || candidate.variant === "preloaded-super-dark-flow") &&
+      candidate.selected
+    )
+  ) {
+    add("super-dark-dispatch", "Optimizer selected FA..FF indirect one-command cases.", "optimizer");
   }
   return [...used.values()];
+}
+
+function machineItemsToLayoutCells(items: readonly MachineItem[]): LayoutIrCell[] {
+  const cells: LayoutIrCell[] = [];
+  let address = 0;
+  for (const item of items) {
+    if (item.kind === "label") continue;
+    if (item.kind === "op") {
+      cells.push({
+        address,
+        opcode: item.opcode,
+        roles: ["exec"],
+        tactic: item.comment ?? "",
+      });
+      address += 1;
+      continue;
+    }
+    cells.push({
+      address,
+      opcode: item.formalOpcode ?? (typeof item.target === "number" ? item.target : 0),
+      roles: ["address"],
+      tactic: item.comment ?? "",
+    });
+    address += 1;
+  }
+  return cells;
 }
 
 function buildProofReport(
@@ -5183,6 +5246,7 @@ function buildProofReport(
   cellRoles: CellRoleReport[],
   _options: CompileOptions,
   optimizations: AppliedOptimization[],
+  preloads: readonly PreloadReport[],
 ): CompileReport["proofs"] {
   const proofs: CompileReport["proofs"] = [];
   const usesSubroutine = items.some((item) => item.kind === "op" && item.opcode === 0x53);
@@ -5210,6 +5274,8 @@ function buildProofReport(
   if (
     optimizations.some((optimization) =>
       optimization.name === "stable-indirect-flow" ||
+      optimization.name === "preloaded-indirect-flow" ||
+      optimization.name === "preloaded-super-dark-flow" ||
       optimization.name === "indirect-memory-table" ||
       optimization.name === "r0-fractional-sentinel"
     )
@@ -5217,7 +5283,19 @@ function buildProofReport(
     proofs.push({
       id: "indirect-addressing-ranges",
       status: "proved",
-      detail: "Indirect selectors are rewritten only after local data-flow proves a stable target or the fractional R0 sentinel shape.",
+      detail: "Indirect selectors are rewritten only after local data-flow proves a stable target, a compiler-owned address preload, or the fractional R0 sentinel shape.",
+    });
+  }
+  if (optimizations.some((optimization) => optimization.name === "preloaded-super-dark-flow")) {
+    const proof = verifySuperDarkSuffixLayout(machineItemsToLayoutCells(items), {
+      selectorValues: superDarkSelectorValues(preloads),
+    });
+    proofs.push({
+      id: "super-dark-suffix-layout",
+      status: proof.proved ? "proved" : "assumed",
+      detail: proof.proved
+        ? `Compiler-owned FA..FF dispatch entries land on physical 48..53 and resume through proved 01..06 continuations (${proof.pairs.length} pair${proof.pairs.length === 1 ? "" : "s"}).`
+        : `Compiler selected preloaded super-dark flow, but the final layout proof is incomplete: ${proof.reasons.join("; ")}.`,
     });
   }
   if (ast.v2) {

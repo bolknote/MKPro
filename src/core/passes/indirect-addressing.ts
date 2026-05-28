@@ -4,7 +4,7 @@ import {
 } from "../indirect-addressing.ts";
 import { registerIndex } from "../opcodes.ts";
 import type { IrCondition, IrMeta, IrOp, RegisterName } from "../types.ts";
-import { type IrPass, type IrPassFn } from "./helpers.ts";
+import { hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
 
 const INDIRECT_COND_BASES: Record<IrCondition, number> = {
   "!=0": 0x70,
@@ -76,6 +76,11 @@ function findMemorySelector(
 }
 
 function updateKnownAfterOp(state: KnownState, op: IrOp): void {
+  if (hasRewriteBarrier(op)) {
+    clearKnownState(state);
+    return;
+  }
+
   const digit = digitForPlain(op);
   if (digit !== undefined) {
     state.currentLiteral = `${state.currentLiteral ?? ""}${digit}`;
@@ -112,14 +117,19 @@ function updateKnownAfterOp(state: KnownState, op: IrOp): void {
   }
 }
 
-function indirectFlowOp(op: Extract<IrOp, { kind: "jump" | "call" | "cjump" }>, register: RegisterName): IrOp {
+function indirectFlowOp(
+  op: Extract<IrOp, { kind: "jump" | "call" | "cjump" }>,
+  register: RegisterName,
+  target: number,
+): IrOp {
   const offset = registerIndex(register);
+  const suffix = `stable indirect flow indirect-target=${target}`;
   if (op.kind === "jump") {
     return {
       kind: "indirect-jump",
       register,
       opcode: 0x80 + offset,
-      meta: cloneMeta({ ...op.meta, mnemonic: `К БП ${register}` }, "stable indirect flow"),
+      meta: cloneMeta({ ...op.meta, mnemonic: `К БП ${register}` }, suffix),
     };
   }
   if (op.kind === "call") {
@@ -127,7 +137,7 @@ function indirectFlowOp(op: Extract<IrOp, { kind: "jump" | "call" | "cjump" }>, 
       kind: "indirect-call",
       register,
       opcode: 0xa0 + offset,
-      meta: cloneMeta({ ...op.meta, mnemonic: `К ПП ${register}` }, "stable indirect flow"),
+      meta: cloneMeta({ ...op.meta, mnemonic: `К ПП ${register}` }, suffix),
     };
   }
   const opcode = INDIRECT_COND_BASES[op.condition] + offset;
@@ -141,7 +151,7 @@ function indirectFlowOp(op: Extract<IrOp, { kind: "jump" | "call" | "cjump" }>, 
     condition: op.condition,
     register,
     opcode,
-    meta: cloneMeta({ ...op.meta, mnemonic: `К ${name} ${register}` }, "stable indirect flow"),
+    meta: cloneMeta({ ...op.meta, mnemonic: `К ${name} ${register}` }, suffix),
   };
 }
 
@@ -151,10 +161,10 @@ const stableFlowRun: IrPassFn = (ops) => {
   let applied = 0;
 
   for (const op of ops) {
-    if (op.kind === "jump" || op.kind === "call" || op.kind === "cjump") {
+    if (!hasRewriteBarrier(op) && (op.kind === "jump" || op.kind === "call" || op.kind === "cjump")) {
       const register = findFlowSelector(state, op.target);
-      if (register !== undefined) {
-        const rewritten = indirectFlowOp(op, register);
+      if (register !== undefined && typeof op.target === "number") {
+        const rewritten = indirectFlowOp(op, register, op.target);
         result.push(rewritten);
         updateKnownAfterOp(state, rewritten);
         applied += 1;
@@ -184,7 +194,7 @@ const memoryTableRun: IrPassFn = (ops) => {
   let applied = 0;
 
   for (const op of ops) {
-    if (op.kind === "recall" || op.kind === "store") {
+    if (!hasRewriteBarrier(op) && (op.kind === "recall" || op.kind === "store")) {
       const selector = findMemorySelector(state, op.register);
       if (selector !== undefined) {
         const opcodeBase = op.kind === "recall" ? 0xd0 : 0xb0;

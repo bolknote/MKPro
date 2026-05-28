@@ -1,5 +1,5 @@
 import type { IrOp } from "../types.ts";
-import { type IrPass, type IrPassFn } from "./helpers.ts";
+import { hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
 
 function displayBoundaryText(op: IrOp): string {
   if (!("meta" in op)) return "";
@@ -10,12 +10,14 @@ function displayBoundaryText(op: IrOp): string {
 }
 
 function isDisplayVp(op: IrOp): boolean {
+  if (hasRewriteBarrier(op)) return false;
   return op.kind === "plain" &&
     op.opcode === 0x0c &&
     /display|x2|вп/u.test(displayBoundaryText(op));
 }
 
 function isFractionAfterDisplayBoundary(op: IrOp): boolean {
+  if (hasRewriteBarrier(op)) return false;
   return op.kind === "plain" &&
     op.opcode === 0x35 &&
     /display|x2|frac/u.test(displayBoundaryText(op));

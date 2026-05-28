@@ -87,10 +87,12 @@ program TinyGame {
 ```
 
 The compiler always uses the `mk61` machine model and automatic proofs to select
-the strongest available tactics: indirect flow, super-dark dispatch,
-branch removal, shared tails, cyclic layout, code/data overlay, X2/`ВП`,
-display-byte packing, hexadecimal mantissa data, R0 edge cases, and
-Danilov-style error-stop idioms when the source semantics allows them.
+the strongest proved tactics: indirect flow, branch removal, shared tails,
+code/data overlay, X2/`ВП`, display-byte packing, hexadecimal mantissa data,
+R0 edge cases, and Danilov-style error-stop idioms when the source semantics
+allows them. Super-dark FA..FF dispatch is modeled, but it is selected only
+when the layout proves the entry/continuation cells and the dispatch register's
+FA..FF selector value.
 
 All `examples/*.m61` programs are written in the human DSL. They cover:
 

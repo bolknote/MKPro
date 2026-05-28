@@ -1,5 +1,5 @@
 import type { IrOp, IrMeta, IrTargetMeta } from "../types.ts";
-import { type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
+import { hasRewriteBarrier, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
 
 interface Block {
   startIndex: number;
@@ -7,6 +7,7 @@ interface Block {
 }
 
 function isPureDataOp(op: IrOp): boolean {
+  if (hasRewriteBarrier(op)) return false;
   if (op.kind === "recall") return true;
   if (op.kind === "plain") {
     if (op.opcode === 0x10 || op.opcode === 0x12) return true;
@@ -16,6 +17,7 @@ function isPureDataOp(op: IrOp): boolean {
 }
 
 function isBlockTerminator(op: IrOp): boolean {
+  if (hasRewriteBarrier(op)) return false;
   return op.kind === "stop" || op.kind === "store" || op.kind === "indirect-store";
 }
 

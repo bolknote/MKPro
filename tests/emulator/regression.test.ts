@@ -108,6 +108,7 @@ const SCENARIOS: Scenario[] = [
     },
     keys: ["БП", "4", "4", "4", "4", "П→X", "9", "F", "0", "С/П"],
     expectStop: true,
+    expectDisplayMatches: /^1,0000001$/u,
     expectPc: "01",
     maxFrames: 600,
   },

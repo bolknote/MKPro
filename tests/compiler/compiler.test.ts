@@ -108,7 +108,7 @@ program RawRule {
     expect(result.report.cellRoles.some((cell) => cell.note?.includes("raw opcode"))).toBe(true);
   });
 
-  it("selects stable indirect flow for raw numeric branches with a live address selector", () => {
+  it("keeps raw numeric branches behind the optimizer barrier", () => {
     const result = compileOk(`
 program StableIndirectFlow {
   state {
@@ -134,14 +134,40 @@ program StableIndirectFlow {
     const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
     const features = new Set(result.report.machineFeaturesUsed.map((feature) => feature.id));
 
-    expect(result.steps.map((step) => step.hex)).toContain("87");
-    expect(result.steps.map((step) => step.hex)).not.toContain("51");
-    expect(selected.has("stable-indirect-flow")).toBe(true);
-    expect(features.has("indirect-flow")).toBe(true);
-    expect(result.report.proofs.some((proof) => proof.id === "indirect-addressing-ranges")).toBe(true);
+    expect(result.steps.map((step) => step.hex)).toContain("51");
+    expect(result.steps.map((step) => step.hex)).not.toContain("87");
+    expect(selected.has("stable-indirect-flow")).toBe(false);
+    expect(features.has("indirect-flow")).toBe(false);
+    expect(result.report.proofs.some((proof) => proof.id === "indirect-addressing-ranges")).toBe(false);
   });
 
-  it("selects indirect memory table access for raw direct memory through a live selector", () => {
+  it("does not add compiler-owned preloads for raw numeric branches", () => {
+    const result = compileOk(`
+program PreloadedIndirectFlow {
+  turn {
+    raw {
+      clobbers X
+      preserves state
+      code {
+        БП 13
+      }
+    }
+    stop 0
+  }
+}
+`);
+    const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
+    const features = new Set(result.report.machineFeaturesUsed.map((feature) => feature.id));
+
+    expect(result.steps.map((step) => step.hex)).toContain("51");
+    expect(result.steps.map((step) => step.hex)).not.toContain("87");
+    expect(result.report.preloads).not.toContainEqual({ register: "7", value: "C5", countsAgainstProgram: false });
+    expect(selected.has("preloaded-indirect-flow")).toBe(false);
+    expect(features.has("indirect-flow")).toBe(false);
+    expect(result.report.proofs.some((proof) => proof.id === "indirect-addressing-ranges")).toBe(false);
+  });
+
+  it("keeps raw direct memory access exact through a live selector", () => {
     const result = compileOk(`
 program IndirectMemoryTable {
   state {
@@ -170,10 +196,11 @@ program IndirectMemoryTable {
     );
     const features = new Set(result.report.machineFeaturesUsed.map((feature) => feature.id));
 
-    expect(result.steps.map((step) => step.hex)).toContain("D7");
-    expect(selected.has("indirect-memory-table")).toBe(true);
-    expect(activeCapabilities.has("indirect-memory-table")).toBe(true);
-    expect(features.has("indirect-memory")).toBe(true);
+    expect(result.steps.map((step) => step.hex)).toContain("62");
+    expect(result.steps.map((step) => step.hex)).not.toContain("D7");
+    expect(selected.has("indirect-memory-table")).toBe(false);
+    expect(activeCapabilities.has("indirect-memory-table")).toBe(false);
+    expect(features.has("indirect-memory")).toBe(false);
   });
 
   it("keeps raw formal dark branch operands as address bytes", () => {
@@ -196,6 +223,9 @@ program RawFormalAddress {
     expect(cells.slice(0, 2)).toEqual(["51", "C5"]);
     expect(result.steps[1]?.mnemonic).toBe("C5");
     expect(result.steps[1]?.comment).toMatch(/formal C5->13/u);
+    expect(result.report.cellRoles[1]?.roles).toContain("formal-address");
+    expect(result.report.cellRoles[1]?.roles).toContain("dark-entry");
+    expect(result.report.proofs.find((proof) => proof.id === "formal-address-operands")?.status).toBe("proved");
   });
 
   it("reports unknown instructions in contracted raw blocks as compile errors", () => {

@@ -5,6 +5,7 @@ import type {
   IrOp,
   LayoutIrCell,
   MachineItem,
+  PreloadReport,
 } from "../types.ts";
 import { arithmeticIfPass } from "./arithmetic-if.ts";
 import { constantFolding } from "./constant-folding.ts";
@@ -18,6 +19,7 @@ import { indirectMemoryTable, stableIndirectFlow } from "./indirect-addressing.t
 import { jumpThread } from "./jump-thread.ts";
 import { jumpToNextThreading } from "./jump-to-next.ts";
 import { lastXReuse } from "./last-x-reuse.ts";
+import { preloadedIndirectFlow } from "./preloaded-indirect-flow.ts";
 import { redundantPrologueElimination } from "./redundant-prologue.ts";
 import { registerCoalesce } from "./register-coalesce.ts";
 import { returnZeroJump } from "./return-zero-jump.ts";
@@ -32,6 +34,7 @@ const PASS_PIPELINE: ReadonlyArray<IrPass> = [
   jumpToNextThreading,
   jumpThread,
   stableIndirectFlow,
+  preloadedIndirectFlow,
   indirectMemoryTable,
   deadStoreBeforeCommutative,
   deadStoreElimination,
@@ -53,6 +56,7 @@ export interface RunPassesResult {
   applied: number;
   optimizations: AppliedOptimization[];
   passCounts: Record<string, number>;
+  preloads: PreloadReport[];
 }
 
 interface RunOnIrOptions {
@@ -68,10 +72,12 @@ function runPassesOnIr(
   applied: number;
   optimizations: AppliedOptimization[];
   passCounts: Record<string, number>;
+  preloads: PreloadReport[];
 } {
   let current = initial;
   let totalApplied = 0;
   const optimizations: AppliedOptimization[] = [];
+  const preloads: PreloadReport[] = [];
   const passCounts: Record<string, number> = {};
   let changedInIteration = true;
   let iteration = 0;
@@ -93,11 +99,12 @@ function runPassesOnIr(
             optimizations.push({ ...opt });
           }
         }
+        if (result.preloads !== undefined) preloads.push(...result.preloads);
       }
       current = result.ops;
     }
   }
-  return { ops: current, applied: totalApplied, optimizations, passCounts };
+  return { ops: current, applied: totalApplied, optimizations, passCounts, preloads };
 }
 
 export function runIrPasses(items: MachineItem[], options: CompileOptions): RunPassesResult {
@@ -108,6 +115,7 @@ export function runIrPasses(items: MachineItem[], options: CompileOptions): RunP
     applied: result.applied,
     optimizations: result.optimizations,
     passCounts: result.passCounts,
+    preloads: result.preloads,
   };
 }
 
@@ -116,6 +124,7 @@ export interface RunLayoutPassesResult {
   applied: number;
   optimizations: AppliedOptimization[];
   passCounts: Record<string, number>;
+  preloads: PreloadReport[];
 }
 
 export function runIrPassesOnLayout(
@@ -130,6 +139,7 @@ export function runIrPassesOnLayout(
     applied: result.applied,
     optimizations: result.optimizations,
     passCounts: result.passCounts,
+    preloads: result.preloads,
   };
 }
 

@@ -1,5 +1,5 @@
 import type { IrOp } from "../types.ts";
-import { type IrPass, type IrPassFn } from "./helpers.ts";
+import { hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
 
 const run: IrPassFn = (ops) => {
   const labelRefs = countLabelRefs(ops);
@@ -8,7 +8,7 @@ const run: IrPassFn = (ops) => {
 
   for (let i = 0; i < ops.length; i += 1) {
     const op = ops[i]!;
-    if (op.kind !== "cjump" || typeof op.target !== "string") {
+    if (op.kind !== "cjump" || typeof op.target !== "string" || hasRewriteBarrier(op)) {
       result.push(op);
       continue;
     }
@@ -94,10 +94,11 @@ function findLabel(ops: readonly IrOp[], name: string, start: number): number | 
 
 function isPureLinearBlock(ops: readonly IrOp[]): boolean {
   return ops.length > 0 && ops.every((op) =>
-    op.kind === "plain" ||
-    op.kind === "store" ||
-    op.kind === "recall" ||
-    op.kind === "stop"
+    !hasRewriteBarrier(op) &&
+    (op.kind === "plain" ||
+      op.kind === "store" ||
+      op.kind === "recall" ||
+      op.kind === "stop")
   );
 }
 

@@ -2491,8 +2491,8 @@ var M61EmulatorBundle = (() => {
     if (typeof target === "number") return target;
     return labels.get(target);
   }
-  function hasRewriteBarrier(_op) {
-    return false;
+  function hasRewriteBarrier(op) {
+    return "meta" in op && "raw" in op.meta && op.meta.raw === true;
   }
 
   // src/core/passes/arithmetic-if.ts
@@ -2502,7 +2502,7 @@ var M61EmulatorBundle = (() => {
     let applied = 0;
     for (let i = 0; i < ops.length; i += 1) {
       const op = ops[i];
-      if (op.kind !== "cjump" || typeof op.target !== "string") {
+      if (op.kind !== "cjump" || typeof op.target !== "string" || hasRewriteBarrier(op)) {
         result.push(op);
         continue;
       }
@@ -2575,7 +2575,7 @@ var M61EmulatorBundle = (() => {
   }
   function isPureLinearBlock(ops) {
     return ops.length > 0 && ops.every(
-      (op) => op.kind === "plain" || op.kind === "store" || op.kind === "recall" || op.kind === "stop"
+      (op) => !hasRewriteBarrier(op) && (op.kind === "plain" || op.kind === "store" || op.kind === "recall" || op.kind === "stop")
     );
   }
   function opsEquivalent(a, b) {
@@ -2628,7 +2628,7 @@ var M61EmulatorBundle = (() => {
     for (let i = 0; i < ops.length; i += 1) {
       const op = ops[i];
       const prev = result[result.length - 1];
-      if ((isIdentityPlus(op, prev) || isIdentityMul(op, prev)) && prev !== void 0 && prev.kind === "plain" && prev.meta.raw !== true) {
+      if ((isIdentityPlus(op, prev) || isIdentityMul(op, prev)) && prev !== void 0 && prev.kind === "plain" && prev.meta.raw !== true && op.kind === "plain" && op.meta.raw !== true) {
         result.pop();
         applied += 1;
         continue;
@@ -2658,6 +2658,7 @@ var M61EmulatorBundle = (() => {
 
   // src/core/passes/cse-display-block.ts
   function isPureDataOp(op) {
+    if (hasRewriteBarrier(op)) return false;
     if (op.kind === "recall") return true;
     if (op.kind === "plain") {
       if (op.opcode === 16 || op.opcode === 18) return true;
@@ -2666,6 +2667,7 @@ var M61EmulatorBundle = (() => {
     return false;
   }
   function isBlockTerminator(op) {
+    if (hasRewriteBarrier(op)) return false;
     return op.kind === "stop" || op.kind === "store" || op.kind === "indirect-store";
   }
   function collectCseCandidates(ops) {
@@ -2901,9 +2903,15 @@ var M61EmulatorBundle = (() => {
   // src/core/passes/dead-code-after-halt.ts
   function reachableFromEntry(ops) {
     const labelIndex = /* @__PURE__ */ new Map();
+    const addressIndex = /* @__PURE__ */ new Map();
+    let address = 0;
     for (let i = 0; i < ops.length; i += 1) {
       const op = ops[i];
       if (op.kind === "label") labelIndex.set(op.name, i);
+      else {
+        addressIndex.set(address, i);
+        address += cellsPerOp(op);
+      }
     }
     const visited = /* @__PURE__ */ new Set();
     const stack = [];
@@ -2919,6 +2927,9 @@ var M61EmulatorBundle = (() => {
       const target = (label) => {
         if (typeof label === "string") {
           const idx = labelIndex.get(label);
+          if (idx !== void 0) stack.push(idx);
+        } else {
+          const idx = addressIndex.get(label);
           if (idx !== void 0) stack.push(idx);
         }
       };
@@ -2949,17 +2960,36 @@ var M61EmulatorBundle = (() => {
           target(op.target);
           fallthrough();
           break;
-        case "indirect-jump":
+        case "indirect-jump": {
+          const knownTarget = knownIndirectTarget(op);
+          if (knownTarget !== void 0) target(knownTarget);
           break;
-        case "indirect-call":
+        }
+        case "indirect-call": {
+          const knownTarget = knownIndirectTarget(op);
+          if (knownTarget !== void 0) target(knownTarget);
           fallthrough();
           break;
-        case "indirect-cjump":
+        }
+        case "indirect-cjump": {
+          const knownTarget = knownIndirectTarget(op);
+          if (knownTarget !== void 0) target(knownTarget);
           fallthrough();
           break;
+        }
       }
     }
     return visited;
+  }
+  function knownIndirectTarget(op) {
+    if (op.kind !== "indirect-jump" && op.kind !== "indirect-call" && op.kind !== "indirect-cjump") {
+      return void 0;
+    }
+    const match = /\bindirect-target=(\d+)\b/u.exec(op.meta.comment ?? "");
+    if (!match) return void 0;
+    const target = Number(match[1]);
+    if (!Number.isInteger(target) || target < 0 || target > 104) return void 0;
+    return target;
   }
   var run4 = (ops) => {
     if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
@@ -3340,6 +3370,10 @@ var M61EmulatorBundle = (() => {
     return void 0;
   }
   function updateKnownAfterOp(state, op) {
+    if (hasRewriteBarrier(op)) {
+      clearKnownState(state);
+      return;
+    }
     const digit = digitForPlain(op);
     if (digit !== void 0) {
       state.currentLiteral = `${state.currentLiteral ?? ""}${digit}`;
@@ -3374,14 +3408,15 @@ var M61EmulatorBundle = (() => {
         return;
     }
   }
-  function indirectFlowOp(op, register) {
+  function indirectFlowOp(op, register, target) {
     const offset = registerIndex(register);
+    const suffix = `stable indirect flow indirect-target=${target}`;
     if (op.kind === "jump") {
       return {
         kind: "indirect-jump",
         register,
         opcode: 128 + offset,
-        meta: cloneMeta({ ...op.meta, mnemonic: `\u041A \u0411\u041F ${register}` }, "stable indirect flow")
+        meta: cloneMeta({ ...op.meta, mnemonic: `\u041A \u0411\u041F ${register}` }, suffix)
       };
     }
     if (op.kind === "call") {
@@ -3389,7 +3424,7 @@ var M61EmulatorBundle = (() => {
         kind: "indirect-call",
         register,
         opcode: 160 + offset,
-        meta: cloneMeta({ ...op.meta, mnemonic: `\u041A \u041F\u041F ${register}` }, "stable indirect flow")
+        meta: cloneMeta({ ...op.meta, mnemonic: `\u041A \u041F\u041F ${register}` }, suffix)
       };
     }
     const opcode = INDIRECT_COND_BASES2[op.condition] + offset;
@@ -3399,7 +3434,7 @@ var M61EmulatorBundle = (() => {
       condition: op.condition,
       register,
       opcode,
-      meta: cloneMeta({ ...op.meta, mnemonic: `\u041A ${name} ${register}` }, "stable indirect flow")
+      meta: cloneMeta({ ...op.meta, mnemonic: `\u041A ${name} ${register}` }, suffix)
     };
   }
   var stableFlowRun = (ops) => {
@@ -3407,10 +3442,10 @@ var M61EmulatorBundle = (() => {
     const state = { currentLiteral: void 0, stableRegisters: /* @__PURE__ */ new Map() };
     let applied = 0;
     for (const op of ops) {
-      if (op.kind === "jump" || op.kind === "call" || op.kind === "cjump") {
+      if (!hasRewriteBarrier(op) && (op.kind === "jump" || op.kind === "call" || op.kind === "cjump")) {
         const register = findFlowSelector(state, op.target);
-        if (register !== void 0) {
-          const rewritten = indirectFlowOp(op, register);
+        if (register !== void 0 && typeof op.target === "number") {
+          const rewritten = indirectFlowOp(op, register, op.target);
           result.push(rewritten);
           updateKnownAfterOp(state, rewritten);
           applied += 1;
@@ -3437,7 +3472,7 @@ var M61EmulatorBundle = (() => {
     const state = { currentLiteral: void 0, stableRegisters: /* @__PURE__ */ new Map() };
     let applied = 0;
     for (const op of ops) {
-      if (op.kind === "recall" || op.kind === "store") {
+      if (!hasRewriteBarrier(op) && (op.kind === "recall" || op.kind === "store")) {
         const selector = findMemorySelector(state, op.register);
         if (selector !== void 0) {
           const opcodeBase = op.kind === "recall" ? 208 : 176;
@@ -3660,6 +3695,219 @@ var M61EmulatorBundle = (() => {
     layoutSafe: false
   };
 
+  // src/core/passes/preloaded-indirect-flow.ts
+  var INDIRECT_COND_BASES3 = {
+    "!=0": 112,
+    ">=0": 144,
+    "<0": 192,
+    "==0": 224
+  };
+  var STABLE_REGISTERS = ["7", "8", "9", "a", "b", "c", "d", "e"];
+  function cloneMeta2(meta, comment) {
+    return {
+      ...meta,
+      comment: [meta.comment, comment].filter(Boolean).join("; ")
+    };
+  }
+  function usedRegisters(ops) {
+    const used = /* @__PURE__ */ new Set();
+    for (const op of ops) {
+      if (op.kind === "store" || op.kind === "recall" || op.kind === "indirect-store" || op.kind === "indirect-recall" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
+        used.add(op.register);
+      }
+    }
+    return used;
+  }
+  function spareStableRegisters(ops) {
+    const used = usedRegisters(ops);
+    return STABLE_REGISTERS.filter((register) => !used.has(register));
+  }
+  function numericFlowTarget(op) {
+    if (op.kind !== "jump" && op.kind !== "call" && op.kind !== "cjump" && op.kind !== "loop") return void 0;
+    if (typeof op.target !== "number") return void 0;
+    if (!Number.isInteger(op.target) || op.target < 0 || op.target > 104) return void 0;
+    return op.target;
+  }
+  function branchTarget(op) {
+    if (op.kind !== "jump" && op.kind !== "call" && op.kind !== "cjump") return void 0;
+    if (op.targetMeta.formalOpcode !== void 0 || op.targetMeta.roles?.includes("formal-address")) return void 0;
+    return numericFlowTarget(op);
+  }
+  function maxNumericFlowTarget(ops) {
+    let max = -1;
+    for (const op of ops) {
+      const target = numericFlowTarget(op);
+      if (target !== void 0 && target > max) max = target;
+    }
+    return max;
+  }
+  function addressByIndex(ops) {
+    const addresses = [];
+    let address = 0;
+    for (const op of ops) {
+      addresses.push(address);
+      address += cellsPerOp(op);
+    }
+    return addresses;
+  }
+  function opAtAddress(ops, addresses, address) {
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (cellsPerOp(op) === 0) continue;
+      if (addresses[i] === address) return op;
+    }
+    return void 0;
+  }
+  function hasSingleCellFallthrough(op) {
+    if (op === void 0 || cellsPerOp(op) !== 1) return false;
+    switch (op.kind) {
+      case "plain":
+      case "store":
+      case "recall":
+      case "indirect-store":
+      case "indirect-recall":
+      case "stop":
+        return true;
+      default:
+        return false;
+    }
+  }
+  function isSuperDarkCompatibleTarget(ops, addresses, labels, target) {
+    if (target < 48 || target > 53) return false;
+    const entry = opAtAddress(ops, addresses, target);
+    if (!hasSingleCellFallthrough(entry)) return false;
+    const continuationAddress = target - 47;
+    const afterEntry = opAtAddress(ops, addresses, target + 1);
+    if (afterEntry?.kind !== "jump") return false;
+    return targetAddress(afterEntry.target, labels) === continuationAddress;
+  }
+  function selectorForTarget(ops, addresses, labels, target) {
+    if (isSuperDarkCompatibleTarget(ops, addresses, labels, target)) {
+      return {
+        selectorValue: formalLabelFromOpcode(250 + (target - 48)),
+        superDark: true
+      };
+    }
+    if (target <= 47) return { selectorValue: formalLabelFromOrdinal(target + 112), superDark: false };
+    return { selectorValue: officialLabel(target), superDark: false };
+  }
+  function formalLabelFromOrdinal(ordinal) {
+    const high = Math.floor(ordinal / 10);
+    const low = ordinal % 10;
+    return `${high.toString(16).toUpperCase()}${low.toString(16).toUpperCase()}`;
+  }
+  function formalLabelFromOpcode(opcode) {
+    const high = Math.floor(opcode / 16);
+    const low = opcode % 16;
+    return `${high.toString(16).toUpperCase()}${low.toString(16).toUpperCase()}`;
+  }
+  function officialLabel(target) {
+    if (target <= 99) {
+      return `${Math.floor(target / 10)}${target % 10}`;
+    }
+    return `A${target - 100}`;
+  }
+  function indirectFlowOp2(op, register, selectorValue, target, superDark) {
+    const offset = registerIndex(register);
+    const suffix = `preloaded R${register}=${selectorValue} indirect-target=${target}${superDark ? " super-dark" : ""} indirect flow`;
+    if (op.kind === "jump") {
+      return {
+        kind: "indirect-jump",
+        register,
+        opcode: 128 + offset,
+        meta: cloneMeta2({ ...op.meta, mnemonic: `\u041A \u0411\u041F ${register}` }, suffix)
+      };
+    }
+    if (op.kind === "call") {
+      return {
+        kind: "indirect-call",
+        register,
+        opcode: 160 + offset,
+        meta: cloneMeta2({ ...op.meta, mnemonic: `\u041A \u041F\u041F ${register}` }, suffix)
+      };
+    }
+    const opcode = INDIRECT_COND_BASES3[op.condition] + offset;
+    const name = op.condition === "==0" ? "x=0" : op.condition === "!=0" ? "x!=0" : `x${op.condition}`;
+    return {
+      kind: "indirect-cjump",
+      condition: op.condition,
+      register,
+      opcode,
+      meta: cloneMeta2({ ...op.meta, mnemonic: `\u041A ${name} ${register}` }, suffix)
+    };
+  }
+  var run11 = (ops) => {
+    const registers = spareStableRegisters(ops);
+    if (registers.length === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    const addresses = addressByIndex(ops);
+    const labels = calculateLabelAddresses(ops);
+    const maxTarget = maxNumericFlowTarget(ops);
+    const targets = /* @__PURE__ */ new Map();
+    const preloads = [];
+    const result = [];
+    let applied = 0;
+    let superDarkApplied = 0;
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (hasRewriteBarrier(op) || op.kind !== "jump" && op.kind !== "call" && op.kind !== "cjump") {
+        result.push(op);
+        continue;
+      }
+      const target = branchTarget(op);
+      const siteAddress = addresses[index];
+      if (target === void 0 || target > siteAddress || maxTarget > siteAddress) {
+        result.push(op);
+        continue;
+      }
+      let selected = targets.get(target);
+      if (selected === void 0) {
+        const register = registers.shift();
+        if (register === void 0) {
+          result.push(op);
+          continue;
+        }
+        const { selectorValue, superDark } = selectorForTarget(ops, addresses, labels, target);
+        const evaluated = evaluateIndirectAddress(register, selectorValue, "flow");
+        const selectedSuperDark = evaluated?.superDark?.entryAddress === target;
+        if (evaluated?.actualFlowTarget !== target || selectedSuperDark !== superDark || !isStableIndirectSelector(register)) {
+          result.push(op);
+          continue;
+        }
+        selected = { register, selectorValue, superDark };
+        targets.set(target, selected);
+        preloads.push({ register, value: selectorValue, countsAgainstProgram: false });
+      }
+      result.push(indirectFlowOp2(op, selected.register, selected.selectorValue, target, selected.superDark));
+      applied += 1;
+      if (selected.superDark) superDarkApplied += 1;
+    }
+    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    const formal = preloads.filter((preload) => /[B-F]/iu.test(preload.value)).length;
+    const optimizations = [
+      {
+        name: "preloaded-indirect-flow",
+        detail: `Replaced ${applied} numeric direct branch/call(s) with compiler-owned preloaded indirect flow (${formal} formal alias selector${formal === 1 ? "" : "s"}).`
+      }
+    ];
+    if (superDarkApplied > 0) {
+      optimizations.push({
+        name: "preloaded-super-dark-flow",
+        detail: `Selected ${superDarkApplied} FA..FF one-command indirect dispatch(es) after proving the entry cell falls through to the matching 01..06 continuation jump.`
+      });
+    }
+    return {
+      ops: result,
+      applied,
+      preloads,
+      optimizations
+    };
+  };
+  var preloadedIndirectFlow = {
+    name: "preloaded-indirect-flow",
+    run: run11,
+    layoutSafe: false
+  };
+
   // src/core/passes/redundant-prologue.ts
   function isShowDisplayOp(op) {
     if (op.kind === "recall") return true;
@@ -3755,7 +4003,7 @@ var M61EmulatorBundle = (() => {
     }
     return true;
   }
-  var run11 = (ops) => {
+  var run12 = (ops) => {
     const labelIndex = /* @__PURE__ */ new Map();
     for (let i = 0; i < ops.length; i += 1) {
       const op = ops[i];
@@ -3830,7 +4078,7 @@ var M61EmulatorBundle = (() => {
   };
   var redundantPrologueElimination = {
     name: "redundant-prologue-elimination",
-    run: run11,
+    run: run12,
     layoutSafe: false
   };
 
@@ -3907,7 +4155,7 @@ var M61EmulatorBundle = (() => {
       }
     };
   }
-  var run12 = (ops) => {
+  var run13 = (ops) => {
     if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
     if (ops.some((op) => hasRewriteBarrier(op))) {
       return { ops: [...ops], applied: 0, optimizations: [] };
@@ -3962,12 +4210,12 @@ var M61EmulatorBundle = (() => {
   };
   var registerCoalesce = {
     name: "register-coalesce",
-    run: run12,
+    run: run13,
     layoutSafe: true
   };
 
   // src/core/passes/return-zero-jump.ts
-  var run13 = (ops) => {
+  var run14 = (ops) => {
     const usesCall = ops.some((op) => op.kind === "call" || op.kind === "indirect-call");
     if (usesCall) return { ops: [...ops], applied: 0, optimizations: [] };
     const labels = calculateLabelAddresses(ops);
@@ -4013,7 +4261,7 @@ var M61EmulatorBundle = (() => {
   };
   var returnZeroJump = {
     name: "return-zero-jump",
-    run: run13,
+    run: run14,
     layoutSafe: false
   };
 
@@ -4033,13 +4281,17 @@ var M61EmulatorBundle = (() => {
     if (zero === void 0) return true;
     return zero.kind === "plain" && zero.opcode === 0;
   }
-  var run14 = (ops) => {
+  var run15 = (ops) => {
     if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
     const liveness = computeLiveness(ops);
     const remove = /* @__PURE__ */ new Set();
     let r0Fractional = false;
     for (let i = 0; i < ops.length; i += 1) {
       const op = ops[i];
+      if (hasRewriteBarrier(op)) {
+        r0Fractional = false;
+        continue;
+      }
       if (op.kind === "store" && op.register === "0") {
         r0Fractional = isFractionalR0LiteralBeforeStore(ops, i);
         continue;
@@ -4080,12 +4332,12 @@ var M61EmulatorBundle = (() => {
   };
   var r0FractionalSentinel = {
     name: "r0-fractional-sentinel",
-    run: run14,
+    run: run15,
     layoutSafe: false
   };
 
   // src/core/passes/store-recall-peephole.ts
-  var run15 = (ops) => {
+  var run16 = (ops) => {
     const result = [];
     let applied = 0;
     for (let i = 0; i < ops.length; i += 1) {
@@ -4113,7 +4365,7 @@ var M61EmulatorBundle = (() => {
   };
   var storeRecallPeephole = {
     name: "store-recall-peephole",
-    run: run15,
+    run: run16,
     layoutSafe: false
   };
 
@@ -4126,12 +4378,14 @@ var M61EmulatorBundle = (() => {
     ].filter(Boolean).join(" ").toLowerCase();
   }
   function isDisplayVp(op) {
+    if (hasRewriteBarrier(op)) return false;
     return op.kind === "plain" && op.opcode === 12 && /display|x2|вп/u.test(displayBoundaryText(op));
   }
   function isFractionAfterDisplayBoundary(op) {
+    if (hasRewriteBarrier(op)) return false;
     return op.kind === "plain" && op.opcode === 53 && /display|x2|frac/u.test(displayBoundaryText(op));
   }
-  var run16 = (ops) => {
+  var run17 = (ops) => {
     const remove = /* @__PURE__ */ new Set();
     for (let i = 1; i < ops.length; i += 1) {
       if (isDisplayVp(ops[i - 1]) && isFractionAfterDisplayBoundary(ops[i])) {
@@ -4152,7 +4406,7 @@ var M61EmulatorBundle = (() => {
   };
   var vpX2Peephole = {
     name: "vp-x2-peephole",
-    run: run16,
+    run: run17,
     layoutSafe: false
   };
 
@@ -4164,6 +4418,7 @@ var M61EmulatorBundle = (() => {
     jumpToNextThreading,
     jumpThread,
     stableIndirectFlow,
+    preloadedIndirectFlow,
     indirectMemoryTable,
     deadStoreBeforeCommutative,
     deadStoreElimination,
@@ -4182,6 +4437,7 @@ var M61EmulatorBundle = (() => {
     let current = initial;
     let totalApplied = 0;
     const optimizations = [];
+    const preloads = [];
     const passCounts = {};
     let changedInIteration = true;
     let iteration = 0;
@@ -4203,11 +4459,12 @@ var M61EmulatorBundle = (() => {
               optimizations.push({ ...opt });
             }
           }
+          if (result.preloads !== void 0) preloads.push(...result.preloads);
         }
         current = result.ops;
       }
     }
-    return { ops: current, applied: totalApplied, optimizations, passCounts };
+    return { ops: current, applied: totalApplied, optimizations, passCounts, preloads };
   }
   function runIrPasses(items, options) {
     const ir = raiseMachineToIr(items);
@@ -4216,8 +4473,124 @@ var M61EmulatorBundle = (() => {
       items: lowerIrToMachine(result.ops),
       applied: result.applied,
       optimizations: result.optimizations,
-      passCounts: result.passCounts
+      passCounts: result.passCounts,
+      preloads: result.preloads
     };
+  }
+
+  // src/core/super-dark-layout.ts
+  function hex2(value) {
+    return value.toString(16).toUpperCase().padStart(2, "0");
+  }
+  function verifySuperDarkSuffixLayout(layout, options = {}) {
+    const byAddress = new Map(layout.map((cell) => [cell.address, cell]));
+    const pairs = [];
+    const dispatchCells = collectSuperDarkDispatchCells(layout, options.selectorValues ?? {});
+    const provedDispatchCells = dispatchCells.filter((cell) => isSuperDarkSelectorValue(cell.selectorValue));
+    const requiredOffsets = requiredSuperDarkOffsets(provedDispatchCells);
+    const reasons = [];
+    if (dispatchCells.length === 0) {
+      reasons.push("no super-dark \u041A \u0411\u041F R dispatch cell is marked in the layout");
+    } else if (provedDispatchCells.length === 0) {
+      reasons.push("no super-dark dispatch register has a proved FA..FF selector value");
+    }
+    for (const offset of requiredOffsets) {
+      const formal = 250 + offset;
+      const entryAddress = 48 + offset;
+      const continuationAddress = 1 + offset;
+      const entry = byAddress.get(entryAddress);
+      const continuation = byAddress.get(continuationAddress);
+      if (entry === void 0) {
+        reasons.push(`${hex2(formal)} has no physical entry cell at ${entryAddress}`);
+        continue;
+      }
+      if (continuation === void 0) {
+        reasons.push(`${hex2(formal)} has no continuation cell at ${continuationAddress}`);
+        continue;
+      }
+      if (!entry.roles.includes("exec")) {
+        reasons.push(`${hex2(formal)} entry ${entryAddress} is not executable`);
+        continue;
+      }
+      if (getOpcode(entry.opcode).takesAddress) {
+        reasons.push(`${hex2(formal)} entry ${entryAddress} is a two-cell address-taking command`);
+        continue;
+      }
+      if (!continuation.roles.includes("exec")) {
+        reasons.push(`${hex2(formal)} continuation ${continuationAddress} is not executable`);
+        continue;
+      }
+      pairs.push({
+        formal,
+        entryAddress,
+        continuationAddress,
+        entryOpcode: entry.opcode,
+        continuationOpcode: continuation.opcode
+      });
+    }
+    if (pairs.length !== requiredOffsets.length && reasons.length === 0) {
+      reasons.push("FA..FF did not produce the required super-dark entry/continuation pairs");
+    }
+    return {
+      proved: provedDispatchCells.length > 0 && pairs.length === requiredOffsets.length && reasons.length === 0,
+      pairs,
+      dispatchCells,
+      reasons
+    };
+  }
+  function requiredSuperDarkOffsets(dispatchCells) {
+    const offsets = /* @__PURE__ */ new Set();
+    for (const cell of dispatchCells) {
+      const value = cell.selectorValue?.trim().toUpperCase().replace(/\s+/gu, "");
+      const formal = value === void 0 ? void 0 : /^F([A-F])$/u.exec(value);
+      if (formal) {
+        offsets.add(Number.parseInt(formal[1], 16) - 10);
+      } else if (isSuperDarkSelectorValue(value)) {
+        for (let offset = 0; offset <= 5; offset += 1) offsets.add(offset);
+      }
+    }
+    return [...offsets].sort((a, b) => a - b);
+  }
+  function collectSuperDarkDispatchCells(layout, selectorValues) {
+    const cells = [];
+    for (const cell of layout) {
+      if (cell.opcode < 135 || cell.opcode > 142) continue;
+      if (!/\bsuper[- ]dark\b/iu.test(cell.tactic)) continue;
+      const register = registerForIndirectJumpOpcode(cell.opcode);
+      const selectorValue = selectorValueForRegister(selectorValues, register);
+      cells.push({
+        address: cell.address,
+        opcode: cell.opcode,
+        register,
+        tactic: cell.tactic,
+        ...selectorValue === void 0 ? {} : { selectorValue }
+      });
+    }
+    return cells;
+  }
+  function registerForIndirectJumpOpcode(opcode) {
+    const registers = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e"];
+    return registers[opcode - 128] ?? "?";
+  }
+  function selectorValueForRegister(selectorValues, register) {
+    const aliases = [
+      register,
+      register.toUpperCase(),
+      `R${register}`,
+      `R${register.toUpperCase()}`,
+      `r${register}`
+    ];
+    for (const alias of aliases) {
+      const value = selectorValues[alias];
+      if (value !== void 0) return value;
+    }
+    return void 0;
+  }
+  function isSuperDarkSelectorValue(value) {
+    if (value === void 0) return false;
+    const normalized = value.trim().toUpperCase().replace(/\s+/gu, "");
+    if (/^F[A-F]$/u.test(normalized)) return true;
+    return normalized === "FA..FF" || normalized === "FA-FF" || normalized === "FA\u2026FF" || normalized === "SUPER-DARK" || normalized === "SUPER_DARK";
   }
 
   // src/core/machineProfile.ts
@@ -4434,7 +4807,9 @@ var M61EmulatorBundle = (() => {
       candidates
     );
     context.compileProgram();
-    const optimized = optimizeItems(context.items, opts, optimizations);
+    const optimizedResult = optimizeItems(context.items, opts, optimizations);
+    const optimized = optimizedResult.items;
+    const preloads = [...buildPreloadReport(ast, allocation), ...optimizedResult.preloads];
     appendOptimizationCandidateReports(optimizations, candidates);
     const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, machineProfile);
     const largestBlocks = summarizeBlocks(optimized);
@@ -4460,14 +4835,14 @@ var M61EmulatorBundle = (() => {
       warnings,
       delivery: opts.delivery,
       optimizer: buildOptimizerReport(ast, opts, optimizations, candidates, cellRoles, machineProfile),
-      preloads: buildPreloadReport(ast, allocation),
+      preloads,
       ...referenceResult?.report === void 0 ? {} : { reference: referenceResult.report },
       ir: buildIrReport(ast, optimized, steps.length),
       cellRoles,
       candidates,
       budgetReport: buildBudgetReport(steps.length, opts.budget, largestBlocks, 0),
       machineFeaturesUsed: buildMachineFeaturesUsed(machineProfile, optimizations, cellRoles, candidates),
-      proofs: buildProofReport(ast, optimized, cellRoles, opts, optimizations),
+      proofs: buildProofReport(ast, optimized, cellRoles, opts, optimizations, preloads),
       emulatorFacts: machineProfile.emulatorFacts,
       rejectedCandidates: candidates.filter((candidate) => !candidate.selected).map((candidate) => ({
         site: candidate.site,
@@ -4491,6 +4866,8 @@ var M61EmulatorBundle = (() => {
   function appendOptimizationCandidateReports(optimizations, candidates) {
     const selectedPassCandidates = [
       ["stable-indirect-flow", "stable-register indirect branch/call selected by IR data-flow proof", 1],
+      ["preloaded-indirect-flow", "compiler-owned address preload selected for one-cell indirect branch/call", 1],
+      ["preloaded-super-dark-flow", "compiler-owned FA..FF preloaded one-command dispatch selected after layout proof", 1],
       ["indirect-memory-table", "stable selector reused for indirect memory access", 0],
       ["r0-fractional-sentinel", "fractional R0 selector side effect reused after liveness proof", 0]
     ];
@@ -4717,7 +5094,7 @@ var M61EmulatorBundle = (() => {
       ...buildGameBackendCandidateReports(backendCandidates, selectedBackend),
       ...buildGameIntentCandidates(candidateIr, selectedBackend)
     ];
-    const cellRoles = buildGameIntentCellRoles(layoutIr, machineProfile);
+    const cellRoles = buildGameIntentCellRoles(layoutIr, selectedBackend.preloads, machineProfile);
     const warnings = selectedBackend.variant === "universal_spatial_resource" ? ["GameIntent selected the universal spatial/counter tactic pipeline; reference metadata did not affect code generation."] : [`GameIntent selected ${selectedBackend.variant} semantic microkernel; reference metadata did not affect code generation.`];
     if (referenceResult?.warning !== void 0) warnings.push(referenceResult.warning);
     const report = {
@@ -5401,11 +5778,17 @@ var M61EmulatorBundle = (() => {
       }
       return shapeSpecific;
     }
+    const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout, {
+      selectorValues: superDarkSelectorValues(backend.preloads)
+    });
+    const formalAddressOptimizations = superDarkLayoutProof.proved ? [
+      selected("super-dark-dispatch", "Selected super/dark formal address entries where one-command side paths are profitable."),
+      selected("cyclic-address-layout", "Selected wraparound address layout so tails continue through formal address space.")
+    ] : [];
     return [
       ...base,
       selected("indirect-register-flow", "Selected R7/R8/R9-style indirect flow for compact command and procedure dispatch."),
-      selected("super-dark-dispatch", "Selected super/dark formal address entries where one-command side paths are profitable."),
-      selected("cyclic-address-layout", "Selected wraparound address layout so tails continue through formal address space."),
+      ...formalAddressOptimizations,
       selected("shared-tail-layout", "Merged movement, wall-break, search, and initialization tails."),
       selected("code-data-overlay", "Reused branch operands and command bytes as address/data constants."),
       selected("constants-dual-use", "Reused constants as coefficients, rounding adjusters, and indirect branch addresses."),
@@ -5425,32 +5808,26 @@ var M61EmulatorBundle = (() => {
   }
   function buildGameIntentCandidates(candidates, backend) {
     const usesUniversalTactics = backend.variant === "universal_spatial_resource";
-    const superDarkLayoutProved = usesUniversalTactics && provesSuperDarkSuffixLayout(backend.layout);
+    const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout, {
+      selectorValues: superDarkSelectorValues(backend.preloads)
+    });
+    const superDarkLayoutProved = usesUniversalTactics && superDarkLayoutProof.proved;
     return candidates.map((candidate) => ({
       site: candidate.site,
       variant: candidate.variant,
       steps: candidate.cost,
-      selected: candidate.selected && usesUniversalTactics && (candidate.variant !== "super-dark-dispatch" || superDarkLayoutProved),
-      reason: gameIntentCandidateReason(candidate, backend, superDarkLayoutProved)
+      selected: candidate.selected && usesUniversalTactics && (!["super-dark-dispatch", "cyclic-address-layout"].includes(candidate.variant) || superDarkLayoutProved),
+      reason: gameIntentCandidateReason(candidate, backend, superDarkLayoutProof)
     }));
   }
-  function gameIntentCandidateReason(candidate, backend, superDarkLayoutProved) {
+  function gameIntentCandidateReason(candidate, backend, superDarkLayoutProof) {
     if (backend.variant !== "universal_spatial_resource") {
       return `rejected; ${backend.variant} backend is shorter, so universal ${candidate.variant} tactics were not emitted`;
     }
-    if (candidate.variant === "super-dark-dispatch" && !superDarkLayoutProved) {
-      return "rejected; layout proof did not establish FA..FF entries at 48..53 with suffix continuations 01..06";
+    if (["super-dark-dispatch", "cyclic-address-layout"].includes(candidate.variant) && !superDarkLayoutProof.proved) {
+      return `rejected; layout proof did not establish FA..FF entries at 48..53, suffix continuations 01..06, and a proved FA..FF selector (${superDarkLayoutProof.reasons.join("; ")})`;
     }
     return `selected; ${candidate.proofs.join("; ")}`;
-  }
-  function provesSuperDarkSuffixLayout(layout) {
-    for (let offset = 0; offset <= 5; offset += 1) {
-      const entry = layout[48 + offset];
-      const continuation = layout[1 + offset];
-      if (entry === void 0 || continuation === void 0) return false;
-      if (!entry.roles.includes("exec") || !continuation.roles.includes("exec")) return false;
-    }
-    return true;
   }
   function buildGameIntentPreloads(ast) {
     const explicit = (ast?.preloads ?? []).map((preload) => ({
@@ -5467,6 +5844,14 @@ var M61EmulatorBundle = (() => {
       { register: "R8", value: "-52", countsAgainstProgram: false },
       { register: "R9", value: "4,_3E-08", countsAgainstProgram: false }
     ];
+  }
+  function superDarkSelectorValues(preloads) {
+    const values = {};
+    for (const preload of preloads) {
+      const register = preload.register.replace(/^R/iu, "").toLowerCase();
+      values[register] = preload.value;
+    }
+    return values;
   }
   function buildGameIntentProofs(intent, backend, reference) {
     if (backend.variant !== "universal_spatial_resource") {
@@ -5517,6 +5902,9 @@ var M61EmulatorBundle = (() => {
       }
       return proofs2;
     }
+    const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout, {
+      selectorValues: superDarkSelectorValues(backend.preloads)
+    });
     const proofs = [
       {
         id: "full-game-semantics",
@@ -5540,8 +5928,8 @@ var M61EmulatorBundle = (() => {
       },
       {
         id: "cyclic-address-safety",
-        status: "proved",
-        detail: "Wraparound and dark-entry addresses land only on intended shared tails or one-command side paths."
+        status: superDarkLayoutProof.proved ? "proved" : "not-needed",
+        detail: superDarkLayoutProof.proved ? "Wraparound and dark-entry addresses land only on intended shared tails or one-command side paths." : "No formal wraparound/dark-entry layout was selected, so there are no cyclic-address aliases to prove."
       },
       {
         id: "indirect-addressing-ranges",
@@ -5550,8 +5938,8 @@ var M61EmulatorBundle = (() => {
       },
       {
         id: "super-dark-suffix-layout",
-        status: provesSuperDarkSuffixLayout(backend.layout) ? "proved" : "not-needed",
-        detail: provesSuperDarkSuffixLayout(backend.layout) ? "FA..FF indirect dispatch entries are placed at physical 48..53 and resume through suffix-compatible continuations 01..06." : "No suffix-compatible FA..FF dispatch layout was selected for this backend."
+        status: superDarkLayoutProof.proved ? "proved" : "not-needed",
+        detail: superDarkLayoutProof.proved ? `FA..FF indirect dispatch entries are placed at physical 48..53 and resume through suffix-compatible continuations 01..06 (${superDarkLayoutProof.pairs.length} pairs).` : `No suffix-compatible FA..FF dispatch layout was selected for this backend: ${superDarkLayoutProof.reasons.join("; ")}.`
       },
       {
         id: "display-observability",
@@ -5568,12 +5956,15 @@ var M61EmulatorBundle = (() => {
     }
     return proofs;
   }
-  function buildGameIntentCellRoles(layout, machineProfile) {
+  function buildGameIntentCellRoles(layout, preloads, machineProfile) {
     const addressOperandCells = /* @__PURE__ */ new Set();
     for (let address = 0; address < layout.length - 1; address += 1) {
       if (getOpcode(layout[address].opcode).takesAddress) addressOperandCells.add(address + 1);
     }
-    const darkEntryCells = /* @__PURE__ */ new Set([1, 2, 3, 4, 5, 6, 48, 49, 50, 51, 52, 53, 99, 100, 101, 102, 103, 104]);
+    const superDarkProof = verifySuperDarkSuffixLayout(layout, {
+      selectorValues: superDarkSelectorValues(preloads)
+    });
+    const darkEntryCells = superDarkProof.proved ? new Set(superDarkProof.pairs.flatMap((pair) => [pair.entryAddress, pair.continuationAddress])) : /* @__PURE__ */ new Set();
     const displayByteCells = /* @__PURE__ */ new Set([18, 33, 90]);
     return layout.map((cell) => {
       const { address, opcode: code } = cell;
@@ -5589,7 +5980,7 @@ var M61EmulatorBundle = (() => {
       }
       if (darkEntryCells.has(address) && machineSupports(machineProfile, "dark-entries")) {
         roles.push("dark-entry");
-        notes.push("formal/dark entry participates in cyclic shared-tail layout");
+        notes.push("formal/dark entry participates in proved super-dark dispatch layout");
       }
       if (displayByteCells.has(address) && machineSupports(machineProfile, "display-bytes")) {
         roles.push("display-byte");
@@ -7304,7 +7695,7 @@ var M61EmulatorBundle = (() => {
   function optimizeItems(items, options, optimizations) {
     const result = runIrPasses(items, options);
     optimizations.push(...result.optimizations);
-    return result.items;
+    return { items: result.items, preloads: result.preloads };
   }
   function layoutProgram(items, diagnostics, options, ast, machineProfile) {
     const labelAddresses = /* @__PURE__ */ new Map();
@@ -7404,7 +7795,7 @@ var M61EmulatorBundle = (() => {
     if (code !== void 0) diagnostic.code = code;
     return diagnostic;
   }
-  function buildCellRole(address, hex2, item, options, machineProfile) {
+  function buildCellRole(address, hex3, item, options, machineProfile) {
     const roles = ["exec"];
     const notes = [];
     if (item.raw) {
@@ -7417,7 +7808,7 @@ var M61EmulatorBundle = (() => {
     }
     const role = {
       address: safeFormatAddress(address),
-      hex: hex2,
+      hex: hex3,
       roles: uniqueRoles(roles)
     };
     if (notes.length > 0) role.note = notes.join("; ");
@@ -7426,6 +7817,15 @@ var M61EmulatorBundle = (() => {
   function buildAddressCellRole(address, opcode, item, options, machineProfile) {
     const roles = ["address"];
     const notes = [];
+    if (item.formalOpcode !== void 0) {
+      const info2 = formalAddressInfo(item.formalOpcode);
+      roles.push("formal-address");
+      notes.push(`formal address ${info2.label} maps to ${safeFormatAddress(info2.actual)} (${info2.kind})`);
+      if (info2.kind !== "official" && machineSupports(machineProfile, "dark-entries")) {
+        roles.push("dark-entry");
+        notes.push("uses formal/dark program-address mapping");
+      }
+    }
     if (machineSupports(machineProfile, "address-constants")) {
       roles.push("constant");
       notes.push("address can be reused as constant");
@@ -8358,8 +8758,8 @@ var M61EmulatorBundle = (() => {
       category: "flow",
       source: "documented",
       requires: [],
-      activeWhen: ["indirect-register-flow", "stable-indirect-flow"],
-      detail: "Candidate rule: replace direct branches/calls with \u041A \u0411\u041F/\u041A \u041F\u041F/\u041A x?0 only when the address value is already live and cheaper."
+      activeWhen: ["indirect-register-flow", "stable-indirect-flow", "preloaded-indirect-flow", "preloaded-super-dark-flow"],
+      detail: "Candidate rule: replace direct branches/calls with \u041A \u0411\u041F/\u041A \u041F\u041F/\u041A x?0 when the address value is already live, or when a compiler-owned preload is cheaper."
     },
     {
       id: "indirect-memory-table",
@@ -8414,8 +8814,8 @@ var M61EmulatorBundle = (() => {
       category: "flow",
       source: "undocumented",
       requires: ["super-dark-dispatch", "indirect-flow"],
-      activeWhen: ["super-dark-dispatch"],
-      detail: "Dispatch candidate for indirect \u041A \u0411\u041F R with FA..FF; selected only when layout can place one-command cases at 48..53 and tails at 01..06."
+      activeWhen: ["super-dark-dispatch", "preloaded-super-dark-flow"],
+      detail: "Dispatch candidate for indirect \u041A \u0411\u041F R with FA..FF; selected only when layout can place one-command cases at 48..53, tails at 01..06, and prove the selector register contains FA..FF."
     },
     {
       id: "r0-alias-indirect",
@@ -8668,7 +9068,9 @@ var M61EmulatorBundle = (() => {
     if (optimizations.some((optimization) => optimization.name === "fl-unit-decrement")) {
       add("fl-decrement-branch", "Optimizer selected F L0..F L3 for a unit decrement.", "optimizer");
     }
-    if (optimizations.some((optimization) => optimization.name === "indirect-register-flow" || optimization.name === "stable-indirect-flow")) {
+    if (optimizations.some(
+      (optimization) => optimization.name === "indirect-register-flow" || optimization.name === "stable-indirect-flow" || optimization.name === "preloaded-indirect-flow" || optimization.name === "preloaded-super-dark-flow"
+    )) {
       add("indirect-flow", "Optimizer selected register-held branch addresses for one-cell indirect flow.", "optimizer");
     }
     if (optimizations.some((optimization) => optimization.name === "indirect-memory-table")) {
@@ -8702,7 +9104,12 @@ var M61EmulatorBundle = (() => {
       add("code-data-overlay", "Layout marked address cells as reusable code/data overlay candidates.", "layout");
     }
     if (cellRoles.some((cell) => cell.roles.includes("dark-entry"))) {
-      add("dark-entries", "Layout exposed shared tails as dark-entry candidates.", "layout");
+      const formal = cellRoles.some((cell) => cell.roles.includes("formal-address"));
+      add(
+        "dark-entries",
+        formal ? "Layout emitted formal/dark MK-61 address operand(s)." : "Layout exposed shared tails as dark-entry candidates.",
+        "layout"
+      );
     }
     if (cellRoles.some((cell) => cell.roles.includes("display-byte"))) {
       add("display-bytes", "Display lowering marked cells as packed display-byte candidates.", "layout");
@@ -8710,12 +9117,39 @@ var M61EmulatorBundle = (() => {
     if (cellRoles.some((cell) => cell.roles.includes("address") && cell.roles.includes("constant"))) {
       add("address-constants", "Layout marked address cells as reusable constants.", "layout");
     }
-    if (candidates.some((candidate) => candidate.variant === "super-dark-dispatch" && candidate.selected)) {
-      add("super-dark-dispatch", "Dispatch solver selected FA..FF indirect one-command cases.", "optimizer");
+    if (candidates.some(
+      (candidate) => (candidate.variant === "super-dark-dispatch" || candidate.variant === "preloaded-super-dark-flow") && candidate.selected
+    )) {
+      add("super-dark-dispatch", "Optimizer selected FA..FF indirect one-command cases.", "optimizer");
     }
     return [...used.values()];
   }
-  function buildProofReport(ast, items, cellRoles, _options, optimizations) {
+  function machineItemsToLayoutCells(items) {
+    const cells = [];
+    let address = 0;
+    for (const item of items) {
+      if (item.kind === "label") continue;
+      if (item.kind === "op") {
+        cells.push({
+          address,
+          opcode: item.opcode,
+          roles: ["exec"],
+          tactic: item.comment ?? ""
+        });
+        address += 1;
+        continue;
+      }
+      cells.push({
+        address,
+        opcode: item.formalOpcode ?? (typeof item.target === "number" ? item.target : 0),
+        roles: ["address"],
+        tactic: item.comment ?? ""
+      });
+      address += 1;
+    }
+    return cells;
+  }
+  function buildProofReport(ast, items, cellRoles, _options, optimizations, preloads) {
     const proofs = [];
     const usesSubroutine = items.some((item) => item.kind === "op" && item.opcode === 83);
     proofs.push({
@@ -8736,12 +9170,22 @@ var M61EmulatorBundle = (() => {
       });
     }
     if (optimizations.some(
-      (optimization) => optimization.name === "stable-indirect-flow" || optimization.name === "indirect-memory-table" || optimization.name === "r0-fractional-sentinel"
+      (optimization) => optimization.name === "stable-indirect-flow" || optimization.name === "preloaded-indirect-flow" || optimization.name === "preloaded-super-dark-flow" || optimization.name === "indirect-memory-table" || optimization.name === "r0-fractional-sentinel"
     )) {
       proofs.push({
         id: "indirect-addressing-ranges",
         status: "proved",
-        detail: "Indirect selectors are rewritten only after local data-flow proves a stable target or the fractional R0 sentinel shape."
+        detail: "Indirect selectors are rewritten only after local data-flow proves a stable target, a compiler-owned address preload, or the fractional R0 sentinel shape."
+      });
+    }
+    if (optimizations.some((optimization) => optimization.name === "preloaded-super-dark-flow")) {
+      const proof = verifySuperDarkSuffixLayout(machineItemsToLayoutCells(items), {
+        selectorValues: superDarkSelectorValues(preloads)
+      });
+      proofs.push({
+        id: "super-dark-suffix-layout",
+        status: proof.proved ? "proved" : "assumed",
+        detail: proof.proved ? `Compiler-owned FA..FF dispatch entries land on physical 48..53 and resume through proved 01..06 continuations (${proof.pairs.length} pair${proof.pairs.length === 1 ? "" : "s"}).` : `Compiler selected preloaded super-dark flow, but the final layout proof is incomplete: ${proof.reasons.join("; ")}.`
       });
     }
     if (ast.v2) {
@@ -8767,6 +9211,14 @@ var M61EmulatorBundle = (() => {
         id: "display-byte-observable-boundary",
         status: "assumed",
         detail: "Display-byte candidates are bounded by screen declarations and the exact mk61 profile."
+      });
+    }
+    const formalOperands = items.filter((item) => item.kind === "address" && item.formalOpcode !== void 0).map((item) => formalAddressInfo(item.formalOpcode)).filter((info2) => info2.kind !== "official");
+    if (formalOperands.length > 0) {
+      proofs.push({
+        id: "formal-address-operands",
+        status: "proved",
+        detail: `Resolved formal MK-61 address byte(s): ${formalOperands.map((info2) => `${info2.label}->${safeFormatAddress(info2.actual)}`).join(", ")}.`
       });
     }
     return proofs;
@@ -8912,8 +9364,8 @@ var M61EmulatorBundle = (() => {
     return `Inserted raw MK-61 block at line ${statement.line}: ${inputs}; ${outputs}; ${clobbers}; ${preserves}.`;
   }
   function parseRawInstruction(text) {
-    const hex2 = /^[0-9A-Fa-f]{2}$/u.exec(text);
-    if (hex2) {
+    const hex3 = /^[0-9A-Fa-f]{2}$/u.exec(text);
+    if (hex3) {
       const opcode = Number.parseInt(text, 16);
       return { opcode, mnemonic: getOpcode(opcode).name, comment: "raw hex" };
     }

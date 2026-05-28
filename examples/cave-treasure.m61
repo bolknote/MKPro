@@ -1,7 +1,8 @@
-reference kei_treasure_cave
+reference anvarov_demo
 
-// Full Cave Treasure in the current M61 surface: compact source intent, with the
-// MK-61-specific overlay and dispatch choices left to compiler reports.
+// Serge Anvarov's Treasure Cave demo in the current M61 surface: compact source
+// intent, with the MK-61-specific overlay and dispatch choices left to compiler
+// reports.
 
 program CaveTreasure {
   state {

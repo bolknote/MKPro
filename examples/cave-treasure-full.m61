@@ -1,7 +1,8 @@
-reference kei_treasure_cave
+reference anvarov_demo
 
-// The named compactness reference for Cave Treasure. It intentionally stays at
-// game-rule level so compiler changes can be judged against the same source.
+// The named compactness reference for Serge Anvarov's Treasure Cave demo. It
+// intentionally stays at game-rule level so compiler changes can be judged
+// against the same source.
 
 program CaveTreasure {
   state {

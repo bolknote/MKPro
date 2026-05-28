@@ -75,7 +75,8 @@ describe("M61 compiler", () => {
     expect(result.report.steps).toBeLessThanOrEqual(105);
     expect(result.report.candidates.some((candidate) => candidate.variant === "indirect-register-flow")).toBe(true);
     expect(result.report.cellRoles.some((cell) => cell.roles.includes("overlay"))).toBe(true);
-    expect(result.report.cellRoles.some((cell) => cell.roles.includes("dark-entry"))).toBe(true);
+    expect(result.report.cellRoles.some((cell) => cell.roles.includes("dark-entry"))).toBe(false);
+    expect(result.report.rejectedCandidates.some((candidate) => candidate.variant === "super-dark-dispatch")).toBe(true);
   });
 
   it("keeps the full cave reference high-level and compiles its semantic domains", () => {
@@ -171,17 +172,67 @@ program SimpleRules {
     expect(result.report.optimizations.some((optimization) => optimization.name === "intent-domain-lowering")).toBe(true);
     expect(result.report.optimizations.some((optimization) => optimization.name === "game-intent-lowering")).toBe(true);
     expect(selected.has("indirect-register-flow")).toBe(true);
-    expect(selected.has("super-dark-dispatch")).toBe(true);
-    expect(selected.has("cyclic-address-layout")).toBe(true);
+    expect(selected.has("super-dark-dispatch")).toBe(false);
+    expect(selected.has("cyclic-address-layout")).toBe(false);
     expect(selected.has("x2-vp-scheduling")).toBe(true);
     expect(selected.has("hex-mantissa-data")).toBe(true);
     expect(features.has("indirect-flow")).toBe(true);
     expect(features.has("x2-register")).toBe(true);
     expect(features.has("code-data-overlay")).toBe(true);
-    expect(features.has("super-dark-dispatch")).toBe(true);
+    expect(features.has("super-dark-dispatch")).toBe(false);
     expect(result.report.proofs.find((proof) => proof.id === "full-game-semantics")?.status).toBe("assumed");
     expect(result.report.proofs.some((proof) => proof.id === "cyclic-address-safety")).toBe(true);
-    expect(result.report.proofs.find((proof) => proof.id === "super-dark-suffix-layout")?.status).toBe("proved");
+    expect(result.report.proofs.find((proof) => proof.id === "cyclic-address-safety")?.status).toBe("not-needed");
+    expect(result.report.proofs.find((proof) => proof.id === "super-dark-suffix-layout")?.status).toBe("not-needed");
+    expect(result.report.rejectedCandidates.find((candidate) => candidate.variant === "super-dark-dispatch")?.reason).toMatch(/proved FA\.\.FF selector/u);
+  });
+
+  it("ports Anvarov's Treasure Cave demo byte-for-byte within the original size", () => {
+    const { parseProgramText } = require("./emulator/mk61.cjs") as {
+      parseProgramText: (text: string) => { codes: number[]; diagnostics: string[] };
+    };
+    const result = compileM61(source("examples/cave-treasure.m61"));
+    const reference = parseProgramText(source("games/anvarov/demo.txt"));
+
+    expect(reference.diagnostics).toEqual([]);
+    expect(result.report.reference?.name).toBe("anvarov_demo");
+    expect(result.report.reference?.referenceSpan).toBe(105);
+    expect(result.report.reference?.parity).toBe("equal");
+    expect(result.steps.map((step) => step.opcode)).toEqual(reference.codes);
+  });
+
+  it("ports Bolknote's 99 Bottles demo byte-for-byte within the original size", () => {
+    const { MK61, parseProgramText } = require("./emulator/mk61.cjs") as {
+      MK61: new () => {
+        loadProgram: (codes: number[]) => { diagnostics: string[] };
+        readProgramCodes: (count: number) => number[];
+        setRegister: (register: string, value: string) => unknown;
+        pressSequence: (keys: string[]) => unknown;
+        displayText: () => string;
+        runUntilStable: (options: { maxFrames: number; stableFrames: number }) => { stopped: boolean };
+      };
+      parseProgramText: (text: string) => { codes: number[]; diagnostics: string[] };
+    };
+    const result = compileM61(source("examples/99-bottles.m61"));
+    const reference = parseProgramText(source("games/bolknote/99-bottles.txt"));
+    const codes = result.steps.map((step) => step.opcode);
+    const calc = new MK61();
+    const loaded = calc.loadProgram([0x3a, 0x50]);
+
+    calc.setRegister("X", "8112006Е");
+    calc.pressSequence(["В/О", "С/П"]);
+
+    expect(reference.diagnostics).toEqual([]);
+    expect(loaded.diagnostics).toEqual([]);
+    expect(result.report.reference?.name).toBe("bolknote_99_bottles");
+    expect(result.report.reference?.referenceSpan).toBe(53);
+    expect(result.report.reference?.parity).toBe("equal");
+    expect(result.report.steps).toBe(53);
+    expect(result.report.warnings.join("\n")).not.toMatch(/was not found/u);
+    expect(codes).toEqual(reference.codes);
+    expect(calc.runUntilStable({ maxFrames: 200, stableFrames: 6 }).stopped).toBe(true);
+    expect(calc.readProgramCodes(2)).toEqual([0x3a, 0x50]);
+    expect(calc.displayText()).toBe("8,ЕЕГ  91");
   });
 
   it("does not contain the old benchmark-special backend in compiler source", () => {
@@ -224,7 +275,6 @@ program SimpleRules {
     for (const name of [
       "indirect-register-flow",
       "constants-dual-use",
-      "cyclic-address-layout",
       "shared-tail-layout",
       "code-data-overlay",
       "x2-display-byte-scheduling",
@@ -242,10 +292,7 @@ program SimpleRules {
 
     for (const id of [
       "address-constant-overlay",
-      "cyclic-address-layout",
       "constants-dual-use",
-      "dark-entry-layout",
-      "super-dark-dispatch",
       "r0-alias-indirect",
       "r0-fractional-sentinel",
       "x2-display-register",
@@ -270,7 +317,6 @@ program SimpleRules {
     for (const id of [
       "return-empty-stack-jump",
       "indirect-flow",
-      "dark-entries",
       "address-constants",
       "x2-register",
       "x2-restore-boundaries",
@@ -278,13 +324,12 @@ program SimpleRules {
       "r0-fractional-sentinel",
       "r0-t-alias",
       "code-data-overlay",
-      "super-dark-dispatch",
     ]) {
       expect(features.has(id)).toBe(true);
     }
 
     expect(roleNotes).toMatch(/address\/data overlay selected/u);
-    expect(roleNotes).toMatch(/formal\/dark entry participates/u);
+    expect(roleNotes).not.toMatch(/formal\/dark entry participates/u);
     expect(roleNotes).toMatch(/X2\/display-byte boundary/u);
     expect(comments).toMatch(/К ЗН as one-cell doubling/u);
     expect(comments).toMatch(/К∨ digit\/boundary test/u);
@@ -304,8 +349,9 @@ program SimpleRules {
       expect(result.report.steps).toBeLessThanOrEqual(105);
       expect(result.report.budgetReport.officialSteps).toBe(105);
       expect(selected.has("indirect-register-flow")).toBe(true);
-      expect(selected.has("super-dark-dispatch")).toBe(true);
-      expect(selected.has("cyclic-address-layout")).toBe(true);
+      expect(selected.has("super-dark-dispatch")).toBe(false);
+      expect(selected.has("cyclic-address-layout")).toBe(false);
+      expect(result.report.rejectedCandidates.find((candidate) => candidate.variant === "super-dark-dispatch")?.reason).toMatch(/proved FA\.\.FF selector/u);
       expect(result.report.warnings.join("\n")).toMatch(/universal spatial\/counter tactic pipeline/u);
     }
   });
@@ -526,8 +572,9 @@ program SimpleRules {
   it("always uses exact-machine lowerings for the full cave reference", () => {
     const result = compileM61(source("examples/cave-treasure.m61"));
     const applied = new Set(result.report.optimizations.map((optimization) => optimization.name));
-    expect(applied.has("super-dark-dispatch")).toBe(true);
+    expect(applied.has("super-dark-dispatch")).toBe(false);
     expect(applied.has("x2-display-byte-scheduling")).toBe(true);
+    expect(result.report.rejectedCandidates.find((candidate) => candidate.variant === "super-dark-dispatch")?.reason).toMatch(/proved FA\.\.FF selector/u);
     expect(result.report.steps).toBeLessThanOrEqual(105);
   });
 

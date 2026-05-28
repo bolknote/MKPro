@@ -39,7 +39,9 @@ const run: IrPassFn = (ops) => {
       (isIdentityPlus(op, prev) || isIdentityMul(op, prev)) &&
       prev !== undefined &&
       prev.kind === "plain" &&
-      prev.meta.raw !== true
+      prev.meta.raw !== true &&
+      op.kind === "plain" &&
+      op.meta.raw !== true
     ) {
       result.pop();
       applied += 1;

@@ -3,6 +3,7 @@ import type {
   CompileOptions,
   IrOp,
   IrTargetMeta,
+  PreloadReport,
 } from "../types.ts";
 
 export interface PassContext {
@@ -13,6 +14,7 @@ export interface PassResult {
   readonly ops: IrOp[];
   readonly applied: number;
   readonly optimizations: AppliedOptimization[];
+  readonly preloads?: readonly PreloadReport[];
 }
 
 export type IrPassFn = (ops: readonly IrOp[], context: PassContext) => PassResult;
@@ -87,6 +89,6 @@ export function findOpForward<T extends IrOp>(
   return undefined;
 }
 
-export function hasRewriteBarrier(_op: IrOp): boolean {
-  return false;
+export function hasRewriteBarrier(op: IrOp): boolean {
+  return "meta" in op && "raw" in op.meta && op.meta.raw === true;
 }

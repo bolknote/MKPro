@@ -505,20 +505,22 @@ real addressed span (`max(address)+1`), occupied entries, and gaps, and keeps
 listings fall back to the budget with a warning.
 
 For these programs the report marks selected tactics, not source switches:
-indirect register flow, super-dark dispatch, cyclic/dark layout, code/data
-overlay, X2/`ВП`, hex-mantissa data packing, R0 indirect behavior, `К ЗН`,
-`К∨`, and `К max` are emitted as chosen lowerings through `GameIntent`,
-`EffectIR`, `CandidateIR`, and `LayoutIR`.
+indirect register flow, code/data overlay, X2/`ВП`, hex-mantissa data packing,
+R0 indirect behavior, `К ЗН`, `К∨`, and `К max` are emitted as chosen
+lowerings through `GameIntent`, `EffectIR`, `CandidateIR`, and `LayoutIR`.
+Super-dark dispatch and cyclic/dark layout stay as rejected candidates unless
+the layout verifier proves both halves: FA..FF entry/continuation cells and a
+dispatch register containing a proved FA..FF selector.
 
 Documented capabilities such as `branch-removal`, `arithmetic-if-*`,
 `zero-condition-test`, `dispatch-compare-chain`, and `fl-decrement-branch` are
 reported `active` not only when their literal rewrite fired, but also when the
 GameIntent backend picked a semantic equivalent. `К max` zero-through counts as
 the extrema selection, `К∨` and fractional indirect addressing count as the
-zero/digit test, `super-dark dispatch` counts as the dispatch lowering,
-`r0-indirect-counter` counts as the decrement-branch loop, and hex-mantissa
-arithmetic counts as the masked conditional update. This keeps the capability
-report honest about the optimizer's effective behavior across both backends.
+zero/digit test, `r0-indirect-counter` counts as the decrement-branch loop, and
+hex-mantissa arithmetic counts as the masked conditional update. This keeps the
+capability report honest about the optimizer's effective behavior across both
+backends.
 
 ## Current Generic Intent Nodes
 
@@ -695,12 +697,15 @@ candidates:
   preceding op is `X->П r`). This is what shrinks `human.m61` 35→28 and
   `tiny-game.m61` 30→26 without any source edits.
 
-The spatial/counter backend selects super-dark FA..FF dispatch, dark tables,
-X2 display-byte scheduling, fractional-R0 sentinels, and branch-removal
-arithmetic from the tactic registry automatically when the IR proves the
-required layout, liveness, observability, and emulator facts. Raw `5F`
-display transforms remain modeled as machine capabilities and are only
-legal when display semantics explicitly permit that raw display state.
+The spatial/counter backend selects X2 display-byte scheduling, fractional-R0
+sentinels, and branch-removal arithmetic from the tactic registry automatically
+when the IR proves the required liveness, observability, and emulator facts.
+Super-dark FA..FF dispatch and dark/cyclic layout are stricter: the verifier
+requires a marked `К БП R` dispatcher, one-command entries at `48`..`53`,
+continuations at `01`..`06`, and a proved FA..FF selector value in the dispatch
+register. Without that, the candidate remains rejected in the report. Raw `5F`
+display transforms remain modeled as machine capabilities and are only legal
+when display semantics explicitly permit that raw display state.
 
 ## Unified IR Pipeline
 
@@ -737,6 +742,14 @@ The pipeline currently contains:
   coalescing, and dead-code analysis.
 - **jump-to-next-threading** — drops `БП label` immediately before `label`.
 - **jump-thread** — chases jump-to-jump trampolines to the final target.
+- **preloaded-indirect-flow** — for address-stable numeric branch/call
+  targets, reserves a spare stable register as a compiler-owned address
+  preload and emits one-cell `К БП`/`К ПП`/`К x?0`. The pass rewrites only
+  branches whose numeric targets cannot be shifted by the removed address
+  cell. Targets `00`..`47` use formal aliases `B2`..`F9`; targets `48`..`53`
+  may use `FA`..`FF` only when the target cell is a proved one-command entry
+  and the following direct jump already resumes at the matching `01`..`06`
+  continuation.
 - **dead-code-after-halt** — CFG reachability from the entry removes ops
   that no fall-through or jump edge reaches.
 - **constant-folding** — strips `0 +` and `1 *` identities.
