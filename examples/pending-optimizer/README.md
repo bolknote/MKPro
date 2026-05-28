@@ -18,7 +18,7 @@ Current `--analysis` sizes, measured against the local reference listings:
 | `teleport.mkpro` | 242 | 105 | station masks and vault/guard flow |
 | `tic-tac-toe-4x4.mkpro` | 246 | 105 | 4x4 line-count state representation |
 | `treasure-hunter-2.mkpro` | 185 | 105 | floor-plan display/state lowerer |
-| `wumpus-full.mkpro` | 114 | 105 | repeated room loads in inspection and remaining hazard flow |
+| `wumpus-full.mkpro` | 112 | 105 | repeated room loads in inspection and remaining hazard flow |
 
 Prototype notes:
 

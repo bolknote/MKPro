@@ -51,7 +51,7 @@ const PENDING_BASELINE: Record<string, number> = {
   teleport: 242,
   "tic-tac-toe-4x4": 246,
   "treasure-hunter-2": 185,
-  "wumpus-full": 114,
+  "wumpus-full": 112,
 };
 
 function exampleSteps(relativePath: string, analysis: boolean): number {

@@ -79,7 +79,7 @@ program WumpusFull {
       won
     }
     else {
-      if arrows <= 0 {
+      if arrows == 0 {
         dead
       }
       else {
