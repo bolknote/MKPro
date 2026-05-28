@@ -1448,6 +1448,13 @@ interface SimpleChallengeCase {
   failure: SimpleEffects;
 }
 
+interface SharedChallengeException {
+  key: number;
+  line: number;
+  successBody: V2StatementAst[];
+  failureBody: V2StatementAst[];
+}
+
 interface SimpleEffects {
   deltas: Map<string, number>;
   cellUpdates: CellUpdateEffect[];
@@ -1487,7 +1494,20 @@ function lowerSharedChallengeEncounter(table: V2EncounterTableAst, context: V2Lo
     .sort((left, right) => right.cases.length - left.cases.length)[0];
   if (group === undefined) return undefined;
 
-  const optimizedKeys = new Set(group.cases.map((item) => item.key));
+  const protocol = group.cases[0]!.challenge;
+  const groupKeys = new Set(group.cases.map((item) => item.key));
+  const exceptions = table.cases
+    .filter((encounterCase) => {
+      const key = numericLiteralTextValue(encounterCase.value);
+      return key !== undefined && !groupKeys.has(key);
+    })
+    .map((encounterCase) => analyzeSharedChallengeException(encounterCase, protocol))
+    .filter((item): item is SharedChallengeException => item !== undefined)
+    .sort((left, right) => left.key - right.key);
+  const optimizedKeys = new Set([
+    ...group.cases.map((item) => item.key),
+    ...exceptions.map((item) => item.key),
+  ]);
   const helperName = `encounter_effects_${table.line}`;
   const defaultDispatch = defaultableOptimizedEncounterDispatch(table, optimizedKeys, helperName, context);
   const dispatch: DispatchStatementAst = {
@@ -1512,12 +1532,21 @@ function lowerSharedChallengeEncounter(table: V2EncounterTableAst, context: V2Lo
     line: table.line,
     scratchId: table.line,
   };
+  const encounterBody = defaultDispatch === undefined
+    ? [dispatch]
+    : lowerDefaultDispatchAsIfChain(dispatch) ?? [dispatch];
 
-  const protocol = group.cases[0]!.challenge;
   const helper: ProcAst = {
     kind: "proc",
     name: helperName,
-    body: lowerSharedChallengeHelper(protocol, group.success, group.failure, encounterParamName(table.expr), context),
+    body: lowerSharedChallengeHelper(
+      protocol,
+      group.success,
+      group.failure,
+      encounterParamName(table.expr),
+      context,
+      exceptions,
+    ),
     line: table.line,
   };
 
@@ -1525,11 +1554,46 @@ function lowerSharedChallengeEncounter(table: V2EncounterTableAst, context: V2Lo
     {
       kind: "proc",
       name: "encounter",
-      body: [dispatch],
+      body: encounterBody,
       line: table.line,
     },
     helper,
   ];
+}
+
+function lowerDefaultDispatchAsIfChain(dispatch: DispatchStatementAst): StatementAst[] | undefined {
+  if (dispatch.defaultBody === undefined || dispatch.cases.length > 2) return undefined;
+  const emptyCases = dispatch.cases.filter((item) => item.body.length === 0);
+  const nonEmptyCases = dispatch.cases.filter((item) => item.body.length > 0);
+  if (emptyCases.length === 0 || nonEmptyCases.length > 1) return undefined;
+
+  let body = dispatch.defaultBody;
+  for (const dispatchCase of [...emptyCases].reverse()) {
+    body = [{
+      kind: "if",
+      condition: {
+        left: dispatch.expr,
+        op: "!=",
+        right: dispatchCase.value,
+      },
+      thenBody: body,
+      line: dispatchCase.line,
+    }];
+  }
+
+  const special = nonEmptyCases[0];
+  if (special === undefined) return body;
+  return [{
+    kind: "if",
+    condition: {
+      left: dispatch.expr,
+      op: "==",
+      right: special.value,
+    },
+    thenBody: special.body,
+    elseBody: body,
+    line: dispatch.line,
+  }];
 }
 
 function defaultableOptimizedEncounterDispatch(
@@ -1580,6 +1644,24 @@ interface EffectPlan {
   keys: number[];
   deltas: LinearDeltaPlan[];
   cellUpdates: CellUpdateEffect[];
+}
+
+function analyzeSharedChallengeException(
+  encounterCase: V2EncounterCaseAst,
+  protocol: V2ChallengeStatementAst,
+): SharedChallengeException | undefined {
+  const key = numericLiteralTextValue(encounterCase.value);
+  if (key === undefined) return undefined;
+  if (encounterCase.body.length !== 1) return undefined;
+  const challenge = encounterCase.body[0];
+  if (challenge?.kind !== "v2_challenge" || challenge.failureBody === undefined) return undefined;
+  if (challengeProtocolKey(challenge) !== challengeProtocolKey(protocol)) return undefined;
+  return {
+    key,
+    line: encounterCase.line,
+    successBody: challenge.successBody,
+    failureBody: challenge.failureBody,
+  };
 }
 
 function analyzeSimpleChallengeCase(
@@ -1688,6 +1770,7 @@ function lowerSharedChallengeHelper(
   failure: EffectPlan,
   keyName: string,
   context: V2LoweringContext,
+  exceptions: SharedChallengeException[] = [],
 ): StatementAst[] {
   return [
     {
@@ -1706,11 +1789,50 @@ function lowerSharedChallengeHelper(
         op: "==",
         right: { kind: "identifier", name: protocol.challengeTarget },
       },
-      thenBody: lowerEffectPlan(success, keyName, protocol.line, context),
-      elseBody: lowerEffectPlan(failure, keyName, protocol.line, context),
+      thenBody: lowerSharedChallengeBranch(
+        lowerEffectPlan(success, keyName, protocol.line, context),
+        exceptions,
+        "success",
+        keyName,
+        protocol.line,
+        context,
+      ),
+      elseBody: lowerSharedChallengeBranch(
+        lowerEffectPlan(failure, keyName, protocol.line, context),
+        exceptions,
+        "failure",
+        keyName,
+        protocol.line,
+        context,
+      ),
       line: protocol.line,
     },
   ];
+}
+
+function lowerSharedChallengeBranch(
+  fallback: StatementAst[],
+  exceptions: SharedChallengeException[],
+  branch: "success" | "failure",
+  keyName: string,
+  line: number,
+  context: V2LoweringContext,
+): StatementAst[] {
+  let body = fallback;
+  for (const exception of [...exceptions].reverse()) {
+    body = [{
+      kind: "if",
+      condition: {
+        left: { kind: "identifier", name: keyName },
+        op: "==",
+        right: { kind: "number", raw: String(exception.key) },
+      },
+      thenBody: lowerV2Statements(branch === "success" ? exception.successBody : exception.failureBody, context),
+      elseBody: body,
+      line: exception.line || line,
+    }];
+  }
+  return body;
 }
 
 function lowerEffectPlan(

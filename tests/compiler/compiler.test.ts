@@ -578,6 +578,125 @@ program SharedChallengeDemo {
     expect(activeCapabilities.has("shared-challenge-effect-lowering")).toBe(true);
   });
 
+  it("keeps exceptional encounter effects inside a shared challenge helper", () => {
+    const result = compileOk(`
+program SharedChallengeExceptionDemo {
+  state {
+    tile: counter 0..4 = 0
+    challenge: packed = 0
+    answer: packed = 0
+    warning_value: packed = 7
+    score: counter 0..99 = 0
+    strength: counter 0..99 = 10
+  }
+  screen warning {
+    show warning_value
+  }
+  screen memory {
+    show challenge
+  }
+  turn {
+    encounter tile
+    stop score + strength
+  }
+  encounters tile {
+    1 {
+      challenge tile as challenge using warning, memory, answer {
+        success {
+          bonus
+        }
+        failure {
+          strength--
+        }
+      }
+    }
+    2 {
+      challenge tile as challenge using warning, memory, answer {
+        success {
+          strength += 2
+        }
+        failure {
+          strength -= 2
+        }
+      }
+    }
+    3 {
+      challenge tile as challenge using warning, memory, answer {
+        success {
+          strength++
+          score++
+        }
+        failure {
+          strength -= 3
+        }
+      }
+    }
+    4 {
+      challenge tile as challenge using warning, memory, answer {
+        success {
+          score += 2
+        }
+        failure {
+          strength -= 4
+        }
+      }
+    }
+  }
+  rule bonus {
+    score += 9
+  }
+}
+`);
+    const encounter = result.ast.procs.find((proc) => proc.name === "encounter");
+    const dispatch = encounter?.body[0];
+    const caseValues = dispatch?.kind === "dispatch"
+      ? dispatch.cases.map((item) => item.value).filter((value) => value.kind === "number").map((value) => value.raw)
+      : [];
+
+    expect(result.ast.procs.some((proc) => proc.name.startsWith("encounter_effects_"))).toBe(true);
+    expect(caseValues).not.toContain("1");
+    expect(result.report.optimizations.some((item) => item.name === "shared-challenge-effect-lowering")).toBe(true);
+  });
+
+  it("removes lowered rule procs that become unreachable", () => {
+    const result = compileOk(`
+program DeadLoweredRules {
+  state {
+    tile: counter 0..9 = 0
+    energy: counter 0..9 = 9
+  }
+  turn {
+    match tile {
+      1 => pool_exit
+      2 => ladder_exit
+      3 => shaft_exit
+      otherwise => clear_exit
+    }
+    stop energy
+  }
+  rule clear_exit {
+    energy++
+  }
+  rule pool_exit {
+    energy = 0
+  }
+  rule ladder_exit {
+    energy -= 5
+  }
+  rule shaft_exit {
+    energy -= 6
+  }
+}
+`);
+    const procNames = new Set(result.ast.procs.map((proc) => proc.name));
+
+    expect(result.report.optimizations.some((item) => item.name === "dead-proc-elimination")).toBe(true);
+    expect(procNames.has("pool_exit")).toBe(false);
+    expect(procNames.has("ladder_exit")).toBe(false);
+    expect(procNames.has("shaft_exit")).toBe(false);
+    expect(procNames.has("clear_exit")).toBe(false);
+  });
+
   it("lowers contracted raw blocks inside V2 rules", () => {
     const result = compileOk(`
 program RawRule {
@@ -905,7 +1024,7 @@ program DirectTerminalBranch {
       fail
     }
     else {
-      stop 1
+      other
     }
   }
   rule fail {

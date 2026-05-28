@@ -117,6 +117,7 @@ export class CompileError extends Error {
 
 interface LoweringOptions {
   aggressiveTerminalDirect?: boolean;
+  invertBranchOrder?: boolean;
 }
 
 export function compileMKPro(
@@ -124,18 +125,46 @@ export function compileMKPro(
   options: Partial<CompileOptions> = {},
 ): CompileResult {
   const primary = compileMKProOnce(source, options, {});
-  let aggressive: CompileResult | undefined;
-  try {
-    aggressive = compileMKProOnce(source, options, { aggressiveTerminalDirect: true });
-  } catch {
-    aggressive = undefined;
+  const candidates: Array<{ result: CompileResult; name: string; detail: string }> = [];
+  const tryCandidate = (loweringOptions: LoweringOptions, name: string, detail: string): void => {
+    try {
+      candidates.push({ result: compileMKProOnce(source, options, loweringOptions), name, detail });
+    } catch {
+      // Optional late-layout variants are speculative; keep the primary result.
+    }
+  };
+
+  tryCandidate(
+    { aggressiveTerminalDirect: true },
+    "late-layout-if-variant",
+    "Selected aggressive terminal-if lowering after full layout",
+  );
+  tryCandidate(
+    { invertBranchOrder: true },
+    "late-layout-branch-order",
+    "Selected inverted if/else branch order after full layout",
+  );
+  tryCandidate(
+    { aggressiveTerminalDirect: true, invertBranchOrder: true },
+    "late-layout-if-branch-order",
+    "Selected aggressive terminal-if plus inverted branch-order lowering after full layout",
+  );
+
+  let best = primary;
+  let selected: (typeof candidates)[number] | undefined;
+  for (const candidate of candidates) {
+    if (candidate.result.steps.length < best.steps.length) {
+      best = candidate.result;
+      selected = candidate;
+    }
   }
-  if (aggressive !== undefined && aggressive.steps.length < primary.steps.length) {
-    aggressive.report.optimizations.push({
-      name: "late-layout-if-variant",
-      detail: `Selected aggressive terminal-if lowering after full layout (${aggressive.steps.length} vs ${primary.steps.length} cells).`,
+
+  if (selected !== undefined) {
+    selected.result.report.optimizations.push({
+      name: selected.name,
+      detail: `${selected.detail} (${selected.result.steps.length} vs ${primary.steps.length} cells).`,
     });
-    return aggressive;
+    return selected.result;
   }
   return primary;
 }
@@ -181,6 +210,7 @@ function compileMKProOnce(
       });
     }
   }
+  eliminateUnreachableV2Procs(ast, optimizations);
 
   const allocation = allocateRegisters(ast, diagnostics);
   const context = new EmitContext(
@@ -1446,15 +1476,16 @@ class EmitContext {
     if (this.compileMembershipSetReuse(statement, line)) return;
     if (this.compileLocalTerminalElseTail(statement, line)) return;
 
+    const selected = this.branchOrderStatement(statement, line);
     const falseLabel = this.freshLabel("if_false");
-    const thenTerminates = this.statementsTerminate(statement.thenBody);
+    const thenTerminates = this.statementsTerminate(selected.thenBody);
     const endLabel = thenTerminates ? undefined : this.freshLabel("if_end");
-    this.compileCondition(statement.condition, falseLabel, line);
-    this.compileStatements(statement.thenBody);
-    if (statement.elseBody) {
+    this.compileCondition(selected.condition, falseLabel, line);
+    this.compileStatements(selected.thenBody);
+    if (selected.elseBody) {
       if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", line);
       this.emitLabel(falseLabel);
-      this.compileStatements(statement.elseBody);
+      this.compileStatements(selected.elseBody);
       if (endLabel !== undefined) this.emitLabel(endLabel);
       if (thenTerminates) {
         this.optimizations.push({
@@ -1465,6 +1496,35 @@ class EmitContext {
     } else {
       this.emitLabel(falseLabel);
     }
+  }
+
+  private branchOrderStatement(
+    statement: Extract<StatementAst, { kind: "if" }>,
+    line: number,
+  ): Extract<StatementAst, { kind: "if" }> {
+    if (this.loweringOptions.invertBranchOrder !== true || statement.elseBody === undefined) return statement;
+    const thenCost = estimateBranchOrderBodyCost(statement.thenBody, this.ast);
+    const elseCost = estimateBranchOrderBodyCost(statement.elseBody, this.ast);
+    if (!Number.isFinite(thenCost) || !Number.isFinite(elseCost) || elseCost <= thenCost) return statement;
+
+    const preloadedConstants = new Set(Object.keys(this.allocation.constants));
+    const originalCost = estimateConditionCost(statement.condition, this.ast, preloadedConstants) +
+      (this.statementsTerminate(statement.thenBody) ? 0 : 2);
+    const invertedCondition = invertCondition(statement.condition);
+    const invertedCost = estimateConditionCost(invertedCondition, this.ast, preloadedConstants) +
+      (this.statementsTerminate(statement.elseBody) ? 0 : 2);
+    if (invertedCost > originalCost) return statement;
+
+    this.optimizations.push({
+      name: "if-branch-order-inversion",
+      detail: `Inverted if/else at line ${line} so the larger branch falls through (${elseCost} vs ${thenCost} estimated body cells).`,
+    });
+    return {
+      ...statement,
+      condition: invertedCondition,
+      thenBody: statement.elseBody,
+      elseBody: statement.thenBody,
+    };
   }
 
   private compileDirectTerminalIfBranch(
@@ -3660,6 +3720,77 @@ function findSingleUseProcNames(ast: ProgramAst): Set<string> {
       .filter(([name, count]) => count === 1 && !recursive.has(name))
       .map(([name]) => name),
   );
+}
+
+function eliminateUnreachableV2Procs(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  if (!ast.v2 || ast.procs.length === 0) return;
+  const reachable = collectReachableProcNames(ast);
+  const before = ast.procs.length;
+  ast.procs = ast.procs.filter((proc) => reachable.has(proc.name));
+  const removed = before - ast.procs.length;
+  if (removed === 0) return;
+  optimizations.push({
+    name: "dead-proc-elimination",
+    detail: `Removed ${removed} unreachable lowered rule proc(s) after high-level match/effect lowering.`,
+  });
+}
+
+function collectReachableProcNames(ast: ProgramAst): Set<string> {
+  const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
+  const blockMap = new Map(ast.blocks.map((block) => [block.name, block]));
+  const reachableProcs = new Set<string>();
+  const reachableBlocks = new Set<string>();
+  const procQueue: string[] = [];
+  const blockQueue: string[] = [];
+
+  const enqueueCall = (name: string): void => {
+    if (blockMap.has(name)) {
+      if (!reachableBlocks.has(name)) {
+        reachableBlocks.add(name);
+        blockQueue.push(name);
+      }
+      return;
+    }
+    if (procMap.has(name) && !reachableProcs.has(name)) {
+      reachableProcs.add(name);
+      procQueue.push(name);
+    }
+  };
+
+  const visit = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "call") enqueueCall(statement.block);
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "switch") {
+        for (const switchCase of statement.cases) visit(switchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+
+  for (const entry of ast.entries) visit(entry.body);
+  while (procQueue.length > 0 || blockQueue.length > 0) {
+    const procName = procQueue.shift();
+    if (procName !== undefined) {
+      const proc = procMap.get(procName);
+      if (proc !== undefined) visit(proc.body);
+      continue;
+    }
+    const blockName = blockQueue.shift();
+    if (blockName !== undefined) {
+      const block = blockMap.get(blockName);
+      if (block !== undefined) visit(block.body);
+    }
+  }
+  return reachableProcs;
 }
 
 interface DomainBinding {
@@ -6849,6 +6980,52 @@ function numericLiteralValue(expr: ExpressionAst): number | undefined {
   if (expr.kind !== "number") return undefined;
   const value = Number(expr.raw);
   return Number.isFinite(value) ? value : undefined;
+}
+
+function estimateBranchOrderBodyCost(statements: readonly StatementAst[], ast: ProgramAst): number {
+  let total = 0;
+  for (const statement of statements) {
+    const cost = estimateBranchOrderStatementCost(statement, ast);
+    if (!Number.isFinite(cost)) return Number.POSITIVE_INFINITY;
+    total += cost;
+  }
+  return total;
+}
+
+function estimateBranchOrderStatementCost(statement: StatementAst, ast: ProgramAst): number {
+  switch (statement.kind) {
+    case "assign":
+      return estimateExpressionCost(statement.expr) + 1;
+    case "pause":
+    case "halt":
+    case "trap":
+      return estimateExpressionCost(statement.expr) + 1;
+    case "ask":
+      return (statement.prompt === undefined ? 0 : estimateExpressionCost(statement.prompt)) + 2;
+    case "input":
+      return 2;
+    case "show": {
+      const display = ast.displays.find((candidate) => candidate.name === statement.display);
+      return display === undefined ? Number.POSITIVE_INFINITY : estimatePackedDisplayBodyCost(display.sources.length);
+    }
+    case "call":
+      return 2;
+    case "if": {
+      const thenCost = estimateBranchOrderBodyCost(statement.thenBody, ast);
+      if (!Number.isFinite(thenCost)) return Number.POSITIVE_INFINITY;
+      if (statement.elseBody === undefined) return estimateConditionCost(statement.condition, ast) + thenCost;
+      const elseCost = estimateBranchOrderBodyCost(statement.elseBody, ast);
+      if (!Number.isFinite(elseCost)) return Number.POSITIVE_INFINITY;
+      return estimateConditionCost(statement.condition, ast) + thenCost + 2 + elseCost;
+    }
+    case "core":
+    case "egg":
+      return statement.lines.length;
+    case "loop":
+    case "switch":
+    case "dispatch":
+      return Number.POSITIVE_INFINITY;
+  }
 }
 
 function estimateOrdinaryIfCost(statement: Extract<StatementAst, { kind: "if" }>, ast: ProgramAst): number {
