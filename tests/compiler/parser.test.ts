@@ -469,7 +469,7 @@ program Bad {
     ).toThrow(/Unexpected top-level line 'resource strength \{'/u);
   });
 
-  it("parses challenge blocks as game intent", () => {
+  it("parses challenge blocks as rule syntax", () => {
     const ast = parseProgram(`
 program Demo {
   state {

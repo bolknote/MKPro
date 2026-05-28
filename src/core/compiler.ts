@@ -11,7 +11,6 @@ import {
   formatFormalAddressOpcode,
   parseFormalAddressOpcode,
 } from "./formal-address.ts";
-import { lowerIrToLayout, raiseLayoutToIr } from "./ir.ts";
 import { normalizeV2ExpressionText, parseExpression, parseProgram } from "./parser.ts";
 import { runIrPasses } from "./passes/index.ts";
 import { verifySuperDarkSuffixLayout } from "./super-dark-layout.ts";
@@ -28,17 +27,10 @@ import type {
   ConditionAst,
   Diagnostic,
   ExpressionAst,
-  CandidateIr,
   MachineAddressRef,
   MachineFeatureUseReport,
   MachineItem,
   MachineOp,
-  EffectIrOp,
-  GameIntentFeature,
-  GameIntentShape,
-  GameIntent,
-  GameQueryIntent,
-  HotBlockReport,
   OptimizerCapabilityReport,
   OptimizerReport,
   LayoutIrCell,
@@ -53,7 +45,6 @@ import type {
   TrapStatementAst,
   StorageHint,
   V2PredicateAst,
-  V2ProgramAst,
   V2StatementAst,
 } from "./types.ts";
 
@@ -61,14 +52,6 @@ const DEFAULT_OPTIONS: CompileOptions = {
   delivery: "hex",
   budget: 105,
 };
-
-const SIZE_BENCHMARK_REFERENCES = new Set([
-  "anvarov_fox_hunt_100",
-  "anvarov_minesweeper_9x9",
-  "anvarov_treasure_hunter_2",
-  "anvarov_dangerous_loading",
-  "anvarov_sea_battle",
-]);
 
 interface NodeFsModule {
   existsSync(path: string): boolean;
@@ -127,9 +110,6 @@ export function compileMKPro(
   const optimizations: AppliedOptimization[] = [];
   const warnings: string[] = [];
   const candidates: CandidateReport[] = [];
-
-  const gameIntentProgram = tryCompileGameIntentProgram(ast, opts, machineProfile);
-  if (gameIntentProgram) return gameIntentProgram;
 
   validateSemanticDomains(ast, diagnostics);
   validateV2Intent(ast, diagnostics);
@@ -382,1204 +362,6 @@ function parseReferenceAddress(text: string): number {
   throw new Error(`Invalid MK-61 reference address '${text}'.`);
 }
 
-interface TacticSegment {
-  readonly name: string;
-  readonly opcodes: readonly number[];
-}
-
-function emitUniversalSpatialResourceProgram(intent: GameIntent, candidates: CandidateIr[]): LayoutIrCell[] {
-  const selected = new Set(candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
-  const segments: TacticSegment[] = [
-    {
-      name: "display-input-entry",
-      opcodes: [0x50, 0x6e, 0x01, 0x11, 0x5c, 0xb9, 0x52],
-    },
-    {
-      name: selected.has("indirect-register-flow") ? "indirect-dispatch-frontier" : "compare-chain-frontier",
-      opcodes: [0x4e, 0x14, 0x6a, 0x14, 0x02, 0x13, 0x57, 0x63],
-    },
-    {
-      name: "x2-vp-stack-schedule",
-      opcodes: [0x20, 0x10, 0x4b, 0x0c, 0x32, 0x5e, 0xea],
-    },
-    {
-      name: "packed-coordinate-update",
-      opcodes: [0x66, 0x6a, 0x35, 0xdb, 0x12, 0x59, 0x77],
-    },
-    {
-      name: "branch-removal-arithmetic-test",
-      opcodes: [0x12, 0x38, 0x35, 0xe9, 0x0a, 0x69, 0x11],
-    },
-    {
-      name: "bitset-mask-clear-or-probe",
-      opcodes: [0x6a, 0x34, 0x10, 0x4b, 0xdb, 0x37, 0x35, 0x14, 0x4b, 0x36],
-    },
-    {
-      name: "shared-movement-resource-tail",
-      opcodes: [0x77, 0x4a, 0x4e, 0x00, 0x4c, 0x40, 0x63, 0x06, 0x4d],
-    },
-    {
-      name: "generated-mask-initializer",
-      opcodes: [0x3b, 0x15, 0x0f, 0x24, 0x38, 0xb0, 0x60, 0x98],
-    },
-    {
-      name: "fractional-r0-counter-loop",
-      opcodes: [0x6d, 0x02, 0x11, 0x97, 0x4d, 0x6b, 0x04, 0x11, 0xc9],
-    },
-    {
-      name: selected.has("super-dark-dispatch") ? "super-dark-mid-tail-dispatch" : "ordinary-mid-tail-dispatch",
-      opcodes: [0x6b, 0xdb, 0x38, 0xbb, 0x89, 0x60, 0x6a, 0x3a, 0x37, 0x40],
-    },
-    {
-      name: "hex-mantissa-cache-resource",
-      opcodes: [0x11, 0x77, 0x65, 0x6a, 0x10, 0x3a, 0x35, 0x3b, 0x0c, 0x4b],
-    },
-    {
-      name: "fight-or-terminal-resource-tail",
-      opcodes: [0xdb, 0x6b, 0x01, 0x11, 0x22, 0x10, 0x50],
-    },
-    {
-      name: "cyclic-wrap-finalizer",
-      opcodes: [0x1c, 0x01, 0x10, 0x12, 0x34, 0xbb],
-    },
-  ];
-
-  const layout: LayoutIrCell[] = [];
-  for (const segment of segments) {
-    for (const opcode of segment.opcodes) {
-      layout.push({
-        address: layout.length,
-        opcode,
-        roles: ["exec"],
-        tactic: refineTacticForAddress(layout.length, segment.name, intent),
-      });
-    }
-  }
-  return layout;
-}
-
-const UNIVERSAL_SPATIAL_RESOURCE_REGISTERS: Record<string, RegisterName> = {
-  collections: "0",
-  mask_plane1: "1",
-  mask_plane2: "2",
-  mask_plane3: "3",
-  two: "4",
-  ten: "5",
-  hex_scale: "6",
-  dispatch_a: "7",
-  dispatch_b: "8",
-  dispatch_c: "9",
-  pos: "a",
-  scratch: "b",
-  treasure: "c",
-  dynamite: "d",
-  food: "e",
-};
-
-interface GameBackendCandidate {
-  readonly variant: GameIntentShape;
-  readonly layout: LayoutIrCell[];
-  readonly registers: Record<string, RegisterName>;
-  readonly labels: Record<string, string>;
-  readonly preloads: PreloadReport[];
-  readonly hotBlocks: HotBlockReport[];
-  readonly reason: string;
-}
-
-function roundTripLayoutThroughIr(layout: LayoutIrCell[]): LayoutIrCell[] {
-  const ir = raiseLayoutToIr(layout);
-  const lowered = lowerIrToLayout(ir);
-  return lowered.cells;
-}
-
-function tryCompileGameIntentProgram(
-  ast: ProgramAst,
-  options: CompileOptions,
-  machineProfile: MachineProfile,
-): CompileResult | undefined {
-  const intent = buildGameIntent(ast);
-  if (!intent) return undefined;
-
-  const effectIr = buildGameEffectIr(intent);
-  const candidateIr = buildCandidateIr(intent);
-  const backendCandidates = buildGameBackendCandidates(intent, candidateIr);
-  const selectedBackend = selectGameBackendCandidate(backendCandidates);
-  const rawLayoutIr = selectedBackend.layout;
-  const layoutIr = roundTripLayoutThroughIr(rawLayoutIr);
-  const steps = layoutIr.map((cell) =>
-    buildResolvedStep(cell.address, cell.opcode, getOpcode(cell.opcode).name, gameTacticComment(cell)),
-  );
-  const items: MachineItem[] = steps.map((step) => {
-    const item: MachineOp = {
-      kind: "op",
-      opcode: step.opcode,
-      mnemonic: step.mnemonic,
-    };
-    if (step.comment !== undefined) item.comment = step.comment;
-    return item;
-  });
-  const referenceResult = ast.reference === undefined
-    ? undefined
-    : buildReferenceReport(ast.reference, steps.length, options.budget);
-  if (
-    ast.reference !== undefined &&
-    SIZE_BENCHMARK_REFERENCES.has(ast.reference) &&
-    referenceResult?.report.referenceSpan !== undefined &&
-    steps.length >= referenceResult.report.referenceSpan
-  ) {
-    throw new CompileError([
-      {
-        level: "error",
-        code: "REFERENCE_SIZE_NOT_BEATEN",
-        message: `${selectedBackend.variant} emitted ${steps.length} steps for ${ast.reference}; required < ${referenceResult.report.referenceSpan}.`,
-      },
-    ]);
-  }
-  const optimizations = buildGameIntentOptimizations(intent, selectedBackend);
-  const candidates = [
-    ...buildGameBackendCandidateReports(backendCandidates, selectedBackend),
-    ...buildGameIntentCandidates(candidateIr, selectedBackend),
-  ];
-  const cellRoles = buildGameIntentCellRoles(layoutIr, selectedBackend.preloads, machineProfile);
-  const warnings = selectedBackend.variant === "universal_spatial_resource"
-    ? ["GameIntent selected the universal spatial/counter tactic pipeline; reference metadata did not affect code generation."]
-    : [`GameIntent selected ${selectedBackend.variant} semantic microkernel; reference metadata did not affect code generation.`];
-  if (referenceResult?.warning !== undefined) warnings.push(referenceResult.warning);
-  const report: CompileReport = {
-    steps: steps.length,
-    budget: options.budget,
-    machine: machineProfile.id,
-    registers: selectedBackend.registers,
-    labels: selectedBackend.labels,
-    optimizations,
-    warnings,
-    delivery: options.delivery,
-    optimizer: buildOptimizerReport(ast, options, optimizations, candidates, cellRoles, machineProfile),
-    preloads: selectedBackend.preloads,
-    ...(referenceResult?.report === undefined ? {} : { reference: referenceResult.report }),
-    ir: {
-      lowered: true,
-      v2: ast.v2 !== undefined,
-      intentNodes: intent.stateRoles.length + intent.domains.length + intent.rules.length,
-      effectOps: effectIr.length,
-      layoutCells: steps.length,
-    },
-    cellRoles,
-    candidates,
-    budgetReport: buildBudgetReport(steps.length, options.budget, selectedBackend.hotBlocks.map((block) => `${block.name}=${block.estimatedCells}`), 0),
-    machineFeaturesUsed: buildMachineFeaturesUsed(machineProfile, optimizations, cellRoles, candidates),
-    proofs: buildGameIntentProofs(intent, selectedBackend, referenceResult?.report),
-    emulatorFacts: machineProfile.emulatorFacts,
-    rejectedCandidates: candidates
-      .filter((candidate) => !candidate.selected)
-      .map((candidate) => ({
-        site: candidate.site,
-        variant: candidate.variant,
-        reason: candidate.reason,
-        steps: candidate.steps,
-      })),
-    hotBlocks: selectedBackend.hotBlocks,
-  };
-
-  return { ast, items, steps, report, diagnostics: [] };
-}
-
-function buildGameBackendCandidates(intent: GameIntent, tacticCandidates: CandidateIr[]): GameBackendCandidate[] {
-  const candidates: GameBackendCandidate[] = [];
-  const shapeCandidate = buildShapeBackendCandidate(intent);
-  if (shapeCandidate !== undefined) candidates.push(shapeCandidate);
-  candidates.push(buildUniversalBackendCandidate(intent, tacticCandidates));
-  return candidates;
-}
-
-function selectGameBackendCandidate(candidates: GameBackendCandidate[]): GameBackendCandidate {
-  return [...candidates].sort((a, b) => a.layout.length - b.layout.length)[0]!;
-}
-
-function buildUniversalBackendCandidate(intent: GameIntent, tacticCandidates: CandidateIr[]): GameBackendCandidate {
-  const layout = emitUniversalSpatialResourceProgram(intent, tacticCandidates);
-  return {
-    variant: "universal_spatial_resource",
-    layout,
-    registers: UNIVERSAL_SPATIAL_RESOURCE_REGISTERS,
-    labels: {
-      main: "00",
-      setup_tail: "48",
-      resource_action: "63",
-      collection_action: "77",
-      terminal_tail: "99",
-    },
-    preloads: buildGameIntentPreloads(),
-    hotBlocks: [
-      { name: "spatial+barrier-check", estimatedCells: 47 },
-      { name: "setup+mask-generation", estimatedCells: 29 },
-      { name: "collection+event", estimatedCells: 29 },
-    ],
-    reason: "fallback covers the full spatial/counter feature set",
-  };
-}
-
-function buildShapeBackendCandidate(intent: GameIntent): GameBackendCandidate | undefined {
-  if (intent.shape === "universal_spatial_resource") return undefined;
-  const required = requiredFeaturesForShape(intent.shape);
-  if (required === undefined || !required.every((feature) => intent.features.includes(feature))) return undefined;
-  const covered = coveredFeaturesForShape(intent.shape);
-  const unsupported = intent.features.filter((feature) => !covered.includes(feature));
-  if (unsupported.length > 0) return undefined;
-  const segments = kernelSegmentsForShape(intent.shape);
-  return {
-    variant: intent.shape,
-    layout: emitKernelSegments(segments),
-    registers: registersForShape(intent),
-    labels: labelsForKernel(segments),
-    preloads: preloadsForShape(intent.shape),
-    hotBlocks: segments.map((segment) => ({ name: segment.name, estimatedCells: segment.opcodes.length })),
-    reason: `covers ${intent.features.join(", ")} without universal fallback machinery`,
-  };
-}
-
-function requiredFeaturesForShape(shape: GameIntentShape): GameIntentFeature[] | undefined {
-  switch (shape) {
-    case "board_line_count":
-      return ["board", "bitset", "line_count", "resources"];
-    case "board_neighbor_count":
-      return ["board", "bitset", "neighbor_count", "resources"];
-    case "board_fleet_duel":
-      return ["board", "bitset", "cell_probe", "cell_clear", "random_board_cell", "hit_report", "resources"];
-    case "world_table":
-      return ["movement", "cell_at", "resources"];
-    case "lane_resource":
-      return ["movement", "random_cell", "resources"];
-    case "universal_spatial_resource":
-      return undefined;
-  }
-}
-
-function coveredFeaturesForShape(shape: Exclude<GameIntentShape, "universal_spatial_resource">): GameIntentFeature[] {
-  switch (shape) {
-    case "board_line_count":
-      return ["bitset", "board", "cell_probe", "cell_clear", "line_count", "resources"];
-    case "board_neighbor_count":
-      return ["bitset", "board", "cell_probe", "neighbor_count", "resources"];
-    case "board_fleet_duel":
-      return ["bitset", "board", "cell_probe", "cell_clear", "hit_report", "random_board_cell", "resources"];
-    case "world_table":
-      return ["bitset", "cell_at", "cell_clear", "movement", "resources"];
-    case "lane_resource":
-      return ["movement", "random_cell", "resources"];
-  }
-}
-
-function emitKernelSegments(segments: readonly TacticSegment[]): LayoutIrCell[] {
-  const layout: LayoutIrCell[] = [];
-  for (const segment of segments) {
-    for (const opcode of segment.opcodes) {
-      layout.push({
-        address: layout.length,
-        opcode,
-        roles: ["exec"],
-        tactic: segment.name,
-      });
-    }
-  }
-  return layout;
-}
-
-function labelsForKernel(segments: readonly TacticSegment[]): Record<string, string> {
-  let address = 0;
-  const labels: Record<string, string> = { main: "00" };
-  for (const segment of segments) {
-    labels[segment.name] = formatAddress(address);
-    address += segment.opcodes.length;
-  }
-  labels.terminal_tail = formatAddress(Math.max(0, address - segments.at(-1)!.opcodes.length));
-  return labels;
-}
-
-function registersForShape(intent: GameIntent): Record<string, RegisterName> {
-  const registers: Record<string, RegisterName> = {};
-  const order: RegisterName[] = ["0", "a", "b", "c", "d", "e", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
-  let index = 0;
-  const add = (name: string | undefined): void => {
-    if (name === undefined || registers[name] !== undefined) return;
-    registers[name] = order[index++] ?? "9";
-  };
-  for (const query of intent.queries) {
-    add(query.source);
-    add(query.at);
-    add(query.target);
-  }
-  for (const role of intent.stateRoles) add(role.name);
-  add("scratch");
-  add("dispatch");
-  return registers;
-}
-
-function preloadsForShape(shape: GameIntentShape): PreloadReport[] {
-  switch (shape) {
-    case "board_line_count":
-      return [
-        { register: "4", value: "10", countsAgainstProgram: false },
-        { register: "5", value: "0.1", countsAgainstProgram: false },
-      ];
-    case "board_neighbor_count":
-      return [
-        { register: "4", value: "1", countsAgainstProgram: false },
-        { register: "5", value: "10", countsAgainstProgram: false },
-      ];
-    case "board_fleet_duel":
-      return [
-        { register: "4", value: "100", countsAgainstProgram: false },
-        { register: "5", value: "10", countsAgainstProgram: false },
-        { register: "6", value: "1", countsAgainstProgram: false },
-      ];
-    case "world_table":
-      return [
-        { register: "4", value: "7", countsAgainstProgram: false },
-        { register: "5", value: "100", countsAgainstProgram: false },
-        { register: "6", value: "9", countsAgainstProgram: false },
-      ];
-    case "lane_resource":
-      return [
-        { register: "4", value: "1", countsAgainstProgram: false },
-        { register: "5", value: "8", countsAgainstProgram: false },
-      ];
-    case "universal_spatial_resource":
-      return buildGameIntentPreloads();
-  }
-}
-
-function kernelSegmentsForShape(shape: Exclude<GameIntentShape, "universal_spatial_resource">): TacticSegment[] {
-  switch (shape) {
-    case "board_line_count":
-      return [
-        { name: "board-input-probe", opcodes: [0x50, 0x40, 0x6a, 0x34, 0x35, 0x4b, 0x6b, 0x14] },
-        { name: "fleet-hit-clear", opcodes: [0x60, 0x6a, 0x37, 0x5e, 0x1a, 0x6b, 0x10, 0x4b, 0x11, 0x52, 0x4c, 0x36] },
-        { name: "line-row-column-count", opcodes: [0x6a, 0x34, 0x10, 0x65, 0x12, 0x38, 0x35, 0x4b, 0x6c, 0x14, 0x11, 0x57, 0x46, 0x63] },
-        { name: "line-left-diagonal-count", opcodes: [0x6a, 0x6d, 0x10, 0x12, 0x34, 0x37, 0x35, 0x4b, 0x38, 0x11, 0x59, 0x4d] },
-        { name: "line-right-diagonal-count", opcodes: [0x6a, 0x6e, 0x10, 0x12, 0x34, 0x38, 0x35, 0x4b, 0x37, 0x11, 0x5c, 0x4e] },
-        { name: "bearing-accumulate", opcodes: [0x6b, 0x6c, 0x10, 0x6d, 0x10, 0x6e, 0x10, 0x4b, 0x65, 0x52] },
-        { name: "fox-resource-tail", opcodes: [0x6c, 0x01, 0x11, 0x5e, 0x62, 0x0b, 0x4c, 0x51, 0x00, 0x50] },
-        { name: "board-query-dispatch", opcodes: [0x6a, 0x4a, 0x6b, 0x4b, 0x6c, 0x4c, 0x57, 0x00, 0x63, 0x52, 0x3b, 0x35] },
-        { name: "line-terminal-finalizer", opcodes: [0x6c, 0x50, 0x6b, 0x50, 0x20, 0x10, 0x4d, 0x52, 0x1c, 0x01, 0x10, 0x12, 0x34, 0x50] },
-      ];
-    case "board_neighbor_count":
-      return [
-        { name: "mine-input-probe", opcodes: [0x50, 0x40, 0x6a, 0x34, 0x35, 0x4a, 0x6b, 0x14] },
-        { name: "mine-hit-test", opcodes: [0x60, 0x6a, 0x37, 0x5e, 0x58, 0x6b, 0x10, 0x4b, 0x11, 0x50, 0x0b, 0x52] },
-        { name: "neighbor-north-band", opcodes: [0x6a, 0x01, 0x11, 0x34, 0x37, 0x35, 0x4c, 0x6a, 0x10, 0x34, 0x37, 0x35, 0x4d, 0x6c, 0x6d, 0x10] },
-        { name: "neighbor-south-band", opcodes: [0x6a, 0x01, 0x10, 0x34, 0x37, 0x35, 0x4c, 0x6a, 0x10, 0x34, 0x37, 0x35, 0x4d, 0x6c, 0x6d, 0x10] },
-        { name: "neighbor-side-count", opcodes: [0x6a, 0x65, 0x12, 0x37, 0x35, 0x6b, 0x10, 0x4b, 0x6c, 0x10, 0x4c, 0x52] },
-        { name: "clear-cell-resource", opcodes: [0x6d, 0x01, 0x11, 0x4d, 0x5e, 0x5e, 0x63, 0x6b, 0x50, 0x52] },
-        { name: "mine-terminal-tail", opcodes: [0x6b, 0x50, 0x6d, 0x50, 0x20, 0x10, 0x4e, 0x52, 0x3b, 0x35] },
-        { name: "neighbor-finalizer", opcodes: [0x6a, 0x4a, 0x6b, 0x4b, 0x6c, 0x4c, 0x57, 0x00, 0x63, 0x1c, 0x34, 0x50] },
-      ];
-    case "board_fleet_duel":
-      return [
-        { name: "duel-input-response", opcodes: [0x50, 0x40, 0x6a, 0x14, 0x6b, 0x11, 0x5e, 0x64] },
-        { name: "duel-random-board-shot", opcodes: [0x3b, 0x65, 0x12, 0x34, 0x10, 0x6a, 0x35, 0x4a, 0x50, 0x52] },
-        { name: "duel-display-pack", opcodes: [0x6a, 0x65, 0x12, 0x6c, 0x10, 0x6d, 0x10, 0x6e, 0x10, 0x52] },
-        { name: "duel-negative-hit-report", opcodes: [0x6b, 0x00, 0x11, 0x5e, 0x63, 0x6c, 0x01, 0x11, 0x4c, 0x52] },
-        { name: "duel-own-ship-counter", opcodes: [0x6c, 0x01, 0x11, 0x4c, 0x6c, 0x5e, 0x62, 0x6d, 0x50, 0x52] },
-        { name: "duel-player-shot", opcodes: [0x6b, 0x4b, 0x6d, 0x34, 0x35, 0x4d, 0x6d, 0x10, 0x4e, 0x57, 0x46, 0x52] },
-        { name: "duel-fleet-probe-clear", opcodes: [0x6e, 0x6d, 0x11, 0x5e, 0x58, 0x6e, 0x6d, 0x37, 0x35, 0x4e, 0x6d, 0x01, 0x11, 0x52] },
-        { name: "duel-enemy-ship-counter", opcodes: [0x6d, 0x01, 0x11, 0x4d, 0x6d, 0x5e, 0x63, 0x6e, 0x50, 0x52] },
-        { name: "duel-terminal-tail", opcodes: [0x6c, 0x50, 0x6d, 0x50, 0x20, 0x10, 0x4b, 0x51, 0x00] },
-        { name: "duel-finalizer", opcodes: [0x1c, 0x01, 0x10, 0x12, 0x34, 0x50, 0x52, 0x50] },
-      ];
-    case "world_table":
-      return [
-        { name: "world-input-screen", opcodes: [0x50, 0x6a, 0x4b, 0x60, 0x14, 0x6b, 0x50, 0x52] },
-        { name: "world-horizontal-move", opcodes: [0x6a, 0x01, 0x10, 0x4a, 0x6b, 0x01, 0x11, 0x4b, 0x57, 0x42, 0x63, 0x52] },
-        { name: "world-floor-table-lookup", opcodes: [0x6a, 0x65, 0x12, 0x34, 0x15, 0x6c, 0x12, 0x35, 0x34, 0x4c, 0x38, 0x37, 0x4d, 0x52] },
-        { name: "world-tile-dispatch", opcodes: [0x6c, 0x01, 0x11, 0x5e, 0x58, 0x6c, 0x02, 0x11, 0x5e, 0x62, 0x6c, 0x03, 0x11, 0x52] },
-        { name: "world-climb-descend", opcodes: [0x6a, 0x64, 0x10, 0x4a, 0x6b, 0x01, 0x10, 0x4b, 0x6d, 0x37, 0x35, 0x52] },
-        { name: "world-treasure-update", opcodes: [0x6d, 0x01, 0x10, 0x4d, 0x6e, 0x6a, 0x37, 0x5e, 0x74, 0x6e, 0x4e, 0x52] },
-        { name: "world-hole-known-mask", opcodes: [0x6e, 0x6a, 0x11, 0x37, 0x0b, 0x10, 0x4e, 0x6a, 0x4a, 0x52] },
-        { name: "world-exit-terminal", opcodes: [0x6b, 0x01, 0x11, 0x5e, 0x63, 0x6d, 0x50, 0x51, 0x00, 0x52] },
-        { name: "world-finalizer", opcodes: [0x20, 0x10, 0x4b, 0x0c, 0x32, 0x5e, 0xea, 0x1c, 0x01, 0x10, 0x34, 0x50] },
-      ];
-    case "lane_resource":
-      return [
-        { name: "lane-input-screen", opcodes: [0x50, 0x6a, 0x4a, 0x60, 0x14, 0x6b, 0x50, 0x52] },
-        { name: "lane-row-left-right", opcodes: [0x6a, 0x01, 0x11, 0x4a, 0x6a, 0x01, 0x10, 0x4a, 0x6b, 0x5e, 0x46, 0x52] },
-        { name: "lane-threat-random", opcodes: [0x3b, 0x65, 0x12, 0x34, 0x01, 0x10, 0x4b, 0x6b, 0x4c, 0x52] },
-        { name: "lane-collision-test", opcodes: [0x6a, 0x6b, 0x11, 0x5e, 0x64, 0x6d, 0x01, 0x11, 0x4d, 0x6a, 0x08, 0x4a] },
-        { name: "lane-dock-load", opcodes: [0x6a, 0x01, 0x11, 0x5e, 0x74, 0x01, 0x4e, 0x52] },
-        { name: "lane-ship-unload", opcodes: [0x6a, 0x08, 0x11, 0x5e, 0x66, 0x6e, 0x01, 0x11, 0x5e, 0x6a, 0x6c, 0x01, 0x11, 0x4c] },
-        { name: "lane-cargo-terminal", opcodes: [0x6c, 0x5e, 0x63, 0x6d, 0x5e, 0x69, 0x6a, 0x08, 0x4a, 0x6b, 0x50, 0x52] },
-        { name: "lane-boat-reset", opcodes: [0x6d, 0x01, 0x11, 0x4d, 0x08, 0x4a, 0x00, 0x4e, 0x6d, 0x50] },
-        { name: "lane-display-pack", opcodes: [0x6c, 0x65, 0x12, 0x6a, 0x10, 0x6b, 0x10, 0x6d, 0x10, 0x52] },
-        { name: "lane-finalizer", opcodes: [0x1c, 0x01, 0x10, 0x12, 0x34, 0x50] },
-      ];
-  }
-}
-
-function buildGameBackendCandidateReports(
-  candidates: readonly GameBackendCandidate[],
-  selected: GameBackendCandidate,
-): CandidateReport[] {
-  return candidates.map((candidate) => ({
-    site: selected.variant === candidate.variant ? selected.variant : candidate.variant,
-    variant: candidate.variant,
-    steps: candidate.layout.length,
-    selected: candidate.variant === selected.variant,
-    reason: candidate.variant === selected.variant ? `selected; ${candidate.reason}` : `rejected; ${candidate.reason}`,
-  }));
-}
-
-function buildGameIntent(ast: ProgramAst): GameIntent | undefined {
-  const domainKinds = new Set(ast.domains.map((domain) => domain.domainKind));
-  const v2Types = new Set(ast.v2?.state.map((field) => field.type.split("(")[0]!.trim()) ?? []);
-  const hasSpatialState =
-    domainKinds.has("maze") ||
-    domainKinds.has("coord") ||
-    v2Types.has("coord") ||
-    v2Types.has("cells");
-  const hasResourceState =
-    domainKinds.has("resource") ||
-    v2Types.has("counter") ||
-    ast.states.some((state) => state.fields.some((field) => gameStateRole(field.type) === "resource"));
-  const hasGameFlow =
-    domainKinds.has("event") ||
-    domainKinds.has("cache_search") ||
-    domainKinds.has("fight") ||
-    (ast.v2?.turn !== undefined) ||
-    ((ast.v2?.rules.length ?? 0) > 0);
-  if (!(hasSpatialState && hasResourceState && hasGameFlow)) return undefined;
-  const queries = collectGameQueryIntents(ast.v2);
-  const features = collectGameIntentFeatures(ast, queries);
-  const intent: GameIntent = {
-    kind: "game_intent",
-    name: ast.v2?.name ?? ast.reference ?? "game",
-    shape: classifyGameIntentShape(features),
-    features,
-    inputs: collectV2InputNames(ast.v2),
-    stateRoles: collectGameStateRoles(ast),
-    domains: ast.domains.map((domain) => {
-      const domainIntent: GameIntent["domains"][number] = {
-        kind: domain.domainKind,
-        facts: Object.fromEntries(domain.lines.map((line) => [line.text.split(/\s+/u)[0] ?? "fact", line.text])),
-      };
-      if (domain.name !== undefined) domainIntent.name = domain.name;
-      return domainIntent;
-    }),
-    queries,
-    screens: ast.v2?.screens.map((screen) => screen.name) ?? ast.displays.map((display) => display.name),
-    rules: ast.v2
-      ? [...ast.v2.rules.map((rule) => rule.name), ...ast.v2.encounters.map((table) => `encounters:${table.expr}`)]
-      : ast.blocks.map((block) => block.name),
-    terminalOutcomes: ["stop", "resource_exhausted", "exit", "fight_declined", "fight_resolved"],
-  };
-  if (ast.reference !== undefined) intent.reference = ast.reference;
-  return intent;
-}
-
-function collectGameIntentFeatures(ast: ProgramAst, queries: GameQueryIntent[]): GameIntentFeature[] {
-  const features = new Set<GameIntentFeature>();
-  const v2 = ast.v2;
-  const cellSetNames = new Set([
-    ...(v2?.state.filter((field) => field.type === "cells").map((field) => field.name) ?? []),
-  ]);
-  const inputNames = new Set(collectV2InputNames(v2));
-  const boardCellCounts = new Set(v2?.boards.map((board) => board.width * board.height) ?? []);
-
-  if ((v2?.boards.length ?? 0) > 0) features.add("board");
-  if (cellSetNames.size > 0) {
-    features.add("bitset");
-    features.add("resources");
-  }
-  if ((v2?.worlds.length ?? 0) > 0) features.add("movement");
-
-  for (const field of v2?.state ?? []) {
-    if (field.type === "cells") features.add("bitset");
-    if (field.type === "counter") features.add("resources");
-  }
-  for (const state of ast.states) {
-    for (const field of state.fields) {
-      if (gameStateRole(field.type) === "resource") features.add("resources");
-    }
-  }
-  for (const query of queries) {
-    features.add(query.kind);
-  }
-
-  const addPredicateFeatures = (predicate: V2PredicateAst): void => {
-    if (
-      predicate.kind === "v2_compare" &&
-      predicate.op === ">=" &&
-      cellSetNames.has(predicate.left.trim())
-    ) {
-      features.add("cell_probe");
-    }
-    if (isNegativeInputReportPredicate(predicate, inputNames)) {
-      features.add("hit_report");
-    }
-  };
-
-  const visit = (statements: V2StatementAst[]): void => {
-    for (const statement of statements) {
-      if (statement.kind === "v2_move") features.add("movement");
-      if (statement.kind === "v2_assign" && isRandomBoardCellExpression(statement.expr, boardCellCounts)) {
-        features.add("random_board_cell");
-      }
-      if (statement.kind === "v2_update" && statement.op === "-=" && cellSetNames.has(statement.target)) {
-        features.add("cell_clear");
-      }
-      if (statement.kind === "v2_if") {
-        addPredicateFeatures(statement.predicate);
-        visit(statement.thenBody);
-        if (statement.elseBody) visit(statement.elseBody);
-      }
-      if (statement.kind === "v2_challenge") {
-        visit(statement.successBody);
-        if (statement.failureBody) visit(statement.failureBody);
-      }
-      if (statement.kind === "v2_match") {
-        for (const matchCase of statement.cases) visit([matchCase.action]);
-        if (statement.otherwise) visit([statement.otherwise]);
-      }
-    }
-  };
-
-  if (v2?.turn) visit(v2.turn.body);
-  for (const rule of v2?.rules ?? []) visit(rule.body);
-
-  return [...features].sort();
-}
-
-function isRandomBoardCellExpression(text: string, boardCellCounts: ReadonlySet<number>): boolean {
-  const compact = normalizeV2ExpressionText(text).replace(/\s+/gu, "").toLowerCase();
-  const randomInt = /^int\(random\(\)\*(\d+)\)$/u.exec(compact);
-  return randomInt !== null && boardCellCounts.has(Number(randomInt[1]));
-}
-
-function isNegativeInputReportPredicate(predicate: V2PredicateAst, inputNames: ReadonlySet<string>): boolean {
-  if (predicate.kind !== "v2_compare") return false;
-  const left = normalizeV2ExpressionText(predicate.left).trim();
-  const right = normalizeV2ExpressionText(predicate.right).trim();
-  if (inputNames.has(left) && isZeroLiteralText(right)) {
-    return predicate.op === "<" || predicate.op === "<=";
-  }
-  if (inputNames.has(right) && isZeroLiteralText(left)) {
-    return predicate.op === ">" || predicate.op === ">=";
-  }
-  return false;
-}
-
-function isZeroLiteralText(text: string): boolean {
-  return /^[+-]?0(?:\.0+)?$/u.test(text);
-}
-
-function classifyGameIntentShape(features: readonly GameIntentFeature[]): GameIntentShape {
-  const set = new Set(features);
-  if (set.has("line_count")) return "board_line_count";
-  if (set.has("neighbor_count")) return "board_neighbor_count";
-  if (
-    set.has("board") &&
-    set.has("cell_probe") &&
-    set.has("cell_clear") &&
-    set.has("random_board_cell") &&
-    set.has("hit_report")
-  ) {
-    return "board_fleet_duel";
-  }
-  if (set.has("cell_at")) return "world_table";
-  if (set.has("random_cell") && set.has("movement")) return "lane_resource";
-  return "universal_spatial_resource";
-}
-
-function collectGameQueryIntents(v2: V2ProgramAst | undefined): GameQueryIntent[] {
-  if (!v2) return [];
-  const queries: GameQueryIntent[] = [];
-
-  const addExpression = (expr: string, line: number, target?: string): void => {
-    const query = parseGameQueryExpression(expr, line);
-    if (query === undefined) return;
-    queries.push(target === undefined ? query : { ...query, target });
-  };
-
-  const visit = (statements: V2StatementAst[]): void => {
-    for (const statement of statements) {
-      switch (statement.kind) {
-        case "v2_assign":
-          addExpression(statement.expr, statement.line, statement.target);
-          break;
-        case "v2_stop":
-          addExpression(statement.value, statement.line);
-          break;
-        case "v2_update":
-          addExpression(statement.expr, statement.line, statement.target);
-          break;
-        case "v2_if":
-          addExpression(formatV2Predicate(statement.predicate), statement.line);
-          visit(statement.thenBody);
-          if (statement.elseBody) visit(statement.elseBody);
-          break;
-        case "v2_challenge":
-          addExpression(statement.expr, statement.line, statement.challengeTarget);
-          visit(statement.successBody);
-          if (statement.failureBody) visit(statement.failureBody);
-          break;
-        case "v2_match":
-          addExpression(statement.expr, statement.line);
-          for (const matchCase of statement.cases) visit([matchCase.action]);
-          if (statement.otherwise) visit([statement.otherwise]);
-          break;
-        case "v2_invoke":
-          for (const arg of statement.args) addExpression(arg, statement.line);
-          break;
-        case "v2_show":
-        case "v2_read":
-        case "v2_move":
-          break;
-      }
-    }
-  };
-
-  if (v2.turn) visit(v2.turn.body);
-  for (const rule of v2.rules) visit(rule.body);
-  for (const table of v2.encounters) {
-    addExpression(table.expr, table.line);
-    for (const encounterCase of table.cases) visit(encounterCase.body);
-  }
-  return queries;
-}
-
-function parseGameQueryExpression(text: string, line: number): GameQueryIntent | undefined {
-  let expr: ExpressionAst;
-  try {
-    expr = parseExpression(normalizeV2ExpressionText(text), line);
-  } catch {
-    return undefined;
-  }
-  if (expr.kind !== "call") return undefined;
-  const kind = gameQueryKind(expr.callee);
-  if (kind === undefined) return undefined;
-  const [source, at] = expr.args;
-  if (source === undefined) return undefined;
-  const query: GameQueryIntent = {
-    kind,
-    source: expressionToIntentText(source),
-    line,
-  };
-  if (at !== undefined) query.at = expressionToIntentText(at);
-  return query;
-}
-
-function gameQueryKind(name: string): GameQueryIntent["kind"] | undefined {
-  switch (name.toLowerCase()) {
-    case "line_count":
-      return "line_count";
-    case "neighbor_count":
-      return "neighbor_count";
-    case "cell_at":
-      return "cell_at";
-    case "random_cell":
-      return "random_cell";
-    default:
-      return undefined;
-  }
-}
-
-function expressionToIntentText(expr: ExpressionAst): string {
-  switch (expr.kind) {
-    case "number":
-      return expr.raw;
-    case "identifier":
-      return expr.name;
-    case "unary":
-      return `-${expressionToIntentText(expr.expr)}`;
-    case "binary":
-      return `${expressionToIntentText(expr.left)} ${expr.op} ${expressionToIntentText(expr.right)}`;
-    case "call":
-      return `${expr.callee}(${expr.args.map(expressionToIntentText).join(", ")})`;
-  }
-}
-
-function collectGameStateRoles(ast: ProgramAst): GameIntent["stateRoles"] {
-  const roles: GameIntent["stateRoles"] = [];
-  const displayedV2State = new Set((ast.v2?.screens ?? []).flatMap((screen) => screen.sources));
-  const declaredV2State = new Set((ast.v2?.state ?? []).map((field) => field.name));
-  for (const input of collectV2InputNames(ast.v2)) {
-    if (!declaredV2State.has(input)) roles.push({ name: input, role: "input", displayed: false, persistent: false });
-  }
-  for (const field of ast.v2?.state ?? []) {
-    roles.push({
-      name: field.name,
-      role: gameStateRole(field.type),
-      displayed: displayedV2State.has(field.name),
-      persistent: true,
-    });
-  }
-  for (const state of ast.states) {
-    for (const field of state.fields) {
-      roles.push({
-        name: field.name,
-        role: gameStateRole(field.type),
-        displayed: ast.displays.some((display) => display.sources.includes(field.name)),
-        persistent: true,
-      });
-    }
-  }
-  return roles;
-}
-
-function collectV2InputNames(v2: V2ProgramAst | undefined): string[] {
-  const names = new Set<string>();
-  const visit = (statements: V2StatementAst[]): void => {
-    for (const statement of statements) {
-      if (statement.kind === "v2_read") names.add(statement.target);
-      if (statement.kind === "v2_challenge") {
-        names.add(statement.answerInput);
-        visit(statement.successBody);
-        if (statement.failureBody) visit(statement.failureBody);
-      }
-      if (statement.kind === "v2_if") {
-        visit(statement.thenBody);
-        if (statement.elseBody) visit(statement.elseBody);
-      }
-      if (statement.kind === "v2_match") {
-        for (const matchCase of statement.cases) visit([matchCase.action]);
-        if (statement.otherwise) visit([statement.otherwise]);
-      }
-    }
-  };
-  if (v2?.turn !== undefined) visit(v2.turn.body);
-  for (const rule of v2?.rules ?? []) visit(rule.body);
-  for (const table of v2?.encounters ?? []) {
-    for (const encounterCase of table.cases) visit(encounterCase.body);
-  }
-  return [...names];
-}
-
-function gameStateRole(type: string): GameIntent["stateRoles"][number]["role"] {
-  if (type === "coord" || type === "packed") return "coord";
-  if (type === "cells" || type === "bitset") return "bitset";
-  if (type === "counter" || type === "range") return "resource";
-  if (type === "flag") return "flag";
-  return "unknown";
-}
-
-function buildGameEffectIr(intent: GameIntent): EffectIrOp[] {
-  return [
-    {
-      id: "turn-display-input",
-      op: "show/read",
-      reads: intent.stateRoles.filter((role) => role.displayed).map((role) => role.name),
-      writes: intent.inputs,
-      stack: ["X", "Y", "Z", "T"],
-      displayObservable: true,
-      mayTrap: false,
-    },
-    ...intent.queries.map((query, index): EffectIrOp => ({
-      id: `spatial-query-${index + 1}`,
-      op: query.kind,
-      reads: [query.source, query.at].filter((value): value is string => value !== undefined),
-      writes: query.target === undefined ? [] : [query.target],
-      stack: ["X", "Y", "X2"],
-      displayObservable: false,
-      mayTrap: false,
-    })),
-    {
-      id: "maze-move-wall-check",
-      op: "move/has/blocked",
-      reads: ["coord", "maze", "walls"],
-      writes: ["coord", "blocked"],
-      stack: ["X", "Y", "X2"],
-      displayObservable: false,
-      mayTrap: false,
-    },
-    {
-      id: "resource-cache-fight",
-      op: "search/reward/fight",
-      reads: ["caches", "resources", "random"],
-      writes: ["caches", "resources"],
-      stack: ["X", "Y", "X2"],
-      displayObservable: true,
-      mayTrap: false,
-    },
-  ];
-}
-
-function buildCandidateIr(intent: GameIntent): CandidateIr[] {
-  return [
-    {
-      site: intent.name,
-      variant: "indirect-register-flow",
-      cost: 9,
-      preconditions: ["branch addresses are representable as live numeric values"],
-      proofs: ["address-like constants are assigned by layout"],
-      features: ["indirect-flow", "address-constants"],
-      selected: true,
-    },
-    {
-      site: intent.name,
-      variant: "super-dark-dispatch",
-      cost: 4,
-      preconditions: ["one-command side paths can be placed at formal dark entries"],
-      proofs: ["cyclic layout maps dark entries to shared tails"],
-      features: ["super-dark-dispatch", "dark-entries"],
-      selected: true,
-    },
-    {
-      site: intent.name,
-      variant: "cyclic-address-layout",
-      cost: 0,
-      preconditions: ["all wrap targets are shared-tail entries"],
-      proofs: ["layout aliases point at intended cells"],
-      features: ["dark-entries", "code-data-overlay"],
-      selected: true,
-    },
-    {
-      site: intent.name,
-      variant: "x2-vp-scheduling",
-      cost: 0,
-      preconditions: ["X2 is unobserved between screen boundaries"],
-      proofs: ["display observability is bounded by screen declarations"],
-      features: ["x2-register", "display-bytes"],
-      selected: true,
-    },
-    {
-      site: intent.name,
-      variant: "hex-mantissa-data",
-      cost: 0,
-      preconditions: ["state values tolerate mantissa/sign-digit encoding"],
-      proofs: ["resource and bitset domains are packed"],
-      features: ["display-bytes", "address-constants"],
-      selected: true,
-    },
-  ];
-}
-
-function refineTacticForAddress(address: number, fallback: string, _intent: GameIntent): string {
-  const tacticByAddress = new Map<number, string>([
-    [18, "vp-fraction-restore"],
-    [19, "kzn-double"],
-    [30, "kor-digit-test"],
-    [45, "kmax-zero-through"],
-    [60, "r0-indirect-counter"],
-    [90, "vp-fraction-restore"],
-    [92, "fractional-indirect-addressing"],
-  ]);
-  return tacticByAddress.get(address) ?? fallback;
-}
-
-function buildGameIntentOptimizations(
-  intent: GameIntent,
-  backend: GameBackendCandidate,
-): AppliedOptimization[] {
-  const selected = (name: string, detail: string): AppliedOptimization => ({ name, detail });
-  const base: AppliedOptimization[] = [
-    selected("intent-domain-lowering", `Lowered ${intent.name} state/rules/domains into GameIntent.`),
-    selected("game-intent-lowering", "Built GameIntent for spatial state, collections, resources, events, and terminal outcomes."),
-    selected("compact-domain-effect-ir", "Lowered GameIntent into stack/register/X2/display-aware EffectIR."),
-    ...(intent.queries.length > 0
-      ? [selected("spatial-query-lowering", `Captured ${intent.queries.length} board/world query expression(s): ${formatGameQueries(intent.queries)}.`)]
-      : []),
-    selected("game-backend-selection", `Selected ${backend.variant} (${backend.layout.length} cells): ${backend.reason}.`),
-  ];
-  if (backend.variant !== "universal_spatial_resource") {
-    const shapeSpecific = [
-      ...base,
-      selected(
-        "shape-specific-microkernel",
-        `Lowered ${intent.shape} features directly, avoiding universal board/bitset/world-table machinery.`,
-      ),
-    ];
-    if (intent.queries.length > 0) {
-      shapeSpecific.push(selected("query-specialization", `Specialized query lowering for ${formatGameQueries(intent.queries)}.`));
-    }
-    if (backend.variant === "board_fleet_duel") {
-      shapeSpecific.push(
-        selected(
-          "fleet-duel-lowering",
-          "Lowered random board shot, negative hit report, fleet probe/clear, ship counters, and terminal stops as one duel microkernel.",
-        ),
-      );
-    }
-    return shapeSpecific;
-  }
-  const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout, {
-    selectorValues: superDarkSelectorValues(backend.preloads),
-  });
-  const formalAddressOptimizations = superDarkLayoutProof.proved
-    ? [
-      selected("super-dark-dispatch", "Selected super/dark formal address entries where one-command side paths are profitable."),
-      selected("cyclic-address-layout", "Selected wraparound address layout so tails continue through formal address space."),
-    ]
-    : [];
-  return [
-    ...base,
-    selected("indirect-register-flow", "Selected R7/R8/R9-style indirect flow for compact command and procedure dispatch."),
-    ...formalAddressOptimizations,
-    selected("shared-tail-layout", "Merged movement, wall-break, search, and initialization tails."),
-    selected("code-data-overlay", "Reused branch operands and command bytes as address/data constants."),
-    selected("constants-dual-use", "Reused constants as coefficients, rounding adjusters, and indirect branch addresses."),
-    selected("x2-display-byte-scheduling", "Scheduled X2 saves/restores across ВП/display-byte boundaries."),
-    selected("vp-fraction-restore", "Used ВП as X2 restoration and fractional-part transform."),
-    selected("hex-mantissa-arithmetic", "Packed spatial masks and resource transforms into hexadecimal mantissa/sign digits."),
-    selected("fractional-indirect-addressing", "Used indirect-address truncation and fractional mantissa effects for compact bit selection."),
-    selected("r0-indirect-counter", "Used R0 indirect store with the negative-counter behavior required by generated mask loops."),
-    selected("kzn-double", "Used К ЗН as a one-cell doubling/sign-digit transform."),
-    selected("kor-digit-test", "Used К∨ as a compact multi-digit/boundary test."),
-    selected("kmax-zero-through", "Used К max as a zero-through stack transform and <-> replacement."),
-    selected("return-zero-jump", "Selected В/О where the return stack proof permits one-cell return/jump behavior."),
-  ];
-}
-
-function formatGameQueries(queries: GameQueryIntent[]): string {
-  return queries
-    .slice(0, 4)
-    .map((query) => `${query.target ?? "_"}=${query.kind}(${[query.source, query.at].filter(Boolean).join(", ")})`)
-    .join("; ");
-}
-
-function buildGameIntentCandidates(
-  candidates: CandidateIr[],
-  backend: GameBackendCandidate,
-): CandidateReport[] {
-  const usesUniversalTactics = backend.variant === "universal_spatial_resource";
-  const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout, {
-    selectorValues: superDarkSelectorValues(backend.preloads),
-  });
-  const superDarkLayoutProved = usesUniversalTactics && superDarkLayoutProof.proved;
-  return candidates.map((candidate) => ({
-    site: candidate.site,
-    variant: candidate.variant,
-    steps: candidate.cost,
-    selected: candidate.selected && usesUniversalTactics && (
-      !["super-dark-dispatch", "cyclic-address-layout"].includes(candidate.variant) || superDarkLayoutProved
-    ),
-    reason: gameIntentCandidateReason(candidate, backend, superDarkLayoutProof),
-  }));
-}
-
-function gameIntentCandidateReason(
-  candidate: CandidateIr,
-  backend: GameBackendCandidate,
-  superDarkLayoutProof: ReturnType<typeof verifySuperDarkSuffixLayout>,
-): string {
-  if (backend.variant !== "universal_spatial_resource") {
-    return `rejected; ${backend.variant} backend is shorter, so universal ${candidate.variant} tactics were not emitted`;
-  }
-  if (["super-dark-dispatch", "cyclic-address-layout"].includes(candidate.variant) && !superDarkLayoutProof.proved) {
-    return `rejected; layout proof did not establish FA..FF entries at 48..53, suffix continuations 01..06, and a proved FA..FF selector (${superDarkLayoutProof.reasons.join("; ")})`;
-  }
-  return `selected; ${candidate.proofs.join("; ")}`;
-}
-
-function buildGameIntentPreloads(ast?: ProgramAst): PreloadReport[] {
-  const explicit = (ast?.preloads ?? []).map((preload) => ({
-    register: preload.register,
-    value: preload.value,
-    countsAgainstProgram: false,
-  }));
-  if (explicit.length > 0) return explicit;
-  return [
-    { register: "R4", value: "2", countsAgainstProgram: false },
-    { register: "R5", value: "10", countsAgainstProgram: false },
-    { register: "R6", value: "ГE-02", countsAgainstProgram: false },
-    { register: "R7", value: "5E-1", countsAgainstProgram: false },
-    { register: "R8", value: "-52", countsAgainstProgram: false },
-    { register: "R9", value: "4,_3E-08", countsAgainstProgram: false },
-  ];
-}
-
-function superDarkSelectorValues(preloads: readonly PreloadReport[]): Record<string, string> {
-  const values: Record<string, string> = {};
-  for (const preload of preloads) {
-    const register = preload.register.replace(/^R/iu, "").toLowerCase();
-    values[register] = preload.value;
-  }
-  return values;
-}
-
-function buildGameIntentProofs(
-  intent: GameIntent,
-  backend: GameBackendCandidate,
-  reference?: NonNullable<CompileReport["reference"]>,
-): CompileReport["proofs"] {
-  if (backend.variant !== "universal_spatial_resource") {
-    const proofs: CompileReport["proofs"] = [
-      {
-        id: "full-game-semantics",
-        status: "assumed",
-        detail: `${backend.variant} is a source-driven semantic microkernel; full interactive equivalence still requires a backend verifier.`,
-      },
-      {
-        id: "shape-features-covered",
-        status: "proved",
-        detail: `${backend.variant} covers declared GameIntent features: ${intent.features.join(", ")}.`,
-      },
-      {
-        id: "display-observability",
-        status: "proved",
-        detail: "Only declared screens and explicit stop/error states are user-observable in the shape backend.",
-      },
-    ];
-    if (intent.queries.length > 0) {
-      proofs.push(
-        {
-          id: "query-lowering-covered",
-          status: "proved",
-          detail: `Shape microkernel covers query lowering for ${formatGameQueries(intent.queries)}.`,
-        },
-        {
-          id: "spatial-query-semantics",
-          status: "proved",
-          detail: `Captured board/world query semantics for ${formatGameQueries(intent.queries)}.`,
-        },
-      );
-    }
-    if (backend.variant === "board_fleet_duel") {
-      proofs.push({
-        id: "fleet-duel-lowering-covered",
-        status: "proved",
-        detail:
-          "Board-fleet duel microkernel covers random calculator shots, negative hit reports, enemy fleet probe/clear, ship counters, and terminal stops.",
-      });
-    }
-    if (reference !== undefined) {
-      proofs.push({
-        id: "reference-size-beaten",
-        status: backend.layout.length < reference.referenceSpan ? "proved" : "assumed",
-        detail: `${backend.variant} uses ${backend.layout.length} cells vs reference span ${reference.referenceSpan}.`,
-      });
-    }
-    return proofs;
-  }
-  const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout, {
-    selectorValues: superDarkSelectorValues(backend.preloads),
-  });
-  const proofs: CompileReport["proofs"] = [
-    {
-      id: "full-game-semantics",
-      status: "assumed",
-      detail: `Universal fallback lowers ${intent.name} with the previous spatial/counter tactic template; no shape verifier is attached.`,
-    },
-    {
-      id: "return-stack-empty",
-      status: "proved",
-      detail: "Compact layout does not rely on pending ПП frames at В/О-as-jump sites.",
-    },
-    {
-      id: "x2-liveness",
-      status: "proved",
-      detail: "X2 is clobbered only between display-observable boundaries and is restored before the next required display state.",
-    },
-    {
-      id: "bitset-equivalence",
-      status: "proved",
-      detail: "Walls and caches are lowered to packed mantissa masks with clear/has operations preserving source-level set semantics.",
-    },
-    {
-      id: "cyclic-address-safety",
-      status: superDarkLayoutProof.proved ? "proved" : "not-needed",
-      detail: superDarkLayoutProof.proved
-        ? "Wraparound and dark-entry addresses land only on intended shared tails or one-command side paths."
-        : "No formal wraparound/dark-entry layout was selected, so there are no cyclic-address aliases to prove.",
-    },
-    {
-      id: "indirect-addressing-ranges",
-      status: "proved",
-      detail: "Indirect flow selectors use stable R7..Re address values; fractional R0 sentinel sites are exact-machine facts, not inferred aliases.",
-    },
-    {
-      id: "super-dark-suffix-layout",
-      status: superDarkLayoutProof.proved ? "proved" : "not-needed",
-      detail: superDarkLayoutProof.proved
-        ? `FA..FF indirect dispatch entries are placed at physical 48..53 and resume through suffix-compatible continuations 01..06 (${superDarkLayoutProof.pairs.length} pairs).`
-        : `No suffix-compatible FA..FF dispatch layout was selected for this backend: ${superDarkLayoutProof.reasons.join("; ")}.`,
-    },
-    {
-      id: "display-observability",
-      status: "proved",
-      detail: "Only declared screens and explicit stop/error states are user-observable.",
-    },
-  ];
-  if (intent.queries.length > 0) {
-    proofs.push({
-      id: "spatial-query-semantics",
-      status: "proved",
-      detail: `Captured board/world query semantics for ${formatGameQueries(intent.queries)}.`,
-    });
-  }
-  return proofs;
-}
-
-function buildGameIntentCellRoles(
-  layout: LayoutIrCell[],
-  preloads: readonly PreloadReport[],
-  machineProfile: MachineProfile,
-): CellRoleReport[] {
-  const addressOperandCells = new Set<number>();
-  for (let address = 0; address < layout.length - 1; address += 1) {
-    if (getOpcode(layout[address]!.opcode).takesAddress) addressOperandCells.add(address + 1);
-  }
-  const superDarkProof = verifySuperDarkSuffixLayout(layout, {
-    selectorValues: superDarkSelectorValues(preloads),
-  });
-  const darkEntryCells = superDarkProof.proved
-    ? new Set(superDarkProof.pairs.flatMap((pair) => [pair.entryAddress, pair.continuationAddress]))
-    : new Set<number>();
-  const displayByteCells = new Set([18, 33, 90]);
-  return layout.map((cell) => {
-    const { address, opcode: code } = cell;
-    const roles: CellRole[] = addressOperandCells.has(address) ? ["address"] : ["exec"];
-    const notes: string[] = [];
-    if (addressOperandCells.has(address) && machineSupports(machineProfile, "address-constants")) {
-      roles.push("constant");
-      notes.push("address operand reused as compact data");
-    }
-    if (addressOperandCells.has(address) && machineSupports(machineProfile, "code-data-overlay")) {
-      roles.push("overlay");
-      notes.push("address/data overlay selected");
-    }
-    if (darkEntryCells.has(address) && machineSupports(machineProfile, "dark-entries")) {
-      roles.push("dark-entry");
-      notes.push("formal/dark entry participates in proved super-dark dispatch layout");
-    }
-    if (displayByteCells.has(address) && machineSupports(machineProfile, "display-bytes")) {
-      roles.push("display-byte");
-      notes.push("X2/display-byte boundary");
-    }
-    const role: CellRoleReport = {
-      address: formatAddress(address),
-      hex: getOpcode(code).hex,
-      roles: uniqueRoles(roles),
-    };
-    if (notes.length > 0) role.note = notes.join("; ");
-    return role;
-  });
-}
-
-function gameTacticComment(cell: LayoutIrCell): string | undefined {
-  const comments: Record<number, string> = {
-    13: "branch into init/search tail",
-    18: "ВП restores X2 and takes fractional part",
-    19: "К ЗН as one-cell doubling/sign transform",
-    25: "indirect recall through packed address",
-    30: "К∨ digit/boundary test",
-    32: "indirect conditional via R9",
-    40: "shared wall/position tail",
-    45: "К max zero-through transform",
-    46: "indirect conditional via R7",
-    47: "movement tail writes player position",
-    60: "R0 indirect negative-counter loop",
-    62: "indirect conditional via R8",
-    66: "indirect conditional via R7",
-    71: "indirect conditional via R9",
-    76: "indirect jump via R9",
-    83: "indirect conditional via R7",
-    90: "ВП combines X2 restore and hex digit",
-    92: "indirect recall truncates fractional address",
-    99: "event/resource tail",
-    104: "cyclic tail through indirect store",
-  };
-  return comments[cell.address] ?? cell.tactic.replace(/-/gu, " ");
-}
-
 function validateSemanticDomains(ast: ProgramAst, diagnostics: Diagnostic[]): void {
   const unresolved = ast.domains.filter((domain) =>
     ["maze", "event", "cache_search", "fight", "table"].includes(domain.domainKind),
@@ -1590,7 +372,7 @@ function validateSemanticDomains(ast: ProgramAst, diagnostics: Diagnostic[]): vo
     code: "SEMANTIC_DOMAIN_LOWERER_MISSING",
     message:
       `High-level semantic domains need real rule lowerers before code generation: ${unresolved.map(formatDomainName).join(", ")}. ` +
-      "The compiler refuses to treat game intent as comments.",
+      "The compiler refuses to treat game rules as comments.",
   });
 }
 
@@ -3599,6 +2381,44 @@ function conditionToText(condition: ConditionAst): string {
   return `${expressionToIntentText(condition.left)} ${condition.op} ${expressionToIntentText(condition.right)}`;
 }
 
+function expressionToIntentText(expr: ExpressionAst): string {
+  switch (expr.kind) {
+    case "number":
+      return expr.raw;
+    case "identifier":
+      return expr.name;
+    case "unary":
+      return `-${wrapExpressionText(expr.expr, 3)}`;
+    case "binary":
+      return `${wrapExpressionText(expr.left, binaryPrecedence(expr.op))} ${expr.op} ${wrapExpressionText(expr.right, binaryPrecedence(expr.op) + (expr.op === "-" || expr.op === "/" ? 1 : 0))}`;
+    case "call":
+      return `${expr.callee}(${expr.args.map(expressionToIntentText).join(", ")})`;
+  }
+}
+
+function wrapExpressionText(expr: ExpressionAst, parentPrecedence: number): string {
+  const text = expressionToIntentText(expr);
+  const precedence = expressionPrecedence(expr);
+  return precedence < parentPrecedence ? `(${text})` : text;
+}
+
+function expressionPrecedence(expr: ExpressionAst): number {
+  switch (expr.kind) {
+    case "number":
+    case "identifier":
+    case "call":
+      return 4;
+    case "unary":
+      return 3;
+    case "binary":
+      return binaryPrecedence(expr.op);
+  }
+}
+
+function binaryPrecedence(op: Extract<ExpressionAst, { kind: "binary" }>["op"]): number {
+  return op === "*" || op === "/" ? 2 : 1;
+}
+
 function priority(
   variable: string,
   hints: Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>,
@@ -4860,7 +3680,7 @@ const optimizerCapabilities: Array<{
       "kzn-double",
       "kor-digit-test",
     ],
-    detail: "Umbrella rule for replacing provably equivalent conditionals with branchless arithmetic, sign, extrema, or masked updates. Also marked active when the GameIntent backend selects К max / К ЗН / К∨ as semantic equivalents.",
+    detail: "Umbrella rule for replacing provably equivalent conditionals with branchless arithmetic, sign, extrema, or masked updates.",
   },
   {
     id: "zero-condition-test",
@@ -4872,7 +3692,7 @@ const optimizerCapabilities: Array<{
       "fractional-indirect-addressing",
       "kor-digit-test",
     ],
-    detail: "Uses direct F x?0 tests when one side of a condition is a proved zero, avoiding a zero literal and subtraction. Also marked active when GameIntent proves zero/digit boundaries through fractional indirect addressing or К∨.",
+    detail: "Uses direct F x?0 tests when one side of a condition is a proved zero, avoiding a zero literal and subtraction.",
   },
   {
     id: "dispatch-compare-chain",
@@ -4899,7 +3719,7 @@ const optimizerCapabilities: Array<{
       "kmax-zero-through",
       "kzn-double",
     ],
-    detail: "Replaces simple boolean if/else assignments, stops, and conditional moves with arithmetic selection when shorter. Counts К max/К ЗН as the GameIntent-equivalent selection.",
+    detail: "Replaces simple boolean if/else assignments, stops, and conditional moves with arithmetic selection when shorter.",
   },
   {
     id: "arithmetic-if-update",
@@ -4911,7 +3731,7 @@ const optimizerCapabilities: Array<{
       "arithmetic-if-sign-toggle",
       "hex-mantissa-arithmetic",
     ],
-    detail: "Replaces conditional +=/-= and sign toggles guarded by a proved boolean with masked arithmetic. GameIntent's hex-mantissa updates count as the masked-update equivalent.",
+    detail: "Replaces conditional +=/-= and sign toggles guarded by a proved boolean with masked arithmetic.",
   },
   {
     id: "arithmetic-if-extrema",
@@ -4951,7 +3771,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["fl-unit-decrement", "r0-indirect-counter"],
-    detail: "Uses F L0..F L3 as compact decrement-and-continue/decrement-and-branch forms for small counters. The R0 indirect counter is its GameIntent equivalent.",
+    detail: "Uses F L0..F L3 as compact decrement-and-continue/decrement-and-branch forms for small counters.",
   },
   {
     id: "address-constant-overlay",
@@ -5442,6 +4262,12 @@ function buildProofReport(
     });
   }
   return proofs;
+}
+
+function superDarkSelectorValues(preloads: readonly PreloadReport[]): Record<string, string> {
+  const selectors: Record<string, string> = {};
+  for (const preload of preloads) selectors[preload.register] = preload.value;
+  return selectors;
 }
 
 function parseHotBlock(text: string): CompileReport["hotBlocks"][number] {

@@ -1,6 +1,6 @@
 reference kei_treasure_cave
 
-// Small readable sketch. Use cave-treasure.mkpro for the full compact game intent.
+// Small readable sketch. Use cave-treasure.mkpro for the fuller game rules.
 
 program CaveSketch {
   state {

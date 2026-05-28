@@ -35,6 +35,13 @@ function exampleFiles(): string[] {
     .map((name) => resolve(dir, name));
 }
 
+function spatialDraftFiles(): string[] {
+  const dir = resolve("examples/spatial-drafts");
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".mkpro"))
+    .map((name) => resolve(dir, name));
+}
+
 interface Scenario {
   name: string;
   example: string;
@@ -95,28 +102,11 @@ const SCENARIOS: Scenario[] = [
     keys: ["В/О", "С/П", "4", "С/П", "С/П"],
     expectStop: true,
   },
-  {
-    name: "cave-treasure.mkpro enters the dark-overlay loop and stabilises",
-    example: "cave-treasure.mkpro",
-    registers: {
-      "4": "2",
-      "5": "10",
-      "6": "ГE-02",
-      "7": "5E-1",
-      "8": "-52",
-      "9": "4,_3E-08",
-    },
-    keys: ["БП", "4", "4", "4", "4", "П→X", "9", "F", "0", "С/П"],
-    expectStop: true,
-    expectDisplayMatches: /^1,0000001$/u,
-    expectPc: "01",
-    maxFrames: 600,
-  },
 ];
 
 describe("emulator regression", () => {
   const files = exampleFiles();
-  expect(files.length).toBeGreaterThanOrEqual(16);
+  expect(files.length).toBeGreaterThanOrEqual(5);
 
   for (const file of files) {
     const name = file.split("/").pop()!;
@@ -128,6 +118,14 @@ describe("emulator regression", () => {
       const loaded = calc.loadProgram(codes);
       expect(loaded.diagnostics).toEqual([]);
       expect(calc.readProgramCodes(codes.length)).toEqual(codes);
+    });
+  }
+
+  for (const file of spatialDraftFiles()) {
+    const name = file.split("/").pop()!;
+    it(`rejects spatial draft ${name} before emulator loading`, () => {
+      const source = readFileSync(file, "utf8");
+      expect(() => compileMKPro(source)).toThrow(/real rule lowerers before code generation/u);
     });
   }
 

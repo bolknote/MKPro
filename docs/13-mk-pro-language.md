@@ -6,9 +6,9 @@ dark entries, X2 tricks, overlays, or undocumented opcodes. Those are MK-61
 machine capabilities, and the optimizer may use them whenever
 its effect checks and emulator facts allow the rewrite.
 
-The examples in `examples/*.mkpro` are intentionally written in this V2 human
-DSL. MK-Pro source is one `program` block, plus optional report metadata; standalone
-raw calculator listing syntax is not part of the language.
+The runnable examples in top-level `examples/*.mkpro` are intentionally written
+in this V2 human DSL. MK-Pro source is one `program` block, plus optional report
+metadata; standalone raw calculator listing syntax is not part of the language.
 
 ## Shape
 
@@ -231,26 +231,23 @@ rule reveal_safe_cell {
 
 `line_count(cells, cell)` is the fox-hunt style row/column/diagonal count.
 `neighbor_count(cells, cell)` is the Minesweeper-style 8-neighbor count. These
-lower to spatial query intent; the optimizer chooses
-whether to use masks, decimal digits, or a shared query tail.
+parse as spatial query nodes. They do not compile until a real lowerer maps the
+source rules to IR; once that exists, the optimizer can choose masks, decimal
+digits, or a shared query tail.
 
 ## Example Programs
 
-The repository examples are grouped by the game shape they exercise:
+The top-level repository examples are runnable MK-Pro programs:
 
 - `basic.mkpro`, `human.mkpro`, and `tiny-game.mkpro` are small syntax and control-flow
   examples.
 - `lunar.mkpro` is a numeric counter game with touchdown rules.
-- `cave-sketch.mkpro`, `cave-highlevel-baseline.mkpro`, `cave-treasure.mkpro`,
-  `cave-treasure-full.mkpro`, and `labyrinth777.mkpro` show increasingly complete
-  cave/grid games.
-- `grid-rescue.mkpro`, `resource-raid.mkpro`, and `giants-country.mkpro` exercise
-  spatial counters, generated masks, encounters, and challenge blocks.
-- `sea-battle.mkpro` demonstrates `board`, `coord(domain)`, and `cells(domain)`
-  for non-movement board games.
-- `fox-hunt-100.mkpro`, `minesweeper-9x9.mkpro`, `treasure-hunter-2.mkpro`, and
-  `dangerous-loading.mkpro` are larger Anvarov ports used to check how well the
-  human DSL covers dense 105-cell MK-61 games.
+- `99-bottles.mkpro` is a direct port of the Bolknote beer demo.
+
+`examples/spatial-drafts/*.mkpro` contains source-level board/world ports such
+as Cave Treasure, Sea Battle, Fox Hunt, Minesweeper, and other dense MK-61
+games. They intentionally fail compilation until the corresponding spatial
+lowerers exist.
 
 ## World Blocks
 
@@ -264,10 +261,9 @@ world giant_country {
 }
 ```
 
-This is intentionally about world rules, not storage. The compiler lowers it to
-the GameIntent pipeline and reports whether it used shared tails, code/data
-overlay, constants as branch targets, X2, display-byte packing, or other MK-61
-features.
+This is intentionally about world rules, not storage. A `world` block is a real
+semantic commitment: if the compiler has no lowerer for that world operation, it
+rejects the program instead of selecting a canned game template.
 
 Movement rules should use `move` when they mean movement rather than coordinate
 arithmetic:
@@ -314,19 +310,19 @@ rule move_monster {
 
 `cell_at(world, pos)` reads the generated tile/event code for a world position.
 `random_cell(world)` asks the compiler for a compact random coordinate for that
-world backend.
+world lowerer.
 
 ## Formulas
 
-V2 formulas use the same expression parser as the compiler backend. Decimal
+V2 formulas use the same expression parser as the compiler pipeline. Decimal
 constants are valid inside larger formulas, so numeric games can write:
 
 ```mkpro
 accel = burn * 10 / fuel - 9.8
 ```
 
-The compiler validates that an expression can be lowered before it enters the
-game-intent path. It no longer rejects formulas simply because a decimal literal
+The compiler validates that an expression can be lowered before it enters code
+generation. It no longer rejects formulas simply because a decimal literal
 appears next to variables or operators.
 
 Formula helpers expose useful calculator-shaped operations without requiring
@@ -503,23 +499,10 @@ The source only states what is allowed semantically. The report explains:
 - external budget and hot blocks.
 
 Unsupported high-level effects fail compilation instead of becoming comments.
-The current production path first classifies `GameIntent` by shape and features,
-then selects the smallest valid backend candidate. Shape-specific microkernels
-cover:
-
-- `board_line_count` for fox-hunt row/column/diagonal probes;
-- `board_neighbor_count` for Minesweeper-style 8-neighbor probes;
-- `board_fleet_duel` for Sea Battle-style hidden fleet probes, hit reports,
-  random board shots, and ship counters;
-- `world_table` for compact generated-world tile lookup;
-- `lane_resource` for one-dimensional movement with random hazards and counters.
-
-The universal spatial/counter backend remains the fallback for mixed or
-unsupported shapes: packed coordinates, generated cell sets, counters, events,
-dispatch, screens, and terminal outcomes. `examples/cave-treasure.mkpro` is now
-just one reference source; `examples/grid-rescue.mkpro`,
-and `examples/resource-raid.mkpro` continue compiling through this fallback when
-no shape-specific backend covers the features.
+There is no production spatial template path: spatial programs must lower from
+their actual AST rules through ordinary IR. Until a real lowerer exists for
+`board`, `world`, `cells`, `line_count`, `neighbor_count`, `cell_at`, or
+`random_cell`, the compiler stops with an explicit diagnostic.
 
 `reference` is report metadata only and must not change code generation. For
 known `games/*` references, the report resolves the original listing, counts the
@@ -527,27 +510,21 @@ real addressed span (`max(address)+1`), occupied entries, and gaps, and keeps
 `referenceSteps` equal to that span for existing report consumers. Missing
 listings fall back to the budget with a warning.
 
-For these programs the report marks selected tactics, not source switches:
-indirect register flow, code/data overlay, X2/`ВП`, hex-mantissa data packing,
-R0 indirect behavior, `К ЗН`, `К∨`, and `К max` are emitted as chosen
-lowerings through `GameIntent`, `EffectIR`, `CandidateIR`, and `LayoutIR`.
-Super-dark dispatch and cyclic/dark layout stay as rejected candidates unless
-the layout verifier proves both halves: FA..FF entry/continuation cells and a
-dispatch register containing a proved FA..FF selector.
+For compiled programs the report marks selected tactics, not source switches:
+indirect register flow, code/data overlay, X2/`ВП`, display-byte packing, and
+raw machine facts appear only when a real IR lowering or optimizer pass selected
+them. Super-dark dispatch and cyclic/dark layout stay as rejected candidates
+unless the layout verifier proves both halves: FA..FF entry/continuation cells
+and a dispatch register containing a proved FA..FF selector.
 
 Documented capabilities such as `branch-removal`, `arithmetic-if-*`,
 `zero-condition-test`, `dispatch-compare-chain`, and `fl-decrement-branch` are
-reported `active` not only when their literal rewrite fired, but also when the
-GameIntent backend picked a semantic equivalent. `К max` zero-through counts as
-the extrema selection, `К∨` and fractional indirect addressing count as the
-zero/digit test, `r0-indirect-counter` counts as the decrement-branch loop, and
-hex-mantissa arithmetic counts as the masked conditional update. This keeps the
-capability report honest about the optimizer's effective behavior across both
-backends.
+reported `active` when their literal rewrite fires. This keeps the capability
+report tied to proof-backed optimizer behavior rather than to template paths.
 
-## Current Generic Intent Nodes
+## Current Generic Source Nodes
 
-The parser keeps these high-level statements as typed intent:
+The parser keeps these high-level statements as typed source nodes:
 
 - `read name`
 - `name = expr`
@@ -568,8 +545,8 @@ The parser keeps these high-level statements as typed intent:
 - contracted `raw { ... }` blocks for explicit MK-61 command sequences
 
 Assignments, updates, comparison predicates, rule parameters, and rule calls
-lower through the generic backend. Query expressions are captured as spatial
-query intent before code generation. A `turn` is a real loop, and `rule` blocks
+lower through the generic compiler path. Query expressions are captured as
+spatial query nodes before code generation. A `turn` is a real loop, and `rule` blocks
 compile as `ПП`/`В/О` procedures, direct terminal jumps, or inline code depending
 on the compiler's cost model and termination analysis. Calls must pass exactly
 the parameters declared by the rule.
@@ -654,7 +631,8 @@ challenge tile as monster_code {
 
 The construct is semantic sugar only. It does not request a particular MK-61
 layout. The optimizer may still inline it, share tails, branch-remove the
-success/failure effects, or route it through a GameIntent/EffectIR lowering.
+success/failure effects, or route it through an explicit future semantic
+lowerer that is proved from the source rules.
 
 Current scalar lowerings are still deliberately small and auditable:
 
@@ -720,36 +698,32 @@ candidates:
   preceding op is `X->П r`). This is what shrinks `human.mkpro` 35→28 and
   `tiny-game.mkpro` 30→26 without any source edits.
 
-The spatial/counter backend selects X2 display-byte scheduling, fractional-R0
-sentinels, and branch-removal arithmetic from the tactic registry automatically
-when the IR proves the required liveness, observability, and emulator facts.
-Super-dark FA..FF dispatch and dark/cyclic layout are stricter: the verifier
-requires a marked `К БП R` dispatcher, one-command entries at `48`..`53`,
-continuations at `01`..`06`, and a proved FA..FF selector value in the dispatch
-register. Without that, the candidate remains rejected in the report. Raw `5F`
-display transforms remain modeled as machine capabilities and are only legal
-when display semantics explicitly permit that raw display state.
+Layout-sensitive tactics such as X2 display-byte scheduling, fractional-R0
+sentinels, branch-removal arithmetic, super-dark FA..FF dispatch, dark/cyclic
+layout, and raw `5F` display transforms are available only as proved optimizer
+candidates. A real lowerer must first emit IR from the source semantics; the
+optimizer may then apply a tactic when the IR proves the required liveness,
+observability, address, and emulator facts. Without that proof, the candidate
+remains rejected in the report.
 
 ## Unified IR Pipeline
 
-Since the unified IR refactor, every program — both the regular intent
-backend and the GameIntent layout backend — flows through a single typed
-intermediate representation (`IrOp[]`) before final cell resolution. The IR captures
+Since the unified IR refactor, every compiled program flows through a single
+typed intermediate representation (`IrOp[]`) before final cell resolution. The IR captures
 semantic kinds (`store`, `recall`, `jump`, `cjump`, `call`, `loop`, `stop`,
 `return`, `plain` …) rather than raw opcodes, so passes no longer guess
 behavior from opcode ranges.
 
 `lowerIrToMachine` and `raiseMachineToIr` round-trip `MachineItem[]`
 losslessly; `raiseLayoutToIr` and `lowerIrToLayout` do the same for
-`LayoutIrCell[]`. Both round trips are property-tested across the 16 examples,
-so the pipeline is byte-identical on every checkpoint.
+`LayoutIrCell[]`. The supported example set is property-tested through the
+machine IR path, while layout IR is tested independently as a data structure.
 
 The pass driver in `src/core/passes/` runs the registered passes to a fixed
 point (with a bounded iteration cap) and aggregates their `applied` counts
-into the optimizer report. Passes that would move already-laid-out cells
-(anything that changes cell count or label addresses) are filtered out when
-the GameIntent backend invokes the driver, so the layout's pinned addresses,
-dark-entries, and overlays are preserved.
+into the optimizer report. Passes that depend on fixed addresses or observable
+display state must prove those constraints from the IR before they can rewrite
+the program.
 
 The pipeline currently contains:
 

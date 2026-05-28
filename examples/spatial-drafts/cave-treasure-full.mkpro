@@ -28,8 +28,8 @@ program CaveTreasure {
   }
 
   world cave {
-    // The world block says what the cave means, not how to store it. The backend
-    // is free to use packed mantissas, overlays, or a future layout.
+    // The world block says what the cave means, not how to store it. A real
+    // lowerer may choose packed mantissas, overlays, or a future layout.
     position pos {
       encoding packed_decimal_zero_run
     }

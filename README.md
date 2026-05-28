@@ -96,22 +96,16 @@ allows them. Super-dark FA..FF dispatch is modeled, but it is selected only
 when the layout proves the entry/continuation cells and the dispatch register's
 FA..FF selector value.
 
-All `examples/*.mkpro` programs are written in the human DSL. They cover:
+All top-level `examples/*.mkpro` programs are runnable MK-Pro programs. They cover:
 
 - `examples/basic.mkpro`: minimal input/output and arithmetic.
 - `examples/tiny-game.mkpro`: tiny menu-style loop.
 - `examples/lunar.mkpro`: numeric landing game with counters and touchdown rules.
 - `examples/human.mkpro`: small counter game used as syntax smoke test.
-- `examples/cave-sketch.mkpro`: compact cave sketch in game intent form.
-- `examples/cave-highlevel-baseline.mkpro`: readable Cave Treasure baseline.
-- `examples/cave-treasure.mkpro`: full high-level compactness reference.
-- `examples/cave-treasure-full.mkpro`: full reference metadata variant.
-- `examples/grid-rescue.mkpro`: synthetic grid/cell-set stress sketch.
-- `examples/resource-raid.mkpro`: synthetic counter/dispatch stress sketch.
-- `examples/alaram.mkpro`: commented Lord_BSS cockpit interceptor port.
-- `examples/dungeon.mkpro`: commented Lord_BSS Dungeon port.
-- `examples/giants-country.mkpro`: commented high-level game port.
-- `examples/sea-battle.mkpro`: turn-based fleet duel port from the games archive.
+
+`examples/spatial-drafts/*.mkpro` contains source-level board/world game ports.
+They are intentionally not runnable examples yet: the compiler rejects them
+until their spatial rules lower from the AST into ordinary IR.
 
 ## Documentation
 
@@ -138,8 +132,7 @@ program reports, and the headless emulator loader smoke test.
 - Peephole optimization for redundant `X->П r ; П->X r` pairs at synthetic
   boundaries in compiler-generated lowering.
 - MK-Pro lowers high-level `program`, `state`, `screen`, `read`, `match`,
-  `challenge`, counter updates, and rule calls through an
-  intent/effect/layout report.
+  `challenge`, counter updates, and rule calls through ordinary compiler IR.
 - JSON reports include IR stats, layout cell roles, candidate lowerings, and
   a budget summary.
 - JSON/explain reports include an automatic optimizer capability matrix:

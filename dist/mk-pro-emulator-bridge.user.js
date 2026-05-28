@@ -351,437 +351,6 @@ var MKProEmulatorBundle = (() => {
     return name.trim().replaceAll("\u2190\u2192", "<->").replaceAll("\u2192", "->").replaceAll("\u2190", "<-").replace(/\^\{([^}]+)\}/gu, "^$1").replaceAll("\u03C0", "pi").replaceAll("\u221A", "sqrt").replaceAll("\u21BB", "reverse").replaceAll("\u2260", "!=").replaceAll("\u2265", ">=").replaceAll("\u2264", "<=").replaceAll("\xD7", "*").replaceAll("\xF7", "/").replaceAll("\u2212", "-").replaceAll("\u2223", "|").replaceAll("\u0425", "X").replaceAll("\u0445", "x").replaceAll("K", "\u041A").replaceAll("k", "\u043A").replace(/^([FfКк])(?=\S)/u, "$1 ").replace(/\s+/g, " ").toLowerCase();
   }
 
-  // src/core/ir.ts
-  var REGISTERS_BY_INDEX = [
-    "0",
-    "1",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7",
-    "8",
-    "9",
-    "a",
-    "b",
-    "c",
-    "d",
-    "e"
-  ];
-  var DIRECT_STORE_BASE = 64;
-  var DIRECT_RECALL_BASE = 96;
-  var INDIRECT_JUMP_BASE = 128;
-  var INDIRECT_CALL_BASE = 160;
-  var INDIRECT_STORE_BASE = 176;
-  var INDIRECT_RECALL_BASE = 208;
-  var INDIRECT_COND_BASES = {
-    112: "!=0",
-    144: ">=0",
-    192: "<0",
-    224: "==0"
-  };
-  var COND_OPCODES = {
-    87: "!=0",
-    89: ">=0",
-    92: "<0",
-    94: "==0"
-  };
-  var LOOP_OPCODES = {
-    93: "L0",
-    91: "L1",
-    88: "L2",
-    90: "L3"
-  };
-  var TAKES_ADDRESS = /* @__PURE__ */ new Set([
-    81,
-    83,
-    87,
-    88,
-    89,
-    90,
-    91,
-    92,
-    93,
-    94
-  ]);
-  function metaFromOp(op) {
-    const meta = { mnemonic: op.mnemonic };
-    if (op.comment !== void 0) meta.comment = op.comment;
-    if (op.sourceLine !== void 0) meta.sourceLine = op.sourceLine;
-    if (op.raw === true) meta.raw = true;
-    return meta;
-  }
-  function targetMetaFromAddress(item) {
-    const meta = {};
-    if (item.comment !== void 0) meta.comment = item.comment;
-    if (item.sourceLine !== void 0) meta.sourceLine = item.sourceLine;
-    if (item.formalOpcode !== void 0) meta.formalOpcode = item.formalOpcode;
-    return meta;
-  }
-  function isInRange(opcode, base) {
-    return opcode >= base && opcode <= base + 14;
-  }
-  function registerForOffset(opcode, base) {
-    return REGISTERS_BY_INDEX[opcode - base];
-  }
-  function stopSemanticFromComment(comment) {
-    if (comment === void 0) return "unknown";
-    const lower = comment.toLowerCase();
-    if (lower.startsWith("halt")) return "halt";
-    if (lower.startsWith("pause")) return "pause";
-    if (lower.startsWith("show")) return "show";
-    if (lower.startsWith("ask")) return "ask";
-    if (lower.startsWith("input") || lower.startsWith("read")) return "input";
-    if (lower.startsWith("implicit final stop")) return "halt";
-    if (lower.includes("implicit stop")) return "halt";
-    return "unknown";
-  }
-  function raiseMachineToIr(items) {
-    const result = [];
-    for (let i = 0; i < items.length; i += 1) {
-      const item = items[i];
-      if (item.kind === "label") {
-        result.push({ kind: "label", name: item.name });
-        continue;
-      }
-      if (item.kind === "address") {
-        result.push({
-          kind: "orphan-address",
-          target: item.target,
-          meta: targetMetaFromAddress(item)
-        });
-        continue;
-      }
-      const meta = metaFromOp(item);
-      const opcode = item.opcode;
-      if (TAKES_ADDRESS.has(opcode)) {
-        const next = items[i + 1];
-        if (next?.kind !== "address") {
-          result.push({ kind: "plain", opcode, meta });
-          continue;
-        }
-        const target = next.target;
-        const tmeta = targetMetaFromAddress(next);
-        i += 1;
-        if (opcode === 81) {
-          result.push({ kind: "jump", target, opcode, meta, targetMeta: tmeta });
-          continue;
-        }
-        if (opcode === 83) {
-          result.push({ kind: "call", target, opcode, meta, targetMeta: tmeta });
-          continue;
-        }
-        const condition = COND_OPCODES[opcode];
-        if (condition !== void 0) {
-          result.push({ kind: "cjump", condition, target, opcode, meta, targetMeta: tmeta });
-          continue;
-        }
-        const loop = LOOP_OPCODES[opcode];
-        if (loop !== void 0) {
-          result.push({ kind: "loop", counter: loop, target, opcode, meta, targetMeta: tmeta });
-          continue;
-        }
-        result.push({ kind: "plain", opcode, meta });
-        continue;
-      }
-      if (isInRange(opcode, DIRECT_STORE_BASE)) {
-        result.push({
-          kind: "store",
-          register: registerForOffset(opcode, DIRECT_STORE_BASE),
-          opcode,
-          meta
-        });
-        continue;
-      }
-      if (isInRange(opcode, DIRECT_RECALL_BASE)) {
-        result.push({
-          kind: "recall",
-          register: registerForOffset(opcode, DIRECT_RECALL_BASE),
-          opcode,
-          meta
-        });
-        continue;
-      }
-      if (isInRange(opcode, INDIRECT_STORE_BASE)) {
-        result.push({
-          kind: "indirect-store",
-          register: registerForOffset(opcode, INDIRECT_STORE_BASE),
-          opcode,
-          meta
-        });
-        continue;
-      }
-      if (isInRange(opcode, INDIRECT_RECALL_BASE)) {
-        result.push({
-          kind: "indirect-recall",
-          register: registerForOffset(opcode, INDIRECT_RECALL_BASE),
-          opcode,
-          meta
-        });
-        continue;
-      }
-      if (isInRange(opcode, INDIRECT_JUMP_BASE)) {
-        result.push({
-          kind: "indirect-jump",
-          register: registerForOffset(opcode, INDIRECT_JUMP_BASE),
-          opcode,
-          meta
-        });
-        continue;
-      }
-      if (isInRange(opcode, INDIRECT_CALL_BASE)) {
-        result.push({
-          kind: "indirect-call",
-          register: registerForOffset(opcode, INDIRECT_CALL_BASE),
-          opcode,
-          meta
-        });
-        continue;
-      }
-      const indirectCondBase = Object.keys(INDIRECT_COND_BASES).map((value) => Number(value)).find((base) => isInRange(opcode, base));
-      if (indirectCondBase !== void 0) {
-        result.push({
-          kind: "indirect-cjump",
-          condition: INDIRECT_COND_BASES[indirectCondBase],
-          register: registerForOffset(opcode, indirectCondBase),
-          opcode,
-          meta
-        });
-        continue;
-      }
-      if (opcode === 82) {
-        result.push({ kind: "return", opcode, meta });
-        continue;
-      }
-      if (opcode === 80) {
-        result.push({
-          kind: "stop",
-          opcode,
-          semantic: stopSemanticFromComment(item.comment),
-          meta
-        });
-        continue;
-      }
-      result.push({ kind: "plain", opcode, meta });
-    }
-    return result;
-  }
-  function machineOpFromMeta(opcode, meta) {
-    const op = {
-      kind: "op",
-      opcode,
-      mnemonic: meta.mnemonic
-    };
-    if (meta.comment !== void 0) op.comment = meta.comment;
-    if (meta.sourceLine !== void 0) op.sourceLine = meta.sourceLine;
-    if (meta.raw === true) op.raw = true;
-    return op;
-  }
-  function machineAddressFromMeta(target, meta) {
-    const ref = { kind: "address", target };
-    if (meta.comment !== void 0) ref.comment = meta.comment;
-    if (meta.sourceLine !== void 0) ref.sourceLine = meta.sourceLine;
-    if (meta.formalOpcode !== void 0) ref.formalOpcode = meta.formalOpcode;
-    return ref;
-  }
-  function lowerIrToMachine(ops) {
-    const result = [];
-    for (const op of ops) {
-      switch (op.kind) {
-        case "label":
-          result.push({ kind: "label", name: op.name });
-          break;
-        case "orphan-address":
-          result.push(machineAddressFromMeta(op.target, op.meta));
-          break;
-        case "store":
-        case "recall":
-        case "indirect-store":
-        case "indirect-recall":
-        case "indirect-jump":
-        case "indirect-call":
-        case "indirect-cjump":
-        case "return":
-        case "stop":
-        case "plain":
-          result.push(machineOpFromMeta(op.opcode, op.meta));
-          break;
-        case "jump":
-        case "cjump":
-        case "call":
-        case "loop":
-          result.push(machineOpFromMeta(op.opcode, op.meta));
-          result.push(machineAddressFromMeta(op.target, op.targetMeta));
-          break;
-      }
-    }
-    return result;
-  }
-  function raiseLayoutToIr(cells) {
-    const result = [];
-    for (let i = 0; i < cells.length; i += 1) {
-      const cell = cells[i];
-      const info2 = getOpcode(cell.opcode);
-      const meta = { mnemonic: info2.name };
-      if (cell.roles.length > 0) meta.roles = [...cell.roles];
-      if (cell.tactic !== void 0) meta.tactic = cell.tactic;
-      if (TAKES_ADDRESS.has(cell.opcode)) {
-        const next = cells[i + 1];
-        if (next === void 0 || !next.roles.includes("address")) {
-          result.push({ kind: "plain", opcode: cell.opcode, meta });
-          continue;
-        }
-        const target = next.opcode;
-        const targetMeta = {};
-        if (next.tactic !== void 0 && next.tactic !== "") {
-          targetMeta.comment = next.tactic;
-        }
-        if (next.roles.length > 0) targetMeta.roles = [...next.roles];
-        i += 1;
-        if (cell.opcode === 81) {
-          result.push({ kind: "jump", target, opcode: cell.opcode, meta, targetMeta });
-          continue;
-        }
-        if (cell.opcode === 83) {
-          result.push({ kind: "call", target, opcode: cell.opcode, meta, targetMeta });
-          continue;
-        }
-        const condition = COND_OPCODES[cell.opcode];
-        if (condition !== void 0) {
-          result.push({ kind: "cjump", condition, target, opcode: cell.opcode, meta, targetMeta });
-          continue;
-        }
-        const loop = LOOP_OPCODES[cell.opcode];
-        if (loop !== void 0) {
-          result.push({ kind: "loop", counter: loop, target, opcode: cell.opcode, meta, targetMeta });
-          continue;
-        }
-        result.push({ kind: "plain", opcode: cell.opcode, meta });
-        continue;
-      }
-      if (isInRange(cell.opcode, DIRECT_STORE_BASE)) {
-        result.push({
-          kind: "store",
-          register: registerForOffset(cell.opcode, DIRECT_STORE_BASE),
-          opcode: cell.opcode,
-          meta
-        });
-        continue;
-      }
-      if (isInRange(cell.opcode, DIRECT_RECALL_BASE)) {
-        result.push({
-          kind: "recall",
-          register: registerForOffset(cell.opcode, DIRECT_RECALL_BASE),
-          opcode: cell.opcode,
-          meta
-        });
-        continue;
-      }
-      if (isInRange(cell.opcode, INDIRECT_STORE_BASE)) {
-        result.push({
-          kind: "indirect-store",
-          register: registerForOffset(cell.opcode, INDIRECT_STORE_BASE),
-          opcode: cell.opcode,
-          meta
-        });
-        continue;
-      }
-      if (isInRange(cell.opcode, INDIRECT_RECALL_BASE)) {
-        result.push({
-          kind: "indirect-recall",
-          register: registerForOffset(cell.opcode, INDIRECT_RECALL_BASE),
-          opcode: cell.opcode,
-          meta
-        });
-        continue;
-      }
-      if (isInRange(cell.opcode, INDIRECT_JUMP_BASE)) {
-        result.push({
-          kind: "indirect-jump",
-          register: registerForOffset(cell.opcode, INDIRECT_JUMP_BASE),
-          opcode: cell.opcode,
-          meta
-        });
-        continue;
-      }
-      if (isInRange(cell.opcode, INDIRECT_CALL_BASE)) {
-        result.push({
-          kind: "indirect-call",
-          register: registerForOffset(cell.opcode, INDIRECT_CALL_BASE),
-          opcode: cell.opcode,
-          meta
-        });
-        continue;
-      }
-      const indirectCondBase = Object.keys(INDIRECT_COND_BASES).map((value) => Number(value)).find((base) => isInRange(cell.opcode, base));
-      if (indirectCondBase !== void 0) {
-        result.push({
-          kind: "indirect-cjump",
-          condition: INDIRECT_COND_BASES[indirectCondBase],
-          register: registerForOffset(cell.opcode, indirectCondBase),
-          opcode: cell.opcode,
-          meta
-        });
-        continue;
-      }
-      if (cell.opcode === 82) {
-        result.push({ kind: "return", opcode: cell.opcode, meta });
-        continue;
-      }
-      if (cell.opcode === 80) {
-        result.push({
-          kind: "stop",
-          opcode: cell.opcode,
-          semantic: stopSemanticFromComment(cell.tactic),
-          meta
-        });
-        continue;
-      }
-      result.push({ kind: "plain", opcode: cell.opcode, meta });
-    }
-    return result;
-  }
-  function lowerIrToLayout(ops, options = {}) {
-    const cells = [];
-    const addressOfLabel = /* @__PURE__ */ new Map();
-    let address = 0;
-    const fallbackTactic = options.defaultTactic ?? "";
-    for (const op of ops) {
-      if (op.kind === "label") {
-        addressOfLabel.set(op.name, address);
-        continue;
-      }
-      if (op.kind === "orphan-address") {
-        cells.push({
-          address,
-          opcode: op.meta.formalOpcode ?? (typeof op.target === "number" ? op.target : 0),
-          roles: op.meta.roles ? [...op.meta.roles] : ["address"],
-          tactic: op.meta.comment ?? fallbackTactic
-        });
-        address += 1;
-        continue;
-      }
-      const opcode = op.opcode;
-      const tactic = op.meta.tactic ?? op.meta.comment ?? fallbackTactic;
-      const roles = op.meta.roles ? [...op.meta.roles] : ["exec"];
-      cells.push({ address, opcode, roles, tactic });
-      address += 1;
-      if (op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") {
-        const targetValue = typeof op.target === "number" ? op.target : addressOfLabel.get(op.target) ?? 0;
-        const targetRoles = op.targetMeta.roles ? [...op.targetMeta.roles] : ["address"];
-        cells.push({
-          address,
-          opcode: op.targetMeta.formalOpcode ?? targetValue,
-          roles: targetRoles,
-          tactic: op.targetMeta.comment ?? tactic
-        });
-        address += 1;
-      }
-    }
-    return { cells, addressOfLabel };
-  }
-
   // src/core/parser.ts
   var V2_RESERVED_RULE_NAMES = /* @__PURE__ */ new Set([
     "challenge",
@@ -2508,6 +2077,274 @@ var MKProEmulatorBundle = (() => {
       if (!quoted && char === "/" && text[index + 1] === "/") return text.slice(0, index);
     }
     return text;
+  }
+
+  // src/core/ir.ts
+  var REGISTERS_BY_INDEX = [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "a",
+    "b",
+    "c",
+    "d",
+    "e"
+  ];
+  var DIRECT_STORE_BASE = 64;
+  var DIRECT_RECALL_BASE = 96;
+  var INDIRECT_JUMP_BASE = 128;
+  var INDIRECT_CALL_BASE = 160;
+  var INDIRECT_STORE_BASE = 176;
+  var INDIRECT_RECALL_BASE = 208;
+  var INDIRECT_COND_BASES = {
+    112: "!=0",
+    144: ">=0",
+    192: "<0",
+    224: "==0"
+  };
+  var COND_OPCODES = {
+    87: "!=0",
+    89: ">=0",
+    92: "<0",
+    94: "==0"
+  };
+  var LOOP_OPCODES = {
+    93: "L0",
+    91: "L1",
+    88: "L2",
+    90: "L3"
+  };
+  var TAKES_ADDRESS = /* @__PURE__ */ new Set([
+    81,
+    83,
+    87,
+    88,
+    89,
+    90,
+    91,
+    92,
+    93,
+    94
+  ]);
+  function metaFromOp(op) {
+    const meta = { mnemonic: op.mnemonic };
+    if (op.comment !== void 0) meta.comment = op.comment;
+    if (op.sourceLine !== void 0) meta.sourceLine = op.sourceLine;
+    if (op.raw === true) meta.raw = true;
+    return meta;
+  }
+  function targetMetaFromAddress(item) {
+    const meta = {};
+    if (item.comment !== void 0) meta.comment = item.comment;
+    if (item.sourceLine !== void 0) meta.sourceLine = item.sourceLine;
+    if (item.formalOpcode !== void 0) meta.formalOpcode = item.formalOpcode;
+    return meta;
+  }
+  function isInRange(opcode, base) {
+    return opcode >= base && opcode <= base + 14;
+  }
+  function registerForOffset(opcode, base) {
+    return REGISTERS_BY_INDEX[opcode - base];
+  }
+  function stopSemanticFromComment(comment) {
+    if (comment === void 0) return "unknown";
+    const lower = comment.toLowerCase();
+    if (lower.startsWith("halt")) return "halt";
+    if (lower.startsWith("pause")) return "pause";
+    if (lower.startsWith("show")) return "show";
+    if (lower.startsWith("ask")) return "ask";
+    if (lower.startsWith("input") || lower.startsWith("read")) return "input";
+    if (lower.startsWith("implicit final stop")) return "halt";
+    if (lower.includes("implicit stop")) return "halt";
+    return "unknown";
+  }
+  function raiseMachineToIr(items) {
+    const result = [];
+    for (let i = 0; i < items.length; i += 1) {
+      const item = items[i];
+      if (item.kind === "label") {
+        result.push({ kind: "label", name: item.name });
+        continue;
+      }
+      if (item.kind === "address") {
+        result.push({
+          kind: "orphan-address",
+          target: item.target,
+          meta: targetMetaFromAddress(item)
+        });
+        continue;
+      }
+      const meta = metaFromOp(item);
+      const opcode = item.opcode;
+      if (TAKES_ADDRESS.has(opcode)) {
+        const next = items[i + 1];
+        if (next?.kind !== "address") {
+          result.push({ kind: "plain", opcode, meta });
+          continue;
+        }
+        const target = next.target;
+        const tmeta = targetMetaFromAddress(next);
+        i += 1;
+        if (opcode === 81) {
+          result.push({ kind: "jump", target, opcode, meta, targetMeta: tmeta });
+          continue;
+        }
+        if (opcode === 83) {
+          result.push({ kind: "call", target, opcode, meta, targetMeta: tmeta });
+          continue;
+        }
+        const condition = COND_OPCODES[opcode];
+        if (condition !== void 0) {
+          result.push({ kind: "cjump", condition, target, opcode, meta, targetMeta: tmeta });
+          continue;
+        }
+        const loop = LOOP_OPCODES[opcode];
+        if (loop !== void 0) {
+          result.push({ kind: "loop", counter: loop, target, opcode, meta, targetMeta: tmeta });
+          continue;
+        }
+        result.push({ kind: "plain", opcode, meta });
+        continue;
+      }
+      if (isInRange(opcode, DIRECT_STORE_BASE)) {
+        result.push({
+          kind: "store",
+          register: registerForOffset(opcode, DIRECT_STORE_BASE),
+          opcode,
+          meta
+        });
+        continue;
+      }
+      if (isInRange(opcode, DIRECT_RECALL_BASE)) {
+        result.push({
+          kind: "recall",
+          register: registerForOffset(opcode, DIRECT_RECALL_BASE),
+          opcode,
+          meta
+        });
+        continue;
+      }
+      if (isInRange(opcode, INDIRECT_STORE_BASE)) {
+        result.push({
+          kind: "indirect-store",
+          register: registerForOffset(opcode, INDIRECT_STORE_BASE),
+          opcode,
+          meta
+        });
+        continue;
+      }
+      if (isInRange(opcode, INDIRECT_RECALL_BASE)) {
+        result.push({
+          kind: "indirect-recall",
+          register: registerForOffset(opcode, INDIRECT_RECALL_BASE),
+          opcode,
+          meta
+        });
+        continue;
+      }
+      if (isInRange(opcode, INDIRECT_JUMP_BASE)) {
+        result.push({
+          kind: "indirect-jump",
+          register: registerForOffset(opcode, INDIRECT_JUMP_BASE),
+          opcode,
+          meta
+        });
+        continue;
+      }
+      if (isInRange(opcode, INDIRECT_CALL_BASE)) {
+        result.push({
+          kind: "indirect-call",
+          register: registerForOffset(opcode, INDIRECT_CALL_BASE),
+          opcode,
+          meta
+        });
+        continue;
+      }
+      const indirectCondBase = Object.keys(INDIRECT_COND_BASES).map((value) => Number(value)).find((base) => isInRange(opcode, base));
+      if (indirectCondBase !== void 0) {
+        result.push({
+          kind: "indirect-cjump",
+          condition: INDIRECT_COND_BASES[indirectCondBase],
+          register: registerForOffset(opcode, indirectCondBase),
+          opcode,
+          meta
+        });
+        continue;
+      }
+      if (opcode === 82) {
+        result.push({ kind: "return", opcode, meta });
+        continue;
+      }
+      if (opcode === 80) {
+        result.push({
+          kind: "stop",
+          opcode,
+          semantic: stopSemanticFromComment(item.comment),
+          meta
+        });
+        continue;
+      }
+      result.push({ kind: "plain", opcode, meta });
+    }
+    return result;
+  }
+  function machineOpFromMeta(opcode, meta) {
+    const op = {
+      kind: "op",
+      opcode,
+      mnemonic: meta.mnemonic
+    };
+    if (meta.comment !== void 0) op.comment = meta.comment;
+    if (meta.sourceLine !== void 0) op.sourceLine = meta.sourceLine;
+    if (meta.raw === true) op.raw = true;
+    return op;
+  }
+  function machineAddressFromMeta(target, meta) {
+    const ref = { kind: "address", target };
+    if (meta.comment !== void 0) ref.comment = meta.comment;
+    if (meta.sourceLine !== void 0) ref.sourceLine = meta.sourceLine;
+    if (meta.formalOpcode !== void 0) ref.formalOpcode = meta.formalOpcode;
+    return ref;
+  }
+  function lowerIrToMachine(ops) {
+    const result = [];
+    for (const op of ops) {
+      switch (op.kind) {
+        case "label":
+          result.push({ kind: "label", name: op.name });
+          break;
+        case "orphan-address":
+          result.push(machineAddressFromMeta(op.target, op.meta));
+          break;
+        case "store":
+        case "recall":
+        case "indirect-store":
+        case "indirect-recall":
+        case "indirect-jump":
+        case "indirect-call":
+        case "indirect-cjump":
+        case "return":
+        case "stop":
+        case "plain":
+          result.push(machineOpFromMeta(op.opcode, op.meta));
+          break;
+        case "jump":
+        case "cjump":
+        case "call":
+        case "loop":
+          result.push(machineOpFromMeta(op.opcode, op.meta));
+          result.push(machineAddressFromMeta(op.target, op.targetMeta));
+          break;
+      }
+    }
+    return result;
   }
 
   // src/core/passes/helpers.ts
@@ -4833,13 +4670,6 @@ var MKProEmulatorBundle = (() => {
     delivery: "hex",
     budget: 105
   };
-  var SIZE_BENCHMARK_REFERENCES = /* @__PURE__ */ new Set([
-    "anvarov_fox_hunt_100",
-    "anvarov_minesweeper_9x9",
-    "anvarov_treasure_hunter_2",
-    "anvarov_dangerous_loading",
-    "anvarov_sea_battle"
-  ]);
   var REGISTER_ORDER = [
     "0",
     "1",
@@ -4875,8 +4705,6 @@ var MKProEmulatorBundle = (() => {
     const optimizations = [];
     const warnings = [];
     const candidates = [];
-    const gameIntentProgram = tryCompileGameIntentProgram(ast, opts, machineProfile);
-    if (gameIntentProgram) return gameIntentProgram;
     validateSemanticDomains(ast, diagnostics);
     validateV2Intent(ast, diagnostics);
     if (diagnostics.some((diagnostic) => diagnostic.level === "error")) {
@@ -5060,1060 +4888,6 @@ var MKProEmulatorBundle = (() => {
     if (extended) return 100 + Number(extended[1]);
     throw new Error(`Invalid MK-61 reference address '${text}'.`);
   }
-  function emitUniversalSpatialResourceProgram(intent, candidates) {
-    const selected = new Set(candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
-    const segments = [
-      {
-        name: "display-input-entry",
-        opcodes: [80, 110, 1, 17, 92, 185, 82]
-      },
-      {
-        name: selected.has("indirect-register-flow") ? "indirect-dispatch-frontier" : "compare-chain-frontier",
-        opcodes: [78, 20, 106, 20, 2, 19, 87, 99]
-      },
-      {
-        name: "x2-vp-stack-schedule",
-        opcodes: [32, 16, 75, 12, 50, 94, 234]
-      },
-      {
-        name: "packed-coordinate-update",
-        opcodes: [102, 106, 53, 219, 18, 89, 119]
-      },
-      {
-        name: "branch-removal-arithmetic-test",
-        opcodes: [18, 56, 53, 233, 10, 105, 17]
-      },
-      {
-        name: "bitset-mask-clear-or-probe",
-        opcodes: [106, 52, 16, 75, 219, 55, 53, 20, 75, 54]
-      },
-      {
-        name: "shared-movement-resource-tail",
-        opcodes: [119, 74, 78, 0, 76, 64, 99, 6, 77]
-      },
-      {
-        name: "generated-mask-initializer",
-        opcodes: [59, 21, 15, 36, 56, 176, 96, 152]
-      },
-      {
-        name: "fractional-r0-counter-loop",
-        opcodes: [109, 2, 17, 151, 77, 107, 4, 17, 201]
-      },
-      {
-        name: selected.has("super-dark-dispatch") ? "super-dark-mid-tail-dispatch" : "ordinary-mid-tail-dispatch",
-        opcodes: [107, 219, 56, 187, 137, 96, 106, 58, 55, 64]
-      },
-      {
-        name: "hex-mantissa-cache-resource",
-        opcodes: [17, 119, 101, 106, 16, 58, 53, 59, 12, 75]
-      },
-      {
-        name: "fight-or-terminal-resource-tail",
-        opcodes: [219, 107, 1, 17, 34, 16, 80]
-      },
-      {
-        name: "cyclic-wrap-finalizer",
-        opcodes: [28, 1, 16, 18, 52, 187]
-      }
-    ];
-    const layout = [];
-    for (const segment of segments) {
-      for (const opcode of segment.opcodes) {
-        layout.push({
-          address: layout.length,
-          opcode,
-          roles: ["exec"],
-          tactic: refineTacticForAddress(layout.length, segment.name, intent)
-        });
-      }
-    }
-    return layout;
-  }
-  var UNIVERSAL_SPATIAL_RESOURCE_REGISTERS = {
-    collections: "0",
-    mask_plane1: "1",
-    mask_plane2: "2",
-    mask_plane3: "3",
-    two: "4",
-    ten: "5",
-    hex_scale: "6",
-    dispatch_a: "7",
-    dispatch_b: "8",
-    dispatch_c: "9",
-    pos: "a",
-    scratch: "b",
-    treasure: "c",
-    dynamite: "d",
-    food: "e"
-  };
-  function roundTripLayoutThroughIr(layout) {
-    const ir = raiseLayoutToIr(layout);
-    const lowered = lowerIrToLayout(ir);
-    return lowered.cells;
-  }
-  function tryCompileGameIntentProgram(ast, options, machineProfile) {
-    const intent = buildGameIntent(ast);
-    if (!intent) return void 0;
-    const effectIr = buildGameEffectIr(intent);
-    const candidateIr = buildCandidateIr(intent);
-    const backendCandidates = buildGameBackendCandidates(intent, candidateIr);
-    const selectedBackend = selectGameBackendCandidate(backendCandidates);
-    const rawLayoutIr = selectedBackend.layout;
-    const layoutIr = roundTripLayoutThroughIr(rawLayoutIr);
-    const steps = layoutIr.map(
-      (cell) => buildResolvedStep(cell.address, cell.opcode, getOpcode(cell.opcode).name, gameTacticComment(cell))
-    );
-    const items = steps.map((step) => {
-      const item = {
-        kind: "op",
-        opcode: step.opcode,
-        mnemonic: step.mnemonic
-      };
-      if (step.comment !== void 0) item.comment = step.comment;
-      return item;
-    });
-    const referenceResult = ast.reference === void 0 ? void 0 : buildReferenceReport(ast.reference, steps.length, options.budget);
-    if (ast.reference !== void 0 && SIZE_BENCHMARK_REFERENCES.has(ast.reference) && referenceResult?.report.referenceSpan !== void 0 && steps.length >= referenceResult.report.referenceSpan) {
-      throw new CompileError([
-        {
-          level: "error",
-          code: "REFERENCE_SIZE_NOT_BEATEN",
-          message: `${selectedBackend.variant} emitted ${steps.length} steps for ${ast.reference}; required < ${referenceResult.report.referenceSpan}.`
-        }
-      ]);
-    }
-    const optimizations = buildGameIntentOptimizations(intent, selectedBackend);
-    const candidates = [
-      ...buildGameBackendCandidateReports(backendCandidates, selectedBackend),
-      ...buildGameIntentCandidates(candidateIr, selectedBackend)
-    ];
-    const cellRoles = buildGameIntentCellRoles(layoutIr, selectedBackend.preloads, machineProfile);
-    const warnings = selectedBackend.variant === "universal_spatial_resource" ? ["GameIntent selected the universal spatial/counter tactic pipeline; reference metadata did not affect code generation."] : [`GameIntent selected ${selectedBackend.variant} semantic microkernel; reference metadata did not affect code generation.`];
-    if (referenceResult?.warning !== void 0) warnings.push(referenceResult.warning);
-    const report = {
-      steps: steps.length,
-      budget: options.budget,
-      machine: machineProfile.id,
-      registers: selectedBackend.registers,
-      labels: selectedBackend.labels,
-      optimizations,
-      warnings,
-      delivery: options.delivery,
-      optimizer: buildOptimizerReport(ast, options, optimizations, candidates, cellRoles, machineProfile),
-      preloads: selectedBackend.preloads,
-      ...referenceResult?.report === void 0 ? {} : { reference: referenceResult.report },
-      ir: {
-        lowered: true,
-        v2: ast.v2 !== void 0,
-        intentNodes: intent.stateRoles.length + intent.domains.length + intent.rules.length,
-        effectOps: effectIr.length,
-        layoutCells: steps.length
-      },
-      cellRoles,
-      candidates,
-      budgetReport: buildBudgetReport(steps.length, options.budget, selectedBackend.hotBlocks.map((block) => `${block.name}=${block.estimatedCells}`), 0),
-      machineFeaturesUsed: buildMachineFeaturesUsed(machineProfile, optimizations, cellRoles, candidates),
-      proofs: buildGameIntentProofs(intent, selectedBackend, referenceResult?.report),
-      emulatorFacts: machineProfile.emulatorFacts,
-      rejectedCandidates: candidates.filter((candidate) => !candidate.selected).map((candidate) => ({
-        site: candidate.site,
-        variant: candidate.variant,
-        reason: candidate.reason,
-        steps: candidate.steps
-      })),
-      hotBlocks: selectedBackend.hotBlocks
-    };
-    return { ast, items, steps, report, diagnostics: [] };
-  }
-  function buildGameBackendCandidates(intent, tacticCandidates) {
-    const candidates = [];
-    const shapeCandidate = buildShapeBackendCandidate(intent);
-    if (shapeCandidate !== void 0) candidates.push(shapeCandidate);
-    candidates.push(buildUniversalBackendCandidate(intent, tacticCandidates));
-    return candidates;
-  }
-  function selectGameBackendCandidate(candidates) {
-    return [...candidates].sort((a, b) => a.layout.length - b.layout.length)[0];
-  }
-  function buildUniversalBackendCandidate(intent, tacticCandidates) {
-    const layout = emitUniversalSpatialResourceProgram(intent, tacticCandidates);
-    return {
-      variant: "universal_spatial_resource",
-      layout,
-      registers: UNIVERSAL_SPATIAL_RESOURCE_REGISTERS,
-      labels: {
-        main: "00",
-        setup_tail: "48",
-        resource_action: "63",
-        collection_action: "77",
-        terminal_tail: "99"
-      },
-      preloads: buildGameIntentPreloads(),
-      hotBlocks: [
-        { name: "spatial+barrier-check", estimatedCells: 47 },
-        { name: "setup+mask-generation", estimatedCells: 29 },
-        { name: "collection+event", estimatedCells: 29 }
-      ],
-      reason: "fallback covers the full spatial/counter feature set"
-    };
-  }
-  function buildShapeBackendCandidate(intent) {
-    if (intent.shape === "universal_spatial_resource") return void 0;
-    const required = requiredFeaturesForShape(intent.shape);
-    if (required === void 0 || !required.every((feature) => intent.features.includes(feature))) return void 0;
-    const covered = coveredFeaturesForShape(intent.shape);
-    const unsupported = intent.features.filter((feature) => !covered.includes(feature));
-    if (unsupported.length > 0) return void 0;
-    const segments = kernelSegmentsForShape(intent.shape);
-    return {
-      variant: intent.shape,
-      layout: emitKernelSegments(segments),
-      registers: registersForShape(intent),
-      labels: labelsForKernel(segments),
-      preloads: preloadsForShape(intent.shape),
-      hotBlocks: segments.map((segment) => ({ name: segment.name, estimatedCells: segment.opcodes.length })),
-      reason: `covers ${intent.features.join(", ")} without universal fallback machinery`
-    };
-  }
-  function requiredFeaturesForShape(shape) {
-    switch (shape) {
-      case "board_line_count":
-        return ["board", "bitset", "line_count", "resources"];
-      case "board_neighbor_count":
-        return ["board", "bitset", "neighbor_count", "resources"];
-      case "board_fleet_duel":
-        return ["board", "bitset", "cell_probe", "cell_clear", "random_board_cell", "hit_report", "resources"];
-      case "world_table":
-        return ["movement", "cell_at", "resources"];
-      case "lane_resource":
-        return ["movement", "random_cell", "resources"];
-      case "universal_spatial_resource":
-        return void 0;
-    }
-  }
-  function coveredFeaturesForShape(shape) {
-    switch (shape) {
-      case "board_line_count":
-        return ["bitset", "board", "cell_probe", "cell_clear", "line_count", "resources"];
-      case "board_neighbor_count":
-        return ["bitset", "board", "cell_probe", "neighbor_count", "resources"];
-      case "board_fleet_duel":
-        return ["bitset", "board", "cell_probe", "cell_clear", "hit_report", "random_board_cell", "resources"];
-      case "world_table":
-        return ["bitset", "cell_at", "cell_clear", "movement", "resources"];
-      case "lane_resource":
-        return ["movement", "random_cell", "resources"];
-    }
-  }
-  function emitKernelSegments(segments) {
-    const layout = [];
-    for (const segment of segments) {
-      for (const opcode of segment.opcodes) {
-        layout.push({
-          address: layout.length,
-          opcode,
-          roles: ["exec"],
-          tactic: segment.name
-        });
-      }
-    }
-    return layout;
-  }
-  function labelsForKernel(segments) {
-    let address = 0;
-    const labels = { main: "00" };
-    for (const segment of segments) {
-      labels[segment.name] = formatAddress(address);
-      address += segment.opcodes.length;
-    }
-    labels.terminal_tail = formatAddress(Math.max(0, address - segments.at(-1).opcodes.length));
-    return labels;
-  }
-  function registersForShape(intent) {
-    const registers = {};
-    const order = ["0", "a", "b", "c", "d", "e", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
-    let index = 0;
-    const add = (name) => {
-      if (name === void 0 || registers[name] !== void 0) return;
-      registers[name] = order[index++] ?? "9";
-    };
-    for (const query of intent.queries) {
-      add(query.source);
-      add(query.at);
-      add(query.target);
-    }
-    for (const role of intent.stateRoles) add(role.name);
-    add("scratch");
-    add("dispatch");
-    return registers;
-  }
-  function preloadsForShape(shape) {
-    switch (shape) {
-      case "board_line_count":
-        return [
-          { register: "4", value: "10", countsAgainstProgram: false },
-          { register: "5", value: "0.1", countsAgainstProgram: false }
-        ];
-      case "board_neighbor_count":
-        return [
-          { register: "4", value: "1", countsAgainstProgram: false },
-          { register: "5", value: "10", countsAgainstProgram: false }
-        ];
-      case "board_fleet_duel":
-        return [
-          { register: "4", value: "100", countsAgainstProgram: false },
-          { register: "5", value: "10", countsAgainstProgram: false },
-          { register: "6", value: "1", countsAgainstProgram: false }
-        ];
-      case "world_table":
-        return [
-          { register: "4", value: "7", countsAgainstProgram: false },
-          { register: "5", value: "100", countsAgainstProgram: false },
-          { register: "6", value: "9", countsAgainstProgram: false }
-        ];
-      case "lane_resource":
-        return [
-          { register: "4", value: "1", countsAgainstProgram: false },
-          { register: "5", value: "8", countsAgainstProgram: false }
-        ];
-      case "universal_spatial_resource":
-        return buildGameIntentPreloads();
-    }
-  }
-  function kernelSegmentsForShape(shape) {
-    switch (shape) {
-      case "board_line_count":
-        return [
-          { name: "board-input-probe", opcodes: [80, 64, 106, 52, 53, 75, 107, 20] },
-          { name: "fleet-hit-clear", opcodes: [96, 106, 55, 94, 26, 107, 16, 75, 17, 82, 76, 54] },
-          { name: "line-row-column-count", opcodes: [106, 52, 16, 101, 18, 56, 53, 75, 108, 20, 17, 87, 70, 99] },
-          { name: "line-left-diagonal-count", opcodes: [106, 109, 16, 18, 52, 55, 53, 75, 56, 17, 89, 77] },
-          { name: "line-right-diagonal-count", opcodes: [106, 110, 16, 18, 52, 56, 53, 75, 55, 17, 92, 78] },
-          { name: "bearing-accumulate", opcodes: [107, 108, 16, 109, 16, 110, 16, 75, 101, 82] },
-          { name: "fox-resource-tail", opcodes: [108, 1, 17, 94, 98, 11, 76, 81, 0, 80] },
-          { name: "board-query-dispatch", opcodes: [106, 74, 107, 75, 108, 76, 87, 0, 99, 82, 59, 53] },
-          { name: "line-terminal-finalizer", opcodes: [108, 80, 107, 80, 32, 16, 77, 82, 28, 1, 16, 18, 52, 80] }
-        ];
-      case "board_neighbor_count":
-        return [
-          { name: "mine-input-probe", opcodes: [80, 64, 106, 52, 53, 74, 107, 20] },
-          { name: "mine-hit-test", opcodes: [96, 106, 55, 94, 88, 107, 16, 75, 17, 80, 11, 82] },
-          { name: "neighbor-north-band", opcodes: [106, 1, 17, 52, 55, 53, 76, 106, 16, 52, 55, 53, 77, 108, 109, 16] },
-          { name: "neighbor-south-band", opcodes: [106, 1, 16, 52, 55, 53, 76, 106, 16, 52, 55, 53, 77, 108, 109, 16] },
-          { name: "neighbor-side-count", opcodes: [106, 101, 18, 55, 53, 107, 16, 75, 108, 16, 76, 82] },
-          { name: "clear-cell-resource", opcodes: [109, 1, 17, 77, 94, 94, 99, 107, 80, 82] },
-          { name: "mine-terminal-tail", opcodes: [107, 80, 109, 80, 32, 16, 78, 82, 59, 53] },
-          { name: "neighbor-finalizer", opcodes: [106, 74, 107, 75, 108, 76, 87, 0, 99, 28, 52, 80] }
-        ];
-      case "board_fleet_duel":
-        return [
-          { name: "duel-input-response", opcodes: [80, 64, 106, 20, 107, 17, 94, 100] },
-          { name: "duel-random-board-shot", opcodes: [59, 101, 18, 52, 16, 106, 53, 74, 80, 82] },
-          { name: "duel-display-pack", opcodes: [106, 101, 18, 108, 16, 109, 16, 110, 16, 82] },
-          { name: "duel-negative-hit-report", opcodes: [107, 0, 17, 94, 99, 108, 1, 17, 76, 82] },
-          { name: "duel-own-ship-counter", opcodes: [108, 1, 17, 76, 108, 94, 98, 109, 80, 82] },
-          { name: "duel-player-shot", opcodes: [107, 75, 109, 52, 53, 77, 109, 16, 78, 87, 70, 82] },
-          { name: "duel-fleet-probe-clear", opcodes: [110, 109, 17, 94, 88, 110, 109, 55, 53, 78, 109, 1, 17, 82] },
-          { name: "duel-enemy-ship-counter", opcodes: [109, 1, 17, 77, 109, 94, 99, 110, 80, 82] },
-          { name: "duel-terminal-tail", opcodes: [108, 80, 109, 80, 32, 16, 75, 81, 0] },
-          { name: "duel-finalizer", opcodes: [28, 1, 16, 18, 52, 80, 82, 80] }
-        ];
-      case "world_table":
-        return [
-          { name: "world-input-screen", opcodes: [80, 106, 75, 96, 20, 107, 80, 82] },
-          { name: "world-horizontal-move", opcodes: [106, 1, 16, 74, 107, 1, 17, 75, 87, 66, 99, 82] },
-          { name: "world-floor-table-lookup", opcodes: [106, 101, 18, 52, 21, 108, 18, 53, 52, 76, 56, 55, 77, 82] },
-          { name: "world-tile-dispatch", opcodes: [108, 1, 17, 94, 88, 108, 2, 17, 94, 98, 108, 3, 17, 82] },
-          { name: "world-climb-descend", opcodes: [106, 100, 16, 74, 107, 1, 16, 75, 109, 55, 53, 82] },
-          { name: "world-treasure-update", opcodes: [109, 1, 16, 77, 110, 106, 55, 94, 116, 110, 78, 82] },
-          { name: "world-hole-known-mask", opcodes: [110, 106, 17, 55, 11, 16, 78, 106, 74, 82] },
-          { name: "world-exit-terminal", opcodes: [107, 1, 17, 94, 99, 109, 80, 81, 0, 82] },
-          { name: "world-finalizer", opcodes: [32, 16, 75, 12, 50, 94, 234, 28, 1, 16, 52, 80] }
-        ];
-      case "lane_resource":
-        return [
-          { name: "lane-input-screen", opcodes: [80, 106, 74, 96, 20, 107, 80, 82] },
-          { name: "lane-row-left-right", opcodes: [106, 1, 17, 74, 106, 1, 16, 74, 107, 94, 70, 82] },
-          { name: "lane-threat-random", opcodes: [59, 101, 18, 52, 1, 16, 75, 107, 76, 82] },
-          { name: "lane-collision-test", opcodes: [106, 107, 17, 94, 100, 109, 1, 17, 77, 106, 8, 74] },
-          { name: "lane-dock-load", opcodes: [106, 1, 17, 94, 116, 1, 78, 82] },
-          { name: "lane-ship-unload", opcodes: [106, 8, 17, 94, 102, 110, 1, 17, 94, 106, 108, 1, 17, 76] },
-          { name: "lane-cargo-terminal", opcodes: [108, 94, 99, 109, 94, 105, 106, 8, 74, 107, 80, 82] },
-          { name: "lane-boat-reset", opcodes: [109, 1, 17, 77, 8, 74, 0, 78, 109, 80] },
-          { name: "lane-display-pack", opcodes: [108, 101, 18, 106, 16, 107, 16, 109, 16, 82] },
-          { name: "lane-finalizer", opcodes: [28, 1, 16, 18, 52, 80] }
-        ];
-    }
-  }
-  function buildGameBackendCandidateReports(candidates, selected) {
-    return candidates.map((candidate) => ({
-      site: selected.variant === candidate.variant ? selected.variant : candidate.variant,
-      variant: candidate.variant,
-      steps: candidate.layout.length,
-      selected: candidate.variant === selected.variant,
-      reason: candidate.variant === selected.variant ? `selected; ${candidate.reason}` : `rejected; ${candidate.reason}`
-    }));
-  }
-  function buildGameIntent(ast) {
-    const domainKinds = new Set(ast.domains.map((domain) => domain.domainKind));
-    const v2Types = new Set(ast.v2?.state.map((field) => field.type.split("(")[0].trim()) ?? []);
-    const hasSpatialState = domainKinds.has("maze") || domainKinds.has("coord") || v2Types.has("coord") || v2Types.has("cells");
-    const hasResourceState = domainKinds.has("resource") || v2Types.has("counter") || ast.states.some((state) => state.fields.some((field) => gameStateRole(field.type) === "resource"));
-    const hasGameFlow = domainKinds.has("event") || domainKinds.has("cache_search") || domainKinds.has("fight") || ast.v2?.turn !== void 0 || (ast.v2?.rules.length ?? 0) > 0;
-    if (!(hasSpatialState && hasResourceState && hasGameFlow)) return void 0;
-    const queries = collectGameQueryIntents(ast.v2);
-    const features = collectGameIntentFeatures(ast, queries);
-    const intent = {
-      kind: "game_intent",
-      name: ast.v2?.name ?? ast.reference ?? "game",
-      shape: classifyGameIntentShape(features),
-      features,
-      inputs: collectV2InputNames(ast.v2),
-      stateRoles: collectGameStateRoles(ast),
-      domains: ast.domains.map((domain) => {
-        const domainIntent = {
-          kind: domain.domainKind,
-          facts: Object.fromEntries(domain.lines.map((line) => [line.text.split(/\s+/u)[0] ?? "fact", line.text]))
-        };
-        if (domain.name !== void 0) domainIntent.name = domain.name;
-        return domainIntent;
-      }),
-      queries,
-      screens: ast.v2?.screens.map((screen) => screen.name) ?? ast.displays.map((display) => display.name),
-      rules: ast.v2 ? [...ast.v2.rules.map((rule) => rule.name), ...ast.v2.encounters.map((table) => `encounters:${table.expr}`)] : ast.blocks.map((block) => block.name),
-      terminalOutcomes: ["stop", "resource_exhausted", "exit", "fight_declined", "fight_resolved"]
-    };
-    if (ast.reference !== void 0) intent.reference = ast.reference;
-    return intent;
-  }
-  function collectGameIntentFeatures(ast, queries) {
-    const features = /* @__PURE__ */ new Set();
-    const v2 = ast.v2;
-    const cellSetNames = /* @__PURE__ */ new Set([
-      ...v2?.state.filter((field) => field.type === "cells").map((field) => field.name) ?? []
-    ]);
-    const inputNames = new Set(collectV2InputNames(v2));
-    const boardCellCounts = new Set(v2?.boards.map((board) => board.width * board.height) ?? []);
-    if ((v2?.boards.length ?? 0) > 0) features.add("board");
-    if (cellSetNames.size > 0) {
-      features.add("bitset");
-      features.add("resources");
-    }
-    if ((v2?.worlds.length ?? 0) > 0) features.add("movement");
-    for (const field of v2?.state ?? []) {
-      if (field.type === "cells") features.add("bitset");
-      if (field.type === "counter") features.add("resources");
-    }
-    for (const state of ast.states) {
-      for (const field of state.fields) {
-        if (gameStateRole(field.type) === "resource") features.add("resources");
-      }
-    }
-    for (const query of queries) {
-      features.add(query.kind);
-    }
-    const addPredicateFeatures = (predicate) => {
-      if (predicate.kind === "v2_compare" && predicate.op === ">=" && cellSetNames.has(predicate.left.trim())) {
-        features.add("cell_probe");
-      }
-      if (isNegativeInputReportPredicate(predicate, inputNames)) {
-        features.add("hit_report");
-      }
-    };
-    const visit = (statements) => {
-      for (const statement of statements) {
-        if (statement.kind === "v2_move") features.add("movement");
-        if (statement.kind === "v2_assign" && isRandomBoardCellExpression(statement.expr, boardCellCounts)) {
-          features.add("random_board_cell");
-        }
-        if (statement.kind === "v2_update" && statement.op === "-=" && cellSetNames.has(statement.target)) {
-          features.add("cell_clear");
-        }
-        if (statement.kind === "v2_if") {
-          addPredicateFeatures(statement.predicate);
-          visit(statement.thenBody);
-          if (statement.elseBody) visit(statement.elseBody);
-        }
-        if (statement.kind === "v2_challenge") {
-          visit(statement.successBody);
-          if (statement.failureBody) visit(statement.failureBody);
-        }
-        if (statement.kind === "v2_match") {
-          for (const matchCase of statement.cases) visit([matchCase.action]);
-          if (statement.otherwise) visit([statement.otherwise]);
-        }
-      }
-    };
-    if (v2?.turn) visit(v2.turn.body);
-    for (const rule of v2?.rules ?? []) visit(rule.body);
-    return [...features].sort();
-  }
-  function isRandomBoardCellExpression(text, boardCellCounts) {
-    const compact = normalizeV2ExpressionText(text).replace(/\s+/gu, "").toLowerCase();
-    const randomInt = /^int\(random\(\)\*(\d+)\)$/u.exec(compact);
-    return randomInt !== null && boardCellCounts.has(Number(randomInt[1]));
-  }
-  function isNegativeInputReportPredicate(predicate, inputNames) {
-    if (predicate.kind !== "v2_compare") return false;
-    const left = normalizeV2ExpressionText(predicate.left).trim();
-    const right = normalizeV2ExpressionText(predicate.right).trim();
-    if (inputNames.has(left) && isZeroLiteralText(right)) {
-      return predicate.op === "<" || predicate.op === "<=";
-    }
-    if (inputNames.has(right) && isZeroLiteralText(left)) {
-      return predicate.op === ">" || predicate.op === ">=";
-    }
-    return false;
-  }
-  function isZeroLiteralText(text) {
-    return /^[+-]?0(?:\.0+)?$/u.test(text);
-  }
-  function classifyGameIntentShape(features) {
-    const set = new Set(features);
-    if (set.has("line_count")) return "board_line_count";
-    if (set.has("neighbor_count")) return "board_neighbor_count";
-    if (set.has("board") && set.has("cell_probe") && set.has("cell_clear") && set.has("random_board_cell") && set.has("hit_report")) {
-      return "board_fleet_duel";
-    }
-    if (set.has("cell_at")) return "world_table";
-    if (set.has("random_cell") && set.has("movement")) return "lane_resource";
-    return "universal_spatial_resource";
-  }
-  function collectGameQueryIntents(v2) {
-    if (!v2) return [];
-    const queries = [];
-    const addExpression = (expr, line, target) => {
-      const query = parseGameQueryExpression(expr, line);
-      if (query === void 0) return;
-      queries.push(target === void 0 ? query : { ...query, target });
-    };
-    const visit = (statements) => {
-      for (const statement of statements) {
-        switch (statement.kind) {
-          case "v2_assign":
-            addExpression(statement.expr, statement.line, statement.target);
-            break;
-          case "v2_stop":
-            addExpression(statement.value, statement.line);
-            break;
-          case "v2_update":
-            addExpression(statement.expr, statement.line, statement.target);
-            break;
-          case "v2_if":
-            addExpression(formatV2Predicate(statement.predicate), statement.line);
-            visit(statement.thenBody);
-            if (statement.elseBody) visit(statement.elseBody);
-            break;
-          case "v2_challenge":
-            addExpression(statement.expr, statement.line, statement.challengeTarget);
-            visit(statement.successBody);
-            if (statement.failureBody) visit(statement.failureBody);
-            break;
-          case "v2_match":
-            addExpression(statement.expr, statement.line);
-            for (const matchCase of statement.cases) visit([matchCase.action]);
-            if (statement.otherwise) visit([statement.otherwise]);
-            break;
-          case "v2_invoke":
-            for (const arg of statement.args) addExpression(arg, statement.line);
-            break;
-          case "v2_show":
-          case "v2_read":
-          case "v2_move":
-            break;
-        }
-      }
-    };
-    if (v2.turn) visit(v2.turn.body);
-    for (const rule of v2.rules) visit(rule.body);
-    for (const table of v2.encounters) {
-      addExpression(table.expr, table.line);
-      for (const encounterCase of table.cases) visit(encounterCase.body);
-    }
-    return queries;
-  }
-  function parseGameQueryExpression(text, line) {
-    let expr;
-    try {
-      expr = parseExpression(normalizeV2ExpressionText(text), line);
-    } catch {
-      return void 0;
-    }
-    if (expr.kind !== "call") return void 0;
-    const kind = gameQueryKind(expr.callee);
-    if (kind === void 0) return void 0;
-    const [source, at] = expr.args;
-    if (source === void 0) return void 0;
-    const query = {
-      kind,
-      source: expressionToIntentText(source),
-      line
-    };
-    if (at !== void 0) query.at = expressionToIntentText(at);
-    return query;
-  }
-  function gameQueryKind(name) {
-    switch (name.toLowerCase()) {
-      case "line_count":
-        return "line_count";
-      case "neighbor_count":
-        return "neighbor_count";
-      case "cell_at":
-        return "cell_at";
-      case "random_cell":
-        return "random_cell";
-      default:
-        return void 0;
-    }
-  }
-  function expressionToIntentText(expr) {
-    switch (expr.kind) {
-      case "number":
-        return expr.raw;
-      case "identifier":
-        return expr.name;
-      case "unary":
-        return `-${expressionToIntentText(expr.expr)}`;
-      case "binary":
-        return `${expressionToIntentText(expr.left)} ${expr.op} ${expressionToIntentText(expr.right)}`;
-      case "call":
-        return `${expr.callee}(${expr.args.map(expressionToIntentText).join(", ")})`;
-    }
-  }
-  function collectGameStateRoles(ast) {
-    const roles = [];
-    const displayedV2State = new Set((ast.v2?.screens ?? []).flatMap((screen) => screen.sources));
-    const declaredV2State = new Set((ast.v2?.state ?? []).map((field) => field.name));
-    for (const input of collectV2InputNames(ast.v2)) {
-      if (!declaredV2State.has(input)) roles.push({ name: input, role: "input", displayed: false, persistent: false });
-    }
-    for (const field of ast.v2?.state ?? []) {
-      roles.push({
-        name: field.name,
-        role: gameStateRole(field.type),
-        displayed: displayedV2State.has(field.name),
-        persistent: true
-      });
-    }
-    for (const state of ast.states) {
-      for (const field of state.fields) {
-        roles.push({
-          name: field.name,
-          role: gameStateRole(field.type),
-          displayed: ast.displays.some((display) => display.sources.includes(field.name)),
-          persistent: true
-        });
-      }
-    }
-    return roles;
-  }
-  function collectV2InputNames(v2) {
-    const names = /* @__PURE__ */ new Set();
-    const visit = (statements) => {
-      for (const statement of statements) {
-        if (statement.kind === "v2_read") names.add(statement.target);
-        if (statement.kind === "v2_challenge") {
-          names.add(statement.answerInput);
-          visit(statement.successBody);
-          if (statement.failureBody) visit(statement.failureBody);
-        }
-        if (statement.kind === "v2_if") {
-          visit(statement.thenBody);
-          if (statement.elseBody) visit(statement.elseBody);
-        }
-        if (statement.kind === "v2_match") {
-          for (const matchCase of statement.cases) visit([matchCase.action]);
-          if (statement.otherwise) visit([statement.otherwise]);
-        }
-      }
-    };
-    if (v2?.turn !== void 0) visit(v2.turn.body);
-    for (const rule of v2?.rules ?? []) visit(rule.body);
-    for (const table of v2?.encounters ?? []) {
-      for (const encounterCase of table.cases) visit(encounterCase.body);
-    }
-    return [...names];
-  }
-  function gameStateRole(type) {
-    if (type === "coord" || type === "packed") return "coord";
-    if (type === "cells" || type === "bitset") return "bitset";
-    if (type === "counter" || type === "range") return "resource";
-    if (type === "flag") return "flag";
-    return "unknown";
-  }
-  function buildGameEffectIr(intent) {
-    return [
-      {
-        id: "turn-display-input",
-        op: "show/read",
-        reads: intent.stateRoles.filter((role) => role.displayed).map((role) => role.name),
-        writes: intent.inputs,
-        stack: ["X", "Y", "Z", "T"],
-        displayObservable: true,
-        mayTrap: false
-      },
-      ...intent.queries.map((query, index) => ({
-        id: `spatial-query-${index + 1}`,
-        op: query.kind,
-        reads: [query.source, query.at].filter((value) => value !== void 0),
-        writes: query.target === void 0 ? [] : [query.target],
-        stack: ["X", "Y", "X2"],
-        displayObservable: false,
-        mayTrap: false
-      })),
-      {
-        id: "maze-move-wall-check",
-        op: "move/has/blocked",
-        reads: ["coord", "maze", "walls"],
-        writes: ["coord", "blocked"],
-        stack: ["X", "Y", "X2"],
-        displayObservable: false,
-        mayTrap: false
-      },
-      {
-        id: "resource-cache-fight",
-        op: "search/reward/fight",
-        reads: ["caches", "resources", "random"],
-        writes: ["caches", "resources"],
-        stack: ["X", "Y", "X2"],
-        displayObservable: true,
-        mayTrap: false
-      }
-    ];
-  }
-  function buildCandidateIr(intent) {
-    return [
-      {
-        site: intent.name,
-        variant: "indirect-register-flow",
-        cost: 9,
-        preconditions: ["branch addresses are representable as live numeric values"],
-        proofs: ["address-like constants are assigned by layout"],
-        features: ["indirect-flow", "address-constants"],
-        selected: true
-      },
-      {
-        site: intent.name,
-        variant: "super-dark-dispatch",
-        cost: 4,
-        preconditions: ["one-command side paths can be placed at formal dark entries"],
-        proofs: ["cyclic layout maps dark entries to shared tails"],
-        features: ["super-dark-dispatch", "dark-entries"],
-        selected: true
-      },
-      {
-        site: intent.name,
-        variant: "cyclic-address-layout",
-        cost: 0,
-        preconditions: ["all wrap targets are shared-tail entries"],
-        proofs: ["layout aliases point at intended cells"],
-        features: ["dark-entries", "code-data-overlay"],
-        selected: true
-      },
-      {
-        site: intent.name,
-        variant: "x2-vp-scheduling",
-        cost: 0,
-        preconditions: ["X2 is unobserved between screen boundaries"],
-        proofs: ["display observability is bounded by screen declarations"],
-        features: ["x2-register", "display-bytes"],
-        selected: true
-      },
-      {
-        site: intent.name,
-        variant: "hex-mantissa-data",
-        cost: 0,
-        preconditions: ["state values tolerate mantissa/sign-digit encoding"],
-        proofs: ["resource and bitset domains are packed"],
-        features: ["display-bytes", "address-constants"],
-        selected: true
-      }
-    ];
-  }
-  function refineTacticForAddress(address, fallback, _intent) {
-    const tacticByAddress = /* @__PURE__ */ new Map([
-      [18, "vp-fraction-restore"],
-      [19, "kzn-double"],
-      [30, "kor-digit-test"],
-      [45, "kmax-zero-through"],
-      [60, "r0-indirect-counter"],
-      [90, "vp-fraction-restore"],
-      [92, "fractional-indirect-addressing"]
-    ]);
-    return tacticByAddress.get(address) ?? fallback;
-  }
-  function buildGameIntentOptimizations(intent, backend) {
-    const selected = (name, detail) => ({ name, detail });
-    const base = [
-      selected("intent-domain-lowering", `Lowered ${intent.name} state/rules/domains into GameIntent.`),
-      selected("game-intent-lowering", "Built GameIntent for spatial state, collections, resources, events, and terminal outcomes."),
-      selected("compact-domain-effect-ir", "Lowered GameIntent into stack/register/X2/display-aware EffectIR."),
-      ...intent.queries.length > 0 ? [selected("spatial-query-lowering", `Captured ${intent.queries.length} board/world query expression(s): ${formatGameQueries(intent.queries)}.`)] : [],
-      selected("game-backend-selection", `Selected ${backend.variant} (${backend.layout.length} cells): ${backend.reason}.`)
-    ];
-    if (backend.variant !== "universal_spatial_resource") {
-      const shapeSpecific = [
-        ...base,
-        selected(
-          "shape-specific-microkernel",
-          `Lowered ${intent.shape} features directly, avoiding universal board/bitset/world-table machinery.`
-        )
-      ];
-      if (intent.queries.length > 0) {
-        shapeSpecific.push(selected("query-specialization", `Specialized query lowering for ${formatGameQueries(intent.queries)}.`));
-      }
-      if (backend.variant === "board_fleet_duel") {
-        shapeSpecific.push(
-          selected(
-            "fleet-duel-lowering",
-            "Lowered random board shot, negative hit report, fleet probe/clear, ship counters, and terminal stops as one duel microkernel."
-          )
-        );
-      }
-      return shapeSpecific;
-    }
-    const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout, {
-      selectorValues: superDarkSelectorValues(backend.preloads)
-    });
-    const formalAddressOptimizations = superDarkLayoutProof.proved ? [
-      selected("super-dark-dispatch", "Selected super/dark formal address entries where one-command side paths are profitable."),
-      selected("cyclic-address-layout", "Selected wraparound address layout so tails continue through formal address space.")
-    ] : [];
-    return [
-      ...base,
-      selected("indirect-register-flow", "Selected R7/R8/R9-style indirect flow for compact command and procedure dispatch."),
-      ...formalAddressOptimizations,
-      selected("shared-tail-layout", "Merged movement, wall-break, search, and initialization tails."),
-      selected("code-data-overlay", "Reused branch operands and command bytes as address/data constants."),
-      selected("constants-dual-use", "Reused constants as coefficients, rounding adjusters, and indirect branch addresses."),
-      selected("x2-display-byte-scheduling", "Scheduled X2 saves/restores across \u0412\u041F/display-byte boundaries."),
-      selected("vp-fraction-restore", "Used \u0412\u041F as X2 restoration and fractional-part transform."),
-      selected("hex-mantissa-arithmetic", "Packed spatial masks and resource transforms into hexadecimal mantissa/sign digits."),
-      selected("fractional-indirect-addressing", "Used indirect-address truncation and fractional mantissa effects for compact bit selection."),
-      selected("r0-indirect-counter", "Used R0 indirect store with the negative-counter behavior required by generated mask loops."),
-      selected("kzn-double", "Used \u041A \u0417\u041D as a one-cell doubling/sign-digit transform."),
-      selected("kor-digit-test", "Used \u041A\u2228 as a compact multi-digit/boundary test."),
-      selected("kmax-zero-through", "Used \u041A max as a zero-through stack transform and <-> replacement."),
-      selected("return-zero-jump", "Selected \u0412/\u041E where the return stack proof permits one-cell return/jump behavior.")
-    ];
-  }
-  function formatGameQueries(queries) {
-    return queries.slice(0, 4).map((query) => `${query.target ?? "_"}=${query.kind}(${[query.source, query.at].filter(Boolean).join(", ")})`).join("; ");
-  }
-  function buildGameIntentCandidates(candidates, backend) {
-    const usesUniversalTactics = backend.variant === "universal_spatial_resource";
-    const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout, {
-      selectorValues: superDarkSelectorValues(backend.preloads)
-    });
-    const superDarkLayoutProved = usesUniversalTactics && superDarkLayoutProof.proved;
-    return candidates.map((candidate) => ({
-      site: candidate.site,
-      variant: candidate.variant,
-      steps: candidate.cost,
-      selected: candidate.selected && usesUniversalTactics && (!["super-dark-dispatch", "cyclic-address-layout"].includes(candidate.variant) || superDarkLayoutProved),
-      reason: gameIntentCandidateReason(candidate, backend, superDarkLayoutProof)
-    }));
-  }
-  function gameIntentCandidateReason(candidate, backend, superDarkLayoutProof) {
-    if (backend.variant !== "universal_spatial_resource") {
-      return `rejected; ${backend.variant} backend is shorter, so universal ${candidate.variant} tactics were not emitted`;
-    }
-    if (["super-dark-dispatch", "cyclic-address-layout"].includes(candidate.variant) && !superDarkLayoutProof.proved) {
-      return `rejected; layout proof did not establish FA..FF entries at 48..53, suffix continuations 01..06, and a proved FA..FF selector (${superDarkLayoutProof.reasons.join("; ")})`;
-    }
-    return `selected; ${candidate.proofs.join("; ")}`;
-  }
-  function buildGameIntentPreloads(ast) {
-    const explicit = (ast?.preloads ?? []).map((preload) => ({
-      register: preload.register,
-      value: preload.value,
-      countsAgainstProgram: false
-    }));
-    if (explicit.length > 0) return explicit;
-    return [
-      { register: "R4", value: "2", countsAgainstProgram: false },
-      { register: "R5", value: "10", countsAgainstProgram: false },
-      { register: "R6", value: "\u0413E-02", countsAgainstProgram: false },
-      { register: "R7", value: "5E-1", countsAgainstProgram: false },
-      { register: "R8", value: "-52", countsAgainstProgram: false },
-      { register: "R9", value: "4,_3E-08", countsAgainstProgram: false }
-    ];
-  }
-  function superDarkSelectorValues(preloads) {
-    const values = {};
-    for (const preload of preloads) {
-      const register = preload.register.replace(/^R/iu, "").toLowerCase();
-      values[register] = preload.value;
-    }
-    return values;
-  }
-  function buildGameIntentProofs(intent, backend, reference) {
-    if (backend.variant !== "universal_spatial_resource") {
-      const proofs2 = [
-        {
-          id: "full-game-semantics",
-          status: "assumed",
-          detail: `${backend.variant} is a source-driven semantic microkernel; full interactive equivalence still requires a backend verifier.`
-        },
-        {
-          id: "shape-features-covered",
-          status: "proved",
-          detail: `${backend.variant} covers declared GameIntent features: ${intent.features.join(", ")}.`
-        },
-        {
-          id: "display-observability",
-          status: "proved",
-          detail: "Only declared screens and explicit stop/error states are user-observable in the shape backend."
-        }
-      ];
-      if (intent.queries.length > 0) {
-        proofs2.push(
-          {
-            id: "query-lowering-covered",
-            status: "proved",
-            detail: `Shape microkernel covers query lowering for ${formatGameQueries(intent.queries)}.`
-          },
-          {
-            id: "spatial-query-semantics",
-            status: "proved",
-            detail: `Captured board/world query semantics for ${formatGameQueries(intent.queries)}.`
-          }
-        );
-      }
-      if (backend.variant === "board_fleet_duel") {
-        proofs2.push({
-          id: "fleet-duel-lowering-covered",
-          status: "proved",
-          detail: "Board-fleet duel microkernel covers random calculator shots, negative hit reports, enemy fleet probe/clear, ship counters, and terminal stops."
-        });
-      }
-      if (reference !== void 0) {
-        proofs2.push({
-          id: "reference-size-beaten",
-          status: backend.layout.length < reference.referenceSpan ? "proved" : "assumed",
-          detail: `${backend.variant} uses ${backend.layout.length} cells vs reference span ${reference.referenceSpan}.`
-        });
-      }
-      return proofs2;
-    }
-    const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout, {
-      selectorValues: superDarkSelectorValues(backend.preloads)
-    });
-    const proofs = [
-      {
-        id: "full-game-semantics",
-        status: "assumed",
-        detail: `Universal fallback lowers ${intent.name} with the previous spatial/counter tactic template; no shape verifier is attached.`
-      },
-      {
-        id: "return-stack-empty",
-        status: "proved",
-        detail: "Compact layout does not rely on pending \u041F\u041F frames at \u0412/\u041E-as-jump sites."
-      },
-      {
-        id: "x2-liveness",
-        status: "proved",
-        detail: "X2 is clobbered only between display-observable boundaries and is restored before the next required display state."
-      },
-      {
-        id: "bitset-equivalence",
-        status: "proved",
-        detail: "Walls and caches are lowered to packed mantissa masks with clear/has operations preserving source-level set semantics."
-      },
-      {
-        id: "cyclic-address-safety",
-        status: superDarkLayoutProof.proved ? "proved" : "not-needed",
-        detail: superDarkLayoutProof.proved ? "Wraparound and dark-entry addresses land only on intended shared tails or one-command side paths." : "No formal wraparound/dark-entry layout was selected, so there are no cyclic-address aliases to prove."
-      },
-      {
-        id: "indirect-addressing-ranges",
-        status: "proved",
-        detail: "Indirect flow selectors use stable R7..Re address values; fractional R0 sentinel sites are exact-machine facts, not inferred aliases."
-      },
-      {
-        id: "super-dark-suffix-layout",
-        status: superDarkLayoutProof.proved ? "proved" : "not-needed",
-        detail: superDarkLayoutProof.proved ? `FA..FF indirect dispatch entries are placed at physical 48..53 and resume through suffix-compatible continuations 01..06 (${superDarkLayoutProof.pairs.length} pairs).` : `No suffix-compatible FA..FF dispatch layout was selected for this backend: ${superDarkLayoutProof.reasons.join("; ")}.`
-      },
-      {
-        id: "display-observability",
-        status: "proved",
-        detail: "Only declared screens and explicit stop/error states are user-observable."
-      }
-    ];
-    if (intent.queries.length > 0) {
-      proofs.push({
-        id: "spatial-query-semantics",
-        status: "proved",
-        detail: `Captured board/world query semantics for ${formatGameQueries(intent.queries)}.`
-      });
-    }
-    return proofs;
-  }
-  function buildGameIntentCellRoles(layout, preloads, machineProfile) {
-    const addressOperandCells = /* @__PURE__ */ new Set();
-    for (let address = 0; address < layout.length - 1; address += 1) {
-      if (getOpcode(layout[address].opcode).takesAddress) addressOperandCells.add(address + 1);
-    }
-    const superDarkProof = verifySuperDarkSuffixLayout(layout, {
-      selectorValues: superDarkSelectorValues(preloads)
-    });
-    const darkEntryCells = superDarkProof.proved ? new Set(superDarkProof.pairs.flatMap((pair) => [pair.entryAddress, pair.continuationAddress])) : /* @__PURE__ */ new Set();
-    const displayByteCells = /* @__PURE__ */ new Set([18, 33, 90]);
-    return layout.map((cell) => {
-      const { address, opcode: code } = cell;
-      const roles = addressOperandCells.has(address) ? ["address"] : ["exec"];
-      const notes = [];
-      if (addressOperandCells.has(address) && machineSupports(machineProfile, "address-constants")) {
-        roles.push("constant");
-        notes.push("address operand reused as compact data");
-      }
-      if (addressOperandCells.has(address) && machineSupports(machineProfile, "code-data-overlay")) {
-        roles.push("overlay");
-        notes.push("address/data overlay selected");
-      }
-      if (darkEntryCells.has(address) && machineSupports(machineProfile, "dark-entries")) {
-        roles.push("dark-entry");
-        notes.push("formal/dark entry participates in proved super-dark dispatch layout");
-      }
-      if (displayByteCells.has(address) && machineSupports(machineProfile, "display-bytes")) {
-        roles.push("display-byte");
-        notes.push("X2/display-byte boundary");
-      }
-      const role = {
-        address: formatAddress(address),
-        hex: getOpcode(code).hex,
-        roles: uniqueRoles(roles)
-      };
-      if (notes.length > 0) role.note = notes.join("; ");
-      return role;
-    });
-  }
-  function gameTacticComment(cell) {
-    const comments = {
-      13: "branch into init/search tail",
-      18: "\u0412\u041F restores X2 and takes fractional part",
-      19: "\u041A \u0417\u041D as one-cell doubling/sign transform",
-      25: "indirect recall through packed address",
-      30: "\u041A\u2228 digit/boundary test",
-      32: "indirect conditional via R9",
-      40: "shared wall/position tail",
-      45: "\u041A max zero-through transform",
-      46: "indirect conditional via R7",
-      47: "movement tail writes player position",
-      60: "R0 indirect negative-counter loop",
-      62: "indirect conditional via R8",
-      66: "indirect conditional via R7",
-      71: "indirect conditional via R9",
-      76: "indirect jump via R9",
-      83: "indirect conditional via R7",
-      90: "\u0412\u041F combines X2 restore and hex digit",
-      92: "indirect recall truncates fractional address",
-      99: "event/resource tail",
-      104: "cyclic tail through indirect store"
-    };
-    return comments[cell.address] ?? cell.tactic.replace(/-/gu, " ");
-  }
   function validateSemanticDomains(ast, diagnostics) {
     const unresolved = ast.domains.filter(
       (domain) => ["maze", "event", "cache_search", "fight", "table"].includes(domain.domainKind)
@@ -6122,7 +4896,7 @@ var MKProEmulatorBundle = (() => {
     diagnostics.push({
       level: "error",
       code: "SEMANTIC_DOMAIN_LOWERER_MISSING",
-      message: `High-level semantic domains need real rule lowerers before code generation: ${unresolved.map(formatDomainName).join(", ")}. The compiler refuses to treat game intent as comments.`
+      message: `High-level semantic domains need real rule lowerers before code generation: ${unresolved.map(formatDomainName).join(", ")}. The compiler refuses to treat game rules as comments.`
     });
   }
   function validateV2Intent(ast, diagnostics) {
@@ -7871,6 +6645,40 @@ var MKProEmulatorBundle = (() => {
   function conditionToText(condition) {
     return `${expressionToIntentText(condition.left)} ${condition.op} ${expressionToIntentText(condition.right)}`;
   }
+  function expressionToIntentText(expr) {
+    switch (expr.kind) {
+      case "number":
+        return expr.raw;
+      case "identifier":
+        return expr.name;
+      case "unary":
+        return `-${wrapExpressionText(expr.expr, 3)}`;
+      case "binary":
+        return `${wrapExpressionText(expr.left, binaryPrecedence(expr.op))} ${expr.op} ${wrapExpressionText(expr.right, binaryPrecedence(expr.op) + (expr.op === "-" || expr.op === "/" ? 1 : 0))}`;
+      case "call":
+        return `${expr.callee}(${expr.args.map(expressionToIntentText).join(", ")})`;
+    }
+  }
+  function wrapExpressionText(expr, parentPrecedence) {
+    const text = expressionToIntentText(expr);
+    const precedence = expressionPrecedence(expr);
+    return precedence < parentPrecedence ? `(${text})` : text;
+  }
+  function expressionPrecedence(expr) {
+    switch (expr.kind) {
+      case "number":
+      case "identifier":
+      case "call":
+        return 4;
+      case "unary":
+        return 3;
+      case "binary":
+        return binaryPrecedence(expr.op);
+    }
+  }
+  function binaryPrecedence(op) {
+    return op === "*" || op === "/" ? 2 : 1;
+  }
   function priority(variable, hints) {
     const hint = hints.get(variable);
     if (hint?.mode === "prefer") return REGISTER_ORDER.indexOf(hint.register) - 100;
@@ -8868,7 +7676,7 @@ var MKProEmulatorBundle = (() => {
         "kzn-double",
         "kor-digit-test"
       ],
-      detail: "Umbrella rule for replacing provably equivalent conditionals with branchless arithmetic, sign, extrema, or masked updates. Also marked active when the GameIntent backend selects \u041A max / \u041A \u0417\u041D / \u041A\u2228 as semantic equivalents."
+      detail: "Umbrella rule for replacing provably equivalent conditionals with branchless arithmetic, sign, extrema, or masked updates."
     },
     {
       id: "zero-condition-test",
@@ -8880,7 +7688,7 @@ var MKProEmulatorBundle = (() => {
         "fractional-indirect-addressing",
         "kor-digit-test"
       ],
-      detail: "Uses direct F x?0 tests when one side of a condition is a proved zero, avoiding a zero literal and subtraction. Also marked active when GameIntent proves zero/digit boundaries through fractional indirect addressing or \u041A\u2228."
+      detail: "Uses direct F x?0 tests when one side of a condition is a proved zero, avoiding a zero literal and subtraction."
     },
     {
       id: "dispatch-compare-chain",
@@ -8907,7 +7715,7 @@ var MKProEmulatorBundle = (() => {
         "kmax-zero-through",
         "kzn-double"
       ],
-      detail: "Replaces simple boolean if/else assignments, stops, and conditional moves with arithmetic selection when shorter. Counts \u041A max/\u041A \u0417\u041D as the GameIntent-equivalent selection."
+      detail: "Replaces simple boolean if/else assignments, stops, and conditional moves with arithmetic selection when shorter."
     },
     {
       id: "arithmetic-if-update",
@@ -8919,7 +7727,7 @@ var MKProEmulatorBundle = (() => {
         "arithmetic-if-sign-toggle",
         "hex-mantissa-arithmetic"
       ],
-      detail: "Replaces conditional +=/-= and sign toggles guarded by a proved boolean with masked arithmetic. GameIntent's hex-mantissa updates count as the masked-update equivalent."
+      detail: "Replaces conditional +=/-= and sign toggles guarded by a proved boolean with masked arithmetic."
     },
     {
       id: "arithmetic-if-extrema",
@@ -8959,7 +7767,7 @@ var MKProEmulatorBundle = (() => {
       source: "documented",
       requires: [],
       activeWhen: ["fl-unit-decrement", "r0-indirect-counter"],
-      detail: "Uses F L0..F L3 as compact decrement-and-continue/decrement-and-branch forms for small counters. The R0 indirect counter is its GameIntent equivalent."
+      detail: "Uses F L0..F L3 as compact decrement-and-continue/decrement-and-branch forms for small counters."
     },
     {
       id: "address-constant-overlay",
@@ -9406,6 +8214,11 @@ var MKProEmulatorBundle = (() => {
       });
     }
     return proofs;
+  }
+  function superDarkSelectorValues(preloads) {
+    const selectors = {};
+    for (const preload of preloads) selectors[preload.register] = preload.value;
+    return selectors;
   }
   function parseHotBlock(text) {
     const match = /^(.+)=(\d+)$/u.exec(text);

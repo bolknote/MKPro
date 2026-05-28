@@ -18,13 +18,20 @@ function exampleFiles(): string[] {
     .map((name) => resolve(dir, name));
 }
 
+function spatialDraftFiles(): string[] {
+  const dir = resolve("examples/spatial-drafts");
+  return readdirSync(dir)
+    .filter((name) => name.endsWith(".mkpro"))
+    .map((name) => resolve(dir, name));
+}
+
 function describeDifference(a: MachineItem, b: MachineItem): string {
   return `expected ${JSON.stringify(a)}\n  got    ${JSON.stringify(b)}`;
 }
 
 describe("ir round-trip", () => {
   const files = exampleFiles();
-  expect(files.length).toBeGreaterThanOrEqual(16);
+  expect(files.length).toBeGreaterThanOrEqual(5);
 
   for (const file of files) {
     it(`round-trips ${file.split("/").pop()} losslessly`, () => {
@@ -41,6 +48,13 @@ describe("ir round-trip", () => {
           throw new Error(`Item ${i} mismatch:\n  ${describeDifference(original, restored)}`);
         }
       }
+    });
+  }
+
+  for (const file of spatialDraftFiles()) {
+    it(`rejects spatial draft ${file.split("/").pop()} before IR round-trip`, () => {
+      const source = readFileSync(file, "utf8");
+      expect(() => compileMKPro(source)).toThrow(/real rule lowerers before code generation/u);
     });
   }
 
@@ -141,7 +155,7 @@ describe("ir round-trip", () => {
     expect(ir[5]?.kind === "indirect-cjump" && ir[5].condition === "==0").toBe(true);
   });
 
-  it("round-trips LayoutIrCell cell-by-cell for GameIntent-shaped output", () => {
+  it("round-trips LayoutIrCell cell-by-cell", () => {
     const cells: LayoutIrCell[] = [
       { address: 0, opcode: 0x41, roles: ["exec"], tactic: "store" },
       { address: 1, opcode: 0x51, roles: ["exec"], tactic: "jump" },

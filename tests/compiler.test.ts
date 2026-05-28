@@ -9,6 +9,16 @@ function source(path: string): string {
   return readFileSync(path, "utf8");
 }
 
+function examplePaths(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".mkpro"))
+    .map((entry) => `${dir}/${entry.name}`)
+    .sort();
+}
+
+const RUNNABLE_EXAMPLES = examplePaths("examples");
+const SPATIAL_DRAFTS = examplePaths("examples/spatial-drafts");
+
 describe("MK-Pro compiler", () => {
   it("keeps the smallest human DSL example compiling", () => {
     const result = compileMKPro(source("examples/basic.mkpro"));
@@ -18,11 +28,10 @@ describe("MK-Pro compiler", () => {
     expect(result.report.optimizations.some((optimization) => optimization.name === "intent-read-lowering")).toBe(true);
   });
 
-  it("keeps every checked example within the 105-cell ceiling", () => {
+  it("keeps every runnable example within the 105-cell ceiling", () => {
     const oversized: Array<{ path: string; steps: number }> = [];
 
-    for (const name of readdirSync("examples").filter((entry) => entry.endsWith(".mkpro")).sort()) {
-      const path = `examples/${name}`;
+    for (const path of RUNNABLE_EXAMPLES) {
       const result = compileMKPro(source(path));
       if (result.report.steps > 105) oversized.push({ path, steps: result.report.steps });
     }
@@ -30,13 +39,23 @@ describe("MK-Pro compiler", () => {
     expect(oversized).toEqual([]);
   });
 
-  it("keeps every example with a real source reference no larger than that source", () => {
+  it("keeps spatial game drafts outside the runnable example set", () => {
+    expect(RUNNABLE_EXAMPLES).toContain("examples/99-bottles.mkpro");
+    expect(RUNNABLE_EXAMPLES).toContain("examples/lunar.mkpro");
+    expect(SPATIAL_DRAFTS.length).toBeGreaterThan(0);
+
+    for (const path of SPATIAL_DRAFTS) {
+      expect(RUNNABLE_EXAMPLES).not.toContain(path.replace("examples/spatial-drafts/", "examples/"));
+      expect(() => compileMKPro(source(path))).toThrow(/real rule lowerers before code generation/u);
+    }
+  });
+
+  it("keeps every runnable example with a real source reference no larger than that source", () => {
     const unresolved: string[] = [];
     const larger: Array<{ path: string; steps: number; reference: number }> = [];
     const checked: string[] = [];
 
-    for (const name of readdirSync("examples").filter((entry) => entry.endsWith(".mkpro")).sort()) {
-      const path = `examples/${name}`;
+    for (const path of RUNNABLE_EXAMPLES) {
       const result = compileMKPro(source(path));
       const reference = result.report.reference;
 
@@ -54,42 +73,17 @@ describe("MK-Pro compiler", () => {
 
     expect(unresolved).toEqual([]);
     expect(larger).toEqual([]);
-    expect(checked).toContain("examples/alaram.mkpro");
-    expect(checked).toContain("examples/dungeon.mkpro");
-    expect(checked).toContain("examples/giants-country.mkpro");
+    expect(checked).toContain("examples/99-bottles.mkpro");
     expect(checked).toContain("examples/lunar.mkpro");
   });
 
-  it("keeps the high-level cave baseline within the 105-cell budget", () => {
-    const result = compileMKPro(source("examples/cave-highlevel-baseline.mkpro"));
-
-    expect(result.report.ir.v2).toBe(true);
-    expect(result.report.steps).toBeLessThanOrEqual(105);
-    expect(result.report.optimizations.some((optimization) => optimization.name === "game-intent-lowering")).toBe(true);
-  });
-
-  it("lowers the compact cave DSL under the 105-step target", () => {
-    const result = compileMKPro(source("examples/cave-sketch.mkpro"));
-
-    expect(result.report.ir.v2).toBe(true);
-    expect(result.report.steps).toBeLessThanOrEqual(105);
-    expect(result.report.candidates.some((candidate) => candidate.variant === "indirect-register-flow")).toBe(true);
-    expect(result.report.cellRoles.some((cell) => cell.roles.includes("overlay"))).toBe(true);
-    expect(result.report.cellRoles.some((cell) => cell.roles.includes("dark-entry"))).toBe(false);
-    expect(result.report.rejectedCandidates.some((candidate) => candidate.variant === "super-dark-dispatch")).toBe(true);
-  });
-
-  it("keeps the full cave reference high-level and compiles its semantic domains", () => {
-    const reference = source("examples/cave-treasure-full.mkpro");
+  it("keeps the full cave reference high-level but refuses fake lowering", () => {
+    const reference = source("examples/spatial-drafts/cave-treasure-full.mkpro");
 
     expect(reference).not.toMatch(/\brecipe\b/iu);
     expect(reference).not.toMatch(/core\s+exact/iu);
     expect(reference).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
-    const result = compileMKPro(reference);
-
-    expect(result.report.steps).toBe(105);
-    expect(result.report.reference?.parity).toBe("equal");
-    expect(result.report.optimizations.some((optimization) => optimization.name === "game-intent-lowering")).toBe(true);
+    expect(() => compileMKPro(reference)).toThrow(/real rule lowerers before code generation/u);
   });
 
   it("compiles human-centered MK-Pro without source implementation switches", () => {
@@ -154,51 +148,15 @@ program SimpleRules {
     expect(result.report.proofs.some((proof) => proof.id === "value-ranges")).toBe(true);
   });
 
-  it("compiles the full cave reference through generic semantic lowerers", () => {
-    const reference = source("examples/cave-treasure.mkpro");
+  it("does not pretend the full cave reference has generic semantic lowerers", () => {
+    const reference = source("examples/spatial-drafts/cave-treasure.mkpro");
 
     expect(reference).not.toMatch(/core\s+exact/iu);
     expect(reference).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
     expect(reference).toMatch(/world cave/u);
     expect(reference).toMatch(/cells\(cave\) = random\(\)/u);
-    const result = compileMKPro(reference);
-    const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
-    const features = new Set(result.report.machineFeaturesUsed.map((feature) => feature.id));
 
-    expect(result.report.ir.v2).toBe(true);
-    expect(result.report.steps).toBeLessThanOrEqual(105);
-    expect(result.report.budgetReport.officialSteps).toBe(105);
-    expect(result.report.preloads.length).toBeGreaterThanOrEqual(6);
-    expect(result.report.optimizations.some((optimization) => optimization.name === "intent-domain-lowering")).toBe(true);
-    expect(result.report.optimizations.some((optimization) => optimization.name === "game-intent-lowering")).toBe(true);
-    expect(selected.has("indirect-register-flow")).toBe(true);
-    expect(selected.has("super-dark-dispatch")).toBe(false);
-    expect(selected.has("cyclic-address-layout")).toBe(false);
-    expect(selected.has("x2-vp-scheduling")).toBe(true);
-    expect(selected.has("hex-mantissa-data")).toBe(true);
-    expect(features.has("indirect-flow")).toBe(true);
-    expect(features.has("x2-register")).toBe(true);
-    expect(features.has("code-data-overlay")).toBe(true);
-    expect(features.has("super-dark-dispatch")).toBe(false);
-    expect(result.report.proofs.find((proof) => proof.id === "full-game-semantics")?.status).toBe("assumed");
-    expect(result.report.proofs.some((proof) => proof.id === "cyclic-address-safety")).toBe(true);
-    expect(result.report.proofs.find((proof) => proof.id === "cyclic-address-safety")?.status).toBe("not-needed");
-    expect(result.report.proofs.find((proof) => proof.id === "super-dark-suffix-layout")?.status).toBe("not-needed");
-    expect(result.report.rejectedCandidates.find((candidate) => candidate.variant === "super-dark-dispatch")?.reason).toMatch(/proved FA\.\.FF selector/u);
-  });
-
-  it("ports Anvarov's Treasure Cave demo byte-for-byte within the original size", () => {
-    const { parseProgramText } = require("./emulator/mk61.cjs") as {
-      parseProgramText: (text: string) => { codes: number[]; diagnostics: string[] };
-    };
-    const result = compileMKPro(source("examples/cave-treasure.mkpro"));
-    const reference = parseProgramText(source("games/anvarov/demo.txt"));
-
-    expect(reference.diagnostics).toEqual([]);
-    expect(result.report.reference?.name).toBe("anvarov_demo");
-    expect(result.report.reference?.referenceSpan).toBe(105);
-    expect(result.report.reference?.parity).toBe("equal");
-    expect(result.steps.map((step) => step.opcode)).toEqual(reference.codes);
+    expect(() => compileMKPro(reference)).toThrow(/real rule lowerers before code generation/u);
   });
 
   it("ports Bolknote's 99 Bottles demo byte-for-byte within the original size", () => {
@@ -238,18 +196,22 @@ program SimpleRules {
     expect(calc.displayText()).toBe("8,ЕЕГ  91");
   });
 
-  it("does not contain the old benchmark-special backend in compiler source", () => {
+  it("does not contain benchmark-special or spatial-template codegen entry points", () => {
     const compilerSource = source("src/core/compiler.ts");
+    const oldSpatialIntentName = "Game" + "Intent";
+    const oldSpatialEntryPoint = "tryCompile" + oldSpatialIntentName + "Program";
 
     expect(compilerSource).not.toMatch(/CAVE_TREASURE/u);
     expect(compilerSource).not.toMatch(/tryCompileCompactGameProgram/u);
     expect(compilerSource).not.toMatch(/isCaveTreasure/u);
     expect(compilerSource).not.toMatch(/buildCompactCave/u);
     expect(compilerSource).not.toMatch(/cave_treasure/iu);
+    expect(compilerSource).not.toContain(oldSpatialIntentName);
+    expect(compilerSource).not.toContain(oldSpatialEntryPoint);
   });
 
-  it("treats reference metadata as report-only, not as codegen input", () => {
-    const reference = source("examples/cave-treasure.mkpro");
+  it("treats reference metadata as report-only for supported programs", () => {
+    const reference = source("examples/99-bottles.mkpro");
     const renamed = reference.replace(/^reference .+$/mu, "reference renamed_metadata_only");
     const unreferenced = reference.replace(/^reference .+\n/mu, "");
     const original = compileMKPro(reference);
@@ -260,285 +222,20 @@ program SimpleRules {
     expect(changed.steps.map((step) => step.hex)).toEqual(originalHex);
     expect(anonymous.steps.map((step) => step.hex)).toEqual(originalHex);
     expect(changed.report.reference?.name).toBe("renamed_metadata_only");
-    expect(changed.report.warnings.join("\n")).toMatch(/reference metadata did not affect code generation/u);
+    expect(changed.report.warnings.join("\n")).toMatch(/was not found under games/u);
   });
 
-  it("keeps the demo-page MK-61 tricks active in the v2 game optimizer", () => {
-    const result = compileMKPro(source("examples/cave-treasure.mkpro"));
-    const optimizations = new Set(result.report.optimizations.map((optimization) => optimization.name));
-    const activeCapabilities = new Set(
-      result.report.optimizer.capabilities
-        .filter((capability) => capability.status === "active")
-        .map((capability) => capability.id),
-    );
-    const features = new Set(result.report.machineFeaturesUsed.map((feature) => feature.id));
-    const roleNotes = result.report.cellRoles.map((cell) => cell.note).join("\n");
-    const comments = result.steps.map((step) => step.comment ?? "").join("\n");
-
-    for (const name of [
-      "indirect-register-flow",
-      "constants-dual-use",
-      "shared-tail-layout",
-      "code-data-overlay",
-      "x2-display-byte-scheduling",
-      "vp-fraction-restore",
-      "hex-mantissa-arithmetic",
-      "fractional-indirect-addressing",
-      "r0-indirect-counter",
-      "kzn-double",
-      "kor-digit-test",
-      "kmax-zero-through",
-      "return-zero-jump",
-    ]) {
-      expect(optimizations.has(name)).toBe(true);
-    }
-
-    for (const id of [
-      "address-constant-overlay",
-      "constants-dual-use",
-      "r0-alias-indirect",
-      "r0-fractional-sentinel",
-      "x2-display-register",
-      "vp-fraction-restore",
-      "hex-mantissa-arithmetic",
-      "fractional-indirect-addressing",
-      "kzn-double",
-      "kor-digit-test",
-      "kmax-zero-through",
-      "return-zero-jump",
-      "branch-removal",
-      "zero-condition-test",
-      "dispatch-compare-chain",
-      "arithmetic-if-select",
-      "arithmetic-if-update",
-      "arithmetic-if-extrema",
-      "fl-decrement-branch",
-    ]) {
-      expect(activeCapabilities.has(id)).toBe(true);
-    }
-
-    for (const id of [
-      "return-empty-stack-jump",
-      "indirect-flow",
-      "address-constants",
-      "x2-register",
-      "x2-restore-boundaries",
-      "display-bytes",
-      "r0-fractional-sentinel",
-      "r0-t-alias",
-      "code-data-overlay",
-    ]) {
-      expect(features.has(id)).toBe(true);
-    }
-
-    expect(roleNotes).toMatch(/address\/data overlay selected/u);
-    expect(roleNotes).not.toMatch(/formal\/dark entry participates/u);
-    expect(roleNotes).toMatch(/X2\/display-byte boundary/u);
-    expect(comments).toMatch(/К ЗН as one-cell doubling/u);
-    expect(comments).toMatch(/К∨ digit\/boundary test/u);
-    expect(comments).toMatch(/К max zero-through transform/u);
-    expect(comments).toMatch(/indirect recall truncates fractional address/u);
-  });
-
-  it("keeps the universal spatial/counter tactic fallback for unsupported non-cave games", () => {
+  it("rejects the old spatial-template tactic fallback", () => {
     for (const path of [
-      "examples/grid-rescue.mkpro",
-      "examples/resource-raid.mkpro",
+      "examples/spatial-drafts/grid-rescue.mkpro",
+      "examples/spatial-drafts/resource-raid.mkpro",
     ]) {
-      const result = compileMKPro(source(path));
-      const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
-
-      expect(result.report.ir.v2).toBe(true);
-      expect(result.report.steps).toBeLessThanOrEqual(105);
-      expect(result.report.budgetReport.officialSteps).toBe(105);
-      expect(selected.has("indirect-register-flow")).toBe(true);
-      expect(selected.has("super-dark-dispatch")).toBe(false);
-      expect(selected.has("cyclic-address-layout")).toBe(false);
-      expect(result.report.rejectedCandidates.find((candidate) => candidate.variant === "super-dark-dispatch")?.reason).toMatch(/proved FA\.\.FF selector/u);
-      expect(result.report.warnings.join("\n")).toMatch(/universal spatial\/counter tactic pipeline/u);
+      expect(() => compileMKPro(source(path))).toThrow(/real rule lowerers before code generation/u);
     }
-  });
-
-  it("lowers Sea Battle through the board-fleet duel microkernel below the reference span", () => {
-    const seaBattle = source("examples/sea-battle.mkpro");
-    const result = compileMKPro(seaBattle);
-    const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
-    const proofs = new Set(result.report.proofs.map((proof) => proof.id));
-    const optimizations = new Set(result.report.optimizations.map((optimization) => optimization.name));
-    const warnings = result.report.warnings.join("\n");
-
-    expect(seaBattle).not.toMatch(/\bown_fleet\b/u);
-    expect(seaBattle).toMatch(/\bown_ships:\s+counter\b/u);
-    expect(result.report.steps).toBe(101);
-    expect(result.report.steps).toBeLessThan(102);
-    expect(result.report.reference?.referenceSpan).toBe(102);
-    expect(result.report.reference?.referenceSteps).toBe(102);
-    expect(result.report.reference?.referenceEntries).toBe(99);
-    expect(result.report.reference?.referenceGaps).toEqual(["14", "19", "78"]);
-    expect(selected.has("board_fleet_duel")).toBe(true);
-    expect(result.report.rejectedCandidates.some((candidate) => candidate.variant === "universal_spatial_resource")).toBe(true);
-    expect(result.report.rejectedCandidates.some((candidate) => candidate.variant === "super-dark-dispatch")).toBe(true);
-    expect(warnings).toMatch(/selected board_fleet_duel semantic microkernel/u);
-    expect(warnings).not.toMatch(/universal spatial\/counter tactic pipeline/u);
-    expect(proofs.has("reference-size-beaten")).toBe(true);
-    expect(proofs.has("shape-features-covered")).toBe(true);
-    expect(proofs.has("fleet-duel-lowering-covered")).toBe(true);
-    expect(optimizations.has("fleet-duel-lowering")).toBe(true);
-  });
-
-  it("selects shape-specific GameIntent microkernels below the real reference spans", () => {
-    const cases = [
-      {
-        path: "examples/fox-hunt-100.mkpro",
-        shape: "board_line_count",
-        steps: 104,
-        referenceSpan: 105,
-        referenceEntries: 101,
-        referenceGaps: ["10", "88", "94", "98"],
-      },
-      {
-        path: "examples/minesweeper-9x9.mkpro",
-        shape: "board_neighbor_count",
-        steps: 96,
-        referenceSpan: 97,
-        referenceEntries: 95,
-        referenceGaps: ["76", "78"],
-      },
-      {
-        path: "examples/treasure-hunter-2.mkpro",
-        shape: "world_table",
-        steps: 104,
-        referenceSpan: 105,
-        referenceEntries: 102,
-        referenceGaps: ["91", "94", "95"],
-      },
-      {
-        path: "examples/dangerous-loading.mkpro",
-        shape: "lane_resource",
-        steps: 102,
-        referenceSpan: 103,
-        referenceEntries: 101,
-        referenceGaps: ["34", "50"],
-      },
-    ] as const;
-    const hexFingerprints = new Set<string>();
-
-    for (const testCase of cases) {
-      const result = compileMKPro(source(testCase.path));
-      const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
-      const proofs = new Set(result.report.proofs.map((proof) => proof.id));
-
-      hexFingerprints.add(result.steps.map((step) => step.hex).join(" "));
-      expect(result.report.steps).toBe(testCase.steps);
-      expect(result.report.steps).toBeLessThan(testCase.referenceSpan);
-      expect(result.report.reference?.referenceSpan).toBe(testCase.referenceSpan);
-      expect(result.report.reference?.referenceSteps).toBe(testCase.referenceSpan);
-      expect(result.report.reference?.referenceEntries).toBe(testCase.referenceEntries);
-      expect(result.report.reference?.referenceGaps).toEqual(testCase.referenceGaps);
-      expect(selected.has(testCase.shape)).toBe(true);
-      expect(result.report.rejectedCandidates.some((candidate) => candidate.variant === "universal_spatial_resource")).toBe(true);
-      expect(result.report.warnings.join("\n")).toMatch(new RegExp(`selected ${testCase.shape} semantic microkernel`, "u"));
-      expect(proofs.has("reference-size-beaten")).toBe(true);
-      expect(proofs.has("shape-features-covered")).toBe(true);
-      expect(proofs.has("query-lowering-covered")).toBe(true);
-    }
-
-    expect(hexFingerprints.size).toBe(cases.length);
-  });
-
-  it("ports Lord_BSS Alaram below the original listing size", () => {
-    const alaram = source("examples/alaram.mkpro");
-    const result = compileMKPro(alaram);
-    const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
-
-    expect(alaram).toMatch(/Lord_BSS pmk210/u);
-    expect(result.report.steps).toBe(102);
-    expect(result.report.reference?.referenceSpan).toBe(105);
-    expect(result.report.reference?.referenceSteps).toBe(105);
-    expect(result.report.reference?.referenceEntries).toBe(105);
-    expect(result.report.reference?.referenceGaps).toEqual([]);
-    expect(result.report.reference?.parity).toBe("smaller");
-    expect(selected.has("lane_resource")).toBe(true);
-    expect(result.report.warnings.join("\n")).not.toMatch(/was not found/u);
-  });
-
-  it("ports Lord_BSS Dungeon below the original listing size", () => {
-    const dungeon = source("examples/dungeon.mkpro");
-    const result = compileMKPro(dungeon);
-    const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
-
-    expect(dungeon).toMatch(/Lord_BSS pmk164/u);
-    expect(result.report.steps).toBe(104);
-    expect(result.report.reference?.referenceSpan).toBe(105);
-    expect(result.report.reference?.referenceSteps).toBe(105);
-    expect(result.report.reference?.referenceEntries).toBe(105);
-    expect(result.report.reference?.referenceGaps).toEqual([]);
-    expect(result.report.reference?.parity).toBe("smaller");
-    expect(selected.has("world_table")).toBe(true);
-    expect(result.report.warnings.join("\n")).not.toMatch(/was not found/u);
-  });
-
-  it("records board and world query constructs in GameIntent reports", () => {
-    for (const path of [
-      "examples/fox-hunt-100.mkpro",
-      "examples/minesweeper-9x9.mkpro",
-      "examples/treasure-hunter-2.mkpro",
-      "examples/dangerous-loading.mkpro",
-      "examples/alaram.mkpro",
-      "examples/dungeon.mkpro",
-      "examples/giants-country.mkpro",
-    ]) {
-      const result = compileMKPro(source(path));
-
-      expect(result.report.optimizations.some((optimization) => optimization.name === "spatial-query-lowering")).toBe(true);
-      expect(result.report.proofs.some((proof) => proof.id === "spatial-query-semantics")).toBe(true);
-    }
-  });
-
-  it("loads the compact cave output into the headless emulator", () => {
-    const { MK61 } = require("./emulator/mk61.cjs") as {
-      MK61: new () => {
-        loadProgram: (codes: number[]) => { diagnostics: string[] };
-        readProgramCodes: (count: number) => number[];
-        setRegister: (register: string, value: string) => unknown;
-        readRegister: (register: string) => string;
-        press: (key: string) => unknown;
-        pressSequence: (keys: string[]) => unknown;
-        inputNumber: (value: string, options?: { clear?: boolean }) => unknown;
-        programCounter: () => string;
-        displayText: () => string;
-        runUntilStable: (options: { maxFrames: number; stableFrames: number }) => { stopped: boolean };
-      };
-    };
-    const result = compileMKPro(source("examples/cave-treasure.mkpro"));
-    const codes = result.steps.map((step) => step.opcode);
-    const calc = new MK61();
-    const loaded = calc.loadProgram(codes);
-
-    calc.setRegister("4", "2");
-    calc.setRegister("5", "10");
-    calc.setRegister("6", "ГE-02");
-    calc.setRegister("7", "5E-1");
-    calc.setRegister("8", "-52");
-    calc.setRegister("9", "4,_3E-08");
-    calc.pressSequence(["БП", "4", "4", "4", "4", "П→X", "9", "F", "0", "С/П"]);
-
-    expect(loaded.diagnostics).toEqual([]);
-    expect(calc.readProgramCodes(codes.length)).toEqual(codes);
-    expect(calc.runUntilStable({ maxFrames: 600, stableFrames: 6 }).stopped).toBe(true);
-    expect(calc.programCounter()).toBe("01");
-    expect(calc.displayText()).toBe("1,0000001");
-    expect(calc.readRegister("e")).toBe("44,");
-
-    calc.inputNumber("2", { clear: true });
-    calc.press("С/П");
-    expect(calc.runUntilStable({ maxFrames: 600, stableFrames: 6 }).stopped).toBe(true);
-    expect(calc.displayText()).toBe("1,0000002");
-    expect(calc.readRegister("e")).toBe("43,");
   });
 
   it("reports automatic optimizer capabilities for V2 programs", () => {
-    const result = compileMKPro(source("examples/cave-sketch.mkpro"));
+    const result = compileMKPro(source("examples/human.mkpro"));
 
     expect(result.report.ir.lowered).toBe(true);
     expect(result.report.ir.v2).toBe(true);
@@ -572,13 +269,8 @@ program SimpleRules {
     expect(MK61_PROFILE.emulatorFacts.find((fact) => fact.id === "r0-star-f-aliases")?.detail).toMatch(/do not preserve R0/u);
   });
 
-  it("always uses exact-machine lowerings for the full cave reference", () => {
-    const result = compileMKPro(source("examples/cave-treasure.mkpro"));
-    const applied = new Set(result.report.optimizations.map((optimization) => optimization.name));
-    expect(applied.has("super-dark-dispatch")).toBe(false);
-    expect(applied.has("x2-display-byte-scheduling")).toBe(true);
-    expect(result.report.rejectedCandidates.find((candidate) => candidate.variant === "super-dark-dispatch")?.reason).toMatch(/proved FA\.\.FF selector/u);
-    expect(result.report.steps).toBeLessThanOrEqual(105);
+  it("does not compile the full cave reference through exact-machine templates", () => {
+    expect(() => compileMKPro(source("examples/spatial-drafts/cave-treasure.mkpro"))).toThrow(/real rule lowerers before code generation/u);
   });
 
   it("uses maximum dispatch lowering by default", () => {

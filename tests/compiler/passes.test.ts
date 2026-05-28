@@ -391,11 +391,11 @@ describe("ir passes on synthetic programs", () => {
     const recallOp = rewritten.ops.find((op) => op.kind === "indirect-recall");
     const pruned = deadStoreElimination.run(rewritten.ops, ctx);
 
-    expect(recallOp).toMatchObject({
-      kind: "indirect-recall",
-      register: "7",
-      meta: expect.objectContaining({ comment: expect.stringContaining("indirect-memory-target=2") }),
-    });
+    expect(recallOp?.kind).toBe("indirect-recall");
+    if (recallOp?.kind === "indirect-recall") {
+      expect(recallOp.register).toBe("7");
+      expect(recallOp.meta?.comment).toContain("indirect-memory-target=2");
+    }
     expect(pruned.ops).toContainEqual(expect.objectContaining({ kind: "store", register: "2" }));
   });
 
