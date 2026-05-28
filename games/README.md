@@ -17,16 +17,20 @@ Cleaned game programs: 254.
 
 ## Tekhnika Molodezhi / KEI
 
-Source: *Tekhnika Molodezhi*, No. 7, 1987 — «Клуб электронных игр» (KEI column)
+Source: *Tekhnika Molodezhi*, 1987 — «Клуб электронных игр» (KEI column)
 
 Files are stored in [`kei/`](./kei/):
 
+- `lunolot-d.txt` — dynamic *Lunar Lander* («Лунолёт-Д»), 80 steps.
 - `treasure-cave.txt` — original *Treasure Cave* («Пещера сокровищ»), 105 steps.
 - `winner.txt` — *Winner* («Победитель»), MK-61 adaptation, 101 steps.
 - Matching `*.md` descriptions and `manifest.tsv`.
 
-Both listings come from the same KEI column in TM No. 7/1987. The modified demo in
+The two 105/101-step listings come from the same KEI column in TM No. 7/1987.
+The modified demo in
 [`anvarov/`](./anvarov/) reimplements *Treasure Cave* with a different program.
+
+Programs: **3**.
 
 ## Serge Anvarov Collection
 
@@ -63,3 +67,15 @@ Files are stored in [`bolknote/`](./bolknote/):
 - `manifest.tsv` - tab-separated index with program file, description file, title, author, and source URL.
 
 Programs: **1**.
+
+## MonatkoDenis Blog
+
+Source: [«Поиграем на микрокалькуляторе»](https://monatkodenis.blogspot.com/2014/01/blog-post.html)
+
+Files are stored in [`monatkodenis/`](./monatkodenis/):
+
+- `fox-hunt-mk61.txt` - improved MK-61 variant of «Охота на лис», restored from the source scan.
+- `clock.txt` - «Программа-часы» by С. Конин and А. Шарапов.
+- Matching `*.md` descriptions and `manifest.tsv`.
+
+Programs: **2**.

@@ -1,5 +1,5 @@
 import type { IrMeta, IrOp } from "../types.ts";
-import { type IrPass, type IrPassFn } from "./helpers.ts";
+import { hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
 
 interface TailJumpTarget {
   continuation: string | number;
@@ -11,6 +11,7 @@ const run: IrPassFn = (ops) => {
   const tailJumpTargets = findTailJumpTargets(ops);
   const returnContinuations = collectReturnContinuations(ops, tailJumpTargets);
   const returnLabels = collectReturnLabels(ops);
+  const normalizeContinuation = buildContinuationNormalizer(ops);
   const result: IrOp[] = [];
   let applied = 0;
   for (let index = 0; index < ops.length; index += 1) {
@@ -76,7 +77,11 @@ const run: IrPassFn = (ops) => {
         continue;
       }
       const target = typeof op.target === "string" ? tailJumpTargets.get(op.target) : undefined;
-      if (target !== undefined && next?.kind === "jump" && sameTarget(next.target, target.continuation)) {
+      if (
+        target !== undefined &&
+        next?.kind === "jump" &&
+        sameTarget(normalizeContinuation(next.target), target.continuation)
+      ) {
         result.push({
           kind: "jump",
           target: op.target,
@@ -92,7 +97,11 @@ const run: IrPassFn = (ops) => {
         applied += 1;
         continue;
       }
-      if (target !== undefined && next?.kind === "label" && sameTarget(next.name, target.continuation)) {
+      if (
+        target !== undefined &&
+        next?.kind === "label" &&
+        sameTarget(normalizeContinuation(next.name), target.continuation)
+      ) {
         result.push({
           kind: "jump",
           target: op.target,
@@ -133,13 +142,14 @@ export const tailCallLowering: IrPass = {
 function findTailJumpTargets(ops: readonly IrOp[]): Map<string, TailJumpTarget> {
   const calls = new Map<string, Array<string | number | undefined>>();
   const nonCallFlowTargets = new Set<string>();
+  const normalizeContinuation = buildContinuationNormalizer(ops);
 
   for (let index = 0; index < ops.length; index += 1) {
     const op = ops[index]!;
     if (op.kind === "call" && typeof op.target === "string") {
       const continuation = callContinuation(ops, index);
       const existing = calls.get(op.target) ?? [];
-      existing.push(continuation);
+      existing.push(continuation === undefined ? undefined : normalizeContinuation(continuation));
       calls.set(op.target, existing);
       continue;
     }
@@ -231,4 +241,26 @@ function callContinuation(ops: readonly IrOp[], index: number): string | number 
 
 function sameTarget(left: string | number, right: string | number): boolean {
   return left === right;
+}
+
+function buildContinuationNormalizer(ops: readonly IrOp[]): (target: string | number) => string | number {
+  const labelIndexes = new Map<string, number>();
+  for (let index = 0; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") labelIndexes.set(op.name, index);
+  }
+
+  const normalize = (target: string | number, seen = new Set<string>()): string | number => {
+    if (typeof target !== "string") return target;
+    if (seen.has(target)) return target;
+    seen.add(target);
+    const labelIndex = labelIndexes.get(target);
+    if (labelIndex === undefined) return target;
+    const executableIndex = nextExecutableIndex(ops, labelIndex + 1);
+    const executable = executableIndex === undefined ? undefined : ops[executableIndex];
+    if (executable?.kind !== "jump" || hasRewriteBarrier(executable)) return target;
+    return normalize(executable.target, seen);
+  };
+
+  return (target) => normalize(target);
 }

@@ -24,6 +24,7 @@ import { redundantPrologueElimination } from "./redundant-prologue.ts";
 import { registerCoalesce } from "./register-coalesce.ts";
 import { returnZeroJump } from "./return-zero-jump.ts";
 import { r0FractionalSentinel } from "./r0-fractional-sentinel.ts";
+import { sharedCallTail } from "./shared-call-tail.ts";
 import { storeRecallPeephole } from "./store-recall-peephole.ts";
 import { tailCallLowering } from "./tail-call.ts";
 import { vpX2Peephole } from "./vp-x2-peephole.ts";
@@ -31,6 +32,7 @@ import { vpX2Peephole } from "./vp-x2-peephole.ts";
 const PASS_PIPELINE: ReadonlyArray<IrPass> = [
   redundantPrologueElimination,
   tailCallLowering,
+  sharedCallTail,
   returnZeroJump,
   storeRecallPeephole,
   jumpToNextThreading,

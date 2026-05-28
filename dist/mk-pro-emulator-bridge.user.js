@@ -352,6 +352,414 @@ var MKProEmulatorBundle = (() => {
     return name.trim().replaceAll("\u2190\u2192", "<->").replaceAll("\u2192", "->").replaceAll("\u2190", "<-").replace(/\^\{([^}]+)\}/gu, "^$1").replaceAll("\u03C0", "pi").replaceAll("\u221A", "sqrt").replaceAll("\u21BB", "reverse").replaceAll("\u2260", "!=").replaceAll("\u2265", ">=").replaceAll("\u2264", "<=").replaceAll("\xD7", "*").replaceAll("\xF7", "/").replaceAll("\u2212", "-").replaceAll("\u2223", "|").replaceAll("\u0425", "X").replaceAll("\u0445", "x").replaceAll("K", "\u041A").replaceAll("k", "\u043A").replace(/^([FfКк])(?=\S)/u, "$1 ").replace(/\s+/g, " ").toLowerCase();
   }
 
+  // src/core/constant-folder.ts
+  var MAX_FOLDED_SIGNIFICANT_DIGITS = 8;
+  var MAX_FOLDED_DECIMAL_SCALE = 12;
+  var MAX_LITERAL_EXPONENT = 18;
+  var ConstantFolder = class {
+    applied = 0;
+    foldProgram(ast) {
+      for (const declaration of ast.declarations) {
+        if (declaration.kind === "store" && declaration.value !== void 0) {
+          declaration.value = this.foldExpression(declaration.value);
+        }
+        if (declaration.kind === "const") {
+          declaration.value = this.foldExpression(declaration.value);
+        }
+      }
+      for (const state of ast.states) {
+        for (const field of state.fields) {
+          if (field.initial !== void 0) field.initial = this.foldExpression(field.initial);
+        }
+      }
+      for (const entry of ast.entries) this.foldStatements(entry.body);
+      for (const proc of ast.procs) this.foldStatements(proc.body);
+      for (const block of ast.blocks) this.foldStatements(block.body);
+      return this.applied;
+    }
+    foldStatements(statements) {
+      for (const statement of statements) {
+        switch (statement.kind) {
+          case "pause":
+          case "halt":
+          case "trap":
+            statement.expr = this.foldExpression(statement.expr);
+            break;
+          case "ask":
+            if (statement.prompt !== void 0) statement.prompt = this.foldExpression(statement.prompt);
+            break;
+          case "assign":
+            statement.expr = this.foldExpression(statement.expr);
+            break;
+          case "loop":
+            this.foldStatements(statement.body);
+            break;
+          case "if":
+            statement.condition = this.foldCondition(statement.condition);
+            this.foldStatements(statement.thenBody);
+            if (statement.elseBody !== void 0) this.foldStatements(statement.elseBody);
+            break;
+          case "switch":
+            statement.expr = this.foldExpression(statement.expr);
+            for (const switchCase of statement.cases) {
+              switchCase.value = this.foldExpression(switchCase.value);
+              this.foldStatements(switchCase.body);
+            }
+            if (statement.defaultBody !== void 0) this.foldStatements(statement.defaultBody);
+            break;
+          case "dispatch":
+            statement.expr = this.foldExpression(statement.expr);
+            for (const dispatchCase of statement.cases) {
+              dispatchCase.value = this.foldExpression(dispatchCase.value);
+              this.foldStatements(dispatchCase.body);
+            }
+            if (statement.defaultBody !== void 0) this.foldStatements(statement.defaultBody);
+            break;
+          case "core":
+            for (const input of statement.inputs ?? []) {
+              input.expr = this.foldExpression(input.expr);
+            }
+            break;
+          case "input":
+          case "show":
+          case "call":
+          case "egg":
+            break;
+        }
+      }
+    }
+    foldCondition(condition) {
+      return {
+        left: this.foldExpression(condition.left),
+        op: condition.op,
+        right: this.foldExpression(condition.right)
+      };
+    }
+    folded(expr) {
+      this.applied += 1;
+      return expr;
+    }
+    foldExpression(expr) {
+      switch (expr.kind) {
+        case "number":
+        case "identifier":
+          return expr;
+        case "unary": {
+          const inner = this.foldExpression(expr.expr);
+          if (inner.kind === "number") {
+            const negated = negateNumberExpression(inner);
+            if (negated !== void 0) return this.folded(negated);
+          }
+          if (inner.kind === "unary" && inner.op === "-") return this.folded(inner.expr);
+          return inner === expr.expr ? expr : { ...expr, expr: inner };
+        }
+        case "call":
+          return { ...expr, args: expr.args.map((arg) => this.foldExpression(arg)) };
+        case "binary": {
+          const left = this.foldExpression(expr.left);
+          const right = this.foldExpression(expr.right);
+          const folded = this.foldBinary(expr.op, left, right);
+          if (folded !== void 0) return this.folded(folded);
+          return left === expr.left && right === expr.right ? expr : { ...expr, left, right };
+        }
+      }
+    }
+    foldBinary(op, left, right) {
+      const numeric = foldNumericBinary(op, left, right);
+      if (numeric !== void 0 && estimateNumberCost(numeric.raw) <= estimateBinaryCost(left, right)) {
+        return numeric;
+      }
+      switch (op) {
+        case "+":
+          if (isNumericValue(left, 0)) return right;
+          if (isNumericValue(right, 0)) return left;
+          return void 0;
+        case "-":
+          if (isNumericValue(right, 0)) return left;
+          if (isNumericValue(left, 0)) return { kind: "unary", op: "-", expr: right };
+          return void 0;
+        case "*": {
+          if (isNumericValue(left, 1)) return right;
+          if (isNumericValue(right, 1)) return left;
+          if (isNumericValue(left, 0) && expressionSafeToDrop(right)) return numberExpression(0);
+          if (isNumericValue(right, 0) && expressionSafeToDrop(left)) return numberExpression(0);
+          const distributed = distributeConstantFactor(left, right) ?? distributeConstantFactor(right, left);
+          if (distributed !== void 0 && estimateExpressionCost(distributed) <= estimateBinaryCost(left, right)) {
+            return distributed;
+          }
+          return void 0;
+        }
+        case "/":
+          if (isNumericValue(right, 1)) return left;
+          return void 0;
+      }
+    }
+  };
+  function foldProgramConstants(ast) {
+    return new ConstantFolder().foldProgram(ast);
+  }
+  function foldNumericBinary(op, left, right) {
+    if (left.kind !== "number" || right.kind !== "number") return void 0;
+    const lhs = parseDecimalLiteral(left.raw);
+    const rhs = parseDecimalLiteral(right.raw);
+    if (lhs === void 0 || rhs === void 0) return void 0;
+    const result = (() => {
+      switch (op) {
+        case "+":
+          return addDecimal(lhs, rhs);
+        case "-":
+          return subtractDecimal(lhs, rhs);
+        case "*":
+          return multiplyDecimal(lhs, rhs);
+        case "/":
+          return divideDecimal(lhs, rhs);
+      }
+    })();
+    return result === void 0 ? void 0 : decimalNumberExpression(result);
+  }
+  function negateNumberExpression(expr) {
+    const value = parseDecimalLiteral(expr.raw);
+    return value === void 0 ? void 0 : decimalNumberExpression({ num: -value.num, scale: value.scale });
+  }
+  function distributeConstantFactor(factor, term) {
+    if (factor.kind !== "number" || term.kind !== "binary" || term.op !== "+" && term.op !== "-") return void 0;
+    if (!expressionPureForFolding(term)) return void 0;
+    const leftConstant = term.left.kind === "number" ? term.left : void 0;
+    const rightConstant = term.right.kind === "number" ? term.right : void 0;
+    if (term.op === "+") {
+      const constant = leftConstant ?? rightConstant;
+      const rest = leftConstant !== void 0 ? term.right : term.left;
+      if (constant === void 0) return void 0;
+      const foldedConstant = foldNumericBinary("*", factor, constant);
+      if (foldedConstant === void 0) return void 0;
+      return {
+        kind: "binary",
+        op: "+",
+        left: foldedConstant,
+        right: multiplyExpressions(factor, rest)
+      };
+    }
+    if (leftConstant !== void 0) {
+      const factorValue = numericLiteralValue(factor);
+      if (factorValue !== void 0 && factorValue < 0) {
+        const positiveFactor = negateNumberExpression(factor);
+        if (positiveFactor === void 0) return void 0;
+        const foldedConstant2 = foldNumericBinary("*", positiveFactor, leftConstant);
+        if (foldedConstant2 === void 0) return void 0;
+        return subtractExpressions(multiplyExpressions(positiveFactor, term.right), foldedConstant2);
+      }
+      const foldedConstant = foldNumericBinary("*", factor, leftConstant);
+      if (foldedConstant === void 0) return void 0;
+      return subtractExpressions(foldedConstant, multiplyExpressions(factor, term.right));
+    }
+    if (rightConstant !== void 0) {
+      const foldedConstant = foldNumericBinary("*", factor, rightConstant);
+      if (foldedConstant === void 0) return void 0;
+      return subtractExpressions(multiplyExpressions(factor, term.left), foldedConstant);
+    }
+    return void 0;
+  }
+  function multiplyExpressions(left, right) {
+    if (isNumericValue(left, 1)) return right;
+    if (isNumericValue(right, 1)) return left;
+    return { kind: "binary", op: "*", left, right };
+  }
+  function subtractExpressions(left, right) {
+    if (isNumericValue(right, 0)) return left;
+    if (isNumericValue(left, 0)) return { kind: "unary", op: "-", expr: right };
+    const rightValue = numericLiteralValue(right);
+    if (rightValue !== void 0 && rightValue < 0 && right.kind === "number") {
+      const positive = negateNumberExpression(right);
+      if (positive !== void 0) return { kind: "binary", op: "+", left, right: positive };
+    }
+    return { kind: "binary", op: "-", left, right };
+  }
+  function expressionPureForFolding(expr) {
+    switch (expr.kind) {
+      case "number":
+      case "identifier":
+        return true;
+      case "unary":
+        return expressionPureForFolding(expr.expr);
+      case "binary":
+        return expressionPureForFolding(expr.left) && expressionPureForFolding(expr.right);
+      case "call":
+        return expr.callee.toLowerCase() !== "random" && expr.args.every(expressionPureForFolding);
+    }
+  }
+  function expressionSafeToDrop(expr) {
+    switch (expr.kind) {
+      case "number":
+      case "identifier":
+        return true;
+      case "unary":
+        return expressionSafeToDrop(expr.expr);
+      case "binary":
+        return expr.op !== "/" && expressionSafeToDrop(expr.left) && expressionSafeToDrop(expr.right);
+      case "call":
+        return false;
+    }
+  }
+  function parseDecimalLiteral(raw) {
+    const match = /^(-)?(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/iu.exec(raw.trim());
+    if (!match) return void 0;
+    const exponent = match[4] === void 0 ? 0 : Number(match[4]);
+    if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > MAX_LITERAL_EXPONENT) return void 0;
+    const integerPart = match[2];
+    const fractionalPart = match[3] ?? "";
+    let digits = `${integerPart}${fractionalPart}`.replace(/^0+/u, "");
+    let scale = fractionalPart.length - exponent;
+    if (scale < 0) {
+      digits = `${digits}${"0".repeat(-scale)}`;
+      scale = 0;
+    }
+    const num = (match[1] === "-" ? -1n : 1n) * BigInt(digits || "0");
+    return normalizeDecimal({ num, scale });
+  }
+  function addDecimal(left, right) {
+    const scale = Math.max(left.scale, right.scale);
+    return normalizeDecimal({
+      num: left.num * pow10(scale - left.scale) + right.num * pow10(scale - right.scale),
+      scale
+    });
+  }
+  function subtractDecimal(left, right) {
+    return addDecimal(left, { num: -right.num, scale: right.scale });
+  }
+  function multiplyDecimal(left, right) {
+    return normalizeDecimal({
+      num: left.num * right.num,
+      scale: left.scale + right.scale
+    });
+  }
+  function divideDecimal(left, right) {
+    if (right.num === 0n) return void 0;
+    let numerator = left.num * pow10(right.scale);
+    let denominator = right.num * pow10(left.scale);
+    if (denominator < 0n) {
+      numerator = -numerator;
+      denominator = -denominator;
+    }
+    const divisor = gcd(absBigInt(numerator), denominator);
+    numerator /= divisor;
+    denominator /= divisor;
+    let twos = 0;
+    while (denominator % 2n === 0n) {
+      denominator /= 2n;
+      twos += 1;
+    }
+    let fives = 0;
+    while (denominator % 5n === 0n) {
+      denominator /= 5n;
+      fives += 1;
+    }
+    if (denominator !== 1n) return void 0;
+    const scale = Math.max(twos, fives);
+    if (scale > MAX_FOLDED_DECIMAL_SCALE) return void 0;
+    return normalizeDecimal({
+      num: numerator * powBigInt(2n, scale - twos) * powBigInt(5n, scale - fives),
+      scale
+    });
+  }
+  function normalizeDecimal(value) {
+    let { num, scale } = value;
+    if (num === 0n) return { num: 0n, scale: 0 };
+    while (scale > 0 && num % 10n === 0n) {
+      num /= 10n;
+      scale -= 1;
+    }
+    return { num, scale };
+  }
+  function decimalNumberExpression(value) {
+    const normalized = normalizeDecimal(value);
+    if (normalized.scale > MAX_FOLDED_DECIMAL_SCALE) return void 0;
+    const raw = decimalToRaw(normalized);
+    if (significantDigitCount(raw) > MAX_FOLDED_SIGNIFICANT_DIGITS) return void 0;
+    return { kind: "number", raw };
+  }
+  function decimalToRaw(value) {
+    const normalized = normalizeDecimal(value);
+    if (normalized.num === 0n) return "0";
+    const sign = normalized.num < 0n ? "-" : "";
+    const digits = absBigInt(normalized.num).toString();
+    if (normalized.scale === 0) return `${sign}${digits}`;
+    if (digits.length <= normalized.scale) {
+      return `${sign}0.${"0".repeat(normalized.scale - digits.length)}${digits}`;
+    }
+    const split = digits.length - normalized.scale;
+    return `${sign}${digits.slice(0, split)}.${digits.slice(split)}`;
+  }
+  function significantDigitCount(raw) {
+    const digits = raw.replace(/^-|\.|e[+-]?\d+$/giu, "").replace(/^0+/u, "");
+    return digits.length === 0 ? 1 : digits.length;
+  }
+  function numberExpression(value) {
+    return { kind: "number", raw: String(value) };
+  }
+  function isNumericValue(expr, value) {
+    const parsed = numericLiteralValue(expr);
+    return parsed !== void 0 && parsed === value;
+  }
+  function numericLiteralValue(expr) {
+    if (expr.kind !== "number") return void 0;
+    const value = Number(expr.raw);
+    return Number.isFinite(value) ? value : void 0;
+  }
+  function estimateBinaryCost(left, right) {
+    return estimateExpressionCost(left) + estimateExpressionCost(right) + 1;
+  }
+  function estimateExpressionCost(expr) {
+    switch (expr.kind) {
+      case "number":
+        return estimateNumberCost(expr.raw);
+      case "identifier":
+        return 1;
+      case "unary":
+        return estimateExpressionCost(expr.expr) + 1;
+      case "binary":
+        return estimateExpressionCost(expr.left) + estimateExpressionCost(expr.right) + 1;
+      case "call":
+        return expr.args.reduce((sum, arg) => sum + estimateExpressionCost(arg), 1);
+    }
+  }
+  function estimateNumberCost(raw) {
+    const normalized = raw.trim().toLowerCase();
+    const negative = normalized.startsWith("-");
+    const unsigned = negative ? normalized.slice(1) : normalized;
+    const [mantissa = "0", exponent] = unsigned.split("e");
+    let cost = negative ? 1 : 0;
+    for (const char of mantissa) {
+      if (char === "." || /\d/u.test(char)) cost += 1;
+    }
+    if (exponent !== void 0) {
+      cost += 1;
+      if (exponent.startsWith("-")) cost += 1;
+      cost += exponent.replace(/^[+-]/u, "").length;
+    }
+    return cost;
+  }
+  function pow10(exponent) {
+    return powBigInt(10n, exponent);
+  }
+  function powBigInt(base, exponent) {
+    let result = 1n;
+    for (let i = 0; i < exponent; i += 1) result *= base;
+    return result;
+  }
+  function gcd(left, right) {
+    let a = left;
+    let b = right;
+    while (b !== 0n) {
+      const next = a % b;
+      a = b;
+      b = next;
+    }
+    return a;
+  }
+  function absBigInt(value) {
+    return value < 0n ? -value : value;
+  }
+
   // src/core/parser.ts
   var V2_RESERVED_RULE_NAMES = /* @__PURE__ */ new Set([
     "challenge",
@@ -4525,8 +4933,139 @@ var MKProEmulatorBundle = (() => {
     layoutSafe: false
   };
 
-  // src/core/passes/store-recall-peephole.ts
+  // src/core/passes/shared-call-tail.ts
   var run16 = (ops) => {
+    const candidates = collectSharedCallTails(ops);
+    const normalizeContinuation = buildContinuationNormalizer(ops);
+    if (candidates.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    const result = [];
+    let applied = 0;
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      const next = ops[index + 1];
+      if (op.kind === "call" && next?.kind === "jump") {
+        const key = callTailKey(op, next, normalizeContinuation);
+        const candidate = candidates.get(key);
+        if (candidate !== void 0) {
+          result.push({
+            kind: "jump",
+            target: candidate.label,
+            opcode: 81,
+            meta: {
+              ...op.meta,
+              mnemonic: "\u0411\u041F",
+              comment: op.meta.comment?.replace(/^proc call/u, "shared call tail") ?? "shared call tail"
+            },
+            targetMeta: { comment: "shared call tail" }
+          });
+          index += 1;
+          applied += 1;
+          continue;
+        }
+      }
+      result.push(op);
+    }
+    for (const candidate of candidates.values()) {
+      result.push({ kind: "label", name: candidate.label });
+      result.push({
+        ...candidate.call,
+        meta: {
+          ...candidate.call.meta,
+          comment: candidate.call.meta.comment ?? "shared call tail helper"
+        }
+      });
+      result.push({
+        ...candidate.continuation,
+        meta: {
+          ...candidate.continuation.meta,
+          comment: candidate.continuation.meta.comment ?? "shared call tail continuation"
+        }
+      });
+    }
+    return {
+      ops: result,
+      applied,
+      optimizations: [{
+        name: "shared-call-tail",
+        detail: `Shared ${applied} call+jump tail sequence${applied === 1 ? "" : "s"}.`
+      }]
+    };
+  };
+  var sharedCallTail = {
+    name: "shared-call-tail",
+    run: run16,
+    layoutSafe: false
+  };
+  function collectSharedCallTails(ops) {
+    const normalizeContinuation = buildContinuationNormalizer(ops);
+    const counts = /* @__PURE__ */ new Map();
+    for (let index2 = 0; index2 < ops.length - 1; index2 += 1) {
+      const op = ops[index2];
+      const next = ops[index2 + 1];
+      if (op.kind !== "call" || next.kind !== "jump") continue;
+      if (hasRewriteBarrier(op) || hasRewriteBarrier(next)) continue;
+      const normalizedTarget = normalizeContinuation(next.target);
+      const continuation = {
+        ...next,
+        target: normalizedTarget
+      };
+      const key = callTailKey(op, continuation, normalizeContinuation);
+      const existing = counts.get(key);
+      if (existing === void 0) {
+        counts.set(key, { call: op, continuation, count: 1 });
+      } else {
+        existing.count += 1;
+      }
+    }
+    const result = /* @__PURE__ */ new Map();
+    let index = 0;
+    for (const [key, candidate] of counts) {
+      if (candidate.count < 3) continue;
+      result.set(key, {
+        key,
+        label: `__shared_call_tail_${index}`,
+        call: candidate.call,
+        continuation: candidate.continuation,
+        count: candidate.count
+      });
+      index += 1;
+    }
+    return result;
+  }
+  function callTailKey(call, continuation, normalizeContinuation) {
+    return `${targetKey(call.target)}|${targetKey(normalizeContinuation(continuation.target))}`;
+  }
+  function targetKey(target) {
+    return typeof target === "number" ? `#${target}` : target;
+  }
+  function buildContinuationNormalizer(ops) {
+    const labelIndexes = /* @__PURE__ */ new Map();
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (op.kind === "label") labelIndexes.set(op.name, index);
+    }
+    const normalize = (target, seen = /* @__PURE__ */ new Set()) => {
+      if (typeof target !== "string") return target;
+      if (seen.has(target)) return target;
+      seen.add(target);
+      const labelIndex = labelIndexes.get(target);
+      if (labelIndex === void 0) return target;
+      const executableIndex = nextExecutableIndex(ops, labelIndex + 1);
+      const executable = executableIndex === void 0 ? void 0 : ops[executableIndex];
+      if (executable?.kind !== "jump" || hasRewriteBarrier(executable)) return target;
+      return normalize(executable.target, seen);
+    };
+    return (target) => normalize(target);
+  }
+  function nextExecutableIndex(ops, start) {
+    for (let index = start; index < ops.length; index += 1) {
+      if (ops[index]?.kind !== "label") return index;
+    }
+    return void 0;
+  }
+
+  // src/core/passes/store-recall-peephole.ts
+  var run17 = (ops) => {
     const result = [];
     let applied = 0;
     for (let i = 0; i < ops.length; i += 1) {
@@ -4554,15 +5093,16 @@ var MKProEmulatorBundle = (() => {
   };
   var storeRecallPeephole = {
     name: "store-recall-peephole",
-    run: run16,
+    run: run17,
     layoutSafe: false
   };
 
   // src/core/passes/tail-call.ts
-  var run17 = (ops) => {
+  var run18 = (ops) => {
     const tailJumpTargets = findTailJumpTargets(ops);
     const returnContinuations = collectReturnContinuations(ops, tailJumpTargets);
     const returnLabels = collectReturnLabels(ops);
+    const normalizeContinuation = buildContinuationNormalizer2(ops);
     const result = [];
     let applied = 0;
     for (let index = 0; index < ops.length; index += 1) {
@@ -4592,7 +5132,7 @@ var MKProEmulatorBundle = (() => {
         }
       }
       if (op.kind === "call") {
-        const continuationIndex = nextExecutableIndex(ops, index + 1);
+        const continuationIndex = nextExecutableIndex2(ops, index + 1);
         const continuation = continuationIndex === void 0 ? void 0 : ops[continuationIndex];
         const continuationIsImmediate = continuationIndex === index + 1;
         if (continuation?.kind === "jump" && isReturnLabel(continuation.target, returnLabels)) {
@@ -4628,7 +5168,7 @@ var MKProEmulatorBundle = (() => {
           continue;
         }
         const target = typeof op.target === "string" ? tailJumpTargets.get(op.target) : void 0;
-        if (target !== void 0 && next?.kind === "jump" && sameTarget(next.target, target.continuation)) {
+        if (target !== void 0 && next?.kind === "jump" && sameTarget(normalizeContinuation(next.target), target.continuation)) {
           result.push({
             kind: "jump",
             target: op.target,
@@ -4644,7 +5184,7 @@ var MKProEmulatorBundle = (() => {
           applied += 1;
           continue;
         }
-        if (target !== void 0 && next?.kind === "label" && sameTarget(next.name, target.continuation)) {
+        if (target !== void 0 && next?.kind === "label" && sameTarget(normalizeContinuation(next.name), target.continuation)) {
           result.push({
             kind: "jump",
             target: op.target,
@@ -4675,18 +5215,19 @@ var MKProEmulatorBundle = (() => {
   };
   var tailCallLowering = {
     name: "tail-call-lowering",
-    run: run17,
+    run: run18,
     layoutSafe: false
   };
   function findTailJumpTargets(ops) {
     const calls = /* @__PURE__ */ new Map();
     const nonCallFlowTargets = /* @__PURE__ */ new Set();
+    const normalizeContinuation = buildContinuationNormalizer2(ops);
     for (let index = 0; index < ops.length; index += 1) {
       const op = ops[index];
       if (op.kind === "call" && typeof op.target === "string") {
         const continuation = callContinuation(ops, index);
         const existing = calls.get(op.target) ?? [];
-        existing.push(continuation);
+        existing.push(continuation === void 0 ? void 0 : normalizeContinuation(continuation));
         calls.set(op.target, existing);
         continue;
       }
@@ -4735,12 +5276,12 @@ var MKProEmulatorBundle = (() => {
     for (let index = 0; index < ops.length; index += 1) {
       const op = ops[index];
       if (op.kind !== "label") continue;
-      const next = nextExecutableIndex(ops, index + 1);
+      const next = nextExecutableIndex2(ops, index + 1);
       if (next !== void 0 && ops[next]?.kind === "return") result.add(op.name);
     }
     return result;
   }
-  function nextExecutableIndex(ops, start) {
+  function nextExecutableIndex2(ops, start) {
     for (let index = start; index < ops.length; index += 1) {
       if (ops[index]?.kind !== "label") return index;
     }
@@ -4764,6 +5305,25 @@ var MKProEmulatorBundle = (() => {
   function sameTarget(left, right) {
     return left === right;
   }
+  function buildContinuationNormalizer2(ops) {
+    const labelIndexes = /* @__PURE__ */ new Map();
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (op.kind === "label") labelIndexes.set(op.name, index);
+    }
+    const normalize = (target, seen = /* @__PURE__ */ new Set()) => {
+      if (typeof target !== "string") return target;
+      if (seen.has(target)) return target;
+      seen.add(target);
+      const labelIndex = labelIndexes.get(target);
+      if (labelIndex === void 0) return target;
+      const executableIndex = nextExecutableIndex2(ops, labelIndex + 1);
+      const executable = executableIndex === void 0 ? void 0 : ops[executableIndex];
+      if (executable?.kind !== "jump" || hasRewriteBarrier(executable)) return target;
+      return normalize(executable.target, seen);
+    };
+    return (target) => normalize(target);
+  }
 
   // src/core/passes/vp-x2-peephole.ts
   function displayBoundaryText(op) {
@@ -4781,7 +5341,7 @@ var MKProEmulatorBundle = (() => {
     if (hasRewriteBarrier(op)) return false;
     return op.kind === "plain" && op.opcode === 53 && /display|x2|frac/u.test(displayBoundaryText(op));
   }
-  var run18 = (ops) => {
+  var run19 = (ops) => {
     const remove = /* @__PURE__ */ new Set();
     for (let i = 1; i < ops.length; i += 1) {
       if (isDisplayVp(ops[i - 1]) && isFractionAfterDisplayBoundary(ops[i])) {
@@ -4802,7 +5362,7 @@ var MKProEmulatorBundle = (() => {
   };
   var vpX2Peephole = {
     name: "vp-x2-peephole",
-    run: run18,
+    run: run19,
     layoutSafe: false
   };
 
@@ -4810,6 +5370,7 @@ var MKProEmulatorBundle = (() => {
   var PASS_PIPELINE = [
     redundantPrologueElimination,
     tailCallLowering,
+    sharedCallTail,
     returnZeroJump,
     storeRecallPeephole,
     jumpToNextThreading,
@@ -5193,6 +5754,13 @@ var MKProEmulatorBundle = (() => {
     const optimizations = [];
     const warnings = [];
     const candidates = [];
+    const foldedConstants = foldProgramConstants(ast);
+    if (foldedConstants > 0) {
+      optimizations.push({
+        name: "expression-constant-folder",
+        detail: `Folded ${foldedConstants} constant expression node(s) before code generation.`
+      });
+    }
     eliminateUnobservedState(ast, optimizations);
     hoistCommonBranchTails(ast, optimizations);
     validateSemanticDomains(ast, diagnostics);
@@ -5817,7 +6385,9 @@ var MKProEmulatorBundle = (() => {
     showSequenceHelpers = /* @__PURE__ */ new Map();
     expressionHelpers = /* @__PURE__ */ new Map();
     lineCountHelpers = /* @__PURE__ */ new Map();
+    spatialSumLoopHelpers = /* @__PURE__ */ new Map();
     currentXVariable;
+    currentXKnownZero = false;
     emittingExpressionHelper = false;
     constructor(ast, allocation, options, machineProfile, diagnostics, optimizations, warnings, candidates) {
       this.ast = ast;
@@ -5912,6 +6482,15 @@ var MKProEmulatorBundle = (() => {
           detail: `Emitted shared line_count helper for ${helper.board.name}/${expressionToIntentText(helper.cell)}.`
         });
       }
+      for (const helper of this.spatialSumLoopHelpers.values()) {
+        this.emitLabel(helper.label);
+        this.emitSpatialSumLoopHelperBody(helper.hitMask, helper.cell, helper.operation, helper.line);
+        this.emitOp(82, "\u0412/\u041E", `${helper.operation} progression return`, helper.line);
+        this.optimizations.push({
+          name: "spatial-sum-loop-helper",
+          detail: `Emitted shared ${helper.operation} progression helper for ${helper.hitMask}.`
+        });
+      }
       for (const helper of this.spatialHitHelpers.values()) {
         this.emitLabel(helper.label);
         this.emitStore(helper.scratch, "spatial hit index", helper.line);
@@ -5977,6 +6556,10 @@ var MKProEmulatorBundle = (() => {
             index += reused - 1;
             continue;
           }
+        }
+        if (statement.kind === "assign" && next?.kind === "if" && this.compileDecrementZeroBranch(statement, next)) {
+          index += 1;
+          continue;
         }
         if (statement.kind === "assign" && next?.kind === "assign" && this.compileTicTacToeCellMaskReuse(statement, next)) {
           index += 1;
@@ -6079,7 +6662,7 @@ var MKProEmulatorBundle = (() => {
       if ((this.readCounts.get(assign.target) ?? 0) !== readsInCondition) return false;
       if (!expressionPureForSubstitution(assign.expr)) return false;
       const substitutedCondition = substituteConditionIdentifier(guarded.condition, assign.target, assign.expr);
-      const ordinaryCost = estimateExpressionCost(assign.expr) + 1 + conditionCompileCost(guarded.condition);
+      const ordinaryCost = estimateExpressionCost2(assign.expr) + 1 + conditionCompileCost(guarded.condition);
       const substitutedCost = conditionCompileCost(substitutedCondition);
       if (substitutedCost + 4 >= ordinaryCost) return false;
       this.compileIf({
@@ -6202,10 +6785,39 @@ var MKProEmulatorBundle = (() => {
       });
       return true;
     }
+    compileDecrementZeroBranch(decrement, branch) {
+      if (!isUnitDecrementExpression(decrement.target, decrement.expr)) return false;
+      if (!decrementBranchTestsZero(branch.condition, decrement.target)) return false;
+      const field = this.findStateField(decrement.target);
+      if ((field?.min ?? Number.NEGATIVE_INFINITY) < 1) return false;
+      const register = this.allocation.registers[decrement.target];
+      if (register === void 0) return false;
+      const opcode = flOpcode(register);
+      if (opcode === void 0) return false;
+      const nonZeroLabel = this.freshLabel("decrement_nonzero");
+      const thenTerminates = this.statementsTerminate(branch.thenBody);
+      const endLabel = branch.elseBody !== void 0 && !thenTerminates ? this.freshLabel("if_end") : void 0;
+      this.emitJump(opcode, getOpcode(opcode).name, nonZeroLabel, `decrement/test ${decrement.target}`, decrement.line);
+      this.compileStatements(branch.thenBody);
+      if (branch.elseBody !== void 0) {
+        if (endLabel !== void 0) this.emitJump(81, "\u0411\u041F", endLabel, "if end", branch.line);
+        this.emitLabel(nonZeroLabel);
+        this.compileStatements(branch.elseBody);
+        if (endLabel !== void 0) this.emitLabel(endLabel);
+      } else {
+        this.emitLabel(nonZeroLabel);
+      }
+      this.optimizations.push({
+        name: "fl-decrement-zero-branch",
+        detail: `Fused ${decrement.target} decrement and zero branch at lines ${decrement.line}/${branch.line}.`
+      });
+      return true;
+    }
     compileIf(statement, line) {
       if (this.compileArithmeticIfSelect(statement)) return;
       if (this.compileDirectTerminalIfBranch(statement, line)) return;
       if (this.compileMembershipClearReuse(statement, line)) return;
+      if (this.compileMembershipSetReuse(statement, line)) return;
       const falseLabel = this.freshLabel("if_false");
       const thenTerminates = this.statementsTerminate(statement.thenBody);
       const endLabel = thenTerminates ? void 0 : this.freshLabel("if_end");
@@ -6296,6 +6908,7 @@ var MKProEmulatorBundle = (() => {
       if (statement.elseBody) {
         this.emitJump(81, "\u0411\u041F", endLabel, "if end", line);
         this.emitLabel(falseLabel);
+        this.currentXKnownZero = true;
         this.compileStatements(statement.elseBody);
         this.emitLabel(endLabel);
       } else {
@@ -6306,6 +6919,79 @@ var MKProEmulatorBundle = (() => {
         detail: `Reused the successful membership mask when clearing ${clear.target} at line ${clear.line}.`
       });
       return true;
+    }
+    compileMembershipSetReuse(statement, line) {
+      const present = matchBitMembershipCondition(statement.condition);
+      if (present !== void 0 && present.collection.kind === "identifier" && statement.elseBody !== void 0) {
+        const setPrefix2 = this.membershipSetPrefix(statement.elseBody, present);
+        if (setPrefix2 !== void 0) {
+          return this.compileMembershipSetReuseForPresentCondition(statement, present, setPrefix2, line);
+        }
+      }
+      const absent = matchBitAbsenceCondition(statement.condition);
+      if (absent === void 0 || absent.collection.kind !== "identifier") return false;
+      const setPrefix = this.membershipSetPrefix(statement.thenBody, absent);
+      if (setPrefix === void 0) return false;
+      return this.compileMembershipSetReuseForAbsentCondition(statement, absent, setPrefix, line);
+    }
+    compileMembershipSetReuseForPresentCondition(statement, membership, setPrefix, line) {
+      const scratch = bitMaskScratchName(statement);
+      if (this.allocation.registers[scratch] === void 0) return false;
+      const { set, tail } = setPrefix;
+      const falseLabel = this.freshLabel("if_false");
+      const thenTerminates = this.statementsTerminate(statement.thenBody);
+      const endLabel = thenTerminates ? void 0 : this.freshLabel("if_end");
+      this.emitMembershipMaskTest(membership, scratch, line);
+      this.emitJump(94, "F x=0", falseLabel, "false branch for !=", line);
+      this.compileStatements(statement.thenBody);
+      if (endLabel !== void 0) this.emitJump(81, "\u0411\u041F", endLabel, "if end", line);
+      this.emitLabel(falseLabel);
+      this.emitBitSetWithScratch(membership, set, scratch);
+      this.compileStatements(tail);
+      if (endLabel !== void 0) this.emitLabel(endLabel);
+      this.optimizations.push({
+        name: "cell-membership-set-reuse",
+        detail: `Reused the failed membership mask when setting ${set.target} at line ${set.line}.`
+      });
+      return true;
+    }
+    compileMembershipSetReuseForAbsentCondition(statement, membership, setPrefix, line) {
+      const scratch = bitMaskScratchName(statement);
+      if (this.allocation.registers[scratch] === void 0) return false;
+      const { set, tail } = setPrefix;
+      const falseLabel = this.freshLabel("if_false");
+      const thenTerminates = this.statementsTerminate(statement.thenBody);
+      const endLabel = statement.elseBody !== void 0 && !thenTerminates ? this.freshLabel("if_end") : void 0;
+      this.emitMembershipMaskTest(membership, scratch, line);
+      this.emitJump(87, "F x!=0", falseLabel, "false branch for ==", line);
+      this.emitBitSetWithScratch(membership, set, scratch);
+      this.compileStatements(tail);
+      if (statement.elseBody !== void 0) {
+        if (endLabel !== void 0) this.emitJump(81, "\u0411\u041F", endLabel, "if end", line);
+        this.emitLabel(falseLabel);
+        this.compileStatements(statement.elseBody);
+        if (endLabel !== void 0) this.emitLabel(endLabel);
+      } else {
+        this.emitLabel(falseLabel);
+      }
+      this.optimizations.push({
+        name: "cell-membership-set-reuse",
+        detail: `Reused the failed membership mask when setting ${set.target} at line ${set.line}.`
+      });
+      return true;
+    }
+    emitMembershipMaskTest(membership, scratch, line) {
+      this.compileExpression(bitMaskExpression(membership.item));
+      this.emitStore(scratch, "cell bit mask scratch", line);
+      this.compileExpression(membership.collection);
+      this.emitRecall(scratch, "reuse cell bit mask", line);
+      this.emitOp(55, "\u041A \u2227", "membership test with reused mask", line);
+    }
+    emitBitSetWithScratch(membership, set, scratch) {
+      this.compileExpression(membership.collection);
+      this.emitRecall(scratch, "reuse cell bit mask", set.line);
+      this.emitOp(56, "\u041A \u2228", "bit_set with reused mask", set.line);
+      this.emitStore(set.target, `set ${set.target}`, set.line);
     }
     membershipClearPrefix(statements) {
       const first = statements[0];
@@ -6322,6 +7008,21 @@ var MKProEmulatorBundle = (() => {
         tail: [...proc.body.slice(1), ...statements.slice(1)]
       };
     }
+    membershipSetPrefix(statements, membership) {
+      const first = statements[0];
+      if (first?.kind === "assign" && isBitSetAssignment(first, membership)) {
+        return { set: first, tail: statements.slice(1) };
+      }
+      if (first?.kind !== "call" || !this.inlineProcNames.has(first.block)) return void 0;
+      const proc = this.ast.procs.find((candidate) => candidate.name === first.block);
+      if (proc === void 0) return void 0;
+      const set = proc.body[0];
+      if (set?.kind !== "assign" || !isBitSetAssignment(set, membership)) return void 0;
+      return {
+        set,
+        tail: [...proc.body.slice(1), ...statements.slice(1)]
+      };
+    }
     compileArithmeticIfSelect(statement) {
       const canUseNegativeZero = this.allocation.negativeZeroDegree !== void 0;
       const selected = buildBranchRemovalCandidate(
@@ -6334,7 +7035,7 @@ var MKProEmulatorBundle = (() => {
         return false;
       }
       const ordinaryCost = estimateOrdinaryIfCost(statement, this.ast);
-      const selectedCost = estimateExpressionCost(selected.expr) + 1;
+      const selectedCost = estimateExpressionCost2(selected.expr) + 1;
       if (selectedCost >= ordinaryCost) {
         this.candidates.push({
           site: `if@${statement.line}`,
@@ -6368,7 +7069,7 @@ var MKProEmulatorBundle = (() => {
       const selected = buildBranchRemovalCandidate(statement, this.ast, { negativeZeroDegree: true });
       if (selected === void 0 || !selected.name.startsWith("negative-zero-threshold-")) return;
       const ordinaryCost = estimateOrdinaryIfCost(statement, this.ast);
-      const selectedCost = estimateExpressionCost(selected.expr) + 1;
+      const selectedCost = estimateExpressionCost2(selected.expr) + 1;
       this.candidates.push({
         site: `if@${statement.line}`,
         variant: selected.name,
@@ -6381,7 +7082,7 @@ var MKProEmulatorBundle = (() => {
       const selected = buildDoubleClampCandidate(first, second);
       if (!selected) return false;
       const ordinaryCost = estimateOrdinaryIfCost(first, this.ast) + estimateOrdinaryIfCost(second, this.ast);
-      const selectedCost = estimateExpressionCost(selected.expr) + 1;
+      const selectedCost = estimateExpressionCost2(selected.expr) + 1;
       if (selectedCost >= ordinaryCost) {
         this.candidates.push({
           site: `if@${first.line}+${second.line}`,
@@ -6463,6 +7164,7 @@ var MKProEmulatorBundle = (() => {
       this.compileDispatchCompareChain(optimized.statement, selected.selected.variant === "fallthrough-compare-chain");
     }
     compileDispatchCompareChain(statement, useFallthrough) {
+      if (this.compileNumericResidualDispatchCompareChain(statement, useFallthrough)) return;
       const scratch = `${DISPATCH_SCRATCH_PREFIX}${statement.scratchId}`;
       const sourceRegister = dispatchExpressionRegister(statement, this.allocation);
       const register = sourceRegister ?? this.allocation.registers[scratch];
@@ -6520,6 +7222,50 @@ var MKProEmulatorBundle = (() => {
       }
       if (statement.defaultBody) this.compileStatements(statement.defaultBody);
       this.emitLabel(endLabel);
+    }
+    compileNumericResidualDispatchCompareChain(statement, useFallthrough) {
+      if (statement.cases.length < 2) return false;
+      const values = statement.cases.map((dispatchCase) => numericLiteralValue2(dispatchCase.value));
+      if (values.some((value) => value === void 0)) return false;
+      const numericValues = values;
+      if (!numericResidualDispatchIsCheaper(statement, numericValues)) return false;
+      this.compileExpression(statement.expr);
+      const endLabel = this.freshLabel("dispatch_end");
+      let comparedValue = 0;
+      let hasComparedValue = false;
+      for (let index = 0; index < statement.cases.length; index += 1) {
+        const dispatchCase = statement.cases[index];
+        const value = numericValues[index];
+        const nextLabel = this.freshLabel("dispatch_next");
+        const lastCase = index === statement.cases.length - 1;
+        if (!hasComparedValue) {
+          if (value !== 0) {
+            this.emitNumberOrPreload(String(value));
+            this.emitOp(17, "-", "dispatch compare", dispatchCase.line);
+          }
+          hasComparedValue = true;
+        } else {
+          const delta = comparedValue - value;
+          if (delta !== 0) {
+            this.emitNumberOrPreload(String(delta));
+            this.emitOp(16, "+", "dispatch residual compare", dispatchCase.line);
+          }
+        }
+        comparedValue = value;
+        this.emitJump(94, "F x=0", nextLabel, "case mismatch", dispatchCase.line);
+        this.compileStatements(dispatchCase.body);
+        if (!this.statementsTerminate(dispatchCase.body) && (!useFallthrough || !lastCase || statement.defaultBody !== void 0)) {
+          this.emitJump(81, "\u0411\u041F", endLabel, "dispatch end", dispatchCase.line);
+        }
+        this.emitLabel(nextLabel);
+      }
+      if (statement.defaultBody) this.compileStatements(statement.defaultBody);
+      this.emitLabel(endLabel);
+      this.optimizations.push({
+        name: "numeric-dispatch-residual-chain",
+        detail: `Reused residual comparisons for numeric dispatch at line ${statement.line}.`
+      });
+      return true;
     }
     statementsTerminate(statements) {
       return this.statementListTerminates(statements, /* @__PURE__ */ new Set());
@@ -6866,7 +7612,7 @@ var MKProEmulatorBundle = (() => {
         });
         return false;
       }
-      this.emitNegativeZeroThresholdRaw(threshold.value, numberExpression(threshold.bound), register, line);
+      this.emitNegativeZeroThresholdRaw(threshold.value, numberExpression2(threshold.bound), register, line);
       const opcode = threshold.truth === "ge" ? 87 : 94;
       this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `negative-zero false branch for ${condition.op}`, line);
       this.optimizations.push({
@@ -6956,6 +7702,11 @@ var MKProEmulatorBundle = (() => {
           this.emitOp(11, "/-/", "unary minus");
           return;
         case "binary":
+          if (expr.op === "-" && isNumericValue2(expr.left, 0)) {
+            this.compileExpression(expr.right);
+            this.emitOp(11, "/-/", "unary minus");
+            return;
+          }
           if (this.compileRemainderByConstant(expr)) {
             return;
           }
@@ -7038,7 +7789,7 @@ var MKProEmulatorBundle = (() => {
     shouldShareExpression(expr) {
       if (!expressionPureForSubstitution(expr)) return false;
       if (expr.kind === "number" || expr.kind === "identifier") return false;
-      const cost = estimateExpressionCost(expr);
+      const cost = estimateExpressionCost2(expr);
       if (cost < EXPRESSION_HELPER_MIN_COST) return false;
       const key = expressionToIntentText(expr);
       const uses = this.expressionUseCounts.get(key)?.count ?? 0;
@@ -7346,23 +8097,42 @@ var MKProEmulatorBundle = (() => {
       const line = scratch[1];
       const offset = scratch[2];
       const counter = scratch[3];
-      this.emitNumber("0");
+      this.emitZero(`${operation} total`, sourceLine);
       this.emitStore(total, `${operation} total`, sourceLine);
+      if (!useMax && progressions.length >= 3) {
+        const helper = this.ensureSpatialSumLoopHelper(hitMask, cell, operation, sourceLine);
+        for (const progression of progressions) {
+          this.compileExpression(progression.startOffset);
+          this.emitStore(offset, `${operation} offset`, sourceLine);
+          this.compileExpression(progression.step);
+          this.emitStore(line, `${operation} step`, sourceLine);
+          this.emitNumberOrPreload(String(progression.count));
+          this.emitStore(counter, `${operation} counter`, sourceLine);
+          this.emitJump(83, "\u041F\u041F", helper.label, `${operation} progression`, sourceLine);
+        }
+        this.optimizations.push({
+          name: "spatial-sum-loop-helper-call",
+          detail: `Reused shared ${operation} progression helper for ${hitMask}.`
+        });
+        return;
+      }
       for (const progression of progressions) {
-        this.emitNumber("0");
-        this.emitStore(line, `${operation} current line`, sourceLine);
+        if (useMax) {
+          this.emitNumber("0");
+          this.emitStore(line, `${operation} current line`, sourceLine);
+        }
         this.compileExpression(progression.startOffset);
         this.emitStore(offset, `${operation} offset`, sourceLine);
-        this.emitNumber(String(progression.count));
+        this.emitNumberOrPreload(String(progression.count));
         this.emitStore(counter, `${operation} counter`, sourceLine);
         const start = this.freshLabel(`${operation}_loop`);
         this.emitLabel(start);
         this.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
         const helper = this.ensureSpatialHitHelper(hitMask, spatialHitScratchName(hitMask));
         this.emitJump(83, "\u041F\u041F", helper.label, `spatial hit ${hitMask}`, sourceLine);
-        this.emitRecall(line, `${operation} accumulator`);
+        this.emitRecall(useMax ? line : total, `${operation} accumulator`);
         this.emitOp(16, "+", `${operation} add hit`);
-        this.emitStore(line, `${operation} accumulator`);
+        this.emitStore(useMax ? line : total, `${operation} accumulator`);
         this.emitRecall(offset, `${operation} offset`);
         this.compileExpression(progression.step);
         this.emitOp(16, "+", `${operation} next offset`);
@@ -7383,19 +8153,72 @@ var MKProEmulatorBundle = (() => {
           this.emitRecall(counter, `${operation} counter`);
           this.emitJump(94, "F x=0", start, `${operation} loop`, sourceLine);
         }
-        this.emitRecall(total, `${operation} total`);
-        this.emitRecall(line, `${operation} current line`);
         if (useMax) {
+          this.emitRecall(total, `${operation} total`);
+          this.emitRecall(line, `${operation} current line`);
           this.emitOp(54, "\u041A max", `${operation} best line`);
-        } else {
-          this.emitOp(16, "+", `${operation} total add line`);
+          this.emitStore(total, `${operation} total`);
         }
-        this.emitStore(total, `${operation} total`);
       }
       this.emitRecall(total, `${operation} result`);
       this.optimizations.push({
         name: `spatial-${operation.replace("_", "-")}-loop`,
         detail: `Lowered ${operation}(...) as shared spatial hit loops.`
+      });
+    }
+    emitSpatialSumLoopHelperBody(hitMask, cell, operation, sourceLine) {
+      const scratch = spatialCountScratchNames();
+      const total = scratch[0];
+      const step = scratch[1];
+      const offset = scratch[2];
+      const counter = scratch[3];
+      const start = this.freshLabel(`${operation}_loop`);
+      this.emitLabel(start);
+      this.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
+      const hitScratch = spatialHitScratchName(hitMask);
+      this.emitStore(hitScratch, "spatial hit index", sourceLine);
+      this.emitRecall(offset, `${operation} offset`);
+      this.emitRecall(step, `${operation} step`);
+      this.emitOp(16, "+", `${operation} next offset`);
+      this.emitStore(offset, `${operation} offset`);
+      this.emitInlineSpatialHitFromScratch(hitMask, hitScratch, sourceLine);
+      this.emitRecall(total, `${operation} accumulator`);
+      this.emitOp(16, "+", `${operation} add hit`);
+      this.emitStore(total, `${operation} accumulator`);
+      const counterRegister = this.allocation.registers[counter];
+      const flCounterOpcode = counterRegister === void 0 ? void 0 : flOpcode(counterRegister);
+      if (flCounterOpcode !== void 0) {
+        this.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, `${operation} loop`, sourceLine);
+        this.optimizations.push({
+          name: "spatial-count-fl-loop",
+          detail: `Used ${getOpcode(flCounterOpcode).name} for ${operation} loop counter.`
+        });
+      } else {
+        this.emitRecall(counter, `${operation} counter`);
+        this.emitNumber("1");
+        this.emitOp(17, "-", `${operation} decrement`);
+        this.emitStore(counter, `${operation} counter`);
+        this.emitRecall(counter, `${operation} counter`);
+        this.emitJump(94, "F x=0", start, `${operation} loop`, sourceLine);
+      }
+    }
+    emitInlineSpatialHit(hitMask, sourceLine) {
+      const scratch = spatialHitScratchName(hitMask);
+      this.emitStore(scratch, "spatial hit index", sourceLine);
+      this.emitInlineSpatialHitFromScratch(hitMask, scratch, sourceLine);
+    }
+    emitInlineSpatialHitFromScratch(hitMask, scratch, sourceLine) {
+      this.emitRecall(hitMask, "spatial hit mask", sourceLine);
+      this.compileExpression({
+        kind: "call",
+        callee: "bit_mask",
+        args: [{ kind: "identifier", name: scratch }]
+      });
+      this.emitOp(55, "\u041A \u2227", "spatial hit test", sourceLine);
+      this.emitOp(50, "\u041A \u0417\u041D", "spatial hit to count", sourceLine);
+      this.optimizations.push({
+        name: "spatial-hit-inline",
+        detail: `Inlined spatial hit test for ${hitMask} into ${sourceLine === void 0 ? "generated loop" : `line ${sourceLine}`}.`
       });
     }
     compileSpatialHitCall(expr) {
@@ -7469,6 +8292,20 @@ var MKProEmulatorBundle = (() => {
       this.spatialHitHelpers.set(mask, helper);
       return helper;
     }
+    ensureSpatialSumLoopHelper(hitMask, cell, operation, line) {
+      const key = `${operation}:${hitMask}:${expressionToIntentText(cell)}`;
+      const existing = this.spatialSumLoopHelpers.get(key);
+      if (existing !== void 0) return existing;
+      const helper = {
+        hitMask,
+        cell,
+        label: `__${operation}_progression_${this.spatialSumLoopHelpers.size}`,
+        operation,
+        ...line === void 0 ? {} : { line }
+      };
+      this.spatialSumLoopHelpers.set(key, helper);
+      return helper;
+    }
     compileRawStatement(statement) {
       const inputs = statement.inputs ?? [];
       const outputs = statement.outputs ?? [];
@@ -7511,6 +8348,7 @@ var MKProEmulatorBundle = (() => {
     }
     emitNumber(raw) {
       this.currentXVariable = void 0;
+      this.currentXKnownZero = false;
       const normalized = raw.trim().toLowerCase();
       const negative = normalized.startsWith("-");
       const unsigned = negative ? normalized.slice(1) : normalized;
@@ -7529,6 +8367,22 @@ var MKProEmulatorBundle = (() => {
         if (expNegative) this.emitOp(11, "/-/", "negative exponent");
       }
       if (negative) this.emitOp(11, "/-/", "negative number");
+      this.currentXKnownZero = Number(raw) === 0;
+    }
+    emitZero(comment, sourceLine) {
+      if (this.currentXKnownZero) {
+        this.optimizations.push({
+          name: "known-zero-reuse",
+          detail: `Reused known zero in X${comment === void 0 ? "" : ` for ${comment}`}.`
+        });
+        return;
+      }
+      this.emitNumber("0");
+      if (comment !== void 0) {
+        const last = this.items.at(-1);
+        if (last?.kind === "op" && last.comment === void 0) last.comment = comment;
+        if (last?.kind === "op" && sourceLine !== void 0 && last.sourceLine === void 0) last.sourceLine = sourceLine;
+      }
     }
     emitNumberOrPreload(raw) {
       const normalized = normalizeConstantLiteral(raw);
@@ -7590,6 +8444,7 @@ var MKProEmulatorBundle = (() => {
       if (raw) op.raw = true;
       this.items.push(op);
       this.currentXVariable = void 0;
+      this.currentXKnownZero = false;
     }
     emitLabel(name) {
       this.items.push({ kind: "label", name });
@@ -7821,8 +8676,15 @@ var MKProEmulatorBundle = (() => {
       values.add("20");
       values.add("10");
     }
+    if (programContainsCall(ast, "line_count")) {
+      values.add("10");
+      values.add("11");
+      values.add("19");
+      values.add("-99");
+      values.add("-81");
+    }
     const visitExpr = (expr) => {
-      if (expr.kind === "number" && estimateNumberCost(expr.raw) > 1) values.add(normalizeConstantLiteral(expr.raw));
+      if (expr.kind === "number" && estimateNumberCost2(expr.raw) > 1) values.add(normalizeConstantLiteral(expr.raw));
       if (expr.kind === "unary") {
         if (expr.op === "-" && expr.expr.kind === "number") {
           values.add(normalizeConstantLiteral(negatedNumberLiteral(expr.expr.raw)));
@@ -7876,7 +8738,7 @@ var MKProEmulatorBundle = (() => {
     for (const entry of ast.entries) visitStatements(entry.body);
     for (const proc of ast.procs) visitStatements(proc.body);
     for (const block of ast.blocks) visitStatements(block.body);
-    return [...values].filter((value) => value !== "0" && value !== "1").sort((a, b) => estimateNumberCost(b) - estimateNumberCost(a));
+    return [...values].filter((value) => value !== "0" && value !== "1").sort((a, b) => estimateNumberCost2(b) - estimateNumberCost2(a));
   }
   function programContainsCall(ast, name) {
     const target = name.toLowerCase();
@@ -7938,7 +8800,7 @@ var MKProEmulatorBundle = (() => {
   function statementNeedsNegativeZeroDegree(statement, ast) {
     const selected = buildBranchRemovalCandidate(statement, ast, { negativeZeroDegree: true });
     if (selected !== void 0 && selected.name.startsWith("negative-zero-threshold-")) {
-      return estimateExpressionCost(selected.expr) + 1 < estimateOrdinaryIfCost(statement, ast);
+      return estimateExpressionCost2(selected.expr) + 1 < estimateOrdinaryIfCost(statement, ast);
     }
     const threshold = matchNegativeZeroThresholdCondition(statement.condition, ast);
     if (threshold === void 0) return false;
@@ -8491,6 +9353,9 @@ var MKProEmulatorBundle = (() => {
         if (statement.kind === "assign" && next?.kind === "assign" && isReusableBitSetPair(statement, next)) {
           variables.add(bitMaskScratchName(statement));
         }
+        if (statement.kind === "if" && isReusableMembershipSet(statement)) {
+          variables.add(bitMaskScratchName(statement));
+        }
         if (statement.kind === "loop") visit(statement.body);
         if (statement.kind === "if") {
           visit(statement.thenBody);
@@ -8636,11 +9501,37 @@ var MKProEmulatorBundle = (() => {
     if (statement.expr.kind !== "identifier") return void 0;
     return allocation.registers[statement.expr.name];
   }
+  function numericResidualDispatchIsCheaper(statement, values) {
+    const sourceRegister = statement.expr.kind === "identifier";
+    let ordinary = estimateExpressionCost2(statement.expr) + (sourceRegister ? 0 : 1);
+    for (let index = 0; index < values.length; index += 1) {
+      const value = values[index];
+      ordinary += (index > 0 ? 1 : 0) + (value === 0 ? 0 : estimateNumberCost2(String(value)) + 1) + 2;
+    }
+    let residual = estimateExpressionCost2(statement.expr);
+    let comparedValue = 0;
+    let hasComparedValue = false;
+    for (const value of values) {
+      if (!hasComparedValue) {
+        residual += value === 0 ? 0 : estimateNumberCost2(String(value)) + 1;
+        hasComparedValue = true;
+      } else {
+        const delta = comparedValue - value;
+        residual += delta === 0 ? 0 : estimateNumberCost2(String(delta)) + 1;
+      }
+      residual += 2;
+      comparedValue = value;
+    }
+    return residual < ordinary;
+  }
   function isZeroExpression(expr) {
     return expr.kind === "number" && Number(expr.raw) === 0;
   }
   function isUnitDecrementExpression(target, expr) {
     return expr.kind === "binary" && expr.op === "-" && expr.left.kind === "identifier" && expr.left.name === target && expr.right.kind === "number" && Number(expr.right.raw) === 1;
+  }
+  function decrementBranchTestsZero(condition, target) {
+    return condition.left.kind === "identifier" && condition.left.name === target && (condition.op === "<=" || condition.op === "==") && isZeroExpression(condition.right);
   }
   function flOpcode(register) {
     switch (register) {
@@ -8726,14 +9617,14 @@ var MKProEmulatorBundle = (() => {
   }
   function integerBoundaryCandidates(condition, ast) {
     if (!isKnownIntegerExpression(condition.left, ast)) return [];
-    const value = numericLiteralValue(condition.right);
+    const value = numericLiteralValue2(condition.right);
     if (value === void 0 || !Number.isSafeInteger(value)) return [];
     const shifted = shiftedIntegerBoundary(condition.op, value);
     if (shifted === void 0) return [];
     return [{
       left: condition.left,
       op: shifted.op,
-      right: numberExpression(shifted.value)
+      right: numberExpression2(shifted.value)
     }];
   }
   function shiftedIntegerBoundary(op, value) {
@@ -8769,7 +9660,7 @@ var MKProEmulatorBundle = (() => {
     return false;
   }
   function numericRangeForExpression(expr, ast) {
-    const value = numericLiteralValue(expr);
+    const value = numericLiteralValue2(expr);
     if (value !== void 0) return { min: value, max: value };
     if (expr.kind === "identifier") return numericRangeFor(expr.name, ast);
     if (expr.kind === "unary" && expr.op === "-") {
@@ -9064,39 +9955,39 @@ var MKProEmulatorBundle = (() => {
     return terminal?.kind === "pause" || terminal?.kind === "halt" ? terminal : void 0;
   }
   function terminalSelectExpression(thenExpr, elseExpr, selector) {
-    const thenValue = numericLiteralValue(thenExpr);
-    const elseValue = numericLiteralValue(elseExpr);
+    const thenValue = numericLiteralValue2(thenExpr);
+    const elseValue = numericLiteralValue2(elseExpr);
     if (thenValue !== void 0 && elseValue !== void 0) {
       const delta = thenValue - elseValue;
-      if (delta === 0) return numberExpression(thenValue);
+      if (delta === 0) return numberExpression2(thenValue);
       return addExpressions(
-        numberExpression(elseValue),
-        multiplyExpressions(numberExpression(delta), selector)
+        numberExpression2(elseValue),
+        multiplyExpressions2(numberExpression2(delta), selector)
       );
     }
     return addExpressions(
-      multiplyExpressions(thenExpr, selector),
-      multiplyExpressions(elseExpr, oneMinus(selector))
+      multiplyExpressions2(thenExpr, selector),
+      multiplyExpressions2(elseExpr, oneMinus(selector))
     );
   }
   function comparisonSelectorExpression(condition) {
     const { left, right, op } = condition;
     switch (op) {
       case "==":
-        return oneMinus(signExpression(absExpression(subtractExpressions(left, right))));
+        return oneMinus(signExpression(absExpression(subtractExpressions2(left, right))));
       case "!=":
-        return signExpression(absExpression(subtractExpressions(left, right)));
+        return signExpression(absExpression(subtractExpressions2(left, right)));
       case ">":
-        return maxExpression(numberExpression(0), signExpression(subtractExpressions(left, right)));
+        return maxExpression(numberExpression2(0), signExpression(subtractExpressions2(left, right)));
       case "<":
-        return maxExpression(numberExpression(0), signExpression(subtractExpressions(right, left)));
+        return maxExpression(numberExpression2(0), signExpression(subtractExpressions2(right, left)));
       case ">=":
         return oneMinus(
-          maxExpression(numberExpression(0), signExpression(subtractExpressions(right, left)))
+          maxExpression(numberExpression2(0), signExpression(subtractExpressions2(right, left)))
         );
       case "<=":
         return oneMinus(
-          maxExpression(numberExpression(0), signExpression(subtractExpressions(left, right)))
+          maxExpression(numberExpression2(0), signExpression(subtractExpressions2(left, right)))
         );
       default:
         return void 0;
@@ -9108,7 +9999,7 @@ var MKProEmulatorBundle = (() => {
     const selector = {
       kind: "call",
       callee: NEGATIVE_ZERO_DEGREE_SELECTOR_GE,
-      args: [threshold.value, numberExpression(threshold.bound)]
+      args: [threshold.value, numberExpression2(threshold.bound)]
     };
     return threshold.truth === "ge" ? selector : oneMinus(selector);
   }
@@ -9118,7 +10009,7 @@ var MKProEmulatorBundle = (() => {
       return flipped === void 0 ? void 0 : matchNegativeZeroThresholdCondition(flipped, ast);
     }
     const value = condition.left;
-    const bound = numericLiteralValue(condition.right);
+    const bound = numericLiteralValue2(condition.right);
     if (bound === void 0 || !Number.isFinite(bound) || bound <= 0 || bound > 1e12) return void 0;
     if (!isKnownIntegerValuedExpression(value, ast)) return void 0;
     const range2 = numericRangeForExpression(value, ast);
@@ -9152,8 +10043,8 @@ var MKProEmulatorBundle = (() => {
     if (!selector) return void 0;
     const usesNegativeZero = booleanSelector === void 0 && negativeZeroSelector !== void 0;
     const expr = addExpressions(
-      multiplyExpressions(thenAssign.expr, selector),
-      multiplyExpressions(elseAssign.expr, oneMinus(selector))
+      multiplyExpressions2(thenAssign.expr, selector),
+      multiplyExpressions2(elseAssign.expr, oneMinus(selector))
     );
     return {
       kind: "assign",
@@ -9169,8 +10060,8 @@ var MKProEmulatorBundle = (() => {
     const elseAssign = statement.elseBody[0];
     if (thenAssign?.kind !== "assign" || elseAssign?.kind !== "assign") return void 0;
     if (thenAssign.target !== elseAssign.target) return void 0;
-    const thenValue = numericLiteralValue(thenAssign.expr);
-    const elseValue = numericLiteralValue(elseAssign.expr);
+    const thenValue = numericLiteralValue2(thenAssign.expr);
+    const elseValue = numericLiteralValue2(elseAssign.expr);
     if (!(thenValue === 1 && elseValue === 0 || thenValue === 0 && elseValue === 1)) return void 0;
     const truth = comparisonMask(statement.condition);
     if (!truth) return void 0;
@@ -9193,17 +10084,17 @@ var MKProEmulatorBundle = (() => {
     if (!selector || !selectorName) return void 0;
     const otherThen = booleanIdentifier(thenAssign.expr, ast);
     const otherElse = booleanIdentifier(elseAssign.expr, ast);
-    const thenValue = numericLiteralValue(thenAssign.expr);
-    const elseValue = numericLiteralValue(elseAssign.expr);
+    const thenValue = numericLiteralValue2(thenAssign.expr);
+    const elseValue = numericLiteralValue2(elseAssign.expr);
     if (otherThen && elseValue === 0) {
-      return booleanAlgebraCandidate(thenAssign.target, multiplyExpressions(selector, otherThen), "and");
+      return booleanAlgebraCandidate(thenAssign.target, multiplyExpressions2(selector, otherThen), "and");
     }
     if (thenValue === 1 && otherElse) {
       return booleanAlgebraCandidate(thenAssign.target, maxExpression(selector, otherElse), "or");
     }
     if (otherThen && otherElse && expressionEquals(otherThen, otherElse)) return void 0;
     if (otherThen && otherElse && expressionEquals(thenAssign.expr, oneMinus(otherElse))) {
-      return booleanAlgebraCandidate(thenAssign.target, absExpression(subtractExpressions(selector, otherElse)), "xor");
+      return booleanAlgebraCandidate(thenAssign.target, absExpression(subtractExpressions2(selector, otherElse)), "xor");
     }
     return void 0;
   }
@@ -9228,7 +10119,7 @@ var MKProEmulatorBundle = (() => {
       return {
         kind: "assign",
         target: assign.target,
-        expr: addExpressions(current, multiplyExpressions(plus, selector)),
+        expr: addExpressions(current, multiplyExpressions2(plus, selector)),
         name: "arithmetic-if-update",
         detail: "Replaced conditional addition with boolean-masked arithmetic"
       };
@@ -9238,7 +10129,7 @@ var MKProEmulatorBundle = (() => {
       return {
         kind: "assign",
         target: assign.target,
-        expr: subtractExpressions(current, multiplyExpressions(minus, selector)),
+        expr: subtractExpressions2(current, multiplyExpressions2(minus, selector)),
         name: "arithmetic-if-update",
         detail: "Replaced conditional subtraction with boolean-masked arithmetic"
       };
@@ -9279,8 +10170,8 @@ var MKProEmulatorBundle = (() => {
       kind: "assign",
       target: assign.target,
       expr: addExpressions(
-        multiplyExpressions(current, oneMinus(selector)),
-        multiplyExpressions(assign.expr, selector)
+        multiplyExpressions2(current, oneMinus(selector)),
+        multiplyExpressions2(assign.expr, selector)
       ),
       name: "arithmetic-if-conditional-move",
       detail: "Replaced conditional assignment with boolean-masked conditional move"
@@ -9296,11 +10187,11 @@ var MKProEmulatorBundle = (() => {
     const { left, right, op } = statement.condition;
     if (!expressionEquals(left, targetExpr)) return void 0;
     const decrement = matchTargetMinusDelta(assign.expr, assign.target);
-    if (decrement && op === ">" && isNumericValue(decrement, 1) && range2.min !== void 0 && isNumericValue(right, range2.min)) {
+    if (decrement && op === ">" && isNumericValue2(decrement, 1) && range2.min !== void 0 && isNumericValue2(right, range2.min)) {
       return maxCandidate(assign.target, assign.expr, right, "Replaced saturating decrement branch with max()");
     }
     const increment = matchTargetPlusDelta(assign.expr, assign.target);
-    if (increment && op === "<" && isNumericValue(increment, 1) && range2.max !== void 0 && isNumericValue(right, range2.max)) {
+    if (increment && op === "<" && isNumericValue2(increment, 1) && range2.max !== void 0 && isNumericValue2(right, range2.max)) {
       return minCandidate(assign.target, assign.expr, right, "Replaced saturating increment branch with min-via-max()");
     }
     return void 0;
@@ -9347,7 +10238,7 @@ var MKProEmulatorBundle = (() => {
     const thenAssign = statement.thenBody[0];
     if (thenAssign?.kind !== "assign") return void 0;
     const { left, right, op } = statement.condition;
-    if (!isNumericValue(right, 0)) return void 0;
+    if (!isNumericValue2(right, 0)) return void 0;
     const negativeLeft = negateExpression(left);
     if (!statement.elseBody) {
       const targetExpr = { kind: "identifier", name: thenAssign.target };
@@ -9402,8 +10293,8 @@ var MKProEmulatorBundle = (() => {
   function booleanSelectorExpression(condition, ast) {
     const leftIdentifier = condition.left.kind === "identifier" ? condition.left.name : void 0;
     const rightIdentifier = condition.right.kind === "identifier" ? condition.right.name : void 0;
-    const leftNumber = numericLiteralValue(condition.left);
-    const rightNumber = numericLiteralValue(condition.right);
+    const leftNumber = numericLiteralValue2(condition.left);
+    const rightNumber = numericLiteralValue2(condition.right);
     let variable;
     let value;
     if (leftIdentifier !== void 0 && rightNumber !== void 0) {
@@ -9456,8 +10347,8 @@ var MKProEmulatorBundle = (() => {
   function booleanSelectorVariableName(condition, ast) {
     const leftIdentifier = condition.left.kind === "identifier" ? condition.left.name : void 0;
     const rightIdentifier = condition.right.kind === "identifier" ? condition.right.name : void 0;
-    const leftNumber = numericLiteralValue(condition.left);
-    const rightNumber = numericLiteralValue(condition.right);
+    const leftNumber = numericLiteralValue2(condition.left);
+    const rightNumber = numericLiteralValue2(condition.right);
     const name = leftIdentifier !== void 0 && rightNumber !== void 0 ? leftIdentifier : rightIdentifier !== void 0 && leftNumber !== void 0 ? rightIdentifier : void 0;
     return name !== void 0 && isBooleanVariable(name, ast) ? name : void 0;
   }
@@ -9466,7 +10357,7 @@ var MKProEmulatorBundle = (() => {
   }
   function comparisonMask(condition) {
     if (condition.op !== "==" && condition.op !== "!=") return void 0;
-    const notEqual = signExpression(absExpression(subtractExpressions(condition.left, condition.right)));
+    const notEqual = signExpression(absExpression(subtractExpressions2(condition.left, condition.right)));
     return condition.op === "==" ? oneMinus(notEqual) : notEqual;
   }
   function isTicTacToeMacroName(name) {
@@ -9517,7 +10408,7 @@ var MKProEmulatorBundle = (() => {
       case "diag_left_index":
         return norm4Expression(addExpressions(args[0], args[1]));
       case "diag_right_index":
-        return norm4Expression(subtractExpressions(args[0], args[1]));
+        return norm4Expression(subtractExpressions2(args[0], args[1]));
       case "cell_mask":
         return cellMaskExpression(args[0], args[1]);
       case "cell_has":
@@ -9536,7 +10427,7 @@ var MKProEmulatorBundle = (() => {
       case "packed4_add":
         return addExpressions(
           args[0],
-          multiplyExpressions(args[2], digitPlaceExpression(args[1]))
+          multiplyExpressions2(args[2], digitPlaceExpression(args[1]))
         );
       case "digit_set":
         return digitSetExpression(args[0], args[1], args[2]);
@@ -9546,7 +10437,7 @@ var MKProEmulatorBundle = (() => {
         return {
           kind: "call",
           callee: "sqr",
-          args: [subtractExpressions(packed4DigitExpression(args[0], args[1]), numberExpression(0.41200076))]
+          args: [subtractExpressions2(packed4DigitExpression(args[0], args[1]), numberExpression2(0.41200076))]
         };
       default:
         return void 0;
@@ -9575,6 +10466,17 @@ var MKProEmulatorBundle = (() => {
     const secondSet = matchBitSetAssignment(second);
     return firstSet !== void 0 && secondSet !== void 0 && expressionEquals(firstSet.item, secondSet.item);
   }
+  function isReusableMembershipSet(statement) {
+    const present = matchBitMembershipCondition(statement.condition);
+    if (present !== void 0 && statement.elseBody !== void 0) {
+      const first2 = statement.elseBody[0];
+      if (first2?.kind === "assign" && isBitSetAssignment(first2, present)) return true;
+    }
+    const absent = matchBitAbsenceCondition(statement.condition);
+    if (absent === void 0) return false;
+    const first = statement.thenBody[0];
+    return first?.kind === "assign" && isBitSetAssignment(first, absent);
+  }
   function bitMaskScratchName(statement) {
     return `${BIT_MASK_SCRATCH_PREFIX}${statement.line}`;
   }
@@ -9588,32 +10490,47 @@ var MKProEmulatorBundle = (() => {
       test
     };
   }
+  function matchBitAbsenceCondition(condition) {
+    if (condition.op !== "==" || !isZeroExpression(condition.right)) return void 0;
+    const test = condition.left;
+    if (test.kind !== "call" || test.callee.toLowerCase() !== "bit_has" || test.args.length !== 2) return void 0;
+    return {
+      collection: test.args[0],
+      item: test.args[1],
+      test
+    };
+  }
   function isBitClearAssignment(statement, membership) {
     if (membership.collection.kind !== "identifier" || statement.target !== membership.collection.name) return false;
     const expr = statement.expr;
     return expr.kind === "call" && expr.callee.toLowerCase() === "bit_clear" && expr.args.length === 2 && expressionEquals(expr.args[0], membership.collection) && expressionEquals(expr.args[1], membership.item);
   }
+  function isBitSetAssignment(statement, membership) {
+    if (membership.collection.kind !== "identifier" || statement.target !== membership.collection.name) return false;
+    const expr = statement.expr;
+    return expr.kind === "call" && expr.callee.toLowerCase() === "bit_set" && expr.args.length === 2 && expressionEquals(expr.args[0], membership.collection) && expressionEquals(expr.args[1], membership.item);
+  }
   function norm4Expression(expr) {
-    const rem = multiplyExpressions(
-      { kind: "call", callee: "frac", args: [divideExpressions({ kind: "call", callee: "int", args: [expr] }, numberExpression(4))] },
-      numberExpression(4)
+    const rem = multiplyExpressions2(
+      { kind: "call", callee: "frac", args: [divideExpressions({ kind: "call", callee: "int", args: [expr] }, numberExpression2(4))] },
+      numberExpression2(4)
     );
     return addExpressions(
       rem,
-      multiplyExpressions(numberExpression(4), oneMinus(signExpression(maxExpression(rem, numberExpression(0)))))
+      multiplyExpressions2(numberExpression2(4), oneMinus(signExpression(maxExpression(rem, numberExpression2(0)))))
     );
   }
   function cellMaskExpression(x, y) {
     return addExpressions(
       pow10Expression(x),
-      { kind: "call", callee: "int", args: [multiplyExpressions(pow10Expression(y), numberExpression(0.22600029))] }
+      { kind: "call", callee: "int", args: [multiplyExpressions2(pow10Expression(y), numberExpression2(0.22600029))] }
     );
   }
   function bitMaskExpression(index) {
-    const nibble = intExpression(divideExpressions(index, numberExpression(4)));
-    const offset = subtractExpressions(index, multiplyExpressions(nibble, numberExpression(4)));
-    return multiplyExpressions(
-      powExpression(numberExpression(2), offset),
+    const nibble = intExpression(divideExpressions(index, numberExpression2(4)));
+    const offset = subtractExpressions2(index, multiplyExpressions2(nibble, numberExpression2(4)));
+    return multiplyExpressions2(
+      powExpression(numberExpression2(2), offset),
       pow10Expression(nibble)
     );
   }
@@ -9622,9 +10539,9 @@ var MKProEmulatorBundle = (() => {
       kind: "call",
       callee: "int",
       args: [
-        multiplyExpressions(
+        multiplyExpressions2(
           { kind: "call", callee: "frac", args: [divideExpressions(lines, pow10Expression(index))] },
-          numberExpression(10)
+          numberExpression2(10)
         )
       ]
     };
@@ -9632,40 +10549,41 @@ var MKProEmulatorBundle = (() => {
   function digitSetExpression(value, index, digit) {
     const place = digitPlaceExpression(index);
     return addExpressions(
-      subtractExpressions(value, multiplyExpressions(packed4DigitExpression(value, index), place)),
-      multiplyExpressions(digit, place)
+      subtractExpressions2(value, multiplyExpressions2(packed4DigitExpression(value, index), place)),
+      multiplyExpressions2(digit, place)
     );
   }
   function digitPlaceExpression(index) {
-    return pow10Expression(subtractExpressions(index, numberExpression(1)));
+    return pow10Expression(subtractExpressions2(index, numberExpression2(1)));
   }
   function oneMinus(expr) {
-    if (isNumericValue(expr, 0)) return numberExpression(1);
-    if (isNumericValue(expr, 1)) return numberExpression(0);
+    if (isNumericValue2(expr, 0)) return numberExpression2(1);
+    if (isNumericValue2(expr, 1)) return numberExpression2(0);
     return {
       kind: "binary",
       op: "-",
-      left: numberExpression(1),
+      left: numberExpression2(1),
       right: expr
     };
   }
-  function multiplyExpressions(left, right) {
-    if (isNumericValue(left, 0) || isNumericValue(right, 0)) return numberExpression(0);
-    if (isNumericValue(left, 1)) return right;
-    if (isNumericValue(right, 1)) return left;
+  function multiplyExpressions2(left, right) {
+    if (isNumericValue2(left, 0) || isNumericValue2(right, 0)) return numberExpression2(0);
+    if (isNumericValue2(left, 1)) return right;
+    if (isNumericValue2(right, 1)) return left;
     return { kind: "binary", op: "*", left, right };
   }
   function addExpressions(left, right) {
-    if (isNumericValue(left, 0)) return right;
-    if (isNumericValue(right, 0)) return left;
+    if (isNumericValue2(left, 0)) return right;
+    if (isNumericValue2(right, 0)) return left;
     return { kind: "binary", op: "+", left, right };
   }
-  function subtractExpressions(left, right) {
-    if (isNumericValue(right, 0)) return left;
+  function subtractExpressions2(left, right) {
+    if (isNumericValue2(right, 0)) return left;
+    if (isNumericValue2(left, 0)) return { kind: "unary", op: "-", expr: right };
     return { kind: "binary", op: "-", left, right };
   }
   function divideExpressions(left, right) {
-    if (isNumericValue(right, 1)) return left;
+    if (isNumericValue2(right, 1)) return left;
     return { kind: "binary", op: "/", left, right };
   }
   function pow10Expression(expr) {
@@ -9700,6 +10618,9 @@ var MKProEmulatorBundle = (() => {
   }
   function bitNotExpression(expr) {
     return { kind: "call", callee: "bit_not", args: [expr] };
+  }
+  function fracExpression(expr) {
+    return { kind: "call", callee: "frac", args: [expr] };
   }
   function spatialCountExpression(name, args, ast) {
     const [mask, cell] = args;
@@ -9738,9 +10659,9 @@ var MKProEmulatorBundle = (() => {
     const y = decimalTensExpressionAst(cell);
     switch (kind) {
       case "row":
-        return range(board.xMin, board.xMax).map((candidateX) => boardCellExpressionAst(numberExpression(candidateX), y));
+        return range(board.xMin, board.xMax).map((candidateX) => boardCellExpressionAst(numberExpression2(candidateX), y));
       case "column":
-        return range(board.yMin, board.yMax).map((candidateY) => boardCellExpressionAst(x, numberExpression(candidateY)));
+        return range(board.yMin, board.yMax).map((candidateY) => boardCellExpressionAst(x, numberExpression2(candidateY)));
       case "diag-left":
         return range(-Math.max(board.width, board.height) + 1, Math.max(board.width, board.height) - 1).map((delta) => offsetExpressionAst(cell, delta * 11));
       case "diag-right":
@@ -9753,58 +10674,58 @@ var MKProEmulatorBundle = (() => {
     const span = Math.max(board.width, board.height);
     return [
       {
-        startOffset: subtractExpressions(boardCellExpressionAst(numberExpression(board.xMin), y), cell),
-        step: numberExpression(1),
+        startOffset: subtractExpressions2(numberExpression2(board.xMin), x),
+        step: numberExpression2(1),
         count: board.width
       },
       {
-        startOffset: subtractExpressions(boardCellExpressionAst(x, numberExpression(board.yMin)), cell),
-        step: numberExpression(10),
+        startOffset: multiplyExpressions2(numberExpression2(10), subtractExpressions2(numberExpression2(board.yMin), y)),
+        step: numberExpression2(10),
         count: board.height
       },
       {
-        startOffset: numberExpression(-(span - 1) * 11),
-        step: numberExpression(11),
+        startOffset: numberExpression2(-(span - 1) * 11),
+        step: numberExpression2(11),
         count: span * 2 - 1
       },
       {
-        startOffset: numberExpression(-(span - 1) * 9),
-        step: numberExpression(9),
+        startOffset: numberExpression2(-(span - 1) * 9),
+        step: numberExpression2(9),
         count: span * 2 - 1
       }
     ];
   }
   function spatialNeighborProgressions(board) {
     if (board?.height === 1) {
-      return [{ startOffset: numberExpression(-1), step: numberExpression(2), count: 2 }];
+      return [{ startOffset: numberExpression2(-1), step: numberExpression2(2), count: 2 }];
     }
     if (board?.width === 1) {
-      return [{ startOffset: numberExpression(-10), step: numberExpression(20), count: 2 }];
+      return [{ startOffset: numberExpression2(-10), step: numberExpression2(20), count: 2 }];
     }
     return [
-      { startOffset: numberExpression(-11), step: numberExpression(1), count: 3 },
-      { startOffset: numberExpression(-1), step: numberExpression(2), count: 2 },
-      { startOffset: numberExpression(9), step: numberExpression(1), count: 3 }
+      { startOffset: numberExpression2(-11), step: numberExpression2(1), count: 3 },
+      { startOffset: numberExpression2(-1), step: numberExpression2(2), count: 2 },
+      { startOffset: numberExpression2(9), step: numberExpression2(1), count: 3 }
     ];
   }
   function lineCountGroupKeyFor(board, cell) {
     return `${board.name}:${board.xMin}:${board.xMax}:${board.yMin}:${board.yMax}:${expressionToIntentText(cell)}`;
   }
   function boardCellExpressionAst(x, y) {
-    return addExpressions(x, multiplyExpressions(numberExpression(10), y));
+    return addExpressions(x, multiplyExpressions2(numberExpression2(10), y));
   }
   function decimalTensExpressionAst(expr) {
-    return intExpression(divideExpressions(expr, numberExpression(10)));
+    return intExpression(divideExpressions(expr, numberExpression2(10)));
   }
   function decimalOnesExpressionAst(expr) {
-    return subtractExpressions(expr, multiplyExpressions(numberExpression(10), intExpression(divideExpressions(expr, numberExpression(10)))));
+    return multiplyExpressions2(fracExpression(divideExpressions(expr, numberExpression2(10))), numberExpression2(10));
   }
   function offsetExpressionAst(expr, offset) {
     if (offset === 0) return expr;
-    return offset > 0 ? addExpressions(expr, numberExpression(offset)) : subtractExpressions(expr, numberExpression(Math.abs(offset)));
+    return offset > 0 ? addExpressions(expr, numberExpression2(offset)) : subtractExpressions2(expr, numberExpression2(Math.abs(offset)));
   }
   function sumExpressions(expressions) {
-    return expressions.reduce((sum, expr) => addExpressions(sum, expr), numberExpression(0));
+    return expressions.reduce((sum, expr) => addExpressions(sum, expr), numberExpression2(0));
   }
   function maxExpressions(expressions) {
     return expressions.reduce((best, expr) => maxExpression(best, expr));
@@ -9832,15 +10753,15 @@ var MKProEmulatorBundle = (() => {
     return values;
   }
   function signToggleExpression(current, selector) {
-    return multiplyExpressions(
+    return multiplyExpressions2(
       current,
-      subtractExpressions(numberExpression(1), multiplyExpressions(numberExpression(2), selector))
+      subtractExpressions2(numberExpression2(1), multiplyExpressions2(numberExpression2(2), selector))
     );
   }
   function negateExpression(expr) {
     if (expr.kind === "unary") return expr.expr;
-    const value = numericLiteralValue(expr);
-    if (value !== void 0) return numberExpression(-value);
+    const value = numericLiteralValue2(expr);
+    if (value !== void 0) return numberExpression2(-value);
     return { kind: "unary", op: "-", expr };
   }
   function matchRemainderByConstant(expr) {
@@ -9862,13 +10783,13 @@ var MKProEmulatorBundle = (() => {
     if (expr.kind !== "call" || expr.callee.toLowerCase() !== "int" || expr.args.length !== 1) return void 0;
     const divided = expr.args[0];
     if (divided.kind !== "binary" || divided.op !== "/") return void 0;
-    if (numericLiteralValue(divided.right) === void 0) return void 0;
+    if (numericLiteralValue2(divided.right) === void 0) return void 0;
     return {
       value: divided.left,
       divisor: divided.right
     };
   }
-  function numberExpression(value) {
+  function numberExpression2(value) {
     return { kind: "number", raw: String(value) };
   }
   function matchTargetPlusDelta(expr, target) {
@@ -9921,8 +10842,8 @@ var MKProEmulatorBundle = (() => {
     let removed = 0;
     for (let index = 0; index < statement.cases.length; index += 1) {
       const dispatchCase = statement.cases[index];
-      const value = numericLiteralValue(dispatchCase.value);
-      const laterSameValue = value !== void 0 && statement.cases.slice(index + 1).some((laterCase) => numericLiteralValue(laterCase.value) === value);
+      const value = numericLiteralValue2(dispatchCase.value);
+      const laterSameValue = value !== void 0 && statement.cases.slice(index + 1).some((laterCase) => numericLiteralValue2(laterCase.value) === value);
       if (value !== void 0 && !laterSameValue && statementListsEqual(dispatchCase.body, defaultBody)) {
         removed += 1;
         continue;
@@ -10040,13 +10961,13 @@ var MKProEmulatorBundle = (() => {
       }
     }
   }
-  function isNumericValue(expr, value) {
-    const parsed = numericLiteralValue(expr);
+  function isNumericValue2(expr, value) {
+    const parsed = numericLiteralValue2(expr);
     return parsed !== void 0 && parsed === value;
   }
-  function numericLiteralValue(expr) {
+  function numericLiteralValue2(expr) {
     if (expr.kind === "unary" && expr.op === "-") {
-      const value2 = numericLiteralValue(expr.expr);
+      const value2 = numericLiteralValue2(expr.expr);
       return value2 === void 0 ? void 0 : -value2;
     }
     if (expr.kind !== "number") return void 0;
@@ -10068,10 +10989,10 @@ var MKProEmulatorBundle = (() => {
   function estimateSimpleStatementCost(statement, ast) {
     switch (statement.kind) {
       case "assign":
-        return estimateExpressionCost(statement.expr) + 1;
+        return estimateExpressionCost2(statement.expr) + 1;
       case "pause":
       case "halt":
-        return estimateExpressionCost(statement.expr) + 1;
+        return estimateExpressionCost2(statement.expr) + 1;
       case "call": {
         const terminal = effectiveTerminalStatement(statement, ast);
         return terminal === void 0 ? Number.POSITIVE_INFINITY : estimateSimpleStatementCost(terminal, ast);
@@ -10087,14 +11008,14 @@ var MKProEmulatorBundle = (() => {
     );
   }
   function estimateExpressionCostForCondition(expr, preloadedConstants) {
-    if (preloadedConstants === void 0) return estimateExpressionCost(expr);
+    if (preloadedConstants === void 0) return estimateExpressionCost2(expr);
     if (expr.kind === "number" && preloadedConstants.has(normalizeConstantLiteral(expr.raw))) return 1;
     if (expr.kind === "unary" && expr.op === "-" && expr.expr.kind === "number" && preloadedConstants.has(normalizeConstantLiteral(negatedNumberLiteral(expr.expr.raw)))) {
       return 1;
     }
     switch (expr.kind) {
       case "number":
-        return estimateNumberCost(expr.raw);
+        return estimateNumberCost2(expr.raw);
       case "identifier":
         return 1;
       case "unary":
@@ -10130,26 +11051,26 @@ var MKProEmulatorBundle = (() => {
     return estimateNegativeZeroThresholdRawCost(expr.args[0], expr.args[1], preloadedConstants) + 1;
   }
   function estimateNegativeZeroThresholdFlowCost(threshold, preloadedConstants) {
-    return estimateNegativeZeroThresholdRawCost(threshold.value, numberExpression(threshold.bound), preloadedConstants) + 2;
+    return estimateNegativeZeroThresholdRawCost(threshold.value, numberExpression2(threshold.bound), preloadedConstants) + 2;
   }
   function estimateNegativeZeroThresholdRawCost(value, bound, preloadedConstants) {
     const ratio = divideExpressions(value, bound);
     return estimateExpressionCostForCondition(ratio, preloadedConstants) + 4;
   }
-  function estimateExpressionCost(expr) {
+  function estimateExpressionCost2(expr) {
     switch (expr.kind) {
       case "number":
-        return estimateNumberCost(expr.raw);
+        return estimateNumberCost2(expr.raw);
       case "identifier":
         return 1;
       case "unary":
-        return estimateExpressionCost(expr.expr) + 1;
+        return estimateExpressionCost2(expr.expr) + 1;
       case "binary": {
         const remainder = matchRemainderByConstant(expr);
         if (remainder !== void 0) {
-          return estimateExpressionCost(remainder.value) + estimateExpressionCost(remainder.divisor) * 2 + 3;
+          return estimateExpressionCost2(remainder.value) + estimateExpressionCost2(remainder.divisor) * 2 + 3;
         }
-        return estimateExpressionCost(expr.left) + estimateExpressionCost(expr.right) + 1;
+        return estimateExpressionCost2(expr.left) + estimateExpressionCost2(expr.right) + 1;
       }
       case "call":
         return estimateCallCost(expr);
@@ -10161,17 +11082,17 @@ var MKProEmulatorBundle = (() => {
       return estimateNegativeZeroDegreeSelectorCost(expr);
     }
     const macro = ticTacToeExpressionMacro(name, expr.args);
-    if (macro !== void 0) return estimateExpressionCost(macro);
+    if (macro !== void 0) return estimateExpressionCost2(macro);
     if (name === "random" || name === "pi") return 1;
     if (name === "pow") {
-      return (expr.args[0] ? estimateExpressionCost(expr.args[0]) : 0) + (expr.args[1] ? estimateExpressionCost(expr.args[1]) : 0) + 1;
+      return (expr.args[0] ? estimateExpressionCost2(expr.args[0]) : 0) + (expr.args[1] ? estimateExpressionCost2(expr.args[1]) : 0) + 1;
     }
     if (["max", "bit_and", "bit_or", "bit_xor"].includes(name)) {
-      return (expr.args[0] ? estimateExpressionCost(expr.args[0]) : 0) + (expr.args[1] ? estimateExpressionCost(expr.args[1]) : 0) + 1;
+      return (expr.args[0] ? estimateExpressionCost2(expr.args[0]) : 0) + (expr.args[1] ? estimateExpressionCost2(expr.args[1]) : 0) + 1;
     }
-    return (expr.args[0] ? estimateExpressionCost(expr.args[0]) : 0) + 1;
+    return (expr.args[0] ? estimateExpressionCost2(expr.args[0]) : 0) + 1;
   }
-  function estimateNumberCost(raw) {
+  function estimateNumberCost2(raw) {
     const normalized = raw.trim().toLowerCase();
     const negative = normalized.startsWith("-");
     const unsigned = negative ? normalized.slice(1) : normalized;
@@ -10577,8 +11498,8 @@ var MKProEmulatorBundle = (() => {
       category: "data",
       source: "documented",
       requires: [],
-      activeWhen: ["constant-folding"],
-      detail: "Eliminates identity arithmetic such as '0 +' and '1 *' from the IR after upstream passes simplify the expression tree."
+      activeWhen: ["expression-constant-folder", "constant-folding"],
+      detail: "Folds numeric source-expression subtrees before code generation and eliminates identity arithmetic such as '0 +' and '1 *' from the IR after upstream passes simplify the expression tree."
     },
     {
       id: "cse-display-block",

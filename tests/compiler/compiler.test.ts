@@ -30,6 +30,151 @@ program Minimal {
     expect(result.steps.some((step) => step.hex === "50")).toBe(true);
   });
 
+  it("lowers zero-minus expressions through unary sign change", () => {
+    const result = compileOk(`
+program ZeroMinus {
+  state {
+    value: packed = 0
+  }
+  turn {
+    read x
+    value = 0 - x
+    stop value
+  }
+}
+`);
+    const opcodes = result.steps.map((step) => step.hex);
+
+    expect(opcodes).toContain("0B");
+    expect(opcodes).not.toContain("11");
+  });
+
+  it("folds numeric constant subexpressions before code generation", () => {
+    const result = compileOk(`
+program ConstantFold {
+  state {
+    value: packed = 0
+  }
+  turn {
+    value = 5 + 2
+    stop value
+  }
+}
+`);
+    const opcodes = result.steps.map((step) => step.hex);
+
+    expect(opcodes[0]).toBe("07");
+    expect(opcodes).not.toContain("05");
+    expect(opcodes).not.toContain("02");
+    expect(opcodes).not.toContain("10");
+    expect(result.report.optimizations.some((item) => item.name === "expression-constant-folder")).toBe(true);
+  });
+
+  it("folds unary numeric constants before arithmetic", () => {
+    const result = compileOk(`
+program NegativeConstantFold {
+  state {
+    value: packed = 0
+  }
+  turn {
+    value = -5 + 7
+    stop value
+  }
+}
+`);
+    const opcodes = result.steps.map((step) => step.hex);
+
+    expect(opcodes[0]).toBe("02");
+    expect(opcodes).not.toContain("0B");
+    expect(opcodes).not.toContain("10");
+  });
+
+  it("distributes small constant factors over constant additions", () => {
+    const result = compileOk(`
+program ConstantDistribute {
+  state {
+    value: packed = 0
+  }
+  turn {
+    read x
+    value = 2 * (2 + x)
+    stop value
+  }
+}
+`);
+    const opcodes = result.steps.map((step) => step.hex);
+
+    expect(opcodes.slice(2, 7)).toEqual(["04", "02", "61", "12", "10"]);
+    expect(result.report.optimizations.some((item) => item.name === "expression-constant-folder")).toBe(true);
+  });
+
+  it("distributes negative constant factors over constant subtractions", () => {
+    const result = compileOk(`
+program NegativeConstantDistribute {
+  state {
+    value: packed = 0
+  }
+  turn {
+    read x
+    value = -5 * (2 - x)
+    stop value
+  }
+}
+`);
+    const opcodes = result.steps.map((step) => step.hex);
+    const multiply = opcodes.indexOf("12");
+    const subtract = opcodes.indexOf("11");
+
+    expect(opcodes).toContain("05");
+    expect(multiply).toBeGreaterThan(opcodes.indexOf("05"));
+    expect(subtract).toBeGreaterThan(multiply);
+    expect(opcodes).not.toContain("0B");
+    expect(result.report.optimizations.some((item) => item.name === "expression-constant-folder")).toBe(true);
+  });
+
+  it("normalizes nested linear expressions with multiple variables", () => {
+    const result = compileOk(`
+program MultiVariableLinearFold {
+  state {
+    value: packed = 0
+  }
+  turn {
+    read x
+    read y
+    value = 2 * (x + y + 3) - (x - 4 * y)
+    stop value
+  }
+}
+`);
+    const opcodes = result.steps.map((step) => step.hex);
+    const afterReads = opcodes.slice(4, opcodes.indexOf("50", 4));
+
+    expect(afterReads).toEqual(["06", "61", "10", "06", "62", "12", "10"]);
+    expect(result.report.optimizations.some((item) => item.name === "expression-constant-folder")).toBe(true);
+  });
+
+  it("normalizes deeply nested linear constant products", () => {
+    const result = compileOk(`
+program NestedLinearFold {
+  state {
+    value: packed = 0
+  }
+  turn {
+    read x
+    value = 5 * (2 + 3 * (2 + x))
+    stop value
+  }
+}
+`);
+    const opcodes = result.steps.map((step) => step.hex);
+
+    expect(opcodes).toContain("12");
+    expect(opcodes).toContain("10");
+    expect(result.report.preloads.some((item) => item.value === "40")).toBe(true);
+    expect(result.report.preloads.some((item) => item.value === "15")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "expression-constant-folder")).toBe(true);
+  });
+
   it("lowers MK-61 primitive functions from V2 formulas", () => {
     const result = compileOk(`
 program FormulaPrimitives {

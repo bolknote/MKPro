@@ -11,14 +11,14 @@ Current `--analysis` sizes, measured against the local reference listings:
 
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
-| `cave-highlevel-baseline.mkpro` | 265 | 105 | command dispatch and cave mask lowerers |
-| `cave-treasure.mkpro` | 300 | 105 | command dispatch, guarded direction dispatch, and cave mask lowerers |
-| `fox-hunt-100.mkpro` | 185 | 105 | `line_count` still larger than the reference fox table helper |
+| `cave-highlevel-baseline.mkpro` | 252 | 105 | command dispatch and cave mask lowerers |
+| `cave-treasure.mkpro` | 295 | 105 | command dispatch, guarded direction dispatch, and cave mask lowerers |
+| `fox-hunt-100.mkpro` | 107 | 105 | `bit_mask`/spatial-hit arithmetic is still larger than the reference fox table helper |
 | `giants-country.mkpro` | 429 | 105 | repeated encounter/challenge dispatch |
-| `labyrinth777.mkpro` | 270 | 105 | room inspection and local-jumper dispatch |
-| `teleport.mkpro` | 258 | 105 | station masks and vault/guard flow |
-| `tic-tac-toe-4x4.mkpro` | 302 | 105 | 4x4 line-count state representation |
-| `treasure-hunter-2.mkpro` | 206 | 105 | floor-plan display/state lowerer |
+| `labyrinth777.mkpro` | 253 | 105 | room inspection and local-jumper dispatch |
+| `teleport.mkpro` | 246 | 105 | station masks and vault/guard flow |
+| `tic-tac-toe-4x4.mkpro` | 294 | 105 | 4x4 line-count state representation |
+| `treasure-hunter-2.mkpro` | 192 | 105 | floor-plan display/state lowerer |
 
 Prototype notes:
 

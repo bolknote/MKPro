@@ -11,6 +11,7 @@ import {
   formatFormalAddressOpcode,
   parseFormalAddressOpcode,
 } from "./formal-address.ts";
+import { foldProgramConstants } from "./constant-folder.ts";
 import { normalizeV2ExpressionText, parseExpression, parseProgram } from "./parser.ts";
 import { runIrPasses } from "./passes/index.ts";
 import { verifySuperDarkSuffixLayout } from "./super-dark-layout.ts";
@@ -123,6 +124,13 @@ export function compileMKPro(
   const warnings: string[] = [];
   const candidates: CandidateReport[] = [];
 
+  const foldedConstants = foldProgramConstants(ast);
+  if (foldedConstants > 0) {
+    optimizations.push({
+      name: "expression-constant-folder",
+      detail: `Folded ${foldedConstants} constant expression node(s) before code generation.`,
+    });
+  }
   eliminateUnobservedState(ast, optimizations);
   hoistCommonBranchTails(ast, optimizations);
   validateSemanticDomains(ast, diagnostics);
@@ -859,7 +867,15 @@ class EmitContext {
   }>();
   private readonly expressionHelpers = new Map<string, { expr: ExpressionAst; label: string; line?: number }>();
   private readonly lineCountHelpers = new Map<string, { cell: ExpressionAst; board: V2BoardAst; label: string; line?: number }>();
+  private readonly spatialSumLoopHelpers = new Map<string, {
+    hitMask: string;
+    cell: ExpressionAst;
+    label: string;
+    operation: "line_count" | "neighbor_count";
+    line?: number;
+  }>();
   private currentXVariable: string | undefined;
+  private currentXKnownZero = false;
   private emittingExpressionHelper = false;
 
   constructor(
@@ -969,6 +985,15 @@ class EmitContext {
         detail: `Emitted shared line_count helper for ${helper.board.name}/${expressionToIntentText(helper.cell)}.`,
       });
     }
+    for (const helper of this.spatialSumLoopHelpers.values()) {
+      this.emitLabel(helper.label);
+      this.emitSpatialSumLoopHelperBody(helper.hitMask, helper.cell, helper.operation, helper.line);
+      this.emitOp(0x52, "В/О", `${helper.operation} progression return`, helper.line);
+      this.optimizations.push({
+        name: "spatial-sum-loop-helper",
+        detail: `Emitted shared ${helper.operation} progression helper for ${helper.hitMask}.`,
+      });
+    }
     for (const helper of this.spatialHitHelpers.values()) {
       this.emitLabel(helper.label);
       this.emitStore(helper.scratch, "spatial hit index", helper.line);
@@ -1037,6 +1062,10 @@ class EmitContext {
           index += reused - 1;
           continue;
         }
+      }
+      if (statement.kind === "assign" && next?.kind === "if" && this.compileDecrementZeroBranch(statement, next)) {
+        index += 1;
+        continue;
       }
       if (statement.kind === "assign" && next?.kind === "assign" && this.compileTicTacToeCellMaskReuse(statement, next)) {
         index += 1;
@@ -1290,6 +1319,40 @@ class EmitContext {
     return true;
   }
 
+  private compileDecrementZeroBranch(
+    decrement: Extract<StatementAst, { kind: "assign" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+  ): boolean {
+    if (!isUnitDecrementExpression(decrement.target, decrement.expr)) return false;
+    if (!decrementBranchTestsZero(branch.condition, decrement.target)) return false;
+    const field = this.findStateField(decrement.target);
+    if ((field?.min ?? Number.NEGATIVE_INFINITY) < 1) return false;
+    const register = this.allocation.registers[decrement.target];
+    if (register === undefined) return false;
+    const opcode = flOpcode(register);
+    if (opcode === undefined) return false;
+
+    const nonZeroLabel = this.freshLabel("decrement_nonzero");
+    const thenTerminates = this.statementsTerminate(branch.thenBody);
+    const endLabel = branch.elseBody !== undefined && !thenTerminates ? this.freshLabel("if_end") : undefined;
+
+    this.emitJump(opcode, getOpcode(opcode).name, nonZeroLabel, `decrement/test ${decrement.target}`, decrement.line);
+    this.compileStatements(branch.thenBody);
+    if (branch.elseBody !== undefined) {
+      if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", branch.line);
+      this.emitLabel(nonZeroLabel);
+      this.compileStatements(branch.elseBody);
+      if (endLabel !== undefined) this.emitLabel(endLabel);
+    } else {
+      this.emitLabel(nonZeroLabel);
+    }
+    this.optimizations.push({
+      name: "fl-decrement-zero-branch",
+      detail: `Fused ${decrement.target} decrement and zero branch at lines ${decrement.line}/${branch.line}.`,
+    });
+    return true;
+  }
+
   private compileIf(
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
@@ -1297,6 +1360,7 @@ class EmitContext {
     if (this.compileArithmeticIfSelect(statement)) return;
     if (this.compileDirectTerminalIfBranch(statement, line)) return;
     if (this.compileMembershipClearReuse(statement, line)) return;
+    if (this.compileMembershipSetReuse(statement, line)) return;
 
     const falseLabel = this.freshLabel("if_false");
     const thenTerminates = this.statementsTerminate(statement.thenBody);
@@ -1413,6 +1477,7 @@ class EmitContext {
     if (statement.elseBody) {
       this.emitJump(0x51, "БП", endLabel, "if end", line);
       this.emitLabel(falseLabel);
+      this.currentXKnownZero = true;
       this.compileStatements(statement.elseBody);
       this.emitLabel(endLabel);
     } else {
@@ -1423,6 +1488,118 @@ class EmitContext {
       detail: `Reused the successful membership mask when clearing ${clear.target} at line ${clear.line}.`,
     });
     return true;
+  }
+
+  private compileMembershipSetReuse(
+    statement: Extract<StatementAst, { kind: "if" }>,
+    line: number,
+  ): boolean {
+    const present = matchBitMembershipCondition(statement.condition);
+    if (present !== undefined && present.collection.kind === "identifier" && statement.elseBody !== undefined) {
+      const setPrefix = this.membershipSetPrefix(statement.elseBody, present);
+      if (setPrefix !== undefined) {
+        return this.compileMembershipSetReuseForPresentCondition(statement, present, setPrefix, line);
+      }
+    }
+
+    const absent = matchBitAbsenceCondition(statement.condition);
+    if (absent === undefined || absent.collection.kind !== "identifier") return false;
+    const setPrefix = this.membershipSetPrefix(statement.thenBody, absent);
+    if (setPrefix === undefined) return false;
+    return this.compileMembershipSetReuseForAbsentCondition(statement, absent, setPrefix, line);
+  }
+
+  private compileMembershipSetReuseForPresentCondition(
+    statement: Extract<StatementAst, { kind: "if" }>,
+    membership: BitMembershipCondition,
+    setPrefix: {
+      set: Extract<StatementAst, { kind: "assign" }>;
+      tail: StatementAst[];
+    },
+    line: number,
+  ): boolean {
+    const scratch = bitMaskScratchName(statement);
+    if (this.allocation.registers[scratch] === undefined) return false;
+
+    const { set, tail } = setPrefix;
+    const falseLabel = this.freshLabel("if_false");
+    const thenTerminates = this.statementsTerminate(statement.thenBody);
+    const endLabel = thenTerminates ? undefined : this.freshLabel("if_end");
+
+    this.emitMembershipMaskTest(membership, scratch, line);
+    this.emitJump(0x5e, "F x=0", falseLabel, "false branch for !=", line);
+    this.compileStatements(statement.thenBody);
+    if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", line);
+    this.emitLabel(falseLabel);
+    this.emitBitSetWithScratch(membership, set, scratch);
+    this.compileStatements(tail);
+    if (endLabel !== undefined) this.emitLabel(endLabel);
+
+    this.optimizations.push({
+      name: "cell-membership-set-reuse",
+      detail: `Reused the failed membership mask when setting ${set.target} at line ${set.line}.`,
+    });
+    return true;
+  }
+
+  private compileMembershipSetReuseForAbsentCondition(
+    statement: Extract<StatementAst, { kind: "if" }>,
+    membership: BitMembershipCondition,
+    setPrefix: {
+      set: Extract<StatementAst, { kind: "assign" }>;
+      tail: StatementAst[];
+    },
+    line: number,
+  ): boolean {
+    const scratch = bitMaskScratchName(statement);
+    if (this.allocation.registers[scratch] === undefined) return false;
+
+    const { set, tail } = setPrefix;
+    const falseLabel = this.freshLabel("if_false");
+    const thenTerminates = this.statementsTerminate(statement.thenBody);
+    const endLabel = statement.elseBody !== undefined && !thenTerminates ? this.freshLabel("if_end") : undefined;
+
+    this.emitMembershipMaskTest(membership, scratch, line);
+    this.emitJump(0x57, "F x!=0", falseLabel, "false branch for ==", line);
+    this.emitBitSetWithScratch(membership, set, scratch);
+    this.compileStatements(tail);
+    if (statement.elseBody !== undefined) {
+      if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", line);
+      this.emitLabel(falseLabel);
+      this.compileStatements(statement.elseBody);
+      if (endLabel !== undefined) this.emitLabel(endLabel);
+    } else {
+      this.emitLabel(falseLabel);
+    }
+
+    this.optimizations.push({
+      name: "cell-membership-set-reuse",
+      detail: `Reused the failed membership mask when setting ${set.target} at line ${set.line}.`,
+    });
+    return true;
+  }
+
+  private emitMembershipMaskTest(
+    membership: BitMembershipCondition,
+    scratch: string,
+    line: number,
+  ): void {
+    this.compileExpression(bitMaskExpression(membership.item));
+    this.emitStore(scratch, "cell bit mask scratch", line);
+    this.compileExpression(membership.collection);
+    this.emitRecall(scratch, "reuse cell bit mask", line);
+    this.emitOp(0x37, "К ∧", "membership test with reused mask", line);
+  }
+
+  private emitBitSetWithScratch(
+    membership: BitMembershipCondition,
+    set: Extract<StatementAst, { kind: "assign" }>,
+    scratch: string,
+  ): void {
+    this.compileExpression(membership.collection);
+    this.emitRecall(scratch, "reuse cell bit mask", set.line);
+    this.emitOp(0x38, "К ∨", "bit_set with reused mask", set.line);
+    this.emitStore(set.target, `set ${set.target}`, set.line);
   }
 
   private membershipClearPrefix(statements: StatementAst[]): {
@@ -1440,6 +1617,28 @@ class EmitContext {
     if (clear?.kind !== "assign") return undefined;
     return {
       clear,
+      tail: [...proc.body.slice(1), ...statements.slice(1)],
+    };
+  }
+
+  private membershipSetPrefix(
+    statements: StatementAst[],
+    membership: BitMembershipCondition,
+  ): {
+    set: Extract<StatementAst, { kind: "assign" }>;
+    tail: StatementAst[];
+  } | undefined {
+    const first = statements[0];
+    if (first?.kind === "assign" && isBitSetAssignment(first, membership)) {
+      return { set: first, tail: statements.slice(1) };
+    }
+    if (first?.kind !== "call" || !this.inlineProcNames.has(first.block)) return undefined;
+    const proc = this.ast.procs.find((candidate) => candidate.name === first.block);
+    if (proc === undefined) return undefined;
+    const set = proc.body[0];
+    if (set?.kind !== "assign" || !isBitSetAssignment(set, membership)) return undefined;
+    return {
+      set,
       tail: [...proc.body.slice(1), ...statements.slice(1)],
     };
   }
@@ -1608,6 +1807,8 @@ class EmitContext {
     statement: Extract<StatementAst, { kind: "dispatch" }>,
     useFallthrough: boolean,
   ): void {
+    if (this.compileNumericResidualDispatchCompareChain(statement, useFallthrough)) return;
+
     const scratch = `${DISPATCH_SCRATCH_PREFIX}${statement.scratchId}`;
     const sourceRegister = dispatchExpressionRegister(statement, this.allocation);
     const register = sourceRegister ?? this.allocation.registers[scratch];
@@ -1670,6 +1871,58 @@ class EmitContext {
     }
     if (statement.defaultBody) this.compileStatements(statement.defaultBody);
     this.emitLabel(endLabel);
+  }
+
+  private compileNumericResidualDispatchCompareChain(
+    statement: Extract<StatementAst, { kind: "dispatch" }>,
+    useFallthrough: boolean,
+  ): boolean {
+    if (statement.cases.length < 2) return false;
+    const values = statement.cases.map((dispatchCase) => numericLiteralValue(dispatchCase.value));
+    if (values.some((value) => value === undefined)) return false;
+    const numericValues = values as number[];
+    if (!numericResidualDispatchIsCheaper(statement, numericValues)) return false;
+
+    this.compileExpression(statement.expr);
+    const endLabel = this.freshLabel("dispatch_end");
+    let comparedValue = 0;
+    let hasComparedValue = false;
+    for (let index = 0; index < statement.cases.length; index += 1) {
+      const dispatchCase = statement.cases[index]!;
+      const value = numericValues[index]!;
+      const nextLabel = this.freshLabel("dispatch_next");
+      const lastCase = index === statement.cases.length - 1;
+      if (!hasComparedValue) {
+        if (value !== 0) {
+          this.emitNumberOrPreload(String(value));
+          this.emitOp(0x11, "-", "dispatch compare", dispatchCase.line);
+        }
+        hasComparedValue = true;
+      } else {
+        const delta = comparedValue - value;
+        if (delta !== 0) {
+          this.emitNumberOrPreload(String(delta));
+          this.emitOp(0x10, "+", "dispatch residual compare", dispatchCase.line);
+        }
+      }
+      comparedValue = value;
+      this.emitJump(0x5e, "F x=0", nextLabel, "case mismatch", dispatchCase.line);
+      this.compileStatements(dispatchCase.body);
+      if (
+        !this.statementsTerminate(dispatchCase.body) &&
+        (!useFallthrough || !lastCase || statement.defaultBody !== undefined)
+      ) {
+        this.emitJump(0x51, "БП", endLabel, "dispatch end", dispatchCase.line);
+      }
+      this.emitLabel(nextLabel);
+    }
+    if (statement.defaultBody) this.compileStatements(statement.defaultBody);
+    this.emitLabel(endLabel);
+    this.optimizations.push({
+      name: "numeric-dispatch-residual-chain",
+      detail: `Reused residual comparisons for numeric dispatch at line ${statement.line}.`,
+    });
+    return true;
   }
 
   private statementsTerminate(statements: StatementAst[]): boolean {
@@ -2208,6 +2461,11 @@ class EmitContext {
         this.emitOp(0x0b, "/-/", "unary minus");
         return;
       case "binary":
+        if (expr.op === "-" && isNumericValue(expr.left, 0)) {
+          this.compileExpression(expr.right);
+          this.emitOp(0x0b, "/-/", "unary minus");
+          return;
+        }
         if (this.compileRemainderByConstant(expr)) {
           return;
         }
@@ -2646,14 +2904,33 @@ class EmitContext {
     const offset = scratch[2]!;
     const counter = scratch[3]!;
 
-    this.emitNumber("0");
+    this.emitZero(`${operation} total`, sourceLine);
     this.emitStore(total, `${operation} total`, sourceLine);
+    if (!useMax && progressions.length >= 3) {
+      const helper = this.ensureSpatialSumLoopHelper(hitMask, cell, operation, sourceLine);
+      for (const progression of progressions) {
+        this.compileExpression(progression.startOffset);
+        this.emitStore(offset, `${operation} offset`, sourceLine);
+        this.compileExpression(progression.step);
+        this.emitStore(line, `${operation} step`, sourceLine);
+        this.emitNumberOrPreload(String(progression.count));
+        this.emitStore(counter, `${operation} counter`, sourceLine);
+        this.emitJump(0x53, "ПП", helper.label, `${operation} progression`, sourceLine);
+      }
+      this.optimizations.push({
+        name: "spatial-sum-loop-helper-call",
+        detail: `Reused shared ${operation} progression helper for ${hitMask}.`,
+      });
+      return;
+    }
     for (const progression of progressions) {
-      this.emitNumber("0");
-      this.emitStore(line, `${operation} current line`, sourceLine);
+      if (useMax) {
+        this.emitNumber("0");
+        this.emitStore(line, `${operation} current line`, sourceLine);
+      }
       this.compileExpression(progression.startOffset);
       this.emitStore(offset, `${operation} offset`, sourceLine);
-      this.emitNumber(String(progression.count));
+      this.emitNumberOrPreload(String(progression.count));
       this.emitStore(counter, `${operation} counter`, sourceLine);
 
       const start = this.freshLabel(`${operation}_loop`);
@@ -2661,9 +2938,9 @@ class EmitContext {
       this.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
       const helper = this.ensureSpatialHitHelper(hitMask, spatialHitScratchName(hitMask));
       this.emitJump(0x53, "ПП", helper.label, `spatial hit ${hitMask}`, sourceLine);
-      this.emitRecall(line, `${operation} accumulator`);
+      this.emitRecall(useMax ? line : total, `${operation} accumulator`);
       this.emitOp(0x10, "+", `${operation} add hit`);
-      this.emitStore(line, `${operation} accumulator`);
+      this.emitStore(useMax ? line : total, `${operation} accumulator`);
 
       this.emitRecall(offset, `${operation} offset`);
       this.compileExpression(progression.step);
@@ -2687,19 +2964,88 @@ class EmitContext {
         this.emitJump(0x5e, "F x=0", start, `${operation} loop`, sourceLine);
       }
 
-      this.emitRecall(total, `${operation} total`);
-      this.emitRecall(line, `${operation} current line`);
       if (useMax) {
+        this.emitRecall(total, `${operation} total`);
+        this.emitRecall(line, `${operation} current line`);
         this.emitOp(0x36, "К max", `${operation} best line`);
-      } else {
-        this.emitOp(0x10, "+", `${operation} total add line`);
+        this.emitStore(total, `${operation} total`);
       }
-      this.emitStore(total, `${operation} total`);
     }
     this.emitRecall(total, `${operation} result`);
     this.optimizations.push({
       name: `spatial-${operation.replace("_", "-")}-loop`,
       detail: `Lowered ${operation}(...) as shared spatial hit loops.`,
+    });
+  }
+
+  private emitSpatialSumLoopHelperBody(
+    hitMask: string,
+    cell: ExpressionAst,
+    operation: "line_count" | "neighbor_count",
+    sourceLine: number | undefined,
+  ): void {
+    const scratch = spatialCountScratchNames();
+    const total = scratch[0]!;
+    const step = scratch[1]!;
+    const offset = scratch[2]!;
+    const counter = scratch[3]!;
+
+    const start = this.freshLabel(`${operation}_loop`);
+    this.emitLabel(start);
+    this.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
+    const hitScratch = spatialHitScratchName(hitMask);
+    this.emitStore(hitScratch, "spatial hit index", sourceLine);
+
+    this.emitRecall(offset, `${operation} offset`);
+    this.emitRecall(step, `${operation} step`);
+    this.emitOp(0x10, "+", `${operation} next offset`);
+    this.emitStore(offset, `${operation} offset`);
+
+    this.emitInlineSpatialHitFromScratch(hitMask, hitScratch, sourceLine);
+    this.emitRecall(total, `${operation} accumulator`);
+    this.emitOp(0x10, "+", `${operation} add hit`);
+    this.emitStore(total, `${operation} accumulator`);
+
+    const counterRegister = this.allocation.registers[counter];
+    const flCounterOpcode = counterRegister === undefined ? undefined : flOpcode(counterRegister);
+    if (flCounterOpcode !== undefined) {
+      this.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, `${operation} loop`, sourceLine);
+      this.optimizations.push({
+        name: "spatial-count-fl-loop",
+        detail: `Used ${getOpcode(flCounterOpcode).name} for ${operation} loop counter.`,
+      });
+    } else {
+      this.emitRecall(counter, `${operation} counter`);
+      this.emitNumber("1");
+      this.emitOp(0x11, "-", `${operation} decrement`);
+      this.emitStore(counter, `${operation} counter`);
+      this.emitRecall(counter, `${operation} counter`);
+      this.emitJump(0x5e, "F x=0", start, `${operation} loop`, sourceLine);
+    }
+  }
+
+  private emitInlineSpatialHit(hitMask: string, sourceLine: number | undefined): void {
+    const scratch = spatialHitScratchName(hitMask);
+    this.emitStore(scratch, "spatial hit index", sourceLine);
+    this.emitInlineSpatialHitFromScratch(hitMask, scratch, sourceLine);
+  }
+
+  private emitInlineSpatialHitFromScratch(
+    hitMask: string,
+    scratch: string,
+    sourceLine: number | undefined,
+  ): void {
+    this.emitRecall(hitMask, "spatial hit mask", sourceLine);
+    this.compileExpression({
+      kind: "call",
+      callee: "bit_mask",
+      args: [{ kind: "identifier", name: scratch }],
+    });
+    this.emitOp(0x37, "К ∧", "spatial hit test", sourceLine);
+    this.emitOp(0x32, "К ЗН", "spatial hit to count", sourceLine);
+    this.optimizations.push({
+      name: "spatial-hit-inline",
+      detail: `Inlined spatial hit test for ${hitMask} into ${sourceLine === undefined ? "generated loop" : `line ${sourceLine}`}.`,
     });
   }
 
@@ -2784,6 +3130,26 @@ class EmitContext {
     return helper;
   }
 
+  private ensureSpatialSumLoopHelper(
+    hitMask: string,
+    cell: ExpressionAst,
+    operation: "line_count" | "neighbor_count",
+    line: number | undefined,
+  ): { hitMask: string; cell: ExpressionAst; label: string; operation: "line_count" | "neighbor_count"; line?: number } {
+    const key = `${operation}:${hitMask}:${expressionToIntentText(cell)}`;
+    const existing = this.spatialSumLoopHelpers.get(key);
+    if (existing !== undefined) return existing;
+    const helper = {
+      hitMask,
+      cell,
+      label: `__${operation}_progression_${this.spatialSumLoopHelpers.size}`,
+      operation,
+      ...(line === undefined ? {} : { line }),
+    };
+    this.spatialSumLoopHelpers.set(key, helper);
+    return helper;
+  }
+
   private compileRawStatement(statement: Extract<StatementAst, { kind: "core" }>): void {
     const inputs = statement.inputs ?? [];
     const outputs = statement.outputs ?? [];
@@ -2840,6 +3206,7 @@ class EmitContext {
 
   private emitNumber(raw: string): void {
     this.currentXVariable = undefined;
+    this.currentXKnownZero = false;
     const normalized = raw.trim().toLowerCase();
     const negative = normalized.startsWith("-");
     const unsigned = negative ? normalized.slice(1) : normalized;
@@ -2859,6 +3226,23 @@ class EmitContext {
       if (expNegative) this.emitOp(0x0b, "/-/", "negative exponent");
     }
     if (negative) this.emitOp(0x0b, "/-/", "negative number");
+    this.currentXKnownZero = Number(raw) === 0;
+  }
+
+  private emitZero(comment?: string, sourceLine?: number): void {
+    if (this.currentXKnownZero) {
+      this.optimizations.push({
+        name: "known-zero-reuse",
+        detail: `Reused known zero in X${comment === undefined ? "" : ` for ${comment}`}.`,
+      });
+      return;
+    }
+    this.emitNumber("0");
+    if (comment !== undefined) {
+      const last = this.items.at(-1);
+      if (last?.kind === "op" && last.comment === undefined) last.comment = comment;
+      if (last?.kind === "op" && sourceLine !== undefined && last.sourceLine === undefined) last.sourceLine = sourceLine;
+    }
   }
 
   private emitNumberOrPreload(raw: string): void {
@@ -2947,6 +3331,7 @@ class EmitContext {
     if (raw) op.raw = true;
     this.items.push(op);
     this.currentXVariable = undefined;
+    this.currentXKnownZero = false;
   }
 
   private emitLabel(name: string): void {
@@ -3226,6 +3611,13 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
   if (programContainsCall(ast, "direction")) {
     values.add("20");
     values.add("10");
+  }
+  if (programContainsCall(ast, "line_count")) {
+    values.add("10");
+    values.add("11");
+    values.add("19");
+    values.add("-99");
+    values.add("-81");
   }
   const visitExpr = (expr: ExpressionAst): void => {
     if (expr.kind === "number" && estimateNumberCost(expr.raw) > 1) values.add(normalizeConstantLiteral(expr.raw));
@@ -3929,6 +4321,9 @@ function collectBitMaskScratchVariables(ast: ProgramAst, variables: Set<string>)
       if (statement.kind === "assign" && next?.kind === "assign" && isReusableBitSetPair(statement, next)) {
         variables.add(bitMaskScratchName(statement));
       }
+      if (statement.kind === "if" && isReusableMembershipSet(statement)) {
+        variables.add(bitMaskScratchName(statement));
+      }
       if (statement.kind === "loop") visit(statement.body);
       if (statement.kind === "if") {
         visit(statement.thenBody);
@@ -4096,6 +4491,34 @@ function dispatchExpressionRegister(
   return allocation.registers[statement.expr.name];
 }
 
+function numericResidualDispatchIsCheaper(
+  statement: Extract<StatementAst, { kind: "dispatch" }>,
+  values: readonly number[],
+): boolean {
+  const sourceRegister = statement.expr.kind === "identifier";
+  let ordinary = estimateExpressionCost(statement.expr) + (sourceRegister ? 0 : 1);
+  for (let index = 0; index < values.length; index += 1) {
+    const value = values[index]!;
+    ordinary += (index > 0 ? 1 : 0) + (value === 0 ? 0 : estimateNumberCost(String(value)) + 1) + 2;
+  }
+
+  let residual = estimateExpressionCost(statement.expr);
+  let comparedValue = 0;
+  let hasComparedValue = false;
+  for (const value of values) {
+    if (!hasComparedValue) {
+      residual += value === 0 ? 0 : estimateNumberCost(String(value)) + 1;
+      hasComparedValue = true;
+    } else {
+      const delta = comparedValue - value;
+      residual += delta === 0 ? 0 : estimateNumberCost(String(delta)) + 1;
+    }
+    residual += 2;
+    comparedValue = value;
+  }
+  return residual < ordinary;
+}
+
 function isZeroExpression(expr: ExpressionAst): boolean {
   return expr.kind === "number" && Number(expr.raw) === 0;
 }
@@ -4107,6 +4530,13 @@ function isUnitDecrementExpression(target: string, expr: ExpressionAst): boolean
     expr.left.name === target &&
     expr.right.kind === "number" &&
     Number(expr.right.raw) === 1;
+}
+
+function decrementBranchTestsZero(condition: ConditionAst, target: string): boolean {
+  return condition.left.kind === "identifier" &&
+    condition.left.name === target &&
+    (condition.op === "<=" || condition.op === "==") &&
+    isZeroExpression(condition.right);
 }
 
 function flOpcode(register: RegisterName): number | undefined {
@@ -5311,12 +5741,35 @@ function isReusableBitSetPair(
     expressionEquals(firstSet.item, secondSet.item);
 }
 
+function isReusableMembershipSet(statement: Extract<StatementAst, { kind: "if" }>): boolean {
+  const present = matchBitMembershipCondition(statement.condition);
+  if (present !== undefined && statement.elseBody !== undefined) {
+    const first = statement.elseBody[0];
+    if (first?.kind === "assign" && isBitSetAssignment(first, present)) return true;
+  }
+  const absent = matchBitAbsenceCondition(statement.condition);
+  if (absent === undefined) return false;
+  const first = statement.thenBody[0];
+  return first?.kind === "assign" && isBitSetAssignment(first, absent);
+}
+
 function bitMaskScratchName(statement: StatementAst): string {
   return `${BIT_MASK_SCRATCH_PREFIX}${statement.line}`;
 }
 
 function matchBitMembershipCondition(condition: ConditionAst): BitMembershipCondition | undefined {
   if (condition.op !== "!=" || !isZeroExpression(condition.right)) return undefined;
+  const test = condition.left;
+  if (test.kind !== "call" || test.callee.toLowerCase() !== "bit_has" || test.args.length !== 2) return undefined;
+  return {
+    collection: test.args[0]!,
+    item: test.args[1]!,
+    test,
+  };
+}
+
+function matchBitAbsenceCondition(condition: ConditionAst): BitMembershipCondition | undefined {
+  if (condition.op !== "==" || !isZeroExpression(condition.right)) return undefined;
   const test = condition.left;
   if (test.kind !== "call" || test.callee.toLowerCase() !== "bit_has" || test.args.length !== 2) return undefined;
   return {
@@ -5334,6 +5787,19 @@ function isBitClearAssignment(
   const expr = statement.expr;
   return expr.kind === "call" &&
     expr.callee.toLowerCase() === "bit_clear" &&
+    expr.args.length === 2 &&
+    expressionEquals(expr.args[0]!, membership.collection) &&
+    expressionEquals(expr.args[1]!, membership.item);
+}
+
+function isBitSetAssignment(
+  statement: Extract<StatementAst, { kind: "assign" }>,
+  membership: BitMembershipCondition,
+): boolean {
+  if (membership.collection.kind !== "identifier" || statement.target !== membership.collection.name) return false;
+  const expr = statement.expr;
+  return expr.kind === "call" &&
+    expr.callee.toLowerCase() === "bit_set" &&
     expr.args.length === 2 &&
     expressionEquals(expr.args[0]!, membership.collection) &&
     expressionEquals(expr.args[1]!, membership.item);
@@ -5417,6 +5883,7 @@ function addExpressions(left: ExpressionAst, right: ExpressionAst): ExpressionAs
 
 function subtractExpressions(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
   if (isNumericValue(right, 0)) return left;
+  if (isNumericValue(left, 0)) return { kind: "unary", op: "-", expr: right };
   return { kind: "binary", op: "-", left, right };
 }
 
@@ -5467,6 +5934,10 @@ function bitXorExpression(left: ExpressionAst, right: ExpressionAst): Expression
 
 function bitNotExpression(expr: ExpressionAst): ExpressionAst {
   return { kind: "call", callee: "bit_not", args: [expr] };
+}
+
+function fracExpression(expr: ExpressionAst): ExpressionAst {
+  return { kind: "call", callee: "frac", args: [expr] };
 }
 
 function spatialCountExpression(
@@ -5547,12 +6018,12 @@ function spatialLineProgressions(board: V2BoardAst, cell: ExpressionAst): Spatia
   const span = Math.max(board.width, board.height);
   return [
     {
-      startOffset: subtractExpressions(boardCellExpressionAst(numberExpression(board.xMin), y), cell),
+      startOffset: subtractExpressions(numberExpression(board.xMin), x),
       step: numberExpression(1),
       count: board.width,
     },
     {
-      startOffset: subtractExpressions(boardCellExpressionAst(x, numberExpression(board.yMin)), cell),
+      startOffset: multiplyExpressions(numberExpression(10), subtractExpressions(numberExpression(board.yMin), y)),
       step: numberExpression(10),
       count: board.height,
     },
@@ -5596,7 +6067,7 @@ function decimalTensExpressionAst(expr: ExpressionAst): ExpressionAst {
 }
 
 function decimalOnesExpressionAst(expr: ExpressionAst): ExpressionAst {
-  return subtractExpressions(expr, multiplyExpressions(numberExpression(10), intExpression(divideExpressions(expr, numberExpression(10)))));
+  return multiplyExpressions(fracExpression(divideExpressions(expr, numberExpression(10))), numberExpression(10));
 }
 
 function offsetExpressionAst(expr: ExpressionAst, offset: number): ExpressionAst {
@@ -6514,8 +6985,8 @@ const optimizerCapabilities: Array<{
     category: "data",
     source: "documented",
     requires: [],
-    activeWhen: ["constant-folding"],
-    detail: "Eliminates identity arithmetic such as '0 +' and '1 *' from the IR after upstream passes simplify the expression tree.",
+    activeWhen: ["expression-constant-folder", "constant-folding"],
+    detail: "Folds numeric source-expression subtrees before code generation and eliminates identity arithmetic such as '0 +' and '1 *' from the IR after upstream passes simplify the expression tree.",
   },
   {
     id: "cse-display-block",

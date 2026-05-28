@@ -33,6 +33,8 @@ program FoxHunt100 {
     else {
       scan_from_cell
     }
+
+    show report
   }
 
   rule found_fox {
@@ -46,7 +48,6 @@ program FoxHunt100 {
     }
     else {
       bearing = -remaining_foxes
-      show report
     }
   }
 
@@ -54,6 +55,5 @@ program FoxHunt100 {
     // The clue is not distance. It is the number of foxes aligned with this cell
     // by row, column, or either diagonal.
     bearing = line_count(foxes, cell)
-    show report
   }
 }

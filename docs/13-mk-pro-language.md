@@ -782,7 +782,8 @@ The pipeline currently contains:
   continuation.
 - **dead-code-after-halt** — CFG reachability from the entry removes ops
   that no fall-through or jump edge reaches.
-- **constant-folding** — strips `0 +` and `1 *` identities.
+- **constant-folding** — folds numeric source-expression subtrees before code
+  generation, and strips `0 +` and `1 *` identities in later IR.
 - **r0-fractional-sentinel** — removes redundant direct `R3` accesses after
   fractional `R0` indirect access when liveness proves `R0` is dead afterward.
 - **vp-x2-peephole** — drops a `К {x}` immediately after a proved display
@@ -797,6 +798,8 @@ The pipeline currently contains:
   shorter.
 - **duplicate-failure-tail-merge** — merges duplicate `show 0` failure
   tails into a shared exit.
+- **shared-call-tail** — coalesces repeated `ПП helper; БП continuation`
+  pairs into one shared call tail when that is smaller.
 - **return-zero-jump** — replaces `БП 01` with `В/О` only when the return
   stack is provably empty.
 - **redundant-prologue-elimination** — when a `display + С/П` block
