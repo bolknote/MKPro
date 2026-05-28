@@ -155,6 +155,31 @@ program SmallSetHelpers {
     )).toHaveLength(2);
   });
 
+  it("shares repeated random_cell arithmetic without sharing the random draw", () => {
+    const result = compileMKPro(`
+program RandomCellReuse {
+  grid: board(1..20, 1..1)
+
+  state {
+    a: coord(grid) = 1
+    b: coord(grid) = 1
+    c: coord(grid) = 1
+  }
+
+  turn {
+    a = random_cell(grid)
+    b = random_cell(grid)
+    c = random_cell(grid)
+    stop a + b + c
+  }
+}
+`, { budget: 999999, analysis: true });
+
+    const names = result.report.optimizations.map((optimization) => optimization.name);
+    expect(names.filter((name) => name === "random-cell-helper-call")).toHaveLength(3);
+    expect(names).toContain("random-cell-helper");
+  });
+
   it("rejects removed low-level calculator syntax", () => {
     expect(() =>
       compileMKPro(`

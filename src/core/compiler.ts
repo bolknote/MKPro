@@ -949,6 +949,7 @@ class EmitContext {
   private readonly displayUseCounts: Map<string, number>;
   private readonly showSequenceUseCounts: Map<string, number>;
   private readonly expressionUseCounts: Map<string, { count: number; expr: ExpressionAst }>;
+  private readonly nearAnyHelperStats: Map<string, NearAnyHelperStats>;
   private readonly lineCountCallCount: number;
   private readonly lineCountGroupCounts: Map<string, number>;
   private readonly spatialHitHelpers = new Map<string, { mask: string; scratch: string; label: string; line?: number }>();
@@ -960,8 +961,17 @@ class EmitContext {
     line: number;
   }>();
   private readonly expressionHelpers = new Map<string, { expr: ExpressionAst; label: string; line?: number }>();
+  private readonly randomCellHelpers = new Map<string, { expr: ExpressionAst; label: string; line?: number }>();
+  private readonly nearAnyHelpers = new Map<string, { value: ExpressionAst; radius: ExpressionAst; label: string; line?: number }>();
   private readonly lineCountHelpers = new Map<string, { cell: ExpressionAst; board: V2BoardAst; label: string; line?: number }>();
   private readonly spatialBitMaskHelpers = new Map<string, { scratch: string; label: string; line?: number }>();
+  private readonly spatialLineProgressionHelpers = new Map<string, {
+    hitMask: string;
+    cell: ExpressionAst;
+    label: string;
+    operation: "line_count" | "neighbor_count";
+    line?: number;
+  }>();
   private readonly spatialSumLoopHelpers = new Map<string, {
     hitMask: string;
     cell: ExpressionAst;
@@ -972,12 +982,17 @@ class EmitContext {
   private readonly terminalTailHelpers: Array<{ body: StatementAst[]; label: string; line: number }> = [];
   private currentXVariable: string | undefined;
   private currentXKnownZero = false;
+  // Meet of the X-variable carried by every recorded branch/jump edge into a
+  // label (undefined value = edges disagree / unknown). Used by emitLabel to
+  // keep stack-reuse facts sound across control-flow joins.
+  private readonly labelEdgeX = new Map<string, string | undefined>();
   // True when the machine is mid number-entry, so the next number literal would
   // concatenate digits (e.g. 1 then 3 -> 13) instead of starting a new value.
   // Set by digit-building ops and by С/П reads (the user-typed value stays in
   // entry mode until a finalizing op lifts/uses it).
   private machineEntryOpen = false;
   private emittingExpressionHelper = false;
+  private emittingRandomCellHelper = false;
 
   constructor(
     ast: ProgramAst,
@@ -1004,6 +1019,7 @@ class EmitContext {
     this.displayUseCounts = collectDisplayUseCounts(ast);
     this.showSequenceUseCounts = collectShowSequenceUseCounts(ast);
     this.expressionUseCounts = collectExpressionUseCounts(ast);
+    this.nearAnyHelperStats = collectNearAnyHelperStats(ast, new Set(Object.keys(allocation.constants)));
     this.lineCountCallCount = countCalls(ast, "line_count");
     this.lineCountGroupCounts = collectLineCountGroupCounts(ast);
     for (const declaration of ast.declarations) {
@@ -1073,6 +1089,20 @@ class EmitContext {
         detail: `Emitted shared helper for show ${helper.first.name}; show ${helper.second.name}; read.`,
       });
     }
+    for (const helper of this.randomCellHelpers.values()) {
+      this.emitLabel(helper.label);
+      this.emittingRandomCellHelper = true;
+      try {
+        this.compileExpression(helper.expr);
+      } finally {
+        this.emittingRandomCellHelper = false;
+      }
+      this.emitOp(0x52, "В/О", "random_cell helper return", helper.line);
+      this.optimizations.push({
+        name: "random-cell-helper",
+        detail: `Emitted shared random cell helper for ${expressionToIntentText(helper.expr)}.`,
+      });
+    }
     for (const helper of this.expressionHelpers.values()) {
       this.emitLabel(helper.label);
       this.emittingExpressionHelper = true;
@@ -1087,6 +1117,20 @@ class EmitContext {
         detail: `Emitted shared helper for ${expressionToIntentText(helper.expr)}.`,
       });
     }
+    for (const helper of this.nearAnyHelpers.values()) {
+      this.emitLabel(helper.label);
+      this.compileExpression(helper.value);
+      this.emitOp(0x11, "-", "near_any delta", helper.line);
+      this.emitOp(0x31, "К |x|", "near_any distance", helper.line);
+      this.compileExpression(helper.radius);
+      this.emitOp(0x14, "<->", "near_any radius before distance", helper.line);
+      this.emitOp(0x11, "-", "near_any margin", helper.line);
+      this.emitOp(0x52, "В/О", "near_any return", helper.line);
+      this.optimizations.push({
+        name: "near-any-helper",
+        detail: `Emitted shared near_any helper for ${expressionToIntentText(helper.value)} / ${expressionToIntentText(helper.radius)}.`,
+      });
+    }
     for (const helper of this.lineCountHelpers.values()) {
       this.emitLabel(helper.label);
       this.emitStore(spatialCountMaskScratchName(), "line count mask", helper.line);
@@ -1095,6 +1139,15 @@ class EmitContext {
       this.optimizations.push({
         name: "spatial-line-count-helper",
         detail: `Emitted shared line_count helper for ${helper.board.name}/${expressionToIntentText(helper.cell)}.`,
+      });
+    }
+    for (const helper of this.spatialLineProgressionHelpers.values()) {
+      this.emitLabel(helper.label);
+      this.emitSpatialLineProgressionHelperBody(helper.hitMask, helper.cell, helper.operation, helper.line);
+      this.emitOp(0x52, "В/О", `${helper.operation} line progression return`, helper.line);
+      this.optimizations.push({
+        name: "spatial-line-progression-helper",
+        detail: `Emitted shared ${helper.operation} line progression helper for ${helper.hitMask}.`,
       });
     }
     for (const helper of this.spatialSumLoopHelpers.values()) {
@@ -1357,6 +1410,11 @@ class EmitContext {
       case "loop": {
         const start = this.freshLabel("loop");
         this.emitLabel(start);
+        // The back-edge (БП -> start) is emitted after the body, so its X-fact
+        // is unknown when the header is reached. Clear the reuse fact so the
+        // body cannot reuse a value that only holds on the first iteration.
+        this.currentXVariable = undefined;
+        this.currentXKnownZero = false;
         this.compileStatements(statement.body);
         this.emitJump(0x51, "БП", start, "loop back", statement.line);
         return;
@@ -1499,7 +1557,12 @@ class EmitContext {
     const falseLabel = this.freshLabel("if_false");
     const thenTerminates = this.statementsTerminate(selected.thenBody);
     const endLabel = thenTerminates ? undefined : this.freshLabel("if_end");
+    const fallthroughIdentifier = this.nearAnyFallthroughCandidate(selected.condition, selected.thenBody);
     this.compileCondition(selected.condition, falseLabel, line);
+    if (fallthroughIdentifier !== undefined) {
+      this.currentXVariable = fallthroughIdentifier;
+      this.currentXKnownZero = false;
+    }
     this.compileStatements(selected.thenBody);
     if (selected.elseBody) {
       if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", line);
@@ -1515,6 +1578,43 @@ class EmitContext {
     } else {
       this.emitLabel(falseLabel);
     }
+  }
+
+  private nearAnyFallthroughCandidate(
+    condition: ConditionAst,
+    thenBody: StatementAst[],
+  ): string | undefined {
+    const normalized = normalizeZeroComparison(condition);
+    if (
+      normalized === undefined ||
+      !canTestAgainstZeroDirectly(normalized.op) ||
+      normalized.expr.kind !== "identifier"
+    ) {
+      return undefined;
+    }
+    const first = this.firstInlineStatement(thenBody);
+    if (first?.kind !== "if") return undefined;
+    const firstCondition = selectCheaperEquivalentCondition(
+      first.condition,
+      this.ast,
+      new Set(Object.keys(this.allocation.constants)),
+    ).condition;
+    const match = matchNearAnyHelperCondition(firstCondition);
+    const firstCandidate = match?.candidates[0];
+    if (firstCandidate?.kind !== "identifier" || firstCandidate.name !== normalized.expr.name) {
+      return undefined;
+    }
+    return normalized.expr.name;
+  }
+
+  private firstInlineStatement(statements: StatementAst[], seen = new Set<string>()): StatementAst | undefined {
+    const first = statements[0];
+    if (first?.kind !== "call") return first;
+    if (!this.inlineProcNames.has(first.block) || seen.has(first.block)) return first;
+    const proc = this.ast.procs.find((candidate) => candidate.name === first.block);
+    if (proc === undefined) return first;
+    seen.add(first.block);
+    return this.firstInlineStatement(proc.body, seen);
   }
 
   private compileNestedGuardSharedFailure(
@@ -2703,6 +2803,7 @@ class EmitContext {
       });
     }
     const compiledCondition = selected.condition;
+    if (this.compileNearAnyHelperCondition(compiledCondition, falseLabel, line, preloadedConstants)) return;
     if (this.compileSmallSetCondition(compiledCondition, falseLabel, line, preloadedConstants)) return;
     if (isZeroExpression(compiledCondition.right) && canTestAgainstZeroDirectly(compiledCondition.op)) {
       const usedSpatialHit = this.compileBitHasConditionWithSpatialHelper(compiledCondition.left, line);
@@ -2739,6 +2840,71 @@ class EmitContext {
             : 0x57;
     const mnemonic = getOpcode(opcode).name;
     this.emitJump(opcode, mnemonic, falseLabel, `false branch for ${compiledCondition.op}`, line);
+  }
+
+  private compileNearAnyHelperCondition(
+    condition: ConditionAst,
+    falseLabel: string,
+    line: number,
+    preloadedConstants: ReadonlySet<string>,
+  ): boolean {
+    const match = matchNearAnyHelperCondition(condition);
+    if (match === undefined) return false;
+    const key = nearAnyHelperKey(match.value, match.radius);
+    const stats = this.nearAnyHelperStats.get(key);
+    if (stats === undefined || stats.helperCost >= stats.ordinaryCost) return false;
+
+    const helper = this.nearAnyHelper(match.value, match.radius, line);
+    this.compileNearAnyMarginWithHelper(match, helper.label, line);
+    const opcode = directTestOpcode(match.op);
+    this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${match.op}`, line);
+    this.optimizations.push({
+      name: "near-any-helper-lowering",
+      detail: `Lowered ${conditionToText(condition)} through shared near_any helper at line ${line} (${stats.helperCost} vs ${stats.ordinaryCost} estimated group steps).`,
+    });
+    return true;
+  }
+
+  private compileNearAnyMarginWithHelper(
+    match: NearAnyHelperConditionMatch,
+    label: string,
+    line: number,
+  ): void {
+    for (let index = 0; index < match.candidates.length; index += 1) {
+      const candidate = match.candidates[index]!;
+      this.compileNearAnyCandidate(candidate, line);
+      this.emitJump(0x53, "ПП", label, "near_any candidate", line);
+      if (index > 0) this.emitOp(0x36, "К max", "near_any max margin", line);
+    }
+  }
+
+  private compileNearAnyCandidate(candidate: ExpressionAst, line: number): void {
+    if (candidate.kind === "identifier" && candidate.name === this.currentXVariable) {
+      this.optimizations.push({
+        name: "stack-current-x-scheduling",
+        detail: `Reused ${candidate.name} already in X for near_any candidate at line ${line}.`,
+      });
+      return;
+    }
+    this.compileExpression(candidate);
+  }
+
+  private nearAnyHelper(
+    value: ExpressionAst,
+    radius: ExpressionAst,
+    line?: number,
+  ): { value: ExpressionAst; radius: ExpressionAst; label: string; line?: number } {
+    const key = nearAnyHelperKey(value, radius);
+    const existing = this.nearAnyHelpers.get(key);
+    if (existing !== undefined) return existing;
+    const helper = {
+      value,
+      radius,
+      label: `__near_any_${this.nearAnyHelpers.size}`,
+      ...(line === undefined ? {} : { line }),
+    };
+    this.nearAnyHelpers.set(key, helper);
+    return helper;
   }
 
   private compileSmallSetCondition(
@@ -2871,6 +3037,16 @@ class EmitContext {
   }
 
   private compileExpression(expr: ExpressionAst): void {
+    const randomCellHelper = this.sharedRandomCellHelper(expr);
+    if (randomCellHelper !== undefined) {
+      this.emitJump(0x53, "ПП", randomCellHelper.label, `random cell ${expressionToIntentText(expr)}`);
+      this.optimizations.push({
+        name: "random-cell-helper-call",
+        detail: `Reused shared random cell helper for ${expressionToIntentText(expr)}.`,
+      });
+      return;
+    }
+
     const helper = this.sharedExpressionHelper(expr);
     if (helper !== undefined) {
       this.emitJump(0x53, "ПП", helper.label, `expr ${expressionToIntentText(expr)}`);
@@ -3050,6 +3226,32 @@ class EmitContext {
       detail: `Lowered ${expressionToIntentText(expr)} without recomputing the dividend.`,
     });
     return true;
+  }
+
+  private sharedRandomCellHelper(expr: ExpressionAst): { expr: ExpressionAst; label: string; line?: number } | undefined {
+    if (this.emittingRandomCellHelper) return undefined;
+    if (!this.shouldShareRandomCellExpression(expr)) return undefined;
+    const key = expressionToIntentText(expr);
+    const existing = this.randomCellHelpers.get(key);
+    if (existing !== undefined) return existing;
+    const helper = {
+      expr,
+      label: `__random_cell_${this.randomCellHelpers.size}`,
+    };
+    this.randomCellHelpers.set(key, helper);
+    return helper;
+  }
+
+  private shouldShareRandomCellExpression(expr: ExpressionAst): boolean {
+    if (!isRandomCellExpressionShape(expr)) return false;
+    const key = expressionToIntentText(expr);
+    const uses = this.expressionUseCounts.get(key)?.count ?? 0;
+    if (uses < 2) return false;
+    const preloadedConstants = new Set(Object.keys(this.allocation.constants));
+    const cost = estimateExpressionCostForCondition(expr, preloadedConstants);
+    const inlineTotal = uses * cost;
+    const helperTotal = uses * 2 + cost + 1;
+    return inlineTotal - helperTotal >= EXPRESSION_HELPER_MIN_SAVINGS;
   }
 
   private sharedExpressionHelper(expr: ExpressionAst): { expr: ExpressionAst; label: string; line?: number } | undefined {
@@ -3440,6 +3642,31 @@ class EmitContext {
 
     this.emitZero(`${operation} total`, sourceLine);
     this.emitStore(total, `${operation} total`, sourceLine);
+    if (useMax && progressions.length >= 3 && this.allocation.registers[spatialCountStepScratchName()] !== undefined) {
+      const helper = this.ensureSpatialLineProgressionHelper(hitMask, cell, operation, sourceLine);
+      for (const progression of progressions) {
+        this.emitZero(`${operation} current line`, sourceLine);
+        this.emitStore(line, `${operation} current line`, sourceLine);
+        this.compileExpression(progression.startOffset);
+        this.emitStore(offset, `${operation} offset`, sourceLine);
+        this.compileExpression(progression.step);
+        this.emitStore(spatialCountStepScratchName(), `${operation} step`, sourceLine);
+        this.emitNumberOrPreload(String(progression.count));
+        this.emitStore(counter, `${operation} counter`, sourceLine);
+        this.emitJump(0x53, "ПП", helper.label, `${operation} line progression`, sourceLine);
+
+        this.emitRecall(total, `${operation} total`);
+        this.emitRecall(line, `${operation} current line`);
+        this.emitOp(0x36, "К max", `${operation} best line`);
+        this.emitStore(total, `${operation} total`);
+      }
+      this.emitRecall(total, `${operation} result`);
+      this.optimizations.push({
+        name: "spatial-line-progression-helper-call",
+        detail: `Reused shared ${operation} line progression helper for ${hitMask}.`,
+      });
+      return;
+    }
     if (!useMax && progressions.length >= 3) {
       const helper = this.ensureSpatialSumLoopHelper(hitMask, cell, operation, sourceLine);
       for (const progression of progressions) {
@@ -3512,6 +3739,50 @@ class EmitContext {
       name: `spatial-${operation.replace("_", "-")}-loop`,
       detail: `Lowered ${operation}(...) as shared spatial hit loops.`,
     });
+  }
+
+  private emitSpatialLineProgressionHelperBody(
+    hitMask: string,
+    cell: ExpressionAst,
+    operation: "line_count" | "neighbor_count",
+    sourceLine: number | undefined,
+  ): void {
+    const scratch = spatialCountScratchNames();
+    const line = scratch[1]!;
+    const offset = scratch[2]!;
+    const counter = scratch[3]!;
+    const counterRegister = this.allocation.registers[counter];
+    const flCounterOpcode = counterRegister === undefined ? undefined : flOpcode(counterRegister);
+
+    const start = this.freshLabel(`${operation}_line_loop`);
+    this.emitLabel(start);
+    this.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
+    const helper = this.ensureSpatialHitHelper(hitMask, spatialHitScratchName(hitMask));
+    this.emitJump(0x53, "ПП", helper.label, `spatial hit ${hitMask}`, sourceLine);
+    this.emitRecall(line, `${operation} line accumulator`);
+    this.emitOp(0x10, "+", `${operation} add hit`);
+    this.emitStore(line, `${operation} line accumulator`);
+
+    this.emitRecall(offset, `${operation} offset`);
+    this.emitRecall(spatialCountStepScratchName(), `${operation} step`);
+    this.emitOp(0x10, "+", `${operation} next offset`);
+    this.emitStore(offset, `${operation} offset`);
+
+    if (flCounterOpcode !== undefined) {
+      this.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, `${operation} line loop`, sourceLine);
+      this.optimizations.push({
+        name: "spatial-count-fl-loop",
+        detail: `Used ${getOpcode(flCounterOpcode).name} for ${operation} line progression loop counter.`,
+      });
+    } else {
+      this.emitRecall(counter, `${operation} counter`);
+      this.emitNumber("1");
+      this.emitOp(0x11, "-", `${operation} decrement`);
+      this.emitStore(counter, `${operation} counter`);
+      this.emitRecall(counter, `${operation} counter`);
+      this.emitJump(0x5e, "F x=0", start, `${operation} line loop`, sourceLine);
+    }
+    this.emitRecall(line, `${operation} current line`);
   }
 
   private emitSpatialSumLoopHelperBody(
@@ -3703,6 +3974,26 @@ class EmitContext {
     return helper;
   }
 
+  private ensureSpatialLineProgressionHelper(
+    hitMask: string,
+    cell: ExpressionAst,
+    operation: "line_count" | "neighbor_count",
+    line: number | undefined,
+  ): { hitMask: string; cell: ExpressionAst; label: string; operation: "line_count" | "neighbor_count"; line?: number } {
+    const key = `${operation}:${hitMask}:${expressionToIntentText(cell)}`;
+    const existing = this.spatialLineProgressionHelpers.get(key);
+    if (existing !== undefined) return existing;
+    const helper = {
+      hitMask,
+      cell,
+      label: `__${operation}_line_progression_${this.spatialLineProgressionHelpers.size}`,
+      operation,
+      ...(line === undefined ? {} : { line }),
+    };
+    this.spatialLineProgressionHelpers.set(key, helper);
+    return helper;
+  }
+
   private compileRawStatement(statement: Extract<StatementAst, { kind: "core" }>): void {
     const inputs = statement.inputs ?? [];
     const outputs = statement.outputs ?? [];
@@ -3845,6 +4136,9 @@ class EmitContext {
     comment?: string,
     sourceLine?: number,
   ): void {
+    // Capture the X-fact on this edge *before* the branch/jump opcode clears
+    // it, so merge points can verify all predecessors agree (see emitLabel).
+    if (typeof target === "string") this.recordLabelEdge(target, this.currentXVariable);
     this.emitOp(opcode, mnemonic, comment, sourceLine);
     this.emitAddress(target, comment ?? mnemonic, sourceLine);
   }
@@ -3896,15 +4190,27 @@ class EmitContext {
     this.machineEntryOpen = opcode <= 0x0c;
   }
 
+  private recordLabelEdge(label: string, fact: string | undefined): void {
+    if (this.labelEdgeX.has(label)) {
+      if (this.labelEdgeX.get(label) !== fact) this.labelEdgeX.set(label, undefined);
+    } else {
+      this.labelEdgeX.set(label, fact);
+    }
+  }
+
   private emitLabel(name: string): void {
     this.items.push({ kind: "label", name });
-    // A label is a control-flow merge point (jump target): the value in X
-    // depends on which predecessor path was taken, so the statically tracked
-    // "current X" fact is no longer valid here. Killing it keeps stack-reuse
-    // optimizations (e.g. display-stack-reuse, condition-current-x-reuse) sound
-    // across branches and loops.
-    this.currentXVariable = undefined;
-    this.currentXKnownZero = false;
+    // A label is a control-flow merge point. The "current X" fact tracked
+    // textually only reflects the fall-through edge; reusing it across a join
+    // is sound only if every incoming branch/jump edge agrees on the same
+    // variable. Otherwise the value in X is path-dependent and must not be
+    // reused (this is what made display-stack-reuse pick up garbage left by a
+    // sibling branch). Labels with no recorded edge keep the fall-through fact.
+    if (this.labelEdgeX.has(name)) {
+      const edgeFact = this.labelEdgeX.get(name);
+      this.currentXVariable = this.currentXVariable === edgeFact ? this.currentXVariable : undefined;
+      this.currentXKnownZero = false;
+    }
   }
 
   private freshLabel(prefix: string): string {
@@ -4734,6 +5040,67 @@ function collectExpressionUseCounts(ast: ProgramAst): Map<string, { count: numbe
   return counts;
 }
 
+function collectNearAnyHelperStats(
+  ast: ProgramAst,
+  preloadedConstants: ReadonlySet<string>,
+): Map<string, NearAnyHelperStats> {
+  const stats = new Map<string, NearAnyHelperStats>();
+  const add = (condition: ConditionAst): void => {
+    const selected = selectCheaperEquivalentCondition(condition, ast, preloadedConstants).condition;
+    const match = matchNearAnyHelperCondition(selected);
+    if (match === undefined) return;
+    const key = nearAnyHelperKey(match.value, match.radius);
+    const candidateCallCost = match.candidates.reduce(
+      (sum, candidate) => sum + estimateExpressionCostForCondition(candidate, preloadedConstants) + 2,
+      0,
+    );
+    const helperConditionCost = candidateCallCost + Math.max(0, match.candidates.length - 1) + 2;
+    const ordinaryCost = conditionCompileCost(selected, preloadedConstants);
+    const existing = stats.get(key);
+    if (existing === undefined) {
+      const helperBodyCost =
+        estimateExpressionCostForCondition(match.value, preloadedConstants) +
+        estimateExpressionCostForCondition(match.radius, preloadedConstants) +
+        5;
+      stats.set(key, {
+        candidateCount: match.candidates.length,
+        conditionCount: 1,
+        ordinaryCost,
+        helperCallCost: helperConditionCost,
+        helperCost: helperBodyCost + helperConditionCost,
+      });
+      return;
+    }
+    existing.candidateCount += match.candidates.length;
+    existing.conditionCount += 1;
+    existing.ordinaryCost += ordinaryCost;
+    existing.helperCallCost += helperConditionCost;
+    existing.helperCost += helperConditionCost;
+  };
+  const visit = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "if") {
+        add(statement.condition);
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "switch") {
+        for (const switchCase of statement.cases) visit(switchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  for (const block of ast.blocks) visit(block.body);
+  return stats;
+}
+
 function estimatePackedDisplayBodyCost(sourceCount: number): number {
   return sourceCount === 0 ? 2 : sourceCount * 2;
 }
@@ -5115,6 +5482,69 @@ function collectSpatialCountScratchVariables(ast: ProgramAst, variables: Set<str
   if (!needsScratch) return;
   for (const scratch of spatialCountScratchNames()) variables.add(scratch);
   if (countCalls(ast, "line_count") > 1) variables.add(spatialCountMaskScratchName());
+  if (programNeedsSpatialLineProgressionHelper(ast) && variables.size < REGISTER_ORDER.length) {
+    variables.add(spatialCountStepScratchName());
+  }
+}
+
+function programNeedsSpatialLineProgressionHelper(ast: ProgramAst): boolean {
+  let needed = false;
+  const visitExpr = (expr: ExpressionAst): void => {
+    if (needed) return;
+    if (expr.kind === "call" && expr.callee.toLowerCase() === "line_count" && expr.args[0] !== undefined) {
+      const board = boardForCellMask(expr.args[0], ast);
+      if (board !== undefined && board.width <= 4 && board.height <= 4) {
+        needed = true;
+        return;
+      }
+    }
+    if (expr.kind === "unary") visitExpr(expr.expr);
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+    }
+    if (expr.kind === "call") {
+      for (const arg of expr.args) visitExpr(arg);
+    }
+  };
+  const visit = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (needed) return;
+      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+      if (statement.kind === "assign") visitExpr(statement.expr);
+      if (statement.kind === "if") {
+        visitExpr(statement.condition.left);
+        visitExpr(statement.condition.right);
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "switch") {
+        visitExpr(statement.expr);
+        for (const switchCase of statement.cases) {
+          visitExpr(switchCase.value);
+          visit(switchCase.body);
+        }
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          visitExpr(dispatchCase.value);
+          visit(dispatchCase.body);
+        }
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "core") {
+        for (const input of statement.inputs ?? []) visitExpr(input.expr);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  for (const block of ast.blocks) visit(block.body);
+  return needed;
 }
 
 function collectGuardedUpdateScratchVariables(ast: ProgramAst, variables: Set<string>): void {
@@ -6427,9 +6857,9 @@ function ticTacToeExpressionMacro(name: string, args: ExpressionAst[]): Expressi
     case "bit_toggle":
       return bitXorExpression(args[0]!, bitMaskExpression(args[1]!));
     case "diag_left_index":
-      return norm4Expression(addExpressions(args[0]!, args[1]!));
+      return positiveNorm4Expression(addExpressions(args[0]!, args[1]!));
     case "diag_right_index":
-      return norm4Expression(subtractExpressions(args[0]!, args[1]!));
+      return positiveNorm4Expression(addExpressions(subtractExpressions(args[0]!, args[1]!), numberExpression(4)));
     case "cell_mask":
       return cellMaskExpression(args[0]!, args[1]!);
     case "cell_has":
@@ -6477,6 +6907,21 @@ interface SmallSetConditionMatch {
   kind: SmallSetMacroName;
   mode: "any" | "all";
   tests: SmallSetTest[];
+}
+
+interface NearAnyHelperConditionMatch {
+  value: ExpressionAst;
+  radius: ExpressionAst;
+  candidates: ExpressionAst[];
+  op: ">=" | "<";
+}
+
+interface NearAnyHelperStats {
+  candidateCount: number;
+  conditionCount: number;
+  ordinaryCost: number;
+  helperCallCost: number;
+  helperCost: number;
 }
 
 function isSmallSetMacroName(name: string): name is SmallSetMacroName {
@@ -6536,6 +6981,53 @@ function matchSmallSetCondition(condition: ConditionAst): SmallSetConditionMatch
   }
 
   return undefined;
+}
+
+function matchNearAnyHelperCondition(condition: ConditionAst): NearAnyHelperConditionMatch | undefined {
+  const normalized = normalizeZeroComparison(condition);
+  if (normalized === undefined || (normalized.op !== ">=" && normalized.op !== "<")) return undefined;
+  const match = matchNearAnySetExpression(normalized.expr);
+  if (match === undefined) return undefined;
+  if (!isSimpleStackLoad(match.value) || !isSimpleStackLoad(match.radius)) return undefined;
+  if (match.candidates.length === 0 || match.candidates.some((candidate) => !isSimpleStackLoad(candidate))) {
+    return undefined;
+  }
+  return { ...match, op: normalized.op };
+}
+
+function matchNearAnySetExpression(
+  expr: ExpressionAst,
+): { value: ExpressionAst; radius: ExpressionAst; candidates: ExpressionAst[] } | undefined {
+  if (expr.kind === "call" && expr.callee.toLowerCase() === "near_any" && smallSetMacroArityOk("near_any", expr.args.length)) {
+    return {
+      value: expr.args[0]!,
+      radius: expr.args[1]!,
+      candidates: expr.args.slice(2),
+    };
+  }
+  return matchNearAnyMarginSetExpression(expr);
+}
+
+function matchNearAnyMarginSetExpression(
+  expr: ExpressionAst,
+): { value: ExpressionAst; radius: ExpressionAst; candidates: ExpressionAst[] } | undefined {
+  const terms = flattenMaxTerms(expr);
+  const margins = terms.map(matchNearMarginTerm);
+  if (margins.some((margin) => margin === undefined)) return undefined;
+  const typedMargins = margins as NearMarginTerm[];
+  if (typedMargins.length === 0) return undefined;
+  const commonValue = commonDifferenceEndpoint(typedMargins.map((margin) => margin.difference));
+  if (commonValue === undefined) return undefined;
+  const radius = typedMargins[0]!.radius;
+  if (!typedMargins.every((margin) => expressionEquals(margin.radius, radius))) return undefined;
+  const candidates = typedMargins.map((margin) =>
+    expressionEquals(margin.difference.left, commonValue) ? margin.difference.right : margin.difference.left
+  );
+  return { value: commonValue, radius, candidates };
+}
+
+function nearAnyHelperKey(value: ExpressionAst, radius: ExpressionAst): string {
+  return `${expressionToIntentText(value)}|${expressionToIntentText(radius)}`;
 }
 
 function normalizeZeroComparison(condition: ConditionAst): { expr: ExpressionAst; op: ConditionAst["op"] } | undefined {
@@ -6835,6 +7327,17 @@ function norm4Expression(expr: ExpressionAst): ExpressionAst {
   );
 }
 
+function positiveNorm4Expression(expr: ExpressionAst): ExpressionAst {
+  const rem = multiplyExpressions(
+    fracExpression(divideExpressions(intExpression(expr), numberExpression(4))),
+    numberExpression(4),
+  );
+  return addExpressions(
+    rem,
+    multiplyExpressions(numberExpression(4), oneMinus(signExpression(rem))),
+  );
+}
+
 function cellMaskExpression(x: ExpressionAst, y: ExpressionAst): ExpressionAst {
   return addExpressions(
     pow10Expression(x),
@@ -7129,6 +7632,10 @@ function spatialCountMaskScratchName(): string {
   return `${SPATIAL_COUNT_SCRATCH_PREFIX}mask`;
 }
 
+function spatialCountStepScratchName(): string {
+  return `${SPATIAL_COUNT_SCRATCH_PREFIX}step`;
+}
+
 function range(start: number, end: number): number[] {
   const values: number[] = [];
   for (let value = start; value <= end; value += 1) values.push(value);
@@ -7241,6 +7748,46 @@ function expressionEquals(left: ExpressionAst, right: ExpressionAst): boolean {
         left.callee.toLowerCase() === right.callee.toLowerCase() &&
         left.args.length === right.args.length &&
         left.args.every((arg, index) => expressionEquals(arg, right.args[index]!));
+  }
+}
+
+function isRandomCellExpressionShape(expr: ExpressionAst): boolean {
+  if (isRandomScaledInteger(expr)) return true;
+  if (expr.kind !== "binary") return false;
+  if (expr.op === "+") {
+    return (isRandomScaledInteger(expr.left) && numericLiteralValue(expr.right) !== undefined) ||
+      (numericLiteralValue(expr.left) !== undefined && isRandomScaledInteger(expr.right));
+  }
+  if (expr.op === "-") {
+    return isRandomScaledInteger(expr.left) && numericLiteralValue(expr.right) !== undefined;
+  }
+  return false;
+}
+
+function isRandomScaledInteger(expr: ExpressionAst): boolean {
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "int" || expr.args.length !== 1) return false;
+  const arg = expr.args[0]!;
+  if (arg.kind !== "binary" || arg.op !== "*") return false;
+  if (isRandomCall(arg.left)) return !expressionContainsRandom(arg.right);
+  if (isRandomCall(arg.right)) return !expressionContainsRandom(arg.left);
+  return false;
+}
+
+function isRandomCall(expr: ExpressionAst): boolean {
+  return expr.kind === "call" && expr.callee.toLowerCase() === "random" && expr.args.length === 0;
+}
+
+function expressionContainsRandom(expr: ExpressionAst): boolean {
+  switch (expr.kind) {
+    case "number":
+    case "identifier":
+      return false;
+    case "unary":
+      return expressionContainsRandom(expr.expr);
+    case "binary":
+      return expressionContainsRandom(expr.left) || expressionContainsRandom(expr.right);
+    case "call":
+      return isRandomCall(expr) || expr.args.some(expressionContainsRandom);
   }
 }
 

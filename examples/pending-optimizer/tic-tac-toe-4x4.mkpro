@@ -13,13 +13,11 @@ program TicTacToe4x4 {
     calculator_marks: cells(grid)
     occupied: cells(grid)
 
-    player_line: counter 0..4 = 0
-    calculator_line: counter 0..4 = 0
     turn_count: counter 0..16 = 0
   }
 
   screen board {
-    show cell, player_line, calculator_line, turn_count
+    show cell, turn_count
   }
 
   rule player_wins {
@@ -45,8 +43,7 @@ program TicTacToe4x4 {
       player_marks += cell
       occupied += cell
       turn_count++
-      player_line = line_count(player_marks, cell)
-      if player_line >= 4 {
+      if line_count(player_marks, cell) >= 4 {
         player_wins
       }
       else {
@@ -68,8 +65,7 @@ program TicTacToe4x4 {
         calculator_marks += cell
         occupied += cell
         turn_count++
-        calculator_line = line_count(calculator_marks, cell)
-        if calculator_line >= 4 {
+        if line_count(calculator_marks, cell) >= 4 {
           calculator_wins
         }
         else {

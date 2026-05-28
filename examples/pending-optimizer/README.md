@@ -13,12 +13,12 @@ Current `--analysis` sizes, measured against the local reference listings:
 | --- | ---: | ---: | --- |
 | `cave-highlevel-baseline.mkpro` | 206 | 105 | command dispatch and remaining cave flow lowerers |
 | `cave-treasure.mkpro` | 210 | 105 | command dispatch, guarded direction dispatch, and robber/cache flow |
-| `giants-country.mkpro` | 212 | 105 | remaining encounter dispatch and plan bitset lowerers |
+| `giants-country.mkpro` | 213 | 105 | remaining encounter dispatch and plan bitset lowerers |
 | `labyrinth777.mkpro` | 242 | 105 | room inspection and local-jumper dispatch |
 | `teleport.mkpro` | 242 | 105 | station masks and vault/guard flow |
-| `tic-tac-toe-4x4.mkpro` | 278 | 105 | 4x4 line-count state representation |
+| `tic-tac-toe-4x4.mkpro` | 246 | 105 | 4x4 line-count state representation |
 | `treasure-hunter-2.mkpro` | 185 | 105 | floor-plan display/state lowerer |
-| `wumpus-full.mkpro` | 127 | 105 | prioritized hazard-sense flow and repeated room loads |
+| `wumpus-full.mkpro` | 114 | 105 | repeated room loads in inspection and remaining hazard flow |
 
 Prototype notes:
 

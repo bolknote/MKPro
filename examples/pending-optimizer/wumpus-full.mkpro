@@ -54,18 +54,14 @@ program WumpusFull {
   rule sense {
     clue = 0
 
+    if near_any(room, 1, bat1, bat2) >= 0 {
+      clue = 3
+    }
+    if near_any(room, 1, pit1, pit2) >= 0 {
+      clue = 2
+    }
     if near_any(room, 1, wumpus) >= 0 {
       clue = 1
-    }
-    else {
-      if near_any(room, 1, pit1, pit2) >= 0 {
-        clue = 2
-      }
-      else {
-        if near_any(room, 1, bat1, bat2) >= 0 {
-          clue = 3
-        }
-      }
     }
   }
 

@@ -837,6 +837,12 @@ The pipeline currently contains:
   membership and line-count lowering need the same packed-cell mask shape.
 - **small-set-primitive-lowering** — lowers `near_any` and `eq_any` to compact
   arithmetic over small coordinate sets.
+- **near-any-helper** — shares repeated `near_any(value, radius, ...)`
+  candidate-distance checks through a stack-parameterized subroutine when the
+  group is smaller than inlining.
+- **random-cell-helper** — shares repeated single-axis `random_cell` arithmetic
+  as a subroutine only when the estimated saving clears the normal helper
+  threshold; each helper call still executes `random()` independently.
 - **return-zero-jump** — replaces `БП 01` with `В/О` only when the return
   stack is provably empty.
 - **redundant-prologue-elimination** — when a `display + С/П` block

@@ -43,12 +43,15 @@ const EXAMPLE_BASELINE: Record<string, number> = {
 const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 206,
   "cave-treasure": 210,
-  "giants-country": 212,
+  // +1 after the display-stack-reuse soundness fix: the X-in-register reuse is
+  // no longer applied across a control-flow join where the predecessors do not
+  // all leave the same variable in X, so one display source is recalled again.
+  "giants-country": 213,
   labyrinth777: 242,
   teleport: 242,
-  "tic-tac-toe-4x4": 278,
+  "tic-tac-toe-4x4": 246,
   "treasure-hunter-2": 185,
-  "wumpus-full": 127,
+  "wumpus-full": 114,
 };
 
 function exampleSteps(relativePath: string, analysis: boolean): number {
