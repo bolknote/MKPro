@@ -8,9 +8,9 @@ program CaveHighlevelBaseline {
     // This baseline keeps the classic cave contract explicit: the player sees a
     // packed room display, while walls and caches live as generated hidden masks.
 
-    walls: bitset = random()
+    walls: cells(cave) = random()
 
-    caches: bitset = random()
+    caches: cells(cave) = random()
 
     food: counter 0..99 = stack.Y
     // Dynamite is intentionally scarcer than food; it turns blocked movement
@@ -18,8 +18,8 @@ program CaveHighlevelBaseline {
     dynamite: counter 0..9 = 6
     treasure: counter 0..9 = 0
 
-    blocked: coord
-    next: coord
+    blocked: coord(cave)
+    next: coord(cave)
     loot: packed = 0
   }
 
@@ -85,7 +85,7 @@ program CaveHighlevelBaseline {
   }
 
   rule try_move {
-    if walls >= next {
+    if next in walls {
       blocked = next
       show 0
     }
@@ -114,7 +114,7 @@ program CaveHighlevelBaseline {
   }
 
   rule search_cache {
-    if caches >= player {
+    if player in caches {
       // Searching consumes the cache so repeated probing cannot farm score from
       // one lucky room.
       caches -= player

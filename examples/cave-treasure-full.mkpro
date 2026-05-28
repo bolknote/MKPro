@@ -8,11 +8,11 @@ program CaveTreasure {
   state {
     // Position is visible to the player and meaningful to the hidden masks: one
     // coordinate names both the display room and generated cave contents.
-    pos: coord = stack.X
+    pos: coord(cave) = stack.X
 
-    walls: bitset = random()
+    walls: cells(cave) = random()
 
-    caches: bitset = random()
+    caches: cells(cave) = random()
 
     food: counter 0..99 = stack.Y
 
@@ -21,8 +21,8 @@ program CaveTreasure {
     dynamite: counter 0..9 = 4
     treasure: counter 0..9 = 0
 
-    blocked: coord
-    next: coord
+    blocked: coord(cave)
+    next: coord(cave)
     robber: flag = 0
     exit_reached: flag = 0
   }
@@ -66,7 +66,7 @@ program CaveTreasure {
     if exit_reached == 1 {
       exit_found
     }
-    if walls >= next {
+    if next in walls {
       // A wall hit is remembered rather than immediately resolved; spending
       // dynamite is a separate player commitment.
       blocked = next
@@ -94,7 +94,7 @@ program CaveTreasure {
   }
 
   rule search {
-    if caches >= pos {
+    if pos in caches {
       caches -= pos
       // Cache value follows floor depth, matching the "riskier rooms pay better"
       // shape without spelling out three separate search rules.

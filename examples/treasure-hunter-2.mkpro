@@ -7,7 +7,7 @@ program TreasureHunter2 {
   state {
     // Position is shown as a compact floor/room view, while floor and room are
     // kept separately so movement rules can name the original game's structure.
-    pos: coord = 9
+    pos: coord(cave) = 9
     floor_view: packed = 0
     treasure: counter 0..99 = 0
 
@@ -15,7 +15,7 @@ program TreasureHunter2 {
     room: counter 0..6 = 0
     // "known_floors" doubles as the generated world table: clearing a bit means
     // this floor/position has been resolved by play.
-    known_floors: bitset = random()
+    known_floors: cells(cave) = random()
 
     tile: counter 0..9 = 0
   }

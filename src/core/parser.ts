@@ -23,7 +23,6 @@ import type {
   V2BoardAst,
   V2ChallengeStatementAst,
   V2EncounterTableAst,
-  V2FleetAst,
   V2IfStatementAst,
   V2InvokeStatementAst,
   V2MatchCaseAst,
@@ -142,7 +141,6 @@ class MKProParser {
     const state: V2StateFieldAst[] = [];
     const screens: V2ScreenAst[] = [];
     const boards: V2BoardAst[] = [];
-    const fleets: V2FleetAst[] = [];
     const worlds: V2WorldAst[] = [];
     const encounters: V2EncounterTableAst[] = [];
     const rules: V2RuleAst[] = [];
@@ -158,7 +156,6 @@ class MKProParser {
           state,
           screens,
           boards,
-          fleets,
           worlds,
           encounters,
           rules,
@@ -176,14 +173,14 @@ class MKProParser {
         screens.push(this.parseV2Screen(line.text));
         continue;
       }
-      if (line.text.startsWith("board ")) {
-        boards.push(this.parseV2Board(line.text));
+      const board = parseV2BoardDeclaration(line);
+      if (board !== undefined) {
+        this.index += 1;
+        boards.push(board);
         continue;
       }
-      if (line.text.startsWith("fleet ")) {
-        fleets.push(this.parseV2Fleet(line.text));
-        continue;
-      }
+      if (line.text.startsWith("board ")) throw new ParseError("Board must look like 'name: board(0..9, 0..9)'", line.line);
+      if (line.text.startsWith("fleet ")) throw new ParseError("Fleet blocks were removed; declare cells and counters in state", line.line);
       if (line.text.startsWith("world ")) {
         worlds.push(this.parseV2World(line.text));
         continue;
@@ -252,54 +249,6 @@ class MKProParser {
       throw new ParseError(`Unexpected screen line '${line.text}'`, line.line);
     }
     throw new ParseError("Unclosed screen block", header.line);
-  }
-
-  private parseV2Board(text: string): V2BoardAst {
-    const header = this.next();
-    const match = /^board\s+([A-Za-z_][\w]*)\s*:\s*(\d+)x(\d+)\s*\{$/u.exec(text);
-    if (!match) throw new ParseError("Board must look like 'board name: 10x10 {'", header.line);
-    const board: V2BoardAst = {
-      kind: "v2_board",
-      name: match[1]!,
-      width: Number(match[2]),
-      height: Number(match[3]),
-      line: header.line,
-    };
-    while (!this.done()) {
-      const line = this.next();
-      if (line.text === "}") return board;
-      throw new ParseError("Board block does not support body lines", line.line);
-    }
-    throw new ParseError("Unclosed board block", header.line);
-  }
-
-  private parseV2Fleet(text: string): V2FleetAst {
-    const header = this.next();
-    const match = /^fleet\s+([A-Za-z_][\w]*)\s+on\s+([A-Za-z_][\w]*)\s*\{$/u.exec(text);
-    if (!match) throw new ParseError("Fleet must look like 'fleet name on board {'", header.line);
-    let ships: V2FleetAst["ships"] | undefined;
-    const fleet: Omit<V2FleetAst, "ships"> = {
-      kind: "v2_fleet",
-      name: match[1]!,
-      board: match[2]!,
-      line: header.line,
-    };
-    while (!this.done()) {
-      const line = this.next();
-      if (line.text === "}") {
-        if (ships === undefined) throw new ParseError("Fleet block must contain ships line", header.line);
-        return { ...fleet, ships };
-      }
-      const shipsMatch = /^ships\s+([A-Za-z_][\w]*)(?:\s+(-?\d+)\.\.(-?\d+))?\s*=\s*(.+)$/u.exec(line.text);
-      if (shipsMatch) {
-        ships = { name: shipsMatch[1]!, initial: shipsMatch[4]!.trim() };
-        if (shipsMatch[2] !== undefined) ships.min = Number(shipsMatch[2]);
-        if (shipsMatch[3] !== undefined) ships.max = Number(shipsMatch[3]);
-        continue;
-      }
-      throw new ParseError(`Unexpected fleet line '${line.text}'`, line.line);
-    }
-    throw new ParseError("Unclosed fleet block", header.line);
   }
 
   private parseV2World(text: string): V2WorldAst {
@@ -627,18 +576,35 @@ class MKProParser {
 }
 
 function parseV2StateField(line: SourceLine): V2StateFieldAst {
-  const match = /^([A-Za-z_][\w]*)\s*:\s*([A-Za-z_][\w]*)(.*)$/u.exec(line.text);
+  const match = /^([A-Za-z_][\w]*)\s*:\s*([A-Za-z_][\w]*)(?:\(([^)]*)\))?(.*)$/u.exec(line.text);
   if (!match) {
-    throw new ParseError("State field must look like 'name: counter 0..9 = 0'", line.line);
+    throw new ParseError("State field must look like 'name: counter 0..9 = 0' or 'name: cells(domain) = random()'", line.line);
   }
   const typeText = match[2]!.toLowerCase();
-  if (!["flag", "counter", "coord", "bitset", "packed"].includes(typeText)) {
+  if (!["flag", "counter", "coord", "cells", "packed"].includes(typeText)) {
     throw new ParseError(`Unknown state type '${match[2]}'`, line.line);
   }
-  const tail = match[3]!.trim();
+  const args = match[3]?.trim();
+  const argList = args === undefined ? [] : splitArgs(args);
+  if (typeText === "cells" && (!args || argList.length !== 1)) {
+    throw new ParseError("cells state must look like 'name: cells(domain) = random()'", line.line);
+  }
+  if (typeText === "coord" && (!args || argList.length !== 1)) {
+    throw new ParseError("coord state must look like 'name: coord(domain)'", line.line);
+  }
+  if (typeText !== "cells" && typeText !== "coord" && args !== undefined) {
+    throw new ParseError(`State type '${match[2]}' does not take parameters`, line.line);
+  }
+  const tail = match[4]!.trim();
   const tailMatch = /^(?:(-?\d+)\.\.(-?\d+))?(?:\s*=\s*(.+))?$/u.exec(tail);
   if (!tailMatch) {
-    throw new ParseError("State field must look like 'name: counter 0..9 = 0'", line.line);
+    throw new ParseError("State field must look like 'name: counter 0..9 = 0' or 'name: cells(domain) = random()'", line.line);
+  }
+  if (typeText === "counter" && tailMatch[1] === undefined) {
+    throw new ParseError("counter state must look like 'name: counter 0..9 = 0'", line.line);
+  }
+  if (typeText !== "counter" && tailMatch[1] !== undefined) {
+    throw new ParseError(`State type '${match[2]}' does not take a numeric range`, line.line);
   }
   const field: V2StateFieldAst = {
     kind: "v2_state_field",
@@ -646,12 +612,38 @@ function parseV2StateField(line: SourceLine): V2StateFieldAst {
     type: typeText as V2StateFieldAst["type"],
     line: line.line,
   };
+  if (typeText === "cells" || typeText === "coord") {
+    field.domain = argList[0]!;
+  }
   if (tailMatch[1] !== undefined) {
     field.min = Number(tailMatch[1]);
     field.max = Number(tailMatch[2]);
   }
   if (tailMatch[3] !== undefined) field.initial = tailMatch[3].trim();
   return field;
+}
+
+function parseV2BoardDeclaration(line: SourceLine): V2BoardAst | undefined {
+  const match = /^([A-Za-z_][\w]*)\s*:\s*board\(\s*(-?\d+)\.\.(-?\d+)\s*,\s*(-?\d+)\.\.(-?\d+)\s*\)$/u.exec(line.text);
+  if (!match) return undefined;
+  const xMin = Number(match[2]);
+  const xMax = Number(match[3]);
+  const yMin = Number(match[4]);
+  const yMax = Number(match[5]);
+  if (xMin > xMax || yMin > yMax) {
+    throw new ParseError("Board ranges must be ascending", line.line);
+  }
+  return {
+    kind: "v2_board",
+    name: match[1]!,
+    xMin,
+    xMax,
+    yMin,
+    yMax,
+    width: xMax - xMin + 1,
+    height: yMax - yMin + 1,
+    line: line.line,
+  };
 }
 
 function parseV2InlineStatement(text: string, line: number): V2StatementAst {
@@ -723,6 +715,15 @@ function parseV2InlineStatement(text: string, line: number): V2StatementAst {
 }
 
 function parseV2Predicate(text: string, line: number): V2PredicateAst {
+  const contains = /^(.+?)\s+in\s+([A-Za-z_][\w]*)$/u.exec(text);
+  if (contains) {
+    return {
+      kind: "v2_compare",
+      left: contains[2]!.trim(),
+      op: ">=",
+      right: contains[1]!.trim(),
+    };
+  }
   const compare = /^(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)$/u.exec(text);
   if (compare) {
     return {
@@ -822,6 +823,7 @@ function lowerV2Program(v2: V2ProgramAst): {
   const ruleParams = collectV2RuleParams(v2);
   const rules = collectV2Rules(v2);
   const specializedRules = selectV2RuleSpecializations(v2, rules);
+  validateV2Domains(v2);
   validateV2References(v2, { screens, ruleParams });
   const context: V2LoweringContext = {
     ruleParams,
@@ -975,6 +977,24 @@ function collectV2Screens(v2: V2ProgramAst): Map<string, V2ScreenAst> {
   return screens;
 }
 
+function validateV2Domains(v2: V2ProgramAst): void {
+  const domains = new Map<string, number>();
+  for (const board of v2.boards) {
+    if (domains.has(board.name)) throw new ParseError(`Duplicate domain '${board.name}'`, board.line);
+    domains.set(board.name, board.line);
+  }
+  for (const world of v2.worlds) {
+    if (domains.has(world.name)) throw new ParseError(`Duplicate domain '${world.name}'`, world.line);
+    domains.set(world.name, world.line);
+  }
+
+  for (const field of v2.state) {
+    if ((field.type === "coord" || field.type === "cells") && field.domain !== undefined && !domains.has(field.domain)) {
+      throw new ParseError(`Unknown domain '${field.domain}'`, field.line);
+    }
+  }
+}
+
 function validateV2References(
   v2: V2ProgramAst,
   context: {
@@ -1079,6 +1099,8 @@ function lowerV2Domains(v2: V2ProgramAst): DomainAst[] {
   const domains: DomainAst[] = [];
   for (const board of v2.boards) {
     const lines: RawBlockLine[] = [
+      { text: `x ${board.xMin}..${board.xMax}`, line: board.line },
+      { text: `y ${board.yMin}..${board.yMax}`, line: board.line },
       { text: `columns ${board.width}`, line: board.line },
       { text: `rows ${board.height}`, line: board.line },
     ];
@@ -1115,40 +1137,18 @@ function lowerV2Domains(v2: V2ProgramAst): DomainAst[] {
     });
   }
   for (const field of v2.state) {
-    if (field.type === "bitset") {
+    if (field.type === "cells") {
+      const lines: RawBlockLine[] = [];
+      if (field.domain !== undefined) lines.push({ text: `domain ${field.domain}`, line: field.line });
       domains.push({
         kind: "domain",
         domainKind: "bitset",
         name: field.name,
-        header: `bitset ${field.name}`,
-        lines: [],
+        header: `cells ${field.name}`,
+        lines,
         line: field.line,
       });
     }
-  }
-  for (const fleet of v2.fleets) {
-    domains.push({
-      kind: "domain",
-      domainKind: "bitset",
-      name: fleet.name,
-      header: `fleet ${fleet.name}`,
-      lines: [
-        { text: `board ${fleet.board}`, line: fleet.line },
-      ],
-      line: fleet.line,
-    });
-    const resourceLines: RawBlockLine[] = [
-      { text: `initial ${fleet.ships.initial}`, line: fleet.line },
-      { text: `fleet ${fleet.name}`, line: fleet.line },
-    ];
-    domains.push({
-      kind: "domain",
-      domainKind: "resource",
-      name: fleet.ships.name,
-      header: `fleet ships ${fleet.ships.name}`,
-      lines: resourceLines,
-      line: fleet.line,
-    });
   }
   if (v2.encounters.length > 0) {
     domains.push({
@@ -1185,28 +1185,6 @@ function lowerV2State(v2: V2ProgramAst, specializedRules: Set<string>): StateAst
       }
     }
     fields.push(lowered);
-  }
-  for (const fleet of v2.fleets) {
-    const ships: StateFieldAst = {
-      name: fleet.ships.name,
-      type: "range",
-      line: fleet.line,
-    };
-    if (fleet.ships.min !== undefined) ships.min = fleet.ships.min;
-    if (fleet.ships.max !== undefined) ships.max = fleet.ships.max;
-    const stackSource = parseStackSource(fleet.ships.initial, fleet.line);
-    if (stackSource !== undefined) {
-      ships.initialStack = stackSource;
-    } else {
-      ships.initial = lowerV2Expression(fleet.ships.initial, fleet.line);
-    }
-    fields.push(ships);
-    fields.push({
-      name: fleet.name,
-      type: "packed",
-      initial: lowerV2Expression("random() * 999", fleet.line),
-      line: fleet.line,
-    });
   }
   const declared = new Set(fields.map((field) => field.name));
   for (const scratch of collectV2ScratchFields(v2, specializedRules)) {
@@ -1258,7 +1236,7 @@ function collectV2ScratchFields(v2: V2ProgramAst, specializedRules: Set<string>)
 
 function lowerV2InitialExpression(field: V2StateFieldAst): ExpressionAst {
   const initial = field.initial ?? "0";
-  if (field.type === "bitset" && initial.trim() === "random()") {
+  if (field.type === "cells" && initial.trim() === "random()") {
     return lowerV2Expression("random() * 999", field.line);
   }
   return lowerV2Expression(initial, field.line);
@@ -1266,7 +1244,7 @@ function lowerV2InitialExpression(field: V2StateFieldAst): ExpressionAst {
 
 function lowerV2StateFieldType(type: V2StateFieldAst["type"]): StateFieldType {
   if (type === "counter") return "range";
-  if (type === "coord" || type === "bitset") return "packed";
+  if (type === "coord" || type === "cells") return "packed";
   return type;
 }
 

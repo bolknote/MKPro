@@ -7,7 +7,7 @@ program GiantsCountry {
   state {
     // The visible cave is a one-dimensional hall on each floor; the danger comes
     // from what the generated room table says is waiting there.
-    pos: coord = 1
+    pos: coord(giant_country) = 1
     view: packed = 0
 
     strength: counter 0..99 = 40
@@ -21,7 +21,7 @@ program GiantsCountry {
 
     // Plans represent learned/defeated encounters. Clearing them marks that a
     // room's scripted danger has been resolved by the player.
-    plans: bitset = random()
+    plans: cells(giant_country) = random()
 
     tile: counter 0..9 = 0
     challenge: packed = 0

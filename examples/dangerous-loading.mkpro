@@ -7,8 +7,8 @@ program DangerousLoading {
   state {
     // The display is a compact lane drama: boat position, telegraphed threat,
     // remaining cargo, and hulls left.
-    boat: coord = 8
-    threat: coord = 3
+    boat: coord(harbor) = 8
+    threat: coord(harbor) = 3
     cargo_left: counter 0..9 = 9
     boats_left: counter 0..3 = 3
     loaded: flag = 0

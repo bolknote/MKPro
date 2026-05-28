@@ -86,14 +86,13 @@ export type GameIntentShape =
 export type GameIntentFeature =
   | "movement"
   | "board"
-  | "fleet"
   | "bitset"
   | "line_count"
   | "neighbor_count"
   | "cell_at"
   | "random_cell"
-  | "fleet_probe"
-  | "fleet_clear"
+  | "cell_probe"
+  | "cell_clear"
   | "random_board_cell"
   | "hit_report"
   | "resources";
@@ -259,7 +258,6 @@ export interface V2ProgramAst {
   state: V2StateFieldAst[];
   screens: V2ScreenAst[];
   boards: V2BoardAst[];
-  fleets: V2FleetAst[];
   worlds: V2WorldAst[];
   encounters: V2EncounterTableAst[];
   turn?: V2TurnAst;
@@ -270,7 +268,8 @@ export interface V2ProgramAst {
 export interface V2StateFieldAst {
   kind: "v2_state_field";
   name: string;
-  type: "flag" | "counter" | "coord" | "bitset" | "packed";
+  type: "flag" | "counter" | "coord" | "cells" | "packed";
+  domain?: string;
   min?: number;
   max?: number;
   initial?: string;
@@ -280,24 +279,13 @@ export interface V2StateFieldAst {
 export interface V2BoardAst {
   kind: "v2_board";
   name: string;
+  xMin: number;
+  xMax: number;
+  yMin: number;
+  yMax: number;
   width: number;
   height: number;
   line: number;
-}
-
-export interface V2FleetAst {
-  kind: "v2_fleet";
-  name: string;
-  board: string;
-  ships: V2FleetShipsAst;
-  line: number;
-}
-
-export interface V2FleetShipsAst {
-  name: string;
-  min?: number;
-  max?: number;
-  initial: string;
 }
 
 export interface V2WorldAst {

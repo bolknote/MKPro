@@ -4,20 +4,16 @@ reference anvarov_fox_hunt_100
 // A probe returns how many foxes share a row, column, or diagonal with the cell.
 
 program FoxHunt100 {
-  board field: 10x10 {
-    // Decimal-pair coordinates keep the radio-orienteering feel of the original:
-    // the player thinks in x.y cells, not in a flat index.
-  }
-
-  fleet foxes on field {
-    // A fleet can hold more than one hidden target per board relation; the
-    // "remaining_foxes" is the truth the display reports after hits.
-    ships remaining_foxes 1..100 = stack.Y
-  }
+  field: board(0..9, 0..9)
 
   state {
+    // Decimal-pair coordinates keep the radio-orienteering feel of the original:
+    // the player thinks in x.y cells, not in a flat index.
+    cell: coord(field)
+    foxes: cells(field) = random()
+    // "remaining_foxes" is the truth the display reports after hits.
+    remaining_foxes: counter 1..100 = stack.Y
     bearing: counter 0..8 = 0
-    cell: coord
   }
 
   screen report {
@@ -31,7 +27,7 @@ program FoxHunt100 {
   turn {
     read cell
 
-    if foxes >= cell {
+    if cell in foxes {
       found_fox
     }
     else {

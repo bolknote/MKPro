@@ -72,9 +72,10 @@ Only optional report metadata belongs outside `program`:
 
 - `reference name`
 
-Game meaning belongs inside `program`. Counters, bitsets, maps, events, random,
-or packed-table facts should become `state`, `world`, `encounters`, rules,
-and screens. The compiler report shows which registers, overlays, setup
+Game meaning belongs inside `program`. Counters, cell sets, maps, events,
+random, or packed-table facts should become ordinary declarations, `state`,
+`world`, `encounters`, rules, and screens. The compiler report shows which
+registers, overlays, setup
 constants, hex mantissas, random initialization, or other implementation tactics
 were selected.
 
@@ -85,7 +86,7 @@ The current human DSL surface inside `program` is:
 - `state { ... }` for game state, counters, masks, coordinates, and
   scratch fields.
 - `screen name { show ... }` for reusable display layouts.
-- `board` and `fleet` for fixed-board games such as Sea Battle.
+- `name: board(0..9, 0..9)` for fixed-board coordinate domains.
 - `world` for movement games with coordinates and generated rooms.
 - `encounters expr { ... }` for event tables.
 - `turn { ... }` for the main game loop and `rule name { ... }` for named
@@ -125,7 +126,7 @@ MK-Pro keeps real game facts in the game language:
 ```mkpro
 strength: counter 0..99 = 40
 
-plans: bitset = random()
+plans: cells(giant_country) = random()
 ```
 
 ## State Configuration
@@ -137,15 +138,16 @@ state {
   strength: counter 0..99 = 40
   score: counter 0..99 = 0
 
-  plans: bitset = random()
+  plans: cells(giant_country) = random()
 }
 ```
 
 Use `counter` for bounded numeric values, including consumables, scores, fuel,
-and remaining-piece counts. Use `bitset` for generated map or encounter masks.
-The complete canonical state set is `flag`, `counter`, `coord`, `bitset`, and
-`packed`. Register placement, address storage, and compact packing are compiler
-decisions.
+and remaining-piece counts. Use `coord(domain)` for a cell coordinate and
+`cells(domain)` for generated map, fleet, mine, wall, or encounter masks. The
+complete canonical state set is `flag`, `counter`, `coord(domain)`,
+`cells(domain)`, and `packed`. Register placement, address storage, and compact
+packing are compiler decisions.
 
 Initial values can come from the startup stack registers `stack.X` and
 `stack.Y`, for games where the player enters setup values before running the
@@ -153,7 +155,7 @@ program:
 
 ```mkpro
 state {
-  pos: coord = stack.X
+  pos: coord(cave) = stack.X
   food: counter 0..99 = stack.Y
 }
 ```
@@ -192,24 +194,28 @@ inlined, and shared terminal rules can be lowered as direct jumps by the
 optimizer, so authors do not need a separate terminal form for layout reasons.
 Rule names must be unique, and a call must reference a declared rule.
 
-## Board And Fleet Blocks
+## Boards And Cell Sets
 
 Use `board` when a game is about probes, shots, or pieces on a fixed board
-rather than movement through a world:
+rather than movement through a world. Board coordinates are ranges, not a
+separate `10x10` mini-syntax:
 
 ```mkpro
-board ocean: 10x10 {
-}
+ocean: board(0..9, 0..9)
 
-fleet enemy_fleet on ocean {
-  ships enemy_ships 0..99 = stack.X
+state {
+  player_shot: coord(ocean)
+  enemy_fleet: cells(ocean) = random()
+  enemy_ships: counter 0..99 = stack.X
 }
 ```
 
-`board` describes the coordinate system. `fleet` describes a generated set of
-occupied cells plus the counter that counts remaining pieces. This keeps games
+`board` describes the coordinate system. `cells(domain)` describes a generated
+set of occupied cells. Counters that count remaining pieces are ordinary
+`counter` fields, not hidden inside a special fleet block. This keeps games
 such as Sea Battle, Minesweeper, fox hunting, or board puzzles from pretending
-to be hallway movement games.
+to be hallway movement games while still using the same declaration form as
+other state.
 
 Board queries should name the geometric operation directly:
 
@@ -223,8 +229,8 @@ rule reveal_safe_cell {
 }
 ```
 
-`line_count(fleet, cell)` is the fox-hunt style row/column/diagonal count.
-`neighbor_count(bitset, cell)` is the Minesweeper-style 8-neighbor count. These
+`line_count(cells, cell)` is the fox-hunt style row/column/diagonal count.
+`neighbor_count(cells, cell)` is the Minesweeper-style 8-neighbor count. These
 lower to spatial query intent; the optimizer chooses
 whether to use masks, decimal digits, or a shared query tail.
 
@@ -240,8 +246,8 @@ The repository examples are grouped by the game shape they exercise:
   cave/grid games.
 - `grid-rescue.mkpro`, `resource-raid.mkpro`, and `giants-country.mkpro` exercise
   spatial counters, generated masks, encounters, and challenge blocks.
-- `sea-battle.mkpro` demonstrates `board` and `fleet` for non-movement board
-  games.
+- `sea-battle.mkpro` demonstrates `board`, `coord(domain)`, and `cells(domain)`
+  for non-movement board games.
 - `fox-hunt-100.mkpro`, `minesweeper-9x9.mkpro`, `treasure-hunter-2.mkpro`, and
   `dangerous-loading.mkpro` are larger Anvarov ports used to check how well the
   human DSL covers dense 105-cell MK-61 games.
@@ -274,7 +280,7 @@ rule move_south {
 
 rule move_dir dir {
   next = player + dir
-  if walls >= next {
+  if next in walls {
     blocked = next
     show 0
   }
@@ -509,7 +515,7 @@ cover:
 - `lane_resource` for one-dimensional movement with random hazards and counters.
 
 The universal spatial/counter backend remains the fallback for mixed or
-unsupported shapes: packed coordinates, generated bitsets, counters, events,
+unsupported shapes: packed coordinates, generated cell sets, counters, events,
 dispatch, screens, and terminal outcomes. `examples/cave-treasure.mkpro` is now
 just one reference source; `examples/grid-rescue.mkpro`,
 and `examples/resource-raid.mkpro` continue compiling through this fallback when
@@ -655,9 +661,9 @@ Current scalar lowerings are still deliberately small and auditable:
 - `coord` is represented as a packed numeric value; `pos.floor` lowers to
   `int(pos / 100)`, with `100` automatically placed in setup state when
   that is cheaper than entering three digits.
-- `bitset = random()` is moved to reported setup state by the optimizer.
-- bitset membership currently uses ordinary comparisons such as
-  `collection >= item` until the full bitset solver lands.
+- `cells(domain) = random()` is moved to reported setup state by the optimizer.
+- cell-set membership is written as `item in collection`; the lowering keeps the
+  compact comparison form internally when that is smaller.
 - rewards are ordinary updates such as `treasure += expr`.
 - `direction(key)` lowers through a shared keypad geometry decoder. It no
   longer treats the key value itself as the movement delta.

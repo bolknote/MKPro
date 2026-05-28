@@ -7,9 +7,9 @@ program Alaram {
   state {
     // The cockpit display is a compact perspective picture: canopy edges,
     // reticle, steering wheel, and the intruder's relative bearing.
-    fighter: coord = 0
+    fighter: coord(sky) = 0
     cockpit_view: packed = 80000078
-    intruder_mark: coord = 3
+    intruder_mark: coord(sky) = 3
 
     altitude: counter 0..999 = 0
     range: counter -300..0 = -300

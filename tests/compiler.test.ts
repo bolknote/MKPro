@@ -160,7 +160,7 @@ program SimpleRules {
     expect(reference).not.toMatch(/core\s+exact/iu);
     expect(reference).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
     expect(reference).toMatch(/world cave/u);
-    expect(reference).toMatch(/bitset = random\(\)/u);
+    expect(reference).toMatch(/cells\(cave\) = random\(\)/u);
     const result = compileMKPro(reference);
     const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
     const features = new Set(result.report.machineFeaturesUsed.map((feature) => feature.id));

@@ -8,11 +8,11 @@ program CaveTreasure {
   state {
     // The visible position is also the key into generated wall/cache masks. The
     // source does not prescribe how those masks are packed into registers.
-    pos: coord = stack.X
+    pos: coord(cave) = stack.X
 
-    walls: bitset = random()
+    walls: cells(cave) = random()
 
-    caches: bitset = random()
+    caches: cells(cave) = random()
 
     food: counter 0..99 = stack.Y
 
@@ -21,8 +21,8 @@ program CaveTreasure {
     dynamite: counter 0..9 = 4
     treasure: counter 0..9 = 0
 
-    blocked: coord
-    next: coord
+    blocked: coord(cave)
+    next: coord(cave)
     robber: flag = 0
     exit_reached: flag = 0
   }
@@ -66,7 +66,7 @@ program CaveTreasure {
     if exit_reached == 1 {
       exit_found
     }
-    if walls >= next {
+    if next in walls {
       // Bumping into a wall records intent: the next break_wall command knows
       // which obstacle the player chose to spend dynamite on.
       blocked = next
@@ -94,7 +94,7 @@ program CaveTreasure {
   }
 
   rule search {
-    if caches >= pos {
+    if pos in caches {
       caches -= pos
       // Deeper floors matter: treasure += floor lets one compact rule express
       // "farther from safety, better loot".

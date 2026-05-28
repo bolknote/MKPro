@@ -867,7 +867,6 @@ var MKProEmulatorBundle = (() => {
       const state = [];
       const screens = [];
       const boards = [];
-      const fleets = [];
       const worlds = [];
       const encounters = [];
       const rules = [];
@@ -882,7 +881,6 @@ var MKProEmulatorBundle = (() => {
             state,
             screens,
             boards,
-            fleets,
             worlds,
             encounters,
             rules,
@@ -900,14 +898,14 @@ var MKProEmulatorBundle = (() => {
           screens.push(this.parseV2Screen(line.text));
           continue;
         }
-        if (line.text.startsWith("board ")) {
-          boards.push(this.parseV2Board(line.text));
+        const board = parseV2BoardDeclaration(line);
+        if (board !== void 0) {
+          this.index += 1;
+          boards.push(board);
           continue;
         }
-        if (line.text.startsWith("fleet ")) {
-          fleets.push(this.parseV2Fleet(line.text));
-          continue;
-        }
+        if (line.text.startsWith("board ")) throw new ParseError("Board must look like 'name: board(0..9, 0..9)'", line.line);
+        if (line.text.startsWith("fleet ")) throw new ParseError("Fleet blocks were removed; declare cells and counters in state", line.line);
         if (line.text.startsWith("world ")) {
           worlds.push(this.parseV2World(line.text));
           continue;
@@ -953,6 +951,7 @@ var MKProEmulatorBundle = (() => {
       const match = /^screen\s+([A-Za-z_][\w]*)\s*\{$/u.exec(text);
       if (!match) throw new ParseError("Screen must look like 'screen name {'", header.line);
       let sources = [];
+      let items = [];
       while (!this.done()) {
         const line = this.next();
         if (line.text === "}") {
@@ -960,62 +959,18 @@ var MKProEmulatorBundle = (() => {
             kind: "v2_screen",
             name: match[1],
             sources,
+            items,
             line: header.line
           };
         }
         if (line.text.startsWith("show ")) {
-          sources = parseIdentifierList(line.text.slice("show ".length));
+          items = parseDisplayItemList(line.text.slice("show ".length), line.line);
+          sources = items.filter((item) => item.kind === "source").map((item) => item.name);
           continue;
         }
         throw new ParseError(`Unexpected screen line '${line.text}'`, line.line);
       }
       throw new ParseError("Unclosed screen block", header.line);
-    }
-    parseV2Board(text) {
-      const header = this.next();
-      const match = /^board\s+([A-Za-z_][\w]*)\s*:\s*(\d+)x(\d+)\s*\{$/u.exec(text);
-      if (!match) throw new ParseError("Board must look like 'board name: 10x10 {'", header.line);
-      const board = {
-        kind: "v2_board",
-        name: match[1],
-        width: Number(match[2]),
-        height: Number(match[3]),
-        line: header.line
-      };
-      while (!this.done()) {
-        const line = this.next();
-        if (line.text === "}") return board;
-        throw new ParseError("Board block does not support body lines", line.line);
-      }
-      throw new ParseError("Unclosed board block", header.line);
-    }
-    parseV2Fleet(text) {
-      const header = this.next();
-      const match = /^fleet\s+([A-Za-z_][\w]*)\s+on\s+([A-Za-z_][\w]*)\s*\{$/u.exec(text);
-      if (!match) throw new ParseError("Fleet must look like 'fleet name on board {'", header.line);
-      let ships;
-      const fleet = {
-        kind: "v2_fleet",
-        name: match[1],
-        board: match[2],
-        line: header.line
-      };
-      while (!this.done()) {
-        const line = this.next();
-        if (line.text === "}") {
-          if (ships === void 0) throw new ParseError("Fleet block must contain ships line", header.line);
-          return { ...fleet, ships };
-        }
-        const shipsMatch = /^ships\s+([A-Za-z_][\w]*)(?:\s+(-?\d+)\.\.(-?\d+))?\s*=\s*(.+)$/u.exec(line.text);
-        if (shipsMatch) {
-          ships = { name: shipsMatch[1], initial: shipsMatch[4].trim() };
-          if (shipsMatch[2] !== void 0) ships.min = Number(shipsMatch[2]);
-          if (shipsMatch[3] !== void 0) ships.max = Number(shipsMatch[3]);
-          continue;
-        }
-        throw new ParseError(`Unexpected fleet line '${line.text}'`, line.line);
-      }
-      throw new ParseError("Unclosed fleet block", header.line);
     }
     parseV2World(text) {
       const header = this.next();
@@ -1326,18 +1281,35 @@ var MKProEmulatorBundle = (() => {
     }
   };
   function parseV2StateField(line) {
-    const match = /^([A-Za-z_][\w]*)\s*:\s*([A-Za-z_][\w]*)(.*)$/u.exec(line.text);
+    const match = /^([A-Za-z_][\w]*)\s*:\s*([A-Za-z_][\w]*)(?:\(([^)]*)\))?(.*)$/u.exec(line.text);
     if (!match) {
-      throw new ParseError("State field must look like 'name: counter 0..9 = 0'", line.line);
+      throw new ParseError("State field must look like 'name: counter 0..9 = 0' or 'name: cells(domain) = random()'", line.line);
     }
     const typeText = match[2].toLowerCase();
-    if (!["flag", "counter", "coord", "bitset", "packed"].includes(typeText)) {
+    if (!["flag", "counter", "coord", "cells", "packed"].includes(typeText)) {
       throw new ParseError(`Unknown state type '${match[2]}'`, line.line);
     }
-    const tail = match[3].trim();
+    const args = match[3]?.trim();
+    const argList = args === void 0 ? [] : splitArgs(args);
+    if (typeText === "cells" && (!args || argList.length !== 1)) {
+      throw new ParseError("cells state must look like 'name: cells(domain) = random()'", line.line);
+    }
+    if (typeText === "coord" && (!args || argList.length !== 1)) {
+      throw new ParseError("coord state must look like 'name: coord(domain)'", line.line);
+    }
+    if (typeText !== "cells" && typeText !== "coord" && args !== void 0) {
+      throw new ParseError(`State type '${match[2]}' does not take parameters`, line.line);
+    }
+    const tail = match[4].trim();
     const tailMatch = /^(?:(-?\d+)\.\.(-?\d+))?(?:\s*=\s*(.+))?$/u.exec(tail);
     if (!tailMatch) {
-      throw new ParseError("State field must look like 'name: counter 0..9 = 0'", line.line);
+      throw new ParseError("State field must look like 'name: counter 0..9 = 0' or 'name: cells(domain) = random()'", line.line);
+    }
+    if (typeText === "counter" && tailMatch[1] === void 0) {
+      throw new ParseError("counter state must look like 'name: counter 0..9 = 0'", line.line);
+    }
+    if (typeText !== "counter" && tailMatch[1] !== void 0) {
+      throw new ParseError(`State type '${match[2]}' does not take a numeric range`, line.line);
     }
     const field = {
       kind: "v2_state_field",
@@ -1345,12 +1317,37 @@ var MKProEmulatorBundle = (() => {
       type: typeText,
       line: line.line
     };
+    if (typeText === "cells" || typeText === "coord") {
+      field.domain = argList[0];
+    }
     if (tailMatch[1] !== void 0) {
       field.min = Number(tailMatch[1]);
       field.max = Number(tailMatch[2]);
     }
     if (tailMatch[3] !== void 0) field.initial = tailMatch[3].trim();
     return field;
+  }
+  function parseV2BoardDeclaration(line) {
+    const match = /^([A-Za-z_][\w]*)\s*:\s*board\(\s*(-?\d+)\.\.(-?\d+)\s*,\s*(-?\d+)\.\.(-?\d+)\s*\)$/u.exec(line.text);
+    if (!match) return void 0;
+    const xMin = Number(match[2]);
+    const xMax = Number(match[3]);
+    const yMin = Number(match[4]);
+    const yMax = Number(match[5]);
+    if (xMin > xMax || yMin > yMax) {
+      throw new ParseError("Board ranges must be ascending", line.line);
+    }
+    return {
+      kind: "v2_board",
+      name: match[1],
+      xMin,
+      xMax,
+      yMin,
+      yMax,
+      width: xMax - xMin + 1,
+      height: yMax - yMin + 1,
+      line: line.line
+    };
   }
   function parseV2InlineStatement(text, line) {
     if (text.startsWith("show ")) {
@@ -1420,6 +1417,15 @@ var MKProEmulatorBundle = (() => {
     throw new ParseError(`Unexpected statement '${text}'`, line);
   }
   function parseV2Predicate(text, line) {
+    const contains = /^(.+?)\s+in\s+([A-Za-z_][\w]*)$/u.exec(text);
+    if (contains) {
+      return {
+        kind: "v2_compare",
+        left: contains[2].trim(),
+        op: ">=",
+        right: contains[1].trim()
+      };
+    }
     const compare = /^(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)$/u.exec(text);
     if (compare) {
       return {
@@ -1498,6 +1504,7 @@ var MKProEmulatorBundle = (() => {
     const ruleParams = collectV2RuleParams(v2);
     const rules = collectV2Rules(v2);
     const specializedRules = selectV2RuleSpecializations(v2, rules);
+    validateV2Domains(v2);
     validateV2References(v2, { screens, ruleParams });
     const context = {
       ruleParams,
@@ -1630,6 +1637,22 @@ var MKProEmulatorBundle = (() => {
     }
     return screens;
   }
+  function validateV2Domains(v2) {
+    const domains = /* @__PURE__ */ new Map();
+    for (const board of v2.boards) {
+      if (domains.has(board.name)) throw new ParseError(`Duplicate domain '${board.name}'`, board.line);
+      domains.set(board.name, board.line);
+    }
+    for (const world of v2.worlds) {
+      if (domains.has(world.name)) throw new ParseError(`Duplicate domain '${world.name}'`, world.line);
+      domains.set(world.name, world.line);
+    }
+    for (const field of v2.state) {
+      if ((field.type === "coord" || field.type === "cells") && field.domain !== void 0 && !domains.has(field.domain)) {
+        throw new ParseError(`Unknown domain '${field.domain}'`, field.line);
+      }
+    }
+  }
   function validateV2References(v2, context) {
     const visit = (statements) => {
       for (const statement of statements) {
@@ -1717,6 +1740,8 @@ var MKProEmulatorBundle = (() => {
     const domains = [];
     for (const board of v2.boards) {
       const lines = [
+        { text: `x ${board.xMin}..${board.xMax}`, line: board.line },
+        { text: `y ${board.yMin}..${board.yMax}`, line: board.line },
         { text: `columns ${board.width}`, line: board.line },
         { text: `rows ${board.height}`, line: board.line }
       ];
@@ -1753,40 +1778,18 @@ var MKProEmulatorBundle = (() => {
       });
     }
     for (const field of v2.state) {
-      if (field.type === "bitset") {
+      if (field.type === "cells") {
+        const lines = [];
+        if (field.domain !== void 0) lines.push({ text: `domain ${field.domain}`, line: field.line });
         domains.push({
           kind: "domain",
           domainKind: "bitset",
           name: field.name,
-          header: `bitset ${field.name}`,
-          lines: [],
+          header: `cells ${field.name}`,
+          lines,
           line: field.line
         });
       }
-    }
-    for (const fleet of v2.fleets) {
-      domains.push({
-        kind: "domain",
-        domainKind: "bitset",
-        name: fleet.name,
-        header: `fleet ${fleet.name}`,
-        lines: [
-          { text: `board ${fleet.board}`, line: fleet.line }
-        ],
-        line: fleet.line
-      });
-      const resourceLines = [
-        { text: `initial ${fleet.ships.initial}`, line: fleet.line },
-        { text: `fleet ${fleet.name}`, line: fleet.line }
-      ];
-      domains.push({
-        kind: "domain",
-        domainKind: "resource",
-        name: fleet.ships.name,
-        header: `fleet ships ${fleet.ships.name}`,
-        lines: resourceLines,
-        line: fleet.line
-      });
     }
     if (v2.encounters.length > 0) {
       domains.push({
@@ -1822,28 +1825,6 @@ var MKProEmulatorBundle = (() => {
         }
       }
       fields.push(lowered);
-    }
-    for (const fleet of v2.fleets) {
-      const ships = {
-        name: fleet.ships.name,
-        type: "range",
-        line: fleet.line
-      };
-      if (fleet.ships.min !== void 0) ships.min = fleet.ships.min;
-      if (fleet.ships.max !== void 0) ships.max = fleet.ships.max;
-      const stackSource = parseStackSource(fleet.ships.initial, fleet.line);
-      if (stackSource !== void 0) {
-        ships.initialStack = stackSource;
-      } else {
-        ships.initial = lowerV2Expression(fleet.ships.initial, fleet.line);
-      }
-      fields.push(ships);
-      fields.push({
-        name: fleet.name,
-        type: "packed",
-        initial: lowerV2Expression("random() * 999", fleet.line),
-        line: fleet.line
-      });
     }
     const declared = new Set(fields.map((field) => field.name));
     for (const scratch of collectV2ScratchFields(v2, specializedRules)) {
@@ -1892,14 +1873,14 @@ var MKProEmulatorBundle = (() => {
   }
   function lowerV2InitialExpression(field) {
     const initial = field.initial ?? "0";
-    if (field.type === "bitset" && initial.trim() === "random()") {
+    if (field.type === "cells" && initial.trim() === "random()") {
       return lowerV2Expression("random() * 999", field.line);
     }
     return lowerV2Expression(initial, field.line);
   }
   function lowerV2StateFieldType(type) {
     if (type === "counter") return "range";
-    if (type === "coord" || type === "bitset") return "packed";
+    if (type === "coord" || type === "cells") return "packed";
     return type;
   }
   function lowerV2Screen(screen) {
@@ -1908,6 +1889,7 @@ var MKProEmulatorBundle = (() => {
       name: screen.name,
       format: "packed",
       sources: screen.sources,
+      items: screen.items,
       line: screen.line
     };
   }
@@ -2329,6 +2311,59 @@ var MKProEmulatorBundle = (() => {
   function parseIdentifierList(text) {
     return text.split(",").map((part) => part.trim()).filter((part) => part.length > 0);
   }
+  function parseDisplayItemList(text, line) {
+    return splitDisplayArgs(text, line).map((part) => parseDisplayItem(part, line));
+  }
+  function parseDisplayItem(text, line) {
+    const trimmed = text.trim();
+    if (trimmed.startsWith('"')) {
+      return {
+        kind: "literal",
+        text: parseQuotedDisplayText(trimmed, line),
+        line
+      };
+    }
+    if (/^[A-Za-z_][\w]*$/u.test(trimmed)) {
+      return { kind: "source", name: trimmed, line };
+    }
+    throw new ParseError(`Display item must be a string literal or state name, got '${trimmed}'`, line);
+  }
+  function parseQuotedDisplayText(text, line) {
+    try {
+      const value = JSON.parse(text);
+      if (typeof value === "string") return value;
+    } catch {
+    }
+    throw new ParseError(`Invalid display string literal '${text}'`, line);
+  }
+  function splitDisplayArgs(text, line) {
+    const parts = [];
+    let start = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quoted && char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        quoted = !quoted;
+        continue;
+      }
+      if (char === "," && !quoted) {
+        parts.push(text.slice(start, index).trim());
+        start = index + 1;
+      }
+    }
+    if (quoted) throw new ParseError("Unclosed display string literal", line);
+    parts.push(text.slice(start).trim());
+    return parts.filter((part) => part.length > 0);
+  }
   function parseExpression(text, line = 0) {
     return new ExpressionParser(text, line).parse();
   }
@@ -2453,10 +2488,26 @@ var MKProEmulatorBundle = (() => {
     return tokens;
   }
   function stripComment(text) {
-    const slash = text.indexOf("//");
-    const hash = text.indexOf("#");
-    const cut = slash === -1 ? hash : hash === -1 ? slash : Math.min(slash, hash);
-    return cut === -1 ? text : text.slice(0, cut);
+    let quoted = false;
+    let escaped = false;
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quoted && char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        quoted = !quoted;
+        continue;
+      }
+      if (!quoted && char === "#") return text.slice(0, index);
+      if (!quoted && char === "/" && text[index + 1] === "/") return text.slice(0, index);
+    }
+    return text;
   }
 
   // src/core/passes/helpers.ts
@@ -2493,6 +2544,15 @@ var MKProEmulatorBundle = (() => {
   }
   function hasRewriteBarrier(op) {
     return "meta" in op && "raw" in op.meta && op.meta.raw === true;
+  }
+  function isDisplayFocusSensitive(op) {
+    return "meta" in op && (op.meta.roles?.includes("display-byte") === true || /\b(display|screen|show|x2|вп)\b/iu.test(op.meta.comment ?? ""));
+  }
+  function knownIndirectMemoryTarget(op) {
+    if (op.kind !== "indirect-recall" && op.kind !== "indirect-store") return void 0;
+    const match = /\bindirect-memory-target=([0-9a-e])\b/iu.exec(op.meta.comment ?? "");
+    if (!match) return void 0;
+    return match[1].toLowerCase();
   }
 
   // src/core/passes/arithmetic-if.ts
@@ -2784,16 +2844,23 @@ var MKProEmulatorBundle = (() => {
   };
 
   // src/core/passes/liveness-analysis.ts
-  function buildLabelIndex(ops) {
-    const map = /* @__PURE__ */ new Map();
+  function buildTargetIndexes(ops) {
+    const labelIndex = /* @__PURE__ */ new Map();
+    const addressIndex = /* @__PURE__ */ new Map();
+    let address = 0;
     for (let i = 0; i < ops.length; i += 1) {
       const op = ops[i];
-      if (op.kind === "label") map.set(op.name, i);
+      if (op.kind === "label") {
+        labelIndex.set(op.name, i);
+        continue;
+      }
+      addressIndex.set(address, i);
+      address += cellsPerOp(op);
     }
-    return map;
+    return { labelIndex, addressIndex };
   }
   function buildSuccessors(ops) {
-    const labelIndex = buildLabelIndex(ops);
+    const { labelIndex, addressIndex } = buildTargetIndexes(ops);
     const successors = Array.from({ length: ops.length }, () => []);
     for (let i = 0; i < ops.length; i += 1) {
       const op = ops[i];
@@ -2804,6 +2871,9 @@ var MKProEmulatorBundle = (() => {
       const jumpTo = (target) => {
         if (typeof target === "string") {
           const idx = labelIndex.get(target);
+          if (idx !== void 0) successors[i].push(idx);
+        } else {
+          const idx = addressIndex.get(target);
           if (idx !== void 0) successors[i].push(idx);
         }
       };
@@ -2831,6 +2901,7 @@ var MKProEmulatorBundle = (() => {
           fallthrough();
           break;
         case "call":
+          jumpTo(op.target);
           fallthrough();
           break;
         case "indirect-jump":
@@ -2851,8 +2922,20 @@ var MKProEmulatorBundle = (() => {
         return { defs: [op.register], uses: [] };
       case "recall":
         return { defs: [], uses: [op.register] };
-      case "indirect-recall":
-      case "indirect-store":
+      case "indirect-recall": {
+        const target = knownIndirectMemoryTarget(op);
+        return {
+          defs: [],
+          uses: target === void 0 ? [op.register] : [op.register, target]
+        };
+      }
+      case "indirect-store": {
+        const target = knownIndirectMemoryTarget(op);
+        return {
+          defs: target === void 0 ? [] : [target],
+          uses: [op.register]
+        };
+      }
       case "indirect-jump":
       case "indirect-call":
       case "indirect-cjump":
@@ -3258,7 +3341,7 @@ var MKProEmulatorBundle = (() => {
   function memoryTargetFromTransformed(transformed) {
     const normalized = transformed.trim().toLowerCase();
     if (/^-?\d+$/u.test(normalized)) {
-      return REGISTERS_BY_INDEX2[positiveModulo(Number(normalized), 10)];
+      return REGISTERS_BY_INDEX2[positiveModulo(Number(normalized), 15)];
     }
     const last = normalized.at(-1);
     if (last === void 0) return void 0;
@@ -3472,7 +3555,7 @@ var MKProEmulatorBundle = (() => {
     const state = { currentLiteral: void 0, stableRegisters: /* @__PURE__ */ new Map() };
     let applied = 0;
     for (const op of ops) {
-      if (!hasRewriteBarrier(op) && (op.kind === "recall" || op.kind === "store")) {
+      if ((op.kind === "recall" || op.kind === "store") && !hasRewriteBarrier(op) && !isDisplayFocusSensitive(op)) {
         const selector = findMemorySelector(state, op.register);
         if (selector !== void 0) {
           const opcodeBase = op.kind === "recall" ? 208 : 176;
@@ -3481,7 +3564,7 @@ var MKProEmulatorBundle = (() => {
             kind: op.kind === "recall" ? "indirect-recall" : "indirect-store",
             register: selector,
             opcode: opcodeBase + registerIndex(selector),
-            meta: cloneMeta({ ...op.meta, mnemonic }, "indirect memory table")
+            meta: cloneMeta({ ...op.meta, mnemonic }, `indirect memory table indirect-memory-target=${op.register}`)
           };
           result.push(rewritten);
           updateKnownAfterOp(state, rewritten);
@@ -4097,6 +4180,8 @@ var MKProEmulatorBundle = (() => {
       if (op.kind === "store" || op.kind === "recall") set.add(op.register);
       if (op.kind === "indirect-store" || op.kind === "indirect-recall" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
         set.add(op.register);
+        const memoryTarget = knownIndirectMemoryTarget(op);
+        if (memoryTarget !== void 0) set.add(memoryTarget);
       }
       if (op.kind === "loop") set.add(LOOP_COUNTER_REGISTER[op.counter]);
     }
@@ -4128,9 +4213,15 @@ var MKProEmulatorBundle = (() => {
     for (const op of ops) {
       if (op.kind === "indirect-store" || op.kind === "indirect-recall" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
         if (op.register === register) return true;
+        if (knownIndirectMemoryTarget(op) === register) return true;
       }
     }
     return false;
+  }
+  function usesDisplayFocusSensitiveAccess(ops, register) {
+    return ops.some(
+      (op) => (op.kind === "store" || op.kind === "recall") && op.register === register && isDisplayFocusSensitive(op)
+    );
   }
   function usesLoopCounter(ops, register) {
     return ops.some((op) => op.kind === "loop" && LOOP_COUNTER_REGISTER[op.counter] === register);
@@ -4174,12 +4265,14 @@ var MKProEmulatorBundle = (() => {
       if (mapping.has(a)) continue;
       if (liveAtEntry.has(a)) continue;
       if (usesIndirectAccess(ops, a)) continue;
+      if (usesDisplayFocusSensitiveAccess(ops, a)) continue;
       if (usesLoopCounter(ops, a)) continue;
       for (let j = i + 1; j < ordered.length; j += 1) {
         const b = ordered[j];
         if (mapping.has(b)) continue;
         if (liveAtEntry.has(b)) continue;
         if (usesIndirectAccess(ops, b)) continue;
+        if (usesDisplayFocusSensitiveAccess(ops, b)) continue;
         if (usesLoopCounter(ops, b)) continue;
         const rangeA = ranges.get(a);
         const rangeB = ranges.get(b);
@@ -5185,11 +5278,11 @@ var MKProEmulatorBundle = (() => {
   function requiredFeaturesForShape(shape) {
     switch (shape) {
       case "board_line_count":
-        return ["board", "fleet", "line_count", "resources"];
+        return ["board", "bitset", "line_count", "resources"];
       case "board_neighbor_count":
         return ["board", "bitset", "neighbor_count", "resources"];
       case "board_fleet_duel":
-        return ["board", "fleet", "bitset", "fleet_probe", "fleet_clear", "random_board_cell", "hit_report", "resources"];
+        return ["board", "bitset", "cell_probe", "cell_clear", "random_board_cell", "hit_report", "resources"];
       case "world_table":
         return ["movement", "cell_at", "resources"];
       case "lane_resource":
@@ -5201,13 +5294,13 @@ var MKProEmulatorBundle = (() => {
   function coveredFeaturesForShape(shape) {
     switch (shape) {
       case "board_line_count":
-        return ["bitset", "board", "fleet", "fleet_probe", "fleet_clear", "line_count", "resources"];
+        return ["bitset", "board", "cell_probe", "cell_clear", "line_count", "resources"];
       case "board_neighbor_count":
-        return ["bitset", "board", "neighbor_count", "resources"];
+        return ["bitset", "board", "cell_probe", "neighbor_count", "resources"];
       case "board_fleet_duel":
-        return ["bitset", "board", "fleet", "fleet_probe", "fleet_clear", "hit_report", "random_board_cell", "resources"];
+        return ["bitset", "board", "cell_probe", "cell_clear", "hit_report", "random_board_cell", "resources"];
       case "world_table":
-        return ["bitset", "cell_at", "movement", "resources"];
+        return ["bitset", "cell_at", "cell_clear", "movement", "resources"];
       case "lane_resource":
         return ["movement", "random_cell", "resources"];
     }
@@ -5364,7 +5457,7 @@ var MKProEmulatorBundle = (() => {
   function buildGameIntent(ast) {
     const domainKinds = new Set(ast.domains.map((domain) => domain.domainKind));
     const v2Types = new Set(ast.v2?.state.map((field) => field.type.split("(")[0].trim()) ?? []);
-    const hasSpatialState = domainKinds.has("maze") || domainKinds.has("coord") || v2Types.has("coord") || v2Types.has("bitset");
+    const hasSpatialState = domainKinds.has("maze") || domainKinds.has("coord") || v2Types.has("coord") || v2Types.has("cells");
     const hasResourceState = domainKinds.has("resource") || v2Types.has("counter") || ast.states.some((state) => state.fields.some((field) => gameStateRole(field.type) === "resource"));
     const hasGameFlow = domainKinds.has("event") || domainKinds.has("cache_search") || domainKinds.has("fight") || ast.v2?.turn !== void 0 || (ast.v2?.rules.length ?? 0) > 0;
     if (!(hasSpatialState && hasResourceState && hasGameFlow)) return void 0;
@@ -5396,18 +5489,19 @@ var MKProEmulatorBundle = (() => {
   function collectGameIntentFeatures(ast, queries) {
     const features = /* @__PURE__ */ new Set();
     const v2 = ast.v2;
-    const fleetNames = new Set(v2?.fleets.map((fleet) => fleet.name) ?? []);
+    const cellSetNames = /* @__PURE__ */ new Set([
+      ...v2?.state.filter((field) => field.type === "cells").map((field) => field.name) ?? []
+    ]);
     const inputNames = new Set(collectV2InputNames(v2));
     const boardCellCounts = new Set(v2?.boards.map((board) => board.width * board.height) ?? []);
     if ((v2?.boards.length ?? 0) > 0) features.add("board");
-    if ((v2?.fleets.length ?? 0) > 0) {
-      features.add("fleet");
+    if (cellSetNames.size > 0) {
       features.add("bitset");
       features.add("resources");
     }
     if ((v2?.worlds.length ?? 0) > 0) features.add("movement");
     for (const field of v2?.state ?? []) {
-      if (field.type === "bitset") features.add("bitset");
+      if (field.type === "cells") features.add("bitset");
       if (field.type === "counter") features.add("resources");
     }
     for (const state of ast.states) {
@@ -5419,8 +5513,8 @@ var MKProEmulatorBundle = (() => {
       features.add(query.kind);
     }
     const addPredicateFeatures = (predicate) => {
-      if (predicate.kind === "v2_compare" && predicate.op === ">=" && fleetNames.has(predicate.left.trim())) {
-        features.add("fleet_probe");
+      if (predicate.kind === "v2_compare" && predicate.op === ">=" && cellSetNames.has(predicate.left.trim())) {
+        features.add("cell_probe");
       }
       if (isNegativeInputReportPredicate(predicate, inputNames)) {
         features.add("hit_report");
@@ -5432,8 +5526,8 @@ var MKProEmulatorBundle = (() => {
         if (statement.kind === "v2_assign" && isRandomBoardCellExpression(statement.expr, boardCellCounts)) {
           features.add("random_board_cell");
         }
-        if (statement.kind === "v2_update" && statement.op === "-=" && fleetNames.has(statement.target)) {
-          features.add("fleet_clear");
+        if (statement.kind === "v2_update" && statement.op === "-=" && cellSetNames.has(statement.target)) {
+          features.add("cell_clear");
         }
         if (statement.kind === "v2_if") {
           addPredicateFeatures(statement.predicate);
@@ -5478,7 +5572,7 @@ var MKProEmulatorBundle = (() => {
     const set = new Set(features);
     if (set.has("line_count")) return "board_line_count";
     if (set.has("neighbor_count")) return "board_neighbor_count";
-    if (set.has("board") && set.has("fleet") && set.has("fleet_probe") && set.has("fleet_clear") && set.has("random_board_cell") && set.has("hit_report")) {
+    if (set.has("board") && set.has("cell_probe") && set.has("cell_clear") && set.has("random_board_cell") && set.has("hit_report")) {
       return "board_fleet_duel";
     }
     if (set.has("cell_at")) return "world_table";
@@ -5642,7 +5736,7 @@ var MKProEmulatorBundle = (() => {
   }
   function gameStateRole(type) {
     if (type === "coord" || type === "packed") return "coord";
-    if (type === "bitset") return "bitset";
+    if (type === "cells" || type === "bitset") return "bitset";
     if (type === "counter" || type === "range") return "resource";
     if (type === "flag") return "flag";
     return "unknown";
@@ -6522,6 +6616,15 @@ var MKProEmulatorBundle = (() => {
         this.diagnostics.push(buildDiagnostic("error", `Unknown display '${displayName}'.`, line));
         return;
       }
+      if (this.compileTextDisplay(display, line)) return;
+      if (display.items.some((item) => item.kind === "literal")) {
+        this.diagnostics.push(buildDiagnostic(
+          "error",
+          `Screen '${display.name}' contains text fragments that are not lowerable for this program shape yet.`,
+          line
+        ));
+        return;
+      }
       const sources = this.orderDisplaySources(display.sources);
       if (sources.length === 0) {
         this.emitNumber("0");
@@ -6540,6 +6643,87 @@ var MKProEmulatorBundle = (() => {
         name: "packed-display-lowering",
         detail: canUseDisplayBytes ? `Display ${display.name} may use display-byte encodings in later layout passes.` : `Display ${display.name} lowered as ordinary packed numeric output.`
       });
+    }
+    compileTextDisplay(display, line) {
+      const [literal, source, ...rest] = display.items;
+      if (literal?.kind !== "literal" || literal.text !== "BEEr " || source?.kind !== "source" || rest.length !== 0) {
+        return false;
+      }
+      const field = this.findStateField(source.name);
+      if (field === void 0 || (field.min ?? 0) < 0 || (field.max ?? 0) > 99) return false;
+      if (this.allocation.registers[source.name] !== "0") return false;
+      if (this.currentAddress() !== 0) return false;
+      const scratchRegisters = /* @__PURE__ */ new Set(["1", "2", "7", "8", "a"]);
+      const conflicting = Object.entries(this.allocation.registers).filter(([name, register]) => name !== source.name && scratchRegisters.has(register));
+      if (conflicting.length > 0) return false;
+      this.emitTwoDigitTextDisplay(source.name, line);
+      this.optimizations.push({
+        name: "screen-text-lowering",
+        detail: `Lowered screen ${display.name} as visible text ${JSON.stringify(literal.text)} plus ${source.name}.`
+      });
+      return true;
+    }
+    emitTwoDigitTextDisplay(source, line) {
+      this.emitRecall(source, "text display verse", line);
+      this.emitOp(1, "1", "text tens divisor", line);
+      this.emitOp(0, "0", "text tens divisor", line);
+      this.emitOp(19, "/", "text tens", line);
+      this.emitOp(52, "\u041A [x]", "text tens integer", line);
+      this.emitOp(65, "X->\u041F 1", "text tens scratch", line);
+      this.emitOp(15, "F \u0412x", "text ones from last X", line);
+      this.emitOp(53, "\u041A {x}", "text ones fraction", line);
+      this.emitOp(1, "1", "text ones scale", line);
+      this.emitOp(0, "0", "text ones scale", line);
+      this.emitOp(18, "*", "text ones", line);
+      this.emitOp(66, "X->\u041F 2", "text ones scratch", line);
+      this.emitOp(1, "1", "text display tens prefix", line);
+      this.emitOp(1, "1", "text display tens prefix", line);
+      this.emitOp(72, "X->\u041F 8", "text display prefix scratch", line);
+      this.emitOp(1, "1", "text display tens offset", line);
+      this.emitOp(2, "2", "text display tens offset", line);
+      this.emitOp(71, "X->\u041F 7", "text display digit offset", line);
+      this.emitOp(98, "\u041F->X 2", "text display ones digit", line);
+      this.emitJump(83, "\u041F\u041F", 34, "text digit renderer", line);
+      this.emitOp(74, "X->\u041F a", "text display rendered ones", line);
+      this.emitOp(1, "1", "text display ones prefix", line);
+      this.emitOp(4, "4", "text display ones prefix", line);
+      this.emitOp(72, "X->\u041F 8", "text display prefix scratch", line);
+      this.emitOp(1, "1", "text display ones offset", line);
+      this.emitOp(3, "3", "text display ones offset", line);
+      this.emitOp(71, "X->\u041F 7", "text display digit offset", line);
+      this.emitOp(97, "\u041F->X 1", "text display tens digit", line);
+      this.emitJump(83, "\u041F\u041F", 34, "text digit renderer", line);
+      this.emitOp(106, "\u041F->X a", "text display rendered ones", line);
+      this.emitOp(14, "\u0412\u2191", "show text", line);
+      this.emitOp(80, "\u0421/\u041F", "show text", line);
+      this.emitOp(6, "6", "text digit renderer", line);
+      this.emitOp(17, "-", "text digit renderer", line);
+      this.emitOp(11, "/-/", "text digit renderer", line);
+      this.emitJump(92, "F x<0", 45, "text digit renderer", line);
+      this.emitOp(9, "9", "text digit complement", line);
+      this.emitOp(16, "+", "text digit complement", line);
+      this.emitOp(215, "\u041A \u041F->X 7", "text display byte", line);
+      this.emitOp(16, "+", "text display byte", line);
+      this.emitOp(58, "\u041A \u0418\u041D\u0412", "text visible digit", line);
+      this.emitOp(82, "\u0412/\u041E", "text digit return", line);
+      this.emitOp(1, "1", "text digit complement", line);
+      this.emitOp(16, "+", "text digit complement", line);
+      this.emitOp(215, "\u041A \u041F->X 7", "text display byte", line);
+      this.emitOp(16, "+", "text display byte", line);
+      this.emitOp(58, "\u041A \u0418\u041D\u0412", "text visible digit", line);
+      this.emitOp(216, "\u041A \u041F->X 8", "text display prefix", line);
+      this.emitOp(14, "\u0412\u2191", "text digit return value", line);
+      this.emitOp(82, "\u0412/\u041E", "text digit return", line);
+    }
+    findStateField(name) {
+      for (const state of this.ast.states) {
+        const field = state.fields.find((candidate) => candidate.name === name);
+        if (field !== void 0) return field;
+      }
+      return void 0;
+    }
+    currentAddress() {
+      return this.items.filter((item) => item.kind !== "label").length;
     }
     compileBlockCall(blockName, line) {
       const block = this.ast.blocks.find((candidate) => candidate.name === blockName);

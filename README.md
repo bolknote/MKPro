@@ -56,8 +56,10 @@ entries, overlays, X2/display bytes, or other MK-61 tricks.
 
 ```mkpro
 program TinyGame {
+  field: board(0..9, 0..9)
+
   state {
-    player: coord = 1
+    player: coord(field) = 1
     food: counter 0..9 = 5
   }
 
@@ -104,7 +106,7 @@ All `examples/*.mkpro` programs are written in the human DSL. They cover:
 - `examples/cave-highlevel-baseline.mkpro`: readable Cave Treasure baseline.
 - `examples/cave-treasure.mkpro`: full high-level compactness reference.
 - `examples/cave-treasure-full.mkpro`: full reference metadata variant.
-- `examples/grid-rescue.mkpro`: synthetic grid/bitset stress sketch.
+- `examples/grid-rescue.mkpro`: synthetic grid/cell-set stress sketch.
 - `examples/resource-raid.mkpro`: synthetic counter/dispatch stress sketch.
 - `examples/alaram.mkpro`: commented Lord_BSS cockpit interceptor port.
 - `examples/dungeon.mkpro`: commented Lord_BSS Dungeon port.

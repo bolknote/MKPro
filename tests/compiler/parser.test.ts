@@ -107,8 +107,10 @@ program BeerScreen {
   it("parses command-style rule calls with expression arguments", () => {
     const ast = parseProgram(`
 program Demo {
+  arena: board(0..9, 0..9)
+
   state {
-    pos: coord = 1
+    pos: coord(arena) = 1
     delta: counter -100..100 = 0
   }
   turn {
@@ -279,26 +281,24 @@ program Bad {
     ).toThrow(/Rule name 'move' is reserved/u);
   });
 
-  it("parses v2 world, boards, fleets, state config, encounters, and reference metadata", () => {
+  it("parses v2 world, boards, cell sets, state config, encounters, and reference metadata", () => {
     const ast = parseProgram(`
 reference demo_reference
 
 program Demo {
-  board ocean: 10x10 {
-  }
+  ocean: board(0..9, 0..9)
   state {
-    pos: coord = 1
+    pos: coord(demo_world) = 1
     strength: counter 0..99 = 40
     points: counter 0..9 = 0
-    plans: bitset = random()
+    plans: cells(demo_world) = random()
+    enemy_fleet: cells(ocean) = random()
+    enemy_ships: counter 0..99 = stack.X
   }
   world demo_world {
     position pos {
       encoding decimal_player
     }
-  }
-  fleet enemy_fleet on ocean {
-    ships enemy_ships 0..99 = stack.X
   }
   screen main {
     show pos, strength
@@ -318,8 +318,7 @@ program Demo {
 `);
 
     expect(ast.reference).toBe("demo_reference");
-    expect(ast.v2?.boards[0]).toMatchObject({ name: "ocean", width: 10, height: 10 });
-    expect(ast.v2?.fleets[0]?.ships).toMatchObject({ name: "enemy_ships", initial: "stack.X", min: 0, max: 99 });
+    expect(ast.v2?.boards[0]).toMatchObject({ name: "ocean", xMin: 0, xMax: 9, yMin: 0, yMax: 9, width: 10, height: 10 });
     expect(ast.v2?.worlds[0]?.name).toBe("demo_world");
     expect(ast.v2?.encounters[0]?.cases.map((encounterCase) => encounterCase.value)).toEqual(["0", "3"]);
     expect(ast.domains.some((domain) => domain.domainKind === "maze" && domain.name === "ocean")).toBe(true);
@@ -332,8 +331,10 @@ program Demo {
   it("parses and lowers v2 move statements and named terminal rules", () => {
     const ast = parseProgram(`
 program Demo {
+  cave: board(0..9, 0..9)
+
   state {
-    pos: coord
+    pos: coord(cave)
   }
   rule escaped {
     stop 777
@@ -362,13 +363,13 @@ program Demo {
     const ast = parseProgram(`
 program Queries {
   state {
-    pos: coord
-    foxes: bitset = random()
-    mines: bitset = random()
+    pos: coord(cave)
+    foxes: cells(cave) = random()
+    mines: cells(cave) = random()
     bearing: counter 0..8 = 0
     clue: counter 0..8 = 0
     tile: counter 0..9 = 0
-    threat: coord
+    threat: coord(cave)
   }
   world cave {
     position pos {
@@ -567,16 +568,20 @@ program Bad {
     const ast = parseProgram(`
 program Demo {
   state {
-    pos: coord = 1
-    next: coord
-    walls: bitset = random()
+    pos: coord(cave) = 1
+    next: coord(cave)
+    walls: cells(cave) = random()
+  }
+  world cave {
+    position pos {
+    }
   }
   turn {
     stop 0
   }
   rule advance {
     next = pos + 1
-    if walls >= next {
+    if next in walls {
       show 0
     }
     else {
@@ -696,12 +701,12 @@ program Bad {
     ).toThrow(/Unexpected screen line 'style compact digits'/u);
   });
 
-  it("rejects unknown state and fleet config syntax", () => {
+  it("rejects unknown state and removed board/fleet config syntax", () => {
     expect(() =>
       parseProgram(`
 program Bad {
   state {
-    walls: bitset generated random
+    walls: cells(cave) generated random
   }
   turn {
     stop 0
@@ -714,7 +719,7 @@ program Bad {
       parseProgram(`
 program Bad {
   state {
-    walls: bitset {
+    walls: cells(cave) {
       generated random
     }
   }
@@ -730,16 +735,24 @@ program Bad {
 program Bad {
   board ocean: 10x10 {
   }
+  turn {
+    stop 0
+  }
+}
+`),
+    ).toThrow(/Board must look like 'name: board\(0\.\.9, 0\.\.9\)'/u);
+
+    expect(() =>
+      parseProgram(`
+program Bad {
   fleet enemy_fleet on ocean {
-    ships enemy_ships 0..99 = stack.X
-    generated random
   }
   turn {
     stop 0
   }
 }
 `),
-    ).toThrow(/Unexpected fleet line 'generated random'/u);
+    ).toThrow(/Fleet blocks were removed/u);
   });
 
   it("rejects unknown state field tails", () => {
@@ -747,7 +760,46 @@ program Bad {
       parseProgram(`
 program Bad {
   state {
-    blocked: coord optional
+    pos: coord = 0
+  }
+  turn {
+    stop 0
+  }
+}
+`),
+    ).toThrow(/coord state must look like 'name: coord\(domain\)'/u);
+
+    expect(() =>
+      parseProgram(`
+program Bad {
+  state {
+    score: counter() 0..9 = 0
+  }
+  turn {
+    stop 0
+  }
+}
+`),
+    ).toThrow(/State type 'counter' does not take parameters/u);
+
+    expect(() =>
+      parseProgram(`
+program Bad {
+  state {
+    pos: coord(missing) = 0
+  }
+  turn {
+    stop 0
+  }
+}
+`),
+    ).toThrow(/Unknown domain 'missing'/u);
+
+    expect(() =>
+      parseProgram(`
+program Bad {
+  state {
+    blocked: coord(cave) optional
   }
   turn {
     stop 0
@@ -761,8 +813,10 @@ program Bad {
     expect(() =>
       parseProgram(`
 program Bad {
+  cave: board(0..9, 0..9)
+
   state {
-    pos: coord = input.X
+    pos: coord(cave) = input.X
   }
   turn {
     stop 0

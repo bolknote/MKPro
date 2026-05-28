@@ -641,11 +641,11 @@ function buildShapeBackendCandidate(intent: GameIntent): GameBackendCandidate | 
 function requiredFeaturesForShape(shape: GameIntentShape): GameIntentFeature[] | undefined {
   switch (shape) {
     case "board_line_count":
-      return ["board", "fleet", "line_count", "resources"];
+      return ["board", "bitset", "line_count", "resources"];
     case "board_neighbor_count":
       return ["board", "bitset", "neighbor_count", "resources"];
     case "board_fleet_duel":
-      return ["board", "fleet", "bitset", "fleet_probe", "fleet_clear", "random_board_cell", "hit_report", "resources"];
+      return ["board", "bitset", "cell_probe", "cell_clear", "random_board_cell", "hit_report", "resources"];
     case "world_table":
       return ["movement", "cell_at", "resources"];
     case "lane_resource":
@@ -658,13 +658,13 @@ function requiredFeaturesForShape(shape: GameIntentShape): GameIntentFeature[] |
 function coveredFeaturesForShape(shape: Exclude<GameIntentShape, "universal_spatial_resource">): GameIntentFeature[] {
   switch (shape) {
     case "board_line_count":
-      return ["bitset", "board", "fleet", "fleet_probe", "fleet_clear", "line_count", "resources"];
+      return ["bitset", "board", "cell_probe", "cell_clear", "line_count", "resources"];
     case "board_neighbor_count":
-      return ["bitset", "board", "neighbor_count", "resources"];
+      return ["bitset", "board", "cell_probe", "neighbor_count", "resources"];
     case "board_fleet_duel":
-      return ["bitset", "board", "fleet", "fleet_probe", "fleet_clear", "hit_report", "random_board_cell", "resources"];
+      return ["bitset", "board", "cell_probe", "cell_clear", "hit_report", "random_board_cell", "resources"];
     case "world_table":
-      return ["bitset", "cell_at", "movement", "resources"];
+      return ["bitset", "cell_at", "cell_clear", "movement", "resources"];
     case "lane_resource":
       return ["movement", "random_cell", "resources"];
   }
@@ -835,7 +835,7 @@ function buildGameIntent(ast: ProgramAst): GameIntent | undefined {
     domainKinds.has("maze") ||
     domainKinds.has("coord") ||
     v2Types.has("coord") ||
-    v2Types.has("bitset");
+    v2Types.has("cells");
   const hasResourceState =
     domainKinds.has("resource") ||
     v2Types.has("counter") ||
@@ -878,20 +878,21 @@ function buildGameIntent(ast: ProgramAst): GameIntent | undefined {
 function collectGameIntentFeatures(ast: ProgramAst, queries: GameQueryIntent[]): GameIntentFeature[] {
   const features = new Set<GameIntentFeature>();
   const v2 = ast.v2;
-  const fleetNames = new Set(v2?.fleets.map((fleet) => fleet.name) ?? []);
+  const cellSetNames = new Set([
+    ...(v2?.state.filter((field) => field.type === "cells").map((field) => field.name) ?? []),
+  ]);
   const inputNames = new Set(collectV2InputNames(v2));
   const boardCellCounts = new Set(v2?.boards.map((board) => board.width * board.height) ?? []);
 
   if ((v2?.boards.length ?? 0) > 0) features.add("board");
-  if ((v2?.fleets.length ?? 0) > 0) {
-    features.add("fleet");
+  if (cellSetNames.size > 0) {
     features.add("bitset");
     features.add("resources");
   }
   if ((v2?.worlds.length ?? 0) > 0) features.add("movement");
 
   for (const field of v2?.state ?? []) {
-    if (field.type === "bitset") features.add("bitset");
+    if (field.type === "cells") features.add("bitset");
     if (field.type === "counter") features.add("resources");
   }
   for (const state of ast.states) {
@@ -907,9 +908,9 @@ function collectGameIntentFeatures(ast: ProgramAst, queries: GameQueryIntent[]):
     if (
       predicate.kind === "v2_compare" &&
       predicate.op === ">=" &&
-      fleetNames.has(predicate.left.trim())
+      cellSetNames.has(predicate.left.trim())
     ) {
-      features.add("fleet_probe");
+      features.add("cell_probe");
     }
     if (isNegativeInputReportPredicate(predicate, inputNames)) {
       features.add("hit_report");
@@ -922,8 +923,8 @@ function collectGameIntentFeatures(ast: ProgramAst, queries: GameQueryIntent[]):
       if (statement.kind === "v2_assign" && isRandomBoardCellExpression(statement.expr, boardCellCounts)) {
         features.add("random_board_cell");
       }
-      if (statement.kind === "v2_update" && statement.op === "-=" && fleetNames.has(statement.target)) {
-        features.add("fleet_clear");
+      if (statement.kind === "v2_update" && statement.op === "-=" && cellSetNames.has(statement.target)) {
+        features.add("cell_clear");
       }
       if (statement.kind === "v2_if") {
         addPredicateFeatures(statement.predicate);
@@ -976,9 +977,8 @@ function classifyGameIntentShape(features: readonly GameIntentFeature[]): GameIn
   if (set.has("neighbor_count")) return "board_neighbor_count";
   if (
     set.has("board") &&
-    set.has("fleet") &&
-    set.has("fleet_probe") &&
-    set.has("fleet_clear") &&
+    set.has("cell_probe") &&
+    set.has("cell_clear") &&
     set.has("random_board_cell") &&
     set.has("hit_report")
   ) {
@@ -1155,7 +1155,7 @@ function collectV2InputNames(v2: V2ProgramAst | undefined): string[] {
 
 function gameStateRole(type: string): GameIntent["stateRoles"][number]["role"] {
   if (type === "coord" || type === "packed") return "coord";
-  if (type === "bitset") return "bitset";
+  if (type === "cells" || type === "bitset") return "bitset";
   if (type === "counter" || type === "range") return "resource";
   if (type === "flag") return "flag";
   return "unknown";

@@ -7,7 +7,7 @@ program Labyrinth777 {
   state {
     // Labyrinth777 is about orientation in volume: floor, row, and room all
     // matter, but the calculator can only afford a compact row-like display.
-    pos: coord = 444
+    pos: coord(maze) = 444
     row_view: packed = 0
 
     energy: counter 0..9 = 9
@@ -20,7 +20,7 @@ program Labyrinth777 {
 
     // The personal jumper is hidden until found; clearing it records that the
     // search has converged, not that a visible item was picked up.
-    jumper: bitset = random()
+    jumper: cells(maze) = random()
 
     tile: counter 0..9 = 0
   }
