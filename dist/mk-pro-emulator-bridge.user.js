@@ -6057,6 +6057,7 @@ var MKProEmulatorBundle = (() => {
   var DISPATCH_SCRATCH_PREFIX = "__dispatch_";
   var TICTACTOE_MASK_SCRATCH_PREFIX = "__ttt_mask_";
   var BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
+  var IF_SELECTOR_SCRATCH_PREFIX = "__if_selector_";
   var CELL_MAP_PREFIX = "__cell_map_";
   var SPATIAL_HIT_SCRATCH_PREFIX = "__spatial_hit_";
   var SPATIAL_COUNT_SCRATCH_PREFIX = "__spatial_count_";
@@ -6074,6 +6075,23 @@ var MKProEmulatorBundle = (() => {
     }
   };
   function compileMKPro(source, options = {}) {
+    const primary = compileMKProOnce(source, options, {});
+    let aggressive;
+    try {
+      aggressive = compileMKProOnce(source, options, { aggressiveTerminalDirect: true });
+    } catch {
+      aggressive = void 0;
+    }
+    if (aggressive !== void 0 && aggressive.steps.length < primary.steps.length) {
+      aggressive.report.optimizations.push({
+        name: "late-layout-if-variant",
+        detail: `Selected aggressive terminal-if lowering after full layout (${aggressive.steps.length} vs ${primary.steps.length} cells).`
+      });
+      return aggressive;
+    }
+    return primary;
+  }
+  function compileMKProOnce(source, options, loweringOptions) {
     const ast = parseProgram(source);
     const opts = { ...DEFAULT_OPTIONS, ...options };
     const machineProfile = MK61_PROFILE;
@@ -6111,7 +6129,8 @@ var MKProEmulatorBundle = (() => {
       diagnostics,
       optimizations,
       warnings,
-      candidates
+      candidates,
+      loweringOptions
     );
     context.compileProgram();
     const optimizedResult = optimizeItems(context.items, opts, optimizations);
@@ -6168,7 +6187,7 @@ var MKProEmulatorBundle = (() => {
   function visiblePublicRegisters(all) {
     const result = {};
     for (const [name, register] of Object.entries(all)) {
-      if (!name.startsWith(SWITCH_SCRATCH_PREFIX) && !name.startsWith(DISPATCH_SCRATCH_PREFIX) && !name.startsWith(TICTACTOE_MASK_SCRATCH_PREFIX) && !name.startsWith(BIT_MASK_SCRATCH_PREFIX) && !name.startsWith(CELL_MAP_PREFIX) && !name.startsWith(SPATIAL_HIT_SCRATCH_PREFIX) && !name.startsWith(SPATIAL_COUNT_SCRATCH_PREFIX)) {
+      if (!name.startsWith(SWITCH_SCRATCH_PREFIX) && !name.startsWith(DISPATCH_SCRATCH_PREFIX) && !name.startsWith(TICTACTOE_MASK_SCRATCH_PREFIX) && !name.startsWith(BIT_MASK_SCRATCH_PREFIX) && !name.startsWith(IF_SELECTOR_SCRATCH_PREFIX) && !name.startsWith(CELL_MAP_PREFIX) && !name.startsWith(SPATIAL_HIT_SCRATCH_PREFIX) && !name.startsWith(SPATIAL_COUNT_SCRATCH_PREFIX)) {
         result[name] = register;
       }
     }
@@ -6700,6 +6719,7 @@ var MKProEmulatorBundle = (() => {
     optimizations;
     warnings;
     candidates;
+    loweringOptions;
     inlineProcNames;
     readCounts;
     displayUseCounts;
@@ -6714,10 +6734,11 @@ var MKProEmulatorBundle = (() => {
     lineCountHelpers = /* @__PURE__ */ new Map();
     spatialBitMaskHelpers = /* @__PURE__ */ new Map();
     spatialSumLoopHelpers = /* @__PURE__ */ new Map();
+    terminalTailHelpers = [];
     currentXVariable;
     currentXKnownZero = false;
     emittingExpressionHelper = false;
-    constructor(ast, allocation, options, machineProfile, diagnostics, optimizations, warnings, candidates) {
+    constructor(ast, allocation, options, machineProfile, diagnostics, optimizations, warnings, candidates, loweringOptions) {
       this.ast = ast;
       this.allocation = allocation;
       this.options = options;
@@ -6726,6 +6747,7 @@ var MKProEmulatorBundle = (() => {
       this.optimizations = optimizations;
       this.warnings = warnings;
       this.candidates = candidates;
+      this.loweringOptions = loweringOptions;
       this.inlineProcNames = findSingleUseProcNames(ast);
       this.readCounts = collectVariableReadCounts(ast);
       this.displayUseCounts = collectDisplayUseCounts(ast);
@@ -6767,6 +6789,15 @@ var MKProEmulatorBundle = (() => {
       this.compileRuntimeHelpers();
     }
     compileRuntimeHelpers() {
+      for (let index = 0; index < this.terminalTailHelpers.length; index += 1) {
+        const helper = this.terminalTailHelpers[index];
+        this.emitLabel(helper.label);
+        this.compileStatements(helper.body);
+        this.optimizations.push({
+          name: "local-terminal-tail",
+          detail: `Emitted local terminal tail for branch at line ${helper.line}.`
+        });
+      }
       for (const helper of this.displayHelpers.values()) {
         this.emitLabel(helper.label);
         this.compilePackedDisplayBody(helper.display, helper.line, false);
@@ -7157,9 +7188,11 @@ var MKProEmulatorBundle = (() => {
     }
     compileIf(statement, line) {
       if (this.compileArithmeticIfSelect(statement)) return;
+      if (this.compileGuardedUpdateSelector(statement)) return;
       if (this.compileDirectTerminalIfBranch(statement, line)) return;
       if (this.compileMembershipClearReuse(statement, line)) return;
       if (this.compileMembershipSetReuse(statement, line)) return;
+      if (this.compileLocalTerminalElseTail(statement, line)) return;
       const falseLabel = this.freshLabel("if_false");
       const thenTerminates = this.statementsTerminate(statement.thenBody);
       const endLabel = thenTerminates ? void 0 : this.freshLabel("if_end");
@@ -7187,14 +7220,14 @@ var MKProEmulatorBundle = (() => {
       const preloadedConstants = new Set(Object.keys(this.allocation.constants));
       const originalCost = estimateConditionCost(statement.condition, this.ast, preloadedConstants);
       const candidates = [];
-      if (thenTarget !== void 0 && statement.elseBody !== void 0) {
+      if (thenTarget !== void 0 && (statement.elseBody !== void 0 || this.loweringOptions.aggressiveTerminalDirect === true)) {
         const condition = invertCondition(statement.condition);
         candidates.push({
           branchWhen: "true",
           target: thenTarget,
           condition,
           estimatedCost: estimateConditionCost(condition, this.ast, preloadedConstants),
-          ordinaryCost: originalCost + 1
+          ordinaryCost: originalCost + 2
         });
       }
       if (elseTarget !== void 0) {
@@ -7230,6 +7263,30 @@ var MKProEmulatorBundle = (() => {
       const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
       if (proc === void 0 || this.inlineProcNames.has(proc.name)) return void 0;
       return this.statementsTerminate(proc.body) ? proc.name : void 0;
+    }
+    compileLocalTerminalElseTail(statement, line) {
+      if (statement.elseBody === void 0) return false;
+      if (this.statementsTerminate(statement.thenBody)) return false;
+      if (!this.statementsTerminate(statement.elseBody)) return false;
+      const helper = this.ensureTerminalTailHelper(statement.elseBody, line);
+      this.compileCondition(statement.condition, helper.label, line);
+      this.compileStatements(statement.thenBody);
+      this.optimizations.push({
+        name: "local-terminal-tail-branch",
+        detail: `Branched to a local terminal tail for else path at line ${line}.`
+      });
+      return true;
+    }
+    ensureTerminalTailHelper(body, line) {
+      const existing = this.terminalTailHelpers.find((helper2) => statementListsEqual(helper2.body, body));
+      if (existing !== void 0) return existing;
+      const helper = {
+        body,
+        label: this.freshLabel("terminal_tail"),
+        line
+      };
+      this.terminalTailHelpers.push(helper);
+      return helper;
     }
     compileMembershipClearReuse(statement, line) {
       const clearPrefix = this.membershipClearPrefix(statement.thenBody);
@@ -7419,6 +7476,42 @@ var MKProEmulatorBundle = (() => {
       this.optimizations.push({
         name: selected.name,
         detail: `${selected.detail} at line ${statement.line} (${selectedCost} vs ${ordinaryCost} estimated steps).`
+      });
+      return true;
+    }
+    compileGuardedUpdateSelector(statement) {
+      const scratch = ifSelectorScratchName(statement);
+      if (this.allocation.registers[scratch] === void 0) return false;
+      const candidate = buildGuardedUpdateSelectorCandidate(statement, this.ast, {
+        negativeZeroDegree: this.allocation.negativeZeroDegree !== void 0
+      });
+      if (candidate === void 0) return false;
+      const ordinaryCost = estimateOrdinaryGuardedUpdateCost(statement, this.ast);
+      const selectedCost = estimateGuardedUpdateSelectorCost(candidate, scratch);
+      if (selectedCost >= ordinaryCost) {
+        this.candidates.push({
+          site: `if@${statement.line}`,
+          variant: candidate.name,
+          steps: selectedCost,
+          selected: false,
+          reason: `Guarded update selector estimated at ${selectedCost} cells; ordinary branched form was shorter (${ordinaryCost}).`
+        });
+        return false;
+      }
+      this.compileExpression(candidate.selector);
+      this.emitStore(scratch, `${candidate.name} selector`, statement.line);
+      const selector = { kind: "identifier", name: scratch };
+      for (const update of candidate.updates) {
+        this.compileExpression(maskedGuardedUpdateExpression(update, selector));
+        this.emitStore(update.target, `${candidate.name} ${update.target}`, statement.line);
+      }
+      this.optimizations.push({
+        name: "branch-removal",
+        detail: `${candidate.detail} at line ${statement.line}; emitted masked guarded updates.`
+      });
+      this.optimizations.push({
+        name: candidate.name,
+        detail: `${candidate.detail} at line ${statement.line} (${selectedCost} vs ${ordinaryCost} estimated steps).`
       });
       return true;
     }
@@ -8905,6 +8998,7 @@ var MKProEmulatorBundle = (() => {
     collectBitMaskScratchVariables(ast, variables);
     collectSpatialHitScratchVariables(ast, variables);
     collectSpatialCountScratchVariables(ast, variables);
+    collectGuardedUpdateScratchVariables(ast, variables);
     const registers = {};
     const used = /* @__PURE__ */ new Set();
     for (const variable of variables) {
@@ -9022,6 +9116,13 @@ var MKProEmulatorBundle = (() => {
       return void 0;
     }
     if (variable.startsWith(BIT_MASK_SCRATCH_PREFIX)) {
+      for (let i = REGISTER_ORDER.length - 1; i >= 0; i -= 1) {
+        const candidate = REGISTER_ORDER[i];
+        if (!used.has(candidate)) return candidate;
+      }
+      return void 0;
+    }
+    if (variable.startsWith(IF_SELECTOR_SCRATCH_PREFIX)) {
       for (let i = REGISTER_ORDER.length - 1; i >= 0; i -= 1) {
         const candidate = REGISTER_ORDER[i];
         if (!used.has(candidate)) return candidate;
@@ -9180,6 +9281,10 @@ var MKProEmulatorBundle = (() => {
     const selected = buildBranchRemovalCandidate(statement, ast, { negativeZeroDegree: true });
     if (selected !== void 0 && selected.name.startsWith("negative-zero-threshold-")) {
       return estimateExpressionCost2(selected.expr) + 1 < estimateOrdinaryIfCost(statement, ast);
+    }
+    const guarded = buildGuardedUpdateSelectorCandidate(statement, ast, { negativeZeroDegree: true });
+    if (guarded?.usesNegativeZero === true) {
+      return estimateGuardedUpdateSelectorCost(guarded, ifSelectorScratchName(statement)) < estimateOrdinaryGuardedUpdateCost(statement, ast);
     }
     const threshold = matchNegativeZeroThresholdCondition(statement.condition, ast);
     if (threshold === void 0) return false;
@@ -9866,6 +9971,36 @@ var MKProEmulatorBundle = (() => {
     for (const scratch of spatialCountScratchNames()) variables.add(scratch);
     if (countCalls(ast, "line_count") > 1) variables.add(spatialCountMaskScratchName());
   }
+  function collectGuardedUpdateScratchVariables(ast, variables) {
+    const visit = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "if") {
+          if (guardedUpdateSelectorProfitable(statement, ast, { negativeZeroDegree: true })) {
+            variables.add(ifSelectorScratchName(statement));
+          }
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "loop") visit(statement.body);
+        if (statement.kind === "switch") {
+          for (const switchCase of statement.cases) visit(switchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) visit(proc.body);
+    for (const block of ast.blocks) visit(block.body);
+  }
+  function guardedUpdateSelectorProfitable(statement, ast, options = {}) {
+    const candidate = buildGuardedUpdateSelectorCandidate(statement, ast, options);
+    if (candidate === void 0) return false;
+    return estimateGuardedUpdateSelectorCost(candidate, ifSelectorScratchName(statement)) < estimateOrdinaryGuardedUpdateCost(statement, ast);
+  }
   function isReusableCellMaskPair(first, second) {
     const used = matchCellHelperCall(first.expr, ["cell_used", "cell_has"]);
     const mark = matchCellHelperCall(second.expr, ["cell_mark", "cell_set"]);
@@ -10282,6 +10417,49 @@ var MKProEmulatorBundle = (() => {
   }
   function buildBranchRemovalCandidate(statement, ast, options = {}) {
     return buildTerminalSelectCandidate(statement, ast, options) ?? buildComparisonBooleanCandidate(statement) ?? buildBooleanAlgebraCandidate(statement, ast) ?? buildAbsCandidate(statement) ?? buildMaxMinCandidate(statement) ?? buildClampCandidate(statement) ?? buildSaturatingUpdateCandidate(statement, ast) ?? buildBooleanSignToggleCandidate(statement, ast) ?? buildBooleanUpdateCandidate(statement, ast) ?? buildArithmeticIfSelect(statement, ast, options);
+  }
+  function buildGuardedUpdateSelectorCandidate(statement, ast, options = {}) {
+    const updates = guardedUpdates(statement);
+    if (updates === void 0) return void 0;
+    const booleanSelector = booleanSelectorExpression(statement.condition, ast);
+    const negativeZeroSelector = options.negativeZeroDegree ? negativeZeroThresholdSelectorExpression(statement.condition, ast) : void 0;
+    const selector = booleanSelector ?? negativeZeroSelector ?? comparisonSelectorExpression(statement.condition);
+    if (selector === void 0) return void 0;
+    const usesNegativeZero = booleanSelector === void 0 && negativeZeroSelector !== void 0;
+    if (!usesNegativeZero && updates.length < 2) return void 0;
+    return {
+      selector,
+      updates,
+      name: usesNegativeZero ? "negative-zero-threshold-update" : "multi-guarded-update",
+      detail: usesNegativeZero ? "Replaced threshold guarded update with a negative-zero selector" : "Replaced guarded updates with one stored arithmetic selector",
+      usesNegativeZero
+    };
+  }
+  function guardedUpdates(statement) {
+    if (statement.elseBody !== void 0 || statement.thenBody.length === 0) return void 0;
+    const updates = [];
+    for (const inner of statement.thenBody) {
+      if (inner.kind !== "assign") return void 0;
+      const plus = matchTargetPlusDelta(inner.expr, inner.target);
+      if (plus !== void 0) {
+        if (!expressionPureForSubstitution(plus)) return void 0;
+        updates.push({ target: inner.target, op: "+", delta: plus });
+        continue;
+      }
+      const minus = matchTargetMinusDelta(inner.expr, inner.target);
+      if (minus !== void 0) {
+        if (!expressionPureForSubstitution(minus)) return void 0;
+        updates.push({ target: inner.target, op: "-", delta: minus });
+        continue;
+      }
+      return void 0;
+    }
+    return updates;
+  }
+  function maskedGuardedUpdateExpression(update, selector) {
+    const current = { kind: "identifier", name: update.target };
+    const delta = multiplyExpressions2(update.delta, selector);
+    return update.op === "+" ? addExpressions2(current, delta) : subtractExpressions2(current, delta);
   }
   function buildDoubleClampCandidate(first, second) {
     const lower = clampBound(first, "lower");
@@ -10859,6 +11037,9 @@ var MKProEmulatorBundle = (() => {
   function bitMaskScratchName(statement) {
     return `${BIT_MASK_SCRATCH_PREFIX}${statement.line}`;
   }
+  function ifSelectorScratchName(statement) {
+    return `${IF_SELECTOR_SCRATCH_PREFIX}${statement.line}`;
+  }
   function matchBitMembershipCondition(condition) {
     if (condition.op !== "!=" || !isZeroExpression(condition.right)) return void 0;
     const test = condition.left;
@@ -11391,6 +11572,23 @@ var MKProEmulatorBundle = (() => {
     if (!Number.isFinite(elseCost)) return Number.POSITIVE_INFINITY;
     return estimateConditionCost(statement.condition, ast) + thenCost + 2 + elseCost;
   }
+  function estimateOrdinaryGuardedUpdateCost(statement, ast) {
+    if (statement.elseBody !== void 0 || statement.thenBody.length === 0) return Number.POSITIVE_INFINITY;
+    let bodyCost = 0;
+    for (const inner of statement.thenBody) {
+      const cost = estimateSimpleStatementCost(inner, ast);
+      if (!Number.isFinite(cost)) return Number.POSITIVE_INFINITY;
+      bodyCost += cost;
+    }
+    return estimateConditionCost(statement.condition, ast) + bodyCost;
+  }
+  function estimateGuardedUpdateSelectorCost(candidate, scratch) {
+    const selector = { kind: "identifier", name: scratch };
+    return estimateExpressionCost2(candidate.selector) + 1 + candidate.updates.reduce(
+      (sum, update) => sum + estimateExpressionCost2(maskedGuardedUpdateExpression(update, selector)) + 1,
+      0
+    );
+  }
   function estimateSimpleStatementCost(statement, ast) {
     switch (statement.kind) {
       case "assign":
@@ -11588,7 +11786,10 @@ var MKProEmulatorBundle = (() => {
         "terminal-rule-tail-call",
         "tail-call-layout",
         "terminal-if-direct-branch",
-        "terminal-branch-end-elision"
+        "terminal-branch-end-elision",
+        "local-terminal-tail",
+        "local-terminal-tail-branch",
+        "late-layout-if-variant"
       ],
       detail: "Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops."
     },
@@ -11666,7 +11867,8 @@ var MKProEmulatorBundle = (() => {
         "negative-zero-threshold-selector",
         "negative-zero-threshold-select",
         "negative-zero-threshold-terminal-select",
-        "negative-zero-threshold-flow"
+        "negative-zero-threshold-flow",
+        "negative-zero-threshold-update"
       ],
       detail: "Uses a compiler-owned 1|-00 preload plus \u0412\u2191 normalization to build a 0/1 selector or flow test for bounded nonnegative threshold branches when that beats ordinary branching."
     },
@@ -11678,6 +11880,8 @@ var MKProEmulatorBundle = (() => {
       activeWhen: [
         "arithmetic-if-update",
         "arithmetic-if-sign-toggle",
+        "multi-guarded-update",
+        "negative-zero-threshold-update",
         "hex-mantissa-arithmetic"
       ],
       detail: "Replaces conditional +=/-= and sign toggles guarded by a proved boolean with masked arithmetic."

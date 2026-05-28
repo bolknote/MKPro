@@ -831,6 +831,107 @@ program DirectTerminalBranch {
     expect(result.report.optimizations.some((item) => item.name === "terminal-if-direct-branch")).toBe(true);
   });
 
+  it("branches to a local terminal tail for multi-command else endings", () => {
+    const result = compileOk(`
+program LocalTerminalTail {
+  state {
+    score: counter 0..9 = 0
+    fail_value: packed = -999
+  }
+  screen fail_screen {
+    show fail_value
+  }
+  turn {
+    if score < 5 {
+      score++
+    }
+    else {
+      show fail_screen
+      stop -999
+    }
+    stop score
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "local-terminal-tail-branch")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "local-terminal-tail")).toBe(true);
+  });
+
+  it("uses one selector for multiple guarded updates when shorter", () => {
+    const result = compileOk(`
+program BooleanMultiUpdate {
+  state {
+    flag: flag = 0
+    a: counter 0..9 = 1
+    b: counter 0..9 = 2
+  }
+  turn {
+    if flag == 1 {
+      a++
+      b--
+    }
+    stop a + b
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "multi-guarded-update")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "branch-removal")).toBe(true);
+  });
+
+  it("keeps negative-zero guarded updates behind the cost gate", () => {
+    const result = compileOk(`
+program NegativeZeroGuardedUpdate {
+  state {
+    score: counter 0..999 = 0
+    bonus: counter 0..99 = 0
+  }
+  turn {
+    if score >= 100 {
+      bonus++
+    }
+    stop bonus
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "negative-zero-threshold-update")).toBe(false);
+    expect(result.report.preloads.some((item) => item.value === "1|-00")).toBe(false);
+  });
+
+  it("selects aggressive terminal-if lowering only after full layout wins", () => {
+    const result = compileOk(`
+program LateLayoutIfVariant {
+  state {
+    strength: counter -9..9 = 0
+    value: counter 0..9 = 0
+    fail_value: packed = -999
+  }
+  screen fail_screen {
+    show fail_value
+  }
+  turn {
+    if strength <= 0 {
+      exhausted
+    }
+    value++
+    if value >= 9 {
+      exhausted
+    }
+    stop value
+  }
+  rule exhausted {
+    show fail_screen
+    stop -999
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "late-layout-if-variant")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "terminal-if-direct-branch")).toBe(true);
+  });
+
   it("extends terminal-select to comparison conditions when branchless is shorter", () => {
     const result = compileOk(`
 program BranchlessCompare {

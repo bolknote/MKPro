@@ -670,7 +670,16 @@ candidates:
   whenever the normal condition is shorter;
 - terminal branch simplification: `if/else` lowering omits an unreachable
   `БП if_end` after a terminal then-branch, and may branch directly to a
-  reusable terminal rule instead of landing on a one-command branch stub;
+  reusable terminal rule instead of landing on a one-command branch stub. For
+  multi-command terminal `else` endings, the compiler may branch to a local
+  terminal tail so the continuing `then` path does not pay a skip-over jump.
+  A late layout check can try a more aggressive terminal-if lowering and keep
+  it only when the full optimized layout is smaller;
+- multi-update guard selection: one-legged `if` bodies made only of pure
+  `+=`/`-=` updates may store one selector in a compiler scratch register and
+  apply it to several updates when that beats the branch. Negative-zero
+  threshold selectors are costed for the same update path but remain gated
+  because ordinary branches are usually shorter there;
 - cell membership clear reuse: when `if cell in cells` immediately clears that
   same cell, the compiler reuses the successful mask instead of recomputing it;
 - adjacent bit-set reuse: consecutive `cells += cell` updates compute the cell

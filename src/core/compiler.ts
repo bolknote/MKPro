@@ -94,6 +94,7 @@ const SWITCH_SCRATCH_PREFIX = "__switch_";
 const DISPATCH_SCRATCH_PREFIX = "__dispatch_";
 const TICTACTOE_MASK_SCRATCH_PREFIX = "__ttt_mask_";
 const BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
+const IF_SELECTOR_SCRATCH_PREFIX = "__if_selector_";
 const CELL_MAP_PREFIX = "__cell_map_";
 const SPATIAL_HIT_SCRATCH_PREFIX = "__spatial_hit_";
 const SPATIAL_COUNT_SCRATCH_PREFIX = "__spatial_count_";
@@ -113,9 +114,35 @@ export class CompileError extends Error {
   }
 }
 
+interface LoweringOptions {
+  aggressiveTerminalDirect?: boolean;
+}
+
 export function compileMKPro(
   source: string,
   options: Partial<CompileOptions> = {},
+): CompileResult {
+  const primary = compileMKProOnce(source, options, {});
+  let aggressive: CompileResult | undefined;
+  try {
+    aggressive = compileMKProOnce(source, options, { aggressiveTerminalDirect: true });
+  } catch {
+    aggressive = undefined;
+  }
+  if (aggressive !== undefined && aggressive.steps.length < primary.steps.length) {
+    aggressive.report.optimizations.push({
+      name: "late-layout-if-variant",
+      detail: `Selected aggressive terminal-if lowering after full layout (${aggressive.steps.length} vs ${primary.steps.length} cells).`,
+    });
+    return aggressive;
+  }
+  return primary;
+}
+
+function compileMKProOnce(
+  source: string,
+  options: Partial<CompileOptions>,
+  loweringOptions: LoweringOptions,
 ): CompileResult {
   const ast = parseProgram(source);
   const opts: CompileOptions = { ...DEFAULT_OPTIONS, ...options };
@@ -157,6 +184,7 @@ export function compileMKPro(
     optimizations,
     warnings,
     candidates,
+    loweringOptions,
   );
 
   context.compileProgram();
@@ -230,6 +258,7 @@ function visiblePublicRegisters(
       !name.startsWith(DISPATCH_SCRATCH_PREFIX) &&
       !name.startsWith(TICTACTOE_MASK_SCRATCH_PREFIX) &&
       !name.startsWith(BIT_MASK_SCRATCH_PREFIX) &&
+      !name.startsWith(IF_SELECTOR_SCRATCH_PREFIX) &&
       !name.startsWith(CELL_MAP_PREFIX) &&
       !name.startsWith(SPATIAL_HIT_SCRATCH_PREFIX) &&
       !name.startsWith(SPATIAL_COUNT_SCRATCH_PREFIX)
@@ -851,6 +880,7 @@ class EmitContext {
   private readonly optimizations: AppliedOptimization[];
   private readonly warnings: string[];
   private readonly candidates: CandidateReport[];
+  private readonly loweringOptions: LoweringOptions;
   private readonly inlineProcNames: Set<string>;
   private readonly readCounts: Map<string, number>;
   private readonly displayUseCounts: Map<string, number>;
@@ -876,6 +906,7 @@ class EmitContext {
     operation: "line_count" | "neighbor_count";
     line?: number;
   }>();
+  private readonly terminalTailHelpers: Array<{ body: StatementAst[]; label: string; line: number }> = [];
   private currentXVariable: string | undefined;
   private currentXKnownZero = false;
   private emittingExpressionHelper = false;
@@ -889,6 +920,7 @@ class EmitContext {
     optimizations: AppliedOptimization[],
     warnings: string[],
     candidates: CandidateReport[],
+    loweringOptions: LoweringOptions,
   ) {
     this.ast = ast;
     this.allocation = allocation;
@@ -898,6 +930,7 @@ class EmitContext {
     this.optimizations = optimizations;
     this.warnings = warnings;
     this.candidates = candidates;
+    this.loweringOptions = loweringOptions;
     this.inlineProcNames = findSingleUseProcNames(ast);
     this.readCounts = collectVariableReadCounts(ast);
     this.displayUseCounts = collectDisplayUseCounts(ast);
@@ -944,6 +977,15 @@ class EmitContext {
   }
 
   private compileRuntimeHelpers(): void {
+    for (let index = 0; index < this.terminalTailHelpers.length; index += 1) {
+      const helper = this.terminalTailHelpers[index]!;
+      this.emitLabel(helper.label);
+      this.compileStatements(helper.body);
+      this.optimizations.push({
+        name: "local-terminal-tail",
+        detail: `Emitted local terminal tail for branch at line ${helper.line}.`,
+      });
+    }
     for (const helper of this.displayHelpers.values()) {
       this.emitLabel(helper.label);
       this.compilePackedDisplayBody(helper.display, helper.line, false);
@@ -1374,9 +1416,11 @@ class EmitContext {
     line: number,
   ): void {
     if (this.compileArithmeticIfSelect(statement)) return;
+    if (this.compileGuardedUpdateSelector(statement)) return;
     if (this.compileDirectTerminalIfBranch(statement, line)) return;
     if (this.compileMembershipClearReuse(statement, line)) return;
     if (this.compileMembershipSetReuse(statement, line)) return;
+    if (this.compileLocalTerminalElseTail(statement, line)) return;
 
     const falseLabel = this.freshLabel("if_false");
     const thenTerminates = this.statementsTerminate(statement.thenBody);
@@ -1417,14 +1461,17 @@ class EmitContext {
       ordinaryCost: number;
     }> = [];
 
-    if (thenTarget !== undefined && statement.elseBody !== undefined) {
+    if (
+      thenTarget !== undefined &&
+      (statement.elseBody !== undefined || this.loweringOptions.aggressiveTerminalDirect === true)
+    ) {
       const condition = invertCondition(statement.condition);
       candidates.push({
         branchWhen: "true",
         target: thenTarget,
         condition,
         estimatedCost: estimateConditionCost(condition, this.ast, preloadedConstants),
-        ordinaryCost: originalCost + 1,
+        ordinaryCost: originalCost + 2,
       });
     }
     if (elseTarget !== undefined) {
@@ -1467,6 +1514,36 @@ class EmitContext {
     const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
     if (proc === undefined || this.inlineProcNames.has(proc.name)) return undefined;
     return this.statementsTerminate(proc.body) ? proc.name : undefined;
+  }
+
+  private compileLocalTerminalElseTail(
+    statement: Extract<StatementAst, { kind: "if" }>,
+    line: number,
+  ): boolean {
+    if (statement.elseBody === undefined) return false;
+    if (this.statementsTerminate(statement.thenBody)) return false;
+    if (!this.statementsTerminate(statement.elseBody)) return false;
+
+    const helper = this.ensureTerminalTailHelper(statement.elseBody, line);
+    this.compileCondition(statement.condition, helper.label, line);
+    this.compileStatements(statement.thenBody);
+    this.optimizations.push({
+      name: "local-terminal-tail-branch",
+      detail: `Branched to a local terminal tail for else path at line ${line}.`,
+    });
+    return true;
+  }
+
+  private ensureTerminalTailHelper(body: StatementAst[], line: number): { body: StatementAst[]; label: string; line: number } {
+    const existing = this.terminalTailHelpers.find((helper) => statementListsEqual(helper.body, body));
+    if (existing !== undefined) return existing;
+    const helper = {
+      body,
+      label: this.freshLabel("terminal_tail"),
+      line,
+    };
+    this.terminalTailHelpers.push(helper);
+    return helper;
   }
 
   private compileMembershipClearReuse(
@@ -1716,6 +1793,45 @@ class EmitContext {
     this.optimizations.push({
       name: selected.name,
       detail: `${selected.detail} at line ${statement.line} (${selectedCost} vs ${ordinaryCost} estimated steps).`,
+    });
+    return true;
+  }
+
+  private compileGuardedUpdateSelector(statement: Extract<StatementAst, { kind: "if" }>): boolean {
+    const scratch = ifSelectorScratchName(statement);
+    if (this.allocation.registers[scratch] === undefined) return false;
+    const candidate = buildGuardedUpdateSelectorCandidate(statement, this.ast, {
+      negativeZeroDegree: this.allocation.negativeZeroDegree !== undefined,
+    });
+    if (candidate === undefined) return false;
+
+    const ordinaryCost = estimateOrdinaryGuardedUpdateCost(statement, this.ast);
+    const selectedCost = estimateGuardedUpdateSelectorCost(candidate, scratch);
+    if (selectedCost >= ordinaryCost) {
+      this.candidates.push({
+        site: `if@${statement.line}`,
+        variant: candidate.name,
+        steps: selectedCost,
+        selected: false,
+        reason: `Guarded update selector estimated at ${selectedCost} cells; ordinary branched form was shorter (${ordinaryCost}).`,
+      });
+      return false;
+    }
+
+    this.compileExpression(candidate.selector);
+    this.emitStore(scratch, `${candidate.name} selector`, statement.line);
+    const selector: ExpressionAst = { kind: "identifier", name: scratch };
+    for (const update of candidate.updates) {
+      this.compileExpression(maskedGuardedUpdateExpression(update, selector));
+      this.emitStore(update.target, `${candidate.name} ${update.target}`, statement.line);
+    }
+    this.optimizations.push({
+      name: "branch-removal",
+      detail: `${candidate.detail} at line ${statement.line}; emitted masked guarded updates.`,
+    });
+    this.optimizations.push({
+      name: candidate.name,
+      detail: `${candidate.detail} at line ${statement.line} (${selectedCost} vs ${ordinaryCost} estimated steps).`,
     });
     return true;
   }
@@ -3497,6 +3613,7 @@ function allocateRegisters(
   collectBitMaskScratchVariables(ast, variables);
   collectSpatialHitScratchVariables(ast, variables);
   collectSpatialCountScratchVariables(ast, variables);
+  collectGuardedUpdateScratchVariables(ast, variables);
 
   const registers: Record<string, RegisterName> = {};
   const used = new Set<RegisterName>();
@@ -3636,6 +3753,13 @@ function pickRegister(
     return undefined;
   }
   if (variable.startsWith(BIT_MASK_SCRATCH_PREFIX)) {
+    for (let i = REGISTER_ORDER.length - 1; i >= 0; i -= 1) {
+      const candidate = REGISTER_ORDER[i]!;
+      if (!used.has(candidate)) return candidate;
+    }
+    return undefined;
+  }
+  if (variable.startsWith(IF_SELECTOR_SCRATCH_PREFIX)) {
     for (let i = REGISTER_ORDER.length - 1; i >= 0; i -= 1) {
       const candidate = REGISTER_ORDER[i]!;
       if (!used.has(candidate)) return candidate;
@@ -3802,6 +3926,11 @@ function statementNeedsNegativeZeroDegree(
   const selected = buildBranchRemovalCandidate(statement, ast, { negativeZeroDegree: true });
   if (selected !== undefined && selected.name.startsWith("negative-zero-threshold-")) {
     return estimateExpressionCost(selected.expr) + 1 < estimateOrdinaryIfCost(statement, ast);
+  }
+  const guarded = buildGuardedUpdateSelectorCandidate(statement, ast, { negativeZeroDegree: true });
+  if (guarded?.usesNegativeZero === true) {
+    return estimateGuardedUpdateSelectorCost(guarded, ifSelectorScratchName(statement)) <
+      estimateOrdinaryGuardedUpdateCost(statement, ast);
   }
   const threshold = matchNegativeZeroThresholdCondition(statement.condition, ast);
   if (threshold === undefined) return false;
@@ -4521,6 +4650,43 @@ function collectSpatialCountScratchVariables(ast: ProgramAst, variables: Set<str
   if (countCalls(ast, "line_count") > 1) variables.add(spatialCountMaskScratchName());
 }
 
+function collectGuardedUpdateScratchVariables(ast: ProgramAst, variables: Set<string>): void {
+  const visit = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "if") {
+        if (guardedUpdateSelectorProfitable(statement, ast, { negativeZeroDegree: true })) {
+          variables.add(ifSelectorScratchName(statement));
+        }
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "switch") {
+        for (const switchCase of statement.cases) visit(switchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  for (const block of ast.blocks) visit(block.body);
+}
+
+function guardedUpdateSelectorProfitable(
+  statement: Extract<StatementAst, { kind: "if" }>,
+  ast: ProgramAst,
+  options: { negativeZeroDegree?: boolean } = {},
+): boolean {
+  const candidate = buildGuardedUpdateSelectorCandidate(statement, ast, options);
+  if (candidate === undefined) return false;
+  return estimateGuardedUpdateSelectorCost(candidate, ifSelectorScratchName(statement)) <
+    estimateOrdinaryGuardedUpdateCost(statement, ast);
+}
+
 function isReusableCellMaskPair(
   first: Extract<StatementAst, { kind: "assign" }>,
   second: Extract<StatementAst, { kind: "assign" }>,
@@ -5057,6 +5223,20 @@ function uniqueRoles(roles: CellRole[]): CellRole[] {
 
 type BranchRemovalCandidate = BranchAssignCandidate | BranchTerminalCandidate;
 
+interface GuardedUpdate {
+  target: string;
+  op: "+" | "-";
+  delta: ExpressionAst;
+}
+
+interface GuardedUpdateSelectorCandidate {
+  selector: ExpressionAst;
+  updates: GuardedUpdate[];
+  name: string;
+  detail: string;
+  usesNegativeZero: boolean;
+}
+
 interface BranchAssignCandidate {
   kind: "assign";
   target: string;
@@ -5087,6 +5267,64 @@ function buildBranchRemovalCandidate(
     buildBooleanSignToggleCandidate(statement, ast) ??
     buildBooleanUpdateCandidate(statement, ast) ??
     buildArithmeticIfSelect(statement, ast, options);
+}
+
+function buildGuardedUpdateSelectorCandidate(
+  statement: Extract<StatementAst, { kind: "if" }>,
+  ast: ProgramAst,
+  options: { negativeZeroDegree?: boolean } = {},
+): GuardedUpdateSelectorCandidate | undefined {
+  const updates = guardedUpdates(statement);
+  if (updates === undefined) return undefined;
+
+  const booleanSelector = booleanSelectorExpression(statement.condition, ast);
+  const negativeZeroSelector = options.negativeZeroDegree
+    ? negativeZeroThresholdSelectorExpression(statement.condition, ast)
+    : undefined;
+  const selector = booleanSelector ?? negativeZeroSelector ?? comparisonSelectorExpression(statement.condition);
+  if (selector === undefined) return undefined;
+
+  const usesNegativeZero = booleanSelector === undefined && negativeZeroSelector !== undefined;
+  if (!usesNegativeZero && updates.length < 2) return undefined;
+  return {
+    selector,
+    updates,
+    name: usesNegativeZero ? "negative-zero-threshold-update" : "multi-guarded-update",
+    detail: usesNegativeZero
+      ? "Replaced threshold guarded update with a negative-zero selector"
+      : "Replaced guarded updates with one stored arithmetic selector",
+    usesNegativeZero,
+  };
+}
+
+function guardedUpdates(statement: Extract<StatementAst, { kind: "if" }>): GuardedUpdate[] | undefined {
+  if (statement.elseBody !== undefined || statement.thenBody.length === 0) return undefined;
+  const updates: GuardedUpdate[] = [];
+  for (const inner of statement.thenBody) {
+    if (inner.kind !== "assign") return undefined;
+    const plus = matchTargetPlusDelta(inner.expr, inner.target);
+    if (plus !== undefined) {
+      if (!expressionPureForSubstitution(plus)) return undefined;
+      updates.push({ target: inner.target, op: "+", delta: plus });
+      continue;
+    }
+    const minus = matchTargetMinusDelta(inner.expr, inner.target);
+    if (minus !== undefined) {
+      if (!expressionPureForSubstitution(minus)) return undefined;
+      updates.push({ target: inner.target, op: "-", delta: minus });
+      continue;
+    }
+    return undefined;
+  }
+  return updates;
+}
+
+function maskedGuardedUpdateExpression(update: GuardedUpdate, selector: ExpressionAst): ExpressionAst {
+  const current: ExpressionAst = { kind: "identifier", name: update.target };
+  const delta = multiplyExpressions(update.delta, selector);
+  return update.op === "+"
+    ? addExpressions(current, delta)
+    : subtractExpressions(current, delta);
 }
 
 function buildDoubleClampCandidate(
@@ -5816,6 +6054,10 @@ function bitMaskScratchName(statement: StatementAst): string {
   return `${BIT_MASK_SCRATCH_PREFIX}${statement.line}`;
 }
 
+function ifSelectorScratchName(statement: StatementAst): string {
+  return `${IF_SELECTOR_SCRATCH_PREFIX}${statement.line}`;
+}
+
 function matchBitMembershipCondition(condition: ConditionAst): BitMembershipCondition | undefined {
   if (condition.op !== "!=" || !isZeroExpression(condition.right)) return undefined;
   const test = condition.left;
@@ -6499,6 +6741,26 @@ function estimateOrdinaryIfCost(statement: Extract<StatementAst, { kind: "if" }>
   return estimateConditionCost(statement.condition, ast) + thenCost + 2 + elseCost;
 }
 
+function estimateOrdinaryGuardedUpdateCost(statement: Extract<StatementAst, { kind: "if" }>, ast: ProgramAst): number {
+  if (statement.elseBody !== undefined || statement.thenBody.length === 0) return Number.POSITIVE_INFINITY;
+  let bodyCost = 0;
+  for (const inner of statement.thenBody) {
+    const cost = estimateSimpleStatementCost(inner, ast);
+    if (!Number.isFinite(cost)) return Number.POSITIVE_INFINITY;
+    bodyCost += cost;
+  }
+  return estimateConditionCost(statement.condition, ast) + bodyCost;
+}
+
+function estimateGuardedUpdateSelectorCost(candidate: GuardedUpdateSelectorCandidate, scratch: string): number {
+  const selector: ExpressionAst = { kind: "identifier", name: scratch };
+  return estimateExpressionCost(candidate.selector) + 1 +
+    candidate.updates.reduce(
+      (sum, update) => sum + estimateExpressionCost(maskedGuardedUpdateExpression(update, selector)) + 1,
+      0,
+    );
+}
+
 function estimateSimpleStatementCost(statement: StatementAst, ast: ProgramAst): number {
   switch (statement.kind) {
     case "assign":
@@ -6759,6 +7021,9 @@ const optimizerCapabilities: Array<{
       "tail-call-layout",
       "terminal-if-direct-branch",
       "terminal-branch-end-elision",
+      "local-terminal-tail",
+      "local-terminal-tail-branch",
+      "late-layout-if-variant",
     ],
     detail: "Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.",
   },
@@ -6837,6 +7102,7 @@ const optimizerCapabilities: Array<{
       "negative-zero-threshold-select",
       "negative-zero-threshold-terminal-select",
       "negative-zero-threshold-flow",
+      "negative-zero-threshold-update",
     ],
     detail: "Uses a compiler-owned 1|-00 preload plus В↑ normalization to build a 0/1 selector or flow test for bounded nonnegative threshold branches when that beats ordinary branching.",
   },
@@ -6848,6 +7114,8 @@ const optimizerCapabilities: Array<{
     activeWhen: [
       "arithmetic-if-update",
       "arithmetic-if-sign-toggle",
+      "multi-guarded-update",
+      "negative-zero-threshold-update",
       "hex-mantissa-arithmetic",
     ],
     detail: "Replaces conditional +=/-= and sign toggles guarded by a proved boolean with masked arithmetic.",
