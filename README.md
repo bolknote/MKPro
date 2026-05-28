@@ -108,6 +108,8 @@ All top-level `examples/*.mkpro` programs are runnable MK-Pro programs. They cov
   command branch compiles smaller than the original.
 - `examples/dungeon.mkpro`: Lord_BSS corridor dungeon port that fits the original.
 - `examples/game-100-pig.mkpro`: Anvarov dice game port that fits the original.
+- `examples/minesweeper-9x7.mkpro`: Lord_BSS Sapper port whose 9x7 paper-board
+  probes match the original 104-cell listing.
 - `examples/minesweeper-9x9.mkpro`: Anvarov Minesweeper port using shared
   board-hit helpers and fitting the original.
 - `examples/raja-yoga.mkpro`: Anvarov one-dimensional mask game port that fits

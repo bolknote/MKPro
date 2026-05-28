@@ -49,6 +49,7 @@ describe("MK-Pro compiler", () => {
     expect(RUNNABLE_EXAMPLES).toContain("examples/dungeon.mkpro");
     expect(RUNNABLE_EXAMPLES).toContain("examples/game-100-pig.mkpro");
     expect(RUNNABLE_EXAMPLES).toContain("examples/lunar.mkpro");
+    expect(RUNNABLE_EXAMPLES).toContain("examples/minesweeper-9x7.mkpro");
     expect(RUNNABLE_EXAMPLES).toContain("examples/minesweeper-9x9.mkpro");
     expect(RUNNABLE_EXAMPLES).toContain("examples/raja-yoga.mkpro");
     expect(RUNNABLE_EXAMPLES).toContain("examples/sea-battle.mkpro");
@@ -91,6 +92,7 @@ describe("MK-Pro compiler", () => {
     expect(checked).toContain("examples/dungeon.mkpro");
     expect(checked).toContain("examples/game-100-pig.mkpro");
     expect(checked).toContain("examples/lunar.mkpro");
+    expect(checked).toContain("examples/minesweeper-9x7.mkpro");
     expect(checked).toContain("examples/minesweeper-9x9.mkpro");
     expect(checked).toContain("examples/raja-yoga.mkpro");
     expect(checked).toContain("examples/sea-battle.mkpro");

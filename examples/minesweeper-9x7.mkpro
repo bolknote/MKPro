@@ -1,0 +1,44 @@
+reference lordbss_pmk39
+
+// Based on Lord_BSS pmk39, "Sapper" by Oleg Bulychev. The original 104-cell
+// listing is a paper-board Minesweeper for a 9x7 field: the calculator keeps
+// the hidden mine mask and answers each probe with an adjacent-mine count.
+
+program Minesweeper9x7 {
+  minefield: board(1..9, 0..6)
+
+  state {
+    // The source asks for X, stack lift, then Y. As intent, that is a single
+    // board coordinate: x is 1..9 and y is 0..6, matching the paper grid.
+    mines: cells(minefield) = random()
+
+    probe: coord(minefield)
+    clue: counter 0..8 = 0
+  }
+
+  screen result {
+    show clue
+  }
+
+  rule exploded {
+    stop -999
+  }
+
+  turn {
+    read probe
+
+    if probe in mines {
+      exploded
+    }
+    else {
+      reveal_safe_cell
+    }
+  }
+
+  rule reveal_safe_cell {
+    // pmk39 has no flagging, opened-cell state, or victory counter. Like the
+    // published game, safe cells only report the eight-neighbor mine count.
+    clue = neighbor_count(mines, probe)
+    show result
+  }
+}

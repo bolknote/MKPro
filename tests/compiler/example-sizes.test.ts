@@ -22,6 +22,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "game-100-pig": 102,
   human: 28,
   lunar: 51,
+  "minesweeper-9x7": 79,
   "minesweeper-9x9": 79,
   "raja-yoga": 84,
   "sea-battle": 67,
