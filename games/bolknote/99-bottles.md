@@ -3,7 +3,7 @@
 - Author: [Евгений Степанищев](https://bolknote.ru/)
 - Source: [bolknote.ru](https://bolknote.ru/all/4418/)
 - Program: [99-bottles.txt](./99-bottles.txt)
-- M61 port: [examples/99-bottles.m61](../../examples/99-bottles.m61)
+- MK-Pro port: [examples/99-bottles.mkpro](../../examples/99-bottles.mkpro)
 
 ## Description
 

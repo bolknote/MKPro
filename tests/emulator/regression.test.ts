@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { compileM61 } from "../../src/core/index.ts";
+import { compileMKPro } from "../../src/core/index.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -31,7 +31,7 @@ const { MK61 } = require("./mk61.cjs") as { MK61: Mk61Constructor };
 function exampleFiles(): string[] {
   const dir = resolve("examples");
   return readdirSync(dir)
-    .filter((name) => name.endsWith(".m61"))
+    .filter((name) => name.endsWith(".mkpro"))
     .map((name) => resolve(dir, name));
 }
 
@@ -49,55 +49,55 @@ interface Scenario {
 
 const SCENARIOS: Scenario[] = [
   {
-    name: "basic.m61 computes 3 + 4 = 7 via the input/show/halt cycle",
-    example: "basic.m61",
+    name: "basic.mkpro computes 3 + 4 = 7 via the input/show/halt cycle",
+    example: "basic.mkpro",
     keys: ["В/О", "С/П", "3", "С/П", "4", "С/П", "С/П"],
     expectStop: true,
     expectDisplayMatches: /^7\.?$|7\b/,
   },
   {
-    name: "lunar.m61 fits within budget and accepts initial state",
-    example: "lunar.m61",
+    name: "lunar.mkpro fits within budget and accepts initial state",
+    example: "lunar.mkpro",
     registers: { "2": "100", "3": "500", "4": "5" },
     keys: ["В/О", "С/П"],
     expectStop: true,
   },
   {
-    name: "tiny-game.m61 boots and stops awaiting first key",
-    example: "tiny-game.m61",
+    name: "tiny-game.mkpro boots and stops awaiting first key",
+    example: "tiny-game.mkpro",
     keys: ["В/О", "С/П"],
     expectStop: true,
   },
   {
-    name: "human.m61 boots and stops awaiting first action",
-    example: "human.m61",
+    name: "human.mkpro boots and stops awaiting first action",
+    example: "human.mkpro",
     keys: ["В/О", "С/П"],
     expectStop: true,
   },
   {
-    name: "human.m61 train (key=2) keeps program stable after prologue-elimination",
-    example: "human.m61",
+    name: "human.mkpro train (key=2) keeps program stable after prologue-elimination",
+    example: "human.mkpro",
     registers: { "1": "0", "2": "5" },
     keys: ["В/О", "С/П", "2", "С/П", "С/П"],
     expectStop: true,
   },
   {
-    name: "human.m61 spend (key=8) keeps program stable after prologue-elimination",
-    example: "human.m61",
+    name: "human.mkpro spend (key=8) keeps program stable after prologue-elimination",
+    example: "human.mkpro",
     registers: { "1": "3", "2": "5" },
     keys: ["В/О", "С/П", "8", "С/П", "С/П"],
     expectStop: true,
   },
   {
-    name: "tiny-game.m61 drain (key=4) keeps program stable after prologue-elimination",
-    example: "tiny-game.m61",
+    name: "tiny-game.mkpro drain (key=4) keeps program stable after prologue-elimination",
+    example: "tiny-game.mkpro",
     registers: { "0": "80000078", "2": "8" },
     keys: ["В/О", "С/П", "4", "С/П", "С/П"],
     expectStop: true,
   },
   {
-    name: "cave-treasure.m61 enters the dark-overlay loop and stabilises",
-    example: "cave-treasure.m61",
+    name: "cave-treasure.mkpro enters the dark-overlay loop and stabilises",
+    example: "cave-treasure.mkpro",
     registers: {
       "4": "2",
       "5": "10",
@@ -122,7 +122,7 @@ describe("emulator regression", () => {
     const name = file.split("/").pop()!;
     it(`loads ${name} into the headless emulator with zero diagnostics`, () => {
       const source = readFileSync(file, "utf8");
-      const result = compileM61(source);
+      const result = compileMKPro(source);
       const codes = result.steps.map((step) => step.opcode);
       const calc = new MK61();
       const loaded = calc.loadProgram(codes);
@@ -135,7 +135,7 @@ describe("emulator regression", () => {
     it(scenario.name, () => {
       const file = resolve("examples", scenario.example);
       const source = readFileSync(file, "utf8");
-      const result = compileM61(source);
+      const result = compileMKPro(source);
       const codes = result.steps.map((step) => step.opcode);
       const calc = new MK61();
       const loaded = calc.loadProgram(codes);

@@ -21,7 +21,7 @@ Danilov maps program creation to ordinary engineering stages:
 | Use | Run control examples; document register conventions |
 
 On a real calculator one person wears every hat. In this repository, keep the
-same artifacts even when the source lives in `.m61` files: register plan,
+same artifacts even when the source lives in `.mkpro` files: register plan,
 address table, control example.
 
 ## Inspecting Program Memory
@@ -165,7 +165,7 @@ Tools and habits that speed development:
 | Control example written first | Gives a finish line |
 | Emulator watch on `X,Y,Z,T,PC` | Faster than hardware alone |
 
-In this repo, `m61c explain` and emulator smoke tests complement manual stepping.
+In this repo, `mk-pro explain` and emulator smoke tests complement manual stepping.
 
 ## Service for the User
 

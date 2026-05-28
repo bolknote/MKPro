@@ -12,7 +12,7 @@ const supportsExperimentalStripTypes = major > 22 || (major === 22 && minor >= 6
 
 if (!supportsNativeStripTypes && !supportsExperimentalStripTypes) {
   console.error(
-    `m61c needs Node >= 22.6 to strip TypeScript at runtime; current is ${process.versions.node}.`,
+    `mk-pro needs Node >= 22.6 to strip TypeScript at runtime; current is ${process.versions.node}.`,
   );
   process.exit(1);
 }

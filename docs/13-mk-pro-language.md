@@ -1,18 +1,18 @@
-# M61 Language
+# MK-Pro Language
 
-M61 describes a compact calculator program in human terms: state, reads,
+MK-Pro describes a compact calculator program in human terms: state, reads,
 screen output, and rules. It does not ask the author to enable
 dark entries, X2 tricks, overlays, or undocumented opcodes. Those are MK-61
 machine capabilities, and the optimizer may use them whenever
 its effect checks and emulator facts allow the rewrite.
 
-The examples in `examples/*.m61` are intentionally written in this V2 human
-DSL. M61 source is one `program` block, plus optional report metadata; standalone
+The examples in `examples/*.mkpro` are intentionally written in this V2 human
+DSL. MK-Pro source is one `program` block, plus optional report metadata; standalone
 raw calculator listing syntax is not part of the language.
 
 ## Shape
 
-```m61
+```mkpro
 program CounterGame {
   state {
     score: counter 0..9 = 0
@@ -52,16 +52,16 @@ program CounterGame {
 
 ## No Hints
 
-M61 has no bracket hint syntax. If a word does not change the lowered program,
+MK-Pro has no bracket hint syntax. If a word does not change the lowered program,
 validation, or optimizer choices, it belongs in a comment, not in the language.
 The compiler owns implementation choices such as X2, dark entries, overlays,
 register placement, display bytes, and undocumented opcodes.
 
 ## Comments
 
-M61 accepts line and trailing comments with either `//` or `#`:
+MK-Pro accepts line and trailing comments with either `//` or `#`:
 
-```m61
+```mkpro
 // A whole-line comment.
 read key  # A trailing comment.
 ```
@@ -98,14 +98,14 @@ lowerer turns those into assignments, display commands, dispatch, and stops.
 
 Do not write setup or storage tactics as top-level implementation blocks:
 
-```m61
+```mkpro
 preload R9 = random_seed()
 table packed code_overlay giant_country_tables { floor_plans may_overlay address_cells }
 ```
 
-M61 keeps real game facts in the game language:
+MK-Pro keeps real game facts in the game language:
 
-```m61
+```mkpro
 strength: counter 0..99 = 40
 
 plans: bitset = random()
@@ -115,7 +115,7 @@ plans: bitset = random()
 
 State fields carry only data that affects the program:
 
-```m61
+```mkpro
 state {
   strength: counter 0..99 = 40
   score: counter 0..99 = 0
@@ -134,7 +134,7 @@ Initial values can come from the startup stack registers `stack.X` and
 `stack.Y`, for games where the player enters setup values before running the
 program:
 
-```m61
+```mkpro
 state {
   pos: coord = stack.X
   food: counter 0..99 = stack.Y
@@ -150,7 +150,7 @@ state placement.
 Terminal outcomes are ordinary rules. Put the final display/stop sequence in a
 named rule and call that rule like any other action:
 
-```m61
+```mkpro
 rule safe_landing {
   stop 777
 }
@@ -180,7 +180,7 @@ Rule names must be unique, and a call must reference a declared rule.
 Use `board` when a game is about probes, shots, or pieces on a fixed board
 rather than movement through a world:
 
-```m61
+```mkpro
 board ocean: 10x10 {
 }
 
@@ -196,7 +196,7 @@ to be hallway movement games.
 
 Board queries should name the geometric operation directly:
 
-```m61
+```mkpro
 rule scan_foxes {
   bearing = line_count(foxes, cell)
 }
@@ -215,25 +215,25 @@ whether to use masks, decimal digits, or a shared query tail.
 
 The repository examples are grouped by the game shape they exercise:
 
-- `basic.m61`, `human.m61`, and `tiny-game.m61` are small syntax and control-flow
+- `basic.mkpro`, `human.mkpro`, and `tiny-game.mkpro` are small syntax and control-flow
   examples.
-- `lunar.m61` is a numeric counter game with touchdown rules.
-- `cave-sketch.m61`, `cave-highlevel-baseline.m61`, `cave-treasure.m61`,
-  `cave-treasure-full.m61`, and `labyrinth777.m61` show increasingly complete
+- `lunar.mkpro` is a numeric counter game with touchdown rules.
+- `cave-sketch.mkpro`, `cave-highlevel-baseline.mkpro`, `cave-treasure.mkpro`,
+  `cave-treasure-full.mkpro`, and `labyrinth777.mkpro` show increasingly complete
   cave/grid games.
-- `grid-rescue.m61`, `resource-raid.m61`, and `giants-country.m61` exercise
+- `grid-rescue.mkpro`, `resource-raid.mkpro`, and `giants-country.mkpro` exercise
   spatial counters, generated masks, encounters, and challenge blocks.
-- `sea-battle.m61` demonstrates `board` and `fleet` for non-movement board
+- `sea-battle.mkpro` demonstrates `board` and `fleet` for non-movement board
   games.
-- `fox-hunt-100.m61`, `minesweeper-9x9.m61`, `treasure-hunter-2.m61`, and
-  `dangerous-loading.m61` are larger Anvarov ports used to check how well the
+- `fox-hunt-100.mkpro`, `minesweeper-9x9.mkpro`, `treasure-hunter-2.mkpro`, and
+  `dangerous-loading.mkpro` are larger Anvarov ports used to check how well the
   human DSL covers dense 105-cell MK-61 games.
 
 ## World Blocks
 
 `world` declares the coordinate used by movement rules:
 
-```m61
+```mkpro
 world giant_country {
   position pos {
     encoding decimal_player
@@ -249,7 +249,7 @@ features.
 Movement rules should use `move` when they mean movement rather than coordinate
 arithmetic:
 
-```m61
+```mkpro
 rule move_south {
   move player south
   show cave_screen
@@ -279,7 +279,7 @@ wall was actually hit.
 
 World queries use the same expression position as ordinary formulas:
 
-```m61
+```mkpro
 rule inspect_cell {
   tile = cell_at(cave, pos)
 }
@@ -298,7 +298,7 @@ world backend.
 V2 formulas use the same expression parser as the compiler backend. Decimal
 constants are valid inside larger formulas, so numeric games can write:
 
-```m61
+```mkpro
 accel = burn * 10 / fuel - 9.8
 ```
 
@@ -309,7 +309,7 @@ appears next to variables or operators.
 Formula helpers expose useful calculator-shaped operations without requiring
 raw opcodes:
 
-```m61
+```mkpro
 height = pow(base, exponent)
 probe = bit_has(walls, 5)
 walls = bit_set(walls, 5)
@@ -344,7 +344,7 @@ Use `raw` only when a program really needs a calculator command sequence that
 does not yet have a semantic helper. A raw block is allowed inside `turn`, `rule`,
 `if`, `match`, and `challenge` bodies, but it must declare its contract:
 
-```m61
+```mkpro
 rule invert_sum {
   raw {
     takes Y = left, X = right
@@ -380,7 +380,7 @@ The raw parser accepts the full `00`..`FF` opcode range as two-digit hex. It
 also accepts documented command names and the common Anvarov command-reference
 notation:
 
-```m61
+```mkpro
 code {
   F π
   F√
@@ -405,7 +405,7 @@ ASCII spellings are equivalent where they are clearer in source control:
 
 Branch raw commands take a following label or two-digit address:
 
-```m61
+```mkpro
 code {
   F x≠0 retry
   БП done
@@ -430,7 +430,7 @@ machine notes.
 
 Use `encounters expr` when a tile or event code selects one of several rules:
 
-```m61
+```mkpro
 encounters tile {
   0 {
     show cave
@@ -493,9 +493,9 @@ cover:
 
 The universal spatial/counter backend remains the fallback for mixed or
 unsupported shapes: packed coordinates, generated bitsets, counters, events,
-dispatch, screens, and terminal outcomes. `examples/cave-treasure.m61` is now
-just one reference source; `examples/grid-rescue.m61`,
-and `examples/resource-raid.m61` continue compiling through this fallback when
+dispatch, screens, and terminal outcomes. `examples/cave-treasure.mkpro` is now
+just one reference source; `examples/grid-rescue.mkpro`,
+and `examples/resource-raid.mkpro` continue compiling through this fallback when
 no shape-specific backend covers the features.
 
 `reference` is report metadata only and must not change code generation. For
@@ -551,7 +551,7 @@ compile as `ПП`/`В/О` procedures, direct terminal jumps, or inline code depe
 on the compiler's cost model and termination analysis. Calls must pass exactly
 the parameters declared by the rule.
 
-```m61
+```mkpro
 rule jump_to floor {
   current_floor = floor
   strength -= floor
@@ -583,7 +583,7 @@ same input/display/branch boilerplate everywhere.
 `challenge` describes the common “show warning, show memory value, read answer,
 then apply success/failure effects” pattern:
 
-```m61
+```mkpro
 rule skeleton {
   challenge tile {
     success {
@@ -600,7 +600,7 @@ rule skeleton {
 
 This lowers as if the source had said:
 
-```m61
+```mkpro
 challenge = memory_code(tile)
 show warning
 show memory
@@ -622,7 +622,7 @@ The default names are deliberately conventional:
 
 If the generated value needs a different temporary, use `as`:
 
-```m61
+```mkpro
 challenge tile as monster_code {
   success { score++ }
   failure { strength -= 3 }
@@ -694,8 +694,8 @@ candidates:
   by the loop head. With the X-state tracker the pass also matches the
   "partial" backward prologue produced by `stack-current-X scheduling` against
   the loop head's full prologue (a virtual `П->X r` is prepended when the
-  preceding op is `X->П r`). This is what shrinks `human.m61` 35→28 and
-  `tiny-game.m61` 30→26 without any source edits.
+  preceding op is `X->П r`). This is what shrinks `human.mkpro` 35→28 and
+  `tiny-game.mkpro` 30→26 without any source edits.
 
 The spatial/counter backend selects X2 display-byte scheduling, fractional-R0
 sentinels, and branch-removal arithmetic from the tactic registry automatically
@@ -777,7 +777,7 @@ The pipeline currently contains:
   is `X->П r`, the pass virtually prepends a `П->X r` and matches against the
   loop head's full prologue. The display the user actually sees is the one
   at the loop head; observable behavior is preserved. This is what shrinks
-  `human.m61` 35→28 and `tiny-game.m61` 30→26 without touching the source.
+  `human.mkpro` 35→28 and `tiny-game.mkpro` 30→26 without touching the source.
 
 A round-trip emulator regression suite (`tests/emulator/regression.test.ts`)
 loads each of the 16 examples into the headless MK-61 emulator and runs a

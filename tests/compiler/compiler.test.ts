@@ -1,15 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { CompileError, compileM61 } from "../../src/core/index.ts";
+import { CompileError, compileMKPro } from "../../src/core/index.ts";
 import type { CompileOptions } from "../../src/core/index.ts";
 
 function compileOk(source: string, options: Partial<CompileOptions> = { budget: 999 }) {
-  return compileM61(source, options);
+  return compileMKPro(source, options);
 }
 
 describe("compiler semantics", () => {
   it("compiles only the V2 program surface", () => {
     expect(() =>
-      compileM61(`
+      compileMKPro(`
 machine mk61
 entry main {
   pause 0
@@ -401,7 +401,7 @@ program LunarLike {
   it("surfaces budget exceeded as a hard error for V2 programs", () => {
     const body = Array.from({ length: 60 }, () => "    x = x + 1234567").join("\n");
     expect(() =>
-      compileM61(`
+      compileMKPro(`
 program TooLarge {
   state {
     x: counter 0..999999 = 0
@@ -416,7 +416,7 @@ ${body}
   });
 
   it("keeps the default V2 budget at 105 cells", () => {
-    const result = compileM61(`
+    const result = compileMKPro(`
 program DefaultBudget {
   turn {
     stop 1

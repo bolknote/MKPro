@@ -1,5 +1,5 @@
 "use strict";
-var M61EmulatorBundle = (() => {
+var MKProEmulatorBundle = (() => {
   var __defProp = Object.defineProperty;
   var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
   var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -24,7 +24,7 @@ var M61EmulatorBundle = (() => {
     compileForBrowser: () => compileForBrowser,
     compileToProgramText: () => compileToProgramText,
     installEmulatorBridge: () => installEmulatorBridge,
-    looksLikeM61Source: () => looksLikeM61Source
+    looksLikeMKProSource: () => looksLikeMKProSource
   });
 
   // src/core/formal-address.ts
@@ -802,9 +802,9 @@ var M61EmulatorBundle = (() => {
     }
   };
   function parseProgram(source) {
-    return new M61Parser(source).parseProgram();
+    return new MKProParser(source).parseProgram();
   }
-  var M61Parser = class {
+  var MKProParser = class {
     lines;
     index = 0;
     constructor(source) {
@@ -4774,7 +4774,7 @@ var M61EmulatorBundle = (() => {
       this.diagnostics = diagnostics;
     }
   };
-  function compileM61(source, options = {}) {
+  function compileMKPro(source, options = {}) {
     const ast = parseProgram(source);
     const opts = { ...DEFAULT_OPTIONS, ...options };
     const machineProfile = MK61_PROFILE;
@@ -6039,7 +6039,7 @@ var M61EmulatorBundle = (() => {
     diagnostics.push({
       level: "error",
       code: "V2_SEMANTIC_LOWERER_MISSING",
-      message: `M61 intent contains effects that need real generic lowerers before code generation: ${unsupported.slice(0, 8).map((item) => `${item.text} (line ${item.line})`).join(", ")}. The compiler refuses to treat human-level semantics as comments.`
+      message: `MK-Pro intent contains effects that need real generic lowerers before code generation: ${unsupported.slice(0, 8).map((item) => `${item.text} (line ${item.line})`).join(", ")}. The compiler refuses to treat human-level semantics as comments.`
     });
   }
   function collectUnsupportedV2Statements(ast) {
@@ -9501,9 +9501,9 @@ var M61EmulatorBundle = (() => {
     budget: 105
   };
   var DEFAULT_DEBOUNCE_MS = 250;
-  var STATUS_ID = "m61-emulator-status";
+  var STATUS_ID = "mk-pro-emulator-status";
   function compileForBrowser(source, options = {}) {
-    const result = compileM61(source, { ...DEFAULT_COMPILE_OPTIONS, ...options });
+    const result = compileMKPro(source, { ...DEFAULT_COMPILE_OPTIONS, ...options });
     const programText = formatProgramTokens(result.steps.map((step) => step.hex));
     return {
       source,
@@ -9517,19 +9517,19 @@ var M61EmulatorBundle = (() => {
   function compileToProgramText(source, options = {}) {
     return compileForBrowser(source, options).programText;
   }
-  function looksLikeM61Source(text) {
+  function looksLikeMKProSource(text) {
     const normalized = text.trim();
     return /\bprogram\s+[A-Za-z_][\w-]*\s*\{/u.test(normalized);
   }
   function installEmulatorBridge(options = {}) {
-    window.__m61EmulatorBridge?.uninstall();
+    window.__mkProEmulatorBridge?.uninstall();
     const program = document.getElementById("program");
     const writeButton = document.getElementById("text_to_program");
     if (!(program instanceof HTMLElement)) {
-      throw new Error("M61 bridge cannot find #program on this page.");
+      throw new Error("MK-Pro bridge cannot find #program on this page.");
     }
     if (!(writeButton instanceof HTMLElement)) {
-      throw new Error("M61 bridge cannot find #text_to_program on this page.");
+      throw new Error("MK-Pro bridge cannot find #text_to_program on this page.");
     }
     const statusElement = ensureStatusElement(writeButton);
     const cleanups = [];
@@ -9545,16 +9545,16 @@ var M61EmulatorBundle = (() => {
     };
     const compileField = () => {
       const source = readProgramText(program);
-      if (!looksLikeM61Source(source)) return void 0;
+      if (!looksLikeMKProSource(source)) return void 0;
       const compiled = compileForBrowser(source, compilerOptions);
       lastSource = source;
       lastResult = compiled;
       writeProgramText(program, compiled.programText);
-      program.dispatchEvent(new CustomEvent("m61:compiled", {
+      program.dispatchEvent(new CustomEvent("mk-pro:compiled", {
         bubbles: true,
         detail: compiled
       }));
-      setStatus(`M61 compiled: ${compiled.report.steps}/${compiled.report.budget} cells.`);
+      setStatus(`MK-Pro compiled: ${compiled.report.steps}/${compiled.report.budget} cells.`);
       return compiled;
     };
     const writeFieldToMemory = () => {
@@ -9565,18 +9565,18 @@ var M61EmulatorBundle = (() => {
     const restoreSource = () => {
       if (lastSource === void 0) return false;
       writeProgramText(program, lastSource);
-      setStatus("M61 source restored.");
+      setStatus("MK-Pro source restored.");
       return true;
     };
     const uninstall = () => {
       if (previewTimer !== void 0) window.clearTimeout(previewTimer);
       for (const cleanup of cleanups.splice(0)) cleanup();
       statusElement.remove();
-      if (window.__m61EmulatorBridge === bridge) {
-        delete window.__m61EmulatorBridge;
+      if (window.__mkProEmulatorBridge === bridge) {
+        delete window.__mkProEmulatorBridge;
       }
-      if (window.M61Emulator === bridge) {
-        delete window.M61Emulator;
+      if (window.MKProEmulator === bridge) {
+        delete window.MKProEmulator;
       }
     };
     const bridge = {
@@ -9594,16 +9594,16 @@ var M61EmulatorBundle = (() => {
         event.preventDefault();
         event.stopImmediatePropagation();
         setStatus(errorToStatus(error), true);
-        console.error("[M61] compile failed", error);
+        console.error("[MK-Pro] compile failed", error);
       }
     };
     const previewCurrentText = () => {
       const source = readProgramText(program);
-      if (!looksLikeM61Source(source)) return;
+      if (!looksLikeMKProSource(source)) return;
       try {
         const compiled = compileForBrowser(source, compilerOptions);
         lastResult = compiled;
-        setStatus(`M61 detected: ${compiled.report.steps}/${compiled.report.budget} cells. Click Write to load.`);
+        setStatus(`MK-Pro detected: ${compiled.report.steps}/${compiled.report.budget} cells. Click Write to load.`);
       } catch (error) {
         setStatus(errorToStatus(error), true);
       }
@@ -9614,7 +9614,7 @@ var M61EmulatorBundle = (() => {
     };
     const afterPaste = () => {
       window.setTimeout(() => {
-        if (autoWriteOnPaste && looksLikeM61Source(readProgramText(program))) {
+        if (autoWriteOnPaste && looksLikeMKProSource(readProgramText(program))) {
           writeFieldToMemory();
         } else {
           previewCurrentText();
@@ -9627,9 +9627,9 @@ var M61EmulatorBundle = (() => {
     cleanups.push(() => writeButton.removeEventListener("click", beforeEmulatorWrite, true));
     cleanups.push(() => program.removeEventListener("input", schedulePreview));
     cleanups.push(() => program.removeEventListener("paste", afterPaste));
-    setStatus("M61 bridge ready. Paste M61 source, then click Write.");
-    window.__m61EmulatorBridge = bridge;
-    window.M61Emulator = bridge;
+    setStatus("MK-Pro bridge ready. Paste MK-Pro source, then click Write.");
+    window.__mkProEmulatorBridge = bridge;
+    window.MKProEmulator = bridge;
     return bridge;
   }
   function formatProgramTokens(tokens) {
@@ -9674,15 +9674,15 @@ var M61EmulatorBundle = (() => {
     compile: compileForBrowser,
     compileToProgramText,
     installEmulatorBridge,
-    looksLikeM61Source
+    looksLikeMKProSource
   };
   if (typeof window !== "undefined") {
-    window.M61 = api;
+    window.MKPro = api;
     try {
       installEmulatorBridge();
-      console.info("[M61] Emulator bridge installed.");
+      console.info("[MK-Pro] Emulator bridge installed.");
     } catch (error) {
-      console.warn("[M61] Compiler loaded, but the emulator bridge was not installed.", error);
+      console.warn("[MK-Pro] Compiler loaded, but the emulator bridge was not installed.", error);
     }
   }
   return __toCommonJS(emulator_bridge_exports);

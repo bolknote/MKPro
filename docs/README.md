@@ -26,7 +26,7 @@ steps.
 | 14 | [16-hexadecimal-arithmetic.md](./16-hexadecimal-arithmetic.md) | Hex-like mantissa arithmetic and bit masks |
 | 15 | [17-sign-digits-and-zeroes.md](./17-sign-digits-and-zeroes.md) | Sign-digits and non-normal zeroes |
 | 16 | [18-f-opcodes-and-demo-program.md](./18-f-opcodes-and-demo-program.md) | F-opcode insertion and demo-program lessons |
-| 17 | [13-m61-language.md](./13-m61-language.md) | The M61 language, human DSL, and automatic max optimization |
+| 17 | [13-mk-pro-language.md](./13-mk-pro-language.md) | The MK-Pro language, human DSL, and automatic max optimization |
 | 18 | [19-anvarov-browser-bridge.md](./19-anvarov-browser-bridge.md) | Browser-console bridge for Serge Anvarov's emulator |
 
 Hardware internals and chip-level detail live separately in
@@ -48,7 +48,7 @@ Hardware internals and chip-level detail live separately in
 | [10-applied-examples.md](./10-applied-examples.md) | Methodology and applied walkthroughs |
 | [11-game-design.md](./11-game-design.md) | Game types, RNG, compact game structure |
 | [12-danilov-secrets-mk61-delta.md](./12-danilov-secrets-mk61-delta.md) | Classic B3-34 secrets and MK-61 differences |
-| [13-m61-language.md](./13-m61-language.md) | M61 syntax, human DSL constructs, semantic hints, optimizer contract |
+| [13-mk-pro-language.md](./13-mk-pro-language.md) | MK-Pro syntax, human DSL constructs, semantic hints, optimizer contract |
 | [14-indirect-addressing.md](./14-indirect-addressing.md) | Indirect-addressing edge cases and compact dispatch |
 | [15-x2-display-register.md](./15-x2-display-register.md) | X2 display register, restoration commands, and overflow timing |
 | [16-hexadecimal-arithmetic.md](./16-hexadecimal-arithmetic.md) | Hex-like mantissa arithmetic and logical bit masks |

@@ -1,6 +1,6 @@
 reference anvarov_demo
 
-// Serge Anvarov's Treasure Cave demo in the current M61 surface: compact source
+// Serge Anvarov's Treasure Cave demo in the current MK-Pro surface: compact source
 // intent, with the MK-61-specific overlay and dispatch choices left to compiler
 // reports.
 

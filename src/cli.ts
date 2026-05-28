@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   CompileError,
-  compileM61,
+  compileMKPro,
   formatAll,
   formatExplain,
   formatHex,
@@ -32,7 +32,7 @@ function main(argv: string[]): number {
     }
     if (!args.file) throw new Error("Missing input file.");
     const source = readFileSync(resolve(args.file), "utf8");
-    const result = compileM61(source, args.options);
+    const result = compileMKPro(source, args.options);
     printWarnings(result.diagnostics);
 
     if (args.command === "explain") {
@@ -126,11 +126,11 @@ function parseDelivery(value: string): DeliveryMode {
 }
 
 function helpText(): string {
-  return `m61c - M61 to MK-61 translator
+  return `mk-pro - MK-Pro to MK-61 translator
 
 Usage:
-  m61c compile file.m61 --out listing|hex|json|all
-  m61c explain file.m61
+  mk-pro compile file.mkpro --out listing|hex|json|all
+  mk-pro explain file.mkpro
 
 Flags:
   --delivery manual|loader|hex default: hex

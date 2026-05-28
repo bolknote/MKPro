@@ -1,15 +1,15 @@
 {
-  "name": "mk61-m61",
+  "name": "mk-pro",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "bin": {
-    "m61c": "./bin/m61c.mjs"
+    "mk-pro": "./bin/mk-pro.mjs"
   },
   "scripts": {
-    "build:browser": "esbuild src/browser/emulator-bridge.ts --bundle --format=iife --global-name=M61EmulatorBundle --platform=browser --target=es2022 --outfile=dist/m61-emulator-bridge.user.js",
+    "build:browser": "esbuild src/browser/emulator-bridge.ts --bundle --format=iife --global-name=MKProEmulatorBundle --platform=browser --target=es2022 --outfile=dist/mk-pro-emulator-bridge.user.js",
     "lint": "eslint .",
-    "m61c": "node ./bin/m61c.mjs",
+    "mk-pro": "node ./bin/mk-pro.mjs",
     "serve:browser": "vite --host 127.0.0.1 --port 4173",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

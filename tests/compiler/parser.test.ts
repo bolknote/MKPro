@@ -52,7 +52,7 @@ program Comments {
     expect(ast.v2?.name).toBe("Comments");
   });
 
-  it("parses human-centered M61 programs", () => {
+  it("parses human-centered MK-Pro programs", () => {
     const ast = parseProgram(`
 program Demo {
   state {

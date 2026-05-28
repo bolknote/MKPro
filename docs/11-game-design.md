@@ -162,11 +162,11 @@ Smoke tests for packaged games live under `tests/emulator/`.
 | --- | --- |
 | `games/lordbss/` | Cleaned Lord_BSS listings + per-game `.md` |
 | `games/kei/` | OCR-derived treasure-cave material |
-| `examples/tiny-game.m61` | Minimal M61 game sketch |
-| `examples/cave-sketch.m61` | compact V2 cave sketch/baseline |
-| `examples/cave-treasure-full.m61` | hard high-level compactness reference |
-| `examples/alaram.m61` | commented Lord_BSS cockpit interceptor port |
-| `examples/dungeon.m61` | commented Lord_BSS Dungeon port |
+| `examples/tiny-game.mkpro` | Minimal MK-Pro game sketch |
+| `examples/cave-sketch.mkpro` | compact V2 cave sketch/baseline |
+| `examples/cave-treasure-full.mkpro` | hard high-level compactness reference |
+| `examples/alaram.mkpro` | commented Lord_BSS cockpit interceptor port |
+| `examples/dungeon.mkpro` | commented Lord_BSS Dungeon port |
 
 ## Sources
 

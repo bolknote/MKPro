@@ -1,6 +1,6 @@
-# M61
+# MK-Pro
 
-`m61c` is an experimental TypeScript CLI translator from the M61 language to
+`mk-pro` is an experimental TypeScript CLI translator from the MK-Pro language to
 Elektronika MK-61 program listings.
 
 This milestone focuses on the translator. The repo also contains emulator
@@ -14,17 +14,17 @@ Node 22.6 or later strips TypeScript at runtime, so no build step is required:
 
 ```sh
 npm install
-npm run m61c -- compile examples/basic.m61 --out listing
-npm run m61c -- compile examples/basic.m61 --out hex
-npm run m61c -- compile examples/basic.m61 --out json
-npm run m61c -- explain examples/tiny-game.m61
+npm run mk-pro -- compile examples/basic.mkpro --out listing
+npm run mk-pro -- compile examples/basic.mkpro --out hex
+npm run mk-pro -- compile examples/basic.mkpro --out json
+npm run mk-pro -- explain examples/tiny-game.mkpro
 ```
 
 The CLI shape is:
 
 ```sh
-m61c compile file.m61 --out listing|hex|json|all
-m61c explain file.m61
+mk-pro compile file.mkpro --out listing|hex|json|all
+mk-pro explain file.mkpro
 ```
 
 Flags:
@@ -35,7 +35,7 @@ Flags:
 
 ## Browser Bridge
 
-To load M61 source directly into Serge Anvarov's browser emulator:
+To load MK-Pro source directly into Serge Anvarov's browser emulator:
 
 ```sh
 npm run build:browser
@@ -47,14 +47,14 @@ Then paste the console loader from
 the emulator page. The bridge compiles `#program` before the emulator's own
 write-to-memory handler runs, so the page only sees MK-61 hex opcodes.
 
-## M61 Language
+## MK-Pro Language
 
-M61 is a single V2 language for game/application intent. Programs describe
+MK-Pro is a single V2 language for game/application intent. Programs describe
 state, reads, screens, rules, and tables. The compiler decides
 whether that becomes registers, stack scheduling, address constants, dark
 entries, overlays, X2/display bytes, or other MK-61 tricks.
 
-```m61
+```mkpro
 program TinyGame {
   state {
     player: coord = 1
@@ -94,22 +94,22 @@ allows them. Super-dark FA..FF dispatch is modeled, but it is selected only
 when the layout proves the entry/continuation cells and the dispatch register's
 FA..FF selector value.
 
-All `examples/*.m61` programs are written in the human DSL. They cover:
+All `examples/*.mkpro` programs are written in the human DSL. They cover:
 
-- `examples/basic.m61`: minimal input/output and arithmetic.
-- `examples/tiny-game.m61`: tiny menu-style loop.
-- `examples/lunar.m61`: numeric landing game with counters and touchdown rules.
-- `examples/human.m61`: small counter game used as syntax smoke test.
-- `examples/cave-sketch.m61`: compact cave sketch in game intent form.
-- `examples/cave-highlevel-baseline.m61`: readable Cave Treasure baseline.
-- `examples/cave-treasure.m61`: full high-level compactness reference.
-- `examples/cave-treasure-full.m61`: full reference metadata variant.
-- `examples/grid-rescue.m61`: synthetic grid/bitset stress sketch.
-- `examples/resource-raid.m61`: synthetic counter/dispatch stress sketch.
-- `examples/alaram.m61`: commented Lord_BSS cockpit interceptor port.
-- `examples/dungeon.m61`: commented Lord_BSS Dungeon port.
-- `examples/giants-country.m61`: commented high-level game port.
-- `examples/sea-battle.m61`: turn-based fleet duel port from the games archive.
+- `examples/basic.mkpro`: minimal input/output and arithmetic.
+- `examples/tiny-game.mkpro`: tiny menu-style loop.
+- `examples/lunar.mkpro`: numeric landing game with counters and touchdown rules.
+- `examples/human.mkpro`: small counter game used as syntax smoke test.
+- `examples/cave-sketch.mkpro`: compact cave sketch in game intent form.
+- `examples/cave-highlevel-baseline.mkpro`: readable Cave Treasure baseline.
+- `examples/cave-treasure.mkpro`: full high-level compactness reference.
+- `examples/cave-treasure-full.mkpro`: full reference metadata variant.
+- `examples/grid-rescue.mkpro`: synthetic grid/bitset stress sketch.
+- `examples/resource-raid.mkpro`: synthetic counter/dispatch stress sketch.
+- `examples/alaram.mkpro`: commented Lord_BSS cockpit interceptor port.
+- `examples/dungeon.mkpro`: commented Lord_BSS Dungeon port.
+- `examples/giants-country.mkpro`: commented high-level game port.
+- `examples/sea-battle.mkpro`: turn-based fleet duel port from the games archive.
 
 ## Documentation
 
@@ -135,7 +135,7 @@ program reports, and the headless emulator loader smoke test.
   jumps to the address".
 - Peephole optimization for redundant `X->П r ; П->X r` pairs at synthetic
   boundaries in compiler-generated lowering.
-- M61 lowers high-level `program`, `state`, `screen`, `read`, `match`,
+- MK-Pro lowers high-level `program`, `state`, `screen`, `read`, `match`,
   `challenge`, counter updates, and rule calls through an
   intent/effect/layout report.
 - JSON reports include IR stats, layout cell roles, candidate lowerings, and

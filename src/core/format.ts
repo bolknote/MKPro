@@ -61,7 +61,7 @@ export function formatJson(result: CompileResult): string {
 
 export function formatExplain(result: CompileResult): string {
   const lines = [
-    `M61 compile report`,
+    `MK-Pro compile report`,
     `Steps: ${result.report.steps}/${result.report.budget}`,
     `Delivery: ${result.report.delivery}`,
     `Optimizer: exact maximum`,

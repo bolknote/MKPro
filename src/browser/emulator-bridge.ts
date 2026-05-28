@@ -1,4 +1,4 @@
-import { CompileError, compileM61, formatListing } from "../core/index.ts";
+import { CompileError, compileMKPro, formatListing } from "../core/index.ts";
 import type { CompileOptions, CompileResult } from "../core/index.ts";
 
 const DEFAULT_COMPILE_OPTIONS: CompileOptions = {
@@ -7,7 +7,7 @@ const DEFAULT_COMPILE_OPTIONS: CompileOptions = {
 };
 
 const DEFAULT_DEBOUNCE_MS = 250;
-const STATUS_ID = "m61-emulator-status";
+const STATUS_ID = "mk-pro-emulator-status";
 
 export interface BrowserCompileOutput {
   source: string;
@@ -33,18 +33,18 @@ export interface EmulatorBridge {
   statusElement: HTMLElement;
 }
 
-export interface M61BrowserApi {
+export interface MKProBrowserApi {
   compile(source: string, options?: Partial<CompileOptions>): BrowserCompileOutput;
   compileToProgramText(source: string, options?: Partial<CompileOptions>): string;
   installEmulatorBridge(options?: EmulatorBridgeOptions): EmulatorBridge;
-  looksLikeM61Source(text: string): boolean;
+  looksLikeMKProSource(text: string): boolean;
 }
 
 declare global {
   interface Window {
-    M61?: M61BrowserApi;
-    M61Emulator?: EmulatorBridge;
-    __m61EmulatorBridge?: EmulatorBridge;
+    MKPro?: MKProBrowserApi;
+    MKProEmulator?: EmulatorBridge;
+    __mkProEmulatorBridge?: EmulatorBridge;
   }
 }
 
@@ -52,7 +52,7 @@ export function compileForBrowser(
   source: string,
   options: Partial<CompileOptions> = {},
 ): BrowserCompileOutput {
-  const result = compileM61(source, { ...DEFAULT_COMPILE_OPTIONS, ...options });
+  const result = compileMKPro(source, { ...DEFAULT_COMPILE_OPTIONS, ...options });
   const programText = formatProgramTokens(result.steps.map((step) => step.hex));
   return {
     source,
@@ -71,7 +71,7 @@ export function compileToProgramText(
   return compileForBrowser(source, options).programText;
 }
 
-export function looksLikeM61Source(text: string): boolean {
+export function looksLikeMKProSource(text: string): boolean {
   const normalized = text.trim();
   return (
     /\bprogram\s+[A-Za-z_][\w-]*\s*\{/u.test(normalized)
@@ -81,15 +81,15 @@ export function looksLikeM61Source(text: string): boolean {
 export function installEmulatorBridge(
   options: EmulatorBridgeOptions = {},
 ): EmulatorBridge {
-  window.__m61EmulatorBridge?.uninstall();
+  window.__mkProEmulatorBridge?.uninstall();
 
   const program = document.getElementById("program");
   const writeButton = document.getElementById("text_to_program");
   if (!(program instanceof HTMLElement)) {
-    throw new Error("M61 bridge cannot find #program on this page.");
+    throw new Error("MK-Pro bridge cannot find #program on this page.");
   }
   if (!(writeButton instanceof HTMLElement)) {
-    throw new Error("M61 bridge cannot find #text_to_program on this page.");
+    throw new Error("MK-Pro bridge cannot find #text_to_program on this page.");
   }
 
   const statusElement = ensureStatusElement(writeButton);
@@ -108,17 +108,17 @@ export function installEmulatorBridge(
 
   const compileField = (): BrowserCompileOutput | undefined => {
     const source = readProgramText(program);
-    if (!looksLikeM61Source(source)) return undefined;
+    if (!looksLikeMKProSource(source)) return undefined;
 
     const compiled = compileForBrowser(source, compilerOptions);
     lastSource = source;
     lastResult = compiled;
     writeProgramText(program, compiled.programText);
-    program.dispatchEvent(new CustomEvent("m61:compiled", {
+    program.dispatchEvent(new CustomEvent("mk-pro:compiled", {
       bubbles: true,
       detail: compiled,
     }));
-    setStatus(`M61 compiled: ${compiled.report.steps}/${compiled.report.budget} cells.`);
+    setStatus(`MK-Pro compiled: ${compiled.report.steps}/${compiled.report.budget} cells.`);
     return compiled;
   };
 
@@ -131,7 +131,7 @@ export function installEmulatorBridge(
   const restoreSource = (): boolean => {
     if (lastSource === undefined) return false;
     writeProgramText(program, lastSource);
-    setStatus("M61 source restored.");
+    setStatus("MK-Pro source restored.");
     return true;
   };
 
@@ -139,11 +139,11 @@ export function installEmulatorBridge(
     if (previewTimer !== undefined) window.clearTimeout(previewTimer);
     for (const cleanup of cleanups.splice(0)) cleanup();
     statusElement.remove();
-    if (window.__m61EmulatorBridge === bridge) {
-      delete window.__m61EmulatorBridge;
+    if (window.__mkProEmulatorBridge === bridge) {
+      delete window.__mkProEmulatorBridge;
     }
-    if (window.M61Emulator === bridge) {
-      delete window.M61Emulator;
+    if (window.MKProEmulator === bridge) {
+      delete window.MKProEmulator;
     }
   };
 
@@ -163,17 +163,17 @@ export function installEmulatorBridge(
       event.preventDefault();
       event.stopImmediatePropagation();
       setStatus(errorToStatus(error), true);
-      console.error("[M61] compile failed", error);
+      console.error("[MK-Pro] compile failed", error);
     }
   };
 
   const previewCurrentText = (): void => {
     const source = readProgramText(program);
-    if (!looksLikeM61Source(source)) return;
+    if (!looksLikeMKProSource(source)) return;
     try {
       const compiled = compileForBrowser(source, compilerOptions);
       lastResult = compiled;
-      setStatus(`M61 detected: ${compiled.report.steps}/${compiled.report.budget} cells. Click Write to load.`);
+      setStatus(`MK-Pro detected: ${compiled.report.steps}/${compiled.report.budget} cells. Click Write to load.`);
     } catch (error) {
       setStatus(errorToStatus(error), true);
     }
@@ -186,7 +186,7 @@ export function installEmulatorBridge(
 
   const afterPaste = (): void => {
     window.setTimeout(() => {
-      if (autoWriteOnPaste && looksLikeM61Source(readProgramText(program))) {
+      if (autoWriteOnPaste && looksLikeMKProSource(readProgramText(program))) {
         writeFieldToMemory();
       } else {
         previewCurrentText();
@@ -201,9 +201,9 @@ export function installEmulatorBridge(
   cleanups.push(() => program.removeEventListener("input", schedulePreview));
   cleanups.push(() => program.removeEventListener("paste", afterPaste));
 
-  setStatus("M61 bridge ready. Paste M61 source, then click Write.");
-  window.__m61EmulatorBridge = bridge;
-  window.M61Emulator = bridge;
+  setStatus("MK-Pro bridge ready. Paste MK-Pro source, then click Write.");
+  window.__mkProEmulatorBridge = bridge;
+  window.MKProEmulator = bridge;
   return bridge;
 }
 
@@ -258,19 +258,19 @@ function errorToStatus(error: unknown): string {
   return String(error);
 }
 
-const api: M61BrowserApi = {
+const api: MKProBrowserApi = {
   compile: compileForBrowser,
   compileToProgramText,
   installEmulatorBridge,
-  looksLikeM61Source,
+  looksLikeMKProSource,
 };
 
 if (typeof window !== "undefined") {
-  window.M61 = api;
+  window.MKPro = api;
   try {
     installEmulatorBridge();
-    console.info("[M61] Emulator bridge installed.");
+    console.info("[MK-Pro] Emulator bridge installed.");
   } catch (error) {
-    console.warn("[M61] Compiler loaded, but the emulator bridge was not installed.", error);
+    console.warn("[MK-Pro] Compiler loaded, but the emulator bridge was not installed.", error);
   }
 }

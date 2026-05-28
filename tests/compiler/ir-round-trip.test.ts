@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { compileM61 } from "../../src/core/compiler.ts";
+import { compileMKPro } from "../../src/core/compiler.ts";
 import {
   lowerIrToLayout,
   lowerIrToMachine,
@@ -14,7 +14,7 @@ import type { LayoutIrCell, MachineItem } from "../../src/core/types.ts";
 function exampleFiles(): string[] {
   const dir = resolve("examples");
   return readdirSync(dir)
-    .filter((name) => name.endsWith(".m61"))
+    .filter((name) => name.endsWith(".mkpro"))
     .map((name) => resolve(dir, name));
 }
 
@@ -29,7 +29,7 @@ describe("ir round-trip", () => {
   for (const file of files) {
     it(`round-trips ${file.split("/").pop()} losslessly`, () => {
       const source = readFileSync(file, "utf8");
-      const result = compileM61(source);
+      const result = compileMKPro(source);
       const ir = raiseMachineToIr(result.items);
       const back = lowerIrToMachine(ir);
 

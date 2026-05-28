@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { compileM61, MK61_PROFILE } from "../src/core/index.ts";
+import { compileMKPro, MK61_PROFILE } from "../src/core/index.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -9,9 +9,9 @@ function source(path: string): string {
   return readFileSync(path, "utf8");
 }
 
-describe("M61 compiler", () => {
+describe("MK-Pro compiler", () => {
   it("keeps the smallest human DSL example compiling", () => {
-    const result = compileM61(source("examples/basic.m61"));
+    const result = compileMKPro(source("examples/basic.mkpro"));
 
     expect(result.report.ir.v2).toBe(true);
     expect(result.report.steps).toBeLessThanOrEqual(105);
@@ -21,9 +21,9 @@ describe("M61 compiler", () => {
   it("keeps every checked example within the 105-cell ceiling", () => {
     const oversized: Array<{ path: string; steps: number }> = [];
 
-    for (const name of readdirSync("examples").filter((entry) => entry.endsWith(".m61")).sort()) {
+    for (const name of readdirSync("examples").filter((entry) => entry.endsWith(".mkpro")).sort()) {
       const path = `examples/${name}`;
-      const result = compileM61(source(path));
+      const result = compileMKPro(source(path));
       if (result.report.steps > 105) oversized.push({ path, steps: result.report.steps });
     }
 
@@ -35,9 +35,9 @@ describe("M61 compiler", () => {
     const larger: Array<{ path: string; steps: number; reference: number }> = [];
     const checked: string[] = [];
 
-    for (const name of readdirSync("examples").filter((entry) => entry.endsWith(".m61")).sort()) {
+    for (const name of readdirSync("examples").filter((entry) => entry.endsWith(".mkpro")).sort()) {
       const path = `examples/${name}`;
-      const result = compileM61(source(path));
+      const result = compileMKPro(source(path));
       const reference = result.report.reference;
 
       if (reference === undefined) continue;
@@ -54,14 +54,14 @@ describe("M61 compiler", () => {
 
     expect(unresolved).toEqual([]);
     expect(larger).toEqual([]);
-    expect(checked).toContain("examples/alaram.m61");
-    expect(checked).toContain("examples/dungeon.m61");
-    expect(checked).toContain("examples/giants-country.m61");
-    expect(checked).toContain("examples/lunar.m61");
+    expect(checked).toContain("examples/alaram.mkpro");
+    expect(checked).toContain("examples/dungeon.mkpro");
+    expect(checked).toContain("examples/giants-country.mkpro");
+    expect(checked).toContain("examples/lunar.mkpro");
   });
 
   it("keeps the high-level cave baseline within the 105-cell budget", () => {
-    const result = compileM61(source("examples/cave-highlevel-baseline.m61"));
+    const result = compileMKPro(source("examples/cave-highlevel-baseline.mkpro"));
 
     expect(result.report.ir.v2).toBe(true);
     expect(result.report.steps).toBeLessThanOrEqual(105);
@@ -69,7 +69,7 @@ describe("M61 compiler", () => {
   });
 
   it("lowers the compact cave DSL under the 105-step target", () => {
-    const result = compileM61(source("examples/cave-sketch.m61"));
+    const result = compileMKPro(source("examples/cave-sketch.mkpro"));
 
     expect(result.report.ir.v2).toBe(true);
     expect(result.report.steps).toBeLessThanOrEqual(105);
@@ -80,20 +80,20 @@ describe("M61 compiler", () => {
   });
 
   it("keeps the full cave reference high-level and compiles its semantic domains", () => {
-    const reference = source("examples/cave-treasure-full.m61");
+    const reference = source("examples/cave-treasure-full.mkpro");
 
     expect(reference).not.toMatch(/\brecipe\b/iu);
     expect(reference).not.toMatch(/core\s+exact/iu);
     expect(reference).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
-    const result = compileM61(reference);
+    const result = compileMKPro(reference);
 
     expect(result.report.steps).toBe(105);
     expect(result.report.reference?.parity).toBe("equal");
     expect(result.report.optimizations.some((optimization) => optimization.name === "game-intent-lowering")).toBe(true);
   });
 
-  it("compiles human-centered M61 without source implementation switches", () => {
-    const result = compileM61(source("examples/human.m61"));
+  it("compiles human-centered MK-Pro without source implementation switches", () => {
+    const result = compileMKPro(source("examples/human.mkpro"));
 
     expect(result.report.ir.v2).toBe(true);
     expect(result.report.machine).toBe("mk61");
@@ -110,7 +110,7 @@ describe("M61 compiler", () => {
 
   it("rejects removed low-level calculator syntax", () => {
     expect(() =>
-      compileM61(`
+      compileMKPro(`
 machine mk61
 entry main {
   core {
@@ -124,7 +124,7 @@ entry main {
   });
 
   it("lowers simple assignment and if rules through generic intent", () => {
-    const result = compileM61(`
+    const result = compileMKPro(`
 program SimpleRules {
   state {
     score: counter 0..9 = 1
@@ -155,13 +155,13 @@ program SimpleRules {
   });
 
   it("compiles the full cave reference through generic semantic lowerers", () => {
-    const reference = source("examples/cave-treasure.m61");
+    const reference = source("examples/cave-treasure.mkpro");
 
     expect(reference).not.toMatch(/core\s+exact/iu);
     expect(reference).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
     expect(reference).toMatch(/world cave/u);
     expect(reference).toMatch(/bitset = random\(\)/u);
-    const result = compileM61(reference);
+    const result = compileMKPro(reference);
     const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
     const features = new Set(result.report.machineFeaturesUsed.map((feature) => feature.id));
 
@@ -191,7 +191,7 @@ program SimpleRules {
     const { parseProgramText } = require("./emulator/mk61.cjs") as {
       parseProgramText: (text: string) => { codes: number[]; diagnostics: string[] };
     };
-    const result = compileM61(source("examples/cave-treasure.m61"));
+    const result = compileMKPro(source("examples/cave-treasure.mkpro"));
     const reference = parseProgramText(source("games/anvarov/demo.txt"));
 
     expect(reference.diagnostics).toEqual([]);
@@ -213,7 +213,7 @@ program SimpleRules {
       };
       parseProgramText: (text: string) => { codes: number[]; diagnostics: string[] };
     };
-    const result = compileM61(source("examples/99-bottles.m61"));
+    const result = compileMKPro(source("examples/99-bottles.mkpro"));
     const reference = parseProgramText(source("games/bolknote/99-bottles.txt"));
     const codes = result.steps.map((step) => step.opcode);
     const calc = new MK61();
@@ -246,12 +246,12 @@ program SimpleRules {
   });
 
   it("treats reference metadata as report-only, not as codegen input", () => {
-    const reference = source("examples/cave-treasure.m61");
+    const reference = source("examples/cave-treasure.mkpro");
     const renamed = reference.replace(/^reference .+$/mu, "reference renamed_metadata_only");
     const unreferenced = reference.replace(/^reference .+\n/mu, "");
-    const original = compileM61(reference);
-    const changed = compileM61(renamed);
-    const anonymous = compileM61(unreferenced);
+    const original = compileMKPro(reference);
+    const changed = compileMKPro(renamed);
+    const anonymous = compileMKPro(unreferenced);
     const originalHex = original.steps.map((step) => step.hex);
 
     expect(changed.steps.map((step) => step.hex)).toEqual(originalHex);
@@ -261,7 +261,7 @@ program SimpleRules {
   });
 
   it("keeps the demo-page MK-61 tricks active in the v2 game optimizer", () => {
-    const result = compileM61(source("examples/cave-treasure.m61"));
+    const result = compileMKPro(source("examples/cave-treasure.mkpro"));
     const optimizations = new Set(result.report.optimizations.map((optimization) => optimization.name));
     const activeCapabilities = new Set(
       result.report.optimizer.capabilities
@@ -339,10 +339,10 @@ program SimpleRules {
 
   it("keeps the universal spatial/counter tactic fallback for unsupported non-cave games", () => {
     for (const path of [
-      "examples/grid-rescue.m61",
-      "examples/resource-raid.m61",
+      "examples/grid-rescue.mkpro",
+      "examples/resource-raid.mkpro",
     ]) {
-      const result = compileM61(source(path));
+      const result = compileMKPro(source(path));
       const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
 
       expect(result.report.ir.v2).toBe(true);
@@ -357,8 +357,8 @@ program SimpleRules {
   });
 
   it("lowers Sea Battle through the board-fleet duel microkernel below the reference span", () => {
-    const seaBattle = source("examples/sea-battle.m61");
-    const result = compileM61(seaBattle);
+    const seaBattle = source("examples/sea-battle.mkpro");
+    const result = compileMKPro(seaBattle);
     const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
     const proofs = new Set(result.report.proofs.map((proof) => proof.id));
     const optimizations = new Set(result.report.optimizations.map((optimization) => optimization.name));
@@ -386,7 +386,7 @@ program SimpleRules {
   it("selects shape-specific GameIntent microkernels below the real reference spans", () => {
     const cases = [
       {
-        path: "examples/fox-hunt-100.m61",
+        path: "examples/fox-hunt-100.mkpro",
         shape: "board_line_count",
         steps: 104,
         referenceSpan: 105,
@@ -394,7 +394,7 @@ program SimpleRules {
         referenceGaps: ["10", "88", "94", "98"],
       },
       {
-        path: "examples/minesweeper-9x9.m61",
+        path: "examples/minesweeper-9x9.mkpro",
         shape: "board_neighbor_count",
         steps: 96,
         referenceSpan: 97,
@@ -402,7 +402,7 @@ program SimpleRules {
         referenceGaps: ["76", "78"],
       },
       {
-        path: "examples/treasure-hunter-2.m61",
+        path: "examples/treasure-hunter-2.mkpro",
         shape: "world_table",
         steps: 104,
         referenceSpan: 105,
@@ -410,7 +410,7 @@ program SimpleRules {
         referenceGaps: ["91", "94", "95"],
       },
       {
-        path: "examples/dangerous-loading.m61",
+        path: "examples/dangerous-loading.mkpro",
         shape: "lane_resource",
         steps: 102,
         referenceSpan: 103,
@@ -421,7 +421,7 @@ program SimpleRules {
     const hexFingerprints = new Set<string>();
 
     for (const testCase of cases) {
-      const result = compileM61(source(testCase.path));
+      const result = compileMKPro(source(testCase.path));
       const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
       const proofs = new Set(result.report.proofs.map((proof) => proof.id));
 
@@ -444,8 +444,8 @@ program SimpleRules {
   });
 
   it("ports Lord_BSS Alaram below the original listing size", () => {
-    const alaram = source("examples/alaram.m61");
-    const result = compileM61(alaram);
+    const alaram = source("examples/alaram.mkpro");
+    const result = compileMKPro(alaram);
     const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
 
     expect(alaram).toMatch(/Lord_BSS pmk210/u);
@@ -460,8 +460,8 @@ program SimpleRules {
   });
 
   it("ports Lord_BSS Dungeon below the original listing size", () => {
-    const dungeon = source("examples/dungeon.m61");
-    const result = compileM61(dungeon);
+    const dungeon = source("examples/dungeon.mkpro");
+    const result = compileMKPro(dungeon);
     const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
 
     expect(dungeon).toMatch(/Lord_BSS pmk164/u);
@@ -477,15 +477,15 @@ program SimpleRules {
 
   it("records board and world query constructs in GameIntent reports", () => {
     for (const path of [
-      "examples/fox-hunt-100.m61",
-      "examples/minesweeper-9x9.m61",
-      "examples/treasure-hunter-2.m61",
-      "examples/dangerous-loading.m61",
-      "examples/alaram.m61",
-      "examples/dungeon.m61",
-      "examples/giants-country.m61",
+      "examples/fox-hunt-100.mkpro",
+      "examples/minesweeper-9x9.mkpro",
+      "examples/treasure-hunter-2.mkpro",
+      "examples/dangerous-loading.mkpro",
+      "examples/alaram.mkpro",
+      "examples/dungeon.mkpro",
+      "examples/giants-country.mkpro",
     ]) {
-      const result = compileM61(source(path));
+      const result = compileMKPro(source(path));
 
       expect(result.report.optimizations.some((optimization) => optimization.name === "spatial-query-lowering")).toBe(true);
       expect(result.report.proofs.some((proof) => proof.id === "spatial-query-semantics")).toBe(true);
@@ -507,7 +507,7 @@ program SimpleRules {
         runUntilStable: (options: { maxFrames: number; stableFrames: number }) => { stopped: boolean };
       };
     };
-    const result = compileM61(source("examples/cave-treasure.m61"));
+    const result = compileMKPro(source("examples/cave-treasure.mkpro"));
     const codes = result.steps.map((step) => step.opcode);
     const calc = new MK61();
     const loaded = calc.loadProgram(codes);
@@ -535,7 +535,7 @@ program SimpleRules {
   });
 
   it("reports automatic optimizer capabilities for V2 programs", () => {
-    const result = compileM61(source("examples/cave-sketch.m61"));
+    const result = compileMKPro(source("examples/cave-sketch.mkpro"));
 
     expect(result.report.ir.lowered).toBe(true);
     expect(result.report.ir.v2).toBe(true);
@@ -546,7 +546,7 @@ program SimpleRules {
   });
 
   it("marks stack-current-x-scheduling active when the matching optimization fires", () => {
-    const result = compileM61(source("examples/lunar.m61"));
+    const result = compileMKPro(source("examples/lunar.mkpro"));
     const applied = new Set(result.report.optimizations.map((optimization) => optimization.name));
     expect(applied.has("stack-current-x-scheduling")).toBe(true);
     const capability = result.report.optimizer.capabilities.find(
@@ -570,7 +570,7 @@ program SimpleRules {
   });
 
   it("always uses exact-machine lowerings for the full cave reference", () => {
-    const result = compileM61(source("examples/cave-treasure.m61"));
+    const result = compileMKPro(source("examples/cave-treasure.mkpro"));
     const applied = new Set(result.report.optimizations.map((optimization) => optimization.name));
     expect(applied.has("super-dark-dispatch")).toBe(false);
     expect(applied.has("x2-display-byte-scheduling")).toBe(true);
@@ -579,7 +579,7 @@ program SimpleRules {
   });
 
   it("uses maximum dispatch lowering by default", () => {
-    const result = compileM61(source("examples/tiny-game.m61"));
+    const result = compileMKPro(source("examples/tiny-game.mkpro"));
     const selected = result.report.candidates.find((candidate) => candidate.selected);
     const rejectedIndirect = result.report.rejectedCandidates.find(
       (candidate) => candidate.variant === "indirect-register-flow",
@@ -592,7 +592,7 @@ program SimpleRules {
   });
 
   it("considers generic dark dispatch only through proof-backed candidates", () => {
-    const result = compileM61(source("examples/human.m61"));
+    const result = compileMKPro(source("examples/human.mkpro"));
     const dark = result.report.candidates.find((candidate) => candidate.variant === "super-dark-dispatch");
 
     expect(dark?.selected).toBe(false);
@@ -602,7 +602,7 @@ program SimpleRules {
 
   it("can load compiled output into the headless emulator wrapper", () => {
     const { MK61 } = require("./emulator/mk61.cjs") as { MK61: new () => { loadProgram: (codes: number[]) => void; readProgramCodes: (count: number) => number[] } };
-    const result = compileM61(source("examples/basic.m61"));
+    const result = compileMKPro(source("examples/basic.mkpro"));
     const calc = new MK61();
     const codes = result.steps.map((step) => step.opcode);
 
@@ -612,7 +612,7 @@ program SimpleRules {
   });
 
   it("does not expose unsafe optimizer fields", () => {
-    const result = compileM61(source("examples/tiny-game.m61"), { budget: 999 });
+    const result = compileMKPro(source("examples/tiny-game.mkpro"), { budget: 999 });
     const json = JSON.stringify(result.report);
     expect(json).not.toMatch(/unsafe|unsafe-unverified/u);
     expect(result.report.optimizer.capabilities.every((capability) => capability.status !== "planned" || capability.detail.length > 0)).toBe(true);

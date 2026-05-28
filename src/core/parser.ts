@@ -66,10 +66,10 @@ export class ParseError extends Error {
 }
 
 export function parseProgram(source: string): ProgramAst {
-  return new M61Parser(source).parseProgram();
+  return new MKProParser(source).parseProgram();
 }
 
-class M61Parser {
+class MKProParser {
   private readonly lines: SourceLine[];
   private index = 0;
 

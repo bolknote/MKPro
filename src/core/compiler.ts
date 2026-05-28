@@ -115,7 +115,7 @@ export class CompileError extends Error {
   }
 }
 
-export function compileM61(
+export function compileMKPro(
   source: string,
   options: Partial<CompileOptions> = {},
 ): CompileResult {
@@ -1602,7 +1602,7 @@ function validateV2Intent(ast: ProgramAst, diagnostics: Diagnostic[]): void {
     level: "error",
     code: "V2_SEMANTIC_LOWERER_MISSING",
     message:
-      `M61 intent contains effects that need real generic lowerers before code generation: ` +
+      `MK-Pro intent contains effects that need real generic lowerers before code generation: ` +
       `${unsupported.slice(0, 8).map((item) => `${item.text} (line ${item.line})`).join(", ")}. ` +
       "The compiler refuses to treat human-level semantics as comments.",
   });

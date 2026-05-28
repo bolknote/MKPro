@@ -5,7 +5,7 @@ const path = require('path');
 
 function parseLordBssGame(filePath) {
   const source = fs.readFileSync(filePath, 'utf8');
-  if (/\.(txt|m61)$/i.test(filePath)) return parseTextListing(filePath, source);
+  if (/\.(txt|mkpro)$/i.test(filePath)) return parseTextListing(filePath, source);
 
   const html = source;
   const title = extractTitle(html);

@@ -1,9 +1,9 @@
 %YAML 1.2
 ---
-name: M61
+name: MK-Pro
 file_extensions:
-  - m61
-scope: source.m61
+  - mkpro
+scope: source.mkpro
 version: 2
 
 variables:
@@ -29,82 +29,82 @@ contexts:
 
   comments:
     - match: '//.*$'
-      scope: comment.line.double-slash.m61
+      scope: comment.line.double-slash.mkpro
     - match: '#.*$'
-      scope: comment.line.number-sign.m61
+      scope: comment.line.number-sign.mkpro
 
   top-level-keywords:
     - match: '^\s*(reference)\b'
-      scope: keyword.control.toplevel.m61
+      scope: keyword.control.toplevel.mkpro
     - match: '\b(mk61|manual|loader|hex)\b'
-      scope: constant.language.m61
+      scope: constant.language.mkpro
 
   section-declarations:
     - match: '^\s*(program|state|screen|turn|rule|board|fleet|world|encounters)\b'
-      scope: keyword.declaration.block.m61
+      scope: keyword.declaration.block.mkpro
     - match: '\b(exact|inline|at)\b'
-      scope: storage.modifier.block.m61
+      scope: storage.modifier.block.mkpro
 
   control-keywords:
     - match: '\b(show|read|match|otherwise|if|else|stop|as|move|challenge|success|failure)\b'
-      scope: keyword.control.m61
+      scope: keyword.control.mkpro
     - match: '\b(and|or|not|north|south|east|west|up|down)\b'
-      scope: keyword.operator.word.m61
+      scope: keyword.operator.word.mkpro
 
   domain-keywords:
     - match: '\b(flag|counter|coord|bitset|packed|position|board|fleet|ships|encoding|true|false)\b'
-      scope: storage.type.domain.m61
+      scope: storage.type.domain.mkpro
     - match: '\b(calculator_random|random_seed|stack\.X|stack\.Y|random|direction|memory_code|cell_at|line_count|neighbor_count|random_cell|nonzero)\b'
-      scope: support.function.domain.m61
+      scope: support.function.domain.mkpro
 
   storage-keywords:
     - match: '\b(store|temp|const|fixed|prefer)\b'
-      scope: storage.type.m61
+      scope: storage.type.mkpro
 
   raw-rows:
     - match: '^\s*(row)\s+([0-9A-Fa-f]{2})\s*(:)'
       captures:
-        1: keyword.declaration.row.m61
-        2: constant.numeric.address.m61
-        3: punctuation.separator.key-value.m61
+        1: keyword.declaration.row.mkpro
+        2: constant.numeric.address.mkpro
+        3: punctuation.separator.key-value.mkpro
       push:
-        - meta_scope: meta.raw-opcode-row.m61
+        - meta_scope: meta.raw-opcode-row.mkpro
         - match: '$'
           pop: true
         - match: '\b[0-9A-Fa-f]{2}\b'
-          scope: constant.numeric.opcode.hex.m61
+          scope: constant.numeric.opcode.hex.mkpro
         - include: comments
 
   mk61-commands:
     - match: '(?:С/П|В/О|БП|ПП|В↑|ВП|Сx|Cx|П->X|X->П|Пх|хП|КПП|КБП|КПх|КхП|FL[0-3])'
-      scope: support.function.mk61.m61
+      scope: support.function.mk61.mkpro
     - match: '\bF\s*[A-Za-zА-Яа-я0-9^]+'
-      scope: support.function.mk61.m61
+      scope: support.function.mk61.mkpro
     - match: '\bК\s*[^{}\[\](),:#/\n]+'
-      scope: support.function.mk61.m61
+      scope: support.function.mk61.mkpro
 
   registers:
     - match: '\b{{register}}\b'
-      scope: variable.other.register.m61
+      scope: variable.other.register.mkpro
     - match: '\bR[abcedABCEDe]\b'
-      scope: variable.other.register.m61
+      scope: variable.other.register.mkpro
 
   constants:
     - match: '\b[0-9A-Fa-f]{2}(?=\s|$)'
-      scope: constant.numeric.hex.m61
+      scope: constant.numeric.hex.mkpro
     - match: '{{number}}'
-      scope: constant.numeric.m61
+      scope: constant.numeric.mkpro
 
   operators:
     - match: '=>|==|!=|<=|>=|\+\+|--|\+=|-=|[-+*/=<>]'
-      scope: keyword.operator.m61
+      scope: keyword.operator.mkpro
     - match: '\.\.'
-      scope: keyword.operator.range.m61
+      scope: keyword.operator.range.mkpro
 
   punctuation:
     - match: '[{}()\[\],:]'
-      scope: punctuation.separator.m61
+      scope: punctuation.separator.mkpro
 
   identifiers:
     - match: '\b{{ident}}\b'
-      scope: variable.other.identifier.m61
+      scope: variable.other.identifier.mkpro
