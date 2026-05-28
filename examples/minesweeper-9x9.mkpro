@@ -9,8 +9,8 @@ program Minesweeper9x9 {
   state {
     // The original uses two-digit cell names from 11 to 99; preserving that
     // convention keeps the player's mental board aligned with the listing.
-    // Mines are generated once and never shown. Opened cells are tracked so the
-    // source names the semantic idea even if a compact backend can encode it away.
+    // Mines are generated once and never shown. Opened cells prevent repeated
+    // safe probes from draining the remaining-cell counter twice.
     mines: cells(minefield) = random()
 
     opened: cells(minefield)
@@ -44,15 +44,20 @@ program Minesweeper9x9 {
   }
 
   rule reveal_safe_cell {
-    // A safe probe earns information, not just survival: the clue is the count
-    // of mines in the eight surrounding cells.
-    opened += probe
-    safe_left--
-    clue = neighbor_count(mines, probe)
-    show result
+    if probe in opened {
+      show result
+    }
+    else {
+      // A safe probe earns information, not just survival: the clue is the count
+      // of mines in the eight surrounding cells.
+      opened += probe
+      safe_left--
+      clue = neighbor_count(mines, probe)
+      show result
 
-    if safe_left <= 0 {
-      cleared_all
+      if safe_left <= 0 {
+        cleared_all
+      }
     }
   }
 }

@@ -6,7 +6,7 @@ reference anvarov_labyrinth777
 program Labyrinth777 {
   state {
     // Labyrinth777 is about orientation in volume: floor, row, and room all
-    // matter, but the calculator can only afford a compact row-like display.
+    // matter, while the display sketches the current row around the player.
     pos: coord(maze) = 444
     row_view: packed = 0
 
@@ -18,8 +18,8 @@ program Labyrinth777 {
     row: counter 1..7 = 4
     room: counter 1..7 = 4
 
-    // The personal jumper is hidden until found; clearing it records that the
-    // search has converged, not that a visible item was picked up.
+    // The personal jumper is a hidden destination separate from local jumpers,
+    // holes, and other room effects.
     jumper: cells(maze) = random()
 
     tile: counter 0..9 = 0
@@ -135,7 +135,6 @@ program Labyrinth777 {
       match tile {
         2 => climb
         3 => descend
-        7 => found_jumper
         otherwise => inspect_room
       }
     }
@@ -195,10 +194,13 @@ program Labyrinth777 {
     // Most rooms only update the display. The one special tile that matters
     // immediately is the lost personal jumper.
     tile = cell_at(pos)
+    row_view = tile
 
-    match tile {
-      7 => found_jumper
-      otherwise => show maze
+    if pos in jumper {
+      found_jumper
+    }
+    else {
+      show maze
     }
   }
 

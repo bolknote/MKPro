@@ -7,6 +7,7 @@ program CaveHighlevelBaseline {
   state {
     // This baseline keeps the classic cave contract explicit: the player sees a
     // packed room display, while walls and caches live as generated hidden masks.
+    player: coord(cave) = stack.X
 
     walls: cells(cave) = random()
 
@@ -20,7 +21,8 @@ program CaveHighlevelBaseline {
 
     blocked: coord(cave)
     next: coord(cave)
-    loot: packed = 0
+    robber: flag = 0
+    robber_roll: counter 0..9 = 0
   }
 
   world cave {
@@ -38,6 +40,10 @@ program CaveHighlevelBaseline {
 
   rule ignored {
     stop 0
+  }
+
+  rule exit_found {
+    stop 11
   }
 
   turn {
@@ -65,8 +71,13 @@ program CaveHighlevelBaseline {
   }
 
   rule move_west {
-    next = player + 0.000001
-    try_move
+    if player == 3.0000008 {
+      exit_found
+    }
+    else {
+      next = player + 0.000001
+      try_move
+    }
   }
 
   rule move_east {
@@ -101,6 +112,9 @@ program CaveHighlevelBaseline {
     // the screen response is the feedback, not a separate error language.
     if blocked != 0 {
       if dynamite >= 2 {
+        walls -= blocked
+        player = blocked
+        blocked = 0
         dynamite -= 2
         show cave_screen
       }
@@ -118,8 +132,52 @@ program CaveHighlevelBaseline {
       // Searching consumes the cache so repeated probing cannot farm score from
       // one lucky room.
       caches -= player
-      treasure++
-      show cave_screen
+      cache_reward
+      robber = 1
+      fight
     }
+  }
+
+  rule cache_reward {
+    if player.floor == 1 {
+      food += 10
+    }
+    else {
+      if player.floor == 2 {
+        dynamite++
+      }
+      else {
+        treasure++
+      }
+    }
+  }
+
+  rule fight {
+    if robber == 1 {
+      show cave_screen
+      read fight_key
+      match fight_key {
+        0 => decline_fight
+        10 => accept_fight
+        otherwise => ignored
+      }
+    }
+  }
+
+  rule decline_fight {
+    robber = 0
+    show 0
+  }
+
+  rule accept_fight {
+    robber_roll = random()
+    if robber_roll >= 5 {
+      cache_reward
+    }
+    else {
+      food -= 3
+    }
+    robber = 0
+    show cave_screen
   }
 }

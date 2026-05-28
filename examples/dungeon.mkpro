@@ -6,8 +6,8 @@ reference lordbss_pmk164
 
 program Dungeon {
   state {
-    // The player sees position and height. The generated plan says which height
-    // is blocked by a wall at each corridor position.
+    // The player sees position, height, and score. The generated plan says
+    // which height is blocked by a wall at each corridor position.
     pos: coord(dungeon) = 8
     height: counter 0..9 = 2
     plan: packed = 42134124
@@ -27,7 +27,7 @@ program Dungeon {
   }
 
   screen place {
-    show pos, height
+    show pos, height, score
   }
 
   screen map {

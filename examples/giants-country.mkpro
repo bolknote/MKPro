@@ -15,12 +15,10 @@ program GiantsCountry {
     // Score values are deliberately uneven: larger monsters are not just harder
     // walls, they change the reward curve.
     floor: counter 1..3 = 1
-    room: counter 0..7 = 0
-
     score: counter 0..99 = 0
 
-    // Plans represent learned/defeated encounters. Clearing them marks that a
-    // room's scripted danger has been resolved by the player.
+    // Plans mark unresolved scripted encounters. A successfully handled room is
+    // cleared so its creature or item is not fought again.
     plans: cells(giant_country) = random()
 
     tile: counter 0..9 = 0
@@ -38,7 +36,7 @@ program GiantsCountry {
   }
 
   screen cave {
-    show view, strength
+    show view, strength, score
   }
 
   screen warning {
@@ -68,14 +66,20 @@ program GiantsCountry {
     // empty rooms part of the attrition game.
     strength--
     tile = cell_at(pos)
+    view = tile
 
     if tile == 8 {
       hit_wall
     }
     else {
-      encounter tile
-      room++
-      pos++
+      if pos in plans {
+        encounter tile
+        pos++
+      }
+      else {
+        pos++
+        show cave
+      }
     }
 
     if strength <= 0 {

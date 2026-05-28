@@ -24,7 +24,7 @@ program CaveTreasure {
     blocked: coord(cave)
     next: coord(cave)
     robber: flag = 0
-    exit_reached: flag = 0
+    robber_roll: counter 0..9 = 0
   }
 
   world cave {
@@ -45,7 +45,7 @@ program CaveTreasure {
   }
 
   rule exit_found {
-    stop 1
+    stop 11
   }
 
   turn {
@@ -54,18 +54,25 @@ program CaveTreasure {
     food--
 
     match key {
-      2, 4, 6, 8, 5, -5 => go direction(key)
+      4 => go_left
+      2, 6, 8, 5, -5 => go direction(key)
       0 => break_wall
       10 => search
       otherwise => ignored
     }
   }
 
-  rule go dir {
-    next = pos + dir
-    if exit_reached == 1 {
+  rule go_left {
+    if pos == 3.0000008 {
       exit_found
     }
+    else {
+      go direction(key)
+    }
+  }
+
+  rule go dir {
+    next = pos + dir
     if next in walls {
       // A wall hit is remembered rather than immediately resolved; spending
       // dynamite is a separate player commitment.
@@ -74,6 +81,7 @@ program CaveTreasure {
     }
     else {
       pos = next
+      blocked = 0
     }
   }
 
@@ -82,6 +90,7 @@ program CaveTreasure {
       if dynamite >= 2 {
         walls -= blocked
         pos = blocked
+        blocked = 0
         dynamite -= 2
       }
       else {
@@ -96,23 +105,37 @@ program CaveTreasure {
   rule search {
     if pos in caches {
       caches -= pos
-      // Cache value follows floor depth, matching the "riskier rooms pay better"
-      // shape without spelling out three separate search rules.
-      treasure += pos.floor
+      cache_reward
       robber = 1
       fight
+    }
+  }
+
+  rule cache_reward {
+    if pos.floor == 1 {
+      food += 9
+    }
+    else {
+      if pos.floor == 2 {
+        dynamite += 4
+      }
+      else {
+        treasure++
+      }
     }
   }
 
   rule fight {
     // The robber prompt creates a short memory test/choice after treasure is
     // found; the search result has already been committed.
-    show main
-    read fight_key
-    match fight_key {
-      0 => decline_fight
-      10 => accept_fight
-      otherwise => ignored
+    if robber == 1 {
+      show main
+      read fight_key
+      match fight_key {
+        0 => decline_fight
+        10 => accept_fight
+        otherwise => ignored
+      }
     }
   }
 
@@ -122,7 +145,14 @@ program CaveTreasure {
   }
 
   rule accept_fight {
+    robber_roll = random()
+    if robber_roll >= 5 {
+      cache_reward
+    }
+    else {
+      food -= 3
+    }
     robber = 0
-    treasure += random()
+    show main
   }
 }

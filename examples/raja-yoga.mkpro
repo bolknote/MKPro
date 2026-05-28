@@ -11,7 +11,6 @@ program RajaYoga {
     laziness: coord(life)
     old_age: coord(life) = 1
     obstacles: cells(life) = random()
-    mastered: cells(life)
 
     stage: counter 1..8 = 1
     effort: counter -3..3 = 0
@@ -31,19 +30,28 @@ program RajaYoga {
   }
 
   turn {
+    if goal == 0 {
+      goal = random_cell(life)
+    }
+
     show path
     read effort
     steps++
 
-    if effort < -3 {
-      show path
+    if steps >= 99 {
+      failed
     }
     else {
-      if effort > 3 {
+      if effort < -3 {
         show path
       }
       else {
-        walk
+        if effort > 3 {
+          show path
+        }
+        else {
+          walk
+        }
       }
     }
   }
@@ -69,7 +77,6 @@ program RajaYoga {
 
   rule pursue_goal {
     if adept == goal {
-      mastered += adept
       stage++
       if stage > 8 {
         attained

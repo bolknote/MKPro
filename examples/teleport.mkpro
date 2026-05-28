@@ -27,20 +27,13 @@ program Teleport {
     stop -999
   }
 
-  rule escaped {
-    stop 777
-  }
-
   turn {
     show station_view
     read command
     charges--
 
     match command {
-      4 => try_move direction(command)
-      6 => try_move direction(command)
-      8 => try_move direction(command)
-      2 => try_move direction(command)
+      2, 4, 6, 8 => try_move direction(command)
       5 => climb
       -5 => drop
       0 => teleport_to_vault

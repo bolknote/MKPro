@@ -1,7 +1,7 @@
 reference anvarov_tic_tac_toe_4x4
 
 // Based on Serge Anvarov's 4x4 tic-tac-toe. The source listing packs occupied
-// cells and line tests with K AND/K OR; the MK-Pro source names the two masks
+// cells and line tests with K AND/K OR; the MK-Pro source names the mark masks
 // and asks line_count for the tactical report.
 
 program TicTacToe4x4 {

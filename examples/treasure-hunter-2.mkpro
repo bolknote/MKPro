@@ -13,9 +13,10 @@ program TreasureHunter2 {
 
     floor: counter 1..9 = 9
     room: counter 0..6 = 0
-    // "known_floors" doubles as the generated world table: clearing a bit means
-    // this floor/position has been resolved by play.
-    known_floors: cells(cave) = random()
+
+    known_floor: counter 0..9 = 0
+    dug_pos: coord(cave)
+    collected_treasure: coord(cave)
 
     tile: counter 0..9 = 0
   }
@@ -42,6 +43,10 @@ program TreasureHunter2 {
     stop 0
   }
 
+  rule lost {
+    stop -999
+  }
+
   turn {
     show maze
     read action
@@ -59,60 +64,118 @@ program TreasureHunter2 {
   rule move_left {
     // The left edge of floor 1 is the only exit. Other left moves are just
     // ordinary exploration and still inspect the resulting cell.
-    if floor == 1 {
-      if room == 0 {
+    if room == 0 {
+      if floor == 1 {
         escaped
       }
+      else {
+        show maze
+      }
     }
-
-    room--
-    pos--
-    inspect_cell
+    else {
+      room--
+      pos--
+      inspect_cell
+    }
   }
 
   rule move_right {
-    room++
-    pos++
-    inspect_cell
+    if room < 6 {
+      room++
+      pos++
+      inspect_cell
+    }
+    else {
+      show maze
+    }
   }
 
   rule climb {
-    if tile == 3 {
-      floor++
-      move pos up
+    if pos == dug_pos {
+      show maze
     }
-    show maze
+    else {
+      if tile == 3 {
+        if floor < 9 {
+          floor++
+          move pos up
+          inspect_cell
+        }
+        else {
+          show maze
+        }
+      }
+      else {
+        show maze
+      }
+    }
   }
 
   rule descend {
     floor--
-    move pos down
-    inspect_cell
+    if floor <= 0 {
+      lost
+    }
+    else {
+      move pos down
+      inspect_cell
+    }
   }
 
   rule punch_hole {
-    // Digging a hole turns uncertainty into a forced descent; it is the player's
-    // way to make progress when the generated map is unhelpful.
-    known_floors -= pos
+    // Digging marks this cell as a forced descent. That also destroys a ladder,
+    // so future climb attempts from the same cell no longer work.
+    dug_pos = pos
     descend
   }
 
   rule inspect_cell {
-    // Tile numbers are semantic, not visual decoration: treasure, hole, ladder,
-    // or empty passage decide the next rule.
-    tile = cell_at(cave, pos)
+    if pos == dug_pos {
+      descend
+    }
+    else {
+      reveal_cell
+    }
+  }
 
-    match tile {
-      1 => collect_treasure
-      2 => descend
-      3 => show maze
-      otherwise => show maze
+  rule reveal_cell {
+    // Tile numbers are semantic, not visual decoration: treasure, hole, ladder,
+    // or empty passage decide the next rule. The first visit to a generated
+    // floor/cell also makes its plan visible on the calculator screen.
+    tile = cell_at(cave, pos)
+    floor_view = tile
+
+    if floor == known_floor {
+      classify_tile
+    }
+    else {
+      known_floor = floor
+      classify_tile
+    }
+  }
+
+  rule classify_tile {
+    if pos == collected_treasure {
+      show maze
+    }
+    else {
+      match tile {
+        1 => collect_treasure
+        2 => descend
+        3 => show maze
+        otherwise => show maze
+      }
     }
   }
 
   rule collect_treasure {
-    treasure++
-    known_floors -= pos
-    show maze
+    if pos == collected_treasure {
+      show maze
+    }
+    else {
+      collected_treasure = pos
+      treasure++
+      show maze
+    }
   }
 }

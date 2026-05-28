@@ -1,14 +1,13 @@
 // Source: games/anvarov/game-100-pig.txt
 // Pig is mostly a score-and-display game. The dice face is modeled as a tiny
-// board so the compiler can keep the random face and bit-mask style visible at
-// intent level instead of spelling out the original K OR display packing.
+// board so the compiler can keep the random roll visible at intent level
+// instead of spelling out the original display packing.
 
 program Game100Pig {
   die_faces: board(1..6, 1..1)
 
   state {
     die: coord(die_faces)
-    rolled_faces: cells(die_faces) = random()
 
     player_total: counter 0..100 = 0
     calculator_total: counter 0..100 = 0
@@ -35,7 +34,6 @@ program Game100Pig {
 
   rule roll_player {
     die = random_cell(die_faces)
-    rolled_faces += die
     roll_count++
 
     if die == 1 {
@@ -44,13 +42,7 @@ program Game100Pig {
     else {
       turn_score += die
       preview_total = player_total + turn_score
-      show status
-      read choice
-
-      match choice {
-        0 => hold_player
-        otherwise => roll_player
-      }
+      player_choice
     }
   }
 
@@ -79,7 +71,6 @@ program Game100Pig {
 
   rule roll_calculator {
     die = random_cell(die_faces)
-    rolled_faces += die
     roll_count++
 
     if die == 1 {
@@ -108,12 +99,7 @@ program Game100Pig {
       turn_score = 0
       roll_count = 0
       preview_total = player_total
-      show status
-      read choice
-      match choice {
-        0 => hold_player
-        otherwise => roll_player
-      }
+      player_choice
     }
   }
 
@@ -121,6 +107,10 @@ program Game100Pig {
     turn_score = 0
     roll_count = 0
     preview_total = player_total
+    player_choice
+  }
+
+  rule player_choice {
     show status
     read choice
     match choice {

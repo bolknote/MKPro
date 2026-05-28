@@ -58,6 +58,7 @@ program ResourceRaid {
     }
     else {
       pos = next
+      blocked = 0
     }
   }
 
@@ -68,6 +69,7 @@ program ResourceRaid {
       if keys >= 1 {
         doors -= blocked
         pos = blocked
+        blocked = 0
         keys--
       }
       else {
