@@ -164,6 +164,10 @@ This is a startup convention, not general register binding. Memory registers
 `R0`..`Re` are allocated by the compiler; source code should not name them for
 state placement.
 
+Names beginning with `__mkpro_` are reserved for compiler-internal helper
+expressions. User programs should express game rules directly; generated helper
+names may appear in reports, but they are not part of the source language.
+
 ## Terminal Rules
 
 Terminal outcomes are ordinary rules. Put the final display/stop sequence in a
@@ -658,6 +662,12 @@ candidates:
 - store/recall peephole: removes immediate `X->П r ; П->X r`;
 - branch-removal umbrella: replaces matched conditionals with branchless
   arithmetic, `К max`, `К |x|`, sign transforms, or boolean-masked updates;
+- negative-zero threshold selector: for bounded integer nonnegative threshold
+  `if/else` forms, the compiler may use a compiler-owned `1|-00` preload and
+  `В↑` normalization to produce a `0..1` selector when that is shorter than the
+  ordinary branch. The report includes a setup program for the unusual preload;
+  ordinary flow branches are also costed through this path, but kept unchanged
+  whenever the normal condition is shorter;
 - cell membership clear reuse: when `if cell in cells` immediately clears that
   same cell, the compiler reuses the successful mask instead of recomputing it;
 - adjacent bit-set reuse: consecutive `cells += cell` updates compute the cell
@@ -681,7 +691,9 @@ candidates:
   cell counts) and marks the matching capability `considered` rather than
   `candidate`, making it clear the rewrite was tried and not profitable;
 - setup-state extraction: moves setup values outside official program cells and
-  records the required calculator state in the report;
+  records the required calculator state in the report. Special compiler-owned
+  setup values, such as `1|-00`, include `setupProgram`/`setupNote` fields in
+  JSON and an extra setup line in `explain`;
 - automatic constants: reserves spare registers for expensive constants such as
   `10`, `20`, and `100`;
 - show/read fusion: `show screen` followed by `read key` uses one calculator

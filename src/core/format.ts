@@ -82,6 +82,12 @@ export function formatExplain(result: CompileResult): string {
     lines.push("", "Preloads:");
     for (const preload of result.report.preloads) {
       lines.push(`  R${preload.register}: ${preload.value}${preload.countsAgainstProgram ? "" : " (outside program cells)"}`);
+      if (preload.setupProgram !== undefined) {
+        lines.push(`    setup: ${preload.setupProgram}`);
+      }
+      if (preload.setupNote !== undefined) {
+        lines.push(`    note: ${preload.setupNote}`);
+      }
     }
   }
   lines.push("", "Registers:");

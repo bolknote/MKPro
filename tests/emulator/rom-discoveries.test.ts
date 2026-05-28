@@ -109,6 +109,29 @@ function runProgramWithRegisters(codes: number[], registers: Record<string, stri
   };
 }
 
+function preloadNegativeZeroOne(calc: Mk61Instance, register: RegisterName): void {
+  const registerCode = registerIndex(register);
+  calc.loadProgram([
+    0x54, 0x01, 0x03, 0x40 + registerCode, 0x01, 0x08, 0x38, 0x35, 0x0b,
+    0x0c, 0x02, 0x15, 0x0e, 0x0c, 0x0b, 0x05, 0x00, 0x40 + registerCode,
+    0x50,
+  ]);
+  calc.press("В/О");
+  calc.press("С/П");
+  calc.runUntilStable({ maxFrames: 1000, stableFrames: 5 });
+}
+
+function runNegativeZeroThresholdSelector(value: string): string {
+  const calc = new MK61();
+  preloadNegativeZeroOne(calc, "9");
+  calc.setRegister("0", value);
+  calc.loadProgram([0x69, 0x60, 0x12, 0x0e, 0x32, 0x50]);
+  calc.press("В/О");
+  calc.press("С/П");
+  calc.runUntilStable({ maxFrames: 500, stableFrames: 5 });
+  return calc.readRegister("x");
+}
+
 describe("emulator ROM discoveries", () => {
   it("uses different command ROM words across chips for every user opcode", () => {
     const differingOpcodes: number[] = [];
@@ -186,6 +209,14 @@ describe("emulator ROM discoveries", () => {
     expect(result.stopped).toBe(true);
     expect(result.frames).toBeLessThan(20);
     expect(result.display).toBe("0,5000000000,0,");
+  });
+
+  it("turns 1|-00 multiplication into a normalized threshold selector", () => {
+    expect(runNegativeZeroThresholdSelector("0")).toBe("0,");
+    expect(runNegativeZeroThresholdSelector("0.7")).toBe("0,");
+    expect(runNegativeZeroThresholdSelector("0.999")).toBe("0,");
+    expect(runNegativeZeroThresholdSelector("1")).toBe("1,");
+    expect(runNegativeZeroThresholdSelector("2")).toBe("1,");
   });
 
   it("does not collapse the F0..FF range to one command word", () => {

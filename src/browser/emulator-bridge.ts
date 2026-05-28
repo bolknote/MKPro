@@ -13,6 +13,7 @@ const STATUS_ID = "mk-pro-emulator-status";
 export interface BrowserCompileOutput {
   source: string;
   programText: string;
+  setupProgramText?: string;
   listing: string;
   steps: CompileResult["steps"];
   report: CompileResult["report"];
@@ -55,9 +56,14 @@ export function compileForBrowser(
 ): BrowserCompileOutput {
   const result = compileMKPro(source, { ...DEFAULT_COMPILE_OPTIONS, ...options });
   const programText = formatProgramTokens(result.steps.map((step) => step.hex));
+  const setupPrograms = result.report.preloads
+    .map((preload) => preload.setupProgram)
+    .filter((program): program is string => program !== undefined);
+  const setupProgramText = setupPrograms.length === 0 ? undefined : setupPrograms.join("\n\n");
   return {
     source,
     programText,
+    ...(setupProgramText === undefined ? {} : { setupProgramText }),
     listing: formatListing(result),
     steps: result.steps,
     report: result.report,
@@ -119,7 +125,11 @@ export function installEmulatorBridge(
       bubbles: true,
       detail: compiled,
     }));
-    setStatus(`MK-Pro compiled: ${compiled.report.steps}/${compiled.report.budget} cells.`);
+    setStatus(
+      compiled.setupProgramText === undefined
+        ? `MK-Pro compiled: ${compiled.report.steps}/${compiled.report.budget} cells.`
+        : `MK-Pro compiled: ${compiled.report.steps}/${compiled.report.budget} cells; setup program required.`,
+    );
     return compiled;
   };
 
@@ -174,7 +184,11 @@ export function installEmulatorBridge(
     try {
       const compiled = compileForBrowser(source, compilerOptions);
       lastResult = compiled;
-      setStatus(`MK-Pro detected: ${compiled.report.steps}/${compiled.report.budget} cells. Click Write to load.`);
+      setStatus(
+        compiled.setupProgramText === undefined
+          ? `MK-Pro detected: ${compiled.report.steps}/${compiled.report.budget} cells. Click Write to load.`
+          : `MK-Pro detected: ${compiled.report.steps}/${compiled.report.budget} cells. Run setupProgramText once, then click Write.`,
+      );
     } catch (error) {
       setStatus(errorToStatus(error), true);
     }

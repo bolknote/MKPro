@@ -95,6 +95,9 @@ const BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
 const CELL_MAP_PREFIX = "__cell_map_";
 const SPATIAL_HIT_SCRATCH_PREFIX = "__spatial_hit_";
 const SPATIAL_COUNT_SCRATCH_PREFIX = "__spatial_count_";
+const NEGATIVE_ZERO_DEGREE_SELECTOR_GE = "__mkpro_negative_zero_ge";
+const NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE = "1|-00";
+const INTERNAL_NAME_PREFIX = "__mkpro_";
 const DISPLAY_HELPER_MIN_SAVINGS = 4;
 const EXPRESSION_HELPER_MIN_COST = 8;
 const EXPRESSION_HELPER_MIN_SAVINGS = 4;
@@ -124,6 +127,7 @@ export function compileMKPro(
   hoistCommonBranchTails(ast, optimizations);
   validateSemanticDomains(ast, diagnostics);
   validateV2Intent(ast, diagnostics);
+  validateReservedInternalNames(ast, diagnostics);
   if (diagnostics.some((diagnostic) => diagnostic.level === "error")) {
     throw new CompileError(diagnostics);
   }
@@ -149,7 +153,11 @@ export function compileMKPro(
   context.compileProgram();
   const optimizedResult = optimizeItems(context.items, opts, optimizations);
   const optimized = optimizedResult.items;
-  const preloads = [...buildPreloadReport(ast, allocation), ...optimizedResult.preloads];
+  const preloads = [
+    ...buildPreloadReport(ast, allocation),
+    ...buildNegativeZeroDegreePreloadReport(allocation, optimizations),
+    ...optimizedResult.preloads,
+  ];
   appendOptimizationCandidateReports(optimizations, candidates);
   const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, machineProfile);
   const largestBlocks = summarizeBlocks(optimized);
@@ -438,7 +446,8 @@ function simplifyIfStatement(statement: Extract<StatementAst, { kind: "if" }>): 
     }];
   }
   if (statement.elseBody !== undefined && statement.elseBody.length === 0) {
-    const { elseBody: _elseBody, ...rest } = statement;
+    const rest = { ...statement };
+    delete rest.elseBody;
     return [{
       ...rest,
     }];
@@ -651,6 +660,105 @@ function validateV2Intent(ast: ProgramAst, diagnostics: Diagnostic[]): void {
       `${unsupported.slice(0, 8).map((item) => `${item.text} (line ${item.line})`).join(", ")}. ` +
       "The compiler refuses to treat human-level semantics as comments.",
   });
+}
+
+function validateReservedInternalNames(ast: ProgramAst, diagnostics: Diagnostic[]): void {
+  const seen = new Set<string>();
+  const report = (name: string, line?: number): void => {
+    if (!name.toLowerCase().startsWith(INTERNAL_NAME_PREFIX)) return;
+    const key = `${line ?? 0}:${name}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    diagnostics.push(buildDiagnostic(
+      "error",
+      `Name '${name}' uses reserved compiler-internal prefix '${INTERNAL_NAME_PREFIX}'.`,
+      line,
+    ));
+  };
+  const visitExpr = (expr: ExpressionAst): void => {
+    if (expr.kind === "identifier") report(expr.name);
+    if (expr.kind === "unary") visitExpr(expr.expr);
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+    }
+    if (expr.kind === "call") {
+      report(expr.callee);
+      for (const arg of expr.args) visitExpr(arg);
+    }
+  };
+  const visitCondition = (condition: ConditionAst): void => {
+    visitExpr(condition.left);
+    visitExpr(condition.right);
+  };
+  const visitStatements = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "assign") {
+        report(statement.target, statement.line);
+        visitExpr(statement.expr);
+      }
+      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "ask") {
+        report(statement.target, statement.line);
+        if (statement.prompt) visitExpr(statement.prompt);
+      }
+      if (statement.kind === "show") report(statement.display, statement.line);
+      if (statement.kind === "call") report(statement.block, statement.line);
+      if (statement.kind === "trap") visitExpr(statement.expr);
+      if (statement.kind === "if") {
+        visitCondition(statement.condition);
+        visitStatements(statement.thenBody);
+        if (statement.elseBody) visitStatements(statement.elseBody);
+      }
+      if (statement.kind === "loop") visitStatements(statement.body);
+      if (statement.kind === "switch") {
+        visitExpr(statement.expr);
+        for (const switchCase of statement.cases) {
+          visitExpr(switchCase.value);
+          visitStatements(switchCase.body);
+        }
+        if (statement.defaultBody) visitStatements(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          visitExpr(dispatchCase.value);
+          visitStatements(dispatchCase.body);
+        }
+        if (statement.defaultBody) visitStatements(statement.defaultBody);
+      }
+    }
+  };
+
+  for (const declaration of ast.declarations) {
+    report(declaration.name, declaration.line);
+    if (declaration.kind === "const" || declaration.kind === "store") {
+      if (declaration.value) visitExpr(declaration.value);
+    }
+  }
+  for (const state of ast.states) {
+    report(state.name, state.line);
+    for (const field of state.fields) {
+      report(field.name, field.line);
+      if (field.initial) visitExpr(field.initial);
+    }
+  }
+  for (const display of ast.displays) {
+    report(display.name, display.line);
+    for (const source of display.sources) report(source, display.line);
+  }
+  for (const entry of ast.entries) {
+    report(entry.name, entry.line);
+    visitStatements(entry.body);
+  }
+  for (const proc of ast.procs) {
+    report(proc.name, proc.line);
+    visitStatements(proc.body);
+  }
+  for (const block of ast.blocks) {
+    report(block.name, block.line);
+    visitStatements(block.body);
+  }
 }
 
 function collectUnsupportedV2Statements(ast: NonNullable<ProgramAst["v2"]>): Array<{ text: string; line: number }> {
@@ -1259,8 +1367,16 @@ class EmitContext {
   }
 
   private compileArithmeticIfSelect(statement: Extract<StatementAst, { kind: "if" }>): boolean {
-    const selected = buildBranchRemovalCandidate(statement, this.ast);
-    if (!selected) return false;
+    const canUseNegativeZero = this.allocation.negativeZeroDegree !== undefined;
+    const selected = buildBranchRemovalCandidate(
+      statement,
+      this.ast,
+      { negativeZeroDegree: canUseNegativeZero },
+    );
+    if (!selected) {
+      if (!canUseNegativeZero) this.recordRejectedNegativeZeroBranchCandidate(statement);
+      return false;
+    }
 
     const ordinaryCost = estimateOrdinaryIfCost(statement, this.ast);
     const selectedCost = estimateExpressionCost(selected.expr) + 1;
@@ -1272,6 +1388,9 @@ class EmitContext {
         selected: false,
         reason: `Branchless ${selected.name} estimated at ${selectedCost} cells; ordinary branched form was shorter (${ordinaryCost}).`,
       });
+      if (!selected.name.startsWith("negative-zero-threshold-")) {
+        this.recordRejectedNegativeZeroBranchCandidate(statement);
+      }
       return false;
     }
 
@@ -1290,6 +1409,22 @@ class EmitContext {
       detail: `${selected.detail} at line ${statement.line} (${selectedCost} vs ${ordinaryCost} estimated steps).`,
     });
     return true;
+  }
+
+  private recordRejectedNegativeZeroBranchCandidate(statement: Extract<StatementAst, { kind: "if" }>): void {
+    const selected = buildBranchRemovalCandidate(statement, this.ast, { negativeZeroDegree: true });
+    if (selected === undefined || !selected.name.startsWith("negative-zero-threshold-")) return;
+    const ordinaryCost = estimateOrdinaryIfCost(statement, this.ast);
+    const selectedCost = estimateExpressionCost(selected.expr) + 1;
+    this.candidates.push({
+      site: `if@${statement.line}`,
+      variant: selected.name,
+      steps: selectedCost,
+      selected: false,
+      reason: selectedCost >= ordinaryCost
+        ? `Branchless ${selected.name} estimated at ${selectedCost} cells; ordinary branched form was shorter (${ordinaryCost}).`
+        : `Branchless ${selected.name} estimated at ${selectedCost} cells, but no compiler-owned negative-zero register was available.`,
+    });
   }
 
   private compileDoubleBranchRemoval(
@@ -1804,6 +1939,8 @@ class EmitContext {
     falseLabel: string,
     line: number,
   ): void {
+    if (this.compileNegativeZeroThresholdFlow(condition, falseLabel, line)) return;
+
     const selected = selectCheaperEquivalentCondition(
       condition,
       this.ast,
@@ -1851,6 +1988,57 @@ class EmitContext {
             : 0x57;
     const mnemonic = getOpcode(opcode).name;
     this.emitJump(opcode, mnemonic, falseLabel, `false branch for ${compiledCondition.op}`, line);
+  }
+
+  private compileNegativeZeroThresholdFlow(
+    condition: ConditionAst,
+    falseLabel: string,
+    line: number,
+  ): boolean {
+    const register = this.allocation.negativeZeroDegree;
+    const threshold = matchNegativeZeroThresholdCondition(condition, this.ast);
+    if (threshold === undefined) return false;
+
+    const preloadedConstants = new Set(Object.keys(this.allocation.constants));
+    const selectedCost = estimateNegativeZeroThresholdFlowCost(threshold, preloadedConstants);
+    const ordinaryCost = conditionCompileCost(
+      selectCheaperEquivalentCondition(condition, this.ast, preloadedConstants).condition,
+      preloadedConstants,
+    );
+    if (register === undefined || selectedCost >= ordinaryCost) {
+      this.candidates.push({
+        site: `if@${line}`,
+        variant: "negative-zero-threshold-flow",
+        steps: selectedCost,
+        selected: false,
+        reason: selectedCost >= ordinaryCost
+          ? `Negative-zero threshold flow estimated at ${selectedCost} cells; ordinary condition was shorter (${ordinaryCost}).`
+          : "Negative-zero threshold flow matched, but no compiler-owned negative-zero register was available.",
+      });
+      return false;
+    }
+
+    this.emitNegativeZeroThresholdRaw(threshold.value, numberExpression(threshold.bound), register, line);
+    const opcode = threshold.truth === "ge" ? 0x57 : 0x5e;
+    this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `negative-zero false branch for ${condition.op}`, line);
+    this.optimizations.push({
+      name: "negative-zero-threshold-flow",
+      detail: `Tested ${conditionToText(condition)} through preloaded ${NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE} in R${register}.`,
+    });
+    return true;
+  }
+
+  private emitNegativeZeroThresholdRaw(
+    value: ExpressionAst,
+    bound: ExpressionAst,
+    register: RegisterName,
+    line?: number,
+  ): void {
+    this.compileExpression(divideExpressions(value, bound));
+    this.emitOp(0x60 + registerIndex(register), `П->X ${register}`, "negative-zero threshold sentinel", line);
+    this.emitOp(0x14, "X↔Y", "place threshold value above negative-zero sentinel", line);
+    this.emitOp(0x12, "*", "negative-zero threshold zero-through", line);
+    this.emitOp(0x0e, "В↑", "normalize negative-zero threshold result", line);
   }
 
   private compileBitHasConditionWithSpatialHelper(expr: ExpressionAst, line: number): boolean {
@@ -2050,6 +2238,9 @@ class EmitContext {
     }
     if (name === "__spatial_hit") {
       if (this.compileSpatialHitCall(expr)) return;
+    }
+    if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
+      if (this.compileNegativeZeroDegreeSelectorCall(expr)) return;
     }
     if (isTicTacToeMacroName(name) && ticTacToeMacroArity(name) !== expr.args.length) {
       this.diagnostics.push({
@@ -2452,6 +2643,34 @@ class EmitContext {
     return true;
   }
 
+  private compileNegativeZeroDegreeSelectorCall(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
+    if (expr.args.length !== 2) {
+      this.diagnostics.push({
+        level: "error",
+        message: `${NEGATIVE_ZERO_DEGREE_SELECTOR_GE}() expects two arguments.`,
+      });
+      return true;
+    }
+    const register = this.allocation.negativeZeroDegree;
+    if (register === undefined) {
+      this.diagnostics.push({
+        level: "error",
+        message: "Internal: negative-zero threshold selector was emitted without a reserved register.",
+      });
+      return true;
+    }
+    const [value, bound] = expr.args;
+    if (value === undefined || bound === undefined) return true;
+
+    this.emitNegativeZeroThresholdRaw(value, bound, register);
+    this.emitOp(0x32, "К ЗН", "negative-zero threshold selector");
+    this.optimizations.push({
+      name: "negative-zero-threshold-selector",
+      detail: `Used preloaded ${NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE} in R${register} for ${expressionToIntentText(value)} >= ${expressionToIntentText(bound)}.`,
+    });
+    return true;
+  }
+
   private sharedLineCountHelper(
     mask: ExpressionAst,
     cell: ExpressionAst,
@@ -2666,6 +2885,7 @@ class EmitContext {
 interface RegisterAllocation {
   registers: Record<string, RegisterName>;
   constants: Record<string, RegisterName>;
+  negativeZeroDegree?: RegisterName;
 }
 
 function findSingleUseProcNames(ast: ProgramAst): Set<string> {
@@ -2804,7 +3024,14 @@ function allocateRegisters(
     used.add(register);
   }
 
-  return { registers, constants };
+  const negativeZeroDegree = programNeedsNegativeZeroDegree(ast)
+    ? pickConstantRegister(used)
+    : undefined;
+  if (negativeZeroDegree !== undefined) used.add(negativeZeroDegree);
+
+  return negativeZeroDegree === undefined
+    ? { registers, constants }
+    : { registers, constants, negativeZeroDegree };
 }
 
 function collectDomainBindings(ast: ProgramAst): DomainBinding[] {
@@ -3025,6 +3252,56 @@ function programContainsCall(ast: ProgramAst, name: string): boolean {
           visitExpr(dispatchCase.value);
           visitStatements(dispatchCase.body);
         }
+        if (statement.defaultBody) visitStatements(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visitStatements(entry.body);
+  for (const proc of ast.procs) visitStatements(proc.body);
+  for (const block of ast.blocks) visitStatements(block.body);
+  return found;
+}
+
+function programNeedsNegativeZeroDegree(ast: ProgramAst): boolean {
+  return programVisitsIf(ast, (statement) => statementNeedsNegativeZeroDegree(statement, ast));
+}
+
+function statementNeedsNegativeZeroDegree(
+  statement: Extract<StatementAst, { kind: "if" }>,
+  ast: ProgramAst,
+): boolean {
+  const selected = buildBranchRemovalCandidate(statement, ast, { negativeZeroDegree: true });
+  if (selected !== undefined && selected.name.startsWith("negative-zero-threshold-")) {
+    return estimateExpressionCost(selected.expr) + 1 < estimateOrdinaryIfCost(statement, ast);
+  }
+  const threshold = matchNegativeZeroThresholdCondition(statement.condition, ast);
+  if (threshold === undefined) return false;
+  return estimateNegativeZeroThresholdFlowCost(threshold, undefined) < estimateConditionCost(statement.condition, ast);
+}
+
+function programVisitsIf(
+  ast: ProgramAst,
+  predicate: (statement: Extract<StatementAst, { kind: "if" }>) => boolean,
+): boolean {
+  let found = false;
+  const visitStatements = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (found) return;
+      if (statement.kind === "if") {
+        if (predicate(statement)) {
+          found = true;
+          return;
+        }
+        visitStatements(statement.thenBody);
+        if (statement.elseBody) visitStatements(statement.elseBody);
+      }
+      if (statement.kind === "loop") visitStatements(statement.body);
+      if (statement.kind === "switch") {
+        for (const switchCase of statement.cases) visitStatements(switchCase.body);
+        if (statement.defaultBody) visitStatements(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visitStatements(dispatchCase.body);
         if (statement.defaultBody) visitStatements(statement.defaultBody);
       }
     }
@@ -3884,6 +4161,44 @@ function isKnownIntegerExpression(expr: ExpressionAst, ast: ProgramAst): boolean
   return expr.kind === "identifier" && integerRangeFor(expr.name, ast) !== undefined;
 }
 
+function isKnownIntegerValuedExpression(expr: ExpressionAst, ast: ProgramAst): boolean {
+  if (expr.kind === "number") return Number.isSafeInteger(Number(expr.raw));
+  if (expr.kind === "identifier") return integerRangeFor(expr.name, ast) !== undefined;
+  if (expr.kind === "unary" && expr.op === "-") return isKnownIntegerValuedExpression(expr.expr, ast);
+  if (expr.kind === "call" && expr.args.length === 1) {
+    const name = expr.callee.toLowerCase();
+    if (name === "int") return true;
+    if (name === "abs") return isKnownIntegerValuedExpression(expr.args[0]!, ast);
+  }
+  if (expr.kind === "binary" && (expr.op === "+" || expr.op === "-" || expr.op === "*")) {
+    return isKnownIntegerValuedExpression(expr.left, ast) && isKnownIntegerValuedExpression(expr.right, ast);
+  }
+  return false;
+}
+
+function numericRangeForExpression(expr: ExpressionAst, ast: ProgramAst): { min?: number; max?: number } | undefined {
+  const value = numericLiteralValue(expr);
+  if (value !== undefined) return { min: value, max: value };
+  if (expr.kind === "identifier") return numericRangeFor(expr.name, ast);
+  if (expr.kind === "unary" && expr.op === "-") {
+    const range = numericRangeForExpression(expr.expr, ast);
+    if (range === undefined) return undefined;
+    return {
+      ...(range.max === undefined ? {} : { min: -range.max }),
+      ...(range.min === undefined ? {} : { max: -range.min }),
+    };
+  }
+  if (expr.kind === "call" && expr.callee.toLowerCase() === "abs" && expr.args.length === 1) {
+    const range = numericRangeForExpression(expr.args[0]!, ast);
+    if (range === undefined || range.min === undefined || range.max === undefined) return undefined;
+    return {
+      min: range.min <= 0 && range.max >= 0 ? 0 : Math.min(Math.abs(range.min), Math.abs(range.max)),
+      max: Math.max(Math.abs(range.min), Math.abs(range.max)),
+    };
+  }
+  return undefined;
+}
+
 function conditionCompileCost(condition: ConditionAst, preloadedConstants?: ReadonlySet<string>): number {
   if (isZeroExpression(condition.right) && canTestAgainstZeroDirectly(condition.op)) {
     return estimateExpressionCostForCondition(condition.left, preloadedConstants) + 2;
@@ -4193,8 +4508,9 @@ interface BranchTerminalCandidate {
 function buildBranchRemovalCandidate(
   statement: Extract<StatementAst, { kind: "if" }>,
   ast: ProgramAst,
+  options: { negativeZeroDegree?: boolean } = {},
 ): BranchRemovalCandidate | undefined {
-  return buildTerminalSelectCandidate(statement, ast) ??
+  return buildTerminalSelectCandidate(statement, ast, options) ??
     buildComparisonBooleanCandidate(statement) ??
     buildBooleanAlgebraCandidate(statement, ast) ??
     buildAbsCandidate(statement) ??
@@ -4203,7 +4519,7 @@ function buildBranchRemovalCandidate(
     buildSaturatingUpdateCandidate(statement, ast) ??
     buildBooleanSignToggleCandidate(statement, ast) ??
     buildBooleanUpdateCandidate(statement, ast) ??
-    buildArithmeticIfSelect(statement, ast);
+    buildArithmeticIfSelect(statement, ast, options);
 }
 
 function buildDoubleClampCandidate(
@@ -4240,23 +4556,42 @@ function clampBound(
 function buildTerminalSelectCandidate(
   statement: Extract<StatementAst, { kind: "if" }>,
   ast: ProgramAst,
+  options: { negativeZeroDegree?: boolean } = {},
 ): BranchRemovalCandidate | undefined {
   if (!statement.elseBody || statement.thenBody.length !== 1 || statement.elseBody.length !== 1) return undefined;
-  const thenStatement = statement.thenBody[0];
-  const elseStatement = statement.elseBody[0];
+  const thenStatement = effectiveTerminalStatement(statement.thenBody[0], ast);
+  const elseStatement = effectiveTerminalStatement(statement.elseBody[0], ast);
   if (!thenStatement || !elseStatement) return undefined;
-  if (thenStatement.kind !== "pause" && thenStatement.kind !== "halt") return undefined;
   if (elseStatement.kind !== thenStatement.kind) return undefined;
 
-  const selector = booleanSelectorExpression(statement.condition, ast) ??
-    comparisonSelectorExpression(statement.condition);
+  const booleanSelector = booleanSelectorExpression(statement.condition, ast);
+  const negativeZeroSelector = options.negativeZeroDegree
+    ? negativeZeroThresholdSelectorExpression(statement.condition, ast)
+    : undefined;
+  const selector = booleanSelector ?? negativeZeroSelector ?? comparisonSelectorExpression(statement.condition);
   if (!selector) return undefined;
+  const usesNegativeZero = booleanSelector === undefined && negativeZeroSelector !== undefined;
   return {
     kind: thenStatement.kind,
     expr: terminalSelectExpression(thenStatement.expr, elseStatement.expr, selector),
-    name: "arithmetic-if-terminal-select",
-    detail: `Replaced boolean ${thenStatement.kind} if/else with arithmetic selection`,
+    name: usesNegativeZero ? "negative-zero-threshold-terminal-select" : "arithmetic-if-terminal-select",
+    detail: usesNegativeZero
+      ? `Replaced threshold ${thenStatement.kind} if/else with negative-zero selection`
+      : `Replaced boolean ${thenStatement.kind} if/else with arithmetic selection`,
   };
+}
+
+function effectiveTerminalStatement(
+  statement: StatementAst | undefined,
+  ast: ProgramAst,
+): Extract<StatementAst, { kind: "pause" | "halt" }> | undefined {
+  if (statement === undefined) return undefined;
+  if (statement.kind === "pause" || statement.kind === "halt") return statement;
+  if (statement.kind !== "call") return undefined;
+  const proc = ast.procs.find((candidate) => candidate.name === statement.block);
+  if (proc === undefined || proc.body.length !== 1) return undefined;
+  const terminal = proc.body[0];
+  return terminal?.kind === "pause" || terminal?.kind === "halt" ? terminal : undefined;
 }
 
 function terminalSelectExpression(
@@ -4304,9 +4639,53 @@ function comparisonSelectorExpression(condition: ConditionAst): ExpressionAst | 
   }
 }
 
+function negativeZeroThresholdSelectorExpression(condition: ConditionAst, ast: ProgramAst): ExpressionAst | undefined {
+  const threshold = matchNegativeZeroThresholdCondition(condition, ast);
+  if (threshold === undefined) return undefined;
+  const selector: ExpressionAst = {
+    kind: "call",
+    callee: NEGATIVE_ZERO_DEGREE_SELECTOR_GE,
+    args: [threshold.value, numberExpression(threshold.bound)],
+  };
+  return threshold.truth === "ge" ? selector : oneMinus(selector);
+}
+
+function matchNegativeZeroThresholdCondition(
+  condition: ConditionAst,
+  ast: ProgramAst,
+): { value: ExpressionAst; bound: number; truth: "ge" | "lt" } | undefined {
+  if (condition.left.kind === "number") {
+    const flipped = flipNumericLeftCondition(condition);
+    return flipped === undefined ? undefined : matchNegativeZeroThresholdCondition(flipped, ast);
+  }
+
+  const value = condition.left;
+  const bound = numericLiteralValue(condition.right);
+  if (bound === undefined || !Number.isFinite(bound) || bound <= 0 || bound > 1e12) return undefined;
+  if (!isKnownIntegerValuedExpression(value, ast)) return undefined;
+  const range = numericRangeForExpression(value, ast);
+  if (range === undefined || range.min === undefined || range.min < 0) return undefined;
+  if (range.max !== undefined && range.max / bound >= 1e60) return undefined;
+
+  switch (condition.op) {
+    case ">=":
+      return { value, bound, truth: "ge" };
+    case "<":
+      return { value, bound, truth: "lt" };
+    case ">":
+      return Number.isSafeInteger(bound + 1) ? { value, bound: bound + 1, truth: "ge" } : undefined;
+    case "<=":
+      return Number.isSafeInteger(bound + 1) ? { value, bound: bound + 1, truth: "lt" } : undefined;
+    case "==":
+    case "!=":
+      return undefined;
+  }
+}
+
 function buildArithmeticIfSelect(
   statement: Extract<StatementAst, { kind: "if" }>,
   ast: ProgramAst,
+  options: { negativeZeroDegree?: boolean } = {},
 ): BranchRemovalCandidate | undefined {
   if (!statement.elseBody || statement.thenBody.length !== 1 || statement.elseBody.length !== 1) {
     return undefined;
@@ -4316,8 +4695,13 @@ function buildArithmeticIfSelect(
   if (thenAssign?.kind !== "assign" || elseAssign?.kind !== "assign") return undefined;
   if (thenAssign.target !== elseAssign.target) return undefined;
 
-  const selector = booleanSelectorExpression(statement.condition, ast);
+  const booleanSelector = booleanSelectorExpression(statement.condition, ast);
+  const negativeZeroSelector = options.negativeZeroDegree
+    ? negativeZeroThresholdSelectorExpression(statement.condition, ast)
+    : undefined;
+  const selector = booleanSelector ?? negativeZeroSelector;
   if (!selector) return undefined;
+  const usesNegativeZero = booleanSelector === undefined && negativeZeroSelector !== undefined;
 
   const expr = addExpressions(
     multiplyExpressions(thenAssign.expr, selector),
@@ -4327,8 +4711,10 @@ function buildArithmeticIfSelect(
     kind: "assign",
     target: thenAssign.target,
     expr,
-    name: "arithmetic-if-select",
-    detail: "Replaced boolean if/else with arithmetic selection",
+    name: usesNegativeZero ? "negative-zero-threshold-select" : "arithmetic-if-select",
+    detail: usesNegativeZero
+      ? "Replaced threshold if/else assignment with negative-zero selection"
+      : "Replaced boolean if/else with arithmetic selection",
   };
 }
 
@@ -4667,11 +5053,18 @@ function isBooleanVariable(name: string, ast: ProgramAst): boolean {
 }
 
 function integerRangeFor(name: string, ast: ProgramAst): { min?: number; max?: number } | undefined {
+  const range = numericRangeFor(name, ast);
+  if (range === undefined) return undefined;
+  if (!Number.isInteger(range.min) || !Number.isInteger(range.max)) return undefined;
+  return range;
+}
+
+function numericRangeFor(name: string, ast: ProgramAst): { min?: number; max?: number } | undefined {
   for (const state of ast.states) {
     const field = state.fields.find((candidate) => candidate.name === name);
     if (!field) continue;
     if (field.type === "flag") return { min: 0, max: 1 };
-    if (field.type === "range" && Number.isInteger(field.min) && Number.isInteger(field.max)) {
+    if (field.type === "range") {
       const range: { min?: number; max?: number } = {};
       if (field.min !== undefined) range.min = field.min;
       if (field.max !== undefined) range.max = field.max;
@@ -5459,23 +5852,27 @@ function numericLiteralValue(expr: ExpressionAst): number | undefined {
 function estimateOrdinaryIfCost(statement: Extract<StatementAst, { kind: "if" }>, ast: ProgramAst): number {
   const thenStatement = statement.thenBody[0];
   if (statement.thenBody.length !== 1 || !thenStatement) return Number.POSITIVE_INFINITY;
-  const thenCost = estimateSimpleStatementCost(thenStatement);
+  const thenCost = estimateSimpleStatementCost(thenStatement, ast);
   if (!Number.isFinite(thenCost)) return Number.POSITIVE_INFINITY;
   if (!statement.elseBody) return estimateConditionCost(statement.condition, ast) + thenCost;
   const elseStatement = statement.elseBody[0];
   if (statement.elseBody.length !== 1 || !elseStatement) return Number.POSITIVE_INFINITY;
-  const elseCost = estimateSimpleStatementCost(elseStatement);
+  const elseCost = estimateSimpleStatementCost(elseStatement, ast);
   if (!Number.isFinite(elseCost)) return Number.POSITIVE_INFINITY;
   return estimateConditionCost(statement.condition, ast) + thenCost + 2 + elseCost;
 }
 
-function estimateSimpleStatementCost(statement: StatementAst): number {
+function estimateSimpleStatementCost(statement: StatementAst, ast: ProgramAst): number {
   switch (statement.kind) {
     case "assign":
       return estimateExpressionCost(statement.expr) + 1;
     case "pause":
     case "halt":
       return estimateExpressionCost(statement.expr) + 1;
+    case "call": {
+      const terminal = effectiveTerminalStatement(statement, ast);
+      return terminal === undefined ? Number.POSITIVE_INFINITY : estimateSimpleStatementCost(terminal, ast);
+    }
     default:
       return Number.POSITIVE_INFINITY;
   }
@@ -5527,6 +5924,9 @@ function estimateCallCostForCondition(
   preloadedConstants: ReadonlySet<string>,
 ): number {
   const name = expr.callee.toLowerCase();
+  if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
+    return estimateNegativeZeroDegreeSelectorCost(expr, preloadedConstants);
+  }
   const macro = ticTacToeExpressionMacro(name, expr.args);
   if (macro !== undefined) return estimateExpressionCostForCondition(macro, preloadedConstants);
   if (name === "random" || name === "pi") return 1;
@@ -5536,6 +5936,32 @@ function estimateCallCostForCondition(
       1;
   }
   return (expr.args[0] ? estimateExpressionCostForCondition(expr.args[0], preloadedConstants) : 0) + 1;
+}
+
+function estimateNegativeZeroDegreeSelectorCost(
+  expr: Extract<ExpressionAst, { kind: "call" }>,
+  preloadedConstants?: ReadonlySet<string>,
+): number {
+  if (expr.args.length !== 2 || expr.args[0] === undefined || expr.args[1] === undefined) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return estimateNegativeZeroThresholdRawCost(expr.args[0], expr.args[1], preloadedConstants) + 1;
+}
+
+function estimateNegativeZeroThresholdFlowCost(
+  threshold: { value: ExpressionAst; bound: number },
+  preloadedConstants?: ReadonlySet<string>,
+): number {
+  return estimateNegativeZeroThresholdRawCost(threshold.value, numberExpression(threshold.bound), preloadedConstants) + 2;
+}
+
+function estimateNegativeZeroThresholdRawCost(
+  value: ExpressionAst,
+  bound: ExpressionAst,
+  preloadedConstants?: ReadonlySet<string>,
+): number {
+  const ratio = divideExpressions(value, bound);
+  return estimateExpressionCostForCondition(ratio, preloadedConstants) + 4;
 }
 
 function estimateExpressionCost(expr: ExpressionAst): number {
@@ -5560,6 +5986,9 @@ function estimateExpressionCost(expr: ExpressionAst): number {
 
 function estimateCallCost(expr: Extract<ExpressionAst, { kind: "call" }>): number {
   const name = expr.callee.toLowerCase();
+  if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
+    return estimateNegativeZeroDegreeSelectorCost(expr);
+  }
   const macro = ticTacToeExpressionMacro(name, expr.args);
   if (macro !== undefined) return estimateExpressionCost(macro);
   if (name === "random" || name === "pi") return 1;
@@ -5740,10 +6169,26 @@ const optimizerCapabilities: Array<{
       "arithmetic-if-select",
       "arithmetic-if-terminal-select",
       "arithmetic-if-conditional-move",
+      "negative-zero-threshold-select",
+      "negative-zero-threshold-terminal-select",
+      "negative-zero-threshold-selector",
       "kmax-zero-through",
       "kzn-double",
     ],
     detail: "Replaces simple boolean if/else assignments, stops, and conditional moves with arithmetic selection when shorter.",
+  },
+  {
+    id: "negative-zero-threshold-selector",
+    category: "flow",
+    source: "undocumented",
+    requires: ["negative-zero-degree", "x2-register"],
+    activeWhen: [
+      "negative-zero-threshold-selector",
+      "negative-zero-threshold-select",
+      "negative-zero-threshold-terminal-select",
+      "negative-zero-threshold-flow",
+    ],
+    detail: "Uses a compiler-owned 1|-00 preload plus В↑ normalization to build a 0/1 selector or flow test for bounded nonnegative threshold branches when that beats ordinary branching.",
   },
   {
     id: "arithmetic-if-update",
@@ -6059,6 +6504,46 @@ function buildPreloadReport(ast: ProgramAst, allocation: RegisterAllocation): Pr
   return [...explicit, ...synthetic, ...constants];
 }
 
+function buildNegativeZeroDegreePreloadReport(
+  allocation: RegisterAllocation,
+  optimizations: readonly AppliedOptimization[],
+): PreloadReport[] {
+  if (allocation.negativeZeroDegree === undefined) return [];
+  if (!optimizations.some((optimization) => optimization.name === "negative-zero-threshold-selector")) return [];
+  return [{
+    register: allocation.negativeZeroDegree,
+    value: NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE,
+    countsAgainstProgram: false,
+    setupProgram: negativeZeroDegreeSetupProgramText(allocation.negativeZeroDegree),
+    setupNote: `Run this setup program once before loading the main program; it leaves ${NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE} in R${allocation.negativeZeroDegree}.`,
+  }];
+}
+
+function negativeZeroDegreeSetupProgramText(register: RegisterName): string {
+  const registerOpcode = (0x40 + registerIndex(register)).toString(16).toUpperCase().padStart(2, "0");
+  return [
+    "54",
+    "01",
+    "03",
+    registerOpcode,
+    "01",
+    "08",
+    "38",
+    "35",
+    "0B",
+    "0C",
+    "02",
+    "15",
+    "0E",
+    "0C",
+    "0B",
+    "05",
+    "00",
+    registerOpcode,
+    "50",
+  ].join(" ");
+}
+
 function buildBudgetReport(used: number, limit: number, largestBlocks: string[], extraCells: number): BudgetReport {
   return {
     used,
@@ -6117,6 +6602,9 @@ function buildMachineFeaturesUsed(
   }
   if (optimizations.some((optimization) => optimization.name === "x2-display-byte-scheduling")) {
     add("x2-register", "Optimizer scheduled hidden X2 values across display-byte boundaries.", "optimizer");
+  }
+  if (optimizations.some((optimization) => optimization.name === "negative-zero-threshold-selector")) {
+    add("negative-zero-degree", "Optimizer selected a preloaded negative-zero exponent threshold selector.", "optimizer");
   }
   if (optimizations.some((optimization) => optimization.name === "vp-fraction-restore")) {
     add("x2-restore-boundaries", "Optimizer used ВП as both X2 restoration and fractional/mantissa transform.", "optimizer");
@@ -6210,7 +6698,10 @@ function buildProofReport(
     const variants = [
       ...new Set(
         optimizations
-          .filter((optimization) => optimization.name.startsWith("arithmetic-if-"))
+          .filter((optimization) =>
+            optimization.name.startsWith("arithmetic-if-") ||
+            optimization.name.startsWith("negative-zero-threshold-")
+          )
           .map((optimization) => optimization.name),
       ),
     ];
@@ -6218,6 +6709,13 @@ function buildProofReport(
       id: "branch-equivalence",
       status: "proved",
       detail: `Removed conditional branches via ${variants.join(", ")} after matching assignment/update shape and value ranges.`,
+    });
+  }
+  if (optimizations.some((optimization) => optimization.name === "negative-zero-threshold-selector")) {
+    proofs.push({
+      id: "negative-zero-threshold-selector",
+      status: "proved",
+      detail: "Selected only for bounded integer nonnegative thresholds; В↑ normalizes the underflowed 1|-00 product before К ЗН turns it into a 0/1 selector.",
     });
   }
   if (

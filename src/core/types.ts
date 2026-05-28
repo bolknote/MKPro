@@ -801,6 +801,8 @@ export interface PreloadReport {
   register: string;
   value: string;
   countsAgainstProgram: boolean;
+  setupProgram?: string;
+  setupNote?: string;
 }
 
 export interface ReferenceReport {

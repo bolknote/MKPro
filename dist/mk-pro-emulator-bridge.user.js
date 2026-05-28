@@ -5055,6 +5055,11 @@ var MKProEmulatorBundle = (() => {
         detail: "The hidden X2 display register can be scheduled when observable display semantics are preserved."
       },
       {
+        id: "negative-zero-degree",
+        source: "machine",
+        detail: "Negative-zero exponent values such as 1|-00 can act as constants or threshold sentinels when X2-normalization boundaries are controlled."
+      },
+      {
         id: "extra-cells",
         source: "machine",
         detail: "Extra physical cells are tracked separately from official program cells."
@@ -5117,6 +5122,11 @@ var MKProEmulatorBundle = (() => {
         detail: "\u0412\u041F, '.', '/-/', and digit-entry X2 restoration boundaries are modeled as display-state boundaries."
       },
       {
+        id: "negative-zero-degree-threshold",
+        status: "probed",
+        detail: "With 1|-00 in Y, multiplying by X and then normalizing through \u0412\u2191 yields a zero/nonzero threshold at |X|=1."
+      },
+      {
         id: "step-vs-run-delta",
         status: "probed",
         detail: "Continuous-run behavior is the default profile; step-only divergences are explicit exact-machine facts."
@@ -5162,6 +5172,9 @@ var MKProEmulatorBundle = (() => {
   var CELL_MAP_PREFIX = "__cell_map_";
   var SPATIAL_HIT_SCRATCH_PREFIX = "__spatial_hit_";
   var SPATIAL_COUNT_SCRATCH_PREFIX = "__spatial_count_";
+  var NEGATIVE_ZERO_DEGREE_SELECTOR_GE = "__mkpro_negative_zero_ge";
+  var NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE = "1|-00";
+  var INTERNAL_NAME_PREFIX = "__mkpro_";
   var DISPLAY_HELPER_MIN_SAVINGS = 4;
   var EXPRESSION_HELPER_MIN_COST = 8;
   var EXPRESSION_HELPER_MIN_SAVINGS = 4;
@@ -5184,6 +5197,7 @@ var MKProEmulatorBundle = (() => {
     hoistCommonBranchTails(ast, optimizations);
     validateSemanticDomains(ast, diagnostics);
     validateV2Intent(ast, diagnostics);
+    validateReservedInternalNames(ast, diagnostics);
     if (diagnostics.some((diagnostic) => diagnostic.level === "error")) {
       throw new CompileError(diagnostics);
     }
@@ -5207,7 +5221,11 @@ var MKProEmulatorBundle = (() => {
     context.compileProgram();
     const optimizedResult = optimizeItems(context.items, opts, optimizations);
     const optimized = optimizedResult.items;
-    const preloads = [...buildPreloadReport(ast, allocation), ...optimizedResult.preloads];
+    const preloads = [
+      ...buildPreloadReport(ast, allocation),
+      ...buildNegativeZeroDegreePreloadReport(allocation, optimizations),
+      ...optimizedResult.preloads
+    ];
     appendOptimizationCandidateReports(optimizations, candidates);
     const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, machineProfile);
     const largestBlocks = summarizeBlocks(optimized);
@@ -5614,6 +5632,103 @@ var MKProEmulatorBundle = (() => {
       code: "V2_SEMANTIC_LOWERER_MISSING",
       message: `MK-Pro source contains effects that need real rule lowerers before code generation: ${unsupported.slice(0, 8).map((item) => `${item.text} (line ${item.line})`).join(", ")}. The compiler refuses to treat human-level semantics as comments.`
     });
+  }
+  function validateReservedInternalNames(ast, diagnostics) {
+    const seen = /* @__PURE__ */ new Set();
+    const report = (name, line) => {
+      if (!name.toLowerCase().startsWith(INTERNAL_NAME_PREFIX)) return;
+      const key = `${line ?? 0}:${name}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      diagnostics.push(buildDiagnostic(
+        "error",
+        `Name '${name}' uses reserved compiler-internal prefix '${INTERNAL_NAME_PREFIX}'.`,
+        line
+      ));
+    };
+    const visitExpr = (expr) => {
+      if (expr.kind === "identifier") report(expr.name);
+      if (expr.kind === "unary") visitExpr(expr.expr);
+      if (expr.kind === "binary") {
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+      }
+      if (expr.kind === "call") {
+        report(expr.callee);
+        for (const arg of expr.args) visitExpr(arg);
+      }
+    };
+    const visitCondition = (condition) => {
+      visitExpr(condition.left);
+      visitExpr(condition.right);
+    };
+    const visitStatements = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "assign") {
+          report(statement.target, statement.line);
+          visitExpr(statement.expr);
+        }
+        if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+        if (statement.kind === "ask") {
+          report(statement.target, statement.line);
+          if (statement.prompt) visitExpr(statement.prompt);
+        }
+        if (statement.kind === "show") report(statement.display, statement.line);
+        if (statement.kind === "call") report(statement.block, statement.line);
+        if (statement.kind === "trap") visitExpr(statement.expr);
+        if (statement.kind === "if") {
+          visitCondition(statement.condition);
+          visitStatements(statement.thenBody);
+          if (statement.elseBody) visitStatements(statement.elseBody);
+        }
+        if (statement.kind === "loop") visitStatements(statement.body);
+        if (statement.kind === "switch") {
+          visitExpr(statement.expr);
+          for (const switchCase of statement.cases) {
+            visitExpr(switchCase.value);
+            visitStatements(switchCase.body);
+          }
+          if (statement.defaultBody) visitStatements(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          visitExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            visitExpr(dispatchCase.value);
+            visitStatements(dispatchCase.body);
+          }
+          if (statement.defaultBody) visitStatements(statement.defaultBody);
+        }
+      }
+    };
+    for (const declaration of ast.declarations) {
+      report(declaration.name, declaration.line);
+      if (declaration.kind === "const" || declaration.kind === "store") {
+        if (declaration.value) visitExpr(declaration.value);
+      }
+    }
+    for (const state of ast.states) {
+      report(state.name, state.line);
+      for (const field of state.fields) {
+        report(field.name, field.line);
+        if (field.initial) visitExpr(field.initial);
+      }
+    }
+    for (const display of ast.displays) {
+      report(display.name, display.line);
+      for (const source of display.sources) report(source, display.line);
+    }
+    for (const entry of ast.entries) {
+      report(entry.name, entry.line);
+      visitStatements(entry.body);
+    }
+    for (const proc of ast.procs) {
+      report(proc.name, proc.line);
+      visitStatements(proc.body);
+    }
+    for (const block of ast.blocks) {
+      report(block.name, block.line);
+      visitStatements(block.body);
+    }
   }
   function collectUnsupportedV2Statements(ast) {
     const unsupported = [];
@@ -6148,8 +6263,16 @@ var MKProEmulatorBundle = (() => {
       };
     }
     compileArithmeticIfSelect(statement) {
-      const selected = buildBranchRemovalCandidate(statement, this.ast);
-      if (!selected) return false;
+      const canUseNegativeZero = this.allocation.negativeZeroDegree !== void 0;
+      const selected = buildBranchRemovalCandidate(
+        statement,
+        this.ast,
+        { negativeZeroDegree: canUseNegativeZero }
+      );
+      if (!selected) {
+        if (!canUseNegativeZero) this.recordRejectedNegativeZeroBranchCandidate(statement);
+        return false;
+      }
       const ordinaryCost = estimateOrdinaryIfCost(statement, this.ast);
       const selectedCost = estimateExpressionCost(selected.expr) + 1;
       if (selectedCost >= ordinaryCost) {
@@ -6160,6 +6283,9 @@ var MKProEmulatorBundle = (() => {
           selected: false,
           reason: `Branchless ${selected.name} estimated at ${selectedCost} cells; ordinary branched form was shorter (${ordinaryCost}).`
         });
+        if (!selected.name.startsWith("negative-zero-threshold-")) {
+          this.recordRejectedNegativeZeroBranchCandidate(statement);
+        }
         return false;
       }
       this.compileExpression(selected.expr);
@@ -6177,6 +6303,19 @@ var MKProEmulatorBundle = (() => {
         detail: `${selected.detail} at line ${statement.line} (${selectedCost} vs ${ordinaryCost} estimated steps).`
       });
       return true;
+    }
+    recordRejectedNegativeZeroBranchCandidate(statement) {
+      const selected = buildBranchRemovalCandidate(statement, this.ast, { negativeZeroDegree: true });
+      if (selected === void 0 || !selected.name.startsWith("negative-zero-threshold-")) return;
+      const ordinaryCost = estimateOrdinaryIfCost(statement, this.ast);
+      const selectedCost = estimateExpressionCost(selected.expr) + 1;
+      this.candidates.push({
+        site: `if@${statement.line}`,
+        variant: selected.name,
+        steps: selectedCost,
+        selected: false,
+        reason: selectedCost >= ordinaryCost ? `Branchless ${selected.name} estimated at ${selectedCost} cells; ordinary branched form was shorter (${ordinaryCost}).` : `Branchless ${selected.name} estimated at ${selectedCost} cells, but no compiler-owned negative-zero register was available.`
+      });
     }
     compileDoubleBranchRemoval(first, second) {
       const selected = buildDoubleClampCandidate(first, second);
@@ -6608,6 +6747,7 @@ var MKProEmulatorBundle = (() => {
       return true;
     }
     compileCondition(condition, falseLabel, line) {
+      if (this.compileNegativeZeroThresholdFlow(condition, falseLabel, line)) return;
       const selected = selectCheaperEquivalentCondition(
         condition,
         this.ast,
@@ -6645,6 +6785,42 @@ var MKProEmulatorBundle = (() => {
       const opcode = compiledCondition.op === "<" || compiledCondition.op === ">" ? 92 : compiledCondition.op === ">=" || compiledCondition.op === "<=" ? 89 : compiledCondition.op === "==" ? 94 : 87;
       const mnemonic = getOpcode(opcode).name;
       this.emitJump(opcode, mnemonic, falseLabel, `false branch for ${compiledCondition.op}`, line);
+    }
+    compileNegativeZeroThresholdFlow(condition, falseLabel, line) {
+      const register = this.allocation.negativeZeroDegree;
+      const threshold = matchNegativeZeroThresholdCondition(condition, this.ast);
+      if (threshold === void 0) return false;
+      const preloadedConstants = new Set(Object.keys(this.allocation.constants));
+      const selectedCost = estimateNegativeZeroThresholdFlowCost(threshold, preloadedConstants);
+      const ordinaryCost = conditionCompileCost(
+        selectCheaperEquivalentCondition(condition, this.ast, preloadedConstants).condition,
+        preloadedConstants
+      );
+      if (register === void 0 || selectedCost >= ordinaryCost) {
+        this.candidates.push({
+          site: `if@${line}`,
+          variant: "negative-zero-threshold-flow",
+          steps: selectedCost,
+          selected: false,
+          reason: selectedCost >= ordinaryCost ? `Negative-zero threshold flow estimated at ${selectedCost} cells; ordinary condition was shorter (${ordinaryCost}).` : "Negative-zero threshold flow matched, but no compiler-owned negative-zero register was available."
+        });
+        return false;
+      }
+      this.emitNegativeZeroThresholdRaw(threshold.value, numberExpression(threshold.bound), register, line);
+      const opcode = threshold.truth === "ge" ? 87 : 94;
+      this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `negative-zero false branch for ${condition.op}`, line);
+      this.optimizations.push({
+        name: "negative-zero-threshold-flow",
+        detail: `Tested ${conditionToText(condition)} through preloaded ${NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE} in R${register}.`
+      });
+      return true;
+    }
+    emitNegativeZeroThresholdRaw(value, bound, register, line) {
+      this.compileExpression(divideExpressions(value, bound));
+      this.emitOp(96 + registerIndex(register), `\u041F->X ${register}`, "negative-zero threshold sentinel", line);
+      this.emitOp(20, "X\u2194Y", "place threshold value above negative-zero sentinel", line);
+      this.emitOp(18, "*", "negative-zero threshold zero-through", line);
+      this.emitOp(14, "\u0412\u2191", "normalize negative-zero threshold result", line);
     }
     compileBitHasConditionWithSpatialHelper(expr, line) {
       if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_has" || expr.args.length !== 2) return false;
@@ -6822,6 +6998,9 @@ var MKProEmulatorBundle = (() => {
       }
       if (name === "__spatial_hit") {
         if (this.compileSpatialHitCall(expr)) return;
+      }
+      if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
+        if (this.compileNegativeZeroDegreeSelectorCall(expr)) return;
       }
       if (isTicTacToeMacroName(name) && ticTacToeMacroArity(name) !== expr.args.length) {
         this.diagnostics.push({
@@ -7176,6 +7355,32 @@ var MKProEmulatorBundle = (() => {
       this.emitJump(83, "\u041F\u041F", helper.label, `spatial hit ${mask.name}`, helper.line);
       return true;
     }
+    compileNegativeZeroDegreeSelectorCall(expr) {
+      if (expr.args.length !== 2) {
+        this.diagnostics.push({
+          level: "error",
+          message: `${NEGATIVE_ZERO_DEGREE_SELECTOR_GE}() expects two arguments.`
+        });
+        return true;
+      }
+      const register = this.allocation.negativeZeroDegree;
+      if (register === void 0) {
+        this.diagnostics.push({
+          level: "error",
+          message: "Internal: negative-zero threshold selector was emitted without a reserved register."
+        });
+        return true;
+      }
+      const [value, bound] = expr.args;
+      if (value === void 0 || bound === void 0) return true;
+      this.emitNegativeZeroThresholdRaw(value, bound, register);
+      this.emitOp(50, "\u041A \u0417\u041D", "negative-zero threshold selector");
+      this.optimizations.push({
+        name: "negative-zero-threshold-selector",
+        detail: `Used preloaded ${NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE} in R${register} for ${expressionToIntentText(value)} >= ${expressionToIntentText(bound)}.`
+      });
+      return true;
+    }
     sharedLineCountHelper(mask, cell, board, line) {
       if (this.lineCountCallCount < 2) return void 0;
       if (this.allocation.registers[spatialCountMaskScratchName()] === void 0) return void 0;
@@ -7450,7 +7655,9 @@ var MKProEmulatorBundle = (() => {
       constants[value] = register;
       used.add(register);
     }
-    return { registers, constants };
+    const negativeZeroDegree = programNeedsNegativeZeroDegree(ast) ? pickConstantRegister(used) : void 0;
+    if (negativeZeroDegree !== void 0) used.add(negativeZeroDegree);
+    return negativeZeroDegree === void 0 ? { registers, constants } : { registers, constants, negativeZeroDegree };
   }
   function collectDomainBindings(ast) {
     const bindings = [];
@@ -7656,6 +7863,47 @@ var MKProEmulatorBundle = (() => {
             visitExpr(dispatchCase.value);
             visitStatements(dispatchCase.body);
           }
+          if (statement.defaultBody) visitStatements(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visitStatements(entry.body);
+    for (const proc of ast.procs) visitStatements(proc.body);
+    for (const block of ast.blocks) visitStatements(block.body);
+    return found;
+  }
+  function programNeedsNegativeZeroDegree(ast) {
+    return programVisitsIf(ast, (statement) => statementNeedsNegativeZeroDegree(statement, ast));
+  }
+  function statementNeedsNegativeZeroDegree(statement, ast) {
+    const selected = buildBranchRemovalCandidate(statement, ast, { negativeZeroDegree: true });
+    if (selected !== void 0 && selected.name.startsWith("negative-zero-threshold-")) {
+      return estimateExpressionCost(selected.expr) + 1 < estimateOrdinaryIfCost(statement, ast);
+    }
+    const threshold = matchNegativeZeroThresholdCondition(statement.condition, ast);
+    if (threshold === void 0) return false;
+    return estimateNegativeZeroThresholdFlowCost(threshold, void 0) < estimateConditionCost(statement.condition, ast);
+  }
+  function programVisitsIf(ast, predicate) {
+    let found = false;
+    const visitStatements = (statements) => {
+      for (const statement of statements) {
+        if (found) return;
+        if (statement.kind === "if") {
+          if (predicate(statement)) {
+            found = true;
+            return;
+          }
+          visitStatements(statement.thenBody);
+          if (statement.elseBody) visitStatements(statement.elseBody);
+        }
+        if (statement.kind === "loop") visitStatements(statement.body);
+        if (statement.kind === "switch") {
+          for (const switchCase of statement.cases) visitStatements(switchCase.body);
+          if (statement.defaultBody) visitStatements(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visitStatements(dispatchCase.body);
           if (statement.defaultBody) visitStatements(statement.defaultBody);
         }
       }
@@ -8446,6 +8694,42 @@ var MKProEmulatorBundle = (() => {
   function isKnownIntegerExpression(expr, ast) {
     return expr.kind === "identifier" && integerRangeFor(expr.name, ast) !== void 0;
   }
+  function isKnownIntegerValuedExpression(expr, ast) {
+    if (expr.kind === "number") return Number.isSafeInteger(Number(expr.raw));
+    if (expr.kind === "identifier") return integerRangeFor(expr.name, ast) !== void 0;
+    if (expr.kind === "unary" && expr.op === "-") return isKnownIntegerValuedExpression(expr.expr, ast);
+    if (expr.kind === "call" && expr.args.length === 1) {
+      const name = expr.callee.toLowerCase();
+      if (name === "int") return true;
+      if (name === "abs") return isKnownIntegerValuedExpression(expr.args[0], ast);
+    }
+    if (expr.kind === "binary" && (expr.op === "+" || expr.op === "-" || expr.op === "*")) {
+      return isKnownIntegerValuedExpression(expr.left, ast) && isKnownIntegerValuedExpression(expr.right, ast);
+    }
+    return false;
+  }
+  function numericRangeForExpression(expr, ast) {
+    const value = numericLiteralValue(expr);
+    if (value !== void 0) return { min: value, max: value };
+    if (expr.kind === "identifier") return numericRangeFor(expr.name, ast);
+    if (expr.kind === "unary" && expr.op === "-") {
+      const range2 = numericRangeForExpression(expr.expr, ast);
+      if (range2 === void 0) return void 0;
+      return {
+        ...range2.max === void 0 ? {} : { min: -range2.max },
+        ...range2.min === void 0 ? {} : { max: -range2.min }
+      };
+    }
+    if (expr.kind === "call" && expr.callee.toLowerCase() === "abs" && expr.args.length === 1) {
+      const range2 = numericRangeForExpression(expr.args[0], ast);
+      if (range2 === void 0 || range2.min === void 0 || range2.max === void 0) return void 0;
+      return {
+        min: range2.min <= 0 && range2.max >= 0 ? 0 : Math.min(Math.abs(range2.min), Math.abs(range2.max)),
+        max: Math.max(Math.abs(range2.min), Math.abs(range2.max))
+      };
+    }
+    return void 0;
+  }
   function conditionCompileCost(condition, preloadedConstants) {
     if (isZeroExpression(condition.right) && canTestAgainstZeroDirectly(condition.op)) {
       return estimateExpressionCostForCondition(condition.left, preloadedConstants) + 2;
@@ -8666,8 +8950,8 @@ var MKProEmulatorBundle = (() => {
   function uniqueRoles(roles) {
     return [...new Set(roles)];
   }
-  function buildBranchRemovalCandidate(statement, ast) {
-    return buildTerminalSelectCandidate(statement, ast) ?? buildComparisonBooleanCandidate(statement) ?? buildBooleanAlgebraCandidate(statement, ast) ?? buildAbsCandidate(statement) ?? buildMaxMinCandidate(statement) ?? buildClampCandidate(statement) ?? buildSaturatingUpdateCandidate(statement, ast) ?? buildBooleanSignToggleCandidate(statement, ast) ?? buildBooleanUpdateCandidate(statement, ast) ?? buildArithmeticIfSelect(statement, ast);
+  function buildBranchRemovalCandidate(statement, ast, options = {}) {
+    return buildTerminalSelectCandidate(statement, ast, options) ?? buildComparisonBooleanCandidate(statement) ?? buildBooleanAlgebraCandidate(statement, ast) ?? buildAbsCandidate(statement) ?? buildMaxMinCandidate(statement) ?? buildClampCandidate(statement) ?? buildSaturatingUpdateCandidate(statement, ast) ?? buildBooleanSignToggleCandidate(statement, ast) ?? buildBooleanUpdateCandidate(statement, ast) ?? buildArithmeticIfSelect(statement, ast, options);
   }
   function buildDoubleClampCandidate(first, second) {
     const lower = clampBound(first, "lower");
@@ -8692,21 +8976,32 @@ var MKProEmulatorBundle = (() => {
     if (direction === "upper" && (op === ">" || op === ">=")) return { target: assign.target, bound: right };
     return void 0;
   }
-  function buildTerminalSelectCandidate(statement, ast) {
+  function buildTerminalSelectCandidate(statement, ast, options = {}) {
     if (!statement.elseBody || statement.thenBody.length !== 1 || statement.elseBody.length !== 1) return void 0;
-    const thenStatement = statement.thenBody[0];
-    const elseStatement = statement.elseBody[0];
+    const thenStatement = effectiveTerminalStatement(statement.thenBody[0], ast);
+    const elseStatement = effectiveTerminalStatement(statement.elseBody[0], ast);
     if (!thenStatement || !elseStatement) return void 0;
-    if (thenStatement.kind !== "pause" && thenStatement.kind !== "halt") return void 0;
     if (elseStatement.kind !== thenStatement.kind) return void 0;
-    const selector = booleanSelectorExpression(statement.condition, ast) ?? comparisonSelectorExpression(statement.condition);
+    const booleanSelector = booleanSelectorExpression(statement.condition, ast);
+    const negativeZeroSelector = options.negativeZeroDegree ? negativeZeroThresholdSelectorExpression(statement.condition, ast) : void 0;
+    const selector = booleanSelector ?? negativeZeroSelector ?? comparisonSelectorExpression(statement.condition);
     if (!selector) return void 0;
+    const usesNegativeZero = booleanSelector === void 0 && negativeZeroSelector !== void 0;
     return {
       kind: thenStatement.kind,
       expr: terminalSelectExpression(thenStatement.expr, elseStatement.expr, selector),
-      name: "arithmetic-if-terminal-select",
-      detail: `Replaced boolean ${thenStatement.kind} if/else with arithmetic selection`
+      name: usesNegativeZero ? "negative-zero-threshold-terminal-select" : "arithmetic-if-terminal-select",
+      detail: usesNegativeZero ? `Replaced threshold ${thenStatement.kind} if/else with negative-zero selection` : `Replaced boolean ${thenStatement.kind} if/else with arithmetic selection`
     };
+  }
+  function effectiveTerminalStatement(statement, ast) {
+    if (statement === void 0) return void 0;
+    if (statement.kind === "pause" || statement.kind === "halt") return statement;
+    if (statement.kind !== "call") return void 0;
+    const proc = ast.procs.find((candidate) => candidate.name === statement.block);
+    if (proc === void 0 || proc.body.length !== 1) return void 0;
+    const terminal = proc.body[0];
+    return terminal?.kind === "pause" || terminal?.kind === "halt" ? terminal : void 0;
   }
   function terminalSelectExpression(thenExpr, elseExpr, selector) {
     const thenValue = numericLiteralValue(thenExpr);
@@ -8747,7 +9042,43 @@ var MKProEmulatorBundle = (() => {
         return void 0;
     }
   }
-  function buildArithmeticIfSelect(statement, ast) {
+  function negativeZeroThresholdSelectorExpression(condition, ast) {
+    const threshold = matchNegativeZeroThresholdCondition(condition, ast);
+    if (threshold === void 0) return void 0;
+    const selector = {
+      kind: "call",
+      callee: NEGATIVE_ZERO_DEGREE_SELECTOR_GE,
+      args: [threshold.value, numberExpression(threshold.bound)]
+    };
+    return threshold.truth === "ge" ? selector : oneMinus(selector);
+  }
+  function matchNegativeZeroThresholdCondition(condition, ast) {
+    if (condition.left.kind === "number") {
+      const flipped = flipNumericLeftCondition(condition);
+      return flipped === void 0 ? void 0 : matchNegativeZeroThresholdCondition(flipped, ast);
+    }
+    const value = condition.left;
+    const bound = numericLiteralValue(condition.right);
+    if (bound === void 0 || !Number.isFinite(bound) || bound <= 0 || bound > 1e12) return void 0;
+    if (!isKnownIntegerValuedExpression(value, ast)) return void 0;
+    const range2 = numericRangeForExpression(value, ast);
+    if (range2 === void 0 || range2.min === void 0 || range2.min < 0) return void 0;
+    if (range2.max !== void 0 && range2.max / bound >= 1e60) return void 0;
+    switch (condition.op) {
+      case ">=":
+        return { value, bound, truth: "ge" };
+      case "<":
+        return { value, bound, truth: "lt" };
+      case ">":
+        return Number.isSafeInteger(bound + 1) ? { value, bound: bound + 1, truth: "ge" } : void 0;
+      case "<=":
+        return Number.isSafeInteger(bound + 1) ? { value, bound: bound + 1, truth: "lt" } : void 0;
+      case "==":
+      case "!=":
+        return void 0;
+    }
+  }
+  function buildArithmeticIfSelect(statement, ast, options = {}) {
     if (!statement.elseBody || statement.thenBody.length !== 1 || statement.elseBody.length !== 1) {
       return void 0;
     }
@@ -8755,8 +9086,11 @@ var MKProEmulatorBundle = (() => {
     const elseAssign = statement.elseBody[0];
     if (thenAssign?.kind !== "assign" || elseAssign?.kind !== "assign") return void 0;
     if (thenAssign.target !== elseAssign.target) return void 0;
-    const selector = booleanSelectorExpression(statement.condition, ast);
+    const booleanSelector = booleanSelectorExpression(statement.condition, ast);
+    const negativeZeroSelector = options.negativeZeroDegree ? negativeZeroThresholdSelectorExpression(statement.condition, ast) : void 0;
+    const selector = booleanSelector ?? negativeZeroSelector;
     if (!selector) return void 0;
+    const usesNegativeZero = booleanSelector === void 0 && negativeZeroSelector !== void 0;
     const expr = addExpressions(
       multiplyExpressions(thenAssign.expr, selector),
       multiplyExpressions(elseAssign.expr, oneMinus(selector))
@@ -8765,8 +9099,8 @@ var MKProEmulatorBundle = (() => {
       kind: "assign",
       target: thenAssign.target,
       expr,
-      name: "arithmetic-if-select",
-      detail: "Replaced boolean if/else with arithmetic selection"
+      name: usesNegativeZero ? "negative-zero-threshold-select" : "arithmetic-if-select",
+      detail: usesNegativeZero ? "Replaced threshold if/else assignment with negative-zero selection" : "Replaced boolean if/else with arithmetic selection"
     };
   }
   function buildComparisonBooleanCandidate(statement) {
@@ -9040,11 +9374,17 @@ var MKProEmulatorBundle = (() => {
     return false;
   }
   function integerRangeFor(name, ast) {
+    const range2 = numericRangeFor(name, ast);
+    if (range2 === void 0) return void 0;
+    if (!Number.isInteger(range2.min) || !Number.isInteger(range2.max)) return void 0;
+    return range2;
+  }
+  function numericRangeFor(name, ast) {
     for (const state of ast.states) {
       const field = state.fields.find((candidate) => candidate.name === name);
       if (!field) continue;
       if (field.type === "flag") return { min: 0, max: 1 };
-      if (field.type === "range" && Number.isInteger(field.min) && Number.isInteger(field.max)) {
+      if (field.type === "range") {
         const range2 = {};
         if (field.min !== void 0) range2.min = field.min;
         if (field.max !== void 0) range2.max = field.max;
@@ -9656,22 +9996,26 @@ var MKProEmulatorBundle = (() => {
   function estimateOrdinaryIfCost(statement, ast) {
     const thenStatement = statement.thenBody[0];
     if (statement.thenBody.length !== 1 || !thenStatement) return Number.POSITIVE_INFINITY;
-    const thenCost = estimateSimpleStatementCost(thenStatement);
+    const thenCost = estimateSimpleStatementCost(thenStatement, ast);
     if (!Number.isFinite(thenCost)) return Number.POSITIVE_INFINITY;
     if (!statement.elseBody) return estimateConditionCost(statement.condition, ast) + thenCost;
     const elseStatement = statement.elseBody[0];
     if (statement.elseBody.length !== 1 || !elseStatement) return Number.POSITIVE_INFINITY;
-    const elseCost = estimateSimpleStatementCost(elseStatement);
+    const elseCost = estimateSimpleStatementCost(elseStatement, ast);
     if (!Number.isFinite(elseCost)) return Number.POSITIVE_INFINITY;
     return estimateConditionCost(statement.condition, ast) + thenCost + 2 + elseCost;
   }
-  function estimateSimpleStatementCost(statement) {
+  function estimateSimpleStatementCost(statement, ast) {
     switch (statement.kind) {
       case "assign":
         return estimateExpressionCost(statement.expr) + 1;
       case "pause":
       case "halt":
         return estimateExpressionCost(statement.expr) + 1;
+      case "call": {
+        const terminal = effectiveTerminalStatement(statement, ast);
+        return terminal === void 0 ? Number.POSITIVE_INFINITY : estimateSimpleStatementCost(terminal, ast);
+      }
       default:
         return Number.POSITIVE_INFINITY;
     }
@@ -9705,6 +10049,9 @@ var MKProEmulatorBundle = (() => {
   }
   function estimateCallCostForCondition(expr, preloadedConstants) {
     const name = expr.callee.toLowerCase();
+    if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
+      return estimateNegativeZeroDegreeSelectorCost(expr, preloadedConstants);
+    }
     const macro = ticTacToeExpressionMacro(name, expr.args);
     if (macro !== void 0) return estimateExpressionCostForCondition(macro, preloadedConstants);
     if (name === "random" || name === "pi") return 1;
@@ -9712,6 +10059,19 @@ var MKProEmulatorBundle = (() => {
       return (expr.args[0] ? estimateExpressionCostForCondition(expr.args[0], preloadedConstants) : 0) + (expr.args[1] ? estimateExpressionCostForCondition(expr.args[1], preloadedConstants) : 0) + 1;
     }
     return (expr.args[0] ? estimateExpressionCostForCondition(expr.args[0], preloadedConstants) : 0) + 1;
+  }
+  function estimateNegativeZeroDegreeSelectorCost(expr, preloadedConstants) {
+    if (expr.args.length !== 2 || expr.args[0] === void 0 || expr.args[1] === void 0) {
+      return Number.POSITIVE_INFINITY;
+    }
+    return estimateNegativeZeroThresholdRawCost(expr.args[0], expr.args[1], preloadedConstants) + 1;
+  }
+  function estimateNegativeZeroThresholdFlowCost(threshold, preloadedConstants) {
+    return estimateNegativeZeroThresholdRawCost(threshold.value, numberExpression(threshold.bound), preloadedConstants) + 2;
+  }
+  function estimateNegativeZeroThresholdRawCost(value, bound, preloadedConstants) {
+    const ratio = divideExpressions(value, bound);
+    return estimateExpressionCostForCondition(ratio, preloadedConstants) + 4;
   }
   function estimateExpressionCost(expr) {
     switch (expr.kind) {
@@ -9734,6 +10094,9 @@ var MKProEmulatorBundle = (() => {
   }
   function estimateCallCost(expr) {
     const name = expr.callee.toLowerCase();
+    if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
+      return estimateNegativeZeroDegreeSelectorCost(expr);
+    }
     const macro = ticTacToeExpressionMacro(name, expr.args);
     if (macro !== void 0) return estimateExpressionCost(macro);
     if (name === "random" || name === "pi") return 1;
@@ -9891,10 +10254,26 @@ var MKProEmulatorBundle = (() => {
         "arithmetic-if-select",
         "arithmetic-if-terminal-select",
         "arithmetic-if-conditional-move",
+        "negative-zero-threshold-select",
+        "negative-zero-threshold-terminal-select",
+        "negative-zero-threshold-selector",
         "kmax-zero-through",
         "kzn-double"
       ],
       detail: "Replaces simple boolean if/else assignments, stops, and conditional moves with arithmetic selection when shorter."
+    },
+    {
+      id: "negative-zero-threshold-selector",
+      category: "flow",
+      source: "undocumented",
+      requires: ["negative-zero-degree", "x2-register"],
+      activeWhen: [
+        "negative-zero-threshold-selector",
+        "negative-zero-threshold-select",
+        "negative-zero-threshold-terminal-select",
+        "negative-zero-threshold-flow"
+      ],
+      detail: "Uses a compiler-owned 1|-00 preload plus \u0412\u2191 normalization to build a 0/1 selector or flow test for bounded nonnegative threshold branches when that beats ordinary branching."
     },
     {
       id: "arithmetic-if-update",
@@ -10208,6 +10587,41 @@ var MKProEmulatorBundle = (() => {
     }));
     return [...explicit, ...synthetic, ...constants];
   }
+  function buildNegativeZeroDegreePreloadReport(allocation, optimizations) {
+    if (allocation.negativeZeroDegree === void 0) return [];
+    if (!optimizations.some((optimization) => optimization.name === "negative-zero-threshold-selector")) return [];
+    return [{
+      register: allocation.negativeZeroDegree,
+      value: NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE,
+      countsAgainstProgram: false,
+      setupProgram: negativeZeroDegreeSetupProgramText(allocation.negativeZeroDegree),
+      setupNote: `Run this setup program once before loading the main program; it leaves ${NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE} in R${allocation.negativeZeroDegree}.`
+    }];
+  }
+  function negativeZeroDegreeSetupProgramText(register) {
+    const registerOpcode = (64 + registerIndex(register)).toString(16).toUpperCase().padStart(2, "0");
+    return [
+      "54",
+      "01",
+      "03",
+      registerOpcode,
+      "01",
+      "08",
+      "38",
+      "35",
+      "0B",
+      "0C",
+      "02",
+      "15",
+      "0E",
+      "0C",
+      "0B",
+      "05",
+      "00",
+      registerOpcode,
+      "50"
+    ].join(" ");
+  }
   function buildBudgetReport(used, limit, largestBlocks, extraCells) {
     return {
       used,
@@ -10255,6 +10669,9 @@ var MKProEmulatorBundle = (() => {
     }
     if (optimizations.some((optimization) => optimization.name === "x2-display-byte-scheduling")) {
       add("x2-register", "Optimizer scheduled hidden X2 values across display-byte boundaries.", "optimizer");
+    }
+    if (optimizations.some((optimization) => optimization.name === "negative-zero-threshold-selector")) {
+      add("negative-zero-degree", "Optimizer selected a preloaded negative-zero exponent threshold selector.", "optimizer");
     }
     if (optimizations.some((optimization) => optimization.name === "vp-fraction-restore")) {
       add("x2-restore-boundaries", "Optimizer used \u0412\u041F as both X2 restoration and fractional/mantissa transform.", "optimizer");
@@ -10331,13 +10748,22 @@ var MKProEmulatorBundle = (() => {
     if (optimizations.some((optimization) => optimization.name === "branch-removal")) {
       const variants = [
         ...new Set(
-          optimizations.filter((optimization) => optimization.name.startsWith("arithmetic-if-")).map((optimization) => optimization.name)
+          optimizations.filter(
+            (optimization) => optimization.name.startsWith("arithmetic-if-") || optimization.name.startsWith("negative-zero-threshold-")
+          ).map((optimization) => optimization.name)
         )
       ];
       proofs.push({
         id: "branch-equivalence",
         status: "proved",
         detail: `Removed conditional branches via ${variants.join(", ")} after matching assignment/update shape and value ranges.`
+      });
+    }
+    if (optimizations.some((optimization) => optimization.name === "negative-zero-threshold-selector")) {
+      proofs.push({
+        id: "negative-zero-threshold-selector",
+        status: "proved",
+        detail: "Selected only for bounded integer nonnegative thresholds; \u0412\u2191 normalizes the underflowed 1|-00 product before \u041A \u0417\u041D turns it into a 0/1 selector."
       });
     }
     if (optimizations.some(
@@ -10682,9 +11108,12 @@ var MKProEmulatorBundle = (() => {
   function compileForBrowser(source, options = {}) {
     const result = compileMKPro(source, { ...DEFAULT_COMPILE_OPTIONS, ...options });
     const programText = formatProgramTokens(result.steps.map((step) => step.hex));
+    const setupPrograms = result.report.preloads.map((preload) => preload.setupProgram).filter((program) => program !== void 0);
+    const setupProgramText = setupPrograms.length === 0 ? void 0 : setupPrograms.join("\n\n");
     return {
       source,
       programText,
+      ...setupProgramText === void 0 ? {} : { setupProgramText },
       listing: formatListing(result),
       steps: result.steps,
       report: result.report,
@@ -10731,7 +11160,9 @@ var MKProEmulatorBundle = (() => {
         bubbles: true,
         detail: compiled
       }));
-      setStatus(`MK-Pro compiled: ${compiled.report.steps}/${compiled.report.budget} cells.`);
+      setStatus(
+        compiled.setupProgramText === void 0 ? `MK-Pro compiled: ${compiled.report.steps}/${compiled.report.budget} cells.` : `MK-Pro compiled: ${compiled.report.steps}/${compiled.report.budget} cells; setup program required.`
+      );
       return compiled;
     };
     const writeFieldToMemory = () => {
@@ -10780,7 +11211,9 @@ var MKProEmulatorBundle = (() => {
       try {
         const compiled = compileForBrowser(source, compilerOptions);
         lastResult = compiled;
-        setStatus(`MK-Pro detected: ${compiled.report.steps}/${compiled.report.budget} cells. Click Write to load.`);
+        setStatus(
+          compiled.setupProgramText === void 0 ? `MK-Pro detected: ${compiled.report.steps}/${compiled.report.budget} cells. Click Write to load.` : `MK-Pro detected: ${compiled.report.steps}/${compiled.report.budget} cells. Run setupProgramText once, then click Write.`
+        );
       } catch (error) {
         setStatus(errorToStatus(error), true);
       }

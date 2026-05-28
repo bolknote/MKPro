@@ -74,6 +74,11 @@ export const MK61_PROFILE: MachineProfile = {
       detail: "The hidden X2 display register can be scheduled when observable display semantics are preserved.",
     },
     {
+      id: "negative-zero-degree",
+      source: "machine",
+      detail: "Negative-zero exponent values such as 1|-00 can act as constants or threshold sentinels when X2-normalization boundaries are controlled.",
+    },
+    {
       id: "extra-cells",
       source: "machine",
       detail: "Extra physical cells are tracked separately from official program cells.",
@@ -134,6 +139,11 @@ export const MK61_PROFILE: MachineProfile = {
       id: "x2-restore-boundaries",
       status: "probed",
       detail: "ВП, '.', '/-/', and digit-entry X2 restoration boundaries are modeled as display-state boundaries.",
+    },
+    {
+      id: "negative-zero-degree-threshold",
+      status: "probed",
+      detail: "With 1|-00 in Y, multiplying by X and then normalizing through В↑ yields a zero/nonzero threshold at |X|=1.",
     },
     {
       id: "step-vs-run-delta",

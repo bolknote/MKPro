@@ -429,6 +429,21 @@ program BadRawOpcode {
     ).toThrow(CompileError);
   });
 
+  it("rejects compiler-internal __mkpro names in user source", () => {
+    expect(() =>
+      compileOk(`
+program ReservedName {
+  state {
+    __mkpro_score: counter 0..9 = 0
+  }
+  turn {
+    stop __mkpro_score
+  }
+}
+`),
+    ).toThrow(/reserved compiler-internal prefix/u);
+  });
+
   it("accepts decimal constants inside V2 formulas", () => {
     const result = compileOk(`
 program DecimalFormula {
@@ -546,7 +561,10 @@ program BranchlessCompare {
   }
 }
 `);
-    const applied = result.report.optimizations.filter((item) => item.name === "arithmetic-if-terminal-select");
+    const applied = result.report.optimizations.filter((item) =>
+      item.name === "arithmetic-if-terminal-select" ||
+      item.name === "negative-zero-threshold-terminal-select"
+    );
     expect(applied.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -566,19 +584,74 @@ program LunarLike {
   }
 }
 `);
-    const applied = result.report.optimizations.filter((item) => item.name === "arithmetic-if-terminal-select");
+    const applied = result.report.optimizations.filter((item) =>
+      item.name === "arithmetic-if-terminal-select" ||
+      item.name === "negative-zero-threshold-terminal-select"
+    );
     expect(applied.length).toBe(0);
 
     const rejected = result.report.rejectedCandidates.find(
-      (entry) => entry.variant === "arithmetic-if-terminal-select",
+      (entry) => entry.variant === "negative-zero-threshold-terminal-select",
     );
     expect(rejected).toBeDefined();
     expect(rejected!.reason).toMatch(/branched form was shorter/u);
 
     const capability = result.report.optimizer.capabilities.find(
-      (entry) => entry.id === "arithmetic-if-select",
+      (entry) => entry.id === "negative-zero-threshold-selector",
     );
     expect(capability?.status).toBe("considered");
+  });
+
+  it("uses a negative-zero threshold selector when it makes terminal if/else shorter", () => {
+    const result = compileOk(`
+program NegativeZeroThreshold {
+  state {
+    score: counter 0..999 = 0
+  }
+  turn {
+    if score >= 100 {
+      stop 1
+    }
+    else {
+      stop 0
+    }
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "negative-zero-threshold-selector")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "negative-zero-threshold-terminal-select")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "branch-removal")).toBe(true);
+    expect(result.report.machineFeaturesUsed.some((item) => item.id === "negative-zero-degree")).toBe(true);
+    const preload = result.report.preloads.find((item) => item.value === "1|-00");
+    expect(preload).toMatchObject({
+      register: "d",
+      value: "1|-00",
+      countsAgainstProgram: false,
+    });
+    expect(preload?.setupProgram).toContain("4D");
+    expect(result.report.steps).toBe(11);
+  });
+
+  it("considers negative-zero threshold flow but keeps the shorter ordinary branch", () => {
+    const result = compileOk(`
+program NegativeZeroFlowCandidate {
+  state {
+    score: counter 0..999 = 0
+  }
+  turn {
+    if score >= 100 {
+      stop 1
+    }
+    stop 0
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "negative-zero-threshold-flow")).toBe(false);
+    const rejected = result.report.rejectedCandidates.find((entry) => entry.variant === "negative-zero-threshold-flow");
+    expect(rejected).toBeDefined();
+    expect(rejected!.reason).toMatch(/ordinary condition was shorter/u);
   });
 
   it("surfaces budget exceeded as a hard error for V2 programs", () => {
