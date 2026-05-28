@@ -11,20 +11,16 @@ Current `--analysis` sizes, measured against the local reference listings:
 
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
-| `cave-highlevel-baseline.mkpro` | 252 | 105 | command dispatch and cave mask lowerers |
+| `cave-highlevel-baseline.mkpro` | 253 | 105 | command dispatch and cave mask lowerers |
 | `cave-treasure.mkpro` | 295 | 105 | command dispatch, guarded direction dispatch, and cave mask lowerers |
-| `fox-hunt-100.mkpro` | 107 | 105 | `bit_mask`/spatial-hit arithmetic is still larger than the reference fox table helper |
 | `giants-country.mkpro` | 429 | 105 | repeated encounter/challenge dispatch |
-| `labyrinth777.mkpro` | 253 | 105 | room inspection and local-jumper dispatch |
-| `teleport.mkpro` | 246 | 105 | station masks and vault/guard flow |
+| `labyrinth777.mkpro` | 248 | 105 | room inspection and local-jumper dispatch |
+| `teleport.mkpro` | 243 | 105 | station masks and vault/guard flow |
 | `tic-tac-toe-4x4.mkpro` | 294 | 105 | 4x4 line-count state representation |
-| `treasure-hunter-2.mkpro` | 192 | 105 | floor-plan display/state lowerer |
+| `treasure-hunter-2.mkpro` | 186 | 105 | floor-plan display/state lowerer |
 
 Prototype notes:
 
-- `fox-hunt-100.txt` similarly treats hidden fox positions as generated packed
-  data addressed through compact helpers, not as an expanded sum of independent
-  `bit_has` formulas.
 - `tic-tac-toe-4x4.txt` keeps 4x4 line state in packed line registers
   (`R4..R7`) and updates/scans those lines directly. The current `line_count`
   loop is smaller than the old expansion, but still recomputes line state

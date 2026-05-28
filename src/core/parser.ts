@@ -810,6 +810,7 @@ interface V2LoweringContext {
   moveDeltas: Map<string, Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>>>;
   stateTypes: Map<string, V2StateFieldAst["type"]>;
   stateDomains: Map<string, string>;
+  stateRanges: Map<string, { min?: number; max?: number }>;
   cellMapNames: Map<string, string>;
   boards: Map<string, V2BoardAst>;
   worlds: Map<string, V2WorldAst>;
@@ -842,6 +843,7 @@ function lowerV2Program(v2: V2ProgramAst): {
     moveDeltas: collectV2MoveDeltas(v2),
     stateTypes: new Map(v2.state.map((field) => [field.name, field.type])),
     stateDomains,
+    stateRanges: collectV2StateRanges(v2),
     cellMapNames,
     boards: new Map(v2.boards.map((board) => [board.name, board])),
     worlds: new Map(v2.worlds.map((world) => [world.name, world])),
@@ -857,6 +859,15 @@ function lowerV2Program(v2: V2ProgramAst): {
     ],
     blocks: [],
   };
+}
+
+function collectV2StateRanges(v2: V2ProgramAst): Map<string, { min?: number; max?: number }> {
+  return new Map(v2.state.map((field) => {
+    const range: { min?: number; max?: number } = {};
+    if (field.min !== undefined) range.min = field.min;
+    if (field.max !== undefined) range.max = field.max;
+    return [field.name, range];
+  }));
 }
 
 function collectV2RuleParams(v2: V2ProgramAst): V2LoweringContext["ruleParams"] {
@@ -1924,6 +1935,7 @@ function cellAtIndexExpression(pos: string, domain: string, context: V2LoweringC
     case "floor_plan":
     case "decimal_player":
     case "pier_to_ship":
+      if (isSingleDecimalDigitExpression(pos, context)) return pos;
       return decimalOnesExpression(pos);
     case "corridor_plan":
     case "packed_decimal_zero_run":
@@ -1932,6 +1944,11 @@ function cellAtIndexExpression(pos: string, domain: string, context: V2LoweringC
       return pos;
   }
   return pos;
+}
+
+function isSingleDecimalDigitExpression(expr: string, context: V2LoweringContext): boolean {
+  const range = context.stateRanges.get(expr.trim());
+  return range?.min !== undefined && range.max !== undefined && range.min >= 0 && range.max <= 9;
 }
 
 function lineCountExpression(args: string[], context: V2LoweringContext): string | undefined {

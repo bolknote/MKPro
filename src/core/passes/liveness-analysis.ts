@@ -1,4 +1,4 @@
-import type { IrOp, RegisterName } from "../types.ts";
+import type { IrLoopCounter, IrOp, RegisterName } from "../types.ts";
 import { cellsPerOp, knownIndirectMemoryTarget } from "./helpers.ts";
 
 export interface LivenessInfo {
@@ -122,8 +122,25 @@ function defsAndUses(op: IrOp): { defs: ReadonlyArray<RegisterName>; uses: Reado
     case "indirect-call":
     case "indirect-cjump":
       return { defs: [], uses: [op.register] };
+    case "loop": {
+      const register = loopCounterRegister(op.counter);
+      return { defs: [register], uses: [register] };
+    }
     default:
       return { defs: [], uses: [] };
+  }
+}
+
+function loopCounterRegister(counter: IrLoopCounter): RegisterName {
+  switch (counter) {
+    case "L0":
+      return "0";
+    case "L1":
+      return "1";
+    case "L2":
+      return "2";
+    case "L3":
+      return "3";
   }
 }
 

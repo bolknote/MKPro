@@ -129,8 +129,14 @@ class ConstantFolder {
         if (inner.kind === "unary" && inner.op === "-") return this.folded(inner.expr);
         return inner === expr.expr ? expr : { ...expr, expr: inner };
       }
-      case "call":
-        return { ...expr, args: expr.args.map((arg) => this.foldExpression(arg)) };
+      case "call": {
+        const args = expr.args.map((arg) => this.foldExpression(arg));
+        const changed = args.some((arg, index) => arg !== expr.args[index]);
+        const call = changed ? { ...expr, args } : expr;
+        const folded = foldPureConstantCall(expr.callee, args);
+        if (folded !== undefined) return this.folded(folded);
+        return call;
+      }
       case "binary": {
         const left = this.foldExpression(expr.left);
         const right = this.foldExpression(expr.right);
@@ -225,54 +231,54 @@ function negateNumberExpression(
   return value === undefined ? undefined : decimalNumberExpression(negateDecimal(value));
 }
 
+function foldPureConstantCall(
+  callee: string,
+  args: ExpressionAst[],
+): Extract<ExpressionAst, { kind: "number" }> | undefined {
+  const name = callee.toLowerCase();
+  const decimals = args.map(decimalFromExpression);
+  if (decimals.some((value) => value === undefined)) return undefined;
+  const values = decimals as DecimalValue[];
+
+  const result = (() => {
+    switch (name) {
+      case "abs":
+        return values.length === 1 ? absDecimal(values[0]!) : undefined;
+      case "sign":
+        return values.length === 1 ? decimal(decimalSign(values[0]!)) : undefined;
+      case "int":
+        return values.length === 1 ? truncateDecimal(values[0]!) : undefined;
+      case "frac":
+        return values.length === 1 ? fractionalDecimal(values[0]!) : undefined;
+      case "sqr":
+        return values.length === 1 ? multiplyDecimal(values[0]!, values[0]!) : undefined;
+      case "inv":
+        return values.length === 1 ? divideDecimal(decimal(1), values[0]!) : undefined;
+      case "pow10":
+        return values.length === 1 ? pow10Decimal(values[0]!) : undefined;
+      case "pow":
+        return values.length === 2 ? powDecimalInteger(values[0]!, values[1]!) : undefined;
+      case "max":
+        return values.length === 2 ? maxDecimal(values[0]!, values[1]!) : undefined;
+      case "bit_and":
+        return values.length === 2 ? foldBitwise(values[0]!, values[1]!, "and") : undefined;
+      case "bit_or":
+        return values.length === 2 ? foldBitwise(values[0]!, values[1]!, "or") : undefined;
+      case "bit_xor":
+        return values.length === 2 ? foldBitwise(values[0]!, values[1]!, "xor") : undefined;
+      case "bit_not":
+        return values.length === 1 ? foldBitwiseNot(values[0]!) : undefined;
+      default:
+        return undefined;
+    }
+  })();
+
+  return result === undefined ? undefined : decimalNumberExpression(result);
+}
+
 function decimalFromExpression(expr: ExpressionAst): DecimalValue | undefined {
   if (expr.kind !== "number") return undefined;
   return parseDecimalLiteral(expr.raw);
-}
-
-function distributeConstantFactor(factor: ExpressionAst, term: ExpressionAst): ExpressionAst | undefined {
-  if (factor.kind !== "number" || term.kind !== "binary" || (term.op !== "+" && term.op !== "-")) return undefined;
-  if (!expressionPureForFolding(term)) return undefined;
-
-  const leftConstant = term.left.kind === "number" ? term.left : undefined;
-  const rightConstant = term.right.kind === "number" ? term.right : undefined;
-  if (term.op === "+") {
-    const constant = leftConstant ?? rightConstant;
-    const rest = leftConstant !== undefined ? term.right : term.left;
-    if (constant === undefined) return undefined;
-
-    const foldedConstant = foldNumericBinary("*", factor, constant);
-    if (foldedConstant === undefined) return undefined;
-    return {
-      kind: "binary",
-      op: "+",
-      left: foldedConstant,
-      right: multiplyExpressions(factor, rest),
-    };
-  }
-
-  if (leftConstant !== undefined) {
-    const factorValue = numericLiteralValue(factor);
-    if (factorValue !== undefined && factorValue < 0) {
-      const positiveFactor = negateNumberExpression(factor);
-      if (positiveFactor === undefined) return undefined;
-      const foldedConstant = foldNumericBinary("*", positiveFactor, leftConstant);
-      if (foldedConstant === undefined) return undefined;
-      return subtractExpressions(multiplyExpressions(positiveFactor, term.right), foldedConstant);
-    }
-
-    const foldedConstant = foldNumericBinary("*", factor, leftConstant);
-    if (foldedConstant === undefined) return undefined;
-    return subtractExpressions(foldedConstant, multiplyExpressions(factor, term.right));
-  }
-
-  if (rightConstant !== undefined) {
-    const foldedConstant = foldNumericBinary("*", factor, rightConstant);
-    if (foldedConstant === undefined) return undefined;
-    return subtractExpressions(multiplyExpressions(factor, term.left), foldedConstant);
-  }
-
-  return undefined;
 }
 
 function foldLinearExpression(expr: ExpressionAst): ExpressionAst | undefined {
@@ -597,6 +603,123 @@ function decimalSign(value: DecimalValue): -1 | 0 | 1 {
   if (normalized.num < 0n) return -1;
   if (normalized.num > 0n) return 1;
   return 0;
+}
+
+function compareDecimal(left: DecimalValue, right: DecimalValue): -1 | 0 | 1 {
+  const scale = Math.max(left.scale, right.scale);
+  const lhs = left.num * pow10(scale - left.scale);
+  const rhs = right.num * pow10(scale - right.scale);
+  if (lhs < rhs) return -1;
+  if (lhs > rhs) return 1;
+  return 0;
+}
+
+function truncateDecimal(value: DecimalValue): DecimalValue {
+  const normalized = normalizeDecimal(value);
+  if (normalized.scale === 0) return normalized;
+  return normalizeDecimal({
+    num: normalized.num / pow10(normalized.scale),
+    scale: 0,
+  });
+}
+
+function fractionalDecimal(value: DecimalValue): DecimalValue {
+  return subtractDecimal(value, truncateDecimal(value));
+}
+
+function pow10Decimal(exponent: DecimalValue): DecimalValue | undefined {
+  const integer = decimalToIntegerBigInt(exponent);
+  if (integer === undefined || integer < BigInt(-MAX_LITERAL_EXPONENT) || integer > BigInt(MAX_LITERAL_EXPONENT)) {
+    return undefined;
+  }
+  const power = Number(integer);
+  return power >= 0
+    ? normalizeDecimal({ num: pow10(power), scale: 0 })
+    : normalizeDecimal({ num: 1n, scale: -power });
+}
+
+function powDecimalInteger(base: DecimalValue, exponent: DecimalValue): DecimalValue | undefined {
+  if (decimalSign(base) <= 0) return undefined;
+  const integerExponent = decimalToIntegerBigInt(exponent);
+  if (
+    integerExponent === undefined ||
+    integerExponent < BigInt(-MAX_LITERAL_EXPONENT) ||
+    integerExponent > BigInt(MAX_LITERAL_EXPONENT)
+  ) {
+    return undefined;
+  }
+
+  const magnitude = Number(absBigInt(integerExponent));
+  let result = decimal(1);
+  for (let i = 0; i < magnitude; i += 1) {
+    result = multiplyDecimal(result, base);
+    if (result.scale > MAX_FOLDED_DECIMAL_SCALE) return undefined;
+  }
+
+  return integerExponent >= 0n ? result : divideDecimal(decimal(1), result);
+}
+
+function maxDecimal(left: DecimalValue, right: DecimalValue): DecimalValue {
+  if (isDecimalZero(left) || isDecimalZero(right)) return decimal(0);
+  return compareDecimal(left, right) >= 0 ? left : right;
+}
+
+function foldBitwise(left: DecimalValue, right: DecimalValue, op: "and" | "or" | "xor"): DecimalValue | undefined {
+  const lhs = decimalMantissaDigits(left);
+  const rhs = decimalMantissaDigits(right);
+  if (lhs === undefined || rhs === undefined) return undefined;
+  const digits = [8];
+  for (let index = 1; index < 8; index += 1) {
+    const digit = bitwiseNibble(lhs[index]!, rhs[index]!, op);
+    if (digit > 9) return undefined;
+    digits.push(digit);
+  }
+  return decimalFromDigits(digits, 7);
+}
+
+function foldBitwiseNot(value: DecimalValue): DecimalValue | undefined {
+  const digits = decimalMantissaDigits(value);
+  if (digits === undefined) return undefined;
+  const result = [8];
+  for (let index = 1; index < 8; index += 1) {
+    const digit = (~digits[index]!) & 0x0f;
+    if (digit > 9) return undefined;
+    result.push(digit);
+  }
+  return decimalFromDigits(result, 7);
+}
+
+function bitwiseNibble(left: number, right: number, op: "and" | "or" | "xor"): number {
+  switch (op) {
+    case "and":
+      return left & right;
+    case "or":
+      return left | right;
+    case "xor":
+      return left ^ right;
+  }
+}
+
+function decimalToIntegerBigInt(value: DecimalValue): bigint | undefined {
+  const normalized = normalizeDecimal(value);
+  return normalized.scale === 0 ? normalized.num : undefined;
+}
+
+function decimalMantissaDigits(value: DecimalValue): number[] | undefined {
+  const normalized = normalizeDecimal(value);
+  if (normalized.num === 0n) return new Array<number>(8).fill(0);
+  const digits = absBigInt(normalized.num)
+    .toString()
+    .slice(0, 8)
+    .padEnd(8, "0");
+  return [...digits].map((digit) => Number(digit));
+}
+
+function decimalFromDigits(digits: number[], scale: number): DecimalValue {
+  return normalizeDecimal({
+    num: BigInt(digits.join("")),
+    scale,
+  });
 }
 
 function isDecimalZero(value: DecimalValue): boolean {

@@ -769,7 +769,10 @@ The pipeline currently contains:
   value last stored to `r` and no intervening op (С/П, jump, ALU, …) clobbers
   X. С/П acts as a barrier because the user may overwrite X during pause.
 - **liveness-analysis** — foundational dataflow used by DSE, register
-  coalescing, and dead-code analysis.
+  coalescing, and dead-code analysis; `F L0`..`F L3` loop counters are modeled
+  as both read and written registers.
+- **dispatch-case-ordering** — moves unique numeric zero cases earlier when a
+  high-level `match` can reuse the selector already in X.
 - **jump-to-next-threading** — drops `БП label` immediately before `label`.
 - **jump-thread** — chases jump-to-jump trampolines to the final target.
 - **preloaded-indirect-flow** — for address-stable numeric branch/call
@@ -782,8 +785,9 @@ The pipeline currently contains:
   continuation.
 - **dead-code-after-halt** — CFG reachability from the entry removes ops
   that no fall-through or jump edge reaches.
-- **constant-folding** — folds numeric source-expression subtrees before code
-  generation, and strips `0 +` and `1 *` identities in later IR.
+- **constant-folding** — folds numeric source-expression subtrees, deterministic
+  constant primitive calls, and affine constant/variable expressions before code
+  generation, then strips `0 +` and `1 *` identities in later IR.
 - **r0-fractional-sentinel** — removes redundant direct `R3` accesses after
   fractional `R0` indirect access when liveness proves `R0` is dead afterward.
 - **vp-x2-peephole** — drops a `К {x}` immediately after a proved display
@@ -800,6 +804,8 @@ The pipeline currently contains:
   tails into a shared exit.
 - **shared-call-tail** — coalesces repeated `ПП helper; БП continuation`
   pairs into one shared call tail when that is smaller.
+- **bit-mask-helper** — shares generated `bit_mask(index)` code when spatial
+  membership and line-count lowering need the same packed-cell mask shape.
 - **return-zero-jump** — replaces `БП 01` with `В/О` only when the return
   stack is provably empty.
 - **redundant-prologue-elimination** — when a `display + С/П` block

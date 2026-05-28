@@ -27,6 +27,7 @@ import type {
   CompileResult,
   ConditionAst,
   Diagnostic,
+  DispatchCaseAst,
   ExpressionAst,
   MachineAddressRef,
   MachineFeatureUseReport,
@@ -867,6 +868,7 @@ class EmitContext {
   }>();
   private readonly expressionHelpers = new Map<string, { expr: ExpressionAst; label: string; line?: number }>();
   private readonly lineCountHelpers = new Map<string, { cell: ExpressionAst; board: V2BoardAst; label: string; line?: number }>();
+  private readonly spatialBitMaskHelpers = new Map<string, { scratch: string; label: string; line?: number }>();
   private readonly spatialSumLoopHelpers = new Map<string, {
     hitMask: string;
     cell: ExpressionAst;
@@ -992,6 +994,20 @@ class EmitContext {
       this.optimizations.push({
         name: "spatial-sum-loop-helper",
         detail: `Emitted shared ${helper.operation} progression helper for ${helper.hitMask}.`,
+      });
+    }
+    for (const helper of this.spatialBitMaskHelpers.values()) {
+      this.emitLabel(helper.label);
+      this.emitStore(helper.scratch, "bit mask index", helper.line);
+      this.compileExpression({
+        kind: "call",
+        callee: "bit_mask",
+        args: [{ kind: "identifier", name: helper.scratch }],
+      });
+      this.emitOp(0x52, "В/О", "bit_mask return", helper.line);
+      this.optimizations.push({
+        name: "bit-mask-helper",
+        detail: `Emitted shared bit_mask helper using ${helper.scratch}.`,
       });
     }
     for (const helper of this.spatialHitHelpers.values()) {
@@ -1467,7 +1483,7 @@ class EmitContext {
     const falseLabel = this.freshLabel("if_false");
     const endLabel = this.freshLabel("if_end");
 
-    this.compileExpression(membership.test);
+    if (!this.compileBitMembershipMaskValue(membership, line)) this.compileExpression(membership.test);
     this.emitJump(0x57, "F x!=0", falseLabel, "false branch for !=", line);
     this.emitOp(0x3a, "К ИНВ", "reuse membership mask for clear", clear.line);
     this.compileExpression(membership.collection);
@@ -1486,6 +1502,22 @@ class EmitContext {
     this.optimizations.push({
       name: "cell-membership-clear-reuse",
       detail: `Reused the successful membership mask when clearing ${clear.target} at line ${clear.line}.`,
+    });
+    return true;
+  }
+
+  private compileBitMembershipMaskValue(membership: BitMembershipCondition, line: number): boolean {
+    if (membership.collection.kind !== "identifier") return false;
+    const scratch = spatialHitScratchName(membership.collection.name);
+    if (this.allocation.registers[scratch] === undefined) return false;
+    const helper = this.ensureSpatialBitMaskHelper(scratch, line);
+    this.compileExpression(membership.item);
+    this.emitJump(0x53, "ПП", helper.label, "bit_mask helper", line);
+    this.compileExpression(membership.collection);
+    this.emitOp(0x37, "К ∧", "bit membership test", line);
+    this.optimizations.push({
+      name: "bit-mask-helper-call",
+      detail: `Reused shared bit_mask helper for ${membership.collection.name} at line ${line}.`,
     });
     return true;
   }
@@ -1788,6 +1820,12 @@ class EmitContext {
       this.optimizations.push({
         name: "dispatch-default-merge",
         detail: `Removed ${optimized.removed} dispatch case${optimized.removed === 1 ? "" : "s"} whose body matched the default branch.`,
+      });
+    }
+    if (optimized.reordered > 0) {
+      this.optimizations.push({
+        name: "dispatch-case-ordering",
+        detail: `Moved ${optimized.reordered} zero dispatch case${optimized.reordered === 1 ? "" : "s"} earlier to reuse the selector already in X.`,
       });
     }
 
@@ -2903,6 +2941,8 @@ class EmitContext {
     const line = scratch[1]!;
     const offset = scratch[2]!;
     const counter = scratch[3]!;
+    const counterRegister = this.allocation.registers[counter];
+    const helperTakesCounterInX = counterRegister !== undefined && flOpcode(counterRegister) !== undefined;
 
     this.emitZero(`${operation} total`, sourceLine);
     this.emitStore(total, `${operation} total`, sourceLine);
@@ -2913,8 +2953,10 @@ class EmitContext {
         this.emitStore(offset, `${operation} offset`, sourceLine);
         this.compileExpression(progression.step);
         this.emitStore(line, `${operation} step`, sourceLine);
-        this.emitNumberOrPreload(String(progression.count));
-        this.emitStore(counter, `${operation} counter`, sourceLine);
+        if (!isNumericValue(progression.step, progression.count)) {
+          this.emitNumberOrPreload(String(progression.count));
+        }
+        if (!helperTakesCounterInX) this.emitStore(counter, `${operation} counter`, sourceLine);
         this.emitJump(0x53, "ПП", helper.label, `${operation} progression`, sourceLine);
       }
       this.optimizations.push({
@@ -2989,6 +3031,12 @@ class EmitContext {
     const step = scratch[1]!;
     const offset = scratch[2]!;
     const counter = scratch[3]!;
+    const counterRegister = this.allocation.registers[counter];
+    const flCounterOpcode = counterRegister === undefined ? undefined : flOpcode(counterRegister);
+
+    if (flCounterOpcode !== undefined) {
+      this.emitStore(counter, `${operation} counter`, sourceLine);
+    }
 
     const start = this.freshLabel(`${operation}_loop`);
     this.emitLabel(start);
@@ -3006,8 +3054,6 @@ class EmitContext {
     this.emitOp(0x10, "+", `${operation} add hit`);
     this.emitStore(total, `${operation} accumulator`);
 
-    const counterRegister = this.allocation.registers[counter];
-    const flCounterOpcode = counterRegister === undefined ? undefined : flOpcode(counterRegister);
     if (flCounterOpcode !== undefined) {
       this.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, `${operation} loop`, sourceLine);
       this.optimizations.push({
@@ -3035,12 +3081,10 @@ class EmitContext {
     scratch: string,
     sourceLine: number | undefined,
   ): void {
+    const helper = this.ensureSpatialBitMaskHelper(scratch, sourceLine);
+    this.emitRecall(scratch, "spatial hit index", sourceLine);
+    this.emitJump(0x53, "ПП", helper.label, "bit_mask helper", sourceLine);
     this.emitRecall(hitMask, "spatial hit mask", sourceLine);
-    this.compileExpression({
-      kind: "call",
-      callee: "bit_mask",
-      args: [{ kind: "identifier", name: scratch }],
-    });
     this.emitOp(0x37, "К ∧", "spatial hit test", sourceLine);
     this.emitOp(0x32, "К ЗН", "spatial hit to count", sourceLine);
     this.optimizations.push({
@@ -3127,6 +3171,21 @@ class EmitContext {
       label: `__spatial_hit_${mask}`,
     };
     this.spatialHitHelpers.set(mask, helper);
+    return helper;
+  }
+
+  private ensureSpatialBitMaskHelper(
+    scratch: string,
+    line: number | undefined,
+  ): { scratch: string; label: string; line?: number } {
+    const existing = this.spatialBitMaskHelpers.get(scratch);
+    if (existing !== undefined) return existing;
+    const helper = {
+      scratch,
+      label: `__bit_mask_${this.spatialBitMaskHelpers.size}`,
+      ...(line === undefined ? {} : { line }),
+    };
+    this.spatialBitMaskHelpers.set(scratch, helper);
     return helper;
   }
 
@@ -6223,8 +6282,16 @@ function expressionEquals(left: ExpressionAst, right: ExpressionAst): boolean {
 
 function optimizeDispatchDefaultCases(
   statement: Extract<StatementAst, { kind: "dispatch" }>,
-): { statement: Extract<StatementAst, { kind: "dispatch" }>; removed: number } {
-  if (!statement.defaultBody || statement.cases.length === 0) return { statement, removed: 0 };
+): { statement: Extract<StatementAst, { kind: "dispatch" }>; removed: number; reordered: number } {
+  if (statement.cases.length === 0) return { statement, removed: 0, reordered: 0 };
+  if (!statement.defaultBody) {
+    const ordered = orderZeroDispatchCasesFirst(statement.cases);
+    return {
+      statement: ordered.reordered === 0 ? statement : { ...statement, cases: ordered.cases },
+      removed: 0,
+      reordered: ordered.reordered,
+    };
+  }
 
   const defaultBody = statement.defaultBody;
   const kept: typeof statement.cases = [];
@@ -6245,8 +6312,29 @@ function optimizeDispatchDefaultCases(
     kept.push(dispatchCase);
   }
 
-  if (removed === 0) return { statement, removed };
-  return { statement: { ...statement, cases: kept }, removed };
+  const ordered = orderZeroDispatchCasesFirst(kept);
+  const nextStatement = removed === 0 && ordered.reordered === 0
+    ? statement
+    : { ...statement, cases: ordered.cases };
+  return { statement: nextStatement, removed, reordered: ordered.reordered };
+}
+
+function orderZeroDispatchCasesFirst(cases: DispatchCaseAst[]): { cases: DispatchCaseAst[]; reordered: number } {
+  if (cases.length < 2) return { cases, reordered: 0 };
+  const values = cases.map((dispatchCase) => numericLiteralValue(dispatchCase.value));
+  if (values.some((value) => value === undefined)) return { cases, reordered: 0 };
+  const seen = new Set<number>();
+  for (const value of values as number[]) {
+    if (seen.has(value)) return { cases, reordered: 0 };
+    seen.add(value);
+  }
+  const zeroIndex = (values as number[]).indexOf(0);
+  if (zeroIndex <= 0) return { cases, reordered: 0 };
+  const zeroCase = cases[zeroIndex]!;
+  return {
+    cases: [zeroCase, ...cases.slice(0, zeroIndex), ...cases.slice(zeroIndex + 1)],
+    reordered: 1,
+  };
 }
 
 function statementListsEqual(left: readonly StatementAst[], right: readonly StatementAst[]): boolean {

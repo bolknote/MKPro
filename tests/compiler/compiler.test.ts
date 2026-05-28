@@ -175,6 +175,84 @@ program NestedLinearFold {
     expect(result.report.optimizations.some((item) => item.name === "expression-constant-folder")).toBe(true);
   });
 
+  it("folds constant bitwise primitive calls before code generation", () => {
+    const result = compileOk(`
+program ConstantBitwiseCallFold {
+  state {
+    value: packed = 0
+  }
+  turn {
+    value = bit_or(2, 4)
+    stop value
+  }
+}
+`);
+    const opcodes = result.steps.map((step) => step.hex);
+
+    expect(opcodes[0]).toBe("08");
+    expect(opcodes).not.toContain("38");
+    expect(result.report.optimizations.some((item) => item.name === "expression-constant-folder")).toBe(true);
+  });
+
+  it("folds pure constant primitive calls before code generation", () => {
+    const result = compileOk(`
+program ConstantPrimitiveCallFold {
+  state {
+    value: packed = 0
+  }
+  turn {
+    value = bit_or(2, 4) + bit_and(7, 3) + bit_xor(6, 3) + max(2, 9) + abs(-3) + sign(-12) + int(2.9) + frac(2.75) + inv(2) + pow(2, 3) + pow10(2)
+    stop value
+  }
+}
+`);
+    const opcodes = result.steps.map((step) => step.hex);
+
+    expect(result.report.preloads.some((item) => item.value === "146.25")).toBe(true);
+    for (const opcode of ["15", "23", "24", "31", "32", "34", "35", "36", "37", "38", "39"]) {
+      expect(opcodes).not.toContain(opcode);
+    }
+    expect(result.report.optimizations.some((item) => item.name === "expression-constant-folder")).toBe(true);
+  });
+
+  it("folds constant bitwise inversion when the MK-61 mantissa result is decimal", () => {
+    const result = compileOk(`
+program ConstantBitwiseNotFold {
+  state {
+    value: packed = 0
+  }
+  turn {
+    value = bit_not(99999999)
+    stop value
+  }
+}
+`);
+    const opcodes = result.steps.map((step) => step.hex);
+
+    expect(result.report.preloads.some((item) => item.value === "8.6666666")).toBe(true);
+    expect(opcodes).not.toContain("3A");
+    expect(result.report.optimizations.some((item) => item.name === "expression-constant-folder")).toBe(true);
+  });
+
+  it("folds constant max calls with MK-61 zero ordering", () => {
+    const result = compileOk(`
+program ConstantMaxZeroFold {
+  state {
+    value: packed = 0
+  }
+  turn {
+    value = max(0, 5)
+    stop value
+  }
+}
+`);
+    const opcodes = result.steps.map((step) => step.hex);
+
+    expect(opcodes[0]).toBe("00");
+    expect(opcodes).not.toContain("36");
+    expect(result.report.optimizations.some((item) => item.name === "expression-constant-folder")).toBe(true);
+  });
+
   it("lowers MK-61 primitive functions from V2 formulas", () => {
     const result = compileOk(`
 program FormulaPrimitives {
@@ -182,7 +260,9 @@ program FormulaPrimitives {
     value: packed = 0
   }
   turn {
-    value = max(pi(), sqr(2)) + inv(2) + pow(2, 3) + bit_and(1, 2) + bit_or(1, 2) + bit_xor(1, 2) + bit_not(1)
+    read x
+    read y
+    value = max(pi(), sqr(x)) + inv(y) + pow(x, y) + bit_and(x, y) + bit_or(x, y) + bit_xor(x, y) + bit_not(x)
     stop value
   }
 }

@@ -158,7 +158,7 @@ program TreasureHunter2 {
   rule reveal_cell {
     // Tile numbers are semantic, not visual decoration: treasure, hole, ladder,
     // or empty passage decide the next rule.
-    floor_view = cell_at(cave, pos)
+    floor_view = cell_at(cave, room)
     classify_tile
   }
 

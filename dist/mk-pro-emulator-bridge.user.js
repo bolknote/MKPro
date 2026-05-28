@@ -453,8 +453,14 @@ var MKProEmulatorBundle = (() => {
           if (inner.kind === "unary" && inner.op === "-") return this.folded(inner.expr);
           return inner === expr.expr ? expr : { ...expr, expr: inner };
         }
-        case "call":
-          return { ...expr, args: expr.args.map((arg) => this.foldExpression(arg)) };
+        case "call": {
+          const args = expr.args.map((arg) => this.foldExpression(arg));
+          const changed = args.some((arg, index) => arg !== expr.args[index]);
+          const call = changed ? { ...expr, args } : expr;
+          const folded = foldPureConstantCall(expr.callee, args);
+          if (folded !== void 0) return this.folded(folded);
+          return call;
+        }
         case "binary": {
           const left = this.foldExpression(expr.left);
           const right = this.foldExpression(expr.right);
@@ -473,24 +479,34 @@ var MKProEmulatorBundle = (() => {
         case "+":
           if (isNumericValue(left, 0)) return right;
           if (isNumericValue(right, 0)) return left;
+          {
+            const linear = foldLinearExpression({ kind: "binary", op, left, right });
+            if (linear !== void 0 && estimateExpressionCost(linear) <= estimateBinaryCost(left, right)) return linear;
+          }
           return void 0;
         case "-":
           if (isNumericValue(right, 0)) return left;
           if (isNumericValue(left, 0)) return { kind: "unary", op: "-", expr: right };
+          {
+            const linear = foldLinearExpression({ kind: "binary", op, left, right });
+            if (linear !== void 0 && estimateExpressionCost(linear) <= estimateBinaryCost(left, right)) return linear;
+          }
           return void 0;
         case "*": {
           if (isNumericValue(left, 1)) return right;
           if (isNumericValue(right, 1)) return left;
           if (isNumericValue(left, 0) && expressionSafeToDrop(right)) return numberExpression(0);
           if (isNumericValue(right, 0) && expressionSafeToDrop(left)) return numberExpression(0);
-          const distributed = distributeConstantFactor(left, right) ?? distributeConstantFactor(right, left);
-          if (distributed !== void 0 && estimateExpressionCost(distributed) <= estimateBinaryCost(left, right)) {
-            return distributed;
-          }
+          const linear = foldLinearExpression({ kind: "binary", op, left, right });
+          if (linear !== void 0 && estimateExpressionCost(linear) <= estimateBinaryCost(left, right)) return linear;
           return void 0;
         }
         case "/":
           if (isNumericValue(right, 1)) return left;
+          {
+            const linear = foldLinearExpression({ kind: "binary", op, left, right });
+            if (linear !== void 0 && estimateExpressionCost(linear) <= estimateBinaryCost(left, right)) return linear;
+          }
           return void 0;
       }
     }
@@ -518,51 +534,202 @@ var MKProEmulatorBundle = (() => {
     return result === void 0 ? void 0 : decimalNumberExpression(result);
   }
   function negateNumberExpression(expr) {
-    const value = parseDecimalLiteral(expr.raw);
-    return value === void 0 ? void 0 : decimalNumberExpression({ num: -value.num, scale: value.scale });
+    const value = decimalFromExpression(expr);
+    return value === void 0 ? void 0 : decimalNumberExpression(negateDecimal(value));
   }
-  function distributeConstantFactor(factor, term) {
-    if (factor.kind !== "number" || term.kind !== "binary" || term.op !== "+" && term.op !== "-") return void 0;
-    if (!expressionPureForFolding(term)) return void 0;
-    const leftConstant = term.left.kind === "number" ? term.left : void 0;
-    const rightConstant = term.right.kind === "number" ? term.right : void 0;
-    if (term.op === "+") {
-      const constant = leftConstant ?? rightConstant;
-      const rest = leftConstant !== void 0 ? term.right : term.left;
-      if (constant === void 0) return void 0;
-      const foldedConstant = foldNumericBinary("*", factor, constant);
-      if (foldedConstant === void 0) return void 0;
-      return {
-        kind: "binary",
-        op: "+",
-        left: foldedConstant,
-        right: multiplyExpressions(factor, rest)
-      };
-    }
-    if (leftConstant !== void 0) {
-      const factorValue = numericLiteralValue(factor);
-      if (factorValue !== void 0 && factorValue < 0) {
-        const positiveFactor = negateNumberExpression(factor);
-        if (positiveFactor === void 0) return void 0;
-        const foldedConstant2 = foldNumericBinary("*", positiveFactor, leftConstant);
-        if (foldedConstant2 === void 0) return void 0;
-        return subtractExpressions(multiplyExpressions(positiveFactor, term.right), foldedConstant2);
+  function foldPureConstantCall(callee, args) {
+    const name = callee.toLowerCase();
+    const decimals = args.map(decimalFromExpression);
+    if (decimals.some((value) => value === void 0)) return void 0;
+    const values = decimals;
+    const result = (() => {
+      switch (name) {
+        case "abs":
+          return values.length === 1 ? absDecimal(values[0]) : void 0;
+        case "sign":
+          return values.length === 1 ? decimal(decimalSign(values[0])) : void 0;
+        case "int":
+          return values.length === 1 ? truncateDecimal(values[0]) : void 0;
+        case "frac":
+          return values.length === 1 ? fractionalDecimal(values[0]) : void 0;
+        case "sqr":
+          return values.length === 1 ? multiplyDecimal(values[0], values[0]) : void 0;
+        case "inv":
+          return values.length === 1 ? divideDecimal(decimal(1), values[0]) : void 0;
+        case "pow10":
+          return values.length === 1 ? pow10Decimal(values[0]) : void 0;
+        case "pow":
+          return values.length === 2 ? powDecimalInteger(values[0], values[1]) : void 0;
+        case "max":
+          return values.length === 2 ? maxDecimal(values[0], values[1]) : void 0;
+        case "bit_and":
+          return values.length === 2 ? foldBitwise(values[0], values[1], "and") : void 0;
+        case "bit_or":
+          return values.length === 2 ? foldBitwise(values[0], values[1], "or") : void 0;
+        case "bit_xor":
+          return values.length === 2 ? foldBitwise(values[0], values[1], "xor") : void 0;
+        case "bit_not":
+          return values.length === 1 ? foldBitwiseNot(values[0]) : void 0;
+        default:
+          return void 0;
       }
-      const foldedConstant = foldNumericBinary("*", factor, leftConstant);
-      if (foldedConstant === void 0) return void 0;
-      return subtractExpressions(foldedConstant, multiplyExpressions(factor, term.right));
+    })();
+    return result === void 0 ? void 0 : decimalNumberExpression(result);
+  }
+  function decimalFromExpression(expr) {
+    if (expr.kind !== "number") return void 0;
+    return parseDecimalLiteral(expr.raw);
+  }
+  function foldLinearExpression(expr) {
+    if (!expressionPureForFolding(expr)) return void 0;
+    const form = linearizeExpression(expr);
+    if (form === void 0) return void 0;
+    const rebuilt = buildLinearExpression(form);
+    if (rebuilt === void 0 || expressionKey(rebuilt) === expressionKey(expr)) return void 0;
+    return rebuilt;
+  }
+  function linearizeExpression(expr) {
+    if (!expressionPureForFolding(expr)) return void 0;
+    switch (expr.kind) {
+      case "number": {
+        const value = parseDecimalLiteral(expr.raw);
+        return value === void 0 ? singleTerm(expr) : { constant: value, terms: /* @__PURE__ */ new Map() };
+      }
+      case "identifier":
+      case "call":
+        return singleTerm(expr);
+      case "unary": {
+        const inner = linearizeExpression(expr.expr);
+        return inner === void 0 ? void 0 : scaleLinearForm(inner, decimal(-1));
+      }
+      case "binary": {
+        switch (expr.op) {
+          case "+": {
+            const left = linearizeExpression(expr.left);
+            const right = linearizeExpression(expr.right);
+            return left === void 0 || right === void 0 ? void 0 : addLinearForms(left, right);
+          }
+          case "-": {
+            const left = linearizeExpression(expr.left);
+            const right = linearizeExpression(expr.right);
+            return left === void 0 || right === void 0 ? void 0 : addLinearForms(left, scaleLinearForm(right, decimal(-1)));
+          }
+          case "*": {
+            const leftFactor = decimalFromExpression(expr.left);
+            if (leftFactor !== void 0) {
+              const right = linearizeExpression(expr.right);
+              return right === void 0 ? void 0 : scaleLinearForm(right, leftFactor);
+            }
+            const rightFactor = decimalFromExpression(expr.right);
+            if (rightFactor !== void 0) {
+              const left = linearizeExpression(expr.left);
+              return left === void 0 ? void 0 : scaleLinearForm(left, rightFactor);
+            }
+            return singleTerm(expr);
+          }
+          case "/": {
+            const divisor = decimalFromExpression(expr.right);
+            if (divisor === void 0) return singleTerm(expr);
+            const reciprocal = divideDecimal(decimal(1), divisor);
+            if (reciprocal === void 0) return void 0;
+            const left = linearizeExpression(expr.left);
+            return left === void 0 ? void 0 : scaleLinearForm(left, reciprocal);
+          }
+        }
+      }
     }
-    if (rightConstant !== void 0) {
-      const foldedConstant = foldNumericBinary("*", factor, rightConstant);
-      if (foldedConstant === void 0) return void 0;
-      return subtractExpressions(multiplyExpressions(factor, term.left), foldedConstant);
+  }
+  function buildLinearExpression(form) {
+    const signedTerms = [...form.terms.values()].map(signedTermExpression).filter((term) => term !== void 0);
+    const constant = normalizeDecimal(form.constant);
+    const constantSign = decimalSign(constant);
+    if (signedTerms.length === 0) return decimalNumberExpression(constant);
+    const hasPositiveTerm = signedTerms.some((term) => !term.negative);
+    const startWithConstant = constantSign > 0 || constantSign < 0 && !hasPositiveTerm;
+    let result;
+    if (startWithConstant && constantSign !== 0) {
+      result = decimalNumberExpression(constant);
+      if (result === void 0) return void 0;
     }
-    return void 0;
+    for (const term of signedTerms) {
+      if (result === void 0) {
+        result = term.negative ? { kind: "unary", op: "-", expr: term.expr } : term.expr;
+      } else {
+        result = term.negative ? subtractExpressions(result, term.expr) : addExpressions(result, term.expr);
+      }
+    }
+    if (result === void 0) return decimalNumberExpression(constant);
+    if (!startWithConstant && constantSign < 0) {
+      const constantExpr = decimalNumberExpression(absDecimal(constant));
+      if (constantExpr === void 0) return void 0;
+      result = subtractExpressions(result, constantExpr);
+    }
+    return result;
+  }
+  function signedTermExpression(term) {
+    const coeff = normalizeDecimal(term.coeff);
+    if (isDecimalZero(coeff)) return void 0;
+    const negative = coeff.num < 0n;
+    const magnitude = absDecimal(coeff);
+    const coefficient = decimalNumberExpression(magnitude);
+    if (coefficient === void 0) return void 0;
+    return {
+      expr: isDecimalOne(magnitude) ? term.expr : multiplyExpressions(coefficient, term.expr),
+      negative
+    };
+  }
+  function singleTerm(expr) {
+    return {
+      constant: decimal(0),
+      terms: /* @__PURE__ */ new Map([[expressionKey(expr), { expr, coeff: decimal(1) }]])
+    };
+  }
+  function addLinearForms(left, right) {
+    const result = {
+      constant: addDecimal(left.constant, right.constant),
+      terms: new Map(left.terms)
+    };
+    for (const [key, term] of right.terms) addLinearTerm(result, key, term.expr, term.coeff);
+    return result;
+  }
+  function scaleLinearForm(form, factor) {
+    const normalized = normalizeDecimal(factor);
+    if (isDecimalZero(normalized)) return { constant: decimal(0), terms: /* @__PURE__ */ new Map() };
+    const terms = /* @__PURE__ */ new Map();
+    for (const [key, term] of form.terms) {
+      terms.set(key, {
+        expr: term.expr,
+        coeff: multiplyDecimal(term.coeff, normalized)
+      });
+    }
+    return {
+      constant: multiplyDecimal(form.constant, normalized),
+      terms
+    };
+  }
+  function addLinearTerm(form, key, expr, coeff) {
+    const existing = form.terms.get(key);
+    const next = existing === void 0 ? normalizeDecimal(coeff) : addDecimal(existing.coeff, coeff);
+    if (isDecimalZero(next)) {
+      form.terms.delete(key);
+      return;
+    }
+    form.terms.set(key, { expr: existing?.expr ?? expr, coeff: next });
   }
   function multiplyExpressions(left, right) {
     if (isNumericValue(left, 1)) return right;
     if (isNumericValue(right, 1)) return left;
     return { kind: "binary", op: "*", left, right };
+  }
+  function addExpressions(left, right) {
+    if (isNumericValue(left, 0)) return right;
+    if (isNumericValue(right, 0)) return left;
+    const rightValue = numericLiteralValue(right);
+    if (rightValue !== void 0 && rightValue < 0 && right.kind === "number") {
+      const positive = negateNumberExpression(right);
+      if (positive !== void 0) return subtractExpressions(left, positive);
+    }
+    return { kind: "binary", op: "+", left, right };
   }
   function subtractExpressions(left, right) {
     if (isNumericValue(right, 0)) return left;
@@ -573,6 +740,20 @@ var MKProEmulatorBundle = (() => {
       if (positive !== void 0) return { kind: "binary", op: "+", left, right: positive };
     }
     return { kind: "binary", op: "-", left, right };
+  }
+  function expressionKey(expr) {
+    switch (expr.kind) {
+      case "number":
+        return `number:${expr.raw.trim().toLowerCase()}`;
+      case "identifier":
+        return `identifier:${expr.name}`;
+      case "unary":
+        return `unary:${expr.op}:${expressionKey(expr.expr)}`;
+      case "binary":
+        return `binary:${expr.op}:${expressionKey(expr.left)}:${expressionKey(expr.right)}`;
+      case "call":
+        return `call:${expr.callee}:${expr.args.map(expressionKey).join(",")}`;
+    }
   }
   function expressionPureForFolding(expr) {
     switch (expr.kind) {
@@ -669,6 +850,122 @@ var MKProEmulatorBundle = (() => {
       scale -= 1;
     }
     return { num, scale };
+  }
+  function decimal(value) {
+    return normalizeDecimal({ num: BigInt(value), scale: 0 });
+  }
+  function negateDecimal(value) {
+    return normalizeDecimal({ num: -value.num, scale: value.scale });
+  }
+  function absDecimal(value) {
+    return normalizeDecimal({ num: absBigInt(value.num), scale: value.scale });
+  }
+  function decimalSign(value) {
+    const normalized = normalizeDecimal(value);
+    if (normalized.num < 0n) return -1;
+    if (normalized.num > 0n) return 1;
+    return 0;
+  }
+  function compareDecimal(left, right) {
+    const scale = Math.max(left.scale, right.scale);
+    const lhs = left.num * pow10(scale - left.scale);
+    const rhs = right.num * pow10(scale - right.scale);
+    if (lhs < rhs) return -1;
+    if (lhs > rhs) return 1;
+    return 0;
+  }
+  function truncateDecimal(value) {
+    const normalized = normalizeDecimal(value);
+    if (normalized.scale === 0) return normalized;
+    return normalizeDecimal({
+      num: normalized.num / pow10(normalized.scale),
+      scale: 0
+    });
+  }
+  function fractionalDecimal(value) {
+    return subtractDecimal(value, truncateDecimal(value));
+  }
+  function pow10Decimal(exponent) {
+    const integer = decimalToIntegerBigInt(exponent);
+    if (integer === void 0 || integer < BigInt(-MAX_LITERAL_EXPONENT) || integer > BigInt(MAX_LITERAL_EXPONENT)) {
+      return void 0;
+    }
+    const power = Number(integer);
+    return power >= 0 ? normalizeDecimal({ num: pow10(power), scale: 0 }) : normalizeDecimal({ num: 1n, scale: -power });
+  }
+  function powDecimalInteger(base, exponent) {
+    if (decimalSign(base) <= 0) return void 0;
+    const integerExponent = decimalToIntegerBigInt(exponent);
+    if (integerExponent === void 0 || integerExponent < BigInt(-MAX_LITERAL_EXPONENT) || integerExponent > BigInt(MAX_LITERAL_EXPONENT)) {
+      return void 0;
+    }
+    const magnitude = Number(absBigInt(integerExponent));
+    let result = decimal(1);
+    for (let i = 0; i < magnitude; i += 1) {
+      result = multiplyDecimal(result, base);
+      if (result.scale > MAX_FOLDED_DECIMAL_SCALE) return void 0;
+    }
+    return integerExponent >= 0n ? result : divideDecimal(decimal(1), result);
+  }
+  function maxDecimal(left, right) {
+    if (isDecimalZero(left) || isDecimalZero(right)) return decimal(0);
+    return compareDecimal(left, right) >= 0 ? left : right;
+  }
+  function foldBitwise(left, right, op) {
+    const lhs = decimalMantissaDigits(left);
+    const rhs = decimalMantissaDigits(right);
+    if (lhs === void 0 || rhs === void 0) return void 0;
+    const digits = [8];
+    for (let index = 1; index < 8; index += 1) {
+      const digit = bitwiseNibble(lhs[index], rhs[index], op);
+      if (digit > 9) return void 0;
+      digits.push(digit);
+    }
+    return decimalFromDigits(digits, 7);
+  }
+  function foldBitwiseNot(value) {
+    const digits = decimalMantissaDigits(value);
+    if (digits === void 0) return void 0;
+    const result = [8];
+    for (let index = 1; index < 8; index += 1) {
+      const digit = ~digits[index] & 15;
+      if (digit > 9) return void 0;
+      result.push(digit);
+    }
+    return decimalFromDigits(result, 7);
+  }
+  function bitwiseNibble(left, right, op) {
+    switch (op) {
+      case "and":
+        return left & right;
+      case "or":
+        return left | right;
+      case "xor":
+        return left ^ right;
+    }
+  }
+  function decimalToIntegerBigInt(value) {
+    const normalized = normalizeDecimal(value);
+    return normalized.scale === 0 ? normalized.num : void 0;
+  }
+  function decimalMantissaDigits(value) {
+    const normalized = normalizeDecimal(value);
+    if (normalized.num === 0n) return new Array(8).fill(0);
+    const digits = absBigInt(normalized.num).toString().slice(0, 8).padEnd(8, "0");
+    return [...digits].map((digit) => Number(digit));
+  }
+  function decimalFromDigits(digits, scale) {
+    return normalizeDecimal({
+      num: BigInt(digits.join("")),
+      scale
+    });
+  }
+  function isDecimalZero(value) {
+    return normalizeDecimal(value).num === 0n;
+  }
+  function isDecimalOne(value) {
+    const normalized = normalizeDecimal(value);
+    return normalized.num === 1n && normalized.scale === 0;
   }
   function decimalNumberExpression(value) {
     const normalized = normalizeDecimal(value);
@@ -1494,6 +1791,7 @@ var MKProEmulatorBundle = (() => {
       moveDeltas: collectV2MoveDeltas(v2),
       stateTypes: new Map(v2.state.map((field) => [field.name, field.type])),
       stateDomains,
+      stateRanges: collectV2StateRanges(v2),
       cellMapNames,
       boards: new Map(v2.boards.map((board) => [board.name, board])),
       worlds: new Map(v2.worlds.map((world) => [world.name, world]))
@@ -1509,6 +1807,14 @@ var MKProEmulatorBundle = (() => {
       ],
       blocks: []
     };
+  }
+  function collectV2StateRanges(v2) {
+    return new Map(v2.state.map((field) => {
+      const range2 = {};
+      if (field.min !== void 0) range2.min = field.min;
+      if (field.max !== void 0) range2.max = field.max;
+      return [field.name, range2];
+    }));
   }
   function collectV2RuleParams(v2) {
     const ruleParams = /* @__PURE__ */ new Map();
@@ -2444,6 +2750,7 @@ var MKProEmulatorBundle = (() => {
       case "floor_plan":
       case "decimal_player":
       case "pier_to_ship":
+        if (isSingleDecimalDigitExpression(pos, context)) return pos;
         return decimalOnesExpression(pos);
       case "corridor_plan":
       case "packed_decimal_zero_run":
@@ -2452,6 +2759,10 @@ var MKProEmulatorBundle = (() => {
         return pos;
     }
     return pos;
+  }
+  function isSingleDecimalDigitExpression(expr, context) {
+    const range2 = context.stateRanges.get(expr.trim());
+    return range2?.min !== void 0 && range2.max !== void 0 && range2.min >= 0 && range2.max <= 9;
   }
   function boardForCells(mask, context) {
     const domain = context.stateDomains.get(mask.trim());
@@ -3443,8 +3754,24 @@ var MKProEmulatorBundle = (() => {
       case "indirect-call":
       case "indirect-cjump":
         return { defs: [], uses: [op.register] };
+      case "loop": {
+        const register = loopCounterRegister(op.counter);
+        return { defs: [register], uses: [register] };
+      }
       default:
         return { defs: [], uses: [] };
+    }
+  }
+  function loopCounterRegister(counter) {
+    switch (counter) {
+      case "L0":
+        return "0";
+      case "L1":
+        return "1";
+      case "L2":
+        return "2";
+      case "L3":
+        return "3";
     }
   }
   function computeLiveness(ops) {
@@ -3871,9 +4198,9 @@ var MKProEmulatorBundle = (() => {
     const normalized = value.trim().replace(/^0x/iu, "").toLowerCase();
     if (!/^[0-9a-f]+$/iu.test(normalized)) return void 0;
     if (mutation === "stable" && /[a-f]/iu.test(normalized)) return normalized;
-    const decimal = Number(normalized);
-    if (!Number.isFinite(decimal)) return void 0;
-    return String(Math.trunc(decimal) + mutationDelta(mutation));
+    const decimal2 = Number(normalized);
+    if (!Number.isFinite(decimal2)) return void 0;
+    return String(Math.trunc(decimal2) + mutationDelta(mutation));
   }
   function isPositiveFractional(value) {
     const numeric = typeof value === "number" ? value : Number(value.trim().replace(",", "."));
@@ -6385,6 +6712,7 @@ var MKProEmulatorBundle = (() => {
     showSequenceHelpers = /* @__PURE__ */ new Map();
     expressionHelpers = /* @__PURE__ */ new Map();
     lineCountHelpers = /* @__PURE__ */ new Map();
+    spatialBitMaskHelpers = /* @__PURE__ */ new Map();
     spatialSumLoopHelpers = /* @__PURE__ */ new Map();
     currentXVariable;
     currentXKnownZero = false;
@@ -6489,6 +6817,20 @@ var MKProEmulatorBundle = (() => {
         this.optimizations.push({
           name: "spatial-sum-loop-helper",
           detail: `Emitted shared ${helper.operation} progression helper for ${helper.hitMask}.`
+        });
+      }
+      for (const helper of this.spatialBitMaskHelpers.values()) {
+        this.emitLabel(helper.label);
+        this.emitStore(helper.scratch, "bit mask index", helper.line);
+        this.compileExpression({
+          kind: "call",
+          callee: "bit_mask",
+          args: [{ kind: "identifier", name: helper.scratch }]
+        });
+        this.emitOp(82, "\u0412/\u041E", "bit_mask return", helper.line);
+        this.optimizations.push({
+          name: "bit-mask-helper",
+          detail: `Emitted shared bit_mask helper using ${helper.scratch}.`
         });
       }
       for (const helper of this.spatialHitHelpers.values()) {
@@ -6898,7 +7240,7 @@ var MKProEmulatorBundle = (() => {
       if (!isBitClearAssignment(clear, membership)) return false;
       const falseLabel = this.freshLabel("if_false");
       const endLabel = this.freshLabel("if_end");
-      this.compileExpression(membership.test);
+      if (!this.compileBitMembershipMaskValue(membership, line)) this.compileExpression(membership.test);
       this.emitJump(87, "F x!=0", falseLabel, "false branch for !=", line);
       this.emitOp(58, "\u041A \u0418\u041D\u0412", "reuse membership mask for clear", clear.line);
       this.compileExpression(membership.collection);
@@ -6917,6 +7259,21 @@ var MKProEmulatorBundle = (() => {
       this.optimizations.push({
         name: "cell-membership-clear-reuse",
         detail: `Reused the successful membership mask when clearing ${clear.target} at line ${clear.line}.`
+      });
+      return true;
+    }
+    compileBitMembershipMaskValue(membership, line) {
+      if (membership.collection.kind !== "identifier") return false;
+      const scratch = spatialHitScratchName(membership.collection.name);
+      if (this.allocation.registers[scratch] === void 0) return false;
+      const helper = this.ensureSpatialBitMaskHelper(scratch, line);
+      this.compileExpression(membership.item);
+      this.emitJump(83, "\u041F\u041F", helper.label, "bit_mask helper", line);
+      this.compileExpression(membership.collection);
+      this.emitOp(55, "\u041A \u2227", "bit membership test", line);
+      this.optimizations.push({
+        name: "bit-mask-helper-call",
+        detail: `Reused shared bit_mask helper for ${membership.collection.name} at line ${line}.`
       });
       return true;
     }
@@ -7152,6 +7509,12 @@ var MKProEmulatorBundle = (() => {
         this.optimizations.push({
           name: "dispatch-default-merge",
           detail: `Removed ${optimized.removed} dispatch case${optimized.removed === 1 ? "" : "s"} whose body matched the default branch.`
+        });
+      }
+      if (optimized.reordered > 0) {
+        this.optimizations.push({
+          name: "dispatch-case-ordering",
+          detail: `Moved ${optimized.reordered} zero dispatch case${optimized.reordered === 1 ? "" : "s"} earlier to reuse the selector already in X.`
         });
       }
       const site = statement.name ?? `dispatch@${statement.line}`;
@@ -8025,7 +8388,7 @@ var MKProEmulatorBundle = (() => {
         this.emitStore(counter, "neighbor_count counter", sourceLine);
         const start = this.freshLabel("neighbor_count_loop");
         this.emitLabel(start);
-        this.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
+        this.compileExpression(addExpressions2(cell, { kind: "identifier", name: offset }));
         const helper = this.ensureSpatialHitHelper(hitMask, spatialHitScratchName(hitMask));
         this.emitJump(83, "\u041F\u041F", helper.label, `spatial hit ${hitMask}`, sourceLine);
         this.emitRecall(total, "neighbor_count total");
@@ -8097,6 +8460,8 @@ var MKProEmulatorBundle = (() => {
       const line = scratch[1];
       const offset = scratch[2];
       const counter = scratch[3];
+      const counterRegister = this.allocation.registers[counter];
+      const helperTakesCounterInX = counterRegister !== void 0 && flOpcode(counterRegister) !== void 0;
       this.emitZero(`${operation} total`, sourceLine);
       this.emitStore(total, `${operation} total`, sourceLine);
       if (!useMax && progressions.length >= 3) {
@@ -8106,8 +8471,10 @@ var MKProEmulatorBundle = (() => {
           this.emitStore(offset, `${operation} offset`, sourceLine);
           this.compileExpression(progression.step);
           this.emitStore(line, `${operation} step`, sourceLine);
-          this.emitNumberOrPreload(String(progression.count));
-          this.emitStore(counter, `${operation} counter`, sourceLine);
+          if (!isNumericValue2(progression.step, progression.count)) {
+            this.emitNumberOrPreload(String(progression.count));
+          }
+          if (!helperTakesCounterInX) this.emitStore(counter, `${operation} counter`, sourceLine);
           this.emitJump(83, "\u041F\u041F", helper.label, `${operation} progression`, sourceLine);
         }
         this.optimizations.push({
@@ -8127,7 +8494,7 @@ var MKProEmulatorBundle = (() => {
         this.emitStore(counter, `${operation} counter`, sourceLine);
         const start = this.freshLabel(`${operation}_loop`);
         this.emitLabel(start);
-        this.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
+        this.compileExpression(addExpressions2(cell, { kind: "identifier", name: offset }));
         const helper = this.ensureSpatialHitHelper(hitMask, spatialHitScratchName(hitMask));
         this.emitJump(83, "\u041F\u041F", helper.label, `spatial hit ${hitMask}`, sourceLine);
         this.emitRecall(useMax ? line : total, `${operation} accumulator`);
@@ -8137,8 +8504,8 @@ var MKProEmulatorBundle = (() => {
         this.compileExpression(progression.step);
         this.emitOp(16, "+", `${operation} next offset`);
         this.emitStore(offset, `${operation} offset`);
-        const counterRegister = this.allocation.registers[counter];
-        const flCounterOpcode = counterRegister === void 0 ? void 0 : flOpcode(counterRegister);
+        const counterRegister2 = this.allocation.registers[counter];
+        const flCounterOpcode = counterRegister2 === void 0 ? void 0 : flOpcode(counterRegister2);
         if (flCounterOpcode !== void 0) {
           this.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, `${operation} loop`, sourceLine);
           this.optimizations.push({
@@ -8172,9 +8539,14 @@ var MKProEmulatorBundle = (() => {
       const step = scratch[1];
       const offset = scratch[2];
       const counter = scratch[3];
+      const counterRegister = this.allocation.registers[counter];
+      const flCounterOpcode = counterRegister === void 0 ? void 0 : flOpcode(counterRegister);
+      if (flCounterOpcode !== void 0) {
+        this.emitStore(counter, `${operation} counter`, sourceLine);
+      }
       const start = this.freshLabel(`${operation}_loop`);
       this.emitLabel(start);
-      this.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
+      this.compileExpression(addExpressions2(cell, { kind: "identifier", name: offset }));
       const hitScratch = spatialHitScratchName(hitMask);
       this.emitStore(hitScratch, "spatial hit index", sourceLine);
       this.emitRecall(offset, `${operation} offset`);
@@ -8185,8 +8557,6 @@ var MKProEmulatorBundle = (() => {
       this.emitRecall(total, `${operation} accumulator`);
       this.emitOp(16, "+", `${operation} add hit`);
       this.emitStore(total, `${operation} accumulator`);
-      const counterRegister = this.allocation.registers[counter];
-      const flCounterOpcode = counterRegister === void 0 ? void 0 : flOpcode(counterRegister);
       if (flCounterOpcode !== void 0) {
         this.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, `${operation} loop`, sourceLine);
         this.optimizations.push({
@@ -8208,12 +8578,10 @@ var MKProEmulatorBundle = (() => {
       this.emitInlineSpatialHitFromScratch(hitMask, scratch, sourceLine);
     }
     emitInlineSpatialHitFromScratch(hitMask, scratch, sourceLine) {
+      const helper = this.ensureSpatialBitMaskHelper(scratch, sourceLine);
+      this.emitRecall(scratch, "spatial hit index", sourceLine);
+      this.emitJump(83, "\u041F\u041F", helper.label, "bit_mask helper", sourceLine);
       this.emitRecall(hitMask, "spatial hit mask", sourceLine);
-      this.compileExpression({
-        kind: "call",
-        callee: "bit_mask",
-        args: [{ kind: "identifier", name: scratch }]
-      });
       this.emitOp(55, "\u041A \u2227", "spatial hit test", sourceLine);
       this.emitOp(50, "\u041A \u0417\u041D", "spatial hit to count", sourceLine);
       this.optimizations.push({
@@ -8290,6 +8658,17 @@ var MKProEmulatorBundle = (() => {
         label: `__spatial_hit_${mask}`
       };
       this.spatialHitHelpers.set(mask, helper);
+      return helper;
+    }
+    ensureSpatialBitMaskHelper(scratch, line) {
+      const existing = this.spatialBitMaskHelpers.get(scratch);
+      if (existing !== void 0) return existing;
+      const helper = {
+        scratch,
+        label: `__bit_mask_${this.spatialBitMaskHelpers.size}`,
+        ...line === void 0 ? {} : { line }
+      };
+      this.spatialBitMaskHelpers.set(scratch, helper);
       return helper;
     }
     ensureSpatialSumLoopHelper(hitMask, cell, operation, line) {
@@ -9960,12 +10339,12 @@ var MKProEmulatorBundle = (() => {
     if (thenValue !== void 0 && elseValue !== void 0) {
       const delta = thenValue - elseValue;
       if (delta === 0) return numberExpression2(thenValue);
-      return addExpressions(
+      return addExpressions2(
         numberExpression2(elseValue),
         multiplyExpressions2(numberExpression2(delta), selector)
       );
     }
-    return addExpressions(
+    return addExpressions2(
       multiplyExpressions2(thenExpr, selector),
       multiplyExpressions2(elseExpr, oneMinus(selector))
     );
@@ -10042,7 +10421,7 @@ var MKProEmulatorBundle = (() => {
     const selector = booleanSelector ?? negativeZeroSelector;
     if (!selector) return void 0;
     const usesNegativeZero = booleanSelector === void 0 && negativeZeroSelector !== void 0;
-    const expr = addExpressions(
+    const expr = addExpressions2(
       multiplyExpressions2(thenAssign.expr, selector),
       multiplyExpressions2(elseAssign.expr, oneMinus(selector))
     );
@@ -10119,7 +10498,7 @@ var MKProEmulatorBundle = (() => {
       return {
         kind: "assign",
         target: assign.target,
-        expr: addExpressions(current, multiplyExpressions2(plus, selector)),
+        expr: addExpressions2(current, multiplyExpressions2(plus, selector)),
         name: "arithmetic-if-update",
         detail: "Replaced conditional addition with boolean-masked arithmetic"
       };
@@ -10169,7 +10548,7 @@ var MKProEmulatorBundle = (() => {
     return {
       kind: "assign",
       target: assign.target,
-      expr: addExpressions(
+      expr: addExpressions2(
         multiplyExpressions2(current, oneMinus(selector)),
         multiplyExpressions2(assign.expr, selector)
       ),
@@ -10406,7 +10785,7 @@ var MKProEmulatorBundle = (() => {
       case "bit_toggle":
         return bitXorExpression(args[0], bitMaskExpression(args[1]));
       case "diag_left_index":
-        return norm4Expression(addExpressions(args[0], args[1]));
+        return norm4Expression(addExpressions2(args[0], args[1]));
       case "diag_right_index":
         return norm4Expression(subtractExpressions2(args[0], args[1]));
       case "cell_mask":
@@ -10425,7 +10804,7 @@ var MKProEmulatorBundle = (() => {
         return packed4DigitExpression(args[0], args[1]);
       case "digit_add":
       case "packed4_add":
-        return addExpressions(
+        return addExpressions2(
           args[0],
           multiplyExpressions2(args[2], digitPlaceExpression(args[1]))
         );
@@ -10515,13 +10894,13 @@ var MKProEmulatorBundle = (() => {
       { kind: "call", callee: "frac", args: [divideExpressions({ kind: "call", callee: "int", args: [expr] }, numberExpression2(4))] },
       numberExpression2(4)
     );
-    return addExpressions(
+    return addExpressions2(
       rem,
       multiplyExpressions2(numberExpression2(4), oneMinus(signExpression(maxExpression(rem, numberExpression2(0)))))
     );
   }
   function cellMaskExpression(x, y) {
-    return addExpressions(
+    return addExpressions2(
       pow10Expression(x),
       { kind: "call", callee: "int", args: [multiplyExpressions2(pow10Expression(y), numberExpression2(0.22600029))] }
     );
@@ -10548,7 +10927,7 @@ var MKProEmulatorBundle = (() => {
   }
   function digitSetExpression(value, index, digit) {
     const place = digitPlaceExpression(index);
-    return addExpressions(
+    return addExpressions2(
       subtractExpressions2(value, multiplyExpressions2(packed4DigitExpression(value, index), place)),
       multiplyExpressions2(digit, place)
     );
@@ -10572,7 +10951,7 @@ var MKProEmulatorBundle = (() => {
     if (isNumericValue2(right, 1)) return left;
     return { kind: "binary", op: "*", left, right };
   }
-  function addExpressions(left, right) {
+  function addExpressions2(left, right) {
     if (isNumericValue2(left, 0)) return right;
     if (isNumericValue2(right, 0)) return left;
     return { kind: "binary", op: "+", left, right };
@@ -10712,7 +11091,7 @@ var MKProEmulatorBundle = (() => {
     return `${board.name}:${board.xMin}:${board.xMax}:${board.yMin}:${board.yMax}:${expressionToIntentText(cell)}`;
   }
   function boardCellExpressionAst(x, y) {
-    return addExpressions(x, multiplyExpressions2(numberExpression2(10), y));
+    return addExpressions2(x, multiplyExpressions2(numberExpression2(10), y));
   }
   function decimalTensExpressionAst(expr) {
     return intExpression(divideExpressions(expr, numberExpression2(10)));
@@ -10722,10 +11101,10 @@ var MKProEmulatorBundle = (() => {
   }
   function offsetExpressionAst(expr, offset) {
     if (offset === 0) return expr;
-    return offset > 0 ? addExpressions(expr, numberExpression2(offset)) : subtractExpressions2(expr, numberExpression2(Math.abs(offset)));
+    return offset > 0 ? addExpressions2(expr, numberExpression2(offset)) : subtractExpressions2(expr, numberExpression2(Math.abs(offset)));
   }
   function sumExpressions(expressions) {
-    return expressions.reduce((sum, expr) => addExpressions(sum, expr), numberExpression2(0));
+    return expressions.reduce((sum, expr) => addExpressions2(sum, expr), numberExpression2(0));
   }
   function maxExpressions(expressions) {
     return expressions.reduce((best, expr) => maxExpression(best, expr));
@@ -10836,7 +11215,15 @@ var MKProEmulatorBundle = (() => {
     }
   }
   function optimizeDispatchDefaultCases(statement) {
-    if (!statement.defaultBody || statement.cases.length === 0) return { statement, removed: 0 };
+    if (statement.cases.length === 0) return { statement, removed: 0, reordered: 0 };
+    if (!statement.defaultBody) {
+      const ordered2 = orderZeroDispatchCasesFirst(statement.cases);
+      return {
+        statement: ordered2.reordered === 0 ? statement : { ...statement, cases: ordered2.cases },
+        removed: 0,
+        reordered: ordered2.reordered
+      };
+    }
     const defaultBody = statement.defaultBody;
     const kept = [];
     let removed = 0;
@@ -10850,8 +11237,26 @@ var MKProEmulatorBundle = (() => {
       }
       kept.push(dispatchCase);
     }
-    if (removed === 0) return { statement, removed };
-    return { statement: { ...statement, cases: kept }, removed };
+    const ordered = orderZeroDispatchCasesFirst(kept);
+    const nextStatement = removed === 0 && ordered.reordered === 0 ? statement : { ...statement, cases: ordered.cases };
+    return { statement: nextStatement, removed, reordered: ordered.reordered };
+  }
+  function orderZeroDispatchCasesFirst(cases) {
+    if (cases.length < 2) return { cases, reordered: 0 };
+    const values = cases.map((dispatchCase) => numericLiteralValue2(dispatchCase.value));
+    if (values.some((value) => value === void 0)) return { cases, reordered: 0 };
+    const seen = /* @__PURE__ */ new Set();
+    for (const value of values) {
+      if (seen.has(value)) return { cases, reordered: 0 };
+      seen.add(value);
+    }
+    const zeroIndex = values.indexOf(0);
+    if (zeroIndex <= 0) return { cases, reordered: 0 };
+    const zeroCase = cases[zeroIndex];
+    return {
+      cases: [zeroCase, ...cases.slice(0, zeroIndex), ...cases.slice(zeroIndex + 1)],
+      reordered: 1
+    };
   }
   function statementListsEqual(left, right) {
     return left.length === right.length && left.every((statement, index) => statementEquals(statement, right[index]));
