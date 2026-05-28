@@ -123,6 +123,38 @@ describe("MK-Pro compiler", () => {
     expect(result.report.optimizations.some((optimization) => optimization.name === "redundant-prologue-elimination")).toBe(true);
   });
 
+  it("lowers small coordinate-set helpers to generic near/equality arithmetic", () => {
+    const helperSource = `
+program SmallSetHelpers {
+  state {
+    room: counter 0..20 = 5
+    pit1: counter 0..20 = 6
+    pit2: counter 0..20 = 15
+    near: counter -20..20 = 0
+    hit: counter -999..999 = 0
+  }
+
+  turn {
+    near = near_any(room, 1, pit1, pit2)
+    hit = eq_any(room, pit1, pit2)
+    stop near + hit
+  }
+}
+`;
+
+    const handWrittenSource = helperSource
+      .replace("near_any(room, 1, pit1, pit2)", "max(1 - abs(room - pit1), 1 - abs(room - pit2))")
+      .replace("eq_any(room, pit1, pit2)", "(room - pit1) * (room - pit2)");
+
+    const helperResult = compileMKPro(helperSource);
+    const handWrittenResult = compileMKPro(handWrittenSource);
+
+    expect(helperResult.report.steps).toBe(handWrittenResult.report.steps);
+    expect(helperResult.report.optimizations.filter((optimization) =>
+      optimization.name === "small-set-primitive-lowering"
+    )).toHaveLength(2);
+  });
+
   it("rejects removed low-level calculator syntax", () => {
     expect(() =>
       compileMKPro(`

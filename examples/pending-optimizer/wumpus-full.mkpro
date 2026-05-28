@@ -1,0 +1,123 @@
+// Full Wumpus experiment. This is intentionally kept in pending-optimizer:
+// it keeps the full rule surface we want, then lets the listing show where
+// the current compiler spends cells.
+//
+// Display: room, arrows, clue.
+// Clues are prioritized: 0 = quiet, 1 = Wumpus nearby, 2 = pit draft,
+// 3 = bat rustle.
+//
+// Input a positive adjacent room to move there; a non-adjacent positive room
+// only redraws the screen. Input a negative room to shoot there.
+
+program WumpusFull {
+  cave: board(1..20, 1..1)
+
+  state {
+    room: coord(cave) = 1
+    target: packed = 0
+
+    wumpus: coord(cave) = random_cell(cave)
+    pit1: coord(cave) = random_cell(cave)
+    pit2: coord(cave) = random_cell(cave)
+    bat1: coord(cave) = random_cell(cave)
+    bat2: coord(cave) = random_cell(cave)
+
+    arrows: counter 0..5 = 5
+    clue: counter 0..9 = 0
+  }
+
+  screen main {
+    show room, arrows, clue
+  }
+
+  rule won {
+    stop 777
+  }
+
+  rule dead {
+    stop -999
+  }
+
+  turn {
+    sense
+    show main
+    read target
+
+    if target >= 0 {
+      travel
+    }
+    else {
+      shoot
+    }
+  }
+
+  rule sense {
+    clue = 0
+
+    if near_any(room, 1, wumpus) >= 0 {
+      clue = 1
+    }
+    else {
+      if near_any(room, 1, pit1, pit2) >= 0 {
+        clue = 2
+      }
+      else {
+        if near_any(room, 1, bat1, bat2) >= 0 {
+          clue = 3
+        }
+      }
+    }
+  }
+
+  rule travel {
+    if near_any(room, 1, target) >= 0 {
+      room = target
+      inspect
+    }
+  }
+
+  rule shoot {
+    arrows--
+
+    if target + wumpus == 0 {
+      won
+    }
+    else {
+      if arrows <= 0 {
+        dead
+      }
+      else {
+        wake_wumpus
+      }
+    }
+  }
+
+  rule wake_wumpus {
+    wumpus = random_cell(cave)
+
+    if room == wumpus {
+      dead
+    }
+  }
+
+  rule inspect {
+    if room == wumpus {
+      dead
+    }
+    else {
+      if eq_any(room, pit1, pit2) == 0 {
+        dead
+      }
+      else {
+        if eq_any(room, bat1, bat2) == 0 {
+          bat_jump
+        }
+      }
+    }
+  }
+
+  rule bat_jump {
+    room = random_cell(cave)
+    inspect
+  }
+}

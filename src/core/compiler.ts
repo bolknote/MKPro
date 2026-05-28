@@ -1489,6 +1489,7 @@ class EmitContext {
   ): void {
     if (this.compileArithmeticIfSelect(statement)) return;
     if (this.compileGuardedUpdateSelector(statement)) return;
+    if (this.compileNestedGuardSharedFailure(statement, line)) return;
     if (this.compileDirectTerminalIfBranch(statement, line)) return;
     if (this.compileMembershipClearReuse(statement, line)) return;
     if (this.compileMembershipSetReuse(statement, line)) return;
@@ -1514,6 +1515,32 @@ class EmitContext {
     } else {
       this.emitLabel(falseLabel);
     }
+  }
+
+  private compileNestedGuardSharedFailure(
+    statement: Extract<StatementAst, { kind: "if" }>,
+    line: number,
+  ): boolean {
+    if (statement.elseBody === undefined || statement.thenBody.length !== 1) return false;
+    const inner = statement.thenBody[0];
+    if (inner?.kind !== "if" || inner.elseBody === undefined) return false;
+    if (!statementListsEqual(statement.elseBody, inner.elseBody)) return false;
+
+    const failureLabel = this.freshLabel("guard_failure");
+    const thenTerminates = this.statementsTerminate(inner.thenBody);
+    const endLabel = thenTerminates ? undefined : this.freshLabel("guard_end");
+    this.compileCondition(statement.condition, failureLabel, line);
+    this.compileCondition(inner.condition, failureLabel, inner.line);
+    this.compileStatements(inner.thenBody);
+    if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "guard success end", inner.line);
+    this.emitLabel(failureLabel);
+    this.compileStatements(statement.elseBody);
+    if (endLabel !== undefined) this.emitLabel(endLabel);
+    this.optimizations.push({
+      name: "nested-guard-shared-failure",
+      detail: `Shared identical nested failure branch at lines ${line}/${inner.line}.`,
+    });
+    return true;
   }
 
   private branchOrderStatement(
@@ -1686,6 +1713,12 @@ class EmitContext {
   }
 
   private compileBitMembershipMaskValue(membership: BitMembershipCondition, line: number): boolean {
+    if (membership.mode === "mask") {
+      this.compileExpression(membership.mask);
+      this.compileExpression(membership.collection);
+      this.emitOp(0x37, "К ∧", "bit membership test", line);
+      return true;
+    }
     if (membership.collection.kind !== "identifier") return false;
     const scratch = spatialHitScratchName(membership.collection.name);
     if (this.allocation.registers[scratch] === undefined) return false;
@@ -1883,7 +1916,7 @@ class EmitContext {
     scratch: string,
     line: number,
   ): void {
-    this.compileExpression(bitMaskExpression(membership.item));
+    this.compileExpression(membership.mask);
     this.emitStore(scratch, "cell bit mask scratch", line);
     this.compileExpression(membership.collection);
     this.emitRecall(scratch, "reuse cell bit mask", line);
@@ -1968,7 +2001,7 @@ class EmitContext {
     while (index < statements.length) {
       const statement = statements[index];
       if (statement?.kind !== "assign") break;
-      const matched = matchAnyBitSetAssignment(statement, membership.item);
+      const matched = matchAnyBitSetAssignment(statement, membership);
       if (matched === undefined) break;
       sets.push({ set: statement, collection: matched.collection });
       index += 1;
@@ -2657,10 +2690,11 @@ class EmitContext {
   ): void {
     if (this.compileNegativeZeroThresholdFlow(condition, falseLabel, line)) return;
 
+    const preloadedConstants = new Set(Object.keys(this.allocation.constants));
     const selected = selectCheaperEquivalentCondition(
       condition,
       this.ast,
-      new Set(Object.keys(this.allocation.constants)),
+      preloadedConstants,
     );
     if (selected.changed) {
       this.optimizations.push({
@@ -2669,6 +2703,7 @@ class EmitContext {
       });
     }
     const compiledCondition = selected.condition;
+    if (this.compileSmallSetCondition(compiledCondition, falseLabel, line, preloadedConstants)) return;
     if (isZeroExpression(compiledCondition.right) && canTestAgainstZeroDirectly(compiledCondition.op)) {
       const usedSpatialHit = this.compileBitHasConditionWithSpatialHelper(compiledCondition.left, line);
       if (!usedSpatialHit) {
@@ -2704,6 +2739,40 @@ class EmitContext {
             : 0x57;
     const mnemonic = getOpcode(opcode).name;
     this.emitJump(opcode, mnemonic, falseLabel, `false branch for ${compiledCondition.op}`, line);
+  }
+
+  private compileSmallSetCondition(
+    condition: ConditionAst,
+    falseLabel: string,
+    line: number,
+    preloadedConstants: ReadonlySet<string>,
+  ): boolean {
+    const match = matchSmallSetCondition(condition);
+    if (match === undefined) return false;
+    const selectedCost = estimateSmallSetConditionCost(match, preloadedConstants);
+    const ordinaryCost = conditionCompileCost(condition, preloadedConstants);
+    if (selectedCost >= ordinaryCost) return false;
+    if (match.mode === "any") {
+      const trueLabel = this.freshLabel(`${match.kind}_any_true`);
+      for (const item of match.tests.slice(0, -1)) {
+        this.compileExpression(item.expr);
+        this.emitJump(item.trueOpcode, getOpcode(item.trueOpcode).name, trueLabel, `${match.kind} any hit`, line);
+      }
+      const last = match.tests.at(-1)!;
+      this.compileExpression(last.expr);
+      this.emitJump(last.falseOpcode, getOpcode(last.falseOpcode).name, falseLabel, `${match.kind} any miss`, line);
+      this.emitLabel(trueLabel);
+    } else {
+      for (const item of match.tests) {
+        this.compileExpression(item.expr);
+        this.emitJump(item.falseOpcode, getOpcode(item.falseOpcode).name, falseLabel, `${match.kind} all miss`, line);
+      }
+    }
+    this.optimizations.push({
+      name: "small-set-condition-lowering",
+      detail: `Lowered ${conditionToText(condition)} as ${match.tests.length} direct small-set test${match.tests.length === 1 ? "" : "s"} at line ${line} (${selectedCost} vs ${ordinaryCost} estimated steps).`,
+    });
+    return true;
   }
 
   private compileNegativeZeroThresholdFlow(
@@ -3029,6 +3098,22 @@ class EmitContext {
       this.diagnostics.push({
         level: "error",
         message: `${expr.callee}() expects ${ticTacToeMacroArity(name)} arguments, got ${expr.args.length}.`,
+      });
+      return;
+    }
+    if (isSmallSetMacroName(name) && !smallSetMacroArityOk(name, expr.args.length)) {
+      this.diagnostics.push({
+        level: "error",
+        message: `${expr.callee}() expects ${smallSetMacroArityText(name)}, got ${expr.args.length}.`,
+      });
+      return;
+    }
+    const smallSetMacro = smallSetExpressionMacro(name, expr.args);
+    if (smallSetMacro !== undefined) {
+      this.compileExpression(smallSetMacro);
+      this.optimizations.push({
+        name: "small-set-primitive-lowering",
+        detail: `Lowered ${expr.callee}() to coordinate-set arithmetic.`,
       });
       return;
     }
@@ -3813,6 +3898,13 @@ class EmitContext {
 
   private emitLabel(name: string): void {
     this.items.push({ kind: "label", name });
+    // A label is a control-flow merge point (jump target): the value in X
+    // depends on which predecessor path was taken, so the statically tracked
+    // "current X" fact is no longer valid here. Killing it keeps stack-reuse
+    // optimizations (e.g. display-stack-reuse, condition-current-x-reuse) sound
+    // across branches and loops.
+    this.currentXVariable = undefined;
+    this.currentXKnownZero = false;
   }
 
   private freshLabel(prefix: string): string {
@@ -5316,6 +5408,16 @@ function conditionCompileCost(condition: ConditionAst, preloadedConstants?: Read
     3;
 }
 
+function estimateSmallSetConditionCost(
+  match: SmallSetConditionMatch,
+  preloadedConstants: ReadonlySet<string>,
+): number {
+  return match.tests.reduce(
+    (sum, test) => sum + estimateExpressionCostForCondition(test.expr, preloadedConstants) + 2,
+    0,
+  );
+}
+
 function conditionEquals(left: ConditionAst, right: ConditionAst): boolean {
   return left.op === right.op && expressionEquals(left.left, right.left) && expressionEquals(left.right, right.right);
 }
@@ -6363,6 +6465,162 @@ function ticTacToeExpressionMacro(name: string, args: ExpressionAst[]): Expressi
   }
 }
 
+type SmallSetMacroName = "near_any" | "eq_any";
+
+interface SmallSetTest {
+  expr: ExpressionAst;
+  trueOpcode: number;
+  falseOpcode: number;
+}
+
+interface SmallSetConditionMatch {
+  kind: SmallSetMacroName;
+  mode: "any" | "all";
+  tests: SmallSetTest[];
+}
+
+function isSmallSetMacroName(name: string): name is SmallSetMacroName {
+  return name === "near_any" || name === "eq_any";
+}
+
+function smallSetMacroArityOk(name: SmallSetMacroName, argCount: number): boolean {
+  return name === "near_any" ? argCount >= 3 : argCount >= 2;
+}
+
+function smallSetMacroArityText(name: SmallSetMacroName): string {
+  return name === "near_any" ? "at least three arguments" : "at least two arguments";
+}
+
+function smallSetExpressionMacro(name: string, args: ExpressionAst[]): ExpressionAst | undefined {
+  if (!isSmallSetMacroName(name) || !smallSetMacroArityOk(name, args.length)) return undefined;
+  if (name === "near_any") {
+    const value = args[0]!;
+    const radius = args[1]!;
+    const distances = args.slice(2).map((candidate) => absExpression(subtractExpressions(value, candidate)));
+    if (distances.length === 1) return subtractExpressions(radius, distances[0]!);
+    return addExpressions(radius, maxExpressions(distances.map(negateExpression)));
+  }
+  const value = args[0]!;
+  const differences = args.slice(1).map((candidate) => subtractExpressions(value, candidate));
+  return productExpressions(differences);
+}
+
+function matchSmallSetCondition(condition: ConditionAst): SmallSetConditionMatch | undefined {
+  const normalized = normalizeZeroComparison(condition);
+  if (normalized === undefined) return undefined;
+
+  const near = matchNearAnyExpression(normalized.expr);
+  if (near !== undefined && (normalized.op === ">=" || normalized.op === "<")) {
+    return {
+      kind: "near_any",
+      mode: normalized.op === ">=" ? "any" : "all",
+      tests: near.map((expr) => ({
+        expr,
+        trueOpcode: directTestOpcode("<"),
+        falseOpcode: directTestOpcode(">="),
+      })),
+    };
+  }
+
+  const equal = matchEqAnyExpression(normalized.expr);
+  if (equal !== undefined && (normalized.op === "==" || normalized.op === "!=")) {
+    return {
+      kind: "eq_any",
+      mode: normalized.op === "==" ? "any" : "all",
+      tests: equal.map((expr) => ({
+        expr,
+        trueOpcode: directTestOpcode("!="),
+        falseOpcode: directTestOpcode("=="),
+      })),
+    };
+  }
+
+  return undefined;
+}
+
+function normalizeZeroComparison(condition: ConditionAst): { expr: ExpressionAst; op: ConditionAst["op"] } | undefined {
+  if (isZeroExpression(condition.right)) return { expr: condition.left, op: condition.op };
+  if (isZeroExpression(condition.left)) return { expr: condition.right, op: flipComparisonOp(condition.op) };
+  return undefined;
+}
+
+function matchNearAnyExpression(expr: ExpressionAst): ExpressionAst[] | undefined {
+  if (expr.kind === "call" && expr.callee.toLowerCase() === "near_any") {
+    const macro = smallSetExpressionMacro("near_any", expr.args);
+    return macro === undefined ? undefined : matchNearAnyExpression(macro);
+  }
+
+  const terms = flattenMaxTerms(expr);
+  const margins = terms.map(matchNearMarginTerm);
+  if (margins.some((margin) => margin === undefined)) return undefined;
+  const typedMargins = margins as NearMarginTerm[];
+  const commonValue = commonDifferenceEndpoint(typedMargins.map((margin) => margin.difference));
+  if (commonValue === undefined) return undefined;
+  const radius = typedMargins[0]!.radius;
+  if (!typedMargins.every((margin) => expressionEquals(margin.radius, radius))) return undefined;
+  return typedMargins.map((margin) => margin.expr);
+}
+
+interface NearMarginTerm {
+  expr: ExpressionAst;
+  radius: ExpressionAst;
+  difference: Extract<ExpressionAst, { kind: "binary" }>;
+}
+
+function matchNearMarginTerm(expr: ExpressionAst): NearMarginTerm | undefined {
+  if (expr.kind !== "binary" || expr.op !== "-") return undefined;
+  const absCall = expr.right;
+  if (absCall.kind !== "call" || absCall.callee.toLowerCase() !== "abs" || absCall.args.length !== 1) {
+    return undefined;
+  }
+  const difference = absCall.args[0]!;
+  if (difference.kind !== "binary" || difference.op !== "-") return undefined;
+  return { expr, radius: expr.left, difference };
+}
+
+function matchEqAnyExpression(expr: ExpressionAst): ExpressionAst[] | undefined {
+  if (expr.kind === "call" && expr.callee.toLowerCase() === "eq_any") {
+    const macro = smallSetExpressionMacro("eq_any", expr.args);
+    return macro === undefined ? undefined : matchEqAnyExpression(macro);
+  }
+
+  const factors = flattenProductTerms(expr);
+  if (factors.length === 0) return undefined;
+  const differences = factors.map((factor) =>
+    factor.kind === "binary" && factor.op === "-" ? factor : undefined
+  );
+  if (differences.some((difference) => difference === undefined)) return undefined;
+  const typedDifferences = differences as Array<Extract<ExpressionAst, { kind: "binary" }>>;
+  if (commonDifferenceEndpoint(typedDifferences) === undefined) return undefined;
+  return factors;
+}
+
+function commonDifferenceEndpoint(
+  differences: Array<Extract<ExpressionAst, { kind: "binary" }>>,
+): ExpressionAst | undefined {
+  if (differences.length === 0) return undefined;
+  const candidates = [differences[0]!.left, differences[0]!.right];
+  return candidates.find((candidate) =>
+    differences.every((difference) =>
+      expressionEquals(difference.left, candidate) || expressionEquals(difference.right, candidate)
+    )
+  );
+}
+
+function flattenMaxTerms(expr: ExpressionAst): ExpressionAst[] {
+  if (expr.kind === "call" && expr.callee.toLowerCase() === "max" && expr.args.length === 2) {
+    return [...flattenMaxTerms(expr.args[0]!), ...flattenMaxTerms(expr.args[1]!)];
+  }
+  return [expr];
+}
+
+function flattenProductTerms(expr: ExpressionAst): ExpressionAst[] {
+  if (expr.kind === "binary" && expr.op === "*") {
+    return [...flattenProductTerms(expr.left), ...flattenProductTerms(expr.right)];
+  }
+  return [expr];
+}
+
 interface CellHelperCall {
   mask: ExpressionAst;
   x: ExpressionAst;
@@ -6374,6 +6632,8 @@ type CellHelperName = "cell_used" | "cell_has" | "cell_mark" | "cell_set";
 interface BitMembershipCondition {
   collection: ExpressionAst;
   item: ExpressionAst;
+  mask: ExpressionAst;
+  mode: "index" | "mask";
   test: ExpressionAst;
 }
 
@@ -6404,13 +6664,20 @@ function matchBitSetAssignment(statement: Extract<StatementAst, { kind: "assign"
 
 function matchAnyBitSetAssignment(
   statement: Extract<StatementAst, { kind: "assign" }>,
-  item: ExpressionAst,
+  membership: BitMembershipCondition,
 ): BitSetAssignment | undefined {
   const expr = statement.expr;
-  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_set" || expr.args.length !== 2) return undefined;
+  if (expr.kind !== "call" || expr.args.length !== 2) return undefined;
   const collection = expr.args[0]!;
   if (collection.kind !== "identifier" || statement.target !== collection.name) return undefined;
-  if (!expressionEquals(expr.args[1]!, item)) return undefined;
+  const name = expr.callee.toLowerCase();
+  if (name === "bit_set") {
+    if (membership.mode !== "index" || !expressionEquals(expr.args[1]!, membership.item)) return undefined;
+  } else if (name === "bit_or") {
+    if (!expressionEquals(expr.args[1]!, membership.mask)) return undefined;
+  } else {
+    return undefined;
+  }
   return {
     collection,
     item: expr.args[1]!,
@@ -6449,11 +6716,11 @@ function membershipSetRunScratchName(statement: Extract<StatementAst, { kind: "i
   if (present !== undefined && statement.elseBody !== undefined) {
     const first = statement.elseBody[0];
     if (first?.kind !== "assign") return undefined;
-    let count = matchAnyBitSetAssignment(first, present.item) === undefined ? 0 : 1;
+    let count = matchAnyBitSetAssignment(first, present) === undefined ? 0 : 1;
     if (count === 0) return undefined;
     for (const inner of statement.elseBody) {
       if (inner === first) continue;
-      if (inner.kind !== "assign" || matchAnyBitSetAssignment(inner, present.item) === undefined) break;
+      if (inner.kind !== "assign" || matchAnyBitSetAssignment(inner, present) === undefined) break;
       count += 1;
     }
     if (count >= 2) return bitMaskScratchName(first);
@@ -6463,11 +6730,11 @@ function membershipSetRunScratchName(statement: Extract<StatementAst, { kind: "i
   if (absent === undefined) return undefined;
   const first = statement.thenBody[0];
   if (first?.kind !== "assign") return undefined;
-  let count = matchAnyBitSetAssignment(first, absent.item) === undefined ? 0 : 1;
+  let count = matchAnyBitSetAssignment(first, absent) === undefined ? 0 : 1;
   if (count === 0) return undefined;
   for (const inner of statement.thenBody) {
     if (inner === first) continue;
-    if (inner.kind !== "assign" || matchAnyBitSetAssignment(inner, absent.item) === undefined) break;
+    if (inner.kind !== "assign" || matchAnyBitSetAssignment(inner, absent) === undefined) break;
     count += 1;
   }
   return count >= 2 ? bitMaskScratchName(first) : undefined;
@@ -6484,10 +6751,23 @@ function ifSelectorScratchName(statement: StatementAst): string {
 function matchBitMembershipCondition(condition: ConditionAst): BitMembershipCondition | undefined {
   if (condition.op !== "!=" || !isZeroExpression(condition.right)) return undefined;
   const test = condition.left;
-  if (test.kind !== "call" || test.callee.toLowerCase() !== "bit_has" || test.args.length !== 2) return undefined;
+  if (test.kind !== "call" || test.args.length !== 2) return undefined;
+  if (test.callee.toLowerCase() === "bit_and") {
+    return {
+      collection: test.args[0]!,
+      item: test.args[1]!,
+      mask: test.args[1]!,
+      mode: "mask",
+      test,
+    };
+  }
+  if (test.callee.toLowerCase() !== "bit_has") return undefined;
+  const item = test.args[1]!;
   return {
     collection: test.args[0]!,
-    item: test.args[1]!,
+    item,
+    mask: bitMaskExpression(item),
+    mode: "index",
     test,
   };
 }
@@ -6495,10 +6775,23 @@ function matchBitMembershipCondition(condition: ConditionAst): BitMembershipCond
 function matchBitAbsenceCondition(condition: ConditionAst): BitMembershipCondition | undefined {
   if (condition.op !== "==" || !isZeroExpression(condition.right)) return undefined;
   const test = condition.left;
-  if (test.kind !== "call" || test.callee.toLowerCase() !== "bit_has" || test.args.length !== 2) return undefined;
+  if (test.kind !== "call" || test.args.length !== 2) return undefined;
+  if (test.callee.toLowerCase() === "bit_and") {
+    return {
+      collection: test.args[0]!,
+      item: test.args[1]!,
+      mask: test.args[1]!,
+      mode: "mask",
+      test,
+    };
+  }
+  if (test.callee.toLowerCase() !== "bit_has") return undefined;
+  const item = test.args[1]!;
   return {
     collection: test.args[0]!,
-    item: test.args[1]!,
+    item,
+    mask: bitMaskExpression(item),
+    mode: "index",
     test,
   };
 }
@@ -6509,24 +6802,26 @@ function isBitClearAssignment(
 ): boolean {
   if (membership.collection.kind !== "identifier" || statement.target !== membership.collection.name) return false;
   const expr = statement.expr;
-  return expr.kind === "call" &&
-    expr.callee.toLowerCase() === "bit_clear" &&
-    expr.args.length === 2 &&
-    expressionEquals(expr.args[0]!, membership.collection) &&
-    expressionEquals(expr.args[1]!, membership.item);
+  if (expr.kind !== "call" || expr.args.length !== 2 || !expressionEquals(expr.args[0]!, membership.collection)) {
+    return false;
+  }
+  const name = expr.callee.toLowerCase();
+  if (name === "bit_clear") return membership.mode === "index" && expressionEquals(expr.args[1]!, membership.item);
+  return name === "bit_and" && isBitNotOf(expr.args[1]!, membership.mask);
 }
 
 function isBitSetAssignment(
   statement: Extract<StatementAst, { kind: "assign" }>,
   membership: BitMembershipCondition,
 ): boolean {
-  if (membership.collection.kind !== "identifier" || statement.target !== membership.collection.name) return false;
-  const expr = statement.expr;
+  return matchAnyBitSetAssignment(statement, membership) !== undefined;
+}
+
+function isBitNotOf(expr: ExpressionAst, inner: ExpressionAst): boolean {
   return expr.kind === "call" &&
-    expr.callee.toLowerCase() === "bit_set" &&
-    expr.args.length === 2 &&
-    expressionEquals(expr.args[0]!, membership.collection) &&
-    expressionEquals(expr.args[1]!, membership.item);
+    expr.callee.toLowerCase() === "bit_not" &&
+    expr.args.length === 1 &&
+    expressionEquals(expr.args[0]!, inner);
 }
 
 function norm4Expression(expr: ExpressionAst): ExpressionAst {
@@ -6597,6 +6892,10 @@ function multiplyExpressions(left: ExpressionAst, right: ExpressionAst): Express
   if (isNumericValue(left, 1)) return right;
   if (isNumericValue(right, 1)) return left;
   return { kind: "binary", op: "*", left, right };
+}
+
+function productExpressions(expressions: ExpressionAst[]): ExpressionAst {
+  return expressions.reduce((product, expr) => multiplyExpressions(product, expr));
 }
 
 function addExpressions(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
@@ -7327,6 +7626,8 @@ function estimateCallCostForCondition(
   if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
     return estimateNegativeZeroDegreeSelectorCost(expr, preloadedConstants);
   }
+  const smallSetMacro = smallSetExpressionMacro(name, expr.args);
+  if (smallSetMacro !== undefined) return estimateExpressionCostForCondition(smallSetMacro, preloadedConstants);
   const macro = ticTacToeExpressionMacro(name, expr.args);
   if (macro !== undefined) return estimateExpressionCostForCondition(macro, preloadedConstants);
   if (name === "random" || name === "pi") return 1;
@@ -7389,6 +7690,8 @@ function estimateCallCost(expr: Extract<ExpressionAst, { kind: "call" }>): numbe
   if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
     return estimateNegativeZeroDegreeSelectorCost(expr);
   }
+  const smallSetMacro = smallSetExpressionMacro(name, expr.args);
+  if (smallSetMacro !== undefined) return estimateExpressionCost(smallSetMacro);
   const macro = ticTacToeExpressionMacro(name, expr.args);
   if (macro !== undefined) return estimateExpressionCost(macro);
   if (name === "random" || name === "pi") return 1;

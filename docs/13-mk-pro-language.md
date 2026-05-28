@@ -364,6 +364,9 @@ walls = cell_toggle(walls, x, y)
 code = digit_at(screen, 2)
 screen = digit_add(screen, 1, 7)
 screen = digit_set(screen, 2, 9)
+
+near = near_any(room, 1, pit1, pit2)
+hit = eq_any(room, bat1, bat2)
 ```
 
 `pow(base, exponent)` lowers to the MK-61 `F x^y` command. `bit_mask(index)`
@@ -377,6 +380,11 @@ Packed digit helpers use one-based indexes from the right: `digit_at(value, 1)`
 is the units digit, `digit_at(value, 2)` is the tens digit. `digit_add` adds a
 digit at that position, while `digit_set` first removes the old digit at that
 position and then inserts the new one.
+
+Small coordinate-set helpers are ordinary expression macros. `near_any(value,
+radius, a, b, ...) >= 0` means at least one candidate is within `radius`;
+`near_any(...) < 0` means none are. `eq_any(value, a, b, ...) == 0` means the
+value equals at least one candidate; `eq_any(...) != 0` means it equals none.
 
 ## Raw Blocks
 
@@ -561,7 +569,7 @@ The parser keeps these high-level statements as typed source nodes:
   `cell_at(world, pos)`, and `random_cell(world)`
 - formula helpers: `pow`, `bit_mask`, `bit_has`, `bit_set`, `bit_clear`,
   `bit_toggle`, `cell_mask`, `cell_has`, `cell_set`, `cell_clear`,
-  `cell_toggle`, `digit_at`, `digit_add`, and `digit_set`
+  `cell_toggle`, `digit_at`, `digit_add`, `digit_set`, `near_any`, and `eq_any`
 - contracted `raw { ... }` blocks for explicit MK-61 command sequences
 
 Assignments, updates, comparison predicates, rule parameters, and rule calls
@@ -827,6 +835,8 @@ The pipeline currently contains:
   pairs into one shared call tail when that is smaller.
 - **bit-mask-helper** — shares generated `bit_mask(index)` code when spatial
   membership and line-count lowering need the same packed-cell mask shape.
+- **small-set-primitive-lowering** — lowers `near_any` and `eq_any` to compact
+  arithmetic over small coordinate sets.
 - **return-zero-jump** — replaces `БП 01` with `В/О` only when the return
   stack is provably empty.
 - **redundant-prologue-elimination** — when a `display + С/П` block

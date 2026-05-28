@@ -2197,6 +2197,8 @@ function lowerV2MatchStatements(statement: V2MatchStatementAst, context: V2Lower
   if (cyclic !== undefined) return cyclic;
   const effects = lowerSimpleEffectMatch(statement, context);
   if (effects !== undefined) return effects;
+  const guardedDirection = lowerGuardedDirectionMatch(statement, context);
+  if (guardedDirection !== undefined) return guardedDirection;
   const smallCase = lowerSmallCaseMatch(statement, context);
   if (smallCase !== undefined) return [smallCase];
   const singleCase = lowerSingleCaseMatch(statement, context);
@@ -2647,6 +2649,182 @@ function lowerCompactDirectionDispatch(
   };
 }
 
+interface GuardedDirectionCase {
+  matchCase: V2MatchCaseAst;
+  predicate: V2PredicateAst;
+  terminalBody: V2StatementAst[];
+  invertPredicate: boolean;
+}
+
+function lowerGuardedDirectionMatch(
+  statement: V2MatchStatementAst,
+  context: V2LoweringContext,
+): StatementAst[] | undefined {
+  const directionalCases = statement.cases.filter((matchCase) => isDirectionInvoke(matchCase.action, statement.expr));
+  const directionalValueCount = directionalCases.reduce((sum, matchCase) => sum + matchCase.values.length, 0);
+  if (directionalValueCount < 3) return undefined;
+  const action = directionalCases[0]?.action;
+  if (action?.kind !== "v2_invoke") return undefined;
+  if (!directionalCases.every((matchCase) => sameInvoke(matchCase.action, action))) return undefined;
+
+  const guardedCases: GuardedDirectionCase[] = [];
+  for (const matchCase of statement.cases) {
+    if (directionalCases.includes(matchCase)) continue;
+    const guarded = analyzeGuardedDirectionCase(matchCase, action, statement.expr, context);
+    if (guarded !== undefined) guardedCases.push(guarded);
+  }
+  if (guardedCases.length === 0) return undefined;
+
+  const rewritten: V2MatchStatementAst = {
+    ...statement,
+    cases: statement.cases.map((matchCase) =>
+      guardedCases.some((guarded) => guarded.matchCase === matchCase)
+        ? { ...matchCase, action }
+        : matchCase
+    ),
+  };
+  const dispatch = lowerCompactDirectionDispatch(rewritten, context);
+  if (dispatch === undefined) return undefined;
+
+  return [
+    ...guardedCases.flatMap((guarded) => lowerGuardedDirectionCasePrelude(statement, guarded, context)),
+    dispatch,
+  ];
+}
+
+function analyzeGuardedDirectionCase(
+  matchCase: V2MatchCaseAst,
+  sharedAction: V2InvokeStatementAst,
+  matchExpr: string,
+  context: V2LoweringContext,
+): GuardedDirectionCase | undefined {
+  const body = resolveV2ActionBody(matchCase.action, context, matchExpr);
+  if (body?.length !== 1) return undefined;
+  const guarded = body[0];
+  if (guarded?.kind !== "v2_if" || guarded.elseBody === undefined) return undefined;
+
+  const thenShared = isSharedDirectionBranch(guarded.thenBody, sharedAction);
+  const elseShared = isSharedDirectionBranch(guarded.elseBody, sharedAction);
+  if (thenShared === elseShared) return undefined;
+
+  if (elseShared && v2StatementsTerminate(guarded.thenBody, context)) {
+    return {
+      matchCase,
+      predicate: guarded.predicate,
+      terminalBody: guarded.thenBody,
+      invertPredicate: false,
+    };
+  }
+  if (thenShared && v2StatementsTerminate(guarded.elseBody, context)) {
+    return {
+      matchCase,
+      predicate: guarded.predicate,
+      terminalBody: guarded.elseBody,
+      invertPredicate: true,
+    };
+  }
+  return undefined;
+}
+
+function isSharedDirectionBranch(statements: V2StatementAst[], sharedAction: V2InvokeStatementAst): boolean {
+  return statements.length === 1 && sameInvoke(statements[0]!, sharedAction);
+}
+
+function lowerGuardedDirectionCasePrelude(
+  statement: V2MatchStatementAst,
+  guarded: GuardedDirectionCase,
+  context: V2LoweringContext,
+): StatementAst[] {
+  return guarded.matchCase.values.map((value) => {
+    const condition = lowerV2Predicate(guarded.predicate, guarded.matchCase.line, context);
+    const innerCondition = guarded.invertPredicate ? invertLoweredCondition(condition) : condition;
+    return {
+      kind: "if" as const,
+      condition: {
+        left: lowerV2Expression(statement.expr, statement.line, context),
+        op: "==",
+        right: lowerV2Expression(value, guarded.matchCase.line, context),
+      },
+      thenBody: [{
+        kind: "if" as const,
+        condition: innerCondition,
+        thenBody: lowerV2Statements(guarded.terminalBody, context),
+        line: guarded.matchCase.line,
+      }],
+      line: guarded.matchCase.line,
+    };
+  });
+}
+
+function v2StatementsTerminate(
+  statements: V2StatementAst[],
+  context: V2LoweringContext,
+  seenRules = new Set<string>(),
+): boolean {
+  for (const statement of statements) {
+    if (v2StatementTerminates(statement, context, seenRules)) return true;
+  }
+  return false;
+}
+
+function v2StatementTerminates(
+  statement: V2StatementAst,
+  context: V2LoweringContext,
+  seenRules: Set<string>,
+): boolean {
+  switch (statement.kind) {
+    case "v2_stop":
+      return true;
+    case "v2_invoke": {
+      if (seenRules.has(statement.name)) return false;
+      const rule = context.rules.get(statement.name);
+      if (rule === undefined) return false;
+      seenRules.add(statement.name);
+      const terminates = v2StatementsTerminate(rule.body, context, seenRules);
+      seenRules.delete(statement.name);
+      return terminates;
+    }
+    case "v2_if":
+      return statement.elseBody !== undefined &&
+        v2StatementsTerminate(statement.thenBody, context, new Set(seenRules)) &&
+        v2StatementsTerminate(statement.elseBody, context, new Set(seenRules));
+    case "v2_match":
+      return statement.otherwise !== undefined &&
+        statement.cases.every((matchCase) => v2StatementTerminates(matchCase.action, context, new Set(seenRules))) &&
+        v2StatementTerminates(statement.otherwise, context, new Set(seenRules));
+    case "v2_challenge":
+      return statement.failureBody !== undefined &&
+        v2StatementsTerminate(statement.successBody, context, new Set(seenRules)) &&
+        v2StatementsTerminate(statement.failureBody, context, new Set(seenRules));
+    default:
+      return false;
+  }
+}
+
+function invertLoweredCondition(condition: ConditionAst): ConditionAst {
+  return {
+    ...condition,
+    op: invertLoweredComparisonOp(condition.op),
+  };
+}
+
+function invertLoweredComparisonOp(op: ConditionAst["op"]): ConditionAst["op"] {
+  switch (op) {
+    case "==":
+      return "!=";
+    case "!=":
+      return "==";
+    case "<":
+      return ">=";
+    case "<=":
+      return ">";
+    case ">":
+      return "<=";
+    case ">=":
+      return "<";
+  }
+}
+
 function directionKeyGuardExpression(expr: string): string {
   const key = `(${expr})`;
   const cardinal = `(abs(${key} - 5) - 1) * (abs(${key} - 5) - 3)`;
@@ -2816,7 +2994,9 @@ function resolveV2InvokeArg(arg: string, matchExpr: string, matchValue?: string)
 }
 
 function lowerV2Expression(text: string, line: number, context?: V2LoweringContext): ExpressionAst {
-  const normalized = normalizeV2ExpressionText(rewriteSpatialExpressionText(text, context));
+  const rewritten = rewriteSpatialExpressionText(text, context);
+  const contextual = context === undefined ? rewritten : normalizeContextualFloorAccessText(rewritten, context);
+  const normalized = normalizeV2ExpressionText(contextual);
   return parseExpression(normalized, line);
 }
 
@@ -2905,7 +3085,12 @@ function cellMaskExpressionForCollection(
   cell: string,
   context: V2LoweringContext,
 ): string | undefined {
-  return oneDimensionalCellMaskExpression(mask, cell, context);
+  const oneDimensional = oneDimensionalCellMaskExpression(mask, cell, context);
+  if (oneDimensional !== undefined) return oneDimensional;
+  const domain = context.stateDomains.get(mask.trim());
+  const world = domain === undefined ? undefined : context.worlds.get(domain);
+  if (world?.position?.encoding === "packed_decimal_zero_run") return `frac(${cell})`;
+  return undefined;
 }
 
 function lineCells(
@@ -3010,6 +3195,14 @@ export function normalizeV2ExpressionText(text: string): string {
   return text
     .trim()
     .replace(/\b([A-Za-z_][\w]*)\.floor\b/gu, "int($1 / 100)");
+}
+
+function normalizeContextualFloorAccessText(text: string, context: V2LoweringContext): string {
+  return text.replace(/\b([A-Za-z_][\w]*)\.floor\b/gu, (match, name: string) => {
+    const domain = context.stateDomains.get(name);
+    const world = domain === undefined ? undefined : context.worlds.get(domain);
+    return world?.position?.encoding === "packed_decimal_zero_run" ? `int(${name})` : match;
+  });
 }
 
 function parseStackSource(text: string, line: number): "X" | "Y" | undefined {

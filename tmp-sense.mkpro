@@ -1,0 +1,42 @@
+program SenseProbe {
+  cave: board(1..20, 1..1)
+
+  state {
+    room: coord(cave) = 1
+    wumpus: coord(cave) = 1
+    pit1: coord(cave) = 1
+    pit2: coord(cave) = 1
+    bat1: coord(cave) = 1
+    bat2: coord(cave) = 1
+    arrows: counter 0..5 = 5
+    clue: counter 0..9 = 0
+  }
+
+  screen main {
+    show room, arrows, clue
+  }
+
+  turn {
+    sense
+    show main
+    stop 0
+  }
+
+  rule sense {
+    clue = 0
+
+    if abs(room - wumpus) <= 1 {
+      clue = 1
+    }
+    else {
+      if max(1 - abs(room - pit1), 1 - abs(room - pit2)) >= 0 {
+        clue = 2
+      }
+      else {
+        if max(1 - abs(room - bat1), 1 - abs(room - bat2)) >= 0 {
+          clue = 3
+        }
+      }
+    }
+  }
+}

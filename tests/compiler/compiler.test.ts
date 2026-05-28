@@ -1373,4 +1373,53 @@ program MembershipMaskRun {
 
     expect(result.report.optimizations.some((item) => item.name === "cell-membership-mask-run-reuse")).toBe(true);
   });
+
+  it("reuses a precomputed mask membership result when clearing the same mask", () => {
+    const result = compileOk(`
+program MaskMembershipClear {
+  state {
+    pos: packed = 1.0000008
+    marks: packed = 0
+  }
+
+  turn {
+    if bit_and(marks, frac(pos)) != 0 {
+      marks = bit_and(marks, bit_not(frac(pos)))
+    }
+    stop marks
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "cell-membership-clear-reuse")).toBe(true);
+  });
+
+  it("shares identical nested guard failure branches", () => {
+    const result = compileOk(`
+program NestedGuardFailure {
+  state {
+    a: counter 0..9 = 1
+    b: counter 0..9 = 1
+    score: counter 0..9 = 0
+  }
+
+  turn {
+    if a != 0 {
+      if b != 0 {
+        score = 1
+      }
+      else {
+        show 0
+      }
+    }
+    else {
+      show 0
+    }
+    stop score
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "nested-guard-shared-failure")).toBe(true);
+  });
 });

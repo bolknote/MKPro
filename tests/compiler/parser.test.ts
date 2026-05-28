@@ -131,6 +131,58 @@ program Demo {
     ]));
   });
 
+  it("shares guarded direction match actions with the common direction dispatch", () => {
+    const ast = parseProgram(`
+program GuardedDirection {
+  state {
+    key: packed = 0
+    pos: coord(cave) = 1
+  }
+  world cave {
+    position pos {
+    }
+  }
+  turn {
+    read key
+    match key {
+      4 => move_left
+      2, 6, 8, 5, -5 => go direction(key)
+      otherwise => ignored
+    }
+  }
+  rule move_left {
+    if pos == 7 {
+      stop 77
+    }
+    else {
+      go direction(key)
+    }
+  }
+  rule go dir {
+    pos += dir
+  }
+  rule ignored {
+    stop 0
+  }
+}
+`);
+    const loop = ast.entries[0]?.body[0];
+    expect(loop?.kind).toBe("loop");
+    if (loop?.kind !== "loop") throw new Error("expected loop");
+    const guarded = loop.body.find((statement) => statement.kind === "if");
+    expect(guarded).toMatchObject({
+      kind: "if",
+      condition: {
+        op: "==",
+        right: { kind: "number", raw: "4" },
+      },
+    });
+    const dispatch = loop.body.find((statement) => statement.kind === "dispatch");
+    expect(dispatch).toMatchObject({ kind: "dispatch", name: "direction_dispatch" });
+    if (dispatch?.kind !== "dispatch") throw new Error("expected direction dispatch");
+    expect(dispatch.cases.map((dispatchCase) => JSON.stringify(dispatchCase.value))).not.toContain(JSON.stringify({ kind: "number", raw: "4" }));
+  });
+
   it("rejects rule calls with the wrong arity", () => {
     expect(() =>
       parseProgram(`
@@ -537,6 +589,35 @@ program LineMask {
     expect(lowered).toMatch(/bit_or/u);
     expect(lowered).toMatch(/bit_and/u);
     expect(lowered).not.toMatch(/bit_set|bit_has/u);
+  });
+
+  it("lowers packed decimal zero-run cell sets to fractional cell masks", () => {
+    const ast = parseProgram(`
+program PackedCaveMask {
+  state {
+    pos: coord(cave) = 1.0000008
+    walls: cells(cave) = random()
+    floor: counter 0..9 = 0
+  }
+  world cave {
+    position pos {
+      encoding packed_decimal_zero_run
+    }
+  }
+  turn {
+    walls -= pos
+    if pos in walls {
+      floor = pos.floor
+    }
+  }
+}
+`);
+    const lowered = JSON.stringify(ast.entries[0]?.body);
+
+    expect(lowered).toMatch(/frac/u);
+    expect(lowered).toMatch(/bit_and/u);
+    expect(lowered).not.toMatch(/bit_has|bit_clear/u);
+    expect(lowered).toMatch(/"callee":"int","args":\[\{"kind":"identifier","name":"pos"\}\]/u);
   });
 
   it("rejects unknown program syntax and unknown rules", () => {
