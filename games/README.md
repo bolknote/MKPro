@@ -79,3 +79,18 @@ Files are stored in [`monatkodenis/`](./monatkodenis/):
 - Matching `*.md` descriptions and `manifest.tsv`.
 
 Programs: **2**.
+
+## Semico MK Programs
+
+Source: [Semico MK games](http://mk.semico.ru/mkpr_r9.htm)
+
+Files are stored in [`semico/`](./semico/):
+
+- `lunolet-1.txt`, `lunolet-2.txt`, `lunolet-3.txt` - MK-61-sized listings
+  restored from Semico `*.mkp` files.
+- Matching `*.md` descriptions include setup registers decoded from Semico
+  `*.mkd` files.
+- `manifest.tsv` - tab-separated index with program file, description file,
+  title, author, and source URL.
+
+Programs: **3**.
