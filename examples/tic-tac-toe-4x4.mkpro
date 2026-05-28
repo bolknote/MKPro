@@ -1,0 +1,81 @@
+reference anvarov_tic_tac_toe_4x4
+
+// Based on Serge Anvarov's 4x4 tic-tac-toe. The source listing packs occupied
+// cells and line tests with K AND/K OR; the MK-Pro source names the two masks
+// and asks line_count for the tactical report.
+
+program TicTacToe4x4 {
+  grid: board(1..4, 1..4)
+
+  state {
+    cell: coord(grid)
+    player_marks: cells(grid)
+    calculator_marks: cells(grid)
+    occupied: cells(grid)
+
+    player_line: counter 0..4 = 0
+    calculator_line: counter 0..4 = 0
+    turn_count: counter 0..16 = 0
+  }
+
+  screen board {
+    show cell, player_line, calculator_line, turn_count
+  }
+
+  rule player_wins {
+    stop 4444
+  }
+
+  rule calculator_wins {
+    stop -4444
+  }
+
+  rule draw {
+    stop 0
+  }
+
+  turn {
+    show board
+    read cell
+
+    if cell in occupied {
+      show board
+    }
+    else {
+      player_marks += cell
+      occupied += cell
+      turn_count++
+      player_line = line_count(player_marks, cell)
+      if player_line >= 4 {
+        player_wins
+      }
+      else {
+        calculator_reply
+      }
+    }
+  }
+
+  rule calculator_reply {
+    if turn_count >= 16 {
+      draw
+    }
+    else {
+      cell = random_cell(grid)
+      if cell in occupied {
+        calculator_reply
+      }
+      else {
+        calculator_marks += cell
+        occupied += cell
+        turn_count++
+        calculator_line = line_count(calculator_marks, cell)
+        if calculator_line >= 4 {
+          calculator_wins
+        }
+        else {
+          show board
+        }
+      }
+    }
+  }
+}

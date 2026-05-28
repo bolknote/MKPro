@@ -1,0 +1,86 @@
+// Source: games/anvarov/raja-yoga.txt
+// The original life line is a compact seven-cell display maintained with KINV
+// and K XOR. In MK-Pro it is a small board with explicit obstacle masks.
+
+program RajaYoga {
+  life: board(1..7, 1..1)
+
+  state {
+    adept: coord(life) = 4
+    goal: coord(life)
+    laziness: coord(life)
+    old_age: coord(life) = 1
+    obstacles: cells(life) = random()
+    mastered: cells(life)
+
+    stage: counter 1..8 = 1
+    effort: counter -3..3 = 0
+    steps: counter 0..99 = 0
+  }
+
+  screen path {
+    show stage, adept, goal, old_age
+  }
+
+  rule attained {
+    stop 888
+  }
+
+  rule failed {
+    stop -999
+  }
+
+  turn {
+    show path
+    read effort
+    steps++
+
+    if effort < -3 {
+      show path
+    }
+    else {
+      if effort > 3 {
+        show path
+      }
+      else {
+        walk
+      }
+    }
+  }
+
+  rule walk {
+    adept += effort
+    old_age++
+    laziness = random_cell(life)
+    obstacles += laziness
+
+    if adept in obstacles {
+      failed
+    }
+    else {
+      if old_age > 7 {
+        failed
+      }
+      else {
+        pursue_goal
+      }
+    }
+  }
+
+  rule pursue_goal {
+    if adept == goal {
+      mastered += adept
+      stage++
+      if stage > 8 {
+        attained
+      }
+      else {
+        goal = random_cell(life)
+        show path
+      }
+    }
+    else {
+      show path
+    }
+  }
+}

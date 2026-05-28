@@ -1,0 +1,131 @@
+// Source: games/anvarov/game-100-pig.txt
+// Pig is mostly a score-and-display game. The dice face is modeled as a tiny
+// board so the compiler can keep the random face and bit-mask style visible at
+// intent level instead of spelling out the original K OR display packing.
+
+program Game100Pig {
+  die_faces: board(1..6, 1..1)
+
+  state {
+    die: coord(die_faces)
+    rolled_faces: cells(die_faces) = random()
+
+    player_total: counter 0..100 = 0
+    calculator_total: counter 0..100 = 0
+    turn_score: counter 0..99 = 0
+    roll_count: counter 0..99 = 0
+    preview_total: counter 0..100 = 0
+  }
+
+  screen status {
+    show die, turn_score, preview_total, roll_count
+  }
+
+  rule player_wins {
+    stop 100
+  }
+
+  rule calculator_wins {
+    stop -100
+  }
+
+  turn {
+    roll_player
+  }
+
+  rule roll_player {
+    die = random_cell(die_faces)
+    rolled_faces += die
+    roll_count++
+
+    if die == 1 {
+      pig_out_player
+    }
+    else {
+      turn_score += die
+      preview_total = player_total + turn_score
+      show status
+      read choice
+
+      match choice {
+        0 => hold_player
+        otherwise => roll_player
+      }
+    }
+  }
+
+  rule hold_player {
+    player_total += turn_score
+    if player_total >= 100 {
+      player_wins
+    }
+    else {
+      start_calculator_turn
+    }
+  }
+
+  rule pig_out_player {
+    turn_score = 0
+    roll_count = 0
+    preview_total = player_total
+    start_calculator_turn
+  }
+
+  rule start_calculator_turn {
+    turn_score = 0
+    roll_count = 0
+    roll_calculator
+  }
+
+  rule roll_calculator {
+    die = random_cell(die_faces)
+    rolled_faces += die
+    roll_count++
+
+    if die == 1 {
+      pig_out_calculator
+    }
+    else {
+      turn_score += die
+      preview_total = calculator_total + turn_score
+      show status
+
+      if turn_score >= 20 {
+        hold_calculator
+      }
+      else {
+        roll_calculator
+      }
+    }
+  }
+
+  rule hold_calculator {
+    calculator_total += turn_score
+    if calculator_total >= 100 {
+      calculator_wins
+    }
+    else {
+      turn_score = 0
+      roll_count = 0
+      preview_total = player_total
+      show status
+      read choice
+      match choice {
+        0 => hold_player
+        otherwise => roll_player
+      }
+    }
+  }
+
+  rule pig_out_calculator {
+    turn_score = 0
+    roll_count = 0
+    preview_total = player_total
+    show status
+    read choice
+    match choice {
+      0 => hold_player
+      otherwise => roll_player
+    }
+  }
+}
