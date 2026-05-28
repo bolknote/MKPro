@@ -640,7 +640,6 @@ function buildDispatchFromIfChain(
 ): DispatchStatementAst | undefined {
   const first = matchEqualityConstantCondition(root.condition);
   if (first === undefined || !expressionIsDeterministic(first.expr)) return undefined;
-  if (estimateExpressionCost(first.expr) <= 2) return undefined;
 
   const cases: DispatchCaseAst[] = [];
   const seen = new Set<number>();
