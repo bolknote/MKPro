@@ -51,3 +51,15 @@ node scripts/import-emulator-listings.cjs
 
 The Treasure Cave demo in `anvarov/demo.txt` is a modified showcase program. The KEI column
 listings live in [`kei/`](./kei/).
+
+## Bolknote Collection
+
+Source: [Evgeny Stepanishchev / bolknote.ru](https://bolknote.ru/)
+
+Files are stored in [`bolknote/`](./bolknote/):
+
+- `99-bottles.txt` - plain program listing, one command per addressed step.
+- `99-bottles.md` - Markdown description and setup notes from the source page.
+- `manifest.tsv` - tab-separated index with program file, description file, title, author, and source URL.
+
+Programs: **1**.
