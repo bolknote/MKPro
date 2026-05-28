@@ -19,6 +19,7 @@ export {
   officialAddressToOpcode,
   parseFormalAddressOpcode,
 } from "./formal-address.ts";
+export { verifySuperDarkSuffixLayout } from "./super-dark-layout.ts";
 export {
   formatAll,
   formatExplain,

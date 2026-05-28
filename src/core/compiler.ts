@@ -14,6 +14,7 @@ import {
 import { lowerIrToLayout, raiseLayoutToIr } from "./ir.ts";
 import { normalizeV2ExpressionText, parseExpression, parseProgram } from "./parser.ts";
 import { runIrPasses } from "./passes/index.ts";
+import { verifySuperDarkSuffixLayout } from "./super-dark-layout.ts";
 import { MK61_PROFILE, machineSupports, type MachineProfile } from "./machineProfile.ts";
 import type {
   AppliedOptimization,
@@ -1294,11 +1295,17 @@ function buildGameIntentOptimizations(
     }
     return shapeSpecific;
   }
+  const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout);
+  const formalAddressOptimizations = superDarkLayoutProof.proved
+    ? [
+      selected("super-dark-dispatch", "Selected super/dark formal address entries where one-command side paths are profitable."),
+      selected("cyclic-address-layout", "Selected wraparound address layout so tails continue through formal address space."),
+    ]
+    : [];
   return [
     ...base,
     selected("indirect-register-flow", "Selected R7/R8/R9-style indirect flow for compact command and procedure dispatch."),
-    selected("super-dark-dispatch", "Selected super/dark formal address entries where one-command side paths are profitable."),
-    selected("cyclic-address-layout", "Selected wraparound address layout so tails continue through formal address space."),
+    ...formalAddressOptimizations,
     selected("shared-tail-layout", "Merged movement, wall-break, search, and initialization tails."),
     selected("code-data-overlay", "Reused branch operands and command bytes as address/data constants."),
     selected("constants-dual-use", "Reused constants as coefficients, rounding adjusters, and indirect branch addresses."),
@@ -1326,40 +1333,31 @@ function buildGameIntentCandidates(
   backend: GameBackendCandidate,
 ): CandidateReport[] {
   const usesUniversalTactics = backend.variant === "universal_spatial_resource";
-  const superDarkLayoutProved = usesUniversalTactics && provesSuperDarkSuffixLayout(backend.layout);
+  const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout);
+  const superDarkLayoutProved = usesUniversalTactics && superDarkLayoutProof.proved;
   return candidates.map((candidate) => ({
     site: candidate.site,
     variant: candidate.variant,
     steps: candidate.cost,
     selected: candidate.selected && usesUniversalTactics && (
-      candidate.variant !== "super-dark-dispatch" || superDarkLayoutProved
+      !["super-dark-dispatch", "cyclic-address-layout"].includes(candidate.variant) || superDarkLayoutProved
     ),
-    reason: gameIntentCandidateReason(candidate, backend, superDarkLayoutProved),
+    reason: gameIntentCandidateReason(candidate, backend, superDarkLayoutProof),
   }));
 }
 
 function gameIntentCandidateReason(
   candidate: CandidateIr,
   backend: GameBackendCandidate,
-  superDarkLayoutProved: boolean,
+  superDarkLayoutProof: ReturnType<typeof verifySuperDarkSuffixLayout>,
 ): string {
   if (backend.variant !== "universal_spatial_resource") {
     return `rejected; ${backend.variant} backend is shorter, so universal ${candidate.variant} tactics were not emitted`;
   }
-  if (candidate.variant === "super-dark-dispatch" && !superDarkLayoutProved) {
-    return "rejected; layout proof did not establish FA..FF entries at 48..53 with suffix continuations 01..06";
+  if (["super-dark-dispatch", "cyclic-address-layout"].includes(candidate.variant) && !superDarkLayoutProof.proved) {
+    return `rejected; layout proof did not establish FA..FF entries at 48..53 with suffix continuations 01..06 (${superDarkLayoutProof.reasons.join("; ")})`;
   }
   return `selected; ${candidate.proofs.join("; ")}`;
-}
-
-function provesSuperDarkSuffixLayout(layout: readonly LayoutIrCell[]): boolean {
-  for (let offset = 0; offset <= 5; offset += 1) {
-    const entry = layout[48 + offset];
-    const continuation = layout[1 + offset];
-    if (entry === undefined || continuation === undefined) return false;
-    if (!entry.roles.includes("exec") || !continuation.roles.includes("exec")) return false;
-  }
-  return true;
 }
 
 function buildGameIntentPreloads(ast?: ProgramAst): PreloadReport[] {
@@ -1433,6 +1431,7 @@ function buildGameIntentProofs(
     }
     return proofs;
   }
+  const superDarkLayoutProof = verifySuperDarkSuffixLayout(backend.layout);
   const proofs: CompileReport["proofs"] = [
     {
       id: "full-game-semantics",
@@ -1456,8 +1455,10 @@ function buildGameIntentProofs(
     },
     {
       id: "cyclic-address-safety",
-      status: "proved",
-      detail: "Wraparound and dark-entry addresses land only on intended shared tails or one-command side paths.",
+      status: superDarkLayoutProof.proved ? "proved" : "not-needed",
+      detail: superDarkLayoutProof.proved
+        ? "Wraparound and dark-entry addresses land only on intended shared tails or one-command side paths."
+        : "No formal wraparound/dark-entry layout was selected, so there are no cyclic-address aliases to prove.",
     },
     {
       id: "indirect-addressing-ranges",
@@ -1466,10 +1467,10 @@ function buildGameIntentProofs(
     },
     {
       id: "super-dark-suffix-layout",
-      status: provesSuperDarkSuffixLayout(backend.layout) ? "proved" : "not-needed",
-      detail: provesSuperDarkSuffixLayout(backend.layout)
-        ? "FA..FF indirect dispatch entries are placed at physical 48..53 and resume through suffix-compatible continuations 01..06."
-        : "No suffix-compatible FA..FF dispatch layout was selected for this backend.",
+      status: superDarkLayoutProof.proved ? "proved" : "not-needed",
+      detail: superDarkLayoutProof.proved
+        ? `FA..FF indirect dispatch entries are placed at physical 48..53 and resume through suffix-compatible continuations 01..06 (${superDarkLayoutProof.pairs.length} pairs).`
+        : `No suffix-compatible FA..FF dispatch layout was selected for this backend: ${superDarkLayoutProof.reasons.join("; ")}.`,
     },
     {
       id: "display-observability",
@@ -1492,7 +1493,10 @@ function buildGameIntentCellRoles(layout: LayoutIrCell[], machineProfile: Machin
   for (let address = 0; address < layout.length - 1; address += 1) {
     if (getOpcode(layout[address]!.opcode).takesAddress) addressOperandCells.add(address + 1);
   }
-  const darkEntryCells = new Set([1, 2, 3, 4, 5, 6, 48, 49, 50, 51, 52, 53, 99, 100, 101, 102, 103, 104]);
+  const superDarkProof = verifySuperDarkSuffixLayout(layout);
+  const darkEntryCells = superDarkProof.proved
+    ? new Set(superDarkProof.pairs.flatMap((pair) => [pair.entryAddress, pair.continuationAddress]))
+    : new Set<number>();
   const displayByteCells = new Set([18, 33, 90]);
   return layout.map((cell) => {
     const { address, opcode: code } = cell;
@@ -1508,7 +1512,7 @@ function buildGameIntentCellRoles(layout: LayoutIrCell[], machineProfile: Machin
     }
     if (darkEntryCells.has(address) && machineSupports(machineProfile, "dark-entries")) {
       roles.push("dark-entry");
-      notes.push("formal/dark entry participates in cyclic shared-tail layout");
+      notes.push("formal/dark entry participates in proved super-dark dispatch layout");
     }
     if (displayByteCells.has(address) && machineSupports(machineProfile, "display-bytes")) {
       roles.push("display-byte");
@@ -3645,6 +3649,15 @@ function buildAddressCellRole(
 ): CellRoleReport {
   const roles: CellRole[] = ["address"];
   const notes: string[] = [];
+  if (item.formalOpcode !== undefined) {
+    const info = formalAddressInfo(item.formalOpcode);
+    roles.push("formal-address");
+    notes.push(`formal address ${info.label} maps to ${safeFormatAddress(info.actual)} (${info.kind})`);
+    if (info.kind !== "official" && machineSupports(machineProfile, "dark-entries")) {
+      roles.push("dark-entry");
+      notes.push("uses formal/dark program-address mapping");
+    }
+  }
   if (machineSupports(machineProfile, "address-constants")) {
     roles.push("constant");
     notes.push("address can be reused as constant");
@@ -5143,7 +5156,14 @@ function buildMachineFeaturesUsed(
     add("code-data-overlay", "Layout marked address cells as reusable code/data overlay candidates.", "layout");
   }
   if (cellRoles.some((cell) => cell.roles.includes("dark-entry"))) {
-    add("dark-entries", "Layout exposed shared tails as dark-entry candidates.", "layout");
+    const formal = cellRoles.some((cell) => cell.roles.includes("formal-address"));
+    add(
+      "dark-entries",
+      formal
+        ? "Layout emitted formal/dark MK-61 address operand(s)."
+        : "Layout exposed shared tails as dark-entry candidates.",
+      "layout",
+    );
   }
   if (cellRoles.some((cell) => cell.roles.includes("display-byte"))) {
     add("display-bytes", "Display lowering marked cells as packed display-byte candidates.", "layout");
@@ -5223,6 +5243,19 @@ function buildProofReport(
       id: "display-byte-observable-boundary",
       status: "assumed",
       detail: "Display-byte candidates are bounded by screen declarations and the exact mk61 profile.",
+    });
+  }
+  const formalOperands = items
+    .filter((item): item is Extract<MachineItem, { kind: "address" }> => item.kind === "address" && item.formalOpcode !== undefined)
+    .map((item) => formalAddressInfo(item.formalOpcode!))
+    .filter((info) => info.kind !== "official");
+  if (formalOperands.length > 0) {
+    proofs.push({
+      id: "formal-address-operands",
+      status: "proved",
+      detail: `Resolved formal MK-61 address byte(s): ${
+        formalOperands.map((info) => `${info.label}->${safeFormatAddress(info.actual)}`).join(", ")
+      }.`,
     });
   }
   return proofs;

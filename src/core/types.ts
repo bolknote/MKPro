@@ -905,7 +905,7 @@ export interface IrReport {
   layoutCells: number;
 }
 
-export type CellRole = "exec" | "address" | "constant" | "display-byte" | "overlay" | "dark-entry";
+export type CellRole = "exec" | "address" | "constant" | "display-byte" | "overlay" | "dark-entry" | "formal-address";
 
 export interface CellRoleReport {
   address: string;

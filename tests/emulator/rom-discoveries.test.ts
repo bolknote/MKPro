@@ -1,5 +1,8 @@
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
+import { evaluateIndirectAddress } from "../../src/core/indirect-addressing.ts";
+import { registerIndex } from "../../src/core/opcodes.ts";
+import type { RegisterName } from "../../src/core/types.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -33,6 +36,14 @@ const { MK61, parseProgramText } = require("./mk61.cjs") as {
 };
 
 const CHIP_NAMES = ["ИК1302", "ИК1303", "ИК1306"] as const;
+const MK61_HEX_DIGITS: Record<string, string> = {
+  A: "-",
+  B: "L",
+  C: "С",
+  D: "Г",
+  E: "Е",
+  F: "_",
+};
 
 function sync4(commandWord: number): number {
   return (commandWord >>> 14) & 0xff;
@@ -40,6 +51,10 @@ function sync4(commandWord: number): number {
 
 function hex(code: number): string {
   return code.toString(16).toUpperCase().padStart(2, "0");
+}
+
+function mk61HexLiteral(text: string): string {
+  return [...text.toUpperCase()].map((digit) => MK61_HEX_DIGITS[digit] ?? digit).join("");
 }
 
 function runSingleOpcode(
@@ -71,6 +86,22 @@ function runProgram(codes: number[]) {
   calc.press("С/П");
   const run = calc.runUntilStable({ maxFrames: 500, stableFrames: 5 });
   return {
+    display: calc.displayText(),
+    pc: calc.programCounter(),
+    stopped: run.stopped,
+    frames: run.frames,
+  };
+}
+
+function runProgramWithRegisters(codes: number[], registers: Record<string, string>) {
+  const calc = new MK61();
+  calc.loadProgram(codes);
+  for (const [register, value] of Object.entries(registers)) calc.setRegister(register, value);
+  calc.press("В/О");
+  calc.press("С/П");
+  const run = calc.runUntilStable({ maxFrames: 700, stableFrames: 5 });
+  return {
+    calc,
     display: calc.displayText(),
     pc: calc.programCounter(),
     stopped: run.stopped,
@@ -250,5 +281,93 @@ C6 8
     expect(recall.display).toContain("5");
     expect(store.stopped).toBe(true);
     expect(store.display).toContain("9");
+  });
+
+  it("matches the indirect address model for representative integer flow selectors", () => {
+    for (const { selector, value } of [
+      { selector: "0" as RegisterName, value: "13" },
+      { selector: "4" as RegisterName, value: "11" },
+      { selector: "7" as RegisterName, value: "12" },
+    ]) {
+      const model = evaluateIndirectAddress(selector, value, "flow");
+      expect(model?.actualFlowTarget).toBe(12);
+
+      const program = Array<number>(105).fill(0x50);
+      program[0] = 0x80 + registerIndex(selector);
+      program[1] = 0x09;
+      program[12] = 0x07;
+      program[13] = 0x50;
+      const result = runProgramWithRegisters(program, { [selector]: value });
+
+      expect(result.stopped).toBe(true);
+      expect(result.display).toContain("7");
+      expect(result.display).not.toContain("9");
+      expect(result.calc.readRegister(selector).trim()).toMatch(/^0*12,/u);
+    }
+  });
+
+  it("matches the indirect address model for representative integer memory selectors", () => {
+    for (const { selector, value } of [
+      { selector: "0" as RegisterName, value: "3" },
+      { selector: "4" as RegisterName, value: "1" },
+      { selector: "7" as RegisterName, value: "2" },
+    ]) {
+      const model = evaluateIndirectAddress(selector, value, "memory");
+      expect(model?.memoryTarget).toBe("2");
+
+      const result = runProgramWithRegisters(
+        [0xd0 + registerIndex(selector), 0x50],
+        { [selector]: value, "2": "7" },
+      );
+
+      expect(result.stopped).toBe(true);
+      expect(result.display).toContain("7");
+      expect(result.calc.readRegister(selector).trim()).toMatch(/^0*2,/u);
+    }
+  });
+
+  it("matches the fractional R0 sentinel model for flow and memory", () => {
+    const flowModel = evaluateIndirectAddress("0", "0,5", "flow");
+    const recallModel = evaluateIndirectAddress("0", "0,5", "memory");
+    expect(flowModel?.actualFlowTarget).toBe(99);
+    expect(recallModel?.memoryTarget).toBe("3");
+
+    const flowProgram = Array<number>(105).fill(0x50);
+    flowProgram[0] = 0x80;
+    flowProgram[99] = 0x06;
+    flowProgram[100] = 0x50;
+    const flow = runProgramWithRegisters(flowProgram, { "0": "0,5" });
+    const recall = runProgramWithRegisters([0xd0, 0x50], { "0": "0,5", "3": "8" });
+
+    expect(flow.stopped).toBe(true);
+    expect(flow.display).toContain("6");
+    expect(flow.calc.readRegister("0").trim()).toMatch(/^-99999999,/u);
+    expect(recall.stopped).toBe(true);
+    expect(recall.display).toContain("8");
+    expect(recall.calc.readRegister("0").trim()).toMatch(/^-99999999,/u);
+  });
+
+  it("matches the indirect address model for FA..FF super-dark dispatch", () => {
+    for (let offset = 0; offset <= 5; offset += 1) {
+      const value = (0xfa + offset).toString(16).toUpperCase();
+      const model = evaluateIndirectAddress("7", value, "flow");
+      expect(model?.superDark).toEqual({
+        formal: 0xfa + offset,
+        entryAddress: 48 + offset,
+        continuationAddress: 1 + offset,
+      });
+
+      const marker = offset + 1;
+      const program = Array<number>(105).fill(0x50);
+      program[0] = 0x87;
+      program[1 + offset] = 0x50;
+      program[48 + offset] = marker;
+      program[49 + offset] = 0x09;
+      const result = runProgramWithRegisters(program, { "7": mk61HexLiteral(value) });
+
+      expect(result.stopped).toBe(true);
+      expect(result.display).toContain(String(marker));
+      expect(result.display).not.toContain("9");
+    }
   });
 });
