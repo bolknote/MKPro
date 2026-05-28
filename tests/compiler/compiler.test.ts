@@ -401,6 +401,38 @@ program ClearAfterHit {
     expect(result.report.optimizations.some((item) => item.name === "cell-membership-clear-reuse")).toBe(true);
   });
 
+  it("tests cell membership through a shared bit mask helper before line_count", () => {
+    const result = compileOk(`
+program FoxProbe {
+  field: board(0..9, 0..9)
+  state {
+    cell: coord(field)
+    foxes: cells(field) = random()
+    hit_value: packed = -20
+    bearing: counter 0..9 = 0
+  }
+  screen hit {
+    show hit_value
+  }
+  screen report {
+    show bearing
+  }
+  turn {
+    read cell
+    if cell in foxes {
+      show hit
+    }
+    bearing = line_count(foxes, cell)
+    show report
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "bit-mask-condition-helper")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "spatial-hit-condition-helper")).toBe(false);
+    expect(result.report.steps).toBeLessThanOrEqual(92);
+  });
+
   it("hoists common branch tails before MK-61 code generation", () => {
     const result = compileOk(`
 program CommonBranchTail {

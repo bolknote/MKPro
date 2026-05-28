@@ -31,6 +31,7 @@ import type {
   ConditionAst,
   Diagnostic,
   DispatchCaseAst,
+  DispatchStatementAst,
   ExpressionAst,
   MachineAddressRef,
   MachineFeatureUseReport,
@@ -134,6 +135,13 @@ interface LoweringOptions {
   // bodies stay unchanged; only their physical placement moves behind the
   // startup skip so repeated calls can become backward one-cell indirect calls.
   hoistProcs?: boolean;
+  // Collapse `if E==c1 {..} else if E==c2 {..} ..` chains that test the same
+  // deterministic expression against integer constants into a single-evaluation
+  // dispatch. In an if/else-if chain no body runs between the repeated E
+  // evaluations on the path to a later test, so single evaluation is sound for
+  // any deterministic E; the win is not recomputing a non-trivial E per arm.
+  // Adopted only when it produces fewer cells.
+  canonicalizeIfChains?: boolean;
 }
 
 export function compileMKPro(
@@ -174,6 +182,11 @@ export function compileMKPro(
     { hoistSharedHelpers: true, hoistProcs: true },
     "hoisted-proc-indirect-layout",
     "Hoisted ordinary rule procs to the front so repeated calls become single-cell preloaded indirect flow",
+  );
+  tryCandidate(
+    { canonicalizeIfChains: true },
+    "if-chain-dispatch-canonicalization",
+    "Selected single-evaluation dispatch for a repeated expensive if/else-if selector",
   );
 
   let best = primary;
@@ -240,6 +253,9 @@ function compileMKProOnce(
       name: "expression-constant-folder",
       detail: `Folded ${foldedConstants} constant expression node(s) before code generation.`,
     });
+  }
+  if (loweringOptions.canonicalizeIfChains === true) {
+    canonicalizeConstantIfChains(ast, optimizations);
   }
   hoistOneShotLoopInitializers(ast, optimizations);
   inlineSingleUseConstantGuardedCalls(ast, optimizations);
@@ -566,6 +582,133 @@ function eliminateIdentityAssignments(ast: ProgramAst, optimizations: AppliedOpt
     name: "identity-assignment-elimination",
     detail: `Removed ${removed} identity assignment${removed === 1 ? "" : "s"} before register allocation.`,
   });
+}
+
+// Collapses `if E==c1 {..} else if E==c2 {..} .. else {..}` chains that test the
+// same deterministic expression against distinct integer constants into a single
+// dispatch, so E is evaluated once (and lowered through the cheaper residual
+// compare chain) instead of recomputed on every arm. Sound because no body runs
+// between the repeated E evaluations on the path that reaches a later test.
+function canonicalizeConstantIfChains(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  let converted = 0;
+
+  const transformList = (statements: StatementAst[]): StatementAst[] => statements.map(transformStatement);
+
+  const transformStatement = (statement: StatementAst): StatementAst => {
+    if (statement.kind === "loop") {
+      return { ...statement, body: transformList(statement.body) };
+    }
+    if (statement.kind === "switch" || statement.kind === "dispatch") {
+      return {
+        ...statement,
+        cases: statement.cases.map((entry) => ({ ...entry, body: transformList(entry.body) })),
+        ...(statement.defaultBody === undefined ? {} : { defaultBody: transformList(statement.defaultBody) }),
+      };
+    }
+    if (statement.kind !== "if") return statement;
+
+    const dispatch = buildDispatchFromIfChain(statement);
+    if (dispatch !== undefined) {
+      converted += 1;
+      return {
+        ...dispatch,
+        cases: dispatch.cases.map((entry) => ({ ...entry, body: transformList(entry.body) })),
+        ...(dispatch.defaultBody === undefined ? {} : { defaultBody: transformList(dispatch.defaultBody) }),
+      };
+    }
+    const rewritten: Extract<StatementAst, { kind: "if" }> = {
+      ...statement,
+      thenBody: transformList(statement.thenBody),
+    };
+    if (statement.elseBody !== undefined) rewritten.elseBody = transformList(statement.elseBody);
+    return rewritten;
+  };
+
+  for (const entry of ast.entries) entry.body = transformList(entry.body);
+  for (const proc of ast.procs) proc.body = transformList(proc.body);
+  for (const block of ast.blocks) block.body = transformList(block.body);
+
+  if (converted === 0) return;
+  optimizations.push({
+    name: "if-chain-dispatch-canonicalization",
+    detail: `Collapsed ${converted} constant if/else-if chain${converted === 1 ? "" : "s"} into single-evaluation dispatch.`,
+  });
+}
+
+function buildDispatchFromIfChain(
+  root: Extract<StatementAst, { kind: "if" }>,
+): DispatchStatementAst | undefined {
+  const first = matchEqualityConstantCondition(root.condition);
+  if (first === undefined || !expressionIsDeterministic(first.expr)) return undefined;
+  if (estimateExpressionCost(first.expr) <= 2) return undefined;
+
+  const cases: DispatchCaseAst[] = [];
+  const seen = new Set<number>();
+  let current: Extract<StatementAst, { kind: "if" }> | undefined = root;
+  let defaultBody: StatementAst[] | undefined;
+
+  while (current !== undefined) {
+    const matched = matchEqualityConstantCondition(current.condition);
+    if (matched === undefined || !expressionEquals(matched.expr, first.expr) || seen.has(matched.value)) {
+      defaultBody = [current];
+      break;
+    }
+    seen.add(matched.value);
+    cases.push({ value: numberExpression(matched.value), body: current.thenBody, line: current.line });
+    const elseBody = current.elseBody;
+    if (elseBody === undefined || elseBody.length === 0) {
+      current = undefined;
+      break;
+    }
+    if (elseBody.length === 1 && elseBody[0]!.kind === "if") {
+      current = elseBody[0] as Extract<StatementAst, { kind: "if" }>;
+      continue;
+    }
+    defaultBody = elseBody;
+    current = undefined;
+  }
+
+  if (cases.length < 2) return undefined;
+  return {
+    kind: "dispatch",
+    expr: first.expr,
+    cases,
+    ...(defaultBody === undefined ? {} : { defaultBody }),
+    line: root.line,
+    scratchId: root.line,
+  };
+}
+
+function matchEqualityConstantCondition(
+  condition: ConditionAst,
+): { expr: ExpressionAst; value: number } | undefined {
+  if (condition.op !== "==") return undefined;
+  const rightValue = numericLiteralValue(condition.right);
+  if (rightValue !== undefined && Number.isInteger(rightValue) && numericLiteralValue(condition.left) === undefined) {
+    return { expr: condition.left, value: rightValue };
+  }
+  const leftValue = numericLiteralValue(condition.left);
+  if (leftValue !== undefined && Number.isInteger(leftValue) && numericLiteralValue(condition.right) === undefined) {
+    return { expr: condition.right, value: leftValue };
+  }
+  return undefined;
+}
+
+function expressionIsDeterministic(expr: ExpressionAst): boolean {
+  switch (expr.kind) {
+    case "number":
+    case "identifier":
+      return true;
+    case "unary":
+      return expressionIsDeterministic(expr.expr);
+    case "binary":
+      return expressionIsDeterministic(expr.left) && expressionIsDeterministic(expr.right);
+    case "call": {
+      const name = expr.callee.toLowerCase();
+      if (name === "random" || name === "random_cell") return false;
+      return expr.args.every(expressionIsDeterministic);
+    }
+  }
 }
 
 function hoistOneShotLoopInitializers(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
@@ -1589,16 +1732,22 @@ class EmitContext {
     }
     for (const helper of this.spatialBitMaskHelpers.values()) {
       this.emitLabel(helper.label);
-      this.emitStore(helper.scratch, "bit mask index", helper.line);
-      this.compileExpression({
-        kind: "call",
-        callee: "bit_mask",
-        args: [{ kind: "identifier", name: helper.scratch }],
-      });
+      this.emitNumber("4");
+      this.emitOp(0x13, "/", "bit mask quotient", helper.line);
+      this.emitStore(helper.scratch, "bit mask quotient", helper.line);
+      this.emitOp(0x35, "К {x}", "bit mask remainder fraction", helper.line);
+      this.emitNumber("4");
+      this.emitOp(0x12, "*", "bit mask remainder scale", helper.line);
+      this.emitNumber("2");
+      this.emitOp(0x24, "F x^y", "bit mask power", helper.line);
+      this.emitRecall(helper.scratch, "bit mask quotient", helper.line);
+      this.emitOp(0x34, "К [x]", "bit mask digit index", helper.line);
+      this.emitOp(0x15, "F 10^x", "bit mask decade", helper.line);
+      this.emitOp(0x12, "*", "bit mask value", helper.line);
       this.emitOp(0x52, "В/О", "bit_mask return", helper.line);
       this.optimizations.push({
         name: "bit-mask-helper",
-        detail: `Emitted shared bit_mask helper using ${helper.scratch}.`,
+        detail: `Emitted shared bit_mask helper using ${helper.scratch} with quotient reuse.`,
       });
     }
     for (const helper of this.spatialHitHelpers.values()) {
@@ -3315,17 +3464,17 @@ class EmitContext {
     if (this.compileNearAnyHelperCondition(compiledCondition, falseLabel, line, preloadedConstants)) return;
     if (this.compileSmallSetCondition(compiledCondition, falseLabel, line, preloadedConstants)) return;
     if (isZeroExpression(compiledCondition.right) && canTestAgainstZeroDirectly(compiledCondition.op)) {
-      const usedSpatialHit = this.compileBitHasConditionWithSpatialHelper(compiledCondition.left, line);
-      if (!usedSpatialHit) {
+      const bitHasLowering = this.compileBitHasConditionWithBitMaskHelper(compiledCondition.left, line)
+        ?? this.compileBitHasConditionWithSpatialHelper(compiledCondition.left, line);
+      if (bitHasLowering === undefined) {
         this.compileExpression(compiledCondition.left);
       }
       const opcode = directTestOpcode(compiledCondition.op);
       this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${condition.op}`, line);
       this.optimizations.push({
-        name: usedSpatialHit ? "spatial-hit-condition-helper" : "zero-condition-test",
-        detail: usedSpatialHit
-          ? `Tested bit_has() through the shared spatial hit helper at line ${line}.`
-          : `Tested ${compiledCondition.op} 0 without materializing a zero literal at line ${line}.`,
+        name: bitHasLowering?.name ?? "zero-condition-test",
+        detail: bitHasLowering?.detail
+          ?? `Tested ${compiledCondition.op} 0 without materializing a zero literal at line ${line}.`,
       });
       return;
     }
@@ -3349,6 +3498,77 @@ class EmitContext {
             : 0x57;
     const mnemonic = getOpcode(opcode).name;
     this.emitJump(opcode, mnemonic, falseLabel, `false branch for ${compiledCondition.op}`, line);
+  }
+
+  private compileBitHasConditionWithBitMaskHelper(
+    expr: ExpressionAst,
+    line: number,
+  ): { name: string; detail: string } | undefined {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_has" || expr.args.length !== 2) return undefined;
+    const [mask, index] = expr.args;
+    if (mask?.kind !== "identifier" || index === undefined) return undefined;
+    if (!programHasLineCountForMask(this.ast, mask.name)) return undefined;
+    const scratch = spatialHitScratchName(mask.name);
+    if (!this.allocation.registers[scratch]) return undefined;
+    const helper = this.ensureSpatialBitMaskHelper(scratch, line);
+    this.compileExpression(index);
+    this.emitJump(0x53, "ПП", helper.label, "bit_mask helper", line);
+    this.compileExpression(mask);
+    this.emitOp(0x37, "К ∧", "bit membership test", line);
+    return {
+      name: "bit-mask-condition-helper",
+      detail: `Tested bit_has() through the shared bit_mask helper at line ${line}.`,
+    };
+  }
+
+  private compileBitHasConditionWithSpatialHelper(
+    expr: ExpressionAst,
+    line: number,
+  ): { name: string; detail: string } | undefined {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_has" || expr.args.length !== 2) return undefined;
+    const [mask, index] = expr.args;
+    if (mask?.kind !== "identifier" || index === undefined) return undefined;
+    const scratch = spatialHitScratchName(mask.name);
+    if (!this.allocation.registers[scratch]) return undefined;
+    const helper = this.ensureSpatialHitHelper(mask.name, scratch);
+    this.compileExpression(index);
+    this.emitJump(0x53, "ПП", helper.label, `spatial hit ${mask.name}`, line);
+    return {
+      name: "spatial-hit-condition-helper",
+      detail: `Tested bit_has() through the shared spatial hit helper at line ${line}.`,
+    };
+  }
+
+  private compileEqualityWithCurrentX(
+    condition: ConditionAst,
+    falseLabel: string,
+    line: number,
+  ): boolean {
+    if (condition.op !== "==" && condition.op !== "!=") return false;
+    const reused = this.currentXVariable;
+    if (
+      condition.right.kind === "identifier" &&
+      condition.right.name === reused &&
+      isSimpleStackLoad(condition.left)
+    ) {
+      this.compileExpression(condition.left);
+    } else if (
+      condition.left.kind === "identifier" &&
+      condition.left.name === reused &&
+      isSimpleStackLoad(condition.right)
+    ) {
+      this.compileExpression(condition.right);
+    } else {
+      return false;
+    }
+    this.emitOp(0x11, "-", "condition compare", line);
+    const opcode = condition.op === "==" ? 0x5e : 0x57;
+    this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${condition.op}`, line);
+    this.optimizations.push({
+      name: "condition-current-x-reuse",
+      detail: `Reused ${reused} already in X for equality comparison at line ${line}.`,
+    });
+    return true;
   }
 
   private compileNearAnyHelperCondition(
@@ -3499,50 +3719,6 @@ class EmitContext {
     this.emitOp(0x14, "X↔Y", "place threshold value above negative-zero sentinel", line);
     this.emitOp(0x12, "*", "negative-zero threshold zero-through", line);
     this.emitOp(0x0e, "В↑", "normalize negative-zero threshold result", line);
-  }
-
-  private compileBitHasConditionWithSpatialHelper(expr: ExpressionAst, line: number): boolean {
-    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_has" || expr.args.length !== 2) return false;
-    const [mask, index] = expr.args;
-    if (mask?.kind !== "identifier" || index === undefined) return false;
-    const scratch = spatialHitScratchName(mask.name);
-    if (!this.allocation.registers[scratch]) return false;
-    const helper = this.ensureSpatialHitHelper(mask.name, scratch);
-    this.compileExpression(index);
-    this.emitJump(0x53, "ПП", helper.label, `spatial hit ${mask.name}`, line);
-    return true;
-  }
-
-  private compileEqualityWithCurrentX(
-    condition: ConditionAst,
-    falseLabel: string,
-    line: number,
-  ): boolean {
-    if (condition.op !== "==" && condition.op !== "!=") return false;
-    const reused = this.currentXVariable;
-    if (
-      condition.right.kind === "identifier" &&
-      condition.right.name === reused &&
-      isSimpleStackLoad(condition.left)
-    ) {
-      this.compileExpression(condition.left);
-    } else if (
-      condition.left.kind === "identifier" &&
-      condition.left.name === reused &&
-      isSimpleStackLoad(condition.right)
-    ) {
-      this.compileExpression(condition.right);
-    } else {
-      return false;
-    }
-    this.emitOp(0x11, "-", "condition compare", line);
-    const opcode = condition.op === "==" ? 0x5e : 0x57;
-    this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${condition.op}`, line);
-    this.optimizations.push({
-      name: "condition-current-x-reuse",
-      detail: `Reused ${reused} already in X for equality comparison at line ${line}.`,
-    });
-    return true;
   }
 
   private compileExpression(expr: ExpressionAst): void {
@@ -5300,6 +5476,65 @@ function countCalls(ast: ProgramAst, name: string): number {
   for (const proc of ast.procs) visitStatements(proc.body);
   for (const block of ast.blocks) visitStatements(block.body);
   return count;
+}
+
+function programHasLineCountForMask(ast: ProgramAst, maskName: string): boolean {
+  let found = false;
+  const visitExpr = (expr: ExpressionAst): void => {
+    if (found) return;
+    if (
+      expr.kind === "call" &&
+      expr.callee.toLowerCase() === "line_count" &&
+      expr.args[0]?.kind === "identifier" &&
+      expr.args[0].name === maskName
+    ) {
+      found = true;
+      return;
+    }
+    if (expr.kind === "unary") visitExpr(expr.expr);
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+    }
+    if (expr.kind === "call") {
+      for (const arg of expr.args) visitExpr(arg);
+    }
+  };
+  const visitStatements = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (found) return;
+      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+      if (statement.kind === "assign") visitExpr(statement.expr);
+      if (statement.kind === "if") {
+        visitExpr(statement.condition.left);
+        visitExpr(statement.condition.right);
+        visitStatements(statement.thenBody);
+        if (statement.elseBody) visitStatements(statement.elseBody);
+      }
+      if (statement.kind === "loop") visitStatements(statement.body);
+      if (statement.kind === "switch") {
+        visitExpr(statement.expr);
+        for (const switchCase of statement.cases) {
+          visitExpr(switchCase.value);
+          visitStatements(switchCase.body);
+        }
+        if (statement.defaultBody) visitStatements(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          visitExpr(dispatchCase.value);
+          visitStatements(dispatchCase.body);
+        }
+        if (statement.defaultBody) visitStatements(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visitStatements(entry.body);
+  for (const proc of ast.procs) visitStatements(proc.body);
+  for (const block of ast.blocks) visitStatements(block.body);
+  return found;
 }
 
 function collectLineCountGroupCounts(ast: ProgramAst): Map<string, number> {

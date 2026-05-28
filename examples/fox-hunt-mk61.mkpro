@@ -11,16 +11,16 @@ program FoxHuntMK61 {
   state {
     cell: coord(field)
     foxes: cells(field) = random()
-    remaining_foxes: counter 1..9 = 9
     bearing: counter 0..9 = 0
+    hit_value: packed = -20
+  }
+
+  screen hit {
+    show hit_value
   }
 
   screen report {
     show bearing
-  }
-
-  rule all_found {
-    stop -8
   }
 
   turn {
@@ -29,23 +29,13 @@ program FoxHuntMK61 {
     if cell in foxes {
       found_fox
     }
-    else {
-      scan_from_cell
-    }
 
+    scan_from_cell
     show report
   }
 
   rule found_fox {
-    foxes -= cell
-    remaining_foxes--
-
-    if remaining_foxes <= 0 {
-      all_found
-    }
-    else {
-      bearing = -remaining_foxes
-    }
+    show hit
   }
 
   rule scan_from_cell {
