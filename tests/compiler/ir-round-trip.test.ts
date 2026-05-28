@@ -18,8 +18,8 @@ function exampleFiles(): string[] {
     .map((name) => resolve(dir, name));
 }
 
-function spatialDraftFiles(): string[] {
-  const dir = resolve("examples/spatial-drafts");
+function pendingOptimizerFiles(): string[] {
+  const dir = resolve("examples/pending-optimizer");
   return readdirSync(dir)
     .filter((name) => name.endsWith(".mkpro"))
     .map((name) => resolve(dir, name));
@@ -51,10 +51,10 @@ describe("ir round-trip", () => {
     });
   }
 
-  for (const file of spatialDraftFiles()) {
-    it(`rejects spatial draft ${file.split("/").pop()} before IR round-trip`, () => {
+  for (const file of pendingOptimizerFiles()) {
+    it(`keeps pending optimizer ${file.split("/").pop()} out of IR round-trip`, () => {
       const source = readFileSync(file, "utf8");
-      expect(() => compileMKPro(source)).toThrow(/real rule lowerers before code generation/u);
+      expect(() => compileMKPro(source, { budget: 999 })).not.toThrow(/real rule lowerers before code generation/u);
     });
   }
 

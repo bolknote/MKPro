@@ -343,6 +343,7 @@ var MKProEmulatorBundle = (() => {
     if (item.name === "\u041A |x|") aliases.add("K|x|");
     if (item.name === "\u041A [x]") aliases.add("K[x]");
     if (item.name === "\u041A {x}") aliases.add("K{x}");
+    if (item.name === "F \u0412x") aliases.add("FBx");
     if (item.name === "\u0421/\u041F") aliases.add("STOP");
     if (item.name === "\u0412/\u041E") aliases.add("RTN");
     return [...aliases].map(normalizeName);
@@ -989,10 +990,9 @@ var MKProEmulatorBundle = (() => {
     const contains = /^(.+?)\s+in\s+([A-Za-z_][\w]*)$/u.exec(text);
     if (contains) {
       return {
-        kind: "v2_compare",
-        left: contains[2].trim(),
-        op: ">=",
-        right: contains[1].trim()
+        kind: "v2_contains",
+        collection: contains[2].trim(),
+        item: contains[1].trim()
       };
     }
     const compare = /^(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)$/u.exec(text);
@@ -1073,17 +1073,26 @@ var MKProEmulatorBundle = (() => {
     const ruleParams = collectV2RuleParams(v2);
     const rules = collectV2Rules(v2);
     const specializedRules = selectV2RuleSpecializations(v2, rules);
+    const stateDomains = new Map(
+      v2.state.filter((field) => field.domain !== void 0).map((field) => [field.name, field.domain])
+    );
+    const cellMapNames = collectV2CellMapNames(v2, stateDomains);
     validateV2Domains(v2);
     validateV2References(v2, { screens, ruleParams });
     const context = {
       ruleParams,
       rules,
       specializedRules,
-      moveDeltas: collectV2MoveDeltas(v2)
+      moveDeltas: collectV2MoveDeltas(v2),
+      stateTypes: new Map(v2.state.map((field) => [field.name, field.type])),
+      stateDomains,
+      cellMapNames,
+      boards: new Map(v2.boards.map((board) => [board.name, board])),
+      worlds: new Map(v2.worlds.map((world) => [world.name, world]))
     };
     return {
       domains: lowerV2Domains(v2),
-      states: lowerV2State(v2, specializedRules),
+      states: lowerV2State(v2, specializedRules, cellMapNames, context),
       displays: v2.screens.map(lowerV2Screen),
       entries: [lowerV2Entry(v2, context)],
       procs: [
@@ -1285,6 +1294,88 @@ var MKProEmulatorBundle = (() => {
     }
     return deltas;
   }
+  function collectV2CellMapNames(v2, stateDomains) {
+    const explicit = v2.state.find((field) => field.type === "packed" && /^(?:plan|map)$/iu.test(field.name));
+    const byDomain = /* @__PURE__ */ new Map();
+    const addDomain = (domain) => {
+      if (byDomain.has(domain)) return;
+      const domainSpecific = v2.state.find(
+        (field) => field.type === "packed" && new RegExp(`^${escapeRegExp(domain)}_(?:plan|map)$`, "iu").test(field.name)
+      );
+      byDomain.set(domain, domainSpecific?.name ?? explicit?.name ?? `__cell_map_${domain}`);
+    };
+    for (const text of collectV2ExpressionTexts(v2)) {
+      for (const args of findSpatialCalls(text, "cell_at")) {
+        if (args.length === 2) {
+          addDomain(args[0]);
+          continue;
+        }
+        if (args.length === 1) {
+          const domain = stateDomains.get(args[0]);
+          if (domain !== void 0) addDomain(domain);
+        }
+      }
+    }
+    return byDomain;
+  }
+  function collectV2ExpressionTexts(v2) {
+    const texts = [];
+    const visit = (statements) => {
+      for (const statement of statements) {
+        switch (statement.kind) {
+          case "v2_assign":
+            texts.push(statement.expr);
+            break;
+          case "v2_update":
+            texts.push(statement.expr);
+            break;
+          case "v2_stop":
+            texts.push(statement.value);
+            break;
+          case "v2_if":
+            if (statement.predicate.kind === "v2_contains") {
+              texts.push(statement.predicate.collection, statement.predicate.item);
+            } else {
+              texts.push(statement.predicate.left, statement.predicate.right);
+            }
+            visit(statement.thenBody);
+            if (statement.elseBody !== void 0) visit(statement.elseBody);
+            break;
+          case "v2_challenge":
+            texts.push(statement.expr);
+            visit(statement.successBody);
+            if (statement.failureBody !== void 0) visit(statement.failureBody);
+            break;
+          case "v2_match":
+            texts.push(statement.expr);
+            for (const matchCase of statement.cases) {
+              texts.push(...matchCase.values);
+              visit([matchCase.action]);
+            }
+            if (statement.otherwise !== void 0) visit([statement.otherwise]);
+            break;
+          case "v2_invoke":
+            texts.push(...statement.args);
+            break;
+          case "v2_move":
+          case "v2_show":
+          case "v2_read":
+          case "v2_raw":
+            break;
+        }
+      }
+    };
+    if (v2.turn !== void 0) visit(v2.turn.body);
+    for (const rule of v2.rules) visit(rule.body);
+    for (const table of v2.encounters) {
+      texts.push(table.expr);
+      for (const encounterCase of table.cases) {
+        texts.push(encounterCase.value);
+        visit(encounterCase.body);
+      }
+    }
+    return texts;
+  }
   function moveDeltasForEncoding(encoding) {
     if (encoding === "packed_decimal_zero_run") {
       return {
@@ -1375,7 +1466,7 @@ var MKProEmulatorBundle = (() => {
     }
     return domains;
   }
-  function lowerV2State(v2, specializedRules) {
+  function lowerV2State(v2, specializedRules, cellMapNames, context) {
     const fields = [];
     for (const field of v2.state) {
       const lowered = {
@@ -1390,7 +1481,7 @@ var MKProEmulatorBundle = (() => {
         if (stackSource !== void 0) {
           lowered.initialStack = stackSource;
         } else {
-          lowered.initial = lowerV2InitialExpression(field);
+          lowered.initial = lowerV2InitialExpression(field, context);
         }
       }
       fields.push(lowered);
@@ -1400,6 +1491,16 @@ var MKProEmulatorBundle = (() => {
       if (declared.has(scratch.name)) continue;
       declared.add(scratch.name);
       fields.push(scratch);
+    }
+    for (const mapName of cellMapNames.values()) {
+      if (!mapName.startsWith("__cell_map_") || declared.has(mapName)) continue;
+      declared.add(mapName);
+      fields.push({
+        name: mapName,
+        type: "packed",
+        initial: lowerV2Expression("int(random() * 999999999) + 1", v2.line),
+        line: v2.line
+      });
     }
     return fields.length > 0 ? [{ kind: "state", name: v2.name, fields, line: v2.line }] : [];
   }
@@ -1440,12 +1541,12 @@ var MKProEmulatorBundle = (() => {
       }
     }
   }
-  function lowerV2InitialExpression(field) {
+  function lowerV2InitialExpression(field, context) {
     const initial = field.initial ?? "0";
     if (field.type === "cells" && initial.trim() === "random()") {
-      return lowerV2Expression("random() * 999", field.line);
+      return lowerV2Expression("int(random() * 999)", field.line);
     }
-    return lowerV2Expression(initial, field.line);
+    return lowerV2Expression(initial, field.line, context);
   }
   function lowerV2StateFieldType(type) {
     if (type === "counter") return "range";
@@ -1489,9 +1590,9 @@ var MKProEmulatorBundle = (() => {
   function lowerV2EncounterDispatch(table, context) {
     return {
       kind: "dispatch",
-      expr: lowerV2Expression(encounterParamName(table.expr), table.line),
+      expr: lowerV2Expression(encounterParamName(table.expr), table.line, context),
       cases: table.cases.map((encounterCase) => ({
-        value: lowerV2Expression(encounterCase.value, encounterCase.line),
+        value: lowerV2Expression(encounterCase.value, encounterCase.line, context),
         body: lowerV2Statements(encounterCase.body, context),
         line: encounterCase.line
       })),
@@ -1524,11 +1625,11 @@ var MKProEmulatorBundle = (() => {
           line: statement.line
         }];
       case "v2_stop":
-        return [{ kind: "halt", expr: lowerV2Expression(statement.value, statement.line), line: statement.line }];
+        return [{ kind: "halt", expr: lowerV2Expression(statement.value, statement.line, context), line: statement.line }];
       case "v2_invoke":
         return lowerV2Invoke(statement, context);
       case "v2_if": {
-        const condition = lowerV2Predicate(statement.predicate, statement.line);
+        const condition = lowerV2Predicate(statement.predicate, statement.line, context);
         const lowered = {
           kind: "if",
           condition,
@@ -1543,8 +1644,16 @@ var MKProEmulatorBundle = (() => {
       case "v2_move":
         return lowerV2Move(statement, context);
       case "v2_assign":
-        return [{ kind: "assign", target: statement.target, expr: lowerV2Expression(statement.expr, statement.line), line: statement.line }];
+        return [{ kind: "assign", target: statement.target, expr: lowerV2Expression(statement.expr, statement.line, context), line: statement.line }];
       case "v2_update": {
+        if (context.stateTypes.get(statement.target) === "cells") {
+          return [{
+            kind: "assign",
+            target: statement.target,
+            expr: lowerV2Expression(cellSetUpdateExpression(statement.target, statement.expr, statement.op, context), statement.line, context),
+            line: statement.line
+          }];
+        }
         return [{
           kind: "assign",
           target: statement.target,
@@ -1552,7 +1661,7 @@ var MKProEmulatorBundle = (() => {
             kind: "binary",
             op: statement.op === "+=" ? "+" : "-",
             left: { kind: "identifier", name: statement.target },
-            right: lowerV2Expression(statement.expr, statement.line)
+            right: lowerV2Expression(statement.expr, statement.line, context)
           },
           line: statement.line
         }];
@@ -1562,7 +1671,7 @@ var MKProEmulatorBundle = (() => {
           kind: "core",
           inputs: statement.inputs.map((input) => ({
             slot: input.slot,
-            expr: lowerV2Expression(input.expr, input.line),
+            expr: lowerV2Expression(input.expr, input.line, context),
             line: input.line
           })),
           outputs: statement.outputs.map((output) => ({
@@ -1580,12 +1689,28 @@ var MKProEmulatorBundle = (() => {
         return [lowerV2Match(statement, context)];
     }
   }
-  function lowerV2Predicate(predicate, line) {
+  function lowerV2Predicate(predicate, line, context) {
+    if (predicate.kind === "v2_contains") {
+      return {
+        left: lowerV2Expression(cellMembershipExpression(predicate.collection, predicate.item, context), line, context),
+        op: "!=",
+        right: lowerV2Expression("0", line, context)
+      };
+    }
     return {
-      left: lowerV2Expression(predicate.left, line),
+      left: lowerV2Expression(predicate.left, line, context),
       op: predicate.op,
-      right: lowerV2Expression(predicate.right, line)
+      right: lowerV2Expression(predicate.right, line, context)
     };
+  }
+  function cellSetUpdateExpression(collection, item, op, context) {
+    const mask = cellMaskExpressionForCollection(collection, item, context);
+    if (mask === void 0) return `${op === "+=" ? "bit_set" : "bit_clear"}(${collection}, ${item})`;
+    return op === "+=" ? `bit_or(${collection}, ${mask})` : `bit_and(${collection}, bit_not(${mask}))`;
+  }
+  function cellMembershipExpression(collection, item, context) {
+    const mask = cellMaskExpressionForCollection(collection, item, context);
+    return mask === void 0 ? `bit_has(${collection}, ${item})` : `bit_and(${collection}, ${mask})`;
   }
   function lowerV2Challenge(statement, context) {
     const failureBody = statement.failureBody ?? [{ kind: "v2_show", target: "0", line: statement.line }];
@@ -1593,7 +1718,7 @@ var MKProEmulatorBundle = (() => {
       {
         kind: "assign",
         target: statement.challengeTarget,
-        expr: lowerV2Expression(`memory_code(${statement.expr})`, statement.line),
+        expr: lowerV2Expression(statement.expr, statement.line, context),
         line: statement.line
       },
       { kind: "show", display: statement.warningScreen, line: statement.line },
@@ -1625,7 +1750,7 @@ var MKProEmulatorBundle = (() => {
         kind: "binary",
         op: "+",
         left: { kind: "identifier", name: statement.target },
-        right: lowerV2Expression(delta, statement.line)
+        right: lowerV2Expression(delta, statement.line, context)
       },
       line: statement.line
     };
@@ -1655,7 +1780,7 @@ var MKProEmulatorBundle = (() => {
     for (const matchCase of statement.cases) {
       for (const value of matchCase.values) {
         cases.push({
-          value: lowerV2Expression(value, matchCase.line),
+          value: lowerV2Expression(value, matchCase.line, context),
           body: lowerV2MatchAction(matchCase.action, context, statement.expr, value, matchCase.line),
           line: matchCase.line
         });
@@ -1663,7 +1788,7 @@ var MKProEmulatorBundle = (() => {
     }
     const lowered = {
       kind: "dispatch",
-      expr: lowerV2Expression(statement.expr, statement.line),
+      expr: lowerV2Expression(statement.expr, statement.line, context),
       cases,
       line: statement.line,
       scratchId: statement.line
@@ -1680,35 +1805,54 @@ var MKProEmulatorBundle = (() => {
     if (!directionalCases.every((matchCase) => sameInvoke(matchCase.action, action))) return void 0;
     const params = context.ruleParams.get(action.name) ?? [];
     if (params.length === 0) return void 0;
+    const needsGuard = statement.otherwise === void 0 || !isDirectionInvoke(statement.otherwise, statement.expr);
+    if (needsGuard && directionalValueCount < 5) return void 0;
     const cases = [];
     for (const matchCase of statement.cases) {
       if (directionalCases.includes(matchCase)) continue;
       for (const value of matchCase.values) {
         cases.push({
-          value: lowerV2Expression(value, matchCase.line),
+          value: lowerV2Expression(value, matchCase.line, context),
           body: lowerV2MatchAction(matchCase.action, context, statement.expr, value, matchCase.line),
           line: matchCase.line
         });
       }
     }
-    const defaultBody = [
+    const directionBody = [
       {
         kind: "assign",
         target: params[0],
-        expr: lowerV2Expression(`direction(${statement.expr})`, statement.line),
+        expr: lowerV2Expression(`direction(${statement.expr})`, statement.line, context),
         line: statement.line
       },
       { kind: "call", block: action.name, line: action.line }
     ];
+    const defaultBody = needsGuard ? [{
+      kind: "if",
+      condition: {
+        left: lowerV2Expression(directionKeyGuardExpression(statement.expr), statement.line, context),
+        op: "==",
+        right: lowerV2Expression("0", statement.line, context)
+      },
+      thenBody: directionBody,
+      ...statement.otherwise === void 0 ? {} : { elseBody: lowerV2Statement(statement.otherwise, context) },
+      line: statement.line
+    }] : directionBody;
     return {
       kind: "dispatch",
-      expr: lowerV2Expression(statement.expr, statement.line),
+      expr: lowerV2Expression(statement.expr, statement.line, context),
       name: "direction_dispatch",
       cases,
       defaultBody,
       line: statement.line,
       scratchId: statement.line
     };
+  }
+  function directionKeyGuardExpression(expr) {
+    const key = `(${expr})`;
+    const cardinal = `(abs(${key} - 5) - 1) * (abs(${key} - 5) - 3)`;
+    const vertical = `abs(${key}) - 5`;
+    return `(${cardinal}) * (${vertical})`;
   }
   function isDirectionInvoke(action, matchExpr) {
     if (action.kind !== "v2_invoke") return false;
@@ -1734,7 +1878,7 @@ var MKProEmulatorBundle = (() => {
       statements.push({
         kind: "assign",
         target: params[index],
-        expr: lowerV2Expression(arg, line),
+        expr: lowerV2Expression(arg, line, context),
         line
       });
     }
@@ -1752,7 +1896,7 @@ var MKProEmulatorBundle = (() => {
       statements.push({
         kind: "assign",
         target: params[index],
-        expr: lowerV2Expression(statement.args[index], statement.line),
+        expr: lowerV2Expression(statement.args[index], statement.line, context),
         line: statement.line
       });
     }
@@ -1816,6 +1960,13 @@ var MKProEmulatorBundle = (() => {
     }
   }
   function substituteV2Predicate(predicate, replacements) {
+    if (predicate.kind === "v2_contains") {
+      return {
+        ...predicate,
+        collection: substituteV2Text(predicate.collection, replacements),
+        item: substituteV2Text(predicate.item, replacements)
+      };
+    }
     return {
       ...predicate,
       left: substituteV2Text(predicate.left, replacements),
@@ -1846,9 +1997,104 @@ var MKProEmulatorBundle = (() => {
     }
     return arg;
   }
-  function lowerV2Expression(text, line) {
-    const normalized = normalizeV2ExpressionText(text);
+  function lowerV2Expression(text, line, context) {
+    const normalized = normalizeV2ExpressionText(rewriteSpatialExpressionText(text, context));
     return parseExpression(normalized, line);
+  }
+  function rewriteSpatialExpressionText(text, context) {
+    if (context === void 0) return text;
+    let rewritten = replaceSpatialCall(text, "random_cell", (args) => {
+      if (args.length !== 1) return void 0;
+      return randomCellExpression(args[0], context);
+    });
+    rewritten = replaceSpatialCall(rewritten, "cell_at", (args) => cellAtExpression(args, context));
+    return rewritten;
+  }
+  function replaceSpatialCall(text, name, replacer) {
+    const pattern = new RegExp(`\\b${name}\\s*\\(([^()]*)\\)`, "gu");
+    return text.replace(pattern, (match, rawArgs) => replacer(splitArgs(rawArgs)) ?? match);
+  }
+  function findSpatialCalls(text, name) {
+    const pattern = new RegExp(`\\b${name}\\s*\\(([^()]*)\\)`, "gu");
+    return [...text.matchAll(pattern)].map((match) => splitArgs(match[1]));
+  }
+  function cellAtExpression(args, context) {
+    const [domain, pos] = cellAtDomainAndPosition(args, context);
+    if (domain === void 0 || pos === void 0) return void 0;
+    const map = context.cellMapNames.get(domain) ?? `__cell_map_${domain}`;
+    return `digit_at(${map}, ${cellAtIndexExpression(pos, domain, context)})`;
+  }
+  function cellAtDomainAndPosition(args, context) {
+    if (args.length === 2) return [args[0], args[1]];
+    if (args.length !== 1) return [void 0, void 0];
+    return [context.stateDomains.get(args[0]), args[0]];
+  }
+  function cellAtIndexExpression(pos, domain, context) {
+    const world = context.worlds.get(domain);
+    switch (world?.position?.encoding) {
+      case "row_scan":
+      case "floor_plan":
+      case "decimal_player":
+      case "pier_to_ship":
+        return decimalOnesExpression(pos);
+      case "corridor_plan":
+      case "packed_decimal_zero_run":
+      case "cockpit_perspective":
+      case void 0:
+        return pos;
+    }
+    return pos;
+  }
+  function boardForCells(mask, context) {
+    const domain = context.stateDomains.get(mask.trim());
+    return domain === void 0 ? void 0 : context.boards.get(domain);
+  }
+  function oneDimensionalCellMaskExpression(mask, cell, context) {
+    const board = boardForCells(mask, context);
+    if (board === void 0) return void 0;
+    if (board.height === 1 && board.xMin >= 0 && board.xMax <= 7) return `pow10(${cell})`;
+    if (board.width === 1 && board.yMin >= 0 && board.yMax <= 7) return `pow10(${cell})`;
+    return void 0;
+  }
+  function cellMaskExpressionForCollection(mask, cell, context) {
+    return oneDimensionalCellMaskExpression(mask, cell, context);
+  }
+  function decimalOnesExpression(expr) {
+    return `(${expr}) - 10 * int((${expr}) / 10)`;
+  }
+  function randomCellExpression(domain, context) {
+    const board = context.boards.get(domain);
+    if (board !== void 0) return randomBoardCellExpression(board);
+    const world = context.worlds.get(domain);
+    if (world !== void 0) return randomWorldCellExpression(world);
+    return "int(random() * 9) + 1";
+  }
+  function randomBoardCellExpression(board) {
+    if (board.height === 1) return addOffsetExpression(`int(random() * ${board.width})`, board.xMin);
+    if (board.width === 1) return addOffsetExpression(`int(random() * ${board.height})`, board.yMin);
+    const x = addOffsetExpression(`int(random() * ${board.width})`, board.xMin);
+    const y = addOffsetExpression(`int(random() * ${board.height})`, board.yMin);
+    return `${x} + 10 * (${y})`;
+  }
+  function randomWorldCellExpression(world) {
+    switch (world.position?.encoding) {
+      case "pier_to_ship":
+        return "int(random() * 8) + 1";
+      case "cockpit_perspective":
+      case "corridor_plan":
+      case "decimal_player":
+      case "floor_plan":
+      case "packed_decimal_zero_run":
+      case "row_scan":
+      case void 0:
+        return "int(random() * 9) + 1";
+    }
+    return "int(random() * 9) + 1";
+  }
+  function addOffsetExpression(expr, offset) {
+    if (offset === 0) return expr;
+    if (offset > 0) return `${expr} + ${offset}`;
+    return `${expr} - ${Math.abs(offset)}`;
   }
   function normalizeV2ExpressionText(text) {
     return text.trim().replace(/\b([A-Za-z_][\w]*)\.floor\b/gu, "int($1 / 100)");
@@ -2583,8 +2829,10 @@ var MKProEmulatorBundle = (() => {
         buffer.push(op);
         continue;
       }
-      if (op.kind === "return" && buffer.length >= 3) {
+      if (buffer.length >= 3 && op.kind === "return") {
         blocks.push({ startIndex: start, ops: [...buffer, op] });
+      } else if (buffer.length >= 3 && op.kind === "stop" && ops[i + 1]?.kind === "return") {
+        blocks.push({ startIndex: start, ops: [...buffer, op, ops[i + 1]] });
       }
       start = -1;
       buffer = [];
@@ -2597,6 +2845,7 @@ var MKProEmulatorBundle = (() => {
       if (op.kind === "recall") return `r:${op.register}`;
       if (op.kind === "plain") return `p:${op.opcode.toString(16)}`;
       if (op.kind === "stop") return `stop:${op.semantic}`;
+      if (op.kind === "return") return "return";
       return `o:${op.kind}`;
     }).join("|");
   }
@@ -2699,6 +2948,14 @@ var MKProEmulatorBundle = (() => {
   function buildSuccessors(ops) {
     const { labelIndex, addressIndex } = buildTargetIndexes(ops);
     const successors = Array.from({ length: ops.length }, () => []);
+    const callReturns = [];
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      const next = i + 1;
+      if ((op.kind === "call" || op.kind === "indirect-call") && next < ops.length) {
+        callReturns.push(next);
+      }
+    }
     for (let i = 0; i < ops.length; i += 1) {
       const op = ops[i];
       const next = i + 1;
@@ -2728,6 +2985,7 @@ var MKProEmulatorBundle = (() => {
           fallthrough();
           break;
         case "return":
+          successors[i].push(...callReturns);
           break;
         case "jump":
           jumpTo(op.target);
@@ -3967,7 +4225,7 @@ var MKProEmulatorBundle = (() => {
       }
       if (!hasIntermediateContent) continue;
       const overlaps = removeRanges.some(
-        (range) => !(end <= range.start || start >= range.end)
+        (range2) => !(end <= range2.start || start >= range2.end)
       );
       if (overlaps) continue;
       removeRanges.push({ start, end });
@@ -3977,14 +4235,15 @@ var MKProEmulatorBundle = (() => {
       return { ops: [...ops], applied: 0, optimizations: [] };
     }
     const shouldRemove = new Array(ops.length).fill(false);
-    for (const range of removeRanges) {
-      for (let i = range.start; i < range.end; i += 1) shouldRemove[i] = true;
+    for (const range2 of removeRanges) {
+      for (let i = range2.start; i < range2.end; i += 1) shouldRemove[i] = true;
     }
     const result = [];
     for (let i = 0; i < ops.length; i += 1) {
-      if (!shouldRemove[i]) result.push(ops[i]);
+      const op = ops[i];
+      if (!shouldRemove[i] || op.kind === "label") result.push(op);
     }
-    const totalCells = removeRanges.reduce((acc, range) => acc + (range.end - range.start), 0);
+    const totalCells = removeRanges.reduce((acc, range2) => acc + (range2.end - range2.start), 0);
     return {
       ops: result,
       applied,
@@ -4299,6 +4558,213 @@ var MKProEmulatorBundle = (() => {
     layoutSafe: false
   };
 
+  // src/core/passes/tail-call.ts
+  var run17 = (ops) => {
+    const tailJumpTargets = findTailJumpTargets(ops);
+    const returnContinuations = collectReturnContinuations(ops, tailJumpTargets);
+    const returnLabels = collectReturnLabels(ops);
+    const result = [];
+    let applied = 0;
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (op.kind === "label") {
+        result.push(op);
+        continue;
+      }
+      const next = ops[index + 1];
+      if (op.kind === "return") {
+        const continuation = returnContinuations.get(index);
+        if (continuation !== void 0) {
+          const meta = {
+            mnemonic: "\u0411\u041F",
+            comment: op.meta.comment?.replace(/^implicit return from proc/u, "tail continuation") ?? "tail continuation"
+          };
+          if (op.meta.sourceLine !== void 0) meta.sourceLine = op.meta.sourceLine;
+          result.push({
+            kind: "jump",
+            target: continuation,
+            opcode: 81,
+            meta,
+            targetMeta: { comment: "tail continuation" }
+          });
+          applied += 1;
+          continue;
+        }
+      }
+      if (op.kind === "call") {
+        const continuationIndex = nextExecutableIndex(ops, index + 1);
+        const continuation = continuationIndex === void 0 ? void 0 : ops[continuationIndex];
+        const continuationIsImmediate = continuationIndex === index + 1;
+        if (continuation?.kind === "jump" && isReturnLabel(continuation.target, returnLabels)) {
+          result.push({
+            kind: "jump",
+            target: op.target,
+            opcode: 81,
+            meta: {
+              ...op.meta,
+              mnemonic: "\u0411\u041F",
+              comment: op.meta.comment?.replace(/^proc call/u, "tail call") ?? "tail call"
+            },
+            targetMeta: { ...op.targetMeta }
+          });
+          if (continuationIsImmediate) index += 1;
+          applied += 1;
+          continue;
+        }
+        if (continuation?.kind === "return") {
+          result.push({
+            kind: "jump",
+            target: op.target,
+            opcode: 81,
+            meta: {
+              ...op.meta,
+              mnemonic: "\u0411\u041F",
+              comment: op.meta.comment?.replace(/^proc call/u, "tail call") ?? "tail call"
+            },
+            targetMeta: { ...op.targetMeta }
+          });
+          if (continuationIsImmediate) index += 1;
+          applied += 1;
+          continue;
+        }
+        const target = typeof op.target === "string" ? tailJumpTargets.get(op.target) : void 0;
+        if (target !== void 0 && next?.kind === "jump" && sameTarget(next.target, target.continuation)) {
+          result.push({
+            kind: "jump",
+            target: op.target,
+            opcode: 81,
+            meta: {
+              ...op.meta,
+              mnemonic: "\u0411\u041F",
+              comment: op.meta.comment?.replace(/^proc call/u, "tail jump") ?? "tail jump"
+            },
+            targetMeta: { ...op.targetMeta }
+          });
+          index += 1;
+          applied += 1;
+          continue;
+        }
+        if (target !== void 0 && next?.kind === "label" && sameTarget(next.name, target.continuation)) {
+          result.push({
+            kind: "jump",
+            target: op.target,
+            opcode: 81,
+            meta: {
+              ...op.meta,
+              mnemonic: "\u0411\u041F",
+              comment: op.meta.comment?.replace(/^proc call/u, "tail jump") ?? "tail jump"
+            },
+            targetMeta: { ...op.targetMeta }
+          });
+          applied += 1;
+          continue;
+        }
+      }
+      result.push(op);
+    }
+    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    const tailJumpCount = tailJumpTargets.size;
+    return {
+      ops: result,
+      applied,
+      optimizations: [{
+        name: "tail-call-lowering",
+        detail: tailJumpCount === 0 ? `Replaced ${applied} subroutine tail call${applied === 1 ? "" : "s"} with direct jump(s).` : `Replaced ${applied} subroutine tail operation${applied === 1 ? "" : "s"} with direct jump continuation${tailJumpCount === 1 ? "" : "s"}.`
+      }]
+    };
+  };
+  var tailCallLowering = {
+    name: "tail-call-lowering",
+    run: run17,
+    layoutSafe: false
+  };
+  function findTailJumpTargets(ops) {
+    const calls = /* @__PURE__ */ new Map();
+    const nonCallFlowTargets = /* @__PURE__ */ new Set();
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (op.kind === "call" && typeof op.target === "string") {
+        const continuation = callContinuation(ops, index);
+        const existing = calls.get(op.target) ?? [];
+        existing.push(continuation);
+        calls.set(op.target, existing);
+        continue;
+      }
+      if ((op.kind === "jump" || op.kind === "cjump" || op.kind === "loop") && typeof op.target === "string") {
+        nonCallFlowTargets.add(op.target);
+      }
+    }
+    const regions = collectCallableRegions(ops, new Set(calls.keys()));
+    const result = /* @__PURE__ */ new Map();
+    for (const [target, continuations] of calls) {
+      if (nonCallFlowTargets.has(target)) continue;
+      const region = regions.get(target);
+      if (region === void 0 || !blockHasReturn(ops, region.start, region.end)) continue;
+      const first = continuations[0];
+      if (first === void 0) continue;
+      if (continuations.every((continuation) => continuation !== void 0 && sameTarget(continuation, first))) {
+        result.set(target, { continuation: first, start: region.start, end: region.end });
+      }
+    }
+    return result;
+  }
+  function collectCallableRegions(ops, callTargets) {
+    const result = /* @__PURE__ */ new Map();
+    let current;
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (op.kind !== "label") continue;
+      if (!callTargets.has(op.name)) continue;
+      if (current !== void 0) result.set(current.name, { start: current.start, end: index });
+      current = { name: op.name, start: index + 1 };
+    }
+    if (current !== void 0) result.set(current.name, { start: current.start, end: ops.length });
+    return result;
+  }
+  function collectReturnContinuations(ops, targets) {
+    const result = /* @__PURE__ */ new Map();
+    for (const target of targets.values()) {
+      for (let index = target.start; index < target.end; index += 1) {
+        if (ops[index]?.kind === "return") result.set(index, target.continuation);
+      }
+    }
+    return result;
+  }
+  function collectReturnLabels(ops) {
+    const result = /* @__PURE__ */ new Set();
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (op.kind !== "label") continue;
+      const next = nextExecutableIndex(ops, index + 1);
+      if (next !== void 0 && ops[next]?.kind === "return") result.add(op.name);
+    }
+    return result;
+  }
+  function nextExecutableIndex(ops, start) {
+    for (let index = start; index < ops.length; index += 1) {
+      if (ops[index]?.kind !== "label") return index;
+    }
+    return void 0;
+  }
+  function isReturnLabel(target, returnLabels) {
+    return typeof target === "string" && returnLabels.has(target);
+  }
+  function blockHasReturn(ops, start, end) {
+    for (let index = start; index < end; index += 1) {
+      if (ops[index]?.kind === "return") return true;
+    }
+    return false;
+  }
+  function callContinuation(ops, index) {
+    const next = ops[index + 1];
+    if (next?.kind === "jump") return next.target;
+    if (next?.kind === "label") return next.name;
+    return void 0;
+  }
+  function sameTarget(left, right) {
+    return left === right;
+  }
+
   // src/core/passes/vp-x2-peephole.ts
   function displayBoundaryText(op) {
     if (!("meta" in op)) return "";
@@ -4315,7 +4781,7 @@ var MKProEmulatorBundle = (() => {
     if (hasRewriteBarrier(op)) return false;
     return op.kind === "plain" && op.opcode === 53 && /display|x2|frac/u.test(displayBoundaryText(op));
   }
-  var run17 = (ops) => {
+  var run18 = (ops) => {
     const remove = /* @__PURE__ */ new Set();
     for (let i = 1; i < ops.length; i += 1) {
       if (isDisplayVp(ops[i - 1]) && isFractionAfterDisplayBoundary(ops[i])) {
@@ -4336,13 +4802,14 @@ var MKProEmulatorBundle = (() => {
   };
   var vpX2Peephole = {
     name: "vp-x2-peephole",
-    run: run17,
+    run: run18,
     layoutSafe: false
   };
 
   // src/core/passes/index.ts
   var PASS_PIPELINE = [
     redundantPrologueElimination,
+    tailCallLowering,
     returnZeroJump,
     storeRecallPeephole,
     jumpToNextThreading,
@@ -4668,7 +5135,8 @@ var MKProEmulatorBundle = (() => {
   // src/core/compiler.ts
   var DEFAULT_OPTIONS = {
     delivery: "hex",
-    budget: 105
+    budget: 105,
+    analysis: false
   };
   var REGISTER_ORDER = [
     "0",
@@ -4690,6 +5158,13 @@ var MKProEmulatorBundle = (() => {
   var SWITCH_SCRATCH_PREFIX = "__switch_";
   var DISPATCH_SCRATCH_PREFIX = "__dispatch_";
   var TICTACTOE_MASK_SCRATCH_PREFIX = "__ttt_mask_";
+  var BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
+  var CELL_MAP_PREFIX = "__cell_map_";
+  var SPATIAL_HIT_SCRATCH_PREFIX = "__spatial_hit_";
+  var SPATIAL_COUNT_SCRATCH_PREFIX = "__spatial_count_";
+  var DISPLAY_HELPER_MIN_SAVINGS = 4;
+  var EXPRESSION_HELPER_MIN_COST = 8;
+  var EXPRESSION_HELPER_MIN_SAVINGS = 4;
   var CompileError = class extends Error {
     diagnostics;
     constructor(diagnostics) {
@@ -4705,6 +5180,8 @@ var MKProEmulatorBundle = (() => {
     const optimizations = [];
     const warnings = [];
     const candidates = [];
+    eliminateUnobservedState(ast, optimizations);
+    hoistCommonBranchTails(ast, optimizations);
     validateSemanticDomains(ast, diagnostics);
     validateV2Intent(ast, diagnostics);
     if (diagnostics.some((diagnostic) => diagnostic.level === "error")) {
@@ -4738,7 +5215,7 @@ var MKProEmulatorBundle = (() => {
     if (referenceResult?.warning !== void 0) warnings.push(referenceResult.warning);
     if (steps.length > opts.budget) {
       diagnostics.push({
-        level: "error",
+        level: opts.analysis ? "warning" : "error",
         code: "BUDGET_EXCEEDED",
         message: `Program uses ${steps.length} steps, budget is ${opts.budget}. Largest blocks: ${largestBlocks.join(", ")}`
       });
@@ -4778,11 +5255,239 @@ var MKProEmulatorBundle = (() => {
   function visiblePublicRegisters(all) {
     const result = {};
     for (const [name, register] of Object.entries(all)) {
-      if (!name.startsWith(SWITCH_SCRATCH_PREFIX) && !name.startsWith(DISPATCH_SCRATCH_PREFIX) && !name.startsWith(TICTACTOE_MASK_SCRATCH_PREFIX)) {
+      if (!name.startsWith(SWITCH_SCRATCH_PREFIX) && !name.startsWith(DISPATCH_SCRATCH_PREFIX) && !name.startsWith(TICTACTOE_MASK_SCRATCH_PREFIX) && !name.startsWith(BIT_MASK_SCRATCH_PREFIX) && !name.startsWith(CELL_MAP_PREFIX) && !name.startsWith(SPATIAL_HIT_SCRATCH_PREFIX) && !name.startsWith(SPATIAL_COUNT_SCRATCH_PREFIX)) {
         result[name] = register;
       }
     }
     return result;
+  }
+  function eliminateUnobservedState(ast, optimizations) {
+    const stateFields = new Set(ast.states.flatMap((state) => state.fields.map((field) => field.name)));
+    if (stateFields.size === 0) return;
+    const externallyRead = /* @__PURE__ */ new Set();
+    const inputTargets = /* @__PURE__ */ new Set();
+    const assigned = /* @__PURE__ */ new Map();
+    const addRead = (name) => {
+      if (stateFields.has(name)) externallyRead.add(name);
+    };
+    const visitExpr = (expr, ignored) => {
+      if (expr.kind === "identifier") {
+        if (expr.name !== ignored) addRead(expr.name);
+        return;
+      }
+      if (expr.kind === "unary") visitExpr(expr.expr, ignored);
+      if (expr.kind === "binary") {
+        visitExpr(expr.left, ignored);
+        visitExpr(expr.right, ignored);
+      }
+      if (expr.kind === "call") {
+        for (const arg of expr.args) visitExpr(arg, ignored);
+      }
+    };
+    const visitStatements = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+        if (statement.kind === "ask") {
+          inputTargets.add(statement.target);
+          if (statement.prompt) visitExpr(statement.prompt);
+        }
+        if (statement.kind === "input") inputTargets.add(statement.target);
+        if (statement.kind === "assign") {
+          if (!assigned.has(statement.target)) assigned.set(statement.target, []);
+          assigned.get(statement.target).push(statement.expr);
+          visitExpr(statement.expr, statement.target);
+        }
+        if (statement.kind === "show") {
+          const display = ast.displays.find((candidate) => candidate.name === statement.display);
+          for (const source of display?.sources ?? []) addRead(source);
+        }
+        if (statement.kind === "if") {
+          visitExpr(statement.condition.left);
+          visitExpr(statement.condition.right);
+          visitStatements(statement.thenBody);
+          if (statement.elseBody) visitStatements(statement.elseBody);
+        }
+        if (statement.kind === "loop") visitStatements(statement.body);
+        if (statement.kind === "switch") {
+          visitExpr(statement.expr);
+          for (const switchCase of statement.cases) {
+            visitExpr(switchCase.value);
+            visitStatements(switchCase.body);
+          }
+          if (statement.defaultBody) visitStatements(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          visitExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            visitExpr(dispatchCase.value);
+            visitStatements(dispatchCase.body);
+          }
+          if (statement.defaultBody) visitStatements(statement.defaultBody);
+        }
+        if (statement.kind === "core") {
+          for (const input of statement.inputs ?? []) visitExpr(input.expr);
+          for (const output of statement.outputs ?? []) addRead(output.target);
+        }
+        if (statement.kind === "trap") visitExpr(statement.expr);
+      }
+    };
+    for (const entry of ast.entries) visitStatements(entry.body);
+    for (const proc of ast.procs) visitStatements(proc.body);
+    for (const block of ast.blocks) visitStatements(block.body);
+    const removable = /* @__PURE__ */ new Set();
+    for (const state of ast.states) {
+      for (const field of state.fields) {
+        if (externallyRead.has(field.name) || inputTargets.has(field.name)) continue;
+        if (field.initial !== void 0 && !expressionPureForSubstitution(field.initial)) continue;
+        const writes = assigned.get(field.name) ?? [];
+        if (writes.every(expressionPureForSubstitution)) removable.add(field.name);
+      }
+    }
+    if (removable.size === 0) return;
+    for (const state of ast.states) {
+      state.fields = state.fields.filter((field) => !removable.has(field.name));
+    }
+    const pruneStatements = (statements) => statements.flatMap((statement) => {
+      if (statement.kind === "assign" && removable.has(statement.target)) return [];
+      if (statement.kind === "loop") return [{ ...statement, body: pruneStatements(statement.body) }];
+      if (statement.kind === "if") {
+        const pruned = {
+          ...statement,
+          thenBody: pruneStatements(statement.thenBody)
+        };
+        if (statement.elseBody !== void 0) pruned.elseBody = pruneStatements(statement.elseBody);
+        return [pruned];
+      }
+      if (statement.kind === "switch") {
+        return [{
+          ...statement,
+          cases: statement.cases.map((switchCase) => ({ ...switchCase, body: pruneStatements(switchCase.body) })),
+          ...statement.defaultBody === void 0 ? {} : { defaultBody: pruneStatements(statement.defaultBody) }
+        }];
+      }
+      if (statement.kind === "dispatch") {
+        return [{
+          ...statement,
+          cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: pruneStatements(dispatchCase.body) })),
+          ...statement.defaultBody === void 0 ? {} : { defaultBody: pruneStatements(statement.defaultBody) }
+        }];
+      }
+      return [statement];
+    });
+    for (const entry of ast.entries) entry.body = pruneStatements(entry.body);
+    for (const proc of ast.procs) proc.body = pruneStatements(proc.body);
+    for (const block of ast.blocks) block.body = pruneStatements(block.body);
+    optimizations.push({
+      name: "dead-state-elimination",
+      detail: `Removed ${removable.size} unobserved state field${removable.size === 1 ? "" : "s"} before register allocation.`
+    });
+  }
+  function hoistCommonBranchTails(ast, optimizations) {
+    let hoisted = 0;
+    let simplified = 0;
+    const visitList = (statements) => {
+      const result = [];
+      for (const statement of statements) {
+        result.push(...visitStatement(statement));
+      }
+      return result;
+    };
+    const visitStatement = (statement) => {
+      if (statement.kind === "loop") {
+        return [{ ...statement, body: visitList(statement.body) }];
+      }
+      if (statement.kind === "if") {
+        const thenBody = visitList(statement.thenBody);
+        const elseBody = statement.elseBody === void 0 ? void 0 : visitList(statement.elseBody);
+        const tails = [];
+        if (elseBody !== void 0) {
+          while (thenBody.length > 0 && elseBody.length > 0 && statementEquals(thenBody[thenBody.length - 1], elseBody[elseBody.length - 1])) {
+            tails.unshift(thenBody.pop());
+            elseBody.pop();
+          }
+        }
+        hoisted += tails.length;
+        const simplifiedBranch = simplifyIfStatement({
+          ...statement,
+          thenBody,
+          ...elseBody === void 0 ? {} : { elseBody }
+        });
+        if (simplifiedBranch.length !== 1 || !statementEquals(simplifiedBranch[0], {
+          ...statement,
+          thenBody,
+          ...elseBody === void 0 ? {} : { elseBody }
+        })) {
+          simplified += 1;
+        }
+        return [...simplifiedBranch, ...tails];
+      }
+      if (statement.kind === "switch") {
+        return [{
+          ...statement,
+          cases: statement.cases.map((switchCase) => ({ ...switchCase, body: visitList(switchCase.body) })),
+          ...statement.defaultBody === void 0 ? {} : { defaultBody: visitList(statement.defaultBody) }
+        }];
+      }
+      if (statement.kind === "dispatch") {
+        return [{
+          ...statement,
+          cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: visitList(dispatchCase.body) })),
+          ...statement.defaultBody === void 0 ? {} : { defaultBody: visitList(statement.defaultBody) }
+        }];
+      }
+      return [statement];
+    };
+    for (const entry of ast.entries) entry.body = visitList(entry.body);
+    for (const proc of ast.procs) proc.body = visitList(proc.body);
+    for (const block of ast.blocks) block.body = visitList(block.body);
+    if (hoisted > 0 || simplified > 0) {
+      optimizations.push({
+        name: "common-branch-tail-hoisting",
+        detail: `Hoisted ${hoisted} shared branch tail${hoisted === 1 ? "" : "s"} and simplified ${simplified} conditional shape${simplified === 1 ? "" : "s"}.`
+      });
+    }
+  }
+  function simplifyIfStatement(statement) {
+    if (statement.elseBody !== void 0 && statement.thenBody.length === 0 && statement.elseBody.length === 0) {
+      return [];
+    }
+    if (statement.elseBody !== void 0 && statement.thenBody.length === 0) {
+      const { elseBody, ...rest } = statement;
+      return [{
+        ...rest,
+        condition: invertCondition(statement.condition),
+        thenBody: elseBody
+      }];
+    }
+    if (statement.elseBody !== void 0 && statement.elseBody.length === 0) {
+      const { elseBody: _elseBody, ...rest } = statement;
+      return [{
+        ...rest
+      }];
+    }
+    return [statement];
+  }
+  function invertCondition(condition) {
+    return {
+      ...condition,
+      op: invertComparisonOp(condition.op)
+    };
+  }
+  function invertComparisonOp(op) {
+    switch (op) {
+      case "==":
+        return "!=";
+      case "!=":
+        return "==";
+      case "<":
+        return ">=";
+      case "<=":
+        return ">";
+      case ">":
+        return "<=";
+      case ">=":
+        return "<";
+    }
   }
   function appendOptimizationCandidateReports(optimizations, candidates) {
     const selectedPassCandidates = [
@@ -4890,7 +5595,7 @@ var MKProEmulatorBundle = (() => {
   }
   function validateSemanticDomains(ast, diagnostics) {
     const unresolved = ast.domains.filter(
-      (domain) => ["maze", "event", "cache_search", "fight", "table"].includes(domain.domainKind)
+      (domain) => ["cache_search", "fight", "table"].includes(domain.domainKind)
     );
     if (unresolved.length === 0) return;
     diagnostics.push({
@@ -4907,7 +5612,7 @@ var MKProEmulatorBundle = (() => {
     diagnostics.push({
       level: "error",
       code: "V2_SEMANTIC_LOWERER_MISSING",
-      message: `MK-Pro intent contains effects that need real generic lowerers before code generation: ${unsupported.slice(0, 8).map((item) => `${item.text} (line ${item.line})`).join(", ")}. The compiler refuses to treat human-level semantics as comments.`
+      message: `MK-Pro source contains effects that need real rule lowerers before code generation: ${unsupported.slice(0, 8).map((item) => `${item.text} (line ${item.line})`).join(", ")}. The compiler refuses to treat human-level semantics as comments.`
     });
   }
   function collectUnsupportedV2Statements(ast) {
@@ -4945,12 +5650,16 @@ var MKProEmulatorBundle = (() => {
     return unsupported;
   }
   function isLowerableV2Predicate(predicate) {
+    if (predicate.kind === "v2_contains") {
+      return isSimpleCompilerExpression(predicate.collection) && isSimpleCompilerExpression(predicate.item);
+    }
     if (predicate.kind === "v2_compare") {
       return isSimpleCompilerExpression(predicate.left) && isSimpleCompilerExpression(predicate.right);
     }
     return false;
   }
   function formatV2Predicate(predicate) {
+    if (predicate.kind === "v2_contains") return `${predicate.item} in ${predicate.collection}`;
     return `${predicate.left} ${predicate.op} ${predicate.right}`;
   }
   function isSimpleCompilerExpression(text) {
@@ -4981,7 +5690,19 @@ var MKProEmulatorBundle = (() => {
     warnings;
     candidates;
     inlineProcNames;
+    readCounts;
+    displayUseCounts;
+    showSequenceUseCounts;
+    expressionUseCounts;
+    lineCountCallCount;
+    lineCountGroupCounts;
+    spatialHitHelpers = /* @__PURE__ */ new Map();
+    displayHelpers = /* @__PURE__ */ new Map();
+    showSequenceHelpers = /* @__PURE__ */ new Map();
+    expressionHelpers = /* @__PURE__ */ new Map();
+    lineCountHelpers = /* @__PURE__ */ new Map();
     currentXVariable;
+    emittingExpressionHelper = false;
     constructor(ast, allocation, options, machineProfile, diagnostics, optimizations, warnings, candidates) {
       this.ast = ast;
       this.allocation = allocation;
@@ -4992,6 +5713,12 @@ var MKProEmulatorBundle = (() => {
       this.warnings = warnings;
       this.candidates = candidates;
       this.inlineProcNames = findSingleUseProcNames(ast);
+      this.readCounts = collectVariableReadCounts(ast);
+      this.displayUseCounts = collectDisplayUseCounts(ast);
+      this.showSequenceUseCounts = collectShowSequenceUseCounts(ast);
+      this.expressionUseCounts = collectExpressionUseCounts(ast);
+      this.lineCountCallCount = countCalls(ast, "line_count");
+      this.lineCountGroupCounts = collectLineCountGroupCounts(ast);
       for (const declaration of ast.declarations) {
         if (declaration.kind === "const") {
           this.constants.set(declaration.name, declaration.value);
@@ -5022,6 +5749,65 @@ var MKProEmulatorBundle = (() => {
         if (!this.statementsTerminate(block.body)) {
           this.emitOp(80, "\u0421/\u041F", `implicit stop for ${block.mode} block ${block.name}`, block.line);
         }
+      }
+      this.compileRuntimeHelpers();
+    }
+    compileRuntimeHelpers() {
+      for (const helper of this.displayHelpers.values()) {
+        this.emitLabel(helper.label);
+        this.compilePackedDisplayBody(helper.display, helper.line, false);
+        this.emitOp(82, "\u0412/\u041E", `display ${helper.display.name} return`, helper.line);
+        this.optimizations.push({
+          name: "packed-display-helper",
+          detail: `Emitted shared packed display helper for screen ${helper.display.name}.`
+        });
+      }
+      for (const helper of this.showSequenceHelpers.values()) {
+        this.emitLabel(helper.label);
+        this.compilePackedDisplayBody(helper.first, helper.line, false);
+        this.compilePackedDisplayBody(helper.second, helper.line, false);
+        this.emitOp(82, "\u0412/\u041E", `show sequence ${helper.first.name}/${helper.second.name} return`, helper.line);
+        this.optimizations.push({
+          name: "show-sequence-helper",
+          detail: `Emitted shared helper for show ${helper.first.name}; show ${helper.second.name}; read.`
+        });
+      }
+      for (const helper of this.expressionHelpers.values()) {
+        this.emitLabel(helper.label);
+        this.emittingExpressionHelper = true;
+        try {
+          this.compileExpression(helper.expr);
+        } finally {
+          this.emittingExpressionHelper = false;
+        }
+        this.emitOp(82, "\u0412/\u041E", "expression helper return", helper.line);
+        this.optimizations.push({
+          name: "expression-helper",
+          detail: `Emitted shared helper for ${expressionToIntentText(helper.expr)}.`
+        });
+      }
+      for (const helper of this.lineCountHelpers.values()) {
+        this.emitLabel(helper.label);
+        this.emitStore(spatialCountMaskScratchName(), "line count mask", helper.line);
+        this.emitSpatialLineCountLoopBody(spatialCountMaskScratchName(), helper.cell, helper.board, helper.line);
+        this.emitOp(82, "\u0412/\u041E", "line_count return", helper.line);
+        this.optimizations.push({
+          name: "spatial-line-count-helper",
+          detail: `Emitted shared line_count helper for ${helper.board.name}/${expressionToIntentText(helper.cell)}.`
+        });
+      }
+      for (const helper of this.spatialHitHelpers.values()) {
+        this.emitLabel(helper.label);
+        this.emitStore(helper.scratch, "spatial hit index", helper.line);
+        this.emitRecall(helper.mask, "spatial hit mask", helper.line);
+        this.compileExpression({
+          kind: "call",
+          callee: "bit_mask",
+          args: [{ kind: "identifier", name: helper.scratch }]
+        });
+        this.emitOp(55, "\u041A \u2227", "spatial hit test", helper.line);
+        this.emitOp(50, "\u041A \u0417\u041D", "spatial hit to count", helper.line);
+        this.emitOp(82, "\u0412/\u041E", "spatial hit return", helper.line);
       }
     }
     compileInitialState() {
@@ -5069,13 +5855,53 @@ var MKProEmulatorBundle = (() => {
       for (let index = 0; index < statements.length; index += 1) {
         const statement = statements[index];
         const next = statements[index + 1];
+        if (statement.kind === "assign") {
+          const reused = this.compileRepeatedAssignmentValue(statements, index);
+          if (reused > 1) {
+            index += reused - 1;
+            continue;
+          }
+        }
         if (statement.kind === "assign" && next?.kind === "assign" && this.compileTicTacToeCellMaskReuse(statement, next)) {
+          index += 1;
+          continue;
+        }
+        if (statement.kind === "assign" && next?.kind === "assign" && this.compileBitSetMaskReuse(statement, next)) {
+          index += 1;
+          continue;
+        }
+        if (statement.kind === "assign" && next?.kind === "if" && this.compileGuardAssignmentSubstitution(statement, next)) {
           index += 1;
           continue;
         }
         if (statement.kind === "if" && next?.kind === "if" && this.compileDoubleBranchRemoval(statement, next)) {
           index += 1;
           continue;
+        }
+        if (statement.kind === "pause" && next?.kind === "halt" && expressionEquals(statement.expr, next.expr)) {
+          this.compileStatement(next);
+          this.optimizations.push({
+            name: "terminal-display-fusion",
+            detail: `Dropped duplicate terminal display before stop at line ${next.line}.`
+          });
+          index += 1;
+          continue;
+        }
+        if (statement.kind === "show" && next?.kind === "halt" && this.haltDisplaysSameValue(statement, next)) {
+          this.compileStatement(next);
+          this.optimizations.push({
+            name: "terminal-display-fusion",
+            detail: `Dropped duplicate screen ${statement.display} before stop at line ${next.line}.`
+          });
+          index += 1;
+          continue;
+        }
+        if (statement.kind === "show" && next?.kind === "show" && statements[index + 2]?.kind === "input") {
+          const input = statements[index + 2];
+          if (this.compileShowSequenceRead(statement, next, input)) {
+            index += 2;
+            continue;
+          }
         }
         if (statement.kind === "show" && next?.kind === "input") {
           this.compileShow(statement.display, statement.line);
@@ -5089,6 +5915,66 @@ var MKProEmulatorBundle = (() => {
         }
         this.compileStatement(statement);
       }
+    }
+    compileRepeatedAssignmentValue(statements, start) {
+      const first = statements[start];
+      if (first?.kind !== "assign" || !expressionPureForSubstitution(first.expr)) return 0;
+      let end = start + 1;
+      while (end < statements.length) {
+        const candidate = statements[end];
+        if (candidate.kind !== "assign" || !expressionEquals(candidate.expr, first.expr)) break;
+        end += 1;
+      }
+      const count = end - start;
+      if (count <= 1) return 0;
+      this.compileExpression(first.expr);
+      for (let index = start; index < end; index += 1) {
+        const assignment = statements[index];
+        this.emitStore(assignment.target, `set ${assignment.target}`, assignment.line);
+      }
+      this.optimizations.push({
+        name: "repeated-assignment-value-reuse",
+        detail: `Stored one computed value into ${count} consecutive assignment targets at line ${first.line}.`
+      });
+      return count;
+    }
+    haltDisplaysSameValue(show, halt) {
+      const display = this.ast.displays.find((candidate) => candidate.name === show.display);
+      if (display === void 0 || display.items.length !== 1) return false;
+      const [item] = display.items;
+      if (item?.kind !== "source") return false;
+      const field = this.findStateField(item.name);
+      return field?.initial !== void 0 && expressionEquals(field.initial, halt.expr);
+    }
+    compileShowSequenceRead(firstShow, secondShow, input) {
+      const helper = this.sharedShowSequenceHelper(firstShow.display, secondShow.display, firstShow.line);
+      if (helper === void 0) return false;
+      this.emitJump(83, "\u041F\u041F", helper.label, `show ${firstShow.display}; show ${secondShow.display}`, firstShow.line);
+      this.emitStore(input.target, `read ${input.target}`, input.line);
+      this.optimizations.push({
+        name: "show-sequence-helper-call",
+        detail: `Reused shared helper for show ${firstShow.display}; show ${secondShow.display}; read ${input.target}.`
+      });
+      return true;
+    }
+    compileGuardAssignmentSubstitution(assign, guarded) {
+      const readsInCondition = countIdentifierReadsInCondition(guarded.condition, assign.target);
+      if (readsInCondition === 0) return false;
+      if ((this.readCounts.get(assign.target) ?? 0) !== readsInCondition) return false;
+      if (!expressionPureForSubstitution(assign.expr)) return false;
+      const substitutedCondition = substituteConditionIdentifier(guarded.condition, assign.target, assign.expr);
+      const ordinaryCost = estimateExpressionCost(assign.expr) + 1 + conditionCompileCost(guarded.condition);
+      const substitutedCost = conditionCompileCost(substitutedCondition);
+      if (substitutedCost + 4 >= ordinaryCost) return false;
+      this.compileIf({
+        ...guarded,
+        condition: substitutedCondition
+      }, guarded.line);
+      this.optimizations.push({
+        name: "single-use-guard-substitution",
+        detail: `Substituted ${assign.target} directly into the following condition at lines ${assign.line}/${guarded.line}.`
+      });
+      return true;
     }
     compileStatement(statement) {
       switch (statement.kind) {
@@ -5177,8 +6063,32 @@ var MKProEmulatorBundle = (() => {
       });
       return true;
     }
+    compileBitSetMaskReuse(first, second) {
+      const firstSet = matchBitSetAssignment(first);
+      const secondSet = matchBitSetAssignment(second);
+      if (firstSet === void 0 || secondSet === void 0) return false;
+      if (!expressionEquals(firstSet.item, secondSet.item)) return false;
+      const scratch = bitMaskScratchName(first);
+      if (!this.allocation.registers[scratch]) return false;
+      this.compileExpression(bitMaskExpression(firstSet.item));
+      this.emitStore(scratch, "cell bit mask scratch", first.line);
+      this.compileExpression(firstSet.collection);
+      this.emitRecall(scratch, "reuse cell bit mask", first.line);
+      this.emitOp(56, "\u041A \u2228", "bit_set with reused mask", first.line);
+      this.emitStore(first.target, `set ${first.target}`, first.line);
+      this.compileExpression(secondSet.collection);
+      this.emitRecall(scratch, "reuse cell bit mask", second.line);
+      this.emitOp(56, "\u041A \u2228", "bit_set with reused mask", second.line);
+      this.emitStore(second.target, `set ${second.target}`, second.line);
+      this.optimizations.push({
+        name: "bit-set-mask-cse",
+        detail: `Computed bit_mask() once for adjacent set updates at lines ${first.line}/${second.line}.`
+      });
+      return true;
+    }
     compileIf(statement, line) {
       if (this.compileArithmeticIfSelect(statement)) return;
+      if (this.compileMembershipClearReuse(statement, line)) return;
       const falseLabel = this.freshLabel("if_false");
       const endLabel = this.freshLabel("if_end");
       this.compileCondition(statement.condition, falseLabel, line);
@@ -5191,6 +6101,51 @@ var MKProEmulatorBundle = (() => {
       } else {
         this.emitLabel(falseLabel);
       }
+    }
+    compileMembershipClearReuse(statement, line) {
+      const clearPrefix = this.membershipClearPrefix(statement.thenBody);
+      if (clearPrefix === void 0) return false;
+      const { clear, tail } = clearPrefix;
+      const membership = matchBitMembershipCondition(statement.condition);
+      if (membership === void 0) return false;
+      if (!isBitClearAssignment(clear, membership)) return false;
+      const falseLabel = this.freshLabel("if_false");
+      const endLabel = this.freshLabel("if_end");
+      this.compileExpression(membership.test);
+      this.emitJump(87, "F x!=0", falseLabel, "false branch for !=", line);
+      this.emitOp(58, "\u041A \u0418\u041D\u0412", "reuse membership mask for clear", clear.line);
+      this.compileExpression(membership.collection);
+      this.emitOp(55, "\u041A \u2227", "clear matched cell with reused mask", clear.line);
+      this.emitStore(clear.target, `set ${clear.target}`, clear.line);
+      this.compileStatements(tail);
+      if (statement.elseBody) {
+        this.emitJump(81, "\u0411\u041F", endLabel, "if end", line);
+        this.emitLabel(falseLabel);
+        this.compileStatements(statement.elseBody);
+        this.emitLabel(endLabel);
+      } else {
+        this.emitLabel(falseLabel);
+      }
+      this.optimizations.push({
+        name: "cell-membership-clear-reuse",
+        detail: `Reused the successful membership mask when clearing ${clear.target} at line ${clear.line}.`
+      });
+      return true;
+    }
+    membershipClearPrefix(statements) {
+      const first = statements[0];
+      if (first?.kind === "assign") {
+        return { clear: first, tail: statements.slice(1) };
+      }
+      if (first?.kind !== "call" || !this.inlineProcNames.has(first.block)) return void 0;
+      const proc = this.ast.procs.find((candidate) => candidate.name === first.block);
+      if (proc === void 0) return void 0;
+      const clear = proc.body[0];
+      if (clear?.kind !== "assign") return void 0;
+      return {
+        clear,
+        tail: [...proc.body.slice(1), ...statements.slice(1)]
+      };
     }
     compileArithmeticIfSelect(statement) {
       const selected = buildBranchRemovalCandidate(statement, this.ast);
@@ -5292,14 +6247,21 @@ var MKProEmulatorBundle = (() => {
       });
     }
     compileDispatch(statement) {
+      const optimized = optimizeDispatchDefaultCases(statement);
+      if (optimized.removed > 0) {
+        this.optimizations.push({
+          name: "dispatch-default-merge",
+          detail: `Removed ${optimized.removed} dispatch case${optimized.removed === 1 ? "" : "s"} whose body matched the default branch.`
+        });
+      }
       const site = statement.name ?? `dispatch@${statement.line}`;
-      const selected = selectDispatchCandidate(statement, this.machineProfile);
+      const selected = selectDispatchCandidate(optimized.statement, this.machineProfile);
       for (const candidate of selected.candidates) this.candidates.push(candidate);
       this.optimizations.push({
         name: "dispatch-lowering",
         detail: `Selected ${selected.selected.variant} for ${site}.`
       });
-      this.compileDispatchCompareChain(statement, selected.selected.variant === "fallthrough-compare-chain");
+      this.compileDispatchCompareChain(optimized.statement, selected.selected.variant === "fallthrough-compare-chain");
     }
     compileDispatchCompareChain(statement, useFallthrough) {
       const scratch = `${DISPATCH_SCRATCH_PREFIX}${statement.scratchId}`;
@@ -5399,7 +6361,20 @@ var MKProEmulatorBundle = (() => {
         ));
         return;
       }
-      const sources = this.orderDisplaySources(display.sources);
+      const helper = this.sharedDisplayHelper(display, line);
+      if (helper !== void 0) {
+        this.emitJump(83, "\u041F\u041F", helper.label, `show ${display.name}`, line);
+        this.optimizations.push({
+          name: "packed-display-helper-call",
+          detail: `Reused shared packed display helper for screen ${display.name}.`
+        });
+        return;
+      }
+      this.compilePackedDisplayBody(display, line, true);
+      this.reportPackedDisplayLowering(display);
+    }
+    compilePackedDisplayBody(display, line, reuseCurrentX) {
+      const sources = reuseCurrentX ? this.orderDisplaySources(display.sources) : display.sources;
       if (sources.length === 0) {
         this.emitNumber("0");
       } else {
@@ -5412,11 +6387,63 @@ var MKProEmulatorBundle = (() => {
         }
       }
       this.emitOp(80, "\u0421/\u041F", `show ${display.name}`, line);
+    }
+    reportPackedDisplayLowering(display) {
       const canUseDisplayBytes = machineSupports(this.machineProfile, "display-bytes");
       this.optimizations.push({
         name: "packed-display-lowering",
         detail: canUseDisplayBytes ? `Display ${display.name} may use display-byte encodings in later layout passes.` : `Display ${display.name} lowered as ordinary packed numeric output.`
       });
+    }
+    sharedDisplayHelper(display, line) {
+      if (!this.shouldShareDisplay(display)) return void 0;
+      const existing = this.displayHelpers.get(display.name);
+      if (existing !== void 0) return existing;
+      const helper = {
+        display,
+        label: `__display_${display.name}`,
+        line
+      };
+      this.displayHelpers.set(display.name, helper);
+      return helper;
+    }
+    shouldShareDisplay(display) {
+      if (display.items.some((item) => item.kind === "literal")) return false;
+      const sources = display.sources.length;
+      if (sources < 2) return false;
+      const uses = this.displayUseCounts.get(display.name) ?? 0;
+      if (uses < 2) return false;
+      const inlineCost = estimatePackedDisplayBodyCost(sources);
+      const helperCost = uses * 2 + inlineCost + 1;
+      const inlineTotal = uses * inlineCost;
+      return inlineTotal - helperCost >= DISPLAY_HELPER_MIN_SAVINGS;
+    }
+    sharedShowSequenceHelper(firstName, secondName, line) {
+      const first = this.ast.displays.find((candidate) => candidate.name === firstName);
+      const second = this.ast.displays.find((candidate) => candidate.name === secondName);
+      if (first === void 0 || second === void 0) return void 0;
+      if (!this.shouldShareShowSequence(first, second)) return void 0;
+      const key = showSequenceKey(first.name, second.name);
+      const existing = this.showSequenceHelpers.get(key);
+      if (existing !== void 0) return existing;
+      const helper = {
+        first,
+        second,
+        label: `__showseq_${this.showSequenceHelpers.size}`,
+        line
+      };
+      this.showSequenceHelpers.set(key, helper);
+      return helper;
+    }
+    shouldShareShowSequence(first, second) {
+      if (first.items.some((item) => item.kind === "literal")) return false;
+      if (second.items.some((item) => item.kind === "literal")) return false;
+      const uses = this.showSequenceUseCounts.get(showSequenceKey(first.name, second.name)) ?? 0;
+      if (uses < 2) return false;
+      const bodyCost = estimatePackedDisplayBodyCost(first.sources.length) + estimatePackedDisplayBodyCost(second.sources.length);
+      const inlineTotal = uses * (bodyCost + 1);
+      const helperTotal = uses * 3 + bodyCost + 1;
+      return inlineTotal - helperTotal >= DISPLAY_HELPER_MIN_SAVINGS;
     }
     compileTextDisplay(display, line) {
       const [literal, source, ...rest] = display.items;
@@ -5581,7 +6608,11 @@ var MKProEmulatorBundle = (() => {
       return true;
     }
     compileCondition(condition, falseLabel, line) {
-      const selected = selectCheaperEquivalentCondition(condition, this.ast);
+      const selected = selectCheaperEquivalentCondition(
+        condition,
+        this.ast,
+        new Set(Object.keys(this.allocation.constants))
+      );
       if (selected.changed) {
         this.optimizations.push({
           name: "comparison-boundary-normalization",
@@ -5590,15 +6621,19 @@ var MKProEmulatorBundle = (() => {
       }
       const compiledCondition = selected.condition;
       if (isZeroExpression(compiledCondition.right) && canTestAgainstZeroDirectly(compiledCondition.op)) {
-        this.compileExpression(compiledCondition.left);
+        const usedSpatialHit = this.compileBitHasConditionWithSpatialHelper(compiledCondition.left, line);
+        if (!usedSpatialHit) {
+          this.compileExpression(compiledCondition.left);
+        }
         const opcode2 = directTestOpcode(compiledCondition.op);
         this.emitJump(opcode2, getOpcode(opcode2).name, falseLabel, `false branch for ${condition.op}`, line);
         this.optimizations.push({
-          name: "zero-condition-test",
-          detail: `Tested ${compiledCondition.op} 0 without materializing a zero literal at line ${line}.`
+          name: usedSpatialHit ? "spatial-hit-condition-helper" : "zero-condition-test",
+          detail: usedSpatialHit ? `Tested bit_has() through the shared spatial hit helper at line ${line}.` : `Tested ${compiledCondition.op} 0 without materializing a zero literal at line ${line}.`
         });
         return;
       }
+      if (this.compileEqualityWithCurrentX(compiledCondition, falseLabel, line)) return;
       if (compiledCondition.op === ">" || compiledCondition.op === "<=") {
         this.compileExpression(compiledCondition.right);
         this.compileExpression(compiledCondition.left);
@@ -5611,7 +6646,46 @@ var MKProEmulatorBundle = (() => {
       const mnemonic = getOpcode(opcode).name;
       this.emitJump(opcode, mnemonic, falseLabel, `false branch for ${compiledCondition.op}`, line);
     }
+    compileBitHasConditionWithSpatialHelper(expr, line) {
+      if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_has" || expr.args.length !== 2) return false;
+      const [mask, index] = expr.args;
+      if (mask?.kind !== "identifier" || index === void 0) return false;
+      const scratch = spatialHitScratchName(mask.name);
+      if (!this.allocation.registers[scratch]) return false;
+      const helper = this.ensureSpatialHitHelper(mask.name, scratch);
+      this.compileExpression(index);
+      this.emitJump(83, "\u041F\u041F", helper.label, `spatial hit ${mask.name}`, line);
+      return true;
+    }
+    compileEqualityWithCurrentX(condition, falseLabel, line) {
+      if (condition.op !== "==" && condition.op !== "!=") return false;
+      const reused = this.currentXVariable;
+      if (condition.right.kind === "identifier" && condition.right.name === reused && isSimpleStackLoad(condition.left)) {
+        this.compileExpression(condition.left);
+      } else if (condition.left.kind === "identifier" && condition.left.name === reused && isSimpleStackLoad(condition.right)) {
+        this.compileExpression(condition.right);
+      } else {
+        return false;
+      }
+      this.emitOp(17, "-", "condition compare", line);
+      const opcode = condition.op === "==" ? 94 : 87;
+      this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${condition.op}`, line);
+      this.optimizations.push({
+        name: "condition-current-x-reuse",
+        detail: `Reused ${reused} already in X for equality comparison at line ${line}.`
+      });
+      return true;
+    }
     compileExpression(expr) {
+      const helper = this.sharedExpressionHelper(expr);
+      if (helper !== void 0) {
+        this.emitJump(83, "\u041F\u041F", helper.label, `expr ${expressionToIntentText(expr)}`);
+        this.optimizations.push({
+          name: "expression-helper-call",
+          detail: `Reused shared helper for ${expressionToIntentText(expr)}.`
+        });
+        return;
+      }
       switch (expr.kind) {
         case "number":
           this.emitNumberOrPreload(expr.raw);
@@ -5638,10 +6712,17 @@ var MKProEmulatorBundle = (() => {
           return;
         }
         case "unary":
+          if (expr.op === "-" && expr.expr.kind === "number") {
+            this.emitNumberOrPreload(negatedNumberLiteral(expr.expr.raw));
+            return;
+          }
           this.compileExpression(expr.expr);
           this.emitOp(11, "/-/", "unary minus");
           return;
         case "binary":
+          if (this.compileRemainderByConstant(expr)) {
+            return;
+          }
           if ((expr.op === "+" || expr.op === "*") && this.compileCommutativeWithCurrentX(expr)) {
             return;
           }
@@ -5690,11 +6771,57 @@ var MKProEmulatorBundle = (() => {
       }
       return false;
     }
+    compileRemainderByConstant(expr) {
+      const matched = matchRemainderByConstant(expr);
+      if (matched === void 0) return false;
+      this.compileExpression(matched.value);
+      this.compileExpression(matched.divisor);
+      this.emitOp(19, "/", "remainder quotient");
+      this.emitOp(53, "\u041A {x}", "remainder fractional part");
+      this.compileExpression(matched.divisor);
+      this.emitOp(18, "*", "remainder scale");
+      this.optimizations.push({
+        name: "remainder-fraction-lowering",
+        detail: `Lowered ${expressionToIntentText(expr)} without recomputing the dividend.`
+      });
+      return true;
+    }
+    sharedExpressionHelper(expr) {
+      if (this.emittingExpressionHelper) return void 0;
+      if (!this.shouldShareExpression(expr)) return void 0;
+      const key = expressionToIntentText(expr);
+      const existing = this.expressionHelpers.get(key);
+      if (existing !== void 0) return existing;
+      const helper = {
+        expr,
+        label: `__expr_${this.expressionHelpers.size}`
+      };
+      this.expressionHelpers.set(key, helper);
+      return helper;
+    }
+    shouldShareExpression(expr) {
+      if (!expressionPureForSubstitution(expr)) return false;
+      if (expr.kind === "number" || expr.kind === "identifier") return false;
+      const cost = estimateExpressionCost(expr);
+      if (cost < EXPRESSION_HELPER_MIN_COST) return false;
+      const key = expressionToIntentText(expr);
+      const uses = this.expressionUseCounts.get(key)?.count ?? 0;
+      if (uses < 2) return false;
+      const inlineTotal = uses * cost;
+      const helperTotal = uses * 2 + cost + 1;
+      return inlineTotal - helperTotal >= EXPRESSION_HELPER_MIN_SAVINGS;
+    }
     compileCall(expr) {
       const name = expr.callee.toLowerCase();
       if (name === "direction") {
         this.compileDirectionCall(expr);
         return;
+      }
+      if (name === "neighbor_count" || name === "line_count") {
+        if (this.compileSpatialCountCall(name, expr)) return;
+      }
+      if (name === "__spatial_hit") {
+        if (this.compileSpatialHitCall(expr)) return;
       }
       if (isTicTacToeMacroName(name) && ticTacToeMacroArity(name) !== expr.args.length) {
         this.diagnostics.push({
@@ -5861,6 +6988,221 @@ var MKProEmulatorBundle = (() => {
         name: "direction-keypad-lowering",
         detail: `Lowered direction(${arg.name}) through a shared keypad geometry formula.`
       });
+    }
+    compileSpatialCountCall(name, expr) {
+      if (expr.args.length !== 2) {
+        this.diagnostics.push({
+          level: "error",
+          message: `${name}() expects two arguments, got ${expr.args.length}.`
+        });
+        return true;
+      }
+      if (name === "line_count" && this.compileSpatialLineCountLoop(expr)) return true;
+      const expanded = spatialCountExpression(name, expr.args, this.ast);
+      if (expanded === void 0) return false;
+      this.compileExpression(expanded);
+      this.optimizations.push({
+        name: "spatial-count-hit-helper",
+        detail: `Lowered ${name}() through shared spatial hit helper calls.`
+      });
+      return true;
+    }
+    compileSpatialNeighborCountLoop(expr) {
+      const [mask, cell] = expr.args;
+      if (mask?.kind !== "identifier" || cell === void 0) return false;
+      const board = boardForCellMask(mask, this.ast);
+      const scratch = spatialCountScratchNames();
+      if (scratch.some((name) => this.allocation.registers[name] === void 0)) return false;
+      const progressions = spatialNeighborProgressions(board);
+      this.emitSpatialNeighborCountLoopBody(mask.name, cell, progressions, void 0);
+      this.optimizations.push({
+        name: "spatial-neighbor-count-loop",
+        detail: `Lowered neighbor_count(${mask.name}, ...) as spatial hit loops.`
+      });
+      return true;
+    }
+    emitSpatialNeighborCountLoopBody(hitMask, cell, progressions, sourceLine) {
+      const scratch = spatialCountScratchNames();
+      const total = scratch[0];
+      const offset = scratch[2];
+      const counter = scratch[3];
+      this.emitNumber("0");
+      this.emitStore(total, "neighbor_count total", sourceLine);
+      for (const progression of progressions) {
+        this.compileExpression(progression.startOffset);
+        this.emitStore(offset, "neighbor_count offset", sourceLine);
+        this.emitNumber(String(progression.count));
+        this.emitStore(counter, "neighbor_count counter", sourceLine);
+        const start = this.freshLabel("neighbor_count_loop");
+        this.emitLabel(start);
+        this.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
+        const helper = this.ensureSpatialHitHelper(hitMask, spatialHitScratchName(hitMask));
+        this.emitJump(83, "\u041F\u041F", helper.label, `spatial hit ${hitMask}`, sourceLine);
+        this.emitRecall(total, "neighbor_count total");
+        this.emitOp(16, "+", "neighbor_count add hit");
+        this.emitStore(total, "neighbor_count total");
+        this.emitRecall(offset, "neighbor_count offset");
+        this.compileExpression(progression.step);
+        this.emitOp(16, "+", "neighbor_count next offset");
+        this.emitStore(offset, "neighbor_count offset");
+        const counterRegister = this.allocation.registers[counter];
+        const flCounterOpcode = counterRegister === void 0 ? void 0 : flOpcode(counterRegister);
+        if (flCounterOpcode !== void 0) {
+          this.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, "neighbor_count loop", sourceLine);
+          this.optimizations.push({
+            name: "spatial-count-fl-loop",
+            detail: `Used ${getOpcode(flCounterOpcode).name} for neighbor_count loop counter.`
+          });
+        } else {
+          this.emitRecall(counter, "neighbor_count counter");
+          this.emitNumber("1");
+          this.emitOp(17, "-", "neighbor_count decrement");
+          this.emitStore(counter, "neighbor_count counter");
+          this.emitRecall(counter, "neighbor_count counter");
+          this.emitJump(94, "F x=0", start, "neighbor_count loop", sourceLine);
+        }
+      }
+      this.emitRecall(total, "neighbor_count result");
+    }
+    compileSpatialLineCountLoop(expr) {
+      const [mask, cell] = expr.args;
+      if (mask?.kind !== "identifier" || cell === void 0) return false;
+      const board = boardForCellMask(mask, this.ast);
+      if (board === void 0) return false;
+      const scratch = spatialCountScratchNames();
+      if (scratch.some((name) => this.allocation.registers[name] === void 0)) return false;
+      const maskScratch = spatialCountMaskScratchName();
+      const useSharedMask = this.lineCountCallCount > 1 && this.allocation.registers[maskScratch] !== void 0;
+      const hitMask = useSharedMask ? maskScratch : mask.name;
+      const helper = this.sharedLineCountHelper(mask, cell, board, void 0);
+      if (helper !== void 0) {
+        this.compileExpression(mask);
+        this.emitJump(83, "\u041F\u041F", helper.label, `line_count ${mask.name}`, void 0);
+        this.optimizations.push({
+          name: "spatial-line-count-helper-call",
+          detail: `Reused shared line_count helper for ${mask.name}.`
+        });
+        return true;
+      }
+      if (useSharedMask) {
+        this.compileExpression(mask);
+        this.emitStore(maskScratch, "line count mask", void 0);
+      }
+      this.emitSpatialLineCountLoopBody(hitMask, cell, board, void 0);
+      return true;
+    }
+    emitSpatialLineCountLoopBody(hitMask, cell, board, sourceLine) {
+      this.emitSpatialProgressionCountLoopBody(
+        hitMask,
+        cell,
+        spatialLineProgressions(board, cell),
+        board.width <= 4 && board.height <= 4,
+        sourceLine,
+        "line_count"
+      );
+    }
+    emitSpatialProgressionCountLoopBody(hitMask, cell, progressions, useMax, sourceLine, operation) {
+      const scratch = spatialCountScratchNames();
+      const total = scratch[0];
+      const line = scratch[1];
+      const offset = scratch[2];
+      const counter = scratch[3];
+      this.emitNumber("0");
+      this.emitStore(total, `${operation} total`, sourceLine);
+      for (const progression of progressions) {
+        this.emitNumber("0");
+        this.emitStore(line, `${operation} current line`, sourceLine);
+        this.compileExpression(progression.startOffset);
+        this.emitStore(offset, `${operation} offset`, sourceLine);
+        this.emitNumber(String(progression.count));
+        this.emitStore(counter, `${operation} counter`, sourceLine);
+        const start = this.freshLabel(`${operation}_loop`);
+        this.emitLabel(start);
+        this.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
+        const helper = this.ensureSpatialHitHelper(hitMask, spatialHitScratchName(hitMask));
+        this.emitJump(83, "\u041F\u041F", helper.label, `spatial hit ${hitMask}`, sourceLine);
+        this.emitRecall(line, `${operation} accumulator`);
+        this.emitOp(16, "+", `${operation} add hit`);
+        this.emitStore(line, `${operation} accumulator`);
+        this.emitRecall(offset, `${operation} offset`);
+        this.compileExpression(progression.step);
+        this.emitOp(16, "+", `${operation} next offset`);
+        this.emitStore(offset, `${operation} offset`);
+        const counterRegister = this.allocation.registers[counter];
+        const flCounterOpcode = counterRegister === void 0 ? void 0 : flOpcode(counterRegister);
+        if (flCounterOpcode !== void 0) {
+          this.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, `${operation} loop`, sourceLine);
+          this.optimizations.push({
+            name: "spatial-count-fl-loop",
+            detail: `Used ${getOpcode(flCounterOpcode).name} for ${operation} loop counter.`
+          });
+        } else {
+          this.emitRecall(counter, `${operation} counter`);
+          this.emitNumber("1");
+          this.emitOp(17, "-", `${operation} decrement`);
+          this.emitStore(counter, `${operation} counter`);
+          this.emitRecall(counter, `${operation} counter`);
+          this.emitJump(94, "F x=0", start, `${operation} loop`, sourceLine);
+        }
+        this.emitRecall(total, `${operation} total`);
+        this.emitRecall(line, `${operation} current line`);
+        if (useMax) {
+          this.emitOp(54, "\u041A max", `${operation} best line`);
+        } else {
+          this.emitOp(16, "+", `${operation} total add line`);
+        }
+        this.emitStore(total, `${operation} total`);
+      }
+      this.emitRecall(total, `${operation} result`);
+      this.optimizations.push({
+        name: `spatial-${operation.replace("_", "-")}-loop`,
+        detail: `Lowered ${operation}(...) as shared spatial hit loops.`
+      });
+    }
+    compileSpatialHitCall(expr) {
+      if (expr.args.length !== 2) {
+        this.diagnostics.push({
+          level: "error",
+          message: "__spatial_hit() expects two arguments."
+        });
+        return true;
+      }
+      const [mask, index] = expr.args;
+      if (mask?.kind !== "identifier" || index === void 0) return false;
+      const scratch = spatialHitScratchName(mask.name);
+      if (!this.allocation.registers[scratch]) return false;
+      const helper = this.ensureSpatialHitHelper(mask.name, scratch);
+      this.compileExpression(index);
+      this.emitJump(83, "\u041F\u041F", helper.label, `spatial hit ${mask.name}`, helper.line);
+      return true;
+    }
+    sharedLineCountHelper(mask, cell, board, line) {
+      if (this.lineCountCallCount < 2) return void 0;
+      if (this.allocation.registers[spatialCountMaskScratchName()] === void 0) return void 0;
+      const key = lineCountGroupKeyFor(board, cell);
+      if ((this.lineCountGroupCounts.get(key) ?? 0) < 2) return void 0;
+      if (mask.kind !== "identifier") return void 0;
+      const existing = this.lineCountHelpers.get(key);
+      if (existing !== void 0) return existing;
+      const helper = {
+        cell,
+        board,
+        label: `__line_count_${this.lineCountHelpers.size}`,
+        ...line === void 0 ? {} : { line }
+      };
+      this.lineCountHelpers.set(key, helper);
+      return helper;
+    }
+    ensureSpatialHitHelper(mask, scratch) {
+      const existing = this.spatialHitHelpers.get(mask);
+      if (existing !== void 0) return existing;
+      const helper = {
+        mask,
+        scratch,
+        label: `__spatial_hit_${mask}`
+      };
+      this.spatialHitHelpers.set(mask, helper);
+      return helper;
     }
     compileRawStatement(statement) {
       const inputs = statement.inputs ?? [];
@@ -6061,6 +7403,9 @@ var MKProEmulatorBundle = (() => {
     collectSwitchScratchVariables(ast, variables);
     collectDispatchScratchVariables(ast, variables);
     collectTicTacToeScratchVariables(ast, variables);
+    collectBitMaskScratchVariables(ast, variables);
+    collectSpatialHitScratchVariables(ast, variables);
+    collectSpatialCountScratchVariables(ast, variables);
     const registers = {};
     const used = /* @__PURE__ */ new Set();
     for (const variable of variables) {
@@ -6175,6 +7520,25 @@ var MKProEmulatorBundle = (() => {
       }
       return void 0;
     }
+    if (variable.startsWith(BIT_MASK_SCRATCH_PREFIX)) {
+      for (let i = REGISTER_ORDER.length - 1; i >= 0; i -= 1) {
+        const candidate = REGISTER_ORDER[i];
+        if (!used.has(candidate)) return candidate;
+      }
+      return void 0;
+    }
+    if (variable.startsWith(SPATIAL_COUNT_SCRATCH_PREFIX)) {
+      if (variable === spatialCountCounterScratchName()) {
+        for (const candidate of ["0", "1", "2", "3"]) {
+          if (!used.has(candidate)) return candidate;
+        }
+      }
+      for (let i = REGISTER_ORDER.length - 1; i >= 0; i -= 1) {
+        const candidate = REGISTER_ORDER[i];
+        if (!used.has(candidate)) return candidate;
+      }
+      return void 0;
+    }
     return REGISTER_ORDER.find((candidate) => !used.has(candidate));
   }
   function pickConstantRegister(used) {
@@ -6192,12 +7556,23 @@ var MKProEmulatorBundle = (() => {
     }
     const visitExpr = (expr) => {
       if (expr.kind === "number" && estimateNumberCost(expr.raw) > 1) values.add(normalizeConstantLiteral(expr.raw));
-      if (expr.kind === "unary") visitExpr(expr.expr);
+      if (expr.kind === "unary") {
+        if (expr.op === "-" && expr.expr.kind === "number") {
+          values.add(normalizeConstantLiteral(negatedNumberLiteral(expr.expr.raw)));
+          return;
+        }
+        visitExpr(expr.expr);
+      }
       if (expr.kind === "binary") {
         visitExpr(expr.left);
         visitExpr(expr.right);
       }
       if (expr.kind === "call") {
+        const macro = ticTacToeExpressionMacro(expr.callee.toLowerCase(), expr.args);
+        if (macro !== void 0) {
+          visitExpr(macro);
+          return;
+        }
         for (const arg of expr.args) visitExpr(arg);
       }
     };
@@ -6290,6 +7665,301 @@ var MKProEmulatorBundle = (() => {
     for (const block of ast.blocks) visitStatements(block.body);
     return found;
   }
+  function countCalls(ast, name) {
+    const target = name.toLowerCase();
+    let count = 0;
+    const visitExpr = (expr) => {
+      if (expr.kind === "call" && expr.callee.toLowerCase() === target) count += 1;
+      if (expr.kind === "unary") visitExpr(expr.expr);
+      if (expr.kind === "binary") {
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+      }
+      if (expr.kind === "call") {
+        for (const arg of expr.args) visitExpr(arg);
+      }
+    };
+    const visitStatements = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+        if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+        if (statement.kind === "assign") visitExpr(statement.expr);
+        if (statement.kind === "if") {
+          visitExpr(statement.condition.left);
+          visitExpr(statement.condition.right);
+          visitStatements(statement.thenBody);
+          if (statement.elseBody) visitStatements(statement.elseBody);
+        }
+        if (statement.kind === "loop") visitStatements(statement.body);
+        if (statement.kind === "switch") {
+          visitExpr(statement.expr);
+          for (const switchCase of statement.cases) {
+            visitExpr(switchCase.value);
+            visitStatements(switchCase.body);
+          }
+          if (statement.defaultBody) visitStatements(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          visitExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            visitExpr(dispatchCase.value);
+            visitStatements(dispatchCase.body);
+          }
+          if (statement.defaultBody) visitStatements(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visitStatements(entry.body);
+    for (const proc of ast.procs) visitStatements(proc.body);
+    for (const block of ast.blocks) visitStatements(block.body);
+    return count;
+  }
+  function collectLineCountGroupCounts(ast) {
+    const counts = /* @__PURE__ */ new Map();
+    const visitExpr = (expr) => {
+      if (expr.kind === "call" && expr.callee.toLowerCase() === "line_count" && expr.args.length === 2) {
+        const [mask, cell] = expr.args;
+        if (mask !== void 0 && cell !== void 0) {
+          const board = boardForCellMask(mask, ast);
+          if (board !== void 0) {
+            const key = lineCountGroupKeyFor(board, cell);
+            counts.set(key, (counts.get(key) ?? 0) + 1);
+          }
+        }
+      }
+      if (expr.kind === "unary") visitExpr(expr.expr);
+      if (expr.kind === "binary") {
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+      }
+      if (expr.kind === "call") {
+        for (const arg of expr.args) visitExpr(arg);
+      }
+    };
+    const visitStatements = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+        if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+        if (statement.kind === "assign") visitExpr(statement.expr);
+        if (statement.kind === "if") {
+          visitExpr(statement.condition.left);
+          visitExpr(statement.condition.right);
+          visitStatements(statement.thenBody);
+          if (statement.elseBody) visitStatements(statement.elseBody);
+        }
+        if (statement.kind === "loop") visitStatements(statement.body);
+        if (statement.kind === "switch") {
+          visitExpr(statement.expr);
+          for (const switchCase of statement.cases) {
+            visitExpr(switchCase.value);
+            visitStatements(switchCase.body);
+          }
+          if (statement.defaultBody) visitStatements(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          visitExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            visitExpr(dispatchCase.value);
+            visitStatements(dispatchCase.body);
+          }
+          if (statement.defaultBody) visitStatements(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visitStatements(entry.body);
+    for (const proc of ast.procs) visitStatements(proc.body);
+    for (const block of ast.blocks) visitStatements(block.body);
+    return counts;
+  }
+  function collectVariableReadCounts(ast) {
+    const counts = /* @__PURE__ */ new Map();
+    const add = (name) => {
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    };
+    const visitExpr = (expr) => {
+      if (expr.kind === "identifier") add(expr.name);
+      if (expr.kind === "unary") visitExpr(expr.expr);
+      if (expr.kind === "binary") {
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+      }
+      if (expr.kind === "call") {
+        for (const arg of expr.args) visitExpr(arg);
+      }
+    };
+    const visitCondition = (condition) => {
+      visitExpr(condition.left);
+      visitExpr(condition.right);
+    };
+    const visitStatements = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+        if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+        if (statement.kind === "assign") visitExpr(statement.expr);
+        if (statement.kind === "show") {
+          const display = ast.displays.find((candidate) => candidate.name === statement.display);
+          for (const source of display?.sources ?? []) add(source);
+        }
+        if (statement.kind === "if") {
+          visitCondition(statement.condition);
+          visitStatements(statement.thenBody);
+          if (statement.elseBody) visitStatements(statement.elseBody);
+        }
+        if (statement.kind === "loop") visitStatements(statement.body);
+        if (statement.kind === "switch") {
+          visitExpr(statement.expr);
+          for (const switchCase of statement.cases) {
+            visitExpr(switchCase.value);
+            visitStatements(switchCase.body);
+          }
+          if (statement.defaultBody) visitStatements(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          visitExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            visitExpr(dispatchCase.value);
+            visitStatements(dispatchCase.body);
+          }
+          if (statement.defaultBody) visitStatements(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visitStatements(entry.body);
+    for (const proc of ast.procs) visitStatements(proc.body);
+    for (const block of ast.blocks) visitStatements(block.body);
+    return counts;
+  }
+  function collectDisplayUseCounts(ast) {
+    const counts = /* @__PURE__ */ new Map();
+    const add = (name) => {
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    };
+    const visit = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "show") add(statement.display);
+        if (statement.kind === "loop") visit(statement.body);
+        if (statement.kind === "if") {
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "switch") {
+          for (const switchCase of statement.cases) visit(switchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) visit(proc.body);
+    for (const block of ast.blocks) visit(block.body);
+    return counts;
+  }
+  function collectShowSequenceUseCounts(ast) {
+    const counts = /* @__PURE__ */ new Map();
+    const add = (first, second) => {
+      const key = showSequenceKey(first, second);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    };
+    const visit = (statements) => {
+      for (let index = 0; index < statements.length; index += 1) {
+        const statement = statements[index];
+        const next = statements[index + 1];
+        const afterNext = statements[index + 2];
+        if (statement.kind === "show" && next?.kind === "show" && afterNext?.kind === "input") {
+          add(statement.display, next.display);
+        }
+        if (statement.kind === "loop") visit(statement.body);
+        if (statement.kind === "if") {
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "switch") {
+          for (const switchCase of statement.cases) visit(switchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) visit(proc.body);
+    for (const block of ast.blocks) visit(block.body);
+    return counts;
+  }
+  function showSequenceKey(first, second) {
+    return `${first}\0${second}`;
+  }
+  function collectExpressionUseCounts(ast) {
+    const counts = /* @__PURE__ */ new Map();
+    const add = (expr) => {
+      const key = expressionToIntentText(expr);
+      const existing = counts.get(key);
+      if (existing === void 0) {
+        counts.set(key, { count: 1, expr });
+      } else {
+        existing.count += 1;
+      }
+    };
+    const visitExpr = (expr) => {
+      add(expr);
+      if (expr.kind === "unary") visitExpr(expr.expr);
+      if (expr.kind === "binary") {
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+      }
+      if (expr.kind === "call") {
+        for (const arg of expr.args) visitExpr(arg);
+      }
+    };
+    const visitCondition = (condition) => {
+      visitExpr(condition.left);
+      visitExpr(condition.right);
+    };
+    const visit = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+        if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+        if (statement.kind === "assign") visitExpr(statement.expr);
+        if (statement.kind === "if") {
+          visitCondition(statement.condition);
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "loop") visit(statement.body);
+        if (statement.kind === "switch") {
+          visitExpr(statement.expr);
+          for (const switchCase of statement.cases) {
+            visitExpr(switchCase.value);
+            visit(switchCase.body);
+          }
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          visitExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            visitExpr(dispatchCase.value);
+            visit(dispatchCase.body);
+          }
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "core") {
+          for (const input of statement.inputs ?? []) visitExpr(input.expr);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) visit(proc.body);
+    for (const block of ast.blocks) visit(block.body);
+    return counts;
+  }
+  function estimatePackedDisplayBodyCost(sourceCount) {
+    return sourceCount === 0 ? 2 : sourceCount * 2;
+  }
   function programUsesTicTacToeHelpers(ast) {
     let found = false;
     const visitExpr = (expr) => {
@@ -6340,6 +8010,10 @@ var MKProEmulatorBundle = (() => {
   function normalizeConstantLiteral(raw) {
     const value = Number(raw);
     return Number.isFinite(value) ? String(value) : raw.trim().toLowerCase();
+  }
+  function negatedNumberLiteral(raw) {
+    const normalized = raw.trim();
+    return normalized.startsWith("-") ? normalized.slice(1) : `-${normalized}`;
   }
   function warnUndeclaredAssignments(ast, declared, diagnostics) {
     const seen = /* @__PURE__ */ new Set();
@@ -6501,6 +8175,145 @@ var MKProEmulatorBundle = (() => {
     for (const proc of ast.procs) visit(proc.body);
     for (const block of ast.blocks) visit(block.body);
   }
+  function collectBitMaskScratchVariables(ast, variables) {
+    const visit = (statements) => {
+      for (let index = 0; index < statements.length; index += 1) {
+        const statement = statements[index];
+        const next = statements[index + 1];
+        if (statement.kind === "assign" && next?.kind === "assign" && isReusableBitSetPair(statement, next)) {
+          variables.add(bitMaskScratchName(statement));
+        }
+        if (statement.kind === "loop") visit(statement.body);
+        if (statement.kind === "if") {
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "switch") {
+          for (const switchCase of statement.cases) visit(switchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) visit(proc.body);
+    for (const block of ast.blocks) visit(block.body);
+  }
+  function collectSpatialHitScratchVariables(ast, variables) {
+    const shareLineCountMask = countCalls(ast, "line_count") > 1;
+    const visitExpr = (expr) => {
+      if (shareLineCountMask && expr.kind === "call" && expr.callee.toLowerCase() === "line_count") {
+        variables.add(spatialHitScratchName(spatialCountMaskScratchName()));
+        for (const arg of expr.args) visitExpr(arg);
+        return;
+      }
+      if (expr.kind === "call" && (expr.callee.toLowerCase() === "neighbor_count" || expr.callee.toLowerCase() === "line_count") && expr.args[0]?.kind === "identifier") {
+        variables.add(spatialHitScratchName(expr.args[0].name));
+      }
+      if (expr.kind === "unary") visitExpr(expr.expr);
+      if (expr.kind === "binary") {
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+      }
+      if (expr.kind === "call") {
+        for (const arg of expr.args) visitExpr(arg);
+      }
+    };
+    const visit = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+        if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+        if (statement.kind === "assign") visitExpr(statement.expr);
+        if (statement.kind === "if") {
+          visitExpr(statement.condition.left);
+          visitExpr(statement.condition.right);
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "loop") visit(statement.body);
+        if (statement.kind === "switch") {
+          visitExpr(statement.expr);
+          for (const switchCase of statement.cases) {
+            visitExpr(switchCase.value);
+            visit(switchCase.body);
+          }
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          visitExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            visitExpr(dispatchCase.value);
+            visit(dispatchCase.body);
+          }
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "core") {
+          for (const input of statement.inputs ?? []) visitExpr(input.expr);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) visit(proc.body);
+    for (const block of ast.blocks) visit(block.body);
+  }
+  function collectSpatialCountScratchVariables(ast, variables) {
+    let needsScratch = false;
+    const visitExpr = (expr) => {
+      if (expr.kind === "call" && expr.callee.toLowerCase() === "line_count") {
+        needsScratch = true;
+      }
+      if (expr.kind === "unary") visitExpr(expr.expr);
+      if (expr.kind === "binary") {
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+      }
+      if (expr.kind === "call") {
+        for (const arg of expr.args) visitExpr(arg);
+      }
+    };
+    const visit = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+        if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+        if (statement.kind === "assign") visitExpr(statement.expr);
+        if (statement.kind === "if") {
+          visitExpr(statement.condition.left);
+          visitExpr(statement.condition.right);
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "loop") visit(statement.body);
+        if (statement.kind === "switch") {
+          visitExpr(statement.expr);
+          for (const switchCase of statement.cases) {
+            visitExpr(switchCase.value);
+            visit(switchCase.body);
+          }
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          visitExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            visitExpr(dispatchCase.value);
+            visit(dispatchCase.body);
+          }
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "core") {
+          for (const input of statement.inputs ?? []) visitExpr(input.expr);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) visit(proc.body);
+    for (const block of ast.blocks) visit(block.body);
+    if (!needsScratch) return;
+    for (const scratch of spatialCountScratchNames()) variables.add(scratch);
+    if (countCalls(ast, "line_count") > 1) variables.add(spatialCountMaskScratchName());
+  }
   function isReusableCellMaskPair(first, second) {
     const used = matchCellHelperCall(first.expr, ["cell_used", "cell_has"]);
     const mark = matchCellHelperCall(second.expr, ["cell_mark", "cell_set"]);
@@ -6555,11 +8368,11 @@ var MKProEmulatorBundle = (() => {
         throw new Error(`No direct zero-test opcode for ${op}`);
     }
   }
-  function selectCheaperEquivalentCondition(condition, ast) {
+  function selectCheaperEquivalentCondition(condition, ast, preloadedConstants) {
     let best = condition;
-    let bestCost = conditionCompileCost(condition);
+    let bestCost = conditionCompileCost(condition, preloadedConstants);
     for (const candidate of equivalentConditionCandidates(condition, ast)) {
-      const cost = conditionCompileCost(candidate);
+      const cost = conditionCompileCost(candidate, preloadedConstants);
       if (cost < bestCost) {
         best = candidate;
         bestCost = cost;
@@ -6633,11 +8446,11 @@ var MKProEmulatorBundle = (() => {
   function isKnownIntegerExpression(expr, ast) {
     return expr.kind === "identifier" && integerRangeFor(expr.name, ast) !== void 0;
   }
-  function conditionCompileCost(condition) {
+  function conditionCompileCost(condition, preloadedConstants) {
     if (isZeroExpression(condition.right) && canTestAgainstZeroDirectly(condition.op)) {
-      return estimateExpressionCost(condition.left) + 2;
+      return estimateExpressionCostForCondition(condition.left, preloadedConstants) + 2;
     }
-    return estimateExpressionCost(condition.left) + estimateExpressionCost(condition.right) + 3;
+    return estimateExpressionCostForCondition(condition.left, preloadedConstants) + estimateExpressionCostForCondition(condition.right, preloadedConstants) + 3;
   }
   function conditionEquals(left, right) {
     return left.op === right.op && expressionEquals(left.left, right.left) && expressionEquals(left.right, right.right);
@@ -6704,7 +8517,7 @@ var MKProEmulatorBundle = (() => {
     address = 0;
     for (const item of items) {
       if (item.kind === "label") continue;
-      if (address > 255) {
+      if (!options.analysis && address > 255) {
         diagnostics.push(
           buildDiagnostic("error", `Program address ${address} exceeds formal MK-61 address range.`)
         );
@@ -6724,7 +8537,7 @@ var MKProEmulatorBundle = (() => {
         );
         continue;
       }
-      const opcode = item.formalOpcode ?? safeAddressToOpcode(targetAddress2, item.sourceLine, diagnostics);
+      const opcode = item.formalOpcode ?? safeAddressToOpcode(targetAddress2, item.sourceLine, diagnostics, options);
       if (opcode === void 0) {
         address += 1;
         continue;
@@ -6733,7 +8546,7 @@ var MKProEmulatorBundle = (() => {
         buildResolvedStep(
           address,
           opcode,
-          item.formalOpcode === void 0 ? formatAddress(targetAddress2) : formatFormalAddressOpcode(item.formalOpcode),
+          item.formalOpcode === void 0 ? safeFormatAddress(targetAddress2) : formatFormalAddressOpcode(item.formalOpcode),
           item.comment
         )
       );
@@ -6760,7 +8573,10 @@ var MKProEmulatorBundle = (() => {
     if (comment !== void 0) step.comment = comment;
     return step;
   }
-  function safeAddressToOpcode(address, line, diagnostics) {
+  function safeAddressToOpcode(address, line, diagnostics, options) {
+    if (options.analysis && Number.isInteger(address) && address >= 0) {
+      return address & 255;
+    }
     try {
       return addressToOpcode(address);
     } catch (error) {
@@ -7080,17 +8896,17 @@ var MKProEmulatorBundle = (() => {
     if (statement.elseBody || statement.thenBody.length !== 1) return void 0;
     const assign = statement.thenBody[0];
     if (assign?.kind !== "assign") return void 0;
-    const range = integerRangeFor(assign.target, ast);
-    if (!range) return void 0;
+    const range2 = integerRangeFor(assign.target, ast);
+    if (!range2) return void 0;
     const targetExpr = { kind: "identifier", name: assign.target };
     const { left, right, op } = statement.condition;
     if (!expressionEquals(left, targetExpr)) return void 0;
     const decrement = matchTargetMinusDelta(assign.expr, assign.target);
-    if (decrement && op === ">" && isNumericValue(decrement, 1) && range.min !== void 0 && isNumericValue(right, range.min)) {
+    if (decrement && op === ">" && isNumericValue(decrement, 1) && range2.min !== void 0 && isNumericValue(right, range2.min)) {
       return maxCandidate(assign.target, assign.expr, right, "Replaced saturating decrement branch with max()");
     }
     const increment = matchTargetPlusDelta(assign.expr, assign.target);
-    if (increment && op === "<" && isNumericValue(increment, 1) && range.max !== void 0 && isNumericValue(right, range.max)) {
+    if (increment && op === "<" && isNumericValue(increment, 1) && range2.max !== void 0 && isNumericValue(right, range2.max)) {
       return minCandidate(assign.target, assign.expr, right, "Replaced saturating increment branch with min-via-max()");
     }
     return void 0;
@@ -7229,10 +9045,10 @@ var MKProEmulatorBundle = (() => {
       if (!field) continue;
       if (field.type === "flag") return { min: 0, max: 1 };
       if (field.type === "range" && Number.isInteger(field.min) && Number.isInteger(field.max)) {
-        const range = {};
-        if (field.min !== void 0) range.min = field.min;
-        if (field.max !== void 0) range.max = field.max;
-        return range;
+        const range2 = {};
+        if (field.min !== void 0) range2.min = field.min;
+        if (field.max !== void 0) range2.max = field.max;
+        return range2;
       }
     }
     return void 0;
@@ -7344,6 +9160,39 @@ var MKProEmulatorBundle = (() => {
       y: expr.args[2]
     };
   }
+  function matchBitSetAssignment(statement) {
+    const expr = statement.expr;
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_set" || expr.args.length !== 2) return void 0;
+    const collection = expr.args[0];
+    if (collection.kind !== "identifier" || statement.target !== collection.name) return void 0;
+    return {
+      collection,
+      item: expr.args[1]
+    };
+  }
+  function isReusableBitSetPair(first, second) {
+    const firstSet = matchBitSetAssignment(first);
+    const secondSet = matchBitSetAssignment(second);
+    return firstSet !== void 0 && secondSet !== void 0 && expressionEquals(firstSet.item, secondSet.item);
+  }
+  function bitMaskScratchName(statement) {
+    return `${BIT_MASK_SCRATCH_PREFIX}${statement.line}`;
+  }
+  function matchBitMembershipCondition(condition) {
+    if (condition.op !== "!=" || !isZeroExpression(condition.right)) return void 0;
+    const test = condition.left;
+    if (test.kind !== "call" || test.callee.toLowerCase() !== "bit_has" || test.args.length !== 2) return void 0;
+    return {
+      collection: test.args[0],
+      item: test.args[1],
+      test
+    };
+  }
+  function isBitClearAssignment(statement, membership) {
+    if (membership.collection.kind !== "identifier" || statement.target !== membership.collection.name) return false;
+    const expr = statement.expr;
+    return expr.kind === "call" && expr.callee.toLowerCase() === "bit_clear" && expr.args.length === 2 && expressionEquals(expr.args[0], membership.collection) && expressionEquals(expr.args[1], membership.item);
+  }
   function norm4Expression(expr) {
     const rem = multiplyExpressions(
       { kind: "call", callee: "frac", args: [divideExpressions({ kind: "call", callee: "int", args: [expr] }, numberExpression(4))] },
@@ -7452,6 +9301,136 @@ var MKProEmulatorBundle = (() => {
   function bitNotExpression(expr) {
     return { kind: "call", callee: "bit_not", args: [expr] };
   }
+  function spatialCountExpression(name, args, ast) {
+    const [mask, cell] = args;
+    if (mask === void 0 || cell === void 0) return void 0;
+    if (name === "neighbor_count") {
+      const board2 = boardForCellMask(mask, ast);
+      const offsets2 = board2?.height === 1 ? [-1, 1] : board2?.width === 1 ? [-10, 10] : [-11, -10, -9, -1, 1, 9, 10, 11];
+      return sumExpressions(offsets2.map((offset) => spatialHitExpression(mask, offsetExpressionAst(cell, offset))));
+    }
+    const board = boardForCellMask(mask, ast);
+    if (board !== void 0 && board.width <= 4 && board.height <= 4) {
+      return maxExpressions([
+        sumExpressions(spatialLineCells(board, "row", cell).map((index) => spatialHitExpression(mask, index))),
+        sumExpressions(spatialLineCells(board, "column", cell).map((index) => spatialHitExpression(mask, index))),
+        sumExpressions(spatialLineCells(board, "diag-left", cell).map((index) => spatialHitExpression(mask, index))),
+        sumExpressions(spatialLineCells(board, "diag-right", cell).map((index) => spatialHitExpression(mask, index)))
+      ]);
+    }
+    const offsets = [-99, -90, -81, -72, -63, -54, -45, -36, -27, -18, -9, 0, 9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 99];
+    return sumExpressions([
+      spatialHitExpression(mask, cell),
+      ...offsets.filter((offset) => offset !== 0).map((offset) => spatialHitExpression(mask, offsetExpressionAst(cell, offset)))
+    ]);
+  }
+  function spatialHitExpression(mask, index) {
+    return { kind: "call", callee: "__spatial_hit", args: [mask, index] };
+  }
+  function boardForCellMask(mask, ast) {
+    if (mask.kind !== "identifier" || ast.v2 === void 0) return void 0;
+    const domain = ast.v2.state.find((field) => field.name === mask.name)?.domain;
+    if (domain === void 0) return void 0;
+    return ast.v2.boards.find((board) => board.name === domain);
+  }
+  function spatialLineCells(board, kind, cell) {
+    const x = decimalOnesExpressionAst(cell);
+    const y = decimalTensExpressionAst(cell);
+    switch (kind) {
+      case "row":
+        return range(board.xMin, board.xMax).map((candidateX) => boardCellExpressionAst(numberExpression(candidateX), y));
+      case "column":
+        return range(board.yMin, board.yMax).map((candidateY) => boardCellExpressionAst(x, numberExpression(candidateY)));
+      case "diag-left":
+        return range(-Math.max(board.width, board.height) + 1, Math.max(board.width, board.height) - 1).map((delta) => offsetExpressionAst(cell, delta * 11));
+      case "diag-right":
+        return range(-Math.max(board.width, board.height) + 1, Math.max(board.width, board.height) - 1).map((delta) => offsetExpressionAst(cell, delta * 9));
+    }
+  }
+  function spatialLineProgressions(board, cell) {
+    const x = decimalOnesExpressionAst(cell);
+    const y = decimalTensExpressionAst(cell);
+    const span = Math.max(board.width, board.height);
+    return [
+      {
+        startOffset: subtractExpressions(boardCellExpressionAst(numberExpression(board.xMin), y), cell),
+        step: numberExpression(1),
+        count: board.width
+      },
+      {
+        startOffset: subtractExpressions(boardCellExpressionAst(x, numberExpression(board.yMin)), cell),
+        step: numberExpression(10),
+        count: board.height
+      },
+      {
+        startOffset: numberExpression(-(span - 1) * 11),
+        step: numberExpression(11),
+        count: span * 2 - 1
+      },
+      {
+        startOffset: numberExpression(-(span - 1) * 9),
+        step: numberExpression(9),
+        count: span * 2 - 1
+      }
+    ];
+  }
+  function spatialNeighborProgressions(board) {
+    if (board?.height === 1) {
+      return [{ startOffset: numberExpression(-1), step: numberExpression(2), count: 2 }];
+    }
+    if (board?.width === 1) {
+      return [{ startOffset: numberExpression(-10), step: numberExpression(20), count: 2 }];
+    }
+    return [
+      { startOffset: numberExpression(-11), step: numberExpression(1), count: 3 },
+      { startOffset: numberExpression(-1), step: numberExpression(2), count: 2 },
+      { startOffset: numberExpression(9), step: numberExpression(1), count: 3 }
+    ];
+  }
+  function lineCountGroupKeyFor(board, cell) {
+    return `${board.name}:${board.xMin}:${board.xMax}:${board.yMin}:${board.yMax}:${expressionToIntentText(cell)}`;
+  }
+  function boardCellExpressionAst(x, y) {
+    return addExpressions(x, multiplyExpressions(numberExpression(10), y));
+  }
+  function decimalTensExpressionAst(expr) {
+    return intExpression(divideExpressions(expr, numberExpression(10)));
+  }
+  function decimalOnesExpressionAst(expr) {
+    return subtractExpressions(expr, multiplyExpressions(numberExpression(10), intExpression(divideExpressions(expr, numberExpression(10)))));
+  }
+  function offsetExpressionAst(expr, offset) {
+    if (offset === 0) return expr;
+    return offset > 0 ? addExpressions(expr, numberExpression(offset)) : subtractExpressions(expr, numberExpression(Math.abs(offset)));
+  }
+  function sumExpressions(expressions) {
+    return expressions.reduce((sum, expr) => addExpressions(sum, expr), numberExpression(0));
+  }
+  function maxExpressions(expressions) {
+    return expressions.reduce((best, expr) => maxExpression(best, expr));
+  }
+  function spatialHitScratchName(mask) {
+    return `${SPATIAL_HIT_SCRATCH_PREFIX}${mask}`;
+  }
+  function spatialCountScratchNames() {
+    return [
+      `${SPATIAL_COUNT_SCRATCH_PREFIX}total`,
+      `${SPATIAL_COUNT_SCRATCH_PREFIX}line`,
+      `${SPATIAL_COUNT_SCRATCH_PREFIX}offset`,
+      spatialCountCounterScratchName()
+    ];
+  }
+  function spatialCountCounterScratchName() {
+    return `${SPATIAL_COUNT_SCRATCH_PREFIX}counter`;
+  }
+  function spatialCountMaskScratchName() {
+    return `${SPATIAL_COUNT_SCRATCH_PREFIX}mask`;
+  }
+  function range(start, end) {
+    const values = [];
+    for (let value = start; value <= end; value += 1) values.push(value);
+    return values;
+  }
   function signToggleExpression(current, selector) {
     return multiplyExpressions(
       current,
@@ -7463,6 +9442,31 @@ var MKProEmulatorBundle = (() => {
     const value = numericLiteralValue(expr);
     if (value !== void 0) return numberExpression(-value);
     return { kind: "unary", op: "-", expr };
+  }
+  function matchRemainderByConstant(expr) {
+    if (expr.op !== "-") return void 0;
+    if (!expressionPureForSubstitution(expr.left)) return void 0;
+    const product = expr.right;
+    if (product.kind !== "binary" || product.op !== "*") return void 0;
+    const leftIntDivide = matchIntDivideByConstant(product.left);
+    if (leftIntDivide !== void 0 && expressionEquals(leftIntDivide.value, expr.left) && expressionEquals(leftIntDivide.divisor, product.right)) {
+      return leftIntDivide;
+    }
+    const rightIntDivide = matchIntDivideByConstant(product.right);
+    if (rightIntDivide !== void 0 && expressionEquals(rightIntDivide.value, expr.left) && expressionEquals(rightIntDivide.divisor, product.left)) {
+      return rightIntDivide;
+    }
+    return void 0;
+  }
+  function matchIntDivideByConstant(expr) {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "int" || expr.args.length !== 1) return void 0;
+    const divided = expr.args[0];
+    if (divided.kind !== "binary" || divided.op !== "/") return void 0;
+    if (numericLiteralValue(divided.right) === void 0) return void 0;
+    return {
+      value: divided.left,
+      divisor: divided.right
+    };
   }
   function numberExpression(value) {
     return { kind: "number", raw: String(value) };
@@ -7510,6 +9514,132 @@ var MKProEmulatorBundle = (() => {
         return right.kind === "call" && left.callee.toLowerCase() === right.callee.toLowerCase() && left.args.length === right.args.length && left.args.every((arg, index) => expressionEquals(arg, right.args[index]));
     }
   }
+  function optimizeDispatchDefaultCases(statement) {
+    if (!statement.defaultBody || statement.cases.length === 0) return { statement, removed: 0 };
+    const defaultBody = statement.defaultBody;
+    const kept = [];
+    let removed = 0;
+    for (let index = 0; index < statement.cases.length; index += 1) {
+      const dispatchCase = statement.cases[index];
+      const value = numericLiteralValue(dispatchCase.value);
+      const laterSameValue = value !== void 0 && statement.cases.slice(index + 1).some((laterCase) => numericLiteralValue(laterCase.value) === value);
+      if (value !== void 0 && !laterSameValue && statementListsEqual(dispatchCase.body, defaultBody)) {
+        removed += 1;
+        continue;
+      }
+      kept.push(dispatchCase);
+    }
+    if (removed === 0) return { statement, removed };
+    return { statement: { ...statement, cases: kept }, removed };
+  }
+  function statementListsEqual(left, right) {
+    return left.length === right.length && left.every((statement, index) => statementEquals(statement, right[index]));
+  }
+  function statementEquals(left, right) {
+    if (left.kind !== right.kind) return false;
+    switch (left.kind) {
+      case "pause":
+      case "halt":
+        return expressionEquals(left.expr, right.expr);
+      case "ask":
+        return left.target === right.target && expressionOptionEquals(left.prompt, right.prompt);
+      case "input":
+        return left.target === right.target;
+      case "assign":
+        return left.target === right.target && expressionEquals(left.expr, right.expr);
+      case "loop":
+        return statementListsEqual(left.body, right.body);
+      case "if":
+        return conditionEquals(left.condition, right.condition) && statementListsEqual(left.thenBody, right.thenBody) && statementListOptionEquals(left.elseBody, right.elseBody);
+      case "switch":
+        return expressionEquals(left.expr, right.expr) && left.cases.length === right.cases.length && left.cases.every(
+          (switchCase, index) => expressionEquals(switchCase.value, right.cases[index].value) && statementListsEqual(switchCase.body, right.cases[index].body)
+        ) && statementListOptionEquals(left.defaultBody, right.defaultBody);
+      case "dispatch":
+        return expressionEquals(left.expr, right.expr) && left.cases.length === right.cases.length && left.cases.every(
+          (dispatchCase, index) => expressionEquals(dispatchCase.value, right.cases[index].value) && statementListsEqual(dispatchCase.body, right.cases[index].body)
+        ) && statementListOptionEquals(left.defaultBody, right.defaultBody);
+      case "show":
+        return left.display === right.display;
+      case "call":
+        return left.block === right.block;
+      case "core":
+        return rawLinesEqual(left.lines, right.lines) && JSON.stringify(left.inputs ?? []) === JSON.stringify(right.inputs ?? []) && JSON.stringify(left.outputs ?? []) === JSON.stringify(right.outputs ?? []) && JSON.stringify(left.clobbers ?? []) === JSON.stringify(right.clobbers ?? []) && JSON.stringify(left.preserves ?? []) === JSON.stringify(right.preserves ?? []) && left.strict === right.strict;
+      case "egg":
+        return rawLinesEqual(left.lines, right.lines);
+      case "trap":
+        return left.trap === right.trap && expressionEquals(left.expr, right.expr);
+    }
+  }
+  function expressionOptionEquals(left, right) {
+    if (left === void 0 || right === void 0) return left === right;
+    return expressionEquals(left, right);
+  }
+  function statementListOptionEquals(left, right) {
+    if (left === void 0 || right === void 0) return left === right;
+    return statementListsEqual(left, right);
+  }
+  function rawLinesEqual(left, right) {
+    return left.length === right.length && left.every((line, index) => line.text === right[index].text);
+  }
+  function countIdentifierReadsInCondition(condition, name) {
+    return countIdentifierReads(condition.left, name) + countIdentifierReads(condition.right, name);
+  }
+  function countIdentifierReads(expr, name) {
+    switch (expr.kind) {
+      case "number":
+        return 0;
+      case "identifier":
+        return expr.name === name ? 1 : 0;
+      case "unary":
+        return countIdentifierReads(expr.expr, name);
+      case "binary":
+        return countIdentifierReads(expr.left, name) + countIdentifierReads(expr.right, name);
+      case "call":
+        return expr.args.reduce((sum, arg) => sum + countIdentifierReads(arg, name), 0);
+    }
+  }
+  function substituteConditionIdentifier(condition, name, replacement) {
+    return {
+      left: substituteExpressionIdentifier(condition.left, name, replacement),
+      op: condition.op,
+      right: substituteExpressionIdentifier(condition.right, name, replacement)
+    };
+  }
+  function substituteExpressionIdentifier(expr, name, replacement) {
+    switch (expr.kind) {
+      case "number":
+        return expr;
+      case "identifier":
+        return expr.name === name ? replacement : expr;
+      case "unary":
+        return { ...expr, expr: substituteExpressionIdentifier(expr.expr, name, replacement) };
+      case "binary":
+        return {
+          ...expr,
+          left: substituteExpressionIdentifier(expr.left, name, replacement),
+          right: substituteExpressionIdentifier(expr.right, name, replacement)
+        };
+      case "call":
+        return { ...expr, args: expr.args.map((arg) => substituteExpressionIdentifier(arg, name, replacement)) };
+    }
+  }
+  function expressionPureForSubstitution(expr) {
+    switch (expr.kind) {
+      case "number":
+      case "identifier":
+        return true;
+      case "unary":
+        return expressionPureForSubstitution(expr.expr);
+      case "binary":
+        return expressionPureForSubstitution(expr.left) && expressionPureForSubstitution(expr.right);
+      case "call": {
+        const name = expr.callee.toLowerCase();
+        if (name === "random") return false;
+        return expr.args.every(expressionPureForSubstitution);
+      }
+    }
+  }
   function isNumericValue(expr, value) {
     const parsed = numericLiteralValue(expr);
     return parsed !== void 0 && parsed === value;
@@ -7549,6 +9679,40 @@ var MKProEmulatorBundle = (() => {
   function estimateConditionCost(condition, ast) {
     return conditionCompileCost(selectCheaperEquivalentCondition(condition, ast).condition);
   }
+  function estimateExpressionCostForCondition(expr, preloadedConstants) {
+    if (preloadedConstants === void 0) return estimateExpressionCost(expr);
+    if (expr.kind === "number" && preloadedConstants.has(normalizeConstantLiteral(expr.raw))) return 1;
+    if (expr.kind === "unary" && expr.op === "-" && expr.expr.kind === "number" && preloadedConstants.has(normalizeConstantLiteral(negatedNumberLiteral(expr.expr.raw)))) {
+      return 1;
+    }
+    switch (expr.kind) {
+      case "number":
+        return estimateNumberCost(expr.raw);
+      case "identifier":
+        return 1;
+      case "unary":
+        return estimateExpressionCostForCondition(expr.expr, preloadedConstants) + 1;
+      case "binary": {
+        const remainder = matchRemainderByConstant(expr);
+        if (remainder !== void 0) {
+          return estimateExpressionCostForCondition(remainder.value, preloadedConstants) + estimateExpressionCostForCondition(remainder.divisor, preloadedConstants) * 2 + 3;
+        }
+        return estimateExpressionCostForCondition(expr.left, preloadedConstants) + estimateExpressionCostForCondition(expr.right, preloadedConstants) + 1;
+      }
+      case "call":
+        return estimateCallCostForCondition(expr, preloadedConstants);
+    }
+  }
+  function estimateCallCostForCondition(expr, preloadedConstants) {
+    const name = expr.callee.toLowerCase();
+    const macro = ticTacToeExpressionMacro(name, expr.args);
+    if (macro !== void 0) return estimateExpressionCostForCondition(macro, preloadedConstants);
+    if (name === "random" || name === "pi") return 1;
+    if (name === "pow" || ["max", "bit_and", "bit_or", "bit_xor"].includes(name)) {
+      return (expr.args[0] ? estimateExpressionCostForCondition(expr.args[0], preloadedConstants) : 0) + (expr.args[1] ? estimateExpressionCostForCondition(expr.args[1], preloadedConstants) : 0) + 1;
+    }
+    return (expr.args[0] ? estimateExpressionCostForCondition(expr.args[0], preloadedConstants) : 0) + 1;
+  }
   function estimateExpressionCost(expr) {
     switch (expr.kind) {
       case "number":
@@ -7557,8 +9721,13 @@ var MKProEmulatorBundle = (() => {
         return 1;
       case "unary":
         return estimateExpressionCost(expr.expr) + 1;
-      case "binary":
+      case "binary": {
+        const remainder = matchRemainderByConstant(expr);
+        if (remainder !== void 0) {
+          return estimateExpressionCost(remainder.value) + estimateExpressionCost(remainder.divisor) * 2 + 3;
+        }
         return estimateExpressionCost(expr.left) + estimateExpressionCost(expr.right) + 1;
+      }
       case "call":
         return estimateCallCost(expr);
     }
@@ -7658,6 +9827,14 @@ var MKProEmulatorBundle = (() => {
       detail: "Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof."
     },
     {
+      id: "tail-call-lowering",
+      category: "flow",
+      source: "documented",
+      requires: [],
+      activeWhen: ["tail-call-lowering", "terminal-rule-tail-call", "tail-call-layout"],
+      detail: "Replaces subroutine calls in tail position with direct jumps so rule factoring does not force an extra return."
+    },
+    {
       id: "return-zero-jump",
       category: "flow",
       source: "mk61-delta",
@@ -7698,6 +9875,8 @@ var MKProEmulatorBundle = (() => {
       activeWhen: [
         "fallthrough-compare-chain",
         "dispatch-lowering",
+        "dispatch-default-merge",
+        "terminal-display-fusion",
         "super-dark-dispatch",
         "indirect-register-flow"
       ],
@@ -8495,7 +10674,8 @@ var MKProEmulatorBundle = (() => {
   // src/browser/emulator-bridge.ts
   var DEFAULT_COMPILE_OPTIONS = {
     delivery: "hex",
-    budget: 105
+    budget: 105,
+    analysis: false
   };
   var DEFAULT_DEBOUNCE_MS = 250;
   var STATUS_ID = "mk-pro-emulator-status";

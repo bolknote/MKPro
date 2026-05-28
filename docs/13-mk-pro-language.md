@@ -230,10 +230,12 @@ rule reveal_safe_cell {
 ```
 
 `line_count(cells, cell)` is the fox-hunt style row/column/diagonal count.
-`neighbor_count(cells, cell)` is the Minesweeper-style 8-neighbor count. These
-parse as spatial query nodes. They do not compile until a real lowerer maps the
-source rules to IR; once that exists, the optimizer can choose masks, decimal
-digits, or a shared query tail.
+`neighbor_count(cells, cell)` is the Minesweeper-style 8-neighbor count. They
+lower into ordinary mask/digit expressions, after which the optimizer can choose
+shared arithmetic, masks, decimal digits, or a query tail.
+For one-dimensional boards that fit in the mantissa, `cells(domain)` membership
+and updates lower to decimal position masks such as `pow10(cell)` instead of the
+general four-bit mask formula.
 
 ## Example Programs
 
@@ -243,11 +245,14 @@ The top-level repository examples are runnable MK-Pro programs:
   examples.
 - `lunar.mkpro` is a numeric counter game with touchdown rules.
 - `99-bottles.mkpro` is a direct port of the Bolknote beer demo.
+- `alaram.mkpro`, `cave-sketch.mkpro`, `dangerous-loading.mkpro`,
+  `dungeon.mkpro`, `game-100-pig.mkpro`, `minesweeper-9x9.mkpro`,
+  `raja-yoga.mkpro`, and `sea-battle.mkpro` are game ports that lower through
+  ordinary IR and fit within their references.
 
-`examples/spatial-drafts/*.mkpro` contains source-level board/world ports such
-as Cave Treasure, Sea Battle, Fox Hunt, Minesweeper, and other dense MK-61
-games. They intentionally fail compilation until the corresponding spatial
-lowerers exist.
+`examples/pending-optimizer/*.mkpro` contains ports that lower through ordinary
+IR but are still too large for MK-61 or their reference. Source-level board and
+world queries are part of the language surface, not a separate draft bucket.
 
 ## World Blocks
 
@@ -500,9 +505,8 @@ The source only states what is allowed semantically. The report explains:
 
 Unsupported high-level effects fail compilation instead of becoming comments.
 There is no production spatial template path: spatial programs must lower from
-their actual AST rules through ordinary IR. Until a real lowerer exists for
-`board`, `world`, `cells`, `line_count`, `neighbor_count`, `cell_at`, or
-`random_cell`, the compiler stops with an explicit diagnostic.
+their actual AST rules through ordinary IR. Board/world/cell queries lower into
+the same expression and control-flow IR as the rest of the language.
 
 `reference` is report metadata only and must not change code generation. For
 known `games/*` references, the report resolves the original listing, counts the
@@ -654,6 +658,20 @@ candidates:
 - store/recall peephole: removes immediate `X->П r ; П->X r`;
 - branch-removal umbrella: replaces matched conditionals with branchless
   arithmetic, `К max`, `К |x|`, sign transforms, or boolean-masked updates;
+- cell membership clear reuse: when `if cell in cells` immediately clears that
+  same cell, the compiler reuses the successful mask instead of recomputing it;
+- adjacent bit-set reuse: consecutive `cells += cell` updates compute the cell
+  bit mask once and apply it to each collection;
+- repeated packed display helpers: repeated packed screens and repeated
+  `show; show; read` prompt sequences are emitted once and called normally;
+- pure expression helpers: repeated expensive pure expressions such as
+  generated `digit_at(...)` bodies are shared as ordinary subroutines;
+- remainder fraction lowering: `x - n * int(x / n)` lowers as `frac(x / n) * n`
+  so generated digit/bit indexing does not recompute `x`;
+- spatial count hit helpers: `neighbor_count` and `line_count` keep their
+  query shape until code generation and share compiled hit-test helpers;
+- spatial line-count loops: large `line_count` queries use compact hit loops
+  and shared geometry helpers when several masks use the same board/cell;
   `arithmetic-if-terminal-select` covers both boolean-flag `==`/`!=` forms
   and full six-operator comparisons (`==`/`!=`/`<`/`<=`/`>`/`>=`) by lowering
   the predicate to a `0..1` selector via `sign`/`max`/`abs`. A cost gate keeps

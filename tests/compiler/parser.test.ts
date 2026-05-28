@@ -281,6 +281,42 @@ program Bad {
     ).toThrow(/Rule name 'move' is reserved/u);
   });
 
+  it("keeps explicit otherwise branches when compacting direction calls", () => {
+    const ast = parseProgram(`
+program DirectionOtherwise {
+  state {
+    pos: counter -99..99 = 0
+  }
+  turn {
+    match key {
+      2, 4, 5, 6, 8 => step direction(key)
+      otherwise => wait
+    }
+  }
+  rule step delta {
+    pos += delta
+  }
+  rule wait {
+    stop 0
+  }
+}
+`);
+    const loop = ast.entries[0]?.body[0];
+    expect(loop?.kind).toBe("loop");
+    if (loop?.kind !== "loop") throw new Error("expected loop");
+    const dispatch = loop.body[0];
+    expect(dispatch?.kind).toBe("dispatch");
+    if (dispatch?.kind !== "dispatch") throw new Error("expected dispatch");
+    expect(dispatch.cases).toHaveLength(0);
+    expect(dispatch.defaultBody).toEqual([
+      expect.objectContaining({
+        kind: "if",
+        thenBody: expect.arrayContaining([expect.objectContaining({ kind: "call", block: "step" })]),
+        elseBody: [expect.objectContaining({ kind: "call", block: "wait" })],
+      }),
+    ]);
+  });
+
   it("parses v2 world, boards, cell sets, state config, encounters, and reference metadata", () => {
     const ast = parseProgram(`
 reference demo_reference
@@ -386,11 +422,38 @@ program Queries {
     const loop = ast.entries[0]?.body[0];
     expect(loop?.kind).toBe("loop");
     if (loop?.kind !== "loop") throw new Error("expected loop");
-    const calls = loop.body
-      .filter((statement) => statement.kind === "assign")
-      .map((statement) => statement.kind === "assign" && statement.expr.kind === "call" ? statement.expr.callee : undefined);
+    const lowered = JSON.stringify(loop.body);
 
-    expect(calls).toEqual(["line_count", "neighbor_count", "cell_at", "random_cell"]);
+    expect(lowered).toMatch(/line_count/u);
+    expect(lowered).toMatch(/neighbor_count/u);
+    expect(lowered).not.toMatch(/cell_at/u);
+    expect(lowered).toMatch(/digit_at/u);
+    const sourceTurn = ast.v2?.turn?.body.filter((statement) => statement.kind === "v2_assign");
+    expect(sourceTurn?.map((statement) => statement.kind === "v2_assign" ? statement.expr : undefined)).toContain("random_cell(cave)");
+  });
+
+  it("lowers one-dimensional cell sets to decimal position masks", () => {
+    const ast = parseProgram(`
+program LineMask {
+  life: board(1..7, 1..1)
+  state {
+    pos: coord(life) = 4
+    hazards: cells(life) = random()
+  }
+  turn {
+    hazards += pos
+    if pos in hazards {
+      stop 1
+    }
+  }
+}
+`);
+    const lowered = JSON.stringify(ast.entries[0]?.body);
+
+    expect(lowered).toMatch(/pow10/u);
+    expect(lowered).toMatch(/bit_or/u);
+    expect(lowered).toMatch(/bit_and/u);
+    expect(lowered).not.toMatch(/bit_set|bit_has/u);
   });
 
   it("rejects unknown program syntax and unknown rules", () => {
@@ -607,10 +670,9 @@ program Demo {
     expect(conditional?.kind).toBe("v2_if");
     if (conditional?.kind !== "v2_if") throw new Error("expected v2_if");
     expect(conditional.predicate).toMatchObject({
-      kind: "v2_compare",
-      left: "walls",
-      op: ">=",
-      right: "next",
+      kind: "v2_contains",
+      collection: "walls",
+      item: "next",
     });
   });
 

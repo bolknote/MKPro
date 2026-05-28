@@ -38,7 +38,7 @@ program LunarLander {
     // thrust changes acceleration, acceleration changes both height and speed.
     accel = burn * 10 / fuel - 9.8
     height = height - speed - accel / 2
-    speed = speed + accel
+    speed += accel
     fuel -= burn
 
     if height < 2 {

@@ -16,6 +16,7 @@ describe("opcode catalog", () => {
     expect(findOpcodeName("К СЧ")?.code).toBe(0x3b);
     expect(findOpcodeName("K СЧ")?.code).toBe(0x3b);
     expect(findOpcodeName("k сч")?.code).toBe(0x3b);
+    expect(findOpcodeName("FBx")?.code).toBe(0x0f);
   });
 
   it("looks up storage opcodes with Cyrillic Х", () => {

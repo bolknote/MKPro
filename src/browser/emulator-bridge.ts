@@ -4,6 +4,7 @@ import type { CompileOptions, CompileResult } from "../core/index.ts";
 const DEFAULT_COMPILE_OPTIONS: CompileOptions = {
   delivery: "hex",
   budget: 105,
+  analysis: false,
 };
 
 const DEFAULT_DEBOUNCE_MS = 250;

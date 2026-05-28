@@ -163,10 +163,14 @@ Smoke tests for packaged games live under `tests/emulator/`.
 | `games/lordbss/` | Cleaned Lord_BSS listings + per-game `.md` |
 | `games/kei/` | OCR-derived treasure-cave material |
 | `examples/tiny-game.mkpro` | Minimal MK-Pro game sketch |
-| `examples/spatial-drafts/cave-sketch.mkpro` | compact cave sketch/baseline draft |
-| `examples/spatial-drafts/cave-treasure-full.mkpro` | hard high-level compactness reference draft |
-| `examples/spatial-drafts/alaram.mkpro` | commented Lord_BSS cockpit interceptor port draft |
-| `examples/spatial-drafts/dungeon.mkpro` | commented Lord_BSS Dungeon port draft |
+| `examples/alaram.mkpro` | Lord_BSS cockpit interceptor port that fits the original |
+| `examples/cave-sketch.mkpro` | compact cave sketch/baseline |
+| `examples/dangerous-loading.mkpro` | ferry/loading port that fits after dispatch default merging |
+| `examples/dungeon.mkpro` | Lord_BSS Dungeon port that fits the original |
+| `examples/game-100-pig.mkpro` | Anvarov dice game port that fits the original |
+| `examples/minesweeper-9x9.mkpro` | Anvarov Minesweeper port that fits the original |
+| `examples/raja-yoga.mkpro` | Anvarov one-dimensional mask game port that fits the original |
+| `examples/pending-optimizer/cave-treasure.mkpro` | hard high-level compactness reference needing size work |
 
 ## Sources
 

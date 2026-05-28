@@ -37,8 +37,10 @@ function collectCseCandidates(ops: readonly IrOp[]): Block[] {
       buffer.push(op);
       continue;
     }
-    if (op.kind === "return" && buffer.length >= 3) {
+    if (buffer.length >= 3 && op.kind === "return") {
       blocks.push({ startIndex: start, ops: [...buffer, op] });
+    } else if (buffer.length >= 3 && op.kind === "stop" && ops[i + 1]?.kind === "return") {
+      blocks.push({ startIndex: start, ops: [...buffer, op, ops[i + 1]!] });
     }
     start = -1;
     buffer = [];
@@ -53,6 +55,7 @@ function blockSignature(block: Block): string {
       if (op.kind === "recall") return `r:${op.register}`;
       if (op.kind === "plain") return `p:${op.opcode.toString(16)}`;
       if (op.kind === "stop") return `stop:${op.semantic}`;
+      if (op.kind === "return") return "return";
       return `o:${op.kind}`;
     })
     .join("|");

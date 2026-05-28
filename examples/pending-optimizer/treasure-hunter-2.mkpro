@@ -14,11 +14,10 @@ program TreasureHunter2 {
     floor: counter 1..9 = 9
     room: counter 0..6 = 0
 
-    known_floor: counter 0..9 = 0
+    entered: flag = 0
     dug_pos: coord(cave)
     collected_treasure: coord(cave)
-
-    tile: counter 0..9 = 0
+    ladder_top: coord(cave)
   }
 
   world cave {
@@ -48,16 +47,26 @@ program TreasureHunter2 {
   }
 
   turn {
-    show maze
-    read action
+    if entered == 0 {
+      // The original enters from the left wall automatically; if the starting
+      // cell is a hole, the first visible state is already lower in the cave.
+      entered = 1
+      inspect_cell
+    }
+    else {
+      show maze
+      read action
 
-    match action {
-      4 => move_left
-      6 => move_right
-      8 => climb
-      2 => descend
-      0 => punch_hole
-      otherwise => show maze
+      // The MK-61 prototype uses non-zero X plus the R/GRD/G angle switch for
+      // left/up/right. These numeric labels are the portable command names for
+      // the same three choices; there is no manual down command in the source.
+      match action {
+        4 => move_left
+        6 => move_right
+        8 => climb_or_descend
+        0 => punch_hole
+        otherwise => show maze
+      }
     }
   }
 
@@ -90,15 +99,16 @@ program TreasureHunter2 {
     }
   }
 
-  rule climb {
+  rule climb_or_descend {
     if pos == dug_pos {
       show maze
     }
     else {
-      if tile == 3 {
+      if floor_view == 3 {
         if floor < 9 {
           floor++
           move pos up
+          ladder_top = pos
           inspect_cell
         }
         else {
@@ -106,7 +116,14 @@ program TreasureHunter2 {
         }
       }
       else {
-        show maze
+        // At the top of a known ladder the prototype treats "up" in empty
+        // space as a quick descent back down the ladder.
+        if pos == ladder_top {
+          descend
+        }
+        else {
+          show maze
+        }
       }
     }
   }
@@ -140,18 +157,9 @@ program TreasureHunter2 {
 
   rule reveal_cell {
     // Tile numbers are semantic, not visual decoration: treasure, hole, ladder,
-    // or empty passage decide the next rule. The first visit to a generated
-    // floor/cell also makes its plan visible on the calculator screen.
-    tile = cell_at(cave, pos)
-    floor_view = tile
-
-    if floor == known_floor {
-      classify_tile
-    }
-    else {
-      known_floor = floor
-      classify_tile
-    }
+    // or empty passage decide the next rule.
+    floor_view = cell_at(cave, pos)
+    classify_tile
   }
 
   rule classify_tile {
@@ -159,23 +167,17 @@ program TreasureHunter2 {
       show maze
     }
     else {
-      match tile {
+      match floor_view {
         1 => collect_treasure
         2 => descend
-        3 => show maze
         otherwise => show maze
       }
     }
   }
 
   rule collect_treasure {
-    if pos == collected_treasure {
-      show maze
-    }
-    else {
-      collected_treasure = pos
-      treasure++
-      show maze
-    }
+    collected_treasure = pos
+    treasure++
+    show maze
   }
 }

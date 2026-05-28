@@ -22,6 +22,7 @@ export type MachineId = "mk61";
 export interface CompileOptions {
   delivery: DeliveryMode;
   budget: number;
+  analysis: boolean;
 }
 
 export interface Diagnostic {
@@ -376,13 +377,19 @@ export interface V2MatchCaseAst {
   line: number;
 }
 
-export type V2PredicateAst = V2ComparePredicateAst;
+export type V2PredicateAst = V2ComparePredicateAst | V2ContainsPredicateAst;
 
 export interface V2ComparePredicateAst {
   kind: "v2_compare";
   left: string;
   op: "==" | "!=" | "<" | "<=" | ">" | ">=";
   right: string;
+}
+
+export interface V2ContainsPredicateAst {
+  kind: "v2_contains";
+  collection: string;
+  item: string;
 }
 
 export interface BlockAst {

@@ -185,7 +185,8 @@ const run: IrPassFn = (ops) => {
   }
   const result: IrOp[] = [];
   for (let i = 0; i < ops.length; i += 1) {
-    if (!shouldRemove[i]) result.push(ops[i]!);
+    const op = ops[i]!;
+    if (!shouldRemove[i] || op.kind === "label") result.push(op);
   }
   const totalCells = removeRanges.reduce((acc, range) => acc + (range.end - range.start), 0);
   return {

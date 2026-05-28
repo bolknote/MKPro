@@ -32,6 +32,14 @@ function buildTargetIndexes(ops: readonly IrOp[]): {
 function buildSuccessors(ops: readonly IrOp[]): SuccessorMap {
   const { labelIndex, addressIndex } = buildTargetIndexes(ops);
   const successors: number[][] = Array.from({ length: ops.length }, () => []);
+  const callReturns: number[] = [];
+  for (let i = 0; i < ops.length; i += 1) {
+    const op = ops[i]!;
+    const next = i + 1;
+    if ((op.kind === "call" || op.kind === "indirect-call") && next < ops.length) {
+      callReturns.push(next);
+    }
+  }
   for (let i = 0; i < ops.length; i += 1) {
     const op = ops[i]!;
     const next = i + 1;
@@ -63,6 +71,7 @@ function buildSuccessors(ops: readonly IrOp[]): SuccessorMap {
         fallthrough();
         break;
       case "return":
+        successors[i]!.push(...callReturns);
         break;
       case "jump":
         jumpTo(op.target);

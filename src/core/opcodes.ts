@@ -271,6 +271,7 @@ function normalizeAliases(item: OpcodeInfo): string[] {
   if (item.name === "К |x|") aliases.add("K|x|");
   if (item.name === "К [x]") aliases.add("K[x]");
   if (item.name === "К {x}") aliases.add("K{x}");
+  if (item.name === "F Вx") aliases.add("FBx");
   if (item.name === "С/П") aliases.add("STOP");
   if (item.name === "В/О") aliases.add("RTN");
 

@@ -75,6 +75,189 @@ program FormulaHelpers {
     }
   });
 
+  it("reuses a successful cell membership mask when clearing that cell", () => {
+    const result = compileOk(`
+program ClearAfterHit {
+  state {
+    pos: coord(cave) = 12
+    marks: cells(cave) = random()
+  }
+  world cave {
+    position pos {
+    }
+  }
+  turn {
+    if pos in marks {
+      marks -= pos
+      stop 1
+    }
+    else {
+      stop 0
+    }
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "cell-membership-clear-reuse")).toBe(true);
+  });
+
+  it("hoists common branch tails before MK-61 code generation", () => {
+    const result = compileOk(`
+program CommonBranchTail {
+  state {
+    selector: counter 0..9 = 0
+    value: counter 0..9 = 0
+  }
+  screen view {
+    show value
+  }
+  turn {
+    if selector == 0 {
+      value = 1
+      show view
+    }
+    else {
+      value = 2
+      show view
+    }
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "common-branch-tail-hoisting")).toBe(true);
+    expect(result.steps.filter((step) => step.hex === "50")).toHaveLength(1);
+  });
+
+  it("shares repeated packed display bodies through a normal helper", () => {
+    const result = compileOk(`
+program RepeatedPackedDisplay {
+  state {
+    selector: counter 0..9 = 0
+    a: packed = 1
+    b: packed = 2
+    c: packed = 3
+  }
+  screen view {
+    show a, b, c
+  }
+  turn {
+    match selector {
+      1 => show view
+      2 => show view
+      3 => show view
+      otherwise => stop 0
+    }
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "packed-display-helper")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "packed-display-helper-call")).toBe(true);
+  });
+
+  it("shares repeated pure expression bodies through a normal helper", () => {
+    const result = compileOk(`
+program RepeatedExpression {
+  state {
+    pos: packed = 23
+    map: packed = 123456789
+    a: packed = 0
+    b: packed = 0
+    c: packed = 0
+  }
+  turn {
+    a = digit_at(map, pos - int(pos / 10) * 10)
+    b = digit_at(map, pos - int(pos / 10) * 10)
+    c = digit_at(map, pos - int(pos / 10) * 10)
+    stop a + b + c
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "expression-helper")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "expression-helper-call")).toBe(true);
+  });
+
+  it("lowers integer remainders without recomputing the dividend", () => {
+    const result = compileOk(`
+program RemainderLowering {
+  state {
+    value: packed = 23
+    ones: packed = 0
+  }
+  turn {
+    ones = value - 10 * int(value / 10)
+    stop ones
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "remainder-fraction-lowering")).toBe(true);
+  });
+
+  it("reuses one cell bit mask across adjacent set updates", () => {
+    const result = compileOk(`
+program AdjacentSetUpdates {
+  grid: board(1..4, 1..4)
+  state {
+    cell: coord(grid) = 11
+    mine: cells(grid)
+    seen: cells(grid)
+  }
+  turn {
+    mine += cell
+    seen += cell
+    stop mine + seen
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "bit-set-mask-cse")).toBe(true);
+  });
+
+  it("shares repeated show-show-read sequences", () => {
+    const result = compileOk(`
+program RepeatedChallengePrompt {
+  state {
+    warning_value: packed = 7
+    memory_value: packed = 3
+    answer: packed = 0
+    selector: counter 0..9 = 0
+  }
+  screen warning {
+    show warning_value
+  }
+  screen memory {
+    show memory_value
+  }
+  turn {
+    show warning
+    show memory
+    read answer
+    show warning
+    show memory
+    read answer
+    show warning
+    show memory
+    read answer
+    show warning
+    show memory
+    read answer
+    show warning
+    show memory
+    read answer
+    show warning
+    show memory
+    read answer
+    stop answer
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "show-sequence-helper")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "show-sequence-helper-call")).toBe(true);
+  });
+
   it("lowers contracted raw blocks inside V2 rules", () => {
     const result = compileOk(`
 program RawRule {
@@ -399,20 +582,48 @@ program LunarLike {
   });
 
   it("surfaces budget exceeded as a hard error for V2 programs", () => {
-    const body = Array.from({ length: 60 }, () => "    x = x + 1234567").join("\n");
     expect(() =>
       compileMKPro(`
 program TooLarge {
-  state {
-    x: counter 0..999999 = 0
-  }
   turn {
-${body}
-    stop x
+    stop 1
   }
 }
-`, { budget: 20 }),
+`, { budget: 1 }),
     ).toThrow(CompileError);
+  });
+
+  it("keeps overbudget output inspectable in analysis mode", () => {
+    const result = compileMKPro(`
+program AnalyzeBudget {
+  state {
+    value: packed = 0
+  }
+  turn {
+    value = 1
+    stop value
+  }
+}
+`, { budget: 1, analysis: true });
+
+    expect(result.report.budgetReport.exceeded).toBe(true);
+    expect(result.diagnostics.some((diagnostic) => diagnostic.code === "BUDGET_EXCEEDED" && diagnostic.level === "warning")).toBe(true);
+    expect(result.steps.length).toBeGreaterThan(1);
+  });
+
+  it("keeps analysis output inspectable past the byte address range", () => {
+    const pauses = Array.from({ length: 130 }, () => "    show 0").join("\n");
+    const result = compileMKPro(`
+program AnalyzeHuge {
+  turn {
+${pauses}
+  }
+}
+`, { budget: 1, analysis: true });
+
+    expect(result.steps.length).toBeGreaterThan(0xff);
+    expect(result.diagnostics.some((diagnostic) => diagnostic.message.includes("exceeds formal MK-61 address range"))).toBe(false);
+    expect(result.diagnostics.some((diagnostic) => diagnostic.code === "BUDGET_EXCEEDED" && diagnostic.level === "warning")).toBe(true);
   });
 
   it("keeps the default V2 budget at 105 cells", () => {

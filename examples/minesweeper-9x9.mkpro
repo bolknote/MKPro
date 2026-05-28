@@ -1,0 +1,45 @@
+reference anvarov_minesweeper_9x9
+
+// Based on Serge Anvarov's "Minesweeper 9x9": the calculator owns the hidden
+// mine mask and reports the number of mines adjacent to each requested cell.
+
+program Minesweeper9x9 {
+  minefield: board(1..9, 1..9)
+
+  state {
+    // The original uses two-digit cell names from 11 to 99; preserving that
+    // convention keeps the player's paper board aligned with the listing.
+    // Mines are generated once and never shown.
+    mines: cells(minefield) = random()
+
+    probe: coord(minefield)
+    clue: counter 0..8 = 0
+  }
+
+  screen result {
+    show clue
+  }
+
+  rule exploded {
+    stop -999
+  }
+
+  turn {
+    read probe
+
+    if probe in mines {
+      exploded
+    }
+    else {
+      reveal_safe_cell
+    }
+  }
+
+  rule reveal_safe_cell {
+    // A safe probe reports only the number of mines in the eight surrounding
+    // cells. Tracking opened cells or a victory counter is left to the player,
+    // just as in the original paper-board game.
+    clue = neighbor_count(mines, probe)
+    show result
+  }
+}

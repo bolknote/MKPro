@@ -13,10 +13,11 @@ import { r0FractionalSentinel } from "../../src/core/passes/r0-fractional-sentin
 import { redundantPrologueElimination } from "../../src/core/passes/redundant-prologue.ts";
 import { registerCoalesce } from "../../src/core/passes/register-coalesce.ts";
 import { storeRecallPeephole } from "../../src/core/passes/store-recall-peephole.ts";
+import { tailCallLowering } from "../../src/core/passes/tail-call.ts";
 import { vpX2Peephole } from "../../src/core/passes/vp-x2-peephole.ts";
 import type { IrOp, RegisterName } from "../../src/core/types.ts";
 
-const noopOptions = { delivery: "manual" as const, budget: 105 };
+const noopOptions = { delivery: "manual" as const, budget: 105, analysis: false };
 const ctx = { options: noopOptions };
 
 const REGISTER_INDEX: Record<RegisterName, number> = {
@@ -111,6 +112,16 @@ function numericCall(target: number): IrOp {
   };
 }
 
+function call(target: string): IrOp {
+  return {
+    kind: "call",
+    target,
+    opcode: 0x53,
+    meta: { mnemonic: "ПП", comment: `proc call ${target}` },
+    targetMeta: {},
+  };
+}
+
 function indirectRecall(register: RegisterName): IrOp {
   return {
     kind: "indirect-recall",
@@ -191,6 +202,21 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops[0]).toMatchObject({ kind: "store", register: "8" });
   });
 
+  it("dead-store-elimination keeps subroutine stores that are read after return", () => {
+    const program: IrOp[] = [
+      label("main"),
+      call("bump"),
+      recall("1"),
+      halt(),
+      label("bump"),
+      store("1"),
+      ret(),
+    ];
+    const result = deadStoreElimination.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+  });
+
   it("last-x-reuse drops П->X r when X already holds that register's value", () => {
     const program: IrOp[] = [
       store("1"),
@@ -245,6 +271,78 @@ describe("ir passes on synthetic programs", () => {
     const result = jumpToNextThreading.run(program, ctx);
     expect(result.applied).toBe(1);
     expect(result.ops.find((op) => op.kind === "jump")).toBeUndefined();
+  });
+
+  it("tail-call-lowering specializes procedures called only with one jump continuation", () => {
+    const program: IrOp[] = [
+      label("main"),
+      call("finish_turn"),
+      jump("loop"),
+      label("loop"),
+      halt(),
+      label("finish_turn"),
+      cjump("done"),
+      halt(),
+      label("done"),
+      ret(),
+    ];
+    const result = tailCallLowering.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops[1]).toMatchObject({ kind: "jump", target: "finish_turn" });
+    expect(result.ops.some((op) => op.kind === "return")).toBe(false);
+    expect(result.ops.at(-1)).toMatchObject({ kind: "jump", target: "loop" });
+  });
+
+  it("tail-call-lowering refuses mixed continuations for the same procedure", () => {
+    const program: IrOp[] = [
+      label("main"),
+      call("finish_turn"),
+      jump("loop"),
+      label("other"),
+      call("finish_turn"),
+      jump("menu"),
+      label("finish_turn"),
+      ret(),
+    ];
+    const result = tailCallLowering.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+  });
+
+  it("tail-call-lowering turns call plus return jump into a direct tail jump", () => {
+    const program: IrOp[] = [
+      label("main"),
+      call("finish_turn"),
+      jump("return_here"),
+      label("return_here"),
+      ret(),
+      cjump("finish_turn"),
+      label("finish_turn"),
+      ret(),
+    ];
+    const result = tailCallLowering.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops[1]).toMatchObject({ kind: "jump", target: "finish_turn" });
+    expect(result.ops[2]).toMatchObject({ kind: "label", name: "return_here" });
+  });
+
+  it("tail-call-lowering sees tail returns through compiler labels", () => {
+    const program: IrOp[] = [
+      label("main"),
+      call("finish_turn"),
+      label("if_end"),
+      ret(),
+      cjump("finish_turn"),
+      label("finish_turn"),
+      ret(),
+    ];
+    const result = tailCallLowering.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops[1]).toMatchObject({ kind: "jump", target: "finish_turn" });
+    expect(result.ops[2]).toMatchObject({ kind: "label", name: "if_end" });
   });
 
   it("stable-indirect-flow replaces direct numeric branches when a stable selector already holds the address", () => {
@@ -708,6 +806,24 @@ describe("ir passes on synthetic programs", () => {
     expect(result.applied).toBe(1);
     expect(result.ops.length).toBe(program.length - 4);
     expect(result.ops[result.ops.length - 1]!.kind).toBe("jump");
+  });
+
+  it("redundant-prologue-elimination preserves labels inside the removed command range", () => {
+    const program: IrOp[] = [
+      label("main"),
+      recall("1"),
+      halt(),
+      recall("3"),
+      store("3"),
+      recall("1"),
+      label("dispatch_end"),
+      halt(),
+      jump("main"),
+    ];
+    const result = redundantPrologueElimination.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toContainEqual(label("dispatch_end"));
   });
 
   it("redundant-prologue-elimination refuses to fire when the only body is the duplicate prologue", () => {

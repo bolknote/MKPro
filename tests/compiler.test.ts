@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { compileMKPro, MK61_PROFILE } from "../src/core/index.ts";
 
@@ -10,6 +10,7 @@ function source(path: string): string {
 }
 
 function examplePaths(dir: string): string[] {
+  if (!existsSync(dir)) return [];
   return readdirSync(dir, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith(".mkpro"))
     .map((entry) => `${dir}/${entry.name}`)
@@ -17,7 +18,8 @@ function examplePaths(dir: string): string[] {
 }
 
 const RUNNABLE_EXAMPLES = examplePaths("examples");
-const SPATIAL_DRAFTS = examplePaths("examples/spatial-drafts");
+const PENDING_LOWERER_EXAMPLES = examplePaths("examples/pending-lowerers");
+const PENDING_OPTIMIZER_EXAMPLES = examplePaths("examples/pending-optimizer");
 
 describe("MK-Pro compiler", () => {
   it("keeps the smallest human DSL example compiling", () => {
@@ -39,14 +41,23 @@ describe("MK-Pro compiler", () => {
     expect(oversized).toEqual([]);
   });
 
-  it("keeps spatial game drafts outside the runnable example set", () => {
+  it("keeps unfinished game ports outside the runnable example set", () => {
     expect(RUNNABLE_EXAMPLES).toContain("examples/99-bottles.mkpro");
+    expect(RUNNABLE_EXAMPLES).toContain("examples/alaram.mkpro");
+    expect(RUNNABLE_EXAMPLES).toContain("examples/cave-sketch.mkpro");
+    expect(RUNNABLE_EXAMPLES).toContain("examples/dangerous-loading.mkpro");
+    expect(RUNNABLE_EXAMPLES).toContain("examples/dungeon.mkpro");
+    expect(RUNNABLE_EXAMPLES).toContain("examples/game-100-pig.mkpro");
     expect(RUNNABLE_EXAMPLES).toContain("examples/lunar.mkpro");
-    expect(SPATIAL_DRAFTS.length).toBeGreaterThan(0);
+    expect(RUNNABLE_EXAMPLES).toContain("examples/minesweeper-9x9.mkpro");
+    expect(RUNNABLE_EXAMPLES).toContain("examples/raja-yoga.mkpro");
+    expect(RUNNABLE_EXAMPLES).toContain("examples/sea-battle.mkpro");
+    expect(PENDING_LOWERER_EXAMPLES).toEqual([]);
+    expect(PENDING_OPTIMIZER_EXAMPLES.length).toBeGreaterThan(0);
 
-    for (const path of SPATIAL_DRAFTS) {
-      expect(RUNNABLE_EXAMPLES).not.toContain(path.replace("examples/spatial-drafts/", "examples/"));
-      expect(() => compileMKPro(source(path))).toThrow(/real rule lowerers before code generation/u);
+    for (const path of PENDING_OPTIMIZER_EXAMPLES) {
+      expect(RUNNABLE_EXAMPLES).not.toContain(path.replace("examples/pending-optimizer/", "examples/"));
+      expect(() => compileMKPro(source(path), { budget: 999 })).not.toThrow(/real rule lowerers before code generation/u);
     }
   });
 
@@ -74,16 +85,24 @@ describe("MK-Pro compiler", () => {
     expect(unresolved).toEqual([]);
     expect(larger).toEqual([]);
     expect(checked).toContain("examples/99-bottles.mkpro");
+    expect(checked).toContain("examples/alaram.mkpro");
+    expect(checked).toContain("examples/cave-sketch.mkpro");
+    expect(checked).toContain("examples/dangerous-loading.mkpro");
+    expect(checked).toContain("examples/dungeon.mkpro");
+    expect(checked).toContain("examples/game-100-pig.mkpro");
     expect(checked).toContain("examples/lunar.mkpro");
+    expect(checked).toContain("examples/minesweeper-9x9.mkpro");
+    expect(checked).toContain("examples/raja-yoga.mkpro");
+    expect(checked).toContain("examples/sea-battle.mkpro");
   });
 
-  it("keeps the full cave reference high-level but refuses fake lowering", () => {
-    const reference = source("examples/spatial-drafts/cave-treasure-full.mkpro");
+  it("keeps the full cave reference high-level but does not fit it through templates", () => {
+    const reference = source("examples/pending-optimizer/cave-treasure.mkpro");
 
     expect(reference).not.toMatch(/\brecipe\b/iu);
     expect(reference).not.toMatch(/core\s+exact/iu);
     expect(reference).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
-    expect(() => compileMKPro(reference)).toThrow(/real rule lowerers before code generation/u);
+    expect(() => compileMKPro(reference, { budget: 999 })).toThrow(/outside 00\.\.A4/u);
   });
 
   it("compiles human-centered MK-Pro without source implementation switches", () => {
@@ -148,15 +167,15 @@ program SimpleRules {
     expect(result.report.proofs.some((proof) => proof.id === "value-ranges")).toBe(true);
   });
 
-  it("does not pretend the full cave reference has generic semantic lowerers", () => {
-    const reference = source("examples/spatial-drafts/cave-treasure.mkpro");
+  it("does not pretend the full cave reference is optimized enough yet", () => {
+    const reference = source("examples/pending-optimizer/cave-treasure.mkpro");
 
     expect(reference).not.toMatch(/core\s+exact/iu);
     expect(reference).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
     expect(reference).toMatch(/world cave/u);
     expect(reference).toMatch(/cells\(cave\) = random\(\)/u);
 
-    expect(() => compileMKPro(reference)).toThrow(/real rule lowerers before code generation/u);
+    expect(() => compileMKPro(reference, { budget: 999 })).toThrow(/outside 00\.\.A4/u);
   });
 
   it("ports Bolknote's 99 Bottles demo byte-for-byte within the original size", () => {
@@ -225,15 +244,6 @@ program SimpleRules {
     expect(changed.report.warnings.join("\n")).toMatch(/was not found under games/u);
   });
 
-  it("rejects the old spatial-template tactic fallback", () => {
-    for (const path of [
-      "examples/spatial-drafts/grid-rescue.mkpro",
-      "examples/spatial-drafts/resource-raid.mkpro",
-    ]) {
-      expect(() => compileMKPro(source(path))).toThrow(/real rule lowerers before code generation/u);
-    }
-  });
-
   it("reports automatic optimizer capabilities for V2 programs", () => {
     const result = compileMKPro(source("examples/human.mkpro"));
 
@@ -270,7 +280,7 @@ program SimpleRules {
   });
 
   it("does not compile the full cave reference through exact-machine templates", () => {
-    expect(() => compileMKPro(source("examples/spatial-drafts/cave-treasure.mkpro"))).toThrow(/real rule lowerers before code generation/u);
+    expect(() => compileMKPro(source("examples/pending-optimizer/cave-treasure.mkpro"), { budget: 999 })).toThrow(/outside 00\.\.A4/u);
   });
 
   it("uses maximum dispatch lowering by default", () => {
@@ -284,6 +294,15 @@ program SimpleRules {
     expect(selected?.reason).toMatch(/key-based dispatch/u);
     expect(rejectedIndirect?.reason).toMatch(/key-valued, not address-valued/u);
     expect(result.report.optimizer.capabilities.some((capability) => capability.status === "active")).toBe(true);
+  });
+
+  it("merges dispatch cases that are identical to the default branch", () => {
+    const result = compileMKPro(source("examples/dangerous-loading.mkpro"));
+
+    expect(result.report.steps).toBe(89);
+    expect(result.report.reference?.referenceSpan).toBe(103);
+    expect(result.report.optimizations.some((optimization) => optimization.name === "dispatch-default-merge")).toBe(true);
+    expect(result.report.optimizations.some((optimization) => optimization.name === "tail-call-lowering")).toBe(true);
   });
 
   it("considers generic dark dispatch only through proof-backed candidates", () => {

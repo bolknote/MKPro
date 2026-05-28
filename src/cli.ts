@@ -93,6 +93,8 @@ function parseArgs(argv: string[]): CliArgs {
         throw new Error("--budget must be a positive integer.");
       }
       options.budget = budget;
+    } else if (arg === "--analysis") {
+      options.analysis = true;
     } else if (arg.startsWith("-")) {
       throw new Error(`Unknown flag '${arg}'.`);
     } else if (!file) {
@@ -135,6 +137,7 @@ Usage:
 Flags:
   --delivery manual|loader|hex default: hex
   --budget N                  default: 105
+  --analysis                  emit diagnostic output even when over budget
 `;
 }
 

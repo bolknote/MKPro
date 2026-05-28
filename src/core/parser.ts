@@ -718,10 +718,9 @@ function parseV2Predicate(text: string, line: number): V2PredicateAst {
   const contains = /^(.+?)\s+in\s+([A-Za-z_][\w]*)$/u.exec(text);
   if (contains) {
     return {
-      kind: "v2_compare",
-      left: contains[2]!.trim(),
-      op: ">=",
-      right: contains[1]!.trim(),
+      kind: "v2_contains",
+      collection: contains[2]!.trim(),
+      item: contains[1]!.trim(),
     };
   }
   const compare = /^(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)$/u.exec(text);
@@ -809,6 +808,11 @@ interface V2LoweringContext {
   rules: Map<string, V2RuleAst>;
   specializedRules: Set<string>;
   moveDeltas: Map<string, Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>>>;
+  stateTypes: Map<string, V2StateFieldAst["type"]>;
+  stateDomains: Map<string, string>;
+  cellMapNames: Map<string, string>;
+  boards: Map<string, V2BoardAst>;
+  worlds: Map<string, V2WorldAst>;
 }
 
 function lowerV2Program(v2: V2ProgramAst): {
@@ -823,6 +827,12 @@ function lowerV2Program(v2: V2ProgramAst): {
   const ruleParams = collectV2RuleParams(v2);
   const rules = collectV2Rules(v2);
   const specializedRules = selectV2RuleSpecializations(v2, rules);
+  const stateDomains = new Map(
+    v2.state
+      .filter((field) => field.domain !== undefined)
+      .map((field) => [field.name, field.domain!]),
+  );
+  const cellMapNames = collectV2CellMapNames(v2, stateDomains);
   validateV2Domains(v2);
   validateV2References(v2, { screens, ruleParams });
   const context: V2LoweringContext = {
@@ -830,10 +840,15 @@ function lowerV2Program(v2: V2ProgramAst): {
     rules,
     specializedRules,
     moveDeltas: collectV2MoveDeltas(v2),
+    stateTypes: new Map(v2.state.map((field) => [field.name, field.type])),
+    stateDomains,
+    cellMapNames,
+    boards: new Map(v2.boards.map((board) => [board.name, board])),
+    worlds: new Map(v2.worlds.map((world) => [world.name, world])),
   };
   return {
     domains: lowerV2Domains(v2),
-    states: lowerV2State(v2, specializedRules),
+    states: lowerV2State(v2, specializedRules, cellMapNames, context),
     displays: v2.screens.map(lowerV2Screen),
     entries: [lowerV2Entry(v2, context)],
     procs: [
@@ -1074,6 +1089,91 @@ function collectV2MoveDeltas(v2: V2ProgramAst): V2LoweringContext["moveDeltas"] 
   return deltas;
 }
 
+function collectV2CellMapNames(v2: V2ProgramAst, stateDomains: Map<string, string>): Map<string, string> {
+  const explicit = v2.state.find((field) => field.type === "packed" && /^(?:plan|map)$/iu.test(field.name));
+  const byDomain = new Map<string, string>();
+  const addDomain = (domain: string): void => {
+    if (byDomain.has(domain)) return;
+    const domainSpecific = v2.state.find((field) =>
+      field.type === "packed" && new RegExp(`^${escapeRegExp(domain)}_(?:plan|map)$`, "iu").test(field.name),
+    );
+    byDomain.set(domain, domainSpecific?.name ?? explicit?.name ?? `__cell_map_${domain}`);
+  };
+
+  for (const text of collectV2ExpressionTexts(v2)) {
+    for (const args of findSpatialCalls(text, "cell_at")) {
+      if (args.length === 2) {
+        addDomain(args[0]!);
+        continue;
+      }
+      if (args.length === 1) {
+        const domain = stateDomains.get(args[0]!);
+        if (domain !== undefined) addDomain(domain);
+      }
+    }
+  }
+  return byDomain;
+}
+
+function collectV2ExpressionTexts(v2: V2ProgramAst): string[] {
+  const texts: string[] = [];
+  const visit = (statements: V2StatementAst[]): void => {
+    for (const statement of statements) {
+      switch (statement.kind) {
+        case "v2_assign":
+          texts.push(statement.expr);
+          break;
+        case "v2_update":
+          texts.push(statement.expr);
+          break;
+        case "v2_stop":
+          texts.push(statement.value);
+          break;
+        case "v2_if":
+          if (statement.predicate.kind === "v2_contains") {
+            texts.push(statement.predicate.collection, statement.predicate.item);
+          } else {
+            texts.push(statement.predicate.left, statement.predicate.right);
+          }
+          visit(statement.thenBody);
+          if (statement.elseBody !== undefined) visit(statement.elseBody);
+          break;
+        case "v2_challenge":
+          texts.push(statement.expr);
+          visit(statement.successBody);
+          if (statement.failureBody !== undefined) visit(statement.failureBody);
+          break;
+        case "v2_match":
+          texts.push(statement.expr);
+          for (const matchCase of statement.cases) {
+            texts.push(...matchCase.values);
+            visit([matchCase.action]);
+          }
+          if (statement.otherwise !== undefined) visit([statement.otherwise]);
+          break;
+        case "v2_invoke":
+          texts.push(...statement.args);
+          break;
+        case "v2_move":
+        case "v2_show":
+        case "v2_read":
+        case "v2_raw":
+          break;
+      }
+    }
+  };
+  if (v2.turn !== undefined) visit(v2.turn.body);
+  for (const rule of v2.rules) visit(rule.body);
+  for (const table of v2.encounters) {
+    texts.push(table.expr);
+    for (const encounterCase of table.cases) {
+      texts.push(encounterCase.value);
+      visit(encounterCase.body);
+    }
+  }
+  return texts;
+}
+
 function moveDeltasForEncoding(encoding: string | undefined): Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>> {
   if (encoding === "packed_decimal_zero_run") {
     return {
@@ -1166,7 +1266,12 @@ function lowerV2Domains(v2: V2ProgramAst): DomainAst[] {
   return domains;
 }
 
-function lowerV2State(v2: V2ProgramAst, specializedRules: Set<string>): StateAst[] {
+function lowerV2State(
+  v2: V2ProgramAst,
+  specializedRules: Set<string>,
+  cellMapNames: Map<string, string>,
+  context: V2LoweringContext,
+): StateAst[] {
   const fields: StateFieldAst[] = [];
   for (const field of v2.state) {
     const lowered: StateFieldAst = {
@@ -1181,7 +1286,7 @@ function lowerV2State(v2: V2ProgramAst, specializedRules: Set<string>): StateAst
       if (stackSource !== undefined) {
         lowered.initialStack = stackSource;
       } else {
-        lowered.initial = lowerV2InitialExpression(field);
+        lowered.initial = lowerV2InitialExpression(field, context);
       }
     }
     fields.push(lowered);
@@ -1191,6 +1296,16 @@ function lowerV2State(v2: V2ProgramAst, specializedRules: Set<string>): StateAst
     if (declared.has(scratch.name)) continue;
     declared.add(scratch.name);
     fields.push(scratch);
+  }
+  for (const mapName of cellMapNames.values()) {
+    if (!mapName.startsWith("__cell_map_") || declared.has(mapName)) continue;
+    declared.add(mapName);
+    fields.push({
+      name: mapName,
+      type: "packed",
+      initial: lowerV2Expression("int(random() * 999999999) + 1", v2.line),
+      line: v2.line,
+    });
   }
   return fields.length > 0 ? [{ kind: "state", name: v2.name, fields, line: v2.line }] : [];
 }
@@ -1234,12 +1349,12 @@ function collectV2ScratchFields(v2: V2ProgramAst, specializedRules: Set<string>)
   }
 }
 
-function lowerV2InitialExpression(field: V2StateFieldAst): ExpressionAst {
+function lowerV2InitialExpression(field: V2StateFieldAst, context: V2LoweringContext): ExpressionAst {
   const initial = field.initial ?? "0";
   if (field.type === "cells" && initial.trim() === "random()") {
-    return lowerV2Expression("random() * 999", field.line);
+    return lowerV2Expression("int(random() * 999)", field.line);
   }
-  return lowerV2Expression(initial, field.line);
+  return lowerV2Expression(initial, field.line, context);
 }
 
 function lowerV2StateFieldType(type: V2StateFieldAst["type"]): StateFieldType {
@@ -1291,9 +1406,9 @@ function lowerV2EncounterRules(v2: V2ProgramAst, context: V2LoweringContext): Pr
 function lowerV2EncounterDispatch(table: V2EncounterTableAst, context: V2LoweringContext): DispatchStatementAst {
   return {
     kind: "dispatch",
-    expr: lowerV2Expression(encounterParamName(table.expr), table.line),
+    expr: lowerV2Expression(encounterParamName(table.expr), table.line, context),
     cases: table.cases.map((encounterCase) => ({
-      value: lowerV2Expression(encounterCase.value, encounterCase.line),
+      value: lowerV2Expression(encounterCase.value, encounterCase.line, context),
       body: lowerV2Statements(encounterCase.body, context),
       line: encounterCase.line,
     })),
@@ -1329,11 +1444,11 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
         line: statement.line,
       }];
     case "v2_stop":
-      return [{ kind: "halt", expr: lowerV2Expression(statement.value, statement.line), line: statement.line }];
+      return [{ kind: "halt", expr: lowerV2Expression(statement.value, statement.line, context), line: statement.line }];
     case "v2_invoke":
       return lowerV2Invoke(statement, context);
     case "v2_if": {
-      const condition = lowerV2Predicate(statement.predicate, statement.line);
+      const condition = lowerV2Predicate(statement.predicate, statement.line, context);
       const lowered: IfStatementAst = {
         kind: "if",
         condition,
@@ -1348,8 +1463,16 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
     case "v2_move":
       return lowerV2Move(statement, context);
     case "v2_assign":
-      return [{ kind: "assign", target: statement.target, expr: lowerV2Expression(statement.expr, statement.line), line: statement.line }];
+      return [{ kind: "assign", target: statement.target, expr: lowerV2Expression(statement.expr, statement.line, context), line: statement.line }];
     case "v2_update": {
+      if (context.stateTypes.get(statement.target) === "cells") {
+        return [{
+          kind: "assign",
+          target: statement.target,
+          expr: lowerV2Expression(cellSetUpdateExpression(statement.target, statement.expr, statement.op, context), statement.line, context),
+          line: statement.line,
+        }];
+      }
       return [{
         kind: "assign",
         target: statement.target,
@@ -1357,7 +1480,7 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
           kind: "binary",
           op: statement.op === "+=" ? "+" : "-",
           left: { kind: "identifier", name: statement.target },
-          right: lowerV2Expression(statement.expr, statement.line),
+          right: lowerV2Expression(statement.expr, statement.line, context),
         },
         line: statement.line,
       }];
@@ -1367,7 +1490,7 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
         kind: "core",
         inputs: statement.inputs.map((input) => ({
           slot: input.slot,
-          expr: lowerV2Expression(input.expr, input.line),
+          expr: lowerV2Expression(input.expr, input.line, context),
           line: input.line,
         })),
         outputs: statement.outputs.map((output) => ({
@@ -1386,12 +1509,41 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
   }
 }
 
-function lowerV2Predicate(predicate: V2PredicateAst, line: number): ConditionAst {
+function lowerV2Predicate(predicate: V2PredicateAst, line: number, context: V2LoweringContext): ConditionAst {
+  if (predicate.kind === "v2_contains") {
+    return {
+      left: lowerV2Expression(cellMembershipExpression(predicate.collection, predicate.item, context), line, context),
+      op: "!=",
+      right: lowerV2Expression("0", line, context),
+    };
+  }
   return {
-    left: lowerV2Expression(predicate.left, line),
+    left: lowerV2Expression(predicate.left, line, context),
     op: predicate.op,
-    right: lowerV2Expression(predicate.right, line),
+    right: lowerV2Expression(predicate.right, line, context),
   };
+}
+
+function cellSetUpdateExpression(
+  collection: string,
+  item: string,
+  op: "+=" | "-=",
+  context: V2LoweringContext,
+): string {
+  const mask = cellMaskExpressionForCollection(collection, item, context);
+  if (mask === undefined) return `${op === "+=" ? "bit_set" : "bit_clear"}(${collection}, ${item})`;
+  return op === "+="
+    ? `bit_or(${collection}, ${mask})`
+    : `bit_and(${collection}, bit_not(${mask}))`;
+}
+
+function cellMembershipExpression(
+  collection: string,
+  item: string,
+  context: V2LoweringContext,
+): string {
+  const mask = cellMaskExpressionForCollection(collection, item, context);
+  return mask === undefined ? `bit_has(${collection}, ${item})` : `bit_and(${collection}, ${mask})`;
 }
 
 function lowerV2Challenge(
@@ -1403,7 +1555,7 @@ function lowerV2Challenge(
     {
       kind: "assign",
       target: statement.challengeTarget,
-      expr: lowerV2Expression(`memory_code(${statement.expr})`, statement.line),
+      expr: lowerV2Expression(statement.expr, statement.line, context),
       line: statement.line,
     },
     { kind: "show", display: statement.warningScreen, line: statement.line },
@@ -1436,7 +1588,7 @@ function lowerV2Move(statement: V2MoveStatementAst, context: V2LoweringContext):
       kind: "binary",
       op: "+",
       left: { kind: "identifier", name: statement.target },
-      right: lowerV2Expression(delta, statement.line),
+      right: lowerV2Expression(delta, statement.line, context),
     },
     line: statement.line,
   };
@@ -1475,7 +1627,7 @@ function lowerV2Match(statement: V2MatchStatementAst, context: V2LoweringContext
   for (const matchCase of statement.cases) {
     for (const value of matchCase.values) {
       cases.push({
-        value: lowerV2Expression(value, matchCase.line),
+        value: lowerV2Expression(value, matchCase.line, context),
         body: lowerV2MatchAction(matchCase.action, context, statement.expr, value, matchCase.line),
         line: matchCase.line,
       });
@@ -1483,7 +1635,7 @@ function lowerV2Match(statement: V2MatchStatementAst, context: V2LoweringContext
   }
   const lowered: DispatchStatementAst = {
     kind: "dispatch",
-    expr: lowerV2Expression(statement.expr, statement.line),
+    expr: lowerV2Expression(statement.expr, statement.line, context),
     cases,
     line: statement.line,
     scratchId: statement.line,
@@ -1504,38 +1656,60 @@ function lowerCompactDirectionDispatch(
   if (!directionalCases.every((matchCase) => sameInvoke(matchCase.action, action))) return undefined;
   const params = context.ruleParams.get(action.name) ?? [];
   if (params.length === 0) return undefined;
+  const needsGuard = statement.otherwise === undefined || !isDirectionInvoke(statement.otherwise, statement.expr);
+  if (needsGuard && directionalValueCount < 5) return undefined;
 
   const cases: DispatchCaseAst[] = [];
   for (const matchCase of statement.cases) {
     if (directionalCases.includes(matchCase)) continue;
     for (const value of matchCase.values) {
       cases.push({
-        value: lowerV2Expression(value, matchCase.line),
+        value: lowerV2Expression(value, matchCase.line, context),
         body: lowerV2MatchAction(matchCase.action, context, statement.expr, value, matchCase.line),
         line: matchCase.line,
       });
     }
   }
 
-  const defaultBody: StatementAst[] = [
+  const directionBody: StatementAst[] = [
     {
       kind: "assign",
       target: params[0]!,
-      expr: lowerV2Expression(`direction(${statement.expr})`, statement.line),
+      expr: lowerV2Expression(`direction(${statement.expr})`, statement.line, context),
       line: statement.line,
     },
     { kind: "call", block: action.name, line: action.line },
   ];
+  const defaultBody: StatementAst[] = needsGuard
+    ? [{
+        kind: "if",
+        condition: {
+          left: lowerV2Expression(directionKeyGuardExpression(statement.expr), statement.line, context),
+          op: "==",
+          right: lowerV2Expression("0", statement.line, context),
+        },
+        thenBody: directionBody,
+        ...(statement.otherwise === undefined ? {} : { elseBody: lowerV2Statement(statement.otherwise, context) }),
+        line: statement.line,
+      }]
+    : directionBody;
 
   return {
     kind: "dispatch",
-    expr: lowerV2Expression(statement.expr, statement.line),
+    expr: lowerV2Expression(statement.expr, statement.line, context),
     name: "direction_dispatch",
     cases,
     defaultBody,
     line: statement.line,
     scratchId: statement.line,
   };
+}
+
+function directionKeyGuardExpression(expr: string): string {
+  const key = `(${expr})`;
+  const cardinal = `(abs(${key} - 5) - 1) * (abs(${key} - 5) - 3)`;
+  const vertical = `abs(${key}) - 5`;
+  return `(${cardinal}) * (${vertical})`;
 }
 
 function isDirectionInvoke(action: V2StatementAst, matchExpr: string): boolean {
@@ -1570,7 +1744,7 @@ function lowerV2MatchAction(
     statements.push({
       kind: "assign",
       target: params[index]!,
-      expr: lowerV2Expression(arg, line),
+      expr: lowerV2Expression(arg, line, context),
       line,
     });
   }
@@ -1589,7 +1763,7 @@ function lowerV2Invoke(statement: V2InvokeStatementAst, context: V2LoweringConte
     statements.push({
       kind: "assign",
       target: params[index]!,
-      expr: lowerV2Expression(statement.args[index]!, statement.line),
+      expr: lowerV2Expression(statement.args[index]!, statement.line, context),
       line: statement.line,
     });
   }
@@ -1656,6 +1830,13 @@ function substituteV2Statement(statement: V2StatementAst, replacements: Map<stri
 }
 
 function substituteV2Predicate(predicate: V2PredicateAst, replacements: Map<string, string>): V2PredicateAst {
+  if (predicate.kind === "v2_contains") {
+    return {
+      ...predicate,
+      collection: substituteV2Text(predicate.collection, replacements),
+      item: substituteV2Text(predicate.item, replacements),
+    };
+  }
   return {
     ...predicate,
     left: substituteV2Text(predicate.left, replacements),
@@ -1691,9 +1872,220 @@ function resolveV2InvokeArg(arg: string, matchExpr: string, matchValue: string):
   return arg;
 }
 
-function lowerV2Expression(text: string, line: number): ExpressionAst {
-  const normalized = normalizeV2ExpressionText(text);
+function lowerV2Expression(text: string, line: number, context?: V2LoweringContext): ExpressionAst {
+  const normalized = normalizeV2ExpressionText(rewriteSpatialExpressionText(text, context));
   return parseExpression(normalized, line);
+}
+
+function rewriteSpatialExpressionText(text: string, context: V2LoweringContext | undefined): string {
+  if (context === undefined) return text;
+  let rewritten = replaceSpatialCall(text, "random_cell", (args) => {
+    if (args.length !== 1) return undefined;
+    return randomCellExpression(args[0]!, context);
+  });
+  rewritten = replaceSpatialCall(rewritten, "cell_at", (args) => cellAtExpression(args, context));
+  return rewritten;
+}
+
+function replaceSpatialCall(
+  text: string,
+  name: string,
+  replacer: (args: string[]) => string | undefined,
+): string {
+  const pattern = new RegExp(`\\b${name}\\s*\\(([^()]*)\\)`, "gu");
+  return text.replace(pattern, (match, rawArgs: string) => replacer(splitArgs(rawArgs)) ?? match);
+}
+
+function findSpatialCalls(text: string, name: string): string[][] {
+  const pattern = new RegExp(`\\b${name}\\s*\\(([^()]*)\\)`, "gu");
+  return [...text.matchAll(pattern)].map((match) => splitArgs(match[1]!));
+}
+
+function cellAtExpression(args: string[], context: V2LoweringContext): string | undefined {
+  const [domain, pos] = cellAtDomainAndPosition(args, context);
+  if (domain === undefined || pos === undefined) return undefined;
+  const map = context.cellMapNames.get(domain) ?? `__cell_map_${domain}`;
+  return `digit_at(${map}, ${cellAtIndexExpression(pos, domain, context)})`;
+}
+
+function cellAtDomainAndPosition(
+  args: string[],
+  context: V2LoweringContext,
+): [string | undefined, string | undefined] {
+  if (args.length === 2) return [args[0], args[1]];
+  if (args.length !== 1) return [undefined, undefined];
+  return [context.stateDomains.get(args[0]!), args[0]];
+}
+
+function cellAtIndexExpression(pos: string, domain: string, context: V2LoweringContext): string {
+  const world = context.worlds.get(domain);
+  switch (world?.position?.encoding) {
+    case "row_scan":
+    case "floor_plan":
+    case "decimal_player":
+    case "pier_to_ship":
+      return decimalOnesExpression(pos);
+    case "corridor_plan":
+    case "packed_decimal_zero_run":
+    case "cockpit_perspective":
+    case undefined:
+      return pos;
+  }
+  return pos;
+}
+
+function lineCountExpression(args: string[], context: V2LoweringContext): string | undefined {
+  if (args.length !== 2) return undefined;
+  const [mask, cell] = args as [string, string];
+  const board = boardForCells(mask, context);
+  if (board !== undefined && board.width <= 4 && board.height <= 4) {
+    return maxExpressionText([
+      sumExpressionText(lineCells(board, "row", cell).map((index) => bitHitExpression(mask, index))),
+      sumExpressionText(lineCells(board, "column", cell).map((index) => bitHitExpression(mask, index))),
+      sumExpressionText(lineCells(board, "diag-left", cell).map((index) => bitHitExpression(mask, index))),
+      sumExpressionText(lineCells(board, "diag-right", cell).map((index) => bitHitExpression(mask, index))),
+    ]);
+  }
+  const offsets = [-99, -90, -81, -72, -63, -54, -45, -36, -27, -18, -9, 0, 9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 99];
+  return sumExpressionText([
+    bitHitExpression(mask, cell),
+    ...offsets.filter((offset) => offset !== 0).map((offset) => bitHitExpression(mask, offsetExpression(cell, offset))),
+  ]);
+}
+
+function neighborCountExpression(args: string[], context: V2LoweringContext): string | undefined {
+  if (args.length !== 2) return undefined;
+  const [mask, cell] = args as [string, string];
+  const board = boardForCells(mask, context);
+  const offsets = board?.height === 1
+    ? [-1, 1]
+    : board?.width === 1
+      ? [-10, 10]
+      : [-11, -10, -9, -1, 1, 9, 10, 11];
+  return sumExpressionText(offsets.map((offset) => bitHitExpression(mask, offsetExpression(cell, offset))));
+}
+
+function boardForCells(mask: string, context: V2LoweringContext): V2BoardAst | undefined {
+  const domain = context.stateDomains.get(mask.trim());
+  return domain === undefined ? undefined : context.boards.get(domain);
+}
+
+function oneDimensionalCellMaskExpression(
+  mask: string,
+  cell: string,
+  context: V2LoweringContext,
+): string | undefined {
+  const board = boardForCells(mask, context);
+  if (board === undefined) return undefined;
+  if (board.height === 1 && board.xMin >= 0 && board.xMax <= 7) return `pow10(${cell})`;
+  if (board.width === 1 && board.yMin >= 0 && board.yMax <= 7) return `pow10(${cell})`;
+  return undefined;
+}
+
+function cellMaskExpressionForCollection(
+  mask: string,
+  cell: string,
+  context: V2LoweringContext,
+): string | undefined {
+  return oneDimensionalCellMaskExpression(mask, cell, context);
+}
+
+function lineCells(
+  board: V2BoardAst,
+  kind: "row" | "column" | "diag-left" | "diag-right",
+  cell: string,
+): string[] {
+  const x = decimalOnesExpression(cell);
+  const y = decimalTensExpression(cell);
+  switch (kind) {
+    case "row":
+      return range(board.xMin, board.xMax).map((candidateX) => boardCellExpression(String(candidateX), y));
+    case "column":
+      return range(board.yMin, board.yMax).map((candidateY) => boardCellExpression(x, String(candidateY)));
+    case "diag-left":
+      return range(-Math.max(board.width, board.height) + 1, Math.max(board.width, board.height) - 1)
+        .map((delta) => offsetExpression(cell, delta * 11));
+    case "diag-right":
+      return range(-Math.max(board.width, board.height) + 1, Math.max(board.width, board.height) - 1)
+        .map((delta) => offsetExpression(cell, delta * 9));
+  }
+}
+
+function bitHitExpression(mask: string, index: string): string {
+  return `sign(bit_has(${mask}, ${index}))`;
+}
+
+function boardCellExpression(x: string, y: string): string {
+  return `${x} + 10 * (${y})`;
+}
+
+function decimalTensExpression(expr: string): string {
+  return `int((${expr}) / 10)`;
+}
+
+function decimalOnesExpression(expr: string): string {
+  return `(${expr}) - 10 * int((${expr}) / 10)`;
+}
+
+function offsetExpression(expr: string, offset: number): string {
+  if (offset === 0) return expr;
+  if (offset > 0) return `(${expr}) + ${offset}`;
+  return `(${expr}) - ${Math.abs(offset)}`;
+}
+
+function sumExpressionText(parts: string[]): string {
+  if (parts.length === 0) return "0";
+  return parts.map((part) => `(${part})`).join(" + ");
+}
+
+function maxExpressionText(parts: string[]): string {
+  const nonEmpty = parts.filter((part) => part !== "0");
+  if (nonEmpty.length === 0) return "0";
+  return nonEmpty.reduce((left, right) => `max(${left}, ${right})`);
+}
+
+function range(start: number, end: number): number[] {
+  const values: number[] = [];
+  for (let value = start; value <= end; value += 1) values.push(value);
+  return values;
+}
+
+function randomCellExpression(domain: string, context: V2LoweringContext): string {
+  const board = context.boards.get(domain);
+  if (board !== undefined) return randomBoardCellExpression(board);
+  const world = context.worlds.get(domain);
+  if (world !== undefined) return randomWorldCellExpression(world);
+  return "int(random() * 9) + 1";
+}
+
+function randomBoardCellExpression(board: V2BoardAst): string {
+  if (board.height === 1) return addOffsetExpression(`int(random() * ${board.width})`, board.xMin);
+  if (board.width === 1) return addOffsetExpression(`int(random() * ${board.height})`, board.yMin);
+  const x = addOffsetExpression(`int(random() * ${board.width})`, board.xMin);
+  const y = addOffsetExpression(`int(random() * ${board.height})`, board.yMin);
+  return `${x} + 10 * (${y})`;
+}
+
+function randomWorldCellExpression(world: V2WorldAst): string {
+  switch (world.position?.encoding) {
+    case "pier_to_ship":
+      return "int(random() * 8) + 1";
+    case "cockpit_perspective":
+    case "corridor_plan":
+    case "decimal_player":
+    case "floor_plan":
+    case "packed_decimal_zero_run":
+    case "row_scan":
+    case undefined:
+      return "int(random() * 9) + 1";
+  }
+  return "int(random() * 9) + 1";
+}
+
+function addOffsetExpression(expr: string, offset: number): string {
+  if (offset === 0) return expr;
+  if (offset > 0) return `${expr} + ${offset}`;
+  return `${expr} - ${Math.abs(offset)}`;
 }
 
 export function normalizeV2ExpressionText(text: string): string {

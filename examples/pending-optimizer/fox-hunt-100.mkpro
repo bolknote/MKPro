@@ -17,7 +17,7 @@ program FoxHunt100 {
   }
 
   screen report {
-    show cell, bearing, remaining_foxes
+    show bearing
   }
 
   rule all_found {

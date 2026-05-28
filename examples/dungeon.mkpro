@@ -82,9 +82,6 @@ program Dungeon {
     if pos <= 0 {
       bump
     }
-    if pos >= 9 {
-      bump
-    }
 
     wall = cell_at(dungeon, pos)
     if height == wall {
@@ -100,7 +97,6 @@ program Dungeon {
     if mistakes >= 3 {
       lost
     }
-    show place
   }
 
   rule extend_corridor {

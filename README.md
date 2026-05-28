@@ -102,10 +102,22 @@ All top-level `examples/*.mkpro` programs are runnable MK-Pro programs. They cov
 - `examples/tiny-game.mkpro`: tiny menu-style loop.
 - `examples/lunar.mkpro`: numeric landing game with counters and touchdown rules.
 - `examples/human.mkpro`: small counter game used as syntax smoke test.
+- `examples/alaram.mkpro`: cockpit interceptor port that fits the original.
+- `examples/cave-sketch.mkpro`: compact cave sketch with world movement.
+- `examples/dangerous-loading.mkpro`: ferry/loading game whose natural default
+  command branch compiles smaller than the original.
+- `examples/dungeon.mkpro`: Lord_BSS corridor dungeon port that fits the original.
+- `examples/game-100-pig.mkpro`: Anvarov dice game port that fits the original.
+- `examples/minesweeper-9x9.mkpro`: Anvarov Minesweeper port using shared
+  board-hit helpers and fitting the original.
+- `examples/raja-yoga.mkpro`: Anvarov one-dimensional mask game port that fits
+  the original.
+- `examples/sea-battle.mkpro`: board/cell-set game port that fits the original.
 
-`examples/spatial-drafts/*.mkpro` contains source-level board/world game ports.
-They are intentionally not runnable examples yet: the compiler rejects them
-until their spatial rules lower from the AST into ordinary IR.
+`examples/pending-optimizer/*.mkpro` contains ports that lower through ordinary
+IR but are still too large for MK-61 or their reference. There is no separate
+pending-lowerers bucket: source-level queries must either lower or fail as
+ordinary compiler bugs.
 
 ## Documentation
 

@@ -13,7 +13,7 @@ interface RunResult {
 
 interface Mk61Instance {
   setRegister(register: string, value: string): void;
-  loadProgram(codes: number[]): { diagnostics: string[] };
+  loadProgram(codes: number[] | string): { diagnostics: string[] };
   readProgramCodes(count: number): number[];
   press(key: string): void;
   pressSequence(keys: string[]): void;
@@ -26,7 +26,10 @@ interface Mk61Instance {
 
 type Mk61Constructor = new (options?: { extended?: boolean }) => Mk61Instance;
 
-const { MK61 } = require("./mk61.cjs") as { MK61: Mk61Constructor };
+const { MK61, parseProgramText } = require("./mk61.cjs") as {
+  MK61: Mk61Constructor;
+  parseProgramText: (source: string) => { codes: number[]; diagnostics: string[] };
+};
 
 function exampleFiles(): string[] {
   const dir = resolve("examples");
@@ -35,8 +38,8 @@ function exampleFiles(): string[] {
     .map((name) => resolve(dir, name));
 }
 
-function spatialDraftFiles(): string[] {
-  const dir = resolve("examples/spatial-drafts");
+function pendingOptimizerFiles(): string[] {
+  const dir = resolve("examples/pending-optimizer");
   return readdirSync(dir)
     .filter((name) => name.endsWith(".mkpro"))
     .map((name) => resolve(dir, name));
@@ -108,6 +111,12 @@ describe("emulator regression", () => {
   const files = exampleFiles();
   expect(files.length).toBeGreaterThanOrEqual(5);
 
+  it("parses Anvarov's Latin FBx spelling as F Вx", () => {
+    const parsed = parseProgramText("30 FBx");
+    expect(parsed.diagnostics).toEqual([]);
+    expect(parsed.codes[30]).toBe(0x0f);
+  });
+
   for (const file of files) {
     const name = file.split("/").pop()!;
     it(`loads ${name} into the headless emulator with zero diagnostics`, () => {
@@ -121,11 +130,11 @@ describe("emulator regression", () => {
     });
   }
 
-  for (const file of spatialDraftFiles()) {
+  for (const file of pendingOptimizerFiles()) {
     const name = file.split("/").pop()!;
-    it(`rejects spatial draft ${name} before emulator loading`, () => {
+    it(`keeps pending optimizer ${name} before emulator loading`, () => {
       const source = readFileSync(file, "utf8");
-      expect(() => compileMKPro(source)).toThrow(/real rule lowerers before code generation/u);
+      expect(() => compileMKPro(source, { budget: 999 })).not.toThrow(/real rule lowerers before code generation/u);
     });
   }
 

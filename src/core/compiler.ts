@@ -44,6 +44,7 @@ import type {
   SwitchStatementAst,
   TrapStatementAst,
   StorageHint,
+  V2BoardAst,
   V2PredicateAst,
   V2StatementAst,
 } from "./types.ts";
@@ -51,6 +52,7 @@ import type {
 const DEFAULT_OPTIONS: CompileOptions = {
   delivery: "hex",
   budget: 105,
+  analysis: false,
 };
 
 interface NodeFsModule {
@@ -89,6 +91,13 @@ const REGISTER_ORDER: RegisterName[] = [
 const SWITCH_SCRATCH_PREFIX = "__switch_";
 const DISPATCH_SCRATCH_PREFIX = "__dispatch_";
 const TICTACTOE_MASK_SCRATCH_PREFIX = "__ttt_mask_";
+const BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
+const CELL_MAP_PREFIX = "__cell_map_";
+const SPATIAL_HIT_SCRATCH_PREFIX = "__spatial_hit_";
+const SPATIAL_COUNT_SCRATCH_PREFIX = "__spatial_count_";
+const DISPLAY_HELPER_MIN_SAVINGS = 4;
+const EXPRESSION_HELPER_MIN_COST = 8;
+const EXPRESSION_HELPER_MIN_SAVINGS = 4;
 
 export class CompileError extends Error {
   readonly diagnostics: Diagnostic[];
@@ -111,6 +120,8 @@ export function compileMKPro(
   const warnings: string[] = [];
   const candidates: CandidateReport[] = [];
 
+  eliminateUnobservedState(ast, optimizations);
+  hoistCommonBranchTails(ast, optimizations);
   validateSemanticDomains(ast, diagnostics);
   validateV2Intent(ast, diagnostics);
   if (diagnostics.some((diagnostic) => diagnostic.level === "error")) {
@@ -149,7 +160,7 @@ export function compileMKPro(
 
   if (steps.length > opts.budget) {
     diagnostics.push({
-      level: "error",
+      level: opts.analysis ? "warning" : "error",
       code: "BUDGET_EXCEEDED",
       message: `Program uses ${steps.length} steps, budget is ${opts.budget}. Largest blocks: ${largestBlocks.join(", ")}`,
     });
@@ -200,12 +211,263 @@ function visiblePublicRegisters(
     if (
       !name.startsWith(SWITCH_SCRATCH_PREFIX) &&
       !name.startsWith(DISPATCH_SCRATCH_PREFIX) &&
-      !name.startsWith(TICTACTOE_MASK_SCRATCH_PREFIX)
+      !name.startsWith(TICTACTOE_MASK_SCRATCH_PREFIX) &&
+      !name.startsWith(BIT_MASK_SCRATCH_PREFIX) &&
+      !name.startsWith(CELL_MAP_PREFIX) &&
+      !name.startsWith(SPATIAL_HIT_SCRATCH_PREFIX) &&
+      !name.startsWith(SPATIAL_COUNT_SCRATCH_PREFIX)
     ) {
       result[name] = register;
     }
   }
   return result;
+}
+
+function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  const stateFields = new Set(ast.states.flatMap((state) => state.fields.map((field) => field.name)));
+  if (stateFields.size === 0) return;
+  const externallyRead = new Set<string>();
+  const inputTargets = new Set<string>();
+  const assigned = new Map<string, ExpressionAst[]>();
+
+  const addRead = (name: string): void => {
+    if (stateFields.has(name)) externallyRead.add(name);
+  };
+  const visitExpr = (expr: ExpressionAst, ignored?: string): void => {
+    if (expr.kind === "identifier") {
+      if (expr.name !== ignored) addRead(expr.name);
+      return;
+    }
+    if (expr.kind === "unary") visitExpr(expr.expr, ignored);
+    if (expr.kind === "binary") {
+      visitExpr(expr.left, ignored);
+      visitExpr(expr.right, ignored);
+    }
+    if (expr.kind === "call") {
+      for (const arg of expr.args) visitExpr(arg, ignored);
+    }
+  };
+  const visitStatements = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "ask") {
+        inputTargets.add(statement.target);
+        if (statement.prompt) visitExpr(statement.prompt);
+      }
+      if (statement.kind === "input") inputTargets.add(statement.target);
+      if (statement.kind === "assign") {
+        if (!assigned.has(statement.target)) assigned.set(statement.target, []);
+        assigned.get(statement.target)!.push(statement.expr);
+        visitExpr(statement.expr, statement.target);
+      }
+      if (statement.kind === "show") {
+        const display = ast.displays.find((candidate) => candidate.name === statement.display);
+        for (const source of display?.sources ?? []) addRead(source);
+      }
+      if (statement.kind === "if") {
+        visitExpr(statement.condition.left);
+        visitExpr(statement.condition.right);
+        visitStatements(statement.thenBody);
+        if (statement.elseBody) visitStatements(statement.elseBody);
+      }
+      if (statement.kind === "loop") visitStatements(statement.body);
+      if (statement.kind === "switch") {
+        visitExpr(statement.expr);
+        for (const switchCase of statement.cases) {
+          visitExpr(switchCase.value);
+          visitStatements(switchCase.body);
+        }
+        if (statement.defaultBody) visitStatements(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          visitExpr(dispatchCase.value);
+          visitStatements(dispatchCase.body);
+        }
+        if (statement.defaultBody) visitStatements(statement.defaultBody);
+      }
+      if (statement.kind === "core") {
+        for (const input of statement.inputs ?? []) visitExpr(input.expr);
+        for (const output of statement.outputs ?? []) addRead(output.target);
+      }
+      if (statement.kind === "trap") visitExpr(statement.expr);
+    }
+  };
+
+  for (const entry of ast.entries) visitStatements(entry.body);
+  for (const proc of ast.procs) visitStatements(proc.body);
+  for (const block of ast.blocks) visitStatements(block.body);
+
+  const removable = new Set<string>();
+  for (const state of ast.states) {
+    for (const field of state.fields) {
+      if (externallyRead.has(field.name) || inputTargets.has(field.name)) continue;
+      if (field.initial !== undefined && !expressionPureForSubstitution(field.initial)) continue;
+      const writes = assigned.get(field.name) ?? [];
+      if (writes.every(expressionPureForSubstitution)) removable.add(field.name);
+    }
+  }
+  if (removable.size === 0) return;
+
+  for (const state of ast.states) {
+    state.fields = state.fields.filter((field) => !removable.has(field.name));
+  }
+  const pruneStatements = (statements: StatementAst[]): StatementAst[] =>
+    statements.flatMap((statement): StatementAst[] => {
+      if (statement.kind === "assign" && removable.has(statement.target)) return [];
+      if (statement.kind === "loop") return [{ ...statement, body: pruneStatements(statement.body) }];
+      if (statement.kind === "if") {
+        const pruned: Extract<StatementAst, { kind: "if" }> = {
+          ...statement,
+          thenBody: pruneStatements(statement.thenBody),
+        };
+        if (statement.elseBody !== undefined) pruned.elseBody = pruneStatements(statement.elseBody);
+        return [pruned];
+      }
+      if (statement.kind === "switch") {
+        return [{
+          ...statement,
+          cases: statement.cases.map((switchCase) => ({ ...switchCase, body: pruneStatements(switchCase.body) })),
+          ...(statement.defaultBody === undefined ? {} : { defaultBody: pruneStatements(statement.defaultBody) }),
+        }];
+      }
+      if (statement.kind === "dispatch") {
+        return [{
+          ...statement,
+          cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: pruneStatements(dispatchCase.body) })),
+          ...(statement.defaultBody === undefined ? {} : { defaultBody: pruneStatements(statement.defaultBody) }),
+        }];
+      }
+      return [statement];
+    });
+  for (const entry of ast.entries) entry.body = pruneStatements(entry.body);
+  for (const proc of ast.procs) proc.body = pruneStatements(proc.body);
+  for (const block of ast.blocks) block.body = pruneStatements(block.body);
+  optimizations.push({
+    name: "dead-state-elimination",
+    detail: `Removed ${removable.size} unobserved state field${removable.size === 1 ? "" : "s"} before register allocation.`,
+  });
+}
+
+function hoistCommonBranchTails(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  let hoisted = 0;
+  let simplified = 0;
+
+  const visitList = (statements: StatementAst[]): StatementAst[] => {
+    const result: StatementAst[] = [];
+    for (const statement of statements) {
+      result.push(...visitStatement(statement));
+    }
+    return result;
+  };
+
+  const visitStatement = (statement: StatementAst): StatementAst[] => {
+    if (statement.kind === "loop") {
+      return [{ ...statement, body: visitList(statement.body) }];
+    }
+    if (statement.kind === "if") {
+      const thenBody = visitList(statement.thenBody);
+      const elseBody = statement.elseBody === undefined ? undefined : visitList(statement.elseBody);
+      const tails: StatementAst[] = [];
+      if (elseBody !== undefined) {
+        while (
+          thenBody.length > 0 &&
+          elseBody.length > 0 &&
+          statementEquals(thenBody[thenBody.length - 1]!, elseBody[elseBody.length - 1]!)
+        ) {
+          tails.unshift(thenBody.pop()!);
+          elseBody.pop();
+        }
+      }
+      hoisted += tails.length;
+
+      const simplifiedBranch = simplifyIfStatement({
+        ...statement,
+        thenBody,
+        ...(elseBody === undefined ? {} : { elseBody }),
+      });
+      if (simplifiedBranch.length !== 1 || !statementEquals(simplifiedBranch[0]!, {
+        ...statement,
+        thenBody,
+        ...(elseBody === undefined ? {} : { elseBody }),
+      })) {
+        simplified += 1;
+      }
+      return [...simplifiedBranch, ...tails];
+    }
+    if (statement.kind === "switch") {
+      return [{
+        ...statement,
+        cases: statement.cases.map((switchCase) => ({ ...switchCase, body: visitList(switchCase.body) })),
+        ...(statement.defaultBody === undefined ? {} : { defaultBody: visitList(statement.defaultBody) }),
+      }];
+    }
+    if (statement.kind === "dispatch") {
+      return [{
+        ...statement,
+        cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: visitList(dispatchCase.body) })),
+        ...(statement.defaultBody === undefined ? {} : { defaultBody: visitList(statement.defaultBody) }),
+      }];
+    }
+    return [statement];
+  };
+
+  for (const entry of ast.entries) entry.body = visitList(entry.body);
+  for (const proc of ast.procs) proc.body = visitList(proc.body);
+  for (const block of ast.blocks) block.body = visitList(block.body);
+
+  if (hoisted > 0 || simplified > 0) {
+    optimizations.push({
+      name: "common-branch-tail-hoisting",
+      detail: `Hoisted ${hoisted} shared branch tail${hoisted === 1 ? "" : "s"} and simplified ${simplified} conditional shape${simplified === 1 ? "" : "s"}.`,
+    });
+  }
+}
+
+function simplifyIfStatement(statement: Extract<StatementAst, { kind: "if" }>): StatementAst[] {
+  if (statement.elseBody !== undefined && statement.thenBody.length === 0 && statement.elseBody.length === 0) {
+    return [];
+  }
+  if (statement.elseBody !== undefined && statement.thenBody.length === 0) {
+    const { elseBody, ...rest } = statement;
+    return [{
+      ...rest,
+      condition: invertCondition(statement.condition),
+      thenBody: elseBody,
+    }];
+  }
+  if (statement.elseBody !== undefined && statement.elseBody.length === 0) {
+    const { elseBody: _elseBody, ...rest } = statement;
+    return [{
+      ...rest,
+    }];
+  }
+  return [statement];
+}
+
+function invertCondition(condition: ConditionAst): ConditionAst {
+  return {
+    ...condition,
+    op: invertComparisonOp(condition.op),
+  };
+}
+
+function invertComparisonOp(op: ConditionAst["op"]): ConditionAst["op"] {
+  switch (op) {
+    case "==":
+      return "!=";
+    case "!=":
+      return "==";
+    case "<":
+      return ">=";
+    case "<=":
+      return ">";
+    case ">":
+      return "<=";
+    case ">=":
+      return "<";
+  }
 }
 
 function appendOptimizationCandidateReports(
@@ -364,7 +626,7 @@ function parseReferenceAddress(text: string): number {
 
 function validateSemanticDomains(ast: ProgramAst, diagnostics: Diagnostic[]): void {
   const unresolved = ast.domains.filter((domain) =>
-    ["maze", "event", "cache_search", "fight", "table"].includes(domain.domainKind),
+    ["cache_search", "fight", "table"].includes(domain.domainKind),
   );
   if (unresolved.length === 0) return;
   diagnostics.push({
@@ -385,7 +647,7 @@ function validateV2Intent(ast: ProgramAst, diagnostics: Diagnostic[]): void {
     level: "error",
     code: "V2_SEMANTIC_LOWERER_MISSING",
     message:
-      `MK-Pro intent contains effects that need real generic lowerers before code generation: ` +
+      `MK-Pro source contains effects that need real rule lowerers before code generation: ` +
       `${unsupported.slice(0, 8).map((item) => `${item.text} (line ${item.line})`).join(", ")}. ` +
       "The compiler refuses to treat human-level semantics as comments.",
   });
@@ -427,13 +689,19 @@ function collectUnsupportedV2Statements(ast: NonNullable<ProgramAst["v2"]>): Arr
 }
 
 function isLowerableV2Predicate(predicate: V2PredicateAst): boolean {
+  if (predicate.kind === "v2_contains") {
+    return isSimpleCompilerExpression(predicate.collection) &&
+      isSimpleCompilerExpression(predicate.item);
+  }
   if (predicate.kind === "v2_compare") {
-    return isSimpleCompilerExpression(predicate.left) && isSimpleCompilerExpression(predicate.right);
+    return isSimpleCompilerExpression(predicate.left) &&
+      isSimpleCompilerExpression(predicate.right);
   }
   return false;
 }
 
 function formatV2Predicate(predicate: V2PredicateAst): string {
+  if (predicate.kind === "v2_contains") return `${predicate.item} in ${predicate.collection}`;
   return `${predicate.left} ${predicate.op} ${predicate.right}`;
 }
 
@@ -467,7 +735,24 @@ class EmitContext {
   private readonly warnings: string[];
   private readonly candidates: CandidateReport[];
   private readonly inlineProcNames: Set<string>;
+  private readonly readCounts: Map<string, number>;
+  private readonly displayUseCounts: Map<string, number>;
+  private readonly showSequenceUseCounts: Map<string, number>;
+  private readonly expressionUseCounts: Map<string, { count: number; expr: ExpressionAst }>;
+  private readonly lineCountCallCount: number;
+  private readonly lineCountGroupCounts: Map<string, number>;
+  private readonly spatialHitHelpers = new Map<string, { mask: string; scratch: string; label: string; line?: number }>();
+  private readonly displayHelpers = new Map<string, { display: ProgramAst["displays"][number]; label: string; line: number }>();
+  private readonly showSequenceHelpers = new Map<string, {
+    first: ProgramAst["displays"][number];
+    second: ProgramAst["displays"][number];
+    label: string;
+    line: number;
+  }>();
+  private readonly expressionHelpers = new Map<string, { expr: ExpressionAst; label: string; line?: number }>();
+  private readonly lineCountHelpers = new Map<string, { cell: ExpressionAst; board: V2BoardAst; label: string; line?: number }>();
   private currentXVariable: string | undefined;
+  private emittingExpressionHelper = false;
 
   constructor(
     ast: ProgramAst,
@@ -488,6 +773,12 @@ class EmitContext {
     this.warnings = warnings;
     this.candidates = candidates;
     this.inlineProcNames = findSingleUseProcNames(ast);
+    this.readCounts = collectVariableReadCounts(ast);
+    this.displayUseCounts = collectDisplayUseCounts(ast);
+    this.showSequenceUseCounts = collectShowSequenceUseCounts(ast);
+    this.expressionUseCounts = collectExpressionUseCounts(ast);
+    this.lineCountCallCount = countCalls(ast, "line_count");
+    this.lineCountGroupCounts = collectLineCountGroupCounts(ast);
     for (const declaration of ast.declarations) {
       if (declaration.kind === "const") {
         this.constants.set(declaration.name, declaration.value);
@@ -521,6 +812,67 @@ class EmitContext {
       if (!this.statementsTerminate(block.body)) {
         this.emitOp(0x50, "С/П", `implicit stop for ${block.mode} block ${block.name}`, block.line);
       }
+    }
+
+    this.compileRuntimeHelpers();
+  }
+
+  private compileRuntimeHelpers(): void {
+    for (const helper of this.displayHelpers.values()) {
+      this.emitLabel(helper.label);
+      this.compilePackedDisplayBody(helper.display, helper.line, false);
+      this.emitOp(0x52, "В/О", `display ${helper.display.name} return`, helper.line);
+      this.optimizations.push({
+        name: "packed-display-helper",
+        detail: `Emitted shared packed display helper for screen ${helper.display.name}.`,
+      });
+    }
+    for (const helper of this.showSequenceHelpers.values()) {
+      this.emitLabel(helper.label);
+      this.compilePackedDisplayBody(helper.first, helper.line, false);
+      this.compilePackedDisplayBody(helper.second, helper.line, false);
+      this.emitOp(0x52, "В/О", `show sequence ${helper.first.name}/${helper.second.name} return`, helper.line);
+      this.optimizations.push({
+        name: "show-sequence-helper",
+        detail: `Emitted shared helper for show ${helper.first.name}; show ${helper.second.name}; read.`,
+      });
+    }
+    for (const helper of this.expressionHelpers.values()) {
+      this.emitLabel(helper.label);
+      this.emittingExpressionHelper = true;
+      try {
+        this.compileExpression(helper.expr);
+      } finally {
+        this.emittingExpressionHelper = false;
+      }
+      this.emitOp(0x52, "В/О", "expression helper return", helper.line);
+      this.optimizations.push({
+        name: "expression-helper",
+        detail: `Emitted shared helper for ${expressionToIntentText(helper.expr)}.`,
+      });
+    }
+    for (const helper of this.lineCountHelpers.values()) {
+      this.emitLabel(helper.label);
+      this.emitStore(spatialCountMaskScratchName(), "line count mask", helper.line);
+      this.emitSpatialLineCountLoopBody(spatialCountMaskScratchName(), helper.cell, helper.board, helper.line);
+      this.emitOp(0x52, "В/О", "line_count return", helper.line);
+      this.optimizations.push({
+        name: "spatial-line-count-helper",
+        detail: `Emitted shared line_count helper for ${helper.board.name}/${expressionToIntentText(helper.cell)}.`,
+      });
+    }
+    for (const helper of this.spatialHitHelpers.values()) {
+      this.emitLabel(helper.label);
+      this.emitStore(helper.scratch, "spatial hit index", helper.line);
+      this.emitRecall(helper.mask, "spatial hit mask", helper.line);
+      this.compileExpression({
+        kind: "call",
+        callee: "bit_mask",
+        args: [{ kind: "identifier", name: helper.scratch }],
+      });
+      this.emitOp(0x37, "К ∧", "spatial hit test", helper.line);
+      this.emitOp(0x32, "К ЗН", "spatial hit to count", helper.line);
+      this.emitOp(0x52, "В/О", "spatial hit return", helper.line);
     }
   }
 
@@ -571,13 +923,53 @@ class EmitContext {
     for (let index = 0; index < statements.length; index += 1) {
       const statement = statements[index]!;
       const next = statements[index + 1];
+      if (statement.kind === "assign") {
+        const reused = this.compileRepeatedAssignmentValue(statements, index);
+        if (reused > 1) {
+          index += reused - 1;
+          continue;
+        }
+      }
       if (statement.kind === "assign" && next?.kind === "assign" && this.compileTicTacToeCellMaskReuse(statement, next)) {
+        index += 1;
+        continue;
+      }
+      if (statement.kind === "assign" && next?.kind === "assign" && this.compileBitSetMaskReuse(statement, next)) {
+        index += 1;
+        continue;
+      }
+      if (statement.kind === "assign" && next?.kind === "if" && this.compileGuardAssignmentSubstitution(statement, next)) {
         index += 1;
         continue;
       }
       if (statement.kind === "if" && next?.kind === "if" && this.compileDoubleBranchRemoval(statement, next)) {
         index += 1;
         continue;
+      }
+      if (statement.kind === "pause" && next?.kind === "halt" && expressionEquals(statement.expr, next.expr)) {
+        this.compileStatement(next);
+        this.optimizations.push({
+          name: "terminal-display-fusion",
+          detail: `Dropped duplicate terminal display before stop at line ${next.line}.`,
+        });
+        index += 1;
+        continue;
+      }
+      if (statement.kind === "show" && next?.kind === "halt" && this.haltDisplaysSameValue(statement, next)) {
+        this.compileStatement(next);
+        this.optimizations.push({
+          name: "terminal-display-fusion",
+          detail: `Dropped duplicate screen ${statement.display} before stop at line ${next.line}.`,
+        });
+        index += 1;
+        continue;
+      }
+      if (statement.kind === "show" && next?.kind === "show" && statements[index + 2]?.kind === "input") {
+        const input = statements[index + 2] as Extract<StatementAst, { kind: "input" }>;
+        if (this.compileShowSequenceRead(statement, next, input)) {
+          index += 2;
+          continue;
+        }
       }
       if (statement.kind === "show" && next?.kind === "input") {
         this.compileShow(statement.display, statement.line);
@@ -591,6 +983,80 @@ class EmitContext {
       }
       this.compileStatement(statement);
     }
+  }
+
+  private compileRepeatedAssignmentValue(statements: StatementAst[], start: number): number {
+    const first = statements[start];
+    if (first?.kind !== "assign" || !expressionPureForSubstitution(first.expr)) return 0;
+    let end = start + 1;
+    while (end < statements.length) {
+      const candidate = statements[end]!;
+      if (candidate.kind !== "assign" || !expressionEquals(candidate.expr, first.expr)) break;
+      end += 1;
+    }
+    const count = end - start;
+    if (count <= 1) return 0;
+    this.compileExpression(first.expr);
+    for (let index = start; index < end; index += 1) {
+      const assignment = statements[index] as Extract<StatementAst, { kind: "assign" }>;
+      this.emitStore(assignment.target, `set ${assignment.target}`, assignment.line);
+    }
+    this.optimizations.push({
+      name: "repeated-assignment-value-reuse",
+      detail: `Stored one computed value into ${count} consecutive assignment targets at line ${first.line}.`,
+    });
+    return count;
+  }
+
+  private haltDisplaysSameValue(
+    show: Extract<StatementAst, { kind: "show" }>,
+    halt: Extract<StatementAst, { kind: "halt" }>,
+  ): boolean {
+    const display = this.ast.displays.find((candidate) => candidate.name === show.display);
+    if (display === undefined || display.items.length !== 1) return false;
+    const [item] = display.items;
+    if (item?.kind !== "source") return false;
+    const field = this.findStateField(item.name);
+    return field?.initial !== undefined && expressionEquals(field.initial, halt.expr);
+  }
+
+  private compileShowSequenceRead(
+    firstShow: Extract<StatementAst, { kind: "show" }>,
+    secondShow: Extract<StatementAst, { kind: "show" }>,
+    input: Extract<StatementAst, { kind: "input" }>,
+  ): boolean {
+    const helper = this.sharedShowSequenceHelper(firstShow.display, secondShow.display, firstShow.line);
+    if (helper === undefined) return false;
+    this.emitJump(0x53, "ПП", helper.label, `show ${firstShow.display}; show ${secondShow.display}`, firstShow.line);
+    this.emitStore(input.target, `read ${input.target}`, input.line);
+    this.optimizations.push({
+      name: "show-sequence-helper-call",
+      detail: `Reused shared helper for show ${firstShow.display}; show ${secondShow.display}; read ${input.target}.`,
+    });
+    return true;
+  }
+
+  private compileGuardAssignmentSubstitution(
+    assign: Extract<StatementAst, { kind: "assign" }>,
+    guarded: Extract<StatementAst, { kind: "if" }>,
+  ): boolean {
+    const readsInCondition = countIdentifierReadsInCondition(guarded.condition, assign.target);
+    if (readsInCondition === 0) return false;
+    if ((this.readCounts.get(assign.target) ?? 0) !== readsInCondition) return false;
+    if (!expressionPureForSubstitution(assign.expr)) return false;
+    const substitutedCondition = substituteConditionIdentifier(guarded.condition, assign.target, assign.expr);
+    const ordinaryCost = estimateExpressionCost(assign.expr) + 1 + conditionCompileCost(guarded.condition);
+    const substitutedCost = conditionCompileCost(substitutedCondition);
+    if (substitutedCost + 4 >= ordinaryCost) return false;
+    this.compileIf({
+      ...guarded,
+      condition: substitutedCondition,
+    }, guarded.line);
+    this.optimizations.push({
+      name: "single-use-guard-substitution",
+      detail: `Substituted ${assign.target} directly into the following condition at lines ${assign.line}/${guarded.line}.`,
+    });
+    return true;
   }
 
   private compileStatement(statement: StatementAst): void {
@@ -687,11 +1153,41 @@ class EmitContext {
     return true;
   }
 
+  private compileBitSetMaskReuse(
+    first: Extract<StatementAst, { kind: "assign" }>,
+    second: Extract<StatementAst, { kind: "assign" }>,
+  ): boolean {
+    const firstSet = matchBitSetAssignment(first);
+    const secondSet = matchBitSetAssignment(second);
+    if (firstSet === undefined || secondSet === undefined) return false;
+    if (!expressionEquals(firstSet.item, secondSet.item)) return false;
+
+    const scratch = bitMaskScratchName(first);
+    if (!this.allocation.registers[scratch]) return false;
+
+    this.compileExpression(bitMaskExpression(firstSet.item));
+    this.emitStore(scratch, "cell bit mask scratch", first.line);
+    this.compileExpression(firstSet.collection);
+    this.emitRecall(scratch, "reuse cell bit mask", first.line);
+    this.emitOp(0x38, "К ∨", "bit_set with reused mask", first.line);
+    this.emitStore(first.target, `set ${first.target}`, first.line);
+    this.compileExpression(secondSet.collection);
+    this.emitRecall(scratch, "reuse cell bit mask", second.line);
+    this.emitOp(0x38, "К ∨", "bit_set with reused mask", second.line);
+    this.emitStore(second.target, `set ${second.target}`, second.line);
+    this.optimizations.push({
+      name: "bit-set-mask-cse",
+      detail: `Computed bit_mask() once for adjacent set updates at lines ${first.line}/${second.line}.`,
+    });
+    return true;
+  }
+
   private compileIf(
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): void {
     if (this.compileArithmeticIfSelect(statement)) return;
+    if (this.compileMembershipClearReuse(statement, line)) return;
 
     const falseLabel = this.freshLabel("if_false");
     const endLabel = this.freshLabel("if_end");
@@ -705,6 +1201,61 @@ class EmitContext {
     } else {
       this.emitLabel(falseLabel);
     }
+  }
+
+  private compileMembershipClearReuse(
+    statement: Extract<StatementAst, { kind: "if" }>,
+    line: number,
+  ): boolean {
+    const clearPrefix = this.membershipClearPrefix(statement.thenBody);
+    if (clearPrefix === undefined) return false;
+    const { clear, tail } = clearPrefix;
+    const membership = matchBitMembershipCondition(statement.condition);
+    if (membership === undefined) return false;
+    if (!isBitClearAssignment(clear, membership)) return false;
+
+    const falseLabel = this.freshLabel("if_false");
+    const endLabel = this.freshLabel("if_end");
+
+    this.compileExpression(membership.test);
+    this.emitJump(0x57, "F x!=0", falseLabel, "false branch for !=", line);
+    this.emitOp(0x3a, "К ИНВ", "reuse membership mask for clear", clear.line);
+    this.compileExpression(membership.collection);
+    this.emitOp(0x37, "К ∧", "clear matched cell with reused mask", clear.line);
+    this.emitStore(clear.target, `set ${clear.target}`, clear.line);
+    this.compileStatements(tail);
+    if (statement.elseBody) {
+      this.emitJump(0x51, "БП", endLabel, "if end", line);
+      this.emitLabel(falseLabel);
+      this.compileStatements(statement.elseBody);
+      this.emitLabel(endLabel);
+    } else {
+      this.emitLabel(falseLabel);
+    }
+    this.optimizations.push({
+      name: "cell-membership-clear-reuse",
+      detail: `Reused the successful membership mask when clearing ${clear.target} at line ${clear.line}.`,
+    });
+    return true;
+  }
+
+  private membershipClearPrefix(statements: StatementAst[]): {
+    clear: Extract<StatementAst, { kind: "assign" }>;
+    tail: StatementAst[];
+  } | undefined {
+    const first = statements[0];
+    if (first?.kind === "assign") {
+      return { clear: first, tail: statements.slice(1) };
+    }
+    if (first?.kind !== "call" || !this.inlineProcNames.has(first.block)) return undefined;
+    const proc = this.ast.procs.find((candidate) => candidate.name === first.block);
+    if (proc === undefined) return undefined;
+    const clear = proc.body[0];
+    if (clear?.kind !== "assign") return undefined;
+    return {
+      clear,
+      tail: [...proc.body.slice(1), ...statements.slice(1)],
+    };
   }
 
   private compileArithmeticIfSelect(statement: Extract<StatementAst, { kind: "if" }>): boolean {
@@ -820,8 +1371,16 @@ class EmitContext {
   }
 
   private compileDispatch(statement: Extract<StatementAst, { kind: "dispatch" }>): void {
+    const optimized = optimizeDispatchDefaultCases(statement);
+    if (optimized.removed > 0) {
+      this.optimizations.push({
+        name: "dispatch-default-merge",
+        detail: `Removed ${optimized.removed} dispatch case${optimized.removed === 1 ? "" : "s"} whose body matched the default branch.`,
+      });
+    }
+
     const site = statement.name ?? `dispatch@${statement.line}`;
-    const selected = selectDispatchCandidate(statement, this.machineProfile);
+    const selected = selectDispatchCandidate(optimized.statement, this.machineProfile);
     for (const candidate of selected.candidates) this.candidates.push(candidate);
 
     this.optimizations.push({
@@ -829,7 +1388,7 @@ class EmitContext {
       detail: `Selected ${selected.selected.variant} for ${site}.`,
     });
 
-    this.compileDispatchCompareChain(statement, selected.selected.variant === "fallthrough-compare-chain");
+    this.compileDispatchCompareChain(optimized.statement, selected.selected.variant === "fallthrough-compare-chain");
   }
 
   private compileDispatchCompareChain(
@@ -948,7 +1507,26 @@ class EmitContext {
       return;
     }
 
-    const sources = this.orderDisplaySources(display.sources);
+    const helper = this.sharedDisplayHelper(display, line);
+    if (helper !== undefined) {
+      this.emitJump(0x53, "ПП", helper.label, `show ${display.name}`, line);
+      this.optimizations.push({
+        name: "packed-display-helper-call",
+        detail: `Reused shared packed display helper for screen ${display.name}.`,
+      });
+      return;
+    }
+
+    this.compilePackedDisplayBody(display, line, true);
+    this.reportPackedDisplayLowering(display);
+  }
+
+  private compilePackedDisplayBody(
+    display: ProgramAst["displays"][number],
+    line: number,
+    reuseCurrentX: boolean,
+  ): void {
+    const sources = reuseCurrentX ? this.orderDisplaySources(display.sources) : display.sources;
     if (sources.length === 0) {
       this.emitNumber("0");
     } else {
@@ -961,7 +1539,9 @@ class EmitContext {
       }
     }
     this.emitOp(0x50, "С/П", `show ${display.name}`, line);
+  }
 
+  private reportPackedDisplayLowering(display: ProgramAst["displays"][number]): void {
     const canUseDisplayBytes = machineSupports(this.machineProfile, "display-bytes");
     this.optimizations.push({
       name: "packed-display-lowering",
@@ -969,6 +1549,76 @@ class EmitContext {
         ? `Display ${display.name} may use display-byte encodings in later layout passes.`
         : `Display ${display.name} lowered as ordinary packed numeric output.`,
     });
+  }
+
+  private sharedDisplayHelper(
+    display: ProgramAst["displays"][number],
+    line: number,
+  ): { display: ProgramAst["displays"][number]; label: string; line: number } | undefined {
+    if (!this.shouldShareDisplay(display)) return undefined;
+    const existing = this.displayHelpers.get(display.name);
+    if (existing !== undefined) return existing;
+    const helper = {
+      display,
+      label: `__display_${display.name}`,
+      line,
+    };
+    this.displayHelpers.set(display.name, helper);
+    return helper;
+  }
+
+  private shouldShareDisplay(display: ProgramAst["displays"][number]): boolean {
+    if (display.items.some((item) => item.kind === "literal")) return false;
+    const sources = display.sources.length;
+    if (sources < 2) return false;
+    const uses = this.displayUseCounts.get(display.name) ?? 0;
+    if (uses < 2) return false;
+
+    const inlineCost = estimatePackedDisplayBodyCost(sources);
+    const helperCost = uses * 2 + inlineCost + 1;
+    const inlineTotal = uses * inlineCost;
+    return inlineTotal - helperCost >= DISPLAY_HELPER_MIN_SAVINGS;
+  }
+
+  private sharedShowSequenceHelper(
+    firstName: string,
+    secondName: string,
+    line: number,
+  ): {
+    first: ProgramAst["displays"][number];
+    second: ProgramAst["displays"][number];
+    label: string;
+    line: number;
+  } | undefined {
+    const first = this.ast.displays.find((candidate) => candidate.name === firstName);
+    const second = this.ast.displays.find((candidate) => candidate.name === secondName);
+    if (first === undefined || second === undefined) return undefined;
+    if (!this.shouldShareShowSequence(first, second)) return undefined;
+    const key = showSequenceKey(first.name, second.name);
+    const existing = this.showSequenceHelpers.get(key);
+    if (existing !== undefined) return existing;
+    const helper = {
+      first,
+      second,
+      label: `__showseq_${this.showSequenceHelpers.size}`,
+      line,
+    };
+    this.showSequenceHelpers.set(key, helper);
+    return helper;
+  }
+
+  private shouldShareShowSequence(
+    first: ProgramAst["displays"][number],
+    second: ProgramAst["displays"][number],
+  ): boolean {
+    if (first.items.some((item) => item.kind === "literal")) return false;
+    if (second.items.some((item) => item.kind === "literal")) return false;
+    const uses = this.showSequenceUseCounts.get(showSequenceKey(first.name, second.name)) ?? 0;
+    if (uses < 2) return false;
+    const bodyCost = estimatePackedDisplayBodyCost(first.sources.length) + estimatePackedDisplayBodyCost(second.sources.length);
+    const inlineTotal = uses * (bodyCost + 1);
+    const helperTotal = uses * 3 + bodyCost + 1;
+    return inlineTotal - helperTotal >= DISPLAY_HELPER_MIN_SAVINGS;
   }
 
   private compileTextDisplay(display: ProgramAst["displays"][number], line: number): boolean {
@@ -1154,7 +1804,11 @@ class EmitContext {
     falseLabel: string,
     line: number,
   ): void {
-    const selected = selectCheaperEquivalentCondition(condition, this.ast);
+    const selected = selectCheaperEquivalentCondition(
+      condition,
+      this.ast,
+      new Set(Object.keys(this.allocation.constants)),
+    );
     if (selected.changed) {
       this.optimizations.push({
         name: "comparison-boundary-normalization",
@@ -1163,15 +1817,21 @@ class EmitContext {
     }
     const compiledCondition = selected.condition;
     if (isZeroExpression(compiledCondition.right) && canTestAgainstZeroDirectly(compiledCondition.op)) {
-      this.compileExpression(compiledCondition.left);
+      const usedSpatialHit = this.compileBitHasConditionWithSpatialHelper(compiledCondition.left, line);
+      if (!usedSpatialHit) {
+        this.compileExpression(compiledCondition.left);
+      }
       const opcode = directTestOpcode(compiledCondition.op);
       this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${condition.op}`, line);
       this.optimizations.push({
-        name: "zero-condition-test",
-        detail: `Tested ${compiledCondition.op} 0 without materializing a zero literal at line ${line}.`,
+        name: usedSpatialHit ? "spatial-hit-condition-helper" : "zero-condition-test",
+        detail: usedSpatialHit
+          ? `Tested bit_has() through the shared spatial hit helper at line ${line}.`
+          : `Tested ${compiledCondition.op} 0 without materializing a zero literal at line ${line}.`,
       });
       return;
     }
+    if (this.compileEqualityWithCurrentX(compiledCondition, falseLabel, line)) return;
     if (compiledCondition.op === ">" || compiledCondition.op === "<=") {
       this.compileExpression(compiledCondition.right);
       this.compileExpression(compiledCondition.left);
@@ -1193,7 +1853,61 @@ class EmitContext {
     this.emitJump(opcode, mnemonic, falseLabel, `false branch for ${compiledCondition.op}`, line);
   }
 
+  private compileBitHasConditionWithSpatialHelper(expr: ExpressionAst, line: number): boolean {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_has" || expr.args.length !== 2) return false;
+    const [mask, index] = expr.args;
+    if (mask?.kind !== "identifier" || index === undefined) return false;
+    const scratch = spatialHitScratchName(mask.name);
+    if (!this.allocation.registers[scratch]) return false;
+    const helper = this.ensureSpatialHitHelper(mask.name, scratch);
+    this.compileExpression(index);
+    this.emitJump(0x53, "ПП", helper.label, `spatial hit ${mask.name}`, line);
+    return true;
+  }
+
+  private compileEqualityWithCurrentX(
+    condition: ConditionAst,
+    falseLabel: string,
+    line: number,
+  ): boolean {
+    if (condition.op !== "==" && condition.op !== "!=") return false;
+    const reused = this.currentXVariable;
+    if (
+      condition.right.kind === "identifier" &&
+      condition.right.name === reused &&
+      isSimpleStackLoad(condition.left)
+    ) {
+      this.compileExpression(condition.left);
+    } else if (
+      condition.left.kind === "identifier" &&
+      condition.left.name === reused &&
+      isSimpleStackLoad(condition.right)
+    ) {
+      this.compileExpression(condition.right);
+    } else {
+      return false;
+    }
+    this.emitOp(0x11, "-", "condition compare", line);
+    const opcode = condition.op === "==" ? 0x5e : 0x57;
+    this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${condition.op}`, line);
+    this.optimizations.push({
+      name: "condition-current-x-reuse",
+      detail: `Reused ${reused} already in X for equality comparison at line ${line}.`,
+    });
+    return true;
+  }
+
   private compileExpression(expr: ExpressionAst): void {
+    const helper = this.sharedExpressionHelper(expr);
+    if (helper !== undefined) {
+      this.emitJump(0x53, "ПП", helper.label, `expr ${expressionToIntentText(expr)}`);
+      this.optimizations.push({
+        name: "expression-helper-call",
+        detail: `Reused shared helper for ${expressionToIntentText(expr)}.`,
+      });
+      return;
+    }
+
     switch (expr.kind) {
       case "number":
         this.emitNumberOrPreload(expr.raw);
@@ -1220,10 +1934,17 @@ class EmitContext {
         return;
       }
       case "unary":
+        if (expr.op === "-" && expr.expr.kind === "number") {
+          this.emitNumberOrPreload(negatedNumberLiteral(expr.expr.raw));
+          return;
+        }
         this.compileExpression(expr.expr);
         this.emitOp(0x0b, "/-/", "unary minus");
         return;
       case "binary":
+        if (this.compileRemainderByConstant(expr)) {
+          return;
+        }
         if ((expr.op === "+" || expr.op === "*") && this.compileCommutativeWithCurrentX(expr)) {
           return;
         }
@@ -1275,11 +1996,60 @@ class EmitContext {
     return false;
   }
 
+  private compileRemainderByConstant(expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
+    const matched = matchRemainderByConstant(expr);
+    if (matched === undefined) return false;
+    this.compileExpression(matched.value);
+    this.compileExpression(matched.divisor);
+    this.emitOp(0x13, "/", "remainder quotient");
+    this.emitOp(0x35, "К {x}", "remainder fractional part");
+    this.compileExpression(matched.divisor);
+    this.emitOp(0x12, "*", "remainder scale");
+    this.optimizations.push({
+      name: "remainder-fraction-lowering",
+      detail: `Lowered ${expressionToIntentText(expr)} without recomputing the dividend.`,
+    });
+    return true;
+  }
+
+  private sharedExpressionHelper(expr: ExpressionAst): { expr: ExpressionAst; label: string; line?: number } | undefined {
+    if (this.emittingExpressionHelper) return undefined;
+    if (!this.shouldShareExpression(expr)) return undefined;
+    const key = expressionToIntentText(expr);
+    const existing = this.expressionHelpers.get(key);
+    if (existing !== undefined) return existing;
+    const helper = {
+      expr,
+      label: `__expr_${this.expressionHelpers.size}`,
+    };
+    this.expressionHelpers.set(key, helper);
+    return helper;
+  }
+
+  private shouldShareExpression(expr: ExpressionAst): boolean {
+    if (!expressionPureForSubstitution(expr)) return false;
+    if (expr.kind === "number" || expr.kind === "identifier") return false;
+    const cost = estimateExpressionCost(expr);
+    if (cost < EXPRESSION_HELPER_MIN_COST) return false;
+    const key = expressionToIntentText(expr);
+    const uses = this.expressionUseCounts.get(key)?.count ?? 0;
+    if (uses < 2) return false;
+    const inlineTotal = uses * cost;
+    const helperTotal = uses * 2 + cost + 1;
+    return inlineTotal - helperTotal >= EXPRESSION_HELPER_MIN_SAVINGS;
+  }
+
   private compileCall(expr: Extract<ExpressionAst, { kind: "call" }>): void {
     const name = expr.callee.toLowerCase();
     if (name === "direction") {
       this.compileDirectionCall(expr);
       return;
+    }
+    if (name === "neighbor_count" || name === "line_count") {
+      if (this.compileSpatialCountCall(name, expr)) return;
+    }
+    if (name === "__spatial_hit") {
+      if (this.compileSpatialHitCall(expr)) return;
     }
     if (isTicTacToeMacroName(name) && ticTacToeMacroArity(name) !== expr.args.length) {
       this.diagnostics.push({
@@ -1458,6 +2228,263 @@ class EmitContext {
       name: "direction-keypad-lowering",
       detail: `Lowered direction(${arg.name}) through a shared keypad geometry formula.`,
     });
+  }
+
+  private compileSpatialCountCall(name: "neighbor_count" | "line_count", expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
+    if (expr.args.length !== 2) {
+      this.diagnostics.push({
+        level: "error",
+        message: `${name}() expects two arguments, got ${expr.args.length}.`,
+      });
+      return true;
+    }
+    if (name === "line_count" && this.compileSpatialLineCountLoop(expr)) return true;
+    const expanded = spatialCountExpression(name, expr.args, this.ast);
+    if (expanded === undefined) return false;
+    this.compileExpression(expanded);
+    this.optimizations.push({
+      name: "spatial-count-hit-helper",
+      detail: `Lowered ${name}() through shared spatial hit helper calls.`,
+    });
+    return true;
+  }
+
+  private compileSpatialNeighborCountLoop(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
+    const [mask, cell] = expr.args;
+    if (mask?.kind !== "identifier" || cell === undefined) return false;
+    const board = boardForCellMask(mask, this.ast);
+    const scratch = spatialCountScratchNames();
+    if (scratch.some((name) => this.allocation.registers[name] === undefined)) return false;
+    const progressions = spatialNeighborProgressions(board);
+    this.emitSpatialNeighborCountLoopBody(mask.name, cell, progressions, undefined);
+    this.optimizations.push({
+      name: "spatial-neighbor-count-loop",
+      detail: `Lowered neighbor_count(${mask.name}, ...) as spatial hit loops.`,
+    });
+    return true;
+  }
+
+  private emitSpatialNeighborCountLoopBody(
+    hitMask: string,
+    cell: ExpressionAst,
+    progressions: SpatialLineProgression[],
+    sourceLine: number | undefined,
+  ): void {
+    const scratch = spatialCountScratchNames();
+    const total = scratch[0]!;
+    const offset = scratch[2]!;
+    const counter = scratch[3]!;
+
+    this.emitNumber("0");
+    this.emitStore(total, "neighbor_count total", sourceLine);
+    for (const progression of progressions) {
+      this.compileExpression(progression.startOffset);
+      this.emitStore(offset, "neighbor_count offset", sourceLine);
+      this.emitNumber(String(progression.count));
+      this.emitStore(counter, "neighbor_count counter", sourceLine);
+
+      const start = this.freshLabel("neighbor_count_loop");
+      this.emitLabel(start);
+      this.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
+      const helper = this.ensureSpatialHitHelper(hitMask, spatialHitScratchName(hitMask));
+      this.emitJump(0x53, "ПП", helper.label, `spatial hit ${hitMask}`, sourceLine);
+      this.emitRecall(total, "neighbor_count total");
+      this.emitOp(0x10, "+", "neighbor_count add hit");
+      this.emitStore(total, "neighbor_count total");
+
+      this.emitRecall(offset, "neighbor_count offset");
+      this.compileExpression(progression.step);
+      this.emitOp(0x10, "+", "neighbor_count next offset");
+      this.emitStore(offset, "neighbor_count offset");
+
+      const counterRegister = this.allocation.registers[counter];
+      const flCounterOpcode = counterRegister === undefined ? undefined : flOpcode(counterRegister);
+      if (flCounterOpcode !== undefined) {
+        this.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, "neighbor_count loop", sourceLine);
+        this.optimizations.push({
+          name: "spatial-count-fl-loop",
+          detail: `Used ${getOpcode(flCounterOpcode).name} for neighbor_count loop counter.`,
+        });
+      } else {
+        this.emitRecall(counter, "neighbor_count counter");
+        this.emitNumber("1");
+        this.emitOp(0x11, "-", "neighbor_count decrement");
+        this.emitStore(counter, "neighbor_count counter");
+        this.emitRecall(counter, "neighbor_count counter");
+        this.emitJump(0x5e, "F x=0", start, "neighbor_count loop", sourceLine);
+      }
+    }
+    this.emitRecall(total, "neighbor_count result");
+  }
+
+  private compileSpatialLineCountLoop(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
+    const [mask, cell] = expr.args;
+    if (mask?.kind !== "identifier" || cell === undefined) return false;
+    const board = boardForCellMask(mask, this.ast);
+    if (board === undefined) return false;
+    const scratch = spatialCountScratchNames();
+    if (scratch.some((name) => this.allocation.registers[name] === undefined)) return false;
+
+    const maskScratch = spatialCountMaskScratchName();
+    const useSharedMask = this.lineCountCallCount > 1 && this.allocation.registers[maskScratch] !== undefined;
+    const hitMask = useSharedMask ? maskScratch : mask.name;
+    const helper = this.sharedLineCountHelper(mask, cell, board, undefined);
+    if (helper !== undefined) {
+      this.compileExpression(mask);
+      this.emitJump(0x53, "ПП", helper.label, `line_count ${mask.name}`, undefined);
+      this.optimizations.push({
+        name: "spatial-line-count-helper-call",
+        detail: `Reused shared line_count helper for ${mask.name}.`,
+      });
+      return true;
+    }
+
+    if (useSharedMask) {
+      this.compileExpression(mask);
+      this.emitStore(maskScratch, "line count mask", undefined);
+    }
+    this.emitSpatialLineCountLoopBody(hitMask, cell, board, undefined);
+    return true;
+  }
+
+  private emitSpatialLineCountLoopBody(
+    hitMask: string,
+    cell: ExpressionAst,
+    board: V2BoardAst,
+    sourceLine: number | undefined,
+  ): void {
+    this.emitSpatialProgressionCountLoopBody(
+      hitMask,
+      cell,
+      spatialLineProgressions(board, cell),
+      board.width <= 4 && board.height <= 4,
+      sourceLine,
+      "line_count",
+    );
+  }
+
+  private emitSpatialProgressionCountLoopBody(
+    hitMask: string,
+    cell: ExpressionAst,
+    progressions: SpatialLineProgression[],
+    useMax: boolean,
+    sourceLine: number | undefined,
+    operation: "line_count" | "neighbor_count",
+  ): void {
+    const scratch = spatialCountScratchNames();
+    const total = scratch[0]!;
+    const line = scratch[1]!;
+    const offset = scratch[2]!;
+    const counter = scratch[3]!;
+
+    this.emitNumber("0");
+    this.emitStore(total, `${operation} total`, sourceLine);
+    for (const progression of progressions) {
+      this.emitNumber("0");
+      this.emitStore(line, `${operation} current line`, sourceLine);
+      this.compileExpression(progression.startOffset);
+      this.emitStore(offset, `${operation} offset`, sourceLine);
+      this.emitNumber(String(progression.count));
+      this.emitStore(counter, `${operation} counter`, sourceLine);
+
+      const start = this.freshLabel(`${operation}_loop`);
+      this.emitLabel(start);
+      this.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
+      const helper = this.ensureSpatialHitHelper(hitMask, spatialHitScratchName(hitMask));
+      this.emitJump(0x53, "ПП", helper.label, `spatial hit ${hitMask}`, sourceLine);
+      this.emitRecall(line, `${operation} accumulator`);
+      this.emitOp(0x10, "+", `${operation} add hit`);
+      this.emitStore(line, `${operation} accumulator`);
+
+      this.emitRecall(offset, `${operation} offset`);
+      this.compileExpression(progression.step);
+      this.emitOp(0x10, "+", `${operation} next offset`);
+      this.emitStore(offset, `${operation} offset`);
+
+      const counterRegister = this.allocation.registers[counter];
+      const flCounterOpcode = counterRegister === undefined ? undefined : flOpcode(counterRegister);
+      if (flCounterOpcode !== undefined) {
+        this.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, `${operation} loop`, sourceLine);
+        this.optimizations.push({
+          name: "spatial-count-fl-loop",
+          detail: `Used ${getOpcode(flCounterOpcode).name} for ${operation} loop counter.`,
+        });
+      } else {
+        this.emitRecall(counter, `${operation} counter`);
+        this.emitNumber("1");
+        this.emitOp(0x11, "-", `${operation} decrement`);
+        this.emitStore(counter, `${operation} counter`);
+        this.emitRecall(counter, `${operation} counter`);
+        this.emitJump(0x5e, "F x=0", start, `${operation} loop`, sourceLine);
+      }
+
+      this.emitRecall(total, `${operation} total`);
+      this.emitRecall(line, `${operation} current line`);
+      if (useMax) {
+        this.emitOp(0x36, "К max", `${operation} best line`);
+      } else {
+        this.emitOp(0x10, "+", `${operation} total add line`);
+      }
+      this.emitStore(total, `${operation} total`);
+    }
+    this.emitRecall(total, `${operation} result`);
+    this.optimizations.push({
+      name: `spatial-${operation.replace("_", "-")}-loop`,
+      detail: `Lowered ${operation}(...) as shared spatial hit loops.`,
+    });
+  }
+
+  private compileSpatialHitCall(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
+    if (expr.args.length !== 2) {
+      this.diagnostics.push({
+        level: "error",
+        message: "__spatial_hit() expects two arguments.",
+      });
+      return true;
+    }
+    const [mask, index] = expr.args;
+    if (mask?.kind !== "identifier" || index === undefined) return false;
+    const scratch = spatialHitScratchName(mask.name);
+    if (!this.allocation.registers[scratch]) return false;
+    const helper = this.ensureSpatialHitHelper(mask.name, scratch);
+    this.compileExpression(index);
+    this.emitJump(0x53, "ПП", helper.label, `spatial hit ${mask.name}`, helper.line);
+    return true;
+  }
+
+  private sharedLineCountHelper(
+    mask: ExpressionAst,
+    cell: ExpressionAst,
+    board: V2BoardAst,
+    line: number | undefined,
+  ): { cell: ExpressionAst; board: V2BoardAst; label: string; line?: number } | undefined {
+    if (this.lineCountCallCount < 2) return undefined;
+    if (this.allocation.registers[spatialCountMaskScratchName()] === undefined) return undefined;
+    const key = lineCountGroupKeyFor(board, cell);
+    if ((this.lineCountGroupCounts.get(key) ?? 0) < 2) return undefined;
+    if (mask.kind !== "identifier") return undefined;
+    const existing = this.lineCountHelpers.get(key);
+    if (existing !== undefined) return existing;
+    const helper = {
+      cell,
+      board,
+      label: `__line_count_${this.lineCountHelpers.size}`,
+      ...(line === undefined ? {} : { line }),
+    };
+    this.lineCountHelpers.set(key, helper);
+    return helper;
+  }
+
+  private ensureSpatialHitHelper(mask: string, scratch: string): { mask: string; scratch: string; label: string; line?: number } {
+    const existing = this.spatialHitHelpers.get(mask);
+    if (existing !== undefined) return existing;
+    const helper = {
+      mask,
+      scratch,
+      label: `__spatial_hit_${mask}`,
+    };
+    this.spatialHitHelpers.set(mask, helper);
+    return helper;
   }
 
   private compileRawStatement(statement: Extract<StatementAst, { kind: "core" }>): void {
@@ -1725,6 +2752,9 @@ function allocateRegisters(
   collectSwitchScratchVariables(ast, variables);
   collectDispatchScratchVariables(ast, variables);
   collectTicTacToeScratchVariables(ast, variables);
+  collectBitMaskScratchVariables(ast, variables);
+  collectSpatialHitScratchVariables(ast, variables);
+  collectSpatialCountScratchVariables(ast, variables);
 
   const registers: Record<string, RegisterName> = {};
   const used = new Set<RegisterName>();
@@ -1856,6 +2886,25 @@ function pickRegister(
     }
     return undefined;
   }
+  if (variable.startsWith(BIT_MASK_SCRATCH_PREFIX)) {
+    for (let i = REGISTER_ORDER.length - 1; i >= 0; i -= 1) {
+      const candidate = REGISTER_ORDER[i]!;
+      if (!used.has(candidate)) return candidate;
+    }
+    return undefined;
+  }
+  if (variable.startsWith(SPATIAL_COUNT_SCRATCH_PREFIX)) {
+    if (variable === spatialCountCounterScratchName()) {
+      for (const candidate of ["0", "1", "2", "3"] satisfies RegisterName[]) {
+        if (!used.has(candidate)) return candidate;
+      }
+    }
+    for (let i = REGISTER_ORDER.length - 1; i >= 0; i -= 1) {
+      const candidate = REGISTER_ORDER[i]!;
+      if (!used.has(candidate)) return candidate;
+    }
+    return undefined;
+  }
   return REGISTER_ORDER.find((candidate) => !used.has(candidate));
 }
 
@@ -1875,12 +2924,23 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
   }
   const visitExpr = (expr: ExpressionAst): void => {
     if (expr.kind === "number" && estimateNumberCost(expr.raw) > 1) values.add(normalizeConstantLiteral(expr.raw));
-    if (expr.kind === "unary") visitExpr(expr.expr);
+    if (expr.kind === "unary") {
+      if (expr.op === "-" && expr.expr.kind === "number") {
+        values.add(normalizeConstantLiteral(negatedNumberLiteral(expr.expr.raw)));
+        return;
+      }
+      visitExpr(expr.expr);
+    }
     if (expr.kind === "binary") {
       visitExpr(expr.left);
       visitExpr(expr.right);
     }
     if (expr.kind === "call") {
+      const macro = ticTacToeExpressionMacro(expr.callee.toLowerCase(), expr.args);
+      if (macro !== undefined) {
+        visitExpr(macro);
+        return;
+      }
       for (const arg of expr.args) visitExpr(arg);
     }
   };
@@ -1975,6 +3035,309 @@ function programContainsCall(ast: ProgramAst, name: string): boolean {
   return found;
 }
 
+function countCalls(ast: ProgramAst, name: string): number {
+  const target = name.toLowerCase();
+  let count = 0;
+  const visitExpr = (expr: ExpressionAst): void => {
+    if (expr.kind === "call" && expr.callee.toLowerCase() === target) count += 1;
+    if (expr.kind === "unary") visitExpr(expr.expr);
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+    }
+    if (expr.kind === "call") {
+      for (const arg of expr.args) visitExpr(arg);
+    }
+  };
+  const visitStatements = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+      if (statement.kind === "assign") visitExpr(statement.expr);
+      if (statement.kind === "if") {
+        visitExpr(statement.condition.left);
+        visitExpr(statement.condition.right);
+        visitStatements(statement.thenBody);
+        if (statement.elseBody) visitStatements(statement.elseBody);
+      }
+      if (statement.kind === "loop") visitStatements(statement.body);
+      if (statement.kind === "switch") {
+        visitExpr(statement.expr);
+        for (const switchCase of statement.cases) {
+          visitExpr(switchCase.value);
+          visitStatements(switchCase.body);
+        }
+        if (statement.defaultBody) visitStatements(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          visitExpr(dispatchCase.value);
+          visitStatements(dispatchCase.body);
+        }
+        if (statement.defaultBody) visitStatements(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visitStatements(entry.body);
+  for (const proc of ast.procs) visitStatements(proc.body);
+  for (const block of ast.blocks) visitStatements(block.body);
+  return count;
+}
+
+function collectLineCountGroupCounts(ast: ProgramAst): Map<string, number> {
+  const counts = new Map<string, number>();
+  const visitExpr = (expr: ExpressionAst): void => {
+    if (expr.kind === "call" && expr.callee.toLowerCase() === "line_count" && expr.args.length === 2) {
+      const [mask, cell] = expr.args;
+      if (mask !== undefined && cell !== undefined) {
+        const board = boardForCellMask(mask, ast);
+        if (board !== undefined) {
+          const key = lineCountGroupKeyFor(board, cell);
+          counts.set(key, (counts.get(key) ?? 0) + 1);
+        }
+      }
+    }
+    if (expr.kind === "unary") visitExpr(expr.expr);
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+    }
+    if (expr.kind === "call") {
+      for (const arg of expr.args) visitExpr(arg);
+    }
+  };
+  const visitStatements = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+      if (statement.kind === "assign") visitExpr(statement.expr);
+      if (statement.kind === "if") {
+        visitExpr(statement.condition.left);
+        visitExpr(statement.condition.right);
+        visitStatements(statement.thenBody);
+        if (statement.elseBody) visitStatements(statement.elseBody);
+      }
+      if (statement.kind === "loop") visitStatements(statement.body);
+      if (statement.kind === "switch") {
+        visitExpr(statement.expr);
+        for (const switchCase of statement.cases) {
+          visitExpr(switchCase.value);
+          visitStatements(switchCase.body);
+        }
+        if (statement.defaultBody) visitStatements(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          visitExpr(dispatchCase.value);
+          visitStatements(dispatchCase.body);
+        }
+        if (statement.defaultBody) visitStatements(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visitStatements(entry.body);
+  for (const proc of ast.procs) visitStatements(proc.body);
+  for (const block of ast.blocks) visitStatements(block.body);
+  return counts;
+}
+
+function collectVariableReadCounts(ast: ProgramAst): Map<string, number> {
+  const counts = new Map<string, number>();
+  const add = (name: string): void => {
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  };
+  const visitExpr = (expr: ExpressionAst): void => {
+    if (expr.kind === "identifier") add(expr.name);
+    if (expr.kind === "unary") visitExpr(expr.expr);
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+    }
+    if (expr.kind === "call") {
+      for (const arg of expr.args) visitExpr(arg);
+    }
+  };
+  const visitCondition = (condition: ConditionAst): void => {
+    visitExpr(condition.left);
+    visitExpr(condition.right);
+  };
+  const visitStatements = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+      if (statement.kind === "assign") visitExpr(statement.expr);
+      if (statement.kind === "show") {
+        const display = ast.displays.find((candidate) => candidate.name === statement.display);
+        for (const source of display?.sources ?? []) add(source);
+      }
+      if (statement.kind === "if") {
+        visitCondition(statement.condition);
+        visitStatements(statement.thenBody);
+        if (statement.elseBody) visitStatements(statement.elseBody);
+      }
+      if (statement.kind === "loop") visitStatements(statement.body);
+      if (statement.kind === "switch") {
+        visitExpr(statement.expr);
+        for (const switchCase of statement.cases) {
+          visitExpr(switchCase.value);
+          visitStatements(switchCase.body);
+        }
+        if (statement.defaultBody) visitStatements(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          visitExpr(dispatchCase.value);
+          visitStatements(dispatchCase.body);
+        }
+        if (statement.defaultBody) visitStatements(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visitStatements(entry.body);
+  for (const proc of ast.procs) visitStatements(proc.body);
+  for (const block of ast.blocks) visitStatements(block.body);
+  return counts;
+}
+
+function collectDisplayUseCounts(ast: ProgramAst): Map<string, number> {
+  const counts = new Map<string, number>();
+  const add = (name: string): void => {
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  };
+  const visit = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "show") add(statement.display);
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "switch") {
+        for (const switchCase of statement.cases) visit(switchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  for (const block of ast.blocks) visit(block.body);
+  return counts;
+}
+
+function collectShowSequenceUseCounts(ast: ProgramAst): Map<string, number> {
+  const counts = new Map<string, number>();
+  const add = (first: string, second: string): void => {
+    const key = showSequenceKey(first, second);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  };
+  const visit = (statements: StatementAst[]): void => {
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      const next = statements[index + 1];
+      const afterNext = statements[index + 2];
+      if (statement.kind === "show" && next?.kind === "show" && afterNext?.kind === "input") {
+        add(statement.display, next.display);
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "switch") {
+        for (const switchCase of statement.cases) visit(switchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  for (const block of ast.blocks) visit(block.body);
+  return counts;
+}
+
+function showSequenceKey(first: string, second: string): string {
+  return `${first}\0${second}`;
+}
+
+function collectExpressionUseCounts(ast: ProgramAst): Map<string, { count: number; expr: ExpressionAst }> {
+  const counts = new Map<string, { count: number; expr: ExpressionAst }>();
+  const add = (expr: ExpressionAst): void => {
+    const key = expressionToIntentText(expr);
+    const existing = counts.get(key);
+    if (existing === undefined) {
+      counts.set(key, { count: 1, expr });
+    } else {
+      existing.count += 1;
+    }
+  };
+  const visitExpr = (expr: ExpressionAst): void => {
+    add(expr);
+    if (expr.kind === "unary") visitExpr(expr.expr);
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+    }
+    if (expr.kind === "call") {
+      for (const arg of expr.args) visitExpr(arg);
+    }
+  };
+  const visitCondition = (condition: ConditionAst): void => {
+    visitExpr(condition.left);
+    visitExpr(condition.right);
+  };
+  const visit = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+      if (statement.kind === "assign") visitExpr(statement.expr);
+      if (statement.kind === "if") {
+        visitCondition(statement.condition);
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "switch") {
+        visitExpr(statement.expr);
+        for (const switchCase of statement.cases) {
+          visitExpr(switchCase.value);
+          visit(switchCase.body);
+        }
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          visitExpr(dispatchCase.value);
+          visit(dispatchCase.body);
+        }
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "core") {
+        for (const input of statement.inputs ?? []) visitExpr(input.expr);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  for (const block of ast.blocks) visit(block.body);
+  return counts;
+}
+
+function estimatePackedDisplayBodyCost(sourceCount: number): number {
+  return sourceCount === 0 ? 2 : sourceCount * 2;
+}
+
 function programUsesTicTacToeHelpers(ast: ProgramAst): boolean {
   let found = false;
   const visitExpr = (expr: ExpressionAst): void => {
@@ -2026,6 +3389,11 @@ function programUsesTicTacToeHelpers(ast: ProgramAst): boolean {
 function normalizeConstantLiteral(raw: string): string {
   const value = Number(raw);
   return Number.isFinite(value) ? String(value) : raw.trim().toLowerCase();
+}
+
+function negatedNumberLiteral(raw: string): string {
+  const normalized = raw.trim();
+  return normalized.startsWith("-") ? normalized.slice(1) : `-${normalized}`;
 }
 
 function warnUndeclaredAssignments(
@@ -2198,6 +3566,152 @@ function collectTicTacToeScratchVariables(ast: ProgramAst, variables: Set<string
   for (const block of ast.blocks) visit(block.body);
 }
 
+function collectBitMaskScratchVariables(ast: ProgramAst, variables: Set<string>): void {
+  const visit = (statements: StatementAst[]): void => {
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      const next = statements[index + 1];
+      if (statement.kind === "assign" && next?.kind === "assign" && isReusableBitSetPair(statement, next)) {
+        variables.add(bitMaskScratchName(statement));
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "switch") {
+        for (const switchCase of statement.cases) visit(switchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  for (const block of ast.blocks) visit(block.body);
+}
+
+function collectSpatialHitScratchVariables(ast: ProgramAst, variables: Set<string>): void {
+  const shareLineCountMask = countCalls(ast, "line_count") > 1;
+  const visitExpr = (expr: ExpressionAst): void => {
+    if (shareLineCountMask && expr.kind === "call" && expr.callee.toLowerCase() === "line_count") {
+      variables.add(spatialHitScratchName(spatialCountMaskScratchName()));
+      for (const arg of expr.args) visitExpr(arg);
+      return;
+    }
+    if (
+      expr.kind === "call" &&
+      (expr.callee.toLowerCase() === "neighbor_count" || expr.callee.toLowerCase() === "line_count") &&
+      expr.args[0]?.kind === "identifier"
+    ) {
+      variables.add(spatialHitScratchName(expr.args[0].name));
+    }
+    if (expr.kind === "unary") visitExpr(expr.expr);
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+    }
+    if (expr.kind === "call") {
+      for (const arg of expr.args) visitExpr(arg);
+    }
+  };
+  const visit = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+      if (statement.kind === "assign") visitExpr(statement.expr);
+      if (statement.kind === "if") {
+        visitExpr(statement.condition.left);
+        visitExpr(statement.condition.right);
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "switch") {
+        visitExpr(statement.expr);
+        for (const switchCase of statement.cases) {
+          visitExpr(switchCase.value);
+          visit(switchCase.body);
+        }
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          visitExpr(dispatchCase.value);
+          visit(dispatchCase.body);
+        }
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "core") {
+        for (const input of statement.inputs ?? []) visitExpr(input.expr);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  for (const block of ast.blocks) visit(block.body);
+}
+
+function collectSpatialCountScratchVariables(ast: ProgramAst, variables: Set<string>): void {
+  let needsScratch = false;
+  const visitExpr = (expr: ExpressionAst): void => {
+    if (expr.kind === "call" && expr.callee.toLowerCase() === "line_count") {
+      needsScratch = true;
+    }
+    if (expr.kind === "unary") visitExpr(expr.expr);
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+    }
+    if (expr.kind === "call") {
+      for (const arg of expr.args) visitExpr(arg);
+    }
+  };
+  const visit = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+      if (statement.kind === "assign") visitExpr(statement.expr);
+      if (statement.kind === "if") {
+        visitExpr(statement.condition.left);
+        visitExpr(statement.condition.right);
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "switch") {
+        visitExpr(statement.expr);
+        for (const switchCase of statement.cases) {
+          visitExpr(switchCase.value);
+          visit(switchCase.body);
+        }
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          visitExpr(dispatchCase.value);
+          visit(dispatchCase.body);
+        }
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "core") {
+        for (const input of statement.inputs ?? []) visitExpr(input.expr);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  for (const block of ast.blocks) visit(block.body);
+  if (!needsScratch) return;
+  for (const scratch of spatialCountScratchNames()) variables.add(scratch);
+  if (countCalls(ast, "line_count") > 1) variables.add(spatialCountMaskScratchName());
+}
+
 function isReusableCellMaskPair(
   first: Extract<StatementAst, { kind: "assign" }>,
   second: Extract<StatementAst, { kind: "assign" }>,
@@ -2278,11 +3792,15 @@ function directTestOpcode(op: ConditionAst["op"]): number {
   }
 }
 
-function selectCheaperEquivalentCondition(condition: ConditionAst, ast: ProgramAst): { condition: ConditionAst; changed: boolean } {
+function selectCheaperEquivalentCondition(
+  condition: ConditionAst,
+  ast: ProgramAst,
+  preloadedConstants?: ReadonlySet<string>,
+): { condition: ConditionAst; changed: boolean } {
   let best = condition;
-  let bestCost = conditionCompileCost(condition);
+  let bestCost = conditionCompileCost(condition, preloadedConstants);
   for (const candidate of equivalentConditionCandidates(condition, ast)) {
-    const cost = conditionCompileCost(candidate);
+    const cost = conditionCompileCost(candidate, preloadedConstants);
     if (cost < bestCost) {
       best = candidate;
       bestCost = cost;
@@ -2366,11 +3884,13 @@ function isKnownIntegerExpression(expr: ExpressionAst, ast: ProgramAst): boolean
   return expr.kind === "identifier" && integerRangeFor(expr.name, ast) !== undefined;
 }
 
-function conditionCompileCost(condition: ConditionAst): number {
+function conditionCompileCost(condition: ConditionAst, preloadedConstants?: ReadonlySet<string>): number {
   if (isZeroExpression(condition.right) && canTestAgainstZeroDirectly(condition.op)) {
-    return estimateExpressionCost(condition.left) + 2;
+    return estimateExpressionCostForCondition(condition.left, preloadedConstants) + 2;
   }
-  return estimateExpressionCost(condition.left) + estimateExpressionCost(condition.right) + 3;
+  return estimateExpressionCostForCondition(condition.left, preloadedConstants) +
+    estimateExpressionCostForCondition(condition.right, preloadedConstants) +
+    3;
 }
 
 function conditionEquals(left: ConditionAst, right: ConditionAst): boolean {
@@ -2460,7 +3980,7 @@ function layoutProgram(
   address = 0;
   for (const item of items) {
     if (item.kind === "label") continue;
-    if (address > 0xff) {
+    if (!options.analysis && address > 0xff) {
       diagnostics.push(
         buildDiagnostic("error", `Program address ${address} exceeds formal MK-61 address range.`),
       );
@@ -2481,7 +4001,7 @@ function layoutProgram(
       );
       continue;
     }
-    const opcode = item.formalOpcode ?? safeAddressToOpcode(targetAddress, item.sourceLine, diagnostics);
+    const opcode = item.formalOpcode ?? safeAddressToOpcode(targetAddress, item.sourceLine, diagnostics, options);
     if (opcode === undefined) {
       address += 1;
       continue;
@@ -2490,7 +4010,7 @@ function layoutProgram(
       buildResolvedStep(
         address,
         opcode,
-        item.formalOpcode === undefined ? formatAddress(targetAddress) : formatFormalAddressOpcode(item.formalOpcode),
+        item.formalOpcode === undefined ? safeFormatAddress(targetAddress) : formatFormalAddressOpcode(item.formalOpcode),
         item.comment,
       ),
     );
@@ -2529,7 +4049,11 @@ function safeAddressToOpcode(
   address: number,
   line: number | undefined,
   diagnostics: Diagnostic[],
+  options: CompileOptions,
 ): number | undefined {
+  if (options.analysis && Number.isInteger(address) && address >= 0) {
+    return address & 0xff;
+  }
   try {
     return addressToOpcode(address);
   } catch (error) {
@@ -3274,6 +4798,17 @@ interface CellHelperCall {
 
 type CellHelperName = "cell_used" | "cell_has" | "cell_mark" | "cell_set";
 
+interface BitMembershipCondition {
+  collection: ExpressionAst;
+  item: ExpressionAst;
+  test: ExpressionAst;
+}
+
+interface BitSetAssignment {
+  collection: ExpressionAst;
+  item: ExpressionAst;
+}
+
 function matchCellHelperCall(expr: ExpressionAst, names: readonly CellHelperName[]): CellHelperCall | undefined {
   if (expr.kind !== "call" || !names.includes(expr.callee.toLowerCase() as CellHelperName) || expr.args.length !== 3) return undefined;
   return {
@@ -3281,6 +4816,56 @@ function matchCellHelperCall(expr: ExpressionAst, names: readonly CellHelperName
     x: expr.args[1]!,
     y: expr.args[2]!,
   };
+}
+
+function matchBitSetAssignment(statement: Extract<StatementAst, { kind: "assign" }>): BitSetAssignment | undefined {
+  const expr = statement.expr;
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_set" || expr.args.length !== 2) return undefined;
+  const collection = expr.args[0]!;
+  if (collection.kind !== "identifier" || statement.target !== collection.name) return undefined;
+  return {
+    collection,
+    item: expr.args[1]!,
+  };
+}
+
+function isReusableBitSetPair(
+  first: Extract<StatementAst, { kind: "assign" }>,
+  second: Extract<StatementAst, { kind: "assign" }>,
+): boolean {
+  const firstSet = matchBitSetAssignment(first);
+  const secondSet = matchBitSetAssignment(second);
+  return firstSet !== undefined &&
+    secondSet !== undefined &&
+    expressionEquals(firstSet.item, secondSet.item);
+}
+
+function bitMaskScratchName(statement: StatementAst): string {
+  return `${BIT_MASK_SCRATCH_PREFIX}${statement.line}`;
+}
+
+function matchBitMembershipCondition(condition: ConditionAst): BitMembershipCondition | undefined {
+  if (condition.op !== "!=" || !isZeroExpression(condition.right)) return undefined;
+  const test = condition.left;
+  if (test.kind !== "call" || test.callee.toLowerCase() !== "bit_has" || test.args.length !== 2) return undefined;
+  return {
+    collection: test.args[0]!,
+    item: test.args[1]!,
+    test,
+  };
+}
+
+function isBitClearAssignment(
+  statement: Extract<StatementAst, { kind: "assign" }>,
+  membership: BitMembershipCondition,
+): boolean {
+  if (membership.collection.kind !== "identifier" || statement.target !== membership.collection.name) return false;
+  const expr = statement.expr;
+  return expr.kind === "call" &&
+    expr.callee.toLowerCase() === "bit_clear" &&
+    expr.args.length === 2 &&
+    expressionEquals(expr.args[0]!, membership.collection) &&
+    expressionEquals(expr.args[1]!, membership.item);
 }
 
 function norm4Expression(expr: ExpressionAst): ExpressionAst {
@@ -3413,6 +4998,178 @@ function bitNotExpression(expr: ExpressionAst): ExpressionAst {
   return { kind: "call", callee: "bit_not", args: [expr] };
 }
 
+function spatialCountExpression(
+  name: "neighbor_count" | "line_count",
+  args: ExpressionAst[],
+  ast: ProgramAst,
+): ExpressionAst | undefined {
+  const [mask, cell] = args;
+  if (mask === undefined || cell === undefined) return undefined;
+  if (name === "neighbor_count") {
+    const board = boardForCellMask(mask, ast);
+    const offsets = board?.height === 1
+      ? [-1, 1]
+      : board?.width === 1
+        ? [-10, 10]
+        : [-11, -10, -9, -1, 1, 9, 10, 11];
+    return sumExpressions(offsets.map((offset) => spatialHitExpression(mask, offsetExpressionAst(cell, offset))));
+  }
+
+  const board = boardForCellMask(mask, ast);
+  if (board !== undefined && board.width <= 4 && board.height <= 4) {
+    return maxExpressions([
+      sumExpressions(spatialLineCells(board, "row", cell).map((index) => spatialHitExpression(mask, index))),
+      sumExpressions(spatialLineCells(board, "column", cell).map((index) => spatialHitExpression(mask, index))),
+      sumExpressions(spatialLineCells(board, "diag-left", cell).map((index) => spatialHitExpression(mask, index))),
+      sumExpressions(spatialLineCells(board, "diag-right", cell).map((index) => spatialHitExpression(mask, index))),
+    ]);
+  }
+
+  const offsets = [-99, -90, -81, -72, -63, -54, -45, -36, -27, -18, -9, 0, 9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 99];
+  return sumExpressions([
+    spatialHitExpression(mask, cell),
+    ...offsets.filter((offset) => offset !== 0).map((offset) => spatialHitExpression(mask, offsetExpressionAst(cell, offset))),
+  ]);
+}
+
+function spatialHitExpression(mask: ExpressionAst, index: ExpressionAst): ExpressionAst {
+  return { kind: "call", callee: "__spatial_hit", args: [mask, index] };
+}
+
+function boardForCellMask(mask: ExpressionAst, ast: ProgramAst): V2BoardAst | undefined {
+  if (mask.kind !== "identifier" || ast.v2 === undefined) return undefined;
+  const domain = ast.v2.state.find((field) => field.name === mask.name)?.domain;
+  if (domain === undefined) return undefined;
+  return ast.v2.boards.find((board) => board.name === domain);
+}
+
+function spatialLineCells(
+  board: V2BoardAst,
+  kind: "row" | "column" | "diag-left" | "diag-right",
+  cell: ExpressionAst,
+): ExpressionAst[] {
+  const x = decimalOnesExpressionAst(cell);
+  const y = decimalTensExpressionAst(cell);
+  switch (kind) {
+    case "row":
+      return range(board.xMin, board.xMax).map((candidateX) => boardCellExpressionAst(numberExpression(candidateX), y));
+    case "column":
+      return range(board.yMin, board.yMax).map((candidateY) => boardCellExpressionAst(x, numberExpression(candidateY)));
+    case "diag-left":
+      return range(-Math.max(board.width, board.height) + 1, Math.max(board.width, board.height) - 1)
+        .map((delta) => offsetExpressionAst(cell, delta * 11));
+    case "diag-right":
+      return range(-Math.max(board.width, board.height) + 1, Math.max(board.width, board.height) - 1)
+        .map((delta) => offsetExpressionAst(cell, delta * 9));
+  }
+}
+
+interface SpatialLineProgression {
+  startOffset: ExpressionAst;
+  step: ExpressionAst;
+  count: number;
+}
+
+function spatialLineProgressions(board: V2BoardAst, cell: ExpressionAst): SpatialLineProgression[] {
+  const x = decimalOnesExpressionAst(cell);
+  const y = decimalTensExpressionAst(cell);
+  const span = Math.max(board.width, board.height);
+  return [
+    {
+      startOffset: subtractExpressions(boardCellExpressionAst(numberExpression(board.xMin), y), cell),
+      step: numberExpression(1),
+      count: board.width,
+    },
+    {
+      startOffset: subtractExpressions(boardCellExpressionAst(x, numberExpression(board.yMin)), cell),
+      step: numberExpression(10),
+      count: board.height,
+    },
+    {
+      startOffset: numberExpression(-(span - 1) * 11),
+      step: numberExpression(11),
+      count: span * 2 - 1,
+    },
+    {
+      startOffset: numberExpression(-(span - 1) * 9),
+      step: numberExpression(9),
+      count: span * 2 - 1,
+    },
+  ];
+}
+
+function spatialNeighborProgressions(board: V2BoardAst | undefined): SpatialLineProgression[] {
+  if (board?.height === 1) {
+    return [{ startOffset: numberExpression(-1), step: numberExpression(2), count: 2 }];
+  }
+  if (board?.width === 1) {
+    return [{ startOffset: numberExpression(-10), step: numberExpression(20), count: 2 }];
+  }
+  return [
+    { startOffset: numberExpression(-11), step: numberExpression(1), count: 3 },
+    { startOffset: numberExpression(-1), step: numberExpression(2), count: 2 },
+    { startOffset: numberExpression(9), step: numberExpression(1), count: 3 },
+  ];
+}
+
+function lineCountGroupKeyFor(board: V2BoardAst, cell: ExpressionAst): string {
+  return `${board.name}:${board.xMin}:${board.xMax}:${board.yMin}:${board.yMax}:${expressionToIntentText(cell)}`;
+}
+
+function boardCellExpressionAst(x: ExpressionAst, y: ExpressionAst): ExpressionAst {
+  return addExpressions(x, multiplyExpressions(numberExpression(10), y));
+}
+
+function decimalTensExpressionAst(expr: ExpressionAst): ExpressionAst {
+  return intExpression(divideExpressions(expr, numberExpression(10)));
+}
+
+function decimalOnesExpressionAst(expr: ExpressionAst): ExpressionAst {
+  return subtractExpressions(expr, multiplyExpressions(numberExpression(10), intExpression(divideExpressions(expr, numberExpression(10)))));
+}
+
+function offsetExpressionAst(expr: ExpressionAst, offset: number): ExpressionAst {
+  if (offset === 0) return expr;
+  return offset > 0
+    ? addExpressions(expr, numberExpression(offset))
+    : subtractExpressions(expr, numberExpression(Math.abs(offset)));
+}
+
+function sumExpressions(expressions: ExpressionAst[]): ExpressionAst {
+  return expressions.reduce((sum, expr) => addExpressions(sum, expr), numberExpression(0));
+}
+
+function maxExpressions(expressions: ExpressionAst[]): ExpressionAst {
+  return expressions.reduce((best, expr) => maxExpression(best, expr));
+}
+
+function spatialHitScratchName(mask: string): string {
+  return `${SPATIAL_HIT_SCRATCH_PREFIX}${mask}`;
+}
+
+function spatialCountScratchNames(): string[] {
+  return [
+    `${SPATIAL_COUNT_SCRATCH_PREFIX}total`,
+    `${SPATIAL_COUNT_SCRATCH_PREFIX}line`,
+    `${SPATIAL_COUNT_SCRATCH_PREFIX}offset`,
+    spatialCountCounterScratchName(),
+  ];
+}
+
+function spatialCountCounterScratchName(): string {
+  return `${SPATIAL_COUNT_SCRATCH_PREFIX}counter`;
+}
+
+function spatialCountMaskScratchName(): string {
+  return `${SPATIAL_COUNT_SCRATCH_PREFIX}mask`;
+}
+
+function range(start: number, end: number): number[] {
+  const values: number[] = [];
+  for (let value = start; value <= end; value += 1) values.push(value);
+  return values;
+}
+
 function signToggleExpression(current: ExpressionAst, selector: ExpressionAst): ExpressionAst {
   return multiplyExpressions(
     current,
@@ -3425,6 +5182,43 @@ function negateExpression(expr: ExpressionAst): ExpressionAst {
   const value = numericLiteralValue(expr);
   if (value !== undefined) return numberExpression(-value);
   return { kind: "unary", op: "-", expr };
+}
+
+function matchRemainderByConstant(
+  expr: Extract<ExpressionAst, { kind: "binary" }>,
+): { value: ExpressionAst; divisor: ExpressionAst } | undefined {
+  if (expr.op !== "-") return undefined;
+  if (!expressionPureForSubstitution(expr.left)) return undefined;
+  const product = expr.right;
+  if (product.kind !== "binary" || product.op !== "*") return undefined;
+  const leftIntDivide = matchIntDivideByConstant(product.left);
+  if (
+    leftIntDivide !== undefined &&
+    expressionEquals(leftIntDivide.value, expr.left) &&
+    expressionEquals(leftIntDivide.divisor, product.right)
+  ) {
+    return leftIntDivide;
+  }
+  const rightIntDivide = matchIntDivideByConstant(product.right);
+  if (
+    rightIntDivide !== undefined &&
+    expressionEquals(rightIntDivide.value, expr.left) &&
+    expressionEquals(rightIntDivide.divisor, product.left)
+  ) {
+    return rightIntDivide;
+  }
+  return undefined;
+}
+
+function matchIntDivideByConstant(expr: ExpressionAst): { value: ExpressionAst; divisor: ExpressionAst } | undefined {
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "int" || expr.args.length !== 1) return undefined;
+  const divided = expr.args[0]!;
+  if (divided.kind !== "binary" || divided.op !== "/") return undefined;
+  if (numericLiteralValue(divided.right) === undefined) return undefined;
+  return {
+    value: divided.left,
+    divisor: divided.right,
+  };
 }
 
 function numberExpression(value: number): ExpressionAst {
@@ -3485,6 +5279,168 @@ function expressionEquals(left: ExpressionAst, right: ExpressionAst): boolean {
   }
 }
 
+function optimizeDispatchDefaultCases(
+  statement: Extract<StatementAst, { kind: "dispatch" }>,
+): { statement: Extract<StatementAst, { kind: "dispatch" }>; removed: number } {
+  if (!statement.defaultBody || statement.cases.length === 0) return { statement, removed: 0 };
+
+  const defaultBody = statement.defaultBody;
+  const kept: typeof statement.cases = [];
+  let removed = 0;
+  for (let index = 0; index < statement.cases.length; index += 1) {
+    const dispatchCase = statement.cases[index]!;
+    const value = numericLiteralValue(dispatchCase.value);
+    const laterSameValue = value !== undefined &&
+      statement.cases.slice(index + 1).some((laterCase) => numericLiteralValue(laterCase.value) === value);
+    if (
+      value !== undefined &&
+      !laterSameValue &&
+      statementListsEqual(dispatchCase.body, defaultBody)
+    ) {
+      removed += 1;
+      continue;
+    }
+    kept.push(dispatchCase);
+  }
+
+  if (removed === 0) return { statement, removed };
+  return { statement: { ...statement, cases: kept }, removed };
+}
+
+function statementListsEqual(left: readonly StatementAst[], right: readonly StatementAst[]): boolean {
+  return left.length === right.length && left.every((statement, index) => statementEquals(statement, right[index]!));
+}
+
+function statementEquals(left: StatementAst, right: StatementAst): boolean {
+  if (left.kind !== right.kind) return false;
+  switch (left.kind) {
+    case "pause":
+    case "halt":
+      return expressionEquals(left.expr, (right as typeof left).expr);
+    case "ask":
+      return left.target === (right as typeof left).target &&
+        expressionOptionEquals(left.prompt, (right as typeof left).prompt);
+    case "input":
+      return left.target === (right as typeof left).target;
+    case "assign":
+      return left.target === (right as typeof left).target && expressionEquals(left.expr, (right as typeof left).expr);
+    case "loop":
+      return statementListsEqual(left.body, (right as typeof left).body);
+    case "if":
+      return conditionEquals(left.condition, (right as typeof left).condition) &&
+        statementListsEqual(left.thenBody, (right as typeof left).thenBody) &&
+        statementListOptionEquals(left.elseBody, (right as typeof left).elseBody);
+    case "switch":
+      return expressionEquals(left.expr, (right as typeof left).expr) &&
+        left.cases.length === (right as typeof left).cases.length &&
+        left.cases.every((switchCase, index) =>
+          expressionEquals(switchCase.value, (right as typeof left).cases[index]!.value) &&
+          statementListsEqual(switchCase.body, (right as typeof left).cases[index]!.body)
+        ) &&
+        statementListOptionEquals(left.defaultBody, (right as typeof left).defaultBody);
+    case "dispatch":
+      return expressionEquals(left.expr, (right as typeof left).expr) &&
+        left.cases.length === (right as typeof left).cases.length &&
+        left.cases.every((dispatchCase, index) =>
+          expressionEquals(dispatchCase.value, (right as typeof left).cases[index]!.value) &&
+          statementListsEqual(dispatchCase.body, (right as typeof left).cases[index]!.body)
+        ) &&
+        statementListOptionEquals(left.defaultBody, (right as typeof left).defaultBody);
+    case "show":
+      return left.display === (right as typeof left).display;
+    case "call":
+      return left.block === (right as typeof left).block;
+    case "core":
+      return rawLinesEqual(left.lines, (right as typeof left).lines) &&
+        JSON.stringify(left.inputs ?? []) === JSON.stringify((right as typeof left).inputs ?? []) &&
+        JSON.stringify(left.outputs ?? []) === JSON.stringify((right as typeof left).outputs ?? []) &&
+        JSON.stringify(left.clobbers ?? []) === JSON.stringify((right as typeof left).clobbers ?? []) &&
+        JSON.stringify(left.preserves ?? []) === JSON.stringify((right as typeof left).preserves ?? []) &&
+        left.strict === (right as typeof left).strict;
+    case "egg":
+      return rawLinesEqual(left.lines, (right as typeof left).lines);
+    case "trap":
+      return left.trap === (right as typeof left).trap && expressionEquals(left.expr, (right as typeof left).expr);
+  }
+}
+
+function expressionOptionEquals(left: ExpressionAst | undefined, right: ExpressionAst | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return expressionEquals(left, right);
+}
+
+function statementListOptionEquals(left: StatementAst[] | undefined, right: StatementAst[] | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return statementListsEqual(left, right);
+}
+
+function rawLinesEqual(left: readonly { text: string }[], right: readonly { text: string }[]): boolean {
+  return left.length === right.length && left.every((line, index) => line.text === right[index]!.text);
+}
+
+function countIdentifierReadsInCondition(condition: ConditionAst, name: string): number {
+  return countIdentifierReads(condition.left, name) + countIdentifierReads(condition.right, name);
+}
+
+function countIdentifierReads(expr: ExpressionAst, name: string): number {
+  switch (expr.kind) {
+    case "number":
+      return 0;
+    case "identifier":
+      return expr.name === name ? 1 : 0;
+    case "unary":
+      return countIdentifierReads(expr.expr, name);
+    case "binary":
+      return countIdentifierReads(expr.left, name) + countIdentifierReads(expr.right, name);
+    case "call":
+      return expr.args.reduce((sum, arg) => sum + countIdentifierReads(arg, name), 0);
+  }
+}
+
+function substituteConditionIdentifier(condition: ConditionAst, name: string, replacement: ExpressionAst): ConditionAst {
+  return {
+    left: substituteExpressionIdentifier(condition.left, name, replacement),
+    op: condition.op,
+    right: substituteExpressionIdentifier(condition.right, name, replacement),
+  };
+}
+
+function substituteExpressionIdentifier(expr: ExpressionAst, name: string, replacement: ExpressionAst): ExpressionAst {
+  switch (expr.kind) {
+    case "number":
+      return expr;
+    case "identifier":
+      return expr.name === name ? replacement : expr;
+    case "unary":
+      return { ...expr, expr: substituteExpressionIdentifier(expr.expr, name, replacement) };
+    case "binary":
+      return {
+        ...expr,
+        left: substituteExpressionIdentifier(expr.left, name, replacement),
+        right: substituteExpressionIdentifier(expr.right, name, replacement),
+      };
+    case "call":
+      return { ...expr, args: expr.args.map((arg) => substituteExpressionIdentifier(arg, name, replacement)) };
+  }
+}
+
+function expressionPureForSubstitution(expr: ExpressionAst): boolean {
+  switch (expr.kind) {
+    case "number":
+    case "identifier":
+      return true;
+    case "unary":
+      return expressionPureForSubstitution(expr.expr);
+    case "binary":
+      return expressionPureForSubstitution(expr.left) && expressionPureForSubstitution(expr.right);
+    case "call": {
+      const name = expr.callee.toLowerCase();
+      if (name === "random") return false;
+      return expr.args.every(expressionPureForSubstitution);
+    }
+  }
+}
+
 function isNumericValue(expr: ExpressionAst, value: number): boolean {
   const parsed = numericLiteralValue(expr);
   return parsed !== undefined && parsed === value;
@@ -3529,6 +5485,59 @@ function estimateConditionCost(condition: ConditionAst, ast: ProgramAst): number
   return conditionCompileCost(selectCheaperEquivalentCondition(condition, ast).condition);
 }
 
+function estimateExpressionCostForCondition(
+  expr: ExpressionAst,
+  preloadedConstants: ReadonlySet<string> | undefined,
+): number {
+  if (preloadedConstants === undefined) return estimateExpressionCost(expr);
+  if (expr.kind === "number" && preloadedConstants.has(normalizeConstantLiteral(expr.raw))) return 1;
+  if (
+    expr.kind === "unary" &&
+    expr.op === "-" &&
+    expr.expr.kind === "number" &&
+    preloadedConstants.has(normalizeConstantLiteral(negatedNumberLiteral(expr.expr.raw)))
+  ) {
+    return 1;
+  }
+  switch (expr.kind) {
+    case "number":
+      return estimateNumberCost(expr.raw);
+    case "identifier":
+      return 1;
+    case "unary":
+      return estimateExpressionCostForCondition(expr.expr, preloadedConstants) + 1;
+    case "binary": {
+      const remainder = matchRemainderByConstant(expr);
+      if (remainder !== undefined) {
+        return estimateExpressionCostForCondition(remainder.value, preloadedConstants) +
+          estimateExpressionCostForCondition(remainder.divisor, preloadedConstants) * 2 +
+          3;
+      }
+      return estimateExpressionCostForCondition(expr.left, preloadedConstants) +
+        estimateExpressionCostForCondition(expr.right, preloadedConstants) +
+        1;
+    }
+    case "call":
+      return estimateCallCostForCondition(expr, preloadedConstants);
+  }
+}
+
+function estimateCallCostForCondition(
+  expr: Extract<ExpressionAst, { kind: "call" }>,
+  preloadedConstants: ReadonlySet<string>,
+): number {
+  const name = expr.callee.toLowerCase();
+  const macro = ticTacToeExpressionMacro(name, expr.args);
+  if (macro !== undefined) return estimateExpressionCostForCondition(macro, preloadedConstants);
+  if (name === "random" || name === "pi") return 1;
+  if (name === "pow" || ["max", "bit_and", "bit_or", "bit_xor"].includes(name)) {
+    return (expr.args[0] ? estimateExpressionCostForCondition(expr.args[0], preloadedConstants) : 0) +
+      (expr.args[1] ? estimateExpressionCostForCondition(expr.args[1], preloadedConstants) : 0) +
+      1;
+  }
+  return (expr.args[0] ? estimateExpressionCostForCondition(expr.args[0], preloadedConstants) : 0) + 1;
+}
+
 function estimateExpressionCost(expr: ExpressionAst): number {
   switch (expr.kind) {
     case "number":
@@ -3537,8 +5546,13 @@ function estimateExpressionCost(expr: ExpressionAst): number {
       return 1;
     case "unary":
       return estimateExpressionCost(expr.expr) + 1;
-    case "binary":
+    case "binary": {
+      const remainder = matchRemainderByConstant(expr);
+      if (remainder !== undefined) {
+        return estimateExpressionCost(remainder.value) + estimateExpressionCost(remainder.divisor) * 2 + 3;
+      }
       return estimateExpressionCost(expr.left) + estimateExpressionCost(expr.right) + 1;
+    }
     case "call":
       return estimateCallCost(expr);
   }
@@ -3662,6 +5676,14 @@ const optimizerCapabilities: Array<{
     detail: "Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.",
   },
   {
+    id: "tail-call-lowering",
+    category: "flow",
+    source: "documented",
+    requires: [],
+    activeWhen: ["tail-call-lowering", "terminal-rule-tail-call", "tail-call-layout"],
+    detail: "Replaces subroutine calls in tail position with direct jumps so rule factoring does not force an extra return.",
+  },
+  {
     id: "return-zero-jump",
     category: "flow",
     source: "mk61-delta",
@@ -3702,6 +5724,8 @@ const optimizerCapabilities: Array<{
     activeWhen: [
       "fallthrough-compare-chain",
       "dispatch-lowering",
+      "dispatch-default-merge",
+      "terminal-display-fusion",
       "super-dark-dispatch",
       "indirect-register-flow",
     ],
