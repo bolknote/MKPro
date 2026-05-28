@@ -1,0 +1,241 @@
+import type { AssignStatementAst, ExpressionAst, ProgramAst, StatementAst } from "./types.ts";
+
+// A statement-level, interprocedural control-flow graph over the lowered rule
+// bodies (entries + procs + blocks). Rule invocations become real call edges;
+// a callee's exit returns to every call site that targets it (context
+// insensitive). That is conservative for both analyses built on top of it:
+// liveness can only gain successors (keep more values live) and the value
+// equalities can only lose facts at a wider merge, never invent a wrong one.
+
+export interface CfgNode {
+  readonly id: number;
+  readonly succ: number[];
+  readonly defs: readonly string[];
+  readonly uses: readonly string[];
+  // Plain `field = expr` assignment node (absent for every other statement).
+  readonly assign?: AssignStatementAst;
+  // Opaque statements (raw core / egg / call to an unknown routine). Treated as
+  // reading every variable and clobbering every fact.
+  readonly barrier?: boolean;
+}
+
+export interface RuleCfg {
+  readonly nodes: readonly CfgNode[];
+  readonly entryNode: number;
+  readonly routineEntry: ReadonlyMap<string, number>;
+  readonly routineExit: ReadonlyMap<string, number>;
+}
+
+export function collectExprVars(expr: ExpressionAst, out: Set<string>): void {
+  switch (expr.kind) {
+    case "number":
+      return;
+    case "identifier":
+      out.add(expr.name);
+      return;
+    case "unary":
+      collectExprVars(expr.expr, out);
+      return;
+    case "binary":
+      collectExprVars(expr.left, out);
+      collectExprVars(expr.right, out);
+      return;
+    case "call":
+      for (const arg of expr.args) collectExprVars(arg, out);
+      return;
+  }
+}
+
+export function exprVars(expr: ExpressionAst): string[] {
+  const out = new Set<string>();
+  collectExprVars(expr, out);
+  return [...out];
+}
+
+// Strict purity: an expression is safe to drop or recompute only when it has no
+// calls at all. This is intentionally stricter than the compiler's
+// substitution purity, because calls like random_cell advance hidden state and
+// must never be removed by dead-store elimination.
+export function exprIsCallFree(expr: ExpressionAst): boolean {
+  switch (expr.kind) {
+    case "number":
+    case "identifier":
+      return true;
+    case "unary":
+      return exprIsCallFree(expr.expr);
+    case "binary":
+      return exprIsCallFree(expr.left) && exprIsCallFree(expr.right);
+    case "call":
+      return false;
+  }
+}
+
+interface Fragment {
+  entry: number;
+  exits: number[];
+}
+
+class Builder {
+  readonly nodes: CfgNode[] = [];
+  readonly routineEntry = new Map<string, number>();
+  readonly routineExit = new Map<string, number>();
+  private readonly ast: ProgramAst;
+
+  constructor(ast: ProgramAst) {
+    this.ast = ast;
+  }
+
+  private add(node: Omit<CfgNode, "id" | "succ"> & { succ?: number[] }): number {
+    const id = this.nodes.length;
+    this.nodes.push({ id, succ: node.succ ?? [], defs: node.defs, uses: node.uses, ...(node.assign ? { assign: node.assign } : {}), ...(node.barrier ? { barrier: true } : {}) });
+    return id;
+  }
+
+  private link(exits: readonly number[], target: number): void {
+    for (const exit of exits) {
+      if (!this.nodes[exit]!.succ.includes(target)) this.nodes[exit]!.succ.push(target);
+    }
+  }
+
+  build(): RuleCfg {
+    const routines: Array<{ name: string; body: StatementAst[] }> = [
+      ...this.ast.entries.map((entry) => ({ name: entry.name, body: entry.body })),
+      ...this.ast.procs.map((proc) => ({ name: proc.name, body: proc.body })),
+      ...this.ast.blocks.map((block) => ({ name: block.name, body: block.body })),
+    ];
+
+    for (const routine of routines) {
+      this.routineEntry.set(routine.name, this.add({ defs: [], uses: [] }));
+      this.routineExit.set(routine.name, this.add({ defs: [], uses: [] }));
+    }
+
+    for (const routine of routines) {
+      const fragment = this.buildSequence(routine.body);
+      this.link([this.routineEntry.get(routine.name)!], fragment.entry);
+      this.link(fragment.exits, this.routineExit.get(routine.name)!);
+    }
+
+    const entryNode = this.ast.entries.length > 0
+      ? this.routineEntry.get(this.ast.entries[0]!.name)!
+      : 0;
+
+    return {
+      nodes: this.nodes,
+      entryNode,
+      routineEntry: this.routineEntry,
+      routineExit: this.routineExit,
+    };
+  }
+
+  private buildSequence(statements: readonly StatementAst[]): Fragment {
+    let entry: number | undefined;
+    let pending: number[] = [];
+    for (const statement of statements) {
+      const fragment = this.buildStatement(statement);
+      if (entry === undefined) entry = fragment.entry;
+      else this.link(pending, fragment.entry);
+      pending = fragment.exits;
+    }
+    if (entry === undefined) {
+      const nop = this.add({ defs: [], uses: [] });
+      return { entry: nop, exits: [nop] };
+    }
+    return { entry, exits: pending };
+  }
+
+  private buildStatement(statement: StatementAst): Fragment {
+    switch (statement.kind) {
+      case "assign": {
+        const node = this.add({ defs: [statement.target], uses: exprVars(statement.expr), assign: statement });
+        return { entry: node, exits: [node] };
+      }
+      case "show": {
+        const display = this.ast.displays.find((candidate) => candidate.name === statement.display);
+        const node = this.add({ defs: [], uses: display?.sources ?? [] });
+        return { entry: node, exits: [node] };
+      }
+      case "input": {
+        const node = this.add({ defs: [statement.target], uses: [] });
+        return { entry: node, exits: [node] };
+      }
+      case "ask": {
+        const node = this.add({ defs: [statement.target], uses: statement.prompt ? exprVars(statement.prompt) : [] });
+        return { entry: node, exits: [node] };
+      }
+      case "pause":
+      case "halt":
+      case "trap": {
+        // Treat stops as falling through: on the MK-61 С/П resumes at the next
+        // cell, so a value can still be read after the stop.
+        const node = this.add({ defs: [], uses: exprVars(statement.expr) });
+        return { entry: node, exits: [node] };
+      }
+      case "call": {
+        const calleeEntry = this.routineEntry.get(statement.block);
+        const calleeExit = this.routineExit.get(statement.block);
+        if (calleeEntry === undefined || calleeExit === undefined) {
+          const node = this.add({ defs: [], uses: [], barrier: true });
+          return { entry: node, exits: [node] };
+        }
+        const node = this.add({ defs: [], uses: [], succ: [calleeEntry] });
+        // The continuation after this call is reached when the callee returns,
+        // so the callee's exit (not the call node) is the fragment exit.
+        return { entry: node, exits: [calleeExit] };
+      }
+      case "core":
+      case "egg": {
+        const node = this.add({ defs: [], uses: [], barrier: true });
+        return { entry: node, exits: [node] };
+      }
+      case "if": {
+        const test = this.add({ defs: [], uses: [...exprVars(statement.condition.left), ...exprVars(statement.condition.right)] });
+        const thenFragment = this.buildSequence(statement.thenBody);
+        this.link([test], thenFragment.entry);
+        const exits = [...thenFragment.exits];
+        if (statement.elseBody !== undefined) {
+          const elseFragment = this.buildSequence(statement.elseBody);
+          this.link([test], elseFragment.entry);
+          exits.push(...elseFragment.exits);
+        } else {
+          exits.push(test);
+        }
+        return { entry: test, exits };
+      }
+      case "switch":
+      case "dispatch": {
+        const uses = new Set<string>(exprVars(statement.expr));
+        for (const branch of statement.cases) for (const v of exprVars(branch.value)) uses.add(v);
+        const test = this.add({ defs: [], uses: [...uses] });
+        const exits: number[] = [];
+        for (const branch of statement.cases) {
+          const fragment = this.buildSequence(branch.body);
+          this.link([test], fragment.entry);
+          exits.push(...fragment.exits);
+        }
+        if (statement.defaultBody !== undefined) {
+          const fragment = this.buildSequence(statement.defaultBody);
+          this.link([test], fragment.entry);
+          exits.push(...fragment.exits);
+        } else {
+          exits.push(test);
+        }
+        return { entry: test, exits };
+      }
+      case "loop": {
+        const fragment = this.buildSequence(statement.body);
+        this.link(fragment.exits, fragment.entry);
+        // Also allow falling out (conservative: the loop may terminate), so any
+        // code after it stays reachable for analysis.
+        return { entry: fragment.entry, exits: [...fragment.exits] };
+      }
+    }
+  }
+}
+
+export function buildRuleCfg(ast: ProgramAst): RuleCfg {
+  return new Builder(ast).build();
+}
+
+export function programStateFields(ast: ProgramAst): Set<string> {
+  return new Set(ast.states.flatMap((state) => state.fields.map((field) => field.name)));
+}

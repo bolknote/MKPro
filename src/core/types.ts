@@ -29,6 +29,9 @@ export interface CompileOptions {
   // in-budget programs keep their direct branches; lower it to rescue space
   // more aggressively.
   indirectFlowRescueAbove?: number;
+  // Test-only: disable the interprocedural value-propagation and dead-store
+  // passes so a differential test can compare optimized vs unoptimized output.
+  disableInterproceduralOpts?: boolean;
 }
 
 export interface Diagnostic {

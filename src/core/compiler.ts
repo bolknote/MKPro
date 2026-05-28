@@ -12,6 +12,8 @@ import {
   parseFormalAddressOpcode,
 } from "./formal-address.ts";
 import { foldProgramConstants } from "./constant-folder.ts";
+import { eliminateInterproceduralDeadStores } from "./interprocedural-dse.ts";
+import { propagateValuesInterprocedurally } from "./value-propagation.ts";
 import { normalizeV2ExpressionText, parseExpression, parseProgram } from "./parser.ts";
 import { runIrPasses } from "./passes/index.ts";
 import { optimizePostLayoutIndirectFlow } from "./post-layout-indirect-flow.ts";
@@ -190,6 +192,15 @@ function compileMKProOnce(
     });
   }
   eliminateUnobservedState(ast, optimizations);
+  // Value propagation can expose new dead stores and vice-versa, so run the two
+  // interprocedural passes to a small fixpoint before register allocation.
+  if (!opts.disableInterproceduralOpts) {
+    for (let pass = 0; pass < 4; pass += 1) {
+      const propagated = propagateValuesInterprocedurally(ast, optimizations);
+      const removed = eliminateInterproceduralDeadStores(ast, optimizations);
+      if (propagated === 0 && removed === 0) break;
+    }
+  }
   hoistCommonBranchTails(ast, optimizations);
   validateSemanticDomains(ast, diagnostics);
   validateV2Intent(ast, diagnostics);
@@ -7675,6 +7686,22 @@ const optimizerCapabilities: Array<{
     requires: [],
     activeWhen: ["dead-store-elimination"],
     detail: "Removes X->П r writes whose register is never read again before the next write to the same register, using whole-program liveness.",
+  },
+  {
+    id: "interprocedural-dead-store",
+    category: "data",
+    source: "documented",
+    requires: [],
+    activeWhen: ["interprocedural-dead-store"],
+    detail: "Drops a field assignment when interprocedural liveness over the rule call graph proves the value is always overwritten before it can be observed (shown, branched on, output, or read back).",
+  },
+  {
+    id: "interprocedural-value-propagation",
+    category: "data",
+    source: "documented",
+    requires: [],
+    activeWhen: ["interprocedural-value-propagation"],
+    detail: "Replaces a recomputed expression with an equal live variable when an affine-form analysis proves they hold the same value on every path, including merges that need linear-arithmetic reasoning.",
   },
   {
     id: "last-x-reuse",
