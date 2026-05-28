@@ -1,7 +1,13 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import { getOpcode, registerIndex } from "../opcodes.ts";
 import { computeLiveness } from "./liveness-analysis.ts";
-import { hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
+import {
+  hasRewriteBarrier,
+  isDisplayFocusSensitive,
+  knownIndirectMemoryTarget,
+  type IrPass,
+  type IrPassFn,
+} from "./helpers.ts";
 
 const DIRECT_STORE_BASE = 0x40;
 const DIRECT_RECALL_BASE = 0x60;
@@ -25,6 +31,8 @@ function gatherUsedRegisters(ops: readonly IrOp[]): Set<RegisterName> {
       op.kind === "indirect-cjump"
     ) {
       set.add(op.register);
+      const memoryTarget = knownIndirectMemoryTarget(op);
+      if (memoryTarget !== undefined) set.add(memoryTarget);
     }
     if (op.kind === "loop") set.add(LOOP_COUNTER_REGISTER[op.counter]!);
   }
@@ -68,9 +76,18 @@ function usesIndirectAccess(ops: readonly IrOp[], register: RegisterName): boole
       op.kind === "indirect-cjump"
     ) {
       if (op.register === register) return true;
+      if (knownIndirectMemoryTarget(op) === register) return true;
     }
   }
   return false;
+}
+
+function usesDisplayFocusSensitiveAccess(ops: readonly IrOp[], register: RegisterName): boolean {
+  return ops.some((op) =>
+    (op.kind === "store" || op.kind === "recall") &&
+    op.register === register &&
+    isDisplayFocusSensitive(op)
+  );
 }
 
 function usesLoopCounter(ops: readonly IrOp[], register: RegisterName): boolean {
@@ -119,12 +136,14 @@ const run: IrPassFn = (ops) => {
     if (mapping.has(a)) continue;
     if (liveAtEntry.has(a)) continue;
     if (usesIndirectAccess(ops, a)) continue;
+    if (usesDisplayFocusSensitiveAccess(ops, a)) continue;
     if (usesLoopCounter(ops, a)) continue;
     for (let j = i + 1; j < ordered.length; j += 1) {
       const b = ordered[j]!;
       if (mapping.has(b)) continue;
       if (liveAtEntry.has(b)) continue;
       if (usesIndirectAccess(ops, b)) continue;
+      if (usesDisplayFocusSensitiveAccess(ops, b)) continue;
       if (usesLoopCounter(ops, b)) continue;
       const rangeA = ranges.get(a)!;
       const rangeB = ranges.get(b)!;

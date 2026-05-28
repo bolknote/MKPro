@@ -3,6 +3,7 @@ import type {
   BlockAst,
   ConditionAst,
   DeclarationAst,
+  DisplayItemAst,
   DomainAst,
   DispatchCaseAst,
   DispatchStatementAst,
@@ -230,6 +231,7 @@ class MKProParser {
     const match = /^screen\s+([A-Za-z_][\w]*)\s*\{$/u.exec(text);
     if (!match) throw new ParseError("Screen must look like 'screen name {'", header.line);
     let sources: string[] = [];
+    let items: DisplayItemAst[] = [];
     while (!this.done()) {
       const line = this.next();
       if (line.text === "}") {
@@ -237,11 +239,14 @@ class MKProParser {
           kind: "v2_screen",
           name: match[1]!,
           sources,
+          items,
           line: header.line,
         };
       }
       if (line.text.startsWith("show ")) {
-        sources = parseIdentifierList(line.text.slice("show ".length));
+        items = parseDisplayItemList(line.text.slice("show ".length), line.line);
+        sources = items.filter((item): item is Extract<DisplayItemAst, { kind: "source" }> => item.kind === "source")
+          .map((item) => item.name);
         continue;
       }
       throw new ParseError(`Unexpected screen line '${line.text}'`, line.line);
@@ -1271,6 +1276,7 @@ function lowerV2Screen(screen: V2ScreenAst): DisplayAst {
     name: screen.name,
     format: "packed",
     sources: screen.sources,
+    items: screen.items,
     line: screen.line,
   };
 }
@@ -1752,6 +1758,64 @@ function parseIdentifierList(text: string): string[] {
     .filter((part) => part.length > 0);
 }
 
+function parseDisplayItemList(text: string, line: number): DisplayItemAst[] {
+  return splitDisplayArgs(text, line).map((part) => parseDisplayItem(part, line));
+}
+
+function parseDisplayItem(text: string, line: number): DisplayItemAst {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("\"")) {
+    return {
+      kind: "literal",
+      text: parseQuotedDisplayText(trimmed, line),
+      line,
+    };
+  }
+  if (/^[A-Za-z_][\w]*$/u.test(trimmed)) {
+    return { kind: "source", name: trimmed, line };
+  }
+  throw new ParseError(`Display item must be a string literal or state name, got '${trimmed}'`, line);
+}
+
+function parseQuotedDisplayText(text: string, line: number): string {
+  try {
+    const value: unknown = JSON.parse(text);
+    if (typeof value === "string") return value;
+  } catch {
+    // Fall through to the user-facing parse error below.
+  }
+  throw new ParseError(`Invalid display string literal '${text}'`, line);
+}
+
+function splitDisplayArgs(text: string, line: number): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quoted && char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "\"") {
+      quoted = !quoted;
+      continue;
+    }
+    if (char === "," && !quoted) {
+      parts.push(text.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  if (quoted) throw new ParseError("Unclosed display string literal", line);
+  parts.push(text.slice(start).trim());
+  return parts.filter((part) => part.length > 0);
+}
+
 export function parseExpression(text: string, line = 0): ExpressionAst {
   return new ExpressionParser(text, line).parse();
 }
@@ -1890,9 +1954,24 @@ function tokenizeExpression(source: string, line: number): string[] {
 }
 
 function stripComment(text: string): string {
-  const slash = text.indexOf("//");
-  const hash = text.indexOf("#");
-  const cut =
-    slash === -1 ? hash : hash === -1 ? slash : Math.min(slash, hash);
-  return cut === -1 ? text : text.slice(0, cut);
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quoted && char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "\"") {
+      quoted = !quoted;
+      continue;
+    }
+    if (!quoted && char === "#") return text.slice(0, index);
+    if (!quoted && char === "/" && text[index + 1] === "/") return text.slice(0, index);
+  }
+  return text;
 }

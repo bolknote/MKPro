@@ -4,7 +4,7 @@ import {
 } from "../indirect-addressing.ts";
 import { registerIndex } from "../opcodes.ts";
 import type { IrCondition, IrMeta, IrOp, RegisterName } from "../types.ts";
-import { hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
+import { hasRewriteBarrier, isDisplayFocusSensitive, type IrPass, type IrPassFn } from "./helpers.ts";
 
 const INDIRECT_COND_BASES: Record<IrCondition, number> = {
   "!=0": 0x70,
@@ -194,7 +194,7 @@ const memoryTableRun: IrPassFn = (ops) => {
   let applied = 0;
 
   for (const op of ops) {
-    if (!hasRewriteBarrier(op) && (op.kind === "recall" || op.kind === "store")) {
+    if ((op.kind === "recall" || op.kind === "store") && !hasRewriteBarrier(op) && !isDisplayFocusSensitive(op)) {
       const selector = findMemorySelector(state, op.register);
       if (selector !== undefined) {
         const opcodeBase = op.kind === "recall" ? 0xd0 : 0xb0;
@@ -203,7 +203,7 @@ const memoryTableRun: IrPassFn = (ops) => {
           kind: op.kind === "recall" ? "indirect-recall" : "indirect-store",
           register: selector,
           opcode: opcodeBase + registerIndex(selector),
-          meta: cloneMeta({ ...op.meta, mnemonic }, "indirect memory table"),
+          meta: cloneMeta({ ...op.meta, mnemonic }, `indirect memory table indirect-memory-target=${op.register}`),
         };
         result.push(rewritten);
         updateKnownAfterOp(state, rewritten);

@@ -19,11 +19,14 @@ describe("indirect address model", () => {
     expect(isStableIndirectSelector("2")).toBe(false);
   });
 
-  it("uses trailing digits for ordinary integer flow and memory targets", () => {
+  it("uses ordinary integer flow targets and modulo-15 memory targets", () => {
     expect(evaluateIndirectAddress("7", 4, "flow")?.flowTarget).toBe(4);
     expect(evaluateIndirectAddress("7", 123, "flow")?.flowTarget).toBe(23);
     expect(evaluateIndirectAddress("7", 123, "memory")?.memoryTarget).toBe("3");
-    expect(evaluateIndirectAddress("7", 10, "memory")?.memoryTarget).toBe("0");
+    expect(evaluateIndirectAddress("7", 10, "memory")?.memoryTarget).toBe("a");
+    expect(evaluateIndirectAddress("7", 12, "memory")?.memoryTarget).toBe("c");
+    expect(evaluateIndirectAddress("7", 14, "memory")?.memoryTarget).toBe("e");
+    expect(evaluateIndirectAddress("7", 15, "memory")?.memoryTarget).toBe("0");
   });
 
   it("applies R0..R3 pre-decrement before selecting a target", () => {
@@ -34,14 +37,14 @@ describe("indirect address model", () => {
     expect(one?.resultValue).toBe("1");
     expect(nine?.flowTarget).toBe(9);
     expect(evaluateIndirectAddress("0", 0, "flow")?.flowTarget).toBe(99);
-    expect(evaluateIndirectAddress("0", 0, "memory")?.memoryTarget).toBe("9");
+    expect(evaluateIndirectAddress("0", 0, "memory")?.memoryTarget).toBe("e");
   });
 
   it("applies R4..R6 pre-increment before selecting a target", () => {
     const flow = evaluateIndirectAddress("4", 9, "flow");
     expect(flow?.flowTarget).toBe(10);
     expect(flow?.resultValue).toBe("10");
-    expect(evaluateIndirectAddress("6", 9, "memory")?.memoryTarget).toBe("0");
+    expect(evaluateIndirectAddress("6", 9, "memory")?.memoryTarget).toBe("a");
   });
 
   it("models fractional R0 as the sentinel case", () => {
@@ -83,7 +86,7 @@ describe("indirect address model", () => {
     expect(IndirectAddressModel.stableSelector("e")).toBe(true);
     expect(IndirectAddressModel.evaluate("7", 12, "flow")?.flowTarget).toBe(12);
     expect(IndirectAddressModel.evaluate("7", "C5", "flow")?.actualFlowTarget).toBe(13);
-    expect(IndirectAddressModel.memoryTargetFromTransformed("12")).toBe("2");
+    expect(IndirectAddressModel.memoryTargetFromTransformed("12")).toBe("c");
     expect(IndirectAddressModel.memoryTargetFromTransformed("ff")).toBe("0");
     expect(IndirectAddressModel.superDarkTarget(0xfa)?.entryAddress).toBe(48);
   });

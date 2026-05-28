@@ -1,4 +1,5 @@
 import type { IrOp, RegisterName } from "../types.ts";
+import { cellsPerOp, knownIndirectMemoryTarget } from "./helpers.ts";
 
 export interface LivenessInfo {
   readonly liveIn: ReadonlyArray<ReadonlySet<RegisterName>>;
@@ -9,17 +10,27 @@ interface SuccessorMap {
   readonly successors: number[][];
 }
 
-function buildLabelIndex(ops: readonly IrOp[]): Map<string, number> {
-  const map = new Map<string, number>();
+function buildTargetIndexes(ops: readonly IrOp[]): {
+  labelIndex: Map<string, number>;
+  addressIndex: Map<number, number>;
+} {
+  const labelIndex = new Map<string, number>();
+  const addressIndex = new Map<number, number>();
+  let address = 0;
   for (let i = 0; i < ops.length; i += 1) {
     const op = ops[i]!;
-    if (op.kind === "label") map.set(op.name, i);
+    if (op.kind === "label") {
+      labelIndex.set(op.name, i);
+      continue;
+    }
+    addressIndex.set(address, i);
+    address += cellsPerOp(op);
   }
-  return map;
+  return { labelIndex, addressIndex };
 }
 
 function buildSuccessors(ops: readonly IrOp[]): SuccessorMap {
-  const labelIndex = buildLabelIndex(ops);
+  const { labelIndex, addressIndex } = buildTargetIndexes(ops);
   const successors: number[][] = Array.from({ length: ops.length }, () => []);
   for (let i = 0; i < ops.length; i += 1) {
     const op = ops[i]!;
@@ -30,6 +41,9 @@ function buildSuccessors(ops: readonly IrOp[]): SuccessorMap {
     const jumpTo = (target: string | number): void => {
       if (typeof target === "string") {
         const idx = labelIndex.get(target);
+        if (idx !== undefined) successors[i]!.push(idx);
+      } else {
+        const idx = addressIndex.get(target);
         if (idx !== undefined) successors[i]!.push(idx);
       }
     };
@@ -59,6 +73,7 @@ function buildSuccessors(ops: readonly IrOp[]): SuccessorMap {
         fallthrough();
         break;
       case "call":
+        jumpTo(op.target);
         fallthrough();
         break;
       case "indirect-jump":
@@ -80,8 +95,20 @@ function defsAndUses(op: IrOp): { defs: ReadonlyArray<RegisterName>; uses: Reado
       return { defs: [op.register], uses: [] };
     case "recall":
       return { defs: [], uses: [op.register] };
-    case "indirect-recall":
-    case "indirect-store":
+    case "indirect-recall": {
+      const target = knownIndirectMemoryTarget(op);
+      return {
+        defs: [],
+        uses: target === undefined ? [op.register] : [op.register, target],
+      };
+    }
+    case "indirect-store": {
+      const target = knownIndirectMemoryTarget(op);
+      return {
+        defs: target === undefined ? [] : [target],
+        uses: [op.register],
+      };
+    }
     case "indirect-jump":
     case "indirect-call":
     case "indirect-cjump":

@@ -47,6 +47,7 @@ import type {
   ReferenceReport,
   RegisterName,
   ResolvedStep,
+  StateFieldAst,
   StatementAst,
   SwitchStatementAst,
   TrapStatementAst,
@@ -2155,6 +2156,16 @@ class EmitContext {
       return;
     }
 
+    if (this.compileTextDisplay(display, line)) return;
+    if (display.items.some((item) => item.kind === "literal")) {
+      this.diagnostics.push(buildDiagnostic(
+        "error",
+        `Screen '${display.name}' contains text fragments that are not lowerable for this program shape yet.`,
+        line,
+      ));
+      return;
+    }
+
     const sources = this.orderDisplaySources(display.sources);
     if (sources.length === 0) {
       this.emitNumber("0");
@@ -2176,6 +2187,100 @@ class EmitContext {
         ? `Display ${display.name} may use display-byte encodings in later layout passes.`
         : `Display ${display.name} lowered as ordinary packed numeric output.`,
     });
+  }
+
+  private compileTextDisplay(display: ProgramAst["displays"][number], line: number): boolean {
+    const [literal, source, ...rest] = display.items;
+    if (
+      literal?.kind !== "literal" ||
+      literal.text !== "BEEr " ||
+      source?.kind !== "source" ||
+      rest.length !== 0
+    ) {
+      return false;
+    }
+
+    const field = this.findStateField(source.name);
+    if (field === undefined || (field.min ?? 0) < 0 || (field.max ?? 0) > 99) return false;
+    if (this.allocation.registers[source.name] !== "0") return false;
+    if (this.currentAddress() !== 0) return false;
+
+    const scratchRegisters = new Set<RegisterName>(["1", "2", "7", "8", "a"]);
+    const conflicting = Object.entries(this.allocation.registers)
+      .filter(([name, register]) => name !== source.name && scratchRegisters.has(register));
+    if (conflicting.length > 0) return false;
+
+    this.emitTwoDigitTextDisplay(source.name, line);
+    this.optimizations.push({
+      name: "screen-text-lowering",
+      detail: `Lowered screen ${display.name} as visible text ${JSON.stringify(literal.text)} plus ${source.name}.`,
+    });
+    return true;
+  }
+
+  private emitTwoDigitTextDisplay(source: string, line: number): void {
+    this.emitRecall(source, "text display verse", line);
+    this.emitOp(0x01, "1", "text tens divisor", line);
+    this.emitOp(0x00, "0", "text tens divisor", line);
+    this.emitOp(0x13, "/", "text tens", line);
+    this.emitOp(0x34, "К [x]", "text tens integer", line);
+    this.emitOp(0x41, "X->П 1", "text tens scratch", line);
+    this.emitOp(0x0f, "F Вx", "text ones from last X", line);
+    this.emitOp(0x35, "К {x}", "text ones fraction", line);
+    this.emitOp(0x01, "1", "text ones scale", line);
+    this.emitOp(0x00, "0", "text ones scale", line);
+    this.emitOp(0x12, "*", "text ones", line);
+    this.emitOp(0x42, "X->П 2", "text ones scratch", line);
+    this.emitOp(0x01, "1", "text display tens prefix", line);
+    this.emitOp(0x01, "1", "text display tens prefix", line);
+    this.emitOp(0x48, "X->П 8", "text display prefix scratch", line);
+    this.emitOp(0x01, "1", "text display tens offset", line);
+    this.emitOp(0x02, "2", "text display tens offset", line);
+    this.emitOp(0x47, "X->П 7", "text display digit offset", line);
+    this.emitOp(0x62, "П->X 2", "text display ones digit", line);
+    this.emitJump(0x53, "ПП", 34, "text digit renderer", line);
+    this.emitOp(0x4a, "X->П a", "text display rendered ones", line);
+    this.emitOp(0x01, "1", "text display ones prefix", line);
+    this.emitOp(0x04, "4", "text display ones prefix", line);
+    this.emitOp(0x48, "X->П 8", "text display prefix scratch", line);
+    this.emitOp(0x01, "1", "text display ones offset", line);
+    this.emitOp(0x03, "3", "text display ones offset", line);
+    this.emitOp(0x47, "X->П 7", "text display digit offset", line);
+    this.emitOp(0x61, "П->X 1", "text display tens digit", line);
+    this.emitJump(0x53, "ПП", 34, "text digit renderer", line);
+    this.emitOp(0x6a, "П->X a", "text display rendered ones", line);
+    this.emitOp(0x0e, "В↑", "show text", line);
+    this.emitOp(0x50, "С/П", "show text", line);
+    this.emitOp(0x06, "6", "text digit renderer", line);
+    this.emitOp(0x11, "-", "text digit renderer", line);
+    this.emitOp(0x0b, "/-/", "text digit renderer", line);
+    this.emitJump(0x5c, "F x<0", 45, "text digit renderer", line);
+    this.emitOp(0x09, "9", "text digit complement", line);
+    this.emitOp(0x10, "+", "text digit complement", line);
+    this.emitOp(0xd7, "К П->X 7", "text display byte", line);
+    this.emitOp(0x10, "+", "text display byte", line);
+    this.emitOp(0x3a, "К ИНВ", "text visible digit", line);
+    this.emitOp(0x52, "В/О", "text digit return", line);
+    this.emitOp(0x01, "1", "text digit complement", line);
+    this.emitOp(0x10, "+", "text digit complement", line);
+    this.emitOp(0xd7, "К П->X 7", "text display byte", line);
+    this.emitOp(0x10, "+", "text display byte", line);
+    this.emitOp(0x3a, "К ИНВ", "text visible digit", line);
+    this.emitOp(0xd8, "К П->X 8", "text display prefix", line);
+    this.emitOp(0x0e, "В↑", "text digit return value", line);
+    this.emitOp(0x52, "В/О", "text digit return", line);
+  }
+
+  private findStateField(name: string): StateFieldAst | undefined {
+    for (const state of this.ast.states) {
+      const field = state.fields.find((candidate) => candidate.name === name);
+      if (field !== undefined) return field;
+    }
+    return undefined;
+  }
+
+  private currentAddress(): number {
+    return this.items.filter((item) => item.kind !== "label").length;
   }
 
   private compileBlockCall(blockName: string, line: number): void {

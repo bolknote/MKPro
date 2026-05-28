@@ -82,6 +82,28 @@ program Demo {
     expect(turn.body.some((statement) => statement.kind === "dispatch")).toBe(true);
   });
 
+  it("parses screen text fragments as ordinary show items", () => {
+    const ast = parseProgram(`
+program BeerScreen {
+  state {
+    bottles: counter 0..99 = stack.X
+  }
+  screen beer {
+    show "BEEr ", bottles
+  }
+  turn {
+    show beer
+  }
+}
+`);
+
+    expect(ast.v2?.screens[0]?.items).toEqual([
+      { kind: "literal", text: "BEEr ", line: 7 },
+      { kind: "source", name: "bottles", line: 7 },
+    ]);
+    expect(ast.displays[0]?.sources).toEqual(["bottles"]);
+  });
+
   it("parses command-style rule calls with expression arguments", () => {
     const ast = parseProgram(`
 program Demo {

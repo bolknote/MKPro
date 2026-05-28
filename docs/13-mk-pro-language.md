@@ -96,6 +96,23 @@ Rules should stay at the level of game actions: `move player south`,
 `safe_landing`, normal assignments, comparisons, dispatch, and stops. The
 lowerer turns those into assignments, display commands, dispatch, and stops.
 
+Screen output is a list of visible fragments. A fragment can be state or text:
+
+```mkpro
+state {
+  bottles: counter 0..99 = stack.X
+}
+
+screen beer {
+  show "BEEr ", bottles
+}
+```
+
+The counter range gives the natural visible width: `0..99` is two digits,
+`0..9999` is four. The compiler decides whether that screen becomes ordinary
+numeric output, packed display bytes, sign-digit forms, `К ИНВ`, or another
+proved MK-61 lowering.
+
 Do not write setup or storage tactics as top-level implementation blocks:
 
 ```mkpro

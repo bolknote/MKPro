@@ -1,67 +1,19 @@
 reference bolknote_99_bottles
 
-// Evgeny Stepanishchev's compact MK-61 "99 Bottles" demo displays a raw
-// calculator phrase shaped like "BEEr NN" (on the display: "8,ЕЕГ  NN").
-// It relies on the setup registers from games/bolknote/99-bottles.md and then
-// constructs complement nibbles so К ИНВ turns them into the visible digits.
+// Evgeny Stepanishchev's compact MK-61 "99 Bottles" demo displays a calculator
+// phrase shaped like "BEEr NN" (on the display: "8,ЕЕГ  NN"). The source says
+// that directly: a visible text fragment followed by a two-digit counter.
 
 program NinetyNineBottles {
+  state {
+    bottles: counter 0..99 = stack.X
+  }
+
+  screen beer {
+    show "BEEr ", bottles
+  }
+
   turn {
-    raw {
-      clobbers stack, display, memory
-      preserves state
-      code {
-        П->X 0
-        1
-        0
-        /
-        К [x]
-        X->П 1
-        F Вx
-        К {x}
-        1
-        0
-        *
-        X->П 2
-        1
-        1
-        X->П 8
-        1
-        2
-        X->П 7
-        П->X 2
-        ПП 34
-        X->П a
-        1
-        4
-        X->П 8
-        1
-        3
-        X->П 7
-        П->X 1
-        ПП 34
-        П->X a
-        В↑
-        С/П
-        6
-        -
-        /-/
-        F x<0 45
-        9
-        +
-        К П->X 7
-        +
-        К ИНВ
-        В/О
-        1
-        +
-        К П->X 7
-        +
-        К ИНВ
-        К П->X 8
-        В↑
-        В/О
-      }
-    }
+    show beer
   }
 }

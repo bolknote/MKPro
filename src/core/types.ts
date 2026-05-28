@@ -233,6 +233,23 @@ export interface DisplayAst {
   name: string;
   format: "packed";
   sources: string[];
+  items: DisplayItemAst[];
+  line: number;
+}
+
+export type DisplayItemAst =
+  | DisplayLiteralItemAst
+  | DisplaySourceItemAst;
+
+export interface DisplayLiteralItemAst {
+  kind: "literal";
+  text: string;
+  line: number;
+}
+
+export interface DisplaySourceItemAst {
+  kind: "source";
+  name: string;
   line: number;
 }
 
@@ -313,6 +330,7 @@ export interface V2ScreenAst {
   kind: "v2_screen";
   name: string;
   sources: string[];
+  items: DisplayItemAst[];
   line: number;
 }
 

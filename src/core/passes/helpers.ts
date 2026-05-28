@@ -4,6 +4,7 @@ import type {
   IrOp,
   IrTargetMeta,
   PreloadReport,
+  RegisterName,
 } from "../types.ts";
 
 export interface PassContext {
@@ -91,4 +92,18 @@ export function findOpForward<T extends IrOp>(
 
 export function hasRewriteBarrier(op: IrOp): boolean {
   return "meta" in op && "raw" in op.meta && op.meta.raw === true;
+}
+
+export function isDisplayFocusSensitive(op: IrOp): boolean {
+  return "meta" in op && (
+    op.meta.roles?.includes("display-byte") === true ||
+    /\b(display|screen|show|x2|вп)\b/iu.test(op.meta.comment ?? "")
+  );
+}
+
+export function knownIndirectMemoryTarget(op: IrOp): RegisterName | undefined {
+  if (op.kind !== "indirect-recall" && op.kind !== "indirect-store") return undefined;
+  const match = /\bindirect-memory-target=([0-9a-e])\b/iu.exec(op.meta.comment ?? "");
+  if (!match) return undefined;
+  return match[1]!.toLowerCase() as RegisterName;
 }

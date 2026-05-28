@@ -115,7 +115,7 @@ export function evaluateIndirectAddress(
 export function memoryTargetFromTransformed(transformed: string): RegisterName | undefined {
   const normalized = transformed.trim().toLowerCase();
   if (/^-?\d+$/u.test(normalized)) {
-    return REGISTERS_BY_INDEX[positiveModulo(Number(normalized), 10)];
+    return REGISTERS_BY_INDEX[positiveModulo(Number(normalized), 15)];
   }
   const last = normalized.at(-1);
   if (last === undefined) return undefined;

@@ -101,6 +101,16 @@ function numericJump(target: number): IrOp {
   };
 }
 
+function numericCall(target: number): IrOp {
+  return {
+    kind: "call",
+    target,
+    opcode: 0x53,
+    meta: { mnemonic: "ПП" },
+    targetMeta: {},
+  };
+}
+
 function indirectRecall(register: RegisterName): IrOp {
   return {
     kind: "indirect-recall",
@@ -165,6 +175,20 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = deadStoreElimination.run(program, ctx);
     expect(result.applied).toBe(0);
+  });
+
+  it("dead-store-elimination tracks reads inside numeric subroutine calls", () => {
+    const program: IrOp[] = [
+      store("8"),
+      numericCall(4),
+      store("8"),
+      halt(),
+      recall("8"),
+      ret(),
+    ];
+    const result = deadStoreElimination.run(program, ctx);
+
+    expect(result.ops[0]).toMatchObject({ kind: "store", register: "8" });
   });
 
   it("last-x-reuse drops П->X r when X already holds that register's value", () => {
@@ -355,6 +379,45 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops[3]).toMatchObject({ kind: "recall", register: "2" });
   });
 
+  it("indirect-memory-table keeps the target register visible to later liveness passes", () => {
+    const program: IrOp[] = [
+      store("2"),
+      plain(0x02, "2"),
+      store("7"),
+      recall("2"),
+      halt(),
+    ];
+    const rewritten = indirectMemoryTable.run(program, ctx);
+    const recallOp = rewritten.ops.find((op) => op.kind === "indirect-recall");
+    const pruned = deadStoreElimination.run(rewritten.ops, ctx);
+
+    expect(recallOp).toMatchObject({
+      kind: "indirect-recall",
+      register: "7",
+      meta: expect.objectContaining({ comment: expect.stringContaining("indirect-memory-target=2") }),
+    });
+    expect(pruned.ops).toContainEqual(expect.objectContaining({ kind: "store", register: "2" }));
+  });
+
+  it("indirect-memory-table refuses display-focus-sensitive memory reads", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("7"),
+      {
+        kind: "recall",
+        register: "2",
+        opcode: 0x62,
+        meta: { mnemonic: "П->X 2", comment: "display digit" },
+      },
+      halt(),
+    ];
+    const result = indirectMemoryTable.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops[3]).toMatchObject({ kind: "recall", register: "2" });
+  });
+
   it("dead-code-after-halt prunes ops unreachable from the entry CFG", () => {
     const program: IrOp[] = [
       jump("END"),
@@ -449,6 +512,30 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = registerCoalesce.run(program, ctx);
     expect(result.applied).toBe(0);
+  });
+
+  it("register-coalesce refuses display-focus-sensitive direct register access", () => {
+    const program: IrOp[] = [
+      store("1"),
+      recall("1"),
+      halt(),
+      {
+        kind: "store",
+        register: "2",
+        opcode: 0x42,
+        meta: { mnemonic: "X->П 2", comment: "display rendered digit" },
+      },
+      {
+        kind: "recall",
+        register: "2",
+        opcode: 0x62,
+        meta: { mnemonic: "П->X 2", comment: "display rendered digit" },
+      },
+    ];
+    const result = registerCoalesce.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops.at(-1)).toMatchObject({ kind: "recall", register: "2" });
   });
 
   it("arithmetic-if-pass collapses byte-identical simplified branches", () => {

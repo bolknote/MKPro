@@ -215,6 +215,7 @@ program SimpleRules {
     };
     const result = compileMKPro(source("examples/99-bottles.mkpro"));
     const reference = parseProgramText(source("games/bolknote/99-bottles.txt"));
+    const mkproSource = source("examples/99-bottles.mkpro");
     const codes = result.steps.map((step) => step.opcode);
     const calc = new MK61();
     const loaded = calc.loadProgram([0x3a, 0x50]);
@@ -229,6 +230,8 @@ program SimpleRules {
     expect(result.report.reference?.parity).toBe("equal");
     expect(result.report.steps).toBe(53);
     expect(result.report.warnings.join("\n")).not.toMatch(/was not found/u);
+    expect(mkproSource).toContain(`show "BEEr ", bottles`);
+    expect(mkproSource).not.toMatch(/\braw\s*\{/u);
     expect(codes).toEqual(reference.codes);
     expect(calc.runUntilStable({ maxFrames: 200, stableFrames: 6 }).stopped).toBe(true);
     expect(calc.readProgramCodes(2)).toEqual([0x3a, 0x50]);
