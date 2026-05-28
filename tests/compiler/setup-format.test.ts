@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   compileMKPro,
   formatExplain,
+  formatKeys,
+  formatListing,
   formatSetupBlock,
   type CompileResult,
 } from "../../src/core/index.ts";
@@ -31,5 +33,22 @@ describe("setup formatting", () => {
     } as CompileResult;
 
     expect(formatSetupBlock(result)).toBe("`R7=С5; R8=__; R9=1E-3`");
+  });
+
+  it("keeps keys output free of emulator setup-block syntax", () => {
+    const source = readFileSync(resolve("examples/wumpus.mkpro"), "utf8");
+    const keys = formatKeys(compileMKPro(source));
+
+    expect(keys).not.toContain("`");
+    expect(keys.split(/\r?\n/u)[0]).toBe("1");
+  });
+
+  it("shows generated setup in the default listing output", () => {
+    const source = readFileSync(resolve("examples/wumpus.mkpro"), "utf8");
+    const listing = formatListing(compileMKPro(source));
+
+    expect(listing).toContain("# Setup Listing");
+    expect(listing).toContain("setup wumpus");
+    expect(listing).toContain("# Main Listing");
   });
 });

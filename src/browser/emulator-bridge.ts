@@ -1,4 +1,11 @@
-import { CompileError, compileMKPro, formatListing, formatSetupBlock } from "../core/index.ts";
+import {
+  CompileError,
+  compileMKPro,
+  formatListing,
+  formatProgramTokens,
+  formatSetupBlock,
+  formatSetupProgram,
+} from "../core/index.ts";
 import type { CompileOptions, CompileResult } from "../core/index.ts";
 
 const DEFAULT_COMPILE_OPTIONS: CompileOptions = {
@@ -56,11 +63,15 @@ export function compileForBrowser(
   options: Partial<CompileOptions> = {},
 ): BrowserCompileOutput {
   const result = compileMKPro(source, { ...DEFAULT_COMPILE_OPTIONS, ...options });
-  const programText = formatProgramTokens(result.steps.map((step) => step.hex));
+  const programText = formatProgramTokens(result.steps);
   const setupBlockText = formatSetupBlock(result);
-  const setupPrograms = result.report.preloads
+  const preloadSetupPrograms = result.report.preloads
     .map((preload) => preload.setupProgram)
     .filter((program): program is string => program !== undefined);
+  const setupPrograms = [
+    formatSetupProgram(result),
+    ...preloadSetupPrograms,
+  ].filter((program): program is string => program !== undefined);
   const setupProgramText = setupPrograms.length === 0 ? undefined : setupPrograms.join("\n\n");
   return {
     source,
@@ -223,14 +234,6 @@ export function installEmulatorBridge(
   window.__mkProEmulatorBridge = bridge;
   window.MKProEmulator = bridge;
   return bridge;
-}
-
-function formatProgramTokens(tokens: string[]): string {
-  const rows: string[] = [];
-  for (let index = 0; index < tokens.length; index += 16) {
-    rows.push(tokens.slice(index, index + 16).join(" "));
-  }
-  return rows.join("\n");
 }
 
 function readProgramText(element: HTMLElement): string {

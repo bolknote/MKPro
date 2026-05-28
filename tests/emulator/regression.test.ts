@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { compileMKPro } from "../../src/core/index.ts";
+import { compileMKPro, formatProgramTokens, formatSetupProgram } from "../../src/core/index.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -169,4 +169,48 @@ describe("emulator regression", () => {
       }
     });
   }
+
+  it("runs wumpus setup before the main program and wins by shooting the generated Wumpus", () => {
+    const file = resolve("examples/wumpus.mkpro");
+    const source = readFileSync(file, "utf8");
+    const result = compileMKPro(source);
+    const setupProgram = formatSetupProgram(result);
+    expect(setupProgram).toBeDefined();
+
+    const calc = new MK61();
+    const setupLoaded = calc.loadProgram(setupProgram!);
+    expect(setupLoaded.diagnostics).toEqual([]);
+
+    calc.pressSequence(["В/О", "С/П"]);
+    const setupRun = calc.runUntilStable({ maxFrames: 1000, stableFrames: 8 });
+    expect(setupRun.stopped).toBe(true);
+
+    const wumpus = readIntegerRegister(calc, "8");
+    expect(wumpus).toBeGreaterThanOrEqual(1);
+    expect(wumpus).toBeLessThanOrEqual(20);
+    for (const register of ["4", "5", "0", "1"]) {
+      const value = readIntegerRegister(calc, register);
+      expect(value).toBeGreaterThanOrEqual(1);
+      expect(value).toBeLessThanOrEqual(20);
+    }
+
+    const mainLoaded = calc.loadProgram(formatProgramTokens(result.steps));
+    expect(mainLoaded.diagnostics).toEqual([]);
+
+    calc.pressSequence(["В/О", "С/П"]);
+    const boot = calc.runUntilStable({ maxFrames: 2000, stableFrames: 8 });
+    expect(boot.stopped).toBe(true);
+
+    calc.press("Сx");
+    calc.inputNumber(String(wumpus));
+    calc.press("/-/");
+    calc.press("С/П");
+    const shot = calc.runUntilStable({ maxFrames: 2000, stableFrames: 8 });
+    expect(shot.stopped).toBe(true);
+    expect(calc.displayText()).toMatch(/^777\b/u);
+  });
 });
+
+function readIntegerRegister(calc: Mk61Instance, register: string): number {
+  return Number.parseInt(calc.readRegister(register).replace(",", ""), 10);
+}

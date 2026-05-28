@@ -1,5 +1,6 @@
+import { formalAddressInfo } from "./formal-address.ts";
 import { formatAddress } from "./opcodes.ts";
-import type { CompileResult, PreloadReport } from "./types.ts";
+import type { CompileResult, PreloadReport, ResolvedStep } from "./types.ts";
 
 const HEX_COLUMNS = 8;
 const MK61_HEX_SETUP_DIGITS: Record<string, string> = {
@@ -12,11 +13,36 @@ const MK61_HEX_SETUP_DIGITS: Record<string, string> = {
 };
 
 export function formatListing(result: CompileResult): string {
+  const setupProgram = result.report.setupProgram;
+  if (setupProgram !== undefined) {
+    return [
+      "# Setup Listing",
+      formatListingSteps(setupProgram.steps),
+      "",
+      "# Main Listing",
+      formatListingSteps(result.steps),
+    ].join("\n");
+  }
+
+  const setupBlock = formatSetupBlock(result);
+  if (setupBlock !== undefined) {
+    return [
+      "Setup Block:",
+      `  ${setupBlock}`,
+      "",
+      formatListingSteps(result.steps),
+    ].join("\n");
+  }
+
+  return formatListingSteps(result.steps);
+}
+
+function formatListingSteps(steps: readonly ResolvedStep[]): string {
   const lines = [
     " Step | Code | Command                 | Comment",
     "------+------+-------------------------+----------------",
   ];
-  for (const step of result.steps) {
+  for (const step of steps) {
     const address = formatStepAddress(step.address).padStart(4, " ");
     const command = step.mnemonic.padEnd(23, " ");
     const comments = [step.comment]
@@ -28,13 +54,21 @@ export function formatListing(result: CompileResult): string {
 }
 
 export function formatHex(result: CompileResult): string {
+  return formatHexSteps(result.steps);
+}
+
+function formatHexSteps(steps: readonly ResolvedStep[]): string {
   const rows: string[] = [];
-  for (let i = 0; i < result.steps.length; i += HEX_COLUMNS) {
-    const chunk = result.steps.slice(i, i + HEX_COLUMNS).map((step) => step.hex);
+  for (let i = 0; i < steps.length; i += HEX_COLUMNS) {
+    const chunk = steps.slice(i, i + HEX_COLUMNS).map((step) => step.hex);
     const address = formatStepAddress(i).padStart(2, "0");
     rows.push(`${address}: ${chunk.join(" ")}`);
   }
   return rows.join("\n");
+}
+
+export function formatProgramTokens(steps: readonly ResolvedStep[]): string {
+  return steps.map((step) => step.hex).join("\n");
 }
 
 function formatStepAddress(address: number): string {
@@ -75,6 +109,36 @@ export function formatSetupBlock(result: CompileResult): string | undefined {
   return `\`${assignments.join("; ")}\``;
 }
 
+export function formatSetupProgram(result: CompileResult): string | undefined {
+  if (result.report.setupProgram === undefined) return undefined;
+  return formatProgramTokens(result.report.setupProgram.steps);
+}
+
+export function formatKeys(result: CompileResult): string {
+  const lines: string[] = [];
+  const setupProgram = result.report.setupProgram;
+  if (setupProgram !== undefined) {
+    lines.push(...formatStepKeys(setupProgram.steps));
+    lines.push("В/О", "С/П");
+  } else {
+    lines.push(...formatSetupPreloadKeys(result.report.preloads));
+  }
+  lines.push(...formatStepKeys(result.steps));
+  lines.push("В/О", "С/П");
+  return lines.join("\n");
+}
+
+function formatStepKeys(steps: readonly ResolvedStep[]): string[] {
+  return steps.map((step) => step.mnemonic);
+}
+
+function formatSetupPreloadKeys(preloads: readonly PreloadReport[]): string[] {
+  return preloads.flatMap((preload) => {
+    const value = executableSetupValue(preload.value);
+    return value === undefined ? [] : [value, `X->П ${preload.register}`];
+  });
+}
+
 function formatSetupAssignment(preload: PreloadReport): string | undefined {
   if (!isSetupLiteral(preload.value)) return undefined;
   return `R${preload.register}=${formatSetupValue(preload.value)}`;
@@ -89,6 +153,13 @@ function formatSetupValue(value: string): string {
   if (isScientificDecimal(normalized)) return value;
   if (!/^[0-9A-F]+$/iu.test(normalized) || !/[A-F]/iu.test(normalized)) return value;
   return [...normalized].map((digit) => MK61_HEX_SETUP_DIGITS[digit] ?? digit).join("");
+}
+
+function executableSetupValue(value: string): string | undefined {
+  const normalized = value.trim().toUpperCase();
+  if (/^-?\d+(?:[,.]\d+)?(?:E-?\d{1,2})?$/iu.test(normalized)) return normalized.replace(",", ".");
+  if (/^[A-F][0-9A-F]$/iu.test(normalized)) return String(formalAddressInfo(Number.parseInt(normalized, 16)).actual);
+  return undefined;
 }
 
 function isScientificDecimal(value: string): boolean {
@@ -132,6 +203,11 @@ export function formatExplain(result: CompileResult): string {
       lines.push("", "Setup Block:");
       lines.push(`  ${setupBlock}`);
     }
+  }
+  if (result.report.setupProgram !== undefined) {
+    lines.push("", "Setup Program:");
+    lines.push(`  Reason: ${result.report.setupProgram.reason}`);
+    lines.push(formatHexSteps(result.report.setupProgram.steps).split("\n").map((line) => `  ${line}`).join("\n"));
   }
   lines.push("", "Registers:");
   const registerEntries = Object.entries(result.report.registers).sort(
@@ -214,14 +290,21 @@ function preloadSourceLabel(result: CompileResult, preload: PreloadReport): stri
 }
 
 export function formatAll(result: CompileResult): string {
-  return [
+  const sections = [
     "# Listing",
     formatListing(result),
     "",
     "# Hex",
     formatHex(result),
+  ];
+  const setupProgram = formatSetupProgram(result);
+  if (setupProgram !== undefined) {
+    sections.push("", "# Setup Program", setupProgram);
+  }
+  sections.push(
     "",
     "# JSON",
     formatJson(result),
-  ].join("\n");
+  );
+  return sections.join("\n");
 }

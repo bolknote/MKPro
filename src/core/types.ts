@@ -16,7 +16,7 @@ export type RegisterName =
   | "e";
 
 export type DeliveryMode = "manual" | "loader" | "hex";
-export type OutputMode = "listing" | "hex" | "json" | "all";
+export type OutputMode = "listing" | "hex" | "json" | "keys" | "all";
 export type MachineId = "mk61";
 
 export interface CompileOptions {
@@ -804,6 +804,7 @@ export interface CompileReport {
   emulatorFacts: EmulatorFactReport[];
   rejectedCandidates: RejectedCandidateReport[];
   hotBlocks: HotBlockReport[];
+  setupProgram?: SetupProgramReport;
 }
 
 export interface PreloadReport {
@@ -812,6 +813,11 @@ export interface PreloadReport {
   countsAgainstProgram: boolean;
   setupProgram?: string;
   setupNote?: string;
+}
+
+export interface SetupProgramReport {
+  steps: ResolvedStep[];
+  reason: string;
 }
 
 export interface ReferenceReport {

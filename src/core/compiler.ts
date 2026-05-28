@@ -45,6 +45,7 @@ import type {
   ReferenceReport,
   RegisterName,
   ResolvedStep,
+  SetupProgramReport,
   StateFieldAst,
   StatementAst,
   SwitchStatementAst,
@@ -310,6 +311,17 @@ function compileMKProOnce(
     ...optimizedResult.preloads,
     ...postLayoutFlow.preloads,
   ];
+  const setupProgram = buildGeneratedSetupProgram(
+    ast,
+    allocation,
+    preloads,
+    opts,
+    machineProfile,
+    diagnostics,
+    optimizations,
+    warnings,
+    candidates,
+  );
   appendOptimizationCandidateReports(optimizations, candidates);
   const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, machineProfile);
   const largestBlocks = summarizeBlocks(optimized);
@@ -358,6 +370,7 @@ function compileMKProOnce(
         steps: candidate.steps,
       })),
     hotBlocks: largestBlocks.map(parseHotBlock),
+    ...(setupProgram === undefined ? {} : { setupProgram }),
   };
 
   return { ast, items: optimized, steps, report, diagnostics };
@@ -1443,6 +1456,25 @@ class EmitContext {
       const helpers = this.items.splice(helperStart);
       this.items.splice(leadingJumpItems, 0, ...helpers);
     }
+  }
+
+  compileSetupProgramWithPreloads(
+    preloads: readonly ExecutableSetupPreload[],
+    fields: readonly StateFieldAst[],
+  ): void {
+    const dynamicRegisters = new Set(fields.map((field) => this.allocation.registers[field.name]).filter(Boolean));
+    for (const preload of preloads) {
+      if (dynamicRegisters.has(preload.register)) continue;
+      this.emitNumber(preload.value);
+      this.emitOp(0x40 + registerIndex(preload.register), `X->П ${preload.register}`, `setup R${preload.register}`, undefined, true);
+    }
+    for (const field of fields) {
+      if (field.initial === undefined) continue;
+      this.compileExpression(field.initial);
+      this.emitStore(field.name, `setup ${field.name}`, field.line, true);
+    }
+    this.emitOp(0x50, "С/П", "setup complete");
+    this.compileRuntimeHelpers();
   }
 
   private compileProcedures(): void {
@@ -4586,13 +4618,13 @@ class EmitContext {
     this.emitNumber(raw);
   }
 
-  private emitStore(name: string, comment?: string, sourceLine?: number): void {
+  private emitStore(name: string, comment?: string, sourceLine?: number, raw = false): void {
     const register = this.allocation.registers[name];
     if (!register) {
       this.diagnostics.push(buildDiagnostic("error", `No register allocated for ${name}`, sourceLine));
       return;
     }
-    this.emitOp(0x40 + registerIndex(register), `X->П ${register}`, comment, sourceLine);
+    this.emitOp(0x40 + registerIndex(register), `X->П ${register}`, comment, sourceLine, raw);
     this.currentXVariable = name;
   }
 
@@ -9305,6 +9337,84 @@ function buildPreloadReport(ast: ProgramAst, allocation: RegisterAllocation): Pr
     countsAgainstProgram: false,
   }));
   return [...explicit, ...synthetic, ...constants];
+}
+
+function buildGeneratedSetupProgram(
+  ast: ProgramAst,
+  allocation: RegisterAllocation,
+  preloads: readonly PreloadReport[],
+  options: CompileOptions,
+  machineProfile: MachineProfile,
+  diagnostics: Diagnostic[],
+  optimizations: AppliedOptimization[],
+  warnings: string[],
+  candidates: CandidateReport[],
+): SetupProgramReport | undefined {
+  const fields = setupProgramFields(ast);
+  if (fields.length === 0) return undefined;
+  const executablePreloads = preloads.flatMap((preload) => executableSetupPreload(preload));
+
+  const setupOptimizations: AppliedOptimization[] = [];
+  const setupContext = new EmitContext(
+    ast,
+    allocation,
+    options,
+    machineProfile,
+    diagnostics,
+    setupOptimizations,
+    warnings,
+    candidates,
+    {},
+  );
+  setupContext.compileSetupProgramWithPreloads(executablePreloads, fields);
+  const optimizedSetup = optimizeItems(setupContext.items, options, setupOptimizations);
+  const { steps } = layoutProgram(optimizedSetup.items, diagnostics, options, ast, machineProfile);
+
+  optimizations.push({
+    name: "generated-setup-program",
+    detail: `Generated optimized setup program for ${fields.map((field) => field.name).join(", ")}.`,
+  });
+  optimizations.push(...setupOptimizations.map((optimization) => ({
+    name: `setup-${optimization.name}`,
+    detail: optimization.detail,
+  })));
+
+  return {
+    steps,
+    reason: `initializes ${fields.map((field) => field.name).join(", ")}`,
+  };
+}
+
+function setupProgramFields(ast: ProgramAst): StateFieldAst[] {
+  if (!ast.v2) return [];
+  return ast.states
+    .flatMap((state) => state.fields)
+    .filter((field) => field.initial !== undefined && !isSetupLiteralExpression(field.initial));
+}
+
+interface ExecutableSetupPreload {
+  register: RegisterName;
+  value: string;
+}
+
+function executableSetupPreload(preload: PreloadReport): ExecutableSetupPreload[] {
+  const register = registerFromText(preload.register);
+  const value = executableSetupValue(preload.value);
+  return value === undefined ? [] : [{ register, value }];
+}
+
+function executableSetupValue(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (/^-?\d+(?:[,.]\d+)?(?:E-?\d{1,2})?$/iu.test(trimmed)) return trimmed.replace(",", ".");
+  if (/^[A-F][0-9A-F]$/iu.test(trimmed)) {
+    return String(formalAddressInfo(Number.parseInt(trimmed, 16)).actual);
+  }
+  return undefined;
+}
+
+function isSetupLiteralExpression(expr: ExpressionAst): boolean {
+  if (expr.kind === "number") return true;
+  return expr.kind === "unary" && expr.op === "-" && expr.expr.kind === "number";
 }
 
 function buildNegativeZeroDegreePreloadReport(

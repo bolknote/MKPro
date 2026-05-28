@@ -23,7 +23,7 @@ npm run mk-pro -- explain examples/tiny-game.mkpro
 The CLI shape is:
 
 ```sh
-mk-pro compile file.mkpro --out listing|hex|json|all
+mk-pro compile file.mkpro --out listing|hex|json|keys|all
 mk-pro explain file.mkpro
 ```
 
@@ -31,6 +31,8 @@ Flags:
 
 - `--delivery manual|loader|hex` (default `hex`) controls opcode delivery
   metadata for listings.
+- `--out keys` prints a bare press/input stream, including generated setup when
+  the program needs one.
 - `--budget N` (default `105`). Hard error if exceeded.
 
 ## Browser Bridge

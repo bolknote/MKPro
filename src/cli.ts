@@ -8,6 +8,7 @@ import {
   formatExplain,
   formatHex,
   formatJson,
+  formatKeys,
   formatListing,
 } from "./core/index.ts";
 import type {
@@ -44,6 +45,7 @@ function main(argv: string[]): number {
     if (out === "listing") console.log(formatListing(result));
     else if (out === "hex") console.log(formatHex(result));
     else if (out === "json") console.log(formatJson(result));
+    else if (out === "keys") console.log(formatKeys(result));
     else console.log(formatAll(result));
     return 0;
   } catch (error) {
@@ -116,10 +118,10 @@ function nextValue(argv: string[], index: number, flag: string): string {
 }
 
 function parseOutput(value: string): OutputMode {
-  if (value === "listing" || value === "hex" || value === "json" || value === "all") {
+  if (value === "listing" || value === "hex" || value === "json" || value === "keys" || value === "all") {
     return value;
   }
-  throw new Error("--out must be listing, hex, json, or all.");
+  throw new Error("--out must be listing, hex, json, keys, or all.");
 }
 
 function parseDelivery(value: string): DeliveryMode {
@@ -131,7 +133,7 @@ function helpText(): string {
   return `mk-pro - MK-Pro to MK-61 translator
 
 Usage:
-  mk-pro compile file.mkpro --out listing|hex|json|all
+  mk-pro compile file.mkpro --out listing|hex|json|keys|all
   mk-pro explain file.mkpro
 
 Flags:

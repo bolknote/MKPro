@@ -25,7 +25,10 @@ export {
   formatExplain,
   formatHex,
   formatJson,
+  formatKeys,
   formatListing,
+  formatProgramTokens,
+  formatSetupProgram,
   formatSetupBlock,
 } from "./format.ts";
 export { MK61_PROFILE, machineSupports } from "./machineProfile.ts";
