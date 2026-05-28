@@ -668,6 +668,9 @@ candidates:
   ordinary branch. The report includes a setup program for the unusual preload;
   ordinary flow branches are also costed through this path, but kept unchanged
   whenever the normal condition is shorter;
+- terminal branch simplification: `if/else` lowering omits an unreachable
+  `БП if_end` after a terminal then-branch, and may branch directly to a
+  reusable terminal rule instead of landing on a one-command branch stub;
 - cell membership clear reuse: when `if cell in cells` immediately clears that
   same cell, the compiler reuses the successful mask instead of recomputing it;
 - adjacent bit-set reuse: consecutive `cells += cell` updates compute the cell

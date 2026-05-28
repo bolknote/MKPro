@@ -545,6 +545,67 @@ program BranchlessStop {
     expect(result.report.optimizations.some((item) => item.name === "arithmetic-if-terminal-select")).toBe(true);
   });
 
+  it("does not emit an if-end jump after a terminal then branch", () => {
+    const result = compileOk(`
+program TerminalThenEnd {
+  state {
+    flag: flag = 0
+    crash_value: packed = -999
+  }
+  screen crash {
+    show crash_value
+  }
+  turn {
+    if flag == 1 {
+      show crash
+      stop -999
+    }
+    else {
+      stop 1
+    }
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "terminal-branch-end-elision")).toBe(true);
+  });
+
+  it("branches directly to reusable terminal rules", () => {
+    const result = compileOk(`
+program DirectTerminalBranch {
+  state {
+    score: counter 0..9 = 0
+    crash_value: packed = -999
+  }
+  screen crash {
+    show crash_value
+  }
+  turn {
+    if score >= 5 {
+      fail
+    }
+    else {
+      stop 1
+    }
+  }
+  rule fail {
+    show crash
+    stop -999
+  }
+  rule other {
+    if score < 2 {
+      fail
+    }
+    else {
+      stop 2
+    }
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "terminal-if-direct-branch")).toBe(true);
+  });
+
   it("extends terminal-select to comparison conditions when branchless is shorter", () => {
     const result = compileOk(`
 program BranchlessCompare {

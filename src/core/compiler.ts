@@ -1295,20 +1295,98 @@ class EmitContext {
     line: number,
   ): void {
     if (this.compileArithmeticIfSelect(statement)) return;
+    if (this.compileDirectTerminalIfBranch(statement, line)) return;
     if (this.compileMembershipClearReuse(statement, line)) return;
 
     const falseLabel = this.freshLabel("if_false");
-    const endLabel = this.freshLabel("if_end");
+    const thenTerminates = this.statementsTerminate(statement.thenBody);
+    const endLabel = thenTerminates ? undefined : this.freshLabel("if_end");
     this.compileCondition(statement.condition, falseLabel, line);
     this.compileStatements(statement.thenBody);
     if (statement.elseBody) {
-      this.emitJump(0x51, "БП", endLabel, "if end", line);
+      if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", line);
       this.emitLabel(falseLabel);
       this.compileStatements(statement.elseBody);
-      this.emitLabel(endLabel);
+      if (endLabel !== undefined) this.emitLabel(endLabel);
+      if (thenTerminates) {
+        this.optimizations.push({
+          name: "terminal-branch-end-elision",
+          detail: `Omitted unreachable if-end jump after terminal then branch at line ${line}.`,
+        });
+      }
     } else {
       this.emitLabel(falseLabel);
     }
+  }
+
+  private compileDirectTerminalIfBranch(
+    statement: Extract<StatementAst, { kind: "if" }>,
+    line: number,
+  ): boolean {
+    const thenTarget = this.directTerminalCallTarget(statement.thenBody);
+    const elseTarget = statement.elseBody === undefined ? undefined : this.directTerminalCallTarget(statement.elseBody);
+    if (thenTarget === undefined && elseTarget === undefined) return false;
+
+    const preloadedConstants = new Set(Object.keys(this.allocation.constants));
+    const originalCost = estimateConditionCost(statement.condition, this.ast, preloadedConstants);
+    const candidates: Array<{
+      branchWhen: "true" | "false";
+      target: string;
+      condition: ConditionAst;
+      estimatedCost: number;
+      ordinaryCost: number;
+    }> = [];
+
+    if (thenTarget !== undefined && statement.elseBody !== undefined) {
+      const condition = invertCondition(statement.condition);
+      candidates.push({
+        branchWhen: "true",
+        target: thenTarget,
+        condition,
+        estimatedCost: estimateConditionCost(condition, this.ast, preloadedConstants),
+        ordinaryCost: originalCost + 1,
+      });
+    }
+    if (elseTarget !== undefined) {
+      const thenTerminates = this.statementsTerminate(statement.thenBody);
+      candidates.push({
+        branchWhen: "false",
+        target: elseTarget,
+        condition: statement.condition,
+        estimatedCost: originalCost,
+        ordinaryCost: originalCost + (thenTerminates ? 1 : 2),
+      });
+    }
+
+    const selected = candidates
+      .filter((candidate) => candidate.estimatedCost < candidate.ordinaryCost)
+      .sort((left, right) => left.estimatedCost - right.estimatedCost)[0];
+    if (selected === undefined) return false;
+
+    this.compileCondition(selected.condition, selected.target, line);
+    if (selected.branchWhen === "true") {
+      if (statement.elseBody) this.compileStatements(statement.elseBody);
+    } else {
+      this.compileStatements(statement.thenBody);
+    }
+    this.optimizations.push({
+      name: "terminal-if-direct-branch",
+      detail: `Branched directly to terminal ${selected.target} for ${selected.branchWhen} path at line ${line} (${selected.estimatedCost} vs ${selected.ordinaryCost} estimated branch cells).`,
+    });
+    return true;
+  }
+
+  private directTerminalCallTarget(statements: StatementAst[]): string | undefined {
+    if (statements.length !== 1) return undefined;
+    const statement = statements[0];
+    if (statement?.kind !== "call") return undefined;
+
+    const block = this.ast.blocks.find((candidate) => candidate.name === statement.block);
+    if (block !== undefined) return block.mode === "inline" ? undefined : block.name;
+
+    const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
+    if (proc === undefined || this.inlineProcNames.has(proc.name)) return undefined;
+    return this.statementsTerminate(proc.body) ? proc.name : undefined;
   }
 
   private compileMembershipClearReuse(
@@ -5878,8 +5956,15 @@ function estimateSimpleStatementCost(statement: StatementAst, ast: ProgramAst): 
   }
 }
 
-function estimateConditionCost(condition: ConditionAst, ast: ProgramAst): number {
-  return conditionCompileCost(selectCheaperEquivalentCondition(condition, ast).condition);
+function estimateConditionCost(
+  condition: ConditionAst,
+  ast: ProgramAst,
+  preloadedConstants?: ReadonlySet<string>,
+): number {
+  return conditionCompileCost(
+    selectCheaperEquivalentCondition(condition, ast, preloadedConstants).condition,
+    preloadedConstants,
+  );
 }
 
 function estimateExpressionCostForCondition(
@@ -6109,8 +6194,14 @@ const optimizerCapabilities: Array<{
     category: "flow",
     source: "documented",
     requires: [],
-    activeWhen: ["tail-call-lowering", "terminal-rule-tail-call", "tail-call-layout"],
-    detail: "Replaces subroutine calls in tail position with direct jumps so rule factoring does not force an extra return.",
+    activeWhen: [
+      "tail-call-lowering",
+      "terminal-rule-tail-call",
+      "tail-call-layout",
+      "terminal-if-direct-branch",
+      "terminal-branch-end-elision",
+    ],
+    detail: "Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.",
   },
   {
     id: "return-zero-jump",

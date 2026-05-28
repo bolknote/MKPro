@@ -5478,7 +5478,8 @@ var MKProEmulatorBundle = (() => {
       }];
     }
     if (statement.elseBody !== void 0 && statement.elseBody.length === 0) {
-      const { elseBody: _elseBody, ...rest } = statement;
+      const rest = { ...statement };
+      delete rest.elseBody;
       return [{
         ...rest
       }];
@@ -6203,19 +6204,78 @@ var MKProEmulatorBundle = (() => {
     }
     compileIf(statement, line) {
       if (this.compileArithmeticIfSelect(statement)) return;
+      if (this.compileDirectTerminalIfBranch(statement, line)) return;
       if (this.compileMembershipClearReuse(statement, line)) return;
       const falseLabel = this.freshLabel("if_false");
-      const endLabel = this.freshLabel("if_end");
+      const thenTerminates = this.statementsTerminate(statement.thenBody);
+      const endLabel = thenTerminates ? void 0 : this.freshLabel("if_end");
       this.compileCondition(statement.condition, falseLabel, line);
       this.compileStatements(statement.thenBody);
       if (statement.elseBody) {
-        this.emitJump(81, "\u0411\u041F", endLabel, "if end", line);
+        if (endLabel !== void 0) this.emitJump(81, "\u0411\u041F", endLabel, "if end", line);
         this.emitLabel(falseLabel);
         this.compileStatements(statement.elseBody);
-        this.emitLabel(endLabel);
+        if (endLabel !== void 0) this.emitLabel(endLabel);
+        if (thenTerminates) {
+          this.optimizations.push({
+            name: "terminal-branch-end-elision",
+            detail: `Omitted unreachable if-end jump after terminal then branch at line ${line}.`
+          });
+        }
       } else {
         this.emitLabel(falseLabel);
       }
+    }
+    compileDirectTerminalIfBranch(statement, line) {
+      const thenTarget = this.directTerminalCallTarget(statement.thenBody);
+      const elseTarget = statement.elseBody === void 0 ? void 0 : this.directTerminalCallTarget(statement.elseBody);
+      if (thenTarget === void 0 && elseTarget === void 0) return false;
+      const preloadedConstants = new Set(Object.keys(this.allocation.constants));
+      const originalCost = estimateConditionCost(statement.condition, this.ast, preloadedConstants);
+      const candidates = [];
+      if (thenTarget !== void 0 && statement.elseBody !== void 0) {
+        const condition = invertCondition(statement.condition);
+        candidates.push({
+          branchWhen: "true",
+          target: thenTarget,
+          condition,
+          estimatedCost: estimateConditionCost(condition, this.ast, preloadedConstants),
+          ordinaryCost: originalCost + 1
+        });
+      }
+      if (elseTarget !== void 0) {
+        const thenTerminates = this.statementsTerminate(statement.thenBody);
+        candidates.push({
+          branchWhen: "false",
+          target: elseTarget,
+          condition: statement.condition,
+          estimatedCost: originalCost,
+          ordinaryCost: originalCost + (thenTerminates ? 1 : 2)
+        });
+      }
+      const selected = candidates.filter((candidate) => candidate.estimatedCost < candidate.ordinaryCost).sort((left, right) => left.estimatedCost - right.estimatedCost)[0];
+      if (selected === void 0) return false;
+      this.compileCondition(selected.condition, selected.target, line);
+      if (selected.branchWhen === "true") {
+        if (statement.elseBody) this.compileStatements(statement.elseBody);
+      } else {
+        this.compileStatements(statement.thenBody);
+      }
+      this.optimizations.push({
+        name: "terminal-if-direct-branch",
+        detail: `Branched directly to terminal ${selected.target} for ${selected.branchWhen} path at line ${line} (${selected.estimatedCost} vs ${selected.ordinaryCost} estimated branch cells).`
+      });
+      return true;
+    }
+    directTerminalCallTarget(statements) {
+      if (statements.length !== 1) return void 0;
+      const statement = statements[0];
+      if (statement?.kind !== "call") return void 0;
+      const block = this.ast.blocks.find((candidate) => candidate.name === statement.block);
+      if (block !== void 0) return block.mode === "inline" ? void 0 : block.name;
+      const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
+      if (proc === void 0 || this.inlineProcNames.has(proc.name)) return void 0;
+      return this.statementsTerminate(proc.body) ? proc.name : void 0;
     }
     compileMembershipClearReuse(statement, line) {
       const clearPrefix = this.membershipClearPrefix(statement.thenBody);
@@ -10020,8 +10080,11 @@ var MKProEmulatorBundle = (() => {
         return Number.POSITIVE_INFINITY;
     }
   }
-  function estimateConditionCost(condition, ast) {
-    return conditionCompileCost(selectCheaperEquivalentCondition(condition, ast).condition);
+  function estimateConditionCost(condition, ast, preloadedConstants) {
+    return conditionCompileCost(
+      selectCheaperEquivalentCondition(condition, ast, preloadedConstants).condition,
+      preloadedConstants
+    );
   }
   function estimateExpressionCostForCondition(expr, preloadedConstants) {
     if (preloadedConstants === void 0) return estimateExpressionCost(expr);
@@ -10194,8 +10257,14 @@ var MKProEmulatorBundle = (() => {
       category: "flow",
       source: "documented",
       requires: [],
-      activeWhen: ["tail-call-lowering", "terminal-rule-tail-call", "tail-call-layout"],
-      detail: "Replaces subroutine calls in tail position with direct jumps so rule factoring does not force an extra return."
+      activeWhen: [
+        "tail-call-lowering",
+        "terminal-rule-tail-call",
+        "tail-call-layout",
+        "terminal-if-direct-branch",
+        "terminal-branch-end-elision"
+      ],
+      detail: "Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops."
     },
     {
       id: "return-zero-jump",
