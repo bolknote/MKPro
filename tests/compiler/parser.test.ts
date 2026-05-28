@@ -79,7 +79,7 @@ program Demo {
     const turn = ast.entries[0]?.body[0];
     expect(turn?.kind).toBe("loop");
     if (turn?.kind !== "loop") throw new Error("expected turn loop");
-    expect(turn.body.some((statement) => statement.kind === "dispatch")).toBe(true);
+    expect(turn.body.some((statement) => statement.kind === "if")).toBe(true);
   });
 
   it("parses screen text fragments as ordinary show items", () => {
@@ -163,14 +163,13 @@ program BadExtraArg {
     const ast = parseProgram(`
 program Jump {
   state {
-    floor: counter 1..3 = 1
+    floor: counter 1..4 = 1
     strength: counter 0..9 = 9
   }
   turn {
     match floor {
       1 => jump_to 2
       2 => jump_to 3
-      3 => jump_to 1
     }
   }
   rule jump_to f {
@@ -195,6 +194,90 @@ program Jump {
     expect(floorAssign?.kind).toBe("assign");
     if (floorAssign?.kind !== "assign") throw new Error("expected floor assignment");
     expect(floorAssign.expr).toMatchObject({ kind: "number", raw: "2" });
+  });
+
+  it("lowers pure numeric match effect tables to default effects plus corrections", () => {
+    const ast = parseProgram(`
+program EffectTable {
+  state {
+    tile: counter 0..9 = 0
+    energy: counter 0..9 = 9
+  }
+  turn {
+    match tile {
+      1 => pool_exit
+      2 => ladder_exit
+      3 => shaft_exit
+      otherwise => clear_exit
+    }
+  }
+  rule clear_exit {
+    energy++
+  }
+  rule pool_exit {
+    energy = 0
+  }
+  rule ladder_exit {
+    energy -= 5
+  }
+  rule shaft_exit {
+    energy -= 6
+  }
+}
+`);
+    const loop = ast.entries[0]?.body[0];
+    expect(loop?.kind).toBe("loop");
+    if (loop?.kind !== "loop") throw new Error("expected turn loop");
+    expect(loop.body.map((statement) => statement.kind)).toEqual(["assign", "if", "if", "if"]);
+    expect(loop.body.some((statement) => statement.kind === "dispatch")).toBe(false);
+  });
+
+  it("lowers single-key matches as ordinary conditionals", () => {
+    const ast = parseProgram(`
+program BinaryChoice {
+  state {
+    choice: counter 0..9 = 0
+    score: counter 0..9 = 0
+  }
+  turn {
+    match choice {
+      0 => score++
+      otherwise => score--
+    }
+  }
+}
+`);
+    const loop = ast.entries[0]?.body[0];
+    expect(loop?.kind).toBe("loop");
+    if (loop?.kind !== "loop") throw new Error("expected turn loop");
+    expect(loop.body[0]?.kind).toBe("if");
+  });
+
+  it("lowers exhaustive cyclic counter matches without a dispatch chain", () => {
+    const ast = parseProgram(`
+program Cycle {
+  state {
+    floor: counter 1..3 = 1
+    strength: counter 0..9 = 9
+  }
+  turn {
+    match floor {
+      1 => jump_to 2
+      2 => jump_to 3
+      3 => jump_to 1
+    }
+  }
+  rule jump_to f {
+    floor = f
+    strength -= f
+  }
+}
+`);
+    const loop = ast.entries[0]?.body[0];
+    expect(loop?.kind).toBe("loop");
+    if (loop?.kind !== "loop") throw new Error("expected turn loop");
+    expect(loop.body.map((statement) => statement.kind)).toEqual(["assign", "if", "assign"]);
+    expect(ast.procs.some((proc) => proc.name === "jump_to")).toBe(false);
   });
 
   it("parses unary minus in normal expressions", () => {

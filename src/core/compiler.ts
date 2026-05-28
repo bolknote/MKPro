@@ -173,6 +173,13 @@ function compileMKProOnce(
       name: "intent-domain-lowering",
       detail: `Lowered ${ast.v2.state.length} state fields and ${ast.v2.rules.length} rules through the generic intent pipeline.`,
     });
+    const sharedChallengeHelpers = ast.procs.filter((proc) => proc.name.startsWith("encounter_effects_")).length;
+    if (sharedChallengeHelpers > 0) {
+      optimizations.push({
+        name: "shared-challenge-effect-lowering",
+        detail: `Collapsed ${sharedChallengeHelpers} repeated encounter challenge/effect table(s) into shared formula-driven helper logic.`,
+      });
+    }
   }
 
   const allocation = allocateRegisters(ast, diagnostics);
@@ -7222,6 +7229,14 @@ const optimizerCapabilities: Array<{
       "indirect-register-flow",
     ],
     detail: "Lowers high-level command dispatch automatically; small proven dispatches may use indirect or super-dark dispatch.",
+  },
+  {
+    id: "shared-challenge-effect-lowering",
+    category: "data",
+    source: "documented",
+    requires: [],
+    activeWhen: ["shared-challenge-effect-lowering"],
+    detail: "Recognizes repeated challenge protocols whose branches differ by numeric state deltas and common cell updates, then lowers them as one shared formula-driven effect table.",
   },
   {
     id: "arithmetic-if-select",

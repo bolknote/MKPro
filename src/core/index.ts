@@ -26,6 +26,7 @@ export {
   formatHex,
   formatJson,
   formatListing,
+  formatSetupBlock,
 } from "./format.ts";
 export { MK61_PROFILE, machineSupports } from "./machineProfile.ts";
 export type * from "./types.ts";

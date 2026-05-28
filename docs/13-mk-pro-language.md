@@ -164,6 +164,18 @@ This is a startup convention, not general register binding. Memory registers
 `R0`..`Re` are allocated by the compiler; source code should not name them for
 state placement.
 
+For emulator runs and regression tests, use the compiler's setup block instead
+of hand-writing register assignments in source. The source keeps the natural
+state facts above; `mk-pro explain` reports the allocated registers and an
+emulator-ready block such as:
+
+```text
+`R3=0; R0=0; Rc=20`
+```
+
+That block is generated output. It is useful for loading or comparing compiled
+programs, but it should not replace high-level state declarations.
+
 Names beginning with `__mkpro_` are reserved for compiler-internal helper
 expressions. User programs should express game rules directly; generated helper
 names may appear in reports, but they are not part of the source language.

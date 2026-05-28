@@ -42,18 +42,18 @@ program Game100Pig {
   rule roll_player {
     roll_die
 
-    if die == 1 {
-      pig_out_player
-    }
-    else {
+    if die != 1 {
       turn_score += die
       preview_total = player_total + turn_score
       player_choice
     }
+    else {
+      pig_out_player
+    }
   }
 
   rule hold_player {
-    player_total += turn_score
+    player_total = preview_total
     if player_total >= 100 {
       player_wins
     }
@@ -63,9 +63,6 @@ program Game100Pig {
   }
 
   rule pig_out_player {
-    turn_score = 0
-    roll_count = 0
-    preview_total = player_total
     start_calculator_turn
   }
 
@@ -78,10 +75,7 @@ program Game100Pig {
   rule roll_calculator {
     roll_die
 
-    if die == 1 {
-      pig_out_calculator
-    }
-    else {
+    if die != 1 {
       turn_score += die
       preview_total = calculator_total + turn_score
       show status
@@ -93,10 +87,13 @@ program Game100Pig {
         roll_calculator
       }
     }
+    else {
+      pig_out_calculator
+    }
   }
 
   rule hold_calculator {
-    calculator_total += turn_score
+    calculator_total = preview_total
     if calculator_total >= 100 {
       calculator_wins
     }

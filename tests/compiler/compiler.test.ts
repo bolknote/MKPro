@@ -486,6 +486,98 @@ program RepeatedChallengePrompt {
     expect(result.report.optimizations.some((item) => item.name === "show-sequence-helper-call")).toBe(true);
   });
 
+  it("collapses repeated encounter challenges into formula-driven effect logic", () => {
+    const result = compileOk(`
+program SharedChallengeDemo {
+  state {
+    tile: counter 0..5 = 0
+    challenge: packed = 0
+    answer: packed = 0
+    warning_value: packed = 7
+    score: counter 0..99 = 0
+    strength: counter 0..99 = 10
+    plans: cells(cave) = random()
+    pos: coord(cave) = 1
+  }
+  world cave {
+    position pos {
+      encoding decimal_player
+    }
+  }
+  screen warning {
+    show warning_value
+  }
+  screen memory {
+    show challenge
+  }
+  turn {
+    encounter tile
+    stop score + strength + plans
+  }
+  encounters tile {
+    0 {
+      show 0
+    }
+    1 {
+      challenge tile as challenge using warning, memory, answer {
+        success {
+          strength += 3
+          plans -= pos
+        }
+        failure {
+          strength -= 1
+        }
+      }
+    }
+    2 {
+      challenge tile as challenge using warning, memory, answer {
+        success {
+          strength += 2
+          score += 1
+          plans -= pos
+        }
+        failure {
+          strength -= 2
+        }
+      }
+    }
+    3 {
+      challenge tile as challenge using warning, memory, answer {
+        success {
+          strength += 1
+          score += 2
+          plans -= pos
+        }
+        failure {
+          strength -= 3
+        }
+      }
+    }
+    4 {
+      challenge tile as challenge using warning, memory, answer {
+        success {
+          score += 3
+          plans -= pos
+        }
+        failure {
+          strength -= 4
+        }
+      }
+    }
+  }
+}
+`);
+    const activeCapabilities = new Set(
+      result.report.optimizer.capabilities
+        .filter((capability) => capability.status === "active")
+        .map((capability) => capability.id),
+    );
+
+    expect(result.ast.procs.some((proc) => proc.name.startsWith("encounter_effects_"))).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "shared-challenge-effect-lowering")).toBe(true);
+    expect(activeCapabilities.has("shared-challenge-effect-lowering")).toBe(true);
+  });
+
   it("lowers contracted raw blocks inside V2 rules", () => {
     const result = compileOk(`
 program RawRule {

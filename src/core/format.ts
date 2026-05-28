@@ -1,7 +1,15 @@
 import { formatAddress } from "./opcodes.ts";
-import type { CompileResult } from "./types.ts";
+import type { CompileResult, PreloadReport } from "./types.ts";
 
 const HEX_COLUMNS = 8;
+const MK61_HEX_SETUP_DIGITS: Record<string, string> = {
+  A: "-",
+  B: "L",
+  C: "С",
+  D: "Г",
+  E: "Е",
+  F: "_",
+};
 
 export function formatListing(result: CompileResult): string {
   const lines = [
@@ -59,6 +67,34 @@ export function formatJson(result: CompileResult): string {
   );
 }
 
+export function formatSetupBlock(result: CompileResult): string | undefined {
+  const assignments = result.report.preloads
+    .map(formatSetupAssignment)
+    .filter((assignment): assignment is string => assignment !== undefined);
+  if (assignments.length === 0) return undefined;
+  return `\`${assignments.join("; ")}\``;
+}
+
+function formatSetupAssignment(preload: PreloadReport): string | undefined {
+  if (!isSetupLiteral(preload.value)) return undefined;
+  return `R${preload.register}=${formatSetupValue(preload.value)}`;
+}
+
+function isSetupLiteral(value: string): boolean {
+  return /^-?[0-9A-FАВСДЕLСГЕ_\-,.]+(?:E-?[0-9]{1,2})?$/iu.test(value);
+}
+
+function formatSetupValue(value: string): string {
+  const normalized = value.toUpperCase();
+  if (isScientificDecimal(normalized)) return value;
+  if (!/^[0-9A-F]+$/iu.test(normalized) || !/[A-F]/iu.test(normalized)) return value;
+  return [...normalized].map((digit) => MK61_HEX_SETUP_DIGITS[digit] ?? digit).join("");
+}
+
+function isScientificDecimal(value: string): boolean {
+  return /^-?\d+(?:[,.]\d+)?E-?\d{1,2}$/iu.test(value);
+}
+
 export function formatExplain(result: CompileResult): string {
   const lines = [
     `MK-Pro compile report`,
@@ -81,13 +117,20 @@ export function formatExplain(result: CompileResult): string {
   if (result.report.preloads.length > 0) {
     lines.push("", "Preloads:");
     for (const preload of result.report.preloads) {
-      lines.push(`  R${preload.register}: ${preload.value}${preload.countsAgainstProgram ? "" : " (outside program cells)"}`);
+      const label = preloadSourceLabel(result, preload);
+      const target = label === undefined ? `R${preload.register}` : `${label} -> R${preload.register}`;
+      lines.push(`  ${target}: ${preload.value}${preload.countsAgainstProgram ? "" : " (outside program cells)"}`);
       if (preload.setupProgram !== undefined) {
         lines.push(`    setup: ${preload.setupProgram}`);
       }
       if (preload.setupNote !== undefined) {
         lines.push(`    note: ${preload.setupNote}`);
       }
+    }
+    const setupBlock = formatSetupBlock(result);
+    if (setupBlock !== undefined) {
+      lines.push("", "Setup Block:");
+      lines.push(`  ${setupBlock}`);
     }
   }
   lines.push("", "Registers:");
@@ -159,6 +202,15 @@ export function formatExplain(result: CompileResult): string {
     for (const warning of result.report.warnings) lines.push(`  - ${warning}`);
   }
   return lines.join("\n");
+}
+
+function preloadSourceLabel(result: CompileResult, preload: PreloadReport): string | undefined {
+  const field = result.ast.v2?.state.find((candidate) =>
+    result.report.registers[candidate.name] === preload.register &&
+    candidate.initial === preload.value
+  );
+  if (field !== undefined) return field.name;
+  return undefined;
 }
 
 export function formatAll(result: CompileResult): string {

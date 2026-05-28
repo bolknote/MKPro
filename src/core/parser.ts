@@ -22,6 +22,7 @@ import type {
   StateFieldType,
   V2BoardAst,
   V2ChallengeStatementAst,
+  V2EncounterCaseAst,
   V2EncounterTableAst,
   V2IfStatementAst,
   V2InvokeStatementAst,
@@ -1406,12 +1407,18 @@ function lowerV2Rule(rule: V2RuleAst, context: V2LoweringContext): ProcAst {
 }
 
 function lowerV2EncounterRules(v2: V2ProgramAst, context: V2LoweringContext): ProcAst[] {
-  return v2.encounters.map((table) => ({
+  return v2.encounters.flatMap((table) => lowerV2EncounterRule(table, context));
+}
+
+function lowerV2EncounterRule(table: V2EncounterTableAst, context: V2LoweringContext): ProcAst[] {
+  const optimized = lowerSharedChallengeEncounter(table, context);
+  if (optimized !== undefined) return optimized;
+  return [{
     kind: "proc",
     name: "encounter",
     body: [lowerV2EncounterDispatch(table, context)],
     line: table.line,
-  }));
+  }];
 }
 
 function lowerV2EncounterDispatch(table: V2EncounterTableAst, context: V2LoweringContext): DispatchStatementAst {
@@ -1430,6 +1437,439 @@ function lowerV2EncounterDispatch(table: V2EncounterTableAst, context: V2Lowerin
 
 function encounterParamName(expr: string): string {
   return /^[A-Za-z_][\w]*$/u.test(expr.trim()) ? expr.trim() : "encounter_kind";
+}
+
+interface SimpleChallengeCase {
+  key: number;
+  value: string;
+  line: number;
+  challenge: V2ChallengeStatementAst;
+  success: SimpleEffects;
+  failure: SimpleEffects;
+}
+
+interface SimpleEffects {
+  deltas: Map<string, number>;
+  cellUpdates: CellUpdateEffect[];
+}
+
+interface CellUpdateEffect {
+  target: string;
+  op: "+=" | "-=";
+  expr: string;
+}
+
+interface LinearDeltaPlan {
+  target: string;
+  slope: number;
+  intercept: number;
+  corrections: Map<number, number>;
+}
+
+function lowerSharedChallengeEncounter(table: V2EncounterTableAst, context: V2LoweringContext): ProcAst[] | undefined {
+  const analyzed = table.cases.map((encounterCase) => analyzeSimpleChallengeCase(encounterCase, context));
+  const simple = analyzed.filter((item): item is SimpleChallengeCase => item !== undefined);
+  if (simple.length < 3) return undefined;
+
+  const groups = groupSimpleChallengeCases(simple);
+  const group = groups
+    .filter((candidate) => candidate.length >= 3)
+    .map((candidate) => ({
+      cases: candidate,
+      success: buildEffectPlan(candidate, "success"),
+      failure: buildEffectPlan(candidate, "failure"),
+    }))
+    .filter((candidate): candidate is {
+      cases: SimpleChallengeCase[];
+      success: EffectPlan;
+      failure: EffectPlan;
+    } => candidate.success !== undefined && candidate.failure !== undefined)
+    .sort((left, right) => right.cases.length - left.cases.length)[0];
+  if (group === undefined) return undefined;
+
+  const optimizedKeys = new Set(group.cases.map((item) => item.key));
+  const helperName = `encounter_effects_${table.line}`;
+  const defaultDispatch = defaultableOptimizedEncounterDispatch(table, optimizedKeys, helperName, context);
+  const dispatch: DispatchStatementAst = {
+    kind: "dispatch",
+    expr: lowerV2Expression(encounterParamName(table.expr), table.line, context),
+    cases: defaultDispatch?.cases ?? table.cases.map((encounterCase) => {
+      const key = numericLiteralTextValue(encounterCase.value);
+      if (key !== undefined && optimizedKeys.has(key)) {
+        return {
+          value: lowerV2Expression(encounterCase.value, encounterCase.line, context),
+          body: [{ kind: "call", block: helperName, line: encounterCase.line }],
+          line: encounterCase.line,
+        };
+      }
+      return {
+        value: lowerV2Expression(encounterCase.value, encounterCase.line, context),
+        body: lowerV2Statements(encounterCase.body, context),
+        line: encounterCase.line,
+      };
+    }),
+    ...(defaultDispatch === undefined ? {} : { defaultBody: defaultDispatch.defaultBody }),
+    line: table.line,
+    scratchId: table.line,
+  };
+
+  const protocol = group.cases[0]!.challenge;
+  const helper: ProcAst = {
+    kind: "proc",
+    name: helperName,
+    body: lowerSharedChallengeHelper(protocol, group.success, group.failure, encounterParamName(table.expr), context),
+    line: table.line,
+  };
+
+  return [
+    {
+      kind: "proc",
+      name: "encounter",
+      body: [dispatch],
+      line: table.line,
+    },
+    helper,
+  ];
+}
+
+function defaultableOptimizedEncounterDispatch(
+  table: V2EncounterTableAst,
+  optimizedKeys: Set<number>,
+  helperName: string,
+  context: V2LoweringContext,
+): { cases: DispatchCaseAst[]; defaultBody: StatementAst[] } | undefined {
+  const keyName = encounterParamName(table.expr);
+  const range = context.stateRanges.get(keyName);
+  if (range?.min === undefined || range.max === undefined) return undefined;
+  if (!Number.isInteger(range.min) || !Number.isInteger(range.max)) return undefined;
+  if (range.max < range.min || range.max - range.min > 20) return undefined;
+
+  const sourceKeys = new Set<number>();
+  const cases: DispatchCaseAst[] = [];
+  for (const encounterCase of table.cases) {
+    const key = numericLiteralTextValue(encounterCase.value);
+    if (key === undefined) return undefined;
+    sourceKeys.add(key);
+    if (optimizedKeys.has(key)) continue;
+    cases.push({
+      value: lowerV2Expression(encounterCase.value, encounterCase.line, context),
+      body: lowerV2Statements(encounterCase.body, context),
+      line: encounterCase.line,
+    });
+  }
+
+  for (let value = range.min; value <= range.max; value += 1) {
+    if (sourceKeys.has(value) || optimizedKeys.has(value)) continue;
+    cases.push({
+      value: lowerV2Expression(String(value), table.line, context),
+      body: [],
+      line: table.line,
+    });
+  }
+
+  if (cases.length + 1 >= optimizedKeys.size) return undefined;
+  return {
+    cases: cases.sort((left, right) =>
+      (numericLiteralValueForExpression(left.value) ?? 0) - (numericLiteralValueForExpression(right.value) ?? 0)
+    ),
+    defaultBody: [{ kind: "call", block: helperName, line: table.line }],
+  };
+}
+
+interface EffectPlan {
+  keys: number[];
+  deltas: LinearDeltaPlan[];
+  cellUpdates: CellUpdateEffect[];
+}
+
+function analyzeSimpleChallengeCase(
+  encounterCase: V2EncounterCaseAst,
+  context: V2LoweringContext,
+): SimpleChallengeCase | undefined {
+  const key = numericLiteralTextValue(encounterCase.value);
+  if (key === undefined) return undefined;
+  if (encounterCase.body.length !== 1) return undefined;
+  const challenge = encounterCase.body[0];
+  if (challenge?.kind !== "v2_challenge" || challenge.failureBody === undefined) return undefined;
+  const success = analyzeSimpleEffects(challenge.successBody, context);
+  const failure = analyzeSimpleEffects(challenge.failureBody, context);
+  if (success === undefined || failure === undefined) return undefined;
+  return {
+    key,
+    value: encounterCase.value,
+    line: encounterCase.line,
+    challenge,
+    success,
+    failure,
+  };
+}
+
+function analyzeSimpleEffects(statements: V2StatementAst[], context: V2LoweringContext): SimpleEffects | undefined {
+  const deltas = new Map<string, number>();
+  const cellUpdates: CellUpdateEffect[] = [];
+  for (const statement of statements) {
+    if (statement.kind !== "v2_update") return undefined;
+    if (context.stateTypes.get(statement.target) === "cells") {
+      cellUpdates.push({
+        target: statement.target,
+        op: statement.op,
+        expr: statement.expr.trim(),
+      });
+      continue;
+    }
+    const value = numericLiteralTextValue(statement.expr);
+    if (value === undefined) return undefined;
+    const delta = statement.op === "+=" ? value : -value;
+    deltas.set(statement.target, (deltas.get(statement.target) ?? 0) + delta);
+  }
+  return {
+    deltas,
+    cellUpdates: cellUpdates.sort(compareCellUpdates),
+  };
+}
+
+function groupSimpleChallengeCases(cases: SimpleChallengeCase[]): SimpleChallengeCase[][] {
+  const groups = new Map<string, SimpleChallengeCase[]>();
+  for (const challengeCase of cases) {
+    const key = challengeProtocolKey(challengeCase.challenge);
+    const group = groups.get(key);
+    if (group === undefined) {
+      groups.set(key, [challengeCase]);
+    } else {
+      group.push(challengeCase);
+    }
+  }
+  return [...groups.values()];
+}
+
+function challengeProtocolKey(statement: V2ChallengeStatementAst): string {
+  return [
+    statement.expr.trim(),
+    statement.challengeTarget,
+    statement.warningScreen,
+    statement.memoryScreen,
+    statement.answerInput,
+  ].join("\0");
+}
+
+function buildEffectPlan(cases: SimpleChallengeCase[], branch: "success" | "failure"): EffectPlan | undefined {
+  const cellUpdates = cases[0]![branch].cellUpdates;
+  if (!cases.every((item) => cellUpdatesEqual(item[branch].cellUpdates, cellUpdates))) return undefined;
+
+  const targets = new Set<string>();
+  for (const challengeCase of cases) {
+    for (const target of challengeCase[branch].deltas.keys()) targets.add(target);
+  }
+
+  const plans: LinearDeltaPlan[] = [];
+  for (const target of [...targets].sort()) {
+    const values = new Map(cases.map((challengeCase) => [
+      challengeCase.key,
+      challengeCase[branch].deltas.get(target) ?? 0,
+    ]));
+    const plan = fitLinearDeltaPlan(target, values);
+    if (plan === undefined) return undefined;
+    if (plan.slope !== 0 || plan.intercept !== 0 || plan.corrections.size > 0) {
+      plans.push(plan);
+    }
+  }
+
+  if (plans.length === 0 && cellUpdates.length === 0) return undefined;
+  return {
+    keys: cases.map((item) => item.key),
+    deltas: plans,
+    cellUpdates,
+  };
+}
+
+function lowerSharedChallengeHelper(
+  protocol: V2ChallengeStatementAst,
+  success: EffectPlan,
+  failure: EffectPlan,
+  keyName: string,
+  context: V2LoweringContext,
+): StatementAst[] {
+  return [
+    {
+      kind: "assign",
+      target: protocol.challengeTarget,
+      expr: lowerV2Expression(protocol.expr, protocol.line, context),
+      line: protocol.line,
+    },
+    { kind: "show", display: protocol.warningScreen, line: protocol.line },
+    { kind: "show", display: protocol.memoryScreen, line: protocol.line },
+    { kind: "input", target: protocol.answerInput, line: protocol.line },
+    {
+      kind: "if",
+      condition: {
+        left: { kind: "identifier", name: protocol.answerInput },
+        op: "==",
+        right: { kind: "identifier", name: protocol.challengeTarget },
+      },
+      thenBody: lowerEffectPlan(success, keyName, protocol.line, context),
+      elseBody: lowerEffectPlan(failure, keyName, protocol.line, context),
+      line: protocol.line,
+    },
+  ];
+}
+
+function lowerEffectPlan(
+  plan: EffectPlan,
+  keyName: string,
+  line: number,
+  context: V2LoweringContext,
+): StatementAst[] {
+  const statements: StatementAst[] = [];
+  for (const delta of plan.deltas) {
+    const expr = linearDeltaExpressionText(delta, keyName);
+    if (expr !== "0") {
+      statements.push(deltaAssignStatement(delta.target, expr, line, context));
+    }
+  }
+  for (const [key, corrections] of groupedCorrections(plan.deltas)) {
+    statements.push({
+      kind: "if",
+      condition: {
+        left: { kind: "identifier", name: keyName },
+        op: "==",
+        right: { kind: "number", raw: String(key) },
+      },
+      thenBody: corrections.map((correction) =>
+        deltaAssignStatement(correction.target, String(correction.delta), line, context)
+      ),
+      line,
+    });
+  }
+  for (const update of plan.cellUpdates) {
+    statements.push(...lowerV2Statement({
+      kind: "v2_update",
+      target: update.target,
+      op: update.op,
+      expr: update.expr,
+      line,
+    }, context));
+  }
+  return statements;
+}
+
+function deltaAssignStatement(
+  target: string,
+  deltaText: string,
+  line: number,
+  context: V2LoweringContext,
+): Extract<StatementAst, { kind: "assign" }> {
+  const delta = numericLiteralTextValue(deltaText);
+  const exprText = delta !== undefined && delta < 0
+    ? `${target} - ${Math.abs(delta)}`
+    : `${target} + (${deltaText})`;
+  return {
+    kind: "assign",
+    target,
+    expr: lowerV2Expression(exprText, line, context),
+    line,
+  };
+}
+
+function groupedCorrections(plans: LinearDeltaPlan[]): Array<[number, Array<{ target: string; delta: number }>]> {
+  const grouped = new Map<number, Array<{ target: string; delta: number }>>();
+  for (const plan of plans) {
+    for (const [key, delta] of plan.corrections) {
+      if (delta === 0) continue;
+      const corrections = grouped.get(key) ?? [];
+      corrections.push({ target: plan.target, delta });
+      grouped.set(key, corrections);
+    }
+  }
+  return [...grouped.entries()].sort(([left], [right]) => left - right);
+}
+
+function fitLinearDeltaPlan(target: string, values: Map<number, number>): LinearDeltaPlan | undefined {
+  const entries = [...values.entries()].sort(([left], [right]) => left - right);
+  if (entries.every(([, value]) => value === 0)) {
+    return { target, slope: 0, intercept: 0, corrections: new Map() };
+  }
+
+  const candidates: LinearDeltaPlan[] = [];
+  for (const [, value] of entries) {
+    candidates.push(linearPlanFor(target, values, 0, value));
+  }
+  for (let i = 0; i < entries.length; i += 1) {
+    for (let j = i + 1; j < entries.length; j += 1) {
+      const [leftKey, leftValue] = entries[i]!;
+      const [rightKey, rightValue] = entries[j]!;
+      const keyDelta = rightKey - leftKey;
+      const valueDelta = rightValue - leftValue;
+      if (keyDelta === 0 || valueDelta % keyDelta !== 0) continue;
+      const slope = valueDelta / keyDelta;
+      const intercept = leftValue - slope * leftKey;
+      candidates.push(linearPlanFor(target, values, slope, intercept));
+    }
+  }
+
+  return candidates
+    .filter((candidate) => candidate.corrections.size <= Math.max(1, Math.floor(entries.length / 3)))
+    .sort((left, right) => linearPlanCost(left) - linearPlanCost(right))[0];
+}
+
+function linearPlanFor(
+  target: string,
+  values: Map<number, number>,
+  slope: number,
+  intercept: number,
+): LinearDeltaPlan {
+  const corrections = new Map<number, number>();
+  for (const [key, value] of values) {
+    const base = slope * key + intercept;
+    if (base !== value) corrections.set(key, value - base);
+  }
+  return { target, slope, intercept, corrections };
+}
+
+function linearPlanCost(plan: LinearDeltaPlan): number {
+  const baseCost = plan.slope === 0 && plan.intercept === 0
+    ? 0
+    : Math.abs(plan.slope) <= 1
+      ? 3
+      : 5;
+  return baseCost + plan.corrections.size * 6;
+}
+
+function linearDeltaExpressionText(plan: LinearDeltaPlan, keyName: string): string {
+  const variable = plan.slope === 0
+    ? "0"
+    : plan.slope === 1
+      ? keyName
+      : plan.slope === -1
+        ? `(0 - ${keyName})`
+        : `${plan.slope} * ${keyName}`;
+  if (plan.intercept === 0) return variable;
+  if (plan.slope === 0) return String(plan.intercept);
+  return plan.intercept > 0
+    ? `${variable} + ${plan.intercept}`
+    : `${variable} - ${Math.abs(plan.intercept)}`;
+}
+
+function numericLiteralTextValue(text: string): number | undefined {
+  if (!isNumericLiteralText(text.trim())) return undefined;
+  const value = Number(text.trim());
+  return Number.isInteger(value) ? value : undefined;
+}
+
+function numericLiteralValueForExpression(expr: ExpressionAst): number | undefined {
+  if (expr.kind !== "number") return undefined;
+  const value = Number(expr.raw);
+  return Number.isInteger(value) ? value : undefined;
+}
+
+function cellUpdatesEqual(left: CellUpdateEffect[], right: CellUpdateEffect[]): boolean {
+  return left.length === right.length &&
+    left.every((item, index) => compareCellUpdates(item, right[index]!) === 0);
+}
+
+function compareCellUpdates(left: CellUpdateEffect, right: CellUpdateEffect): number {
+  return left.target.localeCompare(right.target) ||
+    left.op.localeCompare(right.op) ||
+    left.expr.localeCompare(right.expr);
 }
 
 function lowerV2Statements(statements: V2StatementAst[], context: V2LoweringContext): StatementAst[] {
@@ -1516,7 +1956,7 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
         line: statement.line,
       }];
     case "v2_match":
-      return [lowerV2Match(statement, context)];
+      return lowerV2MatchStatements(statement, context);
   }
 }
 
@@ -1630,6 +2070,68 @@ function parseV2MoveDirection(text: string, line: number): NonNullable<V2MoveSta
   }
 }
 
+function lowerV2MatchStatements(statement: V2MatchStatementAst, context: V2LoweringContext): StatementAst[] {
+  const cyclic = lowerCyclicCounterMatch(statement, context);
+  if (cyclic !== undefined) return cyclic;
+  const effects = lowerSimpleEffectMatch(statement, context);
+  if (effects !== undefined) return effects;
+  const smallCase = lowerSmallCaseMatch(statement, context);
+  if (smallCase !== undefined) return [smallCase];
+  const singleCase = lowerSingleCaseMatch(statement, context);
+  if (singleCase !== undefined) return [singleCase];
+  return [lowerV2Match(statement, context)];
+}
+
+function lowerSmallCaseMatch(statement: V2MatchStatementAst, context: V2LoweringContext): IfStatementAst | undefined {
+  if (statement.otherwise === undefined) return undefined;
+  const rows = statement.cases.flatMap((matchCase) =>
+    matchCase.values.map((value) => ({ value, action: matchCase.action, line: matchCase.line }))
+  );
+  if (rows.length !== 1) return undefined;
+  if (statement.cases.some((matchCase) => matchCase.values.length !== 1)) return undefined;
+  if (rows.length > 1 && !/^[A-Za-z_][\w]*$/u.test(statement.expr.trim())) return undefined;
+
+  const build = (index: number): IfStatementAst => {
+    const row = rows[index]!;
+    const elseBody = index + 1 < rows.length
+      ? [build(index + 1)]
+      : lowerV2Statement(statement.otherwise!, context);
+    return {
+      kind: "if",
+      condition: {
+        left: lowerV2Expression(statement.expr, statement.line, context),
+        op: "==",
+        right: lowerV2Expression(row.value, row.line, context),
+      },
+      thenBody: lowerV2MatchAction(row.action, context, statement.expr, row.value, row.line),
+      elseBody,
+      line: index === 0 ? statement.line : row.line,
+    };
+  };
+
+  return build(0);
+}
+
+function lowerSingleCaseMatch(statement: V2MatchStatementAst, context: V2LoweringContext): IfStatementAst | undefined {
+  const lowered = lowerSmallCaseMatch(statement, context);
+  if (lowered !== undefined) return lowered;
+  if (statement.otherwise !== undefined || statement.cases.length !== 1) return undefined;
+  const matchCase = statement.cases[0]!;
+  if (matchCase.values.length !== 1) return undefined;
+  const value = matchCase.values[0]!;
+  return {
+    kind: "if",
+    condition: {
+      left: lowerV2Expression(statement.expr, statement.line, context),
+      op: "==",
+      right: lowerV2Expression(value, matchCase.line, context),
+    },
+    thenBody: lowerV2MatchAction(matchCase.action, context, statement.expr, value, matchCase.line),
+    ...(statement.otherwise === undefined ? {} : { elseBody: lowerV2Statement(statement.otherwise, context) }),
+    line: statement.line,
+  };
+}
+
 function lowerV2Match(statement: V2MatchStatementAst, context: V2LoweringContext): DispatchStatementAst {
   const compact = lowerCompactDirectionDispatch(statement, context);
   if (compact !== undefined) return compact;
@@ -1653,6 +2155,313 @@ function lowerV2Match(statement: V2MatchStatementAst, context: V2LoweringContext
   };
   if (statement.otherwise !== undefined) lowered.defaultBody = lowerV2Statement(statement.otherwise, context);
   return lowered;
+}
+
+interface CyclicMatchCase {
+  value: number;
+  next: number;
+  deltas: Map<string, number>;
+}
+
+interface SimpleNumericEffects {
+  effects: Map<string, NumericEffect>;
+}
+
+type NumericEffect =
+  | { kind: "delta"; value: number }
+  | { kind: "assign"; value: number };
+
+interface SimpleEffectMatchRow {
+  value: number;
+  effects: SimpleNumericEffects;
+  line: number;
+}
+
+function lowerSimpleEffectMatch(statement: V2MatchStatementAst, context: V2LoweringContext): StatementAst[] | undefined {
+  const keyName = statement.expr.trim();
+  if (!/^[A-Za-z_][\w]*$/u.test(keyName)) return undefined;
+
+  const defaultEffects = statement.otherwise === undefined
+    ? { effects: new Map<string, NumericEffect>() }
+    : analyzeSimpleNumericEffects(resolveV2ActionBody(statement.otherwise, context, statement.expr), context);
+  if (defaultEffects === undefined) return undefined;
+
+  const rows: SimpleEffectMatchRow[] = [];
+  const seen = new Set<number>();
+  for (const matchCase of statement.cases) {
+    for (const valueText of matchCase.values) {
+      const value = numericLiteralTextValue(valueText);
+      if (value === undefined || seen.has(value)) return undefined;
+      seen.add(value);
+      const body = resolveV2ActionBody(matchCase.action, context, statement.expr, valueText);
+      if (body === undefined) return undefined;
+      const effects = analyzeSimpleNumericEffects(body, context);
+      if (effects === undefined) return undefined;
+      rows.push({ value, effects, line: matchCase.line });
+    }
+  }
+  if (rows.length < 3) return undefined;
+
+  const lowered: StatementAst[] = [
+    ...lowerNumericEffects(defaultEffects, statement.line, context),
+  ];
+  for (const row of rows.sort((left, right) => left.value - right.value)) {
+    const correction = correctionEffects(defaultEffects, row.effects);
+    if (correction === undefined) return undefined;
+    const body = lowerNumericEffects(correction, row.line, context);
+    if (body.length === 0) continue;
+    lowered.push({
+      kind: "if",
+      condition: {
+        left: { kind: "identifier", name: keyName },
+        op: "==",
+        right: { kind: "number", raw: String(row.value) },
+      },
+      thenBody: body,
+      line: row.line,
+    });
+  }
+
+  if (lowered.length <= 1) return undefined;
+  const dispatch = lowerV2Match(statement, context);
+  return estimateStatementCount(lowered) < estimateDispatchStatementCount(dispatch) ? lowered : undefined;
+}
+
+function analyzeSimpleNumericEffects(
+  statements: V2StatementAst[] | undefined,
+  context: V2LoweringContext,
+): SimpleNumericEffects | undefined {
+  if (statements === undefined) return undefined;
+  const effects = new Map<string, NumericEffect>();
+  for (const statement of statements) {
+    if (statement.kind === "v2_update" && context.stateTypes.get(statement.target) !== "cells") {
+      if (!context.stateTypes.has(statement.target)) return undefined;
+      const value = numericLiteralTextValue(statement.expr);
+      if (value === undefined) return undefined;
+      applyNumericDelta(effects, statement.target, statement.op === "+=" ? value : -value);
+      continue;
+    }
+    if (statement.kind === "v2_assign" && context.stateTypes.get(statement.target) !== "cells") {
+      if (!context.stateTypes.has(statement.target)) return undefined;
+      const value = numericLiteralTextValue(statement.expr);
+      if (value === undefined) return undefined;
+      effects.set(statement.target, { kind: "assign", value });
+      continue;
+    }
+    return undefined;
+  }
+  return { effects };
+}
+
+function applyNumericDelta(effects: Map<string, NumericEffect>, target: string, delta: number): void {
+  const current = effects.get(target);
+  if (current?.kind === "assign") {
+    effects.set(target, { kind: "assign", value: current.value + delta });
+    return;
+  }
+  effects.set(target, { kind: "delta", value: (current?.value ?? 0) + delta });
+}
+
+function correctionEffects(
+  base: SimpleNumericEffects,
+  desired: SimpleNumericEffects,
+): SimpleNumericEffects | undefined {
+  const effects = new Map<string, NumericEffect>();
+  const targets = new Set([...base.effects.keys(), ...desired.effects.keys()]);
+  for (const target of [...targets].sort()) {
+    const correction = correctionEffect(
+      base.effects.get(target) ?? { kind: "delta", value: 0 },
+      desired.effects.get(target) ?? { kind: "delta", value: 0 },
+    );
+    if (correction === undefined) return undefined;
+    if (correction.kind === "delta" && correction.value === 0) continue;
+    effects.set(target, correction);
+  }
+  return { effects };
+}
+
+function correctionEffect(base: NumericEffect, desired: NumericEffect): NumericEffect | undefined {
+  if (base.kind === "delta") {
+    if (desired.kind === "delta") return { kind: "delta", value: desired.value - base.value };
+    return desired;
+  }
+  if (desired.kind === "assign") {
+    return desired.value === base.value ? { kind: "delta", value: 0 } : desired;
+  }
+  return undefined;
+}
+
+function lowerNumericEffects(
+  effects: SimpleNumericEffects,
+  line: number,
+  context: V2LoweringContext,
+): StatementAst[] {
+  return [...effects.effects.entries()].sort(([left], [right]) => left.localeCompare(right)).flatMap(
+    ([target, effect]) => {
+      if (effect.kind === "delta") {
+        return effect.value === 0 ? [] : [deltaAssignStatement(target, String(effect.value), line, context)];
+      }
+      return [{
+        kind: "assign" as const,
+        target,
+        expr: lowerV2Expression(String(effect.value), line, context),
+        line,
+      }];
+    },
+  );
+}
+
+function estimateStatementCount(statements: StatementAst[]): number {
+  let count = 0;
+  for (const statement of statements) {
+    count += 1;
+    if (statement.kind === "if") {
+      count += estimateStatementCount(statement.thenBody);
+      if (statement.elseBody !== undefined) count += estimateStatementCount(statement.elseBody);
+    }
+    if (statement.kind === "dispatch") {
+      count += statement.cases.reduce((sum, item) => sum + estimateStatementCount(item.body), 0);
+      if (statement.defaultBody !== undefined) count += estimateStatementCount(statement.defaultBody);
+    }
+    if (statement.kind === "switch") {
+      count += statement.cases.reduce((sum, item) => sum + estimateStatementCount(item.body), 0);
+      if (statement.defaultBody !== undefined) count += estimateStatementCount(statement.defaultBody);
+    }
+    if (statement.kind === "loop") count += estimateStatementCount(statement.body);
+  }
+  return count;
+}
+
+function estimateDispatchStatementCount(statement: DispatchStatementAst): number {
+  const bodyCost = statement.cases.reduce((sum, item) => sum + estimateStatementCount(item.body), 0);
+  const defaultCost = statement.defaultBody === undefined ? 0 : estimateStatementCount(statement.defaultBody);
+  const jumpsAfterCases = Math.max(0, statement.cases.length - (statement.defaultBody === undefined ? 1 : 0));
+  return 2 + statement.cases.length * 5 + jumpsAfterCases * 2 + bodyCost + defaultCost;
+}
+
+function lowerCyclicCounterMatch(statement: V2MatchStatementAst, context: V2LoweringContext): StatementAst[] | undefined {
+  const variable = statement.expr.trim();
+  if (!/^[A-Za-z_][\w]*$/u.test(variable)) return undefined;
+  const range = context.stateRanges.get(variable);
+  if (range?.min === undefined || range.max === undefined) return undefined;
+  if (!Number.isInteger(range.min) || !Number.isInteger(range.max)) return undefined;
+  if (range.max <= range.min || range.max - range.min > 12) return undefined;
+
+  const rows: CyclicMatchCase[] = [];
+  for (const matchCase of statement.cases) {
+    for (const valueText of matchCase.values) {
+      const value = numericLiteralTextValue(valueText);
+      if (value === undefined) return undefined;
+      const body = resolveV2ActionBody(matchCase.action, context, statement.expr, valueText);
+      if (body === undefined) return undefined;
+      const analyzed = analyzeCyclicMatchBody(body, variable, context);
+      if (analyzed === undefined) return undefined;
+      rows.push({ value, ...analyzed });
+    }
+  }
+
+  if (rows.length < 3) return undefined;
+  const sorted = rows.sort((left, right) => left.value - right.value);
+  if (sorted.length !== range.max - range.min + 1) return undefined;
+  const seen = new Set<number>();
+  for (let index = 0; index < sorted.length; index += 1) {
+    const row = sorted[index]!;
+    const value = range.min + index;
+    if (row.value !== value || seen.has(value)) return undefined;
+    seen.add(value);
+    const expectedNext = value === range.max ? range.min : value + 1;
+    if (row.next !== expectedNext) return undefined;
+  }
+
+  const targets = new Set<string>();
+  for (const row of sorted) {
+    for (const target of row.deltas.keys()) targets.add(target);
+  }
+  if (targets.size === 0) return undefined;
+
+  const plans: LinearDeltaPlan[] = [];
+  for (const target of [...targets].sort()) {
+    const values = new Map(sorted.map((row) => [row.next, row.deltas.get(target) ?? 0]));
+    const plan = fitLinearDeltaPlan(target, values);
+    if (plan === undefined) return undefined;
+    if (plan.slope !== 0 || plan.intercept !== 0 || plan.corrections.size > 0) plans.push(plan);
+  }
+  if (plans.length === 0) return undefined;
+
+  return [
+    {
+      kind: "assign",
+      target: variable,
+      expr: lowerV2Expression(`${variable} + 1`, statement.line, context),
+      line: statement.line,
+    },
+    {
+      kind: "if",
+      condition: {
+        left: { kind: "identifier", name: variable },
+        op: ">",
+        right: { kind: "number", raw: String(range.max) },
+      },
+      thenBody: [{
+        kind: "assign",
+        target: variable,
+        expr: { kind: "number", raw: String(range.min) },
+        line: statement.line,
+      }],
+      line: statement.line,
+    },
+    ...lowerEffectPlan({
+      keys: sorted.map((row) => row.next),
+      deltas: plans,
+      cellUpdates: [],
+    }, variable, statement.line, context),
+  ];
+}
+
+function resolveV2ActionBody(
+  action: V2StatementAst,
+  context: V2LoweringContext,
+  matchExpr: string,
+  matchValue?: string,
+): V2StatementAst[] | undefined {
+  if (action.kind !== "v2_invoke") return [action];
+  const rule = context.rules.get(action.name);
+  if (rule === undefined) return undefined;
+  if (rule.params.length === 0) return rule.body;
+  if (rule.params.length !== action.args.length) return undefined;
+  const args: string[] = [];
+  for (const arg of action.args) {
+    const resolved = resolveV2InvokeArg(arg, matchExpr, matchValue);
+    if (resolved === undefined) return undefined;
+    args.push(resolved);
+  }
+  return substituteV2Statements(rule.body, invokeReplacements(rule, args));
+}
+
+function analyzeCyclicMatchBody(
+  statements: V2StatementAst[],
+  variable: string,
+  context: V2LoweringContext,
+): { next: number; deltas: Map<string, number> } | undefined {
+  let next: number | undefined;
+  const deltas = new Map<string, number>();
+  for (const statement of statements) {
+    if (statement.kind === "v2_assign" && statement.target === variable) {
+      const value = numericLiteralTextValue(statement.expr);
+      if (value === undefined || next !== undefined) return undefined;
+      next = value;
+      continue;
+    }
+    if (statement.kind === "v2_update" && context.stateTypes.get(statement.target) !== "cells") {
+      const value = numericLiteralTextValue(statement.expr);
+      if (value === undefined || statement.target === variable) return undefined;
+      const delta = statement.op === "+=" ? value : -value;
+      deltas.set(statement.target, (deltas.get(statement.target) ?? 0) + delta);
+      continue;
+    }
+    return undefined;
+  }
+  return next === undefined ? undefined : { next, deltas };
 }
 
 function lowerCompactDirectionDispatch(
@@ -1745,13 +2554,13 @@ function lowerV2MatchAction(
   if (action.kind !== "v2_invoke") return lowerV2Statement(action, context);
   const rule = context.rules.get(action.name);
   if (rule !== undefined && context.specializedRules.has(rule.name)) {
-    const args = action.args.map((arg) => resolveV2InvokeArg(arg, matchExpr, matchValue));
+    const args = action.args.map((arg) => resolveV2InvokeArg(arg, matchExpr, matchValue)!);
     return lowerV2Statements(substituteV2Statements(rule.body, invokeReplacements(rule, args)), context);
   }
   const params = context.ruleParams.get(action.name) ?? [];
   const statements: StatementAst[] = [];
   for (let index = 0; index < Math.min(params.length, action.args.length); index += 1) {
-    const arg = resolveV2InvokeArg(action.args[index]!, matchExpr, matchValue);
+    const arg = resolveV2InvokeArg(action.args[index]!, matchExpr, matchValue)!;
     statements.push({
       kind: "assign",
       target: params[index]!,
@@ -1874,9 +2683,10 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
-function resolveV2InvokeArg(arg: string, matchExpr: string, matchValue: string): string {
+function resolveV2InvokeArg(arg: string, matchExpr: string, matchValue?: string): string | undefined {
   const direction = /^direction\((.+)\)$/u.exec(arg.trim());
   if (direction && direction[1]!.trim() === matchExpr.trim()) {
+    if (matchValue === undefined) return undefined;
     const delta = directionDelta(matchValue);
     if (delta !== undefined) return String(delta);
   }
@@ -1949,37 +2759,6 @@ function cellAtIndexExpression(pos: string, domain: string, context: V2LoweringC
 function isSingleDecimalDigitExpression(expr: string, context: V2LoweringContext): boolean {
   const range = context.stateRanges.get(expr.trim());
   return range?.min !== undefined && range.max !== undefined && range.min >= 0 && range.max <= 9;
-}
-
-function lineCountExpression(args: string[], context: V2LoweringContext): string | undefined {
-  if (args.length !== 2) return undefined;
-  const [mask, cell] = args as [string, string];
-  const board = boardForCells(mask, context);
-  if (board !== undefined && board.width <= 4 && board.height <= 4) {
-    return maxExpressionText([
-      sumExpressionText(lineCells(board, "row", cell).map((index) => bitHitExpression(mask, index))),
-      sumExpressionText(lineCells(board, "column", cell).map((index) => bitHitExpression(mask, index))),
-      sumExpressionText(lineCells(board, "diag-left", cell).map((index) => bitHitExpression(mask, index))),
-      sumExpressionText(lineCells(board, "diag-right", cell).map((index) => bitHitExpression(mask, index))),
-    ]);
-  }
-  const offsets = [-99, -90, -81, -72, -63, -54, -45, -36, -27, -18, -9, 0, 9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 99];
-  return sumExpressionText([
-    bitHitExpression(mask, cell),
-    ...offsets.filter((offset) => offset !== 0).map((offset) => bitHitExpression(mask, offsetExpression(cell, offset))),
-  ]);
-}
-
-function neighborCountExpression(args: string[], context: V2LoweringContext): string | undefined {
-  if (args.length !== 2) return undefined;
-  const [mask, cell] = args as [string, string];
-  const board = boardForCells(mask, context);
-  const offsets = board?.height === 1
-    ? [-1, 1]
-    : board?.width === 1
-      ? [-10, 10]
-      : [-11, -10, -9, -1, 1, 9, 10, 11];
-  return sumExpressionText(offsets.map((offset) => bitHitExpression(mask, offsetExpression(cell, offset))));
 }
 
 function boardForCells(mask: string, context: V2LoweringContext): V2BoardAst | undefined {

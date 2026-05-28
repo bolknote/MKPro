@@ -1,4 +1,4 @@
-import { CompileError, compileMKPro, formatListing } from "../core/index.ts";
+import { CompileError, compileMKPro, formatListing, formatSetupBlock } from "../core/index.ts";
 import type { CompileOptions, CompileResult } from "../core/index.ts";
 
 const DEFAULT_COMPILE_OPTIONS: CompileOptions = {
@@ -13,6 +13,7 @@ const STATUS_ID = "mk-pro-emulator-status";
 export interface BrowserCompileOutput {
   source: string;
   programText: string;
+  setupBlockText?: string;
   setupProgramText?: string;
   listing: string;
   steps: CompileResult["steps"];
@@ -56,6 +57,7 @@ export function compileForBrowser(
 ): BrowserCompileOutput {
   const result = compileMKPro(source, { ...DEFAULT_COMPILE_OPTIONS, ...options });
   const programText = formatProgramTokens(result.steps.map((step) => step.hex));
+  const setupBlockText = formatSetupBlock(result);
   const setupPrograms = result.report.preloads
     .map((preload) => preload.setupProgram)
     .filter((program): program is string => program !== undefined);
@@ -63,6 +65,7 @@ export function compileForBrowser(
   return {
     source,
     programText,
+    ...(setupBlockText === undefined ? {} : { setupBlockText }),
     ...(setupProgramText === undefined ? {} : { setupProgramText }),
     listing: formatListing(result),
     steps: result.steps,
@@ -126,9 +129,9 @@ export function installEmulatorBridge(
       detail: compiled,
     }));
     setStatus(
-      compiled.setupProgramText === undefined
+      compiled.setupBlockText === undefined && compiled.setupProgramText === undefined
         ? `MK-Pro compiled: ${compiled.report.steps}/${compiled.report.budget} cells.`
-        : `MK-Pro compiled: ${compiled.report.steps}/${compiled.report.budget} cells; setup program required.`,
+        : `MK-Pro compiled: ${compiled.report.steps}/${compiled.report.budget} cells; setup required.`,
     );
     return compiled;
   };
@@ -185,9 +188,9 @@ export function installEmulatorBridge(
       const compiled = compileForBrowser(source, compilerOptions);
       lastResult = compiled;
       setStatus(
-        compiled.setupProgramText === undefined
+        compiled.setupBlockText === undefined && compiled.setupProgramText === undefined
           ? `MK-Pro detected: ${compiled.report.steps}/${compiled.report.budget} cells. Click Write to load.`
-          : `MK-Pro detected: ${compiled.report.steps}/${compiled.report.budget} cells. Run setupProgramText once, then click Write.`,
+          : `MK-Pro detected: ${compiled.report.steps}/${compiled.report.budget} cells. Apply setup, then click Write.`,
       );
     } catch (error) {
       setStatus(errorToStatus(error), true);

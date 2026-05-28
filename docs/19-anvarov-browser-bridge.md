@@ -54,6 +54,7 @@ Useful console helpers:
 
 ```js
 MKPro.compile(source).programText
+MKPro.compile(source).setupBlockText
 MKPro.compile(source).setupProgramText
 MKProEmulator.compileField()
 MKProEmulator.writeFieldToMemory()
@@ -61,6 +62,8 @@ MKProEmulator.restoreSource()
 MKProEmulator.getLastResult()?.listing
 ```
 
+When the compiled program needs register initialization, `setupBlockText`
+contains an emulator-readable assignment block such as `` `R3=0; Rc=20` ``.
 When the optimizer selects an unusual compiler-owned preload such as `1|-00`,
 `setupProgramText` contains the setup program that must be run once before
 loading the main `programText`.
