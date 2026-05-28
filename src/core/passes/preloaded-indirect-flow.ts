@@ -209,7 +209,21 @@ function indirectFlowOp(
   };
 }
 
-const run: IrPassFn = (ops) => {
+export interface IndirectFlowOptions {
+  // When set, the `maxTarget > siteAddress` tail-only guard is dropped. This is
+  // ONLY safe for the post-layout driver, which keeps a single rewrite per
+  // re-layout and independently re-proves the selector against the fresh
+  // address map (any target whose address shifted is rejected). The in-pipeline
+  // pass rewrites many sites against one upfront address map, so it must keep
+  // the conservative guard.
+  relaxMaxTargetGuard?: boolean;
+}
+
+export function runPreloadedIndirectFlow(
+  ops: readonly IrOp[],
+  _context: { options: unknown },
+  flowOptions: IndirectFlowOptions = {},
+): { ops: IrOp[]; applied: number; optimizations: { name: string; detail: string }[]; preloads?: PreloadReport[] } {
   const registers = spareStableRegisters(ops);
   if (registers.length === 0) return { ops: [...ops], applied: 0, optimizations: [] };
 
@@ -230,7 +244,11 @@ const run: IrPassFn = (ops) => {
     }
     const target = branchTarget(op);
     const siteAddress = addresses[index]!;
-    if (target === undefined || target > siteAddress || maxTarget > siteAddress) {
+    if (
+      target === undefined ||
+      target > siteAddress ||
+      (!flowOptions.relaxMaxTargetGuard && maxTarget > siteAddress)
+    ) {
       result.push(op);
       continue;
     }
@@ -283,7 +301,9 @@ const run: IrPassFn = (ops) => {
     preloads,
     optimizations,
   };
-};
+}
+
+const run: IrPassFn = (ops, context) => runPreloadedIndirectFlow(ops, context, {});
 
 export const preloadedIndirectFlow: IrPass = {
   name: "preloaded-indirect-flow",

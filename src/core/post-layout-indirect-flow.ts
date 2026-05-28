@@ -1,7 +1,7 @@
 import { evaluateIndirectAddress } from "./indirect-addressing.ts";
 import { lowerIrToMachine, raiseMachineToIr } from "./ir.ts";
 import { cellsPerOp } from "./passes/helpers.ts";
-import { preloadedIndirectFlow } from "./passes/preloaded-indirect-flow.ts";
+import { runPreloadedIndirectFlow } from "./passes/preloaded-indirect-flow.ts";
 import type {
   AppliedOptimization,
   CompileOptions,
@@ -134,6 +134,12 @@ interface RewriteStep {
   optimizations: AppliedOptimization[];
   superDark: boolean;
   darkEntry: boolean;
+  // Number of call/branch sites converted in this step. Calls that share a
+  // single backward target (e.g. all calls to one front-hoisted helper) reuse
+  // one selector register, so they can be converted together against a single
+  // re-layout when the target sits before every site (its address is stable
+  // under the batch of one-cell shrinks).
+  converted: number;
 }
 
 function isSuperDarkRewrite(op: IndirectBranch): boolean {
@@ -186,6 +192,62 @@ function validateRewriteAt(
     darkEntry: decoded.formalAddress !== undefined
       && decoded.formalAddress.kind !== "official"
       && decoded.formalAddress.kind !== "super-dark",
+    converted: 1,
+  };
+}
+
+// Validates a whole group of rewrites that share one selector register (and
+// therefore one backward target): applies all of them at once, re-lays out, and
+// proves every member's selector still decodes to the target's final address.
+// This is sound precisely when the shared target sits before every converted
+// site, so the batch of one-cell shrinks never moves it; any group whose target
+// would shift fails the per-member decode check and is rejected.
+function validateRewriteGroup(
+  indices: readonly number[],
+  ir: readonly IrOp[],
+  numeric: readonly IrOp[],
+  targetLabel: ReadonlyArray<string | undefined>,
+  result: { ops: IrOp[]; preloads?: readonly PreloadReport[]; optimizations: AppliedOptimization[] },
+  items: readonly MachineItem[],
+): RewriteStep | undefined {
+  if (indices.length === 0) return undefined;
+  const first = result.ops[indices[0]!]!;
+  if (!isIndirectBranch(first)) return undefined;
+  const register = first.register;
+  const selectorValue = selectorValueForRegister(result.preloads ?? [], register);
+  if (selectorValue === undefined) return undefined;
+
+  const indexSet = new Set(indices);
+  const candidate = ir.map((op, i) => (indexSet.has(i) ? result.ops[i]! : op));
+  const finalLabels = labelAddresses(candidate);
+  const decoded = evaluateIndirectAddress(register, selectorValue, "flow");
+  if (decoded === undefined) return undefined;
+
+  let superDark = false;
+  for (const index of indices) {
+    const rewritten = result.ops[index]!;
+    const original = numeric[index]!;
+    if (!isIndirectBranch(rewritten) || !isDirectBranch(original)) return undefined;
+    if (rewritten.register !== register) return undefined;
+    const label = targetLabel[index];
+    if (label === undefined) return undefined;
+    const targetFinalAddress = finalLabels.get(label);
+    if (decoded.actualFlowTarget !== targetFinalAddress) return undefined; // target shifted: reject
+    if (isSuperDarkRewrite(rewritten)) superDark = true;
+  }
+
+  const candidateItems = lowerIrToMachine(candidate);
+  if (cellCount(candidateItems) >= cellCount(items)) return undefined;
+
+  return {
+    items: candidateItems,
+    preload: { register, value: selectorValue, countsAgainstProgram: false },
+    optimizations: result.optimizations,
+    superDark,
+    darkEntry: decoded.formalAddress !== undefined
+      && decoded.formalAddress.kind !== "official"
+      && decoded.formalAddress.kind !== "super-dark",
+    converted: indices.length,
   };
 }
 
@@ -197,20 +259,40 @@ function applyOneRewrite(
   const labels = labelAddresses(ir);
   const { numeric, targetLabel } = numericTargetView(ir, labels);
 
-  const result = preloadedIndirectFlow.run(numeric, { options });
+  // The post-layout driver keeps one verified step per re-layout and re-proves
+  // every selector against the fresh address map, so it can safely drop the
+  // tail-only guard and reach backward in-window calls anywhere in the program
+  // (e.g. calls to a front-hoisted shared helper).
+  const result = runPreloadedIndirectFlow(numeric, { options }, { relaxMaxTargetGuard: true });
   if (result.applied === 0) return undefined;
 
-  // Prefer a provable FA..FF super-dark rewrite (one-cell dispatch entry) over an
-  // ordinary indirect one, since it activates the densest MK-61 idiom; fall back
-  // to the first ordinary rewrite otherwise. Both go through the same proof.
-  let fallback: RewriteStep | undefined;
+  // run() reuses one selector register per distinct backward target, so several
+  // call sites can share it. Group the produced rewrites by register and try to
+  // convert each group as a unit: when the shared target sits before every site
+  // (e.g. a front-hoisted helper), the whole group is proven against one
+  // re-layout, which avoids burning a fresh spare register per round.
+  const groups = new Map<RegisterName, number[]>();
   for (let index = 0; index < result.ops.length; index += 1) {
-    const step = validateRewriteAt(index, ir, numeric, targetLabel, result, items);
-    if (step === undefined) continue;
-    if (step.superDark) return step;
-    fallback ??= step;
+    const op = result.ops[index]!;
+    const original = numeric[index]!;
+    if (!isIndirectBranch(op) || !isDirectBranch(original) || targetLabel[index] === undefined) continue;
+    const list = groups.get(op.register) ?? [];
+    list.push(index);
+    groups.set(op.register, list);
   }
-  return fallback;
+
+  // Prefer a provable FA..FF super-dark group (densest MK-61 idiom); otherwise
+  // take the group that converts the most sites, falling back to a single
+  // rewrite. Every choice goes through the same independent proof.
+  let best: RewriteStep | undefined;
+  for (const indices of groups.values()) {
+    const group = validateRewriteGroup(indices, ir, numeric, targetLabel, result, items);
+    const candidate = group ?? validateRewriteAt(indices[0]!, ir, numeric, targetLabel, result, items);
+    if (candidate === undefined) continue;
+    if (candidate.superDark) return candidate;
+    if (best === undefined || candidate.converted > best.converted) best = candidate;
+  }
+  return best;
 }
 
 const MAX_REWRITES = 64;
@@ -250,7 +332,7 @@ export function optimizePostLayoutIndirectFlow(
     if (step === undefined) break;
     current = step.items;
     preloads.push(step.preload);
-    applied += 1;
+    applied += step.converted;
     if (step.superDark) superDarkApplied += 1;
     if (step.darkEntry) darkEntryApplied += 1;
   }

@@ -8,8 +8,6 @@ program GiantsCountry {
     // The visible cave is a one-dimensional hall on each floor; the danger comes
     // from what the generated room table says is waiting there.
     pos: coord(giant_country) = 1
-    view: packed = 0
-
     strength: counter 0..99 = 40
 
     // Score values are deliberately uneven: larger monsters are not just harder
@@ -36,7 +34,7 @@ program GiantsCountry {
   }
 
   screen cave {
-    show view, strength, score
+    show tile, strength, score
   }
 
   screen warning {
@@ -66,7 +64,6 @@ program GiantsCountry {
     // empty rooms part of the attrition game.
     strength--
     tile = cell_at(pos)
-    view = tile
 
     if tile == 8 {
       hit_wall
@@ -74,12 +71,11 @@ program GiantsCountry {
     else {
       if pos in plans {
         encounter tile
-        pos++
       }
       else {
-        pos++
         show cave
       }
+      pos++
     }
 
     if strength <= 0 {

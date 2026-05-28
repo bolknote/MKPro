@@ -27,7 +27,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "raja-yoga": 84,
   "sea-battle": 67,
   "tiny-game": 24,
-  wumpus: 102,
+  wumpus: 105,
 };
 
 // pending-optimizer programs overflow the physical MK-61 address space, so
@@ -41,17 +41,13 @@ const EXAMPLE_BASELINE: Record<string, number> = {
 // Later optimizer passes have recovered part of that growth; the numbers below
 // are the current locked ceilings, not historical deltas.
 const PENDING_BASELINE: Record<string, number> = {
-  "cave-highlevel-baseline": 206,
-  "cave-treasure": 210,
-  // +1 after the display-stack-reuse soundness fix: the X-in-register reuse is
-  // no longer applied across a control-flow join where the predecessors do not
-  // all leave the same variable in X, so one display source is recalled again.
-  "giants-country": 213,
-  labyrinth777: 242,
-  teleport: 242,
-  "tic-tac-toe-4x4": 246,
-  "treasure-hunter-2": 185,
-  "wumpus-full": 112,
+  "cave-highlevel-baseline": 195,
+  "cave-treasure": 194,
+  "giants-country": 201,
+  labyrinth777: 240,
+  teleport: 236,
+  "tic-tac-toe-4x4": 243,
+  "treasure-hunter-2": 162,
 };
 
 function exampleSteps(relativePath: string, analysis: boolean): number {

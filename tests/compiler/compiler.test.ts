@@ -70,6 +70,78 @@ program ConstantFold {
     expect(result.report.optimizations.some((item) => item.name === "expression-constant-folder")).toBe(true);
   });
 
+  it("drops identity assignments before register allocation", () => {
+    const result = compileOk(`
+program IdentityAssignment {
+  state {
+    value: packed = 0
+  }
+  turn {
+    value = value
+    stop value
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "identity-assignment-elimination")).toBe(true);
+  });
+
+  it("inlines single-use constant-guarded calls before state liveness", () => {
+    const result = compileOk(`
+program GuardedCall {
+  state {
+    flag: flag = 0
+    score: counter 0..9 = 0
+  }
+  turn {
+    flag = 1
+    maybe_score
+    stop score
+  }
+  rule maybe_score {
+    if flag == 1 {
+      score++
+      flag = 0
+    }
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "constant-guarded-call-inline")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "dead-state-elimination")).toBe(true);
+    expect(result.report.registers.flag).toBeUndefined();
+  });
+
+  it("hoists one-shot turn initializers out of the loop", () => {
+    const result = compileOk(`
+program OneShotInit {
+  state {
+    entered: flag = 0
+    value: counter 0..9 = 0
+  }
+  screen main {
+    show value
+  }
+  turn {
+    if entered == 0 {
+      entered = 1
+      value++
+      show main
+    }
+    else {
+      read key
+      value += key
+      show main
+    }
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "one-shot-loop-init-hoist")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "dead-state-elimination")).toBe(true);
+    expect(result.report.registers.entered).toBeUndefined();
+  });
+
   it("folds unary numeric constants before arithmetic", () => {
     const result = compileOk(`
 program NegativeConstantFold {
@@ -1392,6 +1464,44 @@ program MaskMembershipClear {
 `, { budget: 999, analysis: true });
 
     expect(result.report.optimizations.some((item) => item.name === "cell-membership-clear-reuse")).toBe(true);
+  });
+
+  it("preserves false-branch X through a unit decrement before reuse", () => {
+    const result = compileOk(`
+program FalseBranchXReuse {
+  state {
+    target: packed = 0
+    wumpus: packed = 1
+    arrows: counter 0..5 = 2
+  }
+
+  turn {
+    read target
+    if target >= 0 {
+      stop 1
+    }
+    else {
+      shoot
+    }
+  }
+
+  rule shoot {
+    arrows--
+
+    if target + wumpus == 0 {
+      stop 2
+    }
+    else {
+      stop arrows
+    }
+  }
+}
+`, { budget: 999, analysis: true });
+
+    const optimizationNames = result.report.optimizations.map((item) => item.name);
+    expect(optimizationNames).toContain("x-preserving-false-branch");
+    expect(optimizationNames).toContain("fl-unit-decrement");
+    expect(optimizationNames).toContain("stack-current-x-scheduling");
   });
 
   it("shares identical nested guard failure branches", () => {

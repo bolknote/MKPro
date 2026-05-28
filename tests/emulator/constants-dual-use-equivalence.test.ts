@@ -73,7 +73,9 @@ describe("constants-dual-use selector merge behavioral equivalence (real emulato
 
   it("rewrites both sites and shares one selector register", () => {
     expect(result.applied).toBe(2);
-    expect(result.optimizations.some((o) => o.name === "constants-dual-use")).toBe(true);
+    // Both sites target the same head, which sits before them, so the driver
+    // converts them as one group through a single selector register in one
+    // re-layout (no second register is ever allocated and then merged away).
     const flowPreloads = result.preloads.filter((p) => p.countsAgainstProgram === false);
     // One shared selector value -> exactly one preload, two indirect branches.
     const distinctValues = new Set(flowPreloads.map((p) => p.value));

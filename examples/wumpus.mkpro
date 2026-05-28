@@ -1,9 +1,11 @@
-// Hunt the Wumpus, squeezed for the 105-cell MK-61 window.
+// Full Hunt the Wumpus, squeezed into the 105-cell MK-61 window.
 //
 // Display: room, arrows, clue.
 // Clues are prioritized: 0 = quiet, 1 = Wumpus nearby, 2 = pit draft,
-// 3 = bat rustle. Input a positive room to move there; input a negative room
-// to shoot into that room.
+// 3 = bat rustle.
+//
+// Input a positive adjacent room to move there; a non-adjacent positive room
+// only redraws the screen. Input a negative room to shoot there.
 
 program Wumpus {
   cave: board(1..20, 1..1)
@@ -13,8 +15,10 @@ program Wumpus {
     target: packed = 0
 
     wumpus: coord(cave) = random_cell(cave)
-    pit: coord(cave) = random_cell(cave)
-    bat: coord(cave) = random_cell(cave)
+    pit1: coord(cave) = random_cell(cave)
+    pit2: coord(cave) = random_cell(cave)
+    bat1: coord(cave) = random_cell(cave)
+    bat2: coord(cave) = random_cell(cave)
 
     arrows: counter 0..5 = 5
     clue: counter 0..9 = 0
@@ -37,51 +41,56 @@ program Wumpus {
     show main
     read target
 
-    if target < 0 {
-      shoot
+    if target >= 0 {
+      travel
     }
     else {
-      travel
+      shoot
     }
   }
 
   rule sense {
     clue = 0
 
-    if abs(room - wumpus) <= 1 {
-      clue = 1
+    if near_any(room, 1, bat1, bat2) >= 0 {
+      clue = 3
     }
-    else {
-      if abs(room - pit) <= 1 {
-        clue = 2
-      }
-      else {
-        if abs(room - bat) <= 1 {
-          clue = 3
-        }
-      }
+    if near_any(room, 1, pit1, pit2) >= 0 {
+      clue = 2
+    }
+    if near_any(room, 1, wumpus) >= 0 {
+      clue = 1
     }
   }
 
   rule travel {
-    room = target
-    inspect
+    if near_any(room, 1, target) >= 0 {
+      room = target
+      inspect
+    }
   }
 
   rule shoot {
-    target = abs(target)
     arrows--
 
-    if target == wumpus {
+    if target + wumpus == 0 {
       won
     }
     else {
-      if arrows <= 0 {
+      if arrows == 0 {
         dead
       }
       else {
-        show main
+        wake_wumpus
       }
+    }
+  }
+
+  rule wake_wumpus {
+    wumpus = random_cell(cave)
+
+    if room == wumpus {
+      dead
     }
   }
 
@@ -90,15 +99,12 @@ program Wumpus {
       dead
     }
     else {
-      if room == pit {
+      if eq_any(room, pit1, pit2) == 0 {
         dead
       }
       else {
-        if room == bat {
+        if eq_any(room, bat1, bat2) == 0 {
           bat_jump
-        }
-        else {
-          show main
         }
       }
     }
@@ -106,6 +112,6 @@ program Wumpus {
 
   rule bat_jump {
     room = random_cell(cave)
-    show main
+    inspect
   }
 }

@@ -40,6 +40,7 @@ import type {
   OptimizerReport,
   LayoutIrCell,
   PreloadReport,
+  ProcAst,
   ProgramAst,
   ReferenceReport,
   RegisterName,
@@ -120,17 +121,29 @@ export class CompileError extends Error {
 interface LoweringOptions {
   aggressiveTerminalDirect?: boolean;
   invertBranchOrder?: boolean;
+  // Emit shared call-and-return helpers at the FRONT of the program (behind a
+  // leading БП that skips over them) instead of the usual trailing block. This
+  // turns every helper call into a backward, in-window reference, which is the
+  // only shape the proven post-layout indirect-flow pass can rewrite into a
+  // single-cell `К ПП`. It costs one leading БП (2 cells) up front, so it only
+  // pays off for overflowing programs with several helper calls; the smallest
+  // variant is selected, so in-budget programs never adopt it.
+  hoistSharedHelpers?: boolean;
+  // Same layout idea for ordinary non-inline rule procedures. The procedure
+  // bodies stay unchanged; only their physical placement moves behind the
+  // startup skip so repeated calls can become backward one-cell indirect calls.
+  hoistProcs?: boolean;
 }
 
 export function compileMKPro(
   source: string,
   options: Partial<CompileOptions> = {},
 ): CompileResult {
-  const primary = compileMKProOnce(source, options, {});
+  const primary = compileLoweringAttempt(source, options, {});
   const candidates: Array<{ result: CompileResult; name: string; detail: string }> = [];
   const tryCandidate = (loweringOptions: LoweringOptions, name: string, detail: string): void => {
     try {
-      candidates.push({ result: compileMKProOnce(source, options, loweringOptions), name, detail });
+      candidates.push({ result: compileLoweringAttempt(source, options, loweringOptions), name, detail });
     } catch {
       // Optional late-layout variants are speculative; keep the primary result.
     }
@@ -151,6 +164,16 @@ export function compileMKPro(
     "late-layout-if-branch-order",
     "Selected aggressive terminal-if plus inverted branch-order lowering after full layout",
   );
+  tryCandidate(
+    { hoistSharedHelpers: true },
+    "hoisted-helper-indirect-layout",
+    "Hoisted shared helpers to the front so their calls become single-cell preloaded indirect flow",
+  );
+  tryCandidate(
+    { hoistSharedHelpers: true, hoistProcs: true },
+    "hoisted-proc-indirect-layout",
+    "Hoisted ordinary rule procs to the front so repeated calls become single-cell preloaded indirect flow",
+  );
 
   let best = primary;
   let selected: (typeof candidates)[number] | undefined;
@@ -166,9 +189,35 @@ export function compileMKPro(
       name: selected.name,
       detail: `${selected.detail} (${selected.result.steps.length} vs ${primary.steps.length} cells).`,
     });
-    return selected.result;
+    return finishCompileAttempt(selected.result, options.analysis === true);
   }
-  return primary;
+  return finishCompileAttempt(primary, options.analysis === true);
+}
+
+function compileLoweringAttempt(
+  source: string,
+  options: Partial<CompileOptions>,
+  loweringOptions: LoweringOptions,
+): CompileResult {
+  try {
+    return compileMKProOnce(source, options, loweringOptions);
+  } catch (error) {
+    if (options.analysis === true || !isOnlyBudgetExceeded(error)) throw error;
+    return compileMKProOnce(source, { ...options, analysis: true }, loweringOptions);
+  }
+}
+
+function isOnlyBudgetExceeded(error: unknown): error is CompileError {
+  return error instanceof CompileError &&
+    error.diagnostics.some((diagnostic) => diagnostic.level === "error" && diagnostic.code === "BUDGET_EXCEEDED") &&
+    error.diagnostics.every((diagnostic) => diagnostic.level !== "error" || diagnostic.code === "BUDGET_EXCEEDED");
+}
+
+function finishCompileAttempt(result: CompileResult, analysis: boolean): CompileResult {
+  if (analysis || !result.report.budgetReport.exceeded) return result;
+  throw new CompileError(result.diagnostics.map((diagnostic) =>
+    diagnostic.code === "BUDGET_EXCEEDED" ? { ...diagnostic, level: "error" as const } : diagnostic
+  ));
 }
 
 function compileMKProOnce(
@@ -191,7 +240,10 @@ function compileMKProOnce(
       detail: `Folded ${foldedConstants} constant expression node(s) before code generation.`,
     });
   }
+  hoistOneShotLoopInitializers(ast, optimizations);
+  inlineSingleUseConstantGuardedCalls(ast, optimizations);
   eliminateUnobservedState(ast, optimizations);
+  eliminateIdentityAssignments(ast, optimizations);
   // Value propagation can expose new dead stores and vice-versa, so run the two
   // interprocedural passes to a small fixpoint before register allocation.
   if (!opts.disableInterproceduralOpts) {
@@ -457,6 +509,326 @@ function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimiz
     name: "dead-state-elimination",
     detail: `Removed ${removable.size} unobserved state field${removable.size === 1 ? "" : "s"} before register allocation.`,
   });
+}
+
+function eliminateIdentityAssignments(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  let removed = 0;
+  const pruneStatements = (statements: StatementAst[]): StatementAst[] =>
+    statements.flatMap((statement): StatementAst[] => {
+      if (statement.kind === "assign" && isIdentityAssignment(statement)) {
+        removed += 1;
+        return [];
+      }
+      if (statement.kind === "loop") return [{ ...statement, body: pruneStatements(statement.body) }];
+      if (statement.kind === "if") {
+        const pruned: Extract<StatementAst, { kind: "if" }> = {
+          ...statement,
+          thenBody: pruneStatements(statement.thenBody),
+        };
+        if (statement.elseBody !== undefined) pruned.elseBody = pruneStatements(statement.elseBody);
+        return [pruned];
+      }
+      if (statement.kind === "switch") {
+        return [{
+          ...statement,
+          cases: statement.cases.map((switchCase) => ({ ...switchCase, body: pruneStatements(switchCase.body) })),
+          ...(statement.defaultBody === undefined ? {} : { defaultBody: pruneStatements(statement.defaultBody) }),
+        }];
+      }
+      if (statement.kind === "dispatch") {
+        return [{
+          ...statement,
+          cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: pruneStatements(dispatchCase.body) })),
+          ...(statement.defaultBody === undefined ? {} : { defaultBody: pruneStatements(statement.defaultBody) }),
+        }];
+      }
+      return [statement];
+    });
+
+  for (const entry of ast.entries) entry.body = pruneStatements(entry.body);
+  for (const proc of ast.procs) proc.body = pruneStatements(proc.body);
+  for (const block of ast.blocks) block.body = pruneStatements(block.body);
+  if (removed === 0) return;
+  optimizations.push({
+    name: "identity-assignment-elimination",
+    detail: `Removed ${removed} identity assignment${removed === 1 ? "" : "s"} before register allocation.`,
+  });
+}
+
+function hoistOneShotLoopInitializers(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  let hoisted = 0;
+  for (const entry of ast.entries) {
+    if (entry.body.length !== 1) continue;
+    const loop = entry.body[0];
+    if (loop?.kind !== "loop" || loop.body.length !== 1) continue;
+    const branch = loop.body[0];
+    if (branch?.kind !== "if" || branch.elseBody === undefined) continue;
+    if (statementsContainExactMachineCode([...branch.thenBody, ...branch.elseBody])) continue;
+
+    const guard = zeroEqualityIdentifier(branch.condition);
+    if (guard === undefined) continue;
+    const first = branch.thenBody[0];
+    if (first?.kind !== "assign" || first.target !== guard || !isNonZeroNumericLiteral(first.expr)) continue;
+    if (!stateFieldHasInitialValue(ast, guard, 0)) continue;
+
+    const usage = countVariableUsage(ast, guard);
+    if (usage.reads !== 1 || usage.writes !== 1) continue;
+
+    entry.body = [
+      ...cloneStatements(branch.thenBody.slice(1)),
+      { ...loop, body: cloneStatements(branch.elseBody) },
+    ];
+    hoisted += 1;
+  }
+  if (hoisted === 0) return;
+  optimizations.push({
+    name: "one-shot-loop-init-hoist",
+    detail: `Hoisted ${hoisted} one-shot loop initializer${hoisted === 1 ? "" : "s"} before the turn loop.`,
+  });
+}
+
+function zeroEqualityIdentifier(condition: ConditionAst): string | undefined {
+  if (condition.op !== "==") return undefined;
+  if (condition.left.kind === "identifier" && isNumericValue(condition.right, 0)) return condition.left.name;
+  if (condition.right.kind === "identifier" && isNumericValue(condition.left, 0)) return condition.right.name;
+  return undefined;
+}
+
+function isNonZeroNumericLiteral(expr: ExpressionAst): boolean {
+  const value = numericLiteralValue(expr);
+  return value !== undefined && value !== 0;
+}
+
+function stateFieldHasInitialValue(ast: ProgramAst, name: string, value: number): boolean {
+  for (const state of ast.states) {
+    const field = state.fields.find((candidate) => candidate.name === name);
+    if (field === undefined) continue;
+    return field.initial !== undefined && isNumericValue(field.initial, value);
+  }
+  return false;
+}
+
+function countVariableUsage(ast: ProgramAst, name: string): { reads: number; writes: number } {
+  let reads = 0;
+  let writes = 0;
+  const visitExpr = (expr: ExpressionAst): void => {
+    if (expr.kind === "identifier") {
+      if (expr.name === name) reads += 1;
+      return;
+    }
+    if (expr.kind === "unary") visitExpr(expr.expr);
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+    }
+    if (expr.kind === "call") {
+      for (const arg of expr.args) visitExpr(arg);
+    }
+  };
+  const visitCondition = (condition: ConditionAst): void => {
+    visitExpr(condition.left);
+    visitExpr(condition.right);
+  };
+  const visitList = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "assign") {
+        if (statement.target === name) writes += 1;
+        visitExpr(statement.expr);
+      }
+      if (statement.kind === "pause" || statement.kind === "halt" || statement.kind === "trap") visitExpr(statement.expr);
+      if (statement.kind === "ask") {
+        if (statement.target === name) writes += 1;
+        if (statement.prompt !== undefined) visitExpr(statement.prompt);
+      }
+      if (statement.kind === "input" && statement.target === name) writes += 1;
+      if (statement.kind === "show") {
+        const display = ast.displays.find((candidate) => candidate.name === statement.display);
+        if (display?.sources.includes(name)) reads += 1;
+      }
+      if (statement.kind === "core") {
+        for (const input of statement.inputs ?? []) visitExpr(input.expr);
+        for (const output of statement.outputs ?? []) {
+          if (output.target === name) writes += 1;
+        }
+      }
+      if (statement.kind === "if") {
+        visitCondition(statement.condition);
+        visitList(statement.thenBody);
+        if (statement.elseBody !== undefined) visitList(statement.elseBody);
+      }
+      if (statement.kind === "loop") visitList(statement.body);
+      if (statement.kind === "switch") {
+        visitExpr(statement.expr);
+        for (const switchCase of statement.cases) {
+          visitExpr(switchCase.value);
+          visitList(switchCase.body);
+        }
+        if (statement.defaultBody !== undefined) visitList(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          visitExpr(dispatchCase.value);
+          visitList(dispatchCase.body);
+        }
+        if (statement.defaultBody !== undefined) visitList(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visitList(entry.body);
+  for (const proc of ast.procs) visitList(proc.body);
+  for (const block of ast.blocks) visitList(block.body);
+  return { reads, writes };
+}
+
+interface ConstantGuardedProc {
+  readonly name: string;
+  readonly target: string;
+  readonly value: ExpressionAst;
+  readonly body: StatementAst[];
+}
+
+function inlineSingleUseConstantGuardedCalls(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  const callCounts = countStatementCalls(ast);
+  const candidates = new Map<string, ConstantGuardedProc>();
+  for (const proc of ast.procs) {
+    if ((callCounts.get(proc.name) ?? 0) !== 1) continue;
+    const candidate = constantGuardedProc(proc);
+    if (candidate === undefined || statementsContainExactMachineCode(candidate.body)) continue;
+    candidates.set(proc.name, candidate);
+  }
+  if (candidates.size === 0) return;
+
+  let inlined = 0;
+  const inlinedProcs = new Set<string>();
+  const visitList = (statements: StatementAst[]): StatementAst[] => {
+    const result: StatementAst[] = [];
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      const next = statements[index + 1];
+      if (statement.kind === "assign" && next?.kind === "call") {
+        const candidate = candidates.get(next.block);
+        if (
+          candidate !== undefined &&
+          statement.target === candidate.target &&
+          expressionEquals(statement.expr, candidate.value)
+        ) {
+          result.push(statement, ...cloneStatements(candidate.body));
+          inlined += 1;
+          inlinedProcs.add(candidate.name);
+          index += 1;
+          continue;
+        }
+      }
+      result.push(...visitStatement(statement));
+    }
+    return result;
+  };
+
+  const visitStatement = (statement: StatementAst): StatementAst[] => {
+    if (statement.kind === "loop") return [{ ...statement, body: visitList(statement.body) }];
+    if (statement.kind === "if") {
+      const visited: Extract<StatementAst, { kind: "if" }> = {
+        ...statement,
+        thenBody: visitList(statement.thenBody),
+      };
+      if (statement.elseBody !== undefined) visited.elseBody = visitList(statement.elseBody);
+      return [visited];
+    }
+    if (statement.kind === "switch") {
+      return [{
+        ...statement,
+        cases: statement.cases.map((switchCase) => ({ ...switchCase, body: visitList(switchCase.body) })),
+        ...(statement.defaultBody === undefined ? {} : { defaultBody: visitList(statement.defaultBody) }),
+      }];
+    }
+    if (statement.kind === "dispatch") {
+      return [{
+        ...statement,
+        cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: visitList(dispatchCase.body) })),
+        ...(statement.defaultBody === undefined ? {} : { defaultBody: visitList(statement.defaultBody) }),
+      }];
+    }
+    return [statement];
+  };
+
+  for (const entry of ast.entries) entry.body = visitList(entry.body);
+  for (const proc of ast.procs) proc.body = visitList(proc.body);
+  for (const block of ast.blocks) block.body = visitList(block.body);
+  if (inlined === 0) return;
+  ast.procs = ast.procs.filter((proc) => !inlinedProcs.has(proc.name));
+  optimizations.push({
+    name: "constant-guarded-call-inline",
+    detail: `Inlined ${inlined} single-use constant-guarded call${inlined === 1 ? "" : "s"} before state liveness.`,
+  });
+}
+
+function constantGuardedProc(proc: ProcAst): ConstantGuardedProc | undefined {
+  if (proc.body.length !== 1) return undefined;
+  const guard = proc.body[0];
+  if (guard?.kind !== "if" || guard.elseBody !== undefined || guard.condition.op !== "==") return undefined;
+  const left = guard.condition.left;
+  const right = guard.condition.right;
+  if (left.kind === "identifier" && expressionPureForSubstitution(right)) {
+    return { name: proc.name, target: left.name, value: right, body: guard.thenBody };
+  }
+  if (right.kind === "identifier" && expressionPureForSubstitution(left)) {
+    return { name: proc.name, target: right.name, value: left, body: guard.thenBody };
+  }
+  return undefined;
+}
+
+function countStatementCalls(ast: ProgramAst): Map<string, number> {
+  const counts = new Map<string, number>();
+  const add = (name: string): void => {
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  };
+  const visitList = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "call") add(statement.block);
+      if (statement.kind === "loop") visitList(statement.body);
+      if (statement.kind === "if") {
+        visitList(statement.thenBody);
+        if (statement.elseBody !== undefined) visitList(statement.elseBody);
+      }
+      if (statement.kind === "switch") {
+        for (const switchCase of statement.cases) visitList(switchCase.body);
+        if (statement.defaultBody !== undefined) visitList(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visitList(dispatchCase.body);
+        if (statement.defaultBody !== undefined) visitList(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visitList(entry.body);
+  for (const proc of ast.procs) visitList(proc.body);
+  for (const block of ast.blocks) visitList(block.body);
+  return counts;
+}
+
+function statementsContainExactMachineCode(statements: StatementAst[]): boolean {
+  for (const statement of statements) {
+    if (statement.kind === "core" || statement.kind === "egg") return true;
+    if (statement.kind === "loop" && statementsContainExactMachineCode(statement.body)) return true;
+    if (statement.kind === "if") {
+      if (statementsContainExactMachineCode(statement.thenBody)) return true;
+      if (statement.elseBody !== undefined && statementsContainExactMachineCode(statement.elseBody)) return true;
+    }
+    if (statement.kind === "switch") {
+      if (statement.cases.some((switchCase) => statementsContainExactMachineCode(switchCase.body))) return true;
+      if (statement.defaultBody !== undefined && statementsContainExactMachineCode(statement.defaultBody)) return true;
+    }
+    if (statement.kind === "dispatch") {
+      if (statement.cases.some((dispatchCase) => statementsContainExactMachineCode(dispatchCase.body))) return true;
+      if (statement.defaultBody !== undefined && statementsContainExactMachineCode(statement.defaultBody)) return true;
+    }
+  }
+  return false;
+}
+
+function cloneStatements(statements: StatementAst[]): StatementAst[] {
+  return structuredClone(statements);
 }
 
 function hoistCommonBranchTails(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
@@ -1031,6 +1403,16 @@ class EmitContext {
 
   compileProgram(): void {
     const main = this.ast.entries[0]!;
+    const hoistHelpers = this.loweringOptions.hoistSharedHelpers === true;
+    const hoistProcs = this.loweringOptions.hoistProcs === true;
+    const hoist = hoistHelpers || hoistProcs;
+    // With hoisting, cell 00 is a БП that skips over front-placed helpers/procs;
+    // execution resumes at the entry label that now follows them.
+    if (hoist) this.emitJump(0x51, "БП", main.name, "skip hoisted shared helpers");
+    const leadingJumpItems = hoist ? this.items.length : 0;
+
+    if (hoistProcs) this.compileProcedures();
+
     this.emitLabel(main.name);
     this.compileInitialState();
     this.compileInitialStores();
@@ -1039,14 +1421,7 @@ class EmitContext {
       this.emitOp(0x50, "С/П", "implicit final stop");
     }
 
-    for (const proc of this.ast.procs) {
-      if (this.inlineProcNames.has(proc.name)) continue;
-      this.emitLabel(proc.name);
-      this.compileStatements(proc.body);
-      if (!this.statementsTerminate(proc.body)) {
-        this.emitOp(0x52, "В/О", "implicit return from proc");
-      }
-    }
+    if (!hoistProcs) this.compileProcedures();
 
     for (const block of this.ast.blocks) {
       if (block.mode === "inline") continue;
@@ -1057,7 +1432,28 @@ class EmitContext {
       }
     }
 
+    const helperStart = this.items.length;
     this.compileRuntimeHelpers();
+    // Shared helpers can only be discovered while compiling the body (e.g.
+    // near_any registers its helper lazily), so they are emitted last and then
+    // moved to the front. Helpers are reached exclusively through calls/jumps
+    // and never by fall-through, so relocating the block behind the leading БП
+    // preserves control flow while making every call site a backward reference.
+    if (hoistHelpers && this.items.length > helperStart) {
+      const helpers = this.items.splice(helperStart);
+      this.items.splice(leadingJumpItems, 0, ...helpers);
+    }
+  }
+
+  private compileProcedures(): void {
+    for (const proc of this.ast.procs) {
+      if (this.inlineProcNames.has(proc.name)) continue;
+      this.emitLabel(proc.name);
+      this.compileStatements(proc.body);
+      if (!this.statementsTerminate(proc.body)) {
+        this.emitOp(0x52, "В/О", "implicit return from proc");
+      }
+    }
   }
 
   private compileRuntimeHelpers(): void {
@@ -1558,6 +1954,9 @@ class EmitContext {
     const thenTerminates = this.statementsTerminate(selected.thenBody);
     const endLabel = thenTerminates ? undefined : this.freshLabel("if_end");
     const fallthroughIdentifier = this.nearAnyFallthroughCandidate(selected.condition, selected.thenBody);
+    const falseBranchIdentifier = selected.elseBody === undefined
+      ? undefined
+      : this.falseBranchCurrentXCandidate(selected.condition, selected.elseBody);
     this.compileCondition(selected.condition, falseLabel, line);
     if (fallthroughIdentifier !== undefined) {
       this.currentXVariable = fallthroughIdentifier;
@@ -1567,6 +1966,14 @@ class EmitContext {
     if (selected.elseBody) {
       if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", line);
       this.emitLabel(falseLabel);
+      if (falseBranchIdentifier !== undefined) {
+        this.currentXVariable = falseBranchIdentifier;
+        this.currentXKnownZero = false;
+        this.optimizations.push({
+          name: "x-preserving-false-branch",
+          detail: `Preserved ${falseBranchIdentifier} in X across the false branch of the zero-test at line ${line}.`,
+        });
+      }
       this.compileStatements(selected.elseBody);
       if (endLabel !== undefined) this.emitLabel(endLabel);
       if (thenTerminates) {
@@ -1607,6 +2014,35 @@ class EmitContext {
     return normalized.expr.name;
   }
 
+  private falseBranchCurrentXCandidate(
+    condition: ConditionAst,
+    elseBody: StatementAst[],
+  ): string | undefined {
+    const normalized = normalizeZeroComparison(condition);
+    if (
+      normalized === undefined ||
+      !canTestAgainstZeroDirectly(normalized.op) ||
+      normalized.expr.kind !== "identifier"
+    ) {
+      return undefined;
+    }
+
+    const preserved = normalized.expr.name;
+    const statements = this.inlineStatementPrefix(elseBody);
+    let index = 0;
+    const first = statements[index];
+    if (
+      first?.kind === "assign" &&
+      first.target !== preserved &&
+      isUnitDecrementExpression(first.target, first.expr)
+    ) {
+      const register = this.allocation.registers[first.target];
+      if (register !== undefined && flOpcode(register) !== undefined) index += 1;
+    }
+
+    return this.statementStartsWithCurrentXUse(statements[index], preserved) ? preserved : undefined;
+  }
+
   private firstInlineStatement(statements: StatementAst[], seen = new Set<string>()): StatementAst | undefined {
     const first = statements[0];
     if (first?.kind !== "call") return first;
@@ -1615,6 +2051,42 @@ class EmitContext {
     if (proc === undefined) return first;
     seen.add(first.block);
     return this.firstInlineStatement(proc.body, seen);
+  }
+
+  private inlineStatementPrefix(statements: StatementAst[], seen = new Set<string>()): StatementAst[] {
+    const first = statements[0];
+    if (first?.kind !== "call") return statements;
+    if (!this.inlineProcNames.has(first.block) || seen.has(first.block)) return statements;
+    const proc = this.ast.procs.find((candidate) => candidate.name === first.block);
+    if (proc === undefined) return statements;
+    seen.add(first.block);
+    return this.inlineStatementPrefix(proc.body, seen);
+  }
+
+  private statementStartsWithCurrentXUse(statement: StatementAst | undefined, variable: string): boolean {
+    if (statement === undefined) return false;
+    if (statement.kind === "if") return this.conditionCanUseCurrentX(statement.condition, variable);
+    if (statement.kind === "assign") return this.expressionCanUseCurrentX(statement.expr, variable);
+    return false;
+  }
+
+  private conditionCanUseCurrentX(condition: ConditionAst, variable: string): boolean {
+    const selected = selectCheaperEquivalentCondition(
+      condition,
+      this.ast,
+      new Set(Object.keys(this.allocation.constants)),
+    ).condition;
+    const normalized = normalizeZeroComparison(selected);
+    return normalized !== undefined && this.expressionCanUseCurrentX(normalized.expr, variable);
+  }
+
+  private expressionCanUseCurrentX(expr: ExpressionAst, variable: string): boolean {
+    return expr.kind === "binary" &&
+      (expr.op === "+" || expr.op === "*") &&
+      (
+        (expr.left.kind === "identifier" && expr.left.name === variable && isSimpleStackLoad(expr.right)) ||
+        (expr.right.kind === "identifier" && expr.right.name === variable && isSimpleStackLoad(expr.left))
+      );
   }
 
   private compileNestedGuardSharedFailure(
@@ -2774,7 +3246,12 @@ class EmitContext {
     const opcode = flOpcode(register);
     if (opcode === undefined) return false;
     const after = this.freshLabel("fl_decrement_done");
+    const preservedXVariable = this.currentXVariable === statement.target ? undefined : this.currentXVariable;
+    const preservedXKnownZero = this.currentXKnownZero;
     this.emitJump(opcode, getOpcode(opcode).name, after, `decrement ${statement.target}`, statement.line);
+    this.currentXVariable = preservedXVariable;
+    this.currentXKnownZero = preservedXKnownZero;
+    this.machineEntryOpen = false;
     this.emitLabel(after);
     this.optimizations.push({
       name: "fl-unit-decrement",

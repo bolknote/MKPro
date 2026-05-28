@@ -47,10 +47,10 @@ function superDarkProgram(): MachineItem[] {
 
 const options = { delivery: "manual" as const, budget: 999999, analysis: true };
 
-function run(codes: number[], preload?: { register: string; value: string }): { display: string; stopped: boolean } {
+function run(codes: number[], preloads: readonly { register: string; value: string }[] = []): { display: string; stopped: boolean } {
   const calc = new MK61();
   calc.loadProgram(codes);
-  if (preload) calc.setRegister(preload.register, mk61HexLiteral(preload.value));
+  for (const preload of preloads) calc.setRegister(preload.register, mk61HexLiteral(preload.value));
   calc.pressSequence(["В/О", "С/П"]);
   const stable = calc.runUntilStable({ maxFrames: 400, stableFrames: 5 });
   return { display: calc.displayText().trim(), stopped: stable.stopped };
@@ -78,17 +78,16 @@ describe("super-dark dispatch behavioral equivalence (real emulator)", () => {
   const result = optimizePostLayoutIndirectFlow(program, options, 0);
 
   it("selects a proven FF super-dark rewrite", () => {
-    expect(result.applied).toBe(1);
+    expect(result.applied).toBeGreaterThanOrEqual(1);
     expect(result.optimizations.some((o) => o.name === "preloaded-super-dark-flow")).toBe(true);
-    const preload = result.preloads[0]!;
+    const preload = result.preloads.find((candidate) => candidate.value.toUpperCase() === "FF")!;
     expect(preload.value.toUpperCase()).toBe("FF");
     expect(result.items.some((item) => item.kind === "op" && item.opcode >= 0x80 && item.opcode <= 0x8e)).toBe(true);
   });
 
   it("behaves identically before and after on the emulator", () => {
     const before = run(lower(program));
-    const preload = result.preloads[0]!;
-    const after = run(lower(result.items), { register: preload.register, value: preload.value });
+    const after = run(lower(result.items), result.preloads);
 
     expect(before.stopped).toBe(true);
     expect(before.display).toContain("7");
