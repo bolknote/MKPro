@@ -19,6 +19,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "dangerous-loading": 89,
   dungeon: 94,
   "fox-hunt-100": 99,
+  "fox-hunt-mk61": 99,
   "game-100-pig": 93,
   human: 28,
   lunar: 51,
@@ -46,7 +47,7 @@ const PENDING_BASELINE: Record<string, number> = {
   "giants-country": 201,
   labyrinth777: 240,
   teleport: 236,
-  "tic-tac-toe-4x4": 243,
+  "tic-tac-toe-4x4": 242,
   "treasure-hunter-2": 162,
 };
 

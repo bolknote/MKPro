@@ -4624,8 +4624,10 @@ class EmitContext {
       this.diagnostics.push(buildDiagnostic("error", `No register allocated for ${name}`, sourceLine));
       return;
     }
+    const knownZero = this.currentXKnownZero;
     this.emitOp(0x40 + registerIndex(register), `X->П ${register}`, comment, sourceLine, raw);
     this.currentXVariable = name;
+    this.currentXKnownZero = knownZero;
   }
 
   private emitRecall(name: string, comment?: string, sourceLine?: number): void {

@@ -109,6 +109,8 @@ All top-level `examples/*.mkpro` programs are runnable MK-Pro programs. They cov
 - `examples/dangerous-loading.mkpro`: ferry/loading game whose natural default
   command branch compiles smaller than the original.
 - `examples/dungeon.mkpro`: Lord_BSS corridor dungeon port that fits the original.
+- `examples/fox-hunt-mk61.mkpro`: MonatkoDenis MK-61 Fox Hunt port with a
+  generated setup program and row/column/diagonal bearing clues.
 - `examples/game-100-pig.mkpro`: Anvarov dice game port that fits the original.
 - `examples/minesweeper-9x7.mkpro`: Lord_BSS Sapper port whose 9x7 paper-board
   probes match the original 104-cell listing.

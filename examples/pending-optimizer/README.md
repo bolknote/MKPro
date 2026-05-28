@@ -16,7 +16,7 @@ Current `--analysis` sizes, measured against the local reference listings:
 | `giants-country.mkpro` | 201 | 105 | remaining encounter dispatch and plan bitset lowerers |
 | `labyrinth777.mkpro` | 240 | 105 | room inspection and local-jumper dispatch |
 | `teleport.mkpro` | 236 | 105 | station masks and vault/guard flow |
-| `tic-tac-toe-4x4.mkpro` | 243 | 105 | 4x4 line-count state representation |
+| `tic-tac-toe-4x4.mkpro` | 242 | 105 | 4x4 line-count state representation |
 | `treasure-hunter-2.mkpro` | 162 | 105 | floor-plan display/state lowerer |
 
 Prototype notes:

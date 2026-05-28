@@ -1,0 +1,54 @@
+reference monatkodenis_fox_hunt_mk61
+
+// Based on the MK-61 variant of "Fox Hunt" restored from MonatkoDenis's blog.
+// Nine foxes are hidden on a 10x10 board. The player enters a two-digit cell
+// coordinate and receives the number of foxes visible on the same row, column,
+// or diagonal.
+
+program FoxHuntMK61 {
+  field: board(0..9, 0..9)
+
+  state {
+    cell: coord(field)
+    foxes: cells(field) = random()
+    remaining_foxes: counter 1..9 = 9
+    bearing: counter 0..9 = 0
+  }
+
+  screen report {
+    show bearing
+  }
+
+  rule all_found {
+    stop -8
+  }
+
+  turn {
+    read cell
+
+    if cell in foxes {
+      found_fox
+    }
+    else {
+      scan_from_cell
+    }
+
+    show report
+  }
+
+  rule found_fox {
+    foxes -= cell
+    remaining_foxes--
+
+    if remaining_foxes <= 0 {
+      all_found
+    }
+    else {
+      bearing = -remaining_foxes
+    }
+  }
+
+  rule scan_from_cell {
+    bearing = line_count(foxes, cell)
+  }
+}
