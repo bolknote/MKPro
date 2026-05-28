@@ -18,7 +18,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "cave-sketch": 85,
   "dangerous-loading": 89,
   dungeon: 94,
-  "fox-hunt-100": 99,
+  "fox-hunt-100": 97,
   "fox-hunt-mk61": 88,
   "game-100-pig": 93,
   human: 28,
