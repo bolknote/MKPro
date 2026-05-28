@@ -202,6 +202,13 @@ function compileMKProOnce(
     }
   }
   hoistCommonBranchTails(ast, optimizations);
+  if (!opts.disableInterproceduralOpts) {
+    for (let pass = 0; pass < 4; pass += 1) {
+      const propagated = propagateValuesInterprocedurally(ast, optimizations);
+      const removed = eliminateInterproceduralDeadStores(ast, optimizations);
+      if (propagated === 0 && removed === 0) break;
+    }
+  }
   validateSemanticDomains(ast, diagnostics);
   validateV2Intent(ast, diagnostics);
   validateReservedInternalNames(ast, diagnostics);
@@ -1700,6 +1707,10 @@ class EmitContext {
   ): boolean {
     const present = matchBitMembershipCondition(statement.condition);
     if (present !== undefined && present.collection.kind === "identifier" && statement.elseBody !== undefined) {
+      const setRun = this.membershipSetRunPrefix(statement.elseBody, present);
+      if (setRun !== undefined) {
+        return this.compileMembershipSetRunReuseForPresentCondition(statement, present, setRun, line);
+      }
       const setPrefix = this.membershipSetPrefix(statement.elseBody, present);
       if (setPrefix !== undefined) {
         return this.compileMembershipSetReuseForPresentCondition(statement, present, setPrefix, line);
@@ -1708,6 +1719,10 @@ class EmitContext {
 
     const absent = matchBitAbsenceCondition(statement.condition);
     if (absent === undefined || absent.collection.kind !== "identifier") return false;
+    const setRun = this.membershipSetRunPrefix(statement.thenBody, absent);
+    if (setRun !== undefined) {
+      return this.compileMembershipSetRunReuseForAbsentCondition(statement, absent, setRun, line);
+    }
     const setPrefix = this.membershipSetPrefix(statement.thenBody, absent);
     if (setPrefix === undefined) return false;
     return this.compileMembershipSetReuseForAbsentCondition(statement, absent, setPrefix, line);
@@ -1783,6 +1798,86 @@ class EmitContext {
     return true;
   }
 
+  private compileMembershipSetRunReuseForPresentCondition(
+    statement: Extract<StatementAst, { kind: "if" }>,
+    membership: BitMembershipCondition,
+    setRun: {
+      sets: Array<{
+        set: Extract<StatementAst, { kind: "assign" }>;
+        collection: ExpressionAst;
+      }>;
+      tail: StatementAst[];
+    },
+    line: number,
+  ): boolean {
+    const scratch = bitMaskScratchName(setRun.sets[0]!.set);
+    if (this.allocation.registers[scratch] === undefined) return false;
+
+    const falseLabel = this.freshLabel("if_false");
+    const thenTerminates = this.statementsTerminate(statement.thenBody);
+    const endLabel = thenTerminates ? undefined : this.freshLabel("if_end");
+
+    this.emitMembershipMaskTest(membership, scratch, line);
+    this.emitJump(0x5e, "F x=0", falseLabel, "false branch for !=", line);
+    this.compileStatements(statement.thenBody);
+    if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", line);
+    this.emitLabel(falseLabel);
+    for (const { set, collection } of setRun.sets) {
+      this.emitBitSetCollectionWithScratch(collection, set, scratch);
+    }
+    this.compileStatements(setRun.tail);
+    if (endLabel !== undefined) this.emitLabel(endLabel);
+
+    const targets = setRun.sets.map(({ set }) => set.target).join(", ");
+    this.optimizations.push({
+      name: "cell-membership-mask-run-reuse",
+      detail: `Reused the failed membership mask when setting ${targets} after line ${line}.`,
+    });
+    return true;
+  }
+
+  private compileMembershipSetRunReuseForAbsentCondition(
+    statement: Extract<StatementAst, { kind: "if" }>,
+    membership: BitMembershipCondition,
+    setRun: {
+      sets: Array<{
+        set: Extract<StatementAst, { kind: "assign" }>;
+        collection: ExpressionAst;
+      }>;
+      tail: StatementAst[];
+    },
+    line: number,
+  ): boolean {
+    const scratch = bitMaskScratchName(setRun.sets[0]!.set);
+    if (this.allocation.registers[scratch] === undefined) return false;
+
+    const falseLabel = this.freshLabel("if_false");
+    const thenTerminates = this.statementsTerminate(statement.thenBody);
+    const endLabel = statement.elseBody !== undefined && !thenTerminates ? this.freshLabel("if_end") : undefined;
+
+    this.emitMembershipMaskTest(membership, scratch, line);
+    this.emitJump(0x57, "F x!=0", falseLabel, "false branch for ==", line);
+    for (const { set, collection } of setRun.sets) {
+      this.emitBitSetCollectionWithScratch(collection, set, scratch);
+    }
+    this.compileStatements(setRun.tail);
+    if (statement.elseBody !== undefined) {
+      if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", line);
+      this.emitLabel(falseLabel);
+      this.compileStatements(statement.elseBody);
+      if (endLabel !== undefined) this.emitLabel(endLabel);
+    } else {
+      this.emitLabel(falseLabel);
+    }
+
+    const targets = setRun.sets.map(({ set }) => set.target).join(", ");
+    this.optimizations.push({
+      name: "cell-membership-mask-run-reuse",
+      detail: `Reused the failed membership mask when setting ${targets} after line ${line}.`,
+    });
+    return true;
+  }
+
   private emitMembershipMaskTest(
     membership: BitMembershipCondition,
     scratch: string,
@@ -1800,7 +1895,15 @@ class EmitContext {
     set: Extract<StatementAst, { kind: "assign" }>,
     scratch: string,
   ): void {
-    this.compileExpression(membership.collection);
+    this.emitBitSetCollectionWithScratch(membership.collection, set, scratch);
+  }
+
+  private emitBitSetCollectionWithScratch(
+    collection: ExpressionAst,
+    set: Extract<StatementAst, { kind: "assign" }>,
+    scratch: string,
+  ): void {
+    this.compileExpression(collection);
     this.emitRecall(scratch, "reuse cell bit mask", set.line);
     this.emitOp(0x38, "К ∨", "bit_set with reused mask", set.line);
     this.emitStore(set.target, `set ${set.target}`, set.line);
@@ -1844,6 +1947,36 @@ class EmitContext {
     return {
       set,
       tail: [...proc.body.slice(1), ...statements.slice(1)],
+    };
+  }
+
+  private membershipSetRunPrefix(
+    statements: StatementAst[],
+    membership: BitMembershipCondition,
+  ): {
+    sets: Array<{
+      set: Extract<StatementAst, { kind: "assign" }>;
+      collection: ExpressionAst;
+    }>;
+    tail: StatementAst[];
+  } | undefined {
+    const sets: Array<{
+      set: Extract<StatementAst, { kind: "assign" }>;
+      collection: ExpressionAst;
+    }> = [];
+    let index = 0;
+    while (index < statements.length) {
+      const statement = statements[index];
+      if (statement?.kind !== "assign") break;
+      const matched = matchAnyBitSetAssignment(statement, membership.item);
+      if (matched === undefined) break;
+      sets.push({ set: statement, collection: matched.collection });
+      index += 1;
+    }
+    if (sets.length < 2) return undefined;
+    return {
+      sets,
+      tail: statements.slice(index),
     };
   }
 
@@ -4749,8 +4882,10 @@ function collectBitMaskScratchVariables(ast: ProgramAst, variables: Set<string>)
       if (statement.kind === "assign" && next?.kind === "assign" && isReusableBitSetPair(statement, next)) {
         variables.add(bitMaskScratchName(statement));
       }
-      if (statement.kind === "if" && isReusableMembershipSet(statement)) {
-        variables.add(bitMaskScratchName(statement));
+      if (statement.kind === "if") {
+        const runScratch = membershipSetRunScratchName(statement);
+        if (runScratch !== undefined) variables.add(runScratch);
+        else if (isReusableMembershipSet(statement)) variables.add(bitMaskScratchName(statement));
       }
       if (statement.kind === "loop") visit(statement.body);
       if (statement.kind === "if") {
@@ -6267,6 +6402,21 @@ function matchBitSetAssignment(statement: Extract<StatementAst, { kind: "assign"
   };
 }
 
+function matchAnyBitSetAssignment(
+  statement: Extract<StatementAst, { kind: "assign" }>,
+  item: ExpressionAst,
+): BitSetAssignment | undefined {
+  const expr = statement.expr;
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_set" || expr.args.length !== 2) return undefined;
+  const collection = expr.args[0]!;
+  if (collection.kind !== "identifier" || statement.target !== collection.name) return undefined;
+  if (!expressionEquals(expr.args[1]!, item)) return undefined;
+  return {
+    collection,
+    item: expr.args[1]!,
+  };
+}
+
 function isReusableBitSetPair(
   first: Extract<StatementAst, { kind: "assign" }>,
   second: Extract<StatementAst, { kind: "assign" }>,
@@ -6288,6 +6438,39 @@ function isReusableMembershipSet(statement: Extract<StatementAst, { kind: "if" }
   if (absent === undefined) return false;
   const first = statement.thenBody[0];
   return first?.kind === "assign" && isBitSetAssignment(first, absent);
+}
+
+function isReusableMembershipSetRun(statement: Extract<StatementAst, { kind: "if" }>): boolean {
+  return membershipSetRunScratchName(statement) !== undefined;
+}
+
+function membershipSetRunScratchName(statement: Extract<StatementAst, { kind: "if" }>): string | undefined {
+  const present = matchBitMembershipCondition(statement.condition);
+  if (present !== undefined && statement.elseBody !== undefined) {
+    const first = statement.elseBody[0];
+    if (first?.kind !== "assign") return undefined;
+    let count = matchAnyBitSetAssignment(first, present.item) === undefined ? 0 : 1;
+    if (count === 0) return undefined;
+    for (const inner of statement.elseBody) {
+      if (inner === first) continue;
+      if (inner.kind !== "assign" || matchAnyBitSetAssignment(inner, present.item) === undefined) break;
+      count += 1;
+    }
+    if (count >= 2) return bitMaskScratchName(first);
+  }
+
+  const absent = matchBitAbsenceCondition(statement.condition);
+  if (absent === undefined) return undefined;
+  const first = statement.thenBody[0];
+  if (first?.kind !== "assign") return undefined;
+  let count = matchAnyBitSetAssignment(first, absent.item) === undefined ? 0 : 1;
+  if (count === 0) return undefined;
+  for (const inner of statement.thenBody) {
+    if (inner === first) continue;
+    if (inner.kind !== "assign" || matchAnyBitSetAssignment(inner, absent.item) === undefined) break;
+    count += 1;
+  }
+  return count >= 2 ? bitMaskScratchName(first) : undefined;
 }
 
 function bitMaskScratchName(statement: StatementAst): string {

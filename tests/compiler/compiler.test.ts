@@ -1310,4 +1310,67 @@ program DefaultBudget {
 `);
     expect(result.report.budget).toBe(105);
   });
+
+  it("removes dead stores across rule calls before register allocation", () => {
+    const source = `
+program DseAcrossCall {
+  state {
+    shown: packed = 0
+    scratch: packed = 0
+  }
+
+  screen main {
+    show shown
+  }
+
+  rule overwrite {
+    scratch = 2
+    shown = scratch
+  }
+
+  turn {
+    scratch = 1
+    overwrite
+    show main
+  }
+}
+`;
+    const optimized = compileOk(source, { budget: 999, analysis: true });
+    const unoptimized = compileOk(source, { budget: 999, analysis: true, disableInterproceduralOpts: true });
+
+    expect(optimized.report.optimizations.some((item) => item.name === "interprocedural-dead-store")).toBe(true);
+    expect(optimized.report.steps).toBeLessThan(unoptimized.report.steps);
+  });
+
+  it("reuses one failed membership mask for adjacent set updates", () => {
+    const result = compileOk(`
+program MembershipMaskRun {
+  grid: board(1..4, 1..4)
+
+  state {
+    cell: coord(grid)
+    player_marks: cells(grid)
+    occupied: cells(grid)
+  }
+
+  screen board {
+    show cell, player_marks, occupied
+  }
+
+  turn {
+    read cell
+    if cell in occupied {
+      show board
+    }
+    else {
+      player_marks += cell
+      occupied += cell
+      show board
+    }
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "cell-membership-mask-run-reuse")).toBe(true);
+  });
 });

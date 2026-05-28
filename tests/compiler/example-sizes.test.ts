@@ -27,6 +27,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "raja-yoga": 84,
   "sea-battle": 67,
   "tiny-game": 24,
+  wumpus: 102,
 };
 
 // pending-optimizer programs overflow the physical MK-61 address space, so
@@ -37,13 +38,15 @@ const EXAMPLE_BASELINE: Record<string, number> = {
 // grew slightly when the number-entry concatenation bug was fixed: a read/digit
 // immediately followed by another literal now keeps a finalizing store or a В↑
 // separator so the two values no longer merge on the MK-61 (e.g. 1 then 3 -> 13).
+// Later optimizer passes have recovered part of that growth; the numbers below
+// are the current locked ceilings, not historical deltas.
 const PENDING_BASELINE: Record<string, number> = {
-  "cave-highlevel-baseline": 253,
-  "cave-treasure": 294,
+  "cave-highlevel-baseline": 250,
+  "cave-treasure": 291,
   "giants-country": 212,
   labyrinth777: 242,
   teleport: 242,
-  "tic-tac-toe-4x4": 292,
+  "tic-tac-toe-4x4": 278,
   "treasure-hunter-2": 185,
 };
 
