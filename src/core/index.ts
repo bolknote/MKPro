@@ -12,6 +12,14 @@ export {
   formatAddress,
 } from "./opcodes.ts";
 export {
+  formalAddressInfo,
+  formalAddressOrdinal,
+  formatFormalAddressOpcode,
+  formatOfficialAddress,
+  officialAddressToOpcode,
+  parseFormalAddressOpcode,
+} from "./formal-address.ts";
+export {
   formatAll,
   formatExplain,
   formatHex,

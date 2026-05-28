@@ -49,6 +49,11 @@ export const MK61_PROFILE: MachineProfile = {
       detail: "К БП/К ПП/К x?0 indirect flow commands are available to the optimizer.",
     },
     {
+      id: "indirect-memory",
+      source: "machine",
+      detail: "К X->П/К П->X indirect memory commands are available when a selector register is proved live.",
+    },
+    {
       id: "code-data-overlay",
       source: "machine",
       detail: "Address operands, constants, opcodes, and display bytes may share cells after conflict checks.",

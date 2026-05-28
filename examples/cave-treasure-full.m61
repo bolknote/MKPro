@@ -1,4 +1,4 @@
-reference cave_treasure_full
+reference kei_treasure_cave
 
 // The named compactness reference for Cave Treasure. It intentionally stays at
 // game-rule level so compiler changes can be judged against the same source.

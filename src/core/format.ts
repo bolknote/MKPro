@@ -9,7 +9,7 @@ export function formatListing(result: CompileResult): string {
     "------+------+-------------------------+----------------",
   ];
   for (const step of result.steps) {
-    const address = formatAddress(step.address).padStart(4, " ");
+    const address = formatStepAddress(step.address).padStart(4, " ");
     const command = step.mnemonic.padEnd(23, " ");
     const comments = [step.comment]
       .filter((value): value is string => Boolean(value))
@@ -23,10 +23,18 @@ export function formatHex(result: CompileResult): string {
   const rows: string[] = [];
   for (let i = 0; i < result.steps.length; i += HEX_COLUMNS) {
     const chunk = result.steps.slice(i, i + HEX_COLUMNS).map((step) => step.hex);
-    const address = formatAddress(i).padStart(2, "0");
+    const address = formatStepAddress(i).padStart(2, "0");
     rows.push(`${address}: ${chunk.join(" ")}`);
   }
   return rows.join("\n");
+}
+
+function formatStepAddress(address: number): string {
+  try {
+    return formatAddress(address);
+  } catch {
+    return `>${address.toString(16).toUpperCase()}`;
+  }
 }
 
 export function formatJson(result: CompileResult): string {

@@ -77,6 +77,8 @@ const run: IrPassFn = (ops) => {
         const targetMeta: IrTargetMeta = {};
         if (op.targetMeta.comment !== undefined) targetMeta.comment = op.targetMeta.comment;
         if (op.targetMeta.sourceLine !== undefined) targetMeta.sourceLine = op.targetMeta.sourceLine;
+        if (op.targetMeta.roles !== undefined) targetMeta.roles = [...op.targetMeta.roles];
+        if (op.targetMeta.formalOpcode !== undefined) targetMeta.formalOpcode = op.targetMeta.formalOpcode;
         result.push({ ...op, target: replacement, targetMeta });
         continue;
       }

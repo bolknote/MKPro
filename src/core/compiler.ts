@@ -1,12 +1,16 @@
 import {
   addressToOpcode,
-  codeToAddress,
   findOpcodeName,
   formatAddress,
   getOpcode,
   registerFromText,
   registerIndex,
 } from "./opcodes.ts";
+import {
+  formalAddressInfo,
+  formatFormalAddressOpcode,
+  parseFormalAddressOpcode,
+} from "./formal-address.ts";
 import { lowerIrToLayout, raiseLayoutToIr } from "./ir.ts";
 import { normalizeV2ExpressionText, parseExpression, parseProgram } from "./parser.ts";
 import { runIrPasses } from "./passes/index.ts";
@@ -151,8 +155,13 @@ export function compileM61(
 
   context.compileProgram();
   const optimized = optimizeItems(context.items, opts, optimizations);
+  appendOptimizationCandidateReports(optimizations, candidates);
   const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, machineProfile);
   const largestBlocks = summarizeBlocks(optimized);
+  const referenceResult = ast.reference === undefined
+    ? undefined
+    : buildReferenceReport(ast.reference, steps.length, opts.budget);
+  if (referenceResult?.warning !== undefined) warnings.push(referenceResult.warning);
 
   if (steps.length > opts.budget) {
     diagnostics.push({
@@ -177,6 +186,7 @@ export function compileM61(
     delivery: opts.delivery,
     optimizer: buildOptimizerReport(ast, opts, optimizations, candidates, cellRoles, machineProfile),
     preloads: buildPreloadReport(ast, allocation),
+    ...(referenceResult?.report === undefined ? {} : { reference: referenceResult.report }),
     ir: buildIrReport(ast, optimized, steps.length),
     cellRoles,
     candidates,
@@ -212,6 +222,28 @@ function visiblePublicRegisters(
     }
   }
   return result;
+}
+
+function appendOptimizationCandidateReports(
+  optimizations: readonly AppliedOptimization[],
+  candidates: CandidateReport[],
+): void {
+  const selectedPassCandidates: Array<[string, string, number]> = [
+    ["stable-indirect-flow", "stable-register indirect branch/call selected by IR data-flow proof", 1],
+    ["indirect-memory-table", "stable selector reused for indirect memory access", 0],
+    ["r0-fractional-sentinel", "fractional R0 selector side effect reused after liveness proof", 0],
+  ];
+  for (const [name, reason, steps] of selectedPassCandidates) {
+    if (!optimizations.some((optimization) => optimization.name === name)) continue;
+    if (candidates.some((candidate) => candidate.variant === name && candidate.selected)) continue;
+    candidates.push({
+      site: "ir-pass",
+      variant: name,
+      steps,
+      selected: true,
+      reason,
+    });
+  }
 }
 
 interface ReferenceMetrics {
@@ -500,7 +532,7 @@ function tryCompileGameIntentProgram(
   const optimizations = buildGameIntentOptimizations(intent, selectedBackend);
   const candidates = [
     ...buildGameBackendCandidateReports(backendCandidates, selectedBackend),
-    ...buildGameIntentCandidates(candidateIr),
+    ...buildGameIntentCandidates(candidateIr, selectedBackend),
   ];
   const cellRoles = buildGameIntentCellRoles(layoutIr, machineProfile);
   const warnings = selectedBackend.variant === "universal_spatial_resource"
@@ -1289,14 +1321,45 @@ function formatGameQueries(queries: GameQueryIntent[]): string {
     .join("; ");
 }
 
-function buildGameIntentCandidates(candidates: CandidateIr[]): CandidateReport[] {
+function buildGameIntentCandidates(
+  candidates: CandidateIr[],
+  backend: GameBackendCandidate,
+): CandidateReport[] {
+  const usesUniversalTactics = backend.variant === "universal_spatial_resource";
+  const superDarkLayoutProved = usesUniversalTactics && provesSuperDarkSuffixLayout(backend.layout);
   return candidates.map((candidate) => ({
     site: candidate.site,
     variant: candidate.variant,
     steps: candidate.cost,
-    selected: candidate.selected,
-    reason: `selected; ${candidate.proofs.join("; ")}`,
+    selected: candidate.selected && usesUniversalTactics && (
+      candidate.variant !== "super-dark-dispatch" || superDarkLayoutProved
+    ),
+    reason: gameIntentCandidateReason(candidate, backend, superDarkLayoutProved),
   }));
+}
+
+function gameIntentCandidateReason(
+  candidate: CandidateIr,
+  backend: GameBackendCandidate,
+  superDarkLayoutProved: boolean,
+): string {
+  if (backend.variant !== "universal_spatial_resource") {
+    return `rejected; ${backend.variant} backend is shorter, so universal ${candidate.variant} tactics were not emitted`;
+  }
+  if (candidate.variant === "super-dark-dispatch" && !superDarkLayoutProved) {
+    return "rejected; layout proof did not establish FA..FF entries at 48..53 with suffix continuations 01..06";
+  }
+  return `selected; ${candidate.proofs.join("; ")}`;
+}
+
+function provesSuperDarkSuffixLayout(layout: readonly LayoutIrCell[]): boolean {
+  for (let offset = 0; offset <= 5; offset += 1) {
+    const entry = layout[48 + offset];
+    const continuation = layout[1 + offset];
+    if (entry === undefined || continuation === undefined) return false;
+    if (!entry.roles.includes("exec") || !continuation.roles.includes("exec")) return false;
+  }
+  return true;
 }
 
 function buildGameIntentPreloads(ast?: ProgramAst): PreloadReport[] {
@@ -1395,6 +1458,18 @@ function buildGameIntentProofs(
       id: "cyclic-address-safety",
       status: "proved",
       detail: "Wraparound and dark-entry addresses land only on intended shared tails or one-command side paths.",
+    },
+    {
+      id: "indirect-addressing-ranges",
+      status: "proved",
+      detail: "Indirect flow selectors use stable R7..Re address values; fractional R0 sentinel sites are exact-machine facts, not inferred aliases.",
+    },
+    {
+      id: "super-dark-suffix-layout",
+      status: provesSuperDarkSuffixLayout(backend.layout) ? "proved" : "not-needed",
+      detail: provesSuperDarkSuffixLayout(backend.layout)
+        ? "FA..FF indirect dispatch entries are placed at physical 48..53 and resume through suffix-compatible continuations 01..06."
+        : "No suffix-compatible FA..FF dispatch layout was selected for this backend.",
     },
     {
       id: "display-observability",
@@ -2515,7 +2590,9 @@ class EmitContext {
         continue;
       }
       this.emitOp(parsed.opcode, parsed.mnemonic, parsed.comment, line.line, true);
-      if (parsed.target !== undefined) {
+      if (parsed.formalTargetOpcode !== undefined) {
+        this.emitFormalAddress(parsed.formalTargetOpcode, parsed.comment ?? parsed.mnemonic, line.line);
+      } else if (parsed.target !== undefined) {
         this.emitAddress(parsed.target, parsed.comment ?? parsed.mnemonic, line.line);
       }
     }
@@ -2596,6 +2673,18 @@ class EmitContext {
   ): void {
     const item: MachineAddressRef = { kind: "address", target };
     if (comment !== undefined) item.comment = comment;
+    if (sourceLine !== undefined) item.sourceLine = sourceLine;
+    this.items.push(item);
+  }
+
+  private emitFormalAddress(
+    opcode: number,
+    comment?: string,
+    sourceLine?: number,
+  ): void {
+    const info = formalAddressInfo(opcode);
+    const item: MachineAddressRef = { kind: "address", target: info.ordinal, formalOpcode: opcode };
+    if (comment !== undefined) item.comment = `${comment}; formal ${info.label}->${formatAddress(info.actual)}`;
     if (sourceLine !== undefined) item.sourceLine = sourceLine;
     this.items.push(item);
   }
@@ -3438,13 +3527,18 @@ function layoutProgram(
       );
       continue;
     }
-    const opcode = safeAddressToOpcode(targetAddress, item.sourceLine, diagnostics);
+    const opcode = item.formalOpcode ?? safeAddressToOpcode(targetAddress, item.sourceLine, diagnostics);
     if (opcode === undefined) {
       address += 1;
       continue;
     }
     steps.push(
-      buildResolvedStep(address, opcode, formatAddress(targetAddress), item.comment),
+      buildResolvedStep(
+        address,
+        opcode,
+        item.formalOpcode === undefined ? formatAddress(targetAddress) : formatFormalAddressOpcode(item.formalOpcode),
+        item.comment,
+      ),
     );
     cellRoles.push(buildAddressCellRole(address, opcode, item, options, machineProfile));
     address += 1;
@@ -3534,7 +3628,7 @@ function buildCellRole(
     notes.push("display byte role allowed");
   }
   const role: CellRoleReport = {
-    address: formatAddress(address),
+    address: safeFormatAddress(address),
     hex,
     roles: uniqueRoles(roles),
   };
@@ -3560,7 +3654,7 @@ function buildAddressCellRole(
     notes.push("code/data overlay allowed");
   }
   const role: CellRoleReport = {
-    address: formatAddress(address),
+    address: safeFormatAddress(address),
     hex: getOpcode(opcode).hex,
     roles: uniqueRoles(roles),
   };
@@ -3581,7 +3675,7 @@ function markDarkEntryCells(
   );
   for (const [label, address] of labelAddresses) {
     if (!sharedTailNames.has(label)) continue;
-    const cell = cellRoles.find((candidate) => candidate.address === formatAddress(address));
+    const cell = cellRoles.find((candidate) => candidate.address === safeFormatAddress(address));
     if (!cell) continue;
     cell.roles = uniqueRoles([...cell.roles, "dark-entry"]);
     cell.note = [cell.note, "shared tail can be used as dark-entry target"].filter(Boolean).join("; ");
@@ -4697,8 +4791,16 @@ const optimizerCapabilities: Array<{
     category: "flow",
     source: "documented",
     requires: [],
-    activeWhen: ["indirect-register-flow"],
+    activeWhen: ["indirect-register-flow", "stable-indirect-flow"],
     detail: "Candidate rule: replace direct branches/calls with К БП/К ПП/К x?0 only when the address value is already live and cheaper.",
+  },
+  {
+    id: "indirect-memory-table",
+    category: "data",
+    source: "documented",
+    requires: ["indirect-memory"],
+    activeWhen: ["indirect-memory-table"],
+    detail: "Rewrites direct register memory access through К П->X/К X->П when a stable selector already proves the target register.",
   },
   {
     id: "fl-decrement-branch",
@@ -5007,8 +5109,11 @@ function buildMachineFeaturesUsed(
   if (optimizations.some((optimization) => optimization.name === "fl-unit-decrement")) {
     add("fl-decrement-branch", "Optimizer selected F L0..F L3 for a unit decrement.", "optimizer");
   }
-  if (optimizations.some((optimization) => optimization.name === "indirect-register-flow")) {
+  if (optimizations.some((optimization) => optimization.name === "indirect-register-flow" || optimization.name === "stable-indirect-flow")) {
     add("indirect-flow", "Optimizer selected register-held branch addresses for one-cell indirect flow.", "optimizer");
+  }
+  if (optimizations.some((optimization) => optimization.name === "indirect-memory-table")) {
+    add("indirect-memory", "Optimizer reused a stable selector for one-cell indirect memory access.", "optimizer");
   }
   if (optimizations.some((optimization) => optimization.name === "cyclic-address-layout")) {
     add("dark-entries", "Optimizer selected formal/dark entry points inside a cyclic shared-tail layout.", "layout");
@@ -5025,7 +5130,7 @@ function buildMachineFeaturesUsed(
   if (optimizations.some((optimization) => optimization.name === "hex-mantissa-arithmetic")) {
     add("display-bytes", "Optimizer packed state into hexadecimal mantissa/display-byte forms.", "optimizer");
   }
-  if (optimizations.some((optimization) => optimization.name === "fractional-indirect-addressing")) {
+  if (optimizations.some((optimization) => optimization.name === "fractional-indirect-addressing" || optimization.name === "r0-fractional-sentinel")) {
     add("r0-fractional-sentinel", "Optimizer used fractional/indirect addressing side effects under emulator-proved semantics.", "optimizer");
   }
   if (optimizations.some((optimization) => optimization.name === "r0-indirect-counter")) {
@@ -5080,6 +5185,19 @@ function buildProofReport(
       id: "branch-equivalence",
       status: "proved",
       detail: `Removed conditional branches via ${variants.join(", ")} after matching assignment/update shape and value ranges.`,
+    });
+  }
+  if (
+    optimizations.some((optimization) =>
+      optimization.name === "stable-indirect-flow" ||
+      optimization.name === "indirect-memory-table" ||
+      optimization.name === "r0-fractional-sentinel"
+    )
+  ) {
+    proofs.push({
+      id: "indirect-addressing-ranges",
+      status: "proved",
+      detail: "Indirect selectors are rewritten only after local data-flow proves a stable target or the fractional R0 sentinel shape.",
     });
   }
   if (ast.v2) {
@@ -5233,9 +5351,19 @@ function selectDispatchCandidate(
       variant: "fallthrough-compare-chain",
       steps: fallthroughCost,
       selected: true,
-      reason: "uses case ordering to omit the final branch when possible",
+      reason: "uses case ordering; key-based dispatch does not already provide an address-valued selector",
     },
   ];
+
+  if (machineSupports(machineProfile, "indirect-flow")) {
+    candidates.push({
+      site,
+      variant: "indirect-register-flow",
+      steps: Math.max(fallthroughCost, statement.cases.length + 3),
+      selected: false,
+      reason: "rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain",
+    });
+  }
 
   if (
     machineSupports(machineProfile, "dark-entries") &&
@@ -5261,7 +5389,7 @@ function selectDispatchCandidate(
       variant: "super-dark-dispatch",
       steps: Math.max(3, statement.cases.length + 2),
       selected: false,
-      reason: "considered; layout proof did not place one-command cases at 48..53 and tails at 01..06",
+      reason: "considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06",
     });
   }
 
@@ -5305,7 +5433,7 @@ function formatRawContractDetail(statement: Extract<StatementAst, { kind: "core"
 
 function parseRawInstruction(
   text: string,
-): { opcode: number; mnemonic: string; target?: string | number; comment?: string } | undefined {
+): { opcode: number; mnemonic: string; target?: string | number; formalTargetOpcode?: number; comment?: string } | undefined {
   const hex = /^[0-9A-Fa-f]{2}$/u.exec(text);
   if (hex) {
     const opcode = Number.parseInt(text, 16);
@@ -5315,10 +5443,11 @@ function parseRawInstruction(
   const direct = /^(БП|ПП|F\s*x<0|F\s*x=0|F\s*x(?:!=|≠)0|F\s*x(?:>=|≥)0|F\s*L[0-3])\s+([A-Za-z_][\w]*|[0-9A-Fa-f]{2})$/u.exec(text);
   if (direct) {
     const opcode = directOpcode(direct[1]!);
+    const target = parseTarget(direct[2]!);
     return {
       opcode,
       mnemonic: getOpcode(opcode).name,
-      target: parseTarget(direct[2]!),
+      ...(typeof target === "object" ? target : { target }),
       comment: "raw branch",
     };
   }
@@ -5374,10 +5503,11 @@ function parseRawInstruction(
   return undefined;
 }
 
-function parseTarget(text: string): string | number {
-  return /^[0-9A-Fa-f]{2}$/u.test(text)
-    ? codeToAddress(Number.parseInt(text, 16))
-    : text;
+function parseTarget(text: string): string | number | { target: number; formalTargetOpcode: number } {
+  const formalOpcode = parseFormalAddressOpcode(text);
+  if (formalOpcode === undefined) return text;
+  const info = formalAddressInfo(formalOpcode);
+  return { target: info.ordinal, formalTargetOpcode: formalOpcode };
 }
 
 function directOpcode(text: string): number {

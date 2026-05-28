@@ -1,4 +1,9 @@
 import type { DeliveryMode, OpcodeInfo, RegisterName } from "./types.ts";
+import {
+  formalAddressOrdinal,
+  formatOfficialAddress,
+  officialAddressToOpcode,
+} from "./formal-address.ts";
 
 const REGISTERS: RegisterName[] = [
   "0",
@@ -99,37 +104,15 @@ export function registerFromText(text: string): RegisterName {
 }
 
 export function addressToOpcode(address: number): number {
-  if (address < 0 || address > 0xff) {
-    throw new Error(`Address ${address} is out of formal MK-61 address range`);
-  }
-  if (address <= 99) {
-    const tens = Math.floor(address / 10);
-    const ones = address % 10;
-    return tens * 16 + ones;
-  }
-  if (address <= 104) {
-    const offset = address - 100;
-    const high = 10 + Math.floor(offset / 10);
-    const low = offset % 10;
-    return high * 16 + low;
-  }
-  return address;
+  return officialAddressToOpcode(address);
 }
 
 export function formatAddress(address: number): string {
-  return hex(addressToOpcode(address));
+  return formatOfficialAddress(address);
 }
 
 export function codeToAddress(code: number): number {
-  const high = code >> 4;
-  const low = code & 0x0f;
-  if (high <= 9 && low <= 9) {
-    return high * 10 + low;
-  }
-  if (high >= 10 && low <= 9) {
-    return 100 + (high - 10) * 10 + low;
-  }
-  return code;
+  return formalAddressOrdinal(code);
 }
 
 function buildOpcodeCatalog(): OpcodeInfo[] {

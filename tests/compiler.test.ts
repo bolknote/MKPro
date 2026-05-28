@@ -30,6 +30,36 @@ describe("M61 compiler", () => {
     expect(oversized).toEqual([]);
   });
 
+  it("keeps every example with a real source reference no larger than that source", () => {
+    const unresolved: string[] = [];
+    const larger: Array<{ path: string; steps: number; reference: number }> = [];
+    const checked: string[] = [];
+
+    for (const name of readdirSync("examples").filter((entry) => entry.endsWith(".m61")).sort()) {
+      const path = `examples/${name}`;
+      const result = compileM61(source(path));
+      const reference = result.report.reference;
+
+      if (reference === undefined) continue;
+      if (result.report.warnings.some((warning) => warning.includes("was not found under games/*"))) {
+        unresolved.push(path);
+        continue;
+      }
+
+      checked.push(path);
+      if (result.report.steps > reference.referenceSpan) {
+        larger.push({ path, steps: result.report.steps, reference: reference.referenceSpan });
+      }
+    }
+
+    expect(unresolved).toEqual([]);
+    expect(larger).toEqual([]);
+    expect(checked).toContain("examples/alaram.m61");
+    expect(checked).toContain("examples/dungeon.m61");
+    expect(checked).toContain("examples/giants-country.m61");
+    expect(checked).toContain("examples/lunar.m61");
+  });
+
   it("keeps the high-level cave baseline within the 105-cell budget", () => {
     const result = compileM61(source("examples/cave-highlevel-baseline.m61"));
 
@@ -151,6 +181,7 @@ program SimpleRules {
     expect(features.has("super-dark-dispatch")).toBe(true);
     expect(result.report.proofs.find((proof) => proof.id === "full-game-semantics")?.status).toBe("assumed");
     expect(result.report.proofs.some((proof) => proof.id === "cyclic-address-safety")).toBe(true);
+    expect(result.report.proofs.find((proof) => proof.id === "super-dark-suffix-layout")?.status).toBe("proved");
   });
 
   it("does not contain the old benchmark-special backend in compiler source", () => {
@@ -297,6 +328,7 @@ program SimpleRules {
     expect(result.report.reference?.referenceGaps).toEqual(["14", "19", "78"]);
     expect(selected.has("board_fleet_duel")).toBe(true);
     expect(result.report.rejectedCandidates.some((candidate) => candidate.variant === "universal_spatial_resource")).toBe(true);
+    expect(result.report.rejectedCandidates.some((candidate) => candidate.variant === "super-dark-dispatch")).toBe(true);
     expect(warnings).toMatch(/selected board_fleet_duel semantic microkernel/u);
     expect(warnings).not.toMatch(/universal spatial\/counter tactic pipeline/u);
     expect(proofs.has("reference-size-beaten")).toBe(true);
@@ -365,12 +397,47 @@ program SimpleRules {
     expect(hexFingerprints.size).toBe(cases.length);
   });
 
+  it("ports Lord_BSS Alaram below the original listing size", () => {
+    const alaram = source("examples/alaram.m61");
+    const result = compileM61(alaram);
+    const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
+
+    expect(alaram).toMatch(/Lord_BSS pmk210/u);
+    expect(result.report.steps).toBe(102);
+    expect(result.report.reference?.referenceSpan).toBe(105);
+    expect(result.report.reference?.referenceSteps).toBe(105);
+    expect(result.report.reference?.referenceEntries).toBe(105);
+    expect(result.report.reference?.referenceGaps).toEqual([]);
+    expect(result.report.reference?.parity).toBe("smaller");
+    expect(selected.has("lane_resource")).toBe(true);
+    expect(result.report.warnings.join("\n")).not.toMatch(/was not found/u);
+  });
+
+  it("ports Lord_BSS Dungeon below the original listing size", () => {
+    const dungeon = source("examples/dungeon.m61");
+    const result = compileM61(dungeon);
+    const selected = new Set(result.report.candidates.filter((candidate) => candidate.selected).map((candidate) => candidate.variant));
+
+    expect(dungeon).toMatch(/Lord_BSS pmk164/u);
+    expect(result.report.steps).toBe(104);
+    expect(result.report.reference?.referenceSpan).toBe(105);
+    expect(result.report.reference?.referenceSteps).toBe(105);
+    expect(result.report.reference?.referenceEntries).toBe(105);
+    expect(result.report.reference?.referenceGaps).toEqual([]);
+    expect(result.report.reference?.parity).toBe("smaller");
+    expect(selected.has("world_table")).toBe(true);
+    expect(result.report.warnings.join("\n")).not.toMatch(/was not found/u);
+  });
+
   it("records board and world query constructs in GameIntent reports", () => {
     for (const path of [
       "examples/fox-hunt-100.m61",
       "examples/minesweeper-9x9.m61",
       "examples/treasure-hunter-2.m61",
       "examples/dangerous-loading.m61",
+      "examples/alaram.m61",
+      "examples/dungeon.m61",
+      "examples/giants-country.m61",
     ]) {
       const result = compileM61(source(path));
 
@@ -467,8 +534,13 @@ program SimpleRules {
   it("uses maximum dispatch lowering by default", () => {
     const result = compileM61(source("examples/tiny-game.m61"));
     const selected = result.report.candidates.find((candidate) => candidate.selected);
+    const rejectedIndirect = result.report.rejectedCandidates.find(
+      (candidate) => candidate.variant === "indirect-register-flow",
+    );
 
     expect(selected?.variant).toBe("fallthrough-compare-chain");
+    expect(selected?.reason).toMatch(/key-based dispatch/u);
+    expect(rejectedIndirect?.reason).toMatch(/key-valued, not address-valued/u);
     expect(result.report.optimizer.capabilities.some((capability) => capability.status === "active")).toBe(true);
   });
 

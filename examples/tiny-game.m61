@@ -1,5 +1,3 @@
-reference tiny_dial_game
-
 // A toy "dial" game used to show counter exhaustion and terminal rules in a
 // file small enough to read in one glance.
 

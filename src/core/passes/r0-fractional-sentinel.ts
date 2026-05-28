@@ -3,16 +3,19 @@ import { type IrPass, type IrPassFn } from "./helpers.ts";
 import { computeLiveness } from "./liveness-analysis.ts";
 
 function isFractionalR0LiteralBeforeStore(ops: readonly IrOp[], storeIndex: number): boolean {
-  const zero = ops[storeIndex - 3];
-  const dot = ops[storeIndex - 2];
-  const digit = ops[storeIndex - 1];
-  return zero?.kind === "plain" &&
-    zero.opcode === 0x00 &&
-    dot?.kind === "plain" &&
-    dot.opcode === 0x0a &&
-    digit?.kind === "plain" &&
-    digit.opcode >= 0x01 &&
-    digit.opcode <= 0x09;
+  let index = storeIndex - 1;
+  let hasNonZeroFractionDigit = false;
+  while (index >= 0) {
+    const digit = ops[index];
+    if (digit?.kind !== "plain" || digit.opcode < 0x00 || digit.opcode > 0x09) break;
+    if (digit.opcode > 0) hasNonZeroFractionDigit = true;
+    index -= 1;
+  }
+  const dot = ops[index];
+  const zero = ops[index - 1];
+  if (!hasNonZeroFractionDigit || dot?.kind !== "plain" || dot.opcode !== 0x0a) return false;
+  if (zero === undefined) return true;
+  return zero.kind === "plain" && zero.opcode === 0x00;
 }
 
 const run: IrPassFn = (ops) => {

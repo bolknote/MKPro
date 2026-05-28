@@ -1,5 +1,3 @@
-reference grid_rescue_v2
-
 // Rescue sketch for the generic grid pipeline. It mixes blocked movement,
 // expendable wall charges, collectible beacons, and a second input mode for an
 // ambush decision.

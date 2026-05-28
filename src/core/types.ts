@@ -674,6 +674,7 @@ export interface MachineAddressRef {
   target: string | number;
   comment?: string;
   sourceLine?: number;
+  formalOpcode?: number;
 }
 
 export interface IrMeta {
@@ -689,6 +690,7 @@ export interface IrTargetMeta {
   comment?: string;
   sourceLine?: number;
   roles?: readonly CellRole[];
+  formalOpcode?: number;
 }
 
 export type IrCondition = "==0" | "!=0" | "<0" | ">=0";

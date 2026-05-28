@@ -68,6 +68,8 @@ export function withTargetMeta(meta: IrTargetMeta): IrTargetMeta {
   const out: IrTargetMeta = {};
   if (meta.comment !== undefined) out.comment = meta.comment;
   if (meta.sourceLine !== undefined) out.sourceLine = meta.sourceLine;
+  if (meta.roles !== undefined) out.roles = [...meta.roles];
+  if (meta.formalOpcode !== undefined) out.formalOpcode = meta.formalOpcode;
   return out;
 }
 

@@ -102,8 +102,10 @@ All `examples/*.m61` programs are written in the human DSL. They cover:
 - `examples/cave-highlevel-baseline.m61`: readable Cave Treasure baseline.
 - `examples/cave-treasure.m61`: full high-level compactness reference.
 - `examples/cave-treasure-full.m61`: full reference metadata variant.
-- `examples/grid-rescue.m61`: grid/bitset reference.
-- `examples/resource-raid.m61`: counter/dispatch reference.
+- `examples/grid-rescue.m61`: synthetic grid/bitset stress sketch.
+- `examples/resource-raid.m61`: synthetic counter/dispatch stress sketch.
+- `examples/alaram.m61`: commented Lord_BSS cockpit interceptor port.
+- `examples/dungeon.m61`: commented Lord_BSS Dungeon port.
 - `examples/giants-country.m61`: commented high-level game port.
 - `examples/sea-battle.m61`: turn-based fleet duel port from the games archive.
 

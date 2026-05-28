@@ -1,7 +1,8 @@
-reference lunar_lander
+reference lordbss_pmk38
 
-// Numeric example rather than a map game: the player trades fuel for acceleration
-// and tries to arrive near height zero with a survivable vertical speed.
+// Numeric landing game based on the Lord_BSS Lunar Landing listing: the player
+// trades fuel for acceleration and tries to arrive near height zero with a
+// survivable vertical speed.
 
 program LunarLander {
   state {

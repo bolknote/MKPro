@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  codeToAddress,
   findOpcodeName,
   opcodeByCode,
   opcodeCatalog,
@@ -25,6 +26,14 @@ describe("opcode catalog", () => {
   it("looks up raw hex strings", () => {
     expect(findOpcodeName("3B")?.code).toBe(0x3b);
     expect(findOpcodeName("50")?.code).toBe(0x50);
+  });
+
+  it("decodes formal address bytes as address ordinals", () => {
+    expect(codeToAddress(0x99)).toBe(99);
+    expect(codeToAddress(0xa4)).toBe(104);
+    expect(codeToAddress(0x9f)).toBe(105);
+    expect(codeToAddress(0xc5)).toBe(125);
+    expect(codeToAddress(0xff)).toBe(165);
   });
 
   it("accepts command-page notation aliases", () => {

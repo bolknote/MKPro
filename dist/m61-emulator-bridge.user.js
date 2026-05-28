@@ -27,6 +27,92 @@ var M61EmulatorBundle = (() => {
     looksLikeM61Source: () => looksLikeM61Source
   });
 
+  // src/core/formal-address.ts
+  function hexByte(value) {
+    return value.toString(16).toUpperCase().padStart(2, "0");
+  }
+  function assertByte(value) {
+    if (!Number.isInteger(value) || value < 0 || value > 255) {
+      throw new Error(`Formal MK-61 address byte ${value} is out of range`);
+    }
+  }
+  function formalAddressOrdinal(opcode) {
+    assertByte(opcode);
+    const high = opcode >> 4;
+    const low = opcode & 15;
+    return high * 10 + low;
+  }
+  function officialAddressToOpcode(address) {
+    if (!Number.isInteger(address) || address < 0 || address > 104) {
+      throw new Error(`Physical MK-61 program address ${address} is outside 00..A4`);
+    }
+    if (address <= 99) {
+      const tens = Math.floor(address / 10);
+      const ones = address % 10;
+      return tens * 16 + ones;
+    }
+    return 160 + (address - 100);
+  }
+  function formatFormalAddressOpcode(opcode) {
+    assertByte(opcode);
+    return hexByte(opcode);
+  }
+  function formatOfficialAddress(address) {
+    return formatFormalAddressOpcode(officialAddressToOpcode(address));
+  }
+  function parseFormalAddressOpcode(text) {
+    const normalized = text.trim().replace(/[.-]/gu, "A").toUpperCase();
+    if (!/^[0-9A-F]{2}$/u.test(normalized)) return void 0;
+    return Number.parseInt(normalized, 16);
+  }
+  function formalAddressInfo(opcode) {
+    assertByte(opcode);
+    const ordinal = formalAddressOrdinal(opcode);
+    const label = formatFormalAddressOpcode(opcode);
+    if (ordinal <= 104) {
+      return {
+        opcode,
+        label,
+        ordinal,
+        actual: ordinal,
+        kind: "official",
+        oneCommand: false
+      };
+    }
+    if (ordinal <= 111) {
+      return {
+        opcode,
+        label,
+        ordinal,
+        actual: ordinal - 105,
+        kind: "short-side",
+        oneCommand: false
+      };
+    }
+    if (ordinal <= 159) {
+      return {
+        opcode,
+        label,
+        ordinal,
+        actual: ordinal - 112,
+        kind: ordinal >= 120 ? "dark" : "long-side",
+        oneCommand: false
+      };
+    }
+    if (ordinal <= 165) {
+      return {
+        opcode,
+        label,
+        ordinal,
+        actual: ordinal - 112,
+        kind: "super-dark",
+        oneCommand: true,
+        extra: ordinal - 159
+      };
+    }
+    throw new Error(`Formal MK-61 address ${label} maps past the known address space`);
+  }
+
   // src/core/opcodes.ts
   var REGISTERS = [
     "0",
@@ -109,35 +195,10 @@ var M61EmulatorBundle = (() => {
     throw new Error(`Unknown register ${text}`);
   }
   function addressToOpcode(address) {
-    if (address < 0 || address > 255) {
-      throw new Error(`Address ${address} is out of formal MK-61 address range`);
-    }
-    if (address <= 99) {
-      const tens = Math.floor(address / 10);
-      const ones = address % 10;
-      return tens * 16 + ones;
-    }
-    if (address <= 104) {
-      const offset = address - 100;
-      const high = 10 + Math.floor(offset / 10);
-      const low = offset % 10;
-      return high * 16 + low;
-    }
-    return address;
+    return officialAddressToOpcode(address);
   }
   function formatAddress(address) {
-    return hex(addressToOpcode(address));
-  }
-  function codeToAddress(code) {
-    const high = code >> 4;
-    const low = code & 15;
-    if (high <= 9 && low <= 9) {
-      return high * 10 + low;
-    }
-    if (high >= 10 && low <= 9) {
-      return 100 + (high - 10) * 10 + low;
-    }
-    return code;
+    return formatOfficialAddress(address);
   }
   function buildOpcodeCatalog() {
     const result = [];
@@ -355,6 +416,7 @@ var M61EmulatorBundle = (() => {
     const meta = {};
     if (item.comment !== void 0) meta.comment = item.comment;
     if (item.sourceLine !== void 0) meta.sourceLine = item.sourceLine;
+    if (item.formalOpcode !== void 0) meta.formalOpcode = item.formalOpcode;
     return meta;
   }
   function isInRange(opcode, base) {
@@ -520,6 +582,7 @@ var M61EmulatorBundle = (() => {
     const ref = { kind: "address", target };
     if (meta.comment !== void 0) ref.comment = meta.comment;
     if (meta.sourceLine !== void 0) ref.sourceLine = meta.sourceLine;
+    if (meta.formalOpcode !== void 0) ref.formalOpcode = meta.formalOpcode;
     return ref;
   }
   function lowerIrToMachine(ops) {
@@ -692,7 +755,7 @@ var M61EmulatorBundle = (() => {
       if (op.kind === "orphan-address") {
         cells.push({
           address,
-          opcode: typeof op.target === "number" ? op.target : 0,
+          opcode: op.meta.formalOpcode ?? (typeof op.target === "number" ? op.target : 0),
           roles: op.meta.roles ? [...op.meta.roles] : ["address"],
           tactic: op.meta.comment ?? fallbackTactic
         });
@@ -709,7 +772,7 @@ var M61EmulatorBundle = (() => {
         const targetRoles = op.targetMeta.roles ? [...op.targetMeta.roles] : ["address"];
         cells.push({
           address,
-          opcode: targetValue,
+          opcode: op.targetMeta.formalOpcode ?? targetValue,
           roles: targetRoles,
           tactic: op.targetMeta.comment ?? tactic
         });
@@ -3065,6 +3128,8 @@ var M61EmulatorBundle = (() => {
           const targetMeta = {};
           if (op.targetMeta.comment !== void 0) targetMeta.comment = op.targetMeta.comment;
           if (op.targetMeta.sourceLine !== void 0) targetMeta.sourceLine = op.targetMeta.sourceLine;
+          if (op.targetMeta.roles !== void 0) targetMeta.roles = [...op.targetMeta.roles];
+          if (op.targetMeta.formalOpcode !== void 0) targetMeta.formalOpcode = op.targetMeta.formalOpcode;
           result.push({ ...op, target: replacement, targetMeta });
           continue;
         }
@@ -3086,6 +3151,332 @@ var M61EmulatorBundle = (() => {
   var duplicateFailureTail = {
     name: "duplicate-failure-tail-merge",
     run: run7,
+    layoutSafe: false
+  };
+
+  // src/core/indirect-addressing.ts
+  var REGISTERS_BY_INDEX2 = [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "a",
+    "b",
+    "c",
+    "d",
+    "e"
+  ];
+  function indirectSelectorMutation(register) {
+    const index = registerIndex(register);
+    if (index <= 3) return "pre-decrement";
+    if (index <= 6) return "pre-increment";
+    return "stable";
+  }
+  function isStableIndirectSelector(register) {
+    return indirectSelectorMutation(register) === "stable";
+  }
+  function evaluateIndirectAddress(selector, value, operation) {
+    const mutation = indirectSelectorMutation(selector);
+    const fractional = isPositiveFractional(value);
+    if (selector === "0" && fractional) {
+      const formalAddress = formalAddressInfo(153);
+      return {
+        selector,
+        mutation,
+        operation,
+        transformed: "99",
+        ...operation === "flow" ? { flowTarget: 99, actualFlowTarget: formalAddress.actual, formalAddress } : { memoryTarget: "3" },
+        resultValue: "-99999999"
+      };
+    }
+    const transformed = transformSelectorValue(value, mutation);
+    if (transformed === void 0) return void 0;
+    if (operation === "flow") {
+      const flowTarget = flowTargetFromTransformed(transformed);
+      const formalAddress = formalAddressInfo(formalOpcodeForFlowTarget(transformed, flowTarget));
+      const result = {
+        selector,
+        mutation,
+        operation,
+        transformed,
+        formalAddress,
+        flowTarget,
+        actualFlowTarget: formalAddress.actual,
+        resultValue: transformed
+      };
+      const superDark = superDarkTarget(formalAddress.opcode);
+      if (superDark !== void 0) result.superDark = superDark;
+      return result;
+    }
+    const memoryTarget = memoryTargetFromTransformed(transformed);
+    if (memoryTarget === void 0) return void 0;
+    return {
+      selector,
+      mutation,
+      operation,
+      transformed,
+      memoryTarget,
+      resultValue: transformed
+    };
+  }
+  function memoryTargetFromTransformed(transformed) {
+    const normalized = transformed.trim().toLowerCase();
+    if (/^-?\d+$/u.test(normalized)) {
+      return REGISTERS_BY_INDEX2[positiveModulo(Number(normalized), 10)];
+    }
+    const last = normalized.at(-1);
+    if (last === void 0) return void 0;
+    const nibble = Number.parseInt(last, 16);
+    if (!Number.isFinite(nibble) || nibble < 0 || nibble > 15) return void 0;
+    if (nibble === 15) return "0";
+    return REGISTERS_BY_INDEX2[nibble];
+  }
+  function superDarkTarget(formalTarget) {
+    const info2 = formalAddressInfo(formalTarget);
+    if (info2.kind !== "super-dark" || info2.extra === void 0) return void 0;
+    return {
+      formal: info2.opcode,
+      entryAddress: info2.actual,
+      continuationAddress: info2.extra
+    };
+  }
+  function transformSelectorValue(value, mutation) {
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) return void 0;
+      const integer = Math.trunc(value) + mutationDelta(mutation);
+      return String(integer);
+    }
+    const normalized = value.trim().replace(/^0x/iu, "").toLowerCase();
+    if (!/^[0-9a-f]+$/iu.test(normalized)) return void 0;
+    if (mutation === "stable" && /[a-f]/iu.test(normalized)) return normalized;
+    const decimal = Number(normalized);
+    if (!Number.isFinite(decimal)) return void 0;
+    return String(Math.trunc(decimal) + mutationDelta(mutation));
+  }
+  function isPositiveFractional(value) {
+    const numeric = typeof value === "number" ? value : Number(value.trim().replace(",", "."));
+    return numeric !== void 0 && numeric > 0 && numeric < 1;
+  }
+  function mutationDelta(mutation) {
+    if (mutation === "pre-decrement") return -1;
+    if (mutation === "pre-increment") return 1;
+    return 0;
+  }
+  function flowTargetFromTransformed(transformed) {
+    const normalized = transformed.trim().toLowerCase();
+    if (/^[0-9a-f]+$/iu.test(normalized) && /[a-f]/iu.test(normalized)) {
+      return Number.parseInt(normalized.slice(-2), 16);
+    }
+    const numeric = Number(normalized);
+    if (!Number.isFinite(numeric)) return 0;
+    return positiveModulo(Math.trunc(numeric), 100);
+  }
+  function formalOpcodeForFlowTarget(transformed, flowTarget) {
+    const normalized = transformed.trim().toLowerCase();
+    if (/^[0-9a-f]+$/iu.test(normalized) && /[a-f]/iu.test(normalized)) {
+      return flowTarget;
+    }
+    return officialAddressToOpcode(flowTarget);
+  }
+  function positiveModulo(value, modulus) {
+    return (value % modulus + modulus) % modulus;
+  }
+
+  // src/core/passes/indirect-addressing.ts
+  var INDIRECT_COND_BASES2 = {
+    "!=0": 112,
+    ">=0": 144,
+    "<0": 192,
+    "==0": 224
+  };
+  function clearKnownState(state) {
+    state.currentLiteral = void 0;
+    state.stableRegisters.clear();
+  }
+  function cloneMeta(meta, comment) {
+    return {
+      ...meta,
+      comment: [meta.comment, comment].filter(Boolean).join("; ")
+    };
+  }
+  function digitForPlain(op) {
+    if (op.kind !== "plain" || op.opcode < 0 || op.opcode > 9) return void 0;
+    return String(op.opcode);
+  }
+  function literalNumber(text) {
+    if (text === void 0 || !/^\d+$/u.test(text)) return void 0;
+    const value = Number(text);
+    if (!Number.isSafeInteger(value)) return void 0;
+    return value;
+  }
+  function rememberStore(state, register) {
+    if (!isStableIndirectSelector(register)) return;
+    const value = literalNumber(state.currentLiteral);
+    if (value === void 0) {
+      state.stableRegisters.delete(register);
+    } else {
+      state.stableRegisters.set(register, String(value));
+    }
+  }
+  function findFlowSelector(state, target) {
+    if (typeof target !== "number") return void 0;
+    for (const [register, value] of state.stableRegisters) {
+      const evaluated = evaluateIndirectAddress(register, value, "flow");
+      if (evaluated?.flowTarget === target) return register;
+    }
+    return void 0;
+  }
+  function findMemorySelector(state, target) {
+    for (const [register, value] of state.stableRegisters) {
+      const evaluated = evaluateIndirectAddress(register, value, "memory");
+      if (evaluated?.memoryTarget === target) return register;
+    }
+    return void 0;
+  }
+  function updateKnownAfterOp(state, op) {
+    const digit = digitForPlain(op);
+    if (digit !== void 0) {
+      state.currentLiteral = `${state.currentLiteral ?? ""}${digit}`;
+      return;
+    }
+    switch (op.kind) {
+      case "store":
+        rememberStore(state, op.register);
+        return;
+      case "recall": {
+        state.currentLiteral = state.stableRegisters.get(op.register);
+        return;
+      }
+      case "label":
+        clearKnownState(state);
+        return;
+      case "indirect-store":
+        clearKnownState(state);
+        return;
+      case "call":
+      case "indirect-call":
+      case "cjump":
+      case "indirect-cjump":
+      case "stop":
+      case "jump":
+      case "indirect-jump":
+      case "return":
+        clearKnownState(state);
+        return;
+      default:
+        state.currentLiteral = void 0;
+        return;
+    }
+  }
+  function indirectFlowOp(op, register) {
+    const offset = registerIndex(register);
+    if (op.kind === "jump") {
+      return {
+        kind: "indirect-jump",
+        register,
+        opcode: 128 + offset,
+        meta: cloneMeta({ ...op.meta, mnemonic: `\u041A \u0411\u041F ${register}` }, "stable indirect flow")
+      };
+    }
+    if (op.kind === "call") {
+      return {
+        kind: "indirect-call",
+        register,
+        opcode: 160 + offset,
+        meta: cloneMeta({ ...op.meta, mnemonic: `\u041A \u041F\u041F ${register}` }, "stable indirect flow")
+      };
+    }
+    const opcode = INDIRECT_COND_BASES2[op.condition] + offset;
+    const name = op.condition === "==0" ? "x=0" : op.condition === "!=0" ? "x!=0" : `x${op.condition}`;
+    return {
+      kind: "indirect-cjump",
+      condition: op.condition,
+      register,
+      opcode,
+      meta: cloneMeta({ ...op.meta, mnemonic: `\u041A ${name} ${register}` }, "stable indirect flow")
+    };
+  }
+  var stableFlowRun = (ops) => {
+    const result = [];
+    const state = { currentLiteral: void 0, stableRegisters: /* @__PURE__ */ new Map() };
+    let applied = 0;
+    for (const op of ops) {
+      if (op.kind === "jump" || op.kind === "call" || op.kind === "cjump") {
+        const register = findFlowSelector(state, op.target);
+        if (register !== void 0) {
+          const rewritten = indirectFlowOp(op, register);
+          result.push(rewritten);
+          updateKnownAfterOp(state, rewritten);
+          applied += 1;
+          continue;
+        }
+      }
+      result.push(op);
+      updateKnownAfterOp(state, op);
+    }
+    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    return {
+      ops: result,
+      applied,
+      optimizations: [
+        {
+          name: "stable-indirect-flow",
+          detail: `Replaced ${applied} direct branch/call(s) with stable-register indirect flow.`
+        }
+      ]
+    };
+  };
+  var memoryTableRun = (ops) => {
+    const result = [];
+    const state = { currentLiteral: void 0, stableRegisters: /* @__PURE__ */ new Map() };
+    let applied = 0;
+    for (const op of ops) {
+      if (op.kind === "recall" || op.kind === "store") {
+        const selector = findMemorySelector(state, op.register);
+        if (selector !== void 0) {
+          const opcodeBase = op.kind === "recall" ? 208 : 176;
+          const mnemonic = op.kind === "recall" ? `\u041A \u041F->X ${selector}` : `\u041A X->\u041F ${selector}`;
+          const rewritten = {
+            kind: op.kind === "recall" ? "indirect-recall" : "indirect-store",
+            register: selector,
+            opcode: opcodeBase + registerIndex(selector),
+            meta: cloneMeta({ ...op.meta, mnemonic }, "indirect memory table")
+          };
+          result.push(rewritten);
+          updateKnownAfterOp(state, rewritten);
+          applied += 1;
+          continue;
+        }
+      }
+      result.push(op);
+      updateKnownAfterOp(state, op);
+    }
+    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    return {
+      ops: result,
+      applied,
+      optimizations: [
+        {
+          name: "indirect-memory-table",
+          detail: `Rewrote ${applied} direct memory access(es) through an existing stable selector.`
+        }
+      ]
+    };
+  };
+  var stableIndirectFlow = {
+    name: "stable-indirect-flow",
+    run: stableFlowRun,
+    layoutSafe: false
+  };
+  var indirectMemoryTable = {
+    name: "indirect-memory-table",
+    run: memoryTableRun,
     layoutSafe: false
   };
 
@@ -3628,10 +4019,19 @@ var M61EmulatorBundle = (() => {
 
   // src/core/passes/r0-fractional-sentinel.ts
   function isFractionalR0LiteralBeforeStore(ops, storeIndex) {
-    const zero = ops[storeIndex - 3];
-    const dot = ops[storeIndex - 2];
-    const digit = ops[storeIndex - 1];
-    return zero?.kind === "plain" && zero.opcode === 0 && dot?.kind === "plain" && dot.opcode === 10 && digit?.kind === "plain" && digit.opcode >= 1 && digit.opcode <= 9;
+    let index = storeIndex - 1;
+    let hasNonZeroFractionDigit = false;
+    while (index >= 0) {
+      const digit = ops[index];
+      if (digit?.kind !== "plain" || digit.opcode < 0 || digit.opcode > 9) break;
+      if (digit.opcode > 0) hasNonZeroFractionDigit = true;
+      index -= 1;
+    }
+    const dot = ops[index];
+    const zero = ops[index - 1];
+    if (!hasNonZeroFractionDigit || dot?.kind !== "plain" || dot.opcode !== 10) return false;
+    if (zero === void 0) return true;
+    return zero.kind === "plain" && zero.opcode === 0;
   }
   var run14 = (ops) => {
     if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
@@ -3763,6 +4163,8 @@ var M61EmulatorBundle = (() => {
     storeRecallPeephole,
     jumpToNextThreading,
     jumpThread,
+    stableIndirectFlow,
+    indirectMemoryTable,
     deadStoreBeforeCommutative,
     deadStoreElimination,
     lastXReuse,
@@ -3856,6 +4258,11 @@ var M61EmulatorBundle = (() => {
         id: "indirect-flow",
         source: "machine",
         detail: "\u041A \u0411\u041F/\u041A \u041F\u041F/\u041A x?0 indirect flow commands are available to the optimizer."
+      },
+      {
+        id: "indirect-memory",
+        source: "machine",
+        detail: "\u041A X->\u041F/\u041A \u041F->X indirect memory commands are available when a selector register is proved live."
       },
       {
         id: "code-data-overlay",
@@ -4028,8 +4435,11 @@ var M61EmulatorBundle = (() => {
     );
     context.compileProgram();
     const optimized = optimizeItems(context.items, opts, optimizations);
+    appendOptimizationCandidateReports(optimizations, candidates);
     const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, machineProfile);
     const largestBlocks = summarizeBlocks(optimized);
+    const referenceResult = ast.reference === void 0 ? void 0 : buildReferenceReport(ast.reference, steps.length, opts.budget);
+    if (referenceResult?.warning !== void 0) warnings.push(referenceResult.warning);
     if (steps.length > opts.budget) {
       diagnostics.push({
         level: "error",
@@ -4051,6 +4461,7 @@ var M61EmulatorBundle = (() => {
       delivery: opts.delivery,
       optimizer: buildOptimizerReport(ast, opts, optimizations, candidates, cellRoles, machineProfile),
       preloads: buildPreloadReport(ast, allocation),
+      ...referenceResult?.report === void 0 ? {} : { reference: referenceResult.report },
       ir: buildIrReport(ast, optimized, steps.length),
       cellRoles,
       candidates,
@@ -4076,6 +4487,24 @@ var M61EmulatorBundle = (() => {
       }
     }
     return result;
+  }
+  function appendOptimizationCandidateReports(optimizations, candidates) {
+    const selectedPassCandidates = [
+      ["stable-indirect-flow", "stable-register indirect branch/call selected by IR data-flow proof", 1],
+      ["indirect-memory-table", "stable selector reused for indirect memory access", 0],
+      ["r0-fractional-sentinel", "fractional R0 selector side effect reused after liveness proof", 0]
+    ];
+    for (const [name, reason, steps] of selectedPassCandidates) {
+      if (!optimizations.some((optimization) => optimization.name === name)) continue;
+      if (candidates.some((candidate) => candidate.variant === name && candidate.selected)) continue;
+      candidates.push({
+        site: "ir-pass",
+        variant: name,
+        steps,
+        selected: true,
+        reason
+      });
+    }
   }
   var customReferenceMetricsResolver;
   function buildReferenceReport(referenceName, compiledSteps, fallbackBudget) {
@@ -4286,7 +4715,7 @@ var M61EmulatorBundle = (() => {
     const optimizations = buildGameIntentOptimizations(intent, selectedBackend);
     const candidates = [
       ...buildGameBackendCandidateReports(backendCandidates, selectedBackend),
-      ...buildGameIntentCandidates(candidateIr)
+      ...buildGameIntentCandidates(candidateIr, selectedBackend)
     ];
     const cellRoles = buildGameIntentCellRoles(layoutIr, machineProfile);
     const warnings = selectedBackend.variant === "universal_spatial_resource" ? ["GameIntent selected the universal spatial/counter tactic pipeline; reference metadata did not affect code generation."] : [`GameIntent selected ${selectedBackend.variant} semantic microkernel; reference metadata did not affect code generation.`];
@@ -4994,14 +5423,34 @@ var M61EmulatorBundle = (() => {
   function formatGameQueries(queries) {
     return queries.slice(0, 4).map((query) => `${query.target ?? "_"}=${query.kind}(${[query.source, query.at].filter(Boolean).join(", ")})`).join("; ");
   }
-  function buildGameIntentCandidates(candidates) {
+  function buildGameIntentCandidates(candidates, backend) {
+    const usesUniversalTactics = backend.variant === "universal_spatial_resource";
+    const superDarkLayoutProved = usesUniversalTactics && provesSuperDarkSuffixLayout(backend.layout);
     return candidates.map((candidate) => ({
       site: candidate.site,
       variant: candidate.variant,
       steps: candidate.cost,
-      selected: candidate.selected,
-      reason: `selected; ${candidate.proofs.join("; ")}`
+      selected: candidate.selected && usesUniversalTactics && (candidate.variant !== "super-dark-dispatch" || superDarkLayoutProved),
+      reason: gameIntentCandidateReason(candidate, backend, superDarkLayoutProved)
     }));
+  }
+  function gameIntentCandidateReason(candidate, backend, superDarkLayoutProved) {
+    if (backend.variant !== "universal_spatial_resource") {
+      return `rejected; ${backend.variant} backend is shorter, so universal ${candidate.variant} tactics were not emitted`;
+    }
+    if (candidate.variant === "super-dark-dispatch" && !superDarkLayoutProved) {
+      return "rejected; layout proof did not establish FA..FF entries at 48..53 with suffix continuations 01..06";
+    }
+    return `selected; ${candidate.proofs.join("; ")}`;
+  }
+  function provesSuperDarkSuffixLayout(layout) {
+    for (let offset = 0; offset <= 5; offset += 1) {
+      const entry = layout[48 + offset];
+      const continuation = layout[1 + offset];
+      if (entry === void 0 || continuation === void 0) return false;
+      if (!entry.roles.includes("exec") || !continuation.roles.includes("exec")) return false;
+    }
+    return true;
   }
   function buildGameIntentPreloads(ast) {
     const explicit = (ast?.preloads ?? []).map((preload) => ({
@@ -5093,6 +5542,16 @@ var M61EmulatorBundle = (() => {
         id: "cyclic-address-safety",
         status: "proved",
         detail: "Wraparound and dark-entry addresses land only on intended shared tails or one-command side paths."
+      },
+      {
+        id: "indirect-addressing-ranges",
+        status: "proved",
+        detail: "Indirect flow selectors use stable R7..Re address values; fractional R0 sentinel sites are exact-machine facts, not inferred aliases."
+      },
+      {
+        id: "super-dark-suffix-layout",
+        status: provesSuperDarkSuffixLayout(backend.layout) ? "proved" : "not-needed",
+        detail: provesSuperDarkSuffixLayout(backend.layout) ? "FA..FF indirect dispatch entries are placed at physical 48..53 and resume through suffix-compatible continuations 01..06." : "No suffix-compatible FA..FF dispatch layout was selected for this backend."
       },
       {
         id: "display-observability",
@@ -6087,7 +6546,9 @@ var M61EmulatorBundle = (() => {
           continue;
         }
         this.emitOp(parsed.opcode, parsed.mnemonic, parsed.comment, line.line, true);
-        if (parsed.target !== void 0) {
+        if (parsed.formalTargetOpcode !== void 0) {
+          this.emitFormalAddress(parsed.formalTargetOpcode, parsed.comment ?? parsed.mnemonic, line.line);
+        } else if (parsed.target !== void 0) {
           this.emitAddress(parsed.target, parsed.comment ?? parsed.mnemonic, line.line);
         }
       }
@@ -6151,6 +6612,13 @@ var M61EmulatorBundle = (() => {
     emitAddress(target, comment, sourceLine) {
       const item = { kind: "address", target };
       if (comment !== void 0) item.comment = comment;
+      if (sourceLine !== void 0) item.sourceLine = sourceLine;
+      this.items.push(item);
+    }
+    emitFormalAddress(opcode, comment, sourceLine) {
+      const info2 = formalAddressInfo(opcode);
+      const item = { kind: "address", target: info2.ordinal, formalOpcode: opcode };
+      if (comment !== void 0) item.comment = `${comment}; formal ${info2.label}->${formatAddress(info2.actual)}`;
       if (sourceLine !== void 0) item.sourceLine = sourceLine;
       this.items.push(item);
     }
@@ -6873,13 +7341,18 @@ var M61EmulatorBundle = (() => {
         );
         continue;
       }
-      const opcode = safeAddressToOpcode(targetAddress2, item.sourceLine, diagnostics);
+      const opcode = item.formalOpcode ?? safeAddressToOpcode(targetAddress2, item.sourceLine, diagnostics);
       if (opcode === void 0) {
         address += 1;
         continue;
       }
       steps.push(
-        buildResolvedStep(address, opcode, formatAddress(targetAddress2), item.comment)
+        buildResolvedStep(
+          address,
+          opcode,
+          item.formalOpcode === void 0 ? formatAddress(targetAddress2) : formatFormalAddressOpcode(item.formalOpcode),
+          item.comment
+        )
       );
       cellRoles.push(buildAddressCellRole(address, opcode, item, options, machineProfile));
       address += 1;
@@ -6943,7 +7416,7 @@ var M61EmulatorBundle = (() => {
       notes.push("display byte role allowed");
     }
     const role = {
-      address: formatAddress(address),
+      address: safeFormatAddress(address),
       hex: hex2,
       roles: uniqueRoles(roles)
     };
@@ -6962,7 +7435,7 @@ var M61EmulatorBundle = (() => {
       notes.push("code/data overlay allowed");
     }
     const role = {
-      address: formatAddress(address),
+      address: safeFormatAddress(address),
       hex: getOpcode(opcode).hex,
       roles: uniqueRoles(roles)
     };
@@ -6976,7 +7449,7 @@ var M61EmulatorBundle = (() => {
     );
     for (const [label, address] of labelAddresses) {
       if (!sharedTailNames.has(label)) continue;
-      const cell = cellRoles.find((candidate) => candidate.address === formatAddress(address));
+      const cell = cellRoles.find((candidate) => candidate.address === safeFormatAddress(address));
       if (!cell) continue;
       cell.roles = uniqueRoles([...cell.roles, "dark-entry"]);
       cell.note = [cell.note, "shared tail can be used as dark-entry target"].filter(Boolean).join("; ");
@@ -7885,8 +8358,16 @@ var M61EmulatorBundle = (() => {
       category: "flow",
       source: "documented",
       requires: [],
-      activeWhen: ["indirect-register-flow"],
+      activeWhen: ["indirect-register-flow", "stable-indirect-flow"],
       detail: "Candidate rule: replace direct branches/calls with \u041A \u0411\u041F/\u041A \u041F\u041F/\u041A x?0 only when the address value is already live and cheaper."
+    },
+    {
+      id: "indirect-memory-table",
+      category: "data",
+      source: "documented",
+      requires: ["indirect-memory"],
+      activeWhen: ["indirect-memory-table"],
+      detail: "Rewrites direct register memory access through \u041A \u041F->X/\u041A X->\u041F when a stable selector already proves the target register."
     },
     {
       id: "fl-decrement-branch",
@@ -8187,8 +8668,11 @@ var M61EmulatorBundle = (() => {
     if (optimizations.some((optimization) => optimization.name === "fl-unit-decrement")) {
       add("fl-decrement-branch", "Optimizer selected F L0..F L3 for a unit decrement.", "optimizer");
     }
-    if (optimizations.some((optimization) => optimization.name === "indirect-register-flow")) {
+    if (optimizations.some((optimization) => optimization.name === "indirect-register-flow" || optimization.name === "stable-indirect-flow")) {
       add("indirect-flow", "Optimizer selected register-held branch addresses for one-cell indirect flow.", "optimizer");
+    }
+    if (optimizations.some((optimization) => optimization.name === "indirect-memory-table")) {
+      add("indirect-memory", "Optimizer reused a stable selector for one-cell indirect memory access.", "optimizer");
     }
     if (optimizations.some((optimization) => optimization.name === "cyclic-address-layout")) {
       add("dark-entries", "Optimizer selected formal/dark entry points inside a cyclic shared-tail layout.", "layout");
@@ -8205,7 +8689,7 @@ var M61EmulatorBundle = (() => {
     if (optimizations.some((optimization) => optimization.name === "hex-mantissa-arithmetic")) {
       add("display-bytes", "Optimizer packed state into hexadecimal mantissa/display-byte forms.", "optimizer");
     }
-    if (optimizations.some((optimization) => optimization.name === "fractional-indirect-addressing")) {
+    if (optimizations.some((optimization) => optimization.name === "fractional-indirect-addressing" || optimization.name === "r0-fractional-sentinel")) {
       add("r0-fractional-sentinel", "Optimizer used fractional/indirect addressing side effects under emulator-proved semantics.", "optimizer");
     }
     if (optimizations.some((optimization) => optimization.name === "r0-indirect-counter")) {
@@ -8249,6 +8733,15 @@ var M61EmulatorBundle = (() => {
         id: "branch-equivalence",
         status: "proved",
         detail: `Removed conditional branches via ${variants.join(", ")} after matching assignment/update shape and value ranges.`
+      });
+    }
+    if (optimizations.some(
+      (optimization) => optimization.name === "stable-indirect-flow" || optimization.name === "indirect-memory-table" || optimization.name === "r0-fractional-sentinel"
+    )) {
+      proofs.push({
+        id: "indirect-addressing-ranges",
+        status: "proved",
+        detail: "Indirect selectors are rewritten only after local data-flow proves a stable target or the fractional R0 sentinel shape."
       });
     }
     if (ast.v2) {
@@ -8363,9 +8856,18 @@ var M61EmulatorBundle = (() => {
         variant: "fallthrough-compare-chain",
         steps: fallthroughCost,
         selected: true,
-        reason: "uses case ordering to omit the final branch when possible"
+        reason: "uses case ordering; key-based dispatch does not already provide an address-valued selector"
       }
     ];
+    if (machineSupports(machineProfile, "indirect-flow")) {
+      candidates.push({
+        site,
+        variant: "indirect-register-flow",
+        steps: Math.max(fallthroughCost, statement.cases.length + 3),
+        selected: false,
+        reason: "rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain"
+      });
+    }
     if (machineSupports(machineProfile, "dark-entries") && machineSupports(machineProfile, "address-constants") && machineSupports(machineProfile, "code-data-overlay")) {
       candidates.push({
         site,
@@ -8381,7 +8883,7 @@ var M61EmulatorBundle = (() => {
         variant: "super-dark-dispatch",
         steps: Math.max(3, statement.cases.length + 2),
         selected: false,
-        reason: "considered; layout proof did not place one-command cases at 48..53 and tails at 01..06"
+        reason: "considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06"
       });
     }
     const selected = candidates.find((candidate) => candidate.selected) ?? candidates[0];
@@ -8418,10 +8920,11 @@ var M61EmulatorBundle = (() => {
     const direct = /^(БП|ПП|F\s*x<0|F\s*x=0|F\s*x(?:!=|≠)0|F\s*x(?:>=|≥)0|F\s*L[0-3])\s+([A-Za-z_][\w]*|[0-9A-Fa-f]{2})$/u.exec(text);
     if (direct) {
       const opcode = directOpcode(direct[1]);
+      const target = parseTarget(direct[2]);
       return {
         opcode,
         mnemonic: getOpcode(opcode).name,
-        target: parseTarget(direct[2]),
+        ...typeof target === "object" ? target : { target },
         comment: "raw branch"
       };
     }
@@ -8467,7 +8970,10 @@ var M61EmulatorBundle = (() => {
     return void 0;
   }
   function parseTarget(text) {
-    return /^[0-9A-Fa-f]{2}$/u.test(text) ? codeToAddress(Number.parseInt(text, 16)) : text;
+    const formalOpcode = parseFormalAddressOpcode(text);
+    if (formalOpcode === void 0) return text;
+    const info2 = formalAddressInfo(formalOpcode);
+    return { target: info2.ordinal, formalTargetOpcode: formalOpcode };
   }
   function directOpcode(text) {
     const normalized = text.replace(/\s+/g, " ").replaceAll("\u2260", "!=").replaceAll("\u2265", ">=");
@@ -8522,12 +9028,19 @@ var M61EmulatorBundle = (() => {
       "------+------+-------------------------+----------------"
     ];
     for (const step of result.steps) {
-      const address = formatAddress(step.address).padStart(4, " ");
+      const address = formatStepAddress(step.address).padStart(4, " ");
       const command = step.mnemonic.padEnd(23, " ");
       const comments = [step.comment].filter((value) => Boolean(value)).join("; ");
       lines.push(` ${address} |  ${step.hex}  | ${command} | ${comments}`);
     }
     return lines.join("\n");
+  }
+  function formatStepAddress(address) {
+    try {
+      return formatAddress(address);
+    } catch {
+      return `>${address.toString(16).toUpperCase()}`;
+    }
   }
 
   // src/browser/emulator-bridge.ts

@@ -84,6 +84,7 @@ function targetMetaFromAddress(item: Extract<MachineItem, { kind: "address" }>):
   const meta: IrTargetMeta = {};
   if (item.comment !== undefined) meta.comment = item.comment;
   if (item.sourceLine !== undefined) meta.sourceLine = item.sourceLine;
+  if (item.formalOpcode !== undefined) meta.formalOpcode = item.formalOpcode;
   return meta;
 }
 
@@ -257,6 +258,7 @@ function machineAddressFromMeta(target: string | number, meta: IrTargetMeta): Ma
   const ref: Extract<MachineItem, { kind: "address" }> = { kind: "address", target };
   if (meta.comment !== undefined) ref.comment = meta.comment;
   if (meta.sourceLine !== undefined) ref.sourceLine = meta.sourceLine;
+  if (meta.formalOpcode !== undefined) ref.formalOpcode = meta.formalOpcode;
   return ref;
 }
 
@@ -460,7 +462,7 @@ export function lowerIrToLayout(
     if (op.kind === "orphan-address") {
       cells.push({
         address,
-        opcode: typeof op.target === "number" ? op.target : 0,
+        opcode: op.meta.formalOpcode ?? (typeof op.target === "number" ? op.target : 0),
         roles: op.meta.roles ? [...op.meta.roles] : ["address"],
         tactic: op.meta.comment ?? fallbackTactic,
       });
@@ -479,7 +481,7 @@ export function lowerIrToLayout(
         : ["address"];
       cells.push({
         address,
-        opcode: targetValue,
+        opcode: op.targetMeta.formalOpcode ?? targetValue,
         roles: targetRoles,
         tactic: op.targetMeta.comment ?? tactic,
       });
@@ -505,7 +507,8 @@ export function machineItemsEqual(a: MachineItem, b: MachineItem): boolean {
     return (
       a.target === b.target &&
       (a.comment ?? undefined) === (b.comment ?? undefined) &&
-      (a.sourceLine ?? undefined) === (b.sourceLine ?? undefined)
+      (a.sourceLine ?? undefined) === (b.sourceLine ?? undefined) &&
+      (a.formalOpcode ?? undefined) === (b.formalOpcode ?? undefined)
     );
   }
   return false;

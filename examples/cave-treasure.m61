@@ -1,4 +1,4 @@
-reference cave_treasure_full_v2
+reference kei_treasure_cave
 
 // Full Cave Treasure in the current M61 surface: compact source intent, with the
 // MK-61-specific overlay and dispatch choices left to compiler reports.

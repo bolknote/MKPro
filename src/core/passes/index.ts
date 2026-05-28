@@ -14,6 +14,7 @@ import { deadStoreBeforeCommutative } from "./dead-store-before-commutative.ts";
 import { deadStoreElimination } from "./dead-store-elimination.ts";
 import { duplicateFailureTail } from "./duplicate-failure-tail.ts";
 import type { IrPass } from "./helpers.ts";
+import { indirectMemoryTable, stableIndirectFlow } from "./indirect-addressing.ts";
 import { jumpThread } from "./jump-thread.ts";
 import { jumpToNextThreading } from "./jump-to-next.ts";
 import { lastXReuse } from "./last-x-reuse.ts";
@@ -30,6 +31,8 @@ const PASS_PIPELINE: ReadonlyArray<IrPass> = [
   storeRecallPeephole,
   jumpToNextThreading,
   jumpThread,
+  stableIndirectFlow,
+  indirectMemoryTable,
   deadStoreBeforeCommutative,
   deadStoreElimination,
   lastXReuse,

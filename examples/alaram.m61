@@ -1,0 +1,133 @@
+reference lordbss_pmk210
+
+// Based on Lord_BSS pmk210, "Alaram" by Sergey Shinkevich. The original is a
+// full 105-cell cockpit-perspective interceptor game.
+
+program Alaram {
+  state {
+    // The cockpit display is a compact perspective picture: canopy edges,
+    // reticle, steering wheel, and the intruder's relative bearing.
+    fighter: coord = 0
+    cockpit_view: packed = 80000078
+    intruder_mark: coord = 3
+
+    altitude: counter 0..999 = 0
+    range: counter -300..0 = -300
+    angle: counter -180..180 = 0
+
+    // Level narrows the firing cone. The original asks for level A=1..9 before
+    // play; here it stays explicit game state so the rule can name that pressure.
+    level: counter 1..9 = 3
+    hit_window: counter 0..9 = 3
+
+    crash_pattern: packed = -999
+    shot_down_pattern: packed = -666
+    victory_pattern: packed = 80700078
+  }
+
+  world sky {
+    // The source listing draws a forward cockpit lane. Horizontal movement is
+    // aiming, vertical movement is climb/dive, and range closes every turn.
+    position fighter {
+      encoding cockpit_perspective
+    }
+  }
+
+  screen cockpit {
+    show cockpit_view, intruder_mark
+  }
+
+  screen crash {
+    show crash_pattern
+  }
+
+  screen shot_down {
+    show shot_down_pattern
+  }
+
+  screen victory {
+    show victory_pattern
+  }
+
+  rule ground {
+    show crash
+    stop -999
+  }
+
+  rule tail_gun {
+    show shot_down
+    stop -666
+  }
+
+  rule destroyed {
+    show victory
+    stop 777
+  }
+
+  turn {
+    show cockpit
+    read command
+
+    match command {
+      0 => fire
+      2 => dive
+      4 => bank_left
+      6 => bank_right
+      8 => climb
+      otherwise => hold_course
+    }
+  }
+
+  rule climb {
+    move fighter up
+    altitude += 100
+    close_range
+  }
+
+  rule dive {
+    move fighter down
+    altitude -= 100
+    if altitude <= 0 {
+      ground
+    }
+    close_range
+  }
+
+  rule bank_left {
+    move fighter west
+    angle -= 10
+    close_range
+  }
+
+  rule bank_right {
+    move fighter east
+    angle += 10
+    close_range
+  }
+
+  rule hold_course {
+    close_range
+  }
+
+  rule close_range {
+    // The intruder keeps moving through the sight picture. Getting too close
+    // without a clean shot means entering the machine-gun tail arc.
+    range++
+    intruder_mark = random_cell(sky)
+
+    if range >= 0 {
+      tail_gun
+    }
+    show cockpit
+  }
+
+  rule fire {
+    // Firing is only meaningful when the intruder is inside the reticle. A
+    // miss still advances the dogfight, so wasting shots is dangerous.
+    hit_window = 10 - level
+    if abs(angle) <= hit_window {
+      destroyed
+    }
+    close_range
+  }
+}

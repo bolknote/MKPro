@@ -1,4 +1,4 @@
-reference cave_highlevel_baseline
+reference kei_treasure_cave
 
 // Early readable Cave Treasure baseline kept as a compactness comparison.
 // The source is now game intent; register plans and raw return tricks live in reports.

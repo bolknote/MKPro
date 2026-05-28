@@ -689,7 +689,7 @@ function parseProgramText(text) {
   }
 
   const addressedLines = source.split(/\r?\n/)
-    .map((line) => line.match(/^\s*([0-9]{2}|A[0-4])\s+(.+?)\s*$/i))
+    .map((line) => line.match(/^\s*([0-9A-F.-]{2})\s+(.+?)\s*$/i))
     .filter(Boolean)
     .map((match) => `${match[1].toUpperCase()}.${match[2]}`);
   const tokens = addressedLines.length > 0 ? addressedLines : (source.trim() ? source.trim().split(/\s+/) : []);
@@ -697,20 +697,22 @@ function parseProgramText(text) {
   const commands = [];
 
   for (const token of tokens) {
-    const label = token.match(/^((([0-9]|A|-|\.)[0-9])\.)?(.+):$/i);
+    const label = token.match(/^(([0-9A-F.-]{2})\.)?(.+):$/i);
     if (label) {
       const address = label[2] ? parseProgramAddress(label[2]) : commands.length;
-      labels.set(normalizeLabel(label[4]), address);
+      labels.set(normalizeLabel(label[3]), address);
     } else {
       commands.push(token);
     }
   }
 
   const codes = [];
-  for (let index = 0; index < commands.length; index++) {
-    const parsed = parseCommandToken(commands[index], index, labels);
-    if (parsed.address !== null) index = parsed.address;
+  let writeIndex = 0;
+  for (const command of commands) {
+    const parsed = parseCommandToken(command, writeIndex, labels);
+    const index = parsed.address !== null ? parsed.address : writeIndex;
     codes[index] = parsed.code;
+    writeIndex = index + 1;
     if (parsed.warning) diagnostics.push(parsed.warning);
   }
 
@@ -723,10 +725,10 @@ function parseProgramText(text) {
 function parseCommandToken(token, fallbackAddress, labels = new Map()) {
   let command = String(token).trim();
   let address = null;
-  const addressed = command.match(/^(([0-9]|A|-|\.)[0-9])\.(.*)$/i);
+  const addressed = command.match(/^([0-9A-F.-]{2})\.(.*)$/i);
   if (addressed) {
     address = parseProgramAddress(addressed[1]);
-    command = addressed[3];
+    command = addressed[2];
   }
   if (command === '') return { address, code: 0 };
 
@@ -821,17 +823,24 @@ function parseRegisterNibble(text) {
 }
 
 function parseProgramAddress(text) {
-  const normalized = String(text).toUpperCase();
-  if (/^[A.-][0-4]$/.test(normalized)) return 100 + parseInt(normalized[1], 10);
-  if (/^\d\d$/.test(normalized)) return parseInt(normalized, 10);
-  const parsed = parseInt(normalized.replace(/[.-]/g, 'A'), 16);
-  if (parsed >= 0xA0 && parsed <= 0xA4) return 100 + (parsed - 0xA0);
-  return ((parsed / 16) | 0) * 10 + (parsed % 16);
+  const normalized = String(text).toUpperCase().replace(/[.-]/g, 'A');
+  if (!/^[0-9A-F]{2}$/.test(normalized)) return 0;
+  return formalAddressInfo(parseInt(normalized, 16)).actual;
 }
 
 function addressNumberToOpcode(address) {
   if (address >= 100) return 0xA0 + (address - 100);
   return ((address / 10) | 0) * 16 + (address % 10);
+}
+
+function formalAddressInfo(opcode) {
+  const high = opcode >> 4;
+  const low = opcode & 0x0f;
+  const ordinal = high * 10 + low;
+  if (ordinal <= 104) return { actual: ordinal };
+  if (ordinal <= 111) return { actual: ordinal - 105 };
+  if (ordinal <= 165) return { actual: ordinal - 112 };
+  return { actual: 0 };
 }
 
 function normalizeLabel(label) {

@@ -1,0 +1,113 @@
+reference lordbss_pmk164
+
+// Based on Lord_BSS pmk164, "Dungeon" by S. Andrianov. The original listing is
+// a full 105-cell MK-61 program; this source keeps the game as rules instead of
+// calculator storage choreography.
+
+program Dungeon {
+  state {
+    // The player sees position and height. The generated plan says which height
+    // is blocked by a wall at each corridor position.
+    pos: coord = 8
+    height: counter 0..9 = 2
+    plan: packed = 42134124
+
+    score: counter 0..99 = 0
+    mistakes: counter 0..3 = 0
+
+    wall: counter 0..9 = 0
+  }
+
+  world dungeon {
+    // Dungeon is a corridor, not an open board: left/right change the position,
+    // up/down change height, and the plan cell decides whether the move stands.
+    position pos {
+      encoding corridor_plan
+    }
+  }
+
+  screen place {
+    show pos, height
+  }
+
+  screen map {
+    show plan
+  }
+
+  rule lost {
+    stop -999
+  }
+
+  turn {
+    show place
+    show map
+    read action
+
+    match action {
+      4 => step_left
+      6 => step_right
+      8 => climb
+      2 => descend
+      otherwise => bump
+    }
+  }
+
+  rule step_left {
+    pos--
+    check_room
+  }
+
+  rule step_right {
+    pos++
+    score++
+    if pos >= 7 {
+      extend_corridor
+    }
+    check_room
+  }
+
+  rule climb {
+    height++
+    check_room
+  }
+
+  rule descend {
+    height--
+    check_room
+  }
+
+  rule check_room {
+    // A wall is the height digit stored for the current position. Hitting it, or
+    // leaving the corridor, counts as an error; three errors end the run.
+    if pos <= 0 {
+      bump
+    }
+    if pos >= 9 {
+      bump
+    }
+
+    wall = cell_at(dungeon, pos)
+    if height == wall {
+      bump
+    }
+    else {
+      show place
+    }
+  }
+
+  rule bump {
+    mistakes++
+    if mistakes >= 3 {
+      lost
+    }
+    show place
+  }
+
+  rule extend_corridor {
+    // In the published rules, reaching the seventh position reveals the next
+    // slice of dungeon and shifts positions 7 and 8 back to 1 and 2.
+    pos = 2
+    plan = random()
+    show map
+  }
+}

@@ -3,6 +3,7 @@ import { lowerIrToMachine } from "../../src/core/ir.ts";
 import { arithmeticIfPass } from "../../src/core/passes/arithmetic-if.ts";
 import { deadCodeAfterHalt } from "../../src/core/passes/dead-code-after-halt.ts";
 import { deadStoreElimination } from "../../src/core/passes/dead-store-elimination.ts";
+import { indirectMemoryTable, stableIndirectFlow } from "../../src/core/passes/indirect-addressing.ts";
 import { jumpThread } from "../../src/core/passes/jump-thread.ts";
 import { jumpToNextThreading } from "../../src/core/passes/jump-to-next.ts";
 import { lastXReuse } from "../../src/core/passes/last-x-reuse.ts";
@@ -74,6 +75,27 @@ function cjump(target: string): IrOp {
     target,
     opcode: 0x5e,
     meta: { mnemonic: "F x=0" },
+    targetMeta: {},
+  };
+}
+
+function numericCjump(target: number): IrOp {
+  return {
+    kind: "cjump",
+    condition: "==0",
+    target,
+    opcode: 0x5e,
+    meta: { mnemonic: "F x=0" },
+    targetMeta: {},
+  };
+}
+
+function numericJump(target: number): IrOp {
+  return {
+    kind: "jump",
+    target,
+    opcode: 0x51,
+    meta: { mnemonic: "БП" },
     targetMeta: {},
   };
 }
@@ -200,6 +222,95 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops.find((op) => op.kind === "jump")).toBeUndefined();
   });
 
+  it("stable-indirect-flow replaces direct numeric branches when a stable selector already holds the address", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("7"),
+      numericJump(12),
+      halt(),
+    ];
+    const result = stableIndirectFlow.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.optimizations[0]?.name).toBe("stable-indirect-flow");
+    expect(result.ops[3]).toMatchObject({ kind: "indirect-jump", register: "7", opcode: 0x87 });
+  });
+
+  it("stable-indirect-flow replaces numeric conditional branches with indirect conditionals", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("7"),
+      numericCjump(12),
+      halt(),
+    ];
+    const result = stableIndirectFlow.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops[3]).toMatchObject({ kind: "indirect-cjump", register: "7", opcode: 0xe7 });
+  });
+
+  it("stable-indirect-flow refuses non-stable selectors because they mutate during addressing", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("4"),
+      numericJump(13),
+      halt(),
+    ];
+    const result = stableIndirectFlow.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops[3]?.kind).toBe("jump");
+  });
+
+  it("stable-indirect-flow refuses unresolved labels without a layout proof", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("7"),
+      jump("late_label"),
+      label("late_label"),
+      halt(),
+    ];
+    const result = stableIndirectFlow.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops[3]?.kind).toBe("jump");
+  });
+
+  it("stable-indirect-flow drops selector knowledge after calls", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("7"),
+      { kind: "call", target: "maybe_mutates", opcode: 0x53, meta: { mnemonic: "ПП" }, targetMeta: {} },
+      numericJump(12),
+      label("maybe_mutates"),
+      ret(),
+    ];
+    const result = stableIndirectFlow.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops[4]?.kind).toBe("jump");
+  });
+
+  it("indirect-memory-table drops selector knowledge after conditional control-flow splits", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      store("7"),
+      cjump("maybe_mutates"),
+      recall("2"),
+      label("maybe_mutates"),
+      halt(),
+    ];
+    const result = indirectMemoryTable.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops[3]).toMatchObject({ kind: "recall", register: "2" });
+  });
+
   it("dead-code-after-halt prunes ops unreachable from the entry CFG", () => {
     const program: IrOp[] = [
       jump("END"),
@@ -323,6 +434,34 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops.at(-1)?.kind).toBe("indirect-recall");
   });
 
+  it("r0-fractional-sentinel recognizes multi-digit fractional R0 literals", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("0"),
+      indirectRecall("0"),
+      recall("3"),
+    ];
+    const result = r0FractionalSentinel.run(program, ctx);
+    expect(result.applied).toBe(1);
+    expect(result.ops.at(-1)?.kind).toBe("indirect-recall");
+  });
+
+  it("r0-fractional-sentinel recognizes explicit leading-dot R0 literals", () => {
+    const program: IrOp[] = [
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      store("0"),
+      indirectRecall("0"),
+      recall("3"),
+    ];
+    const result = r0FractionalSentinel.run(program, ctx);
+    expect(result.applied).toBe(1);
+    expect(result.ops.at(-1)?.kind).toBe("indirect-recall");
+  });
+
   it("r0-fractional-sentinel refuses when R0 is live after the indirect access", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
@@ -349,6 +488,34 @@ describe("ir passes on synthetic programs", () => {
     const result = r0FractionalSentinel.run(program, ctx);
     expect(result.applied).toBe(1);
     expect(result.ops.at(-1)?.kind).toBe("indirect-store");
+  });
+
+  it("indirect-memory-table rewrites direct recall through an existing stable selector", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      store("7"),
+      recall("2"),
+      halt(),
+    ];
+    const result = indirectMemoryTable.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.optimizations[0]?.name).toBe("indirect-memory-table");
+    expect(result.ops[2]).toMatchObject({ kind: "indirect-recall", register: "7", opcode: 0xd7 });
+  });
+
+  it("indirect-memory-table rewrites direct store through an existing stable selector", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      store("8"),
+      plain(0x09, "9"),
+      store("2"),
+      halt(),
+    ];
+    const result = indirectMemoryTable.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops[3]).toMatchObject({ kind: "indirect-store", register: "8", opcode: 0xb8 });
   });
 
   it("vp-x2-peephole removes fractional op already supplied by a display ВП boundary", () => {

@@ -27,7 +27,10 @@ interface Mk61Instance {
 type Mk61Constructor = new (options?: { extended?: boolean }) => Mk61Instance;
 
 const ROM = require("./rom.cjs") as RomModule;
-const { MK61 } = require("./mk61.cjs") as { MK61: Mk61Constructor };
+const { MK61, parseProgramText } = require("./mk61.cjs") as {
+  MK61: Mk61Constructor;
+  parseProgramText: (source: string) => { codes: number[]; diagnostics: string[] };
+};
 
 const CHIP_NAMES = ["ИК1302", "ИК1303", "ИК1306"] as const;
 
@@ -192,6 +195,17 @@ describe("emulator ROM discoveries", () => {
     }
   });
 
+  it("loads formal dark addressed source lines at their physical cells", () => {
+    const parsed = parseProgramText(`
+C5 7
+C6 8
+`);
+
+    expect(parsed.diagnostics).toEqual([]);
+    expect(parsed.codes[13]).toBe(0x07);
+    expect(parsed.codes[14]).toBe(0x08);
+  });
+
   it("executes only one command at super-dark formal addresses before the extra address", () => {
     const program = Array<number>(105).fill(0x50);
     program[0] = 0x51;
@@ -206,5 +220,35 @@ describe("emulator ROM discoveries", () => {
     expect(result.stopped).toBe(true);
     expect(result.display).toContain("8");
     expect(result.display).not.toContain("9");
+  });
+
+  it("executes stable-register indirect flow used by the optimizer", () => {
+    const program = Array<number>(105).fill(0x50);
+    program[0] = 0x01;
+    program[1] = 0x02;
+    program[2] = 0x47;
+    program[3] = 0x87;
+    program[4] = 0x09;
+    program[12] = 0x07;
+    program[13] = 0x50;
+
+    const result = runProgram(program);
+
+    expect(result.stopped).toBe(true);
+    expect(result.display).toContain("7");
+    expect(result.display).not.toContain("9");
+  });
+
+  it("executes stable-register indirect memory access used by the optimizer", () => {
+    const recallProgram = [0x05, 0x42, 0x0d, 0x02, 0x47, 0xd7, 0x50];
+    const storeProgram = [0x02, 0x47, 0x0d, 0x09, 0xb7, 0x0d, 0xd7, 0x50];
+
+    const recall = runProgram(recallProgram);
+    const store = runProgram(storeProgram);
+
+    expect(recall.stopped).toBe(true);
+    expect(recall.display).toContain("5");
+    expect(store.stopped).toBe(true);
+    expect(store.display).toContain("9");
   });
 });

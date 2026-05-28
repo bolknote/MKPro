@@ -165,6 +165,8 @@ Smoke tests for packaged games live under `tests/emulator/`.
 | `examples/tiny-game.m61` | Minimal M61 game sketch |
 | `examples/cave-sketch.m61` | compact V2 cave sketch/baseline |
 | `examples/cave-treasure-full.m61` | hard high-level compactness reference |
+| `examples/alaram.m61` | commented Lord_BSS cockpit interceptor port |
+| `examples/dungeon.m61` | commented Lord_BSS Dungeon port |
 
 ## Sources
 
