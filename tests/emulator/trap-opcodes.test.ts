@@ -9,6 +9,8 @@ interface Mk61Instance {
   press(key: string): void;
   runUntilStable(options: { maxFrames: number; stableFrames: number }): { stopped: boolean; frames: number };
   displayText(): string;
+  programCounter(): string;
+  readRegister(register: string): string;
 }
 type Mk61Constructor = new (options?: { extended?: boolean }) => Mk61Instance;
 const { MK61 } = require("./mk61.cjs") as { MK61: Mk61Constructor };
@@ -32,6 +34,25 @@ function runTrap(opcode: number, x: string): string {
 // domain, and compute normally off-domain. This proves the (currently
 // explicit-intent-only) trap machinery is semantically sound on real hardware.
 describe("ROM fact: domain-error trap opcodes", () => {
+  const explicitErrorOpcodes = [0x27, 0x28, 0x29, 0x2b, 0x2c, 0x2d, 0x2e, 0x3c];
+
+  it("explicit ЕГГ0Г opcodes act as one-cell traps and copy X to X1", () => {
+    for (const opcode of explicitErrorOpcodes) {
+      const calc = new MK61();
+      calc.loadProgram([opcode, 0x50]);
+      calc.setRegister("x", "5");
+      calc.press("В/О");
+      calc.press("С/П");
+      const run = calc.runUntilStable({ maxFrames: 200, stableFrames: 5 });
+
+      expect(run.stopped).toBe(true);
+      expect(calc.programCounter()).toBe("02");
+      expect(isErrorStop(calc.displayText())).toBe(true);
+      expect(calc.readRegister("x")).toBe("5,");
+      expect(calc.readRegister("x1")).toBe("5,");
+    }
+  });
+
   const cases: Array<{ trap: string; opcode: number; bad: string; good: string }> = [
     { trap: "zero (F 1/x)", opcode: 0x23, bad: "0", good: "5" },
     { trap: "negative (F sqrt)", opcode: 0x21, bad: "-4", good: "4" },

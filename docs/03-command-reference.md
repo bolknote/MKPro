@@ -136,6 +136,10 @@ ROM microprograms.
 
 Commands that fail due to an invalid argument, range check, or explicit error code can still copy `X -> X1` before the error is displayed. Overflow can be subtler: the copy to `X1` may happen at the operation that created the overflow, while a later X2-affecting command only reveals it.
 
+The explicit `ЕГГ0Г` opcodes (`27`, `28`, `29`, `2B`..`2E`, `3C`) are not useful for arithmetic, but they are useful as one-cell traps. Emulator probes show they stop with `ЕГГ0Г`, leave `X` intact, advance past the trap cell, and copy `X` to `X1`. Their ROM words are not identical, so treat them as behavior-equivalent traps rather than byte-identical aliases.
+
+Ordinary domain-checking commands can also be used as conditional traps when their success result is acceptable or unreachable. Examples include `F 1/x` for zero, `F sqrt` for negative values, `F lg` for nonpositive values, `F sin^-1` for `abs(X) > 1`, `F 10^x` for large exponents, and `К °->′"` for fractional parts `>= 0.6`.
+
 ## Approximate Execution Times
 
 Real devices vary by controller batch, but Anvarov gives these approximate timings:
