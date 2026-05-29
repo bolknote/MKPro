@@ -1274,6 +1274,35 @@ program BranchlessAssignment {
     expect(result.report.proofs.some((item) => item.id === "branch-equivalence")).toBe(true);
   });
 
+  it("reuses comparison residuals for guarded self-updates", () => {
+    const result = compileOk(`
+program ResidualGuardedUpdate {
+  state {
+    room: counter 0..6 = 0
+    shown: packed = 0
+  }
+
+  screen main {
+    show room shown
+  }
+
+  turn {
+    if room < 6 {
+      room++
+      shown = room
+    }
+    else {
+      show main
+    }
+    stop room
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "residual-guarded-update")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "residual guarded update room")).toBe(true);
+  });
+
   it("uses counter ranges for saturating unit updates", () => {
     const result = compileOk(`
 program ResourceRange {
@@ -1406,7 +1435,7 @@ program LocalTerminalTail {
   }
   turn {
     if score < 5 {
-      score++
+      score = score * 2
     }
     else {
       show fail_screen

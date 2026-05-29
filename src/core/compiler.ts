@@ -2588,6 +2588,7 @@ class EmitContext {
     if (this.compileArithmeticIfSelect(statement)) return;
     if (this.compileGuardedUpdateSelector(statement)) return;
     if (this.compileNestedGuardSharedFailure(statement, line)) return;
+    if (this.compileResidualGuardedUpdate(statement, line)) return;
     if (this.compileDirectTerminalIfBranch(statement, line)) return;
     if (this.compileMembershipClearReuse(statement, line)) return;
     if (this.compileMembershipSetReuse(statement, line)) return;
@@ -2942,6 +2943,50 @@ class EmitContext {
       return this.directTerminalCallTarget(proc.body, seen);
     }
     return this.statementsTerminate(proc.body) ? proc.name : undefined;
+  }
+
+  private compileResidualGuardedUpdate(
+    statement: Extract<StatementAst, { kind: "if" }>,
+    line: number,
+  ): boolean {
+    const update = matchResidualGuardedUpdate(statement);
+    if (update === undefined) return false;
+
+    const correction = update.bound + update.delta;
+    const correctionRaw = String(correction);
+    const ordinaryUpdateCost = estimateExpressionCost(update.assignment.expr) + 1;
+    const residualUpdateCost = (correction === 0 ? 0 : this.estimateNumberOrPreloadCost(correctionRaw) + 1) + 1;
+    if (residualUpdateCost >= ordinaryUpdateCost) return false;
+
+    const falseLabel = this.freshLabel("if_false");
+    const thenTerminates = this.statementsTerminate(update.tail);
+    const endLabel = statement.elseBody !== undefined && !thenTerminates ? this.freshLabel("if_end") : undefined;
+
+    this.compileExpression(update.condition.left);
+    this.compileExpression(update.condition.right);
+    this.emitOp(0x11, "-", "condition compare", line);
+    this.emitJump(0x5c, "F x<0", falseLabel, `false branch for ${update.condition.op}`, line);
+    if (correction !== 0) {
+      this.emitNumberOrPreload(correctionRaw);
+      this.emitOp(0x10, "+", `residual guarded update ${update.target}`, update.assignment.line);
+    }
+    this.emitStore(update.target, `set ${update.target}`, update.assignment.line);
+    this.compileStatements(update.tail);
+
+    if (statement.elseBody !== undefined) {
+      if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", line);
+      this.emitLabel(falseLabel);
+      this.compileStatements(statement.elseBody);
+      if (endLabel !== undefined) this.emitLabel(endLabel);
+    } else {
+      this.emitLabel(falseLabel);
+    }
+
+    this.optimizations.push({
+      name: "residual-guarded-update",
+      detail: `Reused ${update.target} - ${update.bound} while updating ${update.target} at line ${update.assignment.line}.`,
+    });
+    return true;
   }
 
   private compileLocalTerminalElseTail(
@@ -8416,6 +8461,56 @@ function isUnitDecrementExpression(target: string, expr: ExpressionAst): boolean
     expr.left.name === target &&
     expr.right.kind === "number" &&
     Number(expr.right.raw) === 1;
+}
+
+function matchResidualGuardedUpdate(
+  statement: Extract<StatementAst, { kind: "if" }>,
+): {
+  condition: ConditionAst;
+  assignment: Extract<StatementAst, { kind: "assign" }>;
+  tail: StatementAst[];
+  target: string;
+  bound: number;
+  delta: number;
+} | undefined {
+  const first = statement.thenBody[0];
+  if (first?.kind !== "assign") return undefined;
+  const condition = statement.condition;
+  if (condition.op !== "<") return undefined;
+  if (condition.left.kind !== "identifier") return undefined;
+  const bound = numericLiteralValue(condition.right);
+  if (bound === undefined) return undefined;
+
+  const delta = matchNumericSelfUpdate(condition.left.name, first.expr);
+  if (delta === undefined || delta === 0) return undefined;
+  if (first.target !== condition.left.name) return undefined;
+
+  return {
+    condition,
+    assignment: first,
+    tail: statement.thenBody.slice(1),
+    target: condition.left.name,
+    bound,
+    delta,
+  };
+}
+
+function matchNumericSelfUpdate(target: string, expr: ExpressionAst): number | undefined {
+  if (expr.kind !== "binary") return undefined;
+  if (expr.op === "+") {
+    if (expr.left.kind === "identifier" && expr.left.name === target) return numericLiteralValue(expr.right);
+    if (expr.right.kind === "identifier" && expr.right.name === target) return numericLiteralValue(expr.left);
+    return undefined;
+  }
+  if (
+    expr.op === "-" &&
+    expr.left.kind === "identifier" &&
+    expr.left.name === target
+  ) {
+    const value = numericLiteralValue(expr.right);
+    return value === undefined ? undefined : -value;
+  }
+  return undefined;
 }
 
 function decrementBranchTestsZero(condition: ConditionAst, target: string): boolean {

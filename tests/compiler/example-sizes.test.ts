@@ -40,10 +40,10 @@ const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 134,
   "cave-treasure": 150,
   "giants-country": 180,
-  labyrinth777: 231,
+  labyrinth777: 228,
   teleport: 221,
   "tic-tac-toe-4x4": 219,
-  "treasure-hunter-2": 143,
+  "treasure-hunter-2": 141,
 };
 
 function exampleSteps(relativePath: string, analysis: boolean): number {
