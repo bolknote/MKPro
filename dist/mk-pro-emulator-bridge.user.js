@@ -480,6 +480,10 @@ var MKProEmulatorBundle = (() => {
           if (isNumericValue(left, 0)) return right;
           if (isNumericValue(right, 0)) return left;
           {
+            const signed = foldSignedAddSubExpression({ kind: "binary", op, left, right });
+            if (signed !== void 0 && estimateExpressionCost(signed) < estimateBinaryCost(left, right)) return signed;
+          }
+          {
             const linear = foldLinearExpression({ kind: "binary", op, left, right });
             if (linear !== void 0 && estimateExpressionCost(linear) <= estimateBinaryCost(left, right)) return linear;
           }
@@ -487,6 +491,10 @@ var MKProEmulatorBundle = (() => {
         case "-":
           if (isNumericValue(right, 0)) return left;
           if (isNumericValue(left, 0)) return { kind: "unary", op: "-", expr: right };
+          {
+            const signed = foldSignedAddSubExpression({ kind: "binary", op, left, right });
+            if (signed !== void 0 && estimateExpressionCost(signed) < estimateBinaryCost(left, right)) return signed;
+          }
           {
             const linear = foldLinearExpression({ kind: "binary", op, left, right });
             if (linear !== void 0 && estimateExpressionCost(linear) <= estimateBinaryCost(left, right)) return linear;
@@ -588,6 +596,38 @@ var MKProEmulatorBundle = (() => {
     if (rebuilt === void 0 || expressionKey(rebuilt) === expressionKey(expr)) return void 0;
     return rebuilt;
   }
+  function foldSignedAddSubExpression(expr) {
+    if (!expressionPureForFolding(expr)) return void 0;
+    const terms = [];
+    collectSignedAddSubTerms(expr, false, terms);
+    if (terms.length < 2) return void 0;
+    const rebuilt = buildSignedAddSubExpression(terms);
+    if (rebuilt === void 0 || expressionKey(rebuilt) === expressionKey(expr)) return void 0;
+    return rebuilt;
+  }
+  function collectSignedAddSubTerms(expr, negative, terms) {
+    if (expr.kind === "unary" && expr.op === "-") {
+      collectSignedAddSubTerms(expr.expr, !negative, terms);
+      return;
+    }
+    if (expr.kind === "binary" && (expr.op === "+" || expr.op === "-")) {
+      collectSignedAddSubTerms(expr.left, negative, terms);
+      collectSignedAddSubTerms(expr.right, expr.op === "-" ? !negative : negative, terms);
+      return;
+    }
+    terms.push({ expr, negative });
+  }
+  function buildSignedAddSubExpression(terms) {
+    let result;
+    for (const term of terms) {
+      if (result === void 0) {
+        result = term.negative ? { kind: "unary", op: "-", expr: term.expr } : term.expr;
+        continue;
+      }
+      result = term.negative ? subtractExpressions(result, term.expr) : addExpressions(result, term.expr);
+    }
+    return result;
+  }
   function linearizeExpression(expr) {
     if (!expressionPureForFolding(expr)) return void 0;
     switch (expr.kind) {
@@ -645,7 +685,11 @@ var MKProEmulatorBundle = (() => {
     const constantSign = decimalSign(constant);
     if (signedTerms.length === 0) return decimalNumberExpression(constant);
     const hasPositiveTerm = signedTerms.some((term) => !term.negative);
-    const startWithConstant = constantSign > 0 || constantSign < 0 && !hasPositiveTerm;
+    const firstTerm = signedTerms[0];
+    const firstTermLeadsWithLiteral = firstTerm !== void 0 && expressionBeginsWithNumberEntry(
+      firstTerm.negative ? { kind: "unary", op: "-", expr: firstTerm.expr } : firstTerm.expr
+    );
+    const startWithConstant = (constantSign > 0 || constantSign < 0 && !hasPositiveTerm) && !firstTermLeadsWithLiteral;
     let result;
     if (startWithConstant && constantSign !== 0) {
       result = decimalNumberExpression(constant);
@@ -659,12 +703,26 @@ var MKProEmulatorBundle = (() => {
       }
     }
     if (result === void 0) return decimalNumberExpression(constant);
-    if (!startWithConstant && constantSign < 0) {
+    if (!startWithConstant && constantSign !== 0) {
       const constantExpr = decimalNumberExpression(absDecimal(constant));
       if (constantExpr === void 0) return void 0;
-      result = subtractExpressions(result, constantExpr);
+      result = constantSign < 0 ? subtractExpressions(result, constantExpr) : addExpressions(result, constantExpr);
     }
     return result;
+  }
+  function expressionBeginsWithNumberEntry(expr) {
+    switch (expr.kind) {
+      case "number":
+        return true;
+      case "identifier":
+        return false;
+      case "unary":
+        return expr.expr.kind === "number" || expressionBeginsWithNumberEntry(expr.expr);
+      case "binary":
+        return expressionBeginsWithNumberEntry(expr.left);
+      case "call":
+        return expr.args.length > 0 && expressionBeginsWithNumberEntry(expr.args[0]);
+    }
   }
   function signedTermExpression(term) {
     const coeff = normalizeDecimal(term.coeff);
@@ -1055,6 +1113,556 @@ var MKProEmulatorBundle = (() => {
   }
   function absBigInt(value) {
     return value < 0n ? -value : value;
+  }
+
+  // src/core/rule-cfg.ts
+  function collectExprVars(expr, out) {
+    switch (expr.kind) {
+      case "number":
+        return;
+      case "identifier":
+        out.add(expr.name);
+        return;
+      case "unary":
+        collectExprVars(expr.expr, out);
+        return;
+      case "binary":
+        collectExprVars(expr.left, out);
+        collectExprVars(expr.right, out);
+        return;
+      case "call":
+        for (const arg of expr.args) collectExprVars(arg, out);
+        return;
+    }
+  }
+  function exprVars(expr) {
+    const out = /* @__PURE__ */ new Set();
+    collectExprVars(expr, out);
+    return [...out];
+  }
+  function exprIsCallFree(expr) {
+    switch (expr.kind) {
+      case "number":
+      case "identifier":
+        return true;
+      case "unary":
+        return exprIsCallFree(expr.expr);
+      case "binary":
+        return exprIsCallFree(expr.left) && exprIsCallFree(expr.right);
+      case "call":
+        return false;
+    }
+  }
+  var Builder = class {
+    nodes = [];
+    routineEntry = /* @__PURE__ */ new Map();
+    routineExit = /* @__PURE__ */ new Map();
+    ast;
+    constructor(ast) {
+      this.ast = ast;
+    }
+    add(node) {
+      const id = this.nodes.length;
+      this.nodes.push({ id, succ: node.succ ?? [], defs: node.defs, uses: node.uses, ...node.assign ? { assign: node.assign } : {}, ...node.barrier ? { barrier: true } : {} });
+      return id;
+    }
+    link(exits, target) {
+      for (const exit of exits) {
+        if (!this.nodes[exit].succ.includes(target)) this.nodes[exit].succ.push(target);
+      }
+    }
+    build() {
+      const routines = [
+        ...this.ast.entries.map((entry) => ({ name: entry.name, body: entry.body })),
+        ...this.ast.procs.map((proc) => ({ name: proc.name, body: proc.body })),
+        ...this.ast.blocks.map((block) => ({ name: block.name, body: block.body }))
+      ];
+      for (const routine of routines) {
+        this.routineEntry.set(routine.name, this.add({ defs: [], uses: [] }));
+        this.routineExit.set(routine.name, this.add({ defs: [], uses: [] }));
+      }
+      for (const routine of routines) {
+        const fragment = this.buildSequence(routine.body);
+        this.link([this.routineEntry.get(routine.name)], fragment.entry);
+        this.link(fragment.exits, this.routineExit.get(routine.name));
+      }
+      const entryNode = this.ast.entries.length > 0 ? this.routineEntry.get(this.ast.entries[0].name) : 0;
+      return {
+        nodes: this.nodes,
+        entryNode,
+        routineEntry: this.routineEntry,
+        routineExit: this.routineExit
+      };
+    }
+    buildSequence(statements) {
+      let entry;
+      let pending = [];
+      for (const statement of statements) {
+        const fragment = this.buildStatement(statement);
+        if (entry === void 0) entry = fragment.entry;
+        else this.link(pending, fragment.entry);
+        pending = fragment.exits;
+      }
+      if (entry === void 0) {
+        const nop = this.add({ defs: [], uses: [] });
+        return { entry: nop, exits: [nop] };
+      }
+      return { entry, exits: pending };
+    }
+    buildStatement(statement) {
+      switch (statement.kind) {
+        case "assign": {
+          const node = this.add({ defs: [statement.target], uses: exprVars(statement.expr), assign: statement });
+          return { entry: node, exits: [node] };
+        }
+        case "show": {
+          const display = this.ast.displays.find((candidate) => candidate.name === statement.display);
+          const node = this.add({ defs: [], uses: display?.sources ?? [] });
+          return { entry: node, exits: [node] };
+        }
+        case "input": {
+          const node = this.add({ defs: [statement.target], uses: [] });
+          return { entry: node, exits: [node] };
+        }
+        case "ask": {
+          const node = this.add({ defs: [statement.target], uses: statement.prompt ? exprVars(statement.prompt) : [] });
+          return { entry: node, exits: [node] };
+        }
+        case "pause":
+        case "halt":
+        case "trap": {
+          const node = this.add({ defs: [], uses: exprVars(statement.expr) });
+          return { entry: node, exits: [node] };
+        }
+        case "call": {
+          const calleeEntry = this.routineEntry.get(statement.block);
+          const calleeExit = this.routineExit.get(statement.block);
+          if (calleeEntry === void 0 || calleeExit === void 0) {
+            const node2 = this.add({ defs: [], uses: [], barrier: true });
+            return { entry: node2, exits: [node2] };
+          }
+          const node = this.add({ defs: [], uses: [], succ: [calleeEntry] });
+          return { entry: node, exits: [calleeExit] };
+        }
+        case "core":
+        case "egg": {
+          const node = this.add({ defs: [], uses: [], barrier: true });
+          return { entry: node, exits: [node] };
+        }
+        case "if": {
+          const test = this.add({ defs: [], uses: [...exprVars(statement.condition.left), ...exprVars(statement.condition.right)] });
+          const thenFragment = this.buildSequence(statement.thenBody);
+          this.link([test], thenFragment.entry);
+          const exits = [...thenFragment.exits];
+          if (statement.elseBody !== void 0) {
+            const elseFragment = this.buildSequence(statement.elseBody);
+            this.link([test], elseFragment.entry);
+            exits.push(...elseFragment.exits);
+          } else {
+            exits.push(test);
+          }
+          return { entry: test, exits };
+        }
+        case "switch":
+        case "dispatch": {
+          const uses = new Set(exprVars(statement.expr));
+          for (const branch of statement.cases) for (const v of exprVars(branch.value)) uses.add(v);
+          const test = this.add({ defs: [], uses: [...uses] });
+          const exits = [];
+          for (const branch of statement.cases) {
+            const fragment = this.buildSequence(branch.body);
+            this.link([test], fragment.entry);
+            exits.push(...fragment.exits);
+          }
+          if (statement.defaultBody !== void 0) {
+            const fragment = this.buildSequence(statement.defaultBody);
+            this.link([test], fragment.entry);
+            exits.push(...fragment.exits);
+          } else {
+            exits.push(test);
+          }
+          return { entry: test, exits };
+        }
+        case "loop": {
+          const fragment = this.buildSequence(statement.body);
+          this.link(fragment.exits, fragment.entry);
+          return { entry: fragment.entry, exits: [...fragment.exits] };
+        }
+      }
+    }
+  };
+  function buildRuleCfg(ast) {
+    return new Builder(ast).build();
+  }
+  function programStateFields(ast) {
+    return new Set(ast.states.flatMap((state) => state.fields.map((field) => field.name)));
+  }
+
+  // src/core/interprocedural-dse.ts
+  function computeLiveOut(cfg, allVars) {
+    const n = cfg.nodes.length;
+    const liveIn = Array.from({ length: n }, () => /* @__PURE__ */ new Set());
+    const liveOut = Array.from({ length: n }, () => /* @__PURE__ */ new Set());
+    let changed = true;
+    let rounds = 0;
+    while (changed && rounds < 1e3) {
+      changed = false;
+      rounds += 1;
+      for (let i = n - 1; i >= 0; i -= 1) {
+        const node = cfg.nodes[i];
+        const newOut = /* @__PURE__ */ new Set();
+        for (const successor of node.succ) {
+          for (const reg of liveIn[successor]) newOut.add(reg);
+        }
+        const uses = node.barrier ? allVars : node.uses;
+        const defs = node.barrier ? [] : node.defs;
+        const newIn = new Set(uses);
+        for (const reg of newOut) {
+          if (!defs.includes(reg)) newIn.add(reg);
+        }
+        if (!setsEqual(newIn, liveIn[i]) || !setsEqual(newOut, liveOut[i])) {
+          liveIn[i] = newIn;
+          liveOut[i] = newOut;
+          changed = true;
+        }
+      }
+    }
+    return liveOut;
+  }
+  function setsEqual(a, b) {
+    if (a.size !== b.size) return false;
+    for (const value of a) if (!b.has(value)) return false;
+    return true;
+  }
+  function collectAllVars(cfg) {
+    const vars = /* @__PURE__ */ new Set();
+    for (const node of cfg.nodes) {
+      for (const def of node.defs) vars.add(def);
+      for (const use of node.uses) vars.add(use);
+    }
+    return vars;
+  }
+  function pruneStatements(statements, doomed) {
+    return statements.flatMap((statement) => {
+      if (doomed.has(statement)) return [];
+      if (statement.kind === "loop") return [{ ...statement, body: pruneStatements(statement.body, doomed) }];
+      if (statement.kind === "if") {
+        const pruned = {
+          ...statement,
+          thenBody: pruneStatements(statement.thenBody, doomed)
+        };
+        if (statement.elseBody !== void 0) pruned.elseBody = pruneStatements(statement.elseBody, doomed);
+        return [pruned];
+      }
+      if (statement.kind === "switch") {
+        return [{
+          ...statement,
+          cases: statement.cases.map((branch) => ({ ...branch, body: pruneStatements(branch.body, doomed) })),
+          ...statement.defaultBody === void 0 ? {} : { defaultBody: pruneStatements(statement.defaultBody, doomed) }
+        }];
+      }
+      if (statement.kind === "dispatch") {
+        return [{
+          ...statement,
+          cases: statement.cases.map((branch) => ({ ...branch, body: pruneStatements(branch.body, doomed) })),
+          ...statement.defaultBody === void 0 ? {} : { defaultBody: pruneStatements(statement.defaultBody, doomed) }
+        }];
+      }
+      return [statement];
+    });
+  }
+  function eliminateInterproceduralDeadStores(ast, optimizations) {
+    const fields = programStateFields(ast);
+    if (fields.size === 0) return 0;
+    const cfg = buildRuleCfg(ast);
+    const allVars = collectAllVars(cfg);
+    const liveOut = computeLiveOut(cfg, allVars);
+    const doomed = /* @__PURE__ */ new Set();
+    for (const node of cfg.nodes) {
+      const assign = node.assign;
+      if (assign === void 0) continue;
+      if (!fields.has(assign.target)) continue;
+      if (!exprIsCallFree(assign.expr)) continue;
+      if (liveOut[node.id].has(assign.target)) continue;
+      doomed.add(assign);
+    }
+    if (doomed.size === 0) return 0;
+    for (const entry of ast.entries) entry.body = pruneStatements(entry.body, doomed);
+    for (const proc of ast.procs) proc.body = pruneStatements(proc.body, doomed);
+    for (const block of ast.blocks) block.body = pruneStatements(block.body, doomed);
+    optimizations.push({
+      name: "interprocedural-dead-store",
+      detail: `Removed ${doomed.size} store(s) whose value is always overwritten before it can be observed across the rule call graph.`
+    });
+    return doomed.size;
+  }
+
+  // src/core/value-propagation.ts
+  var MAX_ROUNDS = 1e3;
+  var MAX_TERMS = 8;
+  var MAX_MAGNITUDE = 1e6;
+  function gcd2(a, b) {
+    a = Math.abs(a);
+    b = Math.abs(b);
+    while (b !== 0) {
+      [a, b] = [b, a % b];
+    }
+    return a === 0 ? 1 : a;
+  }
+  function rat(n, d = 1) {
+    if (d === 0 || !Number.isFinite(n) || !Number.isFinite(d)) return { n: NaN, d: 1 };
+    if (d < 0) {
+      n = -n;
+      d = -d;
+    }
+    const g = gcd2(n, d);
+    return { n: n / g, d: d / g };
+  }
+  function ratValid(r) {
+    return Number.isFinite(r.n) && Number.isFinite(r.d) && r.d !== 0 && Math.abs(r.n) <= MAX_MAGNITUDE && Math.abs(r.d) <= MAX_MAGNITUDE;
+  }
+  function ratAdd(a, b) {
+    return rat(a.n * b.d + b.n * a.d, a.d * b.d);
+  }
+  function ratMul(a, b) {
+    return rat(a.n * b.n, a.d * b.d);
+  }
+  function ratEq(a, b) {
+    return a.n === b.n && a.d === b.d;
+  }
+  var RAT_ZERO = { n: 0, d: 1 };
+  function constForm(value) {
+    return { constant: value, terms: /* @__PURE__ */ new Map() };
+  }
+  function singleVar(name) {
+    return { constant: RAT_ZERO, terms: /* @__PURE__ */ new Map([[name, rat(1)]]) };
+  }
+  function formValid(form) {
+    if (!ratValid(form.constant)) return false;
+    if (form.terms.size > MAX_TERMS) return false;
+    for (const coeff of form.terms.values()) if (!ratValid(coeff)) return false;
+    return true;
+  }
+  function addForms(a, b) {
+    const terms = new Map(a.terms);
+    for (const [name, coeff] of b.terms) {
+      const next = ratAdd(terms.get(name) ?? RAT_ZERO, coeff);
+      if (next.n === 0) terms.delete(name);
+      else terms.set(name, next);
+    }
+    return { constant: ratAdd(a.constant, b.constant), terms };
+  }
+  function scaleForm(form, factor) {
+    const terms = /* @__PURE__ */ new Map();
+    for (const [name, coeff] of form.terms) {
+      const next = ratMul(coeff, factor);
+      if (next.n !== 0) terms.set(name, next);
+    }
+    return { constant: ratMul(form.constant, factor), terms };
+  }
+  function formsEqual(a, b) {
+    if (!ratEq(a.constant, b.constant)) return false;
+    if (a.terms.size !== b.terms.size) return false;
+    for (const [name, coeff] of a.terms) {
+      const other = b.terms.get(name);
+      if (other === void 0 || !ratEq(coeff, other)) return false;
+    }
+    return true;
+  }
+  function decimalToRat(raw) {
+    const trimmed = raw.trim();
+    if (!/^[+-]?\d+(?:\.\d+)?$/u.test(trimmed)) return void 0;
+    const negative = trimmed.startsWith("-");
+    const body = trimmed.replace(/^[+-]/u, "");
+    const [intPart, fracPart] = body.split(".");
+    if (fracPart === void 0) {
+      const value = Number(body);
+      return Number.isFinite(value) ? rat(negative ? -value : value) : void 0;
+    }
+    const denom = 10 ** fracPart.length;
+    const numer = Number(intPart) * denom + Number(fracPart);
+    if (!Number.isFinite(numer) || !Number.isFinite(denom)) return void 0;
+    return rat(negative ? -numer : numer, denom);
+  }
+  function valueOf(state, name) {
+    return state.get(name) ?? singleVar(name);
+  }
+  function affineForm(expr, state) {
+    switch (expr.kind) {
+      case "number": {
+        const value = decimalToRat(expr.raw);
+        return value === void 0 ? void 0 : constForm(value);
+      }
+      case "identifier":
+        return valueOf(state, expr.name);
+      case "unary": {
+        const inner = affineForm(expr.expr, state);
+        if (inner === void 0) return void 0;
+        return scaleForm(inner, rat(-1));
+      }
+      case "binary": {
+        const left = affineForm(expr.left, state);
+        const right = affineForm(expr.right, state);
+        if (left === void 0 || right === void 0) return void 0;
+        let result;
+        switch (expr.op) {
+          case "+":
+            result = addForms(left, right);
+            break;
+          case "-":
+            result = addForms(left, scaleForm(right, rat(-1)));
+            break;
+          case "*":
+            if (left.terms.size === 0) result = scaleForm(right, left.constant);
+            else if (right.terms.size === 0) result = scaleForm(left, right.constant);
+            else return void 0;
+            break;
+          case "/":
+            if (right.terms.size === 0 && right.constant.n !== 0) {
+              result = scaleForm(left, rat(right.constant.d, right.constant.n));
+            } else {
+              return void 0;
+            }
+            break;
+        }
+        return result !== void 0 && formValid(result) ? result : void 0;
+      }
+      case "call":
+        return void 0;
+    }
+  }
+  function applyDef(state, name, form) {
+    const next = /* @__PURE__ */ new Map();
+    for (const [key, value] of state) {
+      if (key === name) continue;
+      if (value.terms.has(name)) continue;
+      next.set(key, value);
+    }
+    if (form !== void 0 && !form.terms.has(name) && formValid(form)) {
+      next.set(name, form);
+    }
+    return next;
+  }
+  function transfer(state, node) {
+    if (node.barrier) return /* @__PURE__ */ new Map();
+    const assign = node.assign;
+    if (assign !== void 0) {
+      const form = exprIsCallFree(assign.expr) ? affineForm(assign.expr, state) : void 0;
+      return applyDef(state, assign.target, form);
+    }
+    if (node.defs.length > 0) {
+      let next = state;
+      for (const def of node.defs) next = applyDef(next, def, void 0);
+      return next;
+    }
+    return state;
+  }
+  function holdsIn(state, name, form) {
+    const lhs = valueOf(state, name);
+    let rhs = constForm(form.constant);
+    for (const [term, coeff] of form.terms) {
+      rhs = addForms(rhs, scaleForm(valueOf(state, term), coeff));
+    }
+    return formsEqual(lhs, rhs);
+  }
+  function meet(states) {
+    const reached = states.filter((state) => state !== void 0);
+    if (reached.length === 0) return void 0;
+    const result = /* @__PURE__ */ new Map();
+    for (const state of reached) {
+      for (const [name, form] of state) {
+        if (result.has(name)) continue;
+        if (reached.every((other) => holdsIn(other, name, form))) {
+          result.set(name, form);
+        }
+      }
+    }
+    return result;
+  }
+  function statesEqual(a, b) {
+    if (a === void 0 || b === void 0) return a === b;
+    if (a.size !== b.size) return false;
+    for (const [name, form] of a) {
+      const other = b.get(name);
+      if (other === void 0 || !formsEqual(form, other)) return false;
+    }
+    return true;
+  }
+  function buildPredecessors(cfg) {
+    const preds = Array.from({ length: cfg.nodes.length }, () => []);
+    for (const node of cfg.nodes) {
+      for (const successor of node.succ) preds[successor].push(node.id);
+    }
+    return preds;
+  }
+  function expressionCost(expr) {
+    switch (expr.kind) {
+      case "number":
+      case "identifier":
+        return 1;
+      case "unary":
+        return 1 + expressionCost(expr.expr);
+      case "binary":
+        return 1 + expressionCost(expr.left) + expressionCost(expr.right);
+      case "call":
+        return 100;
+    }
+  }
+  function propagateValuesInterprocedurally(ast, optimizations) {
+    const fields = programStateFields(ast);
+    if (fields.size === 0) return 0;
+    const cfg = buildRuleCfg(ast);
+    const preds = buildPredecessors(cfg);
+    const n = cfg.nodes.length;
+    const out = Array.from({ length: n }, () => void 0);
+    let changed = true;
+    let rounds = 0;
+    while (changed && rounds < MAX_ROUNDS) {
+      changed = false;
+      rounds += 1;
+      for (let i = 0; i < n; i += 1) {
+        const incoming = preds[i].map((p) => out[p]);
+        if (i === cfg.entryNode) incoming.push(/* @__PURE__ */ new Map());
+        const inState = meet(incoming);
+        const newOut = inState === void 0 ? void 0 : transfer(inState, cfg.nodes[i]);
+        if (!statesEqual(newOut, out[i])) {
+          out[i] = newOut;
+          changed = true;
+        }
+      }
+    }
+    if (rounds >= MAX_ROUNDS) return 0;
+    let rewrites = 0;
+    for (const node of cfg.nodes) {
+      const assign = node.assign;
+      if (assign === void 0) continue;
+      if (!exprIsCallFree(assign.expr)) continue;
+      if (assign.expr.kind !== "binary" && assign.expr.kind !== "unary") continue;
+      const incoming = preds[node.id].map((p) => out[p]);
+      if (node.id === cfg.entryNode) incoming.push(/* @__PURE__ */ new Map());
+      const inState = meet(incoming);
+      if (inState === void 0) continue;
+      const target = affineForm(assign.expr, inState);
+      if (target === void 0) continue;
+      let replacement;
+      for (const candidate of fields) {
+        if (candidate === assign.target) continue;
+        if (formsEqual(valueOf(inState, candidate), target) && formValid(target)) {
+          replacement = candidate;
+          break;
+        }
+      }
+      if (replacement === void 0) continue;
+      if (expressionCost(assign.expr) <= 1) continue;
+      assign.expr = { kind: "identifier", name: replacement };
+      rewrites += 1;
+    }
+    if (rewrites === 0) return 0;
+    optimizations.push({
+      name: "interprocedural-value-propagation",
+      detail: `Replaced ${rewrites} recomputed expression(s) with an equal live variable proved equivalent on every path.`
+    });
+    return rewrites;
   }
 
   // src/core/parser.ts
@@ -2294,12 +2902,17 @@ var MKProEmulatorBundle = (() => {
     };
   }
   function lowerV2EncounterRules(v2, context) {
-    return v2.encounters.map((table) => ({
+    return v2.encounters.flatMap((table) => lowerV2EncounterRule(table, context));
+  }
+  function lowerV2EncounterRule(table, context) {
+    const optimized = lowerSharedChallengeEncounter(table, context);
+    if (optimized !== void 0) return optimized;
+    return [{
       kind: "proc",
       name: "encounter",
       body: [lowerV2EncounterDispatch(table, context)],
       line: table.line
-    }));
+    }];
   }
   function lowerV2EncounterDispatch(table, context) {
     return {
@@ -2316,6 +2929,412 @@ var MKProEmulatorBundle = (() => {
   }
   function encounterParamName(expr) {
     return /^[A-Za-z_][\w]*$/u.test(expr.trim()) ? expr.trim() : "encounter_kind";
+  }
+  function lowerSharedChallengeEncounter(table, context) {
+    const analyzed = table.cases.map((encounterCase) => analyzeSimpleChallengeCase(encounterCase, context));
+    const simple = analyzed.filter((item) => item !== void 0);
+    if (simple.length < 3) return void 0;
+    const groups = groupSimpleChallengeCases(simple);
+    const group = groups.filter((candidate) => candidate.length >= 3).map((candidate) => ({
+      cases: candidate,
+      success: buildEffectPlan(candidate, "success"),
+      failure: buildEffectPlan(candidate, "failure")
+    })).filter((candidate) => candidate.success !== void 0 && candidate.failure !== void 0).sort((left, right) => right.cases.length - left.cases.length)[0];
+    if (group === void 0) return void 0;
+    const protocol = group.cases[0].challenge;
+    const groupKeys = new Set(group.cases.map((item) => item.key));
+    const exceptions = table.cases.filter((encounterCase) => {
+      const key = numericLiteralTextValue(encounterCase.value);
+      return key !== void 0 && !groupKeys.has(key);
+    }).map((encounterCase) => analyzeSharedChallengeException(encounterCase, protocol)).filter((item) => item !== void 0).sort((left, right) => left.key - right.key);
+    const optimizedKeys = /* @__PURE__ */ new Set([
+      ...group.cases.map((item) => item.key),
+      ...exceptions.map((item) => item.key)
+    ]);
+    const helperName = `encounter_effects_${table.line}`;
+    const defaultDispatch = defaultableOptimizedEncounterDispatch(table, optimizedKeys, helperName, context);
+    const dispatch = {
+      kind: "dispatch",
+      expr: lowerV2Expression(encounterParamName(table.expr), table.line, context),
+      cases: defaultDispatch?.cases ?? table.cases.map((encounterCase) => {
+        const key = numericLiteralTextValue(encounterCase.value);
+        if (key !== void 0 && optimizedKeys.has(key)) {
+          return {
+            value: lowerV2Expression(encounterCase.value, encounterCase.line, context),
+            body: [{ kind: "call", block: helperName, line: encounterCase.line }],
+            line: encounterCase.line
+          };
+        }
+        return {
+          value: lowerV2Expression(encounterCase.value, encounterCase.line, context),
+          body: lowerV2Statements(encounterCase.body, context),
+          line: encounterCase.line
+        };
+      }),
+      ...defaultDispatch === void 0 ? {} : { defaultBody: defaultDispatch.defaultBody },
+      line: table.line,
+      scratchId: table.line
+    };
+    const encounterBody = defaultDispatch === void 0 ? [dispatch] : lowerDefaultDispatchAsIfChain(dispatch) ?? [dispatch];
+    const helper = {
+      kind: "proc",
+      name: helperName,
+      body: lowerSharedChallengeHelper(
+        protocol,
+        group.success,
+        group.failure,
+        encounterParamName(table.expr),
+        context,
+        exceptions
+      ),
+      line: table.line
+    };
+    return [
+      {
+        kind: "proc",
+        name: "encounter",
+        body: encounterBody,
+        line: table.line
+      },
+      helper
+    ];
+  }
+  function lowerDefaultDispatchAsIfChain(dispatch) {
+    if (dispatch.defaultBody === void 0 || dispatch.cases.length > 2) return void 0;
+    const emptyCases = dispatch.cases.filter((item) => item.body.length === 0);
+    const nonEmptyCases = dispatch.cases.filter((item) => item.body.length > 0);
+    if (emptyCases.length === 0 || nonEmptyCases.length > 1) return void 0;
+    let body = dispatch.defaultBody;
+    for (const dispatchCase of [...emptyCases].reverse()) {
+      body = [{
+        kind: "if",
+        condition: {
+          left: dispatch.expr,
+          op: "!=",
+          right: dispatchCase.value
+        },
+        thenBody: body,
+        line: dispatchCase.line
+      }];
+    }
+    const special = nonEmptyCases[0];
+    if (special === void 0) return body;
+    return [{
+      kind: "if",
+      condition: {
+        left: dispatch.expr,
+        op: "==",
+        right: special.value
+      },
+      thenBody: special.body,
+      elseBody: body,
+      line: dispatch.line
+    }];
+  }
+  function defaultableOptimizedEncounterDispatch(table, optimizedKeys, helperName, context) {
+    const keyName = encounterParamName(table.expr);
+    const range2 = context.stateRanges.get(keyName);
+    if (range2?.min === void 0 || range2.max === void 0) return void 0;
+    if (!Number.isInteger(range2.min) || !Number.isInteger(range2.max)) return void 0;
+    if (range2.max < range2.min || range2.max - range2.min > 20) return void 0;
+    const sourceKeys = /* @__PURE__ */ new Set();
+    const cases = [];
+    for (const encounterCase of table.cases) {
+      const key = numericLiteralTextValue(encounterCase.value);
+      if (key === void 0) return void 0;
+      sourceKeys.add(key);
+      if (optimizedKeys.has(key)) continue;
+      cases.push({
+        value: lowerV2Expression(encounterCase.value, encounterCase.line, context),
+        body: lowerV2Statements(encounterCase.body, context),
+        line: encounterCase.line
+      });
+    }
+    for (let value = range2.min; value <= range2.max; value += 1) {
+      if (sourceKeys.has(value) || optimizedKeys.has(value)) continue;
+      cases.push({
+        value: lowerV2Expression(String(value), table.line, context),
+        body: [],
+        line: table.line
+      });
+    }
+    if (cases.length + 1 >= optimizedKeys.size) return void 0;
+    return {
+      cases: cases.sort(
+        (left, right) => (numericLiteralValueForExpression(left.value) ?? 0) - (numericLiteralValueForExpression(right.value) ?? 0)
+      ),
+      defaultBody: [{ kind: "call", block: helperName, line: table.line }]
+    };
+  }
+  function analyzeSharedChallengeException(encounterCase, protocol) {
+    const key = numericLiteralTextValue(encounterCase.value);
+    if (key === void 0) return void 0;
+    if (encounterCase.body.length !== 1) return void 0;
+    const challenge = encounterCase.body[0];
+    if (challenge?.kind !== "v2_challenge" || challenge.failureBody === void 0) return void 0;
+    if (challengeProtocolKey(challenge) !== challengeProtocolKey(protocol)) return void 0;
+    return {
+      key,
+      line: encounterCase.line,
+      successBody: challenge.successBody,
+      failureBody: challenge.failureBody
+    };
+  }
+  function analyzeSimpleChallengeCase(encounterCase, context) {
+    const key = numericLiteralTextValue(encounterCase.value);
+    if (key === void 0) return void 0;
+    if (encounterCase.body.length !== 1) return void 0;
+    const challenge = encounterCase.body[0];
+    if (challenge?.kind !== "v2_challenge" || challenge.failureBody === void 0) return void 0;
+    const success = analyzeSimpleEffects(challenge.successBody, context);
+    const failure = analyzeSimpleEffects(challenge.failureBody, context);
+    if (success === void 0 || failure === void 0) return void 0;
+    return {
+      key,
+      value: encounterCase.value,
+      line: encounterCase.line,
+      challenge,
+      success,
+      failure
+    };
+  }
+  function analyzeSimpleEffects(statements, context) {
+    const deltas = /* @__PURE__ */ new Map();
+    const cellUpdates = [];
+    for (const statement of statements) {
+      if (statement.kind !== "v2_update") return void 0;
+      if (context.stateTypes.get(statement.target) === "cells") {
+        cellUpdates.push({
+          target: statement.target,
+          op: statement.op,
+          expr: statement.expr.trim()
+        });
+        continue;
+      }
+      const value = numericLiteralTextValue(statement.expr);
+      if (value === void 0) return void 0;
+      const delta = statement.op === "+=" ? value : -value;
+      deltas.set(statement.target, (deltas.get(statement.target) ?? 0) + delta);
+    }
+    return {
+      deltas,
+      cellUpdates: cellUpdates.sort(compareCellUpdates)
+    };
+  }
+  function groupSimpleChallengeCases(cases) {
+    const groups = /* @__PURE__ */ new Map();
+    for (const challengeCase of cases) {
+      const key = challengeProtocolKey(challengeCase.challenge);
+      const group = groups.get(key);
+      if (group === void 0) {
+        groups.set(key, [challengeCase]);
+      } else {
+        group.push(challengeCase);
+      }
+    }
+    return [...groups.values()];
+  }
+  function challengeProtocolKey(statement) {
+    return [
+      statement.expr.trim(),
+      statement.challengeTarget,
+      statement.warningScreen,
+      statement.memoryScreen,
+      statement.answerInput
+    ].join("\0");
+  }
+  function buildEffectPlan(cases, branch) {
+    const cellUpdates = cases[0][branch].cellUpdates;
+    if (!cases.every((item) => cellUpdatesEqual(item[branch].cellUpdates, cellUpdates))) return void 0;
+    const targets = /* @__PURE__ */ new Set();
+    for (const challengeCase of cases) {
+      for (const target of challengeCase[branch].deltas.keys()) targets.add(target);
+    }
+    const plans = [];
+    for (const target of [...targets].sort()) {
+      const values = new Map(cases.map((challengeCase) => [
+        challengeCase.key,
+        challengeCase[branch].deltas.get(target) ?? 0
+      ]));
+      const plan = fitLinearDeltaPlan(target, values);
+      if (plan === void 0) return void 0;
+      if (plan.slope !== 0 || plan.intercept !== 0 || plan.corrections.size > 0) {
+        plans.push(plan);
+      }
+    }
+    if (plans.length === 0 && cellUpdates.length === 0) return void 0;
+    return {
+      keys: cases.map((item) => item.key),
+      deltas: plans,
+      cellUpdates
+    };
+  }
+  function lowerSharedChallengeHelper(protocol, success, failure, keyName, context, exceptions = []) {
+    return [
+      {
+        kind: "assign",
+        target: protocol.challengeTarget,
+        expr: lowerV2Expression(protocol.expr, protocol.line, context),
+        line: protocol.line
+      },
+      { kind: "show", display: protocol.warningScreen, line: protocol.line },
+      { kind: "show", display: protocol.memoryScreen, line: protocol.line },
+      { kind: "input", target: protocol.answerInput, line: protocol.line },
+      {
+        kind: "if",
+        condition: {
+          left: { kind: "identifier", name: protocol.answerInput },
+          op: "==",
+          right: { kind: "identifier", name: protocol.challengeTarget }
+        },
+        thenBody: lowerSharedChallengeBranch(
+          lowerEffectPlan(success, keyName, protocol.line, context),
+          exceptions,
+          "success",
+          keyName,
+          protocol.line,
+          context
+        ),
+        elseBody: lowerSharedChallengeBranch(
+          lowerEffectPlan(failure, keyName, protocol.line, context),
+          exceptions,
+          "failure",
+          keyName,
+          protocol.line,
+          context
+        ),
+        line: protocol.line
+      }
+    ];
+  }
+  function lowerSharedChallengeBranch(fallback, exceptions, branch, keyName, line, context) {
+    let body = fallback;
+    for (const exception of [...exceptions].reverse()) {
+      body = [{
+        kind: "if",
+        condition: {
+          left: { kind: "identifier", name: keyName },
+          op: "==",
+          right: { kind: "number", raw: String(exception.key) }
+        },
+        thenBody: lowerV2Statements(branch === "success" ? exception.successBody : exception.failureBody, context),
+        elseBody: body,
+        line: exception.line || line
+      }];
+    }
+    return body;
+  }
+  function lowerEffectPlan(plan, keyName, line, context) {
+    const statements = [];
+    for (const delta of plan.deltas) {
+      const expr = linearDeltaExpressionText(delta, keyName);
+      if (expr !== "0") {
+        statements.push(deltaAssignStatement(delta.target, expr, line, context));
+      }
+    }
+    for (const [key, corrections] of groupedCorrections(plan.deltas)) {
+      statements.push({
+        kind: "if",
+        condition: {
+          left: { kind: "identifier", name: keyName },
+          op: "==",
+          right: { kind: "number", raw: String(key) }
+        },
+        thenBody: corrections.map(
+          (correction) => deltaAssignStatement(correction.target, String(correction.delta), line, context)
+        ),
+        line
+      });
+    }
+    for (const update of plan.cellUpdates) {
+      statements.push(...lowerV2Statement({
+        kind: "v2_update",
+        target: update.target,
+        op: update.op,
+        expr: update.expr,
+        line
+      }, context));
+    }
+    return statements;
+  }
+  function deltaAssignStatement(target, deltaText, line, context) {
+    const delta = numericLiteralTextValue(deltaText);
+    const exprText = delta !== void 0 && delta < 0 ? `${target} - ${Math.abs(delta)}` : `${target} + (${deltaText})`;
+    return {
+      kind: "assign",
+      target,
+      expr: lowerV2Expression(exprText, line, context),
+      line
+    };
+  }
+  function groupedCorrections(plans) {
+    const grouped = /* @__PURE__ */ new Map();
+    for (const plan of plans) {
+      for (const [key, delta] of plan.corrections) {
+        if (delta === 0) continue;
+        const corrections = grouped.get(key) ?? [];
+        corrections.push({ target: plan.target, delta });
+        grouped.set(key, corrections);
+      }
+    }
+    return [...grouped.entries()].sort(([left], [right]) => left - right);
+  }
+  function fitLinearDeltaPlan(target, values) {
+    const entries = [...values.entries()].sort(([left], [right]) => left - right);
+    if (entries.every(([, value]) => value === 0)) {
+      return { target, slope: 0, intercept: 0, corrections: /* @__PURE__ */ new Map() };
+    }
+    const candidates = [];
+    for (const [, value] of entries) {
+      candidates.push(linearPlanFor(target, values, 0, value));
+    }
+    for (let i = 0; i < entries.length; i += 1) {
+      for (let j = i + 1; j < entries.length; j += 1) {
+        const [leftKey, leftValue] = entries[i];
+        const [rightKey, rightValue] = entries[j];
+        const keyDelta = rightKey - leftKey;
+        const valueDelta = rightValue - leftValue;
+        if (keyDelta === 0 || valueDelta % keyDelta !== 0) continue;
+        const slope = valueDelta / keyDelta;
+        const intercept = leftValue - slope * leftKey;
+        candidates.push(linearPlanFor(target, values, slope, intercept));
+      }
+    }
+    return candidates.filter((candidate) => candidate.corrections.size <= Math.max(1, Math.floor(entries.length / 3))).sort((left, right) => linearPlanCost(left) - linearPlanCost(right))[0];
+  }
+  function linearPlanFor(target, values, slope, intercept) {
+    const corrections = /* @__PURE__ */ new Map();
+    for (const [key, value] of values) {
+      const base = slope * key + intercept;
+      if (base !== value) corrections.set(key, value - base);
+    }
+    return { target, slope, intercept, corrections };
+  }
+  function linearPlanCost(plan) {
+    const baseCost = plan.slope === 0 && plan.intercept === 0 ? 0 : Math.abs(plan.slope) <= 1 ? 3 : 5;
+    return baseCost + plan.corrections.size * 6;
+  }
+  function linearDeltaExpressionText(plan, keyName) {
+    const variable = plan.slope === 0 ? "0" : plan.slope === 1 ? keyName : plan.slope === -1 ? `(0 - ${keyName})` : `${plan.slope} * ${keyName}`;
+    if (plan.intercept === 0) return variable;
+    if (plan.slope === 0) return String(plan.intercept);
+    return plan.intercept > 0 ? `${variable} + ${plan.intercept}` : `${variable} - ${Math.abs(plan.intercept)}`;
+  }
+  function numericLiteralTextValue(text) {
+    if (!isNumericLiteralText(text.trim())) return void 0;
+    const value = Number(text.trim());
+    return Number.isInteger(value) ? value : void 0;
+  }
+  function numericLiteralValueForExpression(expr) {
+    if (expr.kind !== "number") return void 0;
+    const value = Number(expr.raw);
+    return Number.isInteger(value) ? value : void 0;
+  }
+  function cellUpdatesEqual(left, right) {
+    return left.length === right.length && left.every((item, index) => compareCellUpdates(item, right[index]) === 0);
+  }
+  function compareCellUpdates(left, right) {
+    return left.target.localeCompare(right.target) || left.op.localeCompare(right.op) || left.expr.localeCompare(right.expr);
   }
   function lowerV2Statements(statements, context) {
     const lowered = [];
@@ -2338,8 +3357,13 @@ var MKProEmulatorBundle = (() => {
           target: statement.target,
           line: statement.line
         }];
-      case "v2_stop":
+      case "v2_stop": {
+        const literal = parseV2StopLiteral(statement.value, statement.line);
+        if (literal !== void 0) {
+          return [{ kind: "halt", expr: parseExpression("0"), literal, line: statement.line }];
+        }
         return [{ kind: "halt", expr: lowerV2Expression(statement.value, statement.line, context), line: statement.line }];
+      }
       case "v2_invoke":
         return lowerV2Invoke(statement, context);
       case "v2_if": {
@@ -2400,7 +3424,7 @@ var MKProEmulatorBundle = (() => {
           line: statement.line
         }];
       case "v2_match":
-        return [lowerV2Match(statement, context)];
+        return lowerV2MatchStatements(statement, context);
     }
   }
   function lowerV2Predicate(predicate, line, context) {
@@ -2487,6 +3511,63 @@ var MKProEmulatorBundle = (() => {
         throw new ParseError("Move direction must be north, south, east, west, up, or down", line);
     }
   }
+  function lowerV2MatchStatements(statement, context) {
+    const cyclic = lowerCyclicCounterMatch(statement, context);
+    if (cyclic !== void 0) return cyclic;
+    const effects = lowerSimpleEffectMatch(statement, context);
+    if (effects !== void 0) return effects;
+    const guardedDirection = lowerGuardedDirectionMatch(statement, context);
+    if (guardedDirection !== void 0) return guardedDirection;
+    const smallCase = lowerSmallCaseMatch(statement, context);
+    if (smallCase !== void 0) return [smallCase];
+    const singleCase = lowerSingleCaseMatch(statement, context);
+    if (singleCase !== void 0) return [singleCase];
+    return [lowerV2Match(statement, context)];
+  }
+  function lowerSmallCaseMatch(statement, context) {
+    if (statement.otherwise === void 0) return void 0;
+    const rows = statement.cases.flatMap(
+      (matchCase) => matchCase.values.map((value) => ({ value, action: matchCase.action, line: matchCase.line }))
+    );
+    if (rows.length !== 1) return void 0;
+    if (statement.cases.some((matchCase) => matchCase.values.length !== 1)) return void 0;
+    if (rows.length > 1 && !/^[A-Za-z_][\w]*$/u.test(statement.expr.trim())) return void 0;
+    const build = (index) => {
+      const row = rows[index];
+      const elseBody = index + 1 < rows.length ? [build(index + 1)] : lowerV2Statement(statement.otherwise, context);
+      return {
+        kind: "if",
+        condition: {
+          left: lowerV2Expression(statement.expr, statement.line, context),
+          op: "==",
+          right: lowerV2Expression(row.value, row.line, context)
+        },
+        thenBody: lowerV2MatchAction(row.action, context, statement.expr, row.value, row.line),
+        elseBody,
+        line: index === 0 ? statement.line : row.line
+      };
+    };
+    return build(0);
+  }
+  function lowerSingleCaseMatch(statement, context) {
+    const lowered = lowerSmallCaseMatch(statement, context);
+    if (lowered !== void 0) return lowered;
+    if (statement.otherwise !== void 0 || statement.cases.length !== 1) return void 0;
+    const matchCase = statement.cases[0];
+    if (matchCase.values.length !== 1) return void 0;
+    const value = matchCase.values[0];
+    return {
+      kind: "if",
+      condition: {
+        left: lowerV2Expression(statement.expr, statement.line, context),
+        op: "==",
+        right: lowerV2Expression(value, matchCase.line, context)
+      },
+      thenBody: lowerV2MatchAction(matchCase.action, context, statement.expr, value, matchCase.line),
+      ...statement.otherwise === void 0 ? {} : { elseBody: lowerV2Statement(statement.otherwise, context) },
+      line: statement.line
+    };
+  }
   function lowerV2Match(statement, context) {
     const compact = lowerCompactDirectionDispatch(statement, context);
     if (compact !== void 0) return compact;
@@ -2510,17 +3591,266 @@ var MKProEmulatorBundle = (() => {
     if (statement.otherwise !== void 0) lowered.defaultBody = lowerV2Statement(statement.otherwise, context);
     return lowered;
   }
+  function lowerSimpleEffectMatch(statement, context) {
+    const keyName = statement.expr.trim();
+    if (!/^[A-Za-z_][\w]*$/u.test(keyName)) return void 0;
+    const defaultEffects = statement.otherwise === void 0 ? { effects: /* @__PURE__ */ new Map() } : analyzeSimpleNumericEffects(resolveV2ActionBody(statement.otherwise, context, statement.expr), context);
+    if (defaultEffects === void 0) return void 0;
+    const rows = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const matchCase of statement.cases) {
+      for (const valueText of matchCase.values) {
+        const value = numericLiteralTextValue(valueText);
+        if (value === void 0 || seen.has(value)) return void 0;
+        seen.add(value);
+        const body = resolveV2ActionBody(matchCase.action, context, statement.expr, valueText);
+        if (body === void 0) return void 0;
+        const effects = analyzeSimpleNumericEffects(body, context);
+        if (effects === void 0) return void 0;
+        rows.push({ value, effects, line: matchCase.line });
+      }
+    }
+    if (rows.length < 3) return void 0;
+    const lowered = [
+      ...lowerNumericEffects(defaultEffects, statement.line, context)
+    ];
+    for (const row of rows.sort((left, right) => left.value - right.value)) {
+      const correction = correctionEffects(defaultEffects, row.effects);
+      if (correction === void 0) return void 0;
+      const body = lowerNumericEffects(correction, row.line, context);
+      if (body.length === 0) continue;
+      lowered.push({
+        kind: "if",
+        condition: {
+          left: { kind: "identifier", name: keyName },
+          op: "==",
+          right: { kind: "number", raw: String(row.value) }
+        },
+        thenBody: body,
+        line: row.line
+      });
+    }
+    if (lowered.length <= 1) return void 0;
+    const dispatch = lowerV2Match(statement, context);
+    return estimateStatementCount(lowered) < estimateDispatchStatementCount(dispatch) ? lowered : void 0;
+  }
+  function analyzeSimpleNumericEffects(statements, context) {
+    if (statements === void 0) return void 0;
+    const effects = /* @__PURE__ */ new Map();
+    for (const statement of statements) {
+      if (statement.kind === "v2_update" && context.stateTypes.get(statement.target) !== "cells") {
+        if (!context.stateTypes.has(statement.target)) return void 0;
+        const value = numericLiteralTextValue(statement.expr);
+        if (value === void 0) return void 0;
+        applyNumericDelta(effects, statement.target, statement.op === "+=" ? value : -value);
+        continue;
+      }
+      if (statement.kind === "v2_assign" && context.stateTypes.get(statement.target) !== "cells") {
+        if (!context.stateTypes.has(statement.target)) return void 0;
+        const value = numericLiteralTextValue(statement.expr);
+        if (value === void 0) return void 0;
+        effects.set(statement.target, { kind: "assign", value });
+        continue;
+      }
+      return void 0;
+    }
+    return { effects };
+  }
+  function applyNumericDelta(effects, target, delta) {
+    const current = effects.get(target);
+    if (current?.kind === "assign") {
+      effects.set(target, { kind: "assign", value: current.value + delta });
+      return;
+    }
+    effects.set(target, { kind: "delta", value: (current?.value ?? 0) + delta });
+  }
+  function correctionEffects(base, desired) {
+    const effects = /* @__PURE__ */ new Map();
+    const targets = /* @__PURE__ */ new Set([...base.effects.keys(), ...desired.effects.keys()]);
+    for (const target of [...targets].sort()) {
+      const correction = correctionEffect(
+        base.effects.get(target) ?? { kind: "delta", value: 0 },
+        desired.effects.get(target) ?? { kind: "delta", value: 0 }
+      );
+      if (correction === void 0) return void 0;
+      if (correction.kind === "delta" && correction.value === 0) continue;
+      effects.set(target, correction);
+    }
+    return { effects };
+  }
+  function correctionEffect(base, desired) {
+    if (base.kind === "delta") {
+      if (desired.kind === "delta") return { kind: "delta", value: desired.value - base.value };
+      return desired;
+    }
+    if (desired.kind === "assign") {
+      return desired.value === base.value ? { kind: "delta", value: 0 } : desired;
+    }
+    return void 0;
+  }
+  function lowerNumericEffects(effects, line, context) {
+    return [...effects.effects.entries()].sort(([left], [right]) => left.localeCompare(right)).flatMap(
+      ([target, effect]) => {
+        if (effect.kind === "delta") {
+          return effect.value === 0 ? [] : [deltaAssignStatement(target, String(effect.value), line, context)];
+        }
+        return [{
+          kind: "assign",
+          target,
+          expr: lowerV2Expression(String(effect.value), line, context),
+          line
+        }];
+      }
+    );
+  }
+  function estimateStatementCount(statements) {
+    let count = 0;
+    for (const statement of statements) {
+      count += 1;
+      if (statement.kind === "if") {
+        count += estimateStatementCount(statement.thenBody);
+        if (statement.elseBody !== void 0) count += estimateStatementCount(statement.elseBody);
+      }
+      if (statement.kind === "dispatch") {
+        count += statement.cases.reduce((sum, item) => sum + estimateStatementCount(item.body), 0);
+        if (statement.defaultBody !== void 0) count += estimateStatementCount(statement.defaultBody);
+      }
+      if (statement.kind === "switch") {
+        count += statement.cases.reduce((sum, item) => sum + estimateStatementCount(item.body), 0);
+        if (statement.defaultBody !== void 0) count += estimateStatementCount(statement.defaultBody);
+      }
+      if (statement.kind === "loop") count += estimateStatementCount(statement.body);
+    }
+    return count;
+  }
+  function estimateDispatchStatementCount(statement) {
+    const bodyCost = statement.cases.reduce((sum, item) => sum + estimateStatementCount(item.body), 0);
+    const defaultCost = statement.defaultBody === void 0 ? 0 : estimateStatementCount(statement.defaultBody);
+    const jumpsAfterCases = Math.max(0, statement.cases.length - (statement.defaultBody === void 0 ? 1 : 0));
+    return 2 + statement.cases.length * 5 + jumpsAfterCases * 2 + bodyCost + defaultCost;
+  }
+  function lowerCyclicCounterMatch(statement, context) {
+    const variable = statement.expr.trim();
+    if (!/^[A-Za-z_][\w]*$/u.test(variable)) return void 0;
+    const range2 = context.stateRanges.get(variable);
+    if (range2?.min === void 0 || range2.max === void 0) return void 0;
+    if (!Number.isInteger(range2.min) || !Number.isInteger(range2.max)) return void 0;
+    if (range2.max <= range2.min || range2.max - range2.min > 12) return void 0;
+    const rows = [];
+    for (const matchCase of statement.cases) {
+      for (const valueText of matchCase.values) {
+        const value = numericLiteralTextValue(valueText);
+        if (value === void 0) return void 0;
+        const body = resolveV2ActionBody(matchCase.action, context, statement.expr, valueText);
+        if (body === void 0) return void 0;
+        const analyzed = analyzeCyclicMatchBody(body, variable, context);
+        if (analyzed === void 0) return void 0;
+        rows.push({ value, ...analyzed });
+      }
+    }
+    if (rows.length < 3) return void 0;
+    const sorted = rows.sort((left, right) => left.value - right.value);
+    if (sorted.length !== range2.max - range2.min + 1) return void 0;
+    const seen = /* @__PURE__ */ new Set();
+    for (let index = 0; index < sorted.length; index += 1) {
+      const row = sorted[index];
+      const value = range2.min + index;
+      if (row.value !== value || seen.has(value)) return void 0;
+      seen.add(value);
+      const expectedNext = value === range2.max ? range2.min : value + 1;
+      if (row.next !== expectedNext) return void 0;
+    }
+    const targets = /* @__PURE__ */ new Set();
+    for (const row of sorted) {
+      for (const target of row.deltas.keys()) targets.add(target);
+    }
+    if (targets.size === 0) return void 0;
+    const plans = [];
+    for (const target of [...targets].sort()) {
+      const values = new Map(sorted.map((row) => [row.next, row.deltas.get(target) ?? 0]));
+      const plan = fitLinearDeltaPlan(target, values);
+      if (plan === void 0) return void 0;
+      if (plan.slope !== 0 || plan.intercept !== 0 || plan.corrections.size > 0) plans.push(plan);
+    }
+    if (plans.length === 0) return void 0;
+    return [
+      {
+        kind: "assign",
+        target: variable,
+        expr: lowerV2Expression(`${variable} + 1`, statement.line, context),
+        line: statement.line
+      },
+      {
+        kind: "if",
+        condition: {
+          left: { kind: "identifier", name: variable },
+          op: ">",
+          right: { kind: "number", raw: String(range2.max) }
+        },
+        thenBody: [{
+          kind: "assign",
+          target: variable,
+          expr: { kind: "number", raw: String(range2.min) },
+          line: statement.line
+        }],
+        line: statement.line
+      },
+      ...lowerEffectPlan({
+        keys: sorted.map((row) => row.next),
+        deltas: plans,
+        cellUpdates: []
+      }, variable, statement.line, context)
+    ];
+  }
+  function resolveV2ActionBody(action, context, matchExpr, matchValue) {
+    if (action.kind !== "v2_invoke") return [action];
+    const rule = context.rules.get(action.name);
+    if (rule === void 0) return void 0;
+    if (rule.params.length === 0) return rule.body;
+    if (rule.params.length !== action.args.length) return void 0;
+    const args = [];
+    for (const arg of action.args) {
+      const resolved = resolveV2InvokeArg(arg, matchExpr, matchValue);
+      if (resolved === void 0) return void 0;
+      args.push(resolved);
+    }
+    return substituteV2Statements(rule.body, invokeReplacements(rule, args));
+  }
+  function analyzeCyclicMatchBody(statements, variable, context) {
+    let next;
+    const deltas = /* @__PURE__ */ new Map();
+    for (const statement of statements) {
+      if (statement.kind === "v2_assign" && statement.target === variable) {
+        const value = numericLiteralTextValue(statement.expr);
+        if (value === void 0 || next !== void 0) return void 0;
+        next = value;
+        continue;
+      }
+      if (statement.kind === "v2_update" && context.stateTypes.get(statement.target) !== "cells") {
+        const value = numericLiteralTextValue(statement.expr);
+        if (value === void 0 || statement.target === variable) return void 0;
+        const delta = statement.op === "+=" ? value : -value;
+        deltas.set(statement.target, (deltas.get(statement.target) ?? 0) + delta);
+        continue;
+      }
+      return void 0;
+    }
+    return next === void 0 ? void 0 : { next, deltas };
+  }
   function lowerCompactDirectionDispatch(statement, context) {
     const directionalCases = statement.cases.filter((matchCase) => isDirectionInvoke(matchCase.action, statement.expr));
     const directionalValueCount = directionalCases.reduce((sum, matchCase) => sum + matchCase.values.length, 0);
     if (directionalValueCount < 3) return void 0;
+    const directionalValues = directionCaseValues(directionalCases);
+    if (directionalValues === void 0) return void 0;
+    const hasAllCardinalDirections = [2, 4, 6, 8].every((value) => directionalValues.has(value));
     const action = directionalCases[0].action;
     if (action.kind !== "v2_invoke") return void 0;
     if (!directionalCases.every((matchCase) => sameInvoke(matchCase.action, action))) return void 0;
     const params = context.ruleParams.get(action.name) ?? [];
     if (params.length === 0) return void 0;
     const needsGuard = statement.otherwise === void 0 || !isDirectionInvoke(statement.otherwise, statement.expr);
-    if (needsGuard && directionalValueCount < 5) return void 0;
+    if (needsGuard && !hasAllCardinalDirections) return void 0;
     const cases = [];
     for (const matchCase of statement.cases) {
       if (directionalCases.includes(matchCase)) continue;
@@ -2532,11 +3862,12 @@ var MKProEmulatorBundle = (() => {
         });
       }
     }
+    const directionFunction = needsGuard && hasAllCardinalDirections && !directionalValues.has(5) && !directionalValues.has(-5) ? "__direction_cardinal" : "direction";
     const directionBody = [
       {
         kind: "assign",
         target: params[0],
-        expr: lowerV2Expression(`direction(${statement.expr})`, statement.line, context),
+        expr: lowerV2Expression(`${directionFunction}(${statement.expr})`, statement.line, context),
         line: statement.line
       },
       { kind: "call", block: action.name, line: action.line }
@@ -2544,7 +3875,7 @@ var MKProEmulatorBundle = (() => {
     const defaultBody = needsGuard ? [{
       kind: "if",
       condition: {
-        left: lowerV2Expression(directionKeyGuardExpression(statement.expr), statement.line, context),
+        left: lowerV2Expression(directionKeyGuardExpression(statement.expr, directionalValues), statement.line, context),
         op: "==",
         right: lowerV2Expression("0", statement.line, context)
       },
@@ -2562,11 +3893,155 @@ var MKProEmulatorBundle = (() => {
       scratchId: statement.line
     };
   }
-  function directionKeyGuardExpression(expr) {
+  function lowerGuardedDirectionMatch(statement, context) {
+    const directionalCases = statement.cases.filter((matchCase) => isDirectionInvoke(matchCase.action, statement.expr));
+    const directionalValueCount = directionalCases.reduce((sum, matchCase) => sum + matchCase.values.length, 0);
+    if (directionalValueCount < 3) return void 0;
+    const action = directionalCases[0]?.action;
+    if (action?.kind !== "v2_invoke") return void 0;
+    if (!directionalCases.every((matchCase) => sameInvoke(matchCase.action, action))) return void 0;
+    const guardedCases = [];
+    for (const matchCase of statement.cases) {
+      if (directionalCases.includes(matchCase)) continue;
+      const guarded = analyzeGuardedDirectionCase(matchCase, action, statement.expr, context);
+      if (guarded !== void 0) guardedCases.push(guarded);
+    }
+    if (guardedCases.length === 0) return void 0;
+    const rewritten = {
+      ...statement,
+      cases: statement.cases.map(
+        (matchCase) => guardedCases.some((guarded) => guarded.matchCase === matchCase) ? { ...matchCase, action } : matchCase
+      )
+    };
+    const dispatch = lowerCompactDirectionDispatch(rewritten, context);
+    if (dispatch === void 0) return void 0;
+    return [
+      ...guardedCases.flatMap((guarded) => lowerGuardedDirectionCasePrelude(statement, guarded, context)),
+      dispatch
+    ];
+  }
+  function analyzeGuardedDirectionCase(matchCase, sharedAction, matchExpr, context) {
+    const body = resolveV2ActionBody(matchCase.action, context, matchExpr);
+    if (body?.length !== 1) return void 0;
+    const guarded = body[0];
+    if (guarded?.kind !== "v2_if" || guarded.elseBody === void 0) return void 0;
+    const thenShared = isSharedDirectionBranch(guarded.thenBody, sharedAction);
+    const elseShared = isSharedDirectionBranch(guarded.elseBody, sharedAction);
+    if (thenShared === elseShared) return void 0;
+    if (elseShared && v2StatementsTerminate(guarded.thenBody, context)) {
+      return {
+        matchCase,
+        predicate: guarded.predicate,
+        terminalBody: guarded.thenBody,
+        invertPredicate: false
+      };
+    }
+    if (thenShared && v2StatementsTerminate(guarded.elseBody, context)) {
+      return {
+        matchCase,
+        predicate: guarded.predicate,
+        terminalBody: guarded.elseBody,
+        invertPredicate: true
+      };
+    }
+    return void 0;
+  }
+  function isSharedDirectionBranch(statements, sharedAction) {
+    return statements.length === 1 && sameInvoke(statements[0], sharedAction);
+  }
+  function lowerGuardedDirectionCasePrelude(statement, guarded, context) {
+    return guarded.matchCase.values.map((value) => {
+      const condition = lowerV2Predicate(guarded.predicate, guarded.matchCase.line, context);
+      const innerCondition = guarded.invertPredicate ? invertLoweredCondition(condition) : condition;
+      return {
+        kind: "if",
+        condition: {
+          left: lowerV2Expression(statement.expr, statement.line, context),
+          op: "==",
+          right: lowerV2Expression(value, guarded.matchCase.line, context)
+        },
+        thenBody: [{
+          kind: "if",
+          condition: innerCondition,
+          thenBody: lowerV2Statements(guarded.terminalBody, context),
+          line: guarded.matchCase.line
+        }],
+        line: guarded.matchCase.line
+      };
+    });
+  }
+  function v2StatementsTerminate(statements, context, seenRules = /* @__PURE__ */ new Set()) {
+    for (const statement of statements) {
+      if (v2StatementTerminates(statement, context, seenRules)) return true;
+    }
+    return false;
+  }
+  function v2StatementTerminates(statement, context, seenRules) {
+    switch (statement.kind) {
+      case "v2_stop":
+        return true;
+      case "v2_invoke": {
+        if (seenRules.has(statement.name)) return false;
+        const rule = context.rules.get(statement.name);
+        if (rule === void 0) return false;
+        seenRules.add(statement.name);
+        const terminates = v2StatementsTerminate(rule.body, context, seenRules);
+        seenRules.delete(statement.name);
+        return terminates;
+      }
+      case "v2_if":
+        return statement.elseBody !== void 0 && v2StatementsTerminate(statement.thenBody, context, new Set(seenRules)) && v2StatementsTerminate(statement.elseBody, context, new Set(seenRules));
+      case "v2_match":
+        return statement.otherwise !== void 0 && statement.cases.every((matchCase) => v2StatementTerminates(matchCase.action, context, new Set(seenRules))) && v2StatementTerminates(statement.otherwise, context, new Set(seenRules));
+      case "v2_challenge":
+        return statement.failureBody !== void 0 && v2StatementsTerminate(statement.successBody, context, new Set(seenRules)) && v2StatementsTerminate(statement.failureBody, context, new Set(seenRules));
+      default:
+        return false;
+    }
+  }
+  function invertLoweredCondition(condition) {
+    return {
+      ...condition,
+      op: invertLoweredComparisonOp(condition.op)
+    };
+  }
+  function invertLoweredComparisonOp(op) {
+    switch (op) {
+      case "==":
+        return "!=";
+      case "!=":
+        return "==";
+      case "<":
+        return ">=";
+      case "<=":
+        return ">";
+      case ">":
+        return "<=";
+      case ">=":
+        return "<";
+    }
+  }
+  function directionCaseValues(cases) {
+    const values = /* @__PURE__ */ new Set();
+    for (const matchCase of cases) {
+      for (const valueText of matchCase.values) {
+        const value = numericLiteralTextValue(valueText);
+        if (value === void 0) return void 0;
+        values.add(value);
+      }
+    }
+    return values;
+  }
+  function directionKeyGuardExpression(expr, values) {
     const key = `(${expr})`;
-    const cardinal = `(abs(${key} - 5) - 1) * (abs(${key} - 5) - 3)`;
-    const vertical = `abs(${key}) - 5`;
-    return `(${cardinal}) * (${vertical})`;
+    const cardinal = `abs(abs(${key} - 5) - 2) - 1`;
+    if (values === void 0 || values.has(5) && values.has(-5)) {
+      const vertical = `abs(${key}) - 5`;
+      return `(${cardinal}) * (${vertical})`;
+    }
+    if (values.has(5)) return `(${cardinal}) * (${key} - 5)`;
+    if (values.has(-5)) return `(${cardinal}) * (${key} + 5)`;
+    return cardinal;
   }
   function isDirectionInvoke(action, matchExpr) {
     if (action.kind !== "v2_invoke") return false;
@@ -2706,13 +4181,16 @@ var MKProEmulatorBundle = (() => {
   function resolveV2InvokeArg(arg, matchExpr, matchValue) {
     const direction = /^direction\((.+)\)$/u.exec(arg.trim());
     if (direction && direction[1].trim() === matchExpr.trim()) {
+      if (matchValue === void 0) return void 0;
       const delta = directionDelta(matchValue);
       if (delta !== void 0) return String(delta);
     }
     return arg;
   }
   function lowerV2Expression(text, line, context) {
-    const normalized = normalizeV2ExpressionText(rewriteSpatialExpressionText(text, context));
+    const rewritten = rewriteSpatialExpressionText(text, context);
+    const contextual = context === void 0 ? rewritten : normalizeContextualFloorAccessText(rewritten, context);
+    const normalized = normalizeV2ExpressionText(contextual);
     return parseExpression(normalized, line);
   }
   function rewriteSpatialExpressionText(text, context) {
@@ -2776,7 +4254,12 @@ var MKProEmulatorBundle = (() => {
     return void 0;
   }
   function cellMaskExpressionForCollection(mask, cell, context) {
-    return oneDimensionalCellMaskExpression(mask, cell, context);
+    const oneDimensional = oneDimensionalCellMaskExpression(mask, cell, context);
+    if (oneDimensional !== void 0) return oneDimensional;
+    const domain = context.stateDomains.get(mask.trim());
+    const world = domain === void 0 ? void 0 : context.worlds.get(domain);
+    if (world?.position?.encoding === "packed_decimal_zero_run") return `frac(${cell})`;
+    return void 0;
   }
   function decimalOnesExpression(expr) {
     return `(${expr}) - 10 * int((${expr}) / 10)`;
@@ -2818,6 +4301,13 @@ var MKProEmulatorBundle = (() => {
   function normalizeV2ExpressionText(text) {
     return text.trim().replace(/\b([A-Za-z_][\w]*)\.floor\b/gu, "int($1 / 100)");
   }
+  function normalizeContextualFloorAccessText(text, context) {
+    return text.replace(/\b([A-Za-z_][\w]*)\.floor\b/gu, (match, name) => {
+      const domain = context.stateDomains.get(name);
+      const world = domain === void 0 ? void 0 : context.worlds.get(domain);
+      return world?.position?.encoding === "packed_decimal_zero_run" ? `int(${name})` : match;
+    });
+  }
   function parseStackSource(text, line) {
     const trimmed = text.trim();
     if (/^input\.(X|Y)$/u.test(trimmed)) {
@@ -2846,7 +4336,42 @@ var MKProEmulatorBundle = (() => {
     return text.split(",").map((part) => part.trim()).filter((part) => part.length > 0);
   }
   function parseDisplayItemList(text, line) {
-    return splitDisplayArgs(text, line).map((part) => parseDisplayItem(part, line));
+    const tokens = tokenizeDisplayItems(text, line);
+    const items = [];
+    let pendingComma = false;
+    let justReadItem = false;
+    for (const token of tokens) {
+      if (token.kind === "comma") {
+        if (!justReadItem || pendingComma) throw new ParseError("Display comma must separate two fragments", line);
+        pendingComma = true;
+        justReadItem = false;
+        continue;
+      }
+      const item = parseDisplayItem(token.text, line);
+      if (pendingComma) {
+        const previous = items.at(-1);
+        if (previous?.kind === "literal") {
+          previous.text += " ";
+        } else if (item.kind === "literal") {
+          item.text = ` ${item.text}`;
+        } else {
+          items.push({ kind: "literal", text: " ", synthetic: "comma-space", line });
+        }
+        pendingComma = false;
+      }
+      pushDisplayItem(items, item);
+      justReadItem = true;
+    }
+    if (pendingComma) throw new ParseError("Display comma must separate two fragments", line);
+    return items;
+  }
+  function pushDisplayItem(items, item) {
+    const previous = items.at(-1);
+    if (previous?.kind === "literal" && item.kind === "literal") {
+      previous.text += item.text;
+      return;
+    }
+    items.push(item);
   }
   function parseDisplayItem(text, line) {
     const trimmed = text.trim();
@@ -2857,10 +4382,25 @@ var MKProEmulatorBundle = (() => {
         line
       };
     }
-    if (/^[A-Za-z_][\w]*$/u.test(trimmed)) {
-      return { kind: "source", name: trimmed, line };
+    const source = /^([A-Za-z_][\w]*)(?::(0?)(\d+))?$/u.exec(trimmed);
+    if (source) {
+      const [, name, zero, widthText] = source;
+      const item = { kind: "source", name, line };
+      if (widthText !== void 0) {
+        const width = Number(widthText);
+        if (!Number.isInteger(width) || width <= 0 || width > 8) {
+          throw new ParseError(`Display width must be 1..8, got '${widthText}'`, line);
+        }
+        item.width = width;
+        item.pad = zero === "0" ? "zero" : "space";
+      }
+      return item;
     }
     throw new ParseError(`Display item must be a string literal or state name, got '${trimmed}'`, line);
+  }
+  function parseV2StopLiteral(text, line) {
+    const trimmed = text.trim();
+    return trimmed.startsWith('"') ? parseQuotedDisplayText(trimmed, line) : void 0;
   }
   function parseQuotedDisplayText(text, line) {
     try {
@@ -2870,33 +4410,53 @@ var MKProEmulatorBundle = (() => {
     }
     throw new ParseError(`Invalid display string literal '${text}'`, line);
   }
-  function splitDisplayArgs(text, line) {
-    const parts = [];
-    let start = 0;
-    let quoted = false;
-    let escaped = false;
-    for (let index = 0; index < text.length; index += 1) {
+  function tokenizeDisplayItems(text, line) {
+    const tokens = [];
+    let index = 0;
+    while (index < text.length) {
       const char = text[index];
-      if (escaped) {
-        escaped = false;
+      if (/\s/u.test(char)) {
+        index += 1;
         continue;
       }
-      if (quoted && char === "\\") {
-        escaped = true;
+      if (char === ",") {
+        tokens.push({ kind: "comma" });
+        index += 1;
         continue;
       }
       if (char === '"') {
-        quoted = !quoted;
+        const start2 = index;
+        index += 1;
+        let escaped = false;
+        let closed = false;
+        while (index < text.length) {
+          const current = text[index];
+          if (escaped) {
+            escaped = false;
+            index += 1;
+            continue;
+          }
+          if (current === "\\") {
+            escaped = true;
+            index += 1;
+            continue;
+          }
+          if (current === '"') {
+            index += 1;
+            closed = true;
+            break;
+          }
+          index += 1;
+        }
+        if (!closed) throw new ParseError("Unclosed display string literal", line);
+        tokens.push({ kind: "item", text: text.slice(start2, index) });
         continue;
       }
-      if (char === "," && !quoted) {
-        parts.push(text.slice(start, index).trim());
-        start = index + 1;
-      }
+      const start = index;
+      while (index < text.length && !/[\s,]/u.test(text[index])) index += 1;
+      tokens.push({ kind: "item", text: text.slice(start, index) });
     }
-    if (quoted) throw new ParseError("Unclosed display string literal", line);
-    parts.push(text.slice(start).trim());
-    return parts.filter((part) => part.length > 0);
+    return tokens;
   }
   function parseExpression(text, line = 0) {
     return new ExpressionParser(text, line).parse();
@@ -3313,6 +4873,9 @@ var MKProEmulatorBundle = (() => {
   }
 
   // src/core/passes/helpers.ts
+  function emptyResult(ops) {
+    return { ops: [...ops], applied: 0, optimizations: [] };
+  }
   function cellsPerOp(op) {
     switch (op.kind) {
       case "label":
@@ -3796,7 +5359,7 @@ var MKProEmulatorBundle = (() => {
         for (const reg of newOut) {
           if (!defs.includes(reg)) newIn.add(reg);
         }
-        if (!setsEqual(newIn, liveIn[i]) || !setsEqual(newOut, liveOut[i])) {
+        if (!setsEqual2(newIn, liveIn[i]) || !setsEqual2(newOut, liveOut[i])) {
           liveIn[i] = newIn;
           liveOut[i] = newOut;
           changed = true;
@@ -3805,7 +5368,7 @@ var MKProEmulatorBundle = (() => {
     }
     return { liveIn, liveOut };
   }
-  function setsEqual(a, b) {
+  function setsEqual2(a, b) {
     if (a.size !== b.size) return false;
     for (const value of a) {
       if (!b.has(value)) return false;
@@ -3951,6 +5514,7 @@ var MKProEmulatorBundle = (() => {
       const op = ops[i];
       if (op.kind === "recall" && op.register === register) return true;
       if (op.kind === "store" && op.register === register) return false;
+      if (op.kind !== "label" && op.kind !== "plain" && op.kind !== "orphan-address") return true;
     }
     return false;
   }
@@ -3990,6 +5554,30 @@ var MKProEmulatorBundle = (() => {
   };
 
   // src/core/passes/dead-store-elimination.ts
+  function isNumberEntry(op) {
+    return op.kind === "plain" && op.opcode <= 12;
+  }
+  function leavesEntryOpen(op) {
+    if (isNumberEntry(op)) return true;
+    return op.kind === "stop" && op.semantic === "input";
+  }
+  function previousEffectiveOp(ops, index) {
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (ops[i].kind !== "label") return ops[i];
+    }
+    return void 0;
+  }
+  function nextEffectiveOp(ops, index) {
+    for (let i = index + 1; i < ops.length; i += 1) {
+      if (ops[i].kind !== "label") return ops[i];
+    }
+    return void 0;
+  }
+  function finalizesNumberEntry(ops, index) {
+    const prev = previousEffectiveOp(ops, index);
+    const next = nextEffectiveOp(ops, index);
+    return prev !== void 0 && next !== void 0 && leavesEntryOpen(prev) && isNumberEntry(next);
+  }
   var run6 = (ops) => {
     if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
     const liveness = computeLiveness(ops);
@@ -3999,6 +5587,7 @@ var MKProEmulatorBundle = (() => {
       if (op.kind !== "store") continue;
       if (hasRewriteBarrier(op)) continue;
       if (liveness.liveOut[i].has(op.register)) continue;
+      if (finalizesNumberEntry(ops, i)) continue;
       removed.add(i);
     }
     if (removed.size === 0) {
@@ -4749,14 +6338,50 @@ var MKProEmulatorBundle = (() => {
       meta: cloneMeta2({ ...op.meta, mnemonic: `\u041A ${name} ${register}` }, suffix)
     };
   }
-  var run11 = (ops) => {
+  function runPreloadedIndirectFlow(ops, _context, flowOptions = {}) {
     const registers = spareStableRegisters(ops);
     if (registers.length === 0) return { ops: [...ops], applied: 0, optimizations: [] };
     const addresses = addressByIndex(ops);
     const labels = calculateLabelAddresses(ops);
     const maxTarget = maxNumericFlowTarget(ops);
+    const eligibleTargets = /* @__PURE__ */ new Map();
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (hasRewriteBarrier(op) || op.kind !== "jump" && op.kind !== "call" && op.kind !== "cjump") continue;
+      const target = branchTarget(op);
+      const siteAddress = addresses[index];
+      if (target === void 0 || target > siteAddress || !flowOptions.relaxMaxTargetGuard && maxTarget > siteAddress) {
+        continue;
+      }
+      const { selectorValue, superDark } = selectorForTarget(ops, addresses, labels, target);
+      const evaluated = evaluateIndirectAddress(registers[0], selectorValue, "flow");
+      const selectedSuperDark = evaluated?.superDark?.entryAddress === target;
+      if (evaluated?.actualFlowTarget !== target || selectedSuperDark !== superDark) {
+        continue;
+      }
+      const existing = eligibleTargets.get(target);
+      if (existing !== void 0) {
+        existing.indices.push(index);
+      } else {
+        eligibleTargets.set(target, { target, selectorValue, superDark, indices: [index] });
+      }
+    }
     const targets = /* @__PURE__ */ new Map();
     const preloads = [];
+    const sortedTargets = [...eligibleTargets.values()].sort(
+      (left, right) => right.indices.length - left.indices.length || left.indices[0] - right.indices[0]
+    );
+    for (const target of sortedTargets) {
+      const register = registers.shift();
+      if (register === void 0) break;
+      if (!isStableIndirectSelector(register)) continue;
+      targets.set(target.target, {
+        register,
+        selectorValue: target.selectorValue,
+        superDark: target.superDark
+      });
+      preloads.push({ register, value: target.selectorValue, countsAgainstProgram: false });
+    }
     const result = [];
     let applied = 0;
     let superDarkApplied = 0;
@@ -4768,27 +6393,14 @@ var MKProEmulatorBundle = (() => {
       }
       const target = branchTarget(op);
       const siteAddress = addresses[index];
-      if (target === void 0 || target > siteAddress || maxTarget > siteAddress) {
+      if (target === void 0 || target > siteAddress || !flowOptions.relaxMaxTargetGuard && maxTarget > siteAddress) {
         result.push(op);
         continue;
       }
-      let selected = targets.get(target);
+      const selected = targets.get(target);
       if (selected === void 0) {
-        const register = registers.shift();
-        if (register === void 0) {
-          result.push(op);
-          continue;
-        }
-        const { selectorValue, superDark } = selectorForTarget(ops, addresses, labels, target);
-        const evaluated = evaluateIndirectAddress(register, selectorValue, "flow");
-        const selectedSuperDark = evaluated?.superDark?.entryAddress === target;
-        if (evaluated?.actualFlowTarget !== target || selectedSuperDark !== superDark || !isStableIndirectSelector(register)) {
-          result.push(op);
-          continue;
-        }
-        selected = { register, selectorValue, superDark };
-        targets.set(target, selected);
-        preloads.push({ register, value: selectorValue, countsAgainstProgram: false });
+        result.push(op);
+        continue;
       }
       result.push(indirectFlowOp2(op, selected.register, selected.selectorValue, target, selected.superDark));
       applied += 1;
@@ -4814,7 +6426,8 @@ var MKProEmulatorBundle = (() => {
       preloads,
       optimizations
     };
-  };
+  }
+  var run11 = (ops, context) => runPreloadedIndirectFlow(ops, context, {});
   var preloadedIndirectFlow = {
     name: "preloaded-indirect-flow",
     run: run11,
@@ -5077,15 +6690,18 @@ var MKProEmulatorBundle = (() => {
       }
     };
   }
-  var run13 = (ops) => {
-    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
-    if (ops.some((op) => hasRewriteBarrier(op))) {
-      return { ops: [...ops], applied: 0, optimizations: [] };
+  function excludedRegisters(ops, registers) {
+    const excluded = /* @__PURE__ */ new Set();
+    for (const reg of registers) {
+      if (usesIndirectAccess(ops, reg) || usesDisplayFocusSensitiveAccess(ops, reg) || usesLoopCounter(ops, reg)) {
+        excluded.add(reg);
+      }
     }
+    return excluded;
+  }
+  function coalesceNonOverlapping(ops) {
     const registers = gatherUsedRegisters(ops);
-    if (registers.size <= 1) {
-      return { ops: [...ops], applied: 0, optimizations: [] };
-    }
+    if (registers.size <= 1) return { ops: [...ops], applied: 0 };
     const liveness = computeLiveness(ops);
     const liveAtEntry = liveness.liveIn[0] ?? /* @__PURE__ */ new Set();
     const ranges = liveRangePerRegister(ops, registers);
@@ -5113,24 +6729,95 @@ var MKProEmulatorBundle = (() => {
         break;
       }
     }
-    if (mapping.size === 0) {
-      return { ops: [...ops], applied: 0, optimizations: [] };
-    }
+    if (mapping.size === 0) return { ops: [...ops], applied: 0 };
     const result = ops.map((op) => {
       if (op.kind !== "store" && op.kind !== "recall") return op;
       const replacement = mapping.get(op.register);
       return replacement === void 0 ? op : rewriteRegisterOp(op, replacement);
     });
-    return {
-      ops: result,
-      applied: mapping.size,
-      optimizations: [
-        {
-          name: "register-coalesce",
-          detail: `Coalesced ${mapping.size} non-overlapping register live range(s).`
+    return { ops: result, applied: mapping.size };
+  }
+  function coalesceCopies(ops) {
+    const registers = gatherUsedRegisters(ops);
+    if (registers.size <= 1) return { ops: [...ops], applied: 0 };
+    const liveness = computeLiveness(ops);
+    const excluded = excludedRegisters(ops, registers);
+    const storeIndices = /* @__PURE__ */ new Map();
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind === "store") {
+        if (!storeIndices.has(op.register)) storeIndices.set(op.register, []);
+        storeIndices.get(op.register).push(i);
+      }
+    }
+    const mapping = /* @__PURE__ */ new Map();
+    const dropIndices = /* @__PURE__ */ new Set();
+    for (let i = 0; i + 1 < ops.length; i += 1) {
+      const rec = ops[i];
+      const st = ops[i + 1];
+      if (rec.kind !== "recall" || st.kind !== "store") continue;
+      const source = rec.register;
+      const dest = st.register;
+      if (source === dest || mapping.has(dest) || mapping.has(source)) continue;
+      if (excluded.has(source) || excluded.has(dest)) continue;
+      const destStores = storeIndices.get(dest) ?? [];
+      if (destStores.length !== 1 || destStores[0] !== i + 1) continue;
+      if (liveness.liveIn[i].has(dest)) continue;
+      let diverges = false;
+      for (const j of storeIndices.get(source) ?? []) {
+        if (liveness.liveOut[j].has(dest)) {
+          diverges = true;
+          break;
         }
-      ]
-    };
+      }
+      if (diverges) continue;
+      mapping.set(dest, source);
+      dropIndices.add(i + 1);
+    }
+    if (mapping.size === 0) return { ops: [...ops], applied: 0 };
+    const result = [];
+    for (let i = 0; i < ops.length; i += 1) {
+      if (dropIndices.has(i)) continue;
+      const op = ops[i];
+      if (op.kind === "store" || op.kind === "recall") {
+        const replacement = mapping.get(op.register);
+        result.push(replacement === void 0 ? op : rewriteRegisterOp(op, replacement));
+      } else {
+        result.push(op);
+      }
+    }
+    return { ops: result, applied: mapping.size };
+  }
+  var run13 = (ops, context) => {
+    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
+    if (ops.some((op) => hasRewriteBarrier(op))) {
+      return { ops: [...ops], applied: 0, optimizations: [] };
+    }
+    const optimizations = [];
+    let current = [...ops];
+    let applied = 0;
+    const nonOverlap = coalesceNonOverlapping(current);
+    current = nonOverlap.ops;
+    applied += nonOverlap.applied;
+    if (nonOverlap.applied > 0) {
+      optimizations.push({
+        name: "register-coalesce",
+        detail: `Coalesced ${nonOverlap.applied} non-overlapping register live range(s).`
+      });
+    }
+    if (context.options.coalesceCopies === true) {
+      const copies = coalesceCopies(current);
+      current = copies.ops;
+      applied += copies.applied;
+      if (copies.applied > 0) {
+        optimizations.push({
+          name: "copy-coalesce",
+          detail: `Coalesced ${copies.applied} non-diverging copy assignment(s), dropping the copy and freeing a register.`
+        });
+      }
+    }
+    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    return { ops: current, applied, optimizations };
   };
   var registerCoalesce = {
     name: "register-coalesce",
@@ -5189,6 +6876,393 @@ var MKProEmulatorBundle = (() => {
     layoutSafe: false
   };
 
+  // src/core/passes/return-suffix-gadget.ts
+  var run15 = (ops) => {
+    if (hasNumericFlowTarget(ops)) return emptyResult(ops);
+    const candidates = collectReturnSuffixCandidates(ops);
+    const selected = selectGadgets(candidates, ops);
+    if (selected.length === 0) return emptyResult(ops);
+    const targetLabels = /* @__PURE__ */ new Map();
+    const replacementByStart = /* @__PURE__ */ new Map();
+    let applied = 0;
+    let savedCells = 0;
+    let jumps = 0;
+    let calls = 0;
+    for (const gadget of selected) {
+      const labels = targetLabels.get(gadget.target.start) ?? [];
+      labels.push(gadget.label);
+      targetLabels.set(gadget.target.start, labels);
+      for (const replacement of gadget.replacements) {
+        replacementByStart.set(replacement.start, {
+          kind: gadget.kind,
+          end: replacement.end,
+          label: gadget.label
+        });
+        applied += 1;
+        savedCells += replacement.cells - 2;
+        if (gadget.kind === "jump") jumps += 1;
+        else calls += 1;
+      }
+    }
+    const result = [];
+    for (let index = 0; index < ops.length; index += 1) {
+      for (const label of targetLabels.get(index) ?? []) {
+        result.push({ kind: "label", name: label });
+      }
+      const replacement = replacementByStart.get(index);
+      if (replacement !== void 0) {
+        result.push(
+          replacement.kind === "jump" ? gadgetJump(replacement.label, ops[index]) : gadgetCall(replacement.label, ops[index])
+        );
+        index = replacement.end;
+        continue;
+      }
+      result.push(ops[index]);
+    }
+    return {
+      ops: result,
+      applied,
+      optimizations: [{
+        name: "return-suffix-gadget",
+        detail: `Shared ${applied} return/tail-call gadget${applied === 1 ? "" : "s"} (${jumps} jump, ${calls} call; ${savedCells} cell${savedCells === 1 ? "" : "s"} saved).`
+      }]
+    };
+  };
+  var returnSuffixGadget = {
+    name: "return-suffix-gadget",
+    run: run15,
+    layoutSafe: false
+  };
+  function collectReturnSuffixCandidates(ops) {
+    const byKey = /* @__PURE__ */ new Map();
+    for (let end = 0; end < ops.length; end += 1) {
+      const final = ops[end];
+      if (!isShareableReturn(final)) continue;
+      const parts = [opKey(final)];
+      let cells = cellsPerOp(final);
+      for (let start = end - 1; start >= 0; start -= 1) {
+        const op = ops[start];
+        if (!isShareableBodyOp(op)) break;
+        parts.unshift(opKey(op));
+        cells += cellsPerOp(op);
+        if (cells <= 2) continue;
+        const key = parts.join("\n");
+        const bodyKey = parts.slice(0, -1).join("\n");
+        const occurrences = byKey.get(key) ?? [];
+        occurrences.push({ key, bodyKey, start, end, cells, bodyCells: cells - cellsPerOp(final) });
+        byKey.set(key, occurrences);
+      }
+    }
+    return [...byKey.entries()].map(([key, occurrences]) => ({ key, occurrences, cells: occurrences[0].cells }));
+  }
+  function selectGadgets(candidates, ops) {
+    const existingLabels = new Set(ops.flatMap((op) => op.kind === "label" ? [op.name] : []));
+    const protectedIndexes = /* @__PURE__ */ new Set();
+    const selected = [];
+    let labelIndex = 0;
+    const ordered = [...candidates].sort((left, right) => {
+      const leftSavings = (left.occurrences.length - 1) * (left.cells - 2);
+      const rightSavings = (right.occurrences.length - 1) * (right.cells - 2);
+      return rightSavings - leftSavings || right.cells - left.cells || left.key.localeCompare(right.key);
+    });
+    for (const candidate of ordered) {
+      const available = candidate.occurrences.filter(
+        (occurrence) => !rangeIntersects(protectedIndexes, occurrence.start, occurrence.end)
+      );
+      if (available.length < 2) continue;
+      const [target, ...replacements] = available;
+      if (target === void 0 || replacements.length === 0) continue;
+      const savedCells = replacements.reduce((sum, occurrence) => sum + occurrence.cells - 2, 0);
+      if (savedCells <= 0) continue;
+      const label = freshLabel2(existingLabels, labelIndex);
+      labelIndex += 1;
+      existingLabels.add(label);
+      selected.push({ kind: "jump", label, target, replacements });
+      for (const occurrence of [target, ...replacements]) {
+        markRange(protectedIndexes, occurrence.start, occurrence.end);
+      }
+    }
+    const bodyTargets = collectBodyTargets(candidates);
+    const bodyOccurrences = collectBodyOccurrences(ops, new Set(bodyTargets.keys()));
+    const bodyCalls = selectBodyCalls(bodyTargets, bodyOccurrences, existingLabels, protectedIndexes, labelIndex);
+    selected.push(...bodyCalls);
+    const tailCallTargets = collectTailCallTargets(ops);
+    const tailCallOccurrences = collectTailCallOccurrences(ops, new Set(tailCallTargets.keys()));
+    const tailCalls = selectBodyCalls(tailCallTargets, tailCallOccurrences, existingLabels, protectedIndexes, labelIndex);
+    selected.push(...tailCalls);
+    return selected;
+  }
+  function gadgetJump(label, source) {
+    const meta = {
+      mnemonic: "\u0411\u041F",
+      comment: "return suffix gadget"
+    };
+    if ("meta" in source && source.meta.sourceLine !== void 0) {
+      meta.sourceLine = source.meta.sourceLine;
+    }
+    return {
+      kind: "jump",
+      target: label,
+      opcode: 81,
+      meta,
+      targetMeta: { comment: "return suffix gadget" }
+    };
+  }
+  function gadgetCall(label, source) {
+    const meta = {
+      mnemonic: "\u041F\u041F",
+      comment: "proc call return suffix gadget"
+    };
+    if ("meta" in source && source.meta.sourceLine !== void 0) {
+      meta.sourceLine = source.meta.sourceLine;
+    }
+    return {
+      kind: "call",
+      target: label,
+      opcode: 83,
+      meta,
+      targetMeta: { comment: "return suffix gadget target" }
+    };
+  }
+  function isShareableReturn(op) {
+    return op.kind === "return" && !hasRewriteBarrier(op);
+  }
+  function isShareableBodyOp(op) {
+    if (hasRewriteBarrier(op)) return false;
+    switch (op.kind) {
+      case "store":
+      case "recall":
+      case "indirect-store":
+      case "indirect-recall":
+      case "call":
+      case "indirect-call":
+      case "stop":
+      case "plain":
+        return true;
+      case "label":
+      case "jump":
+      case "cjump":
+      case "loop":
+      case "indirect-jump":
+      case "indirect-cjump":
+      case "return":
+      case "orphan-address":
+        return false;
+    }
+  }
+  function isCallableBodyOp(op) {
+    return isShareableBodyOp(op) && op.kind !== "stop";
+  }
+  function isTailCallGadgetBodyOp(op) {
+    if (hasRewriteBarrier(op)) return false;
+    switch (op.kind) {
+      case "store":
+      case "recall":
+      case "indirect-store":
+      case "indirect-recall":
+      case "plain":
+        return true;
+      case "label":
+      case "jump":
+      case "cjump":
+      case "call":
+      case "loop":
+      case "indirect-jump":
+      case "indirect-call":
+      case "indirect-cjump":
+      case "return":
+      case "stop":
+      case "orphan-address":
+        return false;
+    }
+  }
+  function hasNumericFlowTarget(ops) {
+    return ops.some((op) => {
+      switch (op.kind) {
+        case "jump":
+        case "cjump":
+        case "call":
+        case "loop":
+          return typeof op.target === "number";
+        default:
+          return false;
+      }
+    });
+  }
+  function opKey(op) {
+    switch (op.kind) {
+      case "store":
+        return `store:${op.opcode}:${op.register}`;
+      case "recall":
+        return `recall:${op.opcode}:${op.register}`;
+      case "indirect-store":
+        return `indirect-store:${op.opcode}:${op.register}`;
+      case "indirect-recall":
+        return `indirect-recall:${op.opcode}:${op.register}`;
+      case "call":
+        return `call:${op.opcode}:${targetKey(op.target)}:${op.targetMeta.formalOpcode ?? ""}`;
+      case "indirect-call":
+        return `indirect-call:${op.opcode}:${op.register}`;
+      case "stop":
+        return `stop:${op.opcode}`;
+      case "plain":
+        return `plain:${op.opcode}`;
+      case "return":
+        return `return:${op.opcode}`;
+      case "label":
+      case "jump":
+      case "cjump":
+      case "loop":
+      case "indirect-jump":
+      case "indirect-cjump":
+      case "orphan-address":
+        return op.kind;
+    }
+  }
+  function collectBodyTargets(candidates) {
+    const result = /* @__PURE__ */ new Map();
+    for (const candidate of candidates) {
+      for (const occurrence of candidate.occurrences) {
+        if (occurrence.bodyKey.length === 0 || occurrence.bodyCells <= 2) continue;
+        const targets = result.get(occurrence.bodyKey) ?? [];
+        targets.push({
+          key: occurrence.bodyKey,
+          start: occurrence.start,
+          bodyEnd: occurrence.end - 1,
+          end: occurrence.end,
+          cells: occurrence.bodyCells
+        });
+        result.set(occurrence.bodyKey, targets);
+      }
+    }
+    return result;
+  }
+  function collectBodyOccurrences(ops, wantedKeys) {
+    const result = /* @__PURE__ */ new Map();
+    if (wantedKeys.size === 0) return result;
+    for (let start = 0; start < ops.length; start += 1) {
+      const parts = [];
+      let cells = 0;
+      for (let end = start; end < ops.length; end += 1) {
+        const op = ops[end];
+        if (!isCallableBodyOp(op)) break;
+        parts.push(opKey(op));
+        cells += cellsPerOp(op);
+        if (cells <= 2) continue;
+        const key = parts.join("\n");
+        if (!wantedKeys.has(key)) continue;
+        const occurrences = result.get(key) ?? [];
+        occurrences.push({ key, start, end, cells });
+        result.set(key, occurrences);
+      }
+    }
+    return result;
+  }
+  function collectTailCallTargets(ops) {
+    const result = /* @__PURE__ */ new Map();
+    for (let jumpIndex = 0; jumpIndex < ops.length; jumpIndex += 1) {
+      const jump = ops[jumpIndex];
+      if (jump.kind !== "jump" || typeof jump.target !== "string" || hasRewriteBarrier(jump)) continue;
+      const parts = [`target:${targetKey(jump.target)}`];
+      let cells = cellsPerOp(jump);
+      for (let start = jumpIndex - 1; start >= 0; start -= 1) {
+        const op = ops[start];
+        if (!isTailCallGadgetBodyOp(op)) break;
+        parts.unshift(opKey(op));
+        cells += cellsPerOp(op);
+        const bodyCells = cells - cellsPerOp(jump);
+        if (bodyCells <= 0) continue;
+        const key = parts.join("\n");
+        const targets = result.get(key) ?? [];
+        targets.push({
+          key,
+          start,
+          bodyEnd: jumpIndex - 1,
+          end: jumpIndex,
+          cells: bodyCells
+        });
+        result.set(key, targets);
+      }
+    }
+    return result;
+  }
+  function collectTailCallOccurrences(ops, wantedKeys) {
+    const result = /* @__PURE__ */ new Map();
+    if (wantedKeys.size === 0) return result;
+    for (let start = 0; start < ops.length; start += 1) {
+      const parts = [];
+      let cells = 0;
+      for (let callIndex = start; callIndex < ops.length; callIndex += 1) {
+        const op = ops[callIndex];
+        if (op.kind === "call" && typeof op.target === "string" && !hasRewriteBarrier(op)) {
+          const key = [...parts, `target:${targetKey(op.target)}`].join("\n");
+          if (cells > 0 && wantedKeys.has(key)) {
+            const occurrences = result.get(key) ?? [];
+            occurrences.push({ key, start, end: callIndex, cells: cells + cellsPerOp(op) });
+            result.set(key, occurrences);
+          }
+          break;
+        }
+        if (!isTailCallGadgetBodyOp(op)) break;
+        parts.push(opKey(op));
+        cells += cellsPerOp(op);
+      }
+    }
+    return result;
+  }
+  function selectBodyCalls(targets, occurrences, existingLabels, protectedIndexes, initialLabelIndex) {
+    const selected = [];
+    let labelIndex = initialLabelIndex;
+    const keys = [...targets.keys()].sort((left, right) => {
+      const leftCells = targets.get(left)?.[0]?.cells ?? 0;
+      const rightCells = targets.get(right)?.[0]?.cells ?? 0;
+      return rightCells - leftCells || left.localeCompare(right);
+    });
+    for (const key of keys) {
+      const availableTargets = (targets.get(key) ?? []).filter((target2) => !rangeIntersects(protectedIndexes, target2.start, target2.end));
+      if (availableTargets.length === 0) continue;
+      const target = availableTargets[0];
+      const replacements = (occurrences.get(key) ?? []).filter((occurrence) => !sameTargetBody(occurrence, target)).filter((occurrence) => !rangeIntersects(protectedIndexes, occurrence.start, occurrence.end));
+      if (replacements.length === 0) continue;
+      const savedCells = replacements.reduce((sum, occurrence) => sum + occurrence.cells - 2, 0);
+      if (savedCells <= 0) continue;
+      const label = freshLabel2(existingLabels, labelIndex);
+      labelIndex += 1;
+      existingLabels.add(label);
+      selected.push({ kind: "call", label, target, replacements: [...replacements] });
+      markRange(protectedIndexes, target.start, target.end);
+      for (const occurrence of replacements) {
+        markRange(protectedIndexes, occurrence.start, occurrence.end);
+      }
+    }
+    return selected;
+  }
+  function targetKey(target) {
+    return typeof target === "number" ? `#${target}` : target;
+  }
+  function sameTargetBody(occurrence, target) {
+    return occurrence.start === target.start && occurrence.end === target.bodyEnd;
+  }
+  function rangeIntersects(indexes, start, end) {
+    for (let index = start; index <= end; index += 1) {
+      if (indexes.has(index)) return true;
+    }
+    return false;
+  }
+  function markRange(indexes, start, end) {
+    for (let index = start; index <= end; index += 1) {
+      indexes.add(index);
+    }
+  }
+  function freshLabel2(existingLabels, index) {
+    let suffix = index;
+    while (true) {
+      const label = `__return_suffix_gadget_${suffix}`;
+      if (!existingLabels.has(label)) return label;
+      suffix += 1;
+    }
+  }
+
   // src/core/passes/r0-fractional-sentinel.ts
   function isFractionalR0LiteralBeforeStore(ops, storeIndex) {
     let index = storeIndex - 1;
@@ -5205,7 +7279,7 @@ var MKProEmulatorBundle = (() => {
     if (zero === void 0) return true;
     return zero.kind === "plain" && zero.opcode === 0;
   }
-  var run15 = (ops) => {
+  var run16 = (ops) => {
     if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
     const liveness = computeLiveness(ops);
     const remove = /* @__PURE__ */ new Set();
@@ -5256,12 +7330,12 @@ var MKProEmulatorBundle = (() => {
   };
   var r0FractionalSentinel = {
     name: "r0-fractional-sentinel",
-    run: run15,
+    run: run16,
     layoutSafe: false
   };
 
   // src/core/passes/shared-call-tail.ts
-  var run16 = (ops) => {
+  var run17 = (ops) => {
     const candidates = collectSharedCallTails(ops);
     const normalizeContinuation = buildContinuationNormalizer(ops);
     if (candidates.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
@@ -5320,7 +7394,7 @@ var MKProEmulatorBundle = (() => {
   };
   var sharedCallTail = {
     name: "shared-call-tail",
-    run: run16,
+    run: run17,
     layoutSafe: false
   };
   function collectSharedCallTails(ops) {
@@ -5360,9 +7434,9 @@ var MKProEmulatorBundle = (() => {
     return result;
   }
   function callTailKey(call, continuation, normalizeContinuation) {
-    return `${targetKey(call.target)}|${targetKey(normalizeContinuation(continuation.target))}`;
+    return `${targetKey2(call.target)}|${targetKey2(normalizeContinuation(continuation.target))}`;
   }
-  function targetKey(target) {
+  function targetKey2(target) {
     return typeof target === "number" ? `#${target}` : target;
   }
   function buildContinuationNormalizer(ops) {
@@ -5392,7 +7466,7 @@ var MKProEmulatorBundle = (() => {
   }
 
   // src/core/passes/store-recall-peephole.ts
-  var run17 = (ops) => {
+  var run18 = (ops) => {
     const result = [];
     let applied = 0;
     for (let i = 0; i < ops.length; i += 1) {
@@ -5420,12 +7494,95 @@ var MKProEmulatorBundle = (() => {
   };
   var storeRecallPeephole = {
     name: "store-recall-peephole",
-    run: run17,
+    run: run18,
+    layoutSafe: false
+  };
+
+  // src/core/passes/tail-branch-inversion.ts
+  var INVERTED_CONDITIONS = {
+    "==0": { condition: "!=0", opcode: 87 },
+    "!=0": { condition: "==0", opcode: 94 },
+    "<0": { condition: ">=0", opcode: 89 },
+    ">=0": { condition: "<0", opcode: 92 }
+  };
+  var run19 = (ops, context) => {
+    if (context.options.tailBranchInversion !== true) {
+      return { ops: [...ops], applied: 0, optimizations: [] };
+    }
+    const refs = countLabelRefs2(ops);
+    const result = [];
+    let applied = 0;
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (op.kind !== "cjump" || typeof op.target !== "string" || hasRewriteBarrier(op)) {
+        result.push(op);
+        continue;
+      }
+      const jumpIndex = nextExecutableIndex2(ops, index + 1);
+      if (jumpIndex === void 0) {
+        result.push(op);
+        continue;
+      }
+      const jump = ops[jumpIndex];
+      if (jump.kind !== "jump" || hasRewriteBarrier(jump)) {
+        result.push(op);
+        continue;
+      }
+      const labelIndex = jumpIndex + 1;
+      const label = ops[labelIndex];
+      if (label?.kind !== "label" || label.name !== op.target || (refs.get(label.name) ?? 0) !== 1) {
+        result.push(op);
+        continue;
+      }
+      const inverted = INVERTED_CONDITIONS[op.condition];
+      result.push({
+        ...op,
+        condition: inverted.condition,
+        target: jump.target,
+        opcode: inverted.opcode,
+        meta: {
+          ...op.meta,
+          mnemonic: getOpcode(inverted.opcode).name,
+          comment: op.meta.comment?.replace(/^false branch/u, "direct tail branch") ?? "direct tail branch"
+        },
+        targetMeta: { ...jump.targetMeta }
+      });
+      index = labelIndex;
+      applied += 1;
+    }
+    if (applied === 0) return { ops: result, applied: 0, optimizations: [] };
+    return {
+      ops: result,
+      applied,
+      optimizations: [{
+        name: "tail-branch-inversion",
+        detail: `Inverted ${applied} branch${applied === 1 ? "" : "es"} whose then-path was only a tail jump.`
+      }]
+    };
+  };
+  function countLabelRefs2(ops) {
+    const refs = /* @__PURE__ */ new Map();
+    for (const op of ops) {
+      if ((op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") && typeof op.target === "string") {
+        refs.set(op.target, (refs.get(op.target) ?? 0) + 1);
+      }
+    }
+    return refs;
+  }
+  function nextExecutableIndex2(ops, start) {
+    for (let index = start; index < ops.length; index += 1) {
+      if (ops[index].kind !== "label") return index;
+    }
+    return void 0;
+  }
+  var tailBranchInversion = {
+    name: "tail-branch-inversion",
+    run: run19,
     layoutSafe: false
   };
 
   // src/core/passes/tail-call.ts
-  var run18 = (ops) => {
+  var run20 = (ops) => {
     const tailJumpTargets = findTailJumpTargets(ops);
     const returnContinuations = collectReturnContinuations(ops, tailJumpTargets);
     const returnLabels = collectReturnLabels(ops);
@@ -5459,7 +7616,7 @@ var MKProEmulatorBundle = (() => {
         }
       }
       if (op.kind === "call") {
-        const continuationIndex = nextExecutableIndex2(ops, index + 1);
+        const continuationIndex = nextExecutableIndex3(ops, index + 1);
         const continuation = continuationIndex === void 0 ? void 0 : ops[continuationIndex];
         const continuationIsImmediate = continuationIndex === index + 1;
         if (continuation?.kind === "jump" && isReturnLabel(continuation.target, returnLabels)) {
@@ -5542,7 +7699,7 @@ var MKProEmulatorBundle = (() => {
   };
   var tailCallLowering = {
     name: "tail-call-lowering",
-    run: run18,
+    run: run20,
     layoutSafe: false
   };
   function findTailJumpTargets(ops) {
@@ -5603,12 +7760,12 @@ var MKProEmulatorBundle = (() => {
     for (let index = 0; index < ops.length; index += 1) {
       const op = ops[index];
       if (op.kind !== "label") continue;
-      const next = nextExecutableIndex2(ops, index + 1);
+      const next = nextExecutableIndex3(ops, index + 1);
       if (next !== void 0 && ops[next]?.kind === "return") result.add(op.name);
     }
     return result;
   }
-  function nextExecutableIndex2(ops, start) {
+  function nextExecutableIndex3(ops, start) {
     for (let index = start; index < ops.length; index += 1) {
       if (ops[index]?.kind !== "label") return index;
     }
@@ -5644,13 +7801,59 @@ var MKProEmulatorBundle = (() => {
       seen.add(target);
       const labelIndex = labelIndexes.get(target);
       if (labelIndex === void 0) return target;
-      const executableIndex = nextExecutableIndex2(ops, labelIndex + 1);
+      const executableIndex = nextExecutableIndex3(ops, labelIndex + 1);
       const executable = executableIndex === void 0 ? void 0 : ops[executableIndex];
       if (executable?.kind !== "jump" || hasRewriteBarrier(executable)) return target;
       return normalize(executable.target, seen);
     };
     return (target) => normalize(target);
   }
+
+  // src/core/passes/vp-splice.ts
+  var VP = 12;
+  var KNOP = 84;
+  function isPlainOpcode(op, opcode) {
+    return op.kind === "plain" && op.opcode === opcode && !hasRewriteBarrier(op);
+  }
+  function isFreeStandingVp(op) {
+    if (!isPlainOpcode(op, VP)) return false;
+    return !("meta" in op && op.meta.roles !== void 0 && op.meta.roles.length > 0);
+  }
+  function isFreeStandingKnop(op) {
+    if (!isPlainOpcode(op, KNOP)) return false;
+    return !("meta" in op && op.meta.roles !== void 0 && op.meta.roles.length > 0);
+  }
+  var run21 = (ops) => {
+    const remove = /* @__PURE__ */ new Set();
+    for (let i = 1; i < ops.length; i += 1) {
+      const prev = ops[i - 1];
+      const cur = ops[i];
+      if (remove.has(i - 1)) continue;
+      if (isFreeStandingVp(prev) && isFreeStandingVp(cur)) {
+        remove.add(i);
+        continue;
+      }
+      if (isFreeStandingKnop(prev) && isFreeStandingVp(cur)) {
+        remove.add(i - 1);
+      }
+    }
+    if (remove.size === 0) return emptyResult(ops);
+    return {
+      ops: ops.filter((_, index) => !remove.has(index)),
+      applied: remove.size,
+      optimizations: [
+        {
+          name: "vp-exponent-splice",
+          detail: `Collapsed ${remove.size} redundant \u0412\u041F/\u041A\u041D\u041E\u041F cell(s) around an exponent-entry boundary (\u0412\u041F \u0412\u041F -> \u0412\u041F, \u041A\u041D\u041E\u041F \u0412\u041F -> \u0412\u041F).`
+        }
+      ]
+    };
+  };
+  var vpSplice = {
+    name: "vp-splice",
+    run: run21,
+    layoutSafe: false
+  };
 
   // src/core/passes/vp-x2-peephole.ts
   function displayBoundaryText(op) {
@@ -5668,7 +7871,7 @@ var MKProEmulatorBundle = (() => {
     if (hasRewriteBarrier(op)) return false;
     return op.kind === "plain" && op.opcode === 53 && /display|x2|frac/u.test(displayBoundaryText(op));
   }
-  var run19 = (ops) => {
+  var run22 = (ops) => {
     const remove = /* @__PURE__ */ new Set();
     for (let i = 1; i < ops.length; i += 1) {
       if (isDisplayVp(ops[i - 1]) && isFractionAfterDisplayBoundary(ops[i])) {
@@ -5689,7 +7892,7 @@ var MKProEmulatorBundle = (() => {
   };
   var vpX2Peephole = {
     name: "vp-x2-peephole",
-    run: run19,
+    run: run22,
     layoutSafe: false
   };
 
@@ -5697,7 +7900,9 @@ var MKProEmulatorBundle = (() => {
   var PASS_PIPELINE = [
     redundantPrologueElimination,
     tailCallLowering,
+    tailBranchInversion,
     sharedCallTail,
+    returnSuffixGadget,
     returnZeroJump,
     storeRecallPeephole,
     jumpToNextThreading,
@@ -5709,6 +7914,7 @@ var MKProEmulatorBundle = (() => {
     deadStoreElimination,
     lastXReuse,
     r0FractionalSentinel,
+    vpSplice,
     vpX2Peephole,
     constantFolding,
     duplicateFailureTail,
@@ -5761,6 +7967,220 @@ var MKProEmulatorBundle = (() => {
       passCounts: result.passCounts,
       preloads: result.preloads
     };
+  }
+
+  // src/core/post-layout-indirect-flow.ts
+  function isDirectBranch(op) {
+    return op.kind === "jump" || op.kind === "call" || op.kind === "cjump";
+  }
+  function isIndirectBranch(op) {
+    return op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump";
+  }
+  function registerIndex2(register) {
+    return /^[0-9]$/u.test(register) ? Number(register) : register.toLowerCase().charCodeAt(0) - 87;
+  }
+  function labelAddresses(ops) {
+    const map = /* @__PURE__ */ new Map();
+    let address = 0;
+    for (const op of ops) {
+      if (op.kind === "label") {
+        map.set(op.name, address);
+        continue;
+      }
+      address += cellsPerOp(op);
+    }
+    return map;
+  }
+  function cellCount(items) {
+    return items.filter((item) => item.kind !== "label").length;
+  }
+  function mergeDuplicateSelectors(items, preloads) {
+    const canonicalByValue = /* @__PURE__ */ new Map();
+    const remap = /* @__PURE__ */ new Map();
+    const kept = [];
+    for (const preload of preloads) {
+      const register = preload.register;
+      const canonical = canonicalByValue.get(preload.value);
+      if (canonical === void 0) {
+        canonicalByValue.set(preload.value, register);
+        kept.push(preload);
+      } else if (register !== canonical) {
+        remap.set(register, canonical);
+      }
+    }
+    if (remap.size === 0) return { items: [...items], preloads: [...preloads], merged: 0 };
+    const ir = raiseMachineToIr(items).map((op) => {
+      if (!isIndirectBranch(op) || !remap.has(op.register)) return op;
+      const target = remap.get(op.register);
+      const opcode = op.opcode - registerIndex2(op.register) + registerIndex2(target);
+      return { ...op, register: target, opcode };
+    });
+    return { items: lowerIrToMachine(ir), preloads: kept, merged: remap.size };
+  }
+  function selectorValueForRegister(preloads, register) {
+    for (const preload of preloads) {
+      if (preload.register === register) return preload.value;
+    }
+    return void 0;
+  }
+  function numericTargetView(ir, labels) {
+    const numeric = [];
+    const targetLabel = [];
+    for (const op of ir) {
+      if (isDirectBranch(op) && typeof op.target === "string") {
+        const address = labels.get(op.target);
+        if (address !== void 0) {
+          numeric.push({ ...op, target: address });
+          targetLabel.push(op.target);
+          continue;
+        }
+      }
+      numeric.push(op);
+      targetLabel.push(void 0);
+    }
+    return { numeric, targetLabel };
+  }
+  function isSuperDarkRewrite(op) {
+    return /\bsuper-dark\b/iu.test(op.meta.comment ?? "");
+  }
+  function validateRewriteAt(index, ir, numeric, targetLabel, result, items) {
+    const rewritten = result.ops[index];
+    const original = numeric[index];
+    if (!isIndirectBranch(rewritten) || !isDirectBranch(original)) return void 0;
+    const label = targetLabel[index];
+    if (label === void 0) return void 0;
+    const selectorValue = selectorValueForRegister(result.preloads ?? [], rewritten.register);
+    if (selectorValue === void 0) return void 0;
+    const candidate = ir.map((op, i) => i === index ? rewritten : op);
+    const finalLabels = labelAddresses(candidate);
+    const targetFinalAddress = finalLabels.get(label);
+    if (targetFinalAddress === void 0) return void 0;
+    const decoded = evaluateIndirectAddress(rewritten.register, selectorValue, "flow");
+    if (decoded?.actualFlowTarget !== targetFinalAddress) return void 0;
+    const candidateItems = lowerIrToMachine(candidate);
+    if (cellCount(candidateItems) >= cellCount(items)) return void 0;
+    return {
+      items: candidateItems,
+      preload: { register: rewritten.register, value: selectorValue, countsAgainstProgram: false },
+      optimizations: result.optimizations,
+      superDark: isSuperDarkRewrite(rewritten),
+      // A target reached through a formal address beyond the official 104-cell
+      // window is a dark entry pointing at the executable suffix. The dark region
+      // spans several formal kinds (dark / long-side / short-side, e.g. B2 -> 0,
+      // C5 -> 13); FA..FF super-dark is reported separately.
+      darkEntry: decoded.formalAddress !== void 0 && decoded.formalAddress.kind !== "official" && decoded.formalAddress.kind !== "super-dark",
+      converted: 1
+    };
+  }
+  function validateRewriteGroup(indices, ir, numeric, targetLabel, result, items) {
+    if (indices.length === 0) return void 0;
+    const first = result.ops[indices[0]];
+    if (!isIndirectBranch(first)) return void 0;
+    const register = first.register;
+    const selectorValue = selectorValueForRegister(result.preloads ?? [], register);
+    if (selectorValue === void 0) return void 0;
+    const indexSet = new Set(indices);
+    const candidate = ir.map((op, i) => indexSet.has(i) ? result.ops[i] : op);
+    const finalLabels = labelAddresses(candidate);
+    const decoded = evaluateIndirectAddress(register, selectorValue, "flow");
+    if (decoded === void 0) return void 0;
+    let superDark = false;
+    for (const index of indices) {
+      const rewritten = result.ops[index];
+      const original = numeric[index];
+      if (!isIndirectBranch(rewritten) || !isDirectBranch(original)) return void 0;
+      if (rewritten.register !== register) return void 0;
+      const label = targetLabel[index];
+      if (label === void 0) return void 0;
+      const targetFinalAddress = finalLabels.get(label);
+      if (decoded.actualFlowTarget !== targetFinalAddress) return void 0;
+      if (isSuperDarkRewrite(rewritten)) superDark = true;
+    }
+    const candidateItems = lowerIrToMachine(candidate);
+    if (cellCount(candidateItems) >= cellCount(items)) return void 0;
+    return {
+      items: candidateItems,
+      preload: { register, value: selectorValue, countsAgainstProgram: false },
+      optimizations: result.optimizations,
+      superDark,
+      darkEntry: decoded.formalAddress !== void 0 && decoded.formalAddress.kind !== "official" && decoded.formalAddress.kind !== "super-dark",
+      converted: indices.length
+    };
+  }
+  function applyOneRewrite(items, options) {
+    const ir = raiseMachineToIr(items);
+    const labels = labelAddresses(ir);
+    const { numeric, targetLabel } = numericTargetView(ir, labels);
+    const result = runPreloadedIndirectFlow(numeric, { options }, { relaxMaxTargetGuard: true });
+    if (result.applied === 0) return void 0;
+    const groups = /* @__PURE__ */ new Map();
+    for (let index = 0; index < result.ops.length; index += 1) {
+      const op = result.ops[index];
+      const original = numeric[index];
+      if (!isIndirectBranch(op) || !isDirectBranch(original) || targetLabel[index] === void 0) continue;
+      const list = groups.get(op.register) ?? [];
+      list.push(index);
+      groups.set(op.register, list);
+    }
+    let best;
+    for (const indices of groups.values()) {
+      const group = validateRewriteGroup(indices, ir, numeric, targetLabel, result, items);
+      const candidate = group ?? validateRewriteAt(indices[0], ir, numeric, targetLabel, result, items);
+      if (candidate === void 0) continue;
+      if (candidate.superDark) return candidate;
+      if (best === void 0 || candidate.converted > best.converted) best = candidate;
+    }
+    return best;
+  }
+  var MAX_REWRITES = 64;
+  var OFFICIAL_PROGRAM_LIMIT = 105;
+  function optimizePostLayoutIndirectFlow(items, options, rescueAbove = OFFICIAL_PROGRAM_LIMIT) {
+    let current = [...items];
+    const preloads = [];
+    let applied = 0;
+    let superDarkApplied = 0;
+    let darkEntryApplied = 0;
+    for (let round = 0; round < MAX_REWRITES; round += 1) {
+      if (cellCount(current) <= rescueAbove) break;
+      const step = applyOneRewrite(current, options);
+      if (step === void 0) break;
+      current = step.items;
+      preloads.push(step.preload);
+      applied += step.converted;
+      if (step.superDark) superDarkApplied += 1;
+      if (step.darkEntry) darkEntryApplied += 1;
+    }
+    if (applied === 0) {
+      return { items: [...items], preloads: [], optimizations: [], applied: 0 };
+    }
+    const merge = mergeDuplicateSelectors(current, preloads);
+    current = merge.items;
+    const finalPreloads = merge.preloads;
+    const optimizations = [
+      {
+        name: "preloaded-indirect-flow",
+        detail: `Activated post-layout: replaced ${applied} direct branch/call(s) with proven preloaded indirect flow.`
+      }
+    ];
+    if (superDarkApplied > 0) {
+      optimizations.push({
+        name: "preloaded-super-dark-flow",
+        detail: `Selected ${superDarkApplied} FA..FF one-command super-dark dispatch(es), each proven to fall through to its 01..06 continuation.`
+      });
+    }
+    if (darkEntryApplied > 0) {
+      optimizations.push({
+        name: "dark-entry-layout",
+        detail: `Pointed ${darkEntryApplied} branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window).`
+      });
+    }
+    if (merge.merged > 0) {
+      optimizations.push({
+        name: "constants-dual-use",
+        detail: `Shared ${merge.merged} duplicate selector register(s): one stored constant now drives several dispatch sites, freeing the rest.`
+      });
+    }
+    return { items: current, preloads: finalPreloads, optimizations, applied };
   }
 
   // src/core/super-dark-layout.ts
@@ -5842,7 +8262,7 @@ var MKProEmulatorBundle = (() => {
       if (cell.opcode < 135 || cell.opcode > 142) continue;
       if (!/\bsuper[- ]dark\b/iu.test(cell.tactic)) continue;
       const register = registerForIndirectJumpOpcode(cell.opcode);
-      const selectorValue = selectorValueForRegister(selectorValues, register);
+      const selectorValue = selectorValueForRegister2(selectorValues, register);
       cells.push({
         address: cell.address,
         opcode: cell.opcode,
@@ -5857,7 +8277,7 @@ var MKProEmulatorBundle = (() => {
     const registers = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e"];
     return registers[opcode - 128] ?? "?";
   }
-  function selectorValueForRegister(selectorValues, register) {
+  function selectorValueForRegister2(selectorValues, register) {
     const aliases = [
       register,
       register.toUpperCase(),
@@ -6058,6 +8478,9 @@ var MKProEmulatorBundle = (() => {
   var TICTACTOE_MASK_SCRATCH_PREFIX = "__ttt_mask_";
   var BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
   var IF_SELECTOR_SCRATCH_PREFIX = "__if_selector_";
+  var DISPLAY_TEMPLATE_VALUE_PREFIX = "__display_value_";
+  var DISPLAY_TEMPLATE_LOOP_PREFIX = "__display_loop_";
+  var DISPLAY_TEMPLATE_MASK_PREFIX = "__display_mask_";
   var CELL_MAP_PREFIX = "__cell_map_";
   var SPATIAL_HIT_SCRATCH_PREFIX = "__spatial_hit_";
   var SPATIAL_COUNT_SCRATCH_PREFIX = "__spatial_count_";
@@ -6065,8 +8488,16 @@ var MKProEmulatorBundle = (() => {
   var NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE = "1|-00";
   var INTERNAL_NAME_PREFIX = "__mkpro_";
   var DISPLAY_HELPER_MIN_SAVINGS = 4;
+  var UNAVAILABLE_DISPLAY_STRATEGY_COST = 999999;
   var EXPRESSION_HELPER_MIN_COST = 8;
   var EXPRESSION_HELPER_MIN_SAVINGS = 4;
+  var STACK_UNARY_DERIVATION_OPCODES = {
+    abs: [49, "\u041A |x|"],
+    sign: [50, "\u041A \u0417\u041D"],
+    int: [52, "\u041A [x]"],
+    frac: [53, "\u041A {x}"],
+    sqr: [34, "F x^2"]
+  };
   var CompileError = class extends Error {
     diagnostics;
     constructor(diagnostics) {
@@ -6075,25 +8506,149 @@ var MKProEmulatorBundle = (() => {
     }
   };
   function compileMKPro(source, options = {}) {
-    const primary = compileMKProOnce(source, options, {});
-    let aggressive;
-    try {
-      aggressive = compileMKProOnce(source, options, { aggressiveTerminalDirect: true });
-    } catch {
-      aggressive = void 0;
+    const primary = compileLoweringAttempt(source, options, {});
+    const candidates = [];
+    const tryCandidate = (loweringOptions, name, detail) => {
+      try {
+        candidates.push({ result: compileLoweringAttempt(source, options, loweringOptions), name, detail });
+      } catch {
+      }
+    };
+    tryCandidate(
+      { aggressiveTerminalDirect: true },
+      "late-layout-if-variant",
+      "Selected aggressive terminal-if lowering after full layout"
+    );
+    tryCandidate(
+      { invertBranchOrder: true },
+      "late-layout-branch-order",
+      "Selected inverted if/else branch order after full layout"
+    );
+    tryCandidate(
+      { aggressiveTerminalDirect: true, invertBranchOrder: true },
+      "late-layout-if-branch-order",
+      "Selected aggressive terminal-if plus inverted branch-order lowering after full layout"
+    );
+    tryCandidate(
+      { hoistSharedHelpers: true },
+      "hoisted-helper-indirect-layout",
+      "Hoisted shared helpers to the front so their calls become single-cell preloaded indirect flow"
+    );
+    tryCandidate(
+      { hoistSharedHelpers: true, hoistProcs: true },
+      "hoisted-proc-indirect-layout",
+      "Hoisted ordinary rule procs to the front so repeated calls become single-cell preloaded indirect flow"
+    );
+    tryCandidate(
+      { canonicalizeIfChains: true },
+      "if-chain-dispatch-canonicalization",
+      "Selected single-evaluation dispatch for a repeated expensive if/else-if selector"
+    );
+    tryCandidate(
+      { freeResidualDispatchScratch: true },
+      "free-residual-dispatch-scratch",
+      "Freed the unused residual-dispatch scratch register to unlock more preloaded constants"
+    );
+    tryCandidate(
+      { aliasXReuse: true },
+      "alias-x-reuse",
+      "Reused X for copy-equivalent variables at scalar sites (conditions, near_any)"
+    );
+    tryCandidate(
+      { coalesceCopies: true },
+      "coalesce-copies",
+      "Coalesced copy-related registers (A = B) that never diverge, dropping the copy and freeing a register"
+    );
+    tryCandidate(
+      { freeResidualDispatchScratch: true, canonicalizeIfChains: true },
+      "free-residual-dispatch-scratch-with-if-chain",
+      "Combined residual-dispatch scratch freeing with if/else-if dispatch canonicalization"
+    );
+    tryCandidate(
+      { shareRandomCell: true },
+      "share-random-cell-helper",
+      "Shared a repeated random_cell expression through one helper despite a marginal predicted saving"
+    );
+    tryCandidate(
+      { shareRandomCell: true, hoistSharedHelpers: true },
+      "share-random-cell-helper-hoisted",
+      "Shared a repeated random_cell expression and hoisted helpers so its calls become single-cell indirect flow"
+    );
+    tryCandidate(
+      { tailBranchInversion: true },
+      "late-layout-tail-branch-inversion",
+      "Selected tail-branch inversion after full layout"
+    );
+    const selectBest = () => {
+      let best2 = primary;
+      let selected2;
+      for (const candidate of candidates) {
+        if (candidate.result.steps.length < best2.steps.length) {
+          best2 = candidate.result;
+          selected2 = candidate;
+        }
+      }
+      return { best: best2, selected: selected2 };
+    };
+    const OFFICIAL_PROGRAM_LIMIT2 = 105;
+    if (selectBest().best.steps.length > OFFICIAL_PROGRAM_LIMIT2) {
+      const demoteBases = [
+        {},
+        { shareRandomCell: true, hoistSharedHelpers: true },
+        { freeResidualDispatchScratch: true }
+      ];
+      const triedDemotions = /* @__PURE__ */ new Set();
+      for (const base of demoteBases) {
+        let probe;
+        try {
+          probe = compileMKProOnce(source, { ...options, analysis: true }, base);
+        } catch {
+          continue;
+        }
+        for (const preload of probe.report.preloads ?? []) {
+          if (preload.countsAgainstProgram || !/^-?\d+$/u.test(preload.value)) continue;
+          const key = `${JSON.stringify(base)}|${preload.value}`;
+          if (triedDemotions.has(key)) continue;
+          triedDemotions.add(key);
+          tryCandidate(
+            { ...base, suppressConstantPreloads: /* @__PURE__ */ new Set([preload.value]) },
+            "demote-constant-indirect-flow",
+            `Inlined single-use constant ${preload.value} to free a register for post-layout indirect flow`
+          );
+        }
+      }
     }
-    if (aggressive !== void 0 && aggressive.steps.length < primary.steps.length) {
-      aggressive.report.optimizations.push({
-        name: "late-layout-if-variant",
-        detail: `Selected aggressive terminal-if lowering after full layout (${aggressive.steps.length} vs ${primary.steps.length} cells).`
+    const { best, selected } = selectBest();
+    if (selected !== void 0) {
+      selected.result.report.optimizations.push({
+        name: selected.name,
+        detail: `${selected.detail} (${selected.result.steps.length} vs ${primary.steps.length} cells).`
       });
-      return aggressive;
+      return finishCompileAttempt(selected.result, options.analysis === true);
     }
-    return primary;
+    return finishCompileAttempt(primary, options.analysis === true);
+  }
+  function compileLoweringAttempt(source, options, loweringOptions) {
+    try {
+      return compileMKProOnce(source, options, loweringOptions);
+    } catch (error) {
+      if (options.analysis === true || !isOnlyBudgetExceeded(error)) throw error;
+      return compileMKProOnce(source, { ...options, analysis: true }, loweringOptions);
+    }
+  }
+  function isOnlyBudgetExceeded(error) {
+    return error instanceof CompileError && error.diagnostics.some((diagnostic) => diagnostic.level === "error" && diagnostic.code === "BUDGET_EXCEEDED") && error.diagnostics.every((diagnostic) => diagnostic.level !== "error" || diagnostic.code === "BUDGET_EXCEEDED");
+  }
+  function finishCompileAttempt(result, analysis) {
+    if (analysis || !result.report.budgetReport.exceeded) return result;
+    throw new CompileError(result.diagnostics.map(
+      (diagnostic) => diagnostic.code === "BUDGET_EXCEEDED" ? { ...diagnostic, level: "error" } : diagnostic
+    ));
   }
   function compileMKProOnce(source, options, loweringOptions) {
     const ast = parseProgram(source);
     const opts = { ...DEFAULT_OPTIONS, ...options };
+    if (loweringOptions.coalesceCopies === true) opts.coalesceCopies = true;
     const machineProfile = MK61_PROFILE;
     const diagnostics = [];
     const optimizations = [];
@@ -6106,8 +8661,29 @@ var MKProEmulatorBundle = (() => {
         detail: `Folded ${foldedConstants} constant expression node(s) before code generation.`
       });
     }
+    if (loweringOptions.canonicalizeIfChains === true) {
+      canonicalizeConstantIfChains(ast, optimizations);
+    }
+    hoistOneShotLoopInitializers(ast, optimizations);
+    inlineSingleUseConstantGuardedCalls(ast, optimizations);
     eliminateUnobservedState(ast, optimizations);
+    eliminateIdentityAssignments(ast, optimizations);
+    if (!opts.disableInterproceduralOpts) {
+      for (let pass = 0; pass < 4; pass += 1) {
+        const propagated = propagateValuesInterprocedurally(ast, optimizations);
+        const removed = eliminateInterproceduralDeadStores(ast, optimizations);
+        if (propagated === 0 && removed === 0) break;
+      }
+    }
     hoistCommonBranchTails(ast, optimizations);
+    if (!opts.disableInterproceduralOpts) {
+      for (let pass = 0; pass < 4; pass += 1) {
+        const propagated = propagateValuesInterprocedurally(ast, optimizations);
+        const removed = eliminateInterproceduralDeadStores(ast, optimizations);
+        if (propagated === 0 && removed === 0) break;
+      }
+    }
+    elideTerminalLoopHeaderShows(ast, optimizations);
     validateSemanticDomains(ast, diagnostics);
     validateV2Intent(ast, diagnostics);
     validateReservedInternalNames(ast, diagnostics);
@@ -6119,8 +8695,21 @@ var MKProEmulatorBundle = (() => {
         name: "intent-domain-lowering",
         detail: `Lowered ${ast.v2.state.length} state fields and ${ast.v2.rules.length} rules through the generic intent pipeline.`
       });
+      const sharedChallengeHelpers = ast.procs.filter((proc) => proc.name.startsWith("encounter_effects_")).length;
+      if (sharedChallengeHelpers > 0) {
+        optimizations.push({
+          name: "shared-challenge-effect-lowering",
+          detail: `Collapsed ${sharedChallengeHelpers} repeated encounter challenge/effect table(s) into shared formula-driven helper logic.`
+        });
+      }
     }
-    const allocation = allocateRegisters(ast, diagnostics);
+    eliminateUnreachableV2Procs(ast, optimizations);
+    const allocation = allocateRegisters(
+      ast,
+      diagnostics,
+      loweringOptions.freeResidualDispatchScratch === true,
+      loweringOptions.suppressConstantPreloads
+    );
     const context = new EmitContext(
       ast,
       allocation,
@@ -6133,13 +8722,34 @@ var MKProEmulatorBundle = (() => {
       loweringOptions
     );
     context.compileProgram();
-    const optimizedResult = optimizeItems(context.items, opts, optimizations);
-    const optimized = optimizedResult.items;
+    const passOptions = loweringOptions.tailBranchInversion === true ? { ...opts, tailBranchInversion: true } : opts;
+    const optimizedResult = optimizeItems(context.items, passOptions, optimizations);
+    const referenceMetrics = ast.reference === void 0 ? void 0 : resolveReferenceMetrics(ast.reference);
+    const indirectFlowRescueAbove = opts.indirectFlowRescueAbove ?? (referenceMetrics === void 0 ? void 0 : Math.min(referenceMetrics.span, opts.budget));
+    const postLayoutFlow = optimizePostLayoutIndirectFlow(
+      optimizedResult.items,
+      passOptions,
+      indirectFlowRescueAbove
+    );
+    const optimized = postLayoutFlow.items;
+    optimizations.push(...postLayoutFlow.optimizations);
     const preloads = [
       ...buildPreloadReport(ast, allocation),
       ...buildNegativeZeroDegreePreloadReport(allocation, optimizations),
-      ...optimizedResult.preloads
+      ...optimizedResult.preloads,
+      ...postLayoutFlow.preloads
     ];
+    const setupProgram = buildGeneratedSetupProgram(
+      ast,
+      allocation,
+      preloads,
+      opts,
+      machineProfile,
+      diagnostics,
+      optimizations,
+      warnings,
+      candidates
+    );
     appendOptimizationCandidateReports(optimizations, candidates);
     const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, machineProfile);
     const largestBlocks = summarizeBlocks(optimized);
@@ -6180,7 +8790,8 @@ var MKProEmulatorBundle = (() => {
         reason: candidate.reason,
         steps: candidate.steps
       })),
-      hotBlocks: largestBlocks.map(parseHotBlock)
+      hotBlocks: largestBlocks.map(parseHotBlock),
+      ...setupProgram === void 0 ? {} : { setupProgram }
     };
     return { ast, items: optimized, steps, report, diagnostics };
   }
@@ -6196,6 +8807,7 @@ var MKProEmulatorBundle = (() => {
   function eliminateUnobservedState(ast, optimizations) {
     const stateFields = new Set(ast.states.flatMap((state) => state.fields.map((field) => field.name)));
     if (stateFields.size === 0) return;
+    const ephemeralInputTargets = collectEphemeralInputTargets(ast);
     const externallyRead = /* @__PURE__ */ new Set();
     const inputTargets = /* @__PURE__ */ new Set();
     const assigned = /* @__PURE__ */ new Map();
@@ -6204,7 +8816,7 @@ var MKProEmulatorBundle = (() => {
     };
     const visitExpr = (expr, ignored) => {
       if (expr.kind === "identifier") {
-        if (expr.name !== ignored) addRead(expr.name);
+        if (expr.name !== ignored && !ephemeralInputTargets.has(expr.name)) addRead(expr.name);
         return;
       }
       if (expr.kind === "unary") visitExpr(expr.expr, ignored);
@@ -6223,7 +8835,7 @@ var MKProEmulatorBundle = (() => {
           inputTargets.add(statement.target);
           if (statement.prompt) visitExpr(statement.prompt);
         }
-        if (statement.kind === "input") inputTargets.add(statement.target);
+        if (statement.kind === "input" && !ephemeralInputTargets.has(statement.target)) inputTargets.add(statement.target);
         if (statement.kind === "assign") {
           if (!assigned.has(statement.target)) assigned.set(statement.target, []);
           assigned.get(statement.target).push(statement.expr);
@@ -6279,79 +8891,345 @@ var MKProEmulatorBundle = (() => {
     for (const state of ast.states) {
       state.fields = state.fields.filter((field) => !removable.has(field.name));
     }
-    const pruneStatements = (statements) => statements.flatMap((statement) => {
+    const pruneStatements2 = (statements) => statements.flatMap((statement) => {
       if (statement.kind === "assign" && removable.has(statement.target)) return [];
-      if (statement.kind === "loop") return [{ ...statement, body: pruneStatements(statement.body) }];
+      if (statement.kind === "loop") return [{ ...statement, body: pruneStatements2(statement.body) }];
       if (statement.kind === "if") {
         const pruned = {
           ...statement,
-          thenBody: pruneStatements(statement.thenBody)
+          thenBody: pruneStatements2(statement.thenBody)
         };
-        if (statement.elseBody !== void 0) pruned.elseBody = pruneStatements(statement.elseBody);
+        if (statement.elseBody !== void 0) pruned.elseBody = pruneStatements2(statement.elseBody);
         return [pruned];
       }
       if (statement.kind === "switch") {
         return [{
           ...statement,
-          cases: statement.cases.map((switchCase) => ({ ...switchCase, body: pruneStatements(switchCase.body) })),
-          ...statement.defaultBody === void 0 ? {} : { defaultBody: pruneStatements(statement.defaultBody) }
+          cases: statement.cases.map((switchCase) => ({ ...switchCase, body: pruneStatements2(switchCase.body) })),
+          ...statement.defaultBody === void 0 ? {} : { defaultBody: pruneStatements2(statement.defaultBody) }
         }];
       }
       if (statement.kind === "dispatch") {
         return [{
           ...statement,
-          cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: pruneStatements(dispatchCase.body) })),
-          ...statement.defaultBody === void 0 ? {} : { defaultBody: pruneStatements(statement.defaultBody) }
+          cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: pruneStatements2(dispatchCase.body) })),
+          ...statement.defaultBody === void 0 ? {} : { defaultBody: pruneStatements2(statement.defaultBody) }
         }];
       }
       return [statement];
     });
-    for (const entry of ast.entries) entry.body = pruneStatements(entry.body);
-    for (const proc of ast.procs) proc.body = pruneStatements(proc.body);
-    for (const block of ast.blocks) block.body = pruneStatements(block.body);
+    for (const entry of ast.entries) entry.body = pruneStatements2(entry.body);
+    for (const proc of ast.procs) proc.body = pruneStatements2(proc.body);
+    for (const block of ast.blocks) block.body = pruneStatements2(block.body);
     optimizations.push({
       name: "dead-state-elimination",
       detail: `Removed ${removable.size} unobserved state field${removable.size === 1 ? "" : "s"} before register allocation.`
     });
   }
-  function hoistCommonBranchTails(ast, optimizations) {
+  function eliminateIdentityAssignments(ast, optimizations) {
+    let removed = 0;
+    const pruneStatements2 = (statements) => statements.flatMap((statement) => {
+      if (statement.kind === "assign" && isIdentityAssignment(statement)) {
+        removed += 1;
+        return [];
+      }
+      if (statement.kind === "loop") return [{ ...statement, body: pruneStatements2(statement.body) }];
+      if (statement.kind === "if") {
+        const pruned = {
+          ...statement,
+          thenBody: pruneStatements2(statement.thenBody)
+        };
+        if (statement.elseBody !== void 0) pruned.elseBody = pruneStatements2(statement.elseBody);
+        return [pruned];
+      }
+      if (statement.kind === "switch") {
+        return [{
+          ...statement,
+          cases: statement.cases.map((switchCase) => ({ ...switchCase, body: pruneStatements2(switchCase.body) })),
+          ...statement.defaultBody === void 0 ? {} : { defaultBody: pruneStatements2(statement.defaultBody) }
+        }];
+      }
+      if (statement.kind === "dispatch") {
+        return [{
+          ...statement,
+          cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: pruneStatements2(dispatchCase.body) })),
+          ...statement.defaultBody === void 0 ? {} : { defaultBody: pruneStatements2(statement.defaultBody) }
+        }];
+      }
+      return [statement];
+    });
+    for (const entry of ast.entries) entry.body = pruneStatements2(entry.body);
+    for (const proc of ast.procs) proc.body = pruneStatements2(proc.body);
+    for (const block of ast.blocks) block.body = pruneStatements2(block.body);
+    if (removed === 0) return;
+    optimizations.push({
+      name: "identity-assignment-elimination",
+      detail: `Removed ${removed} identity assignment${removed === 1 ? "" : "s"} before register allocation.`
+    });
+  }
+  function canonicalizeConstantIfChains(ast, optimizations) {
+    let converted = 0;
+    const transformList = (statements) => statements.map(transformStatement);
+    const transformStatement = (statement) => {
+      if (statement.kind === "loop") {
+        return { ...statement, body: transformList(statement.body) };
+      }
+      if (statement.kind === "switch" || statement.kind === "dispatch") {
+        return {
+          ...statement,
+          cases: statement.cases.map((entry) => ({ ...entry, body: transformList(entry.body) })),
+          ...statement.defaultBody === void 0 ? {} : { defaultBody: transformList(statement.defaultBody) }
+        };
+      }
+      if (statement.kind !== "if") return statement;
+      const dispatch = buildDispatchFromIfChain(statement);
+      if (dispatch !== void 0) {
+        converted += 1;
+        return {
+          ...dispatch,
+          cases: dispatch.cases.map((entry) => ({ ...entry, body: transformList(entry.body) })),
+          ...dispatch.defaultBody === void 0 ? {} : { defaultBody: transformList(dispatch.defaultBody) }
+        };
+      }
+      const rewritten = {
+        ...statement,
+        thenBody: transformList(statement.thenBody)
+      };
+      if (statement.elseBody !== void 0) rewritten.elseBody = transformList(statement.elseBody);
+      return rewritten;
+    };
+    for (const entry of ast.entries) entry.body = transformList(entry.body);
+    for (const proc of ast.procs) proc.body = transformList(proc.body);
+    for (const block of ast.blocks) block.body = transformList(block.body);
+    if (converted === 0) return;
+    optimizations.push({
+      name: "if-chain-dispatch-canonicalization",
+      detail: `Collapsed ${converted} constant if/else-if chain${converted === 1 ? "" : "s"} into single-evaluation dispatch.`
+    });
+  }
+  function buildDispatchFromIfChain(root) {
+    const first = matchEqualityConstantCondition(root.condition);
+    if (first === void 0 || !expressionIsDeterministic(first.expr)) return void 0;
+    const cases = [];
+    const seen = /* @__PURE__ */ new Set();
+    let current = root;
+    let defaultBody;
+    while (current !== void 0) {
+      const matched = matchEqualityConstantCondition(current.condition);
+      if (matched === void 0 || !expressionEquals(matched.expr, first.expr) || seen.has(matched.value)) {
+        defaultBody = [current];
+        break;
+      }
+      seen.add(matched.value);
+      cases.push({ value: numberExpression2(matched.value), body: current.thenBody, line: current.line });
+      const elseBody = current.elseBody;
+      if (elseBody === void 0 || elseBody.length === 0) {
+        current = void 0;
+        break;
+      }
+      if (elseBody.length === 1 && elseBody[0].kind === "if") {
+        current = elseBody[0];
+        continue;
+      }
+      defaultBody = elseBody;
+      current = void 0;
+    }
+    if (cases.length < 2) return void 0;
+    return {
+      kind: "dispatch",
+      expr: first.expr,
+      cases,
+      ...defaultBody === void 0 ? {} : { defaultBody },
+      line: root.line,
+      scratchId: root.line
+    };
+  }
+  function matchEqualityConstantCondition(condition) {
+    if (condition.op !== "==") return void 0;
+    const rightValue = numericLiteralValue2(condition.right);
+    if (rightValue !== void 0 && Number.isInteger(rightValue) && numericLiteralValue2(condition.left) === void 0) {
+      return { expr: condition.left, value: rightValue };
+    }
+    const leftValue = numericLiteralValue2(condition.left);
+    if (leftValue !== void 0 && Number.isInteger(leftValue) && numericLiteralValue2(condition.right) === void 0) {
+      return { expr: condition.right, value: leftValue };
+    }
+    return void 0;
+  }
+  function expressionIsDeterministic(expr) {
+    switch (expr.kind) {
+      case "number":
+      case "identifier":
+        return true;
+      case "unary":
+        return expressionIsDeterministic(expr.expr);
+      case "binary":
+        return expressionIsDeterministic(expr.left) && expressionIsDeterministic(expr.right);
+      case "call": {
+        const name = expr.callee.toLowerCase();
+        if (name === "random" || name === "random_cell") return false;
+        return expr.args.every(expressionIsDeterministic);
+      }
+    }
+  }
+  function hoistOneShotLoopInitializers(ast, optimizations) {
     let hoisted = 0;
-    let simplified = 0;
+    for (const entry of ast.entries) {
+      if (entry.body.length !== 1) continue;
+      const loop = entry.body[0];
+      if (loop?.kind !== "loop" || loop.body.length !== 1) continue;
+      const branch = loop.body[0];
+      if (branch?.kind !== "if" || branch.elseBody === void 0) continue;
+      if (statementsContainExactMachineCode([...branch.thenBody, ...branch.elseBody])) continue;
+      const guard = zeroEqualityIdentifier(branch.condition);
+      if (guard === void 0) continue;
+      const first = branch.thenBody[0];
+      if (first?.kind !== "assign" || first.target !== guard || !isNonZeroNumericLiteral(first.expr)) continue;
+      if (!stateFieldHasInitialValue(ast, guard, 0)) continue;
+      const usage = countVariableUsage(ast, guard);
+      if (usage.reads !== 1 || usage.writes !== 1) continue;
+      entry.body = [
+        ...cloneStatements(branch.thenBody.slice(1)),
+        { ...loop, body: cloneStatements(branch.elseBody) }
+      ];
+      hoisted += 1;
+    }
+    if (hoisted === 0) return;
+    optimizations.push({
+      name: "one-shot-loop-init-hoist",
+      detail: `Hoisted ${hoisted} one-shot loop initializer${hoisted === 1 ? "" : "s"} before the turn loop.`
+    });
+  }
+  function zeroEqualityIdentifier(condition) {
+    if (condition.op !== "==") return void 0;
+    if (condition.left.kind === "identifier" && isNumericValue2(condition.right, 0)) return condition.left.name;
+    if (condition.right.kind === "identifier" && isNumericValue2(condition.left, 0)) return condition.right.name;
+    return void 0;
+  }
+  function isNonZeroNumericLiteral(expr) {
+    const value = numericLiteralValue2(expr);
+    return value !== void 0 && value !== 0;
+  }
+  function stateFieldHasInitialValue(ast, name, value) {
+    for (const state of ast.states) {
+      const field = state.fields.find((candidate) => candidate.name === name);
+      if (field === void 0) continue;
+      return field.initial !== void 0 && isNumericValue2(field.initial, value);
+    }
+    return false;
+  }
+  function countVariableUsage(ast, name) {
+    let reads = 0;
+    let writes = 0;
+    const visitExpr = (expr) => {
+      if (expr.kind === "identifier") {
+        if (expr.name === name) reads += 1;
+        return;
+      }
+      if (expr.kind === "unary") visitExpr(expr.expr);
+      if (expr.kind === "binary") {
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+      }
+      if (expr.kind === "call") {
+        for (const arg of expr.args) visitExpr(arg);
+      }
+    };
+    const visitCondition = (condition) => {
+      visitExpr(condition.left);
+      visitExpr(condition.right);
+    };
+    const visitList = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "assign") {
+          if (statement.target === name) writes += 1;
+          visitExpr(statement.expr);
+        }
+        if (statement.kind === "pause" || statement.kind === "halt" || statement.kind === "trap") visitExpr(statement.expr);
+        if (statement.kind === "ask") {
+          if (statement.target === name) writes += 1;
+          if (statement.prompt !== void 0) visitExpr(statement.prompt);
+        }
+        if (statement.kind === "input" && statement.target === name) writes += 1;
+        if (statement.kind === "show") {
+          const display = ast.displays.find((candidate) => candidate.name === statement.display);
+          if (display?.sources.includes(name)) reads += 1;
+        }
+        if (statement.kind === "core") {
+          for (const input of statement.inputs ?? []) visitExpr(input.expr);
+          for (const output of statement.outputs ?? []) {
+            if (output.target === name) writes += 1;
+          }
+        }
+        if (statement.kind === "if") {
+          visitCondition(statement.condition);
+          visitList(statement.thenBody);
+          if (statement.elseBody !== void 0) visitList(statement.elseBody);
+        }
+        if (statement.kind === "loop") visitList(statement.body);
+        if (statement.kind === "switch") {
+          visitExpr(statement.expr);
+          for (const switchCase of statement.cases) {
+            visitExpr(switchCase.value);
+            visitList(switchCase.body);
+          }
+          if (statement.defaultBody !== void 0) visitList(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          visitExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            visitExpr(dispatchCase.value);
+            visitList(dispatchCase.body);
+          }
+          if (statement.defaultBody !== void 0) visitList(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visitList(entry.body);
+    for (const proc of ast.procs) visitList(proc.body);
+    for (const block of ast.blocks) visitList(block.body);
+    return { reads, writes };
+  }
+  function inlineSingleUseConstantGuardedCalls(ast, optimizations) {
+    const callCounts = countStatementCalls(ast);
+    const candidates = /* @__PURE__ */ new Map();
+    for (const proc of ast.procs) {
+      if ((callCounts.get(proc.name) ?? 0) !== 1) continue;
+      const candidate = constantGuardedProc(proc);
+      if (candidate === void 0 || statementsContainExactMachineCode(candidate.body)) continue;
+      candidates.set(proc.name, candidate);
+    }
+    if (candidates.size === 0) return;
+    let inlined = 0;
+    const inlinedProcs = /* @__PURE__ */ new Set();
     const visitList = (statements) => {
       const result = [];
-      for (const statement of statements) {
+      for (let index = 0; index < statements.length; index += 1) {
+        const statement = statements[index];
+        const next = statements[index + 1];
+        if (statement.kind === "assign" && next?.kind === "call") {
+          const candidate = candidates.get(next.block);
+          if (candidate !== void 0 && statement.target === candidate.target && expressionEquals(statement.expr, candidate.value)) {
+            result.push(statement, ...cloneStatements(candidate.body));
+            inlined += 1;
+            inlinedProcs.add(candidate.name);
+            index += 1;
+            continue;
+          }
+        }
         result.push(...visitStatement(statement));
       }
       return result;
     };
     const visitStatement = (statement) => {
-      if (statement.kind === "loop") {
-        return [{ ...statement, body: visitList(statement.body) }];
-      }
+      if (statement.kind === "loop") return [{ ...statement, body: visitList(statement.body) }];
       if (statement.kind === "if") {
-        const thenBody = visitList(statement.thenBody);
-        const elseBody = statement.elseBody === void 0 ? void 0 : visitList(statement.elseBody);
-        const tails = [];
-        if (elseBody !== void 0) {
-          while (thenBody.length > 0 && elseBody.length > 0 && statementEquals(thenBody[thenBody.length - 1], elseBody[elseBody.length - 1])) {
-            tails.unshift(thenBody.pop());
-            elseBody.pop();
-          }
-        }
-        hoisted += tails.length;
-        const simplifiedBranch = simplifyIfStatement({
+        const visited = {
           ...statement,
-          thenBody,
-          ...elseBody === void 0 ? {} : { elseBody }
-        });
-        if (simplifiedBranch.length !== 1 || !statementEquals(simplifiedBranch[0], {
-          ...statement,
-          thenBody,
-          ...elseBody === void 0 ? {} : { elseBody }
-        })) {
-          simplified += 1;
-        }
-        return [...simplifiedBranch, ...tails];
+          thenBody: visitList(statement.thenBody)
+        };
+        if (statement.elseBody !== void 0) visited.elseBody = visitList(statement.elseBody);
+        return [visited];
       }
       if (statement.kind === "switch") {
         return [{
@@ -6372,12 +9250,216 @@ var MKProEmulatorBundle = (() => {
     for (const entry of ast.entries) entry.body = visitList(entry.body);
     for (const proc of ast.procs) proc.body = visitList(proc.body);
     for (const block of ast.blocks) block.body = visitList(block.body);
+    if (inlined === 0) return;
+    ast.procs = ast.procs.filter((proc) => !inlinedProcs.has(proc.name));
+    optimizations.push({
+      name: "constant-guarded-call-inline",
+      detail: `Inlined ${inlined} single-use constant-guarded call${inlined === 1 ? "" : "s"} before state liveness.`
+    });
+  }
+  function constantGuardedProc(proc) {
+    if (proc.body.length !== 1) return void 0;
+    const guard = proc.body[0];
+    if (guard?.kind !== "if" || guard.elseBody !== void 0 || guard.condition.op !== "==") return void 0;
+    const left = guard.condition.left;
+    const right = guard.condition.right;
+    if (left.kind === "identifier" && expressionPureForSubstitution(right)) {
+      return { name: proc.name, target: left.name, value: right, body: guard.thenBody };
+    }
+    if (right.kind === "identifier" && expressionPureForSubstitution(left)) {
+      return { name: proc.name, target: right.name, value: left, body: guard.thenBody };
+    }
+    return void 0;
+  }
+  function countStatementCalls(ast) {
+    const counts = /* @__PURE__ */ new Map();
+    const add = (name) => {
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    };
+    const visitList = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "call") add(statement.block);
+        if (statement.kind === "loop") visitList(statement.body);
+        if (statement.kind === "if") {
+          visitList(statement.thenBody);
+          if (statement.elseBody !== void 0) visitList(statement.elseBody);
+        }
+        if (statement.kind === "switch") {
+          for (const switchCase of statement.cases) visitList(switchCase.body);
+          if (statement.defaultBody !== void 0) visitList(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visitList(dispatchCase.body);
+          if (statement.defaultBody !== void 0) visitList(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visitList(entry.body);
+    for (const proc of ast.procs) visitList(proc.body);
+    for (const block of ast.blocks) visitList(block.body);
+    return counts;
+  }
+  function statementsContainExactMachineCode(statements) {
+    for (const statement of statements) {
+      if (statement.kind === "core" || statement.kind === "egg") return true;
+      if (statement.kind === "loop" && statementsContainExactMachineCode(statement.body)) return true;
+      if (statement.kind === "if") {
+        if (statementsContainExactMachineCode(statement.thenBody)) return true;
+        if (statement.elseBody !== void 0 && statementsContainExactMachineCode(statement.elseBody)) return true;
+      }
+      if (statement.kind === "switch") {
+        if (statement.cases.some((switchCase) => statementsContainExactMachineCode(switchCase.body))) return true;
+        if (statement.defaultBody !== void 0 && statementsContainExactMachineCode(statement.defaultBody)) return true;
+      }
+      if (statement.kind === "dispatch") {
+        if (statement.cases.some((dispatchCase) => statementsContainExactMachineCode(dispatchCase.body))) return true;
+        if (statement.defaultBody !== void 0 && statementsContainExactMachineCode(statement.defaultBody)) return true;
+      }
+    }
+    return false;
+  }
+  function cloneStatements(statements) {
+    return structuredClone(statements);
+  }
+  function hoistCommonBranchTails(ast, optimizations) {
+    let hoisted = 0;
+    let simplified = 0;
+    let compactedDispatches = 0;
+    let tailInlinedCalls = 0;
+    const inlineNames = findSingleUseProcNames(ast);
+    const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
+    const visitList = (statements) => {
+      const result = [];
+      for (const statement of statements) {
+        result.push(...visitStatement(statement));
+      }
+      return result;
+    };
+    const visitStatement = (statement) => {
+      if (statement.kind === "loop") {
+        return [{ ...statement, body: visitList(statement.body) }];
+      }
+      if (statement.kind === "if") {
+        const thenBody = visitList(statement.thenBody);
+        const elseBody = statement.elseBody === void 0 ? void 0 : visitList(statement.elseBody);
+        const tails = elseBody === void 0 ? [] : hoistTailFromBranchBodies([thenBody, elseBody]);
+        if (elseBody !== void 0) {
+          hoisted += tails.length;
+        }
+        const simplifiedBranch = simplifyIfStatement({
+          ...statement,
+          thenBody,
+          ...elseBody === void 0 ? {} : { elseBody }
+        });
+        if (simplifiedBranch.length !== 1 || !statementEquals(simplifiedBranch[0], {
+          ...statement,
+          thenBody,
+          ...elseBody === void 0 ? {} : { elseBody }
+        })) {
+          simplified += 1;
+        }
+        return [...simplifiedBranch, ...tails];
+      }
+      if (statement.kind === "switch") {
+        const cases = statement.cases.map((switchCase) => ({ ...switchCase, body: visitList(switchCase.body) }));
+        const defaultBody = statement.defaultBody === void 0 ? void 0 : visitList(statement.defaultBody);
+        const tails = defaultBody === void 0 ? [] : hoistTailFromBranchBodies([...cases.map((switchCase) => switchCase.body), defaultBody]);
+        hoisted += tails.length;
+        if (defaultBody !== void 0 && cases.every((switchCase) => switchCase.body.length === 0) && defaultBody.length === 0) {
+          if (expressionIsDeterministic(statement.expr)) {
+            simplified += 1;
+            return tails;
+          }
+        }
+        return [{
+          ...statement,
+          cases,
+          ...defaultBody === void 0 ? {} : { defaultBody }
+        }, ...tails];
+      }
+      if (statement.kind === "dispatch") {
+        const cases = statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: visitList(dispatchCase.body) }));
+        const defaultBody = statement.defaultBody === void 0 ? void 0 : visitList(statement.defaultBody);
+        const tails = defaultBody === void 0 ? [] : hoistTailFromBranchBodies([...cases.map((dispatchCase) => dispatchCase.body), defaultBody]);
+        hoisted += tails.length;
+        if (defaultBody !== void 0 && cases.every((dispatchCase) => dispatchCase.body.length === 0) && defaultBody.length === 0) {
+          if (expressionIsDeterministic(statement.expr)) {
+            simplified += 1;
+            return tails;
+          }
+        }
+        if (cases.length === 0 && defaultBody !== void 0 && expressionIsDeterministic(statement.expr)) {
+          compactedDispatches += 1;
+          return [...defaultBody, ...tails];
+        }
+        return [{
+          ...statement,
+          cases,
+          ...defaultBody === void 0 ? {} : { defaultBody }
+        }, ...tails];
+      }
+      return [statement];
+    };
+    const hoistTailFromBranchBodies = (branches) => {
+      const expanded = branches.map((branch) => expandSingleUseTailCalls(branch));
+      const expandedBranches = expanded.map((entry) => entry.body);
+      const tails = hoistCommonTailFromBranches(expandedBranches);
+      if (tails.length === 0) return [];
+      for (let index = 0; index < branches.length; index += 1) {
+        branches[index].splice(0, branches[index].length, ...expandedBranches[index]);
+        tailInlinedCalls += expanded[index].inlined;
+      }
+      return tails;
+    };
+    const expandSingleUseTailCalls = (statements, seen = /* @__PURE__ */ new Set()) => {
+      const body = [...statements];
+      let inlined = 0;
+      while (body.length > 0) {
+        const last = body.at(-1);
+        if (last.kind !== "call" || !inlineNames.has(last.block) || seen.has(last.block)) break;
+        const proc = procMap.get(last.block);
+        if (proc === void 0) break;
+        body.pop();
+        seen.add(last.block);
+        const expanded = expandSingleUseTailCalls(cloneStatements(proc.body), seen);
+        body.push(...expanded.body);
+        inlined += 1 + expanded.inlined;
+        seen.delete(last.block);
+      }
+      return { body, inlined };
+    };
+    for (const entry of ast.entries) entry.body = visitList(entry.body);
+    for (const proc of ast.procs) proc.body = visitList(proc.body);
+    for (const block of ast.blocks) block.body = visitList(block.body);
     if (hoisted > 0 || simplified > 0) {
       optimizations.push({
         name: "common-branch-tail-hoisting",
         detail: `Hoisted ${hoisted} shared branch tail${hoisted === 1 ? "" : "s"} and simplified ${simplified} conditional shape${simplified === 1 ? "" : "s"}.`
       });
     }
+    if (tailInlinedCalls > 0) {
+      optimizations.push({
+        name: "single-use-tail-inline",
+        detail: `Expanded ${tailInlinedCalls} single-use tail call${tailInlinedCalls === 1 ? "" : "s"} only where it exposed a shared branch suffix.`
+      });
+    }
+    if (compactedDispatches > 0) {
+      optimizations.push({
+        name: "compact-dispatch-simplification",
+        detail: `Collapsed ${compactedDispatches} dispatch shell${compactedDispatches === 1 ? "" : "s"} with no residual cases into its default flow.`
+      });
+    }
+  }
+  function hoistCommonTailFromBranches(branches) {
+    if (branches.length < 2) return [];
+    const tails = [];
+    while (branches.every((branch) => branch.length > 0)) {
+      const last = branches[0][branches[0].length - 1];
+      if (!branches.every((branch) => statementEquals(branch[branch.length - 1], last))) break;
+      tails.unshift(branches[0].pop());
+      for (const branch of branches.slice(1)) branch.pop();
+    }
+    return tails;
   }
   function simplifyIfStatement(statement) {
     if (statement.elseBody !== void 0 && statement.thenBody.length === 0 && statement.elseBody.length === 0) {
@@ -6721,23 +9803,48 @@ var MKProEmulatorBundle = (() => {
     candidates;
     loweringOptions;
     inlineProcNames;
+    procCallCounts;
+    xParamProcs;
     readCounts;
     displayUseCounts;
     showSequenceUseCounts;
     expressionUseCounts;
+    nearAnyHelperStats;
     lineCountCallCount;
     lineCountGroupCounts;
     spatialHitHelpers = /* @__PURE__ */ new Map();
     displayHelpers = /* @__PURE__ */ new Map();
+    displayByteHelpers = /* @__PURE__ */ new Map();
+    literalDisplayHelpers = /* @__PURE__ */ new Map();
     showSequenceHelpers = /* @__PURE__ */ new Map();
     expressionHelpers = /* @__PURE__ */ new Map();
+    randomCellHelpers = /* @__PURE__ */ new Map();
+    nearAnyHelpers = /* @__PURE__ */ new Map();
     lineCountHelpers = /* @__PURE__ */ new Map();
     spatialBitMaskHelpers = /* @__PURE__ */ new Map();
+    spatialLineProgressionHelpers = /* @__PURE__ */ new Map();
     spatialSumLoopHelpers = /* @__PURE__ */ new Map();
     terminalTailHelpers = [];
     currentXVariable;
+    // Every variable known to hold the value currently in X (a copy-equivalence
+    // class for the straight-line region). After `A = B`, X equals both A and B,
+    // so a read of either can reuse X. Reset by any X-clobbering op and at
+    // control-flow boundaries; grown only by stores that copy X into a name.
+    // Only consulted at scalar reuse sites (conditions, near_any) when
+    // aliasXReuse is enabled — never for the order-dependent packed-display reorder.
+    currentXAliases = /* @__PURE__ */ new Set();
     currentXKnownZero = false;
+    // Meet of the X-variable carried by every recorded branch/jump edge into a
+    // label (undefined value = edges disagree / unknown). Used by emitLabel to
+    // keep stack-reuse facts sound across control-flow joins.
+    labelEdgeX = /* @__PURE__ */ new Map();
+    // True when the machine is mid number-entry, so the next number literal would
+    // concatenate digits (e.g. 1 then 3 -> 13) instead of starting a new value.
+    // Set by digit-building ops and by С/П reads (the user-typed value stays in
+    // entry mode until a finalizing op lifts/uses it).
+    machineEntryOpen = false;
     emittingExpressionHelper = false;
+    emittingRandomCellHelper = false;
     constructor(ast, allocation, options, machineProfile, diagnostics, optimizations, warnings, candidates, loweringOptions) {
       this.ast = ast;
       this.allocation = allocation;
@@ -6748,11 +9855,14 @@ var MKProEmulatorBundle = (() => {
       this.warnings = warnings;
       this.candidates = candidates;
       this.loweringOptions = loweringOptions;
-      this.inlineProcNames = findSingleUseProcNames(ast);
+      this.procCallCounts = collectProcCallCounts(ast);
+      this.inlineProcNames = findInlineProcNamesBySize(ast, this.procCallCounts);
       this.readCounts = collectVariableReadCounts(ast);
+      this.xParamProcs = collectXParamProcLowerings(ast, this.readCounts, this.inlineProcNames);
       this.displayUseCounts = collectDisplayUseCounts(ast);
       this.showSequenceUseCounts = collectShowSequenceUseCounts(ast);
       this.expressionUseCounts = collectExpressionUseCounts(ast);
+      this.nearAnyHelperStats = collectNearAnyHelperStats(ast, new Set(Object.keys(allocation.constants)));
       this.lineCountCallCount = countCalls(ast, "line_count");
       this.lineCountGroupCounts = collectLineCountGroupCounts(ast);
       for (const declaration of ast.declarations) {
@@ -6763,6 +9873,12 @@ var MKProEmulatorBundle = (() => {
     }
     compileProgram() {
       const main = this.ast.entries[0];
+      const hoistHelpers = this.loweringOptions.hoistSharedHelpers === true;
+      const hoistProcs = this.loweringOptions.hoistProcs === true;
+      const hoist = hoistHelpers || hoistProcs;
+      if (hoist) this.emitJump(81, "\u0411\u041F", main.name, "skip hoisted shared helpers");
+      const leadingJumpItems = hoist ? this.items.length : 0;
+      if (hoistProcs) this.compileProcedures();
       this.emitLabel(main.name);
       this.compileInitialState();
       this.compileInitialStores();
@@ -6770,14 +9886,7 @@ var MKProEmulatorBundle = (() => {
       if (!(this.ast.v2 && this.statementsTerminate(main.body))) {
         this.emitOp(80, "\u0421/\u041F", "implicit final stop");
       }
-      for (const proc of this.ast.procs) {
-        if (this.inlineProcNames.has(proc.name)) continue;
-        this.emitLabel(proc.name);
-        this.compileStatements(proc.body);
-        if (!this.statementsTerminate(proc.body)) {
-          this.emitOp(82, "\u0412/\u041E", "implicit return from proc");
-        }
-      }
+      if (!hoistProcs) this.compileProcedures();
       for (const block of this.ast.blocks) {
         if (block.mode === "inline") continue;
         this.emitLabel(block.name);
@@ -6786,7 +9895,48 @@ var MKProEmulatorBundle = (() => {
           this.emitOp(80, "\u0421/\u041F", `implicit stop for ${block.mode} block ${block.name}`, block.line);
         }
       }
+      const helperStart = this.items.length;
       this.compileRuntimeHelpers();
+      if (hoistHelpers && this.items.length > helperStart) {
+        const helpers = this.items.splice(helperStart);
+        this.items.splice(leadingJumpItems, 0, ...helpers);
+      }
+    }
+    compileSetupProgramWithPreloads(preloads, fields) {
+      const dynamicRegisters = new Set(fields.map((field) => this.allocation.registers[field.name]).filter(Boolean));
+      for (const preload of preloads) {
+        if (dynamicRegisters.has(preload.register)) continue;
+        if (preload.kind === "display-literal") {
+          const program = displayLiteralProgram(preload.value);
+          if (program === void 0 || program.kind === "error") continue;
+          this.emitDisplayLiteralProgram(program, void 0, `setup R${preload.register}`);
+        } else {
+          this.emitNumber(preload.value);
+        }
+        this.emitOp(64 + registerIndex(preload.register), `X->\u041F ${preload.register}`, `setup R${preload.register}`, void 0, true);
+      }
+      for (const field of fields) {
+        if (field.initial === void 0) continue;
+        this.compileExpression(field.initial);
+        this.emitStore(field.name, `setup ${field.name}`, field.line, true);
+      }
+      this.emitOp(80, "\u0421/\u041F", "setup complete");
+      this.compileRuntimeHelpers();
+    }
+    compileProcedures() {
+      for (const proc of this.ast.procs) {
+        if (this.inlineProcNames.has(proc.name)) continue;
+        this.emitLabel(proc.name);
+        const xParam = this.xParamProcs.get(proc.name);
+        if (xParam !== void 0) {
+          this.compileXParamProcBody(proc, xParam);
+        } else {
+          this.compileStatements(proc.body);
+        }
+        if (!this.statementsTerminate(proc.body)) {
+          this.emitOp(82, "\u0412/\u041E", "implicit return from proc");
+        }
+      }
     }
     compileRuntimeHelpers() {
       for (let index = 0; index < this.terminalTailHelpers.length; index += 1) {
@@ -6807,6 +9957,24 @@ var MKProEmulatorBundle = (() => {
           detail: `Emitted shared packed display helper for screen ${helper.display.name}.`
         });
       }
+      for (const helper of this.displayByteHelpers.values()) {
+        this.emitLabel(helper.label);
+        this.compileDisplayByteBuilder(helper.display, helper.line, false);
+        this.emitOp(82, "\u0412/\u041E", `display ${helper.display.name} return`, helper.line);
+        this.optimizations.push({
+          name: "display-byte-helper",
+          detail: `Emitted shared display-byte helper for screen ${helper.display.name}.`
+        });
+      }
+      for (const helper of this.literalDisplayHelpers.values()) {
+        this.emitLabel(helper.label);
+        this.compileLiteralDisplayBody(helper.display, helper.line);
+        this.emitOp(82, "\u0412/\u041E", `display ${helper.display.name} return`, helper.line);
+        this.optimizations.push({
+          name: "screen-video-literal-helper",
+          detail: `Emitted shared literal video helper for screen ${helper.display.name}.`
+        });
+      }
       for (const helper of this.showSequenceHelpers.values()) {
         this.emitLabel(helper.label);
         this.compilePackedDisplayBody(helper.first, helper.line, false);
@@ -6815,6 +9983,20 @@ var MKProEmulatorBundle = (() => {
         this.optimizations.push({
           name: "show-sequence-helper",
           detail: `Emitted shared helper for show ${helper.first.name}; show ${helper.second.name}; read.`
+        });
+      }
+      for (const helper of this.randomCellHelpers.values()) {
+        this.emitLabel(helper.label);
+        this.emittingRandomCellHelper = true;
+        try {
+          this.compileExpression(helper.expr);
+        } finally {
+          this.emittingRandomCellHelper = false;
+        }
+        this.emitOp(82, "\u0412/\u041E", "random_cell helper return", helper.line);
+        this.optimizations.push({
+          name: "random-cell-helper",
+          detail: `Emitted shared random cell helper for ${expressionToIntentText(helper.expr)}.`
         });
       }
       for (const helper of this.expressionHelpers.values()) {
@@ -6831,6 +10013,20 @@ var MKProEmulatorBundle = (() => {
           detail: `Emitted shared helper for ${expressionToIntentText(helper.expr)}.`
         });
       }
+      for (const helper of this.nearAnyHelpers.values()) {
+        this.emitLabel(helper.label);
+        this.compileExpression(helper.value);
+        this.emitOp(17, "-", "near_any delta", helper.line);
+        this.emitOp(49, "\u041A |x|", "near_any distance", helper.line);
+        this.compileExpression(helper.radius);
+        this.emitOp(20, "<->", "near_any radius before distance", helper.line);
+        this.emitOp(17, "-", "near_any margin", helper.line);
+        this.emitOp(82, "\u0412/\u041E", "near_any return", helper.line);
+        this.optimizations.push({
+          name: "near-any-helper",
+          detail: `Emitted shared near_any helper for ${expressionToIntentText(helper.value)} / ${expressionToIntentText(helper.radius)}.`
+        });
+      }
       for (const helper of this.lineCountHelpers.values()) {
         this.emitLabel(helper.label);
         this.emitStore(spatialCountMaskScratchName(), "line count mask", helper.line);
@@ -6839,6 +10035,15 @@ var MKProEmulatorBundle = (() => {
         this.optimizations.push({
           name: "spatial-line-count-helper",
           detail: `Emitted shared line_count helper for ${helper.board.name}/${expressionToIntentText(helper.cell)}.`
+        });
+      }
+      for (const helper of this.spatialLineProgressionHelpers.values()) {
+        this.emitLabel(helper.label);
+        this.emitSpatialLineProgressionHelperBody(helper.hitMask, helper.cell, helper.operation, helper.line);
+        this.emitOp(82, "\u0412/\u041E", `${helper.operation} line progression return`, helper.line);
+        this.optimizations.push({
+          name: "spatial-line-progression-helper",
+          detail: `Emitted shared ${helper.operation} line progression helper for ${helper.hitMask}.`
         });
       }
       for (const helper of this.spatialSumLoopHelpers.values()) {
@@ -6852,27 +10057,18 @@ var MKProEmulatorBundle = (() => {
       }
       for (const helper of this.spatialBitMaskHelpers.values()) {
         this.emitLabel(helper.label);
-        this.emitStore(helper.scratch, "bit mask index", helper.line);
-        this.compileExpression({
-          kind: "call",
-          callee: "bit_mask",
-          args: [{ kind: "identifier", name: helper.scratch }]
-        });
+        this.emitBitMaskFromCurrentXWithQuotientScratch(helper.scratch, helper.line);
         this.emitOp(82, "\u0412/\u041E", "bit_mask return", helper.line);
         this.optimizations.push({
           name: "bit-mask-helper",
-          detail: `Emitted shared bit_mask helper using ${helper.scratch}.`
+          detail: `Emitted shared bit_mask helper using ${helper.scratch} with quotient reuse.`
         });
       }
       for (const helper of this.spatialHitHelpers.values()) {
         this.emitLabel(helper.label);
         this.emitStore(helper.scratch, "spatial hit index", helper.line);
         this.emitRecall(helper.mask, "spatial hit mask", helper.line);
-        this.compileExpression({
-          kind: "call",
-          callee: "bit_mask",
-          args: [{ kind: "identifier", name: helper.scratch }]
-        });
+        this.compileBitMaskWithQuotientScratch({ kind: "identifier", name: helper.scratch }, helper.scratch, helper.line);
         this.emitOp(55, "\u041A \u2227", "spatial hit test", helper.line);
         this.emitOp(50, "\u041A \u0417\u041D", "spatial hit to count", helper.line);
         this.emitOp(82, "\u0412/\u041E", "spatial hit return", helper.line);
@@ -6923,10 +10119,19 @@ var MKProEmulatorBundle = (() => {
       for (let index = 0; index < statements.length; index += 1) {
         const statement = statements[index];
         const next = statements[index + 1];
+        if (statement.kind === "assign" && next?.kind === "call" && this.compileXParamProcCall(statement, next)) {
+          index += 1;
+          continue;
+        }
         if (statement.kind === "assign") {
           const reused = this.compileRepeatedAssignmentValue(statements, index);
           if (reused > 1) {
             index += reused - 1;
+            continue;
+          }
+          const derived = this.compileStackUnaryDerivedAssignments(statements, index);
+          if (derived > 1) {
+            index += derived - 1;
             continue;
           }
         }
@@ -6939,6 +10144,10 @@ var MKProEmulatorBundle = (() => {
           continue;
         }
         if (statement.kind === "assign" && next?.kind === "assign" && this.compileBitSetMaskReuse(statement, next)) {
+          index += 1;
+          continue;
+        }
+        if (statement.kind === "assign" && next?.kind === "assign" && this.compileIntFracSharedTail(statement, next)) {
           index += 1;
           continue;
         }
@@ -6975,6 +10184,18 @@ var MKProEmulatorBundle = (() => {
             continue;
           }
         }
+        if (statement.kind === "show" && next?.kind === "input" && statements[index + 2]?.kind === "if" && this.inputFeedsOnlyFollowingCondition(next, statements[index + 2])) {
+          const branch = statements[index + 2];
+          this.compileShow(statement.display, statement.line);
+          this.markCurrentX(next.target);
+          this.compileIf(branch, branch.line);
+          this.optimizations.push({
+            name: "ephemeral-input-branch",
+            detail: `Branched directly on input ${next.target} at line ${next.line} without storing it.`
+          });
+          index += 2;
+          continue;
+        }
         if (statement.kind === "show" && next?.kind === "input") {
           this.compileShow(statement.display, statement.line);
           this.emitStore(next.target, `read ${next.target}`, next.line);
@@ -6985,8 +10206,28 @@ var MKProEmulatorBundle = (() => {
           index += 1;
           continue;
         }
+        if (statement.kind === "input" && next?.kind === "if" && this.inputFeedsOnlyFollowingCondition(statement, next)) {
+          this.emitOp(80, "\u0421/\u041F", `read ${statement.target}`, statement.line);
+          this.markCurrentX(statement.target);
+          this.compileIf(next, next.line);
+          this.optimizations.push({
+            name: "ephemeral-input-branch",
+            detail: `Branched directly on input ${statement.target} at line ${statement.line} without storing it.`
+          });
+          index += 1;
+          continue;
+        }
         this.compileStatement(statement);
       }
+    }
+    inputFeedsOnlyFollowingCondition(input, branch) {
+      const reads = countIdentifierReadsInCondition(branch.condition, input.target);
+      return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
+    }
+    markCurrentX(name) {
+      this.currentXVariable = name;
+      this.currentXAliases = /* @__PURE__ */ new Set([name]);
+      this.currentXKnownZero = false;
     }
     compileRepeatedAssignmentValue(statements, start) {
       const first = statements[start];
@@ -7009,6 +10250,77 @@ var MKProEmulatorBundle = (() => {
         detail: `Stored one computed value into ${count} consecutive assignment targets at line ${first.line}.`
       });
       return count;
+    }
+    compileXParamProcCall(assign, call) {
+      const lowering = this.xParamProcs.get(call.block);
+      if (lowering === void 0 || assign.target !== lowering.param) return false;
+      if (!expressionPureForSubstitution(assign.expr)) return false;
+      this.compileExpression(assign.expr);
+      this.compileBlockCall(call.block, call.line);
+      this.optimizations.push({
+        name: "x-param-proc-call",
+        detail: `Passed ${assign.target} to rule ${call.block} through X at line ${assign.line}.`
+      });
+      return true;
+    }
+    compileXParamProcBody(proc, lowering) {
+      this.emitRecall(lowering.other, `${proc.name} ${lowering.first.target} base`, lowering.first.line);
+      this.emitOp(16, "+", `${proc.name} ${lowering.first.target} from X parameter`, lowering.first.line);
+      this.emitStore(lowering.first.target, `set ${lowering.first.target}`, lowering.first.line);
+      this.compileStatements(proc.body.slice(1));
+      this.optimizations.push({
+        name: "x-param-proc-entry",
+        detail: `Compiled rule ${proc.name} to consume ${lowering.param} directly from X.`
+      });
+    }
+    compileStackUnaryDerivedAssignments(statements, start) {
+      const first = statements[start];
+      if (first?.kind !== "assign") return 0;
+      const firstMatch = matchStackUnaryDerivationCall(first.expr);
+      if (firstMatch === void 0) return 0;
+      if (!expressionPureForSubstitution(firstMatch.arg)) return 0;
+      const derivations = [];
+      const targets = /* @__PURE__ */ new Set();
+      const end = Math.min(statements.length, start + 4);
+      for (let index = start; index < end; index += 1) {
+        const statement = statements[index];
+        if (statement.kind !== "assign") break;
+        const call = matchStackUnaryDerivationCall(statement.expr);
+        if (call === void 0 || !expressionEquals(call.arg, firstMatch.arg)) break;
+        if (targets.has(statement.target)) break;
+        targets.add(statement.target);
+        derivations.push({ statement, call });
+      }
+      if (derivations.length < 3) return 0;
+      if ([...targets].some((target) => expressionReferencesIdentifier(firstMatch.arg, target))) return 0;
+      const argCost = estimateExpressionCost2(firstMatch.arg);
+      const normalCost = derivations.length * (argCost + 2);
+      const duplicateCost = derivations.length - 1;
+      const restoreCost = 1 + (derivations.length - 2) * 2;
+      const sharedCost = argCost + duplicateCost + derivations.length * 2 + restoreCost;
+      if (sharedCost >= normalCost) return 0;
+      this.compileExpression(firstMatch.arg);
+      for (let copy = 1; copy < derivations.length; copy += 1) {
+        this.emitOp(14, "\u0412\u2191", "duplicate operand for Z-stack derived tail", first.line);
+      }
+      for (let index = 0; index < derivations.length; index += 1) {
+        const { statement, call } = derivations[index];
+        if (index === 1) {
+          this.emitOp(20, "XY", "restore shared operand from Y", statement.line);
+        } else if (index > 1) {
+          this.emitOp(37, "F reverse", "rotate shared operand from Z", statement.line);
+          this.emitOp(20, "XY", "restore shared operand from stack", statement.line);
+        }
+        this.emitOp(call.opcode, call.mnemonic, `${call.fn}()`, statement.line);
+        this.emitStore(statement.target, `set ${statement.target}`, statement.line);
+      }
+      const functions = derivations.map(({ call }) => `${call.fn}()`).join("/");
+      const stackRegisters = derivations.length === 4 ? "X/Y/Z/T" : "X/Y/Z";
+      this.optimizations.push({
+        name: "z-stack-derived-value-reuse",
+        detail: `Computed ${expressionToIntentText(firstMatch.arg)} once and derived ${functions} through ${stackRegisters} stack copies.`
+      });
+      return derivations.length;
     }
     haltDisplaysSameValue(show, halt) {
       const display = this.ast.displays.find((candidate) => candidate.name === show.display);
@@ -7068,6 +10380,10 @@ var MKProEmulatorBundle = (() => {
           });
           return;
         case "halt":
+          if (statement.literal !== void 0) {
+            this.compileLiteralHalt(statement.literal, statement.line);
+            return;
+          }
           this.compileExpression(statement.expr);
           this.emitOp(80, "\u0421/\u041F", "halt", statement.line);
           return;
@@ -7079,8 +10395,13 @@ var MKProEmulatorBundle = (() => {
         case "loop": {
           const start = this.freshLabel("loop");
           this.emitLabel(start);
+          this.currentXVariable = void 0;
+          this.currentXAliases.clear();
+          this.currentXKnownZero = false;
           this.compileStatements(statement.body);
-          this.emitJump(81, "\u0411\u041F", start, "loop back", statement.line);
+          if (!this.statementsEndMachineFlow(statement.body)) {
+            this.emitJump(81, "\u0411\u041F", start, "loop back", statement.line);
+          }
           return;
         }
         case "if":
@@ -7142,7 +10463,7 @@ var MKProEmulatorBundle = (() => {
       if (!expressionEquals(firstSet.item, secondSet.item)) return false;
       const scratch = bitMaskScratchName(first);
       if (!this.allocation.registers[scratch]) return false;
-      this.compileExpression(bitMaskExpression(firstSet.item));
+      this.compileBitMaskWithQuotientScratch(firstSet.item, scratch, first.line);
       this.emitStore(scratch, "cell bit mask scratch", first.line);
       this.compileExpression(firstSet.collection);
       this.emitRecall(scratch, "reuse cell bit mask", first.line);
@@ -7157,6 +10478,28 @@ var MKProEmulatorBundle = (() => {
         detail: `Computed bit_mask() once for adjacent set updates at lines ${first.line}/${second.line}.`
       });
       return true;
+    }
+    compileBitMaskWithQuotientScratch(index, scratch, line) {
+      this.compileExpression(index);
+      this.emitBitMaskFromCurrentXWithQuotientScratch(scratch, line);
+      this.optimizations.push({
+        name: "bit-mask-quotient-reuse",
+        detail: `Reused ${expressionToIntentText(index)} / 4 through ${scratch} while building bit_mask().`
+      });
+    }
+    emitBitMaskFromCurrentXWithQuotientScratch(scratch, line) {
+      this.emitNumber("4");
+      this.emitOp(19, "/", "bit mask quotient", line);
+      this.emitStore(scratch, "bit mask quotient", line);
+      this.emitOp(53, "\u041A {x}", "bit mask remainder fraction", line);
+      this.emitNumber("4");
+      this.emitOp(18, "*", "bit mask remainder scale", line);
+      this.emitNumber("2");
+      this.emitOp(36, "F x^y", "bit mask power", line);
+      this.emitRecall(scratch, "bit mask quotient", line);
+      this.emitOp(52, "\u041A [x]", "bit mask digit index", line);
+      this.emitOp(21, "F 10^x", "bit mask decade", line);
+      this.emitOp(18, "*", "bit mask value", line);
     }
     compileDecrementZeroBranch(decrement, branch) {
       if (!isUnitDecrementExpression(decrement.target, decrement.expr)) return false;
@@ -7189,19 +10532,39 @@ var MKProEmulatorBundle = (() => {
     compileIf(statement, line) {
       if (this.compileArithmeticIfSelect(statement)) return;
       if (this.compileGuardedUpdateSelector(statement)) return;
+      if (this.compileNestedGuardSharedFailure(statement, line)) return;
+      if (this.compileResidualGuardedUpdate(statement, line)) return;
       if (this.compileDirectTerminalIfBranch(statement, line)) return;
       if (this.compileMembershipClearReuse(statement, line)) return;
       if (this.compileMembershipSetReuse(statement, line)) return;
       if (this.compileLocalTerminalElseTail(statement, line)) return;
+      if (this.compileResidualEqualityElseIf(statement, line)) return;
+      const selected = this.branchOrderStatement(statement, line);
       const falseLabel = this.freshLabel("if_false");
-      const thenTerminates = this.statementsTerminate(statement.thenBody);
+      const thenTerminates = this.statementsTerminate(selected.thenBody);
       const endLabel = thenTerminates ? void 0 : this.freshLabel("if_end");
-      this.compileCondition(statement.condition, falseLabel, line);
-      this.compileStatements(statement.thenBody);
-      if (statement.elseBody) {
+      const fallthroughIdentifier = this.nearAnyFallthroughCandidate(selected.condition, selected.thenBody);
+      const falseBranchIdentifier = selected.elseBody === void 0 ? void 0 : this.falseBranchCurrentXCandidate(selected.condition, selected.elseBody);
+      this.compileCondition(selected.condition, falseLabel, line);
+      if (fallthroughIdentifier !== void 0) {
+        this.currentXVariable = fallthroughIdentifier;
+        this.currentXAliases = /* @__PURE__ */ new Set([fallthroughIdentifier]);
+        this.currentXKnownZero = false;
+      }
+      this.compileStatements(selected.thenBody);
+      if (selected.elseBody) {
         if (endLabel !== void 0) this.emitJump(81, "\u0411\u041F", endLabel, "if end", line);
         this.emitLabel(falseLabel);
-        this.compileStatements(statement.elseBody);
+        if (falseBranchIdentifier !== void 0) {
+          this.currentXVariable = falseBranchIdentifier;
+          this.currentXAliases = /* @__PURE__ */ new Set([falseBranchIdentifier]);
+          this.currentXKnownZero = false;
+          this.optimizations.push({
+            name: "x-preserving-false-branch",
+            detail: `Preserved ${falseBranchIdentifier} in X across the false branch of the zero-test at line ${line}.`
+          });
+        }
+        this.compileStatements(selected.elseBody);
         if (endLabel !== void 0) this.emitLabel(endLabel);
         if (thenTerminates) {
           this.optimizations.push({
@@ -7212,6 +10575,170 @@ var MKProEmulatorBundle = (() => {
       } else {
         this.emitLabel(falseLabel);
       }
+    }
+    compileResidualEqualityElseIf(statement, line) {
+      if (statement.elseBody?.length !== 1) return false;
+      const nested = statement.elseBody[0];
+      if (nested?.kind !== "if") return false;
+      const first = matchEqualityConstantCondition(statement.condition);
+      const second = matchEqualityConstantCondition(nested.condition);
+      if (first === void 0 || second === void 0) return false;
+      if (!expressionEquals(first.expr, second.expr) || !expressionIsDeterministic(first.expr)) return false;
+      if (first.value === second.value) return false;
+      const residualCost = residualAdjustmentCost(first.value, second.value);
+      const ordinarySecondCompareCost = estimateExpressionCost2(second.expr) + estimateNumberCost2(String(second.value)) + 1;
+      if (residualCost >= ordinarySecondCompareCost) return false;
+      const firstFalseLabel = this.freshLabel("if_residual_next");
+      const secondFalseLabel = this.freshLabel("if_residual_false");
+      const thenTerminates = this.statementsTerminate(statement.thenBody);
+      const nestedThenTerminates = this.statementsTerminate(nested.thenBody);
+      const endLabel = !thenTerminates || nested.elseBody !== void 0 && !nestedThenTerminates ? this.freshLabel("if_residual_end") : void 0;
+      this.compileExpression(first.expr);
+      this.emitNumberOrPreload(String(first.value));
+      this.emitOp(17, "-", "condition compare", line);
+      this.emitJump(94, "F x=0", firstFalseLabel, "false branch for ==", line);
+      this.compileStatements(statement.thenBody);
+      if (!thenTerminates && endLabel !== void 0) {
+        this.emitJump(81, "\u0411\u041F", endLabel, "if end", line);
+      }
+      this.emitLabel(firstFalseLabel);
+      this.emitResidualAdjustment(first.value, second.value, nested.line);
+      this.emitJump(94, "F x=0", secondFalseLabel, "false branch for ==", nested.line);
+      this.compileStatements(nested.thenBody);
+      if (nested.elseBody !== void 0 && !nestedThenTerminates && endLabel !== void 0) {
+        this.emitJump(81, "\u0411\u041F", endLabel, "if end", nested.line);
+      }
+      this.emitLabel(secondFalseLabel);
+      if (nested.elseBody !== void 0) this.compileStatements(nested.elseBody);
+      if (endLabel !== void 0) this.emitLabel(endLabel);
+      this.optimizations.push({
+        name: "residual-elseif-compare",
+        detail: `Reused ${expressionToIntentText(first.expr)} - ${first.value} for else-if comparison to ${second.value} at line ${nested.line}.`
+      });
+      return true;
+    }
+    emitResidualAdjustment(previousValue, nextValue, line) {
+      const delta = previousValue - nextValue;
+      if (delta === 0) return;
+      if (delta > 0) {
+        this.emitNumberOrPreload(String(delta));
+        this.emitOp(16, "+", "residual else-if compare", line);
+        return;
+      }
+      this.emitNumberOrPreload(String(-delta));
+      this.emitOp(17, "-", "residual else-if compare", line);
+    }
+    nearAnyFallthroughCandidate(condition, thenBody) {
+      const normalized = normalizeZeroComparison(condition);
+      if (normalized === void 0 || !canTestAgainstZeroDirectly(normalized.op) || normalized.expr.kind !== "identifier") {
+        return void 0;
+      }
+      const first = this.firstInlineStatement(thenBody);
+      if (first?.kind !== "if") return void 0;
+      const firstCondition = selectCheaperEquivalentCondition(
+        first.condition,
+        this.ast,
+        new Set(Object.keys(this.allocation.constants))
+      ).condition;
+      const match = matchNearAnyHelperCondition(firstCondition);
+      const firstCandidate = match?.candidates[0];
+      if (firstCandidate?.kind !== "identifier" || firstCandidate.name !== normalized.expr.name) {
+        return void 0;
+      }
+      return normalized.expr.name;
+    }
+    falseBranchCurrentXCandidate(condition, elseBody) {
+      const normalized = normalizeZeroComparison(condition);
+      if (normalized === void 0 || !canTestAgainstZeroDirectly(normalized.op) || normalized.expr.kind !== "identifier") {
+        return void 0;
+      }
+      const preserved = normalized.expr.name;
+      const statements = this.inlineStatementPrefix(elseBody);
+      let index = 0;
+      const first = statements[index];
+      if (first?.kind === "assign" && first.target !== preserved && isUnitDecrementExpression(first.target, first.expr)) {
+        const register = this.allocation.registers[first.target];
+        if (register !== void 0 && flOpcode(register) !== void 0) index += 1;
+      }
+      return this.statementStartsWithCurrentXUse(statements[index], preserved) ? preserved : void 0;
+    }
+    firstInlineStatement(statements, seen = /* @__PURE__ */ new Set()) {
+      const first = statements[0];
+      if (first?.kind !== "call") return first;
+      if (!this.inlineProcNames.has(first.block) || seen.has(first.block)) return first;
+      const proc = this.ast.procs.find((candidate) => candidate.name === first.block);
+      if (proc === void 0) return first;
+      seen.add(first.block);
+      return this.firstInlineStatement(proc.body, seen);
+    }
+    inlineStatementPrefix(statements, seen = /* @__PURE__ */ new Set()) {
+      const first = statements[0];
+      if (first?.kind !== "call") return statements;
+      if (!this.inlineProcNames.has(first.block) || seen.has(first.block)) return statements;
+      const proc = this.ast.procs.find((candidate) => candidate.name === first.block);
+      if (proc === void 0) return statements;
+      seen.add(first.block);
+      return this.inlineStatementPrefix(proc.body, seen);
+    }
+    statementStartsWithCurrentXUse(statement, variable) {
+      if (statement === void 0) return false;
+      if (statement.kind === "if") return this.conditionCanUseCurrentX(statement.condition, variable);
+      if (statement.kind === "assign") return this.expressionCanUseCurrentX(statement.expr, variable);
+      return false;
+    }
+    conditionCanUseCurrentX(condition, variable) {
+      const selected = selectCheaperEquivalentCondition(
+        condition,
+        this.ast,
+        new Set(Object.keys(this.allocation.constants))
+      ).condition;
+      const normalized = normalizeZeroComparison(selected);
+      return normalized !== void 0 && this.expressionCanUseCurrentX(normalized.expr, variable);
+    }
+    expressionCanUseCurrentX(expr, variable) {
+      return expr.kind === "binary" && (expr.op === "+" || expr.op === "*") && (expr.left.kind === "identifier" && expr.left.name === variable && isSimpleStackLoad(expr.right) || expr.right.kind === "identifier" && expr.right.name === variable && isSimpleStackLoad(expr.left));
+    }
+    compileNestedGuardSharedFailure(statement, line) {
+      if (statement.elseBody === void 0 || statement.thenBody.length !== 1) return false;
+      const inner = statement.thenBody[0];
+      if (inner?.kind !== "if" || inner.elseBody === void 0) return false;
+      if (!statementListsEqual(statement.elseBody, inner.elseBody)) return false;
+      const failureLabel = this.freshLabel("guard_failure");
+      const thenTerminates = this.statementsTerminate(inner.thenBody);
+      const endLabel = thenTerminates ? void 0 : this.freshLabel("guard_end");
+      this.compileCondition(statement.condition, failureLabel, line);
+      this.compileCondition(inner.condition, failureLabel, inner.line);
+      this.compileStatements(inner.thenBody);
+      if (endLabel !== void 0) this.emitJump(81, "\u0411\u041F", endLabel, "guard success end", inner.line);
+      this.emitLabel(failureLabel);
+      this.compileStatements(statement.elseBody);
+      if (endLabel !== void 0) this.emitLabel(endLabel);
+      this.optimizations.push({
+        name: "nested-guard-shared-failure",
+        detail: `Shared identical nested failure branch at lines ${line}/${inner.line}.`
+      });
+      return true;
+    }
+    branchOrderStatement(statement, line) {
+      if (this.loweringOptions.invertBranchOrder !== true || statement.elseBody === void 0) return statement;
+      const thenCost = estimateBranchOrderBodyCost(statement.thenBody, this.ast);
+      const elseCost = estimateBranchOrderBodyCost(statement.elseBody, this.ast);
+      if (!Number.isFinite(thenCost) || !Number.isFinite(elseCost) || elseCost <= thenCost) return statement;
+      const preloadedConstants = new Set(Object.keys(this.allocation.constants));
+      const originalCost = estimateConditionCost(statement.condition, this.ast, preloadedConstants) + (this.statementsTerminate(statement.thenBody) ? 0 : 2);
+      const invertedCondition = invertCondition(statement.condition);
+      const invertedCost = estimateConditionCost(invertedCondition, this.ast, preloadedConstants) + (this.statementsTerminate(statement.elseBody) ? 0 : 2);
+      if (invertedCost > originalCost) return statement;
+      this.optimizations.push({
+        name: "if-branch-order-inversion",
+        detail: `Inverted if/else at line ${line} so the larger branch falls through (${elseCost} vs ${thenCost} estimated body cells).`
+      });
+      return {
+        ...statement,
+        condition: invertedCondition,
+        thenBody: statement.elseBody,
+        elseBody: statement.thenBody
+      };
     }
     compileDirectTerminalIfBranch(statement, line) {
       const thenTarget = this.directTerminalCallTarget(statement.thenBody);
@@ -7254,15 +10781,60 @@ var MKProEmulatorBundle = (() => {
       });
       return true;
     }
-    directTerminalCallTarget(statements) {
+    directTerminalCallTarget(statements, seen = /* @__PURE__ */ new Set()) {
       if (statements.length !== 1) return void 0;
       const statement = statements[0];
       if (statement?.kind !== "call") return void 0;
       const block = this.ast.blocks.find((candidate) => candidate.name === statement.block);
-      if (block !== void 0) return block.mode === "inline" ? void 0 : block.name;
+      if (block !== void 0) {
+        if (block.mode !== "inline") return block.name;
+        if (seen.has(block.name)) return void 0;
+        seen.add(block.name);
+        return this.directTerminalCallTarget(block.body, seen);
+      }
       const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
-      if (proc === void 0 || this.inlineProcNames.has(proc.name)) return void 0;
+      if (proc === void 0) return void 0;
+      if (this.inlineProcNames.has(proc.name)) {
+        if (seen.has(proc.name)) return void 0;
+        seen.add(proc.name);
+        return this.directTerminalCallTarget(proc.body, seen);
+      }
       return this.statementsTerminate(proc.body) ? proc.name : void 0;
+    }
+    compileResidualGuardedUpdate(statement, line) {
+      const update = matchResidualGuardedUpdate(statement);
+      if (update === void 0) return false;
+      const correction = update.bound + update.delta;
+      const correctionRaw = String(correction);
+      const ordinaryUpdateCost = estimateExpressionCost2(update.assignment.expr) + 1;
+      const residualUpdateCost = (correction === 0 ? 0 : this.estimateNumberOrPreloadCost(correctionRaw) + 1) + 1;
+      if (residualUpdateCost >= ordinaryUpdateCost) return false;
+      const falseLabel = this.freshLabel("if_false");
+      const thenTerminates = this.statementsTerminate(update.tail);
+      const endLabel = statement.elseBody !== void 0 && !thenTerminates ? this.freshLabel("if_end") : void 0;
+      this.compileExpression(update.condition.left);
+      this.compileExpression(update.condition.right);
+      this.emitOp(17, "-", "condition compare", line);
+      this.emitJump(92, "F x<0", falseLabel, `false branch for ${update.condition.op}`, line);
+      if (correction !== 0) {
+        this.emitNumberOrPreload(correctionRaw);
+        this.emitOp(16, "+", `residual guarded update ${update.target}`, update.assignment.line);
+      }
+      this.emitStore(update.target, `set ${update.target}`, update.assignment.line);
+      this.compileStatements(update.tail);
+      if (statement.elseBody !== void 0) {
+        if (endLabel !== void 0) this.emitJump(81, "\u0411\u041F", endLabel, "if end", line);
+        this.emitLabel(falseLabel);
+        this.compileStatements(statement.elseBody);
+        if (endLabel !== void 0) this.emitLabel(endLabel);
+      } else {
+        this.emitLabel(falseLabel);
+      }
+      this.optimizations.push({
+        name: "residual-guarded-update",
+        detail: `Reused ${update.target} - ${update.bound} while updating ${update.target} at line ${update.assignment.line}.`
+      });
+      return true;
     }
     compileLocalTerminalElseTail(statement, line) {
       if (statement.elseBody === void 0) return false;
@@ -7320,6 +10892,12 @@ var MKProEmulatorBundle = (() => {
       return true;
     }
     compileBitMembershipMaskValue(membership, line) {
+      if (membership.mode === "mask") {
+        this.compileExpression(membership.mask);
+        this.compileExpression(membership.collection);
+        this.emitOp(55, "\u041A \u2227", "bit membership test", line);
+        return true;
+      }
       if (membership.collection.kind !== "identifier") return false;
       const scratch = spatialHitScratchName(membership.collection.name);
       if (this.allocation.registers[scratch] === void 0) return false;
@@ -7337,6 +10915,10 @@ var MKProEmulatorBundle = (() => {
     compileMembershipSetReuse(statement, line) {
       const present = matchBitMembershipCondition(statement.condition);
       if (present !== void 0 && present.collection.kind === "identifier" && statement.elseBody !== void 0) {
+        const setRun2 = this.membershipSetRunPrefix(statement.elseBody, present);
+        if (setRun2 !== void 0) {
+          return this.compileMembershipSetRunReuseForPresentCondition(statement, present, setRun2, line);
+        }
         const setPrefix2 = this.membershipSetPrefix(statement.elseBody, present);
         if (setPrefix2 !== void 0) {
           return this.compileMembershipSetReuseForPresentCondition(statement, present, setPrefix2, line);
@@ -7344,6 +10926,10 @@ var MKProEmulatorBundle = (() => {
       }
       const absent = matchBitAbsenceCondition(statement.condition);
       if (absent === void 0 || absent.collection.kind !== "identifier") return false;
+      const setRun = this.membershipSetRunPrefix(statement.thenBody, absent);
+      if (setRun !== void 0) {
+        return this.compileMembershipSetRunReuseForAbsentCondition(statement, absent, setRun, line);
+      }
       const setPrefix = this.membershipSetPrefix(statement.thenBody, absent);
       if (setPrefix === void 0) return false;
       return this.compileMembershipSetReuseForAbsentCondition(statement, absent, setPrefix, line);
@@ -7394,15 +10980,72 @@ var MKProEmulatorBundle = (() => {
       });
       return true;
     }
+    compileMembershipSetRunReuseForPresentCondition(statement, membership, setRun, line) {
+      const scratch = bitMaskScratchName(setRun.sets[0].set);
+      if (this.allocation.registers[scratch] === void 0) return false;
+      const falseLabel = this.freshLabel("if_false");
+      const thenTerminates = this.statementsTerminate(statement.thenBody);
+      const endLabel = thenTerminates ? void 0 : this.freshLabel("if_end");
+      this.emitMembershipMaskTest(membership, scratch, line);
+      this.emitJump(94, "F x=0", falseLabel, "false branch for !=", line);
+      this.compileStatements(statement.thenBody);
+      if (endLabel !== void 0) this.emitJump(81, "\u0411\u041F", endLabel, "if end", line);
+      this.emitLabel(falseLabel);
+      for (const { set, collection } of setRun.sets) {
+        this.emitBitSetCollectionWithScratch(collection, set, scratch);
+      }
+      this.compileStatements(setRun.tail);
+      if (endLabel !== void 0) this.emitLabel(endLabel);
+      const targets = setRun.sets.map(({ set }) => set.target).join(", ");
+      this.optimizations.push({
+        name: "cell-membership-mask-run-reuse",
+        detail: `Reused the failed membership mask when setting ${targets} after line ${line}.`
+      });
+      return true;
+    }
+    compileMembershipSetRunReuseForAbsentCondition(statement, membership, setRun, line) {
+      const scratch = bitMaskScratchName(setRun.sets[0].set);
+      if (this.allocation.registers[scratch] === void 0) return false;
+      const falseLabel = this.freshLabel("if_false");
+      const thenTerminates = this.statementsTerminate(statement.thenBody);
+      const endLabel = statement.elseBody !== void 0 && !thenTerminates ? this.freshLabel("if_end") : void 0;
+      this.emitMembershipMaskTest(membership, scratch, line);
+      this.emitJump(87, "F x!=0", falseLabel, "false branch for ==", line);
+      for (const { set, collection } of setRun.sets) {
+        this.emitBitSetCollectionWithScratch(collection, set, scratch);
+      }
+      this.compileStatements(setRun.tail);
+      if (statement.elseBody !== void 0) {
+        if (endLabel !== void 0) this.emitJump(81, "\u0411\u041F", endLabel, "if end", line);
+        this.emitLabel(falseLabel);
+        this.compileStatements(statement.elseBody);
+        if (endLabel !== void 0) this.emitLabel(endLabel);
+      } else {
+        this.emitLabel(falseLabel);
+      }
+      const targets = setRun.sets.map(({ set }) => set.target).join(", ");
+      this.optimizations.push({
+        name: "cell-membership-mask-run-reuse",
+        detail: `Reused the failed membership mask when setting ${targets} after line ${line}.`
+      });
+      return true;
+    }
     emitMembershipMaskTest(membership, scratch, line) {
-      this.compileExpression(bitMaskExpression(membership.item));
+      if (membership.mode === "index") {
+        this.compileBitMaskWithQuotientScratch(membership.item, scratch, line);
+      } else {
+        this.compileExpression(membership.mask);
+      }
       this.emitStore(scratch, "cell bit mask scratch", line);
       this.compileExpression(membership.collection);
       this.emitRecall(scratch, "reuse cell bit mask", line);
       this.emitOp(55, "\u041A \u2227", "membership test with reused mask", line);
     }
     emitBitSetWithScratch(membership, set, scratch) {
-      this.compileExpression(membership.collection);
+      this.emitBitSetCollectionWithScratch(membership.collection, set, scratch);
+    }
+    emitBitSetCollectionWithScratch(collection, set, scratch) {
+      this.compileExpression(collection);
       this.emitRecall(scratch, "reuse cell bit mask", set.line);
       this.emitOp(56, "\u041A \u2228", "bit_set with reused mask", set.line);
       this.emitStore(set.target, `set ${set.target}`, set.line);
@@ -7435,6 +11078,23 @@ var MKProEmulatorBundle = (() => {
       return {
         set,
         tail: [...proc.body.slice(1), ...statements.slice(1)]
+      };
+    }
+    membershipSetRunPrefix(statements, membership) {
+      const sets = [];
+      let index = 0;
+      while (index < statements.length) {
+        const statement = statements[index];
+        if (statement?.kind !== "assign") break;
+        const matched = matchAnyBitSetAssignment(statement, membership);
+        if (matched === void 0) break;
+        sets.push({ set: statement, collection: matched.collection });
+        index += 1;
+      }
+      if (sets.length < 2) return void 0;
+      return {
+        sets,
+        tail: statements.slice(index)
       };
     }
     compileArithmeticIfSelect(statement) {
@@ -7607,7 +11267,7 @@ var MKProEmulatorBundle = (() => {
       if (optimized.reordered > 0) {
         this.optimizations.push({
           name: "dispatch-case-ordering",
-          detail: `Moved ${optimized.reordered} zero dispatch case${optimized.reordered === 1 ? "" : "s"} earlier to reuse the selector already in X.`
+          detail: `Reordered ${optimized.reordered} numeric dispatch case${optimized.reordered === 1 ? "" : "s"} to shorten residual comparisons.`
         });
       }
       const site = statement.name ?? `dispatch@${statement.line}`;
@@ -7680,11 +11340,8 @@ var MKProEmulatorBundle = (() => {
       this.emitLabel(endLabel);
     }
     compileNumericResidualDispatchCompareChain(statement, useFallthrough) {
-      if (statement.cases.length < 2) return false;
-      const values = statement.cases.map((dispatchCase) => numericLiteralValue2(dispatchCase.value));
-      if (values.some((value) => value === void 0)) return false;
-      const numericValues = values;
-      if (!numericResidualDispatchIsCheaper(statement, numericValues)) return false;
+      if (!dispatchUsesNumericResidualChain(statement)) return false;
+      const numericValues = statement.cases.map((dispatchCase) => numericLiteralValue2(dispatchCase.value));
       this.compileExpression(statement.expr);
       const endLabel = this.freshLabel("dispatch_end");
       let comparedValue = 0;
@@ -7726,13 +11383,22 @@ var MKProEmulatorBundle = (() => {
     statementsTerminate(statements) {
       return this.statementListTerminates(statements, /* @__PURE__ */ new Set());
     }
+    statementsEndMachineFlow(statements) {
+      return this.statementListEndsMachineFlow(statements, /* @__PURE__ */ new Set());
+    }
     statementListTerminates(statements, seenProcs) {
       const last = statements.at(-1);
       if (!last) return false;
       return this.statementTerminates(last, seenProcs);
     }
+    statementListEndsMachineFlow(statements, seenProcs) {
+      const last = statements.at(-1);
+      if (!last) return false;
+      return this.statementEndsMachineFlow(last, seenProcs);
+    }
     statementTerminates(statement, seenProcs) {
       if (statement.kind === "halt" || statement.kind === "loop" || statement.kind === "trap") return true;
+      if (statement.kind === "show" && this.showTerminates(statement.display)) return true;
       if (statement.kind === "if") {
         return statement.elseBody !== void 0 && this.statementListTerminates(statement.thenBody, new Set(seenProcs)) && this.statementListTerminates(statement.elseBody, new Set(seenProcs));
       }
@@ -7747,47 +11413,388 @@ var MKProEmulatorBundle = (() => {
       seenProcs.add(proc.name);
       return this.statementListTerminates(proc.body, seenProcs);
     }
+    statementEndsMachineFlow(statement, seenProcs) {
+      if (statement.kind === "loop" || statement.kind === "trap") return true;
+      if (statement.kind === "halt") return statement.literal !== void 0;
+      if (statement.kind === "show" && this.showTerminates(statement.display)) return true;
+      if (statement.kind === "if") {
+        return statement.elseBody !== void 0 && this.statementListEndsMachineFlow(statement.thenBody, new Set(seenProcs)) && this.statementListEndsMachineFlow(statement.elseBody, new Set(seenProcs));
+      }
+      if (statement.kind === "dispatch") {
+        return statement.defaultBody !== void 0 && this.statementListEndsMachineFlow(statement.defaultBody, new Set(seenProcs)) && statement.cases.every(
+          (dispatchCase) => this.statementListEndsMachineFlow(dispatchCase.body, new Set(seenProcs))
+        );
+      }
+      if (statement.kind !== "call") return false;
+      const block = this.ast.blocks.find((candidate) => candidate.name === statement.block);
+      if (block !== void 0) return block.mode !== "inline";
+      const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
+      if (proc === void 0 || seenProcs.has(proc.name)) return false;
+      seenProcs.add(proc.name);
+      return this.statementListEndsMachineFlow(proc.body, seenProcs);
+    }
+    showTerminates(displayName) {
+      const display = this.ast.displays.find((candidate) => candidate.name === displayName);
+      const literal = display === void 0 ? void 0 : this.collapseLiteralOnlyDisplay(display);
+      const program = literal === void 0 ? void 0 : displayLiteralProgram(literal);
+      return program?.kind === "error";
+    }
     compileShow(displayName, line) {
       const display = this.ast.displays.find((candidate) => candidate.name === displayName);
       if (!display) {
         this.diagnostics.push(buildDiagnostic("error", `Unknown display '${displayName}'.`, line));
         return;
       }
-      if (this.compileTextDisplay(display, line)) return;
-      if (display.items.some((item) => item.kind === "literal")) {
-        this.diagnostics.push(buildDiagnostic(
-          "error",
-          `Screen '${display.name}' contains text fragments that are not lowerable for this program shape yet.`,
-          line
-        ));
-        return;
-      }
-      const helper = this.sharedDisplayHelper(display, line);
-      if (helper !== void 0) {
-        this.emitJump(83, "\u041F\u041F", helper.label, `show ${display.name}`, line);
+      const literalHelper = this.sharedLiteralDisplayHelper(display, line);
+      if (literalHelper !== void 0) {
+        this.emitJump(83, "\u041F\u041F", literalHelper.label, `show ${display.name}`, line);
         this.optimizations.push({
-          name: "packed-display-helper-call",
-          detail: `Reused shared packed display helper for screen ${display.name}.`
+          name: "screen-video-literal-helper-call",
+          detail: `Reused shared literal video helper for screen ${display.name}.`
         });
         return;
       }
+      if (this.compileLiteralDisplay(display, line)) return;
+      if (this.compileTextDisplay(display, line)) return;
+      const strategy = this.selectDisplayStrategy(display);
+      if (strategy === "packed-display-helper") {
+        const helper = this.sharedDisplayHelper(display, line);
+        if (helper !== void 0) {
+          this.emitJump(83, "\u041F\u041F", helper.label, `show ${display.name}`, line);
+          this.optimizations.push({
+            name: "packed-display-helper-call",
+            detail: `Reused shared packed display helper for screen ${display.name}.`
+          });
+          return;
+        }
+      }
+      if (strategy === "display-byte-helper") {
+        const helper = this.sharedDisplayByteHelper(display, line);
+        if (helper !== void 0) {
+          this.emitJump(83, "\u041F\u041F", helper.label, `show ${display.name}`, line);
+          this.optimizations.push({
+            name: "display-byte-helper-call",
+            detail: `Reused shared display-byte helper for screen ${display.name}.`
+          });
+          return;
+        }
+      }
+      if (strategy === "packed-storage-reuse" && this.compilePackedStorageReuseDisplay(display, line, true)) return;
+      if (strategy === "display-byte-builder" && this.compileDisplayByteBuilder(display, line, true)) return;
       this.compilePackedDisplayBody(display, line, true);
       this.reportPackedDisplayLowering(display);
     }
+    selectDisplayStrategy(display) {
+      const candidates = this.displayStrategyCandidates(display);
+      const available = candidates.filter((candidate) => candidate.available);
+      if (available.length === 0) {
+        for (const candidate of candidates) {
+          this.candidates.push({
+            site: `display ${display.name}`,
+            variant: candidate.variant,
+            steps: candidate.steps,
+            selected: false,
+            reason: candidate.reason
+          });
+        }
+        return void 0;
+      }
+      const selected = available.reduce((best, candidate) => {
+        if (candidate.steps < best.steps) return candidate;
+        return best;
+      });
+      for (const candidate of candidates) {
+        this.candidates.push({
+          site: `display ${display.name}`,
+          variant: candidate.variant,
+          steps: candidate.steps,
+          selected: candidate.variant === selected.variant,
+          reason: candidate.variant === selected.variant ? `selected ${candidate.variant} for screen ${display.name}` : candidate.reason
+        });
+      }
+      this.optimizations.push({
+        name: "display-strategy-selection",
+        detail: `Selected ${selected.variant} for screen ${display.name}.`
+      });
+      return selected.variant;
+    }
+    displayStrategyCandidates(display) {
+      const fields = this.numericDisplayFields(display);
+      const sourceFields = this.displaySourceFields(display);
+      const decimalCost = fields === void 0 ? UNAVAILABLE_DISPLAY_STRATEGY_COST : this.estimateDecimalDisplayCost(fields, true);
+      const helperCost = fields === void 0 ? UNAVAILABLE_DISPLAY_STRATEGY_COST : 2;
+      const helperAvailable = fields !== void 0 && this.shouldShareDisplay(display);
+      const storageFields = this.packedStorageReuseFields(display);
+      const storageCost = storageFields === void 0 ? UNAVAILABLE_DISPLAY_STRATEGY_COST : this.estimatePackedStorageReuseCost(storageFields, true);
+      const displayByteAvailable = this.canCompileDisplayByteBuilder(display);
+      const displayByteCost = sourceFields.length === 0 ? UNAVAILABLE_DISPLAY_STRATEGY_COST : this.estimateDisplayByteBuilderCost(display, sourceFields, true);
+      const displayByteHelperAvailable = displayByteAvailable && this.shouldShareDisplayByte(display);
+      const displayByteHelperCost = displayByteHelperAvailable ? 2 : UNAVAILABLE_DISPLAY_STRATEGY_COST;
+      return [
+        {
+          variant: "decimal-pack",
+          steps: decimalCost,
+          available: fields !== void 0,
+          reason: fields === void 0 ? "display contains non-space literal fragments" : "ordinary decimal field packing was not the cheapest display strategy"
+        },
+        {
+          variant: "packed-storage-reuse",
+          steps: storageCost,
+          available: storageFields !== void 0,
+          reason: storageFields === void 0 ? "display fields are not proved to already occupy their decimal positions" : "ready-packed storage reuse was not the cheapest display strategy"
+        },
+        {
+          variant: "packed-display-helper",
+          steps: helperCost,
+          available: helperAvailable,
+          reason: helperAvailable ? "shared packed display helper was not the cheapest display strategy" : "screen is not repeated often enough for a shared packed display helper"
+        },
+        {
+          variant: "display-byte-helper",
+          steps: displayByteHelperCost,
+          available: displayByteHelperAvailable,
+          reason: displayByteHelperAvailable ? "shared display-byte helper was not the cheapest display strategy" : "screen is not repeated often enough for a shared display-byte helper"
+        },
+        {
+          variant: "display-byte-builder",
+          steps: displayByteCost,
+          available: displayByteAvailable,
+          reason: displayByteAvailable ? "display-byte builder was not the cheapest display strategy" : "display has no literal/X2-sensitive fragments to build"
+        }
+      ];
+    }
     compilePackedDisplayBody(display, line, reuseCurrentX) {
-      const sources = reuseCurrentX ? this.orderDisplaySources(display.sources) : display.sources;
+      const fields = this.numericDisplayFields(display, line);
+      if (fields === void 0) return;
+      this.compilePackedDisplayFields(display, fields, line, reuseCurrentX);
+      this.emitOp(80, "\u0421/\u041F", `show ${display.name}`, line);
+    }
+    compilePackedDisplayFields(display, fields, line, reuseCurrentX) {
+      const sources = reuseCurrentX && this.canReorderNumericDisplay(display) ? this.orderDisplaySources(fields.map((field) => field.name)) : fields.map((field) => field.name);
       if (sources.length === 0) {
         this.emitNumber("0");
       } else {
         for (let index = 0; index < sources.length; index += 1) {
           const source = sources[index];
-          if (!(index === 0 && source === this.currentXVariable)) {
-            this.emitRecall(source, `display ${display.name} source`, line);
+          if (index === 0 && source === this.currentXVariable) {
+            this.optimizations.push({
+              name: "display-current-x-reuse",
+              detail: `Reused ${source} already in X as the first field of screen ${display.name}.`
+            });
+            continue;
           }
-          if (index > 0) this.emitOp(16, "+", "packed display combine", line);
+          if (index === 0) {
+            this.emitRecall(source, `display ${display.name} source`, line);
+          } else {
+            const field = fields.find((candidate) => candidate.name === source);
+            this.emitNumberOrPreload(String(10 ** field.width));
+            this.emitOp(18, "*", "packed display field shift", line);
+            this.emitRecall(source, `display ${display.name} source`, line);
+            this.emitOp(16, "+", "packed display field append", line);
+          }
         }
       }
+    }
+    numericDisplayFields(display, line) {
+      const fields = [];
+      for (const item of display.items) {
+        if (item.kind === "literal") {
+          if (item.text.trim().length === 0) continue;
+          if (line !== void 0) {
+            this.diagnostics.push(buildDiagnostic(
+              "error",
+              `Screen '${display.name}' contains display literal ${JSON.stringify(item.text)} that is not lowerable yet.`,
+              line
+            ));
+          }
+          return void 0;
+        }
+        fields.push({ item, name: item.name, width: item.width ?? this.naturalDisplayWidth(item.name) });
+      }
+      return fields;
+    }
+    displaySourceFields(display) {
+      return display.items.filter((item) => item.kind === "source").map((item) => ({ item, name: item.name, width: item.width ?? this.naturalDisplayWidth(item.name) }));
+    }
+    estimateDecimalDisplayCost(fields, reuseCurrentX) {
+      if (fields.length === 0) return 2;
+      let cost = reuseCurrentX && fields[0]?.name === this.currentXVariable ? 0 : 1;
+      for (const field of fields.slice(1)) {
+        cost += this.estimateNumberOrPreloadCost(String(10 ** field.width)) + 3;
+      }
+      return cost + 1;
+    }
+    estimateNumberOrPreloadCost(raw) {
+      return this.allocation.constants[normalizeConstantLiteral(raw)] === void 0 ? estimateNumberCost2(raw) : 1;
+    }
+    packedStorageReuseFields(display) {
+      const fields = this.numericDisplayFields(display);
+      if (fields === void 0 || fields.length < 2) return void 0;
+      const firstState = this.findStateField(fields[0].name);
+      if (firstState?.type !== "packed") return void 0;
+      if (!fields.slice(1).every((field) => field.item.width !== void 0)) return void 0;
+      return fields;
+    }
+    estimatePackedStorageReuseCost(fields, reuseCurrentX) {
+      if (fields.length === 0) return 2;
+      const currentIndex = reuseCurrentX && this.currentXVariable !== void 0 ? fields.findIndex((field) => field.name === this.currentXVariable) : -1;
+      const recalled = currentIndex >= 0 ? fields.length - 1 : fields.length;
+      return recalled + Math.max(0, fields.length - 1) + 1;
+    }
+    compilePackedStorageReuseDisplay(display, line, reuseCurrentX) {
+      const fields = this.packedStorageReuseFields(display);
+      if (fields === void 0) return false;
+      const ordered = this.orderStorageReuseFields(fields, reuseCurrentX);
+      for (let index = 0; index < ordered.length; index += 1) {
+        const field = ordered[index];
+        if (!(index === 0 && reuseCurrentX && field.name === this.currentXVariable)) {
+          this.emitRecall(field.name, `display ${display.name} packed field`, line);
+        }
+        if (index > 0) this.emitOp(16, "+", "packed display storage append", line);
+      }
       this.emitOp(80, "\u0421/\u041F", `show ${display.name}`, line);
+      this.optimizations.push({
+        name: "packed-display-storage-reuse",
+        detail: `Displayed screen ${display.name} by adding fields already stored in their decimal positions.`
+      });
+      return true;
+    }
+    orderStorageReuseFields(fields, reuseCurrentX) {
+      if (!reuseCurrentX || this.currentXVariable === void 0) return fields;
+      const index = fields.findIndex((field) => field.name === this.currentXVariable);
+      if (index <= 0) return fields;
+      this.optimizations.push({
+        name: "display-stack-reuse",
+        detail: `Reordered ready-packed display inputs to reuse ${this.currentXVariable} already in X.`
+      });
+      return [
+        fields[index],
+        ...fields.slice(0, index),
+        ...fields.slice(index + 1)
+      ];
+    }
+    canCompileDisplayByteBuilder(display) {
+      if (!machineSupports(this.machineProfile, "display-bytes")) return false;
+      return this.mantissaExponentDisplayTemplate(display) !== void 0 && this.displayTemplateScratchRegisters(display) !== void 0;
+    }
+    estimateDisplayByteBuilderCost(display, _fields, reuseCurrentX) {
+      const template = this.mantissaExponentDisplayTemplate(display);
+      if (template === void 0) return UNAVAILABLE_DISPLAY_STRATEGY_COST;
+      const leaderCost = reuseCurrentX && template.leader.name === this.currentXVariable ? 0 : 1;
+      return 39 + leaderCost;
+    }
+    compileDisplayByteBuilder(display, line, _reuseCurrentX) {
+      const template = this.mantissaExponentDisplayTemplate(display);
+      const scratch = this.displayTemplateScratchRegisters(display);
+      if (template === void 0 || scratch === void 0) return false;
+      this.emitRecall(template.score.name, `display ${display.name} score`, line);
+      this.emitNumberOrPreload("1000");
+      this.emitOp(19, "/", "display template score shift", line);
+      this.emitRecall(template.total.name, `display ${display.name} total`, line);
+      this.emitNumberOrPreload("10000000");
+      this.emitOp(19, "/", "display template total shift", line);
+      this.emitOp(16, "+", "display template total append", line);
+      this.emitOp(9, "9", "display template numeric anchor", line);
+      this.emitOp(16, "+", "display template numeric body", line);
+      this.emitRecall(scratch.mask, `display ${display.name} separator mask`, line);
+      this.emitOp(56, "\u041A \u2228", "display template body merge", line);
+      const exponentCanBeZero = this.displayFieldCanBeZero(template.exponent);
+      this.emitStore(scratch.value, `display ${display.name} body`, line);
+      const exponentZero = exponentCanBeZero ? this.freshLabel("display_exponent_zero") : void 0;
+      this.emitRecall(template.exponent.name, `display ${display.name} exponent`, line);
+      if (exponentZero !== void 0) {
+        this.emitJump(87, "F x!=0", exponentZero, "display template zero exponent", line);
+      }
+      this.emitStore(scratch.loop, `display ${display.name} exponent counter`, line);
+      this.emitRecall(scratch.value, `display ${display.name} body`, line);
+      const loopStart = this.freshLabel("display_exponent_loop");
+      this.emitLabel(loopStart);
+      this.emitOp(12, "\u0412\u041F", "display template exponent entry", line);
+      this.emitOp(1, "1", "display template exponent digit", line);
+      this.emitOp(11, "/-/", "display template exponent sign", line);
+      this.emitJump(displayLoopOpcode(scratch.loopRegister), `F L${scratch.loopRegister}`, loopStart, "display template exponent loop", line);
+      this.emitStore(scratch.value, `display ${display.name} exponent body`, line);
+      if (exponentZero !== void 0) this.emitLabel(exponentZero);
+      this.emitRecall(template.leader.name, `display ${display.name} leader`, line);
+      this.emitRecall(scratch.value, `display ${display.name} body`, line);
+      this.emitOp(20, "<->", "display template leader merge", line);
+      this.emitOp(84, "\u041A \u041D\u041E\u041F", "display template leader preserve", line, true);
+      this.emitOp(12, "\u0412\u041F", "display template leader restore", line);
+      this.emitOp(80, "\u0421/\u041F", `show ${display.name}`, line);
+      this.optimizations.push({
+        name: "display-byte-x2-lowering",
+        detail: `Built literal-separated screen ${display.name} through a mantissa/exponent video template.`
+      });
+      return true;
+    }
+    mantissaExponentDisplayTemplate(display) {
+      const [leader, firstLiteral, score, secondLiteral, total, thirdLiteral, exponent] = display.items;
+      if (leader?.kind !== "source" || firstLiteral?.kind !== "literal" || score?.kind !== "source" || secondLiteral?.kind !== "literal" || total?.kind !== "source" || thirdLiteral?.kind !== "literal" || exponent?.kind !== "source" || display.items.length !== 7) {
+        return void 0;
+      }
+      if (normalizeDisplayTemplateLiteral(firstLiteral.text) !== ".-") return void 0;
+      if (normalizeDisplayTemplateLiteral(secondLiteral.text) !== "-") return void 0;
+      if (normalizeDisplayTemplateLiteral(thirdLiteral.text) !== "-") return void 0;
+      const result = {
+        leader: { item: leader, name: leader.name, width: leader.width ?? this.naturalDisplayWidth(leader.name) },
+        score: { item: score, name: score.name, width: score.width ?? this.naturalDisplayWidth(score.name) },
+        total: { item: total, name: total.name, width: total.width ?? this.naturalDisplayWidth(total.name) },
+        exponent: { item: exponent, name: exponent.name, width: exponent.width ?? this.naturalDisplayWidth(exponent.name) }
+      };
+      if (result.leader.width !== 1 || result.score.width !== 2 || result.total.width !== 3 || result.exponent.width !== 2) {
+        return void 0;
+      }
+      if (!this.displayFieldFitsUnsignedWidth(result.leader)) return void 0;
+      if (!this.displayFieldFitsUnsignedWidth(result.score)) return void 0;
+      if (!this.displayFieldFitsUnsignedWidth(result.total)) return void 0;
+      if (!this.displayFieldFitsUnsignedWidth(result.exponent)) return void 0;
+      return result;
+    }
+    displayFieldFitsUnsignedWidth(field) {
+      const state = this.findStateField(field.name);
+      if (state === void 0) return false;
+      const min = state.min ?? 0;
+      const max = state.max ?? min;
+      return min >= 0 && max < 10 ** field.width;
+    }
+    displayFieldCanBeZero(field) {
+      const state = this.findStateField(field.name);
+      return state === void 0 || (state.min ?? 0) <= 0;
+    }
+    displayTemplateScratchRegisters(display) {
+      const value = displayTemplateValueScratchName(display);
+      const loop = displayTemplateLoopScratchName(display);
+      const mask = displayTemplateMaskScratchName(display);
+      const loopRegister = this.allocation.registers[loop];
+      if (this.allocation.registers[value] === void 0 || this.allocation.registers[mask] === void 0 || loopRegister === void 0) {
+        return void 0;
+      }
+      if (loopRegister !== "0" && loopRegister !== "1" && loopRegister !== "2" && loopRegister !== "3") return void 0;
+      return { value, loop, loopRegister: Number(loopRegister), mask };
+    }
+    emitDisplayLiteralProgram(program, line, comment) {
+      if (program.kind === "kinv") {
+        this.emitNumberOrPreload(program.digits);
+        this.emitOp(58, "\u041A \u0418\u041D\u0412", comment, line);
+        if (program.negative) this.emitOp(11, "/-/", `${comment} sign`, line);
+        return;
+      }
+      this.emitNumberOrPreload(program.left);
+      this.emitOp(14, "\u0412\u2191", `${comment} split`, line);
+      this.emitNumberOrPreload(program.right);
+      this.emitOp(57, "\u041A \u2295", comment, line);
+      if (program.negative) this.emitOp(11, "/-/", `${comment} sign`, line);
+    }
+    canReorderNumericDisplay(display) {
+      return display.sources.length <= 1 && display.items.every((item) => item.kind === "source" && item.width === void 0);
+    }
+    naturalDisplayWidth(source) {
+      const field = this.findStateField(source);
+      if (field === void 0) return 1;
+      const min = field.min ?? 0;
+      const max = field.max ?? min;
+      const magnitude = Math.max(Math.abs(min), Math.abs(max));
+      return Math.max(1, String(Math.trunc(magnitude)).length);
     }
     reportPackedDisplayLowering(display) {
       const canUseDisplayBytes = machineSupports(this.machineProfile, "display-bytes");
@@ -7795,6 +11802,27 @@ var MKProEmulatorBundle = (() => {
         name: "packed-display-lowering",
         detail: canUseDisplayBytes ? `Display ${display.name} may use display-byte encodings in later layout passes.` : `Display ${display.name} lowered as ordinary packed numeric output.`
       });
+    }
+    sharedDisplayByteHelper(display, line) {
+      if (!this.shouldShareDisplayByte(display)) return void 0;
+      const existing = this.displayByteHelpers.get(display.name);
+      if (existing !== void 0) return existing;
+      const helper = {
+        display,
+        label: `__display_byte_${display.name}`,
+        line
+      };
+      this.displayByteHelpers.set(display.name, helper);
+      return helper;
+    }
+    shouldShareDisplayByte(display) {
+      if (!this.canCompileDisplayByteBuilder(display)) return false;
+      const uses = this.displayUseCounts.get(display.name) ?? 0;
+      if (uses < 2) return false;
+      const bodyCost = this.estimateDisplayByteBuilderCost(display, this.displaySourceFields(display), false);
+      const helperCost = uses * 2 + bodyCost + 1;
+      const inlineTotal = uses * bodyCost;
+      return inlineTotal - helperCost >= DISPLAY_HELPER_MIN_SAVINGS;
     }
     sharedDisplayHelper(display, line) {
       if (!this.shouldShareDisplay(display)) return void 0;
@@ -7809,12 +11837,13 @@ var MKProEmulatorBundle = (() => {
       return helper;
     }
     shouldShareDisplay(display) {
-      if (display.items.some((item) => item.kind === "literal")) return false;
-      const sources = display.sources.length;
+      const fields = this.numericDisplayFields(display);
+      if (fields === void 0) return false;
+      const sources = fields.length;
       if (sources < 2) return false;
       const uses = this.displayUseCounts.get(display.name) ?? 0;
       if (uses < 2) return false;
-      const inlineCost = estimatePackedDisplayBodyCost(sources);
+      const inlineCost = estimatePackedDisplayBodyCost(fields.map((field) => field.width));
       const helperCost = uses * 2 + inlineCost + 1;
       const inlineTotal = uses * inlineCost;
       return inlineTotal - helperCost >= DISPLAY_HELPER_MIN_SAVINGS;
@@ -7837,18 +11866,21 @@ var MKProEmulatorBundle = (() => {
       return helper;
     }
     shouldShareShowSequence(first, second) {
-      if (first.items.some((item) => item.kind === "literal")) return false;
-      if (second.items.some((item) => item.kind === "literal")) return false;
+      const firstFields = this.numericDisplayFields(first);
+      const secondFields = this.numericDisplayFields(second);
+      if (firstFields === void 0 || secondFields === void 0) return false;
       const uses = this.showSequenceUseCounts.get(showSequenceKey(first.name, second.name)) ?? 0;
       if (uses < 2) return false;
-      const bodyCost = estimatePackedDisplayBodyCost(first.sources.length) + estimatePackedDisplayBodyCost(second.sources.length);
+      const bodyCost = estimatePackedDisplayBodyCost(firstFields.map((field) => field.width)) + estimatePackedDisplayBodyCost(secondFields.map((field) => field.width));
       const inlineTotal = uses * (bodyCost + 1);
       const helperTotal = uses * 3 + bodyCost + 1;
       return inlineTotal - helperTotal >= DISPLAY_HELPER_MIN_SAVINGS;
     }
     compileTextDisplay(display, line) {
-      const [literal, source, ...rest] = display.items;
-      if (literal?.kind !== "literal" || literal.text !== "BEEr " || source?.kind !== "source" || rest.length !== 0) {
+      const normalized = this.collapseTextPrefixDisplay(display);
+      if (normalized === void 0) return false;
+      const { text, source } = normalized;
+      if (text !== "BEEr " || source.width !== void 0 && source.width !== 2) {
         return false;
       }
       const field = this.findStateField(source.name);
@@ -7861,9 +11893,105 @@ var MKProEmulatorBundle = (() => {
       this.emitTwoDigitTextDisplay(source.name, line);
       this.optimizations.push({
         name: "screen-text-lowering",
-        detail: `Lowered screen ${display.name} as visible text ${JSON.stringify(literal.text)} plus ${source.name}.`
+        detail: `Lowered screen ${display.name} as visible text ${JSON.stringify(text)} plus ${source.name}.`
       });
       return true;
+    }
+    compileLiteralDisplay(display, line) {
+      const compiled = this.compileLiteralDisplayBody(display, line);
+      if (!compiled) return false;
+      this.optimizations.push({
+        name: "screen-video-literal-lowering",
+        detail: `Lowered screen ${display.name} as a literal calculator video string.`
+      });
+      return true;
+    }
+    compileLiteralDisplayBody(display, line) {
+      const literal = this.collapseLiteralOnlyDisplay(display);
+      if (literal === void 0) return false;
+      const program = displayLiteralProgram(literal);
+      if (program === void 0) return false;
+      if (program.kind === "error") {
+        this.emitErrorStopOpcode(`show ${display.name}`, line);
+        this.optimizations.push({
+          name: "error-stop",
+          detail: `Used one-cell error opcode to show literal \u0415\u0413\u04130\u0413 for screen ${display.name}.`
+        });
+      } else if (program.kind === "kinv") {
+        this.emitNumberOrPreload(program.digits);
+        this.emitOp(58, "\u041A \u0418\u041D\u0412", "display literal video bytes", line);
+      } else {
+        this.emitNumberOrPreload(program.left);
+        this.emitOp(14, "\u0412\u2191", "display literal x/y split", line);
+        this.emitNumberOrPreload(program.right);
+        this.emitOp(57, "\u041A \u2295", "display literal video bytes", line);
+      }
+      if (program.kind !== "error" && program.negative) {
+        this.emitOp(11, "/-/", "display literal sign", line);
+      }
+      if (program.kind === "error") return true;
+      this.emitOp(80, "\u0421/\u041F", `show ${display.name}`, line);
+      return true;
+    }
+    compileLiteralHalt(literal, line) {
+      const program = displayLiteralProgram(literal);
+      if (program?.kind !== "error") {
+        this.diagnostics.push(buildDiagnostic("error", `Only stop "\u0415\u0413\u0413\u041E\u0413" literal stops are supported.`, line));
+        return;
+      }
+      this.emitErrorStopOpcode("halt literal \u0415\u0413\u04130\u0413", line);
+      this.optimizations.push({
+        name: "error-stop",
+        detail: `Used one-cell error opcode for literal \u0415\u0413\u04130\u0413 stop at line ${line}.`
+      });
+    }
+    emitErrorStopOpcode(comment, line) {
+      this.emitOp(43, "error 2B", comment, line);
+    }
+    sharedLiteralDisplayHelper(display, line) {
+      if (!this.shouldShareLiteralDisplay(display)) return void 0;
+      const existing = this.literalDisplayHelpers.get(display.name);
+      if (existing !== void 0) return existing;
+      const helper = {
+        display,
+        label: `__display_literal_${display.name}`,
+        line
+      };
+      this.literalDisplayHelpers.set(display.name, helper);
+      return helper;
+    }
+    shouldShareLiteralDisplay(display) {
+      const literal = this.collapseLiteralOnlyDisplay(display);
+      const program = literal === void 0 ? void 0 : displayLiteralProgram(literal);
+      if (program === void 0) return false;
+      const uses = this.displayUseCounts.get(display.name) ?? 0;
+      if (uses < 2) return false;
+      if (program.kind === "error") return false;
+      const signCost = program.negative ? 1 : 0;
+      const bodyCost = program.kind === "kinv" ? program.digits.length + 2 + signCost : program.left.length + program.right.length + 3 + signCost;
+      const helperCost = uses * 2 + bodyCost + 1;
+      const inlineTotal = uses * bodyCost;
+      return inlineTotal - helperCost >= DISPLAY_HELPER_MIN_SAVINGS;
+    }
+    collapseLiteralOnlyDisplay(display) {
+      if (display.items.length === 0 || display.items.some((item) => item.kind !== "literal")) return void 0;
+      const text = display.items.map((item) => item.kind === "literal" ? item.text : "").join("");
+      return text.trim().length === 0 ? void 0 : text;
+    }
+    collapseTextPrefixDisplay(display) {
+      let text = "";
+      let source;
+      for (const item of display.items) {
+        if (item.kind === "literal") {
+          if (source !== void 0) return void 0;
+          text += item.text;
+          continue;
+        }
+        if (source !== void 0) return void 0;
+        source = item;
+      }
+      if (source === void 0 || text.length === 0) return void 0;
+      return { text, source };
     }
     emitTwoDigitTextDisplay(source, line) {
       this.emitRecall(source, "text display verse", line);
@@ -7933,9 +12061,10 @@ var MKProEmulatorBundle = (() => {
       if (!block && proc) {
         if (this.inlineProcNames.has(proc.name)) {
           this.compileStatements(proc.body);
+          const uses = this.procCallCounts.get(proc.name) ?? 0;
           this.optimizations.push({
-            name: "single-use-rule-inline",
-            detail: `Inlined single-use rule ${proc.name} at line ${line}.`
+            name: uses === 1 ? "single-use-rule-inline" : "size-model-rule-inline",
+            detail: uses === 1 ? `Inlined single-use rule ${proc.name} at line ${line}.` : `Inlined ${uses}-use rule ${proc.name} because it is smaller than a \u041F\u041F/\u0412/\u041E subroutine.`
           });
           return;
         }
@@ -7948,10 +12077,22 @@ var MKProEmulatorBundle = (() => {
           return;
         }
         this.emitJump(83, "\u041F\u041F", proc.name, `proc call ${proc.name}`, line);
+        const returnX = this.procReturnXVariable(proc);
+        if (returnX !== void 0) {
+          this.currentXVariable = returnX;
+          this.currentXAliases = /* @__PURE__ */ new Set([returnX]);
+          this.currentXKnownZero = false;
+        }
         this.optimizations.push({
           name: "proc-call-lowering",
           detail: `Compiled call to rule ${proc.name} as \u041F\u041F/\u0412/\u041E subroutine.`
         });
+        if (returnX !== void 0) {
+          this.optimizations.push({
+            name: "proc-return-x-reuse",
+            detail: `Tracked ${returnX} in X after returning from rule ${proc.name}.`
+          });
+        }
         return;
       }
       if (!block) {
@@ -7979,7 +12120,10 @@ var MKProEmulatorBundle = (() => {
         nonpositive: [23, "F lg"],
         negative: [33, "F sqrt"],
         gt_one: [25, "F sin^-1"],
-        ge_100: [21, "F 10^x"]
+        ge_100: [21, "F 10^x"],
+        // К °->′" rejects a fractional part >= 0.6 (no valid minutes/seconds),
+        // making it a one-cell trap for that domain.
+        frac_ge_06: [42, '\u041A \xB0->\u2032"']
       };
       const [opcode, mnemonic] = mapping[statement.trap];
       this.emitOp(
@@ -7993,6 +12137,11 @@ var MKProEmulatorBundle = (() => {
         detail: `Used ${mnemonic} as trap ${statement.trap} at line ${statement.line}.`
       });
     }
+    procReturnXVariable(proc) {
+      if (this.statementsTerminate(proc.body)) return void 0;
+      const last = proc.body.at(-1);
+      return last?.kind === "assign" ? last.target : void 0;
+    }
     compileUnitDecrement(statement) {
       if (!isUnitDecrementExpression(statement.target, statement.expr)) return false;
       const register = this.allocation.registers[statement.target];
@@ -8000,7 +12149,13 @@ var MKProEmulatorBundle = (() => {
       const opcode = flOpcode(register);
       if (opcode === void 0) return false;
       const after = this.freshLabel("fl_decrement_done");
+      const preservedXVariable = this.currentXVariable === statement.target ? void 0 : this.currentXVariable;
+      const preservedXKnownZero = this.currentXKnownZero;
       this.emitJump(opcode, getOpcode(opcode).name, after, `decrement ${statement.target}`, statement.line);
+      this.currentXVariable = preservedXVariable;
+      this.currentXAliases = preservedXVariable !== void 0 ? /* @__PURE__ */ new Set([preservedXVariable]) : /* @__PURE__ */ new Set();
+      this.currentXKnownZero = preservedXKnownZero;
+      this.machineEntryOpen = false;
       this.emitLabel(after);
       this.optimizations.push({
         name: "fl-unit-decrement",
@@ -8010,10 +12165,11 @@ var MKProEmulatorBundle = (() => {
     }
     compileCondition(condition, falseLabel, line) {
       if (this.compileNegativeZeroThresholdFlow(condition, falseLabel, line)) return;
+      const preloadedConstants = new Set(Object.keys(this.allocation.constants));
       const selected = selectCheaperEquivalentCondition(
         condition,
         this.ast,
-        new Set(Object.keys(this.allocation.constants))
+        preloadedConstants
       );
       if (selected.changed) {
         this.optimizations.push({
@@ -8022,16 +12178,20 @@ var MKProEmulatorBundle = (() => {
         });
       }
       const compiledCondition = selected.condition;
+      if (this.compileNearAnyHelperCondition(compiledCondition, falseLabel, line, preloadedConstants)) return;
+      if (this.compileSmallSetCondition(compiledCondition, falseLabel, line, preloadedConstants)) return;
       if (isZeroExpression(compiledCondition.right) && canTestAgainstZeroDirectly(compiledCondition.op)) {
-        const usedSpatialHit = this.compileBitHasConditionWithSpatialHelper(compiledCondition.left, line);
-        if (!usedSpatialHit) {
-          this.compileExpression(compiledCondition.left);
+        const bitHasLowering = this.compileBitHasConditionWithBitMaskHelper(compiledCondition.left, line) ?? this.compileBitHasConditionWithSpatialHelper(compiledCondition.left, line);
+        if (bitHasLowering === void 0) {
+          if (!(compiledCondition.left.kind === "identifier" && this.xHolds(compiledCondition.left.name))) {
+            this.compileExpression(compiledCondition.left);
+          }
         }
         const opcode2 = directTestOpcode(compiledCondition.op);
         this.emitJump(opcode2, getOpcode(opcode2).name, falseLabel, `false branch for ${condition.op}`, line);
         this.optimizations.push({
-          name: usedSpatialHit ? "spatial-hit-condition-helper" : "zero-condition-test",
-          detail: usedSpatialHit ? `Tested bit_has() through the shared spatial hit helper at line ${line}.` : `Tested ${compiledCondition.op} 0 without materializing a zero literal at line ${line}.`
+          name: bitHasLowering?.name ?? "zero-condition-test",
+          detail: bitHasLowering?.detail ?? `Tested ${compiledCondition.op} 0 without materializing a zero literal at line ${line}.`
         });
         return;
       }
@@ -8047,6 +12207,130 @@ var MKProEmulatorBundle = (() => {
       const opcode = compiledCondition.op === "<" || compiledCondition.op === ">" ? 92 : compiledCondition.op === ">=" || compiledCondition.op === "<=" ? 89 : compiledCondition.op === "==" ? 94 : 87;
       const mnemonic = getOpcode(opcode).name;
       this.emitJump(opcode, mnemonic, falseLabel, `false branch for ${compiledCondition.op}`, line);
+    }
+    compileBitHasConditionWithBitMaskHelper(expr, line) {
+      if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_has" || expr.args.length !== 2) return void 0;
+      const [mask, index] = expr.args;
+      if (mask?.kind !== "identifier" || index === void 0) return void 0;
+      if (!programHasLineCountForMask(this.ast, mask.name)) return void 0;
+      const scratch = spatialHitScratchName(mask.name);
+      if (!this.allocation.registers[scratch]) return void 0;
+      const helper = this.ensureSpatialBitMaskHelper(scratch, line);
+      this.compileExpression(index);
+      this.emitJump(83, "\u041F\u041F", helper.label, "bit_mask helper", line);
+      this.compileExpression(mask);
+      this.emitOp(55, "\u041A \u2227", "bit membership test", line);
+      return {
+        name: "bit-mask-condition-helper",
+        detail: `Tested bit_has() through the shared bit_mask helper at line ${line}.`
+      };
+    }
+    compileBitHasConditionWithSpatialHelper(expr, line) {
+      if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_has" || expr.args.length !== 2) return void 0;
+      const [mask, index] = expr.args;
+      if (mask?.kind !== "identifier" || index === void 0) return void 0;
+      const scratch = spatialHitScratchName(mask.name);
+      if (!this.allocation.registers[scratch]) return void 0;
+      const helper = this.ensureSpatialHitHelper(mask.name, scratch);
+      this.compileExpression(index);
+      this.emitJump(83, "\u041F\u041F", helper.label, `spatial hit ${mask.name}`, line);
+      return {
+        name: "spatial-hit-condition-helper",
+        detail: `Tested bit_has() through the shared spatial hit helper at line ${line}.`
+      };
+    }
+    compileEqualityWithCurrentX(condition, falseLabel, line) {
+      if (condition.op !== "==" && condition.op !== "!=") return false;
+      if (condition.right.kind === "identifier" && this.xHolds(condition.right.name) && isSimpleStackLoad(condition.left)) {
+        this.compileExpression(condition.left);
+      } else if (condition.left.kind === "identifier" && this.xHolds(condition.left.name) && isSimpleStackLoad(condition.right)) {
+        this.compileExpression(condition.right);
+      } else {
+        return false;
+      }
+      this.emitOp(17, "-", "condition compare", line);
+      const opcode = condition.op === "==" ? 94 : 87;
+      this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${condition.op}`, line);
+      this.optimizations.push({
+        name: "condition-current-x-reuse",
+        detail: `Reused the value already in X for equality comparison at line ${line}.`
+      });
+      return true;
+    }
+    compileNearAnyHelperCondition(condition, falseLabel, line, preloadedConstants) {
+      const match = matchNearAnyHelperCondition(condition);
+      if (match === void 0) return false;
+      const key = nearAnyHelperKey(match.value, match.radius);
+      const stats = this.nearAnyHelperStats.get(key);
+      if (stats === void 0 || stats.helperCost >= stats.ordinaryCost) return false;
+      const helper = this.nearAnyHelper(match.value, match.radius, line);
+      this.compileNearAnyMarginWithHelper(match, helper.label, line);
+      const opcode = directTestOpcode(match.op);
+      this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${match.op}`, line);
+      this.optimizations.push({
+        name: "near-any-helper-lowering",
+        detail: `Lowered ${conditionToText(condition)} through shared near_any helper at line ${line} (${stats.helperCost} vs ${stats.ordinaryCost} estimated group steps).`
+      });
+      return true;
+    }
+    compileNearAnyMarginWithHelper(match, label, line) {
+      for (let index = 0; index < match.candidates.length; index += 1) {
+        const candidate = match.candidates[index];
+        this.compileNearAnyCandidate(candidate, line);
+        this.emitJump(83, "\u041F\u041F", label, "near_any candidate", line);
+        if (index > 0) this.emitOp(54, "\u041A max", "near_any max margin", line);
+      }
+    }
+    compileNearAnyCandidate(candidate, line) {
+      if (candidate.kind === "identifier" && this.xHolds(candidate.name)) {
+        this.optimizations.push({
+          name: "stack-current-x-scheduling",
+          detail: `Reused ${candidate.name} already in X for near_any candidate at line ${line}.`
+        });
+        return;
+      }
+      this.compileExpression(candidate);
+    }
+    nearAnyHelper(value, radius, line) {
+      const key = nearAnyHelperKey(value, radius);
+      const existing = this.nearAnyHelpers.get(key);
+      if (existing !== void 0) return existing;
+      const helper = {
+        value,
+        radius,
+        label: `__near_any_${this.nearAnyHelpers.size}`,
+        ...line === void 0 ? {} : { line }
+      };
+      this.nearAnyHelpers.set(key, helper);
+      return helper;
+    }
+    compileSmallSetCondition(condition, falseLabel, line, preloadedConstants) {
+      const match = matchSmallSetCondition(condition);
+      if (match === void 0) return false;
+      const selectedCost = estimateSmallSetConditionCost(match, preloadedConstants);
+      const ordinaryCost = conditionCompileCost(condition, preloadedConstants);
+      if (selectedCost >= ordinaryCost) return false;
+      if (match.mode === "any") {
+        const trueLabel = this.freshLabel(`${match.kind}_any_true`);
+        for (const item of match.tests.slice(0, -1)) {
+          this.compileExpression(item.expr);
+          this.emitJump(item.trueOpcode, getOpcode(item.trueOpcode).name, trueLabel, `${match.kind} any hit`, line);
+        }
+        const last = match.tests.at(-1);
+        this.compileExpression(last.expr);
+        this.emitJump(last.falseOpcode, getOpcode(last.falseOpcode).name, falseLabel, `${match.kind} any miss`, line);
+        this.emitLabel(trueLabel);
+      } else {
+        for (const item of match.tests) {
+          this.compileExpression(item.expr);
+          this.emitJump(item.falseOpcode, getOpcode(item.falseOpcode).name, falseLabel, `${match.kind} all miss`, line);
+        }
+      }
+      this.optimizations.push({
+        name: "small-set-condition-lowering",
+        detail: `Lowered ${conditionToText(condition)} as ${match.tests.length} direct small-set test${match.tests.length === 1 ? "" : "s"} at line ${line} (${selectedCost} vs ${ordinaryCost} estimated steps).`
+      });
+      return true;
     }
     compileNegativeZeroThresholdFlow(condition, falseLabel, line) {
       const register = this.allocation.negativeZeroDegree;
@@ -8084,37 +12368,16 @@ var MKProEmulatorBundle = (() => {
       this.emitOp(18, "*", "negative-zero threshold zero-through", line);
       this.emitOp(14, "\u0412\u2191", "normalize negative-zero threshold result", line);
     }
-    compileBitHasConditionWithSpatialHelper(expr, line) {
-      if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_has" || expr.args.length !== 2) return false;
-      const [mask, index] = expr.args;
-      if (mask?.kind !== "identifier" || index === void 0) return false;
-      const scratch = spatialHitScratchName(mask.name);
-      if (!this.allocation.registers[scratch]) return false;
-      const helper = this.ensureSpatialHitHelper(mask.name, scratch);
-      this.compileExpression(index);
-      this.emitJump(83, "\u041F\u041F", helper.label, `spatial hit ${mask.name}`, line);
-      return true;
-    }
-    compileEqualityWithCurrentX(condition, falseLabel, line) {
-      if (condition.op !== "==" && condition.op !== "!=") return false;
-      const reused = this.currentXVariable;
-      if (condition.right.kind === "identifier" && condition.right.name === reused && isSimpleStackLoad(condition.left)) {
-        this.compileExpression(condition.left);
-      } else if (condition.left.kind === "identifier" && condition.left.name === reused && isSimpleStackLoad(condition.right)) {
-        this.compileExpression(condition.right);
-      } else {
-        return false;
-      }
-      this.emitOp(17, "-", "condition compare", line);
-      const opcode = condition.op === "==" ? 94 : 87;
-      this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${condition.op}`, line);
-      this.optimizations.push({
-        name: "condition-current-x-reuse",
-        detail: `Reused ${reused} already in X for equality comparison at line ${line}.`
-      });
-      return true;
-    }
     compileExpression(expr) {
+      const randomCellHelper = this.sharedRandomCellHelper(expr);
+      if (randomCellHelper !== void 0) {
+        this.emitJump(83, "\u041F\u041F", randomCellHelper.label, `random cell ${expressionToIntentText(expr)}`);
+        this.optimizations.push({
+          name: "random-cell-helper-call",
+          detail: `Reused shared random cell helper for ${expressionToIntentText(expr)}.`
+        });
+        return;
+      }
       const helper = this.sharedExpressionHelper(expr);
       if (helper !== void 0) {
         this.emitJump(83, "\u041F\u041F", helper.label, `expr ${expressionToIntentText(expr)}`);
@@ -8169,6 +12432,9 @@ var MKProEmulatorBundle = (() => {
           if ((expr.op === "+" || expr.op === "*") && this.compileCommutativeWithCurrentX(expr)) {
             return;
           }
+          if (this.compileStackDuplicatedBinary(expr)) {
+            return;
+          }
           this.compileExpression(expr.left);
           this.compileExpression(expr.right);
           this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
@@ -8194,7 +12460,7 @@ var MKProEmulatorBundle = (() => {
     }
     compileCommutativeWithCurrentX(expr) {
       if (this.currentXVariable === void 0) return false;
-      if (expr.left.kind === "identifier" && expr.left.name === this.currentXVariable && isSimpleStackLoad(expr.right)) {
+      if (expr.left.kind === "identifier" && this.xHolds(expr.left.name) && isSimpleStackLoad(expr.right)) {
         this.compileExpression(expr.right);
         this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
         this.optimizations.push({
@@ -8203,7 +12469,7 @@ var MKProEmulatorBundle = (() => {
         });
         return true;
       }
-      if (expr.right.kind === "identifier" && expr.right.name === this.currentXVariable && isSimpleStackLoad(expr.left)) {
+      if (expr.right.kind === "identifier" && this.xHolds(expr.right.name) && isSimpleStackLoad(expr.left)) {
         this.compileExpression(expr.left);
         this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
         this.optimizations.push({
@@ -8213,6 +12479,54 @@ var MKProEmulatorBundle = (() => {
         return true;
       }
       return false;
+    }
+    // Stack-duplicate a repeated pure operand: `e op e` becomes compute(e), В↑,
+    // op, so the shared value is reused from the stack (Y) instead of recomputed.
+    // Only applies to pure operands (so one evaluation equals two) and only when it
+    // actually saves cells versus recomputing the operand.
+    compileStackDuplicatedBinary(expr) {
+      if (!expressionEquals(expr.left, expr.right)) return false;
+      if (!isPureExpression(expr.left)) return false;
+      if (estimateExpressionCost2(expr.left) <= 1) return false;
+      this.compileExpression(expr.left);
+      this.emitOp(14, "\u0412\u2191", "duplicate repeated operand through stack");
+      this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
+      this.optimizations.push({
+        name: "stack-current-x-scheduling",
+        detail: `Duplicated ${expressionToIntentText(expr.left)} through the stack (\u0412\u2191) for ${expr.op} instead of recomputing it.`
+      });
+      return true;
+    }
+    // Shared tail for the integer/fractional parts of one pure operand. When two
+    // adjacent assignments take int(e) and frac(e) of the same pure expression e,
+    // compute e once, duplicate it through the stack (В↑), take К [x] for the
+    // integer target, swap the saved copy back with X↔Y, and take К {x} for the
+    // fractional target. Both parts are produced by their own opcodes (identical
+    // behavior, including the -0 fractional result of negative integers), and the
+    // operand is evaluated once instead of twice.
+    compileIntFracSharedTail(first, second) {
+      const a = matchIntOrFracCall(first.expr);
+      const b = matchIntOrFracCall(second.expr);
+      if (a === void 0 || b === void 0) return false;
+      if (a.fn === b.fn) return false;
+      if (!expressionEquals(a.arg, b.arg)) return false;
+      if (!expressionPureForSubstitution(a.arg)) return false;
+      if (first.target === second.target) return false;
+      if (estimateExpressionCost2(a.arg) <= 2) return false;
+      const intStatement = a.fn === "int" ? first : second;
+      const fracStatement = a.fn === "frac" ? first : second;
+      this.compileExpression(a.arg);
+      this.emitOp(14, "\u0412\u2191", "duplicate operand for shared int/frac tail");
+      this.emitOp(52, "\u041A [x]", "int()");
+      this.emitStore(intStatement.target, `set ${intStatement.target}`, intStatement.line);
+      this.emitOp(20, "XY", "restore saved operand for frac()");
+      this.emitOp(53, "\u041A {x}", "frac()");
+      this.emitStore(fracStatement.target, `set ${fracStatement.target}`, fracStatement.line);
+      this.optimizations.push({
+        name: "int-frac-shared-tail",
+        detail: `Computed ${expressionToIntentText(a.arg)} once and derived int()/frac() through a shared \u0412\u2191/X\u2194Y tail.`
+      });
+      return true;
     }
     compileRemainderByConstant(expr) {
       const matched = matchRemainderByConstant(expr);
@@ -8228,6 +12542,31 @@ var MKProEmulatorBundle = (() => {
         detail: `Lowered ${expressionToIntentText(expr)} without recomputing the dividend.`
       });
       return true;
+    }
+    sharedRandomCellHelper(expr) {
+      if (this.emittingRandomCellHelper) return void 0;
+      if (!this.shouldShareRandomCellExpression(expr)) return void 0;
+      const key = expressionToIntentText(expr);
+      const existing = this.randomCellHelpers.get(key);
+      if (existing !== void 0) return existing;
+      const helper = {
+        expr,
+        label: `__random_cell_${this.randomCellHelpers.size}`
+      };
+      this.randomCellHelpers.set(key, helper);
+      return helper;
+    }
+    shouldShareRandomCellExpression(expr) {
+      if (!isRandomCellExpressionShape(expr)) return false;
+      const key = expressionToIntentText(expr);
+      const uses = this.expressionUseCounts.get(key)?.count ?? 0;
+      if (uses < 2) return false;
+      const preloadedConstants = new Set(Object.keys(this.allocation.constants));
+      const cost = estimateExpressionCostForCondition(expr, preloadedConstants);
+      const inlineTotal = uses * cost;
+      const helperTotal = uses * 2 + cost + 1;
+      const threshold = this.loweringOptions.shareRandomCell === true ? 1 : EXPRESSION_HELPER_MIN_SAVINGS;
+      return inlineTotal - helperTotal >= threshold;
     }
     sharedExpressionHelper(expr) {
       if (this.emittingExpressionHelper) return void 0;
@@ -8260,6 +12599,10 @@ var MKProEmulatorBundle = (() => {
         this.compileDirectionCall(expr);
         return;
       }
+      if (name === "__direction_cardinal") {
+        this.compileCardinalDirectionCall(expr);
+        return;
+      }
       if (name === "neighbor_count" || name === "line_count") {
         if (this.compileSpatialCountCall(name, expr)) return;
       }
@@ -8273,6 +12616,22 @@ var MKProEmulatorBundle = (() => {
         this.diagnostics.push({
           level: "error",
           message: `${expr.callee}() expects ${ticTacToeMacroArity(name)} arguments, got ${expr.args.length}.`
+        });
+        return;
+      }
+      if (isSmallSetMacroName(name) && !smallSetMacroArityOk(name, expr.args.length)) {
+        this.diagnostics.push({
+          level: "error",
+          message: `${expr.callee}() expects ${smallSetMacroArityText(name)}, got ${expr.args.length}.`
+        });
+        return;
+      }
+      const smallSetMacro = smallSetExpressionMacro(name, expr.args);
+      if (smallSetMacro !== void 0) {
+        this.compileExpression(smallSetMacro);
+        this.optimizations.push({
+          name: "small-set-primitive-lowering",
+          detail: `Lowered ${expr.callee}() to coordinate-set arithmetic.`
         });
         return;
       }
@@ -8435,6 +12794,66 @@ var MKProEmulatorBundle = (() => {
         detail: `Lowered direction(${arg.name}) through a shared keypad geometry formula.`
       });
     }
+    compileCardinalDirectionCall(expr) {
+      const keyRegister = this.directionKeyRegister(expr);
+      if (keyRegister === void 0) return;
+      const yAxis = this.freshLabel("direction_cardinal_y_axis");
+      const done = this.freshLabel("direction_cardinal_done");
+      this.emitOp(96 + registerIndex(keyRegister), `\u041F->X ${keyRegister}`, "cardinal direction key");
+      this.emitNumberOrPreload("5");
+      this.emitOp(17, "-", "cardinal direction key-5");
+      this.emitOp(49, "\u041A |x|", "cardinal direction axis test");
+      this.emitNumberOrPreload("1");
+      this.emitOp(17, "-", "cardinal direction axis discriminator");
+      this.emitJump(94, "F x=0", yAxis, "cardinal direction y-axis");
+      this.emitOp(96 + registerIndex(keyRegister), `\u041F->X ${keyRegister}`, "cardinal direction x key");
+      this.emitNumberOrPreload("5");
+      this.emitOp(17, "-", "cardinal direction key-5");
+      this.emitNumberOrPreload("10");
+      this.emitOp(18, "*", "cardinal direction x delta");
+      this.emitJump(81, "\u0411\u041F", done, "cardinal direction done");
+      this.emitLabel(yAxis);
+      this.emitNumberOrPreload("5");
+      this.emitOp(96 + registerIndex(keyRegister), `\u041F->X ${keyRegister}`, "cardinal direction y key");
+      this.emitOp(17, "-", "cardinal direction 5-key");
+      this.emitNumberOrPreload("3");
+      this.emitOp(19, "/", "cardinal direction y delta");
+      this.emitLabel(done);
+      this.optimizations.push({
+        name: "direction-cardinal-lowering",
+        detail: `Lowered guarded cardinal direction(${this.directionKeyName(expr)}) without floor-key cases.`
+      });
+    }
+    directionKeyRegister(expr) {
+      if (expr.args.length !== 1) {
+        this.diagnostics.push({
+          level: "error",
+          message: `direction() expects one keypad argument, got ${expr.args.length}.`
+        });
+        return void 0;
+      }
+      const arg = expr.args[0];
+      if (arg.kind !== "identifier") {
+        this.diagnostics.push({
+          level: "error",
+          message: "direction() currently requires an identifier argument so the optimizer can reuse its register."
+        });
+        return void 0;
+      }
+      const keyRegister = this.allocation.registers[arg.name];
+      if (!keyRegister) {
+        this.diagnostics.push({
+          level: "error",
+          message: `Unknown direction key '${arg.name}'.`
+        });
+        return void 0;
+      }
+      return keyRegister;
+    }
+    directionKeyName(expr) {
+      const arg = expr.args[0];
+      return arg?.kind === "identifier" ? arg.name : "?";
+    }
     compileSpatialCountCall(name, expr) {
       if (expr.args.length !== 2) {
         this.diagnostics.push({
@@ -8557,6 +12976,30 @@ var MKProEmulatorBundle = (() => {
       const helperTakesCounterInX = counterRegister !== void 0 && flOpcode(counterRegister) !== void 0;
       this.emitZero(`${operation} total`, sourceLine);
       this.emitStore(total, `${operation} total`, sourceLine);
+      if (useMax && progressions.length >= 3 && this.allocation.registers[spatialCountStepScratchName()] !== void 0) {
+        const helper = this.ensureSpatialLineProgressionHelper(hitMask, cell, operation, sourceLine);
+        for (const progression of progressions) {
+          this.emitZero(`${operation} current line`, sourceLine);
+          this.emitStore(line, `${operation} current line`, sourceLine);
+          this.compileExpression(progression.startOffset);
+          this.emitStore(offset, `${operation} offset`, sourceLine);
+          this.compileExpression(progression.step);
+          this.emitStore(spatialCountStepScratchName(), `${operation} step`, sourceLine);
+          this.emitNumberOrPreload(String(progression.count));
+          this.emitStore(counter, `${operation} counter`, sourceLine);
+          this.emitJump(83, "\u041F\u041F", helper.label, `${operation} line progression`, sourceLine);
+          this.emitRecall(total, `${operation} total`);
+          this.emitRecall(line, `${operation} current line`);
+          this.emitOp(54, "\u041A max", `${operation} best line`);
+          this.emitStore(total, `${operation} total`);
+        }
+        this.emitRecall(total, `${operation} result`);
+        this.optimizations.push({
+          name: "spatial-line-progression-helper-call",
+          detail: `Reused shared ${operation} line progression helper for ${hitMask}.`
+        });
+        return;
+      }
       if (!useMax && progressions.length >= 3) {
         const helper = this.ensureSpatialSumLoopHelper(hitMask, cell, operation, sourceLine);
         for (const progression of progressions) {
@@ -8625,6 +13068,41 @@ var MKProEmulatorBundle = (() => {
         name: `spatial-${operation.replace("_", "-")}-loop`,
         detail: `Lowered ${operation}(...) as shared spatial hit loops.`
       });
+    }
+    emitSpatialLineProgressionHelperBody(hitMask, cell, operation, sourceLine) {
+      const scratch = spatialCountScratchNames();
+      const line = scratch[1];
+      const offset = scratch[2];
+      const counter = scratch[3];
+      const counterRegister = this.allocation.registers[counter];
+      const flCounterOpcode = counterRegister === void 0 ? void 0 : flOpcode(counterRegister);
+      const start = this.freshLabel(`${operation}_line_loop`);
+      this.emitLabel(start);
+      this.compileExpression(addExpressions2(cell, { kind: "identifier", name: offset }));
+      const helper = this.ensureSpatialHitHelper(hitMask, spatialHitScratchName(hitMask));
+      this.emitJump(83, "\u041F\u041F", helper.label, `spatial hit ${hitMask}`, sourceLine);
+      this.emitRecall(line, `${operation} line accumulator`);
+      this.emitOp(16, "+", `${operation} add hit`);
+      this.emitStore(line, `${operation} line accumulator`);
+      this.emitRecall(offset, `${operation} offset`);
+      this.emitRecall(spatialCountStepScratchName(), `${operation} step`);
+      this.emitOp(16, "+", `${operation} next offset`);
+      this.emitStore(offset, `${operation} offset`);
+      if (flCounterOpcode !== void 0) {
+        this.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, `${operation} line loop`, sourceLine);
+        this.optimizations.push({
+          name: "spatial-count-fl-loop",
+          detail: `Used ${getOpcode(flCounterOpcode).name} for ${operation} line progression loop counter.`
+        });
+      } else {
+        this.emitRecall(counter, `${operation} counter`);
+        this.emitNumber("1");
+        this.emitOp(17, "-", `${operation} decrement`);
+        this.emitStore(counter, `${operation} counter`);
+        this.emitRecall(counter, `${operation} counter`);
+        this.emitJump(94, "F x=0", start, `${operation} line loop`, sourceLine);
+      }
+      this.emitRecall(line, `${operation} current line`);
     }
     emitSpatialSumLoopHelperBody(hitMask, cell, operation, sourceLine) {
       const scratch = spatialCountScratchNames();
@@ -8778,6 +13256,20 @@ var MKProEmulatorBundle = (() => {
       this.spatialSumLoopHelpers.set(key, helper);
       return helper;
     }
+    ensureSpatialLineProgressionHelper(hitMask, cell, operation, line) {
+      const key = `${operation}:${hitMask}:${expressionToIntentText(cell)}`;
+      const existing = this.spatialLineProgressionHelpers.get(key);
+      if (existing !== void 0) return existing;
+      const helper = {
+        hitMask,
+        cell,
+        label: `__${operation}_line_progression_${this.spatialLineProgressionHelpers.size}`,
+        operation,
+        ...line === void 0 ? {} : { line }
+      };
+      this.spatialLineProgressionHelpers.set(key, helper);
+      return helper;
+    }
     compileRawStatement(statement) {
       const inputs = statement.inputs ?? [];
       const outputs = statement.outputs ?? [];
@@ -8820,7 +13312,11 @@ var MKProEmulatorBundle = (() => {
     }
     emitNumber(raw) {
       this.currentXVariable = void 0;
+      this.currentXAliases.clear();
       this.currentXKnownZero = false;
+      if (this.machineEntryOpen) {
+        this.emitOp(14, "\u0412\u2191", "separate adjacent number entry");
+      }
       const normalized = raw.trim().toLowerCase();
       const negative = normalized.startsWith("-");
       const unsigned = negative ? normalized.slice(1) : normalized;
@@ -8869,14 +13365,19 @@ var MKProEmulatorBundle = (() => {
       }
       this.emitNumber(raw);
     }
-    emitStore(name, comment, sourceLine) {
+    emitStore(name, comment, sourceLine, raw = false) {
       const register = this.allocation.registers[name];
       if (!register) {
         this.diagnostics.push(buildDiagnostic("error", `No register allocated for ${name}`, sourceLine));
         return;
       }
-      this.emitOp(64 + registerIndex(register), `X->\u041F ${register}`, comment, sourceLine);
+      const knownZero = this.currentXKnownZero;
+      const aliases = new Set(this.currentXAliases);
+      this.emitOp(64 + registerIndex(register), `X->\u041F ${register}`, comment, sourceLine, raw);
       this.currentXVariable = name;
+      aliases.add(name);
+      this.currentXAliases = aliases;
+      this.currentXKnownZero = knownZero;
     }
     emitRecall(name, comment, sourceLine) {
       const register = this.allocation.registers[name];
@@ -8886,8 +13387,17 @@ var MKProEmulatorBundle = (() => {
       }
       this.emitOp(96 + registerIndex(register), `\u041F->X ${register}`, comment, sourceLine);
       this.currentXVariable = name;
+      this.currentXAliases = /* @__PURE__ */ new Set([name]);
+    }
+    // True when the value in X is known to equal `name` (directly, or via a
+    // copy-equivalence alias when alias reuse is enabled), so a recall can be
+    // elided. Restricted to scalar reuse sites by callers.
+    xHolds(name) {
+      if (name === this.currentXVariable) return true;
+      return this.loweringOptions.aliasXReuse === true && this.currentXAliases.has(name);
     }
     emitJump(opcode, mnemonic, target, comment, sourceLine) {
+      if (typeof target === "string") this.recordLabelEdge(target, this.currentXVariable);
       this.emitOp(opcode, mnemonic, comment, sourceLine);
       this.emitAddress(target, comment ?? mnemonic, sourceLine);
     }
@@ -8916,10 +13426,25 @@ var MKProEmulatorBundle = (() => {
       if (raw) op.raw = true;
       this.items.push(op);
       this.currentXVariable = void 0;
+      this.currentXAliases.clear();
       this.currentXKnownZero = false;
+      this.machineEntryOpen = opcode <= 12;
+    }
+    recordLabelEdge(label, fact) {
+      if (this.labelEdgeX.has(label)) {
+        if (this.labelEdgeX.get(label) !== fact) this.labelEdgeX.set(label, void 0);
+      } else {
+        this.labelEdgeX.set(label, fact);
+      }
     }
     emitLabel(name) {
       this.items.push({ kind: "label", name });
+      if (this.labelEdgeX.has(name)) {
+        const edgeFact = this.labelEdgeX.get(name);
+        this.currentXVariable = this.currentXVariable === edgeFact ? this.currentXVariable : void 0;
+        this.currentXKnownZero = false;
+      }
+      this.currentXAliases = this.currentXVariable !== void 0 ? /* @__PURE__ */ new Set([this.currentXVariable]) : /* @__PURE__ */ new Set();
     }
     freshLabel(prefix) {
       const label = `__${prefix}_${this.labelCounter}`;
@@ -8927,15 +13452,22 @@ var MKProEmulatorBundle = (() => {
       return label;
     }
   };
-  function findSingleUseProcNames(ast) {
+  function collectProcCallCounts(ast) {
     const procNames = new Set(ast.procs.map((proc) => proc.name));
-    const counts = /* @__PURE__ */ new Map();
+    const counts = countStatementCalls(ast);
+    const procCounts = /* @__PURE__ */ new Map();
+    for (const [name, count] of counts) {
+      if (procNames.has(name)) procCounts.set(name, count);
+    }
+    return procCounts;
+  }
+  function collectRecursiveProcNames(ast) {
+    const procNames = new Set(ast.procs.map((proc) => proc.name));
     const recursive = /* @__PURE__ */ new Set();
     const visit = (statements, currentProc) => {
       for (const statement of statements) {
-        if (statement.kind === "call" && procNames.has(statement.block)) {
-          counts.set(statement.block, (counts.get(statement.block) ?? 0) + 1);
-          if (statement.block === currentProc) recursive.add(statement.block);
+        if (statement.kind === "call" && procNames.has(statement.block) && statement.block === currentProc) {
+          recursive.add(statement.block);
         }
         if (statement.kind === "loop") visit(statement.body, currentProc);
         if (statement.kind === "if") {
@@ -8955,11 +13487,284 @@ var MKProEmulatorBundle = (() => {
     for (const entry of ast.entries) visit(entry.body);
     for (const proc of ast.procs) visit(proc.body, proc.name);
     for (const block of ast.blocks) visit(block.body);
+    return recursive;
+  }
+  function findSingleUseProcNames(ast) {
+    const counts = collectProcCallCounts(ast);
+    const recursive = collectRecursiveProcNames(ast);
     return new Set(
       [...counts.entries()].filter(([name, count]) => count === 1 && !recursive.has(name)).map(([name]) => name)
     );
   }
-  function allocateRegisters(ast, diagnostics) {
+  function findInlineProcNamesBySize(ast, counts = collectProcCallCounts(ast)) {
+    const recursive = collectRecursiveProcNames(ast);
+    const inlineNames = /* @__PURE__ */ new Set();
+    for (const proc of ast.procs) {
+      const uses = counts.get(proc.name) ?? 0;
+      if (uses === 0 || recursive.has(proc.name)) continue;
+      const bodyCost = estimateBranchOrderBodyCost(proc.body, ast);
+      if (!Number.isFinite(bodyCost)) {
+        if (uses === 1) inlineNames.add(proc.name);
+        continue;
+      }
+      const terminal = statementListTerminatesStatically(proc.body, ast);
+      if (uses > 1 && !isStraightLineAssignmentBody(proc.body)) continue;
+      if (uses > 1 && terminal) continue;
+      const subroutineCost = bodyCost + (terminal ? 0 : 1) + uses * 2;
+      const inlineCost = bodyCost * uses;
+      if (inlineCost < subroutineCost) inlineNames.add(proc.name);
+    }
+    return inlineNames;
+  }
+  function isStraightLineAssignmentBody(statements) {
+    return statements.length > 0 && statements.every((statement) => statement.kind === "assign");
+  }
+  function statementListTerminatesStatically(statements, ast) {
+    return statementListTerminatesStaticallySeen(statements, ast, /* @__PURE__ */ new Set());
+  }
+  function statementListTerminatesStaticallySeen(statements, ast, seenProcs) {
+    const last = statements.at(-1);
+    return last !== void 0 && statementTerminatesStatically(last, ast, seenProcs);
+  }
+  function statementTerminatesStatically(statement, ast, seenProcs) {
+    if (statement.kind === "halt" || statement.kind === "loop" || statement.kind === "trap") return true;
+    if (statement.kind === "if") {
+      return statement.elseBody !== void 0 && statementListTerminatesStaticallySeen(statement.thenBody, ast, new Set(seenProcs)) && statementListTerminatesStaticallySeen(statement.elseBody, ast, new Set(seenProcs));
+    }
+    if (statement.kind === "dispatch") {
+      return statement.defaultBody !== void 0 && statementListTerminatesStaticallySeen(statement.defaultBody, ast, new Set(seenProcs)) && statement.cases.every(
+        (dispatchCase) => statementListTerminatesStaticallySeen(dispatchCase.body, ast, new Set(seenProcs))
+      );
+    }
+    if (statement.kind !== "call") return false;
+    const block = ast.blocks.find((candidate) => candidate.name === statement.block);
+    if (block !== void 0) return block.mode !== "inline";
+    const proc = ast.procs.find((candidate) => candidate.name === statement.block);
+    if (proc === void 0 || seenProcs.has(proc.name)) return false;
+    seenProcs.add(proc.name);
+    return statementListTerminatesStaticallySeen(proc.body, ast, seenProcs);
+  }
+  function eliminateUnreachableV2Procs(ast, optimizations) {
+    if (!ast.v2 || ast.procs.length === 0) return;
+    const reachable = collectReachableProcNames(ast);
+    const before = ast.procs.length;
+    ast.procs = ast.procs.filter((proc) => reachable.has(proc.name));
+    const removed = before - ast.procs.length;
+    if (removed === 0) return;
+    optimizations.push({
+      name: "dead-proc-elimination",
+      detail: `Removed ${removed} unreachable lowered rule proc(s) after high-level match/effect lowering.`
+    });
+  }
+  function elideTerminalLoopHeaderShows(ast, optimizations) {
+    const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
+    if (procMap.size === 0) return;
+    const allTerminalCallsByDisplay = /* @__PURE__ */ new Map();
+    const nonTerminalCalls = /* @__PURE__ */ new Set();
+    const visitEveryStatementList = (statements, terminalDisplay) => {
+      for (let index = 0; index < statements.length; index += 1) {
+        const statement = statements[index];
+        const atTail = index === statements.length - 1;
+        collectCallsByPosition(statement, atTail ? terminalDisplay : void 0, procMap, allTerminalCallsByDisplay, nonTerminalCalls);
+        if (statement.kind === "loop") visitEveryStatementList(statement.body, loopHeaderDisplay(statement));
+        if (statement.kind === "if") {
+          visitEveryStatementList(statement.thenBody, atTail ? terminalDisplay : void 0);
+          if (statement.elseBody !== void 0) visitEveryStatementList(statement.elseBody, atTail ? terminalDisplay : void 0);
+        }
+        if (statement.kind === "switch") {
+          for (const switchCase of statement.cases) visitEveryStatementList(switchCase.body, atTail ? terminalDisplay : void 0);
+          if (statement.defaultBody !== void 0) visitEveryStatementList(statement.defaultBody, atTail ? terminalDisplay : void 0);
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visitEveryStatementList(dispatchCase.body, atTail ? terminalDisplay : void 0);
+          if (statement.defaultBody !== void 0) visitEveryStatementList(statement.defaultBody, atTail ? terminalDisplay : void 0);
+        }
+      }
+    };
+    for (const entry of ast.entries) visitEveryStatementList(entry.body);
+    for (const block of ast.blocks) visitEveryStatementList(block.body);
+    for (const proc of ast.procs) {
+      collectStatementListCallsByPosition(proc.body, "__mkpro_terminal_proc_tail", procMap, /* @__PURE__ */ new Map(), nonTerminalCalls);
+    }
+    let removed = 0;
+    for (const [display, calls] of allTerminalCallsByDisplay) {
+      const terminalProcs = expandTerminalProcClosure(calls, procMap, nonTerminalCalls);
+      for (const name of terminalProcs) {
+        const proc = procMap.get(name);
+        if (proc === void 0) continue;
+        removed += elideTailShowInStatementList(proc.body, display);
+      }
+    }
+    if (removed === 0) return;
+    optimizations.push({
+      name: "terminal-loop-screen-elision",
+      detail: `Elided ${removed} terminal show${removed === 1 ? "" : "s"} already provided by the next loop header.`
+    });
+  }
+  function loopHeaderDisplay(statement) {
+    const first = statement.body[0];
+    const second = statement.body[1];
+    return first?.kind === "show" && second?.kind === "input" ? first.display : void 0;
+  }
+  function collectCallsByPosition(statement, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls) {
+    if (statement.kind === "call" && procMap.has(statement.block)) {
+      if (terminalDisplay === void 0) {
+        nonTerminalCalls.add(statement.block);
+      } else {
+        const calls = terminalCallsByDisplay.get(terminalDisplay) ?? /* @__PURE__ */ new Set();
+        calls.add(statement.block);
+        terminalCallsByDisplay.set(terminalDisplay, calls);
+      }
+      return;
+    }
+    if (statement.kind === "if") {
+      collectStatementListCallsByPosition(statement.thenBody, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls);
+      if (statement.elseBody !== void 0) {
+        collectStatementListCallsByPosition(statement.elseBody, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls);
+      }
+    }
+    if (statement.kind === "switch") {
+      for (const switchCase of statement.cases) {
+        collectStatementListCallsByPosition(switchCase.body, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls);
+      }
+      if (statement.defaultBody !== void 0) {
+        collectStatementListCallsByPosition(statement.defaultBody, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls);
+      }
+    }
+    if (statement.kind === "dispatch") {
+      for (const dispatchCase of statement.cases) {
+        collectStatementListCallsByPosition(dispatchCase.body, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls);
+      }
+      if (statement.defaultBody !== void 0) {
+        collectStatementListCallsByPosition(statement.defaultBody, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls);
+      }
+    }
+  }
+  function collectStatementListCallsByPosition(statements, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls) {
+    for (let index = 0; index < statements.length; index += 1) {
+      collectCallsByPosition(
+        statements[index],
+        index === statements.length - 1 ? terminalDisplay : void 0,
+        procMap,
+        terminalCallsByDisplay,
+        nonTerminalCalls
+      );
+    }
+  }
+  function expandTerminalProcClosure(initial, procMap, nonTerminalCalls) {
+    const result = /* @__PURE__ */ new Set();
+    const queue = [...initial].filter((name) => !nonTerminalCalls.has(name));
+    while (queue.length > 0) {
+      const name = queue.shift();
+      if (result.has(name) || nonTerminalCalls.has(name)) continue;
+      const proc = procMap.get(name);
+      if (proc === void 0) continue;
+      result.add(name);
+      const terminalCalls = /* @__PURE__ */ new Set();
+      collectStatementListTerminalCalls(proc.body, procMap, terminalCalls);
+      for (const nested of terminalCalls) {
+        if (!result.has(nested) && !nonTerminalCalls.has(nested)) queue.push(nested);
+      }
+    }
+    return result;
+  }
+  function collectStatementListTerminalCalls(statements, procMap, terminalCalls) {
+    const last = statements.at(-1);
+    if (last === void 0) return;
+    if (last.kind === "call" && procMap.has(last.block)) {
+      terminalCalls.add(last.block);
+      return;
+    }
+    if (last.kind === "if") {
+      collectStatementListTerminalCalls(last.thenBody, procMap, terminalCalls);
+      if (last.elseBody !== void 0) collectStatementListTerminalCalls(last.elseBody, procMap, terminalCalls);
+    }
+    if (last.kind === "switch") {
+      for (const switchCase of last.cases) collectStatementListTerminalCalls(switchCase.body, procMap, terminalCalls);
+      if (last.defaultBody !== void 0) collectStatementListTerminalCalls(last.defaultBody, procMap, terminalCalls);
+    }
+    if (last.kind === "dispatch") {
+      for (const dispatchCase of last.cases) collectStatementListTerminalCalls(dispatchCase.body, procMap, terminalCalls);
+      if (last.defaultBody !== void 0) collectStatementListTerminalCalls(last.defaultBody, procMap, terminalCalls);
+    }
+  }
+  function elideTailShowInStatementList(statements, display) {
+    const last = statements.at(-1);
+    if (last === void 0) return 0;
+    if (last.kind === "show" && last.display === display) {
+      statements.pop();
+      return 1;
+    }
+    let removed = 0;
+    if (last.kind === "if") {
+      removed += elideTailShowInStatementList(last.thenBody, display);
+      if (last.elseBody !== void 0) removed += elideTailShowInStatementList(last.elseBody, display);
+    }
+    if (last.kind === "switch") {
+      for (const switchCase of last.cases) removed += elideTailShowInStatementList(switchCase.body, display);
+      if (last.defaultBody !== void 0) removed += elideTailShowInStatementList(last.defaultBody, display);
+    }
+    if (last.kind === "dispatch") {
+      for (const dispatchCase of last.cases) removed += elideTailShowInStatementList(dispatchCase.body, display);
+      if (last.defaultBody !== void 0) removed += elideTailShowInStatementList(last.defaultBody, display);
+    }
+    return removed;
+  }
+  function collectReachableProcNames(ast) {
+    const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
+    const blockMap = new Map(ast.blocks.map((block) => [block.name, block]));
+    const reachableProcs = /* @__PURE__ */ new Set();
+    const reachableBlocks = /* @__PURE__ */ new Set();
+    const procQueue = [];
+    const blockQueue = [];
+    const enqueueCall = (name) => {
+      if (blockMap.has(name)) {
+        if (!reachableBlocks.has(name)) {
+          reachableBlocks.add(name);
+          blockQueue.push(name);
+        }
+        return;
+      }
+      if (procMap.has(name) && !reachableProcs.has(name)) {
+        reachableProcs.add(name);
+        procQueue.push(name);
+      }
+    };
+    const visit = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "call") enqueueCall(statement.block);
+        if (statement.kind === "loop") visit(statement.body);
+        if (statement.kind === "if") {
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "switch") {
+          for (const switchCase of statement.cases) visit(switchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    while (procQueue.length > 0 || blockQueue.length > 0) {
+      const procName = procQueue.shift();
+      if (procName !== void 0) {
+        const proc = procMap.get(procName);
+        if (proc !== void 0) visit(proc.body);
+        continue;
+      }
+      const blockName = blockQueue.shift();
+      if (blockName !== void 0) {
+        const block = blockMap.get(blockName);
+        if (block !== void 0) visit(block.body);
+      }
+    }
+    return reachableProcs;
+  }
+  function allocateRegisters(ast, diagnostics, freeResidualDispatchScratch = false, suppressConstantPreloads = /* @__PURE__ */ new Set()) {
     const declared = /* @__PURE__ */ new Set();
     const hints = /* @__PURE__ */ new Map();
     const variables = /* @__PURE__ */ new Set();
@@ -8993,12 +13798,13 @@ var MKProEmulatorBundle = (() => {
     warnUndeclaredAssignments(ast, declared, diagnostics);
     collectAssignedVariables(ast, variables);
     collectSwitchScratchVariables(ast, variables);
-    collectDispatchScratchVariables(ast, variables);
+    collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch);
     collectTicTacToeScratchVariables(ast, variables);
     collectBitMaskScratchVariables(ast, variables);
     collectSpatialHitScratchVariables(ast, variables);
     collectSpatialCountScratchVariables(ast, variables);
     collectGuardedUpdateScratchVariables(ast, variables);
+    collectDisplayTemplateScratchVariables(ast, variables);
     const registers = {};
     const used = /* @__PURE__ */ new Set();
     for (const variable of variables) {
@@ -9038,6 +13844,7 @@ var MKProEmulatorBundle = (() => {
     }
     const constants = {};
     for (const value of collectPreloadConstantValues(ast)) {
+      if (suppressConstantPreloads.has(value)) continue;
       const register = pickConstantRegister(used);
       if (!register) break;
       constants[value] = register;
@@ -9129,6 +13936,25 @@ var MKProEmulatorBundle = (() => {
       }
       return void 0;
     }
+    if (variable.startsWith(DISPLAY_TEMPLATE_LOOP_PREFIX)) {
+      for (const candidate of ["1", "0", "2", "3"]) {
+        if (!used.has(candidate)) return candidate;
+      }
+      return void 0;
+    }
+    if (variable.startsWith(DISPLAY_TEMPLATE_VALUE_PREFIX)) {
+      for (const candidate of ["2", "0", "3", "4", "5", "6", "8", "9", "a", "b", "c", "d", "e"]) {
+        if (!used.has(candidate)) return candidate;
+      }
+      return void 0;
+    }
+    if (variable.startsWith(DISPLAY_TEMPLATE_MASK_PREFIX)) {
+      for (let i = REGISTER_ORDER.length - 1; i >= 0; i -= 1) {
+        const candidate = REGISTER_ORDER[i];
+        if (!used.has(candidate)) return candidate;
+      }
+      return void 0;
+    }
     if (variable.startsWith(SPATIAL_COUNT_SCRATCH_PREFIX)) {
       if (variable === spatialCountCounterScratchName()) {
         for (const candidate of ["0", "1", "2", "3"]) {
@@ -9156,12 +13982,40 @@ var MKProEmulatorBundle = (() => {
       values.add("20");
       values.add("10");
     }
+    if (programContainsCall(ast, "__direction_cardinal")) {
+      values.add("10");
+    }
     if (programContainsCall(ast, "line_count")) {
       values.add("10");
       values.add("11");
       values.add("19");
       values.add("-99");
       values.add("-81");
+    }
+    for (const display of ast.displays) {
+      if (displayHasMantissaExponentTemplateShape(display)) {
+        values.add("1000");
+        values.add("10000000");
+      }
+      const literal = literalOnlyDisplayText(display);
+      const literalProgram = literal === void 0 ? void 0 : displayLiteralProgram(literal);
+      if (literalProgram?.kind === "kinv" && estimateNumberCost2(literalProgram.digits) > 1) {
+        values.add(normalizeConstantLiteral(literalProgram.digits));
+      }
+      if (literalProgram?.kind === "xor") {
+        if (estimateNumberCost2(literalProgram.left) > 1) values.add(normalizeConstantLiteral(literalProgram.left));
+        if (estimateNumberCost2(literalProgram.right) > 1) values.add(normalizeConstantLiteral(literalProgram.right));
+      }
+      let seenSource = false;
+      for (const item of display.items) {
+        if (item.kind !== "source") continue;
+        if (seenSource) {
+          const width = item.width ?? naturalDisplayWidthForAst(ast, item.name);
+          const scale = String(10 ** width);
+          if (estimateNumberCost2(scale) > 1) values.add(scale);
+        }
+        seenSource = true;
+      }
     }
     const visitExpr = (expr) => {
       if (expr.kind === "number" && estimateNumberCost2(expr.raw) > 1) values.add(normalizeConstantLiteral(expr.raw));
@@ -9219,6 +14073,17 @@ var MKProEmulatorBundle = (() => {
     for (const proc of ast.procs) visitStatements(proc.body);
     for (const block of ast.blocks) visitStatements(block.body);
     return [...values].filter((value) => value !== "0" && value !== "1").sort((a, b) => estimateNumberCost2(b) - estimateNumberCost2(a));
+  }
+  function naturalDisplayWidthForAst(ast, source) {
+    for (const state of ast.states) {
+      const field = state.fields.find((candidate) => candidate.name === source);
+      if (field === void 0) continue;
+      const min = field.min ?? 0;
+      const max = field.max ?? min;
+      const magnitude = Math.max(Math.abs(min), Math.abs(max));
+      return Math.max(1, String(Math.trunc(magnitude)).length);
+    }
+    return 1;
   }
   function programContainsCall(ast, name) {
     const target = name.toLowerCase();
@@ -9368,6 +14233,59 @@ var MKProEmulatorBundle = (() => {
     for (const block of ast.blocks) visitStatements(block.body);
     return count;
   }
+  function programHasLineCountForMask(ast, maskName) {
+    let found = false;
+    const visitExpr = (expr) => {
+      if (found) return;
+      if (expr.kind === "call" && expr.callee.toLowerCase() === "line_count" && expr.args[0]?.kind === "identifier" && expr.args[0].name === maskName) {
+        found = true;
+        return;
+      }
+      if (expr.kind === "unary") visitExpr(expr.expr);
+      if (expr.kind === "binary") {
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+      }
+      if (expr.kind === "call") {
+        for (const arg of expr.args) visitExpr(arg);
+      }
+    };
+    const visitStatements = (statements) => {
+      for (const statement of statements) {
+        if (found) return;
+        if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+        if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+        if (statement.kind === "assign") visitExpr(statement.expr);
+        if (statement.kind === "if") {
+          visitExpr(statement.condition.left);
+          visitExpr(statement.condition.right);
+          visitStatements(statement.thenBody);
+          if (statement.elseBody) visitStatements(statement.elseBody);
+        }
+        if (statement.kind === "loop") visitStatements(statement.body);
+        if (statement.kind === "switch") {
+          visitExpr(statement.expr);
+          for (const switchCase of statement.cases) {
+            visitExpr(switchCase.value);
+            visitStatements(switchCase.body);
+          }
+          if (statement.defaultBody) visitStatements(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          visitExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            visitExpr(dispatchCase.value);
+            visitStatements(dispatchCase.body);
+          }
+          if (statement.defaultBody) visitStatements(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visitStatements(entry.body);
+    for (const proc of ast.procs) visitStatements(proc.body);
+    for (const block of ast.blocks) visitStatements(block.body);
+    return found;
+  }
   function collectLineCountGroupCounts(ast) {
     const counts = /* @__PURE__ */ new Map();
     const visitExpr = (expr) => {
@@ -9482,6 +14400,104 @@ var MKProEmulatorBundle = (() => {
     for (const proc of ast.procs) visitStatements(proc.body);
     for (const block of ast.blocks) visitStatements(block.body);
     return counts;
+  }
+  function collectXParamProcLowerings(ast, readCounts, inlineProcNames) {
+    const result = /* @__PURE__ */ new Map();
+    const v2Rules = new Map(ast.v2?.rules.map((rule) => [rule.name, rule]) ?? []);
+    for (const proc of ast.procs) {
+      if (inlineProcNames.has(proc.name)) continue;
+      const params = v2Rules.get(proc.name)?.params ?? [];
+      if (params.length !== 1) continue;
+      const param = params[0];
+      if ((readCounts.get(param) ?? 0) !== 1) continue;
+      const first = proc.body[0];
+      if (first?.kind !== "assign") continue;
+      const matched = matchXParamFirstAssignment(first, param);
+      if (matched === void 0) continue;
+      if (statementsReadIdentifier(proc.body.slice(1), param)) continue;
+      if (!allProcCallsHaveImmediateParamAssignment(ast, proc.name, param)) continue;
+      result.set(proc.name, { param, first, other: matched.other });
+    }
+    return result;
+  }
+  function matchXParamFirstAssignment(statement, param) {
+    const expr = statement.expr;
+    if (expr.kind !== "binary" || expr.op !== "+") return void 0;
+    if (expr.left.kind === "identifier" && expr.left.name === param && expr.right.kind === "identifier") {
+      return { other: expr.right.name };
+    }
+    if (expr.right.kind === "identifier" && expr.right.name === param && expr.left.kind === "identifier") {
+      return { other: expr.left.name };
+    }
+    return void 0;
+  }
+  function allProcCallsHaveImmediateParamAssignment(ast, procName, param) {
+    let calls = 0;
+    let ok = true;
+    const visit = (statements) => {
+      for (let index = 0; index < statements.length; index += 1) {
+        const statement = statements[index];
+        if (statement.kind === "call" && statement.block === procName) {
+          calls += 1;
+          const previous = statements[index - 1];
+          if (previous?.kind !== "assign" || previous.target !== param) ok = false;
+        }
+        if (statement.kind === "loop") visit(statement.body);
+        if (statement.kind === "if") {
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "switch") {
+          for (const switchCase of statement.cases) visit(switchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) {
+      if (proc.name !== procName) visit(proc.body);
+    }
+    for (const block of ast.blocks) visit(block.body);
+    return ok && calls > 0;
+  }
+  function statementsReadIdentifier(statements, name) {
+    return statements.some((statement) => statementReadsIdentifier(statement, name));
+  }
+  function statementReadsIdentifier(statement, name) {
+    switch (statement.kind) {
+      case "pause":
+      case "halt":
+        return expressionReferencesIdentifier(statement.expr, name);
+      case "ask":
+        return statement.prompt !== void 0 && expressionReferencesIdentifier(statement.prompt, name);
+      case "assign":
+        return expressionReferencesIdentifier(statement.expr, name);
+      case "if":
+        return expressionReferencesIdentifier(statement.condition.left, name) || expressionReferencesIdentifier(statement.condition.right, name) || statementsReadIdentifier(statement.thenBody, name) || statement.elseBody !== void 0 && statementsReadIdentifier(statement.elseBody, name);
+      case "loop":
+        return statementsReadIdentifier(statement.body, name);
+      case "switch":
+        return expressionReferencesIdentifier(statement.expr, name) || statement.cases.some(
+          (switchCase) => expressionReferencesIdentifier(switchCase.value, name) || statementsReadIdentifier(switchCase.body, name)
+        ) || statement.defaultBody !== void 0 && statementsReadIdentifier(statement.defaultBody, name);
+      case "dispatch":
+        return expressionReferencesIdentifier(statement.expr, name) || statement.cases.some(
+          (dispatchCase) => expressionReferencesIdentifier(dispatchCase.value, name) || statementsReadIdentifier(dispatchCase.body, name)
+        ) || statement.defaultBody !== void 0 && statementsReadIdentifier(statement.defaultBody, name);
+      case "show":
+      case "input":
+      case "call":
+      case "egg":
+        return false;
+      case "core":
+        return statement.inputs?.some((input) => expressionReferencesIdentifier(input.expr, name)) ?? false;
+      case "trap":
+        return expressionReferencesIdentifier(statement.expr, name);
+    }
   }
   function collectDisplayUseCounts(ast) {
     const counts = /* @__PURE__ */ new Map();
@@ -9611,8 +14627,164 @@ var MKProEmulatorBundle = (() => {
     for (const block of ast.blocks) visit(block.body);
     return counts;
   }
-  function estimatePackedDisplayBodyCost(sourceCount) {
-    return sourceCount === 0 ? 2 : sourceCount * 2;
+  function collectNearAnyHelperStats(ast, preloadedConstants) {
+    const stats = /* @__PURE__ */ new Map();
+    const add = (condition) => {
+      const selected = selectCheaperEquivalentCondition(condition, ast, preloadedConstants).condition;
+      const match = matchNearAnyHelperCondition(selected);
+      if (match === void 0) return;
+      const key = nearAnyHelperKey(match.value, match.radius);
+      const candidateCallCost = match.candidates.reduce(
+        (sum, candidate) => sum + estimateExpressionCostForCondition(candidate, preloadedConstants) + 2,
+        0
+      );
+      const helperConditionCost = candidateCallCost + Math.max(0, match.candidates.length - 1) + 2;
+      const ordinaryCost = conditionCompileCost(selected, preloadedConstants);
+      const existing = stats.get(key);
+      if (existing === void 0) {
+        const helperBodyCost = estimateExpressionCostForCondition(match.value, preloadedConstants) + estimateExpressionCostForCondition(match.radius, preloadedConstants) + 5;
+        stats.set(key, {
+          candidateCount: match.candidates.length,
+          conditionCount: 1,
+          ordinaryCost,
+          helperCallCost: helperConditionCost,
+          helperCost: helperBodyCost + helperConditionCost
+        });
+        return;
+      }
+      existing.candidateCount += match.candidates.length;
+      existing.conditionCount += 1;
+      existing.ordinaryCost += ordinaryCost;
+      existing.helperCallCost += helperConditionCost;
+      existing.helperCost += helperConditionCost;
+    };
+    const visit = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "if") {
+          add(statement.condition);
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "loop") visit(statement.body);
+        if (statement.kind === "switch") {
+          for (const switchCase of statement.cases) visit(switchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) visit(proc.body);
+    for (const block of ast.blocks) visit(block.body);
+    return stats;
+  }
+  function estimatePackedDisplayBodyCost(widthsOrCount) {
+    if (typeof widthsOrCount === "number") {
+      return widthsOrCount === 0 ? 2 : widthsOrCount * 2;
+    }
+    if (widthsOrCount.length === 0) return 2;
+    return 2 + widthsOrCount.slice(1).reduce((cost, width) => cost + String(10 ** width).length + 3, 0);
+  }
+  function displayHasMantissaExponentTemplateShape(display) {
+    const [leader, firstLiteral, score, secondLiteral, total, thirdLiteral, exponent] = display.items;
+    return display.items.length === 7 && leader?.kind === "source" && firstLiteral?.kind === "literal" && normalizeDisplayTemplateLiteral(firstLiteral.text) === ".-" && score?.kind === "source" && secondLiteral?.kind === "literal" && normalizeDisplayTemplateLiteral(secondLiteral.text) === "-" && total?.kind === "source" && thirdLiteral?.kind === "literal" && normalizeDisplayTemplateLiteral(thirdLiteral.text) === "-" && exponent?.kind === "source";
+  }
+  function displayTemplateValueScratchName(display) {
+    return `${DISPLAY_TEMPLATE_VALUE_PREFIX}${display.name}`;
+  }
+  function displayTemplateLoopScratchName(display) {
+    return `${DISPLAY_TEMPLATE_LOOP_PREFIX}${display.name}`;
+  }
+  function displayTemplateMaskScratchName(display) {
+    return `${DISPLAY_TEMPLATE_MASK_PREFIX}${display.name}`;
+  }
+  function normalizeDisplayTemplateLiteral(text) {
+    return text.replace(/\s/gu, "");
+  }
+  function displayLoopOpcode(register) {
+    switch (register) {
+      case 0:
+        return 93;
+      case 1:
+        return 91;
+      case 2:
+        return 88;
+      case 3:
+        return 90;
+    }
+  }
+  function displayLiteralProgram(text) {
+    const normalized = normalizeDisplayLiteralText(text);
+    const errorCells = displayLiteralCells(normalized);
+    if (errorCells !== void 0 && isErrorLiteralCells(errorCells)) return { kind: "error" };
+    const negative = normalized.startsWith("-") && normalized.length > 1;
+    const body = negative ? normalized.slice(1) : normalized;
+    const cells = displayLiteralCells(body);
+    if (cells === void 0 || cells.length === 0 || cells.length > 8) return void 0;
+    if (cells[0] !== 8) return void 0;
+    const inverted = displayLiteralInversionDigits(cells);
+    if (inverted !== void 0) return { kind: "kinv", digits: inverted, negative };
+    const left = [];
+    const right = [];
+    for (let index = 0; index < cells.length; index += 1) {
+      const pair = index === 0 ? [1, 9] : decimalXorPair(cells[index]);
+      if (pair === void 0) return void 0;
+      left.push(String(pair[0]));
+      right.push(String(pair[1]));
+    }
+    return { kind: "xor", left: left.join(""), right: right.join(""), negative };
+  }
+  function isErrorLiteralCells(cells) {
+    return cells.length === 5 && cells[0] === 14 && cells[1] === 13 && cells[2] === 13 && cells[3] === 0 && cells[4] === 13;
+  }
+  function displayLiteralInversionDigits(cells) {
+    if (cells.length === 0 || cells[0] !== 8) return void 0;
+    const digits = ["1"];
+    for (const cell of cells.slice(1)) {
+      if (cell < 6 || cell > 15) return void 0;
+      digits.push(String(15 - cell));
+    }
+    return digits.join("");
+  }
+  function displayLiteralCells(text) {
+    const cells = [];
+    const normalized = normalizeDisplayLiteralText(text);
+    for (const char of normalized) {
+      if (char === "." || char === ",") continue;
+      if (/\s/u.test(char) || char === "_") {
+        cells.push(15);
+        continue;
+      }
+      if (/[0-9]/u.test(char)) {
+        cells.push(Number(char));
+        continue;
+      }
+      const symbol = DISPLAY_LITERAL_SYMBOLS[char];
+      if (symbol === void 0) return void 0;
+      cells.push(symbol);
+    }
+    return cells;
+  }
+  function normalizeDisplayLiteralText(text) {
+    return text.replace(/[–—]/gu, "-").replace(/[ОO]/gu, "0").replace(/[ВB]/gu, "L").replace(/[C]/gu, "\u0421").replace(/[D]/gu, "\u0413").replace(/[G]/gu, "\u0413").replace(/[E]/gu, "\u0415");
+  }
+  var DISPLAY_LITERAL_SYMBOLS = {
+    "-": 10,
+    L: 11,
+    "\u0421": 12,
+    "\u0413": 13,
+    "\u0415": 14
+  };
+  function decimalXorPair(value) {
+    for (let left = 0; left <= 9; left += 1) {
+      for (let right = 0; right <= 9; right += 1) {
+        if ((left ^ right) === value) return [left, right];
+      }
+    }
+    return void 0;
   }
   function programUsesTicTacToeHelpers(ast) {
     let found = false;
@@ -9671,9 +14843,11 @@ var MKProEmulatorBundle = (() => {
   }
   function warnUndeclaredAssignments(ast, declared, diagnostics) {
     const seen = /* @__PURE__ */ new Set();
+    const ephemeralInputs = collectEphemeralInputTargets(ast);
     const visit = (statements) => {
       for (const statement of statements) {
         if (statement.kind === "assign" || statement.kind === "ask" || statement.kind === "input") {
+          if (statement.kind === "input" && ephemeralInputs.has(statement.target)) continue;
           if (!declared.has(statement.target) && !seen.has(statement.target)) {
             diagnostics.push({
               level: "warning",
@@ -9703,10 +14877,47 @@ var MKProEmulatorBundle = (() => {
     for (const block of ast.blocks) visit(block.body);
   }
   function collectAssignedVariables(ast, variables) {
+    const ephemeralInputs = collectEphemeralInputTargets(ast);
     const visit = (statements) => {
       for (const statement of statements) {
-        if (statement.kind === "assign" || statement.kind === "ask" || statement.kind === "input") {
+        if (statement.kind === "assign" || statement.kind === "ask") {
           variables.add(statement.target);
+        }
+        if (statement.kind === "input" && !ephemeralInputs.has(statement.target)) variables.add(statement.target);
+        if (statement.kind === "loop") visit(statement.body);
+        if (statement.kind === "if") {
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "switch") {
+          for (const switchCase of statement.cases) visit(switchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) visit(proc.body);
+    for (const block of ast.blocks) visit(block.body);
+  }
+  function collectEphemeralInputTargets(ast) {
+    const readCounts = collectVariableReadCounts(ast);
+    const targets = /* @__PURE__ */ new Set();
+    const visit = (statements) => {
+      for (let index = 0; index < statements.length; index += 1) {
+        const statement = statements[index];
+        const next = statements[index + 1];
+        const afterNext = statements[index + 2];
+        if (statement.kind === "input" && next?.kind === "if") {
+          const reads = countIdentifierReadsInCondition(next.condition, statement.target);
+          if (reads > 0 && (readCounts.get(statement.target) ?? 0) === reads) targets.add(statement.target);
+        }
+        if (statement.kind === "show" && next?.kind === "input" && afterNext?.kind === "if") {
+          const reads = countIdentifierReadsInCondition(afterNext.condition, next.target);
+          if (reads > 0 && (readCounts.get(next.target) ?? 0) === reads) targets.add(next.target);
         }
         if (statement.kind === "loop") visit(statement.body);
         if (statement.kind === "if") {
@@ -9726,6 +14937,7 @@ var MKProEmulatorBundle = (() => {
     for (const entry of ast.entries) visit(entry.body);
     for (const proc of ast.procs) visit(proc.body);
     for (const block of ast.blocks) visit(block.body);
+    return targets;
   }
   function collectUnitDecrementTargets(ast) {
     const targets = /* @__PURE__ */ new Set();
@@ -9777,11 +14989,12 @@ var MKProEmulatorBundle = (() => {
     for (const proc of ast.procs) visit(proc.body);
     for (const block of ast.blocks) visit(block.body);
   }
-  function collectDispatchScratchVariables(ast, variables) {
+  function collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch = false) {
     const visit = (statements) => {
       for (const statement of statements) {
         if (statement.kind === "dispatch") {
-          if (statement.expr.kind !== "identifier") {
+          const residualNeedsNoScratch = freeResidualDispatchScratch && dispatchUsesNumericResidualChain(statement);
+          if (statement.expr.kind !== "identifier" && !residualNeedsNoScratch) {
             variables.add(`${DISPATCH_SCRATCH_PREFIX}${statement.scratchId}`);
           }
           for (const dispatchCase of statement.cases) visit(dispatchCase.body);
@@ -9837,8 +15050,10 @@ var MKProEmulatorBundle = (() => {
         if (statement.kind === "assign" && next?.kind === "assign" && isReusableBitSetPair(statement, next)) {
           variables.add(bitMaskScratchName(statement));
         }
-        if (statement.kind === "if" && isReusableMembershipSet(statement)) {
-          variables.add(bitMaskScratchName(statement));
+        if (statement.kind === "if") {
+          const runScratch = membershipSetRunScratchName(statement);
+          if (runScratch !== void 0) variables.add(runScratch);
+          else if (isReusableMembershipSet(statement)) variables.add(bitMaskScratchName(statement));
         }
         if (statement.kind === "loop") visit(statement.body);
         if (statement.kind === "if") {
@@ -9859,7 +15074,95 @@ var MKProEmulatorBundle = (() => {
     for (const proc of ast.procs) visit(proc.body);
     for (const block of ast.blocks) visit(block.body);
   }
+  function collectBitHasConditionStats(ast) {
+    const stats = /* @__PURE__ */ new Map();
+    const visitExpr = (expr) => {
+      if (expr.kind === "unary") visitExpr(expr.expr);
+      if (expr.kind === "binary") {
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+      }
+      if (expr.kind === "call") {
+        for (const arg of expr.args) visitExpr(arg);
+      }
+    };
+    const visitBitHasCondition = (expr) => {
+      if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_has" || expr.args.length !== 2) {
+        visitExpr(expr);
+        return;
+      }
+      const [mask, index] = expr.args;
+      if (mask?.kind !== "identifier" || index === void 0) return;
+      const current = stats.get(mask.name) ?? { count: 0, inlineCost: 0, helperCallCost: 0 };
+      current.count += 1;
+      current.inlineCost += estimateExpressionCostForCondition(expr, void 0);
+      current.helperCallCost += estimateExpressionCost2(index) + 2;
+      stats.set(mask.name, current);
+    };
+    const visitCondition = (condition) => {
+      if ((condition.op === "==" || condition.op === "!=") && isZeroExpression(condition.right)) {
+        visitBitHasCondition(condition.left);
+        return;
+      }
+      if ((condition.op === "==" || condition.op === "!=") && isZeroExpression(condition.left)) {
+        visitBitHasCondition(condition.right);
+        return;
+      }
+      visitExpr(condition.left);
+      visitExpr(condition.right);
+    };
+    const visit = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+        if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+        if (statement.kind === "assign") visitExpr(statement.expr);
+        if (statement.kind === "if") {
+          if (!membershipConditionHandledBeforeGenericBitHas(statement)) {
+            visitCondition(statement.condition);
+          }
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "loop") visit(statement.body);
+        if (statement.kind === "switch") {
+          visitExpr(statement.expr);
+          for (const switchCase of statement.cases) {
+            visitExpr(switchCase.value);
+            visit(switchCase.body);
+          }
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          visitExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            visitExpr(dispatchCase.value);
+            visit(dispatchCase.body);
+          }
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "core") {
+          for (const input of statement.inputs ?? []) visitExpr(input.expr);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) visit(proc.body);
+    for (const block of ast.blocks) visit(block.body);
+    return stats;
+  }
+  function bitHasConditionHelperSaves(mask, stats) {
+    if (stats.count < 2) return false;
+    const scratch = { kind: "identifier", name: spatialHitScratchName(mask) };
+    const helperBodyCost = 1 + 1 + estimateExpressionCost2(bitMaskExpression(scratch)) + 1 + 1 + 1;
+    return stats.inlineCost > helperBodyCost + stats.helperCallCost;
+  }
+  function membershipConditionHandledBeforeGenericBitHas(statement) {
+    return isReusableMembershipClear(statement) || isReusableMembershipSet(statement) || isReusableMembershipSetRun(statement);
+  }
   function collectSpatialHitScratchVariables(ast, variables) {
+    for (const [mask, stats] of collectBitHasConditionStats(ast)) {
+      if (bitHasConditionHelperSaves(mask, stats)) variables.add(spatialHitScratchName(mask));
+    }
     const shareLineCountMask = countCalls(ast, "line_count") > 1;
     const visitExpr = (expr) => {
       if (shareLineCountMask && expr.kind === "call" && expr.callee.toLowerCase() === "line_count") {
@@ -9970,6 +15273,68 @@ var MKProEmulatorBundle = (() => {
     if (!needsScratch) return;
     for (const scratch of spatialCountScratchNames()) variables.add(scratch);
     if (countCalls(ast, "line_count") > 1) variables.add(spatialCountMaskScratchName());
+    if (programNeedsSpatialLineProgressionHelper(ast) && variables.size < REGISTER_ORDER.length) {
+      variables.add(spatialCountStepScratchName());
+    }
+  }
+  function programNeedsSpatialLineProgressionHelper(ast) {
+    let needed = false;
+    const visitExpr = (expr) => {
+      if (needed) return;
+      if (expr.kind === "call" && expr.callee.toLowerCase() === "line_count" && expr.args[0] !== void 0) {
+        const board = boardForCellMask(expr.args[0], ast);
+        if (board !== void 0 && board.width <= 4 && board.height <= 4) {
+          needed = true;
+          return;
+        }
+      }
+      if (expr.kind === "unary") visitExpr(expr.expr);
+      if (expr.kind === "binary") {
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+      }
+      if (expr.kind === "call") {
+        for (const arg of expr.args) visitExpr(arg);
+      }
+    };
+    const visit = (statements) => {
+      for (const statement of statements) {
+        if (needed) return;
+        if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+        if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+        if (statement.kind === "assign") visitExpr(statement.expr);
+        if (statement.kind === "if") {
+          visitExpr(statement.condition.left);
+          visitExpr(statement.condition.right);
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "loop") visit(statement.body);
+        if (statement.kind === "switch") {
+          visitExpr(statement.expr);
+          for (const switchCase of statement.cases) {
+            visitExpr(switchCase.value);
+            visit(switchCase.body);
+          }
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "dispatch") {
+          visitExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            visitExpr(dispatchCase.value);
+            visit(dispatchCase.body);
+          }
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+        if (statement.kind === "core") {
+          for (const input of statement.inputs ?? []) visitExpr(input.expr);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) visit(proc.body);
+    for (const block of ast.blocks) visit(block.body);
+    return needed;
   }
   function collectGuardedUpdateScratchVariables(ast, variables) {
     const visit = (statements) => {
@@ -9996,6 +15361,14 @@ var MKProEmulatorBundle = (() => {
     for (const proc of ast.procs) visit(proc.body);
     for (const block of ast.blocks) visit(block.body);
   }
+  function collectDisplayTemplateScratchVariables(ast, variables) {
+    for (const display of ast.displays) {
+      if (!displayHasMantissaExponentTemplateShape(display)) continue;
+      variables.add(displayTemplateValueScratchName(display));
+      variables.add(displayTemplateLoopScratchName(display));
+      variables.add(displayTemplateMaskScratchName(display));
+    }
+  }
   function guardedUpdateSelectorProfitable(statement, ast, options = {}) {
     const candidate = buildGuardedUpdateSelectorCandidate(statement, ast, options);
     if (candidate === void 0) return false;
@@ -10014,6 +15387,12 @@ var MKProEmulatorBundle = (() => {
   function dispatchExpressionRegister(statement, allocation) {
     if (statement.expr.kind !== "identifier") return void 0;
     return allocation.registers[statement.expr.name];
+  }
+  function dispatchUsesNumericResidualChain(statement) {
+    if (statement.cases.length < 2) return false;
+    const values = statement.cases.map((dispatchCase) => numericLiteralValue2(dispatchCase.value));
+    if (values.some((value) => value === void 0)) return false;
+    return numericResidualDispatchIsCheaper(statement, values);
   }
   function numericResidualDispatchIsCheaper(statement, values) {
     const sourceRegister = statement.expr.kind === "identifier";
@@ -10043,6 +15422,39 @@ var MKProEmulatorBundle = (() => {
   }
   function isUnitDecrementExpression(target, expr) {
     return expr.kind === "binary" && expr.op === "-" && expr.left.kind === "identifier" && expr.left.name === target && expr.right.kind === "number" && Number(expr.right.raw) === 1;
+  }
+  function matchResidualGuardedUpdate(statement) {
+    const first = statement.thenBody[0];
+    if (first?.kind !== "assign") return void 0;
+    const condition = statement.condition;
+    if (condition.op !== "<") return void 0;
+    if (condition.left.kind !== "identifier") return void 0;
+    const bound = numericLiteralValue2(condition.right);
+    if (bound === void 0) return void 0;
+    const delta = matchNumericSelfUpdate(condition.left.name, first.expr);
+    if (delta === void 0 || delta === 0) return void 0;
+    if (first.target !== condition.left.name) return void 0;
+    return {
+      condition,
+      assignment: first,
+      tail: statement.thenBody.slice(1),
+      target: condition.left.name,
+      bound,
+      delta
+    };
+  }
+  function matchNumericSelfUpdate(target, expr) {
+    if (expr.kind !== "binary") return void 0;
+    if (expr.op === "+") {
+      if (expr.left.kind === "identifier" && expr.left.name === target) return numericLiteralValue2(expr.right);
+      if (expr.right.kind === "identifier" && expr.right.name === target) return numericLiteralValue2(expr.left);
+      return void 0;
+    }
+    if (expr.op === "-" && expr.left.kind === "identifier" && expr.left.name === target) {
+      const value = numericLiteralValue2(expr.right);
+      return value === void 0 ? void 0 : -value;
+    }
+    return void 0;
   }
   function decrementBranchTestsZero(condition, target) {
     return condition.left.kind === "identifier" && condition.left.name === target && (condition.op === "<=" || condition.op === "==") && isZeroExpression(condition.right);
@@ -10201,6 +15613,12 @@ var MKProEmulatorBundle = (() => {
     }
     return estimateExpressionCostForCondition(condition.left, preloadedConstants) + estimateExpressionCostForCondition(condition.right, preloadedConstants) + 3;
   }
+  function estimateSmallSetConditionCost(match, preloadedConstants) {
+    return match.tests.reduce(
+      (sum, test) => sum + estimateExpressionCostForCondition(test.expr, preloadedConstants) + 2,
+      0
+    );
+  }
   function conditionEquals(left, right) {
     return left.op === right.op && expressionEquals(left.left, right.left) && expressionEquals(left.right, right.right);
   }
@@ -10252,11 +15670,11 @@ var MKProEmulatorBundle = (() => {
     return { items: result.items, preloads: result.preloads };
   }
   function layoutProgram(items, diagnostics, options, ast, machineProfile) {
-    const labelAddresses = /* @__PURE__ */ new Map();
+    const labelAddresses2 = /* @__PURE__ */ new Map();
     let address = 0;
     for (const item of items) {
       if (item.kind === "label") {
-        labelAddresses.set(item.name, address);
+        labelAddresses2.set(item.name, address);
       } else {
         address += 1;
       }
@@ -10279,7 +15697,7 @@ var MKProEmulatorBundle = (() => {
         address += 1;
         continue;
       }
-      const targetAddress2 = typeof item.target === "number" ? item.target : labelAddresses.get(item.target);
+      const targetAddress2 = typeof item.target === "number" ? item.target : labelAddresses2.get(item.target);
       if (targetAddress2 === void 0) {
         diagnostics.push(
           buildDiagnostic("error", `Unknown label '${item.target}'`, item.sourceLine)
@@ -10303,13 +15721,13 @@ var MKProEmulatorBundle = (() => {
       address += 1;
     }
     const labels = {};
-    const sortedLabels = [...labelAddresses.entries()].sort(
+    const sortedLabels = [...labelAddresses2.entries()].sort(
       ([, a], [, b]) => a - b
     );
     for (const [label, labelAddress] of sortedLabels) {
       labels[label] = safeFormatAddress(labelAddress);
     }
-    markDarkEntryCells(cellRoles, labelAddresses, options, ast, machineProfile);
+    markDarkEntryCells(cellRoles, labelAddresses2, options, ast, machineProfile);
     return { steps, labels, cellRoles };
   }
   function buildResolvedStep(address, opcode, mnemonic, comment) {
@@ -10399,12 +15817,12 @@ var MKProEmulatorBundle = (() => {
     if (notes.length > 0) role.note = notes.join("; ");
     return role;
   }
-  function markDarkEntryCells(cellRoles, labelAddresses, options, ast, machineProfile) {
+  function markDarkEntryCells(cellRoles, labelAddresses2, options, ast, machineProfile) {
     if (!machineSupports(machineProfile, "dark-entries")) return;
     const sharedTailNames = new Set(
       ast.blocks.filter((block) => block.mode === "shared_tail").map((block) => block.name)
     );
-    for (const [label, address] of labelAddresses) {
+    for (const [label, address] of labelAddresses2) {
       if (!sharedTailNames.has(label)) continue;
       const cell = cellRoles.find((candidate) => candidate.address === safeFormatAddress(address));
       if (!cell) continue;
@@ -10963,9 +16381,9 @@ var MKProEmulatorBundle = (() => {
       case "bit_toggle":
         return bitXorExpression(args[0], bitMaskExpression(args[1]));
       case "diag_left_index":
-        return norm4Expression(addExpressions2(args[0], args[1]));
+        return positiveNorm4Expression(addExpressions2(args[0], args[1]));
       case "diag_right_index":
-        return norm4Expression(subtractExpressions2(args[0], args[1]));
+        return positiveNorm4Expression(addExpressions2(subtractExpressions2(args[0], args[1]), numberExpression2(4)));
       case "cell_mask":
         return cellMaskExpression(args[0], args[1]);
       case "cell_has":
@@ -11000,6 +16418,162 @@ var MKProEmulatorBundle = (() => {
         return void 0;
     }
   }
+  function isSmallSetMacroName(name) {
+    return name === "near_any" || name === "eq_any";
+  }
+  function smallSetMacroArityOk(name, argCount) {
+    return name === "near_any" ? argCount >= 3 : argCount >= 2;
+  }
+  function smallSetMacroArityText(name) {
+    return name === "near_any" ? "at least three arguments" : "at least two arguments";
+  }
+  function smallSetExpressionMacro(name, args) {
+    if (!isSmallSetMacroName(name) || !smallSetMacroArityOk(name, args.length)) return void 0;
+    if (name === "near_any") {
+      const value2 = args[0];
+      const radius = args[1];
+      const distances = args.slice(2).map((candidate) => absExpression(subtractExpressions2(value2, candidate)));
+      if (distances.length === 1) return subtractExpressions2(radius, distances[0]);
+      return addExpressions2(radius, maxExpressions(distances.map(negateExpression)));
+    }
+    const value = args[0];
+    const differences = args.slice(1).map((candidate) => subtractExpressions2(value, candidate));
+    return productExpressions(differences);
+  }
+  function matchSmallSetCondition(condition) {
+    const normalized = normalizeZeroComparison(condition);
+    if (normalized === void 0) return void 0;
+    const near = matchNearAnyExpression(normalized.expr);
+    if (near !== void 0 && (normalized.op === ">=" || normalized.op === "<")) {
+      return {
+        kind: "near_any",
+        mode: normalized.op === ">=" ? "any" : "all",
+        tests: near.map((expr) => ({
+          expr,
+          trueOpcode: directTestOpcode("<"),
+          falseOpcode: directTestOpcode(">=")
+        }))
+      };
+    }
+    const equal = matchEqAnyExpression(normalized.expr);
+    if (equal !== void 0 && (normalized.op === "==" || normalized.op === "!=")) {
+      return {
+        kind: "eq_any",
+        mode: normalized.op === "==" ? "any" : "all",
+        tests: equal.map((expr) => ({
+          expr,
+          trueOpcode: directTestOpcode("!="),
+          falseOpcode: directTestOpcode("==")
+        }))
+      };
+    }
+    return void 0;
+  }
+  function matchNearAnyHelperCondition(condition) {
+    const normalized = normalizeZeroComparison(condition);
+    if (normalized === void 0 || normalized.op !== ">=" && normalized.op !== "<") return void 0;
+    const match = matchNearAnySetExpression(normalized.expr);
+    if (match === void 0) return void 0;
+    if (!isSimpleStackLoad(match.value) || !isSimpleStackLoad(match.radius)) return void 0;
+    if (match.candidates.length === 0 || match.candidates.some((candidate) => !isSimpleStackLoad(candidate))) {
+      return void 0;
+    }
+    return { ...match, op: normalized.op };
+  }
+  function matchNearAnySetExpression(expr) {
+    if (expr.kind === "call" && expr.callee.toLowerCase() === "near_any" && smallSetMacroArityOk("near_any", expr.args.length)) {
+      return {
+        value: expr.args[0],
+        radius: expr.args[1],
+        candidates: expr.args.slice(2)
+      };
+    }
+    return matchNearAnyMarginSetExpression(expr);
+  }
+  function matchNearAnyMarginSetExpression(expr) {
+    const terms = flattenMaxTerms(expr);
+    const margins = terms.map(matchNearMarginTerm);
+    if (margins.some((margin) => margin === void 0)) return void 0;
+    const typedMargins = margins;
+    if (typedMargins.length === 0) return void 0;
+    const commonValue = commonDifferenceEndpoint(typedMargins.map((margin) => margin.difference));
+    if (commonValue === void 0) return void 0;
+    const radius = typedMargins[0].radius;
+    if (!typedMargins.every((margin) => expressionEquals(margin.radius, radius))) return void 0;
+    const candidates = typedMargins.map(
+      (margin) => expressionEquals(margin.difference.left, commonValue) ? margin.difference.right : margin.difference.left
+    );
+    return { value: commonValue, radius, candidates };
+  }
+  function nearAnyHelperKey(value, radius) {
+    return `${expressionToIntentText(value)}|${expressionToIntentText(radius)}`;
+  }
+  function normalizeZeroComparison(condition) {
+    if (isZeroExpression(condition.right)) return { expr: condition.left, op: condition.op };
+    if (isZeroExpression(condition.left)) return { expr: condition.right, op: flipComparisonOp(condition.op) };
+    return void 0;
+  }
+  function matchNearAnyExpression(expr) {
+    if (expr.kind === "call" && expr.callee.toLowerCase() === "near_any") {
+      const macro = smallSetExpressionMacro("near_any", expr.args);
+      return macro === void 0 ? void 0 : matchNearAnyExpression(macro);
+    }
+    const terms = flattenMaxTerms(expr);
+    const margins = terms.map(matchNearMarginTerm);
+    if (margins.some((margin) => margin === void 0)) return void 0;
+    const typedMargins = margins;
+    const commonValue = commonDifferenceEndpoint(typedMargins.map((margin) => margin.difference));
+    if (commonValue === void 0) return void 0;
+    const radius = typedMargins[0].radius;
+    if (!typedMargins.every((margin) => expressionEquals(margin.radius, radius))) return void 0;
+    return typedMargins.map((margin) => margin.expr);
+  }
+  function matchNearMarginTerm(expr) {
+    if (expr.kind !== "binary" || expr.op !== "-") return void 0;
+    const absCall = expr.right;
+    if (absCall.kind !== "call" || absCall.callee.toLowerCase() !== "abs" || absCall.args.length !== 1) {
+      return void 0;
+    }
+    const difference = absCall.args[0];
+    if (difference.kind !== "binary" || difference.op !== "-") return void 0;
+    return { expr, radius: expr.left, difference };
+  }
+  function matchEqAnyExpression(expr) {
+    if (expr.kind === "call" && expr.callee.toLowerCase() === "eq_any") {
+      const macro = smallSetExpressionMacro("eq_any", expr.args);
+      return macro === void 0 ? void 0 : matchEqAnyExpression(macro);
+    }
+    const factors = flattenProductTerms(expr);
+    if (factors.length === 0) return void 0;
+    const differences = factors.map(
+      (factor) => factor.kind === "binary" && factor.op === "-" ? factor : void 0
+    );
+    if (differences.some((difference) => difference === void 0)) return void 0;
+    const typedDifferences = differences;
+    if (commonDifferenceEndpoint(typedDifferences) === void 0) return void 0;
+    return factors;
+  }
+  function commonDifferenceEndpoint(differences) {
+    if (differences.length === 0) return void 0;
+    const candidates = [differences[0].left, differences[0].right];
+    return candidates.find(
+      (candidate) => differences.every(
+        (difference) => expressionEquals(difference.left, candidate) || expressionEquals(difference.right, candidate)
+      )
+    );
+  }
+  function flattenMaxTerms(expr) {
+    if (expr.kind === "call" && expr.callee.toLowerCase() === "max" && expr.args.length === 2) {
+      return [...flattenMaxTerms(expr.args[0]), ...flattenMaxTerms(expr.args[1])];
+    }
+    return [expr];
+  }
+  function flattenProductTerms(expr) {
+    if (expr.kind === "binary" && expr.op === "*") {
+      return [...flattenProductTerms(expr.left), ...flattenProductTerms(expr.right)];
+    }
+    return [expr];
+  }
   function matchCellHelperCall(expr, names) {
     if (expr.kind !== "call" || !names.includes(expr.callee.toLowerCase()) || expr.args.length !== 3) return void 0;
     return {
@@ -11013,6 +16587,24 @@ var MKProEmulatorBundle = (() => {
     if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_set" || expr.args.length !== 2) return void 0;
     const collection = expr.args[0];
     if (collection.kind !== "identifier" || statement.target !== collection.name) return void 0;
+    return {
+      collection,
+      item: expr.args[1]
+    };
+  }
+  function matchAnyBitSetAssignment(statement, membership) {
+    const expr = statement.expr;
+    if (expr.kind !== "call" || expr.args.length !== 2) return void 0;
+    const collection = expr.args[0];
+    if (collection.kind !== "identifier" || statement.target !== collection.name) return void 0;
+    const name = expr.callee.toLowerCase();
+    if (name === "bit_set") {
+      if (membership.mode !== "index" || !expressionEquals(expr.args[1], membership.item)) return void 0;
+    } else if (name === "bit_or") {
+      if (!expressionEquals(expr.args[1], membership.mask)) return void 0;
+    } else {
+      return void 0;
+    }
     return {
       collection,
       item: expr.args[1]
@@ -11034,6 +16626,42 @@ var MKProEmulatorBundle = (() => {
     const first = statement.thenBody[0];
     return first?.kind === "assign" && isBitSetAssignment(first, absent);
   }
+  function isReusableMembershipSetRun(statement) {
+    return membershipSetRunScratchName(statement) !== void 0;
+  }
+  function isReusableMembershipClear(statement) {
+    const present = matchBitMembershipCondition(statement.condition);
+    if (present === void 0) return false;
+    const first = statement.thenBody[0];
+    return first?.kind === "assign" && isBitClearAssignment(first, present);
+  }
+  function membershipSetRunScratchName(statement) {
+    const present = matchBitMembershipCondition(statement.condition);
+    if (present !== void 0 && statement.elseBody !== void 0) {
+      const first2 = statement.elseBody[0];
+      if (first2?.kind !== "assign") return void 0;
+      let count2 = matchAnyBitSetAssignment(first2, present) === void 0 ? 0 : 1;
+      if (count2 === 0) return void 0;
+      for (const inner of statement.elseBody) {
+        if (inner === first2) continue;
+        if (inner.kind !== "assign" || matchAnyBitSetAssignment(inner, present) === void 0) break;
+        count2 += 1;
+      }
+      if (count2 >= 2) return bitMaskScratchName(first2);
+    }
+    const absent = matchBitAbsenceCondition(statement.condition);
+    if (absent === void 0) return void 0;
+    const first = statement.thenBody[0];
+    if (first?.kind !== "assign") return void 0;
+    let count = matchAnyBitSetAssignment(first, absent) === void 0 ? 0 : 1;
+    if (count === 0) return void 0;
+    for (const inner of statement.thenBody) {
+      if (inner === first) continue;
+      if (inner.kind !== "assign" || matchAnyBitSetAssignment(inner, absent) === void 0) break;
+      count += 1;
+    }
+    return count >= 2 ? bitMaskScratchName(first) : void 0;
+  }
   function bitMaskScratchName(statement) {
     return `${BIT_MASK_SCRATCH_PREFIX}${statement.line}`;
   }
@@ -11043,32 +16671,64 @@ var MKProEmulatorBundle = (() => {
   function matchBitMembershipCondition(condition) {
     if (condition.op !== "!=" || !isZeroExpression(condition.right)) return void 0;
     const test = condition.left;
-    if (test.kind !== "call" || test.callee.toLowerCase() !== "bit_has" || test.args.length !== 2) return void 0;
+    if (test.kind !== "call" || test.args.length !== 2) return void 0;
+    if (test.callee.toLowerCase() === "bit_and") {
+      return {
+        collection: test.args[0],
+        item: test.args[1],
+        mask: test.args[1],
+        mode: "mask",
+        test
+      };
+    }
+    if (test.callee.toLowerCase() !== "bit_has") return void 0;
+    const item = test.args[1];
     return {
       collection: test.args[0],
-      item: test.args[1],
+      item,
+      mask: bitMaskExpression(item),
+      mode: "index",
       test
     };
   }
   function matchBitAbsenceCondition(condition) {
     if (condition.op !== "==" || !isZeroExpression(condition.right)) return void 0;
     const test = condition.left;
-    if (test.kind !== "call" || test.callee.toLowerCase() !== "bit_has" || test.args.length !== 2) return void 0;
+    if (test.kind !== "call" || test.args.length !== 2) return void 0;
+    if (test.callee.toLowerCase() === "bit_and") {
+      return {
+        collection: test.args[0],
+        item: test.args[1],
+        mask: test.args[1],
+        mode: "mask",
+        test
+      };
+    }
+    if (test.callee.toLowerCase() !== "bit_has") return void 0;
+    const item = test.args[1];
     return {
       collection: test.args[0],
-      item: test.args[1],
+      item,
+      mask: bitMaskExpression(item),
+      mode: "index",
       test
     };
   }
   function isBitClearAssignment(statement, membership) {
     if (membership.collection.kind !== "identifier" || statement.target !== membership.collection.name) return false;
     const expr = statement.expr;
-    return expr.kind === "call" && expr.callee.toLowerCase() === "bit_clear" && expr.args.length === 2 && expressionEquals(expr.args[0], membership.collection) && expressionEquals(expr.args[1], membership.item);
+    if (expr.kind !== "call" || expr.args.length !== 2 || !expressionEquals(expr.args[0], membership.collection)) {
+      return false;
+    }
+    const name = expr.callee.toLowerCase();
+    if (name === "bit_clear") return membership.mode === "index" && expressionEquals(expr.args[1], membership.item);
+    return name === "bit_and" && isBitNotOf(expr.args[1], membership.mask);
   }
   function isBitSetAssignment(statement, membership) {
-    if (membership.collection.kind !== "identifier" || statement.target !== membership.collection.name) return false;
-    const expr = statement.expr;
-    return expr.kind === "call" && expr.callee.toLowerCase() === "bit_set" && expr.args.length === 2 && expressionEquals(expr.args[0], membership.collection) && expressionEquals(expr.args[1], membership.item);
+    return matchAnyBitSetAssignment(statement, membership) !== void 0;
+  }
+  function isBitNotOf(expr, inner) {
+    return expr.kind === "call" && expr.callee.toLowerCase() === "bit_not" && expr.args.length === 1 && expressionEquals(expr.args[0], inner);
   }
   function norm4Expression(expr) {
     const rem = multiplyExpressions2(
@@ -11078,6 +16738,16 @@ var MKProEmulatorBundle = (() => {
     return addExpressions2(
       rem,
       multiplyExpressions2(numberExpression2(4), oneMinus(signExpression(maxExpression(rem, numberExpression2(0)))))
+    );
+  }
+  function positiveNorm4Expression(expr) {
+    const rem = multiplyExpressions2(
+      fracExpression(divideExpressions(intExpression(expr), numberExpression2(4))),
+      numberExpression2(4)
+    );
+    return addExpressions2(
+      rem,
+      multiplyExpressions2(numberExpression2(4), oneMinus(signExpression(rem)))
     );
   }
   function cellMaskExpression(x, y) {
@@ -11131,6 +16801,9 @@ var MKProEmulatorBundle = (() => {
     if (isNumericValue2(left, 1)) return right;
     if (isNumericValue2(right, 1)) return left;
     return { kind: "binary", op: "*", left, right };
+  }
+  function productExpressions(expressions) {
+    return expressions.reduce((product, expr) => multiplyExpressions2(product, expr));
   }
   function addExpressions2(left, right) {
     if (isNumericValue2(left, 0)) return right;
@@ -11307,10 +16980,18 @@ var MKProEmulatorBundle = (() => {
   function spatialCountMaskScratchName() {
     return `${SPATIAL_COUNT_SCRATCH_PREFIX}mask`;
   }
+  function spatialCountStepScratchName() {
+    return `${SPATIAL_COUNT_SCRATCH_PREFIX}step`;
+  }
   function range(start, end) {
     const values = [];
     for (let value = start; value <= end; value += 1) values.push(value);
     return values;
+  }
+  function literalOnlyDisplayText(display) {
+    if (display.items.length === 0 || display.items.some((item) => item.kind !== "literal")) return void 0;
+    const text = display.items.map((item) => item.kind === "literal" ? item.text : "").join("");
+    return text.trim().length === 0 ? void 0 : text;
   }
   function signToggleExpression(current, selector) {
     return multiplyExpressions2(
@@ -11395,10 +17076,88 @@ var MKProEmulatorBundle = (() => {
         return right.kind === "call" && left.callee.toLowerCase() === right.callee.toLowerCase() && left.args.length === right.args.length && left.args.every((arg, index) => expressionEquals(arg, right.args[index]));
     }
   }
+  function expressionReferencesIdentifier(expr, name) {
+    switch (expr.kind) {
+      case "number":
+        return false;
+      case "identifier":
+        return expr.name === name;
+      case "unary":
+        return expressionReferencesIdentifier(expr.expr, name);
+      case "binary":
+        return expressionReferencesIdentifier(expr.left, name) || expressionReferencesIdentifier(expr.right, name);
+      case "call":
+        return expr.args.some((arg) => expressionReferencesIdentifier(arg, name));
+    }
+  }
+  function isRandomCellExpressionShape(expr) {
+    if (isRandomScaledInteger(expr)) return true;
+    if (expr.kind !== "binary") return false;
+    if (expr.op === "+") {
+      return isRandomScaledInteger(expr.left) && numericLiteralValue2(expr.right) !== void 0 || numericLiteralValue2(expr.left) !== void 0 && isRandomScaledInteger(expr.right);
+    }
+    if (expr.op === "-") {
+      return isRandomScaledInteger(expr.left) && numericLiteralValue2(expr.right) !== void 0;
+    }
+    return false;
+  }
+  function isRandomScaledInteger(expr) {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "int" || expr.args.length !== 1) return false;
+    const arg = expr.args[0];
+    if (arg.kind !== "binary" || arg.op !== "*") return false;
+    if (isRandomCall(arg.left)) return !expressionContainsRandom(arg.right);
+    if (isRandomCall(arg.right)) return !expressionContainsRandom(arg.left);
+    return false;
+  }
+  function isRandomCall(expr) {
+    return expr.kind === "call" && expr.callee.toLowerCase() === "random" && expr.args.length === 0;
+  }
+  function expressionContainsRandom(expr) {
+    switch (expr.kind) {
+      case "number":
+      case "identifier":
+        return false;
+      case "unary":
+        return expressionContainsRandom(expr.expr);
+      case "binary":
+        return expressionContainsRandom(expr.left) || expressionContainsRandom(expr.right);
+      case "call":
+        return isRandomCall(expr) || expr.args.some(expressionContainsRandom);
+    }
+  }
+  function isPureExpression(expr) {
+    switch (expr.kind) {
+      case "number":
+      case "identifier":
+        return true;
+      case "unary":
+        return isPureExpression(expr.expr);
+      case "binary":
+        return isPureExpression(expr.left) && isPureExpression(expr.right);
+      case "call":
+        return false;
+    }
+  }
+  function matchIntOrFracCall(expr) {
+    if (expr.kind !== "call" || expr.args.length !== 1) return void 0;
+    const name = expr.callee.toLowerCase();
+    if (name !== "int" && name !== "frac") return void 0;
+    return { fn: name, arg: expr.args[0] };
+  }
+  function matchStackUnaryDerivationCall(expr) {
+    if (expr.kind !== "call" || expr.args.length !== 1) return void 0;
+    const name = expr.callee.toLowerCase();
+    if (!isStackUnaryDerivationFn(name)) return void 0;
+    const [opcode, mnemonic] = STACK_UNARY_DERIVATION_OPCODES[name];
+    return { fn: name, arg: expr.args[0], opcode, mnemonic };
+  }
+  function isStackUnaryDerivationFn(name) {
+    return Object.prototype.hasOwnProperty.call(STACK_UNARY_DERIVATION_OPCODES, name);
+  }
   function optimizeDispatchDefaultCases(statement) {
     if (statement.cases.length === 0) return { statement, removed: 0, reordered: 0 };
     if (!statement.defaultBody) {
-      const ordered2 = orderZeroDispatchCasesFirst(statement.cases);
+      const ordered2 = orderNumericDispatchCasesForResidual(statement.cases);
       return {
         statement: ordered2.reordered === 0 ? statement : { ...statement, cases: ordered2.cases },
         removed: 0,
@@ -11418,11 +17177,11 @@ var MKProEmulatorBundle = (() => {
       }
       kept.push(dispatchCase);
     }
-    const ordered = orderZeroDispatchCasesFirst(kept);
+    const ordered = orderNumericDispatchCasesForResidual(kept);
     const nextStatement = removed === 0 && ordered.reordered === 0 ? statement : { ...statement, cases: ordered.cases };
     return { statement: nextStatement, removed, reordered: ordered.reordered };
   }
-  function orderZeroDispatchCasesFirst(cases) {
+  function orderNumericDispatchCasesForResidual(cases) {
     if (cases.length < 2) return { cases, reordered: 0 };
     const values = cases.map((dispatchCase) => numericLiteralValue2(dispatchCase.value));
     if (values.some((value) => value === void 0)) return { cases, reordered: 0 };
@@ -11431,13 +17190,63 @@ var MKProEmulatorBundle = (() => {
       if (seen.has(value)) return { cases, reordered: 0 };
       seen.add(value);
     }
+    const residualOrder = bestResidualDispatchOrder(values);
+    const order = orderMatchesIdentity(residualOrder) ? zeroFirstDispatchOrder(values) : residualOrder;
+    const reordered = order.filter((originalIndex, index) => originalIndex !== index).length;
+    if (reordered === 0) return { cases, reordered: 0 };
+    const ordered = order.map((index) => cases[index]);
+    return { cases: ordered, reordered };
+  }
+  function orderMatchesIdentity(order) {
+    return order.every((originalIndex, index) => originalIndex === index);
+  }
+  function zeroFirstDispatchOrder(values) {
     const zeroIndex = values.indexOf(0);
-    if (zeroIndex <= 0) return { cases, reordered: 0 };
-    const zeroCase = cases[zeroIndex];
-    return {
-      cases: [zeroCase, ...cases.slice(0, zeroIndex), ...cases.slice(zeroIndex + 1)],
-      reordered: 1
+    if (zeroIndex <= 0) return values.map((_, index) => index);
+    return [zeroIndex, ...values.map((_, index) => index).filter((index) => index !== zeroIndex)];
+  }
+  function bestResidualDispatchOrder(values) {
+    const current = values.map((_, index) => index);
+    let best = current;
+    const currentCost = residualDispatchValueCost(values, current);
+    let bestCost = currentCost;
+    if (values.length > 8) return current;
+    const used = /* @__PURE__ */ new Set();
+    const order = [];
+    const visit = (previous, cost) => {
+      if (cost >= bestCost) return;
+      if (order.length === values.length) {
+        bestCost = cost;
+        best = [...order];
+        return;
+      }
+      for (let index = 0; index < values.length; index += 1) {
+        if (used.has(index)) continue;
+        used.add(index);
+        order.push(index);
+        const value = values[index];
+        visit(value, cost + residualStepCost(previous, value));
+        order.pop();
+        used.delete(index);
+      }
     };
+    visit(void 0, 0);
+    if (currentCost - bestCost < 3) return current;
+    return best;
+  }
+  function residualDispatchValueCost(values, order) {
+    let previous;
+    let cost = 0;
+    for (const index of order) {
+      const value = values[index];
+      cost += residualStepCost(previous, value);
+      previous = value;
+    }
+    return cost;
+  }
+  function residualStepCost(previous, value) {
+    const delta = previous === void 0 ? value : previous - value;
+    return delta === 0 ? 0 : estimateNumberCost2(String(delta)) + 1;
   }
   function statementListsEqual(left, right) {
     return left.length === right.length && left.every((statement, index) => statementEquals(statement, right[index]));
@@ -11446,8 +17255,9 @@ var MKProEmulatorBundle = (() => {
     if (left.kind !== right.kind) return false;
     switch (left.kind) {
       case "pause":
+        return expressionEquals(left.expr, right.expr) && left.kind === right.kind;
       case "halt":
-        return expressionEquals(left.expr, right.expr);
+        return expressionEquals(left.expr, right.expr) && left.literal === right.literal;
       case "ask":
         return left.target === right.target && expressionOptionEquals(left.prompt, right.prompt);
       case "input":
@@ -11560,6 +17370,50 @@ var MKProEmulatorBundle = (() => {
     const value = Number(expr.raw);
     return Number.isFinite(value) ? value : void 0;
   }
+  function estimateBranchOrderBodyCost(statements, ast) {
+    let total = 0;
+    for (const statement of statements) {
+      const cost = estimateBranchOrderStatementCost(statement, ast);
+      if (!Number.isFinite(cost)) return Number.POSITIVE_INFINITY;
+      total += cost;
+    }
+    return total;
+  }
+  function estimateBranchOrderStatementCost(statement, ast) {
+    switch (statement.kind) {
+      case "assign":
+        return estimateExpressionCost2(statement.expr) + 1;
+      case "pause":
+      case "halt":
+      case "trap":
+        return estimateExpressionCost2(statement.expr) + 1;
+      case "ask":
+        return (statement.prompt === void 0 ? 0 : estimateExpressionCost2(statement.prompt)) + 2;
+      case "input":
+        return 2;
+      case "show": {
+        const display = ast.displays.find((candidate) => candidate.name === statement.display);
+        return display === void 0 ? Number.POSITIVE_INFINITY : estimatePackedDisplayBodyCost(display.sources.length);
+      }
+      case "call":
+        return 2;
+      case "if": {
+        const thenCost = estimateBranchOrderBodyCost(statement.thenBody, ast);
+        if (!Number.isFinite(thenCost)) return Number.POSITIVE_INFINITY;
+        if (statement.elseBody === void 0) return estimateConditionCost(statement.condition, ast) + thenCost;
+        const elseCost = estimateBranchOrderBodyCost(statement.elseBody, ast);
+        if (!Number.isFinite(elseCost)) return Number.POSITIVE_INFINITY;
+        return estimateConditionCost(statement.condition, ast) + thenCost + 2 + elseCost;
+      }
+      case "core":
+      case "egg":
+        return statement.lines.length;
+      case "loop":
+      case "switch":
+      case "dispatch":
+        return Number.POSITIVE_INFINITY;
+    }
+  }
   function estimateOrdinaryIfCost(statement, ast) {
     const thenStatement = statement.thenBody[0];
     if (statement.thenBody.length !== 1 || !thenStatement) return Number.POSITIVE_INFINITY;
@@ -11639,6 +17493,8 @@ var MKProEmulatorBundle = (() => {
     if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
       return estimateNegativeZeroDegreeSelectorCost(expr, preloadedConstants);
     }
+    const smallSetMacro = smallSetExpressionMacro(name, expr.args);
+    if (smallSetMacro !== void 0) return estimateExpressionCostForCondition(smallSetMacro, preloadedConstants);
     const macro = ticTacToeExpressionMacro(name, expr.args);
     if (macro !== void 0) return estimateExpressionCostForCondition(macro, preloadedConstants);
     if (name === "random" || name === "pi") return 1;
@@ -11684,6 +17540,8 @@ var MKProEmulatorBundle = (() => {
     if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
       return estimateNegativeZeroDegreeSelectorCost(expr);
     }
+    const smallSetMacro = smallSetExpressionMacro(name, expr.args);
+    if (smallSetMacro !== void 0) return estimateExpressionCost2(smallSetMacro);
     const macro = ticTacToeExpressionMacro(name, expr.args);
     if (macro !== void 0) return estimateExpressionCost2(macro);
     if (name === "random" || name === "pi") return 1;
@@ -11710,6 +17568,11 @@ var MKProEmulatorBundle = (() => {
       cost += exponent.replace(/^[+-]/u, "").length;
     }
     return cost;
+  }
+  function residualAdjustmentCost(previousValue, nextValue) {
+    const delta = previousValue - nextValue;
+    if (delta === 0) return 0;
+    return estimateNumberCost2(String(Math.abs(delta))) + 1;
   }
   function buildIrReport(ast, items, steps) {
     return {
@@ -11783,13 +17646,16 @@ var MKProEmulatorBundle = (() => {
       requires: [],
       activeWhen: [
         "tail-call-lowering",
+        "tail-branch-inversion",
         "terminal-rule-tail-call",
         "tail-call-layout",
         "terminal-if-direct-branch",
         "terminal-branch-end-elision",
         "local-terminal-tail",
         "local-terminal-tail-branch",
-        "late-layout-if-variant"
+        "late-layout-if-variant",
+        "single-use-rule-inline",
+        "size-model-rule-inline"
       ],
       detail: "Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops."
     },
@@ -11800,6 +17666,38 @@ var MKProEmulatorBundle = (() => {
       requires: [],
       activeWhen: ["return-zero-jump"],
       detail: "Uses \u0412/\u041E as one-cell \u0411\u041F 01 only when the return stack is known empty."
+    },
+    {
+      id: "vo-return-body-reorder",
+      category: "flow",
+      source: "mk61-delta",
+      requires: [],
+      activeWhen: ["vo-return-body-reorder"],
+      detail: "Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a \u041F\u041F/\u0412/\u041E pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs."
+    },
+    {
+      id: "super-number-deferred-normalization",
+      category: "data",
+      source: "undocumented",
+      requires: [],
+      activeWhen: ["super-number-deferred-normalization"],
+      detail: "Candidate: keep an un-normalized super-number (extra hidden mantissa digits) to defer a range/error check. The reference emulator models only the 8 visible mantissa digits, so the hidden-digit behavior the idiom relies on cannot be reproduced or safely proven, and no language construct produces it."
+    },
+    {
+      id: "packed-position-type",
+      category: "data",
+      source: "undocumented",
+      requires: ["constants-dual-use"],
+      activeWhen: ["packed-position-type"],
+      detail: "Candidate: a language-level packed position type N.0000H carrying an integer position plus packed (hex) fractional sub-coordinates. The dual-use round-trip (\u041A [x] recovers the position, \u041A {x} recovers the packed fraction) is already exploited by constants-dual-use; a dedicated type would only add language surface that no current program consumes."
+    },
+    {
+      id: "dual-constant-sign-digit",
+      category: "data",
+      source: "undocumented",
+      requires: ["negative-zero-threshold-selector"],
+      activeWhen: ["dual-constant-sign-digit"],
+      detail: "Candidate: a language intent for a dual constant 1.|-00 plus compact sign-digits (2N..9N) and their comparison semantics. The negative-zero comparison behavior is already active through the negative-zero-threshold family; no current program needs the additional sign-digit literal surface."
     },
     {
       id: "branch-removal",
@@ -11821,6 +17719,8 @@ var MKProEmulatorBundle = (() => {
       requires: [],
       activeWhen: [
         "zero-condition-test",
+        "bit-mask-condition-helper",
+        "spatial-hit-condition-helper",
         "fractional-indirect-addressing",
         "kor-digit-test"
       ],
@@ -11840,6 +17740,14 @@ var MKProEmulatorBundle = (() => {
         "indirect-register-flow"
       ],
       detail: "Lowers high-level command dispatch automatically; small proven dispatches may use indirect or super-dark dispatch."
+    },
+    {
+      id: "shared-challenge-effect-lowering",
+      category: "data",
+      source: "documented",
+      requires: [],
+      activeWhen: ["shared-challenge-effect-lowering"],
+      detail: "Recognizes repeated challenge protocols whose branches differ by numeric state deltas and common cell updates, then lowers them as one shared formula-driven effect table."
     },
     {
       id: "arithmetic-if-select",
@@ -12003,8 +17911,8 @@ var MKProEmulatorBundle = (() => {
       category: "display",
       source: "mk61-delta",
       requires: ["x2-register", "display-bytes"],
-      activeWhen: ["vp-fraction-restore"],
-      detail: "Uses \u0412\u041F where it simultaneously restores X2 and provides the needed fractional/mantissa side effect."
+      activeWhen: ["vp-fraction-restore", "vp-exponent-splice"],
+      detail: "Uses \u0412\u041F where it simultaneously restores X2 and provides the needed fractional/mantissa side effect, and collapses redundant \u0412\u041F \u0412\u041F / \u041A\u041D\u041E\u041F \u0412\u041F exponent-entry splices."
     },
     {
       id: "hex-mantissa-arithmetic",
@@ -12079,6 +17987,30 @@ var MKProEmulatorBundle = (() => {
       detail: "Coalesces structurally identical pause-0 failure tails into a single shared exit, removing the trampoline cells between them."
     },
     {
+      id: "return-suffix-gadget",
+      category: "flow",
+      source: "documented",
+      requires: [],
+      activeWhen: ["return-suffix-gadget"],
+      detail: "Shares identical straight-line suffixes ending in \u0412/\u041E, and calls into existing straight-line body plus \u0411\u041F tail-call gadgets when the extra return frame is proven to land on the original continuation."
+    },
+    {
+      id: "subroutine-part-shared-tail",
+      category: "flow",
+      source: "undocumented",
+      requires: [],
+      activeWhen: ["int-frac-shared-tail"],
+      detail: "Computes a shared pure operand once and derives both its integer (\u041A [x]) and fractional (\u041A {x}) parts through a single \u0412\u2191 / X\u2194Y stack tail instead of recomputing the operand for each part."
+    },
+    {
+      id: "z-stack-derived-tail",
+      category: "stack",
+      source: "documented",
+      requires: [],
+      activeWhen: ["z-stack-derived-value-reuse"],
+      detail: "Computes a shared pure operand once and keeps extra copies in Y/Z (and T for four outputs), restoring them with X\u2194Y and F reverse for adjacent unary derivations."
+    },
+    {
       id: "liveness-analysis",
       category: "verification",
       source: "documented",
@@ -12093,6 +18025,22 @@ var MKProEmulatorBundle = (() => {
       requires: [],
       activeWhen: ["dead-store-elimination"],
       detail: "Removes X->\u041F r writes whose register is never read again before the next write to the same register, using whole-program liveness."
+    },
+    {
+      id: "interprocedural-dead-store",
+      category: "data",
+      source: "documented",
+      requires: [],
+      activeWhen: ["interprocedural-dead-store"],
+      detail: "Drops a field assignment when interprocedural liveness over the rule call graph proves the value is always overwritten before it can be observed (shown, branched on, output, or read back)."
+    },
+    {
+      id: "interprocedural-value-propagation",
+      category: "data",
+      source: "documented",
+      requires: [],
+      activeWhen: ["interprocedural-value-propagation"],
+      detail: "Replaces a recomputed expression with an equal live variable when an affine-form analysis proves they hold the same value on every path, including merges that need linear-arithmetic reasoning."
     },
     {
       id: "last-x-reuse",
@@ -12184,7 +18132,75 @@ var MKProEmulatorBundle = (() => {
       value,
       countsAgainstProgram: false
     }));
-    return [...explicit, ...synthetic, ...constants];
+    const displayTemplateMasks = [];
+    for (const display of ast.displays) {
+      if (!displayHasMantissaExponentTemplateShape(display)) continue;
+      const register = allocation.registers[displayTemplateMaskScratchName(display)];
+      if (register === void 0) continue;
+      displayTemplateMasks.push({
+        register,
+        value: "8,-00-000",
+        countsAgainstProgram: false
+      });
+    }
+    return [...explicit, ...synthetic, ...constants, ...displayTemplateMasks];
+  }
+  function buildGeneratedSetupProgram(ast, allocation, preloads, options, machineProfile, diagnostics, optimizations, warnings, candidates) {
+    const fields = setupProgramFields(ast);
+    const executablePreloads = preloads.flatMap((preload) => executableSetupPreload(preload));
+    const needsSetupProgram = fields.length > 0 || executablePreloads.some((preload) => preload.kind === "display-literal");
+    if (!needsSetupProgram) return void 0;
+    const setupOptimizations = [];
+    const setupContext = new EmitContext(
+      ast,
+      allocation,
+      options,
+      machineProfile,
+      diagnostics,
+      setupOptimizations,
+      warnings,
+      candidates,
+      {}
+    );
+    setupContext.compileSetupProgramWithPreloads(executablePreloads, fields);
+    const optimizedSetup = optimizeItems(setupContext.items, options, setupOptimizations);
+    const { steps } = layoutProgram(optimizedSetup.items, diagnostics, options, ast, machineProfile);
+    optimizations.push({
+      name: "generated-setup-program",
+      detail: `Generated optimized setup program for ${fields.map((field) => field.name).join(", ")}.`
+    });
+    optimizations.push(...setupOptimizations.map((optimization) => ({
+      name: `setup-${optimization.name}`,
+      detail: optimization.detail
+    })));
+    return {
+      steps,
+      reason: `initializes ${fields.map((field) => field.name).join(", ")}`
+    };
+  }
+  function setupProgramFields(ast) {
+    if (!ast.v2) return [];
+    return ast.states.flatMap((state) => state.fields).filter((field) => field.initial !== void 0 && !isSetupLiteralExpression(field.initial));
+  }
+  function executableSetupPreload(preload) {
+    const register = registerFromText(preload.register);
+    const value = executableSetupValue(preload.value);
+    if (value !== void 0) return [{ register, value, kind: "number" }];
+    const literal = displayLiteralProgram(preload.value);
+    if (literal === void 0 || literal.kind === "error") return [];
+    return [{ register, value: preload.value, kind: "display-literal" }];
+  }
+  function executableSetupValue(value) {
+    const trimmed = value.trim();
+    if (/^-?\d+(?:[,.]\d+)?(?:E-?\d{1,2})?$/iu.test(trimmed)) return trimmed.replace(",", ".");
+    if (/^[A-F][0-9A-F]$/iu.test(trimmed)) {
+      return String(formalAddressInfo(Number.parseInt(trimmed, 16)).actual);
+    }
+    return void 0;
+  }
+  function isSetupLiteralExpression(expr) {
+    if (expr.kind === "number") return true;
+    return expr.kind === "unary" && expr.op === "-" && expr.expr.kind === "number";
   }
   function buildNegativeZeroDegreePreloadReport(allocation, optimizations) {
     if (allocation.negativeZeroDegree === void 0) return [];
@@ -12266,7 +18282,9 @@ var MKProEmulatorBundle = (() => {
     if (optimizations.some((optimization) => optimization.name === "constants-dual-use")) {
       add("address-constants", "Optimizer reused constants as arithmetic values and address-like data.", "optimizer");
     }
-    if (optimizations.some((optimization) => optimization.name === "x2-display-byte-scheduling")) {
+    if (optimizations.some(
+      (optimization) => optimization.name === "x2-display-byte-scheduling" || optimization.name === "display-byte-x2-lowering"
+    )) {
       add("x2-register", "Optimizer scheduled hidden X2 values across display-byte boundaries.", "optimizer");
     }
     if (optimizations.some((optimization) => optimization.name === "negative-zero-threshold-selector")) {
@@ -12275,7 +18293,12 @@ var MKProEmulatorBundle = (() => {
     if (optimizations.some((optimization) => optimization.name === "vp-fraction-restore")) {
       add("x2-restore-boundaries", "Optimizer used \u0412\u041F as both X2 restoration and fractional/mantissa transform.", "optimizer");
     }
-    if (optimizations.some((optimization) => optimization.name === "hex-mantissa-arithmetic")) {
+    if (optimizations.some((optimization) => optimization.name === "z-stack-derived-value-reuse")) {
+      add("z-stack-register", "Optimizer reused saved operands from Y/Z stack levels with X\u2194Y and F reverse.", "optimizer");
+    }
+    if (optimizations.some(
+      (optimization) => optimization.name === "hex-mantissa-arithmetic" || optimization.name === "display-byte-x2-lowering"
+    )) {
       add("display-bytes", "Optimizer packed state into hexadecimal mantissa/display-byte forms.", "optimizer");
     }
     if (optimizations.some((optimization) => optimization.name === "fractional-indirect-addressing" || optimization.name === "r0-fractional-sentinel")) {
@@ -12675,12 +18698,42 @@ var MKProEmulatorBundle = (() => {
   }
 
   // src/core/format.ts
+  var MK61_HEX_SETUP_DIGITS = {
+    A: "-",
+    B: "L",
+    C: "\u0421",
+    D: "\u0413",
+    E: "\u0415",
+    F: "_"
+  };
   function formatListing(result) {
+    const setupProgram = result.report.setupProgram;
+    if (setupProgram !== void 0) {
+      return [
+        "# Setup Listing",
+        formatListingSteps(setupProgram.steps),
+        "",
+        "# Main Listing",
+        formatListingSteps(result.steps)
+      ].join("\n");
+    }
+    const setupBlock = formatSetupBlock(result);
+    if (setupBlock !== void 0) {
+      return [
+        "Setup Block:",
+        `  ${setupBlock}`,
+        "",
+        formatListingSteps(result.steps)
+      ].join("\n");
+    }
+    return formatListingSteps(result.steps);
+  }
+  function formatListingSteps(steps) {
     const lines = [
       " Step | Code | Command                 | Comment",
       "------+------+-------------------------+----------------"
     ];
-    for (const step of result.steps) {
+    for (const step of steps) {
       const address = formatStepAddress(step.address).padStart(4, " ");
       const command = step.mnemonic.padEnd(23, " ");
       const comments = [step.comment].filter((value) => Boolean(value)).join("; ");
@@ -12688,12 +18741,40 @@ var MKProEmulatorBundle = (() => {
     }
     return lines.join("\n");
   }
+  function formatProgramTokens(steps) {
+    return steps.map((step) => step.hex).join("\n");
+  }
   function formatStepAddress(address) {
     try {
       return formatAddress(address);
     } catch {
       return `>${address.toString(16).toUpperCase()}`;
     }
+  }
+  function formatSetupBlock(result) {
+    const assignments = result.report.preloads.map(formatSetupAssignment).filter((assignment) => assignment !== void 0);
+    if (assignments.length === 0) return void 0;
+    return `\`${assignments.join("; ")}\``;
+  }
+  function formatSetupProgram(result) {
+    if (result.report.setupProgram === void 0) return void 0;
+    return formatProgramTokens(result.report.setupProgram.steps);
+  }
+  function formatSetupAssignment(preload) {
+    if (!isSetupLiteral(preload.value)) return void 0;
+    return `R${preload.register}=${formatSetupValue(preload.value)}`;
+  }
+  function isSetupLiteral(value) {
+    return /^-?[0-9A-FАВСДЕLСГЕ_\-,.]+(?:E-?[0-9]{1,2})?$/iu.test(value);
+  }
+  function formatSetupValue(value) {
+    const normalized = value.toUpperCase();
+    if (isScientificDecimal(normalized)) return value;
+    if (!/^[0-9A-F]+$/iu.test(normalized) || !/[A-F]/iu.test(normalized)) return value;
+    return [...normalized].map((digit) => MK61_HEX_SETUP_DIGITS[digit] ?? digit).join("");
+  }
+  function isScientificDecimal(value) {
+    return /^-?\d+(?:[,.]\d+)?E-?\d{1,2}$/iu.test(value);
   }
 
   // src/browser/emulator-bridge.ts
@@ -12706,12 +18787,18 @@ var MKProEmulatorBundle = (() => {
   var STATUS_ID = "mk-pro-emulator-status";
   function compileForBrowser(source, options = {}) {
     const result = compileMKPro(source, { ...DEFAULT_COMPILE_OPTIONS, ...options });
-    const programText = formatProgramTokens(result.steps.map((step) => step.hex));
-    const setupPrograms = result.report.preloads.map((preload) => preload.setupProgram).filter((program) => program !== void 0);
+    const programText = formatProgramTokens(result.steps);
+    const setupBlockText = formatSetupBlock(result);
+    const preloadSetupPrograms = result.report.preloads.map((preload) => preload.setupProgram).filter((program) => program !== void 0);
+    const setupPrograms = [
+      formatSetupProgram(result),
+      ...preloadSetupPrograms
+    ].filter((program) => program !== void 0);
     const setupProgramText = setupPrograms.length === 0 ? void 0 : setupPrograms.join("\n\n");
     return {
       source,
       programText,
+      ...setupBlockText === void 0 ? {} : { setupBlockText },
       ...setupProgramText === void 0 ? {} : { setupProgramText },
       listing: formatListing(result),
       steps: result.steps,
@@ -12760,7 +18847,7 @@ var MKProEmulatorBundle = (() => {
         detail: compiled
       }));
       setStatus(
-        compiled.setupProgramText === void 0 ? `MK-Pro compiled: ${compiled.report.steps}/${compiled.report.budget} cells.` : `MK-Pro compiled: ${compiled.report.steps}/${compiled.report.budget} cells; setup program required.`
+        compiled.setupBlockText === void 0 && compiled.setupProgramText === void 0 ? `MK-Pro compiled: ${compiled.report.steps}/${compiled.report.budget} cells.` : `MK-Pro compiled: ${compiled.report.steps}/${compiled.report.budget} cells; setup required.`
       );
       return compiled;
     };
@@ -12811,7 +18898,7 @@ var MKProEmulatorBundle = (() => {
         const compiled = compileForBrowser(source, compilerOptions);
         lastResult = compiled;
         setStatus(
-          compiled.setupProgramText === void 0 ? `MK-Pro detected: ${compiled.report.steps}/${compiled.report.budget} cells. Click Write to load.` : `MK-Pro detected: ${compiled.report.steps}/${compiled.report.budget} cells. Run setupProgramText once, then click Write.`
+          compiled.setupBlockText === void 0 && compiled.setupProgramText === void 0 ? `MK-Pro detected: ${compiled.report.steps}/${compiled.report.budget} cells. Click Write to load.` : `MK-Pro detected: ${compiled.report.steps}/${compiled.report.budget} cells. Apply setup, then click Write.`
         );
       } catch (error) {
         setStatus(errorToStatus(error), true);
@@ -12840,13 +18927,6 @@ var MKProEmulatorBundle = (() => {
     window.__mkProEmulatorBridge = bridge;
     window.MKProEmulator = bridge;
     return bridge;
-  }
-  function formatProgramTokens(tokens) {
-    const rows = [];
-    for (let index = 0; index < tokens.length; index += 16) {
-      rows.push(tokens.slice(index, index + 16).join(" "));
-    }
-    return rows.join("\n");
   }
   function readProgramText(element) {
     const text = element.innerText ?? element.textContent;
