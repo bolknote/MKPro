@@ -29,4 +29,4 @@ Generated with `npm run examples:size`.
 | `pending-optimizer/teleport.mkpro` | 232 | 105 | +127 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/tic-tac-toe-4x4.mkpro` | 241 | 105 | +136 | pending optimizer | not loaded: main >105 |
 | `pending-optimizer/treasure-hunter-2.mkpro` | 149 | 105 | +44 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/wumpus.mkpro` | 110 | - | - | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/wumpus.mkpro` | 107 | - | - | pending optimizer | setup load ok; main >105 |

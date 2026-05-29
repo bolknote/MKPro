@@ -18,7 +18,7 @@ Current `--analysis` sizes, measured against the local reference listings:
 | `teleport.mkpro` | 232 | 105 | station masks and vault/guard flow |
 | `tic-tac-toe-4x4.mkpro` | 241 | 105 | 4x4 line-count state representation |
 | `treasure-hunter-2.mkpro` | 149 | 105 | floor-plan display/state lowerer |
-| `wumpus.mkpro` | 110 | 105 | show/output rewrite pushed the full hunt over the MK-61 window |
+| `wumpus.mkpro` | 107 | 105 | terminal loss now uses calculator error stop; still over the MK-61 window |
 
 Prototype notes:
 
