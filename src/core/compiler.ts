@@ -151,6 +151,14 @@ interface LoweringOptions {
   // occasionally regress an unrelated program; gated as a speculative variant
   // and adopted only when it produces fewer cells.
   freeResidualDispatchScratch?: boolean;
+  // Reuse the value already in X for a read of any copy-equivalent variable
+  // (after `A = B`, a read of A or B can reuse X), at scalar sites only
+  // (equality/commutative conditions, near_any candidates). Sound because the
+  // alias set only holds variables proven equal to X in straight-line code.
+  // Speculative variant; adopted only when smaller.
+  aliasXReuse?: boolean;
+  // Enable copy coalescing (Form 2) in register-coalesce. Speculative variant.
+  coalesceCopies?: boolean;
 }
 
 type DisplaySourceItem = Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }>;
@@ -225,6 +233,16 @@ export function compileMKPro(
     "Freed the unused residual-dispatch scratch register to unlock more preloaded constants",
   );
   tryCandidate(
+    { aliasXReuse: true },
+    "alias-x-reuse",
+    "Reused X for copy-equivalent variables at scalar sites (conditions, near_any)",
+  );
+  tryCandidate(
+    { coalesceCopies: true },
+    "coalesce-copies",
+    "Coalesced copy-related registers (A = B) that never diverge, dropping the copy and freeing a register",
+  );
+  tryCandidate(
     { freeResidualDispatchScratch: true, canonicalizeIfChains: true },
     "free-residual-dispatch-scratch-with-if-chain",
     "Combined residual-dispatch scratch freeing with if/else-if dispatch canonicalization",
@@ -282,6 +300,9 @@ function compileMKProOnce(
 ): CompileResult {
   const ast = parseProgram(source);
   const opts: CompileOptions = { ...DEFAULT_OPTIONS, ...options };
+  // The copy-coalescing (Form 2) lowering variant reaches the register-coalesce
+  // IR pass through CompileOptions, since IR passes do not see LoweringOptions.
+  if (loweringOptions.coalesceCopies === true) opts.coalesceCopies = true;
   const machineProfile = MK61_PROFILE;
   const diagnostics: Diagnostic[] = [];
   const optimizations: AppliedOptimization[] = [];
@@ -1552,6 +1573,13 @@ class EmitContext {
   }>();
   private readonly terminalTailHelpers: Array<{ body: StatementAst[]; label: string; line: number }> = [];
   private currentXVariable: string | undefined;
+  // Every variable known to hold the value currently in X (a copy-equivalence
+  // class for the straight-line region). After `A = B`, X equals both A and B,
+  // so a read of either can reuse X. Reset by any X-clobbering op and at
+  // control-flow boundaries; grown only by stores that copy X into a name.
+  // Only consulted at scalar reuse sites (conditions, near_any) when
+  // aliasXReuse is enabled — never for the order-dependent packed-display reorder.
+  private currentXAliases = new Set<string>();
   private currentXKnownZero = false;
   // Meet of the X-variable carried by every recorded branch/jump edge into a
   // label (undefined value = edges disagree / unknown). Used by emitLabel to
@@ -2052,6 +2080,7 @@ class EmitContext {
         // is unknown when the header is reached. Clear the reuse fact so the
         // body cannot reuse a value that only holds on the first iteration.
         this.currentXVariable = undefined;
+        this.currentXAliases.clear();
         this.currentXKnownZero = false;
         this.compileStatements(statement.body);
         this.emitJump(0x51, "БП", start, "loop back", statement.line);
@@ -2203,6 +2232,7 @@ class EmitContext {
     this.compileCondition(selected.condition, falseLabel, line);
     if (fallthroughIdentifier !== undefined) {
       this.currentXVariable = fallthroughIdentifier;
+      this.currentXAliases = new Set([fallthroughIdentifier]);
       this.currentXKnownZero = false;
     }
     this.compileStatements(selected.thenBody);
@@ -2211,6 +2241,7 @@ class EmitContext {
       this.emitLabel(falseLabel);
       if (falseBranchIdentifier !== undefined) {
         this.currentXVariable = falseBranchIdentifier;
+        this.currentXAliases = new Set([falseBranchIdentifier]);
         this.currentXKnownZero = false;
         this.optimizations.push({
           name: "x-preserving-false-branch",
@@ -3962,6 +3993,7 @@ class EmitContext {
     const preservedXKnownZero = this.currentXKnownZero;
     this.emitJump(opcode, getOpcode(opcode).name, after, `decrement ${statement.target}`, statement.line);
     this.currentXVariable = preservedXVariable;
+    this.currentXAliases = preservedXVariable !== undefined ? new Set([preservedXVariable]) : new Set();
     this.currentXKnownZero = preservedXKnownZero;
     this.machineEntryOpen = false;
     this.emitLabel(after);
@@ -4076,16 +4108,15 @@ class EmitContext {
     line: number,
   ): boolean {
     if (condition.op !== "==" && condition.op !== "!=") return false;
-    const reused = this.currentXVariable;
     if (
       condition.right.kind === "identifier" &&
-      condition.right.name === reused &&
+      this.xHolds(condition.right.name) &&
       isSimpleStackLoad(condition.left)
     ) {
       this.compileExpression(condition.left);
     } else if (
       condition.left.kind === "identifier" &&
-      condition.left.name === reused &&
+      this.xHolds(condition.left.name) &&
       isSimpleStackLoad(condition.right)
     ) {
       this.compileExpression(condition.right);
@@ -4097,7 +4128,7 @@ class EmitContext {
     this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${condition.op}`, line);
     this.optimizations.push({
       name: "condition-current-x-reuse",
-      detail: `Reused ${reused} already in X for equality comparison at line ${line}.`,
+      detail: `Reused the value already in X for equality comparison at line ${line}.`,
     });
     return true;
   }
@@ -4139,7 +4170,7 @@ class EmitContext {
   }
 
   private compileNearAnyCandidate(candidate: ExpressionAst, line: number): void {
-    if (candidate.kind === "identifier" && candidate.name === this.currentXVariable) {
+    if (candidate.kind === "identifier" && this.xHolds(candidate.name)) {
       this.optimizations.push({
         name: "stack-current-x-scheduling",
         detail: `Reused ${candidate.name} already in X for near_any candidate at line ${line}.`,
@@ -4348,7 +4379,7 @@ class EmitContext {
 
   private compileCommutativeWithCurrentX(expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
     if (this.currentXVariable === undefined) return false;
-    if (expr.left.kind === "identifier" && expr.left.name === this.currentXVariable && isSimpleStackLoad(expr.right)) {
+    if (expr.left.kind === "identifier" && this.xHolds(expr.left.name) && isSimpleStackLoad(expr.right)) {
       this.compileExpression(expr.right);
       this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
       this.optimizations.push({
@@ -4357,7 +4388,7 @@ class EmitContext {
       });
       return true;
     }
-    if (expr.right.kind === "identifier" && expr.right.name === this.currentXVariable && isSimpleStackLoad(expr.left)) {
+    if (expr.right.kind === "identifier" && this.xHolds(expr.right.name) && isSimpleStackLoad(expr.left)) {
       this.compileExpression(expr.left);
       this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
       this.optimizations.push({
@@ -5266,6 +5297,7 @@ class EmitContext {
 
   private emitNumber(raw: string): void {
     this.currentXVariable = undefined;
+    this.currentXAliases.clear();
     this.currentXKnownZero = false;
     // If the machine is still in number-entry mode, a fresh literal would
     // concatenate onto the previous value (1 then 3 -> 13) or onto a just-read
@@ -5332,8 +5364,13 @@ class EmitContext {
       return;
     }
     const knownZero = this.currentXKnownZero;
+    // A store does not change X: every variable already equal to X stays equal,
+    // and `name` now joins them (X was just copied into it).
+    const aliases = new Set(this.currentXAliases);
     this.emitOp(0x40 + registerIndex(register), `X->П ${register}`, comment, sourceLine, raw);
     this.currentXVariable = name;
+    aliases.add(name);
+    this.currentXAliases = aliases;
     this.currentXKnownZero = knownZero;
   }
 
@@ -5345,6 +5382,15 @@ class EmitContext {
     }
     this.emitOp(0x60 + registerIndex(register), `П->X ${register}`, comment, sourceLine);
     this.currentXVariable = name;
+    this.currentXAliases = new Set([name]);
+  }
+
+  // True when the value in X is known to equal `name` (directly, or via a
+  // copy-equivalence alias when alias reuse is enabled), so a recall can be
+  // elided. Restricted to scalar reuse sites by callers.
+  private xHolds(name: string): boolean {
+    if (name === this.currentXVariable) return true;
+    return this.loweringOptions.aliasXReuse === true && this.currentXAliases.has(name);
   }
 
   private emitJump(
@@ -5402,6 +5448,7 @@ class EmitContext {
     if (raw) op.raw = true;
     this.items.push(op);
     this.currentXVariable = undefined;
+    this.currentXAliases.clear();
     this.currentXKnownZero = false;
     // Digit / '.' / sign / ВП opcodes (0x00..0x0c) keep the machine in
     // number-entry mode; every other op finalizes it.
@@ -5429,6 +5476,9 @@ class EmitContext {
       this.currentXVariable = this.currentXVariable === edgeFact ? this.currentXVariable : undefined;
       this.currentXKnownZero = false;
     }
+    // Copy-equivalence aliases never survive a merge: other predecessors reach
+    // this label with X clobbered, so only the proven single fact may remain.
+    this.currentXAliases = this.currentXVariable !== undefined ? new Set([this.currentXVariable]) : new Set();
   }
 
   private freshLabel(prefix: string): string {

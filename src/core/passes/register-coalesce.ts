@@ -117,15 +117,23 @@ function rewriteRegisterOp(op: IrOp, register: RegisterName): IrOp {
   };
 }
 
-const run: IrPassFn = (ops) => {
-  if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
-  if (ops.some((op) => hasRewriteBarrier(op))) {
-    return { ops: [...ops], applied: 0, optimizations: [] };
+function excludedRegisters(ops: readonly IrOp[], registers: ReadonlySet<RegisterName>): Set<RegisterName> {
+  const excluded = new Set<RegisterName>();
+  for (const reg of registers) {
+    if (
+      usesIndirectAccess(ops, reg) ||
+      usesDisplayFocusSensitiveAccess(ops, reg) ||
+      usesLoopCounter(ops, reg)
+    ) {
+      excluded.add(reg);
+    }
   }
+  return excluded;
+}
+
+function coalesceNonOverlapping(ops: readonly IrOp[]): { ops: IrOp[]; applied: number } {
   const registers = gatherUsedRegisters(ops);
-  if (registers.size <= 1) {
-    return { ops: [...ops], applied: 0, optimizations: [] };
-  }
+  if (registers.size <= 1) return { ops: [...ops], applied: 0 };
   const liveness = computeLiveness(ops);
   const liveAtEntry = liveness.liveIn[0] ?? new Set<RegisterName>();
   const ranges = liveRangePerRegister(ops, registers);
@@ -153,24 +161,114 @@ const run: IrPassFn = (ops) => {
       break;
     }
   }
-  if (mapping.size === 0) {
-    return { ops: [...ops], applied: 0, optimizations: [] };
-  }
+  if (mapping.size === 0) return { ops: [...ops], applied: 0 };
   const result = ops.map((op) => {
     if (op.kind !== "store" && op.kind !== "recall") return op;
     const replacement = mapping.get(op.register);
     return replacement === undefined ? op : rewriteRegisterOp(op, replacement);
   });
-  return {
-    ops: result,
-    applied: mapping.size,
-    optimizations: [
-      {
-        name: "register-coalesce",
-        detail: `Coalesced ${mapping.size} non-overlapping register live range(s).`,
-      },
-    ],
-  };
+  return { ops: result, applied: mapping.size };
+}
+
+// Form 2 — copy coalescing. A copy lowers to `recall S` immediately followed by
+// `store D`. When D is assigned ONLY by that copy (so it never diverges from S),
+// D's prior value is dead at the copy, and S is never stored while D is live
+// (so they never hold different values), D and S can share one register: every
+// read of D becomes a read of S and the now self-referential store is dropped,
+// which removes a cell and frees D's register. The liveness-based interference
+// check makes this sound even across the turn loop.
+function coalesceCopies(ops: readonly IrOp[]): { ops: IrOp[]; applied: number } {
+  const registers = gatherUsedRegisters(ops);
+  if (registers.size <= 1) return { ops: [...ops], applied: 0 };
+  const liveness = computeLiveness(ops);
+  const excluded = excludedRegisters(ops, registers);
+
+  const storeIndices = new Map<RegisterName, number[]>();
+  for (let i = 0; i < ops.length; i += 1) {
+    const op = ops[i]!;
+    if (op.kind === "store") {
+      if (!storeIndices.has(op.register)) storeIndices.set(op.register, []);
+      storeIndices.get(op.register)!.push(i);
+    }
+  }
+
+  const mapping = new Map<RegisterName, RegisterName>();
+  const dropIndices = new Set<number>();
+  for (let i = 0; i + 1 < ops.length; i += 1) {
+    const rec = ops[i]!;
+    const st = ops[i + 1]!;
+    if (rec.kind !== "recall" || st.kind !== "store") continue;
+    const source = rec.register;
+    const dest = st.register;
+    if (source === dest || mapping.has(dest) || mapping.has(source)) continue;
+    if (excluded.has(source) || excluded.has(dest)) continue;
+    // (1) dest assigned only by this copy.
+    const destStores = storeIndices.get(dest) ?? [];
+    if (destStores.length !== 1 || destStores[0] !== i + 1) continue;
+    // (2) dest's prior value is dead at the copy (this copy is its only live def).
+    if (liveness.liveIn[i]!.has(dest)) continue;
+    // (3) source is never stored while dest is live -> they never diverge.
+    let diverges = false;
+    for (const j of storeIndices.get(source) ?? []) {
+      if (liveness.liveOut[j]!.has(dest)) {
+        diverges = true;
+        break;
+      }
+    }
+    if (diverges) continue;
+    mapping.set(dest, source);
+    dropIndices.add(i + 1);
+  }
+
+  if (mapping.size === 0) return { ops: [...ops], applied: 0 };
+  const result: IrOp[] = [];
+  for (let i = 0; i < ops.length; i += 1) {
+    if (dropIndices.has(i)) continue;
+    const op = ops[i]!;
+    if (op.kind === "store" || op.kind === "recall") {
+      const replacement = mapping.get(op.register);
+      result.push(replacement === undefined ? op : rewriteRegisterOp(op, replacement));
+    } else {
+      result.push(op);
+    }
+  }
+  return { ops: result, applied: mapping.size };
+}
+
+const run: IrPassFn = (ops, context) => {
+  if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
+  if (ops.some((op) => hasRewriteBarrier(op))) {
+    return { ops: [...ops], applied: 0, optimizations: [] };
+  }
+
+  const optimizations: { name: string; detail: string }[] = [];
+  let current: IrOp[] = [...ops];
+  let applied = 0;
+
+  const nonOverlap = coalesceNonOverlapping(current);
+  current = nonOverlap.ops;
+  applied += nonOverlap.applied;
+  if (nonOverlap.applied > 0) {
+    optimizations.push({
+      name: "register-coalesce",
+      detail: `Coalesced ${nonOverlap.applied} non-overlapping register live range(s).`,
+    });
+  }
+
+  if (context.options.coalesceCopies === true) {
+    const copies = coalesceCopies(current);
+    current = copies.ops;
+    applied += copies.applied;
+    if (copies.applied > 0) {
+      optimizations.push({
+        name: "copy-coalesce",
+        detail: `Coalesced ${copies.applied} non-diverging copy assignment(s), dropping the copy and freeing a register.`,
+      });
+    }
+  }
+
+  if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+  return { ops: current, applied, optimizations };
 };
 
 export const registerCoalesce: IrPass = {

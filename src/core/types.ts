@@ -32,6 +32,13 @@ export interface CompileOptions {
   // Test-only: disable the interprocedural value-propagation and dead-store
   // passes so a differential test can compare optimized vs unoptimized output.
   disableInterproceduralOpts?: boolean;
+  // Enable copy coalescing in register-coalesce: a copy `recall S; store D`
+  // whose destination D is assigned only by that copy and never diverges from S
+  // (S not stored while D is live) is merged D->S, dropping the redundant store
+  // and freeing D's register. Set by the speculative `coalesce-copies` lowering
+  // variant; off by default so register reshuffles can't regress in-budget
+  // programs.
+  coalesceCopies?: boolean;
 }
 
 export interface Diagnostic {
