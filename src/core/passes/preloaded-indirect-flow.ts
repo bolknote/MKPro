@@ -28,6 +28,13 @@ interface SelectorPlan {
   superDark: boolean;
 }
 
+interface EligibleTarget {
+  target: number;
+  selectorValue: string;
+  superDark: boolean;
+  indices: number[];
+}
+
 function cloneMeta(meta: IrMeta, comment: string): IrMeta {
   return {
     ...meta,
@@ -230,8 +237,56 @@ export function runPreloadedIndirectFlow(
   const addresses = addressByIndex(ops);
   const labels = calculateLabelAddresses(ops);
   const maxTarget = maxNumericFlowTarget(ops);
+  const eligibleTargets = new Map<number, EligibleTarget>();
+  for (let index = 0; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (hasRewriteBarrier(op) || (op.kind !== "jump" && op.kind !== "call" && op.kind !== "cjump")) continue;
+    const target = branchTarget(op);
+    const siteAddress = addresses[index]!;
+    if (
+      target === undefined ||
+      target > siteAddress ||
+      (!flowOptions.relaxMaxTargetGuard && maxTarget > siteAddress)
+    ) {
+      continue;
+    }
+
+    const { selectorValue, superDark } = selectorForTarget(ops, addresses, labels, target);
+    const evaluated = evaluateIndirectAddress(registers[0]!, selectorValue, "flow");
+    const selectedSuperDark = evaluated?.superDark?.entryAddress === target;
+    if (
+      evaluated?.actualFlowTarget !== target ||
+      selectedSuperDark !== superDark
+    ) {
+      continue;
+    }
+
+    const existing = eligibleTargets.get(target);
+    if (existing !== undefined) {
+      existing.indices.push(index);
+    } else {
+      eligibleTargets.set(target, { target, selectorValue, superDark, indices: [index] });
+    }
+  }
+
   const targets = new Map<number, SelectorPlan>();
   const preloads: PreloadReport[] = [];
+  const sortedTargets = [...eligibleTargets.values()].sort((left, right) =>
+    right.indices.length - left.indices.length ||
+    left.indices[0]! - right.indices[0]!
+  );
+  for (const target of sortedTargets) {
+    const register = registers.shift();
+    if (register === undefined) break;
+    if (!isStableIndirectSelector(register)) continue;
+    targets.set(target.target, {
+      register,
+      selectorValue: target.selectorValue,
+      superDark: target.superDark,
+    });
+    preloads.push({ register, value: target.selectorValue, countsAgainstProgram: false });
+  }
+
   const result: IrOp[] = [];
   let applied = 0;
   let superDarkApplied = 0;
@@ -253,27 +308,10 @@ export function runPreloadedIndirectFlow(
       continue;
     }
 
-    let selected = targets.get(target);
+    const selected = targets.get(target);
     if (selected === undefined) {
-      const register = registers.shift();
-      if (register === undefined) {
-        result.push(op);
-        continue;
-      }
-      const { selectorValue, superDark } = selectorForTarget(ops, addresses, labels, target);
-      const evaluated = evaluateIndirectAddress(register, selectorValue, "flow");
-      const selectedSuperDark = evaluated?.superDark?.entryAddress === target;
-      if (
-        evaluated?.actualFlowTarget !== target ||
-        selectedSuperDark !== superDark ||
-        !isStableIndirectSelector(register)
-      ) {
-        result.push(op);
-        continue;
-      }
-      selected = { register, selectorValue, superDark };
-      targets.set(target, selected);
-      preloads.push({ register, value: selectorValue, countsAgainstProgram: false });
+      result.push(op);
+      continue;
     }
 
     result.push(indirectFlowOp(op, selected.register, selected.selectorValue, target, selected.superDark));

@@ -168,6 +168,15 @@ interface LoweringOptions {
   // reshuffles can't regress in-budget programs; this variant relaxes it and is
   // adopted only when the whole program ends up smaller.
   shareRandomCell?: boolean;
+  // Do NOT preload these (already-normalized) constant values into a register;
+  // build them inline from digits instead. Demoting a single-use preloaded
+  // constant costs a few cells at its one use site but frees a stable register,
+  // which the register-starved post-layout indirect-flow pass can then spend on
+  // a preloaded selector to collapse several repeated direct branches into
+  // one-cell indirect ones. Net-negative only when the freed register unlocks
+  // more indirect-flow savings than the inline cost; gated as a speculative
+  // variant and adopted only when the whole program ends up smaller.
+  suppressConstantPreloads?: ReadonlySet<string>;
 }
 
 type DisplaySourceItem = Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }>;
@@ -274,14 +283,60 @@ export function compileMKPro(
     "Shared a repeated random_cell expression and hoisted helpers so its calls become single-cell indirect flow",
   );
 
-  let best = primary;
-  let selected: (typeof candidates)[number] | undefined;
-  for (const candidate of candidates) {
-    if (candidate.result.steps.length < best.steps.length) {
-      best = candidate.result;
-      selected = candidate;
+  const selectBest = (): { best: CompileResult; selected: (typeof candidates)[number] | undefined } => {
+    let best = primary;
+    let selected: (typeof candidates)[number] | undefined;
+    for (const candidate of candidates) {
+      if (candidate.result.steps.length < best.steps.length) {
+        best = candidate.result;
+        selected = candidate;
+      }
+    }
+    return { best, selected };
+  };
+
+  // Demote-constant-for-indirect-flow: probe a few likely-winning configs, read
+  // back which integer constants they preload, and try a variant that inlines
+  // each one to free its register. The freed register lets the register-starved
+  // post-layout indirect-flow pass collapse repeated direct branches. Smallest
+  // wins, so a constant that is not actually single-use (where inlining costs
+  // more than the freed register saves) simply loses.
+  //
+  // Only overflowing programs benefit: the freed register pays off solely
+  // through post-layout indirect-flow, which itself only fires above the
+  // official window. For in-budget lowerings, inlining a constant just grows
+  // them, so confine the probe to the rescue regime and leave clean in-budget
+  // lowerings untouched (and byte-stable for their structural tests).
+  const OFFICIAL_PROGRAM_LIMIT = 105;
+  if (selectBest().best.steps.length > OFFICIAL_PROGRAM_LIMIT) {
+    const demoteBases: LoweringOptions[] = [
+      {},
+      { shareRandomCell: true, hoistSharedHelpers: true },
+      { freeResidualDispatchScratch: true },
+    ];
+    const triedDemotions = new Set<string>();
+    for (const base of demoteBases) {
+      let probe: CompileResult;
+      try {
+        probe = compileMKProOnce(source, { ...options, analysis: true }, base);
+      } catch {
+        continue;
+      }
+      for (const preload of probe.report.preloads ?? []) {
+        if (preload.countsAgainstProgram || !/^-?\d+$/u.test(preload.value)) continue;
+        const key = `${JSON.stringify(base)}|${preload.value}`;
+        if (triedDemotions.has(key)) continue;
+        triedDemotions.add(key);
+        tryCandidate(
+          { ...base, suppressConstantPreloads: new Set([preload.value]) },
+          "demote-constant-indirect-flow",
+          `Inlined single-use constant ${preload.value} to free a register for post-layout indirect flow`,
+        );
+      }
     }
   }
+
+  const { best, selected } = selectBest();
 
   if (selected !== undefined) {
     selected.result.report.optimizations.push({
@@ -388,7 +443,12 @@ function compileMKProOnce(
   }
   eliminateUnreachableV2Procs(ast, optimizations);
 
-  const allocation = allocateRegisters(ast, diagnostics, loweringOptions.freeResidualDispatchScratch === true);
+  const allocation = allocateRegisters(
+    ast,
+    diagnostics,
+    loweringOptions.freeResidualDispatchScratch === true,
+    loweringOptions.suppressConstantPreloads,
+  );
   const context = new EmitContext(
     ast,
     allocation,
@@ -1747,9 +1807,12 @@ class EmitContext {
     if (hoistProcs) this.compileProcedures();
 
     this.emitLabel(main.name);
+    const initialStart = this.currentAddress();
     this.compileInitialState();
     this.compileInitialStores();
-    this.compileStatements(main.body);
+    const canUseEntryTailLoop = !hoist && this.currentAddress() === initialStart;
+    const usedEntryTailLoop = canUseEntryTailLoop && this.compileEntryTailCallLoop(main.body, main.line);
+    if (!usedEntryTailLoop) this.compileStatements(main.body);
     if (!(this.ast.v2 && this.statementsTerminate(main.body))) {
       this.emitOp(0x50, "С/П", "implicit final stop");
     }
@@ -2083,6 +2146,24 @@ class EmitContext {
     }
   }
 
+  private compileEntryTailCallLoop(statements: StatementAst[], line: number): boolean {
+    if (statements.length !== 1) return false;
+    const loop = statements[0];
+    if (loop?.kind !== "loop" || loop.body.length !== 1) return false;
+    const call = loop.body[0];
+    if (call?.kind !== "call") return false;
+    const block = this.ast.blocks.find((candidate) => candidate.name === call.block);
+    if (block?.mode === "inline") return false;
+    if (block === undefined && !this.ast.procs.some((candidate) => candidate.name === call.block)) return false;
+    this.emitOp(0x54, "К НОП", "entry tail loop delay", line, true);
+    this.emitJump(0x51, "БП", call.block, `entry tail loop ${call.block}`, line);
+    this.optimizations.push({
+      name: "entry-tail-loop",
+      detail: `Compiled top-level loop call ${call.block} as a delayed tail jump; empty В/О returns to address 00.`,
+    });
+    return true;
+  }
+
   private compileRepeatedAssignmentValue(statements: StatementAst[], start: number): number {
     const first = statements[start];
     if (first?.kind !== "assign" || !expressionPureForSubstitution(first.expr)) return 0;
@@ -2199,7 +2280,7 @@ class EmitContext {
         this.currentXAliases.clear();
         this.currentXKnownZero = false;
         this.compileStatements(statement.body);
-        if (!this.statementsTerminate(statement.body)) {
+        if (!this.statementsEndMachineFlow(statement.body)) {
           this.emitJump(0x51, "БП", start, "loop back", statement.line);
         }
         return;
@@ -3375,10 +3456,20 @@ class EmitContext {
     return this.statementListTerminates(statements, new Set());
   }
 
+  private statementsEndMachineFlow(statements: StatementAst[]): boolean {
+    return this.statementListEndsMachineFlow(statements, new Set());
+  }
+
   private statementListTerminates(statements: StatementAst[], seenProcs: Set<string>): boolean {
     const last = statements.at(-1);
     if (!last) return false;
     return this.statementTerminates(last, seenProcs);
+  }
+
+  private statementListEndsMachineFlow(statements: StatementAst[], seenProcs: Set<string>): boolean {
+    const last = statements.at(-1);
+    if (!last) return false;
+    return this.statementEndsMachineFlow(last, seenProcs);
   }
 
   private statementTerminates(statement: StatementAst, seenProcs: Set<string>): boolean {
@@ -3401,6 +3492,31 @@ class EmitContext {
     if (proc === undefined || seenProcs.has(proc.name)) return false;
     seenProcs.add(proc.name);
     return this.statementListTerminates(proc.body, seenProcs);
+  }
+
+  private statementEndsMachineFlow(statement: StatementAst, seenProcs: Set<string>): boolean {
+    if (statement.kind === "loop" || statement.kind === "trap") return true;
+    if (statement.kind === "halt") return statement.literal !== undefined;
+    if (statement.kind === "show" && this.showTerminates(statement.display)) return true;
+    if (statement.kind === "if") {
+      return statement.elseBody !== undefined &&
+        this.statementListEndsMachineFlow(statement.thenBody, new Set(seenProcs)) &&
+        this.statementListEndsMachineFlow(statement.elseBody, new Set(seenProcs));
+    }
+    if (statement.kind === "dispatch") {
+      return statement.defaultBody !== undefined &&
+        this.statementListEndsMachineFlow(statement.defaultBody, new Set(seenProcs)) &&
+        statement.cases.every((dispatchCase) =>
+          this.statementListEndsMachineFlow(dispatchCase.body, new Set(seenProcs))
+        );
+    }
+    if (statement.kind !== "call") return false;
+    const block = this.ast.blocks.find((candidate) => candidate.name === statement.block);
+    if (block !== undefined) return block.mode !== "inline";
+    const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
+    if (proc === undefined || seenProcs.has(proc.name)) return false;
+    seenProcs.add(proc.name);
+    return this.statementListEndsMachineFlow(proc.body, seenProcs);
   }
 
   private showTerminates(displayName: string): boolean {
@@ -3743,9 +3859,7 @@ class EmitContext {
     this.emitRecall(scratch.mask, `display ${display.name} separator mask`, line);
     this.emitOp(0x38, "К ∨", "display template body merge", line);
     const exponentCanBeZero = this.displayFieldCanBeZero(template.exponent);
-    if (exponentCanBeZero) {
-      this.emitStore(scratch.value, `display ${display.name} body`, line);
-    }
+    this.emitStore(scratch.value, `display ${display.name} body`, line);
 
     const exponentZero = exponentCanBeZero ? this.freshLabel("display_exponent_zero") : undefined;
     this.emitRecall(template.exponent.name, `display ${display.name} exponent`, line);
@@ -3753,11 +3867,7 @@ class EmitContext {
       this.emitJump(0x57, "F x!=0", exponentZero, "display template zero exponent", line);
     }
     this.emitStore(scratch.loop, `display ${display.name} exponent counter`, line);
-    if (exponentCanBeZero) {
-      this.emitRecall(scratch.value, `display ${display.name} body`, line);
-    } else {
-      this.emitOp(0x14, "<->", "display template body restore", line);
-    }
+    this.emitRecall(scratch.value, `display ${display.name} body`, line);
     const loopStart = this.freshLabel("display_exponent_loop");
     this.emitLabel(loopStart);
     this.emitOp(0x0c, "ВП", "display template exponent entry", line);
@@ -6164,6 +6274,7 @@ function allocateRegisters(
   ast: ProgramAst,
   diagnostics: Diagnostic[],
   freeResidualDispatchScratch = false,
+  suppressConstantPreloads: ReadonlySet<string> = new Set(),
 ): RegisterAllocation {
   const declared = new Set<string>();
   const hints = new Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>();
@@ -6250,6 +6361,7 @@ function allocateRegisters(
 
   const constants: Record<string, RegisterName> = {};
   for (const value of collectPreloadConstantValues(ast)) {
+    if (suppressConstantPreloads.has(value)) continue;
     const register = pickConstantRegister(used);
     if (!register) break;
     constants[value] = register;
@@ -6366,8 +6478,7 @@ function pickRegister(
     return undefined;
   }
   if (variable.startsWith(DISPLAY_TEMPLATE_VALUE_PREFIX)) {
-    for (let i = REGISTER_ORDER.length - 1; i >= 0; i -= 1) {
-      const candidate = REGISTER_ORDER[i]!;
+    for (const candidate of ["2", "0", "3", "4", "5", "6", "8", "9", "a", "b", "c", "d", "e"] satisfies RegisterName[]) {
       if (!used.has(candidate)) return candidate;
     }
     return undefined;

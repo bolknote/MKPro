@@ -173,6 +173,43 @@ program LiteralSeparatedScoreboardRun {
     expect(calc.displayText()).toBe("5,-15-042-03");
   });
 
+  it("preserves zero-padded score fields when the display counter cannot be zero", () => {
+    const { MK61 } = require("../emulator/mk61.cjs") as {
+      MK61: new (options?: { extended?: boolean }) => {
+        loadProgram: (codes: number[]) => { diagnostics: string[] };
+        setRegister: (register: string, value: string) => void;
+        pressSequence: (keys: string[]) => void;
+        runUntilStable: (options: { maxFrames: number; stableFrames: number }) => { stopped: boolean };
+        displayText: () => string;
+      };
+    };
+    const result = compileMKPro(`
+program NonZeroCounterScoreboardRun {
+  state {
+    die: counter 1..6 = 3
+    score: counter 0..99 = 6
+    total: counter 0..999 = 6
+    roll: counter 1..99 = 2
+  }
+  screen status {
+    show die ".-" score:02 "-" total:03 "-" roll:02
+  }
+  turn {
+    show status
+  }
+}
+`);
+    const calc = new MK61({ extended: true });
+    const loaded = calc.loadProgram(result.steps.map((step) => step.opcode));
+    expect(loaded.diagnostics).toEqual([]);
+    for (const preload of result.report.preloads) {
+      calc.setRegister(preload.register, preload.value);
+    }
+    calc.pressSequence(["В/О", "С/П"]);
+    expect(calc.runUntilStable({ maxFrames: 1000, stableFrames: 8 }).stopped).toBe(true);
+    expect(calc.displayText()).toBe("3,-06-006-02");
+  });
+
   it("shares frequent literal-separated display bodies through a display-byte helper", () => {
     const result = compileOk(`
 program RepeatedLiteralSeparatedScoreboard {

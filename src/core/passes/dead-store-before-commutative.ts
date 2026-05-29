@@ -10,6 +10,7 @@ function registerReadBeforeNextWrite(
     const op = ops[i]!;
     if (op.kind === "recall" && op.register === register) return true;
     if (op.kind === "store" && op.register === register) return false;
+    if (op.kind !== "label" && op.kind !== "plain" && op.kind !== "orphan-address") return true;
   }
   return false;
 }

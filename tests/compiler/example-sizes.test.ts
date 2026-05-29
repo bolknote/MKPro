@@ -14,7 +14,7 @@ import { compileMKPro } from "../../src/core/index.ts";
 const EXAMPLE_BASELINE: Record<string, number> = {
   "99-bottles": 53,
   alaram: 82,
-  basic: 6,
+  basic: 8,
   "cave-sketch": 58,
   "dangerous-loading": 89,
   dungeon: 88,
