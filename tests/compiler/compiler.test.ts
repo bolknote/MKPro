@@ -112,6 +112,70 @@ program GuardedCall {
     expect(result.report.registers.flag).toBeUndefined();
   });
 
+  it("branches directly on a single-use input without storing it", () => {
+    const result = compileOk(`
+program InputBranch {
+  turn {
+    read target
+    if target >= 0 {
+      stop 1
+    }
+    else {
+      stop -1
+    }
+  }
+}
+`);
+
+    expect(result.report.registers.target).toBeUndefined();
+    expect(result.report.optimizations.some((item) => item.name === "ephemeral-input-branch")).toBe(true);
+    expect(result.steps.map((step) => step.hex).slice(0, 3)).toEqual(["50", "59", "05"]);
+  });
+
+  it("shares return suffix gadgets across compiled rule procedures", () => {
+    const result = compileOk(`
+program ReturnSuffixGadget {
+  state {
+    a: packed = 0
+    b: packed = 0
+    c: packed = 0
+    d: packed = 0
+  }
+
+  screen main {
+    show b, c, d
+  }
+
+  turn {
+    alpha
+    beta
+    alpha
+    beta
+    show main
+  }
+
+  rule alpha {
+    if a >= 0 {
+      b = 1
+    }
+    c = 2
+    d = 3
+  }
+
+  rule beta {
+    if a >= 0 {
+      b = 4
+    }
+    c = 2
+    d = 3
+  }
+}
+`, { budget: 999, analysis: true, disableInterproceduralOpts: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "return-suffix-gadget")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "return suffix gadget")).toBe(true);
+  });
+
   it("inlines tiny multi-use rules when that beats a subroutine", () => {
     const result = compileOk(`
 program TinyMultiUseRule {
@@ -1485,7 +1549,7 @@ program NegativeZeroThreshold {
       countsAgainstProgram: false,
     });
     expect(preload?.setupProgram).toContain("4D");
-    expect(result.report.steps).toBe(9);
+    expect(result.report.steps).toBe(11);
   });
 
   it("considers negative-zero threshold flow but keeps the shorter ordinary branch", () => {

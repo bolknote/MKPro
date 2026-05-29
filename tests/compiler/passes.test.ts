@@ -12,7 +12,9 @@ import { preloadedIndirectFlow } from "../../src/core/passes/preloaded-indirect-
 import { r0FractionalSentinel } from "../../src/core/passes/r0-fractional-sentinel.ts";
 import { redundantPrologueElimination } from "../../src/core/passes/redundant-prologue.ts";
 import { registerCoalesce } from "../../src/core/passes/register-coalesce.ts";
+import { returnSuffixGadget } from "../../src/core/passes/return-suffix-gadget.ts";
 import { storeRecallPeephole } from "../../src/core/passes/store-recall-peephole.ts";
+import { tailBranchInversion } from "../../src/core/passes/tail-branch-inversion.ts";
 import { tailCallLowering } from "../../src/core/passes/tail-call.ts";
 import { vpX2Peephole } from "../../src/core/passes/vp-x2-peephole.ts";
 import type { IrOp, RegisterName } from "../../src/core/types.ts";
@@ -150,6 +152,10 @@ function halt(): IrOp {
 
 function ret(): IrOp {
   return { kind: "return", opcode: 0x52, meta: { mnemonic: "В/О" } };
+}
+
+function machineCellCount(ops: readonly IrOp[]): number {
+  return lowerIrToMachine(ops).filter((item) => item.kind !== "label").length;
 }
 
 describe("ir passes on synthetic programs", () => {
@@ -343,6 +349,102 @@ describe("ir passes on synthetic programs", () => {
     expect(result.applied).toBe(1);
     expect(result.ops[1]).toMatchObject({ kind: "jump", target: "finish_turn" });
     expect(result.ops[2]).toMatchObject({ kind: "label", name: "if_end" });
+  });
+
+  it("tail-branch-inversion inverts a branch whose then path is only a tail jump", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      cjump("else_path"),
+      jump("terminal_tail"),
+      label("else_path"),
+      plain(0x02, "2"),
+      halt(),
+      label("terminal_tail"),
+      halt(),
+    ];
+    const result = tailBranchInversion.run(program, {
+      options: { ...noopOptions, tailBranchInversion: true },
+    });
+
+    expect(result.applied).toBe(1);
+    expect(result.optimizations[0]?.name).toBe("tail-branch-inversion");
+    expect(result.ops[1]).toMatchObject({
+      kind: "cjump",
+      condition: "!=0",
+      target: "terminal_tail",
+      opcode: 0x57,
+    });
+    expect(result.ops).not.toContainEqual({ kind: "label", name: "else_path" });
+  });
+
+  it("return-suffix-gadget jumps into a matching subroutine tail", () => {
+    const program: IrOp[] = [
+      label("first"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x10, "+"),
+      ret(),
+      label("second"),
+      plain(0x02, "2"),
+      plain(0x10, "+"),
+      ret(),
+    ];
+    const result = returnSuffixGadget.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.optimizations[0]?.name).toBe("return-suffix-gadget");
+    expect(result.ops).toContainEqual({ kind: "label", name: "__return_suffix_gadget_0" });
+    const second = result.ops.findIndex((op) => op.kind === "label" && op.name === "second");
+    expect(result.ops[second + 1]).toMatchObject({
+      kind: "jump",
+      target: "__return_suffix_gadget_0",
+    });
+    expect(machineCellCount(result.ops)).toBeLessThan(machineCellCount(program));
+  });
+
+  it("return-suffix-gadget calls a return tail when the caller continues afterward", () => {
+    const program: IrOp[] = [
+      label("helper"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x10, "+"),
+      ret(),
+      label("main"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x10, "+"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = returnSuffixGadget.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    const main = result.ops.findIndex((op) => op.kind === "label" && op.name === "main");
+    expect(result.ops[main + 1]).toMatchObject({
+      kind: "call",
+      target: "__return_suffix_gadget_0",
+    });
+    expect(result.ops[main + 2]).toMatchObject({ kind: "plain", opcode: 0x03 });
+    expect(machineCellCount(result.ops)).toBeLessThan(machineCellCount(program));
+  });
+
+  it("return-suffix-gadget avoids programs with absolute numeric flow targets", () => {
+    const program: IrOp[] = [
+      label("first"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x10, "+"),
+      ret(),
+      label("second"),
+      plain(0x02, "2"),
+      plain(0x10, "+"),
+      ret(),
+      numericCall(34),
+    ];
+    const result = returnSuffixGadget.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("stable-indirect-flow replaces direct numeric branches when a stable selector already holds the address", () => {

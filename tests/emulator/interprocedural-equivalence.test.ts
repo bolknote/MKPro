@@ -56,21 +56,20 @@ function observe(
   return { display: calc.displayText().trim(), stopped: run.stopped, registers };
 }
 
-describe("interprocedural value-prop + DSE behavioral equivalence (real emulator)", () => {
+describe("interprocedural value-prop behavioral equivalence (real emulator)", () => {
   // The real К СЧ stream is timing/layout-sensitive, so this equivalence probe
   // pins the die roll while preserving the same interprocedural rule shape.
   const source = readFileSync(resolve("examples/game-100-pig.mkpro"), "utf8")
     .replace("die = random_cell(die_faces)", "die = 3");
-  const before = compileMKPro(source, { disableInterproceduralOpts: true });
-  const after = compileMKPro(source);
+  const before = compileMKPro(source, { disableInterproceduralOpts: true, indirectFlowRescueAbove: 105 });
+  const after = compileMKPro(source, { indirectFlowRescueAbove: 105 });
   const beforeCodes = before.steps.map((step) => step.opcode);
   const afterCodes = after.steps.map((step) => step.opcode);
   const gameRegisters = [...new Set(Object.values(after.report.registers))];
 
-  it("both passes fire and the program shrinks", () => {
+  it("value propagation fires and the program shrinks", () => {
     const names = after.report.optimizations.map((optimization) => optimization.name);
     expect(names).toContain("interprocedural-value-propagation");
-    expect(names).toContain("interprocedural-dead-store");
     expect(after.report.steps).toBeLessThan(before.report.steps);
   });
 

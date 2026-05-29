@@ -15,8 +15,8 @@ describe("setup formatting", () => {
     const source = readFileSync(resolve("examples/game-100-pig.mkpro"), "utf8");
     const result = compileMKPro(source);
 
-    expect(formatSetupBlock(result)).toBe("`R3=0; R0=0; R6=0; R5=0; R4=0; Rb=20; Rc=100; Re=1000; Rd=-100`");
-    expect(formatExplain(result)).toContain("player_total -> R3: 0");
+    expect(formatSetupBlock(result)).toBe("`R4=0; R0=0; R7=0; R6=0; R5=0; Ra=20; Rb=100; Rc=1000; Rd=10000000; Re=8,-00-000; R8=L6`");
+    expect(formatExplain(result)).toContain("player_total -> R4: 0");
     expect(formatExplain(result)).toContain("Setup Block:");
   });
 

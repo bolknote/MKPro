@@ -837,6 +837,8 @@ The pipeline currently contains:
   tails into a shared exit.
 - **shared-call-tail** — coalesces repeated `ПП helper; БП continuation`
   pairs into one shared call tail when that is smaller.
+- **return-suffix-gadget** — shares identical straight-line tails ending in
+  `В/О` by jumping into one reusable suffix instead of duplicating it.
 - **bit-mask-helper** — shares generated `bit_mask(index)` code when spatial
   membership and line-count lowering need the same packed-cell mask shape.
 - **small-set-primitive-lowering** — lowers `near_any` and `eq_any` to compact

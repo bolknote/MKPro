@@ -35,8 +35,8 @@ program Game100Pig {
   }
 
   rule roll_die {
-    die = random_cell(die_faces)
     roll_count++
+    die = random_cell(die_faces)
   }
 
   rule roll_player {
@@ -115,9 +115,11 @@ program Game100Pig {
   rule player_choice {
     show status
     read choice
-    match choice {
-      0 => hold_player
-      otherwise => roll_player
+    if choice == 0 {
+      hold_player
+    }
+    else {
+      roll_player
     }
   }
 }

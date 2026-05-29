@@ -114,6 +114,22 @@ const DISPLAY_HELPER_MIN_SAVINGS = 4;
 const UNAVAILABLE_DISPLAY_STRATEGY_COST = 999999;
 const EXPRESSION_HELPER_MIN_COST = 8;
 const EXPRESSION_HELPER_MIN_SAVINGS = 4;
+const STACK_UNARY_DERIVATION_OPCODES = {
+  abs: [0x31, "К |x|"],
+  sign: [0x32, "К ЗН"],
+  int: [0x34, "К [x]"],
+  frac: [0x35, "К {x}"],
+  sqr: [0x22, "F x^2"],
+} as const satisfies Record<string, readonly [number, string]>;
+
+type StackUnaryDerivationFn = keyof typeof STACK_UNARY_DERIVATION_OPCODES;
+
+interface StackUnaryDerivationCall {
+  fn: StackUnaryDerivationFn;
+  arg: ExpressionAst;
+  opcode: number;
+  mnemonic: string;
+}
 
 export class CompileError extends Error {
   readonly diagnostics: Diagnostic[];
@@ -162,6 +178,9 @@ interface LoweringOptions {
   aliasXReuse?: boolean;
   // Enable copy coalescing (Form 2) in register-coalesce. Speculative variant.
   coalesceCopies?: boolean;
+  // Invert branches whose then-path collapsed to a tail jump. Speculative
+  // variant because the local saving can perturb later layout-sensitive passes.
+  tailBranchInversion?: boolean;
   // Share a repeated `random_cell`-shaped expression through one call/return
   // helper even when the static cost model only predicts a marginal (1-2 cell)
   // saving. The default threshold keeps marginal helpers inline so register
@@ -281,6 +300,11 @@ export function compileMKPro(
     { shareRandomCell: true, hoistSharedHelpers: true },
     "share-random-cell-helper-hoisted",
     "Shared a repeated random_cell expression and hoisted helpers so its calls become single-cell indirect flow",
+  );
+  tryCandidate(
+    { tailBranchInversion: true },
+    "late-layout-tail-branch-inversion",
+    "Selected tail-branch inversion after full layout",
   );
 
   const selectBest = (): { best: CompileResult; selected: (typeof candidates)[number] | undefined } => {
@@ -462,11 +486,17 @@ function compileMKProOnce(
   );
 
   context.compileProgram();
-  const optimizedResult = optimizeItems(context.items, opts, optimizations);
+  const passOptions = loweringOptions.tailBranchInversion === true
+    ? { ...opts, tailBranchInversion: true }
+    : opts;
+  const optimizedResult = optimizeItems(context.items, passOptions, optimizations);
+  const referenceMetrics = ast.reference === undefined ? undefined : resolveReferenceMetrics(ast.reference);
+  const indirectFlowRescueAbove = opts.indirectFlowRescueAbove
+    ?? (referenceMetrics === undefined ? undefined : Math.min(referenceMetrics.span, opts.budget));
   const postLayoutFlow = optimizePostLayoutIndirectFlow(
     optimizedResult.items,
-    opts,
-    opts.indirectFlowRescueAbove,
+    passOptions,
+    indirectFlowRescueAbove,
   );
   const optimized = postLayoutFlow.items;
   optimizations.push(...postLayoutFlow.optimizations);
@@ -565,6 +595,7 @@ function visiblePublicRegisters(
 function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
   const stateFields = new Set(ast.states.flatMap((state) => state.fields.map((field) => field.name)));
   if (stateFields.size === 0) return;
+  const ephemeralInputTargets = collectEphemeralInputTargets(ast);
   const externallyRead = new Set<string>();
   const inputTargets = new Set<string>();
   const assigned = new Map<string, ExpressionAst[]>();
@@ -574,7 +605,7 @@ function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimiz
   };
   const visitExpr = (expr: ExpressionAst, ignored?: string): void => {
     if (expr.kind === "identifier") {
-      if (expr.name !== ignored) addRead(expr.name);
+      if (expr.name !== ignored && !ephemeralInputTargets.has(expr.name)) addRead(expr.name);
       return;
     }
     if (expr.kind === "unary") visitExpr(expr.expr, ignored);
@@ -593,7 +624,7 @@ function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimiz
         inputTargets.add(statement.target);
         if (statement.prompt) visitExpr(statement.prompt);
       }
-      if (statement.kind === "input") inputTargets.add(statement.target);
+      if (statement.kind === "input" && !ephemeralInputTargets.has(statement.target)) inputTargets.add(statement.target);
       if (statement.kind === "assign") {
         if (!assigned.has(statement.target)) assigned.set(statement.target, []);
         assigned.get(statement.target)!.push(statement.expr);
@@ -1807,12 +1838,9 @@ class EmitContext {
     if (hoistProcs) this.compileProcedures();
 
     this.emitLabel(main.name);
-    const initialStart = this.currentAddress();
     this.compileInitialState();
     this.compileInitialStores();
-    const canUseEntryTailLoop = !hoist && this.currentAddress() === initialStart;
-    const usedEntryTailLoop = canUseEntryTailLoop && this.compileEntryTailCallLoop(main.body, main.line);
-    if (!usedEntryTailLoop) this.compileStatements(main.body);
+    this.compileStatements(main.body);
     if (!(this.ast.v2 && this.statementsTerminate(main.body))) {
       this.emitOp(0x50, "С/П", "implicit final stop");
     }
@@ -1996,18 +2024,7 @@ class EmitContext {
     }
     for (const helper of this.spatialBitMaskHelpers.values()) {
       this.emitLabel(helper.label);
-      this.emitNumber("4");
-      this.emitOp(0x13, "/", "bit mask quotient", helper.line);
-      this.emitStore(helper.scratch, "bit mask quotient", helper.line);
-      this.emitOp(0x35, "К {x}", "bit mask remainder fraction", helper.line);
-      this.emitNumber("4");
-      this.emitOp(0x12, "*", "bit mask remainder scale", helper.line);
-      this.emitNumber("2");
-      this.emitOp(0x24, "F x^y", "bit mask power", helper.line);
-      this.emitRecall(helper.scratch, "bit mask quotient", helper.line);
-      this.emitOp(0x34, "К [x]", "bit mask digit index", helper.line);
-      this.emitOp(0x15, "F 10^x", "bit mask decade", helper.line);
-      this.emitOp(0x12, "*", "bit mask value", helper.line);
+      this.emitBitMaskFromCurrentXWithQuotientScratch(helper.scratch, helper.line);
       this.emitOp(0x52, "В/О", "bit_mask return", helper.line);
       this.optimizations.push({
         name: "bit-mask-helper",
@@ -2018,11 +2035,7 @@ class EmitContext {
       this.emitLabel(helper.label);
       this.emitStore(helper.scratch, "spatial hit index", helper.line);
       this.emitRecall(helper.mask, "spatial hit mask", helper.line);
-      this.compileExpression({
-        kind: "call",
-        callee: "bit_mask",
-        args: [{ kind: "identifier", name: helper.scratch }],
-      });
+      this.compileBitMaskWithQuotientScratch({ kind: "identifier", name: helper.scratch }, helper.scratch, helper.line);
       this.emitOp(0x37, "К ∧", "spatial hit test", helper.line);
       this.emitOp(0x32, "К ЗН", "spatial hit to count", helper.line);
       this.emitOp(0x52, "В/О", "spatial hit return", helper.line);
@@ -2082,6 +2095,11 @@ class EmitContext {
           index += reused - 1;
           continue;
         }
+        const derived = this.compileStackUnaryDerivedAssignments(statements, index);
+        if (derived > 1) {
+          index += derived - 1;
+          continue;
+        }
       }
       if (statement.kind === "assign" && next?.kind === "if" && this.compileDecrementZeroBranch(statement, next)) {
         index += 1;
@@ -2132,6 +2150,23 @@ class EmitContext {
           continue;
         }
       }
+      if (
+        statement.kind === "show" &&
+        next?.kind === "input" &&
+        statements[index + 2]?.kind === "if" &&
+        this.inputFeedsOnlyFollowingCondition(next, statements[index + 2] as Extract<StatementAst, { kind: "if" }>)
+      ) {
+        const branch = statements[index + 2] as Extract<StatementAst, { kind: "if" }>;
+        this.compileShow(statement.display, statement.line);
+        this.markCurrentX(next.target);
+        this.compileIf(branch, branch.line);
+        this.optimizations.push({
+          name: "ephemeral-input-branch",
+          detail: `Branched directly on input ${next.target} at line ${next.line} without storing it.`,
+        });
+        index += 2;
+        continue;
+      }
       if (statement.kind === "show" && next?.kind === "input") {
         this.compileShow(statement.display, statement.line);
         this.emitStore(next.target, `read ${next.target}`, next.line);
@@ -2142,26 +2177,37 @@ class EmitContext {
         index += 1;
         continue;
       }
+      if (
+        statement.kind === "input" &&
+        next?.kind === "if" &&
+        this.inputFeedsOnlyFollowingCondition(statement, next)
+      ) {
+        this.emitOp(0x50, "С/П", `read ${statement.target}`, statement.line);
+        this.markCurrentX(statement.target);
+        this.compileIf(next, next.line);
+        this.optimizations.push({
+          name: "ephemeral-input-branch",
+          detail: `Branched directly on input ${statement.target} at line ${statement.line} without storing it.`,
+        });
+        index += 1;
+        continue;
+      }
       this.compileStatement(statement);
     }
   }
 
-  private compileEntryTailCallLoop(statements: StatementAst[], line: number): boolean {
-    if (statements.length !== 1) return false;
-    const loop = statements[0];
-    if (loop?.kind !== "loop" || loop.body.length !== 1) return false;
-    const call = loop.body[0];
-    if (call?.kind !== "call") return false;
-    const block = this.ast.blocks.find((candidate) => candidate.name === call.block);
-    if (block?.mode === "inline") return false;
-    if (block === undefined && !this.ast.procs.some((candidate) => candidate.name === call.block)) return false;
-    this.emitOp(0x54, "К НОП", "entry tail loop delay", line, true);
-    this.emitJump(0x51, "БП", call.block, `entry tail loop ${call.block}`, line);
-    this.optimizations.push({
-      name: "entry-tail-loop",
-      detail: `Compiled top-level loop call ${call.block} as a delayed tail jump; empty В/О returns to address 00.`,
-    });
-    return true;
+  private inputFeedsOnlyFollowingCondition(
+    input: Extract<StatementAst, { kind: "input" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+  ): boolean {
+    const reads = countIdentifierReadsInCondition(branch.condition, input.target);
+    return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
+  }
+
+  private markCurrentX(name: string): void {
+    this.currentXVariable = name;
+    this.currentXAliases = new Set([name]);
+    this.currentXKnownZero = false;
   }
 
   private compileRepeatedAssignmentValue(statements: StatementAst[], start: number): number {
@@ -2185,6 +2231,65 @@ class EmitContext {
       detail: `Stored one computed value into ${count} consecutive assignment targets at line ${first.line}.`,
     });
     return count;
+  }
+
+  private compileStackUnaryDerivedAssignments(statements: StatementAst[], start: number): number {
+    const first = statements[start];
+    if (first?.kind !== "assign") return 0;
+    const firstMatch = matchStackUnaryDerivationCall(first.expr);
+    if (firstMatch === undefined) return 0;
+    if (!expressionPureForSubstitution(firstMatch.arg)) return 0;
+
+    const derivations: Array<{
+      statement: Extract<StatementAst, { kind: "assign" }>;
+      call: StackUnaryDerivationCall;
+    }> = [];
+    const targets = new Set<string>();
+    const end = Math.min(statements.length, start + 4);
+    for (let index = start; index < end; index += 1) {
+      const statement = statements[index]!;
+      if (statement.kind !== "assign") break;
+      const call = matchStackUnaryDerivationCall(statement.expr);
+      if (call === undefined || !expressionEquals(call.arg, firstMatch.arg)) break;
+      if (targets.has(statement.target)) break;
+      targets.add(statement.target);
+      derivations.push({ statement, call });
+    }
+
+    if (derivations.length < 3) return 0;
+    if ([...targets].some((target) => expressionReferencesIdentifier(firstMatch.arg, target))) return 0;
+
+    const argCost = estimateExpressionCost(firstMatch.arg);
+    const normalCost = derivations.length * (argCost + 2);
+    const duplicateCost = derivations.length - 1;
+    const restoreCost = 1 + (derivations.length - 2) * 2;
+    const sharedCost = argCost + duplicateCost + derivations.length * 2 + restoreCost;
+    if (sharedCost >= normalCost) return 0;
+
+    this.compileExpression(firstMatch.arg);
+    for (let copy = 1; copy < derivations.length; copy += 1) {
+      this.emitOp(0x0e, "В↑", "duplicate operand for Z-stack derived tail", first.line);
+    }
+
+    for (let index = 0; index < derivations.length; index += 1) {
+      const { statement, call } = derivations[index]!;
+      if (index === 1) {
+        this.emitOp(0x14, "XY", "restore shared operand from Y", statement.line);
+      } else if (index > 1) {
+        this.emitOp(0x25, "F reverse", "rotate shared operand from Z", statement.line);
+        this.emitOp(0x14, "XY", "restore shared operand from stack", statement.line);
+      }
+      this.emitOp(call.opcode, call.mnemonic, `${call.fn}()`, statement.line);
+      this.emitStore(statement.target, `set ${statement.target}`, statement.line);
+    }
+
+    const functions = derivations.map(({ call }) => `${call.fn}()`).join("/");
+    const stackRegisters = derivations.length === 4 ? "X/Y/Z/T" : "X/Y/Z";
+    this.optimizations.push({
+      name: "z-stack-derived-value-reuse",
+      detail: `Computed ${expressionToIntentText(firstMatch.arg)} once and derived ${functions} through ${stackRegisters} stack copies.`,
+    });
+    return derivations.length;
   }
 
   private haltDisplaysSameValue(
@@ -2356,7 +2461,7 @@ class EmitContext {
     const scratch = bitMaskScratchName(first);
     if (!this.allocation.registers[scratch]) return false;
 
-    this.compileExpression(bitMaskExpression(firstSet.item));
+    this.compileBitMaskWithQuotientScratch(firstSet.item, scratch, first.line);
     this.emitStore(scratch, "cell bit mask scratch", first.line);
     this.compileExpression(firstSet.collection);
     this.emitRecall(scratch, "reuse cell bit mask", first.line);
@@ -2371,6 +2476,30 @@ class EmitContext {
       detail: `Computed bit_mask() once for adjacent set updates at lines ${first.line}/${second.line}.`,
     });
     return true;
+  }
+
+  private compileBitMaskWithQuotientScratch(index: ExpressionAst, scratch: string, line: number | undefined): void {
+    this.compileExpression(index);
+    this.emitBitMaskFromCurrentXWithQuotientScratch(scratch, line);
+    this.optimizations.push({
+      name: "bit-mask-quotient-reuse",
+      detail: `Reused ${expressionToIntentText(index)} / 4 through ${scratch} while building bit_mask().`,
+    });
+  }
+
+  private emitBitMaskFromCurrentXWithQuotientScratch(scratch: string, line: number | undefined): void {
+    this.emitNumber("4");
+    this.emitOp(0x13, "/", "bit mask quotient", line);
+    this.emitStore(scratch, "bit mask quotient", line);
+    this.emitOp(0x35, "К {x}", "bit mask remainder fraction", line);
+    this.emitNumber("4");
+    this.emitOp(0x12, "*", "bit mask remainder scale", line);
+    this.emitNumber("2");
+    this.emitOp(0x24, "F x^y", "bit mask power", line);
+    this.emitRecall(scratch, "bit mask quotient", line);
+    this.emitOp(0x34, "К [x]", "bit mask digit index", line);
+    this.emitOp(0x15, "F 10^x", "bit mask decade", line);
+    this.emitOp(0x12, "*", "bit mask value", line);
   }
 
   private compileDecrementZeroBranch(
@@ -2747,16 +2876,26 @@ class EmitContext {
     return true;
   }
 
-  private directTerminalCallTarget(statements: StatementAst[]): string | undefined {
+  private directTerminalCallTarget(statements: StatementAst[], seen = new Set<string>()): string | undefined {
     if (statements.length !== 1) return undefined;
     const statement = statements[0];
     if (statement?.kind !== "call") return undefined;
 
     const block = this.ast.blocks.find((candidate) => candidate.name === statement.block);
-    if (block !== undefined) return block.mode === "inline" ? undefined : block.name;
+    if (block !== undefined) {
+      if (block.mode !== "inline") return block.name;
+      if (seen.has(block.name)) return undefined;
+      seen.add(block.name);
+      return this.directTerminalCallTarget(block.body, seen);
+    }
 
     const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
-    if (proc === undefined || this.inlineProcNames.has(proc.name)) return undefined;
+    if (proc === undefined) return undefined;
+    if (this.inlineProcNames.has(proc.name)) {
+      if (seen.has(proc.name)) return undefined;
+      seen.add(proc.name);
+      return this.directTerminalCallTarget(proc.body, seen);
+    }
     return this.statementsTerminate(proc.body) ? proc.name : undefined;
   }
 
@@ -3031,7 +3170,11 @@ class EmitContext {
     scratch: string,
     line: number,
   ): void {
-    this.compileExpression(membership.mask);
+    if (membership.mode === "index") {
+      this.compileBitMaskWithQuotientScratch(membership.item, scratch, line);
+    } else {
+      this.compileExpression(membership.mask);
+    }
     this.emitStore(scratch, "cell bit mask scratch", line);
     this.compileExpression(membership.collection);
     this.emitRecall(scratch, "reuse cell bit mask", line);
@@ -3835,7 +3978,7 @@ class EmitContext {
     const template = this.mantissaExponentDisplayTemplate(display);
     if (template === undefined) return UNAVAILABLE_DISPLAY_STRATEGY_COST;
     const leaderCost = reuseCurrentX && template.leader.name === this.currentXVariable ? 0 : 1;
-    return 40 + leaderCost;
+    return 39 + leaderCost;
   }
 
   private compileDisplayByteBuilder(
@@ -3878,7 +4021,6 @@ class EmitContext {
     if (exponentZero !== undefined) this.emitLabel(exponentZero);
 
     this.emitRecall(template.leader.name, `display ${display.name} leader`, line);
-    this.emitOp(0x0e, "В↑", "display template leader", line);
     this.emitRecall(scratch.value, `display ${display.name} body`, line);
     this.emitOp(0x14, "<->", "display template leader merge", line);
     this.emitOp(0x54, "К НОП", "display template leader preserve", line, true);
@@ -4328,10 +4470,22 @@ class EmitContext {
         return;
       }
       this.emitJump(0x53, "ПП", proc.name, `proc call ${proc.name}`, line);
+      const returnX = this.procReturnXVariable(proc);
+      if (returnX !== undefined) {
+        this.currentXVariable = returnX;
+        this.currentXAliases = new Set([returnX]);
+        this.currentXKnownZero = false;
+      }
       this.optimizations.push({
         name: "proc-call-lowering",
         detail: `Compiled call to rule ${proc.name} as ПП/В/О subroutine.`,
       });
+      if (returnX !== undefined) {
+        this.optimizations.push({
+          name: "proc-return-x-reuse",
+          detail: `Tracked ${returnX} in X after returning from rule ${proc.name}.`,
+        });
+      }
       return;
     }
     if (!block) {
@@ -4376,6 +4530,12 @@ class EmitContext {
       name: "error-stop",
       detail: `Used ${mnemonic} as trap ${statement.trap} at line ${statement.line}.`,
     });
+  }
+
+  private procReturnXVariable(proc: ProgramAst["procs"][number]): string | undefined {
+    if (this.statementsTerminate(proc.body)) return undefined;
+    const last = proc.body.at(-1);
+    return last?.kind === "assign" ? last.target : undefined;
   }
 
   private compileUnitDecrement(statement: Extract<StatementAst, { kind: "assign" }>): boolean {
@@ -4426,7 +4586,9 @@ class EmitContext {
       const bitHasLowering = this.compileBitHasConditionWithBitMaskHelper(compiledCondition.left, line)
         ?? this.compileBitHasConditionWithSpatialHelper(compiledCondition.left, line);
       if (bitHasLowering === undefined) {
-        this.compileExpression(compiledCondition.left);
+        if (!(compiledCondition.left.kind === "identifier" && this.xHolds(compiledCondition.left.name))) {
+          this.compileExpression(compiledCondition.left);
+        }
       }
       const opcode = directTestOpcode(compiledCondition.op);
       this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${condition.op}`, line);
@@ -7368,9 +7530,11 @@ function warnUndeclaredAssignments(
   diagnostics: Diagnostic[],
 ): void {
   const seen = new Set<string>();
+  const ephemeralInputs = collectEphemeralInputTargets(ast);
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "assign" || statement.kind === "ask" || statement.kind === "input") {
+        if (statement.kind === "input" && ephemeralInputs.has(statement.target)) continue;
         if (!declared.has(statement.target) && !seen.has(statement.target)) {
           diagnostics.push({
             level: "warning",
@@ -7401,10 +7565,48 @@ function warnUndeclaredAssignments(
 }
 
 function collectAssignedVariables(ast: ProgramAst, variables: Set<string>): void {
+  const ephemeralInputs = collectEphemeralInputTargets(ast);
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
-      if (statement.kind === "assign" || statement.kind === "ask" || statement.kind === "input") {
+      if (statement.kind === "assign" || statement.kind === "ask") {
         variables.add(statement.target);
+      }
+      if (statement.kind === "input" && !ephemeralInputs.has(statement.target)) variables.add(statement.target);
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "switch") {
+        for (const switchCase of statement.cases) visit(switchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  for (const block of ast.blocks) visit(block.body);
+}
+
+function collectEphemeralInputTargets(ast: ProgramAst): Set<string> {
+  const readCounts = collectVariableReadCounts(ast);
+  const targets = new Set<string>();
+  const visit = (statements: StatementAst[]): void => {
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      const next = statements[index + 1];
+      const afterNext = statements[index + 2];
+      if (statement.kind === "input" && next?.kind === "if") {
+        const reads = countIdentifierReadsInCondition(next.condition, statement.target);
+        if (reads > 0 && (readCounts.get(statement.target) ?? 0) === reads) targets.add(statement.target);
+      }
+      if (statement.kind === "show" && next?.kind === "input" && afterNext?.kind === "if") {
+        const reads = countIdentifierReadsInCondition(afterNext.condition, next.target);
+        if (reads > 0 && (readCounts.get(next.target) ?? 0) === reads) targets.add(next.target);
       }
       if (statement.kind === "loop") visit(statement.body);
       if (statement.kind === "if") {
@@ -7424,6 +7626,7 @@ function collectAssignedVariables(ast: ProgramAst, variables: Set<string>): void
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
   for (const block of ast.blocks) visit(block.body);
+  return targets;
 }
 
 function collectUnitDecrementTargets(ast: ProgramAst): Set<string> {
@@ -10088,6 +10291,21 @@ function expressionEquals(left: ExpressionAst, right: ExpressionAst): boolean {
   }
 }
 
+function expressionReferencesIdentifier(expr: ExpressionAst, name: string): boolean {
+  switch (expr.kind) {
+    case "number":
+      return false;
+    case "identifier":
+      return expr.name === name;
+    case "unary":
+      return expressionReferencesIdentifier(expr.expr, name);
+    case "binary":
+      return expressionReferencesIdentifier(expr.left, name) || expressionReferencesIdentifier(expr.right, name);
+    case "call":
+      return expr.args.some((arg) => expressionReferencesIdentifier(arg, name));
+  }
+}
+
 function isRandomCellExpressionShape(expr: ExpressionAst): boolean {
   if (isRandomScaledInteger(expr)) return true;
   if (expr.kind !== "binary") return false;
@@ -10151,6 +10369,18 @@ function matchIntOrFracCall(expr: ExpressionAst): { fn: "int" | "frac"; arg: Exp
   const name = expr.callee.toLowerCase();
   if (name !== "int" && name !== "frac") return undefined;
   return { fn: name, arg: expr.args[0]! };
+}
+
+function matchStackUnaryDerivationCall(expr: ExpressionAst): StackUnaryDerivationCall | undefined {
+  if (expr.kind !== "call" || expr.args.length !== 1) return undefined;
+  const name = expr.callee.toLowerCase();
+  if (!isStackUnaryDerivationFn(name)) return undefined;
+  const [opcode, mnemonic] = STACK_UNARY_DERIVATION_OPCODES[name];
+  return { fn: name, arg: expr.args[0]!, opcode, mnemonic };
+}
+
+function isStackUnaryDerivationFn(name: string): name is StackUnaryDerivationFn {
+  return Object.prototype.hasOwnProperty.call(STACK_UNARY_DERIVATION_OPCODES, name);
 }
 
 function optimizeDispatchDefaultCases(
@@ -10763,6 +10993,7 @@ const optimizerCapabilities: Array<{
     requires: [],
     activeWhen: [
       "tail-call-lowering",
+      "tail-branch-inversion",
       "terminal-rule-tail-call",
       "tail-call-layout",
       "terminal-if-direct-branch",
@@ -11103,12 +11334,28 @@ const optimizerCapabilities: Array<{
     detail: "Coalesces structurally identical pause-0 failure tails into a single shared exit, removing the trampoline cells between them.",
   },
   {
+    id: "return-suffix-gadget",
+    category: "flow",
+    source: "documented",
+    requires: [],
+    activeWhen: ["return-suffix-gadget"],
+    detail: "Shares identical straight-line suffixes ending in В/О by jumping into one proved reusable return tail instead of duplicating the same machine cells.",
+  },
+  {
     id: "subroutine-part-shared-tail",
     category: "flow",
     source: "undocumented",
     requires: [],
     activeWhen: ["int-frac-shared-tail"],
     detail: "Computes a shared pure operand once and derives both its integer (К [x]) and fractional (К {x}) parts through a single В↑ / X↔Y stack tail instead of recomputing the operand for each part.",
+  },
+  {
+    id: "z-stack-derived-tail",
+    category: "stack",
+    source: "documented",
+    requires: [],
+    activeWhen: ["z-stack-derived-value-reuse"],
+    detail: "Computes a shared pure operand once and keeps extra copies in Y/Z (and T for four outputs), restoring them with X↔Y and F reverse for adjacent unary derivations.",
   },
   {
     id: "liveness-analysis",
@@ -11438,6 +11685,9 @@ function buildMachineFeaturesUsed(
   }
   if (optimizations.some((optimization) => optimization.name === "vp-fraction-restore")) {
     add("x2-restore-boundaries", "Optimizer used ВП as both X2 restoration and fractional/mantissa transform.", "optimizer");
+  }
+  if (optimizations.some((optimization) => optimization.name === "z-stack-derived-value-reuse")) {
+    add("z-stack-register", "Optimizer reused saved operands from Y/Z stack levels with X↔Y and F reverse.", "optimizer");
   }
   if (optimizations.some((optimization) =>
     optimization.name === "hex-mantissa-arithmetic" ||

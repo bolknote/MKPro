@@ -39,6 +39,10 @@ export interface CompileOptions {
   // variant; off by default so register reshuffles can't regress in-budget
   // programs.
   coalesceCopies?: boolean;
+  // Speculative late-layout pass: invert `if` branches whose then-path has
+  // already collapsed to a tail jump. Tried as a lowering variant because it
+  // can perturb later layout-sensitive passes.
+  tailBranchInversion?: boolean;
 }
 
 export interface Diagnostic {
