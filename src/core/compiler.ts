@@ -202,6 +202,11 @@ interface LoweringOptions {
   // more indirect-flow savings than the inline cost; gated as a speculative
   // variant and adopted only when the whole program ends up smaller.
   suppressConstantPreloads?: ReadonlySet<string>;
+  // Extract repeated `call helper; if guard { continuation } else { terminal }`
+  // prologues into a single subroutine that returns into each unique
+  // continuation only on the successful path. Speculative because the extra
+  // return frame and helper placement can perturb later layout decisions.
+  guardedPrologueGadgets?: boolean;
 }
 
 type DisplaySourceItem = Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }>;
@@ -311,6 +316,16 @@ export function compileMKPro(
     { tailBranchInversion: true },
     "late-layout-tail-branch-inversion",
     "Selected tail-branch inversion after full layout",
+  );
+  tryCandidate(
+    { guardedPrologueGadgets: true },
+    "guarded-prologue-gadget-layout",
+    "Selected guarded prologue gadget extraction after full layout",
+  );
+  tryCandidate(
+    { guardedPrologueGadgets: true, hoistSharedHelpers: true, hoistProcs: true },
+    "guarded-prologue-hoisted-proc-layout",
+    "Selected guarded prologue gadget extraction with hoisted procedure layout",
   );
 
   const selectBest = (): { best: CompileResult; selected: (typeof candidates)[number] | undefined } => {
@@ -444,6 +459,9 @@ function compileMKProOnce(
     }
   }
   hoistCommonBranchTails(ast, optimizations);
+  if (loweringOptions.guardedPrologueGadgets === true) {
+    extractGuardedPrologueGadgets(ast, optimizations);
+  }
   if (!opts.disableInterproceduralOpts) {
     for (let pass = 0; pass < 4; pass += 1) {
       const propagated = propagateValuesInterprocedurally(ast, optimizations);
@@ -1310,6 +1328,175 @@ function hoistCommonBranchTails(ast: ProgramAst, optimizations: AppliedOptimizat
       name: "compact-dispatch-simplification",
       detail: `Collapsed ${compactedDispatches} dispatch shell${compactedDispatches === 1 ? "" : "s"} with no residual cases into its default flow.`,
     });
+  }
+}
+
+interface GuardedPrologueOccurrence {
+  statements: StatementAst[];
+  index: number;
+  depth: number;
+  call: Extract<StatementAst, { kind: "call" }>;
+  branch: Extract<StatementAst, { kind: "if" }>;
+}
+
+interface GuardedPrologueGroup {
+  callBlock: string;
+  condition: ConditionAst;
+  failureBody: StatementAst[];
+  occurrences: GuardedPrologueOccurrence[];
+  helperName?: string;
+}
+
+function extractGuardedPrologueGadgets(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  const groups: GuardedPrologueGroup[] = [];
+
+  const visitList = (statements: StatementAst[], depth: number): void => {
+    for (const statement of statements) visitStatement(statement, depth + 1);
+    for (let index = 0; index < statements.length - 1; index += 1) {
+      const occurrence = matchGuardedPrologueOccurrence(ast, statements, index, depth);
+      if (occurrence === undefined) continue;
+      const group = findGuardedPrologueGroup(groups, occurrence);
+      group.occurrences.push(occurrence);
+    }
+  };
+
+  const visitStatement = (statement: StatementAst, depth: number): void => {
+    if (statement.kind === "loop") visitList(statement.body, depth);
+    if (statement.kind === "if") {
+      visitList(statement.thenBody, depth);
+      if (statement.elseBody !== undefined) visitList(statement.elseBody, depth);
+    }
+    if (statement.kind === "switch") {
+      for (const switchCase of statement.cases) visitList(switchCase.body, depth);
+      if (statement.defaultBody !== undefined) visitList(statement.defaultBody, depth);
+    }
+    if (statement.kind === "dispatch") {
+      for (const dispatchCase of statement.cases) visitList(dispatchCase.body, depth);
+      if (statement.defaultBody !== undefined) visitList(statement.defaultBody, depth);
+    }
+  };
+
+  for (const entry of ast.entries) visitList(entry.body, 0);
+  for (const proc of ast.procs) visitList(proc.body, 0);
+  for (const block of ast.blocks) visitList(block.body, 0);
+
+  const selected = groups.filter((group) =>
+    group.occurrences.length >= 2 && estimateGuardedPrologueSaving(group, ast) > 0
+  );
+  if (selected.length === 0) return;
+
+  const usedNames = collectCallableNames(ast);
+  for (const [index, group] of selected.entries()) {
+    group.helperName = freshCallableName(usedNames, "__guarded_prologue", index);
+    ast.procs.push({
+      kind: "proc",
+      name: group.helperName,
+      line: group.occurrences[0]?.call.line ?? 0,
+      body: [
+        { kind: "call", block: group.callBlock, line: group.occurrences[0]?.call.line ?? 0 },
+        {
+          kind: "if",
+          condition: structuredClone(invertCondition(group.condition)),
+          thenBody: cloneStatements(group.failureBody),
+          line: group.occurrences[0]?.branch.line ?? group.occurrences[0]?.call.line ?? 0,
+        },
+      ],
+    });
+  }
+
+  const replacements = selected
+    .flatMap((group) => group.occurrences.map((occurrence) => ({ group, occurrence })))
+    .sort((left, right) =>
+      right.occurrence.depth - left.occurrence.depth ||
+      right.occurrence.index - left.occurrence.index
+    );
+
+  let replaced = 0;
+  for (const { group, occurrence } of replacements) {
+    if (group.helperName === undefined) continue;
+    if (
+      occurrence.statements[occurrence.index] !== occurrence.call ||
+      occurrence.statements[occurrence.index + 1] !== occurrence.branch
+    ) {
+      continue;
+    }
+    occurrence.statements.splice(
+      occurrence.index,
+      2,
+      { kind: "call", block: group.helperName, line: occurrence.call.line },
+      ...cloneStatements(occurrence.branch.thenBody),
+    );
+    replaced += 1;
+  }
+
+  if (replaced === 0) return;
+  optimizations.push({
+    name: "guarded-prologue-gadget",
+    detail: `Extracted ${selected.length} guarded prologue gadget${selected.length === 1 ? "" : "s"} across ${replaced} call site${replaced === 1 ? "" : "s"}.`,
+  });
+}
+
+function matchGuardedPrologueOccurrence(
+  ast: ProgramAst,
+  statements: StatementAst[],
+  index: number,
+  depth: number,
+): GuardedPrologueOccurrence | undefined {
+  const call = statements[index];
+  const branch = statements[index + 1];
+  if (call?.kind !== "call" || branch?.kind !== "if" || branch.elseBody === undefined) return undefined;
+  if (!statementListTerminatesStatically(branch.elseBody, ast)) return undefined;
+  if (statementsContainExactMachineCode(branch.elseBody)) return undefined;
+  if (!expressionIsDeterministic(branch.condition.left) || !expressionIsDeterministic(branch.condition.right)) return undefined;
+  return { statements, index, depth, call, branch };
+}
+
+function findGuardedPrologueGroup(
+  groups: GuardedPrologueGroup[],
+  occurrence: GuardedPrologueOccurrence,
+): GuardedPrologueGroup {
+  const existing = groups.find((group) =>
+    group.callBlock === occurrence.call.block &&
+    conditionEquals(group.condition, occurrence.branch.condition) &&
+    statementListsEqual(group.failureBody, occurrence.branch.elseBody ?? [])
+  );
+  if (existing !== undefined) return existing;
+  const group: GuardedPrologueGroup = {
+    callBlock: occurrence.call.block,
+    condition: structuredClone(occurrence.branch.condition),
+    failureBody: cloneStatements(occurrence.branch.elseBody ?? []),
+    occurrences: [],
+  };
+  groups.push(group);
+  return group;
+}
+
+function estimateGuardedPrologueSaving(group: GuardedPrologueGroup, ast: ProgramAst): number {
+  const guardCost = estimateConditionCost(group.condition, ast);
+  if (!Number.isFinite(guardCost)) return Number.NEGATIVE_INFINITY;
+  // Call sites keep a two-cell subroutine call shape: they call the new guard
+  // instead of the old prelude. The helper pays one old-prelude call plus one
+  // implicit return, so the repeated guard condition must earn those cells back.
+  return (group.occurrences.length - 1) * guardCost - 3;
+}
+
+function collectCallableNames(ast: ProgramAst): Set<string> {
+  return new Set([
+    ...ast.entries.map((entry) => entry.name),
+    ...ast.procs.map((proc) => proc.name),
+    ...ast.blocks.map((block) => block.name),
+  ]);
+}
+
+function freshCallableName(used: Set<string>, prefix: string, start: number): string {
+  let index = start;
+  while (true) {
+    const name = `${prefix}_${index}`;
+    if (!used.has(name)) {
+      used.add(name);
+      return name;
+    }
+    index += 1;
   }
 }
 
@@ -4375,7 +4562,12 @@ class EmitContext {
     const literal = this.collapseLiteralOnlyDisplay(display);
     if (literal === undefined) return false;
     const program = displayLiteralProgram(literal);
-    if (program === undefined) return false;
+    if (program === undefined) {
+      if (this.compileDecimalLiteralDisplay(display, literal, line)) return true;
+      if (this.compileZeroDigitTailDisplay(display, literal, line)) return true;
+      if (this.compileSignDigitLiteralDisplay(display, literal, line)) return true;
+      return false;
+    }
 
     if (program.kind === "error") {
       this.emitErrorStopOpcode(`show ${display.name}`, line);
@@ -4398,6 +4590,130 @@ class EmitContext {
     if (program.kind === "error") return true;
     this.emitOp(0x50, "С/П", `show ${display.name}`, line);
     return true;
+  }
+
+  private compileDecimalLiteralDisplay(
+    display: ProgramAst["displays"][number],
+    literal: string,
+    line: number,
+  ): boolean {
+    const value = decimalDisplayLiteralNumber(literal);
+    if (value === undefined) return false;
+    this.emitNumber(value);
+    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
+    this.optimizations.push({
+      name: "screen-decimal-literal-lowering",
+      detail: `Lowered screen ${display.name} as an ordinary decimal display literal.`,
+    });
+    return true;
+  }
+
+  private compileZeroDigitTailDisplay(
+    display: ProgramAst["displays"][number],
+    literal: string,
+    line: number,
+  ): boolean {
+    const program = zeroDigitTailDisplayProgram(literal);
+    if (program === undefined) return false;
+    if (!this.scratchRegistersAvailable(new Set<RegisterName>(["9", "c"]))) return false;
+
+    this.emitNumber(String(program.input));
+    this.emitOp(0x54, "К НОП", "display zero-digit tail seed", line, true);
+    this.emitNumber("50");
+    this.emitOp(0x15, "F 10^x", "display zero-digit tail monster", line);
+    this.emitOp(0x22, "F x^2", "display zero-digit tail monster", line);
+    this.emitOp(0x22, "F x^2", "display zero-digit tail monster", line);
+    this.emitOp(0x22, "F x^2", "display zero-digit tail monster", line);
+    this.emitOp(0x12, "*", "display zero-digit tail monster", line);
+    this.emitOp(0x49, "X->П 9", "display zero-digit tail scratch", line, true);
+    this.emitOp(0x69, "П->X 9", "display zero-digit tail scratch", line);
+    this.emitOp(0x6c, "П->X c", "display zero-digit tail hidden tail", line);
+    this.emitOp(0x0c, "ВП", "display zero-digit tail restore", line);
+    this.emitOp(0x07, "7", "display zero-digit tail exponent", line);
+    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
+    this.optimizations.push({
+      name: "screen-zero-digit-tail-lowering",
+      detail: `Lowered screen ${display.name} through the 0C tail sign-digit display trick.`,
+    });
+    return true;
+  }
+
+  private compileSignDigitLiteralDisplay(
+    display: ProgramAst["displays"][number],
+    literal: string,
+    line: number,
+  ): boolean {
+    const program = signDigitLiteralDisplayProgram(literal);
+    if (program === undefined) return false;
+    const scratch = this.signDigitLiteralScratch();
+    if (scratch === undefined) return false;
+
+    this.emitNumber("11");
+    this.emitOp(0x3a, "К ИНВ", "display sign-digit E source", line);
+    this.emitOp(0x35, "К {x}", "display sign-digit E source", line);
+    this.emitOp(0x40 + registerIndex(scratch.source), `X->П ${scratch.source}`, "display sign-digit E source", line, true);
+
+    this.emitOp(0x60 + registerIndex(scratch.source), `П->X ${scratch.source}`, "display sign-digit source", line);
+    this.emitNumber(program.start);
+    this.emitFirstDigitSplice(line);
+
+    for (let index = 0; index < program.indirectSteps; index += 1) {
+      this.emitSignDigitIndirectStep(scratch.indirect, line);
+      if (index < program.indirectSteps - 1) {
+        this.emitOp(0x60 + registerIndex(scratch.source), `П->X ${scratch.source}`, "display sign-digit source", line);
+        this.emitOp(0x60 + registerIndex(scratch.indirect), `П->X ${scratch.indirect}`, "display sign-digit body", line);
+        this.emitFirstDigitSplice(line);
+      }
+    }
+
+    if (program.first === "Е") {
+      this.emitOp(0x60 + registerIndex(scratch.source), `П->X ${scratch.source}`, "display sign-digit final source", line);
+    } else {
+      this.emitNumber(program.first);
+    }
+    this.emitOp(0x60 + registerIndex(scratch.indirect), `П->X ${scratch.indirect}`, "display sign-digit final body", line);
+    this.emitFirstDigitSplice(line);
+    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
+    this.optimizations.push({
+      name: "screen-sign-digit-literal-lowering",
+      detail: `Lowered screen ${display.name} through indirect sign-digit display construction.`,
+    });
+    return true;
+  }
+
+  private emitFirstDigitSplice(line: number): void {
+    this.emitOp(0x14, "<->", "display sign-digit first-cell splice", line);
+    this.emitOp(0x54, "К НОП", "display sign-digit first-cell splice", line, true);
+    this.emitOp(0x0c, "ВП", "display sign-digit first-cell splice", line);
+  }
+
+  private emitSignDigitIndirectStep(register: RegisterName, line: number): void {
+    this.emitOp(0x40 + registerIndex(register), `X->П ${register}`, "display sign-digit indirect scratch", line);
+    this.emitOp(0xd0 + registerIndex(register), `К П->X ${register}`, "display sign-digit indirect normalize", line);
+    this.emitOp(0x60 + registerIndex(register), `П->X ${register}`, "display sign-digit indirect body", line);
+  }
+
+  private signDigitLiteralScratch(): { indirect: RegisterName; source: RegisterName } | undefined {
+    const used = this.usedAllocatedRegisters();
+    const indirect = (["4", "5", "6"] as const).find((register) => !used.has(register));
+    if (indirect === undefined) return undefined;
+    const source = [...REGISTER_ORDER].reverse().find((register) => register !== indirect && !used.has(register));
+    if (source === undefined) return undefined;
+    return { indirect, source };
+  }
+
+  private scratchRegistersAvailable(registers: ReadonlySet<RegisterName>): boolean {
+    const used = this.usedAllocatedRegisters();
+    return [...registers].every((register) => !used.has(register));
+  }
+
+  private usedAllocatedRegisters(): Set<RegisterName> {
+    const used = new Set<RegisterName>([
+      ...Object.values(this.allocation.registers),
+      ...Object.values(this.allocation.constants),
+    ]);
+    if (this.allocation.negativeZeroDegree !== undefined) used.add(this.allocation.negativeZeroDegree);
+    return used;
   }
 
   private compileLiteralHalt(literal: string, line: number): void {
@@ -7656,6 +7972,13 @@ type DisplayLiteralProgram =
   | { kind: "kinv"; digits: string; negative: boolean }
   | { kind: "xor"; left: string; right: string; negative: boolean };
 
+interface SignDigitLiteralDisplayProgram {
+  signDigit: number;
+  first: string;
+  start: string;
+  indirectSteps: number;
+}
+
 function displayLiteralProgram(text: string): DisplayLiteralProgram | undefined {
   const normalized = normalizeDisplayLiteralText(text);
   const errorCells = displayLiteralCells(normalized);
@@ -7679,6 +8002,44 @@ function displayLiteralProgram(text: string): DisplayLiteralProgram | undefined 
     right.push(String(pair[1]));
   }
   return { kind: "xor", left: left.join(""), right: right.join(""), negative };
+}
+
+function decimalDisplayLiteralNumber(text: string): string | undefined {
+  const normalized = normalizeDisplayLiteralText(text);
+  if (!/^(?:0|[1-9][0-9]{0,7})$/u.test(normalized)) return undefined;
+  return normalized;
+}
+
+function zeroDigitTailDisplayProgram(text: string): { input: number } | undefined {
+  const cells = displayLiteralCells(text);
+  if (cells === undefined || cells.length !== 2) return undefined;
+  const [signDigit, tail] = cells;
+  if (signDigit === undefined || signDigit < 2 || signDigit > 9 || tail !== 14) return undefined;
+  return { input: signDigit - 1 };
+}
+
+function signDigitLiteralDisplayProgram(text: string): SignDigitLiteralDisplayProgram | undefined {
+  const cells = displayLiteralCells(text);
+  if (cells === undefined || cells.length !== 9) return undefined;
+  const signDigit = cells[0];
+  if (signDigit === undefined || signDigit < 2 || signDigit > 9) return undefined;
+
+  const body = cells.slice(1);
+  const first = body[0];
+  if (first === undefined || !((first >= 0 && first <= 9) || first === 14)) return undefined;
+  const lower = body.slice(1);
+  if (lower.length !== 7 || !lower.every((cell) => cell >= 0 && cell <= 9)) return undefined;
+
+  const indirectSteps = signDigit - 1;
+  const targetLower = Number.parseInt(lower.join(""), 10);
+  const startLower = targetLower - indirectSteps;
+  if (!Number.isSafeInteger(startLower) || startLower < 0 || startLower > 9999999) return undefined;
+  return {
+    signDigit,
+    first: first === 14 ? "Е" : String(first),
+    start: `1${String(startLower).padStart(7, "0")}`,
+    indirectSteps,
+  };
 }
 
 function isErrorLiteralCells(cells: readonly number[]): boolean {

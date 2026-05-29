@@ -176,6 +176,73 @@ program ReturnSuffixGadget {
     expect(result.steps.some((step) => step.comment === "return suffix gadget")).toBe(true);
   });
 
+  it("extracts repeated guarded prologues into return-to-continuation gadgets", () => {
+    const result = compileOk(`
+program GuardedPrologueGadget {
+  state {
+    action: packed = 0
+    energy: counter 0..9 = 9
+    pos: packed = 0
+  }
+
+  rule pay {
+    energy--
+  }
+
+  rule drained {
+    stop -999
+  }
+
+  turn {
+    read action
+    match action {
+      1 => left
+      2 => right
+      3 => up
+      otherwise => stop pos
+    }
+  }
+
+  rule left {
+    pay
+    if energy > 0 {
+      pos += 1
+    }
+    else {
+      drained
+    }
+    stop pos
+  }
+
+  rule right {
+    pay
+    if energy > 0 {
+      pos += 10
+    }
+    else {
+      drained
+    }
+    stop pos
+  }
+
+  rule up {
+    pay
+    if energy > 0 {
+      pos += 100
+    }
+    else {
+      drained
+    }
+    stop pos
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "guarded-prologue-gadget")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "guarded-prologue-gadget-layout")).toBe(true);
+    expect(result.steps.length).toBeLessThan(62);
+  });
+
   it("inlines tiny multi-use rules when that beats a subroutine", () => {
     const result = compileOk(`
 program TinyMultiUseRule {

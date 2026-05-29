@@ -40,7 +40,7 @@ const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 134,
   "cave-treasure": 150,
   "giants-country": 180,
-  labyrinth777: 228,
+  labyrinth777: 210,
   teleport: 221,
   "tic-tac-toe-4x4": 219,
   "treasure-hunter-2": 141,

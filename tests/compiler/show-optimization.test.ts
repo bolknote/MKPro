@@ -16,6 +16,27 @@ function stepComments(result: ReturnType<typeof compileOk>): string[] {
   return result.steps.map((step) => step.comment ?? "");
 }
 
+function runCompiledDisplay(source: string): string {
+  const { MK61 } = require("../emulator/mk61.cjs") as {
+    MK61: new (options?: { extended?: boolean }) => {
+      loadProgram: (codes: number[]) => { diagnostics: string[] };
+      setRegister: (register: string, value: string) => void;
+      pressSequence: (keys: string[]) => void;
+      runUntilStable: (options: { maxFrames: number; stableFrames: number }) => { stopped: boolean };
+      displayText: () => string;
+    };
+  };
+  const result = compileMKPro(source, { analysis: true, budget: 999 });
+  const calc = new MK61({ extended: true });
+  expect(calc.loadProgram(result.steps.map((step) => step.opcode)).diagnostics).toEqual([]);
+  for (const preload of result.report.preloads) {
+    calc.setRegister(preload.register, preload.value);
+  }
+  calc.pressSequence(["В/О", "С/П"]);
+  expect(calc.runUntilStable({ maxFrames: 1200, stableFrames: 8 }).stopped).toBe(true);
+  return calc.displayText();
+}
+
 describe("show optimization strategy ideas", () => {
   it("reuses a packed display prefix that is already stored in the target decimal positions", () => {
     const result = compileOk(`
@@ -302,6 +323,40 @@ program LiteralErrorScreen {
     expect(hasOptimization(result, "error-stop")).toBe(true);
     expect(result.steps.map((step) => step.opcode)).toEqual(expect.arrayContaining([0x2b]));
     expect(result.steps.map((step) => step.mnemonic)).not.toEqual(expect.arrayContaining(["F 1/x"]));
+  });
+
+  it("lowers zero-digit literal tails through the 0C-tail display trick", () => {
+    const source = `
+program ZeroDigitTailScreen {
+  screen tail {
+    show "2Е"
+  }
+  turn {
+    show tail
+  }
+}
+`;
+
+    const result = compileOk(source);
+    expect(hasOptimization(result, "screen-zero-digit-tail-lowering")).toBe(true);
+    expect(runCompiledDisplay(source)).toBe("2Е,");
+  });
+
+  it("lowers wider sign-digit literal screens through indirect display construction", () => {
+    const source = `
+program SignDigitLiteralScreen {
+  screen cave {
+    show "3Е0000021"
+  }
+  turn {
+    show cave
+  }
+}
+`;
+
+    const result = compileOk(source);
+    expect(hasOptimization(result, "screen-sign-digit-literal-lowering")).toBe(true);
+    expect(runCompiledDisplay(source)).toBe("3Е0000021,");
   });
 
   it("lowers literal calculator error stops to one-cell trap opcodes", () => {
