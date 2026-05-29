@@ -2,6 +2,7 @@
   "name": "mk-pro",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "bin": {
     "mk-pro": "./bin/mk-pro.mjs"
