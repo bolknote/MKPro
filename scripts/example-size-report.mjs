@@ -93,11 +93,76 @@ function formatDelta(value) {
   return String(value);
 }
 
+function rowName(row) {
+  return relative("examples", row.file);
+}
+
+function pendingRow(row) {
+  return row.file.includes("/pending-optimizer/");
+}
+
+function measuredRows(rows) {
+  return rows.filter((row) => !("error" in row));
+}
+
+function formatProgramSize(row) {
+  return `\`${rowName(row)}\` (${row.steps})`;
+}
+
+function snapshot(rows) {
+  const measured = measuredRows(rows);
+  const topLevel = measured.filter((row) => !pendingRow(row));
+  const pending = measured.filter((row) => pendingRow(row));
+  const fittingTopLevel = topLevel.filter((row) => row.steps <= PROGRAM_LIMIT);
+  const loadedTopLevel = topLevel.filter(
+    (row) =>
+      row.emulator.includes("load ok") &&
+      !row.emulator.includes("load failed") &&
+      !row.emulator.includes("load mismatch") &&
+      !row.emulator.includes("not loaded"),
+  );
+  const referencedTopLevel = topLevel.filter((row) => row.reference !== undefined);
+  const noLargerThanReference = referencedTopLevel.filter((row) => row.delta <= 0);
+  const tightestTopLevel = [...topLevel]
+    .sort((left, right) => right.steps - left.steps)
+    .slice(0, 3)
+    .map(formatProgramSize)
+    .join(", ");
+  const pendingOverLimit = pending.filter((row) => row.steps > PROGRAM_LIMIT);
+  const nearestPending = [...pendingOverLimit].sort((left, right) => left.steps - right.steps)[0];
+
+  const lines = [
+    "## Snapshot",
+    "",
+    `- Top-level examples: ${fittingTopLevel.length}/${topLevel.length} fit in the ${PROGRAM_LIMIT}-cell MK-61 window; ${loadedTopLevel.length}/${topLevel.length} pass the headless load check.`,
+  ];
+
+  if (referencedTopLevel.length > 0) {
+    lines.push(
+      `- Referenced top-level examples: ${noLargerThanReference.length}/${referencedTopLevel.length} are no larger than the original MK-61 listing.`,
+    );
+  }
+  if (tightestTopLevel.length > 0) {
+    lines.push(`- Tightest runnable examples: ${tightestTopLevel}.`);
+  }
+  if (pendingOverLimit.length > 0) {
+    lines.push(
+      `- Pending optimizer: ${pendingOverLimit.length} programs still exceed the MK-61 window; nearest is ${formatProgramSize(nearestPending)}.`,
+    );
+  }
+
+  return lines;
+}
+
 function markdown(rows) {
   const lines = [
     "# Example Size Report",
     "",
     "Generated with `npm run examples:size`.",
+    "",
+    ...snapshot(rows),
+    "",
+    "## Measurements",
     "",
     "`MK-Pro` is the current compiled program size in MK-61 cells. `MK-61 ref` is the span of the referenced original listing under `games/` when the source declares `reference ...`. `Delta` is `MK-Pro - MK-61 ref`. The emulator column is a mechanical headless MK-61 load check; it is not a full game-script equivalence proof.",
     "",

@@ -7,18 +7,20 @@ Treat each file here as an optimizer or lowering-size bug, not as an unsupported
 syntax bucket. Do not replace these with raw listings; the point is to make the
 high-level source fit.
 
+`wumpus.mkpro` is no longer pending: it moved back to the top-level examples at
+104 cells and passes the main+setup load check.
+
 Current `--analysis` sizes, measured against the local reference listings:
 
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
-| `cave-highlevel-baseline.mkpro` | 140 | 105 | command dispatch and remaining cave flow lowerers |
+| `cave-highlevel-baseline.mkpro` | 134 | 105 | command dispatch and remaining cave flow lowerers |
 | `cave-treasure.mkpro` | 150 | 105 | guarded direction dispatch, wall breaking, and cache flow |
 | `giants-country.mkpro` | 180 | 105 | remaining encounter dispatch and plan bitset lowerers |
 | `labyrinth777.mkpro` | 231 | 105 | room inspection and local-jumper dispatch |
 | `teleport.mkpro` | 221 | 105 | station masks and vault/guard flow |
 | `tic-tac-toe-4x4.mkpro` | 219 | 105 | 4x4 line-count state representation |
-| `treasure-hunter-2.mkpro` | 144 | 105 | floor-plan display/state lowerer |
-| `wumpus.mkpro` | 106 | 105 | terminal loss now uses calculator error stop; still over the MK-61 window |
+| `treasure-hunter-2.mkpro` | 143 | 105 | floor-plan display/state lowerer |
 
 Prototype notes:
 

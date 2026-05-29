@@ -131,6 +131,12 @@ interface StackUnaryDerivationCall {
   mnemonic: string;
 }
 
+interface XParamProcLowering {
+  param: string;
+  first: Extract<StatementAst, { kind: "assign" }>;
+  other: string;
+}
+
 export class CompileError extends Error {
   readonly diagnostics: Diagnostic[];
 
@@ -1731,6 +1737,7 @@ class EmitContext {
   private readonly loweringOptions: LoweringOptions;
   private readonly inlineProcNames: Set<string>;
   private readonly procCallCounts: Map<string, number>;
+  private readonly xParamProcs: Map<string, XParamProcLowering>;
   private readonly readCounts: Map<string, number>;
   private readonly displayUseCounts: Map<string, number>;
   private readonly showSequenceUseCounts: Map<string, number>;
@@ -1812,6 +1819,7 @@ class EmitContext {
     this.procCallCounts = collectProcCallCounts(ast);
     this.inlineProcNames = findInlineProcNamesBySize(ast, this.procCallCounts);
     this.readCounts = collectVariableReadCounts(ast);
+    this.xParamProcs = collectXParamProcLowerings(ast, this.readCounts, this.inlineProcNames);
     this.displayUseCounts = collectDisplayUseCounts(ast);
     this.showSequenceUseCounts = collectShowSequenceUseCounts(ast);
     this.expressionUseCounts = collectExpressionUseCounts(ast);
@@ -1898,7 +1906,12 @@ class EmitContext {
     for (const proc of this.ast.procs) {
       if (this.inlineProcNames.has(proc.name)) continue;
       this.emitLabel(proc.name);
-      this.compileStatements(proc.body);
+      const xParam = this.xParamProcs.get(proc.name);
+      if (xParam !== undefined) {
+        this.compileXParamProcBody(proc, xParam);
+      } else {
+        this.compileStatements(proc.body);
+      }
       if (!this.statementsTerminate(proc.body)) {
         this.emitOp(0x52, "В/О", "implicit return from proc");
       }
@@ -2089,6 +2102,10 @@ class EmitContext {
     for (let index = 0; index < statements.length; index += 1) {
       const statement = statements[index]!;
       const next = statements[index + 1];
+      if (statement.kind === "assign" && next?.kind === "call" && this.compileXParamProcCall(statement, next)) {
+        index += 1;
+        continue;
+      }
       if (statement.kind === "assign") {
         const reused = this.compileRepeatedAssignmentValue(statements, index);
         if (reused > 1) {
@@ -2231,6 +2248,34 @@ class EmitContext {
       detail: `Stored one computed value into ${count} consecutive assignment targets at line ${first.line}.`,
     });
     return count;
+  }
+
+  private compileXParamProcCall(
+    assign: Extract<StatementAst, { kind: "assign" }>,
+    call: Extract<StatementAst, { kind: "call" }>,
+  ): boolean {
+    const lowering = this.xParamProcs.get(call.block);
+    if (lowering === undefined || assign.target !== lowering.param) return false;
+    if (!expressionPureForSubstitution(assign.expr)) return false;
+
+    this.compileExpression(assign.expr);
+    this.compileBlockCall(call.block, call.line);
+    this.optimizations.push({
+      name: "x-param-proc-call",
+      detail: `Passed ${assign.target} to rule ${call.block} through X at line ${assign.line}.`,
+    });
+    return true;
+  }
+
+  private compileXParamProcBody(proc: ProgramAst["procs"][number], lowering: XParamProcLowering): void {
+    this.emitRecall(lowering.other, `${proc.name} ${lowering.first.target} base`, lowering.first.line);
+    this.emitOp(0x10, "+", `${proc.name} ${lowering.first.target} from X parameter`, lowering.first.line);
+    this.emitStore(lowering.first.target, `set ${lowering.first.target}`, lowering.first.line);
+    this.compileStatements(proc.body.slice(1));
+    this.optimizations.push({
+      name: "x-param-proc-entry",
+      detail: `Compiled rule ${proc.name} to consume ${lowering.param} directly from X.`,
+    });
   }
 
   private compileStackUnaryDerivedAssignments(statements: StatementAst[], start: number): number {
@@ -7195,6 +7240,123 @@ function collectVariableReadCounts(ast: ProgramAst): Map<string, number> {
   return counts;
 }
 
+function collectXParamProcLowerings(
+  ast: ProgramAst,
+  readCounts: ReadonlyMap<string, number>,
+  inlineProcNames: ReadonlySet<string>,
+): Map<string, XParamProcLowering> {
+  const result = new Map<string, XParamProcLowering>();
+  const v2Rules = new Map(ast.v2?.rules.map((rule) => [rule.name, rule]) ?? []);
+  for (const proc of ast.procs) {
+    if (inlineProcNames.has(proc.name)) continue;
+    const params = v2Rules.get(proc.name)?.params ?? [];
+    if (params.length !== 1) continue;
+    const param = params[0]!;
+    if ((readCounts.get(param) ?? 0) !== 1) continue;
+    const first = proc.body[0];
+    if (first?.kind !== "assign") continue;
+    const matched = matchXParamFirstAssignment(first, param);
+    if (matched === undefined) continue;
+    if (statementsReadIdentifier(proc.body.slice(1), param)) continue;
+    if (!allProcCallsHaveImmediateParamAssignment(ast, proc.name, param)) continue;
+    result.set(proc.name, { param, first, other: matched.other });
+  }
+  return result;
+}
+
+function matchXParamFirstAssignment(
+  statement: Extract<StatementAst, { kind: "assign" }>,
+  param: string,
+): { other: string } | undefined {
+  const expr = statement.expr;
+  if (expr.kind !== "binary" || expr.op !== "+") return undefined;
+  if (expr.left.kind === "identifier" && expr.left.name === param && expr.right.kind === "identifier") {
+    return { other: expr.right.name };
+  }
+  if (expr.right.kind === "identifier" && expr.right.name === param && expr.left.kind === "identifier") {
+    return { other: expr.left.name };
+  }
+  return undefined;
+}
+
+function allProcCallsHaveImmediateParamAssignment(ast: ProgramAst, procName: string, param: string): boolean {
+  let calls = 0;
+  let ok = true;
+  const visit = (statements: readonly StatementAst[]): void => {
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      if (statement.kind === "call" && statement.block === procName) {
+        calls += 1;
+        const previous = statements[index - 1];
+        if (previous?.kind !== "assign" || previous.target !== param) ok = false;
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "switch") {
+        for (const switchCase of statement.cases) visit(switchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) {
+    if (proc.name !== procName) visit(proc.body);
+  }
+  for (const block of ast.blocks) visit(block.body);
+  return ok && calls > 0;
+}
+
+function statementsReadIdentifier(statements: readonly StatementAst[], name: string): boolean {
+  return statements.some((statement) => statementReadsIdentifier(statement, name));
+}
+
+function statementReadsIdentifier(statement: StatementAst, name: string): boolean {
+  switch (statement.kind) {
+    case "pause":
+    case "halt":
+      return expressionReferencesIdentifier(statement.expr, name);
+    case "ask":
+      return statement.prompt !== undefined && expressionReferencesIdentifier(statement.prompt, name);
+    case "assign":
+      return expressionReferencesIdentifier(statement.expr, name);
+    case "if":
+      return expressionReferencesIdentifier(statement.condition.left, name) ||
+        expressionReferencesIdentifier(statement.condition.right, name) ||
+        statementsReadIdentifier(statement.thenBody, name) ||
+        (statement.elseBody !== undefined && statementsReadIdentifier(statement.elseBody, name));
+    case "loop":
+      return statementsReadIdentifier(statement.body, name);
+    case "switch":
+      return expressionReferencesIdentifier(statement.expr, name) ||
+        statement.cases.some((switchCase) =>
+          expressionReferencesIdentifier(switchCase.value, name) || statementsReadIdentifier(switchCase.body, name)
+        ) ||
+        (statement.defaultBody !== undefined && statementsReadIdentifier(statement.defaultBody, name));
+    case "dispatch":
+      return expressionReferencesIdentifier(statement.expr, name) ||
+        statement.cases.some((dispatchCase) =>
+          expressionReferencesIdentifier(dispatchCase.value, name) || statementsReadIdentifier(dispatchCase.body, name)
+        ) ||
+        (statement.defaultBody !== undefined && statementsReadIdentifier(statement.defaultBody, name));
+    case "show":
+    case "input":
+    case "call":
+    case "egg":
+      return false;
+    case "core":
+      return statement.inputs?.some((input) => expressionReferencesIdentifier(input.expr, name)) ?? false;
+    case "trap":
+      return expressionReferencesIdentifier(statement.expr, name);
+  }
+}
+
 function collectDisplayUseCounts(ast: ProgramAst): Map<string, number> {
   const counts = new Map<string, number>();
   const add = (name: string): void => {
@@ -11414,7 +11576,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["return-suffix-gadget"],
-    detail: "Shares identical straight-line suffixes ending in В/О by jumping into one proved reusable return tail instead of duplicating the same machine cells.",
+    detail: "Shares identical straight-line suffixes ending in В/О, and calls into existing straight-line body plus БП tail-call gadgets when the extra return frame is proven to land on the original continuation.",
   },
   {
     id: "subroutine-part-shared-tail",

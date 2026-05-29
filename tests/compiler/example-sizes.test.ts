@@ -28,6 +28,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "raja-yoga": 88,
   "sea-battle": 67,
   "tiny-game": 26,
+  wumpus: 104,
 };
 
 // pending-optimizer programs overflow the physical MK-61 address space, so
@@ -36,14 +37,13 @@ const EXAMPLE_BASELINE: Record<string, number> = {
 // shrink these toward 105; the guard only enforces that they never grow.
 // The numbers below are the current locked ceilings, not historical deltas.
 const PENDING_BASELINE: Record<string, number> = {
-  "cave-highlevel-baseline": 140,
+  "cave-highlevel-baseline": 134,
   "cave-treasure": 150,
   "giants-country": 180,
   labyrinth777: 231,
   teleport: 221,
   "tic-tac-toe-4x4": 219,
-  "treasure-hunter-2": 144,
-  wumpus: 106,
+  "treasure-hunter-2": 143,
 };
 
 function exampleSteps(relativePath: string, analysis: boolean): number {

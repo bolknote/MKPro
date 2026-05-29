@@ -654,6 +654,36 @@ program CompactDirectionOnly {
     expect(result.report.optimizations.some((item) => item.name === "dispatch-lowering")).toBe(false);
   });
 
+  it("passes single-use rule parameters through X for shared rule entries", () => {
+    const result = compileOk(`
+program XParamRule {
+  state {
+    key: counter 0..9 = 1
+    pos: packed = 0
+  }
+  screen view {
+    show pos
+  }
+  turn {
+    match key {
+      1 => go 1
+      2 => go 2
+      3 => go 3
+      otherwise => stop 0
+    }
+  }
+  rule go delta {
+    pos = pos + delta
+    show view
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "x-param-proc-call")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "x-param-proc-entry")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "set delta")).toBe(false);
+  });
+
   it("shares repeated packed display bodies through a normal helper", () => {
     const result = compileOk(`
 program RepeatedPackedDisplay {

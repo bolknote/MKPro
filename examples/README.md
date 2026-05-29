@@ -2,6 +2,15 @@
 
 Generated with `npm run examples:size`.
 
+## Snapshot
+
+- Top-level examples: 17/17 fit in the 105-cell MK-61 window; 17/17 pass the headless load check.
+- Referenced top-level examples: 13/13 are no larger than the original MK-61 listing.
+- Tightest runnable examples: `wumpus.mkpro` (104), `game-100-pig.mkpro` (103), `fox-hunt-100.mkpro` (97).
+- Pending optimizer: 7 programs still exceed the MK-61 window; nearest is `pending-optimizer/cave-highlevel-baseline.mkpro` (134).
+
+## Measurements
+
 `MK-Pro` is the current compiled program size in MK-61 cells. `MK-61 ref` is the span of the referenced original listing under `games/` when the source declares `reference ...`. `Delta` is `MK-Pro - MK-61 ref`. The emulator column is a mechanical headless MK-61 load check; it is not a full game-script equivalence proof.
 
 | Example | MK-Pro | MK-61 ref | Delta | Size status | Emulator |
@@ -22,11 +31,11 @@ Generated with `npm run examples:size`.
 | `raja-yoga.mkpro` | 88 | 98 | -10 | ok: <= reference | main+setup load ok |
 | `sea-battle.mkpro` | 67 | 102 | -35 | ok: <= reference | main+setup load ok |
 | `tiny-game.mkpro` | 26 | - | - | ok: no reference | load ok |
-| `pending-optimizer/cave-highlevel-baseline.mkpro` | 140 | 105 | +35 | pending optimizer | setup load ok; main >105 |
+| `wumpus.mkpro` | 104 | - | - | ok: no reference | main+setup load ok |
+| `pending-optimizer/cave-highlevel-baseline.mkpro` | 134 | 105 | +29 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/cave-treasure.mkpro` | 150 | 105 | +45 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/giants-country.mkpro` | 180 | 105 | +75 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/labyrinth777.mkpro` | 231 | 105 | +126 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/teleport.mkpro` | 221 | 105 | +116 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/tic-tac-toe-4x4.mkpro` | 219 | 105 | +114 | pending optimizer | not loaded: main >105 |
-| `pending-optimizer/treasure-hunter-2.mkpro` | 144 | 105 | +39 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/wumpus.mkpro` | 106 | - | - | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/treasure-hunter-2.mkpro` | 143 | 105 | +38 | pending optimizer | setup load ok; main >105 |

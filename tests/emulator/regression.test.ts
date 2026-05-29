@@ -170,13 +170,13 @@ describe("emulator regression", () => {
     });
   }
 
-  it("runs pending wumpus setup before the oversized main program", () => {
-    const file = resolve("examples/pending-optimizer/wumpus.mkpro");
+  it("runs wumpus setup before the main program", () => {
+    const file = resolve("examples/wumpus.mkpro");
     const source = readFileSync(file, "utf8");
     const result = compileMKPro(source, { budget: 999, analysis: true });
     const setupProgram = formatSetupProgram(result);
     expect(setupProgram).toBeDefined();
-    expect(result.report.steps).toBeGreaterThan(105);
+    expect(result.report.steps).toBeLessThanOrEqual(105);
 
     const calc = new MK61();
     const setupLoaded = calc.loadProgram(setupProgram!);
@@ -196,7 +196,7 @@ describe("emulator regression", () => {
     }
 
     const mainLoaded = calc.loadProgram(formatProgramTokens(result.steps));
-    expect(mainLoaded.diagnostics).toEqual([`Program was truncated from ${result.report.steps} to 105 commands.`]);
+    expect(mainLoaded.diagnostics).toEqual([]);
   });
 });
 

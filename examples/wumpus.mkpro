@@ -1,5 +1,4 @@
-// Full Hunt the Wumpus. The corrected multi-field show lowering currently
-// pushes this just outside the 105-cell MK-61 window.
+// Full Hunt the Wumpus, kept inside the 105-cell MK-61 window.
 //
 // Display: room, arrows, clue.
 // Clues are prioritized: 0 = quiet, 1 = Wumpus nearby, 2 = pit draft,

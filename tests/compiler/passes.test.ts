@@ -428,6 +428,37 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(result.ops)).toBeLessThan(machineCellCount(program));
   });
 
+  it("return-suffix-gadget calls into an existing tail-call body", () => {
+    const program: IrOp[] = [
+      label("main"),
+      recall("7"),
+      store("6"),
+      call("inspect"),
+      jump("main"),
+      label("bat_jump"),
+      call("random_cell"),
+      store("6"),
+      jump("inspect"),
+      label("inspect"),
+      recall("6"),
+      ret(),
+      label("random_cell"),
+      plain(0x3b, "К СЧ"),
+      ret(),
+    ];
+    const result = returnSuffixGadget.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    const main = result.ops.findIndex((op) => op.kind === "label" && op.name === "main");
+    expect(result.ops[main + 2]).toMatchObject({
+      kind: "call",
+      target: "__return_suffix_gadget_0",
+    });
+    expect(result.ops[main + 3]).toMatchObject({ kind: "jump", target: "main" });
+    expect(result.ops).toContainEqual({ kind: "label", name: "__return_suffix_gadget_0" });
+    expect(machineCellCount(result.ops)).toBe(machineCellCount(program) - 1);
+  });
+
   it("return-suffix-gadget avoids programs with absolute numeric flow targets", () => {
     const program: IrOp[] = [
       label("first"),

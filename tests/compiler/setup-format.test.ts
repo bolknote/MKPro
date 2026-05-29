@@ -36,7 +36,7 @@ describe("setup formatting", () => {
   });
 
   it("keeps keys output free of emulator setup-block syntax", () => {
-    const source = readFileSync(resolve("examples/pending-optimizer/wumpus.mkpro"), "utf8");
+    const source = readFileSync(resolve("examples/wumpus.mkpro"), "utf8");
     const keys = formatKeys(compileMKPro(source, { budget: 999, analysis: true }));
 
     expect(keys).not.toContain("`");
@@ -44,7 +44,7 @@ describe("setup formatting", () => {
   });
 
   it("shows generated setup in the default listing output", () => {
-    const source = readFileSync(resolve("examples/pending-optimizer/wumpus.mkpro"), "utf8");
+    const source = readFileSync(resolve("examples/wumpus.mkpro"), "utf8");
     const listing = formatListing(compileMKPro(source, { budget: 999, analysis: true }));
 
     expect(listing).toContain("# Setup Listing");

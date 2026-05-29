@@ -103,7 +103,7 @@ const run: IrPassFn = (ops) => {
     applied,
     optimizations: [{
       name: "return-suffix-gadget",
-      detail: `Shared ${applied} return suffix gadget${applied === 1 ? "" : "s"} (${jumps} jump, ${calls} call; ${savedCells} cell${savedCells === 1 ? "" : "s"} saved).`,
+      detail: `Shared ${applied} return/tail-call gadget${applied === 1 ? "" : "s"} (${jumps} jump, ${calls} call; ${savedCells} cell${savedCells === 1 ? "" : "s"} saved).`,
     }],
   };
 };
@@ -185,6 +185,11 @@ function selectGadgets(
   const bodyCalls = selectBodyCalls(bodyTargets, bodyOccurrences, existingLabels, protectedIndexes, labelIndex);
   selected.push(...bodyCalls);
 
+  const tailCallTargets = collectTailCallTargets(ops);
+  const tailCallOccurrences = collectTailCallOccurrences(ops, new Set(tailCallTargets.keys()));
+  const tailCalls = selectBodyCalls(tailCallTargets, tailCallOccurrences, existingLabels, protectedIndexes, labelIndex);
+  selected.push(...tailCalls);
+
   return selected;
 }
 
@@ -208,7 +213,7 @@ function gadgetJump(label: string, source: IrOp): IrOp {
 function gadgetCall(label: string, source: IrOp): IrOp {
   const meta: IrMeta = {
     mnemonic: "ПП",
-    comment: "return suffix gadget call",
+    comment: "proc call return suffix gadget",
   };
   if ("meta" in source && source.meta.sourceLine !== undefined) {
     meta.sourceLine = source.meta.sourceLine;
@@ -218,7 +223,7 @@ function gadgetCall(label: string, source: IrOp): IrOp {
     target: label,
     opcode: 0x53,
     meta,
-    targetMeta: { comment: "return suffix gadget call" },
+    targetMeta: { comment: "return suffix gadget target" },
   };
 }
 
@@ -252,6 +257,30 @@ function isShareableBodyOp(op: IrOp): boolean {
 
 function isCallableBodyOp(op: IrOp): boolean {
   return isShareableBodyOp(op) && op.kind !== "stop";
+}
+
+function isTailCallGadgetBodyOp(op: IrOp): boolean {
+  if (hasRewriteBarrier(op)) return false;
+  switch (op.kind) {
+    case "store":
+    case "recall":
+    case "indirect-store":
+    case "indirect-recall":
+    case "plain":
+      return true;
+    case "label":
+    case "jump":
+    case "cjump":
+    case "call":
+    case "loop":
+    case "indirect-jump":
+    case "indirect-call":
+    case "indirect-cjump":
+    case "return":
+    case "stop":
+    case "orphan-address":
+      return false;
+  }
 }
 
 function hasNumericFlowTarget(ops: readonly IrOp[]): boolean {
@@ -340,6 +369,70 @@ function collectBodyOccurrences(
       const occurrences = result.get(key) ?? [];
       occurrences.push({ key, start, end, cells });
       result.set(key, occurrences);
+    }
+  }
+
+  return result;
+}
+
+function collectTailCallTargets(ops: readonly IrOp[]): Map<string, BodyTarget[]> {
+  const result = new Map<string, BodyTarget[]>();
+
+  for (let jumpIndex = 0; jumpIndex < ops.length; jumpIndex += 1) {
+    const jump = ops[jumpIndex]!;
+    if (jump.kind !== "jump" || typeof jump.target !== "string" || hasRewriteBarrier(jump)) continue;
+
+    const parts = [`target:${targetKey(jump.target)}`];
+    let cells = cellsPerOp(jump);
+    for (let start = jumpIndex - 1; start >= 0; start -= 1) {
+      const op = ops[start]!;
+      if (!isTailCallGadgetBodyOp(op)) break;
+
+      parts.unshift(opKey(op));
+      cells += cellsPerOp(op);
+      const bodyCells = cells - cellsPerOp(jump);
+      if (bodyCells <= 0) continue;
+
+      const key = parts.join("\n");
+      const targets = result.get(key) ?? [];
+      targets.push({
+        key,
+        start,
+        bodyEnd: jumpIndex - 1,
+        end: jumpIndex,
+        cells: bodyCells,
+      });
+      result.set(key, targets);
+    }
+  }
+
+  return result;
+}
+
+function collectTailCallOccurrences(
+  ops: readonly IrOp[],
+  wantedKeys: ReadonlySet<string>,
+): Map<string, BodyOccurrence[]> {
+  const result = new Map<string, BodyOccurrence[]>();
+  if (wantedKeys.size === 0) return result;
+
+  for (let start = 0; start < ops.length; start += 1) {
+    const parts: string[] = [];
+    let cells = 0;
+    for (let callIndex = start; callIndex < ops.length; callIndex += 1) {
+      const op = ops[callIndex]!;
+      if (op.kind === "call" && typeof op.target === "string" && !hasRewriteBarrier(op)) {
+        const key = [...parts, `target:${targetKey(op.target)}`].join("\n");
+        if (cells > 0 && wantedKeys.has(key)) {
+          const occurrences = result.get(key) ?? [];
+          occurrences.push({ key, start, end: callIndex, cells: cells + cellsPerOp(op) });
+          result.set(key, occurrences);
+        }
+        break;
+      }
+      if (!isTailCallGadgetBodyOp(op)) break;
+      parts.push(opKey(op));
+      cells += cellsPerOp(op);
     }
   }
 
