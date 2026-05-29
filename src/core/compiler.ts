@@ -5093,6 +5093,10 @@ class EmitContext {
       this.compileDirectionCall(expr);
       return;
     }
+    if (name === "__direction_cardinal") {
+      this.compileCardinalDirectionCall(expr);
+      return;
+    }
     if (name === "neighbor_count" || name === "line_count") {
       if (this.compileSpatialCountCall(name, expr)) return;
     }
@@ -5295,6 +5299,74 @@ class EmitContext {
       name: "direction-keypad-lowering",
       detail: `Lowered direction(${arg.name}) through a shared keypad geometry formula.`,
     });
+  }
+
+  private compileCardinalDirectionCall(expr: Extract<ExpressionAst, { kind: "call" }>): void {
+    const keyRegister = this.directionKeyRegister(expr);
+    if (keyRegister === undefined) return;
+
+    const yAxis = this.freshLabel("direction_cardinal_y_axis");
+    const done = this.freshLabel("direction_cardinal_done");
+
+    this.emitOp(0x60 + registerIndex(keyRegister), `П->X ${keyRegister}`, "cardinal direction key");
+    this.emitNumberOrPreload("5");
+    this.emitOp(0x11, "-", "cardinal direction key-5");
+    this.emitOp(0x31, "К |x|", "cardinal direction axis test");
+    this.emitNumberOrPreload("1");
+    this.emitOp(0x11, "-", "cardinal direction axis discriminator");
+    this.emitJump(0x5e, "F x=0", yAxis, "cardinal direction y-axis");
+
+    this.emitOp(0x60 + registerIndex(keyRegister), `П->X ${keyRegister}`, "cardinal direction x key");
+    this.emitNumberOrPreload("5");
+    this.emitOp(0x11, "-", "cardinal direction key-5");
+    this.emitNumberOrPreload("10");
+    this.emitOp(0x12, "*", "cardinal direction x delta");
+    this.emitJump(0x51, "БП", done, "cardinal direction done");
+
+    this.emitLabel(yAxis);
+    this.emitNumberOrPreload("5");
+    this.emitOp(0x60 + registerIndex(keyRegister), `П->X ${keyRegister}`, "cardinal direction y key");
+    this.emitOp(0x11, "-", "cardinal direction 5-key");
+    this.emitNumberOrPreload("3");
+    this.emitOp(0x13, "/", "cardinal direction y delta");
+
+    this.emitLabel(done);
+    this.optimizations.push({
+      name: "direction-cardinal-lowering",
+      detail: `Lowered guarded cardinal direction(${this.directionKeyName(expr)}) without floor-key cases.`,
+    });
+  }
+
+  private directionKeyRegister(expr: Extract<ExpressionAst, { kind: "call" }>): RegisterName | undefined {
+    if (expr.args.length !== 1) {
+      this.diagnostics.push({
+        level: "error",
+        message: `direction() expects one keypad argument, got ${expr.args.length}.`,
+      });
+      return undefined;
+    }
+    const arg = expr.args[0]!;
+    if (arg.kind !== "identifier") {
+      this.diagnostics.push({
+        level: "error",
+        message: "direction() currently requires an identifier argument so the optimizer can reuse its register.",
+      });
+      return undefined;
+    }
+    const keyRegister = this.allocation.registers[arg.name];
+    if (!keyRegister) {
+      this.diagnostics.push({
+        level: "error",
+        message: `Unknown direction key '${arg.name}'.`,
+      });
+      return undefined;
+    }
+    return keyRegister;
+  }
+
+  private directionKeyName(expr: Extract<ExpressionAst, { kind: "call" }>): string {
+    const arg = expr.args[0];
+    return arg?.kind === "identifier" ? arg.name : "?";
   }
 
   private compileSpatialCountCall(name: "neighbor_count" | "line_count", expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
@@ -6679,6 +6751,9 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
   const values = new Set<string>();
   if (programContainsCall(ast, "direction")) {
     values.add("20");
+    values.add("10");
+  }
+  if (programContainsCall(ast, "__direction_cardinal")) {
     values.add("10");
   }
   if (programContainsCall(ast, "line_count")) {

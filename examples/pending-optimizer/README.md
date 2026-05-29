@@ -14,11 +14,11 @@ Current `--analysis` sizes, measured against the local reference listings:
 | `cave-highlevel-baseline.mkpro` | 140 | 105 | command dispatch and remaining cave flow lowerers |
 | `cave-treasure.mkpro` | 150 | 105 | guarded direction dispatch, wall breaking, and cache flow |
 | `giants-country.mkpro` | 180 | 105 | remaining encounter dispatch and plan bitset lowerers |
-| `labyrinth777.mkpro` | 241 | 105 | room inspection and local-jumper dispatch |
-| `teleport.mkpro` | 232 | 105 | station masks and vault/guard flow |
-| `tic-tac-toe-4x4.mkpro` | 241 | 105 | 4x4 line-count state representation |
-| `treasure-hunter-2.mkpro` | 149 | 105 | floor-plan display/state lowerer |
-| `wumpus.mkpro` | 107 | 105 | terminal loss now uses calculator error stop; still over the MK-61 window |
+| `labyrinth777.mkpro` | 231 | 105 | room inspection and local-jumper dispatch |
+| `teleport.mkpro` | 221 | 105 | station masks and vault/guard flow |
+| `tic-tac-toe-4x4.mkpro` | 219 | 105 | 4x4 line-count state representation |
+| `treasure-hunter-2.mkpro` | 144 | 105 | floor-plan display/state lowerer |
+| `wumpus.mkpro` | 106 | 105 | terminal loss now uses calculator error stop; still over the MK-61 window |
 
 Prototype notes:
 

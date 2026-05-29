@@ -2623,11 +2623,14 @@ function lowerCompactDirectionDispatch(
     }
   }
 
+  const directionFunction = needsGuard && hasAllCardinalDirections && !directionalValues.has(5) && !directionalValues.has(-5)
+    ? "__direction_cardinal"
+    : "direction";
   const directionBody: StatementAst[] = [
     {
       kind: "assign",
       target: params[0]!,
-      expr: lowerV2Expression(`direction(${statement.expr})`, statement.line, context),
+      expr: lowerV2Expression(`${directionFunction}(${statement.expr})`, statement.line, context),
       line: statement.line,
     },
     { kind: "call", block: action.name, line: action.line },

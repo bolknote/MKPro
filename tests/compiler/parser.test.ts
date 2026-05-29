@@ -229,6 +229,33 @@ program GuardedDirection {
     expect(dispatch.cases.map((dispatchCase) => JSON.stringify(dispatchCase.value))).not.toContain(JSON.stringify({ kind: "number", raw: "4" }));
   });
 
+  it("marks guarded cardinal direction dispatches for the compact direction lowerer", () => {
+    const ast = parseProgram(`
+program CardinalDirection {
+  state {
+    key: packed = 0
+    pos: packed = 0
+  }
+  turn {
+    match key {
+      2, 4, 6, 8 => step direction(key)
+      otherwise => stop 0
+    }
+  }
+  rule step delta {
+    pos += delta
+  }
+}
+`);
+    const loop = ast.entries[0]?.body[0];
+    expect(loop?.kind).toBe("loop");
+    if (loop?.kind !== "loop") throw new Error("expected loop");
+    const dispatch = loop.body[0];
+    expect(dispatch?.kind).toBe("dispatch");
+    if (dispatch?.kind !== "dispatch") throw new Error("expected dispatch");
+    expect(JSON.stringify(dispatch.defaultBody)).toContain('"callee":"__direction_cardinal"');
+  });
+
   it("rejects rule calls with the wrong arity", () => {
     expect(() =>
       parseProgram(`

@@ -650,6 +650,7 @@ program CompactDirectionOnly {
 `);
 
     expect(result.report.optimizations.some((item) => item.name === "compact-dispatch-simplification")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "direction-cardinal-lowering")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "dispatch-lowering")).toBe(false);
   });
 
