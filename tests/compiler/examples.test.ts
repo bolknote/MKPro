@@ -33,7 +33,9 @@ describe("examples", () => {
 
   it("compiles lunar.mkpro under budget", () => {
     const result = compileMKPro(loadExample("lunar"));
-    expect(formatListing(result)).toContain("show landed");
+    expect(formatListing(result)).toContain("show height_view");
+    expect(formatListing(result)).toContain("show speed_view");
+    expect(formatListing(result)).toContain("show fuel_view");
     expect(formatHex(result).length).toBeGreaterThan(0);
     expect(result.report.steps).toBeLessThanOrEqual(105);
   });

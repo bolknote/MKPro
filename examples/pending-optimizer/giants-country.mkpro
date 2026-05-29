@@ -34,7 +34,7 @@ program GiantsCountry {
   }
 
   screen cave {
-    show tile strength score
+    show "8.Е6-ЕГ C"
   }
 
   screen warning {

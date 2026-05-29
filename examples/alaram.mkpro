@@ -8,7 +8,6 @@ program Alaram {
     // The cockpit display is a compact perspective picture: canopy edges,
     // reticle, steering wheel, and the intruder's relative bearing.
     fighter: coord(sky) = 0
-    cockpit_view: packed = 80000078
     intruder_mark: coord(sky) = 3
 
     altitude: counter 0..999 = 0
@@ -22,7 +21,6 @@ program Alaram {
 
     crash_pattern: packed = -999
     shot_down_pattern: packed = -666
-    victory_pattern: packed = 80700078
   }
 
   world sky {
@@ -34,7 +32,7 @@ program Alaram {
   }
 
   screen cockpit {
-    show cockpit_view intruder_mark
+    show "8СГ -78"
   }
 
   screen crash {
@@ -46,7 +44,7 @@ program Alaram {
   }
 
   screen victory {
-    show victory_pattern
+    show "8СГ-Е-78"
   }
 
   rule ground {

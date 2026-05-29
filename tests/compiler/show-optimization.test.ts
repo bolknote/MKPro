@@ -187,4 +187,21 @@ program DisplayStrategySelection {
     expect(displayCandidates.some((candidate) => candidate.selected)).toBe(true);
     expect(hasOptimization(result, "display-strategy-selection")).toBe(true);
   });
+
+  it("lowers literal calculator video strings without source raw blocks", () => {
+    const result = compileOk(`
+program LiteralVideoScreen {
+  screen cave {
+    show "8.E6-EГ C"
+  }
+  turn {
+    show cave
+  }
+}
+`);
+
+    expect(hasOptimization(result, "screen-video-literal-lowering")).toBe(true);
+    expect(result.steps.map((step) => step.mnemonic)).toEqual(expect.arrayContaining(["К ИНВ", "С/П"]));
+    expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "display-bytes")).toBe(true);
+  });
 });

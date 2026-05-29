@@ -9,6 +9,7 @@
   "scripts": {
     "build:browser": "esbuild src/browser/emulator-bridge.ts --bundle --format=iife --global-name=MKProEmulatorBundle --platform=browser --target=es2022 --outfile=dist/mk-pro-emulator-bridge.user.js",
     "lint": "eslint .",
+    "examples:size": "node ./scripts/example-size-report.mjs",
     "mk-pro": "node ./bin/mk-pro.mjs",
     "serve:browser": "vite --host 127.0.0.1 --port 4173",
     "typecheck": "tsc --noEmit",

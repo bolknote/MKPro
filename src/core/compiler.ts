@@ -1524,6 +1524,7 @@ class EmitContext {
   private readonly spatialHitHelpers = new Map<string, { mask: string; scratch: string; label: string; line?: number }>();
   private readonly displayHelpers = new Map<string, { display: ProgramAst["displays"][number]; label: string; line: number }>();
   private readonly displayByteHelpers = new Map<string, { display: ProgramAst["displays"][number]; label: string; line: number }>();
+  private readonly literalDisplayHelpers = new Map<string, { display: ProgramAst["displays"][number]; label: string; line: number }>();
   private readonly showSequenceHelpers = new Map<string, {
     first: ProgramAst["displays"][number];
     second: ProgramAst["displays"][number];
@@ -1699,6 +1700,15 @@ class EmitContext {
       this.optimizations.push({
         name: "display-byte-helper",
         detail: `Emitted shared display-byte helper for screen ${helper.display.name}.`,
+      });
+    }
+    for (const helper of this.literalDisplayHelpers.values()) {
+      this.emitLabel(helper.label);
+      this.compileLiteralDisplayBody(helper.display, helper.line);
+      this.emitOp(0x52, "В/О", `display ${helper.display.name} return`, helper.line);
+      this.optimizations.push({
+        name: "screen-video-literal-helper",
+        detail: `Emitted shared literal video helper for screen ${helper.display.name}.`,
       });
     }
     for (const helper of this.showSequenceHelpers.values()) {
@@ -3250,6 +3260,16 @@ class EmitContext {
       return;
     }
 
+    const literalHelper = this.sharedLiteralDisplayHelper(display, line);
+    if (literalHelper !== undefined) {
+      this.emitJump(0x53, "ПП", literalHelper.label, `show ${display.name}`, line);
+      this.optimizations.push({
+        name: "screen-video-literal-helper-call",
+        detail: `Reused shared literal video helper for screen ${display.name}.`,
+      });
+      return;
+    }
+    if (this.compileLiteralDisplay(display, line)) return;
     if (this.compileTextDisplay(display, line)) return;
 
     const strategy = this.selectDisplayStrategy(display);
@@ -3712,6 +3732,69 @@ class EmitContext {
       detail: `Lowered screen ${display.name} as visible text ${JSON.stringify(text)} plus ${source.name}.`,
     });
     return true;
+  }
+
+  private compileLiteralDisplay(display: ProgramAst["displays"][number], line: number): boolean {
+    const compiled = this.compileLiteralDisplayBody(display, line);
+    if (!compiled) return false;
+    this.optimizations.push({
+      name: "screen-video-literal-lowering",
+      detail: `Lowered screen ${display.name} as a literal calculator video string.`,
+    });
+    return true;
+  }
+
+  private compileLiteralDisplayBody(display: ProgramAst["displays"][number], line: number): boolean {
+    const literal = this.collapseLiteralOnlyDisplay(display);
+    if (literal === undefined) return false;
+    const program = displayLiteralProgram(literal);
+    if (program === undefined) return false;
+
+    if (program.kind === "kinv") {
+      this.emitNumber(program.digits);
+      this.emitOp(0x3a, "К ИНВ", "display literal video bytes", line);
+    } else {
+      this.emitNumber(program.left);
+      this.emitOp(0x0e, "В↑", "display literal x/y split", line);
+      this.emitNumber(program.right);
+      this.emitOp(0x39, "К ⊕", "display literal video bytes", line);
+    }
+    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
+    return true;
+  }
+
+  private sharedLiteralDisplayHelper(
+    display: ProgramAst["displays"][number],
+    line: number,
+  ): { display: ProgramAst["displays"][number]; label: string; line: number } | undefined {
+    if (!this.shouldShareLiteralDisplay(display)) return undefined;
+    const existing = this.literalDisplayHelpers.get(display.name);
+    if (existing !== undefined) return existing;
+    const helper = {
+      display,
+      label: `__display_literal_${display.name}`,
+      line,
+    };
+    this.literalDisplayHelpers.set(display.name, helper);
+    return helper;
+  }
+
+  private shouldShareLiteralDisplay(display: ProgramAst["displays"][number]): boolean {
+    const literal = this.collapseLiteralOnlyDisplay(display);
+    const program = literal === undefined ? undefined : displayLiteralProgram(literal);
+    if (program === undefined) return false;
+    const uses = this.displayUseCounts.get(display.name) ?? 0;
+    if (uses < 2) return false;
+    const bodyCost = program.kind === "kinv" ? program.digits.length + 2 : program.left.length + program.right.length + 3;
+    const helperCost = uses * 2 + bodyCost + 1;
+    const inlineTotal = uses * bodyCost;
+    return inlineTotal - helperCost >= DISPLAY_HELPER_MIN_SAVINGS;
+  }
+
+  private collapseLiteralOnlyDisplay(display: ProgramAst["displays"][number]): string | undefined {
+    if (display.items.length === 0 || display.items.some((item) => item.kind !== "literal")) return undefined;
+    const text = display.items.map((item) => item.kind === "literal" ? item.text : "").join("");
+    return text.trim().length === 0 ? undefined : text;
   }
 
   private collapseTextPrefixDisplay(
@@ -6516,6 +6599,82 @@ function estimatePackedDisplayBodyCost(widthsOrCount: number | readonly number[]
 
 function displayByteBuilderSupportsLiteral(text: string): boolean {
   return /^[\s.-]+$/u.test(text);
+}
+
+type DisplayLiteralProgram =
+  | { kind: "kinv"; digits: string }
+  | { kind: "xor"; left: string; right: string };
+
+function displayLiteralProgram(text: string): DisplayLiteralProgram | undefined {
+  const cells = displayLiteralCells(text);
+  if (cells === undefined || cells.length === 0 || cells.length > 8) return undefined;
+  if (cells[0] !== 8) return undefined;
+
+  const inverted = displayLiteralInversionDigits(cells);
+  if (inverted !== undefined) return { kind: "kinv", digits: inverted };
+
+  const left: string[] = [];
+  const right: string[] = [];
+  for (let index = 0; index < cells.length; index += 1) {
+    const pair = index === 0 ? [1, 9] as const : decimalXorPair(cells[index]!);
+    if (pair === undefined) return undefined;
+    left.push(String(pair[0]));
+    right.push(String(pair[1]));
+  }
+  return { kind: "xor", left: left.join(""), right: right.join("") };
+}
+
+function displayLiteralInversionDigits(cells: readonly number[]): string | undefined {
+  if (cells.length === 0 || cells[0] !== 8) return undefined;
+  const digits = ["1"];
+  for (const cell of cells.slice(1)) {
+    if (cell < 6 || cell > 15) return undefined;
+    digits.push(String(15 - cell));
+  }
+  return digits.join("");
+}
+
+function displayLiteralCells(text: string): number[] | undefined {
+  const cells: number[] = [];
+  const normalized = text
+    .replace(/[–—]/gu, "-")
+    .replace(/[ВB]/gu, "L")
+    .replace(/[C]/gu, "С")
+    .replace(/[D]/gu, "Г")
+    .replace(/[G]/gu, "Г")
+    .replace(/[E]/gu, "Е");
+  for (const char of normalized) {
+    if (char === "." || char === ",") continue;
+    if (/\s/u.test(char) || char === "_") {
+      cells.push(15);
+      continue;
+    }
+    if (/[0-9]/u.test(char)) {
+      cells.push(Number(char));
+      continue;
+    }
+    const symbol = DISPLAY_LITERAL_SYMBOLS[char];
+    if (symbol === undefined) return undefined;
+    cells.push(symbol);
+  }
+  return cells;
+}
+
+const DISPLAY_LITERAL_SYMBOLS: Record<string, number> = {
+  "-": 10,
+  L: 11,
+  "С": 12,
+  "Г": 13,
+  "Е": 14,
+};
+
+function decimalXorPair(value: number): readonly [number, number] | undefined {
+  for (let left = 0; left <= 9; left += 1) {
+    for (let right = 0; right <= 9; right += 1) {
+      if ((left ^ right) === value) return [left, right];
+    }
+  }
+  return undefined;
 }
 
 function programUsesTicTacToeHelpers(ast: ProgramAst): boolean {
