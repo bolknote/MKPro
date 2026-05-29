@@ -457,6 +457,7 @@ export interface InputStatementAst {
 export interface HaltStatementAst {
   kind: "halt";
   expr: ExpressionAst;
+  literal?: string;
   line: number;
 }
 

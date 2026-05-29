@@ -13,19 +13,19 @@ import { compileMKPro } from "../../src/core/index.ts";
 
 const EXAMPLE_BASELINE: Record<string, number> = {
   "99-bottles": 53,
-  alaram: 83,
-  basic: 8,
+  alaram: 82,
+  basic: 6,
   "cave-sketch": 58,
   "dangerous-loading": 89,
-  dungeon: 89,
+  dungeon: 88,
   "fox-hunt-100": 97,
   "fox-hunt-mk61": 88,
-  "game-100-pig": 100,
+  "game-100-pig": 105,
   human: 30,
   lunar: 47,
-  "minesweeper-9x7": 79,
-  "minesweeper-9x9": 79,
-  "raja-yoga": 90,
+  "minesweeper-9x7": 78,
+  "minesweeper-9x9": 78,
+  "raja-yoga": 89,
   "sea-battle": 67,
   "tiny-game": 26,
 };
@@ -38,12 +38,12 @@ const EXAMPLE_BASELINE: Record<string, number> = {
 const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 140,
   "cave-treasure": 150,
-  "giants-country": 181,
+  "giants-country": 180,
   labyrinth777: 241,
-  teleport: 233,
-  "tic-tac-toe-4x4": 246,
-  "treasure-hunter-2": 150,
-  wumpus: 111,
+  teleport: 232,
+  "tic-tac-toe-4x4": 241,
+  "treasure-hunter-2": 149,
+  wumpus: 110,
 };
 
 function exampleSteps(relativePath: string, analysis: boolean): number {

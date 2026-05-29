@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { createRequire } from "node:module";
 import { compileMKPro } from "../../src/core/index.ts";
+
+const require = createRequire(import.meta.url);
 
 function compileOk(source: string) {
   return compileMKPro(source, { analysis: true, budget: 999 });
@@ -129,6 +132,47 @@ program LiteralSeparatedScoreboard {
     expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "display-bytes")).toBe(true);
   });
 
+  it("renders literal-separated scoreboards correctly on the emulator", () => {
+    const { MK61 } = require("../emulator/mk61.cjs") as {
+      MK61: new (options?: { extended?: boolean }) => {
+        loadProgram: (codes: number[]) => { diagnostics: string[] };
+        setRegister: (register: string, value: string) => void;
+        pressSequence: (keys: string[]) => void;
+        runUntilStable: (options: { maxFrames: number; stableFrames: number }) => { stopped: boolean };
+        displayText: () => string;
+      };
+    };
+    const result = compileMKPro(`
+program LiteralSeparatedScoreboardRun {
+  state {
+    die: counter 1..6 = 1
+    score: counter 0..99 = 0
+    total: counter 0..999 = 0
+    roll: counter 0..99 = 0
+  }
+  screen status {
+    show die ".-" score:02 "-" total:03 "-" roll:02
+  }
+  turn {
+    show status
+  }
+}
+`);
+    const calc = new MK61({ extended: true });
+    const loaded = calc.loadProgram(result.steps.map((step) => step.opcode));
+    expect(loaded.diagnostics).toEqual([]);
+    for (const preload of result.report.preloads) {
+      calc.setRegister(preload.register, preload.value);
+    }
+    calc.setRegister(result.report.registers.die!, "5");
+    calc.setRegister(result.report.registers.score!, "15");
+    calc.setRegister(result.report.registers.total!, "42");
+    calc.setRegister(result.report.registers.roll!, "3");
+    calc.pressSequence(["В/О", "С/П"]);
+    expect(calc.runUntilStable({ maxFrames: 1000, stableFrames: 8 }).stopped).toBe(true);
+    expect(calc.displayText()).toBe("5,-15-042-03");
+  });
+
   it("shares frequent literal-separated display bodies through a display-byte helper", () => {
     const result = compileOk(`
 program RepeatedLiteralSeparatedScoreboard {
@@ -219,7 +263,35 @@ program LiteralErrorScreen {
 
     expect(hasOptimization(result, "screen-video-literal-lowering")).toBe(true);
     expect(hasOptimization(result, "error-stop")).toBe(true);
-    expect(result.steps.map((step) => step.mnemonic)).toEqual(expect.arrayContaining(["F 1/x"]));
+    expect(result.steps.map((step) => step.opcode)).toEqual(expect.arrayContaining([0x2b]));
+    expect(result.steps.map((step) => step.mnemonic)).not.toEqual(expect.arrayContaining(["F 1/x"]));
+  });
+
+  it("lowers literal calculator error stops to one-cell trap opcodes", () => {
+    const { MK61 } = require("../emulator/mk61.cjs") as {
+      MK61: new () => {
+        loadProgram: (codes: number[]) => { diagnostics: string[] };
+        pressSequence: (keys: string[]) => void;
+        runUntilStable: (options: { maxFrames: number; stableFrames: number }) => { stopped: boolean };
+        displayText: () => string;
+      };
+    };
+    const result = compileMKPro(`
+program LiteralErrorStop {
+  turn {
+    stop "ЕГГОГ"
+  }
+}
+`);
+
+    expect(hasOptimization(result, "error-stop")).toBe(true);
+    expect(result.steps.map((step) => step.opcode)).toEqual([0x2b]);
+
+    const calc = new MK61();
+    expect(calc.loadProgram(result.steps.map((step) => step.opcode)).diagnostics).toEqual([]);
+    calc.pressSequence(["В/О", "С/П"]);
+    expect(calc.runUntilStable({ maxFrames: 200, stableFrames: 6 }).stopped).toBe(true);
+    expect(calc.displayText().toUpperCase()).toContain("ЕГГ");
   });
 
   it("lowers signed literal calculator video strings", () => {

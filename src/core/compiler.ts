@@ -101,6 +101,9 @@ const DISPATCH_SCRATCH_PREFIX = "__dispatch_";
 const TICTACTOE_MASK_SCRATCH_PREFIX = "__ttt_mask_";
 const BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
 const IF_SELECTOR_SCRATCH_PREFIX = "__if_selector_";
+const DISPLAY_TEMPLATE_VALUE_PREFIX = "__display_value_";
+const DISPLAY_TEMPLATE_LOOP_PREFIX = "__display_loop_";
+const DISPLAY_TEMPLATE_MASK_PREFIX = "__display_mask_";
 const CELL_MAP_PREFIX = "__cell_map_";
 const SPATIAL_HIT_SCRATCH_PREFIX = "__spatial_hit_";
 const SPATIAL_COUNT_SCRATCH_PREFIX = "__spatial_count_";
@@ -159,6 +162,12 @@ interface LoweringOptions {
   aliasXReuse?: boolean;
   // Enable copy coalescing (Form 2) in register-coalesce. Speculative variant.
   coalesceCopies?: boolean;
+  // Share a repeated `random_cell`-shaped expression through one call/return
+  // helper even when the static cost model only predicts a marginal (1-2 cell)
+  // saving. The default threshold keeps marginal helpers inline so register
+  // reshuffles can't regress in-budget programs; this variant relaxes it and is
+  // adopted only when the whole program ends up smaller.
+  shareRandomCell?: boolean;
 }
 
 type DisplaySourceItem = Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }>;
@@ -181,6 +190,13 @@ interface DisplayStrategyCandidate {
   steps: number;
   available: boolean;
   reason: string;
+}
+
+interface MantissaExponentDisplayTemplate {
+  leader: DisplayField;
+  score: DisplayField;
+  total: DisplayField;
+  exponent: DisplayField;
 }
 
 export function compileMKPro(
@@ -246,6 +262,16 @@ export function compileMKPro(
     { freeResidualDispatchScratch: true, canonicalizeIfChains: true },
     "free-residual-dispatch-scratch-with-if-chain",
     "Combined residual-dispatch scratch freeing with if/else-if dispatch canonicalization",
+  );
+  tryCandidate(
+    { shareRandomCell: true },
+    "share-random-cell-helper",
+    "Shared a repeated random_cell expression through one helper despite a marginal predicted saving",
+  );
+  tryCandidate(
+    { shareRandomCell: true, hoistSharedHelpers: true },
+    "share-random-cell-helper-hoisted",
+    "Shared a repeated random_cell expression and hoisted helpers so its calls become single-cell indirect flow",
   );
 
   let best = primary;
@@ -1759,7 +1785,13 @@ class EmitContext {
     const dynamicRegisters = new Set(fields.map((field) => this.allocation.registers[field.name]).filter(Boolean));
     for (const preload of preloads) {
       if (dynamicRegisters.has(preload.register)) continue;
-      this.emitNumber(preload.value);
+      if (preload.kind === "display-literal") {
+        const program = displayLiteralProgram(preload.value);
+        if (program === undefined || program.kind === "error") continue;
+        this.emitDisplayLiteralProgram(program, undefined, `setup R${preload.register}`);
+      } else {
+        this.emitNumber(preload.value);
+      }
       this.emitOp(0x40 + registerIndex(preload.register), `X->П ${preload.register}`, `setup R${preload.register}`, undefined, true);
     }
     for (const field of fields) {
@@ -2145,6 +2177,10 @@ class EmitContext {
         });
         return;
       case "halt":
+        if (statement.literal !== undefined) {
+          this.compileLiteralHalt(statement.literal, statement.line);
+          return;
+        }
         this.compileExpression(statement.expr);
         this.emitOp(0x50, "С/П", "halt", statement.line);
         return;
@@ -2163,7 +2199,9 @@ class EmitContext {
         this.currentXAliases.clear();
         this.currentXKnownZero = false;
         this.compileStatements(statement.body);
-        this.emitJump(0x51, "БП", start, "loop back", statement.line);
+        if (!this.statementsTerminate(statement.body)) {
+          this.emitJump(0x51, "БП", start, "loop back", statement.line);
+        }
         return;
       }
       case "if":
@@ -3669,38 +3707,166 @@ class EmitContext {
 
   private canCompileDisplayByteBuilder(display: ProgramAst["displays"][number]): boolean {
     if (!machineSupports(this.machineProfile, "display-bytes")) return false;
-    if (this.displaySourceFields(display).length === 0) return false;
-    return display.items.some((item) => item.kind === "literal" && item.text.trim().length > 0) &&
-      display.items.every((item) => item.kind !== "literal" || displayByteBuilderSupportsLiteral(item.text));
+    return this.mantissaExponentDisplayTemplate(display) !== undefined &&
+      this.displayTemplateScratchRegisters(display) !== undefined;
   }
 
   private estimateDisplayByteBuilderCost(
     display: ProgramAst["displays"][number],
-    fields: DisplayField[],
+    _fields: DisplayField[],
     reuseCurrentX: boolean,
   ): number {
-    const literalMutations = display.items.filter((item) => item.kind === "literal" && item.text.trim().length > 0).length;
-    return this.estimateDecimalDisplayCost(fields, reuseCurrentX) + literalMutations;
+    const template = this.mantissaExponentDisplayTemplate(display);
+    if (template === undefined) return UNAVAILABLE_DISPLAY_STRATEGY_COST;
+    const leaderCost = reuseCurrentX && template.leader.name === this.currentXVariable ? 0 : 1;
+    return 40 + leaderCost;
   }
 
   private compileDisplayByteBuilder(
     display: ProgramAst["displays"][number],
     line: number,
-    reuseCurrentX: boolean,
+    _reuseCurrentX: boolean,
   ): boolean {
-    if (!this.canCompileDisplayByteBuilder(display)) return false;
-    const fields = this.displaySourceFields(display);
-    this.compilePackedDisplayFields(display, fields, line, reuseCurrentX);
-    for (const item of display.items) {
-      if (item.kind !== "literal" || item.text.trim().length === 0) continue;
-      this.emitOp(0x5f, undefined, `display-byte literal ${JSON.stringify(item.text)}`, item.line);
+    const template = this.mantissaExponentDisplayTemplate(display);
+    const scratch = this.displayTemplateScratchRegisters(display);
+    if (template === undefined || scratch === undefined) return false;
+
+    this.emitRecall(template.score.name, `display ${display.name} score`, line);
+    this.emitNumberOrPreload("1000");
+    this.emitOp(0x13, "/", "display template score shift", line);
+    this.emitRecall(template.total.name, `display ${display.name} total`, line);
+    this.emitNumberOrPreload("10000000");
+    this.emitOp(0x13, "/", "display template total shift", line);
+    this.emitOp(0x10, "+", "display template total append", line);
+    this.emitOp(0x09, "9", "display template numeric anchor", line);
+    this.emitOp(0x10, "+", "display template numeric body", line);
+    this.emitRecall(scratch.mask, `display ${display.name} separator mask`, line);
+    this.emitOp(0x38, "К ∨", "display template body merge", line);
+    const exponentCanBeZero = this.displayFieldCanBeZero(template.exponent);
+    if (exponentCanBeZero) {
+      this.emitStore(scratch.value, `display ${display.name} body`, line);
     }
+
+    const exponentZero = exponentCanBeZero ? this.freshLabel("display_exponent_zero") : undefined;
+    this.emitRecall(template.exponent.name, `display ${display.name} exponent`, line);
+    if (exponentZero !== undefined) {
+      this.emitJump(0x57, "F x!=0", exponentZero, "display template zero exponent", line);
+    }
+    this.emitStore(scratch.loop, `display ${display.name} exponent counter`, line);
+    if (exponentCanBeZero) {
+      this.emitRecall(scratch.value, `display ${display.name} body`, line);
+    } else {
+      this.emitOp(0x14, "<->", "display template body restore", line);
+    }
+    const loopStart = this.freshLabel("display_exponent_loop");
+    this.emitLabel(loopStart);
+    this.emitOp(0x0c, "ВП", "display template exponent entry", line);
+    this.emitOp(0x01, "1", "display template exponent digit", line);
+    this.emitOp(0x0b, "/-/", "display template exponent sign", line);
+    this.emitJump(displayLoopOpcode(scratch.loopRegister), `F L${scratch.loopRegister}`, loopStart, "display template exponent loop", line);
+    this.emitStore(scratch.value, `display ${display.name} exponent body`, line);
+    if (exponentZero !== undefined) this.emitLabel(exponentZero);
+
+    this.emitRecall(template.leader.name, `display ${display.name} leader`, line);
+    this.emitOp(0x0e, "В↑", "display template leader", line);
+    this.emitRecall(scratch.value, `display ${display.name} body`, line);
+    this.emitOp(0x14, "<->", "display template leader merge", line);
+    this.emitOp(0x54, "К НОП", "display template leader preserve", line, true);
+    this.emitOp(0x0c, "ВП", "display template leader restore", line);
     this.emitOp(0x50, "С/П", `show ${display.name}`, line);
     this.optimizations.push({
       name: "display-byte-x2-lowering",
-      detail: `Built literal-separated screen ${display.name} through display-byte/X2 mutation.`,
+      detail: `Built literal-separated screen ${display.name} through a mantissa/exponent video template.`,
     });
     return true;
+  }
+
+  private mantissaExponentDisplayTemplate(
+    display: ProgramAst["displays"][number],
+  ): MantissaExponentDisplayTemplate | undefined {
+    const [leader, firstLiteral, score, secondLiteral, total, thirdLiteral, exponent] = display.items;
+    if (
+      leader?.kind !== "source" ||
+      firstLiteral?.kind !== "literal" ||
+      score?.kind !== "source" ||
+      secondLiteral?.kind !== "literal" ||
+      total?.kind !== "source" ||
+      thirdLiteral?.kind !== "literal" ||
+      exponent?.kind !== "source" ||
+      display.items.length !== 7
+    ) {
+      return undefined;
+    }
+    if (normalizeDisplayTemplateLiteral(firstLiteral.text) !== ".-") return undefined;
+    if (normalizeDisplayTemplateLiteral(secondLiteral.text) !== "-") return undefined;
+    if (normalizeDisplayTemplateLiteral(thirdLiteral.text) !== "-") return undefined;
+
+    const result = {
+      leader: { item: leader, name: leader.name, width: leader.width ?? this.naturalDisplayWidth(leader.name) },
+      score: { item: score, name: score.name, width: score.width ?? this.naturalDisplayWidth(score.name) },
+      total: { item: total, name: total.name, width: total.width ?? this.naturalDisplayWidth(total.name) },
+      exponent: { item: exponent, name: exponent.name, width: exponent.width ?? this.naturalDisplayWidth(exponent.name) },
+    };
+    if (result.leader.width !== 1 || result.score.width !== 2 || result.total.width !== 3 || result.exponent.width !== 2) {
+      return undefined;
+    }
+    if (!this.displayFieldFitsUnsignedWidth(result.leader)) return undefined;
+    if (!this.displayFieldFitsUnsignedWidth(result.score)) return undefined;
+    if (!this.displayFieldFitsUnsignedWidth(result.total)) return undefined;
+    if (!this.displayFieldFitsUnsignedWidth(result.exponent)) return undefined;
+    return result;
+  }
+
+  private displayFieldFitsUnsignedWidth(field: DisplayField): boolean {
+    const state = this.findStateField(field.name);
+    if (state === undefined) return false;
+    const min = state.min ?? 0;
+    const max = state.max ?? min;
+    return min >= 0 && max < 10 ** field.width;
+  }
+
+  private displayFieldCanBeZero(field: DisplayField): boolean {
+    const state = this.findStateField(field.name);
+    return state === undefined || (state.min ?? 0) <= 0;
+  }
+
+  private displayTemplateScratchRegisters(display: ProgramAst["displays"][number]): {
+    value: string;
+    loop: string;
+    loopRegister: 0 | 1 | 2 | 3;
+    mask: string;
+  } | undefined {
+    const value = displayTemplateValueScratchName(display);
+    const loop = displayTemplateLoopScratchName(display);
+    const mask = displayTemplateMaskScratchName(display);
+    const loopRegister = this.allocation.registers[loop];
+    if (
+      this.allocation.registers[value] === undefined ||
+      this.allocation.registers[mask] === undefined ||
+      loopRegister === undefined
+    ) {
+      return undefined;
+    }
+    if (loopRegister !== "0" && loopRegister !== "1" && loopRegister !== "2" && loopRegister !== "3") return undefined;
+    return { value, loop, loopRegister: Number(loopRegister) as 0 | 1 | 2 | 3, mask };
+  }
+
+  private emitDisplayLiteralProgram(
+    program: Exclude<DisplayLiteralProgram, { kind: "error" }>,
+    line: number | undefined,
+    comment: string,
+  ): void {
+    if (program.kind === "kinv") {
+      this.emitNumberOrPreload(program.digits);
+      this.emitOp(0x3a, "К ИНВ", comment, line);
+      if (program.negative) this.emitOp(0x0b, "/-/", `${comment} sign`, line);
+      return;
+    }
+    this.emitNumberOrPreload(program.left);
+    this.emitOp(0x0e, "В↑", `${comment} split`, line);
+    this.emitNumberOrPreload(program.right);
+    this.emitOp(0x39, "К ⊕", comment, line);
+    if (program.negative) this.emitOp(0x0b, "/-/", `${comment} sign`, line);
   }
 
   private canReorderNumericDisplay(display: ProgramAst["displays"][number]): boolean {
@@ -3870,11 +4036,10 @@ class EmitContext {
     if (program === undefined) return false;
 
     if (program.kind === "error") {
-      this.emitNumber("0");
-      this.emitOp(0x23, "F 1/x", "display literal ЕГГ0Г", line);
+      this.emitErrorStopOpcode(`show ${display.name}`, line);
       this.optimizations.push({
         name: "error-stop",
-        detail: `Used F 1/x to show literal ЕГГ0Г for screen ${display.name}.`,
+        detail: `Used one-cell error opcode to show literal ЕГГ0Г for screen ${display.name}.`,
       });
     } else if (program.kind === "kinv") {
       this.emitNumberOrPreload(program.digits);
@@ -3891,6 +4056,23 @@ class EmitContext {
     if (program.kind === "error") return true;
     this.emitOp(0x50, "С/П", `show ${display.name}`, line);
     return true;
+  }
+
+  private compileLiteralHalt(literal: string, line: number): void {
+    const program = displayLiteralProgram(literal);
+    if (program?.kind !== "error") {
+      this.diagnostics.push(buildDiagnostic("error", `Only stop "ЕГГОГ" literal stops are supported.`, line));
+      return;
+    }
+    this.emitErrorStopOpcode("halt literal ЕГГ0Г", line);
+    this.optimizations.push({
+      name: "error-stop",
+      detail: `Used one-cell error opcode for literal ЕГГ0Г stop at line ${line}.`,
+    });
+  }
+
+  private emitErrorStopOpcode(comment: string, line: number): void {
+    this.emitOp(0x2b, "error 2B", comment, line);
   }
 
   private sharedLiteralDisplayHelper(
@@ -4602,7 +4784,8 @@ class EmitContext {
     const cost = estimateExpressionCostForCondition(expr, preloadedConstants);
     const inlineTotal = uses * cost;
     const helperTotal = uses * 2 + cost + 1;
-    return inlineTotal - helperTotal >= EXPRESSION_HELPER_MIN_SAVINGS;
+    const threshold = this.loweringOptions.shareRandomCell === true ? 1 : EXPRESSION_HELPER_MIN_SAVINGS;
+    return inlineTotal - helperTotal >= threshold;
   }
 
   private sharedExpressionHelper(expr: ExpressionAst): { expr: ExpressionAst; label: string; line?: number } | undefined {
@@ -6023,6 +6206,7 @@ function allocateRegisters(
   collectSpatialHitScratchVariables(ast, variables);
   collectSpatialCountScratchVariables(ast, variables);
   collectGuardedUpdateScratchVariables(ast, variables);
+  collectDisplayTemplateScratchVariables(ast, variables);
 
   const registers: Record<string, RegisterName> = {};
   const used = new Set<RegisterName>();
@@ -6175,6 +6359,26 @@ function pickRegister(
     }
     return undefined;
   }
+  if (variable.startsWith(DISPLAY_TEMPLATE_LOOP_PREFIX)) {
+    for (const candidate of ["1", "0", "2", "3"] satisfies RegisterName[]) {
+      if (!used.has(candidate)) return candidate;
+    }
+    return undefined;
+  }
+  if (variable.startsWith(DISPLAY_TEMPLATE_VALUE_PREFIX)) {
+    for (let i = REGISTER_ORDER.length - 1; i >= 0; i -= 1) {
+      const candidate = REGISTER_ORDER[i]!;
+      if (!used.has(candidate)) return candidate;
+    }
+    return undefined;
+  }
+  if (variable.startsWith(DISPLAY_TEMPLATE_MASK_PREFIX)) {
+    for (let i = REGISTER_ORDER.length - 1; i >= 0; i -= 1) {
+      const candidate = REGISTER_ORDER[i]!;
+      if (!used.has(candidate)) return candidate;
+    }
+    return undefined;
+  }
   if (variable.startsWith(SPATIAL_COUNT_SCRATCH_PREFIX)) {
     if (variable === spatialCountCounterScratchName()) {
       for (const candidate of ["0", "1", "2", "3"] satisfies RegisterName[]) {
@@ -6212,6 +6416,10 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
     values.add("-81");
   }
   for (const display of ast.displays) {
+    if (displayHasMantissaExponentTemplateShape(display)) {
+      values.add("1000");
+      values.add("10000000");
+    }
     const literal = literalOnlyDisplayText(display);
     const literalProgram = literal === undefined ? undefined : displayLiteralProgram(literal);
     if (literalProgram?.kind === "kinv" && estimateNumberCost(literalProgram.digits) > 1) {
@@ -6844,6 +7052,50 @@ function displayByteBuilderSupportsLiteral(text: string): boolean {
   return /^[\s.-]+$/u.test(text);
 }
 
+function displayHasMantissaExponentTemplateShape(display: ProgramAst["displays"][number]): boolean {
+  const [leader, firstLiteral, score, secondLiteral, total, thirdLiteral, exponent] = display.items;
+  return display.items.length === 7 &&
+    leader?.kind === "source" &&
+    firstLiteral?.kind === "literal" &&
+    normalizeDisplayTemplateLiteral(firstLiteral.text) === ".-" &&
+    score?.kind === "source" &&
+    secondLiteral?.kind === "literal" &&
+    normalizeDisplayTemplateLiteral(secondLiteral.text) === "-" &&
+    total?.kind === "source" &&
+    thirdLiteral?.kind === "literal" &&
+    normalizeDisplayTemplateLiteral(thirdLiteral.text) === "-" &&
+    exponent?.kind === "source";
+}
+
+function displayTemplateValueScratchName(display: ProgramAst["displays"][number]): string {
+  return `${DISPLAY_TEMPLATE_VALUE_PREFIX}${display.name}`;
+}
+
+function displayTemplateLoopScratchName(display: ProgramAst["displays"][number]): string {
+  return `${DISPLAY_TEMPLATE_LOOP_PREFIX}${display.name}`;
+}
+
+function displayTemplateMaskScratchName(display: ProgramAst["displays"][number]): string {
+  return `${DISPLAY_TEMPLATE_MASK_PREFIX}${display.name}`;
+}
+
+function normalizeDisplayTemplateLiteral(text: string): string {
+  return text.replace(/\s/gu, "");
+}
+
+function displayLoopOpcode(register: 0 | 1 | 2 | 3): number {
+  switch (register) {
+    case 0:
+      return 0x5d;
+    case 1:
+      return 0x5b;
+    case 2:
+      return 0x58;
+    case 3:
+      return 0x5a;
+  }
+}
+
 type DisplayLiteralProgram =
   | { kind: "error" }
   | { kind: "kinv"; digits: string; negative: boolean }
@@ -7256,7 +7508,9 @@ function collectBitHasConditionStats(ast: ProgramAst): Map<string, BitHasConditi
       if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
-        visitCondition(statement.condition);
+        if (!membershipConditionHandledBeforeGenericBitHas(statement)) {
+          visitCondition(statement.condition);
+        }
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
@@ -7293,6 +7547,12 @@ function bitHasConditionHelperSaves(mask: string, stats: BitHasConditionStats): 
   const scratch: ExpressionAst = { kind: "identifier", name: spatialHitScratchName(mask) };
   const helperBodyCost = 1 + 1 + estimateExpressionCost(bitMaskExpression(scratch)) + 1 + 1 + 1;
   return stats.inlineCost > helperBodyCost + stats.helperCallCost;
+}
+
+function membershipConditionHandledBeforeGenericBitHas(statement: Extract<StatementAst, { kind: "if" }>): boolean {
+  return isReusableMembershipClear(statement) ||
+    isReusableMembershipSet(statement) ||
+    isReusableMembershipSetRun(statement);
 }
 
 function collectSpatialHitScratchVariables(ast: ProgramAst, variables: Set<string>): void {
@@ -7503,6 +7763,15 @@ function collectGuardedUpdateScratchVariables(ast: ProgramAst, variables: Set<st
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
   for (const block of ast.blocks) visit(block.body);
+}
+
+function collectDisplayTemplateScratchVariables(ast: ProgramAst, variables: Set<string>): void {
+  for (const display of ast.displays) {
+    if (!displayHasMantissaExponentTemplateShape(display)) continue;
+    variables.add(displayTemplateValueScratchName(display));
+    variables.add(displayTemplateLoopScratchName(display));
+    variables.add(displayTemplateMaskScratchName(display));
+  }
 }
 
 function guardedUpdateSelectorProfitable(
@@ -9147,6 +9416,13 @@ function isReusableMembershipSetRun(statement: Extract<StatementAst, { kind: "if
   return membershipSetRunScratchName(statement) !== undefined;
 }
 
+function isReusableMembershipClear(statement: Extract<StatementAst, { kind: "if" }>): boolean {
+  const present = matchBitMembershipCondition(statement.condition);
+  if (present === undefined) return false;
+  const first = statement.thenBody[0];
+  return first?.kind === "assign" && isBitClearAssignment(first, present);
+}
+
 function membershipSetRunScratchName(statement: Extract<StatementAst, { kind: "if" }>): string | undefined {
   const present = matchBitMembershipCondition(statement.condition);
   if (present !== undefined && statement.elseBody !== undefined) {
@@ -9887,8 +10163,11 @@ function statementEquals(left: StatementAst, right: StatementAst): boolean {
   if (left.kind !== right.kind) return false;
   switch (left.kind) {
     case "pause":
+      return expressionEquals(left.expr, (right as typeof left).expr) &&
+        left.kind === (right as typeof left).kind;
     case "halt":
-      return expressionEquals(left.expr, (right as typeof left).expr);
+      return expressionEquals(left.expr, (right as typeof left).expr) &&
+        left.literal === (right as typeof left).literal;
     case "ask":
       return left.target === (right as typeof left).target &&
         expressionOptionEquals(left.prompt, (right as typeof left).prompt);
@@ -10843,7 +11122,18 @@ function buildPreloadReport(ast: ProgramAst, allocation: RegisterAllocation): Pr
     value,
     countsAgainstProgram: false,
   }));
-  return [...explicit, ...synthetic, ...constants];
+  const displayTemplateMasks: PreloadReport[] = [];
+  for (const display of ast.displays) {
+    if (!displayHasMantissaExponentTemplateShape(display)) continue;
+    const register = allocation.registers[displayTemplateMaskScratchName(display)];
+    if (register === undefined) continue;
+    displayTemplateMasks.push({
+      register,
+      value: "8,-00-000",
+      countsAgainstProgram: false,
+    });
+  }
+  return [...explicit, ...synthetic, ...constants, ...displayTemplateMasks];
 }
 
 function buildGeneratedSetupProgram(
@@ -10858,8 +11148,10 @@ function buildGeneratedSetupProgram(
   candidates: CandidateReport[],
 ): SetupProgramReport | undefined {
   const fields = setupProgramFields(ast);
-  if (fields.length === 0) return undefined;
   const executablePreloads = preloads.flatMap((preload) => executableSetupPreload(preload));
+  const needsSetupProgram = fields.length > 0 ||
+    executablePreloads.some((preload) => preload.kind === "display-literal");
+  if (!needsSetupProgram) return undefined;
 
   const setupOptimizations: AppliedOptimization[] = [];
   const setupContext = new EmitContext(
@@ -10902,12 +11194,16 @@ function setupProgramFields(ast: ProgramAst): StateFieldAst[] {
 interface ExecutableSetupPreload {
   register: RegisterName;
   value: string;
+  kind: "number" | "display-literal";
 }
 
 function executableSetupPreload(preload: PreloadReport): ExecutableSetupPreload[] {
   const register = registerFromText(preload.register);
   const value = executableSetupValue(preload.value);
-  return value === undefined ? [] : [{ register, value }];
+  if (value !== undefined) return [{ register, value, kind: "number" }];
+  const literal = displayLiteralProgram(preload.value);
+  if (literal === undefined || literal.kind === "error") return [];
+  return [{ register, value: preload.value, kind: "display-literal" }];
 }
 
 function executableSetupValue(value: string): string | undefined {

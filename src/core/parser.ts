@@ -2016,8 +2016,13 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
         target: statement.target,
         line: statement.line,
       }];
-    case "v2_stop":
+    case "v2_stop": {
+      const literal = parseV2StopLiteral(statement.value, statement.line);
+      if (literal !== undefined) {
+        return [{ kind: "halt", expr: parseExpression("0"), literal, line: statement.line }];
+      }
       return [{ kind: "halt", expr: lowerV2Expression(statement.value, statement.line, context), line: statement.line }];
+    }
     case "v2_invoke":
       return lowerV2Invoke(statement, context);
     case "v2_if": {
@@ -3325,6 +3330,11 @@ function parseDisplayItem(text: string, line: number): DisplayItemAst {
     return item;
   }
   throw new ParseError(`Display item must be a string literal or state name, got '${trimmed}'`, line);
+}
+
+function parseV2StopLiteral(text: string, line: number): string | undefined {
+  const trimmed = text.trim();
+  return trimmed.startsWith("\"") ? parseQuotedDisplayText(trimmed, line) : undefined;
 }
 
 function parseQuotedDisplayText(text: string, line: number): string {

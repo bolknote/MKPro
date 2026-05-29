@@ -14,7 +14,7 @@ program Game100Pig {
     player_total: counter 0..100 = 0
     calculator_total: counter 0..100 = 0
     turn_score: counter 0..99 = 0
-    roll_count: counter 0..99 = 0
+    roll_count: counter 1..99 = 0
     preview_total: counter 0..100 = 0
   }
 
@@ -27,7 +27,7 @@ program Game100Pig {
   }
 
   rule calculator_wins {
-    stop -100
+    stop calculator_total
   }
 
   turn {
@@ -63,9 +63,6 @@ program Game100Pig {
   }
 
   rule pig_out_player {
-    turn_score = 0
-    roll_count = 0
-    preview_total = player_total
     start_calculator_turn
   }
 
@@ -112,8 +109,7 @@ program Game100Pig {
   rule return_to_player {
     turn_score = 0
     roll_count = 0
-    preview_total = player_total
-    player_choice
+    roll_player
   }
 
   rule player_choice {

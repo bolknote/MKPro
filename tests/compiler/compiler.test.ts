@@ -1485,7 +1485,7 @@ program NegativeZeroThreshold {
       countsAgainstProgram: false,
     });
     expect(preload?.setupProgram).toContain("4D");
-    expect(result.report.steps).toBe(11);
+    expect(result.report.steps).toBe(9);
   });
 
   it("considers negative-zero threshold flow but keeps the shorter ordinary branch", () => {
