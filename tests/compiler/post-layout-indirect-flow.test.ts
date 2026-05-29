@@ -9,6 +9,24 @@ function digit(): MachineItem {
   return { kind: "op", opcode: 0x00, mnemonic: "0" };
 }
 
+function halt(): MachineItem {
+  return { kind: "op", opcode: 0x50, mnemonic: "С/П" };
+}
+
+function jump(target: string): MachineItem[] {
+  return [
+    { kind: "op", opcode: 0x51, mnemonic: "БП" },
+    { kind: "address", target },
+  ];
+}
+
+function cjump(target: string): MachineItem[] {
+  return [
+    { kind: "op", opcode: 0x5e, mnemonic: "F x=0" },
+    { kind: "address", target },
+  ];
+}
+
 function programWithBackwardJump(fillerCells: number): MachineItem[] {
   const items: MachineItem[] = [{ kind: "label", name: "top" }];
   for (let i = 0; i < fillerCells; i += 1) items.push(digit());
@@ -62,5 +80,47 @@ describe("post-layout indirect flow", () => {
 
     expect(cellCount(result.items)).toBeLessThanOrEqual(cellCount(program));
     expect(cellCount(result.items)).toBeLessThanOrEqual(105);
+  });
+
+  it("proves shifted forward targets before rewriting direct branches", () => {
+    const program: MachineItem[] = [
+      { kind: "label", name: "main" },
+      ...jump("skip"),
+      digit(),
+      { kind: "label", name: "skip" },
+      halt(),
+    ];
+    const result = optimizePostLayoutIndirectFlow(program, options, 0);
+
+    expect(result.applied).toBe(1);
+    expect(cellCount(result.items)).toBe(cellCount(program) - 1);
+    expect(result.preloads).toEqual([{ register: "7", value: "B4", countsAgainstProgram: false }]);
+
+    const decoded = evaluateIndirectAddress("7", "B4", "flow");
+    expect(decoded?.actualFlowTarget).toBe(2);
+    expect(result.items.some((item) => item.kind === "address")).toBe(false);
+  });
+
+  it("groups repeated forward branches to the same shifted target", () => {
+    const program: MachineItem[] = [
+      { kind: "label", name: "main" },
+      ...cjump("end"),
+      digit(),
+      ...cjump("end"),
+      digit(),
+      { kind: "label", name: "end" },
+      halt(),
+    ];
+    const result = optimizePostLayoutIndirectFlow(program, options, 0);
+
+    expect(result.applied).toBe(2);
+    expect(cellCount(result.items)).toBe(cellCount(program) - 2);
+    expect(result.preloads).toEqual([{ register: "7", value: "B6", countsAgainstProgram: false }]);
+
+    const indirectConditions = result.items.filter(
+      (item) => item.kind === "op" && item.opcode === 0xe7,
+    );
+    expect(indirectConditions).toHaveLength(2);
+    expect(evaluateIndirectAddress("7", "B6", "flow")?.actualFlowTarget).toBe(4);
   });
 });

@@ -2325,6 +2325,7 @@ class EmitContext {
         { forceInline: true },
       );
       this.emitOp(0x37, "К ∧", "spatial hit test", helper.line);
+      this.emitOp(0x35, "К {x}", "spatial hit membership fraction", helper.line);
       this.emitOp(0x32, "К ЗН", "spatial hit to count", helper.line);
       this.emitOp(0x52, "В/О", "spatial hit return", helper.line);
     }
@@ -2757,6 +2758,8 @@ class EmitContext {
     this.compileExpression(used.mask);
     this.emitRecall(scratch, "reuse 4x4 cell mask", first.line);
     this.emitOp(0x37, "К ∧", "cell_has with reused mask", first.line);
+    this.emitOp(0x35, "К {x}", "cell_has membership fraction", first.line);
+    this.emitOp(0x32, "К ЗН", "cell_has to 0/1", first.line);
     this.emitStore(first.target, `set ${first.target}`, first.line);
     this.compileExpression(mark.mask);
     this.emitRecall(scratch, "reuse 4x4 cell mask", second.line);
@@ -2828,6 +2831,9 @@ class EmitContext {
     return this.allocation.registers[SHARED_BIT_MASK_SCRATCH] === undefined ? undefined : SHARED_BIT_MASK_SCRATCH;
   }
 
+  // Build the `8.HHHHHHH` cell-mask value for the bit index currently in X (see
+  // bitMaskExpression for the representation). The bit lands in fractional nibble
+  // floor(index/4)+1; `2^(index mod 4)` is rounded because `F x^y` is imprecise.
   private emitBitMaskFromCurrentXWithQuotientScratch(scratch: string, line: number | undefined): void {
     this.emitNumber("4");
     this.emitOp(0x13, "/", "bit mask quotient", line);
@@ -2837,10 +2843,17 @@ class EmitContext {
     this.emitOp(0x12, "*", "bit mask remainder scale", line);
     this.emitNumber("2");
     this.emitOp(0x24, "F x^y", "bit mask power", line);
+    this.emitNumber("0.5");
+    this.emitOp(0x10, "+", "bit mask round bias", line);
+    this.emitOp(0x34, "К [x]", "bit mask round", line);
     this.emitRecall(scratch, "bit mask quotient", line);
     this.emitOp(0x34, "К [x]", "bit mask digit index", line);
+    this.emitNumber("1");
+    this.emitOp(0x10, "+", "bit mask decade index", line);
     this.emitOp(0x15, "F 10^x", "bit mask decade", line);
-    this.emitOp(0x12, "*", "bit mask value", line);
+    this.emitOp(0x13, "/", "bit mask fractional place", line);
+    this.emitNumber("8");
+    this.emitOp(0x10, "+", "bit mask anchor", line);
   }
 
   private compileDecrementZeroBranch(
@@ -5146,6 +5159,7 @@ class EmitContext {
     this.emitJump(0x53, "ПП", helper.label, "bit_mask helper", line);
     this.compileExpression(mask);
     this.emitOp(0x37, "К ∧", "bit membership test", line);
+    this.emitOp(0x35, "К {x}", "bit membership fraction", line);
     return {
       name: "bit-mask-condition-helper",
       detail: `Tested bit_has() through the shared bit_mask helper at line ${line}.`,
@@ -6239,6 +6253,7 @@ class EmitContext {
     this.emitJump(0x53, "ПП", helper.label, "bit_mask helper", sourceLine);
     this.emitRecall(hitMask, "spatial hit mask", sourceLine);
     this.emitOp(0x37, "К ∧", "spatial hit test", sourceLine);
+    this.emitOp(0x35, "К {x}", "spatial hit membership fraction", sourceLine);
     this.emitOp(0x32, "К ЗН", "spatial hit to count", sourceLine);
     this.optimizations.push({
       name: "spatial-hit-inline",
@@ -10179,7 +10194,7 @@ function ticTacToeExpressionMacro(name: string, args: ExpressionAst[]): Expressi
     case "bit_mask":
       return bitMaskExpression(args[0]!);
     case "bit_has":
-      return bitAndExpression(args[0]!, bitMaskExpression(args[1]!));
+      return bitMembershipExpression(args[0]!, args[1]!);
     case "bit_set":
       return bitOrExpression(args[0]!, bitMaskExpression(args[1]!));
     case "bit_clear":
@@ -10194,7 +10209,15 @@ function ticTacToeExpressionMacro(name: string, args: ExpressionAst[]): Expressi
       return cellMaskExpression(args[0]!, args[1]!);
     case "cell_has":
     case "cell_used":
-      return bitAndExpression(args[0]!, cellMaskExpression(args[1]!, args[2]!));
+      return {
+        kind: "call",
+        callee: "sign",
+        args: [{
+          kind: "call",
+          callee: "frac",
+          args: [bitAndExpression(args[0]!, cellMaskExpression(args[1]!, args[2]!))],
+        }],
+      };
     case "cell_set":
     case "cell_mark":
       return bitOrExpression(args[0]!, cellMaskExpression(args[1]!, args[2]!));
@@ -10699,13 +10722,37 @@ function randomCellsPlacement(expr: ExpressionAst): RandomCellsPlacement | undef
   return { lo, cells, count };
 }
 
+// A cell mask is stored as `8.HHHHHHH`: the MK-61 blue logical operations
+// (К∨/К∧/К⊕) force the integer part to 8 and operate nibble-wise on the seven
+// fractional hex digits, so each cell's bit lives in a fixed fractional nibble
+// rather than in an integer position (which normalization would collapse).
+// Bit `index` (0-based) occupies hex nibble `floor(index/4)+1` after the point,
+// with value `2^(index mod 4)` inside that nibble. `2^offset` is computed with
+// `F x^y`, which is slightly imprecise (e.g. 2^3 → 7.9999993), so it is rounded
+// before being placed, keeping the nibble exact.
 function bitMaskExpression(index: ExpressionAst): ExpressionAst {
   const nibble = intExpression(divideExpressions(index, numberExpression(4)));
   const offset = subtractExpressions(index, multiplyExpressions(nibble, numberExpression(4)));
-  return multiplyExpressions(
-    powExpression(numberExpression(2), offset),
-    pow10Expression(nibble),
+  const bitValue = intExpression(addExpressions(powExpression(numberExpression(2), offset), numberExpression(0.5)));
+  return addExpressions(
+    numberExpression(8),
+    divideExpressions(bitValue, pow10Expression(addExpressions(nibble, numberExpression(1)))),
   );
+}
+
+// Membership of a bit reduces to: the fractional part of `mask К∧ bitMask` is
+// non-zero exactly when the bit is set (an absent bit yields `8.0`). `sign` of
+// that fraction collapses to the 0/1 the language expects from `bit_has`.
+function bitMembershipExpression(mask: ExpressionAst, index: ExpressionAst): ExpressionAst {
+  return {
+    kind: "call",
+    callee: "sign",
+    args: [{
+      kind: "call",
+      callee: "frac",
+      args: [bitAndExpression(mask, bitMaskExpression(index))],
+    }],
+  };
 }
 
 function packed4DigitExpression(lines: ExpressionAst, index: ExpressionAst): ExpressionAst {

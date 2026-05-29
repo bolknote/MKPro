@@ -1,6 +1,6 @@
 import { evaluateIndirectAddress } from "./indirect-addressing.ts";
 import { lowerIrToMachine, raiseMachineToIr } from "./ir.ts";
-import { cellsPerOp } from "./passes/helpers.ts";
+import { cellsPerOp, hasRewriteBarrier } from "./passes/helpers.ts";
 import { runPreloadedIndirectFlow } from "./passes/preloaded-indirect-flow.ts";
 import type {
   AppliedOptimization,
@@ -20,6 +20,15 @@ export interface PostLayoutIndirectFlowResult {
 
 type DirectBranch = Extract<IrOp, { kind: "jump" | "call" | "cjump" }>;
 type IndirectBranch = Extract<IrOp, { kind: "indirect-jump" | "indirect-call" | "indirect-cjump" }>;
+
+const STABLE_REGISTERS: RegisterName[] = ["7", "8", "9", "a", "b", "c", "d", "e"];
+
+const INDIRECT_COND_BASES = {
+  "!=0": 0x70,
+  ">=0": 0x90,
+  "<0": 0xc0,
+  "==0": 0xe0,
+} as const;
 
 function isDirectBranch(op: IrOp): op is DirectBranch {
   return op.kind === "jump" || op.kind === "call" || op.kind === "cjump";
@@ -49,6 +58,97 @@ function labelAddresses(ops: readonly IrOp[]): Map<string, number> {
 
 function cellCount(items: readonly MachineItem[]): number {
   return items.filter((item) => item.kind !== "label").length;
+}
+
+function opAddresses(ops: readonly IrOp[]): number[] {
+  const addresses: number[] = [];
+  let address = 0;
+  for (const op of ops) {
+    addresses.push(address);
+    address += cellsPerOp(op);
+  }
+  return addresses;
+}
+
+function usedRegisters(ops: readonly IrOp[]): Set<RegisterName> {
+  const used = new Set<RegisterName>();
+  for (const op of ops) {
+    if (
+      op.kind === "store" ||
+      op.kind === "recall" ||
+      op.kind === "indirect-store" ||
+      op.kind === "indirect-recall" ||
+      op.kind === "indirect-jump" ||
+      op.kind === "indirect-call" ||
+      op.kind === "indirect-cjump"
+    ) {
+      used.add(op.register);
+    }
+  }
+  return used;
+}
+
+function spareStableRegister(ops: readonly IrOp[]): RegisterName | undefined {
+  const used = usedRegisters(ops);
+  return STABLE_REGISTERS.find((register) => !used.has(register));
+}
+
+function formalLabelFromOrdinal(ordinal: number): string {
+  const high = Math.floor(ordinal / 10);
+  const low = ordinal % 10;
+  return `${high.toString(16).toUpperCase()}${low.toString(16).toUpperCase()}`;
+}
+
+function officialLabel(target: number): string {
+  if (target <= 99) {
+    return `${Math.floor(target / 10)}${target % 10}`;
+  }
+  return `A${target - 100}`;
+}
+
+function selectorForActualTarget(target: number): string | undefined {
+  if (!Number.isInteger(target) || target < 0 || target > 104) return undefined;
+  if (target <= 47) return formalLabelFromOrdinal(target + 112);
+  return officialLabel(target);
+}
+
+function indirectFlowOp(
+  op: DirectBranch,
+  register: RegisterName,
+  selectorValue: string,
+  target: number,
+): IndirectBranch {
+  const offset = registerIndex(register);
+  const suffix = `preloaded R${register}=${selectorValue} indirect-target=${target} shifted-forward indirect flow`;
+  if (op.kind === "jump") {
+    return {
+      kind: "indirect-jump",
+      register,
+      opcode: 0x80 + offset,
+      meta: { ...op.meta, mnemonic: `К БП ${register}`, comment: [op.meta.comment, suffix].filter(Boolean).join("; ") },
+    };
+  }
+  if (op.kind === "call") {
+    return {
+      kind: "indirect-call",
+      register,
+      opcode: 0xa0 + offset,
+      meta: { ...op.meta, mnemonic: `К ПП ${register}`, comment: [op.meta.comment, suffix].filter(Boolean).join("; ") },
+    };
+  }
+  const opcode = INDIRECT_COND_BASES[op.condition] + offset;
+  const name = op.condition === "==0"
+    ? "x=0"
+    : op.condition === "!=0"
+      ? "x!=0"
+      : `x${op.condition}`;
+  return {
+    kind: "indirect-cjump",
+    condition: op.condition,
+    register,
+    opcode,
+    meta: { ...op.meta, mnemonic: `К ${name} ${register}`, comment: [op.meta.comment, suffix].filter(Boolean).join("; ") },
+  };
 }
 
 // Merges selector registers that hold the identical preloaded value: every
@@ -251,6 +351,107 @@ function validateRewriteGroup(
   };
 }
 
+function validateForwardRewriteGroup(
+  indices: readonly number[],
+  ir: readonly IrOp[],
+  targetLabel: ReadonlyArray<string | undefined>,
+  register: RegisterName,
+  items: readonly MachineItem[],
+): RewriteStep | undefined {
+  if (indices.length === 0) return undefined;
+
+  const indexSet = new Set(indices);
+  const provisional = ir.map((op, index) => {
+    if (!indexSet.has(index)) return op;
+    if (!isDirectBranch(op)) return op;
+    return indirectFlowOp(op, register, "00", 0);
+  });
+  const finalLabels = labelAddresses(provisional);
+
+  let finalTarget: number | undefined;
+  for (const index of indices) {
+    const original = ir[index]!;
+    if (!isDirectBranch(original)) return undefined;
+    const label = targetLabel[index];
+    if (label === undefined) return undefined;
+    const target = finalLabels.get(label);
+    if (target === undefined) return undefined;
+    if (finalTarget === undefined) {
+      finalTarget = target;
+    } else if (finalTarget !== target) {
+      return undefined;
+    }
+  }
+  if (finalTarget === undefined) return undefined;
+
+  const selectorValue = selectorForActualTarget(finalTarget);
+  if (selectorValue === undefined) return undefined;
+  const decoded = evaluateIndirectAddress(register, selectorValue, "flow");
+  if (decoded?.actualFlowTarget !== finalTarget) return undefined;
+
+  const candidate = ir.map((op, index) => {
+    if (!indexSet.has(index)) return op;
+    if (!isDirectBranch(op)) return op;
+    return indirectFlowOp(op, register, selectorValue, finalTarget);
+  });
+  const candidateItems = lowerIrToMachine(candidate);
+  if (cellCount(candidateItems) >= cellCount(items)) return undefined;
+
+  return {
+    items: candidateItems,
+    preload: { register, value: selectorValue, countsAgainstProgram: false },
+    optimizations: [
+      {
+        name: "preloaded-indirect-flow",
+        detail: `Replaced ${indices.length} forward branch/call(s) with compiler-owned preloaded indirect flow after re-layout proof.`,
+      },
+    ],
+    superDark: false,
+    darkEntry: decoded.formalAddress !== undefined
+      && decoded.formalAddress.kind !== "official"
+      && decoded.formalAddress.kind !== "super-dark",
+    converted: indices.length,
+  };
+}
+
+function applyForwardRewrite(
+  ir: readonly IrOp[],
+  targetLabel: ReadonlyArray<string | undefined>,
+  items: readonly MachineItem[],
+): RewriteStep | undefined {
+  const register = spareStableRegister(ir);
+  if (register === undefined) return undefined;
+
+  const labels = labelAddresses(ir);
+  const addresses = opAddresses(ir);
+  const groups = new Map<string, number[]>();
+  for (let index = 0; index < ir.length; index += 1) {
+    const op = ir[index]!;
+    if (hasRewriteBarrier(op) || !isDirectBranch(op)) continue;
+    const label = targetLabel[index];
+    if (label === undefined) continue;
+    const target = labels.get(label);
+    if (target === undefined || target <= addresses[index]!) continue;
+    const group = groups.get(label) ?? [];
+    group.push(index);
+    groups.set(label, group);
+  }
+
+  let best: RewriteStep | undefined;
+  for (const indices of groups.values()) {
+    const candidate = validateForwardRewriteGroup(indices, ir, targetLabel, register, items);
+    if (candidate === undefined) continue;
+    if (
+      best === undefined ||
+      candidate.converted > best.converted ||
+      (candidate.converted === best.converted && candidate.darkEntry && !best.darkEntry)
+    ) {
+      best = candidate;
+    }
+  }
+  return best;
+}
+
 function applyOneRewrite(
   items: readonly MachineItem[],
   options: CompileOptions,
@@ -264,35 +465,37 @@ function applyOneRewrite(
   // tail-only guard and reach backward in-window calls anywhere in the program
   // (e.g. calls to a front-hoisted shared helper).
   const result = runPreloadedIndirectFlow(numeric, { options }, { relaxMaxTargetGuard: true });
-  if (result.applied === 0) return undefined;
+  if (result.applied > 0) {
+    // run() reuses one selector register per distinct backward target, so several
+    // call sites can share it. Group the produced rewrites by register and try to
+    // convert each group as a unit: when the shared target sits before every site
+    // (e.g. a front-hoisted helper), the whole group is proven against one
+    // re-layout, which avoids burning a fresh spare register per round.
+    const groups = new Map<RegisterName, number[]>();
+    for (let index = 0; index < result.ops.length; index += 1) {
+      const op = result.ops[index]!;
+      const original = numeric[index]!;
+      if (!isIndirectBranch(op) || !isDirectBranch(original) || targetLabel[index] === undefined) continue;
+      const list = groups.get(op.register) ?? [];
+      list.push(index);
+      groups.set(op.register, list);
+    }
 
-  // run() reuses one selector register per distinct backward target, so several
-  // call sites can share it. Group the produced rewrites by register and try to
-  // convert each group as a unit: when the shared target sits before every site
-  // (e.g. a front-hoisted helper), the whole group is proven against one
-  // re-layout, which avoids burning a fresh spare register per round.
-  const groups = new Map<RegisterName, number[]>();
-  for (let index = 0; index < result.ops.length; index += 1) {
-    const op = result.ops[index]!;
-    const original = numeric[index]!;
-    if (!isIndirectBranch(op) || !isDirectBranch(original) || targetLabel[index] === undefined) continue;
-    const list = groups.get(op.register) ?? [];
-    list.push(index);
-    groups.set(op.register, list);
+    // Prefer a provable FA..FF super-dark group (densest MK-61 idiom); otherwise
+    // take the group that converts the most sites, falling back to a single
+    // rewrite. Every choice goes through the same independent proof.
+    let best: RewriteStep | undefined;
+    for (const indices of groups.values()) {
+      const group = validateRewriteGroup(indices, ir, numeric, targetLabel, result, items);
+      const candidate = group ?? validateRewriteAt(indices[0]!, ir, numeric, targetLabel, result, items);
+      if (candidate === undefined) continue;
+      if (candidate.superDark) return candidate;
+      if (best === undefined || candidate.converted > best.converted) best = candidate;
+    }
+    if (best !== undefined) return best;
   }
 
-  // Prefer a provable FA..FF super-dark group (densest MK-61 idiom); otherwise
-  // take the group that converts the most sites, falling back to a single
-  // rewrite. Every choice goes through the same independent proof.
-  let best: RewriteStep | undefined;
-  for (const indices of groups.values()) {
-    const group = validateRewriteGroup(indices, ir, numeric, targetLabel, result, items);
-    const candidate = group ?? validateRewriteAt(indices[0]!, ir, numeric, targetLabel, result, items);
-    if (candidate === undefined) continue;
-    if (candidate.superDark) return candidate;
-    if (best === undefined || candidate.converted > best.converted) best = candidate;
-  }
-  return best;
+  return applyForwardRewrite(ir, targetLabel, items);
 }
 
 const MAX_REWRITES = 64;
