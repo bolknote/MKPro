@@ -228,6 +228,33 @@ program MultiVariableLinearFold {
     expect(result.report.optimizations.some((item) => item.name === "expression-constant-folder")).toBe(true);
   });
 
+  it("reassociates signed update deltas to avoid unary negation before addition", () => {
+    const assignSource = `
+program SignedUpdate {
+  state {
+    height: packed = 100
+    speed: packed = 3
+    accel: packed = 2
+  }
+  turn {
+    height = height - speed - accel / 2
+    stop height
+  }
+}
+`;
+    const updateSource = assignSource.replace(
+      "height = height - speed - accel / 2",
+      "height += - speed - accel / 2",
+    );
+
+    const assign = compileOk(assignSource);
+    const update = compileOk(updateSource);
+
+    expect(update.report.steps).toBe(assign.report.steps);
+    expect(update.steps.map((step) => step.hex)).toEqual(assign.steps.map((step) => step.hex));
+    expect(update.report.optimizations.some((item) => item.name === "expression-constant-folder")).toBe(true);
+  });
+
   it("normalizes deeply nested linear constant products", () => {
     const result = compileOk(`
 program NestedLinearFold {

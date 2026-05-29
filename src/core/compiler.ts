@@ -142,6 +142,14 @@ interface LoweringOptions {
   // any deterministic E; the win is not recomputing a non-trivial E per arm.
   // Adopted only when it produces fewer cells.
   canonicalizeIfChains?: boolean;
+  // Do not reserve a dispatch scratch register for dispatches that lower through
+  // the numeric residual chain (which keeps the selector in X and never uses the
+  // scratch). Frees a phantom register, which on register-starved programs can
+  // unlock more preloaded-constant / indirect-flow conversions. Register
+  // allocation is global, so freeing a register can reshuffle assignments and
+  // occasionally regress an unrelated program; gated as a speculative variant
+  // and adopted only when it produces fewer cells.
+  freeResidualDispatchScratch?: boolean;
 }
 
 export function compileMKPro(
@@ -187,6 +195,16 @@ export function compileMKPro(
     { canonicalizeIfChains: true },
     "if-chain-dispatch-canonicalization",
     "Selected single-evaluation dispatch for a repeated expensive if/else-if selector",
+  );
+  tryCandidate(
+    { freeResidualDispatchScratch: true },
+    "free-residual-dispatch-scratch",
+    "Freed the unused residual-dispatch scratch register to unlock more preloaded constants",
+  );
+  tryCandidate(
+    { freeResidualDispatchScratch: true, canonicalizeIfChains: true },
+    "free-residual-dispatch-scratch-with-if-chain",
+    "Combined residual-dispatch scratch freeing with if/else-if dispatch canonicalization",
   );
 
   let best = primary;
@@ -299,7 +317,7 @@ function compileMKProOnce(
   }
   eliminateUnreachableV2Procs(ast, optimizations);
 
-  const allocation = allocateRegisters(ast, diagnostics);
+  const allocation = allocateRegisters(ast, diagnostics, loweringOptions.freeResidualDispatchScratch === true);
   const context = new EmitContext(
     ast,
     allocation,
@@ -2128,6 +2146,7 @@ class EmitContext {
     if (this.compileMembershipClearReuse(statement, line)) return;
     if (this.compileMembershipSetReuse(statement, line)) return;
     if (this.compileLocalTerminalElseTail(statement, line)) return;
+    if (this.compileResidualEqualityElseIf(statement, line)) return;
 
     const selected = this.branchOrderStatement(statement, line);
     const falseLabel = this.freshLabel("if_false");
@@ -2165,6 +2184,76 @@ class EmitContext {
     } else {
       this.emitLabel(falseLabel);
     }
+  }
+
+  private compileResidualEqualityElseIf(
+    statement: Extract<StatementAst, { kind: "if" }>,
+    line: number,
+  ): boolean {
+    if (statement.elseBody?.length !== 1) return false;
+    const nested = statement.elseBody[0];
+    if (nested?.kind !== "if") return false;
+
+    const first = matchEqualityConstantCondition(statement.condition);
+    const second = matchEqualityConstantCondition(nested.condition);
+    if (first === undefined || second === undefined) return false;
+    if (!expressionEquals(first.expr, second.expr) || !expressionIsDeterministic(first.expr)) return false;
+    if (first.value === second.value) return false;
+
+    const residualCost = residualAdjustmentCost(first.value, second.value);
+    const ordinarySecondCompareCost = estimateExpressionCost(second.expr) + estimateNumberCost(String(second.value)) + 1;
+    if (residualCost >= ordinarySecondCompareCost) return false;
+
+    const firstFalseLabel = this.freshLabel("if_residual_next");
+    const secondFalseLabel = this.freshLabel("if_residual_false");
+    const thenTerminates = this.statementsTerminate(statement.thenBody);
+    const nestedThenTerminates = this.statementsTerminate(nested.thenBody);
+    const endLabel =
+      !thenTerminates || (nested.elseBody !== undefined && !nestedThenTerminates)
+        ? this.freshLabel("if_residual_end")
+        : undefined;
+
+    this.compileExpression(first.expr);
+    this.emitNumberOrPreload(String(first.value));
+    this.emitOp(0x11, "-", "condition compare", line);
+    this.emitJump(0x5e, "F x=0", firstFalseLabel, "false branch for ==", line);
+    this.compileStatements(statement.thenBody);
+    if (!thenTerminates && endLabel !== undefined) {
+      this.emitJump(0x51, "БП", endLabel, "if end", line);
+    }
+
+    this.emitLabel(firstFalseLabel);
+    this.emitResidualAdjustment(first.value, second.value, nested.line);
+    this.emitJump(0x5e, "F x=0", secondFalseLabel, "false branch for ==", nested.line);
+    this.compileStatements(nested.thenBody);
+    if (nested.elseBody !== undefined && !nestedThenTerminates && endLabel !== undefined) {
+      this.emitJump(0x51, "БП", endLabel, "if end", nested.line);
+    }
+
+    this.emitLabel(secondFalseLabel);
+    if (nested.elseBody !== undefined) this.compileStatements(nested.elseBody);
+    if (endLabel !== undefined) this.emitLabel(endLabel);
+    this.optimizations.push({
+      name: "residual-elseif-compare",
+      detail: `Reused ${expressionToIntentText(first.expr)} - ${first.value} for else-if comparison to ${second.value} at line ${nested.line}.`,
+    });
+    return true;
+  }
+
+  private emitResidualAdjustment(
+    previousValue: number,
+    nextValue: number,
+    line: number | undefined,
+  ): void {
+    const delta = previousValue - nextValue;
+    if (delta === 0) return;
+    if (delta > 0) {
+      this.emitNumberOrPreload(String(delta));
+      this.emitOp(0x10, "+", "residual else-if compare", line);
+      return;
+    }
+    this.emitNumberOrPreload(String(-delta));
+    this.emitOp(0x11, "-", "residual else-if compare", line);
   }
 
   private nearAnyFallthroughCandidate(
@@ -3044,11 +3133,8 @@ class EmitContext {
     statement: Extract<StatementAst, { kind: "dispatch" }>,
     useFallthrough: boolean,
   ): boolean {
-    if (statement.cases.length < 2) return false;
-    const values = statement.cases.map((dispatchCase) => numericLiteralValue(dispatchCase.value));
-    if (values.some((value) => value === undefined)) return false;
-    const numericValues = values as number[];
-    if (!numericResidualDispatchIsCheaper(statement, numericValues)) return false;
+    if (!dispatchUsesNumericResidualChain(statement)) return false;
+    const numericValues = statement.cases.map((dispatchCase) => numericLiteralValue(dispatchCase.value)) as number[];
 
     this.compileExpression(statement.expr);
     const endLabel = this.freshLabel("dispatch_end");
@@ -5029,6 +5115,7 @@ interface DomainBinding {
 function allocateRegisters(
   ast: ProgramAst,
   diagnostics: Diagnostic[],
+  freeResidualDispatchScratch = false,
 ): RegisterAllocation {
   const declared = new Set<string>();
   const hints = new Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>();
@@ -5065,7 +5152,7 @@ function allocateRegisters(
   warnUndeclaredAssignments(ast, declared, diagnostics);
   collectAssignedVariables(ast, variables);
   collectSwitchScratchVariables(ast, variables);
-  collectDispatchScratchVariables(ast, variables);
+  collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch);
   collectTicTacToeScratchVariables(ast, variables);
   collectBitMaskScratchVariables(ast, variables);
   collectSpatialHitScratchVariables(ast, variables);
@@ -6024,11 +6111,16 @@ function collectSwitchScratchVariables(ast: ProgramAst, variables: Set<string>):
   for (const block of ast.blocks) visit(block.body);
 }
 
-function collectDispatchScratchVariables(ast: ProgramAst, variables: Set<string>): void {
+function collectDispatchScratchVariables(
+  ast: ProgramAst,
+  variables: Set<string>,
+  freeResidualDispatchScratch = false,
+): void {
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "dispatch") {
-        if (statement.expr.kind !== "identifier") {
+        const residualNeedsNoScratch = freeResidualDispatchScratch && dispatchUsesNumericResidualChain(statement);
+        if (statement.expr.kind !== "identifier" && !residualNeedsNoScratch) {
           variables.add(`${DISPATCH_SCRATCH_PREFIX}${statement.scratchId}`);
         }
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
@@ -6356,6 +6448,18 @@ function dispatchExpressionRegister(
 ): RegisterName | undefined {
   if (statement.expr.kind !== "identifier") return undefined;
   return allocation.registers[statement.expr.name];
+}
+
+// True when the dispatch will be lowered through the numeric residual compare
+// chain, which evaluates the selector once and keeps the running residual in X
+// across cases (mismatched cases skip their body, so X survives). That lowering
+// needs NO scratch register even for a non-identifier selector, so the allocator
+// must not reserve one for it. Mirrors compileNumericResidualDispatchCompareChain.
+function dispatchUsesNumericResidualChain(statement: Extract<StatementAst, { kind: "dispatch" }>): boolean {
+  if (statement.cases.length < 2) return false;
+  const values = statement.cases.map((dispatchCase) => numericLiteralValue(dispatchCase.value));
+  if (values.some((value) => value === undefined)) return false;
+  return numericResidualDispatchIsCheaper(statement, values as number[]);
 }
 
 function numericResidualDispatchIsCheaper(
@@ -9015,6 +9119,12 @@ function estimateNumberCost(raw: string): number {
     cost += exponent.replace(/^[+-]/u, "").length;
   }
   return cost;
+}
+
+function residualAdjustmentCost(previousValue: number, nextValue: number): number {
+  const delta = previousValue - nextValue;
+  if (delta === 0) return 0;
+  return estimateNumberCost(String(Math.abs(delta))) + 1;
 }
 
 function buildIrReport(ast: ProgramAst, items: MachineItem[], steps: number): CompileReport["ir"] {

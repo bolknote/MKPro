@@ -42,8 +42,8 @@ const EXAMPLE_BASELINE: Record<string, number> = {
 // Later optimizer passes have recovered part of that growth; the numbers below
 // are the current locked ceilings, not historical deltas.
 const PENDING_BASELINE: Record<string, number> = {
-  "cave-highlevel-baseline": 195,
-  "cave-treasure": 194,
+  "cave-highlevel-baseline": 193,
+  "cave-treasure": 188,
   "giants-country": 201,
   labyrinth777: 240,
   teleport: 236,

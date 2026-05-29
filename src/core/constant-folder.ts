@@ -19,6 +19,11 @@ interface LinearTerm {
   coeff: DecimalValue;
 }
 
+interface SignedExpressionTerm {
+  expr: ExpressionAst;
+  negative: boolean;
+}
+
 interface LinearForm {
   constant: DecimalValue;
   terms: Map<string, LinearTerm>;
@@ -162,6 +167,10 @@ class ConstantFolder {
         if (isNumericValue(left, 0)) return right;
         if (isNumericValue(right, 0)) return left;
         {
+          const signed = foldSignedAddSubExpression({ kind: "binary", op, left, right });
+          if (signed !== undefined && estimateExpressionCost(signed) < estimateBinaryCost(left, right)) return signed;
+        }
+        {
           const linear = foldLinearExpression({ kind: "binary", op, left, right });
           if (linear !== undefined && estimateExpressionCost(linear) <= estimateBinaryCost(left, right)) return linear;
         }
@@ -169,6 +178,10 @@ class ConstantFolder {
       case "-":
         if (isNumericValue(right, 0)) return left;
         if (isNumericValue(left, 0)) return { kind: "unary", op: "-", expr: right };
+        {
+          const signed = foldSignedAddSubExpression({ kind: "binary", op, left, right });
+          if (signed !== undefined && estimateExpressionCost(signed) < estimateBinaryCost(left, right)) return signed;
+        }
         {
           const linear = foldLinearExpression({ kind: "binary", op, left, right });
           if (linear !== undefined && estimateExpressionCost(linear) <= estimateBinaryCost(left, right)) return linear;
@@ -288,6 +301,45 @@ function foldLinearExpression(expr: ExpressionAst): ExpressionAst | undefined {
   const rebuilt = buildLinearExpression(form);
   if (rebuilt === undefined || expressionKey(rebuilt) === expressionKey(expr)) return undefined;
   return rebuilt;
+}
+
+function foldSignedAddSubExpression(expr: ExpressionAst): ExpressionAst | undefined {
+  if (!expressionPureForFolding(expr)) return undefined;
+  const terms: SignedExpressionTerm[] = [];
+  collectSignedAddSubTerms(expr, false, terms);
+  if (terms.length < 2) return undefined;
+  const rebuilt = buildSignedAddSubExpression(terms);
+  if (rebuilt === undefined || expressionKey(rebuilt) === expressionKey(expr)) return undefined;
+  return rebuilt;
+}
+
+function collectSignedAddSubTerms(
+  expr: ExpressionAst,
+  negative: boolean,
+  terms: SignedExpressionTerm[],
+): void {
+  if (expr.kind === "unary" && expr.op === "-") {
+    collectSignedAddSubTerms(expr.expr, !negative, terms);
+    return;
+  }
+  if (expr.kind === "binary" && (expr.op === "+" || expr.op === "-")) {
+    collectSignedAddSubTerms(expr.left, negative, terms);
+    collectSignedAddSubTerms(expr.right, expr.op === "-" ? !negative : negative, terms);
+    return;
+  }
+  terms.push({ expr, negative });
+}
+
+function buildSignedAddSubExpression(terms: SignedExpressionTerm[]): ExpressionAst | undefined {
+  let result: ExpressionAst | undefined;
+  for (const term of terms) {
+    if (result === undefined) {
+      result = term.negative ? { kind: "unary", op: "-", expr: term.expr } : term.expr;
+      continue;
+    }
+    result = term.negative ? subtractExpressions(result, term.expr) : addExpressions(result, term.expr);
+  }
+  return result;
 }
 
 function linearizeExpression(expr: ExpressionAst): LinearForm | undefined {

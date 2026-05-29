@@ -2827,7 +2827,7 @@ function invertLoweredComparisonOp(op: ConditionAst["op"]): ConditionAst["op"] {
 
 function directionKeyGuardExpression(expr: string): string {
   const key = `(${expr})`;
-  const cardinal = `(abs(${key} - 5) - 1) * (abs(${key} - 5) - 3)`;
+  const cardinal = `abs(abs(${key} - 5) - 2) - 1`;
   const vertical = `abs(${key}) - 5`;
   return `(${cardinal}) * (${vertical})`;
 }

@@ -11,8 +11,8 @@ Current `--analysis` sizes, measured against the local reference listings:
 
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
-| `cave-highlevel-baseline.mkpro` | 195 | 105 | command dispatch and remaining cave flow lowerers |
-| `cave-treasure.mkpro` | 194 | 105 | command dispatch, guarded direction dispatch, and cache flow |
+| `cave-highlevel-baseline.mkpro` | 193 | 105 | command dispatch and remaining cave flow lowerers |
+| `cave-treasure.mkpro` | 188 | 105 | command dispatch, guarded direction dispatch, and cache flow |
 | `giants-country.mkpro` | 201 | 105 | remaining encounter dispatch and plan bitset lowerers |
 | `labyrinth777.mkpro` | 240 | 105 | room inspection and local-jumper dispatch |
 | `teleport.mkpro` | 236 | 105 | station masks and vault/guard flow |
