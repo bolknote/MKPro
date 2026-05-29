@@ -34,7 +34,7 @@ program GiantsCountry {
   }
 
   screen cave {
-    show tile, strength, score
+    show tile strength score
   }
 
   screen warning {

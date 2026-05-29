@@ -2595,13 +2595,16 @@ function lowerCompactDirectionDispatch(
   const directionalCases = statement.cases.filter((matchCase) => isDirectionInvoke(matchCase.action, statement.expr));
   const directionalValueCount = directionalCases.reduce((sum, matchCase) => sum + matchCase.values.length, 0);
   if (directionalValueCount < 3) return undefined;
+  const directionalValues = directionCaseValues(directionalCases);
+  if (directionalValues === undefined) return undefined;
+  const hasAllCardinalDirections = [2, 4, 6, 8].every((value) => directionalValues.has(value));
   const action = directionalCases[0]!.action;
   if (action.kind !== "v2_invoke") return undefined;
   if (!directionalCases.every((matchCase) => sameInvoke(matchCase.action, action))) return undefined;
   const params = context.ruleParams.get(action.name) ?? [];
   if (params.length === 0) return undefined;
   const needsGuard = statement.otherwise === undefined || !isDirectionInvoke(statement.otherwise, statement.expr);
-  if (needsGuard && directionalValueCount < 5) return undefined;
+  if (needsGuard && !hasAllCardinalDirections) return undefined;
 
   const cases: DispatchCaseAst[] = [];
   for (const matchCase of statement.cases) {
@@ -2626,12 +2629,12 @@ function lowerCompactDirectionDispatch(
   ];
   const defaultBody: StatementAst[] = needsGuard
     ? [{
-        kind: "if",
-        condition: {
-          left: lowerV2Expression(directionKeyGuardExpression(statement.expr), statement.line, context),
-          op: "==",
-          right: lowerV2Expression("0", statement.line, context),
-        },
+      kind: "if",
+      condition: {
+        left: lowerV2Expression(directionKeyGuardExpression(statement.expr, directionalValues), statement.line, context),
+        op: "==",
+        right: lowerV2Expression("0", statement.line, context),
+      },
         thenBody: directionBody,
         ...(statement.otherwise === undefined ? {} : { elseBody: lowerV2Statement(statement.otherwise, context) }),
         line: statement.line,
@@ -2825,11 +2828,28 @@ function invertLoweredComparisonOp(op: ConditionAst["op"]): ConditionAst["op"] {
   }
 }
 
-function directionKeyGuardExpression(expr: string): string {
+function directionCaseValues(cases: V2MatchCaseAst[]): Set<number> | undefined {
+  const values = new Set<number>();
+  for (const matchCase of cases) {
+    for (const valueText of matchCase.values) {
+      const value = numericLiteralTextValue(valueText);
+      if (value === undefined) return undefined;
+      values.add(value);
+    }
+  }
+  return values;
+}
+
+function directionKeyGuardExpression(expr: string, values?: ReadonlySet<number>): string {
   const key = `(${expr})`;
   const cardinal = `abs(abs(${key} - 5) - 2) - 1`;
-  const vertical = `abs(${key}) - 5`;
-  return `(${cardinal}) * (${vertical})`;
+  if (values === undefined || values.has(5) && values.has(-5)) {
+    const vertical = `abs(${key}) - 5`;
+    return `(${cardinal}) * (${vertical})`;
+  }
+  if (values.has(5)) return `(${cardinal}) * (${key} - 5)`;
+  if (values.has(-5)) return `(${cardinal}) * (${key} + 5)`;
+  return cardinal;
 }
 
 function isDirectionInvoke(action: V2StatementAst, matchExpr: string): boolean {
@@ -3252,16 +3272,33 @@ function parseDisplayItemList(text: string, line: number): DisplayItemAst[] {
       justReadItem = false;
       continue;
     }
+    const item = parseDisplayItem(token.text, line);
     if (pendingComma) {
-      items.push({ kind: "literal", text: " ", synthetic: "comma-space", line });
+      const previous = items.at(-1);
+      if (previous?.kind === "literal") {
+        previous.text += " ";
+      } else if (item.kind === "literal") {
+        item.text = ` ${item.text}`;
+      } else {
+        items.push({ kind: "literal", text: " ", synthetic: "comma-space", line });
+      }
       pendingComma = false;
     }
-    items.push(parseDisplayItem(token.text, line));
+    pushDisplayItem(items, item);
     justReadItem = true;
   }
 
   if (pendingComma) throw new ParseError("Display comma must separate two fragments", line);
   return items;
+}
+
+function pushDisplayItem(items: DisplayItemAst[], item: DisplayItemAst): void {
+  const previous = items.at(-1);
+  if (previous?.kind === "literal" && item.kind === "literal") {
+    previous.text += item.text;
+    return;
+  }
+  items.push(item);
 }
 
 function parseDisplayItem(text: string, line: number): DisplayItemAst {

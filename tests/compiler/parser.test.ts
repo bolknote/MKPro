@@ -98,11 +98,33 @@ program BeerScreen {
 `);
 
     expect(ast.v2?.screens[0]?.items).toEqual([
-      { kind: "literal", text: "BEEr", line: 7 },
-      { kind: "literal", text: " ", synthetic: "comma-space", line: 7 },
+      { kind: "literal", text: "BEEr ", line: 7 },
       { kind: "source", name: "bottles", width: 2, pad: "zero", line: 7 },
     ]);
     expect(ast.displays[0]?.sources).toEqual(["bottles"]);
+  });
+
+  it("keeps comma spaces between two display sources", () => {
+    const ast = parseProgram(`
+program CounterScreen {
+  state {
+    a: counter 0..9 = 2
+    b: counter 0..9 = 5
+  }
+  screen view {
+    show a, b
+  }
+  turn {
+    show view
+  }
+}
+`);
+
+    expect(ast.v2?.screens[0]?.items).toEqual([
+      { kind: "source", name: "a", line: 8 },
+      { kind: "literal", text: " ", synthetic: "comma-space", line: 8 },
+      { kind: "source", name: "b", line: 8 },
+    ]);
   });
 
   it("parses adjacent display fragments without implicit separators", () => {
@@ -474,6 +496,9 @@ program DirectionOtherwise {
         elseBody: [expect.objectContaining({ kind: "call", block: "wait" })],
       }),
     ]);
+    expect(JSON.stringify(dispatch.defaultBody)).not.toContain(
+      `"callee":"abs","args":[{"kind":"identifier","name":"key"}]`,
+    );
   });
 
   it("parses v2 world, boards, cell sets, state config, encounters, and reference metadata", () => {

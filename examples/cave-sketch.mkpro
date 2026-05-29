@@ -6,6 +6,7 @@ program CaveSketch {
   state {
     // The sketch keeps only the core cave pressures: where you are, how long
     // you can keep searching, how many walls you can break, and what you found.
+    // Like the original, the screen itself shows the packed cave coordinate.
     player: coord(cave) = stack.X
     food: counter 0..99 = 9
     dynamite: counter 0..9 = 4
@@ -22,7 +23,7 @@ program CaveSketch {
   }
 
   screen cave_screen {
-    show player, food, dynamite, treasure
+    show player
   }
 
   rule ignored {

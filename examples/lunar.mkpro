@@ -14,12 +14,16 @@ program LunarLander {
     accel: packed = 0
   }
 
-  screen flight {
-    show height, speed, fuel
+  screen height_view {
+    show height
   }
 
-  screen landed {
-    show height, speed
+  screen speed_view {
+    show speed
+  }
+
+  screen fuel_view {
+    show fuel
   }
 
   rule safe_landing {
@@ -31,7 +35,9 @@ program LunarLander {
   }
 
   turn {
-    show flight
+    show height_view
+    show speed_view
+    show fuel_view
     read burn
 
     // The model is intentionally compact, but it keeps the landing-game idea:
@@ -47,9 +53,6 @@ program LunarLander {
   }
 
   rule touchdown {
-    // The landing screen is shown before judging the result so the final speed
-    // remains visible whether the pilot survives or not.
-    show landed
     if abs(speed) <= 5 {
       safe_landing
     }

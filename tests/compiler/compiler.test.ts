@@ -1612,4 +1612,32 @@ program NestedGuardFailure {
 
     expect(result.report.optimizations.some((item) => item.name === "nested-guard-shared-failure")).toBe(true);
   });
+
+  it("elides terminal shows already provided by the next loop header", () => {
+    const result = compileOk(`
+program TerminalLoopScreen {
+  state {
+    pos: counter 0..9 = 1
+    score: counter 0..9 = 0
+  }
+  screen main {
+    show pos
+  }
+  turn {
+    show main
+    read key
+    match key {
+      1 => score_point
+      otherwise => stop 0
+    }
+  }
+  rule score_point {
+    score = 1
+    show main
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "terminal-loop-screen-elision")).toBe(true);
+  });
 });

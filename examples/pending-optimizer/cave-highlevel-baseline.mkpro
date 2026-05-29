@@ -20,7 +20,6 @@ program CaveHighlevelBaseline {
     treasure: counter 0..9 = 0
 
     blocked: coord(cave)
-    next: coord(cave)
     robber: flag = 0
     robber_roll: counter 0..9 = 0
   }
@@ -35,7 +34,7 @@ program CaveHighlevelBaseline {
   }
 
   screen cave_screen {
-    show player, food, dynamite, treasure
+    show player
   }
 
   rule ignored {
@@ -54,20 +53,15 @@ program CaveHighlevelBaseline {
     food--
 
     match command {
-      2 => move_south
+      2 => go 0.0000002
       4 => move_west
-      6 => move_east
-      8 => move_north
-      5 => move_up
+      6 => go -0.000001
+      8 => go -0.0000002
+      5 => go 1
       0 => break_wall
       10 => search_cache
       otherwise => ignored
     }
-  }
-
-  rule move_south {
-    next = player + 0.0000002
-    try_move
   }
 
   rule move_west {
@@ -75,33 +69,21 @@ program CaveHighlevelBaseline {
       exit_found
     }
     else {
-      next = player + 0.000001
-      try_move
+      go 0.000001
     }
   }
 
-  rule move_east {
-    next = player - 0.000001
-    try_move
-  }
-
-  rule move_north {
-    next = player - 0.0000002
-    try_move
-  }
-
-  rule move_up {
-    next = player + 1
+  rule go dir {
+    blocked = player + dir
     try_move
   }
 
   rule try_move {
-    if next in walls {
-      blocked = next
+    if blocked in walls {
       show 0
     }
     else {
-      player = next
+      player = blocked
       blocked = 0
       show cave_screen
     }

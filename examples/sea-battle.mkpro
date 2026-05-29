@@ -19,10 +19,15 @@ program SeaBattle {
     // test and clear.
     enemy_fleet: cells(ocean) = random()
     enemy_ships: counter 0..99 = stack.X
+    enemy_report: counter -99..0 = 0
   }
 
   screen battle {
-    show calculator_shot, own_ships, enemy_ships
+    show calculator_shot
+  }
+
+  screen hit {
+    show enemy_report
   }
 
   rule enemy_win {
@@ -76,11 +81,9 @@ program SeaBattle {
         player_win
       }
       else {
-        show battle
+        enemy_report = -enemy_ships
+        show hit
       }
-    }
-    else {
-      show battle
     }
   }
 }

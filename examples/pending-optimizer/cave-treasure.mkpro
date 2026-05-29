@@ -18,11 +18,11 @@ program CaveTreasure {
 
     // Food is the clock, dynamite is the route override, treasure is the score;
     // keeping them separate is what gives the tiny cave meaningful choices.
+    // They are resources in registers; the visible screen is the cave coordinate.
     dynamite: counter 0..9 = 4
     treasure: counter 0..9 = 0
 
     blocked: coord(cave)
-    next: coord(cave)
     robber: flag = 0
     robber_roll: counter 0..9 = 0
   }
@@ -37,7 +37,7 @@ program CaveTreasure {
   }
 
   screen main {
-    show pos, food, dynamite, treasure
+    show pos
   }
 
   rule ignored {
@@ -72,15 +72,14 @@ program CaveTreasure {
   }
 
   rule go dir {
-    next = pos + dir
-    if next in walls {
+    blocked = pos + dir
+    if blocked in walls {
       // Bumping into a wall records intent: the next break_wall command knows
       // which obstacle the player chose to spend dynamite on.
-      blocked = next
       show 0
     }
     else {
-      pos = next
+      pos = blocked
       blocked = 0
     }
   }

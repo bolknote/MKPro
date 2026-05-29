@@ -30,7 +30,7 @@ program TreasureHunter2 {
   }
 
   screen maze {
-    show pos, floor_view, treasure
+    show pos floor_view treasure
   }
 
   screen exit {

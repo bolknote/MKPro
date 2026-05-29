@@ -34,7 +34,7 @@ program Alaram {
   }
 
   screen cockpit {
-    show cockpit_view, intruder_mark
+    show cockpit_view intruder_mark
   }
 
   screen crash {

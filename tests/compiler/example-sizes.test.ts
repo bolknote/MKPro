@@ -20,7 +20,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   dungeon: 101,
   "fox-hunt-100": 97,
   "fox-hunt-mk61": 88,
-  "game-100-pig": 97,
+  "game-100-pig": 100,
   human: 37,
   lunar: 57,
   "minesweeper-9x7": 79,
@@ -34,15 +34,10 @@ const EXAMPLE_BASELINE: Record<string, number> = {
 // they are measured with a large budget and analysis mode, mirroring
 // `mk-pro compile ... --out hex --budget 999999 --analysis`. The goal is to
 // shrink these toward 105; the guard only enforces that they never grow.
-// cave-highlevel-baseline (+2), cave-treasure (+2) and tic-tac-toe-4x4 (+1)
-// grew slightly when the number-entry concatenation bug was fixed: a read/digit
-// immediately followed by another literal now keeps a finalizing store or a В↑
-// separator so the two values no longer merge on the MK-61 (e.g. 1 then 3 -> 13).
-// Later optimizer passes have recovered part of that growth; the numbers below
-// are the current locked ceilings, not historical deltas.
+// The numbers below are the current locked ceilings, not historical deltas.
 const PENDING_BASELINE: Record<string, number> = {
-  "cave-highlevel-baseline": 203,
-  "cave-treasure": 199,
+  "cave-highlevel-baseline": 143,
+  "cave-treasure": 150,
   "giants-country": 207,
   labyrinth777: 244,
   teleport: 247,

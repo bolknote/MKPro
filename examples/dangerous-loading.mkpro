@@ -24,7 +24,7 @@ program DangerousLoading {
   }
 
   screen water {
-    show cargo_left, boat, threat, boats_left
+    show cargo_left boat threat boats_left
   }
 
   rule delivered {

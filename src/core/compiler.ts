@@ -108,6 +108,7 @@ const NEGATIVE_ZERO_DEGREE_SELECTOR_GE = "__mkpro_negative_zero_ge";
 const NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE = "1|-00";
 const INTERNAL_NAME_PREFIX = "__mkpro_";
 const DISPLAY_HELPER_MIN_SAVINGS = 4;
+const UNAVAILABLE_DISPLAY_STRATEGY_COST = 999999;
 const EXPRESSION_HELPER_MIN_COST = 8;
 const EXPRESSION_HELPER_MIN_SAVINGS = 4;
 
@@ -150,6 +151,28 @@ interface LoweringOptions {
   // occasionally regress an unrelated program; gated as a speculative variant
   // and adopted only when it produces fewer cells.
   freeResidualDispatchScratch?: boolean;
+}
+
+type DisplaySourceItem = Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }>;
+
+interface DisplayField {
+  item: DisplaySourceItem;
+  name: string;
+  width: number;
+}
+
+type DisplayStrategyVariant =
+  | "decimal-pack"
+  | "packed-storage-reuse"
+  | "packed-display-helper"
+  | "display-byte-helper"
+  | "display-byte-builder";
+
+interface DisplayStrategyCandidate {
+  variant: DisplayStrategyVariant;
+  steps: number;
+  available: boolean;
+  reason: string;
 }
 
 export function compileMKPro(
@@ -296,6 +319,7 @@ function compileMKProOnce(
       if (propagated === 0 && removed === 0) break;
     }
   }
+  elideTerminalLoopHeaderShows(ast, optimizations);
   validateSemanticDomains(ast, diagnostics);
   validateV2Intent(ast, diagnostics);
   validateReservedInternalNames(ast, diagnostics);
@@ -1499,6 +1523,7 @@ class EmitContext {
   private readonly lineCountGroupCounts: Map<string, number>;
   private readonly spatialHitHelpers = new Map<string, { mask: string; scratch: string; label: string; line?: number }>();
   private readonly displayHelpers = new Map<string, { display: ProgramAst["displays"][number]; label: string; line: number }>();
+  private readonly displayByteHelpers = new Map<string, { display: ProgramAst["displays"][number]; label: string; line: number }>();
   private readonly showSequenceHelpers = new Map<string, {
     first: ProgramAst["displays"][number];
     second: ProgramAst["displays"][number];
@@ -1665,6 +1690,15 @@ class EmitContext {
       this.optimizations.push({
         name: "packed-display-helper",
         detail: `Emitted shared packed display helper for screen ${helper.display.name}.`,
+      });
+    }
+    for (const helper of this.displayByteHelpers.values()) {
+      this.emitLabel(helper.label);
+      this.compileDisplayByteBuilder(helper.display, helper.line, false);
+      this.emitOp(0x52, "В/О", `display ${helper.display.name} return`, helper.line);
+      this.optimizations.push({
+        name: "display-byte-helper",
+        detail: `Emitted shared display-byte helper for screen ${helper.display.name}.`,
       });
     }
     for (const helper of this.showSequenceHelpers.values()) {
@@ -3218,18 +3252,137 @@ class EmitContext {
 
     if (this.compileTextDisplay(display, line)) return;
 
-    const helper = this.sharedDisplayHelper(display, line);
-    if (helper !== undefined) {
-      this.emitJump(0x53, "ПП", helper.label, `show ${display.name}`, line);
-      this.optimizations.push({
-        name: "packed-display-helper-call",
-        detail: `Reused shared packed display helper for screen ${display.name}.`,
-      });
-      return;
+    const strategy = this.selectDisplayStrategy(display);
+    if (strategy === "packed-display-helper") {
+      const helper = this.sharedDisplayHelper(display, line);
+      if (helper !== undefined) {
+        this.emitJump(0x53, "ПП", helper.label, `show ${display.name}`, line);
+        this.optimizations.push({
+          name: "packed-display-helper-call",
+          detail: `Reused shared packed display helper for screen ${display.name}.`,
+        });
+        return;
+      }
     }
+    if (strategy === "display-byte-helper") {
+      const helper = this.sharedDisplayByteHelper(display, line);
+      if (helper !== undefined) {
+        this.emitJump(0x53, "ПП", helper.label, `show ${display.name}`, line);
+        this.optimizations.push({
+          name: "display-byte-helper-call",
+          detail: `Reused shared display-byte helper for screen ${display.name}.`,
+        });
+        return;
+      }
+    }
+
+    if (strategy === "packed-storage-reuse" && this.compilePackedStorageReuseDisplay(display, line, true)) return;
+    if (strategy === "display-byte-builder" && this.compileDisplayByteBuilder(display, line, true)) return;
 
     this.compilePackedDisplayBody(display, line, true);
     this.reportPackedDisplayLowering(display);
+  }
+
+  private selectDisplayStrategy(display: ProgramAst["displays"][number]): DisplayStrategyVariant | undefined {
+    const candidates = this.displayStrategyCandidates(display);
+    const available = candidates.filter((candidate) => candidate.available);
+    if (available.length === 0) {
+      for (const candidate of candidates) {
+        this.candidates.push({
+          site: `display ${display.name}`,
+          variant: candidate.variant,
+          steps: candidate.steps,
+          selected: false,
+          reason: candidate.reason,
+        });
+      }
+      return undefined;
+    }
+    const selected = available.reduce((best, candidate) => {
+      if (candidate.steps < best.steps) return candidate;
+      return best;
+    });
+    for (const candidate of candidates) {
+      this.candidates.push({
+        site: `display ${display.name}`,
+        variant: candidate.variant,
+        steps: candidate.steps,
+        selected: candidate.variant === selected.variant,
+        reason: candidate.variant === selected.variant
+          ? `selected ${candidate.variant} for screen ${display.name}`
+          : candidate.reason,
+      });
+    }
+    this.optimizations.push({
+      name: "display-strategy-selection",
+      detail: `Selected ${selected.variant} for screen ${display.name}.`,
+    });
+    return selected.variant;
+  }
+
+  private displayStrategyCandidates(display: ProgramAst["displays"][number]): DisplayStrategyCandidate[] {
+    const fields = this.numericDisplayFields(display);
+    const sourceFields = this.displaySourceFields(display);
+    const decimalCost = fields === undefined
+      ? UNAVAILABLE_DISPLAY_STRATEGY_COST
+      : this.estimateDecimalDisplayCost(fields, true);
+    const helperCost = fields === undefined
+      ? UNAVAILABLE_DISPLAY_STRATEGY_COST
+      : 2;
+    const helperAvailable = fields !== undefined && this.shouldShareDisplay(display);
+    const storageFields = this.packedStorageReuseFields(display);
+    const storageCost = storageFields === undefined
+      ? UNAVAILABLE_DISPLAY_STRATEGY_COST
+      : this.estimatePackedStorageReuseCost(storageFields, true);
+    const displayByteAvailable = this.canCompileDisplayByteBuilder(display);
+    const displayByteCost = sourceFields.length === 0
+      ? UNAVAILABLE_DISPLAY_STRATEGY_COST
+      : this.estimateDisplayByteBuilderCost(display, sourceFields, true);
+    const displayByteHelperAvailable = displayByteAvailable && this.shouldShareDisplayByte(display);
+    const displayByteHelperCost = displayByteHelperAvailable ? 2 : UNAVAILABLE_DISPLAY_STRATEGY_COST;
+
+    return [
+      {
+        variant: "decimal-pack",
+        steps: decimalCost,
+        available: fields !== undefined,
+        reason: fields === undefined
+          ? "display contains non-space literal fragments"
+          : "ordinary decimal field packing was not the cheapest display strategy",
+      },
+      {
+        variant: "packed-storage-reuse",
+        steps: storageCost,
+        available: storageFields !== undefined,
+        reason: storageFields === undefined
+          ? "display fields are not proved to already occupy their decimal positions"
+          : "ready-packed storage reuse was not the cheapest display strategy",
+      },
+      {
+        variant: "packed-display-helper",
+        steps: helperCost,
+        available: helperAvailable,
+        reason: helperAvailable
+          ? "shared packed display helper was not the cheapest display strategy"
+          : "screen is not repeated often enough for a shared packed display helper",
+      },
+      {
+        variant: "display-byte-helper",
+        steps: displayByteHelperCost,
+        available: displayByteHelperAvailable,
+        reason: displayByteHelperAvailable
+          ? "shared display-byte helper was not the cheapest display strategy"
+          : "screen is not repeated often enough for a shared display-byte helper",
+      },
+      {
+        variant: "display-byte-builder",
+        steps: displayByteCost,
+        available: displayByteAvailable,
+        reason: displayByteAvailable
+          ? "display-byte builder was not the cheapest display strategy"
+          : "display has no literal/X2-sensitive fragments to build",
+      },
+    ];
   }
 
   private compilePackedDisplayBody(
@@ -3239,6 +3392,16 @@ class EmitContext {
   ): void {
     const fields = this.numericDisplayFields(display, line);
     if (fields === undefined) return;
+    this.compilePackedDisplayFields(display, fields, line, reuseCurrentX);
+    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
+  }
+
+  private compilePackedDisplayFields(
+    display: ProgramAst["displays"][number],
+    fields: DisplayField[],
+    line: number,
+    reuseCurrentX: boolean,
+  ): void {
     const sources = reuseCurrentX && this.canReorderNumericDisplay(display)
       ? this.orderDisplaySources(fields.map((field) => field.name))
       : fields.map((field) => field.name);
@@ -3249,6 +3412,10 @@ class EmitContext {
       for (let index = 0; index < sources.length; index += 1) {
         const source = sources[index]!;
         if (index === 0 && source === this.currentXVariable) {
+          this.optimizations.push({
+            name: "display-current-x-reuse",
+            detail: `Reused ${source} already in X as the first field of screen ${display.name}.`,
+          });
           continue;
         }
         if (index === 0) {
@@ -3262,14 +3429,13 @@ class EmitContext {
         }
       }
     }
-    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
   }
 
   private numericDisplayFields(
     display: ProgramAst["displays"][number],
     line?: number,
-  ): Array<{ name: string; width: number }> | undefined {
-    const fields: Array<{ name: string; width: number }> = [];
+  ): DisplayField[] | undefined {
+    const fields: DisplayField[] = [];
     for (const item of display.items) {
       if (item.kind === "literal") {
         if (item.text.trim().length === 0) continue;
@@ -3282,9 +3448,120 @@ class EmitContext {
         }
         return undefined;
       }
-      fields.push({ name: item.name, width: item.width ?? this.naturalDisplayWidth(item.name) });
+      fields.push({ item, name: item.name, width: item.width ?? this.naturalDisplayWidth(item.name) });
     }
     return fields;
+  }
+
+  private displaySourceFields(display: ProgramAst["displays"][number]): DisplayField[] {
+    return display.items
+      .filter((item): item is DisplaySourceItem => item.kind === "source")
+      .map((item) => ({ item, name: item.name, width: item.width ?? this.naturalDisplayWidth(item.name) }));
+  }
+
+  private estimateDecimalDisplayCost(fields: DisplayField[], reuseCurrentX: boolean): number {
+    if (fields.length === 0) return 2;
+    let cost = reuseCurrentX && fields[0]?.name === this.currentXVariable ? 0 : 1;
+    for (const field of fields.slice(1)) {
+      cost += this.estimateNumberOrPreloadCost(String(10 ** field.width)) + 3;
+    }
+    return cost + 1;
+  }
+
+  private estimateNumberOrPreloadCost(raw: string): number {
+    return this.allocation.constants[normalizeConstantLiteral(raw)] === undefined ? estimateNumberCost(raw) : 1;
+  }
+
+  private packedStorageReuseFields(display: ProgramAst["displays"][number]): DisplayField[] | undefined {
+    const fields = this.numericDisplayFields(display);
+    if (fields === undefined || fields.length < 2) return undefined;
+    const firstState = this.findStateField(fields[0]!.name);
+    if (firstState?.type !== "packed") return undefined;
+    if (!fields.slice(1).every((field) => field.item.width !== undefined)) return undefined;
+    return fields;
+  }
+
+  private estimatePackedStorageReuseCost(fields: DisplayField[], reuseCurrentX: boolean): number {
+    if (fields.length === 0) return 2;
+    const currentIndex = reuseCurrentX && this.currentXVariable !== undefined
+      ? fields.findIndex((field) => field.name === this.currentXVariable)
+      : -1;
+    const recalled = currentIndex >= 0 ? fields.length - 1 : fields.length;
+    return recalled + Math.max(0, fields.length - 1) + 1;
+  }
+
+  private compilePackedStorageReuseDisplay(
+    display: ProgramAst["displays"][number],
+    line: number,
+    reuseCurrentX: boolean,
+  ): boolean {
+    const fields = this.packedStorageReuseFields(display);
+    if (fields === undefined) return false;
+    const ordered = this.orderStorageReuseFields(fields, reuseCurrentX);
+    for (let index = 0; index < ordered.length; index += 1) {
+      const field = ordered[index]!;
+      if (!(index === 0 && reuseCurrentX && field.name === this.currentXVariable)) {
+        this.emitRecall(field.name, `display ${display.name} packed field`, line);
+      }
+      if (index > 0) this.emitOp(0x10, "+", "packed display storage append", line);
+    }
+    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
+    this.optimizations.push({
+      name: "packed-display-storage-reuse",
+      detail: `Displayed screen ${display.name} by adding fields already stored in their decimal positions.`,
+    });
+    return true;
+  }
+
+  private orderStorageReuseFields(fields: DisplayField[], reuseCurrentX: boolean): DisplayField[] {
+    if (!reuseCurrentX || this.currentXVariable === undefined) return fields;
+    const index = fields.findIndex((field) => field.name === this.currentXVariable);
+    if (index <= 0) return fields;
+    this.optimizations.push({
+      name: "display-stack-reuse",
+      detail: `Reordered ready-packed display inputs to reuse ${this.currentXVariable} already in X.`,
+    });
+    return [
+      fields[index]!,
+      ...fields.slice(0, index),
+      ...fields.slice(index + 1),
+    ];
+  }
+
+  private canCompileDisplayByteBuilder(display: ProgramAst["displays"][number]): boolean {
+    if (!machineSupports(this.machineProfile, "display-bytes")) return false;
+    if (this.displaySourceFields(display).length === 0) return false;
+    return display.items.some((item) => item.kind === "literal" && item.text.trim().length > 0) &&
+      display.items.every((item) => item.kind !== "literal" || displayByteBuilderSupportsLiteral(item.text));
+  }
+
+  private estimateDisplayByteBuilderCost(
+    display: ProgramAst["displays"][number],
+    fields: DisplayField[],
+    reuseCurrentX: boolean,
+  ): number {
+    const literalMutations = display.items.filter((item) => item.kind === "literal" && item.text.trim().length > 0).length;
+    return this.estimateDecimalDisplayCost(fields, reuseCurrentX) + literalMutations;
+  }
+
+  private compileDisplayByteBuilder(
+    display: ProgramAst["displays"][number],
+    line: number,
+    reuseCurrentX: boolean,
+  ): boolean {
+    if (!this.canCompileDisplayByteBuilder(display)) return false;
+    const fields = this.displaySourceFields(display);
+    this.compilePackedDisplayFields(display, fields, line, reuseCurrentX);
+    for (const item of display.items) {
+      if (item.kind !== "literal" || item.text.trim().length === 0) continue;
+      this.emitOp(0x5f, undefined, `display-byte literal ${JSON.stringify(item.text)}`, item.line);
+    }
+    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
+    this.optimizations.push({
+      name: "display-byte-x2-lowering",
+      detail: `Built literal-separated screen ${display.name} through display-byte/X2 mutation.`,
+    });
+    return true;
   }
 
   private canReorderNumericDisplay(display: ProgramAst["displays"][number]): boolean {
@@ -3308,6 +3585,32 @@ class EmitContext {
         ? `Display ${display.name} may use display-byte encodings in later layout passes.`
         : `Display ${display.name} lowered as ordinary packed numeric output.`,
     });
+  }
+
+  private sharedDisplayByteHelper(
+    display: ProgramAst["displays"][number],
+    line: number,
+  ): { display: ProgramAst["displays"][number]; label: string; line: number } | undefined {
+    if (!this.shouldShareDisplayByte(display)) return undefined;
+    const existing = this.displayByteHelpers.get(display.name);
+    if (existing !== undefined) return existing;
+    const helper = {
+      display,
+      label: `__display_byte_${display.name}`,
+      line,
+    };
+    this.displayByteHelpers.set(display.name, helper);
+    return helper;
+  }
+
+  private shouldShareDisplayByte(display: ProgramAst["displays"][number]): boolean {
+    if (!this.canCompileDisplayByteBuilder(display)) return false;
+    const uses = this.displayUseCounts.get(display.name) ?? 0;
+    if (uses < 2) return false;
+    const bodyCost = this.estimateDisplayByteBuilderCost(display, this.displaySourceFields(display), false);
+    const helperCost = uses * 2 + bodyCost + 1;
+    const inlineTotal = uses * bodyCost;
+    return inlineTotal - helperCost >= DISPLAY_HELPER_MIN_SAVINGS;
   }
 
   private sharedDisplayHelper(
@@ -5109,6 +5412,192 @@ function eliminateUnreachableV2Procs(ast: ProgramAst, optimizations: AppliedOpti
   });
 }
 
+function elideTerminalLoopHeaderShows(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
+  if (procMap.size === 0) return;
+
+  const allTerminalCallsByDisplay = new Map<string, Set<string>>();
+  const nonTerminalCalls = new Set<string>();
+  const visitEveryStatementList = (statements: StatementAst[], terminalDisplay?: string): void => {
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      const atTail = index === statements.length - 1;
+      collectCallsByPosition(statement, atTail ? terminalDisplay : undefined, procMap, allTerminalCallsByDisplay, nonTerminalCalls);
+      if (statement.kind === "loop") visitEveryStatementList(statement.body, loopHeaderDisplay(statement));
+      if (statement.kind === "if") {
+        visitEveryStatementList(statement.thenBody, atTail ? terminalDisplay : undefined);
+        if (statement.elseBody !== undefined) visitEveryStatementList(statement.elseBody, atTail ? terminalDisplay : undefined);
+      }
+      if (statement.kind === "switch") {
+        for (const switchCase of statement.cases) visitEveryStatementList(switchCase.body, atTail ? terminalDisplay : undefined);
+        if (statement.defaultBody !== undefined) visitEveryStatementList(statement.defaultBody, atTail ? terminalDisplay : undefined);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visitEveryStatementList(dispatchCase.body, atTail ? terminalDisplay : undefined);
+        if (statement.defaultBody !== undefined) visitEveryStatementList(statement.defaultBody, atTail ? terminalDisplay : undefined);
+      }
+    }
+  };
+
+  for (const entry of ast.entries) visitEveryStatementList(entry.body);
+  for (const block of ast.blocks) visitEveryStatementList(block.body);
+  for (const proc of ast.procs) {
+    collectStatementListCallsByPosition(proc.body, "__mkpro_terminal_proc_tail", procMap, new Map(), nonTerminalCalls);
+  }
+
+  let removed = 0;
+  for (const [display, calls] of allTerminalCallsByDisplay) {
+    const terminalProcs = expandTerminalProcClosure(calls, procMap, nonTerminalCalls);
+    for (const name of terminalProcs) {
+      const proc = procMap.get(name);
+      if (proc === undefined) continue;
+      removed += elideTailShowInStatementList(proc.body, display);
+    }
+  }
+
+  if (removed === 0) return;
+  optimizations.push({
+    name: "terminal-loop-screen-elision",
+    detail: `Elided ${removed} terminal show${removed === 1 ? "" : "s"} already provided by the next loop header.`,
+  });
+}
+
+function loopHeaderDisplay(statement: Extract<StatementAst, { kind: "loop" }>): string | undefined {
+  const first = statement.body[0];
+  const second = statement.body[1];
+  return first?.kind === "show" && second?.kind === "input" ? first.display : undefined;
+}
+
+function collectCallsByPosition(
+  statement: StatementAst,
+  terminalDisplay: string | undefined,
+  procMap: ReadonlyMap<string, ProgramAst["procs"][number]>,
+  terminalCallsByDisplay: Map<string, Set<string>>,
+  nonTerminalCalls: Set<string>,
+): void {
+  if (statement.kind === "call" && procMap.has(statement.block)) {
+    if (terminalDisplay === undefined) {
+      nonTerminalCalls.add(statement.block);
+    } else {
+      const calls = terminalCallsByDisplay.get(terminalDisplay) ?? new Set<string>();
+      calls.add(statement.block);
+      terminalCallsByDisplay.set(terminalDisplay, calls);
+    }
+    return;
+  }
+
+  if (statement.kind === "if") {
+    collectStatementListCallsByPosition(statement.thenBody, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls);
+    if (statement.elseBody !== undefined) {
+      collectStatementListCallsByPosition(statement.elseBody, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls);
+    }
+  }
+  if (statement.kind === "switch") {
+    for (const switchCase of statement.cases) {
+      collectStatementListCallsByPosition(switchCase.body, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls);
+    }
+    if (statement.defaultBody !== undefined) {
+      collectStatementListCallsByPosition(statement.defaultBody, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls);
+    }
+  }
+  if (statement.kind === "dispatch") {
+    for (const dispatchCase of statement.cases) {
+      collectStatementListCallsByPosition(dispatchCase.body, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls);
+    }
+    if (statement.defaultBody !== undefined) {
+      collectStatementListCallsByPosition(statement.defaultBody, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls);
+    }
+  }
+}
+
+function collectStatementListCallsByPosition(
+  statements: StatementAst[],
+  terminalDisplay: string | undefined,
+  procMap: ReadonlyMap<string, ProgramAst["procs"][number]>,
+  terminalCallsByDisplay: Map<string, Set<string>>,
+  nonTerminalCalls: Set<string>,
+): void {
+  for (let index = 0; index < statements.length; index += 1) {
+    collectCallsByPosition(
+      statements[index]!,
+      index === statements.length - 1 ? terminalDisplay : undefined,
+      procMap,
+      terminalCallsByDisplay,
+      nonTerminalCalls,
+    );
+  }
+}
+
+function expandTerminalProcClosure(
+  initial: ReadonlySet<string>,
+  procMap: ReadonlyMap<string, ProgramAst["procs"][number]>,
+  nonTerminalCalls: ReadonlySet<string>,
+): Set<string> {
+  const result = new Set<string>();
+  const queue = [...initial].filter((name) => !nonTerminalCalls.has(name));
+  while (queue.length > 0) {
+    const name = queue.shift()!;
+    if (result.has(name) || nonTerminalCalls.has(name)) continue;
+    const proc = procMap.get(name);
+    if (proc === undefined) continue;
+    result.add(name);
+    const terminalCalls = new Set<string>();
+    collectStatementListTerminalCalls(proc.body, procMap, terminalCalls);
+    for (const nested of terminalCalls) {
+      if (!result.has(nested) && !nonTerminalCalls.has(nested)) queue.push(nested);
+    }
+  }
+  return result;
+}
+
+function collectStatementListTerminalCalls(
+  statements: StatementAst[],
+  procMap: ReadonlyMap<string, ProgramAst["procs"][number]>,
+  terminalCalls: Set<string>,
+): void {
+  const last = statements.at(-1);
+  if (last === undefined) return;
+  if (last.kind === "call" && procMap.has(last.block)) {
+    terminalCalls.add(last.block);
+    return;
+  }
+  if (last.kind === "if") {
+    collectStatementListTerminalCalls(last.thenBody, procMap, terminalCalls);
+    if (last.elseBody !== undefined) collectStatementListTerminalCalls(last.elseBody, procMap, terminalCalls);
+  }
+  if (last.kind === "switch") {
+    for (const switchCase of last.cases) collectStatementListTerminalCalls(switchCase.body, procMap, terminalCalls);
+    if (last.defaultBody !== undefined) collectStatementListTerminalCalls(last.defaultBody, procMap, terminalCalls);
+  }
+  if (last.kind === "dispatch") {
+    for (const dispatchCase of last.cases) collectStatementListTerminalCalls(dispatchCase.body, procMap, terminalCalls);
+    if (last.defaultBody !== undefined) collectStatementListTerminalCalls(last.defaultBody, procMap, terminalCalls);
+  }
+}
+
+function elideTailShowInStatementList(statements: StatementAst[], display: string): number {
+  const last = statements.at(-1);
+  if (last === undefined) return 0;
+  if (last.kind === "show" && last.display === display) {
+    statements.pop();
+    return 1;
+  }
+  let removed = 0;
+  if (last.kind === "if") {
+    removed += elideTailShowInStatementList(last.thenBody, display);
+    if (last.elseBody !== undefined) removed += elideTailShowInStatementList(last.elseBody, display);
+  }
+  if (last.kind === "switch") {
+    for (const switchCase of last.cases) removed += elideTailShowInStatementList(switchCase.body, display);
+    if (last.defaultBody !== undefined) removed += elideTailShowInStatementList(last.defaultBody, display);
+  }
+  if (last.kind === "dispatch") {
+    for (const dispatchCase of last.cases) removed += elideTailShowInStatementList(dispatchCase.body, display);
+    if (last.defaultBody !== undefined) removed += elideTailShowInStatementList(last.defaultBody, display);
+  }
+  return removed;
+}
+
 function collectReachableProcNames(ast: ProgramAst): Set<string> {
   const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
   const blockMap = new Map(ast.blocks.map((block) => [block.name, block]));
@@ -6023,6 +6512,10 @@ function estimatePackedDisplayBodyCost(widthsOrCount: number | readonly number[]
   }
   if (widthsOrCount.length === 0) return 2;
   return 2 + widthsOrCount.slice(1).reduce((cost, width) => cost + String(10 ** width).length + 3, 0);
+}
+
+function displayByteBuilderSupportsLiteral(text: string): boolean {
+  return /^[\s.-]+$/u.test(text);
 }
 
 function programUsesTicTacToeHelpers(ast: ProgramAst): boolean {
@@ -9947,7 +10440,10 @@ function buildMachineFeaturesUsed(
   if (optimizations.some((optimization) => optimization.name === "constants-dual-use")) {
     add("address-constants", "Optimizer reused constants as arithmetic values and address-like data.", "optimizer");
   }
-  if (optimizations.some((optimization) => optimization.name === "x2-display-byte-scheduling")) {
+  if (optimizations.some((optimization) =>
+    optimization.name === "x2-display-byte-scheduling" ||
+    optimization.name === "display-byte-x2-lowering"
+  )) {
     add("x2-register", "Optimizer scheduled hidden X2 values across display-byte boundaries.", "optimizer");
   }
   if (optimizations.some((optimization) => optimization.name === "negative-zero-threshold-selector")) {
@@ -9956,7 +10452,10 @@ function buildMachineFeaturesUsed(
   if (optimizations.some((optimization) => optimization.name === "vp-fraction-restore")) {
     add("x2-restore-boundaries", "Optimizer used ВП as both X2 restoration and fractional/mantissa transform.", "optimizer");
   }
-  if (optimizations.some((optimization) => optimization.name === "hex-mantissa-arithmetic")) {
+  if (optimizations.some((optimization) =>
+    optimization.name === "hex-mantissa-arithmetic" ||
+    optimization.name === "display-byte-x2-lowering"
+  )) {
     add("display-bytes", "Optimizer packed state into hexadecimal mantissa/display-byte forms.", "optimizer");
   }
   if (optimizations.some((optimization) => optimization.name === "fractional-indirect-addressing" || optimization.name === "r0-fractional-sentinel")) {

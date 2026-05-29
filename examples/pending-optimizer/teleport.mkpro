@@ -20,7 +20,7 @@ program Teleport {
   }
 
   screen station_view {
-    show pos, danger, charges, loot
+    show pos danger charges loot
   }
 
   rule caught {
