@@ -13,20 +13,20 @@ import { compileMKPro } from "../../src/core/index.ts";
 
 const EXAMPLE_BASELINE: Record<string, number> = {
   "99-bottles": 53,
-  alaram: 99,
+  alaram: 83,
   basic: 8,
-  "cave-sketch": 90,
-  "dangerous-loading": 96,
-  dungeon: 101,
+  "cave-sketch": 58,
+  "dangerous-loading": 89,
+  dungeon: 89,
   "fox-hunt-100": 97,
   "fox-hunt-mk61": 88,
   "game-100-pig": 100,
-  human: 37,
-  lunar: 57,
+  human: 30,
+  lunar: 47,
   "minesweeper-9x7": 79,
   "minesweeper-9x9": 79,
   "raja-yoga": 90,
-  "sea-battle": 71,
+  "sea-battle": 67,
   "tiny-game": 26,
 };
 
@@ -36,13 +36,13 @@ const EXAMPLE_BASELINE: Record<string, number> = {
 // shrink these toward 105; the guard only enforces that they never grow.
 // The numbers below are the current locked ceilings, not historical deltas.
 const PENDING_BASELINE: Record<string, number> = {
-  "cave-highlevel-baseline": 143,
+  "cave-highlevel-baseline": 140,
   "cave-treasure": 150,
-  "giants-country": 207,
-  labyrinth777: 244,
-  teleport: 247,
+  "giants-country": 181,
+  labyrinth777: 241,
+  teleport: 233,
   "tic-tac-toe-4x4": 246,
-  "treasure-hunter-2": 166,
+  "treasure-hunter-2": 150,
   wumpus: 111,
 };
 

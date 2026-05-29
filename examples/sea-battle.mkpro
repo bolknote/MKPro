@@ -30,12 +30,16 @@ program SeaBattle {
     show enemy_report
   }
 
+  screen player_victory {
+    show "-8CEC6-L-"
+  }
+
   rule enemy_win {
     stop 33333331
   }
 
   rule player_win {
-    stop -8
+    show player_victory
   }
 
   turn {

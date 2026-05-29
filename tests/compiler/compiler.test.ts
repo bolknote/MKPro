@@ -112,6 +112,26 @@ program GuardedCall {
     expect(result.report.registers.flag).toBeUndefined();
   });
 
+  it("inlines tiny multi-use rules when that beats a subroutine", () => {
+    const result = compileOk(`
+program TinyMultiUseRule {
+  state {
+    score: counter 0..9 = 0
+  }
+  turn {
+    bump
+    bump
+    stop score
+  }
+  rule bump {
+    score++
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "size-model-rule-inline")).toBe(true);
+  });
+
   it("hoists one-shot turn initializers out of the loop", () => {
     const result = compileOk(`
 program OneShotInit {
@@ -460,6 +480,31 @@ program FoxProbe {
     expect(result.report.steps).toBeLessThanOrEqual(92);
   });
 
+  it("shares repeated bit_has membership checks when the helper is smaller", () => {
+    const result = compileOk(`
+program RepeatedMembershipProbe {
+  grid: board(1..4, 1..4)
+  state {
+    cell: coord(grid)
+    occupied: cells(grid)
+    score: counter 0..9 = 0
+  }
+  turn {
+    read cell
+    if cell in occupied {
+      score++
+    }
+    if cell in occupied {
+      score++
+    }
+    stop score
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "spatial-hit-condition-helper")).toBe(true);
+  });
+
   it("hoists common branch tails before MK-61 code generation", () => {
     const result = compileOk(`
 program CommonBranchTail {
@@ -485,6 +530,63 @@ program CommonBranchTail {
 
     expect(result.report.optimizations.some((item) => item.name === "common-branch-tail-hoisting")).toBe(true);
     expect(result.steps.filter((step) => step.hex === "50")).toHaveLength(1);
+  });
+
+  it("hoists common dispatch tails before MK-61 code generation", () => {
+    const result = compileOk(`
+program CommonDispatchTail {
+  state {
+    selector: counter 0..9 = 0
+    value: counter 0..9 = 0
+  }
+  screen view {
+    show value
+  }
+  turn {
+    if selector == 1 {
+      value = 1
+      show view
+    }
+    else {
+      if selector == 2 {
+        value = 2
+        show view
+      }
+      else {
+        value = 3
+        show view
+      }
+    }
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "common-branch-tail-hoisting")).toBe(true);
+    expect(result.steps.filter((step) => step.hex === "50")).toHaveLength(1);
+  });
+
+  it("collapses compact direction dispatch shells with no residual cases", () => {
+    const result = compileOk(`
+program CompactDirectionOnly {
+  state {
+    key: counter -9..9 = 2
+    dir: packed = 0
+  }
+  turn {
+    match key {
+      2, 4, 6, 8 => go direction(key)
+      otherwise => stop 0
+    }
+  }
+  rule go delta {
+    dir = delta
+    stop dir
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "compact-dispatch-simplification")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "dispatch-lowering")).toBe(false);
   });
 
   it("shares repeated packed display bodies through a normal helper", () => {

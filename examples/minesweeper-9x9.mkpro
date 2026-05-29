@@ -20,8 +20,12 @@ program Minesweeper9x9 {
     show clue
   }
 
+  screen mine {
+    show "ЕГГОГ"
+  }
+
   rule exploded {
-    stop -999
+    show mine
   }
 
   turn {

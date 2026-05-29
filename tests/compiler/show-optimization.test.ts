@@ -204,4 +204,37 @@ program LiteralVideoScreen {
     expect(result.steps.map((step) => step.mnemonic)).toEqual(expect.arrayContaining(["К ИНВ", "С/П"]));
     expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "display-bytes")).toBe(true);
   });
+
+  it("lowers literal calculator error screens", () => {
+    const result = compileOk(`
+program LiteralErrorScreen {
+  screen mine {
+    show "ЕГГОГ"
+  }
+  turn {
+    show mine
+  }
+}
+`);
+
+    expect(hasOptimization(result, "screen-video-literal-lowering")).toBe(true);
+    expect(hasOptimization(result, "error-stop")).toBe(true);
+    expect(result.steps.map((step) => step.mnemonic)).toEqual(expect.arrayContaining(["F 1/x"]));
+  });
+
+  it("lowers signed literal calculator video strings", () => {
+    const result = compileOk(`
+program SignedLiteralVideoScreen {
+  screen win {
+    show "-8CEC6-L-"
+  }
+  turn {
+    show win
+  }
+}
+`);
+
+    expect(hasOptimization(result, "screen-video-literal-lowering")).toBe(true);
+    expect(result.steps.map((step) => step.mnemonic)).toEqual(expect.arrayContaining(["К ИНВ", "/-/", "С/П"]));
+  });
 });

@@ -37,13 +37,17 @@ program TreasureHunter2 {
     show treasure
   }
 
+  screen death {
+    show "ЕГГОГ"
+  }
+
   rule escaped {
     show exit
     stop 0
   }
 
   rule lost {
-    stop -999
+    show death
   }
 
   turn {

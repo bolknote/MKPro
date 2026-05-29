@@ -1052,6 +1052,10 @@ function cloneStatements(statements: StatementAst[]): StatementAst[] {
 function hoistCommonBranchTails(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
   let hoisted = 0;
   let simplified = 0;
+  let compactedDispatches = 0;
+  let tailInlinedCalls = 0;
+  const inlineNames = findSingleUseProcNames(ast);
+  const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
 
   const visitList = (statements: StatementAst[]): StatementAst[] => {
     const result: StatementAst[] = [];
@@ -1068,18 +1072,10 @@ function hoistCommonBranchTails(ast: ProgramAst, optimizations: AppliedOptimizat
     if (statement.kind === "if") {
       const thenBody = visitList(statement.thenBody);
       const elseBody = statement.elseBody === undefined ? undefined : visitList(statement.elseBody);
-      const tails: StatementAst[] = [];
+      const tails = elseBody === undefined ? [] : hoistTailFromBranchBodies([thenBody, elseBody]);
       if (elseBody !== undefined) {
-        while (
-          thenBody.length > 0 &&
-          elseBody.length > 0 &&
-          statementEquals(thenBody[thenBody.length - 1]!, elseBody[elseBody.length - 1]!)
-        ) {
-          tails.unshift(thenBody.pop()!);
-          elseBody.pop();
-        }
+        hoisted += tails.length;
       }
-      hoisted += tails.length;
 
       const simplifiedBranch = simplifyIfStatement({
         ...statement,
@@ -1096,20 +1092,78 @@ function hoistCommonBranchTails(ast: ProgramAst, optimizations: AppliedOptimizat
       return [...simplifiedBranch, ...tails];
     }
     if (statement.kind === "switch") {
+      const cases = statement.cases.map((switchCase) => ({ ...switchCase, body: visitList(switchCase.body) }));
+      const defaultBody = statement.defaultBody === undefined ? undefined : visitList(statement.defaultBody);
+      const tails = defaultBody === undefined
+        ? []
+        : hoistTailFromBranchBodies([...cases.map((switchCase) => switchCase.body), defaultBody]);
+      hoisted += tails.length;
+      if (defaultBody !== undefined && cases.every((switchCase) => switchCase.body.length === 0) && defaultBody.length === 0) {
+        if (expressionIsDeterministic(statement.expr)) {
+          simplified += 1;
+          return tails;
+        }
+      }
       return [{
         ...statement,
-        cases: statement.cases.map((switchCase) => ({ ...switchCase, body: visitList(switchCase.body) })),
-        ...(statement.defaultBody === undefined ? {} : { defaultBody: visitList(statement.defaultBody) }),
-      }];
+        cases,
+        ...(defaultBody === undefined ? {} : { defaultBody }),
+      }, ...tails];
     }
     if (statement.kind === "dispatch") {
+      const cases = statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: visitList(dispatchCase.body) }));
+      const defaultBody = statement.defaultBody === undefined ? undefined : visitList(statement.defaultBody);
+      const tails = defaultBody === undefined
+        ? []
+        : hoistTailFromBranchBodies([...cases.map((dispatchCase) => dispatchCase.body), defaultBody]);
+      hoisted += tails.length;
+      if (defaultBody !== undefined && cases.every((dispatchCase) => dispatchCase.body.length === 0) && defaultBody.length === 0) {
+        if (expressionIsDeterministic(statement.expr)) {
+          simplified += 1;
+          return tails;
+        }
+      }
+      if (cases.length === 0 && defaultBody !== undefined && expressionIsDeterministic(statement.expr)) {
+        compactedDispatches += 1;
+        return [...defaultBody, ...tails];
+      }
       return [{
         ...statement,
-        cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: visitList(dispatchCase.body) })),
-        ...(statement.defaultBody === undefined ? {} : { defaultBody: visitList(statement.defaultBody) }),
-      }];
+        cases,
+        ...(defaultBody === undefined ? {} : { defaultBody }),
+      }, ...tails];
     }
     return [statement];
+  };
+
+  const hoistTailFromBranchBodies = (branches: StatementAst[][]): StatementAst[] => {
+    const expanded = branches.map((branch) => expandSingleUseTailCalls(branch));
+    const expandedBranches = expanded.map((entry) => entry.body);
+    const tails = hoistCommonTailFromBranches(expandedBranches);
+    if (tails.length === 0) return [];
+    for (let index = 0; index < branches.length; index += 1) {
+      branches[index]!.splice(0, branches[index]!.length, ...expandedBranches[index]!);
+      tailInlinedCalls += expanded[index]!.inlined;
+    }
+    return tails;
+  };
+
+  const expandSingleUseTailCalls = (statements: StatementAst[], seen = new Set<string>()): { body: StatementAst[]; inlined: number } => {
+    const body = [...statements];
+    let inlined = 0;
+    while (body.length > 0) {
+      const last = body.at(-1)!;
+      if (last.kind !== "call" || !inlineNames.has(last.block) || seen.has(last.block)) break;
+      const proc = procMap.get(last.block);
+      if (proc === undefined) break;
+      body.pop();
+      seen.add(last.block);
+      const expanded = expandSingleUseTailCalls(cloneStatements(proc.body), seen);
+      body.push(...expanded.body);
+      inlined += 1 + expanded.inlined;
+      seen.delete(last.block);
+    }
+    return { body, inlined };
   };
 
   for (const entry of ast.entries) entry.body = visitList(entry.body);
@@ -1122,6 +1176,30 @@ function hoistCommonBranchTails(ast: ProgramAst, optimizations: AppliedOptimizat
       detail: `Hoisted ${hoisted} shared branch tail${hoisted === 1 ? "" : "s"} and simplified ${simplified} conditional shape${simplified === 1 ? "" : "s"}.`,
     });
   }
+  if (tailInlinedCalls > 0) {
+    optimizations.push({
+      name: "single-use-tail-inline",
+      detail: `Expanded ${tailInlinedCalls} single-use tail call${tailInlinedCalls === 1 ? "" : "s"} only where it exposed a shared branch suffix.`,
+    });
+  }
+  if (compactedDispatches > 0) {
+    optimizations.push({
+      name: "compact-dispatch-simplification",
+      detail: `Collapsed ${compactedDispatches} dispatch shell${compactedDispatches === 1 ? "" : "s"} with no residual cases into its default flow.`,
+    });
+  }
+}
+
+function hoistCommonTailFromBranches(branches: StatementAst[][]): StatementAst[] {
+  if (branches.length < 2) return [];
+  const tails: StatementAst[] = [];
+  while (branches.every((branch) => branch.length > 0)) {
+    const last = branches[0]![branches[0]!.length - 1]!;
+    if (!branches.every((branch) => statementEquals(branch[branch.length - 1]!, last))) break;
+    tails.unshift(branches[0]!.pop()!);
+    for (const branch of branches.slice(1)) branch.pop();
+  }
+  return tails;
 }
 
 function simplifyIfStatement(statement: Extract<StatementAst, { kind: "if" }>): StatementAst[] {
@@ -1535,6 +1613,7 @@ class EmitContext {
   private readonly candidates: CandidateReport[];
   private readonly loweringOptions: LoweringOptions;
   private readonly inlineProcNames: Set<string>;
+  private readonly procCallCounts: Map<string, number>;
   private readonly readCounts: Map<string, number>;
   private readonly displayUseCounts: Map<string, number>;
   private readonly showSequenceUseCounts: Map<string, number>;
@@ -1613,7 +1692,8 @@ class EmitContext {
     this.warnings = warnings;
     this.candidates = candidates;
     this.loweringOptions = loweringOptions;
-    this.inlineProcNames = findSingleUseProcNames(ast);
+    this.procCallCounts = collectProcCallCounts(ast);
+    this.inlineProcNames = findInlineProcNamesBySize(ast, this.procCallCounts);
     this.readCounts = collectVariableReadCounts(ast);
     this.displayUseCounts = collectDisplayUseCounts(ast);
     this.showSequenceUseCounts = collectShowSequenceUseCounts(ast);
@@ -3118,7 +3198,7 @@ class EmitContext {
     if (optimized.reordered > 0) {
       this.optimizations.push({
         name: "dispatch-case-ordering",
-        detail: `Moved ${optimized.reordered} zero dispatch case${optimized.reordered === 1 ? "" : "s"} earlier to reuse the selector already in X.`,
+        detail: `Reordered ${optimized.reordered} numeric dispatch case${optimized.reordered === 1 ? "" : "s"} to shorten residual comparisons.`,
       });
     }
 
@@ -3265,6 +3345,7 @@ class EmitContext {
 
   private statementTerminates(statement: StatementAst, seenProcs: Set<string>): boolean {
     if (statement.kind === "halt" || statement.kind === "loop" || statement.kind === "trap") return true;
+    if (statement.kind === "show" && this.showTerminates(statement.display)) return true;
     if (statement.kind === "if") {
       return statement.elseBody !== undefined &&
         this.statementListTerminates(statement.thenBody, new Set(seenProcs)) &&
@@ -3282,6 +3363,13 @@ class EmitContext {
     if (proc === undefined || seenProcs.has(proc.name)) return false;
     seenProcs.add(proc.name);
     return this.statementListTerminates(proc.body, seenProcs);
+  }
+
+  private showTerminates(displayName: string): boolean {
+    const display = this.ast.displays.find((candidate) => candidate.name === displayName);
+    const literal = display === undefined ? undefined : this.collapseLiteralOnlyDisplay(display);
+    const program = literal === undefined ? undefined : displayLiteralProgram(literal);
+    return program?.kind === "error";
   }
 
   private compileShow(displayName: string, line: number): void {
@@ -3781,15 +3869,26 @@ class EmitContext {
     const program = displayLiteralProgram(literal);
     if (program === undefined) return false;
 
-    if (program.kind === "kinv") {
-      this.emitNumber(program.digits);
+    if (program.kind === "error") {
+      this.emitNumber("0");
+      this.emitOp(0x23, "F 1/x", "display literal ЕГГ0Г", line);
+      this.optimizations.push({
+        name: "error-stop",
+        detail: `Used F 1/x to show literal ЕГГ0Г for screen ${display.name}.`,
+      });
+    } else if (program.kind === "kinv") {
+      this.emitNumberOrPreload(program.digits);
       this.emitOp(0x3a, "К ИНВ", "display literal video bytes", line);
     } else {
-      this.emitNumber(program.left);
+      this.emitNumberOrPreload(program.left);
       this.emitOp(0x0e, "В↑", "display literal x/y split", line);
-      this.emitNumber(program.right);
+      this.emitNumberOrPreload(program.right);
       this.emitOp(0x39, "К ⊕", "display literal video bytes", line);
     }
+    if (program.kind !== "error" && program.negative) {
+      this.emitOp(0x0b, "/-/", "display literal sign", line);
+    }
+    if (program.kind === "error") return true;
     this.emitOp(0x50, "С/П", `show ${display.name}`, line);
     return true;
   }
@@ -3816,7 +3915,9 @@ class EmitContext {
     if (program === undefined) return false;
     const uses = this.displayUseCounts.get(display.name) ?? 0;
     if (uses < 2) return false;
-    const bodyCost = program.kind === "kinv" ? program.digits.length + 2 : program.left.length + program.right.length + 3;
+    if (program.kind === "error") return false;
+    const signCost = program.negative ? 1 : 0;
+    const bodyCost = program.kind === "kinv" ? program.digits.length + 2 + signCost : program.left.length + program.right.length + 3 + signCost;
     const helperCost = uses * 2 + bodyCost + 1;
     const inlineTotal = uses * bodyCost;
     return inlineTotal - helperCost >= DISPLAY_HELPER_MIN_SAVINGS;
@@ -3917,9 +4018,12 @@ class EmitContext {
     if (!block && proc) {
       if (this.inlineProcNames.has(proc.name)) {
         this.compileStatements(proc.body);
+        const uses = this.procCallCounts.get(proc.name) ?? 0;
         this.optimizations.push({
-          name: "single-use-rule-inline",
-          detail: `Inlined single-use rule ${proc.name} at line ${line}.`,
+          name: uses === 1 ? "single-use-rule-inline" : "size-model-rule-inline",
+          detail: uses === 1
+            ? `Inlined single-use rule ${proc.name} at line ${line}.`
+            : `Inlined ${uses}-use rule ${proc.name} because it is smaller than a ПП/В/О subroutine.`,
         });
         return;
       }
@@ -5494,16 +5598,24 @@ interface RegisterAllocation {
   negativeZeroDegree?: RegisterName;
 }
 
-function findSingleUseProcNames(ast: ProgramAst): Set<string> {
+function collectProcCallCounts(ast: ProgramAst): Map<string, number> {
   const procNames = new Set(ast.procs.map((proc) => proc.name));
-  const counts = new Map<string, number>();
+  const counts = countStatementCalls(ast);
+  const procCounts = new Map<string, number>();
+  for (const [name, count] of counts) {
+    if (procNames.has(name)) procCounts.set(name, count);
+  }
+  return procCounts;
+}
+
+function collectRecursiveProcNames(ast: ProgramAst): Set<string> {
+  const procNames = new Set(ast.procs.map((proc) => proc.name));
   const recursive = new Set<string>();
 
   const visit = (statements: StatementAst[], currentProc?: string): void => {
     for (const statement of statements) {
-      if (statement.kind === "call" && procNames.has(statement.block)) {
-        counts.set(statement.block, (counts.get(statement.block) ?? 0) + 1);
-        if (statement.block === currentProc) recursive.add(statement.block);
+      if (statement.kind === "call" && procNames.has(statement.block) && statement.block === currentProc) {
+        recursive.add(statement.block);
       }
       if (statement.kind === "loop") visit(statement.body, currentProc);
       if (statement.kind === "if") {
@@ -5524,12 +5636,83 @@ function findSingleUseProcNames(ast: ProgramAst): Set<string> {
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body, proc.name);
   for (const block of ast.blocks) visit(block.body);
+  return recursive;
+}
+
+function findSingleUseProcNames(ast: ProgramAst): Set<string> {
+  const counts = collectProcCallCounts(ast);
+  const recursive = collectRecursiveProcNames(ast);
 
   return new Set(
     [...counts.entries()]
       .filter(([name, count]) => count === 1 && !recursive.has(name))
       .map(([name]) => name),
   );
+}
+
+function findInlineProcNamesBySize(ast: ProgramAst, counts = collectProcCallCounts(ast)): Set<string> {
+  const recursive = collectRecursiveProcNames(ast);
+  const inlineNames = new Set<string>();
+  for (const proc of ast.procs) {
+    const uses = counts.get(proc.name) ?? 0;
+    if (uses === 0 || recursive.has(proc.name)) continue;
+    const bodyCost = estimateBranchOrderBodyCost(proc.body, ast);
+    if (!Number.isFinite(bodyCost)) {
+      if (uses === 1) inlineNames.add(proc.name);
+      continue;
+    }
+    const terminal = statementListTerminatesStatically(proc.body, ast);
+    if (uses > 1 && !isStraightLineAssignmentBody(proc.body)) continue;
+    if (uses > 1 && terminal) continue;
+    const subroutineCost = bodyCost + (terminal ? 0 : 1) + uses * 2;
+    const inlineCost = bodyCost * uses;
+    if (inlineCost < subroutineCost) inlineNames.add(proc.name);
+  }
+  return inlineNames;
+}
+
+function isStraightLineAssignmentBody(statements: readonly StatementAst[]): boolean {
+  return statements.length > 0 && statements.every((statement) => statement.kind === "assign");
+}
+
+function statementListTerminatesStatically(statements: readonly StatementAst[], ast: ProgramAst): boolean {
+  return statementListTerminatesStaticallySeen(statements, ast, new Set());
+}
+
+function statementListTerminatesStaticallySeen(
+  statements: readonly StatementAst[],
+  ast: ProgramAst,
+  seenProcs: Set<string>,
+): boolean {
+  const last = statements.at(-1);
+  return last !== undefined && statementTerminatesStatically(last, ast, seenProcs);
+}
+
+function statementTerminatesStatically(
+  statement: StatementAst,
+  ast: ProgramAst,
+  seenProcs: Set<string>,
+): boolean {
+  if (statement.kind === "halt" || statement.kind === "loop" || statement.kind === "trap") return true;
+  if (statement.kind === "if") {
+    return statement.elseBody !== undefined &&
+      statementListTerminatesStaticallySeen(statement.thenBody, ast, new Set(seenProcs)) &&
+      statementListTerminatesStaticallySeen(statement.elseBody, ast, new Set(seenProcs));
+  }
+  if (statement.kind === "dispatch") {
+    return statement.defaultBody !== undefined &&
+      statementListTerminatesStaticallySeen(statement.defaultBody, ast, new Set(seenProcs)) &&
+      statement.cases.every((dispatchCase) =>
+        statementListTerminatesStaticallySeen(dispatchCase.body, ast, new Set(seenProcs)),
+      );
+  }
+  if (statement.kind !== "call") return false;
+  const block = ast.blocks.find((candidate) => candidate.name === statement.block);
+  if (block !== undefined) return block.mode !== "inline";
+  const proc = ast.procs.find((candidate) => candidate.name === statement.block);
+  if (proc === undefined || seenProcs.has(proc.name)) return false;
+  seenProcs.add(proc.name);
+  return statementListTerminatesStaticallySeen(proc.body, ast, seenProcs);
 }
 
 function eliminateUnreachableV2Procs(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
@@ -6029,6 +6212,16 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
     values.add("-81");
   }
   for (const display of ast.displays) {
+    const literal = literalOnlyDisplayText(display);
+    const literalProgram = literal === undefined ? undefined : displayLiteralProgram(literal);
+    if (literalProgram?.kind === "kinv" && estimateNumberCost(literalProgram.digits) > 1) {
+      values.add(normalizeConstantLiteral(literalProgram.digits));
+    }
+    if (literalProgram?.kind === "xor") {
+      if (estimateNumberCost(literalProgram.left) > 1) values.add(normalizeConstantLiteral(literalProgram.left));
+      if (estimateNumberCost(literalProgram.right) > 1) values.add(normalizeConstantLiteral(literalProgram.right));
+    }
+
     let seenSource = false;
     for (const item of display.items) {
       if (item.kind !== "source") continue;
@@ -6652,16 +6845,23 @@ function displayByteBuilderSupportsLiteral(text: string): boolean {
 }
 
 type DisplayLiteralProgram =
-  | { kind: "kinv"; digits: string }
-  | { kind: "xor"; left: string; right: string };
+  | { kind: "error" }
+  | { kind: "kinv"; digits: string; negative: boolean }
+  | { kind: "xor"; left: string; right: string; negative: boolean };
 
 function displayLiteralProgram(text: string): DisplayLiteralProgram | undefined {
-  const cells = displayLiteralCells(text);
+  const normalized = normalizeDisplayLiteralText(text);
+  const errorCells = displayLiteralCells(normalized);
+  if (errorCells !== undefined && isErrorLiteralCells(errorCells)) return { kind: "error" };
+
+  const negative = normalized.startsWith("-") && normalized.length > 1;
+  const body = negative ? normalized.slice(1) : normalized;
+  const cells = displayLiteralCells(body);
   if (cells === undefined || cells.length === 0 || cells.length > 8) return undefined;
   if (cells[0] !== 8) return undefined;
 
   const inverted = displayLiteralInversionDigits(cells);
-  if (inverted !== undefined) return { kind: "kinv", digits: inverted };
+  if (inverted !== undefined) return { kind: "kinv", digits: inverted, negative };
 
   const left: string[] = [];
   const right: string[] = [];
@@ -6671,7 +6871,16 @@ function displayLiteralProgram(text: string): DisplayLiteralProgram | undefined 
     left.push(String(pair[0]));
     right.push(String(pair[1]));
   }
-  return { kind: "xor", left: left.join(""), right: right.join("") };
+  return { kind: "xor", left: left.join(""), right: right.join(""), negative };
+}
+
+function isErrorLiteralCells(cells: readonly number[]): boolean {
+  return cells.length === 5 &&
+    cells[0] === 14 &&
+    cells[1] === 13 &&
+    cells[2] === 13 &&
+    cells[3] === 0 &&
+    cells[4] === 13;
 }
 
 function displayLiteralInversionDigits(cells: readonly number[]): string | undefined {
@@ -6686,13 +6895,7 @@ function displayLiteralInversionDigits(cells: readonly number[]): string | undef
 
 function displayLiteralCells(text: string): number[] | undefined {
   const cells: number[] = [];
-  const normalized = text
-    .replace(/[–—]/gu, "-")
-    .replace(/[ВB]/gu, "L")
-    .replace(/[C]/gu, "С")
-    .replace(/[D]/gu, "Г")
-    .replace(/[G]/gu, "Г")
-    .replace(/[E]/gu, "Е");
+  const normalized = normalizeDisplayLiteralText(text);
   for (const char of normalized) {
     if (char === "." || char === ",") continue;
     if (/\s/u.test(char) || char === "_") {
@@ -6708,6 +6911,17 @@ function displayLiteralCells(text: string): number[] | undefined {
     cells.push(symbol);
   }
   return cells;
+}
+
+function normalizeDisplayLiteralText(text: string): string {
+  return text
+    .replace(/[–—]/gu, "-")
+    .replace(/[ОO]/gu, "0")
+    .replace(/[ВB]/gu, "L")
+    .replace(/[C]/gu, "С")
+    .replace(/[D]/gu, "Г")
+    .replace(/[G]/gu, "Г")
+    .replace(/[E]/gu, "Е");
 }
 
 const DISPLAY_LITERAL_SYMBOLS: Record<string, number> = {
@@ -6993,7 +7207,98 @@ function collectBitMaskScratchVariables(ast: ProgramAst, variables: Set<string>)
   for (const block of ast.blocks) visit(block.body);
 }
 
+interface BitHasConditionStats {
+  count: number;
+  inlineCost: number;
+  helperCallCost: number;
+}
+
+function collectBitHasConditionStats(ast: ProgramAst): Map<string, BitHasConditionStats> {
+  const stats = new Map<string, BitHasConditionStats>();
+  const visitExpr = (expr: ExpressionAst): void => {
+    if (expr.kind === "unary") visitExpr(expr.expr);
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+    }
+    if (expr.kind === "call") {
+      for (const arg of expr.args) visitExpr(arg);
+    }
+  };
+  const visitBitHasCondition = (expr: ExpressionAst): void => {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_has" || expr.args.length !== 2) {
+      visitExpr(expr);
+      return;
+    }
+    const [mask, index] = expr.args;
+    if (mask?.kind !== "identifier" || index === undefined) return;
+    const current = stats.get(mask.name) ?? { count: 0, inlineCost: 0, helperCallCost: 0 };
+    current.count += 1;
+    current.inlineCost += estimateExpressionCostForCondition(expr, undefined);
+    current.helperCallCost += estimateExpressionCost(index) + 2;
+    stats.set(mask.name, current);
+  };
+  const visitCondition = (condition: ConditionAst): void => {
+    if ((condition.op === "==" || condition.op === "!=") && isZeroExpression(condition.right)) {
+      visitBitHasCondition(condition.left);
+      return;
+    }
+    if ((condition.op === "==" || condition.op === "!=") && isZeroExpression(condition.left)) {
+      visitBitHasCondition(condition.right);
+      return;
+    }
+    visitExpr(condition.left);
+    visitExpr(condition.right);
+  };
+  const visit = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+      if (statement.kind === "assign") visitExpr(statement.expr);
+      if (statement.kind === "if") {
+        visitCondition(statement.condition);
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "switch") {
+        visitExpr(statement.expr);
+        for (const switchCase of statement.cases) {
+          visitExpr(switchCase.value);
+          visit(switchCase.body);
+        }
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          visitExpr(dispatchCase.value);
+          visit(dispatchCase.body);
+        }
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "core") {
+        for (const input of statement.inputs ?? []) visitExpr(input.expr);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  for (const block of ast.blocks) visit(block.body);
+  return stats;
+}
+
+function bitHasConditionHelperSaves(mask: string, stats: BitHasConditionStats): boolean {
+  if (stats.count < 2) return false;
+  const scratch: ExpressionAst = { kind: "identifier", name: spatialHitScratchName(mask) };
+  const helperBodyCost = 1 + 1 + estimateExpressionCost(bitMaskExpression(scratch)) + 1 + 1 + 1;
+  return stats.inlineCost > helperBodyCost + stats.helperCallCost;
+}
+
 function collectSpatialHitScratchVariables(ast: ProgramAst, variables: Set<string>): void {
+  for (const [mask, stats] of collectBitHasConditionStats(ast)) {
+    if (bitHasConditionHelperSaves(mask, stats)) variables.add(spatialHitScratchName(mask));
+  }
   const shareLineCountMask = countCalls(ast, "line_count") > 1;
   const visitExpr = (expr: ExpressionAst): void => {
     if (shareLineCountMask && expr.kind === "call" && expr.callee.toLowerCase() === "line_count") {
@@ -9281,6 +9586,12 @@ function range(start: number, end: number): number[] {
   return values;
 }
 
+function literalOnlyDisplayText(display: ProgramAst["displays"][number]): string | undefined {
+  if (display.items.length === 0 || display.items.some((item) => item.kind !== "literal")) return undefined;
+  const text = display.items.map((item) => item.kind === "literal" ? item.text : "").join("");
+  return text.trim().length === 0 ? undefined : text;
+}
+
 function signToggleExpression(current: ExpressionAst, selector: ExpressionAst): ExpressionAst {
   return multiplyExpressions(
     current,
@@ -9460,7 +9771,7 @@ function optimizeDispatchDefaultCases(
 ): { statement: Extract<StatementAst, { kind: "dispatch" }>; removed: number; reordered: number } {
   if (statement.cases.length === 0) return { statement, removed: 0, reordered: 0 };
   if (!statement.defaultBody) {
-    const ordered = orderZeroDispatchCasesFirst(statement.cases);
+    const ordered = orderNumericDispatchCasesForResidual(statement.cases);
     return {
       statement: ordered.reordered === 0 ? statement : { ...statement, cases: ordered.cases },
       removed: 0,
@@ -9487,14 +9798,14 @@ function optimizeDispatchDefaultCases(
     kept.push(dispatchCase);
   }
 
-  const ordered = orderZeroDispatchCasesFirst(kept);
+  const ordered = orderNumericDispatchCasesForResidual(kept);
   const nextStatement = removed === 0 && ordered.reordered === 0
     ? statement
     : { ...statement, cases: ordered.cases };
   return { statement: nextStatement, removed, reordered: ordered.reordered };
 }
 
-function orderZeroDispatchCasesFirst(cases: DispatchCaseAst[]): { cases: DispatchCaseAst[]; reordered: number } {
+function orderNumericDispatchCasesForResidual(cases: DispatchCaseAst[]): { cases: DispatchCaseAst[]; reordered: number } {
   if (cases.length < 2) return { cases, reordered: 0 };
   const values = cases.map((dispatchCase) => numericLiteralValue(dispatchCase.value));
   if (values.some((value) => value === undefined)) return { cases, reordered: 0 };
@@ -9503,13 +9814,69 @@ function orderZeroDispatchCasesFirst(cases: DispatchCaseAst[]): { cases: Dispatc
     if (seen.has(value)) return { cases, reordered: 0 };
     seen.add(value);
   }
-  const zeroIndex = (values as number[]).indexOf(0);
-  if (zeroIndex <= 0) return { cases, reordered: 0 };
-  const zeroCase = cases[zeroIndex]!;
-  return {
-    cases: [zeroCase, ...cases.slice(0, zeroIndex), ...cases.slice(zeroIndex + 1)],
-    reordered: 1,
+  const residualOrder = bestResidualDispatchOrder(values as number[]);
+  const order = orderMatchesIdentity(residualOrder) ? zeroFirstDispatchOrder(values as number[]) : residualOrder;
+  const reordered = order.filter((originalIndex, index) => originalIndex !== index).length;
+  if (reordered === 0) return { cases, reordered: 0 };
+  const ordered = order.map((index) => cases[index]!);
+  return { cases: ordered, reordered };
+}
+
+function orderMatchesIdentity(order: readonly number[]): boolean {
+  return order.every((originalIndex, index) => originalIndex === index);
+}
+
+function zeroFirstDispatchOrder(values: readonly number[]): number[] {
+  const zeroIndex = values.indexOf(0);
+  if (zeroIndex <= 0) return values.map((_, index) => index);
+  return [zeroIndex, ...values.map((_, index) => index).filter((index) => index !== zeroIndex)];
+}
+
+function bestResidualDispatchOrder(values: readonly number[]): number[] {
+  const current = values.map((_, index) => index);
+  let best = current;
+  const currentCost = residualDispatchValueCost(values, current);
+  let bestCost = currentCost;
+  if (values.length > 8) return current;
+
+  const used = new Set<number>();
+  const order: number[] = [];
+  const visit = (previous: number | undefined, cost: number): void => {
+    if (cost >= bestCost) return;
+    if (order.length === values.length) {
+      bestCost = cost;
+      best = [...order];
+      return;
+    }
+    for (let index = 0; index < values.length; index += 1) {
+      if (used.has(index)) continue;
+      used.add(index);
+      order.push(index);
+      const value = values[index]!;
+      visit(value, cost + residualStepCost(previous, value));
+      order.pop();
+      used.delete(index);
+    }
   };
+  visit(undefined, 0);
+  if (currentCost - bestCost < 3) return current;
+  return best;
+}
+
+function residualDispatchValueCost(values: readonly number[], order: readonly number[]): number {
+  let previous: number | undefined;
+  let cost = 0;
+  for (const index of order) {
+    const value = values[index]!;
+    cost += residualStepCost(previous, value);
+    previous = value;
+  }
+  return cost;
+}
+
+function residualStepCost(previous: number | undefined, value: number): number {
+  const delta = previous === undefined ? value : previous - value;
+  return delta === 0 ? 0 : estimateNumberCost(String(delta)) + 1;
 }
 
 function statementListsEqual(left: readonly StatementAst[], right: readonly StatementAst[]): boolean {
@@ -10013,6 +10380,8 @@ const optimizerCapabilities: Array<{
       "local-terminal-tail",
       "local-terminal-tail-branch",
       "late-layout-if-variant",
+      "single-use-rule-inline",
+      "size-model-rule-inline",
     ],
     detail: "Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.",
   },
@@ -10076,6 +10445,8 @@ const optimizerCapabilities: Array<{
     requires: [],
     activeWhen: [
       "zero-condition-test",
+      "bit-mask-condition-helper",
+      "spatial-hit-condition-helper",
       "fractional-indirect-addressing",
       "kor-digit-test",
     ],
