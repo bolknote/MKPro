@@ -89,7 +89,7 @@ program BeerScreen {
     bottles: counter 0..99 = stack.X
   }
   screen beer {
-    show "BEEr ", bottles
+    show "BEEr", bottles:02
   }
   turn {
     show beer
@@ -98,10 +98,34 @@ program BeerScreen {
 `);
 
     expect(ast.v2?.screens[0]?.items).toEqual([
-      { kind: "literal", text: "BEEr ", line: 7 },
-      { kind: "source", name: "bottles", line: 7 },
+      { kind: "literal", text: "BEEr", line: 7 },
+      { kind: "literal", text: " ", synthetic: "comma-space", line: 7 },
+      { kind: "source", name: "bottles", width: 2, pad: "zero", line: 7 },
     ]);
     expect(ast.displays[0]?.sources).toEqual(["bottles"]);
+  });
+
+  it("parses adjacent display fragments without implicit separators", () => {
+    const ast = parseProgram(`
+program StatusScreen {
+  state {
+    die: counter 1..6 = 1
+    turn_score: counter 0..99 = 0
+  }
+  screen status {
+    show die ".-" turn_score:02
+  }
+  turn {
+    show status
+  }
+}
+`);
+
+    expect(ast.v2?.screens[0]?.items).toEqual([
+      { kind: "source", name: "die", line: 8 },
+      { kind: "literal", text: ".-", line: 8 },
+      { kind: "source", name: "turn_score", width: 2, pad: "zero", line: 8 },
+    ]);
   });
 
   it("parses command-style rule calls with expression arguments", () => {

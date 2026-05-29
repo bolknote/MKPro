@@ -119,8 +119,6 @@ All top-level `examples/*.mkpro` programs are runnable MK-Pro programs. They cov
 - `examples/raja-yoga.mkpro`: Anvarov one-dimensional mask game port that fits
   the original.
 - `examples/sea-battle.mkpro`: board/cell-set game port that fits the original.
-- `examples/wumpus.mkpro`: full Wumpus hunt with signed move/shoot input,
-  Wumpus, pits, bats, prioritized clues, and fitting the MK-61 window exactly.
 
 `examples/pending-optimizer/*.mkpro` contains ports that lower through ordinary
 IR but are still too large for MK-61 or their reference. There is no separate

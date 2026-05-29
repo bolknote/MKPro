@@ -3217,14 +3217,6 @@ class EmitContext {
     }
 
     if (this.compileTextDisplay(display, line)) return;
-    if (display.items.some((item) => item.kind === "literal")) {
-      this.diagnostics.push(buildDiagnostic(
-        "error",
-        `Screen '${display.name}' contains text fragments that are not lowerable for this program shape yet.`,
-        line,
-      ));
-      return;
-    }
 
     const helper = this.sharedDisplayHelper(display, line);
     if (helper !== undefined) {
@@ -3245,19 +3237,67 @@ class EmitContext {
     line: number,
     reuseCurrentX: boolean,
   ): void {
-    const sources = reuseCurrentX ? this.orderDisplaySources(display.sources) : display.sources;
+    const fields = this.numericDisplayFields(display, line);
+    if (fields === undefined) return;
+    const sources = reuseCurrentX && this.canReorderNumericDisplay(display)
+      ? this.orderDisplaySources(fields.map((field) => field.name))
+      : fields.map((field) => field.name);
+
     if (sources.length === 0) {
       this.emitNumber("0");
     } else {
       for (let index = 0; index < sources.length; index += 1) {
         const source = sources[index]!;
-        if (!(index === 0 && source === this.currentXVariable)) {
-          this.emitRecall(source, `display ${display.name} source`, line);
+        if (index === 0 && source === this.currentXVariable) {
+          continue;
         }
-        if (index > 0) this.emitOp(0x10, "+", "packed display combine", line);
+        if (index === 0) {
+          this.emitRecall(source, `display ${display.name} source`, line);
+        } else {
+          const field = fields.find((candidate) => candidate.name === source)!;
+          this.emitNumberOrPreload(String(10 ** field.width));
+          this.emitOp(0x12, "*", "packed display field shift", line);
+          this.emitRecall(source, `display ${display.name} source`, line);
+          this.emitOp(0x10, "+", "packed display field append", line);
+        }
       }
     }
     this.emitOp(0x50, "С/П", `show ${display.name}`, line);
+  }
+
+  private numericDisplayFields(
+    display: ProgramAst["displays"][number],
+    line?: number,
+  ): Array<{ name: string; width: number }> | undefined {
+    const fields: Array<{ name: string; width: number }> = [];
+    for (const item of display.items) {
+      if (item.kind === "literal") {
+        if (item.text.trim().length === 0) continue;
+        if (line !== undefined) {
+          this.diagnostics.push(buildDiagnostic(
+            "error",
+            `Screen '${display.name}' contains display literal ${JSON.stringify(item.text)} that is not lowerable yet.`,
+            line,
+          ));
+        }
+        return undefined;
+      }
+      fields.push({ name: item.name, width: item.width ?? this.naturalDisplayWidth(item.name) });
+    }
+    return fields;
+  }
+
+  private canReorderNumericDisplay(display: ProgramAst["displays"][number]): boolean {
+    return display.sources.length <= 1 && display.items.every((item) => item.kind === "source" && item.width === undefined);
+  }
+
+  private naturalDisplayWidth(source: string): number {
+    const field = this.findStateField(source);
+    if (field === undefined) return 1;
+    const min = field.min ?? 0;
+    const max = field.max ?? min;
+    const magnitude = Math.max(Math.abs(min), Math.abs(max));
+    return Math.max(1, String(Math.trunc(magnitude)).length);
   }
 
   private reportPackedDisplayLowering(display: ProgramAst["displays"][number]): void {
@@ -3287,13 +3327,14 @@ class EmitContext {
   }
 
   private shouldShareDisplay(display: ProgramAst["displays"][number]): boolean {
-    if (display.items.some((item) => item.kind === "literal")) return false;
-    const sources = display.sources.length;
+    const fields = this.numericDisplayFields(display);
+    if (fields === undefined) return false;
+    const sources = fields.length;
     if (sources < 2) return false;
     const uses = this.displayUseCounts.get(display.name) ?? 0;
     if (uses < 2) return false;
 
-    const inlineCost = estimatePackedDisplayBodyCost(sources);
+    const inlineCost = estimatePackedDisplayBodyCost(fields.map((field) => field.width));
     const helperCost = uses * 2 + inlineCost + 1;
     const inlineTotal = uses * inlineCost;
     return inlineTotal - helperCost >= DISPLAY_HELPER_MIN_SAVINGS;
@@ -3330,23 +3371,24 @@ class EmitContext {
     first: ProgramAst["displays"][number],
     second: ProgramAst["displays"][number],
   ): boolean {
-    if (first.items.some((item) => item.kind === "literal")) return false;
-    if (second.items.some((item) => item.kind === "literal")) return false;
+    const firstFields = this.numericDisplayFields(first);
+    const secondFields = this.numericDisplayFields(second);
+    if (firstFields === undefined || secondFields === undefined) return false;
     const uses = this.showSequenceUseCounts.get(showSequenceKey(first.name, second.name)) ?? 0;
     if (uses < 2) return false;
-    const bodyCost = estimatePackedDisplayBodyCost(first.sources.length) + estimatePackedDisplayBodyCost(second.sources.length);
+    const bodyCost = estimatePackedDisplayBodyCost(firstFields.map((field) => field.width)) + estimatePackedDisplayBodyCost(secondFields.map((field) => field.width));
     const inlineTotal = uses * (bodyCost + 1);
     const helperTotal = uses * 3 + bodyCost + 1;
     return inlineTotal - helperTotal >= DISPLAY_HELPER_MIN_SAVINGS;
   }
 
   private compileTextDisplay(display: ProgramAst["displays"][number], line: number): boolean {
-    const [literal, source, ...rest] = display.items;
+    const normalized = this.collapseTextPrefixDisplay(display);
+    if (normalized === undefined) return false;
+    const { text, source } = normalized;
     if (
-      literal?.kind !== "literal" ||
-      literal.text !== "BEEr " ||
-      source?.kind !== "source" ||
-      rest.length !== 0
+      text !== "BEEr " ||
+      source.width !== undefined && source.width !== 2
     ) {
       return false;
     }
@@ -3364,9 +3406,27 @@ class EmitContext {
     this.emitTwoDigitTextDisplay(source.name, line);
     this.optimizations.push({
       name: "screen-text-lowering",
-      detail: `Lowered screen ${display.name} as visible text ${JSON.stringify(literal.text)} plus ${source.name}.`,
+      detail: `Lowered screen ${display.name} as visible text ${JSON.stringify(text)} plus ${source.name}.`,
     });
     return true;
+  }
+
+  private collapseTextPrefixDisplay(
+    display: ProgramAst["displays"][number],
+  ): { text: string; source: Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }> } | undefined {
+    let text = "";
+    let source: Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }> | undefined;
+    for (const item of display.items) {
+      if (item.kind === "literal") {
+        if (source !== undefined) return undefined;
+        text += item.text;
+        continue;
+      }
+      if (source !== undefined) return undefined;
+      source = item;
+    }
+    if (source === undefined || text.length === 0) return undefined;
+    return { text, source };
   }
 
   private emitTwoDigitTextDisplay(source: string, line: number): void {
@@ -5346,6 +5406,18 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
     values.add("-99");
     values.add("-81");
   }
+  for (const display of ast.displays) {
+    let seenSource = false;
+    for (const item of display.items) {
+      if (item.kind !== "source") continue;
+      if (seenSource) {
+        const width = item.width ?? naturalDisplayWidthForAst(ast, item.name);
+        const scale = String(10 ** width);
+        if (estimateNumberCost(scale) > 1) values.add(scale);
+      }
+      seenSource = true;
+    }
+  }
   const visitExpr = (expr: ExpressionAst): void => {
     if (expr.kind === "number" && estimateNumberCost(expr.raw) > 1) values.add(normalizeConstantLiteral(expr.raw));
     if (expr.kind === "unary") {
@@ -5402,6 +5474,18 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
   for (const proc of ast.procs) visitStatements(proc.body);
   for (const block of ast.blocks) visitStatements(block.body);
   return [...values].filter((value) => value !== "0" && value !== "1").sort((a, b) => estimateNumberCost(b) - estimateNumberCost(a));
+}
+
+function naturalDisplayWidthForAst(ast: ProgramAst, source: string): number {
+  for (const state of ast.states) {
+    const field = state.fields.find((candidate) => candidate.name === source);
+    if (field === undefined) continue;
+    const min = field.min ?? 0;
+    const max = field.max ?? min;
+    const magnitude = Math.max(Math.abs(min), Math.abs(max));
+    return Math.max(1, String(Math.trunc(magnitude)).length);
+  }
+  return 1;
 }
 
 function programContainsCall(ast: ProgramAst, name: string): boolean {
@@ -5933,8 +6017,12 @@ function collectNearAnyHelperStats(
   return stats;
 }
 
-function estimatePackedDisplayBodyCost(sourceCount: number): number {
-  return sourceCount === 0 ? 2 : sourceCount * 2;
+function estimatePackedDisplayBodyCost(widthsOrCount: number | readonly number[]): number {
+  if (typeof widthsOrCount === "number") {
+    return widthsOrCount === 0 ? 2 : widthsOrCount * 2;
+  }
+  if (widthsOrCount.length === 0) return 2;
+  return 2 + widthsOrCount.slice(1).reduce((cost, width) => cost + String(10 ** width).length + 3, 0);
 }
 
 function programUsesTicTacToeHelpers(ast: ProgramAst): boolean {

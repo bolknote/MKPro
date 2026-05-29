@@ -105,12 +105,16 @@ state {
 }
 
 screen beer {
-  show "BEEr ", bottles
+  show "BEEr", bottles:02
 }
 ```
 
-The counter range gives the natural visible width: `0..99` is two digits,
-`0..9999` is four. The compiler decides whether that screen becomes ordinary
+Commas insert one visible space between fragments, so `show a, b` means `a`,
+space, then `b`. Adjacent fragments are concatenated directly:
+`show a "-" b` means `a-b`. A source can request a fixed width with zero
+padding, such as `bottles:02` or `score:03`; without an explicit width, the
+counter range gives the natural visible width (`0..99` is two digits,
+`0..9999` is four). The compiler decides whether that screen becomes ordinary
 numeric output, packed display bytes, sign-digit forms, `К ИНВ`, or another
 proved MK-61 lowering.
 

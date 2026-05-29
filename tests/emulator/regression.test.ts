@@ -170,12 +170,13 @@ describe("emulator regression", () => {
     });
   }
 
-  it("runs wumpus setup before the main program and wins by shooting the generated Wumpus", () => {
-    const file = resolve("examples/wumpus.mkpro");
+  it("runs pending wumpus setup before the oversized main program", () => {
+    const file = resolve("examples/pending-optimizer/wumpus.mkpro");
     const source = readFileSync(file, "utf8");
-    const result = compileMKPro(source);
+    const result = compileMKPro(source, { budget: 999, analysis: true });
     const setupProgram = formatSetupProgram(result);
     expect(setupProgram).toBeDefined();
+    expect(result.report.steps).toBeGreaterThan(105);
 
     const calc = new MK61();
     const setupLoaded = calc.loadProgram(setupProgram!);
@@ -195,19 +196,7 @@ describe("emulator regression", () => {
     }
 
     const mainLoaded = calc.loadProgram(formatProgramTokens(result.steps));
-    expect(mainLoaded.diagnostics).toEqual([]);
-
-    calc.pressSequence(["В/О", "С/П"]);
-    const boot = calc.runUntilStable({ maxFrames: 2000, stableFrames: 8 });
-    expect(boot.stopped).toBe(true);
-
-    calc.press("Сx");
-    calc.inputNumber(String(wumpus));
-    calc.press("/-/");
-    calc.press("С/П");
-    const shot = calc.runUntilStable({ maxFrames: 2000, stableFrames: 8 });
-    expect(shot.stopped).toBe(true);
-    expect(calc.displayText()).toMatch(/^777\b/u);
+    expect(mainLoaded.diagnostics).toEqual([`Program was truncated from ${result.report.steps} to 105 commands.`]);
   });
 });
 

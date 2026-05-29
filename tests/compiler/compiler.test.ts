@@ -514,6 +514,27 @@ program RepeatedPackedDisplay {
     expect(result.report.optimizations.some((item) => item.name === "packed-display-helper-call")).toBe(true);
   });
 
+  it("packs multi-field show values instead of adding them", () => {
+    const result = compileOk(`
+program DisplayFields {
+  state {
+    a: counter 0..9 = 2
+    b: counter 0..9 = 5
+  }
+  screen view {
+    show a, b
+  }
+  turn {
+    show view
+  }
+}
+`);
+
+    expect(result.steps.some((step) => step.comment === "packed display field shift")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "packed display field append")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "packed display combine")).toBe(false);
+  });
+
   it("shares repeated pure expression bodies through a normal helper", () => {
     const result = compileOk(`
 program RepeatedExpression {

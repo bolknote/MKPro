@@ -15,7 +15,7 @@ describe("setup formatting", () => {
     const source = readFileSync(resolve("examples/game-100-pig.mkpro"), "utf8");
     const result = compileMKPro(source);
 
-    expect(formatSetupBlock(result)).toBe("`R3=0; R0=0; R6=0; R5=0; R4=0; Rc=20; Rd=100; Re=-100`");
+    expect(formatSetupBlock(result)).toBe("`R3=0; R0=0; R6=0; R5=0; R4=0; Rb=20; Rc=100; Re=1000; Rd=-100`");
     expect(formatExplain(result)).toContain("player_total -> R3: 0");
     expect(formatExplain(result)).toContain("Setup Block:");
   });
@@ -36,16 +36,16 @@ describe("setup formatting", () => {
   });
 
   it("keeps keys output free of emulator setup-block syntax", () => {
-    const source = readFileSync(resolve("examples/wumpus.mkpro"), "utf8");
-    const keys = formatKeys(compileMKPro(source));
+    const source = readFileSync(resolve("examples/pending-optimizer/wumpus.mkpro"), "utf8");
+    const keys = formatKeys(compileMKPro(source, { budget: 999, analysis: true }));
 
     expect(keys).not.toContain("`");
     expect(keys.split(/\r?\n/u)[0]).toBe("1");
   });
 
   it("shows generated setup in the default listing output", () => {
-    const source = readFileSync(resolve("examples/wumpus.mkpro"), "utf8");
-    const listing = formatListing(compileMKPro(source));
+    const source = readFileSync(resolve("examples/pending-optimizer/wumpus.mkpro"), "utf8");
+    const listing = formatListing(compileMKPro(source, { budget: 999, analysis: true }));
 
     expect(listing).toContain("# Setup Listing");
     expect(listing).toContain("setup wumpus");

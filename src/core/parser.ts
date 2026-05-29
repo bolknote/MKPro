@@ -3240,7 +3240,28 @@ function parseIdentifierList(text: string): string[] {
 }
 
 function parseDisplayItemList(text: string, line: number): DisplayItemAst[] {
-  return splitDisplayArgs(text, line).map((part) => parseDisplayItem(part, line));
+  const tokens = tokenizeDisplayItems(text, line);
+  const items: DisplayItemAst[] = [];
+  let pendingComma = false;
+  let justReadItem = false;
+
+  for (const token of tokens) {
+    if (token.kind === "comma") {
+      if (!justReadItem || pendingComma) throw new ParseError("Display comma must separate two fragments", line);
+      pendingComma = true;
+      justReadItem = false;
+      continue;
+    }
+    if (pendingComma) {
+      items.push({ kind: "literal", text: " ", synthetic: "comma-space", line });
+      pendingComma = false;
+    }
+    items.push(parseDisplayItem(token.text, line));
+    justReadItem = true;
+  }
+
+  if (pendingComma) throw new ParseError("Display comma must separate two fragments", line);
+  return items;
 }
 
 function parseDisplayItem(text: string, line: number): DisplayItemAst {
@@ -3252,8 +3273,19 @@ function parseDisplayItem(text: string, line: number): DisplayItemAst {
       line,
     };
   }
-  if (/^[A-Za-z_][\w]*$/u.test(trimmed)) {
-    return { kind: "source", name: trimmed, line };
+  const source = /^([A-Za-z_][\w]*)(?::(0?)(\d+))?$/u.exec(trimmed);
+  if (source) {
+    const [, name, zero, widthText] = source;
+    const item: DisplayItemAst = { kind: "source", name: name!, line };
+    if (widthText !== undefined) {
+      const width = Number(widthText);
+      if (!Number.isInteger(width) || width <= 0 || width > 8) {
+        throw new ParseError(`Display width must be 1..8, got '${widthText}'`, line);
+      }
+      item.width = width;
+      item.pad = zero === "0" ? "zero" : "space";
+    }
+    return item;
   }
   throw new ParseError(`Display item must be a string literal or state name, got '${trimmed}'`, line);
 }
@@ -3268,33 +3300,60 @@ function parseQuotedDisplayText(text: string, line: number): string {
   throw new ParseError(`Invalid display string literal '${text}'`, line);
 }
 
-function splitDisplayArgs(text: string, line: number): string[] {
-  const parts: string[] = [];
-  let start = 0;
-  let quoted = false;
-  let escaped = false;
-  for (let index = 0; index < text.length; index += 1) {
+type DisplayToken =
+  | { kind: "comma" }
+  | { kind: "item"; text: string };
+
+function tokenizeDisplayItems(text: string, line: number): DisplayToken[] {
+  const tokens: DisplayToken[] = [];
+  let index = 0;
+
+  while (index < text.length) {
     const char = text[index]!;
-    if (escaped) {
-      escaped = false;
+    if (/\s/u.test(char)) {
+      index += 1;
       continue;
     }
-    if (quoted && char === "\\") {
-      escaped = true;
+    if (char === ",") {
+      tokens.push({ kind: "comma" });
+      index += 1;
       continue;
     }
     if (char === "\"") {
-      quoted = !quoted;
+      const start = index;
+      index += 1;
+      let escaped = false;
+      let closed = false;
+      while (index < text.length) {
+        const current = text[index]!;
+        if (escaped) {
+          escaped = false;
+          index += 1;
+          continue;
+        }
+        if (current === "\\") {
+          escaped = true;
+          index += 1;
+          continue;
+        }
+        if (current === "\"") {
+          index += 1;
+          closed = true;
+          break;
+        }
+        index += 1;
+      }
+      if (!closed) throw new ParseError("Unclosed display string literal", line);
+      tokens.push({ kind: "item", text: text.slice(start, index) });
       continue;
     }
-    if (char === "," && !quoted) {
-      parts.push(text.slice(start, index).trim());
-      start = index + 1;
-    }
+
+    const start = index;
+    while (index < text.length && !/[\s,]/u.test(text[index]!)) index += 1;
+    tokens.push({ kind: "item", text: text.slice(start, index) });
   }
-  if (quoted) throw new ParseError("Unclosed display string literal", line);
-  parts.push(text.slice(start).trim());
-  return parts.filter((part) => part.length > 0);
+
+  return tokens;
 }
 
 export function parseExpression(text: string, line = 0): ExpressionAst {

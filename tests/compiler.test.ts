@@ -58,7 +58,7 @@ describe("MK-Pro compiler", () => {
 
     for (const path of PENDING_OPTIMIZER_EXAMPLES) {
       expect(RUNNABLE_EXAMPLES).not.toContain(path.replace("examples/pending-optimizer/", "examples/"));
-      expect(() => compileMKPro(source(path), { budget: 999 })).not.toThrow(/real rule lowerers before code generation/u);
+      expect(() => compileMKPro(source(path), { budget: 999, analysis: true })).not.toThrow(/real rule lowerers before code generation/u);
     }
   });
 
@@ -113,14 +113,14 @@ describe("MK-Pro compiler", () => {
     expect(result.report.ir.v2).toBe(true);
     expect(result.report.machine).toBe("mk61");
     expect(result.report.steps).toBeLessThanOrEqual(105);
-    expect(result.report.steps).toBe(28);
+    expect(result.report.steps).toBe(37);
     expect(result.report.candidates.some((candidate) => candidate.variant === "dark-indirect-table")).toBe(true);
     expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "code-data-overlay")).toBe(true);
     expect(result.report.proofs.some((proof) => proof.id === "value-ranges")).toBe(true);
     expect(result.report.optimizations.some((optimization) => optimization.name === "dispatch-source-register")).toBe(true);
     expect(result.report.optimizations.some((optimization) => optimization.name === "show-read-fusion")).toBe(true);
     expect(result.report.optimizations.some((optimization) => optimization.name === "fl-unit-decrement")).toBe(true);
-    expect(result.report.optimizations.some((optimization) => optimization.name === "redundant-prologue-elimination")).toBe(true);
+    expect(result.report.optimizations.some((optimization) => optimization.name === "packed-display-helper")).toBe(true);
   });
 
   it("lowers small coordinate-set helpers to generic near/equality arithmetic", () => {
@@ -266,7 +266,7 @@ program SimpleRules {
     expect(result.report.reference?.parity).toBe("equal");
     expect(result.report.steps).toBe(53);
     expect(result.report.warnings.join("\n")).not.toMatch(/was not found/u);
-    expect(mkproSource).toContain(`show "BEEr ", bottles`);
+    expect(mkproSource).toContain(`show "BEEr", bottles:02`);
     expect(mkproSource).not.toMatch(/\braw\s*\{/u);
     expect(codes).toEqual(reference.codes);
     expect(calc.runUntilStable({ maxFrames: 200, stableFrames: 6 }).stopped).toBe(true);
@@ -358,7 +358,7 @@ program SimpleRules {
   it("merges dispatch cases that are identical to the default branch", () => {
     const result = compileMKPro(source("examples/dangerous-loading.mkpro"));
 
-    expect(result.report.steps).toBe(89);
+    expect(result.report.steps).toBe(96);
     expect(result.report.reference?.referenceSpan).toBe(103);
     expect(result.report.optimizations.some((optimization) => optimization.name === "dispatch-default-merge")).toBe(true);
     expect(result.report.optimizations.some((optimization) => optimization.name === "tail-call-lowering")).toBe(true);

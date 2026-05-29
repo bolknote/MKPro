@@ -13,22 +13,21 @@ import { compileMKPro } from "../../src/core/index.ts";
 
 const EXAMPLE_BASELINE: Record<string, number> = {
   "99-bottles": 53,
-  alaram: 94,
+  alaram: 97,
   basic: 8,
-  "cave-sketch": 85,
-  "dangerous-loading": 89,
-  dungeon: 94,
+  "cave-sketch": 90,
+  "dangerous-loading": 96,
+  dungeon: 101,
   "fox-hunt-100": 97,
   "fox-hunt-mk61": 88,
-  "game-100-pig": 93,
-  human: 28,
-  lunar: 51,
+  "game-100-pig": 97,
+  human: 37,
+  lunar: 57,
   "minesweeper-9x7": 79,
   "minesweeper-9x9": 79,
-  "raja-yoga": 84,
-  "sea-battle": 67,
-  "tiny-game": 24,
-  wumpus: 105,
+  "raja-yoga": 90,
+  "sea-battle": 71,
+  "tiny-game": 26,
 };
 
 // pending-optimizer programs overflow the physical MK-61 address space, so
@@ -42,13 +41,14 @@ const EXAMPLE_BASELINE: Record<string, number> = {
 // Later optimizer passes have recovered part of that growth; the numbers below
 // are the current locked ceilings, not historical deltas.
 const PENDING_BASELINE: Record<string, number> = {
-  "cave-highlevel-baseline": 193,
-  "cave-treasure": 188,
-  "giants-country": 201,
-  labyrinth777: 240,
-  teleport: 236,
-  "tic-tac-toe-4x4": 242,
-  "treasure-hunter-2": 162,
+  "cave-highlevel-baseline": 203,
+  "cave-treasure": 199,
+  "giants-country": 207,
+  labyrinth777: 244,
+  teleport: 247,
+  "tic-tac-toe-4x4": 246,
+  "treasure-hunter-2": 166,
+  wumpus: 111,
 };
 
 function exampleSteps(relativePath: string, analysis: boolean): number {

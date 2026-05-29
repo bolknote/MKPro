@@ -175,12 +175,15 @@ export type DisplayItemAst =
 export interface DisplayLiteralItemAst {
   kind: "literal";
   text: string;
+  synthetic?: "comma-space";
   line: number;
 }
 
 export interface DisplaySourceItemAst {
   kind: "source";
   name: string;
+  width?: number;
+  pad?: "space" | "zero";
   line: number;
 }
 
