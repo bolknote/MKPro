@@ -307,22 +307,46 @@ program LiteralVideoScreen {
     expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "display-bytes")).toBe(true);
   });
 
-  it("lowers literal calculator error screens", () => {
-    const result = compileOk(`
+  it("lowers literal calculator error screens as resumable pauses", () => {
+    const source = `
 program LiteralErrorScreen {
   screen mine {
     show "ЕГГОГ"
   }
+  screen next {
+    show "1"
+  }
   turn {
     show mine
+    show next
   }
 }
-`);
+`;
 
+    const result = compileOk(source);
     expect(hasOptimization(result, "screen-video-literal-lowering")).toBe(true);
-    expect(hasOptimization(result, "error-stop")).toBe(true);
-    expect(result.steps.map((step) => step.opcode)).toEqual(expect.arrayContaining([0x2b]));
+    expect(hasOptimization(result, "screen-error-literal-lowering")).toBe(true);
+    expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "error-stops")).toBe(true);
+    expect(result.steps.slice(0, 2).map((step) => step.opcode)).toEqual([0x2b, 0x54]);
     expect(result.steps.map((step) => step.mnemonic)).not.toEqual(expect.arrayContaining(["F 1/x"]));
+
+    const { MK61 } = require("../emulator/mk61.cjs") as {
+      MK61: new () => {
+        loadProgram: (codes: number[]) => { diagnostics: string[] };
+        pressSequence: (keys: string[]) => void;
+        press: (key: string) => void;
+        runUntilStable: (options: { maxFrames: number; stableFrames: number }) => { stopped: boolean };
+        displayText: () => string;
+      };
+    };
+    const calc = new MK61();
+    expect(calc.loadProgram(result.steps.map((step) => step.opcode)).diagnostics).toEqual([]);
+    calc.pressSequence(["В/О", "С/П"]);
+    expect(calc.runUntilStable({ maxFrames: 200, stableFrames: 6 }).stopped).toBe(true);
+    expect(calc.displayText().toUpperCase()).toContain("ЕГГ");
+    calc.press("С/П");
+    expect(calc.runUntilStable({ maxFrames: 200, stableFrames: 6 }).stopped).toBe(true);
+    expect(calc.displayText()).toBe("1,");
   });
 
   it("lowers zero-digit literal tails through the 0C-tail display trick", () => {

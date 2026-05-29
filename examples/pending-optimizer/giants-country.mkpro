@@ -45,12 +45,8 @@ program GiantsCountry {
     show challenge
   }
 
-  screen death {
-    show "ЕГГОГ"
-  }
-
   rule exhausted {
-    show death
+    stop "ЕГГОГ"
   }
 
   turn {

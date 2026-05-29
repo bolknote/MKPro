@@ -96,10 +96,12 @@ const REGISTER_ORDER: RegisterName[] = [
   "e",
 ];
 
+const RANDOM_CELLS_SCRATCH = "__random_cells_scratch";
 const SWITCH_SCRATCH_PREFIX = "__switch_";
 const DISPATCH_SCRATCH_PREFIX = "__dispatch_";
 const TICTACTOE_MASK_SCRATCH_PREFIX = "__ttt_mask_";
 const BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
+const SHARED_BIT_MASK_SCRATCH = "__bit_mask_shared";
 const IF_SELECTOR_SCRATCH_PREFIX = "__if_selector_";
 const DISPLAY_TEMPLATE_VALUE_PREFIX = "__display_value_";
 const DISPLAY_TEMPLATE_LOOP_PREFIX = "__display_loop_";
@@ -207,6 +209,11 @@ interface LoweringOptions {
   // continuation only on the successful path. Speculative because the extra
   // return frame and helper placement can perturb later layout decisions.
   guardedPrologueGadgets?: boolean;
+  // Route bit_mask(index) builders through one helper when multiple spatial
+  // operations need the same quotient/remainder construction. Speculative:
+  // a lone spatial hit gets larger, but programs that also compute the mask
+  // inline can share the body.
+  sharedBitMaskHelperCalls?: boolean;
 }
 
 type DisplaySourceItem = Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }>;
@@ -327,6 +334,16 @@ export function compileMKPro(
     "guarded-prologue-hoisted-proc-layout",
     "Selected guarded prologue gadget extraction with hoisted procedure layout",
   );
+  tryCandidate(
+    { sharedBitMaskHelperCalls: true },
+    "shared-bit-mask-helper-layout",
+    "Selected shared bit_mask helper calls after full layout",
+  );
+  tryCandidate(
+    { sharedBitMaskHelperCalls: true, hoistSharedHelpers: true },
+    "shared-bit-mask-helper-hoisted-layout",
+    "Selected shared bit_mask helper calls with hoisted helper layout",
+  );
 
   const selectBest = (): { best: CompileResult; selected: (typeof candidates)[number] | undefined } => {
     let best = primary;
@@ -358,6 +375,8 @@ export function compileMKPro(
       {},
       { shareRandomCell: true, hoistSharedHelpers: true },
       { freeResidualDispatchScratch: true },
+      { sharedBitMaskHelperCalls: true },
+      { sharedBitMaskHelperCalls: true, hoistSharedHelpers: true },
     ];
     const triedDemotions = new Set<string>();
     for (const base of demoteBases) {
@@ -496,6 +515,7 @@ function compileMKProOnce(
     diagnostics,
     loweringOptions.freeResidualDispatchScratch === true,
     loweringOptions.suppressConstantPreloads,
+    loweringOptions.sharedBitMaskHelperCalls === true,
   );
   const context = new EmitContext(
     ast,
@@ -2082,11 +2102,74 @@ class EmitContext {
     }
     for (const field of fields) {
       if (field.initial === undefined) continue;
+      const placement = randomCellsPlacement(field.initial);
+      if (placement !== undefined) {
+        this.compileRandomCellsSetup(field, placement);
+        continue;
+      }
       this.compileExpression(field.initial);
       this.emitStore(field.name, `setup ${field.name}`, field.line, true);
     }
     this.emitOp(0x50, "С/П", "setup complete");
     this.compileRuntimeHelpers();
+  }
+
+  // Build a cell mask holding exactly `count` distinct random cells using Floyd's
+  // algorithm. Each iteration draws a cell from a growing range and, on a
+  // collision with an already-chosen cell, substitutes the top of the range,
+  // which is provably fresh. The construction lives in the (uncounted) setup
+  // program; the field's register is the accumulating mask and one shared
+  // scratch register holds the current draw.
+  private compileRandomCellsSetup(field: StateFieldAst, placement: RandomCellsPlacement): void {
+    if (this.randomCellsScratchRegister() === undefined) {
+      this.diagnostics.push(buildDiagnostic(
+        "error",
+        `random_cells() needs one free register for setup, but every register is allocated.`,
+        field.line,
+      ));
+      return;
+    }
+    const { lo, cells, count } = placement;
+    const line = field.line;
+    const ident = (name: string): ExpressionAst => ({ kind: "identifier", name });
+    const assign = (target: string, expr: ExpressionAst): StatementAst => ({ kind: "assign", target, expr, line });
+    const drawCell = (range: number): ExpressionAst =>
+      addExpressions(
+        numberExpression(lo),
+        intExpression(multiplyExpressions({ kind: "call", callee: "random", args: [] }, numberExpression(range))),
+      );
+    const draw = ident(RANDOM_CELLS_SCRATCH);
+    const mask = ident(field.name);
+    const statements: StatementAst[] = [];
+
+    statements.push(assign(RANDOM_CELLS_SCRATCH, drawCell(cells - count + 1)));
+    statements.push(assign(field.name, bitMaskExpression(draw)));
+    for (let chosen = 1; chosen < count; chosen += 1) {
+      const range = cells - count + 1 + chosen;
+      statements.push(assign(RANDOM_CELLS_SCRATCH, drawCell(range)));
+      statements.push({
+        kind: "if",
+        condition: { left: bitAndExpression(mask, bitMaskExpression(draw)), op: "!=", right: numberExpression(0) },
+        thenBody: [assign(RANDOM_CELLS_SCRATCH, numberExpression(lo + range - 1))],
+        line,
+      });
+      statements.push(assign(field.name, bitOrExpression(mask, bitMaskExpression(draw))));
+    }
+    this.compileStatements(statements);
+  }
+
+  private randomCellsScratchRegister(): RegisterName | undefined {
+    const existing = this.allocation.registers[RANDOM_CELLS_SCRATCH];
+    if (existing !== undefined) return existing;
+    const used = new Set<RegisterName>([
+      ...Object.values(this.allocation.registers),
+      ...Object.values(this.allocation.constants),
+      ...(this.allocation.negativeZeroDegree === undefined ? [] : [this.allocation.negativeZeroDegree]),
+    ]);
+    const free = REGISTER_ORDER.find((register) => !used.has(register));
+    if (free === undefined) return undefined;
+    this.allocation.registers[RANDOM_CELLS_SCRATCH] = free;
+    return free;
   }
 
   private compileProcedures(): void {
@@ -2235,7 +2318,12 @@ class EmitContext {
       this.emitLabel(helper.label);
       this.emitStore(helper.scratch, "spatial hit index", helper.line);
       this.emitRecall(helper.mask, "spatial hit mask", helper.line);
-      this.compileBitMaskWithQuotientScratch({ kind: "identifier", name: helper.scratch }, helper.scratch, helper.line);
+      this.compileBitMaskWithQuotientScratch(
+        { kind: "identifier", name: helper.scratch },
+        helper.scratch,
+        helper.line,
+        { forceInline: true },
+      );
       this.emitOp(0x37, "К ∧", "spatial hit test", helper.line);
       this.emitOp(0x32, "К ЗН", "spatial hit to count", helper.line);
       this.emitOp(0x52, "В/О", "spatial hit return", helper.line);
@@ -2710,13 +2798,34 @@ class EmitContext {
     return true;
   }
 
-  private compileBitMaskWithQuotientScratch(index: ExpressionAst, scratch: string, line: number | undefined): void {
+  private compileBitMaskWithQuotientScratch(
+    index: ExpressionAst,
+    scratch: string,
+    line: number | undefined,
+    options: { forceInline?: boolean } = {},
+  ): void {
+    const helperScratch = this.sharedBitMaskHelperScratch() ?? scratch;
+    if (options.forceInline !== true && this.loweringOptions.sharedBitMaskHelperCalls === true) {
+      const helper = this.ensureSpatialBitMaskHelper(helperScratch, line);
+      this.compileExpression(index);
+      this.emitJump(0x53, "ПП", helper.label, "bit_mask helper", line);
+      this.optimizations.push({
+        name: "bit-mask-helper-call",
+        detail: `Shared bit_mask(${expressionToIntentText(index)}) through ${helper.label}.`,
+      });
+      return;
+    }
     this.compileExpression(index);
     this.emitBitMaskFromCurrentXWithQuotientScratch(scratch, line);
     this.optimizations.push({
       name: "bit-mask-quotient-reuse",
       detail: `Reused ${expressionToIntentText(index)} / 4 through ${scratch} while building bit_mask().`,
     });
+  }
+
+  private sharedBitMaskHelperScratch(): string | undefined {
+    if (this.loweringOptions.sharedBitMaskHelperCalls !== true) return undefined;
+    return this.allocation.registers[SHARED_BIT_MASK_SCRATCH] === undefined ? undefined : SHARED_BIT_MASK_SCRATCH;
   }
 
   private emitBitMaskFromCurrentXWithQuotientScratch(scratch: string, line: number | undefined): void {
@@ -3894,7 +4003,6 @@ class EmitContext {
 
   private statementTerminates(statement: StatementAst, seenProcs: Set<string>): boolean {
     if (statement.kind === "halt" || statement.kind === "loop" || statement.kind === "trap") return true;
-    if (statement.kind === "show" && this.showTerminates(statement.display)) return true;
     if (statement.kind === "if") {
       return statement.elseBody !== undefined &&
         this.statementListTerminates(statement.thenBody, new Set(seenProcs)) &&
@@ -3917,7 +4025,6 @@ class EmitContext {
   private statementEndsMachineFlow(statement: StatementAst, seenProcs: Set<string>): boolean {
     if (statement.kind === "loop" || statement.kind === "trap") return true;
     if (statement.kind === "halt") return statement.literal !== undefined;
-    if (statement.kind === "show" && this.showTerminates(statement.display)) return true;
     if (statement.kind === "if") {
       return statement.elseBody !== undefined &&
         this.statementListEndsMachineFlow(statement.thenBody, new Set(seenProcs)) &&
@@ -3937,13 +4044,6 @@ class EmitContext {
     if (proc === undefined || seenProcs.has(proc.name)) return false;
     seenProcs.add(proc.name);
     return this.statementListEndsMachineFlow(proc.body, seenProcs);
-  }
-
-  private showTerminates(displayName: string): boolean {
-    const display = this.ast.displays.find((candidate) => candidate.name === displayName);
-    const literal = display === undefined ? undefined : this.collapseLiteralOnlyDisplay(display);
-    const program = literal === undefined ? undefined : displayLiteralProgram(literal);
-    return program?.kind === "error";
   }
 
   private compileShow(displayName: string, line: number): void {
@@ -4570,10 +4670,11 @@ class EmitContext {
     }
 
     if (program.kind === "error") {
-      this.emitErrorStopOpcode(`show ${display.name}`, line);
+      this.emitErrorStopOpcode(`show ${display.name}`, line, true);
+      this.emitOp(0x54, "К НОП", `show ${display.name} skipped after error pause`, line, true);
       this.optimizations.push({
-        name: "error-stop",
-        detail: `Used one-cell error opcode to show literal ЕГГ0Г for screen ${display.name}.`,
+        name: "screen-error-literal-lowering",
+        detail: `Lowered screen ${display.name} as a resumable ЕГГ0Г pause with a skipped padding cell.`,
       });
     } else if (program.kind === "kinv") {
       this.emitNumberOrPreload(program.digits);
@@ -4729,8 +4830,8 @@ class EmitContext {
     });
   }
 
-  private emitErrorStopOpcode(comment: string, line: number): void {
-    this.emitOp(0x2b, "error 2B", comment, line);
+  private emitErrorStopOpcode(comment: string, line: number, raw = false): void {
+    this.emitOp(0x2b, "error 2B", comment, line, raw);
   }
 
   private sharedLiteralDisplayHelper(
@@ -5034,8 +5135,11 @@ class EmitContext {
     if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_has" || expr.args.length !== 2) return undefined;
     const [mask, index] = expr.args;
     if (mask?.kind !== "identifier" || index === undefined) return undefined;
-    if (!programHasLineCountForMask(this.ast, mask.name)) return undefined;
-    const scratch = spatialHitScratchName(mask.name);
+    if (
+      !programHasLineCountForMask(this.ast, mask.name) &&
+      this.loweringOptions.sharedBitMaskHelperCalls !== true
+    ) return undefined;
+    const scratch = this.sharedBitMaskHelperScratch() ?? spatialHitScratchName(mask.name);
     if (!this.allocation.registers[scratch]) return undefined;
     const helper = this.ensureSpatialBitMaskHelper(scratch, line);
     this.compileExpression(index);
@@ -6915,6 +7019,7 @@ function allocateRegisters(
   diagnostics: Diagnostic[],
   freeResidualDispatchScratch = false,
   suppressConstantPreloads: ReadonlySet<string> = new Set(),
+  sharedBitMaskHelperCalls = false,
 ): RegisterAllocation {
   const declared = new Set<string>();
   const hints = new Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>();
@@ -6954,7 +7059,7 @@ function allocateRegisters(
   collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch);
   collectTicTacToeScratchVariables(ast, variables);
   collectBitMaskScratchVariables(ast, variables);
-  collectSpatialHitScratchVariables(ast, variables);
+  collectSpatialHitScratchVariables(ast, variables, sharedBitMaskHelperCalls);
   collectSpatialCountScratchVariables(ast, variables);
   collectGuardedUpdateScratchVariables(ast, variables);
   collectDisplayTemplateScratchVariables(ast, variables);
@@ -8512,7 +8617,12 @@ function membershipConditionHandledBeforeGenericBitHas(statement: Extract<Statem
     isReusableMembershipSetRun(statement);
 }
 
-function collectSpatialHitScratchVariables(ast: ProgramAst, variables: Set<string>): void {
+function collectSpatialHitScratchVariables(
+  ast: ProgramAst,
+  variables: Set<string>,
+  sharedBitMaskHelperCalls = false,
+): void {
+  if (sharedBitMaskHelperCalls) variables.add(SHARED_BIT_MASK_SCRATCH);
   for (const [mask, stats] of collectBitHasConditionStats(ast)) {
     if (bitHasConditionHelperSaves(mask, stats)) variables.add(spatialHitScratchName(mask));
   }
@@ -10572,6 +10682,23 @@ function cellMaskExpression(x: ExpressionAst, y: ExpressionAst): ExpressionAst {
   );
 }
 
+interface RandomCellsPlacement {
+  lo: number;
+  cells: number;
+  count: number;
+}
+
+// Recognize the `__random_cells(lo, cells, count)` sentinel emitted for
+// `random_cells([domain,] K)` cell-mask initializers.
+function randomCellsPlacement(expr: ExpressionAst): RandomCellsPlacement | undefined {
+  if (expr.kind !== "call" || expr.callee !== "__random_cells" || expr.args.length !== 3) return undefined;
+  const lo = numericLiteralValue(expr.args[0]!);
+  const cells = numericLiteralValue(expr.args[1]!);
+  const count = numericLiteralValue(expr.args[2]!);
+  if (lo === undefined || cells === undefined || count === undefined) return undefined;
+  return { lo, cells, count };
+}
+
 function bitMaskExpression(index: ExpressionAst): ExpressionAst {
   const nibble = intExpression(divideExpressions(index, numberExpression(4)));
   const offset = subtractExpressions(index, multiplyExpressions(nibble, numberExpression(4)));
@@ -11999,7 +12126,7 @@ const optimizerCapabilities: Array<{
     category: "trap",
     source: "mk61-delta",
     requires: ["error-stops"],
-    activeWhen: ["error-stop"],
+    activeWhen: ["error-stop", "screen-error-literal-lowering"],
     detail: "Use domain-error stops only for explicit trap intent or after verifier proves the failure mode is acceptable.",
   },
   {
@@ -12394,8 +12521,11 @@ function buildMachineFeaturesUsed(
   if (optimizations.some((optimization) => optimization.name === "r0-indirect-counter")) {
     add("r0-t-alias", "Optimizer used R0 indirect behavior with explicit R0 transformation accounted for.", "optimizer");
   }
-  if (optimizations.some((optimization) => optimization.name === "error-stop")) {
-    add("error-stops", "Compiler emitted a domain-error stop for explicit trap semantics.", "optimizer");
+  if (optimizations.some((optimization) =>
+    optimization.name === "error-stop" ||
+    optimization.name === "screen-error-literal-lowering"
+  )) {
+    add("error-stops", "Compiler emitted a domain-error pause or explicit trap.", "optimizer");
   }
   if (cellRoles.some((cell) => cell.roles.includes("overlay"))) {
     add("code-data-overlay", "Layout marked address cells as reusable code/data overlay candidates.", "layout");

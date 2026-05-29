@@ -34,10 +34,6 @@ program Alaram {
     show "8СГ -78"
   }
 
-  screen crash {
-    show "ЕГГОГ"
-  }
-
   screen shot_down {
     show shot_down_pattern
   }
@@ -47,7 +43,7 @@ program Alaram {
   }
 
   rule ground {
-    show crash
+    stop "ЕГГОГ"
   }
 
   rule tail_gun {

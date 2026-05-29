@@ -34,12 +34,8 @@ program Dungeon {
     show plan
   }
 
-  screen death {
-    show "ЕГГОГ"
-  }
-
   rule lost {
-    show death
+    stop "ЕГГОГ"
   }
 
   turn {

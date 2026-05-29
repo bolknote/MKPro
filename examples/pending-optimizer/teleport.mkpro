@@ -23,12 +23,8 @@ program Teleport {
     show pos danger charges loot
   }
 
-  screen caught_view {
-    show "ЕГГОГ"
-  }
-
   rule caught {
-    show caught_view
+    stop "ЕГГОГ"
   }
 
   turn {

@@ -34,8 +34,8 @@ Generated with `npm run examples:size`.
 | `wumpus.mkpro` | 104 | - | - | ok: no reference | main+setup load ok |
 | `pending-optimizer/cave-highlevel-baseline.mkpro` | 134 | 105 | +29 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/cave-treasure.mkpro` | 150 | 105 | +45 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/giants-country.mkpro` | 180 | 105 | +75 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/giants-country.mkpro` | 179 | 105 | +74 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/labyrinth777.mkpro` | 210 | 105 | +105 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/teleport.mkpro` | 221 | 105 | +116 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/teleport.mkpro` | 215 | 105 | +110 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/tic-tac-toe-4x4.mkpro` | 219 | 105 | +114 | pending optimizer | not loaded: main >105 |
 | `pending-optimizer/treasure-hunter-2.mkpro` | 141 | 105 | +36 | pending optimizer | setup load ok; main >105 |

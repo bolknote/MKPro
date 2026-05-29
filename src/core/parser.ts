@@ -1366,7 +1366,54 @@ function lowerV2InitialExpression(field: V2StateFieldAst, context: V2LoweringCon
   if (field.type === "cells" && initial.trim() === "random()") {
     return lowerV2Expression("int(random() * 999)", field.line);
   }
+  if (field.type === "cells") {
+    const placement = lowerRandomCellsInitial(field, initial.trim(), context);
+    if (placement !== undefined) return placement;
+  }
   return lowerV2Expression(initial, field.line, context);
+}
+
+// `random_cells([domain,] K)` initializes a cell mask with K *distinct* random
+// cells. It is lowered to the `__random_cells(lo, N, K)` sentinel so the setup
+// program can emit Floyd's distinct-sampling construction; the main program
+// never evaluates field initials.
+function lowerRandomCellsInitial(
+  field: V2StateFieldAst,
+  initial: string,
+  context: V2LoweringContext,
+): ExpressionAst | undefined {
+  const match = /^random_cells\s*\(\s*(?:([A-Za-z_]\w*)\s*,\s*)?(\d+)\s*\)$/u.exec(initial);
+  if (!match) return undefined;
+  const domain = match[1] ?? field.domain;
+  if (domain === undefined) {
+    throw new ParseError("random_cells() needs a board domain", field.line);
+  }
+  if (field.domain !== undefined && match[1] !== undefined && match[1] !== field.domain) {
+    throw new ParseError(
+      `random_cells() domain '${match[1]}' must match the field's domain '${field.domain}'`,
+      field.line,
+    );
+  }
+  const board = context.boards.get(domain);
+  if (board === undefined) {
+    throw new ParseError(`random_cells() references unknown board '${domain}'`, field.line);
+  }
+  if (board.height !== 1 && board.width !== 1) {
+    throw new ParseError("random_cells() currently supports 1-D boards (width 1 or height 1)", field.line);
+  }
+  const cellCount = board.width * board.height;
+  const lo = board.height === 1 ? board.xMin : board.yMin;
+  const count = Number(match[2]);
+  if (count < 1 || count > cellCount) {
+    throw new ParseError(`random_cells() count must be between 1 and ${cellCount}`, field.line);
+  }
+  return { kind: "call", callee: "__random_cells", args: [numberLiteral(lo), numberLiteral(cellCount), numberLiteral(count)] };
+}
+
+function numberLiteral(value: number): ExpressionAst {
+  return value < 0
+    ? { kind: "unary", op: "-", expr: { kind: "number", raw: String(Math.abs(value)) } }
+    : { kind: "number", raw: String(value) };
 }
 
 function lowerV2StateFieldType(type: V2StateFieldAst["type"]): StateFieldType {

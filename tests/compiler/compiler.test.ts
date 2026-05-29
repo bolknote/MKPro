@@ -633,7 +633,8 @@ program RepeatedMembershipProbe {
 }
 `);
 
-    expect(result.report.optimizations.some((item) => item.name === "spatial-hit-condition-helper")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "bit-mask-condition-helper")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "bit-mask-helper")).toBe(true);
   });
 
   it("hoists common branch tails before MK-61 code generation", () => {
