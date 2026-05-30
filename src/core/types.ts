@@ -147,6 +147,10 @@ export interface EntryAst {
 export interface ProcAst {
   kind: "proc";
   name: string;
+  // Declared parameter names, in order. Present for rules lowered from V2 so the
+  // expression-position function-call path can bind arguments to parameter
+  // registers. Empty/undefined for procs that take no parameters.
+  params?: string[];
   body: StatementAst[];
   line: number;
 }
@@ -273,6 +277,7 @@ export type V2StatementAst =
   | V2InvokeStatementAst
   | V2AssignStatementAst
   | V2UpdateStatementAst
+  | V2ReturnStatementAst
   | V2RawStatementAst;
 
 export interface V2ShowStatementAst {
@@ -341,6 +346,12 @@ export interface V2UpdateStatementAst {
   kind: "v2_update";
   target: string;
   op: "+=" | "-=";
+  expr: string;
+  line: number;
+}
+
+export interface V2ReturnStatementAst {
+  kind: "v2_return";
   expr: string;
   line: number;
 }
@@ -422,6 +433,7 @@ export type StatementAst =
   | CoreStatementAst
   | EggStatementAst
   | TrapStatementAst
+  | ReturnValueStatementAst
   | DecimalSeriesStatementAst;
 
 export interface PauseStatementAst {
@@ -558,6 +570,15 @@ export interface RawOutputAst {
 export interface TrapStatementAst {
   kind: "trap";
   trap: "zero" | "nonpositive" | "negative" | "gt_one" | "ge_100" | "frac_ge_06";
+  expr: ExpressionAst;
+  line: number;
+}
+
+// Evaluates `expr` (leaving the result in X) and returns from the enclosing
+// procedure (В/О). Terminates control flow. Emitted when a rule body uses
+// `return expr`, which turns the rule into a value-returning function.
+export interface ReturnValueStatementAst {
+  kind: "return_value";
   expr: ExpressionAst;
   line: number;
 }

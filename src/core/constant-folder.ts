@@ -61,6 +61,7 @@ class ConstantFolder {
         case "pause":
         case "halt":
         case "trap":
+        case "return_value":
           statement.expr = this.foldExpression(statement.expr);
           break;
         case "ask":

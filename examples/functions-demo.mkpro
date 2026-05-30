@@ -1,0 +1,26 @@
+// Demonstrates value-returning functions. An `fn` whose body contains a
+// `return` produces a value in X and can be called inside an expression,
+// including nested inside another function. Here `sum_of_squares` is composed
+// from the smaller `square` helper, and the working stack is kept intact
+// automatically when a call is nested inside a larger expression.
+
+program FunctionsDemo {
+  state {
+    result: counter 0..99 = 0
+  }
+
+  fn square(n) {
+    return n * n
+  }
+
+  fn sum_of_squares(a, b) {
+    return square(a) + square(b)
+  }
+
+  loop {
+    x = read()
+    y = read()
+    result = sum_of_squares(x, y)
+    halt(result)
+  }
+}

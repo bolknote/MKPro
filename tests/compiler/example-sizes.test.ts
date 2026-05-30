@@ -19,6 +19,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "dangerous-loading": 89,
   dungeon: 88,
   "e-94-digits": 64,
+  "functions-demo": 29,
   "fox-hunt-100": 105,
   "fox-hunt-mk61": 72,
   "game-100-pig": 103,
