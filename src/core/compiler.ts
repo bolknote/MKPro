@@ -20,6 +20,7 @@ import { optimizePostLayoutIndirectFlow } from "./post-layout-indirect-flow.ts";
 import { verifySuperDarkSuffixLayout } from "./super-dark-layout.ts";
 import { MachineEmitter } from "./emit/machine-emitter.ts";
 import type { ProgramAnalysis } from "./emit/program-analysis.ts";
+import { RuntimeHelperRegistry } from "./emit/runtime-helpers.ts";
 import { MK61_PROFILE, machineSupports, type MachineProfile } from "./machineProfile.ts";
 import type {
   AppliedOptimization,
@@ -1972,36 +1973,48 @@ class EmitContext {
     return this.analysis.scaledCoordCellNames;
   }
   private readonly scaledCoordVariables = new Set<string>();
-  private readonly spatialHitHelpers = new Map<string, { mask: string; scratch: string; label: string; line?: number }>();
-  private readonly displayHelpers = new Map<string, { display: ProgramAst["displays"][number]; label: string; line: number }>();
-  private readonly displayByteHelpers = new Map<string, { display: ProgramAst["displays"][number]; label: string; line: number }>();
-  private readonly literalDisplayHelpers = new Map<string, { display: ProgramAst["displays"][number]; label: string; line: number }>();
-  private readonly showSequenceHelpers = new Map<string, {
-    first: ProgramAst["displays"][number];
-    second: ProgramAst["displays"][number];
-    label: string;
-    line: number;
-  }>();
-  private readonly expressionHelpers = new Map<string, { expr: ExpressionAst; label: string; line?: number }>();
-  private readonly randomCellHelpers = new Map<string, { expr: ExpressionAst; label: string; line?: number }>();
-  private readonly nearAnyHelpers = new Map<string, { value: ExpressionAst; radius: ExpressionAst; label: string; line?: number }>();
-  private readonly lineCountHelpers = new Map<string, { cell: ExpressionAst; board: V2BoardAst; label: string; line?: number }>();
-  private readonly spatialBitMaskHelpers = new Map<string, { scratch: string; label: string; line?: number }>();
-  private readonly spatialLineProgressionHelpers = new Map<string, {
-    hitMask: string;
-    cell: ExpressionAst;
-    label: string;
-    operation: "line_count" | "neighbor_count";
-    line?: number;
-  }>();
-  private readonly spatialSumLoopHelpers = new Map<string, {
-    hitMask: string;
-    cell: ExpressionAst;
-    label: string;
-    operation: "line_count" | "neighbor_count";
-    line?: number;
-  }>();
-  private readonly terminalTailHelpers: Array<{ body: StatementAst[]; label: string; line: number }> = [];
+  // Shared runtime-helper tables live in a dedicated collaborator; lowering
+  // reads/registers them through these getters so call sites stay unchanged.
+  private readonly helpers = new RuntimeHelperRegistry();
+  private get spatialHitHelpers() {
+    return this.helpers.spatialHitHelpers;
+  }
+  private get displayHelpers() {
+    return this.helpers.displayHelpers;
+  }
+  private get displayByteHelpers() {
+    return this.helpers.displayByteHelpers;
+  }
+  private get literalDisplayHelpers() {
+    return this.helpers.literalDisplayHelpers;
+  }
+  private get showSequenceHelpers() {
+    return this.helpers.showSequenceHelpers;
+  }
+  private get expressionHelpers() {
+    return this.helpers.expressionHelpers;
+  }
+  private get randomCellHelpers() {
+    return this.helpers.randomCellHelpers;
+  }
+  private get nearAnyHelpers() {
+    return this.helpers.nearAnyHelpers;
+  }
+  private get lineCountHelpers() {
+    return this.helpers.lineCountHelpers;
+  }
+  private get spatialBitMaskHelpers() {
+    return this.helpers.spatialBitMaskHelpers;
+  }
+  private get spatialLineProgressionHelpers() {
+    return this.helpers.spatialLineProgressionHelpers;
+  }
+  private get spatialSumLoopHelpers() {
+    return this.helpers.spatialSumLoopHelpers;
+  }
+  private get terminalTailHelpers() {
+    return this.helpers.terminalTailHelpers;
+  }
   // X-tracking state physically lives in `this.emitter`; these accessors keep
   // the lowering code reading/writing it as plain fields.
   private get currentXVariable(): string | undefined {
@@ -2043,8 +2056,18 @@ class EmitContext {
   private set machineEntryOpen(value: boolean) {
     this.emitter.machineEntryOpen = value;
   }
-  private emittingExpressionHelper = false;
-  private emittingRandomCellHelper = false;
+  private get emittingExpressionHelper(): boolean {
+    return this.helpers.emittingExpressionHelper;
+  }
+  private set emittingExpressionHelper(value: boolean) {
+    this.helpers.emittingExpressionHelper = value;
+  }
+  private get emittingRandomCellHelper(): boolean {
+    return this.helpers.emittingRandomCellHelper;
+  }
+  private set emittingRandomCellHelper(value: boolean) {
+    this.helpers.emittingRandomCellHelper = value;
+  }
 
   constructor(
     ast: ProgramAst,
