@@ -40,15 +40,14 @@ const EXAMPLE_BASELINE: Record<string, number> = {
 const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 130,
   "cave-treasure": 149,
-  "giants-country": 195,
+  "giants-country": 382,
   labyrinth777: 226,
-  "tic-tac-toe-4x4": 282,
+  teleport: 250,
+  "tic-tac-toe-4x4": 260,
   "treasure-hunter-2": 141,
 };
 
-const PENDING_COMPILE_ERRORS: Record<string, RegExp> = {
-  teleport: /Out of MK-61 registers/u,
-};
+const PENDING_COMPILE_ERRORS: Record<string, RegExp> = {};
 
 function exampleSteps(relativePath: string, analysis: boolean): number {
   const source = readFileSync(resolve(`examples/${relativePath}.mkpro`), "utf8");

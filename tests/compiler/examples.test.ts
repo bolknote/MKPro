@@ -74,9 +74,8 @@ describe("examples", () => {
 
   it("compiles lunar.mkpro under budget", () => {
     const result = compileMKPro(loadExample("lunar"));
-    expect(formatListing(result)).toContain("show height_view");
-    expect(formatListing(result)).toContain("show speed_view");
-    expect(formatListing(result)).toContain("show fuel_view");
+    const listing = formatListing(result);
+    expect(listing.match(/show __inline_show_/gu)).toHaveLength(3);
     expect(formatHex(result).length).toBeGreaterThan(0);
     expect(result.report.steps).toBeLessThanOrEqual(105);
   });

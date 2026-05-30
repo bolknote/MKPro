@@ -8650,12 +8650,20 @@ function allocateRegisters(
   const ordered = [...variables].sort(
     (a, b) => priority(a, hints) - priority(b, hints) || a.localeCompare(b),
   );
+  const reusableScratchRegisters = new Map<string, RegisterName>();
   for (const variable of ordered) {
     if (registers[variable]) continue;
+    const reusableScratch = reusableScratchFamily(variable);
+    const existingScratchRegister = reusableScratch === undefined ? undefined : reusableScratchRegisters.get(reusableScratch);
+    if (existingScratchRegister !== undefined) {
+      registers[variable] = existingScratchRegister;
+      continue;
+    }
     const hint = hints.get(variable);
     if (hint?.mode === "prefer" && !used.has(hint.register)) {
       registers[variable] = hint.register;
       used.add(hint.register);
+      if (reusableScratch !== undefined) reusableScratchRegisters.set(reusableScratch, hint.register);
       continue;
     }
     const candidate = pickRegister(variable, used);
@@ -8668,6 +8676,7 @@ function allocateRegisters(
     }
     registers[variable] = candidate;
     used.add(candidate);
+    if (reusableScratch !== undefined) reusableScratchRegisters.set(reusableScratch, candidate);
   }
 
   const constants: Record<string, RegisterName> = {};
@@ -8687,6 +8696,11 @@ function allocateRegisters(
   return negativeZeroDegree === undefined
     ? { registers, constants }
     : { registers, constants, negativeZeroDegree };
+}
+
+function reusableScratchFamily(variable: string): string | undefined {
+  if (variable.startsWith(BIT_MASK_SCRATCH_PREFIX)) return BIT_MASK_SCRATCH_PREFIX;
+  return undefined;
 }
 
 function collectDomainBindings(ast: ProgramAst): DomainBinding[] {
@@ -10613,10 +10627,16 @@ function collectSpatialHitScratchVariables(
 }
 
 function collectSpatialCountScratchVariables(ast: ProgramAst, variables: Set<string>): void {
-  let needsScratch = false;
+  let needsLineCountScratch = false;
+  let needsNeighborTotalScratch = false;
   const visitExpr = (expr: ExpressionAst): void => {
-    if (expr.kind === "call" && (expr.callee.toLowerCase() === "line_count" || expr.callee.toLowerCase() === "neighbor_count")) {
-      needsScratch = true;
+    if (expr.kind === "call") {
+      const callee = expr.callee.toLowerCase();
+      if (callee === "line_count") {
+        needsLineCountScratch = true;
+      } else if (callee === "neighbor_count" && expr.args[0]?.kind === "identifier") {
+        needsNeighborTotalScratch = true;
+      }
     }
     if (expr.kind === "unary") visitExpr(expr.expr);
     if (expr.kind === "binary") {
@@ -10663,8 +10683,12 @@ function collectSpatialCountScratchVariables(ast: ProgramAst, variables: Set<str
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
   for (const block of ast.blocks) visit(block.body);
-  if (!needsScratch) return;
-  for (const scratch of spatialCountScratchNames()) variables.add(scratch);
+  if (!needsLineCountScratch && !needsNeighborTotalScratch) return;
+  if (needsLineCountScratch) {
+    for (const scratch of spatialCountScratchNames()) variables.add(scratch);
+  } else {
+    variables.add(spatialCountScratchNames()[0]!);
+  }
   if (countCalls(ast, "line_count") > 1) variables.add(spatialCountMaskScratchName());
   if (programNeedsSpatialLineProgressionHelper(ast) && variables.size < REGISTER_ORDER.length) {
     variables.add(spatialCountStepScratchName());
