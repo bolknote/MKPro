@@ -9,7 +9,7 @@ import {
 import type {
   BitMembershipCondition,
   SpatialLineProgression,
-} from "../../compiler.ts";
+} from "../lowering-helpers.ts";
 import {
   NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE,
   NEGATIVE_ZERO_DEGREE_SELECTOR_GE,
@@ -34,7 +34,7 @@ import {
   spatialLineProgressions,
   spatialNeighborProgressions,
   ticTacToeMaskScratchName,
-} from "../../compiler.ts";
+} from "../lowering-helpers.ts";
 import {
   getOpcode,
 } from "../../opcodes.ts";

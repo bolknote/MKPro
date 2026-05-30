@@ -14,7 +14,7 @@ import type {
   CoordListIndirectContext,
   DashedCoordReportTemplate,
   RandomCoordListPlacement,
-} from "../../compiler.ts";
+} from "../lowering-helpers.ts";
 import {
   COORD_LIST_COUNTER,
   COORD_LIST_CURRENT,
@@ -32,7 +32,7 @@ import {
   numberExpression,
   sameCoordListCall,
   subtractExpressions,
-} from "../../compiler.ts";
+} from "../lowering-helpers.ts";
 import {
   getOpcode,
 } from "../../opcodes.ts";

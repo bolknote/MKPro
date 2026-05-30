@@ -1,16 +1,5 @@
-import {
-  addressToOpcode,
-  findOpcodeName,
-  formatAddress,
-  getOpcode,
-  registerFromText,
-  registerIndex,
-} from "./opcodes.ts";
-import {
-  formalAddressInfo,
-  formatFormalAddressOpcode,
-  parseFormalAddressOpcode,
-} from "./formal-address.ts";
+import { addressToOpcode, formatAddress, getOpcode, registerFromText, registerIndex } from "./opcodes.ts";
+import { formalAddressInfo, formatFormalAddressOpcode } from "./formal-address.ts";
 import { foldProgramConstants } from "./constant-folder.ts";
 import { eliminateInterproceduralDeadStores } from "./interprocedural-dse.ts";
 import { propagateValuesInterprocedurally } from "./value-propagation.ts";
@@ -27,6 +16,107 @@ import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts
 import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileTicTacToeCellMaskReuse } from "./emit/lowering/spatial.ts";
 import { compileCoordListLineCountAssignment, compileCoordListLineCountDashedReport, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
 import { compileBlockCall, compileDecimalFactorialSeries, compileGuardAssignmentSubstitution, compileInitialState, compileIntFracSharedTail, compileProcedures, compileRawStatement, compileRepeatedAssignmentValue, compileRuntimeHelpers, compileSetupProgramWithPreloads, compileStackUnaryDerivedAssignments, compileUnitDecrement, compileXParamProcCall } from "./emit/lowering/proc-raw-setup.ts";
+import {
+  BIT_MASK_SCRATCH_PREFIX,
+  COORD_LIST_COUNTER,
+  COORD_LIST_CURRENT,
+  COORD_LIST_DX,
+  COORD_LIST_POINTER,
+  DISPATCH_SCRATCH_PREFIX,
+  IF_SELECTOR_SCRATCH_PREFIX,
+  NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE,
+  SPATIAL_COUNT_SCRATCH_PREFIX,
+  SPATIAL_HIT_SCRATCH_PREFIX,
+  TICTACTOE_MASK_SCRATCH_PREFIX,
+  bitMaskExpression,
+  bitMaskScratchName,
+  boardForCellMask,
+  buildBranchRemovalCandidate,
+  buildDiagnostic,
+  buildGuardedUpdateSelectorCandidate,
+  canTestAgainstZeroDirectly,
+  conditionCompileCost,
+  conditionEquals,
+  coordListHasCall,
+  coordListHasConditionCall,
+  coordListItemInfo,
+  coordListLineCountCall,
+  countIdentifierReadsInCondition,
+  countStatements,
+  dashedCoordReportDisplayTemplate,
+  dispatchUsesNumericResidualChain,
+  displayLiteralCells,
+  displayLiteralProgram,
+  estimateConditionCost,
+  estimateExpressionCost,
+  estimateExpressionCostForCondition,
+  estimateGuardedUpdateSelectorCost,
+  estimateNegativeZeroThresholdFlowCost,
+  estimateNumberCost,
+  estimateOrdinaryGuardedUpdateCost,
+  estimateOrdinaryIfCost,
+  exponentTailDisplayLiteralProgram,
+  expressionEquals,
+  expressionIsDeterministic,
+  expressionPureForSubstitution,
+  expressionReferencesIdentifier,
+  expressionToIntentText,
+  firstSpliceDisplayLiteralProgram,
+  flOpcode,
+  ifSelectorScratchName,
+  invertCondition,
+  isBitClearAssignment,
+  isIdentityAssignment,
+  isNumericValue,
+  isPreincrementIndirectRegister,
+  isSimpleStackLoad,
+  isTicTacToeMacroName,
+  isUnitDecrementExpression,
+  isZeroExpression,
+  matchBitAbsenceCondition,
+  matchBitMembershipCondition,
+  matchBitSetAssignment,
+  matchCellHelperCall,
+  matchEqualityConstantCondition,
+  matchNearAnyHelperCondition,
+  matchNegativeZeroThresholdCondition,
+  matchSingleBitMaskOpAssignment,
+  nearAnyHelperKey,
+  negatedNumberLiteral,
+  normalizeConstantLiteral,
+  normalizeDisplayLiteralText,
+  normalizeDisplayTemplateLiteral,
+  normalizeZeroComparison,
+  numberExpression,
+  numericLiteralValue,
+  programUsesDashedCoordReport,
+  randomCoordListItemPlacement,
+  sameCoordListCall,
+  selectCheaperEquivalentCondition,
+  shouldUsePreloadedDisplayLiteral,
+  signedFirstSpliceDisplayLiteralProgram,
+  spatialCountCounterScratchName,
+  spatialCountMaskScratchName,
+  spatialCountScratchNames,
+  spatialCountStepScratchName,
+  spatialHitScratchName,
+  statementEquals,
+  statementListsEqual,
+  ticTacToeExpressionMacro,
+  ticTacToeMaskScratchName,
+} from "./emit/lowering-helpers.ts";
+import type {
+  BitMembershipCondition,
+  BitSetAssignment,
+  CoordListCall,
+  CoordListIndirectContext,
+  DashedCoordReportTemplate,
+  DisplayField,
+  DisplaySourceItem,
+  ExecutableSetupPreload,
+  RegisterAllocation,
+  XParamProcLowering,
+} from "./emit/lowering-helpers.ts";
 import { MK61_PROFILE, machineSupports, type MachineProfile } from "./machineProfile.ts";
 import type {
   AppliedOptimization,
@@ -104,52 +194,19 @@ const REGISTER_ORDER: RegisterName[] = [
   "e",
 ];
 
-export const DISPATCH_SCRATCH_PREFIX = "__dispatch_";
-const TICTACTOE_MASK_SCRATCH_PREFIX = "__ttt_mask_";
-const BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
 const SHARED_BIT_MASK_SCRATCH = "__bit_mask_shared";
-const IF_SELECTOR_SCRATCH_PREFIX = "__if_selector_";
 const DISPLAY_TEMPLATE_VALUE_PREFIX = "__display_value_";
 const DISPLAY_TEMPLATE_LOOP_PREFIX = "__display_loop_";
 const DISPLAY_TEMPLATE_MASK_PREFIX = "__display_mask_";
 const CELL_MAP_PREFIX = "__cell_map_";
-const SPATIAL_HIT_SCRATCH_PREFIX = "__spatial_hit_";
-const SPATIAL_COUNT_SCRATCH_PREFIX = "__spatial_count_";
-const COORD_LIST_ITEM_PREFIX = "__coord_list_";
-export const COORD_LIST_POINTER = "__coord_list_pointer";
-export const COORD_LIST_COUNTER = "__coord_list_counter";
-export const COORD_LIST_CURRENT = "__coord_list_current";
-export const COORD_LIST_DX = "__coord_list_dx";
-export const DASHED_COORD_REPORT_MASK = "8,-00--_";
-export const NEGATIVE_ZERO_DEGREE_SELECTOR_GE = "__mkpro_negative_zero_ge";
-export const NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE = "1|-00";
 const INTERNAL_NAME_PREFIX = "__mkpro_";
 const DISPLAY_HELPER_MIN_SAVINGS = 4;
 const UNAVAILABLE_DISPLAY_STRATEGY_COST = 999999;
 const EXPRESSION_HELPER_MIN_COST = 8;
 const EXPRESSION_HELPER_MIN_SAVINGS = 4;
-const STACK_UNARY_DERIVATION_OPCODES = {
-  abs: [0x31, "К |x|"],
-  sign: [0x32, "К ЗН"],
-  int: [0x34, "К [x]"],
-  frac: [0x35, "К {x}"],
-  sqr: [0x22, "F x^2"],
-} as const satisfies Record<string, readonly [number, string]>;
 
-type StackUnaryDerivationFn = keyof typeof STACK_UNARY_DERIVATION_OPCODES;
 
-export interface StackUnaryDerivationCall {
-  fn: StackUnaryDerivationFn;
-  arg: ExpressionAst;
-  opcode: number;
-  mnemonic: string;
-}
 
-export interface XParamProcLowering {
-  param: string;
-  first: Extract<StatementAst, { kind: "assign" }>;
-  other: string;
-}
 
 export class CompileError extends Error {
   readonly diagnostics: Diagnostic[];
@@ -228,15 +285,7 @@ interface LoweringOptions {
   sharedBitMaskHelperCalls?: boolean;
 }
 
-type DisplaySourceItem = Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }>;
 
-export interface DisplayField {
-  kind: "source" | "literal";
-  item?: DisplaySourceItem;
-  name: string;
-  width: number;
-  value?: string;
-}
 
 type DisplayStrategyVariant =
   | "decimal-pack"
@@ -281,10 +330,6 @@ export interface VariableLeadingMantissaMaskDisplayTemplate {
   };
 }
 
-export interface DashedCoordReportTemplate {
-  cell: DisplayField;
-  bearing: DisplayField;
-}
 
 export function compileMKPro(
   source: string,
@@ -1281,38 +1326,7 @@ function buildDispatchFromIfChain(
   };
 }
 
-export function matchEqualityConstantCondition(
-  condition: ConditionAst,
-): { expr: ExpressionAst; value: number } | undefined {
-  if (condition.op !== "==") return undefined;
-  const rightValue = numericLiteralValue(condition.right);
-  if (rightValue !== undefined && Number.isInteger(rightValue) && numericLiteralValue(condition.left) === undefined) {
-    return { expr: condition.left, value: rightValue };
-  }
-  const leftValue = numericLiteralValue(condition.left);
-  if (leftValue !== undefined && Number.isInteger(leftValue) && numericLiteralValue(condition.right) === undefined) {
-    return { expr: condition.right, value: leftValue };
-  }
-  return undefined;
-}
 
-export function expressionIsDeterministic(expr: ExpressionAst): boolean {
-  switch (expr.kind) {
-    case "number":
-    case "string":
-    case "identifier":
-      return true;
-    case "unary":
-      return expressionIsDeterministic(expr.expr);
-    case "binary":
-      return expressionIsDeterministic(expr.left) && expressionIsDeterministic(expr.right);
-    case "call": {
-      const name = expr.callee.toLowerCase();
-      if (name === "random" || name === "random_cell") return false;
-      return expr.args.every(expressionIsDeterministic);
-    }
-  }
-}
 
 function hoistOneShotLoopInitializers(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
   let hoisted = 0;
@@ -1943,29 +1957,7 @@ function simplifyIfStatement(statement: Extract<StatementAst, { kind: "if" }>): 
   return [statement];
 }
 
-export function invertCondition(condition: ConditionAst): ConditionAst {
-  return {
-    ...condition,
-    op: invertComparisonOp(condition.op),
-  };
-}
 
-function invertComparisonOp(op: ConditionAst["op"]): ConditionAst["op"] {
-  switch (op) {
-    case "==":
-      return "!=";
-    case "!=":
-      return "==";
-    case "<":
-      return ">=";
-    case "<=":
-      return ">";
-    case ">":
-      return "<=";
-    case ">=":
-      return "<";
-  }
-}
 
 function appendOptimizationCandidateReports(
   optimizations: readonly AppliedOptimization[],
@@ -4349,55 +4341,12 @@ export class EmitContext {
   }
 }
 
-interface RegisterAllocation {
-  registers: Record<string, RegisterName>;
-  constants: Record<string, RegisterName>;
-  negativeZeroDegree?: RegisterName;
-}
 
-interface CoordListCall {
-  cell: ExpressionAst;
-  items: Array<{ name: string }>;
-}
 
-export interface CoordListIndirectContext {
-  cell: ExpressionAst;
-  count: number;
-  pointerStart: number;
-  pointerRegister: RegisterName;
-  counterRegister: RegisterName;
-}
 
-export function coordListHasConditionCall(condition: ConditionAst): CoordListCall | undefined {
-  if (!isZeroExpression(condition.right) || condition.op !== "!=") return undefined;
-  return coordListHasCall(condition.left);
-}
 
-function coordListHasCall(expr: ExpressionAst): CoordListCall | undefined {
-  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "coord_list_has") return undefined;
-  if (expr.args.length < 2) return undefined;
-  const [cell, ...items] = expr.args;
-  if (cell === undefined) return undefined;
-  const identifiers = items.every((item): item is Extract<ExpressionAst, { kind: "identifier" }> => item.kind === "identifier");
-  if (!identifiers) return undefined;
-  return { cell, items: items.map((item) => ({ name: item.name })) };
-}
 
-export function coordListLineCountCall(expr: ExpressionAst): CoordListCall | undefined {
-  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "coord_list_line_count") return undefined;
-  if (expr.args.length < 2) return undefined;
-  const [cell, ...items] = expr.args;
-  if (cell === undefined) return undefined;
-  const identifiers = items.every((item): item is Extract<ExpressionAst, { kind: "identifier" }> => item.kind === "identifier");
-  if (!identifiers) return undefined;
-  return { cell, items: items.map((item) => ({ name: item.name })) };
-}
 
-export function sameCoordListCall(left: CoordListCall, right: CoordListCall): boolean {
-  return expressionEquals(left.cell, right.cell) &&
-    left.items.length === right.items.length &&
-    left.items.every((item, index) => item.name === right.items[index]?.name);
-}
 
 function coordListNameFromItems(items: readonly { name: string }[]): string | undefined {
   let listName: string | undefined;
@@ -4700,16 +4649,7 @@ function coordVariableHasOnlyScaledSafeReads(
     ast.procs.every((proc) => statementsSafe(proc.body));
 }
 
-function coordListItemInfo(name: string): { listName: string; index: number } | undefined {
-  if (!name.startsWith(COORD_LIST_ITEM_PREFIX)) return undefined;
-  const match = /^__coord_list_(.+)_(\d+)$/u.exec(name);
-  if (!match) return undefined;
-  return { listName: match[1]!, index: Number(match[2]) };
-}
 
-export function isPreincrementIndirectRegister(register: RegisterName): boolean {
-  return register === "4" || register === "5" || register === "6";
-}
 
 function buildProgramAnalysis(ast: ProgramAst, allocation: RegisterAllocation): ProgramAnalysis {
   const procCallCounts = collectProcCallCounts(ast);
@@ -5792,54 +5732,6 @@ function countCalls(ast: ProgramAst, name: string): number {
   return count;
 }
 
-export function programHasLineCountForMask(ast: ProgramAst, maskName: string): boolean {
-  let found = false;
-  const visitExpr = (expr: ExpressionAst): void => {
-    if (found) return;
-    if (
-      expr.kind === "call" &&
-      expr.callee.toLowerCase() === "line_count" &&
-      expr.args[0]?.kind === "identifier" &&
-      expr.args[0].name === maskName
-    ) {
-      found = true;
-      return;
-    }
-    if (expr.kind === "unary") visitExpr(expr.expr);
-    if (expr.kind === "binary") {
-      visitExpr(expr.left);
-      visitExpr(expr.right);
-    }
-    if (expr.kind === "call") {
-      for (const arg of expr.args) visitExpr(arg);
-    }
-  };
-  const visitStatements = (statements: StatementAst[]): void => {
-    for (const statement of statements) {
-      if (found) return;
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
-      if (statement.kind === "assign") visitExpr(statement.expr);
-      if (statement.kind === "if") {
-        visitExpr(statement.condition.left);
-        visitExpr(statement.condition.right);
-        visitStatements(statement.thenBody);
-        if (statement.elseBody) visitStatements(statement.elseBody);
-      }
-      if (statement.kind === "loop") visitStatements(statement.body);
-      if (statement.kind === "dispatch") {
-        visitExpr(statement.expr);
-        for (const dispatchCase of statement.cases) {
-          visitExpr(dispatchCase.value);
-          visitStatements(dispatchCase.body);
-        }
-        if (statement.defaultBody) visitStatements(statement.defaultBody);
-      }
-    }
-  };
-  for (const entry of ast.entries) visitStatements(entry.body);
-  for (const proc of ast.procs) visitStatements(proc.body);
-  return found;
-}
 
 function collectLineCountGroupCounts(ast: ProgramAst): Map<string, number> {
   const counts = new Map<string, number>();
@@ -6322,32 +6214,7 @@ function displayVariableLeadingMantissaMaskTextsForAst(
   return [displayCellsLiteral(lowMaskCells), displayCellsLiteral(highMaskCells)];
 }
 
-export function programUsesDashedCoordReport(ast: ProgramAst): boolean {
-  return ast.displays.some((display) => dashedCoordReportDisplayTemplate(display) !== undefined);
-}
 
-export function dashedCoordReportDisplayTemplate(
-  display: ProgramAst["displays"][number],
-): DashedCoordReportTemplate | undefined {
-  const [prefix, cell, separator, bearing] = display.items;
-  if (
-    display.items.length !== 4 ||
-    prefix?.kind !== "literal" ||
-    cell?.kind !== "source" ||
-    separator?.kind !== "literal" ||
-    bearing?.kind !== "source"
-  ) {
-    return undefined;
-  }
-  if (normalizeDisplayTemplateLiteral(prefix.text) !== "--") return undefined;
-  if (normalizeDisplayTemplateLiteral(separator.text) !== "--") return undefined;
-  const result: DashedCoordReportTemplate = {
-    cell: { kind: "source", item: cell, name: cell.name, width: cell.width ?? 2 },
-    bearing: { kind: "source", item: bearing, name: bearing.name, width: bearing.width ?? 1 },
-  };
-  if (result.cell.width !== 2 || result.bearing.width !== 1) return undefined;
-  return result;
-}
 
 function displayTemplateValueScratchName(display: ProgramAst["displays"][number]): string {
   return `${DISPLAY_TEMPLATE_VALUE_PREFIX}${display.name}`;
@@ -6365,158 +6232,21 @@ function firstSpliceDisplayScratchName(display: ProgramAst["displays"][number]):
   return `__display_first_${display.name}`;
 }
 
-function normalizeDisplayTemplateLiteral(text: string): string {
-  return text.replace(/\s/gu, "");
-}
 
-export function displayLoopOpcode(register: 0 | 1 | 2 | 3): number {
-  switch (register) {
-    case 0:
-      return 0x5d;
-    case 1:
-      return 0x5b;
-    case 2:
-      return 0x58;
-    case 3:
-      return 0x5a;
-  }
-}
 
-export type DisplayLiteralProgram =
-  | { kind: "error" }
-  | { kind: "kinv"; digits: string; negative: boolean }
-  | { kind: "xor"; left: string; right: string; negative: boolean };
 
-export interface FirstSpliceDisplayLiteralProgram {
-  first: number;
-  second?: number;
-  body: Exclude<DisplayLiteralProgram, { kind: "error" }>;
-  exponent: number;
-  negative?: boolean;
-}
 
-interface SignDigitLiteralDisplayProgram {
-  signDigit: number;
-  first: string;
-  start: string;
-  indirectSteps: number;
-}
 
-export function displayLiteralProgram(text: string): DisplayLiteralProgram | undefined {
-  const normalized = normalizeDisplayLiteralText(text);
-  const errorCells = displayLiteralCells(normalized);
-  if (errorCells !== undefined && isErrorLiteralCells(errorCells)) return { kind: "error" };
 
-  const negative = normalized.startsWith("-") && normalized.length > 1;
-  const body = negative ? normalized.slice(1) : normalized;
-  const cells = displayLiteralCells(body);
-  return displayLiteralProgramFromCells(cells, negative);
-}
 
-function displayLiteralProgramFromCells(
-  cells: readonly number[] | undefined,
-  negative: boolean,
-): DisplayLiteralProgram | undefined {
-  if (cells === undefined || cells.length === 0 || cells.length > 8) return undefined;
-  if (cells[0] !== 8) return undefined;
 
-  const inverted = displayLiteralInversionDigits(cells);
-  if (inverted !== undefined) return { kind: "kinv", digits: inverted, negative };
 
-  const left: string[] = [];
-  const right: string[] = [];
-  for (let index = 0; index < cells.length; index += 1) {
-    const pair = index === 0 ? [1, 9] as const : decimalXorPair(cells[index]!);
-    if (pair === undefined) return undefined;
-    left.push(String(pair[0]));
-    right.push(String(pair[1]));
-  }
-  return { kind: "xor", left: left.join(""), right: right.join(""), negative };
-}
 
-export function firstSpliceDisplayLiteralProgram(text: string): FirstSpliceDisplayLiteralProgram | undefined {
-  const cells = displayLiteralCells(text);
-  if (cells === undefined || cells.length === 0 || cells.length > 8) return undefined;
-  return firstSpliceDisplayLiteralProgramFromCells(
-    cells,
-    displayLiteralPointExponent(text) ?? cells.length - 1,
-    false,
-  );
-}
 
-function firstSpliceDisplayLiteralProgramFromCells(
-  cells: readonly number[],
-  exponent: number,
-  negative: boolean,
-): FirstSpliceDisplayLiteralProgram | undefined {
-  const first = cells[0]!;
-  if (first === 15) return undefined;
-  const body = displayLiteralProgramFromCells([8, ...cells.slice(1)], false);
-  if (body === undefined || body.kind === "error") return undefined;
-  const program: FirstSpliceDisplayLiteralProgram = { first, body, exponent };
-  if (cells[1] !== undefined) program.second = cells[1];
-  if (negative) program.negative = true;
-  return program;
-}
 
-function shouldUseFirstSpliceDisplayLiteral(text: string): boolean {
-  if (firstSpliceDisplayLiteralProgram(text) === undefined) return false;
-  if (decimalDisplayLiteralNumber(text) !== undefined) return false;
-  if (zeroDigitTailDisplayProgram(text) !== undefined) return false;
-  if (signDigitLiteralDisplayProgram(text) !== undefined) return false;
-  const direct = displayLiteralProgram(text);
-  return direct === undefined || direct.kind !== "error" && displayLiteralTrailingZeroExponent(text) !== undefined;
-}
 
-export function signedFirstSpliceDisplayLiteralProgram(text: string): FirstSpliceDisplayLiteralProgram | undefined {
-  const normalized = normalizeDisplayLiteralText(text);
-  if (!/^-[0-9]/u.test(normalized)) return undefined;
-  const body = normalized.slice(1);
-  const cells = displayLiteralCells(body);
-  if (cells === undefined || cells.length === 0 || cells.length > 8) return undefined;
-  return firstSpliceDisplayLiteralProgramFromCells(cells, displayLiteralPointExponent(body) ?? cells.length - 1, true);
-}
 
-export function exponentTailDisplayLiteralProgram(text: string): FirstSpliceDisplayLiteralProgram | undefined {
-  const cells = displayLiteralCells(text);
-  if (cells === undefined || cells.length !== 9) return undefined;
-  const exponent = cells.at(-1);
-  if (exponent === undefined || exponent < 0 || exponent > 9) return undefined;
-  return firstSpliceDisplayLiteralProgramFromCells(cells.slice(0, 8), exponent, false);
-}
 
-export function shouldUsePreloadedDisplayLiteral(text: string): boolean {
-  if (decimalDisplayLiteralNumber(text) !== undefined) return false;
-  if (zeroDigitTailDisplayProgram(text) !== undefined) return false;
-  if (signDigitLiteralDisplayProgram(text) !== undefined) return false;
-  const direct = displayLiteralProgram(text);
-  if (direct !== undefined && direct.kind !== "error") return shouldUseFirstSpliceDisplayLiteral(text);
-  return shouldUseFirstSpliceDisplayLiteral(text) ||
-    signedFirstSpliceDisplayLiteralProgram(text) !== undefined ||
-    exponentTailDisplayLiteralProgram(text) !== undefined;
-}
-
-function displayLiteralPointExponent(text: string): number | undefined {
-  const normalized = normalizeDisplayLiteralText(text);
-  const point = /[.,]/u.exec(normalized);
-  if (point === null) return undefined;
-  const prefix = normalized.slice(0, point.index);
-  const cells = displayLiteralCells(prefix);
-  if (cells === undefined || cells.length === 0) return undefined;
-  return cells.length - 1;
-}
-
-function displayLiteralTrailingZeroExponent(text: string): number | undefined {
-  const cells = displayLiteralCells(text);
-  if (cells === undefined || cells.length === 0 || cells.length > 8) return undefined;
-  return cells.at(-1) === 0 ? cells.length - 1 : undefined;
-}
-
-export function decimalDisplayLiteralNumber(text: string): string | undefined {
-  const normalized = normalizeDisplayLiteralText(text);
-  if (!/^-?(?:0|[1-9][0-9]{0,7})$/u.test(normalized)) return undefined;
-  return normalized;
-}
 
 function decimalDisplayFieldLiteral(
   text: string,
@@ -6557,105 +6287,13 @@ function displayCellsLiteral(cells: readonly number[]): string {
   }).join("");
 }
 
-export function zeroDigitTailDisplayProgram(text: string): { input: number } | undefined {
-  const cells = displayLiteralCells(text);
-  if (cells === undefined || cells.length !== 2) return undefined;
-  const [signDigit, tail] = cells;
-  if (signDigit === undefined || signDigit < 2 || signDigit > 9 || tail !== 14) return undefined;
-  return { input: signDigit - 1 };
-}
 
-export function signDigitLiteralDisplayProgram(text: string): SignDigitLiteralDisplayProgram | undefined {
-  const cells = displayLiteralCells(text);
-  if (cells === undefined || cells.length !== 9) return undefined;
-  const signDigit = cells[0];
-  if (signDigit === undefined || signDigit < 2 || signDigit > 9) return undefined;
 
-  const body = cells.slice(1);
-  const first = body[0];
-  if (first === undefined || !((first >= 0 && first <= 9) || first === 14)) return undefined;
-  const lower = body.slice(1);
-  if (lower.length !== 7 || !lower.every((cell) => cell >= 0 && cell <= 9)) return undefined;
 
-  const indirectSteps = signDigit - 1;
-  const targetLower = Number.parseInt(lower.join(""), 10);
-  const startLower = targetLower - indirectSteps;
-  if (!Number.isSafeInteger(startLower) || startLower < 0 || startLower > 9999999) return undefined;
-  return {
-    signDigit,
-    first: first === 14 ? "Е" : String(first),
-    start: `1${String(startLower).padStart(7, "0")}`,
-    indirectSteps,
-  };
-}
 
-function isErrorLiteralCells(cells: readonly number[]): boolean {
-  return cells.length === 5 &&
-    cells[0] === 14 &&
-    cells[1] === 13 &&
-    cells[2] === 13 &&
-    cells[3] === 0 &&
-    cells[4] === 13;
-}
 
-function displayLiteralInversionDigits(cells: readonly number[]): string | undefined {
-  if (cells.length === 0 || cells[0] !== 8) return undefined;
-  const digits = ["1"];
-  for (const cell of cells.slice(1)) {
-    if (cell < 6 || cell > 15) return undefined;
-    digits.push(String(15 - cell));
-  }
-  return digits.join("");
-}
 
-function displayLiteralCells(text: string): number[] | undefined {
-  const cells: number[] = [];
-  const normalized = normalizeDisplayLiteralText(text);
-  for (const char of normalized) {
-    if (char === "." || char === ",") continue;
-    if (/\s/u.test(char) || char === "_") {
-      cells.push(15);
-      continue;
-    }
-    if (/[0-9]/u.test(char)) {
-      cells.push(Number(char));
-      continue;
-    }
-    const symbol = DISPLAY_LITERAL_SYMBOLS[char];
-    if (symbol === undefined) return undefined;
-    cells.push(symbol);
-  }
-  return cells;
-}
 
-function normalizeDisplayLiteralText(text: string): string {
-  return text
-    .replace(/[–—]/gu, "-")
-    .replace(/[ОO]/gu, "0")
-    .replace(/[Л]/gu, "L")
-    .replace(/[ВB]/gu, "L")
-    .replace(/[C]/gu, "С")
-    .replace(/[D]/gu, "Г")
-    .replace(/[G]/gu, "Г")
-    .replace(/[E]/gu, "Е");
-}
-
-const DISPLAY_LITERAL_SYMBOLS: Record<string, number> = {
-  "-": 10,
-  L: 11,
-  "С": 12,
-  "Г": 13,
-  "Е": 14,
-};
-
-function decimalXorPair(value: number): readonly [number, number] | undefined {
-  for (let left = 0; left <= 9; left += 1) {
-    for (let right = 0; right <= 9; right += 1) {
-      if ((left ^ right) === value) return [left, right];
-    }
-  }
-  return undefined;
-}
 
 function programUsesTicTacToeHelpers(ast: ProgramAst): boolean {
   let found = false;
@@ -6698,15 +6336,7 @@ function programUsesTicTacToeHelpers(ast: ProgramAst): boolean {
   return found;
 }
 
-export function normalizeConstantLiteral(raw: string): string {
-  const value = Number(raw);
-  return Number.isFinite(value) ? String(value) : raw.trim();
-}
 
-export function negatedNumberLiteral(raw: string): string {
-  const normalized = raw.trim();
-  return normalized.startsWith("-") ? normalized.slice(1) : `-${normalized}`;
-}
 
 function warnUndeclaredAssignments(
   ast: ProgramAst,
@@ -7289,363 +6919,35 @@ function isReusableCellMaskPair(
   );
 }
 
-export function ticTacToeMaskScratchName(statement: StatementAst): string {
-  return `${TICTACTOE_MASK_SCRATCH_PREFIX}${statement.line}`;
-}
 
-export function dispatchExpressionRegister(
-  statement: Extract<StatementAst, { kind: "dispatch" }>,
-  allocation: RegisterAllocation,
-): RegisterName | undefined {
-  if (statement.expr.kind !== "identifier") return undefined;
-  return allocation.registers[statement.expr.name];
-}
 
-// True when the dispatch will be lowered through the numeric residual compare
-// chain, which evaluates the selector once and keeps the running residual in X
-// across cases (mismatched cases skip their body, so X survives). That lowering
-// needs NO scratch register even for a non-identifier selector, so the allocator
-// must not reserve one for it. Mirrors compileNumericResidualDispatchCompareChain.
-export function dispatchUsesNumericResidualChain(statement: Extract<StatementAst, { kind: "dispatch" }>): boolean {
-  if (statement.cases.length < 2) return false;
-  const values = statement.cases.map((dispatchCase) => numericLiteralValue(dispatchCase.value));
-  if (values.some((value) => value === undefined)) return false;
-  return numericResidualDispatchIsCheaper(statement, values as number[]);
-}
 
-function numericResidualDispatchIsCheaper(
-  statement: Extract<StatementAst, { kind: "dispatch" }>,
-  values: readonly number[],
-): boolean {
-  const sourceRegister = statement.expr.kind === "identifier";
-  let ordinary = estimateExpressionCost(statement.expr) + (sourceRegister ? 0 : 1);
-  for (let index = 0; index < values.length; index += 1) {
-    const value = values[index]!;
-    ordinary += (index > 0 ? 1 : 0) + (value === 0 ? 0 : estimateNumberCost(String(value)) + 1) + 2;
-  }
 
-  let residual = estimateExpressionCost(statement.expr);
-  let comparedValue = 0;
-  let hasComparedValue = false;
-  for (const value of values) {
-    if (!hasComparedValue) {
-      residual += value === 0 ? 0 : estimateNumberCost(String(value)) + 1;
-      hasComparedValue = true;
-    } else {
-      const delta = comparedValue - value;
-      residual += delta === 0 ? 0 : estimateNumberCost(String(delta)) + 1;
-    }
-    residual += 2;
-    comparedValue = value;
-  }
-  return residual <= ordinary;
-}
 
-export function isZeroExpression(expr: ExpressionAst): boolean {
-  return expr.kind === "number" && Number(expr.raw) === 0;
-}
 
-export function isUnitDecrementExpression(target: string, expr: ExpressionAst): boolean {
-  return expr.kind === "binary" &&
-    expr.op === "-" &&
-    expr.left.kind === "identifier" &&
-    expr.left.name === target &&
-    expr.right.kind === "number" &&
-    Number(expr.right.raw) === 1;
-}
 
-export function matchResidualGuardedUpdate(
-  statement: Extract<StatementAst, { kind: "if" }>,
-): {
-  condition: ConditionAst;
-  assignment: Extract<StatementAst, { kind: "assign" }>;
-  tail: StatementAst[];
-  target: string;
-  bound: number;
-  delta: number;
-} | undefined {
-  const first = statement.thenBody[0];
-  if (first?.kind !== "assign") return undefined;
-  const condition = statement.condition;
-  if (condition.op !== "<") return undefined;
-  if (condition.left.kind !== "identifier") return undefined;
-  const bound = numericLiteralValue(condition.right);
-  if (bound === undefined) return undefined;
 
-  const delta = matchNumericSelfUpdate(condition.left.name, first.expr);
-  if (delta === undefined || delta === 0) return undefined;
-  if (first.target !== condition.left.name) return undefined;
 
-  return {
-    condition,
-    assignment: first,
-    tail: statement.thenBody.slice(1),
-    target: condition.left.name,
-    bound,
-    delta,
-  };
-}
 
-function matchNumericSelfUpdate(target: string, expr: ExpressionAst): number | undefined {
-  if (expr.kind !== "binary") return undefined;
-  if (expr.op === "+") {
-    if (expr.left.kind === "identifier" && expr.left.name === target) return numericLiteralValue(expr.right);
-    if (expr.right.kind === "identifier" && expr.right.name === target) return numericLiteralValue(expr.left);
-    return undefined;
-  }
-  if (
-    expr.op === "-" &&
-    expr.left.kind === "identifier" &&
-    expr.left.name === target
-  ) {
-    const value = numericLiteralValue(expr.right);
-    return value === undefined ? undefined : -value;
-  }
-  return undefined;
-}
 
-export function decrementBranchTestsZero(condition: ConditionAst, target: string): boolean {
-  return condition.left.kind === "identifier" &&
-    condition.left.name === target &&
-    (condition.op === "<=" || condition.op === "==") &&
-    isZeroExpression(condition.right);
-}
 
-export function flOpcode(register: RegisterName): number | undefined {
-  switch (register) {
-    case "0":
-      return 0x5d;
-    case "1":
-      return 0x5b;
-    case "2":
-      return 0x58;
-    case "3":
-      return 0x5a;
-    default:
-      return undefined;
-  }
-}
 
-export function isSimpleStackLoad(expr: ExpressionAst): boolean {
-  return expr.kind === "identifier" || expr.kind === "number";
-}
 
-export function canTestAgainstZeroDirectly(op: ConditionAst["op"]): boolean {
-  return op === "==" || op === "!=" || op === ">=" || op === "<";
-}
 
-export function directTestOpcode(op: ConditionAst["op"]): number {
-  switch (op) {
-    case "==":
-      return 0x5e;
-    case "!=":
-      return 0x57;
-    case ">=":
-      return 0x59;
-    case "<":
-      return 0x5c;
-    default:
-      throw new Error(`No direct zero-test opcode for ${op}`);
-  }
-}
 
-export function selectCheaperEquivalentCondition(
-  condition: ConditionAst,
-  ast: ProgramAst,
-  preloadedConstants?: ReadonlySet<string>,
-): { condition: ConditionAst; changed: boolean } {
-  let best = condition;
-  let bestCost = conditionCompileCost(condition, preloadedConstants);
-  for (const candidate of equivalentConditionCandidates(condition, ast)) {
-    const cost = conditionCompileCost(candidate, preloadedConstants);
-    if (cost < bestCost) {
-      best = candidate;
-      bestCost = cost;
-    }
-  }
-  return { condition: best, changed: !conditionEquals(best, condition) };
-}
 
-function equivalentConditionCandidates(condition: ConditionAst, ast: ProgramAst): ConditionAst[] {
-  const candidates: ConditionAst[] = [];
-  const add = (candidate: ConditionAst): void => {
-    if (!candidates.some((existing) => conditionEquals(existing, candidate))) candidates.push(candidate);
-  };
-  add(condition);
-  const flipped = flipNumericLeftCondition(condition);
-  if (flipped !== undefined) add(flipped);
-  for (const candidate of [...candidates]) {
-    for (const boundary of integerBoundaryCandidates(candidate, ast)) add(boundary);
-  }
-  return candidates;
-}
 
-function flipNumericLeftCondition(condition: ConditionAst): ConditionAst | undefined {
-  if (condition.left.kind !== "number") return undefined;
-  return {
-    left: condition.right,
-    op: flipComparisonOp(condition.op),
-    right: condition.left,
-  };
-}
 
-function flipComparisonOp(op: ConditionAst["op"]): ConditionAst["op"] {
-  switch (op) {
-    case "<":
-      return ">";
-    case "<=":
-      return ">=";
-    case ">":
-      return "<";
-    case ">=":
-      return "<=";
-    case "==":
-    case "!=":
-      return op;
-  }
-}
 
-function integerBoundaryCandidates(condition: ConditionAst, ast: ProgramAst): ConditionAst[] {
-  if (!isKnownIntegerExpression(condition.left, ast)) return [];
-  const value = numericLiteralValue(condition.right);
-  if (value === undefined || !Number.isSafeInteger(value)) return [];
-  const shifted = shiftedIntegerBoundary(condition.op, value);
-  if (shifted === undefined) return [];
-  return [{
-    left: condition.left,
-    op: shifted.op,
-    right: numberExpression(shifted.value),
-  }];
-}
 
-function shiftedIntegerBoundary(
-  op: ConditionAst["op"],
-  value: number,
-): { op: ConditionAst["op"]; value: number } | undefined {
-  switch (op) {
-    case "<":
-      return Number.isSafeInteger(value - 1) ? { op: "<=", value: value - 1 } : undefined;
-    case "<=":
-      return Number.isSafeInteger(value + 1) ? { op: "<", value: value + 1 } : undefined;
-    case ">":
-      return Number.isSafeInteger(value + 1) ? { op: ">=", value: value + 1 } : undefined;
-    case ">=":
-      return Number.isSafeInteger(value - 1) ? { op: ">", value: value - 1 } : undefined;
-    case "==":
-    case "!=":
-      return undefined;
-  }
-}
 
-function isKnownIntegerExpression(expr: ExpressionAst, ast: ProgramAst): boolean {
-  return expr.kind === "identifier" && integerRangeFor(expr.name, ast) !== undefined;
-}
 
-function isKnownIntegerValuedExpression(expr: ExpressionAst, ast: ProgramAst): boolean {
-  if (expr.kind === "number") return Number.isSafeInteger(Number(expr.raw));
-  if (expr.kind === "identifier") return integerRangeFor(expr.name, ast) !== undefined;
-  if (expr.kind === "unary" && expr.op === "-") return isKnownIntegerValuedExpression(expr.expr, ast);
-  if (expr.kind === "call" && expr.args.length === 1) {
-    const name = expr.callee.toLowerCase();
-    if (name === "int") return true;
-    if (name === "abs") return isKnownIntegerValuedExpression(expr.args[0]!, ast);
-  }
-  if (expr.kind === "binary" && (expr.op === "+" || expr.op === "-" || expr.op === "*")) {
-    return isKnownIntegerValuedExpression(expr.left, ast) && isKnownIntegerValuedExpression(expr.right, ast);
-  }
-  return false;
-}
 
-function numericRangeForExpression(expr: ExpressionAst, ast: ProgramAst): { min?: number; max?: number } | undefined {
-  const value = numericLiteralValue(expr);
-  if (value !== undefined) return { min: value, max: value };
-  if (expr.kind === "identifier") return numericRangeFor(expr.name, ast);
-  if (expr.kind === "unary" && expr.op === "-") {
-    const range = numericRangeForExpression(expr.expr, ast);
-    if (range === undefined) return undefined;
-    return {
-      ...(range.max === undefined ? {} : { min: -range.max }),
-      ...(range.min === undefined ? {} : { max: -range.min }),
-    };
-  }
-  if (expr.kind === "call" && expr.callee.toLowerCase() === "abs" && expr.args.length === 1) {
-    const range = numericRangeForExpression(expr.args[0]!, ast);
-    if (range === undefined || range.min === undefined || range.max === undefined) return undefined;
-    return {
-      min: range.min <= 0 && range.max >= 0 ? 0 : Math.min(Math.abs(range.min), Math.abs(range.max)),
-      max: Math.max(Math.abs(range.min), Math.abs(range.max)),
-    };
-  }
-  return undefined;
-}
 
-export function conditionCompileCost(condition: ConditionAst, preloadedConstants?: ReadonlySet<string>): number {
-  if (isZeroExpression(condition.right) && canTestAgainstZeroDirectly(condition.op)) {
-    return estimateExpressionCostForCondition(condition.left, preloadedConstants) + 2;
-  }
-  return estimateExpressionCostForCondition(condition.left, preloadedConstants) +
-    estimateExpressionCostForCondition(condition.right, preloadedConstants) +
-    3;
-}
 
-export function estimateSmallSetConditionCost(
-  match: SmallSetConditionMatch,
-  preloadedConstants: ReadonlySet<string>,
-): number {
-  return match.tests.reduce(
-    (sum, test) => sum + estimateExpressionCostForCondition(test.expr, preloadedConstants) + 2,
-    0,
-  );
-}
 
-function conditionEquals(left: ConditionAst, right: ConditionAst): boolean {
-  return left.op === right.op && expressionEquals(left.left, right.left) && expressionEquals(left.right, right.right);
-}
 
-export function conditionToText(condition: ConditionAst): string {
-  return `${expressionToIntentText(condition.left)} ${condition.op} ${expressionToIntentText(condition.right)}`;
-}
 
-export function expressionToIntentText(expr: ExpressionAst): string {
-  switch (expr.kind) {
-    case "number":
-      return expr.raw;
-    case "string":
-      return JSON.stringify(expr.text);
-    case "identifier":
-      return expr.name;
-    case "unary":
-      return `-${wrapExpressionText(expr.expr, 3)}`;
-    case "binary":
-      return `${wrapExpressionText(expr.left, binaryPrecedence(expr.op))} ${expr.op} ${wrapExpressionText(expr.right, binaryPrecedence(expr.op) + (expr.op === "-" || expr.op === "/" ? 1 : 0))}`;
-    case "call":
-      return `${expr.callee}(${expr.args.map(expressionToIntentText).join(", ")})`;
-  }
-}
-
-function wrapExpressionText(expr: ExpressionAst, parentPrecedence: number): string {
-  const text = expressionToIntentText(expr);
-  const precedence = expressionPrecedence(expr);
-  return precedence < parentPrecedence ? `(${text})` : text;
-}
-
-function expressionPrecedence(expr: ExpressionAst): number {
-  switch (expr.kind) {
-    case "number":
-    case "string":
-    case "identifier":
-    case "call":
-      return 4;
-    case "unary":
-      return 3;
-    case "binary":
-      return binaryPrecedence(expr.op);
-  }
-}
-
-function binaryPrecedence(op: Extract<ExpressionAst, { kind: "binary" }>["op"]): number {
-  return op === "*" || op === "/" ? 2 : 1;
-}
 
 function priority(
   variable: string,
@@ -7784,17 +7086,6 @@ function safeFormatAddress(address: number): string {
   }
 }
 
-export function buildDiagnostic(
-  level: "warning" | "error",
-  message: string,
-  line?: number,
-  code?: string,
-): Diagnostic {
-  const diagnostic: Diagnostic = { level, message };
-  if (line !== undefined) diagnostic.line = line;
-  if (code !== undefined) diagnostic.code = code;
-  return diagnostic;
-}
 
 function buildCellRole(
   address: number,
@@ -7879,801 +7170,50 @@ function uniqueRoles(roles: CellRole[]): CellRole[] {
   return [...new Set(roles)];
 }
 
-type BranchRemovalCandidate = BranchAssignCandidate | BranchTerminalCandidate;
-
-interface GuardedUpdate {
-  target: string;
-  op: "+" | "-";
-  delta: ExpressionAst;
-}
-
-interface GuardedUpdateSelectorCandidate {
-  selector: ExpressionAst;
-  updates: GuardedUpdate[];
-  name: string;
-  detail: string;
-  usesNegativeZero: boolean;
-}
-
-interface BranchAssignCandidate {
-  kind: "assign";
-  target: string;
-  expr: ExpressionAst;
-  name: string;
-  detail: string;
-}
-
-interface BranchTerminalCandidate {
-  kind: "pause" | "halt";
-  expr: ExpressionAst;
-  name: string;
-  detail: string;
-}
-
-export function buildBranchRemovalCandidate(
-  statement: Extract<StatementAst, { kind: "if" }>,
-  ast: ProgramAst,
-  options: { negativeZeroDegree?: boolean } = {},
-): BranchRemovalCandidate | undefined {
-  return buildTerminalSelectCandidate(statement, ast, options) ??
-    buildComparisonBooleanCandidate(statement) ??
-    buildBooleanAlgebraCandidate(statement, ast) ??
-    buildAbsCandidate(statement) ??
-    buildMaxMinCandidate(statement) ??
-    buildClampCandidate(statement) ??
-    buildSaturatingUpdateCandidate(statement, ast) ??
-    buildBooleanSignToggleCandidate(statement, ast) ??
-    buildBooleanUpdateCandidate(statement, ast) ??
-    buildArithmeticIfSelect(statement, ast, options);
-}
-
-export function buildGuardedUpdateSelectorCandidate(
-  statement: Extract<StatementAst, { kind: "if" }>,
-  ast: ProgramAst,
-  options: { negativeZeroDegree?: boolean } = {},
-): GuardedUpdateSelectorCandidate | undefined {
-  const updates = guardedUpdates(statement);
-  if (updates === undefined) return undefined;
-
-  const booleanSelector = booleanSelectorExpression(statement.condition, ast);
-  const negativeZeroSelector = options.negativeZeroDegree
-    ? negativeZeroThresholdSelectorExpression(statement.condition, ast)
-    : undefined;
-  const selector = booleanSelector ?? negativeZeroSelector ?? comparisonSelectorExpression(statement.condition);
-  if (selector === undefined) return undefined;
-
-  const usesNegativeZero = booleanSelector === undefined && negativeZeroSelector !== undefined;
-  if (!usesNegativeZero && updates.length < 2) return undefined;
-  return {
-    selector,
-    updates,
-    name: usesNegativeZero ? "negative-zero-threshold-update" : "multi-guarded-update",
-    detail: usesNegativeZero
-      ? "Replaced threshold guarded update with a negative-zero selector"
-      : "Replaced guarded updates with one stored arithmetic selector",
-    usesNegativeZero,
-  };
-}
-
-function guardedUpdates(statement: Extract<StatementAst, { kind: "if" }>): GuardedUpdate[] | undefined {
-  if (statement.elseBody !== undefined || statement.thenBody.length === 0) return undefined;
-  const updates: GuardedUpdate[] = [];
-  for (const inner of statement.thenBody) {
-    if (inner.kind !== "assign") return undefined;
-    const plus = matchTargetPlusDelta(inner.expr, inner.target);
-    if (plus !== undefined) {
-      if (!expressionPureForSubstitution(plus)) return undefined;
-      updates.push({ target: inner.target, op: "+", delta: plus });
-      continue;
-    }
-    const minus = matchTargetMinusDelta(inner.expr, inner.target);
-    if (minus !== undefined) {
-      if (!expressionPureForSubstitution(minus)) return undefined;
-      updates.push({ target: inner.target, op: "-", delta: minus });
-      continue;
-    }
-    return undefined;
-  }
-  return updates;
-}
-
-export function maskedGuardedUpdateExpression(update: GuardedUpdate, selector: ExpressionAst): ExpressionAst {
-  const current: ExpressionAst = { kind: "identifier", name: update.target };
-  const delta = multiplyExpressions(update.delta, selector);
-  return update.op === "+"
-    ? addExpressions(current, delta)
-    : subtractExpressions(current, delta);
-}
-
-export function buildDoubleClampCandidate(
-  first: Extract<StatementAst, { kind: "if" }>,
-  second: Extract<StatementAst, { kind: "if" }>,
-): BranchAssignCandidate | undefined {
-  const lower = clampBound(first, "lower");
-  const upper = clampBound(second, "upper");
-  if (!lower || !upper || lower.target !== upper.target) return undefined;
-  const targetExpr: ExpressionAst = { kind: "identifier", name: lower.target };
-  return {
-    kind: "assign",
-    target: lower.target,
-    expr: minExpression(maxExpression(targetExpr, lower.bound), upper.bound),
-    name: "arithmetic-if-double-clamp",
-    detail: "Replaced adjacent lower/upper clamp branches with min(max())",
-  };
-}
-
-function clampBound(
-  statement: Extract<StatementAst, { kind: "if" }>,
-  direction: "lower" | "upper",
-): { target: string; bound: ExpressionAst } | undefined {
-  const assign = singleEffectiveAssign(statement);
-  if (!assign) return undefined;
-  const targetExpr: ExpressionAst = { kind: "identifier", name: assign.target };
-  const { left, right, op } = statement.condition;
-  if (!expressionEquals(left, targetExpr) || !expressionEquals(assign.expr, right)) return undefined;
-  if (direction === "lower" && (op === "<" || op === "<=")) return { target: assign.target, bound: right };
-  if (direction === "upper" && (op === ">" || op === ">=")) return { target: assign.target, bound: right };
-  return undefined;
-}
-
-function buildTerminalSelectCandidate(
-  statement: Extract<StatementAst, { kind: "if" }>,
-  ast: ProgramAst,
-  options: { negativeZeroDegree?: boolean } = {},
-): BranchRemovalCandidate | undefined {
-  if (!statement.elseBody || statement.thenBody.length !== 1 || statement.elseBody.length !== 1) return undefined;
-  const thenStatement = effectiveTerminalStatement(statement.thenBody[0], ast);
-  const elseStatement = effectiveTerminalStatement(statement.elseBody[0], ast);
-  if (!thenStatement || !elseStatement) return undefined;
-  if (elseStatement.kind !== thenStatement.kind) return undefined;
-
-  const booleanSelector = booleanSelectorExpression(statement.condition, ast);
-  const negativeZeroSelector = options.negativeZeroDegree
-    ? negativeZeroThresholdSelectorExpression(statement.condition, ast)
-    : undefined;
-  const selector = booleanSelector ?? negativeZeroSelector ?? comparisonSelectorExpression(statement.condition);
-  if (!selector) return undefined;
-  const usesNegativeZero = booleanSelector === undefined && negativeZeroSelector !== undefined;
-  return {
-    kind: thenStatement.kind,
-    expr: terminalSelectExpression(thenStatement.expr, elseStatement.expr, selector),
-    name: usesNegativeZero ? "negative-zero-threshold-terminal-select" : "arithmetic-if-terminal-select",
-    detail: usesNegativeZero
-      ? `Replaced threshold ${thenStatement.kind} if/else with negative-zero selection`
-      : `Replaced boolean ${thenStatement.kind} if/else with arithmetic selection`,
-  };
-}
-
-function effectiveTerminalStatement(
-  statement: StatementAst | undefined,
-  ast: ProgramAst,
-): Extract<StatementAst, { kind: "pause" | "halt" }> | undefined {
-  if (statement === undefined) return undefined;
-  if (statement.kind === "pause" || statement.kind === "halt") return statement;
-  if (statement.kind !== "call") return undefined;
-  const proc = ast.procs.find((candidate) => candidate.name === statement.block);
-  if (proc === undefined || proc.body.length !== 1) return undefined;
-  const terminal = proc.body[0];
-  return terminal?.kind === "pause" || terminal?.kind === "halt" ? terminal : undefined;
-}
-
-function terminalSelectExpression(
-  thenExpr: ExpressionAst,
-  elseExpr: ExpressionAst,
-  selector: ExpressionAst,
-): ExpressionAst {
-  const thenValue = numericLiteralValue(thenExpr);
-  const elseValue = numericLiteralValue(elseExpr);
-  if (thenValue !== undefined && elseValue !== undefined) {
-    const delta = thenValue - elseValue;
-    if (delta === 0) return numberExpression(thenValue);
-    return addExpressions(
-      numberExpression(elseValue),
-      multiplyExpressions(numberExpression(delta), selector),
-    );
-  }
-  return addExpressions(
-    multiplyExpressions(thenExpr, selector),
-    multiplyExpressions(elseExpr, oneMinus(selector)),
-  );
-}
-
-function comparisonSelectorExpression(condition: ConditionAst): ExpressionAst | undefined {
-  const { left, right, op } = condition;
-  switch (op) {
-    case "==":
-      return oneMinus(signExpression(absExpression(subtractExpressions(left, right))));
-    case "!=":
-      return signExpression(absExpression(subtractExpressions(left, right)));
-    case ">":
-      return maxExpression(numberExpression(0), signExpression(subtractExpressions(left, right)));
-    case "<":
-      return maxExpression(numberExpression(0), signExpression(subtractExpressions(right, left)));
-    case ">=":
-      return oneMinus(
-        maxExpression(numberExpression(0), signExpression(subtractExpressions(right, left))),
-      );
-    case "<=":
-      return oneMinus(
-        maxExpression(numberExpression(0), signExpression(subtractExpressions(left, right))),
-      );
-    default:
-      return undefined;
-  }
-}
-
-function negativeZeroThresholdSelectorExpression(condition: ConditionAst, ast: ProgramAst): ExpressionAst | undefined {
-  const threshold = matchNegativeZeroThresholdCondition(condition, ast);
-  if (threshold === undefined) return undefined;
-  const selector: ExpressionAst = {
-    kind: "call",
-    callee: NEGATIVE_ZERO_DEGREE_SELECTOR_GE,
-    args: [threshold.value, numberExpression(threshold.bound)],
-  };
-  return threshold.truth === "ge" ? selector : oneMinus(selector);
-}
-
-export function matchNegativeZeroThresholdCondition(
-  condition: ConditionAst,
-  ast: ProgramAst,
-): { value: ExpressionAst; bound: number; truth: "ge" | "lt" } | undefined {
-  if (condition.left.kind === "number") {
-    const flipped = flipNumericLeftCondition(condition);
-    return flipped === undefined ? undefined : matchNegativeZeroThresholdCondition(flipped, ast);
-  }
-
-  const value = condition.left;
-  const bound = numericLiteralValue(condition.right);
-  if (bound === undefined || !Number.isFinite(bound) || bound <= 0 || bound > 1e12) return undefined;
-  if (!isKnownIntegerValuedExpression(value, ast)) return undefined;
-  const range = numericRangeForExpression(value, ast);
-  if (range === undefined || range.min === undefined || range.min < 0) return undefined;
-  if (range.max !== undefined && range.max / bound >= 1e60) return undefined;
-
-  switch (condition.op) {
-    case ">=":
-      return { value, bound, truth: "ge" };
-    case "<":
-      return { value, bound, truth: "lt" };
-    case ">":
-      return Number.isSafeInteger(bound + 1) ? { value, bound: bound + 1, truth: "ge" } : undefined;
-    case "<=":
-      return Number.isSafeInteger(bound + 1) ? { value, bound: bound + 1, truth: "lt" } : undefined;
-    case "==":
-    case "!=":
-      return undefined;
-  }
-}
-
-function buildArithmeticIfSelect(
-  statement: Extract<StatementAst, { kind: "if" }>,
-  ast: ProgramAst,
-  options: { negativeZeroDegree?: boolean } = {},
-): BranchRemovalCandidate | undefined {
-  if (!statement.elseBody || statement.thenBody.length !== 1 || statement.elseBody.length !== 1) {
-    return undefined;
-  }
-  const thenAssign = statement.thenBody[0];
-  const elseAssign = statement.elseBody[0];
-  if (thenAssign?.kind !== "assign" || elseAssign?.kind !== "assign") return undefined;
-  if (thenAssign.target !== elseAssign.target) return undefined;
-
-  const booleanSelector = booleanSelectorExpression(statement.condition, ast);
-  const negativeZeroSelector = options.negativeZeroDegree
-    ? negativeZeroThresholdSelectorExpression(statement.condition, ast)
-    : undefined;
-  const selector = booleanSelector ?? negativeZeroSelector;
-  if (!selector) return undefined;
-  const usesNegativeZero = booleanSelector === undefined && negativeZeroSelector !== undefined;
-
-  const expr = addExpressions(
-    multiplyExpressions(thenAssign.expr, selector),
-    multiplyExpressions(elseAssign.expr, oneMinus(selector)),
-  );
-  return {
-    kind: "assign",
-    target: thenAssign.target,
-    expr,
-    name: usesNegativeZero ? "negative-zero-threshold-select" : "arithmetic-if-select",
-    detail: usesNegativeZero
-      ? "Replaced threshold if/else assignment with negative-zero selection"
-      : "Replaced boolean if/else with arithmetic selection",
-  };
-}
-
-function buildComparisonBooleanCandidate(statement: Extract<StatementAst, { kind: "if" }>): BranchRemovalCandidate | undefined {
-  if (!statement.elseBody || statement.thenBody.length !== 1 || statement.elseBody.length !== 1) return undefined;
-  const thenAssign = statement.thenBody[0];
-  const elseAssign = statement.elseBody[0];
-  if (thenAssign?.kind !== "assign" || elseAssign?.kind !== "assign") return undefined;
-  if (thenAssign.target !== elseAssign.target) return undefined;
-
-  const thenValue = numericLiteralValue(thenAssign.expr);
-  const elseValue = numericLiteralValue(elseAssign.expr);
-  if (!((thenValue === 1 && elseValue === 0) || (thenValue === 0 && elseValue === 1))) return undefined;
-
-  const truth = comparisonMask(statement.condition);
-  if (!truth) return undefined;
-  return {
-    kind: "assign",
-    target: thenAssign.target,
-    expr: thenValue === 1 ? truth : oneMinus(truth),
-    name: "arithmetic-if-comparison-mask",
-    detail: "Replaced comparison-to-boolean branch with arithmetic mask",
-  };
-}
-
-function buildBooleanAlgebraCandidate(
-  statement: Extract<StatementAst, { kind: "if" }>,
-  ast: ProgramAst,
-): BranchRemovalCandidate | undefined {
-  if (!statement.elseBody || statement.thenBody.length !== 1 || statement.elseBody.length !== 1) return undefined;
-  const thenAssign = statement.thenBody[0];
-  const elseAssign = statement.elseBody[0];
-  if (thenAssign?.kind !== "assign" || elseAssign?.kind !== "assign") return undefined;
-  if (thenAssign.target !== elseAssign.target) return undefined;
-
-  const selector = booleanSelectorExpression(statement.condition, ast);
-  const selectorName = booleanSelectorVariableName(statement.condition, ast);
-  if (!selector || !selectorName) return undefined;
-  const otherThen = booleanIdentifier(thenAssign.expr, ast);
-  const otherElse = booleanIdentifier(elseAssign.expr, ast);
-  const thenValue = numericLiteralValue(thenAssign.expr);
-  const elseValue = numericLiteralValue(elseAssign.expr);
-  if (otherThen && elseValue === 0) {
-    return booleanAlgebraCandidate(thenAssign.target, multiplyExpressions(selector, otherThen), "and");
-  }
-  if (thenValue === 1 && otherElse) {
-    return booleanAlgebraCandidate(thenAssign.target, maxExpression(selector, otherElse), "or");
-  }
-  if (otherThen && otherElse && expressionEquals(otherThen, otherElse)) return undefined;
-  if (otherThen && otherElse && expressionEquals(thenAssign.expr, oneMinus(otherElse))) {
-    return booleanAlgebraCandidate(thenAssign.target, absExpression(subtractExpressions(selector, otherElse)), "xor");
-  }
-  return undefined;
-}
-
-function booleanAlgebraCandidate(target: string, expr: ExpressionAst, operation: string): BranchRemovalCandidate {
-  return {
-    kind: "assign",
-    target,
-    expr,
-    name: "arithmetic-if-boolean-algebra",
-    detail: `Replaced boolean ${operation.toUpperCase()} branch with arithmetic expression`,
-  };
-}
-
-function buildBooleanUpdateCandidate(
-  statement: Extract<StatementAst, { kind: "if" }>,
-  ast: ProgramAst,
-): BranchRemovalCandidate | undefined {
-  if (statement.elseBody || statement.thenBody.length !== 1) return undefined;
-  const assign = statement.thenBody[0];
-  if (assign?.kind !== "assign") return undefined;
-
-  const selector = booleanSelectorExpression(statement.condition, ast);
-  if (!selector) return undefined;
-
-  const current: ExpressionAst = { kind: "identifier", name: assign.target };
-  const plus = matchTargetPlusDelta(assign.expr, assign.target);
-  if (plus) {
-    return {
-      kind: "assign",
-      target: assign.target,
-      expr: addExpressions(current, multiplyExpressions(plus, selector)),
-      name: "arithmetic-if-update",
-      detail: "Replaced conditional addition with boolean-masked arithmetic",
-    };
-  }
-
-  const minus = matchTargetMinusDelta(assign.expr, assign.target);
-  if (minus) {
-    return {
-      kind: "assign",
-      target: assign.target,
-      expr: subtractExpressions(current, multiplyExpressions(minus, selector)),
-      name: "arithmetic-if-update",
-      detail: "Replaced conditional subtraction with boolean-masked arithmetic",
-    };
-  }
-
-  if (expressionEquals(assign.expr, negateExpression(current))) {
-    return {
-      kind: "assign",
-      target: assign.target,
-      expr: signToggleExpression(current, selector),
-      name: "arithmetic-if-sign-toggle",
-      detail: "Replaced conditional sign toggle with boolean-masked multiplier",
-    };
-  }
-
-  return buildConditionalMoveCandidate(assign, selector);
-}
-
-function buildBooleanSignToggleCandidate(
-  statement: Extract<StatementAst, { kind: "if" }>,
-  ast: ProgramAst,
-): BranchRemovalCandidate | undefined {
-  if (!statement.elseBody || statement.thenBody.length !== 1 || statement.elseBody.length !== 1) return undefined;
-  const thenAssign = statement.thenBody[0];
-  const elseAssign = statement.elseBody[0];
-  if (thenAssign?.kind !== "assign" || elseAssign?.kind !== "assign") return undefined;
-  if (thenAssign.target !== elseAssign.target || !isIdentityAssignment(elseAssign)) return undefined;
-  const selector = booleanSelectorExpression(statement.condition, ast);
-  if (!selector) return undefined;
-  const current: ExpressionAst = { kind: "identifier", name: thenAssign.target };
-  if (!expressionEquals(thenAssign.expr, negateExpression(current))) return undefined;
-  return {
-    kind: "assign",
-    target: thenAssign.target,
-    expr: signToggleExpression(current, selector),
-    name: "arithmetic-if-sign-toggle",
-    detail: "Replaced conditional sign toggle with boolean-masked multiplier",
-  };
-}
-
-function buildConditionalMoveCandidate(
-  assign: Extract<StatementAst, { kind: "assign" }>,
-  selector: ExpressionAst,
-): BranchRemovalCandidate | undefined {
-  const current: ExpressionAst = { kind: "identifier", name: assign.target };
-  if (expressionEquals(assign.expr, current)) return undefined;
-  return {
-    kind: "assign",
-    target: assign.target,
-    expr: addExpressions(
-      multiplyExpressions(current, oneMinus(selector)),
-      multiplyExpressions(assign.expr, selector),
-    ),
-    name: "arithmetic-if-conditional-move",
-    detail: "Replaced conditional assignment with boolean-masked conditional move",
-  };
-}
-
-function buildSaturatingUpdateCandidate(
-  statement: Extract<StatementAst, { kind: "if" }>,
-  ast: ProgramAst,
-): BranchRemovalCandidate | undefined {
-  if (statement.elseBody || statement.thenBody.length !== 1) return undefined;
-  const assign = statement.thenBody[0];
-  if (assign?.kind !== "assign") return undefined;
-  const range = integerRangeFor(assign.target, ast);
-  if (!range) return undefined;
-
-  const targetExpr: ExpressionAst = { kind: "identifier", name: assign.target };
-  const { left, right, op } = statement.condition;
-  if (!expressionEquals(left, targetExpr)) return undefined;
-
-  const decrement = matchTargetMinusDelta(assign.expr, assign.target);
-  if (decrement && op === ">" && isNumericValue(decrement, 1) && range.min !== undefined && isNumericValue(right, range.min)) {
-    return maxCandidate(assign.target, assign.expr, right, "Replaced saturating decrement branch with max()");
-  }
-
-  const increment = matchTargetPlusDelta(assign.expr, assign.target);
-  if (increment && op === "<" && isNumericValue(increment, 1) && range.max !== undefined && isNumericValue(right, range.max)) {
-    return minCandidate(assign.target, assign.expr, right, "Replaced saturating increment branch with min-via-max()");
-  }
-
-  return undefined;
-}
-
-function buildMaxMinCandidate(statement: Extract<StatementAst, { kind: "if" }>): BranchRemovalCandidate | undefined {
-  if (!statement.elseBody || statement.thenBody.length !== 1 || statement.elseBody.length !== 1) return undefined;
-  const thenAssign = statement.thenBody[0];
-  const elseAssign = statement.elseBody[0];
-  if (thenAssign?.kind !== "assign" || elseAssign?.kind !== "assign") return undefined;
-  if (thenAssign.target !== elseAssign.target) return undefined;
-
-  const { left, right, op } = statement.condition;
-  if (["<", "<=", ">", ">="].includes(op)) {
-    if ((op === ">" || op === ">=") && expressionEquals(thenAssign.expr, left) && expressionEquals(elseAssign.expr, right)) {
-      return maxCandidate(thenAssign.target, left, right);
-    }
-    if ((op === "<" || op === "<=") && expressionEquals(thenAssign.expr, right) && expressionEquals(elseAssign.expr, left)) {
-      return maxCandidate(thenAssign.target, left, right);
-    }
-    if ((op === "<" || op === "<=") && expressionEquals(thenAssign.expr, left) && expressionEquals(elseAssign.expr, right)) {
-      return minCandidate(thenAssign.target, left, right);
-    }
-    if ((op === ">" || op === ">=") && expressionEquals(thenAssign.expr, right) && expressionEquals(elseAssign.expr, left)) {
-      return minCandidate(thenAssign.target, left, right);
-    }
-  }
-
-  return undefined;
-}
-
-function buildClampCandidate(statement: Extract<StatementAst, { kind: "if" }>): BranchRemovalCandidate | undefined {
-  const assign = singleEffectiveAssign(statement);
-  if (!assign) return undefined;
-  const targetExpr: ExpressionAst = { kind: "identifier", name: assign.target };
-  const { left, right, op } = statement.condition;
-  if (!expressionEquals(left, targetExpr)) return undefined;
-
-  if ((op === "<" || op === "<=") && expressionEquals(assign.expr, right)) {
-    return maxCandidate(assign.target, targetExpr, right, "Replaced lower clamp branch with max()");
-  }
-  if ((op === ">" || op === ">=") && expressionEquals(assign.expr, right)) {
-    return minCandidate(assign.target, targetExpr, right, "Replaced upper clamp branch with min-via-max()");
-  }
-  return undefined;
-}
-
-function buildAbsCandidate(statement: Extract<StatementAst, { kind: "if" }>): BranchRemovalCandidate | undefined {
-  if (statement.thenBody.length !== 1) return undefined;
-  const thenAssign = statement.thenBody[0];
-  if (thenAssign?.kind !== "assign") return undefined;
-  const { left, right, op } = statement.condition;
-  if (!isNumericValue(right, 0)) return undefined;
-  const negativeLeft = negateExpression(left);
-
-  if (!statement.elseBody) {
-    const targetExpr: ExpressionAst = { kind: "identifier", name: thenAssign.target };
-    if (!expressionEquals(targetExpr, left)) return undefined;
-    if ((op === "<" || op === "<=") && expressionEquals(thenAssign.expr, negativeLeft)) {
-      return absCandidate(thenAssign.target, left);
-    }
-    return undefined;
-  }
-
-  if (statement.elseBody.length !== 1) return undefined;
-  const elseAssign = statement.elseBody[0];
-  if (elseAssign?.kind !== "assign" || thenAssign.target !== elseAssign.target) return undefined;
-
-  if ((op === "<" || op === "<=") &&
-    expressionEquals(thenAssign.expr, negativeLeft) &&
-    expressionEquals(elseAssign.expr, left)) {
-    return absCandidate(thenAssign.target, left);
-  }
-  if ((op === ">" || op === ">=") &&
-    expressionEquals(thenAssign.expr, left) &&
-    expressionEquals(elseAssign.expr, negativeLeft)) {
-    return absCandidate(thenAssign.target, left);
-  }
-  return undefined;
-}
-
-function absCandidate(target: string, expr: ExpressionAst): BranchRemovalCandidate {
-  return {
-    kind: "assign",
-    target,
-    expr: { kind: "call", callee: "abs", args: [expr] },
-    name: "arithmetic-if-abs",
-    detail: "Replaced sign branch with abs()",
-  };
-}
-
-function maxCandidate(
-  target: string,
-  left: ExpressionAst,
-  right: ExpressionAst,
-  detail = "Replaced max branch with К max",
-): BranchRemovalCandidate {
-  return {
-    kind: "assign",
-    target,
-    expr: { kind: "call", callee: "max", args: [left, right] },
-    name: "arithmetic-if-max",
-    detail,
-  };
-}
-
-function minCandidate(
-  target: string,
-  left: ExpressionAst,
-  right: ExpressionAst,
-  detail = "Replaced min branch with min-via-max()",
-): BranchRemovalCandidate {
-  return {
-    kind: "assign",
-    target,
-    expr: negateExpression({
-      kind: "call",
-      callee: "max",
-      args: [negateExpression(left), negateExpression(right)],
-    }),
-    name: "arithmetic-if-min",
-    detail,
-  };
-}
-
-function booleanSelectorExpression(condition: ConditionAst, ast: ProgramAst): ExpressionAst | undefined {
-  const leftIdentifier = condition.left.kind === "identifier" ? condition.left.name : undefined;
-  const rightIdentifier = condition.right.kind === "identifier" ? condition.right.name : undefined;
-  const leftNumber = numericLiteralValue(condition.left);
-  const rightNumber = numericLiteralValue(condition.right);
-
-  let variable: string | undefined;
-  let value: number | undefined;
-  if (leftIdentifier !== undefined && rightNumber !== undefined) {
-    variable = leftIdentifier;
-    value = rightNumber;
-  } else if (rightIdentifier !== undefined && leftNumber !== undefined) {
-    variable = rightIdentifier;
-    value = leftNumber;
-  }
-  if (variable === undefined || value === undefined) return undefined;
-  if (!isBooleanVariable(variable, ast)) return undefined;
-
-  const variableExpr: ExpressionAst = { kind: "identifier", name: variable };
-  if ((condition.op === "==" && value === 1) || (condition.op === "!=" && value === 0)) {
-    return variableExpr;
-  }
-  if ((condition.op === "==" && value === 0) || (condition.op === "!=" && value === 1)) {
-    return oneMinus(variableExpr);
-  }
-  return undefined;
-}
-
-function isBooleanVariable(name: string, ast: ProgramAst): boolean {
-  for (const state of ast.states) {
-    const field = state.fields.find((candidate) => candidate.name === name);
-    if (!field) continue;
-    if (field.type === "flag") return true;
-    if (field.min === 0 && field.max === 1) return true;
-  }
-  return false;
-}
-
-function integerRangeFor(name: string, ast: ProgramAst): { min?: number; max?: number } | undefined {
-  const range = numericRangeFor(name, ast);
-  if (range === undefined) return undefined;
-  if (!Number.isInteger(range.min) || !Number.isInteger(range.max)) return undefined;
-  return range;
-}
-
-function numericRangeFor(name: string, ast: ProgramAst): { min?: number; max?: number } | undefined {
-  for (const state of ast.states) {
-    const field = state.fields.find((candidate) => candidate.name === name);
-    if (!field) continue;
-    if (field.type === "flag") return { min: 0, max: 1 };
-    if (field.type === "range") {
-      const range: { min?: number; max?: number } = {};
-      if (field.min !== undefined) range.min = field.min;
-      if (field.max !== undefined) range.max = field.max;
-      return range;
-    }
-  }
-  return undefined;
-}
-
-function booleanSelectorVariableName(condition: ConditionAst, ast: ProgramAst): string | undefined {
-  const leftIdentifier = condition.left.kind === "identifier" ? condition.left.name : undefined;
-  const rightIdentifier = condition.right.kind === "identifier" ? condition.right.name : undefined;
-  const leftNumber = numericLiteralValue(condition.left);
-  const rightNumber = numericLiteralValue(condition.right);
-  const name = leftIdentifier !== undefined && rightNumber !== undefined
-    ? leftIdentifier
-    : rightIdentifier !== undefined && leftNumber !== undefined
-      ? rightIdentifier
-      : undefined;
-  return name !== undefined && isBooleanVariable(name, ast) ? name : undefined;
-}
-
-function booleanIdentifier(expr: ExpressionAst, ast: ProgramAst): ExpressionAst | undefined {
-  return expr.kind === "identifier" && isBooleanVariable(expr.name, ast) ? expr : undefined;
-}
-
-function comparisonMask(condition: ConditionAst): ExpressionAst | undefined {
-  if (condition.op !== "==" && condition.op !== "!=") return undefined;
-  const notEqual = signExpression(absExpression(subtractExpressions(condition.left, condition.right)));
-  return condition.op === "==" ? oneMinus(notEqual) : notEqual;
-}
-
-export function isTicTacToeMacroName(name: string): boolean {
-  return ticTacToeMacroArity(name) !== undefined;
-}
-
-export function ticTacToeMacroArity(name: string): number | undefined {
-  const arities: Record<string, number> = {
-    norm4: 1,
-    grid4_norm: 1,
-    bit_mask: 1,
-    bit_has: 2,
-    bit_set: 2,
-    bit_clear: 2,
-    bit_toggle: 2,
-    diag_left_index: 2,
-    diag_right_index: 2,
-    cell_mask: 2,
-    cell_has: 3,
-    cell_set: 3,
-    cell_clear: 3,
-    cell_toggle: 3,
-    cell_used: 3,
-    cell_mark: 3,
-    digit_at: 2,
-    digit_add: 3,
-    digit_set: 3,
-    packed4_add: 3,
-    packed4_digit: 2,
-    packed4_score: 2,
-  };
-  return arities[name];
-}
-
-export function ticTacToeExpressionMacro(name: string, args: ExpressionAst[]): ExpressionAst | undefined {
-  switch (name) {
-    case "norm4":
-    case "grid4_norm":
-      return norm4Expression(args[0]!);
-    case "bit_mask":
-      return bitMaskExpression(args[0]!);
-    case "bit_has":
-      return bitMembershipExpression(args[0]!, args[1]!);
-    case "bit_set":
-      return bitOrExpression(args[0]!, bitMaskExpression(args[1]!));
-    case "bit_clear":
-      return bitAndExpression(args[0]!, bitNotExpression(bitMaskExpression(args[1]!)));
-    case "bit_toggle":
-      return bitXorExpression(args[0]!, bitMaskExpression(args[1]!));
-    case "diag_left_index":
-      return positiveNorm4Expression(addExpressions(args[0]!, args[1]!));
-    case "diag_right_index":
-      return positiveNorm4Expression(addExpressions(subtractExpressions(args[0]!, args[1]!), numberExpression(4)));
-    case "cell_mask":
-      return cellMaskExpression(args[0]!, args[1]!);
-    case "cell_has":
-    case "cell_used":
-      return {
-        kind: "call",
-        callee: "sign",
-        args: [{
-          kind: "call",
-          callee: "frac",
-          args: [bitAndExpression(args[0]!, cellMaskExpression(args[1]!, args[2]!))],
-        }],
-      };
-    case "cell_set":
-    case "cell_mark":
-      return bitOrExpression(args[0]!, cellMaskExpression(args[1]!, args[2]!));
-    case "cell_clear":
-      return bitAndExpression(args[0]!, bitNotExpression(cellMaskExpression(args[1]!, args[2]!)));
-    case "cell_toggle":
-      return bitXorExpression(args[0]!, cellMaskExpression(args[1]!, args[2]!));
-    case "digit_at":
-      return packed4DigitExpression(args[0]!, args[1]!);
-    case "digit_add":
-    case "packed4_add":
-      return addExpressions(
-        args[0]!,
-        multiplyExpressions(args[2]!, digitPlaceExpression(args[1]!)),
-      );
-    case "digit_set":
-      return digitSetExpression(args[0]!, args[1]!, args[2]!);
-    case "packed4_digit":
-      return packed4DigitExpression(args[0]!, args[1]!);
-    case "packed4_score":
-      return {
-        kind: "call",
-        callee: "sqr",
-        args: [subtractExpressions(packed4DigitExpression(args[0]!, args[1]!), numberExpression(0.41200076))],
-      };
-    default:
-      return undefined;
-  }
-}
-
-type SmallSetMacroName = "near_any" | "eq_any";
-
-interface SmallSetTest {
-  expr: ExpressionAst;
-  trueOpcode: number;
-  falseOpcode: number;
-}
-
-interface SmallSetConditionMatch {
-  kind: SmallSetMacroName;
-  mode: "any" | "all";
-  tests: SmallSetTest[];
-}
-
-export interface NearAnyHelperConditionMatch {
-  value: ExpressionAst;
-  radius: ExpressionAst;
-  candidates: ExpressionAst[];
-  op: ">=" | "<";
-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 export interface NearAnyHelperStats {
   candidateCount: number;
@@ -8683,235 +7223,28 @@ export interface NearAnyHelperStats {
   helperCost: number;
 }
 
-export function isSmallSetMacroName(name: string): name is SmallSetMacroName {
-  return name === "near_any" || name === "eq_any";
-}
 
-export function smallSetMacroArityOk(name: SmallSetMacroName, argCount: number): boolean {
-  return name === "near_any" ? argCount >= 3 : argCount >= 2;
-}
 
-export function smallSetMacroArityText(name: SmallSetMacroName): string {
-  return name === "near_any" ? "at least three arguments" : "at least two arguments";
-}
 
-export function smallSetExpressionMacro(name: string, args: ExpressionAst[]): ExpressionAst | undefined {
-  if (!isSmallSetMacroName(name) || !smallSetMacroArityOk(name, args.length)) return undefined;
-  if (name === "near_any") {
-    const value = args[0]!;
-    const radius = args[1]!;
-    const distances = args.slice(2).map((candidate) => absExpression(subtractExpressions(value, candidate)));
-    if (distances.length === 1) return subtractExpressions(radius, distances[0]!);
-    return addExpressions(radius, maxExpressions(distances.map(negateExpression)));
-  }
-  const value = args[0]!;
-  const differences = args.slice(1).map((candidate) => subtractExpressions(value, candidate));
-  return productExpressions(differences);
-}
 
-export function matchSmallSetCondition(condition: ConditionAst): SmallSetConditionMatch | undefined {
-  const normalized = normalizeZeroComparison(condition);
-  if (normalized === undefined) return undefined;
 
-  const near = matchNearAnyExpression(normalized.expr);
-  if (near !== undefined && (normalized.op === ">=" || normalized.op === "<")) {
-    return {
-      kind: "near_any",
-      mode: normalized.op === ">=" ? "any" : "all",
-      tests: near.map((expr) => ({
-        expr,
-        trueOpcode: directTestOpcode("<"),
-        falseOpcode: directTestOpcode(">="),
-      })),
-    };
-  }
 
-  const equal = matchEqAnyExpression(normalized.expr);
-  if (equal !== undefined && (normalized.op === "==" || normalized.op === "!=")) {
-    return {
-      kind: "eq_any",
-      mode: normalized.op === "==" ? "any" : "all",
-      tests: equal.map((expr) => ({
-        expr,
-        trueOpcode: directTestOpcode("!="),
-        falseOpcode: directTestOpcode("=="),
-      })),
-    };
-  }
 
-  return undefined;
-}
 
-export function matchNearAnyHelperCondition(condition: ConditionAst): NearAnyHelperConditionMatch | undefined {
-  const normalized = normalizeZeroComparison(condition);
-  if (normalized === undefined || (normalized.op !== ">=" && normalized.op !== "<")) return undefined;
-  const match = matchNearAnySetExpression(normalized.expr);
-  if (match === undefined) return undefined;
-  if (!isSimpleStackLoad(match.value) || !isSimpleStackLoad(match.radius)) return undefined;
-  if (match.candidates.length === 0 || match.candidates.some((candidate) => !isSimpleStackLoad(candidate))) {
-    return undefined;
-  }
-  return { ...match, op: normalized.op };
-}
 
-function matchNearAnySetExpression(
-  expr: ExpressionAst,
-): { value: ExpressionAst; radius: ExpressionAst; candidates: ExpressionAst[] } | undefined {
-  if (expr.kind === "call" && expr.callee.toLowerCase() === "near_any" && smallSetMacroArityOk("near_any", expr.args.length)) {
-    return {
-      value: expr.args[0]!,
-      radius: expr.args[1]!,
-      candidates: expr.args.slice(2),
-    };
-  }
-  return matchNearAnyMarginSetExpression(expr);
-}
 
-function matchNearAnyMarginSetExpression(
-  expr: ExpressionAst,
-): { value: ExpressionAst; radius: ExpressionAst; candidates: ExpressionAst[] } | undefined {
-  const terms = flattenMaxTerms(expr);
-  const margins = terms.map(matchNearMarginTerm);
-  if (margins.some((margin) => margin === undefined)) return undefined;
-  const typedMargins = margins as NearMarginTerm[];
-  if (typedMargins.length === 0) return undefined;
-  const commonValue = commonDifferenceEndpoint(typedMargins.map((margin) => margin.difference));
-  if (commonValue === undefined) return undefined;
-  const radius = typedMargins[0]!.radius;
-  if (!typedMargins.every((margin) => expressionEquals(margin.radius, radius))) return undefined;
-  const candidates = typedMargins.map((margin) =>
-    expressionEquals(margin.difference.left, commonValue) ? margin.difference.right : margin.difference.left
-  );
-  return { value: commonValue, radius, candidates };
-}
 
-export function nearAnyHelperKey(value: ExpressionAst, radius: ExpressionAst): string {
-  return `${expressionToIntentText(value)}|${expressionToIntentText(radius)}`;
-}
 
-function normalizeZeroComparison(condition: ConditionAst): { expr: ExpressionAst; op: ConditionAst["op"] } | undefined {
-  if (isZeroExpression(condition.right)) return { expr: condition.left, op: condition.op };
-  if (isZeroExpression(condition.left)) return { expr: condition.right, op: flipComparisonOp(condition.op) };
-  return undefined;
-}
 
-function matchNearAnyExpression(expr: ExpressionAst): ExpressionAst[] | undefined {
-  if (expr.kind === "call" && expr.callee.toLowerCase() === "near_any") {
-    const macro = smallSetExpressionMacro("near_any", expr.args);
-    return macro === undefined ? undefined : matchNearAnyExpression(macro);
-  }
 
-  const terms = flattenMaxTerms(expr);
-  const margins = terms.map(matchNearMarginTerm);
-  if (margins.some((margin) => margin === undefined)) return undefined;
-  const typedMargins = margins as NearMarginTerm[];
-  const commonValue = commonDifferenceEndpoint(typedMargins.map((margin) => margin.difference));
-  if (commonValue === undefined) return undefined;
-  const radius = typedMargins[0]!.radius;
-  if (!typedMargins.every((margin) => expressionEquals(margin.radius, radius))) return undefined;
-  return typedMargins.map((margin) => margin.expr);
-}
 
-interface NearMarginTerm {
-  expr: ExpressionAst;
-  radius: ExpressionAst;
-  difference: Extract<ExpressionAst, { kind: "binary" }>;
-}
 
-function matchNearMarginTerm(expr: ExpressionAst): NearMarginTerm | undefined {
-  if (expr.kind !== "binary" || expr.op !== "-") return undefined;
-  const absCall = expr.right;
-  if (absCall.kind !== "call" || absCall.callee.toLowerCase() !== "abs" || absCall.args.length !== 1) {
-    return undefined;
-  }
-  const difference = absCall.args[0]!;
-  if (difference.kind !== "binary" || difference.op !== "-") return undefined;
-  return { expr, radius: expr.left, difference };
-}
 
-function matchEqAnyExpression(expr: ExpressionAst): ExpressionAst[] | undefined {
-  if (expr.kind === "call" && expr.callee.toLowerCase() === "eq_any") {
-    const macro = smallSetExpressionMacro("eq_any", expr.args);
-    return macro === undefined ? undefined : matchEqAnyExpression(macro);
-  }
 
-  const factors = flattenProductTerms(expr);
-  if (factors.length === 0) return undefined;
-  const differences = factors.map((factor) =>
-    factor.kind === "binary" && factor.op === "-" ? factor : undefined
-  );
-  if (differences.some((difference) => difference === undefined)) return undefined;
-  const typedDifferences = differences as Array<Extract<ExpressionAst, { kind: "binary" }>>;
-  if (commonDifferenceEndpoint(typedDifferences) === undefined) return undefined;
-  return factors;
-}
 
-function commonDifferenceEndpoint(
-  differences: Array<Extract<ExpressionAst, { kind: "binary" }>>,
-): ExpressionAst | undefined {
-  if (differences.length === 0) return undefined;
-  const candidates = [differences[0]!.left, differences[0]!.right];
-  return candidates.find((candidate) =>
-    differences.every((difference) =>
-      expressionEquals(difference.left, candidate) || expressionEquals(difference.right, candidate)
-    )
-  );
-}
 
-function flattenMaxTerms(expr: ExpressionAst): ExpressionAst[] {
-  if (expr.kind === "call" && expr.callee.toLowerCase() === "max" && expr.args.length === 2) {
-    return [...flattenMaxTerms(expr.args[0]!), ...flattenMaxTerms(expr.args[1]!)];
-  }
-  return [expr];
-}
 
-function flattenProductTerms(expr: ExpressionAst): ExpressionAst[] {
-  if (expr.kind === "binary" && expr.op === "*") {
-    return [...flattenProductTerms(expr.left), ...flattenProductTerms(expr.right)];
-  }
-  return [expr];
-}
 
-interface CellHelperCall {
-  mask: ExpressionAst;
-  x: ExpressionAst;
-  y: ExpressionAst;
-}
-
-type CellHelperName = "cell_used" | "cell_has" | "cell_mark" | "cell_set";
-
-export interface BitMembershipCondition {
-  collection: ExpressionAst;
-  item: ExpressionAst;
-  mask: ExpressionAst;
-  mode: "index" | "mask";
-  test: ExpressionAst;
-}
-
-interface BitSetAssignment {
-  collection: ExpressionAst;
-  item: ExpressionAst;
-}
-
-export function matchCellHelperCall(expr: ExpressionAst, names: readonly CellHelperName[]): CellHelperCall | undefined {
-  if (expr.kind !== "call" || !names.includes(expr.callee.toLowerCase() as CellHelperName) || expr.args.length !== 3) return undefined;
-  return {
-    mask: expr.args[0]!,
-    x: expr.args[1]!,
-    y: expr.args[2]!,
-  };
-}
-
-export function matchBitSetAssignment(statement: Extract<StatementAst, { kind: "assign" }>): BitSetAssignment | undefined {
-  const expr = statement.expr;
-  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_set" || expr.args.length !== 2) return undefined;
-  const collection = expr.args[0]!;
-  if (collection.kind !== "identifier" || statement.target !== collection.name) return undefined;
-  return {
-    collection,
-    item: expr.args[1]!,
-  };
-}
 
 function matchAnyBitSetAssignment(
   statement: Extract<StatementAst, { kind: "assign" }>,
@@ -8998,75 +7331,10 @@ function membershipSetRunScratchName(statement: Extract<StatementAst, { kind: "i
   return count >= 2 ? bitMaskScratchName(first) : undefined;
 }
 
-export function bitMaskScratchName(statement: StatementAst): string {
-  return `${BIT_MASK_SCRATCH_PREFIX}${statement.line}`;
-}
 
-export function ifSelectorScratchName(statement: StatementAst): string {
-  return `${IF_SELECTOR_SCRATCH_PREFIX}${statement.line}`;
-}
 
-export function matchBitMembershipCondition(condition: ConditionAst): BitMembershipCondition | undefined {
-  if (condition.op !== "!=" || !isZeroExpression(condition.right)) return undefined;
-  const test = condition.left;
-  if (test.kind !== "call" || test.args.length !== 2) return undefined;
-  if (test.callee.toLowerCase() === "bit_and") {
-    return {
-      collection: test.args[0]!,
-      item: test.args[1]!,
-      mask: test.args[1]!,
-      mode: "mask",
-      test,
-    };
-  }
-  if (test.callee.toLowerCase() !== "bit_has") return undefined;
-  const item = test.args[1]!;
-  return {
-    collection: test.args[0]!,
-    item,
-    mask: bitMaskExpression(item),
-    mode: "index",
-    test,
-  };
-}
 
-export function matchBitAbsenceCondition(condition: ConditionAst): BitMembershipCondition | undefined {
-  if (condition.op !== "==" || !isZeroExpression(condition.right)) return undefined;
-  const test = condition.left;
-  if (test.kind !== "call" || test.args.length !== 2) return undefined;
-  if (test.callee.toLowerCase() === "bit_and") {
-    return {
-      collection: test.args[0]!,
-      item: test.args[1]!,
-      mask: test.args[1]!,
-      mode: "mask",
-      test,
-    };
-  }
-  if (test.callee.toLowerCase() !== "bit_has") return undefined;
-  const item = test.args[1]!;
-  return {
-    collection: test.args[0]!,
-    item,
-    mask: bitMaskExpression(item),
-    mode: "index",
-    test,
-  };
-}
 
-export function isBitClearAssignment(
-  statement: Extract<StatementAst, { kind: "assign" }>,
-  membership: BitMembershipCondition,
-): boolean {
-  if (membership.collection.kind !== "identifier" || statement.target !== membership.collection.name) return false;
-  const expr = statement.expr;
-  if (expr.kind !== "call" || expr.args.length !== 2 || !expressionEquals(expr.args[0]!, membership.collection)) {
-    return false;
-  }
-  const name = expr.callee.toLowerCase();
-  if (name === "bit_clear") return membership.mode === "index" && expressionEquals(expr.args[1]!, membership.item);
-  return name === "bit_and" && isBitNotOf(expr.args[1]!, membership.mask);
-}
 
 function isBitSetAssignment(
   statement: Extract<StatementAst, { kind: "assign" }>,
@@ -9075,485 +7343,61 @@ function isBitSetAssignment(
   return matchAnyBitSetAssignment(statement, membership) !== undefined;
 }
 
-function isBitNotOf(expr: ExpressionAst, inner: ExpressionAst): boolean {
-  return expr.kind === "call" &&
-    expr.callee.toLowerCase() === "bit_not" &&
-    expr.args.length === 1 &&
-    expressionEquals(expr.args[0]!, inner);
-}
 
-interface SingleBitMaskOpAssignment {
-  opcode: number;
-  mnemonic: string;
-  collection: ExpressionAst;
-  index: ExpressionAst;
-  negate: boolean;
-}
 
-// Recognize a standalone `target = bit_or/bit_and/bit_xor(collection,
-// [bit_not] bit_mask(index))` assignment. These come from `cells += item` /
-// `cells -= item` on a single-row board. The generic expression compiler builds
-// `bit_mask(index)` inline while `collection` sits on the stack; the cell-mask
-// construction (frac/x^y/10^x) overflows the four-deep MK-61 stack and corrupts
-// the held accumulator. The dedicated lowering builds the mask into a scratch
-// register first (anchor added last, max depth three), so nothing is held while
-// the mask is constructed.
-export function matchSingleBitMaskOpAssignment(
-  statement: Extract<StatementAst, { kind: "assign" }>,
-): SingleBitMaskOpAssignment | undefined {
-  const expr = statement.expr;
-  if (expr.kind !== "call" || expr.args.length !== 2) return undefined;
-  const name = expr.callee.toLowerCase();
 
-  // `cells += item` / `cells -= item` on a single-row board lower directly to
-  // bit_set/bit_clear/bit_toggle(collection, index).
-  const indexOps: Record<string, [number, string, boolean]> = {
-    bit_set: [0x38, "К ∨", false],
-    bit_clear: [0x37, "К ∧", true],
-    bit_toggle: [0x39, "К ⊕", false],
-  };
-  const indexOp = indexOps[name];
-  if (indexOp !== undefined) {
-    return {
-      opcode: indexOp[0],
-      mnemonic: indexOp[1],
-      collection: expr.args[0]!,
-      index: expr.args[1]!,
-      negate: indexOp[2],
-    };
-  }
 
-  // Two-dimensional boards (and explicit bit ops) arrive pre-expanded as
-  // bit_or/bit_and/bit_xor(collection, [bit_not] bit_mask(index)).
-  const maskOps: Record<string, [number, string]> = {
-    bit_or: [0x38, "К ∨"],
-    bit_and: [0x37, "К ∧"],
-    bit_xor: [0x39, "К ⊕"],
-  };
-  const op = maskOps[name];
-  if (op === undefined) return undefined;
 
-  let maskArg = expr.args[1]!;
-  let negate = false;
-  if (maskArg.kind === "call" && maskArg.callee.toLowerCase() === "bit_not" && maskArg.args.length === 1) {
-    negate = true;
-    maskArg = maskArg.args[0]!;
-  }
-  if (maskArg.kind !== "call" || maskArg.callee.toLowerCase() !== "bit_mask" || maskArg.args.length !== 1) {
-    return undefined;
-  }
-  return {
-    opcode: op[0],
-    mnemonic: op[1],
-    collection: expr.args[0]!,
-    index: maskArg.args[0]!,
-    negate,
-  };
-}
 
-function norm4Expression(expr: ExpressionAst): ExpressionAst {
-  const rem = multiplyExpressions(
-    { kind: "call", callee: "frac", args: [divideExpressions({ kind: "call", callee: "int", args: [expr] }, numberExpression(4))] },
-    numberExpression(4),
-  );
-  return addExpressions(
-    rem,
-    multiplyExpressions(numberExpression(4), oneMinus(signExpression(maxExpression(rem, numberExpression(0))))),
-  );
-}
 
-function positiveNorm4Expression(expr: ExpressionAst): ExpressionAst {
-  const rem = multiplyExpressions(
-    fracExpression(divideExpressions(intExpression(expr), numberExpression(4))),
-    numberExpression(4),
-  );
-  return addExpressions(
-    rem,
-    multiplyExpressions(numberExpression(4), oneMinus(signExpression(rem))),
-  );
-}
 
-export function cellMaskExpression(x: ExpressionAst, y: ExpressionAst): ExpressionAst {
-  return addExpressions(
-    pow10Expression(x),
-    { kind: "call", callee: "int", args: [multiplyExpressions(pow10Expression(y), numberExpression(0.22600029))] },
-  );
-}
 
-export interface RandomCoordListPlacement {
-  listName: string;
-  xMin: number;
-  width: number;
-  yMin: number;
-  height: number;
-  count: number;
-}
 
-export function isZeroOriginTenByTenPlacement(placement: RandomCoordListPlacement): boolean {
-  return placement.xMin === 0 && placement.yMin === 0 && placement.width === 10 && placement.height === 10;
-}
 
-export function randomCoordListItemPlacement(fieldName: string, expr: ExpressionAst): RandomCoordListPlacement | undefined {
-  const item = coordListItemInfo(fieldName);
-  if (item === undefined) return undefined;
-  if (expr.kind !== "call" || expr.callee !== "__random_coord_list_item" || expr.args.length !== 6) return undefined;
-  const xMin = numericLiteralValue(expr.args[0]!);
-  const width = numericLiteralValue(expr.args[1]!);
-  const yMin = numericLiteralValue(expr.args[2]!);
-  const height = numericLiteralValue(expr.args[3]!);
-  const count = numericLiteralValue(expr.args[4]!);
-  const index = numericLiteralValue(expr.args[5]!);
-  if (
-    xMin === undefined ||
-    width === undefined ||
-    yMin === undefined ||
-    height === undefined ||
-    count === undefined ||
-    index === undefined ||
-    index !== item.index
-  ) return undefined;
-  return { listName: item.listName, xMin, width, yMin, height, count };
-}
 
-export function randomCoordListSetupFields(
-  fields: readonly StateFieldAst[],
-  placement: RandomCoordListPlacement,
-): StateFieldAst[] {
-  return fields
-    .filter((field) => {
-      const item = coordListItemInfo(field.name);
-      if (item === undefined || item.listName !== placement.listName) return false;
-      const current = field.initial === undefined ? undefined : randomCoordListItemPlacement(field.name, field.initial);
-      return current !== undefined &&
-        current.xMin === placement.xMin &&
-        current.width === placement.width &&
-        current.yMin === placement.yMin &&
-        current.height === placement.height &&
-        current.count === placement.count;
-    })
-    .sort((left, right) => coordListItemInfo(left.name)!.index - coordListItemInfo(right.name)!.index);
-}
 
-// A cell mask is stored as `8.HHHHHHH`: the MK-61 blue logical operations
-// (К∨/К∧/К⊕) force the integer part to 8 and operate nibble-wise on the seven
-// fractional hex digits, so each cell's bit lives in a fixed fractional nibble
-// rather than in an integer position (which normalization would collapse).
-// Bit `index` (0-based) occupies hex nibble `floor(index/4)+1` after the point,
-// with value `2^(index mod 4)` inside that nibble. `2^offset` is computed with
-// `F x^y`, which is slightly imprecise (e.g. 2^3 → 7.9999993), so it is rounded
-// before being placed, keeping the nibble exact.
-function bitMaskExpression(index: ExpressionAst): ExpressionAst {
-  const nibble = intExpression(divideExpressions(index, numberExpression(4)));
-  const offset = subtractExpressions(index, multiplyExpressions(nibble, numberExpression(4)));
-  const bitValue = intExpression(addExpressions(powExpression(numberExpression(2), offset), numberExpression(0.5)));
-  return addExpressions(
-    numberExpression(8),
-    divideExpressions(bitValue, pow10Expression(addExpressions(nibble, numberExpression(1)))),
-  );
-}
 
-// Membership of a bit reduces to: the fractional part of `mask К∧ bitMask` is
-// non-zero exactly when the bit is set (an absent bit yields `8.0`). `sign` of
-// that fraction collapses to the 0/1 the language expects from `bit_has`.
-function bitMembershipExpression(mask: ExpressionAst, index: ExpressionAst): ExpressionAst {
-  return {
-    kind: "call",
-    callee: "sign",
-    args: [{
-      kind: "call",
-      callee: "frac",
-      args: [bitAndExpression(mask, bitMaskExpression(index))],
-    }],
-  };
-}
 
-function packed4DigitExpression(lines: ExpressionAst, index: ExpressionAst): ExpressionAst {
-  return {
-    kind: "call",
-    callee: "int",
-    args: [
-      multiplyExpressions(
-        { kind: "call", callee: "frac", args: [divideExpressions(lines, pow10Expression(index))] },
-        numberExpression(10),
-      ),
-    ],
-  };
-}
 
-function digitSetExpression(value: ExpressionAst, index: ExpressionAst, digit: ExpressionAst): ExpressionAst {
-  const place = digitPlaceExpression(index);
-  return addExpressions(
-    subtractExpressions(value, multiplyExpressions(packed4DigitExpression(value, index), place)),
-    multiplyExpressions(digit, place),
-  );
-}
 
-function digitPlaceExpression(index: ExpressionAst): ExpressionAst {
-  return pow10Expression(subtractExpressions(index, numberExpression(1)));
-}
 
-function oneMinus(expr: ExpressionAst): ExpressionAst {
-  if (isNumericValue(expr, 0)) return numberExpression(1);
-  if (isNumericValue(expr, 1)) return numberExpression(0);
-  return {
-    kind: "binary",
-    op: "-",
-    left: numberExpression(1),
-    right: expr,
-  };
-}
 
-export function multiplyExpressions(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
-  if (isNumericValue(left, 0) || isNumericValue(right, 0)) return numberExpression(0);
-  if (isNumericValue(left, 1)) return right;
-  if (isNumericValue(right, 1)) return left;
-  return { kind: "binary", op: "*", left, right };
-}
 
-function productExpressions(expressions: ExpressionAst[]): ExpressionAst {
-  return expressions.reduce((product, expr) => multiplyExpressions(product, expr));
-}
 
-export function addExpressions(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
-  if (isNumericValue(left, 0)) return right;
-  if (isNumericValue(right, 0)) return left;
-  return { kind: "binary", op: "+", left, right };
-}
 
-export function subtractExpressions(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
-  if (isNumericValue(right, 0)) return left;
-  if (isNumericValue(left, 0)) return { kind: "unary", op: "-", expr: right };
-  return { kind: "binary", op: "-", left, right };
-}
 
-export function divideExpressions(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
-  if (isNumericValue(right, 1)) return left;
-  return { kind: "binary", op: "/", left, right };
-}
 
-function pow10Expression(expr: ExpressionAst): ExpressionAst {
-  return { kind: "call", callee: "pow10", args: [expr] };
-}
 
-function powExpression(base: ExpressionAst, exponent: ExpressionAst): ExpressionAst {
-  return { kind: "call", callee: "pow", args: [base, exponent] };
-}
 
-function maxExpression(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
-  return { kind: "call", callee: "max", args: [left, right] };
-}
 
-function minExpression(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
-  return negateExpression(maxExpression(negateExpression(left), negateExpression(right)));
-}
 
-function absExpression(expr: ExpressionAst): ExpressionAst {
-  return { kind: "call", callee: "abs", args: [expr] };
-}
 
-export function intExpression(expr: ExpressionAst): ExpressionAst {
-  return { kind: "call", callee: "int", args: [expr] };
-}
 
-function signExpression(expr: ExpressionAst): ExpressionAst {
-  return { kind: "call", callee: "sign", args: [expr] };
-}
 
-function bitAndExpression(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
-  return { kind: "call", callee: "bit_and", args: [left, right] };
-}
 
-function bitOrExpression(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
-  return { kind: "call", callee: "bit_or", args: [left, right] };
-}
 
-function bitXorExpression(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
-  return { kind: "call", callee: "bit_xor", args: [left, right] };
-}
 
-function bitNotExpression(expr: ExpressionAst): ExpressionAst {
-  return { kind: "call", callee: "bit_not", args: [expr] };
-}
 
-function fracExpression(expr: ExpressionAst): ExpressionAst {
-  return { kind: "call", callee: "frac", args: [expr] };
-}
 
-export function spatialCountExpression(
-  name: "neighbor_count" | "line_count",
-  args: ExpressionAst[],
-  ast: ProgramAst,
-): ExpressionAst | undefined {
-  const [mask, cell] = args;
-  if (mask === undefined || cell === undefined) return undefined;
-  if (name === "neighbor_count") {
-    const board = boardForCellMask(mask, ast);
-    const offsets = board?.height === 1
-      ? [-1, 1]
-      : board?.width === 1
-        ? [-10, 10]
-        : [-11, -10, -9, -1, 1, 9, 10, 11];
-    return sumExpressions(offsets.map((offset) => spatialHitExpression(mask, offsetExpressionAst(cell, offset))));
-  }
 
-  const board = boardForCellMask(mask, ast);
-  if (board !== undefined && board.width <= 4 && board.height <= 4) {
-    return maxExpressions([
-      sumExpressions(spatialLineCells(board, "row", cell).map((index) => spatialHitExpression(mask, index))),
-      sumExpressions(spatialLineCells(board, "column", cell).map((index) => spatialHitExpression(mask, index))),
-      sumExpressions(spatialLineCells(board, "diag-left", cell).map((index) => spatialHitExpression(mask, index))),
-      sumExpressions(spatialLineCells(board, "diag-right", cell).map((index) => spatialHitExpression(mask, index))),
-    ]);
-  }
 
-  const offsets = [-99, -90, -81, -72, -63, -54, -45, -36, -27, -18, -9, 0, 9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 99];
-  return sumExpressions([
-    spatialHitExpression(mask, cell),
-    ...offsets.filter((offset) => offset !== 0).map((offset) => spatialHitExpression(mask, offsetExpressionAst(cell, offset))),
-  ]);
-}
 
-function spatialHitExpression(mask: ExpressionAst, index: ExpressionAst): ExpressionAst {
-  return { kind: "call", callee: "__spatial_hit", args: [mask, index] };
-}
-
-export function boardForCellMask(mask: ExpressionAst, ast: ProgramAst): V2BoardAst | undefined {
-  if (mask.kind !== "identifier" || ast.v2 === undefined) return undefined;
-  const domain = ast.v2.state.find((field) => field.name === mask.name)?.domain;
-  if (domain === undefined) return undefined;
-  return ast.v2.boards.find((board) => board.name === domain);
-}
-
-function spatialLineCells(
-  board: V2BoardAst,
-  kind: "row" | "column" | "diag-left" | "diag-right",
-  cell: ExpressionAst,
-): ExpressionAst[] {
-  const x = decimalOnesExpressionAst(cell);
-  const y = decimalTensExpressionAst(cell);
-  switch (kind) {
-    case "row":
-      return range(board.xMin, board.xMax).map((candidateX) => boardCellExpressionAst(numberExpression(candidateX), y));
-    case "column":
-      return range(board.yMin, board.yMax).map((candidateY) => boardCellExpressionAst(x, numberExpression(candidateY)));
-    case "diag-left":
-      return range(-Math.max(board.width, board.height) + 1, Math.max(board.width, board.height) - 1)
-        .map((delta) => offsetExpressionAst(cell, delta * 11));
-    case "diag-right":
-      return range(-Math.max(board.width, board.height) + 1, Math.max(board.width, board.height) - 1)
-        .map((delta) => offsetExpressionAst(cell, delta * 9));
-  }
-}
-
-export interface SpatialLineProgression {
-  startOffset: ExpressionAst;
-  step: ExpressionAst;
-  count: number;
-}
-
-export function spatialLineProgressions(board: V2BoardAst, cell: ExpressionAst): SpatialLineProgression[] {
-  const x = decimalOnesExpressionAst(cell);
-  const y = decimalTensExpressionAst(cell);
-  const span = Math.max(board.width, board.height);
-  return [
-    {
-      startOffset: subtractExpressions(numberExpression(board.xMin), x),
-      step: numberExpression(1),
-      count: board.width,
-    },
-    {
-      startOffset: multiplyExpressions(numberExpression(10), subtractExpressions(numberExpression(board.yMin), y)),
-      step: numberExpression(10),
-      count: board.height,
-    },
-    {
-      startOffset: numberExpression(-(span - 1) * 11),
-      step: numberExpression(11),
-      count: span * 2 - 1,
-    },
-    {
-      startOffset: numberExpression(-(span - 1) * 9),
-      step: numberExpression(9),
-      count: span * 2 - 1,
-    },
-  ];
-}
-
-export function spatialNeighborProgressions(board: V2BoardAst | undefined): SpatialLineProgression[] {
-  if (board?.height === 1) {
-    return [{ startOffset: numberExpression(-1), step: numberExpression(2), count: 2 }];
-  }
-  if (board?.width === 1) {
-    return [{ startOffset: numberExpression(-10), step: numberExpression(20), count: 2 }];
-  }
-  return [
-    { startOffset: numberExpression(-11), step: numberExpression(1), count: 3 },
-    { startOffset: numberExpression(-1), step: numberExpression(2), count: 2 },
-    { startOffset: numberExpression(9), step: numberExpression(1), count: 3 },
-  ];
-}
 
 function lineCountGroupKeyFor(board: V2BoardAst, cell: ExpressionAst): string {
   return `${board.name}:${board.xMin}:${board.xMax}:${board.yMin}:${board.yMax}:${expressionToIntentText(cell)}`;
 }
 
-function boardCellExpressionAst(x: ExpressionAst, y: ExpressionAst): ExpressionAst {
-  return addExpressions(x, multiplyExpressions(numberExpression(10), y));
-}
 
-function decimalTensExpressionAst(expr: ExpressionAst): ExpressionAst {
-  return intExpression(divideExpressions(expr, numberExpression(10)));
-}
 
-function decimalOnesExpressionAst(expr: ExpressionAst): ExpressionAst {
-  return multiplyExpressions(fracExpression(divideExpressions(expr, numberExpression(10))), numberExpression(10));
-}
 
-export function offsetExpressionAst(expr: ExpressionAst, offset: number): ExpressionAst {
-  if (offset === 0) return expr;
-  return offset > 0
-    ? addExpressions(expr, numberExpression(offset))
-    : subtractExpressions(expr, numberExpression(Math.abs(offset)));
-}
 
-function sumExpressions(expressions: ExpressionAst[]): ExpressionAst {
-  return expressions.reduce((sum, expr) => addExpressions(sum, expr), numberExpression(0));
-}
 
-function maxExpressions(expressions: ExpressionAst[]): ExpressionAst {
-  return expressions.reduce((best, expr) => maxExpression(best, expr));
-}
 
-export function spatialHitScratchName(mask: string): string {
-  return `${SPATIAL_HIT_SCRATCH_PREFIX}${mask}`;
-}
 
-export function spatialCountScratchNames(): string[] {
-  return [
-    `${SPATIAL_COUNT_SCRATCH_PREFIX}total`,
-    `${SPATIAL_COUNT_SCRATCH_PREFIX}line`,
-    `${SPATIAL_COUNT_SCRATCH_PREFIX}offset`,
-    spatialCountCounterScratchName(),
-  ];
-}
 
-function spatialCountCounterScratchName(): string {
-  return `${SPATIAL_COUNT_SCRATCH_PREFIX}counter`;
-}
 
-export function spatialCountMaskScratchName(): string {
-  return `${SPATIAL_COUNT_SCRATCH_PREFIX}mask`;
-}
 
-export function spatialCountStepScratchName(): string {
-  return `${SPATIAL_COUNT_SCRATCH_PREFIX}step`;
-}
 
-function range(start: number, end: number): number[] {
-  const values: number[] = [];
-  for (let value = start; value <= end; value += 1) values.push(value);
-  return values;
-}
 
 function literalOnlyDisplayText(display: ProgramAst["displays"][number]): string | undefined {
   if (display.items.length === 0 || display.items.some((item) => item.kind !== "literal")) return undefined;
@@ -9561,132 +7405,16 @@ function literalOnlyDisplayText(display: ProgramAst["displays"][number]): string
   return text.trim().length === 0 ? undefined : text;
 }
 
-function signToggleExpression(current: ExpressionAst, selector: ExpressionAst): ExpressionAst {
-  return multiplyExpressions(
-    current,
-    subtractExpressions(numberExpression(1), multiplyExpressions(numberExpression(2), selector)),
-  );
-}
 
-function negateExpression(expr: ExpressionAst): ExpressionAst {
-  if (expr.kind === "unary") return expr.expr;
-  const value = numericLiteralValue(expr);
-  if (value !== undefined) return numberExpression(-value);
-  return { kind: "unary", op: "-", expr };
-}
 
-export function matchRemainderByConstant(
-  expr: Extract<ExpressionAst, { kind: "binary" }>,
-): { value: ExpressionAst; divisor: ExpressionAst } | undefined {
-  if (expr.op !== "-") return undefined;
-  if (!expressionPureForSubstitution(expr.left)) return undefined;
-  const product = expr.right;
-  if (product.kind !== "binary" || product.op !== "*") return undefined;
-  const leftIntDivide = matchIntDivideByConstant(product.left);
-  if (
-    leftIntDivide !== undefined &&
-    expressionEquals(leftIntDivide.value, expr.left) &&
-    expressionEquals(leftIntDivide.divisor, product.right)
-  ) {
-    return leftIntDivide;
-  }
-  const rightIntDivide = matchIntDivideByConstant(product.right);
-  if (
-    rightIntDivide !== undefined &&
-    expressionEquals(rightIntDivide.value, expr.left) &&
-    expressionEquals(rightIntDivide.divisor, product.left)
-  ) {
-    return rightIntDivide;
-  }
-  return undefined;
-}
 
-function matchIntDivideByConstant(expr: ExpressionAst): { value: ExpressionAst; divisor: ExpressionAst } | undefined {
-  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "int" || expr.args.length !== 1) return undefined;
-  const divided = expr.args[0]!;
-  if (divided.kind !== "binary" || divided.op !== "/") return undefined;
-  if (numericLiteralValue(divided.right) === undefined) return undefined;
-  return {
-    value: divided.left,
-    divisor: divided.right,
-  };
-}
 
-export function numberExpression(value: number): ExpressionAst {
-  return { kind: "number", raw: String(value) };
-}
 
-function matchTargetPlusDelta(expr: ExpressionAst, target: string): ExpressionAst | undefined {
-  if (expr.kind !== "binary" || expr.op !== "+") return undefined;
-  const targetExpr: ExpressionAst = { kind: "identifier", name: target };
-  if (expressionEquals(expr.left, targetExpr)) return expr.right;
-  if (expressionEquals(expr.right, targetExpr)) return expr.left;
-  return undefined;
-}
 
-function matchTargetMinusDelta(expr: ExpressionAst, target: string): ExpressionAst | undefined {
-  if (expr.kind !== "binary" || expr.op !== "-") return undefined;
-  const targetExpr: ExpressionAst = { kind: "identifier", name: target };
-  if (expressionEquals(expr.left, targetExpr)) return expr.right;
-  return undefined;
-}
 
-function singleEffectiveAssign(statement: Extract<StatementAst, { kind: "if" }>): Extract<StatementAst, { kind: "assign" }> | undefined {
-  if (statement.thenBody.length !== 1) return undefined;
-  const thenAssign = statement.thenBody[0];
-  if (thenAssign?.kind !== "assign") return undefined;
-  if (!statement.elseBody) return thenAssign;
-  if (statement.elseBody.length !== 1) return undefined;
-  const elseAssign = statement.elseBody[0];
-  if (elseAssign?.kind !== "assign") return undefined;
-  if (thenAssign.target !== elseAssign.target) return undefined;
-  if (isIdentityAssignment(elseAssign)) return thenAssign;
-  return undefined;
-}
 
-function isIdentityAssignment(statement: Extract<StatementAst, { kind: "assign" }>): boolean {
-  return expressionEquals(statement.expr, { kind: "identifier", name: statement.target });
-}
 
-export function expressionEquals(left: ExpressionAst, right: ExpressionAst): boolean {
-  if (left.kind !== right.kind) return false;
-  switch (left.kind) {
-    case "number":
-      return right.kind === "number" && left.raw === right.raw;
-    case "string":
-      return right.kind === "string" && left.text === right.text;
-    case "identifier":
-      return right.kind === "identifier" && left.name === right.name;
-    case "unary":
-      return right.kind === "unary" && left.op === right.op && expressionEquals(left.expr, right.expr);
-    case "binary":
-      return right.kind === "binary" &&
-        left.op === right.op &&
-        expressionEquals(left.left, right.left) &&
-        expressionEquals(left.right, right.right);
-    case "call":
-      return right.kind === "call" &&
-        left.callee.toLowerCase() === right.callee.toLowerCase() &&
-        left.args.length === right.args.length &&
-        left.args.every((arg, index) => expressionEquals(arg, right.args[index]!));
-  }
-}
 
-export function expressionReferencesIdentifier(expr: ExpressionAst, name: string): boolean {
-  switch (expr.kind) {
-    case "number":
-    case "string":
-      return false;
-    case "identifier":
-      return expr.name === name;
-    case "unary":
-      return expressionReferencesIdentifier(expr.expr, name);
-    case "binary":
-      return expressionReferencesIdentifier(expr.left, name) || expressionReferencesIdentifier(expr.right, name);
-    case "call":
-      return expr.args.some((arg) => expressionReferencesIdentifier(arg, name));
-  }
-}
 
 function isRandomCellExpressionShape(expr: ExpressionAst): boolean {
   if (isRandomScaledInteger(expr)) return true;
@@ -9729,299 +7457,27 @@ function expressionContainsRandom(expr: ExpressionAst): boolean {
   }
 }
 
-// An expression is pure when evaluating it twice yields the same value with no
-// observable effect. Calls (random, read, macros) may be non-idempotent or have
-// side effects, so they are conservatively impure. Purity makes it sound to
-// compute a repeated operand once and duplicate it through the stack.
-export function isPureExpression(expr: ExpressionAst): boolean {
-  switch (expr.kind) {
-    case "number":
-    case "string":
-    case "identifier":
-      return true;
-    case "unary":
-      return isPureExpression(expr.expr);
-    case "binary":
-      return isPureExpression(expr.left) && isPureExpression(expr.right);
-    case "call":
-      return false;
-  }
-}
 
-export function matchIntOrFracCall(expr: ExpressionAst): { fn: "int" | "frac"; arg: ExpressionAst } | undefined {
-  if (expr.kind !== "call" || expr.args.length !== 1) return undefined;
-  const name = expr.callee.toLowerCase();
-  if (name !== "int" && name !== "frac") return undefined;
-  return { fn: name, arg: expr.args[0]! };
-}
 
-export function matchStackUnaryDerivationCall(expr: ExpressionAst): StackUnaryDerivationCall | undefined {
-  if (expr.kind !== "call" || expr.args.length !== 1) return undefined;
-  const name = expr.callee.toLowerCase();
-  if (!isStackUnaryDerivationFn(name)) return undefined;
-  const [opcode, mnemonic] = STACK_UNARY_DERIVATION_OPCODES[name];
-  return { fn: name, arg: expr.args[0]!, opcode, mnemonic };
-}
 
-function isStackUnaryDerivationFn(name: string): name is StackUnaryDerivationFn {
-  return Object.prototype.hasOwnProperty.call(STACK_UNARY_DERIVATION_OPCODES, name);
-}
 
-export function optimizeDispatchDefaultCases(
-  statement: Extract<StatementAst, { kind: "dispatch" }>,
-): { statement: Extract<StatementAst, { kind: "dispatch" }>; removed: number; reordered: number } {
-  if (statement.cases.length === 0) return { statement, removed: 0, reordered: 0 };
-  if (!statement.defaultBody) {
-    const ordered = orderNumericDispatchCasesForResidual(statement.cases);
-    return {
-      statement: ordered.reordered === 0 ? statement : { ...statement, cases: ordered.cases },
-      removed: 0,
-      reordered: ordered.reordered,
-    };
-  }
 
-  const defaultBody = statement.defaultBody;
-  const kept: typeof statement.cases = [];
-  let removed = 0;
-  for (let index = 0; index < statement.cases.length; index += 1) {
-    const dispatchCase = statement.cases[index]!;
-    const value = numericLiteralValue(dispatchCase.value);
-    const laterSameValue = value !== undefined &&
-      statement.cases.slice(index + 1).some((laterCase) => numericLiteralValue(laterCase.value) === value);
-    if (
-      value !== undefined &&
-      !laterSameValue &&
-      statementListsEqual(dispatchCase.body, defaultBody)
-    ) {
-      removed += 1;
-      continue;
-    }
-    kept.push(dispatchCase);
-  }
 
-  const ordered = orderNumericDispatchCasesForResidual(kept);
-  const nextStatement = removed === 0 && ordered.reordered === 0
-    ? statement
-    : { ...statement, cases: ordered.cases };
-  return { statement: nextStatement, removed, reordered: ordered.reordered };
-}
 
-function orderNumericDispatchCasesForResidual(cases: DispatchCaseAst[]): { cases: DispatchCaseAst[]; reordered: number } {
-  if (cases.length < 2) return { cases, reordered: 0 };
-  const values = cases.map((dispatchCase) => numericLiteralValue(dispatchCase.value));
-  if (values.some((value) => value === undefined)) return { cases, reordered: 0 };
-  const seen = new Set<number>();
-  for (const value of values as number[]) {
-    if (seen.has(value)) return { cases, reordered: 0 };
-    seen.add(value);
-  }
-  const residualOrder = bestResidualDispatchOrder(values as number[]);
-  const order = orderMatchesIdentity(residualOrder) ? zeroFirstDispatchOrder(values as number[]) : residualOrder;
-  const reordered = order.filter((originalIndex, index) => originalIndex !== index).length;
-  if (reordered === 0) return { cases, reordered: 0 };
-  const ordered = order.map((index) => cases[index]!);
-  return { cases: ordered, reordered };
-}
 
-function orderMatchesIdentity(order: readonly number[]): boolean {
-  return order.every((originalIndex, index) => originalIndex === index);
-}
 
-function zeroFirstDispatchOrder(values: readonly number[]): number[] {
-  const zeroIndex = values.indexOf(0);
-  if (zeroIndex <= 0) return values.map((_, index) => index);
-  return [zeroIndex, ...values.map((_, index) => index).filter((index) => index !== zeroIndex)];
-}
 
-function bestResidualDispatchOrder(values: readonly number[]): number[] {
-  const current = values.map((_, index) => index);
-  let best = current;
-  const currentCost = residualDispatchValueCost(values, current);
-  let bestCost = currentCost;
-  if (values.length > 8) return current;
 
-  const used = new Set<number>();
-  const order: number[] = [];
-  const visit = (previous: number | undefined, cost: number): void => {
-    if (cost >= bestCost) return;
-    if (order.length === values.length) {
-      bestCost = cost;
-      best = [...order];
-      return;
-    }
-    for (let index = 0; index < values.length; index += 1) {
-      if (used.has(index)) continue;
-      used.add(index);
-      order.push(index);
-      const value = values[index]!;
-      visit(value, cost + residualStepCost(previous, value));
-      order.pop();
-      used.delete(index);
-    }
-  };
-  visit(undefined, 0);
-  if (currentCost - bestCost < 3) return current;
-  return best;
-}
 
-function residualDispatchValueCost(values: readonly number[], order: readonly number[]): number {
-  let previous: number | undefined;
-  let cost = 0;
-  for (const index of order) {
-    const value = values[index]!;
-    cost += residualStepCost(previous, value);
-    previous = value;
-  }
-  return cost;
-}
 
-function residualStepCost(previous: number | undefined, value: number): number {
-  const delta = previous === undefined ? value : value - previous;
-  return delta === 0 ? 0 : estimateNumberCost(String(Math.abs(delta))) + 1;
-}
 
-export function statementListsEqual(left: readonly StatementAst[], right: readonly StatementAst[]): boolean {
-  return left.length === right.length && left.every((statement, index) => statementEquals(statement, right[index]!));
-}
 
-function statementEquals(left: StatementAst, right: StatementAst): boolean {
-  if (left.kind !== right.kind) return false;
-  switch (left.kind) {
-    case "pause":
-      return expressionEquals(left.expr, (right as typeof left).expr) &&
-        left.kind === (right as typeof left).kind;
-    case "halt":
-      return expressionEquals(left.expr, (right as typeof left).expr) &&
-        left.literal === (right as typeof left).literal;
-    case "input":
-      return left.target === (right as typeof left).target;
-    case "assign":
-      return left.target === (right as typeof left).target && expressionEquals(left.expr, (right as typeof left).expr);
-    case "loop":
-      return statementListsEqual(left.body, (right as typeof left).body);
-    case "while":
-      return conditionEquals(left.condition, (right as typeof left).condition) &&
-        statementListsEqual(left.body, (right as typeof left).body);
-    case "if":
-      return conditionEquals(left.condition, (right as typeof left).condition) &&
-        statementListsEqual(left.thenBody, (right as typeof left).thenBody) &&
-        statementListOptionEquals(left.elseBody, (right as typeof left).elseBody);
-    case "dispatch":
-      return expressionEquals(left.expr, (right as typeof left).expr) &&
-        left.cases.length === (right as typeof left).cases.length &&
-        left.cases.every((dispatchCase, index) =>
-          expressionEquals(dispatchCase.value, (right as typeof left).cases[index]!.value) &&
-          statementListsEqual(dispatchCase.body, (right as typeof left).cases[index]!.body)
-        ) &&
-        statementListOptionEquals(left.defaultBody, (right as typeof left).defaultBody);
-    case "show":
-      return left.display === (right as typeof left).display;
-    case "call":
-      return left.block === (right as typeof left).block;
-    case "core":
-      return rawLinesEqual(left.lines, (right as typeof left).lines) &&
-        JSON.stringify(left.inputs ?? []) === JSON.stringify((right as typeof left).inputs ?? []) &&
-        JSON.stringify(left.outputs ?? []) === JSON.stringify((right as typeof left).outputs ?? []) &&
-        JSON.stringify(left.clobbers ?? []) === JSON.stringify((right as typeof left).clobbers ?? []) &&
-        JSON.stringify(left.preserves ?? []) === JSON.stringify((right as typeof left).preserves ?? []) &&
-        left.strict === (right as typeof left).strict;
-    case "return_value":
-      return expressionEquals(left.expr, (right as typeof left).expr);
-    case "decimal_series":
-      return left.digits === (right as typeof left).digits &&
-        left.counterStart === (right as typeof left).counterStart;
-  }
-}
 
-function statementListOptionEquals(left: StatementAst[] | undefined, right: StatementAst[] | undefined): boolean {
-  if (left === undefined || right === undefined) return left === right;
-  return statementListsEqual(left, right);
-}
 
-function rawLinesEqual(left: readonly { text: string }[], right: readonly { text: string }[]): boolean {
-  return left.length === right.length && left.every((line, index) => line.text === right[index]!.text);
-}
 
-export function countIdentifierReadsInCondition(condition: ConditionAst, name: string): number {
-  return countIdentifierReads(condition.left, name) + countIdentifierReads(condition.right, name);
-}
 
-function countIdentifierReads(expr: ExpressionAst, name: string): number {
-  switch (expr.kind) {
-    case "number":
-    case "string":
-      return 0;
-    case "identifier":
-      return expr.name === name ? 1 : 0;
-    case "unary":
-      return countIdentifierReads(expr.expr, name);
-    case "binary":
-      return countIdentifierReads(expr.left, name) + countIdentifierReads(expr.right, name);
-    case "call":
-      return expr.args.reduce((sum, arg) => sum + countIdentifierReads(arg, name), 0);
-  }
-}
 
-export function substituteConditionIdentifier(condition: ConditionAst, name: string, replacement: ExpressionAst): ConditionAst {
-  return {
-    left: substituteExpressionIdentifier(condition.left, name, replacement),
-    op: condition.op,
-    right: substituteExpressionIdentifier(condition.right, name, replacement),
-  };
-}
 
-function substituteExpressionIdentifier(expr: ExpressionAst, name: string, replacement: ExpressionAst): ExpressionAst {
-  switch (expr.kind) {
-    case "number":
-    case "string":
-      return expr;
-    case "identifier":
-      return expr.name === name ? replacement : expr;
-    case "unary":
-      return { ...expr, expr: substituteExpressionIdentifier(expr.expr, name, replacement) };
-    case "binary":
-      return {
-        ...expr,
-        left: substituteExpressionIdentifier(expr.left, name, replacement),
-        right: substituteExpressionIdentifier(expr.right, name, replacement),
-      };
-    case "call":
-      return { ...expr, args: expr.args.map((arg) => substituteExpressionIdentifier(arg, name, replacement)) };
-  }
-}
-
-export function expressionPureForSubstitution(expr: ExpressionAst): boolean {
-  switch (expr.kind) {
-    case "number":
-    case "string":
-    case "identifier":
-      return true;
-    case "unary":
-      return expressionPureForSubstitution(expr.expr);
-    case "binary":
-      return expressionPureForSubstitution(expr.left) && expressionPureForSubstitution(expr.right);
-    case "call": {
-      const name = expr.callee.toLowerCase();
-      if (name === "random") return false;
-      return expr.args.every(expressionPureForSubstitution);
-    }
-  }
-}
-
-export function isNumericValue(expr: ExpressionAst, value: number): boolean {
-  const parsed = numericLiteralValue(expr);
-  return parsed !== undefined && parsed === value;
-}
-
-export function numericLiteralValue(expr: ExpressionAst): number | undefined {
-  if (expr.kind === "unary" && expr.op === "-") {
-    const value = numericLiteralValue(expr.expr);
-    return value === undefined ? undefined : -value;
-  }
-  if (expr.kind !== "number") return undefined;
-  const value = Number(expr.raw);
-  return Number.isFinite(value) ? value : undefined;
-}
 
 function estimateBranchOrderBodyCost(statements: readonly StatementAst[], ast: ProgramAst): number {
   let total = 0;
@@ -10068,221 +7524,19 @@ function estimateBranchOrderStatementCost(statement: StatementAst, ast: ProgramA
   }
 }
 
-export function estimateOrdinaryIfCost(statement: Extract<StatementAst, { kind: "if" }>, ast: ProgramAst): number {
-  const thenStatement = statement.thenBody[0];
-  if (statement.thenBody.length !== 1 || !thenStatement) return Number.POSITIVE_INFINITY;
-  const thenCost = estimateSimpleStatementCost(thenStatement, ast);
-  if (!Number.isFinite(thenCost)) return Number.POSITIVE_INFINITY;
-  if (!statement.elseBody) return estimateConditionCost(statement.condition, ast) + thenCost;
-  const elseStatement = statement.elseBody[0];
-  if (statement.elseBody.length !== 1 || !elseStatement) return Number.POSITIVE_INFINITY;
-  const elseCost = estimateSimpleStatementCost(elseStatement, ast);
-  if (!Number.isFinite(elseCost)) return Number.POSITIVE_INFINITY;
-  return estimateConditionCost(statement.condition, ast) + thenCost + 2 + elseCost;
-}
 
-export function estimateOrdinaryGuardedUpdateCost(statement: Extract<StatementAst, { kind: "if" }>, ast: ProgramAst): number {
-  if (statement.elseBody !== undefined || statement.thenBody.length === 0) return Number.POSITIVE_INFINITY;
-  let bodyCost = 0;
-  for (const inner of statement.thenBody) {
-    const cost = estimateSimpleStatementCost(inner, ast);
-    if (!Number.isFinite(cost)) return Number.POSITIVE_INFINITY;
-    bodyCost += cost;
-  }
-  return estimateConditionCost(statement.condition, ast) + bodyCost;
-}
 
-export function estimateGuardedUpdateSelectorCost(candidate: GuardedUpdateSelectorCandidate, scratch: string): number {
-  const selector: ExpressionAst = { kind: "identifier", name: scratch };
-  return estimateExpressionCost(candidate.selector) + 1 +
-    candidate.updates.reduce(
-      (sum, update) => sum + estimateExpressionCost(maskedGuardedUpdateExpression(update, selector)) + 1,
-      0,
-    );
-}
 
-function estimateSimpleStatementCost(statement: StatementAst, ast: ProgramAst): number {
-  switch (statement.kind) {
-    case "assign":
-      return estimateExpressionCost(statement.expr) + 1;
-    case "pause":
-    case "halt":
-      return estimateExpressionCost(statement.expr) + 1;
-    case "call": {
-      const terminal = effectiveTerminalStatement(statement, ast);
-      return terminal === undefined ? Number.POSITIVE_INFINITY : estimateSimpleStatementCost(terminal, ast);
-    }
-    case "decimal_series":
-      return 64;
-    default:
-      return Number.POSITIVE_INFINITY;
-  }
-}
 
-export function estimateConditionCost(
-  condition: ConditionAst,
-  ast: ProgramAst,
-  preloadedConstants?: ReadonlySet<string>,
-): number {
-  return conditionCompileCost(
-    selectCheaperEquivalentCondition(condition, ast, preloadedConstants).condition,
-    preloadedConstants,
-  );
-}
 
-function estimateExpressionCostForCondition(
-  expr: ExpressionAst,
-  preloadedConstants: ReadonlySet<string> | undefined,
-): number {
-  if (preloadedConstants === undefined) return estimateExpressionCost(expr);
-  if (expr.kind === "number" && preloadedConstants.has(normalizeConstantLiteral(expr.raw))) return 1;
-  if (
-    expr.kind === "unary" &&
-    expr.op === "-" &&
-    expr.expr.kind === "number" &&
-    preloadedConstants.has(normalizeConstantLiteral(negatedNumberLiteral(expr.expr.raw)))
-  ) {
-    return 1;
-  }
-  switch (expr.kind) {
-    case "string":
-      return 0;
-    case "number":
-      return estimateNumberCost(expr.raw);
-    case "identifier":
-      return 1;
-    case "unary":
-      return estimateExpressionCostForCondition(expr.expr, preloadedConstants) + 1;
-    case "binary": {
-      const remainder = matchRemainderByConstant(expr);
-      if (remainder !== undefined) {
-        return estimateExpressionCostForCondition(remainder.value, preloadedConstants) +
-          estimateExpressionCostForCondition(remainder.divisor, preloadedConstants) * 2 +
-          3;
-      }
-      return estimateExpressionCostForCondition(expr.left, preloadedConstants) +
-        estimateExpressionCostForCondition(expr.right, preloadedConstants) +
-        1;
-    }
-    case "call":
-      return estimateCallCostForCondition(expr, preloadedConstants);
-  }
-}
 
-function estimateCallCostForCondition(
-  expr: Extract<ExpressionAst, { kind: "call" }>,
-  preloadedConstants: ReadonlySet<string>,
-): number {
-  const name = expr.callee.toLowerCase();
-  if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
-    return estimateNegativeZeroDegreeSelectorCost(expr, preloadedConstants);
-  }
-  const smallSetMacro = smallSetExpressionMacro(name, expr.args);
-  if (smallSetMacro !== undefined) return estimateExpressionCostForCondition(smallSetMacro, preloadedConstants);
-  const macro = ticTacToeExpressionMacro(name, expr.args);
-  if (macro !== undefined) return estimateExpressionCostForCondition(macro, preloadedConstants);
-  if (name === "random" || name === "pi") return 1;
-  if (name === "pow" || ["max", "bit_and", "bit_or", "bit_xor"].includes(name)) {
-    return (expr.args[0] ? estimateExpressionCostForCondition(expr.args[0], preloadedConstants) : 0) +
-      (expr.args[1] ? estimateExpressionCostForCondition(expr.args[1], preloadedConstants) : 0) +
-      1;
-  }
-  return (expr.args[0] ? estimateExpressionCostForCondition(expr.args[0], preloadedConstants) : 0) + 1;
-}
 
-function estimateNegativeZeroDegreeSelectorCost(
-  expr: Extract<ExpressionAst, { kind: "call" }>,
-  preloadedConstants?: ReadonlySet<string>,
-): number {
-  if (expr.args.length !== 2 || expr.args[0] === undefined || expr.args[1] === undefined) {
-    return Number.POSITIVE_INFINITY;
-  }
-  return estimateNegativeZeroThresholdRawCost(expr.args[0], expr.args[1], preloadedConstants) + 1;
-}
 
-export function estimateNegativeZeroThresholdFlowCost(
-  threshold: { value: ExpressionAst; bound: number },
-  preloadedConstants?: ReadonlySet<string>,
-): number {
-  return estimateNegativeZeroThresholdRawCost(threshold.value, numberExpression(threshold.bound), preloadedConstants) + 2;
-}
 
-function estimateNegativeZeroThresholdRawCost(
-  value: ExpressionAst,
-  bound: ExpressionAst,
-  preloadedConstants?: ReadonlySet<string>,
-): number {
-  const ratio = divideExpressions(value, bound);
-  return estimateExpressionCostForCondition(ratio, preloadedConstants) + 4;
-}
 
-export function estimateExpressionCost(expr: ExpressionAst): number {
-  switch (expr.kind) {
-    case "string":
-      return 0;
-    case "number":
-      return estimateNumberCost(expr.raw);
-    case "identifier":
-      return 1;
-    case "unary":
-      return estimateExpressionCost(expr.expr) + 1;
-    case "binary": {
-      const remainder = matchRemainderByConstant(expr);
-      if (remainder !== undefined) {
-        return estimateExpressionCost(remainder.value) + estimateExpressionCost(remainder.divisor) * 2 + 3;
-      }
-      return estimateExpressionCost(expr.left) + estimateExpressionCost(expr.right) + 1;
-    }
-    case "call":
-      return estimateCallCost(expr);
-  }
-}
 
-function estimateCallCost(expr: Extract<ExpressionAst, { kind: "call" }>): number {
-  const name = expr.callee.toLowerCase();
-  if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
-    return estimateNegativeZeroDegreeSelectorCost(expr);
-  }
-  const smallSetMacro = smallSetExpressionMacro(name, expr.args);
-  if (smallSetMacro !== undefined) return estimateExpressionCost(smallSetMacro);
-  const macro = ticTacToeExpressionMacro(name, expr.args);
-  if (macro !== undefined) return estimateExpressionCost(macro);
-  if (name === "random" || name === "pi") return 1;
-  if (name === "pow") {
-    return (expr.args[0] ? estimateExpressionCost(expr.args[0]) : 0) +
-      (expr.args[1] ? estimateExpressionCost(expr.args[1]) : 0) +
-      1;
-  }
-  if (["max", "bit_and", "bit_or", "bit_xor"].includes(name)) {
-    return (expr.args[0] ? estimateExpressionCost(expr.args[0]) : 0) +
-      (expr.args[1] ? estimateExpressionCost(expr.args[1]) : 0) +
-      1;
-  }
-  return (expr.args[0] ? estimateExpressionCost(expr.args[0]) : 0) + 1;
-}
 
-export function estimateNumberCost(raw: string): number {
-  const normalized = raw.trim().toLowerCase();
-  const negative = normalized.startsWith("-");
-  const unsigned = negative ? normalized.slice(1) : normalized;
-  const [mantissa = "0", exponent] = unsigned.split("e");
-  let cost = negative ? 1 : 0;
-  for (const char of mantissa) {
-    if (char === "." || /\d/u.test(char)) cost += 1;
-  }
-  if (exponent !== undefined) {
-    cost += 1;
-    if (exponent.startsWith("-")) cost += 1;
-    cost += exponent.replace(/^[+-]/u, "").length;
-  }
-  return cost;
-}
 
-export function residualAdjustmentCost(previousValue: number, nextValue: number): number {
-  const delta = previousValue - nextValue;
-  if (delta === 0) return 0;
-  return estimateNumberCost(String(Math.abs(delta))) + 1;
-}
 
 function buildIrReport(ast: ProgramAst, items: MachineItem[], steps: number): CompileReport["ir"] {
   return {
@@ -10933,11 +8187,6 @@ function setupProgramFields(ast: ProgramAst): StateFieldAst[] {
     );
 }
 
-export interface ExecutableSetupPreload {
-  register: RegisterName;
-  value: string;
-  kind: "number" | "display-literal";
-}
 
 function executableSetupPreload(preload: PreloadReport): ExecutableSetupPreload[] {
   const register = registerFromText(preload.register);
@@ -11349,226 +8598,15 @@ function countV2Statements(statements: V2StatementAst[]): number {
   return count;
 }
 
-function countStatements(statements: StatementAst[]): number {
-  let count = 0;
-  for (const statement of statements) {
-    count += 1;
-    if (statement.kind === "loop") count += countStatements(statement.body);
-    if (statement.kind === "while") count += countStatements(statement.body);
-    if (statement.kind === "if") {
-      count += countStatements(statement.thenBody);
-      if (statement.elseBody) count += countStatements(statement.elseBody);
-    }
-    if (statement.kind === "dispatch") {
-      count += statement.cases.reduce((sum, dispatchCase) => sum + countStatements(dispatchCase.body), 0);
-      if (statement.defaultBody) count += countStatements(statement.defaultBody);
-    }
-  }
-  return count;
-}
 
-export function selectDispatchCandidate(
-  statement: Extract<StatementAst, { kind: "dispatch" }>,
-  machineProfile: MachineProfile,
-): { selected: CandidateReport; candidates: CandidateReport[] } {
-  const site = statement.name ?? `dispatch@${statement.line}`;
-  const fallthroughCost = estimateDispatchCost(statement, true);
-  const candidates: CandidateReport[] = [
-    {
-      site,
-      variant: "fallthrough-compare-chain",
-      steps: fallthroughCost,
-      selected: true,
-      reason: "uses case ordering; key-based dispatch does not already provide an address-valued selector",
-    },
-  ];
 
-  if (machineSupports(machineProfile, "indirect-flow")) {
-    candidates.push({
-      site,
-      variant: "indirect-register-flow",
-      steps: Math.max(fallthroughCost, statement.cases.length + 3),
-      selected: false,
-      reason: "rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain",
-    });
-  }
 
-  if (
-    machineSupports(machineProfile, "dark-entries") &&
-    machineSupports(machineProfile, "address-constants") &&
-    machineSupports(machineProfile, "code-data-overlay")
-  ) {
-    candidates.push({
-      site,
-      variant: "dark-indirect-table",
-      steps: Math.max(4, statement.cases.length + 3),
-      selected: false,
-      reason: "considered; layout proof did not establish a conflict-free address/data table for this site",
-    });
-  }
 
-  if (
-    statement.cases.length <= 6 &&
-    machineSupports(machineProfile, "super-dark-dispatch") &&
-    machineSupports(machineProfile, "indirect-flow")
-  ) {
-    candidates.push({
-      site,
-      variant: "super-dark-dispatch",
-      steps: Math.max(3, statement.cases.length + 2),
-      selected: false,
-      reason: "considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06",
-    });
-  }
 
-  const selected = candidates.find((candidate) => candidate.selected) ?? candidates[0]!;
-  return { selected, candidates };
-}
 
-function estimateDispatchCost(
-  statement: Extract<StatementAst, { kind: "dispatch" }>,
-  fallthrough: boolean,
-): number {
-  const bodyCost = statement.cases.reduce((sum, dispatchCase) => sum + countStatements(dispatchCase.body), 0);
-  const defaultCost = statement.defaultBody ? countStatements(statement.defaultBody) : 0;
-  const jumpsAfterCases = Math.max(0, statement.cases.length - (fallthrough && !statement.defaultBody ? 1 : 0));
-  return 2 + statement.cases.length * 5 + jumpsAfterCases * 2 + bodyCost + defaultCost;
-}
 
-export function orderRawInputs(
-  inputs: NonNullable<Extract<StatementAst, { kind: "core" }>["inputs"]>,
-): NonNullable<Extract<StatementAst, { kind: "core" }>["inputs"]> {
-  const order = new Map([
-    ["T", 0],
-    ["Z", 1],
-    ["Y", 2],
-    ["X", 3],
-  ]);
-  return [...inputs].sort((left, right) => order.get(left.slot)! - order.get(right.slot)!);
-}
 
-export function formatRawContractDetail(statement: Extract<StatementAst, { kind: "core" }>): string {
-  const inputs = statement.inputs?.length
-    ? `takes ${orderRawInputs(statement.inputs).map((input) => `${input.slot}=${expressionToIntentText(input.expr)}`).join(", ")}`
-    : "takes none";
-  const outputs = statement.outputs?.length
-    ? `returns ${statement.outputs.map((output) => `${output.slot}->${output.target}`).join(", ")}`
-    : "returns none";
-  const clobbers = `clobbers ${(statement.clobbers ?? ["unknown"]).join(", ")}`;
-  const preserves = `preserves ${(statement.preserves ?? ["unknown"]).join(", ")}`;
-  return `Inserted raw MK-61 block at line ${statement.line}: ${inputs}; ${outputs}; ${clobbers}; ${preserves}.`;
-}
 
-export function parseRawInstruction(
-  text: string,
-): { opcode: number; mnemonic: string; target?: string | number; formalTargetOpcode?: number; comment?: string } | undefined {
-  const hex = /^[0-9A-Fa-f]{2}$/u.exec(text);
-  if (hex) {
-    const opcode = Number.parseInt(text, 16);
-    return { opcode, mnemonic: getOpcode(opcode).name, comment: "raw hex" };
-  }
-
-  const direct = /^(БП|ПП|F\s*x<0|F\s*x=0|F\s*x(?:!=|≠)0|F\s*x(?:>=|≥)0|F\s*L[0-3])\s+([A-Za-z_][\w]*|[0-9A-Fa-f]{2})$/u.exec(text);
-  if (direct) {
-    const opcode = directOpcode(direct[1]!);
-    const target = parseTarget(direct[2]!);
-    return {
-      opcode,
-      mnemonic: getOpcode(opcode).name,
-      ...(typeof target === "object" ? target : { target }),
-      comment: "raw branch",
-    };
-  }
-
-  const compactStore = /^хП([0-9a-eавсде])$/iu.exec(text);
-  if (compactStore) {
-    const register = registerFromText(compactStore[1]!);
-    return { opcode: 0x40 + registerIndex(register), mnemonic: `X->П ${register}` };
-  }
-  const compactRecall = /^Пх([0-9a-eавсде])$/iu.exec(text);
-  if (compactRecall) {
-    const register = registerFromText(compactRecall[1]!);
-    return { opcode: 0x60 + registerIndex(register), mnemonic: `П->X ${register}` };
-  }
-
-  const directMemory = /^(X(?:->|→)П|П(?:->|→)X)\s+R?([0-9a-eавсде])$/iu.exec(text);
-  if (directMemory) {
-    const register = registerFromText(directMemory[2]!);
-    const op = directMemory[1]!.replaceAll("→", "->");
-    const base = op.startsWith("X") ? 0x40 : 0x60;
-    return {
-      opcode: base + registerIndex(register),
-      mnemonic: `${op} ${register}`,
-    };
-  }
-
-  const indirect = /^(К\s*)?(БП|ПП|X(?:->|→)П|П(?:->|→)X|x(?:!=|≠)0|x(?:>=|≥)0|x<0|x=0)\s*R?([0-9a-eавсде])$/iu.exec(text);
-  if (indirect?.[1]) {
-    const register = registerFromText(indirect[3]!);
-    return {
-      opcode: indirectBase(indirect[2]!) + registerIndex(register),
-      mnemonic: `К ${indirect[2]} ${register}`,
-    };
-  }
-
-  const compactIndirect = /^К(БП|ПП|Пх|хП)([0-9a-eавсде])$/iu.exec(text);
-  if (compactIndirect) {
-    const register = registerFromText(compactIndirect[2]!);
-    const op =
-      compactIndirect[1] === "Пх"
-        ? "П->X"
-        : compactIndirect[1] === "хП"
-          ? "X->П"
-          : compactIndirect[1]!;
-    return {
-      opcode: indirectBase(op) + registerIndex(register),
-      mnemonic: `К ${op} ${register}`,
-    };
-  }
-
-  const found = findOpcodeName(text);
-  if (found) return { opcode: found.code, mnemonic: found.name };
-  return undefined;
-}
-
-function parseTarget(text: string): string | number | { target: number; formalTargetOpcode: number } {
-  const formalOpcode = parseFormalAddressOpcode(text);
-  if (formalOpcode === undefined) return text;
-  const info = formalAddressInfo(formalOpcode);
-  return { target: info.ordinal, formalTargetOpcode: formalOpcode };
-}
-
-function directOpcode(text: string): number {
-  const normalized = text.replace(/\s+/g, " ").replaceAll("≠", "!=").replaceAll("≥", ">=");
-  if (normalized === "БП") return 0x51;
-  if (normalized === "ПП") return 0x53;
-  if (normalized === "F x<0") return 0x5c;
-  if (normalized === "F x=0") return 0x5e;
-  if (normalized === "F x!=0") return 0x57;
-  if (normalized === "F x>=0") return 0x59;
-  if (normalized === "F L0") return 0x5d;
-  if (normalized === "F L1") return 0x5b;
-  if (normalized === "F L2") return 0x58;
-  if (normalized === "F L3") return 0x5a;
-  throw new Error(`Unknown direct opcode ${text}`);
-}
-
-function indirectBase(text: string): number {
-  const normalized = text.toLowerCase().replaceAll("→", "->").replaceAll("≠", "!=").replaceAll("≥", ">=");
-  if (normalized === "x!=0") return 0x70;
-  if (normalized === "бп") return 0x80;
-  if (normalized === "x>=0") return 0x90;
-  if (normalized === "пп") return 0xa0;
-  if (normalized === "x->п") return 0xb0;
-  if (normalized === "x<0") return 0xc0;
-  if (normalized === "п->x") return 0xd0;
-  if (normalized === "x=0") return 0xe0;
-  throw new Error(`Unknown indirect opcode ${text}`);
-}
-
-export function binaryOpcode(op: "+" | "-" | "*" | "/"): number {
-  return op === "+" ? 0x10 : op === "-" ? 0x11 : op === "*" ? 0x12 : 0x13;
-}
 
 function summarizeBlocks(items: MachineItem[]): string[] {
   const blocks: Array<{ label: string; size: number }> = [];

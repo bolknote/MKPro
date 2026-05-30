@@ -1,4 +1,5 @@
-import type { NearAnyHelperStats, XParamProcLowering } from "../compiler.ts";
+import type { NearAnyHelperStats } from "../compiler.ts";
+import type { XParamProcLowering } from "./lowering-helpers.ts";
 import type { ExpressionAst, ProcAst } from "../types.ts";
 
 /**

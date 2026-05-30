@@ -24,7 +24,7 @@ import {
 import type {
   BitMembershipCondition,
   NearAnyHelperConditionMatch,
-} from "../../compiler.ts";
+} from "../lowering-helpers.ts";
 import {
   COORD_LIST_COUNTER,
   DISPATCH_SCRATCH_PREFIX,
@@ -73,7 +73,7 @@ import {
   selectDispatchCandidate,
   spatialHitScratchName,
   statementListsEqual,
-} from "../../compiler.ts";
+} from "../lowering-helpers.ts";
 import {
   getOpcode,
 } from "../../opcodes.ts";

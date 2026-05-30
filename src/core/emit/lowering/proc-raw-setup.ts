@@ -29,7 +29,7 @@ import type {
   ExecutableSetupPreload,
   StackUnaryDerivationCall,
   XParamProcLowering,
-} from "../../compiler.ts";
+} from "../lowering-helpers.ts";
 import {
   COORD_LIST_DX,
   DASHED_COORD_REPORT_MASK,
@@ -66,7 +66,7 @@ import {
   signedFirstSpliceDisplayLiteralProgram,
   spatialCountMaskScratchName,
   substituteConditionIdentifier,
-} from "../../compiler.ts";
+} from "../lowering-helpers.ts";
 import {
   getOpcode,
 } from "../../opcodes.ts";

@@ -26,7 +26,7 @@ import {
   smallSetMacroArityText,
   ticTacToeExpressionMacro,
   ticTacToeMacroArity,
-} from "../../compiler.ts";
+} from "../lowering-helpers.ts";
 
 export function compileExpression(ctx: LoweringCtx, expr: ExpressionAst): void {
     const randomCellHelper = ctx.sharedRandomCellHelper(expr);

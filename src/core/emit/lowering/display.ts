@@ -8,7 +8,7 @@ import type {
   DisplayField,
   DisplayLiteralProgram,
   FirstSpliceDisplayLiteralProgram,
-} from "../../compiler.ts";
+} from "../lowering-helpers.ts";
 import {
   COORD_LIST_DX,
   buildDiagnostic,
@@ -23,7 +23,7 @@ import {
   signDigitLiteralDisplayProgram,
   signedFirstSpliceDisplayLiteralProgram,
   zeroDigitTailDisplayProgram,
-} from "../../compiler.ts";
+} from "../lowering-helpers.ts";
 
 export function compileShowSequenceRead(ctx: LoweringCtx, 
     firstShow: Extract<StatementAst, { kind: "show" }>,
