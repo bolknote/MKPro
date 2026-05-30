@@ -68,6 +68,34 @@ import {
   emitResidualAdjustment,
   emitResidualCompareDelta,
 } from "./emit/lowering/control-flow.ts";
+import {
+  compileDashedCoordReportDisplay,
+  compileDecimalLiteralDisplay,
+  compileDisplayByteBuilder,
+  compileLiteralDisplay,
+  compileLiteralDisplayBody,
+  compileMantissaMaskDisplay,
+  compilePackedDisplayBody,
+  compilePackedDisplayFields,
+  compilePackedDisplayFieldsInOrder,
+  compilePackedStorageReuseDisplay,
+  compilePreloadedDisplayLiteral,
+  compileShow,
+  compileShowSequenceRead,
+  compileSignDigitLiteralDisplay,
+  compileTextDisplay,
+  compileZeroDigitTailDisplay,
+  emitDashedCoordReportPackedBodyDisplay,
+  emitDisplayExponent,
+  emitDisplayFieldValue,
+  emitDisplayFirstDigit,
+  emitDisplayLiteralProgram,
+  emitFirstDigitSplice,
+  emitFirstSpliceDisplayLiteralProgram,
+  emitSignDigitIndirectStep,
+  emitTwoDigitTextDisplay,
+  orderDisplaySources,
+} from "./emit/lowering/display.ts";
 import { MK61_PROFILE, machineSupports, type MachineProfile } from "./machineProfile.ts";
 import type {
   AppliedOptimization,
@@ -159,7 +187,7 @@ const COORD_LIST_ITEM_PREFIX = "__coord_list_";
 const COORD_LIST_POINTER = "__coord_list_pointer";
 export const COORD_LIST_COUNTER = "__coord_list_counter";
 const COORD_LIST_CURRENT = "__coord_list_current";
-const COORD_LIST_DX = "__coord_list_dx";
+export const COORD_LIST_DX = "__coord_list_dx";
 const DASHED_COORD_REPORT_MASK = "8,-00--_";
 export const NEGATIVE_ZERO_DEGREE_SELECTOR_GE = "__mkpro_negative_zero_ge";
 const NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE = "1|-00";
@@ -270,7 +298,7 @@ interface LoweringOptions {
 
 type DisplaySourceItem = Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }>;
 
-interface DisplayField {
+export interface DisplayField {
   kind: "source" | "literal";
   item?: DisplaySourceItem;
   name: string;
@@ -2844,15 +2872,7 @@ export class EmitContext {
     secondShow: Extract<StatementAst, { kind: "show" }>,
     input: Extract<StatementAst, { kind: "input" }>,
   ): boolean {
-    const helper = this.sharedShowSequenceHelper(firstShow.display, secondShow.display, firstShow.line);
-    if (helper === undefined) return false;
-    this.emitJump(0x53, "ПП", helper.label, `show ${firstShow.display}; show ${secondShow.display}`, firstShow.line);
-    this.emitStore(input.target, `read ${input.target}`, input.line);
-    this.optimizations.push({
-      name: "show-sequence-helper-call",
-      detail: `Reused shared helper for show ${firstShow.display}; show ${secondShow.display}; read ${input.target}.`,
-    });
-    return true;
+    return compileShowSequenceRead(this, firstShow, secondShow, input);
   }
 
   compileGuardAssignmentSubstitution(
@@ -3724,105 +3744,11 @@ export class EmitContext {
   }
 
   compileShow(displayName: string, line: number): void {
-    const display = this.ast.displays.find((candidate) => candidate.name === displayName);
-    if (!display) {
-      this.diagnostics.push(buildDiagnostic("error", `Unknown display '${displayName}'.`, line));
-      return;
-    }
-
-    const literalHelper = this.sharedLiteralDisplayHelper(display, line);
-    if (literalHelper !== undefined) {
-      this.emitJump(0x53, "ПП", literalHelper.label, `show ${display.name}`, line);
-      this.optimizations.push({
-        name: "screen-video-literal-helper-call",
-        detail: `Reused shared literal video helper for screen ${display.name}.`,
-      });
-      return;
-    }
-    if (this.compileLiteralDisplay(display, line)) return;
-    if (this.compileTextDisplay(display, line)) return;
-    if (this.compileDashedCoordReportDisplay(display, line)) return;
-
-    const strategy = this.selectDisplayStrategy(display);
-    if (strategy === "packed-display-helper") {
-      const helper = this.sharedDisplayHelper(display, line);
-      if (helper !== undefined) {
-        this.emitJump(0x53, "ПП", helper.label, `show ${display.name}`, line);
-        this.optimizations.push({
-          name: "packed-display-helper-call",
-          detail: `Reused shared packed display helper for screen ${display.name}.`,
-        });
-        return;
-      }
-    }
-    if (strategy === "display-byte-helper") {
-      const helper = this.sharedDisplayByteHelper(display, line);
-      if (helper !== undefined) {
-        this.emitJump(0x53, "ПП", helper.label, `show ${display.name}`, line);
-        this.optimizations.push({
-          name: "display-byte-helper-call",
-          detail: `Reused shared display-byte helper for screen ${display.name}.`,
-        });
-        return;
-      }
-    }
-
-    if (strategy === "packed-storage-reuse" && this.compilePackedStorageReuseDisplay(display, line, true)) return;
-    if (strategy === "display-byte-builder" && this.compileDisplayByteBuilder(display, line, true)) return;
-
-    this.compilePackedDisplayBody(display, line, true);
-    this.reportPackedDisplayLowering(display);
+    return compileShow(this, displayName, line);
   }
 
   compileDashedCoordReportDisplay(display: ProgramAst["displays"][number], line: number): boolean {
-    const template = dashedCoordReportDisplayTemplate(display);
-    if (template === undefined) return false;
-    const maskRegister = this.allocation.registers[COORD_LIST_DX];
-    if (maskRegister === undefined) return false;
-    if (!this.displayFieldFitsUnsignedWidth(template.cell) || !this.displayFieldFitsUnsignedWidth(template.bearing)) {
-      return false;
-    }
-
-    if (this.currentXDashedCoordReportBodyMatches(template)) {
-      this.emitDashedCoordReportPackedBodyDisplay(display.name, maskRegister, line);
-      this.optimizations.push({
-        name: "dashed-coord-report-packed-body",
-        detail: `Reused packed --CC-- N body already in X for screen ${display.name}.`,
-      });
-      this.optimizations.push({
-        name: "dashed-coord-report-lowering",
-        detail: `Lowered screen ${display.name} as --CC-- N calculator video output.`,
-      });
-      return true;
-    }
-
-    if (this.currentXVariable !== template.bearing.name) {
-      this.emitRecall(template.bearing.name, `display ${display.name} bearing`, line);
-    }
-    this.emitRecall(template.cell.name, `display ${display.name} cell`, line);
-    if (this.scaledCoordVariables.has(template.cell.name)) {
-      this.emitNumberOrPreload("10");
-      this.emitOp(0x12, "*", "display dashed scaled cell restore", line);
-    }
-    this.emitNumber("4");
-    this.emitOp(0x15, "F 10^x", "display dashed cell scale", line);
-    this.emitOp(0x12, "*", "display dashed cell shift", line);
-    this.emitOp(0x10, "+", "display dashed bearing append", line);
-    this.emitNumber("7");
-    this.emitOp(0x15, "F 10^x", "display dashed video anchor", line);
-    this.emitOp(0x10, "+", "display dashed video body", line);
-    this.emitOp(0x60 + registerIndex(maskRegister), `П->X ${maskRegister}`, `display ${display.name} dashed mask`, line);
-    this.emitOp(0x39, "К ⊕", "display dashed mask merge", line);
-    this.emitOp(0x35, "К {x}", "display dashed video fraction", line);
-    this.emitOp(0x0b, "/-/", "display dashed sign", line);
-    this.emitOp(0x0c, "ВП", "display dashed exponent entry", line);
-    this.emitOp(0x07, "7", "display dashed exponent", line);
-    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
-    this.optimizations.push({
-      name: "dashed-coord-report-lowering",
-      detail: `Lowered screen ${display.name} as --CC-- N calculator video output.`,
-    });
-    return true;
+    return compileDashedCoordReportDisplay(this, display, line);
   }
 
   currentXDashedCoordReportBodyMatches(template: DashedCoordReportTemplate): boolean {
@@ -3835,16 +3761,7 @@ export class EmitContext {
   }
 
   emitDashedCoordReportPackedBodyDisplay(displayName: string, maskRegister: RegisterName, line: number): void {
-    this.emitNumber("7");
-    this.emitOp(0x15, "F 10^x", "display dashed video anchor", line);
-    this.emitOp(0x10, "+", "display dashed video body", line);
-    this.emitOp(0x60 + registerIndex(maskRegister), `П->X ${maskRegister}`, `display ${displayName} dashed mask`, line);
-    this.emitOp(0x39, "К ⊕", "display dashed mask merge", line);
-    this.emitOp(0x35, "К {x}", "display dashed video fraction", line);
-    this.emitOp(0x0b, "/-/", "display dashed sign", line);
-    this.emitOp(0x0c, "ВП", "display dashed exponent entry", line);
-    this.emitOp(0x07, "7", "display dashed exponent", line);
-    this.emitOp(0x50, "С/П", `show ${displayName}`, line);
+    return emitDashedCoordReportPackedBodyDisplay(this, displayName, maskRegister, line);
   }
 
   selectDisplayStrategy(display: ProgramAst["displays"][number]): DisplayStrategyVariant | undefined {
@@ -3954,16 +3871,7 @@ export class EmitContext {
     line: number,
     reuseCurrentX: boolean,
   ): void {
-    const fields = this.numericDisplayFields(display, line);
-    if (fields === undefined) return;
-    this.compilePackedDisplayFields(display, fields, line, reuseCurrentX);
-    if (fields.some((field) => field.kind === "literal")) {
-      this.optimizations.push({
-        name: "display-decimal-literal-field",
-        detail: `Packed decimal digit literals directly into screen ${display.name}.`,
-      });
-    }
-    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
+    return compilePackedDisplayBody(this, display, line, reuseCurrentX);
   }
 
   compilePackedDisplayFields(
@@ -3972,41 +3880,7 @@ export class EmitContext {
     line: number,
     reuseCurrentX: boolean,
   ): void {
-    const currentIndex = reuseCurrentX && this.currentXVariable !== undefined
-      ? fields.findIndex((field) => field.kind === "source" && field.name === this.currentXVariable)
-      : -1;
-    if (currentIndex > 0) {
-      const current = fields[currentIndex]!;
-      this.compilePackedDisplayFieldsInOrder(display, fields.slice(0, currentIndex), line, false);
-      this.emitNumberOrPreload(String(10 ** current.width));
-      this.emitOp(0x12, "*", "packed display field shift", line);
-      this.emitOp(0x10, "+", "packed display current field append", line);
-      for (const field of fields.slice(currentIndex + 1)) {
-        this.emitNumberOrPreload(String(10 ** field.width));
-        this.emitOp(0x12, "*", "packed display field shift", line);
-        if (field.kind === "source" || field.value !== "0") {
-          this.emitDisplayFieldValue(display, field, line);
-          this.emitOp(0x10, "+", "packed display field append", line);
-        }
-      }
-      this.optimizations.push({
-        name: currentIndex === fields.length - 1 ? "display-current-x-suffix-reuse" : "display-current-x-middle-reuse",
-        detail: `Reused ${current.name} already in X as field ${currentIndex + 1} of screen ${display.name}.`,
-      });
-      return;
-    }
-
-    const orderedFields = reuseCurrentX && this.canReorderNumericDisplay(display)
-      ? this.orderDisplaySources(fields.map((field) => field.name))
-        .map((source) => fields.find((field) => field.name === source)!)
-      : fields;
-
-    this.compilePackedDisplayFieldsInOrder(
-      display,
-      orderedFields,
-      line,
-      reuseCurrentX,
-    );
+    return compilePackedDisplayFields(this, display, fields, line, reuseCurrentX);
   }
 
   compilePackedDisplayFieldsInOrder(
@@ -4015,30 +3889,7 @@ export class EmitContext {
     line: number,
     reuseCurrentX: boolean,
   ): void {
-    if (fields.length === 0) {
-      this.emitNumber("0");
-    } else {
-      for (let index = 0; index < fields.length; index += 1) {
-        const field = fields[index]!;
-        if (index === 0 && reuseCurrentX && field.kind === "source" && field.name === this.currentXVariable) {
-          this.optimizations.push({
-            name: "display-current-x-reuse",
-            detail: `Reused ${field.name} already in X as the first field of screen ${display.name}.`,
-          });
-          continue;
-        }
-        if (index === 0) {
-          this.emitDisplayFieldValue(display, field, line);
-        } else {
-          this.emitNumberOrPreload(String(10 ** field.width));
-          this.emitOp(0x12, "*", "packed display field shift", line);
-          if (field.kind === "source" || field.value !== "0") {
-            this.emitDisplayFieldValue(display, field, line);
-            this.emitOp(0x10, "+", "packed display field append", line);
-          }
-        }
-      }
-    }
+    return compilePackedDisplayFieldsInOrder(this, display, fields, line, reuseCurrentX);
   }
 
   emitDisplayFieldValue(
@@ -4046,13 +3897,7 @@ export class EmitContext {
     field: DisplayField,
     line: number,
   ): void {
-    if (field.kind === "literal") {
-      this.emitNumberOrPreload(field.value ?? "0");
-      const last = this.items.at(-1);
-      if (last?.kind === "op") last.comment = `display ${display.name} digit literal`;
-      return;
-    }
-    this.emitRecall(field.name, `display ${display.name} source`, line);
+    return emitDisplayFieldValue(this, display, field, line);
   }
 
   numericDisplayFields(
@@ -4147,22 +3992,7 @@ export class EmitContext {
     line: number,
     reuseCurrentX: boolean,
   ): boolean {
-    const fields = this.packedStorageReuseFields(display);
-    if (fields === undefined) return false;
-    const ordered = this.orderStorageReuseFields(fields, reuseCurrentX);
-    for (let index = 0; index < ordered.length; index += 1) {
-      const field = ordered[index]!;
-      if (!(index === 0 && reuseCurrentX && field.name === this.currentXVariable)) {
-        this.emitRecall(field.name, `display ${display.name} packed field`, line);
-      }
-      if (index > 0) this.emitOp(0x10, "+", "packed display storage append", line);
-    }
-    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
-    this.optimizations.push({
-      name: "packed-display-storage-reuse",
-      detail: `Displayed screen ${display.name} by adding fields already stored in their decimal positions.`,
-    });
-    return true;
+    return compilePackedStorageReuseDisplay(this, display, line, reuseCurrentX);
   }
 
   orderStorageReuseFields(fields: DisplayField[], reuseCurrentX: boolean): DisplayField[] {
@@ -4210,52 +4040,7 @@ export class EmitContext {
     line: number,
     _reuseCurrentX: boolean,
   ): boolean {
-    const template = this.mantissaExponentDisplayTemplate(display);
-    if (template === undefined) return this.compileMantissaMaskDisplay(display, line, _reuseCurrentX);
-    const scratch = this.displayTemplateScratchRegisters(display);
-    if (scratch === undefined) return false;
-
-    this.emitRecall(template.score.name, `display ${display.name} score`, line);
-    this.emitNumberOrPreload("1000");
-    this.emitOp(0x13, "/", "display template score shift", line);
-    this.emitRecall(template.total.name, `display ${display.name} total`, line);
-    this.emitNumberOrPreload("10000000");
-    this.emitOp(0x13, "/", "display template total shift", line);
-    this.emitOp(0x10, "+", "display template total append", line);
-    this.emitOp(0x09, "9", "display template numeric anchor", line);
-    this.emitOp(0x10, "+", "display template numeric body", line);
-    this.emitRecall(scratch.mask, `display ${display.name} separator mask`, line);
-    this.emitOp(0x38, "К ∨", "display template body merge", line);
-    const exponentCanBeZero = this.displayFieldCanBeZero(template.exponent);
-    this.emitStore(scratch.value, `display ${display.name} body`, line);
-
-    const exponentZero = exponentCanBeZero ? this.freshLabel("display_exponent_zero") : undefined;
-    this.emitRecall(template.exponent.name, `display ${display.name} exponent`, line);
-    if (exponentZero !== undefined) {
-      this.emitJump(0x57, "F x!=0", exponentZero, "display template zero exponent", line);
-    }
-    this.emitStore(scratch.loop, `display ${display.name} exponent counter`, line);
-    this.emitRecall(scratch.value, `display ${display.name} body`, line);
-    const loopStart = this.freshLabel("display_exponent_loop");
-    this.emitLabel(loopStart);
-    this.emitOp(0x0c, "ВП", "display template exponent entry", line);
-    this.emitOp(0x01, "1", "display template exponent digit", line);
-    this.emitOp(0x0b, "/-/", "display template exponent sign", line);
-    this.emitJump(displayLoopOpcode(scratch.loopRegister), `F L${scratch.loopRegister}`, loopStart, "display template exponent loop", line);
-    this.emitStore(scratch.value, `display ${display.name} exponent body`, line);
-    if (exponentZero !== undefined) this.emitLabel(exponentZero);
-
-    this.emitRecall(template.leader.name, `display ${display.name} leader`, line);
-    this.emitRecall(scratch.value, `display ${display.name} body`, line);
-    this.emitOp(0x14, "<->", "display template leader merge", line);
-    this.emitOp(0x54, "К НОП", "display template leader preserve", line, true);
-    this.emitOp(0x0c, "ВП", "display template leader restore", line);
-    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
-    this.optimizations.push({
-      name: "display-byte-x2-lowering",
-      detail: `Built literal-separated screen ${display.name} through a mantissa/exponent video template.`,
-    });
-    return true;
+    return compileDisplayByteBuilder(this, display, line, _reuseCurrentX);
   }
 
   compileMantissaMaskDisplay(
@@ -4263,27 +4048,7 @@ export class EmitContext {
     line: number,
     _reuseCurrentX: boolean,
   ): boolean {
-    const template = this.mantissaMaskDisplayTemplate(display);
-    const scratch = this.displayMaskScratchRegister(display);
-    const maskRegister = this.displayMaskRegister(display);
-    if (template === undefined || scratch === undefined || maskRegister === undefined) return false;
-
-    this.compilePackedDisplayFields(display, template.bodyFields, line, false);
-    this.emitOp(0x60 + registerIndex(maskRegister), `П->X ${maskRegister}`, `display ${display.name} literal mask`, line);
-    this.emitOp(0x38, "К ∨", "display mask body merge", line);
-    this.emitOp(0x40 + registerIndex(scratch), `X->П ${scratch}`, `display ${display.name} body`, line, true);
-    this.emitRecall(template.leader.name, `display ${display.name} leader`, line);
-    this.emitOp(0x60 + registerIndex(scratch), `П->X ${scratch}`, `display ${display.name} body`, line);
-    this.emitOp(0x14, "<->", "display mask leader merge", line);
-    this.emitOp(0x54, "К НОП", "display mask leader preserve", line, true);
-    this.emitOp(0x0c, "ВП", "display mask leader restore", line);
-    this.emitDisplayExponent(template.width - 1, line, "display mask exponent");
-    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
-    this.optimizations.push({
-      name: "display-byte-mask-lowering",
-      detail: `Built literal-separated screen ${display.name} through a calculator video mask.`,
-    });
-    return true;
+    return compileMantissaMaskDisplay(this, display, line, _reuseCurrentX);
   }
 
   mantissaExponentDisplayTemplate(
@@ -4430,17 +4195,7 @@ export class EmitContext {
     line: number | undefined,
     comment: string,
   ): void {
-    if (program.kind === "kinv") {
-      this.emitNumberOrPreload(program.digits);
-      this.emitOp(0x3a, "К ИНВ", comment, line);
-      if (program.negative) this.emitOp(0x0b, "/-/", `${comment} sign`, line);
-      return;
-    }
-    this.emitNumberOrPreload(program.left);
-    this.emitOp(0x0e, "В↑", `${comment} split`, line);
-    this.emitNumberOrPreload(program.right);
-    this.emitOp(0x39, "К ⊕", comment, line);
-    if (program.negative) this.emitOp(0x0b, "/-/", `${comment} sign`, line);
+    return emitDisplayLiteralProgram(this, program, line, comment);
   }
 
   emitFirstSpliceDisplayLiteralProgram(
@@ -4449,64 +4204,15 @@ export class EmitContext {
     line: number | undefined,
     comment: string,
   ): void {
-    this.emitDisplayLiteralProgram(program.body, line, `${comment} body`);
-    this.emitOp(0x40 + registerIndex(tempRegister), `X->П ${tempRegister}`, `${comment} body scratch`, line, true);
-    if (program.first === 8) {
-      this.emitOp(0x60 + registerIndex(tempRegister), `П->X ${tempRegister}`, `${comment} body scratch`, line);
-      if (program.negative) this.emitOp(0x0b, "/-/", `${comment} sign`, line);
-      this.emitOp(0x54, "К НОП", `${comment} first digit reuse`, line, true);
-      this.emitOp(0x0c, "ВП", `${comment} first digit reuse`, line);
-      this.emitDisplayExponent(program.exponent, line, `${comment} exponent`);
-      this.optimizations.push({
-        name: "display-literal-first-digit-reuse",
-        detail: "Reused the literal body's leading 8 while restoring X2.",
-      });
-      return;
-    }
-    if (program.first === 10 && program.second === 10) {
-      this.emitOp(0x35, "К {x}", `${comment} first digit from body`, line);
-      this.emitOp(0x60 + registerIndex(tempRegister), `П->X ${tempRegister}`, `${comment} body scratch`, line);
-      if (program.negative) this.emitOp(0x0b, "/-/", `${comment} sign`, line);
-      this.emitFirstDigitSplice(line);
-      this.emitDisplayExponent(program.exponent, line, `${comment} exponent`);
-      this.optimizations.push({
-        name: "display-literal-minus-source-reuse",
-        detail: "Derived a leading '-' from the literal body's fractional tail.",
-      });
-      return;
-    }
-    this.emitDisplayFirstDigit(program.first, line, `${comment} first digit`);
-    this.emitOp(0x60 + registerIndex(tempRegister), `П->X ${tempRegister}`, `${comment} body scratch`, line);
-    if (program.negative) this.emitOp(0x0b, "/-/", `${comment} sign`, line);
-    this.emitFirstDigitSplice(line);
-    this.emitDisplayExponent(program.exponent, line, `${comment} exponent`);
+    return emitFirstSpliceDisplayLiteralProgram(this, program, tempRegister, line, comment);
   }
 
   emitDisplayFirstDigit(cell: number, line: number | undefined, comment: string): void {
-    if (cell >= 0 && cell <= 9) {
-      this.emitNumber(String(cell));
-      const last = this.items.at(-1);
-      if (last?.kind === "op") last.comment = comment;
-      return;
-    }
-    if (cell >= 10 && cell <= 14) {
-      this.emitNumber(`1${15 - cell}`);
-      this.emitOp(0x3a, "К ИНВ", comment, line);
-      this.emitOp(0x35, "К {x}", comment, line);
-      return;
-    }
-    this.diagnostics.push(buildDiagnostic("error", `Unsupported display first digit ${cell}.`, line));
+    return emitDisplayFirstDigit(this, cell, line, comment);
   }
 
   emitDisplayExponent(exponent: number, line: number | undefined, comment: string): void {
-    if (!Number.isInteger(exponent) || exponent < 0 || exponent > 99) {
-      this.diagnostics.push(buildDiagnostic("error", `Unsupported display exponent ${exponent}.`, line));
-      return;
-    }
-    this.emitOp(0x0c, "ВП", comment, line);
-    for (const char of String(exponent)) {
-      this.emitOp(Number(char), char, comment, line);
-    }
+    return emitDisplayExponent(this, exponent, line, comment);
   }
 
   canReorderNumericDisplay(display: ProgramAst["displays"][number]): boolean {
@@ -4631,46 +4337,11 @@ export class EmitContext {
   }
 
   compileTextDisplay(display: ProgramAst["displays"][number], line: number): boolean {
-    const normalized = this.collapseTextPrefixDisplay(display);
-    if (normalized === undefined) return false;
-    const { text, source } = normalized;
-    if (
-      text !== "BEEr " ||
-      source.width !== undefined && source.width !== 2
-    ) {
-      return false;
-    }
-
-    const field = this.findStateField(source.name);
-    if (field === undefined || (field.min ?? 0) < 0 || (field.max ?? 0) > 99) return false;
-    if (this.allocation.registers[source.name] !== "0") return false;
-    if (this.currentAddress() !== 0) return false;
-
-    const scratchRegisters = new Set<RegisterName>(["1", "2", "7", "8", "a"]);
-    const conflicting = Object.entries(this.allocation.registers)
-      .filter(([name, register]) => name !== source.name && scratchRegisters.has(register));
-    if (conflicting.length > 0) return false;
-
-    this.emitTwoDigitTextDisplay(source.name, line);
-    this.optimizations.push({
-      name: "screen-text-lowering",
-      detail: `Lowered screen ${display.name} as visible text ${JSON.stringify(text)} plus ${source.name}.`,
-    });
-    return true;
+    return compileTextDisplay(this, display, line);
   }
 
   compileLiteralDisplay(display: ProgramAst["displays"][number], line: number): boolean {
-    const literal = this.collapseLiteralOnlyDisplay(display);
-    if (literal === undefined) return false;
-    const compiled = this.compileLiteralDisplayBody(display, line, literal);
-    if (!compiled) return false;
-    this.optimizations.push({
-      name: literal.length === 0 ? "screen-empty-literal-lowering" : "screen-video-literal-lowering",
-      detail: literal.length === 0
-        ? `Lowered empty screen ${display.name} as a plain pause.`
-        : `Lowered screen ${display.name} as a literal calculator video string.`,
-    });
-    return true;
+    return compileLiteralDisplay(this, display, line);
   }
 
   compileLiteralDisplayBody(
@@ -4678,57 +4349,7 @@ export class EmitContext {
     line: number,
     literal = this.collapseLiteralOnlyDisplay(display),
   ): boolean {
-    if (literal === undefined) return false;
-    if (literal.length === 0) {
-      this.emitOp(0x50, "С/П", `show ${display.name}`, line);
-      return true;
-    }
-    if (this.compilePreloadedDisplayLiteral(display, literal, line)) return true;
-    const program = displayLiteralProgram(literal);
-    if (program !== undefined) {
-      if (program.kind === "error") {
-        this.emitErrorStopOpcode(`show ${display.name}`, line, true);
-        this.emitOp(0x54, "К НОП", `show ${display.name} skipped after error pause`, line, true);
-        this.optimizations.push({
-          name: "screen-error-literal-lowering",
-          detail: `Lowered screen ${display.name} as a resumable ЕГГ0Г pause with a skipped padding cell.`,
-        });
-      } else if (program.kind === "kinv") {
-        this.emitNumberOrPreload(program.digits);
-        this.emitOp(0x3a, "К ИНВ", "display literal video bytes", line);
-      } else {
-        this.emitNumberOrPreload(program.left);
-        this.emitOp(0x0e, "В↑", "display literal x/y split", line);
-        this.emitNumberOrPreload(program.right);
-        this.emitOp(0x39, "К ⊕", "display literal video bytes", line);
-      }
-      if (program.kind !== "error" && program.negative) {
-        this.emitOp(0x0b, "/-/", "display literal sign", line);
-      }
-      if (program.kind === "error") return true;
-      this.emitOp(0x50, "С/П", `show ${display.name}`, line);
-      return true;
-    }
-    if (this.compileDecimalLiteralDisplay(display, literal, line)) return true;
-    if (this.compileZeroDigitTailDisplay(display, literal, line)) return true;
-    if (this.compileSignDigitLiteralDisplay(display, literal, line)) return true;
-    const firstSplice =
-      signedFirstSpliceDisplayLiteralProgram(literal) ??
-      exponentTailDisplayLiteralProgram(literal) ??
-      firstSpliceDisplayLiteralProgram(literal);
-    if (firstSplice !== undefined) {
-      const scratch = this.firstSpliceDisplayScratch(display);
-      if (scratch !== undefined) {
-        this.emitFirstSpliceDisplayLiteralProgram(firstSplice, scratch, line, "display literal video bytes");
-        this.emitOp(0x50, "С/П", `show ${display.name}`, line);
-        this.optimizations.push({
-          name: "screen-text-literal-first-splice",
-          detail: `Lowered screen ${display.name} by building a literal mantissa and splicing its first digit.`,
-        });
-        return true;
-      }
-    }
-    return false;
+    return compileLiteralDisplayBody(this, display, line, literal);
   }
 
   compilePreloadedDisplayLiteral(
@@ -4736,16 +4357,7 @@ export class EmitContext {
     literal: string,
     line: number,
   ): boolean {
-    if (!shouldUsePreloadedDisplayLiteral(literal)) return false;
-    const register = this.allocation.constants[normalizeConstantLiteral(literal)];
-    if (register === undefined) return false;
-    this.emitOp(0x60 + registerIndex(register), `П->X ${register}`, `display ${display.name} literal`, line);
-    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
-    this.optimizations.push({
-      name: "screen-text-literal-preload",
-      detail: `Displayed screen ${display.name} from prebuilt literal R${register}.`,
-    });
-    return true;
+    return compilePreloadedDisplayLiteral(this, display, literal, line);
   }
 
   firstSpliceDisplayScratch(display: ProgramAst["displays"][number]): RegisterName | undefined {
@@ -4757,15 +4369,7 @@ export class EmitContext {
     literal: string,
     line: number,
   ): boolean {
-    const value = decimalDisplayLiteralNumber(literal);
-    if (value === undefined) return false;
-    this.emitNumber(value);
-    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
-    this.optimizations.push({
-      name: "screen-decimal-literal-lowering",
-      detail: `Lowered screen ${display.name} as an ordinary decimal display literal.`,
-    });
-    return true;
+    return compileDecimalLiteralDisplay(this, display, literal, line);
   }
 
   compileZeroDigitTailDisplay(
@@ -4773,29 +4377,7 @@ export class EmitContext {
     literal: string,
     line: number,
   ): boolean {
-    const program = zeroDigitTailDisplayProgram(literal);
-    if (program === undefined) return false;
-    if (!this.scratchRegistersAvailable(new Set<RegisterName>(["9", "c"]))) return false;
-
-    this.emitNumber(String(program.input));
-    this.emitOp(0x54, "К НОП", "display zero-digit tail seed", line, true);
-    this.emitNumber("50");
-    this.emitOp(0x15, "F 10^x", "display zero-digit tail monster", line);
-    this.emitOp(0x22, "F x^2", "display zero-digit tail monster", line);
-    this.emitOp(0x22, "F x^2", "display zero-digit tail monster", line);
-    this.emitOp(0x22, "F x^2", "display zero-digit tail monster", line);
-    this.emitOp(0x12, "*", "display zero-digit tail monster", line);
-    this.emitOp(0x49, "X->П 9", "display zero-digit tail scratch", line, true);
-    this.emitOp(0x69, "П->X 9", "display zero-digit tail scratch", line);
-    this.emitOp(0x6c, "П->X c", "display zero-digit tail hidden tail", line);
-    this.emitOp(0x0c, "ВП", "display zero-digit tail restore", line);
-    this.emitOp(0x07, "7", "display zero-digit tail exponent", line);
-    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
-    this.optimizations.push({
-      name: "screen-zero-digit-tail-lowering",
-      detail: `Lowered screen ${display.name} through the 0C tail sign-digit display trick.`,
-    });
-    return true;
+    return compileZeroDigitTailDisplay(this, display, literal, line);
   }
 
   compileSignDigitLiteralDisplay(
@@ -4803,54 +4385,15 @@ export class EmitContext {
     literal: string,
     line: number,
   ): boolean {
-    const program = signDigitLiteralDisplayProgram(literal);
-    if (program === undefined) return false;
-    const scratch = this.signDigitLiteralScratch();
-    if (scratch === undefined) return false;
-
-    this.emitNumber("11");
-    this.emitOp(0x3a, "К ИНВ", "display sign-digit E source", line);
-    this.emitOp(0x35, "К {x}", "display sign-digit E source", line);
-    this.emitOp(0x40 + registerIndex(scratch.source), `X->П ${scratch.source}`, "display sign-digit E source", line, true);
-
-    this.emitOp(0x60 + registerIndex(scratch.source), `П->X ${scratch.source}`, "display sign-digit source", line);
-    this.emitNumber(program.start);
-    this.emitFirstDigitSplice(line);
-
-    for (let index = 0; index < program.indirectSteps; index += 1) {
-      this.emitSignDigitIndirectStep(scratch.indirect, line);
-      if (index < program.indirectSteps - 1) {
-        this.emitOp(0x60 + registerIndex(scratch.source), `П->X ${scratch.source}`, "display sign-digit source", line);
-        this.emitOp(0x60 + registerIndex(scratch.indirect), `П->X ${scratch.indirect}`, "display sign-digit body", line);
-        this.emitFirstDigitSplice(line);
-      }
-    }
-
-    if (program.first === "Е") {
-      this.emitOp(0x60 + registerIndex(scratch.source), `П->X ${scratch.source}`, "display sign-digit final source", line);
-    } else {
-      this.emitNumber(program.first);
-    }
-    this.emitOp(0x60 + registerIndex(scratch.indirect), `П->X ${scratch.indirect}`, "display sign-digit final body", line);
-    this.emitFirstDigitSplice(line);
-    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
-    this.optimizations.push({
-      name: "screen-sign-digit-literal-lowering",
-      detail: `Lowered screen ${display.name} through indirect sign-digit display construction.`,
-    });
-    return true;
+    return compileSignDigitLiteralDisplay(this, display, literal, line);
   }
 
   emitFirstDigitSplice(line: number | undefined): void {
-    this.emitOp(0x14, "<->", "display sign-digit first-cell splice", line);
-    this.emitOp(0x54, "К НОП", "display sign-digit first-cell splice", line, true);
-    this.emitOp(0x0c, "ВП", "display sign-digit first-cell splice", line);
+    return emitFirstDigitSplice(this, line);
   }
 
   emitSignDigitIndirectStep(register: RegisterName, line: number): void {
-    this.emitOp(0x40 + registerIndex(register), `X->П ${register}`, "display sign-digit indirect scratch", line);
-    this.emitOp(0xd0 + registerIndex(register), `К П->X ${register}`, "display sign-digit indirect normalize", line);
-    this.emitOp(0x60 + registerIndex(register), `П->X ${register}`, "display sign-digit indirect body", line);
+    return emitSignDigitIndirectStep(this, register, line);
   }
 
   signDigitLiteralScratch(): { indirect: RegisterName; source: RegisterName } | undefined {
@@ -4941,56 +4484,7 @@ export class EmitContext {
   }
 
   emitTwoDigitTextDisplay(source: string, line: number): void {
-    this.emitRecall(source, "text display verse", line);
-    this.emitOp(0x01, "1", "text tens divisor", line);
-    this.emitOp(0x00, "0", "text tens divisor", line);
-    this.emitOp(0x13, "/", "text tens", line);
-    this.emitOp(0x34, "К [x]", "text tens integer", line);
-    this.emitOp(0x41, "X->П 1", "text tens scratch", line);
-    this.emitOp(0x0f, "F Вx", "text ones from last X", line);
-    this.emitOp(0x35, "К {x}", "text ones fraction", line);
-    this.emitOp(0x01, "1", "text ones scale", line);
-    this.emitOp(0x00, "0", "text ones scale", line);
-    this.emitOp(0x12, "*", "text ones", line);
-    this.emitOp(0x42, "X->П 2", "text ones scratch", line);
-    this.emitOp(0x01, "1", "text display tens prefix", line);
-    this.emitOp(0x01, "1", "text display tens prefix", line);
-    this.emitOp(0x48, "X->П 8", "text display prefix scratch", line);
-    this.emitOp(0x01, "1", "text display tens offset", line);
-    this.emitOp(0x02, "2", "text display tens offset", line);
-    this.emitOp(0x47, "X->П 7", "text display digit offset", line);
-    this.emitOp(0x62, "П->X 2", "text display ones digit", line);
-    this.emitJump(0x53, "ПП", 34, "text digit renderer", line);
-    this.emitOp(0x4a, "X->П a", "text display rendered ones", line);
-    this.emitOp(0x01, "1", "text display ones prefix", line);
-    this.emitOp(0x04, "4", "text display ones prefix", line);
-    this.emitOp(0x48, "X->П 8", "text display prefix scratch", line);
-    this.emitOp(0x01, "1", "text display ones offset", line);
-    this.emitOp(0x03, "3", "text display ones offset", line);
-    this.emitOp(0x47, "X->П 7", "text display digit offset", line);
-    this.emitOp(0x61, "П->X 1", "text display tens digit", line);
-    this.emitJump(0x53, "ПП", 34, "text digit renderer", line);
-    this.emitOp(0x6a, "П->X a", "text display rendered ones", line);
-    this.emitOp(0x0e, "В↑", "show text", line);
-    this.emitOp(0x50, "С/П", "show text", line);
-    this.emitOp(0x06, "6", "text digit renderer", line);
-    this.emitOp(0x11, "-", "text digit renderer", line);
-    this.emitOp(0x0b, "/-/", "text digit renderer", line);
-    this.emitJump(0x5c, "F x<0", 45, "text digit renderer", line);
-    this.emitOp(0x09, "9", "text digit complement", line);
-    this.emitOp(0x10, "+", "text digit complement", line);
-    this.emitOp(0xd7, "К П->X 7", "text display byte", line);
-    this.emitOp(0x10, "+", "text display byte", line);
-    this.emitOp(0x3a, "К ИНВ", "text visible digit", line);
-    this.emitOp(0x52, "В/О", "text digit return", line);
-    this.emitOp(0x01, "1", "text digit complement", line);
-    this.emitOp(0x10, "+", "text digit complement", line);
-    this.emitOp(0xd7, "К П->X 7", "text display byte", line);
-    this.emitOp(0x10, "+", "text display byte", line);
-    this.emitOp(0x3a, "К ИНВ", "text visible digit", line);
-    this.emitOp(0xd8, "К П->X 8", "text display prefix", line);
-    this.emitOp(0x0e, "В↑", "text digit return value", line);
-    this.emitOp(0x52, "В/О", "text digit return", line);
+    return emitTwoDigitTextDisplay(this, source, line);
   }
 
   findStateField(name: string): StateFieldAst | undefined {
@@ -5675,18 +5169,7 @@ export class EmitContext {
   }
 
   orderDisplaySources(sources: string[]): string[] {
-    if (this.currentXVariable === undefined) return sources;
-    const index = sources.indexOf(this.currentXVariable);
-    if (index <= 0) return sources;
-    this.optimizations.push({
-      name: "display-stack-reuse",
-      detail: `Reordered packed display inputs to reuse ${this.currentXVariable} already in X.`,
-    });
-    return [
-      this.currentXVariable,
-      ...sources.slice(0, index),
-      ...sources.slice(index + 1),
-    ];
+    return orderDisplaySources(this, sources);
   }
 
   compileCommutativeWithCurrentX(expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
@@ -8408,7 +7891,7 @@ function programUsesDashedCoordReport(ast: ProgramAst): boolean {
   return ast.displays.some((display) => dashedCoordReportDisplayTemplate(display) !== undefined);
 }
 
-function dashedCoordReportDisplayTemplate(
+export function dashedCoordReportDisplayTemplate(
   display: ProgramAst["displays"][number],
 ): DashedCoordReportTemplate | undefined {
   const [prefix, cell, separator, bearing] = display.items;
@@ -8451,7 +7934,7 @@ function normalizeDisplayTemplateLiteral(text: string): string {
   return text.replace(/\s/gu, "");
 }
 
-function displayLoopOpcode(register: 0 | 1 | 2 | 3): number {
+export function displayLoopOpcode(register: 0 | 1 | 2 | 3): number {
   switch (register) {
     case 0:
       return 0x5d;
@@ -8464,12 +7947,12 @@ function displayLoopOpcode(register: 0 | 1 | 2 | 3): number {
   }
 }
 
-type DisplayLiteralProgram =
+export type DisplayLiteralProgram =
   | { kind: "error" }
   | { kind: "kinv"; digits: string; negative: boolean }
   | { kind: "xor"; left: string; right: string; negative: boolean };
 
-interface FirstSpliceDisplayLiteralProgram {
+export interface FirstSpliceDisplayLiteralProgram {
   first: number;
   second?: number;
   body: Exclude<DisplayLiteralProgram, { kind: "error" }>;
@@ -8516,7 +7999,7 @@ function displayLiteralProgramFromCells(
   return { kind: "xor", left: left.join(""), right: right.join(""), negative };
 }
 
-function firstSpliceDisplayLiteralProgram(text: string): FirstSpliceDisplayLiteralProgram | undefined {
+export function firstSpliceDisplayLiteralProgram(text: string): FirstSpliceDisplayLiteralProgram | undefined {
   const cells = displayLiteralCells(text);
   if (cells === undefined || cells.length === 0 || cells.length > 8) return undefined;
   return firstSpliceDisplayLiteralProgramFromCells(
@@ -8550,7 +8033,7 @@ function shouldUseFirstSpliceDisplayLiteral(text: string): boolean {
   return direct === undefined || direct.kind !== "error" && displayLiteralTrailingZeroExponent(text) !== undefined;
 }
 
-function signedFirstSpliceDisplayLiteralProgram(text: string): FirstSpliceDisplayLiteralProgram | undefined {
+export function signedFirstSpliceDisplayLiteralProgram(text: string): FirstSpliceDisplayLiteralProgram | undefined {
   const normalized = normalizeDisplayLiteralText(text);
   if (!/^-[0-9]/u.test(normalized)) return undefined;
   const body = normalized.slice(1);
@@ -8559,7 +8042,7 @@ function signedFirstSpliceDisplayLiteralProgram(text: string): FirstSpliceDispla
   return firstSpliceDisplayLiteralProgramFromCells(cells, displayLiteralPointExponent(body) ?? cells.length - 1, true);
 }
 
-function exponentTailDisplayLiteralProgram(text: string): FirstSpliceDisplayLiteralProgram | undefined {
+export function exponentTailDisplayLiteralProgram(text: string): FirstSpliceDisplayLiteralProgram | undefined {
   const cells = displayLiteralCells(text);
   if (cells === undefined || cells.length !== 9) return undefined;
   const exponent = cells.at(-1);
@@ -8567,7 +8050,7 @@ function exponentTailDisplayLiteralProgram(text: string): FirstSpliceDisplayLite
   return firstSpliceDisplayLiteralProgramFromCells(cells.slice(0, 8), exponent, false);
 }
 
-function shouldUsePreloadedDisplayLiteral(text: string): boolean {
+export function shouldUsePreloadedDisplayLiteral(text: string): boolean {
   if (decimalDisplayLiteralNumber(text) !== undefined) return false;
   if (zeroDigitTailDisplayProgram(text) !== undefined) return false;
   if (signDigitLiteralDisplayProgram(text) !== undefined) return false;
@@ -8594,7 +8077,7 @@ function displayLiteralTrailingZeroExponent(text: string): number | undefined {
   return cells.at(-1) === 0 ? cells.length - 1 : undefined;
 }
 
-function decimalDisplayLiteralNumber(text: string): string | undefined {
+export function decimalDisplayLiteralNumber(text: string): string | undefined {
   const normalized = normalizeDisplayLiteralText(text);
   if (!/^-?(?:0|[1-9][0-9]{0,7})$/u.test(normalized)) return undefined;
   return normalized;
@@ -8639,7 +8122,7 @@ function displayCellsLiteral(cells: readonly number[]): string {
   }).join("");
 }
 
-function zeroDigitTailDisplayProgram(text: string): { input: number } | undefined {
+export function zeroDigitTailDisplayProgram(text: string): { input: number } | undefined {
   const cells = displayLiteralCells(text);
   if (cells === undefined || cells.length !== 2) return undefined;
   const [signDigit, tail] = cells;
@@ -8647,7 +8130,7 @@ function zeroDigitTailDisplayProgram(text: string): { input: number } | undefine
   return { input: signDigit - 1 };
 }
 
-function signDigitLiteralDisplayProgram(text: string): SignDigitLiteralDisplayProgram | undefined {
+export function signDigitLiteralDisplayProgram(text: string): SignDigitLiteralDisplayProgram | undefined {
   const cells = displayLiteralCells(text);
   if (cells === undefined || cells.length !== 9) return undefined;
   const signDigit = cells[0];
@@ -8780,7 +8263,7 @@ function programUsesTicTacToeHelpers(ast: ProgramAst): boolean {
   return found;
 }
 
-function normalizeConstantLiteral(raw: string): string {
+export function normalizeConstantLiteral(raw: string): string {
   const value = Number(raw);
   return Number.isFinite(value) ? String(value) : raw.trim();
 }
