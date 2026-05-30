@@ -66,7 +66,7 @@ program TinyGame {
   }
 
   fn main() {
-    show(player, food)
+    show(player, " ", food)
   }
 
   loop {
@@ -100,18 +100,21 @@ FA..FF selector value.
 
 All top-level `examples/*.mkpro` programs are runnable MK-Pro programs. They cover:
 
+- `examples/99-bottles.mkpro`: compact text/count display demo.
 - `examples/basic.mkpro`: minimal input/output and arithmetic.
-- `examples/tiny-game.mkpro`: tiny menu-style loop.
-- `examples/lunar.mkpro`: numeric landing game with counters and touchdown rules.
-- `examples/human.mkpro`: small counter game used as syntax smoke test.
 - `examples/alaram.mkpro`: cockpit interceptor port that fits the original.
 - `examples/cave-sketch.mkpro`: compact cave sketch with generated board movement.
 - `examples/dangerous-loading.mkpro`: ferry/loading game whose natural default
   command branch compiles smaller than the original.
 - `examples/dungeon.mkpro`: Lord_BSS corridor dungeon port that fits the original.
+- `examples/e-94-digits.mkpro`: Anvarov e-digit calculation port.
+- `examples/fox-hunt-100.mkpro`: Anvarov 10x10 Fox Hunt port.
 - `examples/fox-hunt-mk61.mkpro`: MonatkoDenis MK-61 Fox Hunt port with a
   generated setup program and row/column/diagonal bearing clues.
+- `examples/functions-demo.mkpro`: value-returning function composition demo.
 - `examples/game-100-pig.mkpro`: Anvarov dice game port that fits the original.
+- `examples/human.mkpro`: small counter game used as syntax smoke test.
+- `examples/lunar.mkpro`: numeric landing game with counters and touchdown rules.
 - `examples/minesweeper-9x7.mkpro`: Lord_BSS Sapper port whose 9x7 paper-board
   probes match the original 104-cell listing.
 - `examples/minesweeper-9x9.mkpro`: Anvarov Minesweeper port using shared
@@ -119,6 +122,8 @@ All top-level `examples/*.mkpro` programs are runnable MK-Pro programs. They cov
 - `examples/raja-yoga.mkpro`: Anvarov one-dimensional mask game port that fits
   the original.
 - `examples/sea-battle.mkpro`: board/cell-set game port that fits the original.
+- `examples/tiny-game.mkpro`: tiny menu-style loop.
+- `examples/wumpus.mkpro`: Hunt the Wumpus port that fits the MK-61 window.
 
 `examples/pending-optimizer/*.mkpro` contains ports that lower through ordinary
 IR but are still too large for MK-61 or their reference. There is no separate
