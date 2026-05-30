@@ -441,6 +441,19 @@ function compileLoweringAttempt(
   }
 }
 
+/**
+ * Test-only hook: compile a single explicit lowering variant. Used by the
+ * golden-output guardrail to fingerprint every lowering path (not just the
+ * selected one). Not part of the public API surface.
+ */
+export function compileLoweringVariantForTest(
+  source: string,
+  options: Partial<CompileOptions>,
+  loweringOptions: Record<string, unknown>,
+): CompileResult {
+  return compileLoweringAttempt(source, options, loweringOptions as LoweringOptions);
+}
+
 function isOnlyBudgetExceeded(error: unknown): error is CompileError {
   return error instanceof CompileError &&
     error.diagnostics.some((diagnostic) => diagnostic.level === "error" && diagnostic.code === "BUDGET_EXCEEDED") &&
