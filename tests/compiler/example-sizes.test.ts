@@ -46,7 +46,7 @@ const PENDING_BASELINE: Record<string, number> = {
   "cave-treasure": 139,
   "giants-country": 164,
   labyrinth777: 224,
-  "rambo-iii": 178,
+  "rambo-iii": 324,
   teleport: 246,
   "tic-tac-toe-4x4": 260,
   "treasure-hunter-2": 135,

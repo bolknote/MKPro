@@ -39,7 +39,7 @@ Generated with `npm run examples:size`.
 | `pending-optimizer/cave-treasure.mkpro` | 139 | 105 | +34 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/giants-country.mkpro` | 164 | 105 | +59 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/labyrinth777.mkpro` | 224 | 105 | +119 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/rambo-iii.mkpro` | 178 | 105 | +73 | pending optimizer | not loaded: main >105 |
+| `pending-optimizer/rambo-iii.mkpro` | 324 | 105 | +219 | pending optimizer | not loaded: main >105 |
 | `pending-optimizer/teleport.mkpro` | 246 | 105 | +141 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/tic-tac-toe-4x4.mkpro` | 260 | 105 | +155 | pending optimizer | not loaded: main >105 |
 | `pending-optimizer/treasure-hunter-2.mkpro` | 135 | 105 | +30 | pending optimizer | setup load ok; main >105 |

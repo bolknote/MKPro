@@ -1,31 +1,30 @@
 reference lordbss_pmk53
 
-// Based on Lord_BSS pmk53, "Rambo-III" by Evgeny Vek. The original fills the
-// complete 105-cell MK-61 window and leans heavily on indirect calls/jumps, FL
-// loops, K{x}/K[x] digit extraction, FBx stack rotation, and packed display
-// constants. This pending port keeps the three-front defense rules explicit so
-// optimizer work can be driven by a real, hack-heavy source.
+// Source-level port of Lord_BSS pmk53, "Rambo-III" by Evgeny Vek. The MK-61
+// listing stores enemy strength and fortress distance together in R1..R3
+// (5000.999), our robots in R4..R6, reserve in R7, the victory video value in
+// R8, and the random seed in Rc. This version keeps those source effects
+// explicit instead of inventing a separate game model.
 
 program RamboIII {
   state {
     time: counter 0..25 = 25
-    front: counter 1..3 = 1
-    reserve: counter -9999..99999 = 25000
-    order: counter -9999..9999 = 0
 
-    enemy1: counter 0..99999 = 5000
-    enemy2: counter 0..99999 = 5000
-    enemy3: counter 0..99999 = 5000
+    front1: packed = 5000.999
+    front2: packed = 5000.999
+    front3: packed = 5000.999
 
-    our1: counter 0..99999 = 0
-    our2: counter 0..99999 = 0
-    our3: counter 0..99999 = 0
+    robots1: packed = 0
+    robots2: packed = 0
+    robots3: packed = 0
 
-    distance1: counter -9..999 = 999
-    distance2: counter -9..999 = 999
-    distance3: counter -9..999 = 999
+    reserve: packed = 25000
+    random_state: packed = 0.5
 
-    event: counter 0..9 = 0
+    order: packed = 0
+    event_target: counter 0..7 = 0
+    old_random: packed = 0
+    distance: packed = 0
   }
 
   fn lost() {
@@ -33,95 +32,206 @@ program RamboIII {
   }
 
   fn won() {
-    // The original victory screen is "SOLDIER"; MK-Pro cannot spell that
-    // literal yet, so the pending case uses a numeric success marker for now.
-    halt(7777777)
+    halt(8.1020088E14)
   }
 
   loop {
+    show(time)
+    reinforcement_cycle()
+    front1_stop()
+    front2_stop()
+    front3_stop()
+    time--
+
     if time <= 0 {
       won()
     }
-    else {
-      show(time)
-      defend_front1()
-      defend_front2()
-      defend_front3()
-      reinforce_cycle()
-      time--
+  }
+
+  fn random_92() {
+    random_state = random()
+  }
+
+  fn reinforcement_cycle() {
+    random_92()
+    event_target = int(random_state * 13 / 3)
+    if event_target == 0 {
+      event_target = 7
+    }
+
+    random_92()
+
+    match event_target {
+      1 => front1 += int(random_state * 10000)
+      2 => front2 += int(random_state * 10000)
+      3 => front3 += int(random_state * 10000)
+      4 => robots1 += int(random_state * 10000)
+      7 => reserve += int(random_state * 10000)
     }
   }
 
-  fn validate_order() {
+  fn front1_stop() {
+    show(1)
+    accept_front1_order()
+  }
+
+  fn front2_stop() {
+    show(2)
+    accept_front2_order()
+  }
+
+  fn front3_stop() {
+    show(3)
+    accept_front3_order()
+  }
+
+  fn accept_front1_order() {
     order = read()
-    if order > reserve {
-      lost()
-    }
+    order = int(order)
     reserve -= order
-  }
 
-  fn defend_front1() {
-    front = 1
-    show(front)
-    validate_order()
-    our1 += order
-    if our1 < enemy1 {
-      distance1 -= 2
-    }
-    else {
-      distance1--
-      reserve += our1 - enemy1
-      our1 = enemy1
-    }
-    if distance1 <= 0 {
+    if reserve < 0 {
       lost()
     }
+    else {
+      robots1 += order
+      resolve_front1()
+    }
   }
 
-  fn defend_front2() {
-    front = 2
-    show(front)
-    validate_order()
-    our2 += order
-    if our2 < enemy2 {
-      distance2 -= 2
-    }
-    else {
-      distance2--
-      reserve += our2 - enemy2
-      our2 = enemy2
-    }
-    if distance2 <= 0 {
+  fn accept_front2_order() {
+    order = read()
+    order = int(order)
+    reserve -= order
+
+    if reserve < 0 {
       lost()
     }
+    else {
+      robots2 += order
+      resolve_front2()
+    }
   }
 
-  fn defend_front3() {
-    front = 3
-    show(front)
-    validate_order()
-    our3 += order
-    if our3 < enemy3 {
-      distance3 -= 2
-    }
-    else {
-      distance3--
-      reserve += our3 - enemy3
-      our3 = enemy3
-    }
-    if distance3 <= 0 {
+  fn accept_front3_order() {
+    order = read()
+    order = int(order)
+    reserve -= order
+
+    if reserve < 0 {
       lost()
     }
+    else {
+      robots3 += order
+      resolve_front3()
+    }
   }
 
-  fn reinforce_cycle() {
-    event = int(random() * 3) + 1
-    reserve += int(random() * 4000)
+  fn resolve_front1() {
+    old_random = random_state
+    random_92()
 
-    match event {
-      1 => enemy1 += int(random() * 2000)
-      2 => enemy2 += int(random() * 2000)
-      3 => enemy3 += int(random() * 2000)
+    if old_random - random_state < 0 {
+      robots1 -= int(robots1 * random_state / 4)
+      robots1 -= int(robots1 * random_state / 4)
+      front1 -= int(front1 * random_state / 4)
+    }
+    else {
+      robots1 -= int(robots1 * random_state / 4)
+      front1 -= int(front1 * random_state / 4)
+      front1 -= int(front1 * random_state / 4)
+    }
+
+    advance_front1()
+  }
+
+  fn resolve_front2() {
+    old_random = random_state
+    random_92()
+
+    if old_random - random_state < 0 {
+      robots2 -= int(robots2 * random_state / 4)
+      robots2 -= int(robots2 * random_state / 4)
+      front2 -= int(front2 * random_state / 4)
+    }
+    else {
+      robots2 -= int(robots2 * random_state / 4)
+      front2 -= int(front2 * random_state / 4)
+      front2 -= int(front2 * random_state / 4)
+    }
+
+    advance_front2()
+  }
+
+  fn resolve_front3() {
+    old_random = random_state
+    random_92()
+
+    if old_random - random_state < 0 {
+      robots3 -= int(robots3 * random_state / 4)
+      robots3 -= int(robots3 * random_state / 4)
+      front3 -= int(front3 * random_state / 4)
+    }
+    else {
+      robots3 -= int(robots3 * random_state / 4)
+      front3 -= int(front3 * random_state / 4)
+      front3 -= int(front3 * random_state / 4)
+    }
+
+    advance_front3()
+  }
+
+  fn advance_front1() {
+    if robots1 <= 0 {
+      lost()
+    }
+    else {
+      old_random = random_state
+      random_92()
+      distance = frac(front1) - int((old_random + random_state + 1) * 20 * front1 / robots1) / 1000
+
+      if distance <= 0 {
+        lost()
+      }
+      else {
+        front1 = int(front1) + distance
+      }
+    }
+  }
+
+  fn advance_front2() {
+    if robots2 <= 0 {
+      lost()
+    }
+    else {
+      old_random = random_state
+      random_92()
+      distance = frac(front2) - int((old_random + random_state + 1) * 20 * front2 / robots2) / 1000
+
+      if distance <= 0 {
+        lost()
+      }
+      else {
+        front2 = int(front2) + distance
+      }
+    }
+  }
+
+  fn advance_front3() {
+    if robots3 <= 0 {
+      lost()
+    }
+    else {
+      old_random = random_state
+      random_92()
+      distance = frac(front3) - int((old_random + random_state + 1) * 20 * front3 / robots3) / 1000
+
+      if distance <= 0 {
+        lost()
+      }
+      else {
+        front3 = int(front3) + distance
+      }
     }
   }
 }
