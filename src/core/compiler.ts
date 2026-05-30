@@ -528,6 +528,7 @@ function compileMKProOnce(
     }
   }
   eliminateUnreachableV2Procs(ast, optimizations);
+  liftFunctionCallsInExpressions(ast, optimizations);
 
   const allocation = allocateRegisters(
     ast,
@@ -730,6 +731,7 @@ function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimiz
         for (const output of statement.outputs ?? []) addRead(output.target);
       }
       if (statement.kind === "trap") visitExpr(statement.expr);
+      if (statement.kind === "return_value") visitExpr(statement.expr);
     }
   };
 
@@ -1038,7 +1040,12 @@ function countVariableUsage(ast: ProgramAst, name: string): { reads: number; wri
         if (statement.target === name) writes += 1;
         visitExpr(statement.expr);
       }
-      if (statement.kind === "pause" || statement.kind === "halt" || statement.kind === "trap") visitExpr(statement.expr);
+      if (
+        statement.kind === "pause" || statement.kind === "halt" || statement.kind === "trap" ||
+        statement.kind === "return_value"
+      ) {
+        visitExpr(statement.expr);
+      }
       if (statement.kind === "ask") {
         if (statement.target === name) writes += 1;
         if (statement.prompt !== undefined) visitExpr(statement.prompt);
@@ -1181,6 +1188,49 @@ function constantGuardedProc(proc: ProcAst): ConstantGuardedProc | undefined {
   return undefined;
 }
 
+// The expressions owned directly by a statement (not those inside nested
+// statement bodies, which callers recurse into separately).
+function statementOwnExpressions(statement: StatementAst): ExpressionAst[] {
+  switch (statement.kind) {
+    case "assign":
+    case "pause":
+    case "halt":
+    case "trap":
+    case "return_value":
+      return [statement.expr];
+    case "ask":
+      return statement.prompt !== undefined ? [statement.prompt] : [];
+    case "if":
+    case "while":
+      return [statement.condition.left, statement.condition.right];
+    case "switch":
+    case "dispatch":
+      return [statement.expr, ...statement.cases.map((branch) => branch.value)];
+    case "core":
+      return (statement.inputs ?? []).map((input) => input.expr);
+    default:
+      return [];
+  }
+}
+
+// All call-expression callee names within an expression tree.
+function expressionCallCallees(expr: ExpressionAst): string[] {
+  switch (expr.kind) {
+    case "call":
+      return [expr.callee, ...expr.args.flatMap(expressionCallCallees)];
+    case "unary":
+      return expressionCallCallees(expr.expr);
+    case "binary":
+      return [...expressionCallCallees(expr.left), ...expressionCallCallees(expr.right)];
+    default:
+      return [];
+  }
+}
+
+function statementExpressionCallees(statement: StatementAst): string[] {
+  return statementOwnExpressions(statement).flatMap(expressionCallCallees);
+}
+
 function countStatementCalls(ast: ProgramAst): Map<string, number> {
   const counts = new Map<string, number>();
   const add = (name: string): void => {
@@ -1189,6 +1239,7 @@ function countStatementCalls(ast: ProgramAst): Map<string, number> {
   const visitList = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "call") add(statement.block);
+      for (const callee of statementExpressionCallees(statement)) add(callee);
       if (statement.kind === "loop") visitList(statement.body);
       if (statement.kind === "if") {
         visitList(statement.thenBody);
@@ -2002,6 +2053,7 @@ class EmitContext {
   private readonly loweringOptions: LoweringOptions;
   private readonly inlineProcNames: Set<string>;
   private readonly procCallCounts: Map<string, number>;
+  private readonly functionProcs: Map<string, ProcAst>;
   private readonly xParamProcs: Map<string, XParamProcLowering>;
   private readonly readCounts: Map<string, number>;
   private readonly displayUseCounts: Map<string, number>;
@@ -2089,6 +2141,9 @@ class EmitContext {
     this.loweringOptions = loweringOptions;
     this.procCallCounts = collectProcCallCounts(ast);
     this.inlineProcNames = findInlineProcNamesBySize(ast, this.procCallCounts);
+    this.functionProcs = new Map(
+      ast.procs.filter((proc) => procContainsReturnValue(proc.body)).map((proc) => [proc.name, proc]),
+    );
     this.readCounts = collectVariableReadCounts(ast);
     this.xParamProcs = collectXParamProcLowerings(ast, this.readCounts, this.inlineProcNames);
     this.displayUseCounts = collectDisplayUseCounts(ast);
@@ -2954,6 +3009,10 @@ class EmitContext {
         return;
       case "trap":
         this.compileTrap(statement);
+        return;
+      case "return_value":
+        this.compileExpression(statement.expr);
+        this.emitOp(0x52, "В/О", "return value", statement.line);
         return;
       case "decimal_series":
         this.compileDecimalFactorialSeries(statement);
@@ -4343,7 +4402,10 @@ class EmitContext {
   }
 
   private statementTerminates(statement: StatementAst, seenProcs: Set<string>): boolean {
-    if (statement.kind === "halt" || statement.kind === "loop" || statement.kind === "trap" || statement.kind === "decimal_series") {
+    if (
+      statement.kind === "halt" || statement.kind === "loop" || statement.kind === "trap" ||
+      statement.kind === "decimal_series" || statement.kind === "return_value"
+    ) {
       return true;
     }
     if (statement.kind === "while") return false;
@@ -4367,7 +4429,12 @@ class EmitContext {
   }
 
   private statementEndsMachineFlow(statement: StatementAst, seenProcs: Set<string>): boolean {
-    if (statement.kind === "loop" || statement.kind === "trap" || statement.kind === "decimal_series") return true;
+    if (
+      statement.kind === "loop" || statement.kind === "trap" || statement.kind === "decimal_series" ||
+      statement.kind === "return_value"
+    ) {
+      return true;
+    }
     if (statement.kind === "while") return false;
     if (statement.kind === "halt") return statement.literal !== undefined;
     if (statement.kind === "if") {
@@ -5697,7 +5764,10 @@ class EmitContext {
         });
         return;
       }
-      if (this.statementsTerminate(proc.body)) {
+      // A value-returning function ends in В/О (it returns to the caller), so it
+      // must be reached with ПП even though its body "terminates"; only true
+      // terminal rules (halt/jump-away) may use the direct-jump tail call.
+      if (this.statementsTerminate(proc.body) && !this.functionProcs.has(proc.name)) {
         this.emitJump(0x51, "БП", proc.name, `terminal rule ${proc.name}`, line);
         this.optimizations.push({
           name: "terminal-rule-tail-call",
@@ -6774,7 +6844,38 @@ class EmitContext {
     return inlineTotal - helperTotal >= EXPRESSION_HELPER_MIN_SAVINGS;
   }
 
+  // Compiles a call to a user-defined value-returning function. Arguments are
+  // evaluated and stored into the function's parameter registers (the argument
+  // list is call-free after function-call lifting, so the working stack is not
+  // clobbered between argument evaluations), then `ПП` jumps to the function,
+  // which leaves its result in X. Returns false when the callee is not a
+  // function (so built-in expression calls fall through).
+  private compileFunctionCall(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
+    const proc = this.functionProcs.get(expr.callee);
+    if (proc === undefined) return false;
+    const params = proc.params ?? [];
+    if (expr.args.length !== params.length) {
+      this.diagnostics.push(buildDiagnostic(
+        "error",
+        `Function ${expr.callee} expects ${params.length} argument(s), got ${expr.args.length}.`,
+        proc.line,
+      ));
+      return true;
+    }
+    for (let index = 0; index < params.length; index += 1) {
+      this.compileExpression(expr.args[index]!);
+      this.emitStore(params[index]!, `arg ${params[index]} for ${expr.callee}`, proc.line);
+    }
+    this.emitJump(0x53, "ПП", proc.name, `call function ${proc.name}`, proc.line);
+    this.optimizations.push({
+      name: "function-call",
+      detail: `Called function ${proc.name} and consumed its result from X.`,
+    });
+    return true;
+  }
+
   private compileCall(expr: Extract<ExpressionAst, { kind: "call" }>): void {
+    if (this.compileFunctionCall(expr)) return;
     const name = expr.callee.toLowerCase();
     if (name === "direction") {
       this.compileDirectionCall(expr);
@@ -8233,20 +8334,50 @@ function collectRecursiveProcNames(ast: ProgramAst): Set<string> {
 function findSingleUseProcNames(ast: ProgramAst): Set<string> {
   const counts = collectProcCallCounts(ast);
   const recursive = collectRecursiveProcNames(ast);
+  const functions = collectFunctionProcNames(ast);
 
   return new Set(
     [...counts.entries()]
-      .filter(([name, count]) => count === 1 && !recursive.has(name))
+      .filter(([name, count]) => count === 1 && !recursive.has(name) && !functions.has(name))
       .map(([name]) => name),
   );
 }
 
+// A proc that returns a value (its body contains a `return`). Value-returning
+// functions are always emitted as ПП/В/О subroutines and never inlined or
+// dropped, because expression-position calls jump to their label.
+function procContainsReturnValue(body: readonly StatementAst[]): boolean {
+  return body.some((statement) => {
+    switch (statement.kind) {
+      case "return_value":
+        return true;
+      case "if":
+        return procContainsReturnValue(statement.thenBody) ||
+          (statement.elseBody !== undefined && procContainsReturnValue(statement.elseBody));
+      case "loop":
+      case "while":
+        return procContainsReturnValue(statement.body);
+      case "switch":
+      case "dispatch":
+        return statement.cases.some((branch) => procContainsReturnValue(branch.body)) ||
+          (statement.defaultBody !== undefined && procContainsReturnValue(statement.defaultBody));
+      default:
+        return false;
+    }
+  });
+}
+
+function collectFunctionProcNames(ast: ProgramAst): Set<string> {
+  return new Set(ast.procs.filter((proc) => procContainsReturnValue(proc.body)).map((proc) => proc.name));
+}
+
 function findInlineProcNamesBySize(ast: ProgramAst, counts = collectProcCallCounts(ast)): Set<string> {
   const recursive = collectRecursiveProcNames(ast);
+  const functions = collectFunctionProcNames(ast);
   const inlineNames = new Set<string>();
   for (const proc of ast.procs) {
     const uses = counts.get(proc.name) ?? 0;
-    if (uses === 0 || recursive.has(proc.name)) continue;
+    if (uses === 0 || recursive.has(proc.name) || functions.has(proc.name)) continue;
     const bodyCost = estimateBranchOrderBodyCost(proc.body, ast);
     if (!Number.isFinite(bodyCost)) {
       if (uses === 1) inlineNames.add(proc.name);
@@ -8284,7 +8415,12 @@ function statementTerminatesStatically(
   ast: ProgramAst,
   seenProcs: Set<string>,
 ): boolean {
-  if (statement.kind === "halt" || statement.kind === "loop" || statement.kind === "trap") return true;
+  if (
+    statement.kind === "halt" || statement.kind === "loop" || statement.kind === "trap" ||
+    statement.kind === "return_value"
+  ) {
+    return true;
+  }
   if (statement.kind === "if") {
     return statement.elseBody !== undefined &&
       statementListTerminatesStaticallySeen(statement.thenBody, ast, new Set(seenProcs)) &&
@@ -8505,6 +8641,136 @@ function elideTailShowInStatementList(statements: StatementAst[], display: strin
   return removed;
 }
 
+// Flattens value-returning function calls out of compound expressions so each
+// remaining function call sits in an X-result position (the sole right-hand
+// side of an assignment, or the sole operand of return/pause/halt). A function
+// call lowers to `ПП`, which clobbers the whole X/Y/Z/T working stack, so a
+// nested call would destroy a partially built expression. Hoisting nested calls
+// into preceding temporary assignments keeps the working stack discipline
+// intact; the temporaries are short-lived and the optimizer reclaims them.
+function liftFunctionCallsInExpressions(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  const functions = collectFunctionProcNames(ast);
+  if (functions.size === 0) return;
+  let lifted = 0;
+  let counter = 0;
+  const freshTemp = (): string => {
+    counter += 1;
+    return `${INTERNAL_NAME_PREFIX}call_${counter}`;
+  };
+
+  // Hoist nested function calls in `expr` into `prelude`. When `allowRootCall`
+  // is true a function call at the very root may stay in place (it produces the
+  // value directly in X); otherwise even a root call is hoisted to a temp.
+  const liftExpr = (expr: ExpressionAst, prelude: StatementAst[], allowRootCall: boolean, line: number): ExpressionAst => {
+    switch (expr.kind) {
+      case "number":
+      case "identifier":
+        return expr;
+      case "unary":
+        return { ...expr, expr: liftExpr(expr.expr, prelude, false, line) };
+      case "binary":
+        return {
+          ...expr,
+          left: liftExpr(expr.left, prelude, false, line),
+          right: liftExpr(expr.right, prelude, false, line),
+        };
+      case "call": {
+        const loweredArgs = expr.args.map((arg) => liftExpr(arg, prelude, false, line));
+        const loweredCall: ExpressionAst = { ...expr, args: loweredArgs };
+        if (!functions.has(expr.callee)) return loweredCall;
+        if (allowRootCall) return loweredCall;
+        const temp = freshTemp();
+        prelude.push({ kind: "assign", target: temp, expr: loweredCall, line });
+        lifted += 1;
+        return { kind: "identifier", name: temp };
+      }
+    }
+  };
+
+  const liftStatement = (statement: StatementAst): StatementAst[] => {
+    const prelude: StatementAst[] = [];
+    switch (statement.kind) {
+      case "assign":
+      case "pause":
+      case "halt":
+      case "return_value": {
+        const expr = liftExpr(statement.expr, prelude, true, statement.line);
+        return [...prelude, { ...statement, expr }];
+      }
+      case "trap": {
+        const expr = liftExpr(statement.expr, prelude, false, statement.line);
+        return [...prelude, { ...statement, expr }];
+      }
+      case "ask": {
+        if (statement.prompt === undefined) return [statement];
+        const prompt = liftExpr(statement.prompt, prelude, false, statement.line);
+        return [...prelude, { ...statement, prompt }];
+      }
+      case "if": {
+        const left = liftExpr(statement.condition.left, prelude, false, statement.line);
+        const right = liftExpr(statement.condition.right, prelude, false, statement.line);
+        const rebuilt: StatementAst = {
+          ...statement,
+          condition: { ...statement.condition, left, right },
+          thenBody: liftStatements(statement.thenBody),
+          ...(statement.elseBody === undefined ? {} : { elseBody: liftStatements(statement.elseBody) }),
+        };
+        return [...prelude, rebuilt];
+      }
+      case "while": {
+        // The condition is re-evaluated every iteration, so its hoisted prelude
+        // must run before the loop and again at the end of the body.
+        const left = liftExpr(statement.condition.left, prelude, false, statement.line);
+        const right = liftExpr(statement.condition.right, prelude, false, statement.line);
+        const body = liftStatements(statement.body);
+        const rebuilt: StatementAst = {
+          ...statement,
+          condition: { ...statement.condition, left, right },
+          body: prelude.length === 0 ? body : [...body, ...cloneStatements(prelude)],
+        };
+        return [...prelude, rebuilt];
+      }
+      case "loop":
+        return [{ ...statement, body: liftStatements(statement.body) }];
+      case "switch": {
+        const expr = liftExpr(statement.expr, prelude, false, statement.line);
+        const rebuilt: StatementAst = {
+          ...statement,
+          expr,
+          cases: statement.cases.map((switchCase) => ({ ...switchCase, body: liftStatements(switchCase.body) })),
+          ...(statement.defaultBody === undefined ? {} : { defaultBody: liftStatements(statement.defaultBody) }),
+        };
+        return [...prelude, rebuilt];
+      }
+      case "dispatch": {
+        const expr = liftExpr(statement.expr, prelude, false, statement.line);
+        const rebuilt: StatementAst = {
+          ...statement,
+          expr,
+          cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: liftStatements(dispatchCase.body) })),
+          ...(statement.defaultBody === undefined ? {} : { defaultBody: liftStatements(statement.defaultBody) }),
+        };
+        return [...prelude, rebuilt];
+      }
+      default:
+        return [statement];
+    }
+  };
+
+  const liftStatements = (statements: StatementAst[]): StatementAst[] => statements.flatMap(liftStatement);
+
+  for (const entry of ast.entries) entry.body = liftStatements(entry.body);
+  for (const proc of ast.procs) proc.body = liftStatements(proc.body);
+  for (const block of ast.blocks) block.body = liftStatements(block.body);
+
+  if (lifted > 0) {
+    optimizations.push({
+      name: "function-call-lifting",
+      detail: `Hoisted ${lifted} nested function call(s) into temporaries to preserve the working stack.`,
+    });
+  }
+}
+
 function collectReachableProcNames(ast: ProgramAst): Set<string> {
   const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
   const blockMap = new Map(ast.blocks.map((block) => [block.name, block]));
@@ -8530,6 +8796,7 @@ function collectReachableProcNames(ast: ProgramAst): Set<string> {
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "call") enqueueCall(statement.block);
+      for (const callee of statementExpressionCallees(statement)) enqueueCall(callee);
       if (statement.kind === "loop") visit(statement.body);
       if (statement.kind === "while") visit(statement.body);
       if (statement.kind === "if") {
@@ -9315,6 +9582,7 @@ function collectVariableReadCounts(ast: ProgramAst): Map<string, number> {
   const visitStatements = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "return_value") visitExpr(statement.expr);
       if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "show") {
@@ -9469,6 +9737,7 @@ function statementReadsIdentifier(statement: StatementAst, name: string): boolea
     case "core":
       return statement.inputs?.some((input) => expressionReferencesIdentifier(input.expr, name)) ?? false;
     case "trap":
+    case "return_value":
       return expressionReferencesIdentifier(statement.expr, name);
   }
 }
@@ -13455,6 +13724,8 @@ function statementEquals(left: StatementAst, right: StatementAst): boolean {
       return rawLinesEqual(left.lines, (right as typeof left).lines);
     case "trap":
       return left.trap === (right as typeof left).trap && expressionEquals(left.expr, (right as typeof left).expr);
+    case "return_value":
+      return expressionEquals(left.expr, (right as typeof left).expr);
     case "decimal_series":
       return left.digits === (right as typeof left).digits &&
         left.counterStart === (right as typeof left).counterStart;
@@ -13570,6 +13841,7 @@ function estimateBranchOrderStatementCost(statement: StatementAst, ast: ProgramA
     case "pause":
     case "halt":
     case "trap":
+    case "return_value":
       return estimateExpressionCost(statement.expr) + 1;
     case "ask":
       return (statement.prompt === undefined ? 0 : estimateExpressionCost(statement.prompt)) + 2;

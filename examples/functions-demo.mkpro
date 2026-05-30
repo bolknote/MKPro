@@ -1,0 +1,26 @@
+// Demonstrates value-returning rules ("functions"). A `rule` whose body
+// contains a `return` produces a value in X and can be called inside an
+// expression, including nested inside another function. Here `sum_of_squares`
+// is composed from the smaller `square` helper, and the working stack is kept
+// intact automatically when a call is nested inside a larger expression.
+
+program FunctionsDemo {
+  state {
+    result: counter 0..99 = 0
+  }
+
+  rule square n {
+    return n * n
+  }
+
+  rule sum_of_squares a, b {
+    return square(a) + square(b)
+  }
+
+  turn {
+    read x
+    read y
+    result = sum_of_squares(x, y)
+    stop result
+  }
+}

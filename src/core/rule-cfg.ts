@@ -164,9 +164,12 @@ class Builder {
       }
       case "pause":
       case "halt":
-      case "trap": {
+      case "trap":
+      case "return_value": {
         // Treat stops as falling through: on the MK-61 С/П resumes at the next
-        // cell, so a value can still be read after the stop.
+        // cell, so a value can still be read after the stop. A return reads its
+        // expression operands; modeling it as fall-through keeps liveness
+        // conservative (it never drops a store that the return value needs).
         const node = this.add({ defs: [], uses: exprVars(statement.expr) });
         return { entry: node, exits: [node] };
       }

@@ -54,6 +54,7 @@ const V2_RESERVED_RULE_NAMES = new Set([
   "move",
   "otherwise",
   "read",
+  "return",
   "show",
   "stop",
 ]);
@@ -691,6 +692,13 @@ function parseV2InlineStatement(text: string, line: number): V2StatementAst {
   if (text.startsWith("stop ")) {
     return { kind: "v2_stop", value: text.slice("stop ".length).trim(), line };
   }
+  if (text === "return" || text.startsWith("return ")) {
+    const expr = text.slice("return".length).trim();
+    if (expr === "") {
+      throw new ParseError("'return' must return a value, e.g. 'return x + 1'", line);
+    }
+    return { kind: "v2_return", expr, line };
+  }
   const move = /^move\s+([A-Za-z_][\w]*)\s+(north|south|east|west|up|down)$/u.exec(text);
   if (move) {
     const statement: V2MoveStatementAst = {
@@ -837,6 +845,9 @@ function splitArgs(text: string): string[] {
 interface V2LoweringContext {
   ruleParams: Map<string, string[]>;
   rules: Map<string, V2RuleAst>;
+  // Names of rules that act as value-returning functions (their body contains a
+  // `return`). Used by validation and by the expression-position call path.
+  functionRules: Set<string>;
   specializedRules: Set<string>;
   moveDeltas: Map<string, Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>>>;
   stateTypes: Map<string, V2StateFieldAst["type"]>;
@@ -864,6 +875,7 @@ function lowerV2Program(v2: V2ProgramAst): LoweredV2Program {
   const screens = collectV2Screens(v2);
   const ruleParams = collectV2RuleParams(v2);
   const rules = collectV2Rules(v2);
+  const functionRules = collectV2FunctionRules(v2);
   const specializedRules = selectV2RuleSpecializations(v2, rules);
   const stateDomains = new Map(
     v2.state
@@ -874,9 +886,11 @@ function lowerV2Program(v2: V2ProgramAst): LoweredV2Program {
   const cellMapNames = collectV2CellMapNames(v2, stateDomains);
   validateV2Domains(v2);
   validateV2References(v2, { screens, ruleParams });
+  validateV2Functions(v2, functionRules);
   const context: V2LoweringContext = {
     ruleParams,
     rules,
+    functionRules,
     specializedRules,
     moveDeltas: collectV2MoveDeltas(v2),
     stateTypes: new Map(v2.state.map((field) => [field.name, field.type])),
@@ -1017,6 +1031,184 @@ function collectV2RuleParams(v2: V2ProgramAst): V2LoweringContext["ruleParams"] 
 
 function collectV2Rules(v2: V2ProgramAst): V2LoweringContext["rules"] {
   return new Map(v2.rules.map((rule) => [rule.name, rule]));
+}
+
+// A rule is a value-returning function when any statement in its body (at any
+// nesting depth) is a `return`.
+function collectV2FunctionRules(v2: V2ProgramAst): Set<string> {
+  const functions = new Set<string>();
+  for (const rule of v2.rules) {
+    if (v2StatementsContainReturn(rule.body)) functions.add(rule.name);
+  }
+  return functions;
+}
+
+function v2StatementsContainReturn(statements: V2StatementAst[]): boolean {
+  return statements.some(v2StatementContainsReturn);
+}
+
+function v2StatementContainsReturn(statement: V2StatementAst): boolean {
+  switch (statement.kind) {
+    case "v2_return":
+      return true;
+    case "v2_if":
+      return v2StatementsContainReturn(statement.thenBody) ||
+        (statement.elseBody !== undefined && v2StatementsContainReturn(statement.elseBody));
+    case "v2_while":
+      return v2StatementsContainReturn(statement.body);
+    case "v2_match":
+      return statement.cases.some((matchCase) => v2StatementContainsReturn(matchCase.action)) ||
+        (statement.otherwise !== undefined && v2StatementContainsReturn(statement.otherwise));
+    case "v2_challenge":
+      return v2StatementsContainReturn(statement.successBody) ||
+        (statement.failureBody !== undefined && v2StatementsContainReturn(statement.failureBody));
+    default:
+      return false;
+  }
+}
+
+// Every control path of a function body must end in a `return` (or a `stop`),
+// so the value left in X at В/О is always defined.
+function v2StatementsAlwaysReturn(statements: V2StatementAst[]): boolean {
+  const last = statements.at(-1);
+  if (last === undefined) return false;
+  return v2StatementAlwaysReturns(last);
+}
+
+function v2StatementAlwaysReturns(statement: V2StatementAst): boolean {
+  switch (statement.kind) {
+    case "v2_return":
+    case "v2_stop":
+      return true;
+    case "v2_if":
+      return statement.elseBody !== undefined &&
+        v2StatementsAlwaysReturn(statement.thenBody) &&
+        v2StatementsAlwaysReturn(statement.elseBody);
+    case "v2_match":
+      return statement.otherwise !== undefined &&
+        statement.cases.every((matchCase) => v2StatementAlwaysReturns(matchCase.action)) &&
+        v2StatementAlwaysReturns(statement.otherwise);
+    default:
+      return false;
+  }
+}
+
+function validateV2Functions(v2: V2ProgramAst, functionRules: Set<string>): void {
+  // `return` only makes sense inside a rule (it returns the rule's value).
+  if (v2.turn !== undefined && v2StatementsContainReturn(v2.turn.body)) {
+    throw new ParseError("'return' is only allowed inside a rule, not in 'turn'", v2.turn.line);
+  }
+  if (v2StatementsContainReturn(v2.body)) {
+    throw new ParseError("'return' is only allowed inside a rule", v2.line);
+  }
+  for (const table of v2.encounters) {
+    for (const encounterCase of table.cases) {
+      if (v2StatementsContainReturn(encounterCase.body)) {
+        throw new ParseError("'return' is only allowed inside a rule, not in 'encounters'", encounterCase.line);
+      }
+    }
+  }
+  for (const rule of v2.rules) {
+    if (!functionRules.has(rule.name)) continue;
+    if (!v2StatementsAlwaysReturn(rule.body)) {
+      throw new ParseError(
+        `Function '${rule.name}' must return a value on every path (end each branch with 'return' or 'stop')`,
+        rule.line,
+      );
+    }
+  }
+  validateV2FunctionRecursion(v2, functionRules);
+}
+
+// MK-61 keeps a finite five-level subroutine return stack and has no support for
+// recursion, so reject functions that call themselves (directly or mutually)
+// through expression-position calls.
+function validateV2FunctionRecursion(v2: V2ProgramAst, functionRules: Set<string>): void {
+  const edges = new Map<string, Set<string>>();
+  for (const rule of v2.rules) {
+    if (!functionRules.has(rule.name)) continue;
+    const callees = new Set<string>();
+    for (const text of v2StatementsExprTexts(rule.body)) {
+      for (const callee of expressionCallNames(text)) {
+        if (functionRules.has(callee)) callees.add(callee);
+      }
+    }
+    edges.set(rule.name, callees);
+  }
+  const visiting = new Set<string>();
+  const done = new Set<string>();
+  const walk = (name: string): void => {
+    if (done.has(name)) return;
+    if (visiting.has(name)) {
+      throw new ParseError(`Recursive function '${name}' is not supported on MK-61`, 0);
+    }
+    visiting.add(name);
+    for (const callee of edges.get(name) ?? []) walk(callee);
+    visiting.delete(name);
+    done.add(name);
+  };
+  for (const name of edges.keys()) walk(name);
+}
+
+function v2StatementsExprTexts(statements: V2StatementAst[]): string[] {
+  return statements.flatMap(v2StatementExprTexts);
+}
+
+function v2StatementExprTexts(statement: V2StatementAst): string[] {
+  switch (statement.kind) {
+    case "v2_assign":
+    case "v2_update":
+      return [statement.expr];
+    case "v2_return":
+      return [statement.expr];
+    case "v2_stop":
+      return [statement.value];
+    case "v2_invoke":
+      return [...statement.args];
+    case "v2_show":
+    case "v2_read":
+      return [];
+    case "v2_if":
+      return [
+        ...v2PredicateExprTexts(statement.predicate),
+        ...v2StatementsExprTexts(statement.thenBody),
+        ...(statement.elseBody ? v2StatementsExprTexts(statement.elseBody) : []),
+      ];
+    case "v2_while":
+      return [...v2PredicateExprTexts(statement.predicate), ...v2StatementsExprTexts(statement.body)];
+    case "v2_match":
+      return [
+        statement.expr,
+        ...statement.cases.flatMap((matchCase) => [...matchCase.values, ...v2StatementExprTexts(matchCase.action)]),
+        ...(statement.otherwise ? v2StatementExprTexts(statement.otherwise) : []),
+      ];
+    case "v2_challenge":
+      return [
+        statement.expr,
+        ...v2StatementsExprTexts(statement.successBody),
+        ...(statement.failureBody ? v2StatementsExprTexts(statement.failureBody) : []),
+      ];
+    case "v2_raw":
+      return statement.inputs.map((input) => input.expr);
+    default:
+      return [];
+  }
+}
+
+function v2PredicateExprTexts(predicate: V2PredicateAst): string[] {
+  if (predicate.kind === "v2_contains") return [predicate.collection, predicate.item];
+  return [predicate.left, predicate.right];
+}
+
+// Identifiers immediately followed by `(` in an expression text, i.e. call sites.
+function expressionCallNames(text: string): string[] {
+  const names: string[] = [];
+  const pattern = /([A-Za-z_][\w]*)\s*\(/gu;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    names.push(match[1]!);
+  }
+  return names;
 }
 
 interface V2InvocationSite {
@@ -1617,12 +1809,14 @@ function lowerV2Entry(v2: V2ProgramAst, context: V2LoweringContext): EntryAst {
 }
 
 function lowerV2Rule(rule: V2RuleAst, context: V2LoweringContext): ProcAst {
-  return {
+  const proc: ProcAst = {
     kind: "proc",
     name: rule.name,
     body: lowerV2Statements(rule.body, context),
     line: rule.line,
   };
+  if (rule.params.length > 0) proc.params = [...rule.params];
+  return proc;
 }
 
 function lowerV2EncounterRules(v2: V2ProgramAst, context: V2LoweringContext): ProcAst[] {
@@ -2310,6 +2504,12 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
       }];
     case "v2_match":
       return lowerV2MatchStatements(statement, context);
+    case "v2_return":
+      return [{
+        kind: "return_value",
+        expr: lowerV2Expression(statement.expr, statement.line, context),
+        line: statement.line,
+      }];
   }
 }
 
@@ -3210,6 +3410,8 @@ function substituteV2Statement(statement: V2StatementAst, replacements: Map<stri
       return { ...statement, args: statement.args.map((arg) => substituteV2Text(arg, replacements)) };
     case "v2_stop":
       return { ...statement, value: substituteV2Text(statement.value, replacements) };
+    case "v2_return":
+      return { ...statement, expr: substituteV2Text(statement.expr, replacements) };
     default:
       return statement;
   }

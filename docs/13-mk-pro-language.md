@@ -215,6 +215,51 @@ inlined, and shared terminal rules can be lowered as direct jumps by the
 optimizer, so authors do not need a separate terminal form for layout reasons.
 Rule names must be unique, and a call must reference a declared rule.
 
+## Functions (`return`)
+
+A rule whose body contains `return expr` is a **function**: it computes a value
+and hands it back to the caller. Functions can be used in expression position,
+including nested inside larger expressions and inside other functions.
+
+```mkpro
+rule square n {
+  return n * n
+}
+
+rule sum_of_squares a, b {
+  return square(a) + square(b)
+}
+
+turn {
+  read x
+  read y
+  result = sum_of_squares(x, y)
+  stop result
+}
+```
+
+Semantics and rules:
+
+- The returned value is delivered in the calculator's X register. A call lowers
+  to `ПП` (subroutine call); the function body ends with `В/О`, which returns to
+  the caller with the result in X. The caller then consumes X directly (for
+  example `result = f(x)` stores X into `result`, and `a + f(x)` adds X).
+- A function must `return` on **every** control path. End each branch of an
+  `if`/`match` with `return` (or `stop`); a function that can fall off the end is
+  a compile error.
+- `return` is only valid inside a rule. Using it in `turn`, the main body, or an
+  `encounters` table is a compile error.
+- Recursion is not supported (the MK-61 keeps only a five-level subroutine return
+  stack), so a function that calls itself directly or mutually is rejected.
+- Calling a function as a plain statement is allowed; its result is simply
+  discarded.
+
+Nested calls are handled automatically. Because `ПП` clobbers the whole
+X/Y/Z/T working stack, a call nested inside a larger expression (such as the
+`square(a)` operands above) is hoisted into a short-lived temporary before the
+surrounding expression is built, so a partially computed value is never
+destroyed. The optimizer reclaims those temporaries when it can.
+
 ## Boards And Cell Sets
 
 Use `board` when a game is about probes, shots, or pieces on a fixed board
