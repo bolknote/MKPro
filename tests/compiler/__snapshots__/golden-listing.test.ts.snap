@@ -264,6 +264,28 @@ sharedBitMaskHelperCalls: steps=25 | 64 6E 12 62 10 50 02 11 5E 13 D4 51 00 06 1
 sharedBitMaskHelperCalls+hoistSharedHelpers: steps=25 | 64 6E 12 62 10 50 02 11 5E 13 D4 51 00 06 11 5E 21 58 19 51 00 00 50 51 00"
 `;
 
+exports[`golden listing > lowering variants are stable for examples/jack-pot.mkpro 1`] = `
+"primary: steps=101 | 69 5E 87 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 38 3B 01 00 12 0E 35 11 46 51 25 66 B5 69 5E 47 66 49 51 54 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 70 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 98 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+aggressiveTerminalDirect: steps=101 | 69 5E 87 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 38 3B 01 00 12 0E 35 11 46 51 25 66 B5 69 5E 47 66 49 51 54 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 70 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 98 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+invertBranchOrder: steps=101 | 69 57 17 69 50 6C 1D 46 97 66 5E 14 68 50 00 49 87 6B 50 6C 1D C7 68 6E 11 48 5C 31 6A 50 87 03 40 01 45 00 49 00 46 66 5E 52 3B 01 00 12 0E 35 11 46 51 39 66 B5 69 57 66 01 00 69 12 66 10 49 51 68 66 49 5D 37 62 63 10 64 10 05 13 35 5E 84 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+aggressiveTerminalDirect+invertBranchOrder: steps=101 | 69 57 17 69 50 6C 1D 46 97 66 5E 14 68 50 00 49 87 6B 50 6C 1D C7 68 6E 11 48 5C 31 6A 50 87 03 40 01 45 00 49 00 46 66 5E 52 3B 01 00 12 0E 35 11 46 51 39 66 B5 69 57 66 01 00 69 12 66 10 49 51 68 66 49 5D 37 62 63 10 64 10 05 13 35 5E 84 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+hoistSharedHelpers: steps=101 | 69 5E 87 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 38 3B 01 00 12 0E 35 11 46 51 25 66 B5 69 5E 47 66 49 51 54 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 70 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 98 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+hoistSharedHelpers+hoistProcs: steps=101 | 69 5E 87 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 38 3B 01 00 12 0E 35 11 46 51 25 66 B5 69 5E 47 66 49 51 54 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 70 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 98 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+canonicalizeIfChains: steps=101 | 69 5E 87 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 38 3B 01 00 12 0E 35 11 46 51 25 66 B5 69 5E 47 66 49 51 54 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 70 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 98 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+freeResidualDispatchScratch: steps=101 | 69 5E 87 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 38 3B 01 00 12 0E 35 11 46 51 25 66 B5 69 5E 47 66 49 51 54 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 70 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 98 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+aliasXReuse: steps=101 | 69 5E 87 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 38 3B 01 00 12 0E 35 11 46 51 25 66 B5 69 5E 47 66 49 51 54 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 70 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 98 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+coalesceCopies: steps=101 | 69 5E 87 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 38 3B 01 00 12 0E 35 11 46 51 25 66 B5 69 5E 47 66 49 51 54 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 70 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 98 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+freeResidualDispatchScratch+canonicalizeIfChains: steps=101 | 69 5E 87 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 38 3B 01 00 12 0E 35 11 46 51 25 66 B5 69 5E 47 66 49 51 54 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 70 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 98 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+shareRandomCell: steps=101 | 69 5E 87 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 38 3B 01 00 12 0E 35 11 46 51 25 66 B5 69 5E 47 66 49 51 54 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 70 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 98 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+shareRandomCell+hoistSharedHelpers: steps=101 | 69 5E 87 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 38 3B 01 00 12 0E 35 11 46 51 25 66 B5 69 5E 47 66 49 51 54 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 70 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 98 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+tailBranchInversion: steps=101 | 69 5E 87 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 38 3B 01 00 12 0E 35 11 46 51 25 66 B5 69 5E 47 66 49 51 54 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 70 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 98 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion: steps=101 | 69 5E 87 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 38 3B 01 00 12 0E 35 11 46 51 25 66 B5 69 5E 47 66 49 51 54 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 70 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 98 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+guardedPrologueGadgets: steps=101 | 69 5E 87 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 38 3B 01 00 12 0E 35 11 46 51 25 66 B5 69 5E 47 66 49 51 54 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 70 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 98 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: steps=101 | 69 5E 87 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 38 3B 01 00 12 0E 35 11 46 51 25 66 B5 69 5E 47 66 49 51 54 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 70 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 98 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+sharedBitMaskHelperCalls: steps=101 | 69 5E 87 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 38 3B 01 00 12 0E 35 11 46 51 25 66 B5 69 5E 47 66 49 51 54 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 70 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 98 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
+sharedBitMaskHelperCalls+hoistSharedHelpers: steps=101 | 69 5E 87 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 38 3B 01 00 12 0E 35 11 46 51 25 66 B5 69 5E 47 66 49 51 54 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 70 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 98 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50"
+`;
+
 exports[`golden listing > lowering variants are stable for examples/lunar.mkpro 1`] = `
 "primary: steps=47 | 63 50 64 50 62 50 41 6B 12 62 13 6E 11 40 63 64 11 60 02 13 11 43 64 60 10 44 62 61 11 42 63 02 11 5C 00 05 64 31 11 59 43 6D 50 6C 50 51 00
 aggressiveTerminalDirect: steps=47 | 63 50 64 50 62 50 41 6B 12 62 13 6E 11 40 63 64 11 60 02 13 11 43 64 60 10 44 62 61 11 42 63 02 11 5C 00 05 64 31 11 59 43 6D 50 6C 50 51 00
@@ -394,28 +416,6 @@ guardedPrologueGadgets: steps=168 | 53 87 EA 53 78 62 64 11 42 51 72 58 13 53 8B
 guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: steps=164 | 51 49 6E 3A 50 52 63 65 6D 13 35 6D 12 15 13 35 6D 12 34 52 63 AA 65 6D 13 35 6D 12 01 11 15 12 11 52 D4 64 04 11 5E 42 01 44 52 68 50 66 50 40 52 A9 5E 59 AB 62 64 11 42 51 9C 58 61 AA 47 08 11 5E 74 62 07 11 42 A9 51 9C AA 57 97 67 41 00 11 5E 86 A9 51 98 01 11 5E 70 61 46 AC 60 66 11 5E 6C AB 62 64 10 42 53 20 43 51 98 58 6E 51 98 61 46 AC 60 66 11 5E 8A 04 62 10 66 11 42 66 07 11 5E 85 58 85 53 20 43 51 98 62 66 11 42 66 07 11 5E 98 58 95 51 98 A9 01 65 10 45 00 62 11 59 49 2B 51 49 || setup 01 45 04 00 42 01 44 00 47 07 00 00 00 00 00 00 08 48 01 00 4D 01 01 09 05 01 02 00 03 4E 02 49 06 4A 03 04 4B 04 03 4C 3B 09 09 09 09 09 09 09 09 09 12 34 01 10 43 50
 sharedBitMaskHelperCalls: steps=168 | 53 87 EA 53 78 62 64 11 42 51 72 58 13 53 8B 47 08 11 EB 62 07 11 42 53 87 51 72 53 8B 57 6C 67 41 00 11 EC 53 87 51 6E 01 11 5E 68 61 46 53 81 60 66 11 5E 64 53 78 62 64 10 42 53 99 43 51 6E 58 66 51 6E 61 46 53 81 60 66 11 5E 95 04 62 10 66 11 42 66 07 11 5E 90 58 90 53 99 43 51 6E 62 66 11 42 66 07 11 5E 6E 58 6A 51 6E 53 87 01 65 10 45 00 62 11 99 2B 89 D4 64 04 11 5E 80 01 44 52 68 50 66 50 40 52 6E 3A 50 52 63 65 6D 13 35 6D 12 15 13 35 6D 12 34 52 63 53 8B 65 6D 13 35 6D 12 01 11 15 12 11 52 || setup 01 45 04 00 42 01 44 00 47 07 00 00 00 00 00 00 08 48 01 00 4D 01 01 09 05 01 02 00 03 4E 00 49 01 01 4A 02 07 4B 04 00 4C 3B 09 09 09 09 09 09 09 09 09 12 34 01 10 43 50
 sharedBitMaskHelperCalls+hoistSharedHelpers: steps=164 | 51 34 6E 3A 50 52 63 65 6D 13 35 6D 12 15 13 35 6D 12 34 52 63 AA 65 6D 13 35 6D 12 01 11 15 12 11 52 A9 5E 45 53 95 62 64 11 42 51 8F 58 47 AA 47 08 11 5E 60 62 07 11 42 A9 51 8F AA 57 8A 67 41 00 11 5E 72 A9 51 8B 01 11 5E 99 61 46 53 9E 60 66 11 5E 95 53 95 62 64 10 42 AB 43 51 8B 58 97 51 8B 61 46 53 9E 60 66 11 5E 7D 04 62 10 66 11 42 66 07 11 5E 79 58 79 AB 43 51 8B 62 66 11 42 66 07 11 5E 8B 58 88 51 8B A9 01 65 10 45 00 62 11 9C 2B 8C D4 64 04 11 5E 9D 01 44 52 68 50 66 50 40 52 || setup 01 45 04 00 42 01 44 00 47 07 00 00 00 00 00 00 08 48 01 00 4D 01 01 09 05 01 02 00 03 4E 02 49 06 4A 02 00 4B 03 04 4C 3B 09 09 09 09 09 09 09 09 09 12 34 01 10 43 50"
-`;
-
-exports[`golden listing > lowering variants are stable for examples/pending-optimizer/jack-pot.mkpro 1`] = `
-"primary: steps=99 | 69 5E 85 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 36 3B 01 00 12 34 46 51 25 66 B5 69 5E 45 66 49 51 52 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 68 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 96 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-aggressiveTerminalDirect: steps=99 | 69 5E 85 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 36 3B 01 00 12 34 46 51 25 66 B5 69 5E 45 66 49 51 52 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 68 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 96 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-invertBranchOrder: steps=99 | 69 57 17 69 50 6C 1D 46 97 66 5E 14 68 50 00 49 87 6B 50 6C 1D C7 68 6E 11 48 5C 31 6A 50 87 03 40 01 45 00 49 00 46 66 5E 50 3B 01 00 12 34 46 51 39 66 B5 69 57 64 01 00 69 12 66 10 49 51 66 66 49 5D 37 62 63 10 64 10 05 13 35 5E 82 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-aggressiveTerminalDirect+invertBranchOrder: steps=99 | 69 57 17 69 50 6C 1D 46 97 66 5E 14 68 50 00 49 87 6B 50 6C 1D C7 68 6E 11 48 5C 31 6A 50 87 03 40 01 45 00 49 00 46 66 5E 50 3B 01 00 12 34 46 51 39 66 B5 69 57 64 01 00 69 12 66 10 49 51 66 66 49 5D 37 62 63 10 64 10 05 13 35 5E 82 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-hoistSharedHelpers: steps=99 | 69 5E 85 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 36 3B 01 00 12 34 46 51 25 66 B5 69 5E 45 66 49 51 52 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 68 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 96 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-hoistSharedHelpers+hoistProcs: steps=99 | 69 5E 85 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 36 3B 01 00 12 34 46 51 25 66 B5 69 5E 45 66 49 51 52 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 68 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 96 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-canonicalizeIfChains: steps=99 | 69 5E 85 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 36 3B 01 00 12 34 46 51 25 66 B5 69 5E 45 66 49 51 52 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 68 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 96 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-freeResidualDispatchScratch: steps=99 | 69 5E 85 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 36 3B 01 00 12 34 46 51 25 66 B5 69 5E 45 66 49 51 52 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 68 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 96 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-aliasXReuse: steps=99 | 69 5E 85 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 36 3B 01 00 12 34 46 51 25 66 B5 69 5E 45 66 49 51 52 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 68 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 96 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-coalesceCopies: steps=99 | 69 5E 85 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 36 3B 01 00 12 34 46 51 25 66 B5 69 5E 45 66 49 51 52 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 68 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 96 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-freeResidualDispatchScratch+canonicalizeIfChains: steps=99 | 69 5E 85 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 36 3B 01 00 12 34 46 51 25 66 B5 69 5E 45 66 49 51 52 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 68 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 96 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-shareRandomCell: steps=99 | 69 5E 85 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 36 3B 01 00 12 34 46 51 25 66 B5 69 5E 45 66 49 51 52 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 68 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 96 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-shareRandomCell+hoistSharedHelpers: steps=99 | 69 5E 85 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 36 3B 01 00 12 34 46 51 25 66 B5 69 5E 45 66 49 51 52 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 68 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 96 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-tailBranchInversion: steps=99 | 69 5E 85 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 36 3B 01 00 12 34 46 51 25 66 B5 69 5E 45 66 49 51 52 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 68 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 96 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion: steps=99 | 69 5E 85 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 36 3B 01 00 12 34 46 51 25 66 B5 69 5E 45 66 49 51 52 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 68 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 96 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-guardedPrologueGadgets: steps=99 | 69 5E 85 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 36 3B 01 00 12 34 46 51 25 66 B5 69 5E 45 66 49 51 52 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 68 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 96 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: steps=99 | 69 5E 85 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 36 3B 01 00 12 34 46 51 25 66 B5 69 5E 45 66 49 51 52 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 68 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 96 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-sharedBitMaskHelperCalls: steps=99 | 69 5E 85 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 36 3B 01 00 12 34 46 51 25 66 B5 69 5E 45 66 49 51 52 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 68 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 96 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50
-sharedBitMaskHelperCalls+hoistSharedHelpers: steps=99 | 69 5E 85 6B 50 6C 1D C7 68 6E 11 48 5C 17 6A 50 87 03 40 01 45 00 49 00 46 66 5E 36 3B 01 00 12 34 46 51 25 66 B5 69 5E 45 66 49 51 52 01 00 69 12 66 10 49 5D 23 62 63 10 64 10 05 13 35 5E 68 6E 68 10 48 63 62 11 E7 6D 68 10 48 64 63 11 E7 6D 68 10 48 87 69 50 6C 1D 46 97 66 5E 96 68 50 00 49 87 || setup 01 00 00 00 00 48 00 46 00 40 01 45 00 47 00 49 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 01 03 3A 4B 01 6B 14 54 0C 02 4B 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 00 47 50"
 `;
 
 exports[`golden listing > lowering variants are stable for examples/pending-optimizer/labyrinth777.mkpro 1`] = `
@@ -3515,6 +3515,456 @@ Cell Roles:
   24: 00 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
 `;
 
+exports[`golden listing > selected output is stable for examples/jack-pot.mkpro 1`] = `
+"## Listing
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  01  | 1                       |
+   01 |  00  | 0                       |
+   02 |  00  | 0                       |
+   03 |  00  | 0                       |
+   04 |  00  | 0                       |
+   05 |  48  | X->П 8                  | setup R8
+   06 |  00  | 0                       |
+   07 |  46  | X->П 6                  | setup R6
+   08 |  00  | 0                       |
+   09 |  40  | X->П 0                  | setup R0
+   10 |  01  | 1                       |
+   11 |  45  | X->П 5                  | setup R5
+   12 |  00  | 0                       |
+   13 |  47  | X->П 7                  | setup R7
+   14 |  00  | 0                       |
+   15 |  49  | X->П 9                  | setup R9
+   16 |  01  | 1                       |
+   17 |  00  | 0                       |
+   18 |  00  | 0                       |
+   19 |  4C  | X->П c                  | setup Rc
+   20 |  01  | 1                       |
+   21 |  00  | 0                       |
+   22 |  00  | 0                       |
+   23 |  00  | 0                       |
+   24 |  4E  | X->П e                  | setup Re
+   25 |  03  | 3                       |
+   26 |  00  | 0                       |
+   27 |  00  | 0                       |
+   28 |  00  | 0                       |
+   29 |  4D  | X->П d                  | setup Rd
+   30 |  01  | 1                       |
+   31 |  01  | 1                       |
+   32 |  03  | 3                       |
+   33 |  3A  | К ИНВ                   | setup Rb body
+   34 |  4B  | X->П b                  | setup Rb body scratch
+   35 |  01  | 1                       | setup Rb first digit
+   36 |  6B  | П->X b                  | setup Rb body scratch
+   37 |  14  | <->                     | display sign-digit first-cell splice
+   38 |  54  | К НОП                   | display sign-digit first-cell splice
+   39 |  0C  | ВП                      | display sign-digit first-cell splice
+   40 |  02  | 2                       | setup Rb exponent
+   41 |  4B  | X->П b                  | setup Rb
+   42 |  01  | 1                       |
+   43 |  02  | 2                       |
+   44 |  06  | 6                       |
+   45 |  06  | 6                       |
+   46 |  00  | 0                       |
+   47 |  02  | 2                       |
+   48 |  04  | 4                       |
+   49 |  0E  | В↑                      | setup Ra body split
+   50 |  09  | 9                       |
+   51 |  08  | 8                       |
+   52 |  08  | 8                       |
+   53 |  09  | 9                       |
+   54 |  00  | 0                       |
+   55 |  08  | 8                       |
+   56 |  09  | 9                       |
+   57 |  39  | К ⊕                     | setup Ra body
+   58 |  4A  | X->П a                  | setup Ra body scratch
+   59 |  01  | 1                       |
+   60 |  03  | 3                       |
+   61 |  3A  | К ИНВ                   | setup Ra first digit
+   62 |  35  | К {x}                   | setup Ra first digit
+   63 |  6A  | П->X a                  | setup Ra body scratch
+   64 |  14  | <->                     | display sign-digit first-cell splice
+   65 |  54  | К НОП                   | display sign-digit first-cell splice
+   66 |  0C  | ВП                      | display sign-digit first-cell splice
+   67 |  06  | 6                       | setup Ra exponent
+   68 |  4A  | X->П a                  | setup Ra
+   69 |  00  | 0                       |
+   70 |  47  | X->П 7                  | setup R7
+   71 |  50  | С/П                     | setup complete
+
+# Main Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  69  | П->X 9                  | recall reels
+   01 |  5E  | F x=0                   | false branch for ==
+   02 |  87  | 87                      | false branch for ==
+   03 |  6B  | П->X b                  | display __inline_show_28_0 literal
+   04 |  50  | С/П                     | show __inline_show_28_0
+   05 |  6C  | П->X c                  | preload const 100
+   06 |  1D  | F cos                   | cos()
+   07 |  C7  | К x<0 7                 | false branch for <; preloaded R7=B2 indirect-target=0 indirect flow
+   08 |  68  | П->X 8                  | recall money
+   09 |  6E  | П->X e                  | preload const 1000
+   10 |  11  | -                       | expr -
+   11 |  48  | X->П 8                  | set money
+   12 |  5C  | F x<0                   | false branch for <
+   13 |  17  | 17                      | false branch for <
+   14 |  6A  | П->X a                  | display __inline_show_23_3 literal
+   15 |  50  | С/П                     | show __inline_show_23_3
+   16 |  87  | К БП 7                  | if end; preloaded R7=B2 indirect-target=0 indirect flow
+   17 |  03  | 3                       |
+   18 |  40  | X->П 0                  | set draw_count
+   19 |  01  | 1                       |
+   20 |  45  | X->П 5                  | set slot
+   21 |  00  | 0                       | set reels
+   22 |  49  | X->П 9                  | set reels
+   23 |  00  | 0                       | set digit
+   24 |  46  | X->П 6                  | set digit
+   25 |  66  | П->X 6                  | recall digit
+   26 |  5E  | F x=0                   | false branch for ==
+   27 |  38  | 38                      | false branch for ==
+   28 |  3B  | К СЧ                    | random()
+   29 |  01  | 1                       |
+   30 |  00  | 0                       |
+   31 |  12  | *                       | expr *
+   32 |  0E  | В↑                      | random int keep scaled draw
+   33 |  35  | К {x}                   | random int fractional part
+   34 |  11  | -                       | random int floor
+   35 |  46  | X->П 6                  | set digit
+   36 |  51  | БП                      | while loop back
+   37 |  25  | 25                      | while loop back
+   38 |  66  | П->X 6                  | recall digit
+   39 |  B5  | К X->П 5                | preincrement indexed set digits
+   40 |  69  | П->X 9                  | recall reels
+   41 |  5E  | F x=0                   | false branch for ==
+   42 |  47  | 47                      | false branch for ==
+   43 |  66  | П->X 6                  | recall digit
+   44 |  49  | X->П 9                  | set reels
+   45 |  51  | БП                      | if end
+   46 |  54  | 54                      | if end
+   47 |  01  | 1                       |
+   48 |  00  | 0                       |
+   49 |  69  | П->X 9                  | recall reels
+   50 |  12  | *                       | expr *
+   51 |  66  | П->X 6                  | recall digit
+   52 |  10  | +                       | expr +
+   53 |  49  | X->П 9                  | set reels
+   54 |  5D  | F L0                    | counted while draw_count
+   55 |  23  | 23                      | counted while draw_count
+   56 |  62  | П->X 2                  | indexed recall digits[2]
+   57 |  63  | П->X 3                  | indexed recall digits[3]
+   58 |  10  | +                       | expr +
+   59 |  64  | П->X 4                  | indexed recall digits[4]
+   60 |  10  | +                       | expr +
+   61 |  05  | 5                       |
+   62 |  13  | /                       | expr /
+   63 |  35  | К {x}                   | frac()
+   64 |  5E  | F x=0                   | false branch for ==
+   65 |  70  | 70                      | false branch for ==
+   66 |  6E  | П->X e                  | preload const 1000
+   67 |  68  | П->X 8                  | recall money
+   68 |  10  | +                       | expr +
+   69 |  48  | X->П 8                  | set money
+   70 |  63  | П->X 3                  | indexed recall digits[3]
+   71 |  62  | П->X 2                  | indexed recall digits[2]
+   72 |  11  | -                       | condition compare
+   73 |  E7  | К x=0 7                 | false branch for ==; preloaded R7=B2 indirect-target=0 indirect flow
+   74 |  6D  | П->X d                  | preload const 3000
+   75 |  68  | П->X 8                  | recall money
+   76 |  10  | +                       | expr +
+   77 |  48  | X->П 8                  | set money
+   78 |  64  | П->X 4                  | indexed recall digits[4]
+   79 |  63  | П->X 3                  | indexed recall digits[3]
+   80 |  11  | -                       | condition compare
+   81 |  E7  | К x=0 7                 | false branch for ==; preloaded R7=B2 indirect-target=0 indirect flow
+   82 |  6D  | П->X d                  | preload const 3000
+   83 |  68  | П->X 8                  | recall money
+   84 |  10  | +                       | expr +
+   85 |  48  | X->П 8                  | set money
+   86 |  87  | К БП 7                  | if end; preloaded R7=B2 indirect-target=0 indirect flow
+   87 |  69  | П->X 9                  | display __inline_show_36_1 source
+   88 |  50  | С/П                     | show __inline_show_36_1
+   89 |  6C  | П->X c                  | preload const 100
+   90 |  1D  | F cos                   | cos()
+   91 |  46  | X->П 6                  | set angle_cos
+   92 |  97  | К x>=0 7                | false branch for >=; preloaded R7=B2 indirect-target=0 indirect flow
+   93 |  66  | П->X 6                  | recall angle_cos
+   94 |  5E  | F x=0                   | false branch for ==
+   95 |  98  | 98                      | false branch for ==
+   96 |  68  | П->X 8                  | display __inline_show_41_2 source
+   97 |  50  | С/П                     | show __inline_show_41_2
+   98 |  00  | 0                       | set reels
+   99 |  49  | X->П 9                  | set reels
+   A0 |  87  | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow
+
+## Hex
+00: 69 5E 87 6B 50 6C 1D C7
+08: 68 6E 11 48 5C 17 6A 50
+16: 87 03 40 01 45 00 49 00
+24: 46 66 5E 38 3B 01 00 12
+32: 0E 35 11 46 51 25 66 B5
+40: 69 5E 47 66 49 51 54 01
+48: 00 69 12 66 10 49 5D 23
+56: 62 63 10 64 10 05 13 35
+64: 5E 70 6E 68 10 48 63 62
+72: 11 E7 6D 68 10 48 64 63
+80: 11 E7 6D 68 10 48 87 69
+88: 50 6C 1D 46 97 66 5E 98
+96: 68 50 00 49 87
+
+## Setup Program
+01
+00
+00
+00
+00
+48
+00
+46
+00
+40
+01
+45
+00
+47
+00
+49
+01
+00
+00
+4C
+01
+00
+00
+00
+4E
+03
+00
+00
+00
+4D
+01
+01
+03
+3A
+4B
+01
+6B
+14
+54
+0C
+02
+4B
+01
+02
+06
+06
+00
+02
+04
+0E
+09
+08
+08
+09
+00
+08
+09
+39
+4A
+01
+03
+3A
+35
+6A
+14
+54
+0C
+06
+4A
+00
+47
+50
+
+## Explain
+MK-Pro compile report
+Steps: 101/999999
+Delivery: hex
+Optimizer: exact maximum
+Reference: lordbss_pmk151; span=104, entries=104, gaps=none, compiled=101, delta=-3, parity=smaller
+Machine: mk61
+Optimizer rules: automatic=yes; active=11, considered=0, candidates=42, planned=0
+Budget: official=101, extra=0, physical=101
+Intent IR: lowered=yes, v2=yes; intent=97, effects=101, cells=101
+
+Preloads:
+  money -> R8: 10000 (outside program cells)
+  angle_cos -> R6: 0 (outside program cells)
+  draw_count -> R0: 0 (outside program cells)
+  slot -> R5: 1 (outside program cells)
+  digit -> R7: 0 (outside program cells)
+  reels -> R9: 0 (outside program cells)
+  Rc: 100 (outside program cells)
+  Re: 1000 (outside program cells)
+  Rd: 3000 (outside program cells)
+  Rb: 1ЕС (outside program cells)
+  Ra: С-Е O-Г (outside program cells)
+  R7: B2 (outside program cells)
+
+Setup Block:
+  \`R8=10000; R6=0; R0=0; R5=1; R7=0; R9=0; Rc=100; Re=1000; Rd=3000; Rb=1ЕС; R7=L2\`
+
+Setup Program:
+  Reason: initializes
+  00: 01 00 00 00 00 48 00 46
+  08: 00 40 01 45 00 47 00 49
+  16: 01 00 00 4C 01 00 00 00
+  24: 4E 03 00 00 00 4D 01 01
+  32: 03 3A 4B 01 6B 14 54 0C
+  40: 02 4B 01 02 06 06 00 02
+  48: 04 0E 09 08 08 09 00 08
+  56: 09 39 4A 01 03 3A 35 6A
+  64: 14 54 0C 06 4A 00 47 50
+
+Registers:
+  __display_first___inline_show_23_3: R1
+  __display_first___inline_show_28_0: R1
+  angle_cos: R6
+  digit: R7
+  digits_2: R2
+  digits_3: R3
+  digits_4: R4
+  draw_count: R0
+  money: R8
+  reels: R9
+  slot: R5
+
+Labels:
+   main: 00
+  __loop_0: 00
+  __if_false_5: 17
+  __counted_while_7: 23
+  __while_8: 25
+  __while_end_9: 38
+  __if_false_10: 47
+  __if_end_11: 54
+  __if_false_12: 70
+  __if_false_16: 86
+  __if_false_14: 86
+  __if_end_6: 86
+  __if_false_3: 86
+  __if_false_1: 87
+  __if_false_20: 98
+  __if_false_18: A0
+  __if_end_2: A0
+
+Optimizations:
+  - expression-constant-folder: Folded 6 constant expression node(s) before code generation.
+  - intent-domain-lowering: Lowered 7 state fields and 3 rules through the generic intent pipeline.
+  - auto-preload-initial-state: Moved initial state into setup/preload values so official program cells stay focused on turn logic.
+  - zero-condition-test: Tested == 0 without materializing a zero literal at line 27.
+  - screen-text-literal-preload: Displayed screen __inline_show_28_0 from prebuilt literal Rb.
+  - screen-video-literal-lowering: Lowered screen __inline_show_28_0 as a literal calculator video string.
+  - preloaded-constant: Used preloaded Rc for constant 100.
+  - zero-condition-test: Tested < 0 without materializing a zero literal at line 31.
+  - preloaded-constant: Used preloaded Re for constant 1000.
+  - zero-condition-test: Tested < 0 without materializing a zero literal at line 52.
+  - screen-text-literal-preload: Displayed screen __inline_show_23_3 from prebuilt literal Ra.
+  - screen-video-literal-lowering: Lowered screen __inline_show_23_3 as a literal calculator video string.
+  - single-use-rule-inline: Inlined single-use rule game_over at line 53.
+  - zero-condition-test: Tested == 0 without materializing a zero literal at line 63.
+  - random-range-lowering: Lowered random(0, 10) as min + random() * (max - min).
+  - int-random-range-lowering: Lowered int(random(0, 10)) without К [x] so the MK-61 random sequence keeps moving.
+  - preincrement-indexed-store: Lowered digits[slot+1] and slot++ through К X->П 5 at line 67.
+  - zero-condition-test: Tested == 0 without materializing a zero literal at line 70.
+  - initialized-counted-while-loop: Lowered initialized while draw_count >= 1 through F L0 at line 60.
+  - zero-condition-test: Tested == 0 without materializing a zero literal at line 85.
+  - preloaded-constant: Used preloaded Re for constant 1000.
+  - preloaded-constant: Used preloaded Rd for constant 3000.
+  - preloaded-constant: Used preloaded Rd for constant 3000.
+  - single-use-rule-inline: Inlined single-use rule settle at line 80.
+  - single-use-rule-inline: Inlined single-use rule spin at line 32.
+  - display-strategy-selection: Selected decimal-pack for screen __inline_show_36_1.
+  - packed-display-lowering: Display __inline_show_36_1 may use display-byte encodings in later layout passes.
+  - preloaded-constant: Used preloaded Rc for constant 100.
+  - zero-condition-test: Tested >= 0 without materializing a zero literal at line 39.
+  - zero-condition-test: Tested == 0 without materializing a zero literal at line 40.
+  - display-strategy-selection: Selected decimal-pack for screen __inline_show_41_2.
+  - packed-display-lowering: Display __inline_show_41_2 may use display-byte encodings in later layout passes.
+  - jump-thread: Threaded 6 jump(s) through trampoline labels to the final target.
+  - dead-store-elimination: Removed 1 store(s) to register(s) never read before the next assignment.
+  - register-coalesce: Coalesced 1 non-overlapping register live range(s).
+  - preloaded-indirect-flow: Activated post-layout: replaced 7 direct branch/call(s) with proven preloaded indirect flow.
+  - dark-entry-layout: Pointed 1 branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window).
+  - generated-setup-program: Generated optimized setup program for .
+  - setup-vp-exponent-splice: Collapsed 2 redundant ВП/КНОП cell(s) around an exponent-entry boundary (ВП ВП -> ВП, КНОП ВП -> ВП).
+
+Candidates:
+  * display __inline_show_36_1/decimal-pack: 2 steps; selected decimal-pack for screen __inline_show_36_1
+  - display __inline_show_36_1/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_36_1/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_36_1/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_36_1/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
+  * display __inline_show_41_2/decimal-pack: 2 steps; selected decimal-pack for screen __inline_show_41_2
+  - display __inline_show_41_2/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_41_2/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_41_2/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_41_2/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
+  * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
+
+Optimizer Capabilities:
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
+  - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
+  - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
+  - super-number-deferred-normalization: candidate; Candidate: keep an un-normalized super-number (extra hidden mantissa digits) to defer a range/error check. The reference emulator models only the 8 visible mantissa digits, so the hidden-digit behavior the idiom relies on cannot be reproduced or safely proven, and no language construct produces it.
+  - packed-position-type: candidate; Candidate: a language-level packed position type N.0000H carrying an integer position plus packed (hex) fractional sub-coordinates. The dual-use round-trip (К [x] recovers the position, К {x} recovers the packed fraction) is already exploited by constants-dual-use; a dedicated type would only add language surface that no current program consumes.
+  - coord-list-scaled-decimal: candidate; Stores 10x10 board coordinates as y.x decimal values when all visible uses allow it, so row/column/diagonal scans avoid repeated /10 digit extraction.
+  - dual-constant-sign-digit: candidate; Candidate: a language intent for a dual constant 1.|-00 plus compact sign-digits (2N..9N) and their comparison semantics. The negative-zero comparison behavior is already active through the negative-zero-threshold family; no current program needs the additional sign-digit literal surface.
+  - branch-removal: candidate; Umbrella rule for replacing provably equivalent conditionals with branchless arithmetic, sign, extrema, or masked updates.
+  - zero-condition-test: active; Uses direct F x?0 tests when one side of a condition is a proved zero, avoiding a zero literal and subtraction.
+  - dispatch-compare-chain: candidate; Lowers high-level command dispatch automatically; small proven dispatches may use indirect or super-dark dispatch.
+
+Machine Features Used:
+  - indirect-flow: Optimizer selected register-held branch addresses for one-cell indirect flow.; К БП/К ПП/К x?0 indirect flow commands are available to the optimizer.
+  - code-data-overlay: Layout marked address cells as reusable code/data overlay candidates.; Address operands, constants, opcodes, and display bytes may share cells after conflict checks.
+  - display-bytes: Display lowering marked cells as packed display-byte candidates.; Packed display bytes, hexadecimal mantissa digits, and sign-digit forms are available.
+  - address-constants: Layout marked address cells as reusable constants.; Address cells may double as constants for indirect flow and data transforms.
+
+Proofs:
+  - return-stack-empty: proved; No ПП opcodes were emitted; empty return stack precondition holds for В/О-as-БП01 rewrites.
+  - indirect-addressing-ranges: proved; Indirect selectors are rewritten only after local data-flow proves a stable target, a compiler-owned address preload, or the fractional R0 sentinel shape.
+  - value-ranges: proved; Collected source ranges for money, draw_count, slot, digit, digits, reels.
+  - observability: proved; Visible state is limited by display output: reels, money.
+  - display-byte-observable-boundary: assumed; Display-byte candidates are bounded by display output and the exact mk61 profile.
+
+Rejected Candidates:
+  - display __inline_show_36_1/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_36_1/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_36_1/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_36_1/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
+  - display __inline_show_41_2/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_41_2/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_41_2/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_41_2/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
+
+Cell Roles:
+  02: 87 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  03: 6B exec, display-byte - display byte role allowed
+  13: 17 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  14: 6A exec, display-byte - display byte role allowed
+  27: 38 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  37: 25 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  42: 47 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  46: 54 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  55: 23 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  65: 70 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  87: 69 exec, display-byte - display byte role allowed
+  95: 98 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
+`;
+
 exports[`golden listing > selected output is stable for examples/lunar.mkpro 1`] = `
 "## Listing
 Setup Block:
@@ -5773,453 +6223,6 @@ Cell Roles:
   31: A2 address, constant, overlay - address can be reused as constant; code/data overlay allowed
   35: 39 address, constant, overlay - address can be reused as constant; code/data overlay allowed
   37: 81 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
-`;
-
-exports[`golden listing > selected output is stable for examples/pending-optimizer/jack-pot.mkpro 1`] = `
-"## Listing
-# Setup Listing
- Step | Code | Command                 | Comment
-------+------+-------------------------+----------------
-   00 |  01  | 1                       |
-   01 |  00  | 0                       |
-   02 |  00  | 0                       |
-   03 |  00  | 0                       |
-   04 |  00  | 0                       |
-   05 |  48  | X->П 8                  | setup R8
-   06 |  00  | 0                       |
-   07 |  46  | X->П 6                  | setup R6
-   08 |  00  | 0                       |
-   09 |  40  | X->П 0                  | setup R0
-   10 |  01  | 1                       |
-   11 |  45  | X->П 5                  | setup R5
-   12 |  00  | 0                       |
-   13 |  47  | X->П 7                  | setup R7
-   14 |  00  | 0                       |
-   15 |  49  | X->П 9                  | setup R9
-   16 |  01  | 1                       |
-   17 |  00  | 0                       |
-   18 |  00  | 0                       |
-   19 |  4C  | X->П c                  | setup Rc
-   20 |  01  | 1                       |
-   21 |  00  | 0                       |
-   22 |  00  | 0                       |
-   23 |  00  | 0                       |
-   24 |  4E  | X->П e                  | setup Re
-   25 |  03  | 3                       |
-   26 |  00  | 0                       |
-   27 |  00  | 0                       |
-   28 |  00  | 0                       |
-   29 |  4D  | X->П d                  | setup Rd
-   30 |  01  | 1                       |
-   31 |  01  | 1                       |
-   32 |  03  | 3                       |
-   33 |  3A  | К ИНВ                   | setup Rb body
-   34 |  4B  | X->П b                  | setup Rb body scratch
-   35 |  01  | 1                       | setup Rb first digit
-   36 |  6B  | П->X b                  | setup Rb body scratch
-   37 |  14  | <->                     | display sign-digit first-cell splice
-   38 |  54  | К НОП                   | display sign-digit first-cell splice
-   39 |  0C  | ВП                      | display sign-digit first-cell splice
-   40 |  02  | 2                       | setup Rb exponent
-   41 |  4B  | X->П b                  | setup Rb
-   42 |  01  | 1                       |
-   43 |  02  | 2                       |
-   44 |  06  | 6                       |
-   45 |  06  | 6                       |
-   46 |  00  | 0                       |
-   47 |  02  | 2                       |
-   48 |  04  | 4                       |
-   49 |  0E  | В↑                      | setup Ra body split
-   50 |  09  | 9                       |
-   51 |  08  | 8                       |
-   52 |  08  | 8                       |
-   53 |  09  | 9                       |
-   54 |  00  | 0                       |
-   55 |  08  | 8                       |
-   56 |  09  | 9                       |
-   57 |  39  | К ⊕                     | setup Ra body
-   58 |  4A  | X->П a                  | setup Ra body scratch
-   59 |  01  | 1                       |
-   60 |  03  | 3                       |
-   61 |  3A  | К ИНВ                   | setup Ra first digit
-   62 |  35  | К {x}                   | setup Ra first digit
-   63 |  6A  | П->X a                  | setup Ra body scratch
-   64 |  14  | <->                     | display sign-digit first-cell splice
-   65 |  54  | К НОП                   | display sign-digit first-cell splice
-   66 |  0C  | ВП                      | display sign-digit first-cell splice
-   67 |  06  | 6                       | setup Ra exponent
-   68 |  4A  | X->П a                  | setup Ra
-   69 |  00  | 0                       |
-   70 |  47  | X->П 7                  | setup R7
-   71 |  50  | С/П                     | setup complete
-
-# Main Listing
- Step | Code | Command                 | Comment
-------+------+-------------------------+----------------
-   00 |  69  | П->X 9                  | recall reels
-   01 |  5E  | F x=0                   | false branch for ==
-   02 |  85  | 85                      | false branch for ==
-   03 |  6B  | П->X b                  | display __inline_show_28_0 literal
-   04 |  50  | С/П                     | show __inline_show_28_0
-   05 |  6C  | П->X c                  | preload const 100
-   06 |  1D  | F cos                   | cos()
-   07 |  C7  | К x<0 7                 | false branch for <; preloaded R7=B2 indirect-target=0 indirect flow
-   08 |  68  | П->X 8                  | recall money
-   09 |  6E  | П->X e                  | preload const 1000
-   10 |  11  | -                       | expr -
-   11 |  48  | X->П 8                  | set money
-   12 |  5C  | F x<0                   | false branch for <
-   13 |  17  | 17                      | false branch for <
-   14 |  6A  | П->X a                  | display __inline_show_23_3 literal
-   15 |  50  | С/П                     | show __inline_show_23_3
-   16 |  87  | К БП 7                  | if end; preloaded R7=B2 indirect-target=0 indirect flow
-   17 |  03  | 3                       |
-   18 |  40  | X->П 0                  | set draw_count
-   19 |  01  | 1                       |
-   20 |  45  | X->П 5                  | set slot
-   21 |  00  | 0                       | set reels
-   22 |  49  | X->П 9                  | set reels
-   23 |  00  | 0                       | set digit
-   24 |  46  | X->П 6                  | set digit
-   25 |  66  | П->X 6                  | recall digit
-   26 |  5E  | F x=0                   | false branch for ==
-   27 |  36  | 36                      | false branch for ==
-   28 |  3B  | К СЧ                    | random()
-   29 |  01  | 1                       |
-   30 |  00  | 0                       |
-   31 |  12  | *                       | expr *
-   32 |  34  | К [x]                   | int()
-   33 |  46  | X->П 6                  | set digit
-   34 |  51  | БП                      | while loop back
-   35 |  25  | 25                      | while loop back
-   36 |  66  | П->X 6                  | recall digit
-   37 |  B5  | К X->П 5                | preincrement indexed set digits
-   38 |  69  | П->X 9                  | recall reels
-   39 |  5E  | F x=0                   | false branch for ==
-   40 |  45  | 45                      | false branch for ==
-   41 |  66  | П->X 6                  | recall digit
-   42 |  49  | X->П 9                  | set reels
-   43 |  51  | БП                      | if end
-   44 |  52  | 52                      | if end
-   45 |  01  | 1                       |
-   46 |  00  | 0                       |
-   47 |  69  | П->X 9                  | recall reels
-   48 |  12  | *                       | expr *
-   49 |  66  | П->X 6                  | recall digit
-   50 |  10  | +                       | expr +
-   51 |  49  | X->П 9                  | set reels
-   52 |  5D  | F L0                    | counted while draw_count
-   53 |  23  | 23                      | counted while draw_count
-   54 |  62  | П->X 2                  | indexed recall digits[2]
-   55 |  63  | П->X 3                  | indexed recall digits[3]
-   56 |  10  | +                       | expr +
-   57 |  64  | П->X 4                  | indexed recall digits[4]
-   58 |  10  | +                       | expr +
-   59 |  05  | 5                       |
-   60 |  13  | /                       | expr /
-   61 |  35  | К {x}                   | frac()
-   62 |  5E  | F x=0                   | false branch for ==
-   63 |  68  | 68                      | false branch for ==
-   64 |  6E  | П->X e                  | preload const 1000
-   65 |  68  | П->X 8                  | recall money
-   66 |  10  | +                       | expr +
-   67 |  48  | X->П 8                  | set money
-   68 |  63  | П->X 3                  | indexed recall digits[3]
-   69 |  62  | П->X 2                  | indexed recall digits[2]
-   70 |  11  | -                       | condition compare
-   71 |  E7  | К x=0 7                 | false branch for ==; preloaded R7=B2 indirect-target=0 indirect flow
-   72 |  6D  | П->X d                  | preload const 3000
-   73 |  68  | П->X 8                  | recall money
-   74 |  10  | +                       | expr +
-   75 |  48  | X->П 8                  | set money
-   76 |  64  | П->X 4                  | indexed recall digits[4]
-   77 |  63  | П->X 3                  | indexed recall digits[3]
-   78 |  11  | -                       | condition compare
-   79 |  E7  | К x=0 7                 | false branch for ==; preloaded R7=B2 indirect-target=0 indirect flow
-   80 |  6D  | П->X d                  | preload const 3000
-   81 |  68  | П->X 8                  | recall money
-   82 |  10  | +                       | expr +
-   83 |  48  | X->П 8                  | set money
-   84 |  87  | К БП 7                  | if end; preloaded R7=B2 indirect-target=0 indirect flow
-   85 |  69  | П->X 9                  | display __inline_show_36_1 source
-   86 |  50  | С/П                     | show __inline_show_36_1
-   87 |  6C  | П->X c                  | preload const 100
-   88 |  1D  | F cos                   | cos()
-   89 |  46  | X->П 6                  | set angle_cos
-   90 |  97  | К x>=0 7                | false branch for >=; preloaded R7=B2 indirect-target=0 indirect flow
-   91 |  66  | П->X 6                  | recall angle_cos
-   92 |  5E  | F x=0                   | false branch for ==
-   93 |  96  | 96                      | false branch for ==
-   94 |  68  | П->X 8                  | display __inline_show_41_2 source
-   95 |  50  | С/П                     | show __inline_show_41_2
-   96 |  00  | 0                       | set reels
-   97 |  49  | X->П 9                  | set reels
-   98 |  87  | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow
-
-## Hex
-00: 69 5E 85 6B 50 6C 1D C7
-08: 68 6E 11 48 5C 17 6A 50
-16: 87 03 40 01 45 00 49 00
-24: 46 66 5E 36 3B 01 00 12
-32: 34 46 51 25 66 B5 69 5E
-40: 45 66 49 51 52 01 00 69
-48: 12 66 10 49 5D 23 62 63
-56: 10 64 10 05 13 35 5E 68
-64: 6E 68 10 48 63 62 11 E7
-72: 6D 68 10 48 64 63 11 E7
-80: 6D 68 10 48 87 69 50 6C
-88: 1D 46 97 66 5E 96 68 50
-96: 00 49 87
-
-## Setup Program
-01
-00
-00
-00
-00
-48
-00
-46
-00
-40
-01
-45
-00
-47
-00
-49
-01
-00
-00
-4C
-01
-00
-00
-00
-4E
-03
-00
-00
-00
-4D
-01
-01
-03
-3A
-4B
-01
-6B
-14
-54
-0C
-02
-4B
-01
-02
-06
-06
-00
-02
-04
-0E
-09
-08
-08
-09
-00
-08
-09
-39
-4A
-01
-03
-3A
-35
-6A
-14
-54
-0C
-06
-4A
-00
-47
-50
-
-## Explain
-MK-Pro compile report
-Steps: 99/999999
-Delivery: hex
-Optimizer: exact maximum
-Reference: lordbss_pmk151; span=104, entries=104, gaps=none, compiled=99, delta=-5, parity=smaller
-Machine: mk61
-Optimizer rules: automatic=yes; active=11, considered=0, candidates=42, planned=0
-Budget: official=99, extra=0, physical=99
-Intent IR: lowered=yes, v2=yes; intent=97, effects=99, cells=99
-
-Preloads:
-  money -> R8: 10000 (outside program cells)
-  angle_cos -> R6: 0 (outside program cells)
-  draw_count -> R0: 0 (outside program cells)
-  slot -> R5: 1 (outside program cells)
-  digit -> R7: 0 (outside program cells)
-  reels -> R9: 0 (outside program cells)
-  Rc: 100 (outside program cells)
-  Re: 1000 (outside program cells)
-  Rd: 3000 (outside program cells)
-  Rb: 1ЕС (outside program cells)
-  Ra: С-Е O-Г (outside program cells)
-  R7: B2 (outside program cells)
-
-Setup Block:
-  \`R8=10000; R6=0; R0=0; R5=1; R7=0; R9=0; Rc=100; Re=1000; Rd=3000; Rb=1ЕС; R7=L2\`
-
-Setup Program:
-  Reason: initializes
-  00: 01 00 00 00 00 48 00 46
-  08: 00 40 01 45 00 47 00 49
-  16: 01 00 00 4C 01 00 00 00
-  24: 4E 03 00 00 00 4D 01 01
-  32: 03 3A 4B 01 6B 14 54 0C
-  40: 02 4B 01 02 06 06 00 02
-  48: 04 0E 09 08 08 09 00 08
-  56: 09 39 4A 01 03 3A 35 6A
-  64: 14 54 0C 06 4A 00 47 50
-
-Registers:
-  __display_first___inline_show_23_3: R1
-  __display_first___inline_show_28_0: R1
-  angle_cos: R6
-  digit: R7
-  digits_2: R2
-  digits_3: R3
-  digits_4: R4
-  draw_count: R0
-  money: R8
-  reels: R9
-  slot: R5
-
-Labels:
-   main: 00
-  __loop_0: 00
-  __if_false_5: 17
-  __counted_while_7: 23
-  __while_8: 25
-  __while_end_9: 36
-  __if_false_10: 45
-  __if_end_11: 52
-  __if_false_12: 68
-  __if_false_16: 84
-  __if_false_14: 84
-  __if_end_6: 84
-  __if_false_3: 84
-  __if_false_1: 85
-  __if_false_20: 96
-  __if_false_18: 98
-  __if_end_2: 98
-
-Optimizations:
-  - expression-constant-folder: Folded 6 constant expression node(s) before code generation.
-  - intent-domain-lowering: Lowered 7 state fields and 3 rules through the generic intent pipeline.
-  - auto-preload-initial-state: Moved initial state into setup/preload values so official program cells stay focused on turn logic.
-  - zero-condition-test: Tested == 0 without materializing a zero literal at line 27.
-  - screen-text-literal-preload: Displayed screen __inline_show_28_0 from prebuilt literal Rb.
-  - screen-video-literal-lowering: Lowered screen __inline_show_28_0 as a literal calculator video string.
-  - preloaded-constant: Used preloaded Rc for constant 100.
-  - zero-condition-test: Tested < 0 without materializing a zero literal at line 31.
-  - preloaded-constant: Used preloaded Re for constant 1000.
-  - zero-condition-test: Tested < 0 without materializing a zero literal at line 52.
-  - screen-text-literal-preload: Displayed screen __inline_show_23_3 from prebuilt literal Ra.
-  - screen-video-literal-lowering: Lowered screen __inline_show_23_3 as a literal calculator video string.
-  - single-use-rule-inline: Inlined single-use rule game_over at line 53.
-  - zero-condition-test: Tested == 0 without materializing a zero literal at line 63.
-  - random-range-lowering: Lowered random(0, 10) as min + random() * (max - min).
-  - preincrement-indexed-store: Lowered digits[slot+1] and slot++ through К X->П 5 at line 67.
-  - zero-condition-test: Tested == 0 without materializing a zero literal at line 70.
-  - initialized-counted-while-loop: Lowered initialized while draw_count >= 1 through F L0 at line 60.
-  - zero-condition-test: Tested == 0 without materializing a zero literal at line 85.
-  - preloaded-constant: Used preloaded Re for constant 1000.
-  - preloaded-constant: Used preloaded Rd for constant 3000.
-  - preloaded-constant: Used preloaded Rd for constant 3000.
-  - single-use-rule-inline: Inlined single-use rule settle at line 80.
-  - single-use-rule-inline: Inlined single-use rule spin at line 32.
-  - display-strategy-selection: Selected decimal-pack for screen __inline_show_36_1.
-  - packed-display-lowering: Display __inline_show_36_1 may use display-byte encodings in later layout passes.
-  - preloaded-constant: Used preloaded Rc for constant 100.
-  - zero-condition-test: Tested >= 0 without materializing a zero literal at line 39.
-  - zero-condition-test: Tested == 0 without materializing a zero literal at line 40.
-  - display-strategy-selection: Selected decimal-pack for screen __inline_show_41_2.
-  - packed-display-lowering: Display __inline_show_41_2 may use display-byte encodings in later layout passes.
-  - jump-thread: Threaded 6 jump(s) through trampoline labels to the final target.
-  - dead-store-elimination: Removed 1 store(s) to register(s) never read before the next assignment.
-  - register-coalesce: Coalesced 1 non-overlapping register live range(s).
-  - preloaded-indirect-flow: Activated post-layout: replaced 7 direct branch/call(s) with proven preloaded indirect flow.
-  - dark-entry-layout: Pointed 1 branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window).
-  - generated-setup-program: Generated optimized setup program for .
-  - setup-vp-exponent-splice: Collapsed 2 redundant ВП/КНОП cell(s) around an exponent-entry boundary (ВП ВП -> ВП, КНОП ВП -> ВП).
-
-Candidates:
-  * display __inline_show_36_1/decimal-pack: 2 steps; selected decimal-pack for screen __inline_show_36_1
-  - display __inline_show_36_1/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
-  - display __inline_show_36_1/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
-  - display __inline_show_36_1/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
-  - display __inline_show_36_1/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-  * display __inline_show_41_2/decimal-pack: 2 steps; selected decimal-pack for screen __inline_show_41_2
-  - display __inline_show_41_2/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
-  - display __inline_show_41_2/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
-  - display __inline_show_41_2/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
-  - display __inline_show_41_2/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-  * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
-
-Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
-  - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
-  - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
-  - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
-  - super-number-deferred-normalization: candidate; Candidate: keep an un-normalized super-number (extra hidden mantissa digits) to defer a range/error check. The reference emulator models only the 8 visible mantissa digits, so the hidden-digit behavior the idiom relies on cannot be reproduced or safely proven, and no language construct produces it.
-  - packed-position-type: candidate; Candidate: a language-level packed position type N.0000H carrying an integer position plus packed (hex) fractional sub-coordinates. The dual-use round-trip (К [x] recovers the position, К {x} recovers the packed fraction) is already exploited by constants-dual-use; a dedicated type would only add language surface that no current program consumes.
-  - coord-list-scaled-decimal: candidate; Stores 10x10 board coordinates as y.x decimal values when all visible uses allow it, so row/column/diagonal scans avoid repeated /10 digit extraction.
-  - dual-constant-sign-digit: candidate; Candidate: a language intent for a dual constant 1.|-00 plus compact sign-digits (2N..9N) and their comparison semantics. The negative-zero comparison behavior is already active through the negative-zero-threshold family; no current program needs the additional sign-digit literal surface.
-  - branch-removal: candidate; Umbrella rule for replacing provably equivalent conditionals with branchless arithmetic, sign, extrema, or masked updates.
-  - zero-condition-test: active; Uses direct F x?0 tests when one side of a condition is a proved zero, avoiding a zero literal and subtraction.
-  - dispatch-compare-chain: candidate; Lowers high-level command dispatch automatically; small proven dispatches may use indirect or super-dark dispatch.
-
-Machine Features Used:
-  - indirect-flow: Optimizer selected register-held branch addresses for one-cell indirect flow.; К БП/К ПП/К x?0 indirect flow commands are available to the optimizer.
-  - code-data-overlay: Layout marked address cells as reusable code/data overlay candidates.; Address operands, constants, opcodes, and display bytes may share cells after conflict checks.
-  - display-bytes: Display lowering marked cells as packed display-byte candidates.; Packed display bytes, hexadecimal mantissa digits, and sign-digit forms are available.
-  - address-constants: Layout marked address cells as reusable constants.; Address cells may double as constants for indirect flow and data transforms.
-
-Proofs:
-  - return-stack-empty: proved; No ПП opcodes were emitted; empty return stack precondition holds for В/О-as-БП01 rewrites.
-  - indirect-addressing-ranges: proved; Indirect selectors are rewritten only after local data-flow proves a stable target, a compiler-owned address preload, or the fractional R0 sentinel shape.
-  - value-ranges: proved; Collected source ranges for money, draw_count, slot, digit, digits, reels.
-  - observability: proved; Visible state is limited by display output: reels, money.
-  - display-byte-observable-boundary: assumed; Display-byte candidates are bounded by display output and the exact mk61 profile.
-
-Rejected Candidates:
-  - display __inline_show_36_1/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
-  - display __inline_show_36_1/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
-  - display __inline_show_36_1/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
-  - display __inline_show_36_1/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-  - display __inline_show_41_2/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
-  - display __inline_show_41_2/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
-  - display __inline_show_41_2/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
-  - display __inline_show_41_2/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-
-Cell Roles:
-  02: 85 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  03: 6B exec, display-byte - display byte role allowed
-  13: 17 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  14: 6A exec, display-byte - display byte role allowed
-  27: 36 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  35: 25 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  40: 45 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  44: 52 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  53: 23 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  63: 68 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  85: 69 exec, display-byte - display byte role allowed
-  93: 96 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
 `;
 
 exports[`golden listing > selected output is stable for examples/pending-optimizer/labyrinth777.mkpro 1`] = `
