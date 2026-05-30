@@ -33,6 +33,41 @@ import {
   directionKeyName,
   directionKeyRegister,
 } from "./emit/lowering/expr.ts";
+import {
+  compileArithmeticIfSelect,
+  compileBitHasConditionWithBitMaskHelper,
+  compileBitHasConditionWithSpatialHelper,
+  compileBitMembershipMaskValue,
+  compileCondition,
+  compileDecrementZeroBranch,
+  compileDirectTerminalIfBranch,
+  compileDispatch,
+  compileDispatchCompareChain,
+  compileDoubleBranchRemoval,
+  compileGuardedUpdateSelector,
+  compileIf,
+  compileLiteralHalt,
+  compileLiteralShowHalt,
+  compileMembershipClearReuse,
+  compileMembershipSetReuse,
+  compileMembershipSetReuseForAbsentCondition,
+  compileMembershipSetReuseForPresentCondition,
+  compileMembershipSetRunReuseForAbsentCondition,
+  compileMembershipSetRunReuseForPresentCondition,
+  compileNearAnyCandidate,
+  compileNearAnyHelperCondition,
+  compileNearAnyMarginWithHelper,
+  compileNestedGuardSharedFailure,
+  compileNumericResidualDispatchCompareChain,
+  compileResidualEqualityElseIf,
+  compileResidualGuardedUpdate,
+  compileSmallSetCondition,
+  emitKnownOneIndirectLoopBack,
+  emitMembershipMaskTest,
+  emitPositiveResidualCompare,
+  emitResidualAdjustment,
+  emitResidualCompareDelta,
+} from "./emit/lowering/control-flow.ts";
 import { MK61_PROFILE, machineSupports, type MachineProfile } from "./machineProfile.ts";
 import type {
   AppliedOptimization,
@@ -109,7 +144,7 @@ const REGISTER_ORDER: RegisterName[] = [
   "e",
 ];
 
-const DISPATCH_SCRATCH_PREFIX = "__dispatch_";
+export const DISPATCH_SCRATCH_PREFIX = "__dispatch_";
 const TICTACTOE_MASK_SCRATCH_PREFIX = "__ttt_mask_";
 const BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
 const SHARED_BIT_MASK_SCRATCH = "__bit_mask_shared";
@@ -122,7 +157,7 @@ const SPATIAL_HIT_SCRATCH_PREFIX = "__spatial_hit_";
 const SPATIAL_COUNT_SCRATCH_PREFIX = "__spatial_count_";
 const COORD_LIST_ITEM_PREFIX = "__coord_list_";
 const COORD_LIST_POINTER = "__coord_list_pointer";
-const COORD_LIST_COUNTER = "__coord_list_counter";
+export const COORD_LIST_COUNTER = "__coord_list_counter";
 const COORD_LIST_CURRENT = "__coord_list_current";
 const COORD_LIST_DX = "__coord_list_dx";
 const DASHED_COORD_REPORT_MASK = "8,-00--_";
@@ -912,7 +947,7 @@ function buildDispatchFromIfChain(
   };
 }
 
-function matchEqualityConstantCondition(
+export function matchEqualityConstantCondition(
   condition: ConditionAst,
 ): { expr: ExpressionAst; value: number } | undefined {
   if (condition.op !== "==") return undefined;
@@ -927,7 +962,7 @@ function matchEqualityConstantCondition(
   return undefined;
 }
 
-function expressionIsDeterministic(expr: ExpressionAst): boolean {
+export function expressionIsDeterministic(expr: ExpressionAst): boolean {
   switch (expr.kind) {
     case "number":
     case "identifier":
@@ -1573,7 +1608,7 @@ function simplifyIfStatement(statement: Extract<StatementAst, { kind: "if" }>): 
   return [statement];
 }
 
-function invertCondition(condition: ConditionAst): ConditionAst {
+export function invertCondition(condition: ConditionAst): ConditionAst {
   return {
     ...condition,
     op: invertComparisonOp(condition.op),
@@ -2672,17 +2707,7 @@ export class EmitContext {
     show: Extract<StatementAst, { kind: "show" }>,
     halt: Extract<StatementAst, { kind: "halt" }>,
   ): boolean {
-    if (halt.literal !== undefined || !isZeroExpression(halt.expr)) return false;
-    const display = this.ast.displays.find((candidate) => candidate.name === show.display);
-    if (display === undefined) return false;
-    const literal = this.collapseLiteralOnlyDisplay(display);
-    if (literal === undefined || displayLiteralProgram(literal)?.kind !== "error") return false;
-    this.compileLiteralHalt(literal, show.line);
-    this.optimizations.push({
-      name: "terminal-display-fusion",
-      detail: `Folded literal screen ${show.display} followed by halt at line ${halt.line} into a terminal error stop.`,
-    });
-    return true;
+    return compileLiteralShowHalt(this, show, halt);
   }
 
   markCurrentX(name: string): void {
@@ -3176,142 +3201,21 @@ export class EmitContext {
     decrement: Extract<StatementAst, { kind: "assign" }>,
     branch: Extract<StatementAst, { kind: "if" }>,
   ): boolean {
-    if (!isUnitDecrementExpression(decrement.target, decrement.expr)) return false;
-    if (!decrementBranchTestsZero(branch.condition, decrement.target)) return false;
-    const field = this.findStateField(decrement.target);
-    if ((field?.min ?? Number.NEGATIVE_INFINITY) < 1) return false;
-    const register = this.allocation.registers[decrement.target];
-    if (register === undefined) return false;
-    const opcode = flOpcode(register);
-    if (opcode === undefined) return false;
-
-    const nonZeroLabel = this.freshLabel("decrement_nonzero");
-    const thenTerminates = this.statementsTerminate(branch.thenBody);
-    const endLabel = branch.elseBody !== undefined && !thenTerminates ? this.freshLabel("if_end") : undefined;
-
-    this.emitJump(opcode, getOpcode(opcode).name, nonZeroLabel, `decrement/test ${decrement.target}`, decrement.line);
-    this.compileStatements(branch.thenBody);
-    if (branch.elseBody !== undefined) {
-      if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", branch.line);
-      this.emitLabel(nonZeroLabel);
-      this.compileStatements(branch.elseBody);
-      if (endLabel !== undefined) this.emitLabel(endLabel);
-    } else {
-      this.emitLabel(nonZeroLabel);
-    }
-    this.optimizations.push({
-      name: "fl-decrement-zero-branch",
-      detail: `Fused ${decrement.target} decrement and zero branch at lines ${decrement.line}/${branch.line}.`,
-    });
-    return true;
+    return compileDecrementZeroBranch(this, decrement, branch);
   }
 
   compileIf(
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): void {
-    if (this.compileArithmeticIfSelect(statement)) return;
-    if (this.compileGuardedUpdateSelector(statement)) return;
-    if (this.compileNestedGuardSharedFailure(statement, line)) return;
-    if (this.compileResidualGuardedUpdate(statement, line)) return;
-    if (this.compileDirectTerminalIfBranch(statement, line)) return;
-    if (this.compileMembershipClearReuse(statement, line)) return;
-    if (this.compileMembershipSetReuse(statement, line)) return;
-    if (this.compileLocalTerminalElseTail(statement, line)) return;
-    if (this.compileResidualEqualityElseIf(statement, line)) return;
-
-    const selected = this.branchOrderStatement(statement, line);
-    const falseLabel = this.freshLabel("if_false");
-    const thenTerminates = this.statementsTerminate(selected.thenBody);
-    const endLabel = thenTerminates ? undefined : this.freshLabel("if_end");
-    const fallthroughIdentifier = this.nearAnyFallthroughCandidate(selected.condition, selected.thenBody);
-    const falseBranchIdentifier = selected.elseBody === undefined
-      ? undefined
-      : this.falseBranchCurrentXCandidate(selected.condition, selected.elseBody);
-    this.compileCondition(selected.condition, falseLabel, line);
-    if (fallthroughIdentifier !== undefined) {
-      this.currentXVariable = fallthroughIdentifier;
-      this.currentXAliases = new Set([fallthroughIdentifier]);
-      this.currentXKnownZero = false;
-    }
-    this.compileStatements(selected.thenBody);
-    if (selected.elseBody) {
-      if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", line);
-      this.emitLabel(falseLabel);
-      if (falseBranchIdentifier !== undefined) {
-        this.currentXVariable = falseBranchIdentifier;
-        this.currentXAliases = new Set([falseBranchIdentifier]);
-        this.currentXKnownZero = false;
-        this.optimizations.push({
-          name: "x-preserving-false-branch",
-          detail: `Preserved ${falseBranchIdentifier} in X across the false branch of the zero-test at line ${line}.`,
-        });
-      }
-      this.compileStatements(selected.elseBody);
-      if (endLabel !== undefined) this.emitLabel(endLabel);
-      if (thenTerminates) {
-        this.optimizations.push({
-          name: "terminal-branch-end-elision",
-          detail: `Omitted unreachable if-end jump after terminal then branch at line ${line}.`,
-        });
-      }
-    } else {
-      this.emitLabel(falseLabel);
-    }
+    return compileIf(this, statement, line);
   }
 
   compileResidualEqualityElseIf(
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): boolean {
-    if (statement.elseBody?.length !== 1) return false;
-    const nested = statement.elseBody[0];
-    if (nested?.kind !== "if") return false;
-
-    const first = matchEqualityConstantCondition(statement.condition);
-    const second = matchEqualityConstantCondition(nested.condition);
-    if (first === undefined || second === undefined) return false;
-    if (!expressionEquals(first.expr, second.expr) || !expressionIsDeterministic(first.expr)) return false;
-    if (first.value === second.value) return false;
-
-    const residualCost = residualAdjustmentCost(first.value, second.value);
-    const ordinarySecondCompareCost = estimateExpressionCost(second.expr) + estimateNumberCost(String(second.value)) + 1;
-    if (residualCost >= ordinarySecondCompareCost) return false;
-
-    const firstFalseLabel = this.freshLabel("if_residual_next");
-    const secondFalseLabel = this.freshLabel("if_residual_false");
-    const thenTerminates = this.statementsTerminate(statement.thenBody);
-    const nestedThenTerminates = this.statementsTerminate(nested.thenBody);
-    const endLabel =
-      !thenTerminates || (nested.elseBody !== undefined && !nestedThenTerminates)
-        ? this.freshLabel("if_residual_end")
-        : undefined;
-
-    this.compileExpression(first.expr);
-    this.emitNumberOrPreload(String(first.value));
-    this.emitOp(0x11, "-", "condition compare", line);
-    this.emitJump(0x5e, "F x=0", firstFalseLabel, "false branch for ==", line);
-    this.compileStatements(statement.thenBody);
-    if (!thenTerminates && endLabel !== undefined) {
-      this.emitJump(0x51, "БП", endLabel, "if end", line);
-    }
-
-    this.emitLabel(firstFalseLabel);
-    this.emitResidualAdjustment(first.value, second.value, nested.line);
-    this.emitJump(0x5e, "F x=0", secondFalseLabel, "false branch for ==", nested.line);
-    this.compileStatements(nested.thenBody);
-    if (nested.elseBody !== undefined && !nestedThenTerminates && endLabel !== undefined) {
-      this.emitJump(0x51, "БП", endLabel, "if end", nested.line);
-    }
-
-    this.emitLabel(secondFalseLabel);
-    if (nested.elseBody !== undefined) this.compileStatements(nested.elseBody);
-    if (endLabel !== undefined) this.emitLabel(endLabel);
-    this.optimizations.push({
-      name: "residual-elseif-compare",
-      detail: `Reused ${expressionToIntentText(first.expr)} - ${first.value} for else-if comparison to ${second.value} at line ${nested.line}.`,
-    });
-    return true;
+    return compileResidualEqualityElseIf(this, statement, line);
   }
 
   emitResidualAdjustment(
@@ -3319,15 +3223,7 @@ export class EmitContext {
     nextValue: number,
     line: number | undefined,
   ): void {
-    const delta = previousValue - nextValue;
-    if (delta === 0) return;
-    if (delta > 0) {
-      this.emitNumberOrPreload(String(delta));
-      this.emitOp(0x10, "+", "residual else-if compare", line);
-      return;
-    }
-    this.emitNumberOrPreload(String(-delta));
-    this.emitOp(0x11, "-", "residual else-if compare", line);
+    return emitResidualAdjustment(this, previousValue, nextValue, line);
   }
 
   nearAnyFallthroughCandidate(
@@ -3436,26 +3332,7 @@ export class EmitContext {
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): boolean {
-    if (statement.elseBody === undefined || statement.thenBody.length !== 1) return false;
-    const inner = statement.thenBody[0];
-    if (inner?.kind !== "if" || inner.elseBody === undefined) return false;
-    if (!statementListsEqual(statement.elseBody, inner.elseBody)) return false;
-
-    const failureLabel = this.freshLabel("guard_failure");
-    const thenTerminates = this.statementsTerminate(inner.thenBody);
-    const endLabel = thenTerminates ? undefined : this.freshLabel("guard_end");
-    this.compileCondition(statement.condition, failureLabel, line);
-    this.compileCondition(inner.condition, failureLabel, inner.line);
-    this.compileStatements(inner.thenBody);
-    if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "guard success end", inner.line);
-    this.emitLabel(failureLabel);
-    this.compileStatements(statement.elseBody);
-    if (endLabel !== undefined) this.emitLabel(endLabel);
-    this.optimizations.push({
-      name: "nested-guard-shared-failure",
-      detail: `Shared identical nested failure branch at lines ${line}/${inner.line}.`,
-    });
-    return true;
+    return compileNestedGuardSharedFailure(this, statement, line);
   }
 
   branchOrderStatement(
@@ -3491,60 +3368,7 @@ export class EmitContext {
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): boolean {
-    const thenTarget = this.directTerminalCallTarget(statement.thenBody);
-    const elseTarget = statement.elseBody === undefined ? undefined : this.directTerminalCallTarget(statement.elseBody);
-    if (thenTarget === undefined && elseTarget === undefined) return false;
-
-    const preloadedConstants = new Set(Object.keys(this.allocation.constants));
-    const originalCost = estimateConditionCost(statement.condition, this.ast, preloadedConstants);
-    const candidates: Array<{
-      branchWhen: "true" | "false";
-      target: string;
-      condition: ConditionAst;
-      estimatedCost: number;
-      ordinaryCost: number;
-    }> = [];
-
-    if (
-      thenTarget !== undefined &&
-      (statement.elseBody !== undefined || this.loweringOptions.aggressiveTerminalDirect === true)
-    ) {
-      const condition = invertCondition(statement.condition);
-      candidates.push({
-        branchWhen: "true",
-        target: thenTarget,
-        condition,
-        estimatedCost: estimateConditionCost(condition, this.ast, preloadedConstants),
-        ordinaryCost: originalCost + 2,
-      });
-    }
-    if (elseTarget !== undefined) {
-      const thenTerminates = this.statementsTerminate(statement.thenBody);
-      candidates.push({
-        branchWhen: "false",
-        target: elseTarget,
-        condition: statement.condition,
-        estimatedCost: originalCost,
-        ordinaryCost: originalCost + (thenTerminates ? 1 : 2),
-      });
-    }
-
-    const selected = candidates
-      .filter((candidate) => candidate.estimatedCost < candidate.ordinaryCost)
-      .sort((left, right) => left.estimatedCost - right.estimatedCost)[0];
-    if (selected === undefined) return false;
-
-    this.compileCondition(selected.condition, selected.target, line);
-    if (selected.branchWhen === "true") {
-      if (statement.elseBody) this.compileStatements(statement.elseBody);
-    } else {
-      this.compileStatements(statement.thenBody);
-    }
-    this.optimizations.push({
-      name: "terminal-if-direct-branch",
-      detail: `Branched directly to terminal ${selected.target} for ${selected.branchWhen} path at line ${line} (${selected.estimatedCost} vs ${selected.ordinaryCost} estimated branch cells).`,
-    });
-    return true;
+    return compileDirectTerminalIfBranch(this, statement, line);
   }
 
   directTerminalCallTarget(statements: StatementAst[], seen = new Set<string>()): string | undefined {
@@ -3566,44 +3390,7 @@ export class EmitContext {
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): boolean {
-    const update = matchResidualGuardedUpdate(statement);
-    if (update === undefined) return false;
-
-    const correction = update.bound + update.delta;
-    const correctionRaw = String(correction);
-    const ordinaryUpdateCost = estimateExpressionCost(update.assignment.expr) + 1;
-    const residualUpdateCost = (correction === 0 ? 0 : this.estimateNumberOrPreloadCost(correctionRaw) + 1) + 1;
-    if (residualUpdateCost >= ordinaryUpdateCost) return false;
-
-    const falseLabel = this.freshLabel("if_false");
-    const thenTerminates = this.statementsTerminate(update.tail);
-    const endLabel = statement.elseBody !== undefined && !thenTerminates ? this.freshLabel("if_end") : undefined;
-
-    this.compileExpression(update.condition.left);
-    this.compileExpression(update.condition.right);
-    this.emitOp(0x11, "-", "condition compare", line);
-    this.emitJump(0x5c, "F x<0", falseLabel, `false branch for ${update.condition.op}`, line);
-    if (correction !== 0) {
-      this.emitNumberOrPreload(correctionRaw);
-      this.emitOp(0x10, "+", `residual guarded update ${update.target}`, update.assignment.line);
-    }
-    this.emitStore(update.target, `set ${update.target}`, update.assignment.line);
-    this.compileStatements(update.tail);
-
-    if (statement.elseBody !== undefined) {
-      if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", line);
-      this.emitLabel(falseLabel);
-      this.compileStatements(statement.elseBody);
-      if (endLabel !== undefined) this.emitLabel(endLabel);
-    } else {
-      this.emitLabel(falseLabel);
-    }
-
-    this.optimizations.push({
-      name: "residual-guarded-update",
-      detail: `Reused ${update.target} - ${update.bound} while updating ${update.target} at line ${update.assignment.line}.`,
-    });
-    return true;
+    return compileResidualGuardedUpdate(this, statement, line);
   }
 
   compileLocalTerminalElseTail(
@@ -3640,88 +3427,18 @@ export class EmitContext {
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): boolean {
-    const clearPrefix = this.membershipClearPrefix(statement.thenBody);
-    if (clearPrefix === undefined) return false;
-    const { clear, tail } = clearPrefix;
-    const membership = matchBitMembershipCondition(statement.condition);
-    if (membership === undefined) return false;
-    if (!isBitClearAssignment(clear, membership)) return false;
-
-    const falseLabel = this.freshLabel("if_false");
-    const endLabel = this.freshLabel("if_end");
-
-    if (!this.compileBitMembershipMaskValue(membership, line)) this.compileExpression(membership.test);
-    this.emitJump(0x57, "F x!=0", falseLabel, "false branch for !=", line);
-    this.emitOp(0x3a, "К ИНВ", "reuse membership mask for clear", clear.line);
-    this.compileExpression(membership.collection);
-    this.emitOp(0x37, "К ∧", "clear matched cell with reused mask", clear.line);
-    this.emitStore(clear.target, `set ${clear.target}`, clear.line);
-    this.compileStatements(tail);
-    if (statement.elseBody) {
-      this.emitJump(0x51, "БП", endLabel, "if end", line);
-      this.emitLabel(falseLabel);
-      this.currentXKnownZero = true;
-      this.compileStatements(statement.elseBody);
-      this.emitLabel(endLabel);
-    } else {
-      this.emitLabel(falseLabel);
-    }
-    this.optimizations.push({
-      name: "cell-membership-clear-reuse",
-      detail: `Reused the successful membership mask when clearing ${clear.target} at line ${clear.line}.`,
-    });
-    return true;
+    return compileMembershipClearReuse(this, statement, line);
   }
 
   compileBitMembershipMaskValue(membership: BitMembershipCondition, line: number): boolean {
-    if (membership.mode === "mask") {
-      this.compileExpression(membership.mask);
-      this.compileExpression(membership.collection);
-      this.emitOp(0x37, "К ∧", "bit membership test", line);
-      this.emitOp(0x35, "К {x}", "bit membership fraction", line);
-      return true;
-    }
-    if (membership.collection.kind !== "identifier") return false;
-    const scratch = spatialHitScratchName(membership.collection.name);
-    if (this.allocation.registers[scratch] === undefined) return false;
-    const helper = this.ensureSpatialBitMaskHelper(scratch, line);
-    this.compileExpression(membership.item);
-    this.emitJump(0x53, "ПП", helper.label, "bit_mask helper", line);
-    this.compileExpression(membership.collection);
-    this.emitOp(0x37, "К ∧", "bit membership test", line);
-    this.emitOp(0x35, "К {x}", "bit membership fraction", line);
-    this.optimizations.push({
-      name: "bit-mask-helper-call",
-      detail: `Reused shared bit_mask helper for ${membership.collection.name} at line ${line}.`,
-    });
-    return true;
+    return compileBitMembershipMaskValue(this, membership, line);
   }
 
   compileMembershipSetReuse(
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): boolean {
-    const present = matchBitMembershipCondition(statement.condition);
-    if (present !== undefined && present.collection.kind === "identifier" && statement.elseBody !== undefined) {
-      const setRun = this.membershipSetRunPrefix(statement.elseBody, present);
-      if (setRun !== undefined) {
-        return this.compileMembershipSetRunReuseForPresentCondition(statement, present, setRun, line);
-      }
-      const setPrefix = this.membershipSetPrefix(statement.elseBody, present);
-      if (setPrefix !== undefined) {
-        return this.compileMembershipSetReuseForPresentCondition(statement, present, setPrefix, line);
-      }
-    }
-
-    const absent = matchBitAbsenceCondition(statement.condition);
-    if (absent === undefined || absent.collection.kind !== "identifier") return false;
-    const setRun = this.membershipSetRunPrefix(statement.thenBody, absent);
-    if (setRun !== undefined) {
-      return this.compileMembershipSetRunReuseForAbsentCondition(statement, absent, setRun, line);
-    }
-    const setPrefix = this.membershipSetPrefix(statement.thenBody, absent);
-    if (setPrefix === undefined) return false;
-    return this.compileMembershipSetReuseForAbsentCondition(statement, absent, setPrefix, line);
+    return compileMembershipSetReuse(this, statement, line);
   }
 
   compileMembershipSetReuseForPresentCondition(
@@ -3733,28 +3450,7 @@ export class EmitContext {
     },
     line: number,
   ): boolean {
-    const scratch = bitMaskScratchName(statement);
-    if (this.allocation.registers[scratch] === undefined) return false;
-
-    const { set, tail } = setPrefix;
-    const falseLabel = this.freshLabel("if_false");
-    const thenTerminates = this.statementsTerminate(statement.thenBody);
-    const endLabel = thenTerminates ? undefined : this.freshLabel("if_end");
-
-    this.emitMembershipMaskTest(membership, scratch, line);
-    this.emitJump(0x5e, "F x=0", falseLabel, "false branch for !=", line);
-    this.compileStatements(statement.thenBody);
-    if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", line);
-    this.emitLabel(falseLabel);
-    this.emitBitSetWithScratch(membership, set, scratch);
-    this.compileStatements(tail);
-    if (endLabel !== undefined) this.emitLabel(endLabel);
-
-    this.optimizations.push({
-      name: "cell-membership-set-reuse",
-      detail: `Reused the failed membership mask when setting ${set.target} at line ${set.line}.`,
-    });
-    return true;
+    return compileMembershipSetReuseForPresentCondition(this, statement, membership, setPrefix, line);
   }
 
   compileMembershipSetReuseForAbsentCondition(
@@ -3766,32 +3462,7 @@ export class EmitContext {
     },
     line: number,
   ): boolean {
-    const scratch = bitMaskScratchName(statement);
-    if (this.allocation.registers[scratch] === undefined) return false;
-
-    const { set, tail } = setPrefix;
-    const falseLabel = this.freshLabel("if_false");
-    const thenTerminates = this.statementsTerminate(statement.thenBody);
-    const endLabel = statement.elseBody !== undefined && !thenTerminates ? this.freshLabel("if_end") : undefined;
-
-    this.emitMembershipMaskTest(membership, scratch, line);
-    this.emitJump(0x57, "F x!=0", falseLabel, "false branch for ==", line);
-    this.emitBitSetWithScratch(membership, set, scratch);
-    this.compileStatements(tail);
-    if (statement.elseBody !== undefined) {
-      if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", line);
-      this.emitLabel(falseLabel);
-      this.compileStatements(statement.elseBody);
-      if (endLabel !== undefined) this.emitLabel(endLabel);
-    } else {
-      this.emitLabel(falseLabel);
-    }
-
-    this.optimizations.push({
-      name: "cell-membership-set-reuse",
-      detail: `Reused the failed membership mask when setting ${set.target} at line ${set.line}.`,
-    });
-    return true;
+    return compileMembershipSetReuseForAbsentCondition(this, statement, membership, setPrefix, line);
   }
 
   compileMembershipSetRunReuseForPresentCondition(
@@ -3806,30 +3477,7 @@ export class EmitContext {
     },
     line: number,
   ): boolean {
-    const scratch = bitMaskScratchName(setRun.sets[0]!.set);
-    if (this.allocation.registers[scratch] === undefined) return false;
-
-    const falseLabel = this.freshLabel("if_false");
-    const thenTerminates = this.statementsTerminate(statement.thenBody);
-    const endLabel = thenTerminates ? undefined : this.freshLabel("if_end");
-
-    this.emitMembershipMaskTest(membership, scratch, line);
-    this.emitJump(0x5e, "F x=0", falseLabel, "false branch for !=", line);
-    this.compileStatements(statement.thenBody);
-    if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", line);
-    this.emitLabel(falseLabel);
-    for (const { set, collection } of setRun.sets) {
-      this.emitBitSetCollectionWithScratch(collection, set, scratch);
-    }
-    this.compileStatements(setRun.tail);
-    if (endLabel !== undefined) this.emitLabel(endLabel);
-
-    const targets = setRun.sets.map(({ set }) => set.target).join(", ");
-    this.optimizations.push({
-      name: "cell-membership-mask-run-reuse",
-      detail: `Reused the failed membership mask when setting ${targets} after line ${line}.`,
-    });
-    return true;
+    return compileMembershipSetRunReuseForPresentCondition(this, statement, membership, setRun, line);
   }
 
   compileMembershipSetRunReuseForAbsentCondition(
@@ -3844,34 +3492,7 @@ export class EmitContext {
     },
     line: number,
   ): boolean {
-    const scratch = bitMaskScratchName(setRun.sets[0]!.set);
-    if (this.allocation.registers[scratch] === undefined) return false;
-
-    const falseLabel = this.freshLabel("if_false");
-    const thenTerminates = this.statementsTerminate(statement.thenBody);
-    const endLabel = statement.elseBody !== undefined && !thenTerminates ? this.freshLabel("if_end") : undefined;
-
-    this.emitMembershipMaskTest(membership, scratch, line);
-    this.emitJump(0x57, "F x!=0", falseLabel, "false branch for ==", line);
-    for (const { set, collection } of setRun.sets) {
-      this.emitBitSetCollectionWithScratch(collection, set, scratch);
-    }
-    this.compileStatements(setRun.tail);
-    if (statement.elseBody !== undefined) {
-      if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", line);
-      this.emitLabel(falseLabel);
-      this.compileStatements(statement.elseBody);
-      if (endLabel !== undefined) this.emitLabel(endLabel);
-    } else {
-      this.emitLabel(falseLabel);
-    }
-
-    const targets = setRun.sets.map(({ set }) => set.target).join(", ");
-    this.optimizations.push({
-      name: "cell-membership-mask-run-reuse",
-      detail: `Reused the failed membership mask when setting ${targets} after line ${line}.`,
-    });
-    return true;
+    return compileMembershipSetRunReuseForAbsentCondition(this, statement, membership, setRun, line);
   }
 
   emitMembershipMaskTest(
@@ -3879,16 +3500,7 @@ export class EmitContext {
     scratch: string,
     line: number,
   ): void {
-    if (membership.mode === "index") {
-      this.compileBitMaskWithQuotientScratch(membership.item, scratch, line);
-    } else {
-      this.compileExpression(membership.mask);
-    }
-    this.emitStore(scratch, "cell bit mask scratch", line);
-    this.compileExpression(membership.collection);
-    this.emitRecall(scratch, "reuse cell bit mask", line);
-    this.emitOp(0x37, "К ∧", "membership test with reused mask", line);
-    this.emitOp(0x35, "К {x}", "membership fraction", line);
+    return emitMembershipMaskTest(this, membership, scratch, line);
   }
 
   emitBitSetWithScratch(
@@ -3982,87 +3594,11 @@ export class EmitContext {
   }
 
   compileArithmeticIfSelect(statement: Extract<StatementAst, { kind: "if" }>): boolean {
-    const canUseNegativeZero = this.allocation.negativeZeroDegree !== undefined;
-    const selected = buildBranchRemovalCandidate(
-      statement,
-      this.ast,
-      { negativeZeroDegree: canUseNegativeZero },
-    );
-    if (!selected) {
-      if (!canUseNegativeZero) this.recordRejectedNegativeZeroBranchCandidate(statement);
-      return false;
-    }
-
-    const ordinaryCost = estimateOrdinaryIfCost(statement, this.ast);
-    const selectedCost = estimateExpressionCost(selected.expr) + 1;
-    if (selectedCost >= ordinaryCost) {
-      this.candidates.push({
-        site: `if@${statement.line}`,
-        variant: selected.name,
-        steps: selectedCost,
-        selected: false,
-        reason: `Branchless ${selected.name} estimated at ${selectedCost} cells; ordinary branched form was shorter (${ordinaryCost}).`,
-      });
-      if (!selected.name.startsWith("negative-zero-threshold-")) {
-        this.recordRejectedNegativeZeroBranchCandidate(statement);
-      }
-      return false;
-    }
-
-    this.compileExpression(selected.expr);
-    if (selected.kind === "assign") {
-      this.emitStore(selected.target, `${selected.name} ${selected.target}`, statement.line);
-    } else {
-      this.emitOp(0x50, "С/П", `${selected.kind} ${selected.name}`, statement.line);
-    }
-    this.optimizations.push({
-      name: "branch-removal",
-      detail: `${selected.detail} at line ${statement.line}; emitted branchless ${selected.name}.`,
-    });
-    this.optimizations.push({
-      name: selected.name,
-      detail: `${selected.detail} at line ${statement.line} (${selectedCost} vs ${ordinaryCost} estimated steps).`,
-    });
-    return true;
+    return compileArithmeticIfSelect(this, statement);
   }
 
   compileGuardedUpdateSelector(statement: Extract<StatementAst, { kind: "if" }>): boolean {
-    const scratch = ifSelectorScratchName(statement);
-    if (this.allocation.registers[scratch] === undefined) return false;
-    const candidate = buildGuardedUpdateSelectorCandidate(statement, this.ast, {
-      negativeZeroDegree: this.allocation.negativeZeroDegree !== undefined,
-    });
-    if (candidate === undefined) return false;
-
-    const ordinaryCost = estimateOrdinaryGuardedUpdateCost(statement, this.ast);
-    const selectedCost = estimateGuardedUpdateSelectorCost(candidate, scratch);
-    if (selectedCost >= ordinaryCost) {
-      this.candidates.push({
-        site: `if@${statement.line}`,
-        variant: candidate.name,
-        steps: selectedCost,
-        selected: false,
-        reason: `Guarded update selector estimated at ${selectedCost} cells; ordinary branched form was shorter (${ordinaryCost}).`,
-      });
-      return false;
-    }
-
-    this.compileExpression(candidate.selector);
-    this.emitStore(scratch, `${candidate.name} selector`, statement.line);
-    const selector: ExpressionAst = { kind: "identifier", name: scratch };
-    for (const update of candidate.updates) {
-      this.compileExpression(maskedGuardedUpdateExpression(update, selector));
-      this.emitStore(update.target, `${candidate.name} ${update.target}`, statement.line);
-    }
-    this.optimizations.push({
-      name: "branch-removal",
-      detail: `${candidate.detail} at line ${statement.line}; emitted masked guarded updates.`,
-    });
-    this.optimizations.push({
-      name: candidate.name,
-      detail: `${candidate.detail} at line ${statement.line} (${selectedCost} vs ${ordinaryCost} estimated steps).`,
-    });
-    return true;
+    return compileGuardedUpdateSelector(this, statement);
   }
 
   recordRejectedNegativeZeroBranchCandidate(statement: Extract<StatementAst, { kind: "if" }>): void {
@@ -4085,188 +3621,33 @@ export class EmitContext {
     first: Extract<StatementAst, { kind: "if" }>,
     second: Extract<StatementAst, { kind: "if" }>,
   ): boolean {
-    const selected = buildDoubleClampCandidate(first, second);
-    if (!selected) return false;
-
-    const ordinaryCost = estimateOrdinaryIfCost(first, this.ast) + estimateOrdinaryIfCost(second, this.ast);
-    const selectedCost = estimateExpressionCost(selected.expr) + 1;
-    if (selectedCost >= ordinaryCost) {
-      this.candidates.push({
-        site: `if@${first.line}+${second.line}`,
-        variant: selected.name,
-        steps: selectedCost,
-        selected: false,
-        reason: `Branchless ${selected.name} estimated at ${selectedCost} cells; paired branched form was shorter (${ordinaryCost}).`,
-      });
-      return false;
-    }
-
-    this.compileExpression(selected.expr);
-    this.emitStore(selected.target, `${selected.name} ${selected.target}`, first.line);
-    this.optimizations.push({
-      name: "branch-removal",
-      detail: `${selected.detail} at lines ${first.line}/${second.line}; emitted branchless ${selected.name}.`,
-    });
-    this.optimizations.push({
-      name: selected.name,
-      detail: `${selected.detail} at lines ${first.line}/${second.line} (${selectedCost} vs ${ordinaryCost} estimated steps).`,
-    });
-    return true;
+    return compileDoubleBranchRemoval(this, first, second);
   }
 
   compileDispatch(statement: Extract<StatementAst, { kind: "dispatch" }>): void {
-    const optimized = optimizeDispatchDefaultCases(statement);
-    if (optimized.removed > 0) {
-      this.optimizations.push({
-        name: "dispatch-default-merge",
-        detail: `Removed ${optimized.removed} dispatch case${optimized.removed === 1 ? "" : "s"} whose body matched the default branch.`,
-      });
-    }
-    if (optimized.reordered > 0) {
-      this.optimizations.push({
-        name: "dispatch-case-ordering",
-        detail: `Reordered ${optimized.reordered} numeric dispatch case${optimized.reordered === 1 ? "" : "s"} to shorten residual comparisons.`,
-      });
-    }
-
-    const site = statement.name ?? `dispatch@${statement.line}`;
-    const selected = selectDispatchCandidate(optimized.statement, this.machineProfile);
-    for (const candidate of selected.candidates) this.candidates.push(candidate);
-
-    this.optimizations.push({
-      name: "dispatch-lowering",
-      detail: `Selected ${selected.selected.variant} for ${site}.`,
-    });
-
-    this.compileDispatchCompareChain(optimized.statement, selected.selected.variant === "fallthrough-compare-chain");
+    return compileDispatch(this, statement);
   }
 
   compileDispatchCompareChain(
     statement: Extract<StatementAst, { kind: "dispatch" }>,
     useFallthrough: boolean,
   ): void {
-    if (this.compileNumericResidualDispatchCompareChain(statement, useFallthrough)) return;
-
-    const scratch = `${DISPATCH_SCRATCH_PREFIX}${statement.scratchId}`;
-    const sourceRegister = dispatchExpressionRegister(statement, this.allocation);
-    const register = sourceRegister ?? this.allocation.registers[scratch];
-    if (!register) {
-      this.diagnostics.push({
-        level: "error",
-        message: `Internal: no scratch register reserved for dispatch at line ${statement.line}.`,
-        line: statement.line,
-      });
-      return;
-    }
-
-    this.compileExpression(statement.expr);
-    if (sourceRegister === undefined) {
-      this.emitOp(
-        0x40 + registerIndex(register),
-        `X->П ${register}`,
-        `dispatch scratch`,
-        statement.line,
-      );
-    } else {
-      this.optimizations.push({
-        name: "dispatch-source-register",
-        detail: `Reused R${register} as dispatch scratch for identifier expression.`,
-      });
-    }
-
-    const endLabel = this.freshLabel("dispatch_end");
-    let xContainsDispatchExpr = sourceRegister !== undefined;
-    for (let index = 0; index < statement.cases.length; index += 1) {
-      const dispatchCase = statement.cases[index]!;
-      const nextLabel = this.freshLabel("dispatch_next");
-      const lastCase = index === statement.cases.length - 1;
-      if (index > 0 && !xContainsDispatchExpr) {
-        this.emitOp(
-          0x60 + registerIndex(register),
-          `П->X ${register}`,
-          "dispatch scratch recall",
-          dispatchCase.line,
-        );
-        xContainsDispatchExpr = true;
-      }
-      if (xContainsDispatchExpr && isZeroExpression(dispatchCase.value)) {
-        this.emitJump(0x5e, "F x=0", nextLabel, "zero-case mismatch", dispatchCase.line);
-      } else {
-        this.compileExpression(dispatchCase.value);
-        this.emitOp(0x11, "-", "dispatch compare", dispatchCase.line);
-        this.emitJump(0x5e, "F x=0", nextLabel, "case mismatch", dispatchCase.line);
-        xContainsDispatchExpr = false;
-      }
-      this.compileStatements(dispatchCase.body);
-      if (
-        !this.statementsTerminate(dispatchCase.body) &&
-        (!useFallthrough || !lastCase || statement.defaultBody !== undefined)
-      ) {
-        this.emitJump(0x51, "БП", endLabel, "dispatch end", dispatchCase.line);
-      }
-      this.emitLabel(nextLabel);
-      xContainsDispatchExpr = xContainsDispatchExpr && isZeroExpression(dispatchCase.value);
-    }
-    if (statement.defaultBody) this.compileStatements(statement.defaultBody);
-    this.emitLabel(endLabel);
+    return compileDispatchCompareChain(this, statement, useFallthrough);
   }
 
   compileNumericResidualDispatchCompareChain(
     statement: Extract<StatementAst, { kind: "dispatch" }>,
     useFallthrough: boolean,
   ): boolean {
-    if (!dispatchUsesNumericResidualChain(statement)) return false;
-    const numericValues = statement.cases.map((dispatchCase) => numericLiteralValue(dispatchCase.value)) as number[];
-
-    this.compileExpression(statement.expr);
-    const endLabel = this.freshLabel("dispatch_end");
-    let comparedValue = 0;
-    let hasComparedValue = false;
-    for (let index = 0; index < statement.cases.length; index += 1) {
-      const dispatchCase = statement.cases[index]!;
-      const value = numericValues[index]!;
-      const nextLabel = this.freshLabel("dispatch_next");
-      const lastCase = index === statement.cases.length - 1;
-      if (!hasComparedValue) {
-        if (value !== 0) {
-          this.emitPositiveResidualCompare(value, "dispatch compare", dispatchCase.line);
-        }
-        hasComparedValue = true;
-      } else {
-        this.emitResidualCompareDelta(value - comparedValue, "dispatch residual compare", dispatchCase.line);
-      }
-      comparedValue = value;
-      this.emitJump(0x5e, "F x=0", nextLabel, "case mismatch", dispatchCase.line);
-      this.compileStatements(dispatchCase.body);
-      if (
-        !this.statementsTerminate(dispatchCase.body) &&
-        (!useFallthrough || !lastCase || statement.defaultBody !== undefined)
-      ) {
-        this.emitJump(0x51, "БП", endLabel, "dispatch end", dispatchCase.line);
-      }
-      this.emitLabel(nextLabel);
-    }
-    if (statement.defaultBody) this.compileStatements(statement.defaultBody);
-    this.emitLabel(endLabel);
-    this.optimizations.push({
-      name: "numeric-dispatch-residual-chain",
-      detail: `Reused residual comparisons for numeric dispatch at line ${statement.line}.`,
-    });
-    return true;
+    return compileNumericResidualDispatchCompareChain(this, statement, useFallthrough);
   }
 
   emitPositiveResidualCompare(value: number, comment: string, line?: number): void {
-    const magnitude = Math.abs(value);
-    if (magnitude === 0) return;
-    this.emitNumberOrPreload(String(magnitude));
-    this.emitOp(value < 0 ? 0x10 : 0x11, value < 0 ? "+" : "-", comment, line);
+    return emitPositiveResidualCompare(this, value, comment, line);
   }
 
   emitResidualCompareDelta(delta: number, comment: string, line?: number): void {
-    const magnitude = Math.abs(delta);
-    if (magnitude === 0) return;
-    this.emitNumberOrPreload(String(magnitude));
-    this.emitOp(delta < 0 ? 0x10 : 0x11, delta < 0 ? "+" : "-", comment, line);
+    return emitResidualCompareDelta(this, delta, comment, line);
   }
 
   statementsTerminate(statements: StatementAst[]): boolean {
@@ -5496,36 +4877,7 @@ export class EmitContext {
   }
 
   compileLiteralHalt(literal: string, line: number): void {
-    const program = displayLiteralProgram(literal);
-    if (program?.kind === "error") {
-      this.emitErrorStopOpcode("halt literal ЕГГ0Г", line);
-      this.optimizations.push({
-        name: "error-stop",
-        detail: `Used one-cell error opcode for literal ЕГГ0Г stop at line ${line}.`,
-      });
-      return;
-    }
-
-    const display: ProgramAst["displays"][number] = {
-      kind: "display",
-      name: `__halt_literal_${line}`,
-      format: "packed",
-      sources: [],
-      items: [{ kind: "literal", text: literal, line }],
-      line,
-    };
-    if (!this.compileLiteralDisplayBody(display, line, literal)) {
-      this.diagnostics.push(buildDiagnostic(
-        "error",
-        `Literal halt ${JSON.stringify(literal)} is not lowerable yet.`,
-        line,
-      ));
-      return;
-    }
-    this.optimizations.push({
-      name: "terminal-literal-stop",
-      detail: `Lowered literal terminal stop ${JSON.stringify(literal)} at line ${line}.`,
-    });
+    return compileLiteralHalt(this, literal, line);
   }
 
   emitErrorStopOpcode(comment: string, line: number, raw = false): void {
@@ -6035,15 +5387,7 @@ export class EmitContext {
   }
 
   emitKnownOneIndirectLoopBack(target: string, line: number): boolean {
-    if (!this.coordListCounterKnownOne || !this.zeroAddressLabels.has(target)) return false;
-    const register = this.allocation.registers[COORD_LIST_COUNTER];
-    if (register === undefined || flOpcode(register) === undefined) return false;
-    this.emitOp(0x80 + registerIndex(register), `К БП ${register}`, "loop back via known-one counter", line);
-    this.optimizations.push({
-      name: "indirect-incdec-counter",
-      detail: `Reused ${COORD_LIST_COUNTER} = 1 as a one-cell indirect loop-back to 00 at line ${line}.`,
-    });
-    return true;
+    return emitKnownOneIndirectLoopBack(this, target, line);
   }
 
   compileUnitDecrement(statement: Extract<StatementAst, { kind: "assign" }>): boolean {
@@ -6073,61 +5417,7 @@ export class EmitContext {
     falseLabel: string,
     line: number,
   ): void {
-    if (this.compileCoordListHasCondition(condition, falseLabel, line)) return;
-    if (this.compileNegativeZeroThresholdFlow(condition, falseLabel, line)) return;
-
-    const preloadedConstants = new Set(Object.keys(this.allocation.constants));
-    const selected = selectCheaperEquivalentCondition(
-      condition,
-      this.ast,
-      preloadedConstants,
-    );
-    if (selected.changed) {
-      this.optimizations.push({
-        name: "comparison-boundary-normalization",
-        detail: `Normalized ${conditionToText(condition)} to ${conditionToText(selected.condition)} at line ${line}.`,
-      });
-    }
-    const compiledCondition = selected.condition;
-    if (this.compileNearAnyHelperCondition(compiledCondition, falseLabel, line, preloadedConstants)) return;
-    if (this.compileSmallSetCondition(compiledCondition, falseLabel, line, preloadedConstants)) return;
-    if (isZeroExpression(compiledCondition.right) && canTestAgainstZeroDirectly(compiledCondition.op)) {
-      const bitHasLowering = this.compileBitHasConditionWithBitMaskHelper(compiledCondition.left, line)
-        ?? this.compileBitHasConditionWithSpatialHelper(compiledCondition.left, line);
-      if (bitHasLowering === undefined) {
-        if (!(compiledCondition.left.kind === "identifier" && this.xHolds(compiledCondition.left.name))) {
-          this.compileExpression(compiledCondition.left);
-        }
-      }
-      const opcode = directTestOpcode(compiledCondition.op);
-      this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${condition.op}`, line);
-      this.optimizations.push({
-        name: bitHasLowering?.name ?? "zero-condition-test",
-        detail: bitHasLowering?.detail
-          ?? `Tested ${compiledCondition.op} 0 without materializing a zero literal at line ${line}.`,
-      });
-      return;
-    }
-    if (this.compileEqualityWithCurrentX(compiledCondition, falseLabel, line)) return;
-    if (compiledCondition.op === ">" || compiledCondition.op === "<=") {
-      this.compileExpression(compiledCondition.right);
-      this.compileExpression(compiledCondition.left);
-    } else {
-      this.compileExpression(compiledCondition.left);
-      this.compileExpression(compiledCondition.right);
-    }
-    this.emitOp(0x11, "-", "condition compare", line);
-
-    const opcode =
-      compiledCondition.op === "<" || compiledCondition.op === ">"
-        ? 0x5c
-        : compiledCondition.op === ">=" || compiledCondition.op === "<="
-          ? 0x59
-          : compiledCondition.op === "=="
-            ? 0x5e
-            : 0x57;
-    const mnemonic = getOpcode(opcode).name;
-    this.emitJump(opcode, mnemonic, falseLabel, `false branch for ${compiledCondition.op}`, line);
+    return compileCondition(this, condition, falseLabel, line);
   }
 
   compileCoordListHasCondition(
@@ -6240,43 +5530,14 @@ export class EmitContext {
     expr: ExpressionAst,
     line: number,
   ): { name: string; detail: string } | undefined {
-    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_has" || expr.args.length !== 2) return undefined;
-    const [mask, index] = expr.args;
-    if (mask?.kind !== "identifier" || index === undefined) return undefined;
-    if (
-      !programHasLineCountForMask(this.ast, mask.name) &&
-      this.loweringOptions.sharedBitMaskHelperCalls !== true
-    ) return undefined;
-    const scratch = this.sharedBitMaskHelperScratch() ?? spatialHitScratchName(mask.name);
-    if (!this.allocation.registers[scratch]) return undefined;
-    const helper = this.ensureSpatialBitMaskHelper(scratch, line);
-    this.compileExpression(index);
-    this.emitJump(0x53, "ПП", helper.label, "bit_mask helper", line);
-    this.compileExpression(mask);
-    this.emitOp(0x37, "К ∧", "bit membership test", line);
-    this.emitOp(0x35, "К {x}", "bit membership fraction", line);
-    return {
-      name: "bit-mask-condition-helper",
-      detail: `Tested bit_has() through the shared bit_mask helper at line ${line}.`,
-    };
+    return compileBitHasConditionWithBitMaskHelper(this, expr, line);
   }
 
   compileBitHasConditionWithSpatialHelper(
     expr: ExpressionAst,
     line: number,
   ): { name: string; detail: string } | undefined {
-    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_has" || expr.args.length !== 2) return undefined;
-    const [mask, index] = expr.args;
-    if (mask?.kind !== "identifier" || index === undefined) return undefined;
-    const scratch = spatialHitScratchName(mask.name);
-    if (!this.allocation.registers[scratch]) return undefined;
-    const helper = this.ensureSpatialHitHelper(mask.name, scratch);
-    this.compileExpression(index);
-    this.emitJump(0x53, "ПП", helper.label, `spatial hit ${mask.name}`, line);
-    return {
-      name: "spatial-hit-condition-helper",
-      detail: `Tested bit_has() through the shared spatial hit helper at line ${line}.`,
-    };
+    return compileBitHasConditionWithSpatialHelper(this, expr, line);
   }
 
   compileEqualityWithCurrentX(
@@ -6316,21 +5577,7 @@ export class EmitContext {
     line: number,
     preloadedConstants: ReadonlySet<string>,
   ): boolean {
-    const match = matchNearAnyHelperCondition(condition);
-    if (match === undefined) return false;
-    const key = nearAnyHelperKey(match.value, match.radius);
-    const stats = this.nearAnyHelperStats.get(key);
-    if (stats === undefined || stats.helperCost >= stats.ordinaryCost) return false;
-
-    const helper = this.nearAnyHelper(match.value, match.radius, line);
-    this.compileNearAnyMarginWithHelper(match, helper.label, line);
-    const opcode = directTestOpcode(match.op);
-    this.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${match.op}`, line);
-    this.optimizations.push({
-      name: "near-any-helper-lowering",
-      detail: `Lowered ${conditionToText(condition)} through shared near_any helper at line ${line} (${stats.helperCost} vs ${stats.ordinaryCost} estimated group steps).`,
-    });
-    return true;
+    return compileNearAnyHelperCondition(this, condition, falseLabel, line, preloadedConstants);
   }
 
   compileNearAnyMarginWithHelper(
@@ -6338,23 +5585,11 @@ export class EmitContext {
     label: string,
     line: number,
   ): void {
-    for (let index = 0; index < match.candidates.length; index += 1) {
-      const candidate = match.candidates[index]!;
-      this.compileNearAnyCandidate(candidate, line);
-      this.emitJump(0x53, "ПП", label, "near_any candidate", line);
-      if (index > 0) this.emitOp(0x36, "К max", "near_any max margin", line);
-    }
+    return compileNearAnyMarginWithHelper(this, match, label, line);
   }
 
   compileNearAnyCandidate(candidate: ExpressionAst, line: number): void {
-    if (candidate.kind === "identifier" && this.xHolds(candidate.name)) {
-      this.optimizations.push({
-        name: "stack-current-x-scheduling",
-        detail: `Reused ${candidate.name} already in X for near_any candidate at line ${line}.`,
-      });
-      return;
-    }
-    this.compileExpression(candidate);
+    return compileNearAnyCandidate(this, candidate, line);
   }
 
   nearAnyHelper(
@@ -6381,32 +5616,7 @@ export class EmitContext {
     line: number,
     preloadedConstants: ReadonlySet<string>,
   ): boolean {
-    const match = matchSmallSetCondition(condition);
-    if (match === undefined) return false;
-    const selectedCost = estimateSmallSetConditionCost(match, preloadedConstants);
-    const ordinaryCost = conditionCompileCost(condition, preloadedConstants);
-    if (selectedCost >= ordinaryCost) return false;
-    if (match.mode === "any") {
-      const trueLabel = this.freshLabel(`${match.kind}_any_true`);
-      for (const item of match.tests.slice(0, -1)) {
-        this.compileExpression(item.expr);
-        this.emitJump(item.trueOpcode, getOpcode(item.trueOpcode).name, trueLabel, `${match.kind} any hit`, line);
-      }
-      const last = match.tests.at(-1)!;
-      this.compileExpression(last.expr);
-      this.emitJump(last.falseOpcode, getOpcode(last.falseOpcode).name, falseLabel, `${match.kind} any miss`, line);
-      this.emitLabel(trueLabel);
-    } else {
-      for (const item of match.tests) {
-        this.compileExpression(item.expr);
-        this.emitJump(item.falseOpcode, getOpcode(item.falseOpcode).name, falseLabel, `${match.kind} all miss`, line);
-      }
-    }
-    this.optimizations.push({
-      name: "small-set-condition-lowering",
-      detail: `Lowered ${conditionToText(condition)} as ${match.tests.length} direct small-set test${match.tests.length === 1 ? "" : "s"} at line ${line} (${selectedCost} vs ${ordinaryCost} estimated steps).`,
-    });
-    return true;
+    return compileSmallSetCondition(this, condition, falseLabel, line, preloadedConstants);
   }
 
   compileNegativeZeroThresholdFlow(
@@ -8710,7 +7920,7 @@ function countCalls(ast: ProgramAst, name: string): number {
   return count;
 }
 
-function programHasLineCountForMask(ast: ProgramAst, maskName: string): boolean {
+export function programHasLineCountForMask(ast: ProgramAst, maskName: string): boolean {
   let found = false;
   const visitExpr = (expr: ExpressionAst): void => {
     if (found) return;
@@ -9274,7 +8484,7 @@ interface SignDigitLiteralDisplayProgram {
   indirectSteps: number;
 }
 
-function displayLiteralProgram(text: string): DisplayLiteralProgram | undefined {
+export function displayLiteralProgram(text: string): DisplayLiteralProgram | undefined {
   const normalized = normalizeDisplayLiteralText(text);
   const errorCells = displayLiteralCells(normalized);
   if (errorCells !== undefined && isErrorLiteralCells(errorCells)) return { kind: "error" };
@@ -10161,7 +9371,7 @@ function ticTacToeMaskScratchName(statement: StatementAst): string {
   return `${TICTACTOE_MASK_SCRATCH_PREFIX}${statement.line}`;
 }
 
-function dispatchExpressionRegister(
+export function dispatchExpressionRegister(
   statement: Extract<StatementAst, { kind: "dispatch" }>,
   allocation: RegisterAllocation,
 ): RegisterName | undefined {
@@ -10174,7 +9384,7 @@ function dispatchExpressionRegister(
 // across cases (mismatched cases skip their body, so X survives). That lowering
 // needs NO scratch register even for a non-identifier selector, so the allocator
 // must not reserve one for it. Mirrors compileNumericResidualDispatchCompareChain.
-function dispatchUsesNumericResidualChain(statement: Extract<StatementAst, { kind: "dispatch" }>): boolean {
+export function dispatchUsesNumericResidualChain(statement: Extract<StatementAst, { kind: "dispatch" }>): boolean {
   if (statement.cases.length < 2) return false;
   const values = statement.cases.map((dispatchCase) => numericLiteralValue(dispatchCase.value));
   if (values.some((value) => value === undefined)) return false;
@@ -10209,11 +9419,11 @@ function numericResidualDispatchIsCheaper(
   return residual <= ordinary;
 }
 
-function isZeroExpression(expr: ExpressionAst): boolean {
+export function isZeroExpression(expr: ExpressionAst): boolean {
   return expr.kind === "number" && Number(expr.raw) === 0;
 }
 
-function isUnitDecrementExpression(target: string, expr: ExpressionAst): boolean {
+export function isUnitDecrementExpression(target: string, expr: ExpressionAst): boolean {
   return expr.kind === "binary" &&
     expr.op === "-" &&
     expr.left.kind === "identifier" &&
@@ -10222,7 +9432,7 @@ function isUnitDecrementExpression(target: string, expr: ExpressionAst): boolean
     Number(expr.right.raw) === 1;
 }
 
-function matchResidualGuardedUpdate(
+export function matchResidualGuardedUpdate(
   statement: Extract<StatementAst, { kind: "if" }>,
 ): {
   condition: ConditionAst;
@@ -10272,14 +9482,14 @@ function matchNumericSelfUpdate(target: string, expr: ExpressionAst): number | u
   return undefined;
 }
 
-function decrementBranchTestsZero(condition: ConditionAst, target: string): boolean {
+export function decrementBranchTestsZero(condition: ConditionAst, target: string): boolean {
   return condition.left.kind === "identifier" &&
     condition.left.name === target &&
     (condition.op === "<=" || condition.op === "==") &&
     isZeroExpression(condition.right);
 }
 
-function flOpcode(register: RegisterName): number | undefined {
+export function flOpcode(register: RegisterName): number | undefined {
   switch (register) {
     case "0":
       return 0x5d;
@@ -10298,11 +9508,11 @@ export function isSimpleStackLoad(expr: ExpressionAst): boolean {
   return expr.kind === "identifier" || expr.kind === "number";
 }
 
-function canTestAgainstZeroDirectly(op: ConditionAst["op"]): boolean {
+export function canTestAgainstZeroDirectly(op: ConditionAst["op"]): boolean {
   return op === "==" || op === "!=" || op === ">=" || op === "<";
 }
 
-function directTestOpcode(op: ConditionAst["op"]): number {
+export function directTestOpcode(op: ConditionAst["op"]): number {
   switch (op) {
     case "==":
       return 0x5e;
@@ -10317,7 +9527,7 @@ function directTestOpcode(op: ConditionAst["op"]): number {
   }
 }
 
-function selectCheaperEquivalentCondition(
+export function selectCheaperEquivalentCondition(
   condition: ConditionAst,
   ast: ProgramAst,
   preloadedConstants?: ReadonlySet<string>,
@@ -10447,7 +9657,7 @@ function numericRangeForExpression(expr: ExpressionAst, ast: ProgramAst): { min?
   return undefined;
 }
 
-function conditionCompileCost(condition: ConditionAst, preloadedConstants?: ReadonlySet<string>): number {
+export function conditionCompileCost(condition: ConditionAst, preloadedConstants?: ReadonlySet<string>): number {
   if (isZeroExpression(condition.right) && canTestAgainstZeroDirectly(condition.op)) {
     return estimateExpressionCostForCondition(condition.left, preloadedConstants) + 2;
   }
@@ -10456,7 +9666,7 @@ function conditionCompileCost(condition: ConditionAst, preloadedConstants?: Read
     3;
 }
 
-function estimateSmallSetConditionCost(
+export function estimateSmallSetConditionCost(
   match: SmallSetConditionMatch,
   preloadedConstants: ReadonlySet<string>,
 ): number {
@@ -10470,7 +9680,7 @@ function conditionEquals(left: ConditionAst, right: ConditionAst): boolean {
   return left.op === right.op && expressionEquals(left.left, right.left) && expressionEquals(left.right, right.right);
 }
 
-function conditionToText(condition: ConditionAst): string {
+export function conditionToText(condition: ConditionAst): string {
   return `${expressionToIntentText(condition.left)} ${condition.op} ${expressionToIntentText(condition.right)}`;
 }
 
@@ -10775,7 +9985,7 @@ interface BranchTerminalCandidate {
   detail: string;
 }
 
-function buildBranchRemovalCandidate(
+export function buildBranchRemovalCandidate(
   statement: Extract<StatementAst, { kind: "if" }>,
   ast: ProgramAst,
   options: { negativeZeroDegree?: boolean } = {},
@@ -10792,7 +10002,7 @@ function buildBranchRemovalCandidate(
     buildArithmeticIfSelect(statement, ast, options);
 }
 
-function buildGuardedUpdateSelectorCandidate(
+export function buildGuardedUpdateSelectorCandidate(
   statement: Extract<StatementAst, { kind: "if" }>,
   ast: ProgramAst,
   options: { negativeZeroDegree?: boolean } = {},
@@ -10842,7 +10052,7 @@ function guardedUpdates(statement: Extract<StatementAst, { kind: "if" }>): Guard
   return updates;
 }
 
-function maskedGuardedUpdateExpression(update: GuardedUpdate, selector: ExpressionAst): ExpressionAst {
+export function maskedGuardedUpdateExpression(update: GuardedUpdate, selector: ExpressionAst): ExpressionAst {
   const current: ExpressionAst = { kind: "identifier", name: update.target };
   const delta = multiplyExpressions(update.delta, selector);
   return update.op === "+"
@@ -10850,7 +10060,7 @@ function maskedGuardedUpdateExpression(update: GuardedUpdate, selector: Expressi
     : subtractExpressions(current, delta);
 }
 
-function buildDoubleClampCandidate(
+export function buildDoubleClampCandidate(
   first: Extract<StatementAst, { kind: "if" }>,
   second: Extract<StatementAst, { kind: "if" }>,
 ): BranchAssignCandidate | undefined {
@@ -11533,7 +10743,7 @@ interface SmallSetConditionMatch {
   tests: SmallSetTest[];
 }
 
-interface NearAnyHelperConditionMatch {
+export interface NearAnyHelperConditionMatch {
   value: ExpressionAst;
   radius: ExpressionAst;
   candidates: ExpressionAst[];
@@ -11574,7 +10784,7 @@ export function smallSetExpressionMacro(name: string, args: ExpressionAst[]): Ex
   return productExpressions(differences);
 }
 
-function matchSmallSetCondition(condition: ConditionAst): SmallSetConditionMatch | undefined {
+export function matchSmallSetCondition(condition: ConditionAst): SmallSetConditionMatch | undefined {
   const normalized = normalizeZeroComparison(condition);
   if (normalized === undefined) return undefined;
 
@@ -11607,7 +10817,7 @@ function matchSmallSetCondition(condition: ConditionAst): SmallSetConditionMatch
   return undefined;
 }
 
-function matchNearAnyHelperCondition(condition: ConditionAst): NearAnyHelperConditionMatch | undefined {
+export function matchNearAnyHelperCondition(condition: ConditionAst): NearAnyHelperConditionMatch | undefined {
   const normalized = normalizeZeroComparison(condition);
   if (normalized === undefined || (normalized.op !== ">=" && normalized.op !== "<")) return undefined;
   const match = matchNearAnySetExpression(normalized.expr);
@@ -11650,7 +10860,7 @@ function matchNearAnyMarginSetExpression(
   return { value: commonValue, radius, candidates };
 }
 
-function nearAnyHelperKey(value: ExpressionAst, radius: ExpressionAst): string {
+export function nearAnyHelperKey(value: ExpressionAst, radius: ExpressionAst): string {
   return `${expressionToIntentText(value)}|${expressionToIntentText(radius)}`;
 }
 
@@ -11745,7 +10955,7 @@ interface CellHelperCall {
 
 type CellHelperName = "cell_used" | "cell_has" | "cell_mark" | "cell_set";
 
-interface BitMembershipCondition {
+export interface BitMembershipCondition {
   collection: ExpressionAst;
   item: ExpressionAst;
   mask: ExpressionAst;
@@ -11863,15 +11073,15 @@ function membershipSetRunScratchName(statement: Extract<StatementAst, { kind: "i
   return count >= 2 ? bitMaskScratchName(first) : undefined;
 }
 
-function bitMaskScratchName(statement: StatementAst): string {
+export function bitMaskScratchName(statement: StatementAst): string {
   return `${BIT_MASK_SCRATCH_PREFIX}${statement.line}`;
 }
 
-function ifSelectorScratchName(statement: StatementAst): string {
+export function ifSelectorScratchName(statement: StatementAst): string {
   return `${IF_SELECTOR_SCRATCH_PREFIX}${statement.line}`;
 }
 
-function matchBitMembershipCondition(condition: ConditionAst): BitMembershipCondition | undefined {
+export function matchBitMembershipCondition(condition: ConditionAst): BitMembershipCondition | undefined {
   if (condition.op !== "!=" || !isZeroExpression(condition.right)) return undefined;
   const test = condition.left;
   if (test.kind !== "call" || test.args.length !== 2) return undefined;
@@ -11895,7 +11105,7 @@ function matchBitMembershipCondition(condition: ConditionAst): BitMembershipCond
   };
 }
 
-function matchBitAbsenceCondition(condition: ConditionAst): BitMembershipCondition | undefined {
+export function matchBitAbsenceCondition(condition: ConditionAst): BitMembershipCondition | undefined {
   if (condition.op !== "==" || !isZeroExpression(condition.right)) return undefined;
   const test = condition.left;
   if (test.kind !== "call" || test.args.length !== 2) return undefined;
@@ -11919,7 +11129,7 @@ function matchBitAbsenceCondition(condition: ConditionAst): BitMembershipConditi
   };
 }
 
-function isBitClearAssignment(
+export function isBitClearAssignment(
   statement: Extract<StatementAst, { kind: "assign" }>,
   membership: BitMembershipCondition,
 ): boolean {
@@ -12401,7 +11611,7 @@ function maxExpressions(expressions: ExpressionAst[]): ExpressionAst {
   return expressions.reduce((best, expr) => maxExpression(best, expr));
 }
 
-function spatialHitScratchName(mask: string): string {
+export function spatialHitScratchName(mask: string): string {
   return `${SPATIAL_HIT_SCRATCH_PREFIX}${mask}`;
 }
 
@@ -12639,7 +11849,7 @@ function isStackUnaryDerivationFn(name: string): name is StackUnaryDerivationFn 
   return Object.prototype.hasOwnProperty.call(STACK_UNARY_DERIVATION_OPCODES, name);
 }
 
-function optimizeDispatchDefaultCases(
+export function optimizeDispatchDefaultCases(
   statement: Extract<StatementAst, { kind: "dispatch" }>,
 ): { statement: Extract<StatementAst, { kind: "dispatch" }>; removed: number; reordered: number } {
   if (statement.cases.length === 0) return { statement, removed: 0, reordered: 0 };
@@ -12752,7 +11962,7 @@ function residualStepCost(previous: number | undefined, value: number): number {
   return delta === 0 ? 0 : estimateNumberCost(String(Math.abs(delta))) + 1;
 }
 
-function statementListsEqual(left: readonly StatementAst[], right: readonly StatementAst[]): boolean {
+export function statementListsEqual(left: readonly StatementAst[], right: readonly StatementAst[]): boolean {
   return left.length === right.length && left.every((statement, index) => statementEquals(statement, right[index]!));
 }
 
@@ -12882,7 +12092,7 @@ export function isNumericValue(expr: ExpressionAst, value: number): boolean {
   return parsed !== undefined && parsed === value;
 }
 
-function numericLiteralValue(expr: ExpressionAst): number | undefined {
+export function numericLiteralValue(expr: ExpressionAst): number | undefined {
   if (expr.kind === "unary" && expr.op === "-") {
     const value = numericLiteralValue(expr.expr);
     return value === undefined ? undefined : -value;
@@ -12937,7 +12147,7 @@ function estimateBranchOrderStatementCost(statement: StatementAst, ast: ProgramA
   }
 }
 
-function estimateOrdinaryIfCost(statement: Extract<StatementAst, { kind: "if" }>, ast: ProgramAst): number {
+export function estimateOrdinaryIfCost(statement: Extract<StatementAst, { kind: "if" }>, ast: ProgramAst): number {
   const thenStatement = statement.thenBody[0];
   if (statement.thenBody.length !== 1 || !thenStatement) return Number.POSITIVE_INFINITY;
   const thenCost = estimateSimpleStatementCost(thenStatement, ast);
@@ -12950,7 +12160,7 @@ function estimateOrdinaryIfCost(statement: Extract<StatementAst, { kind: "if" }>
   return estimateConditionCost(statement.condition, ast) + thenCost + 2 + elseCost;
 }
 
-function estimateOrdinaryGuardedUpdateCost(statement: Extract<StatementAst, { kind: "if" }>, ast: ProgramAst): number {
+export function estimateOrdinaryGuardedUpdateCost(statement: Extract<StatementAst, { kind: "if" }>, ast: ProgramAst): number {
   if (statement.elseBody !== undefined || statement.thenBody.length === 0) return Number.POSITIVE_INFINITY;
   let bodyCost = 0;
   for (const inner of statement.thenBody) {
@@ -12961,7 +12171,7 @@ function estimateOrdinaryGuardedUpdateCost(statement: Extract<StatementAst, { ki
   return estimateConditionCost(statement.condition, ast) + bodyCost;
 }
 
-function estimateGuardedUpdateSelectorCost(candidate: GuardedUpdateSelectorCandidate, scratch: string): number {
+export function estimateGuardedUpdateSelectorCost(candidate: GuardedUpdateSelectorCandidate, scratch: string): number {
   const selector: ExpressionAst = { kind: "identifier", name: scratch };
   return estimateExpressionCost(candidate.selector) + 1 +
     candidate.updates.reduce(
@@ -12988,7 +12198,7 @@ function estimateSimpleStatementCost(statement: StatementAst, ast: ProgramAst): 
   }
 }
 
-function estimateConditionCost(
+export function estimateConditionCost(
   condition: ConditionAst,
   ast: ProgramAst,
   preloadedConstants?: ReadonlySet<string>,
@@ -13126,7 +12336,7 @@ function estimateCallCost(expr: Extract<ExpressionAst, { kind: "call" }>): numbe
   return (expr.args[0] ? estimateExpressionCost(expr.args[0]) : 0) + 1;
 }
 
-function estimateNumberCost(raw: string): number {
+export function estimateNumberCost(raw: string): number {
   const normalized = raw.trim().toLowerCase();
   const negative = normalized.startsWith("-");
   const unsigned = negative ? normalized.slice(1) : normalized;
@@ -13143,7 +12353,7 @@ function estimateNumberCost(raw: string): number {
   return cost;
 }
 
-function residualAdjustmentCost(previousValue: number, nextValue: number): number {
+export function residualAdjustmentCost(previousValue: number, nextValue: number): number {
   const delta = previousValue - nextValue;
   if (delta === 0) return 0;
   return estimateNumberCost(String(Math.abs(delta))) + 1;
@@ -14232,7 +13442,7 @@ function countStatements(statements: StatementAst[]): number {
   return count;
 }
 
-function selectDispatchCandidate(
+export function selectDispatchCandidate(
   statement: Extract<StatementAst, { kind: "dispatch" }>,
   machineProfile: MachineProfile,
 ): { selected: CandidateReport; candidates: CandidateReport[] } {
