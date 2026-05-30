@@ -731,6 +731,39 @@ program LiteralErrorStop {
     expect(calc.displayText().toUpperCase()).toContain("ЕГГ");
   });
 
+  it("lowers literal terminal video strings as one visible stop", () => {
+    const result = compileOk(`
+program LiteralTerminalVideoStop {
+  loop {
+    halt("8СГ-Е-78")
+  }
+}
+`);
+
+    expect(hasOptimization(result, "terminal-literal-stop")).toBe(true);
+    expect(result.steps.filter((step) => step.mnemonic === "С/П")).toHaveLength(1);
+    expect(runCompiledDisplay(`
+program LiteralTerminalVideoStop {
+  loop {
+    halt("8СГ-Е-78")
+  }
+}
+`)).toContain("СГ-Е-78");
+  });
+
+  it("lowers first-splice literal terminal stops", () => {
+    const result = compileOk(`
+program FirstSpliceLiteralTerminalStop {
+  loop {
+    halt("Г16ЕL 91")
+  }
+}
+`);
+
+    expect(hasOptimization(result, "terminal-literal-stop")).toBe(true);
+    expect(result.steps.filter((step) => step.mnemonic === "С/П")).toHaveLength(1);
+  });
+
   it("lowers signed literal calculator video strings", () => {
     const result = compileOk(`
 program SignedLiteralVideoScreen {

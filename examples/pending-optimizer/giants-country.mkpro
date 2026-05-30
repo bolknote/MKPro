@@ -29,8 +29,7 @@ program GiantsCountry {
   giant_country: board(decimal_player)
 
   fn exhausted() {
-    show("ЕГГОГ")
-    halt()
+    halt("ЕГГОГ")
   }
 
   loop {

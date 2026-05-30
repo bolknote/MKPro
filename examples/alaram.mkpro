@@ -18,8 +18,6 @@ program Alaram {
     // play; here it stays explicit game state so the function can name that pressure.
     level: counter 1..9 = 3
     hit_window: counter 0..9 = 3
-
-    shot_down_pattern: packed = -666
   }
 
   // The source listing draws a forward cockpit lane. Horizontal movement is
@@ -27,18 +25,15 @@ program Alaram {
   sky: board(cockpit_perspective)
 
   fn ground() {
-    show("ЕГГОГ")
-    halt()
+    halt("ЕГГОГ")
   }
 
   fn tail_gun() {
-    show(shot_down_pattern)
-    halt(-666)
+    halt("Г16ЕL 91")
   }
 
   fn destroyed() {
-    show("8СГ-Е-78")
-    halt(777)
+    halt("8СГ-Е-78")
   }
 
   loop {

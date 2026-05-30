@@ -17,8 +17,7 @@ program Minesweeper9x7 {
   }
 
   fn exploded() {
-    show("ЕГГОГ")
-    halt()
+    halt("ЕГГОГ")
   }
 
   loop {

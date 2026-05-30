@@ -23,8 +23,7 @@ program Dungeon {
   dungeon: board(corridor_plan)
 
   fn lost() {
-    show("ЕГГОГ")
-    halt()
+    halt("ЕГГОГ")
   }
 
   loop {

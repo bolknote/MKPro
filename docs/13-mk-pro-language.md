@@ -117,6 +117,10 @@ counter range gives the natural visible width (`0..99` is two digits,
 numeric output, packed display bytes, sign-digit forms, `К ИНВ`, or another
 proved MK-61 lowering.
 
+`show(...)` is a resumable visible stop. Use it for screens where the player
+continues the program, often followed by `name = read()`. For terminal screens,
+put the visible value directly in `halt(...)`.
+
 Do not write setup or storage tactics as top-level implementation blocks:
 
 ```mkpro
@@ -207,11 +211,14 @@ fn touchdown() {
 }
 ```
 
-Use `halt(value)` when the terminal display is a value. Use `show(...)` followed
-by `halt()` when the terminal display is text or multiple fragments. Single-use terminal functions are
-inlined, and shared terminal functions can be lowered as direct jumps by the
-optimizer, so authors do not need a separate terminal form for layout reasons.
-Function names must be unique, and a call must reference a declared function.
+Use `halt(value)` when the terminal display is a value, and `halt("text")` for
+a terminal calculator video literal such as `halt("ЕГГОГ")` or
+`halt("8СГ-Е-78")`. Do not write `show(...); halt()` for one final screen:
+that describes two source-level effects even if a specific lowering can fuse
+some cases. Single-use terminal functions are inlined, and shared terminal
+functions can be lowered as direct jumps by the optimizer, so authors do not
+need a separate terminal form for layout reasons. Function names must be unique,
+and a call must reference a declared function.
 
 ## Value-Returning Functions (`return`)
 
@@ -609,7 +616,7 @@ The parser keeps these high-level statements as typed source nodes:
 
 - `show(...)`
 - `name = read()`
-- `halt()` or `halt(expr)`
+- `halt()`, `halt(expr)`, or `halt("text")`
 - `name = expr`
 - `name += expr`
 - `name -= expr`

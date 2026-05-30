@@ -25,13 +25,11 @@ program TreasureHunter2 {
   cave: board(floor_plan)
 
   fn escaped() {
-    show(treasure)
-    halt(0)
+    halt(treasure)
   }
 
   fn lost() {
-    show("ЕГГОГ")
-    halt()
+    halt("ЕГГОГ")
   }
 
   loop {

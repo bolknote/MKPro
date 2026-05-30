@@ -7,7 +7,7 @@ shape, not the prose descriptions.
 | MK-Pro example | Original listing display | MK-Pro display now | Status |
 | --- | --- | --- | --- |
 | `examples/99-bottles.mkpro` | `games/bolknote/99-bottles.txt`: `С/П@33` after the text renderer at `34..52`, producing `BEEr NN`. | `show("BEEr ", bottles:02)` | Matches the original text/count screen. |
-| `examples/alaram.mkpro` | `games/lordbss/pmk210.txt`: `С/П@04`, `С/П@09`, `С/П@15` and terminal `В/О` paths show packed cockpit/message patterns. | `show(cockpit_view, intruder_mark)`; terminal screens show packed patterns. | Full cockpit video-byte composition is still represented by semantic packed fields. |
+| `examples/alaram.mkpro` | `games/lordbss/pmk210.txt`: `С/П@04`, `С/П@09`, `С/П@15` and terminal `В/О` paths show packed cockpit/message patterns. | `show("8СГ -78")`; terminal `halt("ЕГГОГ")`, `halt("Г16ЕL 91")`, `halt("8СГ-Е-78")`. | Full cockpit video-byte composition is still represented by semantic packed fields. |
 | `examples/cave-sketch.mkpro` | `games/kei/treasure-cave.txt`: `С/П@88` shows the packed cave coordinate; failure paths show `0`. | `show(player)` | Resource counters are no longer shown on the main screen. |
 | `examples/dangerous-loading.mkpro` | `games/anvarov/dangerous-loading.txt`: `С/П@56` follows `Пх1; FВx; F↻; ВП; ...; /-/`, one signed fractional/video water-lane value. | `show(cargo_left, boat, threat, boats_left)` | C/L/- lane symbols still need a real video-byte lowering. |
 | `examples/dungeon.mkpro` | `games/lordbss/pmk164.txt`: `В/О@92` returns the `PV` position/height value; `В/О@A4` returns the dungeon plan. | `show(pos, height)`; `show(plan)` | Score is no longer shown; it remains register state like in the original. |
@@ -24,7 +24,7 @@ shape, not the prose descriptions.
 | `examples/pending-optimizer/labyrinth777.mkpro` | `games/anvarov/labyrinth777.txt`: `С/П@22` shows row/floor picture; `С/П@63` is a secondary stop path. | `show(pos, row_view, energy)` | Row picture/floor packing is not reconstructed yet. |
 | `examples/pending-optimizer/teleport.mkpro` | `games/anvarov/teleport.txt`: `С/П@70` and `С/П@A4` stop on packed station-state values. | `show(pos, danger, charges, loot)` | Exact packed station screen still needs source-level reconstruction. |
 | `examples/pending-optimizer/tic-tac-toe-4x4.mkpro` | `games/anvarov/tic-tac-toe-4x4.txt`: `С/П@03` after `Пх2; Пх3` displays the active board/move value. | `show(cell, turn_count)` | Current port still shows a simplified state pair. |
-| `examples/pending-optimizer/treasure-hunter-2.mkpro` | `games/anvarov/treasure-hunter-2.txt`: `С/П@16`/`С/П@97` stop on floor/plan display values. | `show(pos, floor_view, treasure)`; exit `show(treasure)` | Full floor-plan screen is not reconstructed yet. |
+| `examples/pending-optimizer/treasure-hunter-2.mkpro` | `games/anvarov/treasure-hunter-2.txt`: `С/П@16`/`С/П@97` stop on floor/plan display values. | `show(pos, floor_view, treasure)`; exit `halt(treasure)` | Full floor-plan screen is not reconstructed yet. |
 | `examples/raja-yoga.mkpro` | `games/anvarov/raja-yoga.txt`: `С/П@37` after `Пх4; FВx; ...; ВП; 7` shows stage plus seven-cell life path. | `show(stage, adept, goal, old_age)` | E/C/- life-path video-byte layout is not reconstructed yet. |
 
 Not covered here: examples without a `reference ...` line, such as `basic`,

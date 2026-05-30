@@ -20,8 +20,7 @@ program Teleport {
   }
 
   fn caught() {
-    show("ЕГГОГ")
-    halt()
+    halt("ЕГГОГ")
   }
 
   loop {

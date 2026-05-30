@@ -5407,14 +5407,34 @@ class EmitContext {
 
   private compileLiteralHalt(literal: string, line: number): void {
     const program = displayLiteralProgram(literal);
-    if (program?.kind !== "error") {
-      this.diagnostics.push(buildDiagnostic("error", `Only halt("ЕГГОГ") literal stops are supported.`, line));
+    if (program?.kind === "error") {
+      this.emitErrorStopOpcode("halt literal ЕГГ0Г", line);
+      this.optimizations.push({
+        name: "error-stop",
+        detail: `Used one-cell error opcode for literal ЕГГ0Г stop at line ${line}.`,
+      });
       return;
     }
-    this.emitErrorStopOpcode("halt literal ЕГГ0Г", line);
+
+    const display: ProgramAst["displays"][number] = {
+      kind: "display",
+      name: `__halt_literal_${line}`,
+      format: "packed",
+      sources: [],
+      items: [{ kind: "literal", text: literal, line }],
+      line,
+    };
+    if (!this.compileLiteralDisplayBody(display, line, literal)) {
+      this.diagnostics.push(buildDiagnostic(
+        "error",
+        `Literal halt ${JSON.stringify(literal)} is not lowerable yet.`,
+        line,
+      ));
+      return;
+    }
     this.optimizations.push({
-      name: "error-stop",
-      detail: `Used one-cell error opcode for literal ЕГГ0Г stop at line ${line}.`,
+      name: "terminal-literal-stop",
+      detail: `Lowered literal terminal stop ${JSON.stringify(literal)} at line ${line}.`,
     });
   }
 
@@ -8829,17 +8849,7 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
     const mantissaMask = displayMantissaMaskTextForAst(ast, display);
     if (mantissaMask !== undefined) values.add(normalizeConstantLiteral(mantissaMask));
     const literal = literalOnlyDisplayText(display);
-    const literalProgram = literal === undefined ? undefined : displayLiteralProgram(literal);
-    if (literal !== undefined && shouldUsePreloadedDisplayLiteral(literal)) {
-      values.add(normalizeConstantLiteral(literal));
-    }
-    if (literalProgram?.kind === "kinv" && estimateNumberCost(literalProgram.digits) > 1) {
-      values.add(normalizeConstantLiteral(literalProgram.digits));
-    }
-    if (literalProgram?.kind === "xor") {
-      if (estimateNumberCost(literalProgram.left) > 1) values.add(normalizeConstantLiteral(literalProgram.left));
-      if (estimateNumberCost(literalProgram.right) > 1) values.add(normalizeConstantLiteral(literalProgram.right));
-    }
+    if (literal !== undefined) collectDisplayLiteralPreloadValues(literal, values);
 
     let seenSource = false;
     for (const item of display.items) {
@@ -8876,6 +8886,9 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
   };
   const visitStatements = (statements: StatementAst[]): void => {
     for (const statement of statements) {
+      if (statement.kind === "halt" && statement.literal !== undefined) {
+        collectDisplayLiteralPreloadValues(statement.literal, values);
+      }
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
@@ -8898,6 +8911,20 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
   for (const entry of ast.entries) visitStatements(entry.body);
   for (const proc of ast.procs) visitStatements(proc.body);
   return [...values].filter((value) => value !== "0" && value !== "1").sort((a, b) => estimateNumberCost(b) - estimateNumberCost(a));
+}
+
+function collectDisplayLiteralPreloadValues(literal: string, values: Set<string>): void {
+  const literalProgram = displayLiteralProgram(literal);
+  if (shouldUsePreloadedDisplayLiteral(literal)) {
+    values.add(normalizeConstantLiteral(literal));
+  }
+  if (literalProgram?.kind === "kinv" && estimateNumberCost(literalProgram.digits) > 1) {
+    values.add(normalizeConstantLiteral(literalProgram.digits));
+  }
+  if (literalProgram?.kind === "xor") {
+    if (estimateNumberCost(literalProgram.left) > 1) values.add(normalizeConstantLiteral(literalProgram.left));
+    if (estimateNumberCost(literalProgram.right) > 1) values.add(normalizeConstantLiteral(literalProgram.right));
+  }
 }
 
 function naturalDisplayWidthForAst(ast: ProgramAst, source: string): number {

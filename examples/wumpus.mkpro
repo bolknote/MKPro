@@ -29,8 +29,7 @@ program Wumpus {
   }
 
   fn dead() {
-    show("ЕГГОГ")
-    halt()
+    halt("ЕГГОГ")
   }
 
   loop {
