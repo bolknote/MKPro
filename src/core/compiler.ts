@@ -96,6 +96,26 @@ import {
   emitTwoDigitTextDisplay,
   orderDisplaySources,
 } from "./emit/lowering/display.ts";
+import {
+  compileBitMaskWithQuotientScratch,
+  compileBitSetMaskReuse,
+  compileNegativeZeroDegreeSelectorCall,
+  compileSingleBitMaskOpAssignment,
+  compileSpatialCountCall,
+  compileSpatialHitCall,
+  compileSpatialLineCountLoop,
+  compileSpatialNeighborCountLoop,
+  compileTicTacToeCellMaskReuse,
+  emitBitMaskFromCurrentXWithQuotientScratch,
+  emitBitSetCollectionWithScratch,
+  emitBitSetWithScratch,
+  emitInlineSpatialHit,
+  emitInlineSpatialHitFromScratch,
+  emitSpatialLineCountLoopBody,
+  emitSpatialLineProgressionHelperBody,
+  emitSpatialProgressionCountLoopBody,
+  emitSpatialSumLoopHelperBody,
+} from "./emit/lowering/spatial.ts";
 import { MK61_PROFILE, machineSupports, type MachineProfile } from "./machineProfile.ts";
 import type {
   AppliedOptimization,
@@ -190,7 +210,7 @@ const COORD_LIST_CURRENT = "__coord_list_current";
 export const COORD_LIST_DX = "__coord_list_dx";
 const DASHED_COORD_REPORT_MASK = "8,-00--_";
 export const NEGATIVE_ZERO_DEGREE_SELECTOR_GE = "__mkpro_negative_zero_ge";
-const NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE = "1|-00";
+export const NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE = "1|-00";
 const INTERNAL_NAME_PREFIX = "__mkpro_";
 const DISPLAY_HELPER_MIN_SAVINGS = 4;
 const UNAVAILABLE_DISPLAY_STRATEGY_COST = 999999;
@@ -3079,63 +3099,14 @@ export class EmitContext {
     first: Extract<StatementAst, { kind: "assign" }>,
     second: Extract<StatementAst, { kind: "assign" }>,
   ): boolean {
-    const used = matchCellHelperCall(first.expr, ["cell_used", "cell_has"]);
-    const mark = matchCellHelperCall(second.expr, ["cell_mark", "cell_set"]);
-    if (!used || !mark) return false;
-    if (!expressionEquals(used.mask, mark.mask) || !expressionEquals(used.x, mark.x) || !expressionEquals(used.y, mark.y)) {
-      return false;
-    }
-    if (used.mask.kind !== "identifier" || second.target !== used.mask.name) return false;
-
-    const scratch = ticTacToeMaskScratchName(first);
-    if (!this.allocation.registers[scratch]) return false;
-
-    this.compileExpression(cellMaskExpression(used.x, used.y));
-    this.emitStore(scratch, "4x4 cell mask scratch", first.line);
-    this.compileExpression(used.mask);
-    this.emitRecall(scratch, "reuse 4x4 cell mask", first.line);
-    this.emitOp(0x37, "К ∧", "cell_has with reused mask", first.line);
-    this.emitOp(0x35, "К {x}", "cell_has membership fraction", first.line);
-    this.emitOp(0x32, "К ЗН", "cell_has to 0/1", first.line);
-    this.emitStore(first.target, `set ${first.target}`, first.line);
-    this.compileExpression(mark.mask);
-    this.emitRecall(scratch, "reuse 4x4 cell mask", second.line);
-    this.emitOp(0x38, "К ∨", "cell_set with reused mask", second.line);
-    this.emitStore(second.target, `set ${second.target}`, second.line);
-    this.optimizations.push({
-      name: "tic-tac-toe-cell-mask-cse",
-      detail: `Computed cell_mask once for adjacent cell_has/cell_set at lines ${first.line}/${second.line}.`,
-    });
-    return true;
+    return compileTicTacToeCellMaskReuse(this, first, second);
   }
 
   compileBitSetMaskReuse(
     first: Extract<StatementAst, { kind: "assign" }>,
     second: Extract<StatementAst, { kind: "assign" }>,
   ): boolean {
-    const firstSet = matchBitSetAssignment(first);
-    const secondSet = matchBitSetAssignment(second);
-    if (firstSet === undefined || secondSet === undefined) return false;
-    if (!expressionEquals(firstSet.item, secondSet.item)) return false;
-
-    const scratch = bitMaskScratchName(first);
-    if (!this.allocation.registers[scratch]) return false;
-
-    this.compileBitMaskWithQuotientScratch(firstSet.item, scratch, first.line);
-    this.emitStore(scratch, "cell bit mask scratch", first.line);
-    this.compileExpression(firstSet.collection);
-    this.emitRecall(scratch, "reuse cell bit mask", first.line);
-    this.emitOp(0x38, "К ∨", "bit_set with reused mask", first.line);
-    this.emitStore(first.target, `set ${first.target}`, first.line);
-    this.compileExpression(secondSet.collection);
-    this.emitRecall(scratch, "reuse cell bit mask", second.line);
-    this.emitOp(0x38, "К ∨", "bit_set with reused mask", second.line);
-    this.emitStore(second.target, `set ${second.target}`, second.line);
-    this.optimizations.push({
-      name: "bit-set-mask-cse",
-      detail: `Computed bit_mask() once for adjacent set updates at lines ${first.line}/${second.line}.`,
-    });
-    return true;
+    return compileBitSetMaskReuse(this, first, second);
   }
 
   // Stack-safe lowering for a standalone `cells += item` / `cells -= item`
@@ -3143,23 +3114,7 @@ export class EmitContext {
   // register first so the held accumulator never rides the four-deep stack
   // through the frac/x^y/10^x construction.
   compileSingleBitMaskOpAssignment(statement: Extract<StatementAst, { kind: "assign" }>): boolean {
-    const match = matchSingleBitMaskOpAssignment(statement);
-    if (match === undefined) return false;
-    const scratch = bitMaskScratchName(statement);
-    if (this.allocation.registers[scratch] === undefined) return false;
-
-    this.compileBitMaskWithQuotientScratch(match.index, scratch, statement.line, { forceInline: true });
-    if (match.negate) this.emitOp(0x3a, "К ИНВ", "bit_clear mask complement", statement.line);
-    this.emitStore(scratch, "single bit op mask scratch", statement.line);
-    this.compileExpression(match.collection);
-    this.emitRecall(scratch, "single bit op mask", statement.line);
-    this.emitOp(match.opcode, match.mnemonic, `${statement.target} bit op`, statement.line);
-    this.emitStore(statement.target, `set ${statement.target}`, statement.line);
-    this.optimizations.push({
-      name: "single-bit-mask-op",
-      detail: `Built the cell mask in ${scratch} before ${statement.target} ${match.mnemonic} at line ${statement.line}.`,
-    });
-    return true;
+    return compileSingleBitMaskOpAssignment(this, statement);
   }
 
   compileBitMaskWithQuotientScratch(
@@ -3168,23 +3123,7 @@ export class EmitContext {
     line: number | undefined,
     options: { forceInline?: boolean } = {},
   ): void {
-    const helperScratch = this.sharedBitMaskHelperScratch() ?? scratch;
-    if (options.forceInline !== true && this.loweringOptions.sharedBitMaskHelperCalls === true) {
-      const helper = this.ensureSpatialBitMaskHelper(helperScratch, line);
-      this.compileExpression(index);
-      this.emitJump(0x53, "ПП", helper.label, "bit_mask helper", line);
-      this.optimizations.push({
-        name: "bit-mask-helper-call",
-        detail: `Shared bit_mask(${expressionToIntentText(index)}) through ${helper.label}.`,
-      });
-      return;
-    }
-    this.compileExpression(index);
-    this.emitBitMaskFromCurrentXWithQuotientScratch(scratch, line);
-    this.optimizations.push({
-      name: "bit-mask-quotient-reuse",
-      detail: `Reused ${expressionToIntentText(index)} / 4 through ${scratch} while building bit_mask().`,
-    });
+    return compileBitMaskWithQuotientScratch(this, index, scratch, line, options);
   }
 
   sharedBitMaskHelperScratch(): string | undefined {
@@ -3196,25 +3135,7 @@ export class EmitContext {
   // bitMaskExpression for the representation). The bit lands in fractional nibble
   // floor(index/4)+1; `2^(index mod 4)` is rounded because `F x^y` is imprecise.
   emitBitMaskFromCurrentXWithQuotientScratch(scratch: string, line: number | undefined): void {
-    this.emitNumber("4");
-    this.emitOp(0x13, "/", "bit mask quotient", line);
-    this.emitStore(scratch, "bit mask quotient", line);
-    this.emitOp(0x35, "К {x}", "bit mask remainder fraction", line);
-    this.emitNumber("4");
-    this.emitOp(0x12, "*", "bit mask remainder scale", line);
-    this.emitNumber("2");
-    this.emitOp(0x24, "F x^y", "bit mask power", line);
-    this.emitNumber("0.5");
-    this.emitOp(0x10, "+", "bit mask round bias", line);
-    this.emitOp(0x34, "К [x]", "bit mask round", line);
-    this.emitRecall(scratch, "bit mask quotient", line);
-    this.emitOp(0x34, "К [x]", "bit mask digit index", line);
-    this.emitNumber("1");
-    this.emitOp(0x10, "+", "bit mask decade index", line);
-    this.emitOp(0x15, "F 10^x", "bit mask decade", line);
-    this.emitOp(0x13, "/", "bit mask fractional place", line);
-    this.emitNumber("8");
-    this.emitOp(0x10, "+", "bit mask anchor", line);
+    return emitBitMaskFromCurrentXWithQuotientScratch(this, scratch, line);
   }
 
   compileDecrementZeroBranch(
@@ -3528,7 +3449,7 @@ export class EmitContext {
     set: Extract<StatementAst, { kind: "assign" }>,
     scratch: string,
   ): void {
-    this.emitBitSetCollectionWithScratch(membership.collection, set, scratch);
+    return emitBitSetWithScratch(this, membership, set, scratch);
   }
 
   emitBitSetCollectionWithScratch(
@@ -3536,10 +3457,7 @@ export class EmitContext {
     set: Extract<StatementAst, { kind: "assign" }>,
     scratch: string,
   ): void {
-    this.compileExpression(collection);
-    this.emitRecall(scratch, "reuse cell bit mask", set.line);
-    this.emitOp(0x38, "К ∨", "bit_set with reused mask", set.line);
-    this.emitStore(set.target, `set ${set.target}`, set.line);
+    return emitBitSetCollectionWithScratch(this, collection, set, scratch);
   }
 
   membershipClearPrefix(statements: StatementAst[]): {
@@ -5312,98 +5230,15 @@ export class EmitContext {
   }
 
   compileSpatialCountCall(name: "neighbor_count" | "line_count", expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
-    if (expr.args.length !== 2) {
-      this.diagnostics.push({
-        level: "error",
-        message: `${name}() expects two arguments, got ${expr.args.length}.`,
-      });
-      return true;
-    }
-    if (name === "line_count" && this.compileSpatialLineCountLoop(expr)) return true;
-    // neighbor_count sums several spatial-hit probes. Each hit-helper call churns
-    // the four-deep MK-61 stack, so a stack-held running sum is corrupted; the
-    // loop body keeps the partial total in a register instead.
-    if (name === "neighbor_count" && this.compileSpatialNeighborCountLoop(expr)) return true;
-    const expanded = spatialCountExpression(name, expr.args, this.ast);
-    if (expanded === undefined) return false;
-    this.compileExpression(expanded);
-    this.optimizations.push({
-      name: "spatial-count-hit-helper",
-      detail: `Lowered ${name}() through shared spatial hit helper calls.`,
-    });
-    return true;
+    return compileSpatialCountCall(this, name, expr);
   }
 
   compileSpatialNeighborCountLoop(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
-    const [mask, cell] = expr.args;
-    if (mask?.kind !== "identifier" || cell === undefined) return false;
-    const board = boardForCellMask(mask, this.ast);
-    const total = spatialCountScratchNames()[0]!;
-    if (this.allocation.registers[total] === undefined) return false;
-
-    // Enumerate the concrete neighbour offsets and accumulate each spatial hit
-    // in a register. An FL-counter loop is avoided on purpose: the spatial-hit
-    // helper churns the four-deep stack, and the post-layout indirect-memory
-    // pass relocates the loop counter, so a register-accumulated unroll is the
-    // only shape that survives both. The neighbour set is tiny (2 on a line,
-    // 8 on a grid), so the unroll stays cheap.
-    const offsets: number[] = [];
-    for (const progression of spatialNeighborProgressions(board)) {
-      const start = numericLiteralValue(progression.startOffset);
-      const step = numericLiteralValue(progression.step);
-      if (start === undefined || step === undefined) return false;
-      for (let i = 0; i < progression.count; i += 1) offsets.push(start + i * step);
-    }
-    if (offsets.length === 0) return false;
-
-    const helper = this.ensureSpatialHitHelper(mask.name, spatialHitScratchName(mask.name));
-    offsets.forEach((offset, position) => {
-      this.compileExpression(offsetExpressionAst(cell, offset));
-      this.emitJump(0x53, "ПП", helper.label, `spatial hit ${mask.name}`, undefined);
-      if (position === 0) {
-        this.emitStore(total, "neighbor_count total", undefined);
-      } else {
-        this.emitRecall(total, "neighbor_count total", undefined);
-        this.emitOp(0x10, "+", "neighbor_count add hit", undefined);
-        this.emitStore(total, "neighbor_count total", undefined);
-      }
-    });
-    this.emitRecall(total, "neighbor_count result", undefined);
-    this.optimizations.push({
-      name: "spatial-neighbor-count-unroll",
-      detail: `Lowered neighbor_count(${mask.name}, ...) as ${offsets.length} register-accumulated spatial hits.`,
-    });
-    return true;
+    return compileSpatialNeighborCountLoop(this, expr);
   }
 
   compileSpatialLineCountLoop(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
-    const [mask, cell] = expr.args;
-    if (mask?.kind !== "identifier" || cell === undefined) return false;
-    const board = boardForCellMask(mask, this.ast);
-    if (board === undefined) return false;
-    const scratch = spatialCountScratchNames();
-    if (scratch.some((name) => this.allocation.registers[name] === undefined)) return false;
-
-    const maskScratch = spatialCountMaskScratchName();
-    const useSharedMask = this.lineCountCallCount > 1 && this.allocation.registers[maskScratch] !== undefined;
-    const hitMask = useSharedMask ? maskScratch : mask.name;
-    const helper = this.sharedLineCountHelper(mask, cell, board, undefined);
-    if (helper !== undefined) {
-      this.compileExpression(mask);
-      this.emitJump(0x53, "ПП", helper.label, `line_count ${mask.name}`, undefined);
-      this.optimizations.push({
-        name: "spatial-line-count-helper-call",
-        detail: `Reused shared line_count helper for ${mask.name}.`,
-      });
-      return true;
-    }
-
-    if (useSharedMask) {
-      this.compileExpression(mask);
-      this.emitStore(maskScratch, "line count mask", undefined);
-    }
-    this.emitSpatialLineCountLoopBody(hitMask, cell, board, undefined);
-    return true;
+    return compileSpatialLineCountLoop(this, expr);
   }
 
   emitSpatialLineCountLoopBody(
@@ -5412,14 +5247,7 @@ export class EmitContext {
     board: V2BoardAst,
     sourceLine: number | undefined,
   ): void {
-    this.emitSpatialProgressionCountLoopBody(
-      hitMask,
-      cell,
-      spatialLineProgressions(board, cell),
-      board.width <= 4 && board.height <= 4,
-      sourceLine,
-      "line_count",
-    );
+    return emitSpatialLineCountLoopBody(this, hitMask, cell, board, sourceLine);
   }
 
   emitSpatialProgressionCountLoopBody(
@@ -5430,113 +5258,7 @@ export class EmitContext {
     sourceLine: number | undefined,
     operation: "line_count" | "neighbor_count",
   ): void {
-    const scratch = spatialCountScratchNames();
-    const total = scratch[0]!;
-    const line = scratch[1]!;
-    const offset = scratch[2]!;
-    const counter = scratch[3]!;
-    const counterRegister = this.allocation.registers[counter];
-    const helperTakesCounterInX = counterRegister !== undefined && flOpcode(counterRegister) !== undefined;
-
-    this.emitZero(`${operation} total`, sourceLine);
-    this.emitStore(total, `${operation} total`, sourceLine);
-    if (useMax && progressions.length >= 3 && this.allocation.registers[spatialCountStepScratchName()] !== undefined) {
-      const helper = this.ensureSpatialLineProgressionHelper(hitMask, cell, operation, sourceLine);
-      for (const progression of progressions) {
-        this.emitZero(`${operation} current line`, sourceLine);
-        this.emitStore(line, `${operation} current line`, sourceLine);
-        this.compileExpression(progression.startOffset);
-        this.emitStore(offset, `${operation} offset`, sourceLine);
-        this.compileExpression(progression.step);
-        this.emitStore(spatialCountStepScratchName(), `${operation} step`, sourceLine);
-        this.emitNumberOrPreload(String(progression.count));
-        this.emitStore(counter, `${operation} counter`, sourceLine);
-        this.emitJump(0x53, "ПП", helper.label, `${operation} line progression`, sourceLine);
-
-        this.emitRecall(total, `${operation} total`);
-        this.emitRecall(line, `${operation} current line`);
-        this.emitOp(0x36, "К max", `${operation} best line`);
-        this.emitStore(total, `${operation} total`);
-      }
-      this.emitRecall(total, `${operation} result`);
-      this.optimizations.push({
-        name: "spatial-line-progression-helper-call",
-        detail: `Reused shared ${operation} line progression helper for ${hitMask}.`,
-      });
-      return;
-    }
-    if (!useMax && progressions.length >= 3) {
-      const helper = this.ensureSpatialSumLoopHelper(hitMask, cell, operation, sourceLine);
-      for (const progression of progressions) {
-        this.compileExpression(progression.startOffset);
-        this.emitStore(offset, `${operation} offset`, sourceLine);
-        this.compileExpression(progression.step);
-        this.emitStore(line, `${operation} step`, sourceLine);
-        if (!isNumericValue(progression.step, progression.count)) {
-          this.emitNumberOrPreload(String(progression.count));
-        }
-        if (!helperTakesCounterInX) this.emitStore(counter, `${operation} counter`, sourceLine);
-        this.emitJump(0x53, "ПП", helper.label, `${operation} progression`, sourceLine);
-      }
-      this.optimizations.push({
-        name: "spatial-sum-loop-helper-call",
-        detail: `Reused shared ${operation} progression helper for ${hitMask}.`,
-      });
-      return;
-    }
-    for (const progression of progressions) {
-      if (useMax) {
-        this.emitNumber("0");
-        this.emitStore(line, `${operation} current line`, sourceLine);
-      }
-      this.compileExpression(progression.startOffset);
-      this.emitStore(offset, `${operation} offset`, sourceLine);
-      this.emitNumberOrPreload(String(progression.count));
-      this.emitStore(counter, `${operation} counter`, sourceLine);
-
-      const start = this.freshLabel(`${operation}_loop`);
-      this.emitLabel(start);
-      this.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
-      const helper = this.ensureSpatialHitHelper(hitMask, spatialHitScratchName(hitMask));
-      this.emitJump(0x53, "ПП", helper.label, `spatial hit ${hitMask}`, sourceLine);
-      this.emitRecall(useMax ? line : total, `${operation} accumulator`);
-      this.emitOp(0x10, "+", `${operation} add hit`);
-      this.emitStore(useMax ? line : total, `${operation} accumulator`);
-
-      this.emitRecall(offset, `${operation} offset`);
-      this.compileExpression(progression.step);
-      this.emitOp(0x10, "+", `${operation} next offset`);
-      this.emitStore(offset, `${operation} offset`);
-
-      const counterRegister = this.allocation.registers[counter];
-      const flCounterOpcode = counterRegister === undefined ? undefined : flOpcode(counterRegister);
-      if (flCounterOpcode !== undefined) {
-        this.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, `${operation} loop`, sourceLine);
-        this.optimizations.push({
-          name: "spatial-count-fl-loop",
-          detail: `Used ${getOpcode(flCounterOpcode).name} for ${operation} loop counter.`,
-        });
-      } else {
-        this.emitRecall(counter, `${operation} counter`);
-        this.emitNumber("1");
-        this.emitOp(0x11, "-", `${operation} decrement`);
-        this.emitStore(counter, `${operation} counter`);
-        this.emitRecall(counter, `${operation} counter`);
-        this.emitJump(0x5e, "F x=0", start, `${operation} loop`, sourceLine);
-      }
-
-      if (useMax) {
-        this.emitRecall(total, `${operation} total`);
-        this.emitRecall(line, `${operation} current line`);
-        this.emitOp(0x36, "К max", `${operation} best line`);
-        this.emitStore(total, `${operation} total`);
-      }
-    }
-    this.emitRecall(total, `${operation} result`);
-    this.optimizations.push({
-      name: `spatial-${operation.replace("_", "-")}-loop`,
-      detail: `Lowered ${operation}(...) as shared spatial hit loops.`,
-    });
+    return emitSpatialProgressionCountLoopBody(this, hitMask, cell, progressions, useMax, sourceLine, operation);
   }
 
   emitSpatialLineProgressionHelperBody(
@@ -5545,42 +5267,7 @@ export class EmitContext {
     operation: "line_count" | "neighbor_count",
     sourceLine: number | undefined,
   ): void {
-    const scratch = spatialCountScratchNames();
-    const line = scratch[1]!;
-    const offset = scratch[2]!;
-    const counter = scratch[3]!;
-    const counterRegister = this.allocation.registers[counter];
-    const flCounterOpcode = counterRegister === undefined ? undefined : flOpcode(counterRegister);
-
-    const start = this.freshLabel(`${operation}_line_loop`);
-    this.emitLabel(start);
-    this.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
-    const helper = this.ensureSpatialHitHelper(hitMask, spatialHitScratchName(hitMask));
-    this.emitJump(0x53, "ПП", helper.label, `spatial hit ${hitMask}`, sourceLine);
-    this.emitRecall(line, `${operation} line accumulator`);
-    this.emitOp(0x10, "+", `${operation} add hit`);
-    this.emitStore(line, `${operation} line accumulator`);
-
-    this.emitRecall(offset, `${operation} offset`);
-    this.emitRecall(spatialCountStepScratchName(), `${operation} step`);
-    this.emitOp(0x10, "+", `${operation} next offset`);
-    this.emitStore(offset, `${operation} offset`);
-
-    if (flCounterOpcode !== undefined) {
-      this.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, `${operation} line loop`, sourceLine);
-      this.optimizations.push({
-        name: "spatial-count-fl-loop",
-        detail: `Used ${getOpcode(flCounterOpcode).name} for ${operation} line progression loop counter.`,
-      });
-    } else {
-      this.emitRecall(counter, `${operation} counter`);
-      this.emitNumber("1");
-      this.emitOp(0x11, "-", `${operation} decrement`);
-      this.emitStore(counter, `${operation} counter`);
-      this.emitRecall(counter, `${operation} counter`);
-      this.emitJump(0x5e, "F x=0", start, `${operation} line loop`, sourceLine);
-    }
-    this.emitRecall(line, `${operation} current line`);
+    return emitSpatialLineProgressionHelperBody(this, hitMask, cell, operation, sourceLine);
   }
 
   emitSpatialSumLoopHelperBody(
@@ -5589,54 +5276,11 @@ export class EmitContext {
     operation: "line_count" | "neighbor_count",
     sourceLine: number | undefined,
   ): void {
-    const scratch = spatialCountScratchNames();
-    const total = scratch[0]!;
-    const step = scratch[1]!;
-    const offset = scratch[2]!;
-    const counter = scratch[3]!;
-    const counterRegister = this.allocation.registers[counter];
-    const flCounterOpcode = counterRegister === undefined ? undefined : flOpcode(counterRegister);
-
-    if (flCounterOpcode !== undefined) {
-      this.emitStore(counter, `${operation} counter`, sourceLine);
-    }
-
-    const start = this.freshLabel(`${operation}_loop`);
-    this.emitLabel(start);
-    this.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
-    const hitScratch = spatialHitScratchName(hitMask);
-    this.emitStore(hitScratch, "spatial hit index", sourceLine);
-
-    this.emitRecall(offset, `${operation} offset`);
-    this.emitRecall(step, `${operation} step`);
-    this.emitOp(0x10, "+", `${operation} next offset`);
-    this.emitStore(offset, `${operation} offset`);
-
-    this.emitInlineSpatialHitFromScratch(hitMask, hitScratch, sourceLine);
-    this.emitRecall(total, `${operation} accumulator`);
-    this.emitOp(0x10, "+", `${operation} add hit`);
-    this.emitStore(total, `${operation} accumulator`);
-
-    if (flCounterOpcode !== undefined) {
-      this.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, `${operation} loop`, sourceLine);
-      this.optimizations.push({
-        name: "spatial-count-fl-loop",
-        detail: `Used ${getOpcode(flCounterOpcode).name} for ${operation} loop counter.`,
-      });
-    } else {
-      this.emitRecall(counter, `${operation} counter`);
-      this.emitNumber("1");
-      this.emitOp(0x11, "-", `${operation} decrement`);
-      this.emitStore(counter, `${operation} counter`);
-      this.emitRecall(counter, `${operation} counter`);
-      this.emitJump(0x5e, "F x=0", start, `${operation} loop`, sourceLine);
-    }
+    return emitSpatialSumLoopHelperBody(this, hitMask, cell, operation, sourceLine);
   }
 
   emitInlineSpatialHit(hitMask: string, sourceLine: number | undefined): void {
-    const scratch = spatialHitScratchName(hitMask);
-    this.emitStore(scratch, "spatial hit index", sourceLine);
-    this.emitInlineSpatialHitFromScratch(hitMask, scratch, sourceLine);
+    return emitInlineSpatialHit(this, hitMask, sourceLine);
   }
 
   emitInlineSpatialHitFromScratch(
@@ -5644,63 +5288,15 @@ export class EmitContext {
     scratch: string,
     sourceLine: number | undefined,
   ): void {
-    const helper = this.ensureSpatialBitMaskHelper(scratch, sourceLine);
-    this.emitRecall(scratch, "spatial hit index", sourceLine);
-    this.emitJump(0x53, "ПП", helper.label, "bit_mask helper", sourceLine);
-    this.emitRecall(hitMask, "spatial hit mask", sourceLine);
-    this.emitOp(0x37, "К ∧", "spatial hit test", sourceLine);
-    this.emitOp(0x35, "К {x}", "spatial hit membership fraction", sourceLine);
-    this.emitOp(0x32, "К ЗН", "spatial hit to count", sourceLine);
-    this.optimizations.push({
-      name: "spatial-hit-inline",
-      detail: `Inlined spatial hit test for ${hitMask} into ${sourceLine === undefined ? "generated loop" : `line ${sourceLine}`}.`,
-    });
+    return emitInlineSpatialHitFromScratch(this, hitMask, scratch, sourceLine);
   }
 
   compileSpatialHitCall(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
-    if (expr.args.length !== 2) {
-      this.diagnostics.push({
-        level: "error",
-        message: "__spatial_hit() expects two arguments.",
-      });
-      return true;
-    }
-    const [mask, index] = expr.args;
-    if (mask?.kind !== "identifier" || index === undefined) return false;
-    const scratch = spatialHitScratchName(mask.name);
-    if (!this.allocation.registers[scratch]) return false;
-    const helper = this.ensureSpatialHitHelper(mask.name, scratch);
-    this.compileExpression(index);
-    this.emitJump(0x53, "ПП", helper.label, `spatial hit ${mask.name}`, helper.line);
-    return true;
+    return compileSpatialHitCall(this, expr);
   }
 
   compileNegativeZeroDegreeSelectorCall(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
-    if (expr.args.length !== 2) {
-      this.diagnostics.push({
-        level: "error",
-        message: `${NEGATIVE_ZERO_DEGREE_SELECTOR_GE}() expects two arguments.`,
-      });
-      return true;
-    }
-    const register = this.allocation.negativeZeroDegree;
-    if (register === undefined) {
-      this.diagnostics.push({
-        level: "error",
-        message: "Internal: negative-zero threshold selector was emitted without a reserved register.",
-      });
-      return true;
-    }
-    const [value, bound] = expr.args;
-    if (value === undefined || bound === undefined) return true;
-
-    this.emitNegativeZeroThresholdRaw(value, bound, register);
-    this.emitOp(0x32, "К ЗН", "negative-zero threshold selector");
-    this.optimizations.push({
-      name: "negative-zero-threshold-selector",
-      detail: `Used preloaded ${NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE} in R${register} for ${expressionToIntentText(value)} >= ${expressionToIntentText(bound)}.`,
-    });
-    return true;
+    return compileNegativeZeroDegreeSelectorCall(this, expr);
   }
 
   sharedLineCountHelper(
@@ -8850,7 +8446,7 @@ function isReusableCellMaskPair(
   );
 }
 
-function ticTacToeMaskScratchName(statement: StatementAst): string {
+export function ticTacToeMaskScratchName(statement: StatementAst): string {
   return `${TICTACTOE_MASK_SCRATCH_PREFIX}${statement.line}`;
 }
 
@@ -10451,7 +10047,7 @@ interface BitSetAssignment {
   item: ExpressionAst;
 }
 
-function matchCellHelperCall(expr: ExpressionAst, names: readonly CellHelperName[]): CellHelperCall | undefined {
+export function matchCellHelperCall(expr: ExpressionAst, names: readonly CellHelperName[]): CellHelperCall | undefined {
   if (expr.kind !== "call" || !names.includes(expr.callee.toLowerCase() as CellHelperName) || expr.args.length !== 3) return undefined;
   return {
     mask: expr.args[0]!,
@@ -10460,7 +10056,7 @@ function matchCellHelperCall(expr: ExpressionAst, names: readonly CellHelperName
   };
 }
 
-function matchBitSetAssignment(statement: Extract<StatementAst, { kind: "assign" }>): BitSetAssignment | undefined {
+export function matchBitSetAssignment(statement: Extract<StatementAst, { kind: "assign" }>): BitSetAssignment | undefined {
   const expr = statement.expr;
   if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_set" || expr.args.length !== 2) return undefined;
   const collection = expr.args[0]!;
@@ -10656,7 +10252,7 @@ interface SingleBitMaskOpAssignment {
 // the held accumulator. The dedicated lowering builds the mask into a scratch
 // register first (anchor added last, max depth three), so nothing is held while
 // the mask is constructed.
-function matchSingleBitMaskOpAssignment(
+export function matchSingleBitMaskOpAssignment(
   statement: Extract<StatementAst, { kind: "assign" }>,
 ): SingleBitMaskOpAssignment | undefined {
   const expr = statement.expr;
@@ -10731,7 +10327,7 @@ function positiveNorm4Expression(expr: ExpressionAst): ExpressionAst {
   );
 }
 
-function cellMaskExpression(x: ExpressionAst, y: ExpressionAst): ExpressionAst {
+export function cellMaskExpression(x: ExpressionAst, y: ExpressionAst): ExpressionAst {
   return addExpressions(
     pow10Expression(x),
     { kind: "call", callee: "int", args: [multiplyExpressions(pow10Expression(y), numberExpression(0.22600029))] },
@@ -10884,7 +10480,7 @@ function productExpressions(expressions: ExpressionAst[]): ExpressionAst {
   return expressions.reduce((product, expr) => multiplyExpressions(product, expr));
 }
 
-function addExpressions(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
+export function addExpressions(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
   if (isNumericValue(left, 0)) return right;
   if (isNumericValue(right, 0)) return left;
   return { kind: "binary", op: "+", left, right };
@@ -10949,7 +10545,7 @@ function fracExpression(expr: ExpressionAst): ExpressionAst {
   return { kind: "call", callee: "frac", args: [expr] };
 }
 
-function spatialCountExpression(
+export function spatialCountExpression(
   name: "neighbor_count" | "line_count",
   args: ExpressionAst[],
   ast: ProgramAst,
@@ -10987,7 +10583,7 @@ function spatialHitExpression(mask: ExpressionAst, index: ExpressionAst): Expres
   return { kind: "call", callee: "__spatial_hit", args: [mask, index] };
 }
 
-function boardForCellMask(mask: ExpressionAst, ast: ProgramAst): V2BoardAst | undefined {
+export function boardForCellMask(mask: ExpressionAst, ast: ProgramAst): V2BoardAst | undefined {
   if (mask.kind !== "identifier" || ast.v2 === undefined) return undefined;
   const domain = ast.v2.state.find((field) => field.name === mask.name)?.domain;
   if (domain === undefined) return undefined;
@@ -11015,13 +10611,13 @@ function spatialLineCells(
   }
 }
 
-interface SpatialLineProgression {
+export interface SpatialLineProgression {
   startOffset: ExpressionAst;
   step: ExpressionAst;
   count: number;
 }
 
-function spatialLineProgressions(board: V2BoardAst, cell: ExpressionAst): SpatialLineProgression[] {
+export function spatialLineProgressions(board: V2BoardAst, cell: ExpressionAst): SpatialLineProgression[] {
   const x = decimalOnesExpressionAst(cell);
   const y = decimalTensExpressionAst(cell);
   const span = Math.max(board.width, board.height);
@@ -11049,7 +10645,7 @@ function spatialLineProgressions(board: V2BoardAst, cell: ExpressionAst): Spatia
   ];
 }
 
-function spatialNeighborProgressions(board: V2BoardAst | undefined): SpatialLineProgression[] {
+export function spatialNeighborProgressions(board: V2BoardAst | undefined): SpatialLineProgression[] {
   if (board?.height === 1) {
     return [{ startOffset: numberExpression(-1), step: numberExpression(2), count: 2 }];
   }
@@ -11079,7 +10675,7 @@ function decimalOnesExpressionAst(expr: ExpressionAst): ExpressionAst {
   return multiplyExpressions(fracExpression(divideExpressions(expr, numberExpression(10))), numberExpression(10));
 }
 
-function offsetExpressionAst(expr: ExpressionAst, offset: number): ExpressionAst {
+export function offsetExpressionAst(expr: ExpressionAst, offset: number): ExpressionAst {
   if (offset === 0) return expr;
   return offset > 0
     ? addExpressions(expr, numberExpression(offset))
@@ -11098,7 +10694,7 @@ export function spatialHitScratchName(mask: string): string {
   return `${SPATIAL_HIT_SCRATCH_PREFIX}${mask}`;
 }
 
-function spatialCountScratchNames(): string[] {
+export function spatialCountScratchNames(): string[] {
   return [
     `${SPATIAL_COUNT_SCRATCH_PREFIX}total`,
     `${SPATIAL_COUNT_SCRATCH_PREFIX}line`,
@@ -11111,11 +10707,11 @@ function spatialCountCounterScratchName(): string {
   return `${SPATIAL_COUNT_SCRATCH_PREFIX}counter`;
 }
 
-function spatialCountMaskScratchName(): string {
+export function spatialCountMaskScratchName(): string {
   return `${SPATIAL_COUNT_SCRATCH_PREFIX}mask`;
 }
 
-function spatialCountStepScratchName(): string {
+export function spatialCountStepScratchName(): string {
   return `${SPATIAL_COUNT_SCRATCH_PREFIX}step`;
 }
 
