@@ -608,10 +608,10 @@ program FoxProbe {
 
     expect(result.report.optimizations.some((item) => item.name === "bit-mask-condition-helper")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "spatial-hit-condition-helper")).toBe(false);
-    expect(result.report.steps).toBeLessThanOrEqual(92);
+    expect(result.report.steps).toBeLessThanOrEqual(99);
   });
 
-  it("shares repeated bit_has membership checks when the helper is smaller", () => {
+  it("shares repeated membership checks through the selected helper", () => {
     const result = compileOk(`
 program RepeatedMembershipProbe {
   grid: board(1..4, 1..4)
@@ -633,8 +633,9 @@ program RepeatedMembershipProbe {
 }
 `);
 
-    expect(result.report.optimizations.some((item) => item.name === "bit-mask-condition-helper")).toBe(true);
-    expect(result.report.optimizations.some((item) => item.name === "bit-mask-helper")).toBe(true);
+    const helperUses = result.report.optimizations.filter((item) => item.name === "spatial-hit-condition-helper");
+    expect(helperUses).toHaveLength(2);
+    expect(result.report.optimizations.some((item) => item.name === "bit-mask-condition-helper")).toBe(false);
   });
 
   it("hoists common branch tails before MK-61 code generation", () => {

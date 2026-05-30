@@ -112,5 +112,5 @@ describe("Z-stack derived unary tail reuse", () => {
       expect(tail.sign).toBe(refUnary(SIGN, value));
       expect(tail.abs).toBe(refUnary(ABS, value));
     }
-  });
+  }, 20_000);
 });

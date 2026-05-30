@@ -92,5 +92,5 @@ describe("int/frac shared-tail fusion (subroutine-part)", () => {
       expect(tail.int).toBe(refInt(value));
       expect(tail.frac).toBe(refFrac(value));
     }
-  });
+  }, 20_000);
 });

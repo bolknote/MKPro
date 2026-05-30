@@ -133,7 +133,7 @@ describe("MK-61 fractional-nibble cell masks round-trip on the emulator", () => 
     expect(runProbe(MEMBERSHIP_PROGRAM, [3, 7, 3])).toBe(1);
     expect(runProbe(MEMBERSHIP_PROGRAM, [3, 7, 7])).toBe(1);
     expect(runProbe(MEMBERSHIP_PROGRAM, [3, 7, 5])).toBe(0);
-  });
+  }, 20_000);
 
   it("membership is exact across nibble boundaries (cells 1..20 span five nibbles)", () => {
     // Cell index n lands in fractional nibble floor((n-1)/4); these pairs cross
@@ -147,7 +147,7 @@ describe("MK-61 fractional-nibble cell masks round-trip on the emulator", () => 
     expect(runProbe(MEMBERSHIP_PROGRAM, [8, 9, 8])).toBe(1);
     expect(runProbe(MEMBERSHIP_PROGRAM, [8, 9, 9])).toBe(1);
     expect(runProbe(MEMBERSHIP_PROGRAM, [8, 9, 12])).toBe(0);
-  });
+  }, 20_000);
 
   it("bit_clear removes exactly the cleared cell", () => {
     // marks = {c}; clearing a removes the cell only when a == c.

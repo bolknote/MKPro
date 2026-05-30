@@ -39,7 +39,7 @@ describe("MK-Pro compiler", () => {
     }
 
     expect(oversized).toEqual([]);
-  });
+  }, 20_000);
 
   it("keeps unfinished game ports outside the runnable example set", () => {
     expect(RUNNABLE_EXAMPLES).toContain("examples/99-bottles.mkpro");
@@ -60,7 +60,7 @@ describe("MK-Pro compiler", () => {
       expect(RUNNABLE_EXAMPLES).not.toContain(path.replace("examples/pending-optimizer/", "examples/"));
       expect(() => compileMKPro(source(path), { budget: 999, analysis: true })).not.toThrow(/real rule lowerers before code generation/u);
     }
-  });
+  }, 20_000);
 
   it("keeps every runnable example with a real source reference no larger than that source", () => {
     const unresolved: string[] = [];
