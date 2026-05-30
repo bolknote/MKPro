@@ -19,6 +19,7 @@ import { runIrPasses } from "./passes/index.ts";
 import { optimizePostLayoutIndirectFlow } from "./post-layout-indirect-flow.ts";
 import { verifySuperDarkSuffixLayout } from "./super-dark-layout.ts";
 import { MachineEmitter } from "./emit/machine-emitter.ts";
+import type { ProgramAnalysis } from "./emit/program-analysis.ts";
 import { MK61_PROFILE, machineSupports, type MachineProfile } from "./machineProfile.ts";
 import type {
   AppliedOptimization,
@@ -136,7 +137,7 @@ interface StackUnaryDerivationCall {
   mnemonic: string;
 }
 
-interface XParamProcLowering {
+export interface XParamProcLowering {
   param: string;
   first: Extract<StatementAst, { kind: "assign" }>;
   other: string;
@@ -1928,19 +1929,48 @@ class EmitContext {
   private readonly warnings: string[];
   private readonly candidates: CandidateReport[];
   private readonly loweringOptions: LoweringOptions;
-  private readonly inlineProcNames: Set<string>;
-  private readonly procCallCounts: Map<string, number>;
-  private readonly functionProcs: Map<string, ProcAst>;
-  private readonly xParamProcs: Map<string, XParamProcLowering>;
-  private readonly readCounts: Map<string, number>;
-  private readonly displayUseCounts: Map<string, number>;
-  private readonly showSequenceUseCounts: Map<string, number>;
-  private readonly expressionUseCounts: Map<string, { count: number; expr: ExpressionAst }>;
-  private readonly nearAnyHelperStats: Map<string, NearAnyHelperStats>;
-  private readonly lineCountCallCount: number;
-  private readonly lineCountGroupCounts: Map<string, number>;
-  private readonly scaledCoordLists: Set<string>;
-  private readonly scaledCoordCellNames: Set<string>;
+  // Read-only program analysis is computed once and injected; the lowering code
+  // reads these maps through getters so call sites stay unchanged.
+  private readonly analysis: ProgramAnalysis;
+  private get inlineProcNames(): Set<string> {
+    return this.analysis.inlineProcNames;
+  }
+  private get procCallCounts(): Map<string, number> {
+    return this.analysis.procCallCounts;
+  }
+  private get functionProcs(): Map<string, ProcAst> {
+    return this.analysis.functionProcs;
+  }
+  private get xParamProcs(): Map<string, XParamProcLowering> {
+    return this.analysis.xParamProcs;
+  }
+  private get readCounts(): Map<string, number> {
+    return this.analysis.readCounts;
+  }
+  private get displayUseCounts(): Map<string, number> {
+    return this.analysis.displayUseCounts;
+  }
+  private get showSequenceUseCounts(): Map<string, number> {
+    return this.analysis.showSequenceUseCounts;
+  }
+  private get expressionUseCounts(): Map<string, { count: number; expr: ExpressionAst }> {
+    return this.analysis.expressionUseCounts;
+  }
+  private get nearAnyHelperStats(): Map<string, NearAnyHelperStats> {
+    return this.analysis.nearAnyHelperStats;
+  }
+  private get lineCountCallCount(): number {
+    return this.analysis.lineCountCallCount;
+  }
+  private get lineCountGroupCounts(): Map<string, number> {
+    return this.analysis.lineCountGroupCounts;
+  }
+  private get scaledCoordLists(): Set<string> {
+    return this.analysis.scaledCoordLists;
+  }
+  private get scaledCoordCellNames(): Set<string> {
+    return this.analysis.scaledCoordCellNames;
+  }
   private readonly scaledCoordVariables = new Set<string>();
   private readonly spatialHitHelpers = new Map<string, { mask: string; scratch: string; label: string; line?: number }>();
   private readonly displayHelpers = new Map<string, { display: ProgramAst["displays"][number]; label: string; line: number }>();
@@ -2036,21 +2066,7 @@ class EmitContext {
     this.warnings = warnings;
     this.candidates = candidates;
     this.loweringOptions = loweringOptions;
-    this.procCallCounts = collectProcCallCounts(ast);
-    this.inlineProcNames = findInlineProcNamesBySize(ast, this.procCallCounts);
-    this.functionProcs = new Map(
-      ast.procs.filter((proc) => procContainsReturnValue(proc.body)).map((proc) => [proc.name, proc]),
-    );
-    this.readCounts = collectVariableReadCounts(ast);
-    this.xParamProcs = collectXParamProcLowerings(ast, this.readCounts, this.inlineProcNames);
-    this.displayUseCounts = collectDisplayUseCounts(ast);
-    this.showSequenceUseCounts = collectShowSequenceUseCounts(ast);
-    this.expressionUseCounts = collectExpressionUseCounts(ast);
-    this.nearAnyHelperStats = collectNearAnyHelperStats(ast, new Set(Object.keys(allocation.constants)));
-    this.lineCountCallCount = countCalls(ast, "line_count");
-    this.lineCountGroupCounts = collectLineCountGroupCounts(ast);
-    this.scaledCoordLists = collectScaledCoordListNames(ast);
-    this.scaledCoordCellNames = collectScaledCoordCellNames(ast, this.scaledCoordLists);
+    this.analysis = buildProgramAnalysis(ast, allocation);
   }
 
   compileProgram(): void {
@@ -7983,6 +7999,30 @@ function isPreincrementIndirectRegister(register: RegisterName): boolean {
   return register === "4" || register === "5" || register === "6";
 }
 
+function buildProgramAnalysis(ast: ProgramAst, allocation: RegisterAllocation): ProgramAnalysis {
+  const procCallCounts = collectProcCallCounts(ast);
+  const inlineProcNames = findInlineProcNamesBySize(ast, procCallCounts);
+  const readCounts = collectVariableReadCounts(ast);
+  const scaledCoordLists = collectScaledCoordListNames(ast);
+  return {
+    procCallCounts,
+    inlineProcNames,
+    functionProcs: new Map(
+      ast.procs.filter((proc) => procContainsReturnValue(proc.body)).map((proc) => [proc.name, proc]),
+    ),
+    xParamProcs: collectXParamProcLowerings(ast, readCounts, inlineProcNames),
+    readCounts,
+    displayUseCounts: collectDisplayUseCounts(ast),
+    showSequenceUseCounts: collectShowSequenceUseCounts(ast),
+    expressionUseCounts: collectExpressionUseCounts(ast),
+    nearAnyHelperStats: collectNearAnyHelperStats(ast, new Set(Object.keys(allocation.constants))),
+    lineCountCallCount: countCalls(ast, "line_count"),
+    lineCountGroupCounts: collectLineCountGroupCounts(ast),
+    scaledCoordLists,
+    scaledCoordCellNames: collectScaledCoordCellNames(ast, scaledCoordLists),
+  };
+}
+
 function collectProcCallCounts(ast: ProgramAst): Map<string, number> {
   const procNames = new Set(ast.procs.map((proc) => proc.name));
   const counts = countStatementCalls(ast);
@@ -11866,7 +11906,7 @@ interface NearAnyHelperConditionMatch {
   op: ">=" | "<";
 }
 
-interface NearAnyHelperStats {
+export interface NearAnyHelperStats {
   candidateCount: number;
   conditionCount: number;
   ordinaryCost: number;
