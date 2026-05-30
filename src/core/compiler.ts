@@ -44,6 +44,7 @@ import {
   countIdentifierReadsInCondition,
   countStatements,
   dashedCoordReportDisplayTemplate,
+  decimalDisplayLiteralNumber,
   dispatchUsesNumericResidualChain,
   displayLiteralCells,
   displayLiteralProgram,
@@ -94,6 +95,7 @@ import {
   sameCoordListCall,
   selectCheaperEquivalentCondition,
   shouldUsePreloadedDisplayLiteral,
+  signDigitLiteralDisplayProgram,
   signedFirstSpliceDisplayLiteralProgram,
   spatialCountCounterScratchName,
   spatialCountMaskScratchName,
@@ -104,6 +106,7 @@ import {
   statementListsEqual,
   ticTacToeExpressionMacro,
   ticTacToeMaskScratchName,
+  zeroDigitTailDisplayProgram,
 } from "./emit/lowering-helpers.ts";
 import type {
   BitMembershipCondition,
@@ -1018,6 +1021,63 @@ function removeDisplayStringAssignments(ast: ProgramAst, targets: ReadonlySet<st
   return removed;
 }
 
+function trimDisplayEdgeWhitespace(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  let changed = 0;
+  const trimStart = (text: string): string => text.replace(/^[\s_]+/gu, "");
+  const trimEnd = (text: string): string => text.replace(/[\s_]+$/gu, "");
+  const pushItem = (items: DisplayItemAst[], item: DisplayItemAst): void => {
+    if (item.kind === "literal" && item.text.length === 0) return;
+    const previous = items.at(-1);
+    if (previous?.kind === "literal" && item.kind === "literal") {
+      previous.text += item.text;
+      return;
+    }
+    items.push({ ...item });
+  };
+
+  for (const display of ast.displays) {
+    const items = display.items.map((item) => ({ ...item }));
+    while (items[0]?.kind === "literal") {
+      const before = items[0].text;
+      items[0].text = trimStart(before);
+      if (items[0].text.length > 0) {
+        if (items[0].text !== before) changed += 1;
+        break;
+      }
+      changed += before.length > 0 ? 1 : 0;
+      items.shift();
+    }
+    while (items.at(-1)?.kind === "literal") {
+      const last = items.at(-1) as Extract<DisplayItemAst, { kind: "literal" }> | undefined;
+      if (last === undefined) break;
+      const before = last.text;
+      last.text = trimEnd(before);
+      if (last.text.length > 0) {
+        if (last.text !== before) changed += 1;
+        break;
+      }
+      changed += before.length > 0 ? 1 : 0;
+      items.pop();
+    }
+    display.items = [];
+    for (const item of items) pushItem(display.items, item);
+    display.sources = sourceNamesForDisplayItems(display.items);
+  }
+
+  if (changed > 0) {
+    optimizations.push({
+      name: "display-edge-whitespace-trim",
+      detail: `Trimmed ${changed} edge whitespace display literal fragment${changed === 1 ? "" : "s"}.`,
+    });
+  }
+}
+
+function sourceNamesForDisplayItems(items: readonly DisplayItemAst[]): string[] {
+  return items
+    .filter((item): item is Extract<DisplayItemAst, { kind: "source" }> => item.kind === "source")
+    .map((item) => item.name);
+}
+
 function compileMKProOnce(
   source: string,
   options: Partial<CompileOptions>,
@@ -1048,6 +1108,7 @@ function compileMKProOnce(
   hoistOneShotLoopInitializers(ast, optimizations);
   inlineSingleUseConstantGuardedCalls(ast, optimizations);
   inlineDisplayStringValues(ast, optimizations);
+  trimDisplayEdgeWhitespace(ast, optimizations);
   eliminateUnobservedState(ast, optimizations);
   eliminateIdentityAssignments(ast, optimizations);
   // Value propagation can expose new dead stores and vice-versa, so run the two
@@ -6169,23 +6230,22 @@ function planFixedDisplayCells(
   const cells: DisplayCell[] = [];
   let leader: DisplayMaskLeader;
   let leadingLiteralTail: number[] = [];
-  let hasVideoLiteral = false;
+  let hasLiteralCell = first.kind === "literal";
   if (first.kind === "source") {
     const field = displaySourceField(first, context);
     if (field.width !== 1 || !displayFieldFitsUnsignedWidthInContext(field, context)) return undefined;
     const leaderMin = displayFieldMinInContext(field, context);
-    if (leaderMin === undefined || leaderMin <= 0) return undefined;
+    if (leaderMin === undefined || leaderMin < 0) return undefined;
     leader = { kind: "source", field };
     appendDisplayDigitCells(cells, field);
   } else {
     const literalCells = displayLiteralMantissaCells(first.text);
     if (literalCells === undefined || literalCells.length === 0) return undefined;
     const [cell, ...tail] = literalCells;
-    if (cell === undefined || cell <= 0 || cell === 15) return undefined;
+    if (cell === undefined || cell === 15) return undefined;
     leader = { kind: "literal", cell };
     cells.push({ kind: "literal", cell });
     leadingLiteralTail = tail;
-    if (cell > 9) hasVideoLiteral = true;
   }
 
   const bodyFields: DisplayField[] = [
@@ -6195,7 +6255,7 @@ function planFixedDisplayCells(
   let width = 1;
 
   const appendLiteralCells = (literalCells: readonly number[]): boolean => {
-    if (literalCells.some((cell) => cell > 9)) hasVideoLiteral = true;
+    if (literalCells.length > 0) hasLiteralCell = true;
     if (literalCells.length === 0) return true;
     for (const cell of literalCells) cells.push({ kind: "literal", cell });
     bodyFields.push({ kind: "literal", name: "#display-literal-gap", width: literalCells.length, value: "0" });
@@ -6223,7 +6283,7 @@ function planFixedDisplayCells(
     if (!appendLiteralCells(literalCells)) return undefined;
   }
 
-  if (!hasVideoLiteral || width < 2 || width > 8) return undefined;
+  if (!hasLiteralCell || width < 2 || width > 8) return undefined;
   return {
     cells,
     leader,
@@ -6245,7 +6305,7 @@ function planVariableLeadingDisplayCells(
   if (
     source.width !== 2 ||
     state === undefined ||
-    (state.min ?? 0) <= 0 ||
+    (state.min ?? 0) < 0 ||
     (state.max ?? 0) < 10 ||
     (state.max ?? 0) >= 100 ||
     !displayFieldFitsUnsignedWidthInContext(source, context)
@@ -6371,9 +6431,13 @@ function displayMantissaMaskTextForAst(
   ast: ProgramAst,
   display: ProgramAst["displays"][number],
 ): string | undefined {
-  return planDisplayForAst(ast, display)
+  const template = planDisplayForAst(ast, display)
     .find((plan): plan is Extract<DisplayPlan, { kind: "fixed-cells" }> => plan.kind === "fixed-cells")
-    ?.template.mask;
+    ?.template;
+  if (template === undefined) return undefined;
+  const hasVideoLiteral = template.cells.some((cell) => cell.kind === "literal" && cell.cell > 9);
+  if (!hasVideoLiteral && displayHasNumericFieldPlan(display)) return undefined;
+  return template.mask;
 }
 
 function displayVariableLeadingMantissaMaskTextsForAst(
@@ -6384,6 +6448,20 @@ function displayVariableLeadingMantissaMaskTextsForAst(
     .find((plan): plan is Extract<DisplayPlan, { kind: "variable-leading-cells" }> => plan.kind === "variable-leading-cells")
     ?.template;
   return template === undefined ? [] : [template.low.mask, template.high.mask];
+}
+
+function displayHasNumericFieldPlan(display: ProgramAst["displays"][number]): boolean {
+  const fields: DisplayField[] = [];
+  for (const item of display.items) {
+    if (item.kind === "source") {
+      fields.push({ kind: "source", item, name: item.name, width: item.width ?? 1 });
+      continue;
+    }
+    const literal = decimalDisplayFieldLiteral(item.text, fields.length === 0);
+    if (literal === undefined) return false;
+    fields.push({ kind: "literal", name: `#${literal.digits}`, width: literal.width, value: literal.value });
+  }
+  return true;
 }
 
 
@@ -7058,9 +7136,21 @@ function collectDisplayTemplateScratchVariables(ast: ProgramAst, variables: Set<
   }
   for (const display of ast.displays) {
     const literal = literalOnlyDisplayText(display);
-    if (literal === undefined || !shouldUsePreloadedDisplayLiteral(literal)) continue;
+    if (literal === undefined || !literalNeedsFirstSpliceScratch(literal)) continue;
     variables.add(firstSpliceDisplayScratchName(display));
   }
+}
+
+function literalNeedsFirstSpliceScratch(literal: string): boolean {
+  if (shouldUsePreloadedDisplayLiteral(literal)) return true;
+  if (decimalDisplayLiteralNumber(literal) !== undefined) return false;
+  if (zeroDigitTailDisplayProgram(literal) !== undefined) return false;
+  if (signDigitLiteralDisplayProgram(literal) !== undefined) return false;
+  const direct = displayLiteralProgram(literal);
+  if (direct !== undefined && direct.kind !== "error") return false;
+  return signedFirstSpliceDisplayLiteralProgram(literal) !== undefined ||
+    exponentTailDisplayLiteralProgram(literal) !== undefined ||
+    firstSpliceDisplayLiteralProgram(literal) !== undefined;
 }
 
 function guardedUpdateSelectorProfitable(

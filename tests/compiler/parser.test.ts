@@ -791,6 +791,60 @@ program PackedCaveMask {
     expect(lowered).toMatch(/"callee":"int","args":\[\{"kind":"identifier","name":"pos"\}\]/u);
   });
 
+  it("uses a single decimal-player cells field as the packed room map", () => {
+    const ast = parseProgram(`
+program DecimalPlayerMap {
+  state {
+    pos: coord(halls) = 1
+    plans: cells(halls) = random()
+    tile: counter 0..9 = 0
+  }
+  halls: board(decimal_player)
+  loop {
+    tile = cell_at(pos)
+    if pos in plans {
+      plans -= pos
+    }
+    halt(tile + plans)
+  }
+}
+`);
+    const lowered = JSON.stringify(ast.entries[0]?.body);
+    const fields = ast.states[0]?.fields ?? [];
+
+    expect(fields.map((field) => field.name)).toContain("plans");
+    expect(fields.map((field) => field.name)).not.toContain("__cell_map_halls");
+    expect(JSON.stringify(fields.find((field) => field.name === "plans")?.initial)).toContain("999999999");
+    expect(lowered).toMatch(/digit_at/u);
+    expect(lowered).toMatch(/digit_set/u);
+    expect(lowered).not.toMatch(/bit_has|bit_clear|bit_and/u);
+  });
+
+  it("uses packed decimal-player cell membership even without cell_at", () => {
+    const ast = parseProgram(`
+program DecimalPlayerMembership {
+  state {
+    pos: coord(halls) = 1
+    plans: cells(halls) = random()
+  }
+  halls: board(decimal_player)
+  loop {
+    if pos in plans {
+      plans -= pos
+    }
+    halt(plans)
+  }
+}
+`);
+    const lowered = JSON.stringify(ast.entries[0]?.body);
+    const fields = ast.states[0]?.fields ?? [];
+
+    expect(JSON.stringify(fields.find((field) => field.name === "plans")?.initial)).toContain("999999999");
+    expect(lowered).toMatch(/digit_at/u);
+    expect(lowered).toMatch(/digit_set/u);
+    expect(lowered).not.toMatch(/bit_has|bit_clear|bit_and/u);
+  });
+
   it("rejects unknown program syntax and unknown functions", () => {
     expect(() =>
       parseProgram(`

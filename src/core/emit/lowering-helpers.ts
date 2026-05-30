@@ -401,6 +401,11 @@ export function shouldUsePreloadedDisplayLiteral(text: string): boolean {
   if (decimalDisplayLiteralNumber(text) !== undefined) return false;
   if (zeroDigitTailDisplayProgram(text) !== undefined) return false;
   if (signDigitLiteralDisplayProgram(text) !== undefined) return false;
+  const firstSplice =
+    signedFirstSpliceDisplayLiteralProgram(text) ??
+    exponentTailDisplayLiteralProgram(text) ??
+    firstSpliceDisplayLiteralProgram(text);
+  if (firstSplice?.first === 0) return false;
   const direct = displayLiteralProgram(text);
   if (direct !== undefined && direct.kind !== "error") return shouldUseFirstSpliceDisplayLiteral(text);
   return shouldUseFirstSpliceDisplayLiteral(text) ||

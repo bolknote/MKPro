@@ -295,6 +295,43 @@ program LiteralLeadingMixedDisplay {
     expect(runCompiledDisplay(source)).toBe("L-L 3,");
   });
 
+  it("trims edge display spaces before arbitrary mixed literal lowering", () => {
+    const source = `
+program EdgeSpaceMixedDisplay {
+  state {
+    clue: counter 0..9 = 3
+  }
+
+  loop {
+    show(" L ", clue, " ")
+  }
+}
+`;
+    const result = compileOk(source);
+
+    expect(hasOptimization(result, "display-edge-whitespace-trim")).toBe(true);
+    expect(hasOptimization(result, "display-byte-mask-lowering")).toBe(true);
+    expect(runCompiledDisplay(source)).toBe("L 3,");
+  });
+
+  it("lowers leading-zero display literal fragments in mixed templates", () => {
+    const source = `
+program LeadingZeroLiteralMixedDisplay {
+  state {
+    clue: counter 0..9 = 3
+  }
+
+  loop {
+    show("0 L", clue)
+  }
+}
+`;
+    const result = compileOk(source);
+
+    expect(hasOptimization(result, "display-byte-mask-lowering")).toBe(true);
+    expect(runCompiledDisplay(source)).toBe("L3,");
+  });
+
   it("renders literal separators after a variable-width leading field", () => {
     const low = `
 program VariableLeadingSpaceLow {
@@ -709,6 +746,28 @@ program LiteralVideoScreen {
     expect(hasOptimization(result, "screen-video-literal-lowering")).toBe(true);
     expect(result.steps.map((step) => step.mnemonic)).toEqual(expect.arrayContaining(["К ИНВ", "С/П"]));
     expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "display-bytes")).toBe(true);
+  });
+
+  it("lowers edge-space and leading-zero literal-only strings without preloaded display corruption", () => {
+    const spaced = `
+program EdgeSpaceLiteralScreen {
+
+  loop {
+    show(" L ")
+  }
+}
+`;
+    const leadingZero = `
+program LeadingZeroLiteralScreen {
+
+  loop {
+    show("0 L")
+  }
+}
+`;
+
+    expect(runCompiledDisplay(spaced)).toBe("L,");
+    expect(runCompiledDisplay(leadingZero)).toBe("L,");
   });
 
   it("lowers empty literal screens as plain pauses", () => {

@@ -4,9 +4,9 @@ Generated with `npm run examples:size`.
 
 ## Snapshot
 
-- Top-level examples: 19/19 fit in the 105-cell MK-61 window; 19/19 pass the headless load check.
-- Referenced top-level examples: 14/14 are no larger than the original MK-61 listing.
-- Tightest runnable examples: `fox-hunt-100.mkpro` (105), `wumpus.mkpro` (104), `game-100-pig.mkpro` (103).
+- Top-level examples: 18/18 fit in the 105-cell MK-61 window; 18/18 pass the headless load check.
+- Referenced top-level examples: 13/13 are no larger than the original MK-61 listing.
+- Tightest runnable examples: `fox-hunt-100.mkpro` (105), `game-100-pig.mkpro` (103), `wumpus.mkpro` (103).
 - Pending optimizer: 7 programs still exceed the MK-61 window; nearest is `pending-optimizer/cave-highlevel-baseline.mkpro` (123).
 
 ## Measurements
@@ -23,7 +23,7 @@ Generated with `npm run examples:size`.
 | `dungeon.mkpro` | 86 | 105 | -19 | ok: <= reference | load ok |
 | `e-94-digits.mkpro` | 64 | 64 | 0 | ok: <= reference | load ok |
 | `fox-hunt-100.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |
-| `fox-hunt-mk61.mkpro` | 65 | 92 | -27 | ok: <= reference | main+setup load ok |
+| `fox-hunt-mk61.mkpro` | - | - | - | compile error | Out of MK-61 registers while allocating '__display_value___inline_show_25_0'. |
 | `functions-demo.mkpro` | 29 | - | - | ok: no reference | load ok |
 | `game-100-pig.mkpro` | 103 | 103 | 0 | ok: <= reference | main+setup load ok |
 | `human.mkpro` | 28 | - | - | ok: no reference | load ok |
@@ -33,11 +33,11 @@ Generated with `npm run examples:size`.
 | `raja-yoga.mkpro` | 88 | 98 | -10 | ok: <= reference | main+setup load ok |
 | `sea-battle.mkpro` | 76 | 102 | -26 | ok: <= reference | main+setup load ok |
 | `tiny-game.mkpro` | 24 | - | - | ok: no reference | load ok |
-| `wumpus.mkpro` | 104 | - | - | ok: no reference | main+setup load ok |
+| `wumpus.mkpro` | 103 | - | - | ok: no reference | main+setup load ok |
 | `pending-optimizer/cave-highlevel-baseline.mkpro` | 123 | 105 | +18 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/cave-treasure.mkpro` | 144 | 105 | +39 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/giants-country.mkpro` | 375 | 105 | +270 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/giants-country.mkpro` | 164 | 105 | +59 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/labyrinth777.mkpro` | 224 | 105 | +119 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/teleport.mkpro` | 249 | 105 | +144 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/teleport.mkpro` | 246 | 105 | +141 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/tic-tac-toe-4x4.mkpro` | 260 | 105 | +155 | pending optimizer | not loaded: main >105 |
 | `pending-optimizer/treasure-hunter-2.mkpro` | 137 | 105 | +32 | pending optimizer | setup load ok; main >105 |

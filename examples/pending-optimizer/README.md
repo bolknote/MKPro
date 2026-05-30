@@ -8,7 +8,7 @@ syntax bucket. Do not replace these with raw listings; the point is to make the
 high-level source fit.
 
 `wumpus.mkpro` is no longer pending: it moved back to the top-level examples at
-104 cells and passes the main+setup load check.
+103 cells and passes the main+setup load check.
 
 Current `--analysis` sizes, measured against the local reference listings:
 
@@ -16,9 +16,9 @@ Current `--analysis` sizes, measured against the local reference listings:
 | --- | ---: | ---: | --- |
 | `cave-highlevel-baseline.mkpro` | 123 | 105 | command dispatch and remaining cave flow lowerers |
 | `cave-treasure.mkpro` | 144 | 105 | guarded direction dispatch, wall breaking, and cache flow |
-| `giants-country.mkpro` | 375 | 105 | remaining encounter dispatch and plan bitset lowerers |
+| `giants-country.mkpro` | 164 | 105 | packed room-map display/flow and remaining event flow lowerers |
 | `labyrinth777.mkpro` | 224 | 105 | room inspection and local-jumper dispatch |
-| `teleport.mkpro` | 249 | 105 | station masks and vault/guard flow |
+| `teleport.mkpro` | 246 | 105 | station masks and vault/guard flow |
 | `tic-tac-toe-4x4.mkpro` | 260 | 105 | 4x4 line-count state representation |
 | `treasure-hunter-2.mkpro` | 137 | 105 | floor-plan display/state lowerer |
 

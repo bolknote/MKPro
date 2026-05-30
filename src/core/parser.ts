@@ -1392,7 +1392,8 @@ function collectV2CellMapNames(v2: V2ProgramAst, stateDomains: Map<string, strin
     const domainSpecific = v2.state.find((field) =>
       field.type === "packed" && new RegExp(`^${escapeRegExp(domain)}_(?:plan|map)$`, "iu").test(field.name),
     );
-    byDomain.set(domain, domainSpecific?.name ?? explicit?.name ?? `__cell_map_${domain}`);
+    const decimalPlayerCells = singleDecimalPlayerCellsField(v2, domain);
+    byDomain.set(domain, domainSpecific?.name ?? explicit?.name ?? decimalPlayerCells?.name ?? `__cell_map_${domain}`);
   };
 
   for (const text of collectV2ExpressionTexts(v2)) {
@@ -1408,6 +1409,13 @@ function collectV2CellMapNames(v2: V2ProgramAst, stateDomains: Map<string, strin
     }
   }
   return byDomain;
+}
+
+function singleDecimalPlayerCellsField(v2: V2ProgramAst, domain: string): V2StateFieldAst | undefined {
+  const world = v2.worlds.find((candidate) => candidate.name === domain);
+  if (world?.position?.encoding !== "decimal_player") return undefined;
+  const fields = v2.state.filter((field) => field.type === "cells" && field.domain === domain);
+  return fields.length === 1 ? fields[0] : undefined;
 }
 
 function collectV2ExpressionTexts(v2: V2ProgramAst): string[] {
@@ -1659,6 +1667,9 @@ function collectV2ScratchFields(v2: V2ProgramAst, specializedRules: Set<string>)
 function lowerV2InitialExpression(field: V2StateFieldAst, context: V2LoweringContext): ExpressionAst {
   const initial = field.initial ?? "0";
   if (field.type === "cells" && initial.trim() === "random()") {
+    if (decimalPlayerPackedCellsIndex(field.name, "1", context) !== undefined) {
+      return lowerV2Expression("int(random() * 999999999) + 1", field.line);
+    }
     return lowerV2Expression("int(random() * 999)", field.line);
   }
   return lowerV2Expression(initial, field.line, context);
@@ -2043,6 +2054,8 @@ function cellSetUpdateExpression(
   op: "+=" | "-=",
   context: V2LoweringContext,
 ): string {
+  const digitIndex = decimalPlayerPackedCellsIndex(collection, item, context);
+  if (digitIndex !== undefined) return `digit_set(${collection}, ${digitIndex}, ${op === "+=" ? "1" : "0"})`;
   const mask = cellMaskExpressionForCollection(collection, item, context);
   if (mask === undefined) return `${op === "+=" ? "bit_set" : "bit_clear"}(${collection}, ${item})`;
   return op === "+="
@@ -2057,6 +2070,8 @@ function cellMembershipExpression(
 ): string {
   const list = context.coordLists.get(collection.trim());
   if (list !== undefined) return `coord_list_has(${item}, ${list.items.join(", ")})`;
+  const digitIndex = decimalPlayerPackedCellsIndex(collection, item, context);
+  if (digitIndex !== undefined) return `digit_at(${collection}, ${digitIndex})`;
   const mask = cellMaskExpressionForCollection(collection, item, context);
   return mask === undefined ? `bit_has(${collection}, ${item})` : `bit_and(${collection}, ${mask})`;
 }
@@ -3042,6 +3057,29 @@ function cellMaskExpressionForCollection(
   const world = domain === undefined ? undefined : context.worlds.get(domain);
   if (world?.position?.encoding === "packed_decimal_zero_run") return `frac(${cell})`;
   return undefined;
+}
+
+function decimalPlayerPackedCellsIndex(
+  collection: string,
+  cell: string,
+  context: V2LoweringContext,
+): string | undefined {
+  const name = collection.trim();
+  if (context.stateTypes.get(name) !== "cells") return undefined;
+  const domain = context.stateDomains.get(name);
+  if (domain === undefined) return undefined;
+  const world = context.worlds.get(domain);
+  if (world?.position?.encoding !== "decimal_player") return undefined;
+  const mapName = context.cellMapNames.get(domain) ?? singleCellsFieldNameForDomain(context, domain);
+  if (mapName !== name) return undefined;
+  return cellAtIndexExpression(cell, domain, context);
+}
+
+function singleCellsFieldNameForDomain(context: V2LoweringContext, domain: string): string | undefined {
+  const names = [...context.stateDomains.entries()]
+    .filter(([name, fieldDomain]) => fieldDomain === domain && context.stateTypes.get(name) === "cells")
+    .map(([name]) => name);
+  return names.length === 1 ? names[0] : undefined;
 }
 
 function decimalOnesExpression(expr: string): string {

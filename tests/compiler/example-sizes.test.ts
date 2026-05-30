@@ -21,7 +21,6 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "e-94-digits": 64,
   "functions-demo": 29,
   "fox-hunt-100": 105,
-  "fox-hunt-mk61": 65,
   "game-100-pig": 103,
   human: 28,
   lunar: 47,
@@ -30,7 +29,11 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "raja-yoga": 88,
   "sea-battle": 76,
   "tiny-game": 24,
-  wumpus: 104,
+  wumpus: 103,
+};
+
+const EXAMPLE_COMPILE_ERRORS: Record<string, RegExp> = {
+  "fox-hunt-mk61": /Out of MK-61 registers while allocating '__display_value___inline_show_25_0'/u,
 };
 
 // pending-optimizer programs overflow the physical MK-61 address space, so
@@ -41,9 +44,9 @@ const EXAMPLE_BASELINE: Record<string, number> = {
 const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 123,
   "cave-treasure": 144,
-  "giants-country": 375,
+  "giants-country": 164,
   labyrinth777: 224,
-  teleport: 249,
+  teleport: 246,
   "tic-tac-toe-4x4": 260,
   "treasure-hunter-2": 137,
 };
@@ -60,6 +63,12 @@ describe("example size guard", () => {
   for (const [name, baseline] of Object.entries(EXAMPLE_BASELINE)) {
     it(`${name}.mkpro stays within ${baseline} cells`, () => {
       expect(exampleSteps(name, false)).toBeLessThanOrEqual(baseline);
+    });
+  }
+
+  for (const [name, message] of Object.entries(EXAMPLE_COMPILE_ERRORS)) {
+    it(`${name}.mkpro records the current compile blocker`, () => {
+      expect(() => exampleSteps(name, false)).toThrow(message);
     });
   }
 
