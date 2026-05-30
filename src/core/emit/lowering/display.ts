@@ -416,7 +416,7 @@ function compileVariableLeadingHighBody(ctx: LoweringCtx,
     ctx.emitOp(0x40 + registerIndex(scratch), `X->П ${scratch}`, `display ${display.name} trailing digit`, line, true);
 
     ctx.emitNumberOrPreload("9");
-    let last = ctx.items.at(-1);
+    const last = ctx.items.at(-1);
     if (last?.kind === "op") last.comment = `display ${display.name} numeric anchor`;
 
     ctx.emitNumberOrPreload(String(split));

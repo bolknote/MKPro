@@ -1068,7 +1068,7 @@ export function compileNearAnyHelperCondition(ctx: LoweringCtx,
     condition: ConditionAst,
     falseLabel: string,
     line: number,
-    preloadedConstants: ReadonlySet<string>,
+    _preloadedConstants: ReadonlySet<string>,
   ): boolean {
     const match = matchNearAnyHelperCondition(condition);
     if (match === undefined) return false;

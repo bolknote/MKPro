@@ -744,10 +744,6 @@ interface ParsedCall {
   argsText: string;
 }
 
-function isNamedCall(text: string, name: string): boolean {
-  return parseNamedCall(text, name) !== undefined;
-}
-
 function parseNamedCall(text: string, name: string): ParsedCall | undefined {
   const call = parseCall(text);
   return call?.name === name ? call : undefined;
@@ -2091,12 +2087,6 @@ function namedMoveDelta(
   return context.moveDeltas.get(target)?.[direction] ?? moveDeltasForEncoding(undefined)[direction] ?? "0";
 }
 
-function parseV2MoveDirection(text: string, line: number): NonNullable<V2MoveStatementAst["direction"]> {
-  const direction = parseV2MoveDirectionName(text);
-  if (direction !== undefined) return direction;
-  throw new ParseError("Move direction must be north, south, east, west, up, or down", line);
-}
-
 function parseV2MoveDirectionName(text: string): NonNullable<V2MoveStatementAst["direction"]> | undefined {
   switch (text) {
     case "north":
@@ -3054,58 +3044,8 @@ function cellMaskExpressionForCollection(
   return undefined;
 }
 
-function lineCells(
-  board: V2BoardAst,
-  kind: "row" | "column" | "diag-left" | "diag-right",
-  cell: string,
-): string[] {
-  const x = decimalOnesExpression(cell);
-  const y = decimalTensExpression(cell);
-  switch (kind) {
-    case "row":
-      return range(board.xMin, board.xMax).map((candidateX) => boardCellExpression(String(candidateX), y));
-    case "column":
-      return range(board.yMin, board.yMax).map((candidateY) => boardCellExpression(x, String(candidateY)));
-    case "diag-left":
-      return range(-Math.max(board.width, board.height) + 1, Math.max(board.width, board.height) - 1)
-        .map((delta) => offsetExpression(cell, delta * 11));
-    case "diag-right":
-      return range(-Math.max(board.width, board.height) + 1, Math.max(board.width, board.height) - 1)
-        .map((delta) => offsetExpression(cell, delta * 9));
-  }
-}
-
-function bitHitExpression(mask: string, index: string): string {
-  return `sign(bit_has(${mask}, ${index}))`;
-}
-
-function boardCellExpression(x: string, y: string): string {
-  return `${x} + 10 * (${y})`;
-}
-
-function decimalTensExpression(expr: string): string {
-  return `int((${expr}) / 10)`;
-}
-
 function decimalOnesExpression(expr: string): string {
   return `(${expr}) - 10 * int((${expr}) / 10)`;
-}
-
-function offsetExpression(expr: string, offset: number): string {
-  if (offset === 0) return expr;
-  if (offset > 0) return `(${expr}) + ${offset}`;
-  return `(${expr}) - ${Math.abs(offset)}`;
-}
-
-function sumExpressionText(parts: string[]): string {
-  if (parts.length === 0) return "0";
-  return parts.map((part) => `(${part})`).join(" + ");
-}
-
-function maxExpressionText(parts: string[]): string {
-  const nonEmpty = parts.filter((part) => part !== "0");
-  if (nonEmpty.length === 0) return "0";
-  return nonEmpty.reduce((left, right) => `max(${left}, ${right})`);
 }
 
 function range(start: number, end: number): number[] {
@@ -3208,12 +3148,6 @@ function parseCommaIdentifierList(text: string, line: number): string[] {
     throw new ParseError("Function parameters must be comma-separated identifiers", line);
   }
   return parts;
-}
-
-function parseShowDisplayItemsText(text: string, line: number): string {
-  const call = parseNamedCall(text, "show");
-  if (call === undefined) throw new ParseError("Screen display must look like 'show(...)'", line);
-  return call.argsText;
 }
 
 function displayItemSources(items: DisplayItemAst[]): string[] {

@@ -596,7 +596,7 @@ program DirectionOtherwise {
     expect(dispatch.defaultBody).toEqual([
       expect.objectContaining({
         kind: "if",
-        thenBody: expect.arrayContaining([expect.objectContaining({ kind: "call", block: "step" })]),
+        thenBody: expect.arrayContaining([expect.objectContaining({ kind: "call", block: "step" })]) as unknown,
         elseBody: [expect.objectContaining({ kind: "call", block: "wait" })],
       }),
     ]);

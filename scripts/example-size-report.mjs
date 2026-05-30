@@ -5,7 +5,6 @@ import { createRequire } from "node:module";
 import { join, relative } from "node:path";
 import {
   compileMKPro,
-  formatProgramTokens,
   formatSetupProgram,
 } from "../src/core/index.ts";
 

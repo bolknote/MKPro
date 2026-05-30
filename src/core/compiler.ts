@@ -441,7 +441,7 @@ export function compileMKPro(
     }
   }
 
-  const { best, selected } = selectBest();
+  const { selected } = selectBest();
 
   if (selected !== undefined) {
     selected.result.report.optimizations.push({
@@ -572,8 +572,8 @@ function inlineDisplayStringValues(ast: ProgramAst, optimizations: AppliedOptimi
     thenEnv.set(assign.target, text);
     return {
       ...statement,
-      thenBody: [inlineShow(next, thenEnv) as Extract<StatementAst, { kind: "show" }>],
-      elseBody: [inlineShow(next, env) as Extract<StatementAst, { kind: "show" }>],
+      thenBody: [inlineShow(next, thenEnv)],
+      elseBody: [inlineShow(next, env)],
     };
   };
 
@@ -1257,13 +1257,13 @@ function buildDispatchFromIfChain(
     }
     seen.add(matched.value);
     cases.push({ value: numberExpression(matched.value), body: current.thenBody, line: current.line });
-    const elseBody = current.elseBody;
+    const elseBody: StatementAst[] | undefined = current.elseBody;
     if (elseBody === undefined || elseBody.length === 0) {
-      current = undefined;
       break;
     }
-    if (elseBody.length === 1 && elseBody[0]!.kind === "if") {
-      current = elseBody[0] as Extract<StatementAst, { kind: "if" }>;
+    const onlyElse: StatementAst | undefined = elseBody[0];
+    if (elseBody.length === 1 && onlyElse?.kind === "if") {
+      current = onlyElse;
       continue;
     }
     defaultBody = elseBody;
@@ -6223,10 +6223,6 @@ function estimatePackedDisplayBodyCost(widthsOrCount: number | readonly number[]
   return 2 + widthsOrCount.slice(1).reduce((cost, width) => cost + String(10 ** width).length + 3, 0);
 }
 
-function displayByteBuilderSupportsLiteral(text: string): boolean {
-  return /^[\s.-]+$/u.test(text);
-}
-
 function displayHasMantissaExponentTemplateShape(display: ProgramAst["displays"][number]): boolean {
   const [leader, firstLiteral, score, secondLiteral, total, thirdLiteral, exponent] = display.items;
   return display.items.length === 7 &&
@@ -9236,18 +9232,6 @@ export function randomCoordListSetupFields(
         current.count === placement.count;
     })
     .sort((left, right) => coordListItemInfo(left.name)!.index - coordListItemInfo(right.name)!.index);
-}
-
-function randomCoordListCellExpression(placement: RandomCoordListPlacement): ExpressionAst {
-  const x = addExpressions(
-    numberExpression(placement.xMin),
-    intExpression(multiplyExpressions({ kind: "call", callee: "random", args: [] }, numberExpression(placement.width))),
-  );
-  const y = addExpressions(
-    numberExpression(placement.yMin),
-    intExpression(multiplyExpressions({ kind: "call", callee: "random", args: [] }, numberExpression(placement.height))),
-  );
-  return addExpressions(x, multiplyExpressions(numberExpression(10), y));
 }
 
 // A cell mask is stored as `8.HHHHHHH`: the MK-61 blue logical operations
