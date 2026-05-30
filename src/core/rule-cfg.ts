@@ -1,4 +1,10 @@
 import type { AssignStatementAst, ExpressionAst, ProgramAst, StatementAst } from "./types.ts";
+import {
+  findStateBankMember,
+  numericIndexValue,
+  stateBankElementForIndex,
+  stateBankElementNames,
+} from "./state-banks.ts";
 
 // A statement-level, interprocedural control-flow graph over the lowered rule
 // bodies (entries + procs + blocks). Rule invocations become real call edges;
@@ -34,6 +40,9 @@ export function collectExprVars(expr: ExpressionAst, out: Set<string>): void {
     case "identifier":
       out.add(expr.name);
       return;
+    case "indexed":
+      collectExprVars(expr.index, out);
+      return;
     case "unary":
       collectExprVars(expr.expr, out);
       return;
@@ -53,6 +62,34 @@ export function exprVars(expr: ExpressionAst): string[] {
   return [...out];
 }
 
+function collectExpressionCallNames(expr: ExpressionAst, out: string[]): void {
+  switch (expr.kind) {
+    case "number":
+    case "string":
+    case "identifier":
+    case "indexed":
+      if (expr.kind === "indexed") collectExpressionCallNames(expr.index, out);
+      return;
+    case "unary":
+      collectExpressionCallNames(expr.expr, out);
+      return;
+    case "binary":
+      collectExpressionCallNames(expr.left, out);
+      collectExpressionCallNames(expr.right, out);
+      return;
+    case "call":
+      for (const arg of expr.args) collectExpressionCallNames(arg, out);
+      out.push(expr.callee);
+      return;
+  }
+}
+
+function expressionCallNames(expr: ExpressionAst): string[] {
+  const out: string[] = [];
+  collectExpressionCallNames(expr, out);
+  return out;
+}
+
 // Strict purity: an expression is safe to drop or recompute only when it has no
 // calls at all. This is intentionally stricter than the compiler's
 // substitution purity, because calls like random_cell advance hidden state and
@@ -63,6 +100,8 @@ export function exprIsCallFree(expr: ExpressionAst): boolean {
     case "string":
     case "identifier":
       return true;
+    case "indexed":
+      return exprIsCallFree(expr.index);
     case "unary":
       return exprIsCallFree(expr.expr);
     case "binary":
@@ -147,7 +186,19 @@ class Builder {
   private buildStatement(statement: StatementAst): Fragment {
     switch (statement.kind) {
       case "assign": {
-        const node = this.add({ defs: [statement.target], uses: exprVars(statement.expr), assign: statement });
+        const callFragment = this.buildExpressionCallFragment(statement.expr, {
+          defs: [statement.target],
+          uses: [],
+        });
+        if (callFragment !== undefined) return callFragment;
+        const node = this.add({ defs: [statement.target], uses: this.exprUses(statement.expr), assign: statement });
+        return { entry: node, exits: [node] };
+      }
+      case "indexed_assign": {
+        const node = this.add({
+          defs: this.indexedTargetDefs(statement.target),
+          uses: [...new Set([...this.exprUses(statement.expr), ...exprVars(statement.target.index)])],
+        });
         return { entry: node, exits: [node] };
       }
       case "show": {
@@ -166,7 +217,12 @@ class Builder {
         // cell, so a value can still be read after the stop. A return reads its
         // expression operands; modeling it as fall-through keeps liveness
         // conservative (it never drops a store that the return value needs).
-        const node = this.add({ defs: [], uses: exprVars(statement.expr) });
+        const callFragment = this.buildExpressionCallFragment(statement.expr, {
+          defs: [],
+          uses: [],
+        });
+        if (callFragment !== undefined) return callFragment;
+        const node = this.add({ defs: [], uses: this.exprUses(statement.expr) });
         return { entry: node, exits: [node] };
       }
       case "call": {
@@ -186,7 +242,7 @@ class Builder {
         return { entry: node, exits: [node] };
       }
       case "if": {
-        const test = this.add({ defs: [], uses: [...exprVars(statement.condition.left), ...exprVars(statement.condition.right)] });
+        const test = this.add({ defs: [], uses: [...this.exprUses(statement.condition.left), ...this.exprUses(statement.condition.right)] });
         const thenFragment = this.buildSequence(statement.thenBody);
         this.link([test], thenFragment.entry);
         const exits = [...thenFragment.exits];
@@ -200,8 +256,8 @@ class Builder {
         return { entry: test, exits };
       }
       case "dispatch": {
-        const uses = new Set<string>(exprVars(statement.expr));
-        for (const branch of statement.cases) for (const v of exprVars(branch.value)) uses.add(v);
+        const uses = new Set<string>(this.exprUses(statement.expr));
+        for (const branch of statement.cases) for (const v of this.exprUses(branch.value)) uses.add(v);
         const test = this.add({ defs: [], uses: [...uses] });
         const exits: number[] = [];
         for (const branch of statement.cases) {
@@ -226,7 +282,7 @@ class Builder {
         return { entry: fragment.entry, exits: [...fragment.exits] };
       }
       case "while": {
-        const test = this.add({ defs: [], uses: [...exprVars(statement.condition.left), ...exprVars(statement.condition.right)] });
+        const test = this.add({ defs: [], uses: [...this.exprUses(statement.condition.left), ...this.exprUses(statement.condition.right)] });
         const fragment = this.buildSequence(statement.body);
         this.link([test], fragment.entry);
         this.link(fragment.exits, test);
@@ -237,6 +293,83 @@ class Builder {
         return { entry: node, exits: [node] };
       }
     }
+  }
+
+  private exprUses(expr: ExpressionAst): string[] {
+    const uses = new Set<string>(exprVars(expr));
+    this.collectIndexedReads(expr, uses);
+    return [...uses];
+  }
+
+  private collectIndexedReads(expr: ExpressionAst, out: Set<string>): void {
+    switch (expr.kind) {
+      case "number":
+      case "string":
+      case "identifier":
+        return;
+      case "indexed": {
+        this.collectIndexedReads(expr.index, out);
+        const resolved = findStateBankMember(this.ast, expr);
+        if (resolved === undefined) return;
+        const constant = numericIndexValue(expr.index);
+        if (constant !== undefined) {
+          const element = stateBankElementForIndex(resolved.member, constant);
+          if (element !== undefined) out.add(element.name);
+          return;
+        }
+        for (const name of stateBankElementNames(resolved.member)) out.add(name);
+        return;
+      }
+      case "unary":
+        this.collectIndexedReads(expr.expr, out);
+        return;
+      case "binary":
+        this.collectIndexedReads(expr.left, out);
+        this.collectIndexedReads(expr.right, out);
+        return;
+      case "call":
+        for (const arg of expr.args) this.collectIndexedReads(arg, out);
+        return;
+    }
+  }
+
+  private indexedTargetDefs(expr: Extract<ExpressionAst, { kind: "indexed" }>): string[] {
+    const resolved = findStateBankMember(this.ast, expr);
+    if (resolved === undefined) return [];
+    const constant = numericIndexValue(expr.index);
+    if (constant !== undefined) {
+      const element = stateBankElementForIndex(resolved.member, constant);
+      return element === undefined ? [] : [element.name];
+    }
+    return stateBankElementNames(resolved.member);
+  }
+
+  private buildExpressionCallFragment(
+    expr: ExpressionAst,
+    finalNode: Omit<CfgNode, "id" | "succ">,
+  ): Fragment | undefined {
+    const calls = expressionCallNames(expr);
+    if (calls.length === 0) return undefined;
+
+    const entry = this.add({ defs: [], uses: this.exprUses(expr) });
+    let exits = [entry];
+    for (const call of calls) {
+      const calleeEntry = this.routineEntry.get(call);
+      const calleeExit = this.routineExit.get(call);
+      if (calleeEntry === undefined || calleeExit === undefined) {
+        const barrier = this.add({ defs: [], uses: [], barrier: true });
+        this.link(exits, barrier);
+        exits = [barrier];
+        continue;
+      }
+      const callNode = this.add({ defs: [], uses: [], succ: [calleeEntry] });
+      this.link(exits, callNode);
+      exits = [calleeExit];
+    }
+
+    const final = this.add(finalNode);
+    this.link(exits, final);
+    return { entry, exits: [final] };
   }
 }
 

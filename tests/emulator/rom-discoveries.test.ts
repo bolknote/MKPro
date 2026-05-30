@@ -21,6 +21,7 @@ interface Mk61Instance {
   setRegister(register: string, value: string): void;
   loadProgram(codes: number[]): void;
   press(key: string): void;
+  pressSequence(keys: string[]): void;
   runUntilStable(options: { maxFrames: number; stableFrames: number }): RunResult;
   displayText(): string;
   readRegister(register: string): string;
@@ -91,6 +92,22 @@ function runProgram(codes: number[]) {
     stopped: run.stopped,
     frames: run.frames,
   };
+}
+
+function runProgramRepeated(codes: number[], count: number): string[] {
+  const calc = new MK61();
+  calc.loadProgram(codes);
+  const displays: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    calc.pressSequence(["В/О", "С/П"]);
+    calc.runUntilStable({ maxFrames: 100, stableFrames: 3 });
+    displays.push(compactDisplay(calc.displayText()));
+  }
+  return displays;
+}
+
+function compactDisplay(text: string): string {
+  return text.replace(/\s/gu, "");
 }
 
 function runProgramWithRegisters(codes: number[], registers: Record<string, string>) {
@@ -217,6 +234,60 @@ describe("emulator ROM discoveries", () => {
     expect(runNegativeZeroThresholdSelector("0.999")).toBe("0,");
     expect(runNegativeZeroThresholdSelector("1")).toBe("1,");
     expect(runNegativeZeroThresholdSelector("2")).toBe("1,");
+  });
+
+  it("matches observed К СЧ edge cases: no ordinary 1, hex-Y zero, and Кmax reset", () => {
+    const calc = new MK61();
+    const drawRandoms = (count: number): string[] => {
+      calc.loadProgram([0x3b, 0x50]);
+      const displays: string[] = [];
+      for (let index = 0; index < count; index += 1) {
+        calc.pressSequence(["В/О", "С/П"]);
+        calc.runUntilStable({ maxFrames: 100, stableFrames: 3 });
+        displays.push(compactDisplay(calc.displayText()));
+      }
+      return displays;
+    };
+
+    const first = drawRandoms(8);
+    expect(first).not.toContain("1,");
+    expect(first).not.toContain("0,");
+    drawRandoms(8);
+
+    calc.loadProgram([0x36, 0x50]);
+    calc.setRegister("y", "0");
+    calc.pressSequence(["В/О", "С/П"]);
+    calc.runUntilStable({ maxFrames: 100, stableFrames: 3 });
+    expect(drawRandoms(8)).toEqual(first);
+
+    const hexY = new MK61();
+    hexY.loadProgram([0x3b, 0x50]);
+    hexY.setRegister("y", "_,0");
+    hexY.pressSequence(["В/О", "С/П"]);
+    hexY.runUntilStable({ maxFrames: 100, stableFrames: 3 });
+    expect(compactDisplay(hexY.displayText())).toBe("0,");
+  });
+
+  it("shows integerizing К СЧ with К [x] can enter a short cycle", () => {
+    expect(runProgramRepeated([0x3b, 0x09, 0x12, 0x34, 0x01, 0x10, 0x50], 6)).toEqual([
+      "4,",
+      "4,",
+      "4,",
+      "4,",
+      "4,",
+      "4,",
+    ]);
+  });
+
+  it("keeps integer random draws moving when flooring via x-frac(x)", () => {
+    expect(runProgramRepeated([0x3b, 0x09, 0x12, 0x0e, 0x35, 0x11, 0x01, 0x10, 0x50], 6)).toEqual([
+      "4,",
+      "6,",
+      "9,",
+      "1,",
+      "8,",
+      "9,",
+    ]);
   });
 
   it("does not collapse the F0..FF range to one command word", () => {

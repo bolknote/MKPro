@@ -64,7 +64,9 @@ function formatListingRows(rows: readonly ListingRow[]): string {
     const comments = [row.comment]
       .filter((value): value is string => Boolean(value))
       .join("; ");
-    lines.push(` ${address} |  ${code}  | ${command} | ${comments}`);
+    lines.push(comments.length > 0
+      ? ` ${address} |  ${code}  | ${command} | ${comments}`
+      : ` ${address} |  ${code}  | ${command} |`);
   }
   return lines.join("\n");
 }
@@ -299,7 +301,7 @@ export function formatExplain(result: CompileResult): string {
   }
   if (result.report.setupProgram !== undefined) {
     lines.push("", "Setup Program:");
-    lines.push(`  Reason: ${result.report.setupProgram.reason}`);
+    lines.push(`  Reason: ${result.report.setupProgram.reason.trimEnd()}`);
     lines.push(formatHexSteps(result.report.setupProgram.steps).split("\n").map((line) => `  ${line}`).join("\n"));
   }
   lines.push("", "Registers:");

@@ -15,6 +15,7 @@ import type {
   RawStackSlot,
   StatementAst,
   StateAst,
+  StateBankAst,
   StateFieldAst,
   StateFieldType,
   V2BoardAst,
@@ -28,6 +29,7 @@ import type {
   V2ProgramAst,
   V2RuleAst,
   V2ScreenAst,
+  V2ShowStatementAst,
   V2StateFieldAst,
   V2StatementAst,
   V2WhileStatementAst,
@@ -93,6 +95,7 @@ class MKProParser {
     const displays: DisplayAst[] = [];
     const entries: EntryAst[] = [];
     const procs: ProcAst[] = [];
+    let programBanks: ProgramAst["banks"];
 
     while (!this.done()) {
       const line = this.peek();
@@ -113,6 +116,10 @@ class MKProParser {
         displays.push(...lowered.displays);
         entries.push(...lowered.entries);
         procs.push(...lowered.procs);
+        if (lowered.banks !== undefined) {
+          if (programBanks === undefined) programBanks = [];
+          programBanks.push(...lowered.banks);
+        }
       } else {
         throw new ParseError(`Unexpected top-level line '${line.text}'`, line.line);
       }
@@ -127,6 +134,7 @@ class MKProParser {
       entries,
       procs,
     };
+    if (programBanks !== undefined && programBanks.length > 0) program.banks = programBanks;
     if (reference !== undefined) program.reference = reference;
     if (v2 !== undefined) program.v2 = v2;
     return program;
@@ -213,11 +221,50 @@ class MKProParser {
         this.index += 1;
         return fields;
       }
+      if (/^[A-Za-z_][\w]*\s*:\s*group\s*\(\s*-?\d+\.\.-?\d+\s*\)\s*\{$/u.test(line.text)) {
+        fields.push(...this.parseV2StateGroup());
+        continue;
+      }
       this.index += 1;
       if (line.text === "}") return fields;
       fields.push(parseV2StateField(line));
     }
     throw new ParseError("Unclosed state block", this.lines.at(-1)?.line ?? 1);
+  }
+
+  private parseV2StateGroup(): V2StateFieldAst[] {
+    const header = this.next();
+    const match = /^([A-Za-z_][\w]*)\s*:\s*group\s*\(\s*(-?\d+)\.\.(-?\d+)\s*\)\s*\{$/u.exec(header.text);
+    if (!match) throw new ParseError("State group must look like 'name: group(1..3) {'", header.line);
+    const name = match[1]!;
+    const min = Number(match[2]);
+    const max = Number(match[3]);
+    if (!Number.isInteger(min) || !Number.isInteger(max) || max < min) {
+      throw new ParseError(`Invalid state group range '${match[2]}..${match[3]}'`, header.line);
+    }
+
+    const fields: V2StateFieldAst[] = [];
+    while (!this.done()) {
+      const line = this.peek();
+      if (line.text === "}") {
+        this.index += 1;
+        return fields;
+      }
+      if (line.text.includes("group")) {
+        throw new ParseError("Nested state groups are not supported", line.line);
+      }
+      this.index += 1;
+      const field = parseV2StateField(line);
+      if (field.bank !== undefined) {
+        throw new ParseError("State group members cannot also be indexed arrays", line.line);
+      }
+      fields.push({
+        ...field,
+        name: bankFieldStateName(name, field.name),
+        bank: { name, member: field.name, min, max },
+      });
+    }
+    throw new ParseError("Unclosed state group", header.line);
   }
 
   private parseV2Rule(text: string): V2RuleAst {
@@ -446,15 +493,26 @@ class MKProParser {
 }
 
 function parseV2StateField(line: SourceLine): V2StateFieldAst {
-  const match = /^([A-Za-z_][\w]*)\s*:\s*([A-Za-z_][\w]*)(?:\(([^)]*)\))?(.*)$/u.exec(line.text);
+  const match = /^([A-Za-z_][\w]*)\s*:\s*([A-Za-z_][\w]*)(?:\[\s*(-?\d+)\.\.(-?\d+)\s*\])?(?:\(([^)]*)\))?(.*)$/u.exec(line.text);
   if (!match) {
-    throw new ParseError("State field must look like 'name: counter 0..9 = 0' or 'name: cells(domain) = random()'", line.line);
+    throw new ParseError("State field must look like 'name: counter 0..9 = 0', 'name: packed[1..3] = 0', or 'name: cells(domain) = random()'", line.line);
   }
   const typeText = match[2]!.toLowerCase();
   if (!["flag", "counter", "coord", "cells", "coord_list", "packed"].includes(typeText)) {
     throw new ParseError(`Unknown state type '${match[2]}'`, line.line);
   }
-  const args = match[3]?.trim();
+  const bankMin = match[3] === undefined ? undefined : Number(match[3]);
+  const bankMax = match[4] === undefined ? undefined : Number(match[4]);
+  if ((bankMin === undefined) !== (bankMax === undefined)) {
+    throw new ParseError("Indexed state range must look like '[1..3]'", line.line);
+  }
+  if (bankMin !== undefined && (!Number.isInteger(bankMin) || !Number.isInteger(bankMax) || bankMax! < bankMin)) {
+    throw new ParseError(`Invalid indexed state range '${match[3]}..${match[4]}'`, line.line);
+  }
+  if (bankMin !== undefined && typeText === "coord_list") {
+    throw new ParseError("coord_list cannot be declared as an indexed state bank", line.line);
+  }
+  const args = match[5]?.trim();
   const argList = args === undefined ? [] : splitArgs(args);
   if (typeText === "cells" && (!args || argList.length !== 1)) {
     throw new ParseError("cells state must look like 'name: cells(domain) = random()'", line.line);
@@ -468,7 +526,7 @@ function parseV2StateField(line: SourceLine): V2StateFieldAst {
   if (!["cells", "coord", "coord_list"].includes(typeText) && args !== undefined) {
     throw new ParseError(`State type '${match[2]}' does not take parameters`, line.line);
   }
-  const tail = match[4]!.trim();
+  const tail = match[6]!.trim();
   const tailMatch = /^(?:(-?\d+)\.\.(-?\d+))?(?:\s*=\s*(.+))?$/u.exec(tail);
   if (!tailMatch) {
     throw new ParseError("State field must look like 'name: counter 0..9 = 0' or 'name: cells(domain) = random()'", line.line);
@@ -485,6 +543,9 @@ function parseV2StateField(line: SourceLine): V2StateFieldAst {
     type: typeText as V2StateFieldAst["type"],
     line: line.line,
   };
+  if (bankMin !== undefined && bankMax !== undefined) {
+    field.bank = { name: field.name, min: bankMin, max: bankMax };
+  }
   if (typeText === "cells" || typeText === "coord") {
     field.domain = argList[0]!;
   }
@@ -502,6 +563,10 @@ function parseV2StateField(line: SourceLine): V2StateFieldAst {
   }
   if (tailMatch[3] !== undefined) field.initial = tailMatch[3].trim();
   return field;
+}
+
+function bankFieldStateName(bank: string, member?: string): string {
+  return member === undefined ? bank : `${bank}_${member}`;
 }
 
 function parseV2BoardDeclaration(line: SourceLine): V2BoardAst | undefined {
@@ -591,21 +656,25 @@ function parseV2InlineStatement(text: string, line: number): V2StatementAst {
       line,
     };
   }
-  const update = /^([A-Za-z_][\w]*)\s*(\+=|-=)\s*(.+)$/u.exec(text);
+  const update = /^(.+?)\s*(\+=|-=)\s*(.+)$/u.exec(text);
   if (update) {
+    const target = update[1]!.trim();
+    validateAssignmentTargetText(target, line);
     return {
       kind: "v2_update",
-      target: update[1]!,
+      target,
       op: update[2] as "+=" | "-=",
       expr: update[3]!.trim(),
       line,
     };
   }
-  const assignment = /^([A-Za-z_][\w]*)\s*=\s*(.+)$/u.exec(text);
+  const assignment = /^(.+?)\s*(?<![!<>=])=(?!=)\s*(.+)$/u.exec(text);
   if (assignment) {
+    const target = assignment[1]!.trim();
+    validateAssignmentTargetText(target, line);
     return {
       kind: "v2_assign",
-      target: assignment[1]!,
+      target,
       expr: assignment[2]!.trim(),
       line,
     };
@@ -624,6 +693,13 @@ function parseV2InlineStatement(text: string, line: number): V2StatementAst {
     throw new ParseError("Function calls must look like 'name(...)'", line);
   }
   throw new ParseError(`Unexpected statement '${text}'`, line);
+}
+
+function validateAssignmentTargetText(target: string, line: number): void {
+  if (/^[A-Za-z_][\w]*$/u.test(target)) return;
+  const expr = parseExpression(target, line);
+  if (expr.kind === "indexed") return;
+  throw new ParseError(`Invalid assignment target '${target}'`, line);
 }
 
 function parseV2ShowCall(argsText: string, line: number): V2StatementAst {
@@ -806,6 +882,7 @@ interface V2LoweringContext {
 
 interface LoweredV2Program {
   domains: DomainAst[];
+  banks?: StateBankAst[];
   states: StateAst[];
   displays: DisplayAst[];
   entries: EntryAst[];
@@ -845,8 +922,10 @@ function lowerV2Program(v2: V2ProgramAst): LoweredV2Program {
     boards: new Map(v2.boards.map((board) => [board.name, board])),
     worlds: new Map(v2.worlds.map((world) => [world.name, world])),
   };
+  const banks = lowerV2StateBanks(v2, context);
   return {
     domains: lowerV2Domains(v2),
+    ...(banks === undefined ? {} : { banks }),
     states: lowerV2State(v2, specializedRules, cellMapNames, context),
     displays: inlineScreens.map(lowerV2Screen),
     entries: [lowerV2Entry(v2, context)],
@@ -1138,11 +1217,17 @@ function selectV2RuleSpecializations(v2: V2ProgramAst, rules: Map<string, V2Rule
   const invocations = collectV2Invocations(v2);
   const selected = new Set<string>();
   for (const rule of v2.rules) {
-    if (rule.params.length === 0 || !isSpecializableRuleBody(rule)) continue;
+    if (rule.params.length === 0) continue;
+    const indexedConstantSpecialization = ruleUsesIndexedParam(rule);
+    if (!indexedConstantSpecialization && !isSpecializableRuleBody(rule)) continue;
     const sites = invocations.filter((site) => site.statement.name === rule.name);
     if (sites.length < 2) continue;
     if (sites.some((site) => site.currentRule === rule.name)) continue;
     if (!sites.every((site) => site.statement.args.length === rule.params.length && site.statement.args.every(isSpecializationArg))) {
+      continue;
+    }
+    if (indexedConstantSpecialization && rules.has(rule.name)) {
+      selected.add(rule.name);
       continue;
     }
 
@@ -1156,6 +1241,66 @@ function selectV2RuleSpecializations(v2: V2ProgramAst, rules: Map<string, V2Rule
     if (inlineCost < genericCost && rules.has(rule.name)) selected.add(rule.name);
   }
   return selected;
+}
+
+function ruleUsesIndexedParam(rule: V2RuleAst): boolean {
+  return rule.params.some((param) => {
+    const pattern = new RegExp(`\\[\\s*${escapeRegExp(param)}\\s*\\]`, "u");
+    return v2StatementTexts(rule.body).some((text) => pattern.test(text));
+  });
+}
+
+function v2StatementTexts(statements: V2StatementAst[]): string[] {
+  const texts: string[] = [];
+  const visit = (items: V2StatementAst[]): void => {
+    for (const statement of items) {
+      switch (statement.kind) {
+        case "v2_assign":
+        case "v2_update":
+          texts.push(statement.target, statement.expr);
+          break;
+        case "v2_if":
+          texts.push(...v2PredicateExprTexts(statement.predicate));
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+          break;
+        case "v2_while":
+          texts.push(...v2PredicateExprTexts(statement.predicate));
+          visit(statement.body);
+          break;
+        case "v2_loop":
+          visit(statement.body);
+          break;
+        case "v2_match":
+          texts.push(statement.expr, ...statement.cases.flatMap((matchCase) => matchCase.values));
+          for (const matchCase of statement.cases) visit([matchCase.action]);
+          if (statement.otherwise) visit([statement.otherwise]);
+          break;
+        case "v2_invoke":
+          texts.push(...statement.args);
+          break;
+        case "v2_show":
+          if (statement.target !== undefined) texts.push(statement.target);
+          for (const item of statement.items ?? []) {
+            if (item.kind === "source") texts.push(item.name);
+          }
+          break;
+        case "v2_stop":
+          texts.push(statement.value);
+          break;
+        case "v2_return":
+          texts.push(statement.expr);
+          break;
+        case "v2_raw":
+          for (const input of statement.inputs ?? []) texts.push(input.expr);
+          break;
+        default:
+          break;
+      }
+    }
+  };
+  visit(statements);
+  return texts;
 }
 
 function collectV2Invocations(v2: V2ProgramAst): V2InvocationSite[] {
@@ -1564,6 +1709,10 @@ function lowerV2State(
 ): StateAst[] {
   const fields: StateFieldAst[] = [];
   for (const field of v2.state) {
+    if (field.bank !== undefined) {
+      fields.push(...lowerV2BankStateField(field, context));
+      continue;
+    }
     if (field.type === "coord_list") {
       fields.push(...lowerV2CoordListState(field, context));
       continue;
@@ -1602,6 +1751,77 @@ function lowerV2State(
     });
   }
   return fields.length > 0 ? [{ kind: "state", name: v2.name, fields, line: v2.line }] : [];
+}
+
+function lowerV2StateBanks(v2: V2ProgramAst, context: V2LoweringContext): StateBankAst[] | undefined {
+  const byBank = new Map<string, V2StateFieldAst[]>();
+  for (const field of v2.state) {
+    if (field.bank === undefined) continue;
+    const fields = byBank.get(field.bank.name) ?? [];
+    fields.push(field);
+    byBank.set(field.bank.name, fields);
+  }
+  const banks: StateBankAst[] = [];
+  for (const [name, fields] of byBank) {
+    const first = fields[0]!;
+    const min = first.bank!.min;
+    const max = first.bank!.max;
+    if (fields.some((field) => field.bank!.min !== min || field.bank!.max !== max)) {
+      throw new ParseError(`State bank '${name}' has inconsistent ranges`, first.line);
+    }
+    banks.push({
+      kind: "state_bank",
+      name,
+      min,
+      max,
+      members: fields.map((field) => {
+        const member: StateBankAst["members"][number] = {
+          ...(field.bank!.member === undefined ? {} : { name: field.bank!.member }),
+          type: lowerV2StateFieldType(field.type),
+          elements: bankIndexes(field).map((index) => ({ index, name: bankElementStateName(field, index) })),
+          line: field.line,
+        };
+        if (field.min !== undefined) member.min = field.min;
+        if (field.max !== undefined) member.max = field.max;
+        return member;
+      }),
+      line: first.line,
+    });
+  }
+  return banks.length === 0 ? undefined : banks;
+}
+
+function lowerV2BankStateField(field: V2StateFieldAst, context: V2LoweringContext): StateFieldAst[] {
+  return bankIndexes(field).map((index) => {
+    const lowered: StateFieldAst = {
+      name: bankElementStateName(field, index),
+      type: lowerV2StateFieldType(field.type),
+      line: field.line,
+    };
+    if (field.min !== undefined) lowered.min = field.min;
+    if (field.max !== undefined) lowered.max = field.max;
+    if (field.initial !== undefined) {
+      const stackSource = parseStackSource(field.initial, field.line);
+      if (stackSource !== undefined) {
+        throw new ParseError("Indexed state banks cannot be initialized from stack.X or stack.Y", field.line);
+      }
+      lowered.initial = lowerV2InitialExpression(field, context);
+    }
+    return lowered;
+  });
+}
+
+function bankIndexes(field: V2StateFieldAst): number[] {
+  if (field.bank === undefined) return [];
+  const indexes: number[] = [];
+  for (let index = field.bank.min; index <= field.bank.max; index += 1) indexes.push(index);
+  return indexes;
+}
+
+function bankElementStateName(field: V2StateFieldAst, index: number): string {
+  const member = field.bank?.member;
+  const base = field.bank?.name ?? field.name;
+  return member === undefined ? `${base}_${index}` : `${base}_${member}_${index}`;
 }
 
 function lowerV2CoordListState(field: V2StateFieldAst, context: V2LoweringContext): StateFieldAst[] {
@@ -2014,8 +2234,30 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
     case "v2_move":
       return lowerV2Move(statement, context);
     case "v2_assign":
+      if (isIndexedTargetText(statement.target)) {
+        return [{
+          kind: "indexed_assign",
+          target: indexedTargetExpression(statement.target, statement.line),
+          expr: lowerV2Expression(statement.expr, statement.line, context),
+          line: statement.line,
+        }];
+      }
       return [{ kind: "assign", target: statement.target, expr: lowerV2Expression(statement.expr, statement.line, context), line: statement.line }];
     case "v2_update": {
+      if (isIndexedTargetText(statement.target)) {
+        const target = indexedTargetExpression(statement.target, statement.line);
+        return [{
+          kind: "indexed_assign",
+          target,
+          expr: {
+            kind: "binary",
+            op: statement.op === "+=" ? "+" : "-",
+            left: target,
+            right: lowerV2Expression(statement.expr, statement.line, context),
+          },
+          line: statement.line,
+        }];
+      }
       if (context.stateTypes.get(statement.target) === "cells") {
         return [{
           kind: "assign",
@@ -2064,6 +2306,16 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
         line: statement.line,
       }];
   }
+}
+
+function isIndexedTargetText(target: string): boolean {
+  return target.includes("[");
+}
+
+function indexedTargetExpression(target: string, line: number): Extract<ExpressionAst, { kind: "indexed" }> {
+  const expr = parseExpression(target, line);
+  if (expr.kind !== "indexed") throw new ParseError(`Invalid indexed assignment target '${target}'`, line);
+  return expr;
 }
 
 function lowerV2Predicate(predicate: V2PredicateAst, line: number, context: V2LoweringContext): ConditionAst {
@@ -2870,9 +3122,19 @@ function substituteV2Statements(statements: V2StatementAst[], replacements: Map<
 function substituteV2Statement(statement: V2StatementAst, replacements: Map<string, string>): V2StatementAst {
   switch (statement.kind) {
     case "v2_assign":
-      return { ...statement, expr: substituteV2Text(statement.expr, replacements) };
+      return {
+        ...statement,
+        target: substituteV2Text(statement.target, replacements),
+        expr: substituteV2Text(statement.expr, replacements),
+      };
     case "v2_update":
-      return { ...statement, expr: substituteV2Text(statement.expr, replacements) };
+      return {
+        ...statement,
+        target: substituteV2Text(statement.target, replacements),
+        expr: substituteV2Text(statement.expr, replacements),
+      };
+    case "v2_show":
+      return substituteV2ShowStatement(statement, replacements);
     case "v2_if": {
       const substituted: V2IfStatementAst = {
         ...statement,
@@ -2927,6 +3189,41 @@ function substituteV2Statement(statement: V2StatementAst, replacements: Map<stri
   }
 }
 
+function substituteV2ShowStatement(
+  statement: V2ShowStatementAst,
+  replacements: Map<string, string>,
+): V2ShowStatementAst {
+  if (statement.target !== undefined) {
+    return { ...statement, target: substituteV2Text(statement.target, replacements) };
+  }
+  if (statement.items === undefined) return statement;
+  let changed = false;
+  const items = statement.items.map((item): DisplayItemAst => {
+    if (item.kind !== "source") return item;
+    const replacement = replacements.get(item.name);
+    if (replacement === undefined) return item;
+    changed = true;
+    if (isNumericLiteralText(replacement) && item.width === undefined && item.pad === undefined) {
+      return { kind: "literal", text: replacement, line: item.line };
+    }
+    if (/^[A-Za-z_][\w]*$/u.test(replacement)) return { ...item, name: replacement };
+    return item;
+  });
+  if (!changed) return statement;
+  const literal = displayLiteralText(items);
+  if (literal !== undefined && isNumericLiteralText(literal)) {
+    return { kind: "v2_show", target: literal, line: statement.line };
+  }
+  const substituted: V2ShowStatementAst = { ...statement, items };
+  delete substituted.inlineName;
+  return substituted;
+}
+
+function displayLiteralText(items: readonly DisplayItemAst[]): string | undefined {
+  if (items.some((item) => item.kind !== "literal")) return undefined;
+  return items.map((item) => item.kind === "literal" ? item.text : "").join("");
+}
+
 function substituteV2Predicate(predicate: V2PredicateAst, replacements: Map<string, string>): V2PredicateAst {
   if (predicate.kind === "v2_contains") {
     return {
@@ -2954,7 +3251,12 @@ function substituteV2Text(text: string, replacements: Map<string, string>): stri
 
 function isSimpleSubstitutionAtom(value: string): boolean {
   const trimmed = value.trim();
-  return isNumericLiteralText(trimmed) || /^[A-Za-z_][\w]*$/u.test(trimmed);
+  if (isNumericLiteralText(trimmed) || /^[A-Za-z_][\w]*$/u.test(trimmed)) return true;
+  try {
+    return parseExpression(trimmed).kind === "indexed";
+  } catch {
+    return false;
+  }
 }
 
 function escapeRegExp(text: string): string {
@@ -3292,7 +3594,25 @@ function parseDisplayItem(text: string, line: number): DisplayItemAst {
     }
     return item;
   }
-  throw new ParseError(`Display item must be a string literal, decimal literal, or state name, got '${trimmed}'`, line);
+  if (trimmed.includes("\"")) {
+    throw new ParseError("Display fragments must be separated by commas", line);
+  }
+  const exprSource = /^(.*?)(?::(0?)(\d+))?$/u.exec(trimmed);
+  if (exprSource) {
+    const [, exprText, zero, widthText] = exprSource;
+    const expr = parseExpression(exprText!.trim(), line);
+    const item: DisplayItemAst = { kind: "source", name: exprText!.trim(), expr, line };
+    if (widthText !== undefined) {
+      const width = Number(widthText);
+      if (!Number.isInteger(width) || width <= 0 || width > 8) {
+        throw new ParseError(`Display width must be 1..8, got '${widthText}'`, line);
+      }
+      item.width = width;
+      item.pad = zero === "0" ? "zero" : "space";
+    }
+    return item;
+  }
+  throw new ParseError(`Display item must be a string literal, decimal literal, state name, or expression, got '${trimmed}'`, line);
 }
 
 function parseV2StopLiteral(text: string, line: number): string | undefined {
@@ -3359,8 +3679,8 @@ function tokenizeDisplayItems(text: string, line: number): DisplayToken[] {
     }
 
     const start = index;
-    while (index < text.length && !/[\s,]/u.test(text[index]!)) index += 1;
-    tokens.push({ kind: "item", text: text.slice(start, index) });
+    while (index < text.length && text[index] !== ",") index += 1;
+    tokens.push({ kind: "item", text: text.slice(start, index).trim() });
   }
 
   return tokens;
@@ -3446,6 +3766,26 @@ class ExpressionParser {
         this.expect(")");
         return { kind: "call", callee: token, args };
       }
+      if (this.peekOptional() === "[") {
+        this.next();
+        const index = this.parseAdditive();
+        this.expect("]");
+        let field: string | undefined;
+        if (this.peekOptional() === ".") {
+          this.next();
+          const member = this.next();
+          if (!/^[A-Za-z_А-Яа-я][\wА-Яа-я]*$/u.test(member)) {
+            throw new ParseError(
+              `Expected indexed field name, got '${member}' in expression '${this.source}'`,
+              this.line,
+            );
+          }
+          field = member;
+        }
+        return field === undefined
+          ? { kind: "indexed", base: token, index }
+          : { kind: "indexed", base: token, field, index };
+      }
       return { kind: "identifier", name: token };
     }
     throw new ParseError(
@@ -3489,7 +3829,7 @@ class ExpressionParser {
 
 function tokenizeExpression(source: string, line: number): string[] {
   const tokens: string[] = [];
-  const regex = /\s*([A-Za-z_А-Яа-я][\wА-Яа-я]*|\d+(?:\.\d+)?(?:e[+-]?\d+)?|==|!=|<=|>=|[()+\-*/,])\s*/giy;
+  const regex = /\s*([A-Za-z_А-Яа-я][\wА-Яа-я]*|\d+(?:\.\d+)?(?:e[+-]?\d+)?|==|!=|<=|>=|[()[\].+\-*/,])\s*/giy;
   let index = 0;
   while (index < source.length) {
     while (index < source.length && /\s/u.test(source[index]!)) index += 1;

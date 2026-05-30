@@ -1501,6 +1501,31 @@ program BoundaryNormalize {
     expect(result.report.optimizations.some((item) => item.name === "zero-condition-test")).toBe(true);
   });
 
+  it("normalizes subtraction-against-zero comparisons when the negated difference enables a zero test", () => {
+    const result = compileOk(`
+program DifferenceZeroNormalize {
+  state {
+    left: packed = 3
+    right: packed = 5
+    result: packed = 0
+  }
+  loop {
+    if left - right <= 0 {
+      result = 1
+    }
+    else {
+      result = 2
+    }
+    halt(result)
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "comparison-boundary-normalization")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "zero-condition-test")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.detail.includes("right - left >= 0"))).toBe(true);
+  });
+
   it("replaces boolean-selected V2 stops with terminal selection", () => {
     const result = compileOk(`
 program BranchlessStop {
@@ -1867,6 +1892,189 @@ program DseAcrossCall {
 
     expect(optimized.report.optimizations.some((item) => item.name === "interprocedural-dead-store")).toBe(true);
     expect(optimized.report.steps).toBeLessThan(unoptimized.report.steps);
+  });
+
+  it("keeps stores read only by while control flow", () => {
+    const result = compileOk(`
+program WhileControlStore {
+  state {
+    money: counter -9..9 = 1
+    ticks: counter 0..3 = 0
+    slot: counter 1..4 = 1
+    dead: packed = 0
+  }
+
+  fn fail() {
+    show("1ЕС")
+  }
+
+  loop {
+    money -= 1
+    if money < 0 {
+      fail()
+    }
+    else {
+      ticks = 3
+      slot = 1
+      dead = 0
+      while ticks >= 1 {
+        slot++
+        ticks--
+      }
+      halt(slot)
+    }
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.steps.some((step) => step.comment === "set ticks")).toBe(true);
+  });
+
+  it("lowers initialized decrementing while loops through FL counters", () => {
+    const result = compileOk(`
+program CountedWhile {
+  state {
+    ticks: counter 0..3 = 0
+    total: counter 0..9 = 0
+  }
+
+  loop {
+    ticks = 3
+    total = 0
+    while ticks >= 1 {
+      total += 1
+      ticks -= 1
+    }
+    halt(total)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "initialized-counted-while-loop")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "counted while ticks")).toBe(true);
+  });
+
+  it("keeps stores read by a value-returning function called from an assignment expression", () => {
+    const result = compileOk(`
+program DseFunctionExpressionCall {
+  state {
+    source: packed = 7
+    current: packed = 0
+    shown: packed = 0
+  }
+
+  fn use_current() {
+    shown = current
+    return shown
+  }
+
+  loop {
+    current = source + 1
+    source = use_current()
+    show(source)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.steps.some((step) => step.comment === "set current")).toBe(true);
+  });
+
+  it("lowers constant indexed state access to the selected scalar register", () => {
+    const result = compileOk(`
+program IndexedConstantState {
+  state {
+    slots: packed[1..3] = 0
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
+    slots[2] = x
+    x = 0
+    halt(slots[2])
+  }
+}
+`, { budget: 999, analysis: true, disableInterproceduralOpts: true });
+
+    expect(result.steps.some((step) => step.comment === "indexed set slots[2]")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "indexed recall slots[2]")).toBe(true);
+    expect(result.steps.some((step) => step.mnemonic?.startsWith("К X->П"))).toBe(false);
+  });
+
+  it("lowers dynamic indexed group state through MK-61 indirect memory commands", () => {
+    const result = compileOk(`
+program IndexedGroupState {
+  state {
+    line: group(1..3) {
+      front: packed = 10
+      robots: packed = 0
+    }
+    i: counter 1..3 = 2
+    order: packed = 3
+  }
+
+  loop {
+    line[i].robots += order
+    line[i].front -= 1
+    show(line[i].robots, line[i].front)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.steps.some((step) => step.comment === "indexed set line.robots")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "indexed set line.front")).toBe(true);
+    expect(result.steps.some((step) => step.mnemonic?.startsWith("К X->П"))).toBe(true);
+    expect(result.steps.some((step) => step.mnemonic?.startsWith("К П->X"))).toBe(true);
+  });
+
+  it("specializes constant indexed rule calls before lowering", () => {
+    const result = compileOk(`
+program ConstantIndexedRuleSpecialization {
+  state {
+    line: group(1..2) {
+      front: packed = 10
+    }
+  }
+
+  loop {
+    touch(1)
+    touch(2)
+    halt(line[1].front + line[2].front)
+  }
+
+  fn touch(slot) {
+    show(slot)
+    line[slot].front += 1
+  }
+}
+`, { budget: 999, analysis: true, disableInterproceduralOpts: true });
+
+    expect(result.ast.procs.some((proc) => proc.name === "touch")).toBe(false);
+    expect(result.steps.some((step) => step.comment === "indexed set line.front[1]")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "indexed set line.front[2]")).toBe(true);
+    expect(result.steps.some((step) => step.mnemonic?.startsWith("К X->П"))).toBe(false);
+  });
+
+  it("fuses indexed stores followed by pointer increments through preincrement indirect stores", () => {
+    const result = compileOk(`
+program IndexedPreincrementStore {
+  state {
+    slots: packed[2..4] = 0
+    pointer: counter 1..4 = 1
+    value: packed = 7
+  }
+
+  loop {
+    slots[pointer + 1] = value
+    pointer++
+    halt(slots[2])
+  }
+}
+`, { budget: 999, analysis: true, disableInterproceduralOpts: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "preincrement-indexed-store")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "preincrement indexed set slots")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "increment pointer")).toBe(false);
   });
 
   it("reuses one failed membership mask for adjacent set updates", () => {

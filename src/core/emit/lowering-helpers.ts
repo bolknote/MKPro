@@ -11,6 +11,7 @@ import type {
   DispatchCaseAst,
   ExpressionAst,
   ProgramAst,
+  ProcAst,
   RegisterName,
   StateFieldAst,
   StatementAst,
@@ -68,6 +69,13 @@ export interface XParamProcLowering {
   other: string;
 }
 
+export interface XParamReturnDecay {
+  param: string;
+  factor: ExpressionAst;
+  divisor: ExpressionAst;
+  line: number;
+}
+
 export type DisplaySourceItem = Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }>;
 
 export interface DisplayField {
@@ -104,6 +112,8 @@ export function expressionIsDeterministic(expr: ExpressionAst): boolean {
     case "string":
     case "identifier":
       return true;
+    case "indexed":
+      return expressionIsDeterministic(expr.index);
     case "unary":
       return expressionIsDeterministic(expr.expr);
     case "binary":
@@ -747,6 +757,10 @@ export function equivalentConditionCandidates(condition: ConditionAst, ast: Prog
   const flipped = flipNumericLeftCondition(condition);
   if (flipped !== undefined) add(flipped);
   for (const candidate of [...candidates]) {
+    const negated = negateZeroDifferenceCondition(candidate);
+    if (negated !== undefined) add(negated);
+  }
+  for (const candidate of [...candidates]) {
     for (const boundary of integerBoundaryCandidates(candidate, ast)) add(boundary);
   }
   return candidates;
@@ -775,6 +789,24 @@ export function flipComparisonOp(op: ConditionAst["op"]): ConditionAst["op"] {
     case "!=":
       return op;
   }
+}
+
+export function negateZeroDifferenceCondition(condition: ConditionAst): ConditionAst | undefined {
+  if (!isZeroExpression(condition.right)) return undefined;
+  if (condition.left.kind !== "binary" || condition.left.op !== "-") return undefined;
+  if (!expressionIsDeterministic(condition.left.left) || !expressionIsDeterministic(condition.left.right)) {
+    return undefined;
+  }
+  return {
+    left: {
+      kind: "binary",
+      op: "-",
+      left: condition.left.right,
+      right: condition.left.left,
+    },
+    op: flipComparisonOp(condition.op),
+    right: condition.right,
+  };
 }
 
 export function integerBoundaryCandidates(condition: ConditionAst, ast: ProgramAst): ConditionAst[] {
@@ -898,6 +930,10 @@ export function expressionToIntentText(expr: ExpressionAst): string {
       return JSON.stringify(expr.text);
     case "identifier":
       return expr.name;
+    case "indexed": {
+      const member = expr.field === undefined ? "" : `.${expr.field}`;
+      return `${expr.base}[${expressionToIntentText(expr.index)}]${member}`;
+    }
     case "unary":
       return `-${wrapExpressionText(expr.expr, 3)}`;
     case "binary":
@@ -919,6 +955,7 @@ export function expressionPrecedence(expr: ExpressionAst): number {
     case "string":
     case "identifier":
     case "call":
+    case "indexed":
       return 4;
     case "unary":
       return 3;
@@ -2645,6 +2682,11 @@ export function expressionEquals(left: ExpressionAst, right: ExpressionAst): boo
       return right.kind === "string" && left.text === right.text;
     case "identifier":
       return right.kind === "identifier" && left.name === right.name;
+    case "indexed":
+      return right.kind === "indexed" &&
+        left.base === right.base &&
+        left.field === right.field &&
+        expressionEquals(left.index, right.index);
     case "unary":
       return right.kind === "unary" && left.op === right.op && expressionEquals(left.expr, right.expr);
     case "binary":
@@ -2667,6 +2709,8 @@ export function expressionReferencesIdentifier(expr: ExpressionAst, name: string
       return false;
     case "identifier":
       return expr.name === name;
+    case "indexed":
+      return expressionReferencesIdentifier(expr.index, name);
     case "unary":
       return expressionReferencesIdentifier(expr.expr, name);
     case "binary":
@@ -2686,6 +2730,8 @@ export function isPureExpression(expr: ExpressionAst): boolean {
     case "string":
     case "identifier":
       return true;
+    case "indexed":
+      return isPureExpression(expr.index);
     case "unary":
       return isPureExpression(expr.expr);
     case "binary":
@@ -2712,6 +2758,34 @@ export function matchStackUnaryDerivationCall(expr: ExpressionAst): StackUnaryDe
 
 export function isStackUnaryDerivationFn(name: string): name is StackUnaryDerivationFn {
   return Object.prototype.hasOwnProperty.call(STACK_UNARY_DERIVATION_OPCODES, name);
+}
+
+export function matchXParamReturnDecay(proc: ProcAst): XParamReturnDecay | undefined {
+  const params = proc.params ?? [];
+  const [param] = params;
+  if (param === undefined || params.length !== 1 || proc.body.length !== 1) return undefined;
+  const only = proc.body[0];
+  if (only?.kind !== "return_value") return undefined;
+  const expr = only.expr;
+  if (expr.kind !== "binary" || expr.op !== "-") return undefined;
+  if (expr.left.kind !== "identifier" || expr.left.name !== param) return undefined;
+  const right = expr.right;
+  if (right.kind !== "call" || right.callee.toLowerCase() !== "int" || right.args.length !== 1) return undefined;
+  const scaled = right.args[0]!;
+  if (scaled.kind !== "binary" || scaled.op !== "/") return undefined;
+  const product = scaled.left;
+  if (product.kind !== "binary" || product.op !== "*") return undefined;
+  let factor: ExpressionAst | undefined;
+  if (product.left.kind === "identifier" && product.left.name === param) {
+    factor = product.right;
+  } else if (product.right.kind === "identifier" && product.right.name === param) {
+    factor = product.left;
+  } else {
+    return undefined;
+  }
+  if (expressionReferencesIdentifier(factor, param) || expressionReferencesIdentifier(scaled.right, param)) return undefined;
+  if (!expressionPureForSubstitution(factor) || !expressionPureForSubstitution(scaled.right)) return undefined;
+  return { param, factor, divisor: scaled.right, line: only.line };
 }
 
 export function optimizeDispatchDefaultCases(
@@ -2844,6 +2918,9 @@ export function statementEquals(left: StatementAst, right: StatementAst): boolea
       return left.target === (right as typeof left).target;
     case "assign":
       return left.target === (right as typeof left).target && expressionEquals(left.expr, (right as typeof left).expr);
+    case "indexed_assign":
+      return expressionEquals(left.target, (right as typeof left).target) &&
+        expressionEquals(left.expr, (right as typeof left).expr);
     case "loop":
       return statementListsEqual(left.body, (right as typeof left).body);
     case "while":
@@ -2900,6 +2977,8 @@ export function countIdentifierReads(expr: ExpressionAst, name: string): number 
       return 0;
     case "identifier":
       return expr.name === name ? 1 : 0;
+    case "indexed":
+      return countIdentifierReads(expr.index, name);
     case "unary":
       return countIdentifierReads(expr.expr, name);
     case "binary":
@@ -2924,6 +3003,8 @@ export function substituteExpressionIdentifier(expr: ExpressionAst, name: string
       return expr;
     case "identifier":
       return expr.name === name ? replacement : expr;
+    case "indexed":
+      return { ...expr, index: substituteExpressionIdentifier(expr.index, name, replacement) };
     case "unary":
       return { ...expr, expr: substituteExpressionIdentifier(expr.expr, name, replacement) };
     case "binary":
@@ -2943,6 +3024,8 @@ export function expressionPureForSubstitution(expr: ExpressionAst): boolean {
     case "string":
     case "identifier":
       return true;
+    case "indexed":
+      return expressionPureForSubstitution(expr.index);
     case "unary":
       return expressionPureForSubstitution(expr.expr);
     case "binary":
@@ -3053,6 +3136,8 @@ export function estimateExpressionCostForCondition(
       return estimateNumberCost(expr.raw);
     case "identifier":
       return 1;
+    case "indexed":
+      return estimateExpressionCostForCondition(expr.index, preloadedConstants) + 2;
     case "unary":
       return estimateExpressionCostForCondition(expr.expr, preloadedConstants) + 1;
     case "binary": {
@@ -3131,6 +3216,8 @@ export function estimateExpressionCost(expr: ExpressionAst): number {
       return estimateNumberCost(expr.raw);
     case "identifier":
       return 1;
+    case "indexed":
+      return estimateExpressionCost(expr.index) + 2;
     case "unary":
       return estimateExpressionCost(expr.expr) + 1;
     case "binary": {

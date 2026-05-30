@@ -14,12 +14,9 @@ program JackPot {
     draw_count: counter 0..3 = 0
     slot: counter 1..4 = 1
     digit: counter 0..9 = 0
-    digit2: counter 0..9 = 0
-    digit3: counter 0..9 = 0
-    digit4: counter 0..9 = 0
+    digits: counter[2..4] 0..9 = 0
     reels: counter 0..999 = 0
 
-    random_state: packed = 0.5
   }
 
   fn game_over() {
@@ -64,23 +61,11 @@ program JackPot {
         digit = 0
 
         while digit == 0 {
-          random_state = random()
-          digit = int(random_state * 10)
+          digit = int(random(0, 10))
         }
 
+        digits[slot + 1] = digit
         slot++
-
-        if slot == 2 {
-          digit2 = digit
-        }
-        else {
-          if slot == 3 {
-            digit3 = digit
-          }
-          else {
-            digit4 = digit
-          }
-        }
 
         if reels == 0 {
           reels = digit
@@ -97,14 +82,14 @@ program JackPot {
   }
 
   fn settle() {
-    if frac((digit2 + digit3 + digit4) / 5) == 0 {
+    if frac((digits[2] + digits[3] + digits[4]) / 5) == 0 {
       money += 1000
     }
 
-    if digit3 == digit2 {
+    if digits[3] == digits[2] {
       money += 3000
 
-      if digit4 == digit3 {
+      if digits[4] == digits[3] {
         money += 3000
       }
     }

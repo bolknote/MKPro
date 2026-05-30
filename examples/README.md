@@ -7,7 +7,7 @@ Generated with `npm run examples:size`.
 - Top-level examples: 19/19 fit in the 105-cell MK-61 window; 19/19 pass the headless load check.
 - Referenced top-level examples: 14/14 are no larger than the original MK-61 listing.
 - Tightest runnable examples: `fox-hunt-100.mkpro` (105), `game-100-pig.mkpro` (103), `wumpus.mkpro` (103).
-- Pending optimizer: 9 programs still exceed the MK-61 window; nearest is `pending-optimizer/cave-highlevel-baseline.mkpro` (120).
+- Pending optimizer: 8 programs still exceed the MK-61 window; nearest is `pending-optimizer/cave-highlevel-baseline.mkpro` (120).
 
 ## Measurements
 
@@ -37,9 +37,9 @@ Generated with `npm run examples:size`.
 | `pending-optimizer/cave-highlevel-baseline.mkpro` | 120 | 105 | +15 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/cave-treasure.mkpro` | 139 | 105 | +34 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/giants-country.mkpro` | 162 | 105 | +57 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/jack-pot.mkpro` | 153 | 104 | +49 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/jack-pot.mkpro` | 99 | 104 | -5 | ok: <= reference | main+setup load ok |
 | `pending-optimizer/labyrinth777.mkpro` | 221 | 105 | +116 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/rambo-iii.mkpro` | 324 | 105 | +219 | pending optimizer | not loaded: main >105 |
+| `pending-optimizer/rambo-iii.mkpro` | 201 | 105 | +96 | pending optimizer | not loaded: main >105 |
 | `pending-optimizer/teleport.mkpro` | 245 | 105 | +140 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/tic-tac-toe-4x4.mkpro` | 260 | 105 | +155 | pending optimizer | not loaded: main >105 |
 | `pending-optimizer/treasure-hunter-2.mkpro` | 135 | 105 | +30 | pending optimizer | setup load ok; main >105 |

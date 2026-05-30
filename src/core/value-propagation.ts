@@ -257,6 +257,8 @@ function expressionCost(expr: ExpressionAst): number {
     case "string":
     case "identifier":
       return 1;
+    case "indexed":
+      return 2 + expressionCost(expr.index);
     case "unary":
       return 1 + expressionCost(expr.expr);
     case "binary":

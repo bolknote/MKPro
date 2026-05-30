@@ -44,9 +44,9 @@ interface Scenario {
 // Deterministic input scripts that drive human.mkpro through its turn logic.
 const SCENARIOS: Scenario[] = [
   { keys: ["В/О", "С/П"] },
-  { registers: { "1": "0", "2": "5" }, keys: ["В/О", "С/П", "2", "С/П", "С/П"] },
-  { registers: { "1": "3", "2": "5" }, keys: ["В/О", "С/П", "8", "С/П", "С/П"] },
-  { registers: { "1": "7", "2": "9" }, keys: ["В/О", "С/П", "2", "С/П", "8", "С/П", "С/П"] },
+  { registers: { "1": "0", "2": "5" }, keys: ["В/О", "С/П", "Сx", "2", "С/П", "С/П"] },
+  { registers: { "1": "3", "2": "5" }, keys: ["В/О", "С/П", "Сx", "8", "С/П", "С/П"] },
+  { registers: { "1": "7", "2": "9" }, keys: ["В/О", "С/П", "Сx", "6", "С/П"] },
 ];
 
 interface Observation {

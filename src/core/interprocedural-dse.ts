@@ -59,7 +59,9 @@ function collectAllVars(cfg: RuleCfg): Set<string> {
 function pruneStatements(statements: StatementAst[], doomed: ReadonlySet<StatementAst>): StatementAst[] {
   return statements.flatMap((statement): StatementAst[] => {
     if (doomed.has(statement)) return [];
-    if (statement.kind === "loop") return [{ ...statement, body: pruneStatements(statement.body, doomed) }];
+    if (statement.kind === "loop" || statement.kind === "while") {
+      return [{ ...statement, body: pruneStatements(statement.body, doomed) }];
+    }
     if (statement.kind === "if") {
       const pruned: Extract<StatementAst, { kind: "if" }> = {
         ...statement,

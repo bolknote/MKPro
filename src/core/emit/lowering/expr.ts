@@ -19,6 +19,7 @@ import {
   isSmallSetMacroName,
   isTicTacToeMacroName,
   matchStackUnaryDerivationCall,
+  matchXParamReturnDecay,
   matchRemainderByConstant,
   negatedNumberLiteral,
   randomRangeExpression,
@@ -81,6 +82,9 @@ export function compileExpression(ctx: LoweringCtx, expr: ExpressionAst): void {
         ctx.emitRecall(expr.name, `recall ${expr.name}`);
         return;
       }
+      case "indexed":
+        ctx.emitIndexedRecall(expr);
+        return;
       case "unary":
         if (expr.op === "-" && expr.expr.kind === "number") {
           ctx.emitNumberOrPreload(negatedNumberLiteral(expr.expr.raw));
@@ -181,11 +185,25 @@ export function compileFunctionCall(ctx: LoweringCtx, expr: Extract<ExpressionAs
       ));
       return true;
     }
+    const xParamDecay = matchXParamReturnDecay(proc);
+    if (xParamDecay !== undefined && expr.args.length === 1) {
+      compileExpression(ctx, expr.args[0]!);
+      const bankSelectors = ctx.snapshotBankSelectorCache();
+      ctx.emitJump(0x53, "ПП", proc.name, `call function ${proc.name}`, proc.line);
+      ctx.restoreBankSelectorCacheAfterCall(proc.name, bankSelectors);
+      ctx.optimizations.push({
+        name: "x-param-return-decay-call",
+        detail: `Passed ${xParamDecay.param} to ${proc.name} through X.`,
+      });
+      return true;
+    }
     for (let index = 0; index < params.length; index += 1) {
       compileExpression(ctx, expr.args[index]!);
       ctx.emitStore(params[index]!, `arg ${params[index]} for ${expr.callee}`, proc.line);
     }
+    const bankSelectors = ctx.snapshotBankSelectorCache();
     ctx.emitJump(0x53, "ПП", proc.name, `call function ${proc.name}`, proc.line);
+    ctx.restoreBankSelectorCacheAfterCall(proc.name, bankSelectors);
     ctx.optimizations.push({
       name: "function-call",
       detail: `Called function ${proc.name} and consumed its result from X.`,

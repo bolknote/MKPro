@@ -1,7 +1,9 @@
 # Pending Optimizer
 
 These MK-Pro sources lower through ordinary compiler IR, but the generated
-program is still too large for MK-61 or larger than the original reference.
+program is usually still too large for MK-61 or larger than the original
+reference. Files that already fit may stay here briefly as regression fixtures
+until they are moved back to the top-level examples.
 
 Treat each file here as an optimizer or lowering-size bug, not as an unsupported
 syntax bucket. Do not replace these with raw listings; the point is to make the
@@ -17,9 +19,9 @@ Current `--analysis` sizes, measured against the local reference listings:
 | `cave-highlevel-baseline.mkpro` | 120 | 105 | command dispatch and remaining cave flow lowerers |
 | `cave-treasure.mkpro` | 139 | 105 | wall breaking, cache flow, and remaining dispatch overhead |
 | `giants-country.mkpro` | 162 | 105 | packed room-map display/flow and remaining event flow lowerers |
-| `jack-pot.mkpro` | 153 | 104 | angle-switch menu polling, indirect digit-store loop, and literal video displays |
+| `jack-pot.mkpro` | 99 | 104 | now fits; regression fixture for preincrement indexed stores, counted loops, and preloaded literal displays |
 | `labyrinth777.mkpro` | 221 | 105 | room inspection and local-jumper dispatch |
-| `rambo-iii.mkpro` | 324 | 105 | source-shaped indirect front schedule, random damage, reserve/order accounting, and packed R8 victory output |
+| `rambo-iii.mkpro` | 201 | 105 | grouped front/robots storage now works; event dispatch and battle-flow branches are the remaining large blocks |
 | `teleport.mkpro` | 245 | 105 | station masks and vault/guard flow |
 | `tic-tac-toe-4x4.mkpro` | 260 | 105 | 4x4 line-count state representation |
 | `treasure-hunter-2.mkpro` | 135 | 105 | floor-plan display/state lowerer |

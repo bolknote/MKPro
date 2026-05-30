@@ -57,6 +57,7 @@ import {
   matchIntOrFracCall,
   matchNegativeZeroThresholdCondition,
   matchStackUnaryDerivationCall,
+  matchXParamReturnDecay,
   numberExpression,
   orderRawInputs,
   parseRawInstruction,
@@ -144,7 +145,15 @@ export function compileProcedures(ctx: LoweringCtx): void {
       if (ctx.inlineProcNames.has(proc.name)) continue;
       ctx.emitLabel(proc.name);
       const xParam = ctx.xParamProcs.get(proc.name);
-      if (xParam !== undefined) {
+      const xParamDecay = matchXParamReturnDecay(proc);
+      if (xParamDecay !== undefined) {
+        compileXParamReturnDecayBody(ctx, xParamDecay);
+        ctx.emitOp(0x52, "В/О", "x-param decay return", xParamDecay.line);
+        ctx.optimizations.push({
+          name: "x-param-return-decay",
+          detail: `Compiled ${proc.name} to consume ${xParamDecay.param} directly from X.`,
+        });
+      } else if (xParam !== undefined) {
         compileXParamProcBody(ctx, proc, xParam);
       } else {
         ctx.compileStatements(proc.body);
@@ -153,6 +162,19 @@ export function compileProcedures(ctx: LoweringCtx): void {
         ctx.emitOp(0x52, "В/О", "implicit return from proc");
       }
     }
+}
+
+function compileXParamReturnDecayBody(
+  ctx: LoweringCtx,
+  decay: { factor: ExpressionAst; divisor: ExpressionAst; line: number },
+): void {
+    ctx.emitOp(0x0e, "В↑", "x-param decay keep base", decay.line);
+    compileExpression(ctx, decay.factor);
+    ctx.emitOp(0x12, "*", "x-param decay scale", decay.line);
+    compileExpression(ctx, decay.divisor);
+    ctx.emitOp(0x13, "/", "x-param decay divide", decay.line);
+    ctx.emitOp(0x34, "К [x]", "x-param decay int", decay.line);
+    ctx.emitOp(0x11, "-", "x-param decay subtract", decay.line);
 }
 
 export function compileRuntimeHelpers(ctx: LoweringCtx): void {
@@ -755,7 +777,9 @@ export function compileBlockCall(ctx: LoweringCtx, blockName: string, line: numb
         });
         return;
       }
+      const bankSelectors = ctx.snapshotBankSelectorCache();
       ctx.emitJump(0x53, "ПП", proc.name, `proc call ${proc.name}`, line);
+      ctx.restoreBankSelectorCacheAfterCall(proc.name, bankSelectors);
       const returnX = ctx.procReturnXVariable(proc);
       if (returnX !== undefined) {
         ctx.currentXVariable = returnX;

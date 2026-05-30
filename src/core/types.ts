@@ -71,6 +71,7 @@ export interface OpcodeInfo {
 export interface ProgramAst {
   reference?: string;
   v2?: V2ProgramAst;
+  banks?: StateBankAst[];
   domains: DomainAst[];
   states: StateAst[];
   displays: DisplayAst[];
@@ -137,6 +138,29 @@ export interface StateFieldAst {
   line: number;
 }
 
+export interface StateBankAst {
+  kind: "state_bank";
+  name: string;
+  min: number;
+  max: number;
+  members: StateBankMemberAst[];
+  line: number;
+}
+
+export interface StateBankMemberAst {
+  name?: string;
+  type: StateFieldType;
+  min?: number;
+  max?: number;
+  elements: StateBankElementAst[];
+  line: number;
+}
+
+export interface StateBankElementAst {
+  index: number;
+  name: string;
+}
+
 export interface DisplayAst {
   kind: "display";
   name: string;
@@ -159,6 +183,7 @@ export interface DisplayLiteralItemAst {
 export interface DisplaySourceItemAst {
   kind: "source";
   name: string;
+  expr?: ExpressionAst;
   width?: number;
   pad?: "space" | "zero";
   line: number;
@@ -179,12 +204,20 @@ export interface V2StateFieldAst {
   kind: "v2_state_field";
   name: string;
   type: "flag" | "counter" | "coord" | "cells" | "coord_list" | "packed";
+  bank?: V2StateBankFieldAst;
   domain?: string;
   count?: number;
   min?: number;
   max?: number;
   initial?: string;
   line: number;
+}
+
+export interface V2StateBankFieldAst {
+  name: string;
+  member?: string;
+  min: number;
+  max: number;
 }
 
 export interface V2BoardAst {
@@ -377,6 +410,7 @@ export type StatementAst =
   | InputStatementAst
   | HaltStatementAst
   | AssignStatementAst
+  | IndexedAssignStatementAst
   | LoopStatementAst
   | WhileStatementAst
   | IfStatementAst
@@ -409,6 +443,13 @@ export interface HaltStatementAst {
 export interface AssignStatementAst {
   kind: "assign";
   target: string;
+  expr: ExpressionAst;
+  line: number;
+}
+
+export interface IndexedAssignStatementAst {
+  kind: "indexed_assign";
+  target: IndexedExpressionAst;
   expr: ExpressionAst;
   line: number;
 }
@@ -516,6 +557,7 @@ export type ExpressionAst =
   | NumberExpressionAst
   | StringExpressionAst
   | IdentifierExpressionAst
+  | IndexedExpressionAst
   | UnaryExpressionAst
   | BinaryExpressionAst
   | CallExpressionAst;
@@ -533,6 +575,13 @@ export interface StringExpressionAst {
 export interface IdentifierExpressionAst {
   kind: "identifier";
   name: string;
+}
+
+export interface IndexedExpressionAst {
+  kind: "indexed";
+  base: string;
+  field?: string;
+  index: ExpressionAst;
 }
 
 export interface UnaryExpressionAst {

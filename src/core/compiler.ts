@@ -83,6 +83,7 @@ import {
   matchEqualityConstantCondition,
   matchNearAnyHelperCondition,
   matchNegativeZeroThresholdCondition,
+  matchXParamReturnDecay,
   matchSingleBitMaskOpAssignment,
   nearAnyHelperKey,
   negatedNumberLiteral,
@@ -110,6 +111,15 @@ import {
   ticTacToeMaskScratchName,
   zeroDigitTailDisplayProgram,
 } from "./emit/lowering-helpers.ts";
+import {
+  bankMemberKey,
+  bankSelectorVariableName,
+  contiguousRegisterOffset,
+  findStateBankMember,
+  numericIndexValue,
+  stateBankElementNames,
+  stateBankElementForIndex,
+} from "./state-banks.ts";
 import type {
   BitMembershipCondition,
   BitSetAssignment,
@@ -201,6 +211,7 @@ const REGISTER_ORDER: RegisterName[] = [
 ];
 
 const SHARED_BIT_MASK_SCRATCH = "__bit_mask_shared";
+const DISPLAY_EXPR_PREFIX = "__display_expr_";
 const DISPLAY_TEMPLATE_VALUE_PREFIX = "__display_value_";
 const DISPLAY_TEMPLATE_LOOP_PREFIX = "__display_loop_";
 const DISPLAY_TEMPLATE_MASK_PREFIX = "__display_mask_";
@@ -940,6 +951,9 @@ function remainingDisplayStringReads(ast: ProgramAst, candidates: ReadonlySet<st
       case "identifier":
         add(expr.name);
         return;
+      case "indexed":
+        visitExpr(expr.index);
+        return;
       case "unary":
         visitExpr(expr.expr);
         return;
@@ -1102,6 +1116,8 @@ function compileMKProOnce(
   const warnings: string[] = [];
   const candidates: CandidateReport[] = [];
 
+  materializeDisplayExpressions(ast, optimizations);
+  elideXParamReturnStateFields(ast, optimizations);
   const foldedConstants = foldProgramConstants(ast);
   if (foldedConstants > 0) {
     optimizations.push({
@@ -1275,6 +1291,7 @@ function visiblePublicRegisters(
       !name.startsWith(TICTACTOE_MASK_SCRATCH_PREFIX) &&
       !name.startsWith(BIT_MASK_SCRATCH_PREFIX) &&
       !name.startsWith(IF_SELECTOR_SCRATCH_PREFIX) &&
+      !name.startsWith(DISPLAY_EXPR_PREFIX) &&
       !name.startsWith(CELL_MAP_PREFIX) &&
       !name.startsWith(SPATIAL_HIT_SCRATCH_PREFIX) &&
       !name.startsWith(SPATIAL_COUNT_SCRATCH_PREFIX)
@@ -1283,6 +1300,131 @@ function visiblePublicRegisters(
     }
   }
   return result;
+}
+
+function materializeDisplayExpressions(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  let materialized = 0;
+  const plans = new Map<string, StatementAst[]>();
+
+  for (const display of ast.displays) {
+    const assignments: StatementAst[] = [];
+    const items = display.items.map((item, index): DisplayItemAst => {
+      if (item.kind !== "source" || item.expr === undefined) return item;
+      const target = `${DISPLAY_EXPR_PREFIX}${display.name}_${index}`;
+      assignments.push({
+        kind: "assign",
+        target,
+        expr: structuredClone(item.expr),
+        line: item.line,
+      });
+      materialized += 1;
+      const lowered: DisplayItemAst = {
+        kind: "source",
+        name: target,
+        line: item.line,
+      };
+      if (item.width !== undefined) lowered.width = item.width;
+      if (item.pad !== undefined) lowered.pad = item.pad;
+      return lowered;
+    });
+    if (assignments.length === 0) continue;
+    display.items = items;
+    display.sources = sourceNamesForDisplayItems(items);
+    plans.set(display.name, assignments);
+  }
+
+  if (plans.size === 0) return;
+
+  const rewrite = (statements: StatementAst[]): StatementAst[] => {
+    const result: StatementAst[] = [];
+    for (const statement of statements) {
+      if (statement.kind === "show") {
+        const assignments = plans.get(statement.display);
+        if (assignments !== undefined) result.push(...cloneStatements(assignments));
+        result.push(statement);
+        continue;
+      }
+      if (statement.kind === "loop") {
+        result.push({ ...statement, body: rewrite(statement.body) });
+        continue;
+      }
+      if (statement.kind === "while") {
+        result.push({ ...statement, body: rewrite(statement.body) });
+        continue;
+      }
+      if (statement.kind === "if") {
+        result.push({
+          ...statement,
+          thenBody: rewrite(statement.thenBody),
+          ...(statement.elseBody === undefined ? {} : { elseBody: rewrite(statement.elseBody) }),
+        });
+        continue;
+      }
+      if (statement.kind === "dispatch") {
+        result.push({
+          ...statement,
+          cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: rewrite(dispatchCase.body) })),
+          ...(statement.defaultBody === undefined ? {} : { defaultBody: rewrite(statement.defaultBody) }),
+        });
+        continue;
+      }
+      result.push(statement);
+    }
+    return result;
+  };
+
+  for (const entry of ast.entries) entry.body = rewrite(entry.body);
+  for (const proc of ast.procs) proc.body = rewrite(proc.body);
+  optimizations.push({
+    name: "display-expression-materialization",
+    detail: `Materialized ${materialized} display expression field${materialized === 1 ? "" : "s"} before show().`,
+  });
+}
+
+function elideXParamReturnStateFields(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  const params = new Set<string>();
+  for (const proc of ast.procs) {
+    const match = matchXParamReturnDecay(proc);
+    if (match === undefined) continue;
+    if (!identifierReadOutsideProc(ast, proc.name, match.param)) params.add(match.param);
+  }
+  if (params.size === 0) return;
+  let removed = 0;
+  for (const state of ast.states) {
+    const before = state.fields.length;
+    state.fields = state.fields.filter((field) => !params.has(field.name));
+    removed += before - state.fields.length;
+  }
+  if (removed > 0) {
+    optimizations.push({
+      name: "x-param-state-elision",
+      detail: `Removed ${removed} register-backed parameter field${removed === 1 ? "" : "s"} consumed directly from X.`,
+    });
+  }
+}
+
+function identifierReadOutsideProc(ast: ProgramAst, procName: string, name: string): boolean {
+  const visitExpr = (expr: ExpressionAst): boolean => expressionReferencesIdentifier(expr, name);
+  const visitCondition = (condition: ConditionAst): boolean => visitExpr(condition.left) || visitExpr(condition.right);
+  const visitStatements = (statements: readonly StatementAst[]): boolean => {
+    for (const statement of statements) {
+      if (statement.kind === "assign" && visitExpr(statement.expr)) return true;
+      if (statement.kind === "indexed_assign" && (visitExpr(statement.target.index) || visitExpr(statement.expr))) return true;
+      if ((statement.kind === "pause" || statement.kind === "halt" || statement.kind === "return_value") && visitExpr(statement.expr)) return true;
+      if ((statement.kind === "if" || statement.kind === "while") && visitCondition(statement.condition)) return true;
+      if (statement.kind === "if" && (visitStatements(statement.thenBody) || (statement.elseBody !== undefined && visitStatements(statement.elseBody)))) return true;
+      if (statement.kind === "while" && visitStatements(statement.body)) return true;
+      if (statement.kind === "loop" && visitStatements(statement.body)) return true;
+      if (statement.kind === "dispatch") {
+        if (visitExpr(statement.expr) || statement.cases.some((branch) => visitExpr(branch.value) || visitStatements(branch.body))) return true;
+        if (statement.defaultBody !== undefined && visitStatements(statement.defaultBody)) return true;
+      }
+      if (statement.kind === "core" && statement.inputs?.some((input) => visitExpr(input.expr))) return true;
+    }
+    return false;
+  };
+  if (ast.entries.some((entry) => visitStatements(entry.body))) return true;
+  return ast.procs.some((proc) => proc.name !== procName && visitStatements(proc.body));
 }
 
 function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
@@ -1296,9 +1438,26 @@ function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimiz
   const addRead = (name: string): void => {
     if (stateFields.has(name)) externallyRead.add(name);
   };
+  const indexedElementNames = (expr: Extract<ExpressionAst, { kind: "indexed" }>): string[] => {
+    const resolved = findStateBankMember(ast, expr);
+    if (resolved === undefined) return [];
+    const constantIndex = numericIndexValue(expr.index);
+    if (constantIndex !== undefined) {
+      const element = stateBankElementForIndex(resolved.member, constantIndex);
+      return element === undefined ? [] : [element.name];
+    }
+    return stateBankElementNames(resolved.member);
+  };
   const visitExpr = (expr: ExpressionAst, ignored?: string): void => {
     if (expr.kind === "identifier") {
       if (expr.name !== ignored && !ephemeralInputTargets.has(expr.name)) addRead(expr.name);
+      return;
+    }
+    if (expr.kind === "indexed") {
+      visitExpr(expr.index, ignored);
+      for (const name of indexedElementNames(expr)) {
+        if (name !== ignored) addRead(name);
+      }
       return;
     }
     if (expr.kind === "unary") visitExpr(expr.expr, ignored);
@@ -1319,6 +1478,14 @@ function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimiz
         assigned.get(statement.target)!.push(statement.expr);
         visitExpr(statement.expr, statement.target);
       }
+      if (statement.kind === "indexed_assign") {
+        for (const name of indexedElementNames(statement.target)) {
+          if (!assigned.has(name)) assigned.set(name, []);
+          assigned.get(name)!.push(statement.expr);
+        }
+        visitExpr(statement.target.index);
+        visitExpr(statement.expr);
+      }
       if (statement.kind === "show") {
         const display = ast.displays.find((candidate) => candidate.name === statement.display);
         for (const source of display?.sources ?? []) addRead(source);
@@ -1330,6 +1497,11 @@ function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimiz
         if (statement.elseBody) visitStatements(statement.elseBody);
       }
       if (statement.kind === "loop") visitStatements(statement.body);
+      if (statement.kind === "while") {
+        visitExpr(statement.condition.left);
+        visitExpr(statement.condition.right);
+        visitStatements(statement.body);
+      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) {
@@ -1362,10 +1534,21 @@ function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimiz
   for (const state of ast.states) {
     state.fields = state.fields.filter((field) => !removable.has(field.name));
   }
+  for (const bank of ast.banks ?? []) {
+    for (const member of bank.members) {
+      member.elements = member.elements.filter((element) => !removable.has(element.name));
+    }
+  }
   const pruneStatements = (statements: StatementAst[]): StatementAst[] =>
     statements.flatMap((statement): StatementAst[] => {
       if (statement.kind === "assign" && removable.has(statement.target)) return [];
-      if (statement.kind === "loop") return [{ ...statement, body: pruneStatements(statement.body) }];
+      if (statement.kind === "indexed_assign") {
+        const targets = indexedElementNames(statement.target);
+        if (targets.length > 0 && targets.every((target) => removable.has(target))) return [];
+      }
+      if (statement.kind === "loop" || statement.kind === "while") {
+        return [{ ...statement, body: pruneStatements(statement.body) }];
+      }
       if (statement.kind === "if") {
         const pruned: Extract<StatementAst, { kind: "if" }> = {
           ...statement,
@@ -1399,7 +1582,9 @@ function eliminateIdentityAssignments(ast: ProgramAst, optimizations: AppliedOpt
         removed += 1;
         return [];
       }
-      if (statement.kind === "loop") return [{ ...statement, body: pruneStatements(statement.body) }];
+      if (statement.kind === "loop" || statement.kind === "while") {
+        return [{ ...statement, body: pruneStatements(statement.body) }];
+      }
       if (statement.kind === "if") {
         const pruned: Extract<StatementAst, { kind: "if" }> = {
           ...statement,
@@ -1438,7 +1623,7 @@ function canonicalizeConstantIfChains(ast: ProgramAst, optimizations: AppliedOpt
   const transformList = (statements: StatementAst[]): StatementAst[] => statements.map(transformStatement);
 
   const transformStatement = (statement: StatementAst): StatementAst => {
-    if (statement.kind === "loop") {
+    if (statement.kind === "loop" || statement.kind === "while") {
       return { ...statement, body: transformList(statement.body) };
     }
     if (statement.kind === "dispatch") {
@@ -1587,6 +1772,9 @@ function countVariableUsage(ast: ProgramAst, name: string): { reads: number; wri
       visitExpr(expr.left);
       visitExpr(expr.right);
     }
+    if (expr.kind === "indexed") {
+      visitExpr(expr.index);
+    }
     if (expr.kind === "call") {
       for (const arg of expr.args) visitExpr(arg);
     }
@@ -1624,6 +1812,10 @@ function countVariableUsage(ast: ProgramAst, name: string): { reads: number; wri
         if (statement.elseBody !== undefined) visitList(statement.elseBody);
       }
       if (statement.kind === "loop") visitList(statement.body);
+      if (statement.kind === "while") {
+        visitCondition(statement.condition);
+        visitList(statement.body);
+      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) {
@@ -1637,6 +1829,23 @@ function countVariableUsage(ast: ProgramAst, name: string): { reads: number; wri
   for (const entry of ast.entries) visitList(entry.body);
   for (const proc of ast.procs) visitList(proc.body);
   return { reads, writes };
+}
+
+function unitPositiveWhileCondition(condition: ConditionAst, target: string): boolean {
+  const leftIdentifier = condition.left.kind === "identifier" && condition.left.name === target;
+  const rightIdentifier = condition.right.kind === "identifier" && condition.right.name === target;
+  const leftValue = numericLiteralValue(condition.left);
+  const rightValue = numericLiteralValue(condition.right);
+
+  if (leftIdentifier) {
+    if (condition.op === ">=" && rightValue === 1) return true;
+    if (condition.op === ">" && rightValue === 0) return true;
+  }
+  if (rightIdentifier) {
+    if (condition.op === "<=" && leftValue === 1) return true;
+    if (condition.op === "<" && leftValue === 0) return true;
+  }
+  return false;
 }
 
 interface ConstantGuardedProc {
@@ -1737,6 +1946,8 @@ function statementOwnExpressions(statement: StatementAst): ExpressionAst[] {
     case "halt":
     case "return_value":
       return [statement.expr];
+    case "indexed_assign":
+      return [statement.target.index, statement.expr];
     case "if":
     case "while":
       return [statement.condition.left, statement.condition.right];
@@ -1758,9 +1969,40 @@ function expressionCallCallees(expr: ExpressionAst): string[] {
       return expressionCallCallees(expr.expr);
     case "binary":
       return [...expressionCallCallees(expr.left), ...expressionCallCallees(expr.right)];
+    case "indexed":
+      return expressionCallCallees(expr.index);
     default:
       return [];
   }
+}
+
+function expressionIdentifierDeps(expr: ExpressionAst): ReadonlySet<string> {
+  const deps = new Set<string>();
+  const visit = (current: ExpressionAst): void => {
+    switch (current.kind) {
+      case "identifier":
+        deps.add(current.name);
+        return;
+      case "indexed":
+        visit(current.index);
+        return;
+      case "unary":
+        visit(current.expr);
+        return;
+      case "binary":
+        visit(current.left);
+        visit(current.right);
+        return;
+      case "call":
+        for (const arg of current.args) visit(arg);
+        return;
+      case "number":
+      case "string":
+        return;
+    }
+  };
+  visit(expr);
+  return deps;
 }
 
 function statementExpressionCallees(statement: StatementAst): string[] {
@@ -2497,6 +2739,7 @@ export class EmitContext {
   readonly warnings: string[];
   readonly candidates: CandidateReport[];
   readonly loweringOptions: LoweringOptions;
+  readonly bankSelectorCache = new Map<string, { key: string; deps: ReadonlySet<string> }>();
   // Read-only program analysis is computed once and injected; the lowering code
   // reads these maps through getters so call sites stay unchanged.
   readonly analysis: ProgramAnalysis;
@@ -2761,6 +3004,21 @@ export class EmitContext {
         index += 1;
         continue;
       }
+      if (statement.kind === "indexed_assign" && next?.kind === "assign" && this.compilePreincrementIndexedStore(statement, next)) {
+        index += 1;
+        continue;
+      }
+      if (statement.kind === "assign") {
+        const countedWhile = this.compileInitializedUnitDecrementWhileRun(statements, index);
+        if (countedWhile > 1) {
+          index += countedWhile - 1;
+          continue;
+        }
+      }
+      if (statement.kind === "assign" && next?.kind === "while" && this.compileInitializedUnitDecrementWhile(statement, next)) {
+        index += 1;
+        continue;
+      }
       if (statement.kind === "assign" && next?.kind === "assign" && compileTicTacToeCellMaskReuse(this, statement, next)) {
         index += 1;
         continue;
@@ -2904,6 +3162,93 @@ export class EmitContext {
     }
   }
 
+  compileInitializedUnitDecrementWhile(
+    initializer: Extract<StatementAst, { kind: "assign" }>,
+    loop: Extract<StatementAst, { kind: "while" }>,
+    intervening: readonly StatementAst[] = [],
+  ): boolean {
+    if (!unitPositiveWhileCondition(loop.condition, initializer.target)) return false;
+    const initialValue = numericLiteralValue(initializer.expr);
+    if (initialValue === undefined || !Number.isInteger(initialValue) || initialValue < 1) return false;
+    const final = loop.body.at(-1);
+    if (final?.kind !== "assign" || !isUnitDecrementExpression(initializer.target, final.expr)) return false;
+    if (final.target !== initializer.target) return false;
+    const register = this.allocation.registers[initializer.target];
+    if (register === undefined) return false;
+    const opcode = flOpcode(register);
+    if (opcode === undefined) return false;
+
+    const body = loop.body.slice(0, -1);
+    if (this.statementsEndMachineFlow(body)) return false;
+
+    this.compileStatement(initializer);
+    for (const statement of intervening) this.compileStatement(statement);
+    const start = this.freshLabel("counted_while");
+    this.emitLabel(start);
+    this.currentXVariable = undefined;
+    this.currentXAliases.clear();
+    this.currentXKnownZero = false;
+    this.scaledCoordVariables.clear();
+    this.compileStatements(body);
+    this.emitJump(opcode, getOpcode(opcode).name, start, `counted while ${initializer.target}`, loop.line);
+    this.optimizations.push({
+      name: "initialized-counted-while-loop",
+      detail: `Lowered initialized while ${initializer.target} >= 1 through ${getOpcode(opcode).name} at line ${loop.line}.`,
+    });
+    return true;
+  }
+
+  compilePreincrementIndexedStore(
+    store: Extract<StatementAst, { kind: "indexed_assign" }>,
+    increment: Extract<StatementAst, { kind: "assign" }>,
+  ): boolean {
+    const pointer = increment.target;
+    if (!isUnitIncrementExpression(pointer, increment.expr)) return false;
+    if (!isUnitIncrementExpression(pointer, store.target.index)) return false;
+    const pointerRegister = this.allocation.registers[pointer];
+    if (pointerRegister === undefined || !isPreincrementIndirectRegister(pointerRegister)) return false;
+    const resolved = findStateBankMember(this.ast, store.target);
+    if (resolved === undefined) return false;
+    if (contiguousRegisterOffset(resolved.member, this.allocation.registers) !== 0) return false;
+
+    if (isZeroExpression(store.expr)) this.emitZero(`set ${bankMemberKey(store.target.base, store.target.field)}`, store.line);
+    else compileExpression(this, store.expr);
+    this.emitOp(
+      0xb0 + registerIndex(pointerRegister),
+      `К X->П ${pointerRegister}`,
+      `preincrement indexed set ${bankMemberKey(store.target.base, store.target.field)}`,
+      store.line,
+    );
+    this.currentXVariable = undefined;
+    this.currentXAliases.clear();
+    this.currentXKnownZero = false;
+    this.bankSelectorCache.clear();
+    this.optimizations.push({
+      name: "preincrement-indexed-store",
+      detail: `Lowered ${bankMemberKey(store.target.base, store.target.field)}[${pointer}+1] and ${pointer}++ through К X->П ${pointerRegister} at line ${store.line}.`,
+    });
+    return true;
+  }
+
+  compileInitializedUnitDecrementWhileRun(statements: readonly StatementAst[], index: number): number {
+    const initializer = statements[index];
+    if (initializer?.kind !== "assign") return 0;
+    const initialValue = numericLiteralValue(initializer.expr);
+    if (initialValue === undefined || !Number.isInteger(initialValue) || initialValue < 1) return 0;
+
+    for (let cursor = index + 1; cursor < statements.length; cursor += 1) {
+      const statement = statements[cursor]!;
+      if (statement.kind === "while") {
+        const intervening = statements.slice(index + 1, cursor);
+        return this.compileInitializedUnitDecrementWhile(initializer, statement, intervening)
+          ? cursor - index + 1
+          : 0;
+      }
+      if (!statementSafeBetweenInitializedCounterAndLoop(statement, initializer.target)) return 0;
+    }
+    return 0;
+  }
+
   inputFeedsOnlyFollowingCondition(
     input: Extract<StatementAst, { kind: "input" }>,
     branch: Extract<StatementAst, { kind: "if" }>,
@@ -2991,6 +3336,23 @@ export class EmitContext {
         if (isZeroExpression(statement.expr)) this.emitZero(`set ${statement.target}`, statement.line);
         else compileExpression(this, statement.expr);
         this.emitStore(statement.target, `set ${statement.target}`, statement.line);
+        return;
+      case "indexed_assign":
+        if (numericIndexValue(statement.target.index) === undefined) {
+          if (!expressionPureForSubstitution(statement.target.index)) {
+            this.diagnostics.push(buildDiagnostic("error", "Dynamic indexed assignment targets must use a deterministic index expression", statement.line));
+            return;
+          }
+          const selector = this.ensureIndexedSelector(statement.target, statement.line);
+          if (selector === undefined) return;
+          if (isZeroExpression(statement.expr)) this.emitZero(`set ${bankMemberKey(statement.target.base, statement.target.field)}`, statement.line);
+          else compileExpression(this, statement.expr);
+          this.emitPreparedIndexedStore(statement.target, selector, statement.line);
+          return;
+        }
+        if (isZeroExpression(statement.expr)) this.emitZero(`set ${bankMemberKey(statement.target.base, statement.target.field)}`, statement.line);
+        else compileExpression(this, statement.expr);
+        this.emitIndexedStore(statement.target, statement.line);
         return;
       case "loop": {
         const start = this.freshLabel("loop");
@@ -4368,6 +4730,7 @@ export class EmitContext {
     this.currentXAliases = aliases;
     this.currentXKnownZero = knownZero;
     this.scaledCoordVariables.delete(name);
+    this.invalidateBankSelectorCacheForStore(name, register);
     if (name === COORD_LIST_COUNTER) this.coordListCounterKnownOne = false;
   }
 
@@ -4380,6 +4743,248 @@ export class EmitContext {
     this.emitOp(0x60 + registerIndex(register), `П->X ${register}`, comment, sourceLine);
     this.currentXVariable = name;
     this.currentXAliases = new Set([name]);
+  }
+
+  emitIndexedRecall(expr: Extract<ExpressionAst, { kind: "indexed" }>, sourceLine?: number): void {
+    const resolved = findStateBankMember(this.ast, expr);
+    if (resolved === undefined) {
+      this.diagnostics.push(buildDiagnostic("error", `Unknown indexed state '${bankMemberKey(expr.base, expr.field)}'`, sourceLine));
+      return;
+    }
+    const constantIndex = numericIndexValue(expr.index);
+    if (constantIndex !== undefined) {
+      const element = stateBankElementForIndex(resolved.member, constantIndex);
+      if (element === undefined) {
+        this.diagnostics.push(buildDiagnostic("error", `Index ${constantIndex} is outside state bank '${expr.base}'`, sourceLine));
+        return;
+      }
+      this.emitRecall(element.name, `indexed recall ${bankMemberKey(expr.base, expr.field)}[${constantIndex}]`, sourceLine);
+      return;
+    }
+    const selector = this.ensureIndexedSelector(expr, sourceLine);
+    if (selector === undefined) return;
+    this.emitOp(
+      0xd0 + registerIndex(selector),
+      `К П->X ${selector}`,
+      `indexed recall ${bankMemberKey(expr.base, expr.field)}`,
+      sourceLine,
+    );
+    this.currentXVariable = undefined;
+    this.currentXAliases.clear();
+    this.currentXKnownZero = false;
+  }
+
+  emitIndexedStore(expr: Extract<ExpressionAst, { kind: "indexed" }>, sourceLine?: number): void {
+    const resolved = findStateBankMember(this.ast, expr);
+    if (resolved === undefined) {
+      this.diagnostics.push(buildDiagnostic("error", `Unknown indexed state '${bankMemberKey(expr.base, expr.field)}'`, sourceLine));
+      return;
+    }
+    const constantIndex = numericIndexValue(expr.index);
+    if (constantIndex !== undefined) {
+      const element = stateBankElementForIndex(resolved.member, constantIndex);
+      if (element === undefined) {
+        this.diagnostics.push(buildDiagnostic("error", `Index ${constantIndex} is outside state bank '${expr.base}'`, sourceLine));
+        return;
+      }
+      this.emitStore(element.name, `indexed set ${bankMemberKey(expr.base, expr.field)}[${constantIndex}]`, sourceLine);
+      return;
+    }
+    const selector = this.ensureIndexedSelector(expr, sourceLine);
+    if (selector === undefined) return;
+    this.emitOp(
+      0xb0 + registerIndex(selector),
+      `К X->П ${selector}`,
+      `indexed set ${bankMemberKey(expr.base, expr.field)}`,
+      sourceLine,
+    );
+    this.currentXVariable = undefined;
+    this.currentXAliases.clear();
+  }
+
+  emitPreparedIndexedStore(
+    expr: Extract<ExpressionAst, { kind: "indexed" }>,
+    selector: RegisterName,
+    sourceLine?: number,
+  ): void {
+    this.emitOp(
+      0xb0 + registerIndex(selector),
+      `К X->П ${selector}`,
+      `indexed set ${bankMemberKey(expr.base, expr.field)}`,
+      sourceLine,
+    );
+    this.currentXVariable = undefined;
+    this.currentXAliases.clear();
+  }
+
+  private ensureIndexedSelector(
+    expr: Extract<ExpressionAst, { kind: "indexed" }>,
+    sourceLine?: number,
+  ): RegisterName | undefined {
+    const resolved = findStateBankMember(this.ast, expr);
+    if (resolved === undefined) return undefined;
+    const offset = contiguousRegisterOffset(resolved.member, this.allocation.registers);
+    if (offset === undefined) {
+      this.diagnostics.push(buildDiagnostic("error", `Indexed state '${bankMemberKey(expr.base, expr.field)}' is not allocated in contiguous registers`, sourceLine));
+      return undefined;
+    }
+    if (offset === 0 && expr.index.kind === "identifier") {
+      const indexRegister = this.allocation.registers[expr.index.name];
+      if (indexRegister !== undefined && registerIndex(indexRegister) >= 7) return indexRegister;
+    }
+    const selectorName = bankSelectorVariableName(expr.base, expr.field);
+    const selector = this.allocation.registers[selectorName];
+    if (selector === undefined) {
+      this.diagnostics.push(buildDiagnostic("error", `No selector register allocated for indexed state '${bankMemberKey(expr.base, expr.field)}'`, sourceLine));
+      return undefined;
+    }
+    if (registerIndex(selector) < 7) {
+      this.diagnostics.push(buildDiagnostic("error", `Indexed state selector '${selectorName}' was allocated to mutating R${selector}; needs R7..Re`, sourceLine));
+      return undefined;
+    }
+
+    const cacheKey = `${bankMemberKey(expr.base, expr.field)}:${expressionToIntentText(expr.index)}:${offset}`;
+    const cacheable = expressionCallCallees(expr.index).length === 0;
+    const cached = this.bankSelectorCache.get(selectorName);
+    if (cacheable && cached?.key === cacheKey) return selector;
+
+    compileExpression(this, expr.index);
+    if (offset > 0) {
+      this.emitNumberOrPreload(String(offset));
+      this.emitOp(0x10, "+", "indexed selector offset", sourceLine);
+    } else if (offset < 0) {
+      this.emitNumberOrPreload(String(Math.abs(offset)));
+      this.emitOp(0x11, "-", "indexed selector offset", sourceLine);
+    }
+    this.emitStore(selectorName, `indexed selector ${bankMemberKey(expr.base, expr.field)}`, sourceLine);
+    if (cacheable) this.bankSelectorCache.set(selectorName, { key: cacheKey, deps: expressionIdentifierDeps(expr.index) });
+    return selector;
+  }
+
+  private invalidateBankSelectorCacheForStore(name: string, register: RegisterName): void {
+    for (const [selectorName, cached] of [...this.bankSelectorCache.entries()]) {
+      if (
+        selectorName === name ||
+        cached.deps.has(name) ||
+        this.allocation.registers[selectorName] === register
+      ) {
+        this.bankSelectorCache.delete(selectorName);
+      }
+    }
+  }
+
+  snapshotBankSelectorCache(): Map<string, { key: string; deps: ReadonlySet<string> }> {
+    return new Map(
+      [...this.bankSelectorCache.entries()].map(([name, cached]) => [
+        name,
+        { key: cached.key, deps: new Set(cached.deps) },
+      ]),
+    );
+  }
+
+  restoreBankSelectorCacheAfterCall(
+    procName: string,
+    snapshot: ReadonlyMap<string, { key: string; deps: ReadonlySet<string> }>,
+  ): void {
+    const writes = this.procBankSelectorRelevantWrites(procName, new Set());
+    if (writes === undefined) return;
+    for (const [selectorName, cached] of snapshot.entries()) {
+      const selectorRegister = this.allocation.registers[selectorName];
+      const affected = [...writes].some((write) =>
+        write === selectorName ||
+        cached.deps.has(write) ||
+        (selectorRegister !== undefined && this.allocation.registers[write] === selectorRegister)
+      );
+      if (!affected) this.bankSelectorCache.set(selectorName, cached);
+    }
+  }
+
+  private procBankSelectorRelevantWrites(procName: string, seen: Set<string>): Set<string> | undefined {
+    if (seen.has(procName)) return new Set();
+    const proc = this.ast.procs.find((candidate) => candidate.name === procName);
+    if (proc === undefined) return undefined;
+    seen.add(procName);
+    const writes = new Set<string>();
+    const merge = (nested: Set<string> | undefined): boolean => {
+      if (nested === undefined) return false;
+      for (const name of nested) writes.add(name);
+      return true;
+    };
+    const visitExpr = (expr: ExpressionAst): boolean => {
+      switch (expr.kind) {
+        case "indexed":
+          if (numericIndexValue(expr.index) === undefined && findStateBankMember(this.ast, expr) !== undefined) {
+            writes.add(bankSelectorVariableName(expr.base, expr.field));
+          }
+          return visitExpr(expr.index);
+        case "unary":
+          return visitExpr(expr.expr);
+        case "binary":
+          return visitExpr(expr.left) && visitExpr(expr.right);
+        case "call": {
+          const nested = this.ast.procs.find((candidate) => candidate.name === expr.callee);
+          if (nested !== undefined && !merge(this.procBankSelectorRelevantWrites(nested.name, seen))) return false;
+          return expr.args.every(visitExpr);
+        }
+        case "number":
+        case "string":
+        case "identifier":
+          return true;
+      }
+    };
+    const visitStatements = (statements: readonly StatementAst[]): boolean => {
+      for (const statement of statements) {
+        switch (statement.kind) {
+          case "assign":
+            writes.add(statement.target);
+            if (!visitExpr(statement.expr)) return false;
+            break;
+          case "indexed_assign":
+            if (numericIndexValue(statement.target.index) === undefined && findStateBankMember(this.ast, statement.target) !== undefined) {
+              writes.add(bankSelectorVariableName(statement.target.base, statement.target.field));
+            }
+            if (!visitExpr(statement.target.index) || !visitExpr(statement.expr)) return false;
+            break;
+          case "input":
+            writes.add(statement.target);
+            break;
+          case "core":
+            return false;
+          case "call":
+            if (!merge(this.procBankSelectorRelevantWrites(statement.block, seen))) return false;
+            break;
+          case "pause":
+          case "halt":
+          case "return_value":
+            if (!visitExpr(statement.expr)) return false;
+            break;
+          case "if":
+            if (!visitExpr(statement.condition.left) || !visitExpr(statement.condition.right)) return false;
+            if (!visitStatements(statement.thenBody)) return false;
+            if (statement.elseBody !== undefined && !visitStatements(statement.elseBody)) return false;
+            break;
+          case "while":
+            if (!visitExpr(statement.condition.left) || !visitExpr(statement.condition.right)) return false;
+            if (!visitStatements(statement.body)) return false;
+            break;
+          case "loop":
+            if (!visitStatements(statement.body)) return false;
+            break;
+          case "dispatch":
+            if (!visitExpr(statement.expr)) return false;
+            for (const dispatchCase of statement.cases) {
+              if (!visitExpr(dispatchCase.value) || !visitStatements(dispatchCase.body)) return false;
+            }
+            if (statement.defaultBody !== undefined && !visitStatements(statement.defaultBody)) return false;
+            break;
+          case "show":
+          case "decimal_series":
+            break;
+        }
+      }
+      return true;
+    };
+    return visitStatements(proc.body) ? writes : undefined;
   }
 
   // True when the value in X is known to equal `name` (directly, or via a
@@ -4398,6 +5003,7 @@ export class EmitContext {
     sourceLine?: number,
   ): void {
     this.emitter.emitJump(opcode, mnemonic, target, comment, sourceLine);
+    if (opcode === 0x53) this.bankSelectorCache.clear();
   }
 
   emitAddress(
@@ -4428,6 +5034,7 @@ export class EmitContext {
 
   emitLabel(name: string): void {
     this.emitter.emitLabel(name);
+    this.bankSelectorCache.clear();
   }
 
   freshLabel(prefix: string): string {
@@ -5117,6 +5724,8 @@ function liftFunctionCallsInExpressions(ast: ProgramAst, optimizations: AppliedO
       case "string":
       case "identifier":
         return expr;
+      case "indexed":
+        return { ...expr, index: liftExpr(expr.index, prelude, false, line) };
       case "unary":
         return { ...expr, expr: liftExpr(expr.expr, prelude, false, line) };
       case "binary":
@@ -5147,6 +5756,11 @@ function liftFunctionCallsInExpressions(ast: ProgramAst, optimizations: AppliedO
       case "return_value": {
         const expr = liftExpr(statement.expr, prelude, true, statement.line);
         return [...prelude, { ...statement, expr }];
+      }
+      case "indexed_assign": {
+        const index = liftExpr(statement.target.index, prelude, false, statement.line);
+        const expr = liftExpr(statement.expr, prelude, true, statement.line);
+        return [...prelude, { ...statement, target: { ...statement.target, index }, expr }];
       }
       case "if": {
         const left = liftExpr(statement.condition.left, prelude, false, statement.line);
@@ -5267,6 +5881,16 @@ function allocateRegisters(
     variables.add(binding.name);
     if (binding.storage) hints.set(binding.name, binding.storage);
   }
+  for (const proc of ast.procs) {
+    const xParamReturn = matchXParamReturnDecay(proc);
+    for (const param of proc.params ?? []) {
+      if (xParamReturn?.param === param) continue;
+      declared.add(param);
+      variables.add(param);
+    }
+  }
+  applyStateBankRegisterHints(ast, variables, hints);
+  collectStateBankSelectorVariables(ast, variables, hints);
   applyTicTacToeRegisterHints(ast, variables, hints);
   applyCoordListRegisterHints(variables, hints);
   const flPreferenceOrder: RegisterName[] = ["2", "3", "1", "0"];
@@ -5278,14 +5902,17 @@ function allocateRegisters(
     hints.set(variable, { mode: "prefer", register });
     flPreferenceIndex += 1;
   }
-  const incrementPreferenceOrder: RegisterName[] = ["4", "5", "6"];
-  let incrementPreferenceIndex = 0;
+  const preincrementIndexedPointers = collectPreincrementIndexedStorePointers(ast);
+  const hintedRegisters = (): Set<RegisterName> => new Set([...hints.values()].map((hint) => hint.register));
   for (const variable of collectUnitIncrementTargets(ast)) {
     if (!variables.has(variable) || hints.has(variable)) continue;
-    const register = incrementPreferenceOrder[incrementPreferenceIndex];
+    const incrementPreferenceOrder: RegisterName[] = preincrementIndexedPointers.has(variable)
+      ? ["5", "6", "4"]
+      : ["4", "5", "6"];
+    const usedHints = hintedRegisters();
+    const register = incrementPreferenceOrder.find((candidate) => !usedHints.has(candidate));
     if (register === undefined) break;
     hints.set(variable, { mode: "prefer", register });
-    incrementPreferenceIndex += 1;
   }
 
   warnUndeclaredAssignments(ast, declared, diagnostics);
@@ -5372,6 +5999,7 @@ function allocateRegisters(
 
 function reusableScratchFamily(variable: string): string | undefined {
   if (variable.startsWith(BIT_MASK_SCRATCH_PREFIX)) return BIT_MASK_SCRATCH_PREFIX;
+  if (variable.startsWith("__display_first_")) return "__display_first_";
   return undefined;
 }
 
@@ -5388,6 +6016,191 @@ function collectDomainBindings(ast: ProgramAst): DomainBinding[] {
     bindings.push(binding);
   }
   return bindings;
+}
+
+function applyStateBankRegisterHints(
+  ast: ProgramAst,
+  variables: ReadonlySet<string>,
+  hints: Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>,
+): void {
+  const used = new Set<RegisterName>([...hints.values()].map((hint) => hint.register));
+  let cursor = 1; // Keep R0 available for compact loop counters.
+  const nextFreeRegister = (): RegisterName | undefined => {
+    while (cursor < REGISTER_ORDER.length) {
+      const register = REGISTER_ORDER[cursor]!;
+      cursor += 1;
+      if (!used.has(register)) return register;
+    }
+    return undefined;
+  };
+  for (const bank of ast.banks ?? []) {
+    for (const member of bank.members) {
+      for (const element of member.elements.sort((left, right) => left.index - right.index)) {
+        const direct = element.index > 0 ? REGISTER_ORDER[element.index] : undefined;
+        const register = direct !== undefined && !used.has(direct)
+          ? direct
+          : nextFreeRegister();
+        if (register === undefined) return;
+        if (variables.has(element.name)) hints.set(element.name, { mode: "fixed", register });
+        used.add(register);
+      }
+    }
+  }
+}
+
+function preincrementIndexedStoreShape(
+  ast: ProgramAst,
+  store: Extract<StatementAst, { kind: "indexed_assign" }>,
+  increment: Extract<StatementAst, { kind: "assign" }>,
+): boolean {
+  const pointer = increment.target;
+  return isUnitIncrementExpression(pointer, increment.expr) &&
+    isUnitIncrementExpression(pointer, store.target.index) &&
+    findStateBankMember(ast, store.target) !== undefined;
+}
+
+function collectPreincrementIndexedStorePointers(ast: ProgramAst): Set<string> {
+  const pointers = new Set<string>();
+  const visit = (statements: readonly StatementAst[]): void => {
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      const next = statements[index + 1];
+      if (
+        statement.kind === "indexed_assign" &&
+        next?.kind === "assign" &&
+        preincrementIndexedStoreShape(ast, statement, next)
+      ) {
+        pointers.add(next.target);
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "while") visit(statement.body);
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  return pointers;
+}
+
+function collectStateBankSelectorVariables(
+  ast: ProgramAst,
+  variables: Set<string>,
+  hints: Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>,
+): void {
+  const selectors = new Set<string>();
+  const visitExpr = (expr: ExpressionAst): void => {
+    switch (expr.kind) {
+      case "number":
+      case "string":
+      case "identifier":
+        return;
+      case "indexed":
+        visitExpr(expr.index);
+        if (numericIndexValue(expr.index) === undefined && findStateBankMember(ast, expr) !== undefined) {
+          const directSelector = directIndexSelectorCandidate(ast, expr, hints);
+          if (directSelector !== undefined) {
+            preferHighIndexSelectorRegister(directSelector, variables, hints);
+            return;
+          }
+          selectors.add(bankSelectorVariableName(expr.base, expr.field));
+        }
+        return;
+      case "unary":
+        visitExpr(expr.expr);
+        return;
+      case "binary":
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+        return;
+      case "call":
+        for (const arg of expr.args) visitExpr(arg);
+        return;
+    }
+  };
+  const visitStatements = (statements: readonly StatementAst[]): void => {
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      const next = statements[index + 1];
+      for (const expr of statementOwnExpressions(statement)) visitExpr(expr);
+      if (
+        statement.kind === "indexed_assign" &&
+        !(next?.kind === "assign" && preincrementIndexedStoreShape(ast, statement, next))
+      ) {
+        visitExpr(statement.target);
+      }
+      if (statement.kind === "if") {
+        visitExpr(statement.condition.left);
+        visitExpr(statement.condition.right);
+        visitStatements(statement.thenBody);
+        if (statement.elseBody) visitStatements(statement.elseBody);
+      }
+      if (statement.kind === "while") {
+        visitExpr(statement.condition.left);
+        visitExpr(statement.condition.right);
+        visitStatements(statement.body);
+      }
+      if (statement.kind === "loop") visitStatements(statement.body);
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const branch of statement.cases) {
+          visitExpr(branch.value);
+          visitStatements(branch.body);
+        }
+        if (statement.defaultBody) visitStatements(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visitStatements(entry.body);
+  for (const proc of ast.procs) visitStatements(proc.body);
+
+  const selectorPreference: RegisterName[] = ["b", "a", "9", "8", "7", "c", "d", "e"];
+  let index = 0;
+  for (const selector of selectors) {
+    variables.add(selector);
+    const register = selectorPreference[index];
+    if (register !== undefined) hints.set(selector, { mode: "prefer", register });
+    index += 1;
+  }
+}
+
+function directIndexSelectorCandidate(
+  ast: ProgramAst,
+  expr: Extract<ExpressionAst, { kind: "indexed" }>,
+  hints: ReadonlyMap<string, { mode: "prefer" | "fixed"; register: RegisterName }>,
+): string | undefined {
+  if (expr.index.kind !== "identifier") return undefined;
+  const resolved = findStateBankMember(ast, expr);
+  if (resolved === undefined) return undefined;
+  let offset: number | undefined;
+  for (const element of resolved.member.elements) {
+    const register = hints.get(element.name)?.register;
+    if (register === undefined) return undefined;
+    const current = registerIndex(register) - element.index;
+    if (offset === undefined) {
+      offset = current;
+      continue;
+    }
+    if (offset !== current) return undefined;
+  }
+  return offset === 0 ? expr.index.name : undefined;
+}
+
+function preferHighIndexSelectorRegister(
+  name: string,
+  variables: ReadonlySet<string>,
+  hints: Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>,
+): void {
+  if (!variables.has(name) || hints.has(name)) return;
+  const used = new Set([...hints.values()].map((hint) => hint.register));
+  const register = (["d", "c", "b", "a", "9", "8", "7", "e"] as RegisterName[]).find((candidate) => !used.has(candidate));
+  if (register !== undefined) hints.set(name, { mode: "prefer", register });
 }
 
 function domainBindingName(domain: ProgramAst["domains"][number]): string | undefined {
@@ -5645,6 +6458,10 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
       }
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "assign") visitExpr(statement.expr);
+      if (statement.kind === "indexed_assign") {
+        visitExpr(statement.target.index);
+        visitExpr(statement.expr);
+      }
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
         visitExpr(statement.condition.right);
@@ -5995,6 +6812,7 @@ function allProcCallsHaveImmediateParamAssignment(ast: ProgramAst, procName: str
         if (previous?.kind !== "assign" || previous.target !== param) ok = false;
       }
       if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "while") visit(statement.body);
       if (statement.kind === "if") {
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
@@ -6023,6 +6841,9 @@ function statementReadsIdentifier(statement: StatementAst, name: string): boolea
       return expressionReferencesIdentifier(statement.expr, name);
     case "assign":
       return expressionReferencesIdentifier(statement.expr, name);
+    case "indexed_assign":
+      return expressionReferencesIdentifier(statement.target.index, name) ||
+        expressionReferencesIdentifier(statement.expr, name);
     case "if":
       return expressionReferencesIdentifier(statement.condition.left, name) ||
         expressionReferencesIdentifier(statement.condition.right, name) ||
@@ -6052,6 +6873,12 @@ function statementReadsIdentifier(statement: StatementAst, name: string): boolea
   }
 }
 
+function statementSafeBetweenInitializedCounterAndLoop(statement: StatementAst, target: string): boolean {
+  return statement.kind === "assign" &&
+    statement.target !== target &&
+    !statementReadsIdentifier(statement, target);
+}
+
 function collectDisplayUseCounts(ast: ProgramAst): Map<string, number> {
   const counts = new Map<string, number>();
   const add = (name: string): void => {
@@ -6061,6 +6888,7 @@ function collectDisplayUseCounts(ast: ProgramAst): Map<string, number> {
     for (const statement of statements) {
       if (statement.kind === "show") add(statement.display);
       if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "while") visit(statement.body);
       if (statement.kind === "if") {
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
@@ -6091,6 +6919,7 @@ function collectShowSequenceUseCounts(ast: ProgramAst): Map<string, number> {
         add(statement.display, next.display);
       }
       if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "while") visit(statement.body);
       if (statement.kind === "if") {
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
@@ -6659,6 +7488,7 @@ function warnUndeclaredAssignments(
     for (const statement of statements) {
       if (statement.kind === "assign" || statement.kind === "input") {
         if (statement.kind === "input" && ephemeralInputs.has(statement.target)) continue;
+        if (statement.target.startsWith(DISPLAY_EXPR_PREFIX)) continue;
         if (!declared.has(statement.target) && !seen.has(statement.target)) {
           diagnostics.push({
             level: "warning",
@@ -6669,6 +7499,7 @@ function warnUndeclaredAssignments(
         }
       }
       if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "while") visit(statement.body);
       if (statement.kind === "if") {
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
@@ -6747,6 +7578,7 @@ function collectUnitDecrementTargets(ast: ProgramAst): Set<string> {
         targets.add(statement.target);
       }
       if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "while") visit(statement.body);
       if (statement.kind === "if") {
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
@@ -6767,7 +7599,10 @@ function collectUnitIncrementTargets(ast: ProgramAst): Set<string> {
   const rangeByName = new Map<string, { type: StateFieldType; min?: number; max?: number }>();
   for (const state of ast.states) {
     for (const field of state.fields) {
-      rangeByName.set(field.name, { type: field.type, min: field.min, max: field.max });
+      const range: { type: StateFieldType; min?: number; max?: number } = { type: field.type };
+      if (field.min !== undefined) range.min = field.min;
+      if (field.max !== undefined) range.max = field.max;
+      rangeByName.set(field.name, range);
     }
   }
 
@@ -6787,6 +7622,7 @@ function collectUnitIncrementTargets(ast: ProgramAst): Set<string> {
         targets.add(statement.target);
       }
       if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "while") visit(statement.body);
       if (statement.kind === "if") {
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
@@ -7036,7 +7872,7 @@ function collectSpatialHitScratchVariables(
   variables: Set<string>,
   sharedBitMaskHelperCalls = false,
 ): void {
-  if (sharedBitMaskHelperCalls) variables.add(SHARED_BIT_MASK_SCRATCH);
+  if (sharedBitMaskHelperCalls && programUsesBitMaskOrSpatialPrimitives(ast)) variables.add(SHARED_BIT_MASK_SCRATCH);
   for (const [mask, stats] of collectBitHasConditionStats(ast)) {
     if (bitHasConditionHelperSaves(mask, stats)) variables.add(spatialHitScratchName(mask));
   }
@@ -7089,6 +7925,66 @@ function collectSpatialHitScratchVariables(
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
+}
+
+function programUsesBitMaskOrSpatialPrimitives(ast: ProgramAst): boolean {
+  let found = false;
+  const primitiveNames = new Set(["bit_mask", "bit_has", "bit_set", "bit_clear", "line_count", "neighbor_count"]);
+  const visitExpr = (expr: ExpressionAst): void => {
+    if (found) return;
+    if (expr.kind === "call") {
+      if (primitiveNames.has(expr.callee.toLowerCase())) {
+        found = true;
+        return;
+      }
+      for (const arg of expr.args) visitExpr(arg);
+      return;
+    }
+    if (expr.kind === "unary") visitExpr(expr.expr);
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+    }
+    if (expr.kind === "indexed") visitExpr(expr.index);
+  };
+  const visit = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (found) return;
+      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "assign") visitExpr(statement.expr);
+      if (statement.kind === "indexed_assign") {
+        visitExpr(statement.target.index);
+        visitExpr(statement.expr);
+      }
+      if (statement.kind === "if") {
+        visitExpr(statement.condition.left);
+        visitExpr(statement.condition.right);
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "loop" || statement.kind === "while") visit(statement.body);
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          visitExpr(dispatchCase.value);
+          visit(dispatchCase.body);
+        }
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "core") {
+        for (const input of statement.inputs ?? []) visitExpr(input.expr);
+      }
+      if (statement.kind === "return_value") visitExpr(statement.expr);
+    }
+  };
+  for (const display of ast.displays) {
+    for (const item of display.items) {
+      if (item.kind === "source" && item.expr !== undefined) visitExpr(item.expr);
+    }
+  }
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  return found;
 }
 
 function collectSpatialCountScratchVariables(ast: ProgramAst, variables: Set<string>): void {
@@ -7813,12 +8709,14 @@ function expressionContainsRandom(expr: ExpressionAst): boolean {
     case "string":
     case "identifier":
       return false;
+    case "indexed":
+      return expressionContainsRandom(expr.index);
     case "unary":
       return expressionContainsRandom(expr.expr);
     case "binary":
       return expressionContainsRandom(expr.left) || expressionContainsRandom(expr.right);
     case "call":
-      return isRandomCall(expr) || expr.args.some(expressionContainsRandom);
+      return expr.callee.toLowerCase() === "random" || expr.args.some(expressionContainsRandom);
   }
 }
 
@@ -7858,6 +8756,8 @@ function estimateBranchOrderStatementCost(statement: StatementAst, ast: ProgramA
   switch (statement.kind) {
     case "assign":
       return estimateExpressionCost(statement.expr) + 1;
+    case "indexed_assign":
+      return estimateExpressionCost(statement.target.index) + estimateExpressionCost(statement.expr) + 1;
     case "pause":
     case "halt":
     case "return_value":

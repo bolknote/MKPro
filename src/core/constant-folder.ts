@@ -56,7 +56,15 @@ class ConstantFolder {
         case "assign":
           statement.expr = this.foldExpression(statement.expr);
           break;
+        case "indexed_assign":
+          statement.target.index = this.foldExpression(statement.target.index);
+          statement.expr = this.foldExpression(statement.expr);
+          break;
         case "loop":
+          this.foldStatements(statement.body);
+          break;
+        case "while":
+          statement.condition = this.foldCondition(statement.condition);
           this.foldStatements(statement.body);
           break;
         case "if":
@@ -104,6 +112,10 @@ class ConstantFolder {
       case "string":
       case "identifier":
         return expr;
+      case "indexed": {
+        const index = this.foldExpression(expr.index);
+        return index === expr.index ? expr : { ...expr, index };
+      }
       case "unary": {
         const inner = this.foldExpression(expr.expr);
         if (inner.kind === "number") {
@@ -331,6 +343,7 @@ function linearizeExpression(expr: ExpressionAst): LinearForm | undefined {
       return value === undefined ? singleTerm(expr) : { constant: value, terms: new Map() };
     }
     case "identifier":
+    case "indexed":
     case "call":
       return singleTerm(expr);
     case "unary": {
@@ -435,6 +448,8 @@ function expressionBeginsWithNumberEntry(expr: ExpressionAst): boolean {
       return true;
     case "identifier":
       return false;
+    case "indexed":
+      return false;
     case "unary":
       return expr.expr.kind === "number" || expressionBeginsWithNumberEntry(expr.expr);
     case "binary":
@@ -535,6 +550,8 @@ function expressionKey(expr: ExpressionAst): string {
       return `number:${expr.raw.trim().toLowerCase()}`;
     case "identifier":
       return `identifier:${expr.name}`;
+    case "indexed":
+      return `indexed:${expr.base}:${expr.field ?? ""}:${expressionKey(expr.index)}`;
     case "unary":
       return `unary:${expr.op}:${expressionKey(expr.expr)}`;
     case "binary":
@@ -550,6 +567,8 @@ function expressionPureForFolding(expr: ExpressionAst): boolean {
     case "string":
     case "identifier":
       return true;
+    case "indexed":
+      return expressionPureForFolding(expr.index);
     case "unary":
       return expressionPureForFolding(expr.expr);
     case "binary":
@@ -565,6 +584,8 @@ function expressionSafeToDrop(expr: ExpressionAst): boolean {
     case "string":
     case "identifier":
       return true;
+    case "indexed":
+      return expressionSafeToDrop(expr.index);
     case "unary":
       return expressionSafeToDrop(expr.expr);
     case "binary":
@@ -853,6 +874,8 @@ function estimateExpressionCost(expr: ExpressionAst): number {
       return estimateNumberCost(expr.raw);
     case "identifier":
       return 1;
+    case "indexed":
+      return estimateExpressionCost(expr.index) + 1;
     case "unary":
       return estimateExpressionCost(expr.expr) + 1;
     case "binary":
