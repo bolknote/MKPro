@@ -21,6 +21,7 @@ import {
   matchStackUnaryDerivationCall,
   matchRemainderByConstant,
   negatedNumberLiteral,
+  randomRangeExpression,
   smallSetExpressionMacro,
   smallSetMacroArityOk,
   smallSetMacroArityText,
@@ -245,8 +246,11 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
       return;
     }
 
+    if (name === "random") {
+      compileRandomCall(ctx, expr);
+      return;
+    }
     const zeroArgOpcodes: Record<string, [number, string]> = {
-      random: [0x3b, "К СЧ"],
       pi: [0x20, "F pi"],
     };
     const zeroArgOpcode = zeroArgOpcodes[name];
@@ -340,6 +344,25 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
     }
     ctx.emitOp(opcode[0], opcode[1], `${expr.callee}()`);
   }
+
+function compileRandomCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kind: "call" }>): void {
+  if (expr.args.length === 0) {
+    ctx.emitOp(0x3b, "К СЧ", `${expr.callee}()`);
+    return;
+  }
+  if (expr.args.length === 2) {
+    compileExpression(ctx, randomRangeExpression(expr.args[0]!, expr.args[1]!));
+    ctx.optimizations.push({
+      name: "random-range-lowering",
+      detail: `Lowered ${expressionToIntentText(expr)} as min + random() * (max - min).`,
+    });
+    return;
+  }
+  ctx.diagnostics.push({
+    level: "error",
+    message: `${expr.callee}() expects zero or two arguments, got ${expr.args.length}.`,
+  });
+}
 
 function compileCommutativeCallWithCurrentX(
   ctx: LoweringCtx,

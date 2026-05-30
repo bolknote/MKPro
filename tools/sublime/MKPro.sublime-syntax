@@ -113,7 +113,7 @@ contexts:
       scope: storage.type.mkpro
 
   builtin-calls:
-    - match: '\b(show|read|halt|move|direction|memory_code|cell_at|line_count|neighbor_count|random_cell|near_any|eq_any|pow|int|frac|abs|max|min|sign|random|calculator_random|random_seed|bit_mask|bit_has|bit_set|bit_clear|bit_toggle|bit_or|bit_and|bit_not|digit_at|digit_add|digit_set|coord_list_has|coord_list_line_count|nonzero)\s*(?=\()'
+    - match: '\b(show|read|halt|move|direction|memory_code|cell_at|line_count|neighbor_count|random_cell|near_any|eq_any|pow|int|frac|abs|max|min|sign|random|bit_mask|bit_has|bit_set|bit_clear|bit_toggle|bit_or|bit_and|bit_not|digit_at|digit_add|digit_set|coord_list_has|coord_list_line_count|nonzero)\s*(?=\()'
       scope: support.function.builtin.mkpro
 
   function-calls:

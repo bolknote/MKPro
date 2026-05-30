@@ -2267,6 +2267,40 @@ export function oneMinus(expr: ExpressionAst): ExpressionAst {
   };
 }
 
+export function randomUnitExpression(): ExpressionAst {
+  return { kind: "call", callee: "random", args: [] };
+}
+
+export function matchRandomRangeCall(
+  expr: ExpressionAst,
+): { min: ExpressionAst; max: ExpressionAst } | undefined {
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "random" || expr.args.length !== 2) {
+    return undefined;
+  }
+  return { min: expr.args[0]!, max: expr.args[1]! };
+}
+
+export function randomRangeSpanExpression(min: ExpressionAst, max: ExpressionAst): ExpressionAst {
+  const minValue = numericLiteralValue(min);
+  const maxValue = numericLiteralValue(max);
+  if (
+    minValue !== undefined &&
+    maxValue !== undefined &&
+    Number.isSafeInteger(minValue) &&
+    Number.isSafeInteger(maxValue)
+  ) {
+    return numberExpression(maxValue - minValue);
+  }
+  return subtractExpressions(max, min);
+}
+
+export function randomRangeExpression(min: ExpressionAst, max: ExpressionAst): ExpressionAst {
+  return addExpressions(
+    min,
+    multiplyExpressions(randomUnitExpression(), randomRangeSpanExpression(min, max)),
+  );
+}
+
 export function multiplyExpressions(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
   if (isNumericValue(left, 0) || isNumericValue(right, 0)) return numberExpression(0);
   if (isNumericValue(left, 1)) return right;
@@ -3049,7 +3083,12 @@ export function estimateCallCostForCondition(
   if (smallSetMacro !== undefined) return estimateExpressionCostForCondition(smallSetMacro, preloadedConstants);
   const macro = ticTacToeExpressionMacro(name, expr.args);
   if (macro !== undefined) return estimateExpressionCostForCondition(macro, preloadedConstants);
-  if (name === "random" || name === "pi") return 1;
+  if (name === "random") {
+    return expr.args.length === 2
+      ? estimateExpressionCostForCondition(randomRangeExpression(expr.args[0]!, expr.args[1]!), preloadedConstants)
+      : 1;
+  }
+  if (name === "pi") return 1;
   if (name === "pow" || ["max", "bit_and", "bit_or", "bit_xor"].includes(name)) {
     return (expr.args[0] ? estimateExpressionCostForCondition(expr.args[0], preloadedConstants) : 0) +
       (expr.args[1] ? estimateExpressionCostForCondition(expr.args[1], preloadedConstants) : 0) +
@@ -3115,7 +3154,10 @@ export function estimateCallCost(expr: Extract<ExpressionAst, { kind: "call" }>)
   if (smallSetMacro !== undefined) return estimateExpressionCost(smallSetMacro);
   const macro = ticTacToeExpressionMacro(name, expr.args);
   if (macro !== undefined) return estimateExpressionCost(macro);
-  if (name === "random" || name === "pi") return 1;
+  if (name === "random") {
+    return expr.args.length === 2 ? estimateExpressionCost(randomRangeExpression(expr.args[0]!, expr.args[1]!)) : 1;
+  }
+  if (name === "pi") return 1;
   if (name === "pow") {
     return (expr.args[0] ? estimateExpressionCost(expr.args[0]) : 0) +
       (expr.args[1] ? estimateExpressionCost(expr.args[1]) : 0) +

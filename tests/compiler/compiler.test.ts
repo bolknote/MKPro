@@ -542,6 +542,57 @@ program FormulaPrimitives {
     }
   });
 
+  it("lowers random range sugar and keeps integer truncation on the compact MK-61 opcode", () => {
+    const result = compileOk(`
+program RandomRangeSugar {
+  state {
+    roll: counter 0..9 = 0
+    span: packed = 10
+  }
+  loop {
+    roll = int(random(1, span))
+    halt(roll)
+  }
+}
+`);
+    const opcodes = result.steps.map((step) => step.hex);
+
+    expect(opcodes).toContain("3B");
+    expect(opcodes).toContain("34");
+    expect(opcodes).not.toContain("35");
+    expect(result.report.optimizations.some((item) => item.name === "int-random-range-lowering")).toBe(false);
+  });
+
+  it("accepts fractional random ranges without integer-bound truncation rewriting", () => {
+    const result = compileOk(`
+program FractionalRandomRangeSugar {
+  state {
+    value: packed = 0
+  }
+  loop {
+    value = int(random(0.5, 2.5))
+    halt(value)
+  }
+}
+`);
+
+    expect(result.steps.some((step) => step.hex === "3B")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "random-range-lowering")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "int-random-range-lowering")).toBe(false);
+  });
+
+  it("rejects one-argument random calls", () => {
+    expect(() =>
+      compileOk(`
+program RandomRangeArity {
+  loop {
+    halt(random(9))
+  }
+}
+`),
+    ).toThrow(/random\(\) expects zero or two arguments, got 1/u);
+  });
+
   it("lowers mask, cell, and packed digit helpers from V2 formulas", () => {
     const result = compileOk(`
 program FormulaHelpers {

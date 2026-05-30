@@ -174,11 +174,12 @@ state {
 ```
 
 Use `counter` for bounded numeric values, including consumables, scores, fuel,
-and remaining-piece counts. Use `coord(domain)` for a cell coordinate and
-`cells(domain)` for generated map, fleet, mine, wall, or encounter masks. The
-complete canonical state set is `flag`, `counter`, `coord(domain)`,
-`cells(domain)`, and `packed`. Register placement, address storage, and compact
-packing are compiler decisions.
+and remaining-piece counts. Use `coord(domain)` for a cell coordinate,
+`cells(domain)` for generated map, fleet, mine, wall, or encounter masks, and
+`coord_list(domain, count)` for a fixed-size list of coordinates on a board.
+The complete canonical state set is `flag`, `counter`, `coord(domain)`,
+`cells(domain)`, `coord_list(domain, count)`, and `packed`. Register placement,
+address storage, and compact packing are compiler decisions.
 
 Initial values can come from the startup stack registers `stack.X` and
 `stack.Y`, for games where the player enters setup values before running the
@@ -312,6 +313,41 @@ set of occupied cells. Counters that count remaining pieces are ordinary
 such as Sea Battle, Minesweeper, fox hunting, or board puzzles from pretending
 to be hallway movement games while still using the same declaration form as
 other state.
+
+Use `coord_list(domain, count)` when a game needs an exact number of distinct
+board coordinates, not a bitmask. Fox Hunt on the MK-61 is the reference shape:
+
+```mkpro
+field: board(0..9, 0..9)
+
+state {
+  cell: coord(field)
+  foxes: coord_list(field, 9) = random_unique()
+  bearing: counter 0..9 = 0
+}
+
+loop {
+  cell = read()
+
+  if cell in foxes {
+    found_fox()
+  }
+
+  bearing = line_count(foxes, cell)
+  show("--", cell:02, "--", bearing)
+}
+```
+
+The list name is game-facing state. The compiler lowers it to contiguous
+coordinate registers and uses `coord_list_has(...)` and
+`coord_list_line_count(...)` internally for membership and fox-hunt-style
+row/column/diagonal scans. Initial values are `random_unique()` or `0`.
+`random_unique()` is a startup initializer, not a call to `random()`: the
+compiler fills the list with `count` unique coordinates on the board domain,
+retrying draws until there are no collisions. Prefer it over
+`cells(domain) = random()` when the game needs a known piece count without
+overlap. See `examples/fox-hunt-mk61.mkpro` and contrast with
+`examples/fox-hunt-100.mkpro`, which uses a random cell-set mask instead.
 
 Board queries should name the geometric operation directly:
 
@@ -450,7 +486,23 @@ display_value = digit_set(display_value, 2, 9)
 
 near = near_any(room, 1, pit1, pit2)
 hit = eq_any(room, bat1, bat2)
+
+roll = int(random(0, 10))
+shot = int(random(0, 100))
 ```
+
+`random()` lowers to the MK-61 pseudorandom command (`К СЧ`) and yields a unit
+fraction in `[0, 1)`. The command never produces `1`. `0` can appear only in
+the same rare hexadecimal-`Y` stack cases as the underlying calculator
+command. Use it in state initializers such as `cells(domain) = random()` and
+in formulas that scale the draw, for example `int(random() * 9) + 1`.
+
+`random(min, max)` is range sugar for `min + random() * (max - min)`. Only
+zero- and two-argument forms are valid. The upper bound is exclusive; wrap
+the call in `int(...)` when the game needs a whole number. `int(random(0, 10))`
+yields `0..9`, and `int(random(0, 100))` yields `0..99`. Fractional bounds
+are allowed when a continuous draw is intended, for example
+`int(random(0.5, 2.5))`.
 
 `pow(base, exponent)` lowers to the MK-61 `F x^y` command. `bit_mask(index)`
 builds a zero-based packed bit mask: index `0` is `1`, `1` is `2`, `2` is `4`,
@@ -695,6 +747,12 @@ Current scalar lowerings are still deliberately small and auditable:
 - `coord` is represented as a packed numeric value; `pos.floor` lowers to
   `int(pos / 100)`, with `100` automatically placed in setup state when
   that is cheaper than entering three digits.
+- `random()` is `[0, 1)` via `К СЧ`; `1` never appears, and `0` only in rare
+  hexadecimal-`Y` stack cases.
+- `random(min, max)` is syntax sugar for `min + random() * (max - min)`; the
+  upper bound is exclusive. When `min` is known to be integer-valued,
+  `int(random(min, max))` floors `random() * (max - min)` with `x - frac(x)`
+  before adding `min`, avoiding `К [x]` immediately after `К СЧ`.
 - `cells(domain) = random()` is moved to reported setup state by the optimizer.
 - cell-set membership is written as `item in collection`; the lowering keeps the
   compact comparison form internally when that is smaller.

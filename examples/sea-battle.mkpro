@@ -45,7 +45,7 @@ program SeaBattle {
   fn calculator_turn() {
     // The calculator reveals a target cell, then waits for the player to report
     // whether that shot hit.
-    calculator_shot = int(random() * 100)
+    calculator_shot = int(random(0, 100))
     show(calculator_shot)
   }
 
