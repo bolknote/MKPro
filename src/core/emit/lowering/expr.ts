@@ -2,6 +2,11 @@ import { registerIndex } from "../../opcodes.ts";
 import type { ExpressionAst, RegisterName } from "../../types.ts";
 import type { LoweringCtx } from "../lowering-ctx.ts";
 import {
+  compileNegativeZeroDegreeSelectorCall,
+  compileSpatialCountCall,
+  compileSpatialHitCall,
+} from "./spatial.ts";
+import {
   NEGATIVE_ZERO_DEGREE_SELECTOR_GE,
   binaryOpcode,
   buildDiagnostic,
@@ -59,7 +64,7 @@ export function compileExpression(ctx: LoweringCtx, expr: ExpressionAst): void {
           }
           ctx.constantStack.add(expr.name);
           try {
-            ctx.compileExpression(constant);
+            compileExpression(ctx, constant);
           } finally {
             ctx.constantStack.delete(expr.name);
           }
@@ -73,30 +78,30 @@ export function compileExpression(ctx: LoweringCtx, expr: ExpressionAst): void {
           ctx.emitNumberOrPreload(negatedNumberLiteral(expr.expr.raw));
           return;
         }
-        ctx.compileExpression(expr.expr);
+        compileExpression(ctx, expr.expr);
         ctx.emitOp(0x0b, "/-/", "unary minus");
         return;
       case "binary":
         if (expr.op === "-" && isNumericValue(expr.left, 0)) {
-          ctx.compileExpression(expr.right);
+          compileExpression(ctx, expr.right);
           ctx.emitOp(0x0b, "/-/", "unary minus");
           return;
         }
-        if (ctx.compileRemainderByConstant(expr)) {
+        if (compileRemainderByConstant(ctx, expr)) {
           return;
         }
-        if ((expr.op === "+" || expr.op === "*") && ctx.compileCommutativeWithCurrentX(expr)) {
+        if ((expr.op === "+" || expr.op === "*") && compileCommutativeWithCurrentX(ctx, expr)) {
           return;
         }
-        if (ctx.compileStackDuplicatedBinary(expr)) {
+        if (compileStackDuplicatedBinary(ctx, expr)) {
           return;
         }
-        ctx.compileExpression(expr.left);
-        ctx.compileExpression(expr.right);
+        compileExpression(ctx, expr.left);
+        compileExpression(ctx, expr.right);
         ctx.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
         return;
       case "call":
-        ctx.compileCall(expr);
+        compileCall(ctx, expr);
         return;
     }
   }
@@ -104,7 +109,7 @@ export function compileExpression(ctx: LoweringCtx, expr: ExpressionAst): void {
 export function compileCommutativeWithCurrentX(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
     if (ctx.currentXVariable === undefined) return false;
     if (expr.left.kind === "identifier" && ctx.xHolds(expr.left.name) && isSimpleStackLoad(expr.right)) {
-      ctx.compileExpression(expr.right);
+      compileExpression(ctx, expr.right);
       ctx.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
       ctx.optimizations.push({
         name: "stack-current-x-scheduling",
@@ -113,7 +118,7 @@ export function compileCommutativeWithCurrentX(ctx: LoweringCtx, expr: Extract<E
       return true;
     }
     if (expr.right.kind === "identifier" && ctx.xHolds(expr.right.name) && isSimpleStackLoad(expr.left)) {
-      ctx.compileExpression(expr.left);
+      compileExpression(ctx, expr.left);
       ctx.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
       ctx.optimizations.push({
         name: "stack-current-x-scheduling",
@@ -130,7 +135,7 @@ export function compileStackDuplicatedBinary(ctx: LoweringCtx, expr: Extract<Exp
     // В↑ costs one cell, so duplication only pays off when recomputing the
     // operand would cost more than one cell.
     if (estimateExpressionCost(expr.left) <= 1) return false;
-    ctx.compileExpression(expr.left);
+    compileExpression(ctx, expr.left);
     ctx.emitOp(0x0e, "В↑", "duplicate repeated operand through stack");
     ctx.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
     ctx.optimizations.push({
@@ -143,11 +148,11 @@ export function compileStackDuplicatedBinary(ctx: LoweringCtx, expr: Extract<Exp
 export function compileRemainderByConstant(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
     const matched = matchRemainderByConstant(expr);
     if (matched === undefined) return false;
-    ctx.compileExpression(matched.value);
-    ctx.compileExpression(matched.divisor);
+    compileExpression(ctx, matched.value);
+    compileExpression(ctx, matched.divisor);
     ctx.emitOp(0x13, "/", "remainder quotient");
     ctx.emitOp(0x35, "К {x}", "remainder fractional part");
-    ctx.compileExpression(matched.divisor);
+    compileExpression(ctx, matched.divisor);
     ctx.emitOp(0x12, "*", "remainder scale");
     ctx.optimizations.push({
       name: "remainder-fraction-lowering",
@@ -169,7 +174,7 @@ export function compileFunctionCall(ctx: LoweringCtx, expr: Extract<ExpressionAs
       return true;
     }
     for (let index = 0; index < params.length; index += 1) {
-      ctx.compileExpression(expr.args[index]!);
+      compileExpression(ctx, expr.args[index]!);
       ctx.emitStore(params[index]!, `arg ${params[index]} for ${expr.callee}`, proc.line);
     }
     ctx.emitJump(0x53, "ПП", proc.name, `call function ${proc.name}`, proc.line);
@@ -181,24 +186,24 @@ export function compileFunctionCall(ctx: LoweringCtx, expr: Extract<ExpressionAs
   }
 
 export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kind: "call" }>): void {
-    if (ctx.compileFunctionCall(expr)) return;
+    if (compileFunctionCall(ctx, expr)) return;
     const name = expr.callee.toLowerCase();
     if (name === "direction") {
-      ctx.compileDirectionCall(expr);
+      compileDirectionCall(ctx, expr);
       return;
     }
     if (name === "__direction_cardinal") {
-      ctx.compileCardinalDirectionCall(expr);
+      compileCardinalDirectionCall(ctx, expr);
       return;
     }
     if (name === "neighbor_count" || name === "line_count") {
-      if (ctx.compileSpatialCountCall(name, expr)) return;
+      if (compileSpatialCountCall(ctx, name, expr)) return;
     }
     if (name === "__spatial_hit") {
-      if (ctx.compileSpatialHitCall(expr)) return;
+      if (compileSpatialHitCall(ctx, expr)) return;
     }
     if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
-      if (ctx.compileNegativeZeroDegreeSelectorCall(expr)) return;
+      if (compileNegativeZeroDegreeSelectorCall(ctx, expr)) return;
     }
     if (isTicTacToeMacroName(name) && ticTacToeMacroArity(name) !== expr.args.length) {
       ctx.diagnostics.push({
@@ -216,7 +221,7 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
     }
     const smallSetMacro = smallSetExpressionMacro(name, expr.args);
     if (smallSetMacro !== undefined) {
-      ctx.compileExpression(smallSetMacro);
+      compileExpression(ctx, smallSetMacro);
       ctx.optimizations.push({
         name: "small-set-primitive-lowering",
         detail: `Lowered ${expr.callee}() to coordinate-set arithmetic.`,
@@ -225,7 +230,7 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
     }
     const macro = ticTacToeExpressionMacro(name, expr.args);
     if (macro !== undefined) {
-      ctx.compileExpression(macro);
+      compileExpression(ctx, macro);
       ctx.optimizations.push({
         name: "tic-tac-toe-primitive-lowering",
         detail: `Lowered ${expr.callee}() to reusable 4x4 grid/packed-line arithmetic.`,
@@ -258,8 +263,8 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
         });
         return;
       }
-      ctx.compileExpression(expr.args[1]!);
-      ctx.compileExpression(expr.args[0]!);
+      compileExpression(ctx, expr.args[1]!);
+      compileExpression(ctx, expr.args[0]!);
       ctx.emitOp(0x24, "F x^y", `${expr.callee}()`);
       return;
     }
@@ -279,8 +284,8 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
         });
         return;
       }
-      ctx.compileExpression(expr.args[0]!);
-      ctx.compileExpression(expr.args[1]!);
+      compileExpression(ctx, expr.args[0]!);
+      compileExpression(ctx, expr.args[1]!);
       ctx.emitOp(binaryCall[0], binaryCall[1], `${expr.callee}()`);
       return;
     }
@@ -292,7 +297,7 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
       });
       return;
     }
-    ctx.compileExpression(expr.args[0]!);
+    compileExpression(ctx, expr.args[0]!);
     const opcodes: Record<string, [number, string]> = {
       abs: [0x31, "К |x|"],
       sign: [0x32, "К ЗН"],
@@ -396,7 +401,7 @@ export function compileDirectionCall(ctx: LoweringCtx, expr: Extract<ExpressionA
   }
 
 export function compileCardinalDirectionCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kind: "call" }>): void {
-    const keyRegister = ctx.directionKeyRegister(expr);
+    const keyRegister = directionKeyRegister(ctx, expr);
     if (keyRegister === undefined) return;
 
     const yAxis = ctx.freshLabel("direction_cardinal_y_axis");
@@ -427,7 +432,7 @@ export function compileCardinalDirectionCall(ctx: LoweringCtx, expr: Extract<Exp
     ctx.emitLabel(done);
     ctx.optimizations.push({
       name: "direction-cardinal-lowering",
-      detail: `Lowered guarded cardinal direction(${ctx.directionKeyName(expr)}) without floor-key cases.`,
+      detail: `Lowered guarded cardinal direction(${directionKeyName(ctx, expr)}) without floor-key cases.`,
     });
   }
 

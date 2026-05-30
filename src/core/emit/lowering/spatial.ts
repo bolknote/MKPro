@@ -1,6 +1,12 @@
 import { registerIndex } from "../../opcodes.ts";
 import type { ExpressionAst, ProgramAst, RegisterName, StatementAst } from "../../types.ts";
 import type { LoweringCtx } from "../lowering-ctx.ts";
+import {
+  compileExpression,
+} from "./expr.ts";
+import {
+  emitNegativeZeroThresholdRaw,
+} from "./proc-raw-setup.ts";
 import type {
   BitMembershipCondition,
   SpatialLineProgression,
@@ -52,15 +58,15 @@ export function compileTicTacToeCellMaskReuse(ctx: LoweringCtx,
     const scratch = ticTacToeMaskScratchName(first);
     if (!ctx.allocation.registers[scratch]) return false;
 
-    ctx.compileExpression(cellMaskExpression(used.x, used.y));
+    compileExpression(ctx, cellMaskExpression(used.x, used.y));
     ctx.emitStore(scratch, "4x4 cell mask scratch", first.line);
-    ctx.compileExpression(used.mask);
+    compileExpression(ctx, used.mask);
     ctx.emitRecall(scratch, "reuse 4x4 cell mask", first.line);
     ctx.emitOp(0x37, "К ∧", "cell_has with reused mask", first.line);
     ctx.emitOp(0x35, "К {x}", "cell_has membership fraction", first.line);
     ctx.emitOp(0x32, "К ЗН", "cell_has to 0/1", first.line);
     ctx.emitStore(first.target, `set ${first.target}`, first.line);
-    ctx.compileExpression(mark.mask);
+    compileExpression(ctx, mark.mask);
     ctx.emitRecall(scratch, "reuse 4x4 cell mask", second.line);
     ctx.emitOp(0x38, "К ∨", "cell_set with reused mask", second.line);
     ctx.emitStore(second.target, `set ${second.target}`, second.line);
@@ -83,13 +89,13 @@ export function compileBitSetMaskReuse(ctx: LoweringCtx,
     const scratch = bitMaskScratchName(first);
     if (!ctx.allocation.registers[scratch]) return false;
 
-    ctx.compileBitMaskWithQuotientScratch(firstSet.item, scratch, first.line);
+    compileBitMaskWithQuotientScratch(ctx, firstSet.item, scratch, first.line);
     ctx.emitStore(scratch, "cell bit mask scratch", first.line);
-    ctx.compileExpression(firstSet.collection);
+    compileExpression(ctx, firstSet.collection);
     ctx.emitRecall(scratch, "reuse cell bit mask", first.line);
     ctx.emitOp(0x38, "К ∨", "bit_set with reused mask", first.line);
     ctx.emitStore(first.target, `set ${first.target}`, first.line);
-    ctx.compileExpression(secondSet.collection);
+    compileExpression(ctx, secondSet.collection);
     ctx.emitRecall(scratch, "reuse cell bit mask", second.line);
     ctx.emitOp(0x38, "К ∨", "bit_set with reused mask", second.line);
     ctx.emitStore(second.target, `set ${second.target}`, second.line);
@@ -106,10 +112,10 @@ export function compileSingleBitMaskOpAssignment(ctx: LoweringCtx, statement: Ex
     const scratch = bitMaskScratchName(statement);
     if (ctx.allocation.registers[scratch] === undefined) return false;
 
-    ctx.compileBitMaskWithQuotientScratch(match.index, scratch, statement.line, { forceInline: true });
+    compileBitMaskWithQuotientScratch(ctx, match.index, scratch, statement.line, { forceInline: true });
     if (match.negate) ctx.emitOp(0x3a, "К ИНВ", "bit_clear mask complement", statement.line);
     ctx.emitStore(scratch, "single bit op mask scratch", statement.line);
-    ctx.compileExpression(match.collection);
+    compileExpression(ctx, match.collection);
     ctx.emitRecall(scratch, "single bit op mask", statement.line);
     ctx.emitOp(match.opcode, match.mnemonic, `${statement.target} bit op`, statement.line);
     ctx.emitStore(statement.target, `set ${statement.target}`, statement.line);
@@ -129,7 +135,7 @@ export function compileBitMaskWithQuotientScratch(ctx: LoweringCtx,
     const helperScratch = ctx.sharedBitMaskHelperScratch() ?? scratch;
     if (options.forceInline !== true && ctx.loweringOptions.sharedBitMaskHelperCalls === true) {
       const helper = ctx.ensureSpatialBitMaskHelper(helperScratch, line);
-      ctx.compileExpression(index);
+      compileExpression(ctx, index);
       ctx.emitJump(0x53, "ПП", helper.label, "bit_mask helper", line);
       ctx.optimizations.push({
         name: "bit-mask-helper-call",
@@ -137,8 +143,8 @@ export function compileBitMaskWithQuotientScratch(ctx: LoweringCtx,
       });
       return;
     }
-    ctx.compileExpression(index);
-    ctx.emitBitMaskFromCurrentXWithQuotientScratch(scratch, line);
+    compileExpression(ctx, index);
+    emitBitMaskFromCurrentXWithQuotientScratch(ctx, scratch, line);
     ctx.optimizations.push({
       name: "bit-mask-quotient-reuse",
       detail: `Reused ${expressionToIntentText(index)} / 4 through ${scratch} while building bit_mask().`,
@@ -172,7 +178,7 @@ export function emitBitSetWithScratch(ctx: LoweringCtx,
     set: Extract<StatementAst, { kind: "assign" }>,
     scratch: string,
   ): void {
-    ctx.emitBitSetCollectionWithScratch(membership.collection, set, scratch);
+    emitBitSetCollectionWithScratch(ctx, membership.collection, set, scratch);
 }
 
 export function emitBitSetCollectionWithScratch(ctx: LoweringCtx, 
@@ -180,7 +186,7 @@ export function emitBitSetCollectionWithScratch(ctx: LoweringCtx,
     set: Extract<StatementAst, { kind: "assign" }>,
     scratch: string,
   ): void {
-    ctx.compileExpression(collection);
+    compileExpression(ctx, collection);
     ctx.emitRecall(scratch, "reuse cell bit mask", set.line);
     ctx.emitOp(0x38, "К ∨", "bit_set with reused mask", set.line);
     ctx.emitStore(set.target, `set ${set.target}`, set.line);
@@ -194,14 +200,14 @@ export function compileSpatialCountCall(ctx: LoweringCtx, name: "neighbor_count"
       });
       return true;
     }
-    if (name === "line_count" && ctx.compileSpatialLineCountLoop(expr)) return true;
+    if (name === "line_count" && compileSpatialLineCountLoop(ctx, expr)) return true;
     // neighbor_count sums several spatial-hit probes. Each hit-helper call churns
     // the four-deep MK-61 stack, so a stack-held running sum is corrupted; the
     // loop body keeps the partial total in a register instead.
-    if (name === "neighbor_count" && ctx.compileSpatialNeighborCountLoop(expr)) return true;
+    if (name === "neighbor_count" && compileSpatialNeighborCountLoop(ctx, expr)) return true;
     const expanded = spatialCountExpression(name, expr.args, ctx.ast);
     if (expanded === undefined) return false;
-    ctx.compileExpression(expanded);
+    compileExpression(ctx, expanded);
     ctx.optimizations.push({
       name: "spatial-count-hit-helper",
       detail: `Lowered ${name}() through shared spatial hit helper calls.`,
@@ -233,7 +239,7 @@ export function compileSpatialNeighborCountLoop(ctx: LoweringCtx, expr: Extract<
 
     const helper = ctx.ensureSpatialHitHelper(mask.name, spatialHitScratchName(mask.name));
     offsets.forEach((offset, position) => {
-      ctx.compileExpression(offsetExpressionAst(cell, offset));
+      compileExpression(ctx, offsetExpressionAst(cell, offset));
       ctx.emitJump(0x53, "ПП", helper.label, `spatial hit ${mask.name}`, undefined);
       if (position === 0) {
         ctx.emitStore(total, "neighbor_count total", undefined);
@@ -264,7 +270,7 @@ export function compileSpatialLineCountLoop(ctx: LoweringCtx, expr: Extract<Expr
     const hitMask = useSharedMask ? maskScratch : mask.name;
     const helper = ctx.sharedLineCountHelper(mask, cell, board, undefined);
     if (helper !== undefined) {
-      ctx.compileExpression(mask);
+      compileExpression(ctx, mask);
       ctx.emitJump(0x53, "ПП", helper.label, `line_count ${mask.name}`, undefined);
       ctx.optimizations.push({
         name: "spatial-line-count-helper-call",
@@ -274,10 +280,10 @@ export function compileSpatialLineCountLoop(ctx: LoweringCtx, expr: Extract<Expr
     }
 
     if (useSharedMask) {
-      ctx.compileExpression(mask);
+      compileExpression(ctx, mask);
       ctx.emitStore(maskScratch, "line count mask", undefined);
     }
-    ctx.emitSpatialLineCountLoopBody(hitMask, cell, board, undefined);
+    emitSpatialLineCountLoopBody(ctx, hitMask, cell, board, undefined);
     return true;
 }
 
@@ -287,7 +293,7 @@ export function emitSpatialLineCountLoopBody(ctx: LoweringCtx,
     board: V2BoardAst,
     sourceLine: number | undefined,
   ): void {
-    ctx.emitSpatialProgressionCountLoopBody(
+    emitSpatialProgressionCountLoopBody(ctx, 
       hitMask,
       cell,
       spatialLineProgressions(board, cell),
@@ -320,9 +326,9 @@ export function emitSpatialProgressionCountLoopBody(ctx: LoweringCtx,
       for (const progression of progressions) {
         ctx.emitZero(`${operation} current line`, sourceLine);
         ctx.emitStore(line, `${operation} current line`, sourceLine);
-        ctx.compileExpression(progression.startOffset);
+        compileExpression(ctx, progression.startOffset);
         ctx.emitStore(offset, `${operation} offset`, sourceLine);
-        ctx.compileExpression(progression.step);
+        compileExpression(ctx, progression.step);
         ctx.emitStore(spatialCountStepScratchName(), `${operation} step`, sourceLine);
         ctx.emitNumberOrPreload(String(progression.count));
         ctx.emitStore(counter, `${operation} counter`, sourceLine);
@@ -343,9 +349,9 @@ export function emitSpatialProgressionCountLoopBody(ctx: LoweringCtx,
     if (!useMax && progressions.length >= 3) {
       const helper = ctx.ensureSpatialSumLoopHelper(hitMask, cell, operation, sourceLine);
       for (const progression of progressions) {
-        ctx.compileExpression(progression.startOffset);
+        compileExpression(ctx, progression.startOffset);
         ctx.emitStore(offset, `${operation} offset`, sourceLine);
-        ctx.compileExpression(progression.step);
+        compileExpression(ctx, progression.step);
         ctx.emitStore(line, `${operation} step`, sourceLine);
         if (!isNumericValue(progression.step, progression.count)) {
           ctx.emitNumberOrPreload(String(progression.count));
@@ -364,14 +370,14 @@ export function emitSpatialProgressionCountLoopBody(ctx: LoweringCtx,
         ctx.emitNumber("0");
         ctx.emitStore(line, `${operation} current line`, sourceLine);
       }
-      ctx.compileExpression(progression.startOffset);
+      compileExpression(ctx, progression.startOffset);
       ctx.emitStore(offset, `${operation} offset`, sourceLine);
       ctx.emitNumberOrPreload(String(progression.count));
       ctx.emitStore(counter, `${operation} counter`, sourceLine);
 
       const start = ctx.freshLabel(`${operation}_loop`);
       ctx.emitLabel(start);
-      ctx.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
+      compileExpression(ctx, addExpressions(cell, { kind: "identifier", name: offset }));
       const helper = ctx.ensureSpatialHitHelper(hitMask, spatialHitScratchName(hitMask));
       ctx.emitJump(0x53, "ПП", helper.label, `spatial hit ${hitMask}`, sourceLine);
       ctx.emitRecall(useMax ? line : total, `${operation} accumulator`);
@@ -379,7 +385,7 @@ export function emitSpatialProgressionCountLoopBody(ctx: LoweringCtx,
       ctx.emitStore(useMax ? line : total, `${operation} accumulator`);
 
       ctx.emitRecall(offset, `${operation} offset`);
-      ctx.compileExpression(progression.step);
+      compileExpression(ctx, progression.step);
       ctx.emitOp(0x10, "+", `${operation} next offset`);
       ctx.emitStore(offset, `${operation} offset`);
 
@@ -429,7 +435,7 @@ export function emitSpatialLineProgressionHelperBody(ctx: LoweringCtx,
 
     const start = ctx.freshLabel(`${operation}_line_loop`);
     ctx.emitLabel(start);
-    ctx.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
+    compileExpression(ctx, addExpressions(cell, { kind: "identifier", name: offset }));
     const helper = ctx.ensureSpatialHitHelper(hitMask, spatialHitScratchName(hitMask));
     ctx.emitJump(0x53, "ПП", helper.label, `spatial hit ${hitMask}`, sourceLine);
     ctx.emitRecall(line, `${operation} line accumulator`);
@@ -478,7 +484,7 @@ export function emitSpatialSumLoopHelperBody(ctx: LoweringCtx,
 
     const start = ctx.freshLabel(`${operation}_loop`);
     ctx.emitLabel(start);
-    ctx.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
+    compileExpression(ctx, addExpressions(cell, { kind: "identifier", name: offset }));
     const hitScratch = spatialHitScratchName(hitMask);
     ctx.emitStore(hitScratch, "spatial hit index", sourceLine);
 
@@ -487,7 +493,7 @@ export function emitSpatialSumLoopHelperBody(ctx: LoweringCtx,
     ctx.emitOp(0x10, "+", `${operation} next offset`);
     ctx.emitStore(offset, `${operation} offset`);
 
-    ctx.emitInlineSpatialHitFromScratch(hitMask, hitScratch, sourceLine);
+    emitInlineSpatialHitFromScratch(ctx, hitMask, hitScratch, sourceLine);
     ctx.emitRecall(total, `${operation} accumulator`);
     ctx.emitOp(0x10, "+", `${operation} add hit`);
     ctx.emitStore(total, `${operation} accumulator`);
@@ -511,7 +517,7 @@ export function emitSpatialSumLoopHelperBody(ctx: LoweringCtx,
 export function emitInlineSpatialHit(ctx: LoweringCtx, hitMask: string, sourceLine: number | undefined): void {
     const scratch = spatialHitScratchName(hitMask);
     ctx.emitStore(scratch, "spatial hit index", sourceLine);
-    ctx.emitInlineSpatialHitFromScratch(hitMask, scratch, sourceLine);
+    emitInlineSpatialHitFromScratch(ctx, hitMask, scratch, sourceLine);
 }
 
 export function emitInlineSpatialHitFromScratch(ctx: LoweringCtx, 
@@ -545,7 +551,7 @@ export function compileSpatialHitCall(ctx: LoweringCtx, expr: Extract<Expression
     const scratch = spatialHitScratchName(mask.name);
     if (!ctx.allocation.registers[scratch]) return false;
     const helper = ctx.ensureSpatialHitHelper(mask.name, scratch);
-    ctx.compileExpression(index);
+    compileExpression(ctx, index);
     ctx.emitJump(0x53, "ПП", helper.label, `spatial hit ${mask.name}`, helper.line);
     return true;
 }
@@ -569,7 +575,7 @@ export function compileNegativeZeroDegreeSelectorCall(ctx: LoweringCtx, expr: Ex
     const [value, bound] = expr.args;
     if (value === undefined || bound === undefined) return true;
 
-    ctx.emitNegativeZeroThresholdRaw(value, bound, register);
+    emitNegativeZeroThresholdRaw(ctx, value, bound, register);
     ctx.emitOp(0x32, "К ЗН", "negative-zero threshold selector");
     ctx.optimizations.push({
       name: "negative-zero-threshold-selector",

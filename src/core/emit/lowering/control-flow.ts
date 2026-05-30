@@ -1,6 +1,26 @@
 import { registerIndex } from "../../opcodes.ts";
 import type { ExpressionAst, RegisterName, StatementAst } from "../../types.ts";
 import type { LoweringCtx } from "../lowering-ctx.ts";
+import {
+  compileCoordListHasCondition,
+} from "./coord-list.ts";
+import {
+  compileLiteralDisplayBody,
+} from "./display.ts";
+import {
+  compileExpression,
+} from "./expr.ts";
+import {
+  compileEqualityWithCurrentX,
+  compileLocalTerminalElseTail,
+  compileNegativeZeroThresholdFlow,
+  emitErrorStopOpcode,
+} from "./proc-raw-setup.ts";
+import {
+  compileBitMaskWithQuotientScratch,
+  emitBitSetCollectionWithScratch,
+  emitBitSetWithScratch,
+} from "./spatial.ts";
 import type {
   BitMembershipCondition,
   NearAnyHelperConditionMatch,
@@ -71,7 +91,7 @@ export function compileLiteralShowHalt(ctx: LoweringCtx,
     if (display === undefined) return false;
     const literal = ctx.collapseLiteralOnlyDisplay(display);
     if (literal === undefined || displayLiteralProgram(literal)?.kind !== "error") return false;
-    ctx.compileLiteralHalt(literal, show.line);
+    compileLiteralHalt(ctx, literal, show.line);
     ctx.optimizations.push({
       name: "terminal-display-fusion",
       detail: `Folded literal screen ${show.display} followed by halt at line ${halt.line} into a terminal error stop.`,
@@ -117,15 +137,15 @@ export function compileIf(ctx: LoweringCtx,
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): void {
-    if (ctx.compileArithmeticIfSelect(statement)) return;
-    if (ctx.compileGuardedUpdateSelector(statement)) return;
-    if (ctx.compileNestedGuardSharedFailure(statement, line)) return;
-    if (ctx.compileResidualGuardedUpdate(statement, line)) return;
-    if (ctx.compileDirectTerminalIfBranch(statement, line)) return;
-    if (ctx.compileMembershipClearReuse(statement, line)) return;
-    if (ctx.compileMembershipSetReuse(statement, line)) return;
-    if (ctx.compileLocalTerminalElseTail(statement, line)) return;
-    if (ctx.compileResidualEqualityElseIf(statement, line)) return;
+    if (compileArithmeticIfSelect(ctx, statement)) return;
+    if (compileGuardedUpdateSelector(ctx, statement)) return;
+    if (compileNestedGuardSharedFailure(ctx, statement, line)) return;
+    if (compileResidualGuardedUpdate(ctx, statement, line)) return;
+    if (compileDirectTerminalIfBranch(ctx, statement, line)) return;
+    if (compileMembershipClearReuse(ctx, statement, line)) return;
+    if (compileMembershipSetReuse(ctx, statement, line)) return;
+    if (compileLocalTerminalElseTail(ctx, statement, line)) return;
+    if (compileResidualEqualityElseIf(ctx, statement, line)) return;
 
     const selected = ctx.branchOrderStatement(statement, line);
     const falseLabel = ctx.freshLabel("if_false");
@@ -135,7 +155,7 @@ export function compileIf(ctx: LoweringCtx,
     const falseBranchIdentifier = selected.elseBody === undefined
       ? undefined
       : ctx.falseBranchCurrentXCandidate(selected.condition, selected.elseBody);
-    ctx.compileCondition(selected.condition, falseLabel, line);
+    compileCondition(ctx, selected.condition, falseLabel, line);
     if (fallthroughIdentifier !== undefined) {
       ctx.currentXVariable = fallthroughIdentifier;
       ctx.currentXAliases = new Set([fallthroughIdentifier]);
@@ -194,7 +214,7 @@ export function compileResidualEqualityElseIf(ctx: LoweringCtx,
         ? ctx.freshLabel("if_residual_end")
         : undefined;
 
-    ctx.compileExpression(first.expr);
+    compileExpression(ctx, first.expr);
     ctx.emitNumberOrPreload(String(first.value));
     ctx.emitOp(0x11, "-", "condition compare", line);
     ctx.emitJump(0x5e, "F x=0", firstFalseLabel, "false branch for ==", line);
@@ -204,7 +224,7 @@ export function compileResidualEqualityElseIf(ctx: LoweringCtx,
     }
 
     ctx.emitLabel(firstFalseLabel);
-    ctx.emitResidualAdjustment(first.value, second.value, nested.line);
+    emitResidualAdjustment(ctx, first.value, second.value, nested.line);
     ctx.emitJump(0x5e, "F x=0", secondFalseLabel, "false branch for ==", nested.line);
     ctx.compileStatements(nested.thenBody);
     if (nested.elseBody !== undefined && !nestedThenTerminates && endLabel !== undefined) {
@@ -249,8 +269,8 @@ export function compileNestedGuardSharedFailure(ctx: LoweringCtx,
     const failureLabel = ctx.freshLabel("guard_failure");
     const thenTerminates = ctx.statementsTerminate(inner.thenBody);
     const endLabel = thenTerminates ? undefined : ctx.freshLabel("guard_end");
-    ctx.compileCondition(statement.condition, failureLabel, line);
-    ctx.compileCondition(inner.condition, failureLabel, inner.line);
+    compileCondition(ctx, statement.condition, failureLabel, line);
+    compileCondition(ctx, inner.condition, failureLabel, inner.line);
     ctx.compileStatements(inner.thenBody);
     if (endLabel !== undefined) ctx.emitJump(0x51, "БП", endLabel, "guard success end", inner.line);
     ctx.emitLabel(failureLabel);
@@ -310,7 +330,7 @@ export function compileDirectTerminalIfBranch(ctx: LoweringCtx,
       .sort((left, right) => left.estimatedCost - right.estimatedCost)[0];
     if (selected === undefined) return false;
 
-    ctx.compileCondition(selected.condition, selected.target, line);
+    compileCondition(ctx, selected.condition, selected.target, line);
     if (selected.branchWhen === "true") {
       if (statement.elseBody) ctx.compileStatements(statement.elseBody);
     } else {
@@ -340,8 +360,8 @@ export function compileResidualGuardedUpdate(ctx: LoweringCtx,
     const thenTerminates = ctx.statementsTerminate(update.tail);
     const endLabel = statement.elseBody !== undefined && !thenTerminates ? ctx.freshLabel("if_end") : undefined;
 
-    ctx.compileExpression(update.condition.left);
-    ctx.compileExpression(update.condition.right);
+    compileExpression(ctx, update.condition.left);
+    compileExpression(ctx, update.condition.right);
     ctx.emitOp(0x11, "-", "condition compare", line);
     ctx.emitJump(0x5c, "F x<0", falseLabel, `false branch for ${update.condition.op}`, line);
     if (correction !== 0) {
@@ -381,10 +401,10 @@ export function compileMembershipClearReuse(ctx: LoweringCtx,
     const falseLabel = ctx.freshLabel("if_false");
     const endLabel = ctx.freshLabel("if_end");
 
-    if (!ctx.compileBitMembershipMaskValue(membership, line)) ctx.compileExpression(membership.test);
+    if (!compileBitMembershipMaskValue(ctx, membership, line)) compileExpression(ctx, membership.test);
     ctx.emitJump(0x57, "F x!=0", falseLabel, "false branch for !=", line);
     ctx.emitOp(0x3a, "К ИНВ", "reuse membership mask for clear", clear.line);
-    ctx.compileExpression(membership.collection);
+    compileExpression(ctx, membership.collection);
     ctx.emitOp(0x37, "К ∧", "clear matched cell with reused mask", clear.line);
     ctx.emitStore(clear.target, `set ${clear.target}`, clear.line);
     ctx.compileStatements(tail);
@@ -406,8 +426,8 @@ export function compileMembershipClearReuse(ctx: LoweringCtx,
 
 export function compileBitMembershipMaskValue(ctx: LoweringCtx, membership: BitMembershipCondition, line: number): boolean {
     if (membership.mode === "mask") {
-      ctx.compileExpression(membership.mask);
-      ctx.compileExpression(membership.collection);
+      compileExpression(ctx, membership.mask);
+      compileExpression(ctx, membership.collection);
       ctx.emitOp(0x37, "К ∧", "bit membership test", line);
       ctx.emitOp(0x35, "К {x}", "bit membership fraction", line);
       return true;
@@ -416,9 +436,9 @@ export function compileBitMembershipMaskValue(ctx: LoweringCtx, membership: BitM
     const scratch = spatialHitScratchName(membership.collection.name);
     if (ctx.allocation.registers[scratch] === undefined) return false;
     const helper = ctx.ensureSpatialBitMaskHelper(scratch, line);
-    ctx.compileExpression(membership.item);
+    compileExpression(ctx, membership.item);
     ctx.emitJump(0x53, "ПП", helper.label, "bit_mask helper", line);
-    ctx.compileExpression(membership.collection);
+    compileExpression(ctx, membership.collection);
     ctx.emitOp(0x37, "К ∧", "bit membership test", line);
     ctx.emitOp(0x35, "К {x}", "bit membership fraction", line);
     ctx.optimizations.push({
@@ -436,11 +456,11 @@ export function compileMembershipSetReuse(ctx: LoweringCtx,
     if (present !== undefined && present.collection.kind === "identifier" && statement.elseBody !== undefined) {
       const setRun = ctx.membershipSetRunPrefix(statement.elseBody, present);
       if (setRun !== undefined) {
-        return ctx.compileMembershipSetRunReuseForPresentCondition(statement, present, setRun, line);
+        return compileMembershipSetRunReuseForPresentCondition(ctx, statement, present, setRun, line);
       }
       const setPrefix = ctx.membershipSetPrefix(statement.elseBody, present);
       if (setPrefix !== undefined) {
-        return ctx.compileMembershipSetReuseForPresentCondition(statement, present, setPrefix, line);
+        return compileMembershipSetReuseForPresentCondition(ctx, statement, present, setPrefix, line);
       }
     }
 
@@ -448,11 +468,11 @@ export function compileMembershipSetReuse(ctx: LoweringCtx,
     if (absent === undefined || absent.collection.kind !== "identifier") return false;
     const setRun = ctx.membershipSetRunPrefix(statement.thenBody, absent);
     if (setRun !== undefined) {
-      return ctx.compileMembershipSetRunReuseForAbsentCondition(statement, absent, setRun, line);
+      return compileMembershipSetRunReuseForAbsentCondition(ctx, statement, absent, setRun, line);
     }
     const setPrefix = ctx.membershipSetPrefix(statement.thenBody, absent);
     if (setPrefix === undefined) return false;
-    return ctx.compileMembershipSetReuseForAbsentCondition(statement, absent, setPrefix, line);
+    return compileMembershipSetReuseForAbsentCondition(ctx, statement, absent, setPrefix, line);
 }
 
 export function compileMembershipSetReuseForPresentCondition(ctx: LoweringCtx, 
@@ -472,12 +492,12 @@ export function compileMembershipSetReuseForPresentCondition(ctx: LoweringCtx,
     const thenTerminates = ctx.statementsTerminate(statement.thenBody);
     const endLabel = thenTerminates ? undefined : ctx.freshLabel("if_end");
 
-    ctx.emitMembershipMaskTest(membership, scratch, line);
+    emitMembershipMaskTest(ctx, membership, scratch, line);
     ctx.emitJump(0x5e, "F x=0", falseLabel, "false branch for !=", line);
     ctx.compileStatements(statement.thenBody);
     if (endLabel !== undefined) ctx.emitJump(0x51, "БП", endLabel, "if end", line);
     ctx.emitLabel(falseLabel);
-    ctx.emitBitSetWithScratch(membership, set, scratch);
+    emitBitSetWithScratch(ctx, membership, set, scratch);
     ctx.compileStatements(tail);
     if (endLabel !== undefined) ctx.emitLabel(endLabel);
 
@@ -505,9 +525,9 @@ export function compileMembershipSetReuseForAbsentCondition(ctx: LoweringCtx,
     const thenTerminates = ctx.statementsTerminate(statement.thenBody);
     const endLabel = statement.elseBody !== undefined && !thenTerminates ? ctx.freshLabel("if_end") : undefined;
 
-    ctx.emitMembershipMaskTest(membership, scratch, line);
+    emitMembershipMaskTest(ctx, membership, scratch, line);
     ctx.emitJump(0x57, "F x!=0", falseLabel, "false branch for ==", line);
-    ctx.emitBitSetWithScratch(membership, set, scratch);
+    emitBitSetWithScratch(ctx, membership, set, scratch);
     ctx.compileStatements(tail);
     if (statement.elseBody !== undefined) {
       if (endLabel !== undefined) ctx.emitJump(0x51, "БП", endLabel, "if end", line);
@@ -544,13 +564,13 @@ export function compileMembershipSetRunReuseForPresentCondition(ctx: LoweringCtx
     const thenTerminates = ctx.statementsTerminate(statement.thenBody);
     const endLabel = thenTerminates ? undefined : ctx.freshLabel("if_end");
 
-    ctx.emitMembershipMaskTest(membership, scratch, line);
+    emitMembershipMaskTest(ctx, membership, scratch, line);
     ctx.emitJump(0x5e, "F x=0", falseLabel, "false branch for !=", line);
     ctx.compileStatements(statement.thenBody);
     if (endLabel !== undefined) ctx.emitJump(0x51, "БП", endLabel, "if end", line);
     ctx.emitLabel(falseLabel);
     for (const { set, collection } of setRun.sets) {
-      ctx.emitBitSetCollectionWithScratch(collection, set, scratch);
+      emitBitSetCollectionWithScratch(ctx, collection, set, scratch);
     }
     ctx.compileStatements(setRun.tail);
     if (endLabel !== undefined) ctx.emitLabel(endLabel);
@@ -582,10 +602,10 @@ export function compileMembershipSetRunReuseForAbsentCondition(ctx: LoweringCtx,
     const thenTerminates = ctx.statementsTerminate(statement.thenBody);
     const endLabel = statement.elseBody !== undefined && !thenTerminates ? ctx.freshLabel("if_end") : undefined;
 
-    ctx.emitMembershipMaskTest(membership, scratch, line);
+    emitMembershipMaskTest(ctx, membership, scratch, line);
     ctx.emitJump(0x57, "F x!=0", falseLabel, "false branch for ==", line);
     for (const { set, collection } of setRun.sets) {
-      ctx.emitBitSetCollectionWithScratch(collection, set, scratch);
+      emitBitSetCollectionWithScratch(ctx, collection, set, scratch);
     }
     ctx.compileStatements(setRun.tail);
     if (statement.elseBody !== undefined) {
@@ -611,12 +631,12 @@ export function emitMembershipMaskTest(ctx: LoweringCtx,
     line: number,
   ): void {
     if (membership.mode === "index") {
-      ctx.compileBitMaskWithQuotientScratch(membership.item, scratch, line);
+      compileBitMaskWithQuotientScratch(ctx, membership.item, scratch, line);
     } else {
-      ctx.compileExpression(membership.mask);
+      compileExpression(ctx, membership.mask);
     }
     ctx.emitStore(scratch, "cell bit mask scratch", line);
-    ctx.compileExpression(membership.collection);
+    compileExpression(ctx, membership.collection);
     ctx.emitRecall(scratch, "reuse cell bit mask", line);
     ctx.emitOp(0x37, "К ∧", "membership test with reused mask", line);
     ctx.emitOp(0x35, "К {x}", "membership fraction", line);
@@ -650,7 +670,7 @@ export function compileArithmeticIfSelect(ctx: LoweringCtx, statement: Extract<S
       return false;
     }
 
-    ctx.compileExpression(selected.expr);
+    compileExpression(ctx, selected.expr);
     if (selected.kind === "assign") {
       ctx.emitStore(selected.target, `${selected.name} ${selected.target}`, statement.line);
     } else {
@@ -688,11 +708,11 @@ export function compileGuardedUpdateSelector(ctx: LoweringCtx, statement: Extrac
       return false;
     }
 
-    ctx.compileExpression(candidate.selector);
+    compileExpression(ctx, candidate.selector);
     ctx.emitStore(scratch, `${candidate.name} selector`, statement.line);
     const selector: ExpressionAst = { kind: "identifier", name: scratch };
     for (const update of candidate.updates) {
-      ctx.compileExpression(maskedGuardedUpdateExpression(update, selector));
+      compileExpression(ctx, maskedGuardedUpdateExpression(update, selector));
       ctx.emitStore(update.target, `${candidate.name} ${update.target}`, statement.line);
     }
     ctx.optimizations.push({
@@ -726,7 +746,7 @@ export function compileDoubleBranchRemoval(ctx: LoweringCtx,
       return false;
     }
 
-    ctx.compileExpression(selected.expr);
+    compileExpression(ctx, selected.expr);
     ctx.emitStore(selected.target, `${selected.name} ${selected.target}`, first.line);
     ctx.optimizations.push({
       name: "branch-removal",
@@ -763,14 +783,14 @@ export function compileDispatch(ctx: LoweringCtx, statement: Extract<StatementAs
       detail: `Selected ${selected.selected.variant} for ${site}.`,
     });
 
-    ctx.compileDispatchCompareChain(optimized.statement, selected.selected.variant === "fallthrough-compare-chain");
+    compileDispatchCompareChain(ctx, optimized.statement, selected.selected.variant === "fallthrough-compare-chain");
 }
 
 export function compileDispatchCompareChain(ctx: LoweringCtx, 
     statement: Extract<StatementAst, { kind: "dispatch" }>,
     useFallthrough: boolean,
   ): void {
-    if (ctx.compileNumericResidualDispatchCompareChain(statement, useFallthrough)) return;
+    if (compileNumericResidualDispatchCompareChain(ctx, statement, useFallthrough)) return;
 
     const scratch = `${DISPATCH_SCRATCH_PREFIX}${statement.scratchId}`;
     const sourceRegister = dispatchExpressionRegister(statement, ctx.allocation);
@@ -784,7 +804,7 @@ export function compileDispatchCompareChain(ctx: LoweringCtx,
       return;
     }
 
-    ctx.compileExpression(statement.expr);
+    compileExpression(ctx, statement.expr);
     if (sourceRegister === undefined) {
       ctx.emitOp(
         0x40 + registerIndex(register),
@@ -817,7 +837,7 @@ export function compileDispatchCompareChain(ctx: LoweringCtx,
       if (xContainsDispatchExpr && isZeroExpression(dispatchCase.value)) {
         ctx.emitJump(0x5e, "F x=0", nextLabel, "zero-case mismatch", dispatchCase.line);
       } else {
-        ctx.compileExpression(dispatchCase.value);
+        compileExpression(ctx, dispatchCase.value);
         ctx.emitOp(0x11, "-", "dispatch compare", dispatchCase.line);
         ctx.emitJump(0x5e, "F x=0", nextLabel, "case mismatch", dispatchCase.line);
         xContainsDispatchExpr = false;
@@ -843,7 +863,7 @@ export function compileNumericResidualDispatchCompareChain(ctx: LoweringCtx,
     if (!dispatchUsesNumericResidualChain(statement)) return false;
     const numericValues = statement.cases.map((dispatchCase) => numericLiteralValue(dispatchCase.value)) as number[];
 
-    ctx.compileExpression(statement.expr);
+    compileExpression(ctx, statement.expr);
     const endLabel = ctx.freshLabel("dispatch_end");
     let comparedValue = 0;
     let hasComparedValue = false;
@@ -854,11 +874,11 @@ export function compileNumericResidualDispatchCompareChain(ctx: LoweringCtx,
       const lastCase = index === statement.cases.length - 1;
       if (!hasComparedValue) {
         if (value !== 0) {
-          ctx.emitPositiveResidualCompare(value, "dispatch compare", dispatchCase.line);
+          emitPositiveResidualCompare(ctx, value, "dispatch compare", dispatchCase.line);
         }
         hasComparedValue = true;
       } else {
-        ctx.emitResidualCompareDelta(value - comparedValue, "dispatch residual compare", dispatchCase.line);
+        emitResidualCompareDelta(ctx, value - comparedValue, "dispatch residual compare", dispatchCase.line);
       }
       comparedValue = value;
       ctx.emitJump(0x5e, "F x=0", nextLabel, "case mismatch", dispatchCase.line);
@@ -897,7 +917,7 @@ export function emitResidualCompareDelta(ctx: LoweringCtx, delta: number, commen
 export function compileLiteralHalt(ctx: LoweringCtx, literal: string, line: number): void {
     const program = displayLiteralProgram(literal);
     if (program?.kind === "error") {
-      ctx.emitErrorStopOpcode("halt literal ЕГГ0Г", line);
+      emitErrorStopOpcode(ctx, "halt literal ЕГГ0Г", line);
       ctx.optimizations.push({
         name: "error-stop",
         detail: `Used one-cell error opcode for literal ЕГГ0Г stop at line ${line}.`,
@@ -913,7 +933,7 @@ export function compileLiteralHalt(ctx: LoweringCtx, literal: string, line: numb
       items: [{ kind: "literal", text: literal, line }],
       line,
     };
-    if (!ctx.compileLiteralDisplayBody(display, line, literal)) {
+    if (!compileLiteralDisplayBody(ctx, display, line, literal)) {
       ctx.diagnostics.push(buildDiagnostic(
         "error",
         `Literal halt ${JSON.stringify(literal)} is not lowerable yet.`,
@@ -944,8 +964,8 @@ export function compileCondition(ctx: LoweringCtx,
     falseLabel: string,
     line: number,
   ): void {
-    if (ctx.compileCoordListHasCondition(condition, falseLabel, line)) return;
-    if (ctx.compileNegativeZeroThresholdFlow(condition, falseLabel, line)) return;
+    if (compileCoordListHasCondition(ctx, condition, falseLabel, line)) return;
+    if (compileNegativeZeroThresholdFlow(ctx, condition, falseLabel, line)) return;
 
     const preloadedConstants = new Set(Object.keys(ctx.allocation.constants));
     const selected = selectCheaperEquivalentCondition(
@@ -960,14 +980,14 @@ export function compileCondition(ctx: LoweringCtx,
       });
     }
     const compiledCondition = selected.condition;
-    if (ctx.compileNearAnyHelperCondition(compiledCondition, falseLabel, line, preloadedConstants)) return;
-    if (ctx.compileSmallSetCondition(compiledCondition, falseLabel, line, preloadedConstants)) return;
+    if (compileNearAnyHelperCondition(ctx, compiledCondition, falseLabel, line, preloadedConstants)) return;
+    if (compileSmallSetCondition(ctx, compiledCondition, falseLabel, line, preloadedConstants)) return;
     if (isZeroExpression(compiledCondition.right) && canTestAgainstZeroDirectly(compiledCondition.op)) {
-      const bitHasLowering = ctx.compileBitHasConditionWithBitMaskHelper(compiledCondition.left, line)
-        ?? ctx.compileBitHasConditionWithSpatialHelper(compiledCondition.left, line);
+      const bitHasLowering = compileBitHasConditionWithBitMaskHelper(ctx, compiledCondition.left, line)
+        ?? compileBitHasConditionWithSpatialHelper(ctx, compiledCondition.left, line);
       if (bitHasLowering === undefined) {
         if (!(compiledCondition.left.kind === "identifier" && ctx.xHolds(compiledCondition.left.name))) {
-          ctx.compileExpression(compiledCondition.left);
+          compileExpression(ctx, compiledCondition.left);
         }
       }
       const opcode = directTestOpcode(compiledCondition.op);
@@ -979,13 +999,13 @@ export function compileCondition(ctx: LoweringCtx,
       });
       return;
     }
-    if (ctx.compileEqualityWithCurrentX(compiledCondition, falseLabel, line)) return;
+    if (compileEqualityWithCurrentX(ctx, compiledCondition, falseLabel, line)) return;
     if (compiledCondition.op === ">" || compiledCondition.op === "<=") {
-      ctx.compileExpression(compiledCondition.right);
-      ctx.compileExpression(compiledCondition.left);
+      compileExpression(ctx, compiledCondition.right);
+      compileExpression(ctx, compiledCondition.left);
     } else {
-      ctx.compileExpression(compiledCondition.left);
-      ctx.compileExpression(compiledCondition.right);
+      compileExpression(ctx, compiledCondition.left);
+      compileExpression(ctx, compiledCondition.right);
     }
     ctx.emitOp(0x11, "-", "condition compare", line);
 
@@ -1015,9 +1035,9 @@ export function compileBitHasConditionWithBitMaskHelper(ctx: LoweringCtx,
     const scratch = ctx.sharedBitMaskHelperScratch() ?? spatialHitScratchName(mask.name);
     if (!ctx.allocation.registers[scratch]) return undefined;
     const helper = ctx.ensureSpatialBitMaskHelper(scratch, line);
-    ctx.compileExpression(index);
+    compileExpression(ctx, index);
     ctx.emitJump(0x53, "ПП", helper.label, "bit_mask helper", line);
-    ctx.compileExpression(mask);
+    compileExpression(ctx, mask);
     ctx.emitOp(0x37, "К ∧", "bit membership test", line);
     ctx.emitOp(0x35, "К {x}", "bit membership fraction", line);
     return {
@@ -1036,7 +1056,7 @@ export function compileBitHasConditionWithSpatialHelper(ctx: LoweringCtx,
     const scratch = spatialHitScratchName(mask.name);
     if (!ctx.allocation.registers[scratch]) return undefined;
     const helper = ctx.ensureSpatialHitHelper(mask.name, scratch);
-    ctx.compileExpression(index);
+    compileExpression(ctx, index);
     ctx.emitJump(0x53, "ПП", helper.label, `spatial hit ${mask.name}`, line);
     return {
       name: "spatial-hit-condition-helper",
@@ -1057,7 +1077,7 @@ export function compileNearAnyHelperCondition(ctx: LoweringCtx,
     if (stats === undefined || stats.helperCost >= stats.ordinaryCost) return false;
 
     const helper = ctx.nearAnyHelper(match.value, match.radius, line);
-    ctx.compileNearAnyMarginWithHelper(match, helper.label, line);
+    compileNearAnyMarginWithHelper(ctx, match, helper.label, line);
     const opcode = directTestOpcode(match.op);
     ctx.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${match.op}`, line);
     ctx.optimizations.push({
@@ -1074,7 +1094,7 @@ export function compileNearAnyMarginWithHelper(ctx: LoweringCtx,
   ): void {
     for (let index = 0; index < match.candidates.length; index += 1) {
       const candidate = match.candidates[index]!;
-      ctx.compileNearAnyCandidate(candidate, line);
+      compileNearAnyCandidate(ctx, candidate, line);
       ctx.emitJump(0x53, "ПП", label, "near_any candidate", line);
       if (index > 0) ctx.emitOp(0x36, "К max", "near_any max margin", line);
     }
@@ -1088,7 +1108,7 @@ export function compileNearAnyCandidate(ctx: LoweringCtx, candidate: ExpressionA
       });
       return;
     }
-    ctx.compileExpression(candidate);
+    compileExpression(ctx, candidate);
 }
 
 export function compileSmallSetCondition(ctx: LoweringCtx, 
@@ -1105,16 +1125,16 @@ export function compileSmallSetCondition(ctx: LoweringCtx,
     if (match.mode === "any") {
       const trueLabel = ctx.freshLabel(`${match.kind}_any_true`);
       for (const item of match.tests.slice(0, -1)) {
-        ctx.compileExpression(item.expr);
+        compileExpression(ctx, item.expr);
         ctx.emitJump(item.trueOpcode, getOpcode(item.trueOpcode).name, trueLabel, `${match.kind} any hit`, line);
       }
       const last = match.tests.at(-1)!;
-      ctx.compileExpression(last.expr);
+      compileExpression(ctx, last.expr);
       ctx.emitJump(last.falseOpcode, getOpcode(last.falseOpcode).name, falseLabel, `${match.kind} any miss`, line);
       ctx.emitLabel(trueLabel);
     } else {
       for (const item of match.tests) {
-        ctx.compileExpression(item.expr);
+        compileExpression(ctx, item.expr);
         ctx.emitJump(item.falseOpcode, getOpcode(item.falseOpcode).name, falseLabel, `${match.kind} all miss`, line);
       }
     }

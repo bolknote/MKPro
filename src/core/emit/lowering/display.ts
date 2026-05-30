@@ -1,6 +1,9 @@
 import { registerIndex } from "../../opcodes.ts";
 import type { ExpressionAst, ProgramAst, RegisterName, StatementAst } from "../../types.ts";
 import type { LoweringCtx } from "../lowering-ctx.ts";
+import {
+  emitErrorStopOpcode,
+} from "./proc-raw-setup.ts";
 import type {
   DisplayField,
   DisplayLiteralProgram,
@@ -54,9 +57,9 @@ export function compileShow(ctx: LoweringCtx, displayName: string, line: number)
       });
       return;
     }
-    if (ctx.compileLiteralDisplay(display, line)) return;
-    if (ctx.compileTextDisplay(display, line)) return;
-    if (ctx.compileDashedCoordReportDisplay(display, line)) return;
+    if (compileLiteralDisplay(ctx, display, line)) return;
+    if (compileTextDisplay(ctx, display, line)) return;
+    if (compileDashedCoordReportDisplay(ctx, display, line)) return;
 
     const strategy = ctx.selectDisplayStrategy(display);
     if (strategy === "packed-display-helper") {
@@ -82,10 +85,10 @@ export function compileShow(ctx: LoweringCtx, displayName: string, line: number)
       }
     }
 
-    if (strategy === "packed-storage-reuse" && ctx.compilePackedStorageReuseDisplay(display, line, true)) return;
-    if (strategy === "display-byte-builder" && ctx.compileDisplayByteBuilder(display, line, true)) return;
+    if (strategy === "packed-storage-reuse" && compilePackedStorageReuseDisplay(ctx, display, line, true)) return;
+    if (strategy === "display-byte-builder" && compileDisplayByteBuilder(ctx, display, line, true)) return;
 
-    ctx.compilePackedDisplayBody(display, line, true);
+    compilePackedDisplayBody(ctx, display, line, true);
     ctx.reportPackedDisplayLowering(display);
 }
 
@@ -99,7 +102,7 @@ export function compileDashedCoordReportDisplay(ctx: LoweringCtx, display: Progr
     }
 
     if (ctx.currentXDashedCoordReportBodyMatches(template)) {
-      ctx.emitDashedCoordReportPackedBodyDisplay(display.name, maskRegister, line);
+      emitDashedCoordReportPackedBodyDisplay(ctx, display.name, maskRegister, line);
       ctx.optimizations.push({
         name: "dashed-coord-report-packed-body",
         detail: `Reused packed --CC-- N body already in X for screen ${display.name}.`,
@@ -160,7 +163,7 @@ export function compilePackedDisplayBody(ctx: LoweringCtx,
   ): void {
     const fields = ctx.numericDisplayFields(display, line);
     if (fields === undefined) return;
-    ctx.compilePackedDisplayFields(display, fields, line, reuseCurrentX);
+    compilePackedDisplayFields(ctx, display, fields, line, reuseCurrentX);
     if (fields.some((field) => field.kind === "literal")) {
       ctx.optimizations.push({
         name: "display-decimal-literal-field",
@@ -181,7 +184,7 @@ export function compilePackedDisplayFields(ctx: LoweringCtx,
       : -1;
     if (currentIndex > 0) {
       const current = fields[currentIndex]!;
-      ctx.compilePackedDisplayFieldsInOrder(display, fields.slice(0, currentIndex), line, false);
+      compilePackedDisplayFieldsInOrder(ctx, display, fields.slice(0, currentIndex), line, false);
       ctx.emitNumberOrPreload(String(10 ** current.width));
       ctx.emitOp(0x12, "*", "packed display field shift", line);
       ctx.emitOp(0x10, "+", "packed display current field append", line);
@@ -189,7 +192,7 @@ export function compilePackedDisplayFields(ctx: LoweringCtx,
         ctx.emitNumberOrPreload(String(10 ** field.width));
         ctx.emitOp(0x12, "*", "packed display field shift", line);
         if (field.kind === "source" || field.value !== "0") {
-          ctx.emitDisplayFieldValue(display, field, line);
+          emitDisplayFieldValue(ctx, display, field, line);
           ctx.emitOp(0x10, "+", "packed display field append", line);
         }
       }
@@ -201,11 +204,11 @@ export function compilePackedDisplayFields(ctx: LoweringCtx,
     }
 
     const orderedFields = reuseCurrentX && ctx.canReorderNumericDisplay(display)
-      ? ctx.orderDisplaySources(fields.map((field) => field.name))
+      ? orderDisplaySources(ctx, fields.map((field) => field.name))
         .map((source) => fields.find((field) => field.name === source)!)
       : fields;
 
-    ctx.compilePackedDisplayFieldsInOrder(
+    compilePackedDisplayFieldsInOrder(ctx, 
       display,
       orderedFields,
       line,
@@ -232,12 +235,12 @@ export function compilePackedDisplayFieldsInOrder(ctx: LoweringCtx,
           continue;
         }
         if (index === 0) {
-          ctx.emitDisplayFieldValue(display, field, line);
+          emitDisplayFieldValue(ctx, display, field, line);
         } else {
           ctx.emitNumberOrPreload(String(10 ** field.width));
           ctx.emitOp(0x12, "*", "packed display field shift", line);
           if (field.kind === "source" || field.value !== "0") {
-            ctx.emitDisplayFieldValue(display, field, line);
+            emitDisplayFieldValue(ctx, display, field, line);
             ctx.emitOp(0x10, "+", "packed display field append", line);
           }
         }
@@ -288,7 +291,7 @@ export function compileDisplayByteBuilder(ctx: LoweringCtx,
     _reuseCurrentX: boolean,
   ): boolean {
     const template = ctx.mantissaExponentDisplayTemplate(display);
-    if (template === undefined) return ctx.compileMantissaMaskDisplay(display, line, _reuseCurrentX);
+    if (template === undefined) return compileMantissaMaskDisplay(ctx, display, line, _reuseCurrentX);
     const scratch = ctx.displayTemplateScratchRegisters(display);
     if (scratch === undefined) return false;
 
@@ -345,7 +348,7 @@ export function compileMantissaMaskDisplay(ctx: LoweringCtx,
     const maskRegister = ctx.displayMaskRegister(display);
     if (template === undefined || scratch === undefined || maskRegister === undefined) return false;
 
-    ctx.compilePackedDisplayFields(display, template.bodyFields, line, false);
+    compilePackedDisplayFields(ctx, display, template.bodyFields, line, false);
     ctx.emitOp(0x60 + registerIndex(maskRegister), `П->X ${maskRegister}`, `display ${display.name} literal mask`, line);
     ctx.emitOp(0x38, "К ∨", "display mask body merge", line);
     ctx.emitOp(0x40 + registerIndex(scratch), `X->П ${scratch}`, `display ${display.name} body`, line, true);
@@ -354,7 +357,7 @@ export function compileMantissaMaskDisplay(ctx: LoweringCtx,
     ctx.emitOp(0x14, "<->", "display mask leader merge", line);
     ctx.emitOp(0x54, "К НОП", "display mask leader preserve", line, true);
     ctx.emitOp(0x0c, "ВП", "display mask leader restore", line);
-    ctx.emitDisplayExponent(template.width - 1, line, "display mask exponent");
+    emitDisplayExponent(ctx, template.width - 1, line, "display mask exponent");
     ctx.emitOp(0x50, "С/П", `show ${display.name}`, line);
     ctx.optimizations.push({
       name: "display-byte-mask-lowering",
@@ -387,14 +390,14 @@ export function emitFirstSpliceDisplayLiteralProgram(ctx: LoweringCtx,
     line: number | undefined,
     comment: string,
   ): void {
-    ctx.emitDisplayLiteralProgram(program.body, line, `${comment} body`);
+    emitDisplayLiteralProgram(ctx, program.body, line, `${comment} body`);
     ctx.emitOp(0x40 + registerIndex(tempRegister), `X->П ${tempRegister}`, `${comment} body scratch`, line, true);
     if (program.first === 8) {
       ctx.emitOp(0x60 + registerIndex(tempRegister), `П->X ${tempRegister}`, `${comment} body scratch`, line);
       if (program.negative) ctx.emitOp(0x0b, "/-/", `${comment} sign`, line);
       ctx.emitOp(0x54, "К НОП", `${comment} first digit reuse`, line, true);
       ctx.emitOp(0x0c, "ВП", `${comment} first digit reuse`, line);
-      ctx.emitDisplayExponent(program.exponent, line, `${comment} exponent`);
+      emitDisplayExponent(ctx, program.exponent, line, `${comment} exponent`);
       ctx.optimizations.push({
         name: "display-literal-first-digit-reuse",
         detail: "Reused the literal body's leading 8 while restoring X2.",
@@ -405,19 +408,19 @@ export function emitFirstSpliceDisplayLiteralProgram(ctx: LoweringCtx,
       ctx.emitOp(0x35, "К {x}", `${comment} first digit from body`, line);
       ctx.emitOp(0x60 + registerIndex(tempRegister), `П->X ${tempRegister}`, `${comment} body scratch`, line);
       if (program.negative) ctx.emitOp(0x0b, "/-/", `${comment} sign`, line);
-      ctx.emitFirstDigitSplice(line);
-      ctx.emitDisplayExponent(program.exponent, line, `${comment} exponent`);
+      emitFirstDigitSplice(ctx, line);
+      emitDisplayExponent(ctx, program.exponent, line, `${comment} exponent`);
       ctx.optimizations.push({
         name: "display-literal-minus-source-reuse",
         detail: "Derived a leading '-' from the literal body's fractional tail.",
       });
       return;
     }
-    ctx.emitDisplayFirstDigit(program.first, line, `${comment} first digit`);
+    emitDisplayFirstDigit(ctx, program.first, line, `${comment} first digit`);
     ctx.emitOp(0x60 + registerIndex(tempRegister), `П->X ${tempRegister}`, `${comment} body scratch`, line);
     if (program.negative) ctx.emitOp(0x0b, "/-/", `${comment} sign`, line);
-    ctx.emitFirstDigitSplice(line);
-    ctx.emitDisplayExponent(program.exponent, line, `${comment} exponent`);
+    emitFirstDigitSplice(ctx, line);
+    emitDisplayExponent(ctx, program.exponent, line, `${comment} exponent`);
 }
 
 export function emitDisplayFirstDigit(ctx: LoweringCtx, cell: number, line: number | undefined, comment: string): void {
@@ -468,7 +471,7 @@ export function compileTextDisplay(ctx: LoweringCtx, display: ProgramAst["displa
       .filter(([name, register]) => name !== source.name && scratchRegisters.has(register));
     if (conflicting.length > 0) return false;
 
-    ctx.emitTwoDigitTextDisplay(source.name, line);
+    emitTwoDigitTextDisplay(ctx, source.name, line);
     ctx.optimizations.push({
       name: "screen-text-lowering",
       detail: `Lowered screen ${display.name} as visible text ${JSON.stringify(text)} plus ${source.name}.`,
@@ -479,7 +482,7 @@ export function compileTextDisplay(ctx: LoweringCtx, display: ProgramAst["displa
 export function compileLiteralDisplay(ctx: LoweringCtx, display: ProgramAst["displays"][number], line: number): boolean {
     const literal = ctx.collapseLiteralOnlyDisplay(display);
     if (literal === undefined) return false;
-    const compiled = ctx.compileLiteralDisplayBody(display, line, literal);
+    const compiled = compileLiteralDisplayBody(ctx, display, line, literal);
     if (!compiled) return false;
     ctx.optimizations.push({
       name: literal.length === 0 ? "screen-empty-literal-lowering" : "screen-video-literal-lowering",
@@ -500,11 +503,11 @@ export function compileLiteralDisplayBody(ctx: LoweringCtx,
       ctx.emitOp(0x50, "С/П", `show ${display.name}`, line);
       return true;
     }
-    if (ctx.compilePreloadedDisplayLiteral(display, literal, line)) return true;
+    if (compilePreloadedDisplayLiteral(ctx, display, literal, line)) return true;
     const program = displayLiteralProgram(literal);
     if (program !== undefined) {
       if (program.kind === "error") {
-        ctx.emitErrorStopOpcode(`show ${display.name}`, line, true);
+        emitErrorStopOpcode(ctx, `show ${display.name}`, line, true);
         ctx.emitOp(0x54, "К НОП", `show ${display.name} skipped after error pause`, line, true);
         ctx.optimizations.push({
           name: "screen-error-literal-lowering",
@@ -526,9 +529,9 @@ export function compileLiteralDisplayBody(ctx: LoweringCtx,
       ctx.emitOp(0x50, "С/П", `show ${display.name}`, line);
       return true;
     }
-    if (ctx.compileDecimalLiteralDisplay(display, literal, line)) return true;
-    if (ctx.compileZeroDigitTailDisplay(display, literal, line)) return true;
-    if (ctx.compileSignDigitLiteralDisplay(display, literal, line)) return true;
+    if (compileDecimalLiteralDisplay(ctx, display, literal, line)) return true;
+    if (compileZeroDigitTailDisplay(ctx, display, literal, line)) return true;
+    if (compileSignDigitLiteralDisplay(ctx, display, literal, line)) return true;
     const firstSplice =
       signedFirstSpliceDisplayLiteralProgram(literal) ??
       exponentTailDisplayLiteralProgram(literal) ??
@@ -536,7 +539,7 @@ export function compileLiteralDisplayBody(ctx: LoweringCtx,
     if (firstSplice !== undefined) {
       const scratch = ctx.firstSpliceDisplayScratch(display);
       if (scratch !== undefined) {
-        ctx.emitFirstSpliceDisplayLiteralProgram(firstSplice, scratch, line, "display literal video bytes");
+        emitFirstSpliceDisplayLiteralProgram(ctx, firstSplice, scratch, line, "display literal video bytes");
         ctx.emitOp(0x50, "С/П", `show ${display.name}`, line);
         ctx.optimizations.push({
           name: "screen-text-literal-first-splice",
@@ -628,14 +631,14 @@ export function compileSignDigitLiteralDisplay(ctx: LoweringCtx,
 
     ctx.emitOp(0x60 + registerIndex(scratch.source), `П->X ${scratch.source}`, "display sign-digit source", line);
     ctx.emitNumber(program.start);
-    ctx.emitFirstDigitSplice(line);
+    emitFirstDigitSplice(ctx, line);
 
     for (let index = 0; index < program.indirectSteps; index += 1) {
-      ctx.emitSignDigitIndirectStep(scratch.indirect, line);
+      emitSignDigitIndirectStep(ctx, scratch.indirect, line);
       if (index < program.indirectSteps - 1) {
         ctx.emitOp(0x60 + registerIndex(scratch.source), `П->X ${scratch.source}`, "display sign-digit source", line);
         ctx.emitOp(0x60 + registerIndex(scratch.indirect), `П->X ${scratch.indirect}`, "display sign-digit body", line);
-        ctx.emitFirstDigitSplice(line);
+        emitFirstDigitSplice(ctx, line);
       }
     }
 
@@ -645,7 +648,7 @@ export function compileSignDigitLiteralDisplay(ctx: LoweringCtx,
       ctx.emitNumber(program.first);
     }
     ctx.emitOp(0x60 + registerIndex(scratch.indirect), `П->X ${scratch.indirect}`, "display sign-digit final body", line);
-    ctx.emitFirstDigitSplice(line);
+    emitFirstDigitSplice(ctx, line);
     ctx.emitOp(0x50, "С/П", `show ${display.name}`, line);
     ctx.optimizations.push({
       name: "screen-sign-digit-literal-lowering",

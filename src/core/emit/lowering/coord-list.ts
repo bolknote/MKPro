@@ -1,6 +1,15 @@
 import { registerIndex } from "../../opcodes.ts";
 import type { ExpressionAst, ProgramAst, RegisterName, StatementAst } from "../../types.ts";
 import type { LoweringCtx } from "../lowering-ctx.ts";
+import {
+  compileShow,
+} from "./display.ts";
+import {
+  compileExpression,
+} from "./expr.ts";
+import {
+  emitIndirectUnitIncrement,
+} from "./proc-raw-setup.ts";
 import type {
   CoordListIndirectContext,
   DashedCoordReportTemplate,
@@ -54,7 +63,7 @@ export function compileRandomCoordListSetup(ctx: LoweringCtx, fields: readonly S
     ctx.emitStore(COORD_LIST_COUNTER, "random coord remaining", line, true);
 
     ctx.emitLabel(draw);
-    ctx.emitRandomCoordListCandidate(placement, seed.name, line);
+    emitRandomCoordListCandidate(ctx, placement, seed.name, line);
 
     ctx.emitNumberOrPreload(String(fields.length));
     ctx.emitRecall(COORD_LIST_COUNTER, "random coord remaining", line);
@@ -67,7 +76,7 @@ export function compileRandomCoordListSetup(ctx: LoweringCtx, fields: readonly S
 
     ctx.emitLabel(check);
     ctx.emitRecall(COORD_LIST_CURRENT, "random coord candidate", line);
-    ctx.emitCoordListIndirectRecall(context.pointerRegister, line, "random coord previous");
+    emitCoordListIndirectRecall(ctx, context.pointerRegister, line, "random coord previous");
     ctx.emitOp(0x11, "-", "random coord uniqueness", line);
     ctx.emitJump(0x57, "F x!=0", draw, "random coord collision", line);
     ctx.emitJump(context.previousCounterOpcode, getOpcode(context.previousCounterOpcode).name, check, "random coord previous loop", line);
@@ -109,7 +118,7 @@ export function emitRandomCoordListCandidate(ctx: LoweringCtx,
 
     const flat = { kind: "identifier", name: COORD_LIST_CURRENT } satisfies ExpressionAst;
     const row = intExpression(divideExpressions(flat, numberExpression(placement.width)));
-    ctx.compileExpression(row);
+    compileExpression(ctx, row);
     ctx.emitStore(COORD_LIST_DX, "random coord row", line, true);
 
     const rowId = { kind: "identifier", name: COORD_LIST_DX } satisfies ExpressionAst;
@@ -118,7 +127,7 @@ export function emitRandomCoordListCandidate(ctx: LoweringCtx,
       subtractExpressions(flat, multiplyExpressions(numberExpression(placement.width), rowId)),
     );
     const y = addExpressions(numberExpression(placement.yMin), rowId);
-    ctx.compileExpression(addExpressions(x, multiplyExpressions(numberExpression(10), y)));
+    compileExpression(ctx, addExpressions(x, multiplyExpressions(numberExpression(10), y)));
     ctx.emitStore(COORD_LIST_CURRENT, "random coord candidate", line, true);
 }
 
@@ -128,8 +137,8 @@ export function compileCoordListLineCountDashedReport(ctx: LoweringCtx,
   ): boolean {
     const template = ctx.dashedCoordReportTemplateAfterLineCount(assignment, show);
     if (template === undefined) return false;
-    if (!ctx.compileCoordListLineCountAssignment(assignment, template)) return false;
-    ctx.compileShow(show.display, show.line);
+    if (!compileCoordListLineCountAssignment(ctx, assignment, template)) return false;
+    compileShow(ctx, show.display, show.line);
     ctx.optimizations.push({
       name: "coord-list-line-count-dashed-report-fusion",
       detail: `Packed coord_list line_count() directly for dashed report ${show.display} at line ${assignment.line}.`,
@@ -150,26 +159,26 @@ export function compileCoordListLineCountAssignment(ctx: LoweringCtx,
     const scaled = ctx.coordListUsesScaledDecimalStorage(call);
     if (scaled && !ctx.scaleCoordListCellInPlace(context.cell, statement.line)) return false;
 
-    ctx.emitCoordListLineCountInitialTotal(statement.target, statement.line, dashedReport);
-    ctx.emitCoordListLoopSetup(context, statement.line);
+    emitCoordListLineCountInitialTotal(ctx, statement.target, statement.line, dashedReport);
+    emitCoordListLoopSetup(ctx, context, statement.line);
 
     const start = ctx.freshLabel("coord_list_line_loop");
     const visible = ctx.freshLabel("coord_list_visible");
     const countNext = ctx.freshLabel("coord_list_count_next");
     ctx.emitLabel(start);
-    ctx.emitCoordListIndirectRecall(context.pointerRegister, statement.line, "coord_list candidate");
+    emitCoordListIndirectRecall(ctx, context.pointerRegister, statement.line, "coord_list candidate");
     ctx.emitStore(COORD_LIST_CURRENT, "coord_list current", statement.line);
 
     if (scaled) {
-      ctx.compileScaledCoordListVisibilityTest(context.cell, visible, countNext, statement.line, "coord_list");
+      compileScaledCoordListVisibilityTest(ctx, context.cell, visible, countNext, statement.line, "coord_list");
     } else {
-      ctx.compileCoordOnesDigit({ kind: "identifier", name: COORD_LIST_CURRENT }, statement.line);
-      ctx.compileCoordOnesDigit(context.cell, statement.line);
+      compileCoordOnesDigit(ctx, { kind: "identifier", name: COORD_LIST_CURRENT }, statement.line);
+      compileCoordOnesDigit(ctx, context.cell, statement.line);
       ctx.emitOp(0x11, "-", "coord_list dx", statement.line);
       ctx.emitJump(0x57, "F x!=0", visible, "coord_list same column", statement.line);
 
-      ctx.compileCoordTensDigit({ kind: "identifier", name: COORD_LIST_CURRENT }, statement.line);
-      ctx.compileCoordTensDigit(context.cell, statement.line);
+      compileCoordTensDigit(ctx, { kind: "identifier", name: COORD_LIST_CURRENT }, statement.line);
+      compileCoordTensDigit(ctx, context.cell, statement.line);
       ctx.emitOp(0x11, "-", "coord_list dy", statement.line);
       ctx.emitJump(0x57, "F x!=0", visible, "coord_list same row", statement.line);
       ctx.emitOp(0x31, "К |x|", "coord_list |dy|", statement.line);
@@ -181,7 +190,7 @@ export function compileCoordListLineCountAssignment(ctx: LoweringCtx,
     }
 
     ctx.emitLabel(visible);
-    if (!ctx.emitIndirectUnitIncrement(statement.target, "coord_list line_count total", statement.line)) {
+    if (!emitIndirectUnitIncrement(ctx, statement.target, "coord_list line_count total", statement.line)) {
       ctx.emitRecall(statement.target, "coord_list line_count total", statement.line);
       ctx.emitNumberOrPreload("1");
       ctx.emitOp(0x10, "+", "coord_list add visible", statement.line);
@@ -189,8 +198,8 @@ export function compileCoordListLineCountAssignment(ctx: LoweringCtx,
     }
 
     ctx.emitLabel(countNext);
-    ctx.emitCoordListCounterLoop(context.counterRegister, start, statement.line, "coord_list line_count loop");
-    ctx.emitCoordListLineCountResult(statement.target, statement.line, dashedReport);
+    emitCoordListCounterLoop(ctx, context.counterRegister, start, statement.line, "coord_list line_count loop");
+    emitCoordListLineCountResult(ctx, statement.target, statement.line, dashedReport);
     ctx.optimizations.push({
       name: scaled ? "coord-list-scaled-line-count" : "coord-list-line-count-indirect-loop",
       detail: scaled
@@ -217,7 +226,7 @@ export function emitCoordListLineCountInitialTotal(ctx: LoweringCtx,
       ctx.emitStore(target, `${commentPrefix} total`, line);
       return;
     }
-    ctx.emitDashedCoordReportCellBody(dashedReport, line, `${commentPrefix} dashed report`);
+    emitDashedCoordReportCellBody(ctx, dashedReport, line, `${commentPrefix} dashed report`);
     ctx.emitStore(target, `${commentPrefix} dashed report body`, line);
 }
 
@@ -257,15 +266,15 @@ export function compileScaledCoordListVisibilityTest(ctx: LoweringCtx,
     line: number,
     commentPrefix: string,
   ): void {
-    ctx.compileScaledCoordFraction({ kind: "identifier", name: COORD_LIST_CURRENT }, line, `${commentPrefix} current x`);
-    ctx.compileScaledCoordFraction(cell, line, `${commentPrefix} cell x`);
+    compileScaledCoordFraction(ctx, { kind: "identifier", name: COORD_LIST_CURRENT }, line, `${commentPrefix} current x`);
+    compileScaledCoordFraction(ctx, cell, line, `${commentPrefix} cell x`);
     ctx.emitOp(0x11, "-", `${commentPrefix} dx`, line);
     ctx.emitJump(0x57, "F x!=0", visible, `${commentPrefix} same column`, line);
     ctx.emitNumberOrPreload("10");
     ctx.emitOp(0x12, "*", `${commentPrefix} dx digit`, line);
 
-    ctx.compileScaledCoordInteger({ kind: "identifier", name: COORD_LIST_CURRENT }, line, `${commentPrefix} current y`);
-    ctx.compileScaledCoordInteger(cell, line, `${commentPrefix} cell y`);
+    compileScaledCoordInteger(ctx, { kind: "identifier", name: COORD_LIST_CURRENT }, line, `${commentPrefix} current y`);
+    compileScaledCoordInteger(ctx, cell, line, `${commentPrefix} cell y`);
     ctx.emitOp(0x11, "-", `${commentPrefix} dy`, line);
     ctx.emitJump(0x57, "F x!=0", visible, `${commentPrefix} same row`, line);
     ctx.emitOp(0x31, "К |x|", `${commentPrefix} |dy|`, line);
@@ -277,12 +286,12 @@ export function compileScaledCoordListVisibilityTest(ctx: LoweringCtx,
 }
 
 export function compileScaledCoordFraction(ctx: LoweringCtx, expr: ExpressionAst, line: number, comment: string): void {
-    ctx.compileExpression(expr);
+    compileExpression(ctx, expr);
     ctx.emitOp(0x35, "К {x}", comment, line);
 }
 
 export function compileScaledCoordInteger(ctx: LoweringCtx, expr: ExpressionAst, line: number, comment: string): void {
-    ctx.compileExpression(expr);
+    compileExpression(ctx, expr);
     ctx.emitOp(0x34, "К [x]", comment, line);
 }
 
@@ -309,32 +318,32 @@ export function compileFusedCoordListScan(ctx: LoweringCtx, statements: Statemen
       ? ctx.dashedCoordReportTemplateAfterLineCount(lineCount, statements[index + 2])
       : undefined;
     if (scaled && !ctx.scaleCoordListCellInPlace(context.cell, line)) return 0;
-    ctx.emitCoordListLineCountInitialTotal(target, line, dashedReport, "coord_list fused");
-    ctx.emitCoordListLoopSetup(context, line);
+    emitCoordListLineCountInitialTotal(ctx, target, line, dashedReport, "coord_list fused");
+    emitCoordListLoopSetup(ctx, context, line);
 
     const start = ctx.freshLabel("coord_list_fused_loop");
     const hit = ctx.freshLabel("coord_list_fused_hit");
     const visible = ctx.freshLabel("coord_list_fused_visible");
     const countNext = ctx.freshLabel("coord_list_fused_next");
     ctx.emitLabel(start);
-    ctx.emitCoordListIndirectRecall(context.pointerRegister, line, "coord_list fused candidate");
+    emitCoordListIndirectRecall(ctx, context.pointerRegister, line, "coord_list fused candidate");
     ctx.emitStore(COORD_LIST_CURRENT, "coord_list fused current", line);
 
-    ctx.compileExpression(context.cell);
+    compileExpression(ctx, context.cell);
     ctx.emitRecall(COORD_LIST_CURRENT, "coord_list fused current", line);
     ctx.emitOp(0x11, "-", "coord_list fused hit compare", line);
     ctx.emitJump(0x57, "F x!=0", hit, "coord_list fused hit", line);
 
     if (scaled) {
-      ctx.compileScaledCoordListVisibilityTest(context.cell, visible, countNext, line, "coord_list fused");
+      compileScaledCoordListVisibilityTest(ctx, context.cell, visible, countNext, line, "coord_list fused");
     } else {
-      ctx.compileCoordOnesDigit({ kind: "identifier", name: COORD_LIST_CURRENT }, line);
-      ctx.compileCoordOnesDigit(context.cell, line);
+      compileCoordOnesDigit(ctx, { kind: "identifier", name: COORD_LIST_CURRENT }, line);
+      compileCoordOnesDigit(ctx, context.cell, line);
       ctx.emitOp(0x11, "-", "coord_list fused dx", line);
       ctx.emitJump(0x57, "F x!=0", visible, "coord_list fused same column", line);
 
-      ctx.compileCoordTensDigit({ kind: "identifier", name: COORD_LIST_CURRENT }, line);
-      ctx.compileCoordTensDigit(context.cell, line);
+      compileCoordTensDigit(ctx, { kind: "identifier", name: COORD_LIST_CURRENT }, line);
+      compileCoordTensDigit(ctx, context.cell, line);
       ctx.emitOp(0x11, "-", "coord_list fused dy", line);
       ctx.emitJump(0x57, "F x!=0", visible, "coord_list fused same row", line);
       ctx.emitOp(0x31, "К |x|", "coord_list fused |dy|", line);
@@ -348,7 +357,7 @@ export function compileFusedCoordListScan(ctx: LoweringCtx, statements: Statemen
     ctx.emitLabel(hit);
     ctx.compileStatements(branch.thenBody);
     ctx.emitLabel(visible);
-    if (!ctx.emitIndirectUnitIncrement(target, "coord_list fused total", line)) {
+    if (!emitIndirectUnitIncrement(ctx, target, "coord_list fused total", line)) {
       ctx.emitRecall(target, "coord_list fused total", line);
       ctx.emitNumberOrPreload("1");
       ctx.emitOp(0x10, "+", "coord_list fused add visible", line);
@@ -356,8 +365,8 @@ export function compileFusedCoordListScan(ctx: LoweringCtx, statements: Statemen
     }
 
     ctx.emitLabel(countNext);
-    ctx.emitCoordListCounterLoop(context.counterRegister, start, line, "coord_list fused loop");
-    ctx.emitCoordListLineCountResult(target, line, dashedReport, "coord_list fused");
+    emitCoordListCounterLoop(ctx, context.counterRegister, start, line, "coord_list fused loop");
+    emitCoordListLineCountResult(ctx, target, line, dashedReport, "coord_list fused");
     ctx.optimizations.push({
       name: scaled ? "coord-list-scaled-fused-hit-line-count" : "coord-list-fused-hit-line-count",
       detail: scaled
@@ -386,14 +395,14 @@ export function compileCoordListHasCondition(ctx: LoweringCtx,
     if (scaled && !ctx.scaleCoordListCellInPlace(context.cell, line)) return false;
 
     const trueLabel = ctx.freshLabel("coord_list_hit");
-    ctx.emitCoordListLoopSetup(context, line);
+    emitCoordListLoopSetup(ctx, context, line);
     const start = ctx.freshLabel("coord_list_has_loop");
     ctx.emitLabel(start);
-    ctx.compileExpression(context.cell);
-    ctx.emitCoordListIndirectRecall(context.pointerRegister, line, "coord_list candidate");
+    compileExpression(ctx, context.cell);
+    emitCoordListIndirectRecall(ctx, context.pointerRegister, line, "coord_list candidate");
     ctx.emitOp(0x11, "-", "coord_list hit compare", line);
     ctx.emitJump(0x57, "F x!=0", trueLabel, "coord_list hit", line);
-    ctx.emitCoordListCounterLoop(context.counterRegister, start, line, "coord_list has loop");
+    emitCoordListCounterLoop(ctx, context.counterRegister, start, line, "coord_list has loop");
     ctx.emitJump(0x51, "БП", falseLabel, "coord_list miss", line);
     ctx.emitLabel(trueLabel);
     ctx.optimizations.push({
@@ -442,7 +451,7 @@ export function emitCoordListCounterLoop(ctx: LoweringCtx,
 }
 
 export function compileCoordOnesDigit(ctx: LoweringCtx, expr: ExpressionAst, line: number): void {
-    ctx.compileExpression(expr);
+    compileExpression(ctx, expr);
     ctx.emitNumberOrPreload("10");
     ctx.emitOp(0x13, "/", "coord quotient", line);
     ctx.emitOp(0x35, "К {x}", "coord fractional part", line);
@@ -451,7 +460,7 @@ export function compileCoordOnesDigit(ctx: LoweringCtx, expr: ExpressionAst, lin
 }
 
 export function compileCoordTensDigit(ctx: LoweringCtx, expr: ExpressionAst, line: number): void {
-    ctx.compileExpression(expr);
+    compileExpression(ctx, expr);
     ctx.emitNumberOrPreload("10");
     ctx.emitOp(0x13, "/", "coord quotient", line);
     ctx.emitOp(0x34, "К [x]", "coord tens digit", line);

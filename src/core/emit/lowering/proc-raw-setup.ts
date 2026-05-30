@@ -1,6 +1,30 @@
 import { registerIndex } from "../../opcodes.ts";
 import type { ExpressionAst, ProgramAst, RegisterName, StatementAst } from "../../types.ts";
 import type { LoweringCtx } from "../lowering-ctx.ts";
+import {
+  compileCondition,
+  compileIf,
+} from "./control-flow.ts";
+import {
+  compileRandomCoordListSetup,
+} from "./coord-list.ts";
+import {
+  compileDisplayByteBuilder,
+  compileLiteralDisplayBody,
+  compilePackedDisplayBody,
+  emitDisplayLiteralProgram,
+  emitFirstSpliceDisplayLiteralProgram,
+} from "./display.ts";
+import {
+  compileExpression,
+} from "./expr.ts";
+import {
+  compileBitMaskWithQuotientScratch,
+  emitBitMaskFromCurrentXWithQuotientScratch,
+  emitSpatialLineCountLoopBody,
+  emitSpatialLineProgressionHelperBody,
+  emitSpatialSumLoopHelperBody,
+} from "./spatial.ts";
 import type {
   ExecutableSetupPreload,
   StackUnaryDerivationCall,
@@ -65,9 +89,9 @@ export function compileSetupProgramWithPreloads(ctx: LoweringCtx,
           exponentTailDisplayLiteralProgram(preload.value) ??
           firstSpliceDisplayLiteralProgram(preload.value);
         if (firstSplice !== undefined) {
-          ctx.emitFirstSpliceDisplayLiteralProgram(firstSplice, preload.register, undefined, `setup R${preload.register}`);
+          emitFirstSpliceDisplayLiteralProgram(ctx, firstSplice, preload.register, undefined, `setup R${preload.register}`);
         } else if (program !== undefined && program.kind !== "error") {
-          ctx.emitDisplayLiteralProgram(program, undefined, `setup R${preload.register}`);
+          emitDisplayLiteralProgram(ctx, program, undefined, `setup R${preload.register}`);
         } else {
           continue;
         }
@@ -91,19 +115,19 @@ export function compileSetupProgramWithPreloads(ctx: LoweringCtx,
       if (coordList !== undefined) {
         if (!initializedCoordLists.has(coordList.listName)) {
           const group = randomCoordListSetupFields(fields, coordList);
-          ctx.compileRandomCoordListSetup(group, coordList);
+          compileRandomCoordListSetup(ctx, group, coordList);
           initializedCoordLists.add(coordList.listName);
         }
         continue;
       }
-      ctx.compileExpression(field.initial);
+      compileExpression(ctx, field.initial);
       ctx.emitStore(field.name, `setup ${field.name}`, field.line, true);
     }
     if (programUsesDashedCoordReport(ctx.ast)) {
       const register = ctx.allocation.registers[COORD_LIST_DX];
       const program = displayLiteralProgram(DASHED_COORD_REPORT_MASK);
       if (register !== undefined && program !== undefined && program.kind !== "error") {
-        ctx.emitDisplayLiteralProgram(program, undefined, "setup dashed report mask");
+        emitDisplayLiteralProgram(ctx, program, undefined, "setup dashed report mask");
         ctx.emitOp(0x40 + registerIndex(register), `X->П ${register}`, "setup dashed report mask", undefined, true);
       }
     }
@@ -111,7 +135,7 @@ export function compileSetupProgramWithPreloads(ctx: LoweringCtx,
       ctx.emitNumber("7");
     }
     ctx.emitOp(0x50, "С/П", "setup complete");
-    ctx.compileRuntimeHelpers();
+    compileRuntimeHelpers(ctx);
 }
 
 export function compileProcedures(ctx: LoweringCtx): void {
@@ -120,7 +144,7 @@ export function compileProcedures(ctx: LoweringCtx): void {
       ctx.emitLabel(proc.name);
       const xParam = ctx.xParamProcs.get(proc.name);
       if (xParam !== undefined) {
-        ctx.compileXParamProcBody(proc, xParam);
+        compileXParamProcBody(ctx, proc, xParam);
       } else {
         ctx.compileStatements(proc.body);
       }
@@ -142,7 +166,7 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
     }
     for (const helper of ctx.displayHelpers.values()) {
       ctx.emitLabel(helper.label);
-      ctx.compilePackedDisplayBody(helper.display, helper.line, false);
+      compilePackedDisplayBody(ctx, helper.display, helper.line, false);
       ctx.emitOp(0x52, "В/О", `display ${helper.display.name} return`, helper.line);
       ctx.optimizations.push({
         name: "packed-display-helper",
@@ -151,7 +175,7 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
     }
     for (const helper of ctx.displayByteHelpers.values()) {
       ctx.emitLabel(helper.label);
-      ctx.compileDisplayByteBuilder(helper.display, helper.line, false);
+      compileDisplayByteBuilder(ctx, helper.display, helper.line, false);
       ctx.emitOp(0x52, "В/О", `display ${helper.display.name} return`, helper.line);
       ctx.optimizations.push({
         name: "display-byte-helper",
@@ -160,7 +184,7 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
     }
     for (const helper of ctx.literalDisplayHelpers.values()) {
       ctx.emitLabel(helper.label);
-      ctx.compileLiteralDisplayBody(helper.display, helper.line);
+      compileLiteralDisplayBody(ctx, helper.display, helper.line);
       ctx.emitOp(0x52, "В/О", `display ${helper.display.name} return`, helper.line);
       ctx.optimizations.push({
         name: "screen-video-literal-helper",
@@ -169,8 +193,8 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
     }
     for (const helper of ctx.showSequenceHelpers.values()) {
       ctx.emitLabel(helper.label);
-      ctx.compilePackedDisplayBody(helper.first, helper.line, false);
-      ctx.compilePackedDisplayBody(helper.second, helper.line, false);
+      compilePackedDisplayBody(ctx, helper.first, helper.line, false);
+      compilePackedDisplayBody(ctx, helper.second, helper.line, false);
       ctx.emitOp(0x52, "В/О", `show sequence ${helper.first.name}/${helper.second.name} return`, helper.line);
       ctx.optimizations.push({
         name: "show-sequence-helper",
@@ -181,7 +205,7 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
       ctx.emitLabel(helper.label);
       ctx.emittingRandomCellHelper = true;
       try {
-        ctx.compileExpression(helper.expr);
+        compileExpression(ctx, helper.expr);
       } finally {
         ctx.emittingRandomCellHelper = false;
       }
@@ -195,7 +219,7 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
       ctx.emitLabel(helper.label);
       ctx.emittingExpressionHelper = true;
       try {
-        ctx.compileExpression(helper.expr);
+        compileExpression(ctx, helper.expr);
       } finally {
         ctx.emittingExpressionHelper = false;
       }
@@ -207,10 +231,10 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
     }
     for (const helper of ctx.nearAnyHelpers.values()) {
       ctx.emitLabel(helper.label);
-      ctx.compileExpression(helper.value);
+      compileExpression(ctx, helper.value);
       ctx.emitOp(0x11, "-", "near_any delta", helper.line);
       ctx.emitOp(0x31, "К |x|", "near_any distance", helper.line);
-      ctx.compileExpression(helper.radius);
+      compileExpression(ctx, helper.radius);
       ctx.emitOp(0x14, "<->", "near_any radius before distance", helper.line);
       ctx.emitOp(0x11, "-", "near_any margin", helper.line);
       ctx.emitOp(0x52, "В/О", "near_any return", helper.line);
@@ -222,7 +246,7 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
     for (const helper of ctx.lineCountHelpers.values()) {
       ctx.emitLabel(helper.label);
       ctx.emitStore(spatialCountMaskScratchName(), "line count mask", helper.line);
-      ctx.emitSpatialLineCountLoopBody(spatialCountMaskScratchName(), helper.cell, helper.board, helper.line);
+      emitSpatialLineCountLoopBody(ctx, spatialCountMaskScratchName(), helper.cell, helper.board, helper.line);
       ctx.emitOp(0x52, "В/О", "line_count return", helper.line);
       ctx.optimizations.push({
         name: "spatial-line-count-helper",
@@ -231,7 +255,7 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
     }
     for (const helper of ctx.spatialLineProgressionHelpers.values()) {
       ctx.emitLabel(helper.label);
-      ctx.emitSpatialLineProgressionHelperBody(helper.hitMask, helper.cell, helper.operation, helper.line);
+      emitSpatialLineProgressionHelperBody(ctx, helper.hitMask, helper.cell, helper.operation, helper.line);
       ctx.emitOp(0x52, "В/О", `${helper.operation} line progression return`, helper.line);
       ctx.optimizations.push({
         name: "spatial-line-progression-helper",
@@ -240,7 +264,7 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
     }
     for (const helper of ctx.spatialSumLoopHelpers.values()) {
       ctx.emitLabel(helper.label);
-      ctx.emitSpatialSumLoopHelperBody(helper.hitMask, helper.cell, helper.operation, helper.line);
+      emitSpatialSumLoopHelperBody(ctx, helper.hitMask, helper.cell, helper.operation, helper.line);
       ctx.emitOp(0x52, "В/О", `${helper.operation} progression return`, helper.line);
       ctx.optimizations.push({
         name: "spatial-sum-loop-helper",
@@ -249,7 +273,7 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
     }
     for (const helper of ctx.spatialBitMaskHelpers.values()) {
       ctx.emitLabel(helper.label);
-      ctx.emitBitMaskFromCurrentXWithQuotientScratch(helper.scratch, helper.line);
+      emitBitMaskFromCurrentXWithQuotientScratch(ctx, helper.scratch, helper.line);
       ctx.emitOp(0x52, "В/О", "bit_mask return", helper.line);
       ctx.optimizations.push({
         name: "bit-mask-helper",
@@ -261,7 +285,7 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
       ctx.emitStore(helper.scratch, "spatial hit index", helper.line);
       // Build the cell mask before recalling the set: constructing the mask
       // churns the four-deep stack, so nothing else may be held while it runs.
-      ctx.compileBitMaskWithQuotientScratch(
+      compileBitMaskWithQuotientScratch(ctx, 
         { kind: "identifier", name: helper.scratch },
         helper.scratch,
         helper.line,
@@ -298,7 +322,7 @@ export function compileInitialState(ctx: LoweringCtx): void {
       for (const field of state.fields) {
         if (field.initialStack !== undefined) continue;
         if (field.initial === undefined) continue;
-        ctx.compileExpression(field.initial);
+        compileExpression(ctx, field.initial);
         ctx.emitStore(field.name, `init ${state.name}.${field.name}`, field.line);
       }
       if (state.fields.length > 0) {
@@ -321,7 +345,7 @@ export function compileRepeatedAssignmentValue(ctx: LoweringCtx, statements: Sta
     }
     const count = end - start;
     if (count <= 1) return 0;
-    ctx.compileExpression(first.expr);
+    compileExpression(ctx, first.expr);
     for (let index = start; index < end; index += 1) {
       const assignment = statements[index] as Extract<StatementAst, { kind: "assign" }>;
       ctx.emitStore(assignment.target, `set ${assignment.target}`, assignment.line);
@@ -341,8 +365,8 @@ export function compileXParamProcCall(ctx: LoweringCtx,
     if (lowering === undefined || assign.target !== lowering.param) return false;
     if (!expressionPureForSubstitution(assign.expr)) return false;
 
-    ctx.compileExpression(assign.expr);
-    ctx.compileBlockCall(call.block, call.line);
+    compileExpression(ctx, assign.expr);
+    compileBlockCall(ctx, call.block, call.line);
     ctx.optimizations.push({
       name: "x-param-proc-call",
       detail: `Passed ${assign.target} to rule ${call.block} through X at line ${assign.line}.`,
@@ -394,7 +418,7 @@ export function compileStackUnaryDerivedAssignments(ctx: LoweringCtx, statements
     const sharedCost = argCost + duplicateCost + derivations.length * 2 + restoreCost;
     if (sharedCost >= normalCost) return 0;
 
-    ctx.compileExpression(firstMatch.arg);
+    compileExpression(ctx, firstMatch.arg);
     for (let copy = 1; copy < derivations.length; copy += 1) {
       ctx.emitOp(0x0e, "В↑", "duplicate operand for Z-stack derived tail", first.line);
     }
@@ -432,7 +456,7 @@ export function compileGuardAssignmentSubstitution(ctx: LoweringCtx,
     const ordinaryCost = estimateExpressionCost(assign.expr) + 1 + conditionCompileCost(guarded.condition);
     const substitutedCost = conditionCompileCost(substitutedCondition);
     if (substitutedCost + 4 >= ordinaryCost) return false;
-    ctx.compileIf({
+    compileIf(ctx, {
       ...guarded,
       condition: substitutedCondition,
     }, guarded.line);
@@ -530,7 +554,7 @@ export function compileLocalTerminalElseTail(ctx: LoweringCtx,
     if (!ctx.statementsTerminate(statement.elseBody)) return false;
 
     const helper = ctx.ensureTerminalTailHelper(statement.elseBody, line);
-    ctx.compileCondition(statement.condition, helper.label, line);
+    compileCondition(ctx, statement.condition, helper.label, line);
     ctx.compileStatements(statement.thenBody);
     ctx.optimizations.push({
       name: "local-terminal-tail-branch",
@@ -550,13 +574,13 @@ export function compileEqualityWithCurrentX(ctx: LoweringCtx,
       ctx.xHolds(condition.right.name) &&
       isSimpleStackLoad(condition.left)
     ) {
-      ctx.compileExpression(condition.left);
+      compileExpression(ctx, condition.left);
     } else if (
       condition.left.kind === "identifier" &&
       ctx.xHolds(condition.left.name) &&
       isSimpleStackLoad(condition.right)
     ) {
-      ctx.compileExpression(condition.right);
+      compileExpression(ctx, condition.right);
     } else {
       return false;
     }
@@ -598,7 +622,7 @@ export function compileNegativeZeroThresholdFlow(ctx: LoweringCtx,
       return false;
     }
 
-    ctx.emitNegativeZeroThresholdRaw(threshold.value, numberExpression(threshold.bound), register, line);
+    emitNegativeZeroThresholdRaw(ctx, threshold.value, numberExpression(threshold.bound), register, line);
     const opcode = threshold.truth === "ge" ? 0x57 : 0x5e;
     ctx.emitJump(opcode, getOpcode(opcode).name, falseLabel, `negative-zero false branch for ${condition.op}`, line);
     ctx.optimizations.push({
@@ -614,7 +638,7 @@ export function emitNegativeZeroThresholdRaw(ctx: LoweringCtx,
     register: RegisterName,
     line?: number,
   ): void {
-    ctx.compileExpression(divideExpressions(value, bound));
+    compileExpression(ctx, divideExpressions(value, bound));
     ctx.emitOp(0x60 + registerIndex(register), `П->X ${register}`, "negative-zero threshold sentinel", line);
     ctx.emitOp(0x14, "X↔Y", "place threshold value above negative-zero sentinel", line);
     ctx.emitOp(0x12, "*", "negative-zero threshold zero-through", line);
@@ -639,7 +663,7 @@ export function compileIntFracSharedTail(ctx: LoweringCtx,
     const intStatement = a.fn === "int" ? first : second;
     const fracStatement = a.fn === "frac" ? first : second;
 
-    ctx.compileExpression(a.arg);
+    compileExpression(ctx, a.arg);
     ctx.emitOp(0x0e, "В↑", "duplicate operand for shared int/frac tail");
     ctx.emitOp(0x34, "К [x]", "int()");
     ctx.emitStore(intStatement.target, `set ${intStatement.target}`, intStatement.line);
@@ -742,10 +766,10 @@ export function compileRawStatement(ctx: LoweringCtx, statement: Extract<Stateme
     const outputs = statement.outputs ?? [];
 
     for (const input of orderRawInputs(inputs)) {
-      ctx.compileExpression(input.expr);
+      compileExpression(ctx, input.expr);
     }
 
-    ctx.compileRawLines(statement.lines, statement.strict ?? false);
+    compileRawLines(ctx, statement.lines, statement.strict ?? false);
 
     for (const output of outputs) {
       ctx.emitStore(output.target, `raw returns ${output.slot}`, output.line);
