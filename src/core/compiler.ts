@@ -49,8 +49,6 @@ import type {
   SetupProgramReport,
   StateFieldAst,
   StatementAst,
-  SwitchStatementAst,
-  TrapStatementAst,
   StorageHint,
   V2BoardAst,
   V2PredicateAst,
@@ -96,7 +94,6 @@ const REGISTER_ORDER: RegisterName[] = [
   "e",
 ];
 
-const SWITCH_SCRATCH_PREFIX = "__switch_";
 const DISPATCH_SCRATCH_PREFIX = "__dispatch_";
 const TICTACTOE_MASK_SCRATCH_PREFIX = "__ttt_mask_";
 const BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
@@ -639,7 +636,6 @@ function visiblePublicRegisters(
   const result: Record<string, RegisterName> = {};
   for (const [name, register] of Object.entries(all)) {
     if (
-      !name.startsWith(SWITCH_SCRATCH_PREFIX) &&
       !name.startsWith(DISPATCH_SCRATCH_PREFIX) &&
       !name.startsWith(TICTACTOE_MASK_SCRATCH_PREFIX) &&
       !name.startsWith(BIT_MASK_SCRATCH_PREFIX) &&
@@ -682,10 +678,6 @@ function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimiz
   const visitStatements = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
-      if (statement.kind === "ask") {
-        inputTargets.add(statement.target);
-        if (statement.prompt) visitExpr(statement.prompt);
-      }
       if (statement.kind === "input" && !ephemeralInputTargets.has(statement.target)) inputTargets.add(statement.target);
       if (statement.kind === "assign") {
         if (!assigned.has(statement.target)) assigned.set(statement.target, []);
@@ -703,14 +695,6 @@ function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimiz
         if (statement.elseBody) visitStatements(statement.elseBody);
       }
       if (statement.kind === "loop") visitStatements(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) {
-          visitExpr(switchCase.value);
-          visitStatements(switchCase.body);
-        }
-        if (statement.defaultBody) visitStatements(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) {
@@ -723,15 +707,12 @@ function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimiz
         for (const input of statement.inputs ?? []) visitExpr(input.expr);
         for (const output of statement.outputs ?? []) addRead(output.target);
       }
-      if (statement.kind === "trap") visitExpr(statement.expr);
       if (statement.kind === "return_value") visitExpr(statement.expr);
     }
   };
 
   for (const entry of ast.entries) visitStatements(entry.body);
   for (const proc of ast.procs) visitStatements(proc.body);
-  for (const block of ast.blocks) visitStatements(block.body);
-
   const removable = new Set<string>();
   for (const state of ast.states) {
     for (const field of state.fields) {
@@ -758,13 +739,6 @@ function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimiz
         if (statement.elseBody !== undefined) pruned.elseBody = pruneStatements(statement.elseBody);
         return [pruned];
       }
-      if (statement.kind === "switch") {
-        return [{
-          ...statement,
-          cases: statement.cases.map((switchCase) => ({ ...switchCase, body: pruneStatements(switchCase.body) })),
-          ...(statement.defaultBody === undefined ? {} : { defaultBody: pruneStatements(statement.defaultBody) }),
-        }];
-      }
       if (statement.kind === "dispatch") {
         return [{
           ...statement,
@@ -776,7 +750,6 @@ function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimiz
     });
   for (const entry of ast.entries) entry.body = pruneStatements(entry.body);
   for (const proc of ast.procs) proc.body = pruneStatements(proc.body);
-  for (const block of ast.blocks) block.body = pruneStatements(block.body);
   optimizations.push({
     name: "dead-state-elimination",
     detail: `Removed ${removable.size} unobserved state field${removable.size === 1 ? "" : "s"} before register allocation.`,
@@ -800,13 +773,6 @@ function eliminateIdentityAssignments(ast: ProgramAst, optimizations: AppliedOpt
         if (statement.elseBody !== undefined) pruned.elseBody = pruneStatements(statement.elseBody);
         return [pruned];
       }
-      if (statement.kind === "switch") {
-        return [{
-          ...statement,
-          cases: statement.cases.map((switchCase) => ({ ...switchCase, body: pruneStatements(switchCase.body) })),
-          ...(statement.defaultBody === undefined ? {} : { defaultBody: pruneStatements(statement.defaultBody) }),
-        }];
-      }
       if (statement.kind === "dispatch") {
         return [{
           ...statement,
@@ -819,7 +785,6 @@ function eliminateIdentityAssignments(ast: ProgramAst, optimizations: AppliedOpt
 
   for (const entry of ast.entries) entry.body = pruneStatements(entry.body);
   for (const proc of ast.procs) proc.body = pruneStatements(proc.body);
-  for (const block of ast.blocks) block.body = pruneStatements(block.body);
   if (removed === 0) return;
   optimizations.push({
     name: "identity-assignment-elimination",
@@ -841,7 +806,7 @@ function canonicalizeConstantIfChains(ast: ProgramAst, optimizations: AppliedOpt
     if (statement.kind === "loop") {
       return { ...statement, body: transformList(statement.body) };
     }
-    if (statement.kind === "switch" || statement.kind === "dispatch") {
+    if (statement.kind === "dispatch") {
       return {
         ...statement,
         cases: statement.cases.map((entry) => ({ ...entry, body: transformList(entry.body) })),
@@ -869,8 +834,6 @@ function canonicalizeConstantIfChains(ast: ProgramAst, optimizations: AppliedOpt
 
   for (const entry of ast.entries) entry.body = transformList(entry.body);
   for (const proc of ast.procs) proc.body = transformList(proc.body);
-  for (const block of ast.blocks) block.body = transformList(block.body);
-
   if (converted === 0) return;
   optimizations.push({
     name: "if-chain-dispatch-canonicalization",
@@ -1034,14 +997,10 @@ function countVariableUsage(ast: ProgramAst, name: string): { reads: number; wri
         visitExpr(statement.expr);
       }
       if (
-        statement.kind === "pause" || statement.kind === "halt" || statement.kind === "trap" ||
+        statement.kind === "pause" || statement.kind === "halt" ||
         statement.kind === "return_value"
       ) {
         visitExpr(statement.expr);
-      }
-      if (statement.kind === "ask") {
-        if (statement.target === name) writes += 1;
-        if (statement.prompt !== undefined) visitExpr(statement.prompt);
       }
       if (statement.kind === "input" && statement.target === name) writes += 1;
       if (statement.kind === "show") {
@@ -1060,14 +1019,6 @@ function countVariableUsage(ast: ProgramAst, name: string): { reads: number; wri
         if (statement.elseBody !== undefined) visitList(statement.elseBody);
       }
       if (statement.kind === "loop") visitList(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) {
-          visitExpr(switchCase.value);
-          visitList(switchCase.body);
-        }
-        if (statement.defaultBody !== undefined) visitList(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) {
@@ -1080,7 +1031,6 @@ function countVariableUsage(ast: ProgramAst, name: string): { reads: number; wri
   };
   for (const entry of ast.entries) visitList(entry.body);
   for (const proc of ast.procs) visitList(proc.body);
-  for (const block of ast.blocks) visitList(block.body);
   return { reads, writes };
 }
 
@@ -1138,13 +1088,6 @@ function inlineSingleUseConstantGuardedCalls(ast: ProgramAst, optimizations: App
       if (statement.elseBody !== undefined) visited.elseBody = visitList(statement.elseBody);
       return [visited];
     }
-    if (statement.kind === "switch") {
-      return [{
-        ...statement,
-        cases: statement.cases.map((switchCase) => ({ ...switchCase, body: visitList(switchCase.body) })),
-        ...(statement.defaultBody === undefined ? {} : { defaultBody: visitList(statement.defaultBody) }),
-      }];
-    }
     if (statement.kind === "dispatch") {
       return [{
         ...statement,
@@ -1157,7 +1100,6 @@ function inlineSingleUseConstantGuardedCalls(ast: ProgramAst, optimizations: App
 
   for (const entry of ast.entries) entry.body = visitList(entry.body);
   for (const proc of ast.procs) proc.body = visitList(proc.body);
-  for (const block of ast.blocks) block.body = visitList(block.body);
   if (inlined === 0) return;
   ast.procs = ast.procs.filter((proc) => !inlinedProcs.has(proc.name));
   optimizations.push({
@@ -1188,15 +1130,11 @@ function statementOwnExpressions(statement: StatementAst): ExpressionAst[] {
     case "assign":
     case "pause":
     case "halt":
-    case "trap":
     case "return_value":
       return [statement.expr];
-    case "ask":
-      return statement.prompt !== undefined ? [statement.prompt] : [];
     case "if":
     case "while":
       return [statement.condition.left, statement.condition.right];
-    case "switch":
     case "dispatch":
       return [statement.expr, ...statement.cases.map((branch) => branch.value)];
     case "core":
@@ -1238,10 +1176,6 @@ function countStatementCalls(ast: ProgramAst): Map<string, number> {
         visitList(statement.thenBody);
         if (statement.elseBody !== undefined) visitList(statement.elseBody);
       }
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visitList(switchCase.body);
-        if (statement.defaultBody !== undefined) visitList(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visitList(dispatchCase.body);
         if (statement.defaultBody !== undefined) visitList(statement.defaultBody);
@@ -1250,22 +1184,17 @@ function countStatementCalls(ast: ProgramAst): Map<string, number> {
   };
   for (const entry of ast.entries) visitList(entry.body);
   for (const proc of ast.procs) visitList(proc.body);
-  for (const block of ast.blocks) visitList(block.body);
   return counts;
 }
 
 function statementsContainExactMachineCode(statements: StatementAst[]): boolean {
   for (const statement of statements) {
-    if (statement.kind === "core" || statement.kind === "egg" || statement.kind === "decimal_series") return true;
+    if (statement.kind === "core" || statement.kind === "decimal_series") return true;
     if (statement.kind === "loop" && statementsContainExactMachineCode(statement.body)) return true;
     if (statement.kind === "while" && statementsContainExactMachineCode(statement.body)) return true;
     if (statement.kind === "if") {
       if (statementsContainExactMachineCode(statement.thenBody)) return true;
       if (statement.elseBody !== undefined && statementsContainExactMachineCode(statement.elseBody)) return true;
-    }
-    if (statement.kind === "switch") {
-      if (statement.cases.some((switchCase) => statementsContainExactMachineCode(switchCase.body))) return true;
-      if (statement.defaultBody !== undefined && statementsContainExactMachineCode(statement.defaultBody)) return true;
     }
     if (statement.kind === "dispatch") {
       if (statement.cases.some((dispatchCase) => statementsContainExactMachineCode(dispatchCase.body))) return true;
@@ -1285,10 +1214,6 @@ function programContainsDecimalSeries(ast: ProgramAst): boolean {
         if (visit(statement.thenBody)) return true;
         if (statement.elseBody !== undefined && visit(statement.elseBody)) return true;
       }
-      if (statement.kind === "switch") {
-        if (statement.cases.some((switchCase) => visit(switchCase.body))) return true;
-        if (statement.defaultBody !== undefined && visit(statement.defaultBody)) return true;
-      }
       if (statement.kind === "dispatch") {
         if (statement.cases.some((dispatchCase) => visit(dispatchCase.body))) return true;
         if (statement.defaultBody !== undefined && visit(statement.defaultBody)) return true;
@@ -1297,8 +1222,7 @@ function programContainsDecimalSeries(ast: ProgramAst): boolean {
     return false;
   };
   return ast.entries.some((entry) => visit(entry.body)) ||
-    ast.procs.some((proc) => visit(proc.body)) ||
-    ast.blocks.some((block) => visit(block.body));
+    ast.procs.some((proc) => visit(proc.body));
 }
 
 function cloneStatements(statements: StatementAst[]): StatementAst[] {
@@ -1346,25 +1270,6 @@ function hoistCommonBranchTails(ast: ProgramAst, optimizations: AppliedOptimizat
         simplified += 1;
       }
       return [...simplifiedBranch, ...tails];
-    }
-    if (statement.kind === "switch") {
-      const cases = statement.cases.map((switchCase) => ({ ...switchCase, body: visitList(switchCase.body) }));
-      const defaultBody = statement.defaultBody === undefined ? undefined : visitList(statement.defaultBody);
-      const tails = defaultBody === undefined
-        ? []
-        : hoistTailFromBranchBodies([...cases.map((switchCase) => switchCase.body), defaultBody]);
-      hoisted += tails.length;
-      if (defaultBody !== undefined && cases.every((switchCase) => switchCase.body.length === 0) && defaultBody.length === 0) {
-        if (expressionIsDeterministic(statement.expr)) {
-          simplified += 1;
-          return tails;
-        }
-      }
-      return [{
-        ...statement,
-        cases,
-        ...(defaultBody === undefined ? {} : { defaultBody }),
-      }, ...tails];
     }
     if (statement.kind === "dispatch") {
       const cases = statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: visitList(dispatchCase.body) }));
@@ -1424,8 +1329,6 @@ function hoistCommonBranchTails(ast: ProgramAst, optimizations: AppliedOptimizat
 
   for (const entry of ast.entries) entry.body = visitList(entry.body);
   for (const proc of ast.procs) proc.body = visitList(proc.body);
-  for (const block of ast.blocks) block.body = visitList(block.body);
-
   if (hoisted > 0 || simplified > 0) {
     optimizations.push({
       name: "common-branch-tail-hoisting",
@@ -1481,10 +1384,6 @@ function extractGuardedPrologueGadgets(ast: ProgramAst, optimizations: AppliedOp
       visitList(statement.thenBody, depth);
       if (statement.elseBody !== undefined) visitList(statement.elseBody, depth);
     }
-    if (statement.kind === "switch") {
-      for (const switchCase of statement.cases) visitList(switchCase.body, depth);
-      if (statement.defaultBody !== undefined) visitList(statement.defaultBody, depth);
-    }
     if (statement.kind === "dispatch") {
       for (const dispatchCase of statement.cases) visitList(dispatchCase.body, depth);
       if (statement.defaultBody !== undefined) visitList(statement.defaultBody, depth);
@@ -1493,8 +1392,6 @@ function extractGuardedPrologueGadgets(ast: ProgramAst, optimizations: AppliedOp
 
   for (const entry of ast.entries) visitList(entry.body, 0);
   for (const proc of ast.procs) visitList(proc.body, 0);
-  for (const block of ast.blocks) visitList(block.body, 0);
-
   const selected = groups.filter((group) =>
     group.occurrences.length >= 2 && estimateGuardedPrologueSaving(group, ast) > 0
   );
@@ -1599,7 +1496,6 @@ function collectCallableNames(ast: ProgramAst): Set<string> {
   return new Set([
     ...ast.entries.map((entry) => entry.name),
     ...ast.procs.map((proc) => proc.name),
-    ...ast.blocks.map((block) => block.name),
   ]);
 }
 
@@ -1892,27 +1788,14 @@ function validateReservedInternalNames(ast: ProgramAst, diagnostics: Diagnostic[
         visitExpr(statement.expr);
       }
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
-      if (statement.kind === "ask") {
-        report(statement.target, statement.line);
-        if (statement.prompt) visitExpr(statement.prompt);
-      }
       if (statement.kind === "show") report(statement.display, statement.line);
       if (statement.kind === "call") report(statement.block, statement.line);
-      if (statement.kind === "trap") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitCondition(statement.condition);
         visitStatements(statement.thenBody);
         if (statement.elseBody) visitStatements(statement.elseBody);
       }
       if (statement.kind === "loop") visitStatements(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) {
-          visitExpr(switchCase.value);
-          visitStatements(switchCase.body);
-        }
-        if (statement.defaultBody) visitStatements(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) {
@@ -1924,12 +1807,6 @@ function validateReservedInternalNames(ast: ProgramAst, diagnostics: Diagnostic[
     }
   };
 
-  for (const declaration of ast.declarations) {
-    report(declaration.name, declaration.line);
-    if (declaration.kind === "const" || declaration.kind === "store") {
-      if (declaration.value) visitExpr(declaration.value);
-    }
-  }
   for (const state of ast.states) {
     report(state.name, state.line);
     for (const field of state.fields) {
@@ -1948,10 +1825,6 @@ function validateReservedInternalNames(ast: ProgramAst, diagnostics: Diagnostic[
   for (const proc of ast.procs) {
     report(proc.name, proc.line);
     visitStatements(proc.body);
-  }
-  for (const block of ast.blocks) {
-    report(block.name, block.line);
-    visitStatements(block.body);
   }
 }
 
@@ -2139,11 +2012,6 @@ class EmitContext {
     this.lineCountGroupCounts = collectLineCountGroupCounts(ast);
     this.scaledCoordLists = collectScaledCoordListNames(ast);
     this.scaledCoordCellNames = collectScaledCoordCellNames(ast, this.scaledCoordLists);
-    for (const declaration of ast.declarations) {
-      if (declaration.kind === "const") {
-        this.constants.set(declaration.name, declaration.value);
-      }
-    }
   }
 
   compileProgram(): void {
@@ -2160,22 +2028,12 @@ class EmitContext {
 
     this.emitLabel(main.name);
     this.compileInitialState();
-    this.compileInitialStores();
     this.compileStatements(main.body);
     if (!(this.ast.v2 && this.statementsTerminate(main.body))) {
       this.emitOp(0x50, "С/П", "implicit final stop");
     }
 
     if (!hoistProcs) this.compileProcedures();
-
-    for (const block of this.ast.blocks) {
-      if (block.mode === "inline") continue;
-      this.emitLabel(block.name);
-      this.compileStatements(block.body);
-      if (!this.statementsTerminate(block.body)) {
-        this.emitOp(0x50, "С/П", `implicit stop for ${block.mode} block ${block.name}`, block.line);
-      }
-    }
 
     const helperStart = this.items.length;
     this.compileRuntimeHelpers();
@@ -2577,14 +2435,6 @@ class EmitContext {
     }
   }
 
-  private compileInitialStores(): void {
-    for (const declaration of this.ast.declarations) {
-      if (declaration.kind !== "store" || !declaration.value) continue;
-      this.compileExpression(declaration.value);
-      this.emitStore(declaration.name, `init ${declaration.name}`, declaration.line);
-    }
-  }
-
   private compileStatements(statements: StatementAst[]): void {
     for (let index = 0; index < statements.length; index += 1) {
       const statement = statements[index]!;
@@ -2919,11 +2769,6 @@ class EmitContext {
         this.compileExpression(statement.expr);
         this.emitOp(0x50, "С/П", "pause", statement.line);
         return;
-      case "ask":
-        if (statement.prompt) this.compileExpression(statement.prompt);
-        this.emitOp(0x50, "С/П", `ask ${statement.target}`, statement.line);
-        this.emitStore(statement.target, `input ${statement.target}`, statement.line);
-        return;
       case "input":
         this.emitOp(0x50, "С/П", `read ${statement.target}`, statement.line);
         if (this.scaledCoordCellNames.has(statement.target)) {
@@ -2995,9 +2840,6 @@ class EmitContext {
       case "if":
         this.compileIf(statement, statement.line);
         return;
-      case "switch":
-        this.compileSwitch(statement);
-        return;
       case "dispatch":
         this.compileDispatch(statement);
         return;
@@ -3009,12 +2851,6 @@ class EmitContext {
         return;
       case "core":
         this.compileRawStatement(statement);
-        return;
-      case "egg":
-        this.compileRawLines(statement.lines);
-        return;
-      case "trap":
-        this.compileTrap(statement);
         return;
       case "return_value":
         this.compileExpression(statement.expr);
@@ -3626,14 +3462,6 @@ class EmitContext {
     const statement = statements[0];
     if (statement?.kind !== "call") return undefined;
 
-    const block = this.ast.blocks.find((candidate) => candidate.name === statement.block);
-    if (block !== undefined) {
-      if (block.mode !== "inline") return block.name;
-      if (seen.has(block.name)) return undefined;
-      seen.add(block.name);
-      return this.directTerminalCallTarget(block.body, seen);
-    }
-
     const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
     if (proc === undefined) return undefined;
     if (this.inlineProcNames.has(proc.name)) {
@@ -4196,51 +4024,6 @@ class EmitContext {
     return true;
   }
 
-  private compileSwitch(statement: SwitchStatementAst): void {
-    const scratch = `${SWITCH_SCRATCH_PREFIX}${statement.scratchId}`;
-    const register = this.allocation.registers[scratch];
-    if (!register) {
-      this.diagnostics.push({
-        level: "error",
-        message: `Internal: no scratch register reserved for switch at line ${statement.line}.`,
-        line: statement.line,
-      });
-      return;
-    }
-
-    this.compileExpression(statement.expr);
-    this.emitOp(
-      0x40 + registerIndex(register),
-      `X->П ${register}`,
-      `switch scratch`,
-      statement.line,
-    );
-
-    const endLabel = this.freshLabel("switch_end");
-    for (const switchCase of statement.cases) {
-      const nextLabel = this.freshLabel("switch_next");
-      this.emitOp(
-        0x60 + registerIndex(register),
-        `П->X ${register}`,
-        "switch scratch recall",
-        switchCase.line,
-      );
-      this.compileExpression(switchCase.value);
-      this.emitOp(0x11, "-", "switch compare", switchCase.line);
-      this.emitJump(0x5e, "F x=0", nextLabel, "case mismatch", switchCase.line);
-      this.compileStatements(switchCase.body);
-      this.emitJump(0x51, "БП", endLabel, "switch end", switchCase.line);
-      this.emitLabel(nextLabel);
-    }
-    if (statement.defaultBody) this.compileStatements(statement.defaultBody);
-    this.emitLabel(endLabel);
-
-    this.optimizations.push({
-      name: "switch-lowering",
-      detail: `Lowered switch at line ${statement.line} via scratch R${register}; expression evaluated once.`,
-    });
-  }
-
   private compileDispatch(statement: Extract<StatementAst, { kind: "dispatch" }>): void {
     const optimized = optimizeDispatchDefaultCases(statement);
     if (optimized.removed > 0) {
@@ -4409,7 +4192,7 @@ class EmitContext {
 
   private statementTerminates(statement: StatementAst, seenProcs: Set<string>): boolean {
     if (
-      statement.kind === "halt" || statement.kind === "loop" || statement.kind === "trap" ||
+      statement.kind === "halt" || statement.kind === "loop" ||
       statement.kind === "decimal_series" || statement.kind === "return_value"
     ) {
       return true;
@@ -4426,8 +4209,6 @@ class EmitContext {
         statement.cases.every((dispatchCase) => this.statementListTerminates(dispatchCase.body, new Set(seenProcs)));
     }
     if (statement.kind !== "call") return false;
-    const block = this.ast.blocks.find((candidate) => candidate.name === statement.block);
-    if (block !== undefined) return block.mode !== "inline";
     const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
     if (proc === undefined || seenProcs.has(proc.name)) return false;
     seenProcs.add(proc.name);
@@ -4436,7 +4217,7 @@ class EmitContext {
 
   private statementEndsMachineFlow(statement: StatementAst, seenProcs: Set<string>): boolean {
     if (
-      statement.kind === "loop" || statement.kind === "trap" || statement.kind === "decimal_series" ||
+      statement.kind === "loop" || statement.kind === "decimal_series" ||
       statement.kind === "return_value"
     ) {
       return true;
@@ -4456,8 +4237,6 @@ class EmitContext {
         );
     }
     if (statement.kind !== "call") return false;
-    const block = this.ast.blocks.find((candidate) => candidate.name === statement.block);
-    if (block !== undefined) return block.mode !== "inline";
     const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
     if (proc === undefined || seenProcs.has(proc.name)) return false;
     seenProcs.add(proc.name);
@@ -5756,9 +5535,8 @@ class EmitContext {
   }
 
   private compileBlockCall(blockName: string, line: number): void {
-    const block = this.ast.blocks.find((candidate) => candidate.name === blockName);
     const proc = this.ast.procs.find((candidate) => candidate.name === blockName);
-    if (!block && proc) {
+    if (proc) {
       if (this.inlineProcNames.has(proc.name)) {
         this.compileStatements(proc.body);
         const uses = this.procCallCounts.get(proc.name) ?? 0;
@@ -5800,48 +5578,7 @@ class EmitContext {
       }
       return;
     }
-    if (!block) {
-      this.diagnostics.push(buildDiagnostic("error", `Unknown block '${blockName}'.`, line));
-      return;
-    }
-    if (block.mode === "inline") {
-      this.compileStatements(block.body);
-      this.optimizations.push({
-        name: "inline-block",
-        detail: `Inlined block ${block.name} at line ${line}.`,
-      });
-      return;
-    }
-    this.emitJump(0x51, "БП", block.name, `${block.mode} call ${block.name}`, line);
-    this.optimizations.push({
-      name: block.mode === "shared_tail" ? "shared-tail-layout" : "tail-call-layout",
-      detail: `Compiled call to ${block.name} as direct tail jump.`,
-    });
-  }
-
-  private compileTrap(statement: TrapStatementAst): void {
-    this.compileExpression(statement.expr);
-    const mapping: Record<TrapStatementAst["trap"], [number, string]> = {
-      zero: [0x23, "F 1/x"],
-      nonpositive: [0x17, "F lg"],
-      negative: [0x21, "F sqrt"],
-      gt_one: [0x19, "F sin^-1"],
-      ge_100: [0x15, "F 10^x"],
-      // К °->′" rejects a fractional part >= 0.6 (no valid minutes/seconds),
-      // making it a one-cell trap for that domain.
-      frac_ge_06: [0x2a, "К °->′\""],
-    };
-    const [opcode, mnemonic] = mapping[statement.trap];
-    this.emitOp(
-      opcode,
-      mnemonic,
-      `trap ${statement.trap}`,
-      statement.line,
-    );
-    this.optimizations.push({
-      name: "error-stop",
-      detail: `Used ${mnemonic} as trap ${statement.trap} at line ${statement.line}.`,
-    });
+    this.diagnostics.push(buildDiagnostic("error", `Unknown block '${blockName}'.`, line));
   }
 
   private procReturnXVariable(proc: ProgramAst["procs"][number]): string | undefined {
@@ -7994,10 +7731,6 @@ function collectScaledCoordListNames(ast: ProgramAst): Set<string> {
         if (statement.elseBody) visit(statement.elseBody);
       }
       if (statement.kind === "loop") visit(statement.body);
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
         if (statement.defaultBody) visit(statement.defaultBody);
@@ -8007,8 +7740,6 @@ function collectScaledCoordListNames(ast: ProgramAst): Set<string> {
 
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
-
   const selected = new Set<string>();
   for (const [listName, cells] of candidates) {
     if (cells.size !== 1) continue;
@@ -8046,18 +7777,12 @@ function collectCoordListCellNames(ast: ProgramAst): Set<string> {
     for (const statement of statements) {
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
-      if (statement.kind === "ask" && statement.prompt !== undefined) visitExpr(statement.prompt);
       if (statement.kind === "if") {
         visitCondition(statement.condition);
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
       if (statement.kind === "loop") visit(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
         if (statement.defaultBody) visit(statement.defaultBody);
@@ -8069,7 +7794,6 @@ function collectCoordListCellNames(ast: ProgramAst): Set<string> {
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
   return names;
 }
 
@@ -8102,18 +7826,12 @@ function collectScaledCoordCellNames(ast: ProgramAst, scaledLists: ReadonlySet<s
     for (const statement of statements) {
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
-      if (statement.kind === "ask" && statement.prompt !== undefined) visitExpr(statement.prompt);
       if (statement.kind === "if") {
         visitCondition(statement.condition);
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
       if (statement.kind === "loop") visit(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
         if (statement.defaultBody) visit(statement.defaultBody);
@@ -8125,7 +7843,6 @@ function collectScaledCoordCellNames(ast: ProgramAst, scaledLists: ReadonlySet<s
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
   return names;
 }
 
@@ -8164,10 +7881,6 @@ function collectCoordListPackedReportTargets(ast: ProgramAst): Set<string> {
         if (statement.elseBody) visit(statement.elseBody);
       }
       if (statement.kind === "loop") visit(statement.body);
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
         if (statement.defaultBody) visit(statement.defaultBody);
@@ -8177,7 +7890,6 @@ function collectCoordListPackedReportTargets(ast: ProgramAst): Set<string> {
 
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
   return names;
 }
 
@@ -8237,20 +7949,12 @@ function coordVariableHasOnlyScaledSafeReads(
     for (const statement of statements) {
       if (statement.kind === "assign" && !exprSafe(statement.expr)) return false;
       if ((statement.kind === "pause" || statement.kind === "halt") && !exprSafe(statement.expr)) return false;
-      if (statement.kind === "ask" && statement.prompt !== undefined && !exprSafe(statement.prompt)) return false;
       if (statement.kind === "if") {
         if (!conditionSafe(statement.condition)) return false;
         if (!statementsSafe(statement.thenBody, seenProcs)) return false;
         if (statement.elseBody !== undefined && !statementsSafe(statement.elseBody, seenProcs)) return false;
       }
       if (statement.kind === "loop" && !statementsSafe(statement.body, seenProcs)) return false;
-      if (statement.kind === "switch") {
-        if (!exprSafe(statement.expr)) return false;
-        for (const switchCase of statement.cases) {
-          if (!statementsSafe(switchCase.body, seenProcs)) return false;
-        }
-        if (statement.defaultBody !== undefined && !statementsSafe(statement.defaultBody, seenProcs)) return false;
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) {
           if (!statementsSafe(dispatchCase.body, seenProcs)) return false;
@@ -8281,8 +7985,7 @@ function coordVariableHasOnlyScaledSafeReads(
     if (template?.cell.name !== cellName) return false;
   }
   return ast.entries.every((entry) => statementsSafe(entry.body)) &&
-    ast.procs.every((proc) => statementsSafe(proc.body)) &&
-    ast.blocks.every((block) => statementsSafe(block.body));
+    ast.procs.every((proc) => statementsSafe(proc.body));
 }
 
 function coordListItemInfo(name: string): { listName: string; index: number } | undefined {
@@ -8320,10 +8023,6 @@ function collectRecursiveProcNames(ast: ProgramAst): Set<string> {
         visit(statement.thenBody, currentProc);
         if (statement.elseBody) visit(statement.elseBody, currentProc);
       }
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visit(switchCase.body, currentProc);
-        if (statement.defaultBody) visit(statement.defaultBody, currentProc);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body, currentProc);
         if (statement.defaultBody) visit(statement.defaultBody, currentProc);
@@ -8333,7 +8032,6 @@ function collectRecursiveProcNames(ast: ProgramAst): Set<string> {
 
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body, proc.name);
-  for (const block of ast.blocks) visit(block.body);
   return recursive;
 }
 
@@ -8363,7 +8061,6 @@ function procContainsReturnValue(body: readonly StatementAst[]): boolean {
       case "loop":
       case "while":
         return procContainsReturnValue(statement.body);
-      case "switch":
       case "dispatch":
         return statement.cases.some((branch) => procContainsReturnValue(branch.body)) ||
           (statement.defaultBody !== undefined && procContainsReturnValue(statement.defaultBody));
@@ -8422,7 +8119,7 @@ function statementTerminatesStatically(
   seenProcs: Set<string>,
 ): boolean {
   if (
-    statement.kind === "halt" || statement.kind === "loop" || statement.kind === "trap" ||
+    statement.kind === "halt" || statement.kind === "loop" ||
     statement.kind === "return_value"
   ) {
     return true;
@@ -8440,8 +8137,6 @@ function statementTerminatesStatically(
       );
   }
   if (statement.kind !== "call") return false;
-  const block = ast.blocks.find((candidate) => candidate.name === statement.block);
-  if (block !== undefined) return block.mode !== "inline";
   const proc = ast.procs.find((candidate) => candidate.name === statement.block);
   if (proc === undefined || seenProcs.has(proc.name)) return false;
   seenProcs.add(proc.name);
@@ -8477,10 +8172,6 @@ function elideTerminalLoopHeaderShows(ast: ProgramAst, optimizations: AppliedOpt
         visitEveryStatementList(statement.thenBody, atTail ? terminalDisplay : undefined);
         if (statement.elseBody !== undefined) visitEveryStatementList(statement.elseBody, atTail ? terminalDisplay : undefined);
       }
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visitEveryStatementList(switchCase.body, atTail ? terminalDisplay : undefined);
-        if (statement.defaultBody !== undefined) visitEveryStatementList(statement.defaultBody, atTail ? terminalDisplay : undefined);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visitEveryStatementList(dispatchCase.body, atTail ? terminalDisplay : undefined);
         if (statement.defaultBody !== undefined) visitEveryStatementList(statement.defaultBody, atTail ? terminalDisplay : undefined);
@@ -8489,7 +8180,6 @@ function elideTerminalLoopHeaderShows(ast: ProgramAst, optimizations: AppliedOpt
   };
 
   for (const entry of ast.entries) visitEveryStatementList(entry.body);
-  for (const block of ast.blocks) visitEveryStatementList(block.body);
   for (const proc of ast.procs) {
     collectStatementListCallsByPosition(proc.body, "__mkpro_terminal_proc_tail", procMap, new Map(), nonTerminalCalls);
   }
@@ -8539,14 +8229,6 @@ function collectCallsByPosition(
     collectStatementListCallsByPosition(statement.thenBody, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls);
     if (statement.elseBody !== undefined) {
       collectStatementListCallsByPosition(statement.elseBody, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls);
-    }
-  }
-  if (statement.kind === "switch") {
-    for (const switchCase of statement.cases) {
-      collectStatementListCallsByPosition(switchCase.body, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls);
-    }
-    if (statement.defaultBody !== undefined) {
-      collectStatementListCallsByPosition(statement.defaultBody, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls);
     }
   }
   if (statement.kind === "dispatch") {
@@ -8614,10 +8296,6 @@ function collectStatementListTerminalCalls(
     collectStatementListTerminalCalls(last.thenBody, procMap, terminalCalls);
     if (last.elseBody !== undefined) collectStatementListTerminalCalls(last.elseBody, procMap, terminalCalls);
   }
-  if (last.kind === "switch") {
-    for (const switchCase of last.cases) collectStatementListTerminalCalls(switchCase.body, procMap, terminalCalls);
-    if (last.defaultBody !== undefined) collectStatementListTerminalCalls(last.defaultBody, procMap, terminalCalls);
-  }
   if (last.kind === "dispatch") {
     for (const dispatchCase of last.cases) collectStatementListTerminalCalls(dispatchCase.body, procMap, terminalCalls);
     if (last.defaultBody !== undefined) collectStatementListTerminalCalls(last.defaultBody, procMap, terminalCalls);
@@ -8635,10 +8313,6 @@ function elideTailShowInStatementList(statements: StatementAst[], display: strin
   if (last.kind === "if") {
     removed += elideTailShowInStatementList(last.thenBody, display);
     if (last.elseBody !== undefined) removed += elideTailShowInStatementList(last.elseBody, display);
-  }
-  if (last.kind === "switch") {
-    for (const switchCase of last.cases) removed += elideTailShowInStatementList(switchCase.body, display);
-    if (last.defaultBody !== undefined) removed += elideTailShowInStatementList(last.defaultBody, display);
   }
   if (last.kind === "dispatch") {
     for (const dispatchCase of last.cases) removed += elideTailShowInStatementList(dispatchCase.body, display);
@@ -8703,15 +8377,6 @@ function liftFunctionCallsInExpressions(ast: ProgramAst, optimizations: AppliedO
         const expr = liftExpr(statement.expr, prelude, true, statement.line);
         return [...prelude, { ...statement, expr }];
       }
-      case "trap": {
-        const expr = liftExpr(statement.expr, prelude, false, statement.line);
-        return [...prelude, { ...statement, expr }];
-      }
-      case "ask": {
-        if (statement.prompt === undefined) return [statement];
-        const prompt = liftExpr(statement.prompt, prelude, false, statement.line);
-        return [...prelude, { ...statement, prompt }];
-      }
       case "if": {
         const left = liftExpr(statement.condition.left, prelude, false, statement.line);
         const right = liftExpr(statement.condition.right, prelude, false, statement.line);
@@ -8738,16 +8403,6 @@ function liftFunctionCallsInExpressions(ast: ProgramAst, optimizations: AppliedO
       }
       case "loop":
         return [{ ...statement, body: liftStatements(statement.body) }];
-      case "switch": {
-        const expr = liftExpr(statement.expr, prelude, false, statement.line);
-        const rebuilt: StatementAst = {
-          ...statement,
-          expr,
-          cases: statement.cases.map((switchCase) => ({ ...switchCase, body: liftStatements(switchCase.body) })),
-          ...(statement.defaultBody === undefined ? {} : { defaultBody: liftStatements(statement.defaultBody) }),
-        };
-        return [...prelude, rebuilt];
-      }
       case "dispatch": {
         const expr = liftExpr(statement.expr, prelude, false, statement.line);
         const rebuilt: StatementAst = {
@@ -8767,8 +8422,6 @@ function liftFunctionCallsInExpressions(ast: ProgramAst, optimizations: AppliedO
 
   for (const entry of ast.entries) entry.body = liftStatements(entry.body);
   for (const proc of ast.procs) proc.body = liftStatements(proc.body);
-  for (const block of ast.blocks) block.body = liftStatements(block.body);
-
   if (lifted > 0) {
     optimizations.push({
       name: "function-call-lifting",
@@ -8779,20 +8432,10 @@ function liftFunctionCallsInExpressions(ast: ProgramAst, optimizations: AppliedO
 
 function collectReachableProcNames(ast: ProgramAst): Set<string> {
   const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
-  const blockMap = new Map(ast.blocks.map((block) => [block.name, block]));
   const reachableProcs = new Set<string>();
-  const reachableBlocks = new Set<string>();
   const procQueue: string[] = [];
-  const blockQueue: string[] = [];
 
   const enqueueCall = (name: string): void => {
-    if (blockMap.has(name)) {
-      if (!reachableBlocks.has(name)) {
-        reachableBlocks.add(name);
-        blockQueue.push(name);
-      }
-      return;
-    }
     if (procMap.has(name) && !reachableProcs.has(name)) {
       reachableProcs.add(name);
       procQueue.push(name);
@@ -8809,10 +8452,6 @@ function collectReachableProcNames(ast: ProgramAst): Set<string> {
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
         if (statement.defaultBody) visit(statement.defaultBody);
@@ -8821,18 +8460,11 @@ function collectReachableProcNames(ast: ProgramAst): Set<string> {
   };
 
   for (const entry of ast.entries) visit(entry.body);
-  while (procQueue.length > 0 || blockQueue.length > 0) {
+  while (procQueue.length > 0) {
     const procName = procQueue.shift();
-    if (procName !== undefined) {
-      const proc = procMap.get(procName);
-      if (proc !== undefined) visit(proc.body);
-      continue;
-    }
-    const blockName = blockQueue.shift();
-    if (blockName !== undefined) {
-      const block = blockMap.get(blockName);
-      if (block !== undefined) visit(block.body);
-    }
+    if (procName === undefined) continue;
+    const proc = procMap.get(procName);
+    if (proc !== undefined) visit(proc.body);
   }
   return reachableProcs;
 }
@@ -8853,12 +8485,6 @@ function allocateRegisters(
   const hints = new Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>();
   const variables = new Set<string>();
 
-  for (const declaration of ast.declarations) {
-    if (declaration.kind === "const") continue;
-    declared.add(declaration.name);
-    variables.add(declaration.name);
-    if (declaration.storage) hints.set(declaration.name, declaration.storage);
-  }
   for (const state of ast.states) {
     for (const field of state.fields) {
       declared.add(field.name);
@@ -8884,7 +8510,6 @@ function allocateRegisters(
 
   warnUndeclaredAssignments(ast, declared, diagnostics);
   collectAssignedVariables(ast, variables);
-  collectSwitchScratchVariables(ast, variables);
   collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch);
   collectTicTacToeScratchVariables(ast, variables);
   collectBitMaskScratchVariables(ast, variables);
@@ -9083,13 +8708,6 @@ function pickRegister(
   variable: string,
   used: Set<RegisterName>,
 ): RegisterName | undefined {
-  if (variable.startsWith(SWITCH_SCRATCH_PREFIX)) {
-    for (let i = REGISTER_ORDER.length - 1; i >= 0; i -= 1) {
-      const candidate = REGISTER_ORDER[i]!;
-      if (!used.has(candidate)) return candidate;
-    }
-    return undefined;
-  }
   if (variable.startsWith(DISPATCH_SCRATCH_PREFIX)) {
     for (let i = REGISTER_ORDER.length - 1; i >= 0; i -= 1) {
       const candidate = REGISTER_ORDER[i]!;
@@ -9250,7 +8868,6 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
   const visitStatements = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
-      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -9259,14 +8876,6 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
         if (statement.elseBody) visitStatements(statement.elseBody);
       }
       if (statement.kind === "loop") visitStatements(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) {
-          visitExpr(switchCase.value);
-          visitStatements(switchCase.body);
-        }
-        if (statement.defaultBody) visitStatements(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) {
@@ -9279,7 +8888,6 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
   };
   for (const entry of ast.entries) visitStatements(entry.body);
   for (const proc of ast.procs) visitStatements(proc.body);
-  for (const block of ast.blocks) visitStatements(block.body);
   return [...values].filter((value) => value !== "0" && value !== "1").sort((a, b) => estimateNumberCost(b) - estimateNumberCost(a));
 }
 
@@ -9324,7 +8932,6 @@ function programContainsCall(ast: ProgramAst, name: string): boolean {
     for (const statement of statements) {
       if (found) return;
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
-      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -9333,14 +8940,6 @@ function programContainsCall(ast: ProgramAst, name: string): boolean {
         if (statement.elseBody) visitStatements(statement.elseBody);
       }
       if (statement.kind === "loop") visitStatements(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) {
-          visitExpr(switchCase.value);
-          visitStatements(switchCase.body);
-        }
-        if (statement.defaultBody) visitStatements(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) {
@@ -9353,7 +8952,6 @@ function programContainsCall(ast: ProgramAst, name: string): boolean {
   };
   for (const entry of ast.entries) visitStatements(entry.body);
   for (const proc of ast.procs) visitStatements(proc.body);
-  for (const block of ast.blocks) visitStatements(block.body);
   return found;
 }
 
@@ -9396,10 +8994,6 @@ function programVisitsIf(
         if (statement.elseBody) visitStatements(statement.elseBody);
       }
       if (statement.kind === "loop") visitStatements(statement.body);
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visitStatements(switchCase.body);
-        if (statement.defaultBody) visitStatements(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visitStatements(dispatchCase.body);
         if (statement.defaultBody) visitStatements(statement.defaultBody);
@@ -9408,7 +9002,6 @@ function programVisitsIf(
   };
   for (const entry of ast.entries) visitStatements(entry.body);
   for (const proc of ast.procs) visitStatements(proc.body);
-  for (const block of ast.blocks) visitStatements(block.body);
   return found;
 }
 
@@ -9429,7 +9022,6 @@ function countCalls(ast: ProgramAst, name: string): number {
   const visitStatements = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
-      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -9438,14 +9030,6 @@ function countCalls(ast: ProgramAst, name: string): number {
         if (statement.elseBody) visitStatements(statement.elseBody);
       }
       if (statement.kind === "loop") visitStatements(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) {
-          visitExpr(switchCase.value);
-          visitStatements(switchCase.body);
-        }
-        if (statement.defaultBody) visitStatements(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) {
@@ -9458,7 +9042,6 @@ function countCalls(ast: ProgramAst, name: string): number {
   };
   for (const entry of ast.entries) visitStatements(entry.body);
   for (const proc of ast.procs) visitStatements(proc.body);
-  for (const block of ast.blocks) visitStatements(block.body);
   return count;
 }
 
@@ -9488,7 +9071,6 @@ function programHasLineCountForMask(ast: ProgramAst, maskName: string): boolean 
     for (const statement of statements) {
       if (found) return;
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
-      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -9497,14 +9079,6 @@ function programHasLineCountForMask(ast: ProgramAst, maskName: string): boolean 
         if (statement.elseBody) visitStatements(statement.elseBody);
       }
       if (statement.kind === "loop") visitStatements(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) {
-          visitExpr(switchCase.value);
-          visitStatements(switchCase.body);
-        }
-        if (statement.defaultBody) visitStatements(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) {
@@ -9517,7 +9091,6 @@ function programHasLineCountForMask(ast: ProgramAst, maskName: string): boolean 
   };
   for (const entry of ast.entries) visitStatements(entry.body);
   for (const proc of ast.procs) visitStatements(proc.body);
-  for (const block of ast.blocks) visitStatements(block.body);
   return found;
 }
 
@@ -9546,7 +9119,6 @@ function collectLineCountGroupCounts(ast: ProgramAst): Map<string, number> {
   const visitStatements = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
-      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -9555,14 +9127,6 @@ function collectLineCountGroupCounts(ast: ProgramAst): Map<string, number> {
         if (statement.elseBody) visitStatements(statement.elseBody);
       }
       if (statement.kind === "loop") visitStatements(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) {
-          visitExpr(switchCase.value);
-          visitStatements(switchCase.body);
-        }
-        if (statement.defaultBody) visitStatements(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) {
@@ -9575,7 +9139,6 @@ function collectLineCountGroupCounts(ast: ProgramAst): Map<string, number> {
   };
   for (const entry of ast.entries) visitStatements(entry.body);
   for (const proc of ast.procs) visitStatements(proc.body);
-  for (const block of ast.blocks) visitStatements(block.body);
   return counts;
 }
 
@@ -9603,7 +9166,6 @@ function collectVariableReadCounts(ast: ProgramAst): Map<string, number> {
     for (const statement of statements) {
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "return_value") visitExpr(statement.expr);
-      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "show") {
         const display = ast.displays.find((candidate) => candidate.name === statement.display);
@@ -9615,14 +9177,6 @@ function collectVariableReadCounts(ast: ProgramAst): Map<string, number> {
         if (statement.elseBody) visitStatements(statement.elseBody);
       }
       if (statement.kind === "loop") visitStatements(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) {
-          visitExpr(switchCase.value);
-          visitStatements(switchCase.body);
-        }
-        if (statement.defaultBody) visitStatements(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) {
@@ -9635,7 +9189,6 @@ function collectVariableReadCounts(ast: ProgramAst): Map<string, number> {
   };
   for (const entry of ast.entries) visitStatements(entry.body);
   for (const proc of ast.procs) visitStatements(proc.body);
-  for (const block of ast.blocks) visitStatements(block.body);
   return counts;
 }
 
@@ -9694,10 +9247,6 @@ function allProcCallsHaveImmediateParamAssignment(ast: ProgramAst, procName: str
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
         if (statement.defaultBody) visit(statement.defaultBody);
@@ -9708,7 +9257,6 @@ function allProcCallsHaveImmediateParamAssignment(ast: ProgramAst, procName: str
   for (const proc of ast.procs) {
     if (proc.name !== procName) visit(proc.body);
   }
-  for (const block of ast.blocks) visit(block.body);
   return ok && calls > 0;
 }
 
@@ -9721,8 +9269,6 @@ function statementReadsIdentifier(statement: StatementAst, name: string): boolea
     case "pause":
     case "halt":
       return expressionReferencesIdentifier(statement.expr, name);
-    case "ask":
-      return statement.prompt !== undefined && expressionReferencesIdentifier(statement.prompt, name);
     case "assign":
       return expressionReferencesIdentifier(statement.expr, name);
     case "if":
@@ -9736,12 +9282,6 @@ function statementReadsIdentifier(statement: StatementAst, name: string): boolea
       return expressionReferencesIdentifier(statement.condition.left, name) ||
         expressionReferencesIdentifier(statement.condition.right, name) ||
         statementsReadIdentifier(statement.body, name);
-    case "switch":
-      return expressionReferencesIdentifier(statement.expr, name) ||
-        statement.cases.some((switchCase) =>
-          expressionReferencesIdentifier(switchCase.value, name) || statementsReadIdentifier(switchCase.body, name)
-        ) ||
-        (statement.defaultBody !== undefined && statementsReadIdentifier(statement.defaultBody, name));
     case "dispatch":
       return expressionReferencesIdentifier(statement.expr, name) ||
         statement.cases.some((dispatchCase) =>
@@ -9751,12 +9291,10 @@ function statementReadsIdentifier(statement: StatementAst, name: string): boolea
     case "show":
     case "input":
     case "call":
-    case "egg":
     case "decimal_series":
       return false;
     case "core":
       return statement.inputs?.some((input) => expressionReferencesIdentifier(input.expr, name)) ?? false;
-    case "trap":
     case "return_value":
       return expressionReferencesIdentifier(statement.expr, name);
   }
@@ -9775,10 +9313,6 @@ function collectDisplayUseCounts(ast: ProgramAst): Map<string, number> {
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
         if (statement.defaultBody) visit(statement.defaultBody);
@@ -9787,7 +9321,6 @@ function collectDisplayUseCounts(ast: ProgramAst): Map<string, number> {
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
   return counts;
 }
 
@@ -9810,10 +9343,6 @@ function collectShowSequenceUseCounts(ast: ProgramAst): Map<string, number> {
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
         if (statement.defaultBody) visit(statement.defaultBody);
@@ -9822,7 +9351,6 @@ function collectShowSequenceUseCounts(ast: ProgramAst): Map<string, number> {
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
   return counts;
 }
 
@@ -9859,7 +9387,6 @@ function collectExpressionUseCounts(ast: ProgramAst): Map<string, { count: numbe
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
-      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitCondition(statement.condition);
@@ -9867,14 +9394,6 @@ function collectExpressionUseCounts(ast: ProgramAst): Map<string, { count: numbe
         if (statement.elseBody) visit(statement.elseBody);
       }
       if (statement.kind === "loop") visit(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) {
-          visitExpr(switchCase.value);
-          visit(switchCase.body);
-        }
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) {
@@ -9890,7 +9409,6 @@ function collectExpressionUseCounts(ast: ProgramAst): Map<string, { count: numbe
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
   return counts;
 }
 
@@ -9939,10 +9457,6 @@ function collectNearAnyHelperStats(
         if (statement.elseBody) visit(statement.elseBody);
       }
       if (statement.kind === "loop") visit(statement.body);
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
         if (statement.defaultBody) visit(statement.defaultBody);
@@ -9951,7 +9465,6 @@ function collectNearAnyHelperStats(
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
   return stats;
 }
 
@@ -10372,7 +9885,6 @@ function programUsesTicTacToeHelpers(ast: ProgramAst): boolean {
     for (const statement of statements) {
       if (found) return;
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
-      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -10381,11 +9893,6 @@ function programUsesTicTacToeHelpers(ast: ProgramAst): boolean {
         if (statement.elseBody) visitStatements(statement.elseBody);
       }
       if (statement.kind === "loop") visitStatements(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) visitStatements(switchCase.body);
-        if (statement.defaultBody) visitStatements(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) visitStatements(dispatchCase.body);
@@ -10395,7 +9902,6 @@ function programUsesTicTacToeHelpers(ast: ProgramAst): boolean {
   };
   for (const entry of ast.entries) visitStatements(entry.body);
   for (const proc of ast.procs) visitStatements(proc.body);
-  for (const block of ast.blocks) visitStatements(block.body);
   return found;
 }
 
@@ -10418,7 +9924,7 @@ function warnUndeclaredAssignments(
   const ephemeralInputs = collectEphemeralInputTargets(ast);
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
-      if (statement.kind === "assign" || statement.kind === "ask" || statement.kind === "input") {
+      if (statement.kind === "assign" || statement.kind === "input") {
         if (statement.kind === "input" && ephemeralInputs.has(statement.target)) continue;
         if (!declared.has(statement.target) && !seen.has(statement.target)) {
           diagnostics.push({
@@ -10434,10 +9940,6 @@ function warnUndeclaredAssignments(
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
         if (statement.defaultBody) visit(statement.defaultBody);
@@ -10446,14 +9948,13 @@ function warnUndeclaredAssignments(
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
 }
 
 function collectAssignedVariables(ast: ProgramAst, variables: Set<string>): void {
   const ephemeralInputs = collectEphemeralInputTargets(ast);
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
-      if (statement.kind === "assign" || statement.kind === "ask") {
+      if (statement.kind === "assign") {
         variables.add(statement.target);
       }
       if (statement.kind === "input" && !ephemeralInputs.has(statement.target)) variables.add(statement.target);
@@ -10463,10 +9964,6 @@ function collectAssignedVariables(ast: ProgramAst, variables: Set<string>): void
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
         if (statement.defaultBody) visit(statement.defaultBody);
@@ -10475,7 +9972,6 @@ function collectAssignedVariables(ast: ProgramAst, variables: Set<string>): void
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
 }
 
 function collectEphemeralInputTargets(ast: ProgramAst): Set<string> {
@@ -10499,10 +9995,6 @@ function collectEphemeralInputTargets(ast: ProgramAst): Set<string> {
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
         if (statement.defaultBody) visit(statement.defaultBody);
@@ -10511,7 +10003,6 @@ function collectEphemeralInputTargets(ast: ProgramAst): Set<string> {
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
   return targets;
 }
 
@@ -10527,10 +10018,6 @@ function collectUnitDecrementTargets(ast: ProgramAst): Set<string> {
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
         if (statement.defaultBody) visit(statement.defaultBody);
@@ -10539,32 +10026,7 @@ function collectUnitDecrementTargets(ast: ProgramAst): Set<string> {
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
   return targets;
-}
-
-function collectSwitchScratchVariables(ast: ProgramAst, variables: Set<string>): void {
-  const visit = (statements: StatementAst[]): void => {
-    for (const statement of statements) {
-      if (statement.kind === "switch") {
-        variables.add(`${SWITCH_SCRATCH_PREFIX}${statement.scratchId}`);
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
-      if (statement.kind === "loop") visit(statement.body);
-      if (statement.kind === "if") {
-        visit(statement.thenBody);
-        if (statement.elseBody) visit(statement.elseBody);
-      }
-      if (statement.kind === "dispatch") {
-        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
-    }
-  };
-  for (const entry of ast.entries) visit(entry.body);
-  for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
 }
 
 function collectDispatchScratchVariables(
@@ -10587,15 +10049,10 @@ function collectDispatchScratchVariables(
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
     }
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
 }
 
 function collectTicTacToeScratchVariables(ast: ProgramAst, variables: Set<string>): void {
@@ -10611,10 +10068,6 @@ function collectTicTacToeScratchVariables(ast: ProgramAst, variables: Set<string
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
         if (statement.defaultBody) visit(statement.defaultBody);
@@ -10623,7 +10076,6 @@ function collectTicTacToeScratchVariables(ast: ProgramAst, variables: Set<string
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
 }
 
 function collectBitMaskScratchVariables(ast: ProgramAst, variables: Set<string>): void {
@@ -10647,10 +10099,6 @@ function collectBitMaskScratchVariables(ast: ProgramAst, variables: Set<string>)
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
         if (statement.defaultBody) visit(statement.defaultBody);
@@ -10659,7 +10107,6 @@ function collectBitMaskScratchVariables(ast: ProgramAst, variables: Set<string>)
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
 }
 
 function collectCoordListScratchVariables(ast: ProgramAst, variables: Set<string>): void {
@@ -10702,18 +10149,12 @@ function collectCoordListScratchVariables(ast: ProgramAst, variables: Set<string
     for (const statement of statements) {
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
-      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
       if (statement.kind === "if") {
         visitCondition(statement.condition);
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
       if (statement.kind === "loop") visit(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
@@ -10726,7 +10167,6 @@ function collectCoordListScratchVariables(ast: ProgramAst, variables: Set<string
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
 }
 
 interface BitHasConditionStats {
@@ -10775,7 +10215,6 @@ function collectBitHasConditionStats(ast: ProgramAst): Map<string, BitHasConditi
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
-      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         if (!membershipConditionHandledBeforeGenericBitHas(statement)) {
@@ -10785,14 +10224,6 @@ function collectBitHasConditionStats(ast: ProgramAst): Map<string, BitHasConditi
         if (statement.elseBody) visit(statement.elseBody);
       }
       if (statement.kind === "loop") visit(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) {
-          visitExpr(switchCase.value);
-          visit(switchCase.body);
-        }
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) {
@@ -10808,7 +10239,6 @@ function collectBitHasConditionStats(ast: ProgramAst): Map<string, BitHasConditi
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
   return stats;
 }
 
@@ -10860,7 +10290,6 @@ function collectSpatialHitScratchVariables(
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
-      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -10869,14 +10298,6 @@ function collectSpatialHitScratchVariables(
         if (statement.elseBody) visit(statement.elseBody);
       }
       if (statement.kind === "loop") visit(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) {
-          visitExpr(switchCase.value);
-          visit(switchCase.body);
-        }
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) {
@@ -10892,7 +10313,6 @@ function collectSpatialHitScratchVariables(
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
 }
 
 function collectSpatialCountScratchVariables(ast: ProgramAst, variables: Set<string>): void {
@@ -10919,7 +10339,6 @@ function collectSpatialCountScratchVariables(ast: ProgramAst, variables: Set<str
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
-      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -10928,14 +10347,6 @@ function collectSpatialCountScratchVariables(ast: ProgramAst, variables: Set<str
         if (statement.elseBody) visit(statement.elseBody);
       }
       if (statement.kind === "loop") visit(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) {
-          visitExpr(switchCase.value);
-          visit(switchCase.body);
-        }
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) {
@@ -10951,7 +10362,6 @@ function collectSpatialCountScratchVariables(ast: ProgramAst, variables: Set<str
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
   if (!needsLineCountScratch && !needsNeighborTotalScratch) return;
   if (needsLineCountScratch) {
     for (const scratch of spatialCountScratchNames()) variables.add(scratch);
@@ -10988,7 +10398,6 @@ function programNeedsSpatialLineProgressionHelper(ast: ProgramAst): boolean {
     for (const statement of statements) {
       if (needed) return;
       if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
-      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -10997,14 +10406,6 @@ function programNeedsSpatialLineProgressionHelper(ast: ProgramAst): boolean {
         if (statement.elseBody) visit(statement.elseBody);
       }
       if (statement.kind === "loop") visit(statement.body);
-      if (statement.kind === "switch") {
-        visitExpr(statement.expr);
-        for (const switchCase of statement.cases) {
-          visitExpr(switchCase.value);
-          visit(switchCase.body);
-        }
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         visitExpr(statement.expr);
         for (const dispatchCase of statement.cases) {
@@ -11020,7 +10421,6 @@ function programNeedsSpatialLineProgressionHelper(ast: ProgramAst): boolean {
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
   return needed;
 }
 
@@ -11035,10 +10435,6 @@ function collectGuardedUpdateScratchVariables(ast: ProgramAst, variables: Set<st
         if (statement.elseBody) visit(statement.elseBody);
       }
       if (statement.kind === "loop") visit(statement.body);
-      if (statement.kind === "switch") {
-        for (const switchCase of statement.cases) visit(switchCase.body);
-        if (statement.defaultBody) visit(statement.defaultBody);
-      }
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
         if (statement.defaultBody) visit(statement.defaultBody);
@@ -11047,7 +10443,6 @@ function collectGuardedUpdateScratchVariables(ast: ProgramAst, variables: Set<st
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
-  for (const block of ast.blocks) visit(block.body);
 }
 
 function collectDisplayTemplateScratchVariables(ast: ProgramAst, variables: Set<string>): void {
@@ -11670,9 +11065,7 @@ function markDarkEntryCells(
   machineProfile: MachineProfile,
 ): void {
   if (!machineSupports(machineProfile, "dark-entries")) return;
-  const sharedTailNames = new Set(
-    ast.blocks.filter((block) => block.mode === "shared_tail").map((block) => block.name),
-  );
+  const sharedTailNames = new Set<string>();
   for (const [label, address] of labelAddresses) {
     if (!sharedTailNames.has(label)) continue;
     const cell = cellRoles.find((candidate) => candidate.address === safeFormatAddress(address));
@@ -13707,9 +13100,6 @@ function statementEquals(left: StatementAst, right: StatementAst): boolean {
     case "halt":
       return expressionEquals(left.expr, (right as typeof left).expr) &&
         left.literal === (right as typeof left).literal;
-    case "ask":
-      return left.target === (right as typeof left).target &&
-        expressionOptionEquals(left.prompt, (right as typeof left).prompt);
     case "input":
       return left.target === (right as typeof left).target;
     case "assign":
@@ -13723,14 +13113,6 @@ function statementEquals(left: StatementAst, right: StatementAst): boolean {
       return conditionEquals(left.condition, (right as typeof left).condition) &&
         statementListsEqual(left.thenBody, (right as typeof left).thenBody) &&
         statementListOptionEquals(left.elseBody, (right as typeof left).elseBody);
-    case "switch":
-      return expressionEquals(left.expr, (right as typeof left).expr) &&
-        left.cases.length === (right as typeof left).cases.length &&
-        left.cases.every((switchCase, index) =>
-          expressionEquals(switchCase.value, (right as typeof left).cases[index]!.value) &&
-          statementListsEqual(switchCase.body, (right as typeof left).cases[index]!.body)
-        ) &&
-        statementListOptionEquals(left.defaultBody, (right as typeof left).defaultBody);
     case "dispatch":
       return expressionEquals(left.expr, (right as typeof left).expr) &&
         left.cases.length === (right as typeof left).cases.length &&
@@ -13750,21 +13132,12 @@ function statementEquals(left: StatementAst, right: StatementAst): boolean {
         JSON.stringify(left.clobbers ?? []) === JSON.stringify((right as typeof left).clobbers ?? []) &&
         JSON.stringify(left.preserves ?? []) === JSON.stringify((right as typeof left).preserves ?? []) &&
         left.strict === (right as typeof left).strict;
-    case "egg":
-      return rawLinesEqual(left.lines, (right as typeof left).lines);
-    case "trap":
-      return left.trap === (right as typeof left).trap && expressionEquals(left.expr, (right as typeof left).expr);
     case "return_value":
       return expressionEquals(left.expr, (right as typeof left).expr);
     case "decimal_series":
       return left.digits === (right as typeof left).digits &&
         left.counterStart === (right as typeof left).counterStart;
   }
-}
-
-function expressionOptionEquals(left: ExpressionAst | undefined, right: ExpressionAst | undefined): boolean {
-  if (left === undefined || right === undefined) return left === right;
-  return expressionEquals(left, right);
 }
 
 function statementListOptionEquals(left: StatementAst[] | undefined, right: StatementAst[] | undefined): boolean {
@@ -13870,11 +13243,8 @@ function estimateBranchOrderStatementCost(statement: StatementAst, ast: ProgramA
       return estimateExpressionCost(statement.expr) + 1;
     case "pause":
     case "halt":
-    case "trap":
     case "return_value":
       return estimateExpressionCost(statement.expr) + 1;
-    case "ask":
-      return (statement.prompt === undefined ? 0 : estimateExpressionCost(statement.prompt)) + 2;
     case "input":
       return 2;
     case "show": {
@@ -13892,13 +13262,11 @@ function estimateBranchOrderStatementCost(statement: StatementAst, ast: ProgramA
       return estimateConditionCost(statement.condition, ast) + thenCost + 2 + elseCost;
     }
     case "core":
-    case "egg":
       return statement.lines.length;
     case "decimal_series":
       return 64;
     case "while":
     case "loop":
-    case "switch":
     case "dispatch":
       return Number.POSITIVE_INFINITY;
   }
@@ -14673,11 +14041,6 @@ const optimizerCapabilities: Array<{
 ];
 
 function buildPreloadReport(ast: ProgramAst, allocation: RegisterAllocation): PreloadReport[] {
-  const explicit = ast.preloads.map((preload) => ({
-    register: preload.register,
-    value: preload.value,
-    countsAgainstProgram: false,
-  }));
   const synthetic: PreloadReport[] = [];
   if (ast.v2) {
     for (const field of ast.v2.state) {
@@ -14708,7 +14071,7 @@ function buildPreloadReport(ast: ProgramAst, allocation: RegisterAllocation): Pr
       countsAgainstProgram: false,
     });
   }
-  return [...explicit, ...synthetic, ...constants, ...displayTemplateMasks];
+  return [...synthetic, ...constants, ...displayTemplateMasks];
 }
 
 function buildGeneratedSetupProgram(
@@ -15111,11 +14474,9 @@ function parseHotBlock(text: string): CompileReport["hotBlocks"][number] {
 
 function hasLoweredIr(ast: ProgramAst): boolean {
   return (
-    ast.preloads.length > 0 ||
     ast.domains.length > 0 ||
     ast.states.length > 0 ||
     ast.displays.length > 0 ||
-    ast.blocks.length > 0 ||
     ast.entries.some((entry) => containsLoweredStatement(entry.body)) ||
     ast.procs.some((proc) => containsLoweredStatement(proc.body))
   );
@@ -15136,10 +14497,6 @@ function containsLoweredStatement(statements: StatementAst[]): boolean {
       if (containsLoweredStatement(statement.thenBody)) return true;
       if (statement.elseBody && containsLoweredStatement(statement.elseBody)) return true;
     }
-    if (statement.kind === "switch") {
-      if (statement.cases.some((switchCase) => containsLoweredStatement(switchCase.body))) return true;
-      if (statement.defaultBody && containsLoweredStatement(statement.defaultBody)) return true;
-    }
   }
   return false;
 }
@@ -15147,11 +14504,9 @@ function containsLoweredStatement(statements: StatementAst[]): boolean {
 function countIntentNodes(ast: ProgramAst): number {
   return (
     countV2IntentNodes(ast) +
-    ast.preloads.length +
     ast.domains.reduce((sum, domain) => sum + 1 + domain.lines.length, 0) +
     ast.states.reduce((sum, state) => sum + 1 + state.fields.length, 0) +
     ast.displays.length +
-    ast.blocks.reduce((sum, block) => sum + 1 + countStatements(block.body), 0) +
     ast.entries.reduce((sum, entry) => sum + countStatements(entry.body), 0) +
     ast.procs.reduce((sum, proc) => sum + countStatements(proc.body), 0)
   );
@@ -15203,10 +14558,6 @@ function countStatements(statements: StatementAst[]): number {
     if (statement.kind === "if") {
       count += countStatements(statement.thenBody);
       if (statement.elseBody) count += countStatements(statement.elseBody);
-    }
-    if (statement.kind === "switch") {
-      count += statement.cases.reduce((sum, switchCase) => sum + countStatements(switchCase.body), 0);
-      if (statement.defaultBody) count += countStatements(statement.defaultBody);
     }
     if (statement.kind === "dispatch") {
       count += statement.cases.reduce((sum, dispatchCase) => sum + countStatements(dispatchCase.body), 0);

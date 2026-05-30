@@ -1,8 +1,6 @@
 import type {
   AssignStatementAst,
-  BlockAst,
   ConditionAst,
-  DeclarationAst,
   DisplayItemAst,
   DomainAst,
   DispatchCaseAst,
@@ -11,7 +9,6 @@ import type {
   EntryAst,
   ExpressionAst,
   IfStatementAst,
-  PreloadAst,
   ProgramAst,
   ProcAst,
   RawBlockLine,
@@ -91,14 +88,11 @@ class MKProParser {
   parseProgram(): ProgramAst {
     let reference: string | undefined;
     let v2: V2ProgramAst | undefined;
-    const preloads: PreloadAst[] = [];
     const domains: DomainAst[] = [];
     const states: StateAst[] = [];
     const displays: DisplayAst[] = [];
-    const declarations: DeclarationAst[] = [];
     const entries: EntryAst[] = [];
     const procs: ProcAst[] = [];
-    const blocks: BlockAst[] = [];
 
     while (!this.done()) {
       const line = this.peek();
@@ -119,7 +113,6 @@ class MKProParser {
         displays.push(...lowered.displays);
         entries.push(...lowered.entries);
         procs.push(...lowered.procs);
-        blocks.push(...lowered.blocks);
       } else {
         throw new ParseError(`Unexpected top-level line '${line.text}'`, line.line);
       }
@@ -128,14 +121,11 @@ class MKProParser {
     if (v2 === undefined) throw new ParseError("Program must contain one V2 program block", 1);
 
     const program: ProgramAst = {
-      preloads,
       domains,
       states,
       displays,
-      declarations,
       entries,
       procs,
-      blocks,
     };
     if (reference !== undefined) program.reference = reference;
     if (v2 !== undefined) program.v2 = v2;
@@ -824,7 +814,6 @@ interface LoweredV2Program {
   displays: DisplayAst[];
   entries: EntryAst[];
   procs: ProcAst[];
-  blocks: BlockAst[];
 }
 
 function lowerV2Program(v2: V2ProgramAst): LoweredV2Program {
@@ -868,7 +857,6 @@ function lowerV2Program(v2: V2ProgramAst): LoweredV2Program {
     procs: [
       ...v2.rules.filter((rule) => !specializedRules.has(rule.name)).map((rule) => lowerV2Rule(rule, context)),
     ],
-    blocks: [],
   };
 }
 
@@ -938,7 +926,6 @@ function tryLowerV2DecimalFactorialSeries(v2: V2ProgramAst): LoweredV2Program | 
       line: v2.line,
     }],
     procs: [],
-    blocks: [],
   };
 }
 
@@ -2376,10 +2363,6 @@ function estimateStatementCount(statements: StatementAst[]): number {
       if (statement.elseBody !== undefined) count += estimateStatementCount(statement.elseBody);
     }
     if (statement.kind === "dispatch") {
-      count += statement.cases.reduce((sum, item) => sum + estimateStatementCount(item.body), 0);
-      if (statement.defaultBody !== undefined) count += estimateStatementCount(statement.defaultBody);
-    }
-    if (statement.kind === "switch") {
       count += statement.cases.reduce((sum, item) => sum + estimateStatementCount(item.body), 0);
       if (statement.defaultBody !== undefined) count += estimateStatementCount(statement.defaultBody);
     }

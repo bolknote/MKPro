@@ -746,8 +746,6 @@ candidates:
   executable position;
 - `В/О` replaces literal or label-resolved `БП 01` when the return stack is
   proven empty;
-- explicit `trap` lowers to Danilov-style domain-error stops only when the
-  source semantics names a trap outcome;
 - redundant-prologue elimination: when a function ends with the same `display +
   С/П` block that the loop head opens with and then jumps to the head, the
   trailing copy is removed — the user only ever observes the show performed

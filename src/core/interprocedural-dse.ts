@@ -68,13 +68,6 @@ function pruneStatements(statements: StatementAst[], doomed: ReadonlySet<Stateme
       if (statement.elseBody !== undefined) pruned.elseBody = pruneStatements(statement.elseBody, doomed);
       return [pruned];
     }
-    if (statement.kind === "switch") {
-      return [{
-        ...statement,
-        cases: statement.cases.map((branch) => ({ ...branch, body: pruneStatements(branch.body, doomed) })),
-        ...(statement.defaultBody === undefined ? {} : { defaultBody: pruneStatements(statement.defaultBody, doomed) }),
-      }];
-    }
     if (statement.kind === "dispatch") {
       return [{
         ...statement,
@@ -109,7 +102,6 @@ export function eliminateInterproceduralDeadStores(
 
   for (const entry of ast.entries) entry.body = pruneStatements(entry.body, doomed);
   for (const proc of ast.procs) proc.body = pruneStatements(proc.body, doomed);
-  for (const block of ast.blocks) block.body = pruneStatements(block.body, doomed);
 
   optimizations.push({
     name: "interprocedural-dead-store",

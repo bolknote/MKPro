@@ -101,7 +101,6 @@ class Builder {
     const routines: Array<{ name: string; body: StatementAst[] }> = [
       ...this.ast.entries.map((entry) => ({ name: entry.name, body: entry.body })),
       ...this.ast.procs.map((proc) => ({ name: proc.name, body: proc.body })),
-      ...this.ast.blocks.map((block) => ({ name: block.name, body: block.body })),
     ];
 
     for (const routine of routines) {
@@ -158,13 +157,8 @@ class Builder {
         const node = this.add({ defs: [statement.target], uses: [] });
         return { entry: node, exits: [node] };
       }
-      case "ask": {
-        const node = this.add({ defs: [statement.target], uses: statement.prompt ? exprVars(statement.prompt) : [] });
-        return { entry: node, exits: [node] };
-      }
       case "pause":
       case "halt":
-      case "trap":
       case "return_value": {
         // Treat stops as falling through: on the MK-61 С/П resumes at the next
         // cell, so a value can still be read after the stop. A return reads its
@@ -185,8 +179,7 @@ class Builder {
         // so the callee's exit (not the call node) is the fragment exit.
         return { entry: node, exits: [calleeExit] };
       }
-      case "core":
-      case "egg": {
+      case "core": {
         const node = this.add({ defs: [], uses: [], barrier: true });
         return { entry: node, exits: [node] };
       }
@@ -204,7 +197,6 @@ class Builder {
         }
         return { entry: test, exits };
       }
-      case "switch":
       case "dispatch": {
         const uses = new Set<string>(exprVars(statement.expr));
         for (const branch of statement.cases) for (const v of exprVars(branch.value)) uses.add(v);

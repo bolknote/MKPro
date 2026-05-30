@@ -71,14 +71,11 @@ export interface OpcodeInfo {
 export interface ProgramAst {
   reference?: string;
   v2?: V2ProgramAst;
-  preloads: PreloadAst[];
   domains: DomainAst[];
   states: StateAst[];
   displays: DisplayAst[];
-  declarations: DeclarationAst[];
   entries: EntryAst[];
   procs: ProcAst[];
-  blocks: BlockAst[];
 }
 
 export interface LayoutIrCell {
@@ -86,40 +83,6 @@ export interface LayoutIrCell {
   opcode: number;
   roles: CellRole[];
   tactic: string;
-}
-
-export type DeclarationAst =
-  | StoreDeclarationAst
-  | TempDeclarationAst
-  | ConstDeclarationAst;
-
-export interface StoreDeclarationAst {
-  kind: "store";
-  name: string;
-  value?: ExpressionAst;
-  storage?: StorageHint;
-  line: number;
-}
-
-export interface TempDeclarationAst {
-  kind: "temp";
-  name: string;
-  storage?: StorageHint;
-  line: number;
-}
-
-export interface ConstDeclarationAst {
-  kind: "const";
-  name: string;
-  value: ExpressionAst;
-  line: number;
-}
-
-export interface PreloadAst {
-  kind: "preload";
-  register: string;
-  value: string;
-  line: number;
 }
 
 export interface DomainAst {
@@ -409,43 +372,24 @@ export interface V2ContainsPredicateAst {
   item: string;
 }
 
-export interface BlockAst {
-  kind: "block";
-  name: string;
-  mode: "inline" | "tail" | "shared_tail";
-  body: StatementAst[];
-  line: number;
-}
-
 export type StatementAst =
   | PauseStatementAst
-  | AskStatementAst
   | InputStatementAst
   | HaltStatementAst
   | AssignStatementAst
   | LoopStatementAst
   | WhileStatementAst
   | IfStatementAst
-  | SwitchStatementAst
   | DispatchStatementAst
   | ShowStatementAst
   | CallBlockStatementAst
   | CoreStatementAst
-  | EggStatementAst
-  | TrapStatementAst
   | ReturnValueStatementAst
   | DecimalSeriesStatementAst;
 
 export interface PauseStatementAst {
   kind: "pause";
   expr: ExpressionAst;
-  line: number;
-}
-
-export interface AskStatementAst {
-  kind: "ask";
-  target: string;
-  prompt?: ExpressionAst;
   line: number;
 }
 
@@ -490,21 +434,6 @@ export interface IfStatementAst {
   line: number;
 }
 
-export interface SwitchStatementAst {
-  kind: "switch";
-  expr: ExpressionAst;
-  cases: SwitchCaseAst[];
-  defaultBody?: StatementAst[];
-  line: number;
-  scratchId: number;
-}
-
-export interface SwitchCaseAst {
-  value: ExpressionAst;
-  body: StatementAst[];
-  line: number;
-}
-
 export interface DispatchStatementAst {
   kind: "dispatch";
   expr: ExpressionAst;
@@ -544,12 +473,6 @@ export interface CoreStatementAst {
   line: number;
 }
 
-export interface EggStatementAst {
-  kind: "egg";
-  lines: RawBlockLine[];
-  line: number;
-}
-
 export interface RawBlockLine {
   text: string;
   line: number;
@@ -564,13 +487,6 @@ export interface RawInputAst {
 export interface RawOutputAst {
   slot: "X";
   target: string;
-  line: number;
-}
-
-export interface TrapStatementAst {
-  kind: "trap";
-  trap: "zero" | "nonpositive" | "negative" | "gt_one" | "ge_100" | "frac_ge_06";
-  expr: ExpressionAst;
   line: number;
 }
 

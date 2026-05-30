@@ -143,8 +143,9 @@ program reports, and the headless emulator loader smoke test.
 
 ## Status
 
-- `compileSwitch` evaluates the discriminant once and stores it in a
-  reserved scratch register; nested switches each get their own.
+- `match` lowers to a `dispatch`: the discriminant is evaluated once and the
+  compiler selects the cheapest residual compare-chain or scratch-register
+  lowering for the cases.
 - Conditional branches follow the MK-61 convention "true falls through, false
   jumps to the address".
 - Peephole optimization for redundant `X->П r ; П->X r` pairs at synthetic

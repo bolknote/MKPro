@@ -33,15 +33,6 @@ class ConstantFolder {
   applied = 0;
 
   foldProgram(ast: ProgramAst): number {
-    for (const declaration of ast.declarations) {
-      if (declaration.kind === "store" && declaration.value !== undefined) {
-        declaration.value = this.foldExpression(declaration.value);
-      }
-      if (declaration.kind === "const") {
-        declaration.value = this.foldExpression(declaration.value);
-      }
-    }
-
     for (const state of ast.states) {
       for (const field of state.fields) {
         if (field.initial !== undefined) field.initial = this.foldExpression(field.initial);
@@ -50,7 +41,6 @@ class ConstantFolder {
 
     for (const entry of ast.entries) this.foldStatements(entry.body);
     for (const proc of ast.procs) this.foldStatements(proc.body);
-    for (const block of ast.blocks) this.foldStatements(block.body);
 
     return this.applied;
   }
@@ -60,12 +50,8 @@ class ConstantFolder {
       switch (statement.kind) {
         case "pause":
         case "halt":
-        case "trap":
         case "return_value":
           statement.expr = this.foldExpression(statement.expr);
-          break;
-        case "ask":
-          if (statement.prompt !== undefined) statement.prompt = this.foldExpression(statement.prompt);
           break;
         case "assign":
           statement.expr = this.foldExpression(statement.expr);
@@ -77,14 +63,6 @@ class ConstantFolder {
           statement.condition = this.foldCondition(statement.condition);
           this.foldStatements(statement.thenBody);
           if (statement.elseBody !== undefined) this.foldStatements(statement.elseBody);
-          break;
-        case "switch":
-          statement.expr = this.foldExpression(statement.expr);
-          for (const switchCase of statement.cases) {
-            switchCase.value = this.foldExpression(switchCase.value);
-            this.foldStatements(switchCase.body);
-          }
-          if (statement.defaultBody !== undefined) this.foldStatements(statement.defaultBody);
           break;
         case "dispatch":
           statement.expr = this.foldExpression(statement.expr);
@@ -102,7 +80,6 @@ class ConstantFolder {
         case "input":
         case "show":
         case "call":
-        case "egg":
           break;
       }
     }
