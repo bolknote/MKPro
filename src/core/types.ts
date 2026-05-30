@@ -514,6 +514,7 @@ export interface ConditionAst {
 
 export type ExpressionAst =
   | NumberExpressionAst
+  | StringExpressionAst
   | IdentifierExpressionAst
   | UnaryExpressionAst
   | BinaryExpressionAst
@@ -522,6 +523,11 @@ export type ExpressionAst =
 export interface NumberExpressionAst {
   kind: "number";
   raw: string;
+}
+
+export interface StringExpressionAst {
+  kind: "string";
+  text: string;
 }
 
 export interface IdentifierExpressionAst {

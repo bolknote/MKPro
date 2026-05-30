@@ -3421,6 +3421,9 @@ class ExpressionParser {
       this.expect(")");
       return expr;
     }
+    if (token.startsWith("\"")) {
+      return { kind: "string", text: parseQuotedDisplayText(token, this.line) };
+    }
     if (/^\d+(?:\.\d+)?(?:e[+-]?\d+)?$/iu.test(token)) {
       return { kind: "number", raw: token };
     }
@@ -3484,6 +3487,36 @@ function tokenizeExpression(source: string, line: number): string[] {
   const regex = /\s*([A-Za-z_А-Яа-я][\wА-Яа-я]*|\d+(?:\.\d+)?(?:e[+-]?\d+)?|==|!=|<=|>=|[()+\-*/,])\s*/giy;
   let index = 0;
   while (index < source.length) {
+    while (index < source.length && /\s/u.test(source[index]!)) index += 1;
+    if (index >= source.length) break;
+    if (source[index] === "\"") {
+      const start = index;
+      index += 1;
+      let escaped = false;
+      let closed = false;
+      while (index < source.length) {
+        const current = source[index]!;
+        if (escaped) {
+          escaped = false;
+          index += 1;
+          continue;
+        }
+        if (current === "\\") {
+          escaped = true;
+          index += 1;
+          continue;
+        }
+        if (current === "\"") {
+          index += 1;
+          closed = true;
+          break;
+        }
+        index += 1;
+      }
+      if (!closed) throw new ParseError("Unclosed expression string literal", line);
+      tokens.push(source.slice(start, index));
+      continue;
+    }
     regex.lastIndex = index;
     const match = regex.exec(source);
     if (!match) {

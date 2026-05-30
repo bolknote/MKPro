@@ -39,6 +39,7 @@ import type {
   CompileResult,
   ConditionAst,
   Diagnostic,
+  DisplayItemAst,
   DispatchCaseAst,
   DispatchStatementAst,
   ExpressionAst,
@@ -265,6 +266,21 @@ interface MantissaMaskDisplayTemplate {
   width: number;
 }
 
+export interface VariableLeadingMantissaMaskDisplayTemplate {
+  source: DisplayField;
+  split: number;
+  low: {
+    bodyFields: DisplayField[];
+    mask: string;
+    width: number;
+  };
+  high: {
+    restFields: DisplayField[];
+    mask: string;
+    width: number;
+  };
+}
+
 export interface DashedCoordReportTemplate {
   cell: DisplayField;
   bearing: DisplayField;
@@ -476,6 +492,364 @@ function finishCompileAttempt(result: CompileResult, analysis: boolean): Compile
   ));
 }
 
+function inlineDisplayStringValues(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  let rewrittenShows = 0;
+  let inlineCounter = 0;
+
+  const stringValue = (expr: ExpressionAst, env: ReadonlyMap<string, string>): string | undefined => {
+    if (expr.kind === "string") return expr.text;
+    if (expr.kind === "identifier") return env.get(expr.name);
+    return undefined;
+  };
+
+  const pushItem = (items: DisplayItemAst[], item: DisplayItemAst): void => {
+    if (item.kind === "literal" && item.text.length === 0) return;
+    const previous = items.at(-1);
+    if (previous?.kind === "literal" && item.kind === "literal") {
+      previous.text += item.text;
+      return;
+    }
+    items.push({ ...item });
+  };
+
+  const sourceNames = (items: readonly DisplayItemAst[]): string[] =>
+    items
+      .filter((item): item is Extract<DisplayItemAst, { kind: "source" }> => item.kind === "source")
+      .map((item) => item.name);
+
+  const inlineShow = (
+    statement: Extract<StatementAst, { kind: "show" }>,
+    env: ReadonlyMap<string, string>,
+  ): StatementAst => {
+    const display = ast.displays.find((candidate) => candidate.name === statement.display);
+    if (display === undefined) return statement;
+
+    const items: DisplayItemAst[] = [];
+    let changed = false;
+    for (const item of display.items) {
+      if (item.kind === "source") {
+        const text = env.get(item.name);
+        if (text !== undefined) {
+          pushItem(items, { kind: "literal", text, line: item.line });
+          changed = true;
+          continue;
+        }
+      }
+      pushItem(items, item);
+    }
+    if (!changed) return statement;
+
+    const name = `__display_string_${statement.line}_${inlineCounter}`;
+    inlineCounter += 1;
+    ast.displays.push({
+      kind: "display",
+      name,
+      format: "packed",
+      sources: sourceNames(items),
+      items,
+      line: display.line,
+    });
+    rewrittenShows += 1;
+    return { ...statement, display: name };
+  };
+
+  const inlineConditionalStringShow = (
+    statement: Extract<StatementAst, { kind: "if" }>,
+    next: StatementAst | undefined,
+    env: ReadonlyMap<string, string>,
+  ): StatementAst | undefined => {
+    if (next?.kind !== "show" || statement.elseBody !== undefined || statement.thenBody.length !== 1) {
+      return undefined;
+    }
+    const assign = statement.thenBody[0];
+    if (assign?.kind !== "assign") return undefined;
+    const text = stringValue(assign.expr, env);
+    if (text === undefined) return undefined;
+    const display = ast.displays.find((candidate) => candidate.name === next.display);
+    if (display === undefined || !display.sources.includes(assign.target)) return undefined;
+
+    const thenEnv = new Map(env);
+    thenEnv.set(assign.target, text);
+    return {
+      ...statement,
+      thenBody: [inlineShow(next, thenEnv) as Extract<StatementAst, { kind: "show" }>],
+      elseBody: [inlineShow(next, env) as Extract<StatementAst, { kind: "show" }>],
+    };
+  };
+
+  const mergeIfEnvs = (
+    before: ReadonlyMap<string, string>,
+    branches: Array<ReadonlyMap<string, string>>,
+  ): Map<string, string> => {
+    const merged = new Map<string, string>();
+    for (const [name, value] of before) {
+      if (branches.every((branch) => branch.get(name) === value)) merged.set(name, value);
+    }
+    for (const [name, value] of branches[0] ?? []) {
+      if (merged.has(name)) continue;
+      if (branches.every((branch) => branch.get(name) === value)) merged.set(name, value);
+    }
+    return merged;
+  };
+
+  const transformStatements = (statements: StatementAst[], env: Map<string, string>): StatementAst[] => {
+    const result: StatementAst[] = [];
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      if (statement.kind === "if") {
+        const inlined = inlineConditionalStringShow(statement, statements[index + 1], env);
+        if (inlined !== undefined) {
+          result.push(inlined);
+          index += 1;
+          continue;
+        }
+      }
+      switch (statement.kind) {
+        case "assign": {
+          const text = stringValue(statement.expr, env);
+          if (text === undefined) env.delete(statement.target);
+          else env.set(statement.target, text);
+          result.push(statement);
+          break;
+        }
+        case "show":
+          result.push(inlineShow(statement, env));
+          break;
+        case "input":
+          env.delete(statement.target);
+          result.push(statement);
+          break;
+        case "core":
+          for (const output of statement.outputs ?? []) env.delete(output.target);
+          result.push(statement);
+          break;
+        case "call":
+          env.clear();
+          result.push(statement);
+          break;
+        case "if": {
+          const before = new Map(env);
+          const thenEnv = new Map(before);
+          const thenBody = transformStatements(statement.thenBody, thenEnv);
+          const elseEnv = new Map(before);
+          const elseBody = statement.elseBody === undefined
+            ? undefined
+            : transformStatements(statement.elseBody, elseEnv);
+          env.clear();
+          for (const [name, value] of mergeIfEnvs(before, [thenEnv, elseEnv])) env.set(name, value);
+          result.push({
+            ...statement,
+            thenBody,
+            ...(elseBody === undefined ? {} : { elseBody }),
+          });
+          break;
+        }
+        case "loop": {
+          const bodyEnv = new Map(env);
+          result.push({ ...statement, body: transformStatements(statement.body, bodyEnv) });
+          env.clear();
+          break;
+        }
+        case "while": {
+          const bodyEnv = new Map(env);
+          result.push({ ...statement, body: transformStatements(statement.body, bodyEnv) });
+          env.clear();
+          break;
+        }
+        case "dispatch": {
+          const before = new Map(env);
+          const cases = statement.cases.map((dispatchCase) => {
+            const caseEnv = new Map(before);
+            return { env: caseEnv, value: { ...dispatchCase, body: transformStatements(dispatchCase.body, caseEnv) } };
+          });
+          const defaultEnv = new Map(before);
+          const defaultBody = statement.defaultBody === undefined
+            ? undefined
+            : transformStatements(statement.defaultBody, defaultEnv);
+          env.clear();
+          for (const [name, value] of mergeIfEnvs(
+            before,
+            [...cases.map((entry) => entry.env), defaultEnv],
+          )) {
+            env.set(name, value);
+          }
+          result.push({
+            ...statement,
+            cases: cases.map((entry) => entry.value),
+            ...(defaultBody === undefined ? {} : { defaultBody }),
+          });
+          break;
+        }
+        default:
+          result.push(statement);
+          break;
+      }
+    }
+    return result;
+  };
+
+  for (const entry of ast.entries) entry.body = transformStatements(entry.body, new Map());
+  for (const proc of ast.procs) proc.body = transformStatements(proc.body, new Map());
+
+  const removable = displayStringAssignmentTargets(ast);
+  if (removable.size > 0) {
+    const read = remainingDisplayStringReads(ast, removable);
+    for (const name of read) removable.delete(name);
+  }
+  const removedAssignments = removable.size === 0 ? 0 : removeDisplayStringAssignments(ast, removable);
+
+  if (rewrittenShows > 0) {
+    optimizations.push({
+      name: "display-string-inline",
+      detail: `Inlined ${rewrittenShows} display string value${rewrittenShows === 1 ? "" : "s"} into show(...) templates.`,
+    });
+  }
+  if (removedAssignments > 0) {
+    optimizations.push({
+      name: "display-string-assignment-elimination",
+      detail: `Removed ${removedAssignments} compile-time display string assignment${removedAssignments === 1 ? "" : "s"}.`,
+    });
+  }
+}
+
+function displayStringAssignmentTargets(ast: ProgramAst): Set<string> {
+  const targets = new Set<string>();
+  let changed = true;
+
+  const visit = (statements: readonly StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "assign") {
+        if (
+          statement.expr.kind === "string" ||
+          statement.expr.kind === "identifier" && targets.has(statement.expr.name)
+        ) {
+          const size = targets.size;
+          targets.add(statement.target);
+          if (targets.size !== size) changed = true;
+        }
+      }
+      if (statement.kind === "loop" || statement.kind === "while") visit(statement.body);
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+
+  while (changed) {
+    changed = false;
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) visit(proc.body);
+  }
+  return targets;
+}
+
+function remainingDisplayStringReads(ast: ProgramAst, candidates: ReadonlySet<string>): Set<string> {
+  const read = new Set<string>();
+  const add = (name: string): void => {
+    if (candidates.has(name)) read.add(name);
+  };
+  const visitExpr = (expr: ExpressionAst): void => {
+    switch (expr.kind) {
+      case "number":
+      case "string":
+        return;
+      case "identifier":
+        add(expr.name);
+        return;
+      case "unary":
+        visitExpr(expr.expr);
+        return;
+      case "binary":
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+        return;
+      case "call":
+        for (const arg of expr.args) visitExpr(arg);
+        return;
+    }
+  };
+  const removableAssignment = (statement: Extract<StatementAst, { kind: "assign" }>): boolean =>
+    statement.expr.kind === "string" ||
+    statement.expr.kind === "identifier" && candidates.has(statement.expr.name);
+
+  const visit = (statements: readonly StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "return_value") visitExpr(statement.expr);
+      if (statement.kind === "assign" && !removableAssignment(statement)) visitExpr(statement.expr);
+      if (statement.kind === "show") {
+        const display = ast.displays.find((candidate) => candidate.name === statement.display);
+        for (const source of display?.sources ?? []) add(source);
+      }
+      if (statement.kind === "if") {
+        visitExpr(statement.condition.left);
+        visitExpr(statement.condition.right);
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "loop" || statement.kind === "while") visit(statement.body);
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          visitExpr(dispatchCase.value);
+          visit(dispatchCase.body);
+        }
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "core") {
+        for (const input of statement.inputs ?? []) visitExpr(input.expr);
+      }
+    }
+  };
+
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  return read;
+}
+
+function removeDisplayStringAssignments(ast: ProgramAst, targets: ReadonlySet<string>): number {
+  let removed = 0;
+  const removableAssignment = (statement: Extract<StatementAst, { kind: "assign" }>): boolean =>
+    targets.has(statement.target) &&
+    (statement.expr.kind === "string" ||
+      statement.expr.kind === "identifier" && targets.has(statement.expr.name));
+
+  const prune = (statements: StatementAst[]): StatementAst[] =>
+    statements.flatMap((statement): StatementAst[] => {
+      if (statement.kind === "assign" && removableAssignment(statement)) {
+        removed += 1;
+        return [];
+      }
+      if (statement.kind === "loop" || statement.kind === "while") {
+        return [{ ...statement, body: prune(statement.body) }];
+      }
+      if (statement.kind === "if") {
+        return [{
+          ...statement,
+          thenBody: prune(statement.thenBody),
+          ...(statement.elseBody === undefined ? {} : { elseBody: prune(statement.elseBody) }),
+        }];
+      }
+      if (statement.kind === "dispatch") {
+        return [{
+          ...statement,
+          cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: prune(dispatchCase.body) })),
+          ...(statement.defaultBody === undefined ? {} : { defaultBody: prune(statement.defaultBody) }),
+        }];
+      }
+      return [statement];
+    });
+
+  for (const entry of ast.entries) entry.body = prune(entry.body);
+  for (const proc of ast.procs) proc.body = prune(proc.body);
+  return removed;
+}
+
 function compileMKProOnce(
   source: string,
   options: Partial<CompileOptions>,
@@ -502,6 +876,7 @@ function compileMKProOnce(
   if (loweringOptions.canonicalizeIfChains === true) {
     canonicalizeConstantIfChains(ast, optimizations);
   }
+  inlineDisplayStringValues(ast, optimizations);
   hoistOneShotLoopInitializers(ast, optimizations);
   inlineSingleUseConstantGuardedCalls(ast, optimizations);
   eliminateUnobservedState(ast, optimizations);
@@ -924,6 +1299,7 @@ export function matchEqualityConstantCondition(
 export function expressionIsDeterministic(expr: ExpressionAst): boolean {
   switch (expr.kind) {
     case "number":
+    case "string":
     case "identifier":
       return true;
     case "unary":
@@ -3033,7 +3409,10 @@ export class EmitContext {
       this.displayTemplateScratchRegisters(display) !== undefined ||
       this.mantissaMaskDisplayTemplate(display) !== undefined &&
       this.displayMaskScratchRegister(display) !== undefined &&
-      this.displayMaskRegister(display) !== undefined;
+      this.displayMaskRegister(display) !== undefined ||
+      this.variableLeadingMantissaMaskDisplayTemplate(display) !== undefined &&
+      this.displayMaskScratchRegister(display) !== undefined &&
+      this.variableDisplayMaskRegisters(display) !== undefined;
   }
 
   estimateDisplayByteBuilderCost(
@@ -3047,9 +3426,17 @@ export class EmitContext {
       return 39 + leaderCost;
     }
     const maskTemplate = this.mantissaMaskDisplayTemplate(display);
-    if (maskTemplate === undefined) return UNAVAILABLE_DISPLAY_STRATEGY_COST;
-    return this.estimateDecimalDisplayCost(maskTemplate.bodyFields, false) + 9 +
+    if (maskTemplate !== undefined) {
+      return this.estimateDecimalDisplayCost(maskTemplate.bodyFields, false) + 9 +
       String(maskTemplate.width - 1).length;
+    }
+    const variableTemplate = this.variableLeadingMantissaMaskDisplayTemplate(display);
+    if (variableTemplate === undefined) return UNAVAILABLE_DISPLAY_STRATEGY_COST;
+    return 4 +
+      this.estimateDecimalDisplayCost(variableTemplate.low.bodyFields, false) + 9 +
+      String(variableTemplate.low.width - 1).length +
+      this.estimateDecimalDisplayCost(variableTemplate.high.restFields, false) + 19 +
+      String(variableTemplate.high.width - 1).length;
   }
 
 
@@ -3146,6 +3533,91 @@ export class EmitContext {
     };
   }
 
+  variableLeadingMantissaMaskDisplayTemplate(
+    display: ProgramAst["displays"][number],
+  ): VariableLeadingMantissaMaskDisplayTemplate | undefined {
+    const [first, ...rest] = display.items;
+    if (first?.kind !== "source" || rest.length === 0) return undefined;
+
+    const source: DisplayField = {
+      kind: "source",
+      item: first,
+      name: first.name,
+      width: first.width ?? this.naturalDisplayWidth(first.name),
+    };
+    const state = this.findStateField(source.name);
+    if (
+      source.width !== 2 ||
+      state === undefined ||
+      (state.min ?? 0) <= 0 ||
+      (state.max ?? 0) < 10 ||
+      (state.max ?? 0) >= 100 ||
+      !this.displayFieldFitsUnsignedWidth(source)
+    ) {
+      return undefined;
+    }
+
+    const lowBodyFields: DisplayField[] = [
+      { kind: "literal", name: "#display-anchor", width: 1, value: "9" },
+    ];
+    const highRestFields: DisplayField[] = [];
+    const lowMaskCells = [8];
+    const highMaskCells = [8, 0];
+    let lowWidth = 1;
+    let highWidth = 2;
+    let hasVideoLiteral = false;
+
+    for (const item of rest) {
+      if (item.kind === "source") {
+        const field: DisplayField = {
+          kind: "source",
+          item,
+          name: item.name,
+          width: item.width ?? this.naturalDisplayWidth(item.name),
+        };
+        if (!this.displayFieldFitsUnsignedWidth(field)) return undefined;
+        lowBodyFields.push(field);
+        highRestFields.push(field);
+        for (let index = 0; index < field.width; index += 1) {
+          lowMaskCells.push(0);
+          highMaskCells.push(0);
+        }
+        lowWidth += field.width;
+        highWidth += field.width;
+        continue;
+      }
+
+      const cells = displayLiteralMantissaCells(item.text);
+      if (cells === undefined) return undefined;
+      if (cells.some((cell) => cell > 9)) hasVideoLiteral = true;
+      if (cells.length === 0) continue;
+      const field: DisplayField = { kind: "literal", name: "#display-literal-gap", width: cells.length, value: "0" };
+      lowBodyFields.push(field);
+      highRestFields.push(field);
+      lowMaskCells.push(...cells);
+      highMaskCells.push(...cells);
+      lowWidth += cells.length;
+      highWidth += cells.length;
+    }
+
+    if (!hasVideoLiteral || lowWidth < 2 || highWidth > 8) return undefined;
+    return {
+      source,
+      split: 10,
+      low: {
+        bodyFields: lowBodyFields,
+        mask: displayCellsLiteral(lowMaskCells),
+        width: lowWidth,
+      },
+      high: {
+        restFields: highRestFields,
+        mask: displayCellsLiteral(highMaskCells),
+        width: highWidth,
+      },
+    };
+  }
+
+
   displayFieldFitsUnsignedWidth(field: DisplayField): boolean {
     const state = this.findStateField(field.name);
     if (state === undefined) return false;
@@ -3191,6 +3663,14 @@ export class EmitContext {
   displayMaskRegister(display: ProgramAst["displays"][number]): RegisterName | undefined {
     const template = this.mantissaMaskDisplayTemplate(display);
     return template === undefined ? undefined : this.allocation.constants[normalizeConstantLiteral(template.mask)];
+  }
+
+  variableDisplayMaskRegisters(display: ProgramAst["displays"][number]): { low: RegisterName; high: RegisterName } | undefined {
+    const template = this.variableLeadingMantissaMaskDisplayTemplate(display);
+    if (template === undefined) return undefined;
+    const low = this.allocation.constants[normalizeConstantLiteral(template.low.mask)];
+    const high = this.allocation.constants[normalizeConstantLiteral(template.high.mask)];
+    return low === undefined || high === undefined ? undefined : { low, high };
   }
 
 
@@ -4600,6 +5080,7 @@ function liftFunctionCallsInExpressions(ast: ProgramAst, optimizations: AppliedO
   const liftExpr = (expr: ExpressionAst, prelude: StatementAst[], allowRootCall: boolean, line: number): ExpressionAst => {
     switch (expr.kind) {
       case "number":
+      case "string":
       case "identifier":
         return expr;
       case "unary":
@@ -5075,6 +5556,9 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
     }
     const mantissaMask = displayMantissaMaskTextForAst(ast, display);
     if (mantissaMask !== undefined) values.add(normalizeConstantLiteral(mantissaMask));
+    for (const mask of displayVariableLeadingMantissaMaskTextsForAst(ast, display)) {
+      values.add(normalizeConstantLiteral(mask));
+    }
     const literal = literalOnlyDisplayText(display);
     if (literal !== undefined) collectDisplayLiteralPreloadValues(literal, values);
 
@@ -5790,6 +6274,56 @@ function displayMantissaMaskTextForAst(
   }
   if (!hasVideoLiteral || width < 2 || width > 8) return undefined;
   return displayCellsLiteral(maskCells);
+}
+
+function displayVariableLeadingMantissaMaskTextsForAst(
+  ast: ProgramAst,
+  display: ProgramAst["displays"][number],
+): string[] {
+  const [first, ...rest] = display.items;
+  if (first?.kind !== "source" || rest.length === 0) return [];
+  const sourceWidth = first.width ?? naturalDisplayWidthForAst(ast, first.name);
+  const source = findStateFieldInAst(ast, first.name);
+  if (
+    sourceWidth !== 2 ||
+    source === undefined ||
+    (source.min ?? 0) <= 0 ||
+    (source.max ?? 0) < 10 ||
+    (source.max ?? 0) >= 100
+  ) {
+    return [];
+  }
+
+  const lowMaskCells = [8];
+  const highMaskCells = [8, 0];
+  let lowWidth = 1;
+  let highWidth = 2;
+  let hasVideoLiteral = false;
+
+  for (const item of rest) {
+    if (item.kind === "source") {
+      const itemWidth = item.width ?? naturalDisplayWidthForAst(ast, item.name);
+      const state = findStateFieldInAst(ast, item.name);
+      if (state === undefined || (state.min ?? 0) < 0 || (state.max ?? 0) >= 10 ** itemWidth) return [];
+      for (let index = 0; index < itemWidth; index += 1) {
+        lowMaskCells.push(0);
+        highMaskCells.push(0);
+      }
+      lowWidth += itemWidth;
+      highWidth += itemWidth;
+      continue;
+    }
+    const cells = displayLiteralMantissaCells(item.text);
+    if (cells === undefined) return [];
+    if (cells.some((cell) => cell > 9)) hasVideoLiteral = true;
+    lowMaskCells.push(...cells);
+    highMaskCells.push(...cells);
+    lowWidth += cells.length;
+    highWidth += cells.length;
+  }
+
+  if (!hasVideoLiteral || lowWidth < 2 || highWidth > 8) return [];
+  return [displayCellsLiteral(lowMaskCells), displayCellsLiteral(highMaskCells)];
 }
 
 export function programUsesDashedCoordReport(ast: ProgramAst): boolean {
@@ -6718,6 +7252,10 @@ function collectDisplayTemplateScratchVariables(ast: ProgramAst, variables: Set<
     }
     if (displayMantissaMaskTextForAst(ast, display) !== undefined) {
       variables.add(displayTemplateValueScratchName(display));
+      continue;
+    }
+    if (displayVariableLeadingMantissaMaskTextsForAst(ast, display).length > 0) {
+      variables.add(displayTemplateValueScratchName(display));
     }
   }
   for (const display of ast.displays) {
@@ -7076,6 +7614,8 @@ export function expressionToIntentText(expr: ExpressionAst): string {
   switch (expr.kind) {
     case "number":
       return expr.raw;
+    case "string":
+      return JSON.stringify(expr.text);
     case "identifier":
       return expr.name;
     case "unary":
@@ -7096,6 +7636,7 @@ function wrapExpressionText(expr: ExpressionAst, parentPrecedence: number): stri
 function expressionPrecedence(expr: ExpressionAst): number {
   switch (expr.kind) {
     case "number":
+    case "string":
     case "identifier":
     case "call":
       return 4;
@@ -7222,12 +7763,12 @@ function safeAddressToOpcode(
   diagnostics: Diagnostic[],
   options: CompileOptions,
 ): number | undefined {
-  if (options.analysis && Number.isInteger(address) && address >= 0) {
-    return address & 0xff;
-  }
   try {
     return addressToOpcode(address);
   } catch (error) {
+    if (options.analysis && Number.isInteger(address) && address >= 0) {
+      return address & 0xff;
+    }
     diagnostics.push(
       buildDiagnostic(
         "error",
@@ -9128,6 +9669,8 @@ export function expressionEquals(left: ExpressionAst, right: ExpressionAst): boo
   switch (left.kind) {
     case "number":
       return right.kind === "number" && left.raw === right.raw;
+    case "string":
+      return right.kind === "string" && left.text === right.text;
     case "identifier":
       return right.kind === "identifier" && left.name === right.name;
     case "unary":
@@ -9148,6 +9691,7 @@ export function expressionEquals(left: ExpressionAst, right: ExpressionAst): boo
 export function expressionReferencesIdentifier(expr: ExpressionAst, name: string): boolean {
   switch (expr.kind) {
     case "number":
+    case "string":
       return false;
     case "identifier":
       return expr.name === name;
@@ -9189,6 +9733,7 @@ function isRandomCall(expr: ExpressionAst): boolean {
 function expressionContainsRandom(expr: ExpressionAst): boolean {
   switch (expr.kind) {
     case "number":
+    case "string":
     case "identifier":
       return false;
     case "unary":
@@ -9207,6 +9752,7 @@ function expressionContainsRandom(expr: ExpressionAst): boolean {
 export function isPureExpression(expr: ExpressionAst): boolean {
   switch (expr.kind) {
     case "number":
+    case "string":
     case "identifier":
       return true;
     case "unary":
@@ -9419,6 +9965,7 @@ export function countIdentifierReadsInCondition(condition: ConditionAst, name: s
 function countIdentifierReads(expr: ExpressionAst, name: string): number {
   switch (expr.kind) {
     case "number":
+    case "string":
       return 0;
     case "identifier":
       return expr.name === name ? 1 : 0;
@@ -9442,6 +9989,7 @@ export function substituteConditionIdentifier(condition: ConditionAst, name: str
 function substituteExpressionIdentifier(expr: ExpressionAst, name: string, replacement: ExpressionAst): ExpressionAst {
   switch (expr.kind) {
     case "number":
+    case "string":
       return expr;
     case "identifier":
       return expr.name === name ? replacement : expr;
@@ -9461,6 +10009,7 @@ function substituteExpressionIdentifier(expr: ExpressionAst, name: string, repla
 export function expressionPureForSubstitution(expr: ExpressionAst): boolean {
   switch (expr.kind) {
     case "number":
+    case "string":
     case "identifier":
       return true;
     case "unary":
@@ -9612,6 +10161,8 @@ function estimateExpressionCostForCondition(
     return 1;
   }
   switch (expr.kind) {
+    case "string":
+      return 0;
     case "number":
       return estimateNumberCost(expr.raw);
     case "identifier":
@@ -9683,6 +10234,8 @@ function estimateNegativeZeroThresholdRawCost(
 
 export function estimateExpressionCost(expr: ExpressionAst): number {
   switch (expr.kind) {
+    case "string":
+      return 0;
     case "number":
       return estimateNumberCost(expr.raw);
     case "identifier":

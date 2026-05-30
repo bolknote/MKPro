@@ -39,7 +39,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
 // shrink these toward 105; the guard only enforces that they never grow.
 // The numbers below are the current locked ceilings, not historical deltas.
 const PENDING_BASELINE: Record<string, number> = {
-  "cave-highlevel-baseline": 128,
+  "cave-highlevel-baseline": 127,
   "cave-treasure": 149,
   "giants-country": 375,
   labyrinth777: 224,

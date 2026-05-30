@@ -101,6 +101,7 @@ class ConstantFolder {
   private foldExpression(expr: ExpressionAst): ExpressionAst {
     switch (expr.kind) {
       case "number":
+      case "string":
       case "identifier":
         return expr;
       case "unary": {
@@ -323,6 +324,8 @@ function buildSignedAddSubExpression(terms: SignedExpressionTerm[]): ExpressionA
 function linearizeExpression(expr: ExpressionAst): LinearForm | undefined {
   if (!expressionPureForFolding(expr)) return undefined;
   switch (expr.kind) {
+    case "string":
+      return undefined;
     case "number": {
       const value = parseDecimalLiteral(expr.raw);
       return value === undefined ? singleTerm(expr) : { constant: value, terms: new Map() };
@@ -426,6 +429,8 @@ function buildLinearExpression(form: LinearForm): ExpressionAst | undefined {
 // literals next to each other, which would concatenate on the MK-61.
 function expressionBeginsWithNumberEntry(expr: ExpressionAst): boolean {
   switch (expr.kind) {
+    case "string":
+      return false;
     case "number":
       return true;
     case "identifier":
@@ -524,6 +529,8 @@ function subtractExpressions(left: ExpressionAst, right: ExpressionAst): Express
 
 function expressionKey(expr: ExpressionAst): string {
   switch (expr.kind) {
+    case "string":
+      return `string:${JSON.stringify(expr.text)}`;
     case "number":
       return `number:${expr.raw.trim().toLowerCase()}`;
     case "identifier":
@@ -540,6 +547,7 @@ function expressionKey(expr: ExpressionAst): string {
 function expressionPureForFolding(expr: ExpressionAst): boolean {
   switch (expr.kind) {
     case "number":
+    case "string":
     case "identifier":
       return true;
     case "unary":
@@ -554,6 +562,7 @@ function expressionPureForFolding(expr: ExpressionAst): boolean {
 function expressionSafeToDrop(expr: ExpressionAst): boolean {
   switch (expr.kind) {
     case "number":
+    case "string":
     case "identifier":
       return true;
     case "unary":
@@ -838,6 +847,8 @@ function estimateBinaryCost(left: ExpressionAst, right: ExpressionAst): number {
 
 function estimateExpressionCost(expr: ExpressionAst): number {
   switch (expr.kind) {
+    case "string":
+      return 0;
     case "number":
       return estimateNumberCost(expr.raw);
     case "identifier":

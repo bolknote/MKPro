@@ -133,6 +133,8 @@ function valueOf(state: State, name: string): LinForm {
 // expression is not affine (calls, variable*variable, division by a variable).
 function affineForm(expr: ExpressionAst, state: State): LinForm | undefined {
   switch (expr.kind) {
+    case "string":
+      return undefined;
     case "number": {
       const value = decimalToRat(expr.raw);
       return value === undefined ? undefined : constForm(value);
@@ -252,6 +254,7 @@ function buildPredecessors(cfg: RuleCfg): number[][] {
 function expressionCost(expr: ExpressionAst): number {
   switch (expr.kind) {
     case "number":
+    case "string":
     case "identifier":
       return 1;
     case "unary":

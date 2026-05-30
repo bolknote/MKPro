@@ -277,6 +277,92 @@ program ExplicitSpaceDisplay {
     expect(runCompiledDisplay(source)).toBe("1 2,");
   });
 
+  it("renders literal separators after a variable-width leading field", () => {
+    const low = `
+program VariableLeadingSpaceLow {
+  state {
+    room: counter 1..20 = 1
+    arrows: counter 0..5 = 5
+    clue: counter 0..9 = 3
+  }
+
+  loop {
+    show(room, " ", arrows, " ", clue)
+  }
+}
+`;
+    const high = low.replace("= 1", "= 20").replace("VariableLeadingSpaceLow", "VariableLeadingSpaceHigh");
+    const result = compileOk(low);
+
+    expect(hasOptimization(result, "display-byte-variable-mask-lowering")).toBe(true);
+    expect(runCompiledDisplay(low)).toBe("1 5 3,");
+    expect(runCompiledDisplay(high)).toBe("20 5 3,");
+  });
+
+  it("inlines display string assignments into mixed show templates", () => {
+    const source = `
+program DisplayStringClue {
+  state {
+    room: counter 1..20 = 1
+    clue: counter 0..9 = 0
+  }
+
+  loop {
+    clue = "-"
+    show(room, " ", clue)
+  }
+}
+`;
+    const result = compileOk(source);
+
+    expect(hasOptimization(result, "display-string-inline")).toBe(true);
+    expect(hasOptimization(result, "display-string-assignment-elimination")).toBe(true);
+    expect(runCompiledDisplay(source)).toBe("1 -,");
+  });
+
+  it("propagates arbitrary display string aliases into show", () => {
+    const source = `
+program DisplayStringAlias {
+  state {
+    clue: counter 0..9 = 0
+    val: counter 0..9 = 0
+  }
+
+  loop {
+    clue = "L-L"
+    val = clue
+    show(val, " ", clue)
+  }
+}
+`;
+
+    expect(runCompiledDisplay(source)).toBe("L-L L-L,");
+  });
+
+  it("splits a conditional display string assignment into show branches", () => {
+    const trueBranch = `
+program ConditionalDisplayStringTrue {
+  state {
+    room: counter 1..9 = 1
+    clue: counter 0..9 = 3
+  }
+
+  loop {
+    if room >= 0 {
+      clue = "-"
+    }
+    show(room, " ", clue)
+  }
+}
+`;
+    const falseBranch = trueBranch
+      .replace("ConditionalDisplayStringTrue", "ConditionalDisplayStringFalse")
+      .replace("room >= 0", "room < 0");
+
+    expect(runCompiledDisplay(trueBranch)).toBe("1 -,");
+    expect(runCompiledDisplay(falseBranch)).toBe("1 3,");
+  });
+
   it("renders literal-separated scoreboards correctly on the emulator", () => {
     const { MK61 } = require("../emulator/mk61.cjs") as {
       MK61: new (options?: { extended?: boolean }) => {

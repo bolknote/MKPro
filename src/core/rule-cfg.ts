@@ -29,6 +29,7 @@ export interface RuleCfg {
 export function collectExprVars(expr: ExpressionAst, out: Set<string>): void {
   switch (expr.kind) {
     case "number":
+    case "string":
       return;
     case "identifier":
       out.add(expr.name);
@@ -59,6 +60,7 @@ export function exprVars(expr: ExpressionAst): string[] {
 export function exprIsCallFree(expr: ExpressionAst): boolean {
   switch (expr.kind) {
     case "number":
+    case "string":
     case "identifier":
       return true;
     case "unary":

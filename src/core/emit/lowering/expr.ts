@@ -18,6 +18,7 @@ import {
   isSimpleStackLoad,
   isSmallSetMacroName,
   isTicTacToeMacroName,
+  matchStackUnaryDerivationCall,
   matchRemainderByConstant,
   negatedNumberLiteral,
   smallSetExpressionMacro,
@@ -51,6 +52,12 @@ export function compileExpression(ctx: LoweringCtx, expr: ExpressionAst): void {
     switch (expr.kind) {
       case "number":
         ctx.emitNumberOrPreload(expr.raw);
+        return;
+      case "string":
+        ctx.diagnostics.push(buildDiagnostic(
+          "error",
+          `Display string ${JSON.stringify(expr.text)} can only be used through show(...).`,
+        ));
         return;
       case "identifier": {
         const constant = ctx.constants.get(expr.name);
@@ -284,6 +291,7 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
         });
         return;
       }
+      if (compileCommutativeCallWithCurrentX(ctx, expr, binaryCall)) return;
       compileExpression(ctx, expr.args[0]!);
       compileExpression(ctx, expr.args[1]!);
       ctx.emitOp(binaryCall[0], binaryCall[1], `${expr.callee}()`);
@@ -332,6 +340,48 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
     }
     ctx.emitOp(opcode[0], opcode[1], `${expr.callee}()`);
   }
+
+function compileCommutativeCallWithCurrentX(
+  ctx: LoweringCtx,
+  expr: Extract<ExpressionAst, { kind: "call" }>,
+  opcode: [number, string],
+): boolean {
+  const left = expr.args[0]!;
+  const right = expr.args[1]!;
+  if (isSimpleStackLoad(right) && compileCurrentXDerivation(ctx, left)) {
+    compileExpression(ctx, right);
+    ctx.emitOp(opcode[0], opcode[1], `${expr.callee}()`);
+    ctx.optimizations.push({
+      name: "stack-current-x-scheduling",
+      detail: `Reused ${expressionToIntentText(left)} already derivable from X for ${expr.callee}().`,
+    });
+    return true;
+  }
+  if (isSimpleStackLoad(left) && compileCurrentXDerivation(ctx, right)) {
+    compileExpression(ctx, left);
+    ctx.emitOp(opcode[0], opcode[1], `${expr.callee}()`);
+    ctx.optimizations.push({
+      name: "stack-current-x-scheduling",
+      detail: `Reused ${expressionToIntentText(right)} already derivable from X for ${expr.callee}().`,
+    });
+    return true;
+  }
+  return false;
+}
+
+function compileCurrentXDerivation(ctx: LoweringCtx, expr: ExpressionAst): boolean {
+  if (expr.kind === "identifier") return ctx.xHolds(expr.name);
+  if (expr.kind === "unary" && expr.op === "-") {
+    if (!compileCurrentXDerivation(ctx, expr.expr)) return false;
+    ctx.emitOp(0x0b, "/-/", "current-X unary minus");
+    return true;
+  }
+  const derived = matchStackUnaryDerivationCall(expr);
+  if (derived === undefined) return false;
+  if (!compileCurrentXDerivation(ctx, derived.arg)) return false;
+  ctx.emitOp(derived.opcode, derived.mnemonic, `current-X ${derived.fn}`);
+  return true;
+}
 
 export function compileDirectionCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kind: "call" }>): void {
     if (expr.args.length !== 1) {

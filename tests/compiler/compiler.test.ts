@@ -1654,6 +1654,39 @@ program MaskMembershipClear {
     expect(result.report.optimizations.some((item) => item.name === "cell-membership-clear-reuse")).toBe(true);
   });
 
+  it("orders commutative calls to reuse derivations of the current X", () => {
+    const result = compileOk(`
+program CurrentXCommutativeCall {
+  state {
+    pos: packed = 1.0000001
+    walls: packed = 8.1
+    blocked: packed = 0
+  }
+
+  loop {
+    blocked = pos + 0.0000001
+    if bit_and(walls, frac(blocked)) != 0 {
+      halt(1)
+    }
+    else {
+      halt(0)
+    }
+  }
+}
+`, { budget: 999, analysis: true });
+
+    const comments = result.steps.map((step) => step.comment ?? "");
+    const setBlocked = comments.indexOf("set blocked");
+    const bitAnd = comments.indexOf("bit_and()");
+    expect(comments).toContain("current-X frac");
+    expect(comments.slice(setBlocked + 1, bitAnd)).not.toContain("recall blocked");
+    expect(result.report.optimizations.some((item) =>
+      item.name === "stack-current-x-scheduling" &&
+      item.detail.includes("frac(blocked)") &&
+      item.detail.includes("bit_and")
+    )).toBe(true);
+  });
+
   it("preserves false-branch X through a unit decrement before reuse", () => {
     const result = compileOk(`
 program FalseBranchXReuse {

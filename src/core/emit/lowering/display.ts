@@ -291,7 +291,10 @@ export function compileDisplayByteBuilder(ctx: LoweringCtx,
     _reuseCurrentX: boolean,
   ): boolean {
     const template = ctx.mantissaExponentDisplayTemplate(display);
-    if (template === undefined) return compileMantissaMaskDisplay(ctx, display, line, _reuseCurrentX);
+    if (template === undefined) {
+      return compileVariableLeadingMantissaMaskDisplay(ctx, display, line) ||
+        compileMantissaMaskDisplay(ctx, display, line, _reuseCurrentX);
+    }
     const scratch = ctx.displayTemplateScratchRegisters(display);
     if (scratch === undefined) return false;
 
@@ -364,6 +367,113 @@ export function compileMantissaMaskDisplay(ctx: LoweringCtx,
       detail: `Built literal-separated screen ${display.name} through a calculator video mask.`,
     });
     return true;
+}
+
+export function compileVariableLeadingMantissaMaskDisplay(ctx: LoweringCtx,
+    display: ProgramAst["displays"][number],
+    line: number,
+  ): boolean {
+    const template = ctx.variableLeadingMantissaMaskDisplayTemplate(display);
+    const scratch = ctx.displayMaskScratchRegister(display);
+    const masks = ctx.variableDisplayMaskRegisters(display);
+    if (template === undefined || scratch === undefined || masks === undefined) return false;
+
+    const lowLabel = ctx.freshLabel("display_mask_low");
+    const endLabel = ctx.freshLabel("display_mask_end");
+    ctx.emitRecall(template.source.name, `display ${display.name} leading field`, line);
+    ctx.emitNumberOrPreload(String(template.split));
+    ctx.emitOp(0x11, "-", "display mask leading width test", line);
+    ctx.emitJump(0x59, "F x>=0", lowLabel, "display mask low branch", line);
+
+    compileVariableLeadingHighBody(ctx, display, template.high.restFields, template.source.name, template.split, scratch, line);
+    emitMantissaMaskBodyMerge(ctx, display.name, masks.high, scratch, line);
+    emitVariableLeadingHighLeader(ctx, template.source.name, template.split, line);
+    emitMantissaMaskLeaderSplice(ctx, display.name, scratch, template.high.width, line, "display mask high");
+    ctx.emitJump(0x51, "БП", endLabel, "display mask end", line);
+
+    ctx.emitLabel(lowLabel);
+    compilePackedDisplayFields(ctx, display, template.low.bodyFields, line, false);
+    emitMantissaMaskBodyMerge(ctx, display.name, masks.low, scratch, line);
+    ctx.emitRecall(template.source.name, `display ${display.name} leader`, line);
+    emitMantissaMaskLeaderSplice(ctx, display.name, scratch, template.low.width, line, "display mask");
+    ctx.emitLabel(endLabel);
+    ctx.optimizations.push({
+      name: "display-byte-variable-mask-lowering",
+      detail: `Built variable-width literal-separated screen ${display.name} through calculator video masks.`,
+    });
+    return true;
+}
+
+function compileVariableLeadingHighBody(ctx: LoweringCtx,
+    display: ProgramAst["displays"][number],
+    restFields: DisplayField[],
+    source: string,
+    split: number,
+    scratch: RegisterName,
+    line: number,
+  ): void {
+    emitVariableLeadingTailDigit(ctx, source, split, line);
+    ctx.emitOp(0x40 + registerIndex(scratch), `X->П ${scratch}`, `display ${display.name} trailing digit`, line, true);
+
+    ctx.emitNumberOrPreload("9");
+    let last = ctx.items.at(-1);
+    if (last?.kind === "op") last.comment = `display ${display.name} numeric anchor`;
+
+    ctx.emitNumberOrPreload(String(split));
+    ctx.emitOp(0x12, "*", "packed display field shift", line);
+    ctx.emitOp(0x60 + registerIndex(scratch), `П->X ${scratch}`, `display ${display.name} trailing digit`, line);
+    ctx.emitOp(0x10, "+", "packed display field append", line);
+
+    for (const field of restFields) {
+      ctx.emitNumberOrPreload(String(10 ** field.width));
+      ctx.emitOp(0x12, "*", "packed display field shift", line);
+      if (field.kind === "source" || field.value !== "0") {
+        emitDisplayFieldValue(ctx, display, field, line);
+        ctx.emitOp(0x10, "+", "packed display field append", line);
+      }
+    }
+}
+
+function emitVariableLeadingTailDigit(ctx: LoweringCtx, source: string, split: number, line: number): void {
+    ctx.emitRecall(source, "display mask trailing digit", line);
+    ctx.emitNumberOrPreload(String(split));
+    ctx.emitOp(0x13, "/", "display mask trailing digit quotient", line);
+    ctx.emitOp(0x35, "К {x}", "display mask trailing digit fraction", line);
+    ctx.emitNumberOrPreload(String(split));
+    ctx.emitOp(0x12, "*", "display mask trailing digit", line);
+}
+
+function emitVariableLeadingHighLeader(ctx: LoweringCtx, source: string, split: number, line: number): void {
+    ctx.emitRecall(source, "display mask high leader", line);
+    ctx.emitNumberOrPreload(String(split));
+    ctx.emitOp(0x13, "/", "display mask high leader quotient", line);
+    ctx.emitOp(0x34, "К [x]", "display mask high leader", line);
+}
+
+function emitMantissaMaskBodyMerge(ctx: LoweringCtx,
+    displayName: string,
+    maskRegister: RegisterName,
+    scratch: RegisterName,
+    line: number,
+  ): void {
+    ctx.emitOp(0x60 + registerIndex(maskRegister), `П->X ${maskRegister}`, `display ${displayName} literal mask`, line);
+    ctx.emitOp(0x38, "К ∨", "display mask body merge", line);
+    ctx.emitOp(0x40 + registerIndex(scratch), `X->П ${scratch}`, `display ${displayName} body`, line, true);
+}
+
+function emitMantissaMaskLeaderSplice(ctx: LoweringCtx,
+    displayName: string,
+    scratch: RegisterName,
+    width: number,
+    line: number,
+    comment: string,
+  ): void {
+    ctx.emitOp(0x60 + registerIndex(scratch), `П->X ${scratch}`, `display ${displayName} body`, line);
+    ctx.emitOp(0x14, "<->", `${comment} leader merge`, line);
+    ctx.emitOp(0x54, "К НОП", `${comment} leader preserve`, line, true);
+    ctx.emitOp(0x0c, "ВП", `${comment} leader restore`, line);
+    emitDisplayExponent(ctx, width - 1, line, `${comment} exponent`);
+    ctx.emitOp(0x50, "С/П", `show ${displayName}`, line);
 }
 
 export function emitDisplayLiteralProgram(ctx: LoweringCtx, 
