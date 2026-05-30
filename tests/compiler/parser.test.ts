@@ -674,6 +674,52 @@ program Demo {
     expect(JSON.stringify(ast.entries[0]?.body)).toContain("coord_list_line_count");
   });
 
+  it("lowers coord_list random() to independent random_cell coordinates", () => {
+    const ast = parseProgram(`
+program Demo {
+  field: board(0..9, 0..9)
+  state {
+    spots: coord_list(field, 2) = random()
+  }
+  loop {
+    halt(0)
+  }
+}
+`);
+
+    const initials = ast.states[0]?.fields
+      .filter((field) => field.name.startsWith("__coord_list_spots_"))
+      .map((field) => JSON.stringify(field.initial));
+    expect(initials).toHaveLength(2);
+    for (const initial of initials ?? []) {
+      expect(initial).toContain('"random"');
+      expect(initial).not.toContain("__random_coord_list_item");
+    }
+  });
+
+  it("lowers coord_list random(min, max) to independent random range coordinates", () => {
+    const ast = parseProgram(`
+program Demo {
+  field: board(0..9, 0..9)
+  state {
+    spots: coord_list(field, 2) = int(random(0, 100))
+  }
+  loop {
+    halt(0)
+  }
+}
+`);
+
+    const initials = ast.states[0]?.fields
+      .filter((field) => field.name.startsWith("__coord_list_spots_"))
+      .map((field) => JSON.stringify(field.initial));
+    expect(initials).toHaveLength(2);
+    for (const initial of initials ?? []) {
+      expect(initial).toContain('"random"');
+      expect(initial).not.toContain("__random_coord_list_item");
+    }
+  });
+
   it("parses and lowers move() expressions and named terminal functions", () => {
     const ast = parseProgram(`
 program Demo {

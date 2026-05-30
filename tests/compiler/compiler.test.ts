@@ -593,6 +593,67 @@ program RandomRangeArity {
     ).toThrow(/random\(\) expects zero or two arguments, got 1/u);
   });
 
+  it("lowers coord_list random() through independent random_cell setup draws", () => {
+    const result = compileOk(`
+program CoordListRandom {
+  field: board(0..9, 0..9)
+  state {
+    cell: coord(field) = 11
+    spots: coord_list(field, 3) = random()
+    bearing: counter 0..9 = 0
+  }
+  loop {
+    bearing = line_count(spots, cell)
+    halt(bearing)
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "setup-coord-list-indirect-random-unique")).toBe(false);
+    expect(result.report.setupProgram?.steps.filter((step) => step.hex === "3B").length ?? 0).toBeGreaterThanOrEqual(3);
+  });
+
+  it("lowers coord_list random_unique() through compact unique setup", () => {
+    const result = compileOk(`
+program CoordListRandomUnique {
+  field: board(0..9, 0..9)
+  state {
+    cell: coord(field) = 11
+    foxes: coord_list(field, 3) = random_unique()
+    bearing: counter 0..9 = 0
+  }
+  loop {
+    bearing = line_count(foxes, cell)
+    halt(bearing)
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name.includes("coord-list-indirect-random-unique"))).toBe(true);
+    expect(result.report.setupProgram?.steps.some((step) => step.comment?.includes("random coord collision"))).toBe(true);
+  });
+
+  it("lowers coord_list random(min, max) through independent range setup draws", () => {
+    const result = compileOk(`
+program CoordListRandomRange {
+  field: board(0..9, 0..9)
+  state {
+    cell: coord(field) = 11
+    spots: coord_list(field, 3) = int(random(0, 100))
+    bearing: counter 0..9 = 0
+  }
+  loop {
+    bearing = line_count(spots, cell)
+    halt(bearing)
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name.includes("coord-list-indirect-random-unique"))).toBe(false);
+    expect(result.report.optimizations.some((item) => item.name === "setup-random-range-lowering")).toBe(true);
+    expect(result.report.setupProgram?.steps.filter((step) => step.hex === "3B").length ?? 0).toBeGreaterThanOrEqual(3);
+  });
+
   it("lowers mask, cell, and packed digit helpers from V2 formulas", () => {
     const result = compileOk(`
 program FormulaHelpers {

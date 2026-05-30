@@ -1608,13 +1608,18 @@ function lowerV2CoordListState(field: V2StateFieldAst, context: V2LoweringContex
   const list = context.coordLists.get(field.name);
   if (list === undefined) throw new ParseError(`Unknown coord_list '${field.name}'`, field.line);
   const initial = field.initial?.trim() ?? "0";
-  const randomUnique = initial === "random_unique()" || initial === "random()";
-  if (!randomUnique && initial !== "0") {
-    throw new ParseError("coord_list initial value must be random_unique() or 0", field.line);
+  const randomRange = coordListRandomRangeInitialExpression(initial, field.line);
+  if (
+    initial !== "random()" &&
+    initial !== "random_unique()" &&
+    initial !== "0" &&
+    randomRange === undefined
+  ) {
+    throw new ParseError("coord_list initial value must be random(), random(min, max), random_unique(), or 0", field.line);
   }
   const board = context.boards.get(list.domain);
-  if (randomUnique && board === undefined) {
-    throw new ParseError("coord_list random_unique() currently needs a board domain", field.line);
+  if ((initial === "random()" || initial === "random_unique()") && board === undefined) {
+    throw new ParseError(`coord_list ${initial} currently needs a board domain`, field.line);
   }
   return list.items.map((name, index) => {
     const lowered: StateFieldAst = {
@@ -1622,8 +1627,12 @@ function lowerV2CoordListState(field: V2StateFieldAst, context: V2LoweringContex
       type: "packed",
       line: field.line,
     };
-    if (randomUnique) {
+    if (initial === "random_unique()") {
       lowered.initial = coordListRandomItemExpression(board!, list.count, index);
+    } else if (initial === "random()") {
+      lowered.initial = lowerV2Expression(randomCellExpression(list.domain, context), field.line, context);
+    } else if (randomRange !== undefined) {
+      lowered.initial = randomRange;
     }
     return lowered;
   });
@@ -1698,6 +1707,30 @@ function coordListRandomItemExpression(board: V2BoardAst, count: number, index: 
       numberLiteral(index),
     ],
   };
+}
+
+function coordListRandomRangeInitialExpression(initial: string, line: number): ExpressionAst | undefined {
+  const trimmed = initial.trim();
+  if (trimmed === "random()" || trimmed === "random_unique()") return undefined;
+  if (!/\brandom\s*\(/u.test(trimmed)) return undefined;
+  const expr = lowerV2Expression(trimmed, line);
+  if (isRandomRangeExpression(expr)) return expr;
+  if (
+    expr.kind === "call" &&
+    expr.callee.toLowerCase() === "int" &&
+    expr.args.length === 1 &&
+    isRandomRangeExpression(expr.args[0]!)
+  ) {
+    return expr;
+  }
+  if (expr.kind === "call" && expr.callee.toLowerCase() === "random") {
+    throw new ParseError(`random() expects zero or two arguments, got ${expr.args.length}.`, line);
+  }
+  throw new ParseError("coord_list random range initial must look like random(min, max)", line);
+}
+
+function isRandomRangeExpression(expr: ExpressionAst): boolean {
+  return expr.kind === "call" && expr.callee.toLowerCase() === "random" && expr.args.length === 2;
 }
 
 function lowerV2StateFieldType(type: V2StateFieldAst["type"]): StateFieldType {
