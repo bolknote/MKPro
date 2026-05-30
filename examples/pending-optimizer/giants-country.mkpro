@@ -34,88 +34,89 @@ program GiantsCountry {
   }
 
   screen cave {
-    show "8.Е6-ЕГ C"
+    show("8.Е6-ЕГ C")
   }
 
   screen warning {
-    show warning_pattern
+    show(warning_pattern)
   }
 
   screen memory {
-    show challenge
+    show(challenge)
   }
 
-  rule exhausted {
-    stop "ЕГГОГ"
+  fn exhausted() {
+    show("ЕГГОГ")
+    halt()
   }
 
   turn {
-    show cave
-    read action
+    show(cave)
+    action = read()
 
     match action {
-      0 => jump_floor
-      otherwise => advance
+      0 => jump_floor()
+      otherwise => advance()
     }
   }
 
-  rule advance {
+  fn advance() {
     // Advancing spends strength before the room is understood, which makes even
     // empty rooms part of the attrition game.
     strength--
     tile = cell_at(pos)
 
     if tile == 8 {
-      hit_wall
+      hit_wall()
     }
     else {
       if pos in plans {
-        encounter tile
+        encounter(tile)
       }
       else {
-        show cave
+        show(cave)
       }
       pos++
     }
 
     if strength <= 0 {
-      exhausted
+      exhausted()
     }
   }
 
-  rule jump_floor {
+  fn jump_floor() {
     match floor {
-      1 => jump_to 2
-      2 => jump_to 3
-      3 => jump_to 1
-      otherwise => show cave
+      1 => jump_to(2)
+      2 => jump_to(3)
+      3 => jump_to(1)
+      otherwise => show(cave)
     }
     if strength <= 0 {
-      exhausted
+      exhausted()
     }
   }
 
-  rule jump_to f {
+  fn jump_to(f) {
     floor = f
     strength -= f
   }
 
-  rule hit_wall {
+  fn hit_wall() {
     strength -= 7
-    show cave
+    show(cave)
   }
 
   encounters tile {
     // Encounters all share the same shape: remember a challenge, then convert
     // success into score or mobility and failure into strength loss.
     0 {
-      show cave
+      show(cave)
     }
 
     1 {
       challenge tile as challenge using warning, memory, answer {
         success {
-          reward_ladder
+          reward_ladder()
         }
         failure {
           strength--
@@ -213,29 +214,29 @@ program GiantsCountry {
     }
   }
 
-  rule reward_ladder {
+  fn reward_ladder() {
     // Ladders are rewards, not free movement commands. Their benefit depends on
     // which floor the player earned them on.
     match floor {
-      1 => ladder_floor_1
-      2 => ladder_floor_2
-      3 => ladder_floor_3
-      otherwise => show cave
+      1 => ladder_floor_1()
+      2 => ladder_floor_2()
+      3 => ladder_floor_3()
+      otherwise => show(cave)
     }
     plans -= pos
   }
 
-  rule ladder_floor_1 {
+  fn ladder_floor_1() {
     strength += 2
     floor = 2
   }
 
-  rule ladder_floor_2 {
+  fn ladder_floor_2() {
     strength += 3
     floor = 3
   }
 
-  rule ladder_floor_3 {
+  fn ladder_floor_3() {
     strength++
     floor = 1
   }

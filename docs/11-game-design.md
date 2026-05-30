@@ -102,8 +102,8 @@ Even without copying Danilov's exact listing, the pattern is reusable:
 ```text
 init positions and RNG
 loop:
-  show state (С/П)
-  read player choice
+  display state (С/П)
+  accept player choice
   update risk from choice + random draw
   maybe crash
   advance progress

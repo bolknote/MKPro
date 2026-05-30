@@ -54,12 +54,12 @@ program ReadyPackedDisplayPrefix {
     suffix: counter 0..99 = 0
   }
   screen view {
-    show prefix, suffix:02
+    show(prefix, suffix:02)
   }
   turn {
     prefix = int(raw / 100) * 100
     suffix = raw - prefix
-    show view
+    show(view)
   }
 }
 `);
@@ -76,11 +76,11 @@ program CurrentXFirstDisplayField {
     b: counter 0..99 = 23
   }
   screen view {
-    show a, b
+    show(a, b)
   }
   turn {
     a = 7
-    show view
+    show(view)
   }
 }
 `);
@@ -98,11 +98,11 @@ program CurrentXLastDisplayField {
     c: counter 0..9 = 3
   }
   screen view {
-    show a, b, c
+    show(a, b, c)
   }
   turn {
     c = 7
-    show view
+    show(view)
   }
 }
 `;
@@ -123,11 +123,11 @@ program CurrentXMiddleDisplayField {
     c: counter 0..9 = 3
   }
   screen view {
-    show a, b, c
+    show(a, b, c)
   }
   turn {
     b = 7
-    show view
+    show(view)
   }
 }
 `;
@@ -147,14 +147,14 @@ program DecimalLiteralFields {
     b: counter 0..9 = 2
   }
   screen short {
-    show a, 0, b
+    show(a, 0, b)
   }
   screen long {
-    show a, 012, b
+    show(a, 012, b)
   }
   turn {
-    show short
-    show long
+    show(short)
+    show(long)
   }
 }
 `;
@@ -168,10 +168,10 @@ program ShortDecimalLiteralField {
     b: counter 0..9 = 2
   }
   screen short {
-    show a, 0, b
+    show(a, 0, b)
   }
   turn {
-    show short
+    show(short)
   }
 }
 `)).toBe("102,");
@@ -182,10 +182,10 @@ program LongDecimalLiteralField {
     b: counter 0..9 = 2
   }
   screen long {
-    show a, 012, b
+    show(a, 012, b)
   }
   turn {
-    show long
+    show(long)
   }
 }
 `)).toBe("10122,");
@@ -196,10 +196,10 @@ program BareDecimalLiteralFields {
     b: counter 0..9 = 3
   }
   screen view {
-    show 123, a, b, 1
+    show(123, a, b, 1)
   }
   turn {
-    show view
+    show(view)
   }
 }
 `)).toBe("123231,");
@@ -214,10 +214,10 @@ program PreloadedDisplayScales {
     c: counter 0..999 = 456
   }
   screen view {
-    show a, b, c
+    show(a, b, c)
   }
   turn {
-    show view
+    show(view)
   }
 }
 `);
@@ -237,14 +237,14 @@ program RepeatedShowBody {
     c: counter 0..999 = 456
   }
   screen view {
-    show a, b, c
+    show(a, b, c)
   }
   turn {
     match selector {
-      1 => show view
-      2 => show view
-      3 => show view
-      otherwise => stop 0
+      1 => show(view)
+      2 => show(view)
+      3 => show(view)
+      otherwise => halt(0)
     }
   }
 }
@@ -264,10 +264,10 @@ program LiteralSeparatedScoreboard {
     roll: counter 0..99 = 0
   }
   screen status {
-    show die, ".-", score:02, "-", total:03, "-", roll:02
+    show(die, ".-", score:02, "-", total:03, "-", roll:02)
   }
   turn {
-    show status
+    show(status)
   }
 }
 `);
@@ -284,10 +284,10 @@ program ExplicitSpaceDisplay {
     b: counter 0..9 = 2
   }
   screen view {
-    show a, " ", b
+    show(a, " ", b)
   }
   turn {
-    show view
+    show(view)
   }
 }
 `;
@@ -316,10 +316,10 @@ program LiteralSeparatedScoreboardRun {
     roll: counter 0..99 = 0
   }
   screen status {
-    show die, ".-", score:02, "-", total:03, "-", roll:02
+    show(die, ".-", score:02, "-", total:03, "-", roll:02)
   }
   turn {
-    show status
+    show(status)
   }
 }
 `);
@@ -358,12 +358,12 @@ program DashedCoordReportRun {
   }
 
   screen report {
-    show "--", cell:02, "--", bearing
+    show("--", cell:02, "--", bearing)
   }
 
   turn {
     bearing = line_count(foxes, cell)
-    show report
+    show(report)
   }
 }
 `);
@@ -395,20 +395,20 @@ program FusedFoxScan {
   }
 
   screen hit {
-    show "-20"
+    show("-20")
   }
 
   screen report {
-    show "--", cell:02, "--", bearing
+    show("--", cell:02, "--", bearing)
   }
 
   turn {
-    read cell
+    cell = read()
     if cell in foxes {
-      show hit
+      show(hit)
     }
     bearing = line_count(foxes, cell)
-    show report
+    show(report)
   }
 }
 `);
@@ -441,10 +441,10 @@ program NonZeroCounterScoreboardRun {
     roll: counter 1..99 = 2
   }
   screen status {
-    show die, ".-", score:02, "-", total:03, "-", roll:02
+    show(die, ".-", score:02, "-", total:03, "-", roll:02)
   }
   turn {
-    show status
+    show(status)
   }
 }
 `);
@@ -470,13 +470,13 @@ program RepeatedLiteralSeparatedScoreboard {
     roll: counter 0..99 = 0
   }
   screen status {
-    show die, ".-", score:02, "-", total:03, "-", roll:02
+    show(die, ".-", score:02, "-", total:03, "-", roll:02)
   }
   turn {
     match selector {
-      1 => show status
-      2 => show status
-      otherwise => stop 0
+      1 => show(status)
+      2 => show(status)
+      otherwise => halt(0)
     }
   }
 }
@@ -499,10 +499,10 @@ program DisplayStrategySelection {
     b: counter 0..99 = 23
   }
   screen view {
-    show a, b
+    show(a, b)
   }
   turn {
-    show view
+    show(view)
   }
 }
 `);
@@ -522,10 +522,10 @@ program DisplayStrategySelection {
     const result = compileOk(`
 program LiteralVideoScreen {
   screen cave {
-    show "8.E6-EГ C"
+    show("8.E6-EГ C")
   }
   turn {
-    show cave
+    show(cave)
   }
 }
 `);
@@ -539,17 +539,17 @@ program LiteralVideoScreen {
     const result = compileOk(`
 program EmptyLiteralScreen {
   screen explicit {
-    show ""
+    show("")
   }
   screen bare {
-    show
+    show()
   }
   screen implicit {
   }
   turn {
-    show explicit
-    show bare
-    show implicit
+    show(explicit)
+    show(bare)
+    show(implicit)
   }
 }
 `);
@@ -560,20 +560,20 @@ program EmptyLiteralScreen {
     expect(runCompiledDisplay(`
 program EmptyLiteralScreenRun {
   screen blank {
-    show ""
+    show("")
   }
   turn {
-    show blank
+    show(blank)
   }
 }
 `)).toBe("0,");
     expect(runCompiledDisplay(`
 program BareEmptyScreenRun {
   screen blank {
-    show
+    show()
   }
   turn {
-    show blank
+    show(blank)
   }
 }
 `)).toBe("0,");
@@ -583,14 +583,14 @@ program BareEmptyScreenRun {
     const source = `
 program LiteralErrorScreen {
   screen mine {
-    show "ЕГГОГ"
+    show("ЕГГОГ")
   }
   screen next {
-    show "1"
+    show("1")
   }
   turn {
-    show mine
-    show next
+    show(mine)
+    show(next)
   }
 }
 `;
@@ -625,10 +625,10 @@ program LiteralErrorScreen {
     const source = `
 program ZeroDigitTailScreen {
   screen tail {
-    show "2Е"
+    show("2Е")
   }
   turn {
-    show tail
+    show(tail)
   }
 }
 `;
@@ -642,18 +642,18 @@ program ZeroDigitTailScreen {
     const source = `
 program LiteralAlphabetScreen {
   screen dash {
-    show "---"
+    show("---")
   }
   screen mixed {
-    show "Е-LСГ90"
+    show("Е-LСГ90")
   }
   screen eight {
-    show "8-LСГ90"
+    show("8-LСГ90")
   }
   turn {
-    show dash
-    show mixed
-    show eight
+    show(dash)
+    show(mixed)
+    show(eight)
   }
 }
 `;
@@ -669,40 +669,40 @@ program LiteralAlphabetScreen {
     expect(runCompiledDisplay(`
 program LiteralDashScreen {
   screen dash {
-    show "---"
+    show("---")
   }
   turn {
-    show dash
+    show(dash)
   }
 }
 `)).toBe("---,");
     expect(runCompiledDisplay(`
 program LiteralMixedScreen {
   screen mixed {
-    show "Е-LСГ90"
+    show("Е-LСГ90")
   }
   turn {
-    show mixed
+    show(mixed)
   }
 }
 `)).toBe("Е-LСГ90,");
     expect(runCompiledDisplay(`
 program LiteralLeadingMinusScreen {
   screen mixed {
-    show "-LСГ90"
+    show("-LСГ90")
   }
   turn {
-    show mixed
+    show(mixed)
   }
 }
 `)).toBe("-LСГ90,");
     expect(runCompiledDisplay(`
 program LiteralEightScreen {
   screen mixed {
-    show "8-LСГ90"
+    show("8-LСГ90")
   }
   turn {
-    show mixed
+    show(mixed)
   }
 }
 `)).toBe("8-LСГ90,");
@@ -712,18 +712,18 @@ program LiteralEightScreen {
     const source = `
 program GameStyleTextScreens {
   screen warning {
-    show "700-----8"
+    show("700-----8")
   }
   screen loading {
-    show "-9.С L -03"
+    show("-9.С L -03")
   }
   screen word {
-    show "-CЛOBO-"
+    show("-CЛOBO-")
   }
   turn {
-    show warning
-    show loading
-    show word
+    show(warning)
+    show(loading)
+    show(word)
   }
 }
 `;
@@ -734,30 +734,30 @@ program GameStyleTextScreens {
     expect(runCompiledDisplay(`
 program WarningTextScreen {
   screen warning {
-    show "700-----8"
+    show("700-----8")
   }
   turn {
-    show warning
+    show(warning)
   }
 }
 `)).toBe("7,00----- 08");
     expect(runCompiledDisplay(`
 program SignedCaveTextScreen {
   screen loading {
-    show "-9.С L -03"
+    show("-9.С L -03")
   }
   turn {
-    show loading
+    show(loading)
   }
 }
 `)).toBe("-9,С L -03");
     expect(runCompiledDisplay(`
 program CyrillicWordTextScreen {
   screen word {
-    show "-CЛOBO-"
+    show("-CЛOBO-")
   }
   turn {
-    show word
+    show(word)
   }
 }
 `)).toBe("-СL0L0-,");
@@ -767,10 +767,10 @@ program CyrillicWordTextScreen {
     const source = `
 program SignDigitLiteralScreen {
   screen cave {
-    show "3Е0000021"
+    show("3Е0000021")
   }
   turn {
-    show cave
+    show(cave)
   }
 }
 `;
@@ -792,7 +792,8 @@ program SignDigitLiteralScreen {
     const result = compileMKPro(`
 program LiteralErrorStop {
   turn {
-    stop "ЕГГОГ"
+    show("ЕГГОГ")
+    halt()
   }
 }
 `);
@@ -811,10 +812,10 @@ program LiteralErrorStop {
     const result = compileOk(`
 program SignedLiteralVideoScreen {
   screen win {
-    show "-8CEC6-L-"
+    show("-8CEC6-L-")
   }
   turn {
-    show win
+    show(win)
   }
 }
 `);

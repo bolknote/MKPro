@@ -46,13 +46,13 @@ program Double {
   state {
     result: counter 0..99 = 0
   }
-  rule double n {
+  fn double(n) {
     return n + n
   }
   turn {
-    read x
+    x = read()
     result = double(x)
-    stop result
+    halt(result)
   }
 }
 `;
@@ -66,16 +66,16 @@ program Nested {
   state {
     result: counter 0..99 = 0
   }
-  rule inc n {
+  fn inc(n) {
     return n + 1
   }
-  rule dbl n {
+  fn dbl(n) {
     return n + n
   }
   turn {
-    read x
+    x = read()
     result = dbl(inc(x))
-    stop result
+    halt(result)
   }
 }
 `;
@@ -89,13 +89,13 @@ program Mixed {
   state {
     result: counter 0..99 = 0
   }
-  rule triple n {
+  fn triple(n) {
     return n + n + n
   }
   turn {
-    read x
+    x = read()
     result = 1 + triple(x)
-    stop result
+    halt(result)
   }
 }
 `;
@@ -109,7 +109,7 @@ program Sign {
   state {
     result: counter 0..99 = 0
   }
-  rule sign n {
+  fn sign(n) {
     if n < 1 {
       return 0
     }
@@ -118,9 +118,9 @@ program Sign {
     }
   }
   turn {
-    read x
+    x = read()
     result = sign(x)
-    stop result
+    halt(result)
   }
 }
 `;

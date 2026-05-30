@@ -20,86 +20,87 @@ program Teleport {
   }
 
   screen station_view {
-    show pos, danger, charges, loot
+    show(pos, danger, charges, loot)
   }
 
-  rule caught {
-    stop "ЕГГОГ"
+  fn caught() {
+    show("ЕГГОГ")
+    halt()
   }
 
   turn {
-    show station_view
-    read command
+    show(station_view)
+    command = read()
     charges--
 
     match command {
-      2, 4, 6, 8 => try_move direction(command)
-      5 => climb
-      -5 => drop
-      0 => teleport_to_vault
-      otherwise => wait
+      2, 4, 6, 8 => try_move(direction(command))
+      5 => climb()
+      -5 => drop()
+      0 => teleport_to_vault()
+      otherwise => wait()
     }
   }
 
-  rule wait {
-    resolve_room
+  fn wait() {
+    resolve_room()
   }
 
-  rule climb {
+  fn climb() {
     next = pos + 1
-    try_enter_next
+    try_enter_next()
   }
 
-  rule drop {
+  fn drop() {
     next = pos - 1
-    try_enter_next
+    try_enter_next()
   }
 
-  rule try_move dir {
+  fn try_move(dir) {
     next = pos + dir
-    try_enter_next
+    try_enter_next()
   }
 
-  rule try_enter_next {
+  fn try_enter_next() {
     pos = next
-    resolve_room
+    resolve_room()
   }
 
-  rule resolve_room {
+  fn resolve_room() {
     if pos in guards {
-      caught
+      caught()
     }
     else {
       danger = neighbor_count(guards, pos)
       if pos in vaults {
-        enter_vault
+        enter_vault()
       }
       else {
-        show station_view
+        show(station_view)
       }
     }
   }
 
-  rule enter_vault {
+  fn enter_vault() {
     if pos in visited_vaults {
-      show station_view
+      show(station_view)
     }
     else {
       visited_vaults += pos
       charges += 10
       loot += 10
-      show station_view
+      show(station_view)
     }
   }
 
-  rule teleport_to_vault {
+  fn teleport_to_vault() {
     if charges >= 10 {
       charges -= 10
       pos = random_cell(station)
-      resolve_room
+      resolve_room()
     }
     else {
-      caught
+      caught()
     }
   }
 }

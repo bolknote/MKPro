@@ -19,70 +19,70 @@ program RajaYoga {
   }
 
   screen path {
-    show stage, adept, goal, old_age
+    show(stage, adept, goal, old_age)
   }
 
-  rule attained {
-    stop 888
+  fn attained() {
+    halt(888)
   }
 
-  rule failed {
-    stop -999
+  fn failed() {
+    halt(-999)
   }
 
   turn {
-    await_effort
+    await_effort()
   }
 
-  rule await_effort {
-    show path
-    read effort
+  fn await_effort() {
+    show(path)
+    effort = read()
     steps++
 
     if steps >= 99 {
-      failed
+      failed()
     }
     else {
       if abs(effort) > 3 {
-        await_effort
+        await_effort()
       }
       else {
-        walk
+        walk()
       }
     }
   }
 
-  rule walk {
+  fn walk() {
     adept += effort
     old_age++
     obstacles += random_cell(life)
 
     if adept in obstacles {
-      failed
+      failed()
     }
     else {
       if old_age > 7 {
-        failed
+        failed()
       }
       else {
-        pursue_goal
+        pursue_goal()
       }
     }
   }
 
-  rule pursue_goal {
+  fn pursue_goal() {
     if adept == goal {
       stage++
       if stage > 8 {
-        attained
+        attained()
       }
       else {
         goal = random_cell(life)
-        await_effort
+        await_effort()
       }
     }
     else {
-      await_effort
+      await_effort()
     }
   }
 }

@@ -7,19 +7,19 @@ function compileOk(source: string, options: Partial<CompileOptions> = { budget: 
 }
 
 describe("rule functions (return)", () => {
-  it("lowers a value-returning rule called in an assignment to ПП/В/О with the result in X", () => {
+  it("lowers a value-returning function called in an assignment to ПП/В/О with the result in X", () => {
     const result = compileOk(`
 program FunctionDemo {
   state {
     result: counter 0..99 = 0
   }
-  rule double n {
+  fn double(n) {
     return n + n
   }
   turn {
-    read x
+    x = read()
     result = double(x)
-    stop result
+    halt(result)
   }
 }
 `);
@@ -27,7 +27,7 @@ program FunctionDemo {
     expect(hex).toContain("53"); // ПП (subroutine call)
     expect(hex).toContain("52"); // В/О (return)
     // The function call sets the argument register, calls, and the result is
-    // consumed straight from X by the following stop.
+    // consumed straight from X by the following halt.
     expect(result.report.optimizations.some((opt) => opt.name === "function-call")).toBe(true);
   });
 
@@ -37,16 +37,16 @@ program Nested {
   state {
     result: counter 0..99 = 0
   }
-  rule inc n {
+  fn inc(n) {
     return n + 1
   }
-  rule dbl n {
+  fn dbl(n) {
     return n + n
   }
   turn {
-    read x
+    x = read()
     result = dbl(inc(x))
-    stop result
+    halt(result)
   }
 }
 `);
@@ -62,7 +62,7 @@ program Sign {
   state {
     result: counter 0..99 = 0
   }
-  rule sign n {
+  fn sign(n) {
     if n < 0 {
       return 0
     }
@@ -71,16 +71,16 @@ program Sign {
     }
   }
   turn {
-    read x
+    x = read()
     result = sign(x)
-    stop result
+    halt(result)
   }
 }
 `);
     expect(result.steps.map((step) => step.hex)).toContain("52");
   });
 
-  it("rejects a return outside of a rule", () => {
+  it("rejects a return outside of a function", () => {
     expect(() =>
       compileMKPro(`
 program BadReturn {
@@ -89,7 +89,7 @@ program BadReturn {
   }
 }
 `)
-    ).toThrow(/'return' is only allowed inside a rule/u);
+    ).toThrow(/'return' is only allowed inside a function/u);
   });
 
   it("rejects a function that does not return on every path", () => {
@@ -99,15 +99,15 @@ program PartialReturn {
   state {
     result: counter 0..99 = 0
   }
-  rule maybe n {
+  fn maybe(n) {
     if n < 0 {
       return 0
     }
   }
   turn {
-    read x
+    x = read()
     result = maybe(x)
-    stop result
+    halt(result)
   }
 }
 `)
@@ -121,13 +121,13 @@ program Recursive {
   state {
     result: counter 0..99 = 0
   }
-  rule loopy n {
+  fn loopy(n) {
     return loopy(n)
   }
   turn {
-    read x
+    x = read()
     result = loopy(x)
-    stop result
+    halt(result)
   }
 }
 `)
@@ -141,16 +141,16 @@ program Mutual {
   state {
     result: counter 0..99 = 0
   }
-  rule ping n {
+  fn ping(n) {
     return pong(n)
   }
-  rule pong n {
+  fn pong(n) {
     return ping(n)
   }
   turn {
-    read x
+    x = read()
     result = ping(x)
-    stop result
+    halt(result)
   }
 }
 `)
@@ -164,13 +164,13 @@ program EmptyReturn {
   state {
     result: counter 0..99 = 0
   }
-  rule nothing n {
+  fn nothing(n) {
     return
   }
   turn {
-    read x
+    x = read()
     result = nothing(x)
-    stop result
+    halt(result)
   }
 }
 `)

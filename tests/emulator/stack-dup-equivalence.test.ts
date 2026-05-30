@@ -19,10 +19,10 @@ const SOURCE = `program SquareSum {
   }
 
   turn {
-    read x
-    read y
+    x = read()
+    y = read()
     result = (x + y) * (x + y)
-    stop result
+    halt(result)
   }
 }
 `;

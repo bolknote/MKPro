@@ -1,4 +1,4 @@
-// A toy "dial" game used to show counter exhaustion and terminal rules in a
+// A toy "dial" game used to show counter exhaustion and terminal functions in a
 // file small enough to read in one glance.
 
 program TinyDialGame {
@@ -10,33 +10,33 @@ program TinyDialGame {
   }
 
   screen dial_screen {
-    show dial, charge
+    show(dial, charge)
   }
 
-  rule ignored {
-    stop 0
+  fn ignored() {
+    halt(0)
   }
 
-  rule success {
-    stop 6
+  fn success() {
+    halt(6)
   }
 
   turn {
-    show dial_screen
-    read key
+    show(dial_screen)
+    key = read()
 
     match key {
-      4 => drain
-      6 => success
-      otherwise => ignored
+      4 => drain()
+      6 => success()
+      otherwise => ignored()
     }
   }
 
-  rule drain {
+  fn drain() {
     // Losing charge is visible but not fatal until the counter's own terminal
     // declaration fires.
     charge--
-    show dial_screen
+    show(dial_screen)
   }
 
 }

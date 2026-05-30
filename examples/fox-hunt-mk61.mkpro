@@ -15,29 +15,29 @@ program FoxHuntMK61 {
   }
 
   screen hit {
-    show "-20"
+    show("-20")
   }
 
   screen report {
-    show "--", cell:02, "--", bearing
+    show("--", cell:02, "--", bearing)
   }
 
   turn {
-    read cell
+    cell = read()
 
     if cell in foxes {
-      found_fox
+      found_fox()
     }
 
-    scan_from_cell
-    show report
+    scan_from_cell()
+    show(report)
   }
 
-  rule found_fox {
-    show hit
+  fn found_fox() {
+    show(hit)
   }
 
-  rule scan_from_cell {
+  fn scan_from_cell() {
     bearing = line_count(foxes, cell)
   }
 }

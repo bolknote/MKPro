@@ -234,6 +234,8 @@ interface RewriteStep {
   optimizations: AppliedOptimization[];
   superDark: boolean;
   darkEntry: boolean;
+  convertedAddresses: number[];
+  protectedTargets: number[];
   // Number of call/branch sites converted in this step. Calls that share a
   // single backward target (e.g. all calls to one front-hoisted helper) reuse
   // one selector register, so they can be converted together against a single
@@ -279,6 +281,7 @@ function validateRewriteAt(
 
   const candidateItems = lowerIrToMachine(candidate);
   if (cellCount(candidateItems) >= cellCount(items)) return undefined; // no shrink: reject
+  const addresses = opAddresses(ir);
 
   return {
     items: candidateItems,
@@ -292,6 +295,8 @@ function validateRewriteAt(
     darkEntry: decoded.formalAddress !== undefined
       && decoded.formalAddress.kind !== "official"
       && decoded.formalAddress.kind !== "super-dark",
+    convertedAddresses: [addresses[index]!],
+    protectedTargets: [targetFinalAddress],
     converted: 1,
   };
 }
@@ -338,6 +343,7 @@ function validateRewriteGroup(
 
   const candidateItems = lowerIrToMachine(candidate);
   if (cellCount(candidateItems) >= cellCount(items)) return undefined;
+  const addresses = opAddresses(ir);
 
   return {
     items: candidateItems,
@@ -347,6 +353,11 @@ function validateRewriteGroup(
     darkEntry: decoded.formalAddress !== undefined
       && decoded.formalAddress.kind !== "official"
       && decoded.formalAddress.kind !== "super-dark",
+    convertedAddresses: indices.map((index) => addresses[index]!),
+    protectedTargets: indices
+      .map((index) => targetLabel[index])
+      .map((label) => label === undefined ? undefined : finalLabels.get(label))
+      .filter((target): target is number => target !== undefined),
     converted: indices.length,
   };
 }
@@ -396,6 +407,7 @@ function validateForwardRewriteGroup(
   });
   const candidateItems = lowerIrToMachine(candidate);
   if (cellCount(candidateItems) >= cellCount(items)) return undefined;
+  const addresses = opAddresses(ir);
 
   return {
     items: candidateItems,
@@ -410,6 +422,8 @@ function validateForwardRewriteGroup(
     darkEntry: decoded.formalAddress !== undefined
       && decoded.formalAddress.kind !== "official"
       && decoded.formalAddress.kind !== "super-dark",
+    convertedAddresses: indices.map((index) => addresses[index]!),
+    protectedTargets: [finalTarget],
     converted: indices.length,
   };
 }
@@ -528,13 +542,16 @@ export function optimizePostLayoutIndirectFlow(
   let applied = 0;
   let superDarkApplied = 0;
   let darkEntryApplied = 0;
+  const protectedTargets: number[] = [];
 
   for (let round = 0; round < MAX_REWRITES; round += 1) {
     if (cellCount(current) <= rescueAbove) break;
     const step = applyOneRewrite(current, options);
     if (step === undefined) break;
+    if (step.convertedAddresses.some((address) => protectedTargets.some((target) => address < target))) break;
     current = step.items;
     preloads.push(step.preload);
+    protectedTargets.push(...step.protectedTargets);
     applied += step.converted;
     if (step.superDark) superDarkApplied += 1;
     if (step.darkEntry) darkEntryApplied += 1;

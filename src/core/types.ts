@@ -304,7 +304,9 @@ export type V2StatementAst =
 
 export interface V2ShowStatementAst {
   kind: "v2_show";
-  target: string;
+  target?: string;
+  items?: DisplayItemAst[];
+  inlineName?: string;
   line: number;
 }
 

@@ -25,31 +25,32 @@ program Wumpus {
   }
 
   screen main {
-    show room, arrows, clue
+    show(room, arrows, clue)
   }
 
-  rule won {
-    stop 777
+  fn won() {
+    halt(777)
   }
 
-  rule dead {
-    stop "ЕГГОГ"
+  fn dead() {
+    show("ЕГГОГ")
+    halt()
   }
 
   turn {
-    sense
-    show main
-    read target
+    sense()
+    show(main)
+    target = read()
 
     if target >= 0 {
-      travel
+      travel()
     }
     else {
-      shoot
+      shoot()
     }
   }
 
-  rule sense {
+  fn sense() {
     clue = 0
 
     if near_any(room, 1, bat1, bat2) >= 0 {
@@ -63,55 +64,55 @@ program Wumpus {
     }
   }
 
-  rule travel {
+  fn travel() {
     if near_any(room, 1, target) >= 0 {
       room = target
-      inspect
+      inspect()
     }
   }
 
-  rule shoot {
+  fn shoot() {
     arrows--
 
     if target + wumpus == 0 {
-      won
+      won()
     }
     else {
       if arrows == 0 {
-        dead
+        dead()
       }
       else {
-        wake_wumpus
+        wake_wumpus()
       }
     }
   }
 
-  rule wake_wumpus {
+  fn wake_wumpus() {
     wumpus = random_cell(cave)
 
     if room == wumpus {
-      dead
+      dead()
     }
   }
 
-  rule inspect {
+  fn inspect() {
     if room == wumpus {
-      dead
+      dead()
     }
     else {
       if eq_any(room, pit1, pit2) == 0 {
-        dead
+        dead()
       }
       else {
         if eq_any(room, bat1, bat2) == 0 {
-          bat_jump
+          bat_jump()
         }
       }
     }
   }
 
-  rule bat_jump {
+  fn bat_jump() {
     room = random_cell(cave)
-    inspect
+    inspect()
   }
 }

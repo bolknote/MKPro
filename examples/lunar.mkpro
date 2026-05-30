@@ -15,30 +15,30 @@ program LunarLander {
   }
 
   screen height_view {
-    show height
+    show(height)
   }
 
   screen speed_view {
-    show speed
+    show(speed)
   }
 
   screen fuel_view {
-    show fuel
+    show(fuel)
   }
 
-  rule safe_landing {
-    stop 777
+  fn safe_landing() {
+    halt(777)
   }
 
-  rule crash {
-    stop 666
+  fn crash() {
+    halt(666)
   }
 
   turn {
-    show height_view
-    show speed_view
-    show fuel_view
-    read burn
+    show(height_view)
+    show(speed_view)
+    show(fuel_view)
+    burn = read()
 
     // The model is intentionally compact, but it keeps the landing-game idea:
     // thrust changes acceleration, acceleration changes both height and speed.
@@ -48,16 +48,16 @@ program LunarLander {
     fuel -= burn
 
     if height < 2 {
-      touchdown
+      touchdown()
     }
   }
 
-  rule touchdown {
+  fn touchdown() {
     if abs(speed) <= 5 {
-      safe_landing
+      safe_landing()
     }
     else {
-      crash
+      crash()
     }
   }
 }

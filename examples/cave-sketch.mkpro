@@ -23,55 +23,55 @@ program CaveSketch {
   }
 
   screen cave_screen {
-    show player
+    show(player)
   }
 
-  rule ignored {
-    stop 0
+  fn ignored() {
+    halt(0)
   }
 
   turn {
-    show cave_screen
-    read command
+    show(cave_screen)
+    command = read()
     // Time pressure is food pressure. Movement and searching share the same
     // clock, so the player cannot inspect forever.
     food--
 
     match command {
-      2 => move_south
-      4 => move_west
-      6 => move_east
-      8 => move_north
-      0 => break_wall
-      10 => search_cache
-      otherwise => ignored
+      2 => move_south()
+      4 => move_west()
+      6 => move_east()
+      8 => move_north()
+      0 => break_wall()
+      10 => search_cache()
+      otherwise => ignored()
     }
   }
 
-  rule move_south {
-    move player south
+  fn move_south() {
+    player = move(player, south)
   }
 
-  rule move_west {
-    move player west
+  fn move_west() {
+    player = move(player, west)
   }
 
-  rule move_east {
-    move player east
+  fn move_east() {
+    player = move(player, east)
   }
 
-  rule move_north {
-    move player north
+  fn move_north() {
+    player = move(player, north)
   }
 
-  rule break_wall {
+  fn break_wall() {
     // The sketch has no hidden wall mask; breaking a wall only demonstrates the
     // separate resource pressure used by the fuller cave examples.
     dynamite -= 2
   }
 
-  rule search_cache {
+  fn search_cache() {
     treasure++
-    show cave_screen
+    show(cave_screen)
   }
 }

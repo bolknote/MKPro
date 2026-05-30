@@ -14,16 +14,16 @@ program ResidualElseIfProbe {
   turn {
     if int(pos) == 1 {
       food += 9
-      stop food
+      halt(food)
     }
     else {
       if int(pos) == 2 {
         dynamite += 4
-        stop dynamite
+        halt(dynamite)
       }
       else {
         treasure++
-        stop treasure
+        halt(treasure)
       }
     }
   }

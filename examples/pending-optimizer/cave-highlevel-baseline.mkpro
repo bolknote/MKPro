@@ -34,62 +34,62 @@ program CaveHighlevelBaseline {
   }
 
   screen cave_screen {
-    show player
+    show(player)
   }
 
-  rule ignored {
-    stop 0
+  fn ignored() {
+    halt(0)
   }
 
-  rule exit_found {
-    stop 11
+  fn exit_found() {
+    halt(11)
   }
 
   turn {
-    show cave_screen
-    read command
+    show(cave_screen)
+    command = read()
     // Food is the global turn clock. All useful actions spend the same survival
     // counter, which is what keeps the tiny program game-like.
     food--
 
     match command {
-      2 => go 0.0000002
-      4 => move_west
-      6 => go -0.000001
-      8 => go -0.0000002
-      5 => go 1
-      0 => break_wall
-      10 => search_cache
-      otherwise => ignored
+      2 => go(0.0000002)
+      4 => move_west()
+      6 => go(-0.000001)
+      8 => go(-0.0000002)
+      5 => go(1)
+      0 => break_wall()
+      10 => search_cache()
+      otherwise => ignored()
     }
   }
 
-  rule move_west {
+  fn move_west() {
     if player == 3.0000008 {
-      exit_found
+      exit_found()
     }
     else {
-      go 0.000001
+      go(0.000001)
     }
   }
 
-  rule go dir {
+  fn go(dir) {
     blocked = player + dir
-    try_move
+    try_move()
   }
 
-  rule try_move {
+  fn try_move() {
     if blocked in walls {
-      show 0
+      show(0)
     }
     else {
       player = blocked
       blocked = 0
-      show cave_screen
+      show(cave_screen)
     }
   }
 
-  rule break_wall {
+  fn break_wall() {
     // Blasting only commits when the remembered wall and enough dynamite exist;
     // the screen response is the feedback, not a separate error language.
     if blocked != 0 {
@@ -98,29 +98,29 @@ program CaveHighlevelBaseline {
         player = blocked
         blocked = 0
         dynamite -= 2
-        show cave_screen
+        show(cave_screen)
       }
       else {
-        show cave_screen
+        show(cave_screen)
       }
     }
     else {
-      show cave_screen
+      show(cave_screen)
     }
   }
 
-  rule search_cache {
+  fn search_cache() {
     if player in caches {
       // Searching consumes the cache so repeated probing cannot farm score from
       // one lucky room.
       caches -= player
-      cache_reward
+      cache_reward()
       robber = 1
-      fight
+      fight()
     }
   }
 
-  rule cache_reward {
+  fn cache_reward() {
     if player.floor == 1 {
       food += 10
     }
@@ -134,32 +134,32 @@ program CaveHighlevelBaseline {
     }
   }
 
-  rule fight {
+  fn fight() {
     if robber == 1 {
-      show cave_screen
-      read fight_key
+      show(cave_screen)
+      fight_key = read()
       match fight_key {
-        0 => decline_fight
-        10 => accept_fight
-        otherwise => ignored
+        0 => decline_fight()
+        10 => accept_fight()
+        otherwise => ignored()
       }
     }
   }
 
-  rule decline_fight {
+  fn decline_fight() {
     robber = 0
-    show 0
+    show(0)
   }
 
-  rule accept_fight {
+  fn accept_fight() {
     robber_roll = random()
     if robber_roll >= 5 {
-      cache_reward
+      cache_reward()
     }
     else {
       food -= 3
     }
     robber = 0
-    show cave_screen
+    show(cave_screen)
   }
 }

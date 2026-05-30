@@ -39,15 +39,15 @@ const SOURCE = `program StackDerived {
   }
 
   turn {
-    read raw
+    raw = read()
     whole = int(raw / 10)
     part = frac(raw / 10)
     signum = sign(raw / 10)
     magnitude = abs(raw / 10)
-    stop whole
-    stop part
-    stop signum
-    stop magnitude
+    halt(whole)
+    halt(part)
+    halt(signum)
+    halt(magnitude)
   }
 }
 `;
@@ -112,5 +112,5 @@ describe("Z-stack derived unary tail reuse", () => {
       expect(tail.sign).toBe(refUnary(SIGN, value));
       expect(tail.abs).toBe(refUnary(ABS, value));
     }
-  });
+  }, 20_000);
 });

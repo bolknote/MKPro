@@ -17,41 +17,41 @@ program FoxHunt100 {
   }
 
   screen report {
-    show bearing
+    show(bearing)
   }
 
-  rule all_found {
-    stop -8
+  fn all_found() {
+    halt(-8)
   }
 
   turn {
-    read cell
+    cell = read()
 
     if cell in foxes {
-      found_fox
+      found_fox()
     }
     else {
-      scan_from_cell
+      scan_from_cell()
     }
 
-    show report
+    show(report)
   }
 
-  rule found_fox {
+  fn found_fox() {
     // A direct hit suppresses the bearing clue and instead reports progress as a
     // negative remaining count, matching the original game's feedback style.
     foxes -= cell
     remaining_foxes--
 
     if remaining_foxes <= 0 {
-      all_found
+      all_found()
     }
     else {
       bearing = -remaining_foxes
     }
   }
 
-  rule scan_from_cell {
+  fn scan_from_cell() {
     // The clue is not distance. It is the number of foxes aligned with this cell
     // by row, column, or either diagonal.
     bearing = line_count(foxes, cell)

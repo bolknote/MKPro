@@ -23,56 +23,56 @@ program SeaBattle {
   }
 
   screen battle {
-    show calculator_shot
+    show(calculator_shot)
   }
 
   screen hit {
-    show enemy_report
+    show(enemy_report)
   }
 
   screen player_victory {
-    show "-8CEC6-L-"
+    show("-8CEC6-L-")
   }
 
-  rule enemy_win {
-    stop 33333331
+  fn enemy_win() {
+    halt(33333331)
   }
 
-  rule player_win {
-    show player_victory
+  fn player_win() {
+    show(player_victory)
   }
 
   turn {
-    calculator_turn
-    read response
+    calculator_turn()
+    response = read()
 
     if response < 0 {
-      calculator_hit
+      calculator_hit()
     }
     else {
-      player_fire
+      player_fire()
     }
   }
 
-  rule calculator_turn {
+  fn calculator_turn() {
     // The calculator reveals a target cell, then waits for the player to report
     // whether that shot hit.
     calculator_shot = int(random() * 100)
-    show battle
+    show(battle)
   }
 
-  rule calculator_hit {
+  fn calculator_hit() {
     own_ships--
 
     if own_ships <= 0 {
-      enemy_win
+      enemy_win()
     }
     else {
-      calculator_turn
+      calculator_turn()
     }
   }
 
-  rule player_fire {
+  fn player_fire() {
     player_shot = response
 
     if player_shot in enemy_fleet {
@@ -82,11 +82,11 @@ program SeaBattle {
       enemy_ships--
 
       if enemy_ships <= 0 {
-        player_win
+        player_win()
       }
       else {
         enemy_report = -enemy_ships
-        show hit
+        show(hit)
       }
     }
   }

@@ -10,10 +10,10 @@ program NinetyNineBottles {
   }
 
   screen beer {
-    show "BEEr ", bottles:02
+    show("BEEr ", bottles:02)
   }
 
   turn {
-    show beer
+    show(beer)
   }
 }

@@ -32,7 +32,7 @@ const SOURCE = `program NearAnyHelperProbe {
     if near_any(room, 1, c, d) >= 0 {
       result = result + 2
     }
-    stop result
+    halt(result)
   }
 }
 `;

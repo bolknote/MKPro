@@ -35,7 +35,7 @@ Generated with `npm run examples:size`.
 | `tiny-game.mkpro` | 26 | - | - | ok: no reference | load ok |
 | `wumpus.mkpro` | 104 | - | - | ok: no reference | main+setup load ok |
 | `pending-optimizer/cave-highlevel-baseline.mkpro` | 130 | 105 | +25 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/cave-treasure.mkpro` | 148 | 105 | +43 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/cave-treasure.mkpro` | 149 | 105 | +44 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/giants-country.mkpro` | 195 | 105 | +90 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/labyrinth777.mkpro` | 226 | 105 | +121 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/teleport.mkpro` | - | - | - | compile error | Out of MK-61 registers while allocating 'vaults'.
@@ -46,4 +46,4 @@ Unknown variable 'visited_vaults'
 No register allocated for visited_vaults
 No register allocated for vaults |
 | `pending-optimizer/tic-tac-toe-4x4.mkpro` | 282 | 105 | +177 | pending optimizer | not loaded: main >105 |
-| `pending-optimizer/treasure-hunter-2.mkpro` | 138 | 105 | +33 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/treasure-hunter-2.mkpro` | 141 | 105 | +36 | pending optimizer | setup load ok; main >105 |

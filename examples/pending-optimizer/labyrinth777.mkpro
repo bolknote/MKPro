@@ -35,177 +35,177 @@ program Labyrinth777 {
   }
 
   screen maze {
-    show pos, row_view, energy
+    show(pos, row_view, energy)
   }
 
-  rule escaped {
-    stop 7777777
+  fn escaped() {
+    halt(7777777)
   }
 
-  rule drained {
-    stop -777
+  fn drained() {
+    halt(-777)
   }
 
   turn {
-    show maze
-    read action
+    show(maze)
+    action = read()
 
     match action {
-      4 => move_left
-      6 => move_right
-      8 => move_forward
-      2 => move_back
-      5 => use_local_jumper
-      otherwise => show maze
+      4 => move_left()
+      6 => move_right()
+      8 => move_forward()
+      2 => move_back()
+      5 => use_local_jumper()
+      otherwise => show(maze)
     }
   }
 
-  rule move_left {
-    apply_exit_cost
+  fn move_left() {
+    apply_exit_cost()
 
     if energy > 0 {
       if room > 1 {
         room--
-        move pos west
+        pos = move(pos, west)
       }
 
-      inspect_room
+      inspect_room()
     }
     else {
-      drained
+      drained()
     }
   }
 
-  rule move_right {
-    apply_exit_cost
+  fn move_right() {
+    apply_exit_cost()
 
     if energy > 0 {
       if room < 7 {
         room++
-        move pos east
+        pos = move(pos, east)
       }
 
-      inspect_room
+      inspect_room()
     }
     else {
-      drained
+      drained()
     }
   }
 
-  rule move_forward {
-    apply_exit_cost
+  fn move_forward() {
+    apply_exit_cost()
 
     if energy > 0 {
       if row < 7 {
         row++
-        move pos north
+        pos = move(pos, north)
       }
 
-      inspect_room
+      inspect_room()
     }
     else {
-      drained
+      drained()
     }
   }
 
-  rule move_back {
-    apply_exit_cost
+  fn move_back() {
+    apply_exit_cost()
 
     if energy > 0 {
       if row > 1 {
         row--
-        move pos south
+        pos = move(pos, south)
       }
 
-      inspect_room
+      inspect_room()
     }
     else {
-      drained
+      drained()
     }
   }
 
-  rule use_local_jumper {
+  fn use_local_jumper() {
     // Key 5 is intentionally contextual: the same command climbs, drops, wins,
     // or merely inspects depending on the room's generated tile.
-    apply_exit_cost
+    apply_exit_cost()
 
     if energy > 0 {
       tile = cell_at(pos)
 
       match tile {
-        2 => climb
-        3 => descend
-        otherwise => inspect_room
+        2 => climb()
+        3 => descend()
+        otherwise => inspect_room()
       }
     }
     else {
-      drained
+      drained()
     }
   }
 
-  rule climb {
+  fn climb() {
     if floor < 7 {
       floor++
-      move pos up
+      pos = move(pos, up)
     }
 
-    inspect_room
+    inspect_room()
   }
 
-  rule descend {
+  fn descend() {
     if floor > 1 {
       floor--
-      move pos down
+      pos = move(pos, down)
     }
 
-    inspect_room
+    inspect_room()
   }
 
-  rule apply_exit_cost {
+  fn apply_exit_cost() {
     // Leaving a room is what costs energy. Entering a bad room is survivable;
     // deciding to move out of it is where the suit pays the price.
     tile = cell_at(pos)
 
     match tile {
-      1 => pool_exit
-      2 => ladder_exit
-      3 => shaft_exit
-      otherwise => clear_exit
+      1 => pool_exit()
+      2 => ladder_exit()
+      3 => shaft_exit()
+      otherwise => clear_exit()
     }
   }
 
-  rule clear_exit {
+  fn clear_exit() {
     energy++
   }
 
-  rule pool_exit {
+  fn pool_exit() {
     energy = 0
   }
 
-  rule ladder_exit {
+  fn ladder_exit() {
     energy -= 5
   }
 
-  rule shaft_exit {
+  fn shaft_exit() {
     energy -= 6
   }
 
-  rule inspect_room {
+  fn inspect_room() {
     // Most rooms only update the display. The one special tile that matters
     // immediately is the lost personal jumper.
     tile = cell_at(pos)
     row_view = tile
 
     if pos in jumper {
-      found_jumper
+      found_jumper()
     }
     else {
-      show maze
+      show(maze)
     }
   }
 
-  rule found_jumper {
+  fn found_jumper() {
     jumper -= pos
-    escaped
+    escaped()
   }
 }

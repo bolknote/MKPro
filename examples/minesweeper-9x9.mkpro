@@ -17,29 +17,30 @@ program Minesweeper9x9 {
   }
 
   screen result {
-    show clue
+    show(clue)
   }
 
-  rule exploded {
-    stop "ЕГГОГ"
+  fn exploded() {
+    show("ЕГГОГ")
+    halt()
   }
 
   turn {
-    read probe
+    probe = read()
 
     if probe in mines {
-      exploded
+      exploded()
     }
     else {
-      reveal_safe_cell
+      reveal_safe_cell()
     }
   }
 
-  rule reveal_safe_cell {
+  fn reveal_safe_cell() {
     // A safe probe reports only the number of mines in the eight surrounding
     // cells. Tracking opened cells or a victory counter is left to the player,
     // just as in the original paper-board game.
     clue = neighbor_count(mines, probe)
-    show result
+    show(result)
   }
 }

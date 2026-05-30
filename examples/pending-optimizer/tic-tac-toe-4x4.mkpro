@@ -17,59 +17,59 @@ program TicTacToe4x4 {
   }
 
   screen board {
-    show cell, turn_count
+    show(cell, turn_count)
   }
 
-  rule player_wins {
-    stop 4444
+  fn player_wins() {
+    halt(4444)
   }
 
-  rule calculator_wins {
-    stop -4444
+  fn calculator_wins() {
+    halt(-4444)
   }
 
-  rule draw {
-    stop 0
+  fn draw() {
+    halt(0)
   }
 
   turn {
-    show board
-    read cell
+    show(board)
+    cell = read()
 
     if cell in occupied {
-      show board
+      show(board)
     }
     else {
       player_marks += cell
       occupied += cell
       turn_count++
       if line_count(player_marks, cell) >= 4 {
-        player_wins
+        player_wins()
       }
       else {
-        calculator_reply
+        calculator_reply()
       }
     }
   }
 
-  rule calculator_reply {
+  fn calculator_reply() {
     if turn_count >= 16 {
-      draw
+      draw()
     }
     else {
       cell = random_cell(grid)
       if cell in occupied {
-        calculator_reply
+        calculator_reply()
       }
       else {
         calculator_marks += cell
         occupied += cell
         turn_count++
         if line_count(calculator_marks, cell) >= 4 {
-          calculator_wins
+          calculator_wins()
         }
         else {
-          show board
+          show(board)
         }
       }
     }

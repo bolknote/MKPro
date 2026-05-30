@@ -2669,6 +2669,10 @@ class EmitContext {
         index += 1;
         continue;
       }
+      if (statement.kind === "show" && next?.kind === "halt" && this.compileLiteralShowHalt(statement, next)) {
+        index += 1;
+        continue;
+      }
       if (statement.kind === "show" && next?.kind === "halt" && this.haltDisplaysSameValue(statement, next)) {
         this.compileStatement(next);
         this.optimizations.push({
@@ -2737,6 +2741,23 @@ class EmitContext {
   ): boolean {
     const reads = countIdentifierReadsInCondition(branch.condition, input.target);
     return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
+  }
+
+  private compileLiteralShowHalt(
+    show: Extract<StatementAst, { kind: "show" }>,
+    halt: Extract<StatementAst, { kind: "halt" }>,
+  ): boolean {
+    if (halt.literal !== undefined || !isZeroExpression(halt.expr)) return false;
+    const display = this.ast.displays.find((candidate) => candidate.name === show.display);
+    if (display === undefined) return false;
+    const literal = this.collapseLiteralOnlyDisplay(display);
+    if (literal === undefined || displayLiteralProgram(literal)?.kind !== "error") return false;
+    this.compileLiteralHalt(literal, show.line);
+    this.optimizations.push({
+      name: "terminal-display-fusion",
+      detail: `Folded literal screen ${show.display} followed by halt at line ${halt.line} into a terminal error stop.`,
+    });
+    return true;
   }
 
   private markCurrentX(name: string): void {
@@ -5614,7 +5635,7 @@ class EmitContext {
   private compileLiteralHalt(literal: string, line: number): void {
     const program = displayLiteralProgram(literal);
     if (program?.kind !== "error") {
-      this.diagnostics.push(buildDiagnostic("error", `Only stop "ЕГГОГ" literal stops are supported.`, line));
+      this.diagnostics.push(buildDiagnostic("error", `Only halt("ЕГГОГ") literal stops are supported.`, line));
       return;
     }
     this.emitErrorStopOpcode("halt literal ЕГГ0Г", line);
