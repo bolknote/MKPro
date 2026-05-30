@@ -21,143 +21,12 @@ import { verifySuperDarkSuffixLayout } from "./super-dark-layout.ts";
 import { MachineEmitter } from "./emit/machine-emitter.ts";
 import type { ProgramAnalysis } from "./emit/program-analysis.ts";
 import { RuntimeHelperRegistry } from "./emit/runtime-helpers.ts";
-import {
-  compileCall,
-  compileCardinalDirectionCall,
-  compileCommutativeWithCurrentX,
-  compileDirectionCall,
-  compileExpression,
-  compileFunctionCall,
-  compileRemainderByConstant,
-  compileStackDuplicatedBinary,
-  directionKeyName,
-  directionKeyRegister,
-} from "./emit/lowering/expr.ts";
-import {
-  compileArithmeticIfSelect,
-  compileBitHasConditionWithBitMaskHelper,
-  compileBitHasConditionWithSpatialHelper,
-  compileBitMembershipMaskValue,
-  compileCondition,
-  compileDecrementZeroBranch,
-  compileDirectTerminalIfBranch,
-  compileDispatch,
-  compileDispatchCompareChain,
-  compileDoubleBranchRemoval,
-  compileGuardedUpdateSelector,
-  compileIf,
-  compileLiteralHalt,
-  compileLiteralShowHalt,
-  compileMembershipClearReuse,
-  compileMembershipSetReuse,
-  compileMembershipSetReuseForAbsentCondition,
-  compileMembershipSetReuseForPresentCondition,
-  compileMembershipSetRunReuseForAbsentCondition,
-  compileMembershipSetRunReuseForPresentCondition,
-  compileNearAnyCandidate,
-  compileNearAnyHelperCondition,
-  compileNearAnyMarginWithHelper,
-  compileNestedGuardSharedFailure,
-  compileNumericResidualDispatchCompareChain,
-  compileResidualEqualityElseIf,
-  compileResidualGuardedUpdate,
-  compileSmallSetCondition,
-  emitKnownOneIndirectLoopBack,
-  emitMembershipMaskTest,
-  emitPositiveResidualCompare,
-  emitResidualAdjustment,
-  emitResidualCompareDelta,
-} from "./emit/lowering/control-flow.ts";
-import {
-  compileDashedCoordReportDisplay,
-  compileDecimalLiteralDisplay,
-  compileDisplayByteBuilder,
-  compileLiteralDisplay,
-  compileLiteralDisplayBody,
-  compileMantissaMaskDisplay,
-  compilePackedDisplayBody,
-  compilePackedDisplayFields,
-  compilePackedDisplayFieldsInOrder,
-  compilePackedStorageReuseDisplay,
-  compilePreloadedDisplayLiteral,
-  compileShow,
-  compileShowSequenceRead,
-  compileSignDigitLiteralDisplay,
-  compileTextDisplay,
-  compileZeroDigitTailDisplay,
-  emitDashedCoordReportPackedBodyDisplay,
-  emitDisplayExponent,
-  emitDisplayFieldValue,
-  emitDisplayFirstDigit,
-  emitDisplayLiteralProgram,
-  emitFirstDigitSplice,
-  emitFirstSpliceDisplayLiteralProgram,
-  emitSignDigitIndirectStep,
-  emitTwoDigitTextDisplay,
-  orderDisplaySources,
-} from "./emit/lowering/display.ts";
-import {
-  compileBitMaskWithQuotientScratch,
-  compileBitSetMaskReuse,
-  compileNegativeZeroDegreeSelectorCall,
-  compileSingleBitMaskOpAssignment,
-  compileSpatialCountCall,
-  compileSpatialHitCall,
-  compileSpatialLineCountLoop,
-  compileSpatialNeighborCountLoop,
-  compileTicTacToeCellMaskReuse,
-  emitBitMaskFromCurrentXWithQuotientScratch,
-  emitBitSetCollectionWithScratch,
-  emitBitSetWithScratch,
-  emitInlineSpatialHit,
-  emitInlineSpatialHitFromScratch,
-  emitSpatialLineCountLoopBody,
-  emitSpatialLineProgressionHelperBody,
-  emitSpatialProgressionCountLoopBody,
-  emitSpatialSumLoopHelperBody,
-} from "./emit/lowering/spatial.ts";
-import {
-  compileCoordListHasCondition,
-  compileCoordListLineCountAssignment,
-  compileCoordListLineCountDashedReport,
-  compileCoordOnesDigit,
-  compileCoordTensDigit,
-  compileFusedCoordListScan,
-  compileRandomCoordListSetup,
-  compileScaledCoordFraction,
-  compileScaledCoordInteger,
-  compileScaledCoordListVisibilityTest,
-  emitCoordListCounterLoop,
-  emitCoordListIndirectRecall,
-  emitCoordListLineCountInitialTotal,
-  emitCoordListLineCountResult,
-  emitCoordListLoopSetup,
-  emitDashedCoordReportCellBody,
-  emitRandomCoordListCandidate,
-} from "./emit/lowering/coord-list.ts";
-import {
-  compileBlockCall,
-  compileDecimalFactorialSeries,
-  compileEqualityWithCurrentX,
-  compileGuardAssignmentSubstitution,
-  compileInitialState,
-  compileIntFracSharedTail,
-  compileLocalTerminalElseTail,
-  compileNegativeZeroThresholdFlow,
-  compileProcedures,
-  compileRawLines,
-  compileRawStatement,
-  compileRepeatedAssignmentValue,
-  compileRuntimeHelpers,
-  compileSetupProgramWithPreloads,
-  compileStackUnaryDerivedAssignments,
-  compileUnitDecrement,
-  compileXParamProcBody,
-  compileXParamProcCall,
-  emitErrorStopOpcode,
-  emitIndirectUnitIncrement,
-  emitNegativeZeroThresholdRaw,
-} from "./emit/lowering/proc-raw-setup.ts";
+import { compileExpression } from "./emit/lowering/expr.ts";
+import { compileCondition, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitKnownOneIndirectLoopBack } from "./emit/lowering/control-flow.ts";
+import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts";
+import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileTicTacToeCellMaskReuse } from "./emit/lowering/spatial.ts";
+import { compileCoordListLineCountAssignment, compileCoordListLineCountDashedReport, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
+import { compileBlockCall, compileDecimalFactorialSeries, compileGuardAssignmentSubstitution, compileInitialState, compileIntFracSharedTail, compileProcedures, compileRawStatement, compileRepeatedAssignmentValue, compileRuntimeHelpers, compileSetupProgramWithPreloads, compileStackUnaryDerivedAssignments, compileUnitDecrement, compileXParamProcCall } from "./emit/lowering/proc-raw-setup.ts";
 import { MK61_PROFILE, machineSupports, type MachineProfile } from "./machineProfile.ts";
 import type {
   AppliedOptimization,
@@ -591,7 +460,7 @@ export function compileLoweringVariantForTest(
   options: Partial<CompileOptions>,
   loweringOptions: Record<string, unknown>,
 ): CompileResult {
-  return compileLoweringAttempt(source, options, loweringOptions as LoweringOptions);
+  return compileLoweringAttempt(source, options, loweringOptions);
 }
 
 function isOnlyBudgetExceeded(error: unknown): error is CompileError {

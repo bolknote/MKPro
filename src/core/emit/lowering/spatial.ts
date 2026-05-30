@@ -1,5 +1,4 @@
-import { registerIndex } from "../../opcodes.ts";
-import type { ExpressionAst, ProgramAst, RegisterName, StatementAst } from "../../types.ts";
+import type { ExpressionAst, StatementAst } from "../../types.ts";
 import type { LoweringCtx } from "../lowering-ctx.ts";
 import {
   compileExpression,
