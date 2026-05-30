@@ -6431,6 +6431,7 @@ function displayMantissaMaskTextForAst(
   ast: ProgramAst,
   display: ProgramAst["displays"][number],
 ): string | undefined {
+  if (dashedCoordReportDisplayTemplate(display) !== undefined) return undefined;
   const template = planDisplayForAst(ast, display)
     .find((plan): plan is Extract<DisplayPlan, { kind: "fixed-cells" }> => plan.kind === "fixed-cells")
     ?.template;
@@ -6798,6 +6799,9 @@ function collectCoordListScratchVariables(ast: ProgramAst, variables: Set<string
         addLineCountScratch();
       }
     }
+  }
+  if (programUsesDashedCoordReport(ast)) {
+    variables.add(COORD_LIST_DX);
   }
   const visitExpr = (expr: ExpressionAst): void => {
     if (expr.kind === "call" && expr.callee.toLowerCase() === "coord_list_line_count") {

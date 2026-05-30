@@ -21,6 +21,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "e-94-digits": 64,
   "functions-demo": 29,
   "fox-hunt-100": 105,
+  "fox-hunt-mk61": 65,
   "game-100-pig": 103,
   human: 28,
   lunar: 47,
@@ -32,9 +33,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   wumpus: 103,
 };
 
-const EXAMPLE_COMPILE_ERRORS: Record<string, RegExp> = {
-  "fox-hunt-mk61": /Out of MK-61 registers while allocating '__display_value___inline_show_25_0'/u,
-};
+const EXAMPLE_COMPILE_ERRORS: Record<string, RegExp> = {};
 
 // pending-optimizer programs overflow the physical MK-61 address space, so
 // they are measured with a large budget and analysis mode, mirroring

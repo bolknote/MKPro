@@ -4,8 +4,8 @@ Generated with `npm run examples:size`.
 
 ## Snapshot
 
-- Top-level examples: 18/18 fit in the 105-cell MK-61 window; 18/18 pass the headless load check.
-- Referenced top-level examples: 13/13 are no larger than the original MK-61 listing.
+- Top-level examples: 19/19 fit in the 105-cell MK-61 window; 19/19 pass the headless load check.
+- Referenced top-level examples: 14/14 are no larger than the original MK-61 listing.
 - Tightest runnable examples: `fox-hunt-100.mkpro` (105), `game-100-pig.mkpro` (103), `wumpus.mkpro` (103).
 - Pending optimizer: 7 programs still exceed the MK-61 window; nearest is `pending-optimizer/cave-highlevel-baseline.mkpro` (123).
 
@@ -23,7 +23,7 @@ Generated with `npm run examples:size`.
 | `dungeon.mkpro` | 86 | 105 | -19 | ok: <= reference | load ok |
 | `e-94-digits.mkpro` | 64 | 64 | 0 | ok: <= reference | load ok |
 | `fox-hunt-100.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |
-| `fox-hunt-mk61.mkpro` | - | - | - | compile error | Out of MK-61 registers while allocating '__display_value___inline_show_25_0'. |
+| `fox-hunt-mk61.mkpro` | 65 | 92 | -27 | ok: <= reference | main+setup load ok |
 | `functions-demo.mkpro` | 29 | - | - | ok: no reference | load ok |
 | `game-100-pig.mkpro` | 103 | 103 | 0 | ok: <= reference | main+setup load ok |
 | `human.mkpro` | 28 | - | - | ok: no reference | load ok |
