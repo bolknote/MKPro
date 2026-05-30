@@ -1911,161 +1911,161 @@ function formatDomainName(domain: ProgramAst["domains"][number]): string {
   return domain.name ? `${domain.domainKind} ${domain.name}` : domain.domainKind;
 }
 
-class EmitContext {
+export class EmitContext {
   // Machine-code emission + X-tracking live in a dedicated collaborator; this
   // class delegates the low-level primitives to it and routes the X-state
   // fields through getters/setters so the lowering code reads unchanged.
-  private readonly emitter = new MachineEmitter<DashedCoordReportTemplate>();
+  readonly emitter = new MachineEmitter<DashedCoordReportTemplate>();
   get items(): MachineItem[] {
     return this.emitter.items;
   }
-  private readonly constants = new Map<string, ExpressionAst>();
-  private readonly constantStack = new Set<string>();
-  private readonly ast: ProgramAst;
-  private readonly allocation: RegisterAllocation;
-  private readonly options: CompileOptions;
-  private readonly machineProfile: MachineProfile;
-  private readonly diagnostics: Diagnostic[];
-  private readonly optimizations: AppliedOptimization[];
-  private readonly warnings: string[];
-  private readonly candidates: CandidateReport[];
-  private readonly loweringOptions: LoweringOptions;
+  readonly constants = new Map<string, ExpressionAst>();
+  readonly constantStack = new Set<string>();
+  readonly ast: ProgramAst;
+  readonly allocation: RegisterAllocation;
+  readonly options: CompileOptions;
+  readonly machineProfile: MachineProfile;
+  readonly diagnostics: Diagnostic[];
+  readonly optimizations: AppliedOptimization[];
+  readonly warnings: string[];
+  readonly candidates: CandidateReport[];
+  readonly loweringOptions: LoweringOptions;
   // Read-only program analysis is computed once and injected; the lowering code
   // reads these maps through getters so call sites stay unchanged.
-  private readonly analysis: ProgramAnalysis;
-  private get inlineProcNames(): Set<string> {
+  readonly analysis: ProgramAnalysis;
+  get inlineProcNames(): Set<string> {
     return this.analysis.inlineProcNames;
   }
-  private get procCallCounts(): Map<string, number> {
+  get procCallCounts(): Map<string, number> {
     return this.analysis.procCallCounts;
   }
-  private get functionProcs(): Map<string, ProcAst> {
+  get functionProcs(): Map<string, ProcAst> {
     return this.analysis.functionProcs;
   }
-  private get xParamProcs(): Map<string, XParamProcLowering> {
+  get xParamProcs(): Map<string, XParamProcLowering> {
     return this.analysis.xParamProcs;
   }
-  private get readCounts(): Map<string, number> {
+  get readCounts(): Map<string, number> {
     return this.analysis.readCounts;
   }
-  private get displayUseCounts(): Map<string, number> {
+  get displayUseCounts(): Map<string, number> {
     return this.analysis.displayUseCounts;
   }
-  private get showSequenceUseCounts(): Map<string, number> {
+  get showSequenceUseCounts(): Map<string, number> {
     return this.analysis.showSequenceUseCounts;
   }
-  private get expressionUseCounts(): Map<string, { count: number; expr: ExpressionAst }> {
+  get expressionUseCounts(): Map<string, { count: number; expr: ExpressionAst }> {
     return this.analysis.expressionUseCounts;
   }
-  private get nearAnyHelperStats(): Map<string, NearAnyHelperStats> {
+  get nearAnyHelperStats(): Map<string, NearAnyHelperStats> {
     return this.analysis.nearAnyHelperStats;
   }
-  private get lineCountCallCount(): number {
+  get lineCountCallCount(): number {
     return this.analysis.lineCountCallCount;
   }
-  private get lineCountGroupCounts(): Map<string, number> {
+  get lineCountGroupCounts(): Map<string, number> {
     return this.analysis.lineCountGroupCounts;
   }
-  private get scaledCoordLists(): Set<string> {
+  get scaledCoordLists(): Set<string> {
     return this.analysis.scaledCoordLists;
   }
-  private get scaledCoordCellNames(): Set<string> {
+  get scaledCoordCellNames(): Set<string> {
     return this.analysis.scaledCoordCellNames;
   }
-  private readonly scaledCoordVariables = new Set<string>();
+  readonly scaledCoordVariables = new Set<string>();
   // Shared runtime-helper tables live in a dedicated collaborator; lowering
   // reads/registers them through these getters so call sites stay unchanged.
-  private readonly helpers = new RuntimeHelperRegistry();
-  private get spatialHitHelpers() {
+  readonly helpers = new RuntimeHelperRegistry();
+  get spatialHitHelpers() {
     return this.helpers.spatialHitHelpers;
   }
-  private get displayHelpers() {
+  get displayHelpers() {
     return this.helpers.displayHelpers;
   }
-  private get displayByteHelpers() {
+  get displayByteHelpers() {
     return this.helpers.displayByteHelpers;
   }
-  private get literalDisplayHelpers() {
+  get literalDisplayHelpers() {
     return this.helpers.literalDisplayHelpers;
   }
-  private get showSequenceHelpers() {
+  get showSequenceHelpers() {
     return this.helpers.showSequenceHelpers;
   }
-  private get expressionHelpers() {
+  get expressionHelpers() {
     return this.helpers.expressionHelpers;
   }
-  private get randomCellHelpers() {
+  get randomCellHelpers() {
     return this.helpers.randomCellHelpers;
   }
-  private get nearAnyHelpers() {
+  get nearAnyHelpers() {
     return this.helpers.nearAnyHelpers;
   }
-  private get lineCountHelpers() {
+  get lineCountHelpers() {
     return this.helpers.lineCountHelpers;
   }
-  private get spatialBitMaskHelpers() {
+  get spatialBitMaskHelpers() {
     return this.helpers.spatialBitMaskHelpers;
   }
-  private get spatialLineProgressionHelpers() {
+  get spatialLineProgressionHelpers() {
     return this.helpers.spatialLineProgressionHelpers;
   }
-  private get spatialSumLoopHelpers() {
+  get spatialSumLoopHelpers() {
     return this.helpers.spatialSumLoopHelpers;
   }
-  private get terminalTailHelpers() {
+  get terminalTailHelpers() {
     return this.helpers.terminalTailHelpers;
   }
   // X-tracking state physically lives in `this.emitter`; these accessors keep
   // the lowering code reading/writing it as plain fields.
-  private get currentXVariable(): string | undefined {
+  get currentXVariable(): string | undefined {
     return this.emitter.currentXVariable;
   }
-  private set currentXVariable(value: string | undefined) {
+  set currentXVariable(value: string | undefined) {
     this.emitter.currentXVariable = value;
   }
-  private get currentXAliases(): Set<string> {
+  get currentXAliases(): Set<string> {
     return this.emitter.currentXAliases;
   }
-  private set currentXAliases(value: Set<string>) {
+  set currentXAliases(value: Set<string>) {
     this.emitter.currentXAliases = value;
   }
-  private get currentXKnownZero(): boolean {
+  get currentXKnownZero(): boolean {
     return this.emitter.currentXKnownZero;
   }
-  private set currentXKnownZero(value: boolean) {
+  set currentXKnownZero(value: boolean) {
     this.emitter.currentXKnownZero = value;
   }
-  private get coordListCounterKnownOne(): boolean {
+  get coordListCounterKnownOne(): boolean {
     return this.emitter.coordListCounterKnownOne;
   }
-  private set coordListCounterKnownOne(value: boolean) {
+  set coordListCounterKnownOne(value: boolean) {
     this.emitter.coordListCounterKnownOne = value;
   }
-  private get zeroAddressLabels(): Set<string> {
+  get zeroAddressLabels(): Set<string> {
     return this.emitter.zeroAddressLabels;
   }
-  private get currentXDashedCoordReportBody(): DashedCoordReportTemplate | undefined {
+  get currentXDashedCoordReportBody(): DashedCoordReportTemplate | undefined {
     return this.emitter.currentXDashedCoordReportBody;
   }
-  private set currentXDashedCoordReportBody(value: DashedCoordReportTemplate | undefined) {
+  set currentXDashedCoordReportBody(value: DashedCoordReportTemplate | undefined) {
     this.emitter.currentXDashedCoordReportBody = value;
   }
-  private get machineEntryOpen(): boolean {
+  get machineEntryOpen(): boolean {
     return this.emitter.machineEntryOpen;
   }
-  private set machineEntryOpen(value: boolean) {
+  set machineEntryOpen(value: boolean) {
     this.emitter.machineEntryOpen = value;
   }
-  private get emittingExpressionHelper(): boolean {
+  get emittingExpressionHelper(): boolean {
     return this.helpers.emittingExpressionHelper;
   }
-  private set emittingExpressionHelper(value: boolean) {
+  set emittingExpressionHelper(value: boolean) {
     this.helpers.emittingExpressionHelper = value;
   }
-  private get emittingRandomCellHelper(): boolean {
+  get emittingRandomCellHelper(): boolean {
     return this.helpers.emittingRandomCellHelper;
   }
-  private set emittingRandomCellHelper(value: boolean) {
+  set emittingRandomCellHelper(value: boolean) {
     this.helpers.emittingRandomCellHelper = value;
   }
 
@@ -2189,7 +2189,7 @@ class EmitContext {
     this.compileRuntimeHelpers();
   }
 
-  private compileRandomCoordListSetup(fields: readonly StateFieldAst[], placement: RandomCoordListPlacement): void {
+  compileRandomCoordListSetup(fields: readonly StateFieldAst[], placement: RandomCoordListPlacement): void {
     const context = this.randomCoordListSetupContext(fields);
     if (context === undefined) {
       this.diagnostics.push(buildDiagnostic(
@@ -2239,7 +2239,7 @@ class EmitContext {
     });
   }
 
-  private emitRandomCoordListCandidate(
+  emitRandomCoordListCandidate(
     placement: RandomCoordListPlacement,
     seedField: string,
     line: number | undefined,
@@ -2279,7 +2279,7 @@ class EmitContext {
     this.emitStore(COORD_LIST_CURRENT, "random coord candidate", line, true);
   }
 
-  private randomCoordListSetupContext(fields: readonly StateFieldAst[]): {
+  randomCoordListSetupContext(fields: readonly StateFieldAst[]): {
     pointerStart: number;
     pointerRegister: RegisterName;
     outerCounterOpcode: number;
@@ -2317,7 +2317,7 @@ class EmitContext {
     };
   }
 
-  private compileProcedures(): void {
+  compileProcedures(): void {
     for (const proc of this.ast.procs) {
       if (this.inlineProcNames.has(proc.name)) continue;
       this.emitLabel(proc.name);
@@ -2333,7 +2333,7 @@ class EmitContext {
     }
   }
 
-  private compileRuntimeHelpers(): void {
+  compileRuntimeHelpers(): void {
     for (let index = 0; index < this.terminalTailHelpers.length; index += 1) {
       const helper = this.terminalTailHelpers[index]!;
       this.emitLabel(helper.label);
@@ -2478,7 +2478,7 @@ class EmitContext {
     }
   }
 
-  private compileInitialState(): void {
+  compileInitialState(): void {
     if (this.ast.v2) {
       const fields = this.ast.states.flatMap((state) => state.fields);
       if (fields.some((field) => field.initial !== undefined || field.initialStack !== undefined)) {
@@ -2513,7 +2513,7 @@ class EmitContext {
     }
   }
 
-  private compileStatements(statements: StatementAst[]): void {
+  compileStatements(statements: StatementAst[]): void {
     for (let index = 0; index < statements.length; index += 1) {
       const statement = statements[index]!;
       const next = statements[index + 1];
@@ -2648,7 +2648,7 @@ class EmitContext {
     }
   }
 
-  private inputFeedsOnlyFollowingCondition(
+  inputFeedsOnlyFollowingCondition(
     input: Extract<StatementAst, { kind: "input" }>,
     branch: Extract<StatementAst, { kind: "if" }>,
   ): boolean {
@@ -2656,7 +2656,7 @@ class EmitContext {
     return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
   }
 
-  private compileLiteralShowHalt(
+  compileLiteralShowHalt(
     show: Extract<StatementAst, { kind: "show" }>,
     halt: Extract<StatementAst, { kind: "halt" }>,
   ): boolean {
@@ -2673,14 +2673,14 @@ class EmitContext {
     return true;
   }
 
-  private markCurrentX(name: string): void {
+  markCurrentX(name: string): void {
     this.currentXVariable = name;
     this.currentXAliases = new Set([name]);
     this.currentXKnownZero = false;
     this.currentXDashedCoordReportBody = undefined;
   }
 
-  private compileRepeatedAssignmentValue(statements: StatementAst[], start: number): number {
+  compileRepeatedAssignmentValue(statements: StatementAst[], start: number): number {
     const first = statements[start];
     if (first?.kind !== "assign" || !expressionPureForSubstitution(first.expr)) return 0;
     let end = start + 1;
@@ -2703,7 +2703,7 @@ class EmitContext {
     return count;
   }
 
-  private compileXParamProcCall(
+  compileXParamProcCall(
     assign: Extract<StatementAst, { kind: "assign" }>,
     call: Extract<StatementAst, { kind: "call" }>,
   ): boolean {
@@ -2720,7 +2720,7 @@ class EmitContext {
     return true;
   }
 
-  private compileXParamProcBody(proc: ProgramAst["procs"][number], lowering: XParamProcLowering): void {
+  compileXParamProcBody(proc: ProgramAst["procs"][number], lowering: XParamProcLowering): void {
     this.emitRecall(lowering.other, `${proc.name} ${lowering.first.target} base`, lowering.first.line);
     this.emitOp(0x10, "+", `${proc.name} ${lowering.first.target} from X parameter`, lowering.first.line);
     this.emitStore(lowering.first.target, `set ${lowering.first.target}`, lowering.first.line);
@@ -2731,7 +2731,7 @@ class EmitContext {
     });
   }
 
-  private compileStackUnaryDerivedAssignments(statements: StatementAst[], start: number): number {
+  compileStackUnaryDerivedAssignments(statements: StatementAst[], start: number): number {
     const first = statements[start];
     if (first?.kind !== "assign") return 0;
     const firstMatch = matchStackUnaryDerivationCall(first.expr);
@@ -2790,7 +2790,7 @@ class EmitContext {
     return derivations.length;
   }
 
-  private haltDisplaysSameValue(
+  haltDisplaysSameValue(
     show: Extract<StatementAst, { kind: "show" }>,
     halt: Extract<StatementAst, { kind: "halt" }>,
   ): boolean {
@@ -2802,7 +2802,7 @@ class EmitContext {
     return field?.initial !== undefined && expressionEquals(field.initial, halt.expr);
   }
 
-  private compileShowSequenceRead(
+  compileShowSequenceRead(
     firstShow: Extract<StatementAst, { kind: "show" }>,
     secondShow: Extract<StatementAst, { kind: "show" }>,
     input: Extract<StatementAst, { kind: "input" }>,
@@ -2818,7 +2818,7 @@ class EmitContext {
     return true;
   }
 
-  private compileGuardAssignmentSubstitution(
+  compileGuardAssignmentSubstitution(
     assign: Extract<StatementAst, { kind: "assign" }>,
     guarded: Extract<StatementAst, { kind: "if" }>,
   ): boolean {
@@ -2841,7 +2841,7 @@ class EmitContext {
     return true;
   }
 
-  private compileStatement(statement: StatementAst): void {
+  compileStatement(statement: StatementAst): void {
     switch (statement.kind) {
       case "pause":
         this.compileExpression(statement.expr);
@@ -2940,7 +2940,7 @@ class EmitContext {
     }
   }
 
-  private compileDecimalFactorialSeries(statement: Extract<StatementAst, { kind: "decimal_series" }>): void {
+  compileDecimalFactorialSeries(statement: Extract<StatementAst, { kind: "decimal_series" }>): void {
     const line = statement.line;
     if (statement.digits !== 94 || statement.counterStart !== 65) {
       this.diagnostics.push(buildDiagnostic(
@@ -3018,7 +3018,7 @@ class EmitContext {
     });
   }
 
-  private compileTicTacToeCellMaskReuse(
+  compileTicTacToeCellMaskReuse(
     first: Extract<StatementAst, { kind: "assign" }>,
     second: Extract<StatementAst, { kind: "assign" }>,
   ): boolean {
@@ -3052,7 +3052,7 @@ class EmitContext {
     return true;
   }
 
-  private compileBitSetMaskReuse(
+  compileBitSetMaskReuse(
     first: Extract<StatementAst, { kind: "assign" }>,
     second: Extract<StatementAst, { kind: "assign" }>,
   ): boolean {
@@ -3085,7 +3085,7 @@ class EmitContext {
   // (see matchSingleBitMaskOpAssignment). Builds the cell mask into a scratch
   // register first so the held accumulator never rides the four-deep stack
   // through the frac/x^y/10^x construction.
-  private compileSingleBitMaskOpAssignment(statement: Extract<StatementAst, { kind: "assign" }>): boolean {
+  compileSingleBitMaskOpAssignment(statement: Extract<StatementAst, { kind: "assign" }>): boolean {
     const match = matchSingleBitMaskOpAssignment(statement);
     if (match === undefined) return false;
     const scratch = bitMaskScratchName(statement);
@@ -3105,7 +3105,7 @@ class EmitContext {
     return true;
   }
 
-  private compileBitMaskWithQuotientScratch(
+  compileBitMaskWithQuotientScratch(
     index: ExpressionAst,
     scratch: string,
     line: number | undefined,
@@ -3130,7 +3130,7 @@ class EmitContext {
     });
   }
 
-  private sharedBitMaskHelperScratch(): string | undefined {
+  sharedBitMaskHelperScratch(): string | undefined {
     if (this.loweringOptions.sharedBitMaskHelperCalls !== true) return undefined;
     return this.allocation.registers[SHARED_BIT_MASK_SCRATCH] === undefined ? undefined : SHARED_BIT_MASK_SCRATCH;
   }
@@ -3138,7 +3138,7 @@ class EmitContext {
   // Build the `8.HHHHHHH` cell-mask value for the bit index currently in X (see
   // bitMaskExpression for the representation). The bit lands in fractional nibble
   // floor(index/4)+1; `2^(index mod 4)` is rounded because `F x^y` is imprecise.
-  private emitBitMaskFromCurrentXWithQuotientScratch(scratch: string, line: number | undefined): void {
+  emitBitMaskFromCurrentXWithQuotientScratch(scratch: string, line: number | undefined): void {
     this.emitNumber("4");
     this.emitOp(0x13, "/", "bit mask quotient", line);
     this.emitStore(scratch, "bit mask quotient", line);
@@ -3160,7 +3160,7 @@ class EmitContext {
     this.emitOp(0x10, "+", "bit mask anchor", line);
   }
 
-  private compileDecrementZeroBranch(
+  compileDecrementZeroBranch(
     decrement: Extract<StatementAst, { kind: "assign" }>,
     branch: Extract<StatementAst, { kind: "if" }>,
   ): boolean {
@@ -3194,7 +3194,7 @@ class EmitContext {
     return true;
   }
 
-  private compileIf(
+  compileIf(
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): void {
@@ -3248,7 +3248,7 @@ class EmitContext {
     }
   }
 
-  private compileResidualEqualityElseIf(
+  compileResidualEqualityElseIf(
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): boolean {
@@ -3302,7 +3302,7 @@ class EmitContext {
     return true;
   }
 
-  private emitResidualAdjustment(
+  emitResidualAdjustment(
     previousValue: number,
     nextValue: number,
     line: number | undefined,
@@ -3318,7 +3318,7 @@ class EmitContext {
     this.emitOp(0x11, "-", "residual else-if compare", line);
   }
 
-  private nearAnyFallthroughCandidate(
+  nearAnyFallthroughCandidate(
     condition: ConditionAst,
     thenBody: StatementAst[],
   ): string | undefined {
@@ -3345,7 +3345,7 @@ class EmitContext {
     return normalized.expr.name;
   }
 
-  private falseBranchCurrentXCandidate(
+  falseBranchCurrentXCandidate(
     condition: ConditionAst,
     elseBody: StatementAst[],
   ): string | undefined {
@@ -3374,7 +3374,7 @@ class EmitContext {
     return this.statementStartsWithCurrentXUse(statements[index], preserved) ? preserved : undefined;
   }
 
-  private firstInlineStatement(statements: StatementAst[], seen = new Set<string>()): StatementAst | undefined {
+  firstInlineStatement(statements: StatementAst[], seen = new Set<string>()): StatementAst | undefined {
     const first = statements[0];
     if (first?.kind !== "call") return first;
     if (!this.inlineProcNames.has(first.block) || seen.has(first.block)) return first;
@@ -3384,7 +3384,7 @@ class EmitContext {
     return this.firstInlineStatement(proc.body, seen);
   }
 
-  private inlineStatementPrefix(statements: StatementAst[], seen = new Set<string>()): StatementAst[] {
+  inlineStatementPrefix(statements: StatementAst[], seen = new Set<string>()): StatementAst[] {
     const first = statements[0];
     if (first?.kind !== "call") return statements;
     if (!this.inlineProcNames.has(first.block) || seen.has(first.block)) return statements;
@@ -3394,14 +3394,14 @@ class EmitContext {
     return this.inlineStatementPrefix(proc.body, seen);
   }
 
-  private statementStartsWithCurrentXUse(statement: StatementAst | undefined, variable: string): boolean {
+  statementStartsWithCurrentXUse(statement: StatementAst | undefined, variable: string): boolean {
     if (statement === undefined) return false;
     if (statement.kind === "if") return this.conditionCanUseCurrentX(statement.condition, variable);
     if (statement.kind === "assign") return this.expressionCanUseCurrentX(statement.expr, variable);
     return false;
   }
 
-  private conditionCanUseCurrentX(condition: ConditionAst, variable: string): boolean {
+  conditionCanUseCurrentX(condition: ConditionAst, variable: string): boolean {
     const selected = selectCheaperEquivalentCondition(
       condition,
       this.ast,
@@ -3411,7 +3411,7 @@ class EmitContext {
     return normalized !== undefined && this.expressionCanUseCurrentX(normalized.expr, variable);
   }
 
-  private expressionCanUseCurrentX(expr: ExpressionAst, variable: string): boolean {
+  expressionCanUseCurrentX(expr: ExpressionAst, variable: string): boolean {
     return expr.kind === "binary" &&
       (expr.op === "+" || expr.op === "*") &&
       (
@@ -3420,7 +3420,7 @@ class EmitContext {
       );
   }
 
-  private compileNestedGuardSharedFailure(
+  compileNestedGuardSharedFailure(
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): boolean {
@@ -3446,7 +3446,7 @@ class EmitContext {
     return true;
   }
 
-  private branchOrderStatement(
+  branchOrderStatement(
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): Extract<StatementAst, { kind: "if" }> {
@@ -3475,7 +3475,7 @@ class EmitContext {
     };
   }
 
-  private compileDirectTerminalIfBranch(
+  compileDirectTerminalIfBranch(
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): boolean {
@@ -3535,7 +3535,7 @@ class EmitContext {
     return true;
   }
 
-  private directTerminalCallTarget(statements: StatementAst[], seen = new Set<string>()): string | undefined {
+  directTerminalCallTarget(statements: StatementAst[], seen = new Set<string>()): string | undefined {
     if (statements.length !== 1) return undefined;
     const statement = statements[0];
     if (statement?.kind !== "call") return undefined;
@@ -3550,7 +3550,7 @@ class EmitContext {
     return this.statementsTerminate(proc.body) ? proc.name : undefined;
   }
 
-  private compileResidualGuardedUpdate(
+  compileResidualGuardedUpdate(
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): boolean {
@@ -3594,7 +3594,7 @@ class EmitContext {
     return true;
   }
 
-  private compileLocalTerminalElseTail(
+  compileLocalTerminalElseTail(
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): boolean {
@@ -3612,7 +3612,7 @@ class EmitContext {
     return true;
   }
 
-  private ensureTerminalTailHelper(body: StatementAst[], line: number): { body: StatementAst[]; label: string; line: number } {
+  ensureTerminalTailHelper(body: StatementAst[], line: number): { body: StatementAst[]; label: string; line: number } {
     const existing = this.terminalTailHelpers.find((helper) => statementListsEqual(helper.body, body));
     if (existing !== undefined) return existing;
     const helper = {
@@ -3624,7 +3624,7 @@ class EmitContext {
     return helper;
   }
 
-  private compileMembershipClearReuse(
+  compileMembershipClearReuse(
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): boolean {
@@ -3661,7 +3661,7 @@ class EmitContext {
     return true;
   }
 
-  private compileBitMembershipMaskValue(membership: BitMembershipCondition, line: number): boolean {
+  compileBitMembershipMaskValue(membership: BitMembershipCondition, line: number): boolean {
     if (membership.mode === "mask") {
       this.compileExpression(membership.mask);
       this.compileExpression(membership.collection);
@@ -3685,7 +3685,7 @@ class EmitContext {
     return true;
   }
 
-  private compileMembershipSetReuse(
+  compileMembershipSetReuse(
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): boolean {
@@ -3712,7 +3712,7 @@ class EmitContext {
     return this.compileMembershipSetReuseForAbsentCondition(statement, absent, setPrefix, line);
   }
 
-  private compileMembershipSetReuseForPresentCondition(
+  compileMembershipSetReuseForPresentCondition(
     statement: Extract<StatementAst, { kind: "if" }>,
     membership: BitMembershipCondition,
     setPrefix: {
@@ -3745,7 +3745,7 @@ class EmitContext {
     return true;
   }
 
-  private compileMembershipSetReuseForAbsentCondition(
+  compileMembershipSetReuseForAbsentCondition(
     statement: Extract<StatementAst, { kind: "if" }>,
     membership: BitMembershipCondition,
     setPrefix: {
@@ -3782,7 +3782,7 @@ class EmitContext {
     return true;
   }
 
-  private compileMembershipSetRunReuseForPresentCondition(
+  compileMembershipSetRunReuseForPresentCondition(
     statement: Extract<StatementAst, { kind: "if" }>,
     membership: BitMembershipCondition,
     setRun: {
@@ -3820,7 +3820,7 @@ class EmitContext {
     return true;
   }
 
-  private compileMembershipSetRunReuseForAbsentCondition(
+  compileMembershipSetRunReuseForAbsentCondition(
     statement: Extract<StatementAst, { kind: "if" }>,
     membership: BitMembershipCondition,
     setRun: {
@@ -3862,7 +3862,7 @@ class EmitContext {
     return true;
   }
 
-  private emitMembershipMaskTest(
+  emitMembershipMaskTest(
     membership: BitMembershipCondition,
     scratch: string,
     line: number,
@@ -3879,7 +3879,7 @@ class EmitContext {
     this.emitOp(0x35, "К {x}", "membership fraction", line);
   }
 
-  private emitBitSetWithScratch(
+  emitBitSetWithScratch(
     membership: BitMembershipCondition,
     set: Extract<StatementAst, { kind: "assign" }>,
     scratch: string,
@@ -3887,7 +3887,7 @@ class EmitContext {
     this.emitBitSetCollectionWithScratch(membership.collection, set, scratch);
   }
 
-  private emitBitSetCollectionWithScratch(
+  emitBitSetCollectionWithScratch(
     collection: ExpressionAst,
     set: Extract<StatementAst, { kind: "assign" }>,
     scratch: string,
@@ -3898,7 +3898,7 @@ class EmitContext {
     this.emitStore(set.target, `set ${set.target}`, set.line);
   }
 
-  private membershipClearPrefix(statements: StatementAst[]): {
+  membershipClearPrefix(statements: StatementAst[]): {
     clear: Extract<StatementAst, { kind: "assign" }>;
     tail: StatementAst[];
   } | undefined {
@@ -3917,7 +3917,7 @@ class EmitContext {
     };
   }
 
-  private membershipSetPrefix(
+  membershipSetPrefix(
     statements: StatementAst[],
     membership: BitMembershipCondition,
   ): {
@@ -3939,7 +3939,7 @@ class EmitContext {
     };
   }
 
-  private membershipSetRunPrefix(
+  membershipSetRunPrefix(
     statements: StatementAst[],
     membership: BitMembershipCondition,
   ): {
@@ -3969,7 +3969,7 @@ class EmitContext {
     };
   }
 
-  private compileArithmeticIfSelect(statement: Extract<StatementAst, { kind: "if" }>): boolean {
+  compileArithmeticIfSelect(statement: Extract<StatementAst, { kind: "if" }>): boolean {
     const canUseNegativeZero = this.allocation.negativeZeroDegree !== undefined;
     const selected = buildBranchRemovalCandidate(
       statement,
@@ -4014,7 +4014,7 @@ class EmitContext {
     return true;
   }
 
-  private compileGuardedUpdateSelector(statement: Extract<StatementAst, { kind: "if" }>): boolean {
+  compileGuardedUpdateSelector(statement: Extract<StatementAst, { kind: "if" }>): boolean {
     const scratch = ifSelectorScratchName(statement);
     if (this.allocation.registers[scratch] === undefined) return false;
     const candidate = buildGuardedUpdateSelectorCandidate(statement, this.ast, {
@@ -4053,7 +4053,7 @@ class EmitContext {
     return true;
   }
 
-  private recordRejectedNegativeZeroBranchCandidate(statement: Extract<StatementAst, { kind: "if" }>): void {
+  recordRejectedNegativeZeroBranchCandidate(statement: Extract<StatementAst, { kind: "if" }>): void {
     const selected = buildBranchRemovalCandidate(statement, this.ast, { negativeZeroDegree: true });
     if (selected === undefined || !selected.name.startsWith("negative-zero-threshold-")) return;
     const ordinaryCost = estimateOrdinaryIfCost(statement, this.ast);
@@ -4069,7 +4069,7 @@ class EmitContext {
     });
   }
 
-  private compileDoubleBranchRemoval(
+  compileDoubleBranchRemoval(
     first: Extract<StatementAst, { kind: "if" }>,
     second: Extract<StatementAst, { kind: "if" }>,
   ): boolean {
@@ -4102,7 +4102,7 @@ class EmitContext {
     return true;
   }
 
-  private compileDispatch(statement: Extract<StatementAst, { kind: "dispatch" }>): void {
+  compileDispatch(statement: Extract<StatementAst, { kind: "dispatch" }>): void {
     const optimized = optimizeDispatchDefaultCases(statement);
     if (optimized.removed > 0) {
       this.optimizations.push({
@@ -4129,7 +4129,7 @@ class EmitContext {
     this.compileDispatchCompareChain(optimized.statement, selected.selected.variant === "fallthrough-compare-chain");
   }
 
-  private compileDispatchCompareChain(
+  compileDispatchCompareChain(
     statement: Extract<StatementAst, { kind: "dispatch" }>,
     useFallthrough: boolean,
   ): void {
@@ -4199,7 +4199,7 @@ class EmitContext {
     this.emitLabel(endLabel);
   }
 
-  private compileNumericResidualDispatchCompareChain(
+  compileNumericResidualDispatchCompareChain(
     statement: Extract<StatementAst, { kind: "dispatch" }>,
     useFallthrough: boolean,
   ): boolean {
@@ -4243,41 +4243,41 @@ class EmitContext {
     return true;
   }
 
-  private emitPositiveResidualCompare(value: number, comment: string, line?: number): void {
+  emitPositiveResidualCompare(value: number, comment: string, line?: number): void {
     const magnitude = Math.abs(value);
     if (magnitude === 0) return;
     this.emitNumberOrPreload(String(magnitude));
     this.emitOp(value < 0 ? 0x10 : 0x11, value < 0 ? "+" : "-", comment, line);
   }
 
-  private emitResidualCompareDelta(delta: number, comment: string, line?: number): void {
+  emitResidualCompareDelta(delta: number, comment: string, line?: number): void {
     const magnitude = Math.abs(delta);
     if (magnitude === 0) return;
     this.emitNumberOrPreload(String(magnitude));
     this.emitOp(delta < 0 ? 0x10 : 0x11, delta < 0 ? "+" : "-", comment, line);
   }
 
-  private statementsTerminate(statements: StatementAst[]): boolean {
+  statementsTerminate(statements: StatementAst[]): boolean {
     return this.statementListTerminates(statements, new Set());
   }
 
-  private statementsEndMachineFlow(statements: StatementAst[]): boolean {
+  statementsEndMachineFlow(statements: StatementAst[]): boolean {
     return this.statementListEndsMachineFlow(statements, new Set());
   }
 
-  private statementListTerminates(statements: StatementAst[], seenProcs: Set<string>): boolean {
+  statementListTerminates(statements: StatementAst[], seenProcs: Set<string>): boolean {
     const last = statements.at(-1);
     if (!last) return false;
     return this.statementTerminates(last, seenProcs);
   }
 
-  private statementListEndsMachineFlow(statements: StatementAst[], seenProcs: Set<string>): boolean {
+  statementListEndsMachineFlow(statements: StatementAst[], seenProcs: Set<string>): boolean {
     const last = statements.at(-1);
     if (!last) return false;
     return this.statementEndsMachineFlow(last, seenProcs);
   }
 
-  private statementTerminates(statement: StatementAst, seenProcs: Set<string>): boolean {
+  statementTerminates(statement: StatementAst, seenProcs: Set<string>): boolean {
     if (
       statement.kind === "halt" || statement.kind === "loop" ||
       statement.kind === "decimal_series" || statement.kind === "return_value"
@@ -4302,7 +4302,7 @@ class EmitContext {
     return this.statementListTerminates(proc.body, seenProcs);
   }
 
-  private statementEndsMachineFlow(statement: StatementAst, seenProcs: Set<string>): boolean {
+  statementEndsMachineFlow(statement: StatementAst, seenProcs: Set<string>): boolean {
     if (
       statement.kind === "loop" || statement.kind === "decimal_series" ||
       statement.kind === "return_value"
@@ -4330,7 +4330,7 @@ class EmitContext {
     return this.statementListEndsMachineFlow(proc.body, seenProcs);
   }
 
-  private compileShow(displayName: string, line: number): void {
+  compileShow(displayName: string, line: number): void {
     const display = this.ast.displays.find((candidate) => candidate.name === displayName);
     if (!display) {
       this.diagnostics.push(buildDiagnostic("error", `Unknown display '${displayName}'.`, line));
@@ -4381,7 +4381,7 @@ class EmitContext {
     this.reportPackedDisplayLowering(display);
   }
 
-  private compileDashedCoordReportDisplay(display: ProgramAst["displays"][number], line: number): boolean {
+  compileDashedCoordReportDisplay(display: ProgramAst["displays"][number], line: number): boolean {
     const template = dashedCoordReportDisplayTemplate(display);
     if (template === undefined) return false;
     const maskRegister = this.allocation.registers[COORD_LIST_DX];
@@ -4432,7 +4432,7 @@ class EmitContext {
     return true;
   }
 
-  private currentXDashedCoordReportBodyMatches(template: DashedCoordReportTemplate): boolean {
+  currentXDashedCoordReportBodyMatches(template: DashedCoordReportTemplate): boolean {
     const body = this.currentXDashedCoordReportBody;
     return body !== undefined &&
       body.cell.name === template.cell.name &&
@@ -4441,7 +4441,7 @@ class EmitContext {
       body.bearing.width === template.bearing.width;
   }
 
-  private emitDashedCoordReportPackedBodyDisplay(displayName: string, maskRegister: RegisterName, line: number): void {
+  emitDashedCoordReportPackedBodyDisplay(displayName: string, maskRegister: RegisterName, line: number): void {
     this.emitNumber("7");
     this.emitOp(0x15, "F 10^x", "display dashed video anchor", line);
     this.emitOp(0x10, "+", "display dashed video body", line);
@@ -4454,7 +4454,7 @@ class EmitContext {
     this.emitOp(0x50, "С/П", `show ${displayName}`, line);
   }
 
-  private selectDisplayStrategy(display: ProgramAst["displays"][number]): DisplayStrategyVariant | undefined {
+  selectDisplayStrategy(display: ProgramAst["displays"][number]): DisplayStrategyVariant | undefined {
     const candidates = this.displayStrategyCandidates(display);
     const available = candidates.filter((candidate) => candidate.available);
     if (available.length === 0) {
@@ -4491,7 +4491,7 @@ class EmitContext {
     return selected.variant;
   }
 
-  private displayStrategyCandidates(display: ProgramAst["displays"][number]): DisplayStrategyCandidate[] {
+  displayStrategyCandidates(display: ProgramAst["displays"][number]): DisplayStrategyCandidate[] {
     const fields = this.numericDisplayFields(display);
     const sourceFields = this.displaySourceFields(display);
     const decimalCost = fields === undefined
@@ -4556,7 +4556,7 @@ class EmitContext {
     ];
   }
 
-  private compilePackedDisplayBody(
+  compilePackedDisplayBody(
     display: ProgramAst["displays"][number],
     line: number,
     reuseCurrentX: boolean,
@@ -4573,7 +4573,7 @@ class EmitContext {
     this.emitOp(0x50, "С/П", `show ${display.name}`, line);
   }
 
-  private compilePackedDisplayFields(
+  compilePackedDisplayFields(
     display: ProgramAst["displays"][number],
     fields: DisplayField[],
     line: number,
@@ -4616,7 +4616,7 @@ class EmitContext {
     );
   }
 
-  private compilePackedDisplayFieldsInOrder(
+  compilePackedDisplayFieldsInOrder(
     display: ProgramAst["displays"][number],
     fields: DisplayField[],
     line: number,
@@ -4648,7 +4648,7 @@ class EmitContext {
     }
   }
 
-  private emitDisplayFieldValue(
+  emitDisplayFieldValue(
     display: ProgramAst["displays"][number],
     field: DisplayField,
     line: number,
@@ -4662,7 +4662,7 @@ class EmitContext {
     this.emitRecall(field.name, `display ${display.name} source`, line);
   }
 
-  private numericDisplayFields(
+  numericDisplayFields(
     display: ProgramAst["displays"][number],
     line?: number,
   ): DisplayField[] | undefined {
@@ -4688,13 +4688,13 @@ class EmitContext {
     return fields;
   }
 
-  private displaySourceFields(display: ProgramAst["displays"][number]): DisplayField[] {
+  displaySourceFields(display: ProgramAst["displays"][number]): DisplayField[] {
     return display.items
       .filter((item): item is DisplaySourceItem => item.kind === "source")
       .map((item) => ({ kind: "source", item, name: item.name, width: item.width ?? this.naturalDisplayWidth(item.name) }));
   }
 
-  private estimateDecimalDisplayCost(fields: DisplayField[], reuseCurrentX: boolean): number {
+  estimateDecimalDisplayCost(fields: DisplayField[], reuseCurrentX: boolean): number {
     if (fields.length === 0) return 2;
     const currentIndex = reuseCurrentX && this.currentXVariable !== undefined
       ? fields.findIndex((field) => field.kind === "source" && field.name === this.currentXVariable)
@@ -4722,15 +4722,15 @@ class EmitContext {
     return cost + 1;
   }
 
-  private estimateDisplayFieldValueCost(field: DisplayField): number {
+  estimateDisplayFieldValueCost(field: DisplayField): number {
     return field.kind === "literal" ? this.estimateNumberOrPreloadCost(field.value ?? "0") : 1;
   }
 
-  private estimateNumberOrPreloadCost(raw: string): number {
+  estimateNumberOrPreloadCost(raw: string): number {
     return this.allocation.constants[normalizeConstantLiteral(raw)] === undefined ? estimateNumberCost(raw) : 1;
   }
 
-  private packedStorageReuseFields(display: ProgramAst["displays"][number]): DisplayField[] | undefined {
+  packedStorageReuseFields(display: ProgramAst["displays"][number]): DisplayField[] | undefined {
     const fields = this.numericDisplayFields(display);
     if (fields === undefined || fields.length < 2) return undefined;
     if (fields.some((field) => field.kind !== "source")) return undefined;
@@ -4740,7 +4740,7 @@ class EmitContext {
     return fields;
   }
 
-  private estimatePackedStorageReuseCost(fields: DisplayField[], reuseCurrentX: boolean): number {
+  estimatePackedStorageReuseCost(fields: DisplayField[], reuseCurrentX: boolean): number {
     if (fields.length === 0) return 2;
     const currentIndex = reuseCurrentX && this.currentXVariable !== undefined
       ? fields.findIndex((field) => field.name === this.currentXVariable)
@@ -4749,7 +4749,7 @@ class EmitContext {
     return recalled + Math.max(0, fields.length - 1) + 1;
   }
 
-  private compilePackedStorageReuseDisplay(
+  compilePackedStorageReuseDisplay(
     display: ProgramAst["displays"][number],
     line: number,
     reuseCurrentX: boolean,
@@ -4772,7 +4772,7 @@ class EmitContext {
     return true;
   }
 
-  private orderStorageReuseFields(fields: DisplayField[], reuseCurrentX: boolean): DisplayField[] {
+  orderStorageReuseFields(fields: DisplayField[], reuseCurrentX: boolean): DisplayField[] {
     if (!reuseCurrentX || this.currentXVariable === undefined) return fields;
     const index = fields.findIndex((field) => field.name === this.currentXVariable);
     if (index <= 0) return fields;
@@ -4787,7 +4787,7 @@ class EmitContext {
     ];
   }
 
-  private canCompileDisplayByteBuilder(display: ProgramAst["displays"][number]): boolean {
+  canCompileDisplayByteBuilder(display: ProgramAst["displays"][number]): boolean {
     if (!machineSupports(this.machineProfile, "display-bytes")) return false;
     return this.mantissaExponentDisplayTemplate(display) !== undefined &&
       this.displayTemplateScratchRegisters(display) !== undefined ||
@@ -4796,7 +4796,7 @@ class EmitContext {
       this.displayMaskRegister(display) !== undefined;
   }
 
-  private estimateDisplayByteBuilderCost(
+  estimateDisplayByteBuilderCost(
     display: ProgramAst["displays"][number],
     _fields: DisplayField[],
     reuseCurrentX: boolean,
@@ -4812,7 +4812,7 @@ class EmitContext {
       String(maskTemplate.width - 1).length;
   }
 
-  private compileDisplayByteBuilder(
+  compileDisplayByteBuilder(
     display: ProgramAst["displays"][number],
     line: number,
     _reuseCurrentX: boolean,
@@ -4865,7 +4865,7 @@ class EmitContext {
     return true;
   }
 
-  private compileMantissaMaskDisplay(
+  compileMantissaMaskDisplay(
     display: ProgramAst["displays"][number],
     line: number,
     _reuseCurrentX: boolean,
@@ -4893,7 +4893,7 @@ class EmitContext {
     return true;
   }
 
-  private mantissaExponentDisplayTemplate(
+  mantissaExponentDisplayTemplate(
     display: ProgramAst["displays"][number],
   ): MantissaExponentDisplayTemplate | undefined {
     const [leader, firstLiteral, score, secondLiteral, total, thirdLiteral, exponent] = display.items;
@@ -4929,7 +4929,7 @@ class EmitContext {
     return result;
   }
 
-  private mantissaMaskDisplayTemplate(
+  mantissaMaskDisplayTemplate(
     display: ProgramAst["displays"][number],
   ): MantissaMaskDisplayTemplate | undefined {
     const [first, ...rest] = display.items;
@@ -4985,7 +4985,7 @@ class EmitContext {
     };
   }
 
-  private displayFieldFitsUnsignedWidth(field: DisplayField): boolean {
+  displayFieldFitsUnsignedWidth(field: DisplayField): boolean {
     const state = this.findStateField(field.name);
     if (state === undefined) return false;
     const min = state.min ?? 0;
@@ -4993,16 +4993,16 @@ class EmitContext {
     return min >= 0 && max < 10 ** field.width;
   }
 
-  private displayFieldCanBeZero(field: DisplayField): boolean {
+  displayFieldCanBeZero(field: DisplayField): boolean {
     const state = this.findStateField(field.name);
     return state === undefined || (state.min ?? 0) <= 0;
   }
 
-  private displayFieldMin(field: DisplayField): number | undefined {
+  displayFieldMin(field: DisplayField): number | undefined {
     return this.findStateField(field.name)?.min;
   }
 
-  private displayTemplateScratchRegisters(display: ProgramAst["displays"][number]): {
+  displayTemplateScratchRegisters(display: ProgramAst["displays"][number]): {
     value: string;
     loop: string;
     loopRegister: 0 | 1 | 2 | 3;
@@ -5023,16 +5023,16 @@ class EmitContext {
     return { value, loop, loopRegister: Number(loopRegister) as 0 | 1 | 2 | 3, mask };
   }
 
-  private displayMaskScratchRegister(display: ProgramAst["displays"][number]): RegisterName | undefined {
+  displayMaskScratchRegister(display: ProgramAst["displays"][number]): RegisterName | undefined {
     return this.allocation.registers[displayTemplateValueScratchName(display)];
   }
 
-  private displayMaskRegister(display: ProgramAst["displays"][number]): RegisterName | undefined {
+  displayMaskRegister(display: ProgramAst["displays"][number]): RegisterName | undefined {
     const template = this.mantissaMaskDisplayTemplate(display);
     return template === undefined ? undefined : this.allocation.constants[normalizeConstantLiteral(template.mask)];
   }
 
-  private emitDisplayLiteralProgram(
+  emitDisplayLiteralProgram(
     program: Exclude<DisplayLiteralProgram, { kind: "error" }>,
     line: number | undefined,
     comment: string,
@@ -5050,7 +5050,7 @@ class EmitContext {
     if (program.negative) this.emitOp(0x0b, "/-/", `${comment} sign`, line);
   }
 
-  private emitFirstSpliceDisplayLiteralProgram(
+  emitFirstSpliceDisplayLiteralProgram(
     program: FirstSpliceDisplayLiteralProgram,
     tempRegister: RegisterName,
     line: number | undefined,
@@ -5089,7 +5089,7 @@ class EmitContext {
     this.emitDisplayExponent(program.exponent, line, `${comment} exponent`);
   }
 
-  private emitDisplayFirstDigit(cell: number, line: number | undefined, comment: string): void {
+  emitDisplayFirstDigit(cell: number, line: number | undefined, comment: string): void {
     if (cell >= 0 && cell <= 9) {
       this.emitNumber(String(cell));
       const last = this.items.at(-1);
@@ -5105,7 +5105,7 @@ class EmitContext {
     this.diagnostics.push(buildDiagnostic("error", `Unsupported display first digit ${cell}.`, line));
   }
 
-  private emitDisplayExponent(exponent: number, line: number | undefined, comment: string): void {
+  emitDisplayExponent(exponent: number, line: number | undefined, comment: string): void {
     if (!Number.isInteger(exponent) || exponent < 0 || exponent > 99) {
       this.diagnostics.push(buildDiagnostic("error", `Unsupported display exponent ${exponent}.`, line));
       return;
@@ -5116,11 +5116,11 @@ class EmitContext {
     }
   }
 
-  private canReorderNumericDisplay(display: ProgramAst["displays"][number]): boolean {
+  canReorderNumericDisplay(display: ProgramAst["displays"][number]): boolean {
     return display.sources.length <= 1 && display.items.every((item) => item.kind === "source" && item.width === undefined);
   }
 
-  private naturalDisplayWidth(source: string): number {
+  naturalDisplayWidth(source: string): number {
     const field = this.findStateField(source);
     if (field === undefined) return 1;
     const min = field.min ?? 0;
@@ -5129,7 +5129,7 @@ class EmitContext {
     return Math.max(1, String(Math.trunc(magnitude)).length);
   }
 
-  private reportPackedDisplayLowering(display: ProgramAst["displays"][number]): void {
+  reportPackedDisplayLowering(display: ProgramAst["displays"][number]): void {
     const canUseDisplayBytes = machineSupports(this.machineProfile, "display-bytes");
     this.optimizations.push({
       name: "packed-display-lowering",
@@ -5139,7 +5139,7 @@ class EmitContext {
     });
   }
 
-  private sharedDisplayByteHelper(
+  sharedDisplayByteHelper(
     display: ProgramAst["displays"][number],
     line: number,
   ): { display: ProgramAst["displays"][number]; label: string; line: number } | undefined {
@@ -5155,7 +5155,7 @@ class EmitContext {
     return helper;
   }
 
-  private shouldShareDisplayByte(display: ProgramAst["displays"][number]): boolean {
+  shouldShareDisplayByte(display: ProgramAst["displays"][number]): boolean {
     if (!this.canCompileDisplayByteBuilder(display)) return false;
     const uses = this.displayUseCounts.get(display.name) ?? 0;
     if (uses < 2) return false;
@@ -5165,7 +5165,7 @@ class EmitContext {
     return inlineTotal - helperCost >= DISPLAY_HELPER_MIN_SAVINGS;
   }
 
-  private sharedDisplayHelper(
+  sharedDisplayHelper(
     display: ProgramAst["displays"][number],
     line: number,
   ): { display: ProgramAst["displays"][number]; label: string; line: number } | undefined {
@@ -5181,7 +5181,7 @@ class EmitContext {
     return helper;
   }
 
-  private shouldShareDisplay(display: ProgramAst["displays"][number]): boolean {
+  shouldShareDisplay(display: ProgramAst["displays"][number]): boolean {
     const fields = this.numericDisplayFields(display);
     if (fields === undefined) return false;
     const sources = fields.length;
@@ -5195,7 +5195,7 @@ class EmitContext {
     return inlineTotal - helperCost >= DISPLAY_HELPER_MIN_SAVINGS;
   }
 
-  private sharedShowSequenceHelper(
+  sharedShowSequenceHelper(
     firstName: string,
     secondName: string,
     line: number,
@@ -5222,7 +5222,7 @@ class EmitContext {
     return helper;
   }
 
-  private shouldShareShowSequence(
+  shouldShareShowSequence(
     first: ProgramAst["displays"][number],
     second: ProgramAst["displays"][number],
   ): boolean {
@@ -5237,7 +5237,7 @@ class EmitContext {
     return inlineTotal - helperTotal >= DISPLAY_HELPER_MIN_SAVINGS;
   }
 
-  private compileTextDisplay(display: ProgramAst["displays"][number], line: number): boolean {
+  compileTextDisplay(display: ProgramAst["displays"][number], line: number): boolean {
     const normalized = this.collapseTextPrefixDisplay(display);
     if (normalized === undefined) return false;
     const { text, source } = normalized;
@@ -5266,7 +5266,7 @@ class EmitContext {
     return true;
   }
 
-  private compileLiteralDisplay(display: ProgramAst["displays"][number], line: number): boolean {
+  compileLiteralDisplay(display: ProgramAst["displays"][number], line: number): boolean {
     const literal = this.collapseLiteralOnlyDisplay(display);
     if (literal === undefined) return false;
     const compiled = this.compileLiteralDisplayBody(display, line, literal);
@@ -5280,7 +5280,7 @@ class EmitContext {
     return true;
   }
 
-  private compileLiteralDisplayBody(
+  compileLiteralDisplayBody(
     display: ProgramAst["displays"][number],
     line: number,
     literal = this.collapseLiteralOnlyDisplay(display),
@@ -5338,7 +5338,7 @@ class EmitContext {
     return false;
   }
 
-  private compilePreloadedDisplayLiteral(
+  compilePreloadedDisplayLiteral(
     display: ProgramAst["displays"][number],
     literal: string,
     line: number,
@@ -5355,11 +5355,11 @@ class EmitContext {
     return true;
   }
 
-  private firstSpliceDisplayScratch(display: ProgramAst["displays"][number]): RegisterName | undefined {
+  firstSpliceDisplayScratch(display: ProgramAst["displays"][number]): RegisterName | undefined {
     return this.allocation.registers[firstSpliceDisplayScratchName(display)];
   }
 
-  private compileDecimalLiteralDisplay(
+  compileDecimalLiteralDisplay(
     display: ProgramAst["displays"][number],
     literal: string,
     line: number,
@@ -5375,7 +5375,7 @@ class EmitContext {
     return true;
   }
 
-  private compileZeroDigitTailDisplay(
+  compileZeroDigitTailDisplay(
     display: ProgramAst["displays"][number],
     literal: string,
     line: number,
@@ -5405,7 +5405,7 @@ class EmitContext {
     return true;
   }
 
-  private compileSignDigitLiteralDisplay(
+  compileSignDigitLiteralDisplay(
     display: ProgramAst["displays"][number],
     literal: string,
     line: number,
@@ -5448,19 +5448,19 @@ class EmitContext {
     return true;
   }
 
-  private emitFirstDigitSplice(line: number | undefined): void {
+  emitFirstDigitSplice(line: number | undefined): void {
     this.emitOp(0x14, "<->", "display sign-digit first-cell splice", line);
     this.emitOp(0x54, "К НОП", "display sign-digit first-cell splice", line, true);
     this.emitOp(0x0c, "ВП", "display sign-digit first-cell splice", line);
   }
 
-  private emitSignDigitIndirectStep(register: RegisterName, line: number): void {
+  emitSignDigitIndirectStep(register: RegisterName, line: number): void {
     this.emitOp(0x40 + registerIndex(register), `X->П ${register}`, "display sign-digit indirect scratch", line);
     this.emitOp(0xd0 + registerIndex(register), `К П->X ${register}`, "display sign-digit indirect normalize", line);
     this.emitOp(0x60 + registerIndex(register), `П->X ${register}`, "display sign-digit indirect body", line);
   }
 
-  private signDigitLiteralScratch(): { indirect: RegisterName; source: RegisterName } | undefined {
+  signDigitLiteralScratch(): { indirect: RegisterName; source: RegisterName } | undefined {
     const used = this.usedAllocatedRegisters();
     const indirect = (["4", "5", "6"] as const).find((register) => !used.has(register));
     if (indirect === undefined) return undefined;
@@ -5469,12 +5469,12 @@ class EmitContext {
     return { indirect, source };
   }
 
-  private scratchRegistersAvailable(registers: ReadonlySet<RegisterName>): boolean {
+  scratchRegistersAvailable(registers: ReadonlySet<RegisterName>): boolean {
     const used = this.usedAllocatedRegisters();
     return [...registers].every((register) => !used.has(register));
   }
 
-  private usedAllocatedRegisters(): Set<RegisterName> {
+  usedAllocatedRegisters(): Set<RegisterName> {
     const used = new Set<RegisterName>([
       ...Object.values(this.allocation.registers),
       ...Object.values(this.allocation.constants),
@@ -5483,7 +5483,7 @@ class EmitContext {
     return used;
   }
 
-  private compileLiteralHalt(literal: string, line: number): void {
+  compileLiteralHalt(literal: string, line: number): void {
     const program = displayLiteralProgram(literal);
     if (program?.kind === "error") {
       this.emitErrorStopOpcode("halt literal ЕГГ0Г", line);
@@ -5516,11 +5516,11 @@ class EmitContext {
     });
   }
 
-  private emitErrorStopOpcode(comment: string, line: number, raw = false): void {
+  emitErrorStopOpcode(comment: string, line: number, raw = false): void {
     this.emitOp(0x2b, "error 2B", comment, line, raw);
   }
 
-  private sharedLiteralDisplayHelper(
+  sharedLiteralDisplayHelper(
     display: ProgramAst["displays"][number],
     line: number,
   ): { display: ProgramAst["displays"][number]; label: string; line: number } | undefined {
@@ -5536,7 +5536,7 @@ class EmitContext {
     return helper;
   }
 
-  private shouldShareLiteralDisplay(display: ProgramAst["displays"][number]): boolean {
+  shouldShareLiteralDisplay(display: ProgramAst["displays"][number]): boolean {
     const literal = this.collapseLiteralOnlyDisplay(display);
     const program = literal === undefined ? undefined : displayLiteralProgram(literal);
     if (program === undefined) return false;
@@ -5550,7 +5550,7 @@ class EmitContext {
     return inlineTotal - helperCost >= DISPLAY_HELPER_MIN_SAVINGS;
   }
 
-  private collapseLiteralOnlyDisplay(display: ProgramAst["displays"][number]): string | undefined {
+  collapseLiteralOnlyDisplay(display: ProgramAst["displays"][number]): string | undefined {
     if (display.items.length === 0) return "";
     if (display.items.some((item) => item.kind !== "literal")) return undefined;
     const text = display.items.map((item) => item.kind === "literal" ? item.text : "").join("");
@@ -5558,7 +5558,7 @@ class EmitContext {
     return text.trim().length === 0 ? undefined : text;
   }
 
-  private collapseTextPrefixDisplay(
+  collapseTextPrefixDisplay(
     display: ProgramAst["displays"][number],
   ): { text: string; source: Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }> } | undefined {
     let text = "";
@@ -5576,7 +5576,7 @@ class EmitContext {
     return { text, source };
   }
 
-  private emitTwoDigitTextDisplay(source: string, line: number): void {
+  emitTwoDigitTextDisplay(source: string, line: number): void {
     this.emitRecall(source, "text display verse", line);
     this.emitOp(0x01, "1", "text tens divisor", line);
     this.emitOp(0x00, "0", "text tens divisor", line);
@@ -5629,7 +5629,7 @@ class EmitContext {
     this.emitOp(0x52, "В/О", "text digit return", line);
   }
 
-  private findStateField(name: string): StateFieldAst | undefined {
+  findStateField(name: string): StateFieldAst | undefined {
     for (const state of this.ast.states) {
       const field = state.fields.find((candidate) => candidate.name === name);
       if (field !== undefined) return field;
@@ -5637,11 +5637,11 @@ class EmitContext {
     return undefined;
   }
 
-  private currentAddress(): number {
+  currentAddress(): number {
     return this.items.filter((item) => item.kind !== "label").length;
   }
 
-  private compileBlockCall(blockName: string, line: number): void {
+  compileBlockCall(blockName: string, line: number): void {
     const proc = this.ast.procs.find((candidate) => candidate.name === blockName);
     if (proc) {
       if (this.inlineProcNames.has(proc.name)) {
@@ -5688,13 +5688,13 @@ class EmitContext {
     this.diagnostics.push(buildDiagnostic("error", `Unknown block '${blockName}'.`, line));
   }
 
-  private procReturnXVariable(proc: ProgramAst["procs"][number]): string | undefined {
+  procReturnXVariable(proc: ProgramAst["procs"][number]): string | undefined {
     if (this.statementsTerminate(proc.body)) return undefined;
     const last = proc.body.at(-1);
     return last?.kind === "assign" ? last.target : undefined;
   }
 
-  private compileCoordListLineCountDashedReport(
+  compileCoordListLineCountDashedReport(
     assignment: Extract<StatementAst, { kind: "assign" }>,
     show: Extract<StatementAst, { kind: "show" }>,
   ): boolean {
@@ -5709,7 +5709,7 @@ class EmitContext {
     return true;
   }
 
-  private compileCoordListLineCountAssignment(
+  compileCoordListLineCountAssignment(
     statement: Extract<StatementAst, { kind: "assign" }>,
     dashedReport?: DashedCoordReportTemplate,
   ): boolean {
@@ -5778,7 +5778,7 @@ class EmitContext {
     return true;
   }
 
-  private dashedCoordReportTemplateAfterLineCount(
+  dashedCoordReportTemplateAfterLineCount(
     assignment: Extract<StatementAst, { kind: "assign" }>,
     statement: StatementAst | undefined,
   ): DashedCoordReportTemplate | undefined {
@@ -5797,7 +5797,7 @@ class EmitContext {
     return template;
   }
 
-  private emitCoordListLineCountInitialTotal(
+  emitCoordListLineCountInitialTotal(
     target: string,
     line: number,
     dashedReport?: DashedCoordReportTemplate,
@@ -5812,7 +5812,7 @@ class EmitContext {
     this.emitStore(target, `${commentPrefix} dashed report body`, line);
   }
 
-  private emitCoordListLineCountResult(
+  emitCoordListLineCountResult(
     target: string,
     line: number,
     dashedReport?: DashedCoordReportTemplate,
@@ -5826,7 +5826,7 @@ class EmitContext {
     if (dashedReport !== undefined) this.currentXDashedCoordReportBody = dashedReport;
   }
 
-  private emitDashedCoordReportCellBody(
+  emitDashedCoordReportCellBody(
     template: DashedCoordReportTemplate,
     line: number,
     commentPrefix: string,
@@ -5841,12 +5841,12 @@ class EmitContext {
     this.emitOp(0x12, "*", `${commentPrefix} cell shift`, line);
   }
 
-  private coordListUsesScaledDecimalStorage(callOrList: CoordListCall | string): boolean {
+  coordListUsesScaledDecimalStorage(callOrList: CoordListCall | string): boolean {
     const listName = typeof callOrList === "string" ? callOrList : coordListNameFromItems(callOrList.items);
     return listName !== undefined && this.scaledCoordLists.has(listName);
   }
 
-  private scaleCoordListCellInPlace(cell: ExpressionAst, line: number): boolean {
+  scaleCoordListCellInPlace(cell: ExpressionAst, line: number): boolean {
     if (cell.kind !== "identifier") return false;
     if (this.scaledCoordVariables.has(cell.name)) return true;
     if (!this.xHolds(cell.name)) this.emitRecall(cell.name, "coord_list raw cell", line);
@@ -5861,7 +5861,7 @@ class EmitContext {
     return true;
   }
 
-  private compileScaledCoordListVisibilityTest(
+  compileScaledCoordListVisibilityTest(
     cell: ExpressionAst,
     visible: string,
     countNext: string,
@@ -5887,17 +5887,17 @@ class EmitContext {
     this.emitJump(0x51, "БП", countNext, `${commentPrefix} not visible`, line);
   }
 
-  private compileScaledCoordFraction(expr: ExpressionAst, line: number, comment: string): void {
+  compileScaledCoordFraction(expr: ExpressionAst, line: number, comment: string): void {
     this.compileExpression(expr);
     this.emitOp(0x35, "К {x}", comment, line);
   }
 
-  private compileScaledCoordInteger(expr: ExpressionAst, line: number, comment: string): void {
+  compileScaledCoordInteger(expr: ExpressionAst, line: number, comment: string): void {
     this.compileExpression(expr);
     this.emitOp(0x34, "К [x]", comment, line);
   }
 
-  private compileFusedCoordListScan(statements: StatementAst[], index: number): number {
+  compileFusedCoordListScan(statements: StatementAst[], index: number): number {
     const branch = statements[index];
     const next = statements[index + 1];
     if (branch?.kind !== "if" || next === undefined || branch.elseBody !== undefined) return 0;
@@ -5984,7 +5984,7 @@ class EmitContext {
     return 2;
   }
 
-  private coordListLineCountAssignmentFromStatement(
+  coordListLineCountAssignmentFromStatement(
     statement: StatementAst,
   ): Extract<StatementAst, { kind: "assign" }> | undefined {
     if (statement.kind === "assign" && coordListLineCountCall(statement.expr) !== undefined) return statement;
@@ -5995,7 +5995,7 @@ class EmitContext {
     return only?.kind === "assign" && coordListLineCountCall(only.expr) !== undefined ? only : undefined;
   }
 
-  private coordListFusedHitBodyAllowed(statements: StatementAst[], seen = new Set<string>()): boolean {
+  coordListFusedHitBodyAllowed(statements: StatementAst[], seen = new Set<string>()): boolean {
     if (statements.length === 0) return true;
     for (const statement of statements) {
       if (statement.kind === "show" || statement.kind === "pause") continue;
@@ -6011,7 +6011,7 @@ class EmitContext {
     return true;
   }
 
-  private emitIndirectUnitIncrement(target: string, comment: string, line: number): boolean {
+  emitIndirectUnitIncrement(target: string, comment: string, line: number): boolean {
     const register = this.allocation.registers[target];
     if (register === undefined || !isPreincrementIndirectRegister(register)) return false;
     this.emitOp(0xd0 + registerIndex(register), `К П->X ${register}`, comment, line);
@@ -6022,7 +6022,7 @@ class EmitContext {
     return true;
   }
 
-  private emitKnownOneIndirectLoopBack(target: string, line: number): boolean {
+  emitKnownOneIndirectLoopBack(target: string, line: number): boolean {
     if (!this.coordListCounterKnownOne || !this.zeroAddressLabels.has(target)) return false;
     const register = this.allocation.registers[COORD_LIST_COUNTER];
     if (register === undefined || flOpcode(register) === undefined) return false;
@@ -6034,7 +6034,7 @@ class EmitContext {
     return true;
   }
 
-  private compileUnitDecrement(statement: Extract<StatementAst, { kind: "assign" }>): boolean {
+  compileUnitDecrement(statement: Extract<StatementAst, { kind: "assign" }>): boolean {
     if (!isUnitDecrementExpression(statement.target, statement.expr)) return false;
     const register = this.allocation.registers[statement.target];
     if (register === undefined) return false;
@@ -6056,7 +6056,7 @@ class EmitContext {
     return true;
   }
 
-  private compileCondition(
+  compileCondition(
     condition: ConditionAst,
     falseLabel: string,
     line: number,
@@ -6118,7 +6118,7 @@ class EmitContext {
     this.emitJump(opcode, mnemonic, falseLabel, `false branch for ${compiledCondition.op}`, line);
   }
 
-  private compileCoordListHasCondition(
+  compileCoordListHasCondition(
     condition: ConditionAst,
     falseLabel: string,
     line: number,
@@ -6150,7 +6150,7 @@ class EmitContext {
     return true;
   }
 
-  private coordListIndirectContext(call: CoordListCall): CoordListIndirectContext | undefined {
+  coordListIndirectContext(call: CoordListCall): CoordListIndirectContext | undefined {
     const pointerRegister = this.allocation.registers[COORD_LIST_POINTER];
     const counterRegister = this.allocation.registers[COORD_LIST_COUNTER];
     if (pointerRegister === undefined || counterRegister === undefined) return undefined;
@@ -6172,14 +6172,14 @@ class EmitContext {
     };
   }
 
-  private emitCoordListLoopSetup(context: CoordListIndirectContext, line: number): void {
+  emitCoordListLoopSetup(context: CoordListIndirectContext, line: number): void {
     this.emitNumberOrPreload(String(context.pointerStart));
     this.emitStore(COORD_LIST_POINTER, "coord_list pointer", line);
     this.emitNumberOrPreload(String(context.count));
     this.emitStore(COORD_LIST_COUNTER, "coord_list counter", line);
   }
 
-  private emitCoordListIndirectRecall(
+  emitCoordListIndirectRecall(
     pointerRegister: RegisterName,
     line: number | undefined,
     comment: string,
@@ -6187,7 +6187,7 @@ class EmitContext {
     this.emitOp(0xd0 + registerIndex(pointerRegister), `К П->X ${pointerRegister}`, comment, line);
   }
 
-  private emitCoordListCounterLoop(
+  emitCoordListCounterLoop(
     counterRegister: RegisterName,
     target: string,
     line: number,
@@ -6208,7 +6208,7 @@ class EmitContext {
     this.coordListCounterKnownOne = false;
   }
 
-  private compileCoordOnesDigit(expr: ExpressionAst, line: number): void {
+  compileCoordOnesDigit(expr: ExpressionAst, line: number): void {
     this.compileExpression(expr);
     this.emitNumberOrPreload("10");
     this.emitOp(0x13, "/", "coord quotient", line);
@@ -6217,14 +6217,14 @@ class EmitContext {
     this.emitOp(0x12, "*", "coord ones digit", line);
   }
 
-  private compileCoordTensDigit(expr: ExpressionAst, line: number): void {
+  compileCoordTensDigit(expr: ExpressionAst, line: number): void {
     this.compileExpression(expr);
     this.emitNumberOrPreload("10");
     this.emitOp(0x13, "/", "coord quotient", line);
     this.emitOp(0x34, "К [x]", "coord tens digit", line);
   }
 
-  private compileBitHasConditionWithBitMaskHelper(
+  compileBitHasConditionWithBitMaskHelper(
     expr: ExpressionAst,
     line: number,
   ): { name: string; detail: string } | undefined {
@@ -6249,7 +6249,7 @@ class EmitContext {
     };
   }
 
-  private compileBitHasConditionWithSpatialHelper(
+  compileBitHasConditionWithSpatialHelper(
     expr: ExpressionAst,
     line: number,
   ): { name: string; detail: string } | undefined {
@@ -6267,7 +6267,7 @@ class EmitContext {
     };
   }
 
-  private compileEqualityWithCurrentX(
+  compileEqualityWithCurrentX(
     condition: ConditionAst,
     falseLabel: string,
     line: number,
@@ -6298,7 +6298,7 @@ class EmitContext {
     return true;
   }
 
-  private compileNearAnyHelperCondition(
+  compileNearAnyHelperCondition(
     condition: ConditionAst,
     falseLabel: string,
     line: number,
@@ -6321,7 +6321,7 @@ class EmitContext {
     return true;
   }
 
-  private compileNearAnyMarginWithHelper(
+  compileNearAnyMarginWithHelper(
     match: NearAnyHelperConditionMatch,
     label: string,
     line: number,
@@ -6334,7 +6334,7 @@ class EmitContext {
     }
   }
 
-  private compileNearAnyCandidate(candidate: ExpressionAst, line: number): void {
+  compileNearAnyCandidate(candidate: ExpressionAst, line: number): void {
     if (candidate.kind === "identifier" && this.xHolds(candidate.name)) {
       this.optimizations.push({
         name: "stack-current-x-scheduling",
@@ -6345,7 +6345,7 @@ class EmitContext {
     this.compileExpression(candidate);
   }
 
-  private nearAnyHelper(
+  nearAnyHelper(
     value: ExpressionAst,
     radius: ExpressionAst,
     line?: number,
@@ -6363,7 +6363,7 @@ class EmitContext {
     return helper;
   }
 
-  private compileSmallSetCondition(
+  compileSmallSetCondition(
     condition: ConditionAst,
     falseLabel: string,
     line: number,
@@ -6397,7 +6397,7 @@ class EmitContext {
     return true;
   }
 
-  private compileNegativeZeroThresholdFlow(
+  compileNegativeZeroThresholdFlow(
     condition: ConditionAst,
     falseLabel: string,
     line: number,
@@ -6435,7 +6435,7 @@ class EmitContext {
     return true;
   }
 
-  private emitNegativeZeroThresholdRaw(
+  emitNegativeZeroThresholdRaw(
     value: ExpressionAst,
     bound: ExpressionAst,
     register: RegisterName,
@@ -6448,7 +6448,7 @@ class EmitContext {
     this.emitOp(0x0e, "В↑", "normalize negative-zero threshold result", line);
   }
 
-  private compileExpression(expr: ExpressionAst): void {
+  compileExpression(expr: ExpressionAst): void {
     const randomCellHelper = this.sharedRandomCellHelper(expr);
     if (randomCellHelper !== undefined) {
       this.emitJump(0x53, "ПП", randomCellHelper.label, `random cell ${expressionToIntentText(expr)}`);
@@ -6527,7 +6527,7 @@ class EmitContext {
     }
   }
 
-  private orderDisplaySources(sources: string[]): string[] {
+  orderDisplaySources(sources: string[]): string[] {
     if (this.currentXVariable === undefined) return sources;
     const index = sources.indexOf(this.currentXVariable);
     if (index <= 0) return sources;
@@ -6542,7 +6542,7 @@ class EmitContext {
     ];
   }
 
-  private compileCommutativeWithCurrentX(expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
+  compileCommutativeWithCurrentX(expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
     if (this.currentXVariable === undefined) return false;
     if (expr.left.kind === "identifier" && this.xHolds(expr.left.name) && isSimpleStackLoad(expr.right)) {
       this.compileExpression(expr.right);
@@ -6569,7 +6569,7 @@ class EmitContext {
   // op, so the shared value is reused from the stack (Y) instead of recomputed.
   // Only applies to pure operands (so one evaluation equals two) and only when it
   // actually saves cells versus recomputing the operand.
-  private compileStackDuplicatedBinary(expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
+  compileStackDuplicatedBinary(expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
     if (!expressionEquals(expr.left, expr.right)) return false;
     if (!isPureExpression(expr.left)) return false;
     // В↑ costs one cell, so duplication only pays off when recomputing the
@@ -6592,7 +6592,7 @@ class EmitContext {
   // fractional target. Both parts are produced by their own opcodes (identical
   // behavior, including the -0 fractional result of negative integers), and the
   // operand is evaluated once instead of twice.
-  private compileIntFracSharedTail(
+  compileIntFracSharedTail(
     first: Extract<StatementAst, { kind: "assign" }>,
     second: Extract<StatementAst, { kind: "assign" }>,
   ): boolean {
@@ -6624,7 +6624,7 @@ class EmitContext {
     return true;
   }
 
-  private compileRemainderByConstant(expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
+  compileRemainderByConstant(expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
     const matched = matchRemainderByConstant(expr);
     if (matched === undefined) return false;
     this.compileExpression(matched.value);
@@ -6640,7 +6640,7 @@ class EmitContext {
     return true;
   }
 
-  private sharedRandomCellHelper(expr: ExpressionAst): { expr: ExpressionAst; label: string; line?: number } | undefined {
+  sharedRandomCellHelper(expr: ExpressionAst): { expr: ExpressionAst; label: string; line?: number } | undefined {
     if (this.emittingRandomCellHelper) return undefined;
     if (!this.shouldShareRandomCellExpression(expr)) return undefined;
     const key = expressionToIntentText(expr);
@@ -6654,7 +6654,7 @@ class EmitContext {
     return helper;
   }
 
-  private shouldShareRandomCellExpression(expr: ExpressionAst): boolean {
+  shouldShareRandomCellExpression(expr: ExpressionAst): boolean {
     if (!isRandomCellExpressionShape(expr)) return false;
     const key = expressionToIntentText(expr);
     const uses = this.expressionUseCounts.get(key)?.count ?? 0;
@@ -6667,7 +6667,7 @@ class EmitContext {
     return inlineTotal - helperTotal >= threshold;
   }
 
-  private sharedExpressionHelper(expr: ExpressionAst): { expr: ExpressionAst; label: string; line?: number } | undefined {
+  sharedExpressionHelper(expr: ExpressionAst): { expr: ExpressionAst; label: string; line?: number } | undefined {
     if (this.emittingExpressionHelper) return undefined;
     if (!this.shouldShareExpression(expr)) return undefined;
     const key = expressionToIntentText(expr);
@@ -6681,7 +6681,7 @@ class EmitContext {
     return helper;
   }
 
-  private shouldShareExpression(expr: ExpressionAst): boolean {
+  shouldShareExpression(expr: ExpressionAst): boolean {
     if (!expressionPureForSubstitution(expr)) return false;
     if (expr.kind === "number" || expr.kind === "identifier") return false;
     const cost = estimateExpressionCost(expr);
@@ -6700,7 +6700,7 @@ class EmitContext {
   // clobbered between argument evaluations), then `ПП` jumps to the function,
   // which leaves its result in X. Returns false when the callee is not a
   // function (so built-in expression calls fall through).
-  private compileFunctionCall(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
+  compileFunctionCall(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
     const proc = this.functionProcs.get(expr.callee);
     if (proc === undefined) return false;
     const params = proc.params ?? [];
@@ -6724,7 +6724,7 @@ class EmitContext {
     return true;
   }
 
-  private compileCall(expr: Extract<ExpressionAst, { kind: "call" }>): void {
+  compileCall(expr: Extract<ExpressionAst, { kind: "call" }>): void {
     if (this.compileFunctionCall(expr)) return;
     const name = expr.callee.toLowerCase();
     if (name === "direction") {
@@ -6872,7 +6872,7 @@ class EmitContext {
     this.emitOp(opcode[0], opcode[1], `${expr.callee}()`);
   }
 
-  private compileDirectionCall(expr: Extract<ExpressionAst, { kind: "call" }>): void {
+  compileDirectionCall(expr: Extract<ExpressionAst, { kind: "call" }>): void {
     if (expr.args.length !== 1) {
       this.diagnostics.push({
         level: "error",
@@ -6939,7 +6939,7 @@ class EmitContext {
     });
   }
 
-  private compileCardinalDirectionCall(expr: Extract<ExpressionAst, { kind: "call" }>): void {
+  compileCardinalDirectionCall(expr: Extract<ExpressionAst, { kind: "call" }>): void {
     const keyRegister = this.directionKeyRegister(expr);
     if (keyRegister === undefined) return;
 
@@ -6975,7 +6975,7 @@ class EmitContext {
     });
   }
 
-  private directionKeyRegister(expr: Extract<ExpressionAst, { kind: "call" }>): RegisterName | undefined {
+  directionKeyRegister(expr: Extract<ExpressionAst, { kind: "call" }>): RegisterName | undefined {
     if (expr.args.length !== 1) {
       this.diagnostics.push({
         level: "error",
@@ -7002,12 +7002,12 @@ class EmitContext {
     return keyRegister;
   }
 
-  private directionKeyName(expr: Extract<ExpressionAst, { kind: "call" }>): string {
+  directionKeyName(expr: Extract<ExpressionAst, { kind: "call" }>): string {
     const arg = expr.args[0];
     return arg?.kind === "identifier" ? arg.name : "?";
   }
 
-  private compileSpatialCountCall(name: "neighbor_count" | "line_count", expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
+  compileSpatialCountCall(name: "neighbor_count" | "line_count", expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
     if (expr.args.length !== 2) {
       this.diagnostics.push({
         level: "error",
@@ -7030,7 +7030,7 @@ class EmitContext {
     return true;
   }
 
-  private compileSpatialNeighborCountLoop(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
+  compileSpatialNeighborCountLoop(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
     const [mask, cell] = expr.args;
     if (mask?.kind !== "identifier" || cell === undefined) return false;
     const board = boardForCellMask(mask, this.ast);
@@ -7072,7 +7072,7 @@ class EmitContext {
     return true;
   }
 
-  private compileSpatialLineCountLoop(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
+  compileSpatialLineCountLoop(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
     const [mask, cell] = expr.args;
     if (mask?.kind !== "identifier" || cell === undefined) return false;
     const board = boardForCellMask(mask, this.ast);
@@ -7102,7 +7102,7 @@ class EmitContext {
     return true;
   }
 
-  private emitSpatialLineCountLoopBody(
+  emitSpatialLineCountLoopBody(
     hitMask: string,
     cell: ExpressionAst,
     board: V2BoardAst,
@@ -7118,7 +7118,7 @@ class EmitContext {
     );
   }
 
-  private emitSpatialProgressionCountLoopBody(
+  emitSpatialProgressionCountLoopBody(
     hitMask: string,
     cell: ExpressionAst,
     progressions: SpatialLineProgression[],
@@ -7235,7 +7235,7 @@ class EmitContext {
     });
   }
 
-  private emitSpatialLineProgressionHelperBody(
+  emitSpatialLineProgressionHelperBody(
     hitMask: string,
     cell: ExpressionAst,
     operation: "line_count" | "neighbor_count",
@@ -7279,7 +7279,7 @@ class EmitContext {
     this.emitRecall(line, `${operation} current line`);
   }
 
-  private emitSpatialSumLoopHelperBody(
+  emitSpatialSumLoopHelperBody(
     hitMask: string,
     cell: ExpressionAst,
     operation: "line_count" | "neighbor_count",
@@ -7329,13 +7329,13 @@ class EmitContext {
     }
   }
 
-  private emitInlineSpatialHit(hitMask: string, sourceLine: number | undefined): void {
+  emitInlineSpatialHit(hitMask: string, sourceLine: number | undefined): void {
     const scratch = spatialHitScratchName(hitMask);
     this.emitStore(scratch, "spatial hit index", sourceLine);
     this.emitInlineSpatialHitFromScratch(hitMask, scratch, sourceLine);
   }
 
-  private emitInlineSpatialHitFromScratch(
+  emitInlineSpatialHitFromScratch(
     hitMask: string,
     scratch: string,
     sourceLine: number | undefined,
@@ -7353,7 +7353,7 @@ class EmitContext {
     });
   }
 
-  private compileSpatialHitCall(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
+  compileSpatialHitCall(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
     if (expr.args.length !== 2) {
       this.diagnostics.push({
         level: "error",
@@ -7371,7 +7371,7 @@ class EmitContext {
     return true;
   }
 
-  private compileNegativeZeroDegreeSelectorCall(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
+  compileNegativeZeroDegreeSelectorCall(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
     if (expr.args.length !== 2) {
       this.diagnostics.push({
         level: "error",
@@ -7399,7 +7399,7 @@ class EmitContext {
     return true;
   }
 
-  private sharedLineCountHelper(
+  sharedLineCountHelper(
     mask: ExpressionAst,
     cell: ExpressionAst,
     board: V2BoardAst,
@@ -7422,7 +7422,7 @@ class EmitContext {
     return helper;
   }
 
-  private ensureSpatialHitHelper(mask: string, scratch: string): { mask: string; scratch: string; label: string; line?: number } {
+  ensureSpatialHitHelper(mask: string, scratch: string): { mask: string; scratch: string; label: string; line?: number } {
     const existing = this.spatialHitHelpers.get(mask);
     if (existing !== undefined) return existing;
     const helper = {
@@ -7434,7 +7434,7 @@ class EmitContext {
     return helper;
   }
 
-  private ensureSpatialBitMaskHelper(
+  ensureSpatialBitMaskHelper(
     scratch: string,
     line: number | undefined,
   ): { scratch: string; label: string; line?: number } {
@@ -7449,7 +7449,7 @@ class EmitContext {
     return helper;
   }
 
-  private ensureSpatialSumLoopHelper(
+  ensureSpatialSumLoopHelper(
     hitMask: string,
     cell: ExpressionAst,
     operation: "line_count" | "neighbor_count",
@@ -7469,7 +7469,7 @@ class EmitContext {
     return helper;
   }
 
-  private ensureSpatialLineProgressionHelper(
+  ensureSpatialLineProgressionHelper(
     hitMask: string,
     cell: ExpressionAst,
     operation: "line_count" | "neighbor_count",
@@ -7489,7 +7489,7 @@ class EmitContext {
     return helper;
   }
 
-  private compileRawStatement(statement: Extract<StatementAst, { kind: "core" }>): void {
+  compileRawStatement(statement: Extract<StatementAst, { kind: "core" }>): void {
     const inputs = statement.inputs ?? [];
     const outputs = statement.outputs ?? [];
 
@@ -7516,7 +7516,7 @@ class EmitContext {
     }
   }
 
-  private compileRawLines(
+  compileRawLines(
     lines: Array<{ text: string; line: number }>,
     strict = false,
   ): void {
@@ -7543,11 +7543,11 @@ class EmitContext {
     }
   }
 
-  private emitNumber(raw: string): void {
+  emitNumber(raw: string): void {
     this.emitter.emitNumber(raw);
   }
 
-  private emitZero(comment?: string, sourceLine?: number): void {
+  emitZero(comment?: string, sourceLine?: number): void {
     if (this.currentXKnownZero) {
       this.optimizations.push({
         name: "known-zero-reuse",
@@ -7563,7 +7563,7 @@ class EmitContext {
     }
   }
 
-  private emitNumberOrPreload(raw: string): void {
+  emitNumberOrPreload(raw: string): void {
     const normalized = normalizeConstantLiteral(raw);
     const register = this.allocation.constants[normalized];
     if (register !== undefined) {
@@ -7577,7 +7577,7 @@ class EmitContext {
     this.emitNumber(raw);
   }
 
-  private emitStore(name: string, comment?: string, sourceLine?: number, raw = false): void {
+  emitStore(name: string, comment?: string, sourceLine?: number, raw = false): void {
     const register = this.allocation.registers[name];
     if (!register) {
       this.diagnostics.push(buildDiagnostic("error", `No register allocated for ${name}`, sourceLine));
@@ -7596,7 +7596,7 @@ class EmitContext {
     if (name === COORD_LIST_COUNTER) this.coordListCounterKnownOne = false;
   }
 
-  private emitRecall(name: string, comment?: string, sourceLine?: number): void {
+  emitRecall(name: string, comment?: string, sourceLine?: number): void {
     const register = this.allocation.registers[name];
     if (!register) {
       this.diagnostics.push(buildDiagnostic("error", `Unknown variable '${name}'`, sourceLine));
@@ -7610,12 +7610,12 @@ class EmitContext {
   // True when the value in X is known to equal `name` (directly, or via a
   // copy-equivalence alias when alias reuse is enabled), so a recall can be
   // elided. Restricted to scalar reuse sites by callers.
-  private xHolds(name: string): boolean {
+  xHolds(name: string): boolean {
     if (name === this.currentXVariable) return true;
     return this.loweringOptions.aliasXReuse === true && this.currentXAliases.has(name);
   }
 
-  private emitJump(
+  emitJump(
     opcode: number,
     mnemonic: string,
     target: string | number,
@@ -7625,7 +7625,7 @@ class EmitContext {
     this.emitter.emitJump(opcode, mnemonic, target, comment, sourceLine);
   }
 
-  private emitAddress(
+  emitAddress(
     target: string | number,
     comment?: string,
     sourceLine?: number,
@@ -7633,7 +7633,7 @@ class EmitContext {
     this.emitter.emitAddress(target, comment, sourceLine);
   }
 
-  private emitFormalAddress(
+  emitFormalAddress(
     opcode: number,
     comment?: string,
     sourceLine?: number,
@@ -7641,7 +7641,7 @@ class EmitContext {
     this.emitter.emitFormalAddress(opcode, comment, sourceLine);
   }
 
-  private emitOp(
+  emitOp(
     opcode: number,
     mnemonic?: string,
     comment?: string,
@@ -7651,11 +7651,11 @@ class EmitContext {
     this.emitter.emitOp(opcode, mnemonic, comment, sourceLine, raw);
   }
 
-  private emitLabel(name: string): void {
+  emitLabel(name: string): void {
     this.emitter.emitLabel(name);
   }
 
-  private freshLabel(prefix: string): string {
+  freshLabel(prefix: string): string {
     return this.emitter.freshLabel(prefix);
   }
 }
