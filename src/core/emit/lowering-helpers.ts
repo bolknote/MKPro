@@ -847,6 +847,18 @@ export function numericRangeForExpression(expr: ExpressionAst, ast: ProgramAst):
 }
 
 export function conditionCompileCost(condition: ConditionAst, preloadedConstants?: ReadonlySet<string>): number {
+  if (
+    isZeroExpression(condition.right) &&
+    (condition.op === "==" || condition.op === "!=") &&
+    condition.left.kind === "binary"
+  ) {
+    const remainder = matchRemainderByConstant(condition.left);
+    if (remainder !== undefined && numericLiteralValue(remainder.divisor) !== 0) {
+      return estimateExpressionCostForCondition(remainder.value, preloadedConstants) +
+        estimateExpressionCostForCondition(remainder.divisor, preloadedConstants) +
+        4;
+    }
+  }
   if (isZeroExpression(condition.right) && canTestAgainstZeroDirectly(condition.op)) {
     return estimateExpressionCostForCondition(condition.left, preloadedConstants) + 2;
   }

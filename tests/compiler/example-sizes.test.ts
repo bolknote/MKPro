@@ -24,7 +24,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "fox-hunt-mk61": 65,
   "game-100-pig": 103,
   human: 28,
-  "jack-pot": 95,
+  "jack-pot": 93,
   lunar: 47,
   "minesweeper-9x7": 100,
   "minesweeper-9x9": 90,

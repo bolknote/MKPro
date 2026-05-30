@@ -265,25 +265,25 @@ sharedBitMaskHelperCalls+hoistSharedHelpers: steps=28 | 61 6D 12 62 10 50 02 11 
 `;
 
 exports[`golden listing > lowering variants are stable for examples/jack-pot.mkpro 1`] = `
-"primary: steps=95 | 62 50 40 00 62 11 5C 86 60 01 11 5E 78 62 6E 11 42 53 88 41 53 88 44 53 88 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 53 6E 62 10 42 61 64 11 5E 71 6D 62 10 42 64 60 11 5E 71 6D 62 10 42 00 62 11 59 00 51 86 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
-aggressiveTerminalDirect: steps=95 | 62 50 40 00 62 11 5C 86 60 01 11 5E 78 62 6E 11 42 53 88 41 53 88 44 53 88 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 53 6E 62 10 42 61 64 11 5E 71 6D 62 10 42 64 60 11 5E 71 6D 62 10 42 00 62 11 5C 86 51 00 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
-invertBranchOrder: steps=95 | 62 50 40 00 62 11 5C 86 60 01 11 5E 78 62 6E 11 42 53 88 41 53 88 44 53 88 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 53 6E 62 10 42 61 64 11 5E 71 6D 62 10 42 64 60 11 5E 71 6D 62 10 42 00 62 11 59 00 51 86 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
-aggressiveTerminalDirect+invertBranchOrder: steps=95 | 62 50 40 00 62 11 5C 86 60 01 11 5E 78 62 6E 11 42 53 88 41 53 88 44 53 88 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 53 6E 62 10 42 61 64 11 5E 71 6D 62 10 42 64 60 11 5E 71 6D 62 10 42 00 62 11 5C 86 51 00 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
-hoistSharedHelpers: steps=97 | 51 09 3B 09 12 34 01 10 52 62 50 40 00 62 11 5C 95 60 01 11 5E 87 62 6E 11 42 53 02 41 53 02 44 53 02 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 62 6E 62 10 42 61 64 11 5E 80 6D 62 10 42 64 60 11 5E 80 6D 62 10 42 00 62 11 59 09 51 95 01 11 5E 09 63 50 51 09 6A 50 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
-hoistSharedHelpers+hoistProcs: steps=97 | 51 11 3B 09 12 34 01 10 52 6A 50 62 50 40 00 62 11 5C 09 60 01 11 5E 89 62 6E 11 42 53 02 41 53 02 44 53 02 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 64 6E 62 10 42 61 64 11 5E 82 6D 62 10 42 64 60 11 5E 82 6D 62 10 42 00 62 11 59 11 51 09 01 11 5E 11 63 50 51 11 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
-canonicalizeIfChains: steps=95 | 62 50 40 00 62 11 5C 86 60 01 11 5E 78 62 6E 11 42 53 88 41 53 88 44 53 88 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 53 6E 62 10 42 61 64 11 5E 71 6D 62 10 42 64 60 11 5E 71 6D 62 10 42 00 62 11 59 00 51 86 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
-freeResidualDispatchScratch: steps=95 | 62 50 40 00 62 11 5C 86 60 01 11 5E 78 62 6E 11 42 53 88 41 53 88 44 53 88 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 53 6E 62 10 42 61 64 11 5E 71 6D 62 10 42 64 60 11 5E 71 6D 62 10 42 00 62 11 59 00 51 86 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
-aliasXReuse: steps=95 | 62 50 40 00 62 11 5C 86 60 01 11 5E 78 62 6E 11 42 53 88 41 53 88 44 53 88 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 53 6E 62 10 42 61 64 11 5E 71 6D 62 10 42 64 60 11 5E 71 6D 62 10 42 00 62 11 59 00 51 86 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
-coalesceCopies: steps=95 | 62 50 40 00 62 11 5C 86 60 01 11 5E 78 62 6E 11 42 53 88 41 53 88 44 53 88 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 53 6E 62 10 42 61 64 11 5E 71 6D 62 10 42 64 60 11 5E 71 6D 62 10 42 00 62 11 59 00 51 86 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
-freeResidualDispatchScratch+canonicalizeIfChains: steps=95 | 62 50 40 00 62 11 5C 86 60 01 11 5E 78 62 6E 11 42 53 88 41 53 88 44 53 88 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 53 6E 62 10 42 61 64 11 5E 71 6D 62 10 42 64 60 11 5E 71 6D 62 10 42 00 62 11 59 00 51 86 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
-shareRandomCell: steps=95 | 62 50 40 00 62 11 5C 86 60 01 11 5E 78 62 6E 11 42 53 88 41 53 88 44 53 88 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 53 6E 62 10 42 61 64 11 5E 71 6D 62 10 42 64 60 11 5E 71 6D 62 10 42 00 62 11 59 00 51 86 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
-shareRandomCell+hoistSharedHelpers: steps=97 | 51 09 3B 09 12 34 01 10 52 62 50 40 00 62 11 5C 95 60 01 11 5E 87 62 6E 11 42 53 02 41 53 02 44 53 02 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 62 6E 62 10 42 61 64 11 5E 80 6D 62 10 42 64 60 11 5E 80 6D 62 10 42 00 62 11 59 09 51 95 01 11 5E 09 63 50 51 09 6A 50 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
-tailBranchInversion: steps=95 | 62 50 40 00 62 11 5C 86 60 01 11 5E 78 62 6E 11 42 53 88 41 53 88 44 53 88 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 53 6E 62 10 42 61 64 11 5E 71 6D 62 10 42 64 60 11 5E 71 6D 62 10 42 00 62 11 5C 86 51 00 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
-hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion: steps=97 | 51 09 3B 09 12 34 01 10 52 62 50 40 00 62 11 5C 95 60 01 11 5E 87 62 6E 11 42 53 02 41 53 02 44 53 02 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 62 6E 62 10 42 61 64 11 5E 80 6D 62 10 42 64 60 11 5E 80 6D 62 10 42 00 62 11 5C 95 51 09 01 11 5E 09 63 50 51 09 6A 50 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
-guardedPrologueGadgets: steps=95 | 62 50 40 00 62 11 5C 86 60 01 11 5E 78 62 6E 11 42 53 88 41 53 88 44 53 88 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 53 6E 62 10 42 61 64 11 5E 71 6D 62 10 42 64 60 11 5E 71 6D 62 10 42 00 62 11 59 00 51 86 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
-guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: steps=97 | 51 11 3B 09 12 34 01 10 52 6A 50 62 50 40 00 62 11 5C 09 60 01 11 5E 89 62 6E 11 42 53 02 41 53 02 44 53 02 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 64 6E 62 10 42 61 64 11 5E 82 6D 62 10 42 64 60 11 5E 82 6D 62 10 42 00 62 11 59 11 51 09 01 11 5E 11 63 50 51 11 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
-sharedBitMaskHelperCalls: steps=95 | 62 50 40 00 62 11 5C 86 60 01 11 5E 78 62 6D 11 42 53 88 41 53 88 44 53 88 40 6B 61 12 6A 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 53 6D 62 10 42 61 64 11 5E 71 6C 62 10 42 64 60 11 5E 71 6C 62 10 42 00 62 11 59 00 51 86 01 11 5E 00 63 50 51 00 69 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4A 01 00 00 4B 01 00 00 00 4D 03 00 00 00 4C 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 49 01 03 3A 35 69 14 54 0C 06 49 50
-sharedBitMaskHelperCalls+hoistSharedHelpers: steps=97 | 51 09 3B 09 12 34 01 10 52 62 50 40 00 62 11 5C 95 60 01 11 5E 87 62 6D 11 42 53 02 41 53 02 44 53 02 40 6B 61 12 6A 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 05 12 5E 62 6D 62 10 42 61 64 11 5E 80 6C 62 10 42 64 60 11 5E 80 6C 62 10 42 00 62 11 59 09 51 95 01 11 5E 09 63 50 51 09 69 50 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4A 01 00 00 4B 01 00 00 00 4D 03 00 00 00 4C 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 49 01 03 3A 35 69 14 54 0C 06 49 50"
+"primary: steps=93 | 62 50 40 00 62 11 5C 84 60 01 11 5E 76 62 6E 11 42 53 86 41 53 86 44 53 86 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 51 6E 62 10 42 61 64 11 5E 69 6D 62 10 42 64 60 11 5E 69 6D 62 10 42 00 62 11 59 00 51 84 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
+aggressiveTerminalDirect: steps=93 | 62 50 40 00 62 11 5C 84 60 01 11 5E 76 62 6E 11 42 53 86 41 53 86 44 53 86 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 51 6E 62 10 42 61 64 11 5E 69 6D 62 10 42 64 60 11 5E 69 6D 62 10 42 00 62 11 5C 84 51 00 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
+invertBranchOrder: steps=93 | 62 50 40 00 62 11 5C 84 60 01 11 5E 76 62 6E 11 42 53 86 41 53 86 44 53 86 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 51 6E 62 10 42 61 64 11 5E 69 6D 62 10 42 64 60 11 5E 69 6D 62 10 42 00 62 11 59 00 51 84 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
+aggressiveTerminalDirect+invertBranchOrder: steps=93 | 62 50 40 00 62 11 5C 84 60 01 11 5E 76 62 6E 11 42 53 86 41 53 86 44 53 86 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 51 6E 62 10 42 61 64 11 5E 69 6D 62 10 42 64 60 11 5E 69 6D 62 10 42 00 62 11 5C 84 51 00 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
+hoistSharedHelpers: steps=95 | 51 09 3B 09 12 34 01 10 52 62 50 40 00 62 11 5C 93 60 01 11 5E 85 62 6E 11 42 53 02 41 53 02 44 53 02 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 60 6E 62 10 42 61 64 11 5E 78 6D 62 10 42 64 60 11 5E 78 6D 62 10 42 00 62 11 59 09 51 93 01 11 5E 09 63 50 51 09 6A 50 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
+hoistSharedHelpers+hoistProcs: steps=95 | 51 11 3B 09 12 34 01 10 52 6A 50 62 50 40 00 62 11 5C 09 60 01 11 5E 87 62 6E 11 42 53 02 41 53 02 44 53 02 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 62 6E 62 10 42 61 64 11 5E 80 6D 62 10 42 64 60 11 5E 80 6D 62 10 42 00 62 11 59 11 51 09 01 11 5E 11 63 50 51 11 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
+canonicalizeIfChains: steps=93 | 62 50 40 00 62 11 5C 84 60 01 11 5E 76 62 6E 11 42 53 86 41 53 86 44 53 86 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 51 6E 62 10 42 61 64 11 5E 69 6D 62 10 42 64 60 11 5E 69 6D 62 10 42 00 62 11 59 00 51 84 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
+freeResidualDispatchScratch: steps=93 | 62 50 40 00 62 11 5C 84 60 01 11 5E 76 62 6E 11 42 53 86 41 53 86 44 53 86 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 51 6E 62 10 42 61 64 11 5E 69 6D 62 10 42 64 60 11 5E 69 6D 62 10 42 00 62 11 59 00 51 84 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
+aliasXReuse: steps=93 | 62 50 40 00 62 11 5C 84 60 01 11 5E 76 62 6E 11 42 53 86 41 53 86 44 53 86 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 51 6E 62 10 42 61 64 11 5E 69 6D 62 10 42 64 60 11 5E 69 6D 62 10 42 00 62 11 59 00 51 84 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
+coalesceCopies: steps=93 | 62 50 40 00 62 11 5C 84 60 01 11 5E 76 62 6E 11 42 53 86 41 53 86 44 53 86 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 51 6E 62 10 42 61 64 11 5E 69 6D 62 10 42 64 60 11 5E 69 6D 62 10 42 00 62 11 59 00 51 84 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
+freeResidualDispatchScratch+canonicalizeIfChains: steps=93 | 62 50 40 00 62 11 5C 84 60 01 11 5E 76 62 6E 11 42 53 86 41 53 86 44 53 86 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 51 6E 62 10 42 61 64 11 5E 69 6D 62 10 42 64 60 11 5E 69 6D 62 10 42 00 62 11 59 00 51 84 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
+shareRandomCell: steps=93 | 62 50 40 00 62 11 5C 84 60 01 11 5E 76 62 6E 11 42 53 86 41 53 86 44 53 86 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 51 6E 62 10 42 61 64 11 5E 69 6D 62 10 42 64 60 11 5E 69 6D 62 10 42 00 62 11 59 00 51 84 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
+shareRandomCell+hoistSharedHelpers: steps=95 | 51 09 3B 09 12 34 01 10 52 62 50 40 00 62 11 5C 93 60 01 11 5E 85 62 6E 11 42 53 02 41 53 02 44 53 02 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 60 6E 62 10 42 61 64 11 5E 78 6D 62 10 42 64 60 11 5E 78 6D 62 10 42 00 62 11 59 09 51 93 01 11 5E 09 63 50 51 09 6A 50 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
+tailBranchInversion: steps=93 | 62 50 40 00 62 11 5C 84 60 01 11 5E 76 62 6E 11 42 53 86 41 53 86 44 53 86 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 51 6E 62 10 42 61 64 11 5E 69 6D 62 10 42 64 60 11 5E 69 6D 62 10 42 00 62 11 5C 84 51 00 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
+hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion: steps=95 | 51 09 3B 09 12 34 01 10 52 62 50 40 00 62 11 5C 93 60 01 11 5E 85 62 6E 11 42 53 02 41 53 02 44 53 02 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 60 6E 62 10 42 61 64 11 5E 78 6D 62 10 42 64 60 11 5E 78 6D 62 10 42 00 62 11 5C 93 51 09 01 11 5E 09 63 50 51 09 6A 50 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
+guardedPrologueGadgets: steps=93 | 62 50 40 00 62 11 5C 84 60 01 11 5E 76 62 6E 11 42 53 86 41 53 86 44 53 86 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 51 6E 62 10 42 61 64 11 5E 69 6D 62 10 42 64 60 11 5E 69 6D 62 10 42 00 62 11 59 00 51 84 01 11 5E 00 63 50 51 00 6A 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
+guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: steps=95 | 51 11 3B 09 12 34 01 10 52 6A 50 62 50 40 00 62 11 5C 09 60 01 11 5E 87 62 6E 11 42 53 02 41 53 02 44 53 02 40 6C 61 12 6B 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 62 6E 62 10 42 61 64 11 5E 80 6D 62 10 42 64 60 11 5E 80 6D 62 10 42 00 62 11 59 11 51 09 01 11 5E 11 63 50 51 11 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4B 01 00 00 4C 01 00 00 00 4E 03 00 00 00 4D 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 4A 01 03 3A 35 6A 14 54 0C 06 4A 50
+sharedBitMaskHelperCalls: steps=93 | 62 50 40 00 62 11 5C 84 60 01 11 5E 76 62 6D 11 42 53 86 41 53 86 44 53 86 40 6B 61 12 6A 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 51 6D 62 10 42 61 64 11 5E 69 6C 62 10 42 64 60 11 5E 69 6C 62 10 42 00 62 11 59 00 51 84 01 11 5E 00 63 50 51 00 69 50 3B 09 12 34 01 10 52 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4A 01 00 00 4B 01 00 00 00 4D 03 00 00 00 4C 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 49 01 03 3A 35 69 14 54 0C 06 49 50
+sharedBitMaskHelperCalls+hoistSharedHelpers: steps=95 | 51 09 3B 09 12 34 01 10 52 62 50 40 00 62 11 5C 93 60 01 11 5E 85 62 6D 11 42 53 02 41 53 02 44 53 02 40 6B 61 12 6A 64 12 10 60 10 43 50 61 64 10 60 10 05 13 35 5E 60 6D 62 10 42 61 64 11 5E 78 6C 62 10 42 64 60 11 5E 78 6C 62 10 42 00 62 11 59 09 51 93 01 11 5E 09 63 50 51 09 69 50 || setup 01 00 00 00 00 42 00 40 01 41 01 44 01 46 01 01 01 43 03 45 01 00 4A 01 00 00 4B 01 00 00 00 4D 03 00 00 00 4C 01 02 06 06 00 02 04 0E 09 08 08 09 00 08 09 39 49 01 03 3A 35 69 14 54 0C 06 49 50"
 `;
 
 exports[`golden listing > lowering variants are stable for examples/lunar.mkpro 1`] = `
@@ -3582,24 +3582,24 @@ exports[`golden listing > selected output is stable for examples/jack-pot.mkpro 
    04 |  62  | П->X 2                  | recall money
    05 |  11  | -                       | condition compare
    06 |  5C  | F x<0                   | false branch for >
-   07 |  86  | 86                      | false branch for >
+   07 |  84  | 84                      | false branch for >
    08 |  60  | П->X 0                  | recall command
    09 |  01  | 1                       | 
    10 |  11  | -                       | dispatch compare
    11 |  5E  | F x=0                   | case mismatch
-   12 |  78  | 78                      | case mismatch
+   12 |  76  | 76                      | case mismatch
    13 |  62  | П->X 2                  | recall money
    14 |  6E  | П->X e                  | preload const 1000
    15 |  11  | -                       | expr -
    16 |  42  | X->П 2                  | set money
    17 |  53  | ПП                      | random cell int(random() * 9) + 1
-   18 |  88  | 88                      | random cell int(random() * 9) + 1
+   18 |  86  | 86                      | random cell int(random() * 9) + 1
    19 |  41  | X->П 1                  | set first
    20 |  53  | ПП                      | random cell int(random() * 9) + 1
-   21 |  88  | 88                      | random cell int(random() * 9) + 1
+   21 |  86  | 86                      | random cell int(random() * 9) + 1
    22 |  44  | X->П 4                  | set second
    23 |  53  | ПП                      | random cell int(random() * 9) + 1
-   24 |  88  | 88                      | random cell int(random() * 9) + 1
+   24 |  86  | 86                      | random cell int(random() * 9) + 1
    25 |  40  | X->П 0                  | set third
    26 |  6C  | П->X c                  | preload const 100
    27 |  61  | П->X 1                  | recall first
@@ -3619,71 +3619,69 @@ exports[`golden listing > selected output is stable for examples/jack-pot.mkpro 
    41 |  10  | +                       | expr +
    42 |  05  | 5                       | 
    43 |  13  | /                       | remainder quotient
-   44 |  35  | К {x}                   | remainder fractional part
-   45 |  05  | 5                       | 
-   46 |  12  | *                       | remainder scale
-   47 |  5E  | F x=0                   | false branch for ==
-   48 |  53  | 53                      | false branch for ==
-   49 |  6E  | П->X e                  | preload const 1000
-   50 |  62  | П->X 2                  | recall money
-   51 |  10  | +                       | expr +
-   52 |  42  | X->П 2                  | set money
-   53 |  61  | П->X 1                  | recall first
-   54 |  64  | П->X 4                  | recall second
-   55 |  11  | -                       | condition compare
-   56 |  5E  | F x=0                   | false branch for ==
-   57 |  71  | 71                      | false branch for ==
-   58 |  6D  | П->X d                  | preload const 3000
-   59 |  62  | П->X 2                  | recall money
-   60 |  10  | +                       | expr +
-   61 |  42  | X->П 2                  | set money
-   62 |  64  | П->X 4                  | recall second
-   63 |  60  | П->X 0                  | recall third
-   64 |  11  | -                       | condition compare
-   65 |  5E  | F x=0                   | false branch for ==
-   66 |  71  | 71                      | false branch for ==
-   67 |  6D  | П->X d                  | preload const 3000
-   68 |  62  | П->X 2                  | recall money
-   69 |  10  | +                       | expr +
-   70 |  42  | X->П 2                  | set money
-   71 |  00  | 0                       | 
-   72 |  62  | П->X 2                  | recall money
-   73 |  11  | -                       | condition compare
-   74 |  59  | F x>=0                  | false branch for <=
-   75 |  00  | 00                      | false branch for <=
-   76 |  51  | БП                      | terminal rule game_over
-   77 |  86  | 86                      | terminal rule game_over
-   78 |  01  | 1                       | 
-   79 |  11  | -                       | dispatch residual compare
-   80 |  5E  | F x=0                   | case mismatch
-   81 |  00  | 00                      | case mismatch
-   82 |  63  | П->X 3                  | display __inline_show_48_1 source
-   83 |  50  | С/П                     | show __inline_show_48_1
-   84 |  51  | БП                      | loop back
-   85 |  00  | 00                      | loop back
-   86 |  6A  | П->X a                  | display __halt_literal_21 literal
-   87 |  50  | С/П                     | show __halt_literal_21
-   88 |  3B  | К СЧ                    | random()
-   89 |  09  | 9                       | 
-   90 |  12  | *                       | expr *
-   91 |  34  | К [x]                   | int()
-   92 |  01  | 1                       | 
-   93 |  10  | +                       | expr +
-   94 |  52  | В/О                     | random_cell helper return
+   44 |  35  | К {x}                   | remainder zero fractional part
+   45 |  5E  | F x=0                   | false branch for ==
+   46 |  51  | 51                      | false branch for ==
+   47 |  6E  | П->X e                  | preload const 1000
+   48 |  62  | П->X 2                  | recall money
+   49 |  10  | +                       | expr +
+   50 |  42  | X->П 2                  | set money
+   51 |  61  | П->X 1                  | recall first
+   52 |  64  | П->X 4                  | recall second
+   53 |  11  | -                       | condition compare
+   54 |  5E  | F x=0                   | false branch for ==
+   55 |  69  | 69                      | false branch for ==
+   56 |  6D  | П->X d                  | preload const 3000
+   57 |  62  | П->X 2                  | recall money
+   58 |  10  | +                       | expr +
+   59 |  42  | X->П 2                  | set money
+   60 |  64  | П->X 4                  | recall second
+   61 |  60  | П->X 0                  | recall third
+   62 |  11  | -                       | condition compare
+   63 |  5E  | F x=0                   | false branch for ==
+   64 |  69  | 69                      | false branch for ==
+   65 |  6D  | П->X d                  | preload const 3000
+   66 |  62  | П->X 2                  | recall money
+   67 |  10  | +                       | expr +
+   68 |  42  | X->П 2                  | set money
+   69 |  00  | 0                       | 
+   70 |  62  | П->X 2                  | recall money
+   71 |  11  | -                       | condition compare
+   72 |  59  | F x>=0                  | false branch for <=
+   73 |  00  | 00                      | false branch for <=
+   74 |  51  | БП                      | terminal rule game_over
+   75 |  84  | 84                      | terminal rule game_over
+   76 |  01  | 1                       | 
+   77 |  11  | -                       | dispatch residual compare
+   78 |  5E  | F x=0                   | case mismatch
+   79 |  00  | 00                      | case mismatch
+   80 |  63  | П->X 3                  | display __inline_show_48_1 source
+   81 |  50  | С/П                     | show __inline_show_48_1
+   82 |  51  | БП                      | loop back
+   83 |  00  | 00                      | loop back
+   84 |  6A  | П->X a                  | display __halt_literal_21 literal
+   85 |  50  | С/П                     | show __halt_literal_21
+   86 |  3B  | К СЧ                    | random()
+   87 |  09  | 9                       | 
+   88 |  12  | *                       | expr *
+   89 |  34  | К [x]                   | int()
+   90 |  01  | 1                       | 
+   91 |  10  | +                       | expr +
+   92 |  52  | В/О                     | random_cell helper return
 
 ## Hex
-00: 62 50 40 00 62 11 5C 86
-08: 60 01 11 5E 78 62 6E 11
-16: 42 53 88 41 53 88 44 53
-24: 88 40 6C 61 12 6B 64 12
+00: 62 50 40 00 62 11 5C 84
+08: 60 01 11 5E 76 62 6E 11
+16: 42 53 86 41 53 86 44 53
+24: 86 40 6C 61 12 6B 64 12
 32: 10 60 10 43 50 61 64 10
-40: 60 10 05 13 35 05 12 5E
-48: 53 6E 62 10 42 61 64 11
-56: 5E 71 6D 62 10 42 64 60
-64: 11 5E 71 6D 62 10 42 00
-72: 62 11 59 00 51 86 01 11
-80: 5E 00 63 50 51 00 6A 50
-88: 3B 09 12 34 01 10 52
+40: 60 10 05 13 35 5E 51 6E
+48: 62 10 42 61 64 11 5E 69
+56: 6D 62 10 42 64 60 11 5E
+64: 69 6D 62 10 42 00 62 11
+72: 59 00 51 84 01 11 5E 00
+80: 63 50 51 00 6A 50 3B 09
+88: 12 34 01 10 52
 
 ## Setup Program
 01
@@ -3754,14 +3752,14 @@ exports[`golden listing > selected output is stable for examples/jack-pot.mkpro 
 
 ## Explain
 MK-Pro compile report
-Steps: 95/999999
+Steps: 93/999999
 Delivery: hex
 Optimizer: exact maximum
-Reference: lordbss_pmk151; span=104, entries=104, gaps=none, compiled=95, delta=-9, parity=smaller
+Reference: lordbss_pmk151; span=104, entries=104, gaps=none, compiled=93, delta=-11, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=13, considered=2, candidates=38, planned=0
-Budget: official=95, extra=0, physical=95
-Intent IR: lowered=yes, v2=yes; intent=77, effects=95, cells=95
+Optimizer rules: automatic=yes; active=12, considered=2, candidates=39, planned=0
+Budget: official=93, extra=0, physical=93
+Intent IR: lowered=yes, v2=yes; intent=77, effects=93, cells=93
 
 Preloads:
   money -> R2: 10000 (outside program cells)
@@ -3804,15 +3802,15 @@ Registers:
 Labels:
    main: 00
   __loop_0: 00
-  __if_false_3: 53
-  __if_false_7: 71
-  __if_false_5: 71
-  __if_false_9: 78
-  __dispatch_next_2: 78
-  __dispatch_next_10: 84
-  __dispatch_end_1: 84
-  game_over: 86
-  __random_cell_0: 88
+  __if_false_3: 51
+  __if_false_7: 69
+  __if_false_5: 69
+  __if_false_9: 76
+  __dispatch_next_2: 76
+  __dispatch_next_10: 82
+  __dispatch_end_1: 82
+  game_over: 84
+  __random_cell_0: 86
 
 Optimizations:
   - expression-constant-folder: Folded 5 constant expression node(s) before code generation.
@@ -3832,8 +3830,7 @@ Optimizations:
   - display-strategy-selection: Selected decimal-pack for screen __inline_show_48_1.
   - display-current-x-reuse: Reused reels already in X as the first field of screen __inline_show_48_1.
   - packed-display-lowering: Display __inline_show_48_1 may use display-byte encodings in later layout passes.
-  - remainder-fraction-lowering: Lowered sum - 5 * int(sum / 5) without recomputing the dividend.
-  - zero-condition-test: Tested == 0 without materializing a zero literal at line 66.
+  - remainder-zero-test-lowering: Tested sum - 5 * int(sum / 5) == 0 without rescaling the fractional remainder at line 66.
   - preloaded-constant: Used preloaded Re for constant 1000.
   - preloaded-constant: Used preloaded Rd for constant 3000.
   - preloaded-constant: Used preloaded Rd for constant 3000.
@@ -3889,7 +3886,7 @@ Optimizer Capabilities:
   - coord-list-scaled-decimal: candidate; Stores 10x10 board coordinates as y.x decimal values when all visible uses allow it, so row/column/diagonal scans avoid repeated /10 digit extraction.
   - dual-constant-sign-digit: candidate; Candidate: a language intent for a dual constant 1.|-00 plus compact sign-digits (2N..9N) and their comparison semantics. The negative-zero comparison behavior is already active through the negative-zero-threshold family; no current program needs the additional sign-digit literal surface.
   - branch-removal: candidate; Umbrella rule for replacing provably equivalent conditionals with branchless arithmetic, sign, extrema, or masked updates.
-  - zero-condition-test: active; Uses direct F x?0 tests when one side of a condition is a proved zero, avoiding a zero literal and subtraction.
+  - zero-condition-test: candidate; Uses direct F x?0 tests when one side of a condition is a proved zero, avoiding a zero literal and subtraction.
   - dispatch-compare-chain: active; Lowers high-level command dispatch automatically; small proven dispatches may use indirect or super-dark dispatch.
 
 Machine Features Used:
@@ -3915,17 +3912,17 @@ Rejected Candidates:
 
 Cell Roles:
   00: 62 exec, display-byte - display byte role allowed
-  07: 86 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  12: 78 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  18: 88 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  21: 88 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  24: 88 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  48: 53 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  57: 71 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  66: 71 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  75: 00 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  77: 86 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  81: 00 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
+  07: 84 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  12: 76 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  18: 86 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  21: 86 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  24: 86 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  46: 51 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  55: 69 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  64: 69 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  73: 00 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  75: 84 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  79: 00 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
 `;
 
 exports[`golden listing > selected output is stable for examples/lunar.mkpro 1`] = `

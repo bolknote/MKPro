@@ -27,7 +27,7 @@ Generated with `npm run examples:size`.
 | `functions-demo.mkpro` | 29 | - | - | ok: no reference | load ok |
 | `game-100-pig.mkpro` | 103 | 103 | 0 | ok: <= reference | main+setup load ok |
 | `human.mkpro` | 28 | - | - | ok: no reference | load ok |
-| `jack-pot.mkpro` | 95 | 104 | -9 | ok: <= reference | main+setup load ok |
+| `jack-pot.mkpro` | 93 | 104 | -11 | ok: <= reference | main+setup load ok |
 | `lunar.mkpro` | 47 | 58 | -11 | ok: <= reference | load ok |
 | `minesweeper-9x7.mkpro` | 100 | 104 | -4 | ok: <= reference | main+setup load ok |
 | `minesweeper-9x9.mkpro` | 90 | 97 | -7 | ok: <= reference | main+setup load ok |

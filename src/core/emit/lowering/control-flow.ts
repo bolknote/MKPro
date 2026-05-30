@@ -62,6 +62,7 @@ import {
   matchBitMembershipCondition,
   matchEqualityConstantCondition,
   matchNearAnyHelperCondition,
+  matchRemainderByConstant,
   matchResidualGuardedUpdate,
   matchSmallSetCondition,
   nearAnyHelperKey,
@@ -1024,6 +1025,7 @@ export function compileCondition(ctx: LoweringCtx,
     const compiledCondition = selected.condition;
     if (compileNearAnyHelperCondition(ctx, compiledCondition, falseLabel, line, preloadedConstants)) return;
     if (compileSmallSetCondition(ctx, compiledCondition, falseLabel, line, preloadedConstants)) return;
+    if (compileRemainderZeroCondition(ctx, compiledCondition, falseLabel, line)) return;
     if (isZeroExpression(compiledCondition.right) && canTestAgainstZeroDirectly(compiledCondition.op)) {
       const bitHasLowering = compileBitHasConditionWithBitMaskHelper(ctx, compiledCondition.left, line)
         ?? compileBitHasConditionWithSpatialHelper(ctx, compiledCondition.left, line);
@@ -1061,6 +1063,30 @@ export function compileCondition(ctx: LoweringCtx,
             : 0x57;
     const mnemonic = getOpcode(opcode).name;
     ctx.emitJump(opcode, mnemonic, falseLabel, `false branch for ${compiledCondition.op}`, line);
+}
+
+export function compileRemainderZeroCondition(
+    ctx: LoweringCtx,
+    condition: ConditionAst,
+    falseLabel: string,
+    line: number,
+  ): boolean {
+    if ((condition.op !== "==" && condition.op !== "!=") || !isZeroExpression(condition.right)) return false;
+    if (condition.left.kind !== "binary") return false;
+    const matched = matchRemainderByConstant(condition.left);
+    if (matched === undefined || numericLiteralValue(matched.divisor) === 0) return false;
+
+    compileExpression(ctx, matched.value);
+    compileExpression(ctx, matched.divisor);
+    ctx.emitOp(0x13, "/", "remainder quotient", line);
+    ctx.emitOp(0x35, "К {x}", "remainder zero fractional part", line);
+    const opcode = directTestOpcode(condition.op);
+    ctx.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${condition.op}`, line);
+    ctx.optimizations.push({
+      name: "remainder-zero-test-lowering",
+      detail: `Tested ${expressionToIntentText(condition.left)} ${condition.op} 0 without rescaling the fractional remainder at line ${line}.`,
+    });
+    return true;
 }
 
 export function compileBitHasConditionWithBitMaskHelper(ctx: LoweringCtx, 

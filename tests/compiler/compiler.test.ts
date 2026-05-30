@@ -901,6 +901,27 @@ program RemainderLowering {
     expect(result.report.optimizations.some((item) => item.name === "remainder-fraction-lowering")).toBe(true);
   });
 
+  it("tests integer remainders against zero without rescaling the fraction", () => {
+    const result = compileOk(`
+program RemainderZeroTest {
+  state {
+    value: packed = 25
+  }
+  loop {
+    if value - 5 * int(value / 5) == 0 {
+      halt(1)
+    }
+    halt(0)
+  }
+}
+`);
+    const comments = result.steps.map((step) => step.comment);
+
+    expect(result.report.optimizations.some((item) => item.name === "remainder-zero-test-lowering")).toBe(true);
+    expect(comments).toContain("remainder zero fractional part");
+    expect(comments).not.toContain("remainder scale");
+  });
+
   it("reuses one cell bit mask across adjacent set updates", () => {
     const result = compileOk(`
 program AdjacentSetUpdates {
