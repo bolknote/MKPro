@@ -30,11 +30,11 @@ const SOURCE = `program Split {
   }
 
   turn {
-    read x
+    x = read()
     hi = int(x / 4)
     lo = frac(x / 4)
-    stop hi
-    stop lo
+    halt(hi)
+    halt(lo)
   }
 }
 `;

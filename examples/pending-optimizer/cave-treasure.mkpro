@@ -37,46 +37,46 @@ program CaveTreasure {
   }
 
   screen main {
-    show pos
+    show(pos)
   }
 
-  rule ignored {
-    stop 0
+  fn ignored() {
+    halt(0)
   }
 
-  rule exit_found {
-    stop 11
+  fn exit_found() {
+    halt(11)
   }
 
   turn {
-    show main
-    read key
+    show(main)
+    key = read()
     food--
 
     match key {
-      4 => go_left
-      2, 6, 8, 5, -5 => go direction(key)
-      0 => break_wall
-      10 => search
-      otherwise => ignored
+      4 => go_left()
+      2, 6, 8, 5, -5 => go(direction(key))
+      0 => break_wall()
+      10 => search()
+      otherwise => ignored()
     }
   }
 
-  rule go_left {
+  fn go_left() {
     if pos == 3.0000008 {
-      exit_found
+      exit_found()
     }
     else {
-      go direction(key)
+      go(direction(key))
     }
   }
 
-  rule go dir {
+  fn go(dir) {
     blocked = pos + dir
     if blocked in walls {
       // Bumping into a wall records intent: the next break_wall command knows
       // which obstacle the player chose to spend dynamite on.
-      show 0
+      show(0)
     }
     else {
       pos = blocked
@@ -84,7 +84,7 @@ program CaveTreasure {
     }
   }
 
-  rule break_wall {
+  fn break_wall() {
     if blocked != 0 {
       if dynamite >= 2 {
         walls -= blocked
@@ -93,24 +93,24 @@ program CaveTreasure {
         dynamite -= 2
       }
       else {
-        show 0
+        show(0)
       }
     }
     else {
-      show 0
+      show(0)
     }
   }
 
-  rule search {
+  fn search() {
     if pos in caches {
       caches -= pos
-      cache_reward
+      cache_reward()
       robber = 1
-      fight
+      fight()
     }
   }
 
-  rule cache_reward {
+  fn cache_reward() {
     if pos.floor == 1 {
       food += 9
     }
@@ -124,34 +124,34 @@ program CaveTreasure {
     }
   }
 
-  rule fight {
+  fn fight() {
     // Robber encounters are a second decision surface after treasure discovery;
     // the cache is already consumed, so refusing is safe but unprofitable.
     if robber == 1 {
-      show main
-      read fight_key
+      show(main)
+      fight_key = read()
       match fight_key {
-        0 => decline_fight
-        10 => accept_fight
-        otherwise => ignored
+        0 => decline_fight()
+        10 => accept_fight()
+        otherwise => ignored()
       }
     }
   }
 
-  rule decline_fight {
+  fn decline_fight() {
     robber = 0
-    show 0
+    show(0)
   }
 
-  rule accept_fight {
+  fn accept_fight() {
     robber_roll = random()
     if robber_roll >= 5 {
-      cache_reward
+      cache_reward()
     }
     else {
       food -= 3
     }
     robber = 0
-    show main
+    show(main)
   }
 }

@@ -49,13 +49,19 @@ interface SourceLine {
 const V2_RESERVED_RULE_NAMES = new Set([
   "challenge",
   "else",
+  "fn",
+  "halt",
   "if",
   "match",
   "move",
   "otherwise",
+  "program",
   "read",
+  "rule",
   "show",
+  "state",
   "stop",
+  "turn",
 ]);
 
 export class ParseError extends Error {
@@ -206,9 +212,12 @@ class MKProParser {
         };
         continue;
       }
-      if (line.text.startsWith("rule ")) {
+      if (line.text.startsWith("fn ")) {
         rules.push(this.parseV2Rule(line.text));
         continue;
+      }
+      if (line.text.startsWith("rule ")) {
+        throw new ParseError("Use 'fn name(arg, ...) {' instead of rule blocks", line.line);
       }
       const knownStatementBlock = /^(match|if|while|challenge)\b/u.test(line.text) || line.text === "raw {";
       if (line.text.startsWith("input ") || line.text.endsWith("{") && !knownStatementBlock) {
@@ -251,11 +260,13 @@ class MKProParser {
           line: header.line,
         };
       }
-      if (line.text === "show" || line.text.startsWith("show ")) {
-        items = parseDisplayItemList(line.text === "show" ? "" : line.text.slice("show ".length), line.line);
-        sources = items.filter((item): item is Extract<DisplayItemAst, { kind: "source" }> => item.kind === "source")
-          .map((item) => item.name);
+      if (isNamedCall(line.text, "show")) {
+        items = parseDisplayItemList(parseShowDisplayItemsText(line.text, line.line), line.line);
+        sources = displayItemSources(items);
         continue;
+      }
+      if (line.text === "show" || line.text.startsWith("show ")) {
+        throw new ParseError("Screen display must look like 'show(...)'", line.line);
       }
       throw new ParseError(`Unexpected screen line '${line.text}'`, line.line);
     }
@@ -339,20 +350,23 @@ class MKProParser {
 
   private parseV2Rule(text: string): V2RuleAst {
     const header = this.next();
-    const match = /^rule\s+([A-Za-z_][\w]*)(?:\s+(.+?))?\s*\{$/u.exec(text);
-    if (!match) throw new ParseError("Rule must look like 'rule name {' or 'rule name arg {'", header.line);
-    if (V2_RESERVED_RULE_NAMES.has(match[1]!)) {
-      throw new ParseError(`Rule name '${match[1]}' is reserved`, header.line);
+    const fn = /^fn\s+([A-Za-z_][\w]*)\s*\(([^)]*)\)\s*\{$/u.exec(text);
+    if (!fn) {
+      throw new ParseError("Function must look like 'fn name(arg, ...) {'", header.line);
     }
-    const params = match[2] ? parseIdentifierList(match[2]) : [];
+    const name = fn[1]!;
+    if (V2_RESERVED_RULE_NAMES.has(name)) {
+      throw new ParseError(`Function name '${name}' is reserved`, header.line);
+    }
+    const params = parseCommaIdentifierList(fn[2] ?? "", header.line);
     for (const param of params) {
       if (!/^[A-Za-z_][\w]*$/u.test(param)) {
-        throw new ParseError(`Invalid rule parameter '${param}'`, header.line);
+        throw new ParseError(`Invalid function parameter '${param}'`, header.line);
       }
     }
     return {
       kind: "v2_rule",
-      name: match[1]!,
+      name,
       params,
       body: this.parseV2StatementBlock(),
       line: header.line,
@@ -678,31 +692,35 @@ function parseV2BoardDeclaration(line: SourceLine): V2BoardAst | undefined {
 }
 
 function parseV2InlineStatement(text: string, line: number): V2StatementAst {
+  const showCall = parseNamedCall(text, "show");
+  if (showCall !== undefined) return parseV2ShowCall(showCall.argsText, line);
+  const haltCall = parseNamedCall(text, "halt");
+  if (haltCall !== undefined) {
+    return { kind: "v2_stop", value: haltCall.argsText.trim() === "" ? "0" : haltCall.argsText.trim(), line };
+  }
+  const readAssignment = /^([A-Za-z_][\w]*)\s*=\s*read\s*\(\s*\)$/u.exec(text);
+  if (readAssignment) {
+    return { kind: "v2_read", target: readAssignment[1]!, line };
+  }
   if (text.startsWith("show ")) {
-    return { kind: "v2_show", target: text.slice("show ".length).trim(), line };
+    throw new ParseError("Show must look like 'show(...)'", line);
   }
   const read = /^read\s+([A-Za-z_][\w]*)$/u.exec(text);
   if (read) {
-    return { kind: "v2_read", target: read[1]!, line };
+    throw new ParseError("Read input with 'name = read()'", line);
   }
   if (text.startsWith("read ")) {
-    throw new ParseError("Read must look like 'read name'", line);
+    throw new ParseError("Read input with 'name = read()'", line);
   }
   if (text.startsWith("stop ")) {
-    return { kind: "v2_stop", value: text.slice("stop ".length).trim(), line };
+    throw new ParseError("Use 'halt(...)' instead of stop", line);
   }
   const move = /^move\s+([A-Za-z_][\w]*)\s+(north|south|east|west|up|down)$/u.exec(text);
   if (move) {
-    const statement: V2MoveStatementAst = {
-      kind: "v2_move",
-      target: move[1]!,
-      line,
-    };
-    if (move[2] !== undefined) statement.direction = parseV2MoveDirection(move[2], line);
-    return statement;
+    throw new ParseError("Use assignment with move(...), for example 'pos = move(pos, east)'", line);
   }
   if (text.startsWith("move ")) {
-    throw new ParseError("Move must look like 'move pos north'. Use 'pos += expr' for computed movement", line);
+    throw new ParseError("Use assignment with move(...), for example 'pos = move(pos, east)'", line);
   }
   const step = /^([A-Za-z_][\w]*)\s*(\+\+|--)$/u.exec(text);
   if (step) {
@@ -733,16 +751,31 @@ function parseV2InlineStatement(text: string, line: number): V2StatementAst {
       line,
     };
   }
-  const invoke = /^([A-Za-z_][\w]*)(?:\s+(.+))?$/u.exec(text);
-  if (invoke) {
+  const call = parseCall(text);
+  if (call !== undefined) {
     return {
       kind: "v2_invoke",
-      name: invoke[1]!,
-      args: invoke[2] ? splitArgs(invoke[2]) : [],
+      name: call.name,
+      args: splitArgs(call.argsText),
       line,
     };
   }
+  const command = /^([A-Za-z_][\w]*)(?:\s+(.+))?$/u.exec(text);
+  if (command) {
+    throw new ParseError("Function calls must look like 'name(...)'", line);
+  }
   throw new ParseError(`Unexpected statement '${text}'`, line);
+}
+
+function parseV2ShowCall(argsText: string, line: number): V2StatementAst {
+  const trimmed = argsText.trim();
+  if (trimmed.length === 0 || trimmed.startsWith("\"") || trimmed.includes(",") || trimmed.includes(":")) {
+    return { kind: "v2_show", items: parseDisplayItemList(trimmed, line), line };
+  }
+  if (isNumericLiteralText(trimmed) || /^[A-Za-z_][\w]*$/u.test(trimmed)) {
+    return { kind: "v2_show", target: trimmed, line };
+  }
+  return { kind: "v2_show", items: parseDisplayItemList(trimmed, line), line };
 }
 
 function parseV2Predicate(text: string, line: number): V2PredicateAst {
@@ -821,8 +854,24 @@ function splitArgs(text: string): string[] {
   const args: string[] = [];
   let start = 0;
   let depth = 0;
+  let quote = false;
+  let escaped = false;
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        quote = false;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      quote = true;
+      continue;
+    }
     if (char === "(") depth += 1;
     if (char === ")") depth = Math.max(0, depth - 1);
     if (char === "," && depth === 0) {
@@ -832,6 +881,58 @@ function splitArgs(text: string): string[] {
   }
   args.push(text.slice(start).trim());
   return args.filter(Boolean);
+}
+
+interface ParsedCall {
+  name: string;
+  argsText: string;
+}
+
+function isNamedCall(text: string, name: string): boolean {
+  return parseNamedCall(text, name) !== undefined;
+}
+
+function parseNamedCall(text: string, name: string): ParsedCall | undefined {
+  const call = parseCall(text);
+  return call?.name === name ? call : undefined;
+}
+
+function parseCall(text: string): ParsedCall | undefined {
+  const header = /^([A-Za-z_][\w]*)\s*\(/u.exec(text);
+  if (!header) return undefined;
+  const open = header[0].lastIndexOf("(");
+  let depth = 0;
+  let quote = false;
+  let escaped = false;
+  for (let index = open; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        quote = false;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      quote = true;
+      continue;
+    }
+    if (char === "(") {
+      depth += 1;
+      continue;
+    }
+    if (char !== ")") continue;
+    depth -= 1;
+    if (depth === 0) {
+      if (text.slice(index + 1).trim().length > 0) return undefined;
+      return { name: header[1]!, argsText: text.slice(open + 1, index) };
+    }
+    if (depth < 0) return undefined;
+  }
+  return undefined;
 }
 
 interface V2LoweringContext {
@@ -861,7 +962,11 @@ function lowerV2Program(v2: V2ProgramAst): LoweredV2Program {
   const decimalSeries = tryLowerV2DecimalFactorialSeries(v2);
   if (decimalSeries !== undefined) return decimalSeries;
 
-  const screens = collectV2Screens(v2);
+  const declaredScreens = collectV2Screens(v2.screens);
+  resolveV2InlineShowTargets(v2, declaredScreens, new Set(v2.state.map((field) => field.name)));
+  const inlineScreens = collectV2InlineScreens(v2);
+  const allScreens = [...v2.screens, ...inlineScreens];
+  const screens = collectV2Screens(allScreens);
   const ruleParams = collectV2RuleParams(v2);
   const rules = collectV2Rules(v2);
   const specializedRules = selectV2RuleSpecializations(v2, rules);
@@ -890,7 +995,7 @@ function lowerV2Program(v2: V2ProgramAst): LoweredV2Program {
   return {
     domains: lowerV2Domains(v2),
     states: lowerV2State(v2, specializedRules, cellMapNames, context),
-    displays: v2.screens.map(lowerV2Screen),
+    displays: allScreens.map(lowerV2Screen),
     entries: [lowerV2Entry(v2, context)],
     procs: [
       ...v2.rules.filter((rule) => !specializedRules.has(rule.name)).map((rule) => lowerV2Rule(rule, context)),
@@ -1005,11 +1110,11 @@ function collectV2CoordLists(v2: V2ProgramAst): V2LoweringContext["coordLists"] 
 function collectV2RuleParams(v2: V2ProgramAst): V2LoweringContext["ruleParams"] {
   const ruleParams = new Map<string, string[]>();
   for (const rule of v2.rules) {
-    if (ruleParams.has(rule.name)) throw new ParseError(`Duplicate rule '${rule.name}'`, rule.line);
+    if (ruleParams.has(rule.name)) throw new ParseError(`Duplicate function '${rule.name}'`, rule.line);
     ruleParams.set(rule.name, rule.params);
   }
   for (const table of v2.encounters) {
-    if (ruleParams.has("encounter")) throw new ParseError("Duplicate rule 'encounter'", table.line);
+    if (ruleParams.has("encounter")) throw new ParseError("Duplicate function 'encounter'", table.line);
     ruleParams.set("encounter", [encounterParamName(table.expr)]);
   }
   return ruleParams;
@@ -1130,13 +1235,95 @@ function estimateV2ExpressionText(text: string): number {
   return 1 + operators + calls + Math.ceil(trimmed.length / 12);
 }
 
-function collectV2Screens(v2: V2ProgramAst): Map<string, V2ScreenAst> {
+function collectV2Screens(v2Screens: V2ScreenAst[]): Map<string, V2ScreenAst> {
   const screens = new Map<string, V2ScreenAst>();
-  for (const screen of v2.screens) {
+  for (const screen of v2Screens) {
     if (screens.has(screen.name)) throw new ParseError(`Duplicate screen '${screen.name}'`, screen.line);
     screens.set(screen.name, screen);
   }
   return screens;
+}
+
+function collectV2InlineScreens(v2: V2ProgramAst): V2ScreenAst[] {
+  const screens: V2ScreenAst[] = [];
+  let next = 0;
+  const visit = (statements: V2StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "v2_show" && statement.items !== undefined) {
+        const name = `__inline_show_${statement.line}_${next}`;
+        next += 1;
+        statement.inlineName = name;
+        screens.push({
+          kind: "v2_screen",
+          name,
+          sources: displayItemSources(statement.items),
+          items: statement.items,
+          line: statement.line,
+        });
+      }
+      if (statement.kind === "v2_if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "v2_while") visit(statement.body);
+      if (statement.kind === "v2_match") {
+        for (const matchCase of statement.cases) visit([matchCase.action]);
+        if (statement.otherwise) visit([statement.otherwise]);
+      }
+      if (statement.kind === "v2_challenge") {
+        visit(statement.successBody);
+        if (statement.failureBody) visit(statement.failureBody);
+      }
+    }
+  };
+  if (v2.body.length > 0) visit(v2.body);
+  if (v2.turn) visit(v2.turn.body);
+  for (const rule of v2.rules) visit(rule.body);
+  for (const table of v2.encounters) {
+    for (const encounterCase of table.cases) visit(encounterCase.body);
+  }
+  return screens;
+}
+
+function resolveV2InlineShowTargets(
+  v2: V2ProgramAst,
+  screens: ReadonlyMap<string, V2ScreenAst>,
+  stateNames: ReadonlySet<string>,
+): void {
+  const visit = (statements: V2StatementAst[]): void => {
+    for (const statement of statements) {
+      if (
+        statement.kind === "v2_show" &&
+        statement.items === undefined &&
+        statement.target !== undefined &&
+        !isNumericLiteralText(statement.target) &&
+        !screens.has(statement.target) &&
+        stateNames.has(statement.target)
+      ) {
+        statement.items = [{ kind: "source", name: statement.target, line: statement.line }];
+        delete statement.target;
+      }
+      if (statement.kind === "v2_if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "v2_while") visit(statement.body);
+      if (statement.kind === "v2_match") {
+        for (const matchCase of statement.cases) visit([matchCase.action]);
+        if (statement.otherwise) visit([statement.otherwise]);
+      }
+      if (statement.kind === "v2_challenge") {
+        visit(statement.successBody);
+        if (statement.failureBody) visit(statement.failureBody);
+      }
+    }
+  };
+  if (v2.body.length > 0) visit(v2.body);
+  if (v2.turn) visit(v2.turn.body);
+  for (const rule of v2.rules) visit(rule.body);
+  for (const table of v2.encounters) {
+    for (const encounterCase of table.cases) visit(encounterCase.body);
+  }
 }
 
 function validateV2Domains(v2: V2ProgramAst): void {
@@ -1191,19 +1378,23 @@ function validateV2Statement(
 ): void {
   switch (statement.kind) {
     case "v2_show":
+      if (statement.items !== undefined) return;
+      if (statement.target === undefined) {
+        throw new ParseError("Show must name a screen, number, or display fragments", statement.line);
+      }
       if (!isNumericLiteralText(statement.target) && !context.screens.has(statement.target)) {
         throw new ParseError(`Unknown screen '${statement.target}'`, statement.line);
       }
       return;
     case "v2_invoke":
       if (!context.ruleParams.has(statement.name)) {
-        throw new ParseError(`Unknown rule '${statement.name}'`, statement.line);
+        throw new ParseError(`Unknown function '${statement.name}'`, statement.line);
       }
       {
         const expected = context.ruleParams.get(statement.name)!.length;
         if (statement.args.length !== expected) {
           throw new ParseError(
-            `Rule '${statement.name}' expects ${expected} argument${expected === 1 ? "" : "s"}, got ${statement.args.length}`,
+            `Function '${statement.name}' expects ${expected} argument${expected === 1 ? "" : "s"}, got ${statement.args.length}`,
             statement.line,
           );
         }
@@ -2217,14 +2408,45 @@ function lowerV2Statements(statements: V2StatementAst[], context: V2LoweringCont
   const lowered: StatementAst[] = [];
   for (let index = 0; index < statements.length; index += 1) {
     const statement = statements[index]!;
+    const literalHalt = lowerV2InlineLiteralShowHalt(statement, statements[index + 1]);
+    if (literalHalt !== undefined) {
+      lowered.push(literalHalt);
+      index += 1;
+      continue;
+    }
     lowered.push(...lowerV2Statement(statement, context));
   }
   return lowered;
 }
 
+function lowerV2InlineLiteralShowHalt(
+  statement: V2StatementAst,
+  next: V2StatementAst | undefined,
+): Extract<StatementAst, { kind: "halt" }> | undefined {
+  if (statement.kind !== "v2_show" || next?.kind !== "v2_stop") return undefined;
+  if (normalizedV2Text(next.value) !== "0") return undefined;
+  const literal = statement.items === undefined ? undefined : collapseV2LiteralItems(statement.items);
+  if (literal !== "ЕГГОГ") return undefined;
+  return { kind: "halt", expr: parseExpression("0"), literal, line: statement.line };
+}
+
+function collapseV2LiteralItems(items: DisplayItemAst[]): string | undefined {
+  if (items.some((item) => item.kind !== "literal")) return undefined;
+  return items.map((item) => item.kind === "literal" ? item.text : "").join("");
+}
+
 function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext): StatementAst[] {
   switch (statement.kind) {
     case "v2_show":
+      if (statement.items !== undefined) {
+        if (statement.inlineName === undefined) {
+          throw new ParseError("Inline show display was not collected before lowering", statement.line);
+        }
+        return [{ kind: "show", display: statement.inlineName, line: statement.line }];
+      }
+      if (statement.target === undefined) {
+        throw new ParseError("Show must name a screen, number, or display fragments", statement.line);
+      }
       if (isNumericLiteralText(statement.target)) {
         return [{ kind: "pause", expr: parseExpression(statement.target, statement.line), line: statement.line }];
       }
@@ -2412,6 +2634,12 @@ function namedMoveDelta(
 }
 
 function parseV2MoveDirection(text: string, line: number): NonNullable<V2MoveStatementAst["direction"]> {
+  const direction = parseV2MoveDirectionName(text);
+  if (direction !== undefined) return direction;
+  throw new ParseError("Move direction must be north, south, east, west, up, or down", line);
+}
+
+function parseV2MoveDirectionName(text: string): NonNullable<V2MoveStatementAst["direction"]> | undefined {
   switch (text) {
     case "north":
     case "south":
@@ -2421,7 +2649,7 @@ function parseV2MoveDirection(text: string, line: number): NonNullable<V2MoveSta
     case "down":
       return text;
     default:
-      throw new ParseError("Move direction must be north, south, east, west, up, or down", line);
+      return undefined;
   }
 }
 
@@ -3274,6 +3502,7 @@ function rewriteSpatialExpressionText(text: string, context: V2LoweringContext |
   });
   rewritten = replaceSpatialCall(rewritten, "cell_at", (args) => cellAtExpression(args, context));
   rewritten = replaceSpatialCall(rewritten, "line_count", (args) => coordListLineCountExpression(args, context));
+  rewritten = replaceSpatialCall(rewritten, "move", (args) => moveExpression(args, context));
   return rewritten;
 }
 
@@ -3305,6 +3534,16 @@ function coordListLineCountExpression(args: string[], context: V2LoweringContext
   const list = context.coordLists.get(collection.trim());
   if (list === undefined) return undefined;
   return `coord_list_line_count(${item}, ${list.items.join(", ")})`;
+}
+
+function moveExpression(args: string[], context: V2LoweringContext): string | undefined {
+  if (args.length !== 2) return undefined;
+  const [target, direction] = args.map((arg) => arg.trim());
+  if (target === undefined || direction === undefined || target.length === 0 || direction.length === 0) return undefined;
+  if (/^direction\s*\(/u.test(direction)) return `${target} + ${direction}`;
+  const namedDirection = parseV2MoveDirectionName(direction);
+  if (namedDirection === undefined) return undefined;
+  return `${target} + ${namedMoveDelta(target, namedDirection, 0, context)}`;
 }
 
 function cellAtDomainAndPosition(
@@ -3513,6 +3752,27 @@ function parseIdentifierList(text: string): string[] {
     .split(",")
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
+}
+
+function parseCommaIdentifierList(text: string, line: number): string[] {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return [];
+  const parts = text.split(",").map((part) => part.trim());
+  if (parts.some((part) => part.length === 0)) {
+    throw new ParseError("Function parameters must be comma-separated identifiers", line);
+  }
+  return parts;
+}
+
+function parseShowDisplayItemsText(text: string, line: number): string {
+  const call = parseNamedCall(text, "show");
+  if (call === undefined) throw new ParseError("Screen display must look like 'show(...)'", line);
+  return call.argsText;
+}
+
+function displayItemSources(items: DisplayItemAst[]): string[] {
+  return items.filter((item): item is Extract<DisplayItemAst, { kind: "source" }> => item.kind === "source")
+    .map((item) => item.name);
 }
 
 function parseDisplayItemList(text: string, line: number): DisplayItemAst[] {

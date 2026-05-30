@@ -1,5 +1,5 @@
 // spends food. It keeps the syntax approachable while still exercising displayed
-// state, persistent state, match dispatch, and a hot rule.
+// state, persistent state, match dispatch, and a hot function.
 
 program CounterGame {
   state {
@@ -8,35 +8,35 @@ program CounterGame {
   }
 
   screen main {
-    show score, food
+    show(score, food)
   }
 
-  rule ignored {
-    stop 0
+  fn ignored() {
+    halt(0)
   }
 
   turn {
     // Invalid keys end quietly; the example is about state transitions, not
     // input validation ceremony.
-    show main
-    read key
+    show(main)
+    key = read()
 
     match key {
-      2 => gain
-      8 => spend
-      otherwise => ignored
+      2 => gain()
+      8 => spend()
+      otherwise => ignored()
     }
   }
 
-  rule gain {
+  fn gain() {
     // Marked hot because "gain" is the common happy path in the optimizer
-    // examples that inspect rule metadata.
+    // examples that inspect function metadata.
     score++
-    show main
+    show(main)
   }
 
-  rule spend {
+  fn spend() {
     food--
-    show main
+    show(main)
   }
 }

@@ -13,17 +13,21 @@ variables:
 
 contexts:
   main:
+    - include: strings
     - include: comments
+    - include: invalid-legacy-syntax
+    - include: declarations
+    - include: raw-contract
     - include: raw-rows
-    - include: section-declarations
-    - include: top-level-keywords
     - include: control-keywords
-    - include: domain-keywords
-    - include: storage-keywords
-    - include: mk61-commands
-    - include: registers
+    - include: state-types
+    - include: builtin-calls
+    - include: function-calls
     - include: constants
+    - include: registers
+    - include: mk61-commands
     - include: operators
+    - include: display-sources
     - include: punctuation
     - include: identifiers
 
@@ -33,33 +37,108 @@ contexts:
     - match: '#.*$'
       scope: comment.line.number-sign.mkpro
 
-  top-level-keywords:
-    - match: '^\s*(reference)\b'
-      scope: keyword.control.toplevel.mkpro
-    - match: '\b(mk61|manual|loader|hex)\b'
-      scope: constant.language.mkpro
+  strings:
+    - match: '"'
+      scope: punctuation.definition.string.begin.mkpro
+      push:
+        - meta_scope: string.quoted.double.mkpro
+        - match: '\\.'
+          scope: constant.character.escape.mkpro
+        - match: '"'
+          scope: punctuation.definition.string.end.mkpro
+          pop: true
 
-  section-declarations:
-    - match: '^\s*(program|state|screen|turn|rule|board|fleet|world|encounters)\b'
-      scope: keyword.declaration.block.mkpro
-    - match: '\b(exact|inline|at)\b'
-      scope: storage.modifier.block.mkpro
+  invalid-legacy-syntax:
+    - match: '^\s*(rule)\b'
+      captures:
+        1: invalid.deprecated.keyword.rule.mkpro
+    - match: '^\s*(show|read|move)\b(?!\s*\()'
+      captures:
+        1: invalid.deprecated.keyword.statement.mkpro
+    - match: '\b(stop)\b'
+      captures:
+        1: invalid.deprecated.keyword.stop.mkpro
+
+  declarations:
+    - match: '^\s*(reference)\s+({{ident}})\b'
+      captures:
+        1: keyword.control.toplevel.mkpro
+        2: entity.name.namespace.reference.mkpro
+    - match: '^\s*(program)\s+({{ident}})\s*(\{)'
+      captures:
+        1: keyword.declaration.program.mkpro
+        2: entity.name.namespace.program.mkpro
+        3: punctuation.section.block.begin.mkpro
+    - match: '^\s*(state|turn)\s*(\{)'
+      captures:
+        1: keyword.declaration.block.mkpro
+        2: punctuation.section.block.begin.mkpro
+    - match: '^\s*(screen|world|encounters)\s+({{ident}})\s*(\{)'
+      captures:
+        1: keyword.declaration.block.mkpro
+        2: entity.name.section.mkpro
+        3: punctuation.section.block.begin.mkpro
+    - match: '^\s*(position)\s+({{ident}})\s*(\{)'
+      captures:
+        1: keyword.declaration.position.mkpro
+        2: variable.parameter.position.mkpro
+        3: punctuation.section.block.begin.mkpro
+    - match: '^\s*({{ident}})\s*(:)\s*(board)\s*(?=\()'
+      captures:
+        1: entity.name.type.domain.mkpro
+        2: punctuation.separator.key-value.mkpro
+        3: storage.type.domain.mkpro
+    - match: '^\s*({{ident}})\s*(:)\s*(flag|counter|coord|cells|coord_list|packed)\b'
+      captures:
+        1: variable.other.state.mkpro
+        2: punctuation.separator.key-value.mkpro
+        3: storage.type.state.mkpro
+    - match: '^\s*(fn)\s+({{ident}})\s*(\()'
+      captures:
+        1: keyword.declaration.function.mkpro
+        2: entity.name.function.mkpro
+        3: punctuation.section.parameters.begin.mkpro
+      push: function-parameters
+
+  function-parameters:
+    - meta_scope: meta.function.parameters.mkpro
+    - include: comments
+    - match: '\)'
+      scope: punctuation.section.parameters.end.mkpro
+      pop: true
+    - match: ','
+      scope: punctuation.separator.parameter.mkpro
+    - match: '\b{{ident}}\b'
+      scope: variable.parameter.function.mkpro
 
   control-keywords:
-    - match: '\b(show|read|match|otherwise|if|else|stop|as|move|challenge|success|failure)\b'
+    - match: '\b(if|else|while|match|otherwise|challenge|success|failure|as|using|raw|takes|returns|clobbers|preserves|code)\b'
       scope: keyword.control.mkpro
-    - match: '\b(and|or|not|north|south|east|west|up|down)\b'
-      scope: keyword.operator.word.mkpro
 
-  domain-keywords:
-    - match: '\b(flag|counter|coord|bitset|packed|position|board|fleet|ships|encoding|true|false)\b'
-      scope: storage.type.domain.mkpro
-    - match: '\b(calculator_random|random_seed|stack\.X|stack\.Y|random|direction|memory_code|cell_at|line_count|neighbor_count|random_cell|nonzero)\b'
-      scope: support.function.domain.mkpro
-
-  storage-keywords:
-    - match: '\b(store|temp|const|fixed|prefer)\b'
+  state-types:
+    - match: '\b(flag|counter|coord|cells|coord_list|packed|board|position|encoding)\b'
       scope: storage.type.mkpro
+
+  builtin-calls:
+    - match: '\b(show|read|halt|move|direction|memory_code|cell_at|line_count|neighbor_count|random_cell|near_any|eq_any|pow|int|frac|abs|max|min|sign|random|calculator_random|random_seed|bit_mask|bit_has|bit_set|bit_clear|bit_toggle|bit_or|bit_and|bit_not|digit_at|digit_add|digit_set|coord_list_has|coord_list_line_count|nonzero)\s*(?=\()'
+      scope: support.function.builtin.mkpro
+
+  function-calls:
+    - match: '\b{{ident}}\s*(?=\()'
+      scope: variable.function.mkpro
+
+  display-sources:
+    - match: '\b({{ident}})(:)(0?\d+)\b'
+      captures:
+        1: variable.other.display-source.mkpro
+        2: punctuation.separator.key-value.mkpro
+        3: constant.numeric.display-width.mkpro
+
+  raw-contract:
+    - match: '\b(none|state|stack|display|flags|memory)\b'
+      scope: constant.language.raw-contract.mkpro
+    - match: '(?:->)'
+      scope: punctuation.separator.arrow.mkpro
 
   raw-rows:
     - match: '^\s*(row)\s+([0-9A-Fa-f]{2})\s*(:)'
@@ -88,8 +167,14 @@ contexts:
       scope: variable.other.register.mkpro
     - match: '\bR[abcedABCEDe]\b'
       scope: variable.other.register.mkpro
+    - match: '\bstack\.(X|Y)\b'
+      captures:
+        0: variable.language.stack.mkpro
+        1: constant.language.stack-slot.mkpro
 
   constants:
+    - match: '\b(true|false|north|south|east|west|up|down)\b'
+      scope: constant.language.mkpro
     - match: '\b[0-9A-Fa-f]{2}(?=\s|$)'
       scope: constant.numeric.hex.mkpro
     - match: '{{number}}'
@@ -100,9 +185,15 @@ contexts:
       scope: keyword.operator.mkpro
     - match: '\.\.'
       scope: keyword.operator.range.mkpro
+    - match: '\bin\b'
+      scope: keyword.operator.word.mkpro
 
   punctuation:
-    - match: '[{}()\[\],:]'
+    - match: '[{}]'
+      scope: punctuation.section.block.mkpro
+    - match: '[()]'
+      scope: punctuation.section.group.mkpro
+    - match: '[\[\],:]'
       scope: punctuation.separator.mkpro
 
   identifiers:

@@ -27,83 +27,84 @@ program Dungeon {
   }
 
   screen place {
-    show pos, height
+    show(pos, height)
   }
 
   screen map {
-    show plan
+    show(plan)
   }
 
-  rule lost {
-    stop "ЕГГОГ"
+  fn lost() {
+    show("ЕГГОГ")
+    halt()
   }
 
   turn {
-    show place
-    show map
-    read action
+    show(place)
+    show(map)
+    action = read()
 
     match action {
-      4 => step_left
-      6 => step_right
-      8 => climb
-      2 => descend
-      otherwise => bump
+      4 => step_left()
+      6 => step_right()
+      8 => climb()
+      2 => descend()
+      otherwise => bump()
     }
   }
 
-  rule step_left {
+  fn step_left() {
     pos--
-    check_room
+    check_room()
   }
 
-  rule step_right {
+  fn step_right() {
     pos++
     score++
     if pos >= 7 {
-      extend_corridor
+      extend_corridor()
     }
-    check_room
+    check_room()
   }
 
-  rule climb {
+  fn climb() {
     height++
-    check_room
+    check_room()
   }
 
-  rule descend {
+  fn descend() {
     height--
-    check_room
+    check_room()
   }
 
-  rule check_room {
+  fn check_room() {
     // A wall is the height digit stored for the current position. Hitting it, or
     // leaving the corridor, counts as an error; three errors end the run.
     if pos <= 0 {
-      bump
+      bump()
     }
 
     wall = cell_at(dungeon, pos)
     if height == wall {
-      bump
+      bump()
     }
     else {
-      show place
+      show(place)
     }
   }
 
-  rule bump {
+  fn bump() {
     mistakes++
     if mistakes >= 3 {
-      lost
+      lost()
     }
   }
 
-  rule extend_corridor {
+  fn extend_corridor() {
     // In the published rules, reaching the seventh position reveals the next
     // slice of dungeon and shifts positions 7 and 8 back to 1 and 2.
     pos = 2
     plan = random()
-    show map
+    show(map)
   }
 }

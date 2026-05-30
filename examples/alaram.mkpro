@@ -15,7 +15,7 @@ program Alaram {
     angle: counter -180..180 = 0
 
     // Level narrows the firing cone. The original asks for level A=1..9 before
-    // play; here it stays explicit game state so the rule can name that pressure.
+    // play; here it stays explicit game state so the function can name that pressure.
     level: counter 1..9 = 3
     hit_window: counter 0..9 = 3
 
@@ -31,95 +31,96 @@ program Alaram {
   }
 
   screen cockpit {
-    show "8СГ -78"
+    show("8СГ -78")
   }
 
   screen shot_down {
-    show shot_down_pattern
+    show(shot_down_pattern)
   }
 
   screen victory {
-    show "8СГ-Е-78"
+    show("8СГ-Е-78")
   }
 
-  rule ground {
-    stop "ЕГГОГ"
+  fn ground() {
+    show("ЕГГОГ")
+    halt()
   }
 
-  rule tail_gun {
-    show shot_down
-    stop -666
+  fn tail_gun() {
+    show(shot_down)
+    halt(-666)
   }
 
-  rule destroyed {
-    show victory
-    stop 777
+  fn destroyed() {
+    show(victory)
+    halt(777)
   }
 
   turn {
-    show cockpit
-    read command
+    show(cockpit)
+    command = read()
 
     match command {
-      0 => fire
-      2 => dive
-      4 => bank_left
-      6 => bank_right
-      8 => climb
-      otherwise => hold_course
+      0 => fire()
+      2 => dive()
+      4 => bank_left()
+      6 => bank_right()
+      8 => climb()
+      otherwise => hold_course()
     }
   }
 
-  rule climb {
-    move fighter up
+  fn climb() {
+    fighter = move(fighter, up)
     altitude += 100
-    close_range
+    close_range()
   }
 
-  rule dive {
-    move fighter down
+  fn dive() {
+    fighter = move(fighter, down)
     altitude -= 100
     if altitude <= 0 {
-      ground
+      ground()
     }
-    close_range
+    close_range()
   }
 
-  rule bank_left {
-    move fighter west
+  fn bank_left() {
+    fighter = move(fighter, west)
     angle -= 10
-    close_range
+    close_range()
   }
 
-  rule bank_right {
-    move fighter east
+  fn bank_right() {
+    fighter = move(fighter, east)
     angle += 10
-    close_range
+    close_range()
   }
 
-  rule hold_course {
-    close_range
+  fn hold_course() {
+    close_range()
   }
 
-  rule close_range {
+  fn close_range() {
     // The intruder keeps moving through the sight picture. Getting too close
     // without a clean shot means entering the machine-gun tail arc.
     range++
     intruder_mark = random_cell(sky)
 
     if range >= 0 {
-      tail_gun
+      tail_gun()
     }
-    show cockpit
+    show(cockpit)
   }
 
-  rule fire {
+  fn fire() {
     // Firing is only meaningful when the intruder is inside the reticle. A
     // miss still advances the dogfight, so wasting shots is dangerous.
     hit_window = 10 - level
     if abs(angle) <= hit_window {
-      destroyed
+      destroyed()
     }
-    close_range
+    close_range()
   }
 }

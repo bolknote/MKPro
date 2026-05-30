@@ -1,7 +1,7 @@
 # MK-Pro Language
 
 MK-Pro describes a compact calculator program in human terms: state, reads,
-screen output, and rules. It does not ask the author to enable
+screen output, and functions. It does not ask the author to enable
 dark entries, X2 tricks, overlays, or undocumented opcodes. Those are MK-61
 machine capabilities, and the optimizer may use them whenever
 its effect checks and emulator facts allow the rewrite.
@@ -20,32 +20,32 @@ program CounterGame {
   }
 
   screen main {
-    show score, food
+    show(score, food)
   }
 
-  rule game_over {
-    stop 0
+  fn game_over() {
+    halt(0)
   }
 
   turn {
-    show main
-    read key
+    show(main)
+    key = read()
 
     match key {
-      2 => gain
-      8 => spend
-      otherwise => game_over
+      2 => gain()
+      8 => spend()
+      otherwise => game_over()
     }
   }
 
-  rule gain {
+  fn gain() {
     score++
-    show main
+    show(main)
   }
 
-  rule spend {
+  fn spend() {
     food--
-    show main
+    show(main)
   }
 }
 ```
@@ -63,7 +63,7 @@ MK-Pro accepts line and trailing comments with either `//` or `#`:
 
 ```mkpro
 // A whole-line comment.
-read key  # A trailing comment.
+key = read()  # A trailing comment.
 ```
 
 ## Top Level
@@ -74,7 +74,7 @@ Only optional report metadata belongs outside `program`:
 
 Game meaning belongs inside `program`. Counters, cell sets, maps, events,
 random, or packed-table facts should become ordinary declarations, `state`,
-`world`, `encounters`, rules, and screens. The compiler report shows which
+`world`, `encounters`, functions, and screens. The compiler report shows which
 registers, overlays, setup
 constants, hex mantissas, random initialization, or other implementation tactics
 were selected.
@@ -85,16 +85,16 @@ The current human DSL surface inside `program` is:
 
 - `state { ... }` for game state, counters, masks, coordinates, and
   scratch fields.
-- `screen name { show ... }` for reusable display layouts.
+- `screen name { show(...) }` for reusable display layouts.
 - `name: board(0..9, 0..9)` for fixed-board coordinate domains.
 - `world` for movement games with coordinates and generated rooms.
 - `encounters expr { ... }` for event tables.
-- `turn { ... }` for the main game loop and `rule name { ... }` for named
+- `turn { ... }` for the main game loop and `fn name(...) { ... }` for named
   actions.
-- `read name` inside a turn or rule for a player-entered value.
+- `name = read()` inside a turn or function for a player-entered value.
 
-Rules should stay at the level of game actions: `move player south`,
-`safe_landing`, normal assignments, comparisons, dispatch, and stops. The
+Functions should stay at the level of game actions: `player = move(player, south)`,
+`safe_landing()`, normal assignments, comparisons, dispatch, and halts. The
 lowerer turns those into assignments, display commands, dispatch, and stops.
 
 Screen output is a list of visible fragments. A fragment can be state or text:
@@ -105,13 +105,13 @@ state {
 }
 
 screen beer {
-  show "BEEr ", bottles:02
+  show("BEEr ", bottles:02)
 }
 ```
 
-Commas separate fragments; they do not add visible characters. `show a, b`
-means `a` directly followed by `b`; write `show a, " ", b` for an explicit
-space or `show a, "-", b` for `a-b`. Adjacent fragments without commas are a
+Commas separate fragments; they do not add visible characters. `show(a, b)`
+means `a` directly followed by `b`; write `show(a, " ", b)` for an explicit
+space or `show(a, "-", b)` for `a-b`. Adjacent fragments without commas are a
 syntax error. A source can request a fixed width with zero
 padding, such as `bottles:02` or `score:03`; without an explicit width, the
 counter range gives the natural visible width (`0..99` is two digits,
@@ -185,35 +185,35 @@ Names beginning with `__mkpro_` are reserved for compiler-internal helper
 expressions. User programs should express game rules directly; generated helper
 names may appear in reports, but they are not part of the source language.
 
-## Terminal Rules
+## Terminal Functions
 
-Terminal outcomes are ordinary rules. Put the final display/stop sequence in a
-named rule and call that rule like any other action:
+Terminal outcomes are ordinary functions. Put the final display/halt sequence in
+a named function and call that function like any other action:
 
 ```mkpro
-rule safe_landing {
-  stop 777
+fn safe_landing() {
+  halt(777)
 }
 
-rule crash {
-  stop 666
+fn crash() {
+  halt(666)
 }
 
-rule touchdown {
+fn touchdown() {
   if abs(speed) <= 5 {
-    safe_landing
+    safe_landing()
   }
   else {
-    crash
+    crash()
   }
 }
 ```
 
-Use `stop value` when the terminal display is a value. Use `show screen` followed
-by `stop 0` when the terminal display is a screen. Single-use terminal rules are
-inlined, and shared terminal rules can be lowered as direct jumps by the
+Use `halt(value)` when the terminal display is a value. Use `show(screen)` followed
+by `halt()` when the terminal display is a screen. Single-use terminal functions are
+inlined, and shared terminal functions can be lowered as direct jumps by the
 optimizer, so authors do not need a separate terminal form for layout reasons.
-Rule names must be unique, and a call must reference a declared rule.
+Function names must be unique, and a call must reference a declared function.
 
 ## Boards And Cell Sets
 
@@ -241,11 +241,11 @@ other state.
 Board queries should name the geometric operation directly:
 
 ```mkpro
-rule scan_foxes {
+fn scan_foxes() {
   bearing = line_count(foxes, cell)
 }
 
-rule reveal_safe_cell {
+fn reveal_safe_cell() {
   clue = neighbor_count(mines, probe)
 }
 ```
@@ -264,7 +264,7 @@ The top-level repository examples are runnable MK-Pro programs:
 
 - `basic.mkpro`, `human.mkpro`, and `tiny-game.mkpro` are small syntax and control-flow
   examples.
-- `lunar.mkpro` is a numeric counter game with touchdown rules.
+- `lunar.mkpro` is a numeric counter game with touchdown functions.
 - `99-bottles.mkpro` is a direct port of the Bolknote beer demo.
 - `alaram.mkpro`, `cave-sketch.mkpro`, `dangerous-loading.mkpro`,
   `dungeon.mkpro`, `game-100-pig.mkpro`, `minesweeper-9x9.mkpro`,
@@ -277,7 +277,7 @@ world queries are part of the language surface, not a separate draft bucket.
 
 ## World Blocks
 
-`world` declares the coordinate used by movement rules:
+`world` declares the coordinate used by movement functions:
 
 ```mkpro
 world giant_country {
@@ -287,24 +287,24 @@ world giant_country {
 }
 ```
 
-This is intentionally about world rules, not storage. A `world` block is a real
+This is intentionally about world semantics, not storage. A `world` block is a real
 semantic commitment: if the compiler has no lowerer for that world operation, it
 rejects the program instead of selecting a canned game template.
 
-Movement rules should use `move` when they mean movement rather than coordinate
+Movement functions should use `move(...)` when they mean movement rather than coordinate
 arithmetic:
 
 ```mkpro
-rule move_south {
-  move player south
-  show cave_screen
+fn move_south() {
+  player = move(player, south)
+  show(cave_screen)
 }
 
-rule move_dir dir {
+fn move_dir(dir) {
   next = player + dir
   if next in walls {
     blocked = next
-    show 0
+    show(0)
   }
   else {
     player = next
@@ -312,24 +312,25 @@ rule move_dir dir {
 }
 ```
 
-`move pos north/south/east/west/up/down` lowers to the current compact coordinate
-update for the position's encoding. For example,
+`move(pos, north/south/east/west/up/down)` lowers to the current compact coordinate
+expression for the position's encoding. Assign the result back to the position:
+`pos = move(pos, east)`. For example,
 `packed_decimal_zero_run` uses the same small fractional deltas that older cave
 sources wrote by hand, while generic grid movement uses integer deltas. When the
 movement amount is deliberately computed, use the ordinary update form:
 `pos += expr`.
-If a rule needs to remember a blocked destination, write that as normal state:
+If a function needs to remember a blocked destination, write that as normal state:
 `next = player + dir`, then assign `blocked = next` only in the branch where a
 wall was actually hit.
 
 World queries use the same expression position as ordinary formulas:
 
 ```mkpro
-rule inspect_cell {
+fn inspect_cell() {
   tile = cell_at(cave, pos)
 }
 
-rule move_monster {
+fn move_monster() {
   threat = random_cell(harbor)
 }
 ```
@@ -394,11 +395,11 @@ value equals at least one candidate; `eq_any(...) != 0` means it equals none.
 ## Raw Blocks
 
 Use `raw` only when a program really needs a calculator command sequence that
-does not yet have a semantic helper. A raw block is allowed inside `turn`, `rule`,
+does not yet have a semantic helper. A raw block is allowed inside `turn`, `fn`,
 `if`, `match`, and `challenge` bodies, but it must declare its contract:
 
 ```mkpro
-rule invert_sum {
+fn invert_sum() {
   raw {
     takes Y = left, X = right
     returns X -> result
@@ -481,16 +482,16 @@ machine notes.
 
 ## Encounter Tables
 
-Use `encounters expr` when a tile or event code selects one of several rules:
+Use `encounters expr` when a tile or event code selects one of several actions:
 
 ```mkpro
 encounters tile {
   0 {
-    show cave
+    show(cave)
   }
 
   3 {
-    challenge tile {
+    challenge tile as challenge using warning, memory, answer {
       success {
         strength++
         score++
@@ -534,7 +535,7 @@ The source only states what is allowed semantically. The report explains:
 
 Unsupported high-level effects fail compilation instead of becoming comments.
 There is no production spatial template path: spatial programs must lower from
-their actual AST rules through ordinary IR. Board/world/cell queries lower into
+their actual AST nodes through ordinary IR. Board/world/cell queries lower into
 the same expression and control-flow IR as the rest of the language.
 
 `reference` is report metadata only and must not change code generation. For
@@ -559,16 +560,18 @@ report tied to proof-backed optimizer behavior rather than to template paths.
 
 The parser keeps these high-level statements as typed source nodes:
 
-- `read name`
+- `show(...)`
+- `name = read()`
+- `halt()` or `halt(expr)`
 - `name = expr`
 - `name += expr`
 - `name -= expr`
 - `name++`
 - `name--`
 - `if predicate { ... } else { ... }`
-- `challenge expr { success { ... } failure { ... } }`
-- `move pos direction`
-- `rule_name` or `rule_name arg1, arg2`
+- `challenge expr as memory_var using warning_screen, memory_screen, answer_input { ... }`
+- `name = move(pos, direction)`
+- `fn_name(arg1, arg2)`
 - `match expr { values => action }`
 - query expressions: `line_count(set, cell)`, `neighbor_count(set, cell)`,
   `cell_at(world, pos)`, and `random_cell(world)`
@@ -577,36 +580,36 @@ The parser keeps these high-level statements as typed source nodes:
   `cell_toggle`, `digit_at`, `digit_add`, `digit_set`, `near_any`, and `eq_any`
 - contracted `raw { ... }` blocks for explicit MK-61 command sequences
 
-Assignments, updates, comparison predicates, rule parameters, and rule calls
+Assignments, updates, comparison predicates, function parameters, and function calls
 lower through the generic compiler path. Query expressions are captured as
-spatial query nodes before code generation. A `turn` is a real loop, and `rule` blocks
+spatial query nodes before code generation. A `turn` is a real loop, and `fn` blocks
 compile as `ПП`/`В/О` procedures, direct terminal jumps, or inline code depending
 on the compiler's cost model and termination analysis. Calls must pass exactly
-the parameters declared by the rule.
+the parameters declared by the function.
 
 ```mkpro
-rule jump_to floor {
+fn jump_to(floor) {
   current_floor = floor
   strength -= floor
 }
 
-rule jump_floor {
+fn jump_floor() {
   match current_floor {
-    1 => jump_to 2
-    2 => jump_to 3
-    3 => jump_to 1
+    1 => jump_to(2)
+    2 => jump_to(3)
+    3 => jump_to(1)
   }
 }
 ```
 
-When all calls to a small parameterized rule use literal values and duplicating
+When all calls to a small parameterized function use literal values and duplicating
 the body is cheaper than storing the parameter and calling a shared subroutine,
 the lowerer specializes those calls automatically.
 
-Statement-level actions do not use parentheses. Parentheses are reserved for
-expressions and expression functions: write `go direction(key)`, not
-`go(direction(key))`, because `go` is a rule call and `direction(key)` is an
-expression. Built-in statement words such as `move` cannot be used as rule names.
+Statement-level actions use the same call shape as the rest of the language:
+write `go(direction(key))`, because `go` is a function call and
+`direction(key)` is an expression. Built-in names such as `move`, `show`, `read`,
+and `halt` cannot be used as function names.
 
 ## Human-Facing Game Sugar
 
@@ -614,11 +617,11 @@ Repeated game mechanics should be written once as intent, not expanded into the
 same input/display/branch boilerplate everywhere.
 
 `challenge` describes the common “show warning, show memory value, read answer,
-then apply success/failure effects” pattern:
+then apply success/failure effects” pattern used by the encounter optimizer:
 
 ```mkpro
-rule skeleton {
-  challenge tile {
+fn skeleton() {
+  challenge tile as challenge using warning, memory, answer {
     success {
       strength++
       score++
@@ -635,9 +638,9 @@ This lowers as if the source had said:
 
 ```mkpro
 challenge = memory_code(tile)
-show warning
-show memory
-read answer
+show(warning)
+show(memory)
+answer = read()
 if answer == challenge {
   // success body
 }
@@ -646,26 +649,23 @@ else {
 }
 ```
 
-The default names are deliberately conventional:
-
-- generated value: `challenge`
-- warning screen: `warning`
-- memory screen: `memory`
-- player answer: `answer`
-
-If the generated value needs a different temporary, use `as`:
+The generated value, warning screen, memory screen, and answer input are explicit:
 
 ```mkpro
-challenge tile as monster_code {
-  success { score++ }
-  failure { strength -= 3 }
+challenge tile as monster_code using warning, memory, answer {
+  success {
+    score++
+  }
+  failure {
+    strength -= 3
+  }
 }
 ```
 
 The construct is semantic sugar only. It does not request a particular MK-61
 layout. The optimizer may still inline it, share tails, branch-remove the
 success/failure effects, or route it through an explicit future semantic
-lowerer that is proved from the source rules.
+lowerer that is proved from the source.
 
 Current scalar lowerings are still deliberately small and auditable:
 
@@ -695,7 +695,7 @@ candidates:
   whenever the normal condition is shorter;
 - terminal branch simplification: `if/else` lowering omits an unreachable
   `БП if_end` after a terminal then-branch, and may branch directly to a
-  reusable terminal rule instead of landing on a one-command branch stub. For
+  reusable terminal function instead of landing on a one-command branch stub. For
   multi-command terminal `else` endings, the compiler may branch to a local
   terminal tail so the continuing `then` path does not pay a skip-over jump.
   A late layout check can try a more aggressive terminal-if lowering and keep
@@ -733,11 +733,11 @@ candidates:
   JSON and an extra setup line in `explain`;
 - automatic constants: reserves spare registers for expensive constants such as
   `10`, `20`, and `100`;
-- show/read fusion: `show screen` followed by `read key` uses one calculator
+- show/read fusion: `show(screen)` followed by `key = read()` uses one calculator
   stop, not two;
 - direction dispatch: groups many direction-key cases into one default
   movement path plus explicit rare commands;
-- single-use rule inlining: inlines rules called once and drops their
+- single-use function inlining: inlines functions called once and drops their
   `ПП`/`В/О` overhead;
 - dispatch source reuse: `match key` reuses `key`'s register instead of
   allocating a second scratch register;
@@ -747,7 +747,7 @@ candidates:
   current `X` value directly when a commutative expression permits it;
 - `F L0`..`F L3` unit decrement: counters assigned to `R0`..`R3` can lower
   `counter--` to a two-cell decrement-and-continue form;
-- duplicate failure-tail merge: identical `show 0` failure tails are shared;
+- duplicate failure-tail merge: identical `show(0)` failure tails are shared;
 - display stack reuse: packed display sources are reordered when the current
   `X` value is already one of the displayed values;
 - jump threading: `БП label` is removed when `label` is the immediately next
@@ -756,7 +756,7 @@ candidates:
   proven empty;
 - explicit `trap` lowers to Danilov-style domain-error stops only when the
   source semantics names a trap outcome;
-- redundant-prologue elimination: when a rule ends with the same `display +
+- redundant-prologue elimination: when a function ends with the same `display +
   С/П` block that the loop head opens with and then jumps to the head, the
   trailing copy is removed — the user only ever observes the show performed
   by the loop head. With the X-state tracker the pass also matches the
@@ -834,7 +834,7 @@ The pipeline currently contains:
 - **arithmetic-if-pass** — removes duplicated branch bodies after earlier
   simplifications prove both sides are byte-identical and the result is
   shorter.
-- **duplicate-failure-tail-merge** — merges duplicate `show 0` failure
+- **duplicate-failure-tail-merge** — merges duplicate `show(0)` failure
   tails into a shared exit.
 - **shared-call-tail** — coalesces repeated `ПП helper; БП continuation`
   pairs into one shared call tail when that is smaller.

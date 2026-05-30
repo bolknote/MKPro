@@ -78,7 +78,7 @@ loop:
   compute trig functions of α
   evaluate T
   evaluate N
-  stop or show (С/П) for recording
+  pause/display (С/П) for recording
   advance α or decrement counter (F L0)
 ```
 

@@ -20,7 +20,7 @@ program AdjacentSetUpdates {
   turn {
     mine += cell
     seen += cell
-    stop mine + seen
+    halt(mine + seen)
   }
 }
 `);

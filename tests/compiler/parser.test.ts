@@ -45,7 +45,7 @@ program BadExpression {
 # also a comment
 program Comments {
   turn {
-    stop 1 // trailing
+    halt(1) // trailing
   }
 }
 `);
@@ -59,17 +59,17 @@ program Demo {
     score: counter 0..9 = 0
   }
   screen main {
-    show score
+    show(score)
   }
   turn {
-    show main
-    read key
+    show(main)
+    key = read()
     match key {
-      1 => inc
-      otherwise => stop 0
+      1 => inc()
+      otherwise => halt(0)
     }
   }
-  rule inc {
+  fn inc() {
     score++
   }
 }
@@ -89,10 +89,10 @@ program BeerScreen {
     bottles: counter 0..99 = stack.X
   }
   screen beer {
-    show "BEEr", bottles:02
+    show("BEEr", bottles:02)
   }
   turn {
-    show beer
+    show(beer)
   }
 }
 `);
@@ -108,10 +108,10 @@ program BeerScreen {
     const ast = parseProgram(`
 program EmptyScreen {
   screen blank {
-    show ""
+    show("")
   }
   turn {
-    show blank
+    show(blank)
   }
 }
 `);
@@ -126,10 +126,10 @@ program EmptyScreen {
     const ast = parseProgram(`
 program BareEmptyScreen {
   screen blank {
-    show
+    show()
   }
   turn {
-    show blank
+    show(blank)
   }
 }
 `);
@@ -146,10 +146,10 @@ program CounterScreen {
     b: counter 0..9 = 5
   }
   screen view {
-    show a, b
+    show(a, b)
   }
   turn {
-    show view
+    show(view)
   }
 }
 `);
@@ -168,10 +168,10 @@ program StatusScreen {
     turn_score: counter 0..99 = 0
   }
   screen status {
-    show die ".-" turn_score:02
+    show(die ".-" turn_score:02)
   }
   turn {
-    show status
+    show(status)
   }
 }
 `)).toThrow(/Display fragments must be separated by commas/u);
@@ -185,10 +185,10 @@ program StatusScreen {
     turn_score: counter 0..99 = 0
   }
   screen status {
-    show die, ".-", turn_score:02
+    show(die, ".-", turn_score:02)
   }
   turn {
-    show status
+    show(status)
   }
 }
 `);
@@ -208,10 +208,10 @@ program NumericFragments {
     b: counter 0..9 = 3
   }
   screen view {
-    show 123, a, b, 1
+    show(123, a, b, 1)
   }
   turn {
-    show view
+    show(view)
   }
 }
 `);
@@ -224,7 +224,26 @@ program NumericFragments {
     ]);
   });
 
-  it("parses command-style rule calls with expression arguments", () => {
+  it("parses inline state displays when show() names a state field", () => {
+    const ast = parseProgram(`
+program InlineStateShow {
+  state {
+    score: counter 0..99 = 7
+  }
+  turn {
+    show(score)
+  }
+}
+`);
+
+    expect(ast.displays.some((display) => display.sources.includes("score"))).toBe(true);
+    const loop = ast.entries[0]?.body[0];
+    expect(loop?.kind).toBe("loop");
+    if (loop?.kind !== "loop") throw new Error("expected loop");
+    expect(loop.body[0]).toMatchObject({ kind: "show" });
+  });
+
+  it("parses function-style calls with expression arguments", () => {
     const ast = parseProgram(`
 program Demo {
   arena: board(0..9, 0..9)
@@ -234,9 +253,9 @@ program Demo {
     delta: counter -100..100 = 0
   }
   turn {
-    step direction(key)
+    step(direction(key))
   }
-  rule step delta {
+  fn step(delta) {
     pos += delta
   }
 }
@@ -263,26 +282,26 @@ program GuardedDirection {
     }
   }
   turn {
-    read key
+    key = read()
     match key {
-      4 => move_left
-      2, 6, 8, 5, -5 => go direction(key)
-      otherwise => ignored
+      4 => move_left()
+      2, 6, 8, 5, -5 => go(direction(key))
+      otherwise => ignored()
     }
   }
-  rule move_left {
+  fn move_left() {
     if pos == 7 {
-      stop 77
+      halt(77)
     }
     else {
-      go direction(key)
+      go(direction(key))
     }
   }
-  rule go dir {
+  fn go(dir) {
     pos += dir
   }
-  rule ignored {
-    stop 0
+  fn ignored() {
+    halt(0)
   }
 }
 `);
@@ -312,11 +331,11 @@ program CardinalDirection {
   }
   turn {
     match key {
-      2, 4, 6, 8 => step direction(key)
-      otherwise => stop 0
+      2, 4, 6, 8 => step(direction(key))
+      otherwise => halt(0)
     }
   }
-  rule step delta {
+  fn step(delta) {
     pos += delta
   }
 }
@@ -330,35 +349,35 @@ program CardinalDirection {
     expect(JSON.stringify(dispatch.defaultBody)).toContain('"callee":"__direction_cardinal"');
   });
 
-  it("rejects rule calls with the wrong arity", () => {
+  it("rejects function calls with the wrong arity", () => {
     expect(() =>
       parseProgram(`
 program BadMissingArg {
   turn {
-    jump_to
+    jump_to()
   }
-  rule jump_to floor {
-    stop floor
+  fn jump_to(floor) {
+    halt(floor)
   }
 }
 `),
-    ).toThrow(/Rule 'jump_to' expects 1 argument, got 0/u);
+    ).toThrow(/Function 'jump_to' expects 1 argument, got 0/u);
 
     expect(() =>
       parseProgram(`
 program BadExtraArg {
   turn {
-    done 1
+    done(1)
   }
-  rule done {
-    stop 0
+  fn done() {
+    halt(0)
   }
 }
 `),
-    ).toThrow(/Rule 'done' expects 0 arguments, got 1/u);
+    ).toThrow(/Function 'done' expects 0 arguments, got 1/u);
   });
 
-  it("specializes constant rule arguments when that is cheaper than a shared parameter proc", () => {
+  it("specializes constant function arguments when that is cheaper than a shared parameter proc", () => {
     const ast = parseProgram(`
 program Jump {
   state {
@@ -367,11 +386,11 @@ program Jump {
   }
   turn {
     match floor {
-      1 => jump_to 2
-      2 => jump_to 3
+      1 => jump_to(2)
+      2 => jump_to(3)
     }
   }
-  rule jump_to f {
+  fn jump_to(f) {
     floor = f
     strength -= f
   }
@@ -404,22 +423,22 @@ program EffectTable {
   }
   turn {
     match tile {
-      1 => pool_exit
-      2 => ladder_exit
-      3 => shaft_exit
-      otherwise => clear_exit
+      1 => pool_exit()
+      2 => ladder_exit()
+      3 => shaft_exit()
+      otherwise => clear_exit()
     }
   }
-  rule clear_exit {
+  fn clear_exit() {
     energy++
   }
-  rule pool_exit {
+  fn pool_exit() {
     energy = 0
   }
-  rule ladder_exit {
+  fn ladder_exit() {
     energy -= 5
   }
-  rule shaft_exit {
+  fn shaft_exit() {
     energy -= 6
   }
 }
@@ -461,12 +480,12 @@ program Cycle {
   }
   turn {
     match floor {
-      1 => jump_to 2
-      2 => jump_to 3
-      3 => jump_to 1
+      1 => jump_to(2)
+      2 => jump_to(3)
+      3 => jump_to(1)
     }
   }
-  rule jump_to f {
+  fn jump_to(f) {
     floor = f
     strength -= f
   }
@@ -522,45 +541,45 @@ program Demo {
     ]);
   });
 
-  it("rejects non-canonical rule syntax", () => {
-    expect(() =>
-      parseProgram(`
-program Bad {
-  turn {
-    step direction(key)
-  }
-  rule step(delta) {
-    stop 0
-  }
-}
-`),
-    ).toThrow(/Rule must look/u);
-
+  it("rejects non-canonical function syntax", () => {
     expect(() =>
       parseProgram(`
 program Bad {
   turn {
     step(direction(key))
   }
-  rule step delta {
-    stop 0
+  rule step(delta) {
+    halt(0)
   }
 }
 `),
-    ).toThrow(/Unexpected statement 'step\(direction\(key\)\)'/u);
+    ).toThrow(/Use 'fn name\(arg, \.\.\.\) \{'/u);
 
     expect(() =>
       parseProgram(`
 program Bad {
-  rule move delta {
-    stop 0
-  }
   turn {
-    stop 0
+    step direction(key)
+  }
+  fn step(delta) {
+    halt(0)
   }
 }
 `),
-    ).toThrow(/Rule name 'move' is reserved/u);
+    ).toThrow(/Function calls must look like 'name\(\.\.\.\)'/u);
+
+    expect(() =>
+      parseProgram(`
+program Bad {
+  fn move(delta) {
+    halt(0)
+  }
+  turn {
+    halt(0)
+  }
+}
+`),
+    ).toThrow(/Function name 'move' is reserved/u);
   });
 
   it("keeps explicit otherwise branches when compacting direction calls", () => {
@@ -571,15 +590,15 @@ program DirectionOtherwise {
   }
   turn {
     match key {
-      2, 4, 5, 6, 8 => step direction(key)
-      otherwise => wait
+      2, 4, 5, 6, 8 => step(direction(key))
+      otherwise => wait()
     }
   }
-  rule step delta {
+  fn step(delta) {
     pos += delta
   }
-  rule wait {
-    stop 0
+  fn wait() {
+    halt(0)
   }
 }
 `);
@@ -622,14 +641,14 @@ program Demo {
     }
   }
   screen main {
-    show pos, strength
+    show(pos, strength)
   }
   turn {
-    encounter key
+    encounter(key)
   }
   encounters key {
     0 {
-      show main
+      show(main)
     }
     3 {
       points++
@@ -659,15 +678,15 @@ program Demo {
     bearing: counter 0..3 = 0
   }
   screen main {
-    show bearing
+    show(bearing)
   }
   turn {
-    read cell
+    cell = read()
     if cell in foxes {
-      show main
+      show(main)
     }
     bearing = line_count(foxes, cell)
-    show main
+    show(main)
   }
 }
 `);
@@ -682,7 +701,7 @@ program Demo {
     expect(JSON.stringify(ast.entries[0]?.body)).toContain("coord_list_line_count");
   });
 
-  it("parses and lowers v2 move statements and named terminal rules", () => {
+  it("parses and lowers move() expressions and named terminal functions", () => {
     const ast = parseProgram(`
 program Demo {
   cave: board(0..9, 0..9)
@@ -690,12 +709,12 @@ program Demo {
   state {
     pos: coord(cave)
   }
-  rule escaped {
-    stop 777
+  fn escaped() {
+    halt(777)
   }
   turn {
-    move pos east
-    escaped
+    pos = move(pos, east)
+    escaped()
   }
 }
 `);
@@ -761,7 +780,7 @@ program LineMask {
   turn {
     hazards += pos
     if pos in hazards {
-      stop 1
+      halt(1)
     }
   }
 }
@@ -803,25 +822,25 @@ program PackedCaveMask {
     expect(lowered).toMatch(/"callee":"int","args":\[\{"kind":"identifier","name":"pos"\}\]/u);
   });
 
-  it("rejects unknown program syntax and unknown rules", () => {
+  it("rejects unknown program syntax and unknown functions", () => {
     expect(() =>
       parseProgram(`
 program Bad {
   turn {
-    end missing
+    end(missing)
   }
 }
 `),
-    ).toThrow(/Unknown rule 'end'/u);
+    ).toThrow(/Unknown function 'end'/u);
 
     expect(() =>
       parseProgram(`
 program Bad {
   ending done {
-    show 1
+    show(1)
   }
   turn {
-    done
+    done()
   }
 }
 `),
@@ -830,28 +849,28 @@ program Bad {
     expect(() =>
       parseProgram(`
 program Bad {
-  rule done {
-    stop 1
+  fn done() {
+    halt(1)
   }
-  rule done {
-    stop 2
+  fn done() {
+    halt(2)
   }
   turn {
-    done
+    done()
   }
 }
 `),
-    ).toThrow(/Duplicate rule 'done'/u);
+    ).toThrow(/Duplicate function 'done'/u);
 
     expect(() =>
       parseProgram(`
 program Bad {
   turn {
-    missing
+    missing()
   }
 }
 `),
-    ).toThrow(/Unknown rule 'missing'/u);
+    ).toThrow(/Unknown function 'missing'/u);
   });
 
   it("rejects unknown setup and domain implementation blocks", () => {
@@ -860,7 +879,7 @@ program Bad {
 preload R9 = random_seed()
 program Bad {
   turn {
-    stop 0
+    halt(0)
   }
 }
 `),
@@ -872,14 +891,14 @@ resource strength {
 }
 program Bad {
   turn {
-    stop 0
+    halt(0)
   }
 }
 `),
     ).toThrow(/Unexpected top-level line 'resource strength \{'/u);
   });
 
-  it("parses challenge blocks as rule syntax", () => {
+  it("parses challenge blocks inside function-era syntax", () => {
     const ast = parseProgram(`
 program Demo {
   state {
@@ -888,10 +907,10 @@ program Demo {
     strength: counter 0..9 = 9
   }
   screen warning {
-    show tile
+    show(tile)
   }
   screen memory {
-    show tile
+    show(tile)
   }
   turn {
     challenge tile as challenge using warning, memory, answer {
@@ -918,7 +937,7 @@ program Demo {
 program OldInput {
   input key: digit
   turn {
-    stop 0
+    halt(0)
   }
 }
 `),
@@ -927,12 +946,12 @@ program OldInput {
     expect(() =>
       parseProgram(`
 program BadEndingShow {
-  rule done {
-    show missing_screen
-    stop 0
+  fn done() {
+    show(missing_screen)
+    halt(0)
   }
   turn {
-    done
+    done()
   }
 }
 `),
@@ -945,12 +964,12 @@ program BadChallenge {
     tile: counter 0..9 = 0
   }
   screen warning {
-    show tile
+    show(tile)
   }
   turn {
     challenge tile as challenge using warning, memory, answer {
       success {
-        stop 1
+        halt(1)
       }
     }
   }
@@ -967,7 +986,7 @@ program Bad {
     [use_X2] score: counter 0..9 = 0
   }
   turn {
-    stop 0
+    halt(0)
   }
 }
 `),
@@ -987,12 +1006,12 @@ program Demo {
     }
   }
   turn {
-    stop 0
+    halt(0)
   }
-  rule advance {
+  fn advance() {
     next = pos + 1
     if next in walls {
-      show 0
+      show(0)
     }
     else {
       pos = next
@@ -1002,7 +1021,7 @@ program Demo {
       pos++
     }
     else {
-      show 0
+      show(0)
     }
   }
 }
@@ -1041,7 +1060,7 @@ program RawDemo {
         К ИНВ
       }
     }
-    stop result
+    halt(result)
   }
 }
 `);
@@ -1088,7 +1107,7 @@ program Bad {
   }
 }
 `),
-    ).toThrow(/Unknown rule 'require'/u);
+    ).toThrow(/Function calls must look like 'name\(\.\.\.\)'/u);
   });
 
   it("rejects unknown screen lines", () => {
@@ -1099,11 +1118,11 @@ program Bad {
     score: counter 0..9 = 0
   }
   screen main {
-    show score
+    show(score)
     style compact digits
   }
   turn {
-    show main
+    show(main)
   }
 }
 `),
@@ -1118,7 +1137,7 @@ program Bad {
     walls: cells(cave) generated random
   }
   turn {
-    stop 0
+    halt(0)
   }
 }
 `),
@@ -1133,7 +1152,7 @@ program Bad {
     }
   }
   turn {
-    stop 0
+    halt(0)
   }
 }
 `),
@@ -1145,7 +1164,7 @@ program Bad {
   board ocean: 10x10 {
   }
   turn {
-    stop 0
+    halt(0)
   }
 }
 `),
@@ -1157,7 +1176,7 @@ program Bad {
   fleet enemy_fleet on ocean {
   }
   turn {
-    stop 0
+    halt(0)
   }
 }
 `),
@@ -1172,7 +1191,7 @@ program Bad {
     pos: coord = 0
   }
   turn {
-    stop 0
+    halt(0)
   }
 }
 `),
@@ -1185,7 +1204,7 @@ program Bad {
     score: counter() 0..9 = 0
   }
   turn {
-    stop 0
+    halt(0)
   }
 }
 `),
@@ -1198,7 +1217,7 @@ program Bad {
     pos: coord(missing) = 0
   }
   turn {
-    stop 0
+    halt(0)
   }
 }
 `),
@@ -1211,7 +1230,7 @@ program Bad {
     blocked: coord(cave) optional
   }
   turn {
-    stop 0
+    halt(0)
   }
 }
 `),
@@ -1228,7 +1247,7 @@ program Bad {
     pos: coord(cave) = input.X
   }
   turn {
-    stop 0
+    halt(0)
   }
 }
 `),
@@ -1249,7 +1268,7 @@ program Bad {
     ${field}
   }
   turn {
-    stop 0
+    halt(0)
   }
 }
 `),

@@ -10,5 +10,5 @@ program E94Digits {
     n--
   }
 
-  stop e
+  halt(e)
 }

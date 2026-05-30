@@ -24,58 +24,58 @@ program DangerousLoading {
   }
 
   screen water {
-    show cargo_left, boat, threat, boats_left
+    show(cargo_left, boat, threat, boats_left)
   }
 
-  rule delivered {
-    stop 777
+  fn delivered() {
+    halt(777)
   }
 
-  rule sunk {
-    stop -999
+  fn sunk() {
+    halt(-999)
   }
 
   turn {
-    show water
-    read command
+    show(water)
+    command = read()
 
     match command {
-      4 => row_left
-      6 => row_right
-      5 => wait
-      otherwise => wait
+      4 => row_left()
+      6 => row_right()
+      5 => wait()
+      otherwise => wait()
     }
   }
 
-  rule row_left {
+  fn row_left() {
     boat--
-    resolve_turn
+    resolve_turn()
   }
 
-  rule row_right {
+  fn row_right() {
     boat++
-    resolve_turn
+    resolve_turn()
   }
 
-  rule wait {
-    resolve_turn
+  fn wait() {
+    resolve_turn()
   }
 
-  rule resolve_turn {
+  fn resolve_turn() {
     // Threat resolution happens before dock handling: a boat caught by the
     // monster loses the trip even if it was about to deliver.
     if boat == threat {
-      lose_boat
+      lose_boat()
     }
     else {
-      handle_dock
+      handle_dock()
     }
 
     threat = random_cell(harbor)
-    show water
+    show(water)
   }
 
-  rule handle_dock {
+  fn handle_dock() {
     // Loading is a flag, not cargo movement per cell. The player must complete a
     // full round trip before cargo_left decreases.
     if boat == 1 {
@@ -90,17 +90,17 @@ program DangerousLoading {
     }
 
     if cargo_left <= 0 {
-      delivered
+      delivered()
     }
   }
 
-  rule lose_boat {
+  fn lose_boat() {
     // A lost boat also loses any crate in transit and restarts at the ship side.
     boats_left--
     loaded = 0
     boat = 8
     if boats_left <= 0 {
-      sunk
+      sunk()
     }
   }
 }

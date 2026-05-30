@@ -137,7 +137,7 @@ program SmallSetHelpers {
   turn {
     near = near_any(room, 1, pit1, pit2)
     hit = eq_any(room, pit1, pit2)
-    stop near + hit
+    halt(near + hit)
   }
 }
 `;
@@ -170,7 +170,7 @@ program RandomCellReuse {
     a = random_cell(grid)
     b = random_cell(grid)
     c = random_cell(grid)
-    stop a + b + c
+    halt(a + b + c)
   }
 }
 `, { budget: 999999, analysis: true });
@@ -203,14 +203,14 @@ program SimpleRules {
     next: counter 0..9 = 0
   }
   screen main {
-    show score
+    show(score)
   }
   turn {
-    read key
-    inc
-    show main
+    key = read()
+    inc()
+    show(main)
   }
-  rule inc {
+  fn inc() {
     next = score + 1
     if next >= 3 {
       score = next
@@ -262,7 +262,7 @@ program SimpleRules {
     expect(result.report.reference?.parity).not.toBe("larger");
     expect(result.report.steps).toBeLessThanOrEqual(53);
     expect(result.report.warnings.join("\n")).not.toMatch(/was not found/u);
-    expect(mkproSource).toContain(`show "BEEr ", bottles:02`);
+    expect(mkproSource).toContain(`show("BEEr ", bottles:02)`);
     expect(mkproSource).not.toMatch(/\braw\s*\{/u);
     expect(calc.runUntilStable({ maxFrames: 200, stableFrames: 6 }).stopped).toBe(true);
     expect(calc.readProgramCodes(2)).toEqual([0x3a, 0x50]);

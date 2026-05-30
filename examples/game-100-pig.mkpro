@@ -19,107 +19,107 @@ program Game100Pig {
   }
 
   screen status {
-    show die, ".-", turn_score:02, "-", preview_total:03, "-", roll_count:02
+    show(die, ".-", turn_score:02, "-", preview_total:03, "-", roll_count:02)
   }
 
-  rule player_wins {
-    stop 100
+  fn player_wins() {
+    halt(100)
   }
 
-  rule calculator_wins {
-    stop calculator_total
+  fn calculator_wins() {
+    halt(calculator_total)
   }
 
   turn {
-    roll_player
+    roll_player()
   }
 
-  rule roll_die {
+  fn roll_die() {
     roll_count++
     die = random_cell(die_faces)
   }
 
-  rule roll_player {
-    roll_die
+  fn roll_player() {
+    roll_die()
 
     if die == 1 {
-      pig_out_player
+      pig_out_player()
     }
     else {
       turn_score += die
       preview_total = player_total + turn_score
-      player_choice
+      player_choice()
     }
   }
 
-  rule hold_player {
+  fn hold_player() {
     player_total += turn_score
     if player_total >= 100 {
-      player_wins
+      player_wins()
     }
     else {
-      start_calculator_turn
+      start_calculator_turn()
     }
   }
 
-  rule pig_out_player {
-    start_calculator_turn
+  fn pig_out_player() {
+    start_calculator_turn()
   }
 
-  rule start_calculator_turn {
+  fn start_calculator_turn() {
     turn_score = 0
     roll_count = 0
-    roll_calculator
+    roll_calculator()
   }
 
-  rule roll_calculator {
-    roll_die
+  fn roll_calculator() {
+    roll_die()
 
     if die == 1 {
-      pig_out_calculator
+      pig_out_calculator()
     }
     else {
       turn_score += die
       preview_total = calculator_total + turn_score
-      show status
+      show(status)
 
       if turn_score >= 20 {
-        hold_calculator
+        hold_calculator()
       }
       else {
-        roll_calculator
+        roll_calculator()
       }
     }
   }
 
-  rule hold_calculator {
+  fn hold_calculator() {
     calculator_total = preview_total
     if calculator_total >= 100 {
-      calculator_wins
+      calculator_wins()
     }
     else {
-      return_to_player
+      return_to_player()
     }
   }
 
-  rule pig_out_calculator {
-    return_to_player
+  fn pig_out_calculator() {
+    return_to_player()
   }
 
-  rule return_to_player {
+  fn return_to_player() {
     turn_score = 0
     roll_count = 0
-    roll_player
+    roll_player()
   }
 
-  rule player_choice {
-    show status
-    read choice
+  fn player_choice() {
+    show(status)
+    choice = read()
     if choice == 0 {
-      hold_player
+      hold_player()
     }
     else {
-      roll_player
+      roll_player()
     }
   }
 }

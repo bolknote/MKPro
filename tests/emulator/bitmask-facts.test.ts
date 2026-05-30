@@ -69,16 +69,16 @@ const MEMBERSHIP_PROGRAM = `program BitMembership {
   }
 
   turn {
-    read a
-    read b
-    read c
+    a = read()
+    b = read()
+    c = read()
     marks += a
     marks += b
     answer = 0
     if c in marks {
       answer = 1
     }
-    stop answer
+    halt(answer)
   }
 }`;
 
@@ -93,15 +93,15 @@ const CLEAR_PROGRAM = `program BitClear {
   }
 
   turn {
-    read a
-    read c
+    a = read()
+    c = read()
     marks += c
     marks -= a
     answer = 0
     if c in marks {
       answer = 1
     }
-    stop answer
+    halt(answer)
   }
 }`;
 
@@ -117,13 +117,13 @@ const NEIGHBOR_PROGRAM = `program NeighborCount {
   }
 
   turn {
-    read a
-    read b
-    read probe
+    a = read()
+    b = read()
+    probe = read()
     marks += a
     marks += b
     answer = neighbor_count(marks, probe)
-    stop answer
+    halt(answer)
   }
 }`;
 

@@ -22,7 +22,7 @@ entry main {
     const result = compileOk(`
 program Minimal {
   turn {
-    stop 0
+    halt(0)
   }
 }
 `);
@@ -37,9 +37,9 @@ program ZeroMinus {
     value: packed = 0
   }
   turn {
-    read x
+    x = read()
     value = 0 - x
-    stop value
+    halt(value)
   }
 }
 `);
@@ -57,7 +57,7 @@ program ConstantFold {
   }
   turn {
     value = 5 + 2
-    stop value
+    halt(value)
   }
 }
 `);
@@ -78,7 +78,7 @@ program IdentityAssignment {
   }
   turn {
     value = value
-    stop value
+    halt(value)
   }
 }
 `);
@@ -95,10 +95,10 @@ program GuardedCall {
   }
   turn {
     flag = 1
-    maybe_score
-    stop score
+    maybe_score()
+    halt(score)
   }
-  rule maybe_score {
+  fn maybe_score() {
     if flag == 1 {
       score++
       flag = 0
@@ -116,12 +116,12 @@ program GuardedCall {
     const result = compileOk(`
 program InputBranch {
   turn {
-    read target
+    target = read()
     if target >= 0 {
-      stop 1
+      halt(1)
     }
     else {
-      stop -1
+      halt(-1)
     }
   }
 }
@@ -143,18 +143,18 @@ program ReturnSuffixGadget {
   }
 
   screen main {
-    show b, c, d
+    show(b, c, d)
   }
 
   turn {
-    alpha
-    beta
-    alpha
-    beta
-    show main
+    alpha()
+    beta()
+    alpha()
+    beta()
+    show(main)
   }
 
-  rule alpha {
+  fn alpha() {
     if a >= 0 {
       b = 1
     }
@@ -162,7 +162,7 @@ program ReturnSuffixGadget {
     d = 3
   }
 
-  rule beta {
+  fn beta() {
     if a >= 0 {
       b = 4
     }
@@ -185,55 +185,55 @@ program GuardedPrologueGadget {
     pos: packed = 0
   }
 
-  rule pay {
+  fn pay() {
     energy--
   }
 
-  rule drained {
-    stop -999
+  fn drained() {
+    halt(-999)
   }
 
   turn {
-    read action
+    action = read()
     match action {
-      1 => left
-      2 => right
-      3 => up
-      otherwise => stop pos
+      1 => left()
+      2 => right()
+      3 => up()
+      otherwise => halt(pos)
     }
   }
 
-  rule left {
-    pay
+  fn left() {
+    pay()
     if energy > 0 {
       pos += 1
     }
     else {
-      drained
+      drained()
     }
-    stop pos
+    halt(pos)
   }
 
-  rule right {
-    pay
+  fn right() {
+    pay()
     if energy > 0 {
       pos += 10
     }
     else {
-      drained
+      drained()
     }
-    stop pos
+    halt(pos)
   }
 
-  rule up {
-    pay
+  fn up() {
+    pay()
     if energy > 0 {
       pos += 100
     }
     else {
-      drained
+      drained()
     }
-    stop pos
+    halt(pos)
   }
 }
 `);
@@ -250,11 +250,11 @@ program TinyMultiUseRule {
     score: counter 0..9 = 0
   }
   turn {
-    bump
-    bump
-    stop score
+    bump()
+    bump()
+    halt(score)
   }
-  rule bump {
+  fn bump() {
     score++
   }
 }
@@ -271,18 +271,18 @@ program OneShotInit {
     value: counter 0..9 = 0
   }
   screen main {
-    show value
+    show(value)
   }
   turn {
     if entered == 0 {
       entered = 1
       value++
-      show main
+      show(main)
     }
     else {
-      read key
+      key = read()
       value += key
-      show main
+      show(main)
     }
   }
 }
@@ -301,7 +301,7 @@ program NegativeConstantFold {
   }
   turn {
     value = -5 + 7
-    stop value
+    halt(value)
   }
 }
 `);
@@ -319,9 +319,9 @@ program ConstantDistribute {
     value: packed = 0
   }
   turn {
-    read x
+    x = read()
     value = 2 * (2 + x)
-    stop value
+    halt(value)
   }
 }
 `);
@@ -341,9 +341,9 @@ program NegativeConstantDistribute {
     value: packed = 0
   }
   turn {
-    read x
+    x = read()
     value = -5 * (2 - x)
-    stop value
+    halt(value)
   }
 }
 `);
@@ -365,10 +365,10 @@ program MultiVariableLinearFold {
     value: packed = 0
   }
   turn {
-    read x
-    read y
+    x = read()
+    y = read()
     value = 2 * (x + y + 3) - (x - 4 * y)
-    stop value
+    halt(value)
   }
 }
 `);
@@ -389,7 +389,7 @@ program SignedUpdate {
   }
   turn {
     height = height - speed - accel / 2
-    stop height
+    halt(height)
   }
 }
 `;
@@ -413,9 +413,9 @@ program NestedLinearFold {
     value: packed = 0
   }
   turn {
-    read x
+    x = read()
     value = 5 * (2 + 3 * (2 + x))
-    stop value
+    halt(value)
   }
 }
 `);
@@ -436,7 +436,7 @@ program ConstantBitwiseCallFold {
   }
   turn {
     value = bit_or(2, 4)
-    stop value
+    halt(value)
   }
 }
 `);
@@ -455,7 +455,7 @@ program ConstantPrimitiveCallFold {
   }
   turn {
     value = bit_or(2, 4) + bit_and(7, 3) + bit_xor(6, 3) + max(2, 9) + abs(-3) + sign(-12) + int(2.9) + frac(2.75) + inv(2) + pow(2, 3) + pow10(2)
-    stop value
+    halt(value)
   }
 }
 `);
@@ -476,7 +476,7 @@ program ConstantBitwiseNotFold {
   }
   turn {
     value = bit_not(99999999)
-    stop value
+    halt(value)
   }
 }
 `);
@@ -495,7 +495,7 @@ program ConstantMaxZeroFold {
   }
   turn {
     value = max(0, 5)
-    stop value
+    halt(value)
   }
 }
 `);
@@ -513,10 +513,10 @@ program FormulaPrimitives {
     value: packed = 0
   }
   turn {
-    read x
-    read y
+    x = read()
+    y = read()
     value = max(pi(), sqr(x)) + inv(y) + pow(x, y) + bit_and(x, y) + bit_or(x, y) + bit_xor(x, y) + bit_not(x)
-    stop value
+    halt(value)
   }
 }
 `);
@@ -542,7 +542,7 @@ program FormulaHelpers {
     mask = cell_set(mask, 1, 2)
     value = value + cell_clear(mask, 1, 2) + cell_toggle(mask, 1, 2)
     value = value + digit_at(1234, 2) + digit_add(1000, 1, 7) + digit_set(1234, 2, 9)
-    stop value
+    halt(value)
   }
 }
 `);
@@ -567,10 +567,10 @@ program ClearAfterHit {
   turn {
     if pos in marks {
       marks -= pos
-      stop 1
+      halt(1)
     }
     else {
-      stop 0
+      halt(0)
     }
   }
 }
@@ -590,18 +590,18 @@ program FoxProbe {
     bearing: counter 0..9 = 0
   }
   screen hit {
-    show hit_value
+    show(hit_value)
   }
   screen report {
-    show bearing
+    show(bearing)
   }
   turn {
-    read cell
+    cell = read()
     if cell in foxes {
-      show hit
+      show(hit)
     }
     bearing = line_count(foxes, cell)
-    show report
+    show(report)
   }
 }
 `);
@@ -621,14 +621,14 @@ program RepeatedMembershipProbe {
     score: counter 0..9 = 0
   }
   turn {
-    read cell
+    cell = read()
     if cell in occupied {
       score++
     }
     if cell in occupied {
       score++
     }
-    stop score
+    halt(score)
   }
 }
 `);
@@ -645,16 +645,16 @@ program CommonBranchTail {
     value: counter 0..9 = 0
   }
   screen view {
-    show value
+    show(value)
   }
   turn {
     if selector == 0 {
       value = 1
-      show view
+      show(view)
     }
     else {
       value = 2
-      show view
+      show(view)
     }
   }
 }
@@ -672,21 +672,21 @@ program CommonDispatchTail {
     value: counter 0..9 = 0
   }
   screen view {
-    show value
+    show(value)
   }
   turn {
     if selector == 1 {
       value = 1
-      show view
+      show(view)
     }
     else {
       if selector == 2 {
         value = 2
-        show view
+        show(view)
       }
       else {
         value = 3
-        show view
+        show(view)
       }
     }
   }
@@ -706,13 +706,13 @@ program CompactDirectionOnly {
   }
   turn {
     match key {
-      2, 4, 6, 8 => go direction(key)
-      otherwise => stop 0
+      2, 4, 6, 8 => go(direction(key))
+      otherwise => halt(0)
     }
   }
-  rule go delta {
+  fn go(delta) {
     dir = delta
-    stop dir
+    halt(dir)
   }
 }
 `);
@@ -730,19 +730,19 @@ program XParamRule {
     pos: packed = 0
   }
   screen view {
-    show pos
+    show(pos)
   }
   turn {
     match key {
-      1 => go 1
-      2 => go 2
-      3 => go 3
-      otherwise => stop 0
+      1 => go(1)
+      2 => go(2)
+      3 => go(3)
+      otherwise => halt(0)
     }
   }
-  rule go delta {
+  fn go(delta) {
     pos = pos + delta
-    show view
+    show(view)
   }
 }
 `);
@@ -762,14 +762,14 @@ program RepeatedPackedDisplay {
     c: packed = 3
   }
   screen view {
-    show a, b, c
+    show(a, b, c)
   }
   turn {
     match selector {
-      1 => show view
-      2 => show view
-      3 => show view
-      otherwise => stop 0
+      1 => show(view)
+      2 => show(view)
+      3 => show(view)
+      otherwise => halt(0)
     }
   }
 }
@@ -787,10 +787,10 @@ program DisplayFields {
     b: counter 0..9 = 5
   }
   screen view {
-    show a, b
+    show(a, b)
   }
   turn {
-    show view
+    show(view)
   }
 }
 `);
@@ -814,7 +814,7 @@ program RepeatedExpression {
     a = digit_at(map, pos - int(pos / 10) * 10)
     b = digit_at(map, pos - int(pos / 10) * 10)
     c = digit_at(map, pos - int(pos / 10) * 10)
-    stop a + b + c
+    halt(a + b + c)
   }
 }
 `);
@@ -832,7 +832,7 @@ program RemainderLowering {
   }
   turn {
     ones = value - 10 * int(value / 10)
-    stop ones
+    halt(ones)
   }
 }
 `);
@@ -852,7 +852,7 @@ program AdjacentSetUpdates {
   turn {
     mine += cell
     seen += cell
-    stop mine + seen
+    halt(mine + seen)
   }
 }
 `);
@@ -870,31 +870,31 @@ program RepeatedChallengePrompt {
     selector: counter 0..9 = 0
   }
   screen warning {
-    show warning_value
+    show(warning_value)
   }
   screen memory {
-    show memory_value
+    show(memory_value)
   }
   turn {
-    show warning
-    show memory
-    read answer
-    show warning
-    show memory
-    read answer
-    show warning
-    show memory
-    read answer
-    show warning
-    show memory
-    read answer
-    show warning
-    show memory
-    read answer
-    show warning
-    show memory
-    read answer
-    stop answer
+    show(warning)
+    show(memory)
+    answer = read()
+    show(warning)
+    show(memory)
+    answer = read()
+    show(warning)
+    show(memory)
+    answer = read()
+    show(warning)
+    show(memory)
+    answer = read()
+    show(warning)
+    show(memory)
+    answer = read()
+    show(warning)
+    show(memory)
+    answer = read()
+    halt(answer)
   }
 }
 `);
@@ -922,18 +922,18 @@ program SharedChallengeDemo {
     }
   }
   screen warning {
-    show warning_value
+    show(warning_value)
   }
   screen memory {
-    show challenge
+    show(challenge)
   }
   turn {
-    encounter tile
-    stop score + strength + plans
+    encounter(tile)
+    halt(score + strength + plans)
   }
   encounters tile {
     0 {
-      show 0
+      show(0)
     }
     1 {
       challenge tile as challenge using warning, memory, answer {
@@ -1007,20 +1007,20 @@ program SharedChallengeExceptionDemo {
     strength: counter 0..99 = 10
   }
   screen warning {
-    show warning_value
+    show(warning_value)
   }
   screen memory {
-    show challenge
+    show(challenge)
   }
   turn {
-    encounter tile
-    stop score + strength
+    encounter(tile)
+    halt(score + strength)
   }
   encounters tile {
     1 {
       challenge tile as challenge using warning, memory, answer {
         success {
-          bonus
+          bonus()
         }
         failure {
           strength--
@@ -1059,7 +1059,7 @@ program SharedChallengeExceptionDemo {
       }
     }
   }
-  rule bonus {
+  fn bonus() {
     score += 9
   }
 }
@@ -1084,23 +1084,23 @@ program DeadLoweredRules {
   }
   turn {
     match tile {
-      1 => pool_exit
-      2 => ladder_exit
-      3 => shaft_exit
-      otherwise => clear_exit
+      1 => pool_exit()
+      2 => ladder_exit()
+      3 => shaft_exit()
+      otherwise => clear_exit()
     }
-    stop energy
+    halt(energy)
   }
-  rule clear_exit {
+  fn clear_exit() {
     energy++
   }
-  rule pool_exit {
+  fn pool_exit() {
     energy = 0
   }
-  rule ladder_exit {
+  fn ladder_exit() {
     energy -= 5
   }
-  rule shaft_exit {
+  fn shaft_exit() {
     energy -= 6
   }
 }
@@ -1122,10 +1122,10 @@ program RawRule {
     result: packed = 0
   }
   turn {
-    hack
-    stop result
+    hack()
+    halt(result)
   }
-  rule hack {
+  fn hack() {
     raw {
       takes Y = value, X = 3
       returns X -> result
@@ -1166,7 +1166,7 @@ program StableIndirectFlow {
         9
       }
     }
-    stop out
+    halt(out)
   }
 }
 `);
@@ -1191,7 +1191,7 @@ program PreloadedIndirectFlow {
         БП 13
       }
     }
-    stop 0
+    halt(0)
   }
 }
 `);
@@ -1223,7 +1223,7 @@ program IndirectMemoryTable {
         П->X R2
       }
     }
-    stop out
+    halt(out)
   }
 }
 `);
@@ -1253,7 +1253,7 @@ program RawFormalAddress {
         БП C5
       }
     }
-    stop 0
+    halt(0)
   }
 }
 `);
@@ -1293,7 +1293,7 @@ program ReservedName {
     __mkpro_score: counter 0..9 = 0
   }
   turn {
-    stop __mkpro_score
+    halt(__mkpro_score)
   }
 }
 `),
@@ -1310,7 +1310,7 @@ program DecimalFormula {
   }
   turn {
     accel = burn * 10 / fuel - 9.8
-    stop accel
+    halt(accel)
   }
 }
 `);
@@ -1332,7 +1332,7 @@ program BranchlessAssignment {
     else {
       result = 10
     }
-    stop result
+    halt(result)
   }
 }
 `);
@@ -1351,7 +1351,7 @@ program ResidualGuardedUpdate {
   }
 
   screen main {
-    show room, shown
+    show(room, shown)
   }
 
   turn {
@@ -1360,9 +1360,9 @@ program ResidualGuardedUpdate {
       shown = room
     }
     else {
-      show main
+      show(main)
     }
-    stop room
+    halt(room)
   }
 }
 `);
@@ -1381,7 +1381,7 @@ program ResourceRange {
     if fuel > 0 {
       fuel--
     }
-    stop fuel
+    halt(fuel)
   }
 }
 `);
@@ -1399,9 +1399,9 @@ program BoundaryNormalize {
   turn {
     if fuel <= -1 {
       fuel--
-      show 0
+      show(0)
     }
-    stop fuel
+    halt(fuel)
   }
 }
 `);
@@ -1418,10 +1418,10 @@ program BranchlessStop {
   }
   turn {
     if flag == 1 {
-      stop 50
+      halt(50)
     }
     else {
-      stop 10
+      halt(10)
     }
   }
 }
@@ -1438,15 +1438,15 @@ program TerminalThenEnd {
     crash_value: packed = -999
   }
   screen crash {
-    show crash_value
+    show(crash_value)
   }
   turn {
     if flag == 1 {
-      show crash
-      stop -999
+      show(crash)
+      halt(-999)
     }
     else {
-      stop 1
+      halt(1)
     }
   }
 }
@@ -1463,26 +1463,26 @@ program DirectTerminalBranch {
     crash_value: packed = -999
   }
   screen crash {
-    show crash_value
+    show(crash_value)
   }
   turn {
     if score >= 5 {
-      fail
+      fail()
     }
     else {
-      other
+      other()
     }
   }
-  rule fail {
-    show crash
-    stop -999
+  fn fail() {
+    show(crash)
+    halt(-999)
   }
-  rule other {
+  fn other() {
     if score < 2 {
-      fail
+      fail()
     }
     else {
-      stop 2
+      halt(2)
     }
   }
 }
@@ -1499,17 +1499,17 @@ program LocalTerminalTail {
     fail_value: packed = -999
   }
   screen fail_screen {
-    show fail_value
+    show(fail_value)
   }
   turn {
     if score < 5 {
       score = score * 2
     }
     else {
-      show fail_screen
-      stop -999
+      show(fail_screen)
+      halt(-999)
     }
-    stop score
+    halt(score)
   }
 }
 `);
@@ -1531,7 +1531,7 @@ program BooleanMultiUpdate {
       a++
       b--
     }
-    stop a + b
+    halt(a + b)
   }
 }
 `);
@@ -1551,7 +1551,7 @@ program NegativeZeroGuardedUpdate {
     if score >= 100 {
       bonus++
     }
-    stop bonus
+    halt(bonus)
   }
 }
 `);
@@ -1569,21 +1569,21 @@ program LateLayoutIfVariant {
     fail_value: packed = -999
   }
   screen fail_screen {
-    show fail_value
+    show(fail_value)
   }
   turn {
     if strength <= 0 {
-      exhausted
+      exhausted()
     }
     value++
     if value >= 9 {
-      exhausted
+      exhausted()
     }
-    stop value
+    halt(value)
   }
-  rule exhausted {
-    show fail_screen
-    stop -999
+  fn exhausted() {
+    show(fail_screen)
+    halt(-999)
   }
 }
 `);
@@ -1600,10 +1600,10 @@ program BranchlessCompare {
   }
   turn {
     if counter > 0 {
-      stop 1
+      halt(1)
     }
     else {
-      stop 0
+      halt(0)
     }
   }
 }
@@ -1623,10 +1623,10 @@ program LunarLike {
   }
   turn {
     if abs(speed) <= 5 {
-      stop 777
+      halt(777)
     }
     else {
-      stop 666
+      halt(666)
     }
   }
 }
@@ -1657,10 +1657,10 @@ program NegativeZeroThreshold {
   }
   turn {
     if score >= 100 {
-      stop 1
+      halt(1)
     }
     else {
-      stop 0
+      halt(0)
     }
   }
 }
@@ -1688,9 +1688,9 @@ program NegativeZeroFlowCandidate {
   }
   turn {
     if score >= 100 {
-      stop 1
+      halt(1)
     }
-    stop 0
+    halt(0)
   }
 }
 `);
@@ -1706,7 +1706,7 @@ program NegativeZeroFlowCandidate {
       compileMKPro(`
 program TooLarge {
   turn {
-    stop 1
+    halt(1)
   }
 }
 `, { budget: 1 }),
@@ -1721,7 +1721,7 @@ program AnalyzeBudget {
   }
   turn {
     value = 1
-    stop value
+    halt(value)
   }
 }
 `, { budget: 1, analysis: true });
@@ -1732,7 +1732,7 @@ program AnalyzeBudget {
   });
 
   it("keeps analysis output inspectable past the byte address range", () => {
-    const pauses = Array.from({ length: 130 }, () => "    show 0").join("\n");
+    const pauses = Array.from({ length: 130 }, () => "    show(0)").join("\n");
     const result = compileMKPro(`
 program AnalyzeHuge {
   turn {
@@ -1750,7 +1750,7 @@ ${pauses}
     const result = compileMKPro(`
 program DefaultBudget {
   turn {
-    stop 1
+    halt(1)
   }
 }
 `);
@@ -1766,18 +1766,18 @@ program DseAcrossCall {
   }
 
   screen main {
-    show shown
+    show(shown)
   }
 
-  rule overwrite {
+  fn overwrite() {
     scratch = 2
     shown = scratch
   }
 
   turn {
     scratch = 1
-    overwrite
-    show main
+    overwrite()
+    show(main)
   }
 }
 `;
@@ -1800,18 +1800,18 @@ program MembershipMaskRun {
   }
 
   screen board {
-    show cell, player_marks, occupied
+    show(cell, player_marks, occupied)
   }
 
   turn {
-    read cell
+    cell = read()
     if cell in occupied {
-      show board
+      show(board)
     }
     else {
       player_marks += cell
       occupied += cell
-      show board
+      show(board)
     }
   }
 }
@@ -1832,7 +1832,7 @@ program MaskMembershipClear {
     if bit_and(marks, frac(pos)) != 0 {
       marks = bit_and(marks, bit_not(frac(pos)))
     }
-    stop marks
+    halt(marks)
   }
 }
 `, { budget: 999, analysis: true });
@@ -1850,23 +1850,23 @@ program FalseBranchXReuse {
   }
 
   turn {
-    read target
+    target = read()
     if target >= 0 {
-      stop 1
+      halt(1)
     }
     else {
-      shoot
+      shoot()
     }
   }
 
-  rule shoot {
+  fn shoot() {
     arrows--
 
     if target + wumpus == 0 {
-      stop 2
+      halt(2)
     }
     else {
-      stop arrows
+      halt(arrows)
     }
   }
 }
@@ -1893,13 +1893,13 @@ program NestedGuardFailure {
         score = 1
       }
       else {
-        show 0
+        show(0)
       }
     }
     else {
-      show 0
+      show(0)
     }
-    stop score
+    halt(score)
   }
 }
 `, { budget: 999, analysis: true });
@@ -1915,19 +1915,19 @@ program TerminalLoopScreen {
     score: counter 0..9 = 0
   }
   screen main {
-    show pos
+    show(pos)
   }
   turn {
-    show main
-    read key
+    show(main)
+    key = read()
     match key {
-      1 => score_point
-      otherwise => stop 0
+      1 => score_point()
+      otherwise => halt(0)
     }
   }
-  rule score_point {
+  fn score_point() {
     score = 1
-    show main
+    show(main)
   }
 }
 `, { budget: 999, analysis: true });

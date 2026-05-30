@@ -40,7 +40,7 @@ const SOURCE = `program IfChainProbe {
         }
       }
     }
-    stop result
+    halt(result)
   }
 }`;
 

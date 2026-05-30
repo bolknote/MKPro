@@ -20,9 +20,9 @@ function program(body: string): string {
   }
 
   turn {
-    read x
+    x = read()
     r = ${body}
-    stop r
+    halt(r)
   }
 }
 `;

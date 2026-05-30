@@ -30,20 +30,21 @@ program TreasureHunter2 {
   }
 
   screen maze {
-    show pos, floor_view, treasure
+    show(pos, floor_view, treasure)
   }
 
   screen exit {
-    show treasure
+    show(treasure)
   }
 
-  rule escaped {
-    show exit
-    stop 0
+  fn escaped() {
+    show(exit)
+    halt(0)
   }
 
-  rule lost {
-    stop "ЕГГОГ"
+  fn lost() {
+    show("ЕГГОГ")
+    halt()
   }
 
   turn {
@@ -51,133 +52,133 @@ program TreasureHunter2 {
       // The original enters from the left wall automatically; if the starting
       // cell is a hole, the first visible state is already lower in the cave.
       entered = 1
-      inspect_cell
+      inspect_cell()
     }
     else {
-      show maze
-      read action
+      show(maze)
+      action = read()
 
       // The MK-61 prototype uses non-zero X plus the R/GRD/G angle switch for
       // left/up/right. These numeric labels are the portable command names for
       // the same three choices; there is no manual down command in the source.
       match action {
-        4 => move_left
-        6 => move_right
-        8 => climb_or_descend
-        0 => punch_hole
-        otherwise => show maze
+        4 => move_left()
+        6 => move_right()
+        8 => climb_or_descend()
+        0 => punch_hole()
+        otherwise => show(maze)
       }
     }
   }
 
-  rule move_left {
+  fn move_left() {
     // The left edge of floor 1 is the only exit. Other left moves are just
     // ordinary exploration and still inspect the resulting cell.
     if room == 0 {
       if floor == 1 {
-        escaped
+        escaped()
       }
       else {
-        show maze
+        show(maze)
       }
     }
     else {
       room--
       pos--
-      inspect_cell
+      inspect_cell()
     }
   }
 
-  rule move_right {
+  fn move_right() {
     if room < 6 {
       room++
       pos++
-      inspect_cell
+      inspect_cell()
     }
     else {
-      show maze
+      show(maze)
     }
   }
 
-  rule climb_or_descend {
+  fn climb_or_descend() {
     if pos == dug_pos {
-      show maze
+      show(maze)
     }
     else {
       if floor_view == 3 {
         if floor < 9 {
           floor++
-          move pos up
+          pos = move(pos, up)
           ladder_top = pos
-          inspect_cell
+          inspect_cell()
         }
         else {
-          show maze
+          show(maze)
         }
       }
       else {
         // At the top of a known ladder the prototype treats "up" in empty
         // space as a quick descent back down the ladder.
         if pos == ladder_top {
-          descend
+          descend()
         }
         else {
-          show maze
+          show(maze)
         }
       }
     }
   }
 
-  rule descend {
+  fn descend() {
     floor--
     if floor <= 0 {
-      lost
+      lost()
     }
     else {
-      move pos down
-      inspect_cell
+      pos = move(pos, down)
+      inspect_cell()
     }
   }
 
-  rule punch_hole {
+  fn punch_hole() {
     // Digging marks this cell as a forced descent. That also destroys a ladder,
     // so future climb attempts from the same cell no longer work.
     dug_pos = pos
-    descend
+    descend()
   }
 
-  rule inspect_cell {
+  fn inspect_cell() {
     if pos == dug_pos {
-      descend
+      descend()
     }
     else {
-      reveal_cell
+      reveal_cell()
     }
   }
 
-  rule reveal_cell {
+  fn reveal_cell() {
     // Tile numbers are semantic, not visual decoration: treasure, hole, ladder,
     // or empty passage decide the next rule.
     floor_view = cell_at(cave, room)
-    classify_tile
+    classify_tile()
   }
 
-  rule classify_tile {
+  fn classify_tile() {
     if pos == collected_treasure {
-      show maze
+      show(maze)
     }
     else {
       match floor_view {
-        1 => collect_treasure
-        2 => descend
-        otherwise => show maze
+        1 => collect_treasure()
+        2 => descend()
+        otherwise => show(maze)
       }
     }
   }
 
-  rule collect_treasure {
+  fn collect_treasure() {
     collected_treasure = pos
     treasure++
-    show maze
+    show(maze)
   }
 }
