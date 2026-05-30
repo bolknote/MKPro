@@ -24,6 +24,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "fox-hunt-mk61": 65,
   "game-100-pig": 103,
   human: 28,
+  "jack-pot": 95,
   lunar: 47,
   "minesweeper-9x7": 100,
   "minesweeper-9x9": 90,
@@ -42,12 +43,12 @@ const EXAMPLE_COMPILE_ERRORS: Record<string, RegExp> = {};
 // The numbers below are the current locked ceilings, not historical deltas.
 const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 123,
-  "cave-treasure": 144,
+  "cave-treasure": 139,
   "giants-country": 164,
   labyrinth777: 224,
   teleport: 246,
   "tic-tac-toe-4x4": 260,
-  "treasure-hunter-2": 137,
+  "treasure-hunter-2": 135,
 };
 
 const PENDING_COMPILE_ERRORS: Record<string, RegExp> = {};

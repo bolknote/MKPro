@@ -434,6 +434,11 @@ export function compileMKPro(
     "Selected tail-branch inversion after full layout",
   );
   tryCandidate(
+    { hoistSharedHelpers: true, canonicalizeIfChains: true, tailBranchInversion: true },
+    "hoisted-helper-if-chain-tail-branch-layout",
+    "Combined helper hoisting, if-chain canonicalization, and tail-branch inversion after full layout",
+  );
+  tryCandidate(
     { guardedPrologueGadgets: true },
     "guarded-prologue-gadget-layout",
     "Selected guarded prologue gadget extraction after full layout",

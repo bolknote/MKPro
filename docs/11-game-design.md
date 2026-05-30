@@ -168,6 +168,7 @@ Smoke tests for packaged games live under `tests/emulator/`.
 | `examples/dangerous-loading.mkpro` | ferry/loading port that fits after dispatch default merging |
 | `examples/dungeon.mkpro` | Lord_BSS Dungeon port that fits the original |
 | `examples/game-100-pig.mkpro` | Anvarov dice game port that fits the original |
+| `examples/jack-pot.mkpro` | Lord_BSS Jack Pot slot-machine port |
 | `examples/minesweeper-9x9.mkpro` | Anvarov Minesweeper port that fits the original |
 | `examples/raja-yoga.mkpro` | Anvarov one-dimensional mask game port that fits the original |
 | `examples/pending-optimizer/cave-treasure.mkpro` | hard high-level compactness reference needing size work |

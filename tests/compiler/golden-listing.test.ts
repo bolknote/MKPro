@@ -41,6 +41,7 @@ const LOWERING_VARIANTS: ReadonlyArray<{ name: string; options: Record<string, u
   { name: "shareRandomCell", options: { shareRandomCell: true } },
   { name: "shareRandomCell+hoistSharedHelpers", options: { shareRandomCell: true, hoistSharedHelpers: true } },
   { name: "tailBranchInversion", options: { tailBranchInversion: true } },
+  { name: "hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion", options: { hoistSharedHelpers: true, canonicalizeIfChains: true, tailBranchInversion: true } },
   { name: "guardedPrologueGadgets", options: { guardedPrologueGadgets: true } },
   { name: "guardedPrologueGadgets+hoistSharedHelpers+hoistProcs", options: { guardedPrologueGadgets: true, hoistSharedHelpers: true, hoistProcs: true } },
   { name: "sharedBitMaskHelperCalls", options: { sharedBitMaskHelperCalls: true } },

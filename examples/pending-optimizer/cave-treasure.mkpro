@@ -46,7 +46,11 @@ program CaveTreasure {
 
     match key {
       4 => go_left()
-      2, 6, 8, 5, -5 => go(direction(key))
+      2 => go(0.0000002)
+      6 => go(-0.000001)
+      8 => go(-0.0000002)
+      5 => go(1)
+      -5 => go(-1)
       0 => break_wall()
       10 => search()
       otherwise => ignored()
@@ -58,7 +62,7 @@ program CaveTreasure {
       exit_found()
     }
     else {
-      go(direction(key))
+      go(0.000001)
     }
   }
 

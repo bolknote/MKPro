@@ -1,0 +1,82 @@
+reference lordbss_pmk151
+
+// Based on Lord_BSS pmk151, "Jack Pot" by Konstantin Sergeev. The original is
+// a 104-step gambling machine: each spin costs 1000 dollars, the calculator
+// draws three digits from 1 to 9, shows them as one three-digit value, and
+// updates the player's money according to the published payout rules.
+
+program JackPot {
+  state {
+    money: counter -9999..99999 = 10000
+    command: counter 0..9 = 0
+
+    first: counter 1..9 = 1
+    second: counter 1..9 = 1
+    third: counter 1..9 = 1
+    reels: counter 111..999 = 111
+    sum: counter 3..27 = 3
+  }
+
+  fn game_over() {
+    halt("С-Е O-Г")
+  }
+
+  loop {
+    show(money)
+    command = read()
+
+    if money <= 0 {
+      game_over()
+    }
+    else {
+      // Source menu keys are represented as numeric commands here:
+      // 1 starts the machine, 2 redraws the last three-digit reel value, and
+      // any other value returns to the money screen.
+      match command {
+        1 => spin()
+        2 => show_reels()
+        otherwise => stay()
+      }
+    }
+  }
+
+  fn stay() {
+    show(money)
+  }
+
+  fn show_reels() {
+    show(reels)
+  }
+
+  fn spin() {
+    money -= 1000
+
+    first = int(random() * 9) + 1
+    second = int(random() * 9) + 1
+    third = int(random() * 9) + 1
+
+    reels = first * 100 + second * 10 + third
+    show(reels)
+
+    sum = first + second + third
+
+    // The original listing applies the published wins as separate checks:
+    // a divisible-by-5 sum refunds the spin cost, matching first reels adds
+    // 3000, and matching all three adds another 3000.
+    if sum - 5 * int(sum / 5) == 0 {
+      money += 1000
+    }
+
+    if first == second {
+      money += 3000
+
+      if second == third {
+        money += 3000
+      }
+    }
+
+    if money <= 0 {
+      game_over()
+    }
+  }
+}

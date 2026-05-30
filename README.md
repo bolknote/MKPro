@@ -114,6 +114,7 @@ All top-level `examples/*.mkpro` programs are runnable MK-Pro programs. They cov
 - `examples/functions-demo.mkpro`: value-returning function composition demo.
 - `examples/game-100-pig.mkpro`: Anvarov dice game port that fits the original.
 - `examples/human.mkpro`: small counter game used as syntax smoke test.
+- `examples/jack-pot.mkpro`: Lord_BSS Jack Pot slot-machine port.
 - `examples/lunar.mkpro`: numeric landing game with counters and touchdown rules.
 - `examples/minesweeper-9x7.mkpro`: Lord_BSS Sapper port whose 9x7 paper-board
   probes match the original 104-cell listing.
