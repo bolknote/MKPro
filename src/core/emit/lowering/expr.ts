@@ -268,6 +268,9 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
       compileRandomCall(ctx, expr);
       return;
     }
+    if (compileRandomIntegerCall(ctx, expr)) {
+      return;
+    }
     const zeroArgOpcodes: Record<string, [number, string]> = {
       pi: [0x20, "F pi"],
     };
@@ -380,6 +383,39 @@ function compileRandomCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kind
     level: "error",
     message: `${expr.callee}() expects zero or two arguments, got ${expr.args.length}.`,
   });
+}
+
+function compileRandomIntegerCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
+  if (expr.callee.toLowerCase() !== "int" || expr.args.length !== 1) return false;
+  const arg = expr.args[0]!;
+  if (!expressionContainsValidRandom(arg)) return false;
+  compileExpression(ctx, arg);
+  ctx.emitOp(0x0e, "В↑", "random int keep scaled draw");
+  ctx.emitOp(0x35, "К {x}", "random int fractional part");
+  ctx.emitOp(0x11, "-", "random int floor");
+  ctx.optimizations.push({
+    name: "int-random-range-lowering",
+    detail: `Lowered ${expressionToIntentText(expr)} without К [x] so the MK-61 random sequence keeps moving.`,
+  });
+  return true;
+}
+
+function expressionContainsValidRandom(expr: ExpressionAst): boolean {
+  switch (expr.kind) {
+    case "number":
+    case "string":
+    case "identifier":
+      return false;
+    case "indexed":
+      return expressionContainsValidRandom(expr.index);
+    case "unary":
+      return expressionContainsValidRandom(expr.expr);
+    case "binary":
+      return expressionContainsValidRandom(expr.left) || expressionContainsValidRandom(expr.right);
+    case "call":
+      return (expr.callee.toLowerCase() === "random" && (expr.args.length === 0 || expr.args.length === 2)) ||
+        expr.args.some(expressionContainsValidRandom);
+  }
 }
 
 function compileCommutativeCallWithCurrentX(

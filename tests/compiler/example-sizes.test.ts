@@ -13,10 +13,10 @@ import { compileMKPro } from "../../src/core/index.ts";
 
 const EXAMPLE_BASELINE: Record<string, number> = {
   "99-bottles": 53,
-  alaram: 79,
+  alaram: 81,
   basic: 8,
   "cave-sketch": 52,
-  "dangerous-loading": 87,
+  "dangerous-loading": 89,
   dungeon: 84,
   "e-94-digits": 64,
   "functions-demo": 29,
@@ -24,11 +24,12 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "fox-hunt-mk61": 65,
   "game-100-pig": 103,
   human: 25,
+  "jack-pot": 101,
   lunar: 47,
   "minesweeper-9x7": 100,
   "minesweeper-9x9": 90,
-  "raja-yoga": 85,
-  "sea-battle": 76,
+  "raja-yoga": 88,
+  "sea-battle": 78,
   "tiny-game": 24,
   wumpus: 103,
 };
@@ -44,11 +45,10 @@ const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 120,
   "cave-treasure": 139,
   "giants-country": 162,
-  "jack-pot": 99,
   labyrinth777: 221,
   "rambo-iii": 201,
-  teleport: 245,
-  "tic-tac-toe-4x4": 260,
+  teleport: 249,
+  "tic-tac-toe-4x4": 264,
   "treasure-hunter-2": 135,
 };
 

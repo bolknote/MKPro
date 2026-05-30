@@ -542,7 +542,7 @@ program FormulaPrimitives {
     }
   });
 
-  it("lowers random range sugar and keeps integer truncation on the compact MK-61 opcode", () => {
+  it("lowers random range integer draws without cycling the MK-61 generator through К [x]", () => {
     const result = compileOk(`
 program RandomRangeSugar {
   state {
@@ -558,12 +558,32 @@ program RandomRangeSugar {
     const opcodes = result.steps.map((step) => step.hex);
 
     expect(opcodes).toContain("3B");
-    expect(opcodes).toContain("34");
-    expect(opcodes).not.toContain("35");
-    expect(result.report.optimizations.some((item) => item.name === "int-random-range-lowering")).toBe(false);
+    expect(opcodes).toContain("0E");
+    expect(opcodes).toContain("35");
+    expect(opcodes).not.toContain("34");
+    expect(result.report.optimizations.some((item) => item.name === "int-random-range-lowering")).toBe(true);
   });
 
-  it("accepts fractional random ranges without integer-bound truncation rewriting", () => {
+  it("lowers scaled random integer draws through x-frac(x)", () => {
+    const result = compileOk(`
+program RandomScaledInteger {
+  state {
+    roll: counter 1..9 = 1
+  }
+  loop {
+    roll = int(random() * 9) + 1
+    halt(roll)
+  }
+}
+`);
+    const opcodes = result.steps.map((step) => step.hex);
+
+    expect(opcodes.slice(0, 8)).toEqual(["3B", "09", "12", "0E", "35", "11", "01", "10"]);
+    expect(opcodes).not.toContain("34");
+    expect(result.report.optimizations.some((item) => item.name === "int-random-range-lowering")).toBe(true);
+  });
+
+  it("accepts fractional random ranges with ROM-friendly integer flooring", () => {
     const result = compileOk(`
 program FractionalRandomRangeSugar {
   state {
@@ -578,7 +598,8 @@ program FractionalRandomRangeSugar {
 
     expect(result.steps.some((step) => step.hex === "3B")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "random-range-lowering")).toBe(true);
-    expect(result.report.optimizations.some((item) => item.name === "int-random-range-lowering")).toBe(false);
+    expect(result.report.optimizations.some((item) => item.name === "int-random-range-lowering")).toBe(true);
+    expect(result.steps.map((step) => step.hex)).not.toContain("34");
   });
 
   it("rejects one-argument random calls", () => {
