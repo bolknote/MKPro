@@ -18,6 +18,7 @@ Current `--analysis` sizes, measured against the local reference listings:
 | `cave-treasure.mkpro` | 139 | 105 | wall breaking, cache flow, and remaining dispatch overhead |
 | `giants-country.mkpro` | 164 | 105 | packed room-map display/flow and remaining event flow lowerers |
 | `labyrinth777.mkpro` | 224 | 105 | room inspection and local-jumper dispatch |
+| `rambo-iii.mkpro` | 178 | 105 | three repeated front-defense phases, reserve/order accounting, and SOLDIER display literal support |
 | `teleport.mkpro` | 246 | 105 | station masks and vault/guard flow |
 | `tic-tac-toe-4x4.mkpro` | 260 | 105 | 4x4 line-count state representation |
 | `treasure-hunter-2.mkpro` | 135 | 105 | floor-plan display/state lowerer |
