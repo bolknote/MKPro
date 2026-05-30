@@ -151,14 +151,20 @@ program TreasureHunter2 {
   }
 
   fn classify_tile() {
-    if pos == collected_treasure {
-      show(pos, floor_view, treasure)
+    if floor_view == 2 {
+      descend()
     }
     else {
-      match floor_view {
-        1 => collect_treasure()
-        2 => descend()
-        otherwise => show(pos, floor_view, treasure)
+      if floor_view == 1 {
+        if pos == collected_treasure {
+          show(pos, floor_view, treasure)
+        }
+        else {
+          collect_treasure()
+        }
+      }
+      else {
+        show(pos, floor_view, treasure)
       }
     }
   }

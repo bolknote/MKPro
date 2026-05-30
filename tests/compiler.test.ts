@@ -113,11 +113,11 @@ describe("MK-Pro compiler", () => {
     expect(result.report.ir.v2).toBe(true);
     expect(result.report.machine).toBe("mk61");
     expect(result.report.steps).toBeLessThanOrEqual(105);
-    expect(result.report.steps).toBe(30);
+    expect(result.report.steps).toBe(28);
     expect(result.report.candidates.some((candidate) => candidate.variant === "dark-indirect-table")).toBe(true);
     expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "code-data-overlay")).toBe(true);
     expect(result.report.proofs.some((proof) => proof.id === "value-ranges")).toBe(true);
-    expect(result.report.optimizations.some((optimization) => optimization.name === "dispatch-source-register")).toBe(true);
+    expect(result.report.optimizations.some((optimization) => optimization.name === "numeric-dispatch-residual-chain")).toBe(true);
     expect(result.report.optimizations.some((optimization) => optimization.name === "show-read-fusion")).toBe(true);
     expect(result.report.optimizations.some((optimization) => optimization.name === "fl-unit-decrement")).toBe(true);
     expect(result.report.optimizations.some((optimization) => optimization.name === "terminal-loop-screen-elision")).toBe(true);
@@ -353,7 +353,7 @@ program SimpleRules {
   it("merges dispatch cases that are identical to the default branch", () => {
     const result = compileMKPro(source("examples/dangerous-loading.mkpro"));
 
-    expect(result.report.steps).toBe(89);
+    expect(result.report.steps).toBe(87);
     expect(result.report.reference?.referenceSpan).toBe(103);
     expect(result.report.optimizations.some((optimization) => optimization.name === "dispatch-default-merge")).toBe(true);
     expect(result.report.optimizations.some((optimization) => optimization.name === "tail-call-lowering")).toBe(true);

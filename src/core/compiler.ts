@@ -4139,16 +4139,11 @@ class EmitContext {
       const lastCase = index === statement.cases.length - 1;
       if (!hasComparedValue) {
         if (value !== 0) {
-          this.emitNumberOrPreload(String(value));
-          this.emitOp(0x11, "-", "dispatch compare", dispatchCase.line);
+          this.emitPositiveResidualCompare(value, "dispatch compare", dispatchCase.line);
         }
         hasComparedValue = true;
       } else {
-        const delta = comparedValue - value;
-        if (delta !== 0) {
-          this.emitNumberOrPreload(String(delta));
-          this.emitOp(0x10, "+", "dispatch residual compare", dispatchCase.line);
-        }
+        this.emitResidualCompareDelta(value - comparedValue, "dispatch residual compare", dispatchCase.line);
       }
       comparedValue = value;
       this.emitJump(0x5e, "F x=0", nextLabel, "case mismatch", dispatchCase.line);
@@ -4168,6 +4163,20 @@ class EmitContext {
       detail: `Reused residual comparisons for numeric dispatch at line ${statement.line}.`,
     });
     return true;
+  }
+
+  private emitPositiveResidualCompare(value: number, comment: string, line?: number): void {
+    const magnitude = Math.abs(value);
+    if (magnitude === 0) return;
+    this.emitNumberOrPreload(String(magnitude));
+    this.emitOp(value < 0 ? 0x10 : 0x11, value < 0 ? "+" : "-", comment, line);
+  }
+
+  private emitResidualCompareDelta(delta: number, comment: string, line?: number): void {
+    const magnitude = Math.abs(delta);
+    if (magnitude === 0) return;
+    this.emitNumberOrPreload(String(magnitude));
+    this.emitOp(delta < 0 ? 0x10 : 0x11, delta < 0 ? "+" : "-", comment, line);
   }
 
   private statementsTerminate(statements: StatementAst[]): boolean {
@@ -10541,7 +10550,7 @@ function numericResidualDispatchIsCheaper(
     residual += 2;
     comparedValue = value;
   }
-  return residual < ordinary;
+  return residual <= ordinary;
 }
 
 function isZeroExpression(expr: ExpressionAst): boolean {
@@ -13083,8 +13092,8 @@ function residualDispatchValueCost(values: readonly number[], order: readonly nu
 }
 
 function residualStepCost(previous: number | undefined, value: number): number {
-  const delta = previous === undefined ? value : previous - value;
-  return delta === 0 ? 0 : estimateNumberCost(String(delta)) + 1;
+  const delta = previous === undefined ? value : value - previous;
+  return delta === 0 ? 0 : estimateNumberCost(String(Math.abs(delta))) + 1;
 }
 
 function statementListsEqual(left: readonly StatementAst[], right: readonly StatementAst[]): boolean {

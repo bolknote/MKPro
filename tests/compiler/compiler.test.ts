@@ -683,6 +683,30 @@ program CommonDispatchTail {
     expect(result.steps.filter((step) => step.hex === "50")).toHaveLength(1);
   });
 
+  it("keeps residual dispatch deltas positive when subtraction is shorter", () => {
+    const result = compileOk(`
+program PositiveResidualDispatch {
+  state {
+    key: counter 0..10 = stack.X
+  }
+
+  loop {
+    match key {
+      0 => halt(0)
+      2 => halt(2)
+      10 => halt(10)
+      otherwise => halt(9)
+    }
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "numeric-dispatch-residual-chain")).toBe(true);
+    expect(result.steps.filter((step) => step.comment === "dispatch residual compare").map((step) => step.hex))
+      .toEqual(["11", "11"]);
+    expect(result.steps.some((step) => step.comment === "negative number")).toBe(false);
+  });
+
   it("collapses compact direction dispatch shells with no residual cases", () => {
     const result = compileOk(`
 program CompactDirectionOnly {

@@ -67,7 +67,9 @@ describe("examples", () => {
 
   it("compiles tiny-game.mkpro under budget", () => {
     const result = compileMKPro(loadExample("tiny-game"));
-    expect(formatListing(result)).toContain("read key");
+    expect(result.report.optimizations.some((item) =>
+      item.name === "show-read-fusion" && item.detail.includes("read key")
+    )).toBe(true);
     expect(formatHex(result).length).toBeGreaterThan(0);
     expect(result.report.steps).toBeLessThanOrEqual(105);
   });
