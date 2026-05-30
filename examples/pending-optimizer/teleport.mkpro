@@ -19,17 +19,13 @@ program Teleport {
     loot: counter 0..99 = 0
   }
 
-  screen station_view {
-    show(pos, danger, charges, loot)
-  }
-
   fn caught() {
     show("ЕГГОГ")
     halt()
   }
 
-  turn {
-    show(station_view)
+  loop {
+    show(pos, danger, charges, loot)
     command = read()
     charges--
 
@@ -76,20 +72,20 @@ program Teleport {
         enter_vault()
       }
       else {
-        show(station_view)
+        show(pos, danger, charges, loot)
       }
     }
   }
 
   fn enter_vault() {
     if pos in visited_vaults {
-      show(station_view)
+      show(pos, danger, charges, loot)
     }
     else {
       visited_vaults += pos
       charges += 10
       loot += 10
-      show(station_view)
+      show(pos, danger, charges, loot)
     }
   }
 

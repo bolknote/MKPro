@@ -24,18 +24,9 @@ program CaveHighlevelBaseline {
     robber_roll: counter 0..9 = 0
   }
 
-  world cave {
-    // The vertical wrap makes the cave feel larger than the display: climbing
-    // cycles floors while the room-row presentation stays compact.
-    position player {
-      encoding packed_decimal_zero_run
-    }
-
-  }
-
-  screen cave_screen {
-    show(player)
-  }
+  // The vertical wrap makes the cave feel larger than the display: climbing
+  // cycles floors while the room-row presentation stays compact.
+  cave: board(packed_decimal_zero_run)
 
   fn ignored() {
     halt(0)
@@ -45,8 +36,8 @@ program CaveHighlevelBaseline {
     halt(11)
   }
 
-  turn {
-    show(cave_screen)
+  loop {
+    show(player)
     command = read()
     // Food is the global turn clock. All useful actions spend the same survival
     // counter, which is what keeps the tiny program game-like.
@@ -85,27 +76,27 @@ program CaveHighlevelBaseline {
     else {
       player = blocked
       blocked = 0
-      show(cave_screen)
+      show(player)
     }
   }
 
   fn break_wall() {
     // Blasting only commits when the remembered wall and enough dynamite exist;
-    // the screen response is the feedback, not a separate error language.
+    // the display response is the feedback, not a separate error language.
     if blocked != 0 {
       if dynamite >= 2 {
         walls -= blocked
         player = blocked
         blocked = 0
         dynamite -= 2
-        show(cave_screen)
+        show(player)
       }
       else {
-        show(cave_screen)
+        show(player)
       }
     }
     else {
-      show(cave_screen)
+      show(player)
     }
   }
 
@@ -136,7 +127,7 @@ program CaveHighlevelBaseline {
 
   fn fight() {
     if robber == 1 {
-      show(cave_screen)
+      show(player)
       fight_key = read()
       match fight_key {
         0 => decline_fight()
@@ -160,6 +151,6 @@ program CaveHighlevelBaseline {
       food -= 3
     }
     robber = 0
-    show(cave_screen)
+    show(player)
   }
 }

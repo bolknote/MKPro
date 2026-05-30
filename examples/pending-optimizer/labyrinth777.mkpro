@@ -13,7 +13,7 @@ program Labyrinth777 {
     energy: counter 0..9 = 9
 
     // Separate counters make boundary rules readable. The packed coordinate is
-    // for the screen and masks; these fields express player intent.
+    // for the display and masks; these fields express player intent.
     floor: counter 1..7 = 4
     row: counter 1..7 = 4
     room: counter 1..7 = 4
@@ -25,18 +25,9 @@ program Labyrinth777 {
     tile: counter 0..9 = 0
   }
 
-  world maze {
-    // The maze is seven floors of seven-room rows. Local jumpers are room
-    // effects, while ordinary movement stays inside the current row/floor.
-    position pos {
-      encoding row_scan
-    }
-
-  }
-
-  screen maze {
-    show(pos, row_view, energy)
-  }
+  // The maze is seven floors of seven-room rows. Local jumpers are room
+  // effects, while ordinary movement stays inside the current row/floor.
+  maze: board(row_scan)
 
   fn escaped() {
     halt(7777777)
@@ -46,8 +37,8 @@ program Labyrinth777 {
     halt(-777)
   }
 
-  turn {
-    show(maze)
+  loop {
+    show(pos, row_view, energy)
     action = read()
 
     match action {
@@ -56,7 +47,7 @@ program Labyrinth777 {
       8 => move_forward()
       2 => move_back()
       5 => use_local_jumper()
-      otherwise => show(maze)
+      otherwise => show(pos, row_view, energy)
     }
   }
 
@@ -200,7 +191,7 @@ program Labyrinth777 {
       found_jumper()
     }
     else {
-      show(maze)
+      show(pos, row_view, energy)
     }
   }
 

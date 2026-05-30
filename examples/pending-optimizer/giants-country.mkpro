@@ -20,38 +20,21 @@ program GiantsCountry {
     plans: cells(giant_country) = random()
 
     tile: counter 0..9 = 0
-    challenge: packed = 0
+    memory_code: packed = 0
     warning_pattern: packed = 70000008
   }
 
-  world giant_country {
-    // A hall, not a free grid: most turns advance forward, while floor jumps are
-    // paid shortcuts through a dangerous generated sequence.
-    position pos {
-      encoding decimal_player
-    }
-
-  }
-
-  screen cave {
-    show("8.Е6-ЕГ C")
-  }
-
-  screen warning {
-    show(warning_pattern)
-  }
-
-  screen memory {
-    show(challenge)
-  }
+  // A hall, not a free grid: most turns advance forward, while floor jumps are
+  // paid shortcuts through a dangerous generated sequence.
+  giant_country: board(decimal_player)
 
   fn exhausted() {
     show("ЕГГОГ")
     halt()
   }
 
-  turn {
-    show(cave)
+  loop {
+    show("8.Е6-ЕГ C")
     action = read()
 
     match action {
@@ -74,7 +57,7 @@ program GiantsCountry {
         encounter(tile)
       }
       else {
-        show(cave)
+        show("8.Е6-ЕГ C")
       }
       pos++
     }
@@ -89,7 +72,7 @@ program GiantsCountry {
       1 => jump_to(2)
       2 => jump_to(3)
       3 => jump_to(1)
-      otherwise => show(cave)
+      otherwise => show("8.Е6-ЕГ C")
     }
     if strength <= 0 {
       exhausted()
@@ -103,114 +86,121 @@ program GiantsCountry {
 
   fn hit_wall() {
     strength -= 7
-    show(cave)
+    show("8.Е6-ЕГ C")
   }
 
-  encounters tile {
-    // Encounters all share the same shape: remember a challenge, then convert
+  fn encounter(encounter_tile) {
+    // Events all share the same shape: remember a code, then convert
     // success into score or mobility and failure into strength loss.
-    0 {
-      show(cave)
+    match encounter_tile {
+      0 => show("8.Е6-ЕГ C")
+      1 => event_ladder(encounter_tile)
+      2 => event_2(encounter_tile)
+      3 => event_3(encounter_tile)
+      4 => event_4(encounter_tile)
+      5 => event_5(encounter_tile)
+      6 => event_6(encounter_tile)
+      7 => event_7(encounter_tile)
+      9 => event_9(encounter_tile)
     }
+  }
 
-    1 {
-      challenge tile as challenge using warning, memory, answer {
-        success {
-          reward_ladder()
-        }
-        failure {
-          strength--
-        }
-      }
+  fn ask_code(question) {
+    memory_code = question
+    show(warning_pattern)
+    show(memory_code)
+    answer = read()
+  }
+
+  fn event_ladder(question) {
+    ask_code(question)
+    if answer == memory_code {
+      reward_ladder()
     }
-
-    2 {
-      challenge tile as challenge using warning, memory, answer {
-        success {
-          strength += 2
-          plans -= pos
-        }
-        failure {
-          strength -= 2
-        }
-      }
+    else {
+      strength--
     }
+  }
 
-    3 {
-      challenge tile as challenge using warning, memory, answer {
-        success {
-          strength++
-          score++
-          plans -= pos
-        }
-        failure {
-          strength -= 3
-        }
-      }
+  fn event_2(question) {
+    ask_code(question)
+    if answer == memory_code {
+      strength += 2
+      plans -= pos
     }
-
-    4 {
-      challenge tile as challenge using warning, memory, answer {
-        success {
-          score += 2
-          plans -= pos
-        }
-        failure {
-          strength -= 4
-        }
-      }
+    else {
+      strength -= 2
     }
+  }
 
-    5 {
-      challenge tile as challenge using warning, memory, answer {
-        success {
-          strength--
-          score += 3
-          plans -= pos
-        }
-        failure {
-          strength -= 5
-        }
-      }
+  fn event_3(question) {
+    ask_code(question)
+    if answer == memory_code {
+      strength++
+      score++
+      plans -= pos
     }
-
-    6 {
-      challenge tile as challenge using warning, memory, answer {
-        success {
-          strength -= 2
-          score += 4
-          plans -= pos
-        }
-        failure {
-          strength -= 6
-        }
-      }
+    else {
+      strength -= 3
     }
+  }
 
-    7 {
-      challenge tile as challenge using warning, memory, answer {
-        success {
-          strength -= 4
-          score += 6
-          plans -= pos
-        }
-        failure {
-          strength -= 8
-        }
-      }
+  fn event_4(question) {
+    ask_code(question)
+    if answer == memory_code {
+      score += 2
+      plans -= pos
     }
+    else {
+      strength -= 4
+    }
+  }
 
-    9 {
-      challenge tile as challenge using warning, memory, answer {
-        success {
-          strength -= 5
-          score += 7
-          plans -= pos
-        }
-        failure {
-          strength -= 9
-        }
-      }
+  fn event_5(question) {
+    ask_code(question)
+    if answer == memory_code {
+      strength--
+      score += 3
+      plans -= pos
+    }
+    else {
+      strength -= 5
+    }
+  }
+
+  fn event_6(question) {
+    ask_code(question)
+    if answer == memory_code {
+      strength -= 2
+      score += 4
+      plans -= pos
+    }
+    else {
+      strength -= 6
+    }
+  }
+
+  fn event_7(question) {
+    ask_code(question)
+    if answer == memory_code {
+      strength -= 4
+      score += 6
+      plans -= pos
+    }
+    else {
+      strength -= 8
+    }
+  }
+
+  fn event_9(question) {
+    ask_code(question)
+    if answer == memory_code {
+      strength -= 5
+      score += 7
+      plans -= pos
+    }
+    else {
+      strength -= 9
     }
   }
 
@@ -221,7 +211,7 @@ program GiantsCountry {
       1 => ladder_floor_1()
       2 => ladder_floor_2()
       3 => ladder_floor_3()
-      otherwise => show(cave)
+      otherwise => show("8.Е6-ЕГ C")
     }
     plans -= pos
   }

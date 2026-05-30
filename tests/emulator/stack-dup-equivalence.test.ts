@@ -18,7 +18,7 @@ const SOURCE = `program SquareSum {
     result: counter 0..99 = 0
   }
 
-  turn {
+  loop {
     x = read()
     y = read()
     result = (x + y) * (x + y)

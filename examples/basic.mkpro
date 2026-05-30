@@ -1,5 +1,5 @@
 // Smallest useful program shape: two inputs become one displayed value. It is
-// intentionally boring so parser, allocator, and screen lowering have a stable
+// intentionally boring so parser, allocator, and display lowering have a stable
 // smoke test that is easy to inspect.
 
 program BasicSum {
@@ -7,9 +7,9 @@ program BasicSum {
     result: counter 0..99 = 0
   }
 
-  turn {
+  loop {
     // The whole observable story is "enter two digits, see their sum"; there is
-    // no persistent game state hidden behind the screen.
+    // no persistent game state hidden behind the display.
     x = read()
     y = read()
     result = x + y

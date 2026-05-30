@@ -519,13 +519,6 @@ function compileMKProOnce(
       name: "intent-domain-lowering",
       detail: `Lowered ${ast.v2.state.length} state fields and ${ast.v2.rules.length} rules through the generic intent pipeline.`,
     });
-    const sharedChallengeHelpers = ast.procs.filter((proc) => proc.name.startsWith("encounter_effects_")).length;
-    if (sharedChallengeHelpers > 0) {
-      optimizations.push({
-        name: "shared-challenge-effect-lowering",
-        detail: `Collapsed ${sharedChallengeHelpers} repeated encounter challenge/effect table(s) into shared formula-driven helper logic.`,
-      });
-    }
   }
   eliminateUnreachableV2Procs(ast, optimizations);
   liftFunctionCallsInExpressions(ast, optimizations);
@@ -1985,13 +1978,6 @@ function collectUnsupportedV2Statements(ast: NonNullable<ProgramAst["v2"]>): Arr
         }
         visit(statement.body);
       }
-      if (statement.kind === "v2_challenge") {
-        if (!isSimpleCompilerExpression(statement.expr)) {
-          unsupported.push({ text: `challenge ${statement.expr}`, line: statement.line });
-        }
-        visit(statement.successBody);
-        if (statement.failureBody) visit(statement.failureBody);
-      }
       if (statement.kind === "v2_match") {
         for (const matchCase of statement.cases) visit([matchCase.action]);
         if (statement.otherwise) visit([statement.otherwise]);
@@ -1999,7 +1985,6 @@ function collectUnsupportedV2Statements(ast: NonNullable<ProgramAst["v2"]>): Arr
     }
   };
   if (ast.body.length > 0) visit(ast.body);
-  if (ast.turn) visit(ast.turn.body);
   for (const rule of ast.rules) visit(rule.body);
   return unsupported;
 }
@@ -4684,7 +4669,7 @@ class EmitContext {
         available: helperAvailable,
         reason: helperAvailable
           ? "shared packed display helper was not the cheapest display strategy"
-          : "screen is not repeated often enough for a shared packed display helper",
+          : "display is not repeated often enough for a shared packed display helper",
       },
       {
         variant: "display-byte-helper",
@@ -4692,7 +4677,7 @@ class EmitContext {
         available: displayByteHelperAvailable,
         reason: displayByteHelperAvailable
           ? "shared display-byte helper was not the cheapest display strategy"
-          : "screen is not repeated often enough for a shared display-byte helper",
+          : "display is not repeated often enough for a shared display-byte helper",
       },
       {
         variant: "display-byte-builder",
@@ -14305,14 +14290,6 @@ const optimizerCapabilities: Array<{
     detail: "Lowers high-level command dispatch automatically; small proven dispatches may use indirect or super-dark dispatch.",
   },
   {
-    id: "shared-challenge-effect-lowering",
-    category: "data",
-    source: "documented",
-    requires: [],
-    activeWhen: ["shared-challenge-effect-lowering"],
-    detail: "Recognizes repeated challenge protocols whose branches differ by numeric state deltas and common cell updates, then lowers them as one shared formula-driven effect table.",
-  },
-  {
     id: "arithmetic-if-select",
     category: "flow",
     source: "documented",
@@ -15064,12 +15041,12 @@ function buildProofReport(
         detail: `Collected source ranges for ${ranged.map((field) => field.name).join(", ")}.`,
       });
     }
-    const observed = ast.v2.screens.flatMap((screen) => screen.sources);
+    const observed = ast.displays.flatMap((display) => display.sources);
     if (observed.length > 0) {
       proofs.push({
         id: "observability",
         status: "proved",
-        detail: `Visible state is limited by screen declarations: ${[...new Set(observed)].join(", ")}.`,
+        detail: `Visible state is limited by display output: ${[...new Set(observed)].join(", ")}.`,
       });
     }
   }
@@ -15077,7 +15054,7 @@ function buildProofReport(
     proofs.push({
       id: "display-byte-observable-boundary",
       status: "assumed",
-      detail: "Display-byte candidates are bounded by screen declarations and the exact mk61 profile.",
+      detail: "Display-byte candidates are bounded by display output and the exact mk61 profile.",
     });
   }
   const formalOperands = items
@@ -15162,9 +15139,7 @@ function countV2IntentNodes(ast: ProgramAst): number {
   return (
     1 +
     v2.state.length +
-    v2.screens.length +
     (v2.body.length > 0 ? countV2Statements(v2.body) : 0) +
-    (v2.turn ? 1 + countV2Statements(v2.turn.body) : 0) +
     v2.rules.reduce((sum, rule) => sum + 1 + countV2Statements(rule.body), 0)
   );
 }
@@ -15185,9 +15160,8 @@ function countV2Statements(statements: V2StatementAst[]): number {
     if (statement.kind === "v2_while") {
       count += countV2Statements(statement.body);
     }
-    if (statement.kind === "v2_challenge") {
-      count += countV2Statements(statement.successBody);
-      if (statement.failureBody) count += countV2Statements(statement.failureBody);
+    if (statement.kind === "v2_loop") {
+      count += countV2Statements(statement.body);
     }
     if (statement.kind === "v2_raw") {
       count += statement.inputs.length + statement.outputs.length + statement.lines.length;

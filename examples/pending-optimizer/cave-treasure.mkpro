@@ -18,7 +18,7 @@ program CaveTreasure {
 
     // Food is the clock, dynamite is the route override, treasure is the score;
     // keeping them separate is what gives the tiny cave meaningful choices.
-    // They are resources in registers; the visible screen is the cave coordinate.
+    // They are resources in registers; the visible display is the cave coordinate.
     dynamite: counter 0..9 = 4
     treasure: counter 0..9 = 0
 
@@ -27,18 +27,9 @@ program CaveTreasure {
     robber_roll: counter 0..9 = 0
   }
 
-  world cave {
-    // Doors tax food on ordinary movement, while walls require an explicit
-    // break action. That split mirrors how the original cave creates decisions.
-    position pos {
-      encoding packed_decimal_zero_run
-    }
-
-  }
-
-  screen main {
-    show(pos)
-  }
+  // Doors tax food on ordinary movement, while walls require an explicit
+  // break action. That split mirrors how the original cave creates decisions.
+  cave: board(packed_decimal_zero_run)
 
   fn ignored() {
     halt(0)
@@ -48,8 +39,8 @@ program CaveTreasure {
     halt(11)
   }
 
-  turn {
-    show(main)
+  loop {
+    show(pos)
     key = read()
     food--
 
@@ -128,7 +119,7 @@ program CaveTreasure {
     // Robber encounters are a second decision surface after treasure discovery;
     // the cache is already consumed, so refusing is safe but unprofitable.
     if robber == 1 {
-      show(main)
+      show(pos)
       fight_key = read()
       match fight_key {
         0 => decline_fight()
@@ -152,6 +143,6 @@ program CaveTreasure {
       food -= 3
     }
     robber = 0
-    show(main)
+    show(pos)
   }
 }

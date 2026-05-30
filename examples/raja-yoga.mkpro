@@ -18,10 +18,6 @@ program RajaYoga {
     steps: counter 0..99 = 0
   }
 
-  screen path {
-    show(stage, adept, goal, old_age)
-  }
-
   fn attained() {
     halt(888)
   }
@@ -30,12 +26,12 @@ program RajaYoga {
     halt(-999)
   }
 
-  turn {
+  loop {
     await_effort()
   }
 
   fn await_effort() {
-    show(path)
+    show(stage, adept, goal, old_age)
     effort = read()
     steps++
 

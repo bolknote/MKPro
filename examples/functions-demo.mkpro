@@ -17,7 +17,7 @@ program FunctionsDemo {
     return square(a) + square(b)
   }
 
-  turn {
+  loop {
     x = read()
     y = read()
     result = sum_of_squares(x, y)

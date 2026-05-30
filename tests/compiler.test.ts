@@ -134,7 +134,7 @@ program SmallSetHelpers {
     hit: counter -999..999 = 0
   }
 
-  turn {
+  loop {
     near = near_any(room, 1, pit1, pit2)
     hit = eq_any(room, pit1, pit2)
     halt(near + hit)
@@ -166,7 +166,7 @@ program RandomCellReuse {
     c: coord(grid) = 1
   }
 
-  turn {
+  loop {
     a = random_cell(grid)
     b = random_cell(grid)
     c = random_cell(grid)
@@ -202,13 +202,11 @@ program SimpleRules {
     score: counter 0..9 = 1
     next: counter 0..9 = 0
   }
-  screen main {
-    show(score)
-  }
-  turn {
+
+  loop {
     key = read()
     inc()
-    show(main)
+    show(score)
   }
   fn inc() {
     next = score + 1
@@ -231,7 +229,7 @@ program SimpleRules {
 
     expect(reference).not.toMatch(/core\s+exact/iu);
     expect(reference).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
-    expect(reference).toMatch(/world cave/u);
+    expect(reference).toMatch(/cave: board\(packed_decimal_zero_run\)/u);
     expect(reference).toMatch(/cells\(cave\) = random\(\)/u);
 
     expect(() => compileMKPro(reference, { budget: 999 })).toThrow(/outside 00\.\.A4/u);

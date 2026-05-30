@@ -22,27 +22,15 @@ program SeaBattle {
     enemy_report: counter -99..0 = 0
   }
 
-  screen battle {
-    show(calculator_shot)
-  }
-
-  screen hit {
-    show(enemy_report)
-  }
-
-  screen player_victory {
-    show("-8CEC6-L-")
-  }
-
   fn enemy_win() {
     halt(33333331)
   }
 
   fn player_win() {
-    show(player_victory)
+    show("-8CEC6-L-")
   }
 
-  turn {
+  loop {
     calculator_turn()
     response = read()
 
@@ -58,7 +46,7 @@ program SeaBattle {
     // The calculator reveals a target cell, then waits for the player to report
     // whether that shot hit.
     calculator_shot = int(random() * 100)
-    show(battle)
+    show(calculator_shot)
   }
 
   fn calculator_hit() {
@@ -86,7 +74,7 @@ program SeaBattle {
       }
       else {
         enemy_report = -enemy_ships
-        show(hit)
+        show(enemy_report)
       }
     }
   }

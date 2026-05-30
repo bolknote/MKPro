@@ -16,7 +16,7 @@ program FunctionDemo {
   fn double(n) {
     return n + n
   }
-  turn {
+  loop {
     x = read()
     result = double(x)
     halt(result)
@@ -43,7 +43,7 @@ program Nested {
   fn dbl(n) {
     return n + n
   }
-  turn {
+  loop {
     x = read()
     result = dbl(inc(x))
     halt(result)
@@ -70,7 +70,7 @@ program Sign {
       return 1
     }
   }
-  turn {
+  loop {
     x = read()
     result = sign(x)
     halt(result)
@@ -84,7 +84,7 @@ program Sign {
     expect(() =>
       compileMKPro(`
 program BadReturn {
-  turn {
+  loop {
     return 1
   }
 }
@@ -104,7 +104,7 @@ program PartialReturn {
       return 0
     }
   }
-  turn {
+  loop {
     x = read()
     result = maybe(x)
     halt(result)
@@ -124,7 +124,7 @@ program Recursive {
   fn loopy(n) {
     return loopy(n)
   }
-  turn {
+  loop {
     x = read()
     result = loopy(x)
     halt(result)
@@ -147,7 +147,7 @@ program Mutual {
   fn pong(n) {
     return ping(n)
   }
-  turn {
+  loop {
     x = read()
     result = ping(x)
     halt(result)
@@ -167,7 +167,7 @@ program EmptyReturn {
   fn nothing(n) {
     return
   }
-  turn {
+  loop {
     x = read()
     result = nothing(x)
     halt(result)

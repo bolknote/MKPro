@@ -30,7 +30,7 @@ program BadExpression {
   state {
     score: counter 0..9 = 0
   }
-  turn {
+  loop {
     score = 1 2
   }
 }
@@ -44,7 +44,7 @@ program BadExpression {
     const ast = parseProgram(`
 # also a comment
 program Comments {
-  turn {
+  loop {
     halt(1) // trailing
   }
 }
@@ -58,11 +58,9 @@ program Demo {
   state {
     score: counter 0..9 = 0
   }
-  screen main {
+
+  loop {
     show(score)
-  }
-  turn {
-    show(main)
     key = read()
     match key {
       1 => inc()
@@ -76,30 +74,28 @@ program Demo {
 `);
     expect(ast.v2?.name).toBe("Demo");
     expect(ast.states[0]?.fields.some((field) => field.name === "key")).toBe(true);
-    const turn = ast.entries[0]?.body[0];
-    expect(turn?.kind).toBe("loop");
-    if (turn?.kind !== "loop") throw new Error("expected turn loop");
-    expect(turn.body.some((statement) => statement.kind === "if")).toBe(true);
+    const loop = ast.entries[0]?.body[0];
+    expect(loop?.kind).toBe("loop");
+    if (loop?.kind !== "loop") throw new Error("expected loop");
+    expect(loop.body.some((statement) => statement.kind === "if")).toBe(true);
   });
 
-  it("parses screen text fragments as ordinary show items", () => {
+  it("parses display text fragments as ordinary show items", () => {
     const ast = parseProgram(`
 program BeerScreen {
   state {
     bottles: counter 0..99 = stack.X
   }
-  screen beer {
+
+  loop {
     show("BEEr", bottles:02)
-  }
-  turn {
-    show(beer)
   }
 }
 `);
 
-    expect(ast.v2?.screens[0]?.items).toEqual([
-      { kind: "literal", text: "BEEr", line: 7 },
-      { kind: "source", name: "bottles", width: 2, pad: "zero", line: 7 },
+    expect(ast.displays[0]?.items).toEqual([
+      { kind: "literal", text: "BEEr", line: 8 },
+      { kind: "source", name: "bottles", width: 2, pad: "zero", line: 8 },
     ]);
     expect(ast.displays[0]?.sources).toEqual(["bottles"]);
   });
@@ -107,16 +103,14 @@ program BeerScreen {
   it("parses empty display string fragments", () => {
     const ast = parseProgram(`
 program EmptyScreen {
-  screen blank {
+
+  loop {
     show("")
-  }
-  turn {
-    show(blank)
   }
 }
 `);
 
-    expect(ast.v2?.screens[0]?.items).toMatchObject([
+    expect(ast.displays[0]?.items).toMatchObject([
       { kind: "literal", text: "" },
     ]);
     expect(ast.displays[0]?.sources).toEqual([]);
@@ -125,16 +119,14 @@ program EmptyScreen {
   it("parses bare empty show statements", () => {
     const ast = parseProgram(`
 program BareEmptyScreen {
-  screen blank {
+
+  loop {
     show()
-  }
-  turn {
-    show(blank)
   }
 }
 `);
 
-    expect(ast.v2?.screens[0]?.items).toEqual([]);
+    expect(ast.displays[0]?.items).toEqual([]);
     expect(ast.displays[0]?.sources).toEqual([]);
   });
 
@@ -145,18 +137,16 @@ program CounterScreen {
     a: counter 0..9 = 2
     b: counter 0..9 = 5
   }
-  screen view {
+
+  loop {
     show(a, b)
-  }
-  turn {
-    show(view)
   }
 }
 `);
 
-    expect(ast.v2?.screens[0]?.items).toEqual([
-      { kind: "source", name: "a", line: 8 },
-      { kind: "source", name: "b", line: 8 },
+    expect(ast.displays[0]?.items).toEqual([
+      { kind: "source", name: "a", line: 9 },
+      { kind: "source", name: "b", line: 9 },
     ]);
   });
 
@@ -167,11 +157,9 @@ program StatusScreen {
     die: counter 1..6 = 1
     turn_score: counter 0..99 = 0
   }
-  screen status {
+
+  loop {
     show(die ".-" turn_score:02)
-  }
-  turn {
-    show(status)
   }
 }
 `)).toThrow(/Display fragments must be separated by commas/u);
@@ -184,19 +172,17 @@ program StatusScreen {
     die: counter 1..6 = 1
     turn_score: counter 0..99 = 0
   }
-  screen status {
+
+  loop {
     show(die, ".-", turn_score:02)
-  }
-  turn {
-    show(status)
   }
 }
 `);
 
-    expect(ast.v2?.screens[0]?.items).toEqual([
-      { kind: "source", name: "die", line: 8 },
-      { kind: "literal", text: ".-", line: 8 },
-      { kind: "source", name: "turn_score", width: 2, pad: "zero", line: 8 },
+    expect(ast.displays[0]?.items).toEqual([
+      { kind: "source", name: "die", line: 9 },
+      { kind: "literal", text: ".-", line: 9 },
+      { kind: "source", name: "turn_score", width: 2, pad: "zero", line: 9 },
     ]);
   });
 
@@ -207,20 +193,18 @@ program NumericFragments {
     a: counter 0..9 = 2
     b: counter 0..9 = 3
   }
-  screen view {
+
+  loop {
     show(123, a, b, 1)
-  }
-  turn {
-    show(view)
   }
 }
 `);
 
-    expect(ast.v2?.screens[0]?.items).toEqual([
-      { kind: "literal", text: "123", line: 8 },
-      { kind: "source", name: "a", line: 8 },
-      { kind: "source", name: "b", line: 8 },
-      { kind: "literal", text: "1", line: 8 },
+    expect(ast.displays[0]?.items).toEqual([
+      { kind: "literal", text: "123", line: 9 },
+      { kind: "source", name: "a", line: 9 },
+      { kind: "source", name: "b", line: 9 },
+      { kind: "literal", text: "1", line: 9 },
     ]);
   });
 
@@ -230,7 +214,7 @@ program InlineStateShow {
   state {
     score: counter 0..99 = 7
   }
-  turn {
+  loop {
     show(score)
   }
 }
@@ -252,7 +236,7 @@ program Demo {
     pos: coord(arena) = 1
     delta: counter -100..100 = 0
   }
-  turn {
+  loop {
     step(direction(key))
   }
   fn step(delta) {
@@ -263,7 +247,7 @@ program Demo {
     expect(ast.v2?.rules[0]?.params).toEqual(["delta"]);
     const loop = ast.entries[0]?.body[0];
     expect(loop?.kind).toBe("loop");
-    if (loop?.kind !== "loop") throw new Error("expected turn loop");
+    if (loop?.kind !== "loop") throw new Error("expected loop");
     expect(loop.body).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "assign", target: "delta" }),
       expect.objectContaining({ kind: "call", block: "step" }),
@@ -277,11 +261,8 @@ program GuardedDirection {
     key: packed = 0
     pos: coord(cave) = 1
   }
-  world cave {
-    position pos {
-    }
-  }
-  turn {
+  cave: board(row_scan)
+  loop {
     key = read()
     match key {
       4 => move_left()
@@ -329,7 +310,7 @@ program CardinalDirection {
     key: packed = 0
     pos: packed = 0
   }
-  turn {
+  loop {
     match key {
       2, 4, 6, 8 => step(direction(key))
       otherwise => halt(0)
@@ -353,7 +334,7 @@ program CardinalDirection {
     expect(() =>
       parseProgram(`
 program BadMissingArg {
-  turn {
+  loop {
     jump_to()
   }
   fn jump_to(floor) {
@@ -366,7 +347,7 @@ program BadMissingArg {
     expect(() =>
       parseProgram(`
 program BadExtraArg {
-  turn {
+  loop {
     done(1)
   }
   fn done() {
@@ -384,7 +365,7 @@ program Jump {
     floor: counter 1..4 = 1
     strength: counter 0..9 = 9
   }
-  turn {
+  loop {
     match floor {
       1 => jump_to(2)
       2 => jump_to(3)
@@ -400,7 +381,7 @@ program Jump {
     expect(ast.states[0]?.fields.some((field) => field.name === "f")).toBe(false);
     const loop = ast.entries[0]?.body[0];
     expect(loop?.kind).toBe("loop");
-    if (loop?.kind !== "loop") throw new Error("expected turn loop");
+    if (loop?.kind !== "loop") throw new Error("expected loop");
     const dispatch = loop.body[0];
     expect(dispatch?.kind).toBe("dispatch");
     if (dispatch?.kind !== "dispatch") throw new Error("expected dispatch");
@@ -421,7 +402,7 @@ program EffectTable {
     tile: counter 0..9 = 0
     energy: counter 0..9 = 9
   }
-  turn {
+  loop {
     match tile {
       1 => pool_exit()
       2 => ladder_exit()
@@ -445,7 +426,7 @@ program EffectTable {
 `);
     const loop = ast.entries[0]?.body[0];
     expect(loop?.kind).toBe("loop");
-    if (loop?.kind !== "loop") throw new Error("expected turn loop");
+    if (loop?.kind !== "loop") throw new Error("expected loop");
     expect(loop.body.map((statement) => statement.kind)).toEqual(["assign", "if", "if", "if"]);
     expect(loop.body.some((statement) => statement.kind === "dispatch")).toBe(false);
   });
@@ -457,7 +438,7 @@ program BinaryChoice {
     choice: counter 0..9 = 0
     score: counter 0..9 = 0
   }
-  turn {
+  loop {
     match choice {
       0 => score++
       otherwise => score--
@@ -467,7 +448,7 @@ program BinaryChoice {
 `);
     const loop = ast.entries[0]?.body[0];
     expect(loop?.kind).toBe("loop");
-    if (loop?.kind !== "loop") throw new Error("expected turn loop");
+    if (loop?.kind !== "loop") throw new Error("expected loop");
     expect(loop.body[0]?.kind).toBe("if");
   });
 
@@ -478,7 +459,7 @@ program Cycle {
     floor: counter 1..3 = 1
     strength: counter 0..9 = 9
   }
-  turn {
+  loop {
     match floor {
       1 => jump_to(2)
       2 => jump_to(3)
@@ -493,7 +474,7 @@ program Cycle {
 `);
     const loop = ast.entries[0]?.body[0];
     expect(loop?.kind).toBe("loop");
-    if (loop?.kind !== "loop") throw new Error("expected turn loop");
+    if (loop?.kind !== "loop") throw new Error("expected loop");
     expect(loop.body.map((statement) => statement.kind)).toEqual(["assign", "if", "assign"]);
     expect(ast.procs.some((proc) => proc.name === "jump_to")).toBe(false);
   });
@@ -505,14 +486,14 @@ program Demo {
     value: counter -9..9 = 3
     result: counter -9..9 = 0
   }
-  turn {
+  loop {
     result = -value
   }
 }
 `);
     const loop = ast.entries[0]?.body[0];
     expect(loop?.kind).toBe("loop");
-    if (loop?.kind !== "loop") throw new Error("expected turn loop");
+    if (loop?.kind !== "loop") throw new Error("expected loop");
     const assignment = loop.body.find((statement) => statement.kind === "assign" && statement.target === "result");
     expect(assignment?.kind).toBe("assign");
     if (assignment?.kind !== "assign") throw new Error("expected result assignment");
@@ -529,13 +510,16 @@ program Demo {
     score: counter 0..9 = 0
     food: counter 0..9 = 5
   }
-  turn {
+  loop {
     score++
     food--
   }
 }
 `);
-    expect(ast.v2?.turn?.body).toEqual([
+    const sourceLoop = ast.v2?.body[0];
+    expect(sourceLoop?.kind).toBe("v2_loop");
+    if (sourceLoop?.kind !== "v2_loop") throw new Error("expected source loop");
+    expect(sourceLoop.body).toEqual([
       expect.objectContaining({ kind: "v2_update", target: "score", op: "+=", expr: "1" }),
       expect.objectContaining({ kind: "v2_update", target: "food", op: "-=", expr: "1" }),
     ]);
@@ -545,7 +529,7 @@ program Demo {
     expect(() =>
       parseProgram(`
 program Bad {
-  turn {
+  loop {
     step(direction(key))
   }
   rule step(delta) {
@@ -558,7 +542,7 @@ program Bad {
     expect(() =>
       parseProgram(`
 program Bad {
-  turn {
+  loop {
     step direction(key)
   }
   fn step(delta) {
@@ -574,7 +558,7 @@ program Bad {
   fn move(delta) {
     halt(0)
   }
-  turn {
+  loop {
     halt(0)
   }
 }
@@ -588,7 +572,7 @@ program DirectionOtherwise {
   state {
     pos: counter -99..99 = 0
   }
-  turn {
+  loop {
     match key {
       2, 4, 5, 6, 8 => step(direction(key))
       otherwise => wait()
@@ -621,7 +605,7 @@ program DirectionOtherwise {
     );
   });
 
-  it("parses v2 world, boards, cell sets, state config, encounters, and reference metadata", () => {
+  it("parses compact board domains, cell sets, state config, and reference metadata", () => {
     const ast = parseProgram(`
 reference demo_reference
 
@@ -635,24 +619,16 @@ program Demo {
     enemy_fleet: cells(ocean) = random()
     enemy_ships: counter 0..99 = stack.X
   }
-  world demo_world {
-    position pos {
-      encoding decimal_player
+  demo_world: board(decimal_player)
+
+  loop {
+    match key {
+      0 => show(score)
+      3 => score_point()
     }
   }
-  screen main {
-    show(pos, strength)
-  }
-  turn {
-    encounter(key)
-  }
-  encounters key {
-    0 {
-      show(main)
-    }
-    3 {
-      points++
-    }
+  fn score_point() {
+    points++
   }
 }
 `);
@@ -660,12 +636,11 @@ program Demo {
     expect(ast.reference).toBe("demo_reference");
     expect(ast.v2?.boards[0]).toMatchObject({ name: "ocean", xMin: 0, xMax: 9, yMin: 0, yMax: 9, width: 10, height: 10 });
     expect(ast.v2?.worlds[0]?.name).toBe("demo_world");
-    expect(ast.v2?.encounters[0]?.cases.map((encounterCase) => encounterCase.value)).toEqual(["0", "3"]);
     expect(ast.domains.some((domain) => domain.domainKind === "maze" && domain.name === "ocean")).toBe(true);
     expect(ast.domains.some((domain) => domain.domainKind === "bitset" && domain.name === "enemy_fleet")).toBe(true);
     expect(ast.states[0]?.fields.some((field) => field.name === "enemy_ships" && field.type === "range")).toBe(true);
     expect(ast.domains.some((domain) => domain.domainKind === "maze" && domain.name === "demo_world")).toBe(true);
-    expect(ast.procs.some((proc) => proc.name === "encounter")).toBe(true);
+    expect(ast.procs.some((proc) => proc.name === "score_point")).toBe(true);
   });
 
   it("lowers coord_list state to random-unique coordinate registers", () => {
@@ -677,16 +652,14 @@ program Demo {
     foxes: coord_list(field, 3) = random_unique()
     bearing: counter 0..3 = 0
   }
-  screen main {
-    show(bearing)
-  }
-  turn {
+
+  loop {
     cell = read()
     if cell in foxes {
-      show(main)
+      show(score)
     }
     bearing = line_count(foxes, cell)
-    show(main)
+    show(score)
   }
 }
 `);
@@ -712,7 +685,7 @@ program Demo {
   fn escaped() {
     halt(777)
   }
-  turn {
+  loop {
     pos = move(pos, east)
     escaped()
   }
@@ -732,7 +705,7 @@ program Demo {
     ]));
   });
 
-  it("parses human board and world query expressions", () => {
+  it("parses human board and board query expressions", () => {
     const ast = parseProgram(`
 program Queries {
   state {
@@ -744,11 +717,8 @@ program Queries {
     tile: counter 0..9 = 0
     threat: coord(cave)
   }
-  world cave {
-    position pos {
-    }
-  }
-  turn {
+  cave: board(row_scan)
+  loop {
     bearing = line_count(foxes, pos)
     clue = neighbor_count(mines, pos)
     tile = cell_at(cave, pos)
@@ -765,8 +735,11 @@ program Queries {
     expect(lowered).toMatch(/neighbor_count/u);
     expect(lowered).not.toMatch(/cell_at/u);
     expect(lowered).toMatch(/digit_at/u);
-    const sourceTurn = ast.v2?.turn?.body.filter((statement) => statement.kind === "v2_assign");
-    expect(sourceTurn?.map((statement) => statement.kind === "v2_assign" ? statement.expr : undefined)).toContain("random_cell(cave)");
+    const sourceLoop = ast.v2?.body[0];
+    const sourceAssignments = sourceLoop?.kind === "v2_loop"
+      ? sourceLoop.body.filter((statement) => statement.kind === "v2_assign")
+      : [];
+    expect(sourceAssignments.map((statement) => statement.kind === "v2_assign" ? statement.expr : undefined)).toContain("random_cell(cave)");
   });
 
   it("lowers one-dimensional cell sets to decimal position masks", () => {
@@ -777,7 +750,7 @@ program LineMask {
     pos: coord(life) = 4
     hazards: cells(life) = random()
   }
-  turn {
+  loop {
     hazards += pos
     if pos in hazards {
       halt(1)
@@ -801,12 +774,8 @@ program PackedCaveMask {
     walls: cells(cave) = random()
     floor: counter 0..9 = 0
   }
-  world cave {
-    position pos {
-      encoding packed_decimal_zero_run
-    }
-  }
-  turn {
+  cave: board(packed_decimal_zero_run)
+  loop {
     walls -= pos
     if pos in walls {
       floor = pos.floor
@@ -826,7 +795,7 @@ program PackedCaveMask {
     expect(() =>
       parseProgram(`
 program Bad {
-  turn {
+  loop {
     end(missing)
   }
 }
@@ -839,7 +808,7 @@ program Bad {
   ending done {
     show(1)
   }
-  turn {
+  loop {
     done()
   }
 }
@@ -855,7 +824,7 @@ program Bad {
   fn done() {
     halt(2)
   }
-  turn {
+  loop {
     done()
   }
 }
@@ -865,7 +834,7 @@ program Bad {
     expect(() =>
       parseProgram(`
 program Bad {
-  turn {
+  loop {
     missing()
   }
 }
@@ -878,7 +847,7 @@ program Bad {
       parseProgram(`
 preload R9 = random_seed()
 program Bad {
-  turn {
+  loop {
     halt(0)
   }
 }
@@ -890,7 +859,7 @@ resource strength {
   register Ra
 }
 program Bad {
-  turn {
+  loop {
     halt(0)
   }
 }
@@ -898,37 +867,23 @@ program Bad {
     ).toThrow(/Unexpected top-level line 'resource strength \{'/u);
   });
 
-  it("parses challenge blocks inside function-era syntax", () => {
-    const ast = parseProgram(`
+  it("rejects removed challenge blocks", () => {
+    expect(() =>
+      parseProgram(`
 program Demo {
   state {
     tile: counter 0..9 = 0
-    score: counter 0..9 = 0
-    strength: counter 0..9 = 9
   }
-  screen warning {
-    show(tile)
-  }
-  screen memory {
-    show(tile)
-  }
-  turn {
+  loop {
     challenge tile as challenge using warning, memory, answer {
       success {
-        score++
-      }
-      failure {
-        strength -= 3
+        halt(1)
       }
     }
   }
 }
-`);
-    const loop = ast.entries[0]?.body[0];
-    expect(loop?.kind).toBe("loop");
-    if (loop?.kind !== "loop") throw new Error("expected turn loop");
-    expect(loop.body.some((statement) => statement.kind === "assign")).toBe(true);
-    expect(loop.body.some((statement) => statement.kind === "if")).toBe(true);
+`),
+    ).toThrow(/Use ordinary show\/read\/if statements instead of challenge blocks/u);
   });
 
   it("rejects old input declarations and bad target references", () => {
@@ -936,7 +891,7 @@ program Demo {
       parseProgram(`
 program OldInput {
   input key: digit
-  turn {
+  loop {
     halt(0)
   }
 }
@@ -947,15 +902,15 @@ program OldInput {
       parseProgram(`
 program BadEndingShow {
   fn done() {
-    show(missing_screen)
+    missing_screen()
     halt(0)
   }
-  turn {
+  loop {
     done()
   }
 }
 `),
-    ).toThrow(/Unknown screen 'missing_screen'/u);
+    ).toThrow(/Unknown function 'missing_screen'/u);
 
     expect(() =>
       parseProgram(`
@@ -963,10 +918,8 @@ program BadChallenge {
   state {
     tile: counter 0..9 = 0
   }
-  screen warning {
-    show(tile)
-  }
-  turn {
+
+  loop {
     challenge tile as challenge using warning, memory, answer {
       success {
         halt(1)
@@ -975,7 +928,7 @@ program BadChallenge {
   }
 }
 `),
-    ).toThrow(/Unknown challenge memory screen 'memory'/u);
+    ).toThrow(/Use ordinary show\/read\/if statements instead of challenge blocks/u);
   });
 
   it("rejects unknown state field syntax", () => {
@@ -985,7 +938,7 @@ program Bad {
   state {
     [use_X2] score: counter 0..9 = 0
   }
-  turn {
+  loop {
     halt(0)
   }
 }
@@ -1001,11 +954,8 @@ program Demo {
     next: coord(cave)
     walls: cells(cave) = random()
   }
-  world cave {
-    position pos {
-    }
-  }
-  turn {
+  cave: board(row_scan)
+  loop {
     halt(0)
   }
   fn advance() {
@@ -1049,7 +999,7 @@ program RawDemo {
     value: packed = 2
     result: packed = 0
   }
-  turn {
+  loop {
     raw {
       takes Y = value, X = 3
       returns X -> result
@@ -1064,7 +1014,8 @@ program RawDemo {
   }
 }
 `);
-    const raw = ast.v2?.turn?.body[0];
+    const sourceLoop = ast.v2?.body[0];
+    const raw = sourceLoop?.kind === "v2_loop" ? sourceLoop.body[0] : undefined;
     expect(raw?.kind).toBe("v2_raw");
     if (raw?.kind !== "v2_raw") throw new Error("expected v2_raw");
     expect(raw.inputs.map((input) => [input.slot, input.expr])).toEqual([
@@ -1085,7 +1036,7 @@ program RawDemo {
     expect(() =>
       parseProgram(`
 program BadRaw {
-  turn {
+  loop {
     raw {
       clobbers X
       code {
@@ -1102,7 +1053,7 @@ program BadRaw {
     expect(() =>
       parseProgram(`
 program Bad {
-  turn {
+  loop {
     require pos != 0 else show 0
   }
 }
@@ -1110,7 +1061,7 @@ program Bad {
     ).toThrow(/Function calls must look like 'name\(\.\.\.\)'/u);
   });
 
-  it("rejects unknown screen lines", () => {
+  it("rejects removed screen blocks", () => {
     expect(() =>
       parseProgram(`
 program Bad {
@@ -1121,12 +1072,12 @@ program Bad {
     show(score)
     style compact digits
   }
-  turn {
-    show(main)
+  loop {
+    show(score)
   }
 }
 `),
-    ).toThrow(/Unexpected screen line 'style compact digits'/u);
+    ).toThrow(/Use 'fn name\(\) \{ show\(\.\.\.\) \}' instead of screen blocks/u);
   });
 
   it("rejects unknown state and removed board/fleet config syntax", () => {
@@ -1136,7 +1087,7 @@ program Bad {
   state {
     walls: cells(cave) generated random
   }
-  turn {
+  loop {
     halt(0)
   }
 }
@@ -1151,7 +1102,7 @@ program Bad {
       generated random
     }
   }
-  turn {
+  loop {
     halt(0)
   }
 }
@@ -1163,7 +1114,7 @@ program Bad {
 program Bad {
   board ocean: 10x10 {
   }
-  turn {
+  loop {
     halt(0)
   }
 }
@@ -1175,7 +1126,7 @@ program Bad {
 program Bad {
   fleet enemy_fleet on ocean {
   }
-  turn {
+  loop {
     halt(0)
   }
 }
@@ -1190,7 +1141,7 @@ program Bad {
   state {
     pos: coord = 0
   }
-  turn {
+  loop {
     halt(0)
   }
 }
@@ -1203,7 +1154,7 @@ program Bad {
   state {
     score: counter() 0..9 = 0
   }
-  turn {
+  loop {
     halt(0)
   }
 }
@@ -1216,7 +1167,7 @@ program Bad {
   state {
     pos: coord(missing) = 0
   }
-  turn {
+  loop {
     halt(0)
   }
 }
@@ -1229,7 +1180,7 @@ program Bad {
   state {
     blocked: coord(cave) optional
   }
-  turn {
+  loop {
     halt(0)
   }
 }
@@ -1246,7 +1197,7 @@ program Bad {
   state {
     pos: coord(cave) = input.X
   }
-  turn {
+  loop {
     halt(0)
   }
 }
@@ -1267,7 +1218,7 @@ program Bad {
   state {
     ${field}
   }
-  turn {
+  loop {
     halt(0)
   }
 }

@@ -68,7 +68,7 @@ const MEMBERSHIP_PROGRAM = `program BitMembership {
     answer: counter 0..1 = 0
   }
 
-  turn {
+  loop {
     a = read()
     b = read()
     c = read()
@@ -92,7 +92,7 @@ const CLEAR_PROGRAM = `program BitClear {
     answer: counter 0..1 = 0
   }
 
-  turn {
+  loop {
     a = read()
     c = read()
     marks += c
@@ -116,7 +116,7 @@ const NEIGHBOR_PROGRAM = `program NeighborCount {
     answer: counter 0..9 = 0
   }
 
-  turn {
+  loop {
     a = read()
     b = read()
     probe = read()

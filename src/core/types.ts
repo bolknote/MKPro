@@ -205,12 +205,9 @@ export interface V2ProgramAst {
   kind: "v2_program";
   name: string;
   state: V2StateFieldAst[];
-  screens: V2ScreenAst[];
   boards: V2BoardAst[];
   worlds: V2WorldAst[];
-  encounters: V2EncounterTableAst[];
   body: V2StatementAst[];
-  turn?: V2TurnAst;
   rules: V2RuleAst[];
   line: number;
 }
@@ -252,30 +249,11 @@ export interface V2WorldPositionAst {
   line: number;
 }
 
-export interface V2EncounterTableAst {
-  kind: "v2_encounters";
-  expr: string;
-  cases: V2EncounterCaseAst[];
-  line: number;
-}
-
-export interface V2EncounterCaseAst {
-  value: string;
-  body: V2StatementAst[];
-  line: number;
-}
-
 export interface V2ScreenAst {
   kind: "v2_screen";
   name: string;
   sources: string[];
   items: DisplayItemAst[];
-  line: number;
-}
-
-export interface V2TurnAst {
-  kind: "v2_turn";
-  body: V2StatementAst[];
   line: number;
 }
 
@@ -293,7 +271,7 @@ export type V2StatementAst =
   | V2StopStatementAst
   | V2IfStatementAst
   | V2WhileStatementAst
-  | V2ChallengeStatementAst
+  | V2LoopStatementAst
   | V2MoveStatementAst
   | V2MatchStatementAst
   | V2InvokeStatementAst
@@ -337,15 +315,9 @@ export interface V2WhileStatementAst {
   line: number;
 }
 
-export interface V2ChallengeStatementAst {
-  kind: "v2_challenge";
-  expr: string;
-  successBody: V2StatementAst[];
-  failureBody?: V2StatementAst[];
-  challengeTarget: string;
-  warningScreen: string;
-  memoryScreen: string;
-  answerInput: string;
+export interface V2LoopStatementAst {
+  kind: "v2_loop";
+  body: V2StatementAst[];
   line: number;
 }
 

@@ -7,18 +7,14 @@ program CounterGame {
     food: counter 0..9 = 5
   }
 
-  screen main {
-    show(score, food)
-  }
-
   fn ignored() {
     halt(0)
   }
 
-  turn {
+  loop {
     // Invalid keys end quietly; the example is about state transitions, not
     // input validation ceremony.
-    show(main)
+    show(score, food)
     key = read()
 
     match key {
@@ -32,11 +28,11 @@ program CounterGame {
     // Marked hot because "gain" is the common happy path in the optimizer
     // examples that inspect function metadata.
     score++
-    show(main)
+    show(score, food)
   }
 
   fn spend() {
     food--
-    show(main)
+    show(score, food)
   }
 }

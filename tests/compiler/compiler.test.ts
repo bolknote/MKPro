@@ -21,7 +21,7 @@ entry main {
   it("emits a final stop for a minimal V2 program", () => {
     const result = compileOk(`
 program Minimal {
-  turn {
+  loop {
     halt(0)
   }
 }
@@ -36,7 +36,7 @@ program ZeroMinus {
   state {
     value: packed = 0
   }
-  turn {
+  loop {
     x = read()
     value = 0 - x
     halt(value)
@@ -55,7 +55,7 @@ program ConstantFold {
   state {
     value: packed = 0
   }
-  turn {
+  loop {
     value = 5 + 2
     halt(value)
   }
@@ -76,7 +76,7 @@ program IdentityAssignment {
   state {
     value: packed = 0
   }
-  turn {
+  loop {
     value = value
     halt(value)
   }
@@ -93,7 +93,7 @@ program GuardedCall {
     flag: flag = 0
     score: counter 0..9 = 0
   }
-  turn {
+  loop {
     flag = 1
     maybe_score()
     halt(score)
@@ -115,7 +115,7 @@ program GuardedCall {
   it("branches directly on a single-use input without storing it", () => {
     const result = compileOk(`
 program InputBranch {
-  turn {
+  loop {
     target = read()
     if target >= 0 {
       halt(1)
@@ -142,16 +142,14 @@ program ReturnSuffixGadget {
     d: packed = 0
   }
 
-  screen main {
-    show(b, c, d)
-  }
 
-  turn {
+
+  loop {
     alpha()
     beta()
     alpha()
     beta()
-    show(main)
+    show(b, c, d)
   }
 
   fn alpha() {
@@ -193,7 +191,7 @@ program GuardedPrologueGadget {
     halt(-999)
   }
 
-  turn {
+  loop {
     action = read()
     match action {
       1 => left()
@@ -249,7 +247,7 @@ program TinyMultiUseRule {
   state {
     score: counter 0..9 = 0
   }
-  turn {
+  loop {
     bump()
     bump()
     halt(score)
@@ -270,19 +268,17 @@ program OneShotInit {
     entered: flag = 0
     value: counter 0..9 = 0
   }
-  screen main {
-    show(value)
-  }
-  turn {
+
+  loop {
     if entered == 0 {
       entered = 1
       value++
-      show(main)
+      show(value)
     }
     else {
       key = read()
       value += key
-      show(main)
+      show(value)
     }
   }
 }
@@ -299,7 +295,7 @@ program NegativeConstantFold {
   state {
     value: packed = 0
   }
-  turn {
+  loop {
     value = -5 + 7
     halt(value)
   }
@@ -318,7 +314,7 @@ program ConstantDistribute {
   state {
     value: packed = 0
   }
-  turn {
+  loop {
     x = read()
     value = 2 * (2 + x)
     halt(value)
@@ -340,7 +336,7 @@ program NegativeConstantDistribute {
   state {
     value: packed = 0
   }
-  turn {
+  loop {
     x = read()
     value = -5 * (2 - x)
     halt(value)
@@ -364,7 +360,7 @@ program MultiVariableLinearFold {
   state {
     value: packed = 0
   }
-  turn {
+  loop {
     x = read()
     y = read()
     value = 2 * (x + y + 3) - (x - 4 * y)
@@ -387,7 +383,7 @@ program SignedUpdate {
     speed: packed = 3
     accel: packed = 2
   }
-  turn {
+  loop {
     height = height - speed - accel / 2
     halt(height)
   }
@@ -412,7 +408,7 @@ program NestedLinearFold {
   state {
     value: packed = 0
   }
-  turn {
+  loop {
     x = read()
     value = 5 * (2 + 3 * (2 + x))
     halt(value)
@@ -434,7 +430,7 @@ program ConstantBitwiseCallFold {
   state {
     value: packed = 0
   }
-  turn {
+  loop {
     value = bit_or(2, 4)
     halt(value)
   }
@@ -453,7 +449,7 @@ program ConstantPrimitiveCallFold {
   state {
     value: packed = 0
   }
-  turn {
+  loop {
     value = bit_or(2, 4) + bit_and(7, 3) + bit_xor(6, 3) + max(2, 9) + abs(-3) + sign(-12) + int(2.9) + frac(2.75) + inv(2) + pow(2, 3) + pow10(2)
     halt(value)
   }
@@ -474,7 +470,7 @@ program ConstantBitwiseNotFold {
   state {
     value: packed = 0
   }
-  turn {
+  loop {
     value = bit_not(99999999)
     halt(value)
   }
@@ -493,7 +489,7 @@ program ConstantMaxZeroFold {
   state {
     value: packed = 0
   }
-  turn {
+  loop {
     value = max(0, 5)
     halt(value)
   }
@@ -512,7 +508,7 @@ program FormulaPrimitives {
   state {
     value: packed = 0
   }
-  turn {
+  loop {
     x = read()
     y = read()
     value = max(pi(), sqr(x)) + inv(y) + pow(x, y) + bit_and(x, y) + bit_or(x, y) + bit_xor(x, y) + bit_not(x)
@@ -534,7 +530,7 @@ program FormulaHelpers {
     mask: packed = 0
     value: packed = 0
   }
-  turn {
+  loop {
     value = bit_mask(5) + bit_has(mask, 5)
     mask = bit_set(mask, 5)
     value = value + bit_clear(mask, 5) + bit_toggle(mask, 5)
@@ -560,11 +556,8 @@ program ClearAfterHit {
     pos: coord(cave) = 12
     marks: cells(cave) = random()
   }
-  world cave {
-    position pos {
-    }
-  }
-  turn {
+  cave: board(row_scan)
+  loop {
     if pos in marks {
       marks -= pos
       halt(1)
@@ -589,19 +582,15 @@ program FoxProbe {
     hit_value: packed = -20
     bearing: counter 0..9 = 0
   }
-  screen hit {
-    show(hit_value)
-  }
-  screen report {
-    show(bearing)
-  }
-  turn {
+
+
+  loop {
     cell = read()
     if cell in foxes {
-      show(hit)
+      show(hit_value)
     }
     bearing = line_count(foxes, cell)
-    show(report)
+    show(bearing)
   }
 }
 `);
@@ -620,7 +609,7 @@ program RepeatedMembershipProbe {
     occupied: cells(grid)
     score: counter 0..9 = 0
   }
-  turn {
+  loop {
     cell = read()
     if cell in occupied {
       score++
@@ -645,17 +634,15 @@ program CommonBranchTail {
     selector: counter 0..9 = 0
     value: counter 0..9 = 0
   }
-  screen view {
-    show(value)
-  }
-  turn {
+
+  loop {
     if selector == 0 {
       value = 1
-      show(view)
+      show(value)
     }
     else {
       value = 2
-      show(view)
+      show(value)
     }
   }
 }
@@ -672,22 +659,20 @@ program CommonDispatchTail {
     selector: counter 0..9 = 0
     value: counter 0..9 = 0
   }
-  screen view {
-    show(value)
-  }
-  turn {
+
+  loop {
     if selector == 1 {
       value = 1
-      show(view)
+      show(value)
     }
     else {
       if selector == 2 {
         value = 2
-        show(view)
+        show(value)
       }
       else {
         value = 3
-        show(view)
+        show(value)
       }
     }
   }
@@ -705,7 +690,7 @@ program CompactDirectionOnly {
     key: counter -9..9 = 2
     dir: packed = 0
   }
-  turn {
+  loop {
     match key {
       2, 4, 6, 8 => go(direction(key))
       otherwise => halt(0)
@@ -730,10 +715,8 @@ program XParamRule {
     key: counter 0..9 = 1
     pos: packed = 0
   }
-  screen view {
-    show(pos)
-  }
-  turn {
+
+  loop {
     match key {
       1 => go(1)
       2 => go(2)
@@ -743,7 +726,7 @@ program XParamRule {
   }
   fn go(delta) {
     pos = pos + delta
-    show(view)
+    show(pos)
   }
 }
 `);
@@ -762,14 +745,12 @@ program RepeatedPackedDisplay {
     b: packed = 2
     c: packed = 3
   }
-  screen view {
-    show(a, b, c)
-  }
-  turn {
+
+  loop {
     match selector {
-      1 => show(view)
-      2 => show(view)
-      3 => show(view)
+      1 => show(a, b, c)
+      2 => show(a, b, c)
+      3 => show(a, b, c)
       otherwise => halt(0)
     }
   }
@@ -787,11 +768,9 @@ program DisplayFields {
     a: counter 0..9 = 2
     b: counter 0..9 = 5
   }
-  screen view {
+
+  loop {
     show(a, b)
-  }
-  turn {
-    show(view)
   }
 }
 `);
@@ -811,7 +790,7 @@ program RepeatedExpression {
     b: packed = 0
     c: packed = 0
   }
-  turn {
+  loop {
     a = digit_at(map, pos - int(pos / 10) * 10)
     b = digit_at(map, pos - int(pos / 10) * 10)
     c = digit_at(map, pos - int(pos / 10) * 10)
@@ -831,7 +810,7 @@ program RemainderLowering {
     value: packed = 23
     ones: packed = 0
   }
-  turn {
+  loop {
     ones = value - 10 * int(value / 10)
     halt(ones)
   }
@@ -850,7 +829,7 @@ program AdjacentSetUpdates {
     mine: cells(grid)
     seen: cells(grid)
   }
-  turn {
+  loop {
     mine += cell
     seen += cell
     halt(mine + seen)
@@ -870,30 +849,26 @@ program RepeatedChallengePrompt {
     answer: packed = 0
     selector: counter 0..9 = 0
   }
-  screen warning {
+
+
+  loop {
     show(warning_value)
-  }
-  screen memory {
     show(memory_value)
-  }
-  turn {
-    show(warning)
-    show(memory)
     answer = read()
-    show(warning)
-    show(memory)
+    show(warning_value)
+    show(memory_value)
     answer = read()
-    show(warning)
-    show(memory)
+    show(warning_value)
+    show(memory_value)
     answer = read()
-    show(warning)
-    show(memory)
+    show(warning_value)
+    show(memory_value)
     answer = read()
-    show(warning)
-    show(memory)
+    show(warning_value)
+    show(memory_value)
     answer = read()
-    show(warning)
-    show(memory)
+    show(warning_value)
+    show(memory_value)
     answer = read()
     halt(answer)
   }
@@ -904,178 +879,6 @@ program RepeatedChallengePrompt {
     expect(result.report.optimizations.some((item) => item.name === "show-sequence-helper-call")).toBe(true);
   });
 
-  it("collapses repeated encounter challenges into formula-driven effect logic", () => {
-    const result = compileOk(`
-program SharedChallengeDemo {
-  state {
-    tile: counter 0..5 = 0
-    challenge: packed = 0
-    answer: packed = 0
-    warning_value: packed = 7
-    score: counter 0..99 = 0
-    strength: counter 0..99 = 10
-    plans: cells(cave) = random()
-    pos: coord(cave) = 1
-  }
-  world cave {
-    position pos {
-      encoding decimal_player
-    }
-  }
-  screen warning {
-    show(warning_value)
-  }
-  screen memory {
-    show(challenge)
-  }
-  turn {
-    encounter(tile)
-    halt(score + strength + plans)
-  }
-  encounters tile {
-    0 {
-      show(0)
-    }
-    1 {
-      challenge tile as challenge using warning, memory, answer {
-        success {
-          strength += 3
-          plans -= pos
-        }
-        failure {
-          strength -= 1
-        }
-      }
-    }
-    2 {
-      challenge tile as challenge using warning, memory, answer {
-        success {
-          strength += 2
-          score += 1
-          plans -= pos
-        }
-        failure {
-          strength -= 2
-        }
-      }
-    }
-    3 {
-      challenge tile as challenge using warning, memory, answer {
-        success {
-          strength += 1
-          score += 2
-          plans -= pos
-        }
-        failure {
-          strength -= 3
-        }
-      }
-    }
-    4 {
-      challenge tile as challenge using warning, memory, answer {
-        success {
-          score += 3
-          plans -= pos
-        }
-        failure {
-          strength -= 4
-        }
-      }
-    }
-  }
-}
-`);
-    const activeCapabilities = new Set(
-      result.report.optimizer.capabilities
-        .filter((capability) => capability.status === "active")
-        .map((capability) => capability.id),
-    );
-
-    expect(result.ast.procs.some((proc) => proc.name.startsWith("encounter_effects_"))).toBe(true);
-    expect(result.report.optimizations.some((item) => item.name === "shared-challenge-effect-lowering")).toBe(true);
-    expect(activeCapabilities.has("shared-challenge-effect-lowering")).toBe(true);
-  });
-
-  it("keeps exceptional encounter effects inside a shared challenge helper", () => {
-    const result = compileOk(`
-program SharedChallengeExceptionDemo {
-  state {
-    tile: counter 0..4 = 0
-    challenge: packed = 0
-    answer: packed = 0
-    warning_value: packed = 7
-    score: counter 0..99 = 0
-    strength: counter 0..99 = 10
-  }
-  screen warning {
-    show(warning_value)
-  }
-  screen memory {
-    show(challenge)
-  }
-  turn {
-    encounter(tile)
-    halt(score + strength)
-  }
-  encounters tile {
-    1 {
-      challenge tile as challenge using warning, memory, answer {
-        success {
-          bonus()
-        }
-        failure {
-          strength--
-        }
-      }
-    }
-    2 {
-      challenge tile as challenge using warning, memory, answer {
-        success {
-          strength += 2
-        }
-        failure {
-          strength -= 2
-        }
-      }
-    }
-    3 {
-      challenge tile as challenge using warning, memory, answer {
-        success {
-          strength++
-          score++
-        }
-        failure {
-          strength -= 3
-        }
-      }
-    }
-    4 {
-      challenge tile as challenge using warning, memory, answer {
-        success {
-          score += 2
-        }
-        failure {
-          strength -= 4
-        }
-      }
-    }
-  }
-  fn bonus() {
-    score += 9
-  }
-}
-`);
-    const encounter = result.ast.procs.find((proc) => proc.name === "encounter");
-    const dispatch = encounter?.body[0];
-    const caseValues = dispatch?.kind === "dispatch"
-      ? dispatch.cases.map((item) => item.value).filter((value) => value.kind === "number").map((value) => value.raw)
-      : [];
-
-    expect(result.ast.procs.some((proc) => proc.name.startsWith("encounter_effects_"))).toBe(true);
-    expect(caseValues).not.toContain("1");
-    expect(result.report.optimizations.some((item) => item.name === "shared-challenge-effect-lowering")).toBe(true);
-  });
-
   it("removes lowered rule procs that become unreachable", () => {
     const result = compileOk(`
 program DeadLoweredRules {
@@ -1083,7 +886,7 @@ program DeadLoweredRules {
     tile: counter 0..9 = 0
     energy: counter 0..9 = 9
   }
-  turn {
+  loop {
     match tile {
       1 => pool_exit()
       2 => ladder_exit()
@@ -1122,7 +925,7 @@ program RawRule {
     value: packed = 2
     result: packed = 0
   }
-  turn {
+  loop {
     hack()
     halt(result)
   }
@@ -1154,7 +957,7 @@ program StableIndirectFlow {
   state {
     out: packed = 0
   }
-  turn {
+  loop {
     raw {
       returns X -> out
       clobbers X, R7
@@ -1184,7 +987,7 @@ program StableIndirectFlow {
   it("does not add compiler-owned preloads for raw numeric branches", () => {
     const result = compileOk(`
 program PreloadedIndirectFlow {
-  turn {
+  loop {
     raw {
       clobbers X
       preserves state
@@ -1213,7 +1016,7 @@ program IndirectMemoryTable {
   state {
     out: packed = 0
   }
-  turn {
+  loop {
     raw {
       returns X -> out
       clobbers X, R7
@@ -1246,7 +1049,7 @@ program IndirectMemoryTable {
   it("keeps raw formal dark branch operands as address bytes", () => {
     const result = compileOk(`
 program RawFormalAddress {
-  turn {
+  loop {
     raw {
       clobbers X
       preserves state
@@ -1272,7 +1075,7 @@ program RawFormalAddress {
     expect(() =>
       compileOk(`
 program BadRawOpcode {
-  turn {
+  loop {
     raw {
       clobbers X
       preserves state
@@ -1293,7 +1096,7 @@ program ReservedName {
   state {
     __mkpro_score: counter 0..9 = 0
   }
-  turn {
+  loop {
     halt(__mkpro_score)
   }
 }
@@ -1309,7 +1112,7 @@ program DecimalFormula {
     fuel: counter 0..999 = 140
     accel: packed = 0
   }
-  turn {
+  loop {
     accel = burn * 10 / fuel - 9.8
     halt(accel)
   }
@@ -1326,7 +1129,7 @@ program BranchlessAssignment {
     flag: flag = 0
     result: counter 0..99 = 0
   }
-  turn {
+  loop {
     if flag == 1 {
       result = 50
     }
@@ -1351,17 +1154,15 @@ program ResidualGuardedUpdate {
     shown: packed = 0
   }
 
-  screen main {
-    show(room, shown)
-  }
 
-  turn {
+
+  loop {
     if room < 6 {
       room++
       shown = room
     }
     else {
-      show(main)
+      show(room, shown)
     }
     halt(room)
   }
@@ -1378,7 +1179,7 @@ program ResourceRange {
   state {
     fuel: counter 0..9 = 4
   }
-  turn {
+  loop {
     if fuel > 0 {
       fuel--
     }
@@ -1397,7 +1198,7 @@ program BoundaryNormalize {
   state {
     fuel: counter 0..9 = 4
   }
-  turn {
+  loop {
     if fuel <= -1 {
       fuel--
       show(0)
@@ -1417,7 +1218,7 @@ program BranchlessStop {
   state {
     flag: flag = 0
   }
-  turn {
+  loop {
     if flag == 1 {
       halt(50)
     }
@@ -1438,12 +1239,10 @@ program TerminalThenEnd {
     flag: flag = 0
     crash_value: packed = -999
   }
-  screen crash {
-    show(crash_value)
-  }
-  turn {
+
+  loop {
     if flag == 1 {
-      show(crash)
+      show(crash_value)
       halt(-999)
     }
     else {
@@ -1463,10 +1262,8 @@ program DirectTerminalBranch {
     score: counter 0..9 = 0
     crash_value: packed = -999
   }
-  screen crash {
-    show(crash_value)
-  }
-  turn {
+
+  loop {
     if score >= 5 {
       fail()
     }
@@ -1475,7 +1272,7 @@ program DirectTerminalBranch {
     }
   }
   fn fail() {
-    show(crash)
+    show(crash_value)
     halt(-999)
   }
   fn other() {
@@ -1499,15 +1296,13 @@ program LocalTerminalTail {
     score: counter 0..9 = 0
     fail_value: packed = -999
   }
-  screen fail_screen {
-    show(fail_value)
-  }
-  turn {
+
+  loop {
     if score < 5 {
       score = score * 2
     }
     else {
-      show(fail_screen)
+      show(fail_value)
       halt(-999)
     }
     halt(score)
@@ -1527,7 +1322,7 @@ program BooleanMultiUpdate {
     a: counter 0..9 = 1
     b: counter 0..9 = 2
   }
-  turn {
+  loop {
     if flag == 1 {
       a++
       b--
@@ -1548,7 +1343,7 @@ program NegativeZeroGuardedUpdate {
     score: counter 0..999 = 0
     bonus: counter 0..99 = 0
   }
-  turn {
+  loop {
     if score >= 100 {
       bonus++
     }
@@ -1569,10 +1364,8 @@ program LateLayoutIfVariant {
     value: counter 0..9 = 0
     fail_value: packed = -999
   }
-  screen fail_screen {
-    show(fail_value)
-  }
-  turn {
+
+  loop {
     if strength <= 0 {
       exhausted()
     }
@@ -1583,7 +1376,7 @@ program LateLayoutIfVariant {
     halt(value)
   }
   fn exhausted() {
-    show(fail_screen)
+    show(fail_value)
     halt(-999)
   }
 }
@@ -1599,7 +1392,7 @@ program BranchlessCompare {
   state {
     counter: counter 0..9 = 0
   }
-  turn {
+  loop {
     if counter > 0 {
       halt(1)
     }
@@ -1622,7 +1415,7 @@ program LunarLike {
   state {
     speed: counter -99..99 = 0
   }
-  turn {
+  loop {
     if abs(speed) <= 5 {
       halt(777)
     }
@@ -1656,7 +1449,7 @@ program NegativeZeroThreshold {
   state {
     score: counter 0..999 = 0
   }
-  turn {
+  loop {
     if score >= 100 {
       halt(1)
     }
@@ -1687,7 +1480,7 @@ program NegativeZeroFlowCandidate {
   state {
     score: counter 0..999 = 0
   }
-  turn {
+  loop {
     if score >= 100 {
       halt(1)
     }
@@ -1706,7 +1499,7 @@ program NegativeZeroFlowCandidate {
     expect(() =>
       compileMKPro(`
 program TooLarge {
-  turn {
+  loop {
     halt(1)
   }
 }
@@ -1720,7 +1513,7 @@ program AnalyzeBudget {
   state {
     value: packed = 0
   }
-  turn {
+  loop {
     value = 1
     halt(value)
   }
@@ -1736,7 +1529,7 @@ program AnalyzeBudget {
     const pauses = Array.from({ length: 130 }, () => "    show(0)").join("\n");
     const result = compileMKPro(`
 program AnalyzeHuge {
-  turn {
+  loop {
 ${pauses}
   }
 }
@@ -1750,7 +1543,7 @@ ${pauses}
   it("keeps the default V2 budget at 105 cells", () => {
     const result = compileMKPro(`
 program DefaultBudget {
-  turn {
+  loop {
     halt(1)
   }
 }
@@ -1766,19 +1559,17 @@ program DseAcrossCall {
     scratch: packed = 0
   }
 
-  screen main {
-    show(shown)
-  }
+
 
   fn overwrite() {
     scratch = 2
     shown = scratch
   }
 
-  turn {
+  loop {
     scratch = 1
     overwrite()
-    show(main)
+    show(shown)
   }
 }
 `;
@@ -1800,19 +1591,17 @@ program MembershipMaskRun {
     occupied: cells(grid)
   }
 
-  screen board {
-    show(cell, player_marks, occupied)
-  }
 
-  turn {
+
+  loop {
     cell = read()
     if cell in occupied {
-      show(board)
+      show(cell, player_marks, occupied)
     }
     else {
       player_marks += cell
       occupied += cell
-      show(board)
+      show(cell, player_marks, occupied)
     }
   }
 }
@@ -1829,7 +1618,7 @@ program MaskMembershipClear {
     marks: packed = 0
   }
 
-  turn {
+  loop {
     if bit_and(marks, frac(pos)) != 0 {
       marks = bit_and(marks, bit_not(frac(pos)))
     }
@@ -1850,7 +1639,7 @@ program FalseBranchXReuse {
     arrows: counter 0..5 = 2
   }
 
-  turn {
+  loop {
     target = read()
     if target >= 0 {
       halt(1)
@@ -1888,7 +1677,7 @@ program NestedGuardFailure {
     score: counter 0..9 = 0
   }
 
-  turn {
+  loop {
     if a != 0 {
       if b != 0 {
         score = 1
@@ -1915,11 +1704,9 @@ program TerminalLoopScreen {
     pos: counter 0..9 = 1
     score: counter 0..9 = 0
   }
-  screen main {
+
+  loop {
     show(pos)
-  }
-  turn {
-    show(main)
     key = read()
     match key {
       1 => score_point()
@@ -1928,7 +1715,7 @@ program TerminalLoopScreen {
   }
   fn score_point() {
     score = 1
-    show(main)
+    show(pos)
   }
 }
 `, { budget: 999, analysis: true });

@@ -38,7 +38,7 @@ const SOURCE = `program StackDerived {
     magnitude: packed = 0
   }
 
-  turn {
+  loop {
     raw = read()
     whole = int(raw / 10)
     part = frac(raw / 10)

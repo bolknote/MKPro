@@ -52,6 +52,9 @@ contexts:
     - match: '^\s*(rule)\b'
       captures:
         1: invalid.deprecated.keyword.rule.mkpro
+    - match: '^\s*(screen|world|turn|encounters|challenge)\b'
+      captures:
+        1: invalid.deprecated.keyword.block.mkpro
     - match: '^\s*(show|read|move)\b(?!\s*\()'
       captures:
         1: invalid.deprecated.keyword.statement.mkpro
@@ -69,20 +72,10 @@ contexts:
         1: keyword.declaration.program.mkpro
         2: entity.name.namespace.program.mkpro
         3: punctuation.section.block.begin.mkpro
-    - match: '^\s*(state|turn)\s*(\{)'
+    - match: '^\s*(state)\s*(\{)'
       captures:
         1: keyword.declaration.block.mkpro
         2: punctuation.section.block.begin.mkpro
-    - match: '^\s*(screen|world|encounters)\s+({{ident}})\s*(\{)'
-      captures:
-        1: keyword.declaration.block.mkpro
-        2: entity.name.section.mkpro
-        3: punctuation.section.block.begin.mkpro
-    - match: '^\s*(position)\s+({{ident}})\s*(\{)'
-      captures:
-        1: keyword.declaration.position.mkpro
-        2: variable.parameter.position.mkpro
-        3: punctuation.section.block.begin.mkpro
     - match: '^\s*({{ident}})\s*(:)\s*(board)\s*(?=\()'
       captures:
         1: entity.name.type.domain.mkpro
@@ -112,11 +105,11 @@ contexts:
       scope: variable.parameter.function.mkpro
 
   control-keywords:
-    - match: '\b(if|else|while|match|otherwise|challenge|success|failure|as|using|raw|takes|returns|clobbers|preserves|code)\b'
+    - match: '\b(if|else|while|loop|match|otherwise|raw|takes|returns|clobbers|preserves|code)\b'
       scope: keyword.control.mkpro
 
   state-types:
-    - match: '\b(flag|counter|coord|cells|coord_list|packed|board|position|encoding)\b'
+    - match: '\b(flag|counter|coord|cells|coord_list|packed|board)\b'
       scope: storage.type.mkpro
 
   builtin-calls:
@@ -173,7 +166,7 @@ contexts:
         1: constant.language.stack-slot.mkpro
 
   constants:
-    - match: '\b(true|false|north|south|east|west|up|down)\b'
+    - match: '\b(true|false|north|south|east|west|up|down|packed_decimal_zero_run|decimal_player|row_scan|floor_plan|corridor_plan|cockpit_perspective|pier_to_ship)\b'
       scope: constant.language.mkpro
     - match: '\b[0-9A-Fa-f]{2}(?=\s|$)'
       scope: constant.numeric.hex.mkpro

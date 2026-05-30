@@ -22,25 +22,9 @@ program Alaram {
     shot_down_pattern: packed = -666
   }
 
-  world sky {
-    // The source listing draws a forward cockpit lane. Horizontal movement is
-    // aiming, vertical movement is climb/dive, and range closes every turn.
-    position fighter {
-      encoding cockpit_perspective
-    }
-  }
-
-  screen cockpit {
-    show("8СГ -78")
-  }
-
-  screen shot_down {
-    show(shot_down_pattern)
-  }
-
-  screen victory {
-    show("8СГ-Е-78")
-  }
+  // The source listing draws a forward cockpit lane. Horizontal movement is
+  // aiming, vertical movement is climb/dive, and range closes every turn.
+  sky: board(cockpit_perspective)
 
   fn ground() {
     show("ЕГГОГ")
@@ -48,17 +32,17 @@ program Alaram {
   }
 
   fn tail_gun() {
-    show(shot_down)
+    show(shot_down_pattern)
     halt(-666)
   }
 
   fn destroyed() {
-    show(victory)
+    show("8СГ-Е-78")
     halt(777)
   }
 
-  turn {
-    show(cockpit)
+  loop {
+    show("8СГ -78")
     command = read()
 
     match command {
@@ -111,7 +95,7 @@ program Alaram {
     if range >= 0 {
       tail_gun()
     }
-    show(cockpit)
+    show("8СГ -78")
   }
 
   fn fire() {

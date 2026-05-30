@@ -5,7 +5,7 @@
 // 3 = bat rustle.
 //
 // Input a positive adjacent room to move there; a non-adjacent positive room
-// only redraws the screen. Input a negative room to shoot there.
+// only redraws the display. Input a negative room to shoot there.
 
 program Wumpus {
   cave: board(1..20, 1..1)
@@ -24,10 +24,6 @@ program Wumpus {
     clue: counter 0..9 = 0
   }
 
-  screen main {
-    show(room, arrows, clue)
-  }
-
   fn won() {
     halt(777)
   }
@@ -37,9 +33,9 @@ program Wumpus {
     halt()
   }
 
-  turn {
+  loop {
     sense()
-    show(main)
+    show(room, arrows, clue)
     target = read()
 
     if target >= 0 {

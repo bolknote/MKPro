@@ -49,7 +49,7 @@ program Double {
   fn double(n) {
     return n + n
   }
-  turn {
+  loop {
     x = read()
     result = double(x)
     halt(result)
@@ -72,7 +72,7 @@ program Nested {
   fn dbl(n) {
     return n + n
   }
-  turn {
+  loop {
     x = read()
     result = dbl(inc(x))
     halt(result)
@@ -92,7 +92,7 @@ program Mixed {
   fn triple(n) {
     return n + n + n
   }
-  turn {
+  loop {
     x = read()
     result = 1 + triple(x)
     halt(result)
@@ -117,7 +117,7 @@ program Sign {
       return 1
     }
   }
-  turn {
+  loop {
     x = read()
     result = sign(x)
     halt(result)

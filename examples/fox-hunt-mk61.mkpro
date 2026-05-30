@@ -14,15 +14,7 @@ program FoxHuntMK61 {
     bearing: counter 0..9 = 0
   }
 
-  screen hit {
-    show("-20")
-  }
-
-  screen report {
-    show("--", cell:02, "--", bearing)
-  }
-
-  turn {
+  loop {
     cell = read()
 
     if cell in foxes {
@@ -30,11 +22,11 @@ program FoxHuntMK61 {
     }
 
     scan_from_cell()
-    show(report)
+    show("--", cell:02, "--", bearing)
   }
 
   fn found_fox() {
-    show(hit)
+    show("-20")
   }
 
   fn scan_from_cell() {
