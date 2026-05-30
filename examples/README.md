@@ -4,10 +4,10 @@ Generated with `npm run examples:size`.
 
 ## Snapshot
 
-- Top-level examples: 20/20 fit in the 105-cell MK-61 window; 20/20 pass the headless load check.
-- Referenced top-level examples: 15/15 are no larger than the original MK-61 listing.
+- Top-level examples: 19/19 fit in the 105-cell MK-61 window; 19/19 pass the headless load check.
+- Referenced top-level examples: 14/14 are no larger than the original MK-61 listing.
 - Tightest runnable examples: `fox-hunt-100.mkpro` (105), `game-100-pig.mkpro` (103), `wumpus.mkpro` (103).
-- Pending optimizer: 8 programs still exceed the MK-61 window; nearest is `pending-optimizer/cave-highlevel-baseline.mkpro` (120).
+- Pending optimizer: 9 programs still exceed the MK-61 window; nearest is `pending-optimizer/cave-highlevel-baseline.mkpro` (120).
 
 ## Measurements
 
@@ -27,7 +27,6 @@ Generated with `npm run examples:size`.
 | `functions-demo.mkpro` | 29 | - | - | ok: no reference | load ok |
 | `game-100-pig.mkpro` | 103 | 103 | 0 | ok: <= reference | main+setup load ok |
 | `human.mkpro` | 25 | - | - | ok: no reference | load ok |
-| `jack-pot.mkpro` | 93 | 104 | -11 | ok: <= reference | main+setup load ok |
 | `lunar.mkpro` | 47 | 58 | -11 | ok: <= reference | load ok |
 | `minesweeper-9x7.mkpro` | 100 | 104 | -4 | ok: <= reference | main+setup load ok |
 | `minesweeper-9x9.mkpro` | 90 | 97 | -7 | ok: <= reference | main+setup load ok |
@@ -38,6 +37,7 @@ Generated with `npm run examples:size`.
 | `pending-optimizer/cave-highlevel-baseline.mkpro` | 120 | 105 | +15 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/cave-treasure.mkpro` | 139 | 105 | +34 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/giants-country.mkpro` | 162 | 105 | +57 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/jack-pot.mkpro` | 153 | 104 | +49 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/labyrinth777.mkpro` | 221 | 105 | +116 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/rambo-iii.mkpro` | 324 | 105 | +219 | pending optimizer | not loaded: main >105 |
 | `pending-optimizer/teleport.mkpro` | 245 | 105 | +140 | pending optimizer | setup load ok; main >105 |

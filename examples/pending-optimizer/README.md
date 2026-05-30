@@ -17,6 +17,7 @@ Current `--analysis` sizes, measured against the local reference listings:
 | `cave-highlevel-baseline.mkpro` | 120 | 105 | command dispatch and remaining cave flow lowerers |
 | `cave-treasure.mkpro` | 139 | 105 | wall breaking, cache flow, and remaining dispatch overhead |
 | `giants-country.mkpro` | 162 | 105 | packed room-map display/flow and remaining event flow lowerers |
+| `jack-pot.mkpro` | 153 | 104 | angle-switch menu polling, indirect digit-store loop, and literal video displays |
 | `labyrinth777.mkpro` | 221 | 105 | room inspection and local-jumper dispatch |
 | `rambo-iii.mkpro` | 324 | 105 | source-shaped indirect front schedule, random damage, reserve/order accounting, and packed R8 victory output |
 | `teleport.mkpro` | 245 | 105 | station masks and vault/guard flow |

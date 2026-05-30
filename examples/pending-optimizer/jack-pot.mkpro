@@ -1,0 +1,112 @@
+reference lordbss_pmk151
+
+// Source-shaped rewrite of Lord_BSS pmk151, "Jack Pot" by Konstantin Sergeev.
+// The MK-61 listing drives its menus from the sign of `cos(100)` under the
+// angle switch: degrees starts a spin, grads returns with money, radians
+// rebuilds the splash. This keeps that UI: the player changes the calculator
+// angle mode before resuming, instead of entering a numeric command.
+
+program JackPot {
+  state {
+    money: counter -9999..99999 = 10000
+    angle_cos: packed = 0
+
+    draw_count: counter 0..3 = 0
+    slot: counter 1..4 = 1
+    digit: counter 0..9 = 0
+    digit2: counter 0..9 = 0
+    digit3: counter 0..9 = 0
+    digit4: counter 0..9 = 0
+    reels: counter 0..999 = 0
+
+    random_state: packed = 0.5
+  }
+
+  fn game_over() {
+    show("С-Е O-Г")
+  }
+
+  loop {
+    if reels == 0 {
+      show("1ЕС")
+      angle_cos = cos(100)
+
+      if angle_cos < 0 {
+        spin()
+      }
+    }
+    else {
+      show(reels)
+      angle_cos = cos(100)
+
+      if angle_cos >= 0 {
+        if angle_cos == 0 {
+          show(money)
+        }
+
+        reels = 0
+      }
+    }
+  }
+
+  fn spin() {
+    money -= 1000
+
+    if money < 0 {
+      game_over()
+    }
+    else {
+      draw_count = 3
+      slot = 1
+      reels = 0
+
+      while draw_count >= 1 {
+        digit = 0
+
+        while digit == 0 {
+          random_state = random()
+          digit = int(random_state * 10)
+        }
+
+        slot++
+
+        if slot == 2 {
+          digit2 = digit
+        }
+        else {
+          if slot == 3 {
+            digit3 = digit
+          }
+          else {
+            digit4 = digit
+          }
+        }
+
+        if reels == 0 {
+          reels = digit
+        }
+        else {
+          reels = reels * 10 + digit
+        }
+
+        draw_count--
+      }
+
+      settle()
+    }
+  }
+
+  fn settle() {
+    if frac((digit2 + digit3 + digit4) / 5) == 0 {
+      money += 1000
+    }
+
+    if digit3 == digit2 {
+      money += 3000
+
+      if digit4 == digit3 {
+        money += 3000
+      }
+    }
+  }
+}

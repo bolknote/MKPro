@@ -342,8 +342,8 @@ The top-level repository examples are runnable MK-Pro programs:
 - `lunar.mkpro` is a numeric counter game with touchdown functions.
 - `99-bottles.mkpro` is a direct port of the Bolknote beer demo.
 - `alaram.mkpro`, `cave-sketch.mkpro`, `dangerous-loading.mkpro`,
-  `dungeon.mkpro`, `game-100-pig.mkpro`, `jack-pot.mkpro`,
-  `minesweeper-9x9.mkpro`, `raja-yoga.mkpro`, and `sea-battle.mkpro` are game
+  `dungeon.mkpro`, `game-100-pig.mkpro`, `minesweeper-9x9.mkpro`,
+  `raja-yoga.mkpro`, and `sea-battle.mkpro` are game
   ports that lower through ordinary IR and fit within their references.
 
 `examples/pending-optimizer/*.mkpro` contains ports that lower through ordinary
