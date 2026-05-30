@@ -21,6 +21,18 @@ import { verifySuperDarkSuffixLayout } from "./super-dark-layout.ts";
 import { MachineEmitter } from "./emit/machine-emitter.ts";
 import type { ProgramAnalysis } from "./emit/program-analysis.ts";
 import { RuntimeHelperRegistry } from "./emit/runtime-helpers.ts";
+import {
+  compileCall,
+  compileCardinalDirectionCall,
+  compileCommutativeWithCurrentX,
+  compileDirectionCall,
+  compileExpression,
+  compileFunctionCall,
+  compileRemainderByConstant,
+  compileStackDuplicatedBinary,
+  directionKeyName,
+  directionKeyRegister,
+} from "./emit/lowering/expr.ts";
 import { MK61_PROFILE, machineSupports, type MachineProfile } from "./machineProfile.ts";
 import type {
   AppliedOptimization,
@@ -114,7 +126,7 @@ const COORD_LIST_COUNTER = "__coord_list_counter";
 const COORD_LIST_CURRENT = "__coord_list_current";
 const COORD_LIST_DX = "__coord_list_dx";
 const DASHED_COORD_REPORT_MASK = "8,-00--_";
-const NEGATIVE_ZERO_DEGREE_SELECTOR_GE = "__mkpro_negative_zero_ge";
+export const NEGATIVE_ZERO_DEGREE_SELECTOR_GE = "__mkpro_negative_zero_ge";
 const NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE = "1|-00";
 const INTERNAL_NAME_PREFIX = "__mkpro_";
 const DISPLAY_HELPER_MIN_SAVINGS = 4;
@@ -6449,82 +6461,7 @@ export class EmitContext {
   }
 
   compileExpression(expr: ExpressionAst): void {
-    const randomCellHelper = this.sharedRandomCellHelper(expr);
-    if (randomCellHelper !== undefined) {
-      this.emitJump(0x53, "ПП", randomCellHelper.label, `random cell ${expressionToIntentText(expr)}`);
-      this.optimizations.push({
-        name: "random-cell-helper-call",
-        detail: `Reused shared random cell helper for ${expressionToIntentText(expr)}.`,
-      });
-      return;
-    }
-
-    const helper = this.sharedExpressionHelper(expr);
-    if (helper !== undefined) {
-      this.emitJump(0x53, "ПП", helper.label, `expr ${expressionToIntentText(expr)}`);
-      this.optimizations.push({
-        name: "expression-helper-call",
-        detail: `Reused shared helper for ${expressionToIntentText(expr)}.`,
-      });
-      return;
-    }
-
-    switch (expr.kind) {
-      case "number":
-        this.emitNumberOrPreload(expr.raw);
-        return;
-      case "identifier": {
-        const constant = this.constants.get(expr.name);
-        if (constant) {
-          if (this.constantStack.has(expr.name)) {
-            this.diagnostics.push({
-              level: "error",
-              message: `Cyclic constant reference '${expr.name}'.`,
-            });
-            return;
-          }
-          this.constantStack.add(expr.name);
-          try {
-            this.compileExpression(constant);
-          } finally {
-            this.constantStack.delete(expr.name);
-          }
-          return;
-        }
-        this.emitRecall(expr.name, `recall ${expr.name}`);
-        return;
-      }
-      case "unary":
-        if (expr.op === "-" && expr.expr.kind === "number") {
-          this.emitNumberOrPreload(negatedNumberLiteral(expr.expr.raw));
-          return;
-        }
-        this.compileExpression(expr.expr);
-        this.emitOp(0x0b, "/-/", "unary minus");
-        return;
-      case "binary":
-        if (expr.op === "-" && isNumericValue(expr.left, 0)) {
-          this.compileExpression(expr.right);
-          this.emitOp(0x0b, "/-/", "unary minus");
-          return;
-        }
-        if (this.compileRemainderByConstant(expr)) {
-          return;
-        }
-        if ((expr.op === "+" || expr.op === "*") && this.compileCommutativeWithCurrentX(expr)) {
-          return;
-        }
-        if (this.compileStackDuplicatedBinary(expr)) {
-          return;
-        }
-        this.compileExpression(expr.left);
-        this.compileExpression(expr.right);
-        this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
-        return;
-      case "call":
-        this.compileCall(expr);
-        return;
-    }
+    return compileExpression(this, expr);
   }
 
   orderDisplaySources(sources: string[]): string[] {
@@ -6543,26 +6480,7 @@ export class EmitContext {
   }
 
   compileCommutativeWithCurrentX(expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
-    if (this.currentXVariable === undefined) return false;
-    if (expr.left.kind === "identifier" && this.xHolds(expr.left.name) && isSimpleStackLoad(expr.right)) {
-      this.compileExpression(expr.right);
-      this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
-      this.optimizations.push({
-        name: "stack-current-x-scheduling",
-        detail: `Reused ${expr.left.name} already in X for commutative ${expr.op}.`,
-      });
-      return true;
-    }
-    if (expr.right.kind === "identifier" && this.xHolds(expr.right.name) && isSimpleStackLoad(expr.left)) {
-      this.compileExpression(expr.left);
-      this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
-      this.optimizations.push({
-        name: "stack-current-x-scheduling",
-        detail: `Reused ${expr.right.name} already in X for commutative ${expr.op}.`,
-      });
-      return true;
-    }
-    return false;
+    return compileCommutativeWithCurrentX(this, expr);
   }
 
   // Stack-duplicate a repeated pure operand: `e op e` becomes compute(e), В↑,
@@ -6570,19 +6488,7 @@ export class EmitContext {
   // Only applies to pure operands (so one evaluation equals two) and only when it
   // actually saves cells versus recomputing the operand.
   compileStackDuplicatedBinary(expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
-    if (!expressionEquals(expr.left, expr.right)) return false;
-    if (!isPureExpression(expr.left)) return false;
-    // В↑ costs one cell, so duplication only pays off when recomputing the
-    // operand would cost more than one cell.
-    if (estimateExpressionCost(expr.left) <= 1) return false;
-    this.compileExpression(expr.left);
-    this.emitOp(0x0e, "В↑", "duplicate repeated operand through stack");
-    this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
-    this.optimizations.push({
-      name: "stack-current-x-scheduling",
-      detail: `Duplicated ${expressionToIntentText(expr.left)} through the stack (В↑) for ${expr.op} instead of recomputing it.`,
-    });
-    return true;
+    return compileStackDuplicatedBinary(this, expr);
   }
 
   // Shared tail for the integer/fractional parts of one pure operand. When two
@@ -6625,19 +6531,7 @@ export class EmitContext {
   }
 
   compileRemainderByConstant(expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
-    const matched = matchRemainderByConstant(expr);
-    if (matched === undefined) return false;
-    this.compileExpression(matched.value);
-    this.compileExpression(matched.divisor);
-    this.emitOp(0x13, "/", "remainder quotient");
-    this.emitOp(0x35, "К {x}", "remainder fractional part");
-    this.compileExpression(matched.divisor);
-    this.emitOp(0x12, "*", "remainder scale");
-    this.optimizations.push({
-      name: "remainder-fraction-lowering",
-      detail: `Lowered ${expressionToIntentText(expr)} without recomputing the dividend.`,
-    });
-    return true;
+    return compileRemainderByConstant(this, expr);
   }
 
   sharedRandomCellHelper(expr: ExpressionAst): { expr: ExpressionAst; label: string; line?: number } | undefined {
@@ -6701,310 +6595,27 @@ export class EmitContext {
   // which leaves its result in X. Returns false when the callee is not a
   // function (so built-in expression calls fall through).
   compileFunctionCall(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
-    const proc = this.functionProcs.get(expr.callee);
-    if (proc === undefined) return false;
-    const params = proc.params ?? [];
-    if (expr.args.length !== params.length) {
-      this.diagnostics.push(buildDiagnostic(
-        "error",
-        `Function ${expr.callee} expects ${params.length} argument(s), got ${expr.args.length}.`,
-        proc.line,
-      ));
-      return true;
-    }
-    for (let index = 0; index < params.length; index += 1) {
-      this.compileExpression(expr.args[index]!);
-      this.emitStore(params[index]!, `arg ${params[index]} for ${expr.callee}`, proc.line);
-    }
-    this.emitJump(0x53, "ПП", proc.name, `call function ${proc.name}`, proc.line);
-    this.optimizations.push({
-      name: "function-call",
-      detail: `Called function ${proc.name} and consumed its result from X.`,
-    });
-    return true;
+    return compileFunctionCall(this, expr);
   }
 
   compileCall(expr: Extract<ExpressionAst, { kind: "call" }>): void {
-    if (this.compileFunctionCall(expr)) return;
-    const name = expr.callee.toLowerCase();
-    if (name === "direction") {
-      this.compileDirectionCall(expr);
-      return;
-    }
-    if (name === "__direction_cardinal") {
-      this.compileCardinalDirectionCall(expr);
-      return;
-    }
-    if (name === "neighbor_count" || name === "line_count") {
-      if (this.compileSpatialCountCall(name, expr)) return;
-    }
-    if (name === "__spatial_hit") {
-      if (this.compileSpatialHitCall(expr)) return;
-    }
-    if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
-      if (this.compileNegativeZeroDegreeSelectorCall(expr)) return;
-    }
-    if (isTicTacToeMacroName(name) && ticTacToeMacroArity(name) !== expr.args.length) {
-      this.diagnostics.push({
-        level: "error",
-        message: `${expr.callee}() expects ${ticTacToeMacroArity(name)} arguments, got ${expr.args.length}.`,
-      });
-      return;
-    }
-    if (isSmallSetMacroName(name) && !smallSetMacroArityOk(name, expr.args.length)) {
-      this.diagnostics.push({
-        level: "error",
-        message: `${expr.callee}() expects ${smallSetMacroArityText(name)}, got ${expr.args.length}.`,
-      });
-      return;
-    }
-    const smallSetMacro = smallSetExpressionMacro(name, expr.args);
-    if (smallSetMacro !== undefined) {
-      this.compileExpression(smallSetMacro);
-      this.optimizations.push({
-        name: "small-set-primitive-lowering",
-        detail: `Lowered ${expr.callee}() to coordinate-set arithmetic.`,
-      });
-      return;
-    }
-    const macro = ticTacToeExpressionMacro(name, expr.args);
-    if (macro !== undefined) {
-      this.compileExpression(macro);
-      this.optimizations.push({
-        name: "tic-tac-toe-primitive-lowering",
-        detail: `Lowered ${expr.callee}() to reusable 4x4 grid/packed-line arithmetic.`,
-      });
-      return;
-    }
-
-    const zeroArgOpcodes: Record<string, [number, string]> = {
-      random: [0x3b, "К СЧ"],
-      pi: [0x20, "F pi"],
-    };
-    const zeroArgOpcode = zeroArgOpcodes[name];
-    if (zeroArgOpcode !== undefined) {
-      if (expr.args.length !== 0) {
-        this.diagnostics.push({
-          level: "error",
-          message: `${expr.callee}() takes no arguments, got ${expr.args.length}.`,
-        });
-        return;
-      }
-      this.emitOp(zeroArgOpcode[0], zeroArgOpcode[1], `${expr.callee}()`);
-      return;
-    }
-
-    if (name === "pow") {
-      if (expr.args.length !== 2) {
-        this.diagnostics.push({
-          level: "error",
-          message: "Function pow expects two arguments.",
-        });
-        return;
-      }
-      this.compileExpression(expr.args[1]!);
-      this.compileExpression(expr.args[0]!);
-      this.emitOp(0x24, "F x^y", `${expr.callee}()`);
-      return;
-    }
-
-    const binaryOpcodes: Record<string, [number, string]> = {
-      max: [0x36, "К max"],
-      bit_and: [0x37, "К ∧"],
-      bit_or: [0x38, "К ∨"],
-      bit_xor: [0x39, "К ⊕"],
-    };
-    const binaryCall = binaryOpcodes[name];
-    if (binaryCall !== undefined) {
-      if (expr.args.length !== 2) {
-        this.diagnostics.push({
-          level: "error",
-          message: `Function ${expr.callee} expects two arguments.`,
-        });
-        return;
-      }
-      this.compileExpression(expr.args[0]!);
-      this.compileExpression(expr.args[1]!);
-      this.emitOp(binaryCall[0], binaryCall[1], `${expr.callee}()`);
-      return;
-    }
-
-    if (expr.args.length !== 1) {
-      this.diagnostics.push({
-        level: "error",
-        message: `Function ${expr.callee} expects one argument.`,
-      });
-      return;
-    }
-    this.compileExpression(expr.args[0]!);
-    const opcodes: Record<string, [number, string]> = {
-      abs: [0x31, "К |x|"],
-      sign: [0x32, "К ЗН"],
-      int: [0x34, "К [x]"],
-      frac: [0x35, "К {x}"],
-      sqr: [0x22, "F x^2"],
-      inv: [0x23, "F 1/x"],
-      sqrt: [0x21, "F sqrt"],
-      lg: [0x17, "F lg"],
-      ln: [0x18, "F ln"],
-      sin: [0x1c, "F sin"],
-      cos: [0x1d, "F cos"],
-      tg: [0x1e, "F tg"],
-      asin: [0x19, "F sin^-1"],
-      acos: [0x1a, "F cos^-1"],
-      atg: [0x1b, "F tg^-1"],
-      exp: [0x16, "F e^x"],
-      pow10: [0x15, "F 10^x"],
-      bit_not: [0x3a, "К ИНВ"],
-      to_min: [0x26, "К °->′"],
-      to_sec: [0x2a, "К °->′\""],
-      from_sec: [0x30, "К °<-′\""],
-      from_min: [0x33, "К °<-′"],
-    };
-    const opcode = opcodes[name];
-    if (!opcode) {
-      this.diagnostics.push({
-        level: "error",
-        message: `Unknown function ${expr.callee}.`,
-      });
-      return;
-    }
-    this.emitOp(opcode[0], opcode[1], `${expr.callee}()`);
+    return compileCall(this, expr);
   }
 
   compileDirectionCall(expr: Extract<ExpressionAst, { kind: "call" }>): void {
-    if (expr.args.length !== 1) {
-      this.diagnostics.push({
-        level: "error",
-        message: `direction() expects one keypad argument, got ${expr.args.length}.`,
-      });
-      return;
-    }
-    const arg = expr.args[0]!;
-    if (arg.kind !== "identifier") {
-      this.diagnostics.push({
-        level: "error",
-        message: "direction() currently requires an identifier argument so the optimizer can reuse its register.",
-      });
-      return;
-    }
-    const keyRegister = this.allocation.registers[arg.name];
-    if (!keyRegister) {
-      this.diagnostics.push({
-        level: "error",
-        message: `Unknown direction key '${arg.name}'.`,
-      });
-      return;
-    }
-
-    const notFloor = this.freshLabel("direction_not_floor");
-    const yAxis = this.freshLabel("direction_y_axis");
-    const done = this.freshLabel("direction_done");
-
-    this.emitOp(0x60 + registerIndex(keyRegister), `П->X ${keyRegister}`, "direction key");
-    this.emitOp(0x31, "К |x|", "direction floor test");
-    this.emitNumberOrPreload("5");
-    this.emitOp(0x11, "-", "direction abs(key)-5");
-    this.emitJump(0x5e, "F x=0", notFloor, "direction not floor");
-
-    this.emitOp(0x60 + registerIndex(keyRegister), `П->X ${keyRegister}`, "direction floor key");
-    this.emitNumberOrPreload("20");
-    this.emitOp(0x12, "*", "direction floor delta");
-    this.emitJump(0x51, "БП", done, "direction done");
-
-    this.emitLabel(notFloor);
-    this.emitOp(0x31, "К |x|", "direction x-axis test");
-    this.emitNumberOrPreload("1");
-    this.emitOp(0x11, "-", "direction axis discriminator");
-    this.emitJump(0x5e, "F x=0", yAxis, "direction y-axis");
-
-    this.emitOp(0x60 + registerIndex(keyRegister), `П->X ${keyRegister}`, "direction x key");
-    this.emitNumberOrPreload("5");
-    this.emitOp(0x11, "-", "direction key-5");
-    this.emitNumberOrPreload("10");
-    this.emitOp(0x12, "*", "direction x delta");
-    this.emitJump(0x51, "БП", done, "direction done");
-
-    this.emitLabel(yAxis);
-    this.emitNumberOrPreload("5");
-    this.emitOp(0x60 + registerIndex(keyRegister), `П->X ${keyRegister}`, "direction y key");
-    this.emitOp(0x11, "-", "direction 5-key");
-    this.emitNumberOrPreload("3");
-    this.emitOp(0x13, "/", "direction y delta");
-
-    this.emitLabel(done);
-    this.optimizations.push({
-      name: "direction-keypad-lowering",
-      detail: `Lowered direction(${arg.name}) through a shared keypad geometry formula.`,
-    });
+    return compileDirectionCall(this, expr);
   }
 
   compileCardinalDirectionCall(expr: Extract<ExpressionAst, { kind: "call" }>): void {
-    const keyRegister = this.directionKeyRegister(expr);
-    if (keyRegister === undefined) return;
-
-    const yAxis = this.freshLabel("direction_cardinal_y_axis");
-    const done = this.freshLabel("direction_cardinal_done");
-
-    this.emitOp(0x60 + registerIndex(keyRegister), `П->X ${keyRegister}`, "cardinal direction key");
-    this.emitNumberOrPreload("5");
-    this.emitOp(0x11, "-", "cardinal direction key-5");
-    this.emitOp(0x31, "К |x|", "cardinal direction axis test");
-    this.emitNumberOrPreload("1");
-    this.emitOp(0x11, "-", "cardinal direction axis discriminator");
-    this.emitJump(0x5e, "F x=0", yAxis, "cardinal direction y-axis");
-
-    this.emitOp(0x60 + registerIndex(keyRegister), `П->X ${keyRegister}`, "cardinal direction x key");
-    this.emitNumberOrPreload("5");
-    this.emitOp(0x11, "-", "cardinal direction key-5");
-    this.emitNumberOrPreload("10");
-    this.emitOp(0x12, "*", "cardinal direction x delta");
-    this.emitJump(0x51, "БП", done, "cardinal direction done");
-
-    this.emitLabel(yAxis);
-    this.emitNumberOrPreload("5");
-    this.emitOp(0x60 + registerIndex(keyRegister), `П->X ${keyRegister}`, "cardinal direction y key");
-    this.emitOp(0x11, "-", "cardinal direction 5-key");
-    this.emitNumberOrPreload("3");
-    this.emitOp(0x13, "/", "cardinal direction y delta");
-
-    this.emitLabel(done);
-    this.optimizations.push({
-      name: "direction-cardinal-lowering",
-      detail: `Lowered guarded cardinal direction(${this.directionKeyName(expr)}) without floor-key cases.`,
-    });
+    return compileCardinalDirectionCall(this, expr);
   }
 
   directionKeyRegister(expr: Extract<ExpressionAst, { kind: "call" }>): RegisterName | undefined {
-    if (expr.args.length !== 1) {
-      this.diagnostics.push({
-        level: "error",
-        message: `direction() expects one keypad argument, got ${expr.args.length}.`,
-      });
-      return undefined;
-    }
-    const arg = expr.args[0]!;
-    if (arg.kind !== "identifier") {
-      this.diagnostics.push({
-        level: "error",
-        message: "direction() currently requires an identifier argument so the optimizer can reuse its register.",
-      });
-      return undefined;
-    }
-    const keyRegister = this.allocation.registers[arg.name];
-    if (!keyRegister) {
-      this.diagnostics.push({
-        level: "error",
-        message: `Unknown direction key '${arg.name}'.`,
-      });
-      return undefined;
-    }
-    return keyRegister;
+    return directionKeyRegister(this, expr);
   }
 
   directionKeyName(expr: Extract<ExpressionAst, { kind: "call" }>): string {
-    const arg = expr.args[0];
-    return arg?.kind === "identifier" ? arg.name : "?";
+    return directionKeyName(this, expr);
   }
 
   compileSpatialCountCall(name: "neighbor_count" | "line_count", expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
@@ -9964,7 +9575,7 @@ function normalizeConstantLiteral(raw: string): string {
   return Number.isFinite(value) ? String(value) : raw.trim();
 }
 
-function negatedNumberLiteral(raw: string): string {
+export function negatedNumberLiteral(raw: string): string {
   const normalized = raw.trim();
   return normalized.startsWith("-") ? normalized.slice(1) : `-${normalized}`;
 }
@@ -10683,7 +10294,7 @@ function flOpcode(register: RegisterName): number | undefined {
   }
 }
 
-function isSimpleStackLoad(expr: ExpressionAst): boolean {
+export function isSimpleStackLoad(expr: ExpressionAst): boolean {
   return expr.kind === "identifier" || expr.kind === "number";
 }
 
@@ -10863,7 +10474,7 @@ function conditionToText(condition: ConditionAst): string {
   return `${expressionToIntentText(condition.left)} ${condition.op} ${expressionToIntentText(condition.right)}`;
 }
 
-function expressionToIntentText(expr: ExpressionAst): string {
+export function expressionToIntentText(expr: ExpressionAst): string {
   switch (expr.kind) {
     case "number":
       return expr.raw;
@@ -11038,7 +10649,7 @@ function safeFormatAddress(address: number): string {
   }
 }
 
-function buildDiagnostic(
+export function buildDiagnostic(
   level: "warning" | "error",
   message: string,
   line?: number,
@@ -11814,11 +11425,11 @@ function comparisonMask(condition: ConditionAst): ExpressionAst | undefined {
   return condition.op === "==" ? oneMinus(notEqual) : notEqual;
 }
 
-function isTicTacToeMacroName(name: string): boolean {
+export function isTicTacToeMacroName(name: string): boolean {
   return ticTacToeMacroArity(name) !== undefined;
 }
 
-function ticTacToeMacroArity(name: string): number | undefined {
+export function ticTacToeMacroArity(name: string): number | undefined {
   const arities: Record<string, number> = {
     norm4: 1,
     grid4_norm: 1,
@@ -11846,7 +11457,7 @@ function ticTacToeMacroArity(name: string): number | undefined {
   return arities[name];
 }
 
-function ticTacToeExpressionMacro(name: string, args: ExpressionAst[]): ExpressionAst | undefined {
+export function ticTacToeExpressionMacro(name: string, args: ExpressionAst[]): ExpressionAst | undefined {
   switch (name) {
     case "norm4":
     case "grid4_norm":
@@ -11937,19 +11548,19 @@ export interface NearAnyHelperStats {
   helperCost: number;
 }
 
-function isSmallSetMacroName(name: string): name is SmallSetMacroName {
+export function isSmallSetMacroName(name: string): name is SmallSetMacroName {
   return name === "near_any" || name === "eq_any";
 }
 
-function smallSetMacroArityOk(name: SmallSetMacroName, argCount: number): boolean {
+export function smallSetMacroArityOk(name: SmallSetMacroName, argCount: number): boolean {
   return name === "near_any" ? argCount >= 3 : argCount >= 2;
 }
 
-function smallSetMacroArityText(name: SmallSetMacroName): string {
+export function smallSetMacroArityText(name: SmallSetMacroName): string {
   return name === "near_any" ? "at least three arguments" : "at least two arguments";
 }
 
-function smallSetExpressionMacro(name: string, args: ExpressionAst[]): ExpressionAst | undefined {
+export function smallSetExpressionMacro(name: string, args: ExpressionAst[]): ExpressionAst | undefined {
   if (!isSmallSetMacroName(name) || !smallSetMacroArityOk(name, args.length)) return undefined;
   if (name === "near_any") {
     const value = args[0]!;
@@ -12841,7 +12452,7 @@ function negateExpression(expr: ExpressionAst): ExpressionAst {
   return { kind: "unary", op: "-", expr };
 }
 
-function matchRemainderByConstant(
+export function matchRemainderByConstant(
   expr: Extract<ExpressionAst, { kind: "binary" }>,
 ): { value: ExpressionAst; divisor: ExpressionAst } | undefined {
   if (expr.op !== "-") return undefined;
@@ -12914,7 +12525,7 @@ function isIdentityAssignment(statement: Extract<StatementAst, { kind: "assign" 
   return expressionEquals(statement.expr, { kind: "identifier", name: statement.target });
 }
 
-function expressionEquals(left: ExpressionAst, right: ExpressionAst): boolean {
+export function expressionEquals(left: ExpressionAst, right: ExpressionAst): boolean {
   if (left.kind !== right.kind) return false;
   switch (left.kind) {
     case "number":
@@ -12995,7 +12606,7 @@ function expressionContainsRandom(expr: ExpressionAst): boolean {
 // observable effect. Calls (random, read, macros) may be non-idempotent or have
 // side effects, so they are conservatively impure. Purity makes it sound to
 // compute a repeated operand once and duplicate it through the stack.
-function isPureExpression(expr: ExpressionAst): boolean {
+export function isPureExpression(expr: ExpressionAst): boolean {
   switch (expr.kind) {
     case "number":
     case "identifier":
@@ -13266,7 +12877,7 @@ function expressionPureForSubstitution(expr: ExpressionAst): boolean {
   }
 }
 
-function isNumericValue(expr: ExpressionAst, value: number): boolean {
+export function isNumericValue(expr: ExpressionAst, value: number): boolean {
   const parsed = numericLiteralValue(expr);
   return parsed !== undefined && parsed === value;
 }
@@ -13472,7 +13083,7 @@ function estimateNegativeZeroThresholdRawCost(
   return estimateExpressionCostForCondition(ratio, preloadedConstants) + 4;
 }
 
-function estimateExpressionCost(expr: ExpressionAst): number {
+export function estimateExpressionCost(expr: ExpressionAst): number {
   switch (expr.kind) {
     case "number":
       return estimateNumberCost(expr.raw);
@@ -14820,7 +14431,7 @@ function indirectBase(text: string): number {
   throw new Error(`Unknown indirect opcode ${text}`);
 }
 
-function binaryOpcode(op: "+" | "-" | "*" | "/"): number {
+export function binaryOpcode(op: "+" | "-" | "*" | "/"): number {
   return op === "+" ? 0x10 : op === "-" ? 0x11 : op === "*" ? 0x12 : 0x13;
 }
 
