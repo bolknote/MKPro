@@ -116,6 +116,25 @@ import {
   emitSpatialProgressionCountLoopBody,
   emitSpatialSumLoopHelperBody,
 } from "./emit/lowering/spatial.ts";
+import {
+  compileCoordListHasCondition,
+  compileCoordListLineCountAssignment,
+  compileCoordListLineCountDashedReport,
+  compileCoordOnesDigit,
+  compileCoordTensDigit,
+  compileFusedCoordListScan,
+  compileRandomCoordListSetup,
+  compileScaledCoordFraction,
+  compileScaledCoordInteger,
+  compileScaledCoordListVisibilityTest,
+  emitCoordListCounterLoop,
+  emitCoordListIndirectRecall,
+  emitCoordListLineCountInitialTotal,
+  emitCoordListLineCountResult,
+  emitCoordListLoopSetup,
+  emitDashedCoordReportCellBody,
+  emitRandomCoordListCandidate,
+} from "./emit/lowering/coord-list.ts";
 import { MK61_PROFILE, machineSupports, type MachineProfile } from "./machineProfile.ts";
 import type {
   AppliedOptimization,
@@ -204,9 +223,9 @@ const CELL_MAP_PREFIX = "__cell_map_";
 const SPATIAL_HIT_SCRATCH_PREFIX = "__spatial_hit_";
 const SPATIAL_COUNT_SCRATCH_PREFIX = "__spatial_count_";
 const COORD_LIST_ITEM_PREFIX = "__coord_list_";
-const COORD_LIST_POINTER = "__coord_list_pointer";
+export const COORD_LIST_POINTER = "__coord_list_pointer";
 export const COORD_LIST_COUNTER = "__coord_list_counter";
-const COORD_LIST_CURRENT = "__coord_list_current";
+export const COORD_LIST_CURRENT = "__coord_list_current";
 export const COORD_LIST_DX = "__coord_list_dx";
 const DASHED_COORD_REPORT_MASK = "8,-00--_";
 export const NEGATIVE_ZERO_DEGREE_SELECTOR_GE = "__mkpro_negative_zero_ge";
@@ -354,7 +373,7 @@ interface MantissaMaskDisplayTemplate {
   width: number;
 }
 
-interface DashedCoordReportTemplate {
+export interface DashedCoordReportTemplate {
   cell: DisplayField;
   bearing: DisplayField;
 }
@@ -2285,53 +2304,7 @@ export class EmitContext {
   }
 
   compileRandomCoordListSetup(fields: readonly StateFieldAst[], placement: RandomCoordListPlacement): void {
-    const context = this.randomCoordListSetupContext(fields);
-    if (context === undefined) {
-      this.diagnostics.push(buildDiagnostic(
-        "error",
-        "random_unique() coord_list setup needs contiguous list registers plus coord-list scratch registers.",
-        fields[0]?.line,
-      ));
-      return;
-    }
-    const line = fields[0]?.line;
-    const draw = this.freshLabel("random_coord_draw");
-    const check = this.freshLabel("random_coord_check");
-    const store = this.freshLabel("random_coord_store");
-    const seed = fields.at(-1)!;
-
-    this.emitOp(0x3b, "К СЧ", "random coord seed", line);
-    this.emitStore(seed.name, "random coord seed", seed.line, true);
-    this.emitNumberOrPreload(String(fields.length));
-    this.emitStore(COORD_LIST_COUNTER, "random coord remaining", line, true);
-
-    this.emitLabel(draw);
-    this.emitRandomCoordListCandidate(placement, seed.name, line);
-
-    this.emitNumberOrPreload(String(fields.length));
-    this.emitRecall(COORD_LIST_COUNTER, "random coord remaining", line);
-    this.emitOp(0x11, "-", "random coord previous count", line);
-    this.emitStore(COORD_LIST_DX, "random coord previous count", line, true);
-    this.emitNumberOrPreload(String(context.pointerStart));
-    this.emitStore(COORD_LIST_POINTER, "random coord pointer", line, true);
-    this.emitRecall(COORD_LIST_DX, "random coord previous count", line);
-    this.emitJump(0x57, "F x!=0", store, "random coord first item", line);
-
-    this.emitLabel(check);
-    this.emitRecall(COORD_LIST_CURRENT, "random coord candidate", line);
-    this.emitCoordListIndirectRecall(context.pointerRegister, line, "random coord previous");
-    this.emitOp(0x11, "-", "random coord uniqueness", line);
-    this.emitJump(0x57, "F x!=0", draw, "random coord collision", line);
-    this.emitJump(context.previousCounterOpcode, getOpcode(context.previousCounterOpcode).name, check, "random coord previous loop", line);
-
-    this.emitLabel(store);
-    this.emitRecall(COORD_LIST_CURRENT, "random coord candidate", line);
-    this.emitOp(0xb0 + registerIndex(context.pointerRegister), `К X->П ${context.pointerRegister}`, "random coord store", line, true);
-    this.emitJump(context.outerCounterOpcode, getOpcode(context.outerCounterOpcode).name, draw, "random coord outer loop", line);
-    this.optimizations.push({
-      name: "setup-coord-list-indirect-random-unique",
-      detail: `Generated compact indirect setup for ${fields.length} unique coord_list item(s).`,
-    });
+    return compileRandomCoordListSetup(this, fields, placement);
   }
 
   emitRandomCoordListCandidate(
@@ -2339,39 +2312,7 @@ export class EmitContext {
     seedField: string,
     line: number | undefined,
   ): void {
-    const cellCount = placement.width * placement.height;
-    this.emitRecall(seedField, "random coord seed", line);
-    this.emitNumberOrPreload("37");
-    this.emitOp(0x12, "*", "random coord next seed", line);
-    this.emitOp(0x35, "К {x}", "random coord seed fraction", line);
-    this.emitStore(seedField, "random coord seed", line, true);
-    this.emitNumberOrPreload(String(cellCount));
-    this.emitOp(0x12, "*", "random coord scaled seed", line);
-    this.emitOp(0x34, "К [x]", "random coord flat index", line);
-    if (this.coordListUsesScaledDecimalStorage(placement.listName) && isZeroOriginTenByTenPlacement(placement)) {
-      this.emitNumberOrPreload("10");
-      this.emitOp(0x13, "/", "random coord scaled decimal cell", line);
-      this.emitStore(COORD_LIST_CURRENT, "random coord scaled decimal cell", line, true);
-      return;
-    }
-    this.emitStore(COORD_LIST_CURRENT, "random coord flat index", line, true);
-    if (placement.xMin === 0 && placement.yMin === 0 && placement.width === 10 && placement.height === 10) {
-      return;
-    }
-
-    const flat = { kind: "identifier", name: COORD_LIST_CURRENT } satisfies ExpressionAst;
-    const row = intExpression(divideExpressions(flat, numberExpression(placement.width)));
-    this.compileExpression(row);
-    this.emitStore(COORD_LIST_DX, "random coord row", line, true);
-
-    const rowId = { kind: "identifier", name: COORD_LIST_DX } satisfies ExpressionAst;
-    const x = addExpressions(
-      numberExpression(placement.xMin),
-      subtractExpressions(flat, multiplyExpressions(numberExpression(placement.width), rowId)),
-    );
-    const y = addExpressions(numberExpression(placement.yMin), rowId);
-    this.compileExpression(addExpressions(x, multiplyExpressions(numberExpression(10), y)));
-    this.emitStore(COORD_LIST_CURRENT, "random coord candidate", line, true);
+    return emitRandomCoordListCandidate(this, placement, seedField, line);
   }
 
   randomCoordListSetupContext(fields: readonly StateFieldAst[]): {
@@ -4474,84 +4415,14 @@ export class EmitContext {
     assignment: Extract<StatementAst, { kind: "assign" }>,
     show: Extract<StatementAst, { kind: "show" }>,
   ): boolean {
-    const template = this.dashedCoordReportTemplateAfterLineCount(assignment, show);
-    if (template === undefined) return false;
-    if (!this.compileCoordListLineCountAssignment(assignment, template)) return false;
-    this.compileShow(show.display, show.line);
-    this.optimizations.push({
-      name: "coord-list-line-count-dashed-report-fusion",
-      detail: `Packed coord_list line_count() directly for dashed report ${show.display} at line ${assignment.line}.`,
-    });
-    return true;
+    return compileCoordListLineCountDashedReport(this, assignment, show);
   }
 
   compileCoordListLineCountAssignment(
     statement: Extract<StatementAst, { kind: "assign" }>,
     dashedReport?: DashedCoordReportTemplate,
   ): boolean {
-    const call = coordListLineCountCall(statement.expr);
-    if (call === undefined) return false;
-    const context = this.coordListIndirectContext(call);
-    if (context === undefined) return false;
-    const current = this.allocation.registers[COORD_LIST_CURRENT];
-    if (current === undefined) return false;
-    const scaled = this.coordListUsesScaledDecimalStorage(call);
-    if (scaled && !this.scaleCoordListCellInPlace(context.cell, statement.line)) return false;
-
-    this.emitCoordListLineCountInitialTotal(statement.target, statement.line, dashedReport);
-    this.emitCoordListLoopSetup(context, statement.line);
-
-    const start = this.freshLabel("coord_list_line_loop");
-    const visible = this.freshLabel("coord_list_visible");
-    const countNext = this.freshLabel("coord_list_count_next");
-    this.emitLabel(start);
-    this.emitCoordListIndirectRecall(context.pointerRegister, statement.line, "coord_list candidate");
-    this.emitStore(COORD_LIST_CURRENT, "coord_list current", statement.line);
-
-    if (scaled) {
-      this.compileScaledCoordListVisibilityTest(context.cell, visible, countNext, statement.line, "coord_list");
-    } else {
-      this.compileCoordOnesDigit({ kind: "identifier", name: COORD_LIST_CURRENT }, statement.line);
-      this.compileCoordOnesDigit(context.cell, statement.line);
-      this.emitOp(0x11, "-", "coord_list dx", statement.line);
-      this.emitJump(0x57, "F x!=0", visible, "coord_list same column", statement.line);
-
-      this.compileCoordTensDigit({ kind: "identifier", name: COORD_LIST_CURRENT }, statement.line);
-      this.compileCoordTensDigit(context.cell, statement.line);
-      this.emitOp(0x11, "-", "coord_list dy", statement.line);
-      this.emitJump(0x57, "F x!=0", visible, "coord_list same row", statement.line);
-      this.emitOp(0x31, "К |x|", "coord_list |dy|", statement.line);
-      this.emitOp(0x14, "<->", "coord_list dx", statement.line);
-      this.emitOp(0x31, "К |x|", "coord_list |dx|", statement.line);
-      this.emitOp(0x11, "-", "coord_list diagonal compare", statement.line);
-      this.emitJump(0x57, "F x!=0", visible, "coord_list same diagonal", statement.line);
-      this.emitJump(0x51, "БП", countNext, "coord_list not visible", statement.line);
-    }
-
-    this.emitLabel(visible);
-    if (!this.emitIndirectUnitIncrement(statement.target, "coord_list line_count total", statement.line)) {
-      this.emitRecall(statement.target, "coord_list line_count total", statement.line);
-      this.emitNumberOrPreload("1");
-      this.emitOp(0x10, "+", "coord_list add visible", statement.line);
-      this.emitStore(statement.target, "coord_list line_count total", statement.line);
-    }
-
-    this.emitLabel(countNext);
-    this.emitCoordListCounterLoop(context.counterRegister, start, statement.line, "coord_list line_count loop");
-    this.emitCoordListLineCountResult(statement.target, statement.line, dashedReport);
-    this.optimizations.push({
-      name: scaled ? "coord-list-scaled-line-count" : "coord-list-line-count-indirect-loop",
-      detail: scaled
-        ? `Lowered coord_list_line_count() through scaled decimal coordinates at line ${statement.line}.`
-        : `Lowered coord_list_line_count() through a compact indirect register loop at line ${statement.line}.`,
-    });
-    if (dashedReport !== undefined) {
-      this.optimizations.push({
-        name: "coord-list-line-count-dashed-report-body",
-        detail: `Accumulated ${statement.target} as a packed dashed report body at line ${statement.line}.`,
-      });
-    }
-    return true;
+    return compileCoordListLineCountAssignment(this, statement, dashedReport);
   }
 
   dashedCoordReportTemplateAfterLineCount(
@@ -4579,13 +4450,7 @@ export class EmitContext {
     dashedReport?: DashedCoordReportTemplate,
     commentPrefix = "coord_list line_count",
   ): void {
-    if (dashedReport === undefined) {
-      this.emitZero(`${commentPrefix} total`, line);
-      this.emitStore(target, `${commentPrefix} total`, line);
-      return;
-    }
-    this.emitDashedCoordReportCellBody(dashedReport, line, `${commentPrefix} dashed report`);
-    this.emitStore(target, `${commentPrefix} dashed report body`, line);
+    return emitCoordListLineCountInitialTotal(this, target, line, dashedReport, commentPrefix);
   }
 
   emitCoordListLineCountResult(
@@ -4594,12 +4459,7 @@ export class EmitContext {
     dashedReport?: DashedCoordReportTemplate,
     commentPrefix = "coord_list line_count",
   ): void {
-    this.emitRecall(
-      target,
-      dashedReport === undefined ? `${commentPrefix} result` : `${commentPrefix} dashed report body`,
-      line,
-    );
-    if (dashedReport !== undefined) this.currentXDashedCoordReportBody = dashedReport;
+    return emitCoordListLineCountResult(this, target, line, dashedReport, commentPrefix);
   }
 
   emitDashedCoordReportCellBody(
@@ -4607,14 +4467,7 @@ export class EmitContext {
     line: number,
     commentPrefix: string,
   ): void {
-    if (!this.xHolds(template.cell.name)) this.emitRecall(template.cell.name, `${commentPrefix} cell`, line);
-    if (this.scaledCoordVariables.has(template.cell.name)) {
-      this.emitNumber("5");
-    } else {
-      this.emitNumber("4");
-    }
-    this.emitOp(0x15, "F 10^x", `${commentPrefix} cell scale`, line);
-    this.emitOp(0x12, "*", `${commentPrefix} cell shift`, line);
+    return emitDashedCoordReportCellBody(this, template, line, commentPrefix);
   }
 
   coordListUsesScaledDecimalStorage(callOrList: CoordListCall | string): boolean {
@@ -4644,120 +4497,19 @@ export class EmitContext {
     line: number,
     commentPrefix: string,
   ): void {
-    this.compileScaledCoordFraction({ kind: "identifier", name: COORD_LIST_CURRENT }, line, `${commentPrefix} current x`);
-    this.compileScaledCoordFraction(cell, line, `${commentPrefix} cell x`);
-    this.emitOp(0x11, "-", `${commentPrefix} dx`, line);
-    this.emitJump(0x57, "F x!=0", visible, `${commentPrefix} same column`, line);
-    this.emitNumberOrPreload("10");
-    this.emitOp(0x12, "*", `${commentPrefix} dx digit`, line);
-
-    this.compileScaledCoordInteger({ kind: "identifier", name: COORD_LIST_CURRENT }, line, `${commentPrefix} current y`);
-    this.compileScaledCoordInteger(cell, line, `${commentPrefix} cell y`);
-    this.emitOp(0x11, "-", `${commentPrefix} dy`, line);
-    this.emitJump(0x57, "F x!=0", visible, `${commentPrefix} same row`, line);
-    this.emitOp(0x31, "К |x|", `${commentPrefix} |dy|`, line);
-    this.emitOp(0x14, "<->", `${commentPrefix} dx`, line);
-    this.emitOp(0x31, "К |x|", `${commentPrefix} |dx|`, line);
-    this.emitOp(0x11, "-", `${commentPrefix} diagonal compare`, line);
-    this.emitJump(0x57, "F x!=0", visible, `${commentPrefix} same diagonal`, line);
-    this.emitJump(0x51, "БП", countNext, `${commentPrefix} not visible`, line);
+    return compileScaledCoordListVisibilityTest(this, cell, visible, countNext, line, commentPrefix);
   }
 
   compileScaledCoordFraction(expr: ExpressionAst, line: number, comment: string): void {
-    this.compileExpression(expr);
-    this.emitOp(0x35, "К {x}", comment, line);
+    return compileScaledCoordFraction(this, expr, line, comment);
   }
 
   compileScaledCoordInteger(expr: ExpressionAst, line: number, comment: string): void {
-    this.compileExpression(expr);
-    this.emitOp(0x34, "К [x]", comment, line);
+    return compileScaledCoordInteger(this, expr, line, comment);
   }
 
   compileFusedCoordListScan(statements: StatementAst[], index: number): number {
-    const branch = statements[index];
-    const next = statements[index + 1];
-    if (branch?.kind !== "if" || next === undefined || branch.elseBody !== undefined) return 0;
-    if (!this.coordListFusedHitBodyAllowed(branch.thenBody)) return 0;
-
-    const hasCall = coordListHasConditionCall(branch.condition);
-    const lineCount = this.coordListLineCountAssignmentFromStatement(next);
-    if (hasCall === undefined || lineCount === undefined) return 0;
-    const lineCountCall = coordListLineCountCall(lineCount.expr);
-    if (lineCountCall === undefined || !sameCoordListCall(hasCall, lineCountCall)) return 0;
-
-    const context = this.coordListIndirectContext(lineCountCall);
-    const current = this.allocation.registers[COORD_LIST_CURRENT];
-    if (context === undefined || current === undefined) return 0;
-    const scaled = this.coordListUsesScaledDecimalStorage(lineCountCall);
-
-    const target = lineCount.target;
-    const line = branch.line;
-    const dashedReport = index + 3 === statements.length
-      ? this.dashedCoordReportTemplateAfterLineCount(lineCount, statements[index + 2])
-      : undefined;
-    if (scaled && !this.scaleCoordListCellInPlace(context.cell, line)) return 0;
-    this.emitCoordListLineCountInitialTotal(target, line, dashedReport, "coord_list fused");
-    this.emitCoordListLoopSetup(context, line);
-
-    const start = this.freshLabel("coord_list_fused_loop");
-    const hit = this.freshLabel("coord_list_fused_hit");
-    const visible = this.freshLabel("coord_list_fused_visible");
-    const countNext = this.freshLabel("coord_list_fused_next");
-    this.emitLabel(start);
-    this.emitCoordListIndirectRecall(context.pointerRegister, line, "coord_list fused candidate");
-    this.emitStore(COORD_LIST_CURRENT, "coord_list fused current", line);
-
-    this.compileExpression(context.cell);
-    this.emitRecall(COORD_LIST_CURRENT, "coord_list fused current", line);
-    this.emitOp(0x11, "-", "coord_list fused hit compare", line);
-    this.emitJump(0x57, "F x!=0", hit, "coord_list fused hit", line);
-
-    if (scaled) {
-      this.compileScaledCoordListVisibilityTest(context.cell, visible, countNext, line, "coord_list fused");
-    } else {
-      this.compileCoordOnesDigit({ kind: "identifier", name: COORD_LIST_CURRENT }, line);
-      this.compileCoordOnesDigit(context.cell, line);
-      this.emitOp(0x11, "-", "coord_list fused dx", line);
-      this.emitJump(0x57, "F x!=0", visible, "coord_list fused same column", line);
-
-      this.compileCoordTensDigit({ kind: "identifier", name: COORD_LIST_CURRENT }, line);
-      this.compileCoordTensDigit(context.cell, line);
-      this.emitOp(0x11, "-", "coord_list fused dy", line);
-      this.emitJump(0x57, "F x!=0", visible, "coord_list fused same row", line);
-      this.emitOp(0x31, "К |x|", "coord_list fused |dy|", line);
-      this.emitOp(0x14, "<->", "coord_list fused dx", line);
-      this.emitOp(0x31, "К |x|", "coord_list fused |dx|", line);
-      this.emitOp(0x11, "-", "coord_list fused diagonal compare", line);
-      this.emitJump(0x57, "F x!=0", visible, "coord_list fused same diagonal", line);
-      this.emitJump(0x51, "БП", countNext, "coord_list fused not visible", line);
-    }
-
-    this.emitLabel(hit);
-    this.compileStatements(branch.thenBody);
-    this.emitLabel(visible);
-    if (!this.emitIndirectUnitIncrement(target, "coord_list fused total", line)) {
-      this.emitRecall(target, "coord_list fused total", line);
-      this.emitNumberOrPreload("1");
-      this.emitOp(0x10, "+", "coord_list fused add visible", line);
-      this.emitStore(target, "coord_list fused total", line);
-    }
-
-    this.emitLabel(countNext);
-    this.emitCoordListCounterLoop(context.counterRegister, start, line, "coord_list fused loop");
-    this.emitCoordListLineCountResult(target, line, dashedReport, "coord_list fused");
-    this.optimizations.push({
-      name: scaled ? "coord-list-scaled-fused-hit-line-count" : "coord-list-fused-hit-line-count",
-      detail: scaled
-        ? `Fused coord_list membership and line_count through scaled decimal coordinates at line ${branch.line}.`
-        : `Fused coord_list membership and line_count into one indirect scan at line ${branch.line}.`,
-    });
-    if (dashedReport !== undefined) {
-      this.optimizations.push({
-        name: "coord-list-fused-dashed-report-body",
-        detail: `Accumulated ${target} as a packed dashed report body during the fused scan at line ${branch.line}.`,
-      });
-    }
-    return 2;
+    return compileFusedCoordListScan(this, statements, index);
   }
 
   coordListLineCountAssignmentFromStatement(
@@ -4837,31 +4589,7 @@ export class EmitContext {
     falseLabel: string,
     line: number,
   ): boolean {
-    const call = coordListHasConditionCall(condition);
-    if (call === undefined) return false;
-    const context = this.coordListIndirectContext(call);
-    if (context === undefined) return false;
-    const scaled = this.coordListUsesScaledDecimalStorage(call);
-    if (scaled && !this.scaleCoordListCellInPlace(context.cell, line)) return false;
-
-    const trueLabel = this.freshLabel("coord_list_hit");
-    this.emitCoordListLoopSetup(context, line);
-    const start = this.freshLabel("coord_list_has_loop");
-    this.emitLabel(start);
-    this.compileExpression(context.cell);
-    this.emitCoordListIndirectRecall(context.pointerRegister, line, "coord_list candidate");
-    this.emitOp(0x11, "-", "coord_list hit compare", line);
-    this.emitJump(0x57, "F x!=0", trueLabel, "coord_list hit", line);
-    this.emitCoordListCounterLoop(context.counterRegister, start, line, "coord_list has loop");
-    this.emitJump(0x51, "БП", falseLabel, "coord_list miss", line);
-    this.emitLabel(trueLabel);
-    this.optimizations.push({
-      name: scaled ? "coord-list-scaled-membership" : "coord-list-indirect-membership",
-      detail: scaled
-        ? `Lowered coord_list membership through scaled decimal coordinates at line ${line}.`
-        : `Lowered coord_list membership through an indirect register walk at line ${line}.`,
-    });
-    return true;
+    return compileCoordListHasCondition(this, condition, falseLabel, line);
   }
 
   coordListIndirectContext(call: CoordListCall): CoordListIndirectContext | undefined {
@@ -4887,10 +4615,7 @@ export class EmitContext {
   }
 
   emitCoordListLoopSetup(context: CoordListIndirectContext, line: number): void {
-    this.emitNumberOrPreload(String(context.pointerStart));
-    this.emitStore(COORD_LIST_POINTER, "coord_list pointer", line);
-    this.emitNumberOrPreload(String(context.count));
-    this.emitStore(COORD_LIST_COUNTER, "coord_list counter", line);
+    return emitCoordListLoopSetup(this, context, line);
   }
 
   emitCoordListIndirectRecall(
@@ -4898,7 +4623,7 @@ export class EmitContext {
     line: number | undefined,
     comment: string,
   ): void {
-    this.emitOp(0xd0 + registerIndex(pointerRegister), `К П->X ${pointerRegister}`, comment, line);
+    return emitCoordListIndirectRecall(this, pointerRegister, line, comment);
   }
 
   emitCoordListCounterLoop(
@@ -4907,35 +4632,15 @@ export class EmitContext {
     line: number,
     comment: string,
   ): void {
-    const opcode = flOpcode(counterRegister);
-    if (opcode !== undefined) {
-      this.emitJump(opcode, getOpcode(opcode).name, target, comment, line);
-      this.coordListCounterKnownOne = true;
-      return;
-    }
-    this.emitRecall(COORD_LIST_COUNTER, "coord_list counter", line);
-    this.emitNumberOrPreload("1");
-    this.emitOp(0x11, "-", "coord_list decrement", line);
-    this.emitStore(COORD_LIST_COUNTER, "coord_list counter", line);
-    this.emitRecall(COORD_LIST_COUNTER, "coord_list counter", line);
-    this.emitJump(0x5e, "F x=0", target, comment, line);
-    this.coordListCounterKnownOne = false;
+    return emitCoordListCounterLoop(this, counterRegister, target, line, comment);
   }
 
   compileCoordOnesDigit(expr: ExpressionAst, line: number): void {
-    this.compileExpression(expr);
-    this.emitNumberOrPreload("10");
-    this.emitOp(0x13, "/", "coord quotient", line);
-    this.emitOp(0x35, "К {x}", "coord fractional part", line);
-    this.emitNumberOrPreload("10");
-    this.emitOp(0x12, "*", "coord ones digit", line);
+    return compileCoordOnesDigit(this, expr, line);
   }
 
   compileCoordTensDigit(expr: ExpressionAst, line: number): void {
-    this.compileExpression(expr);
-    this.emitNumberOrPreload("10");
-    this.emitOp(0x13, "/", "coord quotient", line);
-    this.emitOp(0x34, "К [x]", "coord tens digit", line);
+    return compileCoordTensDigit(this, expr, line);
   }
 
   compileBitHasConditionWithBitMaskHelper(
@@ -5571,7 +5276,7 @@ interface CoordListCall {
   items: Array<{ name: string }>;
 }
 
-interface CoordListIndirectContext {
+export interface CoordListIndirectContext {
   cell: ExpressionAst;
   count: number;
   pointerStart: number;
@@ -5579,7 +5284,7 @@ interface CoordListIndirectContext {
   counterRegister: RegisterName;
 }
 
-function coordListHasConditionCall(condition: ConditionAst): CoordListCall | undefined {
+export function coordListHasConditionCall(condition: ConditionAst): CoordListCall | undefined {
   if (!isZeroExpression(condition.right) || condition.op !== "!=") return undefined;
   return coordListHasCall(condition.left);
 }
@@ -5594,7 +5299,7 @@ function coordListHasCall(expr: ExpressionAst): CoordListCall | undefined {
   return { cell, items: items.map((item) => ({ name: item.name })) };
 }
 
-function coordListLineCountCall(expr: ExpressionAst): CoordListCall | undefined {
+export function coordListLineCountCall(expr: ExpressionAst): CoordListCall | undefined {
   if (expr.kind !== "call" || expr.callee.toLowerCase() !== "coord_list_line_count") return undefined;
   if (expr.args.length < 2) return undefined;
   const [cell, ...items] = expr.args;
@@ -5604,7 +5309,7 @@ function coordListLineCountCall(expr: ExpressionAst): CoordListCall | undefined 
   return { cell, items: items.map((item) => ({ name: item.name })) };
 }
 
-function sameCoordListCall(left: CoordListCall, right: CoordListCall): boolean {
+export function sameCoordListCall(left: CoordListCall, right: CoordListCall): boolean {
   return expressionEquals(left.cell, right.cell) &&
     left.items.length === right.items.length &&
     left.items.every((item, index) => item.name === right.items[index]?.name);
@@ -10334,7 +10039,7 @@ export function cellMaskExpression(x: ExpressionAst, y: ExpressionAst): Expressi
   );
 }
 
-interface RandomCoordListPlacement {
+export interface RandomCoordListPlacement {
   listName: string;
   xMin: number;
   width: number;
@@ -10343,7 +10048,7 @@ interface RandomCoordListPlacement {
   count: number;
 }
 
-function isZeroOriginTenByTenPlacement(placement: RandomCoordListPlacement): boolean {
+export function isZeroOriginTenByTenPlacement(placement: RandomCoordListPlacement): boolean {
   return placement.xMin === 0 && placement.yMin === 0 && placement.width === 10 && placement.height === 10;
 }
 
@@ -10469,7 +10174,7 @@ function oneMinus(expr: ExpressionAst): ExpressionAst {
   };
 }
 
-function multiplyExpressions(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
+export function multiplyExpressions(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
   if (isNumericValue(left, 0) || isNumericValue(right, 0)) return numberExpression(0);
   if (isNumericValue(left, 1)) return right;
   if (isNumericValue(right, 1)) return left;
@@ -10486,13 +10191,13 @@ export function addExpressions(left: ExpressionAst, right: ExpressionAst): Expre
   return { kind: "binary", op: "+", left, right };
 }
 
-function subtractExpressions(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
+export function subtractExpressions(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
   if (isNumericValue(right, 0)) return left;
   if (isNumericValue(left, 0)) return { kind: "unary", op: "-", expr: right };
   return { kind: "binary", op: "-", left, right };
 }
 
-function divideExpressions(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
+export function divideExpressions(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
   if (isNumericValue(right, 1)) return left;
   return { kind: "binary", op: "/", left, right };
 }
@@ -10517,7 +10222,7 @@ function absExpression(expr: ExpressionAst): ExpressionAst {
   return { kind: "call", callee: "abs", args: [expr] };
 }
 
-function intExpression(expr: ExpressionAst): ExpressionAst {
+export function intExpression(expr: ExpressionAst): ExpressionAst {
   return { kind: "call", callee: "int", args: [expr] };
 }
 
@@ -10778,7 +10483,7 @@ function matchIntDivideByConstant(expr: ExpressionAst): { value: ExpressionAst; 
   };
 }
 
-function numberExpression(value: number): ExpressionAst {
+export function numberExpression(value: number): ExpressionAst {
   return { kind: "number", raw: String(value) };
 }
 
