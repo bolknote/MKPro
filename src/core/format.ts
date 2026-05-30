@@ -14,10 +14,14 @@ const MK61_HEX_SETUP_DIGITS: Record<string, string> = {
 
 export function formatListing(result: CompileResult): string {
   const setupProgram = result.report.setupProgram;
-  if (setupProgram !== undefined) {
+  const manualRows = formatManualSetupRows(result);
+  if (setupProgram !== undefined || manualRows.length > 0) {
     return [
       "# Setup Listing",
-      formatListingSteps(setupProgram.steps),
+      formatListingRows([
+        ...manualRows,
+        ...(setupProgram?.steps ?? []).map(stepToListingRow),
+      ]),
       "",
       "# Main Listing",
       formatListingSteps(result.steps),
@@ -37,20 +41,42 @@ export function formatListing(result: CompileResult): string {
   return formatListingSteps(result.steps);
 }
 
+interface ListingRow {
+  address: number | string;
+  hex: string;
+  mnemonic: string;
+  comment?: string;
+}
+
 function formatListingSteps(steps: readonly ResolvedStep[]): string {
+  return formatListingRows(steps.map(stepToListingRow));
+}
+
+function formatListingRows(rows: readonly ListingRow[]): string {
   const lines = [
     " Step | Code | Command                 | Comment",
     "------+------+-------------------------+----------------",
   ];
-  for (const step of steps) {
-    const address = formatStepAddress(step.address).padStart(4, " ");
-    const command = step.mnemonic.padEnd(23, " ");
-    const comments = [step.comment]
+  for (const row of rows) {
+    const address = formatListingAddress(row.address).padStart(4, " ");
+    const code = row.hex.padStart(2, " ");
+    const command = row.mnemonic.padEnd(23, " ");
+    const comments = [row.comment]
       .filter((value): value is string => Boolean(value))
       .join("; ");
-    lines.push(` ${address} |  ${step.hex}  | ${command} | ${comments}`);
+    lines.push(` ${address} |  ${code}  | ${command} | ${comments}`);
   }
   return lines.join("\n");
+}
+
+function stepToListingRow(step: ResolvedStep): ListingRow {
+  const row: ListingRow = {
+    address: step.address,
+    hex: step.hex,
+    mnemonic: step.mnemonic,
+  };
+  if (step.comment !== undefined) row.comment = step.comment;
+  return row;
 }
 
 export function formatHex(result: CompileResult): string {
@@ -77,6 +103,10 @@ function formatStepAddress(address: number): string {
   } catch {
     return `>${address.toString(16).toUpperCase()}`;
   }
+}
+
+function formatListingAddress(address: number | string): string {
+  return typeof address === "number" ? formatStepAddress(address) : address;
 }
 
 export function formatJson(result: CompileResult): string {
@@ -117,10 +147,12 @@ export function formatSetupProgram(result: CompileResult): string | undefined {
 export function formatKeys(result: CompileResult): string {
   const lines: string[] = [];
   const setupProgram = result.report.setupProgram;
+  const manualSetupKeys = formatManualSetupKeys(result);
   if (setupProgram !== undefined) {
     lines.push(...formatStepKeys(setupProgram.steps));
-    lines.push("В/О", "С/П");
+    lines.push("В/О", ...manualSetupKeys, "С/П");
   } else {
+    lines.push(...manualSetupKeys);
     lines.push(...formatSetupPreloadKeys(result.report.preloads));
   }
   lines.push(...formatStepKeys(result.steps));
@@ -137,6 +169,67 @@ function formatSetupPreloadKeys(preloads: readonly PreloadReport[]): string[] {
     const value = executableSetupValue(preload.value);
     return value === undefined ? [] : [value, `X->П ${preload.register}`];
   });
+}
+
+function formatManualSetupRows(result: CompileResult): ListingRow[] {
+  return manualSetupInputs(result).map((input) => ({
+    address: "--",
+    hex: "-",
+    mnemonic: `enter ${input.name}`,
+    comment: `${formatManualInputRange(input)} in ${input.stack}`,
+  }));
+}
+
+function formatManualSetupKeys(result: CompileResult): string[] {
+  return manualSetupInputs(result).map((input) =>
+    `<enter ${input.name}: ${formatManualInputValue(input)} in ${input.stack}>`
+  );
+}
+
+interface ManualSetupInput {
+  name: string;
+  stack: "X" | "Y";
+  min?: number;
+  max?: number;
+}
+
+function manualSetupInputs(result: CompileResult): ManualSetupInput[] {
+  const inputs: ManualSetupInput[] = [];
+  const seen = new Set<string>();
+  for (const preload of result.report.preloads) {
+    const stack = stackPreloadSource(preload.value);
+    if (stack === undefined) continue;
+    const field = result.ast.v2?.state.find((candidate) =>
+      result.report.registers[candidate.name] === preload.register &&
+      candidate.initial === preload.value
+    );
+    const name = field?.name ?? `R${preload.register}`;
+    const key = `${name}:${stack}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const input: ManualSetupInput = {
+      name,
+      stack,
+    };
+    if (field?.min !== undefined) input.min = field.min;
+    if (field?.max !== undefined) input.max = field.max;
+    inputs.push(input);
+  }
+  return inputs;
+}
+
+function stackPreloadSource(value: string): "X" | "Y" | undefined {
+  const match = /^stack\.(X|Y)$/u.exec(value.trim());
+  return match?.[1] as "X" | "Y" | undefined;
+}
+
+function formatManualInputRange(input: ManualSetupInput): string {
+  return `enter ${formatManualInputValue(input)}`;
+}
+
+function formatManualInputValue(input: ManualSetupInput): string {
+  if (input.min !== undefined && input.max !== undefined) return `any value ${input.min}..${input.max}`;
+  return "a value";
 }
 
 function formatSetupAssignment(preload: PreloadReport): string | undefined {

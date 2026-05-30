@@ -22,7 +22,7 @@ Generated with `npm run examples:size`.
 | `dangerous-loading.mkpro` | 89 | 103 | -14 | ok: <= reference | load ok |
 | `dungeon.mkpro` | 88 | 105 | -17 | ok: <= reference | load ok |
 | `fox-hunt-100.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |
-| `fox-hunt-mk61.mkpro` | 97 | 92 | +5 | broken: > reference | main+setup load ok |
+| `fox-hunt-mk61.mkpro` | 72 | 92 | -20 | ok: <= reference | main+setup load ok |
 | `game-100-pig.mkpro` | 103 | 103 | 0 | ok: <= reference | main+setup load ok |
 | `human.mkpro` | 30 | - | - | ok: no reference | load ok |
 | `lunar.mkpro` | 47 | 58 | -11 | ok: <= reference | load ok |

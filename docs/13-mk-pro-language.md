@@ -105,13 +105,14 @@ state {
 }
 
 screen beer {
-  show "BEEr", bottles:02
+  show "BEEr ", bottles:02
 }
 ```
 
-Commas insert one visible space between fragments, so `show a, b` means `a`,
-space, then `b`. Adjacent fragments are concatenated directly:
-`show a "-" b` means `a-b`. A source can request a fixed width with zero
+Commas separate fragments; they do not add visible characters. `show a, b`
+means `a` directly followed by `b`; write `show a, " ", b` for an explicit
+space or `show a, "-", b` for `a-b`. Adjacent fragments without commas are a
+syntax error. A source can request a fixed width with zero
 padding, such as `bottles:02` or `score:03`; without an explicit width, the
 counter range gives the natural visible width (`0..99` is two digits,
 `0..9999` is four). The compiler decides whether that screen becomes ordinary

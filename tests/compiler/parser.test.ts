@@ -98,13 +98,47 @@ program BeerScreen {
 `);
 
     expect(ast.v2?.screens[0]?.items).toEqual([
-      { kind: "literal", text: "BEEr ", line: 7 },
+      { kind: "literal", text: "BEEr", line: 7 },
       { kind: "source", name: "bottles", width: 2, pad: "zero", line: 7 },
     ]);
     expect(ast.displays[0]?.sources).toEqual(["bottles"]);
   });
 
-  it("keeps comma spaces between two display sources", () => {
+  it("parses empty display string fragments", () => {
+    const ast = parseProgram(`
+program EmptyScreen {
+  screen blank {
+    show ""
+  }
+  turn {
+    show blank
+  }
+}
+`);
+
+    expect(ast.v2?.screens[0]?.items).toMatchObject([
+      { kind: "literal", text: "" },
+    ]);
+    expect(ast.displays[0]?.sources).toEqual([]);
+  });
+
+  it("parses bare empty show statements", () => {
+    const ast = parseProgram(`
+program BareEmptyScreen {
+  screen blank {
+    show
+  }
+  turn {
+    show blank
+  }
+}
+`);
+
+    expect(ast.v2?.screens[0]?.items).toEqual([]);
+    expect(ast.displays[0]?.sources).toEqual([]);
+  });
+
+  it("uses commas as display separators without adding spaces", () => {
     const ast = parseProgram(`
 program CounterScreen {
   state {
@@ -122,13 +156,12 @@ program CounterScreen {
 
     expect(ast.v2?.screens[0]?.items).toEqual([
       { kind: "source", name: "a", line: 8 },
-      { kind: "literal", text: " ", synthetic: "comma-space", line: 8 },
       { kind: "source", name: "b", line: 8 },
     ]);
   });
 
-  it("parses adjacent display fragments without implicit separators", () => {
-    const ast = parseProgram(`
+  it("requires commas between adjacent display fragments", () => {
+    expect(() => parseProgram(`
 program StatusScreen {
   state {
     die: counter 1..6 = 1
@@ -141,12 +174,53 @@ program StatusScreen {
     show status
   }
 }
+`)).toThrow(/Display fragments must be separated by commas/u);
+  });
+
+  it("parses explicitly separated display fragments", () => {
+    const ast = parseProgram(`
+program StatusScreen {
+  state {
+    die: counter 1..6 = 1
+    turn_score: counter 0..99 = 0
+  }
+  screen status {
+    show die, ".-", turn_score:02
+  }
+  turn {
+    show status
+  }
+}
 `);
 
     expect(ast.v2?.screens[0]?.items).toEqual([
       { kind: "source", name: "die", line: 8 },
       { kind: "literal", text: ".-", line: 8 },
       { kind: "source", name: "turn_score", width: 2, pad: "zero", line: 8 },
+    ]);
+  });
+
+  it("parses bare decimal display fragments", () => {
+    const ast = parseProgram(`
+program NumericFragments {
+  state {
+    a: counter 0..9 = 2
+    b: counter 0..9 = 3
+  }
+  screen view {
+    show 123, a, b, 1
+  }
+  turn {
+    show view
+  }
+}
+`);
+
+    expect(ast.v2?.screens[0]?.items).toEqual([
+      { kind: "literal", text: "123", line: 8 },
+      { kind: "source", name: "a", line: 8 },
+      { kind: "source", name: "b", line: 8 },
+      { kind: "literal", text: "1", line: 8 },
     ]);
   });
 
@@ -573,6 +647,39 @@ program Demo {
     expect(ast.states[0]?.fields.some((field) => field.name === "enemy_ships" && field.type === "range")).toBe(true);
     expect(ast.domains.some((domain) => domain.domainKind === "maze" && domain.name === "demo_world")).toBe(true);
     expect(ast.procs.some((proc) => proc.name === "encounter")).toBe(true);
+  });
+
+  it("lowers coord_list state to random-unique coordinate registers", () => {
+    const ast = parseProgram(`
+program Demo {
+  field: board(0..9, 0..9)
+  state {
+    cell: coord(field)
+    foxes: coord_list(field, 3) = random_unique()
+    bearing: counter 0..3 = 0
+  }
+  screen main {
+    show bearing
+  }
+  turn {
+    read cell
+    if cell in foxes {
+      show main
+    }
+    bearing = line_count(foxes, cell)
+    show main
+  }
+}
+`);
+
+    expect(ast.v2?.state.find((field) => field.name === "foxes")).toMatchObject({ type: "coord_list", count: 3 });
+    expect(ast.states[0]?.fields.map((field) => field.name)).toEqual(expect.arrayContaining([
+      "__coord_list_foxes_0",
+      "__coord_list_foxes_1",
+      "__coord_list_foxes_2",
+    ]));
+    expect(JSON.stringify(ast.entries[0]?.body)).toContain("coord_list_has");
+    expect(JSON.stringify(ast.entries[0]?.body)).toContain("coord_list_line_count");
   });
 
   it("parses and lowers v2 move statements and named terminal rules", () => {

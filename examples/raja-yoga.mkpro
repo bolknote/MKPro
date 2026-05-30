@@ -19,7 +19,7 @@ program RajaYoga {
   }
 
   screen path {
-    show stage adept goal old_age
+    show stage, adept, goal, old_age
   }
 
   rule attained {

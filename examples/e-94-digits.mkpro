@@ -1,0 +1,14 @@
+reference anvarov_e_94_digits
+
+program E94Digits {
+  digits = 94
+  n = 65
+  e = 1
+
+  while n >= 1 {
+    e = 1 + e / n
+    n--
+  }
+
+  stop e
+}

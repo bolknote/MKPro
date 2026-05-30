@@ -10,17 +10,16 @@ program FoxHuntMK61 {
 
   state {
     cell: coord(field)
-    foxes: cells(field) = random()
+    foxes: coord_list(field, 9) = random_unique()
     bearing: counter 0..9 = 0
-    hit_value: packed = -20
   }
 
   screen hit {
-    show hit_value
+    show "-20"
   }
 
   screen report {
-    show bearing
+    show "--", cell:02, "--", bearing
   }
 
   turn {

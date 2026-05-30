@@ -27,7 +27,7 @@ program Dungeon {
   }
 
   screen place {
-    show pos height
+    show pos, height
   }
 
   screen map {

@@ -17,7 +17,7 @@ program TicTacToe4x4 {
   }
 
   screen board {
-    show cell turn_count
+    show cell, turn_count
   }
 
   rule player_wins {

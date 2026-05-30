@@ -228,6 +228,17 @@ class Builder {
         // code after it stays reachable for analysis.
         return { entry: fragment.entry, exits: [...fragment.exits] };
       }
+      case "while": {
+        const test = this.add({ defs: [], uses: [...exprVars(statement.condition.left), ...exprVars(statement.condition.right)] });
+        const fragment = this.buildSequence(statement.body);
+        this.link([test], fragment.entry);
+        this.link(fragment.exits, test);
+        return { entry: test, exits: [test] };
+      }
+      case "decimal_series": {
+        const node = this.add({ defs: [], uses: [], barrier: true });
+        return { entry: node, exits: [node] };
+      }
     }
   }
 }

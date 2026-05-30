@@ -262,7 +262,7 @@ program SimpleRules {
     expect(result.report.reference?.parity).not.toBe("larger");
     expect(result.report.steps).toBeLessThanOrEqual(53);
     expect(result.report.warnings.join("\n")).not.toMatch(/was not found/u);
-    expect(mkproSource).toContain(`show "BEEr", bottles:02`);
+    expect(mkproSource).toContain(`show "BEEr ", bottles:02`);
     expect(mkproSource).not.toMatch(/\braw\s*\{/u);
     expect(calc.runUntilStable({ maxFrames: 200, stableFrames: 6 }).stopped).toBe(true);
     expect(calc.readProgramCodes(2)).toEqual([0x3a, 0x50]);

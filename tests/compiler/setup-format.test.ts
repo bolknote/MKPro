@@ -51,4 +51,24 @@ describe("setup formatting", () => {
     expect(listing).toContain("setup wumpus");
     expect(listing).toContain("# Main Listing");
   });
+
+  it("shows startup stack inputs inside the setup listing", () => {
+    const source = readFileSync(resolve("examples/99-bottles.mkpro"), "utf8");
+    const result = compileMKPro(source);
+    const listing = formatListing(result);
+    const keys = formatKeys(result);
+
+    expect(listing).toContain("# Setup Listing");
+    expect(listing).toContain("   -- |   -  | enter bottles");
+    expect(listing).toContain("enter any value 0..99 in X");
+    expect(listing).toContain("X->П 0");
+    expect(listing).toContain("# Main Listing");
+    expect(keys.split(/\r?\n/u).slice(0, 5)).toEqual([
+      "X->П 0",
+      "С/П",
+      "В/О",
+      "<enter bottles: any value 0..99 in X>",
+      "С/П",
+    ]);
+  });
 });

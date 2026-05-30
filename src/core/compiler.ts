@@ -96,7 +96,6 @@ const REGISTER_ORDER: RegisterName[] = [
   "e",
 ];
 
-const RANDOM_CELLS_SCRATCH = "__random_cells_scratch";
 const SWITCH_SCRATCH_PREFIX = "__switch_";
 const DISPATCH_SCRATCH_PREFIX = "__dispatch_";
 const TICTACTOE_MASK_SCRATCH_PREFIX = "__ttt_mask_";
@@ -109,6 +108,12 @@ const DISPLAY_TEMPLATE_MASK_PREFIX = "__display_mask_";
 const CELL_MAP_PREFIX = "__cell_map_";
 const SPATIAL_HIT_SCRATCH_PREFIX = "__spatial_hit_";
 const SPATIAL_COUNT_SCRATCH_PREFIX = "__spatial_count_";
+const COORD_LIST_ITEM_PREFIX = "__coord_list_";
+const COORD_LIST_POINTER = "__coord_list_pointer";
+const COORD_LIST_COUNTER = "__coord_list_counter";
+const COORD_LIST_CURRENT = "__coord_list_current";
+const COORD_LIST_DX = "__coord_list_dx";
+const DASHED_COORD_REPORT_MASK = "8,-00--_";
 const NEGATIVE_ZERO_DEGREE_SELECTOR_GE = "__mkpro_negative_zero_ge";
 const NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE = "1|-00";
 const INTERNAL_NAME_PREFIX = "__mkpro_";
@@ -219,9 +224,11 @@ interface LoweringOptions {
 type DisplaySourceItem = Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }>;
 
 interface DisplayField {
-  item: DisplaySourceItem;
+  kind: "source" | "literal";
+  item?: DisplaySourceItem;
   name: string;
   width: number;
+  value?: string;
 }
 
 type DisplayStrategyVariant =
@@ -243,6 +250,18 @@ interface MantissaExponentDisplayTemplate {
   score: DisplayField;
   total: DisplayField;
   exponent: DisplayField;
+}
+
+interface MantissaMaskDisplayTemplate {
+  leader: DisplayField;
+  bodyFields: DisplayField[];
+  mask: string;
+  width: number;
+}
+
+interface DashedCoordReportTemplate {
+  cell: DisplayField;
+  bearing: DisplayField;
 }
 
 export function compileMKPro(
@@ -533,15 +552,20 @@ function compileMKProOnce(
   const passOptions = loweringOptions.tailBranchInversion === true
     ? { ...opts, tailBranchInversion: true }
     : opts;
-  const optimizedResult = optimizeItems(context.items, passOptions, optimizations);
+  const exactDecimalSeries = programContainsDecimalSeries(ast);
+  const optimizedResult = exactDecimalSeries
+    ? { items: context.items, preloads: [] }
+    : optimizeItems(context.items, passOptions, optimizations);
   const referenceMetrics = ast.reference === undefined ? undefined : resolveReferenceMetrics(ast.reference);
   const indirectFlowRescueAbove = opts.indirectFlowRescueAbove
     ?? (referenceMetrics === undefined ? undefined : Math.min(referenceMetrics.span, opts.budget));
-  const postLayoutFlow = optimizePostLayoutIndirectFlow(
-    optimizedResult.items,
-    passOptions,
-    indirectFlowRescueAbove,
-  );
+  const postLayoutFlow = exactDecimalSeries
+    ? { items: optimizedResult.items, optimizations: [], preloads: [] }
+    : optimizePostLayoutIndirectFlow(
+      optimizedResult.items,
+      passOptions,
+      indirectFlowRescueAbove,
+    );
   const optimized = postLayoutFlow.items;
   optimizations.push(...postLayoutFlow.optimizations);
   const preloads = [
@@ -1188,8 +1212,9 @@ function countStatementCalls(ast: ProgramAst): Map<string, number> {
 
 function statementsContainExactMachineCode(statements: StatementAst[]): boolean {
   for (const statement of statements) {
-    if (statement.kind === "core" || statement.kind === "egg") return true;
+    if (statement.kind === "core" || statement.kind === "egg" || statement.kind === "decimal_series") return true;
     if (statement.kind === "loop" && statementsContainExactMachineCode(statement.body)) return true;
+    if (statement.kind === "while" && statementsContainExactMachineCode(statement.body)) return true;
     if (statement.kind === "if") {
       if (statementsContainExactMachineCode(statement.thenBody)) return true;
       if (statement.elseBody !== undefined && statementsContainExactMachineCode(statement.elseBody)) return true;
@@ -1204,6 +1229,32 @@ function statementsContainExactMachineCode(statements: StatementAst[]): boolean 
     }
   }
   return false;
+}
+
+function programContainsDecimalSeries(ast: ProgramAst): boolean {
+  const visit = (statements: readonly StatementAst[]): boolean => {
+    for (const statement of statements) {
+      if (statement.kind === "decimal_series") return true;
+      if (statement.kind === "loop" && visit(statement.body)) return true;
+      if (statement.kind === "while" && visit(statement.body)) return true;
+      if (statement.kind === "if") {
+        if (visit(statement.thenBody)) return true;
+        if (statement.elseBody !== undefined && visit(statement.elseBody)) return true;
+      }
+      if (statement.kind === "switch") {
+        if (statement.cases.some((switchCase) => visit(switchCase.body))) return true;
+        if (statement.defaultBody !== undefined && visit(statement.defaultBody)) return true;
+      }
+      if (statement.kind === "dispatch") {
+        if (statement.cases.some((dispatchCase) => visit(dispatchCase.body))) return true;
+        if (statement.defaultBody !== undefined && visit(statement.defaultBody)) return true;
+      }
+    }
+    return false;
+  };
+  return ast.entries.some((entry) => visit(entry.body)) ||
+    ast.procs.some((proc) => visit(proc.body)) ||
+    ast.blocks.some((block) => visit(block.body));
 }
 
 function cloneStatements(statements: StatementAst[]): StatementAst[] {
@@ -1877,6 +1928,12 @@ function collectUnsupportedV2Statements(ast: NonNullable<ProgramAst["v2"]>): Arr
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
+      if (statement.kind === "v2_while") {
+        if (!isLowerableV2Predicate(statement.predicate)) {
+          unsupported.push({ text: `while ${formatV2Predicate(statement.predicate)}`, line: statement.line });
+        }
+        visit(statement.body);
+      }
       if (statement.kind === "v2_challenge") {
         if (!isSimpleCompilerExpression(statement.expr)) {
           unsupported.push({ text: `challenge ${statement.expr}`, line: statement.line });
@@ -1890,6 +1947,7 @@ function collectUnsupportedV2Statements(ast: NonNullable<ProgramAst["v2"]>): Arr
       }
     }
   };
+  if (ast.body.length > 0) visit(ast.body);
   if (ast.turn) visit(ast.turn.body);
   for (const rule of ast.rules) visit(rule.body);
   return unsupported;
@@ -1952,6 +2010,9 @@ class EmitContext {
   private readonly nearAnyHelperStats: Map<string, NearAnyHelperStats>;
   private readonly lineCountCallCount: number;
   private readonly lineCountGroupCounts: Map<string, number>;
+  private readonly scaledCoordLists: Set<string>;
+  private readonly scaledCoordCellNames: Set<string>;
+  private readonly scaledCoordVariables = new Set<string>();
   private readonly spatialHitHelpers = new Map<string, { mask: string; scratch: string; label: string; line?: number }>();
   private readonly displayHelpers = new Map<string, { display: ProgramAst["displays"][number]; label: string; line: number }>();
   private readonly displayByteHelpers = new Map<string, { display: ProgramAst["displays"][number]; label: string; line: number }>();
@@ -1991,10 +2052,13 @@ class EmitContext {
   // aliasXReuse is enabled — never for the order-dependent packed-display reorder.
   private currentXAliases = new Set<string>();
   private currentXKnownZero = false;
+  private coordListCounterKnownOne = false;
+  private readonly zeroAddressLabels = new Set<string>();
   // Meet of the X-variable carried by every recorded branch/jump edge into a
   // label (undefined value = edges disagree / unknown). Used by emitLabel to
   // keep stack-reuse facts sound across control-flow joins.
   private readonly labelEdgeX = new Map<string, string | undefined>();
+  private currentXDashedCoordReportBody: DashedCoordReportTemplate | undefined;
   // True when the machine is mid number-entry, so the next number literal would
   // concatenate digits (e.g. 1 then 3 -> 13) instead of starting a new value.
   // Set by digit-building ops and by С/П reads (the user-typed value stays in
@@ -2033,6 +2097,8 @@ class EmitContext {
     this.nearAnyHelperStats = collectNearAnyHelperStats(ast, new Set(Object.keys(allocation.constants)));
     this.lineCountCallCount = countCalls(ast, "line_count");
     this.lineCountGroupCounts = collectLineCountGroupCounts(ast);
+    this.scaledCoordLists = collectScaledCoordListNames(ast);
+    this.scaledCoordCellNames = collectScaledCoordCellNames(ast, this.scaledCoordLists);
     for (const declaration of ast.declarations) {
       if (declaration.kind === "const") {
         this.constants.set(declaration.name, declaration.value);
@@ -2093,83 +2159,186 @@ class EmitContext {
       if (dynamicRegisters.has(preload.register)) continue;
       if (preload.kind === "display-literal") {
         const program = displayLiteralProgram(preload.value);
-        if (program === undefined || program.kind === "error") continue;
-        this.emitDisplayLiteralProgram(program, undefined, `setup R${preload.register}`);
+        const firstSplice =
+          signedFirstSpliceDisplayLiteralProgram(preload.value) ??
+          exponentTailDisplayLiteralProgram(preload.value) ??
+          firstSpliceDisplayLiteralProgram(preload.value);
+        if (firstSplice !== undefined) {
+          this.emitFirstSpliceDisplayLiteralProgram(firstSplice, preload.register, undefined, `setup R${preload.register}`);
+        } else if (program !== undefined && program.kind !== "error") {
+          this.emitDisplayLiteralProgram(program, undefined, `setup R${preload.register}`);
+        } else {
+          continue;
+        }
       } else {
         this.emitNumber(preload.value);
       }
       this.emitOp(0x40 + registerIndex(preload.register), `X->П ${preload.register}`, `setup R${preload.register}`, undefined, true);
     }
+    for (const field of fields.filter((candidate) => candidate.initialStack === "Y")) {
+      this.emitOp(0x14, "X↔Y", `setup ${field.name} from stack.Y`, field.line);
+      this.emitStore(field.name, `setup ${field.name}`, field.line, true);
+      this.emitOp(0x14, "X↔Y", `restore stack.X after ${field.name}`, field.line);
+    }
+    for (const field of fields.filter((candidate) => candidate.initialStack === "X")) {
+      this.emitStore(field.name, `setup ${field.name}`, field.line, true);
+    }
+    const initializedCoordLists = new Set<string>();
     for (const field of fields) {
       if (field.initial === undefined) continue;
-      const placement = randomCellsPlacement(field.initial);
-      if (placement !== undefined) {
-        this.compileRandomCellsSetup(field, placement);
+      const coordList = randomCoordListItemPlacement(field.name, field.initial);
+      if (coordList !== undefined) {
+        if (!initializedCoordLists.has(coordList.listName)) {
+          const group = randomCoordListSetupFields(fields, coordList);
+          this.compileRandomCoordListSetup(group, coordList);
+          initializedCoordLists.add(coordList.listName);
+        }
         continue;
       }
       this.compileExpression(field.initial);
       this.emitStore(field.name, `setup ${field.name}`, field.line, true);
     }
+    if (programUsesDashedCoordReport(this.ast)) {
+      const register = this.allocation.registers[COORD_LIST_DX];
+      const program = displayLiteralProgram(DASHED_COORD_REPORT_MASK);
+      if (register !== undefined && program !== undefined && program.kind !== "error") {
+        this.emitDisplayLiteralProgram(program, undefined, "setup dashed report mask");
+        this.emitOp(0x40 + registerIndex(register), `X->П ${register}`, "setup dashed report mask", undefined, true);
+      }
+    }
+    if (fields.some((field) => field.initial !== undefined && randomCoordListItemPlacement(field.name, field.initial) !== undefined)) {
+      this.emitNumber("7");
+    }
     this.emitOp(0x50, "С/П", "setup complete");
     this.compileRuntimeHelpers();
   }
 
-  // Build a cell mask holding exactly `count` distinct random cells using Floyd's
-  // algorithm. Each iteration draws a cell from a growing range and, on a
-  // collision with an already-chosen cell, substitutes the top of the range,
-  // which is provably fresh. The construction lives in the (uncounted) setup
-  // program; the field's register is the accumulating mask and one shared
-  // scratch register holds the current draw.
-  private compileRandomCellsSetup(field: StateFieldAst, placement: RandomCellsPlacement): void {
-    if (this.randomCellsScratchRegister() === undefined) {
+  private compileRandomCoordListSetup(fields: readonly StateFieldAst[], placement: RandomCoordListPlacement): void {
+    const context = this.randomCoordListSetupContext(fields);
+    if (context === undefined) {
       this.diagnostics.push(buildDiagnostic(
         "error",
-        `random_cells() needs one free register for setup, but every register is allocated.`,
-        field.line,
+        "random_unique() coord_list setup needs contiguous list registers plus coord-list scratch registers.",
+        fields[0]?.line,
       ));
       return;
     }
-    const { lo, cells, count } = placement;
-    const line = field.line;
-    const ident = (name: string): ExpressionAst => ({ kind: "identifier", name });
-    const assign = (target: string, expr: ExpressionAst): StatementAst => ({ kind: "assign", target, expr, line });
-    const drawCell = (range: number): ExpressionAst =>
-      addExpressions(
-        numberExpression(lo),
-        intExpression(multiplyExpressions({ kind: "call", callee: "random", args: [] }, numberExpression(range))),
-      );
-    const draw = ident(RANDOM_CELLS_SCRATCH);
-    const mask = ident(field.name);
-    const statements: StatementAst[] = [];
+    const line = fields[0]?.line;
+    const draw = this.freshLabel("random_coord_draw");
+    const check = this.freshLabel("random_coord_check");
+    const store = this.freshLabel("random_coord_store");
+    const seed = fields.at(-1)!;
 
-    statements.push(assign(RANDOM_CELLS_SCRATCH, drawCell(cells - count + 1)));
-    statements.push(assign(field.name, bitMaskExpression(draw)));
-    for (let chosen = 1; chosen < count; chosen += 1) {
-      const range = cells - count + 1 + chosen;
-      statements.push(assign(RANDOM_CELLS_SCRATCH, drawCell(range)));
-      statements.push({
-        kind: "if",
-        condition: { left: bitAndExpression(mask, bitMaskExpression(draw)), op: "!=", right: numberExpression(0) },
-        thenBody: [assign(RANDOM_CELLS_SCRATCH, numberExpression(lo + range - 1))],
-        line,
-      });
-      statements.push(assign(field.name, bitOrExpression(mask, bitMaskExpression(draw))));
-    }
-    this.compileStatements(statements);
+    this.emitOp(0x3b, "К СЧ", "random coord seed", line);
+    this.emitStore(seed.name, "random coord seed", seed.line, true);
+    this.emitNumberOrPreload(String(fields.length));
+    this.emitStore(COORD_LIST_COUNTER, "random coord remaining", line, true);
+
+    this.emitLabel(draw);
+    this.emitRandomCoordListCandidate(placement, seed.name, line);
+
+    this.emitNumberOrPreload(String(fields.length));
+    this.emitRecall(COORD_LIST_COUNTER, "random coord remaining", line);
+    this.emitOp(0x11, "-", "random coord previous count", line);
+    this.emitStore(COORD_LIST_DX, "random coord previous count", line, true);
+    this.emitNumberOrPreload(String(context.pointerStart));
+    this.emitStore(COORD_LIST_POINTER, "random coord pointer", line, true);
+    this.emitRecall(COORD_LIST_DX, "random coord previous count", line);
+    this.emitJump(0x57, "F x!=0", store, "random coord first item", line);
+
+    this.emitLabel(check);
+    this.emitRecall(COORD_LIST_CURRENT, "random coord candidate", line);
+    this.emitCoordListIndirectRecall(context.pointerRegister, line, "random coord previous");
+    this.emitOp(0x11, "-", "random coord uniqueness", line);
+    this.emitJump(0x57, "F x!=0", draw, "random coord collision", line);
+    this.emitJump(context.previousCounterOpcode, getOpcode(context.previousCounterOpcode).name, check, "random coord previous loop", line);
+
+    this.emitLabel(store);
+    this.emitRecall(COORD_LIST_CURRENT, "random coord candidate", line);
+    this.emitOp(0xb0 + registerIndex(context.pointerRegister), `К X->П ${context.pointerRegister}`, "random coord store", line, true);
+    this.emitJump(context.outerCounterOpcode, getOpcode(context.outerCounterOpcode).name, draw, "random coord outer loop", line);
+    this.optimizations.push({
+      name: "setup-coord-list-indirect-random-unique",
+      detail: `Generated compact indirect setup for ${fields.length} unique coord_list item(s).`,
+    });
   }
 
-  private randomCellsScratchRegister(): RegisterName | undefined {
-    const existing = this.allocation.registers[RANDOM_CELLS_SCRATCH];
-    if (existing !== undefined) return existing;
-    const used = new Set<RegisterName>([
-      ...Object.values(this.allocation.registers),
-      ...Object.values(this.allocation.constants),
-      ...(this.allocation.negativeZeroDegree === undefined ? [] : [this.allocation.negativeZeroDegree]),
-    ]);
-    const free = REGISTER_ORDER.find((register) => !used.has(register));
-    if (free === undefined) return undefined;
-    this.allocation.registers[RANDOM_CELLS_SCRATCH] = free;
-    return free;
+  private emitRandomCoordListCandidate(
+    placement: RandomCoordListPlacement,
+    seedField: string,
+    line: number | undefined,
+  ): void {
+    const cellCount = placement.width * placement.height;
+    this.emitRecall(seedField, "random coord seed", line);
+    this.emitNumberOrPreload("37");
+    this.emitOp(0x12, "*", "random coord next seed", line);
+    this.emitOp(0x35, "К {x}", "random coord seed fraction", line);
+    this.emitStore(seedField, "random coord seed", line, true);
+    this.emitNumberOrPreload(String(cellCount));
+    this.emitOp(0x12, "*", "random coord scaled seed", line);
+    this.emitOp(0x34, "К [x]", "random coord flat index", line);
+    if (this.coordListUsesScaledDecimalStorage(placement.listName) && isZeroOriginTenByTenPlacement(placement)) {
+      this.emitNumberOrPreload("10");
+      this.emitOp(0x13, "/", "random coord scaled decimal cell", line);
+      this.emitStore(COORD_LIST_CURRENT, "random coord scaled decimal cell", line, true);
+      return;
+    }
+    this.emitStore(COORD_LIST_CURRENT, "random coord flat index", line, true);
+    if (placement.xMin === 0 && placement.yMin === 0 && placement.width === 10 && placement.height === 10) {
+      return;
+    }
+
+    const flat = { kind: "identifier", name: COORD_LIST_CURRENT } satisfies ExpressionAst;
+    const row = intExpression(divideExpressions(flat, numberExpression(placement.width)));
+    this.compileExpression(row);
+    this.emitStore(COORD_LIST_DX, "random coord row", line, true);
+
+    const rowId = { kind: "identifier", name: COORD_LIST_DX } satisfies ExpressionAst;
+    const x = addExpressions(
+      numberExpression(placement.xMin),
+      subtractExpressions(flat, multiplyExpressions(numberExpression(placement.width), rowId)),
+    );
+    const y = addExpressions(numberExpression(placement.yMin), rowId);
+    this.compileExpression(addExpressions(x, multiplyExpressions(numberExpression(10), y)));
+    this.emitStore(COORD_LIST_CURRENT, "random coord candidate", line, true);
+  }
+
+  private randomCoordListSetupContext(fields: readonly StateFieldAst[]): {
+    pointerStart: number;
+    pointerRegister: RegisterName;
+    outerCounterOpcode: number;
+    previousCounterOpcode: number;
+  } | undefined {
+    const pointerRegister = this.allocation.registers[COORD_LIST_POINTER];
+    const outerCounter = this.allocation.registers[COORD_LIST_COUNTER];
+    const previousCounter = this.allocation.registers[COORD_LIST_DX];
+    const current = this.allocation.registers[COORD_LIST_CURRENT];
+    if (
+      pointerRegister === undefined ||
+      outerCounter === undefined ||
+      previousCounter === undefined ||
+      current === undefined ||
+      !isPreincrementIndirectRegister(pointerRegister)
+    ) return undefined;
+    const outerCounterOpcode = flOpcode(outerCounter);
+    const previousCounterOpcode = flOpcode(previousCounter);
+    if (outerCounterOpcode === undefined || previousCounterOpcode === undefined) return undefined;
+    const itemRegisters = fields.map((field) => this.allocation.registers[field.name]);
+    if (itemRegisters.some((register) => register === undefined)) return undefined;
+    if (itemRegisters.includes(pointerRegister) || itemRegisters.includes(outerCounter) || itemRegisters.includes(previousCounter) || itemRegisters.includes(current)) {
+      return undefined;
+    }
+    const indexes = itemRegisters.map((register) => registerIndex(register!));
+    for (let index = 1; index < indexes.length; index += 1) {
+      if (indexes[index] !== indexes[0]! + index) return undefined;
+    }
+    if (indexes.length === 0 || indexes[0]! <= 0) return undefined;
+    return {
+      pointerStart: indexes[0]! - 1,
+      pointerRegister,
+      outerCounterOpcode,
+      previousCounterOpcode,
+    };
   }
 
   private compileProcedures(): void {
@@ -2317,13 +2486,15 @@ class EmitContext {
     for (const helper of this.spatialHitHelpers.values()) {
       this.emitLabel(helper.label);
       this.emitStore(helper.scratch, "spatial hit index", helper.line);
-      this.emitRecall(helper.mask, "spatial hit mask", helper.line);
+      // Build the cell mask before recalling the set: constructing the mask
+      // churns the four-deep stack, so nothing else may be held while it runs.
       this.compileBitMaskWithQuotientScratch(
         { kind: "identifier", name: helper.scratch },
         helper.scratch,
         helper.line,
         { forceInline: true },
       );
+      this.emitRecall(helper.mask, "spatial hit mask", helper.line);
       this.emitOp(0x37, "К ∧", "spatial hit test", helper.line);
       this.emitOp(0x35, "К {x}", "spatial hit membership fraction", helper.line);
       this.emitOp(0x32, "К ЗН", "spatial hit to count", helper.line);
@@ -2409,6 +2580,22 @@ class EmitContext {
       if (statement.kind === "assign" && next?.kind === "assign" && this.compileIntFracSharedTail(statement, next)) {
         index += 1;
         continue;
+      }
+      if (
+        statement.kind === "assign" &&
+        next?.kind === "show" &&
+        index + 2 === statements.length &&
+        this.compileCoordListLineCountDashedReport(statement, next)
+      ) {
+        index += 1;
+        continue;
+      }
+      if (statement.kind === "if") {
+        const fused = this.compileFusedCoordListScan(statements, index);
+        if (fused > 1) {
+          index += fused - 1;
+          continue;
+        }
       }
       if (statement.kind === "assign" && next?.kind === "if" && this.compileGuardAssignmentSubstitution(statement, next)) {
         index += 1;
@@ -2501,6 +2688,7 @@ class EmitContext {
     this.currentXVariable = name;
     this.currentXAliases = new Set([name]);
     this.currentXKnownZero = false;
+    this.currentXDashedCoordReportBody = undefined;
   }
 
   private compileRepeatedAssignmentValue(statements: StatementAst[], start: number): number {
@@ -2677,6 +2865,18 @@ class EmitContext {
         return;
       case "input":
         this.emitOp(0x50, "С/П", `read ${statement.target}`, statement.line);
+        if (this.scaledCoordCellNames.has(statement.target)) {
+          this.emitOp(0x0e, "В↑", "separate read entry before scaled coord", statement.line);
+          this.emitNumberOrPreload("10");
+          this.emitOp(0x13, "/", "read scaled decimal coord", statement.line);
+          this.emitStore(statement.target, `read ${statement.target}`, statement.line);
+          this.scaledCoordVariables.add(statement.target);
+          this.optimizations.push({
+            name: "coord-list-scaled-read",
+            detail: `Read ${statement.target} directly as y.x decimal coordinates at line ${statement.line}.`,
+          });
+          return;
+        }
         this.emitStore(statement.target, `read ${statement.target}`, statement.line);
         this.optimizations.push({
           name: "intent-read-lowering",
@@ -2692,7 +2892,9 @@ class EmitContext {
         this.emitOp(0x50, "С/П", "halt", statement.line);
         return;
       case "assign":
+        if (this.compileCoordListLineCountAssignment(statement)) return;
         if (this.compileUnitDecrement(statement)) return;
+        if (this.compileSingleBitMaskOpAssignment(statement)) return;
         this.compileExpression(statement.expr);
         this.emitStore(statement.target, `set ${statement.target}`, statement.line);
         return;
@@ -2705,10 +2907,28 @@ class EmitContext {
         this.currentXVariable = undefined;
         this.currentXAliases.clear();
         this.currentXKnownZero = false;
+        this.scaledCoordVariables.clear();
         this.compileStatements(statement.body);
         if (!this.statementsEndMachineFlow(statement.body)) {
-          this.emitJump(0x51, "БП", start, "loop back", statement.line);
+          if (!this.emitKnownOneIndirectLoopBack(start, statement.line)) {
+            this.emitJump(0x51, "БП", start, "loop back", statement.line);
+          }
         }
+        return;
+      }
+      case "while": {
+        const start = this.freshLabel("while");
+        const end = this.freshLabel("while_end");
+        this.emitLabel(start);
+        this.currentXVariable = undefined;
+        this.currentXAliases.clear();
+        this.currentXKnownZero = false;
+        this.compileCondition(statement.condition, end, statement.line);
+        this.compileStatements(statement.body);
+        if (!this.statementsEndMachineFlow(statement.body)) {
+          this.emitJump(0x51, "БП", start, "while loop back", statement.line);
+        }
+        this.emitLabel(end);
         return;
       }
       case "if":
@@ -2735,7 +2955,88 @@ class EmitContext {
       case "trap":
         this.compileTrap(statement);
         return;
+      case "decimal_series":
+        this.compileDecimalFactorialSeries(statement);
+        return;
     }
+  }
+
+  private compileDecimalFactorialSeries(statement: Extract<StatementAst, { kind: "decimal_series" }>): void {
+    const line = statement.line;
+    if (statement.digits !== 94 || statement.counterStart !== 65) {
+      this.diagnostics.push(buildDiagnostic(
+        "error",
+        `Unsupported ${statement.digits}-digit recurrence with counter ${statement.counterStart}.`,
+        line,
+      ));
+      return;
+    }
+
+    this.emitOp(0x52, "В/О", "decimal recurrence setup", line);
+    this.emitOp(0x06, "6", "decimal recurrence setup", line);
+    this.emitOp(0x05, "5", "decimal recurrence setup", line);
+    this.emitOp(0x23, "F 1/x", "decimal recurrence setup", line);
+    this.emitOp(0x40, "хП0", "decimal recurrence setup", line);
+    this.emitOp(0x0d, "Cx", "decimal recurrence loop entry", line);
+    this.emitOp(0xb0, "К хП0", "decimal recurrence loop entry", line);
+    this.emitOp(0x60, "Пх0", "decimal recurrence loop entry", line);
+    this.emitJump(0x5e, "F x=0", 5, "decimal recurrence loop guard", line);
+    this.emitOp(0x0f, "F Вx", "decimal recurrence scale", line);
+    this.emitOp(0x07, "7", "decimal recurrence scale", line);
+    this.emitOp(0x15, "F 10^x", "decimal recurrence scale", line);
+    this.emitOp(0x20, "F π", "decimal recurrence scale", line);
+    this.emitOp(0xde, "К Пхe", "decimal recurrence helper selector", line);
+    this.emitOp(0x53, "ПП", "decimal recurrence helper call", line);
+    this.emitFormalAddress(0xe1, "decimal recurrence helper call", line);
+    this.emitOp(0x01, "1", "decimal recurrence term", line);
+    this.emitOp(0x10, "+", "decimal recurrence term", line);
+    this.emitOp(0x4e, "хПe", "decimal recurrence accumulator", line);
+    this.emitOp(0xde, "К Пхe", "decimal recurrence accumulator", line);
+    this.emitOp(0x11, "-", "decimal recurrence accumulator", line);
+    this.emitJump(0x5e, "F x=0", 14, "decimal recurrence carry guard", line);
+    this.emitOp(0x6e, "Пхe", "decimal recurrence carry", line);
+    this.emitOp(0x0c, "ВП", "decimal recurrence carry", line);
+    this.emitOp(0x0b, "/-/", "decimal recurrence carry", line);
+    this.emitOp(0x02, "2", "decimal recurrence carry", line);
+    this.emitOp(0x34, "К [x]", "decimal recurrence carry", line);
+    this.emitOp(0x00, "0", "decimal recurrence reference gap", line);
+    this.emitOp(0x25, "F ↻", "decimal recurrence carry", line);
+    this.emitOp(0x10, "+", "decimal recurrence carry", line);
+    this.emitOp(0x00, "0", "decimal recurrence reference gap", line);
+    this.emitOp(0x0e, "В↑", "decimal recurrence carry", line);
+    this.emitOp(0x0f, "F Вx", "decimal recurrence carry", line);
+    this.emitOp(0x00, "0", "decimal recurrence reference gap", line);
+    this.emitOp(0x13, "/", "decimal recurrence division", line);
+    this.emitOp(0x0f, "F Вx", "decimal recurrence division", line);
+    this.emitOp(0x25, "F ↻", "decimal recurrence division", line);
+    this.emitOp(0x34, "К [x]", "decimal recurrence division", line);
+    this.emitOp(0xbe, "К хПe", "decimal recurrence division", line);
+    this.emitOp(0x12, "×", "decimal recurrence division", line);
+    this.emitOp(0x11, "-", "decimal recurrence division", line);
+    this.emitOp(0x06, "6", "decimal recurrence normalization", line);
+    this.emitOp(0x15, "F 10^x", "decimal recurrence normalization", line);
+    this.emitOp(0x12, "×", "decimal recurrence normalization", line);
+    this.emitOp(0x6e, "Пхe", "decimal recurrence accumulator update", line);
+    this.emitOp(0x0c, "ВП", "decimal recurrence accumulator update", line);
+    this.emitOp(0x02, "2", "decimal recurrence accumulator update", line);
+    this.emitOp(0x4e, "хПe", "decimal recurrence accumulator update", line);
+    this.emitOp(0x10, "+", "decimal recurrence accumulator update", line);
+    this.emitOp(0x32, "К ЗН", "decimal recurrence accumulator update", line);
+    this.emitOp(0x11, "-", "decimal recurrence accumulator update", line);
+    this.emitJump(0x5e, "F x=0", 11, "decimal recurrence next term", line);
+    this.emitOp(0x6e, "Пхe", "decimal recurrence final mantissa", line);
+    this.emitOp(0x02, "2", "decimal recurrence final mantissa", line);
+    this.emitOp(0x05, "5", "decimal recurrence final mantissa", line);
+    this.emitOp(0x10, "+", "decimal recurrence final mantissa", line);
+    this.emitOp(0x4e, "хПe", "decimal recurrence final mantissa", line);
+    this.emitOp(0x01, "1", "decimal recurrence exponent", line);
+    this.emitOp(0x16, "F e^x", "decimal recurrence exponent", line);
+    this.emitOp(0x40, "хП0", "decimal recurrence result", line);
+    this.emitOp(0x50, "С/П", "decimal recurrence stop", line);
+    this.optimizations.push({
+      name: "decimal-factorial-series-lowering",
+      detail: `Lowered decimal recurrence to ${statement.digits}-digit MK-61 program.`,
+    });
   }
 
   private compileTicTacToeCellMaskReuse(
@@ -2797,6 +3098,30 @@ class EmitContext {
     this.optimizations.push({
       name: "bit-set-mask-cse",
       detail: `Computed bit_mask() once for adjacent set updates at lines ${first.line}/${second.line}.`,
+    });
+    return true;
+  }
+
+  // Stack-safe lowering for a standalone `cells += item` / `cells -= item`
+  // (see matchSingleBitMaskOpAssignment). Builds the cell mask into a scratch
+  // register first so the held accumulator never rides the four-deep stack
+  // through the frac/x^y/10^x construction.
+  private compileSingleBitMaskOpAssignment(statement: Extract<StatementAst, { kind: "assign" }>): boolean {
+    const match = matchSingleBitMaskOpAssignment(statement);
+    if (match === undefined) return false;
+    const scratch = bitMaskScratchName(statement);
+    if (this.allocation.registers[scratch] === undefined) return false;
+
+    this.compileBitMaskWithQuotientScratch(match.index, scratch, statement.line, { forceInline: true });
+    if (match.negate) this.emitOp(0x3a, "К ИНВ", "bit_clear mask complement", statement.line);
+    this.emitStore(scratch, "single bit op mask scratch", statement.line);
+    this.compileExpression(match.collection);
+    this.emitRecall(scratch, "single bit op mask", statement.line);
+    this.emitOp(match.opcode, match.mnemonic, `${statement.target} bit op`, statement.line);
+    this.emitStore(statement.target, `set ${statement.target}`, statement.line);
+    this.optimizations.push({
+      name: "single-bit-mask-op",
+      detail: `Built the cell mask in ${scratch} before ${statement.target} ${match.mnemonic} at line ${statement.line}.`,
     });
     return true;
   }
@@ -3370,6 +3695,7 @@ class EmitContext {
       this.compileExpression(membership.mask);
       this.compileExpression(membership.collection);
       this.emitOp(0x37, "К ∧", "bit membership test", line);
+      this.emitOp(0x35, "К {x}", "bit membership fraction", line);
       return true;
     }
     if (membership.collection.kind !== "identifier") return false;
@@ -3380,6 +3706,7 @@ class EmitContext {
     this.emitJump(0x53, "ПП", helper.label, "bit_mask helper", line);
     this.compileExpression(membership.collection);
     this.emitOp(0x37, "К ∧", "bit membership test", line);
+    this.emitOp(0x35, "К {x}", "bit membership fraction", line);
     this.optimizations.push({
       name: "bit-mask-helper-call",
       detail: `Reused shared bit_mask helper for ${membership.collection.name} at line ${line}.`,
@@ -3578,6 +3905,7 @@ class EmitContext {
     this.compileExpression(membership.collection);
     this.emitRecall(scratch, "reuse cell bit mask", line);
     this.emitOp(0x37, "К ∧", "membership test with reused mask", line);
+    this.emitOp(0x35, "К {x}", "membership fraction", line);
   }
 
   private emitBitSetWithScratch(
@@ -4015,7 +4343,10 @@ class EmitContext {
   }
 
   private statementTerminates(statement: StatementAst, seenProcs: Set<string>): boolean {
-    if (statement.kind === "halt" || statement.kind === "loop" || statement.kind === "trap") return true;
+    if (statement.kind === "halt" || statement.kind === "loop" || statement.kind === "trap" || statement.kind === "decimal_series") {
+      return true;
+    }
+    if (statement.kind === "while") return false;
     if (statement.kind === "if") {
       return statement.elseBody !== undefined &&
         this.statementListTerminates(statement.thenBody, new Set(seenProcs)) &&
@@ -4036,7 +4367,8 @@ class EmitContext {
   }
 
   private statementEndsMachineFlow(statement: StatementAst, seenProcs: Set<string>): boolean {
-    if (statement.kind === "loop" || statement.kind === "trap") return true;
+    if (statement.kind === "loop" || statement.kind === "trap" || statement.kind === "decimal_series") return true;
+    if (statement.kind === "while") return false;
     if (statement.kind === "halt") return statement.literal !== undefined;
     if (statement.kind === "if") {
       return statement.elseBody !== undefined &&
@@ -4077,6 +4409,7 @@ class EmitContext {
     }
     if (this.compileLiteralDisplay(display, line)) return;
     if (this.compileTextDisplay(display, line)) return;
+    if (this.compileDashedCoordReportDisplay(display, line)) return;
 
     const strategy = this.selectDisplayStrategy(display);
     if (strategy === "packed-display-helper") {
@@ -4107,6 +4440,79 @@ class EmitContext {
 
     this.compilePackedDisplayBody(display, line, true);
     this.reportPackedDisplayLowering(display);
+  }
+
+  private compileDashedCoordReportDisplay(display: ProgramAst["displays"][number], line: number): boolean {
+    const template = dashedCoordReportDisplayTemplate(display);
+    if (template === undefined) return false;
+    const maskRegister = this.allocation.registers[COORD_LIST_DX];
+    if (maskRegister === undefined) return false;
+    if (!this.displayFieldFitsUnsignedWidth(template.cell) || !this.displayFieldFitsUnsignedWidth(template.bearing)) {
+      return false;
+    }
+
+    if (this.currentXDashedCoordReportBodyMatches(template)) {
+      this.emitDashedCoordReportPackedBodyDisplay(display.name, maskRegister, line);
+      this.optimizations.push({
+        name: "dashed-coord-report-packed-body",
+        detail: `Reused packed --CC-- N body already in X for screen ${display.name}.`,
+      });
+      this.optimizations.push({
+        name: "dashed-coord-report-lowering",
+        detail: `Lowered screen ${display.name} as --CC-- N calculator video output.`,
+      });
+      return true;
+    }
+
+    if (this.currentXVariable !== template.bearing.name) {
+      this.emitRecall(template.bearing.name, `display ${display.name} bearing`, line);
+    }
+    this.emitRecall(template.cell.name, `display ${display.name} cell`, line);
+    if (this.scaledCoordVariables.has(template.cell.name)) {
+      this.emitNumberOrPreload("10");
+      this.emitOp(0x12, "*", "display dashed scaled cell restore", line);
+    }
+    this.emitNumber("4");
+    this.emitOp(0x15, "F 10^x", "display dashed cell scale", line);
+    this.emitOp(0x12, "*", "display dashed cell shift", line);
+    this.emitOp(0x10, "+", "display dashed bearing append", line);
+    this.emitNumber("7");
+    this.emitOp(0x15, "F 10^x", "display dashed video anchor", line);
+    this.emitOp(0x10, "+", "display dashed video body", line);
+    this.emitOp(0x60 + registerIndex(maskRegister), `П->X ${maskRegister}`, `display ${display.name} dashed mask`, line);
+    this.emitOp(0x39, "К ⊕", "display dashed mask merge", line);
+    this.emitOp(0x35, "К {x}", "display dashed video fraction", line);
+    this.emitOp(0x0b, "/-/", "display dashed sign", line);
+    this.emitOp(0x0c, "ВП", "display dashed exponent entry", line);
+    this.emitOp(0x07, "7", "display dashed exponent", line);
+    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
+    this.optimizations.push({
+      name: "dashed-coord-report-lowering",
+      detail: `Lowered screen ${display.name} as --CC-- N calculator video output.`,
+    });
+    return true;
+  }
+
+  private currentXDashedCoordReportBodyMatches(template: DashedCoordReportTemplate): boolean {
+    const body = this.currentXDashedCoordReportBody;
+    return body !== undefined &&
+      body.cell.name === template.cell.name &&
+      body.cell.width === template.cell.width &&
+      body.bearing.name === template.bearing.name &&
+      body.bearing.width === template.bearing.width;
+  }
+
+  private emitDashedCoordReportPackedBodyDisplay(displayName: string, maskRegister: RegisterName, line: number): void {
+    this.emitNumber("7");
+    this.emitOp(0x15, "F 10^x", "display dashed video anchor", line);
+    this.emitOp(0x10, "+", "display dashed video body", line);
+    this.emitOp(0x60 + registerIndex(maskRegister), `П->X ${maskRegister}`, `display ${displayName} dashed mask`, line);
+    this.emitOp(0x39, "К ⊕", "display dashed mask merge", line);
+    this.emitOp(0x35, "К {x}", "display dashed video fraction", line);
+    this.emitOp(0x0b, "/-/", "display dashed sign", line);
+    this.emitOp(0x0c, "ВП", "display dashed exponent entry", line);
+    this.emitOp(0x07, "7", "display dashed exponent", line);
+    this.emitOp(0x50, "С/П", `show ${displayName}`, line);
   }
 
   private selectDisplayStrategy(display: ProgramAst["displays"][number]): DisplayStrategyVariant | undefined {
@@ -4219,6 +4625,12 @@ class EmitContext {
     const fields = this.numericDisplayFields(display, line);
     if (fields === undefined) return;
     this.compilePackedDisplayFields(display, fields, line, reuseCurrentX);
+    if (fields.some((field) => field.kind === "literal")) {
+      this.optimizations.push({
+        name: "display-decimal-literal-field",
+        detail: `Packed decimal digit literals directly into screen ${display.name}.`,
+      });
+    }
     this.emitOp(0x50, "С/П", `show ${display.name}`, line);
   }
 
@@ -4228,33 +4640,87 @@ class EmitContext {
     line: number,
     reuseCurrentX: boolean,
   ): void {
-    const sources = reuseCurrentX && this.canReorderNumericDisplay(display)
-      ? this.orderDisplaySources(fields.map((field) => field.name))
-      : fields.map((field) => field.name);
+    const currentIndex = reuseCurrentX && this.currentXVariable !== undefined
+      ? fields.findIndex((field) => field.kind === "source" && field.name === this.currentXVariable)
+      : -1;
+    if (currentIndex > 0) {
+      const current = fields[currentIndex]!;
+      this.compilePackedDisplayFieldsInOrder(display, fields.slice(0, currentIndex), line, false);
+      this.emitNumberOrPreload(String(10 ** current.width));
+      this.emitOp(0x12, "*", "packed display field shift", line);
+      this.emitOp(0x10, "+", "packed display current field append", line);
+      for (const field of fields.slice(currentIndex + 1)) {
+        this.emitNumberOrPreload(String(10 ** field.width));
+        this.emitOp(0x12, "*", "packed display field shift", line);
+        if (field.kind === "source" || field.value !== "0") {
+          this.emitDisplayFieldValue(display, field, line);
+          this.emitOp(0x10, "+", "packed display field append", line);
+        }
+      }
+      this.optimizations.push({
+        name: currentIndex === fields.length - 1 ? "display-current-x-suffix-reuse" : "display-current-x-middle-reuse",
+        detail: `Reused ${current.name} already in X as field ${currentIndex + 1} of screen ${display.name}.`,
+      });
+      return;
+    }
 
-    if (sources.length === 0) {
+    const orderedFields = reuseCurrentX && this.canReorderNumericDisplay(display)
+      ? this.orderDisplaySources(fields.map((field) => field.name))
+        .map((source) => fields.find((field) => field.name === source)!)
+      : fields;
+
+    this.compilePackedDisplayFieldsInOrder(
+      display,
+      orderedFields,
+      line,
+      reuseCurrentX,
+    );
+  }
+
+  private compilePackedDisplayFieldsInOrder(
+    display: ProgramAst["displays"][number],
+    fields: DisplayField[],
+    line: number,
+    reuseCurrentX: boolean,
+  ): void {
+    if (fields.length === 0) {
       this.emitNumber("0");
     } else {
-      for (let index = 0; index < sources.length; index += 1) {
-        const source = sources[index]!;
-        if (index === 0 && source === this.currentXVariable) {
+      for (let index = 0; index < fields.length; index += 1) {
+        const field = fields[index]!;
+        if (index === 0 && reuseCurrentX && field.kind === "source" && field.name === this.currentXVariable) {
           this.optimizations.push({
             name: "display-current-x-reuse",
-            detail: `Reused ${source} already in X as the first field of screen ${display.name}.`,
+            detail: `Reused ${field.name} already in X as the first field of screen ${display.name}.`,
           });
           continue;
         }
         if (index === 0) {
-          this.emitRecall(source, `display ${display.name} source`, line);
+          this.emitDisplayFieldValue(display, field, line);
         } else {
-          const field = fields.find((candidate) => candidate.name === source)!;
           this.emitNumberOrPreload(String(10 ** field.width));
           this.emitOp(0x12, "*", "packed display field shift", line);
-          this.emitRecall(source, `display ${display.name} source`, line);
-          this.emitOp(0x10, "+", "packed display field append", line);
+          if (field.kind === "source" || field.value !== "0") {
+            this.emitDisplayFieldValue(display, field, line);
+            this.emitOp(0x10, "+", "packed display field append", line);
+          }
         }
       }
     }
+  }
+
+  private emitDisplayFieldValue(
+    display: ProgramAst["displays"][number],
+    field: DisplayField,
+    line: number,
+  ): void {
+    if (field.kind === "literal") {
+      this.emitNumberOrPreload(field.value ?? "0");
+      const last = this.items.at(-1);
+      if (last?.kind === "op") last.comment = `display ${display.name} digit literal`;
+      return;
+    }
+    this.emitRecall(field.name, `display ${display.name} source`, line);
   }
 
   private numericDisplayFields(
@@ -4264,7 +4730,11 @@ class EmitContext {
     const fields: DisplayField[] = [];
     for (const item of display.items) {
       if (item.kind === "literal") {
-        if (item.text.trim().length === 0) continue;
+        const literal = decimalDisplayFieldLiteral(item.text, fields.length === 0);
+        if (literal !== undefined) {
+          fields.push({ kind: "literal", name: `#${literal.digits}`, width: literal.width, value: literal.value });
+          continue;
+        }
         if (line !== undefined) {
           this.diagnostics.push(buildDiagnostic(
             "error",
@@ -4274,7 +4744,7 @@ class EmitContext {
         }
         return undefined;
       }
-      fields.push({ item, name: item.name, width: item.width ?? this.naturalDisplayWidth(item.name) });
+      fields.push({ kind: "source", item, name: item.name, width: item.width ?? this.naturalDisplayWidth(item.name) });
     }
     return fields;
   }
@@ -4282,16 +4752,39 @@ class EmitContext {
   private displaySourceFields(display: ProgramAst["displays"][number]): DisplayField[] {
     return display.items
       .filter((item): item is DisplaySourceItem => item.kind === "source")
-      .map((item) => ({ item, name: item.name, width: item.width ?? this.naturalDisplayWidth(item.name) }));
+      .map((item) => ({ kind: "source", item, name: item.name, width: item.width ?? this.naturalDisplayWidth(item.name) }));
   }
 
   private estimateDecimalDisplayCost(fields: DisplayField[], reuseCurrentX: boolean): number {
     if (fields.length === 0) return 2;
-    let cost = reuseCurrentX && fields[0]?.name === this.currentXVariable ? 0 : 1;
+    const currentIndex = reuseCurrentX && this.currentXVariable !== undefined
+      ? fields.findIndex((field) => field.kind === "source" && field.name === this.currentXVariable)
+      : -1;
+    if (currentIndex > 0) {
+      let cost = this.estimateDisplayFieldValueCost(fields[0]!);
+      for (const field of fields.slice(1, currentIndex)) {
+        cost += this.estimateNumberOrPreloadCost(String(10 ** field.width)) +
+          (field.kind === "literal" && field.value === "0" ? 1 : this.estimateDisplayFieldValueCost(field) + 2);
+      }
+      cost += this.estimateNumberOrPreloadCost(String(10 ** fields[currentIndex]!.width)) + 2;
+      for (const field of fields.slice(currentIndex + 1)) {
+        cost += this.estimateNumberOrPreloadCost(String(10 ** field.width)) +
+          (field.kind === "literal" && field.value === "0" ? 1 : this.estimateDisplayFieldValueCost(field) + 2);
+      }
+      return cost + 1;
+    }
+    let cost = reuseCurrentX && fields[0]?.kind === "source" && fields[0].name === this.currentXVariable
+      ? 0
+      : this.estimateDisplayFieldValueCost(fields[0]!);
     for (const field of fields.slice(1)) {
-      cost += this.estimateNumberOrPreloadCost(String(10 ** field.width)) + 3;
+      cost += this.estimateNumberOrPreloadCost(String(10 ** field.width)) +
+        (field.kind === "literal" && field.value === "0" ? 1 : this.estimateDisplayFieldValueCost(field) + 2);
     }
     return cost + 1;
+  }
+
+  private estimateDisplayFieldValueCost(field: DisplayField): number {
+    return field.kind === "literal" ? this.estimateNumberOrPreloadCost(field.value ?? "0") : 1;
   }
 
   private estimateNumberOrPreloadCost(raw: string): number {
@@ -4301,9 +4794,10 @@ class EmitContext {
   private packedStorageReuseFields(display: ProgramAst["displays"][number]): DisplayField[] | undefined {
     const fields = this.numericDisplayFields(display);
     if (fields === undefined || fields.length < 2) return undefined;
+    if (fields.some((field) => field.kind !== "source")) return undefined;
     const firstState = this.findStateField(fields[0]!.name);
     if (firstState?.type !== "packed") return undefined;
-    if (!fields.slice(1).every((field) => field.item.width !== undefined)) return undefined;
+    if (!fields.slice(1).every((field) => field.item?.width !== undefined)) return undefined;
     return fields;
   }
 
@@ -4357,7 +4851,10 @@ class EmitContext {
   private canCompileDisplayByteBuilder(display: ProgramAst["displays"][number]): boolean {
     if (!machineSupports(this.machineProfile, "display-bytes")) return false;
     return this.mantissaExponentDisplayTemplate(display) !== undefined &&
-      this.displayTemplateScratchRegisters(display) !== undefined;
+      this.displayTemplateScratchRegisters(display) !== undefined ||
+      this.mantissaMaskDisplayTemplate(display) !== undefined &&
+      this.displayMaskScratchRegister(display) !== undefined &&
+      this.displayMaskRegister(display) !== undefined;
   }
 
   private estimateDisplayByteBuilderCost(
@@ -4366,9 +4863,14 @@ class EmitContext {
     reuseCurrentX: boolean,
   ): number {
     const template = this.mantissaExponentDisplayTemplate(display);
-    if (template === undefined) return UNAVAILABLE_DISPLAY_STRATEGY_COST;
-    const leaderCost = reuseCurrentX && template.leader.name === this.currentXVariable ? 0 : 1;
-    return 39 + leaderCost;
+    if (template !== undefined) {
+      const leaderCost = reuseCurrentX && template.leader.name === this.currentXVariable ? 0 : 1;
+      return 39 + leaderCost;
+    }
+    const maskTemplate = this.mantissaMaskDisplayTemplate(display);
+    if (maskTemplate === undefined) return UNAVAILABLE_DISPLAY_STRATEGY_COST;
+    return this.estimateDecimalDisplayCost(maskTemplate.bodyFields, false) + 9 +
+      String(maskTemplate.width - 1).length;
   }
 
   private compileDisplayByteBuilder(
@@ -4377,8 +4879,9 @@ class EmitContext {
     _reuseCurrentX: boolean,
   ): boolean {
     const template = this.mantissaExponentDisplayTemplate(display);
+    if (template === undefined) return this.compileMantissaMaskDisplay(display, line, _reuseCurrentX);
     const scratch = this.displayTemplateScratchRegisters(display);
-    if (template === undefined || scratch === undefined) return false;
+    if (scratch === undefined) return false;
 
     this.emitRecall(template.score.name, `display ${display.name} score`, line);
     this.emitNumberOrPreload("1000");
@@ -4423,6 +4926,34 @@ class EmitContext {
     return true;
   }
 
+  private compileMantissaMaskDisplay(
+    display: ProgramAst["displays"][number],
+    line: number,
+    _reuseCurrentX: boolean,
+  ): boolean {
+    const template = this.mantissaMaskDisplayTemplate(display);
+    const scratch = this.displayMaskScratchRegister(display);
+    const maskRegister = this.displayMaskRegister(display);
+    if (template === undefined || scratch === undefined || maskRegister === undefined) return false;
+
+    this.compilePackedDisplayFields(display, template.bodyFields, line, false);
+    this.emitOp(0x60 + registerIndex(maskRegister), `П->X ${maskRegister}`, `display ${display.name} literal mask`, line);
+    this.emitOp(0x38, "К ∨", "display mask body merge", line);
+    this.emitOp(0x40 + registerIndex(scratch), `X->П ${scratch}`, `display ${display.name} body`, line, true);
+    this.emitRecall(template.leader.name, `display ${display.name} leader`, line);
+    this.emitOp(0x60 + registerIndex(scratch), `П->X ${scratch}`, `display ${display.name} body`, line);
+    this.emitOp(0x14, "<->", "display mask leader merge", line);
+    this.emitOp(0x54, "К НОП", "display mask leader preserve", line, true);
+    this.emitOp(0x0c, "ВП", "display mask leader restore", line);
+    this.emitDisplayExponent(template.width - 1, line, "display mask exponent");
+    this.emitOp(0x50, "С/П", `show ${display.name}`, line);
+    this.optimizations.push({
+      name: "display-byte-mask-lowering",
+      detail: `Built literal-separated screen ${display.name} through a calculator video mask.`,
+    });
+    return true;
+  }
+
   private mantissaExponentDisplayTemplate(
     display: ProgramAst["displays"][number],
   ): MantissaExponentDisplayTemplate | undefined {
@@ -4443,11 +4974,11 @@ class EmitContext {
     if (normalizeDisplayTemplateLiteral(secondLiteral.text) !== "-") return undefined;
     if (normalizeDisplayTemplateLiteral(thirdLiteral.text) !== "-") return undefined;
 
-    const result = {
-      leader: { item: leader, name: leader.name, width: leader.width ?? this.naturalDisplayWidth(leader.name) },
-      score: { item: score, name: score.name, width: score.width ?? this.naturalDisplayWidth(score.name) },
-      total: { item: total, name: total.name, width: total.width ?? this.naturalDisplayWidth(total.name) },
-      exponent: { item: exponent, name: exponent.name, width: exponent.width ?? this.naturalDisplayWidth(exponent.name) },
+    const result: MantissaExponentDisplayTemplate = {
+      leader: { kind: "source", item: leader, name: leader.name, width: leader.width ?? this.naturalDisplayWidth(leader.name) },
+      score: { kind: "source", item: score, name: score.name, width: score.width ?? this.naturalDisplayWidth(score.name) },
+      total: { kind: "source", item: total, name: total.name, width: total.width ?? this.naturalDisplayWidth(total.name) },
+      exponent: { kind: "source", item: exponent, name: exponent.name, width: exponent.width ?? this.naturalDisplayWidth(exponent.name) },
     };
     if (result.leader.width !== 1 || result.score.width !== 2 || result.total.width !== 3 || result.exponent.width !== 2) {
       return undefined;
@@ -4457,6 +4988,62 @@ class EmitContext {
     if (!this.displayFieldFitsUnsignedWidth(result.total)) return undefined;
     if (!this.displayFieldFitsUnsignedWidth(result.exponent)) return undefined;
     return result;
+  }
+
+  private mantissaMaskDisplayTemplate(
+    display: ProgramAst["displays"][number],
+  ): MantissaMaskDisplayTemplate | undefined {
+    const [first, ...rest] = display.items;
+    if (first?.kind !== "source" || rest.length === 0) return undefined;
+
+    const leader: DisplayField = {
+      kind: "source",
+      item: first,
+      name: first.name,
+      width: first.width ?? this.naturalDisplayWidth(first.name),
+    };
+    if (leader.width !== 1 || !this.displayFieldFitsUnsignedWidth(leader)) return undefined;
+    const leaderMin = this.displayFieldMin(leader);
+    if (leaderMin === undefined || leaderMin <= 0) return undefined;
+
+    const bodyFields: DisplayField[] = [
+      { kind: "literal", name: "#display-anchor", width: 1, value: "9" },
+    ];
+    const maskCells = [8];
+    let width = 1;
+    let hasVideoLiteral = false;
+
+    for (const item of rest) {
+      if (item.kind === "source") {
+        const field: DisplayField = {
+          kind: "source",
+          item,
+          name: item.name,
+          width: item.width ?? this.naturalDisplayWidth(item.name),
+        };
+        if (!this.displayFieldFitsUnsignedWidth(field)) return undefined;
+        bodyFields.push(field);
+        for (let index = 0; index < field.width; index += 1) maskCells.push(0);
+        width += field.width;
+        continue;
+      }
+
+      const cells = displayLiteralMantissaCells(item.text);
+      if (cells === undefined) return undefined;
+      if (cells.some((cell) => cell > 9)) hasVideoLiteral = true;
+      if (cells.length === 0) continue;
+      bodyFields.push({ kind: "literal", name: "#display-literal-gap", width: cells.length, value: "0" });
+      maskCells.push(...cells);
+      width += cells.length;
+    }
+
+    if (!hasVideoLiteral || width < 2 || width > 8) return undefined;
+    return {
+      leader,
+      bodyFields,
+      mask: displayCellsLiteral(maskCells),
+      width,
+    };
   }
 
   private displayFieldFitsUnsignedWidth(field: DisplayField): boolean {
@@ -4470,6 +5057,10 @@ class EmitContext {
   private displayFieldCanBeZero(field: DisplayField): boolean {
     const state = this.findStateField(field.name);
     return state === undefined || (state.min ?? 0) <= 0;
+  }
+
+  private displayFieldMin(field: DisplayField): number | undefined {
+    return this.findStateField(field.name)?.min;
   }
 
   private displayTemplateScratchRegisters(display: ProgramAst["displays"][number]): {
@@ -4493,6 +5084,15 @@ class EmitContext {
     return { value, loop, loopRegister: Number(loopRegister) as 0 | 1 | 2 | 3, mask };
   }
 
+  private displayMaskScratchRegister(display: ProgramAst["displays"][number]): RegisterName | undefined {
+    return this.allocation.registers[displayTemplateValueScratchName(display)];
+  }
+
+  private displayMaskRegister(display: ProgramAst["displays"][number]): RegisterName | undefined {
+    const template = this.mantissaMaskDisplayTemplate(display);
+    return template === undefined ? undefined : this.allocation.constants[normalizeConstantLiteral(template.mask)];
+  }
+
   private emitDisplayLiteralProgram(
     program: Exclude<DisplayLiteralProgram, { kind: "error" }>,
     line: number | undefined,
@@ -4509,6 +5109,72 @@ class EmitContext {
     this.emitNumberOrPreload(program.right);
     this.emitOp(0x39, "К ⊕", comment, line);
     if (program.negative) this.emitOp(0x0b, "/-/", `${comment} sign`, line);
+  }
+
+  private emitFirstSpliceDisplayLiteralProgram(
+    program: FirstSpliceDisplayLiteralProgram,
+    tempRegister: RegisterName,
+    line: number | undefined,
+    comment: string,
+  ): void {
+    this.emitDisplayLiteralProgram(program.body, line, `${comment} body`);
+    this.emitOp(0x40 + registerIndex(tempRegister), `X->П ${tempRegister}`, `${comment} body scratch`, line, true);
+    if (program.first === 8) {
+      this.emitOp(0x60 + registerIndex(tempRegister), `П->X ${tempRegister}`, `${comment} body scratch`, line);
+      if (program.negative) this.emitOp(0x0b, "/-/", `${comment} sign`, line);
+      this.emitOp(0x54, "К НОП", `${comment} first digit reuse`, line, true);
+      this.emitOp(0x0c, "ВП", `${comment} first digit reuse`, line);
+      this.emitDisplayExponent(program.exponent, line, `${comment} exponent`);
+      this.optimizations.push({
+        name: "display-literal-first-digit-reuse",
+        detail: "Reused the literal body's leading 8 while restoring X2.",
+      });
+      return;
+    }
+    if (program.first === 10 && program.second === 10) {
+      this.emitOp(0x35, "К {x}", `${comment} first digit from body`, line);
+      this.emitOp(0x60 + registerIndex(tempRegister), `П->X ${tempRegister}`, `${comment} body scratch`, line);
+      if (program.negative) this.emitOp(0x0b, "/-/", `${comment} sign`, line);
+      this.emitFirstDigitSplice(line);
+      this.emitDisplayExponent(program.exponent, line, `${comment} exponent`);
+      this.optimizations.push({
+        name: "display-literal-minus-source-reuse",
+        detail: "Derived a leading '-' from the literal body's fractional tail.",
+      });
+      return;
+    }
+    this.emitDisplayFirstDigit(program.first, line, `${comment} first digit`);
+    this.emitOp(0x60 + registerIndex(tempRegister), `П->X ${tempRegister}`, `${comment} body scratch`, line);
+    if (program.negative) this.emitOp(0x0b, "/-/", `${comment} sign`, line);
+    this.emitFirstDigitSplice(line);
+    this.emitDisplayExponent(program.exponent, line, `${comment} exponent`);
+  }
+
+  private emitDisplayFirstDigit(cell: number, line: number | undefined, comment: string): void {
+    if (cell >= 0 && cell <= 9) {
+      this.emitNumber(String(cell));
+      const last = this.items.at(-1);
+      if (last?.kind === "op") last.comment = comment;
+      return;
+    }
+    if (cell >= 10 && cell <= 14) {
+      this.emitNumber(`1${15 - cell}`);
+      this.emitOp(0x3a, "К ИНВ", comment, line);
+      this.emitOp(0x35, "К {x}", comment, line);
+      return;
+    }
+    this.diagnostics.push(buildDiagnostic("error", `Unsupported display first digit ${cell}.`, line));
+  }
+
+  private emitDisplayExponent(exponent: number, line: number | undefined, comment: string): void {
+    if (!Number.isInteger(exponent) || exponent < 0 || exponent > 99) {
+      this.diagnostics.push(buildDiagnostic("error", `Unsupported display exponent ${exponent}.`, line));
+      return;
+    }
+    this.emitOp(0x0c, "ВП", comment, line);
+    for (const char of String(exponent)) {
+      this.emitOp(Number(char), char, comment, line);
+    }
   }
 
   private canReorderNumericDisplay(display: ProgramAst["displays"][number]): boolean {
@@ -4662,48 +5328,96 @@ class EmitContext {
   }
 
   private compileLiteralDisplay(display: ProgramAst["displays"][number], line: number): boolean {
-    const compiled = this.compileLiteralDisplayBody(display, line);
+    const literal = this.collapseLiteralOnlyDisplay(display);
+    if (literal === undefined) return false;
+    const compiled = this.compileLiteralDisplayBody(display, line, literal);
     if (!compiled) return false;
     this.optimizations.push({
-      name: "screen-video-literal-lowering",
-      detail: `Lowered screen ${display.name} as a literal calculator video string.`,
+      name: literal.length === 0 ? "screen-empty-literal-lowering" : "screen-video-literal-lowering",
+      detail: literal.length === 0
+        ? `Lowered empty screen ${display.name} as a plain pause.`
+        : `Lowered screen ${display.name} as a literal calculator video string.`,
     });
     return true;
   }
 
-  private compileLiteralDisplayBody(display: ProgramAst["displays"][number], line: number): boolean {
-    const literal = this.collapseLiteralOnlyDisplay(display);
+  private compileLiteralDisplayBody(
+    display: ProgramAst["displays"][number],
+    line: number,
+    literal = this.collapseLiteralOnlyDisplay(display),
+  ): boolean {
     if (literal === undefined) return false;
+    if (literal.length === 0) {
+      this.emitOp(0x50, "С/П", `show ${display.name}`, line);
+      return true;
+    }
+    if (this.compilePreloadedDisplayLiteral(display, literal, line)) return true;
     const program = displayLiteralProgram(literal);
-    if (program === undefined) {
-      if (this.compileDecimalLiteralDisplay(display, literal, line)) return true;
-      if (this.compileZeroDigitTailDisplay(display, literal, line)) return true;
-      if (this.compileSignDigitLiteralDisplay(display, literal, line)) return true;
-      return false;
+    if (program !== undefined) {
+      if (program.kind === "error") {
+        this.emitErrorStopOpcode(`show ${display.name}`, line, true);
+        this.emitOp(0x54, "К НОП", `show ${display.name} skipped after error pause`, line, true);
+        this.optimizations.push({
+          name: "screen-error-literal-lowering",
+          detail: `Lowered screen ${display.name} as a resumable ЕГГ0Г pause with a skipped padding cell.`,
+        });
+      } else if (program.kind === "kinv") {
+        this.emitNumberOrPreload(program.digits);
+        this.emitOp(0x3a, "К ИНВ", "display literal video bytes", line);
+      } else {
+        this.emitNumberOrPreload(program.left);
+        this.emitOp(0x0e, "В↑", "display literal x/y split", line);
+        this.emitNumberOrPreload(program.right);
+        this.emitOp(0x39, "К ⊕", "display literal video bytes", line);
+      }
+      if (program.kind !== "error" && program.negative) {
+        this.emitOp(0x0b, "/-/", "display literal sign", line);
+      }
+      if (program.kind === "error") return true;
+      this.emitOp(0x50, "С/П", `show ${display.name}`, line);
+      return true;
     }
+    if (this.compileDecimalLiteralDisplay(display, literal, line)) return true;
+    if (this.compileZeroDigitTailDisplay(display, literal, line)) return true;
+    if (this.compileSignDigitLiteralDisplay(display, literal, line)) return true;
+    const firstSplice =
+      signedFirstSpliceDisplayLiteralProgram(literal) ??
+      exponentTailDisplayLiteralProgram(literal) ??
+      firstSpliceDisplayLiteralProgram(literal);
+    if (firstSplice !== undefined) {
+      const scratch = this.firstSpliceDisplayScratch(display);
+      if (scratch !== undefined) {
+        this.emitFirstSpliceDisplayLiteralProgram(firstSplice, scratch, line, "display literal video bytes");
+        this.emitOp(0x50, "С/П", `show ${display.name}`, line);
+        this.optimizations.push({
+          name: "screen-text-literal-first-splice",
+          detail: `Lowered screen ${display.name} by building a literal mantissa and splicing its first digit.`,
+        });
+        return true;
+      }
+    }
+    return false;
+  }
 
-    if (program.kind === "error") {
-      this.emitErrorStopOpcode(`show ${display.name}`, line, true);
-      this.emitOp(0x54, "К НОП", `show ${display.name} skipped after error pause`, line, true);
-      this.optimizations.push({
-        name: "screen-error-literal-lowering",
-        detail: `Lowered screen ${display.name} as a resumable ЕГГ0Г pause with a skipped padding cell.`,
-      });
-    } else if (program.kind === "kinv") {
-      this.emitNumberOrPreload(program.digits);
-      this.emitOp(0x3a, "К ИНВ", "display literal video bytes", line);
-    } else {
-      this.emitNumberOrPreload(program.left);
-      this.emitOp(0x0e, "В↑", "display literal x/y split", line);
-      this.emitNumberOrPreload(program.right);
-      this.emitOp(0x39, "К ⊕", "display literal video bytes", line);
-    }
-    if (program.kind !== "error" && program.negative) {
-      this.emitOp(0x0b, "/-/", "display literal sign", line);
-    }
-    if (program.kind === "error") return true;
+  private compilePreloadedDisplayLiteral(
+    display: ProgramAst["displays"][number],
+    literal: string,
+    line: number,
+  ): boolean {
+    if (!shouldUsePreloadedDisplayLiteral(literal)) return false;
+    const register = this.allocation.constants[normalizeConstantLiteral(literal)];
+    if (register === undefined) return false;
+    this.emitOp(0x60 + registerIndex(register), `П->X ${register}`, `display ${display.name} literal`, line);
     this.emitOp(0x50, "С/П", `show ${display.name}`, line);
+    this.optimizations.push({
+      name: "screen-text-literal-preload",
+      detail: `Displayed screen ${display.name} from prebuilt literal R${register}.`,
+    });
     return true;
+  }
+
+  private firstSpliceDisplayScratch(display: ProgramAst["displays"][number]): RegisterName | undefined {
+    return this.allocation.registers[firstSpliceDisplayScratchName(display)];
   }
 
   private compileDecimalLiteralDisplay(
@@ -4795,7 +5509,7 @@ class EmitContext {
     return true;
   }
 
-  private emitFirstDigitSplice(line: number): void {
+  private emitFirstDigitSplice(line: number | undefined): void {
     this.emitOp(0x14, "<->", "display sign-digit first-cell splice", line);
     this.emitOp(0x54, "К НОП", "display sign-digit first-cell splice", line, true);
     this.emitOp(0x0c, "ВП", "display sign-digit first-cell splice", line);
@@ -4878,8 +5592,10 @@ class EmitContext {
   }
 
   private collapseLiteralOnlyDisplay(display: ProgramAst["displays"][number]): string | undefined {
-    if (display.items.length === 0 || display.items.some((item) => item.kind !== "literal")) return undefined;
+    if (display.items.length === 0) return "";
+    if (display.items.some((item) => item.kind !== "literal")) return undefined;
     const text = display.items.map((item) => item.kind === "literal" ? item.text : "").join("");
+    if (text.length === 0) return "";
     return text.trim().length === 0 ? undefined : text;
   }
 
@@ -5058,6 +5774,346 @@ class EmitContext {
     return last?.kind === "assign" ? last.target : undefined;
   }
 
+  private compileCoordListLineCountDashedReport(
+    assignment: Extract<StatementAst, { kind: "assign" }>,
+    show: Extract<StatementAst, { kind: "show" }>,
+  ): boolean {
+    const template = this.dashedCoordReportTemplateAfterLineCount(assignment, show);
+    if (template === undefined) return false;
+    if (!this.compileCoordListLineCountAssignment(assignment, template)) return false;
+    this.compileShow(show.display, show.line);
+    this.optimizations.push({
+      name: "coord-list-line-count-dashed-report-fusion",
+      detail: `Packed coord_list line_count() directly for dashed report ${show.display} at line ${assignment.line}.`,
+    });
+    return true;
+  }
+
+  private compileCoordListLineCountAssignment(
+    statement: Extract<StatementAst, { kind: "assign" }>,
+    dashedReport?: DashedCoordReportTemplate,
+  ): boolean {
+    const call = coordListLineCountCall(statement.expr);
+    if (call === undefined) return false;
+    const context = this.coordListIndirectContext(call);
+    if (context === undefined) return false;
+    const current = this.allocation.registers[COORD_LIST_CURRENT];
+    if (current === undefined) return false;
+    const scaled = this.coordListUsesScaledDecimalStorage(call);
+    if (scaled && !this.scaleCoordListCellInPlace(context.cell, statement.line)) return false;
+
+    this.emitCoordListLineCountInitialTotal(statement.target, statement.line, dashedReport);
+    this.emitCoordListLoopSetup(context, statement.line);
+
+    const start = this.freshLabel("coord_list_line_loop");
+    const visible = this.freshLabel("coord_list_visible");
+    const countNext = this.freshLabel("coord_list_count_next");
+    this.emitLabel(start);
+    this.emitCoordListIndirectRecall(context.pointerRegister, statement.line, "coord_list candidate");
+    this.emitStore(COORD_LIST_CURRENT, "coord_list current", statement.line);
+
+    if (scaled) {
+      this.compileScaledCoordListVisibilityTest(context.cell, visible, countNext, statement.line, "coord_list");
+    } else {
+      this.compileCoordOnesDigit({ kind: "identifier", name: COORD_LIST_CURRENT }, statement.line);
+      this.compileCoordOnesDigit(context.cell, statement.line);
+      this.emitOp(0x11, "-", "coord_list dx", statement.line);
+      this.emitJump(0x57, "F x!=0", visible, "coord_list same column", statement.line);
+
+      this.compileCoordTensDigit({ kind: "identifier", name: COORD_LIST_CURRENT }, statement.line);
+      this.compileCoordTensDigit(context.cell, statement.line);
+      this.emitOp(0x11, "-", "coord_list dy", statement.line);
+      this.emitJump(0x57, "F x!=0", visible, "coord_list same row", statement.line);
+      this.emitOp(0x31, "К |x|", "coord_list |dy|", statement.line);
+      this.emitOp(0x14, "<->", "coord_list dx", statement.line);
+      this.emitOp(0x31, "К |x|", "coord_list |dx|", statement.line);
+      this.emitOp(0x11, "-", "coord_list diagonal compare", statement.line);
+      this.emitJump(0x57, "F x!=0", visible, "coord_list same diagonal", statement.line);
+      this.emitJump(0x51, "БП", countNext, "coord_list not visible", statement.line);
+    }
+
+    this.emitLabel(visible);
+    if (!this.emitIndirectUnitIncrement(statement.target, "coord_list line_count total", statement.line)) {
+      this.emitRecall(statement.target, "coord_list line_count total", statement.line);
+      this.emitNumberOrPreload("1");
+      this.emitOp(0x10, "+", "coord_list add visible", statement.line);
+      this.emitStore(statement.target, "coord_list line_count total", statement.line);
+    }
+
+    this.emitLabel(countNext);
+    this.emitCoordListCounterLoop(context.counterRegister, start, statement.line, "coord_list line_count loop");
+    this.emitCoordListLineCountResult(statement.target, statement.line, dashedReport);
+    this.optimizations.push({
+      name: scaled ? "coord-list-scaled-line-count" : "coord-list-line-count-indirect-loop",
+      detail: scaled
+        ? `Lowered coord_list_line_count() through scaled decimal coordinates at line ${statement.line}.`
+        : `Lowered coord_list_line_count() through a compact indirect register loop at line ${statement.line}.`,
+    });
+    if (dashedReport !== undefined) {
+      this.optimizations.push({
+        name: "coord-list-line-count-dashed-report-body",
+        detail: `Accumulated ${statement.target} as a packed dashed report body at line ${statement.line}.`,
+      });
+    }
+    return true;
+  }
+
+  private dashedCoordReportTemplateAfterLineCount(
+    assignment: Extract<StatementAst, { kind: "assign" }>,
+    statement: StatementAst | undefined,
+  ): DashedCoordReportTemplate | undefined {
+    if (statement?.kind !== "show") return undefined;
+    const call = coordListLineCountCall(assignment.expr);
+    if (call === undefined) return undefined;
+    const display = this.ast.displays.find((candidate) => candidate.name === statement.display);
+    if (display === undefined) return undefined;
+    const template = dashedCoordReportDisplayTemplate(display);
+    if (template === undefined) return undefined;
+    if (assignment.target !== template.bearing.name) return undefined;
+    if (!expressionEquals(call.cell, { kind: "identifier", name: template.cell.name })) return undefined;
+    if (!this.displayFieldFitsUnsignedWidth(template.cell) || !this.displayFieldFitsUnsignedWidth(template.bearing)) {
+      return undefined;
+    }
+    return template;
+  }
+
+  private emitCoordListLineCountInitialTotal(
+    target: string,
+    line: number,
+    dashedReport?: DashedCoordReportTemplate,
+    commentPrefix = "coord_list line_count",
+  ): void {
+    if (dashedReport === undefined) {
+      this.emitZero(`${commentPrefix} total`, line);
+      this.emitStore(target, `${commentPrefix} total`, line);
+      return;
+    }
+    this.emitDashedCoordReportCellBody(dashedReport, line, `${commentPrefix} dashed report`);
+    this.emitStore(target, `${commentPrefix} dashed report body`, line);
+  }
+
+  private emitCoordListLineCountResult(
+    target: string,
+    line: number,
+    dashedReport?: DashedCoordReportTemplate,
+    commentPrefix = "coord_list line_count",
+  ): void {
+    this.emitRecall(
+      target,
+      dashedReport === undefined ? `${commentPrefix} result` : `${commentPrefix} dashed report body`,
+      line,
+    );
+    if (dashedReport !== undefined) this.currentXDashedCoordReportBody = dashedReport;
+  }
+
+  private emitDashedCoordReportCellBody(
+    template: DashedCoordReportTemplate,
+    line: number,
+    commentPrefix: string,
+  ): void {
+    if (!this.xHolds(template.cell.name)) this.emitRecall(template.cell.name, `${commentPrefix} cell`, line);
+    if (this.scaledCoordVariables.has(template.cell.name)) {
+      this.emitNumber("5");
+    } else {
+      this.emitNumber("4");
+    }
+    this.emitOp(0x15, "F 10^x", `${commentPrefix} cell scale`, line);
+    this.emitOp(0x12, "*", `${commentPrefix} cell shift`, line);
+  }
+
+  private coordListUsesScaledDecimalStorage(callOrList: CoordListCall | string): boolean {
+    const listName = typeof callOrList === "string" ? callOrList : coordListNameFromItems(callOrList.items);
+    return listName !== undefined && this.scaledCoordLists.has(listName);
+  }
+
+  private scaleCoordListCellInPlace(cell: ExpressionAst, line: number): boolean {
+    if (cell.kind !== "identifier") return false;
+    if (this.scaledCoordVariables.has(cell.name)) return true;
+    if (!this.xHolds(cell.name)) this.emitRecall(cell.name, "coord_list raw cell", line);
+    this.emitNumberOrPreload("10");
+    this.emitOp(0x13, "/", "coord_list scaled decimal cell", line);
+    this.emitStore(cell.name, "coord_list scaled decimal cell", line);
+    this.scaledCoordVariables.add(cell.name);
+    this.optimizations.push({
+      name: "coord-list-scaled-decimal-storage",
+      detail: `Stored ${cell.name} as y.x decimal coordinates for coord_list scans at line ${line}.`,
+    });
+    return true;
+  }
+
+  private compileScaledCoordListVisibilityTest(
+    cell: ExpressionAst,
+    visible: string,
+    countNext: string,
+    line: number,
+    commentPrefix: string,
+  ): void {
+    this.compileScaledCoordFraction({ kind: "identifier", name: COORD_LIST_CURRENT }, line, `${commentPrefix} current x`);
+    this.compileScaledCoordFraction(cell, line, `${commentPrefix} cell x`);
+    this.emitOp(0x11, "-", `${commentPrefix} dx`, line);
+    this.emitJump(0x57, "F x!=0", visible, `${commentPrefix} same column`, line);
+    this.emitNumberOrPreload("10");
+    this.emitOp(0x12, "*", `${commentPrefix} dx digit`, line);
+
+    this.compileScaledCoordInteger({ kind: "identifier", name: COORD_LIST_CURRENT }, line, `${commentPrefix} current y`);
+    this.compileScaledCoordInteger(cell, line, `${commentPrefix} cell y`);
+    this.emitOp(0x11, "-", `${commentPrefix} dy`, line);
+    this.emitJump(0x57, "F x!=0", visible, `${commentPrefix} same row`, line);
+    this.emitOp(0x31, "К |x|", `${commentPrefix} |dy|`, line);
+    this.emitOp(0x14, "<->", `${commentPrefix} dx`, line);
+    this.emitOp(0x31, "К |x|", `${commentPrefix} |dx|`, line);
+    this.emitOp(0x11, "-", `${commentPrefix} diagonal compare`, line);
+    this.emitJump(0x57, "F x!=0", visible, `${commentPrefix} same diagonal`, line);
+    this.emitJump(0x51, "БП", countNext, `${commentPrefix} not visible`, line);
+  }
+
+  private compileScaledCoordFraction(expr: ExpressionAst, line: number, comment: string): void {
+    this.compileExpression(expr);
+    this.emitOp(0x35, "К {x}", comment, line);
+  }
+
+  private compileScaledCoordInteger(expr: ExpressionAst, line: number, comment: string): void {
+    this.compileExpression(expr);
+    this.emitOp(0x34, "К [x]", comment, line);
+  }
+
+  private compileFusedCoordListScan(statements: StatementAst[], index: number): number {
+    const branch = statements[index];
+    const next = statements[index + 1];
+    if (branch?.kind !== "if" || next === undefined || branch.elseBody !== undefined) return 0;
+    if (!this.coordListFusedHitBodyAllowed(branch.thenBody)) return 0;
+
+    const hasCall = coordListHasConditionCall(branch.condition);
+    const lineCount = this.coordListLineCountAssignmentFromStatement(next);
+    if (hasCall === undefined || lineCount === undefined) return 0;
+    const lineCountCall = coordListLineCountCall(lineCount.expr);
+    if (lineCountCall === undefined || !sameCoordListCall(hasCall, lineCountCall)) return 0;
+
+    const context = this.coordListIndirectContext(lineCountCall);
+    const current = this.allocation.registers[COORD_LIST_CURRENT];
+    if (context === undefined || current === undefined) return 0;
+    const scaled = this.coordListUsesScaledDecimalStorage(lineCountCall);
+
+    const target = lineCount.target;
+    const line = branch.line;
+    const dashedReport = index + 3 === statements.length
+      ? this.dashedCoordReportTemplateAfterLineCount(lineCount, statements[index + 2])
+      : undefined;
+    if (scaled && !this.scaleCoordListCellInPlace(context.cell, line)) return 0;
+    this.emitCoordListLineCountInitialTotal(target, line, dashedReport, "coord_list fused");
+    this.emitCoordListLoopSetup(context, line);
+
+    const start = this.freshLabel("coord_list_fused_loop");
+    const hit = this.freshLabel("coord_list_fused_hit");
+    const visible = this.freshLabel("coord_list_fused_visible");
+    const countNext = this.freshLabel("coord_list_fused_next");
+    this.emitLabel(start);
+    this.emitCoordListIndirectRecall(context.pointerRegister, line, "coord_list fused candidate");
+    this.emitStore(COORD_LIST_CURRENT, "coord_list fused current", line);
+
+    this.compileExpression(context.cell);
+    this.emitRecall(COORD_LIST_CURRENT, "coord_list fused current", line);
+    this.emitOp(0x11, "-", "coord_list fused hit compare", line);
+    this.emitJump(0x57, "F x!=0", hit, "coord_list fused hit", line);
+
+    if (scaled) {
+      this.compileScaledCoordListVisibilityTest(context.cell, visible, countNext, line, "coord_list fused");
+    } else {
+      this.compileCoordOnesDigit({ kind: "identifier", name: COORD_LIST_CURRENT }, line);
+      this.compileCoordOnesDigit(context.cell, line);
+      this.emitOp(0x11, "-", "coord_list fused dx", line);
+      this.emitJump(0x57, "F x!=0", visible, "coord_list fused same column", line);
+
+      this.compileCoordTensDigit({ kind: "identifier", name: COORD_LIST_CURRENT }, line);
+      this.compileCoordTensDigit(context.cell, line);
+      this.emitOp(0x11, "-", "coord_list fused dy", line);
+      this.emitJump(0x57, "F x!=0", visible, "coord_list fused same row", line);
+      this.emitOp(0x31, "К |x|", "coord_list fused |dy|", line);
+      this.emitOp(0x14, "<->", "coord_list fused dx", line);
+      this.emitOp(0x31, "К |x|", "coord_list fused |dx|", line);
+      this.emitOp(0x11, "-", "coord_list fused diagonal compare", line);
+      this.emitJump(0x57, "F x!=0", visible, "coord_list fused same diagonal", line);
+      this.emitJump(0x51, "БП", countNext, "coord_list fused not visible", line);
+    }
+
+    this.emitLabel(hit);
+    this.compileStatements(branch.thenBody);
+    this.emitLabel(visible);
+    if (!this.emitIndirectUnitIncrement(target, "coord_list fused total", line)) {
+      this.emitRecall(target, "coord_list fused total", line);
+      this.emitNumberOrPreload("1");
+      this.emitOp(0x10, "+", "coord_list fused add visible", line);
+      this.emitStore(target, "coord_list fused total", line);
+    }
+
+    this.emitLabel(countNext);
+    this.emitCoordListCounterLoop(context.counterRegister, start, line, "coord_list fused loop");
+    this.emitCoordListLineCountResult(target, line, dashedReport, "coord_list fused");
+    this.optimizations.push({
+      name: scaled ? "coord-list-scaled-fused-hit-line-count" : "coord-list-fused-hit-line-count",
+      detail: scaled
+        ? `Fused coord_list membership and line_count through scaled decimal coordinates at line ${branch.line}.`
+        : `Fused coord_list membership and line_count into one indirect scan at line ${branch.line}.`,
+    });
+    if (dashedReport !== undefined) {
+      this.optimizations.push({
+        name: "coord-list-fused-dashed-report-body",
+        detail: `Accumulated ${target} as a packed dashed report body during the fused scan at line ${branch.line}.`,
+      });
+    }
+    return 2;
+  }
+
+  private coordListLineCountAssignmentFromStatement(
+    statement: StatementAst,
+  ): Extract<StatementAst, { kind: "assign" }> | undefined {
+    if (statement.kind === "assign" && coordListLineCountCall(statement.expr) !== undefined) return statement;
+    if (statement.kind !== "call") return undefined;
+    const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
+    if (proc?.body.length !== 1) return undefined;
+    const [only] = proc.body;
+    return only?.kind === "assign" && coordListLineCountCall(only.expr) !== undefined ? only : undefined;
+  }
+
+  private coordListFusedHitBodyAllowed(statements: StatementAst[], seen = new Set<string>()): boolean {
+    if (statements.length === 0) return true;
+    for (const statement of statements) {
+      if (statement.kind === "show" || statement.kind === "pause") continue;
+      if (statement.kind !== "call") return false;
+      if (seen.has(statement.block)) return false;
+      const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
+      if (proc === undefined) return false;
+      seen.add(statement.block);
+      const allowed = this.coordListFusedHitBodyAllowed(proc.body, seen);
+      seen.delete(statement.block);
+      if (!allowed) return false;
+    }
+    return true;
+  }
+
+  private emitIndirectUnitIncrement(target: string, comment: string, line: number): boolean {
+    const register = this.allocation.registers[target];
+    if (register === undefined || !isPreincrementIndirectRegister(register)) return false;
+    this.emitOp(0xd0 + registerIndex(register), `К П->X ${register}`, comment, line);
+    this.optimizations.push({
+      name: "indirect-incdec-counter",
+      detail: `Incremented ${target} by using ${getOpcode(0xd0 + registerIndex(register)).name}'s pre-increment side effect at line ${line}.`,
+    });
+    return true;
+  }
+
+  private emitKnownOneIndirectLoopBack(target: string, line: number): boolean {
+    if (!this.coordListCounterKnownOne || !this.zeroAddressLabels.has(target)) return false;
+    const register = this.allocation.registers[COORD_LIST_COUNTER];
+    if (register === undefined || flOpcode(register) === undefined) return false;
+    this.emitOp(0x80 + registerIndex(register), `К БП ${register}`, "loop back via known-one counter", line);
+    this.optimizations.push({
+      name: "indirect-incdec-counter",
+      detail: `Reused ${COORD_LIST_COUNTER} = 1 as a one-cell indirect loop-back to 00 at line ${line}.`,
+    });
+    return true;
+  }
+
   private compileUnitDecrement(statement: Extract<StatementAst, { kind: "assign" }>): boolean {
     if (!isUnitDecrementExpression(statement.target, statement.expr)) return false;
     const register = this.allocation.registers[statement.target];
@@ -5085,6 +6141,7 @@ class EmitContext {
     falseLabel: string,
     line: number,
   ): void {
+    if (this.compileCoordListHasCondition(condition, falseLabel, line)) return;
     if (this.compileNegativeZeroThresholdFlow(condition, falseLabel, line)) return;
 
     const preloadedConstants = new Set(Object.keys(this.allocation.constants));
@@ -5139,6 +6196,112 @@ class EmitContext {
             : 0x57;
     const mnemonic = getOpcode(opcode).name;
     this.emitJump(opcode, mnemonic, falseLabel, `false branch for ${compiledCondition.op}`, line);
+  }
+
+  private compileCoordListHasCondition(
+    condition: ConditionAst,
+    falseLabel: string,
+    line: number,
+  ): boolean {
+    const call = coordListHasConditionCall(condition);
+    if (call === undefined) return false;
+    const context = this.coordListIndirectContext(call);
+    if (context === undefined) return false;
+    const scaled = this.coordListUsesScaledDecimalStorage(call);
+    if (scaled && !this.scaleCoordListCellInPlace(context.cell, line)) return false;
+
+    const trueLabel = this.freshLabel("coord_list_hit");
+    this.emitCoordListLoopSetup(context, line);
+    const start = this.freshLabel("coord_list_has_loop");
+    this.emitLabel(start);
+    this.compileExpression(context.cell);
+    this.emitCoordListIndirectRecall(context.pointerRegister, line, "coord_list candidate");
+    this.emitOp(0x11, "-", "coord_list hit compare", line);
+    this.emitJump(0x57, "F x!=0", trueLabel, "coord_list hit", line);
+    this.emitCoordListCounterLoop(context.counterRegister, start, line, "coord_list has loop");
+    this.emitJump(0x51, "БП", falseLabel, "coord_list miss", line);
+    this.emitLabel(trueLabel);
+    this.optimizations.push({
+      name: scaled ? "coord-list-scaled-membership" : "coord-list-indirect-membership",
+      detail: scaled
+        ? `Lowered coord_list membership through scaled decimal coordinates at line ${line}.`
+        : `Lowered coord_list membership through an indirect register walk at line ${line}.`,
+    });
+    return true;
+  }
+
+  private coordListIndirectContext(call: CoordListCall): CoordListIndirectContext | undefined {
+    const pointerRegister = this.allocation.registers[COORD_LIST_POINTER];
+    const counterRegister = this.allocation.registers[COORD_LIST_COUNTER];
+    if (pointerRegister === undefined || counterRegister === undefined) return undefined;
+    if (!isPreincrementIndirectRegister(pointerRegister)) return undefined;
+    const itemRegisters = call.items.map((item) => this.allocation.registers[item.name]);
+    if (itemRegisters.some((register) => register === undefined)) return undefined;
+    const indexes = itemRegisters.map((register) => registerIndex(register!));
+    for (let index = 1; index < indexes.length; index += 1) {
+      if (indexes[index] !== indexes[0]! + index) return undefined;
+    }
+    if (indexes.length === 0 || indexes[0]! <= 0) return undefined;
+    if (itemRegisters.includes(pointerRegister)) return undefined;
+    return {
+      cell: call.cell,
+      count: call.items.length,
+      pointerStart: indexes[0]! - 1,
+      pointerRegister,
+      counterRegister,
+    };
+  }
+
+  private emitCoordListLoopSetup(context: CoordListIndirectContext, line: number): void {
+    this.emitNumberOrPreload(String(context.pointerStart));
+    this.emitStore(COORD_LIST_POINTER, "coord_list pointer", line);
+    this.emitNumberOrPreload(String(context.count));
+    this.emitStore(COORD_LIST_COUNTER, "coord_list counter", line);
+  }
+
+  private emitCoordListIndirectRecall(
+    pointerRegister: RegisterName,
+    line: number | undefined,
+    comment: string,
+  ): void {
+    this.emitOp(0xd0 + registerIndex(pointerRegister), `К П->X ${pointerRegister}`, comment, line);
+  }
+
+  private emitCoordListCounterLoop(
+    counterRegister: RegisterName,
+    target: string,
+    line: number,
+    comment: string,
+  ): void {
+    const opcode = flOpcode(counterRegister);
+    if (opcode !== undefined) {
+      this.emitJump(opcode, getOpcode(opcode).name, target, comment, line);
+      this.coordListCounterKnownOne = true;
+      return;
+    }
+    this.emitRecall(COORD_LIST_COUNTER, "coord_list counter", line);
+    this.emitNumberOrPreload("1");
+    this.emitOp(0x11, "-", "coord_list decrement", line);
+    this.emitStore(COORD_LIST_COUNTER, "coord_list counter", line);
+    this.emitRecall(COORD_LIST_COUNTER, "coord_list counter", line);
+    this.emitJump(0x5e, "F x=0", target, comment, line);
+    this.coordListCounterKnownOne = false;
+  }
+
+  private compileCoordOnesDigit(expr: ExpressionAst, line: number): void {
+    this.compileExpression(expr);
+    this.emitNumberOrPreload("10");
+    this.emitOp(0x13, "/", "coord quotient", line);
+    this.emitOp(0x35, "К {x}", "coord fractional part", line);
+    this.emitNumberOrPreload("10");
+    this.emitOp(0x12, "*", "coord ones digit", line);
+  }
+
+  private compileCoordTensDigit(expr: ExpressionAst, line: number): void {
+    this.compileExpression(expr);
+    this.emitNumberOrPreload("10");
+    this.emitOp(0x13, "/", "coord quotient", line);
+    this.emitOp(0x34, "К [x]", "coord tens digit", line);
   }
 
   private compileBitHasConditionWithBitMaskHelper(
@@ -5902,6 +7065,10 @@ class EmitContext {
       return true;
     }
     if (name === "line_count" && this.compileSpatialLineCountLoop(expr)) return true;
+    // neighbor_count sums several spatial-hit probes. Each hit-helper call churns
+    // the four-deep MK-61 stack, so a stack-held running sum is corrupted; the
+    // loop body keeps the partial total in a register instead.
+    if (name === "neighbor_count" && this.compileSpatialNeighborCountLoop(expr)) return true;
     const expanded = spatialCountExpression(name, expr.args, this.ast);
     if (expanded === undefined) return false;
     this.compileExpression(expanded);
@@ -5916,68 +7083,42 @@ class EmitContext {
     const [mask, cell] = expr.args;
     if (mask?.kind !== "identifier" || cell === undefined) return false;
     const board = boardForCellMask(mask, this.ast);
-    const scratch = spatialCountScratchNames();
-    if (scratch.some((name) => this.allocation.registers[name] === undefined)) return false;
-    const progressions = spatialNeighborProgressions(board);
-    this.emitSpatialNeighborCountLoopBody(mask.name, cell, progressions, undefined);
+    const total = spatialCountScratchNames()[0]!;
+    if (this.allocation.registers[total] === undefined) return false;
+
+    // Enumerate the concrete neighbour offsets and accumulate each spatial hit
+    // in a register. An FL-counter loop is avoided on purpose: the spatial-hit
+    // helper churns the four-deep stack, and the post-layout indirect-memory
+    // pass relocates the loop counter, so a register-accumulated unroll is the
+    // only shape that survives both. The neighbour set is tiny (2 on a line,
+    // 8 on a grid), so the unroll stays cheap.
+    const offsets: number[] = [];
+    for (const progression of spatialNeighborProgressions(board)) {
+      const start = numericLiteralValue(progression.startOffset);
+      const step = numericLiteralValue(progression.step);
+      if (start === undefined || step === undefined) return false;
+      for (let i = 0; i < progression.count; i += 1) offsets.push(start + i * step);
+    }
+    if (offsets.length === 0) return false;
+
+    const helper = this.ensureSpatialHitHelper(mask.name, spatialHitScratchName(mask.name));
+    offsets.forEach((offset, position) => {
+      this.compileExpression(offsetExpressionAst(cell, offset));
+      this.emitJump(0x53, "ПП", helper.label, `spatial hit ${mask.name}`, undefined);
+      if (position === 0) {
+        this.emitStore(total, "neighbor_count total", undefined);
+      } else {
+        this.emitRecall(total, "neighbor_count total", undefined);
+        this.emitOp(0x10, "+", "neighbor_count add hit", undefined);
+        this.emitStore(total, "neighbor_count total", undefined);
+      }
+    });
+    this.emitRecall(total, "neighbor_count result", undefined);
     this.optimizations.push({
-      name: "spatial-neighbor-count-loop",
-      detail: `Lowered neighbor_count(${mask.name}, ...) as spatial hit loops.`,
+      name: "spatial-neighbor-count-unroll",
+      detail: `Lowered neighbor_count(${mask.name}, ...) as ${offsets.length} register-accumulated spatial hits.`,
     });
     return true;
-  }
-
-  private emitSpatialNeighborCountLoopBody(
-    hitMask: string,
-    cell: ExpressionAst,
-    progressions: SpatialLineProgression[],
-    sourceLine: number | undefined,
-  ): void {
-    const scratch = spatialCountScratchNames();
-    const total = scratch[0]!;
-    const offset = scratch[2]!;
-    const counter = scratch[3]!;
-
-    this.emitNumber("0");
-    this.emitStore(total, "neighbor_count total", sourceLine);
-    for (const progression of progressions) {
-      this.compileExpression(progression.startOffset);
-      this.emitStore(offset, "neighbor_count offset", sourceLine);
-      this.emitNumber(String(progression.count));
-      this.emitStore(counter, "neighbor_count counter", sourceLine);
-
-      const start = this.freshLabel("neighbor_count_loop");
-      this.emitLabel(start);
-      this.compileExpression(addExpressions(cell, { kind: "identifier", name: offset }));
-      const helper = this.ensureSpatialHitHelper(hitMask, spatialHitScratchName(hitMask));
-      this.emitJump(0x53, "ПП", helper.label, `spatial hit ${hitMask}`, sourceLine);
-      this.emitRecall(total, "neighbor_count total");
-      this.emitOp(0x10, "+", "neighbor_count add hit");
-      this.emitStore(total, "neighbor_count total");
-
-      this.emitRecall(offset, "neighbor_count offset");
-      this.compileExpression(progression.step);
-      this.emitOp(0x10, "+", "neighbor_count next offset");
-      this.emitStore(offset, "neighbor_count offset");
-
-      const counterRegister = this.allocation.registers[counter];
-      const flCounterOpcode = counterRegister === undefined ? undefined : flOpcode(counterRegister);
-      if (flCounterOpcode !== undefined) {
-        this.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, "neighbor_count loop", sourceLine);
-        this.optimizations.push({
-          name: "spatial-count-fl-loop",
-          detail: `Used ${getOpcode(flCounterOpcode).name} for neighbor_count loop counter.`,
-        });
-      } else {
-        this.emitRecall(counter, "neighbor_count counter");
-        this.emitNumber("1");
-        this.emitOp(0x11, "-", "neighbor_count decrement");
-        this.emitStore(counter, "neighbor_count counter");
-        this.emitRecall(counter, "neighbor_count counter");
-        this.emitJump(0x5e, "F x=0", start, "neighbor_count loop", sourceLine);
-      }
-    }
-    this.emitRecall(total, "neighbor_count result");
   }
 
   private compileSpatialLineCountLoop(expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
@@ -6455,6 +7596,7 @@ class EmitContext {
     this.currentXVariable = undefined;
     this.currentXAliases.clear();
     this.currentXKnownZero = false;
+    this.currentXDashedCoordReportBody = undefined;
     // If the machine is still in number-entry mode, a fresh literal would
     // concatenate onto the previous value (1 then 3 -> 13) or onto a just-read
     // input. Push the previous value with В↑ so the new number starts clean.
@@ -6528,6 +7670,8 @@ class EmitContext {
     aliases.add(name);
     this.currentXAliases = aliases;
     this.currentXKnownZero = knownZero;
+    this.scaledCoordVariables.delete(name);
+    if (name === COORD_LIST_COUNTER) this.coordListCounterKnownOne = false;
   }
 
   private emitRecall(name: string, comment?: string, sourceLine?: number): void {
@@ -6603,9 +7747,11 @@ class EmitContext {
     if (sourceLine !== undefined) op.sourceLine = sourceLine;
     if (raw) op.raw = true;
     this.items.push(op);
+    if (opcode >= 0x80 && opcode <= 0xfe) this.coordListCounterKnownOne = false;
     this.currentXVariable = undefined;
     this.currentXAliases.clear();
     this.currentXKnownZero = false;
+    this.currentXDashedCoordReportBody = undefined;
     // Digit / '.' / sign / ВП opcodes (0x00..0x0c) keep the machine in
     // number-entry mode; every other op finalizes it.
     this.machineEntryOpen = opcode <= 0x0c;
@@ -6620,6 +7766,8 @@ class EmitContext {
   }
 
   private emitLabel(name: string): void {
+    if (this.items.every((item) => item.kind === "label")) this.zeroAddressLabels.add(name);
+    this.coordListCounterKnownOne = false;
     this.items.push({ kind: "label", name });
     // A label is a control-flow merge point. The "current X" fact tracked
     // textually only reflects the fall-through edge; reusing it across a join
@@ -6635,6 +7783,7 @@ class EmitContext {
     // Copy-equivalence aliases never survive a merge: other predecessors reach
     // this label with X clobbered, so only the proven single fact may remain.
     this.currentXAliases = this.currentXVariable !== undefined ? new Set([this.currentXVariable]) : new Set();
+    this.currentXDashedCoordReportBody = undefined;
   }
 
   private freshLabel(prefix: string): string {
@@ -6648,6 +7797,396 @@ interface RegisterAllocation {
   registers: Record<string, RegisterName>;
   constants: Record<string, RegisterName>;
   negativeZeroDegree?: RegisterName;
+}
+
+interface CoordListCall {
+  cell: ExpressionAst;
+  items: Array<{ name: string }>;
+}
+
+interface CoordListIndirectContext {
+  cell: ExpressionAst;
+  count: number;
+  pointerStart: number;
+  pointerRegister: RegisterName;
+  counterRegister: RegisterName;
+}
+
+function coordListHasConditionCall(condition: ConditionAst): CoordListCall | undefined {
+  if (!isZeroExpression(condition.right) || condition.op !== "!=") return undefined;
+  return coordListHasCall(condition.left);
+}
+
+function coordListHasCall(expr: ExpressionAst): CoordListCall | undefined {
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "coord_list_has") return undefined;
+  if (expr.args.length < 2) return undefined;
+  const [cell, ...items] = expr.args;
+  if (cell === undefined) return undefined;
+  const identifiers = items.every((item): item is Extract<ExpressionAst, { kind: "identifier" }> => item.kind === "identifier");
+  if (!identifiers) return undefined;
+  return { cell, items: items.map((item) => ({ name: item.name })) };
+}
+
+function coordListLineCountCall(expr: ExpressionAst): CoordListCall | undefined {
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "coord_list_line_count") return undefined;
+  if (expr.args.length < 2) return undefined;
+  const [cell, ...items] = expr.args;
+  if (cell === undefined) return undefined;
+  const identifiers = items.every((item): item is Extract<ExpressionAst, { kind: "identifier" }> => item.kind === "identifier");
+  if (!identifiers) return undefined;
+  return { cell, items: items.map((item) => ({ name: item.name })) };
+}
+
+function sameCoordListCall(left: CoordListCall, right: CoordListCall): boolean {
+  return expressionEquals(left.cell, right.cell) &&
+    left.items.length === right.items.length &&
+    left.items.every((item, index) => item.name === right.items[index]?.name);
+}
+
+function coordListNameFromItems(items: readonly { name: string }[]): string | undefined {
+  let listName: string | undefined;
+  for (const item of items) {
+    const info = coordListItemInfo(item.name);
+    if (info === undefined) return undefined;
+    if (listName === undefined) {
+      listName = info.listName;
+    } else if (listName !== info.listName) {
+      return undefined;
+    }
+  }
+  return listName;
+}
+
+function collectScaledCoordListNames(ast: ProgramAst): Set<string> {
+  const candidates = new Map<string, Set<string>>();
+  const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
+
+  const addCandidate = (call: CoordListCall): void => {
+    if (call.cell.kind !== "identifier") return;
+    const listName = coordListNameFromItems(call.items);
+    if (listName === undefined || !coordListEligibleForScaledDecimalStorage(ast, listName)) return;
+    const cells = candidates.get(listName) ?? new Set<string>();
+    cells.add(call.cell.name);
+    candidates.set(listName, cells);
+  };
+
+  const visit = (statements: StatementAst[]): void => {
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      const next = statements[index + 1];
+      if (statement.kind === "if" && next !== undefined && statement.elseBody === undefined) {
+        const hasCall = coordListHasConditionCall(statement.condition);
+        const lineCount = coordListLineCountAssignmentFromStatement(next, procMap);
+        const lineCountCall = lineCount === undefined ? undefined : coordListLineCountCall(lineCount.expr);
+        if (hasCall !== undefined && lineCountCall !== undefined && sameCoordListCall(hasCall, lineCountCall)) {
+          addCandidate(lineCountCall);
+        }
+      }
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "switch") {
+        for (const switchCase of statement.cases) visit(switchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  for (const block of ast.blocks) visit(block.body);
+
+  const selected = new Set<string>();
+  for (const [listName, cells] of candidates) {
+    if (cells.size !== 1) continue;
+    const [cell] = cells;
+    if (cell !== undefined && coordVariableHasOnlyScaledSafeReads(ast, cell, listName, procMap)) {
+      selected.add(listName);
+    }
+  }
+  return selected;
+}
+
+function collectCoordListCellNames(ast: ProgramAst): Set<string> {
+  const names = new Set<string>();
+  const visitExpr = (expr: ExpressionAst): void => {
+    const hasCall = coordListHasCall(expr);
+    if (hasCall?.cell.kind === "identifier") names.add(hasCall.cell.name);
+    const lineCount = coordListLineCountCall(expr);
+    if (lineCount?.cell.kind === "identifier") names.add(lineCount.cell.name);
+    if (expr.kind === "unary") visitExpr(expr.expr);
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+    }
+    if (expr.kind === "call") {
+      for (const arg of expr.args) visitExpr(arg);
+    }
+  };
+  const visitCondition = (condition: ConditionAst): void => {
+    const hasCall = coordListHasConditionCall(condition);
+    if (hasCall?.cell.kind === "identifier") names.add(hasCall.cell.name);
+    visitExpr(condition.left);
+    visitExpr(condition.right);
+  };
+  const visit = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "assign") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "ask" && statement.prompt !== undefined) visitExpr(statement.prompt);
+      if (statement.kind === "if") {
+        visitCondition(statement.condition);
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "switch") {
+        visitExpr(statement.expr);
+        for (const switchCase of statement.cases) visit(switchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "core") {
+        for (const input of statement.inputs ?? []) visitExpr(input.expr);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  for (const block of ast.blocks) visit(block.body);
+  return names;
+}
+
+function collectScaledCoordCellNames(ast: ProgramAst, scaledLists: ReadonlySet<string>): Set<string> {
+  const names = new Set<string>();
+  if (scaledLists.size === 0) return names;
+  const add = (call: CoordListCall | undefined): void => {
+    if (call?.cell.kind !== "identifier") return;
+    const listName = coordListNameFromItems(call.items);
+    if (listName !== undefined && scaledLists.has(listName)) names.add(call.cell.name);
+  };
+  const visitExpr = (expr: ExpressionAst): void => {
+    add(coordListHasCall(expr));
+    add(coordListLineCountCall(expr));
+    if (expr.kind === "unary") visitExpr(expr.expr);
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+    }
+    if (expr.kind === "call") {
+      for (const arg of expr.args) visitExpr(arg);
+    }
+  };
+  const visitCondition = (condition: ConditionAst): void => {
+    add(coordListHasConditionCall(condition));
+    visitExpr(condition.left);
+    visitExpr(condition.right);
+  };
+  const visit = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "assign") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "ask" && statement.prompt !== undefined) visitExpr(statement.prompt);
+      if (statement.kind === "if") {
+        visitCondition(statement.condition);
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "switch") {
+        visitExpr(statement.expr);
+        for (const switchCase of statement.cases) visit(switchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "core") {
+        for (const input of statement.inputs ?? []) visitExpr(input.expr);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  for (const block of ast.blocks) visit(block.body);
+  return names;
+}
+
+function collectCoordListPackedReportTargets(ast: ProgramAst): Set<string> {
+  const names = new Set<string>();
+  const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
+
+  const tryAdd = (
+    assignment: Extract<StatementAst, { kind: "assign" }> | undefined,
+    statement: StatementAst | undefined,
+  ): void => {
+    if (assignment === undefined || statement?.kind !== "show") return;
+    const call = coordListLineCountCall(assignment.expr);
+    if (call === undefined) return;
+    const display = ast.displays.find((candidate) => candidate.name === statement.display);
+    if (display === undefined) return;
+    const template = dashedCoordReportDisplayTemplate(display);
+    if (template === undefined) return;
+    if (assignment.target !== template.bearing.name) return;
+    if (!expressionEquals(call.cell, { kind: "identifier", name: template.cell.name })) return;
+    names.add(assignment.target);
+  };
+
+  const visit = (statements: StatementAst[]): void => {
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      tryAdd(coordListLineCountAssignmentFromStatement(statement, procMap), statements[index + 1]);
+      if (statement.kind === "if" && statement.elseBody === undefined) {
+        const afterIf = statements[index + 1];
+        if (afterIf !== undefined) {
+          tryAdd(coordListLineCountAssignmentFromStatement(afterIf, procMap), statements[index + 2]);
+        }
+      }
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "switch") {
+        for (const switchCase of statement.cases) visit(switchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  for (const block of ast.blocks) visit(block.body);
+  return names;
+}
+
+function coordListLineCountAssignmentFromStatement(
+  statement: StatementAst,
+  procMap: ReadonlyMap<string, ProgramAst["procs"][number]>,
+): Extract<StatementAst, { kind: "assign" }> | undefined {
+  if (statement.kind === "assign" && coordListLineCountCall(statement.expr) !== undefined) return statement;
+  if (statement.kind !== "call") return undefined;
+  const proc = procMap.get(statement.block);
+  if (proc?.body.length !== 1) return undefined;
+  const [only] = proc.body;
+  return only?.kind === "assign" && coordListLineCountCall(only.expr) !== undefined ? only : undefined;
+}
+
+function coordListEligibleForScaledDecimalStorage(ast: ProgramAst, listName: string): boolean {
+  const field = ast.v2?.state.find((candidate) => candidate.name === listName && candidate.type === "coord_list");
+  if (field?.domain === undefined) return false;
+  const board = ast.v2?.boards.find((candidate) => candidate.name === field.domain);
+  return board?.xMin === 0 &&
+    board.xMax === 9 &&
+    board.yMin === 0 &&
+    board.yMax === 9 &&
+    board.width === 10 &&
+    board.height === 10;
+}
+
+function coordVariableHasOnlyScaledSafeReads(
+  ast: ProgramAst,
+  cellName: string,
+  listName: string,
+  procMap: ReadonlyMap<string, ProgramAst["procs"][number]>,
+): boolean {
+  const callIsSafe = (call: CoordListCall | undefined): boolean =>
+    call?.cell.kind === "identifier" &&
+    call.cell.name === cellName &&
+    coordListNameFromItems(call.items) === listName;
+
+  const exprSafe = (expr: ExpressionAst): boolean => {
+    const hasCall = coordListHasCall(expr);
+    if (callIsSafe(hasCall)) return true;
+    const lineCount = coordListLineCountCall(expr);
+    if (callIsSafe(lineCount)) return true;
+    if (expr.kind === "identifier") return expr.name !== cellName;
+    if (expr.kind === "unary") return exprSafe(expr.expr);
+    if (expr.kind === "binary") return exprSafe(expr.left) && exprSafe(expr.right);
+    if (expr.kind === "call") return expr.args.every(exprSafe);
+    return true;
+  };
+
+  const conditionSafe = (condition: ConditionAst): boolean => {
+    if (callIsSafe(coordListHasConditionCall(condition))) return true;
+    return exprSafe(condition.left) && exprSafe(condition.right);
+  };
+
+  const statementsSafe = (statements: StatementAst[], seenProcs = new Set<string>()): boolean => {
+    for (const statement of statements) {
+      if (statement.kind === "assign" && !exprSafe(statement.expr)) return false;
+      if ((statement.kind === "pause" || statement.kind === "halt") && !exprSafe(statement.expr)) return false;
+      if (statement.kind === "ask" && statement.prompt !== undefined && !exprSafe(statement.prompt)) return false;
+      if (statement.kind === "if") {
+        if (!conditionSafe(statement.condition)) return false;
+        if (!statementsSafe(statement.thenBody, seenProcs)) return false;
+        if (statement.elseBody !== undefined && !statementsSafe(statement.elseBody, seenProcs)) return false;
+      }
+      if (statement.kind === "loop" && !statementsSafe(statement.body, seenProcs)) return false;
+      if (statement.kind === "switch") {
+        if (!exprSafe(statement.expr)) return false;
+        for (const switchCase of statement.cases) {
+          if (!statementsSafe(switchCase.body, seenProcs)) return false;
+        }
+        if (statement.defaultBody !== undefined && !statementsSafe(statement.defaultBody, seenProcs)) return false;
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) {
+          if (!statementsSafe(dispatchCase.body, seenProcs)) return false;
+        }
+        if (statement.defaultBody !== undefined && !statementsSafe(statement.defaultBody, seenProcs)) return false;
+      }
+      if (statement.kind === "core") {
+        for (const input of statement.inputs ?? []) {
+          if (!exprSafe(input.expr)) return false;
+        }
+      }
+      if (statement.kind === "call") {
+        const proc = procMap.get(statement.block);
+        if (proc !== undefined && !seenProcs.has(proc.name)) {
+          seenProcs.add(proc.name);
+          const ok = statementsSafe(proc.body, seenProcs);
+          seenProcs.delete(proc.name);
+          if (!ok) return false;
+        }
+      }
+    }
+    return true;
+  };
+
+  for (const display of ast.displays) {
+    if (!display.items.some((item) => item.kind === "source" && item.name === cellName)) continue;
+    const template = dashedCoordReportDisplayTemplate(display);
+    if (template?.cell.name !== cellName) return false;
+  }
+  return ast.entries.every((entry) => statementsSafe(entry.body)) &&
+    ast.procs.every((proc) => statementsSafe(proc.body)) &&
+    ast.blocks.every((block) => statementsSafe(block.body));
+}
+
+function coordListItemInfo(name: string): { listName: string; index: number } | undefined {
+  if (!name.startsWith(COORD_LIST_ITEM_PREFIX)) return undefined;
+  const match = /^__coord_list_(.+)_(\d+)$/u.exec(name);
+  if (!match) return undefined;
+  return { listName: match[1]!, index: Number(match[2]) };
+}
+
+function isPreincrementIndirectRegister(register: RegisterName): boolean {
+  return register === "4" || register === "5" || register === "6";
 }
 
 function collectProcCallCounts(ast: ProgramAst): Map<string, number> {
@@ -6992,6 +8531,7 @@ function collectReachableProcNames(ast: ProgramAst): Set<string> {
     for (const statement of statements) {
       if (statement.kind === "call") enqueueCall(statement.block);
       if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "while") visit(statement.body);
       if (statement.kind === "if") {
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
@@ -7058,6 +8598,7 @@ function allocateRegisters(
     if (binding.storage) hints.set(binding.name, binding.storage);
   }
   applyTicTacToeRegisterHints(ast, variables, hints);
+  applyCoordListRegisterHints(variables, hints);
   const flPreferenceOrder: RegisterName[] = ["2", "3", "1", "0"];
   let flPreferenceIndex = 0;
   for (const variable of collectUnitDecrementTargets(ast)) {
@@ -7074,10 +8615,14 @@ function allocateRegisters(
   collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch);
   collectTicTacToeScratchVariables(ast, variables);
   collectBitMaskScratchVariables(ast, variables);
+  collectCoordListScratchVariables(ast, variables);
   collectSpatialHitScratchVariables(ast, variables, sharedBitMaskHelperCalls);
   collectSpatialCountScratchVariables(ast, variables);
   collectGuardedUpdateScratchVariables(ast, variables);
   collectDisplayTemplateScratchVariables(ast, variables);
+  applyCoordListRegisterHints(variables, hints);
+  applyCoordListPackedReportRegisterHints(ast, variables, hints);
+  applyCoordListCellRegisterHints(ast, variables, hints);
 
   const registers: Record<string, RegisterName> = {};
   const used = new Set<RegisterName>();
@@ -7192,6 +8737,61 @@ function applyTicTacToeRegisterHints(
   }
 }
 
+function applyCoordListRegisterHints(
+  variables: Set<string>,
+  hints: Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>,
+): void {
+  const itemRegisters: RegisterName[] = ["6", "7", "8", "9", "a", "b", "c", "d", "e"];
+  const groups = new Map<string, Array<{ name: string; index: number }>>();
+  for (const variable of variables) {
+    const item = coordListItemInfo(variable);
+    if (item === undefined) continue;
+    const group = groups.get(item.listName) ?? [];
+    group.push({ name: variable, index: item.index });
+    groups.set(item.listName, group);
+  }
+  for (const group of groups.values()) {
+    for (const item of group) {
+      const register = itemRegisters[item.index];
+      if (register !== undefined && !hints.has(item.name)) {
+        hints.set(item.name, { mode: "prefer", register });
+      }
+    }
+  }
+
+  const scratchHints: Array<[string, RegisterName]> = [
+    [COORD_LIST_POINTER, "5"],
+    [COORD_LIST_COUNTER, "2"],
+    [COORD_LIST_CURRENT, "0"],
+    [COORD_LIST_DX, "1"],
+  ];
+  for (const [name, register] of scratchHints) {
+    if (variables.has(name) && !hints.has(name)) hints.set(name, { mode: "prefer", register });
+  }
+}
+
+function applyCoordListCellRegisterHints(
+  ast: ProgramAst,
+  variables: Set<string>,
+  hints: Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>,
+): void {
+  const packedTargets = collectCoordListPackedReportTargets(ast);
+  for (const name of collectCoordListCellNames(ast)) {
+    if (!variables.has(name) || hints.has(name)) continue;
+    hints.set(name, { mode: "prefer", register: packedTargets.size > 0 ? "3" : "4" });
+  }
+}
+
+function applyCoordListPackedReportRegisterHints(
+  ast: ProgramAst,
+  variables: Set<string>,
+  hints: Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>,
+): void {
+  for (const name of collectCoordListPackedReportTargets(ast)) {
+    if (variables.has(name) && !hints.has(name)) hints.set(name, { mode: "prefer", register: "4" });
+  }
+}
+
 function pickRegister(
   variable: string,
   used: Set<RegisterName>,
@@ -7250,6 +8850,24 @@ function pickRegister(
     }
     return undefined;
   }
+  if (variable === COORD_LIST_POINTER) {
+    for (const candidate of ["5", "4", "6"] satisfies RegisterName[]) {
+      if (!used.has(candidate)) return candidate;
+    }
+    return undefined;
+  }
+  if (variable === COORD_LIST_COUNTER) {
+    for (const candidate of ["2", "3", "1", "0"] satisfies RegisterName[]) {
+      if (!used.has(candidate)) return candidate;
+    }
+    return undefined;
+  }
+  if (variable === COORD_LIST_CURRENT || variable === COORD_LIST_DX) {
+    for (const candidate of ["0", "1", "3", "4"] satisfies RegisterName[]) {
+      if (!used.has(candidate)) return candidate;
+    }
+    return undefined;
+  }
   if (variable.startsWith(SPATIAL_COUNT_SCRATCH_PREFIX)) {
     if (variable === spatialCountCounterScratchName()) {
       for (const candidate of ["0", "1", "2", "3"] satisfies RegisterName[]) {
@@ -7294,8 +8912,13 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
       values.add("1000");
       values.add("10000000");
     }
+    const mantissaMask = displayMantissaMaskTextForAst(ast, display);
+    if (mantissaMask !== undefined) values.add(normalizeConstantLiteral(mantissaMask));
     const literal = literalOnlyDisplayText(display);
     const literalProgram = literal === undefined ? undefined : displayLiteralProgram(literal);
+    if (literal !== undefined && shouldUsePreloadedDisplayLiteral(literal)) {
+      values.add(normalizeConstantLiteral(literal));
+    }
     if (literalProgram?.kind === "kinv" && estimateNumberCost(literalProgram.digits) > 1) {
       values.add(normalizeConstantLiteral(literalProgram.digits));
     }
@@ -7374,15 +8997,22 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
 }
 
 function naturalDisplayWidthForAst(ast: ProgramAst, source: string): number {
-  for (const state of ast.states) {
-    const field = state.fields.find((candidate) => candidate.name === source);
-    if (field === undefined) continue;
+  const field = findStateFieldInAst(ast, source);
+  if (field !== undefined) {
     const min = field.min ?? 0;
     const max = field.max ?? min;
     const magnitude = Math.max(Math.abs(min), Math.abs(max));
     return Math.max(1, String(Math.trunc(magnitude)).length);
   }
   return 1;
+}
+
+function findStateFieldInAst(ast: ProgramAst, source: string): StateFieldAst | undefined {
+  for (const state of ast.states) {
+    const field = state.fields.find((candidate) => candidate.name === source);
+    if (field !== undefined) return field;
+  }
+  return undefined;
 }
 
 function programContainsCall(ast: ProgramAst, name: string): boolean {
@@ -7814,6 +9444,10 @@ function statementReadsIdentifier(statement: StatementAst, name: string): boolea
         (statement.elseBody !== undefined && statementsReadIdentifier(statement.elseBody, name));
     case "loop":
       return statementsReadIdentifier(statement.body, name);
+    case "while":
+      return expressionReferencesIdentifier(statement.condition.left, name) ||
+        expressionReferencesIdentifier(statement.condition.right, name) ||
+        statementsReadIdentifier(statement.body, name);
     case "switch":
       return expressionReferencesIdentifier(statement.expr, name) ||
         statement.cases.some((switchCase) =>
@@ -7830,6 +9464,7 @@ function statementReadsIdentifier(statement: StatementAst, name: string): boolea
     case "input":
     case "call":
     case "egg":
+    case "decimal_series":
       return false;
     case "core":
       return statement.inputs?.some((input) => expressionReferencesIdentifier(input.expr, name)) ?? false;
@@ -8058,6 +9693,67 @@ function displayHasMantissaExponentTemplateShape(display: ProgramAst["displays"]
     exponent?.kind === "source";
 }
 
+function displayMantissaMaskTextForAst(
+  ast: ProgramAst,
+  display: ProgramAst["displays"][number],
+): string | undefined {
+  const [first, ...rest] = display.items;
+  if (first?.kind !== "source" || rest.length === 0) return undefined;
+  const leaderWidth = first.width ?? naturalDisplayWidthForAst(ast, first.name);
+  const leader = findStateFieldInAst(ast, first.name);
+  if (leaderWidth !== 1 || leader === undefined || (leader.min ?? 0) <= 0 || (leader.max ?? 0) > 9) {
+    return undefined;
+  }
+
+  const maskCells = [8];
+  let width = 1;
+  let hasVideoLiteral = false;
+  for (const item of rest) {
+    if (item.kind === "source") {
+      const sourceWidth = item.width ?? naturalDisplayWidthForAst(ast, item.name);
+      const state = findStateFieldInAst(ast, item.name);
+      if (state === undefined || (state.min ?? 0) < 0 || (state.max ?? 0) >= 10 ** sourceWidth) return undefined;
+      for (let index = 0; index < sourceWidth; index += 1) maskCells.push(0);
+      width += sourceWidth;
+      continue;
+    }
+    const cells = displayLiteralMantissaCells(item.text);
+    if (cells === undefined) return undefined;
+    if (cells.some((cell) => cell > 9)) hasVideoLiteral = true;
+    maskCells.push(...cells);
+    width += cells.length;
+  }
+  if (!hasVideoLiteral || width < 2 || width > 8) return undefined;
+  return displayCellsLiteral(maskCells);
+}
+
+function programUsesDashedCoordReport(ast: ProgramAst): boolean {
+  return ast.displays.some((display) => dashedCoordReportDisplayTemplate(display) !== undefined);
+}
+
+function dashedCoordReportDisplayTemplate(
+  display: ProgramAst["displays"][number],
+): DashedCoordReportTemplate | undefined {
+  const [prefix, cell, separator, bearing] = display.items;
+  if (
+    display.items.length !== 4 ||
+    prefix?.kind !== "literal" ||
+    cell?.kind !== "source" ||
+    separator?.kind !== "literal" ||
+    bearing?.kind !== "source"
+  ) {
+    return undefined;
+  }
+  if (normalizeDisplayTemplateLiteral(prefix.text) !== "--") return undefined;
+  if (normalizeDisplayTemplateLiteral(separator.text) !== "--") return undefined;
+  const result: DashedCoordReportTemplate = {
+    cell: { kind: "source", item: cell, name: cell.name, width: cell.width ?? 2 },
+    bearing: { kind: "source", item: bearing, name: bearing.name, width: bearing.width ?? 1 },
+  };
+  if (result.cell.width !== 2 || result.bearing.width !== 1) return undefined;
+  return result;
+}
+
 function displayTemplateValueScratchName(display: ProgramAst["displays"][number]): string {
   return `${DISPLAY_TEMPLATE_VALUE_PREFIX}${display.name}`;
 }
@@ -8068,6 +9764,10 @@ function displayTemplateLoopScratchName(display: ProgramAst["displays"][number])
 
 function displayTemplateMaskScratchName(display: ProgramAst["displays"][number]): string {
   return `${DISPLAY_TEMPLATE_MASK_PREFIX}${display.name}`;
+}
+
+function firstSpliceDisplayScratchName(display: ProgramAst["displays"][number]): string {
+  return `__display_first_${display.name}`;
 }
 
 function normalizeDisplayTemplateLiteral(text: string): string {
@@ -8092,6 +9792,14 @@ type DisplayLiteralProgram =
   | { kind: "kinv"; digits: string; negative: boolean }
   | { kind: "xor"; left: string; right: string; negative: boolean };
 
+interface FirstSpliceDisplayLiteralProgram {
+  first: number;
+  second?: number;
+  body: Exclude<DisplayLiteralProgram, { kind: "error" }>;
+  exponent: number;
+  negative?: boolean;
+}
+
 interface SignDigitLiteralDisplayProgram {
   signDigit: number;
   first: string;
@@ -8107,6 +9815,13 @@ function displayLiteralProgram(text: string): DisplayLiteralProgram | undefined 
   const negative = normalized.startsWith("-") && normalized.length > 1;
   const body = negative ? normalized.slice(1) : normalized;
   const cells = displayLiteralCells(body);
+  return displayLiteralProgramFromCells(cells, negative);
+}
+
+function displayLiteralProgramFromCells(
+  cells: readonly number[] | undefined,
+  negative: boolean,
+): DisplayLiteralProgram | undefined {
   if (cells === undefined || cells.length === 0 || cells.length > 8) return undefined;
   if (cells[0] !== 8) return undefined;
 
@@ -8124,10 +9839,127 @@ function displayLiteralProgram(text: string): DisplayLiteralProgram | undefined 
   return { kind: "xor", left: left.join(""), right: right.join(""), negative };
 }
 
+function firstSpliceDisplayLiteralProgram(text: string): FirstSpliceDisplayLiteralProgram | undefined {
+  const cells = displayLiteralCells(text);
+  if (cells === undefined || cells.length === 0 || cells.length > 8) return undefined;
+  return firstSpliceDisplayLiteralProgramFromCells(
+    cells,
+    displayLiteralPointExponent(text) ?? cells.length - 1,
+    false,
+  );
+}
+
+function firstSpliceDisplayLiteralProgramFromCells(
+  cells: readonly number[],
+  exponent: number,
+  negative: boolean,
+): FirstSpliceDisplayLiteralProgram | undefined {
+  const first = cells[0]!;
+  if (first === 15) return undefined;
+  const body = displayLiteralProgramFromCells([8, ...cells.slice(1)], false);
+  if (body === undefined || body.kind === "error") return undefined;
+  const program: FirstSpliceDisplayLiteralProgram = { first, body, exponent };
+  if (cells[1] !== undefined) program.second = cells[1];
+  if (negative) program.negative = true;
+  return program;
+}
+
+function shouldUseFirstSpliceDisplayLiteral(text: string): boolean {
+  if (firstSpliceDisplayLiteralProgram(text) === undefined) return false;
+  if (decimalDisplayLiteralNumber(text) !== undefined) return false;
+  if (zeroDigitTailDisplayProgram(text) !== undefined) return false;
+  if (signDigitLiteralDisplayProgram(text) !== undefined) return false;
+  const direct = displayLiteralProgram(text);
+  return direct === undefined || direct.kind !== "error" && displayLiteralTrailingZeroExponent(text) !== undefined;
+}
+
+function signedFirstSpliceDisplayLiteralProgram(text: string): FirstSpliceDisplayLiteralProgram | undefined {
+  const normalized = normalizeDisplayLiteralText(text);
+  if (!/^-[0-9]/u.test(normalized)) return undefined;
+  const body = normalized.slice(1);
+  const cells = displayLiteralCells(body);
+  if (cells === undefined || cells.length === 0 || cells.length > 8) return undefined;
+  return firstSpliceDisplayLiteralProgramFromCells(cells, displayLiteralPointExponent(body) ?? cells.length - 1, true);
+}
+
+function exponentTailDisplayLiteralProgram(text: string): FirstSpliceDisplayLiteralProgram | undefined {
+  const cells = displayLiteralCells(text);
+  if (cells === undefined || cells.length !== 9) return undefined;
+  const exponent = cells.at(-1);
+  if (exponent === undefined || exponent < 0 || exponent > 9) return undefined;
+  return firstSpliceDisplayLiteralProgramFromCells(cells.slice(0, 8), exponent, false);
+}
+
+function shouldUsePreloadedDisplayLiteral(text: string): boolean {
+  if (decimalDisplayLiteralNumber(text) !== undefined) return false;
+  if (zeroDigitTailDisplayProgram(text) !== undefined) return false;
+  if (signDigitLiteralDisplayProgram(text) !== undefined) return false;
+  const direct = displayLiteralProgram(text);
+  if (direct !== undefined && direct.kind !== "error") return shouldUseFirstSpliceDisplayLiteral(text);
+  return shouldUseFirstSpliceDisplayLiteral(text) ||
+    signedFirstSpliceDisplayLiteralProgram(text) !== undefined ||
+    exponentTailDisplayLiteralProgram(text) !== undefined;
+}
+
+function displayLiteralPointExponent(text: string): number | undefined {
+  const normalized = normalizeDisplayLiteralText(text);
+  const point = /[.,]/u.exec(normalized);
+  if (point === null) return undefined;
+  const prefix = normalized.slice(0, point.index);
+  const cells = displayLiteralCells(prefix);
+  if (cells === undefined || cells.length === 0) return undefined;
+  return cells.length - 1;
+}
+
+function displayLiteralTrailingZeroExponent(text: string): number | undefined {
+  const cells = displayLiteralCells(text);
+  if (cells === undefined || cells.length === 0 || cells.length > 8) return undefined;
+  return cells.at(-1) === 0 ? cells.length - 1 : undefined;
+}
+
 function decimalDisplayLiteralNumber(text: string): string | undefined {
   const normalized = normalizeDisplayLiteralText(text);
-  if (!/^(?:0|[1-9][0-9]{0,7})$/u.test(normalized)) return undefined;
+  if (!/^-?(?:0|[1-9][0-9]{0,7})$/u.test(normalized)) return undefined;
   return normalized;
+}
+
+function decimalDisplayFieldLiteral(
+  text: string,
+  leadingField: boolean,
+): { digits: string; value: string; width: number } | undefined {
+  const normalized = normalizeDisplayLiteralText(text.trim());
+  if (!/^[0-9]+$/u.test(normalized)) return undefined;
+  if (leadingField && normalized.startsWith("0")) return undefined;
+  const value = normalized.replace(/^0+/u, "") || "0";
+  return { digits: normalized, value, width: normalized.length };
+}
+
+function displayLiteralMantissaCells(text: string): number[] | undefined {
+  const normalized = normalizeDisplayLiteralText(text);
+  if (/[.,]/u.test(normalized)) return undefined;
+  return displayLiteralCells(normalized);
+}
+
+function displayCellsLiteral(cells: readonly number[]): string {
+  return cells.map((cell) => {
+    if (cell >= 0 && cell <= 9) return String(cell);
+    switch (cell) {
+      case 10:
+        return "-";
+      case 11:
+        return "L";
+      case 12:
+        return "С";
+      case 13:
+        return "Г";
+      case 14:
+        return "Е";
+      case 15:
+        return "_";
+      default:
+        return "";
+    }
+  }).join("");
 }
 
 function zeroDigitTailDisplayProgram(text: string): { input: number } | undefined {
@@ -8205,6 +10037,7 @@ function normalizeDisplayLiteralText(text: string): string {
   return text
     .replace(/[–—]/gu, "-")
     .replace(/[ОO]/gu, "0")
+    .replace(/[Л]/gu, "L")
     .replace(/[ВB]/gu, "L")
     .replace(/[C]/gu, "С")
     .replace(/[D]/gu, "Г")
@@ -8279,7 +10112,7 @@ function programUsesTicTacToeHelpers(ast: ProgramAst): boolean {
 
 function normalizeConstantLiteral(raw: string): string {
   const value = Number(raw);
-  return Number.isFinite(value) ? String(value) : raw.trim().toLowerCase();
+  return Number.isFinite(value) ? String(value) : raw.trim();
 }
 
 function negatedNumberLiteral(raw: string): string {
@@ -8336,6 +10169,7 @@ function collectAssignedVariables(ast: ProgramAst, variables: Set<string>): void
       }
       if (statement.kind === "input" && !ephemeralInputs.has(statement.target)) variables.add(statement.target);
       if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "while") visit(statement.body);
       if (statement.kind === "if") {
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
@@ -8511,6 +10345,9 @@ function collectBitMaskScratchVariables(ast: ProgramAst, variables: Set<string>)
       if (statement.kind === "assign" && next?.kind === "assign" && isReusableBitSetPair(statement, next)) {
         variables.add(bitMaskScratchName(statement));
       }
+      if (statement.kind === "assign" && matchSingleBitMaskOpAssignment(statement) !== undefined) {
+        variables.add(bitMaskScratchName(statement));
+      }
       if (statement.kind === "if") {
         const runScratch = membershipSetRunScratchName(statement);
         if (runScratch !== undefined) variables.add(runScratch);
@@ -8528,6 +10365,73 @@ function collectBitMaskScratchVariables(ast: ProgramAst, variables: Set<string>)
       if (statement.kind === "dispatch") {
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
         if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  for (const block of ast.blocks) visit(block.body);
+}
+
+function collectCoordListScratchVariables(ast: ProgramAst, variables: Set<string>): void {
+  const addHasScratch = (): void => {
+    variables.add(COORD_LIST_POINTER);
+    variables.add(COORD_LIST_COUNTER);
+  };
+  const addLineCountScratch = (): void => {
+    addHasScratch();
+    variables.add(COORD_LIST_CURRENT);
+    variables.add(COORD_LIST_DX);
+  };
+  for (const state of ast.states) {
+    for (const field of state.fields) {
+      if (field.initial !== undefined && randomCoordListItemPlacement(field.name, field.initial) !== undefined) {
+        addLineCountScratch();
+      }
+    }
+  }
+  const visitExpr = (expr: ExpressionAst): void => {
+    if (expr.kind === "call" && expr.callee.toLowerCase() === "coord_list_line_count") {
+      addLineCountScratch();
+    }
+    if (expr.kind === "unary") visitExpr(expr.expr);
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+    }
+    if (expr.kind === "call") {
+      for (const arg of expr.args) visitExpr(arg);
+    }
+  };
+  const visitCondition = (condition: ConditionAst): void => {
+    const call = coordListHasConditionCall(condition);
+    if (call !== undefined) addHasScratch();
+    visitExpr(condition.left);
+    visitExpr(condition.right);
+  };
+  const visit = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "assign") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "ask" && statement.prompt) visitExpr(statement.prompt);
+      if (statement.kind === "if") {
+        visitCondition(statement.condition);
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "switch") {
+        visitExpr(statement.expr);
+        for (const switchCase of statement.cases) visit(switchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+      if (statement.kind === "core") {
+        for (const input of statement.inputs ?? []) visitExpr(input.expr);
       }
     }
   };
@@ -8705,7 +10609,7 @@ function collectSpatialHitScratchVariables(
 function collectSpatialCountScratchVariables(ast: ProgramAst, variables: Set<string>): void {
   let needsScratch = false;
   const visitExpr = (expr: ExpressionAst): void => {
-    if (expr.kind === "call" && expr.callee.toLowerCase() === "line_count") {
+    if (expr.kind === "call" && (expr.callee.toLowerCase() === "line_count" || expr.callee.toLowerCase() === "neighbor_count")) {
       needsScratch = true;
     }
     if (expr.kind === "unary") visitExpr(expr.expr);
@@ -8849,10 +10753,20 @@ function collectGuardedUpdateScratchVariables(ast: ProgramAst, variables: Set<st
 
 function collectDisplayTemplateScratchVariables(ast: ProgramAst, variables: Set<string>): void {
   for (const display of ast.displays) {
-    if (!displayHasMantissaExponentTemplateShape(display)) continue;
-    variables.add(displayTemplateValueScratchName(display));
-    variables.add(displayTemplateLoopScratchName(display));
-    variables.add(displayTemplateMaskScratchName(display));
+    if (displayHasMantissaExponentTemplateShape(display)) {
+      variables.add(displayTemplateValueScratchName(display));
+      variables.add(displayTemplateLoopScratchName(display));
+      variables.add(displayTemplateMaskScratchName(display));
+      continue;
+    }
+    if (displayMantissaMaskTextForAst(ast, display) !== undefined) {
+      variables.add(displayTemplateValueScratchName(display));
+    }
+  }
+  for (const display of ast.displays) {
+    const literal = literalOnlyDisplayText(display);
+    if (literal === undefined || !shouldUsePreloadedDisplayLiteral(literal)) continue;
+    variables.add(firstSpliceDisplayScratchName(display));
   }
 }
 
@@ -10676,6 +12590,75 @@ function isBitNotOf(expr: ExpressionAst, inner: ExpressionAst): boolean {
     expressionEquals(expr.args[0]!, inner);
 }
 
+interface SingleBitMaskOpAssignment {
+  opcode: number;
+  mnemonic: string;
+  collection: ExpressionAst;
+  index: ExpressionAst;
+  negate: boolean;
+}
+
+// Recognize a standalone `target = bit_or/bit_and/bit_xor(collection,
+// [bit_not] bit_mask(index))` assignment. These come from `cells += item` /
+// `cells -= item` on a single-row board. The generic expression compiler builds
+// `bit_mask(index)` inline while `collection` sits on the stack; the cell-mask
+// construction (frac/x^y/10^x) overflows the four-deep MK-61 stack and corrupts
+// the held accumulator. The dedicated lowering builds the mask into a scratch
+// register first (anchor added last, max depth three), so nothing is held while
+// the mask is constructed.
+function matchSingleBitMaskOpAssignment(
+  statement: Extract<StatementAst, { kind: "assign" }>,
+): SingleBitMaskOpAssignment | undefined {
+  const expr = statement.expr;
+  if (expr.kind !== "call" || expr.args.length !== 2) return undefined;
+  const name = expr.callee.toLowerCase();
+
+  // `cells += item` / `cells -= item` on a single-row board lower directly to
+  // bit_set/bit_clear/bit_toggle(collection, index).
+  const indexOps: Record<string, [number, string, boolean]> = {
+    bit_set: [0x38, "К ∨", false],
+    bit_clear: [0x37, "К ∧", true],
+    bit_toggle: [0x39, "К ⊕", false],
+  };
+  const indexOp = indexOps[name];
+  if (indexOp !== undefined) {
+    return {
+      opcode: indexOp[0],
+      mnemonic: indexOp[1],
+      collection: expr.args[0]!,
+      index: expr.args[1]!,
+      negate: indexOp[2],
+    };
+  }
+
+  // Two-dimensional boards (and explicit bit ops) arrive pre-expanded as
+  // bit_or/bit_and/bit_xor(collection, [bit_not] bit_mask(index)).
+  const maskOps: Record<string, [number, string]> = {
+    bit_or: [0x38, "К ∨"],
+    bit_and: [0x37, "К ∧"],
+    bit_xor: [0x39, "К ⊕"],
+  };
+  const op = maskOps[name];
+  if (op === undefined) return undefined;
+
+  let maskArg = expr.args[1]!;
+  let negate = false;
+  if (maskArg.kind === "call" && maskArg.callee.toLowerCase() === "bit_not" && maskArg.args.length === 1) {
+    negate = true;
+    maskArg = maskArg.args[0]!;
+  }
+  if (maskArg.kind !== "call" || maskArg.callee.toLowerCase() !== "bit_mask" || maskArg.args.length !== 1) {
+    return undefined;
+  }
+  return {
+    opcode: op[0],
+    mnemonic: op[1],
+    collection: expr.args[0]!,
+    index: maskArg.args[0]!,
+    negate,
+  };
+}
+
 function norm4Expression(expr: ExpressionAst): ExpressionAst {
   const rem = multiplyExpressions(
     { kind: "call", callee: "frac", args: [divideExpressions({ kind: "call", callee: "int", args: [expr] }, numberExpression(4))] },
@@ -10705,21 +12688,70 @@ function cellMaskExpression(x: ExpressionAst, y: ExpressionAst): ExpressionAst {
   );
 }
 
-interface RandomCellsPlacement {
-  lo: number;
-  cells: number;
+interface RandomCoordListPlacement {
+  listName: string;
+  xMin: number;
+  width: number;
+  yMin: number;
+  height: number;
   count: number;
 }
 
-// Recognize the `__random_cells(lo, cells, count)` sentinel emitted for
-// `random_cells([domain,] K)` cell-mask initializers.
-function randomCellsPlacement(expr: ExpressionAst): RandomCellsPlacement | undefined {
-  if (expr.kind !== "call" || expr.callee !== "__random_cells" || expr.args.length !== 3) return undefined;
-  const lo = numericLiteralValue(expr.args[0]!);
-  const cells = numericLiteralValue(expr.args[1]!);
-  const count = numericLiteralValue(expr.args[2]!);
-  if (lo === undefined || cells === undefined || count === undefined) return undefined;
-  return { lo, cells, count };
+function isZeroOriginTenByTenPlacement(placement: RandomCoordListPlacement): boolean {
+  return placement.xMin === 0 && placement.yMin === 0 && placement.width === 10 && placement.height === 10;
+}
+
+function randomCoordListItemPlacement(fieldName: string, expr: ExpressionAst): RandomCoordListPlacement | undefined {
+  const item = coordListItemInfo(fieldName);
+  if (item === undefined) return undefined;
+  if (expr.kind !== "call" || expr.callee !== "__random_coord_list_item" || expr.args.length !== 6) return undefined;
+  const xMin = numericLiteralValue(expr.args[0]!);
+  const width = numericLiteralValue(expr.args[1]!);
+  const yMin = numericLiteralValue(expr.args[2]!);
+  const height = numericLiteralValue(expr.args[3]!);
+  const count = numericLiteralValue(expr.args[4]!);
+  const index = numericLiteralValue(expr.args[5]!);
+  if (
+    xMin === undefined ||
+    width === undefined ||
+    yMin === undefined ||
+    height === undefined ||
+    count === undefined ||
+    index === undefined ||
+    index !== item.index
+  ) return undefined;
+  return { listName: item.listName, xMin, width, yMin, height, count };
+}
+
+function randomCoordListSetupFields(
+  fields: readonly StateFieldAst[],
+  placement: RandomCoordListPlacement,
+): StateFieldAst[] {
+  return fields
+    .filter((field) => {
+      const item = coordListItemInfo(field.name);
+      if (item === undefined || item.listName !== placement.listName) return false;
+      const current = field.initial === undefined ? undefined : randomCoordListItemPlacement(field.name, field.initial);
+      return current !== undefined &&
+        current.xMin === placement.xMin &&
+        current.width === placement.width &&
+        current.yMin === placement.yMin &&
+        current.height === placement.height &&
+        current.count === placement.count;
+    })
+    .sort((left, right) => coordListItemInfo(left.name)!.index - coordListItemInfo(right.name)!.index);
+}
+
+function randomCoordListCellExpression(placement: RandomCoordListPlacement): ExpressionAst {
+  const x = addExpressions(
+    numberExpression(placement.xMin),
+    intExpression(multiplyExpressions({ kind: "call", callee: "random", args: [] }, numberExpression(placement.width))),
+  );
+  const y = addExpressions(
+    numberExpression(placement.yMin),
+    intExpression(multiplyExpressions({ kind: "call", callee: "random", args: [] }, numberExpression(placement.height))),
+  );
+  return addExpressions(x, multiplyExpressions(numberExpression(10), y));
 }
 
 // A cell mask is stored as `8.HHHHHHH`: the MK-61 blue logical operations
@@ -11385,6 +13417,9 @@ function statementEquals(left: StatementAst, right: StatementAst): boolean {
       return left.target === (right as typeof left).target && expressionEquals(left.expr, (right as typeof left).expr);
     case "loop":
       return statementListsEqual(left.body, (right as typeof left).body);
+    case "while":
+      return conditionEquals(left.condition, (right as typeof left).condition) &&
+        statementListsEqual(left.body, (right as typeof left).body);
     case "if":
       return conditionEquals(left.condition, (right as typeof left).condition) &&
         statementListsEqual(left.thenBody, (right as typeof left).thenBody) &&
@@ -11420,6 +13455,9 @@ function statementEquals(left: StatementAst, right: StatementAst): boolean {
       return rawLinesEqual(left.lines, (right as typeof left).lines);
     case "trap":
       return left.trap === (right as typeof left).trap && expressionEquals(left.expr, (right as typeof left).expr);
+    case "decimal_series":
+      return left.digits === (right as typeof left).digits &&
+        left.counterStart === (right as typeof left).counterStart;
   }
 }
 
@@ -11554,6 +13592,9 @@ function estimateBranchOrderStatementCost(statement: StatementAst, ast: ProgramA
     case "core":
     case "egg":
       return statement.lines.length;
+    case "decimal_series":
+      return 64;
+    case "while":
     case "loop":
     case "switch":
     case "dispatch":
@@ -11605,6 +13646,8 @@ function estimateSimpleStatementCost(statement: StatementAst, ast: ProgramAst): 
       const terminal = effectiveTerminalStatement(statement, ast);
       return terminal === undefined ? Number.POSITIVE_INFINITY : estimateSimpleStatementCost(terminal, ast);
     }
+    case "decimal_series":
+      return 64;
     default:
       return Number.POSITIVE_INFINITY;
   }
@@ -11906,6 +13949,19 @@ const optimizerCapabilities: Array<{
     detail: "Candidate: a language-level packed position type N.0000H carrying an integer position plus packed (hex) fractional sub-coordinates. The dual-use round-trip (К [x] recovers the position, К {x} recovers the packed fraction) is already exploited by constants-dual-use; a dedicated type would only add language surface that no current program consumes.",
   },
   {
+    id: "coord-list-scaled-decimal",
+    category: "data",
+    source: "documented",
+    requires: [],
+    activeWhen: [
+      "coord-list-scaled-decimal-storage",
+      "coord-list-scaled-line-count",
+      "coord-list-scaled-fused-hit-line-count",
+      "coord-list-scaled-membership",
+    ],
+    detail: "Stores 10x10 board coordinates as y.x decimal values when all visible uses allow it, so row/column/diagonal scans avoid repeated /10 digit extraction.",
+  },
+  {
     id: "dual-constant-sign-digit",
     category: "data",
     source: "undocumented",
@@ -12045,7 +14101,7 @@ const optimizerCapabilities: Array<{
     category: "flow",
     source: "documented",
     requires: [],
-    activeWhen: ["fl-unit-decrement", "r0-indirect-counter"],
+    activeWhen: ["fl-unit-decrement", "indirect-incdec-counter", "r0-indirect-counter"],
     detail: "Uses F L0..F L3 as compact decrement-and-continue/decrement-and-branch forms for small counters.",
   },
   {
@@ -12375,7 +14431,8 @@ function buildGeneratedSetupProgram(
   const fields = setupProgramFields(ast);
   const executablePreloads = preloads.flatMap((preload) => executableSetupPreload(preload));
   const needsSetupProgram = fields.length > 0 ||
-    executablePreloads.some((preload) => preload.kind === "display-literal");
+    executablePreloads.some((preload) => preload.kind === "display-literal") ||
+    programUsesDashedCoordReport(ast);
   if (!needsSetupProgram) return undefined;
 
   const setupOptimizations: AppliedOptimization[] = [];
@@ -12413,7 +14470,10 @@ function setupProgramFields(ast: ProgramAst): StateFieldAst[] {
   if (!ast.v2) return [];
   return ast.states
     .flatMap((state) => state.fields)
-    .filter((field) => field.initial !== undefined && !isSetupLiteralExpression(field.initial));
+    .filter((field) =>
+      field.initialStack !== undefined ||
+      field.initial !== undefined && !isSetupLiteralExpression(field.initial)
+    );
 }
 
 interface ExecutableSetupPreload {
@@ -12427,7 +14487,11 @@ function executableSetupPreload(preload: PreloadReport): ExecutableSetupPreload[
   const value = executableSetupValue(preload.value);
   if (value !== undefined) return [{ register, value, kind: "number" }];
   const literal = displayLiteralProgram(preload.value);
-  if (literal === undefined || literal.kind === "error") return [];
+  const firstSplice =
+    signedFirstSpliceDisplayLiteralProgram(preload.value) ??
+    exponentTailDisplayLiteralProgram(preload.value) ??
+    firstSpliceDisplayLiteralProgram(preload.value);
+  if ((literal === undefined || literal.kind === "error") && firstSplice === undefined) return [];
   return [{ register, value: preload.value, kind: "display-literal" }];
 }
 
@@ -12806,6 +14870,7 @@ function countV2IntentNodes(ast: ProgramAst): number {
     1 +
     v2.state.length +
     v2.screens.length +
+    (v2.body.length > 0 ? countV2Statements(v2.body) : 0) +
     (v2.turn ? 1 + countV2Statements(v2.turn.body) : 0) +
     v2.rules.reduce((sum, rule) => sum + 1 + countV2Statements(rule.body), 0)
   );
@@ -12824,6 +14889,9 @@ function countV2Statements(statements: V2StatementAst[]): number {
       count += countV2Statements(statement.thenBody);
       if (statement.elseBody) count += countV2Statements(statement.elseBody);
     }
+    if (statement.kind === "v2_while") {
+      count += countV2Statements(statement.body);
+    }
     if (statement.kind === "v2_challenge") {
       count += countV2Statements(statement.successBody);
       if (statement.failureBody) count += countV2Statements(statement.failureBody);
@@ -12840,6 +14908,7 @@ function countStatements(statements: StatementAst[]): number {
   for (const statement of statements) {
     count += 1;
     if (statement.kind === "loop") count += countStatements(statement.body);
+    if (statement.kind === "while") count += countStatements(statement.body);
     if (statement.kind === "if") {
       count += countStatements(statement.thenBody);
       if (statement.elseBody) count += countStatements(statement.elseBody);

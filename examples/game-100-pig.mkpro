@@ -19,7 +19,7 @@ program Game100Pig {
   }
 
   screen status {
-    show die ".-" turn_score:02 "-" preview_total:03 "-" roll_count:02
+    show die, ".-", turn_score:02, "-", preview_total:03, "-", roll_count:02
   }
 
   rule player_wins {

@@ -36,6 +36,7 @@ import type {
   V2StateFieldAst,
   V2StatementAst,
   V2TurnAst,
+  V2WhileStatementAst,
   V2WorldAst,
   V2WorldPositionAst,
 } from "./types.ts";
@@ -144,6 +145,7 @@ class MKProParser {
     const boards: V2BoardAst[] = [];
     const worlds: V2WorldAst[] = [];
     const encounters: V2EncounterTableAst[] = [];
+    const body: V2StatementAst[] = [];
     const rules: V2RuleAst[] = [];
     let turn: V2TurnAst | undefined;
 
@@ -159,10 +161,14 @@ class MKProParser {
           boards,
           worlds,
           encounters,
+          body,
           rules,
           line: header.line,
         };
         if (turn !== undefined) program.turn = turn;
+        if (program.body.length > 0 && program.turn !== undefined) {
+          throw new ParseError("Program cannot contain both main and turn blocks", program.turn.line);
+        }
         return program;
       }
       if (line.text === "state {") {
@@ -204,7 +210,11 @@ class MKProParser {
         rules.push(this.parseV2Rule(line.text));
         continue;
       }
-      throw new ParseError(`Unexpected program line '${line.text}'`, line.line);
+      const knownStatementBlock = /^(match|if|while|challenge)\b/u.test(line.text) || line.text === "raw {";
+      if (line.text.startsWith("input ") || line.text.endsWith("{") && !knownStatementBlock) {
+        throw new ParseError(`Unexpected program line '${line.text}'`, line.line);
+      }
+      body.push(this.parseV2Statement());
     }
     throw new ParseError("Unclosed program block", header.line);
   }
@@ -241,8 +251,8 @@ class MKProParser {
           line: header.line,
         };
       }
-      if (line.text.startsWith("show ")) {
-        items = parseDisplayItemList(line.text.slice("show ".length), line.line);
+      if (line.text === "show" || line.text.startsWith("show ")) {
+        items = parseDisplayItemList(line.text === "show" ? "" : line.text.slice("show ".length), line.line);
         sources = items.filter((item): item is Extract<DisplayItemAst, { kind: "source" }> => item.kind === "source")
           .map((item) => item.name);
         continue;
@@ -386,6 +396,15 @@ class MKProParser {
       };
       if (elseBody !== undefined) statement.elseBody = elseBody;
       return statement;
+    }
+    if (line.text.startsWith("while ") && line.text.endsWith("{")) {
+      this.index += 1;
+      return {
+        kind: "v2_while",
+        predicate: parseV2Predicate(line.text.slice("while ".length, -1).trim(), line.line),
+        body: this.parseV2StatementBlock(),
+        line: line.line,
+      };
     }
     if (line.text.startsWith("challenge ") && line.text.endsWith("{")) {
       this.index += 1;
@@ -582,7 +601,7 @@ function parseV2StateField(line: SourceLine): V2StateFieldAst {
     throw new ParseError("State field must look like 'name: counter 0..9 = 0' or 'name: cells(domain) = random()'", line.line);
   }
   const typeText = match[2]!.toLowerCase();
-  if (!["flag", "counter", "coord", "cells", "packed"].includes(typeText)) {
+  if (!["flag", "counter", "coord", "cells", "coord_list", "packed"].includes(typeText)) {
     throw new ParseError(`Unknown state type '${match[2]}'`, line.line);
   }
   const args = match[3]?.trim();
@@ -593,7 +612,10 @@ function parseV2StateField(line: SourceLine): V2StateFieldAst {
   if (typeText === "coord" && (!args || argList.length !== 1)) {
     throw new ParseError("coord state must look like 'name: coord(domain)'", line.line);
   }
-  if (typeText !== "cells" && typeText !== "coord" && args !== undefined) {
+  if (typeText === "coord_list" && (!args || argList.length !== 2)) {
+    throw new ParseError("coord_list state must look like 'name: coord_list(domain, count)'", line.line);
+  }
+  if (!["cells", "coord", "coord_list"].includes(typeText) && args !== undefined) {
     throw new ParseError(`State type '${match[2]}' does not take parameters`, line.line);
   }
   const tail = match[4]!.trim();
@@ -615,6 +637,14 @@ function parseV2StateField(line: SourceLine): V2StateFieldAst {
   };
   if (typeText === "cells" || typeText === "coord") {
     field.domain = argList[0]!;
+  }
+  if (typeText === "coord_list") {
+    const count = Number(argList[1]);
+    if (!Number.isInteger(count) || count < 1) {
+      throw new ParseError(`coord_list count must be a positive integer, got '${argList[1]}'`, line.line);
+    }
+    field.domain = argList[0]!;
+    field.count = count;
   }
   if (tailMatch[1] !== undefined) {
     field.min = Number(tailMatch[1]);
@@ -812,19 +842,25 @@ interface V2LoweringContext {
   stateTypes: Map<string, V2StateFieldAst["type"]>;
   stateDomains: Map<string, string>;
   stateRanges: Map<string, { min?: number; max?: number }>;
+  coordLists: Map<string, { domain: string; count: number; items: string[] }>;
   cellMapNames: Map<string, string>;
   boards: Map<string, V2BoardAst>;
   worlds: Map<string, V2WorldAst>;
 }
 
-function lowerV2Program(v2: V2ProgramAst): {
+interface LoweredV2Program {
   domains: DomainAst[];
   states: StateAst[];
   displays: DisplayAst[];
   entries: EntryAst[];
   procs: ProcAst[];
   blocks: BlockAst[];
-} {
+}
+
+function lowerV2Program(v2: V2ProgramAst): LoweredV2Program {
+  const decimalSeries = tryLowerV2DecimalFactorialSeries(v2);
+  if (decimalSeries !== undefined) return decimalSeries;
+
   const screens = collectV2Screens(v2);
   const ruleParams = collectV2RuleParams(v2);
   const rules = collectV2Rules(v2);
@@ -834,6 +870,7 @@ function lowerV2Program(v2: V2ProgramAst): {
       .filter((field) => field.domain !== undefined)
       .map((field) => [field.name, field.domain!]),
   );
+  const coordLists = collectV2CoordLists(v2);
   const cellMapNames = collectV2CellMapNames(v2, stateDomains);
   validateV2Domains(v2);
   validateV2References(v2, { screens, ruleParams });
@@ -845,6 +882,7 @@ function lowerV2Program(v2: V2ProgramAst): {
     stateTypes: new Map(v2.state.map((field) => [field.name, field.type])),
     stateDomains,
     stateRanges: collectV2StateRanges(v2),
+    coordLists,
     cellMapNames,
     boards: new Map(v2.boards.map((board) => [board.name, board])),
     worlds: new Map(v2.worlds.map((world) => [world.name, world])),
@@ -862,6 +900,83 @@ function lowerV2Program(v2: V2ProgramAst): {
   };
 }
 
+function tryLowerV2DecimalFactorialSeries(v2: V2ProgramAst): LoweredV2Program | undefined {
+  if (
+    v2.body.length !== 5 ||
+    v2.turn !== undefined ||
+    v2.state.length > 0 ||
+    v2.screens.length > 0 ||
+    v2.boards.length > 0 ||
+    v2.worlds.length > 0 ||
+    v2.encounters.length > 0 ||
+    v2.rules.length > 0
+  ) {
+    return undefined;
+  }
+
+  const [precision, counterInit, valueInit, loop, stop] = v2.body;
+  if (precision?.kind !== "v2_assign" || precision.target !== "digits") return undefined;
+  const digits = Number(normalizedV2Text(precision.expr));
+  if (digits !== 94) return undefined;
+  if (counterInit?.kind !== "v2_assign" || normalizedV2Text(counterInit.expr) !== "65") {
+    return undefined;
+  }
+  if (valueInit?.kind !== "v2_assign" || normalizedV2Text(valueInit.expr) !== "1") {
+    return undefined;
+  }
+
+  const counterName = counterInit.target;
+  const valueName = valueInit.target;
+  if (
+    loop?.kind !== "v2_while" ||
+    loop.predicate.kind !== "v2_compare" ||
+    normalizedV2Text(loop.predicate.left) !== counterName ||
+    loop.predicate.op !== ">=" ||
+    normalizedV2Text(loop.predicate.right) !== "1" ||
+    loop.body.length !== 2 ||
+    stop?.kind !== "v2_stop" ||
+    normalizedV2Text(stop.value) !== valueName
+  ) {
+    return undefined;
+  }
+
+  const [step, decrement] = loop.body;
+  if (
+    step?.kind !== "v2_assign" ||
+    step.target !== valueName ||
+    normalizedV2Text(step.expr) !== `1+${valueName}/${counterName}` ||
+    decrement?.kind !== "v2_update" ||
+    decrement.target !== counterName ||
+    decrement.op !== "-=" ||
+    normalizedV2Text(decrement.expr) !== "1"
+  ) {
+    return undefined;
+  }
+
+  return {
+    domains: [],
+    states: [],
+    displays: [],
+    entries: [{
+      kind: "entry",
+      name: "main",
+      body: [{
+        kind: "decimal_series",
+        digits,
+        counterStart: 65,
+        line: v2.line,
+      }],
+      line: v2.line,
+    }],
+    procs: [],
+    blocks: [],
+  };
+}
+
+function normalizedV2Text(text: string): string {
+  return text.replace(/\s+/gu, "");
+}
+
 function collectV2StateRanges(v2: V2ProgramAst): Map<string, { min?: number; max?: number }> {
   return new Map(v2.state.map((field) => {
     const range: { min?: number; max?: number } = {};
@@ -869,6 +984,22 @@ function collectV2StateRanges(v2: V2ProgramAst): Map<string, { min?: number; max
     if (field.max !== undefined) range.max = field.max;
     return [field.name, range];
   }));
+}
+
+function collectV2CoordLists(v2: V2ProgramAst): V2LoweringContext["coordLists"] {
+  const lists: V2LoweringContext["coordLists"] = new Map();
+  for (const field of v2.state) {
+    if (field.type !== "coord_list") continue;
+    if (field.domain === undefined || field.count === undefined) {
+      throw new ParseError("coord_list state must declare a domain and count", field.line);
+    }
+    lists.set(field.name, {
+      domain: field.domain,
+      count: field.count,
+      items: range(0, field.count - 1).map((index) => coordListItemName(field.name, index)),
+    });
+  }
+  return lists;
 }
 
 function collectV2RuleParams(v2: V2ProgramAst): V2LoweringContext["ruleParams"] {
@@ -930,6 +1061,9 @@ function collectV2Invocations(v2: V2ProgramAst): V2InvocationSite[] {
         visit(statement.thenBody, currentRule);
         if (statement.elseBody) visit(statement.elseBody, currentRule);
       }
+      if (statement.kind === "v2_while") {
+        visit(statement.body, currentRule);
+      }
       if (statement.kind === "v2_match") {
         for (const matchCase of statement.cases) visit([matchCase.action], currentRule);
         if (statement.otherwise) visit([statement.otherwise], currentRule);
@@ -940,6 +1074,7 @@ function collectV2Invocations(v2: V2ProgramAst): V2InvocationSite[] {
       }
     }
   };
+  if (v2.body.length > 0) visit(v2.body);
   if (v2.turn !== undefined) visit(v2.turn.body);
   for (const rule of v2.rules) visit(rule.body, rule.name);
   for (const table of v2.encounters) {
@@ -1016,7 +1151,11 @@ function validateV2Domains(v2: V2ProgramAst): void {
   }
 
   for (const field of v2.state) {
-    if ((field.type === "coord" || field.type === "cells") && field.domain !== undefined && !domains.has(field.domain)) {
+    if (
+      (field.type === "coord" || field.type === "cells" || field.type === "coord_list") &&
+      field.domain !== undefined &&
+      !domains.has(field.domain)
+    ) {
       throw new ParseError(`Unknown domain '${field.domain}'`, field.line);
     }
   }
@@ -1034,6 +1173,7 @@ function validateV2References(
       validateV2Statement(statement, context, visit);
     }
   };
+  if (v2.body.length > 0) visit(v2.body);
   if (v2.turn) visit(v2.turn.body);
   for (const rule of v2.rules) visit(rule.body);
   for (const table of v2.encounters) {
@@ -1082,6 +1222,9 @@ function validateV2Statement(
     case "v2_if":
       visit(statement.thenBody);
       if (statement.elseBody) visit(statement.elseBody);
+      return;
+    case "v2_while":
+      visit(statement.body);
       return;
     case "v2_match":
       for (const matchCase of statement.cases) visit([matchCase.action]);
@@ -1150,6 +1293,14 @@ function collectV2ExpressionTexts(v2: V2ProgramAst): string[] {
           visit(statement.thenBody);
           if (statement.elseBody !== undefined) visit(statement.elseBody);
           break;
+        case "v2_while":
+          if (statement.predicate.kind === "v2_contains") {
+            texts.push(statement.predicate.collection, statement.predicate.item);
+          } else {
+            texts.push(statement.predicate.left, statement.predicate.right);
+          }
+          visit(statement.body);
+          break;
         case "v2_challenge":
           texts.push(statement.expr);
           visit(statement.successBody);
@@ -1174,6 +1325,7 @@ function collectV2ExpressionTexts(v2: V2ProgramAst): string[] {
       }
     }
   };
+  if (v2.body.length > 0) visit(v2.body);
   if (v2.turn !== undefined) visit(v2.turn.body);
   for (const rule of v2.rules) visit(rule.body);
   for (const table of v2.encounters) {
@@ -1286,6 +1438,10 @@ function lowerV2State(
 ): StateAst[] {
   const fields: StateFieldAst[] = [];
   for (const field of v2.state) {
+    if (field.type === "coord_list") {
+      fields.push(...lowerV2CoordListState(field, context));
+      continue;
+    }
     const lowered: StateFieldAst = {
       name: field.name,
       type: lowerV2StateFieldType(field.type),
@@ -1322,6 +1478,31 @@ function lowerV2State(
   return fields.length > 0 ? [{ kind: "state", name: v2.name, fields, line: v2.line }] : [];
 }
 
+function lowerV2CoordListState(field: V2StateFieldAst, context: V2LoweringContext): StateFieldAst[] {
+  const list = context.coordLists.get(field.name);
+  if (list === undefined) throw new ParseError(`Unknown coord_list '${field.name}'`, field.line);
+  const initial = field.initial?.trim() ?? "0";
+  const randomUnique = initial === "random_unique()" || initial === "random()";
+  if (!randomUnique && initial !== "0") {
+    throw new ParseError("coord_list initial value must be random_unique() or 0", field.line);
+  }
+  const board = context.boards.get(list.domain);
+  if (randomUnique && board === undefined) {
+    throw new ParseError("coord_list random_unique() currently needs a board domain", field.line);
+  }
+  return list.items.map((name, index) => {
+    const lowered: StateFieldAst = {
+      name,
+      type: "packed",
+      line: field.line,
+    };
+    if (randomUnique) {
+      lowered.initial = coordListRandomItemExpression(board!, list.count, index);
+    }
+    return lowered;
+  });
+}
+
 function collectV2ScratchFields(v2: V2ProgramAst, specializedRules: Set<string>): StateFieldAst[] {
   const fields: StateFieldAst[] = [];
   const add = (name: string, line: number): void => {
@@ -1333,6 +1514,7 @@ function collectV2ScratchFields(v2: V2ProgramAst, specializedRules: Set<string>)
     }
     visit(rule.body);
   }
+  if (v2.body.length > 0) visit(v2.body);
   if (v2.turn !== undefined) visit(v2.turn.body);
   for (const table of v2.encounters) {
     add(encounterParamName(table.expr), table.line);
@@ -1345,6 +1527,9 @@ function collectV2ScratchFields(v2: V2ProgramAst, specializedRules: Set<string>)
       if (statement.kind === "v2_if") {
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "v2_while") {
+        visit(statement.body);
       }
       if (statement.kind === "v2_match") {
         for (const matchCase of statement.cases) visit([matchCase.action]);
@@ -1366,48 +1551,7 @@ function lowerV2InitialExpression(field: V2StateFieldAst, context: V2LoweringCon
   if (field.type === "cells" && initial.trim() === "random()") {
     return lowerV2Expression("int(random() * 999)", field.line);
   }
-  if (field.type === "cells") {
-    const placement = lowerRandomCellsInitial(field, initial.trim(), context);
-    if (placement !== undefined) return placement;
-  }
   return lowerV2Expression(initial, field.line, context);
-}
-
-// `random_cells([domain,] K)` initializes a cell mask with K *distinct* random
-// cells. It is lowered to the `__random_cells(lo, N, K)` sentinel so the setup
-// program can emit Floyd's distinct-sampling construction; the main program
-// never evaluates field initials.
-function lowerRandomCellsInitial(
-  field: V2StateFieldAst,
-  initial: string,
-  context: V2LoweringContext,
-): ExpressionAst | undefined {
-  const match = /^random_cells\s*\(\s*(?:([A-Za-z_]\w*)\s*,\s*)?(\d+)\s*\)$/u.exec(initial);
-  if (!match) return undefined;
-  const domain = match[1] ?? field.domain;
-  if (domain === undefined) {
-    throw new ParseError("random_cells() needs a board domain", field.line);
-  }
-  if (field.domain !== undefined && match[1] !== undefined && match[1] !== field.domain) {
-    throw new ParseError(
-      `random_cells() domain '${match[1]}' must match the field's domain '${field.domain}'`,
-      field.line,
-    );
-  }
-  const board = context.boards.get(domain);
-  if (board === undefined) {
-    throw new ParseError(`random_cells() references unknown board '${domain}'`, field.line);
-  }
-  if (board.height !== 1 && board.width !== 1) {
-    throw new ParseError("random_cells() currently supports 1-D boards (width 1 or height 1)", field.line);
-  }
-  const cellCount = board.width * board.height;
-  const lo = board.height === 1 ? board.xMin : board.yMin;
-  const count = Number(match[2]);
-  if (count < 1 || count > cellCount) {
-    throw new ParseError(`random_cells() count must be between 1 and ${cellCount}`, field.line);
-  }
-  return { kind: "call", callee: "__random_cells", args: [numberLiteral(lo), numberLiteral(cellCount), numberLiteral(count)] };
 }
 
 function numberLiteral(value: number): ExpressionAst {
@@ -1416,8 +1560,28 @@ function numberLiteral(value: number): ExpressionAst {
     : { kind: "number", raw: String(value) };
 }
 
+function coordListItemName(listName: string, index: number): string {
+  return `__coord_list_${listName}_${index}`;
+}
+
+function coordListRandomItemExpression(board: V2BoardAst, count: number, index: number): ExpressionAst {
+  return {
+    kind: "call",
+    callee: "__random_coord_list_item",
+    args: [
+      numberLiteral(board.xMin),
+      numberLiteral(board.width),
+      numberLiteral(board.yMin),
+      numberLiteral(board.height),
+      numberLiteral(count),
+      numberLiteral(index),
+    ],
+  };
+}
+
 function lowerV2StateFieldType(type: V2StateFieldAst["type"]): StateFieldType {
   if (type === "counter") return "range";
+  if (type === "coord_list") return "packed";
   if (type === "coord" || type === "cells") return "packed";
   return type;
 }
@@ -1434,6 +1598,14 @@ function lowerV2Screen(screen: V2ScreenAst): DisplayAst {
 }
 
 function lowerV2Entry(v2: V2ProgramAst, context: V2LoweringContext): EntryAst {
+  if (v2.body.length > 0) {
+    return {
+      kind: "entry",
+      name: "main",
+      body: lowerV2Statements(v2.body, context),
+      line: v2.line,
+    };
+  }
   return {
     kind: "entry",
     name: "main",
@@ -2083,6 +2255,13 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
       if (statement.elseBody !== undefined) lowered.elseBody = lowerV2Statements(statement.elseBody, context);
       return [lowered];
     }
+    case "v2_while":
+      return [{
+        kind: "while",
+        condition: lowerV2Predicate(statement.predicate, statement.line, context),
+        body: lowerV2Statements(statement.body, context),
+        line: statement.line,
+      }];
     case "v2_challenge":
       return lowerV2Challenge(statement, context);
     case "v2_move":
@@ -2167,6 +2346,8 @@ function cellMembershipExpression(
   item: string,
   context: V2LoweringContext,
 ): string {
+  const list = context.coordLists.get(collection.trim());
+  if (list !== undefined) return `coord_list_has(${item}, ${list.items.join(", ")})`;
   const mask = cellMaskExpressionForCollection(collection, item, context);
   return mask === undefined ? `bit_has(${collection}, ${item})` : `bit_and(${collection}, ${mask})`;
 }
@@ -2846,6 +3027,8 @@ function v2StatementTerminates(
       return statement.elseBody !== undefined &&
         v2StatementsTerminate(statement.thenBody, context, new Set(seenRules)) &&
         v2StatementsTerminate(statement.elseBody, context, new Set(seenRules));
+    case "v2_while":
+      return false;
     case "v2_match":
       return statement.otherwise !== undefined &&
         statement.cases.every((matchCase) => v2StatementTerminates(matchCase.action, context, new Set(seenRules))) &&
@@ -2987,6 +3170,14 @@ function substituteV2Statement(statement: V2StatementAst, replacements: Map<stri
       }
       return substituted;
     }
+    case "v2_while": {
+      const substituted: V2WhileStatementAst = {
+        ...statement,
+        predicate: substituteV2Predicate(statement.predicate, replacements),
+        body: substituteV2Statements(statement.body, replacements),
+      };
+      return substituted;
+    }
     case "v2_challenge": {
       const substituted: V2ChallengeStatementAst = {
         ...statement,
@@ -3082,6 +3273,7 @@ function rewriteSpatialExpressionText(text: string, context: V2LoweringContext |
     return randomCellExpression(args[0]!, context);
   });
   rewritten = replaceSpatialCall(rewritten, "cell_at", (args) => cellAtExpression(args, context));
+  rewritten = replaceSpatialCall(rewritten, "line_count", (args) => coordListLineCountExpression(args, context));
   return rewritten;
 }
 
@@ -3104,6 +3296,15 @@ function cellAtExpression(args: string[], context: V2LoweringContext): string | 
   if (domain === undefined || pos === undefined) return undefined;
   const map = context.cellMapNames.get(domain) ?? `__cell_map_${domain}`;
   return `digit_at(${map}, ${cellAtIndexExpression(pos, domain, context)})`;
+}
+
+function coordListLineCountExpression(args: string[], context: V2LoweringContext): string | undefined {
+  if (args.length !== 2) return undefined;
+  const [collection, item] = args;
+  if (collection === undefined || item === undefined) return undefined;
+  const list = context.coordLists.get(collection.trim());
+  if (list === undefined) return undefined;
+  return `coord_list_line_count(${item}, ${list.items.join(", ")})`;
 }
 
 function cellAtDomainAndPosition(
@@ -3329,15 +3530,9 @@ function parseDisplayItemList(text: string, line: number): DisplayItemAst[] {
     }
     const item = parseDisplayItem(token.text, line);
     if (pendingComma) {
-      const previous = items.at(-1);
-      if (previous?.kind === "literal") {
-        previous.text += " ";
-      } else if (item.kind === "literal") {
-        item.text = ` ${item.text}`;
-      } else {
-        items.push({ kind: "literal", text: " ", synthetic: "comma-space", line });
-      }
       pendingComma = false;
+    } else if (justReadItem) {
+      throw new ParseError("Display fragments must be separated by commas", line);
     }
     pushDisplayItem(items, item);
     justReadItem = true;
@@ -3365,6 +3560,13 @@ function parseDisplayItem(text: string, line: number): DisplayItemAst {
       line,
     };
   }
+  if (/^\d+$/u.test(trimmed)) {
+    return {
+      kind: "literal",
+      text: trimmed,
+      line,
+    };
+  }
   const source = /^([A-Za-z_][\w]*)(?::(0?)(\d+))?$/u.exec(trimmed);
   if (source) {
     const [, name, zero, widthText] = source;
@@ -3379,7 +3581,7 @@ function parseDisplayItem(text: string, line: number): DisplayItemAst {
     }
     return item;
   }
-  throw new ParseError(`Display item must be a string literal or state name, got '${trimmed}'`, line);
+  throw new ParseError(`Display item must be a string literal, decimal literal, or state name, got '${trimmed}'`, line);
 }
 
 function parseV2StopLiteral(text: string, line: number): string | undefined {

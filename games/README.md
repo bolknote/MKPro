@@ -94,3 +94,21 @@ Files are stored in [`semico/`](./semico/):
   title, author, and source URL.
 
 Programs: **3**.
+
+## xvadim PMK61 Programs
+
+Source: [xvadim/pmk61-programms](https://github.com/xvadim/pmk61-programms)
+
+Files are stored in [`xvadim/`](./xvadim/):
+
+- `harvest-e.txt`, `harvest-i.txt` - two variants of «Урожай».
+- `naval-battle.txt` - Г. Горовой's «Морской бой» adaptation.
+- `wolves-and-goat-9x9.txt` - original 9x9 «Волки и козлик».
+- `square-equation.txt` - quadratic equation utility.
+- `rally.txt` - Rally listing from the source `.pmk`.
+- Matching `*.md` descriptions and `manifest.tsv`.
+
+The original source files are serialized Android emulator state; this
+repository keeps decoded clean listings only.
+
+Programs: **6**.

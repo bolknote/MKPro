@@ -28,10 +28,17 @@ function runCompiledDisplay(source: string): string {
   };
   const result = compileMKPro(source, { analysis: true, budget: 999 });
   const calc = new MK61({ extended: true });
-  expect(calc.loadProgram(result.steps.map((step) => step.opcode)).diagnostics).toEqual([]);
-  for (const preload of result.report.preloads) {
-    calc.setRegister(preload.register, preload.value);
+  const setup = result.report.setupProgram?.steps.map((step) => step.opcode);
+  if (setup !== undefined) {
+    expect(calc.loadProgram(setup).diagnostics).toEqual([]);
+    calc.pressSequence(["В/О", "С/П"]);
+    expect(calc.runUntilStable({ maxFrames: 1200, stableFrames: 8 }).stopped).toBe(true);
+  } else {
+    for (const preload of result.report.preloads) {
+      calc.setRegister(preload.register, preload.value);
+    }
   }
+  expect(calc.loadProgram(result.steps.map((step) => step.opcode)).diagnostics).toEqual([]);
   calc.pressSequence(["В/О", "С/П"]);
   expect(calc.runUntilStable({ maxFrames: 1200, stableFrames: 8 }).stopped).toBe(true);
   return calc.displayText();
@@ -80,6 +87,122 @@ program CurrentXFirstDisplayField {
 
     expect(stepComments(result).filter((comment) => comment === "display view source")).toHaveLength(1);
     expect(hasOptimization(result, "display-stack-reuse")).toBe(false);
+  });
+
+  it("reuses X for the last display field without changing field order", () => {
+    const source = `
+program CurrentXLastDisplayField {
+  state {
+    a: counter 0..9 = 1
+    b: counter 0..9 = 2
+    c: counter 0..9 = 3
+  }
+  screen view {
+    show a, b, c
+  }
+  turn {
+    c = 7
+    show view
+  }
+}
+`;
+    const result = compileOk(source);
+
+    expect(hasOptimization(result, "display-current-x-suffix-reuse")).toBe(true);
+    expect(stepComments(result).filter((comment) => comment === "display view source")).toHaveLength(2);
+    expect(stepComments(result).filter((comment) => comment === "packed display current field append")).toHaveLength(1);
+    expect(runCompiledDisplay(source)).toBe("127,");
+  });
+
+  it("reuses X for a middle display field without changing field order", () => {
+    const source = `
+program CurrentXMiddleDisplayField {
+  state {
+    a: counter 0..9 = 1
+    b: counter 0..9 = 2
+    c: counter 0..9 = 3
+  }
+  screen view {
+    show a, b, c
+  }
+  turn {
+    b = 7
+    show view
+  }
+}
+`;
+    const result = compileOk(source);
+
+    expect(hasOptimization(result, "display-current-x-middle-reuse")).toBe(true);
+    expect(stepComments(result).filter((comment) => comment === "display view source")).toHaveLength(2);
+    expect(stepComments(result).filter((comment) => comment === "packed display current field append")).toHaveLength(1);
+    expect(runCompiledDisplay(source)).toBe("173,");
+  });
+
+  it("packs decimal digit literals inside numeric show screens", () => {
+    const source = `
+program DecimalLiteralFields {
+  state {
+    a: counter 0..9 = 1
+    b: counter 0..9 = 2
+  }
+  screen short {
+    show a, 0, b
+  }
+  screen long {
+    show a, 012, b
+  }
+  turn {
+    show short
+    show long
+  }
+}
+`;
+    const result = compileOk(source);
+
+    expect(hasOptimization(result, "display-decimal-literal-field")).toBe(true);
+    expect(runCompiledDisplay(`
+program ShortDecimalLiteralField {
+  state {
+    a: counter 0..9 = 1
+    b: counter 0..9 = 2
+  }
+  screen short {
+    show a, 0, b
+  }
+  turn {
+    show short
+  }
+}
+`)).toBe("102,");
+    expect(runCompiledDisplay(`
+program LongDecimalLiteralField {
+  state {
+    a: counter 0..9 = 1
+    b: counter 0..9 = 2
+  }
+  screen long {
+    show a, 012, b
+  }
+  turn {
+    show long
+  }
+}
+`)).toBe("10122,");
+    expect(runCompiledDisplay(`
+program BareDecimalLiteralFields {
+  state {
+    a: counter 0..9 = 2
+    b: counter 0..9 = 3
+  }
+  screen view {
+    show 123, a, b, 1
+  }
+  turn {
+    show view
+  }
+}
+`)).toBe("123231,");
   });
 
   it("uses preloaded decimal scale constants for packed display shifts", () => {
@@ -141,7 +264,7 @@ program LiteralSeparatedScoreboard {
     roll: counter 0..99 = 0
   }
   screen status {
-    show die ".-" score:02 "-" total:03 "-" roll:02
+    show die, ".-", score:02, "-", total:03, "-", roll:02
   }
   turn {
     show status
@@ -151,6 +274,27 @@ program LiteralSeparatedScoreboard {
 
     expect(hasOptimization(result, "display-byte-x2-lowering")).toBe(true);
     expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "display-bytes")).toBe(true);
+  });
+
+  it("renders explicit literal spaces between display fields", () => {
+    const source = `
+program ExplicitSpaceDisplay {
+  state {
+    a: counter 1..9 = 1
+    b: counter 0..9 = 2
+  }
+  screen view {
+    show a, " ", b
+  }
+  turn {
+    show view
+  }
+}
+`;
+    const result = compileOk(source);
+
+    expect(hasOptimization(result, "display-byte-mask-lowering")).toBe(true);
+    expect(runCompiledDisplay(source)).toBe("1 2,");
   });
 
   it("renders literal-separated scoreboards correctly on the emulator", () => {
@@ -172,7 +316,7 @@ program LiteralSeparatedScoreboardRun {
     roll: counter 0..99 = 0
   }
   screen status {
-    show die ".-" score:02 "-" total:03 "-" roll:02
+    show die, ".-", score:02, "-", total:03, "-", roll:02
   }
   turn {
     show status
@@ -194,6 +338,90 @@ program LiteralSeparatedScoreboardRun {
     expect(calc.displayText()).toBe("5,-15-042-03");
   });
 
+  it("renders dashed coordinate reports through the calculator video mask", () => {
+    const { MK61 } = require("../emulator/mk61.cjs") as {
+      MK61: new (options?: { extended?: boolean }) => {
+        loadProgram: (codes: number[]) => { diagnostics: string[] };
+        pressSequence: (keys: string[]) => void;
+        runUntilStable: (options: { maxFrames: number; stableFrames: number }) => { stopped: boolean };
+        displayText: () => string;
+      };
+    };
+    const result = compileMKPro(`
+program DashedCoordReportRun {
+  field: board(0..9, 0..9)
+
+  state {
+    cell: coord(field) = 58
+    foxes: coord_list(field, 1) = 0
+    bearing: counter 0..9 = 0
+  }
+
+  screen report {
+    show "--", cell:02, "--", bearing
+  }
+
+  turn {
+    bearing = line_count(foxes, cell)
+    show report
+  }
+}
+`);
+    expect(hasOptimization(result, "dashed-coord-report-lowering")).toBe(true);
+    expect(hasOptimization(result, "coord-list-line-count-dashed-report-body")).toBe(true);
+    expect(hasOptimization(result, "dashed-coord-report-packed-body")).toBe(true);
+    expect(stepComments(result)).not.toContain("display dashed cell scale");
+    expect(result.report.setupProgram).toBeDefined();
+    const calc = new MK61({ extended: true });
+    const setup = result.report.setupProgram?.steps.map((step) => step.opcode) ?? [];
+    expect(calc.loadProgram(setup).diagnostics).toEqual([]);
+    calc.pressSequence(["В/О", "С/П"]);
+    expect(calc.runUntilStable({ maxFrames: 300, stableFrames: 5 }).stopped).toBe(true);
+    expect(calc.loadProgram(result.steps.map((step) => step.opcode)).diagnostics).toEqual([]);
+    calc.pressSequence(["В/О", "С/П"]);
+    expect(calc.runUntilStable({ maxFrames: 1000, stableFrames: 8 }).stopped).toBe(true);
+    expect(calc.displayText()).toBe("--58-- 0,");
+  });
+
+  it("fuses coord_list hit checks with the following line_count scan", () => {
+    const result = compileOk(`
+program FusedFoxScan {
+  field: board(0..9, 0..9)
+
+  state {
+    cell: coord(field)
+    foxes: coord_list(field, 2) = 0
+    bearing: counter 0..9 = 0
+  }
+
+  screen hit {
+    show "-20"
+  }
+
+  screen report {
+    show "--", cell:02, "--", bearing
+  }
+
+  turn {
+    read cell
+    if cell in foxes {
+      show hit
+    }
+    bearing = line_count(foxes, cell)
+    show report
+  }
+}
+`);
+
+    expect(
+      hasOptimization(result, "coord-list-fused-hit-line-count") ||
+        hasOptimization(result, "coord-list-scaled-fused-hit-line-count"),
+    ).toBe(true);
+    expect(hasOptimization(result, "coord-list-fused-dashed-report-body")).toBe(true);
+    expect(hasOptimization(result, "dashed-coord-report-packed-body")).toBe(true);
+    expect(hasOptimization(result, "coord-list-indirect-membership")).toBe(false);
+  });
+
   it("preserves zero-padded score fields when the display counter cannot be zero", () => {
     const { MK61 } = require("../emulator/mk61.cjs") as {
       MK61: new (options?: { extended?: boolean }) => {
@@ -213,7 +441,7 @@ program NonZeroCounterScoreboardRun {
     roll: counter 1..99 = 2
   }
   screen status {
-    show die ".-" score:02 "-" total:03 "-" roll:02
+    show die, ".-", score:02, "-", total:03, "-", roll:02
   }
   turn {
     show status
@@ -242,7 +470,7 @@ program RepeatedLiteralSeparatedScoreboard {
     roll: counter 0..99 = 0
   }
   screen status {
-    show die ".-" score:02 "-" total:03 "-" roll:02
+    show die, ".-", score:02, "-", total:03, "-", roll:02
   }
   turn {
     match selector {
@@ -307,6 +535,50 @@ program LiteralVideoScreen {
     expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "display-bytes")).toBe(true);
   });
 
+  it("lowers empty literal screens as plain pauses", () => {
+    const result = compileOk(`
+program EmptyLiteralScreen {
+  screen explicit {
+    show ""
+  }
+  screen bare {
+    show
+  }
+  screen implicit {
+  }
+  turn {
+    show explicit
+    show bare
+    show implicit
+  }
+}
+`);
+
+    expect(result.report.optimizations.filter((item) => item.name === "screen-empty-literal-lowering")).toHaveLength(3);
+    expect(result.steps.some((step) => step.mnemonic === "С/П")).toBe(true);
+    expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "display-bytes")).toBe(false);
+    expect(runCompiledDisplay(`
+program EmptyLiteralScreenRun {
+  screen blank {
+    show ""
+  }
+  turn {
+    show blank
+  }
+}
+`)).toBe("0,");
+    expect(runCompiledDisplay(`
+program BareEmptyScreenRun {
+  screen blank {
+    show
+  }
+  turn {
+    show blank
+  }
+}
+`)).toBe("0,");
+  });
+
   it("lowers literal calculator error screens as resumable pauses", () => {
     const source = `
 program LiteralErrorScreen {
@@ -364,6 +636,131 @@ program ZeroDigitTailScreen {
     const result = compileOk(source);
     expect(hasOptimization(result, "screen-zero-digit-tail-lowering")).toBe(true);
     expect(runCompiledDisplay(source)).toBe("2Е,");
+  });
+
+  it("lowers arbitrary display-alphabet literals by splicing the first digit", () => {
+    const source = `
+program LiteralAlphabetScreen {
+  screen dash {
+    show "---"
+  }
+  screen mixed {
+    show "Е-LСГ90"
+  }
+  screen eight {
+    show "8-LСГ90"
+  }
+  turn {
+    show dash
+    show mixed
+    show eight
+  }
+}
+`;
+
+    const result = compileOk(source);
+    expect(
+      hasOptimization(result, "screen-text-literal-first-splice") ||
+        hasOptimization(result, "screen-text-literal-preload"),
+    ).toBe(true);
+    expect(hasOptimization(result, "setup-display-literal-minus-source-reuse")).toBe(true);
+    expect(hasOptimization(result, "setup-display-literal-first-digit-reuse")).toBe(true);
+    expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "display-bytes")).toBe(true);
+    expect(runCompiledDisplay(`
+program LiteralDashScreen {
+  screen dash {
+    show "---"
+  }
+  turn {
+    show dash
+  }
+}
+`)).toBe("---,");
+    expect(runCompiledDisplay(`
+program LiteralMixedScreen {
+  screen mixed {
+    show "Е-LСГ90"
+  }
+  turn {
+    show mixed
+  }
+}
+`)).toBe("Е-LСГ90,");
+    expect(runCompiledDisplay(`
+program LiteralLeadingMinusScreen {
+  screen mixed {
+    show "-LСГ90"
+  }
+  turn {
+    show mixed
+  }
+}
+`)).toBe("-LСГ90,");
+    expect(runCompiledDisplay(`
+program LiteralEightScreen {
+  screen mixed {
+    show "8-LСГ90"
+  }
+  turn {
+    show mixed
+  }
+}
+`)).toBe("8-LСГ90,");
+  });
+
+  it("lowers game-style text literals that use sign and exponent display slots", () => {
+    const source = `
+program GameStyleTextScreens {
+  screen warning {
+    show "700-----8"
+  }
+  screen loading {
+    show "-9.С L -03"
+  }
+  screen word {
+    show "-CЛOBO-"
+  }
+  turn {
+    show warning
+    show loading
+    show word
+  }
+}
+`;
+
+    const result = compileOk(source);
+    expect(hasOptimization(result, "screen-text-literal-preload")).toBe(true);
+    expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "display-bytes")).toBe(true);
+    expect(runCompiledDisplay(`
+program WarningTextScreen {
+  screen warning {
+    show "700-----8"
+  }
+  turn {
+    show warning
+  }
+}
+`)).toBe("7,00----- 08");
+    expect(runCompiledDisplay(`
+program SignedCaveTextScreen {
+  screen loading {
+    show "-9.С L -03"
+  }
+  turn {
+    show loading
+  }
+}
+`)).toBe("-9,С L -03");
+    expect(runCompiledDisplay(`
+program CyrillicWordTextScreen {
+  screen word {
+    show "-CЛOBO-"
+  }
+  turn {
+    show word
+  }
+}
+`)).toBe("-СL0L0-,");
   });
 
   it("lowers wider sign-digit literal screens through indirect display construction", () => {

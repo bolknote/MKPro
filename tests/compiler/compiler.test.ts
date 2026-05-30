@@ -1351,7 +1351,7 @@ program ResidualGuardedUpdate {
   }
 
   screen main {
-    show room shown
+    show room, shown
   }
 
   turn {

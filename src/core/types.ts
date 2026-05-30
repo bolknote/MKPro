@@ -186,7 +186,6 @@ export type DisplayItemAst =
 export interface DisplayLiteralItemAst {
   kind: "literal";
   text: string;
-  synthetic?: "comma-space";
   line: number;
 }
 
@@ -206,6 +205,7 @@ export interface V2ProgramAst {
   boards: V2BoardAst[];
   worlds: V2WorldAst[];
   encounters: V2EncounterTableAst[];
+  body: V2StatementAst[];
   turn?: V2TurnAst;
   rules: V2RuleAst[];
   line: number;
@@ -214,8 +214,9 @@ export interface V2ProgramAst {
 export interface V2StateFieldAst {
   kind: "v2_state_field";
   name: string;
-  type: "flag" | "counter" | "coord" | "cells" | "packed";
+  type: "flag" | "counter" | "coord" | "cells" | "coord_list" | "packed";
   domain?: string;
+  count?: number;
   min?: number;
   max?: number;
   initial?: string;
@@ -287,6 +288,7 @@ export type V2StatementAst =
   | V2ReadStatementAst
   | V2StopStatementAst
   | V2IfStatementAst
+  | V2WhileStatementAst
   | V2ChallengeStatementAst
   | V2MoveStatementAst
   | V2MatchStatementAst
@@ -318,6 +320,13 @@ export interface V2IfStatementAst {
   predicate: V2PredicateAst;
   thenBody: V2StatementAst[];
   elseBody?: V2StatementAst[];
+  line: number;
+}
+
+export interface V2WhileStatementAst {
+  kind: "v2_while";
+  predicate: V2PredicateAst;
+  body: V2StatementAst[];
   line: number;
 }
 
@@ -430,6 +439,7 @@ export type StatementAst =
   | HaltStatementAst
   | AssignStatementAst
   | LoopStatementAst
+  | WhileStatementAst
   | IfStatementAst
   | SwitchStatementAst
   | DispatchStatementAst
@@ -437,7 +447,8 @@ export type StatementAst =
   | CallBlockStatementAst
   | CoreStatementAst
   | EggStatementAst
-  | TrapStatementAst;
+  | TrapStatementAst
+  | DecimalSeriesStatementAst;
 
 export interface PauseStatementAst {
   kind: "pause";
@@ -474,6 +485,13 @@ export interface AssignStatementAst {
 
 export interface LoopStatementAst {
   kind: "loop";
+  body: StatementAst[];
+  line: number;
+}
+
+export interface WhileStatementAst {
+  kind: "while";
+  condition: ConditionAst;
   body: StatementAst[];
   line: number;
 }
@@ -567,6 +585,13 @@ export interface TrapStatementAst {
   kind: "trap";
   trap: "zero" | "nonpositive" | "negative" | "gt_one" | "ge_100" | "frac_ge_06";
   expr: ExpressionAst;
+  line: number;
+}
+
+export interface DecimalSeriesStatementAst {
+  kind: "decimal_series";
+  digits: number;
+  counterStart: number;
   line: number;
 }
 

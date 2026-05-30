@@ -35,7 +35,7 @@ program Labyrinth777 {
   }
 
   screen maze {
-    show pos row_view energy
+    show pos, row_view, energy
   }
 
   rule escaped {
