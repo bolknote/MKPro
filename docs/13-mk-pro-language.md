@@ -181,6 +181,74 @@ The complete canonical state set is `flag`, `counter`, `coord(domain)`,
 `cells(domain)`, `coord_list(domain, count)`, and `packed`. Register placement,
 address storage, and compact packing are compiler decisions.
 
+Use `packed` for ordinary numeric storage that is not a bounded counter: reserves,
+random seeds, scratch fields, terminal video values, and other calculator-shaped
+numbers that may include decimals or large magnitudes. A `counter` carries a visible
+digit range; `packed` does not.
+
+```mkpro
+state {
+  reserve: packed = 25000
+  random_state: packed = 0.5
+  scratch: packed = 0
+}
+```
+
+Some original MK-61 games store several related facts in one register as a single
+decimal value, such as `5000.999` for strength and distance together. Express that
+as one `packed` field with the same literal; the compiler stores the value, not a
+separate game model.
+
+### Indexed State Banks
+
+When several parallel arrays share the same index range, declare them as a state
+group:
+
+```mkpro
+state {
+  front_line: group(1..3) {
+    front: packed = 5000.999
+    robots: packed = 0
+  }
+}
+```
+
+Read and write group members with indexed access:
+
+```mkpro
+front = front_line[slot].front
+robots = front_line[slot].robots
+front_line[slot].front += scratch
+front_line[2].robots = 0
+```
+
+The group range is inclusive. All members in one group must use the same range.
+Nested groups are not supported, and a group member cannot also declare its own
+`[min..max]` index range.
+
+For a single indexed `packed` array, the bracket form is equivalent:
+
+```mkpro
+state {
+  slots: packed[1..3] = 0
+}
+
+loop {
+  slots[i] = x
+  halt(slots[2])
+}
+```
+
+Both forms lower to contiguous calculator registers. A constant index such as
+`front_line[2].front` or `slots[2]` is resolved at compile time. A dynamic index
+such as `front_line[slot].front` lowers through MK-61 indirect memory commands
+(`К X->П` / `К П->X`) with a compiler-owned selector register. Indexed bank
+elements cannot be initialized from `stack.X` or `stack.Y`.
+
+When a loop stores through a running pointer and then increments it, for example
+`slots[pointer + 1] = value` followed by `pointer++`, the compiler may fuse the
+pair into one preincrement indirect store when the bank layout allows it.
+
 Initial values can come from the startup stack registers `stack.X` and
 `stack.Y`, for games where the player enters setup values before running the
 program:
