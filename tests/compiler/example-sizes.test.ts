@@ -40,7 +40,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
 // The numbers below are the current locked ceilings, not historical deltas.
 const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 127,
-  "cave-treasure": 149,
+  "cave-treasure": 148,
   "giants-country": 375,
   labyrinth777: 224,
   teleport: 249,

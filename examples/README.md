@@ -16,7 +16,7 @@ Generated with `npm run examples:size`.
 | Example | MK-Pro | MK-61 ref | Delta | Size status | Emulator |
 | --- | ---: | ---: | ---: | --- | --- |
 | `99-bottles.mkpro` | 53 | 53 | 0 | ok: <= reference | main+setup load ok |
-| `alaram.mkpro` | 81 | 105 | -24 | ok: <= reference | load ok |
+| `alaram.mkpro` | 79 | 105 | -26 | ok: <= reference | main+setup load ok |
 | `basic.mkpro` | 8 | - | - | ok: no reference | load ok |
 | `cave-sketch.mkpro` | 52 | 105 | -53 | ok: <= reference | main+setup load ok |
 | `dangerous-loading.mkpro` | 87 | 103 | -16 | ok: <= reference | load ok |
@@ -35,7 +35,7 @@ Generated with `npm run examples:size`.
 | `tiny-game.mkpro` | 24 | - | - | ok: no reference | load ok |
 | `wumpus.mkpro` | 104 | - | - | ok: no reference | main+setup load ok |
 | `pending-optimizer/cave-highlevel-baseline.mkpro` | 127 | 105 | +22 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/cave-treasure.mkpro` | 149 | 105 | +44 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/cave-treasure.mkpro` | 148 | 105 | +43 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/giants-country.mkpro` | 375 | 105 | +270 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/labyrinth777.mkpro` | 224 | 105 | +119 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/teleport.mkpro` | 249 | 105 | +144 | pending optimizer | setup load ok; main >105 |
