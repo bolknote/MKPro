@@ -15,7 +15,7 @@ import { compileCondition, compileDecrementZeroBranch, compileDispatch, compileD
 import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts";
 import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileTicTacToeCellMaskReuse } from "./emit/lowering/spatial.ts";
 import { compileCoordListLineCountAssignment, compileCoordListLineCountDashedReport, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
-import { compileBlockCall, compileDecimalFactorialSeries, compileGuardAssignmentSubstitution, compileInitialState, compileIntFracSharedTail, compileProcedures, compileRawStatement, compileRepeatedAssignmentValue, compileRuntimeHelpers, compileSetupProgramWithPreloads, compileStackUnaryDerivedAssignments, compileUnitDecrement, compileXParamProcCall } from "./emit/lowering/proc-raw-setup.ts";
+import { compileBlockCall, compileDecimalFactorialSeries, compileGuardAssignmentSubstitution, compileInitialState, compileIntFracSharedTail, compileProcedures, compileRawStatement, compileRepeatedAssignmentValue, compileRuntimeHelpers, compileSetupProgramWithPreloads, compileStackUnaryDerivedAssignments, compileUnitDecrement, compileUnitIncrement, compileXParamProcCall } from "./emit/lowering/proc-raw-setup.ts";
 import {
   BIT_MASK_SCRATCH_PREFIX,
   COORD_LIST_COUNTER,
@@ -41,6 +41,7 @@ import {
   coordListHasConditionCall,
   coordListItemInfo,
   coordListLineCountCall,
+  countIdentifierReads,
   countIdentifierReadsInCondition,
   countStatements,
   dashedCoordReportDisplayTemplate,
@@ -73,6 +74,7 @@ import {
   isSimpleStackLoad,
   isTicTacToeMacroName,
   isUnitDecrementExpression,
+  isUnitIncrementExpression,
   isZeroExpression,
   matchBitAbsenceCondition,
   matchBitMembershipCondition,
@@ -151,6 +153,7 @@ import type {
   ResolvedStep,
   SetupProgramReport,
   StateFieldAst,
+  StateFieldType,
   StatementAst,
   StorageHint,
   V2BoardAst,
@@ -2840,6 +2843,23 @@ export class EmitContext {
         index += 2;
         continue;
       }
+      if (
+        statement.kind === "show" &&
+        next?.kind === "input" &&
+        statements[index + 2]?.kind === "dispatch" &&
+        this.inputFeedsOnlyFollowingDispatch(next, statements[index + 2] as Extract<StatementAst, { kind: "dispatch" }>)
+      ) {
+        const dispatch = statements[index + 2] as Extract<StatementAst, { kind: "dispatch" }>;
+        compileShow(this, statement.display, statement.line);
+        this.markCurrentX(next.target);
+        this.compileStatement(dispatch);
+        this.optimizations.push({
+          name: "ephemeral-input-dispatch",
+          detail: `Dispatched directly on input ${next.target} at line ${next.line} without storing it.`,
+        });
+        index += 2;
+        continue;
+      }
       if (statement.kind === "show" && next?.kind === "input") {
         compileShow(this, statement.display, statement.line);
         this.emitStore(next.target, `read ${next.target}`, next.line);
@@ -2865,6 +2885,21 @@ export class EmitContext {
         index += 1;
         continue;
       }
+      if (
+        statement.kind === "input" &&
+        next?.kind === "dispatch" &&
+        this.inputFeedsOnlyFollowingDispatch(statement, next)
+      ) {
+        this.emitOp(0x50, "С/П", `read ${statement.target}`, statement.line);
+        this.markCurrentX(statement.target);
+        this.compileStatement(next);
+        this.optimizations.push({
+          name: "ephemeral-input-dispatch",
+          detail: `Dispatched directly on input ${statement.target} at line ${statement.line} without storing it.`,
+        });
+        index += 1;
+        continue;
+      }
       this.compileStatement(statement);
     }
   }
@@ -2874,6 +2909,15 @@ export class EmitContext {
     branch: Extract<StatementAst, { kind: "if" }>,
   ): boolean {
     const reads = countIdentifierReadsInCondition(branch.condition, input.target);
+    return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
+  }
+
+  inputFeedsOnlyFollowingDispatch(
+    input: Extract<StatementAst, { kind: "input" }>,
+    dispatch: Extract<StatementAst, { kind: "dispatch" }>,
+  ): boolean {
+    if (!dispatchUsesNumericResidualChain(dispatch)) return false;
+    const reads = countIdentifierReads(dispatch.expr, input.target);
     return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
   }
 
@@ -2942,6 +2986,7 @@ export class EmitContext {
       case "assign":
         if (compileCoordListLineCountAssignment(this, statement)) return;
         if (compileUnitDecrement(this, statement)) return;
+        if (compileUnitIncrement(this, statement)) return;
         if (compileSingleBitMaskOpAssignment(this, statement)) return;
         if (isZeroExpression(statement.expr)) this.emitZero(`set ${statement.target}`, statement.line);
         else compileExpression(this, statement.expr);
@@ -5233,6 +5278,15 @@ function allocateRegisters(
     hints.set(variable, { mode: "prefer", register });
     flPreferenceIndex += 1;
   }
+  const incrementPreferenceOrder: RegisterName[] = ["4", "5", "6"];
+  let incrementPreferenceIndex = 0;
+  for (const variable of collectUnitIncrementTargets(ast)) {
+    if (!variables.has(variable) || hints.has(variable)) continue;
+    const register = incrementPreferenceOrder[incrementPreferenceIndex];
+    if (register === undefined) break;
+    hints.set(variable, { mode: "prefer", register });
+    incrementPreferenceIndex += 1;
+  }
 
   warnUndeclaredAssignments(ast, declared, diagnostics);
   collectAssignedVariables(ast, variables);
@@ -6690,6 +6744,46 @@ function collectUnitDecrementTargets(ast: ProgramAst): Set<string> {
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "assign" && isUnitDecrementExpression(statement.target, statement.expr)) {
+        targets.add(statement.target);
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  return targets;
+}
+
+function collectUnitIncrementTargets(ast: ProgramAst): Set<string> {
+  const targets = new Set<string>();
+  const rangeByName = new Map<string, { type: StateFieldType; min?: number; max?: number }>();
+  for (const state of ast.states) {
+    for (const field of state.fields) {
+      rangeByName.set(field.name, { type: field.type, min: field.min, max: field.max });
+    }
+  }
+
+  const rangeFits = (name: string): boolean => {
+    const range = rangeByName.get(name);
+    return range?.type === "range" && range.min !== undefined && range.max !== undefined &&
+      range.min >= 0 && range.max + 1 <= 14;
+  };
+
+  const visit = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (
+        statement.kind === "assign" &&
+        isUnitIncrementExpression(statement.target, statement.expr) &&
+        rangeFits(statement.target)
+      ) {
         targets.add(statement.target);
       }
       if (statement.kind === "loop") visit(statement.body);

@@ -133,6 +133,24 @@ program InputBranch {
     expect(result.steps.map((step) => step.hex).slice(0, 3)).toEqual(["50", "59", "05"]);
   });
 
+  it("dispatches directly on a single-use input without storing it", () => {
+    const result = compileOk(`
+program InputDispatch {
+  loop {
+    target = read()
+    match target {
+      1 => halt(1)
+      2 => halt(2)
+      otherwise => halt(0)
+    }
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "ephemeral-input-dispatch")).toBe(true);
+    expect(result.steps.map((step) => step.hex)[0]).toBe("50");
+  });
+
   it("shares return suffix gadgets across compiled rule procedures", () => {
     const result = compileOk(`
 program ReturnSuffixGadget {
@@ -1858,6 +1876,29 @@ program FalseBranchXReuse {
     expect(optimizationNames).toContain("x-preserving-false-branch");
     expect(optimizationNames).toContain("fl-unit-decrement");
     expect(optimizationNames).toContain("stack-current-x-scheduling");
+  });
+
+  it("lowers bounded R4..R6 unit increments through indirect pre-increment", () => {
+    const result = compileOk(`
+program IndirectUnitIncrement {
+  state {
+    a: packed = 0
+    b: packed = 0
+    c: packed = 0
+    d: packed = 0
+    score: counter 0..9 = 0
+  }
+
+  loop {
+    score = score + 1
+    halt(a + b + c + d + score)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.registers.score).toBe("4");
+    expect(result.steps.map((step) => step.hex)).toContain("D4");
+    expect(result.report.optimizations.some((item) => item.name === "indirect-incdec-counter")).toBe(true);
   });
 
   it("shares identical nested guard failure branches", () => {

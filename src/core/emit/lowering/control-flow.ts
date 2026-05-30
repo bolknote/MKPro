@@ -834,7 +834,7 @@ export function compileDispatchCompareChain(ctx: LoweringCtx,
       return;
     }
 
-    compileExpression(ctx, statement.expr);
+    compileDispatchSelectorExpression(ctx, statement.expr);
     if (sourceRegister === undefined) {
       ctx.emitOp(
         0x40 + registerIndex(register),
@@ -899,7 +899,7 @@ export function compileNumericResidualDispatchCompareChain(ctx: LoweringCtx,
     if (values.some((value) => value === undefined)) return false;
     const numericValues = values as number[];
 
-    compileExpression(ctx, statement.expr);
+    compileDispatchSelectorExpression(ctx, statement.expr);
     const endLabel = ctx.freshLabel("dispatch_end");
     let comparedValue = 0;
     let hasComparedValue = false;
@@ -935,6 +935,11 @@ export function compileNumericResidualDispatchCompareChain(ctx: LoweringCtx,
       detail: `Reused residual comparisons for numeric dispatch at line ${statement.line}.`,
     });
     return true;
+}
+
+function compileDispatchSelectorExpression(ctx: LoweringCtx, expr: ExpressionAst): void {
+    if (expr.kind === "identifier" && ctx.xHolds(expr.name)) return;
+    compileExpression(ctx, expr);
 }
 
 function markDispatchCaseMatchZero(ctx: LoweringCtx): void {

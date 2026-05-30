@@ -610,6 +610,11 @@ export function isUnitDecrementExpression(target: string, expr: ExpressionAst): 
     Number(expr.right.raw) === 1;
 }
 
+export function isUnitIncrementExpression(target: string, expr: ExpressionAst): boolean {
+  const delta = matchTargetPlusDelta(expr, target);
+  return delta !== undefined && isNumericValue(delta, 1);
+}
+
 export function matchResidualGuardedUpdate(
   statement: Extract<StatementAst, { kind: "if" }>,
 ): {

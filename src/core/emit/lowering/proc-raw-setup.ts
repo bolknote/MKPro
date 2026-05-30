@@ -53,6 +53,7 @@ import {
   isPreincrementIndirectRegister,
   isSimpleStackLoad,
   isUnitDecrementExpression,
+  isUnitIncrementExpression,
   matchIntOrFracCall,
   matchNegativeZeroThresholdCondition,
   matchStackUnaryDerivationCall,
@@ -699,15 +700,30 @@ export function compileUnitDecrement(ctx: LoweringCtx, statement: Extract<Statem
     return true;
 }
 
+export function compileUnitIncrement(ctx: LoweringCtx, statement: Extract<StatementAst, { kind: "assign" }>): boolean {
+    if (!isUnitIncrementExpression(statement.target, statement.expr)) return false;
+    if (!targetRangeFitsIndirectIncrement(ctx, statement.target)) return false;
+    return emitIndirectUnitIncrement(ctx, statement.target, `increment ${statement.target}`, statement.line);
+}
+
 export function emitIndirectUnitIncrement(ctx: LoweringCtx, target: string, comment: string, line: number): boolean {
     const register = ctx.allocation.registers[target];
     if (register === undefined || !isPreincrementIndirectRegister(register)) return false;
     ctx.emitOp(0xd0 + registerIndex(register), `К П->X ${register}`, comment, line);
+    ctx.currentXVariable = undefined;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
     ctx.optimizations.push({
       name: "indirect-incdec-counter",
       detail: `Incremented ${target} by using ${getOpcode(0xd0 + registerIndex(register)).name}'s pre-increment side effect at line ${line}.`,
     });
     return true;
+}
+
+function targetRangeFitsIndirectIncrement(ctx: LoweringCtx, target: string): boolean {
+    const field = ctx.findStateField(target);
+    if (field?.min === undefined || field.max === undefined) return false;
+    return field.type === "range" && field.min >= 0 && field.max + 1 <= 14;
 }
 
 export function emitErrorStopOpcode(ctx: LoweringCtx, comment: string, line: number, raw = false): void {
