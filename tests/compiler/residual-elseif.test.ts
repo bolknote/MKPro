@@ -11,7 +11,7 @@ program ResidualElseIfProbe {
     dynamite: counter 0..9 = 0
     treasure: counter 0..9 = 0
   }
-  turn {
+  loop {
     if int(pos) == 1 {
       food += 9
       halt(food)

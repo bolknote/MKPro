@@ -14,18 +14,9 @@ program DangerousLoading {
     loaded: flag = 0
   }
 
-  world harbor {
-    // The eight-room lane encodes shore-to-ship travel. Room 1 loads cargo,
-    // room 8 unloads it, and the threat chooses a new water cell each turn.
-    position boat {
-      encoding pier_to_ship
-    }
-
-  }
-
-  screen water {
-    show(cargo_left, boat, threat, boats_left)
-  }
+  // The eight-room lane encodes shore-to-ship travel. Room 1 loads cargo,
+  // room 8 unloads it, and the threat chooses a new water cell each turn.
+  harbor: board(pier_to_ship)
 
   fn delivered() {
     halt(777)
@@ -35,8 +26,8 @@ program DangerousLoading {
     halt(-999)
   }
 
-  turn {
-    show(water)
+  loop {
+    show(cargo_left, boat, threat, boats_left)
     command = read()
 
     match command {
@@ -72,7 +63,7 @@ program DangerousLoading {
     }
 
     threat = random_cell(harbor)
-    show(water)
+    show(cargo_left, boat, threat, boats_left)
   }
 
   fn handle_dock() {

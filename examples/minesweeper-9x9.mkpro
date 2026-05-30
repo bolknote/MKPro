@@ -16,16 +16,12 @@ program Minesweeper9x9 {
     clue: counter 0..8 = 0
   }
 
-  screen result {
-    show(clue)
-  }
-
   fn exploded() {
     show("ЕГГОГ")
     halt()
   }
 
-  turn {
+  loop {
     probe = read()
 
     if probe in mines {
@@ -41,6 +37,6 @@ program Minesweeper9x9 {
     // cells. Tracking opened cells or a victory counter is left to the player,
     // just as in the original paper-board game.
     clue = neighbor_count(mines, probe)
-    show(result)
+    show(clue)
   }
 }

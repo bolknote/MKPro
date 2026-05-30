@@ -21,11 +21,9 @@ import type {
   StateFieldAst,
   StateFieldType,
   V2BoardAst,
-  V2ChallengeStatementAst,
-  V2EncounterCaseAst,
-  V2EncounterTableAst,
   V2IfStatementAst,
   V2InvokeStatementAst,
+  V2LoopStatementAst,
   V2MatchCaseAst,
   V2MatchStatementAst,
   V2MoveStatementAst,
@@ -35,10 +33,8 @@ import type {
   V2ScreenAst,
   V2StateFieldAst,
   V2StatementAst,
-  V2TurnAst,
   V2WhileStatementAst,
   V2WorldAst,
-  V2WorldPositionAst,
 } from "./types.ts";
 
 interface SourceLine {
@@ -52,16 +48,19 @@ const V2_RESERVED_RULE_NAMES = new Set([
   "fn",
   "halt",
   "if",
+  "loop",
   "match",
   "move",
   "otherwise",
   "program",
   "read",
   "rule",
+  "screen",
   "show",
   "state",
   "stop",
   "turn",
+  "world",
 ]);
 
 export class ParseError extends Error {
@@ -147,13 +146,10 @@ class MKProParser {
     const match = /^program\s+([A-Za-z_][\w]*)\s*\{$/u.exec(header.text);
     if (!match) throw new ParseError("Program must look like 'program Name {'", header.line);
     const state: V2StateFieldAst[] = [];
-    const screens: V2ScreenAst[] = [];
     const boards: V2BoardAst[] = [];
     const worlds: V2WorldAst[] = [];
-    const encounters: V2EncounterTableAst[] = [];
     const body: V2StatementAst[] = [];
     const rules: V2RuleAst[] = [];
-    let turn: V2TurnAst | undefined;
 
     while (!this.done()) {
       const line = this.peek();
@@ -163,27 +159,17 @@ class MKProParser {
           kind: "v2_program",
           name: match[1]!,
           state,
-          screens,
           boards,
           worlds,
-          encounters,
           body,
           rules,
           line: header.line,
         };
-        if (turn !== undefined) program.turn = turn;
-        if (program.body.length > 0 && program.turn !== undefined) {
-          throw new ParseError("Program cannot contain both main and turn blocks", program.turn.line);
-        }
         return program;
       }
       if (line.text === "state {") {
         this.index += 1;
         state.push(...this.parseV2StateBlock());
-        continue;
-      }
-      if (line.text.startsWith("screen ")) {
-        screens.push(this.parseV2Screen(line.text));
         continue;
       }
       const board = parseV2BoardDeclaration(line);
@@ -192,25 +178,25 @@ class MKProParser {
         boards.push(board);
         continue;
       }
+      const compactBoard = parseV2CompactBoardDeclaration(line);
+      if (compactBoard !== undefined) {
+        this.index += 1;
+        worlds.push(compactBoard);
+        continue;
+      }
       if (line.text.startsWith("board ")) throw new ParseError("Board must look like 'name: board(0..9, 0..9)'", line.line);
       if (line.text.startsWith("fleet ")) throw new ParseError("Fleet blocks were removed; declare cells and counters in state", line.line);
       if (line.text.startsWith("world ")) {
-        worlds.push(this.parseV2World(line.text));
-        continue;
+        throw new ParseError("Use 'name: board(encoding)' instead of world blocks", line.line);
       }
       if (line.text.startsWith("encounters ")) {
-        encounters.push(this.parseV2Encounters(line.text));
-        continue;
+        throw new ParseError("Use match blocks instead of encounters blocks", line.line);
+      }
+      if (line.text.startsWith("screen ")) {
+        throw new ParseError("Use 'fn name() { show(...) }' instead of screen blocks", line.line);
       }
       if (line.text === "turn {") {
-        if (turn !== undefined) throw new ParseError("Only one turn block is supported", line.line);
-        this.index += 1;
-        turn = {
-          kind: "v2_turn",
-          body: this.parseV2StatementBlock(),
-          line: line.line,
-        };
-        continue;
+        throw new ParseError("Use 'loop {' instead of turn blocks", line.line);
       }
       if (line.text.startsWith("fn ")) {
         rules.push(this.parseV2Rule(line.text));
@@ -219,7 +205,7 @@ class MKProParser {
       if (line.text.startsWith("rule ")) {
         throw new ParseError("Use 'fn name(arg, ...) {' instead of rule blocks", line.line);
       }
-      const knownStatementBlock = /^(match|if|while|challenge)\b/u.test(line.text) || line.text === "raw {";
+      const knownStatementBlock = /^(match|if|while|loop)\b/u.test(line.text) || line.text === "raw {";
       if (line.text.startsWith("input ") || line.text.endsWith("{") && !knownStatementBlock) {
         throw new ParseError(`Unexpected program line '${line.text}'`, line.line);
       }
@@ -241,111 +227,6 @@ class MKProParser {
       fields.push(parseV2StateField(line));
     }
     throw new ParseError("Unclosed state block", this.lines.at(-1)?.line ?? 1);
-  }
-
-  private parseV2Screen(text: string): V2ScreenAst {
-    const header = this.next();
-    const match = /^screen\s+([A-Za-z_][\w]*)\s*\{$/u.exec(text);
-    if (!match) throw new ParseError("Screen must look like 'screen name {'", header.line);
-    let sources: string[] = [];
-    let items: DisplayItemAst[] = [];
-    while (!this.done()) {
-      const line = this.next();
-      if (line.text === "}") {
-        return {
-          kind: "v2_screen",
-          name: match[1]!,
-          sources,
-          items,
-          line: header.line,
-        };
-      }
-      if (isNamedCall(line.text, "show")) {
-        items = parseDisplayItemList(parseShowDisplayItemsText(line.text, line.line), line.line);
-        sources = displayItemSources(items);
-        continue;
-      }
-      if (line.text === "show" || line.text.startsWith("show ")) {
-        throw new ParseError("Screen display must look like 'show(...)'", line.line);
-      }
-      throw new ParseError(`Unexpected screen line '${line.text}'`, line.line);
-    }
-    throw new ParseError("Unclosed screen block", header.line);
-  }
-
-  private parseV2World(text: string): V2WorldAst {
-    const header = this.next();
-    const match = /^world\s+([A-Za-z_][\w]*)\s*\{$/u.exec(text);
-    if (!match) throw new ParseError("World must look like 'world name {'", header.line);
-    const world: V2WorldAst = {
-      kind: "v2_world",
-      name: match[1]!,
-      line: header.line,
-    };
-    while (!this.done()) {
-      const line = this.next();
-      if (line.text === "}") return world;
-      if (line.text.startsWith("position ") && line.text.endsWith("{")) {
-        world.position = this.parseV2WorldPosition(line);
-        continue;
-      }
-      throw new ParseError("World block only supports position blocks", line.line);
-    }
-    throw new ParseError("Unclosed world block", header.line);
-  }
-
-  private parseV2WorldPosition(header: SourceLine): V2WorldPositionAst {
-    const match = /^position\s+([A-Za-z_][\w]*)\s*\{$/u.exec(header.text);
-    if (!match) throw new ParseError("World position must look like 'position name {'", header.line);
-    const position: V2WorldPositionAst = { name: match[1]!, line: header.line };
-    while (!this.done()) {
-      const line = this.next();
-      if (line.text === "}") return position;
-      if (line.text.startsWith("encoding ")) {
-        position.encoding = line.text.slice("encoding ".length).trim();
-        continue;
-      }
-      throw new ParseError(`Unexpected world position line '${line.text}'`, line.line);
-    }
-    throw new ParseError("Unclosed world position block", header.line);
-  }
-
-  private parseV2Encounters(text: string): V2EncounterTableAst {
-    const header = this.next();
-    const match = /^encounters\s+(.+?)\s*\{$/u.exec(text);
-    if (!match) throw new ParseError("Encounter table must look like 'encounters expr {'", header.line);
-    const cases: V2EncounterTableAst["cases"] = [];
-    while (!this.done()) {
-      const line = this.peek();
-      if (line.text === "}") {
-        this.index += 1;
-        return {
-          kind: "v2_encounters",
-          expr: match[1]!.trim(),
-          cases,
-          line: header.line,
-        };
-      }
-      const inline = /^(\S+)\s*\{\s*(.*?)\s*\}$/u.exec(line.text);
-      if (inline) {
-        this.index += 1;
-        cases.push({
-          value: inline[1]!,
-          body: inline[2]!.split(";").map((part) => part.trim()).filter(Boolean).map((text) => parseV2InlineStatement(text, line.line)),
-          line: line.line,
-        });
-        continue;
-      }
-      const caseMatch = /^(\S+)\s*\{$/u.exec(line.text);
-      if (!caseMatch) throw new ParseError("Encounter case must look like 'value {'", line.line);
-      this.index += 1;
-      cases.push({
-        value: caseMatch[1]!,
-        body: this.parseV2StatementBlock(),
-        line: line.line,
-      });
-    }
-    throw new ParseError("Unclosed encounter table", header.line);
   }
 
   private parseV2Rule(text: string): V2RuleAst {
@@ -420,9 +301,16 @@ class MKProParser {
         line: line.line,
       };
     }
-    if (line.text.startsWith("challenge ") && line.text.endsWith("{")) {
+    if (line.text === "loop {") {
       this.index += 1;
-      return this.parseV2Challenge(line.text, line.line);
+      return {
+        kind: "v2_loop",
+        body: this.parseV2StatementBlock(),
+        line: line.line,
+      };
+    }
+    if (line.text.startsWith("challenge ") && line.text.endsWith("{")) {
+      throw new ParseError("Use ordinary show/read/if statements instead of challenge blocks", line.line);
     }
     if (line.text === "raw {") {
       this.index += 1;
@@ -509,49 +397,6 @@ class MKProParser {
       lines.push({ text: rawLine.text, line: rawLine.line });
     }
     throw new ParseError("Unclosed raw code block", line);
-  }
-
-  private parseV2Challenge(text: string, line: number): V2StatementAst {
-    const match =
-      /^challenge\s+(.+?)\s+as\s+([A-Za-z_][\w]*)\s+using\s+([A-Za-z_][\w]*),\s*([A-Za-z_][\w]*),\s*([A-Za-z_][\w]*)\s*\{$/u.exec(
-        text,
-      );
-    if (!match) {
-      throw new ParseError("Challenge must look like 'challenge expr as memory_var using warning_screen, memory_screen, answer_input {'", line);
-    }
-    let successBody: V2StatementAst[] | undefined;
-    let failureBody: V2StatementAst[] | undefined;
-    while (!this.done()) {
-      const bodyLine = this.peek();
-      if (bodyLine.text === "}") {
-        this.index += 1;
-        if (!successBody) throw new ParseError("Challenge block must contain success { ... }", line);
-        const statement: V2StatementAst = {
-          kind: "v2_challenge",
-          expr: match[1]!.trim(),
-          successBody,
-          challengeTarget: match[2]!,
-          warningScreen: match[3]!,
-          memoryScreen: match[4]!,
-          answerInput: match[5]!,
-          line,
-        };
-        if (failureBody !== undefined) statement.failureBody = failureBody;
-        return statement;
-      }
-      if (bodyLine.text === "success {") {
-        this.index += 1;
-        successBody = this.parseV2StatementBlock();
-        continue;
-      }
-      if (bodyLine.text === "failure {") {
-        this.index += 1;
-        failureBody = this.parseV2StatementBlock();
-        continue;
-      }
-      throw new ParseError("Challenge block must contain success/failure blocks", bodyLine.line);
-    }
-    throw new ParseError("Unclosed challenge block", line);
   }
 
   private parseV2Match(text: string, line: number): V2MatchStatementAst {
@@ -691,6 +536,22 @@ function parseV2BoardDeclaration(line: SourceLine): V2BoardAst | undefined {
   };
 }
 
+function parseV2CompactBoardDeclaration(line: SourceLine): V2WorldAst | undefined {
+  const match = /^([A-Za-z_][\w]*)\s*:\s*board\(\s*([A-Za-z_][\w]*)\s*\)$/u.exec(line.text);
+  if (!match) return undefined;
+  const name = match[1]!;
+  return {
+    kind: "v2_world",
+    name,
+    position: {
+      name,
+      encoding: match[2]!,
+      line: line.line,
+    },
+    line: line.line,
+  };
+}
+
 function parseV2InlineStatement(text: string, line: number): V2StatementAst {
   const showCall = parseNamedCall(text, "show");
   if (showCall !== undefined) return parseV2ShowCall(showCall.argsText, line);
@@ -769,13 +630,10 @@ function parseV2InlineStatement(text: string, line: number): V2StatementAst {
 
 function parseV2ShowCall(argsText: string, line: number): V2StatementAst {
   const trimmed = argsText.trim();
-  if (trimmed.length === 0 || trimmed.startsWith("\"") || trimmed.includes(",") || trimmed.includes(":")) {
+  if (trimmed.length === 0 || !isNumericLiteralText(trimmed)) {
     return { kind: "v2_show", items: parseDisplayItemList(trimmed, line), line };
   }
-  if (isNumericLiteralText(trimmed) || /^[A-Za-z_][\w]*$/u.test(trimmed)) {
-    return { kind: "v2_show", target: trimmed, line };
-  }
-  return { kind: "v2_show", items: parseDisplayItemList(trimmed, line), line };
+  return { kind: "v2_show", target: trimmed, line };
 }
 
 function parseV2Predicate(text: string, line: number): V2PredicateAst {
@@ -962,11 +820,7 @@ function lowerV2Program(v2: V2ProgramAst): LoweredV2Program {
   const decimalSeries = tryLowerV2DecimalFactorialSeries(v2);
   if (decimalSeries !== undefined) return decimalSeries;
 
-  const declaredScreens = collectV2Screens(v2.screens);
-  resolveV2InlineShowTargets(v2, declaredScreens, new Set(v2.state.map((field) => field.name)));
   const inlineScreens = collectV2InlineScreens(v2);
-  const allScreens = [...v2.screens, ...inlineScreens];
-  const screens = collectV2Screens(allScreens);
   const ruleParams = collectV2RuleParams(v2);
   const rules = collectV2Rules(v2);
   const specializedRules = selectV2RuleSpecializations(v2, rules);
@@ -978,7 +832,7 @@ function lowerV2Program(v2: V2ProgramAst): LoweredV2Program {
   const coordLists = collectV2CoordLists(v2);
   const cellMapNames = collectV2CellMapNames(v2, stateDomains);
   validateV2Domains(v2);
-  validateV2References(v2, { screens, ruleParams });
+  validateV2References(v2, { ruleParams });
   const context: V2LoweringContext = {
     ruleParams,
     rules,
@@ -995,11 +849,10 @@ function lowerV2Program(v2: V2ProgramAst): LoweredV2Program {
   return {
     domains: lowerV2Domains(v2),
     states: lowerV2State(v2, specializedRules, cellMapNames, context),
-    displays: allScreens.map(lowerV2Screen),
+    displays: inlineScreens.map(lowerV2Screen),
     entries: [lowerV2Entry(v2, context)],
     procs: [
       ...v2.rules.filter((rule) => !specializedRules.has(rule.name)).map((rule) => lowerV2Rule(rule, context)),
-      ...lowerV2EncounterRules(v2, context),
     ],
     blocks: [],
   };
@@ -1008,12 +861,9 @@ function lowerV2Program(v2: V2ProgramAst): LoweredV2Program {
 function tryLowerV2DecimalFactorialSeries(v2: V2ProgramAst): LoweredV2Program | undefined {
   if (
     v2.body.length !== 5 ||
-    v2.turn !== undefined ||
     v2.state.length > 0 ||
-    v2.screens.length > 0 ||
     v2.boards.length > 0 ||
     v2.worlds.length > 0 ||
-    v2.encounters.length > 0 ||
     v2.rules.length > 0
   ) {
     return undefined;
@@ -1113,10 +963,6 @@ function collectV2RuleParams(v2: V2ProgramAst): V2LoweringContext["ruleParams"] 
     if (ruleParams.has(rule.name)) throw new ParseError(`Duplicate function '${rule.name}'`, rule.line);
     ruleParams.set(rule.name, rule.params);
   }
-  for (const table of v2.encounters) {
-    if (ruleParams.has("encounter")) throw new ParseError("Duplicate function 'encounter'", table.line);
-    ruleParams.set("encounter", [encounterParamName(table.expr)]);
-  }
   return ruleParams;
 }
 
@@ -1169,22 +1015,17 @@ function collectV2Invocations(v2: V2ProgramAst): V2InvocationSite[] {
       if (statement.kind === "v2_while") {
         visit(statement.body, currentRule);
       }
+      if (statement.kind === "v2_loop") {
+        visit(statement.body, currentRule);
+      }
       if (statement.kind === "v2_match") {
         for (const matchCase of statement.cases) visit([matchCase.action], currentRule);
         if (statement.otherwise) visit([statement.otherwise], currentRule);
       }
-      if (statement.kind === "v2_challenge") {
-        visit(statement.successBody, currentRule);
-        if (statement.failureBody) visit(statement.failureBody, currentRule);
-      }
     }
   };
   if (v2.body.length > 0) visit(v2.body);
-  if (v2.turn !== undefined) visit(v2.turn.body);
   for (const rule of v2.rules) visit(rule.body, rule.name);
-  for (const table of v2.encounters) {
-    for (const encounterCase of table.cases) visit(encounterCase.body);
-  }
   return sites;
 }
 
@@ -1235,95 +1076,54 @@ function estimateV2ExpressionText(text: string): number {
   return 1 + operators + calls + Math.ceil(trimmed.length / 12);
 }
 
-function collectV2Screens(v2Screens: V2ScreenAst[]): Map<string, V2ScreenAst> {
-  const screens = new Map<string, V2ScreenAst>();
-  for (const screen of v2Screens) {
-    if (screens.has(screen.name)) throw new ParseError(`Duplicate screen '${screen.name}'`, screen.line);
-    screens.set(screen.name, screen);
-  }
-  return screens;
-}
-
 function collectV2InlineScreens(v2: V2ProgramAst): V2ScreenAst[] {
   const screens: V2ScreenAst[] = [];
+  const screensByItems = new Map<string, V2ScreenAst>();
   let next = 0;
   const visit = (statements: V2StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "v2_show" && statement.items !== undefined) {
-        const name = `__inline_show_${statement.line}_${next}`;
-        next += 1;
-        statement.inlineName = name;
-        screens.push({
-          kind: "v2_screen",
-          name,
-          sources: displayItemSources(statement.items),
-          items: statement.items,
-          line: statement.line,
-        });
+        const key = displayItemKey(statement.items);
+        const existing = screensByItems.get(key);
+        if (existing !== undefined) {
+          statement.inlineName = existing.name;
+        } else {
+          const name = `__inline_show_${statement.line}_${next}`;
+          next += 1;
+          statement.inlineName = name;
+          const screen = {
+            kind: "v2_screen" as const,
+            name,
+            sources: displayItemSources(statement.items),
+            items: statement.items,
+            line: statement.line,
+          };
+          screensByItems.set(key, screen);
+          screens.push(screen);
+        }
       }
       if (statement.kind === "v2_if") {
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
       }
       if (statement.kind === "v2_while") visit(statement.body);
+      if (statement.kind === "v2_loop") visit(statement.body);
       if (statement.kind === "v2_match") {
         for (const matchCase of statement.cases) visit([matchCase.action]);
         if (statement.otherwise) visit([statement.otherwise]);
       }
-      if (statement.kind === "v2_challenge") {
-        visit(statement.successBody);
-        if (statement.failureBody) visit(statement.failureBody);
-      }
     }
   };
   if (v2.body.length > 0) visit(v2.body);
-  if (v2.turn) visit(v2.turn.body);
   for (const rule of v2.rules) visit(rule.body);
-  for (const table of v2.encounters) {
-    for (const encounterCase of table.cases) visit(encounterCase.body);
-  }
   return screens;
 }
 
-function resolveV2InlineShowTargets(
-  v2: V2ProgramAst,
-  screens: ReadonlyMap<string, V2ScreenAst>,
-  stateNames: ReadonlySet<string>,
-): void {
-  const visit = (statements: V2StatementAst[]): void => {
-    for (const statement of statements) {
-      if (
-        statement.kind === "v2_show" &&
-        statement.items === undefined &&
-        statement.target !== undefined &&
-        !isNumericLiteralText(statement.target) &&
-        !screens.has(statement.target) &&
-        stateNames.has(statement.target)
-      ) {
-        statement.items = [{ kind: "source", name: statement.target, line: statement.line }];
-        delete statement.target;
-      }
-      if (statement.kind === "v2_if") {
-        visit(statement.thenBody);
-        if (statement.elseBody) visit(statement.elseBody);
-      }
-      if (statement.kind === "v2_while") visit(statement.body);
-      if (statement.kind === "v2_match") {
-        for (const matchCase of statement.cases) visit([matchCase.action]);
-        if (statement.otherwise) visit([statement.otherwise]);
-      }
-      if (statement.kind === "v2_challenge") {
-        visit(statement.successBody);
-        if (statement.failureBody) visit(statement.failureBody);
-      }
-    }
-  };
-  if (v2.body.length > 0) visit(v2.body);
-  if (v2.turn) visit(v2.turn.body);
-  for (const rule of v2.rules) visit(rule.body);
-  for (const table of v2.encounters) {
-    for (const encounterCase of table.cases) visit(encounterCase.body);
-  }
+function displayItemKey(items: DisplayItemAst[]): string {
+  return JSON.stringify(items.map((item) => {
+    if (item.kind === "literal") return ["literal", item.text];
+    return ["source", item.name, item.width ?? null, item.pad ?? null];
+  }));
 }
 
 function validateV2Domains(v2: V2ProgramAst): void {
@@ -1352,7 +1152,6 @@ function validateV2References(
   v2: V2ProgramAst,
   context: {
     ruleParams: Map<string, string[]>;
-    screens: Map<string, V2ScreenAst>;
   },
 ): void {
   const visit = (statements: V2StatementAst[]): void => {
@@ -1361,18 +1160,13 @@ function validateV2References(
     }
   };
   if (v2.body.length > 0) visit(v2.body);
-  if (v2.turn) visit(v2.turn.body);
   for (const rule of v2.rules) visit(rule.body);
-  for (const table of v2.encounters) {
-    for (const encounterCase of table.cases) visit(encounterCase.body);
-  }
 }
 
 function validateV2Statement(
   statement: V2StatementAst,
   context: {
     ruleParams: Map<string, string[]>;
-    screens: Map<string, V2ScreenAst>;
   },
   visit: (statements: V2StatementAst[]) => void,
 ): void {
@@ -1380,10 +1174,10 @@ function validateV2Statement(
     case "v2_show":
       if (statement.items !== undefined) return;
       if (statement.target === undefined) {
-        throw new ParseError("Show must name a screen, number, or display fragments", statement.line);
+        throw new ParseError("Show must use a number or display fragments", statement.line);
       }
-      if (!isNumericLiteralText(statement.target) && !context.screens.has(statement.target)) {
-        throw new ParseError(`Unknown screen '${statement.target}'`, statement.line);
+      if (!isNumericLiteralText(statement.target)) {
+        throw new ParseError("Show must use a number or display fragments", statement.line);
       }
       return;
     case "v2_invoke":
@@ -1400,21 +1194,14 @@ function validateV2Statement(
         }
       }
       return;
-    case "v2_challenge":
-      if (!context.screens.has(statement.warningScreen)) {
-        throw new ParseError(`Unknown challenge warning screen '${statement.warningScreen}'`, statement.line);
-      }
-      if (!context.screens.has(statement.memoryScreen)) {
-        throw new ParseError(`Unknown challenge memory screen '${statement.memoryScreen}'`, statement.line);
-      }
-      visit(statement.successBody);
-      if (statement.failureBody) visit(statement.failureBody);
-      return;
     case "v2_if":
       visit(statement.thenBody);
       if (statement.elseBody) visit(statement.elseBody);
       return;
     case "v2_while":
+      visit(statement.body);
+      return;
+    case "v2_loop":
       visit(statement.body);
       return;
     case "v2_match":
@@ -1428,9 +1215,12 @@ function validateV2Statement(
 
 function collectV2MoveDeltas(v2: V2ProgramAst): V2LoweringContext["moveDeltas"] {
   const deltas = new Map<string, Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>>>();
-  for (const world of v2.worlds) {
-    if (world.position === undefined) continue;
-    deltas.set(world.position.name, moveDeltasForEncoding(world.position.encoding));
+  const worlds = new Map(v2.worlds.map((world) => [world.name, world]));
+  for (const field of v2.state) {
+    if (field.type !== "coord" || field.domain === undefined) continue;
+    const world = worlds.get(field.domain);
+    if (world === undefined) continue;
+    deltas.set(field.name, moveDeltasForEncoding(world.position?.encoding));
   }
   return deltas;
 }
@@ -1492,10 +1282,8 @@ function collectV2ExpressionTexts(v2: V2ProgramAst): string[] {
           }
           visit(statement.body);
           break;
-        case "v2_challenge":
-          texts.push(statement.expr);
-          visit(statement.successBody);
-          if (statement.failureBody !== undefined) visit(statement.failureBody);
+        case "v2_loop":
+          visit(statement.body);
           break;
         case "v2_match":
           texts.push(statement.expr);
@@ -1517,15 +1305,7 @@ function collectV2ExpressionTexts(v2: V2ProgramAst): string[] {
     }
   };
   if (v2.body.length > 0) visit(v2.body);
-  if (v2.turn !== undefined) visit(v2.turn.body);
   for (const rule of v2.rules) visit(rule.body);
-  for (const table of v2.encounters) {
-    texts.push(table.expr);
-    for (const encounterCase of table.cases) {
-      texts.push(encounterCase.value);
-      visit(encounterCase.body);
-    }
-  }
   return texts;
 }
 
@@ -1569,16 +1349,17 @@ function lowerV2Domains(v2: V2ProgramAst): DomainAst[] {
     });
   }
   for (const world of v2.worlds) {
-    if (world.position !== undefined) {
+    const coordFields = v2.state.filter((field) => field.type === "coord" && field.domain === world.name);
+    for (const field of coordFields) {
       const lines: RawBlockLine[] = [];
-      if (world.position.encoding !== undefined) lines.push({ text: `encoding ${world.position.encoding}`, line: world.position.line });
+      if (world.position?.encoding !== undefined) lines.push({ text: `encoding ${world.position.encoding}`, line: world.position.line });
       domains.push({
         kind: "domain",
         domainKind: "coord",
         name: "packed",
-        header: `coord packed ${world.position.name}`,
+        header: `coord packed ${field.name}`,
         lines,
-        line: world.position.line,
+        line: field.line,
       });
     }
     const worldLines: RawBlockLine[] = [];
@@ -1604,19 +1385,6 @@ function lowerV2Domains(v2: V2ProgramAst): DomainAst[] {
         line: field.line,
       });
     }
-  }
-  if (v2.encounters.length > 0) {
-    domains.push({
-      kind: "domain",
-      domainKind: "event",
-      name: "encounters",
-      header: "event encounters",
-    lines: v2.encounters.flatMap((table) => table.cases.map((encounterCase) => ({
-      text: encounterCase.value,
-      line: encounterCase.line,
-    }))),
-      line: v2.encounters[0]!.line,
-    });
   }
   return domains;
 }
@@ -1706,11 +1474,6 @@ function collectV2ScratchFields(v2: V2ProgramAst, specializedRules: Set<string>)
     visit(rule.body);
   }
   if (v2.body.length > 0) visit(v2.body);
-  if (v2.turn !== undefined) visit(v2.turn.body);
-  for (const table of v2.encounters) {
-    add(encounterParamName(table.expr), table.line);
-    for (const encounterCase of table.cases) visit(encounterCase.body);
-  }
   return fields;
 
   function visit(statements: V2StatementAst[]): void {
@@ -1722,15 +1485,12 @@ function collectV2ScratchFields(v2: V2ProgramAst, specializedRules: Set<string>)
       if (statement.kind === "v2_while") {
         visit(statement.body);
       }
+      if (statement.kind === "v2_loop") {
+        visit(statement.body);
+      }
       if (statement.kind === "v2_match") {
         for (const matchCase of statement.cases) visit([matchCase.action]);
         if (statement.otherwise) visit([statement.otherwise]);
-      }
-      if (statement.kind === "v2_challenge") {
-        add(statement.challengeTarget, statement.line);
-        add(statement.answerInput, statement.line);
-        visit(statement.successBody);
-        if (statement.failureBody) visit(statement.failureBody);
       }
       if (statement.kind === "v2_read") add(statement.target, statement.line);
     }
@@ -1788,22 +1548,22 @@ function lowerV2Screen(screen: V2ScreenAst): DisplayAst {
   };
 }
 
+const V2_INTERNAL_ENTRY_NAME = "\u0000main";
+
 function lowerV2Entry(v2: V2ProgramAst, context: V2LoweringContext): EntryAst {
   if (v2.body.length > 0) {
     return {
       kind: "entry",
-      name: "main",
+      name: V2_INTERNAL_ENTRY_NAME,
       body: lowerV2Statements(v2.body, context),
       line: v2.line,
     };
   }
   return {
     kind: "entry",
-    name: "main",
-    body: v2.turn
-      ? [{ kind: "loop", body: lowerV2Statements(v2.turn.body, context), line: v2.turn.line }]
-      : [{ kind: "halt", expr: parseExpression("0"), line: v2.line }],
-    line: v2.turn?.line ?? v2.line,
+    name: V2_INTERNAL_ENTRY_NAME,
+    body: [{ kind: "halt", expr: parseExpression("0"), line: v2.line }],
+    line: v2.line,
   };
 }
 
@@ -1816,66 +1576,6 @@ function lowerV2Rule(rule: V2RuleAst, context: V2LoweringContext): ProcAst {
   };
 }
 
-function lowerV2EncounterRules(v2: V2ProgramAst, context: V2LoweringContext): ProcAst[] {
-  return v2.encounters.flatMap((table) => lowerV2EncounterRule(table, context));
-}
-
-function lowerV2EncounterRule(table: V2EncounterTableAst, context: V2LoweringContext): ProcAst[] {
-  const optimized = lowerSharedChallengeEncounter(table, context);
-  if (optimized !== undefined) return optimized;
-  return [{
-    kind: "proc",
-    name: "encounter",
-    body: [lowerV2EncounterDispatch(table, context)],
-    line: table.line,
-  }];
-}
-
-function lowerV2EncounterDispatch(table: V2EncounterTableAst, context: V2LoweringContext): DispatchStatementAst {
-  return {
-    kind: "dispatch",
-    expr: lowerV2Expression(encounterParamName(table.expr), table.line, context),
-    cases: table.cases.map((encounterCase) => ({
-      value: lowerV2Expression(encounterCase.value, encounterCase.line, context),
-      body: lowerV2Statements(encounterCase.body, context),
-      line: encounterCase.line,
-    })),
-    line: table.line,
-    scratchId: table.line,
-  };
-}
-
-function encounterParamName(expr: string): string {
-  return /^[A-Za-z_][\w]*$/u.test(expr.trim()) ? expr.trim() : "encounter_kind";
-}
-
-interface SimpleChallengeCase {
-  key: number;
-  value: string;
-  line: number;
-  challenge: V2ChallengeStatementAst;
-  success: SimpleEffects;
-  failure: SimpleEffects;
-}
-
-interface SharedChallengeException {
-  key: number;
-  line: number;
-  successBody: V2StatementAst[];
-  failureBody: V2StatementAst[];
-}
-
-interface SimpleEffects {
-  deltas: Map<string, number>;
-  cellUpdates: CellUpdateEffect[];
-}
-
-interface CellUpdateEffect {
-  target: string;
-  op: "+=" | "-=";
-  expr: string;
-}
-
 interface LinearDeltaPlan {
   target: string;
   slope: number;
@@ -1883,366 +1583,8 @@ interface LinearDeltaPlan {
   corrections: Map<number, number>;
 }
 
-function lowerSharedChallengeEncounter(table: V2EncounterTableAst, context: V2LoweringContext): ProcAst[] | undefined {
-  const analyzed = table.cases.map((encounterCase) => analyzeSimpleChallengeCase(encounterCase, context));
-  const simple = analyzed.filter((item): item is SimpleChallengeCase => item !== undefined);
-  if (simple.length < 3) return undefined;
-
-  const groups = groupSimpleChallengeCases(simple);
-  const group = groups
-    .filter((candidate) => candidate.length >= 3)
-    .map((candidate) => ({
-      cases: candidate,
-      success: buildEffectPlan(candidate, "success"),
-      failure: buildEffectPlan(candidate, "failure"),
-    }))
-    .filter((candidate): candidate is {
-      cases: SimpleChallengeCase[];
-      success: EffectPlan;
-      failure: EffectPlan;
-    } => candidate.success !== undefined && candidate.failure !== undefined)
-    .sort((left, right) => right.cases.length - left.cases.length)[0];
-  if (group === undefined) return undefined;
-
-  const protocol = group.cases[0]!.challenge;
-  const groupKeys = new Set(group.cases.map((item) => item.key));
-  const exceptions = table.cases
-    .filter((encounterCase) => {
-      const key = numericLiteralTextValue(encounterCase.value);
-      return key !== undefined && !groupKeys.has(key);
-    })
-    .map((encounterCase) => analyzeSharedChallengeException(encounterCase, protocol))
-    .filter((item): item is SharedChallengeException => item !== undefined)
-    .sort((left, right) => left.key - right.key);
-  const optimizedKeys = new Set([
-    ...group.cases.map((item) => item.key),
-    ...exceptions.map((item) => item.key),
-  ]);
-  const helperName = `encounter_effects_${table.line}`;
-  const defaultDispatch = defaultableOptimizedEncounterDispatch(table, optimizedKeys, helperName, context);
-  const dispatch: DispatchStatementAst = {
-    kind: "dispatch",
-    expr: lowerV2Expression(encounterParamName(table.expr), table.line, context),
-    cases: defaultDispatch?.cases ?? table.cases.map((encounterCase) => {
-      const key = numericLiteralTextValue(encounterCase.value);
-      if (key !== undefined && optimizedKeys.has(key)) {
-        return {
-          value: lowerV2Expression(encounterCase.value, encounterCase.line, context),
-          body: [{ kind: "call", block: helperName, line: encounterCase.line }],
-          line: encounterCase.line,
-        };
-      }
-      return {
-        value: lowerV2Expression(encounterCase.value, encounterCase.line, context),
-        body: lowerV2Statements(encounterCase.body, context),
-        line: encounterCase.line,
-      };
-    }),
-    ...(defaultDispatch === undefined ? {} : { defaultBody: defaultDispatch.defaultBody }),
-    line: table.line,
-    scratchId: table.line,
-  };
-  const encounterBody = defaultDispatch === undefined
-    ? [dispatch]
-    : lowerDefaultDispatchAsIfChain(dispatch) ?? [dispatch];
-
-  const helper: ProcAst = {
-    kind: "proc",
-    name: helperName,
-    body: lowerSharedChallengeHelper(
-      protocol,
-      group.success,
-      group.failure,
-      encounterParamName(table.expr),
-      context,
-      exceptions,
-    ),
-    line: table.line,
-  };
-
-  return [
-    {
-      kind: "proc",
-      name: "encounter",
-      body: encounterBody,
-      line: table.line,
-    },
-    helper,
-  ];
-}
-
-function lowerDefaultDispatchAsIfChain(dispatch: DispatchStatementAst): StatementAst[] | undefined {
-  if (dispatch.defaultBody === undefined || dispatch.cases.length > 2) return undefined;
-  const emptyCases = dispatch.cases.filter((item) => item.body.length === 0);
-  const nonEmptyCases = dispatch.cases.filter((item) => item.body.length > 0);
-  if (emptyCases.length === 0 || nonEmptyCases.length > 1) return undefined;
-
-  let body = dispatch.defaultBody;
-  for (const dispatchCase of [...emptyCases].reverse()) {
-    body = [{
-      kind: "if",
-      condition: {
-        left: dispatch.expr,
-        op: "!=",
-        right: dispatchCase.value,
-      },
-      thenBody: body,
-      line: dispatchCase.line,
-    }];
-  }
-
-  const special = nonEmptyCases[0];
-  if (special === undefined) return body;
-  return [{
-    kind: "if",
-    condition: {
-      left: dispatch.expr,
-      op: "==",
-      right: special.value,
-    },
-    thenBody: special.body,
-    elseBody: body,
-    line: dispatch.line,
-  }];
-}
-
-function defaultableOptimizedEncounterDispatch(
-  table: V2EncounterTableAst,
-  optimizedKeys: Set<number>,
-  helperName: string,
-  context: V2LoweringContext,
-): { cases: DispatchCaseAst[]; defaultBody: StatementAst[] } | undefined {
-  const keyName = encounterParamName(table.expr);
-  const range = context.stateRanges.get(keyName);
-  if (range?.min === undefined || range.max === undefined) return undefined;
-  if (!Number.isInteger(range.min) || !Number.isInteger(range.max)) return undefined;
-  if (range.max < range.min || range.max - range.min > 20) return undefined;
-
-  const sourceKeys = new Set<number>();
-  const cases: DispatchCaseAst[] = [];
-  for (const encounterCase of table.cases) {
-    const key = numericLiteralTextValue(encounterCase.value);
-    if (key === undefined) return undefined;
-    sourceKeys.add(key);
-    if (optimizedKeys.has(key)) continue;
-    cases.push({
-      value: lowerV2Expression(encounterCase.value, encounterCase.line, context),
-      body: lowerV2Statements(encounterCase.body, context),
-      line: encounterCase.line,
-    });
-  }
-
-  for (let value = range.min; value <= range.max; value += 1) {
-    if (sourceKeys.has(value) || optimizedKeys.has(value)) continue;
-    cases.push({
-      value: lowerV2Expression(String(value), table.line, context),
-      body: [],
-      line: table.line,
-    });
-  }
-
-  if (cases.length + 1 >= optimizedKeys.size) return undefined;
-  return {
-    cases: cases.sort((left, right) =>
-      (numericLiteralValueForExpression(left.value) ?? 0) - (numericLiteralValueForExpression(right.value) ?? 0)
-    ),
-    defaultBody: [{ kind: "call", block: helperName, line: table.line }],
-  };
-}
-
 interface EffectPlan {
-  keys: number[];
   deltas: LinearDeltaPlan[];
-  cellUpdates: CellUpdateEffect[];
-}
-
-function analyzeSharedChallengeException(
-  encounterCase: V2EncounterCaseAst,
-  protocol: V2ChallengeStatementAst,
-): SharedChallengeException | undefined {
-  const key = numericLiteralTextValue(encounterCase.value);
-  if (key === undefined) return undefined;
-  if (encounterCase.body.length !== 1) return undefined;
-  const challenge = encounterCase.body[0];
-  if (challenge?.kind !== "v2_challenge" || challenge.failureBody === undefined) return undefined;
-  if (challengeProtocolKey(challenge) !== challengeProtocolKey(protocol)) return undefined;
-  return {
-    key,
-    line: encounterCase.line,
-    successBody: challenge.successBody,
-    failureBody: challenge.failureBody,
-  };
-}
-
-function analyzeSimpleChallengeCase(
-  encounterCase: V2EncounterCaseAst,
-  context: V2LoweringContext,
-): SimpleChallengeCase | undefined {
-  const key = numericLiteralTextValue(encounterCase.value);
-  if (key === undefined) return undefined;
-  if (encounterCase.body.length !== 1) return undefined;
-  const challenge = encounterCase.body[0];
-  if (challenge?.kind !== "v2_challenge" || challenge.failureBody === undefined) return undefined;
-  const success = analyzeSimpleEffects(challenge.successBody, context);
-  const failure = analyzeSimpleEffects(challenge.failureBody, context);
-  if (success === undefined || failure === undefined) return undefined;
-  return {
-    key,
-    value: encounterCase.value,
-    line: encounterCase.line,
-    challenge,
-    success,
-    failure,
-  };
-}
-
-function analyzeSimpleEffects(statements: V2StatementAst[], context: V2LoweringContext): SimpleEffects | undefined {
-  const deltas = new Map<string, number>();
-  const cellUpdates: CellUpdateEffect[] = [];
-  for (const statement of statements) {
-    if (statement.kind !== "v2_update") return undefined;
-    if (context.stateTypes.get(statement.target) === "cells") {
-      cellUpdates.push({
-        target: statement.target,
-        op: statement.op,
-        expr: statement.expr.trim(),
-      });
-      continue;
-    }
-    const value = numericLiteralTextValue(statement.expr);
-    if (value === undefined) return undefined;
-    const delta = statement.op === "+=" ? value : -value;
-    deltas.set(statement.target, (deltas.get(statement.target) ?? 0) + delta);
-  }
-  return {
-    deltas,
-    cellUpdates: cellUpdates.sort(compareCellUpdates),
-  };
-}
-
-function groupSimpleChallengeCases(cases: SimpleChallengeCase[]): SimpleChallengeCase[][] {
-  const groups = new Map<string, SimpleChallengeCase[]>();
-  for (const challengeCase of cases) {
-    const key = challengeProtocolKey(challengeCase.challenge);
-    const group = groups.get(key);
-    if (group === undefined) {
-      groups.set(key, [challengeCase]);
-    } else {
-      group.push(challengeCase);
-    }
-  }
-  return [...groups.values()];
-}
-
-function challengeProtocolKey(statement: V2ChallengeStatementAst): string {
-  return [
-    statement.expr.trim(),
-    statement.challengeTarget,
-    statement.warningScreen,
-    statement.memoryScreen,
-    statement.answerInput,
-  ].join("\0");
-}
-
-function buildEffectPlan(cases: SimpleChallengeCase[], branch: "success" | "failure"): EffectPlan | undefined {
-  const cellUpdates = cases[0]![branch].cellUpdates;
-  if (!cases.every((item) => cellUpdatesEqual(item[branch].cellUpdates, cellUpdates))) return undefined;
-
-  const targets = new Set<string>();
-  for (const challengeCase of cases) {
-    for (const target of challengeCase[branch].deltas.keys()) targets.add(target);
-  }
-
-  const plans: LinearDeltaPlan[] = [];
-  for (const target of [...targets].sort()) {
-    const values = new Map(cases.map((challengeCase) => [
-      challengeCase.key,
-      challengeCase[branch].deltas.get(target) ?? 0,
-    ]));
-    const plan = fitLinearDeltaPlan(target, values);
-    if (plan === undefined) return undefined;
-    if (plan.slope !== 0 || plan.intercept !== 0 || plan.corrections.size > 0) {
-      plans.push(plan);
-    }
-  }
-
-  if (plans.length === 0 && cellUpdates.length === 0) return undefined;
-  return {
-    keys: cases.map((item) => item.key),
-    deltas: plans,
-    cellUpdates,
-  };
-}
-
-function lowerSharedChallengeHelper(
-  protocol: V2ChallengeStatementAst,
-  success: EffectPlan,
-  failure: EffectPlan,
-  keyName: string,
-  context: V2LoweringContext,
-  exceptions: SharedChallengeException[] = [],
-): StatementAst[] {
-  return [
-    {
-      kind: "assign",
-      target: protocol.challengeTarget,
-      expr: lowerV2Expression(protocol.expr, protocol.line, context),
-      line: protocol.line,
-    },
-    { kind: "show", display: protocol.warningScreen, line: protocol.line },
-    { kind: "show", display: protocol.memoryScreen, line: protocol.line },
-    { kind: "input", target: protocol.answerInput, line: protocol.line },
-    {
-      kind: "if",
-      condition: {
-        left: { kind: "identifier", name: protocol.answerInput },
-        op: "==",
-        right: { kind: "identifier", name: protocol.challengeTarget },
-      },
-      thenBody: lowerSharedChallengeBranch(
-        lowerEffectPlan(success, keyName, protocol.line, context),
-        exceptions,
-        "success",
-        keyName,
-        protocol.line,
-        context,
-      ),
-      elseBody: lowerSharedChallengeBranch(
-        lowerEffectPlan(failure, keyName, protocol.line, context),
-        exceptions,
-        "failure",
-        keyName,
-        protocol.line,
-        context,
-      ),
-      line: protocol.line,
-    },
-  ];
-}
-
-function lowerSharedChallengeBranch(
-  fallback: StatementAst[],
-  exceptions: SharedChallengeException[],
-  branch: "success" | "failure",
-  keyName: string,
-  line: number,
-  context: V2LoweringContext,
-): StatementAst[] {
-  let body = fallback;
-  for (const exception of [...exceptions].reverse()) {
-    body = [{
-      kind: "if",
-      condition: {
-        left: { kind: "identifier", name: keyName },
-        op: "==",
-        right: { kind: "number", raw: String(exception.key) },
-      },
-      thenBody: lowerV2Statements(branch === "success" ? exception.successBody : exception.failureBody, context),
-      elseBody: body,
-      line: exception.line || line,
-    }];
-  }
-  return body;
 }
 
 function lowerEffectPlan(
@@ -2272,34 +1614,7 @@ function lowerEffectPlan(
       line,
     });
   }
-  for (const update of plan.cellUpdates) {
-    statements.push(...lowerV2Statement({
-      kind: "v2_update",
-      target: update.target,
-      op: update.op,
-      expr: update.expr,
-      line,
-    }, context));
-  }
   return statements;
-}
-
-function deltaAssignStatement(
-  target: string,
-  deltaText: string,
-  line: number,
-  context: V2LoweringContext,
-): Extract<StatementAst, { kind: "assign" }> {
-  const delta = numericLiteralTextValue(deltaText);
-  const exprText = delta !== undefined && delta < 0
-    ? `${target} - ${Math.abs(delta)}`
-    : `${target} + (${deltaText})`;
-  return {
-    kind: "assign",
-    target,
-    expr: lowerV2Expression(exprText, line, context),
-    line,
-  };
 }
 
 function groupedCorrections(plans: LinearDeltaPlan[]): Array<[number, Array<{ target: string; delta: number }>]> {
@@ -2381,27 +1696,28 @@ function linearDeltaExpressionText(plan: LinearDeltaPlan, keyName: string): stri
     : `${variable} - ${Math.abs(plan.intercept)}`;
 }
 
+function deltaAssignStatement(
+  target: string,
+  deltaText: string,
+  line: number,
+  context: V2LoweringContext,
+): Extract<StatementAst, { kind: "assign" }> {
+  const delta = numericLiteralTextValue(deltaText);
+  const exprText = delta !== undefined && delta < 0
+    ? `${target} - ${Math.abs(delta)}`
+    : `${target} + (${deltaText})`;
+  return {
+    kind: "assign",
+    target,
+    expr: lowerV2Expression(exprText, line, context),
+    line,
+  };
+}
+
 function numericLiteralTextValue(text: string): number | undefined {
   if (!isNumericLiteralText(text.trim())) return undefined;
   const value = Number(text.trim());
   return Number.isInteger(value) ? value : undefined;
-}
-
-function numericLiteralValueForExpression(expr: ExpressionAst): number | undefined {
-  if (expr.kind !== "number") return undefined;
-  const value = Number(expr.raw);
-  return Number.isInteger(value) ? value : undefined;
-}
-
-function cellUpdatesEqual(left: CellUpdateEffect[], right: CellUpdateEffect[]): boolean {
-  return left.length === right.length &&
-    left.every((item, index) => compareCellUpdates(item, right[index]!) === 0);
-}
-
-function compareCellUpdates(left: CellUpdateEffect, right: CellUpdateEffect): number {
-  return left.target.localeCompare(right.target) ||
-    left.op.localeCompare(right.op) ||
-    left.expr.localeCompare(right.expr);
 }
 
 function lowerV2Statements(statements: V2StatementAst[], context: V2LoweringContext): StatementAst[] {
@@ -2445,7 +1761,7 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
         return [{ kind: "show", display: statement.inlineName, line: statement.line }];
       }
       if (statement.target === undefined) {
-        throw new ParseError("Show must name a screen, number, or display fragments", statement.line);
+        throw new ParseError("Show must use a number or display fragments", statement.line);
       }
       if (isNumericLiteralText(statement.target)) {
         return [{ kind: "pause", expr: parseExpression(statement.target, statement.line), line: statement.line }];
@@ -2484,8 +1800,12 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
         body: lowerV2Statements(statement.body, context),
         line: statement.line,
       }];
-    case "v2_challenge":
-      return lowerV2Challenge(statement, context);
+    case "v2_loop":
+      return [{
+        kind: "loop",
+        body: lowerV2Statements(statement.body, context),
+        line: statement.line,
+      }];
     case "v2_move":
       return lowerV2Move(statement, context);
     case "v2_assign":
@@ -2572,39 +1892,6 @@ function cellMembershipExpression(
   if (list !== undefined) return `coord_list_has(${item}, ${list.items.join(", ")})`;
   const mask = cellMaskExpressionForCollection(collection, item, context);
   return mask === undefined ? `bit_has(${collection}, ${item})` : `bit_and(${collection}, ${mask})`;
-}
-
-function lowerV2Challenge(
-  statement: Extract<V2StatementAst, { kind: "v2_challenge" }>,
-  context: V2LoweringContext,
-): StatementAst[] {
-  const failureBody = statement.failureBody ?? [{ kind: "v2_show", target: "0", line: statement.line } satisfies V2StatementAst];
-  return [
-    {
-      kind: "assign",
-      target: statement.challengeTarget,
-      expr: lowerV2Expression(statement.expr, statement.line, context),
-      line: statement.line,
-    },
-    { kind: "show", display: statement.warningScreen, line: statement.line },
-    { kind: "show", display: statement.memoryScreen, line: statement.line },
-    {
-      kind: "input",
-      target: statement.answerInput,
-      line: statement.line,
-    },
-    {
-      kind: "if",
-      condition: {
-        left: { kind: "identifier", name: statement.answerInput },
-        op: "==",
-        right: { kind: "identifier", name: statement.challengeTarget },
-      },
-      thenBody: lowerV2Statements(statement.successBody, context),
-      elseBody: lowerV2Statements(failureBody, context),
-      line: statement.line,
-    },
-  ];
 }
 
 function lowerV2Move(statement: V2MoveStatementAst, context: V2LoweringContext): StatementAst[] {
@@ -2995,11 +2282,7 @@ function lowerCyclicCounterMatch(statement: V2MatchStatementAst, context: V2Lowe
       }],
       line: statement.line,
     },
-    ...lowerEffectPlan({
-      keys: sorted.map((row) => row.next),
-      deltas: plans,
-      cellUpdates: [],
-    }, variable, statement.line, context),
+    ...lowerEffectPlan({ deltas: plans }, variable, statement.line, context),
   ];
 }
 
@@ -3257,14 +2540,12 @@ function v2StatementTerminates(
         v2StatementsTerminate(statement.elseBody, context, new Set(seenRules));
     case "v2_while":
       return false;
+    case "v2_loop":
+      return false;
     case "v2_match":
       return statement.otherwise !== undefined &&
         statement.cases.every((matchCase) => v2StatementTerminates(matchCase.action, context, new Set(seenRules))) &&
         v2StatementTerminates(statement.otherwise, context, new Set(seenRules));
-    case "v2_challenge":
-      return statement.failureBody !== undefined &&
-        v2StatementsTerminate(statement.successBody, context, new Set(seenRules)) &&
-        v2StatementsTerminate(statement.failureBody, context, new Set(seenRules));
     default:
       return false;
   }
@@ -3406,15 +2687,11 @@ function substituteV2Statement(statement: V2StatementAst, replacements: Map<stri
       };
       return substituted;
     }
-    case "v2_challenge": {
-      const substituted: V2ChallengeStatementAst = {
+    case "v2_loop": {
+      const substituted: V2LoopStatementAst = {
         ...statement,
-        expr: substituteV2Text(statement.expr, replacements),
-        successBody: substituteV2Statements(statement.successBody, replacements),
+        body: substituteV2Statements(statement.body, replacements),
       };
-      if (statement.failureBody !== undefined) {
-        substituted.failureBody = substituteV2Statements(statement.failureBody, replacements);
-      }
       return substituted;
     }
     case "v2_move":

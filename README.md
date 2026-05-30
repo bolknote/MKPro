@@ -52,7 +52,7 @@ write-to-memory handler runs, so the page only sees MK-61 hex opcodes.
 ## MK-Pro Language
 
 MK-Pro is a single V2 language for game/application intent. Programs describe
-state, reads, screens, rules, and tables. The compiler decides
+state, reads, display output, loops, and functions. The compiler decides
 whether that becomes registers, stack scheduling, address constants, dark
 entries, overlays, X2/display bytes, or other MK-61 tricks.
 
@@ -65,27 +65,27 @@ program TinyGame {
     food: counter 0..9 = 5
   }
 
-  screen main {
-    show player, food
+  fn main() {
+    show(player, food)
   }
 
-  turn {
-    show main
-    read key
+  loop {
+    main()
+    key = read()
 
     match key {
-      2, 4, 6, 8 => go direction(key)
-      otherwise => game_over
+      2, 4, 6, 8 => go(direction(key))
+      otherwise => game_over()
     }
   }
 
-  rule go delta {
+  fn go(delta) {
     player += delta
-    show main
+    main()
   }
 
-  rule game_over {
-    stop 0
+  fn game_over() {
+    halt(0)
   }
 }
 ```
@@ -105,7 +105,7 @@ All top-level `examples/*.mkpro` programs are runnable MK-Pro programs. They cov
 - `examples/lunar.mkpro`: numeric landing game with counters and touchdown rules.
 - `examples/human.mkpro`: small counter game used as syntax smoke test.
 - `examples/alaram.mkpro`: cockpit interceptor port that fits the original.
-- `examples/cave-sketch.mkpro`: compact cave sketch with world movement.
+- `examples/cave-sketch.mkpro`: compact cave sketch with generated board movement.
 - `examples/dangerous-loading.mkpro`: ferry/loading game whose natural default
   command branch compiles smaller than the original.
 - `examples/dungeon.mkpro`: Lord_BSS corridor dungeon port that fits the original.
@@ -149,8 +149,8 @@ program reports, and the headless emulator loader smoke test.
   jumps to the address".
 - Peephole optimization for redundant `X->П r ; П->X r` pairs at synthetic
   boundaries in compiler-generated lowering.
-- MK-Pro lowers high-level `program`, `state`, `screen`, `read`, `match`,
-  `challenge`, counter updates, and rule calls through ordinary compiler IR.
+- MK-Pro lowers high-level `program`, `state`, `loop`, `read`, `match`,
+  `show`, counter updates, and function calls through ordinary compiler IR.
 - JSON reports include IR stats, layout cell roles, candidate lowerings, and
   a budget summary.
 - JSON/explain reports include an automatic optimizer capability matrix:

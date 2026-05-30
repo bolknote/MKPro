@@ -29,7 +29,7 @@ const SOURCE = `program Split {
     lo: counter 0..999 = 0
   }
 
-  turn {
+  loop {
     x = read()
     hi = int(x / 4)
     lo = frac(x / 4)

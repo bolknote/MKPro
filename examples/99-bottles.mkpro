@@ -9,11 +9,7 @@ program NinetyNineBottles {
     bottles: counter 0..99 = stack.X
   }
 
-  screen beer {
+  loop {
     show("BEEr ", bottles:02)
-  }
-
-  turn {
-    show(beer)
   }
 }

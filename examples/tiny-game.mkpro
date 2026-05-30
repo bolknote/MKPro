@@ -9,10 +9,6 @@ program TinyDialGame {
     charge: counter 0..9 = 8
   }
 
-  screen dial_screen {
-    show(dial, charge)
-  }
-
   fn ignored() {
     halt(0)
   }
@@ -21,8 +17,8 @@ program TinyDialGame {
     halt(6)
   }
 
-  turn {
-    show(dial_screen)
+  loop {
+    show(dial, charge)
     key = read()
 
     match key {
@@ -36,7 +32,7 @@ program TinyDialGame {
     // Losing charge is visible but not fatal until the counter's own terminal
     // declaration fires.
     charge--
-    show(dial_screen)
+    show(dial, charge)
   }
 
 }

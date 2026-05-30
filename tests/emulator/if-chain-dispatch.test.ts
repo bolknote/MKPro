@@ -23,7 +23,7 @@ const SOURCE = `program IfChainProbe {
     b: counter 0..9 = 0
     result: counter 0..99 = 0
   }
-  turn {
+  loop {
     if a + b == 1 {
       result = 11
     }

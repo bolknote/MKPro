@@ -1,7 +1,7 @@
 # MK-Pro Language
 
 MK-Pro describes a compact calculator program in human terms: state, reads,
-screen output, and functions. It does not ask the author to enable
+display output, loops, and functions. It does not ask the author to enable
 dark entries, X2 tricks, overlays, or undocumented opcodes. Those are MK-61
 machine capabilities, and the optimizer may use them whenever
 its effect checks and emulator facts allow the rewrite.
@@ -19,7 +19,7 @@ program CounterGame {
     food: counter 0..9 = 5
   }
 
-  screen main {
+  fn main_screen() {
     show(score, food)
   }
 
@@ -27,8 +27,8 @@ program CounterGame {
     halt(0)
   }
 
-  turn {
-    show(main)
+  loop {
+    main_screen()
     key = read()
 
     match key {
@@ -40,12 +40,12 @@ program CounterGame {
 
   fn gain() {
     score++
-    show(main)
+    main_screen()
   }
 
   fn spend() {
     food--
-    show(main)
+    main_screen()
   }
 }
 ```
@@ -74,7 +74,7 @@ Only optional report metadata belongs outside `program`:
 
 Game meaning belongs inside `program`. Counters, cell sets, maps, events,
 random, or packed-table facts should become ordinary declarations, `state`,
-`world`, `encounters`, functions, and screens. The compiler report shows which
+loops, matches, and functions. The compiler report shows which
 registers, overlays, setup
 constants, hex mantissas, random initialization, or other implementation tactics
 were selected.
@@ -85,26 +85,24 @@ The current human DSL surface inside `program` is:
 
 - `state { ... }` for game state, counters, masks, coordinates, and
   scratch fields.
-- `screen name { show(...) }` for reusable display layouts.
 - `name: board(0..9, 0..9)` for fixed-board coordinate domains.
-- `world` for movement games with coordinates and generated rooms.
-- `encounters expr { ... }` for event tables.
-- `turn { ... }` for the main game loop and `fn name(...) { ... }` for named
+- `name: board(encoding)` for compact generated coordinate domains.
+- `loop { ... }` for the main game loop and `fn name(...) { ... }` for named
   actions.
-- `name = read()` inside a turn or function for a player-entered value.
+- `name = read()` inside a loop or function for a player-entered value.
 
 Functions should stay at the level of game actions: `player = move(player, south)`,
 `safe_landing()`, normal assignments, comparisons, dispatch, and halts. The
 lowerer turns those into assignments, display commands, dispatch, and stops.
 
-Screen output is a list of visible fragments. A fragment can be state or text:
+Display output is a list of visible fragments. A fragment can be state or text:
 
 ```mkpro
 state {
   bottles: counter 0..99 = stack.X
 }
 
-screen beer {
+fn beer() {
   show("BEEr ", bottles:02)
 }
 ```
@@ -115,7 +113,7 @@ space or `show(a, "-", b)` for `a-b`. Adjacent fragments without commas are a
 syntax error. A source can request a fixed width with zero
 padding, such as `bottles:02` or `score:03`; without an explicit width, the
 counter range gives the natural visible width (`0..99` is two digits,
-`0..9999` is four). The compiler decides whether that screen becomes ordinary
+`0..9999` is four). The compiler decides whether that display becomes ordinary
 numeric output, packed display bytes, sign-digit forms, `К ИНВ`, or another
 proved MK-61 lowering.
 
@@ -209,16 +207,16 @@ fn touchdown() {
 }
 ```
 
-Use `halt(value)` when the terminal display is a value. Use `show(screen)` followed
-by `halt()` when the terminal display is a screen. Single-use terminal functions are
+Use `halt(value)` when the terminal display is a value. Use `show(...)` followed
+by `halt()` when the terminal display is text or multiple fragments. Single-use terminal functions are
 inlined, and shared terminal functions can be lowered as direct jumps by the
 optimizer, so authors do not need a separate terminal form for layout reasons.
 Function names must be unique, and a call must reference a declared function.
 
 ## Boards And Cell Sets
 
-Use `board` when a game is about probes, shots, or pieces on a fixed board
-rather than movement through a world. Board coordinates are ranges, not a
+Use `board` when a game is about probes, shots, pieces, or generated movement
+domains. Rectangular board coordinates are ranges, not a
 separate `10x10` mini-syntax:
 
 ```mkpro
@@ -273,23 +271,25 @@ The top-level repository examples are runnable MK-Pro programs:
 
 `examples/pending-optimizer/*.mkpro` contains ports that lower through ordinary
 IR but are still too large for MK-61 or their reference. Source-level board and
-world queries are part of the language surface, not a separate draft bucket.
+cell queries are part of the language surface, not a separate draft bucket.
 
-## World Blocks
+## Board Domains
 
-`world` declares the coordinate used by movement functions:
+`board` declares a coordinate domain. Rectangular boards use explicit ranges:
 
 ```mkpro
-world giant_country {
-  position pos {
-    encoding decimal_player
-  }
-}
+field: board(0..9, 0..9)
 ```
 
-This is intentionally about world semantics, not storage. A `world` block is a real
-semantic commitment: if the compiler has no lowerer for that world operation, it
-rejects the program instead of selecting a canned game template.
+Compact generated boards use an encoding name:
+
+```mkpro
+giant_country: board(decimal_player)
+```
+
+This is a semantic commitment, not a storage hint: if the compiler has no lowerer
+for that board operation, it rejects the program instead of selecting a canned
+game template.
 
 Movement functions should use `move(...)` when they mean movement rather than coordinate
 arithmetic:
@@ -297,7 +297,7 @@ arithmetic:
 ```mkpro
 fn move_south() {
   player = move(player, south)
-  show(cave_screen)
+  cave_screen()
 }
 
 fn move_dir(dir) {
@@ -323,7 +323,7 @@ If a function needs to remember a blocked destination, write that as normal stat
 `next = player + dir`, then assign `blocked = next` only in the branch where a
 wall was actually hit.
 
-World queries use the same expression position as ordinary formulas:
+Board queries use the same expression position as ordinary formulas:
 
 ```mkpro
 fn inspect_cell() {
@@ -335,9 +335,9 @@ fn move_monster() {
 }
 ```
 
-`cell_at(world, pos)` reads the generated tile/event code for a world position.
-`random_cell(world)` asks the compiler for a compact random coordinate for that
-world lowerer.
+`cell_at(board, pos)` reads the generated tile/event code for a board position.
+`random_cell(board)` asks the compiler for a compact random coordinate for that
+board lowerer.
 
 ## Formulas
 
@@ -367,9 +367,9 @@ walls = cell_set(walls, x, y)
 walls = cell_clear(walls, x, y)
 walls = cell_toggle(walls, x, y)
 
-code = digit_at(screen, 2)
-screen = digit_add(screen, 1, 7)
-screen = digit_set(screen, 2, 9)
+code = digit_at(display_value, 2)
+display_value = digit_add(display_value, 1, 7)
+display_value = digit_set(display_value, 2, 9)
 
 near = near_any(room, 1, pit1, pit2)
 hit = eq_any(room, bat1, bat2)
@@ -395,8 +395,8 @@ value equals at least one candidate; `eq_any(...) != 0` means it equals none.
 ## Raw Blocks
 
 Use `raw` only when a program really needs a calculator command sequence that
-does not yet have a semantic helper. A raw block is allowed inside `turn`, `fn`,
-`if`, `match`, and `challenge` bodies, but it must declare its contract:
+does not yet have a semantic helper. A raw block is allowed inside `loop`, `fn`,
+`if`, and `match` bodies, but it must declare its contract:
 
 ```mkpro
 fn invert_sum() {
@@ -480,34 +480,35 @@ directly: `1F`, `2F`, `3D`, `3E`, `4F`, `5F`, `6F`, `7F`..`EF`, and
 `F0`..`FF`. See `docs/03-command-reference.md` for the command catalog and
 machine notes.
 
-## Encounter Tables
+## Event Dispatch
 
-Use `encounters expr` when a tile or event code selects one of several actions:
+Use `match` when a tile or event code selects one of several actions. If a case
+needs several statements, put them in a function and call it from the case:
 
 ```mkpro
-encounters tile {
-  0 {
-    show(cave)
-  }
+match tile {
+  0 => cave()
+  3 => event_3(tile)
+}
 
-  3 {
-    challenge tile as challenge using warning, memory, answer {
-      success {
-        strength++
-        score++
-        plans -= pos
-      }
-      failure {
-        strength -= 3
-      }
-    }
+fn event_3(question) {
+  memory_code = question
+  warning()
+  memory()
+  answer = read()
+  if answer == memory_code {
+    strength++
+    score++
+    plans -= pos
+  }
+  else {
+    strength -= 3
   }
 }
 ```
 
-The parser lowers this to a generated `encounter kind` procedure with compact
-dispatch. The author writes encounter meaning; the compiler chooses dispatch
-layout.
+The author writes ordinary control flow. The compiler still chooses dispatch
+layout, inlining, tail sharing, and branch removal.
 
 ## Optimizer Contract
 
@@ -535,7 +536,7 @@ The source only states what is allowed semantically. The report explains:
 
 Unsupported high-level effects fail compilation instead of becoming comments.
 There is no production spatial template path: spatial programs must lower from
-their actual AST nodes through ordinary IR. Board/world/cell queries lower into
+their actual AST nodes through ordinary IR. Board/cell queries lower into
 the same expression and control-flow IR as the rest of the language.
 
 `reference` is report metadata only and must not change code generation. For
@@ -569,20 +570,21 @@ The parser keeps these high-level statements as typed source nodes:
 - `name++`
 - `name--`
 - `if predicate { ... } else { ... }`
-- `challenge expr as memory_var using warning_screen, memory_screen, answer_input { ... }`
+- `while predicate { ... }`
+- `loop { ... }`
 - `name = move(pos, direction)`
 - `fn_name(arg1, arg2)`
 - `match expr { values => action }`
 - query expressions: `line_count(set, cell)`, `neighbor_count(set, cell)`,
-  `cell_at(world, pos)`, and `random_cell(world)`
+  `cell_at(board, pos)`, and `random_cell(board)`
 - formula helpers: `pow`, `bit_mask`, `bit_has`, `bit_set`, `bit_clear`,
   `bit_toggle`, `cell_mask`, `cell_has`, `cell_set`, `cell_clear`,
   `cell_toggle`, `digit_at`, `digit_add`, `digit_set`, `near_any`, and `eq_any`
 - contracted `raw { ... }` blocks for explicit MK-61 command sequences
 
-Assignments, updates, comparison predicates, function parameters, and function calls
-lower through the generic compiler path. Query expressions are captured as
-spatial query nodes before code generation. A `turn` is a real loop, and `fn` blocks
+Assignments, updates, comparison predicates, function parameters, loops, and
+function calls lower through the generic compiler path. Query expressions are captured as
+spatial query nodes before code generation. A `loop` is a real loop, and `fn` blocks
 compile as `ПП`/`В/О` procedures, direct terminal jumps, or inline code depending
 on the compiler's cost model and termination analysis. Calls must pass exactly
 the parameters declared by the function.
@@ -610,62 +612,6 @@ Statement-level actions use the same call shape as the rest of the language:
 write `go(direction(key))`, because `go` is a function call and
 `direction(key)` is an expression. Built-in names such as `move`, `show`, `read`,
 and `halt` cannot be used as function names.
-
-## Human-Facing Game Sugar
-
-Repeated game mechanics should be written once as intent, not expanded into the
-same input/display/branch boilerplate everywhere.
-
-`challenge` describes the common “show warning, show memory value, read answer,
-then apply success/failure effects” pattern used by the encounter optimizer:
-
-```mkpro
-fn skeleton() {
-  challenge tile as challenge using warning, memory, answer {
-    success {
-      strength++
-      score++
-      plans -= pos
-    }
-    failure {
-      strength -= 3
-    }
-  }
-}
-```
-
-This lowers as if the source had said:
-
-```mkpro
-challenge = memory_code(tile)
-show(warning)
-show(memory)
-answer = read()
-if answer == challenge {
-  // success body
-}
-else {
-  // failure body
-}
-```
-
-The generated value, warning screen, memory screen, and answer input are explicit:
-
-```mkpro
-challenge tile as monster_code using warning, memory, answer {
-  success {
-    score++
-  }
-  failure {
-    strength -= 3
-  }
-}
-```
-
-The construct is semantic sugar only. It does not request a particular MK-61
-layout. The optimizer may still inline it, share tails, branch-remove the
-success/failure effects, or route it through an explicit future semantic
-lowerer that is proved from the source.
 
 Current scalar lowerings are still deliberately small and auditable:
 
@@ -733,7 +679,7 @@ candidates:
   JSON and an extra setup line in `explain`;
 - automatic constants: reserves spare registers for expensive constants such as
   `10`, `20`, and `100`;
-- show/read fusion: `show(screen)` followed by `key = read()` uses one calculator
+- show/read fusion: `show(...)` followed by `key = read()` uses one calculator
   stop, not two;
 - direction dispatch: groups many direction-key cases into one default
   movement path plus explicit rare commands;

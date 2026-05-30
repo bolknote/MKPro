@@ -16,6 +16,12 @@ function stepComments(result: ReturnType<typeof compileOk>): string[] {
   return result.steps.map((step) => step.comment ?? "");
 }
 
+function inlineDisplaySourceComments(result: ReturnType<typeof compileOk>): string[] {
+  return stepComments(result).filter((comment) =>
+    /^display __inline_show_\d+_\d+ source$/u.test(comment)
+  );
+}
+
 function runCompiledDisplay(source: string): string {
   const { MK61 } = require("../emulator/mk61.cjs") as {
     MK61: new (options?: { extended?: boolean }) => {
@@ -53,13 +59,11 @@ program ReadyPackedDisplayPrefix {
     prefix: packed = 0
     suffix: counter 0..99 = 0
   }
-  screen view {
-    show(prefix, suffix:02)
-  }
-  turn {
+
+  loop {
     prefix = int(raw / 100) * 100
     suffix = raw - prefix
-    show(view)
+    show(prefix, suffix:02)
   }
 }
 `);
@@ -75,17 +79,15 @@ program CurrentXFirstDisplayField {
     a: counter 0..9 = 1
     b: counter 0..99 = 23
   }
-  screen view {
-    show(a, b)
-  }
-  turn {
+
+  loop {
     a = 7
-    show(view)
+    show(a, b)
   }
 }
 `);
 
-    expect(stepComments(result).filter((comment) => comment === "display view source")).toHaveLength(1);
+    expect(inlineDisplaySourceComments(result)).toHaveLength(1);
     expect(hasOptimization(result, "display-stack-reuse")).toBe(false);
   });
 
@@ -97,19 +99,17 @@ program CurrentXLastDisplayField {
     b: counter 0..9 = 2
     c: counter 0..9 = 3
   }
-  screen view {
-    show(a, b, c)
-  }
-  turn {
+
+  loop {
     c = 7
-    show(view)
+    show(a, b, c)
   }
 }
 `;
     const result = compileOk(source);
 
     expect(hasOptimization(result, "display-current-x-suffix-reuse")).toBe(true);
-    expect(stepComments(result).filter((comment) => comment === "display view source")).toHaveLength(2);
+    expect(inlineDisplaySourceComments(result)).toHaveLength(2);
     expect(stepComments(result).filter((comment) => comment === "packed display current field append")).toHaveLength(1);
     expect(runCompiledDisplay(source)).toBe("127,");
   });
@@ -122,19 +122,17 @@ program CurrentXMiddleDisplayField {
     b: counter 0..9 = 2
     c: counter 0..9 = 3
   }
-  screen view {
-    show(a, b, c)
-  }
-  turn {
+
+  loop {
     b = 7
-    show(view)
+    show(a, b, c)
   }
 }
 `;
     const result = compileOk(source);
 
     expect(hasOptimization(result, "display-current-x-middle-reuse")).toBe(true);
-    expect(stepComments(result).filter((comment) => comment === "display view source")).toHaveLength(2);
+    expect(inlineDisplaySourceComments(result)).toHaveLength(2);
     expect(stepComments(result).filter((comment) => comment === "packed display current field append")).toHaveLength(1);
     expect(runCompiledDisplay(source)).toBe("173,");
   });
@@ -146,15 +144,11 @@ program DecimalLiteralFields {
     a: counter 0..9 = 1
     b: counter 0..9 = 2
   }
-  screen short {
+
+
+  loop {
     show(a, 0, b)
-  }
-  screen long {
     show(a, 012, b)
-  }
-  turn {
-    show(short)
-    show(long)
   }
 }
 `;
@@ -167,11 +161,9 @@ program ShortDecimalLiteralField {
     a: counter 0..9 = 1
     b: counter 0..9 = 2
   }
-  screen short {
+
+  loop {
     show(a, 0, b)
-  }
-  turn {
-    show(short)
   }
 }
 `)).toBe("102,");
@@ -181,11 +173,9 @@ program LongDecimalLiteralField {
     a: counter 0..9 = 1
     b: counter 0..9 = 2
   }
-  screen long {
+
+  loop {
     show(a, 012, b)
-  }
-  turn {
-    show(long)
   }
 }
 `)).toBe("10122,");
@@ -195,11 +185,9 @@ program BareDecimalLiteralFields {
     a: counter 0..9 = 2
     b: counter 0..9 = 3
   }
-  screen view {
+
+  loop {
     show(123, a, b, 1)
-  }
-  turn {
-    show(view)
   }
 }
 `)).toBe("123231,");
@@ -213,11 +201,9 @@ program PreloadedDisplayScales {
     b: counter 0..99 = 23
     c: counter 0..999 = 456
   }
-  screen view {
+
+  loop {
     show(a, b, c)
-  }
-  turn {
-    show(view)
   }
 }
 `);
@@ -236,14 +222,12 @@ program RepeatedShowBody {
     b: counter 0..99 = 23
     c: counter 0..999 = 456
   }
-  screen view {
-    show(a, b, c)
-  }
-  turn {
+
+  loop {
     match selector {
-      1 => show(view)
-      2 => show(view)
-      3 => show(view)
+      1 => show(a, b, c)
+      2 => show(a, b, c)
+      3 => show(a, b, c)
       otherwise => halt(0)
     }
   }
@@ -263,11 +247,9 @@ program LiteralSeparatedScoreboard {
     total: counter 0..999 = 0
     roll: counter 0..99 = 0
   }
-  screen status {
+
+  loop {
     show(die, ".-", score:02, "-", total:03, "-", roll:02)
-  }
-  turn {
-    show(status)
   }
 }
 `);
@@ -283,11 +265,9 @@ program ExplicitSpaceDisplay {
     a: counter 1..9 = 1
     b: counter 0..9 = 2
   }
-  screen view {
+
+  loop {
     show(a, " ", b)
-  }
-  turn {
-    show(view)
   }
 }
 `;
@@ -315,11 +295,9 @@ program LiteralSeparatedScoreboardRun {
     total: counter 0..999 = 0
     roll: counter 0..99 = 0
   }
-  screen status {
+
+  loop {
     show(die, ".-", score:02, "-", total:03, "-", roll:02)
-  }
-  turn {
-    show(status)
   }
 }
 `);
@@ -357,13 +335,11 @@ program DashedCoordReportRun {
     bearing: counter 0..9 = 0
   }
 
-  screen report {
-    show("--", cell:02, "--", bearing)
-  }
 
-  turn {
+
+  loop {
     bearing = line_count(foxes, cell)
-    show(report)
+    show("--", cell:02, "--", bearing)
   }
 }
 `);
@@ -394,21 +370,17 @@ program FusedFoxScan {
     bearing: counter 0..9 = 0
   }
 
-  screen hit {
-    show("-20")
-  }
 
-  screen report {
-    show("--", cell:02, "--", bearing)
-  }
 
-  turn {
+
+
+  loop {
     cell = read()
     if cell in foxes {
-      show(hit)
+      show("-20")
     }
     bearing = line_count(foxes, cell)
-    show(report)
+    show("--", cell:02, "--", bearing)
   }
 }
 `);
@@ -440,11 +412,9 @@ program NonZeroCounterScoreboardRun {
     total: counter 0..999 = 6
     roll: counter 1..99 = 2
   }
-  screen status {
+
+  loop {
     show(die, ".-", score:02, "-", total:03, "-", roll:02)
-  }
-  turn {
-    show(status)
   }
 }
 `);
@@ -469,13 +439,11 @@ program RepeatedLiteralSeparatedScoreboard {
     total: counter 0..999 = 0
     roll: counter 0..99 = 0
   }
-  screen status {
-    show(die, ".-", score:02, "-", total:03, "-", roll:02)
-  }
-  turn {
+
+  loop {
     match selector {
-      1 => show(status)
-      2 => show(status)
+      1 => show(die, ".-", score:02, "-", total:03, "-", roll:02)
+      2 => show(die, ".-", score:02, "-", total:03, "-", roll:02)
       otherwise => halt(0)
     }
   }
@@ -485,7 +453,7 @@ program RepeatedLiteralSeparatedScoreboard {
     expect(hasOptimization(result, "display-byte-helper")).toBe(true);
     expect(hasOptimization(result, "display-byte-helper-call")).toBe(true);
     expect(result.report.candidates.some((candidate) =>
-      candidate.site === "display status" &&
+      candidate.site.startsWith("display __inline_show_") &&
       candidate.variant === "display-byte-helper" &&
       candidate.selected
     )).toBe(true);
@@ -498,16 +466,16 @@ program DisplayStrategySelection {
     a: counter 0..9 = 1
     b: counter 0..99 = 23
   }
-  screen view {
+
+  loop {
     show(a, b)
-  }
-  turn {
-    show(view)
   }
 }
 `);
 
-    const displayCandidates = result.report.candidates.filter((candidate) => candidate.site === "display view");
+    const displayCandidates = result.report.candidates.filter((candidate) =>
+      candidate.site.startsWith("display __inline_show_")
+    );
     expect(displayCandidates.map((candidate) => candidate.variant)).toEqual(expect.arrayContaining([
       "decimal-pack",
       "packed-storage-reuse",
@@ -521,11 +489,9 @@ program DisplayStrategySelection {
   it("lowers literal calculator video strings without source raw blocks", () => {
     const result = compileOk(`
 program LiteralVideoScreen {
-  screen cave {
+
+  loop {
     show("8.E6-EГ C")
-  }
-  turn {
-    show(cave)
   }
 }
 `);
@@ -538,18 +504,13 @@ program LiteralVideoScreen {
   it("lowers empty literal screens as plain pauses", () => {
     const result = compileOk(`
 program EmptyLiteralScreen {
-  screen explicit {
+
+
+
+  loop {
     show("")
-  }
-  screen bare {
     show()
-  }
-  screen implicit {
-  }
-  turn {
-    show(explicit)
-    show(bare)
-    show(implicit)
+    show()
   }
 }
 `);
@@ -559,21 +520,17 @@ program EmptyLiteralScreen {
     expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "display-bytes")).toBe(false);
     expect(runCompiledDisplay(`
 program EmptyLiteralScreenRun {
-  screen blank {
+
+  loop {
     show("")
-  }
-  turn {
-    show(blank)
   }
 }
 `)).toBe("0,");
     expect(runCompiledDisplay(`
 program BareEmptyScreenRun {
-  screen blank {
-    show()
-  }
-  turn {
-    show(blank)
+
+  loop {
+    show("")
   }
 }
 `)).toBe("0,");
@@ -582,15 +539,11 @@ program BareEmptyScreenRun {
   it("lowers literal calculator error screens as resumable pauses", () => {
     const source = `
 program LiteralErrorScreen {
-  screen mine {
+
+
+  loop {
     show("ЕГГОГ")
-  }
-  screen next {
     show("1")
-  }
-  turn {
-    show(mine)
-    show(next)
   }
 }
 `;
@@ -624,11 +577,9 @@ program LiteralErrorScreen {
   it("lowers zero-digit literal tails through the 0C-tail display trick", () => {
     const source = `
 program ZeroDigitTailScreen {
-  screen tail {
+
+  loop {
     show("2Е")
-  }
-  turn {
-    show(tail)
   }
 }
 `;
@@ -641,19 +592,13 @@ program ZeroDigitTailScreen {
   it("lowers arbitrary display-alphabet literals by splicing the first digit", () => {
     const source = `
 program LiteralAlphabetScreen {
-  screen dash {
+
+
+
+  loop {
     show("---")
-  }
-  screen mixed {
     show("Е-LСГ90")
-  }
-  screen eight {
     show("8-LСГ90")
-  }
-  turn {
-    show(dash)
-    show(mixed)
-    show(eight)
   }
 }
 `;
@@ -668,41 +613,33 @@ program LiteralAlphabetScreen {
     expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "display-bytes")).toBe(true);
     expect(runCompiledDisplay(`
 program LiteralDashScreen {
-  screen dash {
+
+  loop {
     show("---")
-  }
-  turn {
-    show(dash)
   }
 }
 `)).toBe("---,");
     expect(runCompiledDisplay(`
 program LiteralMixedScreen {
-  screen mixed {
+
+  loop {
     show("Е-LСГ90")
-  }
-  turn {
-    show(mixed)
   }
 }
 `)).toBe("Е-LСГ90,");
     expect(runCompiledDisplay(`
 program LiteralLeadingMinusScreen {
-  screen mixed {
+
+  loop {
     show("-LСГ90")
-  }
-  turn {
-    show(mixed)
   }
 }
 `)).toBe("-LСГ90,");
     expect(runCompiledDisplay(`
 program LiteralEightScreen {
-  screen mixed {
+
+  loop {
     show("8-LСГ90")
-  }
-  turn {
-    show(mixed)
   }
 }
 `)).toBe("8-LСГ90,");
@@ -711,19 +648,13 @@ program LiteralEightScreen {
   it("lowers game-style text literals that use sign and exponent display slots", () => {
     const source = `
 program GameStyleTextScreens {
-  screen warning {
+
+
+
+  loop {
     show("700-----8")
-  }
-  screen loading {
     show("-9.С L -03")
-  }
-  screen word {
     show("-CЛOBO-")
-  }
-  turn {
-    show(warning)
-    show(loading)
-    show(word)
   }
 }
 `;
@@ -733,31 +664,25 @@ program GameStyleTextScreens {
     expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "display-bytes")).toBe(true);
     expect(runCompiledDisplay(`
 program WarningTextScreen {
-  screen warning {
+
+  loop {
     show("700-----8")
-  }
-  turn {
-    show(warning)
   }
 }
 `)).toBe("7,00----- 08");
     expect(runCompiledDisplay(`
 program SignedCaveTextScreen {
-  screen loading {
+
+  loop {
     show("-9.С L -03")
-  }
-  turn {
-    show(loading)
   }
 }
 `)).toBe("-9,С L -03");
     expect(runCompiledDisplay(`
 program CyrillicWordTextScreen {
-  screen word {
+
+  loop {
     show("-CЛOBO-")
-  }
-  turn {
-    show(word)
   }
 }
 `)).toBe("-СL0L0-,");
@@ -766,11 +691,9 @@ program CyrillicWordTextScreen {
   it("lowers wider sign-digit literal screens through indirect display construction", () => {
     const source = `
 program SignDigitLiteralScreen {
-  screen cave {
+
+  loop {
     show("3Е0000021")
-  }
-  turn {
-    show(cave)
   }
 }
 `;
@@ -791,7 +714,7 @@ program SignDigitLiteralScreen {
     };
     const result = compileMKPro(`
 program LiteralErrorStop {
-  turn {
+  loop {
     show("ЕГГОГ")
     halt()
   }
@@ -811,11 +734,9 @@ program LiteralErrorStop {
   it("lowers signed literal calculator video strings", () => {
     const result = compileOk(`
 program SignedLiteralVideoScreen {
-  screen win {
+
+  loop {
     show("-8CEC6-L-")
-  }
-  turn {
-    show(win)
   }
 }
 `);

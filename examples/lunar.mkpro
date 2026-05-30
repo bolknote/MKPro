@@ -14,18 +14,6 @@ program LunarLander {
     accel: packed = 0
   }
 
-  screen height_view {
-    show(height)
-  }
-
-  screen speed_view {
-    show(speed)
-  }
-
-  screen fuel_view {
-    show(fuel)
-  }
-
   fn safe_landing() {
     halt(777)
   }
@@ -34,10 +22,10 @@ program LunarLander {
     halt(666)
   }
 
-  turn {
-    show(height_view)
-    show(speed_view)
-    show(fuel_view)
+  loop {
+    show(height)
+    show(speed)
+    show(fuel)
     burn = read()
 
     // The model is intentionally compact, but it keeps the landing-game idea:

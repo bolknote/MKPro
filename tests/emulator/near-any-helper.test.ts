@@ -24,7 +24,7 @@ const SOURCE = `program NearAnyHelperProbe {
     result: counter 0..9 = 0
   }
 
-  turn {
+  loop {
     result = 0
     if near_any(room, 1, a, b) >= 0 {
       result = 1

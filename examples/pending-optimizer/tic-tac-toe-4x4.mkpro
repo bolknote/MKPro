@@ -16,10 +16,6 @@ program TicTacToe4x4 {
     turn_count: counter 0..16 = 0
   }
 
-  screen board {
-    show(cell, turn_count)
-  }
-
   fn player_wins() {
     halt(4444)
   }
@@ -32,12 +28,12 @@ program TicTacToe4x4 {
     halt(0)
   }
 
-  turn {
-    show(board)
+  loop {
+    show(cell, turn_count)
     cell = read()
 
     if cell in occupied {
-      show(board)
+      show(cell, turn_count)
     }
     else {
       player_marks += cell
@@ -69,7 +65,7 @@ program TicTacToe4x4 {
           calculator_wins()
         }
         else {
-          show(board)
+          show(cell, turn_count)
         }
       }
     }

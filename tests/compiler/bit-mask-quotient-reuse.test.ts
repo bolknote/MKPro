@@ -15,7 +15,7 @@ program AdjacentSetUpdates {
     mine: cells(grid)
     seen: cells(grid)
   }
-  turn {
+  loop {
     mine += cell
     seen += cell
     halt(mine + seen)
@@ -41,7 +41,7 @@ program SharedBitMaskHelper {
     second: cells(grid)
     score: counter 0..9 = 0
   }
-  turn {
+  loop {
     cell = read()
     if cell in first {
       score++

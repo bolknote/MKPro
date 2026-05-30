@@ -16,16 +16,12 @@ program Minesweeper9x7 {
     clue: counter 0..8 = 0
   }
 
-  screen result {
-    show(clue)
-  }
-
   fn exploded() {
     show("ЕГГОГ")
     halt()
   }
 
-  turn {
+  loop {
     probe = read()
 
     if probe in mines {
@@ -40,6 +36,6 @@ program Minesweeper9x7 {
     // pmk39 has no flagging, opened-cell state, or victory counter. Like the
     // published game, safe cells only report the eight-neighbor mine count.
     clue = neighbor_count(mines, probe)
-    show(result)
+    show(clue)
   }
 }

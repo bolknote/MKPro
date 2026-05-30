@@ -18,30 +18,18 @@ program Dungeon {
     wall: counter 0..9 = 0
   }
 
-  world dungeon {
-    // Dungeon is a corridor, not an open board: left/right change the position,
-    // up/down change height, and the plan cell decides whether the move stands.
-    position pos {
-      encoding corridor_plan
-    }
-  }
-
-  screen place {
-    show(pos, height)
-  }
-
-  screen map {
-    show(plan)
-  }
+  // Dungeon is a corridor, not an open board: left/right change the position,
+  // up/down change height, and the plan cell decides whether the move stands.
+  dungeon: board(corridor_plan)
 
   fn lost() {
     show("ЕГГОГ")
     halt()
   }
 
-  turn {
-    show(place)
-    show(map)
+  loop {
+    show(pos, height)
+    show(plan)
     action = read()
 
     match action {
@@ -89,7 +77,7 @@ program Dungeon {
       bump()
     }
     else {
-      show(place)
+      show(pos, height)
     }
   }
 
@@ -105,6 +93,6 @@ program Dungeon {
     // slice of dungeon and shifts positions 7 and 8 back to 1 and 2.
     pos = 2
     plan = random()
-    show(map)
+    show(plan)
   }
 }

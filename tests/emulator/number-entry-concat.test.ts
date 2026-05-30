@@ -19,7 +19,7 @@ function program(body: string): string {
     r: counter 0..9999 = 0
   }
 
-  turn {
+  loop {
     x = read()
     r = ${body}
     halt(r)

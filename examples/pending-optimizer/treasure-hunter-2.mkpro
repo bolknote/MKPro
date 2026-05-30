@@ -20,25 +20,12 @@ program TreasureHunter2 {
     ladder_top: coord(cave)
   }
 
-  world cave {
-    // The world is mostly vertical. Horizontal motion searches rooms on a floor;
-    // holes and ladders shift the player through the nine-floor stack.
-    position pos {
-      encoding floor_plan
-    }
-
-  }
-
-  screen maze {
-    show(pos, floor_view, treasure)
-  }
-
-  screen exit {
-    show(treasure)
-  }
+  // The board is mostly vertical. Horizontal motion searches rooms on a floor;
+  // holes and ladders shift the player through the nine-floor stack.
+  cave: board(floor_plan)
 
   fn escaped() {
-    show(exit)
+    show(treasure)
     halt(0)
   }
 
@@ -47,7 +34,7 @@ program TreasureHunter2 {
     halt()
   }
 
-  turn {
+  loop {
     if entered == 0 {
       // The original enters from the left wall automatically; if the starting
       // cell is a hole, the first visible state is already lower in the cave.
@@ -55,7 +42,7 @@ program TreasureHunter2 {
       inspect_cell()
     }
     else {
-      show(maze)
+      show(pos, floor_view, treasure)
       action = read()
 
       // The MK-61 prototype uses non-zero X plus the R/GRD/G angle switch for
@@ -66,7 +53,7 @@ program TreasureHunter2 {
         6 => move_right()
         8 => climb_or_descend()
         0 => punch_hole()
-        otherwise => show(maze)
+        otherwise => show(pos, floor_view, treasure)
       }
     }
   }
@@ -79,7 +66,7 @@ program TreasureHunter2 {
         escaped()
       }
       else {
-        show(maze)
+        show(pos, floor_view, treasure)
       }
     }
     else {
@@ -96,13 +83,13 @@ program TreasureHunter2 {
       inspect_cell()
     }
     else {
-      show(maze)
+      show(pos, floor_view, treasure)
     }
   }
 
   fn climb_or_descend() {
     if pos == dug_pos {
-      show(maze)
+      show(pos, floor_view, treasure)
     }
     else {
       if floor_view == 3 {
@@ -113,7 +100,7 @@ program TreasureHunter2 {
           inspect_cell()
         }
         else {
-          show(maze)
+          show(pos, floor_view, treasure)
         }
       }
       else {
@@ -123,7 +110,7 @@ program TreasureHunter2 {
           descend()
         }
         else {
-          show(maze)
+          show(pos, floor_view, treasure)
         }
       }
     }
@@ -165,13 +152,13 @@ program TreasureHunter2 {
 
   fn classify_tile() {
     if pos == collected_treasure {
-      show(maze)
+      show(pos, floor_view, treasure)
     }
     else {
       match floor_view {
         1 => collect_treasure()
         2 => descend()
-        otherwise => show(maze)
+        otherwise => show(pos, floor_view, treasure)
       }
     }
   }
@@ -179,6 +166,6 @@ program TreasureHunter2 {
   fn collect_treasure() {
     collected_treasure = pos
     treasure++
-    show(maze)
+    show(pos, floor_view, treasure)
   }
 }
