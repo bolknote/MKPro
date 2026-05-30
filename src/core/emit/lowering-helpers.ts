@@ -615,26 +615,37 @@ export function matchResidualGuardedUpdate(
   bound: number;
   delta: number;
 } | undefined {
-  const first = statement.thenBody[0];
-  if (first?.kind !== "assign") return undefined;
   const condition = statement.condition;
-  if (condition.op !== "<") return undefined;
+  if (condition.op !== "<" && condition.op !== ">=") return undefined;
   if (condition.left.kind !== "identifier") return undefined;
   const bound = numericLiteralValue(condition.right);
   if (bound === undefined) return undefined;
+  const target = condition.left.name;
 
-  const delta = matchNumericSelfUpdate(condition.left.name, first.expr);
-  if (delta === undefined || delta === 0) return undefined;
-  if (first.target !== condition.left.name) return undefined;
+  for (let index = 0; index < statement.thenBody.length; index += 1) {
+    const candidate = statement.thenBody[index]!;
+    if (candidate.kind !== "assign") return undefined;
+    if (candidate.target !== target) {
+      if (expressionReferencesIdentifier(candidate.expr, target)) return undefined;
+      continue;
+    }
 
-  return {
-    condition,
-    assignment: first,
-    tail: statement.thenBody.slice(1),
-    target: condition.left.name,
-    bound,
-    delta,
-  };
+    const delta = matchNumericSelfUpdate(target, candidate.expr);
+    if (delta === undefined || delta === 0) return undefined;
+
+    return {
+      condition,
+      assignment: candidate,
+      tail: [
+        ...statement.thenBody.slice(0, index),
+        ...statement.thenBody.slice(index + 1),
+      ],
+      target,
+      bound,
+      delta,
+    };
+  }
+  return undefined;
 }
 
 export function matchNumericSelfUpdate(target: string, expr: ExpressionAst): number | undefined {

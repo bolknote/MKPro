@@ -34,7 +34,11 @@ program Wumpus {
 
   loop {
     sense()
-    show(room, arrows, clue)
+
+    show(room)
+    show(arrows)
+    show(clue)
+
     target = read()
 
     if target >= 0 {

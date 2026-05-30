@@ -308,8 +308,13 @@ interface MantissaExponentDisplayTemplate {
   exponent: DisplayField;
 }
 
+type DisplayMaskLeader =
+  | { kind: "source"; field: DisplayField }
+  | { kind: "literal"; cell: number };
+
 interface MantissaMaskDisplayTemplate {
-  leader: DisplayField;
+  cells: DisplayCell[];
+  leader: DisplayMaskLeader;
   bodyFields: DisplayField[];
   mask: string;
   width: number;
@@ -318,6 +323,7 @@ interface MantissaMaskDisplayTemplate {
 export interface VariableLeadingMantissaMaskDisplayTemplate {
   source: DisplayField;
   split: number;
+  cells: DisplayCell[];
   low: {
     bodyFields: DisplayField[];
     mask: string;
@@ -328,6 +334,20 @@ export interface VariableLeadingMantissaMaskDisplayTemplate {
     mask: string;
     width: number;
   };
+}
+
+type DisplayCell =
+  | { kind: "literal"; cell: number }
+  | { kind: "digit"; field: DisplayField };
+
+type DisplayPlan =
+  | { kind: "mantissa-exponent"; template: MantissaExponentDisplayTemplate }
+  | { kind: "fixed-cells"; template: MantissaMaskDisplayTemplate }
+  | { kind: "variable-leading-cells"; template: VariableLeadingMantissaMaskDisplayTemplate };
+
+interface DisplayPlanningContext {
+  naturalDisplayWidth(source: string): number;
+  findStateField(source: string): StateFieldAst | undefined;
 }
 
 
@@ -539,6 +559,7 @@ function finishCompileAttempt(result: CompileResult, analysis: boolean): Compile
 
 function inlineDisplayStringValues(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
   let rewrittenShows = 0;
+  let guardedShows = 0;
   let inlineCounter = 0;
 
   const stringValue = (expr: ExpressionAst, env: ReadonlyMap<string, string>): string | undefined => {
@@ -598,6 +619,73 @@ function inlineDisplayStringValues(ast: ProgramAst, optimizations: AppliedOptimi
     return { ...statement, display: name };
   };
 
+  const inlineGuardedStringShow = (
+    statements: StatementAst[],
+    start: number,
+    env: ReadonlyMap<string, string>,
+  ): { statement: StatementAst; consumed: number } | undefined => {
+    const first = statements[start];
+    if (first?.kind !== "assign") return undefined;
+    const text = stringValue(first.expr, env);
+    if (text === undefined) return undefined;
+    const target = first.target;
+
+    const guards: Array<{
+      condition: ConditionAst;
+      assignment: Extract<StatementAst, { kind: "assign" }>;
+      line: number;
+    }> = [];
+    let cursor = start + 1;
+    while (true) {
+      const statement = statements[cursor];
+      if (
+        statement?.kind !== "if" ||
+        statement.elseBody !== undefined ||
+        statement.thenBody.length !== 1 ||
+        !expressionIsDeterministic(statement.condition.left) ||
+        !expressionIsDeterministic(statement.condition.right) ||
+        expressionReferencesIdentifier(statement.condition.left, target) ||
+        expressionReferencesIdentifier(statement.condition.right, target)
+      ) {
+        break;
+      }
+      const assignment = statement.thenBody[0];
+      if (assignment?.kind !== "assign" || assignment.target !== target) break;
+      if (stringValue(assignment.expr, env) !== undefined) break;
+      guards.push({ condition: statement.condition, assignment, line: statement.line });
+      cursor += 1;
+    }
+    if (guards.length === 0) return undefined;
+
+    const show = statements[cursor];
+    if (show?.kind !== "show") return undefined;
+    const display = ast.displays.find((candidate) => candidate.name === show.display);
+    if (display === undefined || !display.sources.includes(target)) return undefined;
+
+    const literalEnv = new Map(env);
+    literalEnv.set(target, text);
+    let nested = inlineShow(show, literalEnv);
+
+    const numericEnv = new Map(env);
+    numericEnv.delete(target);
+    for (let index = guards.length - 1; index >= 0; index -= 1) {
+      const guard = guards[index]!;
+      nested = {
+        kind: "if",
+        condition: guard.condition,
+        thenBody: [
+          { ...guard.assignment },
+          inlineShow(show, numericEnv),
+        ],
+        elseBody: [nested],
+        line: guard.line,
+      };
+    }
+
+    guardedShows += 1;
+    return { statement: nested, consumed: cursor - start + 1 };
+  };
+
   const inlineConditionalStringShow = (
     statement: Extract<StatementAst, { kind: "if" }>,
     next: StatementAst | undefined,
@@ -622,6 +710,19 @@ function inlineDisplayStringValues(ast: ProgramAst, optimizations: AppliedOptimi
     };
   };
 
+  const inlineGuardedStringProcShow = (
+    statement: Extract<StatementAst, { kind: "call" }>,
+    next: StatementAst | undefined,
+    env: ReadonlyMap<string, string>,
+  ): StatementAst | undefined => {
+    if (next?.kind !== "show") return undefined;
+    const proc = ast.procs.find((candidate) => candidate.name === statement.block);
+    if (proc === undefined || proc.body.length === 0) return undefined;
+    const guarded = inlineGuardedStringShow([...proc.body, next], 0, env);
+    if (guarded === undefined || guarded.consumed !== proc.body.length + 1) return undefined;
+    return guarded.statement;
+  };
+
   const mergeIfEnvs = (
     before: ReadonlyMap<string, string>,
     branches: Array<ReadonlyMap<string, string>>,
@@ -641,10 +742,26 @@ function inlineDisplayStringValues(ast: ProgramAst, optimizations: AppliedOptimi
     const result: StatementAst[] = [];
     for (let index = 0; index < statements.length; index += 1) {
       const statement = statements[index]!;
+      const guarded = inlineGuardedStringShow(statements, index, env);
+      if (guarded !== undefined) {
+        result.push(guarded.statement);
+        env.delete((statement as Extract<StatementAst, { kind: "assign" }>).target);
+        index += guarded.consumed - 1;
+        continue;
+      }
       if (statement.kind === "if") {
         const inlined = inlineConditionalStringShow(statement, statements[index + 1], env);
         if (inlined !== undefined) {
           result.push(inlined);
+          index += 1;
+          continue;
+        }
+      }
+      if (statement.kind === "call") {
+        const inlined = inlineGuardedStringProcShow(statement, statements[index + 1], env);
+        if (inlined !== undefined) {
+          result.push(inlined);
+          env.clear();
           index += 1;
           continue;
         }
@@ -747,6 +864,12 @@ function inlineDisplayStringValues(ast: ProgramAst, optimizations: AppliedOptimi
     optimizations.push({
       name: "display-string-inline",
       detail: `Inlined ${rewrittenShows} display string value${rewrittenShows === 1 ? "" : "s"} into show(...) templates.`,
+    });
+  }
+  if (guardedShows > 0) {
+    optimizations.push({
+      name: "display-string-guarded-show",
+      detail: `Moved ${guardedShows} guarded display string value${guardedShows === 1 ? "" : "s"} to show(...) branches.`,
     });
   }
   if (removedAssignments > 0) {
@@ -924,6 +1047,7 @@ function compileMKProOnce(
   inlineDisplayStringValues(ast, optimizations);
   hoistOneShotLoopInitializers(ast, optimizations);
   inlineSingleUseConstantGuardedCalls(ast, optimizations);
+  inlineDisplayStringValues(ast, optimizations);
   eliminateUnobservedState(ast, optimizations);
   eliminateIdentityAssignments(ast, optimizations);
   // Value propagation can expose new dead stores and vice-versa, so run the two
@@ -2716,7 +2840,8 @@ export class EmitContext {
   compileStatement(statement: StatementAst): void {
     switch (statement.kind) {
       case "pause":
-        compileExpression(this, statement.expr);
+        if (isZeroExpression(statement.expr)) this.emitZero("pause", statement.line);
+        else compileExpression(this, statement.expr);
         this.emitOp(0x50, "С/П", "pause", statement.line);
         return;
       case "input":
@@ -2744,14 +2869,16 @@ export class EmitContext {
           compileLiteralHalt(this, statement.literal, statement.line);
           return;
         }
-        compileExpression(this, statement.expr);
+        if (isZeroExpression(statement.expr)) this.emitZero("halt", statement.line);
+        else compileExpression(this, statement.expr);
         this.emitOp(0x50, "С/П", "halt", statement.line);
         return;
       case "assign":
         if (compileCoordListLineCountAssignment(this, statement)) return;
         if (compileUnitDecrement(this, statement)) return;
         if (compileSingleBitMaskOpAssignment(this, statement)) return;
-        compileExpression(this, statement.expr);
+        if (isZeroExpression(statement.expr)) this.emitZero(`set ${statement.target}`, statement.line);
+        else compileExpression(this, statement.expr);
         this.emitStore(statement.target, `set ${statement.target}`, statement.line);
         return;
       case "loop": {
@@ -3419,8 +3546,13 @@ export class EmitContext {
     }
     const maskTemplate = this.mantissaMaskDisplayTemplate(display);
     if (maskTemplate !== undefined) {
-      return this.estimateDecimalDisplayCost(maskTemplate.bodyFields, false) + 9 +
-      String(maskTemplate.width - 1).length;
+      const leaderCost =
+        maskTemplate.leader.kind === "literal" && maskTemplate.leader.cell > 9
+          ? 3
+          : 1;
+      return this.estimateDecimalDisplayCost(maskTemplate.bodyFields, false) + 8 +
+        leaderCost +
+        String(maskTemplate.width - 1).length;
     }
     const variableTemplate = this.variableLeadingMantissaMaskDisplayTemplate(display);
     if (variableTemplate === undefined) return UNAVAILABLE_DISPLAY_STRATEGY_COST;
@@ -3432,181 +3564,32 @@ export class EmitContext {
   }
 
 
+  planDisplay(display: ProgramAst["displays"][number]): DisplayPlan[] {
+    return planDisplay(display, this);
+  }
 
   mantissaExponentDisplayTemplate(
     display: ProgramAst["displays"][number],
   ): MantissaExponentDisplayTemplate | undefined {
-    const [leader, firstLiteral, score, secondLiteral, total, thirdLiteral, exponent] = display.items;
-    if (
-      leader?.kind !== "source" ||
-      firstLiteral?.kind !== "literal" ||
-      score?.kind !== "source" ||
-      secondLiteral?.kind !== "literal" ||
-      total?.kind !== "source" ||
-      thirdLiteral?.kind !== "literal" ||
-      exponent?.kind !== "source" ||
-      display.items.length !== 7
-    ) {
-      return undefined;
-    }
-    if (normalizeDisplayTemplateLiteral(firstLiteral.text) !== ".-") return undefined;
-    if (normalizeDisplayTemplateLiteral(secondLiteral.text) !== "-") return undefined;
-    if (normalizeDisplayTemplateLiteral(thirdLiteral.text) !== "-") return undefined;
-
-    const result: MantissaExponentDisplayTemplate = {
-      leader: { kind: "source", item: leader, name: leader.name, width: leader.width ?? this.naturalDisplayWidth(leader.name) },
-      score: { kind: "source", item: score, name: score.name, width: score.width ?? this.naturalDisplayWidth(score.name) },
-      total: { kind: "source", item: total, name: total.name, width: total.width ?? this.naturalDisplayWidth(total.name) },
-      exponent: { kind: "source", item: exponent, name: exponent.name, width: exponent.width ?? this.naturalDisplayWidth(exponent.name) },
-    };
-    if (result.leader.width !== 1 || result.score.width !== 2 || result.total.width !== 3 || result.exponent.width !== 2) {
-      return undefined;
-    }
-    if (!this.displayFieldFitsUnsignedWidth(result.leader)) return undefined;
-    if (!this.displayFieldFitsUnsignedWidth(result.score)) return undefined;
-    if (!this.displayFieldFitsUnsignedWidth(result.total)) return undefined;
-    if (!this.displayFieldFitsUnsignedWidth(result.exponent)) return undefined;
-    return result;
+    return this.planDisplay(display)
+      .find((plan): plan is Extract<DisplayPlan, { kind: "mantissa-exponent" }> => plan.kind === "mantissa-exponent")
+      ?.template;
   }
 
   mantissaMaskDisplayTemplate(
     display: ProgramAst["displays"][number],
   ): MantissaMaskDisplayTemplate | undefined {
-    const [first, ...rest] = display.items;
-    if (first?.kind !== "source" || rest.length === 0) return undefined;
-
-    const leader: DisplayField = {
-      kind: "source",
-      item: first,
-      name: first.name,
-      width: first.width ?? this.naturalDisplayWidth(first.name),
-    };
-    if (leader.width !== 1 || !this.displayFieldFitsUnsignedWidth(leader)) return undefined;
-    const leaderMin = this.displayFieldMin(leader);
-    if (leaderMin === undefined || leaderMin <= 0) return undefined;
-
-    const bodyFields: DisplayField[] = [
-      { kind: "literal", name: "#display-anchor", width: 1, value: "9" },
-    ];
-    const maskCells = [8];
-    let width = 1;
-    let hasVideoLiteral = false;
-
-    for (const item of rest) {
-      if (item.kind === "source") {
-        const field: DisplayField = {
-          kind: "source",
-          item,
-          name: item.name,
-          width: item.width ?? this.naturalDisplayWidth(item.name),
-        };
-        if (!this.displayFieldFitsUnsignedWidth(field)) return undefined;
-        bodyFields.push(field);
-        for (let index = 0; index < field.width; index += 1) maskCells.push(0);
-        width += field.width;
-        continue;
-      }
-
-      const cells = displayLiteralMantissaCells(item.text);
-      if (cells === undefined) return undefined;
-      if (cells.some((cell) => cell > 9)) hasVideoLiteral = true;
-      if (cells.length === 0) continue;
-      bodyFields.push({ kind: "literal", name: "#display-literal-gap", width: cells.length, value: "0" });
-      maskCells.push(...cells);
-      width += cells.length;
-    }
-
-    if (!hasVideoLiteral || width < 2 || width > 8) return undefined;
-    return {
-      leader,
-      bodyFields,
-      mask: displayCellsLiteral(maskCells),
-      width,
-    };
+    return this.planDisplay(display)
+      .find((plan): plan is Extract<DisplayPlan, { kind: "fixed-cells" }> => plan.kind === "fixed-cells")
+      ?.template;
   }
 
   variableLeadingMantissaMaskDisplayTemplate(
     display: ProgramAst["displays"][number],
   ): VariableLeadingMantissaMaskDisplayTemplate | undefined {
-    const [first, ...rest] = display.items;
-    if (first?.kind !== "source" || rest.length === 0) return undefined;
-
-    const source: DisplayField = {
-      kind: "source",
-      item: first,
-      name: first.name,
-      width: first.width ?? this.naturalDisplayWidth(first.name),
-    };
-    const state = this.findStateField(source.name);
-    if (
-      source.width !== 2 ||
-      state === undefined ||
-      (state.min ?? 0) <= 0 ||
-      (state.max ?? 0) < 10 ||
-      (state.max ?? 0) >= 100 ||
-      !this.displayFieldFitsUnsignedWidth(source)
-    ) {
-      return undefined;
-    }
-
-    const lowBodyFields: DisplayField[] = [
-      { kind: "literal", name: "#display-anchor", width: 1, value: "9" },
-    ];
-    const highRestFields: DisplayField[] = [];
-    const lowMaskCells = [8];
-    const highMaskCells = [8, 0];
-    let lowWidth = 1;
-    let highWidth = 2;
-    let hasVideoLiteral = false;
-
-    for (const item of rest) {
-      if (item.kind === "source") {
-        const field: DisplayField = {
-          kind: "source",
-          item,
-          name: item.name,
-          width: item.width ?? this.naturalDisplayWidth(item.name),
-        };
-        if (!this.displayFieldFitsUnsignedWidth(field)) return undefined;
-        lowBodyFields.push(field);
-        highRestFields.push(field);
-        for (let index = 0; index < field.width; index += 1) {
-          lowMaskCells.push(0);
-          highMaskCells.push(0);
-        }
-        lowWidth += field.width;
-        highWidth += field.width;
-        continue;
-      }
-
-      const cells = displayLiteralMantissaCells(item.text);
-      if (cells === undefined) return undefined;
-      if (cells.some((cell) => cell > 9)) hasVideoLiteral = true;
-      if (cells.length === 0) continue;
-      const field: DisplayField = { kind: "literal", name: "#display-literal-gap", width: cells.length, value: "0" };
-      lowBodyFields.push(field);
-      highRestFields.push(field);
-      lowMaskCells.push(...cells);
-      highMaskCells.push(...cells);
-      lowWidth += cells.length;
-      highWidth += cells.length;
-    }
-
-    if (!hasVideoLiteral || lowWidth < 2 || highWidth > 8) return undefined;
-    return {
-      source,
-      split: 10,
-      low: {
-        bodyFields: lowBodyFields,
-        mask: displayCellsLiteral(lowMaskCells),
-        width: lowWidth,
-      },
-      high: {
-        restFields: highRestFields,
-        mask: displayCellsLiteral(highMaskCells),
-        width: highWidth,
-      },
-    };
+    return this.planDisplay(display)
+      .find((plan): plan is Extract<DisplayPlan, { kind: "variable-leading-cells" }> => plan.kind === "variable-leading-cells")
+      ?.template;
   }
 
 
@@ -5597,6 +5580,16 @@ function findStateFieldInAst(ast: ProgramAst, source: string): StateFieldAst | u
   return undefined;
 }
 
+function planDisplayForAst(
+  ast: ProgramAst,
+  display: ProgramAst["displays"][number],
+): DisplayPlan[] {
+  return planDisplay(display, {
+    naturalDisplayWidth: (source) => naturalDisplayWidthForAst(ast, source),
+    findStateField: (source) => findStateFieldInAst(ast, source),
+  });
+}
+
 function programContainsCall(ast: ProgramAst, name: string): boolean {
   const target = name.toLowerCase();
   let found = false;
@@ -6115,6 +6108,250 @@ function estimatePackedDisplayBodyCost(widthsOrCount: number | readonly number[]
   return 2 + widthsOrCount.slice(1).reduce((cost, width) => cost + String(10 ** width).length + 3, 0);
 }
 
+function planDisplay(
+  display: ProgramAst["displays"][number],
+  context: DisplayPlanningContext,
+): DisplayPlan[] {
+  const plans: DisplayPlan[] = [];
+  const exponent = planMantissaExponentDisplay(display, context);
+  if (exponent !== undefined) plans.push({ kind: "mantissa-exponent", template: exponent });
+  const fixed = planFixedDisplayCells(display, context);
+  if (fixed !== undefined) plans.push({ kind: "fixed-cells", template: fixed });
+  const variable = planVariableLeadingDisplayCells(display, context);
+  if (variable !== undefined) plans.push({ kind: "variable-leading-cells", template: variable });
+  return plans;
+}
+
+function planMantissaExponentDisplay(
+  display: ProgramAst["displays"][number],
+  context: DisplayPlanningContext,
+): MantissaExponentDisplayTemplate | undefined {
+  const [leader, firstLiteral, score, secondLiteral, total, thirdLiteral, exponent] = display.items;
+  if (
+    leader?.kind !== "source" ||
+    firstLiteral?.kind !== "literal" ||
+    score?.kind !== "source" ||
+    secondLiteral?.kind !== "literal" ||
+    total?.kind !== "source" ||
+    thirdLiteral?.kind !== "literal" ||
+    exponent?.kind !== "source" ||
+    display.items.length !== 7
+  ) {
+    return undefined;
+  }
+  if (normalizeDisplayTemplateLiteral(firstLiteral.text) !== ".-") return undefined;
+  if (normalizeDisplayTemplateLiteral(secondLiteral.text) !== "-") return undefined;
+  if (normalizeDisplayTemplateLiteral(thirdLiteral.text) !== "-") return undefined;
+
+  const result: MantissaExponentDisplayTemplate = {
+    leader: displaySourceField(leader, context),
+    score: displaySourceField(score, context),
+    total: displaySourceField(total, context),
+    exponent: displaySourceField(exponent, context),
+  };
+  if (result.leader.width !== 1 || result.score.width !== 2 || result.total.width !== 3 || result.exponent.width !== 2) {
+    return undefined;
+  }
+  if (!displayFieldFitsUnsignedWidthInContext(result.leader, context)) return undefined;
+  if (!displayFieldFitsUnsignedWidthInContext(result.score, context)) return undefined;
+  if (!displayFieldFitsUnsignedWidthInContext(result.total, context)) return undefined;
+  if (!displayFieldFitsUnsignedWidthInContext(result.exponent, context)) return undefined;
+  return result;
+}
+
+function planFixedDisplayCells(
+  display: ProgramAst["displays"][number],
+  context: DisplayPlanningContext,
+): MantissaMaskDisplayTemplate | undefined {
+  const [first, ...rest] = display.items;
+  if (first === undefined || rest.length === 0) return undefined;
+
+  const cells: DisplayCell[] = [];
+  let leader: DisplayMaskLeader;
+  let leadingLiteralTail: number[] = [];
+  let hasVideoLiteral = false;
+  if (first.kind === "source") {
+    const field = displaySourceField(first, context);
+    if (field.width !== 1 || !displayFieldFitsUnsignedWidthInContext(field, context)) return undefined;
+    const leaderMin = displayFieldMinInContext(field, context);
+    if (leaderMin === undefined || leaderMin <= 0) return undefined;
+    leader = { kind: "source", field };
+    appendDisplayDigitCells(cells, field);
+  } else {
+    const literalCells = displayLiteralMantissaCells(first.text);
+    if (literalCells === undefined || literalCells.length === 0) return undefined;
+    const [cell, ...tail] = literalCells;
+    if (cell === undefined || cell <= 0 || cell === 15) return undefined;
+    leader = { kind: "literal", cell };
+    cells.push({ kind: "literal", cell });
+    leadingLiteralTail = tail;
+    if (cell > 9) hasVideoLiteral = true;
+  }
+
+  const bodyFields: DisplayField[] = [
+    { kind: "literal", name: "#display-anchor", width: 1, value: "9" },
+  ];
+  const maskCells = [8];
+  let width = 1;
+
+  const appendLiteralCells = (literalCells: readonly number[]): boolean => {
+    if (literalCells.some((cell) => cell > 9)) hasVideoLiteral = true;
+    if (literalCells.length === 0) return true;
+    for (const cell of literalCells) cells.push({ kind: "literal", cell });
+    bodyFields.push({ kind: "literal", name: "#display-literal-gap", width: literalCells.length, value: "0" });
+    maskCells.push(...literalCells);
+    width += literalCells.length;
+    return width <= 8;
+  };
+
+  if (!appendLiteralCells(leadingLiteralTail)) return undefined;
+
+  for (const item of rest) {
+    if (item.kind === "source") {
+      const field = displaySourceField(item, context);
+      if (!displayFieldFitsUnsignedWidthInContext(field, context)) return undefined;
+      appendDisplayDigitCells(cells, field);
+      bodyFields.push(field);
+      for (let index = 0; index < field.width; index += 1) maskCells.push(0);
+      width += field.width;
+      if (width > 8) return undefined;
+      continue;
+    }
+
+    const literalCells = displayLiteralMantissaCells(item.text);
+    if (literalCells === undefined) return undefined;
+    if (!appendLiteralCells(literalCells)) return undefined;
+  }
+
+  if (!hasVideoLiteral || width < 2 || width > 8) return undefined;
+  return {
+    cells,
+    leader,
+    bodyFields,
+    mask: displayCellsLiteral(maskCells),
+    width,
+  };
+}
+
+function planVariableLeadingDisplayCells(
+  display: ProgramAst["displays"][number],
+  context: DisplayPlanningContext,
+): VariableLeadingMantissaMaskDisplayTemplate | undefined {
+  const [first, ...rest] = display.items;
+  if (first?.kind !== "source" || rest.length === 0) return undefined;
+
+  const source = displaySourceField(first, context);
+  const state = context.findStateField(source.name);
+  if (
+    source.width !== 2 ||
+    state === undefined ||
+    (state.min ?? 0) <= 0 ||
+    (state.max ?? 0) < 10 ||
+    (state.max ?? 0) >= 100 ||
+    !displayFieldFitsUnsignedWidthInContext(source, context)
+  ) {
+    return undefined;
+  }
+
+  const cells: DisplayCell[] = [];
+  appendDisplayDigitCells(cells, source);
+
+  const lowBodyFields: DisplayField[] = [
+    { kind: "literal", name: "#display-anchor", width: 1, value: "9" },
+  ];
+  const highRestFields: DisplayField[] = [];
+  const lowMaskCells = [8];
+  const highMaskCells = [8, 0];
+  let lowWidth = 1;
+  let highWidth = 2;
+  let hasVideoLiteral = false;
+
+  for (const item of rest) {
+    if (item.kind === "source") {
+      const field = displaySourceField(item, context);
+      if (!displayFieldFitsUnsignedWidthInContext(field, context)) return undefined;
+      appendDisplayDigitCells(cells, field);
+      lowBodyFields.push(field);
+      highRestFields.push(field);
+      for (let index = 0; index < field.width; index += 1) {
+        lowMaskCells.push(0);
+        highMaskCells.push(0);
+      }
+      lowWidth += field.width;
+      highWidth += field.width;
+      if (highWidth > 8) return undefined;
+      continue;
+    }
+
+    const literalCells = displayLiteralMantissaCells(item.text);
+    if (literalCells === undefined) return undefined;
+    if (literalCells.some((cell) => cell > 9)) hasVideoLiteral = true;
+    for (const cell of literalCells) cells.push({ kind: "literal", cell });
+    if (literalCells.length === 0) continue;
+    const field: DisplayField = { kind: "literal", name: "#display-literal-gap", width: literalCells.length, value: "0" };
+    lowBodyFields.push(field);
+    highRestFields.push(field);
+    lowMaskCells.push(...literalCells);
+    highMaskCells.push(...literalCells);
+    lowWidth += literalCells.length;
+    highWidth += literalCells.length;
+    if (highWidth > 8) return undefined;
+  }
+
+  if (!hasVideoLiteral || lowWidth < 2 || highWidth > 8) return undefined;
+  return {
+    source,
+    split: 10,
+    cells,
+    low: {
+      bodyFields: lowBodyFields,
+      mask: displayCellsLiteral(lowMaskCells),
+      width: lowWidth,
+    },
+    high: {
+      restFields: highRestFields,
+      mask: displayCellsLiteral(highMaskCells),
+      width: highWidth,
+    },
+  };
+}
+
+function displaySourceField(
+  item: DisplaySourceItem,
+  context: DisplayPlanningContext,
+): DisplayField {
+  return {
+    kind: "source",
+    item,
+    name: item.name,
+    width: item.width ?? context.naturalDisplayWidth(item.name),
+  };
+}
+
+function appendDisplayDigitCells(cells: DisplayCell[], field: DisplayField): void {
+  for (let index = 0; index < field.width; index += 1) {
+    cells.push({ kind: "digit", field });
+  }
+}
+
+function displayFieldFitsUnsignedWidthInContext(
+  field: DisplayField,
+  context: DisplayPlanningContext,
+): boolean {
+  const state = context.findStateField(field.name);
+  if (state === undefined) return false;
+  const min = state.min ?? 0;
+  const max = state.max ?? min;
+  return min >= 0 && max < 10 ** field.width;
+}
+
+function displayFieldMinInContext(
+  field: DisplayField,
+  context: DisplayPlanningContext,
+): number | undefined {
+  return context.findStateField(field.name)?.min;
+}
+
 function displayHasMantissaExponentTemplateShape(display: ProgramAst["displays"][number]): boolean {
   const [leader, firstLiteral, score, secondLiteral, total, thirdLiteral, exponent] = display.items;
   return display.items.length === 7 &&
@@ -6134,84 +6371,19 @@ function displayMantissaMaskTextForAst(
   ast: ProgramAst,
   display: ProgramAst["displays"][number],
 ): string | undefined {
-  const [first, ...rest] = display.items;
-  if (first?.kind !== "source" || rest.length === 0) return undefined;
-  const leaderWidth = first.width ?? naturalDisplayWidthForAst(ast, first.name);
-  const leader = findStateFieldInAst(ast, first.name);
-  if (leaderWidth !== 1 || leader === undefined || (leader.min ?? 0) <= 0 || (leader.max ?? 0) > 9) {
-    return undefined;
-  }
-
-  const maskCells = [8];
-  let width = 1;
-  let hasVideoLiteral = false;
-  for (const item of rest) {
-    if (item.kind === "source") {
-      const sourceWidth = item.width ?? naturalDisplayWidthForAst(ast, item.name);
-      const state = findStateFieldInAst(ast, item.name);
-      if (state === undefined || (state.min ?? 0) < 0 || (state.max ?? 0) >= 10 ** sourceWidth) return undefined;
-      for (let index = 0; index < sourceWidth; index += 1) maskCells.push(0);
-      width += sourceWidth;
-      continue;
-    }
-    const cells = displayLiteralMantissaCells(item.text);
-    if (cells === undefined) return undefined;
-    if (cells.some((cell) => cell > 9)) hasVideoLiteral = true;
-    maskCells.push(...cells);
-    width += cells.length;
-  }
-  if (!hasVideoLiteral || width < 2 || width > 8) return undefined;
-  return displayCellsLiteral(maskCells);
+  return planDisplayForAst(ast, display)
+    .find((plan): plan is Extract<DisplayPlan, { kind: "fixed-cells" }> => plan.kind === "fixed-cells")
+    ?.template.mask;
 }
 
 function displayVariableLeadingMantissaMaskTextsForAst(
   ast: ProgramAst,
   display: ProgramAst["displays"][number],
 ): string[] {
-  const [first, ...rest] = display.items;
-  if (first?.kind !== "source" || rest.length === 0) return [];
-  const sourceWidth = first.width ?? naturalDisplayWidthForAst(ast, first.name);
-  const source = findStateFieldInAst(ast, first.name);
-  if (
-    sourceWidth !== 2 ||
-    source === undefined ||
-    (source.min ?? 0) <= 0 ||
-    (source.max ?? 0) < 10 ||
-    (source.max ?? 0) >= 100
-  ) {
-    return [];
-  }
-
-  const lowMaskCells = [8];
-  const highMaskCells = [8, 0];
-  let lowWidth = 1;
-  let highWidth = 2;
-  let hasVideoLiteral = false;
-
-  for (const item of rest) {
-    if (item.kind === "source") {
-      const itemWidth = item.width ?? naturalDisplayWidthForAst(ast, item.name);
-      const state = findStateFieldInAst(ast, item.name);
-      if (state === undefined || (state.min ?? 0) < 0 || (state.max ?? 0) >= 10 ** itemWidth) return [];
-      for (let index = 0; index < itemWidth; index += 1) {
-        lowMaskCells.push(0);
-        highMaskCells.push(0);
-      }
-      lowWidth += itemWidth;
-      highWidth += itemWidth;
-      continue;
-    }
-    const cells = displayLiteralMantissaCells(item.text);
-    if (cells === undefined) return [];
-    if (cells.some((cell) => cell > 9)) hasVideoLiteral = true;
-    lowMaskCells.push(...cells);
-    highMaskCells.push(...cells);
-    lowWidth += cells.length;
-    highWidth += cells.length;
-  }
-
-  if (!hasVideoLiteral || lowWidth < 2 || highWidth > 8) return [];
-  return [displayCellsLiteral(lowMaskCells), displayCellsLiteral(highMaskCells)];
+  const template = planDisplayForAst(ast, display)
+    .find((plan): plan is Extract<DisplayPlan, { kind: "variable-leading-cells" }> => plan.kind === "variable-leading-cells")
+    ?.template;
+  return template === undefined ? [] : [template.low.mask, template.high.mask];
 }
 
 

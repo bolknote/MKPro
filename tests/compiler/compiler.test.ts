@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CompileError, compileMKPro } from "../../src/core/index.ts";
+import { compileLoweringVariantForTest } from "../../src/core/compiler.ts";
 import type { CompileOptions } from "../../src/core/index.ts";
 
 function compileOk(source: string, options: Partial<CompileOptions> = { budget: 999 }) {
@@ -707,6 +708,62 @@ program PositiveResidualDispatch {
     expect(result.steps.some((step) => step.comment === "negative number")).toBe(false);
   });
 
+  it("reuses the zero residual inside a matching dispatch case", () => {
+    const result = compileOk(`
+program DispatchKnownZeroCase {
+  state {
+    key: counter 0..9 = stack.X
+  }
+
+  loop {
+    match key {
+      0 => halt(0)
+      2 => halt(2)
+      otherwise => halt(9)
+    }
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "numeric-dispatch-residual-chain")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "known-zero-reuse")).toBe(true);
+    expect(result.steps.slice(0, 4).map((step) => step.hex)).toEqual(["60", "5E", "04", "50"]);
+  });
+
+  it("keeps scratch-free residual dispatch valid after default-case merge leaves one case", () => {
+    const result = compileLoweringVariantForTest(`
+program SingleCaseResidualFallback {
+  state {
+    a: counter 0..9 = 0
+    b: counter 0..9 = 0
+    value: counter 0..9 = 0
+  }
+
+  loop {
+    if a + b == 1 {
+      value = 0
+    }
+    else {
+      if a + b == 2 {
+        value = 1
+      }
+      else {
+        value = 0
+      }
+    }
+    halt(value)
+  }
+}
+`, { budget: 999, analysis: true }, {
+      canonicalizeIfChains: true,
+      freeResidualDispatchScratch: true,
+    });
+
+    expect(result.report.optimizations.some((item) => item.name === "dispatch-default-merge")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "numeric-dispatch-residual-chain")).toBe(true);
+    expect(result.diagnostics.filter((diagnostic) => diagnostic.level === "error")).toHaveLength(0);
+  });
+
   it("collapses compact direction dispatch shells with no residual cases", () => {
     const result = compileOk(`
 program CompactDirectionOnly {
@@ -1195,6 +1252,63 @@ program ResidualGuardedUpdate {
 
     expect(result.report.optimizations.some((item) => item.name === "residual-guarded-update")).toBe(true);
     expect(result.steps.some((step) => step.comment === "residual guarded update room")).toBe(true);
+  });
+
+  it("moves independent guarded self-updates forward to reuse comparison residuals", () => {
+    const result = compileOk(`
+program DelayedResidualGuardedUpdate {
+  state {
+    dynamite: counter 0..9 = 4
+    blocked: packed = 7
+    player: packed = 0
+  }
+  loop {
+    if dynamite >= 2 {
+      player = blocked
+      dynamite -= 2
+      show(player)
+    }
+    else {
+      halt(0)
+    }
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "residual-guarded-update")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "residual guarded update dynamite")).toBe(false);
+    expect(result.steps.some((step) => step.comment === "set dynamite")).toBe(true);
+  });
+
+  it("reuses delayed guarded update residuals inside nested shared-failure guards", () => {
+    const result = compileOk(`
+program NestedDelayedResidualGuardedUpdate {
+  state {
+    dynamite: counter 0..9 = 4
+    blocked: packed = 7
+    player: packed = 0
+  }
+  loop {
+    if blocked != 0 {
+      if dynamite >= 2 {
+        player = blocked
+        dynamite -= 2
+        show(player)
+      }
+      else {
+        halt(0)
+      }
+    }
+    else {
+      halt(0)
+    }
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "nested-guard-shared-failure")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "residual-guarded-update")).toBe(true);
+    expect(result.steps.filter((step) => step.comment === "set dynamite")).toHaveLength(1);
   });
 
   it("uses counter ranges for saturating unit updates", () => {

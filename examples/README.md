@@ -7,7 +7,7 @@ Generated with `npm run examples:size`.
 - Top-level examples: 19/19 fit in the 105-cell MK-61 window; 19/19 pass the headless load check.
 - Referenced top-level examples: 14/14 are no larger than the original MK-61 listing.
 - Tightest runnable examples: `fox-hunt-100.mkpro` (105), `wumpus.mkpro` (104), `game-100-pig.mkpro` (103).
-- Pending optimizer: 7 programs still exceed the MK-61 window; nearest is `pending-optimizer/cave-highlevel-baseline.mkpro` (127).
+- Pending optimizer: 7 programs still exceed the MK-61 window; nearest is `pending-optimizer/cave-highlevel-baseline.mkpro` (123).
 
 ## Measurements
 
@@ -34,8 +34,8 @@ Generated with `npm run examples:size`.
 | `sea-battle.mkpro` | 76 | 102 | -26 | ok: <= reference | main+setup load ok |
 | `tiny-game.mkpro` | 24 | - | - | ok: no reference | load ok |
 | `wumpus.mkpro` | 104 | - | - | ok: no reference | main+setup load ok |
-| `pending-optimizer/cave-highlevel-baseline.mkpro` | 127 | 105 | +22 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/cave-treasure.mkpro` | 148 | 105 | +43 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/cave-highlevel-baseline.mkpro` | 123 | 105 | +18 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/cave-treasure.mkpro` | 144 | 105 | +39 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/giants-country.mkpro` | 375 | 105 | +270 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/labyrinth777.mkpro` | 224 | 105 | +119 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/teleport.mkpro` | 249 | 105 | +144 | pending optimizer | setup load ok; main >105 |

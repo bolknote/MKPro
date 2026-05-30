@@ -277,6 +277,24 @@ program ExplicitSpaceDisplay {
     expect(runCompiledDisplay(source)).toBe("1 2,");
   });
 
+  it("renders mixed display-byte screens that start with a literal", () => {
+    const source = `
+program LiteralLeadingMixedDisplay {
+  state {
+    clue: counter 0..9 = 3
+  }
+
+  loop {
+    show("L-L ", clue)
+  }
+}
+`;
+    const result = compileOk(source);
+
+    expect(hasOptimization(result, "display-byte-mask-lowering")).toBe(true);
+    expect(runCompiledDisplay(source)).toBe("L-L 3,");
+  });
+
   it("renders literal separators after a variable-width leading field", () => {
     const low = `
 program VariableLeadingSpaceLow {
@@ -320,6 +338,27 @@ program DisplayStringClue {
     expect(runCompiledDisplay(source)).toBe("1 -,");
   });
 
+  it("inlines display string prefixes into literal-leading mixed show templates", () => {
+    const source = `
+program DisplayStringPrefix {
+  state {
+    prefix: counter 0..9 = 0
+    clue: counter 0..9 = 3
+  }
+
+  loop {
+    prefix = "L-L "
+    show(prefix, clue)
+  }
+}
+`;
+    const result = compileOk(source);
+
+    expect(hasOptimization(result, "display-string-inline")).toBe(true);
+    expect(hasOptimization(result, "display-byte-mask-lowering")).toBe(true);
+    expect(runCompiledDisplay(source)).toBe("L-L 3,");
+  });
+
   it("propagates arbitrary display string aliases into show", () => {
     const source = `
 program DisplayStringAlias {
@@ -361,6 +400,91 @@ program ConditionalDisplayStringTrue {
 
     expect(runCompiledDisplay(trueBranch)).toBe("1 -,");
     expect(runCompiledDisplay(falseBranch)).toBe("1 3,");
+  });
+
+  it("moves guarded display string defaults to the final show", () => {
+    const falseBranch = `
+program GuardedDisplayStringDefault {
+  state {
+    room: counter 1..9 = 1
+    clue: counter 0..9 = 0
+  }
+
+  loop {
+    clue = "-"
+    if room < 0 {
+      clue = 3
+    }
+    show(room, clue)
+  }
+}
+`;
+    const trueBranch = falseBranch
+      .replace("GuardedDisplayStringDefault", "GuardedDisplayStringNumber")
+      .replace("room < 0", "room >= 0");
+    const result = compileOk(falseBranch);
+
+    expect(hasOptimization(result, "display-string-guarded-show")).toBe(true);
+    expect(runCompiledDisplay(falseBranch)).toBe("1-,");
+    expect(runCompiledDisplay(trueBranch)).toBe("13,");
+  });
+
+  it("moves guarded display string defaults through spaced shows", () => {
+    const falseBranch = `
+program GuardedSpacedDisplayStringDefault {
+  state {
+    room: counter 1..9 = 1
+    clue: counter 0..9 = 0
+  }
+
+  loop {
+    clue = "-"
+    if room < 0 {
+      clue = 3
+    }
+    show(room, " ", clue)
+  }
+}
+`;
+    const trueBranch = falseBranch
+      .replace("GuardedSpacedDisplayStringDefault", "GuardedSpacedDisplayStringNumber")
+      .replace("room < 0", "room >= 0");
+    const result = compileOk(falseBranch);
+
+    expect(hasOptimization(result, "display-string-guarded-show")).toBe(true);
+    expect(runCompiledDisplay(falseBranch)).toBe("1 -,");
+    expect(runCompiledDisplay(trueBranch)).toBe("1 3,");
+  });
+
+  it("moves guarded display string defaults from inlined helpers to show", () => {
+    const falseBranch = `
+program GuardedDisplayStringHelper {
+  state {
+    room: counter 1..9 = 1
+    clue: counter 0..9 = 0
+  }
+
+  loop {
+    sense()
+    show(room, " ", clue)
+  }
+
+  fn sense() {
+    clue = "-"
+    if room < 0 {
+      clue = 3
+    }
+  }
+}
+`;
+    const trueBranch = falseBranch
+      .replace("GuardedDisplayStringHelper", "GuardedDisplayStringHelperNumber")
+      .replace("room < 0", "room >= 0");
+    const result = compileOk(falseBranch);
+
+    expect(hasOptimization(result, "display-string-guarded-show")).toBe(true);
+    expect(runCompiledDisplay(falseBranch)).toBe("1 -,");
+    expect(runCompiledDisplay(trueBranch)).toBe("1 3,");
   });
 
   it("renders literal-separated scoreboards correctly on the emulator", () => {

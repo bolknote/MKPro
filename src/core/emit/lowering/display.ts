@@ -351,22 +351,31 @@ export function compileMantissaMaskDisplay(ctx: LoweringCtx,
     const maskRegister = ctx.displayMaskRegister(display);
     if (template === undefined || scratch === undefined || maskRegister === undefined) return false;
 
-    compilePackedDisplayFields(ctx, display, template.bodyFields, line, false);
-    ctx.emitOp(0x60 + registerIndex(maskRegister), `П->X ${maskRegister}`, `display ${display.name} literal mask`, line);
-    ctx.emitOp(0x38, "К ∨", "display mask body merge", line);
-    ctx.emitOp(0x40 + registerIndex(scratch), `X->П ${scratch}`, `display ${display.name} body`, line, true);
-    ctx.emitRecall(template.leader.name, `display ${display.name} leader`, line);
-    ctx.emitOp(0x60 + registerIndex(scratch), `П->X ${scratch}`, `display ${display.name} body`, line);
-    ctx.emitOp(0x14, "<->", "display mask leader merge", line);
-    ctx.emitOp(0x54, "К НОП", "display mask leader preserve", line, true);
-    ctx.emitOp(0x0c, "ВП", "display mask leader restore", line);
-    emitDisplayExponent(ctx, template.width - 1, line, "display mask exponent");
-    ctx.emitOp(0x50, "С/П", `show ${display.name}`, line);
+    emitDisplayCellsTemplate(ctx, display, template, scratch, maskRegister, line);
     ctx.optimizations.push({
       name: "display-byte-mask-lowering",
       detail: `Built literal-separated screen ${display.name} through a calculator video mask.`,
     });
     return true;
+}
+
+function emitDisplayCellsTemplate(ctx: LoweringCtx,
+    display: ProgramAst["displays"][number],
+    template: NonNullable<ReturnType<LoweringCtx["mantissaMaskDisplayTemplate"]>>,
+    scratch: RegisterName,
+    maskRegister: RegisterName,
+    line: number,
+  ): void {
+    compilePackedDisplayFields(ctx, display, template.bodyFields, line, false);
+    ctx.emitOp(0x60 + registerIndex(maskRegister), `П->X ${maskRegister}`, `display ${display.name} literal mask`, line);
+    ctx.emitOp(0x38, "К ∨", "display mask body merge", line);
+    ctx.emitOp(0x40 + registerIndex(scratch), `X->П ${scratch}`, `display ${display.name} body`, line, true);
+    if (template.leader.kind === "source") {
+      ctx.emitRecall(template.leader.field.name, `display ${display.name} leader`, line);
+    } else {
+      emitDisplayFirstDigit(ctx, template.leader.cell, line, `display ${display.name} leader`);
+    }
+    emitMantissaMaskLeaderSplice(ctx, display.name, scratch, template.width, line, "display mask");
 }
 
 export function compileVariableLeadingMantissaMaskDisplay(ctx: LoweringCtx,
@@ -685,7 +694,8 @@ export function compileDecimalLiteralDisplay(ctx: LoweringCtx,
   ): boolean {
     const value = decimalDisplayLiteralNumber(literal);
     if (value === undefined) return false;
-    ctx.emitNumber(value);
+    if (Number(value) === 0) ctx.emitZero(`display ${display.name} literal`, line);
+    else ctx.emitNumber(value);
     ctx.emitOp(0x50, "С/П", `show ${display.name}`, line);
     ctx.optimizations.push({
       name: "screen-decimal-literal-lowering",

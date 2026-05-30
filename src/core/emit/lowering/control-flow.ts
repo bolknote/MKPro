@@ -270,8 +270,16 @@ export function compileNestedGuardSharedFailure(ctx: LoweringCtx,
     const thenTerminates = ctx.statementsTerminate(inner.thenBody);
     const endLabel = thenTerminates ? undefined : ctx.freshLabel("guard_end");
     compileCondition(ctx, statement.condition, failureLabel, line);
-    compileCondition(ctx, inner.condition, failureLabel, inner.line);
-    ctx.compileStatements(inner.thenBody);
+    const residualUpdate = matchResidualGuardedUpdate(inner);
+    const useResidualUpdate = residualUpdate !== undefined && residualGuardedUpdateSaves(ctx, residualUpdate);
+    if (useResidualUpdate) {
+      compileResidualGuardedCondition(ctx, residualUpdate, failureLabel, inner.line);
+      emitResidualGuardedUpdate(ctx, residualUpdate);
+    } else {
+      compileCondition(ctx, inner.condition, failureLabel, inner.line);
+    }
+    const successBody = useResidualUpdate ? residualUpdate!.tail : inner.thenBody;
+    ctx.compileStatements(successBody);
     if (endLabel !== undefined) ctx.emitJump(0x51, "БП", endLabel, "guard success end", inner.line);
     ctx.emitLabel(failureLabel);
     ctx.compileStatements(statement.elseBody);
@@ -349,26 +357,14 @@ export function compileResidualGuardedUpdate(ctx: LoweringCtx,
   ): boolean {
     const update = matchResidualGuardedUpdate(statement);
     if (update === undefined) return false;
-
-    const correction = update.bound + update.delta;
-    const correctionRaw = String(correction);
-    const ordinaryUpdateCost = estimateExpressionCost(update.assignment.expr) + 1;
-    const residualUpdateCost = (correction === 0 ? 0 : ctx.estimateNumberOrPreloadCost(correctionRaw) + 1) + 1;
-    if (residualUpdateCost >= ordinaryUpdateCost) return false;
+    if (!residualGuardedUpdateSaves(ctx, update)) return false;
 
     const falseLabel = ctx.freshLabel("if_false");
     const thenTerminates = ctx.statementsTerminate(update.tail);
     const endLabel = statement.elseBody !== undefined && !thenTerminates ? ctx.freshLabel("if_end") : undefined;
 
-    compileExpression(ctx, update.condition.left);
-    compileExpression(ctx, update.condition.right);
-    ctx.emitOp(0x11, "-", "condition compare", line);
-    ctx.emitJump(0x5c, "F x<0", falseLabel, `false branch for ${update.condition.op}`, line);
-    if (correction !== 0) {
-      ctx.emitNumberOrPreload(correctionRaw);
-      ctx.emitOp(0x10, "+", `residual guarded update ${update.target}`, update.assignment.line);
-    }
-    ctx.emitStore(update.target, `set ${update.target}`, update.assignment.line);
+    compileResidualGuardedCondition(ctx, update, falseLabel, line);
+    emitResidualGuardedUpdate(ctx, update);
     ctx.compileStatements(update.tail);
 
     if (statement.elseBody !== undefined) {
@@ -380,11 +376,43 @@ export function compileResidualGuardedUpdate(ctx: LoweringCtx,
       ctx.emitLabel(falseLabel);
     }
 
+    return true;
+}
+
+type ResidualGuardedUpdate = NonNullable<ReturnType<typeof matchResidualGuardedUpdate>>;
+
+function residualGuardedUpdateSaves(ctx: LoweringCtx, update: ResidualGuardedUpdate): boolean {
+    const correction = update.bound + update.delta;
+    const correctionRaw = String(correction);
+    const ordinaryUpdateCost = estimateExpressionCost(update.assignment.expr) + 1;
+    const residualUpdateCost = (correction === 0 ? 0 : ctx.estimateNumberOrPreloadCost(correctionRaw) + 1) + 1;
+    return residualUpdateCost < ordinaryUpdateCost;
+}
+
+function compileResidualGuardedCondition(
+    ctx: LoweringCtx,
+    update: ResidualGuardedUpdate,
+    falseLabel: string,
+    line: number,
+  ): void {
+    compileExpression(ctx, update.condition.left);
+    compileExpression(ctx, update.condition.right);
+    ctx.emitOp(0x11, "-", "condition compare", line);
+    const falseOpcode = update.condition.op === "<" ? 0x5c : 0x59;
+    ctx.emitJump(falseOpcode, getOpcode(falseOpcode).name, falseLabel, `false branch for ${update.condition.op}`, line);
+}
+
+function emitResidualGuardedUpdate(ctx: LoweringCtx, update: ResidualGuardedUpdate): void {
+    const correction = update.bound + update.delta;
+    if (correction !== 0) {
+      ctx.emitNumberOrPreload(String(correction));
+      ctx.emitOp(0x10, "+", `residual guarded update ${update.target}`, update.assignment.line);
+    }
+    ctx.emitStore(update.target, `set ${update.target}`, update.assignment.line);
     ctx.optimizations.push({
       name: "residual-guarded-update",
       detail: `Reused ${update.target} - ${update.bound} while updating ${update.target} at line ${update.assignment.line}.`,
     });
-    return true;
 }
 
 export function compileMembershipClearReuse(ctx: LoweringCtx, 
@@ -796,6 +824,7 @@ export function compileDispatchCompareChain(ctx: LoweringCtx,
     const sourceRegister = dispatchExpressionRegister(statement, ctx.allocation);
     const register = sourceRegister ?? ctx.allocation.registers[scratch];
     if (!register) {
+      if (compileNumericResidualDispatchCompareChain(ctx, statement, useFallthrough, { allowSingleCase: true })) return;
       ctx.diagnostics.push({
         level: "error",
         message: `Internal: no scratch register reserved for dispatch at line ${statement.line}.`,
@@ -842,6 +871,7 @@ export function compileDispatchCompareChain(ctx: LoweringCtx,
         ctx.emitJump(0x5e, "F x=0", nextLabel, "case mismatch", dispatchCase.line);
         xContainsDispatchExpr = false;
       }
+      markDispatchCaseMatchZero(ctx);
       ctx.compileStatements(dispatchCase.body);
       if (
         !ctx.statementsTerminate(dispatchCase.body) &&
@@ -859,9 +889,14 @@ export function compileDispatchCompareChain(ctx: LoweringCtx,
 export function compileNumericResidualDispatchCompareChain(ctx: LoweringCtx, 
     statement: Extract<StatementAst, { kind: "dispatch" }>,
     useFallthrough: boolean,
+    options: { allowSingleCase?: boolean } = {},
   ): boolean {
-    if (!dispatchUsesNumericResidualChain(statement)) return false;
-    const numericValues = statement.cases.map((dispatchCase) => numericLiteralValue(dispatchCase.value)) as number[];
+    if (!dispatchUsesNumericResidualChain(statement)) {
+      if (options.allowSingleCase !== true || statement.cases.length !== 1) return false;
+    }
+    const values = statement.cases.map((dispatchCase) => numericLiteralValue(dispatchCase.value));
+    if (values.some((value) => value === undefined)) return false;
+    const numericValues = values as number[];
 
     compileExpression(ctx, statement.expr);
     const endLabel = ctx.freshLabel("dispatch_end");
@@ -882,6 +917,7 @@ export function compileNumericResidualDispatchCompareChain(ctx: LoweringCtx,
       }
       comparedValue = value;
       ctx.emitJump(0x5e, "F x=0", nextLabel, "case mismatch", dispatchCase.line);
+      markDispatchCaseMatchZero(ctx);
       ctx.compileStatements(dispatchCase.body);
       if (
         !ctx.statementsTerminate(dispatchCase.body) &&
@@ -898,6 +934,12 @@ export function compileNumericResidualDispatchCompareChain(ctx: LoweringCtx,
       detail: `Reused residual comparisons for numeric dispatch at line ${statement.line}.`,
     });
     return true;
+}
+
+function markDispatchCaseMatchZero(ctx: LoweringCtx): void {
+    ctx.currentXVariable = undefined;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = true;
 }
 
 export function emitPositiveResidualCompare(ctx: LoweringCtx, value: number, comment: string, line?: number): void {
