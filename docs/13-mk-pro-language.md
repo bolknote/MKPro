@@ -117,6 +117,30 @@ counter range gives the natural visible width (`0..99` is two digits,
 numeric output, packed display bytes, sign-digit forms, `К ИНВ`, or another
 proved MK-61 lowering.
 
+Text fragments in `show(...)` use the MK-61 display alphabet: digits, spaces,
+`-`, `L`, `С`, `Г`, and `Е` (Latin `C`, `D`/`G`, `E`, `O`, and Cyrillic
+lookalikes are normalized where they map to calculator cells). Strings are
+display-only; they are not runtime string values. A temporary assignment such
+as `clue = "-"` is only propagated into a following `show(...)` when the
+compiler can prove the value is used as a display fragment. This lets code write
+patterns such as:
+
+```mkpro
+clue = "-"
+show(room, " ", clue)
+```
+
+and still lower it as the display template `show(room, " -")`, without storing
+`"-"` in a numeric register.
+
+The lowering keeps short special cases first (`ЕГГОГ`, prebuilt literal video
+strings, sign/exponent tricks, and other known compact forms). If no special
+case applies, a generic display-cell builder handles fixed-width mixed screens
+up to eight display cells, including combinations of numeric fields and literal
+cells such as `show(room, " ", arrows, " ", clue)`, `show("L-L ", clue)`, and
+`show("0 L", clue)`. Leading and trailing literal spaces are trimmed because the
+calculator display has no stable visible edge space.
+
 `show(...)` is a resumable visible stop. Use it for screens where the player
 continues the program, often followed by `name = read()`. For terminal screens,
 put the visible value directly in `halt(...)`.
