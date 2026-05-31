@@ -65,8 +65,12 @@ program TinyGame {
     food: counter 0..9 = 5
   }
 
+  fn score(a, b) {
+    return a * b + food
+  }
+
   fn main() {
-    show(player, " ", food)
+    show(player, score(player, food))
   }
 
   loop {
@@ -79,8 +83,12 @@ program TinyGame {
     }
   }
 
-  fn go(delta) {
-    player += delta
+  fn adjust_position(pos, step) {
+    return pos + step
+  }
+
+  fn apply_step(delta) {
+    player = adjust_position(player, delta)
     main()
   }
 
