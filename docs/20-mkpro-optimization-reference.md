@@ -174,9 +174,8 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `indirect-register-flow` — the same for regions where address is in a register and already safe for indirect jump.
 - `preloaded-indirect-flow` — preloads selector/address once so multiple indirect jumps become shorter.
 - `preloaded-super-dark-flow` — super-dark path with a preloaded indirect target.
-- `indirect-incdec-counter` — decrements a counter and immediately uses it as an indirect jump source.
+- `indirect-incdec-counter` — lowers a unit `x++`/`x--` through the indirect pre-increment (R4..R6) or pre-decrement (R0..R3) side effect of `К П->X r`, a one-cell true `±1` that correctly reaches 0 (used as the standalone unit-decrement form).
 - `r0-indirect-counter` — uses R0 as a readable counter/switch for jump dispatch where provably safe.
-- `fl-unit-decrement` — shortens unit decrement through a fractional fast-exit path.
 - `indirect-memory-table` — builds a compact address table in memory and jumps by index.
 - `indexed-packed-row-table` — stores packed rows/cells in an addressable table for dense display access.
 - `coord-list-scaled-read` — reads coordinates via scaled index, removing runtime decode work.

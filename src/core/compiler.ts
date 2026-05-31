@@ -10960,7 +10960,7 @@ const optimizerCapabilities: Array<{
     category: "flow",
     source: "documented",
     requires: [],
-    activeWhen: ["fl-unit-decrement", "indirect-incdec-counter", "r0-indirect-counter"],
+    activeWhen: ["fl-decrement-zero-branch", "indirect-incdec-counter", "r0-indirect-counter"],
     detail: "Uses F L0..F L3 as compact decrement-and-continue/decrement-and-branch forms for small counters.",
   },
   {
@@ -11453,8 +11453,8 @@ function buildMachineFeaturesUsed(
   if (optimizations.some((optimization) => optimization.name === "branch-removal")) {
     add("branch-removal", "Optimizer removed a conditional branch through a proved branchless equivalent.", "optimizer");
   }
-  if (optimizations.some((optimization) => optimization.name === "fl-unit-decrement")) {
-    add("fl-decrement-branch", "Optimizer selected F L0..F L3 for a unit decrement.", "optimizer");
+  if (optimizations.some((optimization) => optimization.name === "fl-decrement-zero-branch")) {
+    add("fl-decrement-branch", "Optimizer fused a decrement and zero test through F L0..F L3.", "optimizer");
   }
   if (
     optimizations.some((optimization) =>

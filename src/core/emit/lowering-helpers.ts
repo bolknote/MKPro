@@ -215,6 +215,13 @@ export function isPreincrementIndirectRegister(register: RegisterName): boolean 
   return register === "4" || register === "5" || register === "6";
 }
 
+// Indirect addressing through R0..R3 pre-decrements the register by one (a true
+// arithmetic -1 that reaches 0 and below), unlike F Lx which clamps a positive
+// counter at 1. This makes `К П->X r` the correct compact unit-decrement.
+export function isPredecrementIndirectRegister(register: RegisterName): boolean {
+  return register === "0" || register === "1" || register === "2" || register === "3";
+}
+
 export function programHasLineCountForMask(ast: ProgramAst, maskName: string): boolean {
   let found = false;
   const visitExpr = (expr: ExpressionAst): void => {

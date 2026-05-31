@@ -2634,7 +2634,10 @@ program CurrentXCommutativeCall {
     )).toBe(true);
   });
 
-  it("preserves false-branch X through a unit decrement before reuse", () => {
+  it("decrements a zero-reachable counter through the indirect pre-decrement, not F Lx", () => {
+    // arrows is observed via halt(arrows) and must be able to reach 0. F Lx clamps
+    // a positive counter at 1, so the correct compact form is the R0..R3 indirect
+    // pre-decrement. The false-branch X-preservation around the call still holds.
     const result = compileOk(`
 program FalseBranchXReuse {
   state {
@@ -2668,8 +2671,8 @@ program FalseBranchXReuse {
 
     const optimizationNames = result.report.optimizations.map((item) => item.name);
     expect(optimizationNames).toContain("x-preserving-false-branch");
-    expect(optimizationNames).toContain("fl-unit-decrement");
-    expect(optimizationNames).toContain("stack-current-x-scheduling");
+    expect(optimizationNames).toContain("indirect-incdec-counter");
+    expect(optimizationNames).not.toContain("fl-unit-decrement");
   });
 
   it("lowers bounded R4..R6 unit increments through indirect pre-increment", () => {

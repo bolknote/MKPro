@@ -15,10 +15,10 @@ const { MK61 } = require("./mk61.cjs") as { MK61: Mk61Constructor };
 
 // Documented MK-61 fact behind indirect-incdec-counter / r0-indirect-counter:
 // an indirect access pre-decrements selector registers R0..R3 and pre-increments
-// R4..R6 (R7..RE unchanged). This side effect can serve as a free counter step
-// ONLY when a loop indexes memory by that register with the matching stride; the
-// generated spatial loops already use F Lx (which itself decrements R0..R3), so
-// fusing would double-mutate the register and there is no safe trigger today.
+// R4..R6 (R7..RE unchanged). Crucially the pre-decrement is a true arithmetic -1
+// that reaches 0 (and below), so `К П->X r` is the correct compact lowering of a
+// standalone `x--` on a zero-reachable counter. F Lx, by contrast, clamps a
+// positive counter at 1 and is only safe in the fused decrement-and-branch forms.
 function afterIndirectAccess(registerIndex: number, init: string): string {
   const calc = new MK61();
   calc.loadProgram([0xd0 + registerIndex, 0x50]); // К П->X R ; С/П
@@ -44,6 +44,14 @@ describe("ROM fact: indirect addressing register step", () => {
   for (const r of [7, 9]) {
     it(`R${r} is unchanged on indirect access`, () => {
       expect(Number.parseInt(afterIndirectAccess(r, "5"), 10)).toBe(5);
+    });
+  }
+
+  // The property that makes this a correct unit decrement (unlike F Lx, which
+  // keeps a 1 at 1): the pre-decrement actually reaches 0.
+  for (const r of [0, 1, 2, 3]) {
+    it(`R${r} pre-decrement reaches 0 from 1`, () => {
+      expect(Number.parseInt(afterIndirectAccess(r, "1"), 10)).toBe(0);
     });
   }
 });

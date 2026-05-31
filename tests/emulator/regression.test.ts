@@ -276,6 +276,64 @@ program ResourceUnderflowProbe {
     const mainLoaded = calc.loadProgram(formatProgramTokens(result.steps));
     expect(mainLoaded.diagnostics).toEqual([]);
   });
+
+  it("kills the wumpus player when the arrow counter is exhausted", () => {
+    // Regression for the F Lx clamp bug: `arrows--` lowered through F L0 never
+    // reached 0, so the `if arrows == 0 { dead() }` loss condition was dead code.
+    const source = readFileSync(resolve("examples/wumpus.mkpro"), "utf8");
+    const result = compileMKPro(source, { budget: 999, analysis: true });
+    const reg = result.report.registers;
+
+    const calc = new MK61();
+    expect(calc.loadProgram(formatProgramTokens(result.steps)).diagnostics).toEqual([]);
+
+    // Fixed layout: wumpus far from room 1 so every -5 shot misses.
+    const stateRegs = new Set(Object.values(reg));
+    for (const preload of result.report.preloads) {
+      if (!stateRegs.has(preload.register)) calc.setRegister(preload.register, preload.value);
+    }
+    calc.setRegister(reg.room!, "1");
+    calc.setRegister(reg.target!, "0");
+    calc.setRegister(reg.arrows!, "5");
+    calc.setRegister(reg.clue!, "0");
+    calc.setRegister(reg.wumpus!, "10");
+    calc.setRegister(reg.hazard_pit_1!, "15");
+    calc.setRegister(reg.hazard_pit_2!, "16");
+    calc.setRegister(reg.hazard_bat_1!, "18");
+    calc.setRegister(reg.hazard_bat_2!, "19");
+
+    const shootMiss = (): string => {
+      calc.inputNumber("5", { clear: true });
+      calc.press("/-/"); // MK-61 negates after the digits: -5 fires a shot
+      calc.press("С/П");
+      calc.runUntilStable({ maxFrames: 1500, stableFrames: 6 });
+      return calc.displayText().toUpperCase();
+    };
+
+    // Start: the turn shows room, arrows, clue (the third stop awaits input).
+    calc.pressSequence(["В/О", "С/П"]);
+    calc.runUntilStable({ maxFrames: 800, stableFrames: 6 });
+    calc.press("С/П");
+    calc.runUntilStable({ maxFrames: 800, stableFrames: 6 });
+    calc.press("С/П");
+    calc.runUntilStable({ maxFrames: 800, stableFrames: 6 });
+
+    let died = false;
+    for (let shot = 1; shot <= 6 && !died; shot += 1) {
+      const display = shootMiss();
+      if (display.includes("Г")) {
+        died = true;
+        expect(shot).toBe(5); // five arrows, death on the fifth miss
+        break;
+      }
+      // advance through the next turn's room/arrows/clue stops
+      calc.press("С/П");
+      calc.runUntilStable({ maxFrames: 800, stableFrames: 6 });
+      calc.press("С/П");
+      calc.runUntilStable({ maxFrames: 800, stableFrames: 6 });
+    }
+    expect(died).toBe(true);
+  });
 });
 
 function readIntegerRegister(calc: Mk61Instance, register: string): number {

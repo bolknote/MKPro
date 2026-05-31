@@ -52,8 +52,8 @@ import {
   expressionReferencesIdentifier,
   expressionToIntentText,
   firstSpliceDisplayLiteralProgram,
-  flOpcode,
   formatRawContractDetail,
+  isPredecrementIndirectRegister,
   isPreincrementIndirectRegister,
   isSimpleStackLoad,
   isUnitDecrementExpression,
@@ -1088,20 +1088,40 @@ export function compileUnitDecrement(ctx: LoweringCtx, statement: Extract<Statem
     if (statement.target.startsWith(PACKED_COUNTER_PREFIX)) return false;
     const register = ctx.allocation.registers[statement.target];
     if (register === undefined) return false;
-    const opcode = flOpcode(register);
-    if (opcode === undefined) return false;
-    const after = ctx.freshLabel("fl_decrement_done");
-    const preservedXVariable = ctx.currentXVariable === statement.target ? undefined : ctx.currentXVariable;
-    const preservedXKnownZero = ctx.currentXKnownZero;
-    ctx.emitJump(opcode, getOpcode(opcode).name, after, `decrement ${statement.target}`, statement.line);
-    ctx.currentXVariable = preservedXVariable;
-    ctx.currentXAliases = preservedXVariable !== undefined ? new Set([preservedXVariable]) : new Set();
-    ctx.currentXKnownZero = preservedXKnownZero;
-    ctx.machineEntryOpen = false;
-    ctx.emitLabel(after);
+    // A standalone `x--` writes a value that later statements observe directly
+    // (e.g. `if x == 0`, `if x <= 0`, `while x != 0`, or `show(x)`). F Lx is not a
+    // sound unit decrement for that: it clamps a positive counter at 1 instead of
+    // reaching 0, so any such observation breaks. The correct compact form is the
+    // indirect pre-decrement through R0..R3, which is a true arithmetic -1.
+    if (
+      isPredecrementIndirectRegister(register) &&
+      targetRangeFitsIndirectDecrement(ctx, statement.target)
+    ) {
+      return emitIndirectUnitDecrement(ctx, statement.target, register, `decrement ${statement.target}`, statement.line);
+    }
+    // Otherwise fall back to the generic recall/-1/store decrement, which is always
+    // correct (the fused `x--; if x==0|<0` patterns keep using F Lx separately).
+    return false;
+}
+
+function targetRangeFitsIndirectDecrement(ctx: LoweringCtx, target: string): boolean {
+    const field = ctx.findStateField(target);
+    if (field?.min === undefined || field.max === undefined) return false;
+    // The pre-decrement also recalls the register at the post-decrement address;
+    // keep that address inside the register file (0..14) so the discarded read is
+    // a plain register fetch. For defined values (>= 1) the address is value-1.
+    return field.type === "range" && field.min >= 0 && field.max <= 14;
+}
+
+function emitIndirectUnitDecrement(ctx: LoweringCtx, target: string, register: RegisterName, comment: string, line: number): boolean {
+    if (!isPredecrementIndirectRegister(register)) return false;
+    ctx.emitOp(0xd0 + registerIndex(register), `К П->X ${register}`, comment, line);
+    ctx.currentXVariable = undefined;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
     ctx.optimizations.push({
-      name: "fl-unit-decrement",
-      detail: `Lowered ${statement.target} -= 1 through ${getOpcode(opcode).name}.`,
+      name: "indirect-incdec-counter",
+      detail: `Decremented ${target} by using ${getOpcode(0xd0 + registerIndex(register)).name}'s pre-decrement side effect at line ${line}.`,
     });
     return true;
 }
