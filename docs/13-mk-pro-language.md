@@ -494,6 +494,8 @@ giant_country: board(decimal_player)
 This is a semantic commitment, not a storage hint: if the compiler has no lowerer
 for that board operation, it rejects the program instead of selecting a canned
 game template.
+Current compact board encodings are `corridor_plan`, `decimal_player`,
+`floor_plan`, `packed_decimal_zero_run`, `pier_to_ship`, and `row_scan`.
 
 Movement functions should use `move(...)` when they mean movement rather than coordinate
 arithmetic:

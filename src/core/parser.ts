@@ -622,16 +622,31 @@ function parseV2CompactBoardDeclaration(line: SourceLine): V2WorldAst | undefine
   const match = /^([A-Za-z_][\w]*)\s*:\s*board\(\s*([A-Za-z_][\w]*)\s*\)$/u.exec(line.text);
   if (!match) return undefined;
   const name = match[1]!;
+  const encoding = match[2]!;
+  if (!isKnownCompactBoardEncoding(encoding)) {
+    throw new ParseError(`Unknown board encoding '${encoding}'.`, line.line);
+  }
   return {
     kind: "v2_world",
     name,
     position: {
       name,
-      encoding: match[2]!,
+      encoding,
       line: line.line,
     },
     line: line.line,
   };
+}
+
+function isKnownCompactBoardEncoding(encoding: string): boolean {
+  return [
+    "corridor_plan",
+    "decimal_player",
+    "floor_plan",
+    "packed_decimal_zero_run",
+    "pier_to_ship",
+    "row_scan",
+  ].includes(encoding);
 }
 
 function parseV2InlineStatement(text: string, line: number): V2StatementAst {
@@ -1659,9 +1674,10 @@ function v2ComparableValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(v2ComparableValue);
   if (value === null || typeof value !== "object") return value;
   const result: Record<string, unknown> = {};
-  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+  const record = value as Record<string, unknown>;
+  for (const key of Object.keys(record).sort()) {
     if (key === "line") continue;
-    const field = (value as Record<string, unknown>)[key];
+    const field = record[key];
     if (field !== undefined) result[key] = v2ComparableValue(field);
   }
   return result;
@@ -2242,7 +2258,6 @@ function randomWorldCoordinateExpression(world: V2WorldAst): string {
 function worldCoordinateOrigin(world: V2WorldAst): number {
   switch (world.position?.encoding) {
     case "pier_to_ship":
-    case "cockpit_perspective":
     case "corridor_plan":
     case "decimal_player":
     case "floor_plan":
@@ -4013,7 +4028,6 @@ function cellAtIndexExpression(pos: string, domain: string, context: V2LoweringC
       return decimalOnesExpression(pos);
     case "corridor_plan":
     case "packed_decimal_zero_run":
-    case "cockpit_perspective":
     case undefined:
       return pos;
   }
@@ -4101,7 +4115,6 @@ function worldDomainLength(world: V2WorldAst): number {
   switch (world.position?.encoding) {
     case "pier_to_ship":
       return 8;
-    case "cockpit_perspective":
     case "corridor_plan":
     case "decimal_player":
     case "floor_plan":

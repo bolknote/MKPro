@@ -330,6 +330,20 @@ program CardinalDirection {
     expect(JSON.stringify(dispatch.defaultBody)).toContain('"callee":"__direction_cardinal"');
   });
 
+  it("rejects unknown compact board encodings", () => {
+    expect(() => parseProgram(`
+program UnknownCompactBoard {
+  sky: board(bogus_perspective)
+  state {
+    pos: coord(sky) = 1
+  }
+  loop {
+    show(pos)
+  }
+}
+`)).toThrow("Unknown board encoding 'bogus_perspective'");
+  });
+
   it("rejects function calls with the wrong arity", () => {
     expect(() =>
       parseProgram(`

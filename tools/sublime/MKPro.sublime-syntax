@@ -23,6 +23,7 @@ contexts:
     - include: state-types
     - include: builtin-calls
     - include: function-calls
+    - include: board-encodings
     - include: constants
     - include: registers
     - include: mk61-commands
@@ -120,6 +121,10 @@ contexts:
     - match: '\b{{ident}}\s*(?=\()'
       scope: variable.function.mkpro
 
+  board-encodings:
+    - match: '\b(packed_decimal_zero_run|decimal_player|row_scan|floor_plan|corridor_plan|pier_to_ship)\b'
+      scope: storage.type.domain-encoding.mkpro
+
   display-sources:
     - match: '\b({{ident}})(:)(0?\d+)\b'
       captures:
@@ -166,7 +171,7 @@ contexts:
         1: constant.language.stack-slot.mkpro
 
   constants:
-    - match: '\b(true|false|north|south|east|west|up|down|packed_decimal_zero_run|decimal_player|row_scan|floor_plan|corridor_plan|cockpit_perspective|pier_to_ship)\b'
+    - match: '\b(true|false|north|south|east|west|up|down)\b'
       scope: constant.language.mkpro
     - match: '\b[0-9A-Fa-f]{2}(?=\s|$)'
       scope: constant.numeric.hex.mkpro

@@ -1,7 +1,7 @@
 reference lordbss_pmk210
 
 // Based on Lord_BSS pmk210, "Alaram" by Sergey Shinkevich. The original is a
-// full 105-cell cockpit-perspective interceptor game.
+// full 105-cell cockpit-view interceptor game.
 
 program Alaram {
   state {
@@ -22,7 +22,7 @@ program Alaram {
 
   // The source listing draws a forward cockpit lane. Horizontal movement is
   // aiming, vertical movement is climb/dive, and range closes every turn.
-  sky: board(cockpit_perspective)
+  sky: board(row_scan)
 
   fn ground() {
     halt("ЕГГОГ")
