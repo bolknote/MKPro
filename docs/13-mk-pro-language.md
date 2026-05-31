@@ -619,6 +619,17 @@ builds a zero-based packed bit mask: index `0` is `1`, `1` is `2`, `2` is `4`,
 `cell_has`, and the corresponding `clear`, `set`, and `toggle` helpers lower to
 the blue logical operations where profitable. The `has` helpers return zero or
 the matching mask, so tests should compare them with zero.
+`bit_and(left, right)` and `bit_not(value)` are also supported and lower to the
+bitwise logical operations (`К ∧`, `К ИНВ`) in the same expression family.
+`bit_or(left, right)` and `bit_xor(left, right)` are supported as well.
+Single-argument math and transcendental helpers include `abs`, `sign`, `int`,
+`frac`, `sqr`, `inv`, `sqrt`, `lg`, `ln`, `exp`, `sin`, `cos`, `tg`,
+`asin`, `acos`, `atg`, `to_min`, `to_sec`, `from_sec`, and `from_min`.
+`pow(base, exponent)` is explicit two-argument power.
+`pow10(k)` is available as a convenience helper for decimal-digit scaling and is
+used by board and packed-row logic throughout the examples.
+`max(a, b)` is the two-argument comparator helper (`К max`).
+`pi` is a zero-argument helper (`F pi`).
 
 Packed digit helpers use one-based indexes from the right: `digit_at(value, 1)`
 is the units digit, `digit_at(value, 2)` is the tens digit. `digit_add` adds a
@@ -825,11 +836,13 @@ The parser keeps these high-level statements as typed source nodes:
 - `match expr { values => action }`
 - query expressions: `line_count(set, cell)`, `neighbor_count(set, cell)`,
   and `cell_at(board, pos)`
-- formula helpers: `abs`, `bit_clear`, `bit_has`, `bit_mask`, `bit_set`,
-  `bit_toggle`, `cell_at`, `cell_clear`, `cell_has`, `cell_mask`, `cell_set`,
-  `cell_toggle`, `direction`, `digit_add`, `digit_at`, `digit_set`,
-  `eq_any`, `frac`, `int`, `line_count`, `near_any`, `neighbor_count`,
-  `pow`, and `random`
+- formula helpers: `abs`, `acos`, `asin`, `atg`, `bit_and`, `bit_clear`,
+  `bit_has`, `bit_mask`, `bit_not`, `bit_or`, `bit_set`, `bit_toggle`, `bit_xor`,
+  `cell_at`, `cell_clear`, `cell_has`, `cell_mask`, `cell_set`, `cell_toggle`,
+  `cos`, `direction`, `digit_add`, `digit_at`, `digit_set`, `eq_any`, `exp`,
+  `frac`, `from_min`, `from_sec`, `inv`, `int`, `lg`, `ln`, `line_count`, `max`,
+  `neighbor_count`, `near_any`, `pi`, `pow`, `pow10`, `random`, `sign`, `sin`,
+  `sqr`, `sqrt`, `tg`, `to_min`, `to_sec`.
 - contracted `raw { ... }` blocks for explicit MK-61 command sequences
 
 Assignments, updates, comparison predicates, function parameters, loops, and
