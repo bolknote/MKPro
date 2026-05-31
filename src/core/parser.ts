@@ -922,7 +922,7 @@ function lowerV2Program(v2: V2ProgramAst): LoweredV2Program {
     boards: new Map(v2.boards.map((board) => [board.name, board])),
     worlds: new Map(v2.worlds.map((world) => [world.name, world])),
   };
-  const banks = lowerV2StateBanks(v2, context);
+  const banks = lowerV2StateBanks(v2);
   return {
     domains: lowerV2Domains(v2),
     ...(banks === undefined ? {} : { banks }),
@@ -1753,7 +1753,7 @@ function lowerV2State(
   return fields.length > 0 ? [{ kind: "state", name: v2.name, fields, line: v2.line }] : [];
 }
 
-function lowerV2StateBanks(v2: V2ProgramAst, context: V2LoweringContext): StateBankAst[] | undefined {
+function lowerV2StateBanks(v2: V2ProgramAst): StateBankAst[] | undefined {
   const byBank = new Map<string, V2StateFieldAst[]>();
   for (const field of v2.state) {
     if (field.bank === undefined) continue;

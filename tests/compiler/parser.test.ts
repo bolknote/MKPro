@@ -720,6 +720,116 @@ program Demo {
     }
   });
 
+  it("parses state groups into indexed banks and flattened state fields", () => {
+    const ast = parseProgram(`
+program GroupState {
+  state {
+    line: group(1..2) {
+      front: packed = 10
+      robots: counter 0..9 = 1
+    }
+    slot: counter 1..2 = 1
+  }
+  loop {
+    line[slot].robots += 1
+    halt(line[2].front)
+  }
+}
+`);
+
+    expect(ast.banks).toEqual([
+      expect.objectContaining({
+        kind: "state_bank",
+        name: "line",
+        min: 1,
+        max: 2,
+        members: [
+          expect.objectContaining({
+            name: "front",
+            elements: [
+              { index: 1, name: "line_front_1" },
+              { index: 2, name: "line_front_2" },
+            ],
+          }),
+          expect.objectContaining({
+            name: "robots",
+            elements: [
+              { index: 1, name: "line_robots_1" },
+              { index: 2, name: "line_robots_2" },
+            ],
+          }),
+        ],
+      }),
+    ]);
+    expect(ast.states[0]?.fields.map((field) => field.name)).toEqual(expect.arrayContaining([
+      "line_front_1",
+      "line_front_2",
+      "line_robots_1",
+      "line_robots_2",
+      "slot",
+    ]));
+    const loop = ast.entries[0]?.body[0];
+    expect(loop?.kind).toBe("loop");
+    if (loop?.kind !== "loop") throw new Error("expected loop");
+    expect(loop.body).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "indexed_assign" }),
+      expect.objectContaining({ kind: "halt" }),
+    ]));
+  });
+
+  it("rejects nested state groups", () => {
+    expect(() =>
+      parseProgram(`
+program BadNestedGroup {
+  state {
+    outer: group(1..2) {
+      inner: group(1..2) {
+        value: packed = 0
+      }
+    }
+  }
+  loop {
+    halt(0)
+  }
+}
+`),
+    ).toThrow(/Nested state groups are not supported/u);
+  });
+
+  it("rejects indexed array members inside state groups", () => {
+    expect(() =>
+      parseProgram(`
+program BadGroupMember {
+  state {
+    line: group(1..2) {
+      robots: packed[1..2] = 0
+    }
+  }
+  loop {
+    halt(0)
+  }
+}
+`),
+    ).toThrow(/State group members cannot also be indexed arrays/u);
+  });
+
+  it("rejects stack initializers inside indexed state banks", () => {
+    expect(() =>
+      parseProgram(`
+program BadGroupStack {
+  state {
+    line: group(1..2) {
+      front: packed = stack.X
+    }
+  }
+  loop {
+    halt(0)
+  }
+}
+`),
+    ).toThrow(/Indexed state banks cannot be initialized from stack\.X or stack\.Y/u);
+  });
+
   it("parses and lowers move() expressions and named terminal functions", () => {
     const ast = parseProgram(`
 program Demo {

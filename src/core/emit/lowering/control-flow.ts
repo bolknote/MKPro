@@ -279,7 +279,7 @@ export function compileNestedGuardSharedFailure(ctx: LoweringCtx,
     } else {
       compileCondition(ctx, inner.condition, failureLabel, inner.line);
     }
-    const successBody = useResidualUpdate ? residualUpdate!.tail : inner.thenBody;
+    const successBody = useResidualUpdate ? residualUpdate.tail : inner.thenBody;
     ctx.compileStatements(successBody);
     if (endLabel !== undefined) ctx.emitJump(0x51, "БП", endLabel, "guard success end", inner.line);
     ctx.emitLabel(failureLabel);
