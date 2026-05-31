@@ -2017,9 +2017,39 @@ program IndexedConstantState {
 }
 `, { budget: 999, analysis: true, disableInterproceduralOpts: true });
 
-    expect(result.steps.some((step) => step.comment === "indexed set slots[2]")).toBe(true);
-    expect(result.steps.some((step) => step.comment === "indexed recall slots[2]")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "constant-indexed-state-resolution")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "set slots_2")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "recall slots_2")).toBe(true);
     expect(result.steps.some((step) => step.mnemonic?.startsWith("К X->П"))).toBe(false);
+  });
+
+  it("exposes constant indexed state to small-set helper patterns", () => {
+    const result = compileOk(`
+program IndexedSmallSet {
+  cave: board(1..20, 1..1)
+
+  state {
+    room: coord(cave) = 1
+    slots: coord[1..2](cave) = random_cell(cave)
+    clue: counter 0..9 = 0
+  }
+
+  loop {
+    if near_any(room, 1, slots[1], slots[2]) >= 0 {
+      clue = 1
+    }
+    if near_any(room, 1, slots[1], slots[2]) >= 0 {
+      clue = 2
+    }
+    if near_any(room, 1, slots[1], slots[2]) >= 0 {
+      halt(clue)
+    }
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "constant-indexed-state-resolution")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "near-any-helper-lowering")).toBe(true);
   });
 
   it("lowers dynamic indexed group state through MK-61 indirect memory commands", () => {
@@ -2071,8 +2101,9 @@ program ConstantIndexedRuleSpecialization {
 `, { budget: 999, analysis: true, disableInterproceduralOpts: true });
 
     expect(result.ast.procs.some((proc) => proc.name === "touch")).toBe(false);
-    expect(result.steps.some((step) => step.comment === "indexed set line.front[1]")).toBe(true);
-    expect(result.steps.some((step) => step.comment === "indexed set line.front[2]")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "constant-indexed-state-resolution")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "set line_front_1")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "set line_front_2")).toBe(true);
     expect(result.steps.some((step) => step.mnemonic?.startsWith("К X->П"))).toBe(false);
   });
 

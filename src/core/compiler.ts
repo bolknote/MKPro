@@ -1100,6 +1100,143 @@ function sourceNamesForDisplayItems(items: readonly DisplayItemAst[]): string[] 
     .map((item) => item.name);
 }
 
+function resolveConstantIndexedState(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  let resolved = 0;
+  const resolveIndexed = (expr: Extract<ExpressionAst, { kind: "indexed" }>): string | undefined => {
+    const member = findStateBankMember(ast, expr);
+    if (member === undefined) return undefined;
+    const index = numericIndexValue(expr.index);
+    if (index === undefined) return undefined;
+    const element = stateBankElementForIndex(member.member, index);
+    return element?.name;
+  };
+  const rewriteExpr = (expr: ExpressionAst): ExpressionAst => {
+    switch (expr.kind) {
+      case "number":
+      case "string":
+      case "identifier":
+        return expr;
+      case "indexed": {
+        const index = rewriteExpr(expr.index);
+        const current = index === expr.index ? expr : { ...expr, index };
+        const name = resolveIndexed(current);
+        if (name === undefined) return current;
+        resolved += 1;
+        return { kind: "identifier", name };
+      }
+      case "unary": {
+        const inner = rewriteExpr(expr.expr);
+        return inner === expr.expr ? expr : { ...expr, expr: inner };
+      }
+      case "binary": {
+        const left = rewriteExpr(expr.left);
+        const right = rewriteExpr(expr.right);
+        return left === expr.left && right === expr.right ? expr : { ...expr, left, right };
+      }
+      case "call": {
+        const args = expr.args.map(rewriteExpr);
+        return args.every((arg, index) => arg === expr.args[index]) ? expr : { ...expr, args };
+      }
+    }
+  };
+  const rewriteCondition = (condition: ConditionAst): ConditionAst => {
+    const left = rewriteExpr(condition.left);
+    const right = rewriteExpr(condition.right);
+    return left === condition.left && right === condition.right ? condition : { ...condition, left, right };
+  };
+  const rewriteStatements = (statements: StatementAst[]): StatementAst[] => statements.map((statement): StatementAst => {
+    switch (statement.kind) {
+      case "assign": {
+        const expr = rewriteExpr(statement.expr);
+        return expr === statement.expr ? statement : { ...statement, expr };
+      }
+      case "indexed_assign": {
+        const targetIndex = rewriteExpr(statement.target.index);
+        const target = targetIndex === statement.target.index ? statement.target : { ...statement.target, index: targetIndex };
+        const expr = rewriteExpr(statement.expr);
+        const name = resolveIndexed(target);
+        if (name !== undefined) {
+          resolved += 1;
+          return { kind: "assign", target: name, expr, line: statement.line };
+        }
+        return target === statement.target && expr === statement.expr ? statement : { ...statement, target, expr };
+      }
+      case "pause":
+      case "halt":
+      case "return_value": {
+        const expr = rewriteExpr(statement.expr);
+        return expr === statement.expr ? statement : { ...statement, expr };
+      }
+      case "if": {
+        const condition = rewriteCondition(statement.condition);
+        const thenBody = rewriteStatements(statement.thenBody);
+        const elseBody = statement.elseBody === undefined ? undefined : rewriteStatements(statement.elseBody);
+        return {
+          ...statement,
+          condition,
+          thenBody,
+          ...(elseBody === undefined ? {} : { elseBody }),
+        };
+      }
+      case "while": {
+        const condition = rewriteCondition(statement.condition);
+        const body = rewriteStatements(statement.body);
+        return { ...statement, condition, body };
+      }
+      case "loop":
+        return { ...statement, body: rewriteStatements(statement.body) };
+      case "dispatch": {
+        return {
+          ...statement,
+          expr: rewriteExpr(statement.expr),
+          cases: statement.cases.map((dispatchCase) => ({
+            ...dispatchCase,
+            value: rewriteExpr(dispatchCase.value),
+            body: rewriteStatements(dispatchCase.body),
+          })),
+          ...(statement.defaultBody === undefined ? {} : { defaultBody: rewriteStatements(statement.defaultBody) }),
+        };
+      }
+      case "core":
+        return {
+          ...statement,
+          ...(statement.inputs === undefined
+            ? {}
+            : { inputs: statement.inputs.map((input) => ({ ...input, expr: rewriteExpr(input.expr) })) }),
+        };
+      case "input":
+      case "show":
+      case "call":
+      case "decimal_series":
+        return statement;
+    }
+  });
+
+  for (const display of ast.displays) {
+    display.items = display.items.map((item): DisplayItemAst => {
+      if (item.kind !== "source" || item.expr === undefined) return item;
+      const expr = rewriteExpr(item.expr);
+      if (expr.kind === "identifier") {
+        const lowered: DisplayItemAst = { kind: "source", name: expr.name, line: item.line };
+        if (item.width !== undefined) lowered.width = item.width;
+        if (item.pad !== undefined) lowered.pad = item.pad;
+        return lowered;
+      }
+      return expr === item.expr ? item : { ...item, name: expressionToIntentText(expr), expr };
+    });
+    display.sources = sourceNamesForDisplayItems(display.items);
+  }
+
+  for (const entry of ast.entries) entry.body = rewriteStatements(entry.body);
+  for (const proc of ast.procs) proc.body = rewriteStatements(proc.body);
+  if (resolved > 0) {
+    optimizations.push({
+      name: "constant-indexed-state-resolution",
+      detail: `Resolved ${resolved} constant indexed state access${resolved === 1 ? "" : "es"} before pattern matching.`,
+    });
+  }
+}
+
 function compileMKProOnce(
   source: string,
   options: Partial<CompileOptions>,
@@ -1116,6 +1253,7 @@ function compileMKProOnce(
   const warnings: string[] = [];
   const candidates: CandidateReport[] = [];
 
+  resolveConstantIndexedState(ast, optimizations);
   materializeDisplayExpressions(ast, optimizations);
   elideXParamReturnStateFields(ast, optimizations);
   const foldedConstants = foldProgramConstants(ast);

@@ -15,10 +15,10 @@ program Wumpus {
     target: packed = 0
 
     wumpus: coord(cave) = random_cell(cave)
-    pit1: coord(cave) = random_cell(cave)
-    pit2: coord(cave) = random_cell(cave)
-    bat1: coord(cave) = random_cell(cave)
-    bat2: coord(cave) = random_cell(cave)
+    hazard: group(1..2) {
+      pit: coord(cave) = random_cell(cave)
+      bat: coord(cave) = random_cell(cave)
+    }
 
     arrows: counter 0..5 = 5
     clue: counter 0..9 = 0
@@ -52,10 +52,10 @@ program Wumpus {
   fn sense() {
     clue = 0
 
-    if near_any(room, 1, bat1, bat2) >= 0 {
+    if near_any(room, 1, hazard[1].bat, hazard[2].bat) >= 0 {
       clue = 3
     }
-    if near_any(room, 1, pit1, pit2) >= 0 {
+    if near_any(room, 1, hazard[1].pit, hazard[2].pit) >= 0 {
       clue = 2
     }
     if near_any(room, 1, wumpus) >= 0 {
@@ -99,11 +99,11 @@ program Wumpus {
       dead()
     }
     else {
-      if eq_any(room, pit1, pit2) == 0 {
+      if eq_any(room, hazard[1].pit, hazard[2].pit) == 0 {
         dead()
       }
       else {
-        if eq_any(room, bat1, bat2) == 0 {
+        if eq_any(room, hazard[1].bat, hazard[2].bat) == 0 {
           bat_jump()
         }
       }
