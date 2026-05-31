@@ -653,14 +653,14 @@ exports[`golden listing > selected output is stable for examples/99-bottles.mkpr
    00 |  60  | П->X 0                  | text display verse
    01 |  01  | 1                       | text tens divisor
    02 |  00  | 0                       | text tens divisor
-   03 |  13  | /                       | text tens
+   03 |  13  | ÷                       | text tens
    04 |  34  | К [x]                   | text tens integer
    05 |  41  | X->П 1                  | text tens scratch
    06 |  0F  | F Вx                    | text ones from last X
    07 |  35  | К {x}                   | text ones fraction
    08 |  01  | 1                       | text ones scale
    09 |  00  | 0                       | text ones scale
-   10 |  12  | *                       | text ones
+   10 |  12  | ×                       | text ones
    11 |  42  | X->П 2                  | text ones scratch
    12 |  01  | 1                       | text display tens prefix
    13 |  01  | 1                       | text display tens prefix
@@ -859,7 +859,7 @@ exports[`golden listing > selected output is stable for examples/alaram.mkpro 1`
    62 |  3A  | К ИНВ                   | setup Rc first digit
    63 |  35  | К {x}                   | setup Rc first digit
    64 |  6C  | П->X c                  | setup Rc body scratch
-   65 |  14  | <->                     | display sign-digit first-cell splice
+   65 |  14  | ↔                       | display sign-digit first-cell splice
    66 |  54  | К НОП                   | display sign-digit first-cell splice
    67 |  0C  | ВП                      | display sign-digit first-cell splice
    68 |  07  | 7                       | setup Rc exponent
@@ -940,7 +940,7 @@ exports[`golden listing > selected output is stable for examples/alaram.mkpro 1`
    64 |  47  | X->П 7                  | set range
    65 |  3B  | К СЧ                    | random()
    66 |  09  | 9                       |
-   67 |  12  | *                       | expr *
+   67 |  12  | ×                       | expr *
    68 |  0E  | В↑                      | random int keep scaled draw
    69 |  35  | К {x}                   | random int fractional part
    70 |  11  | -                       | random int floor
@@ -1567,7 +1567,7 @@ exports[`golden listing > selected output is stable for examples/clock.mkpro 1`]
 ------+------+-------------------------+----------------
    00 |  60  | П->X 0                  | display __inline_show_18_0 source
    01 |  6E  | П->X e                  | preload const 100
-   02 |  12  | *                       | packed display field shift
+   02 |  12  | ×                       | packed display field shift
    03 |  61  | П->X 1                  | display __inline_show_18_0 source
    04 |  10  | +                       | packed display field append
    05 |  50  | С/П                     | show __inline_show_18_0
@@ -1773,15 +1773,15 @@ Setup Block:
 ------+------+-------------------------+----------------
    00 |  62  | П->X 2                  | display __inline_show_30_0 source
    01 |  6C  | П->X c                  | preload const 10
-   02 |  12  | *                       | packed display field shift
+   02 |  12  | ×                       | packed display field shift
    03 |  61  | П->X 1                  | display __inline_show_30_0 source
    04 |  10  | +                       | packed display field append
    05 |  6C  | П->X c                  | preload const 10
-   06 |  12  | *                       | packed display field shift
+   06 |  12  | ×                       | packed display field shift
    07 |  65  | П->X 5                  | display __inline_show_30_0 source
    08 |  10  | +                       | packed display field append
    09 |  6C  | П->X c                  | preload const 10
-   10 |  12  | *                       | packed display field shift
+   10 |  12  | ×                       | packed display field shift
    11 |  63  | П->X 3                  | display __inline_show_30_0 source
    12 |  10  | +                       | packed display field append
    13 |  50  | С/П                     | show __inline_show_30_0
@@ -1848,7 +1848,7 @@ Setup Block:
    74 |  50  | С/П                     | halt
    75 |  3B  | К СЧ                    | random()
    76 |  08  | 8                       |
-   77 |  12  | *                       | expr *
+   77 |  12  | ×                       | expr *
    78 |  0E  | В↑                      | random int keep scaled draw
    79 |  35  | К {x}                   | random int fractional part
    80 |  11  | -                       | random int floor
@@ -2030,7 +2030,7 @@ Setup Block:
 ------+------+-------------------------+----------------
    00 |  62  | П->X 2                  | display __inline_show_30_0 source
    01 |  6E  | П->X e                  | preload const 10
-   02 |  12  | *                       | packed display field shift
+   02 |  12  | ×                       | packed display field shift
    03 |  63  | П->X 3                  | display __inline_show_30_0 source
    04 |  10  | +                       | packed display field append
    05 |  50  | С/П                     | show __inline_show_30_0
@@ -2096,10 +2096,10 @@ Setup Block:
    65 |  60  | П->X 0                  | recall plan
    66 |  62  | П->X 2                  | recall pos
    67 |  15  | F 10^x                  | pow10()
-   68 |  13  | /                       | expr /
+   68 |  13  | ÷                       | expr /
    69 |  35  | К {x}                   | frac()
    70 |  6E  | П->X e                  | preload const 10
-   71 |  12  | *                       | expr *
+   71 |  12  | ×                       | expr *
    72 |  34  | К [x]                   | int()
    73 |  63  | П->X 3                  | recall height
    74 |  11  | -                       | condition compare
@@ -2336,7 +2336,7 @@ exports[`golden listing > selected output is stable for examples/e-94-digits.mkp
    33 |  0E  | В↑                      | decimal recurrence carry
    34 |  0F  | F Вx                    | decimal recurrence carry
    35 |  00  | 0                       | decimal recurrence reference gap
-   36 |  13  | /                       | decimal recurrence division
+   36 |  13  | ÷                       | decimal recurrence division
    37 |  0F  | F Вx                    | decimal recurrence division
    38 |  25  | F ↻                     | decimal recurrence division
    39 |  34  | К [x]                   | decimal recurrence division
@@ -2463,7 +2463,7 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-100.mk
    29 |  09  | 9                       |
    30 |  09  | 9                       |
    31 |  09  | 9                       |
-   32 |  12  | *                       | expr *
+   32 |  12  | ×                       | expr *
    33 |  0E  | В↑                      | random int keep scaled draw
    34 |  35  | К {x}                   | random int fractional part
    35 |  11  | -                       | random int floor
@@ -2498,10 +2498,10 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-100.mk
    22 |  4B  | X->П b                  | line_count total
    23 |  64  | П->X 4                  | recall cell
    24 |  6A  | П->X a                  | preload const 10
-   25 |  13  | /                       | expr /
+   25 |  13  | ÷                       | expr /
    26 |  35  | К {x}                   | frac()
    27 |  6A  | П->X a                  | preload const 10
-   28 |  12  | *                       | expr *
+   28 |  12  | ×                       | expr *
    29 |  0B  | /-/                     | unary minus
    30 |  4C  | X->П c                  | line_count offset
    31 |  01  | 1                       |
@@ -2511,10 +2511,10 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-100.mk
    35 |  6A  | П->X a                  | preload const 10
    36 |  64  | П->X 4                  | recall cell
    37 |  6A  | П->X a                  | preload const 10
-   38 |  13  | /                       | expr /
+   38 |  13  | ÷                       | expr /
    39 |  34  | К [x]                   | int()
    40 |  0B  | /-/                     | unary minus
-   41 |  12  | *                       | expr *
+   41 |  12  | ×                       | expr *
    42 |  4C  | X->П c                  | line_count offset
    43 |  6A  | П->X a                  | preload const 10
    44 |  4D  | X->П d                  | line_count step
@@ -2557,11 +2557,11 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-100.mk
    81 |  62  | 62                      | line_count loop
    82 |  52  | В/О                     | line_count progression return
    83 |  04  | 4                       |
-   84 |  13  | /                       | bit mask quotient
+   84 |  13  | ÷                       | bit mask quotient
    85 |  41  | X->П 1                  | bit mask quotient
    86 |  35  | К {x}                   | bit mask remainder fraction
    87 |  04  | 4                       |
-   88 |  12  | *                       | bit mask remainder scale
+   88 |  12  | ×                       | bit mask remainder scale
    89 |  02  | 2                       |
    90 |  24  | F x^y                   | bit mask power
    91 |  00  | 0                       |
@@ -2574,7 +2574,7 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-100.mk
    98 |  01  | 1                       |
    99 |  10  | +                       | bit mask decade index
    A0 |  15  | F 10^x                  | bit mask decade
-   A1 |  13  | /                       | bit mask fractional place
+   A1 |  13  | ÷                       | bit mask fractional place
    A2 |  08  | 8                       |
    A3 |  10  | +                       | bit mask anchor
    A4 |  52  | В/О                     | bit_mask return
@@ -2785,16 +2785,16 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-mk61.m
    06 |  6E  | П->X e                  | random coord seed
    07 |  03  | 3                       |
    08 |  07  | 7                       |
-   09 |  12  | *                       | random coord next seed
+   09 |  12  | ×                       | random coord next seed
    10 |  35  | К {x}                   | random coord seed fraction
    11 |  4E  | X->П e                  | random coord seed
    12 |  02  | 2                       |
    13 |  15  | F 10^x                  | constant 100
-   14 |  12  | *                       | random coord scaled seed
+   14 |  12  | ×                       | random coord scaled seed
    15 |  34  | К [x]                   | random coord flat index
    16 |  01  | 1                       |
    17 |  00  | 0                       |
-   18 |  13  | /                       | random coord scaled decimal cell
+   18 |  13  | ÷                       | random coord scaled decimal cell
    19 |  40  | X->П 0                  | random coord scaled decimal cell
    20 |  09  | 9                       |
    21 |  62  | П->X 2                  | random coord remaining
@@ -2843,11 +2843,11 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-mk61.m
    01 |  0E  | В↑                      | separate read entry before scaled coord
    02 |  01  | 1                       |
    03 |  00  | 0                       |
-   04 |  13  | /                       | read scaled decimal coord
+   04 |  13  | ÷                       | read scaled decimal coord
    05 |  43  | X->П 3                  | read cell
    06 |  05  | 5                       |
    07 |  15  | F 10^x                  | coord_list fused dashed report cell scale
-   08 |  12  | *                       | coord_list fused dashed report cell shift
+   08 |  12  | ×                       | coord_list fused dashed report cell shift
    09 |  44  | X->П 4                  | coord_list fused dashed report body
    10 |  05  | 5                       |
    11 |  45  | X->П 5                  | coord_list pointer
@@ -2869,7 +2869,7 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-mk61.m
    27 |  50  | 50                      | coord_list fused same column
    28 |  01  | 1                       |
    29 |  00  | 0                       |
-   30 |  12  | *                       | coord_list fused dx digit
+   30 |  12  | ×                       | coord_list fused dx digit
    31 |  60  | П->X 0                  | recall __coord_list_current
    32 |  34  | К [x]                   | coord_list fused current y
    33 |  63  | П->X 3                  | recall cell
@@ -2878,7 +2878,7 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-mk61.m
    36 |  57  | F x!=0                  | coord_list fused same row
    37 |  50  | 50                      | coord_list fused same row
    38 |  31  | К |x|                   | coord_list fused |dy|
-   39 |  14  | <->                     | coord_list fused dx
+   39 |  14  | ↔                       | coord_list fused dx
    40 |  31  | К |x|                   | coord_list fused |dx|
    41 |  11  | -                       | coord_list fused diagonal compare
    42 |  57  | F x!=0                  | coord_list fused same diagonal
@@ -3108,7 +3108,7 @@ Setup Block:
    12 |  00  | 00                      | loop back
    13 |  62  | П->X 2                  | recall n
    14 |  62  | П->X 2                  | recall n
-   15 |  12  | *                       | expr *
+   15 |  12  | ×                       | expr *
    16 |  52  | В/О                     | return value
    17 |  62  | П->X 2                  | recall a
    18 |  42  | X->П 2                  | arg n for square
@@ -3275,7 +3275,7 @@ exports[`golden listing > selected output is stable for examples/game-100-pig.mk
    07 |  46  | X->П 6                  | set roll_count
    08 |  3B  | К СЧ                    | random()
    09 |  06  | 6                       |
-   10 |  12  | *                       | expr *
+   10 |  12  | ×                       | expr *
    11 |  0E  | В↑                      | random int keep scaled draw
    12 |  35  | К {x}                   | random int fractional part
    13 |  11  | -                       | random int floor
@@ -3342,10 +3342,10 @@ exports[`golden listing > selected output is stable for examples/game-100-pig.mk
    74 |  89  | К БП 9                  | tail call roll_player; preloaded R9=D0 indirect-target=18 indirect flow
    75 |  67  | П->X 7                  | display __inline_show_80_0 score
    76 |  6C  | П->X c                  | preload const 1000
-   77 |  13  | /                       | display template score shift
+   77 |  13  | ÷                       | display template score shift
    78 |  65  | П->X 5                  | display __inline_show_80_0 total
    79 |  6D  | П->X d                  | preload const 10000000
-   80 |  13  | /                       | display template total shift
+   80 |  13  | ÷                       | display template total shift
    81 |  10  | +                       | display template total append
    82 |  09  | 9                       | display template numeric anchor
    83 |  10  | +                       | display template numeric body
@@ -3363,7 +3363,7 @@ exports[`golden listing > selected output is stable for examples/game-100-pig.mk
    95 |  42  | X->П 2                  | display __inline_show_80_0 exponent body
    96 |  63  | П->X 3                  | display __inline_show_80_0 leader
    97 |  62  | П->X 2                  | display __inline_show_80_0 body
-   98 |  14  | <->                     | display template leader merge
+   98 |  14  | ↔                       | display template leader merge
    99 |  54  | К НОП                   | display template leader preserve
    A0 |  0C  | ВП                      | display template leader restore
    A1 |  50  | С/П                     | show __inline_show_80_0
@@ -3653,7 +3653,7 @@ Setup Block:
 ------+------+-------------------------+----------------
    00 |  64  | П->X 4                  | display __inline_show_17_0 source
    01 |  6E  | П->X e                  | preload const 10
-   02 |  12  | *                       | packed display field shift
+   02 |  12  | ×                       | packed display field shift
    03 |  62  | П->X 2                  | display __inline_show_17_0 source
    04 |  10  | +                       | packed display field append
    05 |  50  | С/П                     | show __inline_show_17_0
@@ -3822,7 +3822,7 @@ exports[`golden listing > selected output is stable for examples/jack-pot.mkpro 
    28 |  4B  | X->П b                  | setup Rb body scratch
    29 |  01  | 1                       | setup Rb first digit
    30 |  6B  | П->X b                  | setup Rb body scratch
-   31 |  14  | <->                     | display sign-digit first-cell splice
+   31 |  14  | ↔                       | display sign-digit first-cell splice
    32 |  54  | К НОП                   | display sign-digit first-cell splice
    33 |  0C  | ВП                      | display sign-digit first-cell splice
    34 |  02  | 2                       | setup Rb exponent
@@ -3849,7 +3849,7 @@ exports[`golden listing > selected output is stable for examples/jack-pot.mkpro 
    55 |  3A  | К ИНВ                   | setup Ra first digit
    56 |  35  | К {x}                   | setup Ra first digit
    57 |  6A  | П->X a                  | setup Ra body scratch
-   58 |  14  | <->                     | display sign-digit first-cell splice
+   58 |  14  | ↔                       | display sign-digit first-cell splice
    59 |  54  | К НОП                   | display sign-digit first-cell splice
    60 |  0C  | ВП                      | display sign-digit first-cell splice
    61 |  06  | 6                       | setup Ra exponent
@@ -3892,7 +3892,7 @@ exports[`golden listing > selected output is stable for examples/jack-pot.mkpro 
    28 |  3B  | К СЧ                    | random()
    29 |  01  | 1                       |
    30 |  00  | 0                       |
-   31 |  12  | *                       | expr *
+   31 |  12  | ×                       | expr *
    32 |  0E  | В↑                      | random int keep scaled draw
    33 |  35  | К {x}                   | random int fractional part
    34 |  11  | -                       | random int floor
@@ -3911,7 +3911,7 @@ exports[`golden listing > selected output is stable for examples/jack-pot.mkpro 
    47 |  01  | 1                       |
    48 |  00  | 0                       |
    49 |  69  | П->X 9                  | recall reels
-   50 |  12  | *                       | expr *
+   50 |  12  | ×                       | expr *
    51 |  66  | П->X 6                  | recall digit
    52 |  10  | +                       | expr +
    53 |  49  | X->П 9                  | set reels
@@ -3923,7 +3923,7 @@ exports[`golden listing > selected output is stable for examples/jack-pot.mkpro 
    59 |  64  | П->X 4                  | recall digits_4
    60 |  10  | +                       | expr +
    61 |  05  | 5                       |
-   62 |  13  | /                       | expr /
+   62 |  13  | ÷                       | expr /
    63 |  35  | К {x}                   | frac()
    64 |  5E  | F x=0                   | false branch for ==
    65 |  70  | 70                      | false branch for ==
@@ -4243,9 +4243,9 @@ Setup Block:
    05 |  50  | С/П                     | show __inline_show_28_2
    06 |  41  | X->П 1                  | read burn
    07 |  6B  | П->X b                  | preload const 10
-   08 |  12  | *                       | expr *
+   08 |  12  | ×                       | expr *
    09 |  62  | П->X 2                  | recall fuel
-   10 |  13  | /                       | expr /
+   10 |  13  | ÷                       | expr /
    11 |  6E  | П->X e                  | preload const 9.8
    12 |  11  | -                       | expr -
    13 |  40  | X->П 0                  | set accel
@@ -4254,7 +4254,7 @@ Setup Block:
    16 |  11  | -                       | expr -
    17 |  60  | П->X 0                  | recall accel
    18 |  02  | 2                       |
-   19 |  13  | /                       | expr /
+   19 |  13  | ÷                       | expr /
    20 |  11  | -                       | expr -
    21 |  43  | X->П 3                  | set height
    22 |  64  | П->X 4                  | recall speed
@@ -4430,7 +4430,7 @@ exports[`golden listing > selected output is stable for examples/minesweeper-9x7
    07 |  09  | 9                       |
    08 |  09  | 9                       |
    09 |  09  | 9                       |
-   10 |  12  | *                       | expr *
+   10 |  12  | ×                       | expr *
    11 |  0E  | В↑                      | random int keep scaled draw
    12 |  35  | К {x}                   | random int fractional part
    13 |  11  | -                       | random int floor
@@ -4515,11 +4515,11 @@ exports[`golden listing > selected output is stable for examples/minesweeper-9x7
    72 |  51  | БП                      | loop back
    73 |  00  | 00                      | loop back
    74 |  04  | 4                       |
-   75 |  13  | /                       | bit mask quotient
+   75 |  13  | ÷                       | bit mask quotient
    76 |  40  | X->П 0                  | bit mask quotient
    77 |  35  | К {x}                   | bit mask remainder fraction
    78 |  04  | 4                       |
-   79 |  12  | *                       | bit mask remainder scale
+   79 |  12  | ×                       | bit mask remainder scale
    80 |  02  | 2                       |
    81 |  24  | F x^y                   | bit mask power
    82 |  00  | 0                       |
@@ -4532,7 +4532,7 @@ exports[`golden listing > selected output is stable for examples/minesweeper-9x7
    89 |  01  | 1                       |
    90 |  10  | +                       | bit mask decade index
    91 |  15  | F 10^x                  | bit mask decade
-   92 |  13  | /                       | bit mask fractional place
+   92 |  13  | ÷                       | bit mask fractional place
    93 |  08  | 8                       |
    94 |  10  | +                       | bit mask anchor
    95 |  62  | П->X 2                  | spatial hit mask
@@ -4700,7 +4700,7 @@ exports[`golden listing > selected output is stable for examples/minesweeper-9x9
    12 |  09  | 9                       |
    13 |  09  | 9                       |
    14 |  09  | 9                       |
-   15 |  12  | *                       | expr *
+   15 |  12  | ×                       | expr *
    16 |  0E  | В↑                      | random int keep scaled draw
    17 |  35  | К {x}                   | random int fractional part
    18 |  11  | -                       | random int floor
@@ -4775,11 +4775,11 @@ exports[`golden listing > selected output is stable for examples/minesweeper-9x9
    62 |  50  | С/П                     | show __inline_show_39_0
    63 |  87  | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow
    64 |  04  | 4                       |
-   65 |  13  | /                       | bit mask quotient
+   65 |  13  | ÷                       | bit mask quotient
    66 |  40  | X->П 0                  | bit mask quotient
    67 |  35  | К {x}                   | bit mask remainder fraction
    68 |  04  | 4                       |
-   69 |  12  | *                       | bit mask remainder scale
+   69 |  12  | ×                       | bit mask remainder scale
    70 |  02  | 2                       |
    71 |  24  | F x^y                   | bit mask power
    72 |  00  | 0                       |
@@ -4792,7 +4792,7 @@ exports[`golden listing > selected output is stable for examples/minesweeper-9x9
    79 |  01  | 1                       |
    80 |  10  | +                       | bit mask decade index
    81 |  15  | F 10^x                  | bit mask decade
-   82 |  13  | /                       | bit mask fractional place
+   82 |  13  | ÷                       | bit mask fractional place
    83 |  08  | 8                       |
    84 |  10  | +                       | bit mask anchor
    85 |  62  | П->X 2                  | spatial hit mask
@@ -4991,7 +4991,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    39 |  09  | 9                       |
    40 |  09  | 9                       |
    41 |  09  | 9                       |
-   42 |  12  | *                       | expr *
+   42 |  12  | ×                       | expr *
    43 |  0E  | В↑                      | random int keep scaled draw
    44 |  35  | К {x}                   | random int fractional part
    45 |  11  | -                       | random int floor
@@ -5000,7 +5000,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    48 |  09  | 9                       |
    49 |  09  | 9                       |
    50 |  09  | 9                       |
-   51 |  12  | *                       | expr *
+   51 |  12  | ×                       | expr *
    52 |  0E  | В↑                      | random int keep scaled draw
    53 |  35  | К {x}                   | random int fractional part
    54 |  11  | -                       | random int floor
@@ -5162,7 +5162,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
   >95 |  1C  | F sin                   | risk input fight_entry
   >96 |  01  | 1                       | risk multiplier
   >97 |  10  | +                       | risk multiplier
-  >98 |  12  | *                       | risk stake
+  >98 |  12  | ×                       | risk stake
   >99 |  34  | К [x]                   | risk integer result
   >9A |  52  | В/О                     | return value
   >9B |  00  | 0                       | halt
@@ -5498,7 +5498,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    39 |  09  | 9                       |
    40 |  09  | 9                       |
    41 |  09  | 9                       |
-   42 |  12  | *                       | expr *
+   42 |  12  | ×                       | expr *
    43 |  0E  | В↑                      | random int keep scaled draw
    44 |  35  | К {x}                   | random int fractional part
    45 |  11  | -                       | random int floor
@@ -5507,7 +5507,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    48 |  09  | 9                       |
    49 |  09  | 9                       |
    50 |  09  | 9                       |
-   51 |  12  | *                       | expr *
+   51 |  12  | ×                       | expr *
    52 |  0E  | В↑                      | random int keep scaled draw
    53 |  35  | К {x}                   | random int fractional part
    54 |  11  | -                       | random int floor
@@ -5679,7 +5679,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
   >9F |  1C  | F sin                   | risk input fight_entry
   >A0 |  01  | 1                       | risk multiplier
   >A1 |  10  | +                       | risk multiplier
-  >A2 |  12  | *                       | risk stake
+  >A2 |  12  | ×                       | risk stake
   >A3 |  34  | К [x]                   | risk integer result
   >A4 |  52  | В/О                     | return value
 
@@ -6029,7 +6029,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    47 |  09  | 9                       |
    48 |  09  | 9                       |
    49 |  09  | 9                       |
-   50 |  12  | *                       | expr *
+   50 |  12  | ×                       | expr *
    51 |  0E  | В↑                      | random int keep scaled draw
    52 |  35  | К {x}                   | random int fractional part
    53 |  11  | -                       | random int floor
@@ -6050,29 +6050,29 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    06 |  63  | П->X 3                  | recall plans
    07 |  65  | П->X 5                  | recall pos
    08 |  6D  | П->X d                  | preload const 10
-   09 |  13  | /                       | remainder quotient
+   09 |  13  | ÷                       | remainder quotient
    10 |  35  | К {x}                   | remainder fractional part
    11 |  6D  | П->X d                  | preload const 10
-   12 |  12  | *                       | remainder scale
+   12 |  12  | ×                       | remainder scale
    13 |  15  | F 10^x                  | pow10()
-   14 |  13  | /                       | expr /
+   14 |  13  | ÷                       | expr /
    15 |  35  | К {x}                   | frac()
    16 |  6D  | П->X d                  | preload const 10
-   17 |  12  | *                       | expr *
+   17 |  12  | ×                       | expr *
    18 |  34  | К [x]                   | int()
    19 |  52  | В/О                     | expression helper return
    20 |  63  | П->X 3                  | recall plans
    21 |  AA  | К ПП a                  | proc call return suffix gadget; preloaded Ra=B8 indirect-target=6 indirect flow
    22 |  65  | П->X 5                  | recall pos
    23 |  6D  | П->X d                  | preload const 10
-   24 |  13  | /                       | remainder quotient
+   24 |  13  | ÷                       | remainder quotient
    25 |  35  | К {x}                   | remainder fractional part
    26 |  6D  | П->X d                  | preload const 10
-   27 |  12  | *                       | remainder scale
+   27 |  12  | ×                       | remainder scale
    28 |  01  | 1                       |
    29 |  11  | -                       | expr -
    30 |  15  | F 10^x                  | pow10()
-   31 |  12  | *                       | expr *
+   31 |  12  | ×                       | expr *
    32 |  11  | -                       | expr -
    33 |  52  | В/О                     | expression helper return
    34 |  A9  | К ПП 9                  | show __inline_show_35_0; preloaded R9=B4 indirect-target=2 indirect flow
@@ -6561,7 +6561,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    44 |  09  | 9                       |
    45 |  09  | 9                       |
    46 |  09  | 9                       |
-   47 |  12  | *                       | expr *
+   47 |  12  | ×                       | expr *
    48 |  0E  | В↑                      | random int keep scaled draw
    49 |  35  | К {x}                   | random int fractional part
    50 |  11  | -                       | random int floor
@@ -6576,7 +6576,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    59 |  09  | 9                       |
    60 |  09  | 9                       |
    61 |  09  | 9                       |
-   62 |  12  | *                       | expr *
+   62 |  12  | ×                       | expr *
    63 |  0E  | В↑                      | random int keep scaled draw
    64 |  35  | К {x}                   | random int fractional part
    65 |  11  | -                       | random int floor
@@ -6593,15 +6593,15 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    02 |  65  | П->X 5                  | recall __cell_map_maze
    03 |  63  | П->X 3                  | recall pos
    04 |  69  | П->X 9                  | preload const 10
-   05 |  13  | /                       | remainder quotient
+   05 |  13  | ÷                       | remainder quotient
    06 |  35  | К {x}                   | remainder fractional part
    07 |  69  | П->X 9                  | preload const 10
-   08 |  12  | *                       | remainder scale
+   08 |  12  | ×                       | remainder scale
    09 |  15  | F 10^x                  | pow10()
-   10 |  13  | /                       | expr /
+   10 |  13  | ÷                       | expr /
    11 |  35  | К {x}                   | frac()
    12 |  69  | П->X 9                  | preload const 10
-   13 |  12  | *                       | expr *
+   13 |  12  | ×                       | expr *
    14 |  34  | К [x]                   | int()
    15 |  52  | В/О                     | expression helper return
    16 |  53  | ПП                      | expr digit_at(__cell_map_maze, pos - 10 * int(pos / 10))
@@ -6611,10 +6611,10 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    20 |  08  | 8                       |
    21 |  63  | П->X 3                  | recall pos
    22 |  04  | 4                       |
-   23 |  13  | /                       | remainder quotient
+   23 |  13  | ÷                       | remainder quotient
    24 |  35  | К {x}                   | remainder fractional part
    25 |  04  | 4                       |
-   26 |  12  | *                       | remainder scale
+   26 |  12  | ×                       | remainder scale
    27 |  02  | 2                       |
    28 |  24  | F x^y                   | pow()
    29 |  6A  | П->X a                  | preload const 0.5
@@ -6622,12 +6622,12 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    31 |  34  | К [x]                   | int()
    32 |  63  | П->X 3                  | recall pos
    33 |  04  | 4                       |
-   34 |  13  | /                       | expr /
+   34 |  13  | ÷                       | expr /
    35 |  34  | К [x]                   | int()
    36 |  01  | 1                       |
    37 |  10  | +                       | expr +
    38 |  15  | F 10^x                  | pow10()
-   39 |  13  | /                       | expr /
+   39 |  13  | ÷                       | expr /
    40 |  10  | +                       | expr +
    41 |  37  | К ∧                     | bit_and()
    42 |  35  | К {x}                   | frac()
@@ -6681,11 +6681,11 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    90 |  52  | В/О                     | implicit return from proc
    91 |  63  | П->X 3                  | display __inline_show_41_0 source
    92 |  69  | П->X 9                  | preload const 10
-   93 |  12  | *                       | packed display field shift
+   93 |  12  | ×                       | packed display field shift
    94 |  67  | П->X 7                  | display __inline_show_41_0 source
    95 |  10  | +                       | packed display field append
    96 |  69  | П->X 9                  | preload const 10
-   97 |  12  | *                       | packed display field shift
+   97 |  12  | ×                       | packed display field shift
    98 |  64  | П->X 4                  | display __inline_show_41_0 source
    99 |  10  | +                       | packed display field append
    A0 |  50  | С/П                     | show __inline_show_41_0
@@ -7167,9 +7167,9 @@ Setup Block:
    34 |  3B  | К СЧ                    | random()
    35 |  01  | 1                       |
    36 |  03  | 3                       |
-   37 |  12  | *                       | expr *
+   37 |  12  | ×                       | expr *
    38 |  03  | 3                       |
-   39 |  13  | /                       | expr /
+   39 |  13  | ÷                       | expr /
    40 |  34  | К [x]                   | int()
    41 |  4D  | X->П d                  | set event_target
    42 |  5E  | F x=0                   | false branch for ==
@@ -7180,7 +7180,7 @@ Setup Block:
    47 |  48  | X->П 8                  | set random_state
    48 |  04  | 4                       |
    49 |  15  | F 10^x                  | constant 10000
-   50 |  12  | *                       | expr *
+   50 |  12  | ×                       | expr *
    51 |  34  | К [x]                   | int()
    52 |  49  | X->П 9                  | set scratch
    53 |  DD  | К П->X d                | indexed recall cells
@@ -7245,15 +7245,15 @@ Setup Block:
   >70 |  10  | +                       | expr +
   >71 |  02  | 2                       |
   >72 |  00  | 0                       |
-  >73 |  12  | *                       | expr *
+  >73 |  12  | ×                       | expr *
   >74 |  DB  | К П->X b                | indexed recall cells
-  >75 |  12  | *                       | expr *
+  >75 |  12  | ×                       | expr *
   >76 |  DC  | К П->X c                | indexed recall cells
-  >77 |  13  | /                       | expr /
+  >77 |  13  | ÷                       | expr /
   >78 |  34  | К [x]                   | int()
   >79 |  03  | 3                       |
   >7A |  15  | F 10^x                  | constant 1000
-  >7B |  13  | /                       | expr /
+  >7B |  13  | ÷                       | expr /
   >7C |  49  | X->П 9                  | set scratch
   >7D |  DB  | К П->X b                | indexed recall cells
   >7E |  35  | К {x}                   | frac()
@@ -7268,9 +7268,9 @@ Setup Block:
   >87 |  14  | 14                      | tail continuation
   >88 |  0E  | В↑                      | x-param decay keep base
   >89 |  68  | П->X 8                  | recall random_state
-  >8A |  12  | *                       | x-param decay scale
+  >8A |  12  | ×                       | x-param decay scale
   >8B |  04  | 4                       |
-  >8C |  13  | /                       | x-param decay divide
+  >8C |  13  | ÷                       | x-param decay divide
   >8D |  34  | К [x]                   | x-param decay int
   >8E |  11  | -                       | x-param decay subtract
   >8F |  52  | В/О                     | x-param decay return
@@ -7486,7 +7486,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    26 |  09  | 9                       |
    27 |  09  | 9                       |
    28 |  09  | 9                       |
-   29 |  12  | *                       | expr *
+   29 |  12  | ×                       | expr *
    30 |  0E  | В↑                      | random int keep scaled draw
    31 |  35  | К {x}                   | random int fractional part
    32 |  11  | -                       | random int floor
@@ -7495,7 +7495,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    35 |  09  | 9                       |
    36 |  09  | 9                       |
    37 |  09  | 9                       |
-   38 |  12  | *                       | expr *
+   38 |  12  | ×                       | expr *
    39 |  0E  | В↑                      | random int keep scaled draw
    40 |  35  | К {x}                   | random int fractional part
    41 |  11  | -                       | random int floor
@@ -7503,7 +7503,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    43 |  05  | 5                       |
    44 |  0E  | В↑                      | separate adjacent number entry
    45 |  09  | 9                       |
-   46 |  13  | /                       | expr /
+   46 |  13  | ÷                       | expr /
    47 |  3A  | К ИНВ                   | bit_not()
    48 |  43  | X->П 3                  | setup empty_row
    49 |  50  | С/П                     | setup complete
@@ -7514,11 +7514,11 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    00 |  51  | БП                      | skip hoisted shared helpers
    01 |  24  | 24                      | skip hoisted shared helpers
    02 |  04  | 4                       |
-   03 |  13  | /                       | bit mask quotient
+   03 |  13  | ÷                       | bit mask quotient
    04 |  40  | X->П 0                  | bit mask quotient
    05 |  35  | К {x}                   | bit mask remainder fraction
    06 |  04  | 4                       |
-   07 |  12  | *                       | bit mask remainder scale
+   07 |  12  | ×                       | bit mask remainder scale
    08 |  02  | 2                       |
    09 |  24  | F x^y                   | bit mask power
    10 |  00  | 0                       |
@@ -7531,7 +7531,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    17 |  01  | 1                       |
    18 |  10  | +                       | bit mask decade index
    19 |  15  | F 10^x                  | bit mask decade
-   20 |  13  | /                       | bit mask fractional place
+   20 |  13  | ÷                       | bit mask fractional place
    21 |  08  | 8                       |
    22 |  10  | +                       | bit mask anchor
    23 |  52  | В/О                     | bit_mask return
@@ -7554,7 +7554,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    40 |  42  | X->П 2                  | set charges
    41 |  3B  | К СЧ                    | random()
    42 |  07  | 7                       |
-   43 |  12  | *                       | expr *
+   43 |  12  | ×                       | expr *
    44 |  0E  | В↑                      | random int keep scaled draw
    45 |  35  | К {x}                   | random int fractional part
    46 |  11  | -                       | random int floor
@@ -7563,13 +7563,13 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    49 |  6D  | П->X d                  | preload const 10
    50 |  3B  | К СЧ                    | random()
    51 |  04  | 4                       |
-   52 |  12  | *                       | expr *
+   52 |  12  | ×                       | expr *
    53 |  0E  | В↑                      | random int keep scaled draw
    54 |  35  | К {x}                   | random int fractional part
    55 |  11  | -                       | random int floor
    56 |  01  | 1                       |
    57 |  10  | +                       | expr +
-   58 |  12  | *                       | expr *
+   58 |  12  | ×                       | expr *
    59 |  53  | ПП                      | proc call return suffix gadget
    60 |  70  | >70                     | return suffix gadget target
    61 |  51  | БП                      | if end
@@ -7597,14 +7597,14 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    83 |  05  | 5                       |
    84 |  11  | -                       | cardinal direction key-5
    85 |  6D  | П->X d                  | preload const 10
-   86 |  12  | *                       | cardinal direction x delta
+   86 |  12  | ×                       | cardinal direction x delta
    87 |  51  | БП                      | cardinal direction done
    88 |  6F  | >6F                     | cardinal direction done
    89 |  05  | 5                       |
    90 |  60  | П->X 0                  | cardinal direction y key
    91 |  11  | -                       | cardinal direction 5-key
    92 |  03  | 3                       |
-   93 |  13  | /                       | cardinal direction y delta
+   93 |  13  | ÷                       | cardinal direction y delta
    94 |  51  | БП                      | tail jump try_move
    95 |  6F  | >6F                     | proc call try_move
    96 |  60  | П->X 0                  | recall command
@@ -7658,13 +7658,13 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
   >90 |  42  | X->П 2                  | set charges
   >91 |  67  | П->X 7                  | recall pos
   >92 |  6D  | П->X d                  | preload const 10
-  >93 |  13  | /                       | expr /
+  >93 |  13  | ÷                       | expr /
   >94 |  34  | К [x]                   | int()
   >95 |  45  | X->П 5                  | set floor
   >96 |  67  | П->X 7                  | recall pos
   >97 |  6D  | П->X d                  | preload const 10
   >98 |  65  | П->X 5                  | recall floor
-  >99 |  12  | *                       | expr *
+  >99 |  12  | ×                       | expr *
   >9A |  11  | -                       | expr -
   >9B |  48  | X->П 8                  | set room
   >9C |  63  | П->X 3                  | recall empty_row
@@ -7691,7 +7691,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
   >B1 |  00  | 0                       |
   >B2 |  02  | 2                       |
   >B3 |  09  | 9                       |
-  >B4 |  12  | *                       | expr *
+  >B4 |  12  | ×                       | expr *
   >B5 |  34  | К [x]                   | int()
   >B6 |  10  | +                       | expr +
   >B7 |  37  | К ∧                     | bit_and()
@@ -7720,7 +7720,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
   >CE |  00  | 0                       |
   >CF |  02  | 2                       |
   >D0 |  09  | 9                       |
-  >D1 |  12  | *                       | expr *
+  >D1 |  12  | ×                       | expr *
   >D2 |  34  | К [x]                   | int()
   >D3 |  10  | +                       | expr +
   >D4 |  37  | К ∧                     | bit_and()
@@ -7745,7 +7745,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
   >E7 |  49  | X->П 9                  | set row
   >E8 |  65  | П->X 5                  | display __inline_show_106_0 floor
   >E9 |  69  | П->X 9                  | display __inline_show_106_0 packed row
-  >EA |  14  | <->                     | display packed row floor merge
+  >EA |  14  | ↔                       | display packed row floor merge
   >EB |  25  | F reverse               | display packed row preserve
   >EC |  0C  | ВП                      | display packed row restore
   >ED |  50  | С/П                     | show __inline_show_106_0
@@ -8046,7 +8046,7 @@ Setup Block:
    00 |  63  | П->X 3                  | display __inline_show_32_0 source
    01 |  68  | П->X 8                  | constant 100 base 10
    02 |  22  | F x^2                   | constant 100
-   03 |  12  | *                       | packed display field shift
+   03 |  12  | ×                       | packed display field shift
    04 |  66  | П->X 6                  | display __inline_show_32_0 source
    05 |  10  | +                       | packed display field append
    06 |  50  | С/П                     | show __inline_show_32_0
@@ -8098,7 +8098,7 @@ Setup Block:
    52 |  50  | С/П                     | halt
    53 |  3B  | К СЧ                    | random()
    54 |  04  | 4                       |
-   55 |  12  | *                       | expr *
+   55 |  12  | ×                       | expr *
    56 |  0E  | В↑                      | random int keep scaled draw
    57 |  35  | К {x}                   | random int fractional part
    58 |  11  | -                       | random int floor
@@ -8107,13 +8107,13 @@ Setup Block:
    61 |  68  | П->X 8                  | preload const 10
    62 |  3B  | К СЧ                    | random()
    63 |  04  | 4                       |
-   64 |  12  | *                       | expr *
+   64 |  12  | ×                       | expr *
    65 |  0E  | В↑                      | random int keep scaled draw
    66 |  35  | К {x}                   | random int fractional part
    67 |  11  | -                       | random int floor
    68 |  01  | 1                       |
    69 |  10  | +                       | expr +
-   70 |  12  | *                       | expr *
+   70 |  12  | ×                       | expr *
    71 |  10  | +                       | expr +
    72 |  43  | X->П 3                  | set cell
    73 |  53  | ПП                      | bit_mask helper
@@ -8156,10 +8156,10 @@ Setup Block:
   >6E |  01  | 1                       |
   >6F |  63  | П->X 3                  | recall cell
   >70 |  68  | П->X 8                  | preload const 10
-  >71 |  13  | /                       | expr /
+  >71 |  13  | ÷                       | expr /
   >72 |  35  | К {x}                   | frac()
   >73 |  68  | П->X 8                  | preload const 10
-  >74 |  12  | *                       | expr *
+  >74 |  12  | ×                       | expr *
   >75 |  11  | -                       | expr -
   >76 |  4B  | X->П b                  | line_count offset
   >77 |  01  | 1                       |
@@ -8174,10 +8174,10 @@ Setup Block:
   >80 |  01  | 1                       |
   >81 |  63  | П->X 3                  | recall cell
   >82 |  68  | П->X 8                  | preload const 10
-  >83 |  13  | /                       | expr /
+  >83 |  13  | ÷                       | expr /
   >84 |  34  | К [x]                   | int()
   >85 |  11  | -                       | expr -
-  >86 |  12  | *                       | expr *
+  >86 |  12  | ×                       | expr *
   >87 |  4B  | X->П b                  | line_count offset
   >88 |  68  | П->X 8                  | preload const 10
   >89 |  4A  | X->П a                  | line_count step
@@ -8228,11 +8228,11 @@ Setup Block:
   >B6 |  6D  | П->X d                  | line_count current line
   >B7 |  52  | В/О                     | line_count line progression return
   >B8 |  04  | 4                       |
-  >B9 |  13  | /                       | bit mask quotient
+  >B9 |  13  | ÷                       | bit mask quotient
   >BA |  4E  | X->П e                  | bit mask quotient
   >BB |  35  | К {x}                   | bit mask remainder fraction
   >BC |  04  | 4                       |
-  >BD |  12  | *                       | bit mask remainder scale
+  >BD |  12  | ×                       | bit mask remainder scale
   >BE |  02  | 2                       |
   >BF |  24  | F x^y                   | bit mask power
   >C0 |  00  | 0                       |
@@ -8245,7 +8245,7 @@ Setup Block:
   >C7 |  01  | 1                       |
   >C8 |  10  | +                       | bit mask decade index
   >C9 |  15  | F 10^x                  | bit mask decade
-  >CA |  13  | /                       | bit mask fractional place
+  >CA |  13  | ÷                       | bit mask fractional place
   >CB |  08  | 8                       |
   >CC |  10  | +                       | bit mask anchor
   >CD |  52  | В/О                     | bit_mask return
@@ -8471,7 +8471,7 @@ exports[`golden listing > selected output is stable for examples/raja-yoga.mkpro
    24 |  4E  | X->П e                  | setup Re
    25 |  3B  | К СЧ                    | random()
    26 |  07  | 7                       |
-   27 |  12  | *                       | expr *
+   27 |  12  | ×                       | expr *
    28 |  0E  | В↑                      | random int keep scaled draw
    29 |  35  | К {x}                   | random int fractional part
    30 |  11  | -                       | random int floor
@@ -8481,7 +8481,7 @@ exports[`golden listing > selected output is stable for examples/raja-yoga.mkpro
    34 |  3B  | К СЧ                    | random()
    35 |  6E  | П->X e                  | constant 999 base -999
    36 |  0B  | /-/                     | constant 999
-   37 |  12  | *                       | expr *
+   37 |  12  | ×                       | expr *
    38 |  0E  | В↑                      | random int keep scaled draw
    39 |  35  | К {x}                   | random int fractional part
    40 |  11  | -                       | random int floor
@@ -8499,15 +8499,15 @@ exports[`golden listing > selected output is stable for examples/raja-yoga.mkpro
    05 |  50  | С/П                     | halt
    06 |  64  | П->X 4                  | display __inline_show_34_0 source
    07 |  6C  | П->X c                  | preload const 10
-   08 |  12  | *                       | packed display field shift
+   08 |  12  | ×                       | packed display field shift
    09 |  60  | П->X 0                  | display __inline_show_34_0 source
    10 |  10  | +                       | packed display field append
    11 |  6C  | П->X c                  | preload const 10
-   12 |  12  | *                       | packed display field shift
+   12 |  12  | ×                       | packed display field shift
    13 |  62  | П->X 2                  | display __inline_show_34_0 source
    14 |  10  | +                       | packed display field append
    15 |  6C  | П->X c                  | preload const 10
-   16 |  12  | *                       | packed display field shift
+   16 |  12  | ×                       | packed display field shift
    17 |  65  | П->X 5                  | display __inline_show_34_0 source
    18 |  10  | +                       | packed display field append
    19 |  50  | С/П                     | show __inline_show_34_0
@@ -8572,7 +8572,7 @@ exports[`golden listing > selected output is stable for examples/raja-yoga.mkpro
    78 |  06  | 06                      | proc call await_effort
    79 |  3B  | К СЧ                    | random()
    80 |  07  | 7                       |
-   81 |  12  | *                       | expr *
+   81 |  12  | ×                       | expr *
    82 |  0E  | В↑                      | random int keep scaled draw
    83 |  35  | К {x}                   | random int fractional part
    84 |  11  | -                       | random int floor
@@ -8838,7 +8838,7 @@ exports[`golden listing > selected output is stable for examples/sea-battle.mkpr
    32 |  09  | 9                       |
    33 |  09  | 9                       |
    34 |  09  | 9                       |
-   35 |  12  | *                       | expr *
+   35 |  12  | ×                       | expr *
    36 |  0E  | В↑                      | random int keep scaled draw
    37 |  35  | К {x}                   | random int fractional part
    38 |  11  | -                       | random int floor
@@ -8875,10 +8875,10 @@ exports[`golden listing > selected output is stable for examples/sea-battle.mkpr
    24 |  08  | 8                       |
    25 |  65  | П->X 5                  | recall player_shot
    26 |  04  | 4                       |
-   27 |  13  | /                       | remainder quotient
+   27 |  13  | ÷                       | remainder quotient
    28 |  35  | К {x}                   | remainder fractional part
    29 |  04  | 4                       |
-   30 |  12  | *                       | remainder scale
+   30 |  12  | ×                       | remainder scale
    31 |  02  | 2                       |
    32 |  24  | F x^y                   | pow()
    33 |  6A  | П->X a                  | preload const 0.5
@@ -8886,12 +8886,12 @@ exports[`golden listing > selected output is stable for examples/sea-battle.mkpr
    35 |  34  | К [x]                   | int()
    36 |  65  | П->X 5                  | recall player_shot
    37 |  04  | 4                       |
-   38 |  13  | /                       | expr /
+   38 |  13  | ÷                       | expr /
    39 |  34  | К [x]                   | int()
    40 |  01  | 1                       |
    41 |  10  | +                       | expr +
    42 |  15  | F 10^x                  | pow10()
-   43 |  13  | /                       | expr /
+   43 |  13  | ÷                       | expr /
    44 |  10  | +                       | expr +
    45 |  37  | К ∧                     | bit_and()
    46 |  35  | К {x}                   | frac()
@@ -8924,7 +8924,7 @@ exports[`golden listing > selected output is stable for examples/sea-battle.mkpr
    73 |  00  | 00                      | loop back
    74 |  3B  | К СЧ                    | random()
    75 |  6B  | П->X b                  | preload const 100
-   76 |  12  | *                       | expr *
+   76 |  12  | ×                       | expr *
    77 |  0E  | В↑                      | random int keep scaled draw
    78 |  35  | К {x}                   | random int fractional part
    79 |  11  | -                       | random int floor
@@ -9146,7 +9146,7 @@ Setup Block:
 ------+------+-------------------------+----------------
    00 |  60  | П->X 0                  | display __inline_show_21_0 source
    01 |  6E  | П->X e                  | preload const 10
-   02 |  12  | *                       | packed display field shift
+   02 |  12  | ×                       | packed display field shift
    03 |  62  | П->X 2                  | display __inline_show_21_0 source
    04 |  10  | +                       | packed display field append
    05 |  50  | С/П                     | show __inline_show_21_0
@@ -9306,7 +9306,7 @@ exports[`golden listing > selected output is stable for examples/treasure-hunter
    23 |  09  | 9                       |
    24 |  09  | 9                       |
    25 |  09  | 9                       |
-   26 |  12  | *                       | expr *
+   26 |  12  | ×                       | expr *
    27 |  0E  | В↑                      | random int keep scaled draw
    28 |  35  | К {x}                   | random int fractional part
    29 |  11  | -                       | random int floor
@@ -9314,7 +9314,7 @@ exports[`golden listing > selected output is stable for examples/treasure-hunter
    31 |  10  | +                       | expr +
    32 |  07  | 7                       |
    33 |  15  | F 10^x                  | constant 10000000
-   34 |  13  | /                       | expr /
+   34 |  13  | ÷                       | expr /
    35 |  10  | +                       | expr +
    36 |  08  | 8                       |
    37 |  0A  | .                       |
@@ -9346,13 +9346,13 @@ exports[`golden listing > selected output is stable for examples/treasure-hunter
    02 |  DD  | К П->X d                | indexed recall rows.row
    03 |  05  | 5                       |
    04 |  60  | П->X 0                  | recall pos
-   05 |  12  | *                       | expr *
+   05 |  12  | ×                       | expr *
    06 |  05  | 5                       |
    07 |  10  | +                       | expr +
    08 |  37  | К ∧                     | bit_and()
    09 |  35  | К {x}                   | frac()
    10 |  60  | П->X 0                  | recall pos
-   11 |  13  | /                       | expr /
+   11 |  13  | ÷                       | expr /
    12 |  52  | В/О                     | expression helper return
    13 |  6D  | П->X d                  | recall floor
    14 |  01  | 1                       |
@@ -9378,14 +9378,14 @@ exports[`golden listing > selected output is stable for examples/treasure-hunter
    34 |  DD  | К П->X d                | indexed recall rows.row
    35 |  02  | 2                       |
    36 |  60  | П->X 0                  | recall pos
-   37 |  12  | *                       | expr *
+   37 |  12  | ×                       | expr *
    38 |  10  | +                       | expr +
    39 |  3A  | К ИНВ                   | bit_not()
    40 |  6D  | П->X d                  | display __inline_show_117_0 floor
-   41 |  14  | <->                     | display packed row expression merge
+   41 |  14  | ↔                       | display packed row expression merge
    42 |  0E  | В↑                      | display packed row expression copy
    43 |  25  | F reverse               | display packed row expression rotate
-   44 |  14  | <->                     | display packed row floor restore
+   44 |  14  | ↔                       | display packed row floor restore
    45 |  25  | F reverse               | display packed row preserve
    46 |  0C  | ВП                      | display packed row restore
    47 |  50  | С/П                     | show __inline_show_117_0
@@ -9394,7 +9394,7 @@ exports[`golden listing > selected output is stable for examples/treasure-hunter
    50 |  DD  | К П->X d                | indexed recall rows.row
    51 |  A8  | К ПП 8                  | expr frac(bit_and(rows[floor].row, 5 * pos + 5)) / pos; preloaded R8=B4 indirect-target=2 indirect flow
    52 |  60  | П->X 0                  | recall pos
-   53 |  12  | *                       | expr *
+   53 |  12  | ×                       | expr *
    54 |  11  | -                       | expr -
    55 |  BD  | К X->П d                | indexed set rows.row
    56 |  A9  | К ПП 9                  | proc call descend; preloaded R9=C5 indirect-target=13 indirect flow
@@ -9425,7 +9425,7 @@ exports[`golden listing > selected output is stable for examples/treasure-hunter
    81 |  60  | П->X 0                  | recall pos
    82 |  01  | 1                       |
    83 |  00  | 0                       |
-   84 |  13  | /                       | expr /
+   84 |  13  | ÷                       | expr /
    85 |  40  | X->П 0                  | set pos
    86 |  8E  | К БП e                  | tail jump inspect_cell; preloaded Re=D2 indirect-target=20 indirect flow
    87 |  60  | П->X 0                  | recall pos
@@ -9443,7 +9443,7 @@ exports[`golden listing > selected output is stable for examples/treasure-hunter
    99 |  01  | 1                       |
    A0 |  00  | 0                       |
    A1 |  60  | П->X 0                  | recall pos
-   A2 |  12  | *                       | expr *
+   A2 |  12  | ×                       | expr *
    A3 |  40  | X->П 0                  | set pos
    A4 |  8E  | К БП e                  | tail jump inspect_cell; preloaded Re=D2 indirect-target=20 indirect flow
 
@@ -9741,7 +9741,7 @@ exports[`golden listing > selected output is stable for examples/wumpus.mkpro 1`
    23 |  40  | X->П 0                  | setup indexed pointer hazard_pit_1..hazard_bat_2
    24 |  3B  | К СЧ                    | random()
    25 |  6C  | П->X c                  | preload const 20
-   26 |  12  | *                       | expr *
+   26 |  12  | ×                       | expr *
    27 |  0E  | В↑                      | random int keep scaled draw
    28 |  35  | К {x}                   | random int fractional part
    29 |  11  | -                       | random int floor
@@ -9757,7 +9757,7 @@ exports[`golden listing > selected output is stable for examples/wumpus.mkpro 1`
    39 |  40  | X->П 0                  | restore setup R0
    40 |  3B  | К СЧ                    | random()
    41 |  6C  | П->X c                  | preload const 20
-   42 |  12  | *                       | expr *
+   42 |  12  | ×                       | expr *
    43 |  0E  | В↑                      | random int keep scaled draw
    44 |  35  | К {x}                   | random int fractional part
    45 |  11  | -                       | random int floor
@@ -9773,7 +9773,7 @@ exports[`golden listing > selected output is stable for examples/wumpus.mkpro 1`
    01 |  18  | 18                      | skip hoisted shared helpers
    02 |  3B  | К СЧ                    | random()
    03 |  6C  | П->X c                  | preload const 20
-   04 |  12  | *                       | expr *
+   04 |  12  | ×                       | expr *
    05 |  0E  | В↑                      | random int keep scaled draw
    06 |  35  | К {x}                   | random int fractional part
    07 |  11  | -                       | random int floor
@@ -9784,7 +9784,7 @@ exports[`golden listing > selected output is stable for examples/wumpus.mkpro 1`
    12 |  11  | -                       | near_any delta
    13 |  31  | К |x|                   | near_any distance
    14 |  01  | 1                       |
-   15 |  14  | <->                     | near_any radius before distance
+   15 |  14  | ↔                       | near_any radius before distance
    16 |  11  | -                       | near_any margin
    17 |  52  | В/О                     | near_any return
    18 |  05  | 5                       |
@@ -9815,7 +9815,7 @@ exports[`golden listing > selected output is stable for examples/wumpus.mkpro 1`
    43 |  45  | X->П 5                  | set clue
    44 |  60  | П->X 0                  | display __inline_show_38_0 source
    45 |  6D  | П->X d                  | preload const 10
-   46 |  13  | /                       | display __inline_show_38_0 decimal point
+   46 |  13  | ÷                       | display __inline_show_38_0 decimal point
    47 |  66  | П->X 6                  | display __inline_show_38_0 integer part
    48 |  10  | +                       | display __inline_show_38_0 integer append
    49 |  50  | С/П                     | show __inline_show_38_0
@@ -9858,7 +9858,7 @@ exports[`golden listing > selected output is stable for examples/wumpus.mkpro 1`
    86 |  66  | П->X 6                  | recall room
    87 |  62  | П->X 2                  | recall hazard_pit_2
    88 |  11  | -                       | expr -
-   89 |  12  | *                       | expr *
+   89 |  12  | ×                       | expr *
    90 |  57  | F x!=0                  | false branch for !=
    91 |  77  | 77                      | false branch for !=
    92 |  66  | П->X 6                  | recall room
@@ -9867,7 +9867,7 @@ exports[`golden listing > selected output is stable for examples/wumpus.mkpro 1`
    95 |  66  | П->X 6                  | recall room
    96 |  64  | П->X 4                  | recall hazard_bat_2
    97 |  11  | -                       | expr -
-   98 |  12  | *                       | expr *
+   98 |  12  | ×                       | expr *
    99 |  EA  | К x=0 a                 | false branch for ==; preloaded Ra=D0 indirect-target=18 indirect flow
    A0 |  53  | ПП                      | random cell int(random(20)) + 1
    A1 |  02  | 02                      | random cell int(random(20)) + 1

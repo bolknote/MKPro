@@ -71,7 +71,7 @@ function formatListingRows(rows: readonly ListingRow[]): string {
   for (const row of rows) {
     const address = formatListingAddress(row.address).padStart(4, " ");
     const code = row.hex.padStart(2, " ");
-    const command = row.mnemonic.padEnd(23, " ");
+    const command = toKeycaps(row.mnemonic).padEnd(23, " ");
     const comments = [row.comment]
       .filter((value): value is string => Boolean(value))
       .join("; ");
