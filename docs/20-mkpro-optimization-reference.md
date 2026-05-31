@@ -302,30 +302,30 @@ Display rewrites are separated into strategy selection + body lowering.
 
 The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 
-1. `redundant-prologue-elimination`
-2. `tail-call`
-3. `tail-branch-inversion`
-4. `shared-call-tail`
-5. `return-suffix-gadget`
-6. `return-zero-jump`
-7. `store-recall-peephole`
-8. `jump-to-next-threading`
-9. `jump-thread`
-10. `stable-indirect-flow`
-11. `preloaded-indirect-flow`
-12. `indirect-memory-table`
-13. `dead-store-before-commutative`
-14. `dead-store-elimination`
-15. `last-x-reuse`
-16. `r0-fractional-sentinel`
-17. `vp-splice`
-18. `vp-x2-peephole`
-19. `constant-folding`
-20. `duplicate-failure-tail`
-21. `cse-display-block`
-22. `dead-code-after-halt`
-23. `register-coalesce`
-24. `arithmetic-if-pass`
+1. `redundant-prologue-elimination` — removes duplicated prologues before the body.
+2. `tail-call` — lowers trailing calls into compact tail-friendly forms.
+3. `tail-branch-inversion` — flips branch conditions to get shorter jump shapes.
+4. `shared-call-tail` — merges identical tails after call sites.
+5. `return-suffix-gadget` — shares a common suffix sequence after `return`.
+6. `return-zero-jump` — rewrites return through a short zero-cell jump path.
+7. `store-recall-peephole` — compresses adjacent `store`/`recall` cell patterns.
+8. `jump-to-next-threading` — removes jumps that only target the next label.
+9. `jump-thread` — collapses jump chains into direct threading.
+10. `stable-indirect-flow` — enables safe indirect jump flow when selector state is stable.
+11. `preloaded-indirect-flow` — reuses preloaded selector/state for indirect flow.
+12. `indirect-memory-table` — converts jumps/calls to compact indirect memory-table dispatch.
+13. `dead-store-before-commutative` — removes stores proven dead before commutative rewrites.
+14. `dead-store-elimination` — removes writes that are never read again.
+15. `last-x-reuse` — reuses the current X value when still valid.
+16. `r0-fractional-sentinel` — applies R0 fractional sentinel handling for shorter branches.
+17. `vp-splice` — splices VP transformations and eliminates redundant VP setup.
+18. `vp-x2-peephole` — applies X2-style peephole optimization for VP sequences.
+19. `constant-folding` — folds compile-time constants before lowering.
+20. `duplicate-failure-tail` — merges duplicate failure-tail sequences.
+21. `cse-display-block` — applies display-block common-subexpression reuse.
+22. `dead-code-after-halt` — removes unreachable instructions after `HALT`.
+23. `register-coalesce` — merges registers/cells with non-overlapping lifetimes.
+24. `arithmetic-if-pass` — applies a pass over branchless arithmetic-conditional patterns.
 
 A fixed-point loop repeats while transformations continue, up to internal iteration limits.
 
@@ -343,22 +343,22 @@ Setup generation is separate from main program layout when needed:
 
 Feature flags are added only after successful candidate/optimization evidence:
 
-- `return-empty-stack-jump`
-- `branch-removal`
-- `indirect-flow`
-- `indirect-memory`
-- `dark-entries`
-- `address-constants`
-- `x2-register`
-- `negative-zero-degree`
-- `x2-restore-boundaries`
-- `z-stack-register`
-- `display-bytes`
-- `r0-fractional-sentinel`
-- `r0-t-alias`
-- `error-stops`
-- `code-data-overlay`
-- `display-byte`
+- `return-empty-stack-jump` — allows return through empty-stack jump behavior.
+- `branch-removal` — enables branch-free rewriting when algebraic forms are cheaper.
+- `indirect-flow` — enables indirect control-flow lowering strategies.
+- `indirect-memory` — allows memory-backed indirect jump/call layouts.
+- `dark-entries` — enables dark-entry based jump targets.
+- `address-constants` — allows overlaying and reusing address constants.
+- `x2-register` — enables X2 register-mode emission for display/code paths.
+- `negative-zero-degree` — uses a special path for negative-zero comparisons.
+- `x2-restore-boundaries` — permits restoring behavior boundaries in X2 flows.
+- `z-stack-register` — enables use of Z-stack-like register behavior.
+- `display-bytes` — enables packed byte-display lowering family.
+- `r0-fractional-sentinel` — allows fractional-sentinel-driven transitions with R0.
+- `r0-t-alias` — allows using R0 as an alias in selected transitions.
+- `error-stops` — enables compact error-stop code generation patterns.
+- `code-data-overlay` — allows overlaying code and data regions where safe.
+- `display-byte` — enables low-level display-byte emission strategies.
 
 These are not independent optimizations; they gate whether the lowering strategy can legally use the corresponding opcode/behavior.
 
