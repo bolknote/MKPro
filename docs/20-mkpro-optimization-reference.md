@@ -244,6 +244,7 @@ Display rewrites are separated into strategy selection + body lowering.
 - `display-stack-reuse` — reuses terminal X stack usage in display and removes redundant jumps.
 - `show-sequence-helper` — shared helper for typical `show(...)` sequences.
 - `show-sequence-helper-call` — calls the shared helper instead of duplicating show blocks.
+- `decimal-point-display` — renders fixed-point decimal layouts like `show(x, ".", frac)` by building fractional digits and dividing by 10^width.
 - `display-byte` strategies (`display-byte-*`) are applied only with `display-bytes` flag; otherwise a safe fallback is used.
 
 ## 10) Random and numeric helpers
@@ -337,6 +338,7 @@ Setup generation is separate from main program layout when needed:
 - `auto-preload-initial-state` and `intent-state-lowering` can push selected state to setup only.
 - `intent-read-lowering`, `show-read-*` may force setup when runtime behavior or literals require state initialization.
 - Setup helpers are themselves subject to the same optimization pipeline (`setup-...` names appear as prefixed entries).
+- `indexed-bank-loop` — initializes runs of consecutively allocated indexed bank fields with one compact setup loop when their initializers and register layout allow it.
 
 ## 15) Machine features this optimizer may activate in report
 
