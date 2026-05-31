@@ -4572,12 +4572,103 @@ function stripComment(text: string): string {
 function normalizeSourceLine(text: string, line: number): SourceLine[] {
   const stripped = stripComment(text).trim();
   if (stripped.length === 0) return [];
-  const attachedElse = /^[}]\s*(else(?:\s+if\b.*|\s*[{]))$/u.exec(stripped);
-  if (attachedElse) {
-    return [
-      { text: "}", line },
-      { text: attachedElse[1]!.trim(), line },
-    ];
+  return tokenizeInlineBlocks(stripped).map((lineText) => ({ text: lineText, line }));
+}
+
+function tokenizeInlineBlocks(text: string): string[] {
+  const rawTokens = tokenizeInlineGrammar(text);
+  const lines: string[] = [];
+  let pending = "";
+  for (const token of rawTokens) {
+    if (token === "{") {
+      if (pending.trim().length > 0) {
+        lines.push(`${pending.trim()} {`);
+      } else {
+        lines.push("{");
+      }
+      pending = "";
+      continue;
+    }
+    if (token === "}") {
+      const body = pending.trim();
+      if (body.length > 0) lines.push(body);
+      lines.push("}");
+      pending = "";
+      continue;
+    }
+    if (pending.length > 0) pending += " ";
+    pending += token;
   }
-  return [{ text: stripped, line }];
+  if (pending.trim().length > 0) lines.push(pending.trim());
+  return lines;
+}
+
+function tokenizeInlineGrammar(text: string): string[] {
+  const tokens: string[] = [];
+  let token = "";
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let quoted = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (escaped) {
+      token += char;
+      escaped = false;
+      continue;
+    }
+    if (quoted) {
+      token += char;
+      if (char === "\\") {
+        escaped = true;
+      } else if (char === "\"") {
+        quoted = false;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      quoted = true;
+      token += char;
+      continue;
+    }
+    if (char === "(") {
+      parenDepth += 1;
+      token += char;
+      continue;
+    }
+    if (char === ")" && parenDepth > 0) {
+      parenDepth -= 1;
+      token += char;
+      continue;
+    }
+    if (char === "[") {
+      bracketDepth += 1;
+      token += char;
+      continue;
+    }
+    if (char === "]" && bracketDepth > 0) {
+      bracketDepth -= 1;
+      token += char;
+      continue;
+    }
+    if (char === ";" && parenDepth === 0 && bracketDepth === 0) {
+      if (token.trim().length > 0) {
+        tokens.push(token.trim());
+      }
+      token = "";
+      continue;
+    }
+    if ((char === "{" || char === "}") && parenDepth === 0 && bracketDepth === 0) {
+      if (token.trim().length > 0) {
+        tokens.push(token.trim());
+      }
+      token = "";
+      tokens.push(char);
+      continue;
+    }
+    token += char;
+  }
+  if (token.trim().length > 0) tokens.push(token.trim());
+  return tokens;
 }
