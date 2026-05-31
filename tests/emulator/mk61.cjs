@@ -764,6 +764,10 @@ function parseNumberLiteral(value) {
   let text = String(value).trim().toUpperCase();
   if (/^-?\d+\.\d+(E-?\d{1,2})?$/.test(text)) text = text.replace('.', ',');
   text = text.replace(/[AВB]/g, (ch) => (ch === 'A' ? '-' : ch === 'B' ? 'L' : 'В'));
+  // Latin hex nibbles C/D/F map to the register glyph alphabet (E stays the
+  // exponent marker; nibble E is the Cyrillic Е). This lets compiler-owned
+  // indirect-flow selectors such as "C3" or "D0" be preloaded directly.
+  text = text.replace(/C/g, 'С').replace(/D/g, 'Г').replace(/F/g, '_');
   const match = text.match(/^(-)?([0-9\-LСГЕ_]+)(?:,([0-9\-LСГЕ_]+))?(?:E(-)?([0-9]{1,2}))?$/);
   if (!match) throw new Error(`Cannot parse MK-61 number literal: ${value}`);
 

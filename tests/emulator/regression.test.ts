@@ -288,7 +288,7 @@ program ResourceUnderflowProbe {
     expect(calc.loadProgram(formatProgramTokens(result.steps)).diagnostics).toEqual([]);
 
     // Fixed layout: wumpus far from room 1 so every -5 shot misses.
-    const stateRegs = new Set(Object.values(reg));
+    const stateRegs = new Set<string>(Object.values(reg));
     for (const preload of result.report.preloads) {
       if (!stateRegs.has(preload.register)) calc.setRegister(preload.register, preload.value);
     }
@@ -302,20 +302,21 @@ program ResourceUnderflowProbe {
     calc.setRegister(reg.hazard_bat_1!, "18");
     calc.setRegister(reg.hazard_bat_2!, "19");
 
+    // Each turn has two display stops: room.arrows and clue. read() is not a
+    // separate stop -- resuming from the clue stop consumes the value in X, so a
+    // shot is fired by entering -5 while the clue is shown and pressing С/П.
     const shootMiss = (): string => {
+      calc.press("С/П"); // room.arrows -> clue stop
+      calc.runUntilStable({ maxFrames: 800, stableFrames: 6 });
       calc.inputNumber("5", { clear: true });
       calc.press("/-/"); // MK-61 negates after the digits: -5 fires a shot
-      calc.press("С/П");
+      calc.press("С/П"); // resume from clue -> read() takes -5
       calc.runUntilStable({ maxFrames: 1500, stableFrames: 6 });
       return calc.displayText().toUpperCase();
     };
 
-    // Start: the turn shows room, arrows, clue (the third stop awaits input).
+    // Start: the first turn stops on its room.arrows display.
     calc.pressSequence(["В/О", "С/П"]);
-    calc.runUntilStable({ maxFrames: 800, stableFrames: 6 });
-    calc.press("С/П");
-    calc.runUntilStable({ maxFrames: 800, stableFrames: 6 });
-    calc.press("С/П");
     calc.runUntilStable({ maxFrames: 800, stableFrames: 6 });
 
     let died = false;
@@ -326,11 +327,6 @@ program ResourceUnderflowProbe {
         expect(shot).toBe(5); // five arrows, death on the fifth miss
         break;
       }
-      // advance through the next turn's room/arrows/clue stops
-      calc.press("С/П");
-      calc.runUntilStable({ maxFrames: 800, stableFrames: 6 });
-      calc.press("С/П");
-      calc.runUntilStable({ maxFrames: 800, stableFrames: 6 });
     }
     expect(died).toBe(true);
   });
