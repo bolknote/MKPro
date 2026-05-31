@@ -17,6 +17,10 @@ main+setup load check.
 
 Current `--analysis` sizes, measured against the local reference listings:
 
+Strict `mk-pro compile` mode is not guaranteed for every pending file yet.
+`--analysis` allows non-official address mapping to keep going, so these `Current`
+numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
+
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
 | `cave-highlevel-baseline.mkpro` | 157 | 105 | resource pressure, original command dispatch, and remaining cave flow lowerers |
