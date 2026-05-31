@@ -312,6 +312,12 @@ interface LoweringOptions {
   // more indirect-flow savings than the inline cost; gated as a speculative
   // variant and adopted only when the whole program ends up smaller.
   suppressConstantPreloads?: ReadonlySet<string>;
+  // Prefer inline synthesis for constants whose setup-time preload is more
+  // expensive than rebuilding them at their use sites. This is intentionally a
+  // speculative variant: the main program may be unchanged or slightly larger,
+  // so top-level selection only adopts it when the main cell count does not
+  // regress and the estimated startup+program cost improves.
+  startupAwareConstantPreloads?: boolean;
   // Extract repeated `call helper; if guard { continuation } else { terminal }`
   // prologues into a single subroutine that returns into each unique
   // continuation only on the successful path. Speculative because the extra
@@ -568,6 +574,11 @@ export function compileMKPro(
     "Fully unrolled small constant-trip counted loops, replacing induction variables with constants",
   );
   tryCandidate(
+    { unrollCountedLoops: true, startupAwareConstantPreloads: true },
+    "startup-aware-constant-preloads",
+    "Kept setup-expensive synthesizable constants inline while preserving the main cell count",
+  );
+  tryCandidate(
     { unrollCountedLoops: true, freeResidualDispatchScratch: true },
     "counted-loop-unroll-free-scratch",
     "Combined counted-loop unrolling with residual-dispatch scratch freeing",
@@ -583,11 +594,17 @@ export function compileMKPro(
     "Combined inline floor-row display expressions with front-hoisted procs and tail-branch inversion",
   );
 
+  const OFFICIAL_PROGRAM_LIMIT = 105;
   const selectBest = (): { best: CompileResult | undefined; selected: (typeof candidates)[number] | undefined } => {
     let best = primary;
     let selected: (typeof candidates)[number] | undefined;
     for (const candidate of candidates) {
-      if (best === undefined || candidate.result.steps.length < best.steps.length) {
+      const sameMainButLowerStartup =
+        best !== undefined &&
+        candidate.result.steps.length === best.steps.length &&
+        best.steps.length > OFFICIAL_PROGRAM_LIMIT &&
+        estimatedStartupProgramCost(candidate.result) < estimatedStartupProgramCost(best);
+      if (best === undefined || candidate.result.steps.length < best.steps.length || sameMainButLowerStartup) {
         best = candidate.result;
         selected = candidate;
       }
@@ -607,7 +624,6 @@ export function compileMKPro(
   // official window. For in-budget lowerings, inlining a constant just grows
   // them, so confine the probe to the rescue regime and leave clean in-budget
   // lowerings untouched (and byte-stable for their structural tests).
-  const OFFICIAL_PROGRAM_LIMIT = 105;
   if ((selectBest().best?.steps.length ?? 0) > OFFICIAL_PROGRAM_LIMIT) {
     const demoteBases: LoweringOptions[] = [
       {},
@@ -656,6 +672,20 @@ export function compileMKPro(
     return finishCompileAttempt(selected.result, options.analysis === true);
   }
   return finishCompileAttempt(best, options.analysis === true);
+}
+
+function estimatedStartupProgramCost(result: CompileResult): number {
+  return result.steps.length + estimatedStartupCost(result);
+}
+
+function estimatedStartupCost(result: CompileResult): number {
+  if (result.report.setupProgram !== undefined) return result.report.setupProgram.steps.length;
+  let total = 0;
+  for (const preload of result.report.preloads) {
+    const value = executableSetupValue(preload.value);
+    if (value !== undefined) total += estimateNumberCost(value) + 1;
+  }
+  return total;
 }
 
 function compileLoweringAttempt(
@@ -1481,6 +1511,7 @@ function compileMKProOnce(
     loweringOptions.freeResidualDispatchScratch === true,
     loweringOptions.suppressConstantPreloads,
     loweringOptions.sharedBitMaskHelperCalls === true,
+    loweringOptions.startupAwareConstantPreloads === true,
   );
   const context = new EmitContext(
     ast,
@@ -8000,6 +8031,7 @@ function allocateRegisters(
   freeResidualDispatchScratch = false,
   suppressConstantPreloads: ReadonlySet<string> = new Set(),
   sharedBitMaskHelperCalls = false,
+  startupAwareConstantPreloads = false,
 ): RegisterAllocation {
   const declared = new Set<string>();
   const hints = new Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>();
@@ -8115,7 +8147,7 @@ function allocateRegisters(
   }
 
   const constants: Record<string, RegisterName> = {};
-  for (const value of collectPreloadConstantValues(ast)) {
+  for (const value of collectPreloadConstantValues(ast, startupAwareConstantPreloads)) {
     if (suppressConstantPreloads.has(value)) continue;
     const register = pickConstantRegister(used);
     if (!register) break;
@@ -8552,8 +8584,9 @@ function pickConstantRegister(used: Set<RegisterName>): RegisterName | undefined
   return undefined;
 }
 
-function collectPreloadConstantValues(ast: ProgramAst): string[] {
+function collectPreloadConstantValues(ast: ProgramAst, startupAwareConstantPreloads = false): string[] {
   const values = new Set<string>();
+  const occurrences = new Map<string, number>();
   // Most candidates appear once, so per-occurrence cost is a fine proxy for the
   // savings of preloading them. Coordinate-decode constants are different: the
   // spatial helpers re-emit `10` (`cell / 10`, `* 10`, per direction) several
@@ -8563,6 +8596,11 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
   const weights = new Map<string, number>();
   const boost = (value: string, weight: number): void => {
     weights.set(value, Math.max(weights.get(value) ?? 0, weight));
+  };
+  const recordLiteralOccurrence = (raw: string): void => {
+    const value = normalizeConstantLiteral(raw);
+    values.add(value);
+    occurrences.set(value, (occurrences.get(value) ?? 0) + 1);
   };
   if (programContainsCall(ast, "direction")) {
     values.add("20");
@@ -8606,10 +8644,10 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
     }
   }
   const visitExpr = (expr: ExpressionAst): void => {
-    if (expr.kind === "number" && estimateNumberCost(expr.raw) > 1) values.add(normalizeConstantLiteral(expr.raw));
+    if (expr.kind === "number" && estimateNumberCost(expr.raw) > 1) recordLiteralOccurrence(expr.raw);
     if (expr.kind === "unary") {
       if (expr.op === "-" && expr.expr.kind === "number") {
-        values.add(normalizeConstantLiteral(negatedNumberLiteral(expr.expr.raw)));
+        recordLiteralOccurrence(negatedNumberLiteral(expr.expr.raw));
         return;
       }
       visitExpr(expr.expr);
@@ -8661,10 +8699,31 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
   // common weight-1 case this is `cost - 1`, which preserves the historical
   // cost-descending ranking; ties keep their insertion order via the stable sort
   // so previously-chosen constants are not silently displaced.
+  const startupUseCount = (value: string): number => Math.max(weights.get(value) ?? 1, occurrences.get(value) ?? 1);
   const savings = (value: string): number => (weights.get(value) ?? 1) * (estimateNumberCost(value) - 1);
   return [...values]
     .filter((value) => value !== "0" && value !== "1")
+    .filter((value) =>
+      !startupAwareConstantPreloads ||
+      !constantIsCheaperInlineForStartup(value, startupUseCount(value))
+    )
     .sort((a, b) => savings(b) - savings(a) || estimateNumberCost(b) - estimateNumberCost(a));
+}
+
+function constantIsCheaperInlineForStartup(value: string, useCount: number): boolean {
+  const inlineCost = standaloneSynthesizedConstantCost(value);
+  if (inlineCost === undefined) return false;
+  const setupValue = executableSetupValue(value);
+  if (setupValue === undefined) return false;
+  const preloadCost = estimateNumberCost(setupValue) + 1 + useCount;
+  return inlineCost * useCount <= preloadCost;
+}
+
+function standaloneSynthesizedConstantCost(value: string): number | undefined {
+  const exponent = positiveIntegerPowerOfTenExponent(value);
+  if (exponent === undefined) return undefined;
+  const cost = estimateNumberCost(String(exponent)) + 1;
+  return cost < estimateNumberCost(value) ? cost : undefined;
 }
 
 function collectDisplayLiteralPreloadValues(literal: string, values: Set<string>): void {

@@ -98,6 +98,30 @@ program ConstantPow10Synthesis {
     )).toBe(true);
   });
 
+  it("avoids startup-expensive decimal power preloads in the startup-aware variant", () => {
+    const source = `
+program StartupAwarePow10Synthesis {
+  state {
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
+    x = x * 10000
+    halt(x)
+  }
+}
+`;
+    const baseline = compileLoweringVariantForTest(source, { budget: 999, analysis: true }, {});
+    const startupAware = compileLoweringVariantForTest(source, { budget: 999, analysis: true }, {
+      startupAwareConstantPreloads: true,
+    });
+
+    expect(baseline.report.preloads.some((item) => item.value === "10000")).toBe(true);
+    expect(startupAware.report.preloads.some((item) => item.value === "10000")).toBe(false);
+    expect(startupAware.steps.some((step) => step.hex === "15" && step.comment === "constant 10000")).toBe(true);
+  });
+
   it("synthesizes suppressed signed constants from preloaded opposites", () => {
     const result = compileLoweringVariantForTest(`
 program ConstantSignSynthesis {

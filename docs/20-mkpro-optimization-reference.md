@@ -17,7 +17,7 @@ The optimizer works in multiple passes, not in a single “on/off” mode.
 7. Run a set of IR-level optimization passes iteratively.
 8. Run layout and apply layout-sensitive indirect/dark-entry candidates.
 9. Optionally compile and optimize setup program (for initializers requiring work).
-10. Select the best lowering variant by cell count under the 105-cell window.
+10. Select the best lowering variant by cell count under the 105-cell window, using estimated startup+program cost as a tie-break for over-budget variants.
 
 For over-budget programs, compile retries include candidate demotions (constant demotion, helper-shape changes) that can free a selector register and enable stronger indirect flow lowering.
 
@@ -94,6 +94,7 @@ These transformations run on source constructs before machine lowering:
 - `show-read-fusion` — merges `show(...)` with a following `read`-based assignment/input path into one calculator `С/П`: `show(...); x = read()` or `show(...); x = int(read())` / `frac(int(read()))` forms share the same input stop and avoid emitting a second `С/П`.
 - `counted-loop-unroll` — replaces small constant-trip counted `while` loops with explicit per-iteration copies when the induction variable updates are simple linear steps and entry values are known constants; this removes the loop machinery and registers update logic.
 - `counted-loop-unroll-free-scratch` — runs counted-loop unrolling together with residual-dispatch scratch freeing (`freeResidualDispatchScratch`) as one candidate.
+- `startup-aware-constant-preloads` — tries a variant that leaves setup-expensive synthesized constants inline, such as decimal powers built with `F 10^x`, when that lowers estimated startup+program cost without increasing the main program size.
 - `intent-domain-lowering` — normalizes special intent types into a base form for later compilation.
 - `packed-counter-stripes` — packs dense counters into a shorter representation.
 - `x-param-state-elision` — removes redundant transition states when returning through X parameters.

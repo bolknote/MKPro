@@ -7126,58 +7126,58 @@ Cell Roles:
 exports[`golden listing > selected output is stable for examples/pending-optimizer/rambo-iii.mkpro 1`] = `
 "## Listing
 Setup Block:
-  \`R8=0.5; Ra=10000; Rb=25000; Re=810200880000000\`
+  \`R8=0.5; Ra=25; Rb=25000; Re=810200880000000\`
 
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    00 |  00  | 0                       |
    01 |  6B  | П->X b                  | preload const 25000
    02 |  47  | X->П 7                  | set cells_7
-   03 |  02  | 2                       |
-   04 |  05  | 5                       |
-   05 |  40  | X->П 0                  | set time
-   06 |  60  | П->X 0                  | display __inline_show_34_0 source
-   07 |  50  | С/П                     | show __inline_show_34_0
-   08 |  53  | ПП                      | proc call reinforcement_cycle
-   09 |  33  | 33                      | proc call reinforcement_cycle
-   10 |  01  | 1                       |
-   11 |  4C  | X->П c                  | set slot
-   12 |  04  | 4                       |
-   13 |  4D  | X->П d                  | set event_target
-   14 |  53  | ПП                      | proc call front_stop
-   15 |  56  | 56                      | proc call front_stop
-   16 |  02  | 2                       |
-   17 |  4C  | X->П c                  | set slot
-   18 |  05  | 5                       |
-   19 |  4D  | X->П d                  | set event_target
-   20 |  53  | ПП                      | proc call front_stop
-   21 |  56  | 56                      | proc call front_stop
-   22 |  03  | 3                       |
-   23 |  4C  | X->П c                  | set slot
-   24 |  06  | 6                       |
-   25 |  4D  | X->П d                  | set event_target
-   26 |  53  | ПП                      | proc call front_stop
-   27 |  56  | 56                      | proc call front_stop
-   28 |  5D  | F L0                    | counted while time
-   29 |  06  | 06                      | counted while time
-   30 |  6E  | П->X e                  | preload const 810200880000000
-   31 |  50  | С/П                     | halt
-   32 |  29  | К ÷                     | halt literal ЕГГ0Г
-   33 |  3B  | К СЧ                    | random()
-   34 |  01  | 1                       |
-   35 |  03  | 3                       |
-   36 |  12  | ×                       | expr *
-   37 |  03  | 3                       |
-   38 |  13  | ÷                       | expr /
-   39 |  34  | К [x]                   | int()
-   40 |  4D  | X->П d                  | set event_target
-   41 |  5E  | F x=0                   | false branch for ==
-   42 |  45  | 45                      | false branch for ==
-   43 |  07  | 7                       |
-   44 |  4D  | X->П d                  | set event_target
-   45 |  3B  | К СЧ                    | random()
-   46 |  48  | X->П 8                  | set random_state
-   47 |  6A  | П->X a                  | preload const 10000
+   03 |  6A  | П->X a                  | preload const 25
+   04 |  40  | X->П 0                  | set time
+   05 |  60  | П->X 0                  | display __inline_show_34_0 source
+   06 |  50  | С/П                     | show __inline_show_34_0
+   07 |  53  | ПП                      | proc call reinforcement_cycle
+   08 |  32  | 32                      | proc call reinforcement_cycle
+   09 |  01  | 1                       |
+   10 |  4C  | X->П c                  | set slot
+   11 |  04  | 4                       |
+   12 |  4D  | X->П d                  | set event_target
+   13 |  53  | ПП                      | proc call front_stop
+   14 |  56  | 56                      | proc call front_stop
+   15 |  02  | 2                       |
+   16 |  4C  | X->П c                  | set slot
+   17 |  05  | 5                       |
+   18 |  4D  | X->П d                  | set event_target
+   19 |  53  | ПП                      | proc call front_stop
+   20 |  56  | 56                      | proc call front_stop
+   21 |  03  | 3                       |
+   22 |  4C  | X->П c                  | set slot
+   23 |  06  | 6                       |
+   24 |  4D  | X->П d                  | set event_target
+   25 |  53  | ПП                      | proc call front_stop
+   26 |  56  | 56                      | proc call front_stop
+   27 |  5D  | F L0                    | counted while time
+   28 |  05  | 05                      | counted while time
+   29 |  6E  | П->X e                  | preload const 810200880000000
+   30 |  50  | С/П                     | halt
+   31 |  29  | К ÷                     | halt literal ЕГГ0Г
+   32 |  3B  | К СЧ                    | random()
+   33 |  01  | 1                       |
+   34 |  03  | 3                       |
+   35 |  12  | ×                       | expr *
+   36 |  03  | 3                       |
+   37 |  13  | ÷                       | expr /
+   38 |  34  | К [x]                   | int()
+   39 |  4D  | X->П d                  | set event_target
+   40 |  5E  | F x=0                   | false branch for ==
+   41 |  44  | 44                      | false branch for ==
+   42 |  07  | 7                       |
+   43 |  4D  | X->П d                  | set event_target
+   44 |  3B  | К СЧ                    | random()
+   45 |  48  | X->П 8                  | set random_state
+   46 |  04  | 4                       |
+   47 |  15  | F 10^x                  | constant 10000
    48 |  12  | ×                       | expr *
    49 |  34  | К [x]                   | int()
    50 |  49  | X->П 9                  | set scratch
@@ -7195,7 +7195,7 @@ Setup Block:
    62 |  11  | -                       | expr -
    63 |  47  | X->П 7                  | set cells_7
    64 |  59  | F x>=0                  | false branch for >=
-   65 |  32  | 32                      | false branch for >=
+   65 |  31  | 31                      | false branch for >=
    66 |  53  | ПП                      | proc call return suffix gadget
    67 |  51  | 51                      | return suffix gadget target
    68 |  68  | П->X 8                  | recall random_state
@@ -7229,7 +7229,7 @@ Setup Block:
    96 |  DD  | К П->X d                | indexed recall cells
    97 |  11  | -                       | condition compare
    98 |  5C  | F x<0                   | false branch for >
-   99 |  32  | 32                      | false branch for >
+   99 |  31  | 31                      | false branch for >
    A0 |  68  | П->X 8                  | recall random_state
    A1 |  49  | X->П 9                  | set scratch
    A2 |  3B  | К СЧ                    | random()
@@ -7255,7 +7255,7 @@ Setup Block:
   >7A |  35  | К {x}                   | frac()
   >7B |  11  | -                       | expr -
   >7C |  5C  | F x<0                   | false branch for >
-  >7D |  32  | 32                      | false branch for >
+  >7D |  31  | 31                      | false branch for >
   >7E |  DC  | К П->X c                | indexed recall cells
   >7F |  69  | П->X 9                  | recall scratch
   >80 |  11  | -                       | expr -
@@ -7271,22 +7271,22 @@ Setup Block:
   >8A |  52  | В/О                     | x-param decay return
 
 ## Hex
-00: 00 6B 47 02 05 40 60 50
-08: 53 33 01 4C 04 4D 53 56
-16: 02 4C 05 4D 53 56 03 4C
-24: 06 4D 53 56 5D 06 6E 50
-32: 29 3B 01 03 12 03 13 34
-40: 4D 5E 45 07 4D 3B 48 6A
+00: 00 6B 47 6A 40 60 50 53
+08: 32 01 4C 04 4D 53 56 02
+16: 4C 05 4D 53 56 03 4C 06
+24: 4D 53 56 5D 05 6E 50 29
+32: 3B 01 03 12 03 13 34 4D
+40: 5E 44 07 4D 3B 48 04 15
 48: 12 34 49 DD 69 10 BD 52
 56: 6C 50 34 49 67 69 11 47
-64: 59 32 53 51 68 49 3B 48
+64: 59 31 53 51 68 49 3B 48
 72: DD 53 83 BD DC 53 83 BC
 80: 69 68 11 5C 91 DD 53 83
 88: BD 51 95 DC 53 83 BC 00
-96: DD 11 5C 32 68 49 3B 48
+96: DD 11 5C 31 68 49 3B 48
 A4: 01 69 10 68 10 02 00 12
 >70: DC 12 DD 13 34 03 15 13
->78: 49 DC 35 11 5C 32 DC 69
+>78: 49 DC 35 11 5C 31 DC 69
 >80: 11 BC 52 0E 68 12 04 13
 >88: 34 11 52
 
@@ -7303,12 +7303,12 @@ Intent IR: lowered=yes, v2=yes; intent=133, effects=139, cells=139
 
 Preloads:
   random_state -> R8: 0.5 (outside program cells)
-  Ra: 10000 (outside program cells)
+  Ra: 25 (outside program cells)
   Rb: 25000 (outside program cells)
   Re: 810200880000000 (outside program cells)
 
 Setup Block:
-  \`R8=0.5; Ra=10000; Rb=25000; Re=810200880000000\`
+  \`R8=0.5; Ra=25; Rb=25000; Re=810200880000000\`
 
 Registers:
   cells_1: R1
@@ -7326,10 +7326,10 @@ Registers:
 
 Labels:
    main: 00
-  __counted_while_0: 06
-  lost: 32
-  reinforcement_cycle: 33
-  __if_false_1: 45
+  __counted_while_0: 05
+  lost: 31
+  reinforcement_cycle: 32
+  __if_false_1: 44
   __return_suffix_gadget_0: 51
   front_stop: 56
   __if_false_3: 91
@@ -7345,6 +7345,7 @@ Optimizations:
   - auto-preload-initial-state: Moved initial state into setup/preload values so official program cells stay focused on turn logic.
   - repeated-assignment-value-reuse: Stored one computed value into 3 consecutive assignment targets at line 28.
   - preloaded-constant: Used preloaded Rb for constant 25000.
+  - preloaded-constant: Used preloaded Ra for constant 25.
   - display-strategy-selection: Selected decimal-pack for screen __inline_show_34_0.
   - packed-display-lowering: Display __inline_show_34_0 may use display-byte encodings in later layout passes.
   - proc-call-lowering: Compiled call to rule reinforcement_cycle as ПП/В/О subroutine.
@@ -7359,7 +7360,7 @@ Optimizations:
   - stack-current-x-scheduling: Reused random_state already in X for commutative *.
   - zero-condition-test: Tested == 0 without materializing a zero literal at line 54.
   - size-model-rule-inline: Inlined 4-use rule random_92 because it is smaller than a ПП/В/О subroutine.
-  - preloaded-constant: Used preloaded Ra for constant 10000.
+  - constant-synthesis: Built constant 10000 by loaded exponent 4 and applied F 10^x (2 cells instead of direct 5).
   - stack-current-x-scheduling: Reused random_state already in X for commutative *.
   - display-strategy-selection: Selected decimal-pack for screen __inline_show_64_1.
   - packed-display-lowering: Display __inline_show_64_1 may use display-byte encodings in later layout passes.
@@ -7384,7 +7385,7 @@ Optimizations:
   - return-suffix-gadget: Shared 1 return/tail-call gadget (0 jump, 1 call; 2 cells saved).
   - store-recall-peephole: Dropped 1 redundant П->X immediately after X->П to the same register.
   - dead-store-elimination: Removed 4 store(s) to register(s) never read before the next assignment.
-  - counted-loop-unroll: Fully unrolled small constant-trip counted loops, replacing induction variables with constants (139 vs 141 cells).
+  - startup-aware-constant-preloads: Kept setup-expensive synthesizable constants inline while preserving the main cell count (139 vs 141 cells).
 
 Candidates:
   * display __inline_show_34_0/decimal-pack: 2 steps; selected decimal-pack for screen __inline_show_34_0
@@ -7435,15 +7436,15 @@ Rejected Candidates:
   - display __inline_show_64_1/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
 
 Cell Roles:
-  06: 60 exec, display-byte - display byte role allowed
-  09: 33 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  15: 56 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  21: 56 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  27: 56 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  29: 06 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  42: 45 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  05: 60 exec, display-byte - display byte role allowed
+  08: 32 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  14: 56 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  20: 56 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  26: 56 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  28: 05 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  41: 44 address, constant, overlay - address can be reused as constant; code/data overlay allowed
   56: 6C exec, display-byte - display byte role allowed
-  65: 32 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  65: 31 address, constant, overlay - address can be reused as constant; code/data overlay allowed
   67: 51 address, constant, overlay - address can be reused as constant; code/data overlay allowed
   74: 83 address, constant, overlay - address can be reused as constant; code/data overlay allowed
   78: 83 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
@@ -8036,7 +8037,7 @@ Cell Roles:
 exports[`golden listing > selected output is stable for examples/pending-optimizer/tic-tac-toe-4x4.mkpro 1`] = `
 "## Listing
 Setup Block:
-  \`R6=0; R8=10; R7=-4444\`
+  \`R6=0; R8=10; R7=4444\`
 
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
@@ -8077,73 +8078,73 @@ Setup Block:
    34 |  04  | 4                       |
    35 |  11  | -                       | condition compare
    36 |  59  | F x>=0                  | false branch for >=
-   37 |  41  | 41                      | false branch for >=
-   38 |  67  | П->X 7                  | constant 4444 base -4444
-   39 |  0B  | /-/                     | constant 4444
-   40 |  50  | С/П                     | halt
-   41 |  53  | ПП                      | proc call calculator_reply
-   42 |  45  | 45                      | proc call calculator_reply
-   43 |  51  | БП                      | loop back
-   44 |  00  | 00                      | loop back
-   45 |  66  | П->X 6                  | recall turn_count
-   46 |  01  | 1                       |
-   47 |  06  | 6                       |
-   48 |  11  | -                       | condition compare
-   49 |  59  | F x>=0                  | false branch for >=
-   50 |  53  | 53                      | false branch for >=
-   51 |  00  | 0                       | halt
-   52 |  50  | С/П                     | halt
-   53 |  3B  | К СЧ                    | random()
-   54 |  04  | 4                       |
-   55 |  12  | ×                       | expr *
-   56 |  0E  | В↑                      | random int keep scaled draw
-   57 |  35  | К {x}                   | random int fractional part
-   58 |  11  | -                       | random int floor
-   59 |  01  | 1                       |
-   60 |  10  | +                       | expr +
-   61 |  68  | П->X 8                  | preload const 10
-   62 |  3B  | К СЧ                    | random()
-   63 |  04  | 4                       |
-   64 |  12  | ×                       | expr *
-   65 |  0E  | В↑                      | random int keep scaled draw
-   66 |  35  | К {x}                   | random int fractional part
-   67 |  11  | -                       | random int floor
-   68 |  01  | 1                       |
-   69 |  10  | +                       | expr +
-   70 |  12  | ×                       | expr *
-   71 |  10  | +                       | expr +
-   72 |  43  | X->П 3                  | set cell
-   73 |  53  | ПП                      | bit_mask helper
-   74 |  B8  | >B8                     | bit_mask helper
-   75 |  4E  | X->П e                  | cell bit mask scratch
-   76 |  64  | П->X 4                  | recall occupied
-   77 |  6E  | П->X e                  | reuse cell bit mask
-   78 |  37  | К ∧                     | membership test with reused mask
-   79 |  35  | К {x}                   | membership fraction
-   80 |  5E  | F x=0                   | false branch for !=
-   81 |  84  | 84                      | false branch for !=
-   82 |  51  | БП                      | tail call calculator_reply
-   83 |  45  | 45                      | proc call calculator_reply
-   84 |  62  | П->X 2                  | recall calculator_marks
-   85 |  6E  | П->X e                  | reuse cell bit mask
-   86 |  38  | К ∨                     | bit_set with reused mask
-   87 |  42  | X->П 2                  | set calculator_marks
-   88 |  64  | П->X 4                  | recall occupied
-   89 |  6E  | П->X e                  | reuse cell bit mask
-   90 |  38  | К ∨                     | bit_set with reused mask
-   91 |  44  | X->П 4                  | set occupied
-   92 |  01  | 1                       |
-   93 |  66  | П->X 6                  | recall turn_count
-   94 |  10  | +                       | expr +
-   95 |  46  | X->П 6                  | set turn_count
-   96 |  62  | П->X 2                  | recall calculator_marks
-   97 |  53  | ПП                      | line_count calculator_marks
-   98 |  6A  | >6A                     | line_count calculator_marks
-   99 |  04  | 4                       |
-   A0 |  11  | -                       | condition compare
-   A1 |  59  | F x>=0                  | false branch for >=
-   A2 |  69  | >69                     | false branch for >=
-   A3 |  67  | П->X 7                  | preload const -4444
+   37 |  40  | 40                      | false branch for >=
+   38 |  67  | П->X 7                  | preload const 4444
+   39 |  50  | С/П                     | halt
+   40 |  53  | ПП                      | proc call calculator_reply
+   41 |  44  | 44                      | proc call calculator_reply
+   42 |  51  | БП                      | loop back
+   43 |  00  | 00                      | loop back
+   44 |  66  | П->X 6                  | recall turn_count
+   45 |  01  | 1                       |
+   46 |  06  | 6                       |
+   47 |  11  | -                       | condition compare
+   48 |  59  | F x>=0                  | false branch for >=
+   49 |  52  | 52                      | false branch for >=
+   50 |  00  | 0                       | halt
+   51 |  50  | С/П                     | halt
+   52 |  3B  | К СЧ                    | random()
+   53 |  04  | 4                       |
+   54 |  12  | ×                       | expr *
+   55 |  0E  | В↑                      | random int keep scaled draw
+   56 |  35  | К {x}                   | random int fractional part
+   57 |  11  | -                       | random int floor
+   58 |  01  | 1                       |
+   59 |  10  | +                       | expr +
+   60 |  68  | П->X 8                  | preload const 10
+   61 |  3B  | К СЧ                    | random()
+   62 |  04  | 4                       |
+   63 |  12  | ×                       | expr *
+   64 |  0E  | В↑                      | random int keep scaled draw
+   65 |  35  | К {x}                   | random int fractional part
+   66 |  11  | -                       | random int floor
+   67 |  01  | 1                       |
+   68 |  10  | +                       | expr +
+   69 |  12  | ×                       | expr *
+   70 |  10  | +                       | expr +
+   71 |  43  | X->П 3                  | set cell
+   72 |  53  | ПП                      | bit_mask helper
+   73 |  B8  | >B8                     | bit_mask helper
+   74 |  4E  | X->П e                  | cell bit mask scratch
+   75 |  64  | П->X 4                  | recall occupied
+   76 |  6E  | П->X e                  | reuse cell bit mask
+   77 |  37  | К ∧                     | membership test with reused mask
+   78 |  35  | К {x}                   | membership fraction
+   79 |  5E  | F x=0                   | false branch for !=
+   80 |  83  | 83                      | false branch for !=
+   81 |  51  | БП                      | tail call calculator_reply
+   82 |  44  | 44                      | proc call calculator_reply
+   83 |  62  | П->X 2                  | recall calculator_marks
+   84 |  6E  | П->X e                  | reuse cell bit mask
+   85 |  38  | К ∨                     | bit_set with reused mask
+   86 |  42  | X->П 2                  | set calculator_marks
+   87 |  64  | П->X 4                  | recall occupied
+   88 |  6E  | П->X e                  | reuse cell bit mask
+   89 |  38  | К ∨                     | bit_set with reused mask
+   90 |  44  | X->П 4                  | set occupied
+   91 |  01  | 1                       |
+   92 |  66  | П->X 6                  | recall turn_count
+   93 |  10  | +                       | expr +
+   94 |  46  | X->П 6                  | set turn_count
+   95 |  62  | П->X 2                  | recall calculator_marks
+   96 |  53  | ПП                      | line_count calculator_marks
+   97 |  6A  | >6A                     | line_count calculator_marks
+   98 |  04  | 4                       |
+   99 |  11  | -                       | condition compare
+   A0 |  59  | F x>=0                  | false branch for >=
+   A1 |  69  | >69                     | false branch for >=
+   A2 |  67  | П->X 7                  | constant -4444 base 4444
+   A3 |  0B  | /-/                     | constant -4444
    A4 |  50  | С/П                     | halt
   >69 |  52  | В/О                     | implicit return from proc
   >6A |  4C  | X->П c                  | line count mask
@@ -8259,15 +8260,15 @@ Setup Block:
 08: 53 B8 4E 64 6E 37 35 5E
 16: 19 51 00 65 6E 38 45 64
 24: 6E 38 44 01 66 10 46 65
-32: 53 6A 04 11 59 41 67 0B
-40: 50 53 45 51 00 66 01 06
-48: 11 59 53 00 50 3B 04 12
-56: 0E 35 11 01 10 68 3B 04
-64: 12 0E 35 11 01 10 12 10
-72: 43 53 B8 4E 64 6E 37 35
-80: 5E 84 51 45 62 6E 38 42
-88: 64 6E 38 44 01 66 10 46
-96: 62 53 6A 04 11 59 69 67
+32: 53 6A 04 11 59 40 67 50
+40: 53 44 51 00 66 01 06 11
+48: 59 52 00 50 3B 04 12 0E
+56: 35 11 01 10 68 3B 04 12
+64: 0E 35 11 01 10 12 10 43
+72: 53 B8 4E 64 6E 37 35 5E
+80: 83 51 44 62 6E 38 42 64
+88: 6E 38 44 01 66 10 46 62
+96: 53 6A 04 11 59 69 67 0B
 A4: 50 52 4C 00 49 4D 01 63
 >70: 68 13 35 68 12 11 4B 01
 >78: 4A 04 B9 53 A1 00 4D 68
@@ -8297,10 +8298,10 @@ Intent IR: lowered=yes, v2=yes; intent=76, effects=213, cells=213
 Preloads:
   turn_count -> R6: 0 (outside program cells)
   R8: 10 (outside program cells)
-  R7: -4444 (outside program cells)
+  R7: 4444 (outside program cells)
 
 Setup Block:
-  \`R6=0; R8=10; R7=-4444\`
+  \`R6=0; R8=10; R7=4444\`
 
 Registers:
   calculator_marks: R2
@@ -8313,11 +8314,11 @@ Labels:
    main: 00
   __loop_0: 00
   __if_false_1: 19
-  __if_false_3: 41
-  __if_end_2: 43
-  calculator_reply: 45
-  __if_false_4: 53
-  __if_false_5: 84
+  __if_false_3: 40
+  __if_end_2: 42
+  calculator_reply: 44
+  __if_false_4: 52
+  __if_false_5: 83
   __if_false_7: >69
   __if_end_6: >69
   __line_count_0: >6A
@@ -8340,7 +8341,7 @@ Optimizations:
   - show-read-fusion: Fused show __inline_show_32_0 and read cell into one calculator stop.
   - bit-mask-helper-call: Shared bit_mask(cell) through __bit_mask_0.
   - spatial-line-count-helper-call: Reused shared line_count helper for player_marks.
-  - constant-synthesis: Built constant 4444 by changed the sign of preloaded R7 (-4444) (2 cells instead of direct 4).
+  - preloaded-constant: Used preloaded R7 for constant 4444.
   - single-use-rule-inline: Inlined single-use rule player_wins at line 43.
   - proc-call-lowering: Compiled call to rule calculator_reply as ПП/В/О subroutine.
   - terminal-branch-end-elision: Omitted unreachable if-end jump after terminal then branch at line 42.
@@ -8354,7 +8355,7 @@ Optimizations:
   - bit-mask-helper-call: Shared bit_mask(cell) through __bit_mask_0.
   - proc-call-lowering: Compiled call to rule calculator_reply as ПП/В/О subroutine.
   - spatial-line-count-helper-call: Reused shared line_count helper for calculator_marks.
-  - preloaded-constant: Used preloaded R7 for constant -4444.
+  - constant-synthesis: Built constant -4444 by changed the sign of preloaded R7 (4444) (2 cells instead of direct 5).
   - single-use-rule-inline: Inlined single-use rule calculator_wins at line 65.
   - terminal-branch-end-elision: Omitted unreachable if-end jump after terminal then branch at line 64.
   - cell-membership-mask-run-reuse: Reused the failed membership mask when setting calculator_marks, occupied after line 57.
@@ -8376,7 +8377,7 @@ Optimizations:
   - jump-thread: Threaded 1 jump(s) through trampoline labels to the final target.
   - indirect-memory-table: Rewrote 4 direct memory access(es) through an existing stable selector.
   - return-suffix-gadget: Shared 1 return/tail-call gadget (0 jump, 1 call; 7 cells saved). (+Shared 1 return/tail-call gadget (0 jump, 1 call; 5 cells saved).) (+Shared 1 return/tail-call gadget (0 jump, 1 call; 4 cells saved).)
-  - shared-bit-mask-helper-layout: Selected shared bit_mask helper calls after full layout (213 vs 246 cells).
+  - demote-constant-indirect-flow: Inlined single-use constant -4444 to free a register for post-layout indirect flow (213 vs 246 cells).
 
 Candidates:
   * display __inline_show_32_0/decimal-pack: 8 steps; selected decimal-pack for screen __inline_show_32_0
@@ -8430,10 +8431,10 @@ Cell Roles:
   16: 19 address, constant, overlay - address can be reused as constant; code/data overlay allowed
   18: 00 address, constant, overlay - address can be reused as constant; code/data overlay allowed
   33: 6A address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  37: 41 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  42: 45 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  44: 00 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  50: 53 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
+  37: 40 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  41: 44 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  43: 00 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  49: 52 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
 `;
 
 exports[`golden listing > selected output is stable for examples/raja-yoga.mkpro 1`] = `
