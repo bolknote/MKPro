@@ -3640,8 +3640,9 @@ function resolveReferenceMetrics(referenceName: string): ReferenceMetrics | unde
   const reference = /^([A-Za-z0-9]+)_(.+)$/u.exec(referenceName);
   if (!reference) return undefined;
   const collection = reference[1]!;
+  const collectionDirectory = collection === "kei" ? "tehnika-molodyzhi" : collection;
   const slug = reference[2]!.replace(/_/gu, "-");
-  const directory = path.resolve(repoRoot, "games", collection);
+  const directory = path.resolve(repoRoot, "games", collectionDirectory);
   const manifestPath = path.resolve(directory, "manifest.tsv");
   let programFile = `${slug}.txt`;
 
