@@ -114,7 +114,88 @@ program PartialReturn {
     ).toThrow(/must return a value on every path/u);
   });
 
-  it("rejects direct recursion in a function", () => {
+  it("lowers direct tail recursion to jumps instead of growing the return stack", () => {
+    const result = compileOk(`
+program Recursive {
+  state {
+    result: counter 0..99 = 0
+  }
+  fn count_down(n, acc) {
+    if n <= 0 {
+      return acc
+    }
+    else {
+      return count_down(n - 1, acc + 1)
+    }
+  }
+  loop {
+    x = read()
+    result = count_down(x, 0)
+    halt(result)
+  }
+}
+`);
+    expect(result.report.optimizations.some((opt) => opt.name === "function-tail-recursion")).toBe(true);
+    expect(result.steps.filter((step) => step.hex === "53").length).toBe(1);
+  });
+
+  it("lowers mutual tail recursion to jumps between function bodies", () => {
+    const result = compileOk(`
+program Mutual {
+  state {
+    result: counter 0..99 = 0
+  }
+  fn even(n) {
+    if n <= 0 {
+      return 1
+    }
+    else {
+      return odd(n - 1)
+    }
+  }
+  fn odd(n) {
+    if n <= 0 {
+      return 0
+    }
+    else {
+      return even(n - 1)
+    }
+  }
+  loop {
+    x = read()
+    result = even(x)
+    halt(result)
+  }
+}
+`);
+    expect(result.report.optimizations.some((opt) => opt.name === "function-tail-call")).toBe(true);
+    expect(result.steps.filter((step) => step.hex === "53").length).toBe(1);
+  });
+
+  it("lowers non-recursive value-function tail calls to direct jumps", () => {
+    const result = compileOk(`
+program TailForward {
+  state {
+    result: counter 0..99 = 0
+  }
+  fn id(n) {
+    return n
+  }
+  fn forward(n) {
+    return id(n + 1)
+  }
+  loop {
+    x = read()
+    result = forward(x)
+    halt(result)
+  }
+}
+`);
+    expect(result.report.optimizations.some((opt) => opt.name === "function-tail-call")).toBe(true);
+    expect(result.steps.filter((step) => step.hex === "53").length).toBe(1);
+  });
+
+  it("rejects direct recursion outside tail position", () => {
     expect(() =>
       compileMKPro(`
 program Recursive {
@@ -122,7 +203,7 @@ program Recursive {
     result: counter 0..99 = 0
   }
   fn loopy(n) {
-    return loopy(n)
+    return loopy(n) + 1
   }
   loop {
     x = read()
@@ -131,10 +212,10 @@ program Recursive {
   }
 }
 `)
-    ).toThrow(/Recursive function 'loopy' is not supported/u);
+    ).toThrow(/non-tail call to 'loopy'/u);
   });
 
-  it("rejects mutual recursion between functions", () => {
+  it("rejects mutual recursion when a cycle edge is not a tail call", () => {
     expect(() =>
       compileMKPro(`
 program Mutual {
@@ -142,7 +223,7 @@ program Mutual {
     result: counter 0..99 = 0
   }
   fn ping(n) {
-    return pong(n)
+    return pong(n) + 1
   }
   fn pong(n) {
     return ping(n)
@@ -154,7 +235,30 @@ program Mutual {
   }
 }
 `)
-    ).toThrow(/Recursive function '(ping|pong)' is not supported/u);
+    ).toThrow(/non-tail call to 'pong'/u);
+  });
+
+  it("rejects recursion hidden inside the arguments of a tail call", () => {
+    expect(() =>
+      compileMKPro(`
+program Hidden {
+  state {
+    result: counter 0..99 = 0
+  }
+  fn wrap(n) {
+    return finish(wrap(n - 1))
+  }
+  fn finish(n) {
+    return n
+  }
+  loop {
+    x = read()
+    result = wrap(x)
+    halt(result)
+  }
+}
+`)
+    ).toThrow(/non-tail call to 'wrap'/u);
   });
 
   it("requires a value after return", () => {

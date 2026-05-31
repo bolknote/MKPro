@@ -201,6 +201,13 @@ class Builder {
         });
         return { entry: node, exits: [node] };
       }
+      case "coord_list_remove": {
+        const node = this.add({
+          defs: statement.items,
+          uses: [...new Set([...this.exprUses(statement.item), ...statement.items])],
+        });
+        return { entry: node, exits: [node] };
+      }
       case "show": {
         const display = this.ast.displays.find((candidate) => candidate.name === statement.display);
         const node = this.add({ defs: [], uses: display?.sources ?? [] });

@@ -129,6 +129,58 @@ program ConstantBinarySynthesis {
     )).toBe(true);
   });
 
+  it("synthesizes suppressed doubled constants from one preload", () => {
+    const result = compileLoweringVariantForTest(`
+program ConstantDoubleSynthesis {
+  state {
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
+    x = x + 9999
+    x = x + 19998
+    halt(x)
+  }
+}
+`, { budget: 999, analysis: true }, {
+      suppressConstantPreloads: new Set(["19998"]),
+    });
+
+    expect(result.report.preloads.some((item) => item.value === "9999")).toBe(true);
+    expect(result.steps.some((step) => step.hex === "0E" && step.comment === "constant 19998 stack")).toBe(true);
+    expect(result.steps.some((step) => step.hex === "10" && step.comment === "constant 19998")).toBe(true);
+    expect(result.report.optimizations.some((item) =>
+      item.name === "constant-synthesis" && item.detail.includes("doubled preloaded"),
+    )).toBe(true);
+  });
+
+  it("synthesizes suppressed halved constants from one preload", () => {
+    const result = compileLoweringVariantForTest(`
+program ConstantHalfSynthesis {
+  state {
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
+    x = x + 10000
+    x = x + 5000
+    halt(x)
+  }
+}
+`, { budget: 999, analysis: true }, {
+      suppressConstantPreloads: new Set(["5000"]),
+    });
+
+    expect(result.report.preloads.some((item) => item.value === "10000")).toBe(true);
+    expect(result.steps.some((step) => step.hex === "02" && step.comment === "constant 5000 divisor")).toBe(true);
+    expect(result.steps.some((step) => step.hex === "13" && step.comment === "constant 5000")).toBe(true);
+    expect(result.report.optimizations.some((item) =>
+      item.name === "constant-synthesis" && item.detail.includes("halved preloaded"),
+    )).toBe(true);
+  });
+
   it("synthesizes setup preloads from earlier setup preloads", () => {
     const result = compileOk(`
 program SetupConstantSquareSynthesis {
@@ -155,6 +207,61 @@ program SetupConstantSquareSynthesis {
     expect(result.report.optimizations.some((item) =>
       item.name === "setup-constant-synthesis" && item.detail.includes("Built setup constant 10000"),
     )).toBe(true);
+  });
+
+  it("synthesizes setup preloads by doubling earlier setup preloads", () => {
+    const result = compileOk(`
+program SetupConstantDoubleSynthesis {
+  state {
+    seed: packed = random()
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
+    x = x + 9999
+    x = x + 19998
+    if seed == -1 {
+      halt(seed)
+    }
+    halt(x)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.setupProgram?.steps.some((step) =>
+      step.hex === "0E" && step.comment === "setup constant 19998 stack",
+    )).toBe(true);
+    expect(result.report.setupProgram?.steps.some((step) =>
+      step.hex === "10" && step.comment === "setup constant 19998",
+    )).toBe(true);
+    expect(result.report.optimizations.some((item) =>
+      item.name === "setup-constant-synthesis" && item.detail.includes("doubled setup"),
+    )).toBe(true);
+  });
+
+  it("initializes repeated indexed bank expressions through one indirect setup loop", () => {
+    const result = compileOk(`
+program IndexedSetupBankLoop {
+  state {
+    room: counter 0..6 = 0
+    rows: group(1..4) {
+      row: packed = int(random(9)) + 1
+    }
+  }
+
+  loop {
+    halt(rows[room + 1].row)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    const setup = result.report.setupProgram?.steps ?? [];
+    expect(result.report.optimizations.some((item) => item.name === "setup-indexed-bank-loop")).toBe(true);
+    expect(setup.filter((step) => step.hex === "3B")).toHaveLength(1);
+    expect(setup.some((step) => step.mnemonic === "К X->П 0" && step.comment === "setup indexed rows_row_1..rows_row_4")).toBe(true);
+    expect(setup.some((step) => step.comment === "restore setup R0")).toBe(true);
+    expect(setup.length).toBeLessThan(25);
   });
 
   it("folds numeric constant subexpressions before code generation", () => {
@@ -983,6 +1090,38 @@ program FoxProbe {
     expect(result.report.optimizations.some((item) => item.name === "bit-mask-condition-helper")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "spatial-hit-condition-helper")).toBe(false);
     expect(result.report.steps).toBeLessThanOrEqual(99);
+  });
+
+  it("reuses the shared bit mask helper inside spatial hit helpers", () => {
+    const result = compileOk(`
+program SharedSpatialHitBitMask {
+  field: board(1..4, 1..4)
+  state {
+    cell: coord(field)
+    a: cells(field) = 0
+    b: cells(field) = 0
+    score: counter 0..9 = 0
+  }
+  loop {
+    cell = read()
+    if cell in a {
+      score++
+    }
+    if line_count(a, cell) >= 4 {
+      score++
+    }
+    if line_count(b, cell) >= 4 {
+      score++
+    }
+    halt(score)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "bit-mask-condition-helper")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "spatial-line-count-helper")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "spatial-hit-bit-mask-helper-reuse")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "spatial hit bit_mask")).toBe(true);
   });
 
   it("shares repeated membership checks through the selected helper", () => {

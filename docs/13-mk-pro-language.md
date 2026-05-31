@@ -250,6 +250,11 @@ such as `front_line[slot].front` lowers through MK-61 indirect memory commands
 (`К X->П` / `К П->X`) with a compiler-owned selector register. Indexed bank
 elements cannot be initialized from `stack.X` or `stack.Y`.
 
+When three or more contiguous indexed fields share the same non-literal
+initializer, setup generation may emit one indirect `R0` fill loop instead of
+copying the initializer once per element. This is the compact setup shape for
+generated row tables such as Treasure Hunter 2's nine packed floor rows.
+
 When a loop stores through a running pointer and then increments it, for example
 `slots[pointer + 1] = value` followed by `pointer++`, the compiler may fuse the
 pair into one preincrement indirect store when the bank layout allows it.
@@ -371,8 +376,11 @@ Semantics and rules:
   off the end is a compile error.
 - `return` is only valid inside an `fn`. Using it in the `loop` block or the main
   body is a compile error.
-- Recursion is not supported (the MK-61 keeps only a five-level subroutine return
-  stack), so a function that calls itself directly or mutually is rejected.
+- Tail recursion is supported. A recursive cycle is accepted only when every call
+  in the cycle is the whole `return other_fn(...)` expression; the compiler lowers
+  that tail call to `БП`, so it does not consume another return-stack frame.
+  Non-tail recursion, such as `return f(n) + 1`, is rejected because the MK-61
+  keeps only a five-level subroutine return stack.
 - Calling a value-returning function as a plain statement is allowed; its result
   is simply discarded.
 
@@ -1036,6 +1044,9 @@ The pipeline currently contains:
   fields in contiguous registers and reads `rows[floor]` through indirect
   memory for floor/row displays. This is the source-level shape behind compact
   `К П->X R` / `К X->П R` row tables such as Treasure Hunter 2.
+- **setup-indexed-bank-loop** — initializes repeated dynamic `packed[]` or
+  `group(...)` bank elements with a single setup loop using `R0` indirect
+  stores, then restores `R0` when it is also a source-visible state/preload.
 - **screen-leading-zero-hex-lowering** — lowers display literals such as
   `"020"` and `"054"` through preloaded hex mantissas and multiplication,
   preserving visible leading zeroes that ordinary decimal entry would normalize
@@ -1052,6 +1063,9 @@ The pipeline currently contains:
   tails into a shared exit.
 - **shared-call-tail** — coalesces repeated `ПП helper; БП continuation`
   pairs into one shared call tail when that is smaller.
+- **function-tail-recursion** — lowers `return f(...)` tail calls between
+  value-returning functions to direct `БП` jumps, including mutual tail
+  recursion, after rejecting any recursive cycle that needs another return frame.
 - **return-suffix-gadget** — shares identical straight-line tails ending in
   `В/О` by jumping into one reusable suffix instead of duplicating it.
 - **bit-mask-helper** — shares generated `bit_mask(index)` code when spatial

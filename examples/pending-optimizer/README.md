@@ -20,13 +20,13 @@ Current `--analysis` sizes, measured against the local reference listings:
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
 | `cave-highlevel-baseline.mkpro` | 157 | 105 | resource pressure, original command dispatch, and remaining cave flow lowerers |
-| `cave-treasure.mkpro` | 172 | 105 | resource pressure, wall breaking, cache miss flow, and remaining dispatch overhead |
+| `cave-treasure.mkpro` | 165 | 105 | resource pressure, wall breaking, cache miss flow, and remaining dispatch overhead |
 | `giants-country.mkpro` | 162 | 105 | packed room-map display/flow and remaining event flow lowerers |
 | `labyrinth777.mkpro` | 221 | 105 | room inspection and local-jumper dispatch |
 | `rambo-iii.mkpro` | 201 | 105 | grouped front/robots storage now works; event dispatch and battle-flow branches are the remaining large blocks |
 | `teleport.mkpro` | 236 | 105 | packed row display, station masks, and vault/guard flow |
-| `tic-tac-toe-4x4.mkpro` | 264 | 105 | 4x4 line-count state representation |
-| `treasure-hunter-2.mkpro` | 169 | 105 | per-floor packed map storage and remaining flow lowerers |
+| `tic-tac-toe-4x4.mkpro` | 251 | 105 | 4x4 line-count state representation |
+| `treasure-hunter-2.mkpro` | 167 | 105 | command dispatch, tile extraction, and remaining flow lowerers |
 
 Prototype notes:
 

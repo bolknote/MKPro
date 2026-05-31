@@ -2970,6 +2970,10 @@ export function statementEquals(left: StatementAst, right: StatementAst): boolea
     case "indexed_assign":
       return expressionEquals(left.target, (right as typeof left).target) &&
         expressionEquals(left.expr, (right as typeof left).expr);
+    case "coord_list_remove":
+      return left.list === (right as typeof left).list &&
+        expressionEquals(left.item, (right as typeof left).item) &&
+        JSON.stringify(left.items) === JSON.stringify((right as typeof left).items);
     case "loop":
       return statementListsEqual(left.body, (right as typeof left).body);
     case "while":

@@ -28,6 +28,7 @@ steps.
 | 16 | [18-f-opcodes-and-demo-program.md](./18-f-opcodes-and-demo-program.md) | F-opcode insertion and demo-program lessons |
 | 17 | [13-mk-pro-language.md](./13-mk-pro-language.md) | The MK-Pro language, human DSL, and automatic max optimization |
 | 18 | [19-anvarov-browser-bridge.md](./19-anvarov-browser-bridge.md) | Browser-console bridge for Serge Anvarov's emulator |
+| 19 | [20-mkpro-optimization-reference.md](./20-mkpro-optimization-reference.md) | Comprehensive MK-Pro optimizer and lowering strategy reference |
 
 Hardware internals and chip-level detail live separately in
 [00-hardware.md](./00-hardware.md).
@@ -55,6 +56,7 @@ Hardware internals and chip-level detail live separately in
 | [17-sign-digits-and-zeroes.md](./17-sign-digits-and-zeroes.md) | Sign-digits, negative zero, and non-normal zeroes |
 | [18-f-opcodes-and-demo-program.md](./18-f-opcodes-and-demo-program.md) | F-opcode insertion methods and compact-game lessons |
 | [19-anvarov-browser-bridge.md](./19-anvarov-browser-bridge.md) | Browser-console bundle and emulator field interception |
+| [20-mkpro-optimization-reference.md](./20-mkpro-optimization-reference.md) | Comprehensive MK-Pro optimizer and strategy reference |
 
 ## Primary Sources
 

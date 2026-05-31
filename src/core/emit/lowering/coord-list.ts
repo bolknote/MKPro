@@ -23,6 +23,7 @@ import {
   addExpressions,
   buildDiagnostic,
   coordListHasConditionCall,
+  coordListItemInfo,
   coordListLineCountCall,
   divideExpressions,
   flOpcode,
@@ -168,6 +169,7 @@ export function compileCoordListLineCountAssignment(ctx: LoweringCtx,
     ctx.emitLabel(start);
     emitCoordListIndirectRecall(ctx, context.pointerRegister, statement.line, "coord_list candidate");
     ctx.emitStore(COORD_LIST_CURRENT, "coord_list current", statement.line);
+    emitRemovedCoordListCandidateSkip(ctx, call.items, countNext, statement.line, "coord_list");
 
     if (scaled) {
       compileScaledCoordListVisibilityTest(ctx, context.cell, visible, countNext, statement.line, "coord_list");
@@ -328,6 +330,7 @@ export function compileFusedCoordListScan(ctx: LoweringCtx, statements: Statemen
     ctx.emitLabel(start);
     emitCoordListIndirectRecall(ctx, context.pointerRegister, line, "coord_list fused candidate");
     ctx.emitStore(COORD_LIST_CURRENT, "coord_list fused current", line);
+    emitRemovedCoordListCandidateSkip(ctx, lineCountCall.items, countNext, line, "coord_list fused");
 
     compileExpression(ctx, context.cell);
     ctx.emitRecall(COORD_LIST_CURRENT, "coord_list fused current", line);
@@ -382,6 +385,54 @@ export function compileFusedCoordListScan(ctx: LoweringCtx, statements: Statemen
     return 2;
 }
 
+export function compileCoordListRemove(
+  ctx: LoweringCtx,
+  statement: Extract<StatementAst, { kind: "coord_list_remove" }>,
+): boolean {
+    const call = {
+      cell: statement.item,
+      items: statement.items.map((name) => ({ name })),
+    };
+    const context = ctx.coordListIndirectContext(call);
+    if (context === undefined) return false;
+    const scaled = ctx.coordListUsesScaledDecimalStorage(statement.list);
+    if (scaled && !ctx.scaleCoordListCellInPlace(context.cell, statement.line)) return false;
+
+    const found = ctx.freshLabel("coord_list_remove_hit");
+    const done = ctx.freshLabel("coord_list_remove_done");
+    const start = ctx.freshLabel("coord_list_remove_loop");
+    emitCoordListLoopSetup(ctx, context, statement.line);
+    ctx.emitLabel(start);
+    compileExpression(ctx, context.cell);
+    emitCoordListIndirectRecall(ctx, context.pointerRegister, statement.line, "coord_list remove candidate");
+    ctx.emitOp(0x11, "-", "coord_list remove compare", statement.line);
+    ctx.emitJump(0x57, "F x!=0", found, "coord_list remove hit", statement.line);
+    emitCoordListCounterLoop(ctx, context.counterRegister, start, statement.line, "coord_list remove loop");
+    ctx.emitJump(0x51, "БП", done, "coord_list remove miss", statement.line);
+
+    ctx.emitLabel(found);
+    ctx.emitRecall(COORD_LIST_POINTER, "coord_list remove pointer", statement.line);
+    ctx.emitNumberOrPreload("1");
+    ctx.emitOp(0x11, "-", "coord_list remove current pointer", statement.line);
+    ctx.emitStore(COORD_LIST_POINTER, "coord_list remove current pointer", statement.line);
+    ctx.emitNumber("-1");
+    ctx.emitOp(
+      0xb0 + registerIndex(context.pointerRegister),
+      `К X->П ${context.pointerRegister}`,
+      "coord_list remove current",
+      statement.line,
+    );
+    ctx.emitLabel(done);
+    ctx.currentXVariable = undefined;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
+    ctx.optimizations.push({
+      name: scaled ? "coord-list-scaled-remove" : "coord-list-remove",
+      detail: `Removed the first matching item from coord_list ${statement.list} at line ${statement.line}.`,
+    });
+    return true;
+}
+
 export function compileCoordListHasCondition(ctx: LoweringCtx, 
     condition: ConditionAst,
     falseLabel: string,
@@ -412,6 +463,33 @@ export function compileCoordListHasCondition(ctx: LoweringCtx,
         : `Lowered coord_list membership through an indirect register walk at line ${line}.`,
     });
     return true;
+}
+
+function emitRemovedCoordListCandidateSkip(
+  ctx: LoweringCtx,
+  items: readonly { name: string }[],
+  countNext: string,
+  line: number,
+  commentPrefix: string,
+): void {
+    const listName = coordListNameFromItems(items);
+    if (listName === undefined || !ctx.removableCoordLists.has(listName)) return;
+    ctx.emitRecall(COORD_LIST_CURRENT, `${commentPrefix} candidate maybe removed`, line);
+    ctx.emitJump(0x5c, "F x<0", countNext, `${commentPrefix} removed candidate`, line);
+}
+
+function coordListNameFromItems(items: readonly { name: string }[]): string | undefined {
+    let listName: string | undefined;
+    for (const item of items) {
+      const info = coordListItemInfo(item.name);
+      if (info === undefined) return undefined;
+      if (listName === undefined) {
+        listName = info.listName;
+      } else if (listName !== info.listName) {
+        return undefined;
+      }
+    }
+    return listName;
 }
 
 export function emitCoordListLoopSetup(ctx: LoweringCtx, context: CoordListIndirectContext, line: number): void {

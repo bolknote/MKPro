@@ -60,6 +60,9 @@ class ConstantFolder {
           statement.target.index = this.foldExpression(statement.target.index);
           statement.expr = this.foldExpression(statement.expr);
           break;
+        case "coord_list_remove":
+          statement.item = this.foldExpression(statement.item);
+          break;
         case "loop":
           this.foldStatements(statement.body);
           break;

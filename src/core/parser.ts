@@ -944,7 +944,6 @@ function lowerV2Program(v2: V2ProgramAst, options: ParseOptions = {}): LoweredV2
   const decimalSeries = tryLowerV2DecimalFactorialSeries(v2);
   if (decimalSeries !== undefined) return decimalSeries;
 
-  const inlineScreens = collectV2InlineScreens(v2);
   const ruleParams = collectV2RuleParams(v2);
   const rules = collectV2Rules(v2);
   const functionRules = collectV2FunctionRules(v2);
@@ -974,6 +973,8 @@ function lowerV2Program(v2: V2ProgramAst, options: ParseOptions = {}): LoweredV2
     boards: new Map(v2.boards.map((board) => [board.name, board])),
     worlds: new Map(v2.worlds.map((world) => [world.name, world])),
   };
+  rewriteV2DisplayExpressions(v2, context);
+  const inlineScreens = collectV2InlineScreens(v2);
   const banks = lowerV2StateBanks(v2);
   return {
     domains: lowerV2Domains(v2),
@@ -985,6 +986,10 @@ function lowerV2Program(v2: V2ProgramAst, options: ParseOptions = {}): LoweredV2
       ...v2.rules.filter((rule) => !specializedRules.has(rule.name)).map((rule) => lowerV2Rule(rule, context)),
     ],
   };
+}
+
+function rewriteV2DisplayExpressions(_v2: V2ProgramAst, _context: V2LoweringContext): void {
+  // Hook for expression-display rewrites before inline screens are collected.
 }
 
 function tryLowerV2DecimalFactorialSeries(v2: V2ProgramAst): LoweredV2Program | undefined {
@@ -1170,41 +1175,8 @@ function validateV2Functions(v2: V2ProgramAst, functionRules: Set<string>): void
       );
     }
   }
-  validateV2FunctionRecursion(v2, functionRules);
-}
-
-// MK-61 keeps a finite five-level subroutine return stack and has no support for
-// recursion, so reject functions that call themselves (directly or mutually)
-// through expression-position calls.
-function validateV2FunctionRecursion(v2: V2ProgramAst, functionRules: Set<string>): void {
-  const edges = new Map<string, Set<string>>();
-  for (const rule of v2.rules) {
-    if (!functionRules.has(rule.name)) continue;
-    const callees = new Set<string>();
-    for (const text of v2StatementsExprTexts(rule.body)) {
-      for (const callee of expressionCallNames(text)) {
-        if (functionRules.has(callee)) callees.add(callee);
-      }
-    }
-    edges.set(rule.name, callees);
-  }
-  const visiting = new Set<string>();
-  const done = new Set<string>();
-  const walk = (name: string): void => {
-    if (done.has(name)) return;
-    if (visiting.has(name)) {
-      throw new ParseError(`Recursive function '${name}' is not supported on MK-61`, 0);
-    }
-    visiting.add(name);
-    for (const callee of edges.get(name) ?? []) walk(callee);
-    visiting.delete(name);
-    done.add(name);
-  };
-  for (const name of edges.keys()) walk(name);
-}
-
-function v2StatementsExprTexts(statements: V2StatementAst[]): string[] {
-  return statements.flatMap(v2StatementExprTexts);
+  // Recursive value functions are validated after lowering, where the compiler
+  // can distinguish true tail calls from calls nested inside larger expressions.
 }
 
 function v2StatementExprTexts(statement: V2StatementAst): string[] {
@@ -1224,13 +1196,13 @@ function v2StatementExprTexts(statement: V2StatementAst): string[] {
     case "v2_if":
       return [
         ...v2PredicateExprTexts(statement.predicate),
-        ...v2StatementsExprTexts(statement.thenBody),
-        ...(statement.elseBody ? v2StatementsExprTexts(statement.elseBody) : []),
+        ...statement.thenBody.flatMap(v2StatementExprTexts),
+        ...(statement.elseBody ? statement.elseBody.flatMap(v2StatementExprTexts) : []),
       ];
     case "v2_while":
-      return [...v2PredicateExprTexts(statement.predicate), ...v2StatementsExprTexts(statement.body)];
+      return [...v2PredicateExprTexts(statement.predicate), ...statement.body.flatMap(v2StatementExprTexts)];
     case "v2_loop":
-      return v2StatementsExprTexts(statement.body);
+      return statement.body.flatMap(v2StatementExprTexts);
     case "v2_match":
       return [
         statement.expr,
@@ -1247,17 +1219,6 @@ function v2StatementExprTexts(statement: V2StatementAst): string[] {
 function v2PredicateExprTexts(predicate: V2PredicateAst): string[] {
   if (predicate.kind === "v2_contains") return [predicate.collection, predicate.item];
   return [predicate.left, predicate.right];
-}
-
-// Identifiers immediately followed by `(` in an expression text, i.e. call sites.
-function expressionCallNames(text: string): string[] {
-  const names: string[] = [];
-  const pattern = /([A-Za-z_][\w]*)\s*\(/gu;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(text)) !== null) {
-    names.push(match[1]!);
-  }
-  return names;
 }
 
 interface V2InvocationSite {
@@ -2737,6 +2698,18 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
           line: statement.line,
         }];
       }
+      if (statement.op === "-=") {
+        const list = context.coordLists.get(statement.target);
+        if (list !== undefined) {
+          return [{
+            kind: "coord_list_remove",
+            list: statement.target,
+            item: lowerV2Expression(statement.expr, statement.line, context),
+            items: list.items,
+            line: statement.line,
+          }];
+        }
+      }
       return [{
         kind: "assign",
         target: statement.target,
@@ -3270,6 +3243,8 @@ function estimateLoweredStatementCost(statement: StatementAst): number {
       return 1 + estimateLoweredExpressionCost(statement.expr);
     case "indexed_assign":
       return 2 + estimateLoweredExpressionCost(statement.target.index) + estimateLoweredExpressionCost(statement.expr);
+    case "coord_list_remove":
+      return 4 + estimateLoweredExpressionCost(statement.item);
     case "pause":
     case "halt":
     case "return_value":
@@ -4365,7 +4340,14 @@ function tokenizeDisplayItems(text: string, line: number): DisplayToken[] {
     }
 
     const start = index;
-    while (index < text.length && text[index] !== ",") index += 1;
+    let depth = 0;
+    while (index < text.length) {
+      const current = text[index]!;
+      if (current === "(") depth += 1;
+      else if (current === ")") depth = Math.max(0, depth - 1);
+      else if (current === "," && depth === 0) break;
+      index += 1;
+    }
     tokens.push({ kind: "item", text: text.slice(start, index).trim() });
   }
 

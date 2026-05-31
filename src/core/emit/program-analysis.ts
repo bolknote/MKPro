@@ -23,4 +23,5 @@ export interface ProgramAnalysis {
   readonly lineCountGroupCounts: Map<string, number>;
   readonly scaledCoordLists: Set<string>;
   readonly scaledCoordCellNames: Set<string>;
+  readonly removableCoordLists: Set<string>;
 }

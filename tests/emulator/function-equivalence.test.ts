@@ -127,4 +127,87 @@ program Sign {
     expect(runWithInput(source, 0)).toBe(0);
     expect(runWithInput(source, 5)).toBe(1);
   });
+
+  it("runs direct tail recursion without accumulating return frames", () => {
+    const source = `
+program TailCount {
+  state {
+    result: counter 0..99 = 0
+  }
+  fn count_down(n, acc) {
+    if n <= 0 {
+      return acc
+    }
+    else {
+      return count_down(n - 1, acc + 1)
+    }
+  }
+  loop {
+    x = read()
+    result = count_down(x, 0)
+    halt(result)
+  }
+}
+`;
+    expect(runWithInput(source, 3)).toBe(3);
+    expect(runWithInput(source, 7)).toBe(7);
+  });
+
+  it("runs mutual tail recursion without accumulating return frames", () => {
+    const source = `
+program TailMutual {
+  state {
+    result: counter 0..99 = 0
+  }
+  fn even(n) {
+    if n <= 0 {
+      return 1
+    }
+    else {
+      return odd(n - 1)
+    }
+  }
+  fn odd(n) {
+    if n <= 0 {
+      return 0
+    }
+    else {
+      return even(n - 1)
+    }
+  }
+  loop {
+    x = read()
+    result = even(x)
+    halt(result)
+  }
+}
+`;
+    expect(runWithInput(source, 6)).toBe(1);
+    expect(runWithInput(source, 7)).toBe(0);
+  });
+
+  it("evaluates tail-recursive arguments before rebinding parameters", () => {
+    const source = `
+program TailFib {
+  state {
+    result: counter 0..99 = 0
+  }
+  fn fib_step(n, a, b) {
+    if n <= 0 {
+      return a
+    }
+    else {
+      return fib_step(n - 1, b, a + b)
+    }
+  }
+  loop {
+    x = read()
+    result = fib_step(x, 0, 1)
+    halt(result)
+  }
+}
+`;
+    expect(runWithInput(source, 6)).toBe(8);
+    expect(runWithInput(source, 7)).toBe(13);
+  });
 });

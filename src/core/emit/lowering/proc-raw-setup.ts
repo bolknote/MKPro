@@ -42,6 +42,7 @@ import {
   binaryOpcode,
   displayLiteralProgram,
   divideExpressions,
+  coordListItemInfo,
   estimateExpressionCost,
   estimateNumberCost,
   estimateNegativeZeroThresholdFlowCost,
@@ -83,6 +84,13 @@ import type {
 
 type NumericSetupPreload = ExecutableSetupPreload & { kind: "number" };
 
+interface RepeatedIndexedSetupGroup {
+  fields: StateFieldAst[];
+  initial: ExpressionAst;
+  minRegisterIndex: number;
+  maxRegisterIndex: number;
+}
+
 type SetupNumericPreloadAction =
   | { kind: "direct"; targetIndex: number; cost: number }
   | {
@@ -92,6 +100,14 @@ type SetupNumericPreloadAction =
       sourceIndex: number;
       opcode: number;
       mnemonic: string;
+      detail: string;
+    }
+  | {
+      kind: "unary-sequence";
+      targetIndex: number;
+      cost: number;
+      sourceIndex: number;
+      ops: Array<{ opcode: number; mnemonic: string; comment: string }>;
       detail: string;
     }
   | {
@@ -111,7 +127,19 @@ export function compileSetupProgramWithPreloads(ctx: LoweringCtx,
     fields: readonly StateFieldAst[],
   ): void {
     const dynamicRegisters = new Set(fields.map((field) => ctx.allocation.registers[field.name]).filter(Boolean));
-    const activePreloads = preloads.filter((preload) => !dynamicRegisters.has(preload.register));
+    const r0StackInitialized = fields.some((field) =>
+      field.initialStack !== undefined && ctx.allocation.registers[field.name] === "0"
+    );
+    const r0NeedsNonNumericRestore = preloads.some((preload) => preload.register === "0" && preload.kind !== "number");
+    const repeatedIndexedGroups = r0StackInitialized || r0NeedsNonNumericRestore
+      ? []
+      : repeatedIndexedSetupGroups(ctx, fields);
+    const groupedFieldNames = new Set(repeatedIndexedGroups.flatMap((group) => group.fields.map((field) => field.name)));
+    const usesR0SetupPointer = repeatedIndexedGroups.length > 0;
+    const activePreloads = preloads.filter((preload) =>
+      !dynamicRegisters.has(preload.register) &&
+      !(usesR0SetupPointer && preload.register === "0")
+    );
     let numericSegment: NumericSetupPreload[] = [];
     const emitNumericSegment = (): void => {
       for (const action of setupNumericPreloadActions(numericSegment)) {
@@ -154,8 +182,12 @@ export function compileSetupProgramWithPreloads(ctx: LoweringCtx,
     for (const field of fields.filter((candidate) => candidate.initialStack === "X")) {
       ctx.emitStore(field.name, `setup ${field.name}`, field.line, true);
     }
+    for (const group of repeatedIndexedGroups) compileRepeatedIndexedSetupGroup(ctx, group);
+    if (usesR0SetupPointer) restoreSetupPointerR0(ctx, preloads);
+
     const initializedCoordLists = new Set<string>();
     for (const field of fields) {
+      if (groupedFieldNames.has(field.name)) continue;
       if (field.initial === undefined) continue;
       const coordList = randomCoordListItemPlacement(field.name, field.initial);
       if (coordList !== undefined) {
@@ -182,6 +214,91 @@ export function compileSetupProgramWithPreloads(ctx: LoweringCtx,
     }
     ctx.emitOp(0x50, "С/П", "setup complete");
     compileRuntimeHelpers(ctx);
+}
+
+function repeatedIndexedSetupGroups(ctx: LoweringCtx, fields: readonly StateFieldAst[]): RepeatedIndexedSetupGroup[] {
+    const groups: RepeatedIndexedSetupGroup[] = [];
+    let index = 0;
+    while (index < fields.length) {
+      const first = fields[index]!;
+      if (first.initial === undefined || first.initialStack !== undefined || setupInitialIsLiteralExpression(first.initial)) {
+        index += 1;
+        continue;
+      }
+      if (coordListItemInfo(first.name) !== undefined || randomCoordListItemPlacement(first.name, first.initial) !== undefined) {
+        index += 1;
+        continue;
+      }
+      const firstRegister = ctx.allocation.registers[first.name];
+      if (firstRegister === undefined) {
+        index += 1;
+        continue;
+      }
+      const run: StateFieldAst[] = [first];
+      let previousRegisterIndex = registerIndex(firstRegister);
+      let cursor = index + 1;
+      while (cursor < fields.length) {
+        const candidate = fields[cursor]!;
+        if (candidate.initial === undefined || candidate.initialStack !== undefined) break;
+        if (coordListItemInfo(candidate.name) !== undefined) break;
+        if (!expressionEquals(candidate.initial, first.initial)) break;
+        const candidateRegister = ctx.allocation.registers[candidate.name];
+        if (candidateRegister === undefined) break;
+        const candidateRegisterIndex = registerIndex(candidateRegister);
+        if (candidateRegisterIndex !== previousRegisterIndex + 1) break;
+        run.push(candidate);
+        previousRegisterIndex = candidateRegisterIndex;
+        cursor += 1;
+      }
+      const minRegisterIndex = registerIndex(firstRegister);
+      const maxRegisterIndex = previousRegisterIndex;
+      if (run.length >= 3 && minRegisterIndex >= 1 && maxRegisterIndex <= 14) {
+        groups.push({
+          fields: run,
+          initial: first.initial,
+          minRegisterIndex,
+          maxRegisterIndex,
+        });
+        index = cursor;
+      } else {
+        index += 1;
+      }
+    }
+    return groups;
+}
+
+function setupInitialIsLiteralExpression(expr: ExpressionAst): boolean {
+    if (expr.kind === "number") return true;
+    return expr.kind === "unary" && expr.op === "-" && expr.expr.kind === "number";
+}
+
+function compileRepeatedIndexedSetupGroup(ctx: LoweringCtx, group: RepeatedIndexedSetupGroup): void {
+    const first = group.fields[0]!;
+    const last = group.fields.at(-1)!;
+    const label = ctx.freshLabel("setup_indexed_bank");
+    ctx.emitNumber(String(group.maxRegisterIndex + 1));
+    ctx.emitOp(0x40, "X->П 0", `setup indexed pointer ${first.name}..${last.name}`, first.line, true);
+    ctx.emitLabel(label);
+    compileExpression(ctx, group.initial);
+    ctx.emitOp(0xb0, "К X->П 0", `setup indexed ${first.name}..${last.name}`, first.line, true);
+    ctx.emitOp(0x60, "П->X 0", "setup indexed pointer", first.line, true);
+    ctx.emitNumber(String(group.minRegisterIndex));
+    ctx.emitOp(0x11, "-", "setup indexed remaining", first.line, true);
+    ctx.emitJump(0x5e, "F x=0", label, `setup indexed loop ${first.name}..${last.name}`, first.line);
+    ctx.currentXVariable = undefined;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
+    ctx.optimizations.push({
+      name: "indexed-bank-loop",
+      detail: `Initialized ${group.fields.length} indexed bank fields (${first.name}..${last.name}) with one indirect setup loop.`,
+    });
+}
+
+function restoreSetupPointerR0(ctx: LoweringCtx, preloads: readonly ExecutableSetupPreload[]): void {
+    const preload = preloads.find((candidate) => candidate.register === "0" && candidate.kind === "number");
+    if (preload === undefined) return;
+    ctx.emitNumber(preload.value);
+    ctx.emitOp(0x40, "X->П 0", "restore setup R0", undefined, true);
 }
 
 function setupNumericPreloadActions(preloads: readonly NumericSetupPreload[]): SetupNumericPreloadAction[] {
@@ -292,6 +409,41 @@ function setupConstantSynthesisActions(
       }
     }
 
+    for (const sourceIndex of loadedIndexes) {
+      const source = numeric[sourceIndex]!;
+      if (!Number.isSafeInteger(source)) continue;
+      const doubled = source * 2;
+      if (Number.isSafeInteger(doubled) && normalizeConstantLiteral(String(doubled)) === targetValue) {
+        accept({
+          kind: "unary-sequence",
+          targetIndex,
+          cost: 3,
+          sourceIndex,
+          ops: [
+            { opcode: 0x0e, mnemonic: "В↑", comment: "stack" },
+            { opcode: 0x10, mnemonic: "+", comment: "" },
+          ],
+          detail: `doubled setup R${preloads[sourceIndex]!.register} (${normalized[sourceIndex]})`,
+        });
+      }
+      if (source % 2 === 0) {
+        const half = source / 2;
+        if (Number.isSafeInteger(half) && normalizeConstantLiteral(String(half)) === targetValue) {
+          accept({
+            kind: "unary-sequence",
+            targetIndex,
+            cost: 3,
+            sourceIndex,
+            ops: [
+              { opcode: 0x02, mnemonic: "2", comment: "divisor" },
+              { opcode: 0x13, mnemonic: "/", comment: "" },
+            ],
+            detail: `halved setup R${preloads[sourceIndex]!.register} (${normalized[sourceIndex]})`,
+          });
+        }
+      }
+    }
+
     for (const leftIndex of loadedIndexes) {
       const left = numeric[leftIndex]!;
       if (!Number.isSafeInteger(left)) continue;
@@ -338,6 +490,13 @@ function emitSetupNumericPreloadAction(
       const source = preloads[action.sourceIndex]!;
       ctx.emitOp(0x60 + registerIndex(source.register), `П->X ${source.register}`, `setup constant ${targetValue} base ${normalizeConstantLiteral(source.value)}`);
       ctx.emitOp(action.opcode, action.mnemonic, `setup constant ${targetValue}`);
+    } else if (action.kind === "unary-sequence") {
+      const source = preloads[action.sourceIndex]!;
+      ctx.emitOp(0x60 + registerIndex(source.register), `П->X ${source.register}`, `setup constant ${targetValue} base ${normalizeConstantLiteral(source.value)}`);
+      for (const op of action.ops) {
+        const comment = op.comment === "" ? `setup constant ${targetValue}` : `setup constant ${targetValue} ${op.comment}`;
+        ctx.emitOp(op.opcode, op.mnemonic, comment);
+      }
     } else {
       const left = preloads[action.leftIndex]!;
       const right = preloads[action.rightIndex]!;
@@ -357,23 +516,25 @@ export function compileProcedures(ctx: LoweringCtx): void {
     for (const proc of ctx.ast.procs) {
       if (ctx.inlineProcNames.has(proc.name)) continue;
       ctx.emitLabel(proc.name);
-      const xParam = ctx.xParamProcs.get(proc.name);
-      const xParamDecay = matchXParamReturnDecay(proc);
-      if (xParamDecay !== undefined) {
-        compileXParamReturnDecayBody(ctx, xParamDecay);
-        ctx.emitOp(0x52, "В/О", "x-param decay return", xParamDecay.line);
-        ctx.optimizations.push({
-          name: "x-param-return-decay",
-          detail: `Compiled ${proc.name} to consume ${xParamDecay.param} directly from X.`,
-        });
-      } else if (xParam !== undefined) {
-        compileXParamProcBody(ctx, proc, xParam);
-      } else {
-        ctx.compileStatements(proc.body);
-      }
-      if (!ctx.statementsTerminate(proc.body)) {
-        ctx.emitOp(0x52, "В/О", "implicit return from proc");
-      }
+      ctx.compileWithinProcedure(proc, () => {
+        const xParam = ctx.xParamProcs.get(proc.name);
+        const xParamDecay = matchXParamReturnDecay(proc);
+        if (xParamDecay !== undefined) {
+          compileXParamReturnDecayBody(ctx, xParamDecay);
+          ctx.emitOp(0x52, "В/О", "x-param decay return", xParamDecay.line);
+          ctx.optimizations.push({
+            name: "x-param-return-decay",
+            detail: `Compiled ${proc.name} to consume ${xParamDecay.param} directly from X.`,
+          });
+        } else if (xParam !== undefined) {
+          compileXParamProcBody(ctx, proc, xParam);
+        } else {
+          ctx.compileStatements(proc.body);
+        }
+        if (!ctx.statementsTerminate(proc.body)) {
+          ctx.emitOp(0x52, "В/О", "implicit return from proc");
+        }
+      });
     }
 }
 
@@ -518,15 +679,24 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
     }
     for (const helper of ctx.spatialHitHelpers.values()) {
       ctx.emitLabel(helper.label);
-      ctx.emitStore(helper.scratch, "spatial hit index", helper.line);
-      // Build the cell mask before recalling the set: constructing the mask
-      // churns the four-deep stack, so nothing else may be held while it runs.
-      compileBitMaskWithQuotientScratch(ctx, 
-        { kind: "identifier", name: helper.scratch },
-        helper.scratch,
-        helper.line,
-        { forceInline: true },
-      );
+      const bitMaskHelper = ctx.spatialBitMaskHelpers.values().next().value;
+      if (bitMaskHelper !== undefined) {
+        ctx.emitJump(0x53, "ПП", bitMaskHelper.label, "spatial hit bit_mask", helper.line);
+        ctx.optimizations.push({
+          name: "spatial-hit-bit-mask-helper-reuse",
+          detail: `Reused shared bit_mask helper ${bitMaskHelper.label} inside spatial hit ${helper.label}.`,
+        });
+      } else {
+        ctx.emitStore(helper.scratch, "spatial hit index", helper.line);
+        // Build the cell mask before recalling the set: constructing the mask
+        // churns the four-deep stack, so nothing else may be held while it runs.
+        compileBitMaskWithQuotientScratch(ctx,
+          { kind: "identifier", name: helper.scratch },
+          helper.scratch,
+          helper.line,
+          { forceInline: true },
+        );
+      }
       ctx.emitRecall(helper.mask, "spatial hit mask", helper.line);
       ctx.emitOp(0x37, "К ∧", "spatial hit test", helper.line);
       ctx.emitOp(0x35, "К {x}", "spatial hit membership fraction", helper.line);

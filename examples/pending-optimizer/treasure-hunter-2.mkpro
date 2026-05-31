@@ -5,26 +5,20 @@ reference anvarov_treasure_hunter_2
 
 program TreasureHunter2 {
   state {
-    // The original main stop splices Rb into a packed, inverted seven-cell row:
-    // Пхb; FВx; 0; 0; ВП; С/П. Keep floor and room separately for the rules,
-    // but draw the visible screen from the packed row rather than diagnostics.
-    pos: coord(cave) = 9
-    floor_view: packed = 0
-    plan: packed = bit_and(8 + (int(random(9999999)) + 1) / pow10(7), 8.5555555)
-    treasure: counter 0..99 = 0
-
     floor: counter 1..9 = 9
     room: counter 0..6 = 0
 
-    entered: flag = 0
-    dug_pos: coord(cave)
-    collected_treasure: coord(cave)
-    ladder_top: coord(cave)
-  }
+    // The original stores every generated floor row in R1..R9 and uses the
+    // current floor as the indirect-memory selector. Updating a row records
+    // dug holes and collected treasures without separate position memory.
+    rows: group(1..9) {
+      row: packed = bit_and(8 + (int(random(9999999)) + 1) / pow10(7), 8.5555555)
+    }
 
-  // The board is mostly vertical. Horizontal motion searches rooms on a floor;
-  // holes and ladders shift the player through the nine-floor stack.
-  cave: board(floor_plan)
+    tile: counter 0..9 = 0
+    treasure: counter 0..99 = 0
+    entered: flag = 0
+  }
 
   fn escaped() {
     halt(treasure)
@@ -36,8 +30,6 @@ program TreasureHunter2 {
 
   loop {
     if entered == 0 {
-      // The original enters from the left wall automatically; if the starting
-      // cell is a hole, the first visible state is already lower in the cave.
       entered = 1
       inspect_cell()
     }
@@ -45,9 +37,6 @@ program TreasureHunter2 {
       draw()
       action = read()
 
-      // The MK-61 prototype uses non-zero X plus the R/GRD/G angle switch for
-      // left/up/right. These numeric labels are the portable command names for
-      // the same three choices; there is no manual down command in the source.
       match action {
         4 => move_left()
         6 => move_right()
@@ -59,8 +48,6 @@ program TreasureHunter2 {
   }
 
   fn move_left() {
-    // The left edge of floor 1 is the only exit. Other left moves are just
-    // ordinary exploration and still inspect the resulting cell.
     if room == 0 {
       if floor == 1 {
         escaped()
@@ -71,7 +58,6 @@ program TreasureHunter2 {
     }
     else {
       room--
-      pos--
       inspect_cell()
     }
   }
@@ -79,7 +65,6 @@ program TreasureHunter2 {
   fn move_right() {
     if room < 6 {
       room++
-      pos++
       inspect_cell()
     }
     else {
@@ -88,83 +73,22 @@ program TreasureHunter2 {
   }
 
   fn climb_or_descend() {
-    if pos == dug_pos {
-      draw()
-    }
-    else {
-      if floor_view == 4 {
-        if floor < 9 {
-          floor++
-          pos = move(pos, up)
-          ladder_top = pos
-          inspect_cell()
-        }
-        else {
-          draw()
-        }
+    if tile == 4 {
+      if floor < 9 {
+        floor++
+        inspect_cell()
       }
       else {
-        // At the top of a known ladder the prototype treats "up" in empty
-        // space as a quick descent back down the ladder.
-        if pos == ladder_top {
+        draw()
+      }
+    }
+    else {
+      if floor > 1 {
+        if int(frac(rows[floor - 1].row * pow10(room)) * 10) == 4 {
           descend()
         }
         else {
           draw()
-        }
-      }
-    }
-  }
-
-  fn descend() {
-    floor--
-    if floor <= 0 {
-      lost()
-    }
-    else {
-      pos = move(pos, down)
-      inspect_cell()
-    }
-  }
-
-  fn punch_hole() {
-    // Digging marks this cell as a forced descent. That also destroys a ladder,
-    // so future climb attempts from the same cell no longer work.
-    dug_pos = pos
-    descend()
-  }
-
-  fn inspect_cell() {
-    if pos == dug_pos {
-      descend()
-    }
-    else {
-      reveal_cell()
-    }
-  }
-
-  fn reveal_cell() {
-    // Original floor rows are masked with 5555555 before КИНВ display:
-    // 0 is a hole, 1 is treasure, 4 is a ladder, and 5 is ordinary floor.
-    floor_view = digit_at(int(frac(plan) * pow10(7)), 7 - room)
-    classify_tile()
-  }
-
-  fn draw() {
-    show(floor, ".", bit_not(plan + 2 / pow10(room + 1)))
-  }
-
-  fn classify_tile() {
-    if floor_view == 0 {
-      descend()
-    }
-    else {
-      if floor_view == 1 {
-        if pos == collected_treasure {
-          draw()
-        }
-        else {
-          collect_treasure()
         }
       }
       else {
@@ -173,8 +97,36 @@ program TreasureHunter2 {
     }
   }
 
+  fn descend() {
+    floor--
+    if floor == 0 {
+      lost()
+    }
+    else {
+      inspect_cell()
+    }
+  }
+
+  fn punch_hole() {
+    rows[floor].row -= tile / pow10(room + 1)
+    descend()
+  }
+
+  fn inspect_cell() {
+    tile = int(frac(rows[floor].row * pow10(room)) * 10)
+    match tile {
+      0 => descend()
+      1 => collect_treasure()
+      otherwise => draw()
+    }
+  }
+
+  fn draw() {
+    show(floor, ".", bit_not(rows[floor].row + 2 / pow10(room + 1)))
+  }
+
   fn collect_treasure() {
-    collected_treasure = pos
+    rows[floor].row += 4 / pow10(room + 1)
     treasure++
     draw()
   }

@@ -15,7 +15,7 @@ import { compileExpression } from "./emit/lowering/expr.ts";
 import { compileCondition, compileDecrementUnderflowBranch, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitKnownOneIndirectLoopBack } from "./emit/lowering/control-flow.ts";
 import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts";
 import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileTicTacToeCellMaskReuse } from "./emit/lowering/spatial.ts";
-import { compileCoordListLineCountAssignment, compileCoordListLineCountDashedReport, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
+import { compileCoordListLineCountAssignment, compileCoordListLineCountDashedReport, compileCoordListRemove, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
 import { compileBlockCall, compileDecimalFactorialSeries, compileGuardAssignmentSubstitution, compileInitialState, compileIntFracSharedTail, compileProcedures, compileRawStatement, compileRepeatedAssignmentValue, compileRuntimeHelpers, compileSetupProgramWithPreloads, compileStackUnaryDerivedAssignments, compileUnitDecrement, compileUnitIncrement, compileXParamProcCall } from "./emit/lowering/proc-raw-setup.ts";
 import {
   BIT_MASK_SCRATCH_PREFIX,
@@ -231,6 +231,11 @@ const DISPLAY_TEMPLATE_MASK_PREFIX = "__display_mask_";
 const CELL_MAP_PREFIX = "__cell_map_";
 const PARAMETRIC_SIBLING_PREFIX = "__param_sibling_";
 const INTERNAL_NAME_PREFIX = "__mkpro_";
+const FUNCTION_TAIL_ARG_PREFIX = `${INTERNAL_NAME_PREFIX}tail_arg_`;
+
+function functionTailArgScratchName(functionName: string, index: number): string {
+  return `${FUNCTION_TAIL_ARG_PREFIX}${functionName}_${index}`;
+}
 const DISPLAY_HELPER_MIN_SAVINGS = 4;
 const UNAVAILABLE_DISPLAY_STRATEGY_COST = 999999;
 const EXPRESSION_HELPER_MIN_COST = 8;
@@ -608,7 +613,8 @@ export function compileMKPro(
 
   const { best, selected } = selectBest();
   if (best === undefined) {
-    if (primaryError !== undefined) throw primaryError;
+    if (primaryError instanceof Error) throw primaryError;
+    if (primaryError !== undefined) throw new Error(primaryFailureSummary(primaryError));
     throw new CompileError([{ level: "error", message: "No lowering candidate succeeded." }]);
   }
 
@@ -1259,6 +1265,10 @@ function resolveConstantIndexedState(ast: ProgramAst, optimizations: AppliedOpti
         }
         return target === statement.target && expr === statement.expr ? statement : { ...statement, target, expr };
       }
+      case "coord_list_remove": {
+        const item = rewriteExpr(statement.item);
+        return item === statement.item ? statement : { ...statement, item };
+      }
       case "pause":
       case "halt":
       case "return_value": {
@@ -1403,6 +1413,7 @@ function compileMKProOnce(
   validateSemanticDomains(ast, diagnostics);
   validateV2Intent(ast, diagnostics);
   validateReservedInternalNames(ast, diagnostics);
+  validateFunctionTailRecursion(ast, diagnostics);
   if (diagnostics.some((diagnostic) => diagnostic.level === "error")) {
     throw new CompileError(diagnostics);
   }
@@ -1543,6 +1554,7 @@ function visiblePublicRegisters(
       !name.startsWith(DISPLAY_EXPR_PREFIX) &&
       !name.startsWith(CELL_MAP_PREFIX) &&
       !name.startsWith(PARAMETRIC_SIBLING_PREFIX) &&
+      !name.startsWith(FUNCTION_TAIL_ARG_PREFIX) &&
       !name.startsWith(SPATIAL_HIT_SCRATCH_PREFIX) &&
       !name.startsWith(SPATIAL_COUNT_SCRATCH_PREFIX)
     ) {
@@ -1780,6 +1792,8 @@ function packCounterStripes(
           target: { ...statement.target, index: rewriteExpr(statement.target.index) },
           expr: rewriteExpr(statement.expr),
         };
+      case "coord_list_remove":
+        return { ...statement, item: rewriteExpr(statement.item) };
       case "if":
         return {
           ...statement,
@@ -2418,6 +2432,7 @@ function identifierReadOutsideProc(ast: ProgramAst, procName: string, name: stri
     for (const statement of statements) {
       if (statement.kind === "assign" && visitExpr(statement.expr)) return true;
       if (statement.kind === "indexed_assign" && (visitExpr(statement.target.index) || visitExpr(statement.expr))) return true;
+      if (statement.kind === "coord_list_remove" && visitExpr(statement.item)) return true;
       if ((statement.kind === "pause" || statement.kind === "halt" || statement.kind === "return_value") && visitExpr(statement.expr)) return true;
       if ((statement.kind === "if" || statement.kind === "while") && visitCondition(statement.condition)) return true;
       if (statement.kind === "if" && (visitStatements(statement.thenBody) || (statement.elseBody !== undefined && visitStatements(statement.elseBody)))) return true;
@@ -3877,6 +3892,14 @@ type ConstantSynthesisPlan =
       detail: string;
     }
   | {
+      kind: "unary-sequence";
+      cost: number;
+      sourceValue: string;
+      sourceRegister: RegisterName;
+      ops: Array<{ opcode: number; mnemonic: string; comment: string }>;
+      detail: string;
+    }
+  | {
       kind: "binary";
       cost: number;
       leftValue: string;
@@ -3906,6 +3929,7 @@ export class EmitContext {
   readonly warnings: string[];
   readonly candidates: CandidateReport[];
   readonly loweringOptions: LoweringOptions;
+  private currentProcedure: ProcAst | undefined;
   readonly bankSelectorCache = new Map<string, { key: string; deps: ReadonlySet<string> }>();
   // Read-only program analysis is computed once and injected; the lowering code
   // reads these maps through getters so call sites stay unchanged.
@@ -3948,6 +3972,9 @@ export class EmitContext {
   }
   get scaledCoordCellNames(): Set<string> {
     return this.analysis.scaledCoordCellNames;
+  }
+  get removableCoordLists(): Set<string> {
+    return this.analysis.removableCoordLists;
   }
   readonly scaledCoordVariables = new Set<string>();
   // Shared runtime-helper tables live in a dedicated collaborator; lowering
@@ -4067,6 +4094,16 @@ export class EmitContext {
     this.candidates = candidates;
     this.loweringOptions = loweringOptions;
     this.analysis = buildProgramAnalysis(ast, allocation);
+  }
+
+  compileWithinProcedure(proc: ProcAst, compile: () => void): void {
+    const previous = this.currentProcedure;
+    this.currentProcedure = proc;
+    try {
+      compile();
+    } finally {
+      this.currentProcedure = previous;
+    }
   }
 
   compileProgram(): void {
@@ -4569,6 +4606,53 @@ export class EmitContext {
 
 
 
+  compileTailFunctionReturn(statement: Extract<StatementAst, { kind: "return_value" }>): boolean {
+    const current = this.currentProcedure;
+    const expr = statement.expr;
+    if (current === undefined || expr.kind !== "call") return false;
+    const target = this.functionProcs.get(expr.callee);
+    if (target === undefined) return false;
+    const params = target.params ?? [];
+    if (expr.args.length !== params.length) {
+      this.diagnostics.push(buildDiagnostic(
+        "error",
+        `Function ${target.name} expects ${params.length} argument(s), got ${expr.args.length}.`,
+        statement.line,
+      ));
+      return true;
+    }
+
+    const xParamDecay = matchXParamReturnDecay(target);
+    if (xParamDecay !== undefined && expr.args.length === 1) {
+      compileExpression(this, expr.args[0]!);
+      this.emitJump(0x51, "БП", target.name, `tail call function ${target.name}`, statement.line);
+      this.reportFunctionTailCall(current.name, target.name, statement.line);
+      return true;
+    }
+
+    for (let index = 0; index < expr.args.length; index += 1) {
+      compileExpression(this, expr.args[index]!);
+      this.emitStore(functionTailArgScratchName(target.name, index), `tail arg ${params[index]} for ${target.name}`, statement.line);
+    }
+    for (let index = 0; index < params.length; index += 1) {
+      const param = params[index]!;
+      this.emitRecall(functionTailArgScratchName(target.name, index), `tail arg ${param} for ${target.name}`, statement.line);
+      this.emitStore(param, `tail param ${param} for ${target.name}`, statement.line);
+    }
+    this.emitJump(0x51, "БП", target.name, `tail call function ${target.name}`, statement.line);
+    this.reportFunctionTailCall(current.name, target.name, statement.line);
+    return true;
+  }
+
+  reportFunctionTailCall(source: string, target: string, line: number): void {
+    this.optimizations.push({
+      name: source === target ? "function-tail-recursion" : "function-tail-call",
+      detail: source === target
+        ? `Compiled tail-recursive call in ${source} as a direct jump at line ${line}.`
+        : `Compiled tail call from ${source} to ${target} as a direct jump at line ${line}.`,
+    });
+  }
+
   compileStatement(statement: StatementAst): void {
     switch (statement.kind) {
       case "pause":
@@ -4613,6 +4697,10 @@ export class EmitContext {
         if (isZeroExpression(statement.expr)) this.emitZero(`set ${statement.target}`, statement.line);
         else compileExpression(this, statement.expr);
         this.emitStore(statement.target, `set ${statement.target}`, statement.line);
+        return;
+      case "coord_list_remove":
+        if (compileCoordListRemove(this, statement)) return;
+        this.diagnostics.push(buildDiagnostic("error", `Cannot lower removable coord_list '${statement.list}'.`, statement.line));
         return;
       case "indexed_assign":
         if (numericIndexValue(statement.target.index) === undefined) {
@@ -4680,6 +4768,7 @@ export class EmitContext {
         compileRawStatement(this, statement);
         return;
       case "return_value":
+        if (this.compileTailFunctionReturn(statement)) return;
         compileExpression(this, statement.expr);
         this.emitOp(0x52, "В/О", "return value", statement.line);
         return;
@@ -6052,6 +6141,40 @@ export class EmitContext {
       }
     }
 
+    for (const entry of entries) {
+      if (!Number.isSafeInteger(entry.numeric)) continue;
+      const doubled = entry.numeric * 2;
+      if (Number.isSafeInteger(doubled) && normalizeConstantLiteral(String(doubled)) === normalized) {
+        accept({
+          kind: "unary-sequence",
+          cost: 3,
+          sourceValue: entry.value,
+          sourceRegister: entry.register,
+          ops: [
+            { opcode: 0x0e, mnemonic: "В↑", comment: "stack" },
+            { opcode: 0x10, mnemonic: "+", comment: "" },
+          ],
+          detail: `doubled preloaded R${entry.register} (${entry.value})`,
+        });
+      }
+      if (entry.numeric % 2 === 0) {
+        const half = entry.numeric / 2;
+        if (Number.isSafeInteger(half) && normalizeConstantLiteral(String(half)) === normalized) {
+          accept({
+            kind: "unary-sequence",
+            cost: 3,
+            sourceValue: entry.value,
+            sourceRegister: entry.register,
+            ops: [
+              { opcode: 0x02, mnemonic: "2", comment: "divisor" },
+              { opcode: 0x13, mnemonic: "/", comment: "" },
+            ],
+            detail: `halved preloaded R${entry.register} (${entry.value})`,
+          });
+        }
+      }
+    }
+
     for (const left of entries) {
       if (!Number.isSafeInteger(left.numeric)) continue;
       for (const right of entries) {
@@ -6091,6 +6214,12 @@ export class EmitContext {
     if (plan.kind === "unary") {
       this.emitOp(0x60 + registerIndex(plan.sourceRegister), `П->X ${plan.sourceRegister}`, `constant ${target} base ${plan.sourceValue}`);
       this.emitOp(plan.opcode, plan.mnemonic, `constant ${target}`);
+    } else if (plan.kind === "unary-sequence") {
+      this.emitOp(0x60 + registerIndex(plan.sourceRegister), `П->X ${plan.sourceRegister}`, `constant ${target} base ${plan.sourceValue}`);
+      for (const op of plan.ops) {
+        const comment = op.comment === "" ? `constant ${target}` : `constant ${target} ${op.comment}`;
+        this.emitOp(op.opcode, op.mnemonic, comment);
+      }
     } else {
       this.emitOp(0x60 + registerIndex(plan.leftRegister), `П->X ${plan.leftRegister}`, `constant ${target} left ${plan.leftValue}`);
       this.emitOp(0x0e, "В↑", `constant ${target} stack`);
@@ -6536,6 +6665,28 @@ function collectScaledCoordListNames(ast: ProgramAst): Set<string> {
   return selected;
 }
 
+function collectRemovableCoordListNames(ast: ProgramAst): Set<string> {
+  const names = new Set<string>();
+  const visit = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "coord_list_remove") names.add(statement.list);
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "while") visit(statement.body);
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+  return names;
+}
+
 function collectCoordListCellNames(ast: ProgramAst): Set<string> {
   const names = new Set<string>();
   const visitExpr = (expr: ExpressionAst): void => {
@@ -6796,6 +6947,7 @@ function buildProgramAnalysis(ast: ProgramAst, allocation: RegisterAllocation): 
     lineCountGroupCounts: collectLineCountGroupCounts(ast),
     scaledCoordLists,
     scaledCoordCellNames: collectScaledCoordCellNames(ast, scaledCoordLists),
+    removableCoordLists: collectRemovableCoordListNames(ast),
   };
 }
 
@@ -6872,6 +7024,162 @@ function procContainsReturnValue(body: readonly StatementAst[]): boolean {
 
 function collectFunctionProcNames(ast: ProgramAst): Set<string> {
   return new Set(ast.procs.filter((proc) => procContainsReturnValue(proc.body)).map((proc) => proc.name));
+}
+
+type FunctionEdgeMap = Map<string, Map<string, number | undefined>>;
+
+function validateFunctionTailRecursion(ast: ProgramAst, diagnostics: Diagnostic[]): void {
+  const functions = collectFunctionProcNames(ast);
+  if (functions.size === 0) return;
+  const { tail, nonTail } = collectFunctionCallEdges(ast, functions);
+  const allEdges = mergeFunctionEdges(tail, nonTail);
+  const reported = new Set<string>();
+
+  for (const [source, targets] of nonTail) {
+    for (const [target, line] of targets) {
+      if (!functionReaches(allEdges, target, source)) continue;
+      const key = `${source}->${target}`;
+      if (reported.has(key)) continue;
+      reported.add(key);
+      diagnostics.push(buildDiagnostic(
+        "error",
+        `Recursive function '${source}' has a non-tail call to '${target}'; recursive function calls must be the whole return expression.`,
+        line,
+      ));
+    }
+  }
+}
+
+function collectFunctionCallEdges(
+  ast: ProgramAst,
+  functions: ReadonlySet<string>,
+): { tail: FunctionEdgeMap; nonTail: FunctionEdgeMap } {
+  const tail: FunctionEdgeMap = new Map();
+  const nonTail: FunctionEdgeMap = new Map();
+
+  const add = (edges: FunctionEdgeMap, source: string, target: string, line?: number): void => {
+    if (!functions.has(target)) return;
+    const targets = edges.get(source) ?? new Map<string, number | undefined>();
+    if (!targets.has(target)) targets.set(target, line);
+    edges.set(source, targets);
+  };
+
+  const visitExprNonTail = (expr: ExpressionAst, source: string, line?: number): void => {
+    switch (expr.kind) {
+      case "number":
+      case "string":
+      case "identifier":
+        return;
+      case "indexed":
+        visitExprNonTail(expr.index, source, line);
+        return;
+      case "unary":
+        visitExprNonTail(expr.expr, source, line);
+        return;
+      case "binary":
+        visitExprNonTail(expr.left, source, line);
+        visitExprNonTail(expr.right, source, line);
+        return;
+      case "call":
+        add(nonTail, source, expr.callee, line);
+        for (const arg of expr.args) visitExprNonTail(arg, source, line);
+        return;
+    }
+  };
+
+  const visitReturnExpr = (expr: ExpressionAst, source: string, line?: number): void => {
+    if (expr.kind === "call" && functions.has(expr.callee)) {
+      add(tail, source, expr.callee, line);
+      for (const arg of expr.args) visitExprNonTail(arg, source, line);
+      return;
+    }
+    visitExprNonTail(expr, source, line);
+  };
+
+  const visitCondition = (condition: ConditionAst, source: string, line?: number): void => {
+    visitExprNonTail(condition.left, source, line);
+    visitExprNonTail(condition.right, source, line);
+  };
+
+  const visitStatements = (statements: readonly StatementAst[], source: string): void => {
+    for (const statement of statements) {
+      switch (statement.kind) {
+        case "assign":
+        case "pause":
+        case "halt":
+          visitExprNonTail(statement.expr, source, statement.line);
+          break;
+        case "indexed_assign":
+          visitExprNonTail(statement.target.index, source, statement.line);
+          visitExprNonTail(statement.expr, source, statement.line);
+          break;
+        case "if":
+          visitCondition(statement.condition, source, statement.line);
+          visitStatements(statement.thenBody, source);
+          if (statement.elseBody !== undefined) visitStatements(statement.elseBody, source);
+          break;
+        case "while":
+          visitCondition(statement.condition, source, statement.line);
+          visitStatements(statement.body, source);
+          break;
+        case "loop":
+          visitStatements(statement.body, source);
+          break;
+        case "dispatch":
+          visitExprNonTail(statement.expr, source, statement.line);
+          for (const dispatchCase of statement.cases) {
+            visitExprNonTail(dispatchCase.value, source, dispatchCase.line);
+            visitStatements(dispatchCase.body, source);
+          }
+          if (statement.defaultBody !== undefined) visitStatements(statement.defaultBody, source);
+          break;
+        case "call":
+          add(nonTail, source, statement.block, statement.line);
+          break;
+        case "core":
+          for (const input of statement.inputs ?? []) visitExprNonTail(input.expr, source, input.line);
+          break;
+        case "return_value":
+          visitReturnExpr(statement.expr, source, statement.line);
+          break;
+        case "input":
+        case "show":
+        case "decimal_series":
+          break;
+      }
+    }
+  };
+
+  for (const proc of ast.procs) {
+    if (!functions.has(proc.name)) continue;
+    visitStatements(proc.body, proc.name);
+  }
+
+  return { tail, nonTail };
+}
+
+function mergeFunctionEdges(...maps: FunctionEdgeMap[]): FunctionEdgeMap {
+  const result: FunctionEdgeMap = new Map();
+  for (const edges of maps) {
+    for (const [source, targets] of edges) {
+      const merged = result.get(source) ?? new Map<string, number | undefined>();
+      for (const [target, line] of targets) {
+        if (!merged.has(target)) merged.set(target, line);
+      }
+      result.set(source, merged);
+    }
+  }
+  return result;
+}
+
+function functionReaches(edges: FunctionEdgeMap, start: string, goal: string, seen = new Set<string>()): boolean {
+  if (start === goal) return true;
+  if (seen.has(start)) return false;
+  seen.add(start);
+  for (const target of edges.get(start)?.keys() ?? []) {
+    if (functionReaches(edges, target, goal, seen)) return true;
+  }
+  return false;
 }
 
 function findInlineProcNamesBySize(ast: ProgramAst, counts = collectProcCallCounts(ast)): Set<string> {
@@ -7340,6 +7648,7 @@ function allocateRegisters(
 
   warnUndeclaredAssignments(ast, declared, diagnostics);
   collectAssignedVariables(ast, variables);
+  collectFunctionTailCallScratchVariables(ast, variables);
   collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch);
   collectTicTacToeScratchVariables(ast, variables);
   collectBitMaskScratchVariables(ast, variables);
@@ -7422,8 +7731,14 @@ function allocateRegisters(
 
 function reusableScratchFamily(variable: string): string | undefined {
   if (variable.startsWith(BIT_MASK_SCRATCH_PREFIX)) return BIT_MASK_SCRATCH_PREFIX;
+  if (variable.startsWith(FUNCTION_TAIL_ARG_PREFIX)) return functionTailArgScratchFamily(variable);
   if (variable.startsWith("__display_first_")) return "__display_first_";
   return undefined;
+}
+
+function functionTailArgScratchFamily(variable: string): string {
+  const index = /_(\d+)$/u.exec(variable)?.[1] ?? "0";
+  return `${FUNCTION_TAIL_ARG_PREFIX}${index}`;
 }
 
 function collectDomainBindings(ast: ProgramAst): DomainBinding[] {
@@ -8276,6 +8591,8 @@ function statementReadsIdentifier(statement: StatementAst, name: string): boolea
     case "indexed_assign":
       return expressionReferencesIdentifier(statement.target.index, name) ||
         expressionReferencesIdentifier(statement.expr, name);
+    case "coord_list_remove":
+      return expressionReferencesIdentifier(statement.item, name);
     case "if":
       return expressionReferencesIdentifier(statement.condition.left, name) ||
         expressionReferencesIdentifier(statement.condition.right, name) ||
@@ -8970,6 +9287,39 @@ function collectAssignedVariables(ast: ProgramAst, variables: Set<string>): void
   for (const proc of ast.procs) visit(proc.body);
 }
 
+function collectFunctionTailCallScratchVariables(ast: ProgramAst, variables: Set<string>): void {
+  const functionProcs = new Map(
+    ast.procs.filter((proc) => procContainsReturnValue(proc.body)).map((proc) => [proc.name, proc]),
+  );
+  if (functionProcs.size === 0) return;
+
+  const visit = (statements: readonly StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "return_value" && statement.expr.kind === "call") {
+        const target = functionProcs.get(statement.expr.callee);
+        if (target !== undefined && matchXParamReturnDecay(target) === undefined) {
+          for (let index = 0; index < statement.expr.args.length; index += 1) {
+            variables.add(functionTailArgScratchName(target.name, index));
+          }
+        }
+      }
+      if (statement.kind === "loop" || statement.kind === "while") visit(statement.body);
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+
+  for (const proc of ast.procs) {
+    if (functionProcs.has(proc.name)) visit(proc.body);
+  }
+}
+
 function collectEphemeralInputTargets(ast: ProgramAst): Set<string> {
   const readCounts = collectVariableReadCounts(ast);
   const targets = new Set<string>();
@@ -9158,12 +9508,12 @@ function collectCoordListScratchVariables(ast: ProgramAst, variables: Set<string
   const addLineCountScratch = (): void => {
     addHasScratch();
     variables.add(COORD_LIST_CURRENT);
-    variables.add(COORD_LIST_DX);
   };
   for (const state of ast.states) {
     for (const field of state.fields) {
       if (field.initial !== undefined && randomCoordListItemPlacement(field.name, field.initial) !== undefined) {
         addLineCountScratch();
+        variables.add(COORD_LIST_DX);
       }
     }
   }
@@ -10199,6 +10549,8 @@ function estimateBranchOrderStatementCost(statement: StatementAst, ast: ProgramA
       return estimateExpressionCost(statement.expr) + 1;
     case "indexed_assign":
       return estimateExpressionCost(statement.target.index) + estimateExpressionCost(statement.expr) + 1;
+    case "coord_list_remove":
+      return Number.POSITIVE_INFINITY;
     case "pause":
     case "halt":
     case "return_value":
@@ -10336,6 +10688,8 @@ const optimizerCapabilities: Array<{
       "tail-branch-inversion",
       "terminal-rule-tail-call",
       "tail-call-layout",
+      "function-tail-call",
+      "function-tail-recursion",
       "terminal-if-direct-branch",
       "terminal-branch-end-elision",
       "local-terminal-tail",

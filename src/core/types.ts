@@ -411,6 +411,7 @@ export type StatementAst =
   | HaltStatementAst
   | AssignStatementAst
   | IndexedAssignStatementAst
+  | CoordListRemoveStatementAst
   | LoopStatementAst
   | WhileStatementAst
   | IfStatementAst
@@ -451,6 +452,14 @@ export interface IndexedAssignStatementAst {
   kind: "indexed_assign";
   target: IndexedExpressionAst;
   expr: ExpressionAst;
+  line: number;
+}
+
+export interface CoordListRemoveStatementAst {
+  kind: "coord_list_remove";
+  list: string;
+  item: ExpressionAst;
+  items: string[];
   line: number;
 }
 
