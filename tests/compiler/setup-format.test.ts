@@ -172,4 +172,20 @@ F2
 
     expect(formatKeys(result)).toContain("<warning: No supported manual patch sequence for 3E at 12.>");
   });
+
+  it("exports the literal error trap as the keyboard-enterable К ÷ with no patch warning", () => {
+    const result = compileMKPro(`
+program LiteralErrorStop {
+  loop {
+    show("ЕГГОГ")
+    halt()
+  }
+}
+`);
+
+    const keys = formatKeys(result);
+    expect(keys.split(/\r?\n/u)).toContain("К ÷");
+    expect(keys).not.toContain("К /");
+    expect(keys).not.toContain("No supported manual patch sequence");
+  });
 });

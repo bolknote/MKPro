@@ -229,7 +229,23 @@ function formatStepKeys(
   patch?: ProgramPatchReport,
 ): string[] {
   const patches = patchByAddress(patch);
-  return steps.map((step) => patches.get(step.address)?.placeholderMnemonic ?? step.mnemonic);
+  return steps.map((step) => toKeycaps(patches.get(step.address)?.placeholderMnemonic ?? step.mnemonic));
+}
+
+// Listings use ASCII shorthand for a few operator opcodes ("/", "*", "<->"),
+// but the keys export tells a human which physical key to press, so it must use
+// the labels actually printed on the MK-61 keyboard ("÷", "×", "↔"). The prefix
+// forms ("К /", "К *") are the keyboard-enterable error traps.
+const KEYCAP_LABELS: Record<string, string> = {
+  "*": "×",
+  "/": "÷",
+  "<->": "↔",
+  "К *": "К ×",
+  "К /": "К ÷",
+};
+
+function toKeycaps(mnemonic: string): string {
+  return KEYCAP_LABELS[mnemonic] ?? mnemonic;
 }
 
 function formatSetupPreloadKeys(preloads: readonly PreloadReport[]): string[] {
