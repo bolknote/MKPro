@@ -113,6 +113,84 @@ program GuardedCall {
     expect(result.report.registers.flag).toBeUndefined();
   });
 
+  it("fuses tail copy assignments before state liveness", () => {
+    const result = compileOk(`
+program TailCopy {
+  state {
+    pos: counter 0..99 = 1
+    next: counter 0..99 = 0
+    dir: counter -9..9 = 1
+  }
+  loop {
+    try_move()
+  }
+  fn try_move() {
+    next = pos + dir
+    enter_next()
+  }
+  fn enter_next() {
+    pos = next
+    halt(pos)
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "tail-copy-assignment-fusion")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "dead-state-elimination")).toBe(true);
+    expect(result.report.registers.next).toBeUndefined();
+    expect(result.ast.procs.some((proc) => proc.name === "enter_next")).toBe(false);
+  });
+
+  it("folds signed match pairs through abs/sign only when the lowering variant is enabled", () => {
+    const source = `
+program SignedMatchPair {
+  state {
+    key: counter -10..10 = 0
+    result: packed = 0
+  }
+  loop {
+    key = read()
+    match key {
+      4 => go_left()
+      2 => go(0.0000002)
+      6 => go(-0.000001)
+      8 => go(-0.0000002)
+      5 => go(1)
+      -5 => go(-1)
+      0 => break_wall()
+      10 => search()
+      otherwise => ignored()
+    }
+  }
+  fn go_left() {
+    result = 4
+    halt(result)
+  }
+  fn go(step) {
+    result = step
+    halt(result)
+  }
+  fn break_wall() {
+    halt(0)
+  }
+  fn search() {
+    halt(10)
+  }
+  fn ignored() {
+    halt(-10)
+  }
+}
+`;
+
+    const base = compileLoweringVariantForTest(source, { budget: 999 }, {});
+    const folded = compileLoweringVariantForTest(source, { budget: 999 }, { signedAbsMatchPairs: true });
+    const lowered = JSON.stringify(folded.ast.entries[0]?.body);
+
+    expect(lowered).toContain('"callee":"abs"');
+    expect(lowered).toContain('"callee":"sign"');
+    expect(folded.steps.length).toBeLessThan(base.steps.length);
+  });
+
   it("branches directly on a single-use input without storing it", () => {
     const result = compileOk(`
 program InputBranch {
@@ -2021,6 +2099,56 @@ program CountedWhile {
 
     expect(result.report.optimizations.some((item) => item.name === "initialized-counted-while-loop")).toBe(true);
     expect(result.steps.some((step) => step.comment === "counted while ticks")).toBe(true);
+  });
+
+  it("fuses resource decrement and underflow terminal branch", () => {
+    const result = compileOk(`
+program ResourceUnderflow {
+  state {
+    food: counter 0..9 = 2
+  }
+
+  loop {
+    food--
+    if food < 0 {
+      halt("ЕГГ0Г")
+    }
+    halt(food)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "decrement-underflow-branch")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "decrement underflow food")).toBe(true);
+  });
+
+  it("keeps a read key on stack while checking resource underflow before dispatch", () => {
+    const result = compileOk(`
+program ReadKeyResourceUnderflow {
+  state {
+    food: counter 0..9 = 2
+    pos: counter 0..9 = 1
+  }
+
+  loop {
+    show(pos)
+    key = read()
+    food--
+    if food < 0 {
+      loop {
+      }
+    }
+    match key {
+      1 => halt(1)
+      otherwise => halt(0)
+    }
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "show-read-decrement-underflow-fusion")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "read key")).toBe(false);
+    expect(result.steps.some((step) => step.comment === "restore read key")).toBe(true);
   });
 
   it("keeps stores read by a value-returning function called from an assignment expression", () => {

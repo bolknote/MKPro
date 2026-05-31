@@ -30,25 +30,11 @@ program Teleport {
 
     match command {
       2, 4, 6, 8 => try_move(direction(command))
-      5 => climb()
-      -5 => drop()
+      5 => try_move(1)
+      -5 => try_move(-1)
       0 => teleport_to_vault()
-      otherwise => wait()
+      otherwise => resolve_room()
     }
-  }
-
-  fn wait() {
-    resolve_room()
-  }
-
-  fn climb() {
-    next = pos + 1
-    try_enter_next()
-  }
-
-  fn drop() {
-    next = pos - 1
-    try_enter_next()
   }
 
   fn try_move(dir) {

@@ -134,6 +134,34 @@ export function compileDecrementZeroBranch(ctx: LoweringCtx,
     return true;
 }
 
+export function compileDecrementUnderflowBranch(ctx: LoweringCtx, 
+    decrement: Extract<StatementAst, { kind: "assign" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+  ): boolean {
+    if (!isUnitDecrementExpression(decrement.target, decrement.expr)) return false;
+    if (branch.elseBody !== undefined) return false;
+    if (!decrementBranchTestsUnderflow(branch.condition, decrement.target)) return false;
+    if (!ctx.statementsTerminate(branch.thenBody)) return false;
+    if (ctx.allocation.registers[decrement.target] === undefined) return false;
+
+    const okLabel = ctx.freshLabel("decrement_ok");
+    ctx.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
+    ctx.emitNumberOrPreload("1");
+    ctx.emitOp(0x11, "-", `decrement/test ${decrement.target}`, decrement.line);
+    ctx.emitJump(0x5c, "F x<0", okLabel, `decrement underflow ${decrement.target}`, branch.line);
+    ctx.compileStatements(branch.thenBody);
+    ctx.emitLabel(okLabel);
+    ctx.currentXVariable = undefined;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
+    ctx.emitStore(decrement.target, `set ${decrement.target}`, decrement.line);
+    ctx.optimizations.push({
+      name: "decrement-underflow-branch",
+      detail: `Fused ${decrement.target} decrement and negative branch at lines ${decrement.line}/${branch.line}.`,
+    });
+    return true;
+}
+
 export function compileIf(ctx: LoweringCtx, 
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
@@ -946,6 +974,13 @@ function markDispatchCaseMatchZero(ctx: LoweringCtx): void {
     ctx.currentXVariable = undefined;
     ctx.currentXAliases.clear();
     ctx.currentXKnownZero = true;
+}
+
+function decrementBranchTestsUnderflow(condition: ConditionAst, target: string): boolean {
+    return condition.left.kind === "identifier" &&
+      condition.left.name === target &&
+      condition.op === "<" &&
+      isZeroExpression(condition.right);
 }
 
 export function emitPositiveResidualCompare(ctx: LoweringCtx, value: number, comment: string, line?: number): void {

@@ -11,7 +11,7 @@ import { MachineEmitter } from "./emit/machine-emitter.ts";
 import type { ProgramAnalysis } from "./emit/program-analysis.ts";
 import { RuntimeHelperRegistry } from "./emit/runtime-helpers.ts";
 import { compileExpression } from "./emit/lowering/expr.ts";
-import { compileCondition, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitKnownOneIndirectLoopBack } from "./emit/lowering/control-flow.ts";
+import { compileCondition, compileDecrementUnderflowBranch, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitKnownOneIndirectLoopBack } from "./emit/lowering/control-flow.ts";
 import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts";
 import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileTicTacToeCellMaskReuse } from "./emit/lowering/spatial.ts";
 import { compileCoordListLineCountAssignment, compileCoordListLineCountDashedReport, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
@@ -300,6 +300,10 @@ interface LoweringOptions {
   // a lone spatial hit gets larger, but programs that also compute the mask
   // inline can share the body.
   sharedBitMaskHelperCalls?: boolean;
+  // Collapse signed match pairs like `K => move(1)` / `-K => move(-1)` into
+  // an abs/sign guarded default branch. Speculative because the expression work
+  // only wins when it replaces enough dispatch arms.
+  signedAbsMatchPairs?: boolean;
 }
 
 
@@ -471,6 +475,21 @@ export function compileMKPro(
     { sharedBitMaskHelperCalls: true, hoistSharedHelpers: true },
     "shared-bit-mask-helper-hoisted-layout",
     "Selected shared bit_mask helper calls with hoisted helper layout",
+  );
+  tryCandidate(
+    { signedAbsMatchPairs: true },
+    "signed-abs-match-pair",
+    "Selected abs/sign lowering for signed match pairs after full layout",
+  );
+  tryCandidate(
+    { signedAbsMatchPairs: true, sharedBitMaskHelperCalls: true, hoistSharedHelpers: true },
+    "signed-abs-shared-bit-helper-hoisted-layout",
+    "Combined signed match-pair lowering with hoisted shared bit-mask helpers after full layout",
+  );
+  tryCandidate(
+    { signedAbsMatchPairs: true, sharedBitMaskHelperCalls: true, hoistSharedHelpers: true, hoistProcs: true },
+    "signed-abs-shared-bit-helper-hoisted-proc-layout",
+    "Combined signed match-pair lowering with hoisted shared bit-mask helpers and procedures after full layout",
   );
 
   const selectBest = (): { best: CompileResult; selected: (typeof candidates)[number] | undefined } => {
@@ -1242,7 +1261,9 @@ function compileMKProOnce(
   options: Partial<CompileOptions>,
   loweringOptions: LoweringOptions,
 ): CompileResult {
-  const ast = parseProgram(source);
+  const ast = parseProgram(source, {
+    signedAbsMatchPairs: loweringOptions.signedAbsMatchPairs === true,
+  });
   const opts: CompileOptions = { ...DEFAULT_OPTIONS, ...options };
   // The copy-coalescing (Form 2) lowering variant reaches the register-coalesce
   // IR pass through CompileOptions, since IR passes do not see LoweringOptions.
@@ -1271,6 +1292,7 @@ function compileMKProOnce(
   inlineSingleUseConstantGuardedCalls(ast, optimizations);
   inlineDisplayStringValues(ast, optimizations);
   trimDisplayEdgeWhitespace(ast, optimizations);
+  fuseTailCopyAssignments(ast, optimizations);
   eliminateUnobservedState(ast, optimizations);
   eliminateIdentityAssignments(ast, optimizations);
   // Value propagation can expose new dead stores and vice-versa, so run the two
@@ -1563,6 +1585,136 @@ function identifierReadOutsideProc(ast: ProgramAst, procName: string, name: stri
   };
   if (ast.entries.some((entry) => visitStatements(entry.body))) return true;
   return ast.procs.some((proc) => proc.name !== procName && visitStatements(proc.body));
+}
+
+function fuseTailCopyAssignments(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
+  const callCounts = collectProcCallCounts(ast);
+  const fusedProcs = new Set<string>();
+  let fused = 0;
+
+  const candidate = (
+    assignment: Extract<StatementAst, { kind: "assign" }>,
+    call: Extract<StatementAst, { kind: "call" }>,
+  ): { target: string; tail: StatementAst[]; procName: string } | undefined => {
+    const proc = procMap.get(call.block);
+    if (proc === undefined || (callCounts.get(proc.name) ?? 0) !== 1 || procContainsReturnValue(proc.body)) return undefined;
+    const first = proc.body[0];
+    if (first?.kind !== "assign" || first.expr.kind !== "identifier" || first.expr.name !== assignment.target) return undefined;
+    const tail = proc.body.slice(1);
+    if (statementsReadIdentifier(tail, assignment.target)) return undefined;
+    if (countIdentifierReadsInProgram(ast, assignment.target) !== 1) return undefined;
+    return { target: first.target, tail, procName: proc.name };
+  };
+
+  const rewriteStatement = (statement: StatementAst): StatementAst => {
+    if (statement.kind === "loop" || statement.kind === "while") {
+      return { ...statement, body: rewriteStatements(statement.body) };
+    }
+    if (statement.kind === "if") {
+      const rewritten: Extract<StatementAst, { kind: "if" }> = {
+        ...statement,
+        thenBody: rewriteStatements(statement.thenBody),
+      };
+      if (statement.elseBody !== undefined) rewritten.elseBody = rewriteStatements(statement.elseBody);
+      return rewritten;
+    }
+    if (statement.kind === "dispatch") {
+      return {
+        ...statement,
+        cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: rewriteStatements(dispatchCase.body) })),
+        ...(statement.defaultBody === undefined ? {} : { defaultBody: rewriteStatements(statement.defaultBody) }),
+      };
+    }
+    return statement;
+  };
+
+  const rewriteStatements = (statements: StatementAst[]): StatementAst[] => {
+    const result: StatementAst[] = [];
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      const next = statements[index + 1];
+      if (statement.kind === "assign" && next?.kind === "call") {
+        const match = candidate(statement, next);
+        if (match !== undefined) {
+          result.push({
+            ...statement,
+            target: match.target,
+            expr: structuredClone(statement.expr),
+          });
+          result.push(...rewriteStatements(structuredClone(match.tail)));
+          fusedProcs.add(match.procName);
+          fused += 1;
+          index += 1;
+          continue;
+        }
+      }
+      result.push(rewriteStatement(statement));
+    }
+    return result;
+  };
+
+  for (const entry of ast.entries) entry.body = rewriteStatements(entry.body);
+  for (const proc of ast.procs) proc.body = rewriteStatements(proc.body);
+
+  if (fused === 0) return;
+  const remainingCalls = collectProcCallCounts(ast);
+  ast.procs = ast.procs.filter((proc) => !fusedProcs.has(proc.name) || (remainingCalls.get(proc.name) ?? 0) > 0);
+  optimizations.push({
+    name: "tail-copy-assignment-fusion",
+    detail: `Fused ${fused} tail copy assignment${fused === 1 ? "" : "s"} before state liveness.`,
+  });
+}
+
+function countIdentifierReadsInProgram(ast: ProgramAst, name: string): number {
+  let reads = 0;
+  const addExpr = (expr: ExpressionAst): void => {
+    reads += countIdentifierReads(expr, name);
+  };
+  const addCondition = (condition: ConditionAst): void => {
+    addExpr(condition.left);
+    addExpr(condition.right);
+  };
+  const addStatements = (statements: readonly StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "pause" || statement.kind === "halt" || statement.kind === "return_value") addExpr(statement.expr);
+      if (statement.kind === "assign") addExpr(statement.expr);
+      if (statement.kind === "indexed_assign") {
+        addExpr(statement.target.index);
+        addExpr(statement.expr);
+      }
+      if (statement.kind === "if") {
+        addCondition(statement.condition);
+        addStatements(statement.thenBody);
+        if (statement.elseBody !== undefined) addStatements(statement.elseBody);
+      }
+      if (statement.kind === "loop") addStatements(statement.body);
+      if (statement.kind === "while") {
+        addCondition(statement.condition);
+        addStatements(statement.body);
+      }
+      if (statement.kind === "dispatch") {
+        addExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          addExpr(dispatchCase.value);
+          addStatements(dispatchCase.body);
+        }
+        if (statement.defaultBody !== undefined) addStatements(statement.defaultBody);
+      }
+      if (statement.kind === "core") {
+        for (const input of statement.inputs ?? []) addExpr(input.expr);
+      }
+    }
+  };
+  for (const display of ast.displays) {
+    for (const item of display.items) {
+      if (item.kind === "source" && item.expr !== undefined) addExpr(item.expr);
+      if (item.kind === "source" && item.expr === undefined && item.name === name) reads += 1;
+    }
+  }
+  for (const entry of ast.entries) addStatements(entry.body);
+  for (const proc of ast.procs) addStatements(proc.body);
+  return reads;
 }
 
 function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
@@ -3138,6 +3290,10 @@ export class EmitContext {
           continue;
         }
       }
+      if (statement.kind === "assign" && next?.kind === "if" && compileDecrementUnderflowBranch(this, statement, next)) {
+        index += 1;
+        continue;
+      }
       if (statement.kind === "assign" && next?.kind === "if" && compileDecrementZeroBranch(this, statement, next)) {
         index += 1;
         continue;
@@ -3218,6 +3374,32 @@ export class EmitContext {
       if (statement.kind === "show" && next?.kind === "show" && statements[index + 2]?.kind === "input") {
         const input = statements[index + 2] as Extract<StatementAst, { kind: "input" }>;
         if (compileShowSequenceRead(this, statement, next, input)) {
+          index += 2;
+          continue;
+        }
+      }
+      if (
+        statement.kind === "show" &&
+        next?.kind === "input" &&
+        statements[index + 2]?.kind === "assign" &&
+        statements[index + 3]?.kind === "if" &&
+        this.compileShowReadDecrementUnderflow(
+          statement,
+          next,
+          statements[index + 2] as Extract<StatementAst, { kind: "assign" }>,
+          statements[index + 3] as Extract<StatementAst, { kind: "if" }>,
+          statements[index + 4],
+        )
+      ) {
+        index += 3;
+        continue;
+      }
+      if (statement.kind === "show" && next?.kind === "input") {
+        const consumer = statements[index + 2];
+        if (
+          (consumer?.kind === "return_value" || consumer?.kind === "assign") &&
+          this.compileShowReadStakeSinResult(statement, next, consumer)
+        ) {
           index += 2;
           continue;
         }
@@ -3402,6 +3584,86 @@ export class EmitContext {
     if (!dispatchUsesNumericResidualChain(dispatch)) return false;
     const reads = countIdentifierReads(dispatch.expr, input.target);
     return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
+  }
+
+  compileShowReadDecrementUnderflow(
+    show: Extract<StatementAst, { kind: "show" }>,
+    input: Extract<StatementAst, { kind: "input" }>,
+    decrement: Extract<StatementAst, { kind: "assign" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+    consumer: StatementAst | undefined,
+  ): boolean {
+    if (!isUnitDecrementExpression(decrement.target, decrement.expr)) return false;
+    if (branch.elseBody !== undefined) return false;
+    if (!decrementUnderflowCondition(branch.condition, decrement.target)) return false;
+    if (!this.statementsTerminate(branch.thenBody)) return false;
+    if (this.allocation.registers[decrement.target] === undefined) return false;
+    if (consumer?.kind === "dispatch") {
+      if (!this.inputFeedsOnlyFollowingDispatch(input, consumer)) return false;
+    } else if (consumer?.kind === "if") {
+      if (!this.inputFeedsOnlyFollowingCondition(input, consumer)) return false;
+    } else {
+      return false;
+    }
+
+    compileShow(this, show.display, show.line);
+    const okLabel = this.freshLabel("decrement_ok");
+    this.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
+    this.emitNumberOrPreload("1");
+    this.emitOp(0x11, "-", `decrement/test ${decrement.target}`, decrement.line);
+    this.emitJump(0x5c, "F x<0", okLabel, `decrement underflow ${decrement.target}`, branch.line);
+    this.compileStatements(branch.thenBody);
+    this.emitLabel(okLabel);
+    this.currentXVariable = undefined;
+    this.currentXAliases.clear();
+    this.currentXKnownZero = false;
+    this.emitStore(decrement.target, `set ${decrement.target}`, decrement.line);
+    this.emitOp(0x14, "X↔Y", `restore read ${input.target}`, input.line);
+    this.markCurrentX(input.target);
+    this.optimizations.push({
+      name: "show-read-decrement-underflow-fusion",
+      detail: `Kept read ${input.target} in Y while checking ${decrement.target} at lines ${input.line}/${branch.line}.`,
+    });
+    return true;
+  }
+
+  compileShowReadStakeSinResult(
+    show: Extract<StatementAst, { kind: "show" }>,
+    input: Extract<StatementAst, { kind: "input" }>,
+    consumer: Extract<StatementAst, { kind: "assign" | "return_value" }>,
+  ): boolean {
+    const stake = this.singlePlainDisplaySource(show.display);
+    if (stake === undefined) return false;
+    const inputReads = countIdentifierReads(consumer.expr, input.target);
+    if (inputReads === 0 || (this.readCounts.get(input.target) ?? 0) !== inputReads) return false;
+    if (!matchStakeSinInputExpression(consumer.expr, stake, input.target)) return false;
+
+    this.emitRecall(stake, `display ${show.display} source`, show.line);
+    this.emitOp(0x0e, "В↑", "keep displayed stake in Y", show.line);
+    this.emitOp(0x50, "С/П", `show ${show.display}`, show.line);
+    this.emitOp(0x1c, "F sin", `risk input ${input.target}`, input.line);
+    this.emitOp(0x01, "1", "risk multiplier", consumer.line);
+    this.emitOp(0x10, "+", "risk multiplier", consumer.line);
+    this.emitOp(0x12, "*", "risk stake", consumer.line);
+    this.emitOp(0x34, "К [x]", "risk integer result", consumer.line);
+    if (consumer.kind === "return_value") {
+      this.emitOp(0x52, "В/О", "return value", consumer.line);
+    } else {
+      this.emitStore(consumer.target, `set ${consumer.target}`, consumer.line);
+    }
+    this.optimizations.push({
+      name: "show-read-stake-sin-lowering",
+      detail: `Reused displayed ${stake} as the stack stake for ${expressionToIntentText(consumer.expr)}.`,
+    });
+    return true;
+  }
+
+  singlePlainDisplaySource(displayName: string): string | undefined {
+    const display = this.ast.displays.find((candidate) => candidate.name === displayName);
+    if (display === undefined || display.items.length !== 1) return undefined;
+    const [item] = display.items;
+    if (item?.kind !== "source" || item.expr !== undefined || item.width !== undefined) return undefined;
+    return item.name;
   }
 
 
@@ -5186,6 +5448,38 @@ export class EmitContext {
 
 
 
+
+function decrementUnderflowCondition(condition: ConditionAst, target: string): boolean {
+  return condition.left.kind === "identifier" &&
+    condition.left.name === target &&
+    condition.op === "<" &&
+    isZeroExpression(condition.right);
+}
+
+function matchStakeSinInputExpression(expr: ExpressionAst, stake: string, input: string): boolean {
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "int" || expr.args.length !== 1) return false;
+  const body = expr.args[0]!;
+  if (body.kind !== "binary" || body.op !== "*") return false;
+  return (isIdentifierExpression(body.left, stake) && isOnePlusSinInput(body.right, input)) ||
+    (isIdentifierExpression(body.right, stake) && isOnePlusSinInput(body.left, input));
+}
+
+function isOnePlusSinInput(expr: ExpressionAst, input: string): boolean {
+  if (expr.kind !== "binary" || expr.op !== "+") return false;
+  return (isNumericValue(expr.left, 1) && isSinInput(expr.right, input)) ||
+    (isNumericValue(expr.right, 1) && isSinInput(expr.left, input));
+}
+
+function isSinInput(expr: ExpressionAst, input: string): boolean {
+  return expr.kind === "call" &&
+    expr.callee.toLowerCase() === "sin" &&
+    expr.args.length === 1 &&
+    isIdentifierExpression(expr.args[0]!, input);
+}
+
+function isIdentifierExpression(expr: ExpressionAst, name: string): boolean {
+  return expr.kind === "identifier" && expr.name === name;
+}
 
 function coordListNameFromItems(items: readonly { name: string }[]): string | undefined {
   let listName: string | undefined;

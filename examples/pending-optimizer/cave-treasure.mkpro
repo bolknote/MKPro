@@ -23,8 +23,7 @@ program CaveTreasure {
     treasure: counter 0..9 = 0
 
     blocked: coord(cave)
-    robber: flag = 0
-    robber_roll: counter 0..9 = 0
+    fight_entry: counter 0..99 = 0
   }
 
   // Doors tax food on ordinary movement, while walls require an explicit
@@ -43,6 +42,10 @@ program CaveTreasure {
     show(pos)
     key = read()
     food--
+    if food < 0 {
+      loop {
+      }
+    }
 
     match key {
       4 => go_left()
@@ -88,7 +91,7 @@ program CaveTreasure {
         dynamite -= 2
       }
       else {
-        show(0)
+        show(dynamite - 2)
       }
     }
     else {
@@ -100,53 +103,32 @@ program CaveTreasure {
     if pos in caches {
       caches -= pos
       cache_reward()
-      robber = 1
-      fight()
+    }
+    else {
+      show(0)
     }
   }
 
   fn cache_reward() {
     if pos.floor == 1 {
       food += 9
+      food = robber_fight(food)
     }
     else {
       if pos.floor == 2 {
         dynamite += 4
+        dynamite = robber_fight(dynamite)
       }
       else {
         treasure++
+        treasure = robber_fight(treasure)
       }
     }
   }
 
-  fn fight() {
-    // Robber encounters are a second decision surface after treasure discovery;
-    // the cache is already consumed, so refusing is safe but unprofitable.
-    if robber == 1 {
-      show(pos)
-      fight_key = read()
-      match fight_key {
-        0 => decline_fight()
-        10 => accept_fight()
-        otherwise => ignored()
-      }
-    }
-  }
-
-  fn decline_fight() {
-    robber = 0
-    show(0)
-  }
-
-  fn accept_fight() {
-    robber_roll = random()
-    if robber_roll >= 5 {
-      cache_reward()
-    }
-    else {
-      food -= 3
-    }
-    robber = 0
-    show(pos)
+  fn robber_fight(stake) {
+    show(stake)
+    fight_entry = read()
+    return int(stake * (1 + sin(fight_entry)))
   }
 }

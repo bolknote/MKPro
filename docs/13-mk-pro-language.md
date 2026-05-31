@@ -864,6 +864,13 @@ candidates:
   bit mask once and apply it to each collection;
 - repeated packed display helpers: repeated packed screens and repeated
   `show; show; read` prompt sequences are emitted once and called normally;
+- stake/read sine flows: `show(stake); input = read(); int(stake * (1 +
+  sin(input)))` keeps the displayed stake in `Y` across the stop, matching the
+  compact robber-choice idiom from cave games;
+- resource-underflow guards: `resource--; if resource < 0 { ...terminal... }`
+  lowers as one subtract-and-branch sequence, and `show; read; resource--; if
+  resource < 0 { ... }; match key` can keep the read key in `Y` while the
+  resource is checked;
 - pure expression helpers: repeated expensive pure expressions such as
   generated `digit_at(...)` bodies are shared as ordinary subroutines;
 - remainder fraction lowering: `x - n * int(x / n)` lowers as `frac(x / n) * n`

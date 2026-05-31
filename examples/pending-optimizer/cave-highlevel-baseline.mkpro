@@ -14,14 +14,11 @@ program CaveHighlevelBaseline {
     caches: cells(cave) = random()
 
     food: counter 0..99 = stack.Y
-    // Dynamite is intentionally scarcer than food; it turns blocked movement
-    // into a strategic choice instead of a simple delay.
-    dynamite: counter 0..9 = 6
+    dynamite: counter 0..9 = 2
     treasure: counter 0..9 = 0
 
     blocked: coord(cave)
-    robber: flag = 0
-    robber_roll: counter 0..9 = 0
+    fight_entry: counter 0..99 = 0
   }
 
   // The vertical wrap makes the cave feel larger than the display: climbing
@@ -42,16 +39,24 @@ program CaveHighlevelBaseline {
     // Food is the global turn clock. All useful actions spend the same survival
     // counter, which is what keeps the tiny program game-like.
     food--
+    if food < 0 {
+      halt("ЕГГ0Г")
+    }
 
-    match command {
-      2 => go(0.0000002)
-      4 => move_west()
-      6 => go(-0.000001)
-      8 => go(-0.0000002)
-      5 => go(1)
-      0 => break_wall()
-      10 => search_cache()
-      otherwise => ignored()
+    if command == pi() {
+      break_wall()
+    }
+    else {
+      match command {
+        2 => go(0.0000002)
+        4 => move_west()
+        6 => go(-0.000001)
+        8 => go(-0.0000002)
+        5 => go(1)
+        -5 => go(-1)
+        0 => search_cache()
+        otherwise => ignored()
+      }
     }
   }
 
@@ -84,19 +89,18 @@ program CaveHighlevelBaseline {
     // Blasting only commits when the remembered wall and enough dynamite exist;
     // the display response is the feedback, not a separate error language.
     if blocked != 0 {
-      if dynamite >= 2 {
+      if dynamite >= 1 {
         walls -= blocked
-        player = blocked
         blocked = 0
-        dynamite -= 2
-        show(player)
+        dynamite--
+        show(0)
       }
       else {
-        show(player)
+        show(0)
       }
     }
     else {
-      show(player)
+      show(0)
     }
   }
 
@@ -106,51 +110,32 @@ program CaveHighlevelBaseline {
       // one lucky room.
       caches -= player
       cache_reward()
-      robber = 1
-      fight()
+    }
+    else {
+      show(0)
     }
   }
 
   fn cache_reward() {
     if player.floor == 1 {
       food += 10
+      food = robber_fight(food)
     }
     else {
       if player.floor == 2 {
         dynamite++
+        dynamite = robber_fight(dynamite)
       }
       else {
         treasure++
+        treasure = robber_fight(treasure)
       }
     }
   }
 
-  fn fight() {
-    if robber == 1 {
-      show(player)
-      fight_key = read()
-      match fight_key {
-        0 => decline_fight()
-        10 => accept_fight()
-        otherwise => ignored()
-      }
-    }
-  }
-
-  fn decline_fight() {
-    robber = 0
-    show(0)
-  }
-
-  fn accept_fight() {
-    robber_roll = random()
-    if robber_roll >= 5 {
-      cache_reward()
-    }
-    else {
-      food -= 3
-    }
-    robber = 0
-    show(player)
+  fn robber_fight(stake) {
+    show(stake)
+    fight_entry = read()
+    return int(stake * (1 + sin(fight_entry)))
   }
 }

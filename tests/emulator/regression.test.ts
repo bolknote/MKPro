@@ -170,6 +170,84 @@ describe("emulator regression", () => {
     });
   }
 
+  it("runs the original cave robber stake flow without a fresh random draw", () => {
+    const source = `
+program StakeSinProbe {
+  state {
+    stake_value: counter 0..99 = 2
+    fight_entry: counter 0..99 = 0
+    result: counter 0..99 = 0
+  }
+
+  loop {
+    result = robber_fight(stake_value)
+    halt(result)
+  }
+
+  fn robber_fight(stake) {
+    show(stake)
+    fight_entry = read()
+    return int(stake * (1 + sin(fight_entry)))
+  }
+}
+`;
+    const result = compileMKPro(source, { budget: 999, analysis: true });
+    expect(result.report.optimizations.some((item) => item.name === "show-read-stake-sin-lowering")).toBe(true);
+
+    const runChoice = (keys: string[]): string => {
+      const calc = new MK61();
+      const loaded = calc.loadProgram(result.steps.map((step) => step.opcode));
+      expect(loaded.diagnostics).toEqual([]);
+      for (const preload of result.report.preloads) {
+        calc.setRegister(preload.register, preload.value);
+      }
+
+      calc.pressSequence(["В/О", "С/П"]);
+      expect(calc.runUntilStable({ maxFrames: 500, stableFrames: 6 }).stopped).toBe(true);
+      expect(calc.displayText()).toMatch(/^2,?$/u);
+
+      calc.pressSequence(keys);
+      expect(calc.runUntilStable({ maxFrames: 500, stableFrames: 6 }).stopped).toBe(true);
+      return calc.displayText();
+    };
+
+    expect(runChoice(["0", "С/П"])).toMatch(/^2,?$/u);
+    expect(runChoice(["В↑", "С/П"])).toMatch(/^3,?$/u);
+  });
+
+  it("runs fused resource underflow as an error stop only after the counter is exhausted", () => {
+    const source = `
+program ResourceUnderflowProbe {
+  state {
+    food: counter 0..9 = 0
+  }
+
+  loop {
+    food--
+    if food < 0 {
+      halt("ЕГГ0Г")
+    }
+    halt(food)
+  }
+}
+`;
+    const result = compileMKPro(source, { budget: 999, analysis: true });
+    expect(result.report.optimizations.some((item) => item.name === "decrement-underflow-branch")).toBe(true);
+
+    const runWithFood = (food: string): string => {
+      const calc = new MK61();
+      const loaded = calc.loadProgram(result.steps.map((step) => step.opcode));
+      expect(loaded.diagnostics).toEqual([]);
+      calc.setRegister(result.report.registers.food!, food);
+      calc.pressSequence(["В/О", "С/П"]);
+      expect(calc.runUntilStable({ maxFrames: 500, stableFrames: 6 }).stopped).toBe(true);
+      return calc.displayText().toUpperCase();
+    };
+
+    expect(runWithFood("2")).toMatch(/^1,?$/u);
+    expect(runWithFood("0")).toContain("ЕГГ");
+  });
+
   it("runs wumpus setup before the main program", () => {
     const file = resolve("examples/wumpus.mkpro");
     const source = readFileSync(file, "utf8");

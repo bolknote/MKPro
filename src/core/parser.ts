@@ -72,15 +72,21 @@ export class ParseError extends Error {
   }
 }
 
-export function parseProgram(source: string): ProgramAst {
-  return new MKProParser(source).parseProgram();
+export interface ParseOptions {
+  signedAbsMatchPairs?: boolean;
+}
+
+export function parseProgram(source: string, options: ParseOptions = {}): ProgramAst {
+  return new MKProParser(source, options).parseProgram();
 }
 
 class MKProParser {
   private readonly lines: SourceLine[];
+  private readonly options: ParseOptions;
   private index = 0;
 
-  constructor(source: string) {
+  constructor(source: string, options: ParseOptions) {
+    this.options = options;
     this.lines = source
       .split(/\r?\n/u)
       .map((text, offset) => ({ text: stripComment(text).trim(), line: offset + 1 }))
@@ -110,7 +116,7 @@ class MKProParser {
           throw new ParseError("Only one program block is supported", line.line);
         }
         v2 = this.parseV2Program();
-        const lowered = lowerV2Program(v2);
+        const lowered = lowerV2Program(v2, this.options);
         domains.push(...lowered.domains);
         states.push(...lowered.states);
         displays.push(...lowered.displays);
@@ -864,6 +870,7 @@ function parseCall(text: string): ParsedCall | undefined {
 }
 
 interface V2LoweringContext {
+  signedAbsMatchPairs: boolean;
   ruleParams: Map<string, string[]>;
   rules: Map<string, V2RuleAst>;
   // Names of rules that act as value-returning functions (their body contains a
@@ -889,7 +896,7 @@ interface LoweredV2Program {
   procs: ProcAst[];
 }
 
-function lowerV2Program(v2: V2ProgramAst): LoweredV2Program {
+function lowerV2Program(v2: V2ProgramAst, options: ParseOptions = {}): LoweredV2Program {
   const decimalSeries = tryLowerV2DecimalFactorialSeries(v2);
   if (decimalSeries !== undefined) return decimalSeries;
 
@@ -909,6 +916,7 @@ function lowerV2Program(v2: V2ProgramAst): LoweredV2Program {
   validateV2References(v2, { ruleParams });
   validateV2Functions(v2, functionRules);
   const context: V2LoweringContext = {
+    signedAbsMatchPairs: options.signedAbsMatchPairs === true,
     ruleParams,
     rules,
     functionRules,
@@ -2445,6 +2453,17 @@ function lowerV2MatchStatements(statement: V2MatchStatementAst, context: V2Lower
   if (cyclic !== undefined) return cyclic;
   const effects = lowerSimpleEffectMatch(statement, context);
   if (effects !== undefined) return effects;
+  if (context.signedAbsMatchPairs) {
+    const signedPair = lowerSignedAbsPairMatch(statement, context);
+    if (signedPair !== undefined) return signedPair;
+  }
+  return lowerV2MatchStatementsAfterSignedAbs(statement, context);
+}
+
+function lowerV2MatchStatementsAfterSignedAbs(statement: V2MatchStatementAst, context: V2LoweringContext): StatementAst[] {
+  if (statement.cases.length === 0) {
+    return statement.otherwise === undefined ? [] : lowerV2Statement(statement.otherwise, context);
+  }
   const guardedDirection = lowerGuardedDirectionMatch(statement, context);
   if (guardedDirection !== undefined) return guardedDirection;
   const smallCase = lowerSmallCaseMatch(statement, context);
@@ -2452,6 +2471,116 @@ function lowerV2MatchStatements(statement: V2MatchStatementAst, context: V2Lower
   const singleCase = lowerSingleCaseMatch(statement, context);
   if (singleCase !== undefined) return [singleCase];
   return [lowerV2Match(statement, context)];
+}
+
+interface SignedAbsMatchRow {
+  caseIndex: number;
+  valueIndex: number;
+  value: number;
+  action: V2StatementAst;
+  line: number;
+}
+
+interface SignedAbsMatchPair {
+  positive: SignedAbsMatchRow;
+  negative: SignedAbsMatchRow;
+  action: V2InvokeStatementAst;
+}
+
+function lowerSignedAbsPairMatch(statement: V2MatchStatementAst, context: V2LoweringContext): StatementAst[] | undefined {
+  const pair = signedAbsMatchPair(statement);
+  if (pair === undefined) return undefined;
+  const positiveKey = signedAbsRowKey(pair.positive);
+  const negativeKey = signedAbsRowKey(pair.negative);
+  const cases = statement.cases
+    .map((matchCase, caseIndex) => ({
+      ...matchCase,
+      values: matchCase.values.filter((_, valueIndex) => {
+        const key = signedAbsRowKey({ caseIndex, valueIndex });
+        return key !== positiveKey && key !== negativeKey;
+      }),
+    }))
+    .filter((matchCase) => matchCase.values.length > 0);
+  const guard: V2IfStatementAst = {
+    kind: "v2_if",
+    predicate: {
+      kind: "v2_compare",
+      left: `abs(${statement.expr})`,
+      op: "==",
+      right: String(pair.positive.value),
+    },
+    thenBody: [pair.action],
+    line: Math.min(pair.positive.line, pair.negative.line),
+  };
+  if (statement.otherwise !== undefined) guard.elseBody = [statement.otherwise];
+  const rewritten: V2MatchStatementAst = {
+    ...statement,
+    cases,
+    otherwise: guard,
+  };
+  const originalLowered = lowerV2MatchStatementsAfterSignedAbs(statement, context);
+  const rewrittenLowered = lowerV2MatchStatements(rewritten, context);
+  return estimateLoweredStatementsCost(rewrittenLowered) < estimateLoweredStatementsCost(originalLowered)
+    ? rewrittenLowered
+    : undefined;
+}
+
+function signedAbsRowKey(row: Pick<SignedAbsMatchRow, "caseIndex" | "valueIndex">): string {
+  return `${row.caseIndex}:${row.valueIndex}`;
+}
+
+function signedAbsMatchPair(statement: V2MatchStatementAst): SignedAbsMatchPair | undefined {
+  if (!/^[A-Za-z_][\w]*$/u.test(statement.expr.trim())) return undefined;
+  const rows: SignedAbsMatchRow[] = [];
+  for (let caseIndex = 0; caseIndex < statement.cases.length; caseIndex += 1) {
+    const matchCase = statement.cases[caseIndex]!;
+    for (let valueIndex = 0; valueIndex < matchCase.values.length; valueIndex += 1) {
+      const value = numericLiteralTextValue(matchCase.values[valueIndex]!);
+      if (value === undefined || value === 0) continue;
+      rows.push({ caseIndex, valueIndex, value, action: matchCase.action, line: matchCase.line });
+    }
+  }
+  for (const positive of rows.filter((row) => row.value > 0)) {
+    const negative = rows.find((row) => row.value === -positive.value);
+    if (negative === undefined) continue;
+    const action = signedAbsAction(positive.action, negative.action, statement.expr);
+    if (action !== undefined) return { positive, negative, action };
+  }
+  return undefined;
+}
+
+function signedAbsAction(
+  positiveAction: V2StatementAst,
+  negativeAction: V2StatementAst,
+  matchExpr: string,
+): V2InvokeStatementAst | undefined {
+  if (positiveAction.kind !== "v2_invoke" || negativeAction.kind !== "v2_invoke") return undefined;
+  if (positiveAction.name !== negativeAction.name || positiveAction.args.length !== negativeAction.args.length) return undefined;
+  const args: string[] = [];
+  let signedArg = false;
+  for (let index = 0; index < positiveAction.args.length; index += 1) {
+    const positiveArg = positiveAction.args[index]!.trim();
+    const negativeArg = negativeAction.args[index]!.trim();
+    if (positiveArg === negativeArg) {
+      args.push(positiveAction.args[index]!);
+      continue;
+    }
+    const positiveValue = numericLiteralTextValue(positiveArg);
+    const negativeValue = numericLiteralTextValue(negativeArg);
+    if (signedArg || positiveValue === undefined || negativeValue === undefined) return undefined;
+    if (positiveValue === 1 && negativeValue === -1) {
+      args.push(`sign(${matchExpr})`);
+      signedArg = true;
+      continue;
+    }
+    if (positiveValue === -1 && negativeValue === 1) {
+      args.push(`-sign(${matchExpr})`);
+      signedArg = true;
+      continue;
+    }
+    return undefined;
+  }
+  return signedArg ? { ...positiveAction, args } : undefined;
 }
 
 function lowerSmallCaseMatch(statement: V2MatchStatementAst, context: V2LoweringContext): IfStatementAst | undefined {
@@ -2705,6 +2834,70 @@ function estimateDispatchStatementCount(statement: DispatchStatementAst): number
   const defaultCost = statement.defaultBody === undefined ? 0 : estimateStatementCount(statement.defaultBody);
   const jumpsAfterCases = Math.max(0, statement.cases.length - (statement.defaultBody === undefined ? 1 : 0));
   return 2 + statement.cases.length * 5 + jumpsAfterCases * 2 + bodyCost + defaultCost;
+}
+
+function estimateLoweredStatementsCost(statements: StatementAst[]): number {
+  return statements.reduce((sum, statement) => sum + estimateLoweredStatementCost(statement), 0);
+}
+
+function estimateLoweredStatementCost(statement: StatementAst): number {
+  switch (statement.kind) {
+    case "assign":
+      return 1 + estimateLoweredExpressionCost(statement.expr);
+    case "indexed_assign":
+      return 2 + estimateLoweredExpressionCost(statement.target.index) + estimateLoweredExpressionCost(statement.expr);
+    case "pause":
+    case "halt":
+    case "return_value":
+      return 1 + estimateLoweredExpressionCost(statement.expr);
+    case "if":
+      return 2 + estimateLoweredConditionCost(statement.condition) +
+        estimateLoweredStatementsCost(statement.thenBody) +
+        (statement.elseBody === undefined ? 0 : estimateLoweredStatementsCost(statement.elseBody));
+    case "while":
+      return 3 + estimateLoweredConditionCost(statement.condition) + estimateLoweredStatementsCost(statement.body);
+    case "loop":
+      return 1 + estimateLoweredStatementsCost(statement.body);
+    case "dispatch":
+      return estimateDispatchStatementCost(statement);
+    case "core":
+      return statement.lines.length +
+        (statement.inputs ?? []).reduce((sum, input) => sum + estimateLoweredExpressionCost(input.expr), 0);
+    case "decimal_series":
+      return statement.digits;
+    case "input":
+    case "show":
+    case "call":
+      return 1;
+  }
+}
+
+function estimateDispatchStatementCost(statement: DispatchStatementAst): number {
+  const bodyCost = statement.cases.reduce((sum, item) => sum + estimateLoweredStatementsCost(item.body), 0);
+  const defaultCost = statement.defaultBody === undefined ? 0 : estimateLoweredStatementsCost(statement.defaultBody);
+  const jumpsAfterCases = Math.max(0, statement.cases.length - (statement.defaultBody === undefined ? 1 : 0));
+  return 2 + estimateLoweredExpressionCost(statement.expr) + statement.cases.length * 5 + jumpsAfterCases * 2 + bodyCost + defaultCost;
+}
+
+function estimateLoweredConditionCost(condition: ConditionAst): number {
+  return 1 + estimateLoweredExpressionCost(condition.left) + estimateLoweredExpressionCost(condition.right);
+}
+
+function estimateLoweredExpressionCost(expr: ExpressionAst): number {
+  switch (expr.kind) {
+    case "number":
+    case "string":
+    case "identifier":
+      return 1;
+    case "indexed":
+      return 2 + estimateLoweredExpressionCost(expr.index);
+    case "unary":
+      return 1 + estimateLoweredExpressionCost(expr.expr);
+    case "binary":
+      return 1 + estimateLoweredExpressionCost(expr.left) + estimateLoweredExpressionCost(expr.right);
+    case "call":
+      return 1 + expr.args.reduce((sum, arg) => sum + estimateLoweredExpressionCost(arg), 0);
+  }
 }
 
 function lowerCyclicCounterMatch(statement: V2MatchStatementAst, context: V2LoweringContext): StatementAst[] | undefined {
