@@ -93,6 +93,7 @@ These transformations run on source constructs before machine lowering:
 - `expression-constant-folder` — precomputes constant expression subtrees.
 - `show-read-fusion` — merges `show(...)` with a following `read`-based assignment/input path into one calculator `С/П`: `show(...); x = read()` or `show(...); x = int(read())` / `frac(int(read()))` forms share the same input stop and avoid emitting a second `С/П`.
 - `counted-loop-unroll` — replaces small constant-trip counted `while` loops with explicit per-iteration copies when the induction variable updates are simple linear steps and entry values are known constants; this removes the loop machinery and registers update logic.
+- `counted-loop-unroll-free-scratch` — runs counted-loop unrolling together with residual-dispatch scratch freeing (`freeResidualDispatchScratch`) as one candidate.
 - `intent-domain-lowering` — normalizes special intent types into a base form for later compilation.
 - `packed-counter-stripes` — packs dense counters into a shorter representation.
 - `x-param-state-elision` — removes redundant transition states when returning through X parameters.
