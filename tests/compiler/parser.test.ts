@@ -674,7 +674,7 @@ program Demo {
     expect(JSON.stringify(ast.entries[0]?.body)).toContain("coord_list_line_count");
   });
 
-  it("lowers coord_list random() to independent random_cell coordinates", () => {
+  it("lowers coord_list random() to independent random coordinates", () => {
     const ast = parseProgram(`
 program Demo {
   field: board(0..9, 0..9)
@@ -718,6 +718,24 @@ program Demo {
       expect(initial).toContain('"random"');
       expect(initial).not.toContain("__random_coord_list_item");
     }
+  });
+
+  it("lowers random(domain) to a random coordinate", () => {
+    const ast = parseProgram(`
+program DomainRandom {
+  cave: board(1..20, 1..1)
+  state {
+    room: coord(cave) = random(cave)
+  }
+  loop {
+    halt(room)
+  }
+}
+`);
+
+    const initial = JSON.stringify(ast.states[0]?.fields.find((field) => field.name === "room")?.initial);
+    expect(initial).toContain('"raw":"20"');
+    expect(initial).toContain('"random"');
   });
 
   it("parses state groups into indexed banks and flattened state fields", () => {
@@ -878,7 +896,7 @@ program Queries {
     bearing = line_count(foxes, pos)
     clue = neighbor_count(mines, pos)
     tile = cell_at(cave, pos)
-    threat = random_cell(cave)
+    threat = random(cave)
   }
 }
 `);
@@ -895,7 +913,7 @@ program Queries {
     const sourceAssignments = sourceLoop?.kind === "v2_loop"
       ? sourceLoop.body.filter((statement) => statement.kind === "v2_assign")
       : [];
-    expect(sourceAssignments.map((statement) => statement.kind === "v2_assign" ? statement.expr : undefined)).toContain("random_cell(cave)");
+    expect(sourceAssignments.map((statement) => statement.kind === "v2_assign" ? statement.expr : undefined)).toContain("random(cave)");
   });
 
   it("lowers one-dimensional cell sets to decimal position masks", () => {

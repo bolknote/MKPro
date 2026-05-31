@@ -1811,6 +1811,41 @@ function lowerV2BankStateField(field: V2StateFieldAst, context: V2LoweringContex
   });
 }
 
+function randomCoordinateExpression(domain: string, context: V2LoweringContext): string {
+  const board = context.boards.get(domain);
+  if (board !== undefined) return randomBoardCoordinateExpression(board);
+  const world = context.worlds.get(domain);
+  if (world !== undefined) return randomWorldCoordinateExpression(world);
+  return "int(random(9)) + 1";
+}
+
+function randomBoardCoordinateExpression(board: V2BoardAst): string {
+  if (board.height === 1) return addOffsetExpression(`int(random(${board.width}))`, board.xMin);
+  if (board.width === 1) return addOffsetExpression(`int(random(${board.height}))`, board.yMin);
+  const x = addOffsetExpression(`int(random(${board.width}))`, board.xMin);
+  const y = addOffsetExpression(`int(random(${board.height}))`, board.yMin);
+  return `${x} + 10 * (${y})`;
+}
+
+function randomWorldCoordinateExpression(world: V2WorldAst): string {
+  return `int(random(${worldDomainLength(world)})) + ${worldCoordinateOrigin(world)}`;
+}
+
+function worldCoordinateOrigin(world: V2WorldAst): number {
+  switch (world.position?.encoding) {
+    case "pier_to_ship":
+    case "cockpit_perspective":
+    case "corridor_plan":
+    case "decimal_player":
+    case "floor_plan":
+    case "packed_decimal_zero_run":
+    case "row_scan":
+    case undefined:
+      return 1;
+  }
+  return 1;
+}
+
 function bankIndexes(field: V2StateFieldAst): number[] {
   if (field.bank === undefined) return [];
   const indexes: number[] = [];
@@ -1828,14 +1863,14 @@ function lowerV2CoordListState(field: V2StateFieldAst, context: V2LoweringContex
   const list = context.coordLists.get(field.name);
   if (list === undefined) throw new ParseError(`Unknown coord_list '${field.name}'`, field.line);
   const initial = field.initial?.trim() ?? "0";
-  const randomRange = coordListRandomRangeInitialExpression(initial, field.line);
+  const randomRange = coordListRandomRangeInitialExpression(initial, field.line, context);
   if (
     initial !== "random()" &&
     initial !== "random_unique()" &&
     initial !== "0" &&
     randomRange === undefined
   ) {
-    throw new ParseError("coord_list initial value must be random(), random(min, max), random_unique(), or 0", field.line);
+    throw new ParseError("coord_list initial value must be random(), random(max), random(min, max), random_unique(), or 0", field.line);
   }
   const board = context.boards.get(list.domain);
   if ((initial === "random()" || initial === "random_unique()") && board === undefined) {
@@ -1850,7 +1885,7 @@ function lowerV2CoordListState(field: V2StateFieldAst, context: V2LoweringContex
     if (initial === "random_unique()") {
       lowered.initial = coordListRandomItemExpression(board!, list.count, index);
     } else if (initial === "random()") {
-      lowered.initial = lowerV2Expression(randomCellExpression(list.domain, context), field.line, context);
+      lowered.initial = lowerV2Expression(randomCoordinateExpression(list.domain, context), field.line, context);
     } else if (randomRange !== undefined) {
       lowered.initial = randomRange;
     }
@@ -1929,11 +1964,15 @@ function coordListRandomItemExpression(board: V2BoardAst, count: number, index: 
   };
 }
 
-function coordListRandomRangeInitialExpression(initial: string, line: number): ExpressionAst | undefined {
+function coordListRandomRangeInitialExpression(
+  initial: string,
+  line: number,
+  context: V2LoweringContext,
+): ExpressionAst | undefined {
   const trimmed = initial.trim();
   if (trimmed === "random()" || trimmed === "random_unique()") return undefined;
   if (!/\brandom\s*\(/u.test(trimmed)) return undefined;
-  const expr = lowerV2Expression(trimmed, line);
+  const expr = lowerV2Expression(trimmed, line, context);
   if (isRandomRangeExpression(expr)) return expr;
   if (
     expr.kind === "call" &&
@@ -1944,13 +1983,13 @@ function coordListRandomRangeInitialExpression(initial: string, line: number): E
     return expr;
   }
   if (expr.kind === "call" && expr.callee.toLowerCase() === "random") {
-    throw new ParseError(`random() expects zero or two arguments, got ${expr.args.length}.`, line);
+    throw new ParseError(`random() expects zero, one, or two arguments, got ${expr.args.length}.`, line);
   }
-  throw new ParseError("coord_list random range initial must look like random(min, max)", line);
+  throw new ParseError("coord_list random range initial must look like random(max) or random(min, max)", line);
 }
 
 function isRandomRangeExpression(expr: ExpressionAst): boolean {
-  return expr.kind === "call" && expr.callee.toLowerCase() === "random" && expr.args.length === 2;
+  return expr.kind === "call" && expr.callee.toLowerCase() === "random" && (expr.args.length === 1 || expr.args.length === 2);
 }
 
 function lowerV2StateFieldType(type: V2StateFieldAst["type"]): StateFieldType {
@@ -3277,19 +3316,48 @@ function lowerV2Expression(text: string, line: number, context?: V2LoweringConte
   const rewritten = rewriteSpatialExpressionText(text, context);
   const contextual = context === undefined ? rewritten : normalizeContextualFloorAccessText(rewritten, context);
   const normalized = normalizeV2ExpressionText(contextual);
-  return parseExpression(normalized, line);
+  const expr = parseExpression(normalized, line);
+  return context === undefined ? expr : lowerDomainRandomCalls(expr, context, line);
 }
 
 function rewriteSpatialExpressionText(text: string, context: V2LoweringContext | undefined): string {
   if (context === undefined) return text;
-  let rewritten = replaceSpatialCall(text, "random_cell", (args) => {
-    if (args.length !== 1) return undefined;
-    return randomCellExpression(args[0]!, context);
-  });
-  rewritten = replaceSpatialCall(rewritten, "cell_at", (args) => cellAtExpression(args, context));
+  let rewritten = replaceSpatialCall(text, "cell_at", (args) => cellAtExpression(args, context));
   rewritten = replaceSpatialCall(rewritten, "line_count", (args) => coordListLineCountExpression(args, context));
   rewritten = replaceSpatialCall(rewritten, "move", (args) => moveExpression(args, context));
   return rewritten;
+}
+
+function lowerDomainRandomCalls(expr: ExpressionAst, context: V2LoweringContext, line: number): ExpressionAst {
+  switch (expr.kind) {
+    case "number":
+    case "string":
+    case "identifier":
+      return expr;
+    case "indexed":
+      return { ...expr, index: lowerDomainRandomCalls(expr.index, context, line) };
+    case "unary":
+      return { ...expr, expr: lowerDomainRandomCalls(expr.expr, context, line) };
+    case "binary":
+      return {
+        ...expr,
+        left: lowerDomainRandomCalls(expr.left, context, line),
+        right: lowerDomainRandomCalls(expr.right, context, line),
+      };
+    case "call": {
+      const callee = expr.callee.toLowerCase();
+      const firstArg = expr.args[0];
+      if (callee === "random" && expr.args.length === 1 && firstArg?.kind === "identifier") {
+        if (domainLength(firstArg.name, context) !== undefined) {
+          return lowerV2Expression(randomCoordinateExpression(firstArg.name, context), line, context);
+        }
+      }
+      return {
+        ...expr,
+        args: expr.args.map((arg) => lowerDomainRandomCalls(arg, context, line)),
+      };
+    }
+  }
 }
 
 function replaceSpatialCall(
@@ -3427,26 +3495,19 @@ function range(start: number, end: number): number[] {
   return values;
 }
 
-function randomCellExpression(domain: string, context: V2LoweringContext): string {
-  const board = context.boards.get(domain);
-  if (board !== undefined) return randomBoardCellExpression(board);
-  const world = context.worlds.get(domain);
-  if (world !== undefined) return randomWorldCellExpression(world);
-  return "int(random() * 9) + 1";
+function domainLength(domain: string, context: V2LoweringContext): number | undefined {
+  const name = domain.trim();
+  const board = context.boards.get(name);
+  if (board !== undefined) return board.width * board.height;
+  const world = context.worlds.get(name);
+  if (world !== undefined) return worldDomainLength(world);
+  return undefined;
 }
 
-function randomBoardCellExpression(board: V2BoardAst): string {
-  if (board.height === 1) return addOffsetExpression(`int(random() * ${board.width})`, board.xMin);
-  if (board.width === 1) return addOffsetExpression(`int(random() * ${board.height})`, board.yMin);
-  const x = addOffsetExpression(`int(random() * ${board.width})`, board.xMin);
-  const y = addOffsetExpression(`int(random() * ${board.height})`, board.yMin);
-  return `${x} + 10 * (${y})`;
-}
-
-function randomWorldCellExpression(world: V2WorldAst): string {
+function worldDomainLength(world: V2WorldAst): number {
   switch (world.position?.encoding) {
     case "pier_to_ship":
-      return "int(random() * 8) + 1";
+      return 8;
     case "cockpit_perspective":
     case "corridor_plan":
     case "decimal_player":
@@ -3454,9 +3515,9 @@ function randomWorldCellExpression(world: V2WorldAst): string {
     case "packed_decimal_zero_run":
     case "row_scan":
     case undefined:
-      return "int(random() * 9) + 1";
+      return 9;
   }
-  return "int(random() * 9) + 1";
+  return 9;
 }
 
 function addOffsetExpression(expr: string, offset: number): string {

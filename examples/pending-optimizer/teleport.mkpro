@@ -91,7 +91,7 @@ program Teleport {
   fn teleport_to_vault() {
     if charges >= 10 {
       charges -= 10
-      pos = random_cell(station)
+      pos = random(station)
       resolve_room()
     }
     else {

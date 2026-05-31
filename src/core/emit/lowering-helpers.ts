@@ -120,7 +120,7 @@ export function expressionIsDeterministic(expr: ExpressionAst): boolean {
       return expressionIsDeterministic(expr.left) && expressionIsDeterministic(expr.right);
     case "call": {
       const name = expr.callee.toLowerCase();
-      if (name === "random" || name === "random_cell") return false;
+      if (name === "random") return false;
       return expr.args.every(expressionIsDeterministic);
     }
   }
@@ -2311,9 +2311,11 @@ export function randomUnitExpression(): ExpressionAst {
 export function matchRandomRangeCall(
   expr: ExpressionAst,
 ): { min: ExpressionAst; max: ExpressionAst } | undefined {
-  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "random" || expr.args.length !== 2) {
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "random") {
     return undefined;
   }
+  if (expr.args.length === 1) return { min: numberExpression(0), max: expr.args[0]! };
+  if (expr.args.length !== 2) return undefined;
   return { min: expr.args[0]!, max: expr.args[1]! };
 }
 
@@ -3169,6 +3171,9 @@ export function estimateCallCostForCondition(
   const macro = ticTacToeExpressionMacro(name, expr.args);
   if (macro !== undefined) return estimateExpressionCostForCondition(macro, preloadedConstants);
   if (name === "random") {
+    if (expr.args.length === 1) {
+      return estimateExpressionCostForCondition(randomRangeExpression(numberExpression(0), expr.args[0]!), preloadedConstants);
+    }
     return expr.args.length === 2
       ? estimateExpressionCostForCondition(randomRangeExpression(expr.args[0]!, expr.args[1]!), preloadedConstants)
       : 1;
@@ -3242,6 +3247,7 @@ export function estimateCallCost(expr: Extract<ExpressionAst, { kind: "call" }>)
   const macro = ticTacToeExpressionMacro(name, expr.args);
   if (macro !== undefined) return estimateExpressionCost(macro);
   if (name === "random") {
+    if (expr.args.length === 1) return estimateExpressionCost(randomRangeExpression(numberExpression(0), expr.args[0]!));
     return expr.args.length === 2 ? estimateExpressionCost(randomRangeExpression(expr.args[0]!, expr.args[1]!)) : 1;
   }
   if (name === "pi") return 1;

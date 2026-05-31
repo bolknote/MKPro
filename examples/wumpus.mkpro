@@ -14,10 +14,10 @@ program Wumpus {
     room: coord(cave) = 1
     target: packed = 0
 
-    wumpus: coord(cave) = random_cell(cave)
+    wumpus: coord(cave) = random(cave)
     hazard: group(1..2) {
-      pit: coord(cave) = random_cell(cave)
-      bat: coord(cave) = random_cell(cave)
+      pit: coord(cave) = random(cave)
+      bat: coord(cave) = random(cave)
     }
 
     arrows: counter 0..5 = 5
@@ -87,7 +87,7 @@ program Wumpus {
   }
 
   fn wake_wumpus() {
-    wumpus = random_cell(cave)
+    wumpus = random(cave)
 
     if room == wumpus {
       dead()
@@ -111,7 +111,7 @@ program Wumpus {
   }
 
   fn bat_jump() {
-    room = random_cell(cave)
+    room = random(cave)
     inspect()
   }
 }

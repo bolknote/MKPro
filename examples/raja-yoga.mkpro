@@ -9,7 +9,7 @@ program RajaYoga {
 
   state {
     adept: coord(life) = 4
-    goal: coord(life) = random_cell(life)
+    goal: coord(life) = random(life)
     old_age: coord(life) = 1
     obstacles: cells(life) = random()
 
@@ -51,7 +51,7 @@ program RajaYoga {
   fn walk() {
     adept += effort
     old_age++
-    obstacles += random_cell(life)
+    obstacles += random(life)
 
     if adept in obstacles {
       failed()
@@ -73,7 +73,7 @@ program RajaYoga {
         attained()
       }
       else {
-        goal = random_cell(life)
+        goal = random(life)
         await_effort()
       }
     }

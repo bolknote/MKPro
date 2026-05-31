@@ -275,7 +275,7 @@ interface LoweringOptions {
   // Invert branches whose then-path collapsed to a tail jump. Speculative
   // variant because the local saving can perturb later layout-sensitive passes.
   tailBranchInversion?: boolean;
-  // Share a repeated `random_cell`-shaped expression through one call/return
+  // Share a repeated random-coordinate expression through one call/return
   // helper even when the static cost model only predicts a marginal (1-2 cell)
   // saving. The default threshold keeps marginal helpers inline so register
   // reshuffles can't regress in-budget programs; this variant relaxes it and is
@@ -435,12 +435,12 @@ export function compileMKPro(
   tryCandidate(
     { shareRandomCell: true },
     "share-random-cell-helper",
-    "Shared a repeated random_cell expression through one helper despite a marginal predicted saving",
+    "Shared a repeated random-coordinate expression through one helper despite a marginal predicted saving",
   );
   tryCandidate(
     { shareRandomCell: true, hoistSharedHelpers: true },
     "share-random-cell-helper-hoisted",
-    "Shared a repeated random_cell expression and hoisted helpers so its calls become single-cell indirect flow",
+    "Shared a repeated random-coordinate expression and hoisted helpers so its calls become single-cell indirect flow",
   );
   tryCandidate(
     { tailBranchInversion: true },
@@ -4657,7 +4657,7 @@ export class EmitContext {
     if (existing !== undefined) return existing;
     const helper = {
       expr,
-      label: `__random_cell_${this.randomCellHelpers.size}`,
+      label: `__random_coord_${this.randomCellHelpers.size}`,
     };
     this.randomCellHelpers.set(key, helper);
     return helper;
@@ -8831,14 +8831,23 @@ function isRandomCellExpressionShape(expr: ExpressionAst): boolean {
 function isRandomScaledInteger(expr: ExpressionAst): boolean {
   if (expr.kind !== "call" || expr.callee.toLowerCase() !== "int" || expr.args.length !== 1) return false;
   const arg = expr.args[0]!;
+  if (isZeroBasedRandomRangeCall(arg)) return true;
   if (arg.kind !== "binary" || arg.op !== "*") return false;
-  if (isRandomCall(arg.left)) return !expressionContainsRandom(arg.right);
-  if (isRandomCall(arg.right)) return !expressionContainsRandom(arg.left);
+  if (isUnitRandomCall(arg.left)) return !expressionContainsRandom(arg.right);
+  if (isUnitRandomCall(arg.right)) return !expressionContainsRandom(arg.left);
   return false;
 }
 
-function isRandomCall(expr: ExpressionAst): boolean {
+function isUnitRandomCall(expr: ExpressionAst): boolean {
   return expr.kind === "call" && expr.callee.toLowerCase() === "random" && expr.args.length === 0;
+}
+
+function isZeroBasedRandomRangeCall(expr: ExpressionAst): boolean {
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "random") return false;
+  if (expr.args.length === 1) return !expressionContainsRandom(expr.args[0]!);
+  return expr.args.length === 2 &&
+    numericLiteralValue(expr.args[0]!) === 0 &&
+    !expressionContainsRandom(expr.args[1]!);
 }
 
 function expressionContainsRandom(expr: ExpressionAst): boolean {

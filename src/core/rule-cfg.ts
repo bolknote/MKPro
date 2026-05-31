@@ -92,7 +92,7 @@ function expressionCallNames(expr: ExpressionAst): string[] {
 
 // Strict purity: an expression is safe to drop or recompute only when it has no
 // calls at all. This is intentionally stricter than the compiler's
-// substitution purity, because calls like random_cell advance hidden state and
+// substitution purity, because calls like random() advance hidden state and
 // must never be removed by dead-store elimination.
 export function exprIsCallFree(expr: ExpressionAst): boolean {
   switch (expr.kind) {

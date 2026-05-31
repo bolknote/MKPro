@@ -232,7 +232,7 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
       } finally {
         ctx.emittingRandomCellHelper = false;
       }
-      ctx.emitOp(0x52, "В/О", "random_cell helper return", helper.line);
+      ctx.emitOp(0x52, "В/О", "random coordinate helper return", helper.line);
       ctx.optimizations.push({
         name: "random-cell-helper",
         detail: `Emitted shared random cell helper for ${expressionToIntentText(helper.expr)}.`,

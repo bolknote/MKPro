@@ -512,13 +512,12 @@ fn inspect_cell() {
 }
 
 fn move_monster() {
-  threat = random_cell(harbor)
+  threat = random(harbor)
 }
 ```
 
 `cell_at(board, pos)` reads the generated tile/event code for a board position.
-`random_cell(board)` asks the compiler for a compact random coordinate for that
-board lowerer.
+`random(board)` draws a coordinate from that board domain.
 
 ## Formulas
 
@@ -565,12 +564,15 @@ the same rare hexadecimal-`Y` stack cases as the underlying calculator
 command. Use it in state initializers such as `cells(domain) = random()` and
 in formulas that scale the draw, for example `int(random() * 9) + 1`.
 
-`random(min, max)` is range sugar for `min + random() * (max - min)`. Only
-zero- and two-argument forms are valid. The upper bound is exclusive; wrap
-the call in `int(...)` when the game needs a whole number. `int(random(0, 10))`
-yields `0..9`, and `int(random(0, 100))` yields `0..99`. Fractional bounds
-are allowed when a continuous draw is intended, for example
-`int(random(0.5, 2.5))`.
+`random(max)` is range sugar for `random() * max`. `random(min, max)` is range
+sugar for `min + random() * (max - min)`. `random(domain)` draws a coordinate
+from a board/world domain. The numeric upper bound is exclusive; wrap the call
+in `int(...)` when a numeric range needs a whole number. `int(random(10))`
+yields `0..9`, `int(random(0, 10))` also yields `0..9`, and
+`int(random(0, 100))` yields `0..99`. Fractional bounds are allowed when a
+continuous draw is intended, for example `int(random(0.5, 2.5))`.
+The compiler floors integer random draws with `x - frac(x)`, so these forms
+avoid the MK-61 `К [x]` opcode immediately after `К СЧ`.
 
 `pow(base, exponent)` lowers to the MK-61 `F x^y` command. `bit_mask(index)`
 builds a zero-based packed bit mask: index `0` is `1`, `1` is `2`, `2` is `4`,
@@ -773,7 +775,7 @@ The parser keeps these high-level statements as typed source nodes:
 - `fn_name(arg1, arg2)`
 - `match expr { values => action }`
 - query expressions: `line_count(set, cell)`, `neighbor_count(set, cell)`,
-  `cell_at(board, pos)`, and `random_cell(board)`
+  and `cell_at(board, pos)`
 - formula helpers: `pow`, `bit_mask`, `bit_has`, `bit_set`, `bit_clear`,
   `bit_toggle`, `cell_mask`, `cell_has`, `cell_set`, `cell_clear`,
   `cell_toggle`, `digit_at`, `digit_add`, `digit_set`, `near_any`, and `eq_any`
@@ -817,10 +819,12 @@ Current scalar lowerings are still deliberately small and auditable:
   that is cheaper than entering three digits.
 - `random()` is `[0, 1)` via `К СЧ`; `1` never appears, and `0` only in rare
   hexadecimal-`Y` stack cases.
-- `random(min, max)` is syntax sugar for `min + random() * (max - min)`; the
-  upper bound is exclusive. When `min` is known to be integer-valued,
-  `int(random(min, max))` floors `random() * (max - min)` with `x - frac(x)`
-  before adding `min`, avoiding `К [x]` immediately after `К СЧ`.
+- `random(max)` is syntax sugar for `random() * max`, `random(min, max)`
+  is syntax sugar for `min + random() * (max - min)`, and `random(domain)`
+  draws a coordinate from a board/world domain. Numeric upper bounds are
+  exclusive. `int(random(max))` and integer-min `int(random(min, max))` floor
+  the scaled draw with `x - frac(x)` before adding the offset, avoiding
+  `К [x]` immediately after `К СЧ`.
 - `cells(domain) = random()` is moved to reported setup state by the optimizer.
 - cell-set membership is written as `item in collection`; the lowering keeps the
   compact comparison form internally when that is smaller.
@@ -994,9 +998,10 @@ The pipeline currently contains:
 - **near-any-helper** — shares repeated `near_any(value, radius, ...)`
   candidate-distance checks through a stack-parameterized subroutine when the
   group is smaller than inlining.
-- **random-cell-helper** — shares repeated single-axis `random_cell` arithmetic
-  as a subroutine only when the estimated saving clears the normal helper
-  threshold; each helper call still executes `random()` independently.
+- **random-cell-helper** — shares repeated single-axis random-coordinate
+  arithmetic such as `random(cave)` as a subroutine only when the
+  estimated saving clears the normal helper threshold; each helper call still
+  executes `random()` independently.
 - **return-zero-jump** — replaces `БП 01` with `В/О` only when the return
   stack is provably empty.
 - **redundant-prologue-elimination** — when a `display + С/П` block

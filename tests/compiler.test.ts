@@ -155,9 +155,26 @@ program SmallSetHelpers {
     )).toHaveLength(2);
   });
 
-  it("shares repeated random_cell arithmetic without sharing the random draw", () => {
+  it("rejects removed random_cell calls", () => {
+    expect(() => compileMKPro(`
+program RemovedRandomCell {
+  grid: board(1..20, 1..1)
+
+  state {
+    a: coord(grid)
+  }
+
+  loop {
+    a = random_cell(grid)
+    halt(a)
+  }
+}
+`)).toThrow(/Unknown function random_cell/u);
+  });
+
+  it("shares repeated random(domain) arithmetic without sharing the random draw", () => {
     const result = compileMKPro(`
-program RandomCellReuse {
+program RandomLenReuse {
   grid: board(1..20, 1..1)
 
   state {
@@ -167,9 +184,9 @@ program RandomCellReuse {
   }
 
   loop {
-    a = random_cell(grid)
-    b = random_cell(grid)
-    c = random_cell(grid)
+    a = random(grid)
+    b = random(grid)
+    c = random(grid)
     halt(a + b + c)
   }
 }

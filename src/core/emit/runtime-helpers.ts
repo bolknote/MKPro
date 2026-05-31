@@ -88,7 +88,7 @@ export class RuntimeHelperRegistry {
   readonly spatialSumLoopHelpers = new Map<string, SpatialProgressionHelper>();
   readonly terminalTailHelpers: TerminalTailHelper[] = [];
 
-  // True while the body of an expression / random_cell helper is being emitted,
+  // True while the body of an expression / random-coordinate helper is being emitted,
   // so the lowering does not recursively route that same expression back
   // through its own helper.
   emittingExpressionHelper = false;

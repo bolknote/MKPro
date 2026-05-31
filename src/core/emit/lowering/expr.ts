@@ -22,6 +22,7 @@ import {
   matchXParamReturnDecay,
   matchRemainderByConstant,
   negatedNumberLiteral,
+  numberExpression,
   randomRangeExpression,
   smallSetExpressionMacro,
   smallSetMacroArityOk,
@@ -371,6 +372,14 @@ function compileRandomCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kind
     ctx.emitOp(0x3b, "К СЧ", `${expr.callee}()`);
     return;
   }
+  if (expr.args.length === 1) {
+    compileExpression(ctx, randomRangeExpression(numberExpression(0), expr.args[0]!));
+    ctx.optimizations.push({
+      name: "random-range-lowering",
+      detail: `Lowered ${expressionToIntentText(expr)} as random() * max.`,
+    });
+    return;
+  }
   if (expr.args.length === 2) {
     compileExpression(ctx, randomRangeExpression(expr.args[0]!, expr.args[1]!));
     ctx.optimizations.push({
@@ -381,7 +390,7 @@ function compileRandomCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kind
   }
   ctx.diagnostics.push({
     level: "error",
-    message: `${expr.callee}() expects zero or two arguments, got ${expr.args.length}.`,
+    message: `${expr.callee}() expects zero, one, or two arguments, got ${expr.args.length}.`,
   });
 }
 
@@ -413,7 +422,7 @@ function expressionContainsValidRandom(expr: ExpressionAst): boolean {
     case "binary":
       return expressionContainsValidRandom(expr.left) || expressionContainsValidRandom(expr.right);
     case "call":
-      return (expr.callee.toLowerCase() === "random" && (expr.args.length === 0 || expr.args.length === 2)) ||
+      return (expr.callee.toLowerCase() === "random" && expr.args.length <= 2) ||
         expr.args.some(expressionContainsValidRandom);
   }
 }

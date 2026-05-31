@@ -64,7 +64,7 @@ MKProEmulator.getLastResult()?.listing
 
 When the compiled program needs register initialization, `setupBlockText`
 contains an emulator-readable assignment block such as `` `R3=0; Rc=20` ``.
-When state initialization needs executable work (for example `random_cell(...)`)
+When state initialization needs executable work (for example `random(domain)`)
 or the optimizer selects an unusual compiler-owned preload such as `1|-00`,
 `setupProgramText` contains the setup program that must be run once before
 loading the main `programText`.

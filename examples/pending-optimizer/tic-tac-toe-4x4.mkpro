@@ -53,7 +53,7 @@ program TicTacToe4x4 {
       draw()
     }
     else {
-      cell = random_cell(grid)
+      cell = random(grid)
       if cell in occupied {
         calculator_reply()
       }

@@ -62,7 +62,7 @@ program DangerousLoading {
       handle_dock()
     }
 
-    threat = random_cell(harbor)
+    threat = random(harbor)
     show(cargo_left, boat, threat, boats_left)
   }
 

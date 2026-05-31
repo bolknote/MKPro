@@ -85,7 +85,7 @@ program Alaram {
     // The intruder keeps moving through the sight picture. Getting too close
     // without a clean shot means entering the machine-gun tail arc.
     range++
-    intruder_mark = random_cell(sky)
+    intruder_mark = random(sky)
 
     if range >= 0 {
       tail_gun()

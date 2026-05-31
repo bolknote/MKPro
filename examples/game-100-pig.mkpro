@@ -32,7 +32,7 @@ program Game100Pig {
 
   fn roll_die() {
     roll_count++
-    die = random_cell(die_faces)
+    die = random(die_faces)
   }
 
   fn roll_player() {

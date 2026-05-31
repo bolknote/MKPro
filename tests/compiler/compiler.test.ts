@@ -602,19 +602,67 @@ program FractionalRandomRangeSugar {
     expect(result.steps.map((step) => step.hex)).not.toContain("34");
   });
 
-  it("rejects one-argument random calls", () => {
+  it("lowers one-argument random calls as zero-based ranges", () => {
+    const result = compileOk(`
+program RandomMax {
+  loop {
+    halt(int(random(9)))
+  }
+}
+`);
+
+    expect(result.steps.some((step) => step.hex === "3B")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "random-range-lowering")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "int-random-range-lowering")).toBe(true);
+    expect(result.steps.map((step) => step.hex)).not.toContain("34");
+  });
+
+  it("lowers int(random()) without using the MK-61 integer opcode", () => {
+    const result = compileOk(`
+program RandomUnitInteger {
+  loop {
+    halt(int(random()))
+  }
+}
+`);
+
+    expect(result.steps.some((step) => step.hex === "3B")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "int-random-range-lowering")).toBe(true);
+    expect(result.steps.map((step) => step.hex)).not.toContain("34");
+  });
+
+  it("lowers random(domain) through a random coordinate draw", () => {
+    const result = compileOk(`
+program RandomDomain {
+  cave: board(1..20, 1..1)
+  state {
+    room: coord(cave) = 1
+  }
+  loop {
+    room = random(cave)
+    halt(room)
+  }
+}
+`);
+
+    expect(result.steps.some((step) => step.hex === "3B")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "random-range-lowering")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "int-random-range-lowering")).toBe(true);
+  });
+
+  it("rejects random calls with too many arguments", () => {
     expect(() =>
       compileOk(`
 program RandomRangeArity {
   loop {
-    halt(random(9))
+    halt(random(1, 2, 3))
   }
 }
 `),
-    ).toThrow(/random\(\) expects zero or two arguments, got 1/u);
+    ).toThrow(/random\(\) expects zero, one, or two arguments, got 3/u);
   });
 
-  it("lowers coord_list random() through independent random_cell setup draws", () => {
+  it("lowers coord_list random() through independent random setup draws", () => {
     const result = compileOk(`
 program CoordListRandom {
   field: board(0..9, 0..9)
@@ -2030,7 +2078,7 @@ program IndexedSmallSet {
 
   state {
     room: coord(cave) = 1
-    slots: coord[1..2](cave) = random_cell(cave)
+    slots: coord[1..2](cave) = random(cave)
     clue: counter 0..9 = 0
   }
 
