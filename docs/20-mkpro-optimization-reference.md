@@ -91,6 +91,7 @@ These transformations run on source constructs before machine lowering:
 - `display-string-guarded-show` and `display-string-assignment-elimination` — simplify guarded string branches and remove extra intermediate variables.
 - `display-edge-whitespace-trim` — removes leading/trailing whitespace around templates that does not affect display output.
 - `expression-constant-folder` — precomputes constant expression subtrees.
+- `show-read-fusion` — merges `show(...)` with a following `read`-based assignment/input path into one calculator `С/П`: `show(...); x = read()` or `show(...); x = int(read())` / `frac(int(read()))` forms share the same input stop and avoid emitting a second `С/П`.
 - `intent-domain-lowering` — normalizes special intent types into a base form for later compilation.
 - `packed-counter-stripes` — packs dense counters into a shorter representation.
 - `x-param-state-elision` — removes redundant transition states when returning through X parameters.
@@ -280,7 +281,7 @@ Display rewrites are separated into strategy selection + body lowering.
 - `interprocedural-dead-store` — removes writes to cells not read beyond procedure boundaries.
 - `elideXParamReturnStateFields` — removes unused X return-state fields and reduces memory.
 - `elide`-style elimination patterns — remove intermediate bookkeeping artifacts when no longer needed.
-- `constant-synthesis` — synthesizes reusable constants in minimally short ways.
+- `constant-synthesis` — synthesizes reusable constants in minimally short ways. For exact positive powers of ten, it now prefers loading the exponent first and emitting `F 10^x` when that plan is cheaper (`positiveIntegerPowerOfTenExponent` + `cost = estimateNumberCost(exponent) + 1 + (machineEntryOpen ? 1 : 0)`), and emits it as `load exponent; F 10^x`.
 - `preloaded-constant` — preloads constants when cheaper than recomputing each time.
 - `auto-preload-initial-state` — moves required startup cells into setup so main code is shorter.
 - `preloaded-indirect-flow` — enables indexed writes via preloaded selector.
@@ -334,7 +335,7 @@ A fixed-point loop repeats while transformations continue, up to internal iterat
 Setup generation is separate from main program layout when needed:
 
 - `generated-setup-program` indicates that a setup routine was emitted.
-- `preloaded-constant`, `preloaded-constant` and `constant-synthesis` entries describe synthetic constants.
+- `preloaded-constant` and `constant-synthesis` entries describe synthetic constants.
 - `auto-preload-initial-state` and `intent-state-lowering` can push selected state to setup only.
 - `intent-read-lowering`, `show-read-*` may force setup when runtime behavior or literals require state initialization.
 - Setup helpers are themselves subject to the same optimization pipeline (`setup-...` names appear as prefixed entries).
