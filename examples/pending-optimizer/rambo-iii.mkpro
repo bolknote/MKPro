@@ -9,13 +9,13 @@ reference lordbss_pmk53
 program RamboIII {
   state {
     cells: packed[1..7] = 5000.999
-    time: counter 0..25 = 0
+    time: counter 0..25
     random_state: packed = 0.5
 
-    slot: counter 0..3 = 0
-    robot_slot: counter 3..6 = 3
-    event_target: counter 0..7 = 0
-    scratch: packed = 0
+    slot: counter 0..3
+    robot_slot: counter 3..6
+    event_target: counter 0..7
+    scratch: packed
   }
 
   fn lost() {

@@ -7126,7 +7126,7 @@ Cell Roles:
 exports[`golden listing > selected output is stable for examples/pending-optimizer/rambo-iii.mkpro 1`] = `
 "## Listing
 Setup Block:
-  \`R0=0; R8=0.5; Rb=0; Rc=3; Rd=0; R9=0; Ra=25000; Re=810200880000000\`
+  \`R8=0.5; Ra=25000; Re=810200880000000\`
 
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
@@ -7307,17 +7307,12 @@ Budget: official=144, extra=0, physical=144
 Intent IR: lowered=yes, v2=yes; intent=132, effects=144, cells=144
 
 Preloads:
-  time -> R0: 0 (outside program cells)
   random_state -> R8: 0.5 (outside program cells)
-  slot -> Rb: 0 (outside program cells)
-  robot_slot -> Rc: 3 (outside program cells)
-  event_target -> Rd: 0 (outside program cells)
-  scratch -> R9: 0 (outside program cells)
   Ra: 25000 (outside program cells)
   Re: 810200880000000 (outside program cells)
 
 Setup Block:
-  \`R0=0; R8=0.5; Rb=0; Rc=3; Rd=0; R9=0; Ra=25000; Re=810200880000000\`
+  \`R8=0.5; Ra=25000; Re=810200880000000\`
 
 Registers:
   cells_1: R1
