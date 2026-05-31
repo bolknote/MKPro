@@ -212,6 +212,30 @@ export function compileFunctionCall(ctx: LoweringCtx, expr: Extract<ExpressionAs
     return true;
   }
 
+// Single-argument intrinsics that lower as "compile the argument, then apply
+// one X-transforming opcode" -- i.e. the argument is emitted first and nothing
+// precedes it. These are exactly the entries of the unary `opcodes` table in
+// compileCall, mirrored here so the show/read fusion can reason about ordering.
+const X_TRANSFORM_UNARY_FUNCTIONS = new Set<string>([
+  "abs", "sign", "int", "frac", "sqr", "inv", "sqrt", "lg", "ln", "sin", "cos",
+  "tg", "asin", "acos", "atg", "exp", "pow10", "bit_not", "to_min", "to_sec",
+  "from_sec", "from_min",
+]);
+
+// True when compiling `expr` emits a bare read() stop (С/П) as its very first
+// operation, so a preceding show can supply that stop. Holds for read() itself
+// and for any chain of single-argument X-transforming intrinsics wrapping it
+// (e.g. int(read()), frac(int(read()))).
+export function expressionLeadsWithRead(expr: ExpressionAst): boolean {
+  if (expr.kind !== "call") return false;
+  const name = expr.callee.toLowerCase();
+  if (name === "read") return expr.args.length === 0;
+  if (expr.args.length === 1 && X_TRANSFORM_UNARY_FUNCTIONS.has(name)) {
+    return expressionLeadsWithRead(expr.args[0]!);
+  }
+  return false;
+}
+
 export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kind: "call" }>): void {
     if (compileFunctionCall(ctx, expr)) return;
     const name = expr.callee.toLowerCase();
@@ -280,6 +304,10 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
         });
         return;
       }
+      // When a preceding show was fused into this read, the calculator already
+      // stopped for the entry and the value is sitting in X; reuse that stop
+      // instead of emitting a second С/П.
+      if (ctx.consumeArmedInputInX()) return;
       ctx.emitOp(0x50, "С/П", `${expr.callee}()`);
       return;
     }

@@ -11,7 +11,7 @@ import { verifySuperDarkSuffixLayout } from "./super-dark-layout.ts";
 import { MachineEmitter } from "./emit/machine-emitter.ts";
 import type { ProgramAnalysis } from "./emit/program-analysis.ts";
 import { RuntimeHelperRegistry } from "./emit/runtime-helpers.ts";
-import { compileExpression } from "./emit/lowering/expr.ts";
+import { compileExpression, expressionLeadsWithRead } from "./emit/lowering/expr.ts";
 import { compileCondition, compileDecrementUnderflowBranch, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitKnownOneIndirectLoopBack } from "./emit/lowering/control-flow.ts";
 import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts";
 import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileTicTacToeCellMaskReuse } from "./emit/lowering/spatial.ts";
@@ -3960,6 +3960,10 @@ export class EmitContext {
   readonly candidates: CandidateReport[];
   readonly loweringOptions: LoweringOptions;
   private currentProcedure: ProcAst | undefined;
+  // Set when a show was fused into a following read so its calculator stop also
+  // serves as the input entry; the next read() lowering consumes this instead of
+  // emitting its own С/П.
+  private inputArmedInX = false;
   readonly bankSelectorCache = new Map<string, { key: string; deps: ReadonlySet<string> }>();
   // Read-only program analysis is computed once and injected; the lowering code
   // reads these maps through getters so call sites stay unchanged.
@@ -4382,6 +4386,23 @@ export class EmitContext {
         index += 2;
         continue;
       }
+      if (
+        statement.kind === "show" &&
+        next?.kind === "assign" &&
+        expressionLeadsWithRead(next.expr)
+      ) {
+        compileShow(this, statement.display, statement.line);
+        this.armInputInX();
+        compileExpression(this, next.expr);
+        this.clearArmedInputInX();
+        this.emitStore(next.target, `set ${next.target}`, next.line);
+        this.optimizations.push({
+          name: "show-read-fusion",
+          detail: `Fused show ${statement.display} and the read in ${next.target} = ${expressionToIntentText(next.expr)} into one calculator stop at line ${next.line}.`,
+        });
+        index += 1;
+        continue;
+      }
       if (statement.kind === "show" && next?.kind === "input") {
         compileShow(this, statement.display, statement.line);
         this.emitStore(next.target, `read ${next.target}`, next.line);
@@ -4617,6 +4638,23 @@ export class EmitContext {
     this.currentXAliases = new Set([name]);
     this.currentXKnownZero = false;
     this.currentXDashedCoordReportBody = undefined;
+  }
+
+  armInputInX(): void {
+    this.inputArmedInX = true;
+  }
+
+  clearArmedInputInX(): void {
+    this.inputArmedInX = false;
+  }
+
+  consumeArmedInputInX(): boolean {
+    if (!this.inputArmedInX) return false;
+    this.inputArmedInX = false;
+    // The freshly entered number now lives in X and is not any tracked variable.
+    this.currentXVariable = undefined;
+    this.currentXAliases.clear();
+    return true;
   }
 
 

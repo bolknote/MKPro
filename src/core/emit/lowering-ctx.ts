@@ -21,6 +21,7 @@ export type LoweringCtx = Pick<
   | "compileWithinProcedure"
   | "constantStack"
   | "constants"
+  | "consumeArmedInputInX"
   | "coordListCounterKnownOne"
   | "coordListFusedHitBodyAllowed"
   | "coordListIndirectContext"
