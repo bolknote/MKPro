@@ -13,7 +13,6 @@ program RamboIII {
     random_state: packed = 0.5
 
     slot: counter 0..3
-    robot_slot: counter 3..6
     event_target: counter 0..7
     scratch: packed
   }
@@ -35,10 +34,10 @@ program RamboIII {
     show(time)
     reinforcement_cycle()
     slot = 0
-    robot_slot = 3
+    event_target = 3
     while slot < 3 {
       slot++
-      robot_slot++
+      event_target++
       front_stop()
     }
     time--
@@ -70,7 +69,7 @@ program RamboIII {
       lost()
     }
     else {
-      cells[robot_slot] += scratch
+      cells[event_target] += scratch
       resolve_front()
     }
   }
@@ -79,11 +78,11 @@ program RamboIII {
     scratch = random_state
     random_92()
 
-    cells[robot_slot] = decay(cells[robot_slot])
+    cells[event_target] = decay(cells[event_target])
     cells[slot] = decay(cells[slot])
 
     if scratch - random_state < 0 {
-      cells[robot_slot] = decay(cells[robot_slot])
+      cells[event_target] = decay(cells[event_target])
     }
     else {
       cells[slot] = decay(cells[slot])
@@ -97,13 +96,13 @@ program RamboIII {
   }
 
   fn advance_front() {
-    if cells[robot_slot] <= 0 {
+    if cells[event_target] <= 0 {
       lost()
     }
     else {
       scratch = random_state
       random_92()
-      scratch = int((scratch + random_state + 1) * 20 * cells[slot] / cells[robot_slot]) / 1000
+      scratch = int((scratch + random_state + 1) * 20 * cells[slot] / cells[event_target]) / 1000
 
       if frac(cells[slot]) - scratch <= 0 {
         lost()
