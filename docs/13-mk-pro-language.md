@@ -148,7 +148,7 @@ put the visible value directly in `halt(...)`.
 Do not write setup or storage tactics as top-level implementation blocks:
 
 ```mkpro
-preload R9 = random_seed()
+preload R9 = 0.5
 table packed code_overlay giant_country_tables { floor_plans may_overlay address_cells }
 ```
 

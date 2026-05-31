@@ -15,7 +15,7 @@ describe("parser", () => {
       "machine mk61",
       "entry main {",
       "store x = 1",
-      "preload R9 = random_seed()",
+      "preload R9 = 0.5",
       "allow undocumented",
       "resource strength {",
     ]) {
@@ -945,14 +945,14 @@ program Bad {
   it("rejects unknown setup and domain implementation blocks", () => {
     expect(() =>
       parseProgram(`
-preload R9 = random_seed()
+preload R9 = 0.5
 program Bad {
   loop {
     halt(0)
   }
 }
 `),
-    ).toThrow(/Unexpected top-level line 'preload R9 = random_seed\(\)'/u);
+    ).toThrow(/Unexpected top-level line 'preload R9 = 0\.5'/u);
     expect(() =>
       parseProgram(`
 resource strength {
