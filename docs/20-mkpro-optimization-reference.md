@@ -302,30 +302,30 @@ Display rewrites are separated into strategy selection + body lowering.
 
 The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 
-1. `redundant-prologue-elimination` — scans neighboring blocks for identical prologue instruction sequences (setup/move/clear patterns) and keeps only one copy when side effects are observationally equivalent.
-2. `tail-call` — rewrites final call sites into jump-oriented tail forms so return machinery and temporary context are avoided.
-3. `tail-branch-inversion` — evaluates whether flipping a branch condition (true ↔ false) shortens the following control-flow shape.
-4. `shared-call-tail` — detects repeated suffixes after function calls and makes them share one implementation sequence.
-5. `return-suffix-gadget` — extracts a reusable post-return gadget, then redirects multiple returns to the same epilogue.
-6. `return-zero-jump` — replaces a full return protocol with a zero-cell jump when stack-emptiness and state constraints are proven.
-7. `store-recall-peephole` — folds back-to-back store/recall of the same cell into a cheaper equivalent instruction pattern.
-8. `jump-to-next-threading` — removes unnecessary intermediate jumps where control already falls through to the next label.
-9. `jump-thread` — follows and flattens jump chains to create a direct threading layout.
-10. `stable-indirect-flow` — enables indirect control transfer only if selector/value stability proofs show no observable divergence.
-11. `preloaded-indirect-flow` — preloads a selector or target once, then reuses it for several indirect branches to reduce repeated setup.
-12. `indirect-memory-table` — builds/uses compact jump-address tables in memory, replacing multiple absolute targets with indexed access.
-13. `dead-store-before-commutative` — clears store operations proven dead before commutative arithmetic simplifications are attempted, helping later passes fire.
-14. `dead-store-elimination` — performs a full dead-store sweep and removes writes that are never consumed along any reachable path.
-15. `last-x-reuse` — checks X-liveness and skips writing X when its current value already satisfies the next consumer.
-16. `r0-fractional-sentinel` — applies a fractional sentinel discipline in R0 to encode jump intent more compactly.
-17. `vp-splice` — merges consecutive VP operations and removes redundant VP setup/teardown when semantics allow.
-18. `vp-x2-peephole` — applies short local substitutions around VP and X2 sequences to reduce opcode count.
-19. `constant-folding` — replaces arithmetic/comparison fragments with immediate constants before lower-level synthesis.
-20. `duplicate-failure-tail` — merges equal failure or error tails so multiple branches share one terminal path.
-21. `cse-display-block` — performs common-subexpression elimination across display blocks that render identical visual sequences.
-22. `dead-code-after-halt` — prunes all instructions proven unreachable after guaranteed halting control states.
-23. `register-coalesce` — reduces register/cell pressure by merging storage slots with non-overlapping lifetimes.
-24. `arithmetic-if-pass` — executes dedicated pattern rewrites for branchless conditional arithmetic and removes explicit branching where safe.
+1. `redundant-prologue-elimination` — removes duplicate `display+HALT` prologues immediately before a jump target when an identical prologue is already at that jump target.
+2. `tail-call-lowering` — rewrites certain tail `call`s and trailing `return`s into direct `БП`/tail flow when the continuation is the same for all exits of that region.
+3. `tail-branch-inversion` — flips `cjump` condition when the then-path is only a single tail jump and the target label is uniquely referenced.
+4. `shared-call-tail` — groups repeated `call` + `jump` tails (three or more occurrences), emits one shared helper tail, and replaces duplicates with `БП` to that helper.
+5. `return-suffix-gadget` — finds repeated return-ending blocks ending in `return`, extracts one shared suffix, and redirects additional copies to it.
+6. `return-zero-jump` — when no procedure calls are used, replaces a backward jump to `01` with `В/О` and tags it as an empty-stack optimization.
+7. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r` to the same register.
+8. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
+9. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.
+10. `stable-indirect-flow` — rewrites direct `jump/call/cjump` to indirect forms (`К БП`, `К ПП`, `К <cond>`) when a stable selector is already live in a register.
+11. `preloaded-indirect-flow` — preloads a selector value into a spare stable register and rewrites repeated backward-direct numeric jumps/calls through that preloaded value.
+12. `indirect-memory-table` — rewrites direct `store/recall` into `К X->П`/`К П->X` when a stable selector maps to the indexed target cell.
+13. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.
+14. `dead-store-elimination` — removes stores whose target register is not live after the write and does not affect number-entry/input finalization.
+15. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding `X->П`.
+16. `r0-fractional-sentinel` — drops redundant immediate `П->X 3` after fractional-R0 indirect access when `R0` is already known to be non-live.
+17. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms.
+18. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a display-aware `ВП`/X2 marker.
+19. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
+20. `duplicate-failure-tail-merge` — removes duplicated `(label -> 0 -> pause)` failure tails by redirecting the first tail to the second.
+21. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.
+22. `dead-code-after-halt` — removes unreachable IR ops by CFG reachability from entry.
+23. `register-coalesce` — merges non-overlapping register live ranges and, when enabled, performs copy coalescing for safe `recall/store` aliases.
+24. `arithmetic-if-pass` — merges two branch paths that lower to byte-identical pure linear blocks (same side effects and same single-pass behavior).
 
 A fixed-point loop repeats while transformations continue, up to internal iteration limits.
 
@@ -343,22 +343,22 @@ Setup generation is separate from main program layout when needed:
 
 Feature flags are added only after successful candidate/optimization evidence:
 
-- `return-empty-stack-jump` — enables the code path that treats a valid empty-stack state as a direct short jump marker.
-- `branch-removal` — permits branch-elimination rewrites that rewrite conditional control into arithmetic when equivalent.
-- `indirect-flow` — activates lowering variants that use proven safe indirect control transfers.
-- `indirect-memory` — permits indirect target representation in memory tables instead of long absolute targets.
-- `dark-entries` — enables jump-point clustering around dark-entry-friendly neighborhoods.
-- `address-constants` — allows the compiler to reuse static addresses with minimal or zero new storage.
-- `x2-register` — turns on X2-oriented encoding paths for display and arithmetic where available.
-- `negative-zero-degree` — enables special handling for `-0` vs `0` classification under strict thresholds.
-- `x2-restore-boundaries` — allows restoration logic that safely leaves and re-enters X2 execution boundaries.
-- `z-stack-register` — activates use of Z-stack behavior as an optimized temporary storage path.
-- `display-bytes` — enables display-byte mode and related packing/unpacking helpers.
-- `r0-fractional-sentinel` — turns on fractional-sentinel control via R0 for shorter transfer patterns.
-- `r0-t-alias` — permits R0 aliasing in selected transfer scenarios when proof constraints are satisfied.
-- `error-stops` — unlocks compact, deterministic error+stop sequences.
-- `code-data-overlay` — allows code and data overlays where layout proofs guarantee no runtime conflict.
-- `display-byte` — enables dedicated low-level byte display emission routines.
+- `return-empty-stack-jump` — added when `return-zero-jump` is used; means the compiler selected `В/О` as the one-cell `БП 01` shape.
+- `branch-removal` — added when `branch-removal` optimization rewrites a branch to a branchless equivalent.
+- `indirect-flow` — added when register-held or preloaded indirect flow rewrites (`stable-indirect-flow`, `preloaded-indirect-flow`, `preloaded-super-dark-flow`) are emitted.
+- `indirect-memory` — added when indirect-memory selectors are used (`indirect-memory-table`, `indexed-packed-row-table`).
+- `dark-entries` — added from cyclic formal dark-entry selection and related layout features.
+- `address-constants` — added when constants are reused as arithmetic/address-like data.
+- `x2-register` — added when X2/Xп/дисплей-byte scheduling relies on X2 boundaries across display-byte paths.
+- `negative-zero-degree` — added when `negative-zero-threshold-selector` proof uses the `1|-00` preload trick.
+- `x2-restore-boundaries` — added when `vp-fraction-restore` is active.
+- `z-stack-register` — added when `z-stack-derived-value-reuse` uses deeper stack-derived storage.
+- `display-bytes` — added when display-byte or packed hex-mantissa lowering is active.
+- `r0-fractional-sentinel` — added when fractional indirect addressing or R0 fractional sentinel flow/path is active.
+- `r0-t-alias` — added when `r0-indirect-counter` path is selected and R0-transforming aliases are proven safe.
+- `error-stops` — added for domain-error stop/trap lowering (`error-stop`, `screen-error-literal-lowering`).
+- `code-data-overlay` — added when layout marks address cells as overlayable with code/data reuse.
+- `super-dark-dispatch` — added when `super-dark-dispatch` or `preloaded-super-dark-flow` candidate is selected and FA..FF routing is proven.
 
 These are not independent optimizations; they gate whether the lowering strategy can legally use the corresponding opcode/behavior.
 
