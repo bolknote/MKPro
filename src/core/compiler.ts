@@ -7264,18 +7264,31 @@ function eliminateUnreachableV2Procs(ast: ProgramAst, optimizations: AppliedOpti
   });
 }
 
+type LoopHeaderScreen = {
+  display: string;
+  pureDisplayProcs: ReadonlySet<string>;
+};
+
 function elideTerminalLoopHeaderShows(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
   const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
   if (procMap.size === 0) return;
 
+  const pureDisplayProcsByDisplay = collectPureDisplayProcsByDisplay(ast);
   const allTerminalCallsByDisplay = new Map<string, Set<string>>();
   const nonTerminalCalls = new Set<string>();
+  let removed = 0;
   const visitEveryStatementList = (statements: StatementAst[], terminalDisplay?: string): void => {
     for (let index = 0; index < statements.length; index += 1) {
       const statement = statements[index]!;
       const atTail = index === statements.length - 1;
       collectCallsByPosition(statement, atTail ? terminalDisplay : undefined, procMap, allTerminalCallsByDisplay, nonTerminalCalls);
-      if (statement.kind === "loop") visitEveryStatementList(statement.body, loopHeaderDisplay(statement));
+      if (statement.kind === "loop") {
+        const header = loopHeaderScreen(statement, procMap, pureDisplayProcsByDisplay);
+        if (header !== undefined) {
+          removed += elideTailScreenInStatementList(statement.body, header.display, header.pureDisplayProcs);
+        }
+        visitEveryStatementList(statement.body, header?.display);
+      }
       if (statement.kind === "if") {
         visitEveryStatementList(statement.thenBody, atTail ? terminalDisplay : undefined);
         if (statement.elseBody !== undefined) visitEveryStatementList(statement.elseBody, atTail ? terminalDisplay : undefined);
@@ -7292,13 +7305,13 @@ function elideTerminalLoopHeaderShows(ast: ProgramAst, optimizations: AppliedOpt
     collectStatementListCallsByPosition(proc.body, "__mkpro_terminal_proc_tail", procMap, new Map(), nonTerminalCalls);
   }
 
-  let removed = 0;
   for (const [display, calls] of allTerminalCallsByDisplay) {
     const terminalProcs = expandTerminalProcClosure(calls, procMap, nonTerminalCalls);
+    const pureDisplayProcs = pureDisplayProcsByDisplay.get(display) ?? EMPTY_STRING_SET;
     for (const name of terminalProcs) {
       const proc = procMap.get(name);
       if (proc === undefined) continue;
-      removed += elideTailShowInStatementList(proc.body, display);
+      removed += elideTailScreenInStatementList(proc.body, display, pureDisplayProcs);
     }
   }
 
@@ -7309,10 +7322,43 @@ function elideTerminalLoopHeaderShows(ast: ProgramAst, optimizations: AppliedOpt
   });
 }
 
-function loopHeaderDisplay(statement: Extract<StatementAst, { kind: "loop" }>): string | undefined {
+const EMPTY_STRING_SET: ReadonlySet<string> = new Set();
+
+function collectPureDisplayProcsByDisplay(ast: ProgramAst): Map<string, Set<string>> {
+  const result = new Map<string, Set<string>>();
+  for (const proc of ast.procs) {
+    if (proc.body.length !== 1) continue;
+    const only = proc.body[0];
+    if (only?.kind !== "show") continue;
+    const names = result.get(only.display) ?? new Set<string>();
+    names.add(proc.name);
+    result.set(only.display, names);
+  }
+  return result;
+}
+
+function loopHeaderScreen(
+  statement: Extract<StatementAst, { kind: "loop" }>,
+  procMap: ReadonlyMap<string, ProgramAst["procs"][number]>,
+  pureDisplayProcsByDisplay: ReadonlyMap<string, ReadonlySet<string>>,
+): LoopHeaderScreen | undefined {
   const first = statement.body[0];
   const second = statement.body[1];
-  return first?.kind === "show" && second?.kind === "input" ? first.display : undefined;
+  if (second?.kind !== "input") return undefined;
+  if (first?.kind === "show") {
+    return {
+      display: first.display,
+      pureDisplayProcs: pureDisplayProcsByDisplay.get(first.display) ?? EMPTY_STRING_SET,
+    };
+  }
+  if (first?.kind !== "call") return undefined;
+  const proc = procMap.get(first.block);
+  const only = proc?.body.length === 1 ? proc.body[0] : undefined;
+  if (only?.kind !== "show") return undefined;
+  return {
+    display: only.display,
+    pureDisplayProcs: pureDisplayProcsByDisplay.get(only.display) ?? EMPTY_STRING_SET,
+  };
 }
 
 function collectCallsByPosition(
@@ -7410,21 +7456,29 @@ function collectStatementListTerminalCalls(
   }
 }
 
-function elideTailShowInStatementList(statements: StatementAst[], display: string): number {
+function elideTailScreenInStatementList(
+  statements: StatementAst[],
+  display: string,
+  pureDisplayProcs: ReadonlySet<string>,
+): number {
   const last = statements.at(-1);
   if (last === undefined) return 0;
   if (last.kind === "show" && last.display === display) {
     statements.pop();
     return 1;
   }
+  if (last.kind === "call" && pureDisplayProcs.has(last.block)) {
+    statements.pop();
+    return 1;
+  }
   let removed = 0;
   if (last.kind === "if") {
-    removed += elideTailShowInStatementList(last.thenBody, display);
-    if (last.elseBody !== undefined) removed += elideTailShowInStatementList(last.elseBody, display);
+    removed += elideTailScreenInStatementList(last.thenBody, display, pureDisplayProcs);
+    if (last.elseBody !== undefined) removed += elideTailScreenInStatementList(last.elseBody, display, pureDisplayProcs);
   }
   if (last.kind === "dispatch") {
-    for (const dispatchCase of last.cases) removed += elideTailShowInStatementList(dispatchCase.body, display);
-    if (last.defaultBody !== undefined) removed += elideTailShowInStatementList(last.defaultBody, display);
+    for (const dispatchCase of last.cases) removed += elideTailScreenInStatementList(dispatchCase.body, display, pureDisplayProcs);
+    if (last.defaultBody !== undefined) removed += elideTailScreenInStatementList(last.defaultBody, display, pureDisplayProcs);
   }
   return removed;
 }
