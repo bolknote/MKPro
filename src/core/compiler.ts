@@ -185,6 +185,7 @@ import type {
   V2BoardAst,
   V2PredicateAst,
   V2StatementAst,
+  WhileStatementAst,
 } from "./types.ts";
 
 const DEFAULT_OPTIONS: CompileOptions = {
@@ -341,6 +342,11 @@ interface LoweringOptions {
   // show(floor, ".", packed_expr). The stack/X2 sequence is longer, so the
   // whole-program candidate must prove that freeing the register pays back.
   inlineFloorPackedRowExpressions?: boolean;
+  // Fully unroll counted `while v < bound` loops with a small, exact trip count,
+  // replacing the induction variables with per-iteration constants. Removes the
+  // loop counter/compare/branch overhead and lets the constants preload, but
+  // duplicates the body, so it is adopted only when the program ends up smaller.
+  unrollCountedLoops?: boolean;
 }
 
 
@@ -556,6 +562,16 @@ export function compileMKPro(
       `Packed counters ${names.join(", ")} into one hidden decimal-striped register`,
     );
   }
+  tryCandidate(
+    { unrollCountedLoops: true },
+    "counted-loop-unroll",
+    "Fully unrolled small constant-trip counted loops, replacing induction variables with constants",
+  );
+  tryCandidate(
+    { unrollCountedLoops: true, freeResidualDispatchScratch: true },
+    "counted-loop-unroll-free-scratch",
+    "Combined counted-loop unrolling with residual-dispatch scratch freeing",
+  );
   tryCandidate(
     { inlineFloorPackedRowExpressions: true },
     "inline-floor-packed-row-expression",
@@ -1407,6 +1423,9 @@ function compileMKProOnce(
       name: "expression-constant-folder",
       detail: `Folded ${foldedConstants} constant expression node(s) before code generation.`,
     });
+  }
+  if (loweringOptions.unrollCountedLoops === true) {
+    unrollCountedLoops(ast, optimizations);
   }
   if (loweringOptions.canonicalizeIfChains === true) {
     canonicalizeConstantIfChains(ast, optimizations);
@@ -3264,6 +3283,237 @@ function programContainsDecimalSeries(ast: ProgramAst): boolean {
 
 function cloneStatements(statements: StatementAst[]): StatementAst[] {
   return structuredClone(statements);
+}
+
+// Integer literal value of an expression, or undefined when it is not a plain
+// integer constant.
+function integerLiteralValue(expr: ExpressionAst): number | undefined {
+  if (expr.kind !== "number") return undefined;
+  const value = Number(expr.raw);
+  return Number.isInteger(value) ? value : undefined;
+}
+
+// Recognizes a top-level linear self-update `x = x + c`, `x = c + x`, or
+// `x = x - c` (the lowered form of `x++`/`x--`/`x += c`). Returns the variable
+// and signed integer step.
+function matchLinearSelfUpdate(statement: StatementAst): { target: string; step: number } | undefined {
+  if (statement.kind !== "assign") return undefined;
+  const expr = statement.expr;
+  if (expr.kind !== "binary" || (expr.op !== "+" && expr.op !== "-")) return undefined;
+  let stepExpr: ExpressionAst | undefined;
+  if (expr.left.kind === "identifier" && expr.left.name === statement.target) {
+    stepExpr = expr.right;
+  } else if (expr.op === "+" && expr.right.kind === "identifier" && expr.right.name === statement.target) {
+    stepExpr = expr.left;
+  } else {
+    return undefined;
+  }
+  const step = integerLiteralValue(stepExpr);
+  if (step === undefined) return undefined;
+  return { target: statement.target, step: expr.op === "-" ? -step : step };
+}
+
+// Set of scalar variables that `statements` may write, following `call`s into
+// their procedures transitively. Only plain `assign`/`input` targets count;
+// `indexed_assign` writes an array element, not the scalar index, so loop
+// induction variables can only be reached through scalar assignments.
+function collectScalarWrites(
+  statements: readonly StatementAst[],
+  procMap: Map<string, ProcAst>,
+  out: Set<string>,
+  seenProcs: Set<string>,
+): void {
+  const visit = (list: readonly StatementAst[]): void => {
+    for (const statement of list) {
+      switch (statement.kind) {
+        case "assign":
+          out.add(statement.target);
+          break;
+        case "input":
+          out.add(statement.target);
+          break;
+        case "loop":
+        case "while":
+          visit(statement.body);
+          break;
+        case "if":
+          visit(statement.thenBody);
+          if (statement.elseBody !== undefined) visit(statement.elseBody);
+          break;
+        case "dispatch":
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+          if (statement.defaultBody !== undefined) visit(statement.defaultBody);
+          break;
+        case "call": {
+          if (seenProcs.has(statement.block)) break;
+          seenProcs.add(statement.block);
+          const proc = procMap.get(statement.block);
+          if (proc !== undefined) visit(proc.body);
+          break;
+        }
+        default:
+          break;
+      }
+    }
+  };
+  visit(statements);
+}
+
+// Fully unrolls counted `while v <REL> bound` loops whose induction variables
+// have statically known constant entry values and constant per-iteration steps,
+// substituting each iteration's constant for the induction variables. Increasing
+// or decreasing integer loops with a small, exact trip count are eligible. The
+// transform is sound: the loop runs a fixed number of times and the rewrite
+// reproduces the same induction-variable values in the same order. It is a
+// speculative candidate (adopted only when the whole program shrinks) because
+// it usually only pays off when the induction variable would otherwise stay in a
+// register/read-modify-write chain that the constant form avoids.
+function unrollCountedLoops(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  const MAX_TRIP_COUNT = 8;
+  const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
+  let unrolled = 0;
+
+  const conditionHolds = (op: ConditionAst["op"], value: number, bound: number): boolean => {
+    switch (op) {
+      case "<":
+        return value < bound;
+      case "<=":
+        return value <= bound;
+      case ">":
+        return value > bound;
+      case ">=":
+        return value >= bound;
+      default:
+        return false;
+    }
+  };
+
+  // Builds the unrolled replacement for `loop`, or undefined if it is not a
+  // statically-bounded counted loop. `preceding` is the already-rewritten run of
+  // statements before the loop in the same block; trailing constant assignments
+  // there supply the induction entry values and are dropped when consumed.
+  const buildUnroll = (loop: WhileStatementAst, preceding: StatementAst[]): StatementAst[] | undefined => {
+    const condition = loop.condition;
+    if (condition.left.kind !== "identifier") return undefined;
+    const conditionVar = condition.left.name;
+    const bound = integerLiteralValue(condition.right);
+    if (bound === undefined) return undefined;
+    // Only increment-bounded loops (`v < n` / `v <= n`). Decrement-to-one loops
+    // (`v >= 1 { ...; v-- }`) already have a dedicated compact F Lx lowering that
+    // is at least as small, so leave those alone and avoid competing with it.
+    if (condition.op !== "<" && condition.op !== "<=") return undefined;
+
+    const prefixUpdates: Array<{ target: string; step: number }> = [];
+    for (const statement of loop.body) {
+      const update = matchLinearSelfUpdate(statement);
+      if (update === undefined) break;
+      if (prefixUpdates.some((existing) => existing.target === update.target)) break;
+      prefixUpdates.push(update);
+    }
+    if (!prefixUpdates.some((update) => update.target === conditionVar)) return undefined;
+    const prefixLength = prefixUpdates.length;
+
+    const entryValues = new Map<string, number>();
+    for (let index = preceding.length - 1; index >= 0; index -= 1) {
+      const statement = preceding[index]!;
+      if (statement.kind !== "assign") break;
+      const value = integerLiteralValue(statement.expr);
+      if (value === undefined) break;
+      if (!entryValues.has(statement.target)) entryValues.set(statement.target, value);
+    }
+    if (prefixUpdates.some((update) => !entryValues.has(update.target))) return undefined;
+
+    // The induction variables must not be rewritten anywhere else in the loop
+    // body (including through called procedures), or the constant substitution
+    // would diverge from the real iteration values.
+    const rest = loop.body.slice(prefixLength);
+    const restWrites = new Set<string>();
+    collectScalarWrites(rest, procMap, restWrites, new Set());
+    if (prefixUpdates.some((update) => restWrites.has(update.target))) return undefined;
+
+    const iterations: Array<Map<string, number>> = [];
+    const current = new Map(prefixUpdates.map((update) => [update.target, entryValues.get(update.target)!]));
+    while (conditionHolds(condition.op, current.get(conditionVar)!, bound)) {
+      for (const update of prefixUpdates) current.set(update.target, current.get(update.target)! + update.step);
+      iterations.push(new Map(current));
+      if (iterations.length > MAX_TRIP_COUNT) return undefined;
+    }
+    if (iterations.length === 0) return undefined;
+
+    const result: StatementAst[] = [];
+    for (const iteration of iterations) {
+      for (let index = 0; index < prefixLength; index += 1) {
+        const update = prefixUpdates[index]!;
+        result.push({
+          kind: "assign",
+          target: update.target,
+          expr: { kind: "number", raw: String(iteration.get(update.target)!) },
+          line: loop.body[index]!.line,
+        });
+      }
+      for (const statement of rest) result.push(structuredClone(statement));
+    }
+
+    // Drop the now-dead constant initializers that fed the loop; the first
+    // unrolled copy overwrites each induction variable before any read.
+    while (preceding.length > 0) {
+      const last = preceding[preceding.length - 1]!;
+      if (last.kind !== "assign" || integerLiteralValue(last.expr) === undefined) break;
+      if (!prefixUpdates.some((update) => update.target === last.target)) break;
+      preceding.pop();
+    }
+    return result;
+  };
+
+  const visitList = (statements: StatementAst[]): StatementAst[] => {
+    const result: StatementAst[] = [];
+    for (const statement of statements) {
+      const visited = visitStatement(statement);
+      if (visited.kind === "while") {
+        const replacement = buildUnroll(visited, result);
+        if (replacement !== undefined) {
+          unrolled += 1;
+          result.push(...replacement);
+          continue;
+        }
+      }
+      result.push(visited);
+    }
+    return result;
+  };
+
+  const visitStatement = (statement: StatementAst): StatementAst => {
+    switch (statement.kind) {
+      case "loop":
+        return { ...statement, body: visitList(statement.body) };
+      case "while":
+        return { ...statement, body: visitList(statement.body) };
+      case "if":
+        return {
+          ...statement,
+          thenBody: visitList(statement.thenBody),
+          ...(statement.elseBody === undefined ? {} : { elseBody: visitList(statement.elseBody) }),
+        };
+      case "dispatch":
+        return {
+          ...statement,
+          cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: visitList(dispatchCase.body) })),
+          ...(statement.defaultBody === undefined ? {} : { defaultBody: visitList(statement.defaultBody) }),
+        };
+      default:
+        return statement;
+    }
+  };
+
+  for (const entry of ast.entries) entry.body = visitList(entry.body);
+  for (const proc of ast.procs) proc.body = visitList(proc.body);
+
+  if (unrolled > 0) {
+    optimizations.push({
+      name: "counted-loop-unroll",
+      detail: `Fully unrolled ${unrolled} small constant-trip counted loop${unrolled === 1 ? "" : "s"}, replacing induction variables with per-iteration constants.`,
+    });
+  }
 }
 
 function hoistCommonBranchTails(ast: ProgramAst, optimizations: AppliedOptimization[]): void {

@@ -7139,172 +7139,170 @@ Setup Block:
    06 |  60  | П->X 0                  | display __inline_show_35_0 source
    07 |  50  | С/П                     | show __inline_show_35_0
    08 |  53  | ПП                      | proc call reinforcement_cycle
-   09 |  34  | 34                      | proc call reinforcement_cycle
-   10 |  00  | 0                       | set slot
+   09 |  33  | 33                      | proc call reinforcement_cycle
+   10 |  01  | 1                       |
    11 |  4B  | X->П b                  | set slot
-   12 |  03  | 3                       |
+   12 |  04  | 4                       |
    13 |  4C  | X->П c                  | set robot_slot
-   14 |  6B  | П->X b                  | recall slot
-   15 |  03  | 3                       |
-   16 |  11  | -                       | condition compare
-   17 |  5C  | F x<0                   | false branch for <
-   18 |  29  | 29                      | false branch for <
-   19 |  01  | 1                       |
-   20 |  6B  | П->X b                  | recall slot
-   21 |  10  | +                       | expr +
-   22 |  4B  | X->П b                  | set slot
-   23 |  01  | 1                       |
-   24 |  6C  | П->X c                  | recall robot_slot
-   25 |  10  | +                       | expr +
-   26 |  4C  | X->П c                  | set robot_slot
-   27 |  51  | БП                      | tail jump front_stop
-   28 |  58  | 58                      | proc call front_stop
-   29 |  5D  | F L0                    | counted while time
-   30 |  06  | 06                      | counted while time
-   31 |  6E  | П->X e                  | preload const 810200880000000
-   32 |  50  | С/П                     | halt
-   33 |  29  | К ÷                     | halt literal ЕГГ0Г
-   34 |  3B  | К СЧ                    | random()
-   35 |  01  | 1                       |
-   36 |  03  | 3                       |
-   37 |  12  | ×                       | expr *
-   38 |  03  | 3                       |
-   39 |  13  | ÷                       | expr /
-   40 |  34  | К [x]                   | int()
-   41 |  4D  | X->П d                  | set event_target
-   42 |  5E  | F x=0                   | false branch for ==
-   43 |  46  | 46                      | false branch for ==
-   44 |  07  | 7                       |
-   45 |  4D  | X->П d                  | set event_target
-   46 |  3B  | К СЧ                    | random()
-   47 |  48  | X->П 8                  | set random_state
-   48 |  04  | 4                       |
-   49 |  15  | F 10^x                  | constant 10000
-   50 |  12  | ×                       | expr *
-   51 |  34  | К [x]                   | int()
-   52 |  49  | X->П 9                  | set scratch
-   53 |  DD  | К П->X d                | indexed recall cells
-   54 |  69  | П->X 9                  | recall scratch
-   55 |  10  | +                       | expr +
-   56 |  BD  | К X->П d                | indexed set cells
-   57 |  52  | В/О                     | implicit return from proc
-   58 |  6B  | П->X b                  | display __inline_show_65_1 source
-   59 |  50  | С/П                     | show __inline_show_65_1
-   60 |  34  | К [x]                   | int()
-   61 |  49  | X->П 9                  | set scratch
-   62 |  67  | П->X 7                  | recall cells_7
-   63 |  69  | П->X 9                  | recall scratch
-   64 |  11  | -                       | expr -
-   65 |  47  | X->П 7                  | set cells_7
-   66 |  59  | F x>=0                  | false branch for >=
-   67 |  33  | 33                      | false branch for >=
-   68 |  DC  | К П->X c                | indexed recall cells
-   69 |  69  | П->X 9                  | recall scratch
-   70 |  10  | +                       | expr +
-   71 |  BC  | К X->П c                | indexed set cells
-   72 |  68  | П->X 8                  | recall random_state
-   73 |  49  | X->П 9                  | set scratch
-   74 |  3B  | К СЧ                    | random()
-   75 |  48  | X->П 8                  | set random_state
-   76 |  DC  | К П->X c                | indexed recall cells
-   77 |  53  | ПП                      | call function decay
-   78 |  88  | >88                     | call function decay
-   79 |  BC  | К X->П c                | indexed set cells
-   80 |  DB  | К П->X b                | indexed recall cells
-   81 |  53  | ПП                      | call function decay
-   82 |  88  | >88                     | call function decay
-   83 |  BB  | К X->П b                | indexed set cells
-   84 |  69  | П->X 9                  | recall scratch
-   85 |  68  | П->X 8                  | recall random_state
-   86 |  11  | -                       | expr -
-   87 |  5C  | F x<0                   | false branch for <
-   88 |  95  | 95                      | false branch for <
-   89 |  DC  | К П->X c                | indexed recall cells
-   90 |  53  | ПП                      | call function decay
-   91 |  88  | >88                     | call function decay
-   92 |  BC  | К X->П c                | indexed set cells
-   93 |  51  | БП                      | if end
-   94 |  99  | 99                      | if end
-   95 |  DB  | К П->X b                | indexed recall cells
-   96 |  53  | ПП                      | call function decay
-   97 |  88  | >88                     | call function decay
-   98 |  BB  | К X->П b                | indexed set cells
-   99 |  00  | 0                       |
-   A0 |  DC  | К П->X c                | indexed recall cells
-   A1 |  11  | -                       | condition compare
-   A2 |  5C  | F x<0                   | false branch for >
-   A3 |  33  | 33                      | false branch for >
-   A4 |  68  | П->X 8                  | recall random_state
-  >69 |  49  | X->П 9                  | set scratch
-  >6A |  3B  | К СЧ                    | random()
-  >6B |  48  | X->П 8                  | set random_state
-  >6C |  01  | 1                       |
-  >6D |  69  | П->X 9                  | recall scratch
-  >6E |  10  | +                       | expr +
-  >6F |  68  | П->X 8                  | recall random_state
-  >70 |  10  | +                       | expr +
-  >71 |  02  | 2                       |
-  >72 |  00  | 0                       |
-  >73 |  12  | ×                       | expr *
-  >74 |  DB  | К П->X b                | indexed recall cells
-  >75 |  12  | ×                       | expr *
-  >76 |  DC  | К П->X c                | indexed recall cells
-  >77 |  13  | ÷                       | expr /
-  >78 |  34  | К [x]                   | int()
-  >79 |  03  | 3                       |
-  >7A |  15  | F 10^x                  | constant 1000
-  >7B |  13  | ÷                       | expr /
-  >7C |  49  | X->П 9                  | set scratch
-  >7D |  DB  | К П->X b                | indexed recall cells
-  >7E |  35  | К {x}                   | frac()
-  >7F |  11  | -                       | expr -
-  >80 |  5C  | F x<0                   | false branch for >
-  >81 |  33  | 33                      | false branch for >
-  >82 |  DB  | К П->X b                | indexed recall cells
-  >83 |  69  | П->X 9                  | recall scratch
-  >84 |  11  | -                       | expr -
-  >85 |  BB  | К X->П b                | indexed set cells
-  >86 |  51  | БП                      | tail continuation
-  >87 |  14  | 14                      | tail continuation
-  >88 |  0E  | В↑                      | x-param decay keep base
-  >89 |  68  | П->X 8                  | recall random_state
-  >8A |  12  | ×                       | x-param decay scale
-  >8B |  04  | 4                       |
-  >8C |  13  | ÷                       | x-param decay divide
-  >8D |  34  | К [x]                   | x-param decay int
-  >8E |  11  | -                       | x-param decay subtract
-  >8F |  52  | В/О                     | x-param decay return
+   14 |  53  | ПП                      | proc call front_stop
+   15 |  57  | 57                      | proc call front_stop
+   16 |  02  | 2                       |
+   17 |  4B  | X->П b                  | set slot
+   18 |  05  | 5                       |
+   19 |  4C  | X->П c                  | set robot_slot
+   20 |  53  | ПП                      | proc call front_stop
+   21 |  57  | 57                      | proc call front_stop
+   22 |  03  | 3                       |
+   23 |  4B  | X->П b                  | set slot
+   24 |  06  | 6                       |
+   25 |  4C  | X->П c                  | set robot_slot
+   26 |  53  | ПП                      | proc call front_stop
+   27 |  57  | 57                      | proc call front_stop
+   28 |  5D  | F L0                    | counted while time
+   29 |  06  | 06                      | counted while time
+   30 |  6E  | П->X e                  | preload const 810200880000000
+   31 |  50  | С/П                     | halt
+   32 |  29  | К ÷                     | halt literal ЕГГ0Г
+   33 |  3B  | К СЧ                    | random()
+   34 |  01  | 1                       |
+   35 |  03  | 3                       |
+   36 |  12  | ×                       | expr *
+   37 |  03  | 3                       |
+   38 |  13  | ÷                       | expr /
+   39 |  34  | К [x]                   | int()
+   40 |  4D  | X->П d                  | set event_target
+   41 |  5E  | F x=0                   | false branch for ==
+   42 |  45  | 45                      | false branch for ==
+   43 |  07  | 7                       |
+   44 |  4D  | X->П d                  | set event_target
+   45 |  3B  | К СЧ                    | random()
+   46 |  48  | X->П 8                  | set random_state
+   47 |  04  | 4                       |
+   48 |  15  | F 10^x                  | constant 10000
+   49 |  12  | ×                       | expr *
+   50 |  34  | К [x]                   | int()
+   51 |  49  | X->П 9                  | set scratch
+   52 |  DD  | К П->X d                | indexed recall cells
+   53 |  69  | П->X 9                  | recall scratch
+   54 |  10  | +                       | expr +
+   55 |  BD  | К X->П d                | indexed set cells
+   56 |  52  | В/О                     | implicit return from proc
+   57 |  6B  | П->X b                  | display __inline_show_65_1 source
+   58 |  50  | С/П                     | show __inline_show_65_1
+   59 |  34  | К [x]                   | int()
+   60 |  49  | X->П 9                  | set scratch
+   61 |  67  | П->X 7                  | recall cells_7
+   62 |  69  | П->X 9                  | recall scratch
+   63 |  11  | -                       | expr -
+   64 |  47  | X->П 7                  | set cells_7
+   65 |  59  | F x>=0                  | false branch for >=
+   66 |  32  | 32                      | false branch for >=
+   67 |  DC  | К П->X c                | indexed recall cells
+   68 |  69  | П->X 9                  | recall scratch
+   69 |  10  | +                       | expr +
+   70 |  BC  | К X->П c                | indexed set cells
+   71 |  68  | П->X 8                  | recall random_state
+   72 |  49  | X->П 9                  | set scratch
+   73 |  3B  | К СЧ                    | random()
+   74 |  48  | X->П 8                  | set random_state
+   75 |  DC  | К П->X c                | indexed recall cells
+   76 |  53  | ПП                      | call function decay
+   77 |  86  | >86                     | call function decay
+   78 |  BC  | К X->П c                | indexed set cells
+   79 |  DB  | К П->X b                | indexed recall cells
+   80 |  53  | ПП                      | call function decay
+   81 |  86  | >86                     | call function decay
+   82 |  BB  | К X->П b                | indexed set cells
+   83 |  69  | П->X 9                  | recall scratch
+   84 |  68  | П->X 8                  | recall random_state
+   85 |  11  | -                       | expr -
+   86 |  5C  | F x<0                   | false branch for <
+   87 |  94  | 94                      | false branch for <
+   88 |  DC  | К П->X c                | indexed recall cells
+   89 |  53  | ПП                      | call function decay
+   90 |  86  | >86                     | call function decay
+   91 |  BC  | К X->П c                | indexed set cells
+   92 |  51  | БП                      | if end
+   93 |  98  | 98                      | if end
+   94 |  DB  | К П->X b                | indexed recall cells
+   95 |  53  | ПП                      | call function decay
+   96 |  86  | >86                     | call function decay
+   97 |  BB  | К X->П b                | indexed set cells
+   98 |  00  | 0                       |
+   99 |  DC  | К П->X c                | indexed recall cells
+   A0 |  11  | -                       | condition compare
+   A1 |  5C  | F x<0                   | false branch for >
+   A2 |  32  | 32                      | false branch for >
+   A3 |  68  | П->X 8                  | recall random_state
+   A4 |  49  | X->П 9                  | set scratch
+  >69 |  3B  | К СЧ                    | random()
+  >6A |  48  | X->П 8                  | set random_state
+  >6B |  01  | 1                       |
+  >6C |  69  | П->X 9                  | recall scratch
+  >6D |  10  | +                       | expr +
+  >6E |  68  | П->X 8                  | recall random_state
+  >6F |  10  | +                       | expr +
+  >70 |  02  | 2                       |
+  >71 |  00  | 0                       |
+  >72 |  12  | ×                       | expr *
+  >73 |  DB  | К П->X b                | indexed recall cells
+  >74 |  12  | ×                       | expr *
+  >75 |  DC  | К П->X c                | indexed recall cells
+  >76 |  13  | ÷                       | expr /
+  >77 |  34  | К [x]                   | int()
+  >78 |  03  | 3                       |
+  >79 |  15  | F 10^x                  | constant 1000
+  >7A |  13  | ÷                       | expr /
+  >7B |  49  | X->П 9                  | set scratch
+  >7C |  DB  | К П->X b                | indexed recall cells
+  >7D |  35  | К {x}                   | frac()
+  >7E |  11  | -                       | expr -
+  >7F |  5C  | F x<0                   | false branch for >
+  >80 |  32  | 32                      | false branch for >
+  >81 |  DB  | К П->X b                | indexed recall cells
+  >82 |  69  | П->X 9                  | recall scratch
+  >83 |  11  | -                       | expr -
+  >84 |  BB  | К X->П b                | indexed set cells
+  >85 |  52  | В/О                     | implicit return from proc
+  >86 |  0E  | В↑                      | x-param decay keep base
+  >87 |  68  | П->X 8                  | recall random_state
+  >88 |  12  | ×                       | x-param decay scale
+  >89 |  04  | 4                       |
+  >8A |  13  | ÷                       | x-param decay divide
+  >8B |  34  | К [x]                   | x-param decay int
+  >8C |  11  | -                       | x-param decay subtract
+  >8D |  52  | В/О                     | x-param decay return
 
 ## Hex
 00: 00 6A 47 02 05 40 60 50
-08: 53 34 00 4B 03 4C 6B 03
-16: 11 5C 29 01 6B 10 4B 01
-24: 6C 10 4C 51 58 5D 06 6E
-32: 50 29 3B 01 03 12 03 13
-40: 34 4D 5E 46 07 4D 3B 48
-48: 04 15 12 34 49 DD 69 10
-56: BD 52 6B 50 34 49 67 69
-64: 11 47 59 33 DC 69 10 BC
-72: 68 49 3B 48 DC 53 88 BC
-80: DB 53 88 BB 69 68 11 5C
-88: 95 DC 53 88 BC 51 99 DB
-96: 53 88 BB 00 DC 11 5C 33
-A4: 68 49 3B 48 01 69 10 68
->70: 10 02 00 12 DB 12 DC 13
->78: 34 03 15 13 49 DB 35 11
->80: 5C 33 DB 69 11 BB 51 14
->88: 0E 68 12 04 13 34 11 52
+08: 53 33 01 4B 04 4C 53 57
+16: 02 4B 05 4C 53 57 03 4B
+24: 06 4C 53 57 5D 06 6E 50
+32: 29 3B 01 03 12 03 13 34
+40: 4D 5E 45 07 4D 3B 48 04
+48: 15 12 34 49 DD 69 10 BD
+56: 52 6B 50 34 49 67 69 11
+64: 47 59 32 DC 69 10 BC 68
+72: 49 3B 48 DC 53 86 BC DB
+80: 53 86 BB 69 68 11 5C 94
+88: DC 53 86 BC 51 98 DB 53
+96: 86 BB 00 DC 11 5C 32 68
+A4: 49 3B 48 01 69 10 68 10
+>70: 02 00 12 DB 12 DC 13 34
+>78: 03 15 13 49 DB 35 11 5C
+>80: 32 DB 69 11 BB 52 0E 68
+>88: 12 04 13 34 11 52
 
 ## Explain
 MK-Pro compile report
-Steps: 144/999999
+Steps: 142/999999
 Delivery: hex
 Optimizer: exact maximum
-Reference: lordbss_pmk53; span=105, entries=105, gaps=none, compiled=144, delta=39, parity=larger
+Reference: lordbss_pmk53; span=105, entries=105, gaps=none, compiled=142, delta=37, parity=larger
 Machine: mk61
-Optimizer rules: automatic=yes; active=10, considered=1, candidates=42, planned=0
-Budget: official=144, extra=0, physical=144
-Intent IR: lowered=yes, v2=yes; intent=132, effects=144, cells=144
+Optimizer rules: automatic=yes; active=10, considered=0, candidates=43, planned=0
+Budget: official=142, extra=0, physical=142
+Intent IR: lowered=yes, v2=yes; intent=135, effects=142, cells=142
 
 Preloads:
   random_state -> R8: 0.5 (outside program cells)
@@ -7332,20 +7330,19 @@ Registers:
 Labels:
    main: 00
   __counted_while_0: 06
-  __while_1: 14
-  __while_end_2: 29
-  lost: 33
-  reinforcement_cycle: 34
-  __if_false_3: 46
-  front_stop: 58
-  __if_false_5: 95
-  __if_end_6: 99
-  decay: >88
+  lost: 32
+  reinforcement_cycle: 33
+  __if_false_1: 45
+  front_stop: 57
+  __if_false_3: 94
+  __if_end_4: 98
+  decay: >86
 
 Optimizations:
   - constant-indexed-state-resolution: Resolved 7 constant indexed state accesses before pattern matching.
   - x-param-state-elision: Removed 1 register-backed parameter field consumed directly from X.
   - expression-constant-folder: Folded 5 constant expression node(s) before code generation.
+  - counted-loop-unroll: Fully unrolled 1 small constant-trip counted loop, replacing induction variables with per-iteration constants.
   - intent-domain-lowering: Lowered 7 state fields and 8 rules through the generic intent pipeline.
   - auto-preload-initial-state: Moved initial state into setup/preload values so official program cells stay focused on turn logic.
   - repeated-assignment-value-reuse: Stored one computed value into 3 consecutive assignment targets at line 29.
@@ -7353,6 +7350,8 @@ Optimizations:
   - display-strategy-selection: Selected decimal-pack for screen __inline_show_35_0.
   - packed-display-lowering: Display __inline_show_35_0 may use display-byte encodings in later layout passes.
   - proc-call-lowering: Compiled call to rule reinforcement_cycle as ПП/В/О subroutine.
+  - proc-call-lowering: Compiled call to rule front_stop as ПП/В/О subroutine.
+  - proc-call-lowering: Compiled call to rule front_stop as ПП/В/О subroutine.
   - proc-call-lowering: Compiled call to rule front_stop as ПП/В/О subroutine.
   - initialized-counted-while-loop: Lowered initialized while time >= 1 through F L0 at line 34.
   - preloaded-constant: Used preloaded Re for constant 810200880000000.
@@ -7384,9 +7383,9 @@ Optimizations:
   - single-use-rule-inline: Inlined single-use rule resolve_front at line 74.
   - terminal-if-direct-branch: Branched directly to terminal lost for true path at line 69 (3 vs 5 estimated branch cells).
   - x-param-return-decay: Compiled decay to consume value directly from X.
-  - tail-call-lowering: Replaced 2 subroutine tail operations with direct jump continuation.
   - store-recall-peephole: Dropped 1 redundant П->X immediately after X->П to the same register.
   - dead-store-elimination: Removed 4 store(s) to register(s) never read before the next assignment.
+  - counted-loop-unroll: Fully unrolled small constant-trip counted loops, replacing induction variables with constants (142 vs 144 cells).
 
 Candidates:
   * display __inline_show_35_0/decimal-pack: 2 steps; selected decimal-pack for screen __inline_show_35_0
@@ -7394,7 +7393,6 @@ Candidates:
   - display __inline_show_35_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
   - display __inline_show_35_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
   - display __inline_show_35_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-  - if@39/negative-zero-threshold-flow: 9 steps; Negative-zero threshold flow estimated at 9 cells; ordinary condition was shorter (5).
   * display __inline_show_65_1/decimal-pack: 2 steps; selected decimal-pack for screen __inline_show_65_1
   - display __inline_show_65_1/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
   - display __inline_show_65_1/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
@@ -7432,24 +7430,24 @@ Rejected Candidates:
   - display __inline_show_35_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
   - display __inline_show_35_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
   - display __inline_show_35_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-  - if@39/negative-zero-threshold-flow: 9 steps; Negative-zero threshold flow estimated at 9 cells; ordinary condition was shorter (5).
   - display __inline_show_65_1/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
   - display __inline_show_65_1/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
   - display __inline_show_65_1/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_65_1/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
 
 Cell Roles:
   06: 60 exec, display-byte - display byte role allowed
-  09: 34 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  18: 29 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  28: 58 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  30: 06 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  43: 46 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  58: 6B exec, display-byte - display byte role allowed
-  67: 33 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  78: 88 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  82: 88 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  88: 95 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  91: 88 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
+  09: 33 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  15: 57 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  21: 57 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  27: 57 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  29: 06 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  42: 45 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  57: 6B exec, display-byte - display byte role allowed
+  66: 32 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  77: 86 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  81: 86 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  87: 94 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
 `;
 
 exports[`golden listing > selected output is stable for examples/pending-optimizer/teleport.mkpro 1`] = `
