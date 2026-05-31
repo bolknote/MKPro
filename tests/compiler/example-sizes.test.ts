@@ -31,7 +31,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "raja-yoga": 88,
   "sea-battle": 78,
   "tiny-game": 24,
-  wumpus: 103,
+  wumpus: 101,
 };
 
 const EXAMPLE_COMPILE_ERRORS: Record<string, RegExp> = {};
@@ -44,12 +44,12 @@ const EXAMPLE_COMPILE_ERRORS: Record<string, RegExp> = {};
 const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 157,
   "cave-treasure": 165,
-  "giants-country": 162,
-  labyrinth777: 221,
+  "giants-country": 161,
+  labyrinth777: 207,
   "rambo-iii": 201,
   teleport: 236,
-  "tic-tac-toe-4x4": 251,
-  "treasure-hunter-2": 167,
+  "tic-tac-toe-4x4": 105,
+  "treasure-hunter-2": 105,
 };
 
 const PENDING_COMPILE_ERRORS: Record<string, RegExp> = {};

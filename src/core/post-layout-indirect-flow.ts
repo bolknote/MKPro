@@ -197,6 +197,81 @@ function selectorValueForRegister(
   return undefined;
 }
 
+function firstExecutableOpIndexAtAddress(
+  ops: readonly IrOp[],
+  addresses: readonly number[],
+  target: number,
+): number | undefined {
+  for (let index = 0; index < ops.length; index += 1) {
+    if (addresses[index] !== target) continue;
+    if (cellsPerOp(ops[index]!) > 0) return index;
+  }
+  return undefined;
+}
+
+function replaceIndirectTargetComment(
+  comment: string | undefined,
+  register: RegisterName,
+  selectorValue: string,
+  target: number,
+): string | undefined {
+  if (comment === undefined) return undefined;
+  const escaped = register.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const pattern = new RegExp(`preloaded R${escaped}=[^\\s;]+ indirect-target=\\d+`, "iu");
+  if (!pattern.test(comment)) return comment;
+  return comment.replace(pattern, `preloaded R${register}=${selectorValue} indirect-target=${target}`);
+}
+
+function retargetExistingSelectorsAfterShift(
+  beforeItems: readonly MachineItem[],
+  afterItems: readonly MachineItem[],
+  preloads: readonly PreloadReport[],
+): { items: MachineItem[]; preloads: PreloadReport[] } | undefined {
+  if (preloads.length === 0) return { items: [...afterItems], preloads: [] };
+
+  const before = raiseMachineToIr(beforeItems);
+  const beforeAddresses = opAddresses(before);
+  const after = raiseMachineToIr(afterItems);
+  const afterAddresses = opAddresses(after);
+  const nextPreloads: PreloadReport[] = [];
+  const nextByRegister = new Map<RegisterName, string>();
+
+  for (const preload of preloads) {
+    const register = preload.register as RegisterName;
+    const decoded = evaluateIndirectAddress(register, preload.value, "flow");
+    if (decoded?.actualFlowTarget === undefined) return undefined;
+    const targetIndex = firstExecutableOpIndexAtAddress(before, beforeAddresses, decoded.actualFlowTarget);
+    if (targetIndex === undefined) return undefined;
+    const shiftedTarget = afterAddresses[targetIndex];
+    if (shiftedTarget === undefined) return undefined;
+    const selectorValue = selectorForActualTarget(shiftedTarget);
+    if (selectorValue === undefined) return undefined;
+    const shiftedDecoded = evaluateIndirectAddress(register, selectorValue, "flow");
+    if (shiftedDecoded?.actualFlowTarget !== shiftedTarget) return undefined;
+    nextPreloads.push({ ...preload, value: selectorValue });
+    nextByRegister.set(register, selectorValue);
+  }
+
+  const retargeted: IrOp[] = after.map((op) => {
+    if (!isIndirectBranch(op)) return op;
+    const selectorValue = nextByRegister.get(op.register);
+    if (selectorValue === undefined) return op;
+    const target = evaluateIndirectAddress(op.register, selectorValue, "flow")?.actualFlowTarget;
+    if (target === undefined) return op;
+    const comment = replaceIndirectTargetComment(op.meta.comment, op.register, selectorValue, target);
+    const meta = comment === undefined
+      ? { ...op.meta }
+      : { ...op.meta, comment };
+    if (comment === undefined) delete meta.comment;
+    return {
+      ...op,
+      meta,
+    };
+  });
+
+  return { items: lowerIrToMachine(retargeted), preloads: nextPreloads };
+}
+
 // Builds a numeric-target view of the program where every string-label branch
 // target is replaced with that label's resolved cell address. Returns the
 // numeric IR plus, for each op, the original label it targeted (when any) so a
@@ -542,16 +617,16 @@ export function optimizePostLayoutIndirectFlow(
   let applied = 0;
   let superDarkApplied = 0;
   let darkEntryApplied = 0;
-  const protectedTargets: number[] = [];
 
   for (let round = 0; round < MAX_REWRITES; round += 1) {
     if (cellCount(current) <= rescueAbove) break;
     const step = applyOneRewrite(current, options);
     if (step === undefined) break;
-    if (step.convertedAddresses.some((address) => protectedTargets.some((target) => address < target))) break;
-    current = step.items;
+    const retargeted = retargetExistingSelectorsAfterShift(current, step.items, preloads);
+    if (retargeted === undefined) break;
+    current = retargeted.items;
+    preloads.splice(0, preloads.length, ...retargeted.preloads);
     preloads.push(step.preload);
-    protectedTargets.push(...step.protectedTargets);
     applied += step.converted;
     if (step.superDark) superDarkApplied += 1;
     if (step.darkEntry) darkEntryApplied += 1;

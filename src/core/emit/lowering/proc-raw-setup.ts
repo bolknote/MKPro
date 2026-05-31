@@ -25,6 +25,7 @@ import {
   emitSpatialLineProgressionHelperBody,
   emitSpatialSumLoopHelperBody,
 } from "./spatial.ts";
+import { emitLine4MoveHelpers } from "./line4.ts";
 import type {
   ExecutableSetupPreload,
   StackUnaryDerivationCall,
@@ -703,6 +704,7 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
       ctx.emitOp(0x32, "К ЗН", "spatial hit to count", helper.line);
       ctx.emitOp(0x52, "В/О", "spatial hit return", helper.line);
     }
+    emitLine4MoveHelpers(ctx);
 }
 
 export function compileInitialState(ctx: LoweringCtx): void {

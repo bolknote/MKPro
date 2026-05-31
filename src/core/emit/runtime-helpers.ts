@@ -63,6 +63,17 @@ interface TerminalTailHelper {
   line: number;
 }
 
+interface Line4MoveHelper {
+  bank: string;
+  occupied: string;
+  cell: string;
+  target: string;
+  label: string;
+  updateLabel: string;
+  normLabel: string;
+  line?: number;
+}
+
 /**
  * Owns the lazily-registered shared runtime-helper tables for one lowering
  * attempt. Lowering registers a helper (returning a stable label) while
@@ -87,6 +98,7 @@ export class RuntimeHelperRegistry {
   readonly spatialLineProgressionHelpers = new Map<string, SpatialProgressionHelper>();
   readonly spatialSumLoopHelpers = new Map<string, SpatialProgressionHelper>();
   readonly terminalTailHelpers: TerminalTailHelper[] = [];
+  readonly line4MoveHelpers = new Map<string, Line4MoveHelper>();
 
   // True while the body of an expression / random-coordinate helper is being emitted,
   // so the lowering does not recursively route that same expression back

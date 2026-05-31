@@ -6,7 +6,7 @@ reference anvarov_treasure_hunter_2
 program TreasureHunter2 {
   state {
     floor: counter 1..9 = 9
-    room: counter 0..6 = 0
+    pos: packed = 0.1
 
     // The original stores every generated floor row in R1..R9 and uses the
     // current floor as the indirect-memory selector. Updating a row records
@@ -15,7 +15,6 @@ program TreasureHunter2 {
       row: packed = bit_and(8 + (int(random(9999999)) + 1) / pow10(7), 8.5555555)
     }
 
-    tile: counter 0..9 = 0
     treasure: counter 0..99 = 0
     entered: flag = 0
   }
@@ -37,18 +36,27 @@ program TreasureHunter2 {
       draw()
       action = read()
 
-      match action {
-        4 => move_left()
-        6 => move_right()
-        8 => climb_or_descend()
-        0 => punch_hole()
-        otherwise => draw()
+      if action == 0 {
+        punch_hole()
+      }
+      else {
+        if cos(100) == 0 {
+          climb_or_descend()
+        }
+        else {
+          if cos(100) < 0 {
+            move_right()
+          }
+          else {
+            move_left()
+          }
+        }
       }
     }
   }
 
   fn move_left() {
-    if room == 0 {
+    if pos == 0.1 {
       if floor == 1 {
         escaped()
       }
@@ -57,39 +65,24 @@ program TreasureHunter2 {
       }
     }
     else {
-      room--
+      pos = pos * 10
       inspect_cell()
     }
   }
 
   fn move_right() {
-    if room < 6 {
-      room++
-      inspect_cell()
-    }
-    else {
-      draw()
-    }
+    pos = pos / 10
+    inspect_cell()
   }
 
   fn climb_or_descend() {
-    if tile == 4 {
-      if floor < 9 {
-        floor++
-        inspect_cell()
-      }
-      else {
-        draw()
-      }
+    if frac(bit_and(rows[floor].row, 5 * (pos + 1))) / pos == 1 {
+      floor++
+      inspect_cell()
     }
     else {
-      if floor > 1 {
-        if int(frac(rows[floor - 1].row * pow10(room)) * 10) == 4 {
-          descend()
-        }
-        else {
-          draw()
-        }
+      if frac(bit_and(rows[floor].row, 5 * (pos + 1))) / pos == 0 {
+        descend()
       }
       else {
         draw()
@@ -108,25 +101,24 @@ program TreasureHunter2 {
   }
 
   fn punch_hole() {
-    rows[floor].row -= tile / pow10(room + 1)
+    rows[floor].row -= frac(bit_and(rows[floor].row, 5 * (pos + 1))) / pos * pos
     descend()
   }
 
   fn inspect_cell() {
-    tile = int(frac(rows[floor].row * pow10(room)) * 10)
-    match tile {
+    match frac(bit_and(rows[floor].row, 5 * (pos + 1))) / pos {
       0 => descend()
-      1 => collect_treasure()
+      4 => collect_treasure()
       otherwise => draw()
     }
   }
 
   fn draw() {
-    show(floor, ".", bit_not(rows[floor].row + 2 / pow10(room + 1)))
+    show(floor, ".", bit_not(rows[floor].row + 2 * pos))
   }
 
   fn collect_treasure() {
-    rows[floor].row += 4 / pow10(room + 1)
+    rows[floor].row += pos
     treasure++
     draw()
   }

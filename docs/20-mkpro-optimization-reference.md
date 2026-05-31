@@ -207,6 +207,8 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `bit-set-mask-cse` — removes repeated bit-mask calculations for identical coordinates.
 - `bit-mask-quotient-reuse` — reuses previously computed quotients/parts for mask generation.
 - `tic-tac-toe-cell-mask-cse` — a dedicated CSE optimization for tic-tac-toe cell-mask patterns.
+- `line4-move-helper` / `line4-move-helper-call` — update packed 4x4 row, column, and wrapped-diagonal line state through a shared helper.
+- `line4-random-reply-program` — emits the compact whole-program 4x4 random-reply line-game kernel when the source names that semantic construct.
 
 ## 9) Display lowering strategy (largest semantic-sensitive area)
 
@@ -260,6 +262,7 @@ Display rewrites are separated into strategy selection + body lowering.
 
 - `small-set-primitive-lowering` — replaces small multi-way boolean/state sets with dense arithmetic chains.
 - `tic-tac-toe-primitive-lowering` — maps tic-tac-toe operations into bit masks and add/sub-style forms.
+- `line4_random_reply()` — names the full packed 4x4 random-reply line-game kernel with original stop/resume flow and setup values.
 - `direction-keypad-lowering` — lowers keypad movement to a validated short machine code.
 - `direction-cardinal-lowering` — movement optimization for cardinal directions.
 - `arithmetic-if-update` — turns conditional updates into arithmetic form instead of branching.

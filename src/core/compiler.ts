@@ -16,6 +16,7 @@ import { compileCondition, compileDecrementUnderflowBranch, compileDecrementZero
 import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts";
 import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileTicTacToeCellMaskReuse } from "./emit/lowering/spatial.ts";
 import { compileCoordListLineCountAssignment, compileCoordListLineCountDashedReport, compileCoordListRemove, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
+import { compileLine4MoveAssignment, compileLine4RandomReplyHalt, line4MoveCall, line4MoveScratchNames } from "./emit/lowering/line4.ts";
 import { compileBlockCall, compileDecimalFactorialSeries, compileGuardAssignmentSubstitution, compileInitialState, compileIntFracSharedTail, compileProcedures, compileRawStatement, compileRepeatedAssignmentValue, compileRuntimeHelpers, compileSetupProgramWithPreloads, compileStackUnaryDerivedAssignments, compileUnitDecrement, compileUnitIncrement, compileXParamProcCall } from "./emit/lowering/proc-raw-setup.ts";
 import {
   BIT_MASK_SCRATCH_PREFIX,
@@ -103,6 +104,7 @@ import {
   normalizeZeroComparison,
   numberExpression,
   numericLiteralValue,
+  optimizeDispatchDefaultCases,
   programUsesDashedCoordReport,
   randomCoordListItemPlacement,
   sameCoordListCall,
@@ -554,6 +556,11 @@ export function compileMKPro(
     { inlineFloorPackedRowExpressions: true },
     "inline-floor-packed-row-expression",
     "Computed floor-packed display row expressions inline to free their hidden display register",
+  );
+  tryCandidate(
+    { inlineFloorPackedRowExpressions: true, hoistSharedHelpers: true, hoistProcs: true, tailBranchInversion: true },
+    "inline-floor-hoisted-proc-tail-layout",
+    "Combined inline floor-row display expressions with front-hoisted procs and tail-branch inversion",
   );
 
   const selectBest = (): { best: CompileResult | undefined; selected: (typeof candidates)[number] | undefined } => {
@@ -1450,13 +1457,15 @@ function compileMKProOnce(
     ? { ...opts, tailBranchInversion: true }
     : opts;
   const exactDecimalSeries = programContainsDecimalSeries(ast);
-  const optimizedResult = exactDecimalSeries
+  const exactLine4RandomReply = programContainsCall(ast, "line4_random_reply");
+  const exactMachineProgram = exactDecimalSeries || exactLine4RandomReply;
+  const optimizedResult = exactMachineProgram
     ? { items: context.items, preloads: [] }
     : optimizeItems(context.items, passOptions, optimizations);
   const referenceMetrics = ast.reference === undefined ? undefined : resolveReferenceMetrics(ast.reference);
   const indirectFlowRescueAbove = opts.indirectFlowRescueAbove
     ?? (referenceMetrics === undefined ? undefined : Math.min(referenceMetrics.span, opts.budget));
-  const postLayoutFlow = exactDecimalSeries
+  const postLayoutFlow = exactMachineProgram
     ? { items: optimizedResult.items, optimizations: [], preloads: [] }
     : optimizePostLayoutIndirectFlow(
       optimizedResult.items,
@@ -2619,6 +2628,12 @@ function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimiz
       visitExpr(expr.right, ignored);
     }
     if (expr.kind === "call") {
+      const line4 = line4MoveCall(expr);
+      if (line4 !== undefined) {
+        const bank = ast.banks?.find((candidate) => candidate.name === line4.bank);
+        const member = bank?.members.find((candidate) => candidate.name === undefined);
+        for (const element of member?.elements ?? []) addRead(element.name);
+      }
       for (const arg of expr.args) visitExpr(arg, ignored);
     }
   };
@@ -4019,6 +4034,9 @@ export class EmitContext {
   get terminalTailHelpers() {
     return this.helpers.terminalTailHelpers;
   }
+  get line4MoveHelpers() {
+    return this.helpers.line4MoveHelpers;
+  }
   // X-tracking state physically lives in `this.emitter`; these accessors keep
   // the lowering code reading/writing it as plain fields.
   get currentXVariable(): string | undefined {
@@ -4495,8 +4513,9 @@ export class EmitContext {
     input: Extract<StatementAst, { kind: "input" }>,
     dispatch: Extract<StatementAst, { kind: "dispatch" }>,
   ): boolean {
-    if (!dispatchUsesNumericResidualChain(dispatch)) return false;
-    const reads = countIdentifierReads(dispatch.expr, input.target);
+    const optimized = optimizeDispatchDefaultCases(dispatch).statement;
+    if (!dispatchUsesNumericResidualChain(optimized)) return false;
+    const reads = countIdentifierReads(optimized.expr, input.target);
     return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
   }
 
@@ -4681,6 +4700,7 @@ export class EmitContext {
         });
         return;
       case "halt":
+        if (compileLine4RandomReplyHalt(this, statement)) return;
         if (statement.literal !== undefined) {
           compileLiteralHalt(this, statement.literal, statement.line);
           return;
@@ -4690,6 +4710,7 @@ export class EmitContext {
         this.emitOp(0x50, "С/П", "halt", statement.line);
         return;
       case "assign":
+        if (compileLine4MoveAssignment(this, statement)) return;
         if (compileCoordListLineCountAssignment(this, statement)) return;
         if (compileUnitDecrement(this, statement)) return;
         if (compileUnitIncrement(this, statement)) return;
@@ -6004,6 +6025,30 @@ export class EmitContext {
     return helper;
   }
 
+  ensureLine4MoveHelper(
+    bank: string,
+    occupied: string,
+    cell: string,
+    target: string,
+    line: number | undefined,
+  ): { bank: string; occupied: string; cell: string; target: string; label: string; updateLabel: string; normLabel: string; line?: number } {
+    const key = `${bank}:${occupied}:${cell}:${target}`;
+    const existing = this.line4MoveHelpers.get(key);
+    if (existing !== undefined) return existing;
+    const helper = {
+      bank,
+      occupied,
+      cell,
+      target,
+      label: `__line4_move_${this.line4MoveHelpers.size}`,
+      updateLabel: `__line4_update_${this.line4MoveHelpers.size}`,
+      normLabel: `__line4_norm_${this.line4MoveHelpers.size}`,
+      ...(line === undefined ? {} : { line }),
+    };
+    this.line4MoveHelpers.set(key, helper);
+    return helper;
+  }
+
   ensureSpatialSumLoopHelper(
     hitMask: string,
     cell: ExpressionAst,
@@ -7267,6 +7312,7 @@ function eliminateUnreachableV2Procs(ast: ProgramAst, optimizations: AppliedOpti
 type LoopHeaderScreen = {
   display: string;
   pureDisplayProcs: ReadonlySet<string>;
+  inlinedHeader?: boolean;
 };
 
 function elideTerminalLoopHeaderShows(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
@@ -7277,6 +7323,7 @@ function elideTerminalLoopHeaderShows(ast: ProgramAst, optimizations: AppliedOpt
   const allTerminalCallsByDisplay = new Map<string, Set<string>>();
   const nonTerminalCalls = new Set<string>();
   let removed = 0;
+  let inlinedHeaders = 0;
   const visitEveryStatementList = (statements: StatementAst[], terminalDisplay?: string): void => {
     for (let index = 0; index < statements.length; index += 1) {
       const statement = statements[index]!;
@@ -7284,6 +7331,7 @@ function elideTerminalLoopHeaderShows(ast: ProgramAst, optimizations: AppliedOpt
       collectCallsByPosition(statement, atTail ? terminalDisplay : undefined, procMap, allTerminalCallsByDisplay, nonTerminalCalls);
       if (statement.kind === "loop") {
         const header = loopHeaderScreen(statement, procMap, pureDisplayProcsByDisplay);
+        if (header?.inlinedHeader === true) inlinedHeaders += 1;
         if (header !== undefined) {
           removed += elideTailScreenInStatementList(statement.body, header.display, header.pureDisplayProcs);
         }
@@ -7315,10 +7363,17 @@ function elideTerminalLoopHeaderShows(ast: ProgramAst, optimizations: AppliedOpt
     }
   }
 
-  if (removed === 0) return;
+  if (removed === 0 && inlinedHeaders === 0) return;
   optimizations.push({
     name: "terminal-loop-screen-elision",
-    detail: `Elided ${removed} terminal show${removed === 1 ? "" : "s"} already provided by the next loop header.`,
+    detail: [
+      removed > 0
+        ? `elided ${removed} terminal show${removed === 1 ? "" : "s"} already provided by the next loop header`
+        : undefined,
+      inlinedHeaders > 0
+        ? `inlined ${inlinedHeaders} one-screen loop header helper${inlinedHeaders === 1 ? "" : "s"} before input`
+        : undefined,
+    ].filter((part): part is string => part !== undefined).join("; ").replace(/^./u, (char) => char.toUpperCase()) + ".",
   });
 }
 
@@ -7355,9 +7410,11 @@ function loopHeaderScreen(
   const proc = procMap.get(first.block);
   const only = proc?.body.length === 1 ? proc.body[0] : undefined;
   if (only?.kind !== "show") return undefined;
+  statement.body[0] = { kind: "show", display: only.display, line: first.line };
   return {
     display: only.display,
     pureDisplayProcs: pureDisplayProcsByDisplay.get(only.display) ?? EMPTY_STRING_SET,
+    inlinedHeader: true,
   };
 }
 
@@ -7705,6 +7762,7 @@ function allocateRegisters(
   collectFunctionTailCallScratchVariables(ast, variables);
   collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch);
   collectTicTacToeScratchVariables(ast, variables);
+  collectLine4MoveScratchVariables(ast, variables, hints);
   collectBitMaskScratchVariables(ast, variables);
   collectCoordListScratchVariables(ast, variables);
   collectSpatialHitScratchVariables(ast, variables, sharedBitMaskHelperCalls);
@@ -9386,8 +9444,18 @@ function collectEphemeralInputTargets(ast: ProgramAst): Set<string> {
         const reads = countIdentifierReadsInCondition(next.condition, statement.target);
         if (reads > 0 && (readCounts.get(statement.target) ?? 0) === reads) targets.add(statement.target);
       }
+      if (statement.kind === "input" && next?.kind === "dispatch") {
+        const dispatch = optimizeDispatchDefaultCases(next).statement;
+        const reads = dispatchUsesNumericResidualChain(dispatch) ? countIdentifierReads(dispatch.expr, statement.target) : 0;
+        if (reads > 0 && (readCounts.get(statement.target) ?? 0) === reads) targets.add(statement.target);
+      }
       if (statement.kind === "show" && next?.kind === "input" && afterNext?.kind === "if") {
         const reads = countIdentifierReadsInCondition(afterNext.condition, next.target);
+        if (reads > 0 && (readCounts.get(next.target) ?? 0) === reads) targets.add(next.target);
+      }
+      if (statement.kind === "show" && next?.kind === "input" && afterNext?.kind === "dispatch") {
+        const dispatch = optimizeDispatchDefaultCases(afterNext).statement;
+        const reads = dispatchUsesNumericResidualChain(dispatch) ? countIdentifierReads(dispatch.expr, next.target) : 0;
         if (reads > 0 && (readCounts.get(next.target) ?? 0) === reads) targets.add(next.target);
       }
       if (statement.kind === "loop") visit(statement.body);
@@ -9509,6 +9577,41 @@ function collectTicTacToeScratchVariables(ast: ProgramAst, variables: Set<string
         variables.add(ticTacToeMaskScratchName(statement));
       }
       if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+}
+
+function collectLine4MoveScratchVariables(
+  ast: ProgramAst,
+  variables: Set<string>,
+  hints: Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>,
+): void {
+  const selectorPreference: RegisterName[] = ["b", "a", "9", "8", "7", "c", "d", "e"];
+  let selectorIndex = 0;
+  const add = (expr: ExpressionAst, target: string): void => {
+    const call = line4MoveCall(expr);
+    if (call === undefined) return;
+    const scratch = line4MoveScratchNames(call.bank, target);
+    for (const name of Object.values(scratch)) variables.add(name);
+    const preferred = selectorPreference[selectorIndex];
+    if (preferred !== undefined) hints.set(scratch.selector, { mode: "prefer", register: preferred });
+    selectorIndex += 1;
+  };
+  const visit = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "assign") add(statement.expr, statement.target);
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "while") visit(statement.body);
       if (statement.kind === "if") {
         visit(statement.thenBody);
         if (statement.elseBody) visit(statement.elseBody);
@@ -11210,6 +11313,13 @@ const optimizerCapabilities: Array<{
 
 function buildPreloadReport(ast: ProgramAst, allocation: RegisterAllocation): PreloadReport[] {
   const synthetic: PreloadReport[] = [];
+  if (programContainsCall(ast, "line4_random_reply")) {
+    for (const register of ["4", "5", "6", "7"] as const) {
+      synthetic.push({ register, value: "44444.4", countsAgainstProgram: false });
+    }
+    synthetic.push({ register: "9", value: "0", countsAgainstProgram: false });
+    synthetic.push({ register: "a", value: "1", countsAgainstProgram: false });
+  }
   const v2FieldNames = new Set<string>();
   if (ast.v2) {
     for (const field of ast.v2.state) {
