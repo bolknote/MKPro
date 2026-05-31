@@ -57,6 +57,12 @@ validation, or optimizer choices, it belongs in a comment, not in the language.
 The compiler owns implementation choices such as X2, dark entries, overlays,
 register placement, display bytes, and undocumented opcodes.
 
+The modern parser surface deliberately rejects legacy block forms and old command
+syntax in favor of `show(...)`, `read()`, `if/while/match`, `loop`, and `fn` blocks.
+These rejected forms include `fleet`, `world`, `encounters`, `screen`, `turn`,
+`rule`, and `challenge` blocks, as well as bare `read X`, `show X`, `stop`, and
+`move X <dir>` statements.
+
 ## Comments
 
 MK-Pro accepts line and trailing comments with either `//` or `#`:
@@ -811,6 +817,7 @@ The parser keeps these high-level statements as typed source nodes:
 - `if predicate { ... }`, `if predicate { ... } else { ... }`, and
   `if predicate { ... } else if predicate { ... } else { ... }`.
   `else` may be written either on its own line after `}` or as `} else {`.
+  Predicates support `==`, `!=`, `<`, `<=`, `>`, `>=`, and membership `item in list`.
 - `while predicate { ... }`
 - `loop { ... }`
 - `name = move(pos, direction)`
@@ -818,9 +825,11 @@ The parser keeps these high-level statements as typed source nodes:
 - `match expr { values => action }`
 - query expressions: `line_count(set, cell)`, `neighbor_count(set, cell)`,
   and `cell_at(board, pos)`
-- formula helpers: `pow`, `bit_mask`, `bit_has`, `bit_set`, `bit_clear`,
-  `bit_toggle`, `cell_mask`, `cell_has`, `cell_set`, `cell_clear`,
-  `cell_toggle`, `digit_at`, `digit_add`, `digit_set`, `near_any`, and `eq_any`
+- formula helpers: `abs`, `bit_clear`, `bit_has`, `bit_mask`, `bit_set`,
+  `bit_toggle`, `cell_at`, `cell_clear`, `cell_has`, `cell_mask`, `cell_set`,
+  `cell_toggle`, `direction`, `digit_add`, `digit_at`, `digit_set`,
+  `eq_any`, `frac`, `int`, `line_count`, `near_any`, `neighbor_count`,
+  `pow`, and `random`
 - contracted `raw { ... }` blocks for explicit MK-61 command sequences
 
 Assignments, updates, comparison predicates, function parameters, loops, and
@@ -853,6 +862,10 @@ Statement-level actions use the same call shape as the rest of the language:
 write `go(direction(key))`, because `go` is a function call and
 `direction(key)` is an expression. Built-in names such as `move`, `show`, `read`,
 and `halt` cannot be used as function names.
+The full parser-reserved function-name list is:
+`challenge`, `else`, `fn`, `halt`, `if`, `loop`, `match`, `move`, `otherwise`,
+`program`, `read`, `return`, `rule`, `screen`, `state`, `stop`, `turn`,
+`world`.
 
 Current scalar lowerings are still deliberately small and auditable:
 
