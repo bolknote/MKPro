@@ -167,8 +167,8 @@ contexts:
       scope: variable.other.register.mkpro
     - match: '\bstack\.(X|Y)\b'
       captures:
-        0: variable.language.stack.mkpro
-        1: constant.language.stack-slot.mkpro
+        0: variable.other.register.stack.mkpro
+        1: variable.other.register.stack-slot.mkpro
 
   constants:
     - match: '\b(true|false|north|south|east|west|up|down)\b'
