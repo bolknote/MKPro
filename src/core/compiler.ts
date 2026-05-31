@@ -674,8 +674,27 @@ function isOnlyBudgetExceeded(error: unknown): error is CompileError {
 }
 
 function canRetryLoweringAfterPrimaryFailure(error: unknown): boolean {
-  return error instanceof CompileError &&
-    error.diagnostics.some((diagnostic) => diagnostic.message.startsWith("Out of MK-61 registers while allocating"));
+  if (!(error instanceof CompileError)) return false;
+  // The default ({}) lowering can fail for reasons that an alternate lowering is
+  // specifically built to rescue. Aborting on the primary failure would hide
+  // those candidates entirely and make the result depend on whether the default
+  // path happened to overflow (the symptom that --analysis appeared to "optimize
+  // better": analysis only downgrades these to warnings, so its candidate search
+  // still ran while the strict search bailed out at the primary).
+  //
+  //   - register exhaustion: a different allocation/lowering may fit.
+  //   - program-window overflow (budget or physical 00..A4 address range): the
+  //     post-layout indirect-flow / dark-entry rescue candidates exist precisely
+  //     to pull such programs back under the window.
+  //
+  // When no candidate succeeds, selectBest() still rethrows this primary error,
+  // so genuine failures keep their original diagnostics.
+  return error.diagnostics.some((diagnostic) =>
+    diagnostic.message.startsWith("Out of MK-61 registers while allocating") ||
+    diagnostic.code === "BUDGET_EXCEEDED" ||
+    diagnostic.message.includes("is outside 00..A4") ||
+    diagnostic.message.includes("exceeds formal MK-61 address range")
+  );
 }
 
 function primaryFailureSummary(error: unknown): string {
