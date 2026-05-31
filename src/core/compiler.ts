@@ -324,6 +324,10 @@ interface LoweringOptions {
   // register. Speculative: cheap unit updates can win a register, but reads need
   // extraction arithmetic and are adopted only when the whole program shrinks.
   packCounterStripes?: boolean;
+  // Speculative: avoids a hidden display-expression register for
+  // show(floor, ".", packed_expr). The stack/X2 sequence is longer, so the
+  // whole-program candidate must prove that freeing the register pays back.
+  inlineFloorPackedRowExpressions?: boolean;
 }
 
 
@@ -520,6 +524,11 @@ export function compileMKPro(
     { packCounterStripes: true },
     "packed-counter-stripes",
     "Packed compatible small counters into one hidden decimal-striped register",
+  );
+  tryCandidate(
+    { inlineFloorPackedRowExpressions: true },
+    "inline-floor-packed-row-expression",
+    "Computed floor-packed display row expressions inline to free their hidden display register",
   );
 
   const selectBest = (): { best: CompileResult; selected: (typeof candidates)[number] | undefined } => {
@@ -1310,7 +1319,7 @@ function compileMKProOnce(
   if (loweringOptions.packCounterStripes === true) {
     packCounterStripes(ast, optimizations, true);
   }
-  materializeDisplayExpressions(ast, optimizations);
+  materializeDisplayExpressions(ast, optimizations, loweringOptions.inlineFloorPackedRowExpressions === true);
   elideXParamReturnStateFields(ast, optimizations);
   const foldedConstants = foldProgramConstants(ast);
   if (foldedConstants > 0) {
@@ -1524,6 +1533,7 @@ function packCounterStripes(
   const plan = selectPackedCounterStripePlan(ast, includeStoragePairs);
   if (plan === undefined) return;
   const byName = new Map(plan.stripes.map((stripe) => [stripe.name, stripe]));
+  const fieldByName = new Map(plan.state.fields.map((field) => [field.name, field]));
   const packedExpr = (): ExpressionAst => ({ kind: "identifier", name: plan.packed });
 
   const extract = (stripe: PackedCounterStripe): ExpressionAst => {
@@ -1553,15 +1563,76 @@ function packCounterStripes(
     }
   };
 
+  const swappedConditionOp = (op: ConditionAst["op"]): ConditionAst["op"] => {
+    if (op === "<") return ">";
+    if (op === "<=") return ">=";
+    if (op === ">") return "<";
+    if (op === ">=") return "<=";
+    return op;
+  };
+
+  const packedThreshold = (value: number): ExpressionAst => numberExpression(Math.round(value * 1e12) / 1e12);
+
+  const rewritePackedCounterComparison = (
+    source: ExpressionAst,
+    op: ConditionAst["op"],
+    comparand: ExpressionAst,
+  ): ConditionAst | undefined => {
+    if (source.kind !== "identifier") return undefined;
+    const stripe = byName.get(source.name);
+    if (stripe === undefined) return undefined;
+    const field = fieldByName.get(source.name);
+    const value = numericLiteralValue(comparand);
+    if (
+      field?.min === undefined ||
+      field.max === undefined ||
+      value === undefined ||
+      !Number.isInteger(value)
+    ) {
+      return undefined;
+    }
+
+    const sourceExpr = stripe.kind === "major" ? packedExpr() : fracExpression(packedExpr());
+    const scale = stripe.scale;
+    const lowerBound = (candidate: number): number => candidate * scale;
+    const upperBound = (candidate: number): number => (candidate + 1) * scale;
+    switch (op) {
+      case "<":
+        return { left: sourceExpr, op: "<", right: packedThreshold(lowerBound(value)) };
+      case "<=":
+        return { left: sourceExpr, op: "<", right: packedThreshold(upperBound(value)) };
+      case ">":
+        return { left: sourceExpr, op: ">=", right: packedThreshold(upperBound(value)) };
+      case ">=":
+        return { left: sourceExpr, op: ">=", right: packedThreshold(lowerBound(value)) };
+      case "==":
+        return undefined;
+      case "!=":
+        return undefined;
+    }
+  };
+
+  const rewriteCondition = (condition: ConditionAst): ConditionAst => {
+    const direct = rewritePackedCounterComparison(condition.left, condition.op, condition.right);
+    if (direct !== undefined) return direct;
+    const swapped = rewritePackedCounterComparison(condition.right, swappedConditionOp(condition.op), condition.left);
+    if (swapped !== undefined) return swapped;
+    return {
+      ...condition,
+      left: rewriteExpr(condition.left),
+      right: rewriteExpr(condition.right),
+    };
+  };
+
   const rewriteDisplayItems = (items: DisplayItemAst[]): DisplayItemAst[] => {
     const compact = plan.compactDecimalDisplay;
-    if (compact === undefined) return items.map(rewriteDisplayItem);
     const rewritten: DisplayItemAst[] = [];
     for (let index = 0; index < items.length; index += 1) {
       const left = items[index];
       const dot = items[index + 1];
       const right = items[index + 2];
       if (
+        compact !== undefined &&
         left?.kind === "source" &&
         left.expr === undefined &&
         left.name === compact.left &&
@@ -1575,10 +1646,37 @@ function packCounterStripes(
         index += 2;
         continue;
       }
+      if (compact === undefined && canRewritePackedRowFloorDisplay(left, dot, right)) {
+        rewritten.push({ kind: "source", name: plan.packed, line: left.line });
+        rewritten.push(dot!);
+        rewritten.push(rewriteDisplayItem(right!));
+        index += 2;
+        continue;
+      }
       rewritten.push(rewriteDisplayItem(left!));
     }
     return rewritten;
   };
+
+  function canRewritePackedRowFloorDisplay(
+    left: DisplayItemAst | undefined,
+    dot: DisplayItemAst | undefined,
+    right: DisplayItemAst | undefined,
+  ): left is Extract<DisplayItemAst, { kind: "source" }> {
+    if (
+      left?.kind !== "source" ||
+      left.expr !== undefined ||
+      left.width !== undefined ||
+      dot?.kind !== "literal" ||
+      dot.text !== "." ||
+      right?.kind !== "source" ||
+      right.expr === undefined ||
+      right.width !== undefined
+    ) {
+      return false;
+    }
+    return byName.get(left.name)?.kind === "major";
+  }
 
   function rewriteDisplayItem(item: DisplayItemAst): DisplayItemAst {
     if (item.kind !== "source") return item;
@@ -1629,22 +1727,14 @@ function packCounterStripes(
       case "if":
         return {
           ...statement,
-          condition: {
-            ...statement.condition,
-            left: rewriteExpr(statement.condition.left),
-            right: rewriteExpr(statement.condition.right),
-          },
+          condition: rewriteCondition(statement.condition),
           thenBody: rewriteStatements(statement.thenBody),
           ...(statement.elseBody === undefined ? {} : { elseBody: rewriteStatements(statement.elseBody) }),
         };
       case "while":
         return {
           ...statement,
-          condition: {
-            ...statement.condition,
-            left: rewriteExpr(statement.condition.left),
-            right: rewriteExpr(statement.condition.right),
-          },
+          condition: rewriteCondition(statement.condition),
           body: rewriteStatements(statement.body),
         };
       case "loop":
@@ -1722,7 +1812,7 @@ function selectPackedCounterStripePlan(
         field.min >= 0 &&
         field.max <= 9 &&
         field.initialStack === undefined &&
-        !displaySources.has(field.name)
+        (!displaySources.has(field.name) || fieldUsedAsPackedRowFloorDisplay(ast, field.name))
       );
     for (let leftIndex = 0; leftIndex < candidates.length; leftIndex += 1) {
       for (let rightIndex = leftIndex + 1; rightIndex < candidates.length; rightIndex += 1) {
@@ -1747,6 +1837,30 @@ function selectPackedCounterStripePlan(
     }
   }
   return undefined;
+}
+
+function fieldUsedAsPackedRowFloorDisplay(ast: ProgramAst, name: string): boolean {
+  return ast.displays.some((display) => {
+    for (let index = 0; index < display.items.length - 2; index += 1) {
+      const left = display.items[index];
+      const dot = display.items[index + 1];
+      const right = display.items[index + 2];
+      if (
+        left?.kind === "source" &&
+        left.expr === undefined &&
+        left.width === undefined &&
+        left.name === name &&
+        dot?.kind === "literal" &&
+        dot.text === "." &&
+        right?.kind === "source" &&
+        right.expr !== undefined &&
+        right.width === undefined
+      ) {
+        return true;
+      }
+    }
+    return false;
+  });
 }
 
 function selectPackedCounterDisplayStripePlan(ast: ProgramAst): PackedCounterStripePlan | undefined {
@@ -1945,7 +2059,11 @@ function freshPackedCounterName(ast: ProgramAst): string {
   }
 }
 
-function materializeDisplayExpressions(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+function materializeDisplayExpressions(
+  ast: ProgramAst,
+  optimizations: AppliedOptimization[],
+  inlineFloorPackedRowExpressions: boolean,
+): void {
   let materialized = 0;
   const plans = new Map<string, StatementAst[]>();
 
@@ -1953,6 +2071,7 @@ function materializeDisplayExpressions(ast: ProgramAst, optimizations: AppliedOp
     const assignments: StatementAst[] = [];
     const items = display.items.map((item, index): DisplayItemAst => {
       if (item.kind !== "source" || item.expr === undefined) return item;
+      if (inlineFloorPackedRowExpressions && canInlineFloorPackedRowDisplayExpression(ast, display, index)) return item;
       const target = `${DISPLAY_EXPR_PREFIX}${display.name}_${index}`;
       assignments.push({
         kind: "assign",
@@ -2022,6 +2141,33 @@ function materializeDisplayExpressions(ast: ProgramAst, optimizations: AppliedOp
     name: "display-expression-materialization",
     detail: `Materialized ${materialized} display expression field${materialized === 1 ? "" : "s"} before show().`,
   });
+}
+
+function canInlineFloorPackedRowDisplayExpression(
+  ast: ProgramAst,
+  display: ProgramAst["displays"][number],
+  index: number,
+): boolean {
+  const [floor, separator, row] = display.items;
+  if (
+    index !== 2 ||
+    display.items.length !== 3 ||
+    floor?.kind !== "source" ||
+    floor.expr !== undefined ||
+    separator?.kind !== "literal" ||
+    separator.text !== "." ||
+    row?.kind !== "source" ||
+    row.expr === undefined ||
+    row.width !== undefined
+  ) {
+    return false;
+  }
+  const floorState = findStateFieldInAst(ast, floor.name);
+  if (floorState === undefined) return false;
+  const floorMin = floorState.min ?? 0;
+  const floorMax = floorState.max ?? floorMin;
+  const floorWidth = floor.width ?? Math.max(1, String(Math.trunc(Math.max(Math.abs(floorMin), Math.abs(floorMax)))).length);
+  return floorWidth === 1 && floorMin >= 0 && floorMax <= 9;
 }
 
 function elideXParamReturnStateFields(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
@@ -10078,7 +10224,7 @@ const optimizerCapabilities: Array<{
     category: "display",
     source: "mk61-delta",
     requires: ["x2-register", "display-bytes"],
-    activeWhen: ["x2-display-byte-scheduling", "display-byte-layout"],
+    activeWhen: ["x2-display-byte-scheduling", "display-byte-layout", "floor-packed-row-expression-display"],
     detail: "Display/data candidate for scheduling X2, ВП, '.', sign digits, and display bytes without extra storage.",
   },
   {
@@ -10523,7 +10669,8 @@ function buildMachineFeaturesUsed(
   }
   if (optimizations.some((optimization) =>
     optimization.name === "x2-display-byte-scheduling" ||
-    optimization.name === "display-byte-x2-lowering"
+    optimization.name === "display-byte-x2-lowering" ||
+    optimization.name === "floor-packed-row-expression-display"
   )) {
     add("x2-register", "Optimizer scheduled hidden X2 values across display-byte boundaries.", "optimizer");
   }

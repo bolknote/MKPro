@@ -1013,6 +1013,15 @@ The pipeline currently contains:
   fractional `R0` indirect access when liveness proves `R0` is dead afterward.
 - **vp-x2-peephole** — drops a `К {x}` immediately after a proved display
   `ВП`/X2 boundary when `ВП` already supplies the fractional transform.
+- **packed-counter-stripes** — packs compatible one-digit counters into decimal
+  stripes of one hidden register. For floor/row displays, the packed register
+  may supply the visible leading floor digit directly, but the variant is kept
+  speculative because repeated extraction can cost more than the freed register.
+- **inline-floor-packed-row-expression** — speculative lowering for
+  `show(floor, ".", packed_expr)`: computes the packed row directly and uses
+  the X2/`ВП` splice instead of allocating a hidden display-expression
+  register. It is adopted only when the freed register wins back the longer
+  stack sequence.
 - **cse-display-block** — coalesces structurally identical pure recall/ALU
   blocks that terminate with `В/О`, redirecting duplicates through a single
   shared exit.

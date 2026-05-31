@@ -26,6 +26,7 @@ import {
   signedFirstSpliceDisplayLiteralProgram,
   zeroDigitTailDisplayProgram,
 } from "../lowering-helpers.ts";
+import { compileExpression } from "./expr.ts";
 
 export function compileShowSequenceRead(ctx: LoweringCtx, 
     firstShow: Extract<StatementAst, { kind: "show" }>,
@@ -110,8 +111,8 @@ export function compileFloorPackedRowDisplay(ctx: LoweringCtx, display: ProgramA
     }
 
     const floorState = ctx.findStateField(floor.name);
-    const rowState = ctx.findStateField(row.name);
-    const rowIsPacked = rowState?.type === "packed" || row.name.startsWith(DISPLAY_EXPR_PREFIX);
+    const rowState = row.expr === undefined ? ctx.findStateField(row.name) : undefined;
+    const rowIsPacked = rowState?.type === "packed" || row.name.startsWith(DISPLAY_EXPR_PREFIX) || row.expr !== undefined;
     const floorMin = floorState?.min ?? 0;
     const floorMax = floorState?.max ?? floorMin;
     const floorWidth = floor.width ?? Math.max(1, String(Math.trunc(Math.max(Math.abs(floorMin), Math.abs(floorMax)))).length);
@@ -126,9 +127,22 @@ export function compileFloorPackedRowDisplay(ctx: LoweringCtx, display: ProgramA
       return false;
     }
 
-    ctx.emitRecall(floor.name, `display ${display.name} floor`, line);
-    ctx.emitRecall(row.name, `display ${display.name} packed row`, line);
-    ctx.emitOp(0x14, "<->", "display packed row floor merge", line);
+    if (row.expr !== undefined) {
+      compileExpression(ctx, row.expr);
+      ctx.emitRecall(floor.name, `display ${display.name} floor`, line);
+      ctx.emitOp(0x14, "<->", "display packed row expression merge", line);
+      ctx.emitOp(0x0e, "В↑", "display packed row expression copy", line);
+      ctx.emitOp(0x25, "F reverse", "display packed row expression rotate", line);
+      ctx.emitOp(0x14, "<->", "display packed row floor restore", line);
+      ctx.optimizations.push({
+        name: "floor-packed-row-expression-display",
+        detail: `Computed packed row expression inline for screen ${display.name} and spliced the one-digit floor through X2.`,
+      });
+    } else {
+      ctx.emitRecall(floor.name, `display ${display.name} floor`, line);
+      ctx.emitRecall(row.name, `display ${display.name} packed row`, line);
+      ctx.emitOp(0x14, "<->", "display packed row floor merge", line);
+    }
     ctx.emitOp(0x25, "F reverse", "display packed row preserve", line);
     ctx.emitOp(0x0c, "ВП", "display packed row restore", line);
     ctx.emitOp(0x50, "С/П", `show ${display.name}`, line);

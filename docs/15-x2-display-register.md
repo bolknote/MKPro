@@ -123,6 +123,9 @@ user-facing numeric interface unless deliberately tested.
 
 - Use `.` when you need to recover a recent input without moving the stack.
 - Use `ВП` tricks when input digits themselves encode multiple decisions.
+- Let the optimizer choose inline packed-row display expressions; the correct
+  X2 splice can be larger than materializing the row unless freeing that
+  register enables another saving.
 - Avoid X2 tricks across subroutine boundaries unless you know whether `В/О`
   will sync X2.
 - Treat X2 as a one-value cache with strict invalidation rules, not as a normal

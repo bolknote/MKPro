@@ -2647,7 +2647,7 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-mk61.m
    46 |  02  | 2                       |
    47 |  00  | 0                       |
    48 |  0B  | /-/                     | negative number
-   49 |  50  | С/П                     | show __inline_show_29_1
+   49 |  50  | С/П                     | pause
    50 |  D4  | К П->X 4                | coord_list fused total
    51 |  58  | F L2                    | coord_list fused loop
    52 |  14  | 14                      | coord_list fused loop
@@ -2744,9 +2744,9 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: monatkodenis_fox_hunt_mk61; span=92, entries=92, gaps=none, compiled=65, delta=-27, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=6, considered=0, candidates=47, planned=0
+Optimizer rules: automatic=yes; active=7, considered=0, candidates=46, planned=0
 Budget: official=65, extra=0, physical=65
-Intent IR: lowered=yes, v2=yes; intent=41, effects=65, cells=65
+Intent IR: lowered=yes, v2=yes; intent=40, effects=65, cells=65
 
 Preloads:
   bearing -> R4: 0 (outside program cells)
@@ -2791,11 +2791,10 @@ Labels:
   __coord_list_fused_next_4: 51
 
 Optimizations:
+  - expression-constant-folder: Folded 1 constant expression node(s) before code generation.
   - intent-domain-lowering: Lowered 3 state fields and 2 rules through the generic intent pipeline.
   - auto-preload-initial-state: Moved initial state into setup/preload values so official program cells stay focused on turn logic.
   - coord-list-scaled-read: Read cell directly as y.x decimal coordinates at line 18.
-  - screen-decimal-literal-lowering: Lowered screen __inline_show_29_1 as an ordinary decimal display literal.
-  - screen-video-literal-lowering: Lowered screen __inline_show_29_1 as a literal calculator video string.
   - single-use-rule-inline: Inlined single-use rule found_fox at line 21.
   - indirect-incdec-counter: Incremented bearing by using К П->X 4's pre-increment side effect at line 20.
   - coord-list-scaled-fused-hit-line-count: Fused coord_list membership and line_count through scaled decimal coordinates at line 20.

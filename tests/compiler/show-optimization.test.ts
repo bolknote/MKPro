@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createRequire } from "node:module";
 import { compileMKPro } from "../../src/core/index.ts";
+import { compileLoweringVariantForTest } from "../../src/core/compiler.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -193,6 +194,73 @@ program BareDecimalLiteralFields {
 `)).toBe("123231,");
   });
 
+  it("lowers quoted canonical numeric screens through the same path as numeric shows", () => {
+    const quoted = compileOk(`
+program QuotedIntegerScreen {
+  loop {
+    show("-20")
+  }
+}
+`);
+    const numeric = compileOk(`
+program NumericIntegerScreen {
+  loop {
+    show(-20)
+  }
+}
+`);
+    const leadingZero = compileOk(`
+program LeadingZeroIntegerScreen {
+  loop {
+    show("020")
+  }
+}
+`);
+    const plain = compileOk(`
+program PlainIntegerScreen {
+  loop {
+    show(20)
+  }
+}
+`);
+    const canonicalDecimal = compileOk(`
+program CanonicalDecimalScreen {
+  loop {
+    show("1.2")
+  }
+}
+`);
+    const decimalNumeric = compileOk(`
+program DecimalNumericScreen {
+  loop {
+    show(1.2)
+  }
+}
+`);
+    const spaced = compileOk(`
+program SpacedScreen {
+  loop {
+    show(" 20")
+  }
+}
+`);
+
+    expect(quoted.steps.map((step) => step.opcode)).toEqual(numeric.steps.map((step) => step.opcode));
+    expect(leadingZero.steps.map((step) => step.opcode)).not.toEqual(plain.steps.map((step) => step.opcode));
+    expect(canonicalDecimal.steps.map((step) => step.opcode)).toEqual(decimalNumeric.steps.map((step) => step.opcode));
+    expect(hasOptimization(quoted, "screen-video-literal-lowering")).toBe(false);
+    expect(hasOptimization(leadingZero, "screen-video-literal-lowering")).toBe(true);
+    expect(hasOptimization(canonicalDecimal, "screen-video-literal-lowering")).toBe(false);
+    expect(hasOptimization(spaced, "screen-video-literal-lowering")).toBe(true);
+    expect(runCompiledDisplay(`
+program QuotedIntegerDisplay {
+  loop {
+    show("-20")
+  }
+}
+`)).toBe("-20,");
+  });
+
   it("uses preloaded decimal scale constants for packed display shifts", () => {
     const result = compileOk(`
 program PreloadedDisplayScales {
@@ -300,6 +368,32 @@ program InlineFloorPackedRow {
     expect(runCompiledDisplay(source)).toBe("2,-------");
   });
 
+  it("can force an inline packed row expression without a hidden display register", () => {
+    const source = `
+program InlineFloorPackedRow {
+  state {
+    floor: counter 1..4 = 2
+  }
+
+  loop {
+    show(floor, ".", bit_not(5 / 9))
+  }
+}
+`;
+    const result = compileLoweringVariantForTest(
+      source,
+      { analysis: true, budget: 999 },
+      { inlineFloorPackedRowExpressions: true },
+    );
+
+    expect(hasOptimization(result, "display-expression-materialization")).toBe(false);
+    expect(hasOptimization(result, "floor-packed-row-expression-display")).toBe(true);
+    expect(result.steps.map((step) => step.hex)).toEqual([
+      "05", "0E", "09", "13", "3A", "60", "14", "0E",
+      "25", "14", "25", "0C", "50", "51", "00",
+    ]);
+  });
+
   it("packs literal-separated small counters into one decimal display register", () => {
     const source = `
 program DotCounterDisplay {
@@ -327,6 +421,36 @@ program DotCounterDisplay {
     expect(result.report.registers).not.toHaveProperty("floor");
     expect(result.report.registers).not.toHaveProperty("room");
     expect(runCompiledDisplay(source)).toBe("8,1");
+  });
+
+  it("can force packed counter stripes under a floor-packed row display", () => {
+    const source = `
+program PackedFloorRowCounters {
+  state {
+    floor: counter 1..9 = 9
+    room: counter 0..6 = 0
+    row: packed = bit_not(5 / 9)
+  }
+
+  loop {
+    if room < 6 {
+      room++
+    }
+    show(floor, ".", bit_not(row + 2 / pow10(room + 1)))
+  }
+}
+`;
+    const result = compileLoweringVariantForTest(
+      source,
+      { analysis: true, budget: 999 },
+      { packCounterStripes: true },
+    );
+
+    expect(hasOptimization(result, "packed-counter-stripes")).toBe(true);
+    expect(hasOptimization(result, "floor-packed-row-display")).toBe(true);
+    expect(result.report.registers).toHaveProperty("__packed_counter_0");
+    expect(result.report.registers).not.toHaveProperty("floor");
+    expect(result.report.registers).not.toHaveProperty("room");
   });
 
   it("renders explicit literal spaces between display fields", () => {

@@ -745,10 +745,19 @@ function validateAssignmentTargetText(target: string, line: number): void {
 
 function parseV2ShowCall(argsText: string, line: number): V2StatementAst {
   const trimmed = argsText.trim();
-  if (trimmed.length === 0 || !isNumericLiteralText(trimmed)) {
+  if (trimmed.length === 0) {
     return { kind: "v2_show", items: parseDisplayItemList(trimmed, line), line };
   }
-  return { kind: "v2_show", target: trimmed, line };
+  if (isNumericLiteralText(trimmed)) {
+    return { kind: "v2_show", target: trimmed, line };
+  }
+  const items = parseDisplayItemList(trimmed, line);
+  const literal = displayLiteralText(items);
+  const numericLiteral = literal === undefined ? undefined : canonicalNumericDisplayLiteralText(literal);
+  if (numericLiteral !== undefined) {
+    return { kind: "v2_show", target: numericLiteral, line };
+  }
+  return { kind: "v2_show", items, line };
 }
 
 function parseV2Predicate(text: string, line: number): V2PredicateAst {
@@ -3858,8 +3867,9 @@ function substituteV2ShowStatement(
   });
   if (!changed) return statement;
   const literal = displayLiteralText(items);
-  if (literal !== undefined && isNumericLiteralText(literal)) {
-    return { kind: "v2_show", target: literal, line: statement.line };
+  const numericLiteral = literal === undefined ? undefined : canonicalNumericDisplayLiteralText(literal);
+  if (numericLiteral !== undefined) {
+    return { kind: "v2_show", target: numericLiteral, line: statement.line };
   }
   const substituted: V2ShowStatementAst = { ...statement, items };
   delete substituted.inlineName;
@@ -3869,6 +3879,15 @@ function substituteV2ShowStatement(
 function displayLiteralText(items: readonly DisplayItemAst[]): string | undefined {
   if (items.some((item) => item.kind !== "literal")) return undefined;
   return items.map((item) => item.kind === "literal" ? item.text : "").join("");
+}
+
+function canonicalNumericDisplayLiteralText(text: string): string | undefined {
+  if (text !== text.trim()) return undefined;
+  if (!isNumericLiteralText(text)) return undefined;
+  const value = Number(text);
+  if (!Number.isFinite(value)) return undefined;
+  const canonical = String(value);
+  return canonical === text ? canonical : undefined;
 }
 
 function substituteV2Predicate(predicate: V2PredicateAst, replacements: Map<string, string>): V2PredicateAst {
