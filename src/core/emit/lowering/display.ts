@@ -12,6 +12,7 @@ import type {
 } from "../lowering-helpers.ts";
 import {
   COORD_LIST_DX,
+  DISPLAY_EXPR_PREFIX,
   buildDiagnostic,
   dashedCoordReportDisplayTemplate,
   decimalDisplayLiteralNumber,
@@ -110,12 +111,13 @@ export function compileFloorPackedRowDisplay(ctx: LoweringCtx, display: ProgramA
 
     const floorState = ctx.findStateField(floor.name);
     const rowState = ctx.findStateField(row.name);
+    const rowIsPacked = rowState?.type === "packed" || row.name.startsWith(DISPLAY_EXPR_PREFIX);
     const floorMin = floorState?.min ?? 0;
     const floorMax = floorState?.max ?? floorMin;
     const floorWidth = floor.width ?? Math.max(1, String(Math.trunc(Math.max(Math.abs(floorMin), Math.abs(floorMax)))).length);
     if (
       floorState === undefined ||
-      rowState?.type !== "packed" ||
+      !rowIsPacked ||
       floorWidth !== 1 ||
       floorMin < 0 ||
       floorMax > 9 ||

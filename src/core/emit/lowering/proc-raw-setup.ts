@@ -34,6 +34,7 @@ import {
   COORD_LIST_DX,
   DASHED_COORD_REPORT_MASK,
   NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE,
+  PACKED_COUNTER_PREFIX,
   buildDiagnostic,
   conditionCompileCost,
   conditionToText,
@@ -702,6 +703,7 @@ export function compileIntFracSharedTail(ctx: LoweringCtx,
 
 export function compileUnitDecrement(ctx: LoweringCtx, statement: Extract<StatementAst, { kind: "assign" }>): boolean {
     if (!isUnitDecrementExpression(statement.target, statement.expr)) return false;
+    if (statement.target.startsWith(PACKED_COUNTER_PREFIX)) return false;
     const register = ctx.allocation.registers[statement.target];
     if (register === undefined) return false;
     const opcode = flOpcode(register);

@@ -48,7 +48,7 @@ const PENDING_BASELINE: Record<string, number> = {
   "rambo-iii": 201,
   teleport: 236,
   "tic-tac-toe-4x4": 264,
-  "treasure-hunter-2": 135,
+  "treasure-hunter-2": 169,
 };
 
 const PENDING_COMPILE_ERRORS: Record<string, RegExp> = {};

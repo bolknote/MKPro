@@ -26,7 +26,7 @@ Current `--analysis` sizes, measured against the local reference listings:
 | `rambo-iii.mkpro` | 201 | 105 | grouped front/robots storage now works; event dispatch and battle-flow branches are the remaining large blocks |
 | `teleport.mkpro` | 236 | 105 | packed row display, station masks, and vault/guard flow |
 | `tic-tac-toe-4x4.mkpro` | 264 | 105 | 4x4 line-count state representation |
-| `treasure-hunter-2.mkpro` | 135 | 105 | floor-plan display/state lowerer |
+| `treasure-hunter-2.mkpro` | 169 | 105 | per-floor packed map storage and remaining flow lowerers |
 
 Prototype notes:
 

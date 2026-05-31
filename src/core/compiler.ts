@@ -23,11 +23,14 @@ import {
   COORD_LIST_DX,
   COORD_LIST_POINTER,
   DISPATCH_SCRATCH_PREFIX,
+  DISPLAY_EXPR_PREFIX,
   IF_SELECTOR_SCRATCH_PREFIX,
   NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE,
+  PACKED_COUNTER_PREFIX,
   SPATIAL_COUNT_SCRATCH_PREFIX,
   SPATIAL_HIT_SCRATCH_PREFIX,
   TICTACTOE_MASK_SCRATCH_PREFIX,
+  addExpressions,
   bitMaskExpression,
   bitMaskScratchName,
   boardForCellMask,
@@ -49,6 +52,7 @@ import {
   dispatchUsesNumericResidualChain,
   displayLiteralCells,
   displayLiteralProgram,
+  divideExpressions,
   estimateConditionCost,
   estimateExpressionCost,
   estimateExpressionCostForCondition,
@@ -66,6 +70,7 @@ import {
   firstSpliceDisplayLiteralProgram,
   flOpcode,
   ifSelectorScratchName,
+  intExpression,
   invertCondition,
   isBitClearAssignment,
   isIdentityAssignment,
@@ -85,6 +90,8 @@ import {
   matchNegativeZeroThresholdCondition,
   matchXParamReturnDecay,
   matchSingleBitMaskOpAssignment,
+  matchTargetMinusDelta,
+  matchTargetPlusDelta,
   nearAnyHelperKey,
   negatedNumberLiteral,
   normalizeConstantLiteral,
@@ -107,6 +114,9 @@ import {
   spatialHitScratchName,
   statementEquals,
   statementListsEqual,
+  subtractExpressions,
+  multiplyExpressions,
+  fracExpression,
   ticTacToeExpressionMacro,
   ticTacToeMaskScratchName,
   zeroDigitTailDisplayProgram,
@@ -162,6 +172,7 @@ import type {
   RegisterName,
   ResolvedStep,
   SetupProgramReport,
+  StateAst,
   StateFieldAst,
   StateFieldType,
   StatementAst,
@@ -211,7 +222,6 @@ const REGISTER_ORDER: RegisterName[] = [
 ];
 
 const SHARED_BIT_MASK_SCRATCH = "__bit_mask_shared";
-const DISPLAY_EXPR_PREFIX = "__display_expr_";
 const DISPLAY_TEMPLATE_VALUE_PREFIX = "__display_value_";
 const DISPLAY_TEMPLATE_LOOP_PREFIX = "__display_loop_";
 const DISPLAY_TEMPLATE_MASK_PREFIX = "__display_mask_";
@@ -310,6 +320,10 @@ interface LoweringOptions {
   // delta. Speculative because sharing a short pair can add call overhead or
   // perturb register allocation; adopted only when the whole program shrinks.
   synthesizeParametricSiblings?: boolean;
+  // Store compatible small counters as decimal stripes inside one hidden packed
+  // register. Speculative: cheap unit updates can win a register, but reads need
+  // extraction arithmetic and are adopted only when the whole program shrinks.
+  packCounterStripes?: boolean;
 }
 
 
@@ -501,6 +515,11 @@ export function compileMKPro(
     { synthesizeParametricSiblings: true },
     "parametric-sibling-proc",
     "Synthesized a shared one-parameter helper for sibling dispatch procedure arms",
+  );
+  tryCandidate(
+    { packCounterStripes: true },
+    "packed-counter-stripes",
+    "Packed compatible small counters into one hidden decimal-striped register",
   );
 
   const selectBest = (): { best: CompileResult; selected: (typeof candidates)[number] | undefined } => {
@@ -1287,6 +1306,10 @@ function compileMKProOnce(
   const candidates: CandidateReport[] = [];
 
   resolveConstantIndexedState(ast, optimizations);
+  packCounterStripes(ast, optimizations, false);
+  if (loweringOptions.packCounterStripes === true) {
+    packCounterStripes(ast, optimizations, true);
+  }
   materializeDisplayExpressions(ast, optimizations);
   elideXParamReturnStateFields(ast, optimizations);
   const foldedConstants = foldProgramConstants(ast);
@@ -1473,6 +1496,453 @@ function visiblePublicRegisters(
     }
   }
   return result;
+}
+
+interface PackedCounterStripe {
+  readonly name: string;
+  readonly scale: number;
+  readonly kind: "major" | "fractional";
+}
+
+interface PackedCounterStripePlan {
+  readonly state: StateAst;
+  readonly insertIndex: number;
+  readonly packed: string;
+  readonly stripes: PackedCounterStripe[];
+  readonly initial: ExpressionAst;
+  readonly compactDecimalDisplay?: {
+    readonly left: string;
+    readonly right: string;
+  };
+}
+
+function packCounterStripes(
+  ast: ProgramAst,
+  optimizations: AppliedOptimization[],
+  includeStoragePairs: boolean,
+): void {
+  const plan = selectPackedCounterStripePlan(ast, includeStoragePairs);
+  if (plan === undefined) return;
+  const byName = new Map(plan.stripes.map((stripe) => [stripe.name, stripe]));
+  const packedExpr = (): ExpressionAst => ({ kind: "identifier", name: plan.packed });
+
+  const extract = (stripe: PackedCounterStripe): ExpressionAst => {
+    if (stripe.kind === "major") {
+      return intExpression(divideExpressions(packedExpr(), numberExpression(stripe.scale)));
+    }
+    return intExpression(multiplyExpressions(fracExpression(packedExpr()), numberExpression(1 / stripe.scale)));
+  };
+
+  const rewriteExpr = (expr: ExpressionAst): ExpressionAst => {
+    switch (expr.kind) {
+      case "identifier": {
+        const stripe = byName.get(expr.name);
+        return stripe === undefined ? expr : extract(stripe);
+      }
+      case "unary":
+        return { ...expr, expr: rewriteExpr(expr.expr) };
+      case "binary":
+        return { ...expr, left: rewriteExpr(expr.left), right: rewriteExpr(expr.right) };
+      case "call":
+        return { ...expr, args: expr.args.map(rewriteExpr) };
+      case "indexed":
+        return { ...expr, index: rewriteExpr(expr.index) };
+      case "number":
+      case "string":
+        return expr;
+    }
+  };
+
+  const rewriteDisplayItems = (items: DisplayItemAst[]): DisplayItemAst[] => {
+    const compact = plan.compactDecimalDisplay;
+    if (compact === undefined) return items.map(rewriteDisplayItem);
+    const rewritten: DisplayItemAst[] = [];
+    for (let index = 0; index < items.length; index += 1) {
+      const left = items[index];
+      const dot = items[index + 1];
+      const right = items[index + 2];
+      if (
+        left?.kind === "source" &&
+        left.expr === undefined &&
+        left.name === compact.left &&
+        dot?.kind === "literal" &&
+        dot.text === "." &&
+        right?.kind === "source" &&
+        right.expr === undefined &&
+        right.name === compact.right
+      ) {
+        rewritten.push({ kind: "source", name: plan.packed, line: left.line });
+        index += 2;
+        continue;
+      }
+      rewritten.push(rewriteDisplayItem(left!));
+    }
+    return rewritten;
+  };
+
+  function rewriteDisplayItem(item: DisplayItemAst): DisplayItemAst {
+    if (item.kind !== "source") return item;
+    const expr = item.expr === undefined
+      ? byName.has(item.name) ? extract(byName.get(item.name)!) : undefined
+      : rewriteExpr(item.expr);
+    if (expr === undefined || (item.expr !== undefined && expressionEquals(expr, item.expr))) return item;
+    const rewritten: DisplayItemAst = {
+      kind: "source",
+      name: expressionToIntentText(expr),
+      expr,
+      line: item.line,
+    };
+    if (item.width !== undefined) rewritten.width = item.width;
+    if (item.pad !== undefined) rewritten.pad = item.pad;
+    return rewritten;
+  }
+
+  const packedUpdateExpr = (stripe: PackedCounterStripe, delta: number): ExpressionAst => {
+    const scaled = delta * stripe.scale;
+    if (scaled === 0) return packedExpr();
+    return scaled > 0
+      ? addExpressions(packedExpr(), numberExpression(scaled))
+      : subtractExpressions(packedExpr(), numberExpression(Math.abs(scaled)));
+  };
+
+  const rewriteStatements = (statements: StatementAst[]): StatementAst[] => statements.map((statement): StatementAst => {
+    switch (statement.kind) {
+      case "assign": {
+        const stripe = byName.get(statement.target);
+        if (stripe !== undefined) {
+          const delta = numericSelfUpdateDelta(statement.target, statement.expr);
+          return {
+            kind: "assign",
+            target: plan.packed,
+            expr: packedUpdateExpr(stripe, delta ?? 0),
+            line: statement.line,
+          };
+        }
+        return { ...statement, expr: rewriteExpr(statement.expr) };
+      }
+      case "indexed_assign":
+        return {
+          ...statement,
+          target: { ...statement.target, index: rewriteExpr(statement.target.index) },
+          expr: rewriteExpr(statement.expr),
+        };
+      case "if":
+        return {
+          ...statement,
+          condition: {
+            ...statement.condition,
+            left: rewriteExpr(statement.condition.left),
+            right: rewriteExpr(statement.condition.right),
+          },
+          thenBody: rewriteStatements(statement.thenBody),
+          ...(statement.elseBody === undefined ? {} : { elseBody: rewriteStatements(statement.elseBody) }),
+        };
+      case "while":
+        return {
+          ...statement,
+          condition: {
+            ...statement.condition,
+            left: rewriteExpr(statement.condition.left),
+            right: rewriteExpr(statement.condition.right),
+          },
+          body: rewriteStatements(statement.body),
+        };
+      case "loop":
+        return { ...statement, body: rewriteStatements(statement.body) };
+      case "dispatch":
+        return {
+          ...statement,
+          expr: rewriteExpr(statement.expr),
+          cases: statement.cases.map((dispatchCase) => ({
+            ...dispatchCase,
+            value: rewriteExpr(dispatchCase.value),
+            body: rewriteStatements(dispatchCase.body),
+          })),
+          ...(statement.defaultBody === undefined ? {} : { defaultBody: rewriteStatements(statement.defaultBody) }),
+        };
+      case "pause":
+      case "halt":
+      case "return_value":
+        return { ...statement, expr: rewriteExpr(statement.expr) };
+      case "core":
+        return statement.inputs === undefined
+          ? statement
+          : {
+            ...statement,
+            inputs: statement.inputs.map((input) => ({ ...input, expr: rewriteExpr(input.expr) })),
+          };
+      case "show":
+      case "input":
+      case "call":
+      case "decimal_series":
+        return statement;
+    }
+  });
+
+  const packedField: StateFieldAst = {
+    name: plan.packed,
+    type: "packed",
+    initial: plan.initial,
+    line: plan.state.fields[plan.insertIndex]?.line ?? plan.state.line,
+  };
+  const removed = new Set(plan.stripes.map((stripe) => stripe.name));
+  plan.state.fields.splice(plan.insertIndex, 0, packedField);
+  plan.state.fields = plan.state.fields.filter((field) => !removed.has(field.name));
+  for (const display of ast.displays) {
+    display.items = rewriteDisplayItems(display.items);
+    display.sources = sourceNamesForDisplayItems(display.items);
+  }
+  for (const entry of ast.entries) entry.body = rewriteStatements(entry.body);
+  for (const proc of ast.procs) proc.body = rewriteStatements(proc.body);
+
+  optimizations.push({
+    name: "packed-counter-stripes",
+    detail: `Packed counters ${plan.stripes.map((stripe) => stripe.name).join(", ")} into ${plan.packed}.`,
+  });
+}
+
+function selectPackedCounterStripePlan(
+  ast: ProgramAst,
+  includeStoragePairs: boolean,
+): PackedCounterStripePlan | undefined {
+  const displayPlan = selectPackedCounterDisplayStripePlan(ast);
+  if (displayPlan !== undefined) return displayPlan;
+  if (!includeStoragePairs) return undefined;
+
+  const displaySources = new Set(ast.displays.flatMap((display) => display.sources));
+  for (const state of ast.states) {
+    const candidates = state.fields
+      .map((field, index) => ({ field, index }))
+      .filter(({ field }) =>
+        field.type === "range" &&
+        field.min !== undefined &&
+        field.max !== undefined &&
+        Number.isInteger(field.min) &&
+        Number.isInteger(field.max) &&
+        field.min >= 0 &&
+        field.max <= 9 &&
+        field.initialStack === undefined &&
+        !displaySources.has(field.name)
+      );
+    for (let leftIndex = 0; leftIndex < candidates.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < candidates.length; rightIndex += 1) {
+        const left = candidates[leftIndex]!;
+        const right = candidates[rightIndex]!;
+        const fields = [left.field, right.field];
+        if (!packedCounterStripeUsagesOk(ast, fields.map((field) => field.name))) continue;
+        const stripes: PackedCounterStripe[] = [
+          { name: left.field.name, scale: 10, kind: "major" },
+          { name: right.field.name, scale: 0.01, kind: "fractional" },
+        ];
+        const initial = packedCounterInitial(fields, stripes);
+        if (initial === undefined) continue;
+        return {
+          state,
+          insertIndex: Math.min(left.index, right.index),
+          packed: freshPackedCounterName(ast),
+          stripes,
+          initial,
+        };
+      }
+    }
+  }
+  return undefined;
+}
+
+function selectPackedCounterDisplayStripePlan(ast: ProgramAst): PackedCounterStripePlan | undefined {
+  const states = new Map<string, { state: StateAst; field: StateFieldAst; index: number }>();
+  for (const state of ast.states) {
+    for (let index = 0; index < state.fields.length; index += 1) {
+      const field = state.fields[index]!;
+      states.set(field.name, { state, field, index });
+    }
+  }
+  for (const display of ast.displays) {
+    for (let index = 0; index < display.items.length - 2; index += 1) {
+      const leftItem = display.items[index];
+      const dot = display.items[index + 1];
+      const rightItem = display.items[index + 2];
+      if (
+        leftItem?.kind !== "source" ||
+        leftItem.expr !== undefined ||
+        leftItem.width !== undefined ||
+        dot?.kind !== "literal" ||
+        dot.text !== "." ||
+        rightItem?.kind !== "source" ||
+        rightItem.expr !== undefined ||
+        rightItem.width !== undefined
+      ) {
+        continue;
+      }
+      const left = states.get(leftItem.name);
+      const right = states.get(rightItem.name);
+      if (
+        left === undefined ||
+        right === undefined ||
+        left.state !== right.state ||
+        !smallDisplayCounterField(left.field) ||
+        !smallDisplayCounterField(right.field)
+      ) {
+        continue;
+      }
+      const fields = [left.field, right.field];
+      if (!packedCounterStripeUsagesOk(ast, fields.map((field) => field.name))) continue;
+      const stripes: PackedCounterStripe[] = [
+        { name: left.field.name, scale: 1, kind: "major" },
+        { name: right.field.name, scale: 0.1, kind: "fractional" },
+      ];
+      const initial = packedCounterInitial(fields, stripes);
+      if (initial === undefined) continue;
+      return {
+        state: left.state,
+        insertIndex: Math.min(left.index, right.index),
+        packed: freshPackedCounterName(ast),
+        stripes,
+        initial,
+        compactDecimalDisplay: { left: left.field.name, right: right.field.name },
+      };
+    }
+  }
+  return undefined;
+}
+
+function smallDisplayCounterField(field: StateFieldAst): boolean {
+  return field.type === "range" &&
+    field.min !== undefined &&
+    field.max !== undefined &&
+    Number.isInteger(field.min) &&
+    Number.isInteger(field.max) &&
+    field.min >= 0 &&
+    field.max <= 9 &&
+    field.initialStack === undefined;
+}
+
+function packedCounterInitial(
+  fields: readonly StateFieldAst[],
+  stripes: readonly PackedCounterStripe[],
+): ExpressionAst | undefined {
+  const values = fields.map((field) => numericLiteralValue(field.initial ?? numberExpression(0)));
+  if (values.some((value) => value === undefined)) return undefined;
+  let initial = 0;
+  for (let index = 0; index < values.length; index += 1) {
+    initial += values[index]! * stripes[index]!.scale;
+  }
+  return numberExpression(initial);
+}
+
+function packedCounterStripeUsagesOk(ast: ProgramAst, names: readonly string[]): boolean {
+  const packed = new Set(names);
+  let ok = true;
+  const visitStatements = (statements: readonly StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "assign" && packed.has(statement.target)) {
+        if (numericSelfUpdateDelta(statement.target, statement.expr) === undefined) ok = false;
+      }
+      if (statement.kind === "input" && packed.has(statement.target)) ok = false;
+      if (statement.kind === "core" && statement.outputs?.some((output) => packed.has(output.target))) ok = false;
+      if (statement.kind === "loop") visitStatements(statement.body);
+      if (statement.kind === "while") visitStatements(statement.body);
+      if (statement.kind === "if") {
+        visitStatements(statement.thenBody);
+        if (statement.elseBody !== undefined) visitStatements(statement.elseBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visitStatements(dispatchCase.body);
+        if (statement.defaultBody !== undefined) visitStatements(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visitStatements(entry.body);
+  for (const proc of ast.procs) visitStatements(proc.body);
+  return ok;
+}
+
+function numericSelfUpdateDelta(target: string, expr: ExpressionAst): number | undefined {
+  const targetExpr: ExpressionAst = { kind: "identifier", name: target };
+  if (expressionEquals(expr, targetExpr)) return 0;
+  const plus = matchTargetPlusDelta(expr, target);
+  if (plus !== undefined) return numericLiteralValue(plus);
+  const minus = matchTargetMinusDelta(expr, target);
+  const value = minus === undefined ? undefined : numericLiteralValue(minus);
+  return value === undefined ? undefined : -value;
+}
+
+function freshPackedCounterName(ast: ProgramAst): string {
+  const used = new Set<string>();
+  const addExpr = (expr: ExpressionAst): void => {
+    if (expr.kind === "identifier") used.add(expr.name);
+    if (expr.kind === "indexed") {
+      used.add(expr.base);
+      addExpr(expr.index);
+    }
+    if (expr.kind === "unary") addExpr(expr.expr);
+    if (expr.kind === "binary") {
+      addExpr(expr.left);
+      addExpr(expr.right);
+    }
+    if (expr.kind === "call") {
+      used.add(expr.callee);
+      for (const arg of expr.args) addExpr(arg);
+    }
+  };
+  const addStatements = (statements: readonly StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "assign") {
+        used.add(statement.target);
+        addExpr(statement.expr);
+      }
+      if (statement.kind === "indexed_assign") {
+        used.add(statement.target.base);
+        addExpr(statement.target.index);
+        addExpr(statement.expr);
+      }
+      if (statement.kind === "input") used.add(statement.target);
+      if (statement.kind === "call") used.add(statement.block);
+      if (statement.kind === "pause" || statement.kind === "halt" || statement.kind === "return_value") addExpr(statement.expr);
+      if (statement.kind === "if" || statement.kind === "while") {
+        addExpr(statement.condition.left);
+        addExpr(statement.condition.right);
+      }
+      if (statement.kind === "if") {
+        addStatements(statement.thenBody);
+        if (statement.elseBody !== undefined) addStatements(statement.elseBody);
+      }
+      if (statement.kind === "while" || statement.kind === "loop") addStatements(statement.body);
+      if (statement.kind === "dispatch") {
+        addExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          addExpr(dispatchCase.value);
+          addStatements(dispatchCase.body);
+        }
+        if (statement.defaultBody !== undefined) addStatements(statement.defaultBody);
+      }
+    }
+  };
+  for (const state of ast.states) {
+    for (const field of state.fields) {
+      used.add(field.name);
+      if (field.initial !== undefined) addExpr(field.initial);
+    }
+  }
+  for (const display of ast.displays) {
+    used.add(display.name);
+    for (const item of display.items) {
+      if (item.kind === "source") {
+        used.add(item.name);
+        if (item.expr !== undefined) addExpr(item.expr);
+      }
+    }
+  }
+  for (const entry of ast.entries) addStatements(entry.body);
+  for (const proc of ast.procs) {
+    used.add(proc.name);
+    for (const param of proc.params ?? []) used.add(param);
+    addStatements(proc.body);
+  }
+  for (let index = 0; ; index += 1) {
+    const name = `${PACKED_COUNTER_PREFIX}${index}`;
+    if (!used.has(name)) return name;
+  }
 }
 
 function materializeDisplayExpressions(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
@@ -9815,8 +10285,10 @@ const optimizerCapabilities: Array<{
 
 function buildPreloadReport(ast: ProgramAst, allocation: RegisterAllocation): PreloadReport[] {
   const synthetic: PreloadReport[] = [];
+  const v2FieldNames = new Set<string>();
   if (ast.v2) {
     for (const field of ast.v2.state) {
+      v2FieldNames.add(field.name);
       const register = allocation.registers[field.name];
       if (!register) continue;
       const value = field.initial;
@@ -9824,6 +10296,25 @@ function buildPreloadReport(ast: ProgramAst, allocation: RegisterAllocation): Pr
       synthetic.push({
         register,
         value,
+        countsAgainstProgram: false,
+      });
+    }
+  }
+  if (ast.v2) {
+    for (const field of ast.states.flatMap((state) => state.fields)) {
+      if (
+        v2FieldNames.has(field.name) ||
+        !field.name.startsWith(PACKED_COUNTER_PREFIX) ||
+        field.initial === undefined ||
+        !isSetupLiteralExpression(field.initial)
+      ) {
+        continue;
+      }
+      const register = allocation.registers[field.name];
+      if (!register) continue;
+      synthetic.push({
+        register,
+        value: expressionToIntentText(field.initial),
         countsAgainstProgram: false,
       });
     }

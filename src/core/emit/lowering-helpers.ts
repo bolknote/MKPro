@@ -26,9 +26,13 @@ export const BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
 
 export const IF_SELECTOR_SCRATCH_PREFIX = "__if_selector_";
 
+export const DISPLAY_EXPR_PREFIX = "__display_expr_";
+
 export const SPATIAL_HIT_SCRATCH_PREFIX = "__spatial_hit_";
 
 export const SPATIAL_COUNT_SCRATCH_PREFIX = "__spatial_count_";
+
+export const PACKED_COUNTER_PREFIX = "__packed_counter_";
 
 export const COORD_LIST_ITEM_PREFIX = "__coord_list_";
 

@@ -281,6 +281,54 @@ program FloorPackedRow {
     expect(runCompiledDisplay(source)).toBe("2,-Е-8--L");
   });
 
+  it("splices a one-digit floor into a materialized packed row expression", () => {
+    const source = `
+program InlineFloorPackedRow {
+  state {
+    floor: counter 1..4 = 2
+  }
+
+  loop {
+    show(floor, ".", bit_not(5 / 9))
+  }
+}
+`;
+    const result = compileOk(source);
+
+    expect(hasOptimization(result, "display-expression-materialization")).toBe(true);
+    expect(hasOptimization(result, "floor-packed-row-display")).toBe(true);
+    expect(runCompiledDisplay(source)).toBe("2,-------");
+  });
+
+  it("packs literal-separated small counters into one decimal display register", () => {
+    const source = `
+program DotCounterDisplay {
+  state {
+    floor: counter 1..9 = 9
+    room: counter 0..6 = 0
+  }
+
+  loop {
+    if room == 0 {
+      room++
+    }
+    if floor == 9 {
+      floor--
+    }
+    show(floor, ".", room)
+  }
+}
+`;
+    const result = compileOk(source);
+
+    expect(hasOptimization(result, "packed-counter-stripes")).toBe(true);
+    expect(hasOptimization(result, "fl-unit-decrement")).toBe(false);
+    expect(result.report.registers).toHaveProperty("__packed_counter_0");
+    expect(result.report.registers).not.toHaveProperty("floor");
+    expect(result.report.registers).not.toHaveProperty("room");
+    expect(runCompiledDisplay(source)).toBe("8,1");
+  });
+
   it("renders explicit literal spaces between display fields", () => {
     const source = `
 program ExplicitSpaceDisplay {

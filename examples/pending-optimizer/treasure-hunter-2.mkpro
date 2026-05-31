@@ -5,10 +5,12 @@ reference anvarov_treasure_hunter_2
 
 program TreasureHunter2 {
   state {
-    // Position is shown as a compact floor/room view, while floor and room are
-    // kept separately so movement rules can name the original game's structure.
+    // The original main stop splices Rb into a packed, inverted seven-cell row:
+    // Пхb; FВx; 0; 0; ВП; С/П. Keep floor and room separately for the rules,
+    // but draw the visible screen from the packed row rather than diagnostics.
     pos: coord(cave) = 9
     floor_view: packed = 0
+    plan: packed = bit_and(8 + (int(random(9999999)) + 1) / pow10(7), 8.5555555)
     treasure: counter 0..99 = 0
 
     floor: counter 1..9 = 9
@@ -40,7 +42,7 @@ program TreasureHunter2 {
       inspect_cell()
     }
     else {
-      show(pos, floor_view, treasure)
+      draw()
       action = read()
 
       // The MK-61 prototype uses non-zero X plus the R/GRD/G angle switch for
@@ -51,7 +53,7 @@ program TreasureHunter2 {
         6 => move_right()
         8 => climb_or_descend()
         0 => punch_hole()
-        otherwise => show(pos, floor_view, treasure)
+        otherwise => draw()
       }
     }
   }
@@ -64,7 +66,7 @@ program TreasureHunter2 {
         escaped()
       }
       else {
-        show(pos, floor_view, treasure)
+        draw()
       }
     }
     else {
@@ -81,16 +83,16 @@ program TreasureHunter2 {
       inspect_cell()
     }
     else {
-      show(pos, floor_view, treasure)
+      draw()
     }
   }
 
   fn climb_or_descend() {
     if pos == dug_pos {
-      show(pos, floor_view, treasure)
+      draw()
     }
     else {
-      if floor_view == 3 {
+      if floor_view == 4 {
         if floor < 9 {
           floor++
           pos = move(pos, up)
@@ -98,7 +100,7 @@ program TreasureHunter2 {
           inspect_cell()
         }
         else {
-          show(pos, floor_view, treasure)
+          draw()
         }
       }
       else {
@@ -108,7 +110,7 @@ program TreasureHunter2 {
           descend()
         }
         else {
-          show(pos, floor_view, treasure)
+          draw()
         }
       }
     }
@@ -142,27 +144,31 @@ program TreasureHunter2 {
   }
 
   fn reveal_cell() {
-    // Tile numbers are semantic, not visual decoration: treasure, hole, ladder,
-    // or empty passage decide the next rule.
-    floor_view = cell_at(cave, room)
+    // Original floor rows are masked with 5555555 before КИНВ display:
+    // 0 is a hole, 1 is treasure, 4 is a ladder, and 5 is ordinary floor.
+    floor_view = digit_at(int(frac(plan) * pow10(7)), 7 - room)
     classify_tile()
   }
 
+  fn draw() {
+    show(floor, ".", bit_not(plan + 2 / pow10(room + 1)))
+  }
+
   fn classify_tile() {
-    if floor_view == 2 {
+    if floor_view == 0 {
       descend()
     }
     else {
       if floor_view == 1 {
         if pos == collected_treasure {
-          show(pos, floor_view, treasure)
+          draw()
         }
         else {
           collect_treasure()
         }
       }
       else {
-        show(pos, floor_view, treasure)
+        draw()
       }
     }
   }
@@ -170,6 +176,6 @@ program TreasureHunter2 {
   fn collect_treasure() {
     collected_treasure = pos
     treasure++
-    show(pos, floor_view, treasure)
+    draw()
   }
 }
