@@ -773,29 +773,29 @@ exports[`golden listing > selected output is stable for examples/alaram.mkpro 1`
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    00 |  00  | 0                       |
-   01 |  43  | X->П 3                  | setup R3
+   01 |  44  | X->П 4                  | setup R4
    02 |  03  | 3                       |
-   03 |  45  | X->П 5                  | setup R5
+   03 |  46  | X->П 6                  | setup R6
    04 |  00  | 0                       |
-   05 |  40  | X->П 0                  | setup R0
+   05 |  41  | X->П 1                  | setup R1
    06 |  03  | 3                       |
    07 |  00  | 0                       |
    08 |  00  | 0                       |
    09 |  0B  | /-/                     | negative number
-   10 |  47  | X->П 7                  | setup R7
+   10 |  48  | X->П 8                  | setup R8
    11 |  00  | 0                       |
-   12 |  41  | X->П 1                  | setup R1
+   12 |  42  | X->П 2                  | setup R2
    13 |  03  | 3                       |
-   14 |  46  | X->П 6                  | setup R6
+   14 |  47  | X->П 7                  | setup R7
    15 |  03  | 3                       |
-   16 |  44  | X->П 4                  | setup R4
+   16 |  45  | X->П 5                  | setup R5
    17 |  01  | 1                       |
    18 |  00  | 0                       |
-   19 |  4A  | X->П a                  | setup Ra
+   19 |  49  | X->П 9                  | setup R9
    20 |  01  | 1                       |
    21 |  00  | 0                       |
    22 |  00  | 0                       |
-   23 |  4B  | X->П b                  | setup Rb
+   23 |  4A  | X->П a                  | setup Ra
    24 |  01  | 1                       |
    25 |  03  | 3                       |
    26 |  02  | 2                       |
@@ -842,7 +842,11 @@ exports[`golden listing > selected output is stable for examples/alaram.mkpro 1`
    67 |  0C  | ВП                      | display sign-digit first-cell splice
    68 |  07  | 7                       | setup Rc exponent
    69 |  4C  | X->П c                  | setup Rc
-   70 |  50  | С/П                     | setup complete
+   70 |  01  | 1                       |
+   71 |  00  | 0                       |
+   72 |  0B  | /-/                     | negative number
+   73 |  4B  | X->П b                  | setup Rb
+   74 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
@@ -852,121 +856,119 @@ exports[`golden listing > selected output is stable for examples/alaram.mkpro 1`
    02 |  50  | С/П                     | show __inline_show_40_0
    03 |  5E  | F x=0                   | case mismatch
    04 |  18  | 18                      | case mismatch
-   05 |  6A  | П->X a                  | preload const 10
-   06 |  66  | П->X 6                  | recall level
+   05 |  69  | П->X 9                  | preload const 10
+   06 |  67  | П->X 7                  | recall level
    07 |  11  | -                       | expr -
-   08 |  61  | П->X 1                  | recall angle
+   08 |  62  | П->X 2                  | recall angle
    09 |  31  | К |x|                   | abs()
    10 |  11  | -                       | condition compare
    11 |  59  | F x>=0                  | false branch for <=
-   12 |  62  | 62                      | false branch for <=
+   12 |  61  | 61                      | false branch for <=
    13 |  6E  | П->X e                  | preload const 13251587
    14 |  3A  | К ИНВ                   | display literal video bytes
    15 |  50  | С/П                     | show __halt_literal_36
-   16 |  51  | БП                      | dispatch end
-   17 |  62  | 62                      | dispatch end
+   16 |  51  | БП                      | shared call tail close_range
+   17 |  61  | 61                      | shared call tail
    18 |  02  | 2                       |
    19 |  11  | -                       | dispatch residual compare
    20 |  5E  | F x=0                   | case mismatch
    21 |  34  | 34                      | case mismatch
-   22 |  60  | П->X 0                  | recall altitude
-   23 |  6B  | П->X b                  | preload const 100
+   22 |  61  | П->X 1                  | recall altitude
+   23 |  6A  | П->X a                  | preload const 100
    24 |  11  | -                       | expr -
-   25 |  40  | X->П 0                  | set altitude
+   25 |  41  | X->П 1                  | set altitude
    26 |  00  | 0                       |
-   27 |  60  | П->X 0                  | recall altitude
+   27 |  61  | П->X 1                  | recall altitude
    28 |  11  | -                       | condition compare
    29 |  59  | F x>=0                  | false branch for <=
-   30 |  62  | 62                      | false branch for <=
+   30 |  61  | 61                      | false branch for <=
    31 |  2B  | error 2B                | halt literal ЕГГ0Г
-   32 |  51  | БП                      | dispatch end
-   33 |  62  | 62                      | dispatch end
+   32 |  51  | БП                      | shared call tail close_range
+   33 |  61  | 61                      | shared call tail
    34 |  02  | 2                       |
    35 |  11  | -                       | dispatch residual compare
    36 |  5E  | F x=0                   | case mismatch
-   37 |  44  | 44                      | case mismatch
-   38 |  61  | П->X 1                  | recall angle
-   39 |  6A  | П->X a                  | preload const 10
-   40 |  11  | -                       | expr -
-   41 |  41  | X->П 1                  | set angle
-   42 |  51  | БП                      | dispatch end
-   43 |  62  | 62                      | dispatch end
-   44 |  02  | 2                       |
-   45 |  11  | -                       | dispatch residual compare
-   46 |  5E  | F x=0                   | case mismatch
-   47 |  54  | 54                      | case mismatch
-   48 |  6A  | П->X a                  | preload const 10
-   49 |  61  | П->X 1                  | recall angle
-   50 |  10  | +                       | expr +
-   51 |  41  | X->П 1                  | set angle
-   52 |  51  | БП                      | dispatch end
-   53 |  62  | 62                      | dispatch end
-   54 |  02  | 2                       |
-   55 |  11  | -                       | dispatch residual compare
-   56 |  5E  | F x=0                   | case mismatch
-   57 |  62  | 62                      | case mismatch
-   58 |  6B  | П->X b                  | preload const 100
-   59 |  60  | П->X 0                  | recall altitude
-   60 |  10  | +                       | expr +
-   61 |  40  | X->П 0                  | set altitude
-   62 |  01  | 1                       |
-   63 |  67  | П->X 7                  | recall range
-   64 |  10  | +                       | expr +
-   65 |  47  | X->П 7                  | set range
-   66 |  3B  | К СЧ                    | random()
-   67 |  09  | 9                       |
-   68 |  12  | *                       | expr *
-   69 |  0E  | В↑                      | random int keep scaled draw
-   70 |  35  | К {x}                   | random int fractional part
-   71 |  11  | -                       | random int floor
-   72 |  01  | 1                       |
-   73 |  10  | +                       | expr +
-   74 |  67  | П->X 7                  | recall range
-   75 |  59  | F x>=0                  | false branch for >=
-   76 |  00  | 00                      | false branch for >=
-   77 |  6C  | П->X c                  | display __halt_literal_32 literal
-   78 |  50  | С/П                     | show __halt_literal_32
-   79 |  51  | БП                      | loop back
-   80 |  00  | 00                      | loop back
+   37 |  41  | 41                      | case mismatch
+   38 |  6B  | П->X b                  | preload const -10
+   39 |  51  | БП                      | tail jump __param_sibling_proc_0
+   40 |  58  | 58                      | proc call __param_sibling_proc_0
+   41 |  02  | 2                       |
+   42 |  11  | -                       | dispatch residual compare
+   43 |  5E  | F x=0                   | case mismatch
+   44 |  48  | 48                      | case mismatch
+   45 |  69  | П->X 9                  | preload const 10
+   46 |  51  | БП                      | tail jump __param_sibling_proc_0
+   47 |  58  | 58                      | proc call __param_sibling_proc_0
+   48 |  02  | 2                       |
+   49 |  11  | -                       | dispatch residual compare
+   50 |  5E  | F x=0                   | case mismatch
+   51 |  61  | 61                      | case mismatch
+   52 |  6A  | П->X a                  | preload const 100
+   53 |  61  | П->X 1                  | recall altitude
+   54 |  10  | +                       | expr +
+   55 |  41  | X->П 1                  | set altitude
+   56 |  51  | БП                      | shared call tail close_range
+   57 |  61  | 61                      | shared call tail
+   58 |  62  | П->X 2                  | __param_sibling_proc_0 angle base
+   59 |  10  | +                       | __param_sibling_proc_0 angle from X parameter
+   60 |  42  | X->П 2                  | set angle
+   61 |  01  | 1                       |
+   62 |  68  | П->X 8                  | recall range
+   63 |  10  | +                       | expr +
+   64 |  48  | X->П 8                  | set range
+   65 |  3B  | К СЧ                    | random()
+   66 |  09  | 9                       |
+   67 |  12  | *                       | expr *
+   68 |  0E  | В↑                      | random int keep scaled draw
+   69 |  35  | К {x}                   | random int fractional part
+   70 |  11  | -                       | random int floor
+   71 |  01  | 1                       |
+   72 |  10  | +                       | expr +
+   73 |  68  | П->X 8                  | recall range
+   74 |  59  | F x>=0                  | false branch for >=
+   75 |  00  | 00                      | false branch for >=
+   76 |  6C  | П->X c                  | display __halt_literal_32 literal
+   77 |  50  | С/П                     | show __halt_literal_32
+   78 |  51  | БП                      | tail continuation
+   79 |  00  | 00                      | tail continuation
 
 ## Hex
-00: 6D 3A 50 5E 18 6A 66 11
-08: 61 31 11 59 62 6E 3A 50
-16: 51 62 02 11 5E 34 60 6B
-24: 11 40 00 60 11 59 62 2B
-32: 51 62 02 11 5E 44 61 6A
-40: 11 41 51 62 02 11 5E 54
-48: 6A 61 10 41 51 62 02 11
-56: 5E 62 6B 60 10 40 01 67
-64: 10 47 3B 09 12 0E 35 11
-72: 01 10 67 59 00 6C 50 51
-80: 00
+00: 6D 3A 50 5E 18 69 67 11
+08: 62 31 11 59 61 6E 3A 50
+16: 51 61 02 11 5E 34 61 6A
+24: 11 41 00 61 11 59 61 2B
+32: 51 61 02 11 5E 41 6B 51
+40: 58 02 11 5E 48 69 51 58
+48: 02 11 5E 61 6A 61 10 41
+56: 51 61 62 10 42 01 68 10
+64: 48 3B 09 12 0E 35 11 01
+72: 10 68 59 00 6C 50 51 00
 
 ## Setup Program
 00
-43
+44
 03
-45
+46
 00
-40
+41
 03
 00
 00
 0B
-47
+48
 00
-41
+42
 03
-46
+47
 03
-44
+45
 01
+00
+49
+01
+00
 00
 4A
-01
-00
-00
-4B
 01
 03
 02
@@ -1013,57 +1015,63 @@ exports[`golden listing > selected output is stable for examples/alaram.mkpro 1`
 0C
 07
 4C
+01
+00
+0B
+4B
 50
 
 ## Explain
 MK-Pro compile report
-Steps: 81/999999
+Steps: 80/999999
 Delivery: hex
 Optimizer: exact maximum
-Reference: lordbss_pmk210; span=105, entries=105, gaps=none, compiled=81, delta=-24, parity=smaller
+Reference: lordbss_pmk210; span=105, entries=105, gaps=none, compiled=80, delta=-25, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=12, considered=2, candidates=39, planned=0
-Budget: official=81, extra=0, physical=81
-Intent IR: lowered=yes, v2=yes; intent=95, effects=81, cells=81
+Optimizer rules: automatic=yes; active=13, considered=2, candidates=38, planned=0
+Budget: official=80, extra=0, physical=80
+Intent IR: lowered=yes, v2=yes; intent=103, effects=80, cells=80
 
 Preloads:
-  fighter -> R3: 0 (outside program cells)
-  intruder_mark -> R5: 3 (outside program cells)
-  altitude -> R0: 0 (outside program cells)
-  range -> R7: -300 (outside program cells)
-  angle -> R1: 0 (outside program cells)
-  level -> R6: 3 (outside program cells)
-  hit_window -> R4: 3 (outside program cells)
-  Ra: 10 (outside program cells)
-  Rb: 100 (outside program cells)
+  fighter -> R4: 0 (outside program cells)
+  intruder_mark -> R6: 3 (outside program cells)
+  altitude -> R1: 0 (outside program cells)
+  range -> R8: -300 (outside program cells)
+  angle -> R2: 0 (outside program cells)
+  level -> R7: 3 (outside program cells)
+  hit_window -> R5: 3 (outside program cells)
+  R9: 10 (outside program cells)
+  Ra: 100 (outside program cells)
   Rd: 1320587 (outside program cells)
   Re: 13251587 (outside program cells)
   Rc: Г16ЕL 91 (outside program cells)
+  Rb: -10 (outside program cells)
 
 Setup Block:
-  \`R3=0; R5=3; R0=0; R7=-300; R1=0; R6=3; R4=3; Ra=10; Rb=100; Rd=1320587; Re=13251587\`
+  \`R4=0; R6=3; R1=0; R8=-300; R2=0; R7=3; R5=3; R9=10; Ra=100; Rd=1320587; Re=13251587; Rb=-10\`
 
 Setup Program:
   Reason: initializes
-  00: 00 43 03 45 00 40 03 00
-  08: 00 0B 47 00 41 03 46 03
-  16: 44 01 00 4A 01 00 00 4B
+  00: 00 44 03 46 00 41 03 00
+  08: 00 0B 48 00 42 03 47 03
+  16: 45 01 00 49 01 00 00 4A
   24: 01 03 02 00 05 08 07 4D
   32: 01 03 02 05 01 05 08 07
   40: 4E 01 00 00 06 02 06 00
   48: 00 0E 09 01 06 08 09 09
   56: 09 01 39 4C 01 02 3A 35
-  64: 6C 14 54 0C 07 4C 50
+  64: 6C 14 54 0C 07 4C 01 00
+  72: 0B 4B 50
 
 Registers:
-  altitude: R0
-  angle: R1
-  command: R2
-  fighter: R3
-  hit_window: R4
-  intruder_mark: R5
-  level: R6
-  range: R7
+  altitude: R1
+  angle: R2
+  command: R3
+  fighter: R4
+  hit_window: R5
+  intruder_mark: R6
+  level: R7
+  range: R8
 
 Labels:
    main: 00
@@ -1072,53 +1080,70 @@ Labels:
   __dispatch_next_2: 18
   __if_false_5: 32
   __dispatch_next_4: 34
-  __dispatch_next_6: 44
-  __dispatch_next_7: 54
-  __dispatch_next_8: 62
-  __dispatch_end_1: 62
-  __if_false_9: 79
+  __dispatch_next_6: 41
+  __dispatch_next_7: 48
+  __dispatch_next_8: 58
+  __dispatch_end_1: 58
+  __param_sibling_proc_0: 58
+  close_range: 61
+  __if_false_9: 78
+  __shared_call_tail_0: 80
 
 Optimizations:
-  - expression-constant-folder: Folded 10 constant expression node(s) before code generation.
+  - expression-constant-folder: Folded 7 constant expression node(s) before code generation.
   - dead-state-elimination: Removed 1 unobserved state field before register allocation.
-  - common-branch-tail-hoisting: Hoisted 1 shared branch tail and simplified 0 conditional shapes.
-  - single-use-tail-inline: Expanded 6 single-use tail calls only where it exposed a shared branch suffix.
   - terminal-loop-screen-elision: Elided 1 terminal show already provided by the next loop header.
-  - intent-domain-lowering: Lowered 7 state fields and 10 rules through the generic intent pipeline.
-  - dead-proc-elimination: Removed 6 unreachable lowered rule proc(s) after high-level match/effect lowering.
+  - intent-domain-lowering: Lowered 7 state fields and 9 rules through the generic intent pipeline.
   - auto-preload-initial-state: Moved initial state into setup/preload values so official program cells stay focused on turn logic.
   - preloaded-constant: Used preloaded Rd for constant 1320587.
   - screen-video-literal-lowering: Lowered screen __inline_show_40_0 as a literal calculator video string.
   - dispatch-lowering: Selected fallthrough-compare-chain for dispatch@43.
-  - preloaded-constant: Used preloaded Ra for constant 10.
+  - preloaded-constant: Used preloaded R9 for constant 10.
   - preloaded-constant: Used preloaded Re for constant 13251587.
   - terminal-literal-stop: Lowered literal terminal stop "8СГ-Е-78" at line 36.
   - single-use-rule-inline: Inlined single-use rule destroyed at line 101.
-  - preloaded-constant: Used preloaded Rb for constant 100.
+  - proc-call-lowering: Compiled call to rule close_range as ПП/В/О subroutine.
+  - single-use-rule-inline: Inlined single-use rule fire at line 44.
+  - preloaded-constant: Used preloaded Ra for constant 100.
   - error-stop: Used one-cell error opcode for literal ЕГГ0Г stop at line 28.
   - single-use-rule-inline: Inlined single-use rule ground at line 63.
-  - preloaded-constant: Used preloaded Ra for constant 10.
-  - preloaded-constant: Used preloaded Ra for constant 10.
-  - preloaded-constant: Used preloaded Rb for constant 100.
+  - proc-call-lowering: Compiled call to rule close_range as ПП/В/О subroutine.
+  - single-use-rule-inline: Inlined single-use rule dive at line 45.
+  - preloaded-constant: Used preloaded Rb for constant -10.
+  - proc-call-lowering: Compiled call to rule __param_sibling_proc_0 as ПП/В/О subroutine.
+  - x-param-proc-call: Passed __param_sibling_delta_0 to rule __param_sibling_proc_0 through X at line 46.
+  - preloaded-constant: Used preloaded R9 for constant 10.
+  - proc-call-lowering: Compiled call to rule __param_sibling_proc_0 as ПП/В/О subroutine.
+  - x-param-proc-call: Passed __param_sibling_delta_0 to rule __param_sibling_proc_0 through X at line 47.
+  - preloaded-constant: Used preloaded Ra for constant 100.
+  - proc-call-lowering: Compiled call to rule close_range as ПП/В/О subroutine.
+  - single-use-rule-inline: Inlined single-use rule climb at line 48.
+  - proc-call-lowering: Compiled call to rule close_range as ПП/В/О subroutine.
+  - single-use-rule-inline: Inlined single-use rule hold_course at line 49.
   - numeric-dispatch-residual-chain: Reused residual comparisons for numeric dispatch at line 43.
   - ephemeral-input-dispatch: Dispatched directly on input command at line 41 without storing it.
+  - proc-call-lowering: Compiled call to rule close_range as ПП/В/О subroutine.
+  - x-param-proc-entry: Compiled rule __param_sibling_proc_0 to consume __param_sibling_delta_0 directly from X.
   - random-range-lowering: Lowered random(9) as random() * max.
   - int-random-range-lowering: Lowered int(random(9)) without К [x] so the MK-61 random sequence keeps moving.
   - zero-condition-test: Tested >= 0 without materializing a zero literal at line 90.
   - screen-text-literal-preload: Displayed screen __halt_literal_32 from prebuilt literal Rc.
   - terminal-literal-stop: Lowered literal terminal stop "Г16ЕL 91" at line 32.
   - single-use-rule-inline: Inlined single-use rule tail_gun at line 91.
-  - single-use-rule-inline: Inlined single-use rule close_range at line 103.
+  - tail-call-lowering: Replaced 3 subroutine tail operations with direct jump continuation. (+Replaced 3 subroutine tail operations with direct jump continuation.)
+  - shared-call-tail: Shared 3 call+jump tail sequences.
   - store-recall-peephole: Dropped 1 redundant П->X immediately after X->П to the same register.
   - jump-to-next-threading: Removed 1 unconditional branch to the immediately following label.
-  - jump-thread: Threaded 3 jump(s) through trampoline labels to the final target.
+  - jump-thread: Threaded 2 jump(s) through trampoline labels to the final target. (+Threaded 7 jump(s) through trampoline labels to the final target.)
   - dead-store-elimination: Removed 2 store(s) to register(s) never read before the next assignment.
+  - dead-code-after-halt: Removed 3 unreachable op(s) from the entry CFG.
   - generated-setup-program: Generated optimized setup program for .
   - setup-vp-exponent-splice: Collapsed 1 redundant ВП/КНОП cell(s) around an exponent-entry boundary (ВП ВП -> ВП, КНОП ВП -> ВП).
+  - parametric-sibling-proc: Synthesized a shared one-parameter helper for sibling dispatch procedure arms (80 vs 81 cells).
 
 Candidates:
-  * dispatch@43/fallthrough-compare-chain: 46 steps; uses case ordering; key-based dispatch does not already provide an address-valued selector
-  - dispatch@43/indirect-register-flow: 46 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
+  * dispatch@43/fallthrough-compare-chain: 45 steps; uses case ordering; key-based dispatch does not already provide an address-valued selector
+  - dispatch@43/indirect-register-flow: 45 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
   - dispatch@43/dark-indirect-table: 8 steps; considered; layout proof did not establish a conflict-free address/data table for this site
   - dispatch@43/super-dark-dispatch: 7 steps; considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06
 
@@ -1148,23 +1173,23 @@ Proofs:
   - display-byte-observable-boundary: assumed; Display-byte candidates are bounded by display output and the exact mk61 profile.
 
 Rejected Candidates:
-  - dispatch@43/indirect-register-flow: 46 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
+  - dispatch@43/indirect-register-flow: 45 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
   - dispatch@43/dark-indirect-table: 8 steps; considered; layout proof did not establish a conflict-free address/data table for this site
   - dispatch@43/super-dark-dispatch: 7 steps; considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06
 
 Cell Roles:
   01: 3A exec, display-byte - display byte role allowed
   04: 18 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  12: 62 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  12: 61 address, constant, overlay - address can be reused as constant; code/data overlay allowed
   14: 3A exec, display-byte - display byte role allowed
-  17: 62 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  17: 61 address, constant, overlay - address can be reused as constant; code/data overlay allowed
   21: 34 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  30: 62 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  33: 62 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  37: 44 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  43: 62 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  47: 54 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  53: 62 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
+  30: 61 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  33: 61 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  37: 41 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  40: 58 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  44: 48 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  47: 58 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
 `;
 
 exports[`golden listing > selected output is stable for examples/basic.mkpro 1`] = `
@@ -1489,169 +1514,166 @@ Cell Roles:
 exports[`golden listing > selected output is stable for examples/dangerous-loading.mkpro 1`] = `
 "## Listing
 Setup Block:
-  \`R2=8; R5=3; R3=9; R1=3; R4=0; Rc=10; Rd=777; Re=-999\`
+  \`R1=8; R6=3; R2=9; R3=3; R5=0; Rc=10; Rd=777; Re=-999; Rb=-1\`
 
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  63  | П->X 3                  | display __inline_show_30_0 source
+   00 |  62  | П->X 2                  | display __inline_show_30_0 source
    01 |  6C  | П->X c                  | preload const 10
    02 |  12  | *                       | packed display field shift
-   03 |  62  | П->X 2                  | display __inline_show_30_0 source
+   03 |  61  | П->X 1                  | display __inline_show_30_0 source
    04 |  10  | +                       | packed display field append
    05 |  6C  | П->X c                  | preload const 10
    06 |  12  | *                       | packed display field shift
-   07 |  65  | П->X 5                  | display __inline_show_30_0 source
+   07 |  66  | П->X 6                  | display __inline_show_30_0 source
    08 |  10  | +                       | packed display field append
    09 |  6C  | П->X c                  | preload const 10
    10 |  12  | *                       | packed display field shift
-   11 |  61  | П->X 1                  | display __inline_show_30_0 source
+   11 |  63  | П->X 3                  | display __inline_show_30_0 source
    12 |  10  | +                       | packed display field append
    13 |  50  | С/П                     | show __inline_show_30_0
    14 |  04  | 4                       |
    15 |  11  | -                       | dispatch compare
    16 |  5E  | F x=0                   | case mismatch
-   17 |  22  | 22                      | case mismatch
-   18 |  58  | F L2                    | decrement boat
-   19 |  20  | 20                      | decrement boat
-   20 |  51  | БП                      | tail jump resolve_turn
-   21 |  30  | 30                      | proc call resolve_turn
-   22 |  02  | 2                       |
-   23 |  11  | -                       | dispatch residual compare
-   24 |  5E  | F x=0                   | case mismatch
-   25 |  30  | 30                      | case mismatch
-   26 |  01  | 1                       |
-   27 |  62  | П->X 2                  | recall boat
-   28 |  10  | +                       | expr +
-   29 |  42  | X->П 2                  | set boat
-   30 |  62  | П->X 2                  | recall boat
-   31 |  65  | П->X 5                  | recall threat
-   32 |  11  | -                       | condition compare
-   33 |  5E  | F x=0                   | false branch for ==
-   34 |  50  | 50                      | false branch for ==
-   35 |  5B  | F L1                    | decrement boats_left
-   36 |  37  | 37                      | decrement boats_left
-   37 |  00  | 0                       | set loaded
-   38 |  44  | X->П 4                  | set loaded
-   39 |  08  | 8                       |
-   40 |  42  | X->П 2                  | set boat
-   41 |  00  | 0                       |
-   42 |  61  | П->X 1                  | recall boats_left
-   43 |  11  | -                       | condition compare
-   44 |  59  | F x>=0                  | false branch for <=
-   45 |  78  | 78                      | false branch for <=
-   46 |  6E  | П->X e                  | preload const -999
-   47 |  50  | С/П                     | halt
-   48 |  51  | БП                      | if end
-   49 |  78  | 78                      | if end
-   50 |  62  | П->X 2                  | recall boat
-   51 |  01  | 1                       |
-   52 |  11  | -                       | condition compare
-   53 |  5E  | F x=0                   | false branch for ==
-   54 |  57  | 57                      | false branch for ==
-   55 |  01  | 1                       |
-   56 |  44  | X->П 4                  | set loaded
-   57 |  62  | П->X 2                  | recall boat
-   58 |  08  | 8                       |
-   59 |  11  | -                       | condition compare
-   60 |  5E  | F x=0                   | false branch for ==
-   61 |  71  | 71                      | false branch for ==
-   62 |  64  | П->X 4                  | recall loaded
-   63 |  01  | 1                       |
-   64 |  11  | -                       | condition compare
-   65 |  5E  | F x=0                   | false branch for ==
-   66 |  71  | 71                      | false branch for ==
-   67 |  5A  | F L3                    | decrement cargo_left
-   68 |  69  | 69                      | decrement cargo_left
-   69 |  00  | 0                       | set loaded
-   70 |  44  | X->П 4                  | set loaded
-   71 |  00  | 0                       |
-   72 |  63  | П->X 3                  | recall cargo_left
-   73 |  11  | -                       | condition compare
-   74 |  59  | F x>=0                  | false branch for <=
-   75 |  78  | 78                      | false branch for <=
-   76 |  6D  | П->X d                  | preload const 777
-   77 |  50  | С/П                     | halt
-   78 |  3B  | К СЧ                    | random()
-   79 |  08  | 8                       |
-   80 |  12  | *                       | expr *
-   81 |  0E  | В↑                      | random int keep scaled draw
-   82 |  35  | К {x}                   | random int fractional part
-   83 |  11  | -                       | random int floor
-   84 |  01  | 1                       |
-   85 |  10  | +                       | expr +
-   86 |  45  | X->П 5                  | set threat
-   87 |  51  | БП                      | tail continuation
-   88 |  00  | 00                      | tail continuation
+   17 |  21  | 21                      | case mismatch
+   18 |  6B  | П->X b                  | preload const -1
+   19 |  51  | БП                      | tail jump __param_sibling_proc_0
+   20 |  26  | 26                      | proc call __param_sibling_proc_0
+   21 |  02  | 2                       |
+   22 |  11  | -                       | dispatch residual compare
+   23 |  5E  | F x=0                   | case mismatch
+   24 |  29  | 29                      | case mismatch
+   25 |  01  | 1                       |
+   26 |  61  | П->X 1                  | __param_sibling_proc_0 boat base
+   27 |  10  | +                       | __param_sibling_proc_0 boat from X parameter
+   28 |  41  | X->П 1                  | set boat
+   29 |  61  | П->X 1                  | recall boat
+   30 |  66  | П->X 6                  | recall threat
+   31 |  11  | -                       | condition compare
+   32 |  5E  | F x=0                   | false branch for ==
+   33 |  49  | 49                      | false branch for ==
+   34 |  5A  | F L3                    | decrement boats_left
+   35 |  36  | 36                      | decrement boats_left
+   36 |  00  | 0                       | set loaded
+   37 |  45  | X->П 5                  | set loaded
+   38 |  08  | 8                       |
+   39 |  41  | X->П 1                  | set boat
+   40 |  00  | 0                       |
+   41 |  63  | П->X 3                  | recall boats_left
+   42 |  11  | -                       | condition compare
+   43 |  59  | F x>=0                  | false branch for <=
+   44 |  77  | 77                      | false branch for <=
+   45 |  6E  | П->X e                  | preload const -999
+   46 |  50  | С/П                     | halt
+   47 |  51  | БП                      | if end
+   48 |  77  | 77                      | if end
+   49 |  61  | П->X 1                  | recall boat
+   50 |  01  | 1                       |
+   51 |  11  | -                       | condition compare
+   52 |  5E  | F x=0                   | false branch for ==
+   53 |  56  | 56                      | false branch for ==
+   54 |  01  | 1                       |
+   55 |  45  | X->П 5                  | set loaded
+   56 |  61  | П->X 1                  | recall boat
+   57 |  08  | 8                       |
+   58 |  11  | -                       | condition compare
+   59 |  5E  | F x=0                   | false branch for ==
+   60 |  70  | 70                      | false branch for ==
+   61 |  65  | П->X 5                  | recall loaded
+   62 |  01  | 1                       |
+   63 |  11  | -                       | condition compare
+   64 |  5E  | F x=0                   | false branch for ==
+   65 |  70  | 70                      | false branch for ==
+   66 |  58  | F L2                    | decrement cargo_left
+   67 |  68  | 68                      | decrement cargo_left
+   68 |  00  | 0                       | set loaded
+   69 |  45  | X->П 5                  | set loaded
+   70 |  00  | 0                       |
+   71 |  62  | П->X 2                  | recall cargo_left
+   72 |  11  | -                       | condition compare
+   73 |  59  | F x>=0                  | false branch for <=
+   74 |  77  | 77                      | false branch for <=
+   75 |  6D  | П->X d                  | preload const 777
+   76 |  50  | С/П                     | halt
+   77 |  3B  | К СЧ                    | random()
+   78 |  08  | 8                       |
+   79 |  12  | *                       | expr *
+   80 |  0E  | В↑                      | random int keep scaled draw
+   81 |  35  | К {x}                   | random int fractional part
+   82 |  11  | -                       | random int floor
+   83 |  01  | 1                       |
+   84 |  10  | +                       | expr +
+   85 |  52  | В/О                     | implicit return from proc
 
 ## Hex
-00: 63 6C 12 62 10 6C 12 65
-08: 10 6C 12 61 10 50 04 11
-16: 5E 22 58 20 51 30 02 11
-24: 5E 30 01 62 10 42 62 65
-32: 11 5E 50 5B 37 00 44 08
-40: 42 00 61 11 59 78 6E 50
-48: 51 78 62 01 11 5E 57 01
-56: 44 62 08 11 5E 71 64 01
-64: 11 5E 71 5A 69 00 44 00
-72: 63 11 59 78 6D 50 3B 08
-80: 12 0E 35 11 01 10 45 51
-88: 00
+00: 62 6C 12 61 10 6C 12 66
+08: 10 6C 12 63 10 50 04 11
+16: 5E 21 6B 51 26 02 11 5E
+24: 29 01 61 10 41 61 66 11
+32: 5E 49 5A 36 00 45 08 41
+40: 00 63 11 59 77 6E 50 51
+48: 77 61 01 11 5E 56 01 45
+56: 61 08 11 5E 70 65 01 11
+64: 5E 70 58 68 00 45 00 62
+72: 11 59 77 6D 50 3B 08 12
+80: 0E 35 11 01 10 52
 
 ## Explain
 MK-Pro compile report
-Steps: 89/999999
+Steps: 86/999999
 Delivery: hex
 Optimizer: exact maximum
-Reference: anvarov_dangerous_loading; span=103, entries=101, gaps=34,50, compiled=89, delta=-14, parity=smaller
+Reference: anvarov_dangerous_loading; span=103, entries=101, gaps=34,50, compiled=86, delta=-17, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=10, considered=2, candidates=41, planned=0
-Budget: official=89, extra=0, physical=89
-Intent IR: lowered=yes, v2=yes; intent=95, effects=89, cells=89
+Optimizer rules: automatic=yes; active=11, considered=2, candidates=40, planned=0
+Budget: official=86, extra=0, physical=86
+Intent IR: lowered=yes, v2=yes; intent=93, effects=86, cells=86
 
 Preloads:
-  boat -> R2: 8 (outside program cells)
-  threat -> R5: 3 (outside program cells)
-  cargo_left -> R3: 9 (outside program cells)
-  boats_left -> R1: 3 (outside program cells)
-  loaded -> R4: 0 (outside program cells)
+  boat -> R1: 8 (outside program cells)
+  threat -> R6: 3 (outside program cells)
+  cargo_left -> R2: 9 (outside program cells)
+  boats_left -> R3: 3 (outside program cells)
+  loaded -> R5: 0 (outside program cells)
   Rc: 10 (outside program cells)
   Rd: 777 (outside program cells)
   Re: -999 (outside program cells)
+  Rb: -1 (outside program cells)
 
 Setup Block:
-  \`R2=8; R5=3; R3=9; R1=3; R4=0; Rc=10; Rd=777; Re=-999\`
+  \`R1=8; R6=3; R2=9; R3=3; R5=0; Rc=10; Rd=777; Re=-999; Rb=-1\`
 
 Registers:
-  boat: R2
-  boats_left: R1
-  cargo_left: R3
-  command: R0
-  loaded: R4
-  threat: R5
+  boat: R1
+  boats_left: R3
+  cargo_left: R2
+  command: R4
+  loaded: R5
+  threat: R6
 
 Labels:
    main: 00
   __loop_0: 00
-  __fl_decrement_done_3: 20
-  __dispatch_next_2: 22
-  __dispatch_next_4: 30
-  __dispatch_end_1: 30
-  wait: 30
-  resolve_turn: 30
-  __fl_decrement_done_7: 37
-  __if_false_8: 48
-  __if_false_5: 50
-  __if_false_9: 57
-  __fl_decrement_done_15: 69
-  __if_false_13: 71
-  __if_false_11: 71
-  __if_false_16: 78
-  __if_end_6: 78
+  __dispatch_next_2: 21
+  __dispatch_next_3: 26
+  __dispatch_end_1: 26
+  __param_sibling_proc_0: 26
+  wait: 29
+  resolve_turn: 29
+  __fl_decrement_done_6: 36
+  __if_false_7: 47
+  __if_false_4: 49
+  __if_false_8: 56
+  __fl_decrement_done_14: 68
+  __if_false_12: 70
+  __if_false_10: 70
+  __if_false_15: 77
+  __if_end_5: 77
 
 Optimizations:
   - expression-constant-folder: Folded 2 constant expression node(s) before code generation.
   - terminal-loop-screen-elision: Elided 1 terminal show already provided by the next loop header.
-  - intent-domain-lowering: Lowered 5 state fields and 8 rules through the generic intent pipeline.
+  - intent-domain-lowering: Lowered 5 state fields and 7 rules through the generic intent pipeline.
   - auto-preload-initial-state: Moved initial state into setup/preload values so official program cells stay focused on turn logic.
   - display-strategy-selection: Selected decimal-pack for screen __inline_show_30_0.
   - preloaded-constant: Used preloaded Rc for constant 10.
@@ -1660,32 +1682,35 @@ Optimizations:
   - packed-display-lowering: Display __inline_show_30_0 may use display-byte encodings in later layout passes.
   - dispatch-default-merge: Removed 1 dispatch case whose body matched the default branch.
   - dispatch-lowering: Selected fallthrough-compare-chain for dispatch@33.
-  - fl-unit-decrement: Lowered boat -= 1 through F L2.
-  - proc-call-lowering: Compiled call to rule resolve_turn as ПП/В/О subroutine.
-  - proc-return-x-reuse: Tracked threat in X after returning from rule resolve_turn.
-  - single-use-rule-inline: Inlined single-use rule row_left at line 34.
-  - proc-call-lowering: Compiled call to rule resolve_turn as ПП/В/О subroutine.
-  - proc-return-x-reuse: Tracked threat in X after returning from rule resolve_turn.
-  - single-use-rule-inline: Inlined single-use rule row_right at line 35.
+  - preloaded-constant: Used preloaded Rb for constant -1.
+  - proc-call-lowering: Compiled call to rule __param_sibling_proc_0 as ПП/В/О subroutine.
+  - x-param-proc-call: Passed __param_sibling_delta_0 to rule __param_sibling_proc_0 through X at line 34.
+  - proc-call-lowering: Compiled call to rule __param_sibling_proc_0 as ПП/В/О subroutine.
+  - x-param-proc-call: Passed __param_sibling_delta_0 to rule __param_sibling_proc_0 through X at line 35.
   - proc-call-lowering: Compiled call to rule wait as ПП/В/О subroutine.
   - numeric-dispatch-residual-chain: Reused residual comparisons for numeric dispatch at line 33.
   - ephemeral-input-dispatch: Dispatched directly on input command at line 31 without storing it.
   - proc-call-lowering: Compiled call to rule resolve_turn as ПП/В/О subroutine.
   - proc-return-x-reuse: Tracked threat in X after returning from rule resolve_turn.
-  - fl-unit-decrement: Lowered boats_left -= 1 through F L1.
+  - x-param-proc-entry: Compiled rule __param_sibling_proc_0 to consume __param_sibling_delta_0 directly from X.
+  - proc-call-lowering: Compiled call to rule resolve_turn as ПП/В/О subroutine.
+  - proc-return-x-reuse: Tracked threat in X after returning from rule resolve_turn.
+  - fl-unit-decrement: Lowered boats_left -= 1 through F L3.
   - preloaded-constant: Used preloaded Re for constant -999.
   - single-use-rule-inline: Inlined single-use rule sunk at line 94.
   - single-use-rule-inline: Inlined single-use rule lose_boat at line 59.
-  - fl-unit-decrement: Lowered cargo_left -= 1 through F L3.
+  - fl-unit-decrement: Lowered cargo_left -= 1 through F L2.
   - preloaded-constant: Used preloaded Rd for constant 777.
   - single-use-rule-inline: Inlined single-use rule delivered at line 84.
   - single-use-rule-inline: Inlined single-use rule handle_dock at line 62.
   - random-range-lowering: Lowered random(8) as random() * max.
   - int-random-range-lowering: Lowered int(random(8)) without К [x] so the MK-61 random sequence keeps moving.
-  - tail-call-lowering: Replaced 2 subroutine tail operations with direct jump continuation. (+Replaced 3 subroutine tail operations with direct jump continuation.)
-  - jump-to-next-threading: Removed 1 unconditional branch to the immediately following label. (+Removed 1 unconditional branch to the immediately following label.)
-  - jump-thread: Threaded 4 jump(s) through trampoline labels to the final target.
+  - tail-call-lowering: Replaced 5 subroutine tail operations with direct jump continuations.
+  - jump-to-next-threading: Removed 1 unconditional branch to the immediately following label. (+Removed 2 unconditional branch to the immediately following label.)
+  - jump-thread: Threaded 2 jump(s) through trampoline labels to the final target.
+  - dead-store-elimination: Removed 1 store(s) to register(s) never read before the next assignment.
   - dead-code-after-halt: Removed 2 unreachable op(s) from the entry CFG.
+  - parametric-sibling-proc: Synthesized a shared one-parameter helper for sibling dispatch procedure arms (86 vs 89 cells).
 
 Candidates:
   * display __inline_show_30_0/decimal-pack: 14 steps; selected decimal-pack for screen __inline_show_30_0
@@ -1693,8 +1718,8 @@ Candidates:
   - display __inline_show_30_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
   - display __inline_show_30_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
   - display __inline_show_30_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-  * dispatch@33/fallthrough-compare-chain: 19 steps; uses case ordering; key-based dispatch does not already provide an address-valued selector
-  - dispatch@33/indirect-register-flow: 19 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
+  * dispatch@33/fallthrough-compare-chain: 21 steps; uses case ordering; key-based dispatch does not already provide an address-valued selector
+  - dispatch@33/indirect-register-flow: 21 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
   - dispatch@33/dark-indirect-table: 5 steps; considered; layout proof did not establish a conflict-free address/data table for this site
   - dispatch@33/super-dark-dispatch: 4 steps; considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06
 
@@ -1729,29 +1754,29 @@ Rejected Candidates:
   - display __inline_show_30_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
   - display __inline_show_30_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
   - display __inline_show_30_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-  - dispatch@33/indirect-register-flow: 19 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
+  - dispatch@33/indirect-register-flow: 21 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
   - dispatch@33/dark-indirect-table: 5 steps; considered; layout proof did not establish a conflict-free address/data table for this site
   - dispatch@33/super-dark-dispatch: 4 steps; considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06
 
 Cell Roles:
-  00: 63 exec, display-byte - display byte role allowed
+  00: 62 exec, display-byte - display byte role allowed
   02: 12 exec, display-byte - display byte role allowed
-  03: 62 exec, display-byte - display byte role allowed
+  03: 61 exec, display-byte - display byte role allowed
   04: 10 exec, display-byte - display byte role allowed
   06: 12 exec, display-byte - display byte role allowed
-  07: 65 exec, display-byte - display byte role allowed
+  07: 66 exec, display-byte - display byte role allowed
   08: 10 exec, display-byte - display byte role allowed
   10: 12 exec, display-byte - display byte role allowed
-  11: 61 exec, display-byte - display byte role allowed
+  11: 63 exec, display-byte - display byte role allowed
   12: 10 exec, display-byte - display byte role allowed
-  17: 22 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  19: 20 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
+  17: 21 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  20: 26 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
 `;
 
 exports[`golden listing > selected output is stable for examples/dungeon.mkpro 1`] = `
 "## Listing
 Setup Block:
-  \`R2=8; R3=2; R1=42134124; R4=0; R5=0; Re=10\`
+  \`R2=8; R3=2; R5=42134124; R4=0; R6=0; Re=10; Rd=-1\`
 
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
@@ -1761,7 +1786,7 @@ Setup Block:
    03 |  63  | П->X 3                  | display __inline_show_30_0 source
    04 |  10  | +                       | packed display field append
    05 |  50  | С/П                     | show __inline_show_30_0
-   06 |  61  | П->X 1                  | display __inline_show_31_1 source
+   06 |  65  | П->X 5                  | display __inline_show_31_1 source
    07 |  50  | С/П                     | show __inline_show_31_1
    08 |  04  | 4                       |
    09 |  11  | -                       | dispatch compare
@@ -1770,7 +1795,7 @@ Setup Block:
    12 |  58  | F L2                    | decrement pos
    13 |  14  | 14                      | decrement pos
    14 |  51  | БП                      | tail jump check_room
-   15 |  57  | 57                      | proc call check_room
+   15 |  56  | 56                      | proc call check_room
    16 |  02  | 2                       |
    17 |  11  | -                       | dispatch residual compare
    18 |  5E  | F x=0                   | case mismatch
@@ -1782,106 +1807,106 @@ Setup Block:
    24 |  07  | 7                       |
    25 |  11  | -                       | condition compare
    26 |  59  | F x>=0                  | false branch for >=
-   27 |  57  | 57                      | false branch for >=
+   27 |  56  | 56                      | false branch for >=
    28 |  02  | 2                       |
    29 |  42  | X->П 2                  | set pos
    30 |  3B  | К СЧ                    | random()
-   31 |  41  | X->П 1                  | set plan
+   31 |  45  | X->П 5                  | set plan
    32 |  50  | С/П                     | show __inline_show_31_1
    33 |  51  | БП                      | tail jump check_room
-   34 |  57  | 57                      | proc call check_room
+   34 |  56  | 56                      | proc call check_room
    35 |  02  | 2                       |
    36 |  11  | -                       | dispatch residual compare
    37 |  5E  | F x=0                   | case mismatch
-   38 |  45  | 45                      | case mismatch
+   38 |  42  | 42                      | case mismatch
    39 |  01  | 1                       |
-   40 |  63  | П->X 3                  | recall height
-   41 |  10  | +                       | expr +
-   42 |  43  | X->П 3                  | set height
-   43 |  51  | БП                      | tail jump check_room
-   44 |  57  | 57                      | proc call check_room
-   45 |  06  | 6                       |
-   46 |  10  | +                       | dispatch residual compare
-   47 |  5E  | F x=0                   | case mismatch
-   48 |  53  | 53                      | case mismatch
-   49 |  5A  | F L3                    | decrement height
-   50 |  51  | 51                      | decrement height
-   51 |  51  | БП                      | tail jump check_room
-   52 |  57  | 57                      | proc call check_room
-   53 |  53  | ПП                      | proc call bump
-   54 |  76  | 76                      | proc call bump
-   55 |  51  | БП                      | loop back
-   56 |  00  | 00                      | loop back
-   57 |  00  | 0                       |
-   58 |  62  | П->X 2                  | recall pos
-   59 |  11  | -                       | condition compare
-   60 |  59  | F x>=0                  | false branch for <=
-   61 |  64  | 64                      | false branch for <=
-   62 |  53  | ПП                      | proc call bump
-   63 |  76  | 76                      | proc call bump
-   64 |  61  | П->X 1                  | recall plan
-   65 |  62  | П->X 2                  | recall pos
-   66 |  15  | F 10^x                  | pow10()
-   67 |  13  | /                       | expr /
-   68 |  35  | К {x}                   | frac()
-   69 |  6E  | П->X e                  | preload const 10
-   70 |  12  | *                       | expr *
-   71 |  34  | К [x]                   | int()
-   72 |  63  | П->X 3                  | recall height
-   73 |  11  | -                       | condition compare
-   74 |  5E  | F x=0                   | false branch for ==
-   75 |  00  | 00                      | false branch for ==
-   76 |  D4  | К П->X 4                | increment mistakes
-   77 |  64  | П->X 4                  | recall mistakes
-   78 |  03  | 3                       |
-   79 |  11  | -                       | condition compare
-   80 |  59  | F x>=0                  | false branch for >=
-   81 |  83  | 83                      | false branch for >=
-   82 |  2B  | error 2B                | halt literal ЕГГ0Г
-   83 |  52  | В/О                     | implicit return from proc
+   40 |  51  | БП                      | tail jump __param_sibling_proc_0
+   41 |  53  | 53                      | proc call __param_sibling_proc_0
+   42 |  06  | 6                       |
+   43 |  10  | +                       | dispatch residual compare
+   44 |  5E  | F x=0                   | case mismatch
+   45 |  49  | 49                      | case mismatch
+   46 |  6D  | П->X d                  | preload const -1
+   47 |  51  | БП                      | tail jump __param_sibling_proc_0
+   48 |  53  | 53                      | proc call __param_sibling_proc_0
+   49 |  53  | ПП                      | proc call bump
+   50 |  75  | 75                      | proc call bump
+   51 |  51  | БП                      | loop back
+   52 |  00  | 00                      | loop back
+   53 |  63  | П->X 3                  | __param_sibling_proc_0 height base
+   54 |  10  | +                       | __param_sibling_proc_0 height from X parameter
+   55 |  43  | X->П 3                  | set height
+   56 |  00  | 0                       |
+   57 |  62  | П->X 2                  | recall pos
+   58 |  11  | -                       | condition compare
+   59 |  59  | F x>=0                  | false branch for <=
+   60 |  63  | 63                      | false branch for <=
+   61 |  53  | ПП                      | proc call bump
+   62 |  75  | 75                      | proc call bump
+   63 |  65  | П->X 5                  | recall plan
+   64 |  62  | П->X 2                  | recall pos
+   65 |  15  | F 10^x                  | pow10()
+   66 |  13  | /                       | expr /
+   67 |  35  | К {x}                   | frac()
+   68 |  6E  | П->X e                  | preload const 10
+   69 |  12  | *                       | expr *
+   70 |  34  | К [x]                   | int()
+   71 |  63  | П->X 3                  | recall height
+   72 |  11  | -                       | condition compare
+   73 |  5E  | F x=0                   | false branch for ==
+   74 |  00  | 00                      | false branch for ==
+   75 |  D4  | К П->X 4                | increment mistakes
+   76 |  64  | П->X 4                  | recall mistakes
+   77 |  03  | 3                       |
+   78 |  11  | -                       | condition compare
+   79 |  59  | F x>=0                  | false branch for >=
+   80 |  82  | 82                      | false branch for >=
+   81 |  2B  | error 2B                | halt literal ЕГГ0Г
+   82 |  52  | В/О                     | implicit return from proc
 
 ## Hex
-00: 62 6E 12 63 10 50 61 50
-08: 04 11 5E 16 58 14 51 57
+00: 62 6E 12 63 10 50 65 50
+08: 04 11 5E 16 58 14 51 56
 16: 02 11 5E 35 01 62 10 42
-24: 07 11 59 57 02 42 3B 41
-32: 50 51 57 02 11 5E 45 01
-40: 63 10 43 51 57 06 10 5E
-48: 53 5A 51 51 57 53 76 51
-56: 00 00 62 11 59 64 53 76
-64: 61 62 15 13 35 6E 12 34
-72: 63 11 5E 00 D4 64 03 11
-80: 59 83 2B 52
+24: 07 11 59 56 02 42 3B 45
+32: 50 51 56 02 11 5E 42 01
+40: 51 53 06 10 5E 49 6D 51
+48: 53 53 75 51 00 63 10 43
+56: 00 62 11 59 63 53 75 65
+64: 62 15 13 35 6E 12 34 63
+72: 11 5E 00 D4 64 03 11 59
+80: 82 2B 52
 
 ## Explain
 MK-Pro compile report
-Steps: 84/999999
+Steps: 83/999999
 Delivery: hex
 Optimizer: exact maximum
-Reference: lordbss_pmk164; span=105, entries=105, gaps=none, compiled=84, delta=-21, parity=smaller
+Reference: lordbss_pmk164; span=105, entries=105, gaps=none, compiled=83, delta=-22, parity=smaller
 Machine: mk61
 Optimizer rules: automatic=yes; active=14, considered=3, candidates=36, planned=0
-Budget: official=84, extra=0, physical=84
-Intent IR: lowered=yes, v2=yes; intent=98, effects=84, cells=84
+Budget: official=83, extra=0, physical=83
+Intent IR: lowered=yes, v2=yes; intent=96, effects=83, cells=83
 
 Preloads:
   pos -> R2: 8 (outside program cells)
   height -> R3: 2 (outside program cells)
-  plan -> R1: 42134124 (outside program cells)
+  plan -> R5: 42134124 (outside program cells)
   mistakes -> R4: 0 (outside program cells)
-  wall -> R5: 0 (outside program cells)
+  wall -> R6: 0 (outside program cells)
   Re: 10 (outside program cells)
+  Rd: -1 (outside program cells)
 
 Setup Block:
-  \`R2=8; R3=2; R1=42134124; R4=0; R5=0; Re=10\`
+  \`R2=8; R3=2; R5=42134124; R4=0; R6=0; Re=10; Rd=-1\`
 
 Registers:
-  action: R0
+  action: R1
   height: R3
   mistakes: R4
-  plan: R1
+  plan: R5
   pos: R2
-  wall: R5
+  wall: R6
 
 Labels:
    main: 00
@@ -1890,21 +1915,21 @@ Labels:
   __dispatch_next_2: 16
   __if_false_5: 33
   __dispatch_next_4: 35
-  __dispatch_next_7: 45
-  __fl_decrement_done_9: 51
-  __dispatch_next_8: 53
-  __dispatch_end_1: 55
-  check_room: 57
-  __if_false_10: 64
-  __if_false_12: 76
-  __if_end_13: 76
-  bump: 76
-  __if_false_14: 83
+  __dispatch_next_7: 42
+  __dispatch_next_8: 49
+  __dispatch_end_1: 51
+  __param_sibling_proc_0: 53
+  check_room: 56
+  __if_false_9: 63
+  __if_false_11: 75
+  __if_end_12: 75
+  bump: 75
+  __if_false_13: 82
 
 Optimizations:
   - expression-constant-folder: Folded 4 constant expression node(s) before code generation.
   - dead-state-elimination: Removed 1 unobserved state field before register allocation.
-  - intent-domain-lowering: Lowered 6 state fields and 8 rules through the generic intent pipeline.
+  - intent-domain-lowering: Lowered 6 state fields and 7 rules through the generic intent pipeline.
   - auto-preload-initial-state: Moved initial state into setup/preload values so official program cells stay focused on turn logic.
   - display-strategy-selection: Selected decimal-pack for screen __inline_show_30_0.
   - preloaded-constant: Used preloaded Re for constant 10.
@@ -1921,14 +1946,16 @@ Optimizations:
   - single-use-rule-inline: Inlined single-use rule extend_corridor at line 52.
   - proc-call-lowering: Compiled call to rule check_room as ПП/В/О subroutine.
   - single-use-rule-inline: Inlined single-use rule step_right at line 36.
-  - proc-call-lowering: Compiled call to rule check_room as ПП/В/О subroutine.
-  - single-use-rule-inline: Inlined single-use rule climb at line 37.
-  - fl-unit-decrement: Lowered height -= 1 through F L3.
-  - proc-call-lowering: Compiled call to rule check_room as ПП/В/О subroutine.
-  - single-use-rule-inline: Inlined single-use rule descend at line 38.
+  - proc-call-lowering: Compiled call to rule __param_sibling_proc_0 as ПП/В/О subroutine.
+  - x-param-proc-call: Passed __param_sibling_delta_0 to rule __param_sibling_proc_0 through X at line 37.
+  - preloaded-constant: Used preloaded Rd for constant -1.
+  - proc-call-lowering: Compiled call to rule __param_sibling_proc_0 as ПП/В/О subroutine.
+  - x-param-proc-call: Passed __param_sibling_delta_0 to rule __param_sibling_proc_0 through X at line 38.
   - proc-call-lowering: Compiled call to rule bump as ПП/В/О subroutine.
   - numeric-dispatch-residual-chain: Reused residual comparisons for numeric dispatch at line 34.
   - ephemeral-input-dispatch: Dispatched directly on input action at line 32 without storing it.
+  - proc-call-lowering: Compiled call to rule check_room as ПП/В/О subroutine.
+  - x-param-proc-entry: Compiled rule __param_sibling_proc_0 to consume __param_sibling_delta_0 directly from X.
   - proc-call-lowering: Compiled call to rule bump as ПП/В/О subroutine.
   - preloaded-constant: Used preloaded Re for constant 10.
   - tic-tac-toe-primitive-lowering: Lowered digit_at() to reusable 4x4 grid/packed-line arithmetic.
@@ -1940,13 +1967,14 @@ Optimizations:
   - indirect-incdec-counter: Incremented mistakes by using К П->X 4's pre-increment side effect at line 84.
   - error-stop: Used one-cell error opcode for literal ЕГГ0Г stop at line 26.
   - single-use-rule-inline: Inlined single-use rule lost at line 86.
-  - tail-call-lowering: Replaced 6 subroutine tail operations with direct jump continuation.
+  - tail-call-lowering: Replaced 4 subroutine tail operations with direct jump continuation. (+Replaced 3 subroutine tail operations with direct jump continuation.)
   - store-recall-peephole: Dropped 1 redundant П->X immediately after X->П to the same register.
-  - jump-thread: Threaded 1 jump(s) through trampoline labels to the final target. (+Threaded 1 jump(s) through trampoline labels to the final target.)
+  - jump-to-next-threading: Removed 1 unconditional branch to the immediately following label. (+Removed 1 unconditional branch to the immediately following label.)
+  - jump-thread: Threaded 2 jump(s) through trampoline labels to the final target. (+Threaded 1 jump(s) through trampoline labels to the final target.) (+Threaded 1 jump(s) through trampoline labels to the final target.)
   - dead-store-elimination: Removed 1 store(s) to register(s) never read before the next assignment.
   - redundant-prologue-elimination: Removed 1 display/halt prologue(s) immediately before a jump to their identical loop head (7 cells).
   - dead-code-after-halt: Removed 1 unreachable op(s) from the entry CFG.
-  - jump-to-next-threading: Removed 1 unconditional branch to the immediately following label.
+  - parametric-sibling-proc: Synthesized a shared one-parameter helper for sibling dispatch procedure arms (83 vs 84 cells).
 
 Candidates:
   * display __inline_show_30_0/decimal-pack: 6 steps; selected decimal-pack for screen __inline_show_30_0
@@ -1959,8 +1987,8 @@ Candidates:
   - display __inline_show_31_1/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
   - display __inline_show_31_1/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
   - display __inline_show_31_1/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-  * dispatch@34/fallthrough-compare-chain: 35 steps; uses case ordering; key-based dispatch does not already provide an address-valued selector
-  - dispatch@34/indirect-register-flow: 35 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
+  * dispatch@34/fallthrough-compare-chain: 37 steps; uses case ordering; key-based dispatch does not already provide an address-valued selector
+  - dispatch@34/indirect-register-flow: 37 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
   - dispatch@34/dark-indirect-table: 7 steps; considered; layout proof did not establish a conflict-free address/data table for this site
   - dispatch@34/super-dark-dispatch: 6 steps; considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06
   * display __inline_show_31_1/decimal-pack: 1 steps; selected decimal-pack for screen __inline_show_31_1
@@ -2017,14 +2045,14 @@ Cell Roles:
   02: 12 exec, display-byte - display byte role allowed
   03: 63 exec, display-byte - display byte role allowed
   04: 10 exec, display-byte - display byte role allowed
-  06: 61 exec, display-byte - display byte role allowed
+  06: 65 exec, display-byte - display byte role allowed
   11: 16 address, constant, overlay - address can be reused as constant; code/data overlay allowed
   13: 14 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  15: 57 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  15: 56 address, constant, overlay - address can be reused as constant; code/data overlay allowed
   19: 35 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  27: 57 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  34: 57 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  38: 45 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
+  27: 56 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  34: 56 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  38: 42 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
 `;
 
 exports[`golden listing > selected output is stable for examples/e-94-digits.mkpro 1`] = `

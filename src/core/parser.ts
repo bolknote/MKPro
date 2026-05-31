@@ -20,6 +20,7 @@ import type {
   StateFieldType,
   V2BoardAst,
   V2IfStatementAst,
+  V2AssignStatementAst,
   V2InvokeStatementAst,
   V2LoopStatementAst,
   V2MatchCaseAst,
@@ -74,6 +75,7 @@ export class ParseError extends Error {
 
 export interface ParseOptions {
   signedAbsMatchPairs?: boolean;
+  synthesizeParametricSiblings?: boolean;
 }
 
 export function parseProgram(source: string, options: ParseOptions = {}): ProgramAst {
@@ -116,6 +118,9 @@ class MKProParser {
           throw new ParseError("Only one program block is supported", line.line);
         }
         v2 = this.parseV2Program();
+        if (this.options.synthesizeParametricSiblings === true) {
+          synthesizeV2ParametricSiblingRules(v2);
+        }
         const lowered = lowerV2Program(v2, this.options);
         domains.push(...lowered.domains);
         states.push(...lowered.states);
@@ -1354,6 +1359,386 @@ function collectV2Invocations(v2: V2ProgramAst): V2InvocationSite[] {
   if (v2.body.length > 0) visit(v2.body);
   for (const rule of v2.rules) visit(rule.body, rule.name);
   return sites;
+}
+
+const PARAMETRIC_SIBLING_RULE_PREFIX = "__param_sibling_";
+
+interface V2ParametricSiblingPlan {
+  readonly body: V2StatementAst[];
+  readonly leftDelta: number;
+  readonly rightDelta: number;
+}
+
+function synthesizeV2ParametricSiblingRules(v2: V2ProgramAst): void {
+  const rules = collectV2Rules(v2);
+  const callCounts = new Map<string, number>();
+  for (const site of collectV2Invocations(v2)) {
+    callCounts.set(site.statement.name, (callCounts.get(site.statement.name) ?? 0) + 1);
+  }
+  const consumed = new Set<string>();
+
+  const rewriteStatements = (statements: V2StatementAst[]): V2StatementAst[] =>
+    statements.map((statement) => rewriteStatement(statement));
+
+  const rewriteStatement = (statement: V2StatementAst): V2StatementAst => {
+    switch (statement.kind) {
+      case "v2_if": {
+        const rewritten: V2IfStatementAst = {
+          ...statement,
+          thenBody: rewriteStatements(statement.thenBody),
+        };
+        if (statement.elseBody !== undefined) rewritten.elseBody = rewriteStatements(statement.elseBody);
+        return rewritten;
+      }
+      case "v2_while":
+        return { ...statement, body: rewriteStatements(statement.body) };
+      case "v2_loop":
+        return { ...statement, body: rewriteStatements(statement.body) };
+      case "v2_match": {
+        const rewritten: V2MatchStatementAst = {
+          ...statement,
+          cases: statement.cases.map((matchCase) => ({
+            ...matchCase,
+            action: rewriteStatement(matchCase.action),
+          })),
+        };
+        if (statement.otherwise !== undefined) rewritten.otherwise = rewriteStatement(statement.otherwise);
+        rewritten.cases = synthesizeV2ParametricSiblingMatchCases(v2, rewritten.cases, rules, callCounts, consumed);
+        return rewritten;
+      }
+      default:
+        return statement;
+    }
+  };
+
+  v2.body = rewriteStatements(v2.body);
+  for (const rule of [...v2.rules]) {
+    if (consumed.has(rule.name) || rule.name.startsWith(PARAMETRIC_SIBLING_RULE_PREFIX)) continue;
+    rule.body = rewriteStatements(rule.body);
+  }
+  if (consumed.size > 0) v2.rules = v2.rules.filter((rule) => !consumed.has(rule.name));
+}
+
+function synthesizeV2ParametricSiblingMatchCases(
+  v2: V2ProgramAst,
+  cases: V2MatchCaseAst[],
+  rules: ReadonlyMap<string, V2RuleAst>,
+  callCounts: ReadonlyMap<string, number>,
+  consumed: Set<string>,
+): V2MatchCaseAst[] {
+  const moveDeltas = collectV2MoveDeltas(v2);
+  const usedCases = new Set<number>();
+  const rewritten = [...cases];
+
+  for (let leftIndex = 0; leftIndex < rewritten.length; leftIndex += 1) {
+    if (usedCases.has(leftIndex)) continue;
+    const leftInvoke = v2SingleInvokeAction(rewritten[leftIndex]!.action);
+    if (leftInvoke === undefined || consumed.has(leftInvoke.name)) continue;
+    const leftRule = singleUseV2SiblingRule(rules, callCounts, leftInvoke.name);
+    if (leftRule === undefined) continue;
+
+    for (let rightIndex = leftIndex + 1; rightIndex < rewritten.length; rightIndex += 1) {
+      if (usedCases.has(rightIndex)) continue;
+      const rightInvoke = v2SingleInvokeAction(rewritten[rightIndex]!.action);
+      if (rightInvoke === undefined || consumed.has(rightInvoke.name)) continue;
+      const rightRule = singleUseV2SiblingRule(rules, callCounts, rightInvoke.name);
+      if (rightRule === undefined) continue;
+
+      const param = freshV2ParametricSiblingName(v2, "delta");
+      const plan = v2ParametricSiblingPlan(leftRule, rightRule, param, moveDeltas);
+      if (plan === undefined) continue;
+
+      const helperName = freshV2ParametricSiblingName(v2, "proc");
+      insertV2ParametricSiblingRule(v2, leftRule, rightRule, {
+        kind: "v2_rule",
+        name: helperName,
+        params: [param],
+        body: plan.body,
+        line: leftRule.line,
+      });
+      rewritten[leftIndex] = {
+        ...rewritten[leftIndex]!,
+        action: {
+          kind: "v2_invoke",
+          name: helperName,
+          args: [formatV2Number(plan.leftDelta)],
+          line: leftInvoke.line,
+        },
+      };
+      rewritten[rightIndex] = {
+        ...rewritten[rightIndex]!,
+        action: {
+          kind: "v2_invoke",
+          name: helperName,
+          args: [formatV2Number(plan.rightDelta)],
+          line: rightInvoke.line,
+        },
+      };
+      consumed.add(leftRule.name);
+      consumed.add(rightRule.name);
+      usedCases.add(leftIndex);
+      usedCases.add(rightIndex);
+      break;
+    }
+  }
+
+  return rewritten;
+}
+
+function insertV2ParametricSiblingRule(
+  v2: V2ProgramAst,
+  left: V2RuleAst,
+  right: V2RuleAst,
+  helper: V2RuleAst,
+): void {
+  const leftIndex = v2.rules.indexOf(left);
+  const rightIndex = v2.rules.indexOf(right);
+  const indexes = [leftIndex, rightIndex].filter((index) => index >= 0);
+  const insertAt = indexes.length === 0 ? v2.rules.length : Math.min(...indexes);
+  v2.rules.splice(insertAt, 0, helper);
+}
+
+function v2SingleInvokeAction(statement: V2StatementAst): V2InvokeStatementAst | undefined {
+  return statement.kind === "v2_invoke" && statement.args.length === 0 ? statement : undefined;
+}
+
+function singleUseV2SiblingRule(
+  rules: ReadonlyMap<string, V2RuleAst>,
+  callCounts: ReadonlyMap<string, number>,
+  name: string,
+): V2RuleAst | undefined {
+  const rule = rules.get(name);
+  if (rule === undefined || rule.params.length > 0) return undefined;
+  if ((callCounts.get(name) ?? 0) !== 1) return undefined;
+  if (v2StatementsContainReturn(rule.body) || v2StatementsContainRaw(rule.body)) return undefined;
+  return rule;
+}
+
+function v2ParametricSiblingPlan(
+  left: V2RuleAst,
+  right: V2RuleAst,
+  param: string,
+  moveDeltas: ReadonlyMap<string, Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>>>,
+): V2ParametricSiblingPlan | undefined {
+  if (left.body.length !== right.body.length || left.body.length === 0) return undefined;
+  let leftDelta: number | undefined;
+  let rightDelta: number | undefined;
+  let parameterized = 0;
+  const body: V2StatementAst[] = [];
+
+  for (let index = 0; index < left.body.length; index += 1) {
+    const leftStatement = left.body[index]!;
+    const rightStatement = right.body[index]!;
+    const leftUpdate = v2AdditiveSelfUpdate(leftStatement, moveDeltas);
+    const rightUpdate = v2AdditiveSelfUpdate(rightStatement, moveDeltas);
+    if (
+      leftUpdate !== undefined &&
+      rightUpdate !== undefined &&
+      leftUpdate.target === rightUpdate.target &&
+      leftUpdate.delta !== rightUpdate.delta
+    ) {
+      if (leftDelta === undefined) {
+        leftDelta = leftUpdate.delta;
+        rightDelta = rightUpdate.delta;
+      } else if (leftDelta !== leftUpdate.delta || rightDelta !== rightUpdate.delta) {
+        return undefined;
+      }
+      body.push({
+        kind: "v2_update",
+        target: leftUpdate.target,
+        op: "+=",
+        expr: param,
+        line: leftStatement.line,
+      });
+      parameterized += 1;
+      continue;
+    }
+    if (!v2StatementsComparable(leftStatement, rightStatement)) return undefined;
+    body.push(structuredClone(leftStatement));
+  }
+
+  const first = body[0];
+  if (
+    leftDelta === undefined ||
+    rightDelta === undefined ||
+    parameterized === 0 ||
+    first?.kind !== "v2_update" ||
+    first.expr !== param
+  ) {
+    return undefined;
+  }
+  return { body, leftDelta, rightDelta };
+}
+
+function v2AdditiveSelfUpdate(
+  statement: V2StatementAst,
+  moveDeltas: ReadonlyMap<string, Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>>>,
+): { target: string; delta: number } | undefined {
+  if (statement.kind === "v2_update") {
+    if (!isSimpleV2Identifier(statement.target)) return undefined;
+    const value = numericV2LiteralValue(statement.expr);
+    if (value === undefined) return undefined;
+    return { target: statement.target, delta: statement.op === "+=" ? value : -value };
+  }
+  if (statement.kind !== "v2_assign" || !isSimpleV2Identifier(statement.target)) return undefined;
+  const moveDelta = v2MoveAssignmentDelta(statement, moveDeltas);
+  if (moveDelta !== undefined) return { target: statement.target, delta: moveDelta };
+  const selfDelta = v2SelfAssignmentDelta(statement.target, statement.expr);
+  return selfDelta === undefined ? undefined : { target: statement.target, delta: selfDelta };
+}
+
+function v2MoveAssignmentDelta(
+  statement: V2AssignStatementAst,
+  moveDeltas: ReadonlyMap<string, Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>>>,
+): number | undefined {
+  const call = parseNamedCall(statement.expr, "move");
+  if (call === undefined) return undefined;
+  const args = splitArgs(call.argsText).map((arg) => arg.trim());
+  const [target, directionText] = args;
+  if (args.length !== 2 || target !== statement.target || directionText === undefined) return undefined;
+  const direction = parseV2MoveDirectionName(directionText);
+  if (direction === undefined) return undefined;
+  const deltaText = moveDeltas.get(statement.target)?.[direction] ?? moveDeltasForEncoding(undefined)[direction];
+  return deltaText === undefined ? undefined : numericV2LiteralValue(deltaText);
+}
+
+function v2SelfAssignmentDelta(target: string, expr: string): number | undefined {
+  const escaped = escapeRegExp(target);
+  const numeric = "(-?\\d+(?:\\.\\d+)?(?:e[+-]?\\d+)?)";
+  const targetPlus = new RegExp(`^${escaped}\\s*\\+\\s*${numeric}$`, "iu").exec(expr.trim());
+  if (targetPlus) return numericV2LiteralValue(targetPlus[1]!);
+  const plusTarget = new RegExp(`^${numeric}\\s*\\+\\s*${escaped}$`, "iu").exec(expr.trim());
+  if (plusTarget) return numericV2LiteralValue(plusTarget[1]!);
+  const targetMinus = new RegExp(`^${escaped}\\s*-\\s*${numeric}$`, "iu").exec(expr.trim());
+  if (targetMinus) {
+    const value = numericV2LiteralValue(targetMinus[1]!);
+    return value === undefined ? undefined : -value;
+  }
+  return undefined;
+}
+
+function numericV2LiteralValue(text: string): number | undefined {
+  if (!isNumericLiteralText(text)) return undefined;
+  const value = Number(text.trim());
+  return Number.isFinite(value) ? value : undefined;
+}
+
+function isSimpleV2Identifier(text: string): boolean {
+  return /^[A-Za-z_][\w]*$/u.test(text);
+}
+
+function formatV2Number(value: number): string {
+  return Object.is(value, -0) ? "0" : String(value);
+}
+
+function v2StatementsContainRaw(statements: readonly V2StatementAst[]): boolean {
+  return statements.some((statement) => {
+    switch (statement.kind) {
+      case "v2_raw":
+        return true;
+      case "v2_if":
+        return v2StatementsContainRaw(statement.thenBody) ||
+          (statement.elseBody !== undefined && v2StatementsContainRaw(statement.elseBody));
+      case "v2_while":
+      case "v2_loop":
+        return v2StatementsContainRaw(statement.body);
+      case "v2_match":
+        return statement.cases.some((matchCase) => v2StatementsContainRaw([matchCase.action])) ||
+          (statement.otherwise !== undefined && v2StatementsContainRaw([statement.otherwise]));
+      default:
+        return false;
+    }
+  });
+}
+
+function v2StatementsComparable(left: V2StatementAst, right: V2StatementAst): boolean {
+  return JSON.stringify(v2ComparableValue(left)) === JSON.stringify(v2ComparableValue(right));
+}
+
+function v2ComparableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(v2ComparableValue);
+  if (value === null || typeof value !== "object") return value;
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+    if (key === "line") continue;
+    const field = (value as Record<string, unknown>)[key];
+    if (field !== undefined) result[key] = v2ComparableValue(field);
+  }
+  return result;
+}
+
+function freshV2ParametricSiblingName(v2: V2ProgramAst, role: "delta" | "proc"): string {
+  const used = collectV2UsedNames(v2);
+  for (let index = 0; ; index += 1) {
+    const candidate = `${PARAMETRIC_SIBLING_RULE_PREFIX}${role}_${index}`;
+    if (!used.has(candidate)) return candidate;
+  }
+}
+
+function collectV2UsedNames(v2: V2ProgramAst): Set<string> {
+  const used = new Set<string>([v2.name]);
+  const addText = (text: string): void => {
+    const pattern = /\b[A-Za-z_][\w]*\b/gu;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text)) !== null) used.add(match[0]);
+  };
+  const visit = (statements: readonly V2StatementAst[]): void => {
+    for (const statement of statements) {
+      for (const text of v2StatementExprTexts(statement)) addText(text);
+      switch (statement.kind) {
+        case "v2_assign":
+        case "v2_update":
+          addText(statement.target);
+          break;
+        case "v2_read":
+          used.add(statement.target);
+          break;
+        case "v2_show":
+          if (statement.target !== undefined) addText(statement.target);
+          if (statement.inlineName !== undefined) used.add(statement.inlineName);
+          for (const item of statement.items ?? []) {
+            if (item.kind === "source") used.add(item.name);
+          }
+          break;
+        case "v2_if":
+          visit(statement.thenBody);
+          if (statement.elseBody !== undefined) visit(statement.elseBody);
+          break;
+        case "v2_while":
+        case "v2_loop":
+          visit(statement.body);
+          break;
+        case "v2_match":
+          for (const matchCase of statement.cases) visit([matchCase.action]);
+          if (statement.otherwise !== undefined) visit([statement.otherwise]);
+          break;
+        case "v2_invoke":
+          used.add(statement.name);
+          break;
+        case "v2_raw":
+          for (const output of statement.outputs) used.add(output.target);
+          for (const clobber of statement.clobbers) used.add(clobber);
+          for (const preserve of statement.preserves) used.add(preserve);
+          break;
+        default:
+          break;
+      }
+    }
+  };
+
+  for (const field of v2.state) used.add(field.name);
+  for (const board of v2.boards) used.add(board.name);
+  for (const world of v2.worlds) {
+    used.add(world.name);
+    if (world.position !== undefined) used.add(world.position.name);
+  }
+  visit(v2.body);
+  for (const rule of v2.rules) {
+    used.add(rule.name);
+    for (const param of rule.params) used.add(param);
+    visit(rule.body);
+  }
+  return used;
 }
 
 function isSpecializableRuleBody(rule: V2RuleAst): boolean {

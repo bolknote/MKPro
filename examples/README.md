@@ -16,11 +16,11 @@ Generated with `npm run examples:size`.
 | Example | MK-Pro | MK-61 ref | Delta | Size status | Emulator |
 | --- | ---: | ---: | ---: | --- | --- |
 | `99-bottles.mkpro` | 53 | 53 | 0 | ok: <= reference | main+setup load ok |
-| `alaram.mkpro` | 81 | 105 | -24 | ok: <= reference | main+setup load ok |
+| `alaram.mkpro` | 80 | 105 | -25 | ok: <= reference | main+setup load ok |
 | `basic.mkpro` | 8 | - | - | ok: no reference | load ok |
 | `cave-sketch.mkpro` | 52 | 105 | -53 | ok: <= reference | main+setup load ok |
-| `dangerous-loading.mkpro` | 89 | 103 | -14 | ok: <= reference | load ok |
-| `dungeon.mkpro` | 84 | 105 | -21 | ok: <= reference | load ok |
+| `dangerous-loading.mkpro` | 86 | 103 | -17 | ok: <= reference | load ok |
+| `dungeon.mkpro` | 83 | 105 | -22 | ok: <= reference | load ok |
 | `e-94-digits.mkpro` | 64 | 64 | 0 | ok: <= reference | load ok |
 | `fox-hunt-100.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |
 | `fox-hunt-mk61.mkpro` | 65 | 92 | -27 | ok: <= reference | main+setup load ok |

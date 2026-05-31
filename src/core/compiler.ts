@@ -216,6 +216,7 @@ const DISPLAY_TEMPLATE_VALUE_PREFIX = "__display_value_";
 const DISPLAY_TEMPLATE_LOOP_PREFIX = "__display_loop_";
 const DISPLAY_TEMPLATE_MASK_PREFIX = "__display_mask_";
 const CELL_MAP_PREFIX = "__cell_map_";
+const PARAMETRIC_SIBLING_PREFIX = "__param_sibling_";
 const INTERNAL_NAME_PREFIX = "__mkpro_";
 const DISPLAY_HELPER_MIN_SAVINGS = 4;
 const UNAVAILABLE_DISPLAY_STRATEGY_COST = 999999;
@@ -304,6 +305,11 @@ interface LoweringOptions {
   // an abs/sign guarded default branch. Speculative because the expression work
   // only wins when it replaces enough dispatch arms.
   signedAbsMatchPairs?: boolean;
+  // Synthesize a one-parameter helper from sibling dispatch arms whose called
+  // single-use procedures have the same body except for one numeric update
+  // delta. Speculative because sharing a short pair can add call overhead or
+  // perturb register allocation; adopted only when the whole program shrinks.
+  synthesizeParametricSiblings?: boolean;
 }
 
 
@@ -490,6 +496,11 @@ export function compileMKPro(
     { signedAbsMatchPairs: true, sharedBitMaskHelperCalls: true, hoistSharedHelpers: true, hoistProcs: true },
     "signed-abs-shared-bit-helper-hoisted-proc-layout",
     "Combined signed match-pair lowering with hoisted shared bit-mask helpers and procedures after full layout",
+  );
+  tryCandidate(
+    { synthesizeParametricSiblings: true },
+    "parametric-sibling-proc",
+    "Synthesized a shared one-parameter helper for sibling dispatch procedure arms",
   );
 
   const selectBest = (): { best: CompileResult; selected: (typeof candidates)[number] | undefined } => {
@@ -1263,6 +1274,7 @@ function compileMKProOnce(
 ): CompileResult {
   const ast = parseProgram(source, {
     signedAbsMatchPairs: loweringOptions.signedAbsMatchPairs === true,
+    synthesizeParametricSiblings: loweringOptions.synthesizeParametricSiblings === true,
   });
   const opts: CompileOptions = { ...DEFAULT_OPTIONS, ...options };
   // The copy-coalescing (Form 2) lowering variant reaches the register-coalesce
@@ -1453,6 +1465,7 @@ function visiblePublicRegisters(
       !name.startsWith(IF_SELECTOR_SCRATCH_PREFIX) &&
       !name.startsWith(DISPLAY_EXPR_PREFIX) &&
       !name.startsWith(CELL_MAP_PREFIX) &&
+      !name.startsWith(PARAMETRIC_SIBLING_PREFIX) &&
       !name.startsWith(SPATIAL_HIT_SCRATCH_PREFIX) &&
       !name.startsWith(SPATIAL_COUNT_SCRATCH_PREFIX)
     ) {
@@ -7202,7 +7215,7 @@ function collectXParamProcLowerings(
   const v2Rules = new Map(ast.v2?.rules.map((rule) => [rule.name, rule]) ?? []);
   for (const proc of ast.procs) {
     if (inlineProcNames.has(proc.name)) continue;
-    const params = v2Rules.get(proc.name)?.params ?? [];
+    const params = proc.params ?? v2Rules.get(proc.name)?.params ?? [];
     if (params.length !== 1) continue;
     const param = params[0]!;
     if ((readCounts.get(param) ?? 0) !== 1) continue;

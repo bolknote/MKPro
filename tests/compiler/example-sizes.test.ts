@@ -1,23 +1,22 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { compileMKPro } from "../../src/core/index.ts";
 
-// Size guard. The compiled cell count of every example program must never
-// grow past these locked baselines. Shrinking is allowed and expected; when a
-// program gets smaller, lower the matching number here so the guard keeps
-// catching regressions.
+// Exact size baseline. Before adding a size optimization, lock the current
+// compiled cell count here; when a program intentionally gets smaller, update
+// the matching number in the same change so the diff shows the saving clearly.
 //
 // Cell count is taken from `report.steps`, which equals the number of program
 // cells emitted by `mk-pro compile ... --out hex`.
 
 const EXAMPLE_BASELINE: Record<string, number> = {
   "99-bottles": 53,
-  alaram: 81,
+  alaram: 80,
   basic: 8,
   "cave-sketch": 52,
-  "dangerous-loading": 89,
-  dungeon: 84,
+  "dangerous-loading": 86,
+  dungeon: 83,
   "e-94-digits": 64,
   "functions-demo": 29,
   "fox-hunt-100": 105,
@@ -36,11 +35,11 @@ const EXAMPLE_BASELINE: Record<string, number> = {
 
 const EXAMPLE_COMPILE_ERRORS: Record<string, RegExp> = {};
 
-// pending-optimizer programs overflow the physical MK-61 address space, so
+// pending-optimizer programs may overflow the physical MK-61 address space, so
 // they are measured with a large budget and analysis mode, mirroring
 // `mk-pro compile ... --out hex --budget 999999 --analysis`. The goal is to
-// shrink these toward 105; the guard only enforces that they never grow.
-// The numbers below are the current locked ceilings, not historical deltas.
+// shrink these toward 105; intentional shrinkage should update these exact
+// baselines just like top-level examples.
 const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 157,
   "cave-treasure": 172,
@@ -60,10 +59,21 @@ function exampleSteps(relativePath: string, analysis: boolean): number {
   return compileMKPro(source, options).report.steps;
 }
 
+function exampleNames(relativeDir: string): string[] {
+  return readdirSync(resolve("examples", relativeDir), { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".mkpro"))
+    .map((entry) => entry.name.replace(/\.mkpro$/u, ""))
+    .sort();
+}
+
 describe("example size guard", () => {
+  it("records every top-level example", () => {
+    expect(Object.keys(EXAMPLE_BASELINE).sort()).toEqual(exampleNames("."));
+  });
+
   for (const [name, baseline] of Object.entries(EXAMPLE_BASELINE)) {
-    it(`${name}.mkpro stays within ${baseline} cells`, () => {
-      expect(exampleSteps(name, false)).toBeLessThanOrEqual(baseline);
+    it(`${name}.mkpro is locked at ${baseline} cells`, () => {
+      expect(exampleSteps(name, false)).toBe(baseline);
     });
   }
 
@@ -73,9 +83,13 @@ describe("example size guard", () => {
     });
   }
 
+  it("records every pending-optimizer example", () => {
+    expect(Object.keys(PENDING_BASELINE).sort()).toEqual(exampleNames("pending-optimizer"));
+  });
+
   for (const [name, baseline] of Object.entries(PENDING_BASELINE)) {
-    it(`pending-optimizer/${name}.mkpro stays within ${baseline} cells`, () => {
-      expect(exampleSteps(`pending-optimizer/${name}`, true)).toBeLessThanOrEqual(baseline);
+    it(`pending-optimizer/${name}.mkpro is locked at ${baseline} cells`, () => {
+      expect(exampleSteps(`pending-optimizer/${name}`, true)).toBe(baseline);
     });
   }
 
