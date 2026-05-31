@@ -4,9 +4,9 @@ Generated with `npm run examples:size`.
 
 ## Snapshot
 
-- Top-level examples: 21/21 fit in the 105-cell MK-61 window; 21/21 pass the headless load check.
-- Referenced top-level examples: 16/16 are no larger than the original MK-61 listing.
-- Tightest runnable examples: `fox-hunt-100.mkpro` (105), `wumpus.mkpro` (105), `game-100-pig.mkpro` (103).
+- Top-level examples: 22/22 fit in the 105-cell MK-61 window; 22/22 pass the headless load check.
+- Referenced top-level examples: 17/17 are no larger than the original MK-61 listing.
+- Tightest runnable examples: `fox-hunt-100.mkpro` (105), `treasure-hunter-2.mkpro` (105), `wumpus.mkpro` (105).
 - Pending optimizer: 7 programs still exceed the MK-61 window; nearest is `pending-optimizer/cave-highlevel-baseline.mkpro` (157).
 
 ## Measurements
@@ -35,6 +35,7 @@ Generated with `npm run examples:size`.
 | `raja-yoga.mkpro` | 88 | 98 | -10 | ok: <= reference | main+setup load ok |
 | `sea-battle.mkpro` | 82 | 102 | -20 | ok: <= reference | main+setup load ok |
 | `tiny-game.mkpro` | 23 | - | - | ok: no reference | load ok |
+| `treasure-hunter-2.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |
 | `wumpus.mkpro` | 105 | - | - | ok: no reference | main+setup load ok |
 | `pending-optimizer/cave-highlevel-baseline.mkpro` | 157 | 105 | +52 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/cave-treasure.mkpro` | 165 | 105 | +60 | pending optimizer | setup load ok; main >105 |
@@ -42,5 +43,4 @@ Generated with `npm run examples:size`.
 | `pending-optimizer/labyrinth777.mkpro` | 206 | 105 | +101 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/rambo-iii.mkpro` | 203 | 105 | +98 | pending optimizer | not loaded: main >105 |
 | `pending-optimizer/teleport.mkpro` | 239 | 105 | +134 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/tic-tac-toe-4x4.mkpro` | 219 | 105 | +114 | pending optimizer | not loaded: main >105 |
-| `pending-optimizer/treasure-hunter-2.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |
+| `pending-optimizer/tic-tac-toe-4x4.mkpro` | 213 | 105 | +108 | pending optimizer | not loaded: main >105 |

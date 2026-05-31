@@ -15,6 +15,9 @@ high-level source fit.
 `jack-pot.mkpro` moved back to the top-level examples at 101 cells and passes the
 main+setup load check.
 
+`treasure-hunter-2.mkpro` moved back to the top-level examples at 105 cells and
+passes the main+setup load check.
+
 Current `--analysis` sizes, measured against the local reference listings:
 
 Strict `mk-pro compile` mode is not guaranteed for every pending file yet.
@@ -30,7 +33,6 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | `rambo-iii.mkpro` | 203 | 105 | grouped front/robots storage now works; event dispatch and battle-flow branches are the remaining large blocks |
 | `teleport.mkpro` | 239 | 105 | packed row display, station masks, and vault/guard flow |
 | `tic-tac-toe-4x4.mkpro` | 219 | 105 | 4x4 line-count state representation |
-| `treasure-hunter-2.mkpro` | 105 | 105 | closed by packed cursor position, angle-switch movement, and indexed floor-row flow |
 
 Prototype notes:
 
