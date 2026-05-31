@@ -281,7 +281,7 @@ Display rewrites are separated into strategy selection + body lowering.
 - `interprocedural-dead-store` — removes writes to cells not read beyond procedure boundaries.
 - `elideXParamReturnStateFields` — removes unused X return-state fields and reduces memory.
 - `elide`-style elimination patterns — remove intermediate bookkeeping artifacts when no longer needed.
-- `constant-synthesis` — synthesizes reusable constants in minimally short ways. For exact positive powers of ten, it now prefers loading the exponent first and emitting `F 10^x` when that plan is cheaper (`positiveIntegerPowerOfTenExponent` + `cost = estimateNumberCost(exponent) + 1 + (machineEntryOpen ? 1 : 0)`), and emits it as `load exponent; F 10^x`.
+- `constant-synthesis` — synthesizes reusable constants in minimally short ways. Exact positive powers of ten can be built as `exponent; F 10^x` when that beats digit entry, both in main code and setup preloads.
 - `preloaded-constant` — preloads constants when cheaper than recomputing each time.
 - `auto-preload-initial-state` — moves required startup cells into setup so main code is shorter.
 - `preloaded-indirect-flow` — enables indexed writes via preloaded selector.

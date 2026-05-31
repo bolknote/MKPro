@@ -627,7 +627,9 @@ Single-argument math and transcendental helpers include `abs`, `sign`, `int`,
 `asin`, `acos`, `atg`, `to_min`, `to_sec`, `from_sec`, and `from_min`.
 `pow(base, exponent)` is explicit two-argument power.
 `pow10(k)` is available as a convenience helper for decimal-digit scaling and is
-used by board and packed-row logic throughout the examples.
+used by board and packed-row logic throughout the examples. Constant decimal
+powers such as `pow10(4)` and literal `10000` are materialized through MK-61
+`F 10^x` when that is shorter than digit entry.
 `max(a, b)` is the two-argument comparator helper (`К max`).
 `pi` is a zero-argument helper (`F pi`).
 

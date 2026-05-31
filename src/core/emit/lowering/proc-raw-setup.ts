@@ -66,6 +66,7 @@ import {
   numberExpression,
   orderRawInputs,
   parseRawInstruction,
+  positiveIntegerPowerOfTenExponent,
   programUsesDashedCoordReport,
   randomCoordListItemPlacement,
   randomCoordListSetupFields,
@@ -93,6 +94,13 @@ interface RepeatedIndexedSetupGroup {
 
 type SetupNumericPreloadAction =
   | { kind: "direct"; targetIndex: number; cost: number }
+  | {
+      kind: "pow10";
+      targetIndex: number;
+      cost: number;
+      exponent: string;
+      detail: string;
+    }
   | {
       kind: "unary";
       targetIndex: number;
@@ -472,6 +480,18 @@ function setupConstantSynthesisActions(
         }
       }
     }
+
+    const powerOfTenExponent = positiveIntegerPowerOfTenExponent(targetValue);
+    if (powerOfTenExponent !== undefined) {
+      const exponent = String(powerOfTenExponent);
+      accept({
+        kind: "pow10",
+        targetIndex,
+        cost: estimateNumberCost(exponent) + 1,
+        exponent,
+        detail: `loaded exponent ${exponent} and applied F 10^x`,
+      });
+    }
     return actions;
 }
 
@@ -486,7 +506,10 @@ function emitSetupNumericPreloadAction(
       ctx.emitNumber(target.value);
       return;
     }
-    if (action.kind === "unary") {
+    if (action.kind === "pow10") {
+      ctx.emitNumber(action.exponent);
+      ctx.emitOp(0x15, "F 10^x", `setup constant ${targetValue}`);
+    } else if (action.kind === "unary") {
       const source = preloads[action.sourceIndex]!;
       ctx.emitOp(0x60 + registerIndex(source.register), `П->X ${source.register}`, `setup constant ${targetValue} base ${normalizeConstantLiteral(source.value)}`);
       ctx.emitOp(action.opcode, action.mnemonic, `setup constant ${targetValue}`);

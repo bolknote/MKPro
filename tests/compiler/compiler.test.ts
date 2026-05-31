@@ -75,6 +75,29 @@ program ConstantSquareSynthesis {
     )).toBe(true);
   });
 
+  it("synthesizes decimal power constants without preloads", () => {
+    const result = compileLoweringVariantForTest(`
+program ConstantPow10Synthesis {
+  state {
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
+    x = x * pow10(4)
+    halt(x)
+  }
+}
+`, { budget: 999, analysis: true }, {
+      suppressConstantPreloads: new Set(["10000"]),
+    });
+
+    expect(result.steps.some((step) => step.hex === "15" && step.comment === "constant 10000")).toBe(true);
+    expect(result.report.optimizations.some((item) =>
+      item.name === "constant-synthesis" && item.detail.includes("F 10^x"),
+    )).toBe(true);
+  });
+
   it("synthesizes suppressed signed constants from preloaded opposites", () => {
     const result = compileLoweringVariantForTest(`
 program ConstantSignSynthesis {
@@ -191,7 +214,34 @@ program SetupConstantSquareSynthesis {
 
   loop {
     x = read()
-    x = x + 100
+    x = x + 123
+    x = x + 15129
+    if seed == -1 {
+      halt(seed)
+    }
+    halt(x)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.setupProgram?.steps.some((step) =>
+      step.hex === "22" && step.comment === "setup constant 15129",
+    )).toBe(true);
+    expect(result.report.optimizations.some((item) =>
+      item.name === "setup-constant-synthesis" && item.detail.includes("Built setup constant 15129"),
+    )).toBe(true);
+  });
+
+  it("synthesizes setup decimal power constants directly", () => {
+    const result = compileOk(`
+program SetupConstantPow10Synthesis {
+  state {
+    seed: packed = random()
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
     x = x + 10000
     if seed == -1 {
       halt(seed)
@@ -202,10 +252,10 @@ program SetupConstantSquareSynthesis {
 `, { budget: 999, analysis: true });
 
     expect(result.report.setupProgram?.steps.some((step) =>
-      step.hex === "22" && step.comment === "setup constant 10000",
+      step.hex === "15" && step.comment === "setup constant 10000",
     )).toBe(true);
     expect(result.report.optimizations.some((item) =>
-      item.name === "setup-constant-synthesis" && item.detail.includes("Built setup constant 10000"),
+      item.name === "setup-constant-synthesis" && item.detail.includes("F 10^x"),
     )).toBe(true);
   });
 
