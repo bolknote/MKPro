@@ -272,6 +272,17 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
     if (compileRandomIntegerCall(ctx, expr)) {
       return;
     }
+    if (name === "read" || name === "input") {
+      if (expr.args.length !== 0) {
+        ctx.diagnostics.push({
+          level: "error",
+          message: `${expr.callee}() takes no arguments, got ${expr.args.length}.`,
+        });
+        return;
+      }
+      ctx.emitOp(0x50, "С/П", `${expr.callee}()`);
+      return;
+    }
     const zeroArgOpcodes: Record<string, [number, string]> = {
       pi: [0x20, "F pi"],
     };
