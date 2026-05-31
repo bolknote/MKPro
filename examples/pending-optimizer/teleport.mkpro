@@ -1,22 +1,25 @@
 reference anvarov_teleport
 
 // Based on Serge Anvarov's "Teleport": collect charges in a four-floor station
-// while visible guards patrol the rooms. The original listing uses K AND, K OR,
-// and K XOR over packed room masks; here those masks are ordinary cell sets.
+// while visible guards patrol the rooms. The display is the original-style
+// floor digit plus seven room glyphs: empty, ladder, player, guard, or overlays.
 
 program Teleport {
   station: board(1..7, 1..4)
 
   state {
-    pos: coord(station) = stack.X
+    pos: coord(station) = 17
     next: coord(station)
     guards: cells(station) = random()
     vaults: cells(station) = random()
     visited_vaults: cells(station)
 
-    charges: counter 0..99 = stack.Y
-    danger: counter 0..9 = 0
-    loot: counter 0..99 = 0
+    charges: counter 0..99 = 5
+    floor: counter 1..4 = 1
+    room: counter 1..7 = 7
+    scan: counter 1..7 = 1
+    empty_row: packed = bit_not(5 / 9)
+    row: packed = 0
   }
 
   fn caught() {
@@ -24,7 +27,7 @@ program Teleport {
   }
 
   loop {
-    show(pos, danger, charges, loot)
+    draw()
     command = read()
     charges--
 
@@ -52,25 +55,23 @@ program Teleport {
       caught()
     }
     else {
-      danger = neighbor_count(guards, pos)
       if pos in vaults {
         enter_vault()
       }
       else {
-        show(pos, danger, charges, loot)
+        draw()
       }
     }
   }
 
   fn enter_vault() {
     if pos in visited_vaults {
-      show(pos, danger, charges, loot)
+      draw()
     }
     else {
       visited_vaults += pos
       charges += 10
-      loot += 10
-      show(pos, danger, charges, loot)
+      draw()
     }
   }
 
@@ -83,5 +84,25 @@ program Teleport {
     else {
       caught()
     }
+  }
+
+  fn draw() {
+    floor = int(pos / 10)
+    room = pos - 10 * floor
+    row = empty_row
+
+    scan = 1
+    while scan <= 7 {
+      if cell_has(vaults, scan, floor) != 0 {
+        row = bit_xor(row, 8 + 1 / pow10(scan))
+      }
+      if cell_has(guards, scan, floor) != 0 {
+        row = bit_xor(row, 8 + 4 / pow10(scan))
+      }
+      scan++
+    }
+
+    row = bit_xor(row, 8 + 2 / pow10(room))
+    show(floor, ".", row)
   }
 }

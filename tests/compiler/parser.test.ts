@@ -1220,6 +1220,39 @@ program Demo {
     });
   });
 
+  it("parses else and else-if on the closing brace line", () => {
+    const ast = parseProgram(`
+program Teleport {
+  state {
+    charges: counter 0..99 = 15
+  }
+  loop {
+    teleport_to_vault()
+  }
+  fn teleport_to_vault() {
+    if charges >= 10 {
+      charges -= 10
+    } else if charges >= 5 {
+      charges -= 5
+    } else {
+      halt(0)
+    }
+  }
+}
+`);
+    const rule = ast.v2?.rules.find((candidate) => candidate.name === "teleport_to_vault");
+    const root = rule?.body[0];
+    expect(root?.kind).toBe("v2_if");
+    if (root?.kind !== "v2_if") throw new Error("expected v2_if");
+    expect(root.predicate).toMatchObject({ kind: "v2_compare", op: ">=", right: "10" });
+    expect(root.elseBody).toHaveLength(1);
+    const nested = root.elseBody?.[0];
+    expect(nested?.kind).toBe("v2_if");
+    if (nested?.kind !== "v2_if") throw new Error("expected nested v2_if");
+    expect(nested.predicate).toMatchObject({ kind: "v2_compare", op: ">=", right: "5" });
+    expect(nested.elseBody).toEqual([expect.objectContaining({ kind: "v2_stop" })]);
+  });
+
   it("parses raw blocks with an explicit stack and state contract", () => {
     const ast = parseProgram(`
 program RawDemo {

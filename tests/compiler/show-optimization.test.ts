@@ -258,6 +258,29 @@ program LiteralSeparatedScoreboard {
     expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "display-bytes")).toBe(true);
   });
 
+  it("splices a one-digit floor into a packed room row", () => {
+    const source = `
+program FloorPackedRow {
+  state {
+    floor: counter 1..4 = 2
+    base: packed = bit_not(5 / 9)
+    row: packed = 0
+  }
+
+  loop {
+    row = bit_xor(base, 8 + 4 / pow10(2))
+    row = bit_xor(row, 8 + 2 / pow10(4))
+    row = bit_xor(row, 8 + 1 / pow10(7))
+    show(floor, ".", row)
+  }
+}
+`;
+    const result = compileOk(source);
+
+    expect(hasOptimization(result, "floor-packed-row-display")).toBe(true);
+    expect(runCompiledDisplay(source)).toBe("2,-Е-8--L");
+  });
+
   it("renders explicit literal spaces between display fields", () => {
     const source = `
 program ExplicitSpaceDisplay {

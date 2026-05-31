@@ -89,7 +89,7 @@ class MKProParser {
     this.options = options;
     this.lines = source
       .split(/\r?\n/u)
-      .map((text, offset) => ({ text: stripComment(text).trim(), line: offset + 1 }))
+      .flatMap((text, offset) => normalizeSourceLine(text, offset + 1))
       .filter((line) => line.text.length > 0);
   }
 
@@ -319,22 +319,10 @@ class MKProParser {
     }
     if (line.text.startsWith("if ") && line.text.endsWith("{")) {
       this.index += 1;
-      const predicate = parseV2Predicate(line.text.slice("if ".length, -1).trim(), line.line);
-      const thenBody = this.parseV2StatementBlock();
-      let elseBody: V2StatementAst[] | undefined;
-      const next = this.peekOptional();
-      if (next?.text === "else {") {
-        this.index += 1;
-        elseBody = this.parseV2StatementBlock();
-      }
-      const statement: V2StatementAst = {
-        kind: "v2_if",
-        predicate,
-        thenBody,
-        line: line.line,
-      };
-      if (elseBody !== undefined) statement.elseBody = elseBody;
-      return statement;
+      return this.parseV2If(line);
+    }
+    if (line.text === "else {" || line.text.startsWith("else if ")) {
+      throw new ParseError("'else' without matching 'if'", line.line);
     }
     if (line.text.startsWith("while ") && line.text.endsWith("{")) {
       this.index += 1;
@@ -441,6 +429,33 @@ class MKProParser {
       lines.push({ text: rawLine.text, line: rawLine.line });
     }
     throw new ParseError("Unclosed raw code block", line);
+  }
+
+  private parseV2If(line: SourceLine): V2IfStatementAst {
+    const match = /^if\s+(.+)\s*\{$/u.exec(line.text);
+    if (!match) throw new ParseError("If must look like 'if predicate {'", line.line);
+    const statement: V2IfStatementAst = {
+      kind: "v2_if",
+      predicate: parseV2Predicate(match[1]!.trim(), line.line),
+      thenBody: this.parseV2StatementBlock(),
+      line: line.line,
+    };
+    const elseBody = this.parseV2ElseBody();
+    if (elseBody !== undefined) statement.elseBody = elseBody;
+    return statement;
+  }
+
+  private parseV2ElseBody(): V2StatementAst[] | undefined {
+    const next = this.peekOptional();
+    if (next?.text === "else {") {
+      this.index += 1;
+      return this.parseV2StatementBlock();
+    }
+    if (next?.text.startsWith("else if ") && next.text.endsWith("{")) {
+      this.index += 1;
+      return [this.parseV2If({ text: next.text.slice("else ".length), line: next.line })];
+    }
+    return undefined;
   }
 
   private parseV2Match(text: string, line: number): V2MatchStatementAst {
@@ -4151,4 +4166,17 @@ function stripComment(text: string): string {
     if (!quoted && char === "/" && text[index + 1] === "/") return text.slice(0, index);
   }
   return text;
+}
+
+function normalizeSourceLine(text: string, line: number): SourceLine[] {
+  const stripped = stripComment(text).trim();
+  if (stripped.length === 0) return [];
+  const attachedElse = /^[}]\s*(else(?:\s+if\b.*|\s*[{]))$/u.exec(stripped);
+  if (attachedElse) {
+    return [
+      { text: "}", line },
+      { text: attachedElse[1]!.trim(), line },
+    ];
+  }
+  return [{ text: stripped, line }];
 }

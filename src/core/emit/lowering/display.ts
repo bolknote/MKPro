@@ -1,4 +1,5 @@
 import { registerIndex } from "../../opcodes.ts";
+import { machineSupports } from "../../machineProfile.ts";
 import type { ProgramAst, RegisterName, StatementAst } from "../../types.ts";
 import type { LoweringCtx } from "../lowering-ctx.ts";
 import {
@@ -60,6 +61,7 @@ export function compileShow(ctx: LoweringCtx, displayName: string, line: number)
     if (compileLiteralDisplay(ctx, display, line)) return;
     if (compileTextDisplay(ctx, display, line)) return;
     if (compileDashedCoordReportDisplay(ctx, display, line)) return;
+    if (compileFloorPackedRowDisplay(ctx, display, line)) return;
 
     const strategy = ctx.selectDisplayStrategy(display);
     if (strategy === "packed-display-helper") {
@@ -90,6 +92,49 @@ export function compileShow(ctx: LoweringCtx, displayName: string, line: number)
 
     compilePackedDisplayBody(ctx, display, line, true);
     ctx.reportPackedDisplayLowering(display);
+}
+
+export function compileFloorPackedRowDisplay(ctx: LoweringCtx, display: ProgramAst["displays"][number], line: number): boolean {
+    if (!machineSupports(ctx.machineProfile, "display-bytes")) return false;
+
+    const [floor, separator, row] = display.items;
+    if (
+      display.items.length !== 3 ||
+      floor?.kind !== "source" ||
+      separator?.kind !== "literal" ||
+      row?.kind !== "source" ||
+      separator.text !== "."
+    ) {
+      return false;
+    }
+
+    const floorState = ctx.findStateField(floor.name);
+    const rowState = ctx.findStateField(row.name);
+    const floorMin = floorState?.min ?? 0;
+    const floorMax = floorState?.max ?? floorMin;
+    const floorWidth = floor.width ?? Math.max(1, String(Math.trunc(Math.max(Math.abs(floorMin), Math.abs(floorMax)))).length);
+    if (
+      floorState === undefined ||
+      rowState?.type !== "packed" ||
+      floorWidth !== 1 ||
+      floorMin < 0 ||
+      floorMax > 9 ||
+      row.width !== undefined
+    ) {
+      return false;
+    }
+
+    ctx.emitRecall(floor.name, `display ${display.name} floor`, line);
+    ctx.emitRecall(row.name, `display ${display.name} packed row`, line);
+    ctx.emitOp(0x14, "<->", "display packed row floor merge", line);
+    ctx.emitOp(0x25, "F reverse", "display packed row preserve", line);
+    ctx.emitOp(0x0c, "ВП", "display packed row restore", line);
+    ctx.emitOp(0x50, "С/П", `show ${display.name}`, line);
+    ctx.optimizations.push({
+      name: "floor-packed-row-display",
+      detail: `Displayed screen ${display.name} by splicing a one-digit floor into a packed video row.`,
+    });
+    return true;
 }
 
 export function compileDashedCoordReportDisplay(ctx: LoweringCtx, display: ProgramAst["displays"][number], line: number): boolean {

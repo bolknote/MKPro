@@ -141,6 +141,11 @@ cells such as `show(room, " ", arrows, " ", clue)`, `show("L-L ", clue)`, and
 `show("0 L", clue)`. Leading and trailing literal spaces are trimmed because the
 calculator display has no stable visible edge space.
 
+A packed video row can also be spliced under a one-digit leading field with
+`show(floor, ".", row)` when `row` is a `packed` value that already contains the
+seven fractional display cells. This matches source listings that build a room
+picture first and then insert the current floor with `↔; F↻; ВП`.
+
 `show(...)` is a resumable visible stop. Use it for screens where the player
 continues the program, often followed by `name = read()`. For terminal screens,
 put the visible value directly in `halt(...)`.
@@ -297,9 +302,27 @@ fn crash() {
 fn touchdown() {
   if abs(speed) <= 5 {
     safe_landing()
-  }
-  else {
+  } else {
     crash()
+  }
+}
+```
+
+Multi-way conditionals use `else if`; it is equivalent to an `else` branch that
+contains another `if`, but keeps source code flatter:
+
+```mkpro
+fn teleport_to_vault() {
+  if charges >= 10 {
+    charges -= 10
+    pos = random(station)
+    resolve_room()
+  } else if charges >= 5 {
+    charges -= 5
+    pos = random(station)
+    resolve_room()
+  } else {
+    caught()
   }
 }
 ```
@@ -768,7 +791,9 @@ The parser keeps these high-level statements as typed source nodes:
 - `name -= expr`
 - `name++`
 - `name--`
-- `if predicate { ... } else { ... }`
+- `if predicate { ... }`, `if predicate { ... } else { ... }`, and
+  `if predicate { ... } else if predicate { ... } else { ... }`.
+  `else` may be written either on its own line after `}` or as `} else {`.
 - `while predicate { ... }`
 - `loop { ... }`
 - `name = move(pos, direction)`
@@ -895,6 +920,8 @@ candidates:
   `10`, `20`, and `100`;
 - show/read fusion: `show(...)` followed by `key = read()` uses one calculator
   stop, not two;
+- floor/row display splice: `show(floor, ".", row)` can use the MK-61 X2
+  splice idiom when `row` is already a packed seven-cell display body;
 - direction dispatch: groups many direction-key cases into one default
   movement path plus explicit rare commands;
 - single-use function inlining: inlines functions called once and drops their

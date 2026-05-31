@@ -40,6 +40,6 @@ Generated with `npm run examples:size`.
 | `pending-optimizer/giants-country.mkpro` | 162 | 105 | +57 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/labyrinth777.mkpro` | 221 | 105 | +116 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/rambo-iii.mkpro` | 201 | 105 | +96 | pending optimizer | not loaded: main >105 |
-| `pending-optimizer/teleport.mkpro` | 231 | 105 | +126 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/teleport.mkpro` | 236 | 105 | +131 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/tic-tac-toe-4x4.mkpro` | 264 | 105 | +159 | pending optimizer | not loaded: main >105 |
 | `pending-optimizer/treasure-hunter-2.mkpro` | 135 | 105 | +30 | pending optimizer | setup load ok; main >105 |
