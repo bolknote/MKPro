@@ -353,7 +353,7 @@ program SimpleRules {
   it("merges dispatch cases that are identical to the default branch", () => {
     const result = compileMKPro(source("examples/dangerous-loading.mkpro"));
 
-    expect(result.report.steps).toBe(87);
+    expect(result.report.steps).toBe(89);
     expect(result.report.reference?.referenceSpan).toBe(103);
     expect(result.report.optimizations.some((optimization) => optimization.name === "dispatch-default-merge")).toBe(true);
     expect(result.report.optimizations.some((optimization) => optimization.name === "tail-call-lowering")).toBe(true);

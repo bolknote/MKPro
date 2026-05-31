@@ -186,10 +186,10 @@ describe("emulator regression", () => {
     const setupRun = calc.runUntilStable({ maxFrames: 1000, stableFrames: 8 });
     expect(setupRun.stopped).toBe(true);
 
-    const wumpus = readIntegerRegister(calc, "8");
-    expect(wumpus).toBeGreaterThanOrEqual(1);
-    expect(wumpus).toBeLessThanOrEqual(20);
-    for (const register of ["4", "5", "0", "1"]) {
+    for (const field of ["wumpus", "hazard_pit_1", "hazard_pit_2", "hazard_bat_1", "hazard_bat_2"]) {
+      const register = result.report.registers[field];
+      expect(register).toBeDefined();
+      if (register === undefined) throw new Error(`missing register for ${field}`);
       const value = readIntegerRegister(calc, register);
       expect(value).toBeGreaterThanOrEqual(1);
       expect(value).toBeLessThanOrEqual(20);
