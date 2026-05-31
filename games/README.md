@@ -32,6 +32,18 @@ The modified demo in
 
 Programs: **3**.
 
+## Tekhnika Molodyzhi / No. 7 (1985)
+
+Source: [Техника-молодёжи](https://epizodsspace.airbase.ru/bibl/tehnika_-_molodyoji/1985/7/put.html) (KEI column)
+
+Files are stored in [`tehnika-molodyzhi/`](./tehnika-molodyzhi/):
+
+- `soft-landing.txt` — landing game program, based on `Lunolot-1` conventions.
+- `planet-constructor.txt` — PC-1 utility for constructing custom planetary parameters.
+- Matching `*.md` descriptions in English and `manifest.tsv`.
+
+Programs: **2**.
+
 ## Serge Anvarov Collection
 
 Sources:
