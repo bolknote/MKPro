@@ -104,6 +104,7 @@ import {
   numberExpression,
   numericLiteralValue,
   optimizeDispatchDefaultCases,
+  positiveIntegerPowerOfTenExponent,
   programUsesDashedCoordReport,
   randomCoordListItemPlacement,
   sameCoordListCall,
@@ -3913,6 +3914,12 @@ function formatDomainName(domain: ProgramAst["domains"][number]): string {
 
 type ConstantSynthesisPlan =
   | {
+      kind: "pow10";
+      cost: number;
+      exponent: string;
+      detail: string;
+    }
+  | {
       kind: "unary";
       cost: number;
       sourceValue: string;
@@ -6274,11 +6281,25 @@ export class EmitContext {
       }
     }
 
+    const powerOfTenExponent = positiveIntegerPowerOfTenExponent(normalized);
+    if (powerOfTenExponent !== undefined) {
+      const exponent = String(powerOfTenExponent);
+      accept({
+        kind: "pow10",
+        cost: estimateNumberCost(exponent) + 1 + (this.emitter.machineEntryOpen ? 1 : 0),
+        exponent,
+        detail: `loaded exponent ${exponent} and applied F 10^x`,
+      });
+    }
+
     return best;
   }
 
   private emitConstantSynthesis(target: string, plan: ConstantSynthesisPlan, directCost: number): void {
-    if (plan.kind === "unary") {
+    if (plan.kind === "pow10") {
+      this.emitNumber(plan.exponent);
+      this.emitOp(0x15, "F 10^x", `constant ${target}`);
+    } else if (plan.kind === "unary") {
       this.emitOp(0x60 + registerIndex(plan.sourceRegister), `П->X ${plan.sourceRegister}`, `constant ${target} base ${plan.sourceValue}`);
       this.emitOp(plan.opcode, plan.mnemonic, `constant ${target}`);
     } else if (plan.kind === "unary-sequence") {

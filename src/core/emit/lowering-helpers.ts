@@ -604,6 +604,12 @@ export function normalizeConstantLiteral(raw: string): string {
   return Number.isFinite(value) ? String(value) : raw.trim();
 }
 
+export function positiveIntegerPowerOfTenExponent(normalized: string): number | undefined {
+  const trimmed = normalized.trim();
+  if (!/^10+$/u.test(trimmed)) return undefined;
+  return trimmed.length - 1;
+}
+
 export function negatedNumberLiteral(raw: string): string {
   const normalized = raw.trim();
   return normalized.startsWith("-") ? normalized.slice(1) : `-${normalized}`;

@@ -41,6 +41,6 @@ Generated with `npm run examples:size`.
 | `pending-optimizer/cave-treasure.mkpro` | 165 | 105 | +60 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/giants-country.mkpro` | 170 | 105 | +65 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/labyrinth777.mkpro` | 206 | 105 | +101 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/rambo-iii.mkpro` | 203 | 105 | +98 | pending optimizer | not loaded: main >105 |
+| `pending-optimizer/rambo-iii.mkpro` | 149 | 105 | +44 | pending optimizer | not loaded: main >105 |
 | `pending-optimizer/teleport.mkpro` | 239 | 105 | +134 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/tic-tac-toe-4x4.mkpro` | 213 | 105 | +108 | pending optimizer | not loaded: main >105 |

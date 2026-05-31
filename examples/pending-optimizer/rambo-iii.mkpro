@@ -1,25 +1,19 @@
 reference lordbss_pmk53
 
 // Source-level port of Lord_BSS pmk53, "Rambo-III" by Evgeny Vek. The MK-61
-// listing stores enemy strength and fortress distance together in R1..R3
-// (5000.999), our robots in R4..R6, reserve in R7, the victory video value in
-// R8, and the random seed in Rc. This version keeps those source effects
-// explicit instead of inventing a separate game model.
+// listing keeps one addressable battle bank: R1..R3 store enemy strength and
+// fortress distance together (5000.999), R4..R6 store our robots, and R7 stores
+// reserve. Random reinforcement is therefore an indexed add into that bank,
+// just as the MK-61 code does through its event-target register.
 
 program RamboIII {
   state {
-    time: counter 0..25 = 25
-
-    front_line: group(1..3) {
-      front: packed = 5000.999
-      robots: packed = 0
-    }
-
-    reserve: packed = 25000
+    cells: packed[1..7] = 5000.999
+    time: counter 0..25 = 0
     random_state: packed = 0.5
 
-    front: packed = 0
-    robots: packed = 0
+    slot: counter 0..3 = 0
+    robot_slot: counter 3..6 = 3
     event_target: counter 0..7 = 0
     scratch: packed = 0
   }
@@ -32,18 +26,24 @@ program RamboIII {
     halt(8.1020088E14)
   }
 
-  loop {
+  cells[4] = 0
+  cells[5] = 0
+  cells[6] = 0
+  cells[7] = 25000
+  time = 25
+  while time >= 1 {
     show(time)
     reinforcement_cycle()
-    front_stop(1)
-    front_stop(2)
-    front_stop(3)
-    time--
-
-    if time <= 0 {
-      won()
+    slot = 0
+    robot_slot = 3
+    while slot < 3 {
+      slot++
+      robot_slot++
+      front_stop()
     }
+    time--
   }
+  won()
 
   fn random_92() {
     random_state = random()
@@ -58,35 +58,19 @@ program RamboIII {
 
     random_92()
     scratch = int(random_state * 10000)
-
-    match event_target {
-      1 => front_line[1].front += scratch
-      2 => front_line[2].front += scratch
-      3 => front_line[3].front += scratch
-      4 => front_line[1].robots += scratch
-      7 => reserve += scratch
-    }
+    cells[event_target] += scratch
   }
 
-  fn front_stop(slot) {
+  fn front_stop() {
     show(slot)
-    front = front_line[slot].front
-    robots = front_line[slot].robots
-    accept_front_order()
-    front_line[slot].front = front
-    front_line[slot].robots = robots
-  }
+    scratch = int(read())
+    cells[7] -= scratch
 
-  fn accept_front_order() {
-    scratch = read()
-    scratch = int(scratch)
-    reserve -= scratch
-
-    if reserve < 0 {
+    if cells[7] < 0 {
       lost()
     }
     else {
-      robots += scratch
+      cells[robot_slot] += scratch
       resolve_front()
     }
   }
@@ -95,14 +79,14 @@ program RamboIII {
     scratch = random_state
     random_92()
 
-    robots = decay(robots)
-    front = decay(front)
+    cells[robot_slot] = decay(cells[robot_slot])
+    cells[slot] = decay(cells[slot])
 
     if scratch - random_state < 0 {
-      robots = decay(robots)
+      cells[robot_slot] = decay(cells[robot_slot])
     }
     else {
-      front = decay(front)
+      cells[slot] = decay(cells[slot])
     }
 
     advance_front()
@@ -113,19 +97,19 @@ program RamboIII {
   }
 
   fn advance_front() {
-    if robots <= 0 {
+    if cells[robot_slot] <= 0 {
       lost()
     }
     else {
       scratch = random_state
       random_92()
-      scratch = int((scratch + random_state + 1) * 20 * front / robots) / 1000
+      scratch = int((scratch + random_state + 1) * 20 * cells[slot] / cells[robot_slot]) / 1000
 
-      if frac(front) - scratch <= 0 {
+      if frac(cells[slot]) - scratch <= 0 {
         lost()
       }
       else {
-        front -= scratch
+        cells[slot] -= scratch
       }
     }
   }
