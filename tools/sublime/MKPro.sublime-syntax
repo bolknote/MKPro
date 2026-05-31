@@ -17,7 +17,6 @@ contexts:
     - include: comments
     - include: invalid-legacy-syntax
     - include: declarations
-    - include: raw-contract
     - include: raw-rows
     - include: control-keywords
     - include: state-types
@@ -26,6 +25,7 @@ contexts:
     - include: board-encodings
     - include: constants
     - include: registers
+    - include: raw-contract
     - include: mk61-commands
     - include: operators
     - include: display-sources
