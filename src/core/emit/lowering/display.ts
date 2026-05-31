@@ -1,5 +1,6 @@
 import { registerIndex } from "../../opcodes.ts";
 import { machineSupports } from "../../machineProfile.ts";
+import { bankMemberKey, findStateBankMember } from "../../state-banks.ts";
 import type { ProgramAst, RegisterName, StatementAst } from "../../types.ts";
 import type { LoweringCtx } from "../lowering-ctx.ts";
 import {
@@ -20,6 +21,7 @@ import {
   displayLoopOpcode,
   exponentTailDisplayLiteralProgram,
   firstSpliceDisplayLiteralProgram,
+  leadingZeroHexProductDisplayProgram,
   normalizeConstantLiteral,
   shouldUsePreloadedDisplayLiteral,
   signDigitLiteralDisplayProgram,
@@ -128,12 +130,20 @@ export function compileFloorPackedRowDisplay(ctx: LoweringCtx, display: ProgramA
     }
 
     if (row.expr !== undefined) {
+      const indexedRowExpr = row.expr.kind === "indexed" ? row.expr : undefined;
+      const indexedRow = indexedRowExpr === undefined ? undefined : findStateBankMember(ctx.ast, indexedRowExpr);
       compileExpression(ctx, row.expr);
       ctx.emitRecall(floor.name, `display ${display.name} floor`, line);
       ctx.emitOp(0x14, "<->", "display packed row expression merge", line);
       ctx.emitOp(0x0e, "В↑", "display packed row expression copy", line);
       ctx.emitOp(0x25, "F reverse", "display packed row expression rotate", line);
       ctx.emitOp(0x14, "<->", "display packed row floor restore", line);
+      if (indexedRow !== undefined && indexedRowExpr !== undefined) {
+        ctx.optimizations.push({
+          name: "indexed-packed-row-table",
+          detail: `Read ${bankMemberKey(indexedRowExpr.base, indexedRowExpr.field)}[${floor.name}] through indirect memory for screen ${display.name}.`,
+        });
+      }
       ctx.optimizations.push({
         name: "floor-packed-row-expression-display",
         detail: `Computed packed row expression inline for screen ${display.name} and spliced the one-digit floor through X2.`,
@@ -710,6 +720,7 @@ export function compileLiteralDisplayBody(ctx: LoweringCtx,
       return true;
     }
     if (compileDecimalLiteralDisplay(ctx, display, literal, line)) return true;
+    if (compileLeadingZeroHexProductDisplay(ctx, display, literal, line)) return true;
     if (compileZeroDigitTailDisplay(ctx, display, literal, line)) return true;
     if (compileSignDigitLiteralDisplay(ctx, display, literal, line)) return true;
     const firstSplice =
@@ -761,6 +772,32 @@ export function compileDecimalLiteralDisplay(ctx: LoweringCtx,
     ctx.optimizations.push({
       name: "screen-decimal-literal-lowering",
       detail: `Lowered screen ${display.name} as an ordinary decimal display literal.`,
+    });
+    return true;
+}
+
+export function compileLeadingZeroHexProductDisplay(ctx: LoweringCtx,
+    display: ProgramAst["displays"][number],
+    literal: string,
+    line: number,
+  ): boolean {
+    const program = leadingZeroHexProductDisplayProgram(literal);
+    if (program === undefined || !machineSupports(ctx.machineProfile, "display-bytes")) return false;
+    const register = ctx.allocation.constants[normalizeConstantLiteral(program.sourceLiteral)];
+    if (register === undefined) return false;
+
+    ctx.emitOp(0x60 + registerIndex(register), `П->X ${register}`, `display ${display.name} hex zero source`, line);
+    ctx.emitOp(0x34, "К [x]", "display leading-zero hex source", line);
+    ctx.emitNumberOrPreload(program.factor);
+    ctx.emitOp(0x12, "*", "display leading-zero hex product", line);
+    ctx.emitOp(0x50, "С/П", `show ${display.name}`, line);
+    ctx.optimizations.push({
+      name: "screen-leading-zero-hex-lowering",
+      detail: `Lowered screen ${display.name} through hex mantissa multiplication to preserve the leading zero.`,
+    });
+    ctx.optimizations.push({
+      name: "hex-mantissa-arithmetic",
+      detail: `Used ${program.sourceLiteral} * ${program.factor} to render ${JSON.stringify(literal)} with a non-normal leading zero.`,
     });
     return true;
 }

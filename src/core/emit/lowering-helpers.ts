@@ -328,6 +328,42 @@ export interface SignDigitLiteralDisplayProgram {
   indirectSteps: number;
 }
 
+interface LeadingZeroHexProductPlan {
+  sourceLiteral: string;
+  factor: string;
+}
+
+const LEADING_ZERO_HEX_PRODUCT_ROWS: ReadonlyArray<readonly [string, number, string]> = [
+  ["-", 10, "00"],
+  ["-", 12, "04"],
+  ["-", 14, "08"],
+  ["-", 16, "000"],
+  ["-", 17, "010"],
+  ["-", 18, "020"],
+  ["-", 19, "030"],
+  ["-", 35, "030"],
+  ["-", 36, "040"],
+  ["-", 37, "050"],
+  ["L", 15, "021"],
+  ["L", 16, "032"],
+  ["L", 17, "043"],
+  ["L", 18, "054"],
+  ["L", 29, "015"],
+  ["С", 15, "052"],
+  ["С", 26, "024"],
+  ["С", 27, "020"],
+  ["С", 28, "032"],
+  ["С", 29, "044"],
+  ["Г", 25, "053"],
+  ["Г", 26, "050"],
+  ["Г", 37, "033"],
+  ["Г", 38, "030"],
+  ["Г", 39, "043"],
+  ["Е", 35, "042"],
+  ["Е", 36, "040"],
+  ["Е", 37, "054"],
+];
+
 export function displayLiteralProgram(text: string): DisplayLiteralProgram | undefined {
   const normalized = normalizeDisplayLiteralText(text);
   const errorCells = displayLiteralCells(normalized);
@@ -447,6 +483,13 @@ export function decimalDisplayLiteralNumber(text: string): string | undefined {
   const normalized = normalizeDisplayLiteralText(text);
   if (!/^-?(?:0|[1-9][0-9]{0,7})$/u.test(normalized)) return undefined;
   return normalized;
+}
+
+export function leadingZeroHexProductDisplayProgram(text: string): LeadingZeroHexProductPlan | undefined {
+  const normalized = normalizeDisplayLiteralText(text);
+  const match = LEADING_ZERO_HEX_PRODUCT_ROWS.find(([, , output]) => output === normalized);
+  if (match === undefined) return undefined;
+  return { sourceLiteral: match[0], factor: String(match[1]) };
 }
 
 export function zeroDigitTailDisplayProgram(text: string): { input: number } | undefined {

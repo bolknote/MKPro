@@ -811,6 +811,7 @@ export interface CompileReport {
   rejectedCandidates: RejectedCandidateReport[];
   hotBlocks: HotBlockReport[];
   setupProgram?: SetupProgramReport;
+  programPatch?: ProgramPatchReport;
 }
 
 export interface PreloadReport {
@@ -823,6 +824,29 @@ export interface PreloadReport {
 
 export interface SetupProgramReport {
   steps: ResolvedStep[];
+  reason: string;
+}
+
+export type ProgramPatchMethod =
+  | "egg-f-prefix"
+  | "return-f-prefix";
+
+export interface ProgramPatchStepReport {
+  address: number;
+  opcode: number;
+  hex: string;
+  mnemonic: string;
+  placeholderOpcode: number;
+  placeholderHex: string;
+  placeholderMnemonic: string;
+  method: ProgramPatchMethod;
+  keys: string[];
+  note: string;
+}
+
+export interface ProgramPatchReport {
+  steps: ProgramPatchStepReport[];
+  warnings: string[];
   reason: string;
 }
 

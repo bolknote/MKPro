@@ -704,6 +704,13 @@ directly: `1F`, `2F`, `3D`, `3E`, `4F`, `5F`, `6F`, `7F`..`EF`, and
 `F0`..`FF`. See `docs/03-command-reference.md` for the command catalog and
 machine notes.
 
+When a manual listing contains a supported not-normally-entered `F*` byte,
+the report can include a `# Patch Listing`. Type the main listing with the
+shown `К НОП` placeholder, then press the patch keys to overwrite that address
+with the final byte. `--out keys` derives the same patch sequence even when the
+compiled delivery mode is `hex`, because key output is inherently a manual
+procedure.
+
 ## Event Dispatch
 
 Use `match` when a tile or event code selects one of several actions. If a case
@@ -1013,15 +1020,26 @@ The pipeline currently contains:
   fractional `R0` indirect access when liveness proves `R0` is dead afterward.
 - **vp-x2-peephole** — drops a `К {x}` immediately after a proved display
   `ВП`/X2 boundary when `ВП` already supplies the fractional transform.
-- **packed-counter-stripes** — packs compatible one-digit counters into decimal
-  stripes of one hidden register. For floor/row displays, the packed register
-  may supply the visible leading floor digit directly, but the variant is kept
-  speculative because repeated extraction can cost more than the freed register.
+- **packed-counter-stripes** — tries every compatible subset of fixed-width
+  decimal counters that fits into the eight-digit mantissa as stripes of one
+  hidden register, then keeps the whole-program candidate only if it is smaller.
+  For floor/row displays, the packed register may supply the visible leading
+  floor digit directly. A stripe group is rejected when one expression would
+  need to read multiple packed fields, because that needs a separate
+  spill/scheduling pass to stay stack-safe.
 - **inline-floor-packed-row-expression** — speculative lowering for
   `show(floor, ".", packed_expr)`: computes the packed row directly and uses
   the X2/`ВП` splice instead of allocating a hidden display-expression
   register. It is adopted only when the freed register wins back the longer
   stack sequence.
+- **indexed-packed-row-table** — keeps `packed[1..9]` or `group(1..9)` row
+  fields in contiguous registers and reads `rows[floor]` through indirect
+  memory for floor/row displays. This is the source-level shape behind compact
+  `К П->X R` / `К X->П R` row tables such as Treasure Hunter 2.
+- **screen-leading-zero-hex-lowering** — lowers display literals such as
+  `"020"` and `"054"` through preloaded hex mantissas and multiplication,
+  preserving visible leading zeroes that ordinary decimal entry would normalize
+  away.
 - **cse-display-block** — coalesces structurally identical pure recall/ALU
   blocks that terminate with `В/О`, redirecting duplicates through a single
   shared exit.

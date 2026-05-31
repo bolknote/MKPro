@@ -30,6 +30,23 @@ Known insertion families:
 These are service/program-entry tricks, not normal runtime instructions. Always
 verify the resulting listing before relying on it.
 
+## Compiler Patch Listings
+
+For manual delivery, `mk-pro` reports a separate `# Patch Listing` when a final
+program byte is not normally enterable but has a supported service-mode patch.
+The main listing uses `К НОП` as the temporary byte at that address; after the
+ordinary program has been typed, follow the patch keys to overwrite the
+placeholder with the real byte.
+
+Currently generated patch procedures cover:
+
+- `F0`..`F9` at addresses `50`..`59` through the `ЕГГ0Г`, `ВП D1 D2 . 0`
+  method;
+- `F4`..`FE` at addresses `34`..`44` through `В/О К ПП R`.
+
+Other not-normally-entered bytes remain direct `loader`/`hex` material until a
+specific manual patch procedure is modeled.
+
 ## Useful Roles for `F*`
 
 - filler in an address/code overlay;

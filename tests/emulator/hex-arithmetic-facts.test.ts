@@ -53,4 +53,15 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(addRegisters("3", "Г")).toBe("0,");
     expect(addRegisters("4", "С")).toBe("0,");
   });
+
+  it("hex A multiplied by 18 renders a non-normal leading zero", () => {
+    const calc = new MK61();
+    calc.setRegister("1", "-");
+    calc.setRegister("2", "18");
+    calc.loadProgram([IP1, IP2, 0x12, STOP]);
+    calc.pressSequence(["В/О", "С/П"]);
+    calc.runUntilStable({ maxFrames: 300, stableFrames: 4 });
+    expect(calc.displayText()).toBe("020,");
+    expect(calc.readRegister("x").trim()).toBe("20,");
+  });
 });

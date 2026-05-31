@@ -1,6 +1,7 @@
 import { formalAddressInfo } from "./formal-address.ts";
 import { formatAddress } from "./opcodes.ts";
-import type { CompileResult, PreloadReport, ResolvedStep } from "./types.ts";
+import { buildManualProgramPatchReport, formatPatchAddress } from "./program-patch.ts";
+import type { CompileResult, PreloadReport, ProgramPatchReport, ProgramPatchStepReport, ResolvedStep } from "./types.ts";
 
 const HEX_COLUMNS = 8;
 const MK61_HEX_SETUP_DIGITS: Record<string, string> = {
@@ -15,16 +16,18 @@ const MK61_HEX_SETUP_DIGITS: Record<string, string> = {
 export function formatListing(result: CompileResult): string {
   const setupProgram = result.report.setupProgram;
   const manualRows = formatManualSetupRows(result);
+  const patch = result.report.programPatch;
   if (setupProgram !== undefined || manualRows.length > 0) {
     return [
       "# Setup Listing",
       formatListingRows([
         ...manualRows,
-        ...(setupProgram?.steps ?? []).map(stepToListingRow),
+        ...(setupProgram?.steps ?? []).map((step) => stepToListingRow(step)),
       ]),
       "",
       "# Main Listing",
-      formatListingSteps(result.steps),
+      formatListingSteps(result.steps, patch),
+      ...formatPatchListingSection(patch),
     ].join("\n");
   }
 
@@ -34,11 +37,15 @@ export function formatListing(result: CompileResult): string {
       "Setup Block:",
       `  ${setupBlock}`,
       "",
-      formatListingSteps(result.steps),
+      formatListingSteps(result.steps, patch),
+      ...formatPatchListingSection(patch),
     ].join("\n");
   }
 
-  return formatListingSteps(result.steps);
+  return [
+    formatListingSteps(result.steps, patch),
+    ...formatPatchListingSection(patch),
+  ].join("\n");
 }
 
 interface ListingRow {
@@ -48,8 +55,12 @@ interface ListingRow {
   comment?: string;
 }
 
-function formatListingSteps(steps: readonly ResolvedStep[]): string {
-  return formatListingRows(steps.map(stepToListingRow));
+function formatListingSteps(
+  steps: readonly ResolvedStep[],
+  patch?: ProgramPatchReport,
+): string {
+  const patches = patchByAddress(patch);
+  return formatListingRows(steps.map((step) => stepToListingRow(step, patches.get(step.address))));
 }
 
 function formatListingRows(rows: readonly ListingRow[]): string {
@@ -71,7 +82,49 @@ function formatListingRows(rows: readonly ListingRow[]): string {
   return lines.join("\n");
 }
 
-function stepToListingRow(step: ResolvedStep): ListingRow {
+function formatPatchListingSection(patch: ProgramPatchReport | undefined): string[] {
+  if (patch === undefined) return [];
+  return ["", "# Patch Listing", formatProgramPatchReport(patch)];
+}
+
+function formatProgramPatchReport(patch: ProgramPatchReport): string {
+  const lines = [
+    " Step | Code | Method          | Keys",
+    "------+------+-----------------+----------------",
+  ];
+  for (const step of patch.steps) {
+    lines.push(
+      ` ${formatPatchAddress(step.address).padStart(4, " ")} |  ${step.hex}  | ${formatPatchMethod(step.method).padEnd(15, " ")} | ${step.keys.join(" ; ")} (${step.note})`,
+    );
+  }
+  for (const warning of patch.warnings) {
+    lines.push(`   -- |   -  | warning         | ${warning}`);
+  }
+  return lines.join("\n");
+}
+
+function formatPatchMethod(method: ProgramPatchStepReport["method"]): string {
+  if (method === "egg-f-prefix") return "ЕГГ0Г/ВП";
+  return "В/О К ПП R";
+}
+
+function patchByAddress(patch: ProgramPatchReport | undefined): Map<number, ProgramPatchStepReport> {
+  const result = new Map<number, ProgramPatchStepReport>();
+  for (const step of patch?.steps ?? []) result.set(step.address, step);
+  return result;
+}
+
+function stepToListingRow(step: ResolvedStep, patch?: ProgramPatchStepReport): ListingRow {
+  if (patch !== undefined) {
+    return {
+      address: step.address,
+      hex: patch.placeholderHex,
+      mnemonic: patch.placeholderMnemonic,
+      comment: [step.comment, `placeholder for ${step.hex}; apply Patch Listing`]
+        .filter((value): value is string => value !== undefined && value.length > 0)
+        .join("; "),
+    };
+  }
   const row: ListingRow = {
     address: step.address,
     hex: step.hex,
@@ -146,10 +199,17 @@ export function formatSetupProgram(result: CompileResult): string | undefined {
   return formatProgramTokens(result.report.setupProgram.steps);
 }
 
+export function formatProgramPatch(result: CompileResult): string | undefined {
+  const patch = result.report.programPatch ?? buildManualProgramPatchReport(result.steps);
+  if (patch === undefined) return undefined;
+  return formatProgramPatchReport(patch);
+}
+
 export function formatKeys(result: CompileResult): string {
   const lines: string[] = [];
   const setupProgram = result.report.setupProgram;
   const manualSetupKeys = formatManualSetupKeys(result);
+  const patch = result.report.programPatch ?? buildManualProgramPatchReport(result.steps);
   if (setupProgram !== undefined) {
     lines.push(...formatStepKeys(setupProgram.steps));
     lines.push("В/О", ...manualSetupKeys, "С/П");
@@ -157,13 +217,19 @@ export function formatKeys(result: CompileResult): string {
     lines.push(...manualSetupKeys);
     lines.push(...formatSetupPreloadKeys(result.report.preloads));
   }
-  lines.push(...formatStepKeys(result.steps));
+  lines.push(...formatStepKeys(result.steps, patch));
+  if (patch !== undefined) lines.push(...formatProgramPatchKeys(patch));
+  if (patch !== undefined && patch.steps.length > 0) lines.push("F АВТ");
   lines.push("В/О", "С/П");
   return lines.join("\n");
 }
 
-function formatStepKeys(steps: readonly ResolvedStep[]): string[] {
-  return steps.map((step) => step.mnemonic);
+function formatStepKeys(
+  steps: readonly ResolvedStep[],
+  patch?: ProgramPatchReport,
+): string[] {
+  const patches = patchByAddress(patch);
+  return steps.map((step) => patches.get(step.address)?.placeholderMnemonic ?? step.mnemonic);
 }
 
 function formatSetupPreloadKeys(preloads: readonly PreloadReport[]): string[] {
@@ -171,6 +237,15 @@ function formatSetupPreloadKeys(preloads: readonly PreloadReport[]): string[] {
     const value = executableSetupValue(preload.value);
     return value === undefined ? [] : [value, `X->П ${preload.register}`];
   });
+}
+
+function formatProgramPatchKeys(patch: ProgramPatchReport): string[] {
+  const lines = patch.steps.flatMap((step) => [
+    `<patch ${step.hex} at ${formatPatchAddress(step.address)}: ${step.method}>`,
+    ...step.keys,
+  ]);
+  lines.push(...patch.warnings.map((warning) => `<warning: ${warning}>`));
+  return lines;
 }
 
 function formatManualSetupRows(result: CompileResult): ListingRow[] {
@@ -304,6 +379,16 @@ export function formatExplain(result: CompileResult): string {
     lines.push(`  Reason: ${result.report.setupProgram.reason.trimEnd()}`);
     lines.push(formatHexSteps(result.report.setupProgram.steps).split("\n").map((line) => `  ${line}`).join("\n"));
   }
+  if (result.report.programPatch !== undefined) {
+    lines.push("", "Program Patch:");
+    lines.push(`  Reason: ${result.report.programPatch.reason}`);
+    for (const step of result.report.programPatch.steps) {
+      lines.push(
+        `  - ${formatPatchAddress(step.address)}: ${step.placeholderMnemonic} placeholder, then ${step.keys.join(" ; ")} => ${step.hex}`,
+      );
+    }
+    for (const warning of result.report.programPatch.warnings) lines.push(`  - warning: ${warning}`);
+  }
   lines.push("", "Registers:");
   const registerEntries = Object.entries(result.report.registers).sort(
     ([a], [b]) => a.localeCompare(b),
@@ -395,6 +480,10 @@ export function formatAll(result: CompileResult): string {
   const setupProgram = formatSetupProgram(result);
   if (setupProgram !== undefined) {
     sections.push("", "# Setup Program", setupProgram);
+  }
+  const programPatch = formatProgramPatch(result);
+  if (programPatch !== undefined) {
+    sections.push("", "# Program Patch", programPatch);
   }
   sections.push(
     "",

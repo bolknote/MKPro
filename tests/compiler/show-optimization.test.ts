@@ -24,6 +24,10 @@ function inlineDisplaySourceComments(result: ReturnType<typeof compileOk>): stri
 }
 
 function runCompiledDisplay(source: string): string {
+  return runCompiledResultDisplay(compileMKPro(source, { analysis: true, budget: 999 }));
+}
+
+function runCompiledResultDisplay(result: ReturnType<typeof compileOk>): string {
   const { MK61 } = require("../emulator/mk61.cjs") as {
     MK61: new (options?: { extended?: boolean }) => {
       loadProgram: (codes: number[]) => { diagnostics: string[] };
@@ -33,7 +37,6 @@ function runCompiledDisplay(source: string): string {
       displayText: () => string;
     };
   };
-  const result = compileMKPro(source, { analysis: true, budget: 999 });
   const calc = new MK61({ extended: true });
   const setup = result.report.setupProgram?.steps.map((step) => step.opcode);
   if (setup !== undefined) {
@@ -250,6 +253,7 @@ program SpacedScreen {
     expect(canonicalDecimal.steps.map((step) => step.opcode)).toEqual(decimalNumeric.steps.map((step) => step.opcode));
     expect(hasOptimization(quoted, "screen-video-literal-lowering")).toBe(false);
     expect(hasOptimization(leadingZero, "screen-video-literal-lowering")).toBe(true);
+    expect(hasOptimization(leadingZero, "screen-leading-zero-hex-lowering")).toBe(true);
     expect(hasOptimization(canonicalDecimal, "screen-video-literal-lowering")).toBe(false);
     expect(hasOptimization(spaced, "screen-video-literal-lowering")).toBe(true);
     expect(runCompiledDisplay(`
@@ -259,7 +263,23 @@ program QuotedIntegerDisplay {
   }
 }
 `)).toBe("-20,");
-  });
+    expect(runCompiledDisplay(`
+program LeadingZeroIntegerDisplay {
+  loop {
+    show("020")
+  }
+}
+`)).toBe("020,");
+    for (const literal of ["00", "000", "010", "030", "040", "050", "021", "032", "043", "054"]) {
+      expect(runCompiledDisplay(`
+program LeadingZeroLiteralDisplay {
+  loop {
+    show("${literal}")
+  }
+}
+`)).toBe(`${literal},`);
+    }
+  }, 10000);
 
   it("uses preloaded decimal scale constants for packed display shifts", () => {
     const result = compileOk(`
@@ -394,6 +414,70 @@ program InlineFloorPackedRow {
     ]);
   });
 
+  it("can force an inline indexed packed row display without losing the state bank", () => {
+    const source = `
+program IndexedFloorPackedRow {
+  state {
+    floor: counter 1..9 = 2
+    rows: packed[1..9] = bit_not(5 / 9)
+  }
+
+  loop {
+    show(floor, ".", rows[floor])
+  }
+}
+`;
+    const result = compileLoweringVariantForTest(
+      source,
+      { analysis: true, budget: 999 },
+      { inlineFloorPackedRowExpressions: true },
+    );
+
+    expect(hasOptimization(result, "display-expression-materialization")).toBe(false);
+    expect(hasOptimization(result, "indexed-packed-row-table")).toBe(true);
+    expect(hasOptimization(result, "floor-packed-row-expression-display")).toBe(true);
+    expect(result.report.registers.rows_1).toBe("1");
+    expect(result.report.registers.rows_9).toBe("9");
+    expect(Number.parseInt(result.report.registers.floor!, 16)).toBeGreaterThanOrEqual(7);
+    expect(stepComments(result)).toContain("indexed recall rows");
+    expect(runCompiledResultDisplay(result)).toBe("2,-------");
+  });
+
+  it("selects inline indexed packed row display when materialization would need one register too many", () => {
+    const source = `
+program IndexedFloorPackedRowRegisterRescue {
+  state {
+    floor: counter 1..9 = 2
+    rows: packed[1..9] = bit_not(5 / 9)
+    a: packed = 1
+    b: packed = 2
+    c: packed = 3
+    d: packed = 4
+    e: packed = 5
+  }
+
+  loop {
+    a = a + 1
+    b = b + a
+    c = c + b
+    d = d + c
+    e = e + d
+    show(floor, ".", rows[floor])
+    halt(a + b + c + d + e)
+  }
+}
+`;
+    const result = compileOk(source);
+
+    expect(hasOptimization(result, "inline-floor-packed-row-expression")).toBe(true);
+    expect(hasOptimization(result, "display-expression-materialization")).toBe(false);
+    expect(hasOptimization(result, "indexed-packed-row-table")).toBe(true);
+    expect(result.report.registers.rows_1).toBe("1");
+    expect(result.report.registers.rows_9).toBe("9");
+    expect(result.report.registers.e).toBeDefined();
+    expect(runCompiledResultDisplay(result)).toBe("2,-------");
+  });
+
   it("packs literal-separated small counters into one decimal display register", () => {
     const source = `
 program DotCounterDisplay {
@@ -451,6 +535,78 @@ program PackedFloorRowCounters {
     expect(result.report.registers).toHaveProperty("__packed_counter_0");
     expect(result.report.registers).not.toHaveProperty("floor");
     expect(result.report.registers).not.toHaveProperty("room");
+  });
+
+  it("can force three small counters into one decimal-striped register", () => {
+    const source = `
+program MultiPackedCounters {
+  state {
+    a: counter 0..9 = 1
+    b: counter 0..9 = 2
+    c: counter 0..9 = 3
+  }
+
+  loop {
+    a++
+    b++
+    c--
+    if b >= 3 {
+      halt(c)
+    }
+    else {
+      halt(0)
+    }
+  }
+}
+`;
+    const result = compileLoweringVariantForTest(
+      source,
+      { analysis: true, budget: 999 },
+      { packCounterStripes: true, packCounterStripeNames: ["a", "b", "c"] },
+    );
+
+    expect(hasOptimization(result, "packed-counter-stripes")).toBe(true);
+    expect(result.report.registers).toHaveProperty("__packed_counter_0");
+    expect(result.report.registers).not.toHaveProperty("a");
+    expect(result.report.registers).not.toHaveProperty("b");
+    expect(result.report.registers).not.toHaveProperty("c");
+    expect(runCompiledResultDisplay(result).trim()).toBe("2,");
+  });
+
+  it("can force fixed-width counters into one decimal-striped register", () => {
+    const source = `
+program WidePackedCounters {
+  state {
+    score: counter 0..99 = 12
+    lives: counter 0..9 = 3
+    room: counter 0..9 = 4
+  }
+
+  loop {
+    score += 10
+    lives--
+    room++
+    if score >= 22 {
+      halt(room)
+    }
+    else {
+      halt(0)
+    }
+  }
+}
+`;
+    const result = compileLoweringVariantForTest(
+      source,
+      { analysis: true, budget: 999 },
+      { packCounterStripes: true, packCounterStripeNames: ["score", "lives", "room"] },
+    );
+
+    expect(hasOptimization(result, "packed-counter-stripes")).toBe(true);
+    expect(result.report.registers).toHaveProperty("__packed_counter_0");
+    expect(result.report.registers).not.toHaveProperty("score");
+    expect(result.report.registers).not.toHaveProperty("lives");
+    expect(result.report.registers).not.toHaveProperty("room");
+    expect(runCompiledResultDisplay(result).trim()).toBe("5,");
   });
 
   it("renders explicit literal spaces between display fields", () => {

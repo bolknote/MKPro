@@ -50,6 +50,113 @@ program ZeroMinus {
     expect(opcodes).not.toContain("11");
   });
 
+  it("synthesizes suppressed square constants from preloaded constants", () => {
+    const result = compileLoweringVariantForTest(`
+program ConstantSquareSynthesis {
+  state {
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
+    x = x + 100
+    x = x + 10000
+    halt(x)
+  }
+}
+`, { budget: 999, analysis: true }, {
+      suppressConstantPreloads: new Set(["10000"]),
+    });
+
+    expect(result.report.preloads.some((item) => item.value === "100")).toBe(true);
+    expect(result.steps.some((step) => step.hex === "22" && step.comment === "constant 10000")).toBe(true);
+    expect(result.report.optimizations.some((item) =>
+      item.name === "constant-synthesis" && item.detail.includes("Built constant 10000"),
+    )).toBe(true);
+  });
+
+  it("synthesizes suppressed signed constants from preloaded opposites", () => {
+    const result = compileLoweringVariantForTest(`
+program ConstantSignSynthesis {
+  state {
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
+    x = x + 100
+    if x == 12345 {
+      halt(x)
+    }
+    halt(-100)
+  }
+}
+`, { budget: 999, analysis: true }, {
+      suppressConstantPreloads: new Set(["-100"]),
+    });
+
+    expect(result.report.preloads.some((item) => item.value === "100")).toBe(true);
+    expect(result.steps.some((step) => step.hex === "0B" && step.comment === "constant -100")).toBe(true);
+    expect(result.report.optimizations.some((item) =>
+      item.name === "constant-synthesis" && item.detail.includes("Built constant -100"),
+    )).toBe(true);
+  });
+
+  it("synthesizes suppressed constants from arithmetic over two preloads", () => {
+    const result = compileLoweringVariantForTest(`
+program ConstantBinarySynthesis {
+  state {
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
+    x = x + 100000
+    x = x + 10000
+    x = x + 110000
+    halt(x)
+  }
+}
+`, { budget: 999, analysis: true }, {
+      suppressConstantPreloads: new Set(["110000"]),
+    });
+
+    expect(result.report.preloads.some((item) => item.value === "100000")).toBe(true);
+    expect(result.report.preloads.some((item) => item.value === "10000")).toBe(true);
+    expect(result.steps.some((step) => step.hex === "10" && step.comment === "constant 110000")).toBe(true);
+    expect(result.report.optimizations.some((item) =>
+      item.name === "constant-synthesis" && item.detail.includes("Built constant 110000"),
+    )).toBe(true);
+  });
+
+  it("synthesizes setup preloads from earlier setup preloads", () => {
+    const result = compileOk(`
+program SetupConstantSquareSynthesis {
+  state {
+    seed: packed = random()
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
+    x = x + 100
+    x = x + 10000
+    if seed == -1 {
+      halt(seed)
+    }
+    halt(x)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.setupProgram?.steps.some((step) =>
+      step.hex === "22" && step.comment === "setup constant 10000",
+    )).toBe(true);
+    expect(result.report.optimizations.some((item) =>
+      item.name === "setup-constant-synthesis" && item.detail.includes("Built setup constant 10000"),
+    )).toBe(true);
+  });
+
   it("folds numeric constant subexpressions before code generation", () => {
     const result = compileOk(`
 program ConstantFold {

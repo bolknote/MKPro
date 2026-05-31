@@ -27,6 +27,7 @@ export {
   formatJson,
   formatKeys,
   formatListing,
+  formatProgramPatch,
   formatProgramTokens,
   formatSetupProgram,
   formatSetupBlock,

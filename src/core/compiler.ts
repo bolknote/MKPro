@@ -6,6 +6,7 @@ import { propagateValuesInterprocedurally } from "./value-propagation.ts";
 import { normalizeV2ExpressionText, parseExpression, parseProgram } from "./parser.ts";
 import { runIrPasses } from "./passes/index.ts";
 import { optimizePostLayoutIndirectFlow } from "./post-layout-indirect-flow.ts";
+import { buildProgramPatchReport } from "./program-patch.ts";
 import { verifySuperDarkSuffixLayout } from "./super-dark-layout.ts";
 import { MachineEmitter } from "./emit/machine-emitter.ts";
 import type { ProgramAnalysis } from "./emit/program-analysis.ts";
@@ -31,6 +32,7 @@ import {
   SPATIAL_HIT_SCRATCH_PREFIX,
   TICTACTOE_MASK_SCRATCH_PREFIX,
   addExpressions,
+  binaryOpcode,
   bitMaskExpression,
   bitMaskScratchName,
   boardForCellMask,
@@ -72,6 +74,7 @@ import {
   ifSelectorScratchName,
   intExpression,
   invertCondition,
+  leadingZeroHexProductDisplayProgram,
   isBitClearAssignment,
   isIdentityAssignment,
   isNumericValue,
@@ -324,6 +327,9 @@ interface LoweringOptions {
   // register. Speculative: cheap unit updates can win a register, but reads need
   // extraction arithmetic and are adopted only when the whole program shrinks.
   packCounterStripes?: boolean;
+  // Exact fixed-width counter set for the packed-stripe candidate. Used by the
+  // top-level variant search to try every compatible subset independently.
+  packCounterStripeNames?: readonly string[];
   // Speculative: avoids a hidden display-expression register for
   // show(floor, ".", packed_expr). The stack/X2 sequence is longer, so the
   // whole-program candidate must prove that freeing the register pays back.
@@ -400,13 +406,20 @@ export function compileMKPro(
   source: string,
   options: Partial<CompileOptions> = {},
 ): CompileResult {
-  const primary = compileLoweringAttempt(source, options, {});
+  let primary: CompileResult | undefined;
+  let primaryError: unknown;
+  try {
+    primary = compileLoweringAttempt(source, options, {});
+  } catch (error) {
+    if (!canRetryLoweringAfterPrimaryFailure(error)) throw error;
+    primaryError = error;
+  }
   const candidates: Array<{ result: CompileResult; name: string; detail: string }> = [];
   const tryCandidate = (loweringOptions: LoweringOptions, name: string, detail: string): void => {
     try {
       candidates.push({ result: compileLoweringAttempt(source, options, loweringOptions), name, detail });
     } catch {
-      // Optional late-layout variants are speculative; keep the primary result.
+      // Optional lowering variants are speculative; keep the current best result.
     }
   };
 
@@ -523,19 +536,26 @@ export function compileMKPro(
   tryCandidate(
     { packCounterStripes: true },
     "packed-counter-stripes",
-    "Packed compatible small counters into one hidden decimal-striped register",
+    "Packed compatible fixed-width counters into one hidden decimal-striped register",
   );
+  for (const names of discoverPackedCounterStripeVariantNames(source)) {
+    tryCandidate(
+      { packCounterStripes: true, packCounterStripeNames: names },
+      `packed-counter-stripes:${names.join("+")}`,
+      `Packed counters ${names.join(", ")} into one hidden decimal-striped register`,
+    );
+  }
   tryCandidate(
     { inlineFloorPackedRowExpressions: true },
     "inline-floor-packed-row-expression",
     "Computed floor-packed display row expressions inline to free their hidden display register",
   );
 
-  const selectBest = (): { best: CompileResult; selected: (typeof candidates)[number] | undefined } => {
+  const selectBest = (): { best: CompileResult | undefined; selected: (typeof candidates)[number] | undefined } => {
     let best = primary;
     let selected: (typeof candidates)[number] | undefined;
     for (const candidate of candidates) {
-      if (candidate.result.steps.length < best.steps.length) {
+      if (best === undefined || candidate.result.steps.length < best.steps.length) {
         best = candidate.result;
         selected = candidate;
       }
@@ -556,7 +576,7 @@ export function compileMKPro(
   // them, so confine the probe to the rescue regime and leave clean in-budget
   // lowerings untouched (and byte-stable for their structural tests).
   const OFFICIAL_PROGRAM_LIMIT = 105;
-  if (selectBest().best.steps.length > OFFICIAL_PROGRAM_LIMIT) {
+  if ((selectBest().best?.steps.length ?? 0) > OFFICIAL_PROGRAM_LIMIT) {
     const demoteBases: LoweringOptions[] = [
       {},
       { shareRandomCell: true, hoistSharedHelpers: true },
@@ -586,16 +606,23 @@ export function compileMKPro(
     }
   }
 
-  const { selected } = selectBest();
+  const { best, selected } = selectBest();
+  if (best === undefined) {
+    if (primaryError !== undefined) throw primaryError;
+    throw new CompileError([{ level: "error", message: "No lowering candidate succeeded." }]);
+  }
 
   if (selected !== undefined) {
+    const comparison = primary === undefined
+      ? `primary lowering failed: ${primaryFailureSummary(primaryError)}`
+      : `${selected.result.steps.length} vs ${primary.steps.length} cells`;
     selected.result.report.optimizations.push({
       name: selected.name,
-      detail: `${selected.detail} (${selected.result.steps.length} vs ${primary.steps.length} cells).`,
+      detail: `${selected.detail} (${comparison}).`,
     });
     return finishCompileAttempt(selected.result, options.analysis === true);
   }
-  return finishCompileAttempt(primary, options.analysis === true);
+  return finishCompileAttempt(best, options.analysis === true);
 }
 
 function compileLoweringAttempt(
@@ -628,6 +655,19 @@ function isOnlyBudgetExceeded(error: unknown): error is CompileError {
   return error instanceof CompileError &&
     error.diagnostics.some((diagnostic) => diagnostic.level === "error" && diagnostic.code === "BUDGET_EXCEEDED") &&
     error.diagnostics.every((diagnostic) => diagnostic.level !== "error" || diagnostic.code === "BUDGET_EXCEEDED");
+}
+
+function canRetryLoweringAfterPrimaryFailure(error: unknown): boolean {
+  return error instanceof CompileError &&
+    error.diagnostics.some((diagnostic) => diagnostic.message.startsWith("Out of MK-61 registers while allocating"));
+}
+
+function primaryFailureSummary(error: unknown): string {
+  if (!(error instanceof CompileError)) return "unknown error";
+  const first = error.diagnostics.find((diagnostic) =>
+    diagnostic.message.startsWith("Out of MK-61 registers while allocating")
+  ) ?? error.diagnostics[0];
+  return first?.message ?? "unknown error";
 }
 
 function finishCompileAttempt(result: CompileResult, analysis: boolean): CompileResult {
@@ -1317,7 +1357,7 @@ function compileMKProOnce(
   resolveConstantIndexedState(ast, optimizations);
   packCounterStripes(ast, optimizations, false);
   if (loweringOptions.packCounterStripes === true) {
-    packCounterStripes(ast, optimizations, true);
+    packCounterStripes(ast, optimizations, true, loweringOptions.packCounterStripeNames);
   }
   materializeDisplayExpressions(ast, optimizations, loweringOptions.inlineFloorPackedRowExpressions === true);
   elideXParamReturnStateFields(ast, optimizations);
@@ -1433,6 +1473,10 @@ function compileMKProOnce(
   );
   appendOptimizationCandidateReports(optimizations, candidates);
   const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, machineProfile);
+  const programPatch = buildProgramPatchReport(steps, opts.delivery);
+  if (programPatch !== undefined) {
+    warnings.push(...programPatch.warnings);
+  }
   const largestBlocks = summarizeBlocks(optimized);
   const referenceResult = ast.reference === undefined
     ? undefined
@@ -1480,6 +1524,7 @@ function compileMKProOnce(
       })),
     hotBlocks: largestBlocks.map(parseHotBlock),
     ...(setupProgram === undefined ? {} : { setupProgram }),
+    ...(programPatch === undefined ? {} : { programPatch }),
   };
 
   return { ast, items: optimized, steps, report, diagnostics };
@@ -1510,7 +1555,8 @@ function visiblePublicRegisters(
 interface PackedCounterStripe {
   readonly name: string;
   readonly scale: number;
-  readonly kind: "major" | "fractional";
+  readonly width: number;
+  readonly kind: "major" | "digit";
 }
 
 interface PackedCounterStripePlan {
@@ -1529,18 +1575,27 @@ function packCounterStripes(
   ast: ProgramAst,
   optimizations: AppliedOptimization[],
   includeStoragePairs: boolean,
+  requestedNames?: readonly string[],
 ): void {
-  const plan = selectPackedCounterStripePlan(ast, includeStoragePairs);
+  const plan = selectPackedCounterStripePlan(ast, includeStoragePairs, requestedNames);
   if (plan === undefined) return;
   const byName = new Map(plan.stripes.map((stripe) => [stripe.name, stripe]));
   const fieldByName = new Map(plan.state.fields.map((field) => [field.name, field]));
   const packedExpr = (): ExpressionAst => ({ kind: "identifier", name: plan.packed });
+  const stripeSelectorExpr = (stripe: PackedCounterStripe): ExpressionAst => {
+    if (stripe.kind === "major") return packedExpr();
+    const nextScale = stripe.scale * 10 ** stripe.width;
+    const shifted = Math.abs(nextScale - 1) < 1e-12
+      ? packedExpr()
+      : divideExpressions(packedExpr(), numberExpression(nextScale));
+    return fracExpression(shifted);
+  };
 
   const extract = (stripe: PackedCounterStripe): ExpressionAst => {
     if (stripe.kind === "major") {
       return intExpression(divideExpressions(packedExpr(), numberExpression(stripe.scale)));
     }
-    return intExpression(multiplyExpressions(fracExpression(packedExpr()), numberExpression(1 / stripe.scale)));
+    return intExpression(multiplyExpressions(stripeSelectorExpr(stripe), numberExpression(10 ** stripe.width)));
   };
 
   const rewriteExpr = (expr: ExpressionAst): ExpressionAst => {
@@ -1592,10 +1647,11 @@ function packCounterStripes(
       return undefined;
     }
 
-    const sourceExpr = stripe.kind === "major" ? packedExpr() : fracExpression(packedExpr());
+    const sourceExpr = stripeSelectorExpr(stripe);
     const scale = stripe.scale;
-    const lowerBound = (candidate: number): number => candidate * scale;
-    const upperBound = (candidate: number): number => (candidate + 1) * scale;
+    const divisor = 10 ** stripe.width;
+    const lowerBound = (candidate: number): number => stripe.kind === "major" ? candidate * scale : candidate / divisor;
+    const upperBound = (candidate: number): number => stripe.kind === "major" ? (candidate + 1) * scale : (candidate + 1) / divisor;
     switch (op) {
       case "<":
         return { left: sourceExpr, op: "<", right: packedThreshold(lowerBound(value)) };
@@ -1794,12 +1850,49 @@ function packCounterStripes(
 function selectPackedCounterStripePlan(
   ast: ProgramAst,
   includeStoragePairs: boolean,
+  requestedNames?: readonly string[],
 ): PackedCounterStripePlan | undefined {
+  if (requestedNames !== undefined) {
+    return selectPackedCounterStorageStripePlans(ast, requestedNames)[0];
+  }
   const displayPlan = selectPackedCounterDisplayStripePlan(ast);
   if (displayPlan !== undefined) return displayPlan;
   if (!includeStoragePairs) return undefined;
+  return selectPackedCounterStorageStripePlans(ast)[0];
+}
 
+const MAX_PACKED_COUNTER_STRIPE_DIGITS = 8;
+
+function discoverPackedCounterStripeVariantNames(source: string): string[][] {
+  let ast: ProgramAst;
+  try {
+    ast = parseProgram(source);
+  } catch {
+    return [];
+  }
+  const displayPlan = selectPackedCounterDisplayStripePlan(ast);
+  const displayKey = displayPlan === undefined
+    ? undefined
+    : packedCounterStripeNameKey(displayPlan.stripes.map((stripe) => stripe.name));
+  const seen = new Set<string>();
+  const result: string[][] = [];
+  for (const plan of selectPackedCounterStorageStripePlans(ast)) {
+    const names = plan.stripes.map((stripe) => stripe.name);
+    const key = packedCounterStripeNameKey(names);
+    if (key === displayKey || seen.has(key)) continue;
+    seen.add(key);
+    result.push(names);
+  }
+  return result;
+}
+
+function selectPackedCounterStorageStripePlans(
+  ast: ProgramAst,
+  requestedNames?: readonly string[],
+): PackedCounterStripePlan[] {
+  const requested = requestedNames === undefined ? undefined : new Set(requestedNames);
   const displaySources = new Set(ast.displays.flatMap((display) => display.sources));
+  const plans: PackedCounterStripePlan[] = [];
   for (const state of ast.states) {
     const candidates = state.fields
       .map((field, index) => ({ field, index }))
@@ -1810,33 +1903,95 @@ function selectPackedCounterStripePlan(
         Number.isInteger(field.min) &&
         Number.isInteger(field.max) &&
         field.min >= 0 &&
-        field.max <= 9 &&
+        decimalCounterWidth(field) !== undefined &&
         field.initialStack === undefined &&
         (!displaySources.has(field.name) || fieldUsedAsPackedRowFloorDisplay(ast, field.name))
       );
-    for (let leftIndex = 0; leftIndex < candidates.length; leftIndex += 1) {
-      for (let rightIndex = leftIndex + 1; rightIndex < candidates.length; rightIndex += 1) {
-        const left = candidates[leftIndex]!;
-        const right = candidates[rightIndex]!;
-        const fields = [left.field, right.field];
-        if (!packedCounterStripeUsagesOk(ast, fields.map((field) => field.name))) continue;
-        const stripes: PackedCounterStripe[] = [
-          { name: left.field.name, scale: 10, kind: "major" },
-          { name: right.field.name, scale: 0.01, kind: "fractional" },
-        ];
-        const initial = packedCounterInitial(fields, stripes);
-        if (initial === undefined) continue;
-        return {
-          state,
-          insertIndex: Math.min(left.index, right.index),
-          packed: freshPackedCounterName(ast),
-          stripes,
-          initial,
-        };
+    if (requested !== undefined) {
+      const selected = requestedNames!
+        .map((name) => candidates.find((candidate) => candidate.field.name === name))
+        .filter((candidate): candidate is (typeof candidates)[number] => candidate !== undefined);
+      if (selected.length !== requested.size) continue;
+      const plan = buildPackedCounterStorageStripePlan(ast, state, selected);
+      if (plan !== undefined) plans.push(plan);
+      continue;
+    }
+    const upper = Math.min(candidates.length, MAX_PACKED_COUNTER_STRIPE_DIGITS);
+    for (let size = 2; size <= upper; size += 1) {
+      for (const selected of combinations(candidates, size)) {
+        const plan = buildPackedCounterStorageStripePlan(ast, state, selected);
+        if (plan !== undefined) plans.push(plan);
       }
     }
   }
-  return undefined;
+  return plans;
+}
+
+function buildPackedCounterStorageStripePlan(
+  ast: ProgramAst,
+  state: StateAst,
+  selected: readonly { field: StateFieldAst; index: number }[],
+): PackedCounterStripePlan | undefined {
+  if (selected.length < 2 || selected.length > MAX_PACKED_COUNTER_STRIPE_DIGITS) return undefined;
+  const ordered = orderPackedCounterStripeFields(ast, selected);
+  const fields = ordered.map((candidate) => candidate.field);
+  const widths: number[] = [];
+  for (const field of fields) {
+    const width = decimalCounterWidth(field);
+    if (width === undefined) return undefined;
+    widths.push(width);
+  }
+  const totalWidth = widths.reduce((sum, width) => sum + width, 0);
+  if (totalWidth > MAX_PACKED_COUNTER_STRIPE_DIGITS) return undefined;
+  const names = fields.map((field) => field.name);
+  if (!packedCounterStripeUsagesOk(ast, names)) return undefined;
+  let remainingWidth = totalWidth;
+  const stripes = fields.map((field, index): PackedCounterStripe => {
+    const width = widths[index]!;
+    remainingWidth -= width;
+    return {
+      name: field.name,
+      scale: 10 ** remainingWidth,
+      width,
+      kind: index === 0 ? "major" : "digit",
+    };
+  });
+  const initial = packedCounterInitial(fields, stripes);
+  if (initial === undefined) return undefined;
+  return {
+    state,
+    insertIndex: Math.min(...ordered.map((candidate) => candidate.index)),
+    packed: freshPackedCounterName(ast),
+    stripes,
+    initial,
+  };
+}
+
+function orderPackedCounterStripeFields(
+  ast: ProgramAst,
+  selected: readonly { field: StateFieldAst; index: number }[],
+): Array<{ field: StateFieldAst; index: number }> {
+  const floorIndex = selected.findIndex(({ field }) => fieldUsedAsPackedRowFloorDisplay(ast, field.name));
+  if (floorIndex <= 0) return [...selected];
+  const floor = selected[floorIndex]!;
+  return [floor, ...selected.filter((_, index) => index !== floorIndex)];
+}
+
+function* combinations<T>(items: readonly T[], size: number, start = 0, prefix: T[] = []): Generator<T[]> {
+  if (prefix.length === size) {
+    yield [...prefix];
+    return;
+  }
+  const remaining = size - prefix.length;
+  for (let index = start; index <= items.length - remaining; index += 1) {
+    prefix.push(items[index]!);
+    yield* combinations(items, size, index + 1, prefix);
+    prefix.pop();
+  }
+}
+
+function packedCounterStripeNameKey(names: readonly string[]): string {
+  return [...names].sort().join("\0");
 }
 
 function fieldUsedAsPackedRowFloorDisplay(ast: ProgramAst, name: string): boolean {
@@ -1902,8 +2057,8 @@ function selectPackedCounterDisplayStripePlan(ast: ProgramAst): PackedCounterStr
       const fields = [left.field, right.field];
       if (!packedCounterStripeUsagesOk(ast, fields.map((field) => field.name))) continue;
       const stripes: PackedCounterStripe[] = [
-        { name: left.field.name, scale: 1, kind: "major" },
-        { name: right.field.name, scale: 0.1, kind: "fractional" },
+        { name: left.field.name, scale: 1, width: 1, kind: "major" },
+        { name: right.field.name, scale: 0.1, width: 1, kind: "digit" },
       ];
       const initial = packedCounterInitial(fields, stripes);
       if (initial === undefined) continue;
@@ -1931,6 +2086,29 @@ function smallDisplayCounterField(field: StateFieldAst): boolean {
     field.initialStack === undefined;
 }
 
+function decimalCounterWidth(field: StateFieldAst): number | undefined {
+  if (
+    field.type !== "range" ||
+    field.min === undefined ||
+    field.max === undefined ||
+    !Number.isInteger(field.min) ||
+    !Number.isInteger(field.max) ||
+    field.min < 0 ||
+    field.initialStack !== undefined
+  ) {
+    return undefined;
+  }
+  if (field.max <= 9) return 1;
+  if (field.max <= 99) return 2;
+  if (field.max <= 999) return 3;
+  if (field.max <= 9999) return 4;
+  if (field.max <= 99999) return 5;
+  if (field.max <= 999999) return 6;
+  if (field.max <= 9999999) return 7;
+  if (field.max <= 99999999) return 8;
+  return undefined;
+}
+
 function packedCounterInitial(
   fields: readonly StateFieldAst[],
   stripes: readonly PackedCounterStripe[],
@@ -1947,13 +2125,49 @@ function packedCounterInitial(
 function packedCounterStripeUsagesOk(ast: ProgramAst, names: readonly string[]): boolean {
   const packed = new Set(names);
   let ok = true;
+  const packedReadCount = (expr: ExpressionAst): number => {
+    switch (expr.kind) {
+      case "identifier":
+        return packed.has(expr.name) ? 1 : 0;
+      case "unary":
+        return packedReadCount(expr.expr);
+      case "binary":
+        return packedReadCount(expr.left) + packedReadCount(expr.right);
+      case "call":
+        return expr.args.reduce((sum, arg) => sum + packedReadCount(arg), 0);
+      case "indexed":
+        return packed.has(expr.base) ? Number.POSITIVE_INFINITY : packedReadCount(expr.index);
+      case "number":
+      case "string":
+        return 0;
+    }
+  };
+  const checkExpr = (expr: ExpressionAst): void => {
+    if (packedReadCount(expr) > 1) ok = false;
+  };
   const visitStatements = (statements: readonly StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "assign" && packed.has(statement.target)) {
         if (numericSelfUpdateDelta(statement.target, statement.expr) === undefined) ok = false;
       }
+      if (statement.kind === "assign") checkExpr(statement.expr);
       if (statement.kind === "input" && packed.has(statement.target)) ok = false;
       if (statement.kind === "core" && statement.outputs?.some((output) => packed.has(output.target))) ok = false;
+      if (statement.kind === "indexed_assign") {
+        checkExpr(statement.target.index);
+        checkExpr(statement.expr);
+      }
+      if (statement.kind === "pause" || statement.kind === "halt" || statement.kind === "return_value") checkExpr(statement.expr);
+      if (statement.kind === "if" || statement.kind === "while") {
+        if (packedReadCount(statement.condition.left) + packedReadCount(statement.condition.right) > 1) ok = false;
+      }
+      if (statement.kind === "dispatch") {
+        checkExpr(statement.expr);
+        for (const dispatchCase of statement.cases) checkExpr(dispatchCase.value);
+      }
+      if (statement.kind === "core" && statement.inputs !== undefined) {
+        for (const input of statement.inputs) checkExpr(input.expr);
+      }
       if (statement.kind === "loop") visitStatements(statement.body);
       if (statement.kind === "while") visitStatements(statement.body);
       if (statement.kind === "if") {
@@ -1966,6 +2180,11 @@ function packedCounterStripeUsagesOk(ast: ProgramAst, names: readonly string[]):
       }
     }
   };
+  for (const display of ast.displays) {
+    for (const item of display.items) {
+      if (item.kind === "source" && item.expr !== undefined) checkExpr(item.expr);
+    }
+  }
   for (const entry of ast.entries) visitStatements(entry.body);
   for (const proc of ast.procs) visitStatements(proc.body);
   return ok;
@@ -2407,7 +2626,14 @@ function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimiz
       }
       if (statement.kind === "show") {
         const display = ast.displays.find((candidate) => candidate.name === statement.display);
-        for (const source of display?.sources ?? []) addRead(source);
+        for (const item of display?.items ?? []) {
+          if (item.kind !== "source") continue;
+          if (item.expr !== undefined) {
+            visitExpr(item.expr);
+          } else {
+            addRead(item.name);
+          }
+        }
       }
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -3322,6 +3548,7 @@ function appendOptimizationCandidateReports(
     ["preloaded-indirect-flow", "compiler-owned address preload selected for one-cell indirect branch/call", 1],
     ["preloaded-super-dark-flow", "compiler-owned FA..FF preloaded one-command dispatch selected after layout proof", 1],
     ["indirect-memory-table", "stable selector reused for indirect memory access", 0],
+    ["indexed-packed-row-table", "indexed packed row display selected direct indirect-memory access", 0],
     ["r0-fractional-sentinel", "fractional R0 selector side effect reused after liveness proof", 0],
   ];
   for (const [name, reason, steps] of selectedPassCandidates) {
@@ -3638,6 +3865,27 @@ function isSimpleCompilerExpression(text: string): boolean {
 function formatDomainName(domain: ProgramAst["domains"][number]): string {
   return domain.name ? `${domain.domainKind} ${domain.name}` : domain.domainKind;
 }
+
+type ConstantSynthesisPlan =
+  | {
+      kind: "unary";
+      cost: number;
+      sourceValue: string;
+      sourceRegister: RegisterName;
+      opcode: number;
+      mnemonic: string;
+      detail: string;
+    }
+  | {
+      kind: "binary";
+      cost: number;
+      leftValue: string;
+      leftRegister: RegisterName;
+      rightValue: string;
+      rightRegister: RegisterName;
+      op: "+" | "-" | "*" | "/" | "pow";
+      detail: string;
+    };
 
 export class EmitContext {
   // Machine-code emission + X-tracking live in a dedicated collaborator; this
@@ -5721,6 +5969,15 @@ export class EmitContext {
       });
       return;
     }
+    if (this.emitter.machineEntryOpen) {
+      this.emitOp(0x0d, "Cx", comment, sourceLine);
+      this.currentXKnownZero = true;
+      this.optimizations.push({
+        name: "constant-synthesis",
+        detail: `Loaded zero with Cx${comment === undefined ? "" : ` for ${comment}`} instead of opening a separated numeric literal.`,
+      });
+      return;
+    }
     this.emitNumber("0");
     if (comment !== undefined) {
       const last = this.items.at(-1);
@@ -5740,7 +5997,112 @@ export class EmitContext {
       });
       return;
     }
+    const directCost = estimateNumberCost(raw) + (this.emitter.machineEntryOpen ? 1 : 0);
+    const synthesis = this.findConstantSynthesis(normalized, directCost);
+    if (synthesis !== undefined) {
+      this.emitConstantSynthesis(normalized, synthesis, directCost);
+      return;
+    }
     this.emitNumber(raw);
+  }
+
+  private findConstantSynthesis(normalized: string, directCost: number): ConstantSynthesisPlan | undefined {
+    const target = Number(normalized);
+    if (!Number.isFinite(target)) return undefined;
+    let best: ConstantSynthesisPlan | undefined;
+    const accept = (plan: ConstantSynthesisPlan): void => {
+      if (plan.cost >= directCost) return;
+      if (best !== undefined && best.cost <= plan.cost) return;
+      best = plan;
+    };
+    const entries = Object.entries(this.allocation.constants)
+      .map(([value, register]) => ({ value, register, numeric: Number(value) }))
+      .filter((entry): entry is { value: string; register: RegisterName; numeric: number } => Number.isFinite(entry.numeric));
+    const byValue = new Map(entries.map((entry) => [entry.value, entry]));
+
+    const negated = normalizeConstantLiteral(String(-target));
+    const negatedEntry = byValue.get(negated);
+    if (negatedEntry !== undefined) {
+      accept({
+        kind: "unary",
+        cost: 2,
+        sourceValue: negatedEntry.value,
+        sourceRegister: negatedEntry.register,
+        opcode: 0x0b,
+        mnemonic: "/-/",
+        detail: `changed the sign of preloaded R${negatedEntry.register} (${negatedEntry.value})`,
+      });
+    }
+
+    if (Number.isSafeInteger(target) && target >= 0) {
+      for (const entry of entries) {
+        if (!Number.isSafeInteger(entry.numeric)) continue;
+        const squared = entry.numeric * entry.numeric;
+        if (!Number.isSafeInteger(squared)) continue;
+        if (normalizeConstantLiteral(String(squared)) !== normalized) continue;
+        accept({
+          kind: "unary",
+          cost: 2,
+          sourceValue: entry.value,
+          sourceRegister: entry.register,
+          opcode: 0x22,
+          mnemonic: "F x^2",
+          detail: `squared preloaded R${entry.register} (${entry.value})`,
+        });
+      }
+    }
+
+    for (const left of entries) {
+      if (!Number.isSafeInteger(left.numeric)) continue;
+      for (const right of entries) {
+        if (!Number.isSafeInteger(right.numeric)) continue;
+        const candidates: Array<{ op: "+" | "-" | "*" | "/" | "pow"; value: number }> = [
+          { op: "+", value: left.numeric + right.numeric },
+          { op: "-", value: left.numeric - right.numeric },
+          { op: "*", value: left.numeric * right.numeric },
+        ];
+        if (right.numeric !== 0 && left.numeric % right.numeric === 0) {
+          candidates.push({ op: "/", value: left.numeric / right.numeric });
+        }
+        if (left.numeric > 0 && right.numeric >= 0 && right.numeric <= 12) {
+          candidates.push({ op: "pow", value: left.numeric ** right.numeric });
+        }
+        for (const candidate of candidates) {
+          if (!Number.isSafeInteger(candidate.value)) continue;
+          if (normalizeConstantLiteral(String(candidate.value)) !== normalized) continue;
+          accept({
+            kind: "binary",
+            cost: 4,
+            leftValue: left.value,
+            leftRegister: left.register,
+            rightValue: right.value,
+            rightRegister: right.register,
+            op: candidate.op,
+            detail: `combined preloaded R${left.register} (${left.value}) and R${right.register} (${right.value}) with ${candidate.op === "pow" ? "F x^y" : candidate.op}`,
+          });
+        }
+      }
+    }
+
+    return best;
+  }
+
+  private emitConstantSynthesis(target: string, plan: ConstantSynthesisPlan, directCost: number): void {
+    if (plan.kind === "unary") {
+      this.emitOp(0x60 + registerIndex(plan.sourceRegister), `П->X ${plan.sourceRegister}`, `constant ${target} base ${plan.sourceValue}`);
+      this.emitOp(plan.opcode, plan.mnemonic, `constant ${target}`);
+    } else {
+      this.emitOp(0x60 + registerIndex(plan.leftRegister), `П->X ${plan.leftRegister}`, `constant ${target} left ${plan.leftValue}`);
+      this.emitOp(0x0e, "В↑", `constant ${target} stack`);
+      this.emitOp(0x60 + registerIndex(plan.rightRegister), `П->X ${plan.rightRegister}`, `constant ${target} right ${plan.rightValue}`);
+      if (plan.op === "pow") this.emitOp(0x24, "F x^y", `constant ${target}`);
+      else this.emitOp(binaryOpcode(plan.op), plan.op, `constant ${target}`);
+    }
+    this.currentXKnownZero = target === "0";
+    this.optimizations.push({
+      name: "constant-synthesis",
+      detail: `Built constant ${target} by ${plan.detail} (${plan.cost} cells instead of direct ${directCost}).`,
+    });
   }
 
   emitStore(name: string, comment?: string, sourceLine?: number, raw = false): void {
@@ -7220,6 +7582,11 @@ function collectStateBankSelectorVariables(
   };
   for (const entry of ast.entries) visitStatements(entry.body);
   for (const proc of ast.procs) visitStatements(proc.body);
+  for (const display of ast.displays) {
+    for (const item of display.items) {
+      if (item.kind === "source" && item.expr !== undefined) visitExpr(item.expr);
+    }
+  }
 
   const selectorPreference: RegisterName[] = ["b", "a", "9", "8", "7", "c", "d", "e"];
   let index = 0;
@@ -7547,6 +7914,10 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
 
 function collectDisplayLiteralPreloadValues(literal: string, values: Set<string>): void {
   const literalProgram = displayLiteralProgram(literal);
+  const leadingZeroProgram = leadingZeroHexProductDisplayProgram(literal);
+  if (leadingZeroProgram !== undefined) {
+    values.add(normalizeConstantLiteral(leadingZeroProgram.sourceLiteral));
+  }
   if (shouldUsePreloadedDisplayLiteral(literal)) {
     values.add(normalizeConstantLiteral(literal));
   }
@@ -10144,8 +10515,8 @@ const optimizerCapabilities: Array<{
     category: "data",
     source: "documented",
     requires: ["indirect-memory"],
-    activeWhen: ["indirect-memory-table"],
-    detail: "Rewrites direct register memory access through К П->X/К X->П when a stable selector already proves the target register.",
+    activeWhen: ["indirect-memory-table", "indexed-packed-row-table"],
+    detail: "Uses К П->X/К X->П indirect memory for compact state tables when a stable selector proves the target register.",
   },
   {
     id: "fl-decrement-branch",
@@ -10658,7 +11029,10 @@ function buildMachineFeaturesUsed(
   ) {
     add("indirect-flow", "Optimizer selected register-held branch addresses for one-cell indirect flow.", "optimizer");
   }
-  if (optimizations.some((optimization) => optimization.name === "indirect-memory-table")) {
+  if (optimizations.some((optimization) =>
+    optimization.name === "indirect-memory-table" ||
+    optimization.name === "indexed-packed-row-table"
+  )) {
     add("indirect-memory", "Optimizer reused a stable selector for one-cell indirect memory access.", "optimizer");
   }
   if (optimizations.some((optimization) => optimization.name === "cyclic-address-layout")) {
@@ -10804,6 +11178,7 @@ function buildProofReport(
       optimization.name === "preloaded-indirect-flow" ||
       optimization.name === "preloaded-super-dark-flow" ||
       optimization.name === "indirect-memory-table" ||
+      optimization.name === "indexed-packed-row-table" ||
       optimization.name === "r0-fractional-sentinel"
     )
   ) {

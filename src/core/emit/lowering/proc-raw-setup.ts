@@ -39,9 +39,11 @@ import {
   conditionCompileCost,
   conditionToText,
   countIdentifierReadsInCondition,
+  binaryOpcode,
   displayLiteralProgram,
   divideExpressions,
   estimateExpressionCost,
+  estimateNumberCost,
   estimateNegativeZeroThresholdFlowCost,
   exponentTailDisplayLiteralProgram,
   expressionEquals,
@@ -59,6 +61,7 @@ import {
   matchNegativeZeroThresholdCondition,
   matchStackUnaryDerivationCall,
   matchXParamReturnDecay,
+  normalizeConstantLiteral,
   numberExpression,
   orderRawInputs,
   parseRawInstruction,
@@ -78,13 +81,52 @@ import type {
   StateFieldAst,
 } from "../../types.ts";
 
+type NumericSetupPreload = ExecutableSetupPreload & { kind: "number" };
+
+type SetupNumericPreloadAction =
+  | { kind: "direct"; targetIndex: number; cost: number }
+  | {
+      kind: "unary";
+      targetIndex: number;
+      cost: number;
+      sourceIndex: number;
+      opcode: number;
+      mnemonic: string;
+      detail: string;
+    }
+  | {
+      kind: "binary";
+      targetIndex: number;
+      cost: number;
+      leftIndex: number;
+      rightIndex: number;
+      op: "+" | "-" | "*" | "/" | "pow";
+      detail: string;
+    };
+
+const MAX_EXACT_SETUP_CONSTANT_SYNTHESIS_PRELOADS = 10;
+
 export function compileSetupProgramWithPreloads(ctx: LoweringCtx, 
     preloads: readonly ExecutableSetupPreload[],
     fields: readonly StateFieldAst[],
   ): void {
     const dynamicRegisters = new Set(fields.map((field) => ctx.allocation.registers[field.name]).filter(Boolean));
-    for (const preload of preloads) {
-      if (dynamicRegisters.has(preload.register)) continue;
+    const activePreloads = preloads.filter((preload) => !dynamicRegisters.has(preload.register));
+    let numericSegment: NumericSetupPreload[] = [];
+    const emitNumericSegment = (): void => {
+      for (const action of setupNumericPreloadActions(numericSegment)) {
+        emitSetupNumericPreloadAction(ctx, numericSegment, action);
+        const preload = numericSegment[action.targetIndex]!;
+        ctx.emitOp(0x40 + registerIndex(preload.register), `X->П ${preload.register}`, `setup R${preload.register}`, undefined, true);
+      }
+      numericSegment = [];
+    };
+    for (const preload of activePreloads) {
+      if (preload.kind === "number") {
+        numericSegment.push(preload as NumericSetupPreload);
+        continue;
+      }
+      emitNumericSegment();
       if (preload.kind === "display-literal") {
         const program = displayLiteralProgram(preload.value);
         const firstSplice =
@@ -103,6 +145,7 @@ export function compileSetupProgramWithPreloads(ctx: LoweringCtx,
       }
       ctx.emitOp(0x40 + registerIndex(preload.register), `X->П ${preload.register}`, `setup R${preload.register}`, undefined, true);
     }
+    emitNumericSegment();
     for (const field of fields.filter((candidate) => candidate.initialStack === "Y")) {
       ctx.emitOp(0x14, "X↔Y", `setup ${field.name} from stack.Y`, field.line);
       ctx.emitStore(field.name, `setup ${field.name}`, field.line, true);
@@ -139,6 +182,175 @@ export function compileSetupProgramWithPreloads(ctx: LoweringCtx,
     }
     ctx.emitOp(0x50, "С/П", "setup complete");
     compileRuntimeHelpers(ctx);
+}
+
+function setupNumericPreloadActions(preloads: readonly NumericSetupPreload[]): SetupNumericPreloadAction[] {
+    const count = preloads.length;
+    if (count === 0) return [];
+    if (count > MAX_EXACT_SETUP_CONSTANT_SYNTHESIS_PRELOADS) {
+      return preloads.map((preload, targetIndex) => ({
+        kind: "direct",
+        targetIndex,
+        cost: estimateNumberCost(preload.value),
+      }));
+    }
+    const normalized = preloads.map((preload) => normalizeConstantLiteral(preload.value));
+    const numeric = normalized.map((value) => Number(value));
+    const directCosts = preloads.map((preload) => estimateNumberCost(preload.value));
+    const fullMask = (1 << count) - 1;
+    const best = new Array<number>(fullMask + 1).fill(Number.POSITIVE_INFINITY);
+    const previous = new Array<{ mask: number; action: SetupNumericPreloadAction } | undefined>(fullMask + 1);
+    best[0] = 0;
+
+    const apply = (mask: number, action: SetupNumericPreloadAction): void => {
+      const nextMask = mask | (1 << action.targetIndex);
+      const nextCost = best[mask]! + action.cost;
+      if (nextCost >= best[nextMask]!) return;
+      best[nextMask] = nextCost;
+      previous[nextMask] = { mask, action };
+    };
+
+    for (let mask = 0; mask <= fullMask; mask += 1) {
+      if (!Number.isFinite(best[mask]!)) continue;
+      for (let targetIndex = 0; targetIndex < count; targetIndex += 1) {
+        if ((mask & (1 << targetIndex)) !== 0) continue;
+        apply(mask, { kind: "direct", targetIndex, cost: directCosts[targetIndex]! });
+        for (const action of setupConstantSynthesisActions(preloads, normalized, numeric, directCosts, mask, targetIndex)) {
+          apply(mask, action);
+        }
+      }
+    }
+
+    if (!Number.isFinite(best[fullMask]!)) {
+      return preloads.map((preload, targetIndex) => ({
+        kind: "direct",
+        targetIndex,
+        cost: estimateNumberCost(preload.value),
+      }));
+    }
+    const actions: SetupNumericPreloadAction[] = [];
+    for (let mask = fullMask; mask !== 0;) {
+      const step = previous[mask];
+      if (step === undefined) break;
+      actions.push(step.action);
+      mask = step.mask;
+    }
+    return actions.reverse();
+}
+
+function setupConstantSynthesisActions(
+  preloads: readonly NumericSetupPreload[],
+  normalized: readonly string[],
+  numeric: readonly number[],
+  directCosts: readonly number[],
+  loadedMask: number,
+  targetIndex: number,
+): SetupNumericPreloadAction[] {
+    const target = numeric[targetIndex]!;
+    if (!Number.isFinite(target)) return [];
+    const targetValue = normalized[targetIndex]!;
+    const directCost = directCosts[targetIndex]!;
+    const actions: SetupNumericPreloadAction[] = [];
+    const accept = (action: SetupNumericPreloadAction): void => {
+      if (action.cost < directCost) actions.push(action);
+    };
+    const loadedIndexes: number[] = [];
+    for (let index = 0; index < preloads.length; index += 1) {
+      if ((loadedMask & (1 << index)) !== 0) loadedIndexes.push(index);
+    }
+
+    const negated = normalizeConstantLiteral(String(-target));
+    const negatedIndex = loadedIndexes.find((index) => normalized[index] === negated);
+    if (negatedIndex !== undefined) {
+      accept({
+        kind: "unary",
+        targetIndex,
+        cost: 2,
+        sourceIndex: negatedIndex,
+        opcode: 0x0b,
+        mnemonic: "/-/",
+        detail: `changed the sign of setup R${preloads[negatedIndex]!.register} (${normalized[negatedIndex]})`,
+      });
+    }
+
+    if (Number.isSafeInteger(target) && target >= 0) {
+      for (const sourceIndex of loadedIndexes) {
+        const source = numeric[sourceIndex]!;
+        if (!Number.isSafeInteger(source)) continue;
+        const squared = source * source;
+        if (!Number.isSafeInteger(squared)) continue;
+        if (normalizeConstantLiteral(String(squared)) !== targetValue) continue;
+        accept({
+          kind: "unary",
+          targetIndex,
+          cost: 2,
+          sourceIndex,
+          opcode: 0x22,
+          mnemonic: "F x^2",
+          detail: `squared setup R${preloads[sourceIndex]!.register} (${normalized[sourceIndex]})`,
+        });
+      }
+    }
+
+    for (const leftIndex of loadedIndexes) {
+      const left = numeric[leftIndex]!;
+      if (!Number.isSafeInteger(left)) continue;
+      for (const rightIndex of loadedIndexes) {
+        const right = numeric[rightIndex]!;
+        if (!Number.isSafeInteger(right)) continue;
+        const candidates: Array<{ op: "+" | "-" | "*" | "/" | "pow"; value: number }> = [
+          { op: "+", value: left + right },
+          { op: "-", value: left - right },
+          { op: "*", value: left * right },
+        ];
+        if (right !== 0 && left % right === 0) candidates.push({ op: "/", value: left / right });
+        if (left > 0 && right >= 0 && right <= 12) candidates.push({ op: "pow", value: left ** right });
+        for (const candidate of candidates) {
+          if (!Number.isSafeInteger(candidate.value)) continue;
+          if (normalizeConstantLiteral(String(candidate.value)) !== targetValue) continue;
+          accept({
+            kind: "binary",
+            targetIndex,
+            cost: 4,
+            leftIndex,
+            rightIndex,
+            op: candidate.op,
+            detail: `combined setup R${preloads[leftIndex]!.register} (${normalized[leftIndex]}) and R${preloads[rightIndex]!.register} (${normalized[rightIndex]}) with ${candidate.op === "pow" ? "F x^y" : candidate.op}`,
+          });
+        }
+      }
+    }
+    return actions;
+}
+
+function emitSetupNumericPreloadAction(
+  ctx: LoweringCtx,
+  preloads: readonly NumericSetupPreload[],
+  action: SetupNumericPreloadAction,
+): void {
+    const target = preloads[action.targetIndex]!;
+    const targetValue = normalizeConstantLiteral(target.value);
+    if (action.kind === "direct") {
+      ctx.emitNumber(target.value);
+      return;
+    }
+    if (action.kind === "unary") {
+      const source = preloads[action.sourceIndex]!;
+      ctx.emitOp(0x60 + registerIndex(source.register), `П->X ${source.register}`, `setup constant ${targetValue} base ${normalizeConstantLiteral(source.value)}`);
+      ctx.emitOp(action.opcode, action.mnemonic, `setup constant ${targetValue}`);
+    } else {
+      const left = preloads[action.leftIndex]!;
+      const right = preloads[action.rightIndex]!;
+      ctx.emitOp(0x60 + registerIndex(left.register), `П->X ${left.register}`, `setup constant ${targetValue} left ${normalizeConstantLiteral(left.value)}`);
+      ctx.emitOp(0x0e, "В↑", `setup constant ${targetValue} stack`);
+      ctx.emitOp(0x60 + registerIndex(right.register), `П->X ${right.register}`, `setup constant ${targetValue} right ${normalizeConstantLiteral(right.value)}`);
+      if (action.op === "pow") ctx.emitOp(0x24, "F x^y", `setup constant ${targetValue}`);
+      else ctx.emitOp(binaryOpcode(action.op), action.op, `setup constant ${targetValue}`);
+    }
+    ctx.optimizations.push({
+      name: "constant-synthesis",
+      detail: `Built setup constant ${targetValue} by ${action.detail} (${action.cost} cells instead of direct ${estimateNumberCost(target.value)}).`,
+    });
 }
 
 export function compileProcedures(ctx: LoweringCtx): void {
