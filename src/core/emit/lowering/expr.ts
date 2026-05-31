@@ -272,7 +272,7 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
     if (compileRandomIntegerCall(ctx, expr)) {
       return;
     }
-    if (name === "read" || name === "input") {
+    if (name === "read") {
       if (expr.args.length !== 0) {
         ctx.diagnostics.push({
           level: "error",
