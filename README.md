@@ -70,7 +70,7 @@ program TinyGame {
   }
 
   fn main() {
-    show(player, score(player, food))
+    show(player, ".", score(player, food))
   }
 
   loop {
