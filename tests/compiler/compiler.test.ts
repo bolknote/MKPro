@@ -1124,26 +1124,6 @@ program SharedSpatialHitBitMask {
     expect(result.steps.some((step) => step.comment === "spatial hit bit_mask")).toBe(true);
   });
 
-  it("emits the compact 4x4 random-reply line-game kernel", () => {
-    const result = compileOk(`
-program Line4RandomReply {
-  halt(line4_random_reply())
-}
-`, { budget: 105, analysis: true });
-
-    expect(result.report.steps).toBe(105);
-    expect(result.steps.map((step) => step.hex).slice(0, 6)).toEqual(["52", "62", "63", "50", "43", "AB"]);
-    expect(result.report.preloads.map((preload) => `${preload.register}=${preload.value}`)).toEqual([
-      "4=44444.4",
-      "5=44444.4",
-      "6=44444.4",
-      "7=44444.4",
-      "9=0",
-      "a=1",
-    ]);
-    expect(result.report.optimizations.some((item) => item.name === "line4-random-reply-program")).toBe(true);
-  });
-
   it("shares repeated membership checks through the selected helper", () => {
     const result = compileOk(`
 program RepeatedMembershipProbe {

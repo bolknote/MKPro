@@ -25,12 +25,12 @@ Current `--analysis` sizes, measured against the local reference listings:
 | `labyrinth777.mkpro` | 207 | 105 | room inspection and local-jumper dispatch |
 | `rambo-iii.mkpro` | 201 | 105 | grouped front/robots storage now works; event dispatch and battle-flow branches are the remaining large blocks |
 | `teleport.mkpro` | 236 | 105 | packed row display, station masks, and vault/guard flow |
-| `tic-tac-toe-4x4.mkpro` | 105 | 105 | closed by `line4_random_reply()` packed line-game kernel |
+| `tic-tac-toe-4x4.mkpro` | 251 | 105 | 4x4 line-count state representation |
 | `treasure-hunter-2.mkpro` | 105 | 105 | closed by packed cursor position, angle-switch movement, and indexed floor-row flow |
 
 Prototype notes:
 
 - `tic-tac-toe-4x4.txt` keeps 4x4 line state in packed line registers
-  (`R4..R7`) and updates/scans those lines directly. `line4_random_reply()`
-  now names that full random-reply line-game kernel without source-level raw,
-  so the compiled program is byte-for-byte equal to the 105-cell reference.
+  (`R4..R7`) and updates/scans those lines directly. The current `line_count`
+  loop is smaller than the old expansion, but still recomputes line state
+  instead of preserving it incrementally.

@@ -507,25 +507,25 @@ sharedBitMaskHelperCalls+hoistSharedHelpers: steps=241 | 51 24 04 13 40 35 04 12
 `;
 
 exports[`golden listing > lowering variants are stable for examples/pending-optimizer/tic-tac-toe-4x4.mkpro 1`] = `
-"primary: steps=105 | 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-aggressiveTerminalDirect: steps=105 | 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-invertBranchOrder: steps=105 | 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-aggressiveTerminalDirect+invertBranchOrder: steps=105 | 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-hoistSharedHelpers: steps=107 | 51 02 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-hoistSharedHelpers+hoistProcs: steps=107 | 51 02 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-canonicalizeIfChains: steps=105 | 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-freeResidualDispatchScratch: steps=105 | 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-aliasXReuse: steps=105 | 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-coalesceCopies: steps=105 | 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-freeResidualDispatchScratch+canonicalizeIfChains: steps=105 | 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-shareRandomCell: steps=105 | 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-shareRandomCell+hoistSharedHelpers: steps=107 | 51 02 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-tailBranchInversion: steps=105 | 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion: steps=107 | 51 02 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-guardedPrologueGadgets: steps=105 | 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: steps=107 | 51 02 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-sharedBitMaskHelperCalls: steps=105 | 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10
-sharedBitMaskHelperCalls+hoistSharedHelpers: steps=107 | 51 02 52 62 63 50 43 AB E3 04 41 04 42 53 EB 37 35 EC 09 08 53 58 60 36 40 11 EC 61 43 62 48 58 11 5B 09 68 AD 42 63 AD 41 69 62 6C 12 15 34 61 15 10 38 49 40 11 57 97 6A 0B 4A 1E 4E 67 61 AE 66 62 AE 65 62 53 72 64 62 0B 61 10 AD 8E 34 04 13 35 04 12 59 85 EA 04 10 52 15 6A 12 10 B0 6B 37 35 7A 43 15 13 35 6D 11 22 10"
+"primary: steps=285 | 63 01 00 00 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 38 87 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 68 50 53 62 87 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 01 00 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 8E 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 69 50 52 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 03 6D 10 4D 6B 01 10 4B 5D A0 53 FE 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 03 6D 10 4D 6B 01 4B 5D C0 53 FE 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 01 01 10 4B 5D D7 53 FE 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 09 10 4B 5D F0 6A 6D 36 4A 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+aggressiveTerminalDirect: steps=285 | 63 01 00 00 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 38 87 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 68 50 53 62 87 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 01 00 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 8E 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 69 50 52 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 03 6D 10 4D 6B 01 10 4B 5D A0 53 FE 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 03 6D 10 4D 6B 01 4B 5D C0 53 FE 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 01 01 10 4B 5D D7 53 FE 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 09 10 4B 5D F0 6A 6D 36 4A 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+invertBranchOrder: steps=285 | 63 01 00 00 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 38 87 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 68 50 53 62 87 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 01 00 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 8E 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 69 50 52 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 03 6D 10 4D 6B 01 10 4B 5D A0 53 FE 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 03 6D 10 4D 6B 01 4B 5D C0 53 FE 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 01 01 10 4B 5D D7 53 FE 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 09 10 4B 5D F0 6A 6D 36 4A 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+aggressiveTerminalDirect+invertBranchOrder: steps=285 | 63 01 00 00 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 38 87 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 68 50 53 62 87 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 01 00 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 8E 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 69 50 52 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 03 6D 10 4D 6B 01 10 4B 5D A0 53 FE 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 03 6D 10 4D 6B 01 4B 5D C0 53 FE 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 01 01 10 4B 5D D7 53 FE 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 09 10 4B 5D F0 6A 6D 36 4A 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+hoistSharedHelpers: steps=288 | 51 91 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 77 6D 10 4D 6B 01 10 4B 5D 20 53 72 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 77 6D 10 4D 6B 01 4B 5D 52 53 72 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 77 6D 10 4D 6B 01 01 10 4B 5D 75 53 72 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 77 6D 10 4D 6B 09 10 4B 5D A0 6A 6D 36 4A 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52 63 01 00 00 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E B8 51 91 65 61 38 45 64 61 38 44 01 66 10 46 65 A7 04 11 59 CC 68 50 53 D0 51 91 66 01 06 11 59 D8 00 50 3B 04 12 0E 35 11 01 10 01 00 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 0B 51 D0 62 61 38 42 64 61 38 44 01 66 10 46 62 A7 04 11 59 1F 69 50 52
+hoistSharedHelpers+hoistProcs: steps=288 | 51 E1 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 77 6D 10 4D 6B 01 10 4B 5D 20 53 72 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 77 6D 10 4D 6B 01 4B 5D 52 53 72 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 77 6D 10 4D 6B 01 01 10 4B 5D 75 53 72 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 77 6D 10 4D 6B 09 10 4B 5D A0 6A 6D 36 4A 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52 66 01 06 11 59 99 00 50 3B 04 12 0E 35 11 01 10 01 00 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E CC 51 91 62 61 38 42 64 61 38 44 01 66 10 46 62 A7 04 11 59 E0 69 50 52 63 01 00 00 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 08 51 E1 65 61 38 45 64 61 38 44 01 66 10 46 65 A7 04 11 59 1C 68 50 53 91 51 E1
+canonicalizeIfChains: steps=285 | 63 01 00 00 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 38 87 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 68 50 53 62 87 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 01 00 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 8E 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 69 50 52 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 03 6D 10 4D 6B 01 10 4B 5D A0 53 FE 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 03 6D 10 4D 6B 01 4B 5D C0 53 FE 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 01 01 10 4B 5D D7 53 FE 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 09 10 4B 5D F0 6A 6D 36 4A 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+freeResidualDispatchScratch: steps=285 | 63 01 00 00 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 38 87 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 68 50 53 62 87 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 01 00 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 8E 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 69 50 52 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 03 6D 10 4D 6B 01 10 4B 5D A0 53 FE 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 03 6D 10 4D 6B 01 4B 5D C0 53 FE 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 01 01 10 4B 5D D7 53 FE 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 09 10 4B 5D F0 6A 6D 36 4A 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+aliasXReuse: steps=285 | 63 01 00 00 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 38 87 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 68 50 53 62 87 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 01 00 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 8E 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 69 50 52 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 03 6D 10 4D 6B 01 10 4B 5D A0 53 FE 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 03 6D 10 4D 6B 01 4B 5D C0 53 FE 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 01 01 10 4B 5D D7 53 FE 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 09 10 4B 5D F0 6A 6D 36 4A 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+coalesceCopies: steps=285 | 63 01 00 00 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 38 87 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 68 50 53 62 87 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 01 00 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 8E 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 69 50 52 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 03 6D 10 4D 6B 01 10 4B 5D A0 53 FE 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 03 6D 10 4D 6B 01 4B 5D C0 53 FE 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 01 01 10 4B 5D D7 53 FE 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 09 10 4B 5D F0 6A 6D 36 4A 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+freeResidualDispatchScratch+canonicalizeIfChains: steps=285 | 63 01 00 00 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 38 87 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 68 50 53 62 87 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 01 00 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 8E 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 69 50 52 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 03 6D 10 4D 6B 01 10 4B 5D A0 53 FE 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 03 6D 10 4D 6B 01 4B 5D C0 53 FE 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 01 01 10 4B 5D D7 53 FE 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 09 10 4B 5D F0 6A 6D 36 4A 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+shareRandomCell: steps=282 | 63 01 00 00 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 38 87 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8B 04 11 59 59 68 50 53 62 87 66 01 06 11 59 70 00 50 53 82 01 00 53 82 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 6C 8E 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8B 04 11 59 81 69 50 52 3B 04 12 0E 35 11 01 10 52 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 00 6D 10 4D 6B 01 10 4B 5D 9D 53 FB 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 00 6D 10 4D 6B 01 4B 5D BD 53 FB 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 00 6D 10 4D 6B 01 01 10 4B 5D D4 53 FB 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 00 6D 10 4D 6B 09 10 4B 5D ED 6A 6D 36 4A 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+shareRandomCell+hoistSharedHelpers: steps=283 | 51 9A 3B 04 12 0E 35 11 01 10 52 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 80 6D 10 4D 6B 01 10 4B 5D 29 53 7B 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 80 6D 10 4D 6B 01 4B 5D 61 53 7B 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 80 6D 10 4D 6B 01 01 10 4B 5D 84 53 7B 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 80 6D 10 4D 6B 09 10 4B 5D 6D 6A 6D 36 4A 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52 63 01 00 00 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E C1 51 9A 65 61 38 45 64 61 38 44 01 66 10 46 65 A7 04 11 59 D5 68 50 53 D9 51 9A 66 01 06 11 59 E1 00 50 AE 01 00 AE 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 06 51 D9 62 61 38 42 64 61 38 44 01 66 10 46 62 A7 04 11 59 1A 69 50 52
+tailBranchInversion: steps=281 | 63 01 00 00 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 77 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8A 04 11 59 57 68 50 53 60 87 66 01 06 11 59 68 00 50 3B 04 12 0E 35 11 01 10 01 00 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 7E 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8A 04 11 59 89 69 50 52 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 FF 6D 10 4D 6B 01 10 4B 5D 9C 53 FA 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 FF 6D 10 4D 6B 01 4B 5D BC 53 FA 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 FF 6D 10 4D 6B 01 01 10 4B 5D D3 53 FA 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 FF 6D 10 4D 6B 09 10 4B 5D EC 6A 6D 36 4A 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion: steps=284 | 51 91 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 77 6D 10 4D 6B 01 10 4B 5D 20 53 72 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 77 6D 10 4D 6B 01 4B 5D 52 53 72 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 77 6D 10 4D 6B 01 01 10 4B 5D 75 53 72 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 77 6D 10 4D 6B 09 10 4B 5D A0 6A 6D 36 4A 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52 63 01 00 00 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 91 65 61 38 45 64 61 38 44 01 66 10 46 65 A7 04 11 59 CA 68 50 53 CE 51 91 66 01 06 11 59 D6 00 50 3B 04 12 0E 35 11 01 10 01 00 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 CE 62 61 38 42 64 61 38 44 01 66 10 46 62 A7 04 11 59 1B 69 50 52
+guardedPrologueGadgets: steps=285 | 63 01 00 00 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 38 87 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 68 50 53 62 87 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 01 00 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 8E 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 69 50 52 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 03 6D 10 4D 6B 01 10 4B 5D A0 53 FE 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 03 6D 10 4D 6B 01 4B 5D C0 53 FE 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 01 01 10 4B 5D D7 53 FE 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 03 6D 10 4D 6B 09 10 4B 5D F0 6A 6D 36 4A 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: steps=288 | 51 E1 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 77 6D 10 4D 6B 01 10 4B 5D 20 53 72 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 77 6D 10 4D 6B 01 4B 5D 52 53 72 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 77 6D 10 4D 6B 01 01 10 4B 5D 75 53 72 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 77 6D 10 4D 6B 09 10 4B 5D A0 6A 6D 36 4A 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52 66 01 06 11 59 99 00 50 3B 04 12 0E 35 11 01 10 01 00 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E CC 51 91 62 61 38 42 64 61 38 44 01 66 10 46 62 A7 04 11 59 E0 69 50 52 63 01 00 00 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 08 51 E1 65 61 38 45 64 61 38 44 01 66 10 46 65 A7 04 11 59 1C 68 50 53 91 51 E1
+sharedBitMaskHelperCalls: steps=251 | 63 01 00 00 12 66 10 50 43 53 DE 4E 64 6E 37 35 5E 19 87 65 6E 38 45 64 6E 38 44 01 66 10 46 65 53 69 04 11 59 40 68 50 53 43 87 66 01 06 11 59 51 00 50 3B 04 12 0E 35 11 01 10 01 00 3B 04 12 0E 35 11 01 10 12 10 43 53 DE 4E 64 6E 37 35 5E 83 51 43 62 6E 38 42 64 6E 38 44 01 66 10 46 62 53 69 04 11 59 A4 69 50 52 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 F4 6D 10 4D 6B 01 10 4B 5D 7B 53 D9 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 F4 6D 10 4D 6B 01 4B 5D 9B 53 D9 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 F4 6D 10 4D 6B 01 01 10 4B 5D B2 53 D9 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 F4 6D 10 4D 6B 09 10 4B 5D CB 6A 6D 36 4A 52 04 13 4E 35 04 12 02 24 00 0A 05 10 34 6E 34 01 10 15 13 08 10 52 53 DE 6C 37 35 32 52
+sharedBitMaskHelperCalls+hoistSharedHelpers: steps=253 | 51 94 4C 00 4A 00 4D 01 63 01 00 13 35 01 00 12 11 4B 04 BA 63 6B 10 53 8D 6D 10 4D 6B 01 10 4B 5D 20 53 72 00 4D 01 00 0E 01 63 01 00 13 34 11 12 4B 04 BD 63 6B 10 53 8D 6D 10 4D 6B 01 4B 5D 52 53 72 00 4D 03 03 0B 4B 07 BD 63 6B 10 53 8D 6D 10 4D 6B 01 01 10 4B 5D 75 53 72 00 4D 02 07 0B 4B 07 BD 63 6B 10 53 8D 6D 10 4D 6B 09 10 4B 5D A0 6A 6D 36 4A 52 04 13 4E 35 04 12 02 24 00 0A 05 10 34 6E 34 01 10 15 13 08 10 52 53 77 6C 37 35 32 52 63 01 00 00 12 66 10 50 43 53 77 4E 64 6E 37 35 5E A8 51 94 65 6E 38 45 64 6E 38 44 01 66 10 46 65 A7 04 11 59 BC 68 50 53 C0 51 94 66 01 06 11 59 C8 00 50 3B 04 12 0E 35 11 01 10 01 00 3B 04 12 0E 35 11 01 10 12 10 43 53 77 4E 64 6E 37 35 5E E8 51 C0 62 6E 38 42 64 6E 38 44 01 66 10 46 62 A7 04 11 59 FC 69 50 52"
 `;
 
 exports[`golden listing > lowering variants are stable for examples/pending-optimizer/treasure-hunter-2.mkpro 1`] = `
@@ -8172,167 +8172,404 @@ Cell Roles:
 exports[`golden listing > selected output is stable for examples/pending-optimizer/tic-tac-toe-4x4.mkpro 1`] = `
 "## Listing
 Setup Block:
-  \`R4=44444.4; R5=44444.4; R6=44444.4; R7=44444.4; R9=0; Ra=1\`
+  \`R6=0; R8=4444; R9=-4444; R7=-99; R7=L2\`
 
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  52  | В/О                     | line4_random_reply
-   01 |  62  | П->X 2                  | line4_random_reply
-   02 |  63  | П->X 3                  | line4_random_reply
-   03 |  50  | С/П                     | line4_random_reply
-   04 |  43  | X->П 3                  | line4_random_reply
-   05 |  AB  | К ПП b                  | line4_random_reply
-   06 |  E3  | К x=0 3                 | line4_random_reply
-   07 |  04  | 4                       | line4_random_reply
-   08 |  41  | X->П 1                  | line4_random_reply
-   09 |  04  | 4                       | line4_random_reply
-   10 |  42  | X->П 2                  | line4_random_reply
-   11 |  53  | ПП                      | line4_random_reply
-   12 |  EB  | EB                      | line4_random_reply; formal EB->39
-   13 |  37  | К ∧                     | line4_random_reply
-   14 |  35  | К {x}                   | line4_random_reply
-   15 |  EC  | К x=0 c                 | line4_random_reply
-   16 |  09  | 9                       | line4_random_reply
-   17 |  08  | 8                       | line4_random_reply
-   18 |  53  | ПП                      | line4_random_reply
-   19 |  58  | 58                      | line4_random_reply; formal 58->58
-   20 |  60  | П->X 0                  | line4_random_reply
-   21 |  36  | К max                   | line4_random_reply
-   22 |  40  | X->П 0                  | line4_random_reply
-   23 |  11  | -                       | line4_random_reply
-   24 |  EC  | К x=0 c                 | line4_random_reply
-   25 |  61  | П->X 1                  | line4_random_reply
-   26 |  43  | X->П 3                  | line4_random_reply
-   27 |  62  | П->X 2                  | line4_random_reply
-   28 |  48  | X->П 8                  | line4_random_reply
-   29 |  58  | F L2                    | line4_random_reply
-   30 |  11  | 11                      | line4_random_reply; formal 11->11
-   31 |  5B  | F L1                    | line4_random_reply
-   32 |  09  | 09                      | line4_random_reply; formal 09->09
-   33 |  68  | П->X 8                  | line4_random_reply
-   34 |  AD  | К ПП d                  | line4_random_reply
-   35 |  42  | X->П 2                  | line4_random_reply
-   36 |  63  | П->X 3                  | line4_random_reply
-   37 |  AD  | К ПП d                  | line4_random_reply
-   38 |  41  | X->П 1                  | line4_random_reply
-   39 |  69  | П->X 9                  | line4_random_reply
-   40 |  62  | П->X 2                  | line4_random_reply
-   41 |  6C  | П->X c                  | line4_random_reply
-   42 |  12  | *                       | line4_random_reply
-   43 |  15  | F 10^x                  | line4_random_reply
-   44 |  34  | К [x]                   | line4_random_reply
-   45 |  61  | П->X 1                  | line4_random_reply
-   46 |  15  | F 10^x                  | line4_random_reply
-   47 |  10  | +                       | line4_random_reply
-   48 |  38  | К ∨                     | line4_random_reply
-   49 |  49  | X->П 9                  | line4_random_reply
-   50 |  40  | X->П 0                  | line4_random_reply
-   51 |  11  | -                       | line4_random_reply
-   52 |  57  | F x!=0                  | line4_random_reply
-   53 |  97  | 97                      | line4_random_reply; formal 97->97
-   54 |  6A  | П->X a                  | line4_random_reply
-   55 |  0B  | /-/                     | line4_random_reply
-   56 |  4A  | X->П a                  | line4_random_reply
-   57 |  1E  | F tg                    | line4_random_reply
-   58 |  4E  | X->П e                  | line4_random_reply
-   59 |  67  | П->X 7                  | line4_random_reply
-   60 |  61  | П->X 1                  | line4_random_reply
-   61 |  AE  | К ПП e                  | line4_random_reply
-   62 |  66  | П->X 6                  | line4_random_reply
-   63 |  62  | П->X 2                  | line4_random_reply
-   64 |  AE  | К ПП e                  | line4_random_reply
-   65 |  65  | П->X 5                  | line4_random_reply
-   66 |  62  | П->X 2                  | line4_random_reply
-   67 |  53  | ПП                      | line4_random_reply
-   68 |  72  | 72                      | line4_random_reply; formal 72->72
-   69 |  64  | П->X 4                  | line4_random_reply
-   70 |  62  | П->X 2                  | line4_random_reply
-   71 |  0B  | /-/                     | line4_random_reply
-   72 |  61  | П->X 1                  | line4_random_reply
-   73 |  10  | +                       | line4_random_reply
-   74 |  AD  | К ПП d                  | line4_random_reply
-   75 |  8E  | К БП e                  | line4_random_reply
-   76 |  34  | К [x]                   | line4_random_reply
-   77 |  04  | 4                       | line4_random_reply
-   78 |  13  | /                       | line4_random_reply
-   79 |  35  | К {x}                   | line4_random_reply
-   80 |  04  | 4                       | line4_random_reply
-   81 |  12  | *                       | line4_random_reply
-   82 |  59  | F x>=0                  | line4_random_reply
-   83 |  85  | 85                      | line4_random_reply; formal 85->85
-   84 |  EA  | К x=0 a                 | line4_random_reply
-   85 |  04  | 4                       | line4_random_reply
-   86 |  10  | +                       | line4_random_reply
-   87 |  52  | В/О                     | line4_random_reply
-   88 |  15  | F 10^x                  | line4_random_reply
-   89 |  6A  | П->X a                  | line4_random_reply
-   90 |  12  | *                       | line4_random_reply
-   91 |  10  | +                       | line4_random_reply
-   92 |  B0  | К X->П 0                | line4_random_reply
-   93 |  6B  | П->X b                  | line4_random_reply
-   94 |  37  | К ∧                     | line4_random_reply
-   95 |  35  | К {x}                   | line4_random_reply
-   96 |  7A  | К x!=0 a                | line4_random_reply
-   97 |  43  | X->П 3                  | line4_random_reply
-   98 |  15  | F 10^x                  | line4_random_reply
-   99 |  13  | /                       | line4_random_reply
-   A0 |  35  | К {x}                   | line4_random_reply
-   A1 |  6D  | П->X d                  | line4_random_reply
-   A2 |  11  | -                       | line4_random_reply
-   A3 |  22  | F x^2                   | line4_random_reply
-   A4 |  10  | +                       | line4_random_reply
+   00 |  63  | П->X 3                  | display __inline_show_32_0 source
+   01 |  01  | 1                       |
+   02 |  00  | 0                       |
+   03 |  00  | 0                       |
+   04 |  12  | *                       | packed display field shift
+   05 |  66  | П->X 6                  | display __inline_show_32_0 source
+   06 |  10  | +                       | packed display field append
+   07 |  50  | С/П                     | show __inline_show_32_0
+   08 |  43  | X->П 3                  | read cell
+   09 |  53  | ПП                      | bit_mask helper
+   10 |  DE  | >DE                     | bit_mask helper
+   11 |  4E  | X->П e                  | cell bit mask scratch
+   12 |  64  | П->X 4                  | recall occupied
+   13 |  6E  | П->X e                  | reuse cell bit mask
+   14 |  37  | К ∧                     | membership test with reused mask
+   15 |  35  | К {x}                   | membership fraction
+   16 |  5E  | F x=0                   | false branch for !=
+   17 |  19  | 19                      | false branch for !=
+   18 |  87  | К БП 7                  | if end; preloaded R7=B2 indirect-target=0 indirect flow
+   19 |  65  | П->X 5                  | recall player_marks
+   20 |  6E  | П->X e                  | reuse cell bit mask
+   21 |  38  | К ∨                     | bit_set with reused mask
+   22 |  45  | X->П 5                  | set player_marks
+   23 |  64  | П->X 4                  | recall occupied
+   24 |  6E  | П->X e                  | reuse cell bit mask
+   25 |  38  | К ∨                     | bit_set with reused mask
+   26 |  44  | X->П 4                  | set occupied
+   27 |  01  | 1                       |
+   28 |  66  | П->X 6                  | recall turn_count
+   29 |  10  | +                       | expr +
+   30 |  46  | X->П 6                  | set turn_count
+   31 |  65  | П->X 5                  | recall player_marks
+   32 |  53  | ПП                      | line_count player_marks
+   33 |  69  | >69                     | line_count player_marks
+   34 |  04  | 4                       |
+   35 |  11  | -                       | condition compare
+   36 |  59  | F x>=0                  | false branch for >=
+   37 |  40  | 40                      | false branch for >=
+   38 |  68  | П->X 8                  | preload const 4444
+   39 |  50  | С/П                     | halt
+   40 |  53  | ПП                      | proc call calculator_reply
+   41 |  43  | 43                      | proc call calculator_reply
+   42 |  87  | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow
+   43 |  66  | П->X 6                  | recall turn_count
+   44 |  01  | 1                       |
+   45 |  06  | 6                       |
+   46 |  11  | -                       | condition compare
+   47 |  59  | F x>=0                  | false branch for >=
+   48 |  51  | 51                      | false branch for >=
+   49 |  00  | 0                       | halt
+   50 |  50  | С/П                     | halt
+   51 |  3B  | К СЧ                    | random()
+   52 |  04  | 4                       |
+   53 |  12  | *                       | expr *
+   54 |  0E  | В↑                      | random int keep scaled draw
+   55 |  35  | К {x}                   | random int fractional part
+   56 |  11  | -                       | random int floor
+   57 |  01  | 1                       |
+   58 |  10  | +                       | expr +
+   59 |  01  | 1                       |
+   60 |  00  | 0                       |
+   61 |  3B  | К СЧ                    | random()
+   62 |  04  | 4                       |
+   63 |  12  | *                       | expr *
+   64 |  0E  | В↑                      | random int keep scaled draw
+   65 |  35  | К {x}                   | random int fractional part
+   66 |  11  | -                       | random int floor
+   67 |  01  | 1                       |
+   68 |  10  | +                       | expr +
+   69 |  12  | *                       | expr *
+   70 |  10  | +                       | expr +
+   71 |  43  | X->П 3                  | set cell
+   72 |  53  | ПП                      | bit_mask helper
+   73 |  DE  | >DE                     | bit_mask helper
+   74 |  4E  | X->П e                  | cell bit mask scratch
+   75 |  64  | П->X 4                  | recall occupied
+   76 |  6E  | П->X e                  | reuse cell bit mask
+   77 |  37  | К ∧                     | membership test with reused mask
+   78 |  35  | К {x}                   | membership fraction
+   79 |  5E  | F x=0                   | false branch for !=
+   80 |  83  | 83                      | false branch for !=
+   81 |  51  | БП                      | tail call calculator_reply
+   82 |  43  | 43                      | proc call calculator_reply
+   83 |  62  | П->X 2                  | recall calculator_marks
+   84 |  6E  | П->X e                  | reuse cell bit mask
+   85 |  38  | К ∨                     | bit_set with reused mask
+   86 |  42  | X->П 2                  | set calculator_marks
+   87 |  64  | П->X 4                  | recall occupied
+   88 |  6E  | П->X e                  | reuse cell bit mask
+   89 |  38  | К ∨                     | bit_set with reused mask
+   90 |  44  | X->П 4                  | set occupied
+   91 |  01  | 1                       |
+   92 |  66  | П->X 6                  | recall turn_count
+   93 |  10  | +                       | expr +
+   94 |  46  | X->П 6                  | set turn_count
+   95 |  62  | П->X 2                  | recall calculator_marks
+   96 |  53  | ПП                      | line_count calculator_marks
+   97 |  69  | >69                     | line_count calculator_marks
+   98 |  04  | 4                       |
+   99 |  11  | -                       | condition compare
+   A0 |  59  | F x>=0                  | false branch for >=
+   A1 |  A4  | A4                      | false branch for >=
+   A2 |  69  | П->X 9                  | preload const -4444
+   A3 |  50  | С/П                     | halt
+   A4 |  52  | В/О                     | implicit return from proc
+  >69 |  4C  | X->П c                  | line count mask
+  >6A |  00  | 0                       | line_count total
+  >6B |  4A  | X->П a                  | line_count total
+  >6C |  00  | 0                       |
+  >6D |  4D  | X->П d                  | line_count current line
+  >6E |  01  | 1                       |
+  >6F |  63  | П->X 3                  | recall cell
+  >70 |  01  | 1                       |
+  >71 |  00  | 0                       |
+  >72 |  13  | /                       | expr /
+  >73 |  35  | К {x}                   | frac()
+  >74 |  01  | 1                       |
+  >75 |  00  | 0                       |
+  >76 |  12  | *                       | expr *
+  >77 |  11  | -                       | expr -
+  >78 |  4B  | X->П b                  | line_count offset
+  >79 |  04  | 4                       |
+  >7A |  BA  | К X->П a                | line_count counter; indirect memory table indirect-memory-target=0
+  >7B |  63  | П->X 3                  | recall cell
+  >7C |  6B  | П->X b                  | recall __spatial_count_offset
+  >7D |  10  | +                       | expr +
+  >7E |  53  | ПП                      | spatial hit __spatial_count_mask
+  >7F |  F4  | >F4                     | spatial hit __spatial_count_mask
+  >80 |  6D  | П->X d                  | line_count accumulator
+  >81 |  10  | +                       | line_count add hit
+  >82 |  4D  | X->П d                  | line_count accumulator
+  >83 |  6B  | П->X b                  | line_count offset
+  >84 |  01  | 1                       |
+  >85 |  10  | +                       | line_count next offset
+  >86 |  4B  | X->П b                  | line_count offset
+  >87 |  5D  | F L0                    | line_count loop
+  >88 |  7B  | >7B                     | line_count loop
+  >89 |  53  | ПП                      | proc call return suffix gadget
+  >8A |  D9  | >D9                     | return suffix gadget target
+  >8B |  00  | 0                       |
+  >8C |  4D  | X->П d                  | line_count current line
+  >8D |  01  | 1                       |
+  >8E |  00  | 0                       |
+  >8F |  0E  | В↑                      | separate adjacent number entry
+  >90 |  01  | 1                       |
+  >91 |  63  | П->X 3                  | recall cell
+  >92 |  01  | 1                       |
+  >93 |  00  | 0                       |
+  >94 |  13  | /                       | expr /
+  >95 |  34  | К [x]                   | int()
+  >96 |  11  | -                       | expr -
+  >97 |  12  | *                       | expr *
+  >98 |  4B  | X->П b                  | line_count offset
+  >99 |  04  | 4                       |
+  >9A |  BD  | К X->П d                | line_count counter; indirect memory table indirect-memory-target=0
+  >9B |  63  | П->X 3                  | recall cell
+  >9C |  6B  | П->X b                  | recall __spatial_count_offset
+  >9D |  10  | +                       | expr +
+  >9E |  53  | ПП                      | spatial hit __spatial_count_mask
+  >9F |  F4  | >F4                     | spatial hit __spatial_count_mask
+  >A0 |  6D  | П->X d                  | line_count accumulator
+  >A1 |  10  | +                       | line_count add hit
+  >A2 |  4D  | X->П d                  | line_count accumulator
+  >A3 |  6B  | П->X b                  | line_count offset
+  >A4 |  01  | 1                       |
+  >A5 |  4B  | X->П b                  | line_count offset
+  >A6 |  5D  | F L0                    | line_count loop
+  >A7 |  9B  | >9B                     | line_count loop
+  >A8 |  53  | ПП                      | proc call return suffix gadget
+  >A9 |  D9  | >D9                     | return suffix gadget target
+  >AA |  00  | 0                       |
+  >AB |  4D  | X->П d                  | line_count current line
+  >AC |  03  | 3                       |
+  >AD |  03  | 3                       |
+  >AE |  0B  | /-/                     | negative number
+  >AF |  4B  | X->П b                  | line_count offset
+  >B0 |  07  | 7                       |
+  >B1 |  BD  | К X->П d                | line_count counter; indirect memory table indirect-memory-target=0
+  >B2 |  63  | П->X 3                  | recall cell
+  >B3 |  6B  | П->X b                  | recall __spatial_count_offset
+  >B4 |  10  | +                       | expr +
+  >B5 |  53  | ПП                      | spatial hit __spatial_count_mask
+  >B6 |  F4  | >F4                     | spatial hit __spatial_count_mask
+  >B7 |  6D  | П->X d                  | line_count accumulator
+  >B8 |  10  | +                       | line_count add hit
+  >B9 |  4D  | X->П d                  | line_count accumulator
+  >BA |  6B  | П->X b                  | line_count offset
+  >BB |  01  | 1                       |
+  >BC |  01  | 1                       |
+  >BD |  10  | +                       | line_count next offset
+  >BE |  4B  | X->П b                  | line_count offset
+  >BF |  5D  | F L0                    | line_count loop
+  >C0 |  B2  | >B2                     | line_count loop
+  >C1 |  53  | ПП                      | proc call return suffix gadget
+  >C2 |  D9  | >D9                     | return suffix gadget target
+  >C3 |  00  | 0                       |
+  >C4 |  4D  | X->П d                  | line_count current line
+  >C5 |  02  | 2                       |
+  >C6 |  07  | 7                       |
+  >C7 |  0B  | /-/                     | negative number
+  >C8 |  4B  | X->П b                  | line_count offset
+  >C9 |  07  | 7                       |
+  >CA |  BD  | К X->П d                | line_count counter; indirect memory table indirect-memory-target=0
+  >CB |  63  | П->X 3                  | recall cell
+  >CC |  6B  | П->X b                  | recall __spatial_count_offset
+  >CD |  10  | +                       | expr +
+  >CE |  53  | ПП                      | spatial hit __spatial_count_mask
+  >CF |  F4  | >F4                     | spatial hit __spatial_count_mask
+  >D0 |  6D  | П->X d                  | line_count accumulator
+  >D1 |  10  | +                       | line_count add hit
+  >D2 |  4D  | X->П d                  | line_count accumulator
+  >D3 |  6B  | П->X b                  | line_count offset
+  >D4 |  09  | 9                       |
+  >D5 |  10  | +                       | line_count next offset
+  >D6 |  4B  | X->П b                  | line_count offset
+  >D7 |  5D  | F L0                    | line_count loop
+  >D8 |  CB  | >CB                     | line_count loop
+  >D9 |  6A  | П->X a                  | line_count total
+  >DA |  6D  | П->X d                  | line_count current line
+  >DB |  36  | К max                   | line_count best line
+  >DC |  4A  | X->П a                  | line_count total
+  >DD |  52  | В/О                     | line_count return
+  >DE |  04  | 4                       |
+  >DF |  13  | /                       | bit mask quotient
+  >E0 |  4E  | X->П e                  | bit mask quotient
+  >E1 |  35  | К {x}                   | bit mask remainder fraction
+  >E2 |  04  | 4                       |
+  >E3 |  12  | *                       | bit mask remainder scale
+  >E4 |  02  | 2                       |
+  >E5 |  24  | F x^y                   | bit mask power
+  >E6 |  00  | 0                       |
+  >E7 |  0A  | .                       |
+  >E8 |  05  | 5                       |
+  >E9 |  10  | +                       | bit mask round bias
+  >EA |  34  | К [x]                   | bit mask round
+  >EB |  6E  | П->X e                  | bit mask quotient
+  >EC |  34  | К [x]                   | bit mask digit index
+  >ED |  01  | 1                       |
+  >EE |  10  | +                       | bit mask decade index
+  >EF |  15  | F 10^x                  | bit mask decade
+  >F0 |  13  | /                       | bit mask fractional place
+  >F1 |  08  | 8                       |
+  >F2 |  10  | +                       | bit mask anchor
+  >F3 |  52  | В/О                     | bit_mask return
+  >F4 |  53  | ПП                      | spatial hit bit_mask
+  >F5 |  DE  | >DE                     | spatial hit bit_mask
+  >F6 |  6C  | П->X c                  | spatial hit mask
+  >F7 |  37  | К ∧                     | spatial hit test
+  >F8 |  35  | К {x}                   | spatial hit membership fraction
+  >F9 |  32  | К ЗН                    | spatial hit to count
+  >FA |  52  | В/О                     | spatial hit return
 
 ## Hex
-00: 52 62 63 50 43 AB E3 04
-08: 41 04 42 53 EB 37 35 EC
-16: 09 08 53 58 60 36 40 11
-24: EC 61 43 62 48 58 11 5B
-32: 09 68 AD 42 63 AD 41 69
-40: 62 6C 12 15 34 61 15 10
-48: 38 49 40 11 57 97 6A 0B
-56: 4A 1E 4E 67 61 AE 66 62
-64: AE 65 62 53 72 64 62 0B
-72: 61 10 AD 8E 34 04 13 35
-80: 04 12 59 85 EA 04 10 52
-88: 15 6A 12 10 B0 6B 37 35
-96: 7A 43 15 13 35 6D 11 22
-A4: 10
+00: 63 01 00 00 12 66 10 50
+08: 43 53 DE 4E 64 6E 37 35
+16: 5E 19 87 65 6E 38 45 64
+24: 6E 38 44 01 66 10 46 65
+32: 53 69 04 11 59 40 68 50
+40: 53 43 87 66 01 06 11 59
+48: 51 00 50 3B 04 12 0E 35
+56: 11 01 10 01 00 3B 04 12
+64: 0E 35 11 01 10 12 10 43
+72: 53 DE 4E 64 6E 37 35 5E
+80: 83 51 43 62 6E 38 42 64
+88: 6E 38 44 01 66 10 46 62
+96: 53 69 04 11 59 A4 69 50
+A4: 52 4C 00 4A 00 4D 01 63
+>70: 01 00 13 35 01 00 12 11
+>78: 4B 04 BA 63 6B 10 53 F4
+>80: 6D 10 4D 6B 01 10 4B 5D
+>88: 7B 53 D9 00 4D 01 00 0E
+>90: 01 63 01 00 13 34 11 12
+>98: 4B 04 BD 63 6B 10 53 F4
+>A0: 6D 10 4D 6B 01 4B 5D 9B
+>A8: 53 D9 00 4D 03 03 0B 4B
+>B0: 07 BD 63 6B 10 53 F4 6D
+>B8: 10 4D 6B 01 01 10 4B 5D
+>C0: B2 53 D9 00 4D 02 07 0B
+>C8: 4B 07 BD 63 6B 10 53 F4
+>D0: 6D 10 4D 6B 09 10 4B 5D
+>D8: CB 6A 6D 36 4A 52 04 13
+>E0: 4E 35 04 12 02 24 00 0A
+>E8: 05 10 34 6E 34 01 10 15
+>F0: 13 08 10 52 53 DE 6C 37
+>F8: 35 32 52
 
 ## Explain
 MK-Pro compile report
-Steps: 105/999999
+Steps: 251/999999
 Delivery: hex
 Optimizer: exact maximum
-Reference: anvarov_tic_tac_toe_4x4; span=105, entries=105, gaps=none, compiled=105, delta=0, parity=equal
+Reference: anvarov_tic_tac_toe_4x4; span=105, entries=105, gaps=none, compiled=251, delta=146, parity=larger
 Machine: mk61
-Optimizer rules: automatic=yes; active=3, considered=0, candidates=50, planned=0
-Budget: official=105, extra=0, physical=105
-Intent IR: lowered=no, v2=yes; intent=3, effects=105, cells=105
+Optimizer rules: automatic=yes; active=11, considered=1, candidates=41, planned=0
+Budget: official=251, extra=0, physical=251
+Intent IR: lowered=yes, v2=yes; intent=76, effects=251, cells=251
 
 Preloads:
-  R4: 44444.4 (outside program cells)
-  R5: 44444.4 (outside program cells)
-  R6: 44444.4 (outside program cells)
-  R7: 44444.4 (outside program cells)
-  R9: 0 (outside program cells)
-  Ra: 1 (outside program cells)
+  turn_count -> R6: 0 (outside program cells)
+  R8: 4444 (outside program cells)
+  R9: -4444 (outside program cells)
+  R7: -99 (outside program cells)
+  R7: B2 (outside program cells)
 
 Setup Block:
-  \`R4=44444.4; R5=44444.4; R6=44444.4; R7=44444.4; R9=0; Ra=1\`
+  \`R6=0; R8=4444; R9=-4444; R7=-99; R7=L2\`
 
 Registers:
+  calculator_marks: R2
+  cell: R3
+  occupied: R4
+  player_marks: R5
+  turn_count: R6
 
 Labels:
    main: 00
+  __loop_0: 00
+  __if_false_1: 19
+  __if_false_3: 40
+  __if_end_2: 42
+  calculator_reply: 43
+  __if_false_4: 51
+  __if_false_5: 83
+  __if_false_7: A4
+  __if_end_6: A4
+  __line_count_0: >69
+  __line_count_loop_8: >7B
+  __line_count_loop_9: >9B
+  __line_count_loop_10: >B2
+  __line_count_loop_11: >CB
+  __return_suffix_gadget_0: >D9
+  __bit_mask_0: >DE
+  __spatial_hit___spatial_count_mask: >F4
 
 Optimizations:
-  - intent-domain-lowering: Lowered 0 state fields and 0 rules through the generic intent pipeline.
-  - line4-random-reply-program: Lowered line4_random_reply() as a compact 4x4 random-reply line-game kernel.
+  - expression-constant-folder: Folded 3 constant expression node(s) before code generation.
+  - terminal-loop-screen-elision: Elided 2 terminal shows already provided by the next loop header.
+  - intent-domain-lowering: Lowered 5 state fields and 4 rules through the generic intent pipeline.
+  - auto-preload-initial-state: Moved initial state into setup/preload values so official program cells stay focused on turn logic.
+  - display-strategy-selection: Selected decimal-pack for screen __inline_show_32_0.
+  - packed-display-lowering: Display __inline_show_32_0 may use display-byte encodings in later layout passes.
+  - show-read-fusion: Fused show __inline_show_32_0 and read cell into one calculator stop.
+  - bit-mask-helper-call: Shared bit_mask(cell) through __bit_mask_0.
+  - spatial-line-count-helper-call: Reused shared line_count helper for player_marks.
+  - preloaded-constant: Used preloaded R8 for constant 4444.
+  - single-use-rule-inline: Inlined single-use rule player_wins at line 43.
+  - proc-call-lowering: Compiled call to rule calculator_reply as ПП/В/О subroutine.
+  - terminal-branch-end-elision: Omitted unreachable if-end jump after terminal then branch at line 42.
+  - cell-membership-mask-run-reuse: Reused the failed membership mask when setting player_marks, occupied after line 35.
+  - single-use-rule-inline: Inlined single-use rule draw at line 53.
+  - random-range-lowering: Lowered random(4) as random() * max.
+  - int-random-range-lowering: Lowered int(random(4)) without К [x] so the MK-61 random sequence keeps moving.
+  - random-range-lowering: Lowered random(4) as random() * max.
+  - int-random-range-lowering: Lowered int(random(4)) without К [x] so the MK-61 random sequence keeps moving.
+  - bit-mask-helper-call: Shared bit_mask(cell) through __bit_mask_0.
+  - proc-call-lowering: Compiled call to rule calculator_reply as ПП/В/О subroutine.
+  - spatial-line-count-helper-call: Reused shared line_count helper for calculator_marks.
+  - preloaded-constant: Used preloaded R9 for constant -4444.
+  - single-use-rule-inline: Inlined single-use rule calculator_wins at line 65.
+  - terminal-branch-end-elision: Omitted unreachable if-end jump after terminal then branch at line 64.
+  - cell-membership-mask-run-reuse: Reused the failed membership mask when setting calculator_marks, occupied after line 57.
+  - terminal-branch-end-elision: Omitted unreachable if-end jump after terminal then branch at line 52.
+  - spatial-count-fl-loop: Used F L0 for line_count loop counter.
+  - spatial-count-fl-loop: Used F L0 for line_count loop counter.
+  - spatial-count-fl-loop: Used F L0 for line_count loop counter.
+  - spatial-count-fl-loop: Used F L0 for line_count loop counter.
+  - spatial-line-count-loop: Lowered line_count(...) as shared spatial hit loops.
+  - spatial-line-count-helper: Emitted shared line_count helper for grid/cell.
+  - bit-mask-helper: Emitted shared bit_mask helper using __bit_mask_shared with quotient reuse.
+  - spatial-hit-bit-mask-helper-reuse: Reused shared bit_mask helper __bit_mask_0 inside spatial hit __spatial_hit___spatial_count_mask.
+  - tail-call-lowering: Replaced 1 subroutine tail call with direct jump(s).
+  - store-recall-peephole: Dropped 3 redundant П->X immediately after X->П to the same register.
+  - jump-thread: Threaded 1 jump(s) through trampoline labels to the final target.
+  - indirect-memory-table: Rewrote 4 direct memory access(es) through an existing stable selector.
+  - constant-folding: Dropped 1 identity arithmetic operation(s) (0+ or 1*).
+  - return-suffix-gadget: Shared 3 return/tail-call gadgets (0 jump, 3 call; 6 cells saved).
+  - preloaded-indirect-flow: Activated post-layout: replaced 2 direct branch/call(s) with proven preloaded indirect flow.
+  - dark-entry-layout: Pointed 1 branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window).
+  - shared-bit-mask-helper-layout: Selected shared bit_mask helper calls after full layout (251 vs 285 cells).
+
+Candidates:
+  * display __inline_show_32_0/decimal-pack: 8 steps; selected decimal-pack for screen __inline_show_32_0
+  - display __inline_show_32_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_32_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_32_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_32_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
+  - if@52/negative-zero-threshold-flow: 10 steps; Negative-zero threshold flow estimated at 10 cells; ordinary condition was shorter (6).
+  * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
+  * ir-pass/indirect-memory-table: 0 steps; stable selector reused for indirect memory access
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
+  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
-  - tail-call-lowering: candidate; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
+  - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
   - super-number-deferred-normalization: candidate; Candidate: keep an un-normalized super-number (extra hidden mantissa digits) to defer a range/error check. The reference emulator models only the 8 visible mantissa digits, so the hidden-digit behavior the idiom relies on cannot be reproduced or safely proven, and no language construct produces it.
@@ -8344,27 +8581,39 @@ Optimizer Capabilities:
   - dispatch-compare-chain: candidate; Lowers high-level command dispatch automatically; small proven dispatches may use indirect or super-dark dispatch.
 
 Machine Features Used:
+  - indirect-flow: Optimizer selected register-held branch addresses for one-cell indirect flow.; К БП/К ПП/К x?0 indirect flow commands are available to the optimizer.
+  - indirect-memory: Optimizer reused a stable selector for one-cell indirect memory access.; К X->П/К П->X indirect memory commands are available when a selector register is proved live.
   - code-data-overlay: Layout marked address cells as reusable code/data overlay candidates.; Address operands, constants, opcodes, and display bytes may share cells after conflict checks.
-  - dark-entries: Layout emitted formal/dark MK-61 address operand(s).; Formal dark/super-dark entry addresses are available to the layout solver.
+  - display-bytes: Display lowering marked cells as packed display-byte candidates.; Packed display bytes, hexadecimal mantissa digits, and sign-digit forms are available.
   - address-constants: Layout marked address cells as reusable constants.; Address cells may double as constants for indirect flow and data transforms.
 
 Proofs:
   - return-stack-empty: not-needed; Program uses subroutine calls, so В/О-as-jump is not assumed globally.
-  - formal-address-operands: proved; Resolved formal MK-61 address byte(s): EB->39.
+  - indirect-addressing-ranges: proved; Indirect selectors are rewritten only after local data-flow proves a stable target, a compiler-owned address preload, or the fractional R0 sentinel shape.
+  - value-ranges: proved; Collected source ranges for turn_count.
+  - observability: proved; Visible state is limited by display output: cell, turn_count.
+  - display-byte-observable-boundary: assumed; Display-byte candidates are bounded by display output and the exact mk61 profile.
+
+Rejected Candidates:
+  - display __inline_show_32_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_32_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_32_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_32_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
+  - if@52/negative-zero-threshold-flow: 10 steps; Negative-zero threshold flow estimated at 10 cells; ordinary condition was shorter (6).
 
 Cell Roles:
-  00: 52 exec, constant - raw opcode can also be read as a byte
-  01: 62 exec, constant - raw opcode can also be read as a byte
-  02: 63 exec, constant - raw opcode can also be read as a byte
-  03: 50 exec, constant - raw opcode can also be read as a byte
-  04: 43 exec, constant - raw opcode can also be read as a byte
-  05: AB exec, constant - raw opcode can also be read as a byte
-  06: E3 exec, constant - raw opcode can also be read as a byte
-  07: 04 exec, constant - raw opcode can also be read as a byte
-  08: 41 exec, constant - raw opcode can also be read as a byte
-  09: 04 exec, constant - raw opcode can also be read as a byte
-  10: 42 exec, constant - raw opcode can also be read as a byte
-  11: 53 exec, constant - raw opcode can also be read as a byte"
+  00: 63 exec, display-byte - display byte role allowed
+  04: 12 exec, display-byte - display byte role allowed
+  05: 66 exec, display-byte - display byte role allowed
+  06: 10 exec, display-byte - display byte role allowed
+  10: DE address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  17: 19 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  33: 69 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  37: 40 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  41: 43 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  48: 51 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  73: DE address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  80: 83 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
 `;
 
 exports[`golden listing > selected output is stable for examples/pending-optimizer/treasure-hunter-2.mkpro 1`] = `

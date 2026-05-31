@@ -265,49 +265,6 @@ When a loop stores through a running pointer and then increments it, for example
 `slots[pointer + 1] = value` followed by `pointer++`, the compiler may fuse the
 pair into one preincrement indirect store when the bank layout allows it.
 
-### Packed 4x4 Line Games
-
-Some 4x4 games, including extended-diagonal tic-tac-toe, are smaller when the
-program keeps balanced line state instead of recomputing `line_count(...)` from
-separate mark masks. MK-Pro exposes this as line-game intent rather than raw
-register code.
-
-For an explicit move transaction, declare four packed line registers and a
-packed occupancy register:
-
-```mkpro
-state {
-  lines: packed[1..4] = 44444.4
-  occupied: packed = 0
-  cell: coord(grid)
-  result: counter 0..2 = 0
-}
-
-result = line4_move(lines, occupied, cell, -1)
-```
-
-`line4_move(lines, occupied, cell, delta)` is assignment-only. `lines` must be a
-`packed[1..4]` bank, `occupied` is the packed occupancy value, `cell` is a
-decimal board coordinate `11..44`, and `delta` is `-1` or `1`. It updates
-occupancy and all row/column/wrapped-diagonal line scores, then returns `0`
-when the cell was already occupied, `1` for an accepted non-winning move, and
-`2` for an accepted winning move.
-
-For source ports that intentionally keep the original Anvarov-style 4x4
-random-reply game UI, the whole kernel can be named directly:
-
-```mkpro
-program TicTacToe4x4 {
-  halt(line4_random_reply())
-}
-```
-
-`line4_random_reply()` owns the stop/resume UI, random calculator reply, packed
-line registers, packed occupancy, and extended diagonals. The compiler emits the
-standard setup values `R4..R7 = 44444.4`, `R9 = 0`, and positive `Ra`, then uses
-the compact MK-61 line-game kernel. It is a semantic construct for this class of
-4x4 random-reply line games, not a raw block in source.
-
 Initial values can come from the startup stack registers `stack.X` and
 `stack.Y`, for games where the player enters setup values before running the
 program:
@@ -977,9 +934,6 @@ candidates:
   query shape until code generation and share compiled hit-test helpers;
 - spatial line-count loops: large `line_count` queries use compact hit loops
   and shared geometry helpers when several masks use the same board/cell;
-- packed 4x4 line-game kernels: `line4_move(...)` updates balanced row,
-  column, and wrapped-diagonal state directly, while `line4_random_reply()`
-  names a full compact random-reply 4x4 line-game kernel;
   `arithmetic-if-terminal-select` covers both boolean-flag `==`/`!=` forms
   and full six-operator comparisons (`==`/`!=`/`<`/`<=`/`>`/`>=`) by lowering
   the predicate to a `0..1` selector via `sign`/`max`/`abs`. A cost gate keeps
