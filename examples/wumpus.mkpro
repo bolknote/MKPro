@@ -1,8 +1,8 @@
 // Full Hunt the Wumpus, kept inside the 105-cell MK-61 window.
 //
 // Display: room, arrows, clue.
-// Clues are prioritized: 0 = quiet, 1 = Wumpus nearby, 2 = pit draft,
-// 3 = bat rustle.
+// Clues are prioritized: 5 (5ilence) = quiet, 3 = Wumpus nearby, 0 = pit draft,
+// 8 (8at) = bat rustle.
 //
 // Input a positive adjacent room to move there; a non-adjacent positive room
 // only redraws the display. Input a negative room to shoot there.
@@ -35,8 +35,7 @@ program Wumpus {
   loop {
     sense()
 
-    show(room)
-    show(arrows)
+    show(room, ".", arrows)
     show(clue)
 
     target = read()
@@ -50,16 +49,16 @@ program Wumpus {
   }
 
   fn sense() {
-    clue = 0
+    clue = 5
 
     if near_any(room, 1, hazard[1].bat, hazard[2].bat) >= 0 {
-      clue = 3
+      clue = 8
     }
     if near_any(room, 1, hazard[1].pit, hazard[2].pit) >= 0 {
-      clue = 2
+      clue = 0
     }
     if near_any(room, 1, wumpus) >= 0 {
-      clue = 1
+      clue = 3
     }
   }
 
