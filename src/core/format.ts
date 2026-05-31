@@ -1,5 +1,6 @@
 import { formalAddressInfo } from "./formal-address.ts";
-import { formatAddress } from "./opcodes.ts";
+import { MachineEmitter } from "./emit/machine-emitter.ts";
+import { formatAddress, getOpcode, registerFromText, registerIndex } from "./opcodes.ts";
 import { buildManualProgramPatchReport, formatPatchAddress } from "./program-patch.ts";
 import type { CompileResult, PreloadReport, ProgramPatchReport, ProgramPatchStepReport, ResolvedStep } from "./types.ts";
 
@@ -17,13 +18,19 @@ export function formatListing(result: CompileResult): string {
   const setupProgram = result.report.setupProgram;
   const manualRows = formatManualSetupRows(result);
   const patch = result.report.programPatch;
-  if (setupProgram !== undefined || manualRows.length > 0) {
+  const setupBlock = setupProgram === undefined && manualRows.length === 0
+    ? formatSetupBlock(result)
+    : undefined;
+  const setupRows = [
+    ...manualRows,
+    ...(setupProgram?.steps ?? []).map((step) => stepToListingRow(step)),
+    ...(setupBlock === undefined ? [] : formatSetupPreloadRows(result.report.preloads) ?? []),
+  ];
+  if (setupRows.length > 0) {
     return [
+      ...(setupBlock === undefined ? [] : ["Setup Block:", `  ${setupBlock}`, ""]),
       "# Setup Listing",
-      formatListingRows([
-        ...manualRows,
-        ...(setupProgram?.steps ?? []).map((step) => stepToListingRow(step)),
-      ]),
+      formatListingRows(setupRows),
       "",
       "# Main Listing",
       formatListingSteps(result.steps, patch),
@@ -31,7 +38,6 @@ export function formatListing(result: CompileResult): string {
     ].join("\n");
   }
 
-  const setupBlock = formatSetupBlock(result);
   if (setupBlock !== undefined) {
     return [
       "Setup Block:",
@@ -270,6 +276,45 @@ function formatManualSetupRows(result: CompileResult): ListingRow[] {
   }));
 }
 
+function formatSetupPreloadRows(preloads: readonly PreloadReport[]): ListingRow[] | undefined {
+  const setupPreloads = preloads.filter((preload) => formatSetupAssignment(preload) !== undefined);
+  if (setupPreloads.length === 0) return [];
+  if (setupPreloads.some((preload) => executableSetupValue(preload.value) === undefined)) return undefined;
+  return setupPreloadSteps(setupPreloads).map((step) => stepToListingRow(step));
+}
+
+function setupPreloadSteps(preloads: readonly PreloadReport[]): ResolvedStep[] {
+  const steps: ResolvedStep[] = [];
+  let address = 0;
+  for (const preload of preloads) {
+    const value = executableSetupValue(preload.value);
+    if (value === undefined) continue;
+    const emitter = new MachineEmitter();
+    emitter.emitNumber(value);
+    for (const item of emitter.items) {
+      if (item.kind !== "op") continue;
+      steps.push(setupResolvedStep(address, item.opcode, item.mnemonic, item.comment));
+      address += 1;
+    }
+    const register = registerFromText(preload.register);
+    const opcode = 0x40 + registerIndex(register);
+    steps.push(setupResolvedStep(address, opcode, getOpcode(opcode).name, `setup R${preload.register}`));
+    address += 1;
+  }
+  return steps;
+}
+
+function setupResolvedStep(address: number, opcode: number, mnemonic: string, comment?: string): ResolvedStep {
+  const step: ResolvedStep = {
+    address,
+    opcode,
+    hex: getOpcode(opcode).hex,
+    mnemonic,
+  };
+  if (comment !== undefined) step.comment = comment;
+  return step;
+}
+
 function formatManualSetupKeys(result: CompileResult): string[] {
   return manualSetupInputs(result).map((input) =>
     `<enter ${input.name}: ${formatManualInputValue(input)} in ${input.stack}>`
@@ -333,6 +378,8 @@ function isSetupLiteral(value: string): boolean {
 
 function formatSetupValue(value: string): string {
   const normalized = value.toUpperCase();
+  const keyboardDecimal = compactKeyboardDecimal(value);
+  if (keyboardDecimal !== undefined) return keyboardDecimal;
   if (isScientificDecimal(normalized)) return value;
   if (!/^[0-9A-F]+$/iu.test(normalized) || !/[A-F]/iu.test(normalized)) return value;
   return [...normalized].map((digit) => MK61_HEX_SETUP_DIGITS[digit] ?? digit).join("");
@@ -340,13 +387,39 @@ function formatSetupValue(value: string): string {
 
 function executableSetupValue(value: string): string | undefined {
   const normalized = value.trim().toUpperCase();
-  if (/^-?\d+(?:[,.]\d+)?(?:E-?\d{1,2})?$/iu.test(normalized)) return normalized.replace(",", ".");
+  if (/^-?\d+(?:[,.]\d+)?(?:E-?\d{1,2})?$/iu.test(normalized)) {
+    return compactKeyboardDecimal(normalized) ?? normalized.replace(",", ".");
+  }
   if (/^[A-F][0-9A-F]$/iu.test(normalized)) return String(formalAddressInfo(Number.parseInt(normalized, 16)).actual);
   return undefined;
 }
 
 function isScientificDecimal(value: string): boolean {
   return /^-?\d+(?:[,.]\d+)?E-?\d{1,2}$/iu.test(value);
+}
+
+function compactKeyboardDecimal(value: string): string | undefined {
+  const normalized = value.trim().replace(",", ".");
+  if (isScientificDecimal(normalized)) return normalized.toUpperCase();
+  const match = /^(-?)(\d+)$/.exec(normalized);
+  if (!match) return undefined;
+  const sign = match[1]!;
+  const digits = match[2]!.replace(/^0+(?=\d)/u, "");
+  if (digits === "0") return undefined;
+  const significant = digits.replace(/0+$/u, "");
+  const exponent = digits.length - 1;
+  if (exponent <= 0 || exponent > 99 || significant.length > 8) return undefined;
+  const mantissa = significant.length === 1
+    ? significant
+    : `${significant[0]}.${significant.slice(1)}`;
+  const candidate = `${sign}${mantissa}E${exponent}`;
+  return numberEntryLength(candidate) < numberEntryLength(normalized) ? candidate : undefined;
+}
+
+function numberEntryLength(value: string): number {
+  const emitter = new MachineEmitter();
+  emitter.emitNumber(value);
+  return emitter.items.filter((item) => item.kind === "op").length;
 }
 
 export function formatExplain(result: CompileResult): string {

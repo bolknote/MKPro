@@ -17,7 +17,7 @@ describe("setup formatting", () => {
     const source = readFileSync(resolve("examples/game-100-pig.mkpro"), "utf8");
     const result = compileMKPro(source);
 
-    expect(formatSetupBlock(result)).toBe("`R4=0; R0=0; R7=0; R6=0; R5=0; Ra=20; Rb=100; Rc=1000; Rd=10000000; Re=8,-00-000; R8=L6; R9=Г0`");
+    expect(formatSetupBlock(result)).toBe("`R4=0; R0=0; R7=0; R6=0; R5=0; Ra=20; Rb=100; Rc=1E3; Rd=1E7; Re=8,-00-000; R8=L6; R9=Г0`");
     expect(formatExplain(result)).toContain("player_total -> R4: 0");
     expect(formatExplain(result)).toContain("Setup Block:");
   });
@@ -51,6 +51,21 @@ describe("setup formatting", () => {
 
     expect(listing).toContain("# Setup Listing");
     expect(listing).toContain("setup wumpus");
+    expect(listing).toContain("# Main Listing");
+  });
+
+  it("shows setup-block preload keys in over-budget analysis listings", () => {
+    const source = readFileSync(resolve("examples/pending-optimizer/rambo-iii.mkpro"), "utf8");
+    const listing = formatListing(compileMKPro(source, { analysis: true }));
+
+    expect(listing).toContain("Setup Block:");
+    expect(listing).toContain("`R8=0.5; Ra=25; Rb=25000; Re=8.1020088E14`");
+    expect(listing).toContain("# Setup Listing");
+    expect(listing).toContain("   00 |  00  | 0");
+    expect(listing).toContain("   01 |  0A  | .");
+    expect(listing).toContain("   03 |  48  | X->П 8");
+    expect(listing).toContain("   22 |  0C  | ВП");
+    expect(listing).toContain("   25 |  4E  | X->П e");
     expect(listing).toContain("# Main Listing");
   });
 

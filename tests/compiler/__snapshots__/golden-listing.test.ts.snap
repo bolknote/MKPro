@@ -1218,6 +1218,13 @@ exports[`golden listing > selected output is stable for examples/basic.mkpro 1`]
 Setup Block:
   \`R0=0\`
 
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  00  | 0                       |
+   01 |  40  | X->П 0                  | setup R0
+
+# Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    00 |  50  | С/П                     | read x
@@ -1422,7 +1429,7 @@ Preloads:
   Rd: 2e-7 (outside program cells)
 
 Setup Block:
-  \`Rc=10; Re=0.000001; Rd=2e-7\`
+  \`Rc=10; Re=0.000001; Rd=2E-7\`
 
 Setup Program:
   Reason: initializes player
@@ -1769,6 +1776,36 @@ exports[`golden listing > selected output is stable for examples/dangerous-loadi
 Setup Block:
   \`R1=8; R5=3; R2=9; R3=3; R4=0; Rc=10; Rd=777; Re=-999; Rb=-1\`
 
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  08  | 8                       |
+   01 |  41  | X->П 1                  | setup R1
+   02 |  03  | 3                       |
+   03 |  45  | X->П 5                  | setup R5
+   04 |  09  | 9                       |
+   05 |  42  | X->П 2                  | setup R2
+   06 |  03  | 3                       |
+   07 |  43  | X->П 3                  | setup R3
+   08 |  00  | 0                       |
+   09 |  44  | X->П 4                  | setup R4
+   10 |  01  | 1                       |
+   11 |  00  | 0                       |
+   12 |  4C  | X->П c                  | setup Rc
+   13 |  07  | 7                       |
+   14 |  07  | 7                       |
+   15 |  07  | 7                       |
+   16 |  4D  | X->П d                  | setup Rd
+   17 |  09  | 9                       |
+   18 |  09  | 9                       |
+   19 |  09  | 9                       |
+   20 |  0B  | /-/                     | negative number
+   21 |  4E  | X->П e                  | setup Re
+   22 |  01  | 1                       |
+   23 |  0B  | /-/                     | negative number
+   24 |  4B  | X->П b                  | setup Rb
+
+# Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    00 |  62  | П->X 2                  | display __inline_show_30_0 source
@@ -2026,6 +2063,31 @@ exports[`golden listing > selected output is stable for examples/dungeon.mkpro 1
 Setup Block:
   \`R2=8; R3=2; R0=42134124; R4=0; R1=0; Re=10\`
 
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  08  | 8                       |
+   01 |  42  | X->П 2                  | setup R2
+   02 |  02  | 2                       |
+   03 |  43  | X->П 3                  | setup R3
+   04 |  04  | 4                       |
+   05 |  02  | 2                       |
+   06 |  01  | 1                       |
+   07 |  03  | 3                       |
+   08 |  04  | 4                       |
+   09 |  01  | 1                       |
+   10 |  02  | 2                       |
+   11 |  04  | 4                       |
+   12 |  40  | X->П 0                  | setup R0
+   13 |  00  | 0                       |
+   14 |  44  | X->П 4                  | setup R4
+   15 |  00  | 0                       |
+   16 |  41  | X->П 1                  | setup R1
+   17 |  01  | 1                       |
+   18 |  00  | 0                       |
+   19 |  4E  | X->П e                  | setup Re
+
+# Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    00 |  62  | П->X 2                  | display __inline_show_30_0 source
@@ -3091,6 +3153,13 @@ exports[`golden listing > selected output is stable for examples/functions-demo.
 Setup Block:
   \`R5=0\`
 
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  00  | 0                       |
+   01 |  45  | X->П 5                  | setup R5
+
+# Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    00 |  50  | С/П                     | read x
@@ -3464,7 +3533,7 @@ Preloads:
   R9: D0 (outside program cells)
 
 Setup Block:
-  \`R4=0; R0=0; R7=0; R6=0; R5=0; Ra=20; Rb=100; Rc=1000; Rd=10000000; Re=8,-00-000; R8=L6; R9=Г0\`
+  \`R4=0; R0=0; R7=0; R6=0; R5=0; Ra=20; Rb=100; Rc=1E3; Rd=1E7; Re=8,-00-000; R8=L6; R9=Г0\`
 
 Setup Program:
   Reason: initializes
@@ -3649,6 +3718,18 @@ exports[`golden listing > selected output is stable for examples/human.mkpro 1`]
 Setup Block:
   \`R4=0; R2=5; Re=10\`
 
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  00  | 0                       |
+   01 |  44  | X->П 4                  | setup R4
+   02 |  05  | 5                       |
+   03 |  42  | X->П 2                  | setup R2
+   04 |  01  | 1                       |
+   05 |  00  | 0                       |
+   06 |  4E  | X->П e                  | setup Re
+
+# Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    00 |  64  | П->X 4                  | display __inline_show_17_0 source
@@ -4072,7 +4153,7 @@ Preloads:
   R7: B2 (outside program cells)
 
 Setup Block:
-  \`R8=10000; R6=0; R0=0; R5=1; R7=0; R9=0; Rc=100; Re=1000; Rd=3000; Rb=1ЕС; R7=L2\`
+  \`R8=1E4; R6=0; R0=0; R5=1; R7=0; R9=0; Rc=100; Re=1E3; Rd=3E3; Rb=1ЕС; R7=L2\`
 
 Setup Program:
   Reason: initializes
@@ -4233,6 +4314,38 @@ exports[`golden listing > selected output is stable for examples/lunar.mkpro 1`]
 Setup Block:
   \`R3=100; R2=140; R4=0; R0=0; Rb=10; Rc=666; Rd=777; Re=9.8\`
 
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  01  | 1                       |
+   01 |  00  | 0                       |
+   02 |  00  | 0                       |
+   03 |  43  | X->П 3                  | setup R3
+   04 |  01  | 1                       |
+   05 |  04  | 4                       |
+   06 |  00  | 0                       |
+   07 |  42  | X->П 2                  | setup R2
+   08 |  00  | 0                       |
+   09 |  44  | X->П 4                  | setup R4
+   10 |  00  | 0                       |
+   11 |  40  | X->П 0                  | setup R0
+   12 |  01  | 1                       |
+   13 |  00  | 0                       |
+   14 |  4B  | X->П b                  | setup Rb
+   15 |  06  | 6                       |
+   16 |  06  | 6                       |
+   17 |  06  | 6                       |
+   18 |  4C  | X->П c                  | setup Rc
+   19 |  07  | 7                       |
+   20 |  07  | 7                       |
+   21 |  07  | 7                       |
+   22 |  4D  | X->П d                  | setup Rd
+   23 |  09  | 9                       |
+   24 |  0A  | .                       |
+   25 |  08  | 8                       |
+   26 |  4E  | X->П e                  | setup Re
+
+# Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    00 |  63  | П->X 3                  | display __inline_show_26_0 source
@@ -5274,7 +5387,7 @@ Preloads:
   Ra: 2e-7 (outside program cells)
 
 Setup Block:
-  \`R3=2; R6=0; Re=-0.000001; Rd=3.0000008; Rc=0.000001; Rb=-2e-7; Ra=2e-7\`
+  \`R3=2; R6=0; Re=-0.000001; Rd=3.0000008; Rc=0.000001; Rb=-2E-7; Ra=2E-7\`
 
 Setup Program:
   Reason: initializes player, walls, caches, food
@@ -5790,7 +5903,7 @@ Preloads:
   R7: B2 (outside program cells)
 
 Setup Block:
-  \`R5=4; R6=0; Re=-0.000001; Rd=3.0000008; Rc=0.000001; Rb=-2e-7; R7=L2\`
+  \`R5=4; R6=0; Re=-0.000001; Rd=3.0000008; Rc=0.000001; Rb=-2E-7; R7=L2\`
 
 Setup Program:
   Reason: initializes pos, walls, caches, food
@@ -7126,8 +7239,39 @@ Cell Roles:
 exports[`golden listing > selected output is stable for examples/pending-optimizer/rambo-iii.mkpro 1`] = `
 "## Listing
 Setup Block:
-  \`R8=0.5; Ra=25; Rb=25000; Re=810200880000000\`
+  \`R8=0.5; Ra=25; Rb=25000; Re=8.1020088E14\`
 
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  00  | 0                       |
+   01 |  0A  | .                       |
+   02 |  05  | 5                       |
+   03 |  48  | X->П 8                  | setup R8
+   04 |  02  | 2                       |
+   05 |  05  | 5                       |
+   06 |  4A  | X->П a                  | setup Ra
+   07 |  02  | 2                       |
+   08 |  05  | 5                       |
+   09 |  00  | 0                       |
+   10 |  00  | 0                       |
+   11 |  00  | 0                       |
+   12 |  4B  | X->П b                  | setup Rb
+   13 |  08  | 8                       |
+   14 |  0A  | .                       |
+   15 |  01  | 1                       |
+   16 |  00  | 0                       |
+   17 |  02  | 2                       |
+   18 |  00  | 0                       |
+   19 |  00  | 0                       |
+   20 |  08  | 8                       |
+   21 |  08  | 8                       |
+   22 |  0C  | ВП                      | exponent
+   23 |  01  | 1                       |
+   24 |  04  | 4                       |
+   25 |  4E  | X->П e                  | setup Re
+
+# Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    00 |  00  | 0                       |
@@ -7308,7 +7452,7 @@ Preloads:
   Re: 810200880000000 (outside program cells)
 
 Setup Block:
-  \`R8=0.5; Ra=25; Rb=25000; Re=810200880000000\`
+  \`R8=0.5; Ra=25; Rb=25000; Re=8.1020088E14\`
 
 Registers:
   cells_1: R1
@@ -8039,6 +8183,21 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
 Setup Block:
   \`R6=0; R8=10; R7=4444\`
 
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  00  | 0                       |
+   01 |  46  | X->П 6                  | setup R6
+   02 |  01  | 1                       |
+   03 |  00  | 0                       |
+   04 |  48  | X->П 8                  | setup R8
+   05 |  04  | 4                       |
+   06 |  04  | 4                       |
+   07 |  04  | 4                       |
+   08 |  04  | 4                       |
+   09 |  47  | X->П 7                  | setup R7
+
+# Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    00 |  63  | П->X 3                  | display __inline_show_32_0 source
@@ -9140,6 +9299,25 @@ exports[`golden listing > selected output is stable for examples/tiny-game.mkpro
 Setup Block:
   \`R0=80000078; R2=8; Re=10\`
 
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  08  | 8                       |
+   01 |  00  | 0                       |
+   02 |  00  | 0                       |
+   03 |  00  | 0                       |
+   04 |  00  | 0                       |
+   05 |  00  | 0                       |
+   06 |  07  | 7                       |
+   07 |  08  | 8                       |
+   08 |  40  | X->П 0                  | setup R0
+   09 |  08  | 8                       |
+   10 |  42  | X->П 2                  | setup R2
+   11 |  01  | 1                       |
+   12 |  00  | 0                       |
+   13 |  4E  | X->П e                  | setup Re
+
+# Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    00 |  60  | П->X 0                  | display __inline_show_21_0 source
