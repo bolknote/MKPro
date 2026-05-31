@@ -234,14 +234,11 @@ function formatStepKeys(
 
 // Listings use ASCII shorthand for a few operator opcodes ("/", "*", "<->"),
 // but the keys export tells a human which physical key to press, so it must use
-// the labels actually printed on the MK-61 keyboard ("÷", "×", "↔"). The prefix
-// forms ("К /", "К *") are the keyboard-enterable error traps.
+// the labels actually printed on the MK-61 keyboard ("÷", "×", "↔").
 const KEYCAP_LABELS: Record<string, string> = {
   "*": "×",
   "/": "÷",
   "<->": "↔",
-  "К *": "К ×",
-  "К /": "К ÷",
 };
 
 function toKeycaps(mnemonic: string): string {

@@ -1178,8 +1178,10 @@ function targetRangeFitsIndirectIncrement(ctx: LoweringCtx, target: string): boo
 export function emitErrorStopOpcode(ctx: LoweringCtx, comment: string, line: number, raw = false): void {
     // К ÷ is a one-cell ЕГГ0Г trap (X kept, advances past, copies X->X1) that, unlike
     // the equivalent service codes 2B..2E, can be entered straight from the keyboard
-    // (К then ÷), so the manual key/patch export needs no service-mode sequence.
-    ctx.emitOp(0x29, "К /", comment, line, raw);
+    // (К then ÷), so the manual key/patch export needs no service-mode sequence. The
+    // mnemonic is spelled with the real ÷ keycap because this cell is literally the
+    // keystroke to press, not a symbolic divide.
+    ctx.emitOp(0x29, "К ÷", comment, line, raw);
 }
 
 export function compileBlockCall(ctx: LoweringCtx, blockName: string, line: number): void {

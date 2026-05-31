@@ -904,7 +904,7 @@ exports[`golden listing > selected output is stable for examples/alaram.mkpro 1`
    28 |  11  | -                       | condition compare
    29 |  59  | F x>=0                  | false branch for <=
    30 |  61  | 61                      | false branch for <=
-   31 |  29  | К /                     | halt literal ЕГГ0Г
+   31 |  29  | К ÷                     | halt literal ЕГГ0Г
    32 |  51  | БП                      | shared call tail close_range
    33 |  61  | 61                      | shared call tail
    34 |  02  | 2                       |
@@ -2111,7 +2111,7 @@ Setup Block:
    80 |  11  | -                       | condition compare
    81 |  59  | F x>=0                  | false branch for >=
    82 |  84  | 84                      | false branch for >=
-   83 |  29  | К /                     | halt literal ЕГГ0Г
+   83 |  29  | К ÷                     | halt literal ЕГГ0Г
    84 |  52  | В/О                     | implicit return from proc
 
 ## Hex
@@ -4446,7 +4446,7 @@ exports[`golden listing > selected output is stable for examples/minesweeper-9x7
    03 |  74  | 74                      | spatial hit mines
    04 |  57  | F x!=0                  | false branch for !=
    05 |  07  | 07                      | false branch for !=
-   06 |  29  | К /                     | halt literal ЕГГ0Г
+   06 |  29  | К ÷                     | halt literal ЕГГ0Г
    07 |  63  | П->X 3                  | recall probe
    08 |  01  | 1                       |
    09 |  01  | 1                       |
@@ -4715,7 +4715,7 @@ exports[`golden listing > selected output is stable for examples/minesweeper-9x9
    02 |  A8  | К ПП 8                  | spatial hit mines; preloaded R8=64 indirect-target=64 shifted-forward indirect flow
    03 |  57  | F x!=0                  | false branch for !=
    04 |  06  | 06                      | false branch for !=
-   05 |  29  | К /                     | halt literal ЕГГ0Г
+   05 |  29  | К ÷                     | halt literal ЕГГ0Г
    06 |  63  | П->X 3                  | recall probe
    07 |  01  | 1                       |
    08 |  01  | 1                       |
@@ -5018,7 +5018,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    05 |  11  | -                       | decrement/test food
    06 |  5C  | F x<0                   | decrement underflow food
    07 |  09  | 09                      | decrement underflow food
-   08 |  29  | К /                     | halt literal ЕГГ0Г
+   08 |  29  | К ÷                     | halt literal ЕГГ0Г
    09 |  42  | X->П 2                  | set food
    10 |  64  | П->X 4                  | recall command
    11 |  20  | F pi                    | pi()
@@ -6194,7 +6194,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
   >96 |  62  | П->X 2                  | recall strength
   >97 |  11  | -                       | condition compare
   >98 |  9C  | К x>=0 c                | false branch for <=; preloaded Rc=E6 indirect-target=34 indirect flow
-  >99 |  29  | К /                     | halt literal ЕГГ0Г
+  >99 |  29  | К ÷                     | halt literal ЕГГ0Г
   >9A |  8C  | К БП c                  | loop back; preloaded Rc=E6 indirect-target=34 indirect flow
   >9B |  D4  | К П->X 4                | increment floor
   >9C |  64  | П->X 4                  | recall floor
@@ -7163,7 +7163,7 @@ Setup Block:
    30 |  06  | 06                      | counted while time
    31 |  6E  | П->X e                  | preload const 810200880000000
    32 |  50  | С/П                     | halt
-   33 |  29  | К /                     | halt literal ЕГГ0Г
+   33 |  29  | К ÷                     | halt literal ЕГГ0Г
    34 |  3B  | К СЧ                    | random()
    35 |  01  | 1                       |
    36 |  03  | 3                       |
@@ -7621,7 +7621,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
   >6B |  72  | >72                     | proc call resolve_room
   >6C |  51  | БП                      | loop back
   >6D |  24  | 24                      | loop back
-  >6E |  29  | К /                     | halt literal ЕГГ0Г
+  >6E |  29  | К ÷                     | halt literal ЕГГ0Г
   >6F |  67  | П->X 7                  | try_move pos base
   >70 |  10  | +                       | try_move pos from X parameter
   >71 |  47  | X->П 7                  | set pos
@@ -9360,7 +9360,7 @@ exports[`golden listing > selected output is stable for examples/treasure-hunter
    16 |  4D  | X->П d                  | set floor
    17 |  5E  | F x=0                   | false branch for ==
    18 |  20  | 20                      | false branch for ==
-   19 |  29  | К /                     | halt literal ЕГГ0Г
+   19 |  29  | К ÷                     | halt literal ЕГГ0Г
    20 |  A8  | К ПП 8                  | expr frac(bit_and(rows[floor].row, 5 * pos + 5)) / pos; preloaded R8=B4 indirect-target=2 indirect flow
    21 |  79  | К x!=0 9                | case mismatch; preloaded R9=C5 indirect-target=13 indirect flow
    22 |  04  | 4                       |
@@ -9846,7 +9846,7 @@ exports[`golden listing > selected output is stable for examples/wumpus.mkpro 1`
    74 |  66  | П->X 6                  | recall room
    75 |  11  | -                       | condition compare
    76 |  EA  | К x=0 a                 | false branch for ==; preloaded Ra=D0 indirect-target=18 indirect flow
-   77 |  29  | К /                     | halt literal ЕГГ0Г
+   77 |  29  | К ÷                     | halt literal ЕГГ0Г
    78 |  66  | П->X 6                  | recall room
    79 |  68  | П->X 8                  | recall wumpus
    80 |  11  | -                       | condition compare
