@@ -1,7 +1,3 @@
-
-> mk-pro@0.1.0 examples:size
-> node ./scripts/example-size-report.mjs
-
 # Example Size Report
 
 Generated with `npm run examples:size`.
