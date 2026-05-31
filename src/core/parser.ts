@@ -605,6 +605,8 @@ function parseV2BoardDeclaration(line: SourceLine): V2BoardAst | undefined {
   if (xMin > xMax || yMin > yMax) {
     throw new ParseError("Board ranges must be ascending", line.line);
   }
+  const width = xMax - xMin + 1;
+  const height = yMax - yMin + 1;
   return {
     kind: "v2_board",
     name: match[1]!,
@@ -612,8 +614,8 @@ function parseV2BoardDeclaration(line: SourceLine): V2BoardAst | undefined {
     xMax,
     yMin,
     yMax,
-    width: xMax - xMin + 1,
-    height: yMax - yMin + 1,
+    width,
+    height,
     line: line.line,
   };
 }

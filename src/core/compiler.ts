@@ -405,6 +405,10 @@ type DisplayPlan =
 interface DisplayPlanningContext {
   naturalDisplayWidth(source: string): number;
   findStateField(source: string): StateFieldAst | undefined;
+  // Resolves the unsigned value range of a display field. Unlike findStateField,
+  // this also surfaces `coord` fields (whose bounds live in the board geometry,
+  // not in `ast.states`) so the video-cell planner can measure them.
+  displayFieldBounds(source: string): { min: number; max: number } | undefined;
 }
 
 
@@ -5439,21 +5443,23 @@ export class EmitContext {
   }
 
 
+  displayFieldBounds(source: string): { min: number; max: number } | undefined {
+    return displayFieldBoundsForAst(this.ast, source);
+  }
+
   displayFieldFitsUnsignedWidth(field: DisplayField): boolean {
-    const state = this.findStateField(field.name);
-    if (state === undefined) return false;
-    const min = state.min ?? 0;
-    const max = state.max ?? min;
-    return min >= 0 && max < 10 ** field.width;
+    const bounds = this.displayFieldBounds(field.name);
+    if (bounds === undefined) return false;
+    return bounds.min >= 0 && bounds.max < 10 ** field.width;
   }
 
   displayFieldCanBeZero(field: DisplayField): boolean {
-    const state = this.findStateField(field.name);
-    return state === undefined || (state.min ?? 0) <= 0;
+    const bounds = this.displayFieldBounds(field.name);
+    return bounds === undefined || bounds.min <= 0;
   }
 
   displayFieldMin(field: DisplayField): number | undefined {
-    return this.findStateField(field.name)?.min;
+    return this.displayFieldBounds(field.name)?.min;
   }
 
   displayTemplateScratchRegisters(display: ProgramAst["displays"][number]): {
@@ -5503,11 +5509,9 @@ export class EmitContext {
   }
 
   naturalDisplayWidth(source: string): number {
-    const field = this.findStateField(source);
-    if (field === undefined) return 1;
-    const min = field.min ?? 0;
-    const max = field.max ?? min;
-    const magnitude = Math.max(Math.abs(min), Math.abs(max));
+    const bounds = this.displayFieldBounds(source);
+    if (bounds === undefined) return 1;
+    const magnitude = Math.max(Math.abs(bounds.min), Math.abs(bounds.max));
     return Math.max(1, String(Math.trunc(magnitude)).length);
   }
 
@@ -6050,8 +6054,6 @@ export class EmitContext {
     this.spatialLineProgressionHelpers.set(key, helper);
     return helper;
   }
-
-
 
   emitNumber(raw: string): void {
     this.emitter.emitNumber(raw);
@@ -7814,6 +7816,22 @@ function functionTailArgScratchFamily(variable: string): string {
   return `${FUNCTION_TAIL_ARG_PREFIX}${index}`;
 }
 
+function effectiveRegisterDemand(variables: Set<string>): number {
+  const families = new Set<string>();
+  let count = 0;
+  for (const variable of variables) {
+    const family = reusableScratchFamily(variable);
+    if (family === undefined) {
+      count += 1;
+      continue;
+    }
+    if (families.has(family)) continue;
+    families.add(family);
+    count += 1;
+  }
+  return count;
+}
+
 function collectDomainBindings(ast: ProgramAst): DomainBinding[] {
   const bindings: DomainBinding[] = [];
   for (const domain of ast.domains) {
@@ -8319,11 +8337,9 @@ function collectDisplayLiteralPreloadValues(literal: string, values: Set<string>
 }
 
 function naturalDisplayWidthForAst(ast: ProgramAst, source: string): number {
-  const field = findStateFieldInAst(ast, source);
-  if (field !== undefined) {
-    const min = field.min ?? 0;
-    const max = field.max ?? min;
-    const magnitude = Math.max(Math.abs(min), Math.abs(max));
+  const bounds = displayFieldBoundsForAst(ast, source);
+  if (bounds !== undefined) {
+    const magnitude = Math.max(Math.abs(bounds.min), Math.abs(bounds.max));
     return Math.max(1, String(Math.trunc(magnitude)).length);
   }
   return 1;
@@ -8337,6 +8353,41 @@ function findStateFieldInAst(ast: ProgramAst, source: string): StateFieldAst | u
   return undefined;
 }
 
+// A `coord` is stored as a `packed` register, so it is absent from `ast.states`;
+// its numeric range comes from the board it indexes (a height-1 board is a linear
+// x-axis, a width-1 board a linear y-axis, and a single-digit 2-D board packs as
+// x + 10*y, mirroring the decimal-point display lowering).
+function coordFieldBoundsForAst(ast: ProgramAst, name: string): { min: number; max: number } | undefined {
+  const v2 = ast.v2;
+  if (v2 === undefined) return undefined;
+  const field = v2.state.find((candidate) => candidate.name === name);
+  if (field?.type !== "coord" || field.domain === undefined) return undefined;
+  const board = v2.boards.find((candidate) => candidate.name === field.domain);
+  if (board === undefined) return undefined;
+  if (board.height === 1) return { min: board.xMin, max: board.xMax };
+  if (board.width === 1) return { min: board.yMin, max: board.yMax };
+  if (board.xMin >= 0 && board.xMax <= 9 && board.yMin >= 0 && board.yMax <= 9) {
+    return { min: board.xMin + 10 * board.yMin, max: board.xMax + 10 * board.yMax };
+  }
+  return undefined;
+}
+
+function displayFieldBoundsForAst(ast: ProgramAst, name: string): { min: number; max: number } | undefined {
+  const field = findStateFieldInAst(ast, name);
+  // Explicit numeric bounds win. A `coord` is stored as a bounds-less `packed`
+  // field, so fall through to the board geometry before the degenerate fallback.
+  if (field?.min !== undefined && field.max !== undefined) {
+    return { min: field.min, max: field.max };
+  }
+  const coord = coordFieldBoundsForAst(ast, name);
+  if (coord !== undefined) return coord;
+  if (field !== undefined) {
+    const min = field.min ?? 0;
+    return { min, max: field.max ?? min };
+  }
+  return undefined;
+}
+
 function planDisplayForAst(
   ast: ProgramAst,
   display: ProgramAst["displays"][number],
@@ -8344,6 +8395,7 @@ function planDisplayForAst(
   return planDisplay(display, {
     naturalDisplayWidth: (source) => naturalDisplayWidthForAst(ast, source),
     findStateField: (source) => findStateFieldInAst(ast, source),
+    displayFieldBounds: (source) => displayFieldBoundsForAst(ast, source),
   });
 }
 
@@ -9011,13 +9063,13 @@ function planVariableLeadingDisplayCells(
   if (first?.kind !== "source" || rest.length === 0) return undefined;
 
   const source = displaySourceField(first, context);
-  const state = context.findStateField(source.name);
+  const bounds = context.displayFieldBounds(source.name);
   if (
     source.width !== 2 ||
-    state === undefined ||
-    (state.min ?? 0) < 0 ||
-    (state.max ?? 0) < 10 ||
-    (state.max ?? 0) >= 100 ||
+    bounds === undefined ||
+    bounds.min < 0 ||
+    bounds.max < 10 ||
+    bounds.max >= 100 ||
     !displayFieldFitsUnsignedWidthInContext(source, context)
   ) {
     return undefined;
@@ -9108,18 +9160,16 @@ function displayFieldFitsUnsignedWidthInContext(
   field: DisplayField,
   context: DisplayPlanningContext,
 ): boolean {
-  const state = context.findStateField(field.name);
-  if (state === undefined) return false;
-  const min = state.min ?? 0;
-  const max = state.max ?? min;
-  return min >= 0 && max < 10 ** field.width;
+  const bounds = context.displayFieldBounds(field.name);
+  if (bounds === undefined) return false;
+  return bounds.min >= 0 && bounds.max < 10 ** field.width;
 }
 
 function displayFieldMinInContext(
   field: DisplayField,
   context: DisplayPlanningContext,
 ): number | undefined {
-  return context.findStateField(field.name)?.min;
+  return context.displayFieldBounds(field.name)?.min;
 }
 
 function displayHasMantissaExponentTemplateShape(display: ProgramAst["displays"][number]): boolean {
@@ -9906,7 +9956,7 @@ function collectSpatialCountScratchVariables(ast: ProgramAst, variables: Set<str
     variables.add(spatialCountScratchNames()[0]!);
   }
   if (countCalls(ast, "line_count") > 1) variables.add(spatialCountMaskScratchName());
-  if (programNeedsSpatialLineProgressionHelper(ast) && variables.size < REGISTER_ORDER.length) {
+  if (programNeedsSpatialLineProgressionHelper(ast) && effectiveRegisterDemand(variables) < REGISTER_ORDER.length) {
     variables.add(spatialCountStepScratchName());
   }
 }
