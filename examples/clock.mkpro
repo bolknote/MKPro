@@ -1,0 +1,42 @@
+reference monatkodenis_clock
+
+// Program-chime style clock restored for MK-Pro. It shows HHMM and updates
+// minute/hour on a calibrated tick.
+
+program MonatkodenisClock {
+  state {
+    // Supply start time before pressing В/О С/П via stack values:
+    // X — hour (0..23), Y — minute (0..59).
+    hour: counter 0..23 = stack.X
+    minute: counter 0..59 = stack.Y
+
+    outer_delay: counter 0..10 = 10
+    inner_delay: counter 0..11 = 11
+  }
+
+  loop {
+    show(hour:02, minute:02)
+    wait_tick()
+
+    minute++
+    if minute >= 60 {
+      minute = 0
+      hour++
+      if hour >= 24 {
+        hour = 0
+      }
+    }
+  }
+
+  fn wait_tick() {
+    outer_delay = 10
+    while outer_delay != 0 {
+      outer_delay--
+
+      inner_delay = 11
+      while inner_delay != 0 {
+        inner_delay--
+      }
+    }
+  }
+}

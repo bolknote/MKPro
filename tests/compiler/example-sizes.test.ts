@@ -15,6 +15,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   alaram: 80,
   basic: 8,
   "cave-sketch": 52,
+  clock: 45,
   "dangerous-loading": 86,
   dungeon: 83,
   "e-94-digits": 64,
@@ -47,8 +48,8 @@ const PENDING_BASELINE: Record<string, number> = {
   labyrinth777: 221,
   "rambo-iii": 201,
   teleport: 236,
-  "tic-tac-toe-4x4": 264,
-  "treasure-hunter-2": 169,
+  "tic-tac-toe-4x4": 251,
+  "treasure-hunter-2": 167,
 };
 
 const PENDING_COMPILE_ERRORS: Record<string, RegExp> = {};

@@ -4,8 +4,8 @@ Generated with `npm run examples:size`.
 
 ## Snapshot
 
-- Top-level examples: 20/20 fit in the 105-cell MK-61 window; 20/20 pass the headless load check.
-- Referenced top-level examples: 15/15 are no larger than the original MK-61 listing.
+- Top-level examples: 21/21 fit in the 105-cell MK-61 window; 21/21 pass the headless load check.
+- Referenced top-level examples: 16/16 are no larger than the original MK-61 listing.
 - Tightest runnable examples: `fox-hunt-100.mkpro` (105), `game-100-pig.mkpro` (103), `wumpus.mkpro` (103).
 - Pending optimizer: 8 programs still exceed the MK-61 window; nearest is `pending-optimizer/cave-highlevel-baseline.mkpro` (157).
 
@@ -19,6 +19,7 @@ Generated with `npm run examples:size`.
 | `alaram.mkpro` | 80 | 105 | -25 | ok: <= reference | main+setup load ok |
 | `basic.mkpro` | 8 | - | - | ok: no reference | load ok |
 | `cave-sketch.mkpro` | 52 | 105 | -53 | ok: <= reference | main+setup load ok |
+| `clock.mkpro` | 45 | 63 | -18 | ok: <= reference | main+setup load ok |
 | `dangerous-loading.mkpro` | 86 | 103 | -17 | ok: <= reference | load ok |
 | `dungeon.mkpro` | 83 | 105 | -22 | ok: <= reference | load ok |
 | `e-94-digits.mkpro` | 64 | 64 | 0 | ok: <= reference | load ok |
@@ -36,10 +37,10 @@ Generated with `npm run examples:size`.
 | `tiny-game.mkpro` | 24 | - | - | ok: no reference | load ok |
 | `wumpus.mkpro` | 103 | - | - | ok: no reference | main+setup load ok |
 | `pending-optimizer/cave-highlevel-baseline.mkpro` | 157 | 105 | +52 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/cave-treasure.mkpro` | 172 | 105 | +67 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/cave-treasure.mkpro` | 165 | 105 | +60 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/giants-country.mkpro` | 162 | 105 | +57 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/labyrinth777.mkpro` | 221 | 105 | +116 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/rambo-iii.mkpro` | 201 | 105 | +96 | pending optimizer | not loaded: main >105 |
 | `pending-optimizer/teleport.mkpro` | 236 | 105 | +131 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/tic-tac-toe-4x4.mkpro` | 264 | 105 | +159 | pending optimizer | not loaded: main >105 |
-| `pending-optimizer/treasure-hunter-2.mkpro` | 169 | 105 | +64 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/tic-tac-toe-4x4.mkpro` | 251 | 105 | +146 | pending optimizer | not loaded: main >105 |
+| `pending-optimizer/treasure-hunter-2.mkpro` | 167 | 105 | +62 | pending optimizer | setup load ok; main >105 |
