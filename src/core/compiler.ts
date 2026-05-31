@@ -8226,12 +8226,24 @@ function pickConstantRegister(used: Set<RegisterName>): RegisterName | undefined
 
 function collectPreloadConstantValues(ast: ProgramAst): string[] {
   const values = new Set<string>();
+  // Most candidates appear once, so per-occurrence cost is a fine proxy for the
+  // savings of preloading them. Coordinate-decode constants are different: the
+  // spatial helpers re-emit `10` (`cell / 10`, `* 10`, per direction) several
+  // times inline, so a single cheap literal is worth far more than its one-shot
+  // cost suggests. Weight those so the savings-aware sort below keeps them.
+  const COORD_DECODE_TENS_WEIGHT = 5;
+  const weights = new Map<string, number>();
+  const boost = (value: string, weight: number): void => {
+    weights.set(value, Math.max(weights.get(value) ?? 0, weight));
+  };
   if (programContainsCall(ast, "direction")) {
     values.add("20");
     values.add("10");
+    boost("10", COORD_DECODE_TENS_WEIGHT);
   }
   if (programContainsCall(ast, "__direction_cardinal")) {
     values.add("10");
+    boost("10", COORD_DECODE_TENS_WEIGHT);
   }
   if (programContainsCall(ast, "line_count")) {
     values.add("10");
@@ -8239,6 +8251,7 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
     values.add("19");
     values.add("-99");
     values.add("-81");
+    boost("10", COORD_DECODE_TENS_WEIGHT);
   }
   for (const display of ast.displays) {
     if (displayHasMantissaExponentTemplateShape(display)) {
@@ -8316,7 +8329,14 @@ function collectPreloadConstantValues(ast: ProgramAst): string[] {
   };
   for (const entry of ast.entries) visitStatements(entry.body);
   for (const proc of ast.procs) visitStatements(proc.body);
-  return [...values].filter((value) => value !== "0" && value !== "1").sort((a, b) => estimateNumberCost(b) - estimateNumberCost(a));
+  // Order by estimated total savings (occurrence weight x per-use cost). For the
+  // common weight-1 case this is `cost - 1`, which preserves the historical
+  // cost-descending ranking; ties keep their insertion order via the stable sort
+  // so previously-chosen constants are not silently displaced.
+  const savings = (value: string): number => (weights.get(value) ?? 1) * (estimateNumberCost(value) - 1);
+  return [...values]
+    .filter((value) => value !== "0" && value !== "1")
+    .sort((a, b) => savings(b) - savings(a) || estimateNumberCost(b) - estimateNumberCost(a));
 }
 
 function collectDisplayLiteralPreloadValues(literal: string, values: Set<string>): void {

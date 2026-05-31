@@ -48,7 +48,7 @@ const PENDING_BASELINE: Record<string, number> = {
   labyrinth777: 206,
   "rambo-iii": 203,
   teleport: 239,
-  "tic-tac-toe-4x4": 219,
+  "tic-tac-toe-4x4": 213,
   "treasure-hunter-2": 105,
 };
 
