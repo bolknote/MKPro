@@ -15,34 +15,26 @@ Files are stored in [`lordbss/`](./lordbss/):
 
 Cleaned game programs: 254.
 
-## Tekhnika Molodezhi / KEI
+## Tekhnika Molodyzhi / KEI + early issue
 
-Source: *Tekhnika Molodezhi*, 1987 — «Клуб электронных игр» (KEI column)
+Source:
 
-Files are stored in [`kei/`](./kei/):
-
-- `lunolot-d.txt` — dynamic *Lunar Lander* («Лунолёт-Д»), 80 steps.
-- `treasure-cave.txt` — original *Treasure Cave* («Пещера сокровищ»), 105 steps.
-- `winner.txt` — *Winner* («Победитель»), MK-61 adaptation, 101 steps.
-- Matching `*.md` descriptions and `manifest.tsv`.
-
-The two 105/101-step listings come from the same KEI column in TM No. 7/1987.
-The modified demo in
-[`anvarov/`](./anvarov/) reimplements *Treasure Cave* with a different program.
-
-Programs: **3**.
-
-## Tekhnika Molodyzhi / No. 7 (1985)
-
-Source: [Техника-молодёжи](https://epizodsspace.airbase.ru/bibl/tehnika_-_molodyoji/1985/7/put.html) (KEI column)
+- *Tekhnika Molodyzhi* — Kei/Club Electronic Games material (1987),
+- [Техника-молодёжи No. 7, 1985](https://epizodsspace.airbase.ru/bibl/tehnika_-_molodyoji/1985/7/put.html)
 
 Files are stored in [`tehnika-molodyzhi/`](./tehnika-molodyzhi/):
 
 - `soft-landing.txt` — landing game program, based on `Lunolot-1` conventions.
 - `planet-constructor.txt` — PC-1 utility for constructing custom planetary parameters.
-- Matching `*.md` descriptions in English and `manifest.tsv`.
+- `lunolot-d.txt` — dynamic *Lunar Lander* («Лунолёт-Д»), 80 steps.
+- `treasure-cave.txt` — original *Treasure Cave* («Пещера сокровищ»), 105 steps.
+- `winner.txt` — *Winner* («Победитель»), MK-61 adaptation, 101 steps.
+- Matching `*.md` descriptions and `manifest.tsv`.
 
-Programs: **2**.
+The demo in [`anvarov/`](./anvarov/) reimplements *Treasure Cave* as a modified
+variant.
+
+Programs: **5**.
 
 ## Serge Anvarov Collection
 
@@ -65,8 +57,8 @@ Re-import:
 node scripts/import-emulator-listings.cjs
 ```
 
-The Treasure Cave demo in `anvarov/demo.txt` is a modified showcase program. The KEI column
-listings live in [`kei/`](./kei/).
+The Treasure Cave demo in `anvarov/demo.txt` is a modified showcase program. The KEI
+and early *Tekhnika* material listings live in [`tehnika-molodyzhi/`](./tehnika-molodyzhi/).
 
 ## Bolknote Collection
 

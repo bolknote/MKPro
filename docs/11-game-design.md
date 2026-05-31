@@ -161,7 +161,7 @@ Smoke tests for packaged games live under `tests/emulator/`.
 | Path | Content |
 | --- | --- |
 | `games/lordbss/` | Cleaned Lord_BSS listings + per-game `.md` |
-| `games/kei/` | OCR-derived treasure-cave material |
+| `games/tehnika-molodyzhi/` | OCR-derived Tekhnika Molodyzhi material |
 | `examples/tiny-game.mkpro` | Minimal MK-Pro game sketch |
 | `examples/alaram.mkpro` | Lord_BSS cockpit interceptor port that fits the original |
 | `examples/cave-sketch.mkpro` | compact cave sketch/baseline |
