@@ -66,6 +66,7 @@ export function compileShow(ctx: LoweringCtx, displayName: string, line: number)
     if (compileTextDisplay(ctx, display, line)) return;
     if (compileDashedCoordReportDisplay(ctx, display, line)) return;
     if (compileFloorPackedRowDisplay(ctx, display, line)) return;
+    if (compileDecimalPointDisplay(ctx, display, line)) return;
 
     const strategy = ctx.selectDisplayStrategy(display);
     if (strategy === "packed-display-helper") {
@@ -114,7 +115,11 @@ export function compileFloorPackedRowDisplay(ctx: LoweringCtx, display: ProgramA
 
     const floorState = ctx.findStateField(floor.name);
     const rowState = row.expr === undefined ? ctx.findStateField(row.name) : undefined;
-    const rowIsPacked = rowState?.type === "packed" || row.name.startsWith(DISPLAY_EXPR_PREFIX) || row.expr !== undefined;
+    // A `coord` is stored as a `packed` field too, but it holds a numeric coordinate
+    // rather than pre-rendered video bytes, so it must not be spliced as a video row.
+    const rowIsPacked = (rowState?.type === "packed" && !isCoordVariable(ctx, row.name)) ||
+      row.name.startsWith(DISPLAY_EXPR_PREFIX) ||
+      row.expr !== undefined;
     const floorMin = floorState?.min ?? 0;
     const floorMax = floorState?.max ?? floorMin;
     const floorWidth = floor.width ?? Math.max(1, String(Math.trunc(Math.max(Math.abs(floorMin), Math.abs(floorMax)))).length);
@@ -161,6 +166,117 @@ export function compileFloorPackedRowDisplay(ctx: LoweringCtx, display: ProgramA
       detail: `Displayed screen ${display.name} by splicing a one-digit floor into a packed video row.`,
     });
     return true;
+}
+
+// Lowers `show(int.., ".", frac..)` for arbitrary-width numeric fields. A "."
+// between numeric fields is a decimal point: every field is concatenated into one
+// integer (most-significant first, exactly like the packed numeric body) and then
+// divided by 10^fractionalWidth so the trailing fields land after the point, e.g.
+// show(room, ".", arrows) with room=12, arrows=3 -> (12*10+3)/10 = 12.3. This is
+// the general form of the single-digit `compileFloorPackedRowDisplay` /
+// packed-counter-stripes paths, which only cover one-digit `counter` fields.
+export function compileDecimalPointDisplay(ctx: LoweringCtx, display: ProgramAst["displays"][number], line: number): boolean {
+    const items = display.items;
+    let dotIndex = -1;
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index]!;
+      if (item.kind === "literal" && item.text.trim() === ".") {
+        if (dotIndex !== -1) return false; // a single decimal point only
+        dotIndex = index;
+        continue;
+      }
+      if (item.kind !== "source" || item.expr !== undefined) return false; // plain numeric fields only
+    }
+    if (dotIndex <= 0 || dotIndex === items.length - 1) return false; // need fields on both sides
+
+    const integerFields: DisplayField[] = [];
+    const fractionalFields: DisplayField[] = [];
+    let fractionalWidth = 0;
+    for (let index = 0; index < items.length; index += 1) {
+      if (index === dotIndex) continue;
+      const item = items[index]!;
+      if (item.kind !== "source") return false;
+      const measured = measureDecimalDisplayField(ctx, item);
+      // Positional concatenation is only exact for a non-negative value that fits its slot.
+      if (measured === undefined || measured.min < 0 || measured.max >= 10 ** measured.width) return false;
+      const field: DisplayField = { kind: "source", item, name: item.name, width: measured.width };
+      if (index < dotIndex) {
+        integerFields.push(field);
+      } else {
+        fractionalFields.push(field);
+        fractionalWidth += measured.width;
+      }
+    }
+    if (fractionalWidth === 0) return false;
+
+    if (integerFields.length === 1) {
+      // Compact form: build only the fractional digits, scale them below the point,
+      // then add the single integer field on top (avoids scaling the integer part up
+      // and immediately back down). frac/10^w then + int.
+      compilePackedDisplayFieldsInOrder(ctx, display, fractionalFields, line, true);
+      ctx.emitNumberOrPreload(String(10 ** fractionalWidth));
+      ctx.emitOp(0x13, "/", `display ${display.name} decimal point`, line);
+      ctx.emitRecall(integerFields[0]!.name, `display ${display.name} integer part`, line);
+      ctx.emitOp(0x10, "+", `display ${display.name} integer append`, line);
+    } else {
+      // General form: concatenate every field into one integer, then drop the point in
+      // by dividing by 10^fractionalWidth. Correct for any field count, slightly larger.
+      compilePackedDisplayFieldsInOrder(ctx, display, [...integerFields, ...fractionalFields], line, true);
+      ctx.emitNumberOrPreload(String(10 ** fractionalWidth));
+      ctx.emitOp(0x13, "/", `display ${display.name} decimal point`, line);
+    }
+    ctx.emitOp(0x50, "С/П", `show ${display.name}`, line);
+    ctx.optimizations.push({
+      name: "decimal-point-display",
+      detail: `Displayed screen ${display.name} as a fixed-point number with ${fractionalWidth} fractional digit(s).`,
+    });
+    return true;
+}
+
+// Resolves the unsigned value range and decimal width of a numeric display field.
+// Plain range/counter fields carry their bounds; a `coord` keeps its bounds in the
+// board geometry (a height-1 cave is a linear axis, a single-digit 2-D board packs
+// as x + 10*y). Returns undefined when the field is not a non-negative integer whose
+// magnitude can be proven, so the caller falls back instead of emitting wrong digits.
+function measureDecimalDisplayField(
+  ctx: LoweringCtx,
+  item: Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }>,
+): { min: number; max: number; width: number } | undefined {
+  const bounds = decimalDisplayFieldBounds(ctx, item.name);
+  if (bounds === undefined) return undefined;
+  const magnitude = Math.max(Math.abs(bounds.min), Math.abs(bounds.max));
+  const naturalWidth = Math.max(1, String(Math.trunc(magnitude)).length);
+  const width = item.width ?? naturalWidth;
+  return { min: bounds.min, max: bounds.max, width };
+}
+
+function decimalDisplayFieldBounds(ctx: LoweringCtx, name: string): { min: number; max: number } | undefined {
+  const field = ctx.findStateField(name);
+  if (field?.min !== undefined && field.max !== undefined) {
+    return { min: field.min, max: field.max };
+  }
+  return coordFieldBounds(ctx, name);
+}
+
+function coordFieldBounds(ctx: LoweringCtx, name: string): { min: number; max: number } | undefined {
+  const v2 = ctx.ast.v2;
+  if (v2 === undefined) return undefined;
+  const field = v2.state.find((candidate) => candidate.name === name);
+  if (field?.type !== "coord" || field.domain === undefined) return undefined;
+  const board = v2.boards.find((candidate) => candidate.name === field.domain);
+  if (board === undefined) return undefined;
+  if (board.height === 1) return { min: board.xMin, max: board.xMax };
+  if (board.width === 1) return { min: board.yMin, max: board.yMax };
+  if (board.xMin >= 0 && board.xMax <= 9 && board.yMin >= 0 && board.yMax <= 9) {
+    return { min: board.xMin + 10 * board.yMin, max: board.xMax + 10 * board.yMax };
+  }
+  return undefined;
+}
+
+function isCoordVariable(ctx: LoweringCtx, name: string): boolean {
+  return ctx.ast.v2?.state.some(
+    (field) => field.name === name && (field.type === "coord" || field.type === "coord_list"),
+  ) ?? false;
 }
 
 export function compileDashedCoordReportDisplay(ctx: LoweringCtx, display: ProgramAst["displays"][number], line: number): boolean {
