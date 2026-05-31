@@ -1172,7 +1172,7 @@ program LiteralErrorScreen {
     expect(hasOptimization(result, "screen-video-literal-lowering")).toBe(true);
     expect(hasOptimization(result, "screen-error-literal-lowering")).toBe(true);
     expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "error-stops")).toBe(true);
-    expect(result.steps.slice(0, 2).map((step) => step.opcode)).toEqual([0x2b, 0x54]);
+    expect(result.steps.slice(0, 2).map((step) => step.opcode)).toEqual([0x29, 0x54]);
     expect(result.steps.map((step) => step.mnemonic)).not.toEqual(expect.arrayContaining(["F 1/x"]));
 
     const { MK61 } = require("../emulator/mk61.cjs") as {
@@ -1342,7 +1342,7 @@ program LiteralErrorStop {
 `);
 
     expect(hasOptimization(result, "error-stop")).toBe(true);
-    expect(result.steps.map((step) => step.opcode)).toEqual([0x2b]);
+    expect(result.steps.map((step) => step.opcode)).toEqual([0x29]);
 
     const calc = new MK61();
     expect(calc.loadProgram(result.steps.map((step) => step.opcode)).diagnostics).toEqual([]);
