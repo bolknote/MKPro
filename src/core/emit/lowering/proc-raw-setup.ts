@@ -563,19 +563,44 @@ export function compileProcedures(ctx: LoweringCtx): void {
     }
 }
 
-// Order in which non-inline procedures are emitted. Default is source order;
-// the `orderProcsByCallCount` variant emits the most frequently called procs
-// first (stable on ties) so they occupy the lowest, cheapest addresses. Procs
-// are reached only through label references, so any order is behavior-preserving.
+// Cheap static size proxy for layout ordering: number of statements in a proc
+// body (nested bodies counted shallowly). Exact cell cost is only known after
+// lowering, but statement count tracks it well enough to drive a placement search.
+function procBodySizeProxy(proc: ProcAst): number {
+    return proc.body.length;
+}
+
+// Order in which non-inline procedures are emitted. Default is source order; the
+// layout-search variants reorder so a chosen class of procs occupies the lowest,
+// cheapest addresses. Procs are reached only through label references, so every
+// ordering is behavior-preserving; the whole-program selector keeps whichever
+// ordering lowers to the fewest cells.
 function procEmissionOrder(ctx: LoweringCtx): readonly ProcAst[] {
-    if (ctx.loweringOptions.orderProcsByCallCount !== true) return ctx.ast.procs;
-    return ctx.ast.procs
-      .map((proc, index) => ({ proc, index }))
-      .sort((a, b) => {
-        const byCount = (ctx.procCallCounts.get(b.proc.name) ?? 0) - (ctx.procCallCounts.get(a.proc.name) ?? 0);
-        return byCount !== 0 ? byCount : a.index - b.index;
-      })
-      .map((entry) => entry.proc);
+    const strategy = ctx.loweringOptions.orderProcsByCallCount === true
+      ? "call-count"
+      : ctx.loweringOptions.procLayoutStrategy;
+    if (strategy === undefined) return ctx.ast.procs;
+    const indexed = ctx.ast.procs.map((proc, index) => ({ proc, index }));
+    const callCount = (proc: ProcAst): number => ctx.procCallCounts.get(proc.name) ?? 0;
+    indexed.sort((a, b) => {
+      let primary = 0;
+      switch (strategy) {
+        case "call-count":
+          primary = callCount(b.proc) - callCount(a.proc);
+          break;
+        case "size-asc":
+          primary = procBodySizeProxy(a.proc) - procBodySizeProxy(b.proc);
+          break;
+        case "size-desc":
+          primary = procBodySizeProxy(b.proc) - procBodySizeProxy(a.proc);
+          break;
+        case "reverse":
+          primary = b.index - a.index;
+          break;
+      }
+      return primary !== 0 ? primary : a.index - b.index;
+    });
+    return indexed.map((entry) => entry.proc);
 }
 
 function compileXParamReturnDecayBody(

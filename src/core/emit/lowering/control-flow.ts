@@ -306,6 +306,48 @@ export function compileDomainErrorGuard(ctx: LoweringCtx,
     return true;
 }
 
+// Always-on generalization of the unit-decrement domain guards: when an
+// assignment `target = <expr>` is immediately followed by `if target <op> 0 {
+// trap }` (op in {<, <=, ==}) whose taken branch is a pure ЕГГОГ trap, the store
+// already leaves the freshly written value in X, so the comparison + branch +
+// shared trap collapse into a single self-trapping opcode on X. This covers the
+// non-unit cases the dedicated decrement peepholes reject — `x -= expr`,
+// `x = a - b`, etc. — without building a branch at all. Unlike the speculative
+// `domainErrorGuards` variant (which rewrites any guard, possibly perturbing
+// global layout), this fires only on the local store+test adjacency where it is
+// a strict local win, so it is safe to run unconditionally.
+export function compileAssignThenDomainTrap(ctx: LoweringCtx,
+    assign: Extract<StatementAst, { kind: "assign" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+  ): boolean {
+    if (!statementsAreDomainErrorTrap(ctx, branch.thenBody)) return false;
+    const plan = planDomainErrorGuard(branch.condition);
+    // Restrict to the "assigned scalar compared to zero" shape: a single operand
+    // (no difference to recompute) that is exactly the just-stored variable, so
+    // the trap reuses X with zero extra cells.
+    if (plan === undefined || plan.second !== undefined) return false;
+    if (plan.first.kind !== "identifier" || plan.first.name !== assign.target) return false;
+    if (ctx.allocation.registers[assign.target] === undefined) return false;
+
+    ctx.compileStatements([assign]);
+    // A scalar store leaves the value in X; only recall if some assignment form
+    // did not (e.g. an indexed/selector store), keeping the rewrite sound.
+    if (!ctx.xHolds(assign.target)) {
+      ctx.emitRecall(assign.target, `trap-test ${assign.target}`, branch.line);
+    }
+    ctx.emitOp(plan.trapOpcode, plan.trapMnemonic, "domain-error guard trap", branch.line);
+    ctx.currentXVariable = undefined;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
+    ctx.scaledCoordVariables.clear();
+    if (branch.elseBody !== undefined) ctx.compileStatements(branch.elseBody);
+    ctx.optimizations.push({
+      name: "assign-zero-domain-guard",
+      detail: `Fused ${assign.target} store and "${branch.condition.op} 0" terminal-error branch through ${plan.trapMnemonic}.`,
+    });
+    return true;
+}
+
 export function compileIf(ctx: LoweringCtx, 
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,

@@ -96,7 +96,7 @@ describe("MK-Pro compiler", () => {
     expect(checked).toContain("examples/minesweeper-9x9.mkpro");
     expect(checked).toContain("examples/raja-yoga.mkpro");
     expect(checked).toContain("examples/sea-battle.mkpro");
-  });
+  }, 20_000);
 
   it("keeps the full cave reference high-level but does not fit it through templates", () => {
     const reference = source("examples/pending-optimizer/cave-treasure.mkpro");

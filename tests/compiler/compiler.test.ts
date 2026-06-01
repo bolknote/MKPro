@@ -2882,6 +2882,34 @@ program TerminalLoopScreen {
     expect(result.report.optimizations.some((item) => item.name === "terminal-loop-screen-elision")).toBe(true);
   });
 
+  it("fuses subtract-then-zero-guard into a single domain trap without a branch", () => {
+    const result = compileOk(`
+program SubtractGuard {
+  state {
+    altitude: counter 0..900 = 500
+    fuel: packed = 0
+  }
+  fn dead() { halt("ЕГГОГ") }
+  loop {
+    burn = read()
+    altitude -= burn
+    if altitude <= 0 { dead() }
+    fuel = burn - altitude
+    if fuel < 0 { dead() }
+    show(altitude)
+  }
+}
+`);
+    const opcodes = result.steps.map((step) => step.hex);
+    // `<= 0` traps via F lg (0x17); `< 0` traps via F √ (0x21).
+    expect(opcodes).toContain("17");
+    expect(opcodes).toContain("21");
+    expect(result.report.optimizations.filter((item) => item.name === "assign-zero-domain-guard").length)
+      .toBeGreaterThanOrEqual(2);
+    // No conditional branch instructions were emitted for the guards (the trap is the branch).
+    expect(opcodes).not.toContain("5C");
+  });
+
   it("orders procedures by descending call count under orderProcsByCallCount", () => {
     const source = `
 program ProcCallLayout {

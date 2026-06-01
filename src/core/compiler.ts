@@ -14,7 +14,7 @@ import { MachineEmitter } from "./emit/machine-emitter.ts";
 import type { ProgramAnalysis } from "./emit/program-analysis.ts";
 import { RuntimeHelperRegistry } from "./emit/runtime-helpers.ts";
 import { compileExpression, expressionLeadsWithRead } from "./emit/lowering/expr.ts";
-import { compileCondition, compileDecrementUnderflowBranch, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitKnownOneIndirectLoopBack } from "./emit/lowering/control-flow.ts";
+import { compileAssignThenDomainTrap, compileCondition, compileDecrementUnderflowBranch, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitKnownOneIndirectLoopBack } from "./emit/lowering/control-flow.ts";
 import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts";
 import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileTicTacToeCellMaskReuse } from "./emit/lowering/spatial.ts";
 import { compileCoordListLineCountAssignment, compileCoordListLineCountDashedReport, compileCoordListRemove, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
@@ -377,6 +377,11 @@ interface LoweringOptions {
   // cannot change behavior; speculative because address shifts perturb the
   // layout-sensitive indirect-flow passes, and it is adopted only when smaller.
   orderProcsByCallCount?: boolean;
+  // Other proc-placement strategies for the layout search (see procEmissionOrder):
+  // "size-asc"/"size-desc" emit the smallest/largest procs first, "reverse"
+  // emits source order reversed. Like orderProcsByCallCount these are pure
+  // placement changes, adopted only when the whole program shrinks.
+  procLayoutStrategy?: "size-asc" | "size-desc" | "reverse";
   // Pin each freed register onto its coalesce target BEFORE preload allocation,
   // reproducing the non-overlapping coalescing the IR pass would otherwise do
   // only after lowering. Freeing the register at allocation time lets the
@@ -643,17 +648,28 @@ export function compileMKPro(
       "Combined domain-error guards with counted-loop unrolling",
     );
   }
-  if (sourceHasMultipleProcs(source)) {
-    tryCandidate(
-      { orderProcsByCallCount: true },
-      "call-count-proc-layout",
-      "Emitted procedures in descending call-count order so hot helpers occupy the cheapest addresses",
-    );
-    tryCandidate(
-      { orderProcsByCallCount: true, hoistProcs: true, hoistSharedHelpers: true },
-      "call-count-hoisted-proc-layout",
-      "Combined call-count proc ordering with front-hoisted procs and shared helpers for single-cell indirect flow",
-    );
+  // The proc-layout search can only change call/jump encoding cost once some
+  // addresses fall outside the official <=104 window; for in-budget programs
+  // every address is official and reordering is a guaranteed no-op. Gate the
+  // whole search to programs the primary attempt could not fit (or that failed
+  // to fit at all), so it costs nothing on the common case and runs exactly
+  // where layout could plausibly recover cells.
+  const primaryOverflows = primary === undefined || primary.steps.length > 105;
+  if (sourceHasMultipleProcs(source) && primaryOverflows) {
+    const procLayouts: Array<{ options: LoweringOptions; name: string; detail: string }> = [
+      { options: { orderProcsByCallCount: true }, name: "call-count-proc-layout", detail: "Emitted procedures in descending call-count order so hot helpers occupy the cheapest addresses" },
+      { options: { procLayoutStrategy: "size-asc" }, name: "size-asc-proc-layout", detail: "Emitted the smallest procedures first to pack hot helpers into the cheapest addresses" },
+      { options: { procLayoutStrategy: "size-desc" }, name: "size-desc-proc-layout", detail: "Emitted the largest procedures first" },
+      { options: { procLayoutStrategy: "reverse" }, name: "reverse-proc-layout", detail: "Emitted procedures in reverse source order" },
+    ];
+    for (const layout of procLayouts) {
+      tryCandidate(layout.options, layout.name, layout.detail);
+      tryCandidate(
+        { ...layout.options, hoistProcs: true, hoistSharedHelpers: true },
+        `${layout.name}-hoisted`,
+        `${layout.detail}; combined with front-hoisted procs and shared helpers for single-cell indirect flow`,
+      );
+    }
   }
   tryCandidate(
     { inlineFloorPackedRowExpressions: true },
@@ -4781,6 +4797,10 @@ export class EmitContext {
         continue;
       }
       if (statement.kind === "assign" && next?.kind === "if" && compileDecrementZeroBranch(this, statement, next)) {
+        index += 1;
+        continue;
+      }
+      if (statement.kind === "assign" && next?.kind === "if" && compileAssignThenDomainTrap(this, statement, next)) {
         index += 1;
         continue;
       }
