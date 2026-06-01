@@ -24,18 +24,11 @@ program TicTacToe4x4 {
     halt(-4444)
   }
 
-  fn draw() {
-    halt(0)
-  }
-
   loop {
     show(cell, turn_count)
     cell = read()
 
-    if cell in occupied {
-      show(cell, turn_count)
-    }
-    else {
+    unless cell in occupied {
       player_marks += cell
       occupied += cell
       turn_count++
@@ -49,25 +42,20 @@ program TicTacToe4x4 {
   }
 
   fn calculator_reply() {
-    if turn_count >= 16 {
-      draw()
-    }
-    else {
-      cell = random(grid)
-      if cell in occupied {
-        calculator_reply()
+    cell = 11 + int(random(4)) + 10 * int(random(4))
+    unless cell in occupied {
+      calculator_marks += cell
+      occupied += cell
+      turn_count++
+      if line_count(calculator_marks, cell) >= 4 {
+        calculator_wins()
       }
       else {
-        calculator_marks += cell
-        occupied += cell
-        turn_count++
-        if line_count(calculator_marks, cell) >= 4 {
-          calculator_wins()
-        }
-        else {
-          show(cell, turn_count)
-        }
+        show(cell, turn_count)
       }
+    }
+    else {
+      calculator_reply()
     }
   }
 }

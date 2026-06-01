@@ -49,7 +49,7 @@ const PENDING_BASELINE: Record<string, number> = {
   labyrinth777: 206,
   "rambo-iii": 133,
   teleport: 195,
-  "tic-tac-toe-4x4": 213,
+  "tic-tac-toe-4x4": 200,
 };
 
 const PENDING_COMPILE_ERRORS: Record<string, RegExp> = {};

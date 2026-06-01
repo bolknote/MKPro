@@ -32,7 +32,7 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | `labyrinth777.mkpro` | 206 | 105 | room inspection and local-jumper dispatch |
 | `rambo-iii.mkpro` | 133 | 105 | grouped front/robots storage, self-trapping domain-error guards (F √ / F lg), and stack-temp reuse now work; event dispatch and battle-flow branches are the remaining large blocks |
 | `teleport.mkpro` | 195 | 105 | packed row display, station masks, and vault/guard flow |
-| `tic-tac-toe-4x4.mkpro` | 213 | 105 | 4x4 line-count state representation |
+| `tic-tac-toe-4x4.mkpro` | 200 | 105 | 4x4 line-count state representation |
 
 Prototype notes:
 
