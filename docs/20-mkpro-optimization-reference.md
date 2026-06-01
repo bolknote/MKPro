@@ -87,15 +87,21 @@ Capabilities can be `considered` and not active if no matching shape is found.
 These transformations run on source constructs before machine lowering:
 
 - `constant-indexed-state-resolution` — if array/field index is known at compile time, substitutes the exact cell address directly.
+- `affine-indexed-selector-reuse` — if an affine dynamic index such as `physical - 3` already evaluates to the physical register number for a contiguous bank member, uses that variable as the MK-61 indirect selector instead of allocating and filling a separate selector.
 - `display-string-inline` — moves text templates directly into `show`, removing separate temporary definitions.
-- `display-string-guarded-show` and `display-string-assignment-elimination` — simplify guarded string branches and remove extra intermediate variables.
+- `display-string-guarded-show` — hoists guarded string value selection into the display path when safe.
+- `display-string-assignment-elimination` — deletes compile-time removable display-string assignments that only flow into later `show` inputs and are never consumed elsewhere.
 - `display-edge-whitespace-trim` — removes leading/trailing whitespace around templates that does not affect display output.
 - `expression-constant-folder` — precomputes constant expression subtrees.
 - `show-read-fusion` — merges `show(...)` with a following `read`-based assignment/input path into one calculator `С/П`: `show(...); x = read()` or `show(...); x = int(read())` / `frac(int(read()))` forms share the same input stop and avoid emitting a second `С/П`.
+- `show-read-decrement-underflow-fusion` — merges `show -> input -> decrement -> if (counter < 0) ...` into one compact sequence, keeping input in `Y` across the decrement-underflow check.
+- `show-read-stake-sin-lowering` — transforms `x = int(stake * (1 + sin(input)))` patterns (with `stake` coming from a single plain `show` source) into stack-direct form: keep `stake` in `Y`, read `input`, and compute the risk expression directly.
 - `counted-loop-unroll` — replaces small constant-trip counted `while` loops with explicit per-iteration copies when the induction variable updates are simple linear steps and entry values are known constants; this removes the loop machinery and registers update logic.
 - `counted-loop-unroll-free-scratch` — runs counted-loop unrolling together with residual-dispatch scratch freeing (`freeResidualDispatchScratch`) as one candidate.
 - `state-init-counted-loop` — recovers the compact one-cell `F Lx` counted-loop lowering for countdown loops whose counter carries its initial value on the state field (`time: counter 0..N = N` + `while time >= 1 { …; time-- }`). When that counter is used solely by the loop in the top-level entry body, the state initializer is rewritten into an explicit `time = N` immediately before the loop, matching the already-supported explicit-init form byte-for-byte while staying re-runnable (the inline store re-arms the counter on every `С/П`, unlike a setup-only preload).
+- `initialized-counted-while-loop` — compiles `x = N; while x >= 1` / `> 0` loops with `x--` in the last body statement into compact `F Lx` loops when the pattern is safe (intervening statements do not touch `x`, loop body has non-terminating tail, and the loop register has an `F Lx` opcode).
 - `domain-error-guard` — replaces a terminal-error guard (`if <expr> <op> 0 { halt("ЕГГОГ") }`, including a call to a proc whose body is just that trap) with a single self-trapping domain opcode that raises ЕГГОГ exactly on its mathematical domain (all proved on hardware in `tests/emulator/trap-opcodes.test.ts`): `F √` for `<` (traps iff X < 0), `F lg` for `<=` (iff X <= 0), and `F 1/x` for `==` (iff X == 0, division by zero — the exact equality trap regardless of sign). `>`/`>=` reduce to the swapped difference. The guard computes the comparison difference into X so the trap fires iff the condition holds; otherwise it falls through into the false branch. This collapses the compare + conditional branch + shared trap into one cell, and when every caller of a shared trap proc is converted the proc becomes dead and is dropped. Speculative (`domainErrorGuards`): adopted only when the whole program ends up smaller. Examples: rambo-iii 139→135, alaram 80→76, dungeon 85→83, wumpus 105→103.
+- `decrement-zero-domain-guard` — when a unit decrement is followed by a terminal `x == 0` error guard and no compact `F Lx` counter opcode is available, stores the decremented value and uses `F 1/x` as the zero trap.
 - `startup-aware-constant-preloads` — tries a variant that leaves setup-expensive synthesized constants inline, such as decimal powers built with `F 10^x`, when that lowers estimated startup+program cost without increasing the main program size.
 - `intent-domain-lowering` — normalizes special intent types into a base form for later compilation.
 - `packed-counter-stripes` — packs dense counters into a shorter representation.
@@ -132,6 +138,7 @@ The control-flow family is where the largest byte savings are found.
 - `terminal-if-direct-branch` — turns final checks into direct branches.
 - `terminal-branch-end-elision` — removes the final redundant jump at block end.
 - `nested-guard-shared-failure` — uses one shared failure handler for nested guarded branches.
+- `dead-proc-elimination` — removes unreachable lowered procedures after `match/effect` pass by collecting reachability from entries and call sites.
 - `ephemeral-input-branch` — shortens one-off input paths into compact branches.
 - `ephemeral-input-dispatch` — chooses input-based dispatch through denser tables.
 - `decrement-underflow-branch` — decrements and immediately handles underflow in one step.
@@ -150,6 +157,7 @@ Machine-level variants around branches:
 - `function-tail-call` — does the same for function tail calls by converting call to direct jump.
 - `function-tail-recursion` — when a function tail-calls itself, emits a loop.
 - `terminal-rule-tail-call` — turns final rule calls into direct jumps.
+- `terminal-loop-screen-elision` — removes terminal `show` duplicates already provided by the following loop header and may inline one-screen loop-header helpers before input.
 - `return-suffix-gadget` — shares a common suffix after `return` across similar regions.
 - `shared-call-tail` — keeps one shared tail after calls instead of duplicates.
 - `jump-thread` — rewires jump chains into a straight flow.
@@ -179,6 +187,7 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `stable-indirect-flow` — after register-liveness analysis, routes branches/calls through one indirect pointer.
 - `indirect-register-flow` — the same for regions where address is in a register and already safe for indirect jump.
 - `preloaded-indirect-flow` — preloads selector/address once so multiple indirect jumps become shorter.
+- `runtime-indirect-call-flow` — for repeated backward helper calls with legal numeric targets, initializes a dead stable register once at runtime and replaces direct `ПП addr` pairs with one-cell `К ПП r` calls.
 - `preloaded-super-dark-flow` — super-dark path with a preloaded indirect target.
 - `indirect-incdec-counter` — lowers a unit `x++`/`x--` through the indirect pre-increment (R4..R6) or pre-decrement (R0..R3) side effect of `К П->X r`, a one-cell true `±1` that correctly reaches 0 (used as the standalone unit-decrement form).
 - `r0-indirect-counter` — uses R0 as a readable counter/switch for jump dispatch where provably safe.
@@ -257,6 +266,7 @@ Display rewrites are separated into strategy selection + body lowering.
 
 - `random-range-lowering` — shortens random value generation within a range into shorter microcode.
 - `int-random-range-lowering` — returns only integer result without extra fractional post-processing.
+- `previous-random-stack-reuse` — when source keeps a previous seed, updates the same seed with `random()`, and consumes both previous and current values in a pure expression, keeps the previous value on the stack instead of storing and recalling it.
 - `random-cell-helper` — extracts shared random-cell handling into one helper.
 - `random-cell-helper-call` — calls the extracted helper instead of repeating logic.
 - `coord-list-scaled-read` — in random coordinate paths, reduces table-unfold cost.
