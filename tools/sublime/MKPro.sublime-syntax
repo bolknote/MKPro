@@ -50,12 +50,6 @@ contexts:
           pop: true
 
   invalid-legacy-syntax:
-    - match: '^\s*(rule)\b'
-      captures:
-        1: invalid.deprecated.keyword.rule.mkpro
-    - match: '^\s*(screen|world|turn|encounters|challenge)\b'
-      captures:
-        1: invalid.deprecated.keyword.block.mkpro
     - match: '^\s*(show|read|move)\b(?!\s*\()'
       captures:
         1: invalid.deprecated.keyword.statement.mkpro
