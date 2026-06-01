@@ -238,17 +238,36 @@ function formatStepKeys(
   return steps.map((step) => toKeycaps(patches.get(step.address)?.placeholderMnemonic ?? step.mnemonic));
 }
 
-// Listings use ASCII shorthand for a few operator opcodes ("/", "*", "<->"),
-// but the keys export tells a human which physical key to press, so it must use
-// the labels actually printed on the MK-61 keyboard ("÷", "×", "↔").
+// Listings and the keys export are read by a human deciding which physical key
+// to press, so operator mnemonics must use the glyphs actually printed on the
+// MK-61 keyboard rather than the ASCII shorthand the IR carries internally
+// (step.mnemonic itself stays ASCII for tooling/round-trips).
+//
+// Whole-token operators map directly; "/" stays "/" inside compound mnemonics
+// like "F 1/x" (whose keycap really is "1/x"), so those are matched exactly.
 const KEYCAP_LABELS: Record<string, string> = {
   "*": "×",
   "/": "÷",
   "<->": "↔",
 };
 
+// Superscript exponents printed on the keyboard (10ˣ, eˣ, x², xʸ, sin⁻¹, ...).
+const SUPERSCRIPT_EXPONENTS: ReadonlyArray<[string, string]> = [
+  ["^-1", "⁻¹"],
+  ["^x", "ˣ"],
+  ["^y", "ʸ"],
+  ["^2", "²"],
+];
+
 function toKeycaps(mnemonic: string): string {
-  return KEYCAP_LABELS[mnemonic] ?? mnemonic;
+  const exact = KEYCAP_LABELS[mnemonic];
+  if (exact !== undefined) return exact;
+
+  let label = mnemonic;
+  for (const [ascii, glyph] of SUPERSCRIPT_EXPONENTS) label = label.replaceAll(ascii, glyph);
+  // Register-transfer and conversion keys print real arrows (X→П, П→X, К °←′).
+  label = label.replaceAll("->", "→").replaceAll("<-", "←");
+  return label;
 }
 
 function formatSetupPreloadKeys(preloads: readonly PreloadReport[]): string[] {

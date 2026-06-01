@@ -63,9 +63,9 @@ describe("setup formatting", () => {
     expect(listing).toContain("# Setup Listing");
     expect(listing).toContain("   00 |  00  | 0");
     expect(listing).toContain("   01 |  0A  | .");
-    expect(listing).toContain("   03 |  48  | X->П 8");
+    expect(listing).toContain("   03 |  48  | X→П 8");
     expect(listing).toContain("   22 |  0C  | ВП");
-    expect(listing).toContain("   25 |  4E  | X->П e");
+    expect(listing).toContain("   25 |  4E  | X→П e");
     expect(listing).toContain("# Main Listing");
   });
 
@@ -78,10 +78,10 @@ describe("setup formatting", () => {
     expect(listing).toContain("# Setup Listing");
     expect(listing).toContain("   -- |   -  | enter bottles");
     expect(listing).toContain("enter any value 0..99 in X");
-    expect(listing).toContain("X->П 0");
+    expect(listing).toContain("X→П 0");
     expect(listing).toContain("# Main Listing");
     expect(keys.split(/\r?\n/u).slice(0, 5)).toEqual([
-      "X->П 0",
+      "X→П 0",
       "С/П",
       "В/О",
       "<enter bottles: any value 0..99 in X>",
