@@ -17,6 +17,7 @@ export type LoweringCtx = Pick<
   | "candidates"
   | "collapseLiteralOnlyDisplay"
   | "collapseTextPrefixDisplay"
+  | "compileStatement"
   | "compileStatements"
   | "compileWithinProcedure"
   | "constantStack"

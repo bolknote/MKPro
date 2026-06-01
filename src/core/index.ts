@@ -2,10 +2,9 @@ export { compileMKPro, CompileError, setReferenceMetricsResolver } from "./compi
 export {
   analyzeProgramStackResidency,
   analyzeSourceStackResidency,
-  analyzeStackResidencyWindows,
   findStackResidentFusionSite,
   statementPreservesStackResidency,
-  summarizeStackResidencyCandidates,
+  summarizeStackResidencyCandidatesInBlock,
 } from "./emit/stack-residency-analysis.ts";
 export { parseProgram, parseExpression, ParseError } from "./parser.ts";
 export {

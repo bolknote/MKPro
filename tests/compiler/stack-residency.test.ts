@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  analyzeStackResidencyWindows,
   canLowerStackResidentExpression,
   findStackResidentFusionSite,
   statementPreservesStackResidency,
@@ -19,16 +18,14 @@ function compileOk(source: string, stackResidentTemps = true) {
 }
 
 describe("stack-residency analysis", () => {
-  it("detects straight-line windows and dual-temp triples", () => {
+  it("detects a straight-line dual-temp fusion site", () => {
     const body: StatementAst[] = [
       { kind: "assign", target: "a", expr: { kind: "identifier", name: "x" }, line: 1 },
       { kind: "assign", target: "b", expr: { kind: "identifier", name: "y" }, line: 2 },
       { kind: "assign", target: "c", expr: { kind: "binary", op: "+", left: { kind: "identifier", name: "a" }, right: { kind: "identifier", name: "b" } }, line: 3 },
       { kind: "if", condition: { kind: "compare", op: "==", left: { kind: "identifier", name: "c" }, right: { kind: "number", raw: "0" } }, thenBody: [], line: 4 },
     ];
-    const windows = analyzeStackResidencyWindows(body);
     const block = summarizeStackResidencyCandidatesInBlock(body);
-    expect(windows).toHaveLength(1);
     expect(block.fusionSites).toBe(1);
     expect(block.controlFlowFusions).toBe(0);
     expect(block.maxLiveTemps).toBeGreaterThanOrEqual(2);

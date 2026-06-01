@@ -5514,11 +5514,14 @@ Preloads:
   treasure -> Re: 0 (outside program cells)
   fight_entry -> R9: 0 (outside program cells)
   screen -> Rc: 0 (outside program cells)
+  R1: 8.70Е2-6С (outside program cells)
+  R2: 8.Е795401 (outside program cells)
+  R3: 8.-2Е83LГ (outside program cells)
   R8: B2 (outside program cells)
   R9: C0 (outside program cells)
 
 Setup Block:
-  \`Ra=1.0000008; R0=20; R4=2; Re=0; R9=0; Rc=0; R8=L2; R9=С0\`
+  \`Ra=1.0000008; R0=20; R4=2; Re=0; R9=0; Rc=0; R1=8.70Е2-6С; R2=8.Е795401; R3=8.-2Е83LГ; R8=L2; R9=С0\`
 
 Setup Program:
   Reason: initializes walls_1, walls_2, walls_3, caches

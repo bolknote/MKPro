@@ -11,25 +11,6 @@ import {
 /** Stack slot names after N consecutive temps are lifted with В↑ between each. */
 export type StackResidentSlot = "X" | "Y" | "Z" | "T";
 
-export interface StackResidencyWindow {
-  /** Inclusive start index in the statement array. */
-  start: number;
-  /** Exclusive end index. */
-  end: number;
-  /** Peak count of assign targets live at once inside the window. */
-  maxLiveTemps: number;
-  /** `temp = e; consumer` pairs eligible for single-use stack residency. */
-  singleUsePairs: number;
-  /** `t0=e0; t1=e1; consumer` triples eligible for dual stack residency. */
-  dualTempTriples: number;
-  /** `t0..t(n-1); consumer` runs with 3 or 4 temps and a qualifying consumer. */
-  multiTempRuns: number;
-  /** `temp = e; cells[i] op= temp` indexed compound consumers. */
-  indexedConsumers: number;
-  /** Fusions that cross stack-preserving control flow (if/loop/dispatch gaps). */
-  controlFlowFusions: number;
-}
-
 export interface StackResidentTempSegment {
   assign: Extract<StatementAst, { kind: "assign" }>;
   /** Statements after this assign and before the next assign or consumer. */
@@ -45,29 +26,6 @@ export interface StackResidentFusionSite {
   consumerIndex: number;
   /** True when any preserveAfter segment is non-empty. */
   crossesControlFlow: boolean;
-}
-
-/** Statements that end a straight-line stack-scheduling window (measurement legacy). */
-export function breaksStackResidencyWindow(statement: StatementAst): boolean {
-  switch (statement.kind) {
-    case "assign":
-    case "indexed_assign":
-    case "pause":
-    case "halt":
-    case "return_value":
-    case "show":
-    case "input":
-      return false;
-    case "call":
-    case "if":
-    case "loop":
-    case "while":
-    case "dispatch":
-    case "coord_list_remove":
-    case "decimal_series":
-    case "core":
-      return true;
-  }
 }
 
 export function stackTempSourceIsSafe(expr: ExpressionAst): boolean {
@@ -360,10 +318,6 @@ export function findStackResidentFusionSite(
   };
 }
 
-function countFusionSite(statements: readonly StatementAst[], start: number): number {
-  return findStackResidentFusionSite(statements, start) === undefined ? 0 : 1;
-}
-
 function countIndexedConsumer(statements: readonly StatementAst[], start: number): number {
   const temp = statements[start];
   const consumer = statements[start + 1];
@@ -425,18 +379,25 @@ function peakLiveAssignTempsInBlock(statements: readonly StatementAst[]): number
   return defs.size === 0 ? 0 : lastUse.size;
 }
 
-/** Summarize stack-residency candidates across a whole statement tree (control-flow aware). */
-export function summarizeStackResidencyCandidatesInBlock(statements: readonly StatementAst[]): {
-  fusionSites: number;
-  controlFlowFusions: number;
-  indexedConsumers: number;
-  straightSingleUsePairs: number;
+export interface StackResidencySummary {
+  /** Peak count of assign targets live at once. */
   maxLiveTemps: number;
-} {
+  /** `t0=e0; …; consumer` fusion sites (straight-line or control-flow). */
+  fusionSites: number;
+  /** Subset of `fusionSites` whose temps are separated by stack-preserving control flow. */
+  controlFlowFusions: number;
+  /** Straight-line `temp = e; consumer` pairs not already covered by a fusion site. */
+  singleUsePairs: number;
+  /** `temp = e; cells[i] op= temp` indexed compound consumers. */
+  indexedConsumers: number;
+}
+
+/** Summarize stack-residency candidates across a whole statement tree (control-flow aware). */
+export function summarizeStackResidencyCandidatesInBlock(statements: readonly StatementAst[]): StackResidencySummary {
   let fusionSites = 0;
   let controlFlowFusions = 0;
   let indexedConsumers = 0;
-  let straightSingleUsePairs = 0;
+  let singleUsePairs = 0;
 
   const visit = (body: readonly StatementAst[]): void => {
     for (let index = 0; index < body.length; index += 1) {
@@ -448,7 +409,7 @@ export function summarizeStackResidencyCandidatesInBlock(statements: readonly St
         continue;
       }
       indexedConsumers += countIndexedConsumer(body, index);
-      straightSingleUsePairs += countStraightSingleUsePair(body, index);
+      singleUsePairs += countStraightSingleUsePair(body, index);
       const statement = body[index]!;
       switch (statement.kind) {
         case "if":
@@ -473,127 +434,43 @@ export function summarizeStackResidencyCandidatesInBlock(statements: readonly St
 
   visit(statements);
   return {
+    maxLiveTemps: peakLiveAssignTempsInBlock(statements),
     fusionSites,
     controlFlowFusions,
+    singleUsePairs,
     indexedConsumers,
-    straightSingleUsePairs,
-    maxLiveTemps: peakLiveAssignTempsInBlock(statements),
   };
 }
 
-/** Split `statements` into maximal straight-line stack-scheduling windows (legacy report). */
-export function analyzeStackResidencyWindows(statements: readonly StatementAst[]): StackResidencyWindow[] {
-  const block = summarizeStackResidencyCandidatesInBlock(statements);
-  const windows: StackResidencyWindow[] = [];
-  let start = 0;
-  while (start < statements.length) {
-    let end = start;
-    while (end < statements.length && !breaksStackResidencyWindow(statements[end]!)) end += 1;
-    if (end === start) {
-      start += 1;
-      continue;
-    }
-    windows.push({
-      start,
-      end,
-      maxLiveTemps: block.maxLiveTemps,
-      singleUsePairs: block.straightSingleUsePairs,
-      dualTempTriples: 0,
-      multiTempRuns: 0,
-      indexedConsumers: block.indexedConsumers,
-      controlFlowFusions: block.controlFlowFusions,
-    });
-    start = end === start ? start + 1 : end;
-  }
-  if (windows.length === 0 && statements.length > 0) {
-    windows.push({
-      start: 0,
-      end: statements.length,
-      maxLiveTemps: block.maxLiveTemps,
-      singleUsePairs: block.straightSingleUsePairs,
-      dualTempTriples: 0,
-      multiTempRuns: 0,
-      indexedConsumers: block.indexedConsumers,
-      controlFlowFusions: block.controlFlowFusions,
-    });
-  }
-  return windows;
-}
-
-/** Summarize stack-residency candidate counts for a whole program body. */
-export function summarizeStackResidencyCandidates(statements: readonly StatementAst[]): {
-  windows: number;
-  maxLiveTemps: number;
-  singleUsePairs: number;
-  dualTempTriples: number;
-  multiTempRuns: number;
-  indexedConsumers: number;
-  controlFlowFusions: number;
-  fusionSites: number;
-} {
-  const block = summarizeStackResidencyCandidatesInBlock(statements);
-  const analyzed = analyzeStackResidencyWindows(statements);
+function mergeSummaries(left: StackResidencySummary, right: StackResidencySummary): StackResidencySummary {
   return {
-    windows: analyzed.length,
-    maxLiveTemps: block.maxLiveTemps,
-    singleUsePairs: block.straightSingleUsePairs,
-    dualTempTriples: 0,
-    multiTempRuns: block.fusionSites > 0 ? block.fusionSites : 0,
-    indexedConsumers: block.indexedConsumers,
-    controlFlowFusions: block.controlFlowFusions,
-    fusionSites: block.fusionSites,
-  };
-}
-
-export interface ProgramStackResidencySummary {
-  windows: number;
-  maxLiveTemps: number;
-  singleUsePairs: number;
-  dualTempTriples: number;
-  multiTempRuns: number;
-  indexedConsumers: number;
-  controlFlowFusions: number;
-  fusionSites: number;
-}
-
-function mergeSummaries(
-  left: ProgramStackResidencySummary,
-  right: ReturnType<typeof summarizeStackResidencyCandidates>,
-): ProgramStackResidencySummary {
-  return {
-    windows: left.windows + right.windows,
     maxLiveTemps: Math.max(left.maxLiveTemps, right.maxLiveTemps),
-    singleUsePairs: left.singleUsePairs + right.singleUsePairs,
-    dualTempTriples: left.dualTempTriples + right.dualTempTriples,
-    multiTempRuns: left.multiTempRuns + right.multiTempRuns,
-    indexedConsumers: left.indexedConsumers + right.indexedConsumers,
-    controlFlowFusions: left.controlFlowFusions + right.controlFlowFusions,
     fusionSites: left.fusionSites + right.fusionSites,
+    controlFlowFusions: left.controlFlowFusions + right.controlFlowFusions,
+    singleUsePairs: left.singleUsePairs + right.singleUsePairs,
+    indexedConsumers: left.indexedConsumers + right.indexedConsumers,
   };
 }
 
 /** Analyze every entry/proc body in a parsed program. */
-export function analyzeProgramStackResidency(ast: ProgramAst): ProgramStackResidencySummary {
-  let summary: ProgramStackResidencySummary = {
-    windows: 0,
+export function analyzeProgramStackResidency(ast: ProgramAst): StackResidencySummary {
+  let summary: StackResidencySummary = {
     maxLiveTemps: 0,
-    singleUsePairs: 0,
-    dualTempTriples: 0,
-    multiTempRuns: 0,
-    indexedConsumers: 0,
-    controlFlowFusions: 0,
     fusionSites: 0,
+    controlFlowFusions: 0,
+    singleUsePairs: 0,
+    indexedConsumers: 0,
   };
   for (const entry of ast.entries) {
-    summary = mergeSummaries(summary, summarizeStackResidencyCandidates(entry.body));
+    summary = mergeSummaries(summary, summarizeStackResidencyCandidatesInBlock(entry.body));
   }
   for (const proc of ast.procs) {
-    summary = mergeSummaries(summary, summarizeStackResidencyCandidates(proc.body));
+    summary = mergeSummaries(summary, summarizeStackResidencyCandidatesInBlock(proc.body));
   }
   return summary;
 }
 
 /** Parse source and return stack-residency candidate counts (measurement harness). */
-export function analyzeSourceStackResidency(source: string): ProgramStackResidencySummary {
+export function analyzeSourceStackResidency(source: string): StackResidencySummary {
   return analyzeProgramStackResidency(parseProgram(source));
 }

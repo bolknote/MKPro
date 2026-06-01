@@ -63,7 +63,7 @@ function emitStackBinaryOnTemps(
   ctx: LoweringCtx,
   leftName: string,
   rightName: string,
-  op: string,
+  op: "+" | "-" | "*" | "/",
   temps: readonly string[],
   line: number,
 ): void {
@@ -198,19 +198,26 @@ function compilePreserveRegion(ctx: LoweringCtx, statements: readonly StatementA
   for (const statement of statements) ctx.compileStatement(statement);
 }
 
-/** True when lowering `statements` overwrites calculator stack slot X (Y/Z/T may survive). */
-function preserveRegionClobbersStackX(statements: readonly StatementAst[]): boolean {
-  return statements.some((statement) => stackStatementClobbersCalculatorStack(statement));
+// Two distinct notions of "preserve" meet here:
+//   - the ANALYSIS (`statementPreservesStackResidency`) guarantees the gap never
+//     destroys the *value* of a temp (no assign to its source can appear inside),
+//   - the LOWERING (this predicate) asks whether the gap destroys the *stack
+//     layout* (X/Y/Z/T) so the temps must be recomputed afterwards.
+// A gap can preserve residency yet still require a rebuild: any condition test
+// (`if`/`while`/`dispatch`) lifts onto the stack while comparing. Only nested
+// empty `loop`s leave the layout untouched.
+function preserveRegionRequiresStackRebuild(statements: readonly StatementAst[]): boolean {
+  return statements.some((statement) => statementRequiresStackRebuild(statement));
 }
 
-function stackStatementClobbersCalculatorStack(statement: StatementAst): boolean {
+function statementRequiresStackRebuild(statement: StatementAst): boolean {
   switch (statement.kind) {
     case "if":
     case "while":
     case "dispatch":
       return true;
     case "loop":
-      return statement.body.some(stackStatementClobbersCalculatorStack);
+      return statement.body.some(statementRequiresStackRebuild);
     case "assign":
     case "indexed_assign":
     case "show":
@@ -238,7 +245,7 @@ function emitStackResidentFusion(ctx: LoweringCtx, site: StackResidentFusionSite
     ctx.markCurrentX(segment.assign.target);
     if (segment.preserveAfter.length > 0) {
       compilePreserveRegion(ctx, segment.preserveAfter);
-      if (preserveRegionClobbersStackX(segment.preserveAfter)) {
+      if (preserveRegionRequiresStackRebuild(segment.preserveAfter)) {
         for (let rebuild = 0; rebuild <= index; rebuild += 1) {
           if (rebuild > 0) {
             ctx.emitOp(0x0e, "В↑", `stack-resident rebuild ${site.temps[rebuild - 1]!.assign.target}`, segment.assign.line);
@@ -277,9 +284,10 @@ export function compileMultiStackResidentTemps(
   const site = findStackResidentFusionSite(statements, start);
   if (site === undefined) return 0;
 
+  const consumer = site.consumer;
   if (
-    site.consumer.kind === "indexed_assign" &&
-    site.temps.some((segment) => expressionReferencesIdentifier(site.consumer.target.index, segment.assign.target))
+    consumer.kind === "indexed_assign" &&
+    site.temps.some((segment) => expressionReferencesIdentifier(consumer.target.index, segment.assign.target))
   ) {
     return 0;
   }

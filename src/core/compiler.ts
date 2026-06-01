@@ -12655,9 +12655,15 @@ const optimizerCapabilities: Array<{
 function buildPreloadReport(ast: ProgramAst, allocation: RegisterAllocation): PreloadReport[] {
   const synthetic: PreloadReport[] = [];
   const v2FieldNames = new Set<string>();
+  const loweredInitializerListFields = new Set<string>();
   if (ast.v2) {
     for (const field of ast.v2.state) {
       v2FieldNames.add(field.name);
+      if (field.bank !== undefined && field.initial !== undefined && isIndexedInitializerListText(field.initial)) {
+        for (const element of stateBankElementsForV2Field(ast, field)) {
+          loweredInitializerListFields.add(element.name);
+        }
+      }
       const register = allocation.registers[field.name];
       if (!register) continue;
       const value = field.initial;
@@ -12668,22 +12674,20 @@ function buildPreloadReport(ast: ProgramAst, allocation: RegisterAllocation): Pr
         countsAgainstProgram: false,
       });
     }
-  }
-  if (ast.v2) {
     for (const field of ast.states.flatMap((state) => state.fields)) {
       if (
         v2FieldNames.has(field.name) ||
-        !field.name.startsWith(PACKED_COUNTER_PREFIX) ||
-        field.initial === undefined ||
-        !isSetupLiteralExpression(field.initial)
+        !(loweredInitializerListFields.has(field.name) || field.name.startsWith(PACKED_COUNTER_PREFIX))
       ) {
         continue;
       }
       const register = allocation.registers[field.name];
       if (!register) continue;
+      const value = field.initial === undefined ? undefined : setupPreloadValueForExpression(field.initial);
+      if (value === undefined) continue;
       synthetic.push({
         register,
-        value: expressionToIntentText(field.initial),
+        value,
         countsAgainstProgram: false,
       });
     }
@@ -12705,6 +12709,18 @@ function buildPreloadReport(ast: ProgramAst, allocation: RegisterAllocation): Pr
     });
   }
   return [...synthetic, ...constants, ...displayTemplateMasks];
+}
+
+function isIndexedInitializerListText(initial: string): boolean {
+  return initial.trimStart().startsWith("[");
+}
+
+function stateBankElementsForV2Field(ast: ProgramAst, field: { bank?: { name: string; member?: string } }): Array<{ name: string }> {
+  const bankRef = field.bank;
+  if (bankRef === undefined) return [];
+  const bank = ast.banks?.find((candidate) => candidate.name === bankRef.name);
+  const member = bank?.members.find((candidate) => candidate.name === bankRef.member);
+  return member?.elements ?? [];
 }
 
 function buildGeneratedSetupProgram(
@@ -12793,6 +12809,105 @@ function isSetupLiteralExpression(expr: ExpressionAst): boolean {
   if (expr.kind === "number") return true;
   return expr.kind === "unary" && expr.op === "-" && expr.expr.kind === "number";
 }
+
+function setupPreloadValueForExpression(expr: ExpressionAst): string | undefined {
+  const bitwiseLiteral = mk61BitwiseDisplayLiteralForExpression(expr);
+  if (bitwiseLiteral !== undefined) return bitwiseLiteral;
+  return isSetupLiteralExpression(expr) ? expressionToIntentText(expr) : undefined;
+}
+
+function mk61BitwiseDisplayLiteralForExpression(expr: ExpressionAst): string | undefined {
+  if (!isMk61BitwiseExpression(expr)) return undefined;
+  const cells = mk61BitwiseMantissaCells(expr);
+  return cells === undefined ? undefined : mk61DisplayLiteralFromCells(cells);
+}
+
+function isMk61BitwiseExpression(expr: ExpressionAst): boolean {
+  return expr.kind === "call" && (
+    expr.callee === "bit_and" ||
+    expr.callee === "bit_or" ||
+    expr.callee === "bit_xor" ||
+    expr.callee === "bit_not"
+  );
+}
+
+function mk61BitwiseMantissaCells(expr: ExpressionAst): number[] | undefined {
+  if (expr.kind === "number") return decimalLiteralMantissaCells(expr.raw);
+  if (expr.kind === "unary" && expr.op === "-") return mk61BitwiseMantissaCells(expr.expr);
+  if (expr.kind !== "call") return undefined;
+
+  if (expr.callee === "bit_not") {
+    if (expr.args.length !== 1) return undefined;
+    const source = mk61BitwiseMantissaCells(expr.args[0]!);
+    if (source === undefined) return undefined;
+    const result = [8];
+    for (let index = 1; index < 8; index += 1) result.push((~source[index]!) & 0x0f);
+    return result;
+  }
+
+  if (expr.callee !== "bit_and" && expr.callee !== "bit_or" && expr.callee !== "bit_xor") return undefined;
+  if (expr.args.length !== 2) return undefined;
+  const left = mk61BitwiseMantissaCells(expr.args[0]!);
+  const right = mk61BitwiseMantissaCells(expr.args[1]!);
+  if (left === undefined || right === undefined) return undefined;
+  const result = [8];
+  for (let index = 1; index < 8; index += 1) {
+    result.push(mk61BitwiseNibble(left[index]!, right[index]!, expr.callee));
+  }
+  return result;
+}
+
+function decimalLiteralMantissaCells(raw: string): number[] | undefined {
+  const match = /^(-)?(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/iu.exec(raw.trim());
+  if (match === null) return undefined;
+  const exponent = match[4] === undefined ? 0 : Number(match[4]);
+  if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > 18) return undefined;
+
+  const integerPart = match[2]!;
+  const fractionalPart = match[3] ?? "";
+  let digits = `${integerPart}${fractionalPart}`.replace(/^0+/u, "");
+  const scale = fractionalPart.length - exponent;
+  if (scale < 0) digits = `${digits}${"0".repeat(-scale)}`;
+  if (digits.length === 0) return new Array<number>(8).fill(0);
+  return [...digits.slice(0, 8).padEnd(8, "0")].map((digit) => Number(digit));
+}
+
+function mk61BitwiseNibble(left: number, right: number, op: "bit_and" | "bit_or" | "bit_xor"): number {
+  switch (op) {
+    case "bit_and":
+      return left & right;
+    case "bit_or":
+      return left | right;
+    case "bit_xor":
+      return left ^ right;
+  }
+}
+
+function mk61DisplayLiteralFromCells(cells: readonly number[]): string | undefined {
+  if (cells.length !== 8 || cells.some((cell) => cell < 0 || cell > 15)) return undefined;
+  const glyphs = cells.map((cell) => MK61_DISPLAY_LITERAL_CELL_GLYPHS[cell]);
+  if (glyphs.some((glyph) => glyph === undefined)) return undefined;
+  return `${glyphs[0]}.${glyphs.slice(1).join("")}`;
+}
+
+const MK61_DISPLAY_LITERAL_CELL_GLYPHS = [
+  "0",
+  "1",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+  "7",
+  "8",
+  "9",
+  "-",
+  "L",
+  "С",
+  "Г",
+  "Е",
+  "_",
+] as const;
 
 function buildNegativeZeroDegreePreloadReport(
   allocation: RegisterAllocation,

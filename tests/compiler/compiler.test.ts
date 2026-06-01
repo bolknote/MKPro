@@ -868,6 +868,38 @@ program ConstantBitwiseNotFold {
     expect(result.report.optimizations.some((item) => item.name === "expression-constant-folder")).toBe(true);
   });
 
+  it("preloads indexed initializer list literal elements after bank lowering", () => {
+    const result = compileOk(`
+program IndexedInitializerListPreloads {
+  state {
+    slots: packed[1..2] = [11, 22]
+  }
+  loop {
+    halt(slots[1] + slots[2])
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.preloads.some((item) => item.value === "11")).toBe(true);
+    expect(result.report.preloads.some((item) => item.value === "22")).toBe(true);
+  });
+
+  it("preloads MK-61 bitwise constants that have display-literal mantissa cells", () => {
+    const result = compileOk(`
+program BitwiseDisplayLiteralPreload {
+  state {
+    walls: packed[1..1] = [bit_or(1.0080808, 1.7062264)]
+  }
+  loop {
+    halt(walls[1])
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.preloads.some((item) => item.value === "8.70Е2-6С")).toBe(true);
+    expect(result.report.setupProgram?.reason).toContain("walls_1");
+  });
+
   it("folds constant max calls with MK-61 zero ordering", () => {
     const result = compileOk(`
 program ConstantMaxZeroFold {
