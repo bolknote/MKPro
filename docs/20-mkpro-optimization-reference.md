@@ -397,8 +397,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 14. `dead-store-elimination` — removes stores whose target register is not live after the write and does not affect number-entry/input finalization.
 15. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding `X->П`.
 16. `r0-fractional-sentinel` — drops redundant immediate `П->X 3` after fractional-R0 indirect access when `R0` is already known to be non-live.
-17. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` in `report.optimizations`.
-18. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a display-aware `ВП`/X2 marker.
+17. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` in `report.optimizations` when one or more cells are removed.
+18. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a display-aware `ВП`/X2 marker and reports `vp-fraction-restore` when one or more restores are removed.
 19. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
 20. `duplicate-failure-tail-merge` — removes duplicated `(label -> 0 -> pause)` failure tails by redirecting the first tail to the second.
 21. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.
@@ -414,6 +414,7 @@ Setup generation is separate from main program layout when needed:
 
 - `generated-setup-program` indicates that a setup routine was emitted.
 - `preloaded-constant` and `constant-synthesis` entries describe synthetic constants.
+- `intent-state-lowering` — moves declared state initialization into generated setup by emitting setup `store` operations and records that state-related initialization was lowered out of the main path.
 - `auto-preload-initial-state` and `intent-state-lowering` can push selected state to setup only.
 - `raw-block-contract` — records and applies the input/output/clobber/preserve contract for raw `core` blocks in helper emission.
 - `intent-read-lowering`, `show-read-*` may force setup when runtime behavior or literals require state initialization.
