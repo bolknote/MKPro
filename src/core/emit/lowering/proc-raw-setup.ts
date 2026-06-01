@@ -80,6 +80,7 @@ import {
 } from "../../opcodes.ts";
 import type {
   ConditionAst,
+  ProcAst,
   StateFieldAst,
 } from "../../types.ts";
 
@@ -536,7 +537,8 @@ function emitSetupNumericPreloadAction(
 }
 
 export function compileProcedures(ctx: LoweringCtx): void {
-    for (const proc of ctx.ast.procs) {
+    const order = procEmissionOrder(ctx);
+    for (const proc of order) {
       if (ctx.inlineProcNames.has(proc.name)) continue;
       ctx.emitLabel(proc.name);
       ctx.compileWithinProcedure(proc, () => {
@@ -559,6 +561,21 @@ export function compileProcedures(ctx: LoweringCtx): void {
         }
       });
     }
+}
+
+// Order in which non-inline procedures are emitted. Default is source order;
+// the `orderProcsByCallCount` variant emits the most frequently called procs
+// first (stable on ties) so they occupy the lowest, cheapest addresses. Procs
+// are reached only through label references, so any order is behavior-preserving.
+function procEmissionOrder(ctx: LoweringCtx): readonly ProcAst[] {
+    if (ctx.loweringOptions.orderProcsByCallCount !== true) return ctx.ast.procs;
+    return ctx.ast.procs
+      .map((proc, index) => ({ proc, index }))
+      .sort((a, b) => {
+        const byCount = (ctx.procCallCounts.get(b.proc.name) ?? 0) - (ctx.procCallCounts.get(a.proc.name) ?? 0);
+        return byCount !== 0 ? byCount : a.index - b.index;
+      })
+      .map((entry) => entry.proc);
 }
 
 function compileXParamReturnDecayBody(

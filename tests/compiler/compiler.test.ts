@@ -2881,4 +2881,49 @@ program TerminalLoopScreen {
 
     expect(result.report.optimizations.some((item) => item.name === "terminal-loop-screen-elision")).toBe(true);
   });
+
+  it("orders procedures by descending call count under orderProcsByCallCount", () => {
+    const source = `
+program ProcCallLayout {
+  state {
+    x: packed = 0
+  }
+  fn cold() {
+    x = x + 1
+    x = x * 7
+    x = x - 3
+    x = x + 9
+  }
+  fn hot() {
+    x = x + 2
+    x = x * 5
+    x = x - 4
+    x = x + 8
+  }
+  loop {
+    x = read()
+    hot()
+    cold()
+    hot()
+    cold()
+    hot()
+    show(x)
+  }
+}
+`;
+    const labelIndex = (items: ReturnType<typeof compileLoweringVariantForTest>["items"], name: string): number =>
+      items.findIndex((item) => item.kind === "label" && item.name === name);
+
+    const sourceOrder = compileLoweringVariantForTest(source, { budget: 999, analysis: true }, {});
+    // Both procs survive as subroutines (called more than once), in source order.
+    expect(labelIndex(sourceOrder.items, "cold")).toBeGreaterThanOrEqual(0);
+    expect(labelIndex(sourceOrder.items, "hot")).toBeGreaterThanOrEqual(0);
+    expect(labelIndex(sourceOrder.items, "cold")).toBeLessThan(labelIndex(sourceOrder.items, "hot"));
+
+    const callCountOrder = compileLoweringVariantForTest(source, { budget: 999, analysis: true }, {
+      orderProcsByCallCount: true,
+    });
+    // hot() is called 3x vs cold() 2x, so it is emitted first (lowest address).
+    expect(labelIndex(callCountOrder.items, "hot")).toBeLessThan(labelIndex(callCountOrder.items, "cold"));
+  });
 });

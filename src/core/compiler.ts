@@ -367,6 +367,16 @@ interface LoweringOptions {
   // CompileResult.coalesceShares so a follow-up compile can reclaim the freed
   // registers for preloaded constants. Set only on the internal trial compile.
   collectCoalesceShares?: boolean;
+  // Emit non-inline procedures in descending static call-count order instead of
+  // source order, so the most frequently called helpers land at the lowest
+  // addresses. On overflowing programs those low addresses stay inside the
+  // official window (<=104), letting their calls remain cheap direct `ПП`/become
+  // single-cell indirect flow, while rarely called procs are pushed into the
+  // dark tail where an extra address cell matters least. Pure placement change
+  // (procs are reached only through label references, never fall-through), so it
+  // cannot change behavior; speculative because address shifts perturb the
+  // layout-sensitive indirect-flow passes, and it is adopted only when smaller.
+  orderProcsByCallCount?: boolean;
   // Pin each freed register onto its coalesce target BEFORE preload allocation,
   // reproducing the non-overlapping coalescing the IR pass would otherwise do
   // only after lowering. Freeing the register at allocation time lets the
@@ -452,6 +462,12 @@ interface DisplayPlanningContext {
 // compiles one losing candidate; a false negative is impossible.
 function sourceMayContainErrorTrap(source: string): boolean {
   return source.includes("ЕГГ");
+}
+
+// Cheap gate for the proc-layout variants: reordering procedures by call count
+// can only change anything when there are at least two declared procedures.
+function sourceHasMultipleProcs(source: string): boolean {
+  return (source.match(/\bfn\b/gu) ?? []).length >= 2;
 }
 
 export function compileMKPro(
@@ -625,6 +641,18 @@ export function compileMKPro(
       { domainErrorGuards: true, unrollCountedLoops: true },
       "domain-error-guards-unroll",
       "Combined domain-error guards with counted-loop unrolling",
+    );
+  }
+  if (sourceHasMultipleProcs(source)) {
+    tryCandidate(
+      { orderProcsByCallCount: true },
+      "call-count-proc-layout",
+      "Emitted procedures in descending call-count order so hot helpers occupy the cheapest addresses",
+    );
+    tryCandidate(
+      { orderProcsByCallCount: true, hoistProcs: true, hoistSharedHelpers: true },
+      "call-count-hoisted-proc-layout",
+      "Combined call-count proc ordering with front-hoisted procs and shared helpers for single-cell indirect flow",
     );
   }
   tryCandidate(
