@@ -276,10 +276,11 @@ function toKeycaps(mnemonic: string): string {
 }
 
 function formatSetupPreloadKeys(preloads: readonly PreloadReport[]): string[] {
-  return preloads.flatMap((preload) => {
-    const value = executableSetupValue(preload.value);
-    return value === undefined ? [] : [value, `X->П ${preload.register}`];
-  });
+  return groupSetupPreloadsByExecutableValue(executableSetupPreloadEntries(preloads))
+    .flatMap((group) => [
+      group.value,
+      ...group.preloads.map((preload) => `X->П ${preload.register}`),
+    ]);
 }
 
 function formatProgramPatchKeys(patch: ProgramPatchReport): string[] {
@@ -304,39 +305,69 @@ function formatSetupPreloadRows(preloads: readonly PreloadReport[]): ListingRow[
   const setupPreloads = preloads.filter((preload) => formatSetupAssignment(preload) !== undefined);
   if (setupPreloads.length === 0) return [];
   if (setupPreloads.some((preload) => executableSetupValue(preload.value) === undefined)) return undefined;
-  return setupPreloadSteps(setupPreloads).map((step) => stepToListingRow(step));
+  return setupPreloadRows(setupPreloads);
 }
 
-function setupPreloadSteps(preloads: readonly PreloadReport[]): ResolvedStep[] {
-  const steps: ResolvedStep[] = [];
+function setupPreloadRows(preloads: readonly PreloadReport[]): ListingRow[] {
+  const rows: ListingRow[] = [];
   let address = 0;
-  for (const preload of preloads) {
-    const value = executableSetupValue(preload.value);
-    if (value === undefined) continue;
-    const emitter = new MachineEmitter();
-    emitter.emitNumber(value);
-    for (const item of emitter.items) {
-      if (item.kind !== "op") continue;
-      steps.push(setupResolvedStep(address, item.opcode, item.mnemonic, item.comment));
+  for (const group of groupSetupPreloadsByExecutableValue(executableSetupPreloadEntries(preloads))) {
+    rows.push({ address, hex: "-", mnemonic: group.value });
+    address += 1;
+    for (const preload of group.preloads) {
+      const register = registerFromText(preload.register);
+      const opcode = 0x40 + registerIndex(register);
+      rows.push({
+        address,
+        hex: getOpcode(opcode).hex,
+        mnemonic: getOpcode(opcode).name,
+        comment: `setup R${preload.register}`,
+      });
       address += 1;
     }
-    const register = registerFromText(preload.register);
-    const opcode = 0x40 + registerIndex(register);
-    steps.push(setupResolvedStep(address, opcode, getOpcode(opcode).name, `setup R${preload.register}`));
-    address += 1;
   }
-  return steps;
+  return rows;
 }
 
-function setupResolvedStep(address: number, opcode: number, mnemonic: string, comment?: string): ResolvedStep {
-  const step: ResolvedStep = {
-    address,
-    opcode,
-    hex: getOpcode(opcode).hex,
-    mnemonic,
-  };
-  if (comment !== undefined) step.comment = comment;
-  return step;
+interface ExecutableSetupPreloadEntry {
+  preload: PreloadReport;
+  value: string;
+}
+
+interface ExecutableSetupPreloadGroup {
+  value: string;
+  preloads: PreloadReport[];
+}
+
+function executableSetupPreloadEntries(preloads: readonly PreloadReport[]): ExecutableSetupPreloadEntry[] {
+  const entries: ExecutableSetupPreloadEntry[] = [];
+  for (const preload of preloads) {
+    const value = executableSetupValue(preload.value);
+    if (value !== undefined) entries.push({ preload, value });
+  }
+  return entries;
+}
+
+function groupSetupPreloadsByExecutableValue(
+  entries: readonly ExecutableSetupPreloadEntry[],
+): ExecutableSetupPreloadGroup[] {
+  const consumed = new Set<number>();
+  const groups: ExecutableSetupPreloadGroup[] = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    if (consumed.has(index)) continue;
+    const entry = entries[index]!;
+    const preloads = [entry.preload];
+    consumed.add(index);
+    for (let other = index + 1; other < entries.length; other += 1) {
+      if (consumed.has(other)) continue;
+      const candidate = entries[other]!;
+      if (candidate.value !== entry.value) continue;
+      preloads.push(candidate.preload);
+      consumed.add(other);
+    }
+    groups.push({ value: entry.value, preloads });
+  }
+  return groups;
 }
 
 function formatManualSetupKeys(result: CompileResult): string[] {

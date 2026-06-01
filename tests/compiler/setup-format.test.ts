@@ -63,11 +63,13 @@ describe("setup formatting", () => {
       "`R8=0.5; R1=5000.999; R2=5000.999; R3=5000.999; R4=0; R5=0; R6=0; R7=25000; Ra=1E3; Rb=1E4; Re=8.1020088E14`",
     );
     expect(listing).toContain("# Setup Listing");
-    expect(listing).toContain("   00 |  00  | 0");
-    expect(listing).toContain("   01 |  0A  | .");
-    expect(listing).toContain("   03 |  48  | X→П 8");
-    expect(listing).toContain("   42 |  47  | X→П 7");
-    expect(listing).toContain("   63 |  4E  | X→П e");
+    expect(listing).toContain("   00 |   -  | 0.5");
+    expect(listing).toContain("   02 |   -  | 5000.999");
+    expect(listing).toContain("   03 |  41  | X→П 1");
+    expect(listing).toContain("   04 |  42  | X→П 2");
+    expect(listing).toContain("   05 |  43  | X→П 3");
+    expect(listing).toContain("   10 |   -  | 25000");
+    expect(listing).toContain("   17 |  4E  | X→П e");
     expect(listing).toContain("# Main Listing");
   });
 

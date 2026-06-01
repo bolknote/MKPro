@@ -93,41 +93,42 @@ interface RepeatedIndexedSetupGroup {
   maxRegisterIndex: number;
 }
 
-type SetupNumericPreloadAction =
-  | { kind: "direct"; targetIndex: number; cost: number }
-  | {
-      kind: "pow10";
-      targetIndex: number;
-      cost: number;
-      exponent: string;
-      detail: string;
-    }
-  | {
-      kind: "unary";
-      targetIndex: number;
-      cost: number;
-      sourceIndex: number;
-      opcode: number;
-      mnemonic: string;
-      detail: string;
-    }
-  | {
-      kind: "unary-sequence";
-      targetIndex: number;
-      cost: number;
-      sourceIndex: number;
-      ops: Array<{ opcode: number; mnemonic: string; comment: string }>;
-      detail: string;
-    }
-  | {
-      kind: "binary";
-      targetIndex: number;
-      cost: number;
-      leftIndex: number;
-      rightIndex: number;
-      op: "+" | "-" | "*" | "/" | "pow";
-      detail: string;
-    };
+type SetupNumericPreloadAction = { extraTargetIndexes?: number[] } & (
+    | { kind: "direct"; targetIndex: number; cost: number }
+    | {
+        kind: "pow10";
+        targetIndex: number;
+        cost: number;
+        exponent: string;
+        detail: string;
+      }
+    | {
+        kind: "unary";
+        targetIndex: number;
+        cost: number;
+        sourceIndex: number;
+        opcode: number;
+        mnemonic: string;
+        detail: string;
+      }
+    | {
+        kind: "unary-sequence";
+        targetIndex: number;
+        cost: number;
+        sourceIndex: number;
+        ops: Array<{ opcode: number; mnemonic: string; comment: string }>;
+        detail: string;
+      }
+    | {
+        kind: "binary";
+        targetIndex: number;
+        cost: number;
+        leftIndex: number;
+        rightIndex: number;
+        op: "+" | "-" | "*" | "/" | "pow";
+        detail: string;
+      }
+  );
 
 const MAX_EXACT_SETUP_CONSTANT_SYNTHESIS_PRELOADS = 10;
 
@@ -153,8 +154,18 @@ export function compileSetupProgramWithPreloads(ctx: LoweringCtx,
     const emitNumericSegment = (): void => {
       for (const action of setupNumericPreloadActions(numericSegment)) {
         emitSetupNumericPreloadAction(ctx, numericSegment, action);
-        const preload = numericSegment[action.targetIndex]!;
-        ctx.emitOp(0x40 + registerIndex(preload.register), `X->П ${preload.register}`, `setup R${preload.register}`, undefined, true);
+        const targets = setupNumericActionTargetIndexes(action);
+        for (const targetIndex of targets) {
+          const preload = numericSegment[targetIndex]!;
+          ctx.emitOp(0x40 + registerIndex(preload.register), `X->П ${preload.register}`, `setup R${preload.register}`, undefined, true);
+        }
+        if (targets.length > 1) {
+          const registers = targets.map((targetIndex) => `R${numericSegment[targetIndex]!.register}`).join(", ");
+          ctx.optimizations.push({
+            name: "duplicate-preload-store-reuse",
+            detail: `Loaded setup constant ${normalizeConstantLiteral(numericSegment[action.targetIndex]!.value)} once and stored it into ${registers}.`,
+          });
+        }
       }
       numericSegment = [];
     };
@@ -314,11 +325,7 @@ function setupNumericPreloadActions(preloads: readonly NumericSetupPreload[]): S
     const count = preloads.length;
     if (count === 0) return [];
     if (count > MAX_EXACT_SETUP_CONSTANT_SYNTHESIS_PRELOADS) {
-      return preloads.map((preload, targetIndex) => ({
-        kind: "direct",
-        targetIndex,
-        cost: estimateNumberCost(preload.value),
-      }));
+      return directSetupNumericPreloadActions(preloads);
     }
     const normalized = preloads.map((preload) => normalizeConstantLiteral(preload.value));
     const numeric = normalized.map((value) => Number(value));
@@ -329,7 +336,10 @@ function setupNumericPreloadActions(preloads: readonly NumericSetupPreload[]): S
     best[0] = 0;
 
     const apply = (mask: number, action: SetupNumericPreloadAction): void => {
-      const nextMask = mask | (1 << action.targetIndex);
+      const targets = setupNumericActionTargetIndexes(action);
+      if (targets.some((targetIndex) => (mask & (1 << targetIndex)) !== 0)) return;
+      let nextMask = mask;
+      for (const targetIndex of targets) nextMask |= 1 << targetIndex;
       const nextCost = best[mask]! + action.cost;
       if (nextCost >= best[nextMask]!) return;
       best[nextMask] = nextCost;
@@ -340,19 +350,19 @@ function setupNumericPreloadActions(preloads: readonly NumericSetupPreload[]): S
       if (!Number.isFinite(best[mask]!)) continue;
       for (let targetIndex = 0; targetIndex < count; targetIndex += 1) {
         if ((mask & (1 << targetIndex)) !== 0) continue;
-        apply(mask, { kind: "direct", targetIndex, cost: directCosts[targetIndex]! });
+        apply(mask, withDuplicateSetupTargets(
+          { kind: "direct", targetIndex, cost: directCosts[targetIndex]! },
+          normalized,
+          mask,
+        ));
         for (const action of setupConstantSynthesisActions(preloads, normalized, numeric, directCosts, mask, targetIndex)) {
-          apply(mask, action);
+          apply(mask, withDuplicateSetupTargets(action, normalized, mask));
         }
       }
     }
 
     if (!Number.isFinite(best[fullMask]!)) {
-      return preloads.map((preload, targetIndex) => ({
-        kind: "direct",
-        targetIndex,
-        cost: estimateNumberCost(preload.value),
-      }));
+      return directSetupNumericPreloadActions(preloads);
     }
     const actions: SetupNumericPreloadAction[] = [];
     for (let mask = fullMask; mask !== 0;) {
@@ -362,6 +372,47 @@ function setupNumericPreloadActions(preloads: readonly NumericSetupPreload[]): S
       mask = step.mask;
     }
     return actions.reverse();
+}
+
+function directSetupNumericPreloadActions(preloads: readonly NumericSetupPreload[]): SetupNumericPreloadAction[] {
+    const normalized = preloads.map((preload) => normalizeConstantLiteral(preload.value));
+    const covered = new Set<number>();
+    const actions: SetupNumericPreloadAction[] = [];
+    for (let targetIndex = 0; targetIndex < preloads.length; targetIndex += 1) {
+      if (covered.has(targetIndex)) continue;
+      const value = normalized[targetIndex]!;
+      const extraTargetIndexes: number[] = [];
+      for (let index = targetIndex + 1; index < preloads.length; index += 1) {
+        if (!covered.has(index) && normalized[index] === value) extraTargetIndexes.push(index);
+      }
+      const action: SetupNumericPreloadAction = {
+        kind: "direct",
+        targetIndex,
+        cost: estimateNumberCost(preloads[targetIndex]!.value),
+        ...(extraTargetIndexes.length === 0 ? {} : { extraTargetIndexes }),
+      };
+      for (const index of setupNumericActionTargetIndexes(action)) covered.add(index);
+      actions.push(action);
+    }
+    return actions;
+}
+
+function withDuplicateSetupTargets(
+  action: SetupNumericPreloadAction,
+  normalized: readonly string[],
+  loadedMask: number,
+): SetupNumericPreloadAction {
+    const value = normalized[action.targetIndex]!;
+    const extraTargetIndexes: number[] = [];
+    for (let index = action.targetIndex + 1; index < normalized.length; index += 1) {
+      if ((loadedMask & (1 << index)) !== 0) continue;
+      if (normalized[index] === value) extraTargetIndexes.push(index);
+    }
+    return extraTargetIndexes.length === 0 ? action : { ...action, extraTargetIndexes };
+}
+
+function setupNumericActionTargetIndexes(action: SetupNumericPreloadAction): number[] {
+    return [action.targetIndex, ...(action.extraTargetIndexes ?? [])];
 }
 
 function setupConstantSynthesisActions(
