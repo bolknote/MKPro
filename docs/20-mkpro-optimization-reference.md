@@ -111,6 +111,10 @@ These transformations run on source constructs before machine lowering:
 - `constant-guarded-call-inline` — inlines a guarded call when used once and safe.
 - `common-branch-tail-hoisting` — merges identical tails from similar branches.
 - `single-use-tail-inline` — inlines a one-time tail instead of emitting a separate call.
+- `expression-helper` — builds a shared helper for a pure, expensive expression when repeated use count makes it profitable after cost gating.
+- `expression-helper-call` — replaces repeated inline compilation of the same pure expression with a helper call (`ПП`) when that helper already exists.
+- `near-any-helper` — emits a shared helper for `near_any`-style checks that computes absolute deltas and compares against a precomputed radius.
+- `single-use-guard-substitution` — removes a one-shot assignment if it can be substituted directly into a following condition and the lowered cost is strictly lower.
 - `compact-dispatch-simplification` — compresses small dispatches to a minimal jump tree.
 - `one-shot-loop-init-hoist` — hoists loop initialization that runs once out of repeated body.
 - `if-branch-order-inversion` — reorders condition branches so profitable paths are checked earlier.
@@ -146,8 +150,16 @@ The control-flow family is where the largest byte savings are found.
 - `if-branch-order-inversion` — reorders branches so downstream lowering is shorter.
 - `x-preserving-false-branch` — preserves current X value in the false branch.
 - `small-set-condition-lowering` — lowers small `set` conditions to compact code.
-- `cell-membership-*` patterns — tests “is in set” using short branch patterns.
-- helper-conditioned transforms — moves conditional checks so a helper pass can simplify them.
+- `cell-membership-clear-reuse` — reuses a computed membership mask when clearing a bit and eliminates duplicate `bit_mask` construction.
+- `cell-membership-set-reuse` — reuses a computed membership mask when setting one cell in an `if` suffix.
+- `cell-membership-mask-run-reuse` — extends membership mask reuse across a short run of set updates.
+- `bit-mask-condition-helper` — lowers `bit_has(mask, index)` comparisons through a shared bit-mask helper (`ПП` + test opcode).
+- `spatial-hit-condition-helper` — routes `bit_has(...)` conditions through the shared spatial-hit helper path.
+- `near-any-helper-lowering` — replaces near-threshold comparisons with a shared near-any helper when helper statistics show lower total cost.
+- `remainder-zero-test-lowering` — lowers `%` comparisons to zero into quotient/fraction checks with one direct zero test.
+- `residual-elseif-compare` — fuses deterministic `if/else if` compare chains into one base compare plus residual adjustment.
+- `condition-current-x-reuse` — if one compare operand is already in X and the other is a simple stack load, emits compare directly without reloading.
+- `negative-zero-threshold-flow` — emits preloaded threshold-flow test through negative-zero selector machinery for tighter `>= / <` checks.
 
 Machine-level variants around branches:
 
@@ -219,6 +231,9 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `spatial-hit-bit-mask-helper-reuse` — reuses a prepared bit-mask for hit helper paths.
 - `spatial-neighbor-count-unroll` — unrolls small neighbor counting directly when it is shorter than a call.
 - `bit-set-mask-cse` — removes repeated bit-mask calculations for identical coordinates.
+- `single-bit-mask-op` — materializes a single-bit mask in scratch once, then applies `К ИНВ`, `К ∧`, or `К ∨` style operations.
+- `bit-mask-helper` — emits shared helper routines that build bit masks from indices once per scratch register.
+- `bit-mask-helper-call` — routes repeated `bit_mask` construction through existing helper labels instead of recompiling.
 - `bit-mask-quotient-reuse` — reuses previously computed quotients/parts for mask generation.
 - `tic-tac-toe-cell-mask-cse` — a dedicated CSE optimization for tic-tac-toe cell-mask patterns.
 
@@ -289,6 +304,7 @@ Display rewrites are separated into strategy selection + body lowering.
 - `arithmetic-if-boolean-algebra` — lowers complex boolean comparisons into masks and arithmetic.
 - `hex-mantissa-arithmetic` — simplifies hex mantissa operations, lowering instruction count.
 - `negative-zero-threshold-selector` — threshold check for `-0`/`0` when it reduces branches.
+- `decimal-factorial-series-lowering` — emits a fixed 94-digit decimal recurrence variant when encountering supported factorial-like `decimal_series` declarations.
 
 ## 12) Register allocation and liveness-driven memory trims
 
@@ -334,7 +350,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 14. `dead-store-elimination` — removes stores whose target register is not live after the write and does not affect number-entry/input finalization.
 15. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding `X->П`.
 16. `r0-fractional-sentinel` — drops redundant immediate `П->X 3` after fractional-R0 indirect access when `R0` is already known to be non-live.
-17. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms.
+17. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` in `report.optimizations`.
 18. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a display-aware `ВП`/X2 marker.
 19. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
 20. `duplicate-failure-tail-merge` — removes duplicated `(label -> 0 -> pause)` failure tails by redirecting the first tail to the second.
@@ -352,6 +368,7 @@ Setup generation is separate from main program layout when needed:
 - `generated-setup-program` indicates that a setup routine was emitted.
 - `preloaded-constant` and `constant-synthesis` entries describe synthetic constants.
 - `auto-preload-initial-state` and `intent-state-lowering` can push selected state to setup only.
+- `raw-block-contract` — records and applies the input/output/clobber/preserve contract for raw `core` blocks in helper emission.
 - `intent-read-lowering`, `show-read-*` may force setup when runtime behavior or literals require state initialization.
 - Setup helpers are themselves subject to the same optimization pipeline (`setup-...` names appear as prefixed entries).
 - `indexed-bank-loop` — initializes runs of consecutively allocated indexed bank fields with one compact setup loop when their initializers and register layout allow it.
