@@ -43,6 +43,13 @@ export interface CompileOptions {
   // already collapsed to a tail jump. Tried as a lowering variant because it
   // can perturb later layout-sensitive passes.
   tailBranchInversion?: boolean;
+  // Relax the runtime-indirect-call-flow frequency guard to its true break-even
+  // (one freed cell per rewritten call vs the one-time literal+store selector
+  // setup) instead of the conservative `+2` margin. The default margin avoids
+  // marginal rewrites that fight other indirect-flow passes for a register or
+  // shift addresses; this variant captures the break-even wins and is adopted
+  // only when the whole program ends up smaller.
+  aggressiveIndirectCallThreshold?: boolean;
 }
 
 export interface Diagnostic {

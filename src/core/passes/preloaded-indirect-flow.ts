@@ -297,7 +297,7 @@ function canBorrowRegisterForRuntimeSelector(
   return true;
 }
 
-function runtimeIndirectCallPlans(ops: readonly IrOp[]): RuntimeCallPlan[] {
+function runtimeIndirectCallPlans(ops: readonly IrOp[], breakEven = false): RuntimeCallPlan[] {
   const addresses = addressByIndex(ops);
   const labels = calculateLabelAddresses(ops);
   const targets = new Map<number, RuntimeCallTarget>();
@@ -337,7 +337,13 @@ function runtimeIndirectCallPlans(ops: readonly IrOp[]): RuntimeCallPlan[] {
   );
   for (const candidate of sorted) {
     const preloadCost = String(candidate.target).length + 1;
-    if (candidate.indices.length <= preloadCost + 2) continue;
+    // Each rewritten site saves one cell (2-cell direct `ПП addr` -> 1-cell
+    // `К ПП r`); the one-time `preloadCost` literal+store pays for the selector
+    // register. Break-even is therefore `indices.length > preloadCost`; the
+    // default keeps a `+2` margin so marginal rewrites can't perturb the other
+    // layout-sensitive indirect-flow passes for a net loss.
+    const margin = breakEven ? 0 : 2;
+    if (candidate.indices.length <= preloadCost + margin) continue;
     const selected = new Set(candidate.indices);
     const targetIndex = firstOpIndexAtAddress(ops, addresses, candidate.target);
     if (targetIndex === undefined) continue;
@@ -357,8 +363,8 @@ function runtimeIndirectCallPlans(ops: readonly IrOp[]): RuntimeCallPlan[] {
   return plans;
 }
 
-const runtimeIndirectCallRun: IrPassFn = (ops) => {
-  const plans = runtimeIndirectCallPlans(ops);
+const runtimeIndirectCallRun: IrPassFn = (ops, context) => {
+  const plans = runtimeIndirectCallPlans(ops, context.options.aggressiveIndirectCallThreshold === true);
   if (plans.length === 0) return { ops: [...ops], applied: 0, optimizations: [] };
   const byInsert = new Map<number, RuntimeCallPlan[]>();
   const byIndex = new Map<number, RuntimeCallPlan>();

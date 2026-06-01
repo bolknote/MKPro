@@ -29,8 +29,8 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | `cave-highlevel-baseline.mkpro` | 194 | 105 | source-faithful fixed wall/cache setup, prompt/result screen state, resource pressure, movement decoder, and remaining cave flow lowerers |
 | `cave-treasure.mkpro` | 165 | 105 | resource pressure, wall breaking, cache miss flow, and remaining dispatch overhead |
 | `giants-country.mkpro` | 170 | 105 | packed room-map display/flow and remaining event flow lowerers |
-| `labyrinth777.mkpro` | 206 | 105 | room inspection and local-jumper dispatch |
-| `rambo-iii.mkpro` | 133 | 105 | grouped front/robots storage, self-trapping domain-error guards (F √ / F lg), and stack-temp reuse now work; event dispatch and battle-flow branches are the remaining large blocks |
+| `labyrinth777.mkpro` | 163 | 105 | room inspection and local-jumper dispatch; break-even indirect-call guard now collapses the repeated room/jumper helper calls to single-cell `К ПП r` |
+| `rambo-iii.mkpro` | 130 | 105 | grouped front/robots storage, self-trapping domain-error guards (F √ / F lg), stack-temp reuse, and single-counter front loop (slot derived as event_target-3) now work; the remaining gap is 2-cell `ПП addr` helper calls (original uses 1-cell `К ПП r` via address-in-register) gated on the program first fitting near 105 |
 | `teleport.mkpro` | 195 | 105 | packed row display, station masks, and vault/guard flow |
 | `tic-tac-toe-4x4.mkpro` | 200 | 105 | 4x4 line-count state representation |
 

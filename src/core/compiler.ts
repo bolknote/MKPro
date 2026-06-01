@@ -435,6 +435,11 @@ interface LoweringOptions {
   // freeing a register reshuffles global allocation, so it is adopted only when
   // the whole program ends up smaller.
   stackResidentTemps?: boolean;
+  // Relax the runtime-indirect-call-flow frequency guard to break-even so a few
+  // more repeated direct helper calls collapse to one-cell `К ПП r`. Speculative
+  // because marginal rewrites can perturb the other layout-sensitive
+  // indirect-flow passes; adopted only when the whole program ends up smaller.
+  aggressiveIndirectCall?: boolean;
 }
 
 
@@ -565,6 +570,11 @@ export function compileMKPro(
     { aggressiveTerminalDirect: true, invertBranchOrder: true },
     "late-layout-if-branch-order",
     "Selected aggressive terminal-if plus inverted branch-order lowering after full layout",
+  );
+  tryCandidate(
+    { guardedPrologueGadgets: true, hoistProcs: true, aggressiveIndirectCall: true },
+    "break-even-indirect-call",
+    "Hoisted procs with guarded-prologue gadgets and a break-even indirect-call guard, collapsing many repeated direct calls to single-cell indirect flow",
   );
   tryCandidate(
     { hoistSharedHelpers: true },
@@ -1624,6 +1634,7 @@ function compileMKProOnce(
   // The copy-coalescing (Form 2) lowering variant reaches the register-coalesce
   // IR pass through CompileOptions, since IR passes do not see LoweringOptions.
   if (loweringOptions.coalesceCopies === true) opts.coalesceCopies = true;
+  if (loweringOptions.aggressiveIndirectCall === true) opts.aggressiveIndirectCallThreshold = true;
   const machineProfile = MK61_PROFILE;
   const diagnostics: Diagnostic[] = [];
   const optimizations: AppliedOptimization[] = [];
