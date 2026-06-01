@@ -751,7 +751,7 @@ Optimizations:
 
 Optimizer Capabilities:
   - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: candidate; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -1163,7 +1163,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -1237,7 +1237,7 @@ Steps: 8/999999
 Delivery: hex
 Optimizer: exact maximum
 Machine: mk61
-Optimizer rules: automatic=yes; active=5, considered=0, candidates=48, planned=0
+Optimizer rules: automatic=yes; active=4, considered=0, candidates=49, planned=0
 Budget: official=8, extra=0, physical=8
 Intent IR: lowered=yes, v2=yes; intent=16, effects=8, cells=8
 
@@ -1262,12 +1262,12 @@ Optimizations:
   - intent-read-lowering: Lowered read at line 13 to calculator stop plus register store.
   - intent-read-lowering: Lowered read at line 14 to calculator stop plus register store.
   - stack-current-x-scheduling: Reused y already in X for commutative +.
-  - store-recall-peephole: Dropped 1 redundant П->X immediately after X->П to the same register.
-  - dead-store-elimination: Removed 2 store(s) to register(s) never read before the next assignment.
+  - stack-current-x-scheduling: Kept single-use temp result in X for the following result at line 16.
+  - dead-store-elimination: Removed 1 store(s) to register(s) never read before the next assignment.
 
 Optimizer Capabilities:
-  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
+  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: candidate; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -1483,7 +1483,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -1719,7 +1719,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -2003,7 +2003,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -2297,7 +2297,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -2447,7 +2447,7 @@ Optimizations:
 
 Optimizer Capabilities:
   - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: candidate; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -2789,7 +2789,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -3105,7 +3105,7 @@ Optimizations:
 
 Optimizer Capabilities:
   - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -3241,7 +3241,7 @@ Optimizations:
 
 Optimizer Capabilities:
   - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: candidate; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -3657,7 +3657,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -3818,7 +3818,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -4254,7 +4254,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -4481,7 +4481,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -4741,7 +4741,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -5003,7 +5003,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -5496,7 +5496,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -6019,7 +6019,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -6470,7 +6470,7 @@ Labels:
 
 Optimizations:
   - expression-constant-folder: Folded 5 constant expression node(s) before code generation.
-  - if-chain-dispatch-canonicalization: Collapsed 1 constant if/else-if chain into single-evaluation dispatch.
+  - if-chain-dispatch-canonicalization: Collapsed 1 constant if/else-if chain into single-evaluation dispatch, including inverted != arms when present.
   - dead-state-elimination: Removed 2 unobserved state fields before register allocation.
   - identity-assignment-elimination: Removed 2 identity assignments before register allocation.
   - common-branch-tail-hoisting: Hoisted 1 shared branch tail and simplified 0 conditional shapes.
@@ -6553,7 +6553,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -7168,7 +7168,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -7516,7 +7516,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -8034,7 +8034,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -8449,7 +8449,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -8806,7 +8806,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -9147,7 +9147,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -9308,7 +9308,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -9728,7 +9728,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -10143,7 +10143,7 @@ Candidates:
 
 Optimizer Capabilities:
   - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.
+  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.

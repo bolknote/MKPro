@@ -2629,6 +2629,31 @@ program IndexedGroupState {
     expect(result.steps.some((step) => step.mnemonic?.startsWith("К П->X"))).toBe(true);
   });
 
+  it("derives sibling indexed selectors from a cached selector for the same index", () => {
+    const result = compileOk(`
+program IndexedSelectorSiblingReuse {
+  state {
+    line: group(1..3) {
+      front: packed = 10
+      robots: packed = 0
+    }
+    i: counter 1..2 = 1
+    j: counter 0..1 = 1
+    order: packed = 3
+  }
+
+  loop {
+    line[i + j + j].robots += order
+    line[i + j + j].front -= 1
+    halt(line[1].front)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "indexed-selector-cache")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "indexed selector reuse line.front")).toBe(true);
+  });
+
   it("specializes constant indexed rule calls before lowering", () => {
     const result = compileOk(`
 program ConstantIndexedRuleSpecialization {
@@ -2761,6 +2786,30 @@ program CurrentXCommutativeCall {
       item.detail.includes("frac(blocked)") &&
       item.detail.includes("bit_and")
     )).toBe(true);
+  });
+
+  it("keeps a single-use temporary in X for the following expression", () => {
+    const result = compileOk(`
+program SingleUseStackTemp {
+  state {
+    a: packed = 4
+    tmp: packed = 0
+    out: packed = 0
+  }
+
+  loop {
+    tmp = a + 1
+    out = tmp * 2
+    halt(out)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) =>
+      item.name === "stack-current-x-scheduling" &&
+      item.detail.includes("single-use temp tmp")
+    )).toBe(true);
+    expect(result.steps.some((step) => step.comment === "set tmp")).toBe(false);
   });
 
   it("decrements a zero-reachable counter through the indirect pre-decrement, not F Lx", () => {

@@ -46,18 +46,51 @@ const SOURCE = `program IfChainProbe {
 
 const compiled = compileMKPro(SOURCE, { budget: 999 });
 
-function run(a: number, b: number): number {
+const NEGATIVE_SOURCE = `program NegativeIfChainProbe {
+  state {
+    a: counter 0..9 = 0
+    b: counter 0..9 = 0
+    result: counter 0..99 = 0
+  }
+  loop {
+    if a + b != 1 {
+      if a + b != 2 {
+        if a + b != 3 {
+          result = 99
+        }
+        else {
+          result = 33
+        }
+      }
+      else {
+        result = 22
+      }
+    }
+    else {
+      result = 11
+    }
+    halt(result)
+  }
+}`;
+
+const negativeCompiled = compileMKPro(NEGATIVE_SOURCE, { budget: 999 });
+
+function runProgram(compiledProgram: typeof compiled, a: number, b: number): number {
   const calc = new MK61();
-  calc.loadProgram(compiled.steps.map((step) => step.opcode));
-  for (const preload of compiled.report.preloads) {
+  calc.loadProgram(compiledProgram.steps.map((step) => step.opcode));
+  for (const preload of compiledProgram.report.preloads) {
     if (preload.countsAgainstProgram === false) calc.setRegister(preload.register, String(preload.value));
   }
-  calc.setRegister(compiled.report.registers.a!, String(a));
-  calc.setRegister(compiled.report.registers.b!, String(b));
-  calc.setRegister(compiled.report.registers.result!, "0");
+  calc.setRegister(compiledProgram.report.registers.a!, String(a));
+  calc.setRegister(compiledProgram.report.registers.b!, String(b));
+  calc.setRegister(compiledProgram.report.registers.result!, "0");
   calc.pressSequence(["В/О", "С/П"]);
   calc.runUntilStable({ maxFrames: 400, stableFrames: 5 });
   return Number(calc.displayText().replace(/\s/gu, "").replace(/,$/u, "").replace(",", "."));
+}
+
+function run(a: number, b: number): number {
+  return runProgram(compiled, a, b);
 }
 
 const expected = (sum: number): number => (sum === 1 ? 11 : sum === 2 ? 22 : sum === 3 ? 33 : 99);
@@ -71,6 +104,14 @@ describe("if/else-if chain dispatch canonicalization", () => {
   it("preserves first-match priority and the default arm on the emulator", () => {
     for (const [a, b] of [[0, 1], [1, 1], [2, 1], [0, 0], [4, 5], [3, 0], [0, 2], [1, 2]] as const) {
       expect(run(a, b)).toBe(expected(a + b));
+    }
+  });
+
+  it("also canonicalizes inverted != chains", () => {
+    const names = negativeCompiled.report.optimizations.map((optimization) => optimization.name);
+    expect(names).toContain("if-chain-dispatch-canonicalization");
+    for (const [a, b] of [[0, 1], [1, 1], [2, 1], [0, 0], [4, 5], [3, 0], [0, 2], [1, 2]] as const) {
+      expect(runProgram(negativeCompiled, a, b)).toBe(expected(a + b));
     }
   });
 });

@@ -239,6 +239,38 @@ const PARAMETRIC_SIBLING_PREFIX = "__param_sibling_";
 const INTERNAL_NAME_PREFIX = "__mkpro_";
 const FUNCTION_TAIL_ARG_PREFIX = `${INTERNAL_NAME_PREFIX}tail_arg_`;
 
+const STACK_TEMP_UNARY_CALL_OPCODES: Readonly<Record<string, readonly [number, string]>> = {
+  abs: [0x31, "К |x|"],
+  sign: [0x32, "К ЗН"],
+  int: [0x34, "К [x]"],
+  frac: [0x35, "К {x}"],
+  sqr: [0x22, "F x^2"],
+  inv: [0x23, "F 1/x"],
+  sqrt: [0x21, "F sqrt"],
+  lg: [0x17, "F lg"],
+  ln: [0x18, "F ln"],
+  sin: [0x1c, "F sin"],
+  cos: [0x1d, "F cos"],
+  tg: [0x1e, "F tg"],
+  asin: [0x19, "F sin^-1"],
+  acos: [0x1a, "F cos^-1"],
+  atg: [0x1b, "F tg^-1"],
+  exp: [0x16, "F e^x"],
+  pow10: [0x15, "F 10^x"],
+  bit_not: [0x3a, "К ИНВ"],
+  to_min: [0x26, "К °->′"],
+  to_sec: [0x2a, "К °->′\""],
+  from_sec: [0x30, "К °<-′\""],
+  from_min: [0x33, "К °<-′"],
+};
+
+const STACK_TEMP_BINARY_CALL_OPCODES: Readonly<Record<string, readonly [number, string]>> = {
+  max: [0x36, "К max"],
+  bit_and: [0x37, "К ∧"],
+  bit_or: [0x38, "К ∨"],
+  bit_xor: [0x39, "К ⊕"],
+};
+
 function functionTailArgScratchName(functionName: string, index: number): string {
   return `${FUNCTION_TAIL_ARG_PREFIX}${functionName}_${index}`;
 }
@@ -457,6 +489,14 @@ interface DisplayPlanningContext {
   // this also surfaces `coord` fields (whose bounds live in the board geometry,
   // not in `ast.states`) so the video-cell planner can measure them.
   displayFieldBounds(source: string): { min: number; max: number } | undefined;
+}
+
+export interface BankSelectorCacheEntry {
+  key: string;
+  deps: ReadonlySet<string>;
+  base: string;
+  indexText: string;
+  offset: number;
 }
 
 
@@ -3027,14 +3067,14 @@ function canonicalizeConstantIfChains(ast: ProgramAst, optimizations: AppliedOpt
   if (converted === 0) return;
   optimizations.push({
     name: "if-chain-dispatch-canonicalization",
-    detail: `Collapsed ${converted} constant if/else-if chain${converted === 1 ? "" : "s"} into single-evaluation dispatch.`,
+    detail: `Collapsed ${converted} constant if/else-if chain${converted === 1 ? "" : "s"} into single-evaluation dispatch, including inverted != arms when present.`,
   });
 }
 
 function buildDispatchFromIfChain(
   root: Extract<StatementAst, { kind: "if" }>,
 ): DispatchStatementAst | undefined {
-  const first = matchEqualityConstantCondition(root.condition);
+  const first = matchConstantDispatchCondition(root.condition);
   if (first === undefined || !expressionIsDeterministic(first.expr)) return undefined;
 
   const cases: DispatchCaseAst[] = [];
@@ -3043,23 +3083,28 @@ function buildDispatchFromIfChain(
   let defaultBody: StatementAst[] | undefined;
 
   while (current !== undefined) {
-    const matched = matchEqualityConstantCondition(current.condition);
+    const matched = matchConstantDispatchCondition(current.condition);
     if (matched === undefined || !expressionEquals(matched.expr, first.expr) || seen.has(matched.value)) {
       defaultBody = [current];
       break;
     }
-    seen.add(matched.value);
-    cases.push({ value: numberExpression(matched.value), body: current.thenBody, line: current.line });
-    const elseBody: StatementAst[] | undefined = current.elseBody;
-    if (elseBody === undefined || elseBody.length === 0) {
+    const caseBody: StatementAst[] | undefined = matched.inverted ? current.elseBody : current.thenBody;
+    const continuation: StatementAst[] | undefined = matched.inverted ? current.thenBody : current.elseBody;
+    if (caseBody === undefined) {
+      defaultBody = [current];
       break;
     }
-    const onlyElse: StatementAst | undefined = elseBody[0];
-    if (elseBody.length === 1 && onlyElse?.kind === "if") {
-      current = onlyElse;
+    seen.add(matched.value);
+    cases.push({ value: numberExpression(matched.value), body: caseBody, line: current.line });
+    if (continuation === undefined || continuation.length === 0) {
+      break;
+    }
+    const onlyContinuation: StatementAst | undefined = continuation[0];
+    if (continuation.length === 1 && onlyContinuation?.kind === "if") {
+      current = onlyContinuation;
       continue;
     }
-    defaultBody = elseBody;
+    defaultBody = continuation;
     current = undefined;
   }
 
@@ -3072,6 +3117,25 @@ function buildDispatchFromIfChain(
     line: root.line,
     scratchId: root.line,
   };
+}
+
+function matchConstantDispatchCondition(
+  condition: ConditionAst,
+): { expr: ExpressionAst; value: number; inverted: boolean } | undefined {
+  if (condition.op === "==") {
+    const matched = matchEqualityConstantCondition(condition);
+    return matched === undefined ? undefined : { ...matched, inverted: false };
+  }
+  if (condition.op !== "!=") return undefined;
+  const rightValue = numericLiteralValue(condition.right);
+  if (rightValue !== undefined && Number.isInteger(rightValue) && numericLiteralValue(condition.left) === undefined) {
+    return { expr: condition.left, value: rightValue, inverted: true };
+  }
+  const leftValue = numericLiteralValue(condition.left);
+  if (leftValue !== undefined && Number.isInteger(leftValue) && numericLiteralValue(condition.right) === undefined) {
+    return { expr: condition.right, value: leftValue, inverted: true };
+  }
+  return undefined;
 }
 
 
@@ -3373,6 +3437,10 @@ function expressionIdentifierDeps(expr: ExpressionAst): ReadonlySet<string> {
   };
   visit(expr);
   return deps;
+}
+
+function selectorOffsetCost(offset: number): number {
+  return offset === 0 ? 0 : estimateNumberCost(String(Math.abs(offset))) + 1;
 }
 
 function statementExpressionCallees(statement: StatementAst): string[] {
@@ -4511,7 +4579,7 @@ export class EmitContext {
   // serves as the input entry; the next read() lowering consumes this instead of
   // emitting its own С/П.
   private inputArmedInX = false;
-  readonly bankSelectorCache = new Map<string, { key: string; deps: ReadonlySet<string> }>();
+  readonly bankSelectorCache = new Map<string, BankSelectorCacheEntry>();
   // Read-only program analysis is computed once and injected; the lowering code
   // reads these maps through getters so call sites stay unchanged.
   readonly analysis: ProgramAnalysis;
@@ -4791,6 +4859,11 @@ export class EmitContext {
           index += derived - 1;
           continue;
         }
+        const stackTemp = this.compileSingleUseStackTemp(statements, index);
+        if (stackTemp > 1) {
+          index += stackTemp - 1;
+          continue;
+        }
       }
       if (statement.kind === "assign" && next?.kind === "if" && compileDecrementUnderflowBranch(this, statement, next)) {
         index += 1;
@@ -5061,6 +5134,165 @@ export class EmitContext {
       detail: `Kept previous ${seed} in Y while updating ${seed} with random() for ${consumer.target} at line ${consumer.line}.`,
     });
     return 3;
+  }
+
+  compileSingleUseStackTemp(statements: readonly StatementAst[], index: number): number {
+    const temp = statements[index];
+    const consumer = statements[index + 1];
+    if (temp?.kind !== "assign" || consumer === undefined) return 0;
+    if (!this.stackTempSourceIsSafe(temp.expr)) return 0;
+    if (expressionReferencesIdentifier(temp.expr, temp.target)) return 0;
+
+    const compileConsumer = (expr: ExpressionAst, emitResult: () => void): boolean => {
+      if (countIdentifierReads(expr, temp.target) !== 1) return false;
+      if (!this.canCompileExpressionWithStackTemp(expr, temp.target)) return false;
+      compileExpression(this, temp.expr);
+      this.markCurrentX(temp.target);
+      this.compileExpressionWithStackTemp(expr, temp.target);
+      emitResult();
+      this.optimizations.push({
+        name: "stack-current-x-scheduling",
+        detail: `Kept single-use temp ${temp.target} in X for the following ${expressionToIntentText(expr)} at line ${consumer.line}.`,
+      });
+      return true;
+    };
+
+    if (consumer.kind === "assign") {
+      if (!this.stackTempValueDeadAfterConsumer(temp.target, consumer.target, statements.slice(index + 2))) return 0;
+      return compileConsumer(consumer.expr, () => this.emitStore(consumer.target, `set ${consumer.target}`, consumer.line))
+        ? 2
+        : 0;
+    }
+    if (!this.stackTempValueDeadAfterConsumer(temp.target, undefined, statements.slice(index + 2))) return 0;
+    if (consumer.kind === "halt" && consumer.literal === undefined) {
+      return compileConsumer(consumer.expr, () => this.emitOp(0x50, "С/П", "halt", consumer.line)) ? 2 : 0;
+    }
+    if (consumer.kind === "pause") {
+      return compileConsumer(consumer.expr, () => this.emitOp(0x50, "С/П", "pause", consumer.line)) ? 2 : 0;
+    }
+    if (consumer.kind === "return_value") {
+      return compileConsumer(consumer.expr, () => this.emitOp(0x52, "В/О", "return value", consumer.line)) ? 2 : 0;
+    }
+    return 0;
+  }
+
+  private stackTempSourceIsSafe(expr: ExpressionAst): boolean {
+    if (!expressionIsDeterministic(expr)) return false;
+    return expressionCallCallees(expr).length === 0;
+  }
+
+  private stackTempValueDeadAfterConsumer(
+    temp: string,
+    overwrittenByConsumer: string | undefined,
+    tail: readonly StatementAst[],
+  ): boolean {
+    return overwrittenByConsumer === temp || !statementsReadIdentifier(tail, temp);
+  }
+
+  private canCompileExpressionWithStackTemp(expr: ExpressionAst, temp: string): boolean {
+    if (countIdentifierReads(expr, temp) !== 1) return false;
+    switch (expr.kind) {
+      case "identifier":
+        return expr.name === temp;
+      case "unary":
+        return this.canCompileExpressionWithStackTemp(expr.expr, temp);
+      case "binary": {
+        const leftReads = countIdentifierReads(expr.left, temp);
+        const rightReads = countIdentifierReads(expr.right, temp);
+        if (leftReads === 1 && rightReads === 0) {
+          return this.canCompileExpressionWithStackTemp(expr.left, temp) && this.stackTempOtherOperandIsSafe(expr.right);
+        }
+        if (leftReads === 0 && rightReads === 1) {
+          return this.canCompileExpressionWithStackTemp(expr.right, temp) &&
+            this.stackTempOtherOperandIsSafe(expr.left) &&
+            (expr.op === "+" || expr.op === "*" || isSimpleStackLoad(expr.left));
+        }
+        return false;
+      }
+      case "call": {
+        const name = expr.callee.toLowerCase();
+        const unary = STACK_TEMP_UNARY_CALL_OPCODES[name];
+        if (unary !== undefined) {
+          return expr.args.length === 1 && this.canCompileExpressionWithStackTemp(expr.args[0]!, temp);
+        }
+        const binary = STACK_TEMP_BINARY_CALL_OPCODES[name];
+        if (binary === undefined || expr.args.length !== 2) return false;
+        const left = expr.args[0]!;
+        const right = expr.args[1]!;
+        const leftReads = countIdentifierReads(left, temp);
+        const rightReads = countIdentifierReads(right, temp);
+        if (leftReads === 1 && rightReads === 0) {
+          return this.canCompileExpressionWithStackTemp(left, temp) &&
+            this.stackTempOtherOperandIsSafe(right) &&
+            isSimpleStackLoad(right);
+        }
+        if (leftReads === 0 && rightReads === 1) {
+          return this.canCompileExpressionWithStackTemp(right, temp) &&
+            this.stackTempOtherOperandIsSafe(left) &&
+            isSimpleStackLoad(left);
+        }
+        return false;
+      }
+      case "number":
+      case "string":
+      case "indexed":
+        return false;
+    }
+  }
+
+  private stackTempOtherOperandIsSafe(expr: ExpressionAst): boolean {
+    return expressionCallCallees(expr).length === 0;
+  }
+
+  private compileExpressionWithStackTemp(expr: ExpressionAst, temp: string): void {
+    switch (expr.kind) {
+      case "identifier":
+        return;
+      case "unary":
+        this.compileExpressionWithStackTemp(expr.expr, temp);
+        this.emitOp(0x0b, "/-/", "stack temp unary minus");
+        return;
+      case "binary": {
+        const leftReads = countIdentifierReads(expr.left, temp);
+        const rightReads = countIdentifierReads(expr.right, temp);
+        if (leftReads === 1) {
+          this.compileExpressionWithStackTemp(expr.left, temp);
+          compileExpression(this, expr.right);
+          this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
+          return;
+        }
+        this.compileExpressionWithStackTemp(expr.right, temp);
+        compileExpression(this, expr.left);
+        if (expr.op !== "+" && expr.op !== "*") this.emitOp(0x14, "X↔Y", "stack temp operand order");
+        this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
+        return;
+      }
+      case "call": {
+        const name = expr.callee.toLowerCase();
+        const unary = STACK_TEMP_UNARY_CALL_OPCODES[name];
+        if (unary !== undefined) {
+          this.compileExpressionWithStackTemp(expr.args[0]!, temp);
+          this.emitOp(unary[0], unary[1], `${expr.callee}()`);
+          return;
+        }
+        const binary = STACK_TEMP_BINARY_CALL_OPCODES[name]!;
+        const left = expr.args[0]!;
+        const right = expr.args[1]!;
+        if (countIdentifierReads(left, temp) === 1) {
+          this.compileExpressionWithStackTemp(left, temp);
+          compileExpression(this, right);
+        } else {
+          this.compileExpressionWithStackTemp(right, temp);
+          compileExpression(this, left);
+        }
+        this.emitOp(binary[0], binary[1], `${expr.callee}()`);
+        return;
+      }
+      case "number":
+      case "string":
+      case "indexed":
+        return;
+    }
   }
 
   private randomUpdateTarget(statement: StatementAst): string | undefined {
@@ -7135,10 +7367,37 @@ export class EmitContext {
       return undefined;
     }
 
-    const cacheKey = `${bankMemberKey(expr.base, expr.field)}:${expressionToIntentText(expr.index)}:${offset}`;
+    const indexText = expressionToIntentText(expr.index);
+    const cacheKey = `${bankMemberKey(expr.base, expr.field)}:${indexText}:${offset}`;
     const cacheable = expressionCallCallees(expr.index).length === 0;
     const cached = this.bankSelectorCache.get(selectorName);
     if (cacheable && cached?.key === cacheKey) return selector;
+    const sibling = cacheable
+      ? this.cachedSiblingBankSelector(selectorName, expr.base, indexText, expr.index, offset)
+      : undefined;
+    if (sibling !== undefined) {
+      this.emitRecall(sibling.selectorName, `indexed selector reuse ${bankMemberKey(expr.base, expr.field)}`, sourceLine);
+      if (sibling.delta > 0) {
+        this.emitNumberOrPreload(String(sibling.delta));
+        this.emitOp(0x10, "+", "indexed selector sibling offset", sourceLine);
+      } else if (sibling.delta < 0) {
+        this.emitNumberOrPreload(String(Math.abs(sibling.delta)));
+        this.emitOp(0x11, "-", "indexed selector sibling offset", sourceLine);
+      }
+      this.emitStore(selectorName, `indexed selector ${bankMemberKey(expr.base, expr.field)}`, sourceLine);
+      this.bankSelectorCache.set(selectorName, {
+        key: cacheKey,
+        deps: expressionIdentifierDeps(expr.index),
+        base: expr.base,
+        indexText,
+        offset,
+      });
+      this.optimizations.push({
+        name: "indexed-selector-cache",
+        detail: `Derived ${bankMemberKey(expr.base, expr.field)} selector from cached ${sibling.selectorName} at line ${sourceLine}.`,
+      });
+      return selector;
+    }
 
     if (affineIndex !== undefined) {
       this.emitRecall(affineIndex.name, `indexed selector ${affineIndex.name}`, sourceLine);
@@ -7154,8 +7413,41 @@ export class EmitContext {
       this.emitOp(0x11, "-", "indexed selector offset", sourceLine);
     }
     this.emitStore(selectorName, `indexed selector ${bankMemberKey(expr.base, expr.field)}`, sourceLine);
-    if (cacheable) this.bankSelectorCache.set(selectorName, { key: cacheKey, deps: expressionIdentifierDeps(expr.index) });
+    if (cacheable) {
+      this.bankSelectorCache.set(selectorName, {
+        key: cacheKey,
+        deps: expressionIdentifierDeps(expr.index),
+        base: expr.base,
+        indexText,
+        offset,
+      });
+    }
     return selector;
+  }
+
+  private cachedSiblingBankSelector(
+    selectorName: string,
+    base: string,
+    indexText: string,
+    index: ExpressionAst,
+    offset: number,
+  ): { selectorName: string; delta: number } | undefined {
+    let best: { selectorName: string; delta: number; cost: number } | undefined;
+    const computeCost = this.indexedSelectorComputeCost(index, offset);
+    for (const [cachedSelectorName, cached] of this.bankSelectorCache.entries()) {
+      if (cachedSelectorName === selectorName) continue;
+      if (cached.base !== base || cached.indexText !== indexText) continue;
+      if (this.allocation.registers[cachedSelectorName] === undefined) continue;
+      const delta = offset - cached.offset;
+      const cost = 1 + selectorOffsetCost(delta) + 1;
+      if (cost >= computeCost) continue;
+      if (best === undefined || cost < best.cost) best = { selectorName: cachedSelectorName, delta, cost };
+    }
+    return best;
+  }
+
+  private indexedSelectorComputeCost(index: ExpressionAst, offset: number): number {
+    return estimateExpressionCost(index) + selectorOffsetCost(offset) + 1;
   }
 
   private invalidateBankSelectorCacheForStore(name: string, register: RegisterName): void {
@@ -7170,18 +7462,24 @@ export class EmitContext {
     }
   }
 
-  snapshotBankSelectorCache(): Map<string, { key: string; deps: ReadonlySet<string> }> {
+  snapshotBankSelectorCache(): Map<string, BankSelectorCacheEntry> {
     return new Map(
       [...this.bankSelectorCache.entries()].map(([name, cached]) => [
         name,
-        { key: cached.key, deps: new Set(cached.deps) },
+        {
+          key: cached.key,
+          deps: new Set(cached.deps),
+          base: cached.base,
+          indexText: cached.indexText,
+          offset: cached.offset,
+        },
       ]),
     );
   }
 
   restoreBankSelectorCacheAfterCall(
     procName: string,
-    snapshot: ReadonlyMap<string, { key: string; deps: ReadonlySet<string> }>,
+    snapshot: ReadonlyMap<string, BankSelectorCacheEntry>,
   ): void {
     const writes = this.procBankSelectorRelevantWrites(procName, new Set());
     if (writes === undefined) return;
@@ -11681,7 +11979,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["stack-current-x-scheduling", "dead-temp-store"],
-    detail: "Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof.",
+    detail: "Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.",
   },
   {
     id: "tail-call-lowering",

@@ -261,6 +261,12 @@ already names the physical calculator register for the selected contiguous bank
 member, the compiler can use the index variable itself as the indirect selector
 instead of materializing a separate bank selector.
 
+When two dynamic accesses use the same bank and the same index expression, the
+lowerer keeps the first selector live. If a sibling field has a different
+contiguous offset and deriving it from the cached selector is cheaper than
+recomputing the index, the compiler recalls the cached selector, applies the
+offset delta, and stores the sibling selector.
+
 When three or more contiguous indexed fields share the same non-literal
 initializer, setup generation may emit one indirect `R0` fill loop instead of
 copying the initializer once per element. This is the compact setup shape for
@@ -989,7 +995,10 @@ candidates:
 - zero-condition tests: comparisons against zero use the direct `F x?0`
   command instead of materializing `0` and subtracting;
 - stack-current-X scheduling and dead-temp-store elimination: consumes the
-  current `X` value directly when a commutative expression permits it;
+  current `X` value directly when an expression permits it, including
+  single-use temporaries whose first stored value is never needed in memory;
+- indexed selector cache: reuses or derives bank selectors for repeated
+  dynamic accesses with the same index expression;
 - `F L0`..`F L3` unit decrement: counters assigned to `R0`..`R3` can lower
   `counter--` to a two-cell decrement-and-continue form;
 - duplicate failure-tail merge: identical `show(0)` failure tails are shared;
@@ -1039,7 +1048,8 @@ The pipeline currently contains:
 
 - **store-recall-peephole** — drops adjacent `X->П r ; П->X r`.
 - **stack-current-X / dead-temp-store** — eliminates the temp store when the
-  current X value can be consumed directly by a following commutative op.
+  current X value can be consumed directly by a following expression, including
+  one-shot temporaries and commutative current-X derivations.
 - **dead-store-elimination** — whole-program liveness-driven DSE: removes
   `X->П r` when liveOut at that point excludes `r`.
 - **last-x-reuse** — drops `П->X r` when the IR proves X already holds the

@@ -88,6 +88,7 @@ These transformations run on source constructs before machine lowering:
 
 - `constant-indexed-state-resolution` — if array/field index is known at compile time, substitutes the exact cell address directly.
 - `affine-indexed-selector-reuse` — if an affine dynamic index such as `physical - 3` already evaluates to the physical register number for a contiguous bank member, uses that variable as the MK-61 indirect selector instead of allocating and filling a separate selector.
+- `indexed-selector-cache` — when repeated dynamic bank accesses share the same index expression, reuses the cached selector directly or derives a sibling field selector by applying only the contiguous offset delta.
 - `display-string-inline` — moves text templates directly into `show`, removing separate temporary definitions.
 - `display-string-guarded-show` — hoists guarded string value selection into the display path when safe.
 - `display-string-assignment-elimination` — deletes compile-time removable display-string assignments that only flow into later `show` inputs and are never consumed elsewhere.
@@ -107,7 +108,7 @@ These transformations run on source constructs before machine lowering:
 - `packed-counter-stripes` — packs dense counters into a shorter representation.
 - `x-param-state-elision` — removes redundant transition states when returning through X parameters.
 - `tail-copy-assignment-fusion` — merges copy assignments in tail blocks into one write pass.
-- `if-chain-dispatch-canonicalization` — turns long `if` chains into a single dispatch template.
+- `if-chain-dispatch-canonicalization` — turns long `if` / inverted `if !=` chains that test the same deterministic expression against constants into a single dispatch template.
 - `constant-guarded-call-inline` — inlines a guarded call when used once and safe.
 - `common-branch-tail-hoisting` — merges identical tails from similar branches.
 - `single-use-tail-inline` — inlines a one-time tail instead of emitting a separate call.
