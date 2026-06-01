@@ -161,6 +161,9 @@ The control-flow family is where the largest byte savings are found.
 - `residual-elseif-compare` — fuses deterministic `if/else if` compare chains into one base compare plus residual adjustment.
 - `condition-current-x-reuse` — if one compare operand is already in X and the other is a simple stack load, emits compare directly without reloading.
 - `negative-zero-threshold-flow` — emits preloaded threshold-flow test through negative-zero selector machinery for tighter `>= / <` checks.
+- `assign-zero-domain-guard` — when a scalar assignment is directly followed by a terminal error check (for example `x <op> 0`), fuses the assignment and trap branch into one domain-guard opcode using the same register value in X.
+- `error-stop` — uses the dedicated one-cell `ЕГГ0Г` error-stop path for literal terminal halts when supported, bypassing generic literal-stop lowering.
+- `terminal-literal-stop` — lowers supported literal terminal halts through the dedicated literal terminal path and records this compact terminal stop strategy.
 
 Machine-level variants around branches:
 
@@ -176,6 +179,51 @@ Machine-level variants around branches:
 - `jump-thread` — rewires jump chains into a straight flow.
 - `jump-to-next-threading` — removes jumps that only go to the next label.
 - `redundant-prologue-elimination` — merges repeated prologues while preserving side effects.
+
+## 5a) Candidate variants and layout re-trials
+
+The `report.candidates` array in `report` shows lowerings that were recompiled and scored during best-fit selection, then one entry is marked `selected`. These are distinct from always-on `report.optimizations` entries.
+
+- `late-layout-if-variant` — re-runs lowering with an aggressive terminal-if lowering variant after full layout.
+- `late-layout-branch-order` — re-runs with swapped terminal-if branch order after full layout.
+- `late-layout-if-branch-order` — combines aggressive terminal-if and branch-order re-runs after full layout.
+- `hoisted-helper-indirect-layout` — hoists shared helpers before re-layout and recompiles for better preloaded indirect flow.
+- `hoisted-proc-indirect-layout` — additionally hoists ordinary procedures before re-layout for tighter call/jump sequences.
+- `if-chain-dispatch-canonicalization` — rechecks constant if/else-if dispatch shape under a full-layout candidate pass.
+- `free-residual-dispatch-scratch` — frees residual dispatch scratch in a candidate pass.
+- `alias-x-reuse` — tests value reuse of X at scalar sites for cleaner candidate control-flow.
+- `coalesce-copies` — enables copy coalescing candidate before final layout scoring.
+- `free-residual-dispatch-scratch-with-if-chain` — combines scratch-freeing and if-chain canonicalization as one candidate.
+- `share-random-cell-helper` — candidates around shared random-cell helper extraction.
+- `share-random-cell-helper-hoisted` — same random-cell-sharing candidate with front-hoisted helpers enabled.
+- `late-layout-tail-branch-inversion` — tests tail-branch inversion as a late-layout candidate.
+- `hoisted-helper-if-chain-tail-branch-layout` — tests helper hoisting + if-chain canonicalization + tail-branch inversion as one candidate.
+- `guarded-prologue-gadget-layout` — candidate for guarded prologue gadget extraction after full layout.
+- `guarded-prologue-hoisted-proc-layout` — same with hoisted helper/procedure pre-layout.
+- `shared-bit-mask-helper-layout` — candidate that enables shared bit-mask helper calls after full layout.
+- `shared-bit-mask-helper-hoisted-layout` — same with hoisted helpers enabled.
+- `signed-abs-match-pair` — candidate for signed abs/sign normalization on match-pair patterns.
+- `signed-abs-shared-bit-helper-hoisted-layout` — combines signed abs/sign candidate with hoisted bit-mask helper calls.
+- `signed-abs-shared-bit-helper-hoisted-proc-layout` — combines signed abs/sign candidate with hoisted helper/procedure layout.
+- `packed-counter-stripes` — candidate that packs compatible fixed-width counters into one striped register.
+- `packed-counter-stripes:<id+id+…>` — parameterized variant for each packed stripe set combination.
+- `counted-loop-unroll` — candidate that fully unrolls small constant-trip counted loops.
+- `startup-aware-constant-preloads` — candidate balancing main/ setup constant trade-offs.
+- `counted-loop-unroll-free-scratch` — combines counted-loop unrolling with residual-dispatch scratch freeing.
+- `domain-error-guards` — candidate that rewrites terminal `halt("ЕГГОГ")` style checks to self-trapping domain opcodes.
+- `domain-error-guards-unroll` — combines domain-error candidate with counted-loop unrolling.
+- `call-count-proc-layout` — procedure reordering by descending call count.
+- `size-asc-proc-layout` — procedure reordering from smallest to largest.
+- `size-desc-proc-layout` — procedure reordering from largest to smallest.
+- `reverse-proc-layout` — procedure reordering in reverse source order.
+- `call-count-proc-layout-hoisted` — same as above plus front-hoisted procs/shared helpers.
+- `size-asc-proc-layout-hoisted` — size-ascending procedure order with front-hoisted procs/shared helpers.
+- `size-desc-proc-layout-hoisted` — size-descending procedure order with front-hoisted procs/shared helpers.
+- `reverse-proc-layout-hoisted` — reverse procedure order with front-hoisted procs/shared helpers.
+- `inline-floor-packed-row-expression` — computes floor-packed display rows inline to reduce hidden display pressure.
+- `inline-floor-hoisted-proc-tail-layout` — combines inline floor-row lowering with helper/proc hoisting and tail-branch inversion.
+- `reclaim-coalesced-preloads` — compiles with forced coalesce-induced register sharing to free constants for preload allocation.
+- `demote-constant-indirect-flow` — recompiles with selective integer constant inlining to free registers for post-layout indirect-flow rescue.
 
 ## 6) Function and call lowering
 
