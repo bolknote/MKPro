@@ -116,12 +116,16 @@ All top-level `examples/*.mkpro` programs are runnable MK-Pro programs. They cov
   command branch compiles smaller than the original.
 - `examples/dungeon.mkpro`: Lord_BSS corridor dungeon port that fits the original.
 - `examples/e-94-digits.mkpro`: Anvarov e-digit calculation port.
+- `examples/clock.mkpro`: compact HH:MM clock/chime loop restored from a known
+  reference program.
 - `examples/fox-hunt-100.mkpro`: Anvarov 10x10 Fox Hunt port.
 - `examples/fox-hunt-mk61.mkpro`: MonatkoDenis MK-61 Fox Hunt port with a
   generated setup program and row/column/diagonal bearing clues.
 - `examples/functions-demo.mkpro`: value-returning function composition demo.
 - `examples/game-100-pig.mkpro`: Anvarov dice game port that fits the original.
 - `examples/human.mkpro`: small counter game used as syntax smoke test.
+- `examples/jack-pot.mkpro`: converted Lord_BSS pmk151 "Jack Pot" game with
+  angle-mode dependent jackpot flow.
 - `examples/lunar.mkpro`: numeric landing game with counters and touchdown rules.
 - `examples/minesweeper-9x7.mkpro`: Lord_BSS Sapper port whose 9x7 paper-board
   probes match the original 104-cell listing.
@@ -130,6 +134,8 @@ All top-level `examples/*.mkpro` programs are runnable MK-Pro programs. They cov
 - `examples/raja-yoga.mkpro`: Anvarov one-dimensional mask game port that fits
   the original.
 - `examples/sea-battle.mkpro`: board/cell-set game port that fits the original.
+- `examples/treasure-hunter-2.mkpro`: Anvarov Treasure Hunter 2 port with nine
+  generated floors, ladders, holes, and exit behavior.
 - `examples/tiny-game.mkpro`: tiny menu-style loop.
 - `examples/wumpus.mkpro`: Hunt the Wumpus port that fits the MK-61 window.
 
