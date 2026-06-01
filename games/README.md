@@ -116,3 +116,18 @@ The original source files are serialized Android emulator state; this
 repository keeps decoded clean listings only.
 
 Programs: **6**.
+
+## Fink L.M., "Papa, Mom, Me and Micro-Calculator" (1988)
+
+Source: [Финк Л.М., Папа, мама, я и микрокалькулятор (1988)](file:///Users/bolk/Downloads/%D0%A4%D0%B8%D0%BD%D0%BA%20%D0%9B.%D0%9C.%2C%20%D0%9F%D0%B0%D0%BF%D0%B0%2C%20%D0%BC%D0%B0%D0%BC%D0%B0%2C%20%D1%8F%20%D0%B8%20%D0%BC%D0%B8%D0%BA%D1%80%D0%BE%D0%BA%D0%B0%D0%BB%D1%8C%D1%82%D0%BE%D1%80%20(1988).pdf)
+
+Files are stored in [`fink-1988/`](./fink-1988/):
+
+- `matchsticks-bashe.txt` — Bash matchstick game listing.
+- `odd-even-trick.txt` — Odd-even / Who can outsmart who listing.
+- `sportloto-model.txt` — Sportloto 5-of-36 model listing.
+- `sailing-regatta.txt` — Sailing regatta simulator listing.
+- `tic-tac-toe.txt` — Unbeatable Tic-Tac-Toe listing.
+- Matching `*.md` descriptions and `manifest.tsv`.
+
+Programs: **5**.
