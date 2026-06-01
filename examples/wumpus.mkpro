@@ -72,11 +72,11 @@ program Wumpus {
   fn shoot() {
     arrows--
 
-    if target + wumpus == 0 {
+    unless target + wumpus {
       won()
     }
     else {
-      if arrows == 0 {
+      unless arrows {
         dead()
       }
       else {
@@ -98,11 +98,11 @@ program Wumpus {
       dead()
     }
     else {
-      if eq_any(room, hazard[1].pit, hazard[2].pit) == 0 {
+      unless eq_any(room, hazard[1].pit, hazard[2].pit) {
         dead()
       }
       else {
-        if eq_any(room, hazard[1].bat, hazard[2].bat) == 0 {
+        unless eq_any(room, hazard[1].bat, hazard[2].bat) {
           bat_jump()
         }
       }

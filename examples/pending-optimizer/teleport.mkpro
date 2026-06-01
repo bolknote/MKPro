@@ -32,7 +32,10 @@ program Teleport {
     charges--
 
     match command {
-      2, 4, 6, 8 => try_move(direction(command))
+      2 => try_move(1)
+      8 => try_move(-1)
+      4 => try_move(-10)
+      6 => try_move(10)
       5 => try_move(1)
       -5 => try_move(-1)
       0 => teleport_to_vault()
@@ -93,10 +96,10 @@ program Teleport {
 
     scan = 1
     while scan <= 7 {
-      if cell_has(vaults, scan, floor) != 0 {
+      if cell_has(vaults, scan, floor) {
         row = bit_xor(row, 8 + 1 / pow10(scan))
       }
-      if cell_has(guards, scan, floor) != 0 {
+      if cell_has(guards, scan, floor) {
         row = bit_xor(row, 8 + 4 / pow10(scan))
       }
       scan++

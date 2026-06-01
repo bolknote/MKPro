@@ -291,8 +291,6 @@ Display rewrites are separated into strategy selection + body lowering.
 
 - `small-set-primitive-lowering` — replaces small multi-way boolean/state sets with dense arithmetic chains.
 - `tic-tac-toe-primitive-lowering` — maps tic-tac-toe operations into bit masks and add/sub-style forms.
-- `direction-keypad-lowering` — lowers keypad movement to a validated short machine code.
-- `direction-cardinal-lowering` — movement optimization for cardinal directions.
 - `arithmetic-if-update` — turns conditional updates into arithmetic form instead of branching.
 - `arithmetic-if-conditional-move` — replaces conditional `move`/copy with arithmetic form.
 - `arithmetic-if-sign-toggle` — routes sign handling through arithmetic when it shortens branches.

@@ -39,20 +39,23 @@ program CaveSketch {
     }
   }
 
+  // The cave packs its coordinate as a decimal with zero-run spacing: north/
+  // south step the seventh fractional digit and east/west step the sixth, so
+  // moves are plain additions on the packed coordinate.
   fn move_south() {
-    player = move(player, south)
+    player = player + 0.0000002
   }
 
   fn move_west() {
-    player = move(player, west)
+    player = player + 0.000001
   }
 
   fn move_east() {
-    player = move(player, east)
+    player = player - 0.000001
   }
 
   fn move_north() {
-    player = move(player, north)
+    player = player - 0.0000002
   }
 
   fn break_wall() {

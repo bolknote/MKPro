@@ -56,6 +56,23 @@ export function numericIndexValue(expr: ExpressionAst): number | undefined {
   return undefined;
 }
 
+export function affineIndexIdentifierOffset(expr: ExpressionAst): { name: string; offset: number } | undefined {
+  if (expr.kind === "identifier") return { name: expr.name, offset: 0 };
+  if (expr.kind !== "binary") return undefined;
+  const left = affineIndexIdentifierOffset(expr.left);
+  const right = numericIndexValue(expr.right);
+  if (left !== undefined && right !== undefined) {
+    if (expr.op === "+") return { name: left.name, offset: left.offset + right };
+    if (expr.op === "-") return { name: left.name, offset: left.offset - right };
+  }
+  const leftConstant = numericIndexValue(expr.left);
+  const rightIdentifier = affineIndexIdentifierOffset(expr.right);
+  if (expr.op === "+" && leftConstant !== undefined && rightIdentifier !== undefined) {
+    return { name: rightIdentifier.name, offset: rightIdentifier.offset + leftConstant };
+  }
+  return undefined;
+}
+
 export function contiguousRegisterOffset(
   member: StateBankMemberAst,
   registers: Readonly<Record<string, RegisterName>>,
@@ -73,4 +90,3 @@ export function contiguousRegisterOffset(
   }
   return offset;
 }
-

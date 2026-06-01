@@ -51,7 +51,7 @@ program RamboIII {
   fn reinforcement_cycle() {
     random_92()
     event_target = int(random_state * 13 / 3)
-    if event_target == 0 {
+    unless event_target {
       event_target = 7
     }
 

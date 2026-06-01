@@ -1,5 +1,4 @@
 import type {
-  AssignStatementAst,
   ConditionAst,
   DisplayItemAst,
   DomainAst,
@@ -20,12 +19,10 @@ import type {
   StateFieldType,
   V2BoardAst,
   V2IfStatementAst,
-  V2AssignStatementAst,
   V2InvokeStatementAst,
   V2LoopStatementAst,
   V2MatchCaseAst,
   V2MatchStatementAst,
-  V2MoveStatementAst,
   V2PredicateAst,
   V2ProgramAst,
   V2RuleAst,
@@ -50,7 +47,6 @@ const V2_RESERVED_RULE_NAMES = new Set([
   "if",
   "loop",
   "match",
-  "move",
   "otherwise",
   "program",
   "read",
@@ -322,6 +318,10 @@ class MKProParser {
       this.index += 1;
       return this.parseV2Match(line.text, line.line);
     }
+    if (line.text.startsWith("unless ") && line.text.endsWith("{")) {
+      this.index += 1;
+      return this.parseV2If({ text: `if ${line.text.slice("unless ".length)}`, line: line.line }, true);
+    }
     if (line.text.startsWith("if ") && line.text.endsWith("{")) {
       this.index += 1;
       return this.parseV2If(line);
@@ -436,7 +436,7 @@ class MKProParser {
     throw new ParseError("Unclosed raw code block", line);
   }
 
-  private parseV2If(line: SourceLine): V2IfStatementAst {
+  private parseV2If(line: SourceLine, negated = false): V2IfStatementAst {
     const match = /^if\s+(.+)\s*\{$/u.exec(line.text);
     if (!match) throw new ParseError("If must look like 'if predicate {'", line.line);
     const statement: V2IfStatementAst = {
@@ -445,6 +445,7 @@ class MKProParser {
       thenBody: this.parseV2StatementBlock(),
       line: line.line,
     };
+    if (negated === true) statement.negated = true;
     const elseBody = this.parseV2ElseBody();
     if (elseBody !== undefined) statement.elseBody = elseBody;
     return statement;
@@ -682,13 +683,6 @@ function parseV2InlineStatement(text: string, line: number): V2StatementAst {
     }
     return { kind: "v2_return", expr, line };
   }
-  const move = /^move\s+([A-Za-z_][\w]*)\s+(north|south|east|west|up|down)$/u.exec(text);
-  if (move) {
-    throw new ParseError("Use assignment with move(...), for example 'pos = move(pos, east)'", line);
-  }
-  if (text.startsWith("move ")) {
-    throw new ParseError("Use assignment with move(...), for example 'pos = move(pos, east)'", line);
-  }
   const step = /^([A-Za-z_][\w]*)\s*(\+\+|--)$/u.exec(text);
   if (step) {
     return {
@@ -763,7 +757,8 @@ function parseV2ShowCall(argsText: string, line: number): V2StatementAst {
 }
 
 function parseV2Predicate(text: string, line: number): V2PredicateAst {
-  const contains = /^(.+?)\s+in\s+([A-Za-z_][\w]*)$/u.exec(text);
+  const trimmed = text.trim();
+  const contains = /^(.+?)\s+in\s+([A-Za-z_][\w]*)$/u.exec(trimmed);
   if (contains) {
     return {
       kind: "v2_contains",
@@ -771,7 +766,7 @@ function parseV2Predicate(text: string, line: number): V2PredicateAst {
       item: contains[1]!.trim(),
     };
   }
-  const compare = /^(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)$/u.exec(text);
+  const compare = /^(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)$/u.exec(trimmed);
   if (compare) {
     return {
       kind: "v2_compare",
@@ -780,7 +775,12 @@ function parseV2Predicate(text: string, line: number): V2PredicateAst {
       right: compare[3]!.trim(),
     };
   }
-  throw new ParseError(`Predicate must look like 'left op right'`, line);
+  return {
+    kind: "v2_compare",
+    left: trimmed,
+    op: "!=",
+    right: "0",
+  };
 }
 
 function parseV2RawInputs(text: string, line: number): Extract<V2StatementAst, { kind: "v2_raw" }>["inputs"] {
@@ -923,7 +923,6 @@ interface V2LoweringContext {
   // `return`). Used by validation and by the expression-position call path.
   functionRules: Set<string>;
   specializedRules: Set<string>;
-  moveDeltas: Map<string, Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>>>;
   stateTypes: Map<string, V2StateFieldAst["type"]>;
   stateDomains: Map<string, string>;
   stateRanges: Map<string, { min?: number; max?: number }>;
@@ -966,7 +965,6 @@ function lowerV2Program(v2: V2ProgramAst, options: ParseOptions = {}): LoweredV2
     rules,
     functionRules,
     specializedRules,
-    moveDeltas: collectV2MoveDeltas(v2),
     stateTypes: new Map(v2.state.map((field) => [field.name, field.type])),
     stateDomains,
     stateRanges: collectV2StateRanges(v2),
@@ -1413,7 +1411,6 @@ function synthesizeV2ParametricSiblingMatchCases(
   callCounts: ReadonlyMap<string, number>,
   consumed: Set<string>,
 ): V2MatchCaseAst[] {
-  const moveDeltas = collectV2MoveDeltas(v2);
   const usedCases = new Set<number>();
   const rewritten = [...cases];
 
@@ -1432,7 +1429,7 @@ function synthesizeV2ParametricSiblingMatchCases(
       if (rightRule === undefined) continue;
 
       const param = freshV2ParametricSiblingName(v2, "delta");
-      const plan = v2ParametricSiblingPlan(leftRule, rightRule, param, moveDeltas);
+      const plan = v2ParametricSiblingPlan(leftRule, rightRule, param);
       if (plan === undefined) continue;
 
       const helperName = freshV2ParametricSiblingName(v2, "proc");
@@ -1505,7 +1502,6 @@ function v2ParametricSiblingPlan(
   left: V2RuleAst,
   right: V2RuleAst,
   param: string,
-  moveDeltas: ReadonlyMap<string, Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>>>,
 ): V2ParametricSiblingPlan | undefined {
   if (left.body.length !== right.body.length || left.body.length === 0) return undefined;
   let leftDelta: number | undefined;
@@ -1516,8 +1512,8 @@ function v2ParametricSiblingPlan(
   for (let index = 0; index < left.body.length; index += 1) {
     const leftStatement = left.body[index]!;
     const rightStatement = right.body[index]!;
-    const leftUpdate = v2AdditiveSelfUpdate(leftStatement, moveDeltas);
-    const rightUpdate = v2AdditiveSelfUpdate(rightStatement, moveDeltas);
+    const leftUpdate = v2AdditiveSelfUpdate(leftStatement);
+    const rightUpdate = v2AdditiveSelfUpdate(rightStatement);
     if (
       leftUpdate !== undefined &&
       rightUpdate !== undefined &&
@@ -1559,7 +1555,6 @@ function v2ParametricSiblingPlan(
 
 function v2AdditiveSelfUpdate(
   statement: V2StatementAst,
-  moveDeltas: ReadonlyMap<string, Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>>>,
 ): { target: string; delta: number } | undefined {
   if (statement.kind === "v2_update") {
     if (!isSimpleV2Identifier(statement.target)) return undefined;
@@ -1568,25 +1563,8 @@ function v2AdditiveSelfUpdate(
     return { target: statement.target, delta: statement.op === "+=" ? value : -value };
   }
   if (statement.kind !== "v2_assign" || !isSimpleV2Identifier(statement.target)) return undefined;
-  const moveDelta = v2MoveAssignmentDelta(statement, moveDeltas);
-  if (moveDelta !== undefined) return { target: statement.target, delta: moveDelta };
   const selfDelta = v2SelfAssignmentDelta(statement.target, statement.expr);
   return selfDelta === undefined ? undefined : { target: statement.target, delta: selfDelta };
-}
-
-function v2MoveAssignmentDelta(
-  statement: V2AssignStatementAst,
-  moveDeltas: ReadonlyMap<string, Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>>>,
-): number | undefined {
-  const call = parseNamedCall(statement.expr, "move");
-  if (call === undefined) return undefined;
-  const args = splitArgs(call.argsText).map((arg) => arg.trim());
-  const [target, directionText] = args;
-  if (args.length !== 2 || target !== statement.target || directionText === undefined) return undefined;
-  const direction = parseV2MoveDirectionName(directionText);
-  if (direction === undefined) return undefined;
-  const deltaText = moveDeltas.get(statement.target)?.[direction] ?? moveDeltasForEncoding(undefined)[direction];
-  return deltaText === undefined ? undefined : numericV2LiteralValue(deltaText);
 }
 
 function v2SelfAssignmentDelta(target: string, expr: string): number | undefined {
@@ -1913,18 +1891,6 @@ function validateV2Statement(
   }
 }
 
-function collectV2MoveDeltas(v2: V2ProgramAst): V2LoweringContext["moveDeltas"] {
-  const deltas = new Map<string, Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>>>();
-  const worlds = new Map(v2.worlds.map((world) => [world.name, world]));
-  for (const field of v2.state) {
-    if (field.type !== "coord" || field.domain === undefined) continue;
-    const world = worlds.get(field.domain);
-    if (world === undefined) continue;
-    deltas.set(field.name, moveDeltasForEncoding(world.position?.encoding));
-  }
-  return deltas;
-}
-
 function collectV2CellMapNames(v2: V2ProgramAst, stateDomains: Map<string, string>): Map<string, string> {
   const explicit = v2.state.find((field) => field.type === "packed" && /^(?:plan|map)$/iu.test(field.name));
   const byDomain = new Map<string, string>();
@@ -2004,7 +1970,6 @@ function collectV2ExpressionTexts(v2: V2ProgramAst): string[] {
         case "v2_invoke":
           texts.push(...statement.args);
           break;
-        case "v2_move":
         case "v2_show":
         case "v2_read":
         case "v2_raw":
@@ -2015,27 +1980,6 @@ function collectV2ExpressionTexts(v2: V2ProgramAst): string[] {
   if (v2.body.length > 0) visit(v2.body);
   for (const rule of v2.rules) visit(rule.body);
   return texts;
-}
-
-function moveDeltasForEncoding(encoding: string | undefined): Partial<Record<NonNullable<V2MoveStatementAst["direction"]>, string>> {
-  if (encoding === "packed_decimal_zero_run") {
-    return {
-      south: "0.0000002",
-      north: "-0.0000002",
-      west: "0.000001",
-      east: "-0.000001",
-      up: "1",
-      down: "-1",
-    };
-  }
-  return {
-    south: "1",
-    north: "-1",
-    east: "10",
-    west: "-10",
-    up: "100",
-    down: "-100",
-  };
 }
 
 function lowerV2Domains(v2: V2ProgramAst): DomainAst[] {
@@ -2645,7 +2589,7 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
       const condition = lowerV2Predicate(statement.predicate, statement.line, context);
       const lowered: IfStatementAst = {
         kind: "if",
-        condition,
+        condition: statement.negated === true ? invertLoweredCondition(condition) : condition,
         thenBody: lowerV2Statements(statement.thenBody, context),
         line: statement.line,
       };
@@ -2665,8 +2609,6 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
         body: lowerV2Statements(statement.body, context),
         line: statement.line,
       }];
-    case "v2_move":
-      return lowerV2Move(statement, context);
     case "v2_assign":
       if (isIndexedTargetText(statement.target)) {
         return [{
@@ -2807,46 +2749,6 @@ function cellMembershipExpression(
   return mask === undefined ? `bit_has(${collection}, ${item})` : `bit_and(${collection}, ${mask})`;
 }
 
-function lowerV2Move(statement: V2MoveStatementAst, context: V2LoweringContext): StatementAst[] {
-  const delta = namedMoveDelta(statement.target, statement.direction, statement.line, context);
-  const move: AssignStatementAst = {
-    kind: "assign",
-    target: statement.target,
-    expr: {
-      kind: "binary",
-      op: "+",
-      left: { kind: "identifier", name: statement.target },
-      right: lowerV2Expression(delta, statement.line, context),
-    },
-    line: statement.line,
-  };
-  return [move];
-}
-
-function namedMoveDelta(
-  target: string,
-  direction: V2MoveStatementAst["direction"],
-  line: number,
-  context: V2LoweringContext,
-): string {
-  if (direction === undefined) throw new ParseError("Move must specify a direction", line);
-  return context.moveDeltas.get(target)?.[direction] ?? moveDeltasForEncoding(undefined)[direction] ?? "0";
-}
-
-function parseV2MoveDirectionName(text: string): NonNullable<V2MoveStatementAst["direction"]> | undefined {
-  switch (text) {
-    case "north":
-    case "south":
-    case "east":
-    case "west":
-    case "up":
-    case "down":
-      return text;
-    default:
-      return undefined;
-  }
-}
-
 function lowerV2MatchStatements(statement: V2MatchStatementAst, context: V2LoweringContext): StatementAst[] {
   const cyclic = lowerCyclicCounterMatch(statement, context);
   if (cyclic !== undefined) return cyclic;
@@ -2863,8 +2765,6 @@ function lowerV2MatchStatementsAfterSignedAbs(statement: V2MatchStatementAst, co
   if (statement.cases.length === 0) {
     return statement.otherwise === undefined ? [] : lowerV2Statement(statement.otherwise, context);
   }
-  const guardedDirection = lowerGuardedDirectionMatch(statement, context);
-  if (guardedDirection !== undefined) return guardedDirection;
   const smallCase = lowerSmallCaseMatch(statement, context);
   if (smallCase !== undefined) return [smallCase];
   const singleCase = lowerSingleCaseMatch(statement, context);
@@ -3003,7 +2903,7 @@ function lowerSmallCaseMatch(statement: V2MatchStatementAst, context: V2Lowering
         op: "==",
         right: lowerV2Expression(row.value, row.line, context),
       },
-      thenBody: lowerV2MatchAction(row.action, context, statement.expr, row.value, row.line),
+      thenBody: lowerV2MatchAction(row.action, context, row.line),
       elseBody,
       line: index === 0 ? statement.line : row.line,
     };
@@ -3026,22 +2926,19 @@ function lowerSingleCaseMatch(statement: V2MatchStatementAst, context: V2Lowerin
       op: "==",
       right: lowerV2Expression(value, matchCase.line, context),
     },
-    thenBody: lowerV2MatchAction(matchCase.action, context, statement.expr, value, matchCase.line),
+    thenBody: lowerV2MatchAction(matchCase.action, context, matchCase.line),
     ...(statement.otherwise === undefined ? {} : { elseBody: lowerV2Statement(statement.otherwise, context) }),
     line: statement.line,
   };
 }
 
 function lowerV2Match(statement: V2MatchStatementAst, context: V2LoweringContext): DispatchStatementAst {
-  const compact = lowerCompactDirectionDispatch(statement, context);
-  if (compact !== undefined) return compact;
-
   const cases: DispatchCaseAst[] = [];
   for (const matchCase of statement.cases) {
     for (const value of matchCase.values) {
       cases.push({
         value: lowerV2Expression(value, matchCase.line, context),
-        body: lowerV2MatchAction(matchCase.action, context, statement.expr, value, matchCase.line),
+        body: lowerV2MatchAction(matchCase.action, context, matchCase.line),
         line: matchCase.line,
       });
     }
@@ -3083,7 +2980,7 @@ function lowerSimpleEffectMatch(statement: V2MatchStatementAst, context: V2Lower
 
   const defaultEffects = statement.otherwise === undefined
     ? { effects: new Map<string, NumericEffect>() }
-    : analyzeSimpleNumericEffects(resolveV2ActionBody(statement.otherwise, context, statement.expr), context);
+    : analyzeSimpleNumericEffects(resolveV2ActionBody(statement.otherwise, context), context);
   if (defaultEffects === undefined) return undefined;
 
   const rows: SimpleEffectMatchRow[] = [];
@@ -3093,7 +2990,7 @@ function lowerSimpleEffectMatch(statement: V2MatchStatementAst, context: V2Lower
       const value = numericLiteralTextValue(valueText);
       if (value === undefined || seen.has(value)) return undefined;
       seen.add(value);
-      const body = resolveV2ActionBody(matchCase.action, context, statement.expr, valueText);
+      const body = resolveV2ActionBody(matchCase.action, context);
       if (body === undefined) return undefined;
       const effects = analyzeSimpleNumericEffects(body, context);
       if (effects === undefined) return undefined;
@@ -3314,7 +3211,7 @@ function lowerCyclicCounterMatch(statement: V2MatchStatementAst, context: V2Lowe
     for (const valueText of matchCase.values) {
       const value = numericLiteralTextValue(valueText);
       if (value === undefined) return undefined;
-      const body = resolveV2ActionBody(matchCase.action, context, statement.expr, valueText);
+      const body = resolveV2ActionBody(matchCase.action, context);
       if (body === undefined) return undefined;
       const analyzed = analyzeCyclicMatchBody(body, variable, context);
       if (analyzed === undefined) return undefined;
@@ -3379,21 +3276,13 @@ function lowerCyclicCounterMatch(statement: V2MatchStatementAst, context: V2Lowe
 function resolveV2ActionBody(
   action: V2StatementAst,
   context: V2LoweringContext,
-  matchExpr: string,
-  matchValue?: string,
 ): V2StatementAst[] | undefined {
   if (action.kind !== "v2_invoke") return [action];
   const rule = context.rules.get(action.name);
   if (rule === undefined) return undefined;
   if (rule.params.length === 0) return rule.body;
   if (rule.params.length !== action.args.length) return undefined;
-  const args: string[] = [];
-  for (const arg of action.args) {
-    const resolved = resolveV2InvokeArg(arg, matchExpr, matchValue);
-    if (resolved === undefined) return undefined;
-    args.push(resolved);
-  }
-  return substituteV2Statements(rule.body, invokeReplacements(rule, args));
+  return substituteV2Statements(rule.body, invokeReplacements(rule, action.args));
 }
 
 function analyzeCyclicMatchBody(
@@ -3422,225 +3311,6 @@ function analyzeCyclicMatchBody(
   return next === undefined ? undefined : { next, deltas };
 }
 
-function lowerCompactDirectionDispatch(
-  statement: V2MatchStatementAst,
-  context: V2LoweringContext,
-): DispatchStatementAst | undefined {
-  const directionalCases = statement.cases.filter((matchCase) => isDirectionInvoke(matchCase.action, statement.expr));
-  const directionalValueCount = directionalCases.reduce((sum, matchCase) => sum + matchCase.values.length, 0);
-  if (directionalValueCount < 3) return undefined;
-  const directionalValues = directionCaseValues(directionalCases);
-  if (directionalValues === undefined) return undefined;
-  const hasAllCardinalDirections = [2, 4, 6, 8].every((value) => directionalValues.has(value));
-  const action = directionalCases[0]!.action;
-  if (action.kind !== "v2_invoke") return undefined;
-  if (!directionalCases.every((matchCase) => sameInvoke(matchCase.action, action))) return undefined;
-  const params = context.ruleParams.get(action.name) ?? [];
-  if (params.length === 0) return undefined;
-  const needsGuard = statement.otherwise === undefined || !isDirectionInvoke(statement.otherwise, statement.expr);
-  if (needsGuard && !hasAllCardinalDirections) return undefined;
-
-  const cases: DispatchCaseAst[] = [];
-  for (const matchCase of statement.cases) {
-    if (directionalCases.includes(matchCase)) continue;
-    for (const value of matchCase.values) {
-      cases.push({
-        value: lowerV2Expression(value, matchCase.line, context),
-        body: lowerV2MatchAction(matchCase.action, context, statement.expr, value, matchCase.line),
-        line: matchCase.line,
-      });
-    }
-  }
-
-  const directionFunction = needsGuard && hasAllCardinalDirections && !directionalValues.has(5) && !directionalValues.has(-5)
-    ? "__direction_cardinal"
-    : "direction";
-  const directionBody: StatementAst[] = [
-    {
-      kind: "assign",
-      target: params[0]!,
-      expr: lowerV2Expression(`${directionFunction}(${statement.expr})`, statement.line, context),
-      line: statement.line,
-    },
-    { kind: "call", block: action.name, line: action.line },
-  ];
-  const defaultBody: StatementAst[] = needsGuard
-    ? [{
-      kind: "if",
-      condition: {
-        left: lowerV2Expression(directionKeyGuardExpression(statement.expr, directionalValues), statement.line, context),
-        op: "==",
-        right: lowerV2Expression("0", statement.line, context),
-      },
-        thenBody: directionBody,
-        ...(statement.otherwise === undefined ? {} : { elseBody: lowerV2Statement(statement.otherwise, context) }),
-        line: statement.line,
-      }]
-    : directionBody;
-
-  return {
-    kind: "dispatch",
-    expr: lowerV2Expression(statement.expr, statement.line, context),
-    name: "direction_dispatch",
-    cases,
-    defaultBody,
-    line: statement.line,
-    scratchId: statement.line,
-  };
-}
-
-interface GuardedDirectionCase {
-  matchCase: V2MatchCaseAst;
-  predicate: V2PredicateAst;
-  terminalBody: V2StatementAst[];
-  invertPredicate: boolean;
-}
-
-function lowerGuardedDirectionMatch(
-  statement: V2MatchStatementAst,
-  context: V2LoweringContext,
-): StatementAst[] | undefined {
-  const directionalCases = statement.cases.filter((matchCase) => isDirectionInvoke(matchCase.action, statement.expr));
-  const directionalValueCount = directionalCases.reduce((sum, matchCase) => sum + matchCase.values.length, 0);
-  if (directionalValueCount < 3) return undefined;
-  const action = directionalCases[0]?.action;
-  if (action?.kind !== "v2_invoke") return undefined;
-  if (!directionalCases.every((matchCase) => sameInvoke(matchCase.action, action))) return undefined;
-
-  const guardedCases: GuardedDirectionCase[] = [];
-  for (const matchCase of statement.cases) {
-    if (directionalCases.includes(matchCase)) continue;
-    const guarded = analyzeGuardedDirectionCase(matchCase, action, statement.expr, context);
-    if (guarded !== undefined) guardedCases.push(guarded);
-  }
-  if (guardedCases.length === 0) return undefined;
-
-  const rewritten: V2MatchStatementAst = {
-    ...statement,
-    cases: statement.cases.map((matchCase) =>
-      guardedCases.some((guarded) => guarded.matchCase === matchCase)
-        ? { ...matchCase, action }
-        : matchCase
-    ),
-  };
-  const dispatch = lowerCompactDirectionDispatch(rewritten, context);
-  if (dispatch === undefined) return undefined;
-
-  return [
-    ...guardedCases.flatMap((guarded) => lowerGuardedDirectionCasePrelude(statement, guarded, context)),
-    dispatch,
-  ];
-}
-
-function analyzeGuardedDirectionCase(
-  matchCase: V2MatchCaseAst,
-  sharedAction: V2InvokeStatementAst,
-  matchExpr: string,
-  context: V2LoweringContext,
-): GuardedDirectionCase | undefined {
-  const body = resolveV2ActionBody(matchCase.action, context, matchExpr);
-  if (body?.length !== 1) return undefined;
-  const guarded = body[0];
-  if (guarded?.kind !== "v2_if" || guarded.elseBody === undefined) return undefined;
-
-  const thenShared = isSharedDirectionBranch(guarded.thenBody, sharedAction);
-  const elseShared = isSharedDirectionBranch(guarded.elseBody, sharedAction);
-  if (thenShared === elseShared) return undefined;
-
-  if (elseShared && v2StatementsTerminate(guarded.thenBody, context)) {
-    return {
-      matchCase,
-      predicate: guarded.predicate,
-      terminalBody: guarded.thenBody,
-      invertPredicate: false,
-    };
-  }
-  if (thenShared && v2StatementsTerminate(guarded.elseBody, context)) {
-    return {
-      matchCase,
-      predicate: guarded.predicate,
-      terminalBody: guarded.elseBody,
-      invertPredicate: true,
-    };
-  }
-  return undefined;
-}
-
-function isSharedDirectionBranch(statements: V2StatementAst[], sharedAction: V2InvokeStatementAst): boolean {
-  return statements.length === 1 && sameInvoke(statements[0]!, sharedAction);
-}
-
-function lowerGuardedDirectionCasePrelude(
-  statement: V2MatchStatementAst,
-  guarded: GuardedDirectionCase,
-  context: V2LoweringContext,
-): StatementAst[] {
-  return guarded.matchCase.values.map((value) => {
-    const condition = lowerV2Predicate(guarded.predicate, guarded.matchCase.line, context);
-    const innerCondition = guarded.invertPredicate ? invertLoweredCondition(condition) : condition;
-    return {
-      kind: "if" as const,
-      condition: {
-        left: lowerV2Expression(statement.expr, statement.line, context),
-        op: "==",
-        right: lowerV2Expression(value, guarded.matchCase.line, context),
-      },
-      thenBody: [{
-        kind: "if" as const,
-        condition: innerCondition,
-        thenBody: lowerV2Statements(guarded.terminalBody, context),
-        line: guarded.matchCase.line,
-      }],
-      line: guarded.matchCase.line,
-    };
-  });
-}
-
-function v2StatementsTerminate(
-  statements: V2StatementAst[],
-  context: V2LoweringContext,
-  seenRules = new Set<string>(),
-): boolean {
-  for (const statement of statements) {
-    if (v2StatementTerminates(statement, context, seenRules)) return true;
-  }
-  return false;
-}
-
-function v2StatementTerminates(
-  statement: V2StatementAst,
-  context: V2LoweringContext,
-  seenRules: Set<string>,
-): boolean {
-  switch (statement.kind) {
-    case "v2_stop":
-      return true;
-    case "v2_invoke": {
-      if (seenRules.has(statement.name)) return false;
-      const rule = context.rules.get(statement.name);
-      if (rule === undefined) return false;
-      seenRules.add(statement.name);
-      const terminates = v2StatementsTerminate(rule.body, context, seenRules);
-      seenRules.delete(statement.name);
-      return terminates;
-    }
-    case "v2_if":
-      return statement.elseBody !== undefined &&
-        v2StatementsTerminate(statement.thenBody, context, new Set(seenRules)) &&
-        v2StatementsTerminate(statement.elseBody, context, new Set(seenRules));
-    case "v2_while":
-      return false;
-    case "v2_loop":
-      return false;
-    case "v2_match":
-      return statement.otherwise !== undefined &&
-        statement.cases.every((matchCase) => v2StatementTerminates(matchCase.action, context, new Set(seenRules))) &&
-        v2StatementTerminates(statement.otherwise, context, new Set(seenRules));
-    default:
-      return false;
-  }
-}
-
 function invertLoweredCondition(condition: ConditionAst): ConditionAst {
   return {
     ...condition,
@@ -3665,59 +3335,20 @@ function invertLoweredComparisonOp(op: ConditionAst["op"]): ConditionAst["op"] {
   }
 }
 
-function directionCaseValues(cases: V2MatchCaseAst[]): Set<number> | undefined {
-  const values = new Set<number>();
-  for (const matchCase of cases) {
-    for (const valueText of matchCase.values) {
-      const value = numericLiteralTextValue(valueText);
-      if (value === undefined) return undefined;
-      values.add(value);
-    }
-  }
-  return values;
-}
-
-function directionKeyGuardExpression(expr: string, values?: ReadonlySet<number>): string {
-  const key = `(${expr})`;
-  const cardinal = `abs(abs(${key} - 5) - 2) - 1`;
-  if (values === undefined || values.has(5) && values.has(-5)) {
-    const vertical = `abs(${key}) - 5`;
-    return `(${cardinal}) * (${vertical})`;
-  }
-  if (values.has(5)) return `(${cardinal}) * (${key} - 5)`;
-  if (values.has(-5)) return `(${cardinal}) * (${key} + 5)`;
-  return cardinal;
-}
-
-function isDirectionInvoke(action: V2StatementAst, matchExpr: string): boolean {
-  if (action.kind !== "v2_invoke") return false;
-  return action.args.some((arg) => {
-    const direction = /^direction\((.+)\)$/u.exec(arg.trim());
-    return direction?.[1]?.trim() === matchExpr.trim();
-  });
-}
-
-function sameInvoke(action: V2StatementAst, expected: V2InvokeStatementAst): boolean {
-  return action.kind === "v2_invoke" && action.name === expected.name && action.args.join(",") === expected.args.join(",");
-}
-
 function lowerV2MatchAction(
   action: V2StatementAst,
   context: V2LoweringContext,
-  matchExpr: string,
-  matchValue: string,
   line: number,
 ): StatementAst[] {
   if (action.kind !== "v2_invoke") return lowerV2Statement(action, context);
   const rule = context.rules.get(action.name);
   if (rule !== undefined && context.specializedRules.has(rule.name)) {
-    const args = action.args.map((arg) => resolveV2InvokeArg(arg, matchExpr, matchValue)!);
-    return lowerV2Statements(substituteV2Statements(rule.body, invokeReplacements(rule, args)), context);
+    return lowerV2Statements(substituteV2Statements(rule.body, invokeReplacements(rule, action.args)), context);
   }
   const params = context.ruleParams.get(action.name) ?? [];
   const statements: StatementAst[] = [];
   for (let index = 0; index < Math.min(params.length, action.args.length); index += 1) {
-    const arg = resolveV2InvokeArg(action.args[index]!, matchExpr, matchValue)!;
+    const arg = action.args[index]!;
     statements.push({
       kind: "assign",
       target: params[index]!,
@@ -3794,8 +3425,6 @@ function substituteV2Statement(statement: V2StatementAst, replacements: Map<stri
       };
       return substituted;
     }
-    case "v2_move":
-      return statement;
     case "v2_match": {
       const substituted: V2MatchStatementAst = {
         ...statement,
@@ -3906,16 +3535,6 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
-function resolveV2InvokeArg(arg: string, matchExpr: string, matchValue?: string): string | undefined {
-  const direction = /^direction\((.+)\)$/u.exec(arg.trim());
-  if (direction && direction[1]!.trim() === matchExpr.trim()) {
-    if (matchValue === undefined) return undefined;
-    const delta = directionDelta(matchValue);
-    if (delta !== undefined) return String(delta);
-  }
-  return arg;
-}
-
 function lowerV2Expression(text: string, line: number, context?: V2LoweringContext): ExpressionAst {
   const rewritten = rewriteSpatialExpressionText(text, context);
   const contextual = context === undefined ? rewritten : normalizeContextualFloorAccessText(rewritten, context);
@@ -3928,7 +3547,6 @@ function rewriteSpatialExpressionText(text: string, context: V2LoweringContext |
   if (context === undefined) return text;
   let rewritten = replaceSpatialCall(text, "cell_at", (args) => cellAtExpression(args, context));
   rewritten = replaceSpatialCall(rewritten, "line_count", (args) => coordListLineCountExpression(args, context));
-  rewritten = replaceSpatialCall(rewritten, "move", (args) => moveExpression(args, context));
   return rewritten;
 }
 
@@ -3992,16 +3610,6 @@ function coordListLineCountExpression(args: string[], context: V2LoweringContext
   const list = context.coordLists.get(collection.trim());
   if (list === undefined) return undefined;
   return `coord_list_line_count(${item}, ${list.items.join(", ")})`;
-}
-
-function moveExpression(args: string[], context: V2LoweringContext): string | undefined {
-  if (args.length !== 2) return undefined;
-  const [target, direction] = args.map((arg) => arg.trim());
-  if (target === undefined || direction === undefined || target.length === 0 || direction.length === 0) return undefined;
-  if (/^direction\s*\(/u.test(direction)) return `${target} + ${direction}`;
-  const namedDirection = parseV2MoveDirectionName(direction);
-  if (namedDirection === undefined) return undefined;
-  return `${target} + ${namedMoveDelta(target, namedDirection, 0, context)}`;
 }
 
 function cellAtDomainAndPosition(
@@ -4149,20 +3757,6 @@ function parseStackSource(text: string, line: number): "X" | "Y" | undefined {
   }
   const match = /^stack\.(X|Y)$/u.exec(trimmed);
   return match?.[1] as "X" | "Y" | undefined;
-}
-
-function directionDelta(text: string): number | undefined {
-  const value = Number(text.trim());
-  if (!Number.isFinite(value)) return undefined;
-  const mapping = new Map<number, number>([
-    [2, 1],
-    [8, -1],
-    [4, -10],
-    [6, 10],
-    [5, 100],
-    [-5, -100],
-  ]);
-  return mapping.get(value);
 }
 
 function isNumericLiteralText(text: string): boolean {

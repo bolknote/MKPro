@@ -111,7 +111,7 @@ export function compileDecrementZeroBranch(ctx: LoweringCtx,
     const register = ctx.allocation.registers[decrement.target];
     if (register === undefined) return false;
     const opcode = flOpcode(register);
-    if (opcode === undefined) return false;
+    if (opcode === undefined) return compileDecrementZeroDomainGuard(ctx, decrement, branch);
 
     const nonZeroLabel = ctx.freshLabel("decrement_nonzero");
     const thenTerminates = ctx.statementsTerminate(branch.thenBody);
@@ -130,6 +130,29 @@ export function compileDecrementZeroBranch(ctx: LoweringCtx,
     ctx.optimizations.push({
       name: "fl-decrement-zero-branch",
       detail: `Fused ${decrement.target} decrement and zero branch at lines ${decrement.line}/${branch.line}.`,
+    });
+    return true;
+}
+
+function compileDecrementZeroDomainGuard(
+    ctx: LoweringCtx,
+    decrement: Extract<StatementAst, { kind: "assign" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+  ): boolean {
+    if (!statementsAreDomainErrorTrap(ctx, branch.thenBody)) return false;
+    ctx.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
+    ctx.emitNumberOrPreload("1");
+    ctx.emitOp(0x11, "-", `decrement/test ${decrement.target}`, decrement.line);
+    ctx.emitStore(decrement.target, `set ${decrement.target}`, decrement.line);
+    ctx.emitOp(0x23, "F 1/x", "decrement zero domain guard trap", branch.line);
+    ctx.currentXVariable = undefined;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
+    ctx.scaledCoordVariables.clear();
+    if (branch.elseBody !== undefined) ctx.compileStatements(branch.elseBody);
+    ctx.optimizations.push({
+      name: "decrement-zero-domain-guard",
+      detail: `Fused ${decrement.target} decrement and zero terminal-error branch through F 1/x at lines ${decrement.line}/${branch.line}.`,
     });
     return true;
 }

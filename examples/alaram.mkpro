@@ -50,14 +50,17 @@ program Alaram {
     }
   }
 
+  // The cockpit lane packs vertical position in the hundreds digit and
+  // horizontal aiming in the tens digit, so climb/dive step the coordinate by
+  // 100 and banking steps it by 10.
   fn climb() {
-    fighter = move(fighter, up)
+    fighter = fighter + 100
     altitude += 100
     close_range()
   }
 
   fn dive() {
-    fighter = move(fighter, down)
+    fighter = fighter - 100
     altitude -= 100
     if altitude <= 0 {
       ground()
@@ -66,13 +69,13 @@ program Alaram {
   }
 
   fn bank_left() {
-    fighter = move(fighter, west)
+    fighter = fighter - 10
     angle -= 10
     close_range()
   }
 
   fn bank_right() {
-    fighter = move(fighter, east)
+    fighter = fighter + 10
     angle += 10
     close_range()
   }

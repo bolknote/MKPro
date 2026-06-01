@@ -968,6 +968,32 @@ program FractionalRandomRangeSugar {
     expect(result.steps.map((step) => step.hex)).not.toContain("34");
   });
 
+  it("keeps the previous random seed on stack across a semantic seed update", () => {
+    const result = compileOk(`
+program PreviousRandomStackReuse {
+  state {
+    seed: packed = 0.5
+    scratch: packed = 0
+  }
+
+  fn any_seed_update_name() {
+    seed = random()
+  }
+
+  loop {
+    scratch = seed
+    any_seed_update_name()
+    scratch = int((1 + scratch + seed) * 20) / 1000
+    halt(scratch)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "previous-random-stack-reuse")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "previous random keep seed")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "previous random additive term")).toBe(true);
+  });
+
   it("lowers one-argument random calls as zero-based ranges", () => {
     const result = compileOk(`
 program RandomMax {
@@ -1359,31 +1385,6 @@ program SingleCaseResidualFallback {
     expect(result.report.optimizations.some((item) => item.name === "dispatch-default-merge")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "numeric-dispatch-residual-chain")).toBe(true);
     expect(result.diagnostics.filter((diagnostic) => diagnostic.level === "error")).toHaveLength(0);
-  });
-
-  it("collapses compact direction dispatch shells with no residual cases", () => {
-    const result = compileOk(`
-program CompactDirectionOnly {
-  state {
-    key: counter -9..9 = 2
-    dir: packed = 0
-  }
-  loop {
-    match key {
-      2, 4, 6, 8 => go(direction(key))
-      otherwise => halt(0)
-    }
-  }
-  fn go(delta) {
-    dir = delta
-    halt(dir)
-  }
-}
-`);
-
-    expect(result.report.optimizations.some((item) => item.name === "compact-dispatch-simplification")).toBe(true);
-    expect(result.report.optimizations.some((item) => item.name === "direction-cardinal-lowering")).toBe(true);
-    expect(result.report.optimizations.some((item) => item.name === "dispatch-lowering")).toBe(false);
   });
 
   it("passes single-use rule parameters through X for shared rule entries", () => {
@@ -2442,6 +2443,34 @@ program ResourceUnderflow {
     expect(result.steps.some((step) => step.comment === "decrement underflow food")).toBe(true);
   });
 
+  it("uses a domain trap for zero terminal branches after non-FL decrements", () => {
+    const result = compileOk(`
+program DecrementZeroDomainGuard {
+  state {
+    rows: packed[1..9] = 0
+    floor: counter 1..9 = 9
+  }
+
+  fn lost() {
+    halt("ЕГГОГ")
+  }
+
+  loop {
+    floor--
+    if floor == 0 {
+      lost()
+    }
+    else {
+      halt(rows[floor])
+    }
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "decrement-zero-domain-guard")).toBe(true);
+    expect(result.steps.some((step) => step.hex === "23" && step.comment === "decrement zero domain guard trap")).toBe(true);
+  });
+
   it("keeps a read key on stack while checking resource underflow before dispatch", () => {
     const result = compileOk(`
 program ReadKeyResourceUnderflow {
@@ -2546,6 +2575,32 @@ program IndexedSmallSet {
 
     expect(result.report.optimizations.some((item) => item.name === "constant-indexed-state-resolution")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "near-any-helper-lowering")).toBe(true);
+  });
+
+  it("uses an affine indexed bank variable directly when it already names the physical cell", () => {
+    const result = compileOk(`
+program AffineIndexedGroupState {
+  state {
+    line: group(1..3) {
+      front: packed = 0
+      robots: packed = 0
+    }
+    physical: counter 4..6 = 4
+  }
+
+  loop {
+    line[physical - 3].robots += 1
+    halt(line[1].front + line[2].front + line[3].front + line[1].robots)
+  }
+}
+`, { budget: 999, analysis: true, disableInterproceduralOpts: true });
+
+    const physical = result.report.registers.physical;
+    expect(result.report.optimizations.some((item) => item.name === "affine-indexed-selector-reuse")).toBe(true);
+    expect(result.report.registers.__bank_selector_line_robots).toBeUndefined();
+    expect(result.steps.some((step) => step.comment === "indexed selector line.robots")).toBe(false);
+    expect(result.steps.some((step) => step.mnemonic === `К П->X ${physical}` && step.comment === "indexed recall line.robots")).toBe(true);
+    expect(result.steps.some((step) => step.mnemonic === `К X->П ${physical}` && step.comment === "indexed set line.robots")).toBe(true);
   });
 
   it("lowers dynamic indexed group state through MK-61 indirect memory commands", () => {

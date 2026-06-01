@@ -110,7 +110,7 @@ program Game100Pig {
   fn player_choice() {
     show(die, ".-", turn_score:02, "-", preview_total:03, "-", roll_count:02)
     choice = read()
-    if choice == 0 {
+    unless choice {
       hold_player()
     }
     else {

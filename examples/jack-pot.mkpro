@@ -24,7 +24,7 @@ program JackPot {
   }
 
   loop {
-    if reels == 0 {
+    unless reels {
       show("1ЕС")
       angle_cos = cos(100)
 
@@ -37,7 +37,7 @@ program JackPot {
       angle_cos = cos(100)
 
       if angle_cos >= 0 {
-        if angle_cos == 0 {
+        unless angle_cos {
           show(money)
         }
 
@@ -67,7 +67,7 @@ program JackPot {
         digits[slot + 1] = digit
         slot++
 
-        if reels == 0 {
+        unless reels {
           reels = digit
         }
         else {
@@ -82,7 +82,7 @@ program JackPot {
   }
 
   fn settle() {
-    if frac((digits[2] + digits[3] + digits[4]) / 5) == 0 {
+    unless frac((digits[2] + digits[3] + digits[4]) / 5) {
       money += 1000
     }
 

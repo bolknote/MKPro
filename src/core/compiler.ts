@@ -129,6 +129,7 @@ import {
   zeroDigitTailDisplayProgram,
 } from "./emit/lowering-helpers.ts";
 import {
+  affineIndexIdentifierOffset,
   bankMemberKey,
   bankSelectorVariableName,
   contiguousRegisterOffset,
@@ -330,7 +331,7 @@ interface LoweringOptions {
   // a lone spatial hit gets larger, but programs that also compute the mask
   // inline can share the body.
   sharedBitMaskHelperCalls?: boolean;
-  // Collapse signed match pairs like `K => move(1)` / `-K => move(-1)` into
+  // Collapse signed match pairs like `K => step(1)` / `-K => step(-1)` into
   // an abs/sign guarded default branch. Speculative because the expression work
   // only wins when it replaces enough dispatch arms.
   signedAbsMatchPairs?: boolean;
@@ -4394,9 +4395,7 @@ function formatV2Predicate(predicate: V2PredicateAst): string {
 }
 
 function isSimpleCompilerExpression(text: string): boolean {
-  let normalized = normalizeV2ExpressionText(text);
-  const direction = /^direction\((.+)\)$/u.exec(normalized.trim());
-  if (direction) normalized = direction[1]!;
+  const normalized = normalizeV2ExpressionText(text);
   try {
     parseExpression(normalized);
     return true;
@@ -4726,6 +4725,13 @@ export class EmitContext {
     for (let index = 0; index < statements.length; index += 1) {
       const statement = statements[index]!;
       const next = statements[index + 1];
+      if (statement.kind === "assign") {
+        const previousRandom = this.compilePreviousRandomStateRun(statements, index);
+        if (previousRandom > 1) {
+          index += previousRandom - 1;
+          continue;
+        }
+      }
       if (statement.kind === "assign" && next?.kind === "call" && compileXParamProcCall(this, statement, next)) {
         index += 1;
         continue;
@@ -4985,6 +4991,130 @@ export class EmitContext {
       detail: `Lowered initialized while ${initializer.target} >= 1 through ${getOpcode(opcode).name} at line ${loop.line}.`,
     });
     return true;
+  }
+
+  compilePreviousRandomStateRun(statements: readonly StatementAst[], index: number): number {
+    const previous = statements[index];
+    const randomUpdate = statements[index + 1];
+    const consumer = statements[index + 2];
+    if (previous?.kind !== "assign" || randomUpdate === undefined || consumer?.kind !== "assign") return 0;
+    if (consumer.target !== previous.target) return 0;
+    if (previous.expr.kind !== "identifier") return 0;
+    const seed = previous.expr.name;
+    if (this.randomUpdateTarget(randomUpdate) !== seed) return 0;
+    if (!expressionReferencesIdentifier(consumer.expr, previous.target)) return 0;
+    if (!expressionReferencesIdentifier(consumer.expr, seed)) return 0;
+    if (!expressionCanUsePreviousRandomPrefix(consumer.expr, previous.target, seed)) return 0;
+    if (!this.compileExpressionFromPreviousRandom(consumer.expr, previous.target, seed, consumer.line)) return 0;
+
+    this.emitStore(consumer.target, `set ${consumer.target}`, consumer.line);
+    this.optimizations.push({
+      name: "previous-random-stack-reuse",
+      detail: `Kept previous ${seed} in Y while updating ${seed} with random() for ${consumer.target} at line ${consumer.line}.`,
+    });
+    return 3;
+  }
+
+  private randomUpdateTarget(statement: StatementAst): string | undefined {
+    if (statement.kind === "call") return this.randomUpdateProcTarget(statement.block);
+    if (
+      statement.kind === "assign" &&
+      statement.expr.kind === "call" &&
+      statement.expr.callee.toLowerCase() === "random" &&
+      statement.expr.args.length === 0
+    ) {
+      return statement.target;
+    }
+    return undefined;
+  }
+
+  private randomUpdateProcTarget(name: string): string | undefined {
+    const proc = this.ast.procs.find((candidate) => candidate.name === name);
+    if (proc === undefined || proc.body.length !== 1) return undefined;
+    const statement = proc.body[0];
+    if (statement?.kind !== "assign") return undefined;
+    if (
+      statement.expr.kind !== "call" ||
+      statement.expr.callee.toLowerCase() !== "random" ||
+      statement.expr.args.length !== 0
+    ) {
+      return undefined;
+    }
+    return statement.target;
+  }
+
+  private compileExpressionFromPreviousRandom(
+    expr: ExpressionAst,
+    previous: string,
+    seed: string,
+    line: number,
+  ): boolean {
+    this.emitRecall(seed, `previous random ${seed}`, line);
+    this.emitOp(0x0e, "В↑", `previous random keep ${seed}`, line);
+    this.emitOp(0x3b, "К СЧ", "random()", line);
+    this.currentXVariable = undefined;
+    this.currentXAliases.clear();
+    this.currentXKnownZero = false;
+    this.emitStore(seed, `set ${seed}`, line);
+    return this.compileExpressionWithPreviousRandomPrefix(expr, previous, seed, line);
+  }
+
+  private compileExpressionWithPreviousRandomPrefix(
+    expr: ExpressionAst,
+    previous: string,
+    seed: string,
+    line: number,
+  ): boolean {
+    const additiveTerms = previousRandomAdditiveRest(expr, previous, seed);
+    if (additiveTerms !== undefined) {
+      this.emitOp(0x10, "+", "previous random + random()", line);
+      this.currentXVariable = undefined;
+      this.currentXAliases.clear();
+      this.currentXKnownZero = false;
+      for (const term of additiveTerms) {
+        compileExpression(this, term);
+        this.emitOp(0x10, "+", "previous random additive term", line);
+        this.currentXVariable = undefined;
+        this.currentXAliases.clear();
+        this.currentXKnownZero = false;
+      }
+      return true;
+    }
+    if (expr.kind === "binary") {
+      if (this.compileExpressionWithPreviousRandomPrefix(expr.left, previous, seed, line)) {
+        compileExpression(this, expr.right);
+        this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`, line);
+        this.currentXVariable = undefined;
+        this.currentXAliases.clear();
+        this.currentXKnownZero = false;
+        return true;
+      }
+      if (
+        (expr.op === "+" || expr.op === "*") &&
+        this.compileExpressionWithPreviousRandomPrefix(expr.right, previous, seed, line)
+      ) {
+        compileExpression(this, expr.left);
+        this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`, line);
+        this.currentXVariable = undefined;
+        this.currentXAliases.clear();
+        this.currentXKnownZero = false;
+        return true;
+      }
+      return false;
+    }
+    if (
+      expr.kind === "call" &&
+      expr.callee.toLowerCase() === "int" &&
+      expr.args.length === 1 &&
+      this.compileExpressionWithPreviousRandomPrefix(expr.args[0]!, previous, seed, line)
+    ) {
+      this.emitOp(0x34, "К [x]", "int()", line);
+      this.currentXVariable = undefined;
+      this.currentXAliases.clear();
+      this.currentXKnownZero = false;
+      return true;
+    }
+    return false;
   }
 
   compilePreincrementIndexedStore(
@@ -6933,9 +7063,18 @@ export class EmitContext {
       this.diagnostics.push(buildDiagnostic("error", `Indexed state '${bankMemberKey(expr.base, expr.field)}' is not allocated in contiguous registers`, sourceLine));
       return undefined;
     }
-    if (offset === 0 && expr.index.kind === "identifier") {
-      const indexRegister = this.allocation.registers[expr.index.name];
-      if (indexRegister !== undefined && registerIndex(indexRegister) >= 7) return indexRegister;
+    const affineIndex = affineIndexIdentifierOffset(expr.index);
+    if (affineIndex !== undefined && offset + affineIndex.offset === 0) {
+      const indexRegister = this.allocation.registers[affineIndex.name];
+      if (indexRegister !== undefined && registerIndex(indexRegister) >= 7) {
+        if (affineIndex.offset !== 0) {
+          this.optimizations.push({
+            name: "affine-indexed-selector-reuse",
+            detail: `Used ${affineIndex.name}${affineIndex.offset > 0 ? "+" : ""}${affineIndex.offset} directly as ${bankMemberKey(expr.base, expr.field)} selector at line ${sourceLine}.`,
+          });
+        }
+        return indexRegister;
+      }
     }
     const selectorName = bankSelectorVariableName(expr.base, expr.field);
     const selector = this.allocation.registers[selectorName];
@@ -6953,12 +7092,17 @@ export class EmitContext {
     const cached = this.bankSelectorCache.get(selectorName);
     if (cacheable && cached?.key === cacheKey) return selector;
 
-    compileExpression(this, expr.index);
-    if (offset > 0) {
-      this.emitNumberOrPreload(String(offset));
+    if (affineIndex !== undefined) {
+      this.emitRecall(affineIndex.name, `indexed selector ${affineIndex.name}`, sourceLine);
+    } else {
+      compileExpression(this, expr.index);
+    }
+    const effectiveOffset = offset + (affineIndex?.offset ?? 0);
+    if (effectiveOffset > 0) {
+      this.emitNumberOrPreload(String(effectiveOffset));
       this.emitOp(0x10, "+", "indexed selector offset", sourceLine);
-    } else if (offset < 0) {
-      this.emitNumberOrPreload(String(Math.abs(offset)));
+    } else if (effectiveOffset < 0) {
+      this.emitNumberOrPreload(String(Math.abs(effectiveOffset)));
       this.emitOp(0x11, "-", "indexed selector offset", sourceLine);
     }
     this.emitStore(selectorName, `indexed selector ${bankMemberKey(expr.base, expr.field)}`, sourceLine);
@@ -8484,6 +8628,55 @@ function preincrementIndexedStoreShape(
     findStateBankMember(ast, store.target) !== undefined;
 }
 
+function isPreviousRandomSum(expr: ExpressionAst, previous: string, seed: string): boolean {
+  return previousRandomAdditiveRest(expr, previous, seed)?.length === 0;
+}
+
+function previousRandomAdditiveRest(expr: ExpressionAst, previous: string, seed: string): ExpressionAst[] | undefined {
+  const terms = additiveTerms(expr);
+  let sawPrevious = false;
+  let sawSeed = false;
+  const rest: ExpressionAst[] = [];
+  for (const term of terms) {
+    if (isIdentifierNamed(term, previous)) {
+      if (sawPrevious) return undefined;
+      sawPrevious = true;
+      continue;
+    }
+    if (isIdentifierNamed(term, seed)) {
+      if (sawSeed) return undefined;
+      sawSeed = true;
+      continue;
+    }
+    if (!expressionPureForSubstitution(term)) return undefined;
+    rest.push(term);
+  }
+  return sawPrevious && sawSeed ? rest : undefined;
+}
+
+function additiveTerms(expr: ExpressionAst): ExpressionAst[] {
+  if (expr.kind === "binary" && expr.op === "+") {
+    return [...additiveTerms(expr.left), ...additiveTerms(expr.right)];
+  }
+  return [expr];
+}
+
+function isIdentifierNamed(expr: ExpressionAst, name: string): boolean {
+  return expr.kind === "identifier" && expr.name === name;
+}
+
+function expressionCanUsePreviousRandomPrefix(expr: ExpressionAst, previous: string, seed: string): boolean {
+  if (previousRandomAdditiveRest(expr, previous, seed) !== undefined) return true;
+  if (expr.kind === "binary") {
+    return expressionCanUsePreviousRandomPrefix(expr.left, previous, seed) ||
+      ((expr.op === "+" || expr.op === "*") && expressionCanUsePreviousRandomPrefix(expr.right, previous, seed));
+  }
+  return expr.kind === "call" &&
+    expr.callee.toLowerCase() === "int" &&
+    expr.args.length === 1 &&
+    expressionCanUsePreviousRandomPrefix(expr.args[0]!, previous, seed);
+}
+
 function collectPreincrementIndexedStorePointers(ast: ProgramAst): Set<string> {
   const pointers = new Set<string>();
   const visit = (statements: readonly StatementAst[]): void => {
@@ -8605,7 +8798,8 @@ function directIndexSelectorCandidate(
   expr: Extract<ExpressionAst, { kind: "indexed" }>,
   hints: ReadonlyMap<string, { mode: "prefer" | "fixed"; register: RegisterName }>,
 ): string | undefined {
-  if (expr.index.kind !== "identifier") return undefined;
+  const affineIndex = affineIndexIdentifierOffset(expr.index);
+  if (affineIndex === undefined) return undefined;
   const resolved = findStateBankMember(ast, expr);
   if (resolved === undefined) return undefined;
   let offset: number | undefined;
@@ -8619,7 +8813,7 @@ function directIndexSelectorCandidate(
     }
     if (offset !== current) return undefined;
   }
-  return offset === 0 ? expr.index.name : undefined;
+  return offset !== undefined && offset + affineIndex.offset === 0 ? affineIndex.name : undefined;
 }
 
 function preferHighIndexSelectorRegister(
@@ -8824,9 +9018,9 @@ function collectPreloadConstantValues(ast: ProgramAst, startupAwareConstantPrelo
   const occurrences = new Map<string, number>();
   // Most candidates appear once, so per-occurrence cost is a fine proxy for the
   // savings of preloading them. Coordinate-decode constants are different: the
-  // spatial helpers re-emit `10` (`cell / 10`, `* 10`, per direction) several
-  // times inline, so a single cheap literal is worth far more than its one-shot
-  // cost suggests. Weight those so the savings-aware sort below keeps them.
+  // spatial helpers re-emit `10` (`cell / 10`, `* 10`) several times inline, so
+  // a single cheap literal is worth far more than its one-shot cost suggests.
+  // Weight those so the savings-aware sort below keeps them.
   const COORD_DECODE_TENS_WEIGHT = 5;
   const weights = new Map<string, number>();
   const boost = (value: string, weight: number): void => {
@@ -8837,15 +9031,6 @@ function collectPreloadConstantValues(ast: ProgramAst, startupAwareConstantPrelo
     values.add(value);
     occurrences.set(value, (occurrences.get(value) ?? 0) + 1);
   };
-  if (programContainsCall(ast, "direction")) {
-    values.add("20");
-    values.add("10");
-    boost("10", COORD_DECODE_TENS_WEIGHT);
-  }
-  if (programContainsCall(ast, "__direction_cardinal")) {
-    values.add("10");
-    boost("10", COORD_DECODE_TENS_WEIGHT);
-  }
   if (programContainsCall(ast, "line_count")) {
     values.add("10");
     values.add("11");

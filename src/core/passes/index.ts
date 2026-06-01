@@ -19,7 +19,7 @@ import { indirectMemoryTable, stableIndirectFlow } from "./indirect-addressing.t
 import { jumpThread } from "./jump-thread.ts";
 import { jumpToNextThreading } from "./jump-to-next.ts";
 import { lastXReuse } from "./last-x-reuse.ts";
-import { preloadedIndirectFlow } from "./preloaded-indirect-flow.ts";
+import { preloadedIndirectFlow, runtimeIndirectCallFlow } from "./preloaded-indirect-flow.ts";
 import { redundantPrologueElimination } from "./redundant-prologue.ts";
 import { registerCoalesce } from "./register-coalesce.ts";
 import { returnZeroJump } from "./return-zero-jump.ts";
@@ -44,6 +44,7 @@ const PASS_PIPELINE: ReadonlyArray<IrPass> = [
   jumpThread,
   stableIndirectFlow,
   preloadedIndirectFlow,
+  runtimeIndirectCallFlow,
   indirectMemoryTable,
   deadStoreBeforeCommutative,
   deadStoreElimination,

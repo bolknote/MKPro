@@ -8,7 +8,7 @@ import { jumpThread } from "../../src/core/passes/jump-thread.ts";
 import { jumpToNextThreading } from "../../src/core/passes/jump-to-next.ts";
 import { lastXReuse } from "../../src/core/passes/last-x-reuse.ts";
 import { computeLiveness } from "../../src/core/passes/liveness-analysis.ts";
-import { preloadedIndirectFlow } from "../../src/core/passes/preloaded-indirect-flow.ts";
+import { preloadedIndirectFlow, runtimeIndirectCallFlow } from "../../src/core/passes/preloaded-indirect-flow.ts";
 import { r0FractionalSentinel } from "../../src/core/passes/r0-fractional-sentinel.ts";
 import { redundantPrologueElimination } from "../../src/core/passes/redundant-prologue.ts";
 import { computeNonOverlappingRegisterMapping, registerCoalesce } from "../../src/core/passes/register-coalesce.ts";
@@ -577,6 +577,54 @@ describe("ir passes on synthetic programs", () => {
       { register: "8", value: "FA", countsAgainstProgram: false },
     ]);
     expect(result.optimizations.some((optimization) => optimization.name === "preloaded-super-dark-flow")).toBe(true);
+  });
+
+  it("runtime-indirect-call-flow borrows a dead stable register for repeated backward helper calls", () => {
+    const program: IrOp[] = [
+      plain(0x09, "9"),
+      store("7"),
+      label("helper"),
+      plain(0x00, "0"),
+      { kind: "return", opcode: 0x52, meta: { mnemonic: "В/О" } },
+      call("helper"),
+      call("helper"),
+      call("helper"),
+      call("helper"),
+      call("helper"),
+    ];
+    const result = runtimeIndirectCallFlow.run(program, ctx);
+
+    expect(result.applied).toBe(5);
+    expect(result.optimizations[0]?.name).toBe("runtime-indirect-call-flow");
+    expect(result.ops.slice(5, 7)).toEqual([
+      { kind: "plain", opcode: 2, meta: { mnemonic: "2", comment: "runtime indirect call selector 2" } },
+      { kind: "store", register: "7", opcode: 0x47, meta: { mnemonic: "X->П 7", comment: "runtime indirect call selector 2" } },
+    ]);
+    expect(result.ops.filter((op) => op.kind === "indirect-call" && op.register === "7")).toHaveLength(5);
+  });
+
+  it("runtime-indirect-call-flow refuses registers used by the helper body", () => {
+    const program: IrOp[] = [
+      label("helper"),
+      recall("7"),
+      recall("8"),
+      recall("9"),
+      recall("a"),
+      recall("b"),
+      recall("c"),
+      recall("d"),
+      recall("e"),
+      { kind: "return", opcode: 0x52, meta: { mnemonic: "В/О" } },
+      call("helper"),
+      call("helper"),
+      call("helper"),
+      call("helper"),
+      call("helper"),
+    ];
+    const result = runtimeIndirectCallFlow.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops.filter((op) => op.kind === "call")).toHaveLength(5);
   });
 
   it("stable-indirect-flow drops selector knowledge after calls", () => {

@@ -88,7 +88,7 @@ program CaveHighlevelBaseline {
   fn break_wall() {
     // Blasting only commits when the remembered wall and enough dynamite exist;
     // the display response is the feedback, not a separate error language.
-    if blocked != 0 {
+    if blocked {
       if dynamite >= 1 {
         walls -= blocked
         blocked = 0

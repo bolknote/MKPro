@@ -216,6 +216,23 @@ function indirectFlowOp(
   };
 }
 
+function runtimeSelectorLiteralOps(target: number, register: RegisterName): IrOp[] {
+  const digits = String(target).split("").map((digit): IrOp => ({
+    kind: "plain",
+    opcode: Number(digit),
+    meta: { mnemonic: digit, comment: `runtime indirect call selector ${target}` },
+  }));
+  return [
+    ...digits,
+    {
+      kind: "store",
+      register,
+      opcode: 0x40 + registerIndex(register),
+      meta: { mnemonic: `X->П ${register}`, comment: `runtime indirect call selector ${target}` },
+    },
+  ];
+}
+
 export interface IndirectFlowOptions {
   // When set, the `maxTarget > siteAddress` tail-only guard is dropped. This is
   // ONLY safe for the post-layout driver, which keeps a single rewrite per
@@ -225,6 +242,160 @@ export interface IndirectFlowOptions {
   // the conservative guard.
   relaxMaxTargetGuard?: boolean;
 }
+
+interface RuntimeCallTarget {
+  target: number;
+  indices: number[];
+  insertIndex: number;
+  insertAddress: number;
+}
+
+interface RuntimeCallPlan {
+  target: number;
+  register: RegisterName;
+  indices: Set<number>;
+  insertIndex: number;
+}
+
+function opReferencesRegister(op: IrOp, register: RegisterName): boolean {
+  switch (op.kind) {
+    case "store":
+    case "recall":
+    case "indirect-store":
+    case "indirect-recall":
+    case "indirect-jump":
+    case "indirect-call":
+    case "indirect-cjump":
+      return op.register === register;
+    default:
+      return false;
+  }
+}
+
+function firstOpIndexAtAddress(ops: readonly IrOp[], addresses: readonly number[], address: number): number | undefined {
+  for (let index = 0; index < ops.length; index += 1) {
+    if (cellsPerOp(ops[index]!) === 0) continue;
+    if (addresses[index] === address) return index;
+  }
+  return undefined;
+}
+
+function canBorrowRegisterForRuntimeSelector(
+  ops: readonly IrOp[],
+  register: RegisterName,
+  targetIndex: number,
+  insertIndex: number,
+  selected: ReadonlySet<number>,
+): boolean {
+  for (let index = targetIndex; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (hasRewriteBarrier(op)) return false;
+    if (selected.has(index)) continue;
+    if (index >= insertIndex && opReferencesRegister(op, register)) return false;
+    if (index < insertIndex && opReferencesRegister(op, register)) return false;
+  }
+  return true;
+}
+
+function runtimeIndirectCallPlans(ops: readonly IrOp[]): RuntimeCallPlan[] {
+  const addresses = addressByIndex(ops);
+  const labels = calculateLabelAddresses(ops);
+  const targets = new Map<number, RuntimeCallTarget>();
+  for (let index = 0; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (hasRewriteBarrier(op) || op.kind !== "call") continue;
+    if (op.targetMeta.formalOpcode !== undefined || op.targetMeta.roles?.includes("formal-address")) continue;
+    const target = targetAddress(op.target, labels);
+    const siteAddress = addresses[index]!;
+    if (
+      target === undefined ||
+      !Number.isInteger(target) ||
+      target < 0 ||
+      target > 99 ||
+      target >= siteAddress
+    ) {
+      continue;
+    }
+    const existing = targets.get(target);
+    if (existing === undefined) {
+      targets.set(target, {
+        target,
+        indices: [index],
+        insertIndex: index,
+        insertAddress: siteAddress,
+      });
+      continue;
+    }
+    existing.indices.push(index);
+  }
+
+  const plans: RuntimeCallPlan[] = [];
+  const usedRegisters = new Set<RegisterName>();
+  const sorted = [...targets.values()].sort((left, right) =>
+    right.indices.length - left.indices.length ||
+    left.insertAddress - right.insertAddress
+  );
+  for (const candidate of sorted) {
+    const preloadCost = String(candidate.target).length + 1;
+    if (candidate.indices.length <= preloadCost + 2) continue;
+    const selected = new Set(candidate.indices);
+    const targetIndex = firstOpIndexAtAddress(ops, addresses, candidate.target);
+    if (targetIndex === undefined) continue;
+    const register = STABLE_REGISTERS.find((item) =>
+      !usedRegisters.has(item) &&
+      canBorrowRegisterForRuntimeSelector(ops, item, targetIndex, candidate.insertIndex, selected)
+    );
+    if (register === undefined) continue;
+    usedRegisters.add(register);
+    plans.push({
+      target: candidate.target,
+      register,
+      indices: selected,
+      insertIndex: candidate.insertIndex,
+    });
+  }
+  return plans;
+}
+
+const runtimeIndirectCallRun: IrPassFn = (ops) => {
+  const plans = runtimeIndirectCallPlans(ops);
+  if (plans.length === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+  const byInsert = new Map<number, RuntimeCallPlan[]>();
+  const byIndex = new Map<number, RuntimeCallPlan>();
+  for (const plan of plans) {
+    const existing = byInsert.get(plan.insertIndex);
+    if (existing === undefined) byInsert.set(plan.insertIndex, [plan]);
+    else existing.push(plan);
+    for (const index of plan.indices) byIndex.set(index, plan);
+  }
+
+  const result: IrOp[] = [];
+  let rewritten = 0;
+  for (let index = 0; index < ops.length; index += 1) {
+    for (const plan of byInsert.get(index) ?? []) {
+      result.push(...runtimeSelectorLiteralOps(plan.target, plan.register));
+    }
+    const plan = byIndex.get(index);
+    const op = ops[index]!;
+    if (plan !== undefined && op.kind === "call") {
+      result.push(indirectFlowOp(op, plan.register, String(plan.target), plan.target, false));
+      rewritten += 1;
+      continue;
+    }
+    result.push(op);
+  }
+
+  return {
+    ops: result,
+    applied: rewritten,
+    optimizations: [
+      {
+        name: "runtime-indirect-call-flow",
+        detail: `Borrowed dead stable register(s) for ${rewritten} repeated direct helper call(s).`,
+      },
+    ],
+  };
+};
 
 export function runPreloadedIndirectFlow(
   ops: readonly IrOp[],
@@ -346,5 +517,11 @@ const run: IrPassFn = (ops, context) => runPreloadedIndirectFlow(ops, context, {
 export const preloadedIndirectFlow: IrPass = {
   name: "preloaded-indirect-flow",
   run,
+  layoutSafe: false,
+};
+
+export const runtimeIndirectCallFlow: IrPass = {
+  name: "runtime-indirect-call-flow",
+  run: runtimeIndirectCallRun,
   layoutSafe: false,
 };

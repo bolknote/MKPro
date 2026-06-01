@@ -28,7 +28,7 @@ program TreasureHunter2 {
   }
 
   loop {
-    if entered == 0 {
+    unless entered {
       entered = 1
       inspect_cell()
     }
@@ -36,11 +36,11 @@ program TreasureHunter2 {
       draw()
       action = read()
 
-      if action == 0 {
+      unless action {
         punch_hole()
       }
       else {
-        if cos(100) == 0 {
+        unless cos(100) {
           climb_or_descend()
         }
         else {
@@ -76,23 +76,21 @@ program TreasureHunter2 {
   }
 
   fn climb_or_descend() {
-    if frac(bit_and(rows[floor].row, 5 * (pos + 1))) / pos == 1 {
-      floor++
-      inspect_cell()
+    match frac(bit_and(rows[floor].row, 5 * (pos + 1))) / pos {
+      1 => climb_up()
+      0 => descend()
+      otherwise => draw()
     }
-    else {
-      if frac(bit_and(rows[floor].row, 5 * (pos + 1))) / pos == 0 {
-        descend()
-      }
-      else {
-        draw()
-      }
-    }
+  }
+
+  fn climb_up() {
+    floor++
+    inspect_cell()
   }
 
   fn descend() {
     floor--
-    if floor == 0 {
+    unless floor {
       lost()
     }
     else {

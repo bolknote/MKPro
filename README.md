@@ -78,7 +78,10 @@ program TinyGame {
     key = read()
 
     match key {
-      2, 4, 6, 8 => go(direction(key))
+      2 => apply_step(10)
+      8 => apply_step(-10)
+      4 => apply_step(-1)
+      6 => apply_step(1)
       otherwise => game_over()
     }
   }

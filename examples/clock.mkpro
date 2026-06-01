@@ -30,11 +30,11 @@ program MonatkodenisClock {
 
   fn wait_tick() {
     outer_delay = 10
-    while outer_delay != 0 {
+    while outer_delay {
       outer_delay--
 
       inner_delay = 11
-      while inner_delay != 0 {
+      while inner_delay {
         inner_delay--
       }
     }

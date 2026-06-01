@@ -88,7 +88,7 @@ program GiantsCountry {
   fn encounter(encounter_tile) {
     // Events all share the same shape: remember a code, then convert
     // success into score or mobility and failure into strength loss.
-    if encounter_tile == 0 {
+    unless encounter_tile {
       show("8.Е6-ЕГ C")
     }
     else {

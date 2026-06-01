@@ -237,7 +237,7 @@ program Demo {
     delta: counter -100..100 = 0
   }
   loop {
-    step(direction(key))
+    step(pos + 1)
   }
   fn step(delta) {
     pos += delta
@@ -252,82 +252,6 @@ program Demo {
       expect.objectContaining({ kind: "assign", target: "delta" }),
       expect.objectContaining({ kind: "call", block: "step" }),
     ]));
-  });
-
-  it("shares guarded direction match actions with the common direction dispatch", () => {
-    const ast = parseProgram(`
-program GuardedDirection {
-  state {
-    key: packed = 0
-    pos: coord(cave) = 1
-  }
-  cave: board(row_scan)
-  loop {
-    key = read()
-    match key {
-      4 => move_left()
-      2, 6, 8, 5, -5 => go(direction(key))
-      otherwise => ignored()
-    }
-  }
-  fn move_left() {
-    if pos == 7 {
-      halt(77)
-    }
-    else {
-      go(direction(key))
-    }
-  }
-  fn go(dir) {
-    pos += dir
-  }
-  fn ignored() {
-    halt(0)
-  }
-}
-`);
-    const loop = ast.entries[0]?.body[0];
-    expect(loop?.kind).toBe("loop");
-    if (loop?.kind !== "loop") throw new Error("expected loop");
-    const guarded = loop.body.find((statement) => statement.kind === "if");
-    expect(guarded).toMatchObject({
-      kind: "if",
-      condition: {
-        op: "==",
-        right: { kind: "number", raw: "4" },
-      },
-    });
-    const dispatch = loop.body.find((statement) => statement.kind === "dispatch");
-    expect(dispatch).toMatchObject({ kind: "dispatch", name: "direction_dispatch" });
-    if (dispatch?.kind !== "dispatch") throw new Error("expected direction dispatch");
-    expect(dispatch.cases.map((dispatchCase) => JSON.stringify(dispatchCase.value))).not.toContain(JSON.stringify({ kind: "number", raw: "4" }));
-  });
-
-  it("marks guarded cardinal direction dispatches for the compact direction lowerer", () => {
-    const ast = parseProgram(`
-program CardinalDirection {
-  state {
-    key: packed = 0
-    pos: packed = 0
-  }
-  loop {
-    match key {
-      2, 4, 6, 8 => step(direction(key))
-      otherwise => halt(0)
-    }
-  }
-  fn step(delta) {
-    pos += delta
-  }
-}
-`);
-    const loop = ast.entries[0]?.body[0];
-    expect(loop?.kind).toBe("loop");
-    if (loop?.kind !== "loop") throw new Error("expected loop");
-    const dispatch = loop.body[0];
-    expect(dispatch?.kind).toBe("dispatch");
-    if (dispatch?.kind !== "dispatch") throw new Error("expected dispatch");
-    expect(JSON.stringify(dispatch.defaultBody)).toContain('"callee":"__direction_cardinal"');
   });
 
   it("rejects unknown compact board encodings", () => {
@@ -544,7 +468,7 @@ program Demo {
       parseProgram(`
 program Bad {
   loop {
-    step(direction(key))
+    step(pos + 1)
   }
   rule step(delta) {
     halt(0)
@@ -557,7 +481,7 @@ program Bad {
       parseProgram(`
 program Bad {
   loop {
-    step direction(key)
+    step pos
   }
   fn step(delta) {
     halt(0)
@@ -565,58 +489,6 @@ program Bad {
 }
 `),
     ).toThrow(/Function calls must look like 'name\(\.\.\.\)'/u);
-
-    expect(() =>
-      parseProgram(`
-program Bad {
-  fn move(delta) {
-    halt(0)
-  }
-  loop {
-    halt(0)
-  }
-}
-`),
-    ).toThrow(/Function name 'move' is reserved/u);
-  });
-
-  it("keeps explicit otherwise branches when compacting direction calls", () => {
-    const ast = parseProgram(`
-program DirectionOtherwise {
-  state {
-    pos: counter -99..99 = 0
-  }
-  loop {
-    match key {
-      2, 4, 5, 6, 8 => step(direction(key))
-      otherwise => wait()
-    }
-  }
-  fn step(delta) {
-    pos += delta
-  }
-  fn wait() {
-    halt(0)
-  }
-}
-`);
-    const loop = ast.entries[0]?.body[0];
-    expect(loop?.kind).toBe("loop");
-    if (loop?.kind !== "loop") throw new Error("expected loop");
-    const dispatch = loop.body[0];
-    expect(dispatch?.kind).toBe("dispatch");
-    if (dispatch?.kind !== "dispatch") throw new Error("expected dispatch");
-    expect(dispatch.cases).toHaveLength(0);
-    expect(dispatch.defaultBody).toEqual([
-      expect.objectContaining({
-        kind: "if",
-        thenBody: expect.arrayContaining([expect.objectContaining({ kind: "call", block: "step" })]) as unknown,
-        elseBody: [expect.objectContaining({ kind: "call", block: "wait" })],
-      }),
-    ]);
-    expect(JSON.stringify(dispatch.defaultBody)).not.toContain(
-      `"callee":"abs","args":[{"kind":"identifier","name":"key"}]`,
-    );
   });
 
   it("parses compact board domains, cell sets, state config, and reference metadata", () => {
@@ -862,7 +734,7 @@ program BadGroupStack {
     ).toThrow(/Indexed state banks cannot be initialized from stack\.X or stack\.Y/u);
   });
 
-  it("parses and lowers move() expressions and named terminal functions", () => {
+  it("parses and lowers coordinate updates and named terminal functions", () => {
     const ast = parseProgram(`
 program Demo {
   cave: board(0..9, 0..9)
@@ -874,7 +746,7 @@ program Demo {
     halt(777)
   }
   loop {
-    pos = move(pos, east)
+    pos = pos + 10
     escaped()
   }
 }
@@ -1265,6 +1137,73 @@ program Teleport {
     if (nested?.kind !== "v2_if") throw new Error("expected nested v2_if");
     expect(nested.predicate).toMatchObject({ kind: "v2_compare", op: ">=", right: "5" });
     expect(nested.elseBody).toEqual([expect.objectContaining({ kind: "v2_stop" })]);
+  });
+
+  it("parses bare predicates as comparisons to 0 for if/unless/while", () => {
+    const ast = parseProgram(`
+program Truthy {
+  state {
+    flag: counter 0..9 = 0
+  }
+  loop {
+    if flag {
+      halt(1)
+    }
+    unless flag {
+      halt(0)
+    }
+    while flag {
+      flag--
+    }
+  }
+}
+`);
+    const loop = ast.entries[0]?.body[0];
+    expect(loop?.kind).toBe("loop");
+    if (loop?.kind !== "loop") throw new Error("expected loop");
+
+    const ifStatement = loop.body[0];
+    const unlessStatement = loop.body[1];
+    const whileStatement = loop.body[2];
+
+    expect(ifStatement).toMatchObject({
+      kind: "v2_if",
+      predicate: { kind: "v2_compare", left: "flag", op: "!=", right: "0" },
+    });
+    expect(unlessStatement).toMatchObject({
+      kind: "v2_if",
+      negated: true,
+      predicate: { kind: "v2_compare", left: "flag", op: "!=", right: "0" },
+    });
+    expect(whileStatement).toMatchObject({
+      kind: "v2_while",
+      predicate: { kind: "v2_compare", left: "flag", op: "!=", right: "0" },
+    });
+  });
+
+  it("parses explicit unless comparison as the inverse of if", () => {
+    const ast = parseProgram(`
+program ExplicitUnless {
+  state {
+    score: counter 0..9 = 0
+  }
+  loop {
+    unless score == 0 {
+      show(0)
+    }
+  }
+}
+`);
+    const loop = ast.entries[0]?.body[0];
+    expect(loop?.kind).toBe("loop");
+    if (loop?.kind !== "loop") throw new Error("expected loop");
+    const unlessStatement = loop.body[0];
+
+    expect(unlessStatement).toMatchObject({
+      kind: "v2_if",
+      negated: true,
+      predicate: { kind: "v2_compare", left: "score", op: "==", right: "0" },
+    });
   });
 
   it("parses raw blocks with an explicit stack and state contract", () => {

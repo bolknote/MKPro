@@ -26,12 +26,12 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   human: 24,
   "jack-pot": 101,
   lunar: 47,
-  "minesweeper-9x7": 100,
+  "minesweeper-9x7": 94,
   "minesweeper-9x9": 90,
   "raja-yoga": 88,
   "sea-battle": 82,
   "tiny-game": 23,
-  "treasure-hunter-2": 105,
+  "treasure-hunter-2": 103,
   wumpus: 103,
 };
 
@@ -47,7 +47,7 @@ const PENDING_BASELINE: Record<string, number> = {
   "cave-treasure": 165,
   "giants-country": 170,
   labyrinth777: 206,
-  "rambo-iii": 135,
+  "rambo-iii": 133,
   teleport: 239,
   "tic-tac-toe-4x4": 213,
 };

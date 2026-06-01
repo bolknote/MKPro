@@ -83,7 +83,7 @@ program CaveTreasure {
   }
 
   fn break_wall() {
-    if blocked != 0 {
+    if blocked {
       if dynamite >= 2 {
         walls -= blocked
         pos = blocked

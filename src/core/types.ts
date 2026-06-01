@@ -268,7 +268,6 @@ export type V2StatementAst =
   | V2IfStatementAst
   | V2WhileStatementAst
   | V2LoopStatementAst
-  | V2MoveStatementAst
   | V2MatchStatementAst
   | V2InvokeStatementAst
   | V2AssignStatementAst
@@ -299,6 +298,7 @@ export interface V2StopStatementAst {
 export interface V2IfStatementAst {
   kind: "v2_if";
   predicate: V2PredicateAst;
+  negated?: true;
   thenBody: V2StatementAst[];
   elseBody?: V2StatementAst[];
   line: number;
@@ -314,13 +314,6 @@ export interface V2WhileStatementAst {
 export interface V2LoopStatementAst {
   kind: "v2_loop";
   body: V2StatementAst[];
-  line: number;
-}
-
-export interface V2MoveStatementAst {
-  kind: "v2_move";
-  target: string;
-  direction?: "north" | "south" | "east" | "west" | "up" | "down";
   line: number;
 }
 

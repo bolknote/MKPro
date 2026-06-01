@@ -58,7 +58,7 @@ The compiler owns implementation choices such as X2, dark entries, overlays,
 register placement, display bytes, and undocumented opcodes.
 
 The modern parser surface deliberately rejects legacy block forms and old command
-syntax in favor of `show(...)`, `read()`, `if/while/match`, `loop`, and `fn` blocks.
+syntax in favor of `show(...)`, `read()`, `if/unless/while/match`, `loop`, and `fn` blocks.
 These rejected forms include `fleet`, `world`, `encounters`, `screen`, `turn`,
 `rule`, and `challenge` blocks, as well as bare `read X`, `show X`, `stop`, and
 `move X <dir>` statements.
@@ -97,7 +97,7 @@ The current human DSL surface inside `program` is:
   actions.
 - `name = read()` inside a loop or function for a player-entered value.
 
-Functions should stay at the level of game actions: `player = move(player, south)`,
+Functions should stay at the level of game actions: `player = player + 10`,
 `safe_landing()`, normal assignments, comparisons, dispatch, and halts. The
 lowerer turns those into assignments, display commands, dispatch, and stops.
 
@@ -255,6 +255,11 @@ Both forms lower to contiguous calculator registers. A constant index such as
 such as `front_line[slot].front` lowers through MK-61 indirect memory commands
 (`К X->П` / `К П->X`) with a compiler-owned selector register. Indexed bank
 elements cannot be initialized from `stack.X` or `stack.Y`.
+
+When an index expression is an affine form like `physical - 3` and that value
+already names the physical calculator register for the selected contiguous bank
+member, the compiler can use the index variable itself as the indirect selector
+instead of materializing a separate bank selector.
 
 When three or more contiguous indexed fields share the same non-literal
 initializer, setup generation may emit one indirect `R0` fill loop instead of
@@ -511,12 +516,12 @@ game template.
 Current compact board encodings are `corridor_plan`, `decimal_player`,
 `floor_plan`, `packed_decimal_zero_run`, `pier_to_ship`, and `row_scan`.
 
-Movement functions should use `move(...)` when they mean movement rather than coordinate
-arithmetic:
+Movement is plain coordinate arithmetic on the packed position. Pick the delta
+that matches the board's encoding and add it to the coordinate:
 
 ```mkpro
 fn move_south() {
-  player = move(player, south)
+  player = player + 1
   cave_screen()
 }
 
@@ -532,13 +537,11 @@ fn move_dir(dir) {
 }
 ```
 
-`move(pos, north/south/east/west/up/down)` lowers to the current compact coordinate
-expression for the position's encoding. Assign the result back to the position:
-`pos = move(pos, east)`. For example,
-`packed_decimal_zero_run` uses the same small fractional deltas that older cave
-sources wrote by hand, while generic grid movement uses integer deltas. When the
-movement amount is deliberately computed, use the ordinary update form:
-`pos += expr`.
+Generic grid boards (`row_scan`) use integer deltas: `+1`/`-1` step the ones digit,
+`+10`/`-10` step the tens digit, and `+100`/`-100` step the hundreds digit. The
+`packed_decimal_zero_run` encoding packs its coordinate as a decimal with zero-run
+spacing, so its moves are small fractional deltas (for example `+0.0000002`). Use
+the ordinary update form `pos += expr` when the movement amount is computed.
 If a function needs to remember a blocked destination, write that as normal state:
 `next = player + dir`, then assign `blocked = next` only in the branch where a
 wall was actually hit.
@@ -612,6 +615,12 @@ yields `0..9`, `int(random(0, 10))` also yields `0..9`, and
 continuous draw is intended, for example `int(random(0.5, 2.5))`.
 The compiler floors integer random draws with `x - frac(x)`, so these forms
 avoid the MK-61 `К [x]` opcode immediately after `К СЧ`.
+
+If source saves a random seed, updates the same seed with `random()`, and then
+uses both the previous and new seed in one pure expression, the compiler may keep
+the previous seed on the stack instead of storing and recalling it. This matches
+both a direct `seed = random()` update and a one-statement helper that performs
+that update; the helper name is irrelevant.
 
 `pow(base, exponent)` lowers to the MK-61 `F x^y` command. `bit_mask(index)`
 builds a zero-based packed bit mask: index `0` is `1`, `1` is `2`, `2` is `4`,
@@ -827,13 +836,19 @@ The parser keeps these high-level statements as typed source nodes:
 - `name -= expr`
 - `name++`
 - `name--`
-- `if predicate { ... }`, `if predicate { ... } else { ... }`, and
+- `if predicate { ... }`, `unless predicate { ... }`,
+  `if predicate { ... } else { ... }`, and
   `if predicate { ... } else if predicate { ... } else { ... }`.
   `else` may be written either on its own line after `}` or as `} else {`.
   Predicates support `==`, `!=`, `<`, `<=`, `>`, `>=`, and membership `item in list`.
+  `unless predicate { ... }` is the inverse of `if predicate { ... }`: the
+  block runs when the predicate is false.
+  A bare predicate is shorthand for comparison with zero: `if lives { ... }`
+  means `if lives != 0 { ... }`, `unless lives { ... }` means
+  `unless lives != 0 { ... }`, and `while lives { ... }` means
+  `while lives != 0 { ... }`.
 - `while predicate { ... }`
 - `loop { ... }`
-- `name = move(pos, direction)`
 - `fn_name(arg1, arg2)`
 - `match expr { values => action }`
 - query expressions: `line_count(set, cell)`, `neighbor_count(set, cell)`,
@@ -841,7 +856,7 @@ The parser keeps these high-level statements as typed source nodes:
 - formula helpers: `abs`, `acos`, `asin`, `atg`, `bit_and`, `bit_clear`,
   `bit_has`, `bit_mask`, `bit_not`, `bit_or`, `bit_set`, `bit_toggle`, `bit_xor`,
   `cell_at`, `cell_clear`, `cell_has`, `cell_mask`, `cell_set`, `cell_toggle`,
-  `cos`, `direction`, `digit_add`, `digit_at`, `digit_set`, `eq_any`, `exp`,
+  `cos`, `digit_add`, `digit_at`, `digit_set`, `eq_any`, `exp`,
   `frac`, `from_min`, `from_sec`, `inv`, `int`, `lg`, `ln`, `line_count`, `max`,
   `neighbor_count`, `near_any`, `pi`, `pow`, `pow10`, `random`, `sign`, `sin`,
   `sqr`, `sqrt`, `tg`, `to_min`, `to_sec`.
@@ -874,11 +889,11 @@ the body is cheaper than storing the parameter and calling a shared subroutine,
 the lowerer specializes those calls automatically.
 
 Statement-level actions use the same call shape as the rest of the language:
-write `go(direction(key))`, because `go` is a function call and
-`direction(key)` is an expression. Built-in names such as `move`, `show`, `read`,
+write `apply_step(player + 1)`, because `apply_step` is a function call and
+`player + 1` is an expression. Built-in names such as `show`, `read`,
 and `halt` cannot be used as function names.
 The full parser-reserved function-name list is:
-`challenge`, `else`, `fn`, `halt`, `if`, `loop`, `match`, `move`, `otherwise`,
+`challenge`, `else`, `fn`, `halt`, `if`, `loop`, `match`, `otherwise`,
 `program`, `read`, `return`, `rule`, `screen`, `state`, `stop`, `turn`,
 `world`.
 
@@ -899,8 +914,6 @@ Current scalar lowerings are still deliberately small and auditable:
 - cell-set membership is written as `item in collection`; the lowering keeps the
   compact comparison form internally when that is smaller.
 - rewards are ordinary updates such as `treasure += expr`.
-- `direction(key)` lowers through a shared keypad geometry decoder. It no
-  longer treats the key value itself as the movement delta.
 
 ## Implemented Size Rewrites
 
@@ -1039,6 +1052,9 @@ The pipeline currently contains:
   high-level `match` can reuse the selector already in X.
 - **jump-to-next-threading** — drops `БП label` immediately before `label`.
 - **jump-thread** — chases jump-to-jump trampolines to the final target.
+- **decrement-zero-domain-guard** — when `x--` is immediately followed by a
+  terminal `x == 0 { halt("ЕГГОГ") }` guard and `F Lx` is unavailable, stores
+  the decremented value and uses `F 1/x` as the one-cell zero trap.
 - **preloaded-indirect-flow** — for address-stable numeric branch/call
   targets, reserves a spare stable register as a compiler-owned address
   preload and emits one-cell `К БП`/`К ПП`/`К x?0`. The pass rewrites only
@@ -1047,6 +1063,13 @@ The pipeline currently contains:
   may use `FA`..`FF` only when the target cell is a proved one-command entry
   and the following direct jump already resumes at the matching `01`..`06`
   continuation.
+- **runtime-indirect-call-flow** — when repeated backward helper calls have a
+  legal numeric target but no globally spare stable selector register, borrows a
+  stable register that is dead across the helper and call sites, initializes it
+  once at runtime, and emits one-cell `К ПП r` calls.
+- **previous-random-stack-reuse** — recognizes the semantic pattern “previous
+  seed, update same seed with `random()`, consume previous + current seed” and
+  keeps the previous seed in the calculator stack.
 - **dead-code-after-halt** — CFG reachability from the entry removes ops
   that no fall-through or jump edge reaches.
 - **constant-folding** — folds numeric source-expression subtrees, deterministic
