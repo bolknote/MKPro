@@ -355,6 +355,13 @@ interface LoweringOptions {
   // loop counter/compare/branch overhead and lets the constants preload, but
   // duplicates the body, so it is adopted only when the program ends up smaller.
   unrollCountedLoops?: boolean;
+  // Replace `if <expr> <op> 0 { halt("ЕГГОГ") }` terminal-error guards with a
+  // single self-trapping domain opcode: `F √` traps iff X<0 (`<`), `F lg` iff
+  // X<=0 (`<=`), `F 1/x` iff X==0 (`==`, division by zero). `>`/`>=` reduce to
+  // the swapped difference. Collapses the compare + conditional branch + shared
+  // trap into one cell, and when all callers of a shared trap proc are converted
+  // that proc becomes dead. Speculative: adopted only when the program shrinks.
+  domainErrorGuards?: boolean;
   // Probe hook: surface the non-overlapping register coalescing pairs on
   // CompileResult.coalesceShares so a follow-up compile can reclaim the freed
   // registers for preloaded constants. Set only on the internal trial compile.
@@ -436,6 +443,15 @@ interface DisplayPlanningContext {
   displayFieldBounds(source: string): { min: number; max: number } | undefined;
 }
 
+
+// Cheap over-approximate gate for the domain-error-guard candidate: the rewrite
+// targets `halt("ЕГГОГ")` / `halt("ЕГГ0Г")` terminal traps (their literal lowers
+// to the МК-61 error display). If the source has no such literal, no guard can
+// match, so the speculative recompiles are skipped. A false positive merely
+// compiles one losing candidate; a false negative is impossible.
+function sourceMayContainErrorTrap(source: string): boolean {
+  return source.includes("ЕГГ");
+}
 
 export function compileMKPro(
   source: string,
@@ -595,6 +611,21 @@ export function compileMKPro(
     "counted-loop-unroll-free-scratch",
     "Combined counted-loop unrolling with residual-dispatch scratch freeing",
   );
+  // The domain-error-guard rewrite can only fire when the program contains a
+  // terminal ЕГГОГ trap, so skip the extra full-recompile candidates entirely
+  // for the common case of programs that have none.
+  if (sourceMayContainErrorTrap(source)) {
+    tryCandidate(
+      { domainErrorGuards: true },
+      "domain-error-guards",
+      "Replaced terminal-error guards with self-trapping domain opcodes (F √ / F lg)",
+    );
+    tryCandidate(
+      { domainErrorGuards: true, unrollCountedLoops: true },
+      "domain-error-guards-unroll",
+      "Combined domain-error guards with counted-loop unrolling",
+    );
+  }
   tryCandidate(
     { inlineFloorPackedRowExpressions: true },
     "inline-floor-packed-row-expression",
@@ -1498,6 +1529,7 @@ function compileMKProOnce(
       detail: `Folded ${foldedConstants} constant expression node(s) before code generation.`,
     });
   }
+  normalizeStateInitCountedLoops(ast, optimizations);
   if (loweringOptions.unrollCountedLoops === true) {
     unrollCountedLoops(ast, optimizations);
   }
@@ -3596,6 +3628,137 @@ function unrollCountedLoops(ast: ProgramAst, optimizations: AppliedOptimization[
     optimizations.push({
       name: "counted-loop-unroll",
       detail: `Fully unrolled ${unrolled} small constant-trip counted loop${unrolled === 1 ? "" : "s"}, replacing induction variables with per-iteration constants.`,
+    });
+  }
+}
+
+// Returns the counter identifier of a `while v >= 1 { ...; v-- }` loop (the exact
+// shape compileInitializedUnitDecrementWhile lowers through a one-cell F Lx
+// counter), or undefined if the loop is not that shape.
+function unitDecrementCountedWhileTarget(loop: WhileStatementAst): string | undefined {
+  const condition = loop.condition;
+  const target = condition.left.kind === "identifier"
+    ? condition.left.name
+    : condition.right.kind === "identifier"
+      ? condition.right.name
+      : undefined;
+  if (target === undefined) return undefined;
+  if (!unitPositiveWhileCondition(condition, target)) return undefined;
+  const final = loop.body.at(-1);
+  if (final?.kind !== "assign" || final.target !== target) return undefined;
+  if (!isUnitDecrementExpression(target, final.expr)) return undefined;
+  return target;
+}
+
+// True when scalar `name` is read or written anywhere in the program OTHER than
+// inside `loop` (which is skipped wholesale, so references inside it are allowed).
+function scalarReferencedOutsideLoop(ast: ProgramAst, name: string, loop: WhileStatementAst): boolean {
+  let found = false;
+  const readExpr = (expr: ExpressionAst): void => {
+    if (countIdentifierReads(expr, name) > 0) found = true;
+  };
+  const walk = (statements: readonly StatementAst[]): void => {
+    for (const statement of statements) {
+      if (found) return;
+      if (statement === loop) continue;
+      switch (statement.kind) {
+        case "assign":
+          if (statement.target === name) found = true;
+          readExpr(statement.expr);
+          break;
+        case "input":
+          if (statement.target === name) found = true;
+          break;
+        case "pause":
+        case "halt":
+        case "return_value":
+          readExpr(statement.expr);
+          break;
+        case "indexed_assign":
+          if (statement.target.base === name) found = true;
+          readExpr(statement.target.index);
+          readExpr(statement.expr);
+          break;
+        case "if":
+          readExpr(statement.condition.left);
+          readExpr(statement.condition.right);
+          walk(statement.thenBody);
+          if (statement.elseBody !== undefined) walk(statement.elseBody);
+          break;
+        case "loop":
+          walk(statement.body);
+          break;
+        case "while":
+          readExpr(statement.condition.left);
+          readExpr(statement.condition.right);
+          walk(statement.body);
+          break;
+        case "dispatch":
+          readExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            readExpr(dispatchCase.value);
+            walk(dispatchCase.body);
+          }
+          if (statement.defaultBody !== undefined) walk(statement.defaultBody);
+          break;
+        case "core":
+          for (const input of statement.inputs ?? []) readExpr(input.expr);
+          break;
+        default:
+          break;
+      }
+    }
+  };
+  for (const entry of ast.entries) walk(entry.body);
+  for (const proc of ast.procs) walk(proc.body);
+  return found;
+}
+
+// Teach the counted-loop lowering the `time: counter 0..N = N` form. The compiler
+// already lowers `time = N; while time >= 1 { ...; time-- }` through a one-cell
+// F Lx counter, but only when an explicit initializer precedes the loop; the same
+// loop written with the initial value on the state field falls back to a full
+// recall/compare/branch loop. When the counter is used solely by such a loop in
+// the top-level entry body (so it runs once per program start), synthesize the
+// explicit `time = N` immediately before the loop and drop the now-redundant
+// state initializer. This keeps the loop re-runnable (the inline store re-arms it
+// on every С/П, unlike a setup-only preload) while unlocking the compact F Lx
+// lowering — a general win for any program, not just one game.
+function normalizeStateInitCountedLoops(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  let normalized = 0;
+  for (const entry of ast.entries) {
+    const body = entry.body;
+    for (let index = 0; index < body.length; index += 1) {
+      const statement = body[index]!;
+      if (statement.kind !== "while") continue;
+      const target = unitDecrementCountedWhileTarget(statement);
+      if (target === undefined) continue;
+      const field = findStateFieldInAst(ast, target);
+      if (field?.initial === undefined) continue;
+      const initialValue = numericLiteralValue(field.initial);
+      if (initialValue === undefined || !Number.isInteger(initialValue) || initialValue < 1) continue;
+      // The counter must be exclusively the loop's induction variable: no other
+      // read or write in the program. Then synthesizing its initializer right
+      // before the loop (and removing the state initializer) is observably
+      // identical to the state-initialized form on the single entry run.
+      if (scalarReferencedOutsideLoop(ast, target, statement)) continue;
+
+      const initializer: StatementAst = {
+        kind: "assign",
+        target,
+        expr: field.initial,
+        line: statement.line,
+      };
+      delete field.initial;
+      body.splice(index, 0, initializer);
+      index += 1;
+      normalized += 1;
+    }
+  }
+  if (normalized > 0) {
+    optimizations.push({
+      name: "state-init-counted-loop",
+      detail: `Recovered the compact F Lx counted-loop lowering for ${normalized} state-initialized countdown counter${normalized === 1 ? "" : "s"}.`,
     });
   }
 }
@@ -11618,7 +11781,7 @@ const optimizerCapabilities: Array<{
     category: "trap",
     source: "mk61-delta",
     requires: ["error-stops"],
-    activeWhen: ["error-stop", "screen-error-literal-lowering"],
+    activeWhen: ["error-stop", "screen-error-literal-lowering", "domain-error-guard"],
     detail: "Use domain-error stops only for explicit trap intent or after verifier proves the failure mode is acceptable.",
   },
   {
@@ -12038,7 +12201,8 @@ function buildMachineFeaturesUsed(
   }
   if (optimizations.some((optimization) =>
     optimization.name === "error-stop" ||
-    optimization.name === "screen-error-literal-lowering"
+    optimization.name === "screen-error-literal-lowering" ||
+    optimization.name === "domain-error-guard"
   )) {
     add("error-stops", "Compiler emitted a domain-error pause or explicit trap.", "optimizer");
   }

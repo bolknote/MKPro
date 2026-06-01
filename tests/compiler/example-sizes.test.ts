@@ -12,12 +12,12 @@ import { compileMKPro } from "../../src/core/index.ts";
 
 const EXAMPLE_BASELINE: Record<string, number> = {
   "99-bottles": 53,
-  alaram: 80,
+  alaram: 76,
   basic: 8,
   "cave-sketch": 52,
   clock: 43,
   "dangerous-loading": 84,
-  dungeon: 85,
+  dungeon: 83,
   "e-94-digits": 64,
   "functions-demo": 29,
   "fox-hunt-100": 104,
@@ -32,7 +32,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "sea-battle": 82,
   "tiny-game": 23,
   "treasure-hunter-2": 105,
-  wumpus: 105,
+  wumpus: 103,
 };
 
 const EXAMPLE_COMPILE_ERRORS: Record<string, RegExp> = {};
@@ -47,7 +47,7 @@ const PENDING_BASELINE: Record<string, number> = {
   "cave-treasure": 165,
   "giants-country": 170,
   labyrinth777: 206,
-  "rambo-iii": 139,
+  "rambo-iii": 135,
   teleport: 239,
   "tic-tac-toe-4x4": 213,
 };

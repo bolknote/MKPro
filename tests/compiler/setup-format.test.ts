@@ -59,13 +59,13 @@ describe("setup formatting", () => {
     const listing = formatListing(compileMKPro(source, { analysis: true }));
 
     expect(listing).toContain("Setup Block:");
-    expect(listing).toContain("`R8=0.5; Ra=25; Rb=25000; Re=8.1020088E14`");
+    expect(listing).toContain("`R8=0.5; Ra=1E4; Rb=25000; Re=8.1020088E14`");
     expect(listing).toContain("# Setup Listing");
     expect(listing).toContain("   00 |  00  | 0");
     expect(listing).toContain("   01 |  0A  | .");
     expect(listing).toContain("   03 |  48  | X→П 8");
-    expect(listing).toContain("   22 |  0C  | ВП");
-    expect(listing).toContain("   25 |  4E  | X→П e");
+    expect(listing).toContain("   23 |  0C  | ВП");
+    expect(listing).toContain("   26 |  4E  | X→П e");
     expect(listing).toContain("# Main Listing");
   });
 

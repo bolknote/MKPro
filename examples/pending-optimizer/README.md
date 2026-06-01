@@ -30,7 +30,7 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | `cave-treasure.mkpro` | 165 | 105 | resource pressure, wall breaking, cache miss flow, and remaining dispatch overhead |
 | `giants-country.mkpro` | 170 | 105 | packed room-map display/flow and remaining event flow lowerers |
 | `labyrinth777.mkpro` | 206 | 105 | room inspection and local-jumper dispatch |
-| `rambo-iii.mkpro` | 139 | 105 | grouped front/robots storage now works; event dispatch and battle-flow branches are the remaining large blocks |
+| `rambo-iii.mkpro` | 135 | 105 | grouped front/robots storage and self-trapping domain-error guards (F √ / F lg) now work; event dispatch and battle-flow branches are the remaining large blocks |
 | `teleport.mkpro` | 239 | 105 | packed row display, station masks, and vault/guard flow |
 | `tic-tac-toe-4x4.mkpro` | 213 | 105 | 4x4 line-count state representation |
 

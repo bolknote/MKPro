@@ -162,10 +162,132 @@ export function compileDecrementUnderflowBranch(ctx: LoweringCtx,
     return true;
 }
 
+// True when `statements` is exactly a domain-error trap: a single `halt("ЕГГОГ")`
+// (literal that lowers to the one-cell ЕГГ0Г stop), or a single call to a proc
+// whose body is exactly that. This is the shape a `< 0` / `<= 0` guard branches
+// to before it is replaced by a self-trapping domain opcode.
+function statementsAreDomainErrorTrap(ctx: LoweringCtx, statements: readonly StatementAst[], seen = new Set<string>()): boolean {
+    if (statements.length !== 1) return false;
+    const statement = statements[0]!;
+    if (statement.kind === "halt") {
+      return statement.literal !== undefined && displayLiteralProgram(statement.literal)?.kind === "error";
+    }
+    if (statement.kind === "call") {
+      if (seen.has(statement.block)) return false;
+      seen.add(statement.block);
+      const proc = ctx.ast.procs.find((candidate) => candidate.name === statement.block);
+      if (proc === undefined) return false;
+      return statementsAreDomainErrorTrap(ctx, proc.body, seen);
+    }
+    return false;
+}
+
+// Plan how to lower a comparison guard whose taken branch is a pure domain-error
+// trap into a single self-trapping opcode. Each opcode raises ЕГГОГ exactly on
+// its mathematical domain (proved on hardware in tests/emulator/trap-opcodes.test.ts):
+//   `F √`   traps iff X < 0
+//   `F lg`  traps iff X <= 0
+//   `F 1/x` traps iff X == 0   (division by zero)
+// The plan computes the comparison difference D = first - second into X so the
+// trap fires iff the guard condition is true; otherwise execution falls through
+// into the false path. A single operand means no subtraction is needed:
+//   a <  b  <=>  a - b <  0   (√)
+//   a <= b  <=>  a - b <= 0   (lg)
+//   a >  b  <=>  b - a <  0   (√)
+//   a >= b  <=>  b - a <= 0   (lg)
+//   a == b  <=>  a - b == 0   (1/x; symmetric, so either zero side collapses)
+interface DomainErrorGuardPlan {
+  first: ExpressionAst;
+  second?: ExpressionAst;
+  trapOpcode: number;
+  trapMnemonic: string;
+}
+
+function planDomainErrorGuard(condition: ConditionAst): DomainErrorGuardPlan | undefined {
+    const SQRT_OPCODE = 0x21;
+    const SQRT_MNEMONIC = "F sqrt";
+    const LG_OPCODE = 0x17;
+    const LG_MNEMONIC = "F lg";
+    const RECIP_OPCODE = 0x23;
+    const RECIP_MNEMONIC = "F 1/x";
+    let trapOpcode: number;
+    let trapMnemonic: string;
+    let a: ExpressionAst;
+    let b: ExpressionAst;
+    // `symmetric` traps test |difference| against zero (==), so the minuend and
+    // subtrahend are interchangeable; sign-sensitive traps must keep their order.
+    let symmetric = false;
+    switch (condition.op) {
+      case "<":
+        trapOpcode = SQRT_OPCODE; trapMnemonic = SQRT_MNEMONIC; a = condition.left; b = condition.right; break;
+      case "<=":
+        trapOpcode = LG_OPCODE; trapMnemonic = LG_MNEMONIC; a = condition.left; b = condition.right; break;
+      case ">":
+        trapOpcode = SQRT_OPCODE; trapMnemonic = SQRT_MNEMONIC; a = condition.right; b = condition.left; break;
+      case ">=":
+        trapOpcode = LG_OPCODE; trapMnemonic = LG_MNEMONIC; a = condition.right; b = condition.left; break;
+      case "==":
+        trapOpcode = RECIP_OPCODE; trapMnemonic = RECIP_MNEMONIC; a = condition.left; b = condition.right; symmetric = true; break;
+      default:
+        return undefined;
+    }
+    // D = a - b. When the subtrahend b is zero, D = a (no subtraction). For an
+    // equality trap the difference is symmetric, so a zero minuend collapses to
+    // the other operand too; for sign-sensitive traps a zero minuend (D = -b)
+    // would need an extra negate, so it is left to the ordinary path.
+    if (isZeroExpression(b)) return { first: a, trapOpcode, trapMnemonic };
+    if (isZeroExpression(a)) return symmetric ? { first: b, trapOpcode, trapMnemonic } : undefined;
+    return { first: a, second: b, trapOpcode, trapMnemonic };
+}
+
+// Replace a terminal-trap guard with a self-trapping domain opcode. Speculative
+// (gated by loweringOptions.domainErrorGuards): emitting `F √` / `F lg` / `F 1/x`
+// collapses the compare + conditional branch + shared trap into one cell, and
+// when every caller of a shared trap proc is converted, that proc becomes dead
+// and is dropped. The smallest variant is selected, so it never regresses.
+export function compileDomainErrorGuard(ctx: LoweringCtx, 
+    statement: Extract<StatementAst, { kind: "if" }>,
+    line: number,
+  ): boolean {
+    if (ctx.loweringOptions.domainErrorGuards !== true) return false;
+    if (!statementsAreDomainErrorTrap(ctx, statement.thenBody)) return false;
+    const plan = planDomainErrorGuard(statement.condition);
+    if (plan === undefined) return false;
+
+    // Mirror compileCondition's X reuse: a bare identifier already sitting in X
+    // (e.g. straight after a read) has no register to recall, so only recompute
+    // operands that X does not already hold.
+    const emitOperand = (expr: ExpressionAst): void => {
+      if (expr.kind === "identifier" && ctx.xHolds(expr.name)) return;
+      compileExpression(ctx, expr);
+    };
+    if (plan.second === undefined) {
+      emitOperand(plan.first);
+    } else {
+      compileExpression(ctx, plan.first);
+      compileExpression(ctx, plan.second);
+      ctx.emitOp(0x11, "-", "domain guard difference", line);
+    }
+    ctx.emitOp(plan.trapOpcode, plan.trapMnemonic, "domain-error guard trap", line);
+    // The trap consumed the taken (true) branch; X now holds garbage on the
+    // fall-through (false) path, so reset the tracked X state before the else.
+    ctx.currentXVariable = undefined;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
+    ctx.scaledCoordVariables.clear();
+    if (statement.elseBody !== undefined) ctx.compileStatements(statement.elseBody);
+    ctx.optimizations.push({
+      name: "domain-error-guard",
+      detail: `Replaced a "${statement.condition.op}" terminal-error guard with a self-trapping ${plan.trapMnemonic} at line ${line}.`,
+    });
+    return true;
+}
+
 export function compileIf(ctx: LoweringCtx, 
     statement: Extract<StatementAst, { kind: "if" }>,
     line: number,
   ): void {
+    if (compileDomainErrorGuard(ctx, statement, line)) return;
     if (compileArithmeticIfSelect(ctx, statement)) return;
     if (compileGuardedUpdateSelector(ctx, statement)) return;
     if (compileNestedGuardSharedFailure(ctx, statement, line)) return;
