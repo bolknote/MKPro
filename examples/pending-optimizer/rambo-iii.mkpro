@@ -8,7 +8,7 @@ reference lordbss_pmk53
 
 program RamboIII {
   state {
-    cells: packed[1..7] = 5000.999
+    cells: packed[1..7] = [5000.999, 5000.999, 5000.999, 0, 0, 0, 25000]
     time: counter 0..25
     random_state: packed = 0.5
 
@@ -25,10 +25,6 @@ program RamboIII {
     halt(8.1020088E14)
   }
 
-  cells[4] = 0
-  cells[5] = 0
-  cells[6] = 0
-  cells[7] = 25000
   time = 25
   while time >= 1 {
     show(time)
