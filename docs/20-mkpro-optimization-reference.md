@@ -79,6 +79,7 @@ Below are the public capability IDs from `report.optimizer.capabilities`.
 - `step-vs-run-verification` — chooses the more compact step/run verification form.
 - `coord-list-scaled-decimal` — uses scaled coordinate lists for cheaper decimal handling.
 - `raw-display-5f` — selects a low-level rendering path using opcode `0x5F`.
+- `stack-resident-temps` — keeps short-lived temporaries on the X/Y/Z/T stack instead of spilling them to numbered registers when the stack-residency path is active.
 
 Capabilities can be `considered` and not active if no matching shape is found.
 
@@ -210,6 +211,9 @@ The `report.candidates` array in `report` shows lowerings that were recompiled a
 - `counted-loop-unroll` — candidate that fully unrolls small constant-trip counted loops.
 - `startup-aware-constant-preloads` — candidate balancing main/ setup constant trade-offs.
 - `counted-loop-unroll-free-scratch` — combines counted-loop unrolling with residual-dispatch scratch freeing.
+- `stack-resident-temps` — recompiles with stack-temporary fusion enabled (`<=4` temps lifted with `В↑`) to avoid `X->П`/`П->X` spills.
+- `stack-resident-temps-hoisted` — same stack-temp fusion candidate with shared helper hoisting enabled.
+- `stack-resident-temps-hoisted-proc` — same stack-temp fusion candidate with helper and procedure hoisting enabled.
 - `domain-error-guards` — candidate that rewrites terminal `halt("ЕГГОГ")` style checks to self-trapping domain opcodes.
 - `domain-error-guards-unroll` — combines domain-error candidate with counted-loop unrolling.
 - `call-count-proc-layout` — procedure reordering by descending call count.
@@ -370,6 +374,9 @@ Display rewrites are separated into strategy selection + body lowering.
 - `known-zero-reuse` — reuses a known zero source instead of reloading.
 - `zero-reuse` — similarly reuses zero in multiple places when liveness is confirmed.
 - `stack-current-x-scheduling` — reorders current-X operations to avoid extra push/pop-like steps.
+- `stack-resident-temps` — keeps up to four consecutive single-use temps on the stack, using `В↑` lifts and restore sequences (`X↔Y` / `F reverse`) before direct stack-based consumers.
+- `stack-resident-indexed-temp` — keeps a single-use temp in X across one indexed compound store `cells[i] op= temp` when the temp is consumed exactly once and selector/index setup is not temp-dependent.
+- `stack-resident-control-flow` — marks stack-temp fusion that crosses stack-preserving `if` / `while` / `dispatch` regions; these regions cannot clobber live temps and the lowering rebuilds stack state if the region requires it.
 - `dead-temp-store` — removes temporary stores after their last read when no longer needed.
 - `store-recall-peephole` — collapses `store` then immediate `recall` of same cell.
 - `dead-store-elimination` — full pass removing pointless stores and empty branches.
@@ -435,6 +442,7 @@ Feature flags are added only after successful candidate/optimization evidence:
 - `negative-zero-degree` — added when `negative-zero-threshold-selector` proof uses the `1|-00` preload trick.
 - `x2-restore-boundaries` — added when `vp-fraction-restore` is active.
 - `z-stack-register` — added when `z-stack-derived-value-reuse` uses deeper stack-derived storage.
+- `stack-resident-temps` — added when any stack-temporary residency optimization is used (`stack-resident-temps`, `stack-resident-indexed-temp`, or `stack-resident-control-flow`).
 - `display-bytes` — added when display-byte or packed hex-mantissa lowering is active.
 - `r0-fractional-sentinel` — added when fractional indirect addressing or R0 fractional sentinel flow/path is active.
 - `r0-t-alias` — added when `r0-indirect-counter` path is selected and R0-transforming aliases are proven safe.
