@@ -1,4 +1,4 @@
-import type { ExpressionAst, StatementAst } from "../types.ts";
+import type { StatementAst } from "../types.ts";
 import { compileExpression } from "./lowering/expr.ts";
 import {
   binaryOpcode,
@@ -9,7 +9,9 @@ import {
 } from "./lowering-helpers.ts";
 import {
   canLowerStackResidentExpression,
+  findStackResidentFusionSite,
   stackResidentRestoreOps,
+  type StackResidentFusionSite,
 } from "./stack-residency-analysis.ts";
 import type { LoweringCtx } from "./lowering-ctx.ts";
 
@@ -79,13 +81,13 @@ function emitStackBinaryOnTemps(
   ctx.emitOp(binaryOpcode(op), op, `expr ${op}`, line);
 }
 
-function referencesAnyTemp(expr: ExpressionAst, temps: readonly string[]): boolean {
+function referencesAnyTemp(expr: import("../types.ts").ExpressionAst, temps: readonly string[]): boolean {
   return temps.some((temp) => countIdentifierReads(expr, temp) > 0);
 }
 
 function compileStackResidentExpression(
   ctx: LoweringCtx,
-  expr: ExpressionAst,
+  expr: import("../types.ts").ExpressionAst,
   temps: readonly string[],
   line: number,
 ): void {
@@ -192,33 +194,79 @@ function emitStackResidentConsumer(
   }
 }
 
-function stackTempValueDeadAfterConsumer(
-  temp: string,
-  overwrittenByConsumer: string | undefined,
-  tail: readonly StatementAst[],
-): boolean {
-  if (overwrittenByConsumer === temp) return true;
-  return !tail.some((statement) => {
-    switch (statement.kind) {
-      case "pause":
-      case "halt":
-        return expressionReferencesIdentifier(statement.expr, temp);
-      case "assign":
-        return expressionReferencesIdentifier(statement.expr, temp);
-      case "indexed_assign":
-        return (
-          expressionReferencesIdentifier(statement.target.index, temp) ||
-          expressionReferencesIdentifier(statement.expr, temp)
-        );
-      case "return_value":
-        return expressionReferencesIdentifier(statement.expr, temp);
-      default:
-        return false;
+function compilePreserveRegion(ctx: LoweringCtx, statements: readonly StatementAst[]): void {
+  for (const statement of statements) ctx.compileStatement(statement);
+}
+
+/** True when lowering `statements` overwrites calculator stack slot X (Y/Z/T may survive). */
+function preserveRegionClobbersStackX(statements: readonly StatementAst[]): boolean {
+  return statements.some((statement) => stackStatementClobbersCalculatorStack(statement));
+}
+
+function stackStatementClobbersCalculatorStack(statement: StatementAst): boolean {
+  switch (statement.kind) {
+    case "if":
+    case "while":
+    case "dispatch":
+      return true;
+    case "loop":
+      return statement.body.some(stackStatementClobbersCalculatorStack);
+    case "assign":
+    case "indexed_assign":
+    case "show":
+    case "halt":
+    case "pause":
+    case "input":
+    case "return_value":
+    case "call":
+    case "core":
+    case "decimal_series":
+    case "coord_list_remove":
+      return true;
+  }
+}
+
+function emitStackResidentFusion(ctx: LoweringCtx, site: StackResidentFusionSite): void {
+  const tempNames = site.temps.map((segment) => segment.assign.target);
+
+  for (let index = 0; index < site.temps.length; index += 1) {
+    const segment = site.temps[index]!;
+    if (index > 0) {
+      ctx.emitOp(0x0e, "В↑", `stack-resident lift ${site.temps[index - 1]!.assign.target}`, segment.assign.line);
     }
+    compileExpression(ctx, segment.assign.expr);
+    ctx.markCurrentX(segment.assign.target);
+    if (segment.preserveAfter.length > 0) {
+      compilePreserveRegion(ctx, segment.preserveAfter);
+      if (preserveRegionClobbersStackX(segment.preserveAfter)) {
+        for (let rebuild = 0; rebuild <= index; rebuild += 1) {
+          if (rebuild > 0) {
+            ctx.emitOp(0x0e, "В↑", `stack-resident rebuild ${site.temps[rebuild - 1]!.assign.target}`, segment.assign.line);
+          }
+          compileExpression(ctx, site.temps[rebuild]!.assign.expr);
+          ctx.markCurrentX(site.temps[rebuild]!.assign.target);
+        }
+      }
+    }
+  }
+
+  if (site.consumer.kind === "indexed_assign") {
+    compileStackResidentExpression(ctx, site.consumer.expr, tempNames, site.consumer.line);
+    ctx.emitIndexedStore(site.consumer.target, site.consumer.line);
+  } else {
+    compileStackResidentExpression(ctx, site.consumer.expr, tempNames, site.consumer.line);
+    emitStackResidentConsumer(ctx, site.consumer);
+  }
+
+  const optimizationName = site.crossesControlFlow ? "stack-resident-control-flow" : "stack-resident-temps";
+  const gapText = site.crossesControlFlow ? " across stack-preserving control flow" : "";
+  ctx.optimizations.push({
+    name: optimizationName,
+    detail: `Kept ${tempNames.join(", ")} on the X/Y/Z/T stack${gapText} for ${expressionToIntentText(site.consumer.expr)} at line ${site.consumer.line}.`,
   });
 }
 
-/** Fuse consecutive single-use assign temps + combining consumer without register spills. */
+/** Fuse assign temps + stack-preserving control-flow gaps + combining consumer. */
 export function compileMultiStackResidentTemps(
   ctx: LoweringCtx,
   statements: readonly StatementAst[],
@@ -226,57 +274,16 @@ export function compileMultiStackResidentTemps(
 ): number {
   if (ctx.loweringOptions.stackResidentTemps !== true) return 0;
 
-  const temps: Extract<StatementAst, { kind: "assign" }>[] = [];
-  const targets = new Set<string>();
-  for (let index = start; index < statements.length && temps.length < 4; index += 1) {
-    const statement = statements[index]!;
-    if (statement.kind !== "assign") break;
-    if (!stackTempSourceIsSafe(statement)) break;
-    if (targets.has(statement.target)) break;
-    if (expressionReferencesIdentifier(statement.expr, statement.target)) break;
-    if ([...targets].some((target) => expressionReferencesIdentifier(statement.expr, target))) break;
-    targets.add(statement.target);
-    temps.push(statement);
-  }
+  const site = findStackResidentFusionSite(statements, start);
+  if (site === undefined) return 0;
 
-  if (temps.length < 2) return 0;
-
-  const consumer = statements[start + temps.length];
   if (
-    consumer?.kind !== "assign" &&
-    consumer?.kind !== "halt" &&
-    consumer?.kind !== "pause" &&
-    consumer?.kind !== "return_value"
+    site.consumer.kind === "indexed_assign" &&
+    site.temps.some((segment) => expressionReferencesIdentifier(site.consumer.target.index, segment.assign.target))
   ) {
     return 0;
   }
 
-  const tail = statements.slice(start + temps.length + 1);
-  const overwrite = consumer.kind === "assign" ? consumer.target : undefined;
-  for (const temp of temps) {
-    if (!stackTempValueDeadAfterConsumer(temp.target, overwrite, tail)) return 0;
-  }
-
-  const tempNames = temps.map((temp) => temp.target);
-  if (!canLowerStackResidentExpression(consumer.expr, tempNames)) return 0;
-
-  for (let index = 0; index < temps.length; index += 1) {
-    if (index > 0) ctx.emitOp(0x0e, "В↑", `stack-resident lift ${temps[index - 1]!.target}`, temps[index]!.line);
-    compileExpression(ctx, temps[index]!.expr);
-    ctx.markCurrentX(temps[index]!.target);
-  }
-
-  compileStackResidentExpression(ctx, consumer.expr, tempNames, consumer.line);
-  emitStackResidentConsumer(ctx, consumer);
-
-  ctx.optimizations.push({
-    name: "stack-resident-temps",
-    detail: `Kept ${tempNames.join(", ")} on the X/Y/Z/T stack across ${expressionToIntentText(consumer.expr)} at line ${consumer.line}.`,
-  });
-  return temps.length + 1;
-}
-
-function stackTempSourceIsSafe(statement: Extract<StatementAst, { kind: "assign" }>): boolean {
-  if (!expressionPureForSubstitution(statement.expr)) return false;
-  return statement.expr.kind !== "call";
+  emitStackResidentFusion(ctx, site);
+  return site.consumerIndex - start + 1;
 }

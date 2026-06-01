@@ -26,9 +26,28 @@ export interface StackResidencyWindow {
   multiTempRuns: number;
   /** `temp = e; cells[i] op= temp` indexed compound consumers. */
   indexedConsumers: number;
+  /** Fusions that cross stack-preserving control flow (if/loop/dispatch gaps). */
+  controlFlowFusions: number;
 }
 
-/** Statements that end a straight-line stack-scheduling window. */
+export interface StackResidentTempSegment {
+  assign: Extract<StatementAst, { kind: "assign" }>;
+  /** Statements after this assign and before the next assign or consumer. */
+  preserveAfter: readonly StatementAst[];
+}
+
+export interface StackResidentFusionSite {
+  temps: readonly StackResidentTempSegment[];
+  consumer: Extract<
+    StatementAst,
+    { kind: "assign" | "halt" | "pause" | "return_value" | "indexed_assign" }
+  >;
+  consumerIndex: number;
+  /** True when any preserveAfter segment is non-empty. */
+  crossesControlFlow: boolean;
+}
+
+/** Statements that end a straight-line stack-scheduling window (measurement legacy). */
 export function breaksStackResidencyWindow(statement: StatementAst): boolean {
   switch (statement.kind) {
     case "assign":
@@ -51,17 +70,17 @@ export function breaksStackResidencyWindow(statement: StatementAst): boolean {
   }
 }
 
-function stackTempSourceIsSafe(expr: ExpressionAst): boolean {
+export function stackTempSourceIsSafe(expr: ExpressionAst): boolean {
   if (!expressionIsDeterministic(expr)) return false;
   if (expr.kind === "call") return false;
   return expressionPureForSubstitution(expr);
 }
 
-function statementsReadIdentifier(statements: readonly StatementAst[], name: string): boolean {
+export function statementsReadIdentifier(statements: readonly StatementAst[], name: string): boolean {
   return statements.some((statement) => statementReadsIdentifier(statement, name));
 }
 
-function statementReadsIdentifier(statement: StatementAst, name: string): boolean {
+export function statementReadsIdentifier(statement: StatementAst, name: string): boolean {
   switch (statement.kind) {
     case "pause":
     case "halt":
@@ -112,20 +131,79 @@ function statementReadsIdentifier(statement: StatementAst, name: string): boolea
   }
 }
 
-function stackTempValueDeadAfterConsumer(
-  temp: string,
-  overwrittenByConsumer: string | undefined,
-  tail: readonly StatementAst[],
+function conditionReferencesProtected(
+  condition: Extract<StatementAst, { kind: "if" }>["condition"],
+  protectedTemps: ReadonlySet<string>,
 ): boolean {
-  return overwrittenByConsumer === temp || !statementsReadIdentifier(tail, temp);
+  for (const temp of protectedTemps) {
+    if (
+      expressionReferencesIdentifier(condition.left, temp) ||
+      expressionReferencesIdentifier(condition.right, temp)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
-function isStackResidentConsumer(statement: StatementAst | undefined): statement is
-  | Extract<StatementAst, { kind: "assign" }>
-  | Extract<StatementAst, { kind: "halt" }>
-  | Extract<StatementAst, { kind: "pause" }>
-  | Extract<StatementAst, { kind: "return_value" }>
-  | Extract<StatementAst, { kind: "indexed_assign" }> {
+function statementsPreserveStackResidencyBlock(
+  statements: readonly StatementAst[],
+  protectedTemps: ReadonlySet<string>,
+): boolean {
+  return statements.every((statement) => statementPreservesStackResidency(statement, protectedTemps));
+}
+
+/** True when lowering `statement` leaves the calculator stack layout intact for `protectedTemps`. */
+export function statementPreservesStackResidency(
+  statement: StatementAst,
+  protectedTemps: ReadonlySet<string>,
+): boolean {
+  for (const temp of protectedTemps) {
+    if (statementReadsIdentifier(statement, temp)) return false;
+  }
+  switch (statement.kind) {
+    case "assign":
+    case "indexed_assign":
+    case "show":
+    case "halt":
+    case "pause":
+    case "input":
+    case "return_value":
+    case "call":
+    case "core":
+    case "decimal_series":
+    case "coord_list_remove":
+      return false;
+    case "if":
+      if (conditionReferencesProtected(statement.condition, protectedTemps)) return false;
+      return (
+        statementsPreserveStackResidencyBlock(statement.thenBody, protectedTemps) &&
+        (statement.elseBody === undefined ||
+          statementsPreserveStackResidencyBlock(statement.elseBody, protectedTemps))
+      );
+    case "loop":
+      return statementsPreserveStackResidencyBlock(statement.body, protectedTemps);
+    case "while":
+      if (conditionReferencesProtected(statement.condition, protectedTemps)) return false;
+      return statementsPreserveStackResidencyBlock(statement.body, protectedTemps);
+    case "dispatch":
+      for (const temp of protectedTemps) {
+        if (expressionReferencesIdentifier(statement.expr, temp)) return false;
+      }
+      return (
+        statement.cases.every((dispatchCase) => {
+          for (const temp of protectedTemps) {
+            if (expressionReferencesIdentifier(dispatchCase.value, temp)) return false;
+          }
+          return statementsPreserveStackResidencyBlock(dispatchCase.body, protectedTemps);
+        }) &&
+        (statement.defaultBody === undefined ||
+          statementsPreserveStackResidencyBlock(statement.defaultBody, protectedTemps))
+      );
+  }
+}
+
+function isStackResidentConsumer(statement: StatementAst | undefined): statement is StackResidentFusionSite["consumer"] {
   if (statement === undefined) return false;
   return (
     statement.kind === "assign" ||
@@ -136,12 +214,18 @@ function isStackResidentConsumer(statement: StatementAst | undefined): statement
   );
 }
 
-function consumerExpr(statement: ReturnType<typeof isStackResidentConsumer> extends true ? StatementAst : never): ExpressionAst {
-  return statement.expr;
+function consumerOverwriteTarget(
+  consumer: StackResidentFusionSite["consumer"],
+): string | undefined {
+  return consumer.kind === "assign" ? consumer.target : undefined;
 }
 
-function consumerOverwriteTarget(statement: ReturnType<typeof isStackResidentConsumer> extends true ? StatementAst : never): string | undefined {
-  return statement.kind === "assign" ? statement.target : undefined;
+function stackTempValueDeadAfterConsumer(
+  temp: string,
+  overwrittenByConsumer: string | undefined,
+  tail: readonly StatementAst[],
+): boolean {
+  return overwrittenByConsumer === temp || !statementsReadIdentifier(tail, temp);
 }
 
 /** Slot depth from X: temp[0] is deepest, temp[n-1] sits in X after emission. */
@@ -214,91 +298,192 @@ function validateStackResidentExpression(expr: ExpressionAst, temps: readonly st
   }
 }
 
-function collectConsecutiveAssignTemps(
+function assignTempIsSafe(statement: Extract<StatementAst, { kind: "assign" }>, targets: ReadonlySet<string>): boolean {
+  if (!stackTempSourceIsSafe(statement.expr)) return false;
+  if (targets.has(statement.target)) return false;
+  if (expressionReferencesIdentifier(statement.expr, statement.target)) return false;
+  if ([...targets].some((target) => expressionReferencesIdentifier(statement.expr, target))) return false;
+  return true;
+}
+
+/** Find a stack-resident fusion site starting at `start`, including control-flow gaps. */
+export function findStackResidentFusionSite(
   statements: readonly StatementAst[],
   start: number,
-  maxTemps: number,
-): Extract<StatementAst, { kind: "assign" }>[] {
-  const temps: Extract<StatementAst, { kind: "assign" }>[] = [];
+): StackResidentFusionSite | undefined {
+  const segments: StackResidentTempSegment[] = [];
   const targets = new Set<string>();
-  for (let index = start; index < statements.length && temps.length < maxTemps; index += 1) {
-    const statement = statements[index]!;
-    if (statement.kind !== "assign") break;
-    if (!stackTempSourceIsSafe(statement.expr)) break;
-    if (targets.has(statement.target)) break;
-    if (expressionReferencesIdentifier(statement.expr, statement.target)) break;
-    if ([...targets].some((target) => expressionReferencesIdentifier(statement.expr, target))) break;
+  let index = start;
+
+  while (index < statements.length && segments.length < 4) {
+    const statement = statements[index];
+    if (statement?.kind !== "assign" || !assignTempIsSafe(statement, targets)) break;
+
     targets.add(statement.target);
-    temps.push(statement);
+    index += 1;
+    const protectedTemps = new Set(targets);
+    const preserveStart = index;
+    while (index < statements.length && statementPreservesStackResidency(statements[index]!, protectedTemps)) {
+      index += 1;
+    }
+    segments.push({
+      assign: statement,
+      preserveAfter: statements.slice(preserveStart, index),
+    });
+
+    if (index >= statements.length) return undefined;
+    if (statements[index]!.kind === "assign" && segments.length < 4) continue;
+    break;
   }
-  return temps;
+
+  if (segments.length === 0) return undefined;
+
+  const consumer = statements[index];
+  if (!isStackResidentConsumer(consumer)) return undefined;
+
+  const tempNames = segments.map((segment) => segment.assign.target);
+  const tail = statements.slice(index + 1);
+  const overwrite = consumerOverwriteTarget(consumer);
+  for (const name of tempNames) {
+    if (!stackTempValueDeadAfterConsumer(name, overwrite, tail)) return undefined;
+  }
+  if (!canLowerStackResidentExpression(consumer.expr, tempNames)) return undefined;
+
+  const crossesControlFlow = segments.some((segment) => segment.preserveAfter.length > 0);
+  if (segments.length === 1 && !crossesControlFlow) return undefined;
+
+  return {
+    temps: segments,
+    consumer,
+    consumerIndex: index,
+    crossesControlFlow,
+  };
 }
 
-function countMultiStackResidentRun(
-  statements: readonly StatementAst[],
-  start: number,
-  tempCount: number,
-): number {
-  const temps = collectConsecutiveAssignTemps(statements, start, tempCount);
-  if (temps.length !== tempCount) return 0;
-  const consumer = statements[start + tempCount];
-  if (!isStackResidentConsumer(consumer)) return 0;
-  const tail = statements.slice(start + tempCount + 1);
-  for (const temp of temps) {
-    if (!stackTempValueDeadAfterConsumer(temp.target, consumerOverwriteTarget(consumer), tail)) return 0;
-  }
-  const expr = consumerExpr(consumer);
-  const names = temps.map((temp) => temp.target);
-  if (!canLowerStackResidentExpression(expr, names)) return 0;
-  return 1;
-}
-
-function countSingleUsePair(statements: readonly StatementAst[], start: number): number {
-  const temp = statements[start];
-  const consumer = statements[start + 1];
-  if (temp?.kind !== "assign" || !isStackResidentConsumer(consumer)) return 0;
-  if (!stackTempSourceIsSafe(temp.expr)) return 0;
-  if (expressionReferencesIdentifier(temp.expr, temp.target)) return 0;
-  const tail = statements.slice(start + 2);
-  if (!stackTempValueDeadAfterConsumer(temp.target, consumerOverwriteTarget(consumer), tail)) return 0;
-  const expr = consumerExpr(consumer);
-  if (countIdentifierReads(expr, temp.target) !== 1) return 0;
-  if (!canLowerStackResidentExpression(expr, [temp.target])) return 0;
-  return 1;
+function countFusionSite(statements: readonly StatementAst[], start: number): number {
+  return findStackResidentFusionSite(statements, start) === undefined ? 0 : 1;
 }
 
 function countIndexedConsumer(statements: readonly StatementAst[], start: number): number {
   const temp = statements[start];
   const consumer = statements[start + 1];
   if (temp?.kind !== "assign" || consumer?.kind !== "indexed_assign") return 0;
-  return countSingleUsePair(statements, start) > 0 ? 1 : 0;
+  if (findStackResidentFusionSite(statements, start) !== undefined) return 0;
+  if (!stackTempSourceIsSafe(temp.expr)) return 0;
+  if (expressionReferencesIdentifier(temp.expr, temp.target)) return 0;
+  const tail = statements.slice(start + 2);
+  if (!stackTempValueDeadAfterConsumer(temp.target, undefined, tail)) return 0;
+  if (countIdentifierReads(consumer.expr, temp.target) !== 1) return 0;
+  if (!canLowerStackResidentExpression(consumer.expr, [temp.target])) return 0;
+  return 1;
 }
 
-function peakLiveAssignTemps(statements: readonly StatementAst[], start: number, end: number): number {
-  const slice = statements.slice(start, end);
+function countStraightSingleUsePair(statements: readonly StatementAst[], start: number): number {
+  const temp = statements[start];
+  const consumer = statements[start + 1];
+  if (temp?.kind !== "assign" || !isStackResidentConsumer(consumer)) return 0;
+  if (findStackResidentFusionSite(statements, start) !== undefined) return 0;
+  if (!stackTempSourceIsSafe(temp.expr)) return 0;
+  if (expressionReferencesIdentifier(temp.expr, temp.target)) return 0;
+  const tail = statements.slice(start + 2);
+  if (!stackTempValueDeadAfterConsumer(temp.target, consumerOverwriteTarget(consumer), tail)) return 0;
+  if (countIdentifierReads(consumer.expr, temp.target) !== 1) return 0;
+  if (!canLowerStackResidentExpression(consumer.expr, [temp.target])) return 0;
+  return 1;
+}
+
+function peakLiveAssignTempsInBlock(statements: readonly StatementAst[]): number {
   const defs = new Map<string, number>();
   const lastUse = new Map<string, number>();
-  for (let index = 0; index < slice.length; index += 1) {
-    const statement = slice[index]!;
+  const indexStatement = (statement: StatementAst, index: number): void => {
     if (statement.kind === "assign") defs.set(statement.target, index);
     for (const target of defs.keys()) {
       if (statementReadsIdentifier(statement, target)) lastUse.set(target, index);
     }
-  }
-  let peak = 0;
-  for (let index = 0; index < slice.length; index += 1) {
-    let live = 0;
-    for (const [target, def] of defs) {
-      const last = lastUse.get(target) ?? def;
-      if (def <= index && index <= last) live += 1;
+    switch (statement.kind) {
+      case "if":
+        statement.thenBody.forEach((child, offset) => indexStatement(child, index * 1000 + offset));
+        statement.elseBody?.forEach((child, offset) => indexStatement(child, index * 1000 + 100 + offset));
+        break;
+      case "loop":
+        statement.body.forEach((child, offset) => indexStatement(child, index * 1000 + offset));
+        break;
+      case "while":
+        statement.body.forEach((child, offset) => indexStatement(child, index * 1000 + offset));
+        break;
+      case "dispatch":
+        for (const dispatchCase of statement.cases) {
+          dispatchCase.body.forEach((child, offset) => indexStatement(child, index * 1000 + offset));
+        }
+        statement.defaultBody?.forEach((child, offset) => indexStatement(child, index * 1000 + 200 + offset));
+        break;
+      default:
+        break;
     }
-    peak = Math.max(peak, live);
-  }
-  return peak;
+  };
+  statements.forEach((statement, index) => indexStatement(statement, index));
+  return defs.size === 0 ? 0 : lastUse.size;
 }
 
-/** Split `statements` into maximal straight-line stack-scheduling windows. */
+/** Summarize stack-residency candidates across a whole statement tree (control-flow aware). */
+export function summarizeStackResidencyCandidatesInBlock(statements: readonly StatementAst[]): {
+  fusionSites: number;
+  controlFlowFusions: number;
+  indexedConsumers: number;
+  straightSingleUsePairs: number;
+  maxLiveTemps: number;
+} {
+  let fusionSites = 0;
+  let controlFlowFusions = 0;
+  let indexedConsumers = 0;
+  let straightSingleUsePairs = 0;
+
+  const visit = (body: readonly StatementAst[]): void => {
+    for (let index = 0; index < body.length; index += 1) {
+      const site = findStackResidentFusionSite(body, index);
+      if (site !== undefined) {
+        fusionSites += 1;
+        if (site.crossesControlFlow) controlFlowFusions += 1;
+        index = site.consumerIndex;
+        continue;
+      }
+      indexedConsumers += countIndexedConsumer(body, index);
+      straightSingleUsePairs += countStraightSingleUsePair(body, index);
+      const statement = body[index]!;
+      switch (statement.kind) {
+        case "if":
+          if (statement.elseBody) visit(statement.elseBody);
+          visit(statement.thenBody);
+          break;
+        case "loop":
+          visit(statement.body);
+          break;
+        case "while":
+          visit(statement.body);
+          break;
+        case "dispatch":
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+          break;
+        default:
+          break;
+      }
+    }
+  };
+
+  visit(statements);
+  return {
+    fusionSites,
+    controlFlowFusions,
+    indexedConsumers,
+    straightSingleUsePairs,
+    maxLiveTemps: peakLiveAssignTempsInBlock(statements),
+  };
+}
+
+/** Split `statements` into maximal straight-line stack-scheduling windows (legacy report). */
 export function analyzeStackResidencyWindows(statements: readonly StatementAst[]): StackResidencyWindow[] {
+  const block = summarizeStackResidencyCandidatesInBlock(statements);
   const windows: StackResidencyWindow[] = [];
   let start = 0;
   while (start < statements.length) {
@@ -308,28 +493,29 @@ export function analyzeStackResidencyWindows(statements: readonly StatementAst[]
       start += 1;
       continue;
     }
-    let singleUsePairs = 0;
-    let dualTempTriples = 0;
-    let multiTempRuns = 0;
-    let indexedConsumers = 0;
-    for (let index = start; index < end; index += 1) {
-      singleUsePairs += countSingleUsePair(statements, index);
-      dualTempTriples += countMultiStackResidentRun(statements, index, 2);
-      indexedConsumers += countIndexedConsumer(statements, index);
-      for (const n of [3, 4] as const) {
-        multiTempRuns += countMultiStackResidentRun(statements, index, n);
-      }
-    }
     windows.push({
       start,
       end,
-      maxLiveTemps: peakLiveAssignTemps(statements, start, end),
-      singleUsePairs,
-      dualTempTriples,
-      multiTempRuns,
-      indexedConsumers,
+      maxLiveTemps: block.maxLiveTemps,
+      singleUsePairs: block.straightSingleUsePairs,
+      dualTempTriples: 0,
+      multiTempRuns: 0,
+      indexedConsumers: block.indexedConsumers,
+      controlFlowFusions: block.controlFlowFusions,
     });
     start = end === start ? start + 1 : end;
+  }
+  if (windows.length === 0 && statements.length > 0) {
+    windows.push({
+      start: 0,
+      end: statements.length,
+      maxLiveTemps: block.maxLiveTemps,
+      singleUsePairs: block.straightSingleUsePairs,
+      dualTempTriples: 0,
+      multiTempRuns: 0,
+      indexedConsumers: block.indexedConsumers,
+      controlFlowFusions: block.controlFlowFusions,
+    });
   }
   return windows;
 }
@@ -342,15 +528,20 @@ export function summarizeStackResidencyCandidates(statements: readonly Statement
   dualTempTriples: number;
   multiTempRuns: number;
   indexedConsumers: number;
+  controlFlowFusions: number;
+  fusionSites: number;
 } {
+  const block = summarizeStackResidencyCandidatesInBlock(statements);
   const analyzed = analyzeStackResidencyWindows(statements);
   return {
     windows: analyzed.length,
-    maxLiveTemps: analyzed.reduce((max, window) => Math.max(max, window.maxLiveTemps), 0),
-    singleUsePairs: analyzed.reduce((sum, window) => sum + window.singleUsePairs, 0),
-    dualTempTriples: analyzed.reduce((sum, window) => sum + window.dualTempTriples, 0),
-    multiTempRuns: analyzed.reduce((sum, window) => sum + window.multiTempRuns, 0),
-    indexedConsumers: analyzed.reduce((sum, window) => sum + window.indexedConsumers, 0),
+    maxLiveTemps: block.maxLiveTemps,
+    singleUsePairs: block.straightSingleUsePairs,
+    dualTempTriples: 0,
+    multiTempRuns: block.fusionSites > 0 ? block.fusionSites : 0,
+    indexedConsumers: block.indexedConsumers,
+    controlFlowFusions: block.controlFlowFusions,
+    fusionSites: block.fusionSites,
   };
 }
 
@@ -361,6 +552,8 @@ export interface ProgramStackResidencySummary {
   dualTempTriples: number;
   multiTempRuns: number;
   indexedConsumers: number;
+  controlFlowFusions: number;
+  fusionSites: number;
 }
 
 function mergeSummaries(
@@ -374,6 +567,8 @@ function mergeSummaries(
     dualTempTriples: left.dualTempTriples + right.dualTempTriples,
     multiTempRuns: left.multiTempRuns + right.multiTempRuns,
     indexedConsumers: left.indexedConsumers + right.indexedConsumers,
+    controlFlowFusions: left.controlFlowFusions + right.controlFlowFusions,
+    fusionSites: left.fusionSites + right.fusionSites,
   };
 }
 
@@ -386,6 +581,8 @@ export function analyzeProgramStackResidency(ast: ProgramAst): ProgramStackResid
     dualTempTriples: 0,
     multiTempRuns: 0,
     indexedConsumers: 0,
+    controlFlowFusions: 0,
+    fusionSites: 0,
   };
   for (const entry of ast.entries) {
     summary = mergeSummaries(summary, summarizeStackResidencyCandidates(entry.body));

@@ -55,6 +55,27 @@ program DualStackEq {
 }
 `;
 
+const CROSS_FLOW_SOURCE = `
+program CrossFlowEq {
+  state {
+    x: packed = 3
+    y: packed = 4
+    z: packed = 0
+    gate: packed = 0
+  }
+  loop {
+    a = x
+    b = y
+    if gate == 1 {
+      loop {
+      }
+    }
+    z = a + b
+    halt(z)
+  }
+}
+`;
+
 describe("stack-resident temp behavioral equivalence (real emulator)", () => {
   const baseline = compileLoweringVariantForTest(DUAL_STACK_SOURCE, { budget: 999999 }, {});
   const stackResident = compileLoweringVariantForTest(DUAL_STACK_SOURCE, { budget: 999999 }, { stackResidentTemps: true });
@@ -89,8 +110,37 @@ describe("stack-resident temp behavioral equivalence (real emulator)", () => {
   });
 });
 
+describe("stack-resident control-flow fusion behavioral equivalence (real emulator)", () => {
+  const baseline = compileLoweringVariantForTest(CROSS_FLOW_SOURCE, { budget: 999999 }, {});
+  const stackResident = compileLoweringVariantForTest(CROSS_FLOW_SOURCE, { budget: 999999 }, { stackResidentTemps: true });
+  const registers = [...new Set(Object.values(stackResident.report.registers))];
+
+  it("control-flow fusion fires and is not larger than the baseline variant", () => {
+    expect(stackResident.report.optimizations.some((entry) => entry.name === "stack-resident-control-flow")).toBe(true);
+    expect(stackResident.steps.length).toBeLessThanOrEqual(baseline.steps.length);
+  });
+
+  it("matches baseline emulator output for a short run", () => {
+    const keys = ["В/О", "С/П"];
+    const before = observe(
+      baseline.steps.map((step) => step.opcode),
+      keys,
+      baseline.report.preloads,
+      registers,
+    );
+    const after = observe(
+      stackResident.steps.map((step) => step.opcode),
+      keys,
+      stackResident.report.preloads,
+      registers,
+    );
+    expect(after.display).toBe(before.display);
+    expect(after.stopped).toBe(before.stopped);
+    expect(after.registers[stackResident.report.registers.z]).toBe(before.registers[baseline.report.registers.z]);
+  });
+});
+
 const PENDING_PROGRAMS = [
-  "examples/pending-optimizer/cave-highlevel-baseline.mkpro",
   "examples/pending-optimizer/cave-treasure.mkpro",
   "examples/pending-optimizer/giants-country.mkpro",
   "examples/pending-optimizer/labyrinth777.mkpro",

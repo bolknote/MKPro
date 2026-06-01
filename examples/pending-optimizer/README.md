@@ -26,7 +26,7 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
-| `cave-highlevel-baseline.mkpro` | 137 | 105 | resource pressure, movement decoder, and remaining cave flow lowerers |
+| `cave-highlevel-baseline.mkpro` | 194 | 105 | source-faithful fixed wall/cache setup, prompt/result screen state, resource pressure, movement decoder, and remaining cave flow lowerers |
 | `cave-treasure.mkpro` | 165 | 105 | resource pressure, wall breaking, cache miss flow, and remaining dispatch overhead |
 | `giants-country.mkpro` | 170 | 105 | packed room-map display/flow and remaining event flow lowerers |
 | `labyrinth777.mkpro` | 206 | 105 | room inspection and local-jumper dispatch |
@@ -44,13 +44,15 @@ Prototype notes:
 Stack-resident temp scheduler (2026-06):
 
 - Measurement harness: `node scripts/spill-report.mjs --pending` reports spill
-  counts plus static candidate windows (`s1`/`dual`/`multi`/`idx` columns).
-- Speculative variant `stackResidentTemps` fuses consecutive single-use assign
-  temps and keeps them on X/Y/Z/T instead of `X->П`/`П->X` spills when a
-  straight-line consumer reads each temp exactly once. `selectBest()` adopts it
-  only when the whole program shrinks.
-- Current pending sources expose **zero** dual/multi stack-residency windows at
-  the AST level (straight-line sections hold at most one live assign temp), so
+  counts plus static candidate counts (`fuse`/`xflow`/`s1`/`idx` columns).
+- Speculative variant `stackResidentTemps` fuses single-use assign temps and
+  keeps them on X/Y/Z/T instead of `X->П`/`П->X` spills when a combining
+  consumer reads each temp exactly once. The scheduler now spans
+  stack-preserving control-flow gaps (empty `if`/`while`/`loop`/`dispatch`
+  bodies that do not read the protected temps or clobber X). `selectBest()`
+  adopts it only when the whole program shrinks.
+- Current pending sources still expose **zero** multi-temp fusion sites at the
+  AST level (straight-line sections hold at most one live assign temp), so
   these programs do not shrink yet from this pass alone. The machinery is in
   place for future source shapes and for smaller examples that do contain
-  `t0=e0; t1=e1; out=t0 op t1` chains.
+  `t0=e0; … stack-preserving stmt …; t1=e1; out=t0 op t1` chains.

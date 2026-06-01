@@ -3,6 +3,8 @@ export {
   analyzeProgramStackResidency,
   analyzeSourceStackResidency,
   analyzeStackResidencyWindows,
+  findStackResidentFusionSite,
+  statementPreservesStackResidency,
   summarizeStackResidencyCandidates,
 } from "./emit/stack-residency-analysis.ts";
 export { parseProgram, parseExpression, ParseError } from "./parser.ts";

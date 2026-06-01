@@ -67,7 +67,7 @@ const rows = exampleFiles().map(measure);
 
 const header =
   "Example".padEnd(42) +
-  "steps  spill  %    st/rc  idx(st/rc)  over105  s1  dual  multi  idx";
+  "steps  spill  %    st/rc  idx(st/rc)  over105  fuse  xflow  s1  idx";
 process.stdout.write(`${header}\n${"-".repeat(header.length)}\n`);
 for (const row of rows) {
   const name = relative("examples", row.file);
@@ -83,9 +83,9 @@ for (const row of rows) {
       `${c.store}/${c.recall}`.padEnd(7) +
       `${c.indexedStore}/${c.indexedRecall}`.padEnd(12) +
       `${over}`.padEnd(9) +
-      `${String(cand.singleUsePairs).padStart(3)}  ` +
-      `${String(cand.dualTempTriples).padStart(4)}  ` +
-      `${String(cand.multiTempRuns).padStart(5)}  ` +
+      `${String(cand.fusionSites).padStart(4)}  ` +
+      `${String(cand.controlFlowFusions).padStart(5)}  ` +
+      `${String(cand.singleUsePairs).padStart(2)}  ` +
       `${String(cand.indexedConsumers).padStart(3)}` +
       "\n",
   );

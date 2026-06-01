@@ -250,6 +250,19 @@ loop {
 }
 ```
 
+Indexed arrays can use a per-element initializer list when a published setup
+loads different constants into a contiguous register bank:
+
+```mkpro
+state {
+  walls: packed[1..3] = [bit_or(1.0080808, 1.7062264), bit_or(1.808, 1.6715401), bit_or(1.8088088, 1.2260335)]
+}
+```
+
+The list length must match the inclusive bank range. Each item is lowered as the
+initial value for the corresponding bank element, so `walls[1]`, `walls[2]`, and
+`walls[3]` stay ordinary indexed state at runtime.
+
 Both forms lower to contiguous calculator registers. A constant index such as
 `front_line[2].front` or `slots[2]` is resolved at compile time. A dynamic index
 such as `front_line[slot].front` lowers through MK-61 indirect memory commands

@@ -375,25 +375,76 @@ sharedBitMaskHelperCalls+hoistSharedHelpers: steps=98 | 89 04 13 4E 35 04 12 02 
 `;
 
 exports[`golden listing > lowering variants are stable for examples/pending-optimizer/cave-highlevel-baseline.mkpro 1`] = `
-"primary: steps=137 | 67 50 44 62 01 11 5C 09 29 42 64 5E 52 67 35 61 37 35 57 50 3A 61 37 41 67 34 01 11 5E 39 01 00 62 10 48 53 80 42 8E 01 11 EE 01 63 10 48 53 80 43 8E 50 8E 64 1C 5E 73 60 63 12 57 70 69 60 35 3A 37 49 00 40 D3 00 50 8E 64 05 13 35 5E 83 64 32 51 70 64 04 11 5E 99 67 6C 11 5E 96 01 01 50 6B 51 70 02 11 5E 6A 6D 51 70 6A 05 64 11 32 12 67 10 40 35 69 37 57 7B 00 50 8E 60 47 00 40 8E 68 0E 50 1C 01 10 12 34 52 || setup 02 43 00 46 00 0A 00 00 00 00 00 01 4B 6B 0B 4D 03 0A 00 00 00 00 00 00 08 4C 02 0C 07 0B 4A 00 4E 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-aggressiveTerminalDirect: steps=137 | 67 50 44 62 01 11 5C 09 29 42 64 5E 52 67 35 61 37 35 57 50 3A 61 37 41 67 34 01 11 5E 39 01 00 62 10 48 53 80 42 8E 01 11 EE 01 63 10 48 53 80 43 8E 50 8E 64 1C 5E 73 60 63 12 57 70 69 60 35 3A 37 49 00 40 D3 00 50 8E 64 05 13 35 5E 83 64 32 51 70 64 04 11 5E 99 67 6C 11 5E 96 01 01 50 6B 51 70 02 11 5E 6A 6D 51 70 6A 05 64 11 32 12 67 10 40 35 69 37 57 7B 00 50 8E 60 47 00 40 8E 68 0E 50 1C 01 10 12 34 52 || setup 02 43 00 46 00 0A 00 00 00 00 00 01 4B 6B 0B 4D 03 0A 00 00 00 00 00 00 08 4C 02 0C 07 0B 4A 00 4E 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-invertBranchOrder: steps=139 | 67 50 44 62 01 11 5C 09 29 42 64 57 75 64 1C 5E 34 60 63 12 57 31 69 60 35 3A 37 49 00 40 D3 00 50 8E 64 05 13 35 5E 44 64 32 51 72 64 04 11 5E 60 67 6C 11 5E 57 01 01 50 6B 51 72 02 11 5E 67 6D 51 72 6A 05 64 11 32 12 51 72 67 35 61 37 35 57 70 3A 61 37 41 67 34 01 11 5E A1 01 00 62 10 48 53 82 42 8E 01 11 EE 01 63 10 48 53 82 43 8E 50 8E 67 10 40 35 69 37 5E 7F 60 47 00 40 8E 00 50 8E 68 0E 50 1C 01 10 12 34 52 || setup 02 43 00 46 00 0A 00 00 00 00 00 01 4B 6B 0B 4D 03 0A 00 00 00 00 00 00 08 4C 02 0C 07 0B 4A 00 4E 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-aggressiveTerminalDirect+invertBranchOrder: steps=139 | 67 50 44 62 01 11 5C 09 29 42 64 57 75 64 1C 5E 34 60 63 12 57 31 69 60 35 3A 37 49 00 40 D3 00 50 8E 64 05 13 35 5E 44 64 32 51 72 64 04 11 5E 60 67 6C 11 5E 57 01 01 50 6B 51 72 02 11 5E 67 6D 51 72 6A 05 64 11 32 12 51 72 67 35 61 37 35 57 70 3A 61 37 41 67 34 01 11 5E A1 01 00 62 10 48 53 82 42 8E 01 11 EE 01 63 10 48 53 82 43 8E 50 8E 67 10 40 35 69 37 5E 7F 60 47 00 40 8E 00 50 8E 68 0E 50 1C 01 10 12 34 52 || setup 02 43 00 46 00 0A 00 00 00 00 00 01 4B 6B 0B 4D 03 0A 00 00 00 00 00 00 08 4C 02 0C 07 0B 4A 00 4E 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-hoistSharedHelpers: steps=137 | 67 50 44 62 01 11 5C 09 29 42 64 5E 52 67 35 61 37 35 57 50 3A 61 37 41 67 34 01 11 5E 39 01 00 62 10 48 53 80 42 8E 01 11 EE 01 63 10 48 53 80 43 8E 50 8E 64 1C 5E 73 60 63 12 57 70 69 60 35 3A 37 49 00 40 D3 00 50 8E 64 05 13 35 5E 83 64 32 51 70 64 04 11 5E 99 67 6C 11 5E 96 01 01 50 6B 51 70 02 11 5E 6A 6D 51 70 6A 05 64 11 32 12 67 10 40 35 69 37 57 7B 00 50 8E 60 47 00 40 8E 68 0E 50 1C 01 10 12 34 52 || setup 02 43 00 46 00 0A 00 00 00 00 00 01 4B 6B 0B 4D 03 0A 00 00 00 00 00 00 08 4C 02 0C 07 0B 4A 00 4E 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-hoistSharedHelpers+hoistProcs: steps=143 | 51 29 67 10 40 35 69 37 57 14 00 50 51 29 60 47 00 40 51 29 68 0E 50 1C 01 10 12 34 52 67 50 44 62 01 11 5C 38 29 42 64 5E 81 67 35 61 37 35 57 79 3A 61 37 41 67 34 01 11 5E 68 01 00 62 10 48 53 20 42 8E 01 11 EE 01 63 10 48 53 20 43 8E 50 8E 64 1C 5E A2 60 63 12 57 99 69 60 35 3A 37 49 00 40 D3 00 50 8E 64 05 13 35 5E 70 64 32 51 02 64 04 11 5E 80 67 6C 11 5E 7D 01 01 50 6B 51 02 02 11 5E 87 6D 51 02 6A 05 64 11 32 12 51 02 || setup 02 43 00 46 00 0A 00 00 00 00 00 01 4B 6B 0B 4D 03 0A 00 00 00 00 00 00 08 4C 02 0C 07 0B 4A 02 09 4E 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-canonicalizeIfChains: steps=137 | 67 50 44 62 01 11 5C 09 29 42 64 5E 52 67 35 61 37 35 57 50 3A 61 37 41 67 34 01 11 5E 39 01 00 62 10 48 53 80 42 8E 01 11 EE 01 63 10 48 53 80 43 8E 50 8E 64 1C 5E 73 60 63 12 57 70 69 60 35 3A 37 49 00 40 D3 00 50 8E 64 05 13 35 5E 83 64 32 51 70 64 04 11 5E 99 67 6C 11 5E 96 01 01 50 6B 51 70 02 11 5E 6A 6D 51 70 6A 05 64 11 32 12 67 10 40 35 69 37 57 7B 00 50 8E 60 47 00 40 8E 68 0E 50 1C 01 10 12 34 52 || setup 02 43 00 46 00 0A 00 00 00 00 00 01 4B 6B 0B 4D 03 0A 00 00 00 00 00 00 08 4C 02 0C 07 0B 4A 00 4E 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-freeResidualDispatchScratch: steps=143 | 67 50 44 62 01 11 5C 09 29 42 64 5E 56 67 35 61 37 35 57 53 3A 61 37 41 67 34 01 11 5E 40 01 00 62 10 48 53 86 42 51 00 01 11 5E 00 01 63 10 48 53 86 43 51 00 50 51 00 64 1C 5E 78 60 63 12 57 74 69 60 35 3A 37 49 00 40 D3 00 50 51 00 64 05 13 35 5E 88 64 32 51 74 64 04 11 5E A3 67 6D 11 5E A0 6A 50 6C 51 74 02 11 5E 6E 6E 51 74 6B 05 64 11 32 12 67 10 40 35 69 37 57 80 00 50 51 00 60 47 00 40 51 00 68 0E 50 1C 01 10 12 34 52 || setup 02 43 00 46 01 01 4A 00 0A 00 00 00 00 00 01 4C 6C 0B 4E 03 0A 00 00 00 00 00 00 08 4D 02 0C 07 0B 4B 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-aliasXReuse: steps=137 | 67 50 44 62 01 11 5C 09 29 42 64 5E 52 67 35 61 37 35 57 50 3A 61 37 41 67 34 01 11 5E 39 01 00 62 10 48 53 80 42 8E 01 11 EE 01 63 10 48 53 80 43 8E 50 8E 64 1C 5E 73 60 63 12 57 70 69 60 35 3A 37 49 00 40 D3 00 50 8E 64 05 13 35 5E 83 64 32 51 70 64 04 11 5E 99 67 6C 11 5E 96 01 01 50 6B 51 70 02 11 5E 6A 6D 51 70 6A 05 64 11 32 12 67 10 40 35 69 37 57 7B 00 50 8E 60 47 00 40 8E 68 0E 50 1C 01 10 12 34 52 || setup 02 43 00 46 00 0A 00 00 00 00 00 01 4B 6B 0B 4D 03 0A 00 00 00 00 00 00 08 4C 02 0C 07 0B 4A 00 4E 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-coalesceCopies: steps=137 | 67 50 44 62 01 11 5C 09 29 42 64 5E 52 67 35 61 37 35 57 50 3A 61 37 41 67 34 01 11 5E 39 01 00 62 10 48 53 80 42 8E 01 11 EE 01 63 10 48 53 80 43 8E 50 8E 64 1C 5E 73 60 63 12 57 70 69 60 35 3A 37 49 00 40 D3 00 50 8E 64 05 13 35 5E 83 64 32 51 70 64 04 11 5E 99 67 6C 11 5E 96 01 01 50 6B 51 70 02 11 5E 6A 6D 51 70 6A 05 64 11 32 12 67 10 40 35 69 37 57 7B 00 50 8E 60 47 00 40 8E 68 0E 50 1C 01 10 12 34 52 || setup 02 43 00 46 00 0A 00 00 00 00 00 01 4B 6B 0B 4D 03 0A 00 00 00 00 00 00 08 4C 02 0C 07 0B 4A 00 4E 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-freeResidualDispatchScratch+canonicalizeIfChains: steps=143 | 67 50 44 62 01 11 5C 09 29 42 64 5E 56 67 35 61 37 35 57 53 3A 61 37 41 67 34 01 11 5E 40 01 00 62 10 48 53 86 42 51 00 01 11 5E 00 01 63 10 48 53 86 43 51 00 50 51 00 64 1C 5E 78 60 63 12 57 74 69 60 35 3A 37 49 00 40 D3 00 50 51 00 64 05 13 35 5E 88 64 32 51 74 64 04 11 5E A3 67 6D 11 5E A0 6A 50 6C 51 74 02 11 5E 6E 6E 51 74 6B 05 64 11 32 12 67 10 40 35 69 37 57 80 00 50 51 00 60 47 00 40 51 00 68 0E 50 1C 01 10 12 34 52 || setup 02 43 00 46 01 01 4A 00 0A 00 00 00 00 00 01 4C 6C 0B 4E 03 0A 00 00 00 00 00 00 08 4D 02 0C 07 0B 4B 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-shareRandomCell: steps=137 | 67 50 44 62 01 11 5C 09 29 42 64 5E 52 67 35 61 37 35 57 50 3A 61 37 41 67 34 01 11 5E 39 01 00 62 10 48 53 80 42 8E 01 11 EE 01 63 10 48 53 80 43 8E 50 8E 64 1C 5E 73 60 63 12 57 70 69 60 35 3A 37 49 00 40 D3 00 50 8E 64 05 13 35 5E 83 64 32 51 70 64 04 11 5E 99 67 6C 11 5E 96 01 01 50 6B 51 70 02 11 5E 6A 6D 51 70 6A 05 64 11 32 12 67 10 40 35 69 37 57 7B 00 50 8E 60 47 00 40 8E 68 0E 50 1C 01 10 12 34 52 || setup 02 43 00 46 00 0A 00 00 00 00 00 01 4B 6B 0B 4D 03 0A 00 00 00 00 00 00 08 4C 02 0C 07 0B 4A 00 4E 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-shareRandomCell+hoistSharedHelpers: steps=137 | 67 50 44 62 01 11 5C 09 29 42 64 5E 52 67 35 61 37 35 57 50 3A 61 37 41 67 34 01 11 5E 39 01 00 62 10 48 53 80 42 8E 01 11 EE 01 63 10 48 53 80 43 8E 50 8E 64 1C 5E 73 60 63 12 57 70 69 60 35 3A 37 49 00 40 D3 00 50 8E 64 05 13 35 5E 83 64 32 51 70 64 04 11 5E 99 67 6C 11 5E 96 01 01 50 6B 51 70 02 11 5E 6A 6D 51 70 6A 05 64 11 32 12 67 10 40 35 69 37 57 7B 00 50 8E 60 47 00 40 8E 68 0E 50 1C 01 10 12 34 52 || setup 02 43 00 46 00 0A 00 00 00 00 00 01 4B 6B 0B 4D 03 0A 00 00 00 00 00 00 08 4C 02 0C 07 0B 4A 00 4E 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-tailBranchInversion: steps=137 | 67 50 44 62 01 11 5C 09 29 42 64 5E 52 67 35 61 37 35 57 50 3A 61 37 41 67 34 01 11 5E 39 01 00 62 10 48 53 80 42 8E 01 11 EE 01 63 10 48 53 80 43 8E 50 8E 64 1C 5E 73 60 63 12 57 70 69 60 35 3A 37 49 00 40 D3 00 50 8E 64 05 13 35 5E 83 64 32 51 70 64 04 11 5E 99 67 6C 11 5E 96 01 01 50 6B 51 70 02 11 5E 6A 6D 51 70 6A 05 64 11 32 12 67 10 40 35 69 37 57 7B 00 50 8E 60 47 00 40 8E 68 0E 50 1C 01 10 12 34 52 || setup 02 43 00 46 00 0A 00 00 00 00 00 01 4B 6B 0B 4D 03 0A 00 00 00 00 00 00 08 4C 02 0C 07 0B 4A 00 4E 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion: steps=137 | 67 50 44 62 01 11 5C 09 29 42 64 5E 52 67 35 61 37 35 57 50 3A 61 37 41 67 34 01 11 5E 39 01 00 62 10 48 53 80 42 8E 01 11 EE 01 63 10 48 53 80 43 8E 50 8E 64 1C 5E 73 60 63 12 57 70 69 60 35 3A 37 49 00 40 D3 00 50 8E 64 05 13 35 5E 83 64 32 51 70 64 04 11 5E 99 67 6C 11 5E 96 01 01 50 6B 51 70 02 11 5E 6A 6D 51 70 6A 05 64 11 32 12 67 10 40 35 69 37 57 7B 00 50 8E 60 47 00 40 8E 68 0E 50 1C 01 10 12 34 52 || setup 02 43 00 46 00 0A 00 00 00 00 00 01 4B 6B 0B 4D 03 0A 00 00 00 00 00 00 08 4C 02 0C 07 0B 4A 00 4E 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-guardedPrologueGadgets: steps=137 | 67 50 44 62 01 11 5C 09 29 42 64 5E 52 67 35 61 37 35 57 50 3A 61 37 41 67 34 01 11 5E 39 01 00 62 10 48 53 80 42 8E 01 11 EE 01 63 10 48 53 80 43 8E 50 8E 64 1C 5E 73 60 63 12 57 70 69 60 35 3A 37 49 00 40 D3 00 50 8E 64 05 13 35 5E 83 64 32 51 70 64 04 11 5E 99 67 6C 11 5E 96 01 01 50 6B 51 70 02 11 5E 6A 6D 51 70 6A 05 64 11 32 12 67 10 40 35 69 37 57 7B 00 50 8E 60 47 00 40 8E 68 0E 50 1C 01 10 12 34 52 || setup 02 43 00 46 00 0A 00 00 00 00 00 01 4B 6B 0B 4D 03 0A 00 00 00 00 00 00 08 4C 02 0C 07 0B 4A 00 4E 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: steps=143 | 51 29 67 10 40 35 69 37 57 14 00 50 51 29 60 47 00 40 51 29 68 0E 50 1C 01 10 12 34 52 67 50 44 62 01 11 5C 38 29 42 64 5E 81 67 35 61 37 35 57 79 3A 61 37 41 67 34 01 11 5E 68 01 00 62 10 48 53 20 42 8E 01 11 EE 01 63 10 48 53 20 43 8E 50 8E 64 1C 5E A2 60 63 12 57 99 69 60 35 3A 37 49 00 40 D3 00 50 8E 64 05 13 35 5E 70 64 32 51 02 64 04 11 5E 80 67 6C 11 5E 7D 01 01 50 6B 51 02 02 11 5E 87 6D 51 02 6A 05 64 11 32 12 51 02 || setup 02 43 00 46 00 0A 00 00 00 00 00 01 4B 6B 0B 4D 03 0A 00 00 00 00 00 00 08 4C 02 0C 07 0B 4A 02 09 4E 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-sharedBitMaskHelperCalls: steps=137 | 67 50 44 62 01 11 5C 09 29 42 64 5E 52 67 35 61 37 35 57 50 3A 61 37 41 67 34 01 11 5E 39 01 00 62 10 48 53 80 42 8E 01 11 EE 01 63 10 48 53 80 43 8E 50 8E 64 1C 5E 73 60 63 12 57 70 69 60 35 3A 37 49 00 40 D3 00 50 8E 64 05 13 35 5E 83 64 32 51 70 64 04 11 5E 99 67 6C 11 5E 96 01 01 50 6B 51 70 02 11 5E 6A 6D 51 70 6A 05 64 11 32 12 67 10 40 35 69 37 57 7B 00 50 8E 60 47 00 40 8E 68 0E 50 1C 01 10 12 34 52 || setup 02 43 00 46 00 0A 00 00 00 00 00 01 4B 6B 0B 4D 03 0A 00 00 00 00 00 00 08 4C 02 0C 07 0B 4A 00 4E 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50
-sharedBitMaskHelperCalls+hoistSharedHelpers: steps=137 | 67 50 44 62 01 11 5C 09 29 42 64 5E 52 67 35 61 37 35 57 50 3A 61 37 41 67 34 01 11 5E 39 01 00 62 10 48 53 80 42 8E 01 11 EE 01 63 10 48 53 80 43 8E 50 8E 64 1C 5E 73 60 63 12 57 70 69 60 35 3A 37 49 00 40 D3 00 50 8E 64 05 13 35 5E 83 64 32 51 70 64 04 11 5E 99 67 6C 11 5E 96 01 01 50 6B 51 70 02 11 5E 6A 6D 51 70 6A 05 64 11 32 12 67 10 40 35 69 37 57 7B 00 50 8E 60 47 00 40 8E 68 0E 50 1C 01 10 12 34 52 || setup 02 43 00 46 00 0A 00 00 00 00 00 01 4B 6B 0B 4D 03 0A 00 00 00 00 00 00 08 4C 02 0C 07 0B 4A 00 4E 14 42 14 47 3B 09 09 09 12 0E 35 11 49 3B 09 09 09 12 0E 35 11 41 50"
+"primary: throws Out of MK-61 registers while allocating 'treasure'.
+Unknown variable 'treasure'
+No register allocated for treasure
+Unknown variable 'treasure'
+aggressiveTerminalDirect: throws Out of MK-61 registers while allocating 'treasure'.
+Unknown variable 'treasure'
+No register allocated for treasure
+Unknown variable 'treasure'
+invertBranchOrder: throws Out of MK-61 registers while allocating 'treasure'.
+Unknown variable 'treasure'
+No register allocated for treasure
+Unknown variable 'treasure'
+aggressiveTerminalDirect+invertBranchOrder: throws Out of MK-61 registers while allocating 'treasure'.
+Unknown variable 'treasure'
+No register allocated for treasure
+Unknown variable 'treasure'
+hoistSharedHelpers: throws Out of MK-61 registers while allocating 'treasure'.
+Unknown variable 'treasure'
+No register allocated for treasure
+Unknown variable 'treasure'
+hoistSharedHelpers+hoistProcs: throws Out of MK-61 registers while allocating 'treasure'.
+Unknown variable 'treasure'
+No register allocated for treasure
+Unknown variable 'treasure'
+canonicalizeIfChains: throws Out of MK-61 registers while allocating 'treasure'.
+Unknown variable 'treasure'
+No register allocated for treasure
+Unknown variable 'treasure'
+freeResidualDispatchScratch: steps=194 | 6C 50 47 60 01 11 C9 29 40 67 5E 63 6A 35 66 37 35 57 61 3A 66 37 46 6A 34 01 11 5E 39 01 00 60 10 4D 53 B9 40 4C 88 01 11 5E 52 01 64 10 4D 53 B9 44 4C 88 01 6E 10 4D 53 B9 4E 4C 88 4C 88 67 1C 5E 93 65 57 90 64 01 11 5C 76 29 44 65 34 65 34 4B DB 65 35 3A 37 BB 00 45 00 4C 88 67 05 13 35 5E A3 67 32 51 A4 67 04 11 5E 86 6A 03 0A 00 00 00 00 00 00 08 11 5E 7C 01 01 50 00 0A 00 00 00 00 00 01 51 A4 02 11 5E 95 00 0A 00 00 00 00 00 01 0B 51 A4 00 0A 00 00 00 00 00 00 02 0E 05 67 11 32 12 6A 10 45 34 4B DB 65 35 37 57 B2 00 4C 88 65 4A 00 45 6A 4C 88 6D 0E 50 1C 01 10 12 34 52 || setup 01 0A 00 00 00 00 00 00 08 4A 02 00 40 02 44 00 4E 00 49 00 4C 00 48 08 49 01 0A 00 00 08 00 08 00 08 0E 01 0A 07 00 06 02 02 06 04 38 41 01 0A 08 00 08 0E 01 0A 06 07 01 05 04 00 01 38 42 01 0A 08 00 08 08 00 08 08 0E 01 0A 02 02 06 00 03 03 05 38 43 20 46 50
+aliasXReuse: throws Out of MK-61 registers while allocating 'treasure'.
+Unknown variable 'treasure'
+No register allocated for treasure
+Unknown variable 'treasure'
+coalesceCopies: throws Out of MK-61 registers while allocating 'treasure'.
+Unknown variable 'treasure'
+No register allocated for treasure
+Unknown variable 'treasure'
+freeResidualDispatchScratch+canonicalizeIfChains: steps=194 | 6C 50 47 60 01 11 C9 29 40 67 5E 63 6A 35 66 37 35 57 61 3A 66 37 46 6A 34 01 11 5E 39 01 00 60 10 4D 53 B9 40 4C 88 01 11 5E 52 01 64 10 4D 53 B9 44 4C 88 01 6E 10 4D 53 B9 4E 4C 88 4C 88 67 1C 5E 93 65 57 90 64 01 11 5C 76 29 44 65 34 65 34 4B DB 65 35 3A 37 BB 00 45 00 4C 88 67 05 13 35 5E A3 67 32 51 A4 67 04 11 5E 86 6A 03 0A 00 00 00 00 00 00 08 11 5E 7C 01 01 50 00 0A 00 00 00 00 00 01 51 A4 02 11 5E 95 00 0A 00 00 00 00 00 01 0B 51 A4 00 0A 00 00 00 00 00 00 02 0E 05 67 11 32 12 6A 10 45 34 4B DB 65 35 37 57 B2 00 4C 88 65 4A 00 45 6A 4C 88 6D 0E 50 1C 01 10 12 34 52 || setup 01 0A 00 00 00 00 00 00 08 4A 02 00 40 02 44 00 4E 00 49 00 4C 00 48 08 49 01 0A 00 00 08 00 08 00 08 0E 01 0A 07 00 06 02 02 06 04 38 41 01 0A 08 00 08 0E 01 0A 06 07 01 05 04 00 01 38 42 01 0A 08 00 08 08 00 08 08 0E 01 0A 02 02 06 00 03 03 05 38 43 20 46 50
+shareRandomCell: throws Out of MK-61 registers while allocating 'treasure'.
+Unknown variable 'treasure'
+No register allocated for treasure
+Unknown variable 'treasure'
+shareRandomCell+hoistSharedHelpers: throws Out of MK-61 registers while allocating 'treasure'.
+Unknown variable 'treasure'
+No register allocated for treasure
+Unknown variable 'treasure'
+tailBranchInversion: throws Out of MK-61 registers while allocating 'treasure'.
+Unknown variable 'treasure'
+No register allocated for treasure
+Unknown variable 'treasure'
+hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion: throws Out of MK-61 registers while allocating 'treasure'.
+Unknown variable 'treasure'
+No register allocated for treasure
+Unknown variable 'treasure'
+guardedPrologueGadgets: throws Out of MK-61 registers while allocating 'treasure'.
+Unknown variable 'treasure'
+No register allocated for treasure
+Unknown variable 'treasure'
+guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: throws Out of MK-61 registers while allocating 'treasure'.
+Unknown variable 'treasure'
+No register allocated for treasure
+Unknown variable 'treasure'
+sharedBitMaskHelperCalls: throws Out of MK-61 registers while allocating 'treasure'.
+Unknown variable 'treasure'
+No register allocated for treasure
+Unknown variable 'treasure'
+sharedBitMaskHelperCalls+hoistSharedHelpers: throws Out of MK-61 registers while allocating 'treasure'.
+Unknown variable 'treasure'
+No register allocated for treasure
+Unknown variable 'treasure'"
 `;
 
 exports[`golden listing > lowering variants are stable for examples/pending-optimizer/cave-treasure.mkpro 1`] = `
@@ -5042,244 +5093,321 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   -- |   -  | enter player            | enter a value in X
-   -- |   -  | enter food              | enter any value 0..99 in Y
-   00 |  02  | 2                       |
-   01 |  43  | X→П 3                   | setup R3
+   00 |  01  | 1                       |
+   01 |  0A  | .                       |
    02 |  00  | 0                       |
-   03 |  46  | X→П 6                   | setup R6
+   03 |  00  | 0                       |
    04 |  00  | 0                       |
-   05 |  0A  | .                       |
+   05 |  00  | 0                       |
    06 |  00  | 0                       |
    07 |  00  | 0                       |
-   08 |  00  | 0                       |
-   09 |  00  | 0                       |
-   10 |  00  | 0                       |
-   11 |  01  | 1                       |
-   12 |  4B  | X→П b                   | setup Rb
-   13 |  6B  | П→X b                   | setup constant -0.000001 base 0.000001
-   14 |  0B  | /-/                     | setup constant -0.000001
-   15 |  4D  | X→П d                   | setup Rd
-   16 |  03  | 3                       |
-   17 |  0A  | .                       |
-   18 |  00  | 0                       |
+   08 |  08  | 8                       |
+   09 |  4A  | X→П a                   | setup Ra
+   10 |  02  | 2                       |
+   11 |  00  | 0                       |
+   12 |  40  | X→П 0                   | setup R0
+   13 |  02  | 2                       |
+   14 |  44  | X→П 4                   | setup R4
+   15 |  00  | 0                       |
+   16 |  4E  | X→П e                   | setup Re
+   17 |  00  | 0                       |
+   18 |  49  | X→П 9                   | setup R9
    19 |  00  | 0                       |
-   20 |  00  | 0                       |
+   20 |  4C  | X→П c                   | setup Rc
    21 |  00  | 0                       |
-   22 |  00  | 0                       |
-   23 |  00  | 0                       |
-   24 |  08  | 8                       |
-   25 |  4C  | X→П c                   | setup Rc
-   26 |  02  | 2                       |
-   27 |  0C  | ВП                      | exponent
-   28 |  07  | 7                       |
-   29 |  0B  | /-/                     | negative exponent
-   30 |  4A  | X→П a                   | setup Ra
-   31 |  00  | 0                       |
-   32 |  4E  | X→П e                   | setup Re
-   33 |  14  | X↔Y                     | setup food from stack.Y
-   34 |  42  | X→П 2                   | setup food
-   35 |  14  | X↔Y                     | restore stack.X after food
-   36 |  47  | X→П 7                   | setup player
-   37 |  3B  | К СЧ                    | random()
-   38 |  09  | 9                       |
-   39 |  09  | 9                       |
-   40 |  09  | 9                       |
-   41 |  12  | ×                       | expr *
-   42 |  0E  | В↑                      | random int keep scaled draw
-   43 |  35  | К {x}                   | random int fractional part
-   44 |  11  | −                       | random int floor
-   45 |  49  | X→П 9                   | setup walls
-   46 |  3B  | К СЧ                    | random()
-   47 |  09  | 9                       |
-   48 |  09  | 9                       |
-   49 |  09  | 9                       |
-   50 |  12  | ×                       | expr *
-   51 |  0E  | В↑                      | random int keep scaled draw
-   52 |  35  | К {x}                   | random int fractional part
-   53 |  11  | −                       | random int floor
-   54 |  41  | X→П 1                   | setup caches
-   55 |  50  | С/П                     | setup complete
+   22 |  48  | X→П 8                   | setup R8
+   23 |  08  | 8                       |
+   24 |  49  | X→П 9                   | setup R9
+   25 |  01  | 1                       |
+   26 |  0A  | .                       |
+   27 |  00  | 0                       |
+   28 |  00  | 0                       |
+   29 |  08  | 8                       |
+   30 |  00  | 0                       |
+   31 |  08  | 8                       |
+   32 |  00  | 0                       |
+   33 |  08  | 8                       |
+   34 |  0E  | В↑                      | separate adjacent number entry
+   35 |  01  | 1                       |
+   36 |  0A  | .                       |
+   37 |  07  | 7                       |
+   38 |  00  | 0                       |
+   39 |  06  | 6                       |
+   40 |  02  | 2                       |
+   41 |  02  | 2                       |
+   42 |  06  | 6                       |
+   43 |  04  | 4                       |
+   44 |  38  | К ∨                     | bit_or()
+   45 |  41  | X→П 1                   | setup walls_1
+   46 |  01  | 1                       |
+   47 |  0A  | .                       |
+   48 |  08  | 8                       |
+   49 |  00  | 0                       |
+   50 |  08  | 8                       |
+   51 |  0E  | В↑                      | separate adjacent number entry
+   52 |  01  | 1                       |
+   53 |  0A  | .                       |
+   54 |  06  | 6                       |
+   55 |  07  | 7                       |
+   56 |  01  | 1                       |
+   57 |  05  | 5                       |
+   58 |  04  | 4                       |
+   59 |  00  | 0                       |
+   60 |  01  | 1                       |
+   61 |  38  | К ∨                     | bit_or()
+   62 |  42  | X→П 2                   | setup walls_2
+   63 |  01  | 1                       |
+   64 |  0A  | .                       |
+   65 |  08  | 8                       |
+   66 |  00  | 0                       |
+   67 |  08  | 8                       |
+   68 |  08  | 8                       |
+   69 |  00  | 0                       |
+   70 |  08  | 8                       |
+   71 |  08  | 8                       |
+   72 |  0E  | В↑                      | separate adjacent number entry
+   73 |  01  | 1                       |
+   74 |  0A  | .                       |
+   75 |  02  | 2                       |
+   76 |  02  | 2                       |
+   77 |  06  | 6                       |
+   78 |  00  | 0                       |
+   79 |  03  | 3                       |
+   80 |  03  | 3                       |
+   81 |  05  | 5                       |
+   82 |  38  | К ∨                     | bit_or()
+   83 |  43  | X→П 3                   | setup walls_3
+   84 |  20  | F π                     | pi()
+   85 |  46  | X→П 6                   | setup caches
+   86 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  67  | П→X 7                   | display __inline_show_37_0 source
-   01 |  50  | С/П                     | show __inline_show_37_0
-   02 |  44  | X→П 4                   | read command
-   03 |  62  | П→X 2                   | decrement/test food
+   00 |  6C  | П→X c                   | display __inline_show_38_0 source
+   01 |  50  | С/П                     | show __inline_show_38_0
+   02 |  47  | X→П 7                   | read command
+   03 |  60  | П→X 0                   | decrement/test food
    04 |  01  | 1                       |
    05 |  11  | −                       | decrement/test food
-   06 |  5C  | F x<0                   | decrement underflow food
-   07 |  09  | 09                      | decrement underflow food
-   08 |  29  | К ÷                     | halt literal ЕГГ0Г
-   09 |  42  | X→П 2                   | set food
-   10 |  64  | П→X 4                   | recall command
-   11 |  5E  | F x=0                   | false branch for ==
-   12 |  52  | 52                      | false branch for ==
-   13 |  67  | П→X 7                   | recall player
-   14 |  35  | К {x}                   | frac()
-   15 |  61  | П→X 1                   | recall caches
-   16 |  37  | К ∧                     | bit membership test
-   17 |  35  | К {x}                   | bit membership fraction
-   18 |  57  | F x≠0                   | false branch for !=
-   19 |  50  | 50                      | false branch for !=
-   20 |  3A  | К ИНВ                   | reuse membership mask for clear
-   21 |  61  | П→X 1                   | recall caches
-   22 |  37  | К ∧                     | clear matched cell with reused mask
-   23 |  41  | X→П 1                   | set caches
-   24 |  67  | П→X 7                   | recall player
-   25 |  34  | К [x]                   | int()
-   26 |  01  | 1                       |
-   27 |  11  | −                       | dispatch compare
-   28 |  5E  | F x=0                   | case mismatch
-   29 |  39  | 39                      | case mismatch
-   30 |  01  | 1                       |
-   31 |  00  | 0                       |
-   32 |  62  | П→X 2                   | recall food
-   33 |  10  | +                       | expr +
-   34 |  48  | X→П 8                   | arg stake for robber_fight
-   35 |  53  | ПП                      | call function robber_fight
-   36 |  80  | >80                     | call function robber_fight
-   37 |  42  | X→П 2                   | set food
-   38 |  8E  | К БП e                  | dispatch end; preloaded Re=B2 indirect-target=0 indirect flow
+   06 |  C9  | К x<0 9                 | decrement underflow food; preloaded R9=C0 indirect-target=8 shifted-forward indirect flow
+   07 |  29  | К ÷                     | halt literal ЕГГ0Г
+   08 |  40  | X→П 0                   | set food
+   09 |  67  | П→X 7                   | recall command
+   10 |  5E  | F x=0                   | false branch for ==
+   11 |  63  | 63                      | false branch for ==
+   12 |  6A  | П→X a                   | recall player
+   13 |  35  | К {x}                   | frac()
+   14 |  66  | П→X 6                   | recall caches
+   15 |  37  | К ∧                     | bit membership test
+   16 |  35  | К {x}                   | bit membership fraction
+   17 |  57  | F x≠0                   | false branch for !=
+   18 |  61  | 61                      | false branch for !=
+   19 |  3A  | К ИНВ                   | reuse membership mask for clear
+   20 |  66  | П→X 6                   | recall caches
+   21 |  37  | К ∧                     | clear matched cell with reused mask
+   22 |  46  | X→П 6                   | set caches
+   23 |  6A  | П→X a                   | recall player
+   24 |  34  | К [x]                   | int()
+   25 |  01  | 1                       |
+   26 |  11  | −                       | dispatch compare
+   27 |  5E  | F x=0                   | case mismatch
+   28 |  39  | 39                      | case mismatch
+   29 |  01  | 1                       |
+   30 |  00  | 0                       |
+   31 |  60  | П→X 0                   | recall food
+   32 |  10  | +                       | expr +
+   33 |  4D  | X→П d                   | arg stake for robber_fight
+   34 |  53  | ПП                      | call function robber_fight
+   35 |  B9  | >B9                     | call function robber_fight
+   36 |  40  | X→П 0                   | set food
+   37 |  4C  | X→П c                   | set screen
+   38 |  88  | К БП 8                  | dispatch end; preloaded R8=B2 indirect-target=0 indirect flow
    39 |  01  | 1                       |
    40 |  11  | −                       | dispatch residual compare
-   41 |  EE  | К x=0 e                 | case mismatch; preloaded Re=B2 indirect-target=0 indirect flow
-   42 |  01  | 1                       |
-   43 |  63  | П→X 3                   | recall dynamite
-   44 |  10  | +                       | expr +
-   45 |  48  | X→П 8                   | arg stake for robber_fight
-   46 |  53  | ПП                      | call function robber_fight
-   47 |  80  | >80                     | call function robber_fight
-   48 |  43  | X→П 3                   | set dynamite
-   49 |  8E  | К БП e                  | if end; preloaded Re=B2 indirect-target=0 indirect flow
-   50 |  50  | С/П                     | pause
-   51 |  8E  | К БП e                  | if end; preloaded Re=B2 indirect-target=0 indirect flow
-   52 |  64  | П→X 4                   | recall command
-   53 |  1C  | F sin                   | sin()
-   54 |  5E  | F x=0                   | false branch for ==
-   55 |  73  | 73                      | false branch for ==
-   56 |  60  | П→X 0                   | recall blocked
-   57 |  63  | П→X 3                   | recall dynamite
-   58 |  12  | ×                       | expr *
-   59 |  57  | F x≠0                   | false branch for !=
-   60 |  70  | 70                      | false branch for !=
-   61 |  69  | П→X 9                   | recall walls
-   62 |  60  | П→X 0                   | recall blocked
-   63 |  35  | К {x}                   | frac()
-   64 |  3A  | К ИНВ                   | bit_not()
-   65 |  37  | К ∧                     | bit_and()
-   66 |  49  | X→П 9                   | set walls
-   67 |  00  | 0                       | set blocked
-   68 |  40  | X→П 0                   | set blocked
-   69 |  D3  | К П→X 3                 | decrement dynamite
-   70 |  00  | 0                       | pause
-   71 |  50  | С/П                     | pause
-   72 |  8E  | К БП e                  | if end; preloaded Re=B2 indirect-target=0 indirect flow
-   73 |  64  | П→X 4                   | recall command
-   74 |  05  | 5                       |
-   75 |  13  | ÷                       | expr /
-   76 |  35  | К {x}                   | frac()
-   77 |  5E  | F x=0                   | false branch for ==
-   78 |  83  | 83                      | false branch for ==
-   79 |  64  | П→X 4                   | recall command
-   80 |  32  | К ЗН                    | sign()
-   81 |  51  | БП                      | tail jump go
-   82 |  70  | >70                     | proc call go
-   83 |  64  | П→X 4                   | recall command
-   84 |  04  | 4                       |
-   85 |  11  | −                       | dispatch compare
-   86 |  5E  | F x=0                   | case mismatch
-   87 |  99  | 99                      | case mismatch
-   88 |  67  | П→X 7                   | recall player
-   89 |  6C  | П→X c                   | preload const 3.0000008
-   90 |  11  | −                       | condition compare
-   91 |  5E  | F x=0                   | false branch for ==
-   92 |  96  | 96                      | false branch for ==
-   93 |  01  | 1                       |
-   94 |  01  | 1                       |
-   95 |  50  | С/П                     | halt
-   96 |  6B  | П→X b                   | preload const 0.000001
-   97 |  51  | БП                      | tail jump go
-   98 |  70  | >70                     | proc call go
-   99 |  02  | 2                       |
-   A0 |  11  | −                       | dispatch residual compare
-   A1 |  5E  | F x=0                   | case mismatch
-   A2 |  6A  | >6A                     | case mismatch
-   A3 |  6D  | П→X d                   | preload const -0.000001
-   A4 |  51  | БП                      | tail jump go
-  >69 |  70  | >70                     | proc call go
-  >6A |  6A  | П→X a                   | preload const 2e-7
-  >6B |  05  | 5                       |
-  >6C |  64  | П→X 4                   | recall command
-  >6D |  11  | −                       | expr -
-  >6E |  32  | К ЗН                    | sign()
-  >6F |  12  | ×                       | expr *
-  >70 |  67  | П→X 7                   | go blocked base
-  >71 |  10  | +                       | go blocked from X parameter
-  >72 |  40  | X→П 0                   | set blocked
-  >73 |  35  | К {x}                   | current-X frac
-  >74 |  69  | П→X 9                   | recall walls
-  >75 |  37  | К ∧                     | bit_and()
-  >76 |  57  | F x≠0                   | false branch for !=
-  >77 |  7B  | >7B                     | false branch for !=
-  >78 |  00  | 0                       | pause
-  >79 |  50  | С/П                     | pause
-  >7A |  8E  | К БП e                  | if end; preloaded Re=B2 indirect-target=0 indirect flow
-  >7B |  60  | П→X 0                   | recall blocked
-  >7C |  47  | X→П 7                   | set player
-  >7D |  00  | 0                       | set blocked
-  >7E |  40  | X→П 0                   | set blocked
-  >7F |  8E  | К БП e                  | tail continuation; preloaded Re=B2 indirect-target=0 indirect flow
-  >80 |  68  | П→X 8                   | display __inline_show_129_1 source
-  >81 |  0E  | В↑                      | keep displayed stake in Y
-  >82 |  50  | С/П                     | show __inline_show_129_1
-  >83 |  1C  | F sin                   | risk input fight_entry
-  >84 |  01  | 1                       | risk multiplier
-  >85 |  10  | +                       | risk multiplier
-  >86 |  12  | ×                       | risk stake
-  >87 |  34  | К [x]                   | risk integer result
-  >88 |  52  | В/О                     | return value
+   41 |  5E  | F x=0                   | case mismatch
+   42 |  52  | 52                      | case mismatch
+   43 |  01  | 1                       |
+   44 |  64  | П→X 4                   | recall dynamite
+   45 |  10  | +                       | expr +
+   46 |  4D  | X→П d                   | arg stake for robber_fight
+   47 |  53  | ПП                      | call function robber_fight
+   48 |  B9  | >B9                     | call function robber_fight
+   49 |  44  | X→П 4                   | set dynamite
+   50 |  4C  | X→П c                   | set screen
+   51 |  88  | К БП 8                  | dispatch end; preloaded R8=B2 indirect-target=0 indirect flow
+   52 |  01  | 1                       |
+   53 |  6E  | П→X e                   | recall treasure
+   54 |  10  | +                       | expr +
+   55 |  4D  | X→П d                   | arg stake for robber_fight
+   56 |  53  | ПП                      | call function robber_fight
+   57 |  B9  | >B9                     | call function robber_fight
+   58 |  4E  | X→П e                   | set treasure
+   59 |  4C  | X→П c                   | set screen
+   60 |  88  | К БП 8                  | if end; preloaded R8=B2 indirect-target=0 indirect flow
+   61 |  4C  | X→П c                   | set screen
+   62 |  88  | К БП 8                  | if end; preloaded R8=B2 indirect-target=0 indirect flow
+   63 |  67  | П→X 7                   | recall command
+   64 |  1C  | F sin                   | sin()
+   65 |  5E  | F x=0                   | false branch for ==
+   66 |  93  | 93                      | false branch for ==
+   67 |  65  | П→X 5                   | recall blocked
+   68 |  57  | F x≠0                   | false branch for !=
+   69 |  90  | 90                      | false branch for !=
+   70 |  64  | П→X 4                   | decrement/test dynamite
+   71 |  01  | 1                       |
+   72 |  11  | −                       | decrement/test dynamite
+   73 |  5C  | F x<0                   | decrement underflow dynamite
+   74 |  76  | 76                      | decrement underflow dynamite
+   75 |  29  | К ÷                     | halt literal ЕГГ0Г
+   76 |  44  | X→П 4                   | set dynamite
+   77 |  65  | П→X 5                   | recall blocked
+   78 |  34  | К [x]                   | int()
+   79 |  65  | П→X 5                   | recall blocked
+   80 |  34  | К [x]                   | int()
+   81 |  4B  | X→П b                   | indexed selector walls
+   82 |  DB  | К П→X b                 | indexed recall walls
+   83 |  65  | П→X 5                   | recall blocked
+   84 |  35  | К {x}                   | frac()
+   85 |  3A  | К ИНВ                   | bit_not()
+   86 |  37  | К ∧                     | bit_and()
+   87 |  BB  | К X→П b                 | indexed set walls
+   88 |  00  | 0                       | set blocked
+   89 |  45  | X→П 5                   | set blocked
+   90 |  00  | 0                       | set screen
+   91 |  4C  | X→П c                   | set screen
+   92 |  88  | К БП 8                  | if end; preloaded R8=B2 indirect-target=0 indirect flow
+   93 |  67  | П→X 7                   | recall command
+   94 |  05  | 5                       |
+   95 |  13  | ÷                       | expr /
+   96 |  35  | К {x}                   | frac()
+   97 |  5E  | F x=0                   | false branch for ==
+   98 |  A3  | A3                      | false branch for ==
+   99 |  67  | П→X 7                   | recall command
+   A0 |  32  | К ЗН                    | sign()
+   A1 |  51  | БП                      | tail jump go
+   A2 |  A4  | >A4                     | proc call go
+   A3 |  67  | П→X 7                   | recall command
+   A4 |  04  | 4                       |
+  >69 |  11  | −                       | dispatch compare
+  >6A |  5E  | F x=0                   | case mismatch
+  >6B |  86  | >86                     | case mismatch
+  >6C |  6A  | П→X a                   | recall player
+  >6D |  03  | 3                       |
+  >6E |  0A  | .                       |
+  >6F |  00  | 0                       |
+  >70 |  00  | 0                       |
+  >71 |  00  | 0                       |
+  >72 |  00  | 0                       |
+  >73 |  00  | 0                       |
+  >74 |  00  | 0                       |
+  >75 |  08  | 8                       |
+  >76 |  11  | −                       | condition compare
+  >77 |  5E  | F x=0                   | false branch for ==
+  >78 |  7C  | >7C                     | false branch for ==
+  >79 |  01  | 1                       |
+  >7A |  01  | 1                       |
+  >7B |  50  | С/П                     | halt
+  >7C |  00  | 0                       |
+  >7D |  0A  | .                       |
+  >7E |  00  | 0                       |
+  >7F |  00  | 0                       |
+  >80 |  00  | 0                       |
+  >81 |  00  | 0                       |
+  >82 |  00  | 0                       |
+  >83 |  01  | 1                       |
+  >84 |  51  | БП                      | tail jump go
+  >85 |  A4  | >A4                     | proc call go
+  >86 |  02  | 2                       |
+  >87 |  11  | −                       | dispatch residual compare
+  >88 |  5E  | F x=0                   | case mismatch
+  >89 |  95  | >95                     | case mismatch
+  >8A |  00  | 0                       |
+  >8B |  0A  | .                       |
+  >8C |  00  | 0                       |
+  >8D |  00  | 0                       |
+  >8E |  00  | 0                       |
+  >8F |  00  | 0                       |
+  >90 |  00  | 0                       |
+  >91 |  01  | 1                       |
+  >92 |  0B  | /-/                     | negative number
+  >93 |  51  | БП                      | tail jump go
+  >94 |  A4  | >A4                     | proc call go
+  >95 |  00  | 0                       |
+  >96 |  0A  | .                       |
+  >97 |  00  | 0                       |
+  >98 |  00  | 0                       |
+  >99 |  00  | 0                       |
+  >9A |  00  | 0                       |
+  >9B |  00  | 0                       |
+  >9C |  00  | 0                       |
+  >9D |  02  | 2                       |
+  >9E |  0E  | В↑                      | separate adjacent number entry
+  >9F |  05  | 5                       |
+  >A0 |  67  | П→X 7                   | recall command
+  >A1 |  11  | −                       | expr -
+  >A2 |  32  | К ЗН                    | sign()
+  >A3 |  12  | ×                       | expr *
+  >A4 |  6A  | П→X a                   | go blocked base
+  >A5 |  10  | +                       | go blocked from X parameter
+  >A6 |  45  | X→П 5                   | set blocked
+  >A7 |  34  | К [x]                   | int()
+  >A8 |  4B  | X→П b                   | indexed selector walls
+  >A9 |  DB  | К П→X b                 | indexed recall walls
+  >AA |  65  | П→X 5                   | recall blocked
+  >AB |  35  | К {x}                   | frac()
+  >AC |  37  | К ∧                     | bit_and()
+  >AD |  57  | F x≠0                   | false branch for !=
+  >AE |  B2  | >B2                     | false branch for !=
+  >AF |  00  | 0                       | set screen
+  >B0 |  4C  | X→П c                   | set screen
+  >B1 |  88  | К БП 8                  | if end; preloaded R8=B2 indirect-target=0 indirect flow
+  >B2 |  65  | П→X 5                   | recall blocked
+  >B3 |  4A  | X→П a                   | set player
+  >B4 |  00  | 0                       | set blocked
+  >B5 |  45  | X→П 5                   | set blocked
+  >B6 |  6A  | П→X a                   | recall player
+  >B7 |  4C  | X→П c                   | set screen
+  >B8 |  88  | К БП 8                  | tail continuation; preloaded R8=B2 indirect-target=0 indirect flow
+  >B9 |  6D  | П→X d                   | display __inline_show_148_1 source
+  >BA |  0E  | В↑                      | keep displayed stake in Y
+  >BB |  50  | С/П                     | show __inline_show_148_1
+  >BC |  1C  | F sin                   | risk input fight_entry
+  >BD |  01  | 1                       | risk multiplier
+  >BE |  10  | +                       | risk multiplier
+  >BF |  12  | ×                       | risk stake
+  >C0 |  34  | К [x]                   | risk integer result
+  >C1 |  52  | В/О                     | return value
 
 ## Hex
-00: 67 50 44 62 01 11 5C 09
-08: 29 42 64 5E 52 67 35 61
-16: 37 35 57 50 3A 61 37 41
-24: 67 34 01 11 5E 39 01 00
-32: 62 10 48 53 80 42 8E 01
-40: 11 EE 01 63 10 48 53 80
-48: 43 8E 50 8E 64 1C 5E 73
-56: 60 63 12 57 70 69 60 35
-64: 3A 37 49 00 40 D3 00 50
-72: 8E 64 05 13 35 5E 83 64
-80: 32 51 70 64 04 11 5E 99
-88: 67 6C 11 5E 96 01 01 50
-96: 6B 51 70 02 11 5E 6A 6D
-A4: 51 70 6A 05 64 11 32 12
->70: 67 10 40 35 69 37 57 7B
->78: 00 50 8E 60 47 00 40 8E
->80: 68 0E 50 1C 01 10 12 34
->88: 52
+00: 6C 50 47 60 01 11 C9 29
+08: 40 67 5E 63 6A 35 66 37
+16: 35 57 61 3A 66 37 46 6A
+24: 34 01 11 5E 39 01 00 60
+32: 10 4D 53 B9 40 4C 88 01
+40: 11 5E 52 01 64 10 4D 53
+48: B9 44 4C 88 01 6E 10 4D
+56: 53 B9 4E 4C 88 4C 88 67
+64: 1C 5E 93 65 57 90 64 01
+72: 11 5C 76 29 44 65 34 65
+80: 34 4B DB 65 35 3A 37 BB
+88: 00 45 00 4C 88 67 05 13
+96: 35 5E A3 67 32 51 A4 67
+A4: 04 11 5E 86 6A 03 0A 00
+>70: 00 00 00 00 00 08 11 5E
+>78: 7C 01 01 50 00 0A 00 00
+>80: 00 00 00 01 51 A4 02 11
+>88: 5E 95 00 0A 00 00 00 00
+>90: 00 01 0B 51 A4 00 0A 00
+>98: 00 00 00 00 00 02 0E 05
+>A0: 67 11 32 12 6A 10 45 34
+>A8: 4B DB 65 35 37 57 B2 00
+>B0: 4C 88 65 4A 00 45 6A 4C
+>B8: 88 6D 0E 50 1C 01 10 12
+>C0: 34 52
 
 ## Setup Program
-02
-43
-00
-46
-00
-0A
-00
-00
-00
-00
-00
 01
-4B
-6B
-0B
-4D
-03
 0A
 00
 00
@@ -5288,191 +5416,244 @@ A4: 51 70 6A 05 64 11 32 12
 00
 00
 08
-4C
-02
-0C
-07
-0B
 4A
+02
+00
+40
+02
+44
 00
 4E
-14
-42
-14
-47
-3B
-09
-09
-09
-12
-0E
-35
-11
+00
 49
-3B
-09
-09
-09
-12
+00
+4C
+00
+48
+08
+49
+01
+0A
+00
+00
+08
+00
+08
+00
+08
 0E
-35
-11
+01
+0A
+07
+00
+06
+02
+02
+06
+04
+38
 41
+01
+0A
+08
+00
+08
+0E
+01
+0A
+06
+07
+01
+05
+04
+00
+01
+38
+42
+01
+0A
+08
+00
+08
+08
+00
+08
+08
+0E
+01
+0A
+02
+02
+06
+00
+03
+03
+05
+38
+43
+20
+46
 50
 
 ## Explain
 MK-Pro compile report
-Steps: 137/999999
+Steps: 194/999999
 Delivery: hex
 Optimizer: exact maximum
-Reference: kei_treasure_cave; span=105, entries=105, gaps=none, compiled=137, delta=32, parity=larger
+Reference: kei_treasure_cave; span=105, entries=105, gaps=none, compiled=194, delta=89, parity=larger
 Machine: mk61
 Optimizer rules: automatic=yes; active=15, considered=1, candidates=38, planned=0
-Budget: official=137, extra=0, physical=137
-Intent IR: lowered=yes, v2=yes; intent=136, effects=137, cells=137
+Budget: official=194, extra=0, physical=194
+Intent IR: lowered=yes, v2=yes; intent=158, effects=194, cells=194
 
 Preloads:
-  player -> R7: stack.X (outside program cells)
-  walls -> R9: random() (outside program cells)
-  caches -> R1: random() (outside program cells)
-  food -> R2: stack.Y (outside program cells)
-  dynamite -> R3: 2 (outside program cells)
-  fight_entry -> R6: 0 (outside program cells)
-  Rd: -0.000001 (outside program cells)
-  Rc: 3.0000008 (outside program cells)
-  Rb: 0.000001 (outside program cells)
-  Ra: 2e-7 (outside program cells)
-  Re: B2 (outside program cells)
+  player -> Ra: 1.0000008 (outside program cells)
+  caches -> R6: pi() (outside program cells)
+  food -> R0: 20 (outside program cells)
+  dynamite -> R4: 2 (outside program cells)
+  treasure -> Re: 0 (outside program cells)
+  fight_entry -> R9: 0 (outside program cells)
+  screen -> Rc: 0 (outside program cells)
+  R8: B2 (outside program cells)
+  R9: C0 (outside program cells)
 
 Setup Block:
-  \`R3=2; R6=0; Rd=-0.000001; Rc=3.0000008; Rb=0.000001; Ra=2E-7; Re=L2\`
+  \`Ra=1.0000008; R0=20; R4=2; Re=0; R9=0; Rc=0; R8=L2; R9=С0\`
 
 Setup Program:
-  Reason: initializes player, walls, caches, food
-  00: 02 43 00 46 00 0A 00 00
-  08: 00 00 00 01 4B 6B 0B 4D
-  16: 03 0A 00 00 00 00 00 00
-  24: 08 4C 02 0C 07 0B 4A 00
-  32: 4E 14 42 14 47 3B 09 09
-  40: 09 12 0E 35 11 49 3B 09
-  48: 09 09 12 0E 35 11 41 50
+  Reason: initializes walls_1, walls_2, walls_3, caches
+  00: 01 0A 00 00 00 00 00 00
+  08: 08 4A 02 00 40 02 44 00
+  16: 4E 00 49 00 4C 00 48 08
+  24: 49 01 0A 00 00 08 00 08
+  32: 00 08 0E 01 0A 07 00 06
+  40: 02 02 06 04 38 41 01 0A
+  48: 08 00 08 0E 01 0A 06 07
+  56: 01 05 04 00 01 38 42 01
+  64: 0A 08 00 08 08 00 08 08
+  72: 0E 01 0A 02 02 06 00 03
+  80: 03 05 38 43 20 46 50
 
 Registers:
-  blocked: R0
-  caches: R1
-  command: R4
-  dir: R5
-  dynamite: R3
-  fight_entry: R6
-  food: R2
-  player: R7
-  stake: R8
-  walls: R9
+  __bank_selector_walls: Rb
+  blocked: R5
+  caches: R6
+  command: R7
+  dir: R8
+  dynamite: R4
+  fight_entry: R9
+  food: R0
+  player: Ra
+  screen: Rc
+  stake: Rd
+  treasure: Re
+  walls_1: R1
+  walls_2: R2
+  walls_3: R3
 
 Labels:
    main: 00
   __loop_0: 00
-  __decrement_ok_1: 09
+  __decrement_ok_1: 08
   __dispatch_next_7: 39
-  __dispatch_next_8: 49
-  __dispatch_end_6: 49
-  __if_false_4: 50
-  __if_end_5: 51
-  __if_false_2: 52
-  __if_false_11: 70
-  __if_false_9: 73
-  __if_false_13: 83
-  __if_false_17: 96
-  __dispatch_next_16: 99
-  __dispatch_next_18: >6A
-  __dispatch_end_15: >70
-  __if_end_14: >70
-  __if_end_10: >70
-  __if_end_3: >70
-  go: >70
-  __if_false_19: >7B
-  __if_end_20: >7F
-  robber_fight: >80
+  __dispatch_next_8: 52
+  __dispatch_end_6: 60
+  __if_false_4: 61
+  __if_end_5: 62
+  __if_false_2: 63
+  __decrement_ok_13: 76
+  __if_false_11: 90
+  __if_false_9: 93
+  __if_false_14: A3
+  __if_false_18: >7C
+  __dispatch_next_17: >86
+  __dispatch_next_19: >95
+  __dispatch_end_16: >A4
+  __if_end_15: >A4
+  __if_end_10: >A4
+  __if_end_3: >A4
+  go: >A4
+  __if_false_20: >B2
+  __if_end_21: >B8
+  robber_fight: >B9
 
 Optimizations:
   - expression-constant-folder: Folded 5 constant expression node(s) before code generation.
-  - dead-state-elimination: Removed 1 unobserved state field before register allocation.
-  - terminal-loop-screen-elision: Elided 1 terminal show already provided by the next loop header.
-  - intent-domain-lowering: Lowered 8 state fields and 10 rules through the generic intent pipeline.
+  - intent-domain-lowering: Lowered 9 state fields and 13 rules through the generic intent pipeline.
   - dead-proc-elimination: Removed 1 unreachable lowered rule proc(s) after high-level match/effect lowering.
   - auto-preload-initial-state: Moved initial state into setup/preload values so official program cells stay focused on turn logic.
-  - display-strategy-selection: Selected decimal-pack for screen __inline_show_37_0.
-  - packed-display-lowering: Display __inline_show_37_0 may use display-byte encodings in later layout passes.
-  - show-read-fusion: Fused show __inline_show_37_0 and read command into one calculator stop.
-  - error-stop: Used one-cell error opcode for literal ЕГГ0Г stop at line 43.
-  - decrement-underflow-branch: Fused food decrement and negative branch at lines 41/42.
-  - zero-condition-test: Tested == 0 without materializing a zero literal at line 48.
-  - dispatch-lowering: Selected fallthrough-compare-chain for dispatch@121.
+  - display-strategy-selection: Selected decimal-pack for screen __inline_show_38_0.
+  - packed-display-lowering: Display __inline_show_38_0 may use display-byte encodings in later layout passes.
+  - show-read-fusion: Fused show __inline_show_38_0 and read command into one calculator stop.
+  - error-stop: Used one-cell error opcode for literal ЕГГ0Г stop at line 44.
+  - decrement-underflow-branch: Fused food decrement and negative branch at lines 42/43.
+  - zero-condition-test: Tested == 0 without materializing a zero literal at line 49.
+  - dispatch-lowering: Selected fallthrough-compare-chain for dispatch@125.
   - function-call: Called function robber_fight and consumed its result from X.
+  - single-use-rule-inline: Inlined single-use rule water_cache at line 126.
   - function-call: Called function robber_fight and consumed its result from X.
-  - numeric-dispatch-residual-chain: Reused residual comparisons for numeric dispatch at line 121.
-  - single-use-rule-inline: Inlined single-use rule cache_reward at line 113.
-  - known-zero-reuse: Reused known zero in X for pause.
-  - cell-membership-clear-reuse: Reused the successful membership mask when clearing caches at line 112.
-  - single-use-rule-inline: Inlined single-use rule search_cache at line 49.
-  - zero-condition-test: Tested == 0 without materializing a zero literal at line 52.
-  - zero-condition-test: Tested != 0 without materializing a zero literal at line 100.
-  - indirect-incdec-counter: Decremented dynamite by using К П->X 3's pre-decrement side effect at line 103.
-  - single-use-rule-inline: Inlined single-use rule break_wall at line 53.
-  - zero-condition-test: Tested == 0 without materializing a zero literal at line 62.
+  - single-use-rule-inline: Inlined single-use rule grenade_cache at line 127.
+  - function-call: Called function robber_fight and consumed its result from X.
+  - single-use-rule-inline: Inlined single-use rule treasure_cache at line 128.
+  - numeric-dispatch-residual-chain: Reused residual comparisons for numeric dispatch at line 125.
+  - single-use-rule-inline: Inlined single-use rule cache_reward at line 117.
+  - known-zero-reuse: Reused known zero in X for set screen.
+  - cell-membership-clear-reuse: Reused the successful membership mask when clearing caches at line 116.
+  - single-use-rule-inline: Inlined single-use rule search_cache at line 50.
+  - zero-condition-test: Tested == 0 without materializing a zero literal at line 53.
+  - zero-condition-test: Tested != 0 without materializing a zero literal at line 101.
+  - error-stop: Used one-cell error opcode for literal ЕГГ0Г stop at line 104.
+  - decrement-underflow-branch: Fused dynamite decrement and negative branch at lines 102/103.
+  - single-use-rule-inline: Inlined single-use rule break_wall at line 54.
+  - zero-condition-test: Tested == 0 without materializing a zero literal at line 63.
   - proc-call-lowering: Compiled call to rule go as ПП/В/О subroutine.
-  - x-param-proc-call: Passed dir to rule go through X at line 63.
-  - dispatch-lowering: Selected fallthrough-compare-chain for dispatch@66.
-  - preloaded-constant: Used preloaded Rc for constant 3.0000008.
-  - single-use-rule-inline: Inlined single-use rule exit_found at line 76.
-  - preloaded-constant: Used preloaded Rb for constant 0.000001.
+  - x-param-proc-call: Passed dir to rule go through X at line 64.
+  - dispatch-lowering: Selected fallthrough-compare-chain for dispatch@67.
+  - single-use-rule-inline: Inlined single-use rule exit_found at line 77.
   - proc-call-lowering: Compiled call to rule go as ПП/В/О subroutine.
-  - x-param-proc-call: Passed dir to rule go through X at line 79.
-  - terminal-branch-end-elision: Omitted unreachable if-end jump after terminal then branch at line 75.
-  - single-use-rule-inline: Inlined single-use rule move_west at line 67.
-  - preloaded-constant: Used preloaded Rd for constant -0.000001.
-  - proc-call-lowering: Compiled call to rule go as ПП/В/О subroutine.
-  - x-param-proc-call: Passed dir to rule go through X at line 68.
-  - preloaded-constant: Used preloaded Ra for constant 2e-7.
+  - x-param-proc-call: Passed dir to rule go through X at line 80.
+  - terminal-branch-end-elision: Omitted unreachable if-end jump after terminal then branch at line 76.
+  - single-use-rule-inline: Inlined single-use rule move_west at line 68.
   - proc-call-lowering: Compiled call to rule go as ПП/В/О subroutine.
   - x-param-proc-call: Passed dir to rule go through X at line 69.
-  - numeric-dispatch-residual-chain: Reused residual comparisons for numeric dispatch at line 66.
-  - single-use-rule-inline: Inlined single-use rule decode_move at line 56.
-  - stack-current-x-scheduling: Reused frac(blocked) already derivable from X for bit_and().
-  - zero-condition-test: Tested != 0 without materializing a zero literal at line 89.
-  - single-use-rule-inline: Inlined single-use rule try_move at line 85.
+  - proc-call-lowering: Compiled call to rule go as ПП/В/О subroutine.
+  - x-param-proc-call: Passed dir to rule go through X at line 70.
+  - numeric-dispatch-residual-chain: Reused residual comparisons for numeric dispatch at line 67.
+  - single-use-rule-inline: Inlined single-use rule decode_move at line 57.
+  - zero-condition-test: Tested != 0 without materializing a zero literal at line 90.
+  - single-use-rule-inline: Inlined single-use rule try_move at line 86.
   - x-param-proc-entry: Compiled rule go to consume dir directly from X.
   - show-read-stake-sin-lowering: Reused displayed stake as the stack stake for int(stake * (1 + sin(fight_entry))).
   - tail-call-lowering: Replaced 5 subroutine tail operations with direct jump continuation.
-  - jump-to-next-threading: Removed 1 unconditional branch to the immediately following label. (+Removed 1 unconditional branch to the immediately following label.)
+  - store-recall-peephole: Dropped 4 redundant П->X immediately after X->П to the same register.
   - jump-thread: Threaded 6 jump(s) through trampoline labels to the final target.
+  - dead-store-elimination: Removed 1 store(s) to register(s) never read before the next assignment.
   - dead-code-after-halt: Removed 1 unreachable op(s) from the entry CFG.
-  - preloaded-indirect-flow: Activated post-layout: replaced 7 direct branch/call(s) with proven preloaded indirect flow.
-  - dark-entry-layout: Pointed 1 branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window).
-  - generated-setup-program: Generated optimized setup program for player, walls, caches, food.
-  - setup-constant-synthesis: Built setup constant -0.000001 by changed the sign of setup Rb (0.000001) (2 cells instead of direct 9).
-  - setup-int-random-range-lowering: Lowered int(random() * 999) without К [x] so the MK-61 random sequence keeps moving.
-  - setup-int-random-range-lowering: Lowered int(random() * 999) without К [x] so the MK-61 random sequence keeps moving.
+  - jump-to-next-threading: Removed 1 unconditional branch to the immediately following label.
+  - preloaded-indirect-flow: Activated post-layout: replaced 8 direct branch/call(s) with proven preloaded indirect flow.
+  - dark-entry-layout: Pointed 2 branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window).
+  - generated-setup-program: Generated optimized setup program for walls_1, walls_2, walls_3, caches.
+  - free-residual-dispatch-scratch: Freed the unused residual-dispatch scratch register to unlock more preloaded constants (primary lowering failed: Out of MK-61 registers while allocating 'treasure'.).
 
 Candidates:
-  * display __inline_show_37_0/decimal-pack: 2 steps; selected decimal-pack for screen __inline_show_37_0
-  - display __inline_show_37_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
-  - display __inline_show_37_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
-  - display __inline_show_37_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
-  - display __inline_show_37_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-  * dispatch@121/fallthrough-compare-chain: 18 steps; uses case ordering; key-based dispatch does not already provide an address-valued selector
-  - dispatch@121/indirect-register-flow: 18 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
-  - dispatch@121/dark-indirect-table: 5 steps; considered; layout proof did not establish a conflict-free address/data table for this site
-  - dispatch@121/super-dark-dispatch: 4 steps; considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06
-  * dispatch@66/fallthrough-compare-chain: 21 steps; uses case ordering; key-based dispatch does not already provide an address-valued selector
-  - dispatch@66/indirect-register-flow: 21 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
-  - dispatch@66/dark-indirect-table: 5 steps; considered; layout proof did not establish a conflict-free address/data table for this site
-  - dispatch@66/super-dark-dispatch: 4 steps; considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06
+  * display __inline_show_38_0/decimal-pack: 2 steps; selected decimal-pack for screen __inline_show_38_0
+  - display __inline_show_38_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_38_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_38_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_38_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
+  * dispatch@125/fallthrough-compare-chain: 19 steps; uses case ordering; key-based dispatch does not already provide an address-valued selector
+  - dispatch@125/indirect-register-flow: 19 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
+  - dispatch@125/dark-indirect-table: 5 steps; considered; layout proof did not establish a conflict-free address/data table for this site
+  - dispatch@125/super-dark-dispatch: 4 steps; considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06
+  * dispatch@67/fallthrough-compare-chain: 21 steps; uses case ordering; key-based dispatch does not already provide an address-valued selector
+  - dispatch@67/indirect-register-flow: 21 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
+  - dispatch@67/dark-indirect-table: 5 steps; considered; layout proof did not establish a conflict-free address/data table for this site
+  - dispatch@67/super-dark-dispatch: 4 steps; considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06
   * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
+  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
   - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
@@ -5495,32 +5676,32 @@ Proofs:
   - return-stack-empty: not-needed; Program uses subroutine calls, so В/О-as-jump is not assumed globally.
   - indirect-addressing-ranges: proved; Indirect selectors are rewritten only after local data-flow proves a stable target, a compiler-owned address preload, or the fractional R0 sentinel shape.
   - value-ranges: proved; Collected source ranges for food, dynamite, treasure, fight_entry.
-  - observability: proved; Visible state is limited by display output: player, stake.
+  - observability: proved; Visible state is limited by display output: screen, stake.
   - display-byte-observable-boundary: assumed; Display-byte candidates are bounded by display output and the exact mk61 profile.
 
 Rejected Candidates:
-  - display __inline_show_37_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
-  - display __inline_show_37_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
-  - display __inline_show_37_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
-  - display __inline_show_37_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-  - dispatch@121/indirect-register-flow: 18 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
-  - dispatch@121/dark-indirect-table: 5 steps; considered; layout proof did not establish a conflict-free address/data table for this site
-  - dispatch@121/super-dark-dispatch: 4 steps; considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06
-  - dispatch@66/indirect-register-flow: 21 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
+  - display __inline_show_38_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_38_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_38_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_38_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
+  - dispatch@125/indirect-register-flow: 19 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
+  - dispatch@125/dark-indirect-table: 5 steps; considered; layout proof did not establish a conflict-free address/data table for this site
+  - dispatch@125/super-dark-dispatch: 4 steps; considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06
+  - dispatch@67/indirect-register-flow: 21 steps; rejected; selector is key-valued, not address-valued, and building an address register would not beat the compare-chain
 
 Cell Roles:
-  00: 67 exec, display-byte - display byte role allowed
-  07: 09 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  12: 52 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  19: 50 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  29: 39 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  36: 80 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  47: 80 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  55: 73 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  60: 70 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  78: 83 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  82: 70 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  87: 99 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
+  00: 6C exec, display-byte - display byte role allowed
+  11: 63 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  18: 61 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  28: 39 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  35: B9 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  42: 52 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  48: B9 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  57: B9 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  66: 93 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  69: 90 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  74: 76 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  98: A3 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
 `;
 
 exports[`golden listing > selected output is stable for examples/pending-optimizer/cave-treasure.mkpro 1`] = `

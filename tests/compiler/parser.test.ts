@@ -681,6 +681,52 @@ program GroupState {
     ]));
   });
 
+  it("parses indexed initializer lists into per-element state initials", () => {
+    const ast = parseProgram(`
+program IndexedInitializers {
+  state {
+    slots: packed[1..3] = [10, 20 + 2, bit_or(1.1, 1.2)]
+  }
+  loop {
+    halt(slots[3])
+  }
+}
+`);
+
+    const fields = ast.states[0]?.fields ?? [];
+    expect(fields.find((field) => field.name === "slots_1")?.initial).toMatchObject({ kind: "number", raw: "10" });
+    expect(JSON.stringify(fields.find((field) => field.name === "slots_2")?.initial)).toContain('"op":"+"');
+    expect(fields.find((field) => field.name === "slots_3")?.initial).toMatchObject({ kind: "call", callee: "bit_or" });
+  });
+
+  it("rejects indexed initializer lists with the wrong shape", () => {
+    expect(() =>
+      parseProgram(`
+program BadIndexedInitializers {
+  state {
+    slots: packed[1..3] = [1, 2]
+  }
+  loop {
+    halt(0)
+  }
+}
+`),
+    ).toThrow(/Indexed initializer list has 2 values for 3 elements/u);
+
+    expect(() =>
+      parseProgram(`
+program BadScalarInitializerList {
+  state {
+    value: packed = [1, 2]
+  }
+  loop {
+    halt(value)
+  }
+}
+`),
+    ).toThrow(/Indexed initializer lists require an indexed state bank/u);
+  });
+
   it("rejects nested state groups", () => {
     expect(() =>
       parseProgram(`

@@ -9,7 +9,7 @@ program CaveHighlevelBaseline {
     // still 0; screen holds the previous result that the next read resumes from.
     player: coord(cave) = 1.0000008
 
-    walls: packed[1..3] = 0
+    walls: packed[1..3] = [bit_or(1.0080808, 1.7062264), bit_or(1.808, 1.6715401), bit_or(1.8088088, 1.2260335)]
 
     caches: packed = pi()
 
@@ -25,10 +25,6 @@ program CaveHighlevelBaseline {
   // Original setup R1..R3: each floor stores a packed wall mask produced by
   // disjoining the two printed mask literals from the article.
   cave: board(packed_decimal_zero_run)
-
-  walls[1] = bit_or(1.0080808, 1.7062264)
-  walls[2] = bit_or(1.808, 1.6715401)
-  walls[3] = bit_or(1.8088088, 1.2260335)
 
   fn ignored() {
     halt(0)
@@ -91,7 +87,7 @@ program CaveHighlevelBaseline {
   }
 
   fn try_move() {
-    if bit_and(walls[blocked.floor], frac(blocked)) != 0 {
+    if bit_and(walls[int(blocked)], frac(blocked)) != 0 {
       screen = 0
     }
     else {
@@ -107,7 +103,7 @@ program CaveHighlevelBaseline {
       if dynamite < 0 {
         halt("ЕГГ0Г")
       }
-      walls[blocked.floor] = bit_and(walls[blocked.floor], bit_not(frac(blocked)))
+      walls[int(blocked)] = bit_and(walls[int(blocked)], bit_not(frac(blocked)))
       blocked = 0
     }
     screen = 0

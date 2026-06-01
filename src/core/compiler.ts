@@ -12551,8 +12551,8 @@ const optimizerCapabilities: Array<{
     category: "stack",
     source: "documented",
     requires: [],
-    activeWhen: ["stack-resident-temps", "stack-resident-indexed-temp"],
-    detail: "Keeps short-lived single-use temporaries on the X/Y/Z/T stack across the next statement instead of spilling them to numbered registers (including indexed compound stores whose recall auto-lifts the held temp into Y).",
+    activeWhen: ["stack-resident-temps", "stack-resident-indexed-temp", "stack-resident-control-flow"],
+    detail: "Keeps short-lived single-use temporaries on the X/Y/Z/T stack across the next statement instead of spilling them to numbered registers, including through stack-preserving if/loop/dispatch regions.",
   },
   {
     id: "liveness-analysis",
@@ -12911,7 +12911,8 @@ function buildMachineFeaturesUsed(
   }
   if (optimizations.some((optimization) =>
     optimization.name === "stack-resident-temps" ||
-    optimization.name === "stack-resident-indexed-temp"
+    optimization.name === "stack-resident-indexed-temp" ||
+    optimization.name === "stack-resident-control-flow"
   )) {
     add("stack-resident-temps", "Optimizer kept short-lived temporaries on the X/Y/Z/T stack instead of register spills.", "optimizer");
   }

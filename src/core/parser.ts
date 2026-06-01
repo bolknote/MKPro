@@ -2065,6 +2065,9 @@ function lowerV2State(
     if (field.min !== undefined) lowered.min = field.min;
     if (field.max !== undefined) lowered.max = field.max;
     if (field.initial !== undefined) {
+      if (isIndexedInitializerList(field.initial)) {
+        throw new ParseError("Indexed initializer lists require an indexed state bank", field.line);
+      }
       const stackSource = parseStackSource(field.initial, field.line);
       if (stackSource !== undefined) {
         lowered.initialStack = stackSource;
@@ -2132,7 +2135,9 @@ function lowerV2StateBanks(v2: V2ProgramAst): StateBankAst[] | undefined {
 }
 
 function lowerV2BankStateField(field: V2StateFieldAst, context: V2LoweringContext): StateFieldAst[] {
-  return bankIndexes(field).map((index) => {
+  const indexes = bankIndexes(field);
+  const initializers = indexedInitializerList(field, indexes.length);
+  return indexes.map((index, offset) => {
     const lowered: StateFieldAst = {
       name: bankElementStateName(field, index),
       type: lowerV2StateFieldType(field.type),
@@ -2140,15 +2145,35 @@ function lowerV2BankStateField(field: V2StateFieldAst, context: V2LoweringContex
     };
     if (field.min !== undefined) lowered.min = field.min;
     if (field.max !== undefined) lowered.max = field.max;
-    if (field.initial !== undefined) {
-      const stackSource = parseStackSource(field.initial, field.line);
+    const initial = initializers?.[offset] ?? field.initial;
+    if (initial !== undefined) {
+      const stackSource = parseStackSource(initial, field.line);
       if (stackSource !== undefined) {
         throw new ParseError("Indexed state banks cannot be initialized from stack.X or stack.Y", field.line);
       }
-      lowered.initial = lowerV2InitialExpression(field, context);
+      lowered.initial = lowerV2InitialExpression({ ...field, initial }, context);
     }
     return lowered;
   });
+}
+
+function isIndexedInitializerList(initial: string): boolean {
+  const trimmed = initial.trim();
+  return trimmed.startsWith("[") || trimmed.endsWith("]");
+}
+
+function indexedInitializerList(field: V2StateFieldAst, expected: number): string[] | undefined {
+  if (field.initial === undefined) return undefined;
+  const trimmed = field.initial.trim();
+  if (!isIndexedInitializerList(trimmed)) return undefined;
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+    throw new ParseError("Indexed initializer list must look like '[a, b, c]'", field.line);
+  }
+  const values = splitArgs(trimmed.slice(1, -1));
+  if (values.length !== expected) {
+    throw new ParseError(`Indexed initializer list has ${values.length} values for ${expected} elements`, field.line);
+  }
+  return values;
 }
 
 function randomCoordinateExpression(domain: string, context: V2LoweringContext): string {
