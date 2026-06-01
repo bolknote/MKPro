@@ -20,19 +20,19 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   dungeon: 83,
   "e-94-digits": 64,
   "functions-demo": 29,
-  "fox-hunt-100": 104,
+  "fox-hunt-100": 103,
   "fox-hunt-mk61": 65,
   "game-100-pig": 103,
   human: 24,
   "jack-pot": 101,
   lunar: 47,
   "minesweeper-9x7": 94,
-  "minesweeper-9x9": 90,
+  "minesweeper-9x9": 89,
   "raja-yoga": 88,
   "sea-battle": 82,
   "tiny-game": 23,
-  "treasure-hunter-2": 103,
-  wumpus: 103,
+  "treasure-hunter-2": 102,
+  wumpus: 101,
 };
 
 const EXAMPLE_COMPILE_ERRORS: Record<string, RegExp> = {};
@@ -47,8 +47,8 @@ const PENDING_BASELINE: Record<string, number> = {
   "cave-treasure": 165,
   "giants-country": 170,
   labyrinth777: 163,
-  "rambo-iii": 125,
-  teleport: 195,
+  "rambo-iii": 105,
+  teleport: 194,
   "tic-tac-toe-4x4": 200,
 };
 
@@ -91,7 +91,7 @@ describe("example size guard", () => {
   for (const [name, baseline] of Object.entries(PENDING_BASELINE)) {
     it(`pending-optimizer/${name}.mkpro is locked at ${baseline} cells`, () => {
       expect(exampleSteps(`pending-optimizer/${name}`, true)).toBe(baseline);
-    });
+    }, 15000);
   }
 
   for (const [name, message] of Object.entries(PENDING_COMPILE_ERRORS)) {

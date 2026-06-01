@@ -67,11 +67,18 @@ export interface StackUnaryDerivationCall {
   mnemonic: string;
 }
 
-export interface XParamProcLowering {
+export type XParamProcLowering =
+  | {
   param: string;
   first: Extract<StatementAst, { kind: "assign" }>;
+      kind: "add";
   other: string;
-}
+    }
+  | {
+      param: string;
+      first: Extract<StatementAst, { kind: "assign" }>;
+      kind: "copy";
+    };
 
 export interface XParamReturnDecay {
   param: string;

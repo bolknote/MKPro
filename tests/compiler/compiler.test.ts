@@ -1339,6 +1339,95 @@ program CommonDispatchTail {
     expect(result.steps.filter((step) => step.hex === "50")).toHaveLength(1);
   });
 
+  it("keeps setup-initialized countdown loops on F Lx", () => {
+    const source = `
+program SetupCountedLoop {
+  state {
+    time: counter 0..3 = 3
+  }
+
+  while time >= 1 {
+    show(time)
+    time--
+  }
+  halt(0)
+}
+`;
+    const result = compileLoweringVariantForTest(source, { budget: 999, analysis: true }, { setupOnlyCountedLoopInit: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "setup-only-counted-loop-init")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "set time")).toBe(false);
+    expect(result.steps.some((step) => /^F L[0-9a-e]$/u.test(step.mnemonic))).toBe(true);
+  });
+
+  it("defers stores across zero fallback branches", () => {
+    const result = compileOk(`
+program ZeroFallbackStore {
+  state {
+    target: counter 0..9 = 0
+    random_state: packed = 0.5
+  }
+
+  target = int(random_state * 13 / 3)
+  if target == 0 {
+    target = 7
+  }
+  show(random_state)
+  halt(target)
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "assign-zero-fallback-store")).toBe(true);
+    expect(result.steps.filter((step) => step.comment === "set target")).toHaveLength(1);
+  });
+
+  it("reuses an indexed store value for immediate domain guards", () => {
+    const result = compileOk(`
+program IndexedStoreGuard {
+  state {
+    cells: packed[1..2] = [5, 0]
+    index: counter 1..2 = 1
+    scratch: packed = 6
+  }
+
+  cells[index] -= scratch
+  if cells[index] < 0 {
+    halt("ЕГГОГ")
+  }
+  else {
+    halt(cells[index])
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "indexed-assign-zero-domain-guard")).toBe(true);
+  });
+
+  it("branches on a previous random value without spilling it", () => {
+    const result = compileOk(`
+program PreviousRandomBranch {
+  state {
+    random_state: packed = 0.5
+    scratch: packed = 0
+    score: packed = 0
+  }
+
+  scratch = random_state
+  random_state = random()
+  if scratch - random_state < 0 {
+    score = 1
+  }
+  else {
+    score = 2
+  }
+  halt(score)
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "previous-random-branch-stack-reuse")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "set scratch")).toBe(false);
+  });
+
   it("keeps residual dispatch deltas positive when subtraction is shorter", () => {
     const result = compileOk(`
 program PositiveResidualDispatch {

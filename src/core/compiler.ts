@@ -14,7 +14,7 @@ import { MachineEmitter } from "./emit/machine-emitter.ts";
 import type { ProgramAnalysis } from "./emit/program-analysis.ts";
 import { RuntimeHelperRegistry } from "./emit/runtime-helpers.ts";
 import { compileExpression, expressionLeadsWithRead } from "./emit/lowering/expr.ts";
-import { compileAssignThenDomainTrap, compileCondition, compileDecrementUnderflowBranch, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitKnownOneIndirectLoopBack } from "./emit/lowering/control-flow.ts";
+import { compileAssignThenDomainTrap, compileCondition, compileDecrementUnderflowBranch, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitKnownOneIndirectLoopBack, statementsAreDomainErrorTrap } from "./emit/lowering/control-flow.ts";
 import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts";
 import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileTicTacToeCellMaskReuse } from "./emit/lowering/spatial.ts";
 import { compileCoordListLineCountAssignment, compileCoordListLineCountDashedReport, compileCoordListRemove, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
@@ -274,6 +274,11 @@ const STACK_TEMP_BINARY_CALL_OPCODES: Readonly<Record<string, readonly [number, 
   bit_xor: [0x39, "К ⊕"],
 };
 
+const STACK_TEMP_SAFE_CALLS = new Set([
+  ...Object.keys(STACK_TEMP_UNARY_CALL_OPCODES),
+  ...Object.keys(STACK_TEMP_BINARY_CALL_OPCODES),
+]);
+
 function functionTailArgScratchName(functionName: string, index: number): string {
   return `${FUNCTION_TAIL_ARG_PREFIX}${functionName}_${index}`;
 }
@@ -391,6 +396,12 @@ interface LoweringOptions {
   // loop counter/compare/branch overhead and lets the constants preload, but
   // duplicates the body, so it is adopted only when the program ends up smaller.
   unrollCountedLoops?: boolean;
+  // Keep a countdown counter's initializer in the generated setup program while
+  // still lowering `while counter >= 1 { ...; counter-- }` through compact F Lx.
+  // The ordinary lowering synthesizes a main-program initializer so restarts
+  // re-arm the loop; this candidate mirrors hand-entered MK listings that load
+  // the counter once in setup. It is selected only when the full program shrinks.
+  setupOnlyCountedLoopInit?: boolean;
   // Replace `if <expr> <op> 0 { halt("ЕГГОГ") }` terminal-error guards with a
   // single self-trapping domain opcode: `F √` traps iff X<0 (`<`), `F lg` iff
   // X<=0 (`<=`), `F 1/x` iff X==0 (`==`, division by zero). `>`/`>=` reduce to
@@ -398,6 +409,13 @@ interface LoweringOptions {
   // trap into one cell, and when all callers of a shared trap proc are converted
   // that proc becomes dead. Speculative: adopted only when the program shrinks.
   domainErrorGuards?: boolean;
+  // Keep a just-read value on the stack across a debit/credit pair whose
+  // negative outcomes both trap through ЕГГОГ:
+  // `tmp=int(read()); a-=tmp; if a<0 trap else { b+=tmp; if b<0 trap else ... }`.
+  // This reproduces the classic `П->X; X↔Y; -; F x>=0; F Вx` calculator idiom.
+  // It is speculative because an existing shared tail can be cheaper than
+  // keeping the input stack-resident.
+  showReadDebitCreditGuard?: boolean;
   // Probe hook: surface the non-overlapping register coalescing pairs on
   // CompileResult.coalesceShares so a follow-up compile can reclaim the freed
   // registers for preloaded constants. Set only on the internal trial compile.
@@ -555,6 +573,13 @@ export function compileMKPro(
       // Optional lowering variants are speculative; keep the current best result.
     }
   };
+  const requestedBudget = { ...DEFAULT_OPTIONS, ...options }.budget;
+  const rescueThreshold = Math.min(requestedBudget, DEFAULT_OPTIONS.budget);
+  const needsSizeRescue = primary === undefined || primary.report.steps > rescueThreshold || primary.report.budgetReport.exceeded;
+  const trySizeRescueCandidate = (loweringOptions: LoweringOptions, name: string, detail: string): void => {
+    if (!needsSizeRescue) return;
+    tryCandidate(loweringOptions, name, detail);
+  };
 
   tryCandidate(
     { aggressiveTerminalDirect: true },
@@ -688,6 +713,11 @@ export function compileMKPro(
     "counted-loop-unroll",
     "Fully unrolled small constant-trip counted loops, replacing induction variables with constants",
   );
+  trySizeRescueCandidate(
+    { setupOnlyCountedLoopInit: true },
+    "setup-only-counted-loop-init",
+    "Kept eligible countdown-loop initializers in setup while preserving compact F Lx lowering",
+  );
   tryCandidate(
     { unrollCountedLoops: true, startupAwareConstantPreloads: true },
     "startup-aware-constant-preloads",
@@ -702,6 +732,11 @@ export function compileMKPro(
     { stackResidentTemps: true },
     "stack-resident-temps",
     "Kept short-lived single-use temporaries on the X/Y/Z/T stack instead of spilling them to registers",
+  );
+  trySizeRescueCandidate(
+    { stackResidentTemps: true, setupOnlyCountedLoopInit: true },
+    "stack-resident-temps-setup-counted-loop",
+    "Combined stack-resident temporaries with setup-only counted-loop initializers",
   );
   tryCandidate(
     { stackResidentTemps: true, hoistSharedHelpers: true },
@@ -727,6 +762,41 @@ export function compileMKPro(
       "domain-error-guards-unroll",
       "Combined domain-error guards with counted-loop unrolling",
     );
+    trySizeRescueCandidate(
+      { domainErrorGuards: true, setupOnlyCountedLoopInit: true },
+      "domain-error-guards-setup-counted-loop",
+      "Combined domain-error guards with setup-only counted-loop initializers",
+    );
+    trySizeRescueCandidate(
+      { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true },
+      "domain-error-guards-unroll-setup-counted-loop",
+      "Combined domain-error guards, counted-loop unrolling, and setup-only counted-loop initializers",
+    );
+    trySizeRescueCandidate(
+      { domainErrorGuards: true, setupOnlyCountedLoopInit: true, stackResidentTemps: true },
+      "domain-error-guards-setup-counted-loop-stack-temps",
+      "Combined domain-error guards, setup-only counted loops, and stack-resident temporaries",
+    );
+    tryCandidate(
+      { domainErrorGuards: true, showReadDebitCreditGuard: true },
+      "show-read-debit-credit-guard",
+      "Kept read/debit/credit guarded transfers on the calculator stack",
+    );
+    tryCandidate(
+      { domainErrorGuards: true, unrollCountedLoops: true, showReadDebitCreditGuard: true },
+      "show-read-debit-credit-guard-unroll",
+      "Combined stack-resident read/debit/credit transfers with counted-loop unrolling",
+    );
+    trySizeRescueCandidate(
+      { domainErrorGuards: true, setupOnlyCountedLoopInit: true, showReadDebitCreditGuard: true },
+      "show-read-debit-credit-guard-setup-counted-loop",
+      "Combined stack-resident read/debit/credit transfers with setup-only counted loops",
+    );
+    trySizeRescueCandidate(
+      { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, showReadDebitCreditGuard: true },
+      "show-read-debit-credit-guard-unroll-setup-counted-loop",
+      "Combined stack-resident read/debit/credit transfers, counted-loop unrolling, and setup-only counted loops",
+    );
   }
   // The proc-layout search can only change call/jump encoding cost once some
   // addresses fall outside the official <=104 window; for in-budget programs
@@ -749,6 +819,23 @@ export function compileMKPro(
         `${layout.name}-hoisted`,
         `${layout.detail}; combined with front-hoisted procs and shared helpers for single-cell indirect flow`,
       );
+      if (sourceMayContainErrorTrap(source)) {
+        tryCandidate(
+          { domainErrorGuards: true, unrollCountedLoops: true, ...layout.options },
+          `domain-error-guards-unroll-${layout.name}`,
+          `Combined domain-error guards and counted-loop unrolling with ${layout.detail}`,
+        );
+        trySizeRescueCandidate(
+          { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, ...layout.options },
+          `domain-error-guards-unroll-setup-counted-loop-${layout.name}`,
+          `Combined domain-error guards, counted-loop unrolling, setup-only counted loops, and ${layout.detail}`,
+        );
+        tryCandidate(
+          { domainErrorGuards: true, unrollCountedLoops: true, showReadDebitCreditGuard: true, ...layout.options },
+          `show-read-debit-credit-guard-${layout.name}`,
+          `Combined stack-resident read/debit/credit transfers with ${layout.detail}`,
+        );
+      }
     }
   }
   tryCandidate(
@@ -771,6 +858,13 @@ export function compileMKPro(
   const reclaimBases: LoweringOptions[] = [
     {},
     { unrollCountedLoops: true },
+    ...(needsSizeRescue
+      ? [
+          { setupOnlyCountedLoopInit: true },
+          { unrollCountedLoops: true, setupOnlyCountedLoopInit: true },
+          { stackResidentTemps: true, setupOnlyCountedLoopInit: true },
+        ]
+      : []),
     { freeResidualDispatchScratch: true },
     { hoistSharedHelpers: true, hoistProcs: true },
   ];
@@ -831,6 +925,30 @@ export function compileMKPro(
       { freeResidualDispatchScratch: true },
       { sharedBitMaskHelperCalls: true },
       { sharedBitMaskHelperCalls: true, hoistSharedHelpers: true },
+      ...(sourceMayContainErrorTrap(source)
+        ? [
+            { domainErrorGuards: true, unrollCountedLoops: true },
+            ...(needsSizeRescue
+              ? [
+                  { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true },
+                  { domainErrorGuards: true, setupOnlyCountedLoopInit: true, stackResidentTemps: true },
+                  { domainErrorGuards: true, setupOnlyCountedLoopInit: true, showReadDebitCreditGuard: true },
+                ]
+              : []),
+            { domainErrorGuards: true, unrollCountedLoops: true, orderProcsByCallCount: true },
+            ...(needsSizeRescue
+              ? [
+                  { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, orderProcsByCallCount: true },
+                ]
+              : []),
+            { domainErrorGuards: true, unrollCountedLoops: true, procLayoutStrategy: "size-asc" as const },
+            ...(needsSizeRescue
+              ? [
+                  { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, procLayoutStrategy: "size-asc" as const },
+                ]
+              : []),
+          ]
+        : []),
     ];
     const triedDemotions = new Set<string>();
     for (const base of demoteBases) {
@@ -849,6 +967,36 @@ export function compileMKPro(
           { ...base, suppressConstantPreloads: new Set([preload.value]) },
           "demote-constant-indirect-flow",
           `Inlined single-use constant ${preload.value} to free a register for post-layout indirect flow`,
+        );
+      }
+      const suppressed = new Set<string>();
+      for (let depth = 0; depth < 6; depth += 1) {
+        let chainProbe: CompileResult;
+        try {
+          chainProbe = compileMKProOnce(source, { ...options, analysis: true }, {
+            ...base,
+            suppressConstantPreloads: new Set(suppressed),
+          });
+        } catch {
+          break;
+        }
+        const next = (chainProbe.report.preloads ?? [])
+          .filter((preload) => !preload.countsAgainstProgram && /^-?\d+$/u.test(preload.value) && !suppressed.has(preload.value))
+          .sort((left, right) =>
+            estimateNumberCost(left.value) - estimateNumberCost(right.value) ||
+            left.value.length - right.value.length ||
+            left.value.localeCompare(right.value)
+          )[0];
+        if (next === undefined) break;
+        suppressed.add(next.value);
+        const values = [...suppressed];
+        const key = `${JSON.stringify(base)}|chain:${values.join(",")}`;
+        if (triedDemotions.has(key)) continue;
+        triedDemotions.add(key);
+        tryCandidate(
+          { ...base, suppressConstantPreloads: new Set(values) },
+          "demote-constant-chain-indirect-flow",
+          `Inlined constants ${values.join(", ")} to keep a register free for post-layout indirect flow`,
         );
       }
     }
@@ -1655,7 +1803,9 @@ function compileMKProOnce(
       detail: `Folded ${foldedConstants} constant expression node(s) before code generation.`,
     });
   }
-  normalizeStateInitCountedLoops(ast, optimizations);
+  if (loweringOptions.setupOnlyCountedLoopInit !== true) {
+    normalizeStateInitCountedLoops(ast, optimizations);
+  }
   if (loweringOptions.unrollCountedLoops === true) {
     unrollCountedLoops(ast, optimizations);
   }
@@ -3875,6 +4025,33 @@ function scalarReferencedOutsideLoop(ast: ProgramAst, name: string, loop: WhileS
   return found;
 }
 
+function previousRandomLessThanCurrentCondition(condition: ConditionAst, temp: string, seed: string): boolean {
+  if (condition.op !== "<" || !isZeroExpression(condition.right)) return false;
+  const left = condition.left;
+  return left.kind === "binary" &&
+    left.op === "-" &&
+    left.left.kind === "identifier" &&
+    left.left.name === temp &&
+    left.right.kind === "identifier" &&
+    left.right.name === seed;
+}
+
+function conditionTestsIdentifierAgainstZero(condition: ConditionAst, name: string, op: ConditionAst["op"]): boolean {
+  return condition.op === op &&
+    ((condition.left.kind === "identifier" && condition.left.name === name && isZeroExpression(condition.right)) ||
+      (condition.right.kind === "identifier" && condition.right.name === name && isZeroExpression(condition.left)));
+}
+
+function indexedZeroDomainTrap(
+  condition: ConditionAst,
+  target: Extract<ExpressionAst, { kind: "indexed" }>,
+): { opcode: number; mnemonic: string } | undefined {
+  if (!expressionEquals(condition.left, target) || !isZeroExpression(condition.right)) return undefined;
+  if (condition.op === "<") return { opcode: 0x21, mnemonic: "F sqrt" };
+  if (condition.op === "<=") return { opcode: 0x17, mnemonic: "F lg" };
+  return undefined;
+}
+
 // Teach the counted-loop lowering the `time: counter 0..N = N` form. The compiler
 // already lowers `time = N; while time >= 1 { ...; time-- }` through a one-cell
 // F Lx counter, but only when an explicit initializer precedes the loop; the same
@@ -4986,15 +5163,32 @@ export class EmitContext {
       const statement = statements[index]!;
       const next = statements[index + 1];
       if (statement.kind === "assign") {
+        const fractionalDebit = this.compilePreviousRandomFractionalDebitRun(statements, index);
+        if (fractionalDebit > 1) {
+          index += fractionalDebit - 1;
+          continue;
+        }
         const previousRandom = this.compilePreviousRandomStateRun(statements, index);
         if (previousRandom > 1) {
           index += previousRandom - 1;
+          continue;
+        }
+        const previousRandomBranch = this.compilePreviousRandomBranchRun(statements, index);
+        if (previousRandomBranch > 1) {
+          index += previousRandomBranch - 1;
           continue;
         }
       }
       if (statement.kind === "assign" && next?.kind === "call" && compileXParamProcCall(this, statement, next)) {
         index += 1;
         continue;
+      }
+      if ((statement.kind === "assign" || statement.kind === "indexed_assign") && (next?.kind === "assign" || next?.kind === "indexed_assign")) {
+        const fused = this.compileRepeatedXParamSelfAssignment(statement, next);
+        if (fused > 1) {
+          index += fused - 1;
+          continue;
+        }
       }
       if (statement.kind === "assign") {
         const reused = compileRepeatedAssignmentValue(this, statements, index);
@@ -5030,6 +5224,14 @@ export class EmitContext {
         index += 1;
         continue;
       }
+      if (statement.kind === "assign" && next?.kind === "if" && this.compileAssignZeroFallback(statement, next)) {
+        index += 1;
+        continue;
+      }
+      if (statement.kind === "indexed_assign" && next?.kind === "if" && this.compileIndexedAssignThenDomainTrap(statement, next)) {
+        index += 1;
+        continue;
+      }
       if (statement.kind === "indexed_assign" && next?.kind === "assign" && this.compilePreincrementIndexedStore(statement, next)) {
         index += 1;
         continue;
@@ -5043,6 +5245,9 @@ export class EmitContext {
       }
       if (statement.kind === "assign" && next?.kind === "while" && this.compileInitializedUnitDecrementWhile(statement, next)) {
         index += 1;
+        continue;
+      }
+      if (statement.kind === "while" && this.compileSetupInitializedUnitDecrementWhile(statement)) {
         continue;
       }
       if (statement.kind === "assign" && next?.kind === "assign" && compileTicTacToeCellMaskReuse(this, statement, next)) {
@@ -5109,6 +5314,22 @@ export class EmitContext {
           index += 2;
           continue;
         }
+      }
+      if (
+        statement.kind === "show" &&
+        next?.kind === "assign" &&
+        (statements[index + 2]?.kind === "assign" || statements[index + 2]?.kind === "indexed_assign") &&
+        statements[index + 3]?.kind === "if" &&
+        this.compileShowReadDebitCreditGuard(
+          statement,
+          next,
+          statements[index + 2] as Extract<StatementAst, { kind: "assign" | "indexed_assign" }>,
+          statements[index + 3] as Extract<StatementAst, { kind: "if" }>,
+          statements.slice(index + 4),
+        )
+      ) {
+        index += 3;
+        continue;
       }
       if (
         statement.kind === "show" &&
@@ -5267,6 +5488,40 @@ export class EmitContext {
     return true;
   }
 
+  compileSetupInitializedUnitDecrementWhile(loop: Extract<StatementAst, { kind: "while" }>): boolean {
+    if (this.loweringOptions.setupOnlyCountedLoopInit !== true) return false;
+    if (this.currentProcedure !== undefined) return false;
+    if (!this.ast.entries[0]?.body.includes(loop)) return false;
+    const target = unitDecrementCountedWhileTarget(loop);
+    if (target === undefined) return false;
+    const field = findStateFieldInAst(this.ast, target);
+    if (field?.initial === undefined) return false;
+    const initialValue = numericLiteralValue(field.initial);
+    if (initialValue === undefined || !Number.isInteger(initialValue) || initialValue < 1) return false;
+    if (scalarReferencedOutsideLoop(this.ast, target, loop)) return false;
+    const register = this.allocation.registers[target];
+    if (register === undefined) return false;
+    const opcode = flOpcode(register);
+    if (opcode === undefined) return false;
+
+    const body = loop.body.slice(0, -1);
+    if (this.statementsEndMachineFlow(body)) return false;
+
+    const start = this.freshLabel("setup_counted_while");
+    this.emitLabel(start);
+    this.currentXVariable = undefined;
+    this.currentXAliases.clear();
+    this.currentXKnownZero = false;
+    this.scaledCoordVariables.clear();
+    this.compileStatements(body);
+    this.emitJump(opcode, getOpcode(opcode).name, start, `setup-counted while ${target}`, loop.line);
+    this.optimizations.push({
+      name: "setup-only-counted-loop-init",
+      detail: `Used setup initializer for ${target} and lowered while ${target} >= 1 through ${getOpcode(opcode).name} at line ${loop.line}.`,
+    });
+    return true;
+  }
+
   compilePreviousRandomStateRun(statements: readonly StatementAst[], index: number): number {
     const previous = statements[index];
     const randomUpdate = statements[index + 1];
@@ -5287,6 +5542,156 @@ export class EmitContext {
       detail: `Kept previous ${seed} in Y while updating ${seed} with random() for ${consumer.target} at line ${consumer.line}.`,
     });
     return 3;
+  }
+
+  compilePreviousRandomBranchRun(statements: readonly StatementAst[], index: number): number {
+    const previous = statements[index];
+    const randomUpdate = statements[index + 1];
+    const branch = statements[index + 2];
+    if (previous?.kind !== "assign" || randomUpdate === undefined || branch?.kind !== "if") return 0;
+    if (previous.expr.kind !== "identifier") return 0;
+    const temp = previous.target;
+    const seed = previous.expr.name;
+    if (this.randomUpdateTarget(randomUpdate) !== seed) return 0;
+    if (statementsReadIdentifierBeforeWrite(statements.slice(index + 3), temp)) return 0;
+    if (!previousRandomLessThanCurrentCondition(branch.condition, temp, seed)) return 0;
+
+    this.emitRecall(seed, `previous random ${seed}`, previous.line);
+    this.emitOp(0x0e, "В↑", `previous random keep ${seed}`, randomUpdate.line);
+    this.emitOp(0x3b, "К СЧ", "random()", randomUpdate.line);
+    this.emitStore(seed, `set ${seed}`, randomUpdate.line);
+    this.emitOp(0x11, "-", "previous random compare", branch.line);
+
+    const falseLabel = this.freshLabel("previous_random_false");
+    const thenTerminates = this.statementsTerminate(branch.thenBody);
+    const endLabel = branch.elseBody !== undefined && !thenTerminates ? this.freshLabel("previous_random_end") : undefined;
+    this.emitJump(0x5c, "F x<0", falseLabel, "false branch for previous random <", branch.line);
+    this.compileStatements(branch.thenBody);
+    if (branch.elseBody !== undefined) {
+      if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", branch.line);
+      this.emitLabel(falseLabel);
+      this.compileStatements(branch.elseBody);
+      if (endLabel !== undefined) this.emitLabel(endLabel);
+    } else {
+      this.emitLabel(falseLabel);
+    }
+
+    this.optimizations.push({
+      name: "previous-random-branch-stack-reuse",
+      detail: `Kept previous ${seed} in Y while updating ${seed} for a following branch at line ${branch.line}.`,
+    });
+    return 3;
+  }
+
+  compilePreviousRandomFractionalDebitRun(statements: readonly StatementAst[], index: number): number {
+    const previous = statements[index];
+    const randomUpdate = statements[index + 1];
+    const consumer = statements[index + 2];
+    const guarded = statements[index + 3];
+    if (previous?.kind !== "assign" || consumer?.kind !== "assign" || guarded?.kind !== "if") return 0;
+    const temp = previous.target;
+    if (consumer.target !== temp) return 0;
+    if (previous.expr.kind !== "identifier") return 0;
+    const seed = previous.expr.name;
+    if (this.randomUpdateTarget(randomUpdate) !== seed) return 0;
+    if (statementsReadIdentifierBeforeWrite(statements.slice(index + 4), temp)) return 0;
+    const plan = this.matchPreviousRandomFractionalDebit(consumer.expr, temp, seed, guarded);
+    if (plan === undefined) return 0;
+
+    const distanceAlreadyInX =
+      index > 0 &&
+      statements[index - 1]?.kind === "indexed_assign" &&
+      expressionEquals((statements[index - 1] as Extract<StatementAst, { kind: "indexed_assign" }>).target, plan.distance);
+    if (!distanceAlreadyInX) {
+      this.emitAssignableRecall(plan.distance, `fractional debit ${this.assignableTargetText(plan.distance)}`, previous.line);
+    }
+    this.emitOp(0x35, "К {x}", "fractional debit distance frac", previous.line);
+    this.emitRecall(seed, `previous random ${seed}`, previous.line);
+    this.emitOp(0x0e, "В↑", `previous random keep ${seed}`, randomUpdate.line);
+    this.emitOp(0x3b, "К СЧ", "random()", randomUpdate.line);
+    this.emitStore(seed, `set ${seed}`, randomUpdate.line);
+    this.emitOp(0x10, "+", "previous random + random()", consumer.line);
+    this.emitNumberOrPreload("1");
+    this.emitOp(0x10, "+", "previous random additive term", consumer.line);
+    this.emitNumberOrPreload(plan.factor);
+    this.emitOp(0x12, "*", "fractional debit factor", consumer.line);
+    this.emitAssignableRecall(plan.defense, `fractional debit divisor ${this.assignableTargetText(plan.defense)}`, consumer.line);
+    this.emitAssignableRecall(plan.distance, `fractional debit numerator ${this.assignableTargetText(plan.distance)}`, consumer.line);
+    this.emitOp(0x13, "/", "fractional debit distance ratio", consumer.line);
+    this.emitOp(0x13, "/", "fractional debit scaled step", consumer.line);
+    this.emitOp(0x34, "К [x]", "fractional debit int step", consumer.line);
+    this.emitNumberOrPreload(plan.scale);
+    this.emitOp(0x13, "/", "fractional debit scale", consumer.line);
+    this.emitOp(0x11, "-", "fractional debit remaining distance", guarded.line);
+    this.emitOp(0x17, "F lg", "fractional debit domain-error guard trap", guarded.line);
+    this.emitOp(0x0f, "F Вx", "fractional debit restore remaining distance", guarded.line);
+    this.emitAssignableRecall(plan.distance, `fractional debit integer ${this.assignableTargetText(plan.distance)}`, guarded.line);
+    this.emitOp(0x34, "К [x]", "fractional debit integer part", guarded.line);
+    this.emitOp(0x10, "+", "fractional debit rebuild value", guarded.line);
+    this.emitAssignableStore(plan.distance, guarded.line);
+    this.optimizations.push({
+      name: "previous-random-fractional-debit",
+      detail: `Kept previous ${seed} and frac(${this.assignableTargetText(plan.distance)}) on the stack while applying guarded fractional debit${distanceAlreadyInX ? " and reused the just-stored distance in X" : ""}.`,
+    });
+    return 4;
+  }
+
+  private matchPreviousRandomFractionalDebit(
+    expr: ExpressionAst,
+    temp: string,
+    seed: string,
+    guarded: Extract<StatementAst, { kind: "if" }>,
+  ): { distance: Extract<ExpressionAst, { kind: "indexed" }>; defense: Extract<ExpressionAst, { kind: "indexed" }>; factor: string; scale: string } | undefined {
+    if (expr.kind !== "binary" || expr.op !== "/" || expr.right.kind !== "number") return undefined;
+    const scale = expr.right.raw;
+    const intCall = expr.left;
+    if (intCall.kind !== "call" || intCall.callee.toLowerCase() !== "int" || intCall.args.length !== 1) return undefined;
+    const ratio = intCall.args[0]!;
+    if (ratio.kind !== "binary" || ratio.op !== "/" || ratio.right.kind !== "indexed") return undefined;
+    const defense = ratio.right;
+    const withDistance = ratio.left;
+    if (withDistance.kind !== "binary" || withDistance.op !== "*" || withDistance.right.kind !== "indexed") return undefined;
+    const distance = withDistance.right;
+    const withFactor = withDistance.left;
+    if (withFactor.kind !== "binary" || withFactor.op !== "*" || withFactor.right.kind !== "number") return undefined;
+    const factor = withFactor.right.raw;
+    const additiveTerms = flattenAdditionTerms(withFactor.left);
+    if (
+      additiveTerms.length !== 3 ||
+      !additiveTerms.some((term) => term.kind === "identifier" && term.name === temp) ||
+      !additiveTerms.some((term) => term.kind === "identifier" && term.name === seed) ||
+      !additiveTerms.some((term) => isNumericValue(term, 1))
+    ) return undefined;
+    if (!this.fractionalDebitGuardMatches(guarded, distance, temp)) return undefined;
+    return { distance, defense, factor, scale };
+  }
+
+  private fractionalDebitGuardMatches(
+    guarded: Extract<StatementAst, { kind: "if" }>,
+    distance: Extract<ExpressionAst, { kind: "indexed" }>,
+    temp: string,
+  ): boolean {
+    if (guarded.condition.op !== "<=" || !isZeroExpression(guarded.condition.right)) return false;
+    const left = guarded.condition.left;
+    if (left.kind !== "binary" || left.op !== "-") return false;
+    const frac = left.left;
+    if (
+      frac.kind !== "call" ||
+      frac.callee.toLowerCase() !== "frac" ||
+      frac.args.length !== 1 ||
+      !expressionEquals(frac.args[0]!, distance)
+    ) return false;
+    if (left.right.kind !== "identifier" || left.right.name !== temp) return false;
+    if (!statementsAreDomainErrorTrap(this, guarded.thenBody)) return false;
+    const update = guarded.elseBody?.[0];
+    return guarded.elseBody?.length === 1 &&
+      update?.kind === "indexed_assign" &&
+      expressionEquals(update.target, distance) &&
+      update.expr.kind === "binary" &&
+      update.expr.op === "-" &&
+      expressionEquals(update.expr.left, distance) &&
+      update.expr.right.kind === "identifier" &&
+      update.expr.right.name === temp;
   }
 
   compileSingleUseStackTemp(statements: readonly StatementAst[], index: number): number {
@@ -5377,7 +5782,7 @@ export class EmitContext {
 
   private stackTempSourceIsSafe(expr: ExpressionAst): boolean {
     if (!expressionIsDeterministic(expr)) return false;
-    return expressionCallCallees(expr).length === 0;
+    return !this.expressionCallsUserFunction(expr);
   }
 
   private stackTempValueDeadAfterConsumer(
@@ -5440,7 +5845,11 @@ export class EmitContext {
   }
 
   private stackTempOtherOperandIsSafe(expr: ExpressionAst): boolean {
-    return expressionCallCallees(expr).length === 0;
+    return expressionIsDeterministic(expr) && !this.expressionCallsUserFunction(expr);
+  }
+
+  private expressionCallsUserFunction(expr: ExpressionAst): boolean {
+    return expressionCallCallees(expr).some((callee) => !STACK_TEMP_SAFE_CALLS.has(callee.toLowerCase()));
   }
 
   private compileExpressionWithStackTemp(expr: ExpressionAst, temp: string): void {
@@ -5628,6 +6037,52 @@ export class EmitContext {
     return true;
   }
 
+  compileAssignZeroFallback(
+    assign: Extract<StatementAst, { kind: "assign" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+  ): boolean {
+    if (branch.elseBody !== undefined || branch.thenBody.length !== 1) return false;
+    if (!conditionTestsIdentifierAgainstZero(branch.condition, assign.target, "==")) return false;
+    const fallback = branch.thenBody[0];
+    if (fallback?.kind !== "assign" || fallback.target !== assign.target) return false;
+    if (expressionReferencesIdentifier(fallback.expr, assign.target)) return false;
+    if (!expressionPureForSubstitution(assign.expr) || !expressionPureForSubstitution(fallback.expr)) return false;
+
+    compileExpression(this, assign.expr);
+    const storeLabel = this.freshLabel("zero_fallback_store");
+    this.emitJump(0x5e, "F x=0", storeLabel, `zero fallback ${assign.target}`, branch.line);
+    compileExpression(this, fallback.expr);
+    this.emitLabel(storeLabel);
+    this.emitStore(assign.target, `set ${assign.target}`, assign.line);
+    this.optimizations.push({
+      name: "assign-zero-fallback-store",
+      detail: `Deferred storing ${assign.target} until after its zero fallback at lines ${assign.line}/${branch.line}.`,
+    });
+    return true;
+  }
+
+  compileIndexedAssignThenDomainTrap(
+    assign: Extract<StatementAst, { kind: "indexed_assign" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+  ): boolean {
+    if (!statementsAreDomainErrorTrap(this, branch.thenBody)) return false;
+    const trap = indexedZeroDomainTrap(branch.condition, assign.target);
+    if (trap === undefined) return false;
+
+    this.compileStatement(assign);
+    this.emitOp(trap.opcode, trap.mnemonic, "indexed assign domain-error guard trap", branch.line);
+    this.currentXVariable = undefined;
+    this.currentXAliases.clear();
+    this.currentXKnownZero = false;
+    this.scaledCoordVariables.clear();
+    if (branch.elseBody !== undefined) this.compileStatements(branch.elseBody);
+    this.optimizations.push({
+      name: "indexed-assign-zero-domain-guard",
+      detail: `Fused indexed store and "${branch.condition.op} 0" terminal-error branch through ${trap.mnemonic}.`,
+    });
+    return true;
+  }
+
   compileInitializedUnitDecrementWhileRun(statements: readonly StatementAst[], index: number): number {
     const initializer = statements[index];
     if (initializer?.kind !== "assign") return 0;
@@ -5663,6 +6118,179 @@ export class EmitContext {
     if (!dispatchUsesNumericResidualChain(optimized)) return false;
     const reads = countIdentifierReads(optimized.expr, input.target);
     return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
+  }
+
+  compileShowReadDebitCreditGuard(
+    show: Extract<StatementAst, { kind: "show" }>,
+    input: Extract<StatementAst, { kind: "assign" }>,
+    debit: Extract<StatementAst, { kind: "assign" | "indexed_assign" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+    tail: readonly StatementAst[],
+  ): boolean {
+    if (this.loweringOptions.domainErrorGuards !== true || this.loweringOptions.showReadDebitCreditGuard !== true) return false;
+    const temp = input.target;
+    if (!this.readTransformIsStackDebitSafe(input.expr)) return false;
+    if (statementsReadIdentifier(tail, temp)) return false;
+    if (!this.assignmentIsSelfUpdate(debit, "-", temp)) return false;
+    if (!this.conditionIsNegativeTargetGuard(branch.condition, debit.target)) return false;
+    if (!statementsAreDomainErrorTrap(this, branch.thenBody)) return false;
+    const elseBody = branch.elseBody;
+    if (elseBody === undefined || elseBody.length < 2) return false;
+
+    const credit = elseBody[0];
+    const creditGuard = elseBody[1];
+    if (credit?.kind !== "assign" && credit?.kind !== "indexed_assign") return false;
+    if (!this.assignmentIsSelfUpdate(credit, "+", temp)) return false;
+    if (creditGuard?.kind !== "if") return false;
+    if (!this.conditionIsNegativeTargetGuard(creditGuard.condition, credit.target)) return false;
+    if (!statementsAreDomainErrorTrap(this, creditGuard.thenBody)) return false;
+    const continuation = creditGuard.elseBody ?? elseBody.slice(2);
+    if (creditGuard.elseBody !== undefined && elseBody.length !== 2) return false;
+    if (statementsReadIdentifier(continuation, temp)) return false;
+
+    compileShow(this, show.display, show.line);
+    this.armInputInX();
+    compileExpression(this, input.expr);
+    this.clearArmedInputInX();
+    this.emitAssignableRecall(debit.target, `debit ${this.assignableTargetText(debit.target)}`, debit.line);
+    this.emitOp(0x14, "X↔Y", "debit input order", debit.line);
+    this.emitOp(0x11, "-", "debit input", debit.line);
+    this.emitAssignableStore(debit.target, debit.line);
+    const trap = this.freshLabel("debit_credit_trap");
+    this.emitJump(0x59, "F x>=0", trap, "debit negative trap", branch.line);
+    this.emitOp(0x0f, "F Вx", "restore debited input", input.line);
+    this.emitAssignableRecall(credit.target, `credit ${this.assignableTargetText(credit.target)}`, credit.line);
+    this.emitOp(0x10, "+", "credit input", credit.line);
+    this.emitAssignableStore(credit.target, credit.line);
+    this.emitLabel(trap);
+    this.emitOp(0x21, "F √", "debit/credit domain-error guard trap", creditGuard.line);
+    this.currentXVariable = undefined;
+    this.currentXAliases.clear();
+    this.currentXKnownZero = false;
+    this.scaledCoordVariables.clear();
+    this.compileStatements(continuation);
+    this.optimizations.push({
+      name: "show-read-debit-credit-guard",
+      detail: `Kept read ${temp} on the stack while debiting ${this.assignableTargetText(debit.target)} and crediting ${this.assignableTargetText(credit.target)}.`,
+    });
+    return true;
+  }
+
+  private readTransformIsStackDebitSafe(expr: ExpressionAst): boolean {
+    if (expr.kind === "call" && expr.callee.toLowerCase() === "read") return expr.args.length === 0;
+    if (expr.kind !== "call" || expr.args.length !== 1) return false;
+    const callee = expr.callee.toLowerCase();
+    return (callee === "int" || callee === "frac") && this.readTransformIsStackDebitSafe(expr.args[0]!);
+  }
+
+  private assignmentIsSelfUpdate(
+    statement: Extract<StatementAst, { kind: "assign" | "indexed_assign" }>,
+    op: "+" | "-",
+    temp: string,
+  ): boolean {
+    const expr = statement.expr;
+    if (expr.kind !== "binary" || expr.op !== op) return false;
+    if (!expressionEquals(expr.left, this.assignableTargetExpression(statement.target))) return false;
+    return expr.right.kind === "identifier" && expr.right.name === temp;
+  }
+
+  private compileRepeatedXParamSelfAssignment(
+    first: Extract<StatementAst, { kind: "assign" | "indexed_assign" }>,
+    second: Extract<StatementAst, { kind: "assign" | "indexed_assign" }>,
+  ): number {
+    const firstMatch = this.matchXParamSelfAssignment(first);
+    if (firstMatch === undefined) return 0;
+    const secondMatch = this.matchXParamSelfAssignment(second);
+    if (secondMatch === undefined) return 0;
+    if (firstMatch.callee !== secondMatch.callee) return 0;
+    if (!expressionEquals(
+      this.assignableTargetExpression(first.target),
+      this.assignableTargetExpression(second.target),
+    )) return 0;
+    const proc = this.functionProcs.get(firstMatch.callee);
+    if (proc === undefined || matchXParamReturnDecay(proc) === undefined) return 0;
+
+    this.emitAssignableRecall(first.target, `repeated ${firstMatch.callee} base ${this.assignableTargetText(first.target)}`, first.line);
+    this.emitXParamFunctionCall(proc, first.line);
+    this.emitXParamFunctionCall(proc, second.line);
+    this.emitAssignableStore(first.target, second.line);
+    this.optimizations.push({
+      name: "repeated-x-param-self-assignment",
+      detail: `Applied ${firstMatch.callee} twice to ${this.assignableTargetText(first.target)} without an intermediate store/reload.`,
+    });
+    return 2;
+  }
+
+  private matchXParamSelfAssignment(
+    statement: Extract<StatementAst, { kind: "assign" | "indexed_assign" }>,
+  ): { callee: string } | undefined {
+    const expr = statement.expr;
+    if (expr.kind !== "call" || expr.args.length !== 1) return undefined;
+    if (!expressionEquals(expr.args[0]!, this.assignableTargetExpression(statement.target))) return undefined;
+    return { callee: expr.callee };
+  }
+
+  private emitXParamFunctionCall(proc: ProcAst, line: number): void {
+    const bankSelectors = this.snapshotBankSelectorCache();
+    this.emitJump(0x53, "ПП", proc.name, `call function ${proc.name}`, line);
+    this.restoreBankSelectorCacheAfterCall(proc.name, bankSelectors);
+    this.optimizations.push({
+      name: "x-param-return-decay-call",
+      detail: `Passed current X to ${proc.name}.`,
+    });
+  }
+
+  private conditionIsNegativeTargetGuard(
+    condition: ConditionAst,
+    target: string | Extract<ExpressionAst, { kind: "indexed" }>,
+  ): boolean {
+    return condition.op === "<" &&
+      expressionEquals(condition.left, this.assignableTargetExpression(target)) &&
+      isZeroExpression(condition.right);
+  }
+
+  private emitAssignableRecall(
+    target: string | Extract<ExpressionAst, { kind: "indexed" }>,
+    comment: string,
+    line: number,
+  ): void {
+    if (typeof target === "string") {
+      this.emitRecall(target, comment, line);
+      return;
+    }
+    const constantIndex = numericIndexValue(target.index);
+    if (constantIndex !== undefined) {
+      const resolved = findStateBankMember(this.ast, target);
+      const element = resolved === undefined ? undefined : stateBankElementForIndex(resolved.member, constantIndex);
+      if (element !== undefined) {
+        this.emitRecall(element.name, comment, line);
+        return;
+      }
+    }
+    this.emitIndexedRecall(target, line);
+  }
+
+  private emitAssignableStore(
+    target: string | Extract<ExpressionAst, { kind: "indexed" }>,
+    line: number,
+  ): void {
+    if (typeof target === "string") {
+      this.emitStore(target, `set ${target}`, line);
+      return;
+    }
+    this.emitIndexedStore(target, line);
+  }
+
+  private assignableTargetExpression(
+    target: string | Extract<ExpressionAst, { kind: "indexed" }>,
+  ): ExpressionAst {
+    return typeof target === "string" ? { kind: "identifier", name: target } : target;
+  }
+
+  private assignableTargetText(
+    target: string | Extract<ExpressionAst, { kind: "indexed" }>,
+  ): string {
+    return typeof target === "string" ? target : expressionToIntentText(target);
   }
 
   compileShowReadDecrementUnderflow(
@@ -10040,7 +10668,9 @@ function collectXParamProcLowerings(
     if (matched === undefined) continue;
     if (statementsReadIdentifier(proc.body.slice(1), param)) continue;
     if (!allProcCallsHaveImmediateParamAssignment(ast, proc.name, param)) continue;
-    result.set(proc.name, { param, first, other: matched.other });
+    result.set(proc.name, matched.kind === "add"
+      ? { param, first, kind: "add", other: matched.other }
+      : { param, first, kind: "copy" });
   }
   return result;
 }
@@ -10048,14 +10678,15 @@ function collectXParamProcLowerings(
 function matchXParamFirstAssignment(
   statement: Extract<StatementAst, { kind: "assign" }>,
   param: string,
-): { other: string } | undefined {
+): { kind: "add"; other: string } | { kind: "copy" } | undefined {
   const expr = statement.expr;
+  if (expr.kind === "identifier" && expr.name === param) return { kind: "copy" };
   if (expr.kind !== "binary" || expr.op !== "+") return undefined;
   if (expr.left.kind === "identifier" && expr.left.name === param && expr.right.kind === "identifier") {
-    return { other: expr.right.name };
+    return { kind: "add", other: expr.right.name };
   }
   if (expr.right.kind === "identifier" && expr.right.name === param && expr.left.kind === "identifier") {
-    return { other: expr.left.name };
+    return { kind: "add", other: expr.left.name };
   }
   return undefined;
 }
@@ -10092,6 +10723,21 @@ function allProcCallsHaveImmediateParamAssignment(ast: ProgramAst, procName: str
 
 function statementsReadIdentifier(statements: readonly StatementAst[], name: string): boolean {
   return statements.some((statement) => statementReadsIdentifier(statement, name));
+}
+
+function flattenAdditionTerms(expr: ExpressionAst): ExpressionAst[] {
+  if (expr.kind === "binary" && expr.op === "+") {
+    return [...flattenAdditionTerms(expr.left), ...flattenAdditionTerms(expr.right)];
+  }
+  return [expr];
+}
+
+function statementsReadIdentifierBeforeWrite(statements: readonly StatementAst[], name: string): boolean {
+  for (const statement of statements) {
+    if (statementReadsIdentifier(statement, name)) return true;
+    if (statementWritesIdentifier(statement, name)) return false;
+  }
+  return false;
 }
 
 function statementReadsIdentifier(statement: StatementAst, name: string): boolean {
@@ -10132,6 +10778,27 @@ function statementReadsIdentifier(statement: StatementAst, name: string): boolea
       return statement.inputs?.some((input) => expressionReferencesIdentifier(input.expr, name)) ?? false;
     case "return_value":
       return expressionReferencesIdentifier(statement.expr, name);
+  }
+}
+
+function statementWritesIdentifier(statement: StatementAst, name: string): boolean {
+  switch (statement.kind) {
+    case "assign":
+    case "input":
+      return statement.target === name;
+    case "indexed_assign":
+      return statement.target.base === name;
+    case "if":
+      return statement.thenBody.some((child) => statementWritesIdentifier(child, name)) &&
+        (statement.elseBody?.some((child) => statementWritesIdentifier(child, name)) ?? false);
+    case "loop":
+    case "while":
+      return statement.body.some((child) => statementWritesIdentifier(child, name));
+    case "dispatch":
+      return statement.cases.some((dispatchCase) => dispatchCase.body.some((child) => statementWritesIdentifier(child, name))) &&
+        (statement.defaultBody?.some((child) => statementWritesIdentifier(child, name)) ?? false);
+    default:
+      return false;
   }
 }
 

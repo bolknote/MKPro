@@ -548,6 +548,7 @@ function applyOneRewrite(
   const ir = raiseMachineToIr(items);
   const labels = labelAddresses(ir);
   const { numeric, targetLabel } = numericTargetView(ir, labels);
+  let best: RewriteStep | undefined;
 
   // The post-layout driver keeps one verified step per re-layout and re-proves
   // every selector against the fresh address map, so it can safely drop the
@@ -570,31 +571,36 @@ function applyOneRewrite(
       groups.set(op.register, list);
     }
 
-    // Prefer a provable FA..FF super-dark group (densest MK-61 idiom); otherwise
-    // take the group that converts the most sites, falling back to a single
+    // Keep the group that converts the most sites, falling back to a single
     // rewrite. Every choice goes through the same independent proof.
-    let best: RewriteStep | undefined;
     for (const indices of groups.values()) {
       const group = validateRewriteGroup(indices, ir, numeric, targetLabel, result, items);
       const candidate = group ?? validateRewriteAt(indices[0]!, ir, numeric, targetLabel, result, items);
       if (candidate === undefined) continue;
-      if (candidate.superDark) return candidate;
-      if (best === undefined || candidate.converted > best.converted) best = candidate;
+      best = betterRewrite(best, candidate);
     }
-    if (best !== undefined) return best;
   }
 
-  return applyForwardRewrite(ir, targetLabel, items);
+  return betterRewrite(best, applyForwardRewrite(ir, targetLabel, items));
+}
+
+function betterRewrite(current: RewriteStep | undefined, candidate: RewriteStep | undefined): RewriteStep | undefined {
+  if (candidate === undefined) return current;
+  if (current === undefined) return candidate;
+  if (candidate.converted !== current.converted) return candidate.converted > current.converted ? candidate : current;
+  if (candidate.superDark !== current.superDark) return candidate.superDark ? candidate : current;
+  if (candidate.darkEntry !== current.darkEntry) return candidate.darkEntry ? candidate : current;
+  return current;
 }
 
 const MAX_REWRITES = 64;
 
 // Official MK-61 program window: cells 00..A4 (105 cells). Trading a direct
 // branch for a preloaded indirect one moves a cell out of the program window
-// and into setup state, so it is only worthwhile to rescue programs that
-// overflow the official window. In-budget programs keep their clean direct
-// branches (and stay byte-identical) instead of acquiring a setup-time preload
-// requirement just to shave a cell they do not need to shave.
+// and into setup state, so an already in-budget program keeps its clean direct
+// branches. Once a program needs this rescue pass, though, every subsequent
+// rewrite is proven and strictly shrinking, so the pass keeps going instead of
+// stopping at the first <=105 layout.
 const OFFICIAL_PROGRAM_LIMIT = 105;
 
 // Activates the preloaded indirect-flow optimization on real programs. The
@@ -618,8 +624,11 @@ export function optimizePostLayoutIndirectFlow(
   let superDarkApplied = 0;
   let darkEntryApplied = 0;
 
+  if (cellCount(current) <= rescueAbove) {
+    return { items: [...items], preloads: [], optimizations: [], applied: 0 };
+  }
+
   for (let round = 0; round < MAX_REWRITES; round += 1) {
-    if (cellCount(current) <= rescueAbove) break;
     const step = applyOneRewrite(current, options);
     if (step === undefined) break;
     const retargeted = retargetExistingSelectorsAfterShift(current, step.items, preloads);

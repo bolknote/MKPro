@@ -60,17 +60,43 @@ describe("setup formatting", () => {
 
     expect(listing).toContain("Setup Block:");
     expect(listing).toContain(
-      "`R8=0.5; R1=5000.999; R2=5000.999; R3=5000.999; R4=0; R5=0; R6=0; R7=25000; Ra=1E3; Rb=1E4; Re=8.1020088E14`",
+      "`R0=25; R8=0.5; R1=5000.999; R2=5000.999; R3=5000.999; R4=0; R5=0; R6=0; R7=25000; Re=8.1020088E14; Ra=97; Rb=Е4`",
     );
     expect(listing).toContain("# Setup Listing");
-    expect(listing).toContain("   00 |   -  | 0.5");
-    expect(listing).toContain("   02 |   -  | 5000.999");
-    expect(listing).toContain("   03 |  41  | X→П 1");
-    expect(listing).toContain("   04 |  42  | X→П 2");
-    expect(listing).toContain("   05 |  43  | X→П 3");
-    expect(listing).toContain("   10 |   -  | 25000");
-    expect(listing).toContain("   17 |  4E  | X→П e");
+    expect(listing).toContain("   00 |   -  | 25");
+    expect(listing).toContain("   02 |   -  | 0.5");
+    expect(listing).toContain("   04 |   -  | 5000.999");
+    expect(listing).toContain("   05 |  41  | X→П 1");
+    expect(listing).toContain("   06 |  42  | X→П 2");
+    expect(listing).toContain("   07 |  43  | X→П 3");
+    expect(listing).toContain("   12 |   -  | 25000");
+    expect(listing).toContain("   15 |  4E  | X→П e");
     expect(listing).toContain("# Main Listing");
+  });
+
+  it("collapses multi-key number entry in main listings", () => {
+    const result = {
+      steps: [
+        { address: 0, opcode: 0x02, hex: "02", mnemonic: "2" },
+        { address: 1, opcode: 0x05, hex: "05", mnemonic: "5" },
+        { address: 2, opcode: 0x51, hex: "51", mnemonic: "БП", comment: "loop back" },
+        { address: 3, opcode: 0x00, hex: "00", mnemonic: "00", comment: "loop back" },
+        { address: 4, opcode: 0x01, hex: "01", mnemonic: "1" },
+        { address: 5, opcode: 0x02, hex: "02", mnemonic: "2" },
+        { address: 6, opcode: 0x03, hex: "03", mnemonic: "3" },
+        { address: 7, opcode: 0x04, hex: "04", mnemonic: "4" },
+        { address: 8, opcode: 0x05, hex: "05", mnemonic: "5" },
+      ],
+      report: {
+        preloads: [],
+      },
+    } as unknown as CompileResult;
+    const listing = formatListing(result);
+
+    expect(listing).toContain("   00 | 02 05     | 25");
+    expect(listing).not.toContain("   01 |  05  | 5");
+    expect(listing).toContain("   03 | 00        | 00");
+    expect(listing).toContain("   04 | 01 ... 05 | 12345");
   });
 
   it("shows startup stack inputs inside the setup listing", () => {

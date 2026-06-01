@@ -61,8 +61,11 @@ describe("interprocedural value-prop behavioral equivalence (real emulator)", ()
   // pins the die roll while preserving the same interprocedural rule shape.
   const source = readFileSync(resolve("examples/game-100-pig.mkpro"), "utf8")
     .replace("die = random(die_faces)", "die = 3");
-  const before = compileMKPro(source, { disableInterproceduralOpts: true, indirectFlowRescueAbove: 105 });
-  const after = compileMKPro(source, { indirectFlowRescueAbove: 105 });
+  // Keep post-layout indirect-flow out of this probe: the test isolates
+  // interprocedural value propagation, and the optimized/unoptimized programs
+  // can otherwise fall on opposite sides of the rescue threshold.
+  const before = compileMKPro(source, { disableInterproceduralOpts: true, indirectFlowRescueAbove: 999 });
+  const after = compileMKPro(source, { indirectFlowRescueAbove: 999 });
   const beforeCodes = before.steps.map((step) => step.opcode);
   const afterCodes = after.steps.map((step) => step.opcode);
   const gameRegisters = [...new Set(Object.values(after.report.registers))];

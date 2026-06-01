@@ -1055,6 +1055,17 @@ candidates:
   dynamic accesses with the same index expression;
 - `F L0`..`F L3` unit decrement: counters assigned to `R0`..`R3` can lower
   `counter--` to a two-cell decrement-and-continue form;
+- setup-only countdown loops: when a countdown counter is initialized in
+  setup and used only by its top-level `while counter >= 1 { ...; counter-- }`,
+  size-rescue lowering can keep the initializer out of the main program while
+  still using `F Lx`;
+- zero-fallback stores: `x = expr; unless x { x = fallback }` can branch on the
+  freshly computed X value and store only once after the fallback path rejoins;
+- previous-random stack reuse: `old = random_state; random_state = random()`
+  followed by a branch or fractional debit can keep `old` on the calculator
+  stack instead of assigning a scratch register;
+- indexed store/domain guards: an immediate terminal negative guard after
+  `cells[i] = ...` can test the just-stored X value directly;
 - duplicate failure-tail merge: identical `show(0)` failure tails are shared;
 - display stack reuse: packed display sources are reordered when the current
   `X` value is already one of the displayed values;
@@ -1126,7 +1137,8 @@ The pipeline currently contains:
   cell. Targets `00`..`47` use formal aliases `B2`..`F9`; targets `48`..`53`
   may use `FA`..`FF` only when the target cell is a proved one-command entry
   and the following direct jump already resumes at the matching `01`..`06`
-  continuation.
+  continuation. Already in-budget programs keep their direct branches, but once
+  the rescue pass is needed it keeps applying every proved shrinking rewrite.
 - **runtime-indirect-call-flow** — when repeated backward helper calls have a
   legal numeric target but no globally spare stable selector register, borrows a
   stable register that is dead across the helper and call sites, initializes it

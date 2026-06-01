@@ -55,24 +55,32 @@ const run: IrPassFn = (ops) => {
   if (selected.length === 0) return emptyResult(ops);
 
   const targetLabels = new Map<number, string[]>();
-  const replacementByStart = new Map<number, { kind: "jump" | "call"; end: number; label: string }>();
+  const replacementByStart = new Map<number, { kind: "jump" | "call"; end: number; label: string; skipNextRecall?: boolean }>();
   let applied = 0;
   let savedCells = 0;
   let jumps = 0;
   let calls = 0;
+  let reusedReturnX = 0;
 
   for (const gadget of selected) {
     const labels = targetLabels.get(gadget.target.start) ?? [];
     labels.push(gadget.label);
     targetLabels.set(gadget.target.start, labels);
     for (const replacement of gadget.replacements) {
+      const returnX = gadget.kind === "call" ? bodyReturnX(ops, gadget.target) : undefined;
+      const skipNextRecall = returnX !== undefined && recallMatchesStore(ops[replacement.end + 1], returnX);
       replacementByStart.set(replacement.start, {
         kind: gadget.kind,
         end: replacement.end,
         label: gadget.label,
+        ...(skipNextRecall ? { skipNextRecall } : {}),
       });
       applied += 1;
       savedCells += replacement.cells - 2;
+      if (skipNextRecall) {
+        savedCells += 1;
+        reusedReturnX += 1;
+      }
       if (gadget.kind === "jump") jumps += 1;
       else calls += 1;
     }
@@ -91,7 +99,7 @@ const run: IrPassFn = (ops) => {
           ? gadgetJump(replacement.label, ops[index]!)
           : gadgetCall(replacement.label, ops[index]!),
       );
-      index = replacement.end;
+      index = replacement.skipNextRecall === true ? replacement.end + 1 : replacement.end;
       continue;
     }
 
@@ -103,10 +111,28 @@ const run: IrPassFn = (ops) => {
     applied,
     optimizations: [{
       name: "return-suffix-gadget",
-      detail: `Shared ${applied} return/tail-call gadget${applied === 1 ? "" : "s"} (${jumps} jump, ${calls} call; ${savedCells} cell${savedCells === 1 ? "" : "s"} saved).`,
+      detail: `Shared ${applied} return/tail-call gadget${applied === 1 ? "" : "s"} (${jumps} jump, ${calls} call; ${savedCells} cell${savedCells === 1 ? "" : "s"} saved${reusedReturnX === 0 ? "" : `, ${reusedReturnX} returned-X recall${reusedReturnX === 1 ? "" : "s"} reused`}).`,
     }],
   };
 };
+
+type StoreResult =
+  | { kind: "store"; register: string }
+  | { kind: "indirect-store"; register: string };
+
+function bodyReturnX(ops: readonly IrOp[], target: BodyTarget): StoreResult | undefined {
+  const final = ops[target.bodyEnd];
+  if (final === undefined || hasRewriteBarrier(final)) return undefined;
+  if (final.kind === "store") return { kind: "store", register: final.register };
+  if (final.kind === "indirect-store") return { kind: "indirect-store", register: final.register };
+  return undefined;
+}
+
+function recallMatchesStore(op: IrOp | undefined, store: StoreResult): boolean {
+  if (op === undefined || hasRewriteBarrier(op)) return false;
+  return (store.kind === "store" && op.kind === "recall" && op.register === store.register) ||
+    (store.kind === "indirect-store" && op.kind === "indirect-recall" && op.register === store.register);
+}
 
 export const returnSuffixGadget: IrPass = {
   name: "return-suffix-gadget",

@@ -12,7 +12,7 @@ program RamboIII {
 
   state {
     cells: packed[1..7] = [5000.999, 5000.999, 5000.999, 0, 0, 0, 25000]
-    time: counter 0..25
+    time: counter 0..25 = 25
     random_state: packed = 0.5
 
     slot: counter 0..3
@@ -28,24 +28,8 @@ program RamboIII {
     halt(VICTORY)
   }
 
-  time = 25
   while time >= 1 {
     show(time)
-    reinforcement_cycle()
-    event_target = 3
-    while event_target < 6 {
-      event_target++
-      front_stop()
-    }
-    time--
-  }
-  won()
-
-  fn random_92() {
-    random_state = random()
-  }
-
-  fn reinforcement_cycle() {
     random_92()
     event_target = int(random_state * 13 / 3)
     unless event_target {
@@ -55,9 +39,20 @@ program RamboIII {
     random_92()
     scratch = int(random_state * REINFORCEMENT_CAP)
     cells[event_target] += scratch
+
+    front_stop(4)
+    front_stop(5)
+    front_stop(6)
+    time--
+  }
+  won()
+
+  fn random_92() {
+    random_state = random()
   }
 
-  fn front_stop() {
+  fn front_stop(target) {
+    event_target = target
     slot = event_target - 3
     show(slot)
     scratch = int(read())
@@ -68,7 +63,12 @@ program RamboIII {
     }
     else {
       cells[event_target] += scratch
-      resolve_front()
+      if cells[event_target] < 0 {
+        lost()
+      }
+      else {
+        resolve_front()
+      }
     }
   }
 
@@ -76,38 +76,29 @@ program RamboIII {
     scratch = random_state
     random_92()
 
+    if scratch - random_state < 0 {
+      cells[slot] = decay(cells[slot])
+    }
+    else {
+      cells[event_target] = decay(cells[event_target])
+    }
+
     cells[event_target] = decay(cells[event_target])
     cells[slot] = decay(cells[slot])
 
-    if scratch - random_state < 0 {
-      cells[event_target] = decay(cells[event_target])
+    scratch = random_state
+    random_92()
+    scratch = int((scratch + random_state + 1) * 20 * cells[slot] / cells[event_target]) / 1000
+
+    if frac(cells[slot]) - scratch <= 0 {
+      lost()
     }
     else {
-      cells[slot] = decay(cells[slot])
+      cells[slot] -= scratch
     }
-
-    advance_front()
   }
 
   fn decay(value) {
     return value - int(value * random_state / 4)
-  }
-
-  fn advance_front() {
-    if cells[event_target] <= 0 {
-      lost()
-    }
-    else {
-      scratch = random_state
-      random_92()
-      scratch = int((scratch + random_state + 1) * 20 * cells[slot] / cells[event_target]) / 1000
-
-      if frac(cells[slot]) - scratch <= 0 {
-        lost()
-      }
-      else {
-        cells[slot] -= scratch
-      }
-    }
   }
 }

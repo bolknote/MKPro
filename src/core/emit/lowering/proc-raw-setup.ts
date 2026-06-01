@@ -898,6 +898,15 @@ export function compileXParamProcCall(ctx: LoweringCtx,
 }
 
 export function compileXParamProcBody(ctx: LoweringCtx, proc: ProgramAst["procs"][number], lowering: XParamProcLowering): void {
+    if (lowering.kind === "copy") {
+      ctx.emitStore(lowering.first.target, `set ${lowering.first.target} from X parameter`, lowering.first.line);
+      ctx.compileStatements(proc.body.slice(1));
+      ctx.optimizations.push({
+        name: "x-param-proc-entry",
+        detail: `Compiled rule ${proc.name} to copy ${lowering.param} directly from X.`,
+      });
+      return;
+    }
     ctx.emitRecall(lowering.other, `${proc.name} ${lowering.first.target} base`, lowering.first.line);
     ctx.emitOp(0x10, "+", `${proc.name} ${lowering.first.target} from X parameter`, lowering.first.line);
     ctx.emitStore(lowering.first.target, `set ${lowering.first.target}`, lowering.first.line);

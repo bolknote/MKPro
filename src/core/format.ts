@@ -5,6 +5,7 @@ import { buildManualProgramPatchReport, formatPatchAddress } from "./program-pat
 import type { CompileResult, PreloadReport, ProgramPatchReport, ProgramPatchStepReport, ResolvedStep } from "./types.ts";
 
 const HEX_COLUMNS = 8;
+const LISTING_INLINE_CODE_TOKENS = 4;
 const MK61_HEX_SETUP_DIGITS: Record<string, string> = {
   A: "-",
   B: "L",
@@ -66,10 +67,12 @@ function formatListingSteps(
   patch?: ProgramPatchReport,
 ): string {
   const patches = patchByAddress(patch);
-  return formatListingRows(steps.map((step) => stepToListingRow(step, patches.get(step.address))));
+  return formatListingRows(coalesceNumberEntryRows(steps, patches));
 }
 
 function formatListingRows(rows: readonly ListingRow[]): string {
+  const codeWidth = Math.max(2, ...rows.map((row) => row.hex.length));
+  if (codeWidth > 2) return formatWideCodeListingRows(rows, codeWidth);
   const lines = [
     " Step | Code | Command                 | Comment",
     "------+------+-------------------------+----------------",
@@ -84,6 +87,25 @@ function formatListingRows(rows: readonly ListingRow[]): string {
     lines.push(comments.length > 0
       ? ` ${address} |  ${code}  | ${command} | ${comments}`
       : ` ${address} |  ${code}  | ${command} |`);
+  }
+  return lines.join("\n");
+}
+
+function formatWideCodeListingRows(rows: readonly ListingRow[], codeWidth: number): string {
+  const lines = [
+    ` Step | ${"Code".padEnd(codeWidth, " ")} | Command                 | Comment`,
+    `------+${"-".repeat(codeWidth + 2)}+-------------------------+----------------`,
+  ];
+  for (const row of rows) {
+    const address = formatListingAddress(row.address).padStart(4, " ");
+    const code = row.hex.padEnd(codeWidth, " ");
+    const command = toKeycaps(row.mnemonic).padEnd(23, " ");
+    const comments = [row.comment]
+      .filter((value): value is string => Boolean(value))
+      .join("; ");
+    lines.push(comments.length > 0
+      ? ` ${address} | ${code} | ${command} | ${comments}`
+      : ` ${address} | ${code} | ${command} |`);
   }
   return lines.join("\n");
 }
@@ -138,6 +160,97 @@ function stepToListingRow(step: ResolvedStep, patch?: ProgramPatchStepReport): L
   };
   if (step.comment !== undefined) row.comment = step.comment;
   return row;
+}
+
+function coalesceNumberEntryRows(
+  steps: readonly ResolvedStep[],
+  patches: ReadonlyMap<number, ProgramPatchStepReport>,
+): ListingRow[] {
+  const rows: ListingRow[] = [];
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index]!;
+    const patch = patches.get(step.address);
+    if (patch !== undefined || !isNumberEntryStep(step)) {
+      rows.push(stepToListingRow(step, patch));
+      continue;
+    }
+
+    const group: ResolvedStep[] = [step];
+    while (index + 1 < steps.length) {
+      const next = steps[index + 1]!;
+      if (patches.has(next.address) || !isNumberEntryStep(next)) break;
+      group.push(next);
+      index += 1;
+    }
+
+    if (group.length === 1) {
+      rows.push(stepToListingRow(step));
+      continue;
+    }
+    rows.push(numberEntryGroupToListingRow(group));
+  }
+  return rows;
+}
+
+function isNumberEntryStep(step: ResolvedStep): boolean {
+  return /^\d$/u.test(step.mnemonic) ||
+    step.mnemonic === "." ||
+    step.mnemonic === "ВП" ||
+    step.mnemonic === "/-/";
+}
+
+function numberEntryGroupToListingRow(steps: readonly ResolvedStep[]): ListingRow {
+  const hex = formatNumberEntryCode(steps);
+  const comment = steps
+    .map((step) => step.comment)
+    .find((value): value is string => value !== undefined && value.length > 0);
+  const row: ListingRow = {
+    address: steps[0]!.address,
+    hex,
+    mnemonic: formatNumberEntryMnemonic(steps),
+  };
+  if (comment !== undefined) row.comment = comment;
+  return row;
+}
+
+function formatNumberEntryCode(steps: readonly ResolvedStep[]): string {
+  const codes = steps.map((step) => step.hex);
+  if (codes.length <= LISTING_INLINE_CODE_TOKENS) return codes.join(" ");
+  return `${codes[0]} ... ${codes.at(-1)}`;
+}
+
+function formatNumberEntryMnemonic(steps: readonly ResolvedStep[]): string {
+  let mantissa = "";
+  let exponent: string | undefined;
+  let negative = false;
+  let exponentNegative = false;
+
+  for (const step of steps) {
+    if (/^\d$/u.test(step.mnemonic)) {
+      if (exponent !== undefined) exponent += step.mnemonic;
+      else mantissa += step.mnemonic;
+      continue;
+    }
+    if (step.mnemonic === ".") {
+      if (exponent === undefined) mantissa += ".";
+      continue;
+    }
+    if (step.mnemonic === "ВП") {
+      exponent = "";
+      continue;
+    }
+    if (step.mnemonic === "/-/") {
+      if (exponent !== undefined && exponent.length > 0 && !exponentNegative) {
+        exponentNegative = true;
+      } else {
+        negative = true;
+      }
+    }
+  }
+
+  const base = mantissa.length === 0 ? "0" : mantissa;
+  const exp = exponent === undefined ? "" : `E${exponentNegative ? "-" : ""}${exponent}`;
+  return `${negative ? "-" : ""}${base}${exp}`;
 }
 
 export function formatHex(result: CompileResult): string {

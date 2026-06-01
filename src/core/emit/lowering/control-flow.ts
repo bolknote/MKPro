@@ -188,7 +188,7 @@ export function compileDecrementUnderflowBranch(ctx: LoweringCtx,
 // (literal that lowers to the one-cell ЕГГ0Г stop), or a single call to a proc
 // whose body is exactly that. This is the shape a `< 0` / `<= 0` guard branches
 // to before it is replaced by a self-trapping domain opcode.
-function statementsAreDomainErrorTrap(ctx: LoweringCtx, statements: readonly StatementAst[], seen = new Set<string>()): boolean {
+export function statementsAreDomainErrorTrap(ctx: LoweringCtx, statements: readonly StatementAst[], seen = new Set<string>()): boolean {
     if (statements.length !== 1) return false;
     const statement = statements[0]!;
     if (statement.kind === "halt") {

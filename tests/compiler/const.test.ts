@@ -104,7 +104,7 @@ program Bank {
       readFileSync(resolve("examples/pending-optimizer/rambo-iii.mkpro"), "utf8"),
       { budget: 999999, analysis: true },
     );
-    expect(result.steps.length).toBe(125);
+    expect(result.steps.length).toBe(105);
     expect(result.report.optimizations.some((entry) => entry.name === "const-inline")).toBe(true);
   });
 });
