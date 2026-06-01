@@ -32,14 +32,8 @@ program Teleport {
     charges--
 
     match command {
-      2 => try_move(1)
-      8 => try_move(-1)
-      4 => try_move(-10)
-      6 => try_move(10)
-      5 => try_move(1)
-      -5 => try_move(-1)
       0 => teleport_to_vault()
-      otherwise => resolve_room()
+      otherwise => try_move(command)
     }
   }
 
