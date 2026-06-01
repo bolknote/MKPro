@@ -19,7 +19,6 @@ import {
 import {
   compileBitMaskWithQuotientScratch,
   emitBitSetCollectionWithScratch,
-  emitBitSetWithScratch,
 } from "./spatial.ts";
 import type {
   BitMembershipCondition,
@@ -724,6 +723,7 @@ export function compileMembershipSetReuseForPresentCondition(ctx: LoweringCtx,
     membership: BitMembershipCondition,
     setPrefix: {
       set: Extract<StatementAst, { kind: "assign" }>;
+      collection: ExpressionAst;
       tail: StatementAst[];
     },
     line: number,
@@ -731,7 +731,7 @@ export function compileMembershipSetReuseForPresentCondition(ctx: LoweringCtx,
     const scratch = bitMaskScratchName(statement);
     if (ctx.allocation.registers[scratch] === undefined) return false;
 
-    const { set, tail } = setPrefix;
+    const { set, collection, tail } = setPrefix;
     const falseLabel = ctx.freshLabel("if_false");
     const thenTerminates = ctx.statementsTerminate(statement.thenBody);
     const endLabel = thenTerminates ? undefined : ctx.freshLabel("if_end");
@@ -741,7 +741,7 @@ export function compileMembershipSetReuseForPresentCondition(ctx: LoweringCtx,
     ctx.compileStatements(statement.thenBody);
     if (endLabel !== undefined) ctx.emitJump(0x51, "БП", endLabel, "if end", line);
     ctx.emitLabel(falseLabel);
-    emitBitSetWithScratch(ctx, membership, set, scratch);
+    emitBitSetCollectionWithScratch(ctx, collection, set, scratch);
     ctx.compileStatements(tail);
     if (endLabel !== undefined) ctx.emitLabel(endLabel);
 
@@ -757,6 +757,7 @@ export function compileMembershipSetReuseForAbsentCondition(ctx: LoweringCtx,
     membership: BitMembershipCondition,
     setPrefix: {
       set: Extract<StatementAst, { kind: "assign" }>;
+      collection: ExpressionAst;
       tail: StatementAst[];
     },
     line: number,
@@ -764,14 +765,14 @@ export function compileMembershipSetReuseForAbsentCondition(ctx: LoweringCtx,
     const scratch = bitMaskScratchName(statement);
     if (ctx.allocation.registers[scratch] === undefined) return false;
 
-    const { set, tail } = setPrefix;
+    const { set, collection, tail } = setPrefix;
     const falseLabel = ctx.freshLabel("if_false");
     const thenTerminates = ctx.statementsTerminate(statement.thenBody);
     const endLabel = statement.elseBody !== undefined && !thenTerminates ? ctx.freshLabel("if_end") : undefined;
 
     emitMembershipMaskTest(ctx, membership, scratch, line);
     ctx.emitJump(0x57, "F x!=0", falseLabel, "false branch for ==", line);
-    emitBitSetWithScratch(ctx, membership, set, scratch);
+    emitBitSetCollectionWithScratch(ctx, collection, set, scratch);
     ctx.compileStatements(tail);
     if (statement.elseBody !== undefined) {
       if (endLabel !== undefined) ctx.emitJump(0x51, "БП", endLabel, "if end", line);
