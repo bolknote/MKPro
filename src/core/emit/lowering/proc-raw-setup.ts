@@ -591,6 +591,7 @@ export function compileProcedures(ctx: LoweringCtx): void {
     const order = procEmissionOrder(ctx);
     for (const proc of order) {
       if (ctx.inlineProcNames.has(proc.name)) continue;
+      const start = ctx.items.length;
       ctx.emitLabel(proc.name);
       ctx.compileWithinProcedure(proc, () => {
         const xParam = ctx.xParamProcs.get(proc.name);
@@ -611,6 +612,7 @@ export function compileProcedures(ctx: LoweringCtx): void {
           ctx.emitOp(0x52, "В/О", "implicit return from proc");
         }
       });
+      ctx.recordProcedureBlock(proc.name, start, ctx.items.length);
     }
 }
 

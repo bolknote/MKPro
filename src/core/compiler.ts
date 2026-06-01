@@ -4697,6 +4697,12 @@ type ConstantSynthesisPlan =
       detail: string;
     };
 
+interface ProcedureBlockRange {
+  readonly name: string;
+  readonly start: number;
+  readonly end: number;
+}
+
 export class EmitContext {
   // Machine-code emission + X-tracking live in a dedicated collaborator; this
   // class delegates the low-level primitives to it and routes the X-state
@@ -4716,6 +4722,7 @@ export class EmitContext {
   readonly warnings: string[];
   readonly candidates: CandidateReport[];
   readonly loweringOptions: LoweringOptions;
+  readonly procedureBlocks: ProcedureBlockRange[] = [];
   private currentProcedure: ProcAst | undefined;
   // Set when a show was fused into a following read so its calculator stop also
   // serves as the input entry; the next read() lowering consumes this instead of
@@ -4897,6 +4904,59 @@ export class EmitContext {
     }
   }
 
+  recordProcedureBlock(name: string, start: number, end: number): void {
+    if (end <= start) return;
+    this.procedureBlocks.push({ name, start, end });
+  }
+
+  pruneUnreferencedProcedures(): void {
+    if (this.options.disableInterproceduralOpts || this.procedureBlocks.length === 0) return;
+    if (this.items.some((item) => item.kind === "op" && item.raw === true)) return;
+
+    const procNames = new Set(this.procedureBlocks.map((block) => block.name));
+    const ownerByIndex = new Map<number, string>();
+    for (const block of this.procedureBlocks) {
+      for (let index = block.start; index < block.end; index += 1) {
+        ownerByIndex.set(index, block.name);
+      }
+    }
+
+    const rootTargets = new Set<string>();
+    const edges = new Map<string, Set<string>>();
+    for (let index = 0; index < this.items.length; index += 1) {
+      const item = this.items[index]!;
+      if (item.kind !== "address" || typeof item.target !== "string" || !procNames.has(item.target)) continue;
+      const owner = ownerByIndex.get(index);
+      if (owner === undefined) {
+        rootTargets.add(item.target);
+      } else {
+        const targets = edges.get(owner) ?? new Set<string>();
+        targets.add(item.target);
+        edges.set(owner, targets);
+      }
+    }
+
+    const reachable = new Set<string>();
+    const stack = [...rootTargets];
+    while (stack.length > 0) {
+      const name = stack.pop()!;
+      if (reachable.has(name)) continue;
+      reachable.add(name);
+      for (const target of edges.get(name) ?? []) stack.push(target);
+    }
+
+    const dead = this.procedureBlocks.filter((block) => !reachable.has(block.name));
+    if (dead.length === 0) return;
+    for (const block of [...dead].sort((a, b) => b.start - a.start)) {
+      this.items.splice(block.start, block.end - block.start);
+    }
+    this.procedureBlocks.length = 0;
+    this.optimizations.push({
+      name: "dead-proc-elimination",
+      detail: `Removed ${dead.length} unreferenced emitted rule proc(s) after lowering.`,
+    });
+  }
+
   compileProgram(): void {
     const main = this.ast.entries[0]!;
     const hoistHelpers = this.loweringOptions.hoistSharedHelpers === true;
@@ -4917,6 +4977,7 @@ export class EmitContext {
     }
 
     if (!hoistProcs) compileProcedures(this);
+    this.pruneUnreferencedProcedures();
 
     const helperStart = this.items.length;
     compileRuntimeHelpers(this);

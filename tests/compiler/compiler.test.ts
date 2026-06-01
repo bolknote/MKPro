@@ -2597,6 +2597,33 @@ program DecrementZeroDomainGuard {
     expect(result.steps.some((step) => step.hex === "23" && step.comment === "decrement zero domain guard trap")).toBe(true);
   });
 
+  it("removes trap procedures after every caller lowers to a domain guard", () => {
+    const result = compileLoweringVariantForTest(`
+program DeadTrapProcAfterGuards {
+  state {
+    turns: counter 0..1 = 1
+  }
+
+  fn lost() {
+    halt("ЕГГОГ")
+  }
+
+  while turns >= 1 {
+    x = read()
+    if x < 0 { lost() }
+    y = read()
+    if y <= 0 { lost() }
+    turns--
+  }
+  halt(1)
+}
+`, { budget: 999, analysis: true }, { domainErrorGuards: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "domain-error-guard")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "dead-proc-elimination")).toBe(true);
+    expect(result.steps.some((step) => step.mnemonic === "К ÷")).toBe(false);
+  });
+
   it("keeps a read key on stack while checking resource underflow before dispatch", () => {
     const result = compileOk(`
 program ReadKeyResourceUnderflow {

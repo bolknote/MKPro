@@ -93,6 +93,7 @@ export type LoweringCtx = Pick<
   | "orderStorageReuseFields"
   | "packedStorageReuseFields"
   | "procCallCounts"
+  | "recordProcedureBlock"
   | "procReturnXVariable"
   | "randomCellHelpers"
   | "randomCoordListSetupContext"
