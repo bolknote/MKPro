@@ -370,6 +370,7 @@ Display rewrites are separated into strategy selection + body lowering.
 - `elide`-style elimination patterns — remove intermediate bookkeeping artifacts when no longer needed.
 - `constant-synthesis` — synthesizes reusable constants in minimally short ways. Exact positive powers of ten can be built as `exponent; F 10^x` when that beats digit entry, both in main code and setup preloads.
 - `preloaded-constant` — preloads constants when cheaper than recomputing each time.
+- `const-inline` — expands program-level `const` names at use sites before register allocation; literals then follow the usual `preloaded-constant` / inline digit cost model.
 - `auto-preload-initial-state` — moves required startup cells into setup so main code is shorter.
 - `preloaded-indirect-flow` — enables indexed writes via preloaded selector.
 - `preincrement-indexed-store` — uses preincrement semantics for indexed stores where profitable.

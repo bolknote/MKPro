@@ -18,6 +18,7 @@ import type {
   StateFieldAst,
   StateFieldType,
   V2BoardAst,
+  V2ConstAst,
   V2IfStatementAst,
   V2InvokeStatementAst,
   V2LoopStatementAst,
@@ -33,6 +34,7 @@ import type {
   V2WhileStatementAst,
   V2WorldAst,
 } from "./types.ts";
+import { buildV2ConstContext, inlineConstIdentifiers, type V2ConstBinding } from "./v2-const.ts";
 
 interface SourceLine {
   text: string;
@@ -151,6 +153,7 @@ class MKProParser {
     const header = this.next();
     const match = /^program\s+([A-Za-z_][\w]*)\s*\{$/u.exec(header.text);
     if (!match) throw new ParseError("Program must look like 'program Name {'", header.line);
+    const consts: V2ConstAst[] = [];
     const state: V2StateFieldAst[] = [];
     const boards: V2BoardAst[] = [];
     const worlds: V2WorldAst[] = [];
@@ -164,6 +167,7 @@ class MKProParser {
         const program: V2ProgramAst = {
           kind: "v2_program",
           name: match[1]!,
+          consts,
           state,
           boards,
           worlds,
@@ -172,6 +176,11 @@ class MKProParser {
           line: header.line,
         };
         return program;
+      }
+      if (line.text.startsWith("const ")) {
+        this.index += 1;
+        consts.push(parseV2ConstLine(line));
+        continue;
       }
       if (line.text === "state {") {
         this.index += 1;
@@ -917,6 +926,7 @@ function parseCall(text: string): ParsedCall | undefined {
 
 interface V2LoweringContext {
   signedAbsMatchPairs: boolean;
+  consts: ReadonlyMap<string, V2ConstBinding>;
   ruleParams: Map<string, string[]>;
   rules: Map<string, V2RuleAst>;
   // Names of rules that act as value-returning functions (their body contains a
@@ -959,8 +969,10 @@ function lowerV2Program(v2: V2ProgramAst, options: ParseOptions = {}): LoweredV2
   validateV2Domains(v2);
   validateV2References(v2, { ruleParams });
   validateV2Functions(v2, functionRules);
+  const constContext = buildV2ConstContext(v2);
   const context: V2LoweringContext = {
     signedAbsMatchPairs: options.signedAbsMatchPairs === true,
+    consts: constContext.bindings,
     ruleParams,
     rules,
     functionRules,
@@ -995,6 +1007,7 @@ function rewriteV2DisplayExpressions(_v2: V2ProgramAst, _context: V2LoweringCont
 function tryLowerV2DecimalFactorialSeries(v2: V2ProgramAst): LoweredV2Program | undefined {
   if (
     v2.body.length !== 5 ||
+    v2.consts.length > 0 ||
     v2.state.length > 0 ||
     v2.boards.length > 0 ||
     v2.worlds.length > 0 ||
@@ -3564,8 +3577,24 @@ function lowerV2Expression(text: string, line: number, context?: V2LoweringConte
   const rewritten = rewriteSpatialExpressionText(text, context);
   const contextual = context === undefined ? rewritten : normalizeContextualFloorAccessText(rewritten, context);
   const normalized = normalizeV2ExpressionText(contextual);
-  const expr = parseExpression(normalized, line);
+  let expr = parseExpression(normalized, line);
+  if (context !== undefined && context.consts.size > 0) {
+    expr = inlineConstIdentifiers(expr, context.consts);
+  }
   return context === undefined ? expr : lowerDomainRandomCalls(expr, context, line);
+}
+
+function parseV2ConstLine(line: SourceLine): V2ConstAst {
+  const match = /^const\s+([A-Za-z_][\w]*)\s*=\s*(.+)$/u.exec(line.text);
+  if (!match) {
+    throw new ParseError("Const must look like 'const name = <expr>'", line.line);
+  }
+  return {
+    kind: "v2_const",
+    name: match[1]!,
+    expr: match[2]!.trim(),
+    line: line.line,
+  };
 }
 
 function rewriteSpatialExpressionText(text: string, context: V2LoweringContext | undefined): string {

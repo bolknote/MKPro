@@ -7300,8 +7300,8 @@ Setup Block:
    00 |  02  | 2                       |
    01 |  05  | 5                       |
    02 |  40  | X→П 0                   | set time
-   03 |  60  | П→X 0                   | display __inline_show_30_0 source
-   04 |  50  | С/П                     | show __inline_show_30_0
+   03 |  60  | П→X 0                   | display __inline_show_33_0 source
+   04 |  50  | С/П                     | show __inline_show_33_0
    05 |  53  | ПП                      | proc call reinforcement_cycle
    06 |  23  | 23                      | proc call reinforcement_cycle
    07 |  04  | 4                       |
@@ -7347,7 +7347,7 @@ Setup Block:
    47 |  03  | 3                       |
    48 |  11  | −                       | expr -
    49 |  4C  | X→П c                   | set slot
-   50 |  50  | С/П                     | show __inline_show_59_1
+   50 |  50  | С/П                     | show __inline_show_62_1
    51 |  34  | К [x]                   | int()
    52 |  49  | X→П 9                   | set scratch
    53 |  67  | П→X 7                   | recall cells_7
@@ -7499,39 +7499,40 @@ Optimizations:
   - expression-constant-folder: Folded 4 constant expression node(s) before code generation.
   - counted-loop-unroll: Fully unrolled 1 small constant-trip counted loop, replacing induction variables with per-iteration constants.
   - intent-domain-lowering: Lowered 6 state fields and 8 rules through the generic intent pipeline.
+  - const-inline: Inlined 2 compile-time const declaration(s) at use sites before code generation.
   - auto-preload-initial-state: Moved initial state into setup/preload values so official program cells stay focused on turn logic.
-  - display-strategy-selection: Selected decimal-pack for screen __inline_show_30_0.
-  - packed-display-lowering: Display __inline_show_30_0 may use display-byte encodings in later layout passes.
+  - display-strategy-selection: Selected decimal-pack for screen __inline_show_33_0.
+  - packed-display-lowering: Display __inline_show_33_0 may use display-byte encodings in later layout passes.
   - proc-call-lowering: Compiled call to rule reinforcement_cycle as ПП/В/О subroutine.
   - proc-call-lowering: Compiled call to rule front_stop as ПП/В/О subroutine.
   - proc-call-lowering: Compiled call to rule front_stop as ПП/В/О subroutine.
   - proc-call-lowering: Compiled call to rule front_stop as ПП/В/О subroutine.
-  - initialized-counted-while-loop: Lowered initialized while time >= 1 through F L0 at line 29.
+  - initialized-counted-while-loop: Lowered initialized while time >= 1 through F L0 at line 32.
   - preloaded-constant: Used preloaded Re for constant 810200880000000.
-  - single-use-rule-inline: Inlined single-use rule won at line 39.
-  - error-stop: Used one-cell error opcode for literal ЕГГ0Г stop at line 21.
+  - single-use-rule-inline: Inlined single-use rule won at line 42.
+  - error-stop: Used one-cell error opcode for literal ЕГГ0Г stop at line 24.
   - size-model-rule-inline: Inlined 4-use rule random_92 because it is smaller than a ПП/В/О subroutine.
   - stack-current-x-scheduling: Reused random_state already in X for commutative *.
-  - zero-condition-test: Tested == 0 without materializing a zero literal at line 48.
+  - zero-condition-test: Tested == 0 without materializing a zero literal at line 51.
   - size-model-rule-inline: Inlined 4-use rule random_92 because it is smaller than a ПП/В/О subroutine.
   - preloaded-constant: Used preloaded Rb for constant 10000.
   - stack-current-x-scheduling: Reused random_state already in X for commutative *.
-  - display-strategy-selection: Selected decimal-pack for screen __inline_show_59_1.
-  - display-current-x-reuse: Reused slot already in X as the first field of screen __inline_show_59_1.
-  - packed-display-lowering: Display __inline_show_59_1 may use display-byte encodings in later layout passes.
-  - show-read-fusion: Fused show __inline_show_59_1 and the read in scratch = int(read()) into one calculator stop at line 60.
+  - display-strategy-selection: Selected decimal-pack for screen __inline_show_62_1.
+  - display-current-x-reuse: Reused slot already in X as the first field of screen __inline_show_62_1.
+  - packed-display-lowering: Display __inline_show_62_1 may use display-byte encodings in later layout passes.
+  - show-read-fusion: Fused show __inline_show_62_1 and the read in scratch = int(read()) into one calculator stop at line 63.
   - size-model-rule-inline: Inlined 4-use rule random_92 because it is smaller than a ПП/В/О subroutine.
   - x-param-return-decay-call: Passed value to decay through X.
   - x-param-return-decay-call: Passed value to decay through X.
-  - zero-condition-test: Tested < 0 without materializing a zero literal at line 79.
+  - zero-condition-test: Tested < 0 without materializing a zero literal at line 82.
   - x-param-return-decay-call: Passed value to decay through X.
   - x-param-return-decay-call: Passed value to decay through X.
   - preloaded-constant: Used preloaded Ra for constant 1000.
-  - previous-random-stack-reuse: Kept previous random_state in Y while updating random_state with random() for scratch at line 100.
-  - domain-error-guard: Replaced a "<=" terminal-error guard with a self-trapping F lg at line 102.
-  - domain-error-guard: Replaced a "<=" terminal-error guard with a self-trapping F lg at line 94.
-  - single-use-rule-inline: Inlined single-use rule advance_front at line 86.
-  - single-use-rule-inline: Inlined single-use rule resolve_front at line 68.
+  - previous-random-stack-reuse: Kept previous random_state in Y while updating random_state with random() for scratch at line 103.
+  - domain-error-guard: Replaced a "<=" terminal-error guard with a self-trapping F lg at line 105.
+  - domain-error-guard: Replaced a "<=" terminal-error guard with a self-trapping F lg at line 97.
+  - single-use-rule-inline: Inlined single-use rule advance_front at line 89.
+  - single-use-rule-inline: Inlined single-use rule resolve_front at line 71.
   - assign-zero-domain-guard: Fused cells_7 store and "< 0" terminal-error branch through F sqrt.
   - x-param-return-decay: Compiled decay to consume value directly from X.
   - return-suffix-gadget: Shared 1 return/tail-call gadget (0 jump, 1 call; 2 cells saved).
@@ -7540,16 +7541,16 @@ Optimizations:
   - domain-error-guards-unroll: Combined domain-error guards with counted-loop unrolling (125 vs 131 cells).
 
 Candidates:
-  * display __inline_show_30_0/decimal-pack: 2 steps; selected decimal-pack for screen __inline_show_30_0
-  - display __inline_show_30_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
-  - display __inline_show_30_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
-  - display __inline_show_30_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
-  - display __inline_show_30_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-  * display __inline_show_59_1/decimal-pack: 1 steps; selected decimal-pack for screen __inline_show_59_1
-  - display __inline_show_59_1/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
-  - display __inline_show_59_1/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
-  - display __inline_show_59_1/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
-  - display __inline_show_59_1/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
+  * display __inline_show_33_0/decimal-pack: 2 steps; selected decimal-pack for screen __inline_show_33_0
+  - display __inline_show_33_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_33_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_33_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_33_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
+  * display __inline_show_62_1/decimal-pack: 1 steps; selected decimal-pack for screen __inline_show_62_1
+  - display __inline_show_62_1/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_62_1/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_62_1/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_62_1/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
 
 Optimizer Capabilities:
   - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
@@ -7578,14 +7579,14 @@ Proofs:
   - display-byte-observable-boundary: assumed; Display-byte candidates are bounded by display output and the exact mk61 profile.
 
 Rejected Candidates:
-  - display __inline_show_30_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
-  - display __inline_show_30_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
-  - display __inline_show_30_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
-  - display __inline_show_30_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-  - display __inline_show_59_1/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
-  - display __inline_show_59_1/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
-  - display __inline_show_59_1/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
-  - display __inline_show_59_1/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
+  - display __inline_show_33_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_33_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_33_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_33_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
+  - display __inline_show_62_1/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_62_1/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_62_1/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_62_1/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
 
 Cell Roles:
   03: 60 exec, display-byte - display byte role allowed

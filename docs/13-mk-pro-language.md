@@ -171,6 +171,47 @@ strength: counter 0..99 = 40
 plans: cells(giant_country) = random()
 ```
 
+## Compile-Time Constants
+
+Declare fixed numeric values that never change at runtime with `const` at program
+scope (alongside `state`, boards, and functions):
+
+```mkpro
+program RamboIII {
+  const REINFORCEMENT_CAP = 10000
+  const VICTORY = 8.1020088E14
+
+  state {
+    scratch: packed
+  }
+
+  fn won() {
+    halt(VICTORY)
+  }
+
+  fn reinforce() {
+    scratch = int(random_state * REINFORCEMENT_CAP)
+  }
+}
+```
+
+Rules:
+
+- The right-hand side must be a **compile-time numeric expression**: literals,
+  references to earlier `const` names in the same program, and `+ - * /` (with
+  unary `-`). Calls such as `random()`, reads, and state names are rejected.
+- `const` names cannot be assigned; they are expanded inline wherever they are
+  used.
+- A `const` cannot reuse a `state` field name.
+
+The compiler inlines each `const` at its use sites before register allocation and
+constant folding, so the name never occupies a state register. The existing
+`preloaded-constant` pass still decides whether a repeated literal is cheaper
+as an inline digit sequence or a shared preloaded register. Use `const` for named
+scalars in expressions (`halt(...)`, `int(x * CAP)`, conditions). Use an indexed
+initializer list (see below) when the value is the **initial content of a state
+bank cell** at setup time.
+
 ## State Configuration
 
 State fields carry only data that affects the program:

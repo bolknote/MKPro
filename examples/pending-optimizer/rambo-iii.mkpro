@@ -7,6 +7,9 @@ reference lordbss_pmk53
 // just as the MK-61 code does through its event-target register.
 
 program RamboIII {
+  const REINFORCEMENT_CAP = 10000
+  const VICTORY = 8.1020088E14
+
   state {
     cells: packed[1..7] = [5000.999, 5000.999, 5000.999, 0, 0, 0, 25000]
     time: counter 0..25
@@ -22,7 +25,7 @@ program RamboIII {
   }
 
   fn won() {
-    halt(8.1020088E14)
+    halt(VICTORY)
   }
 
   time = 25
@@ -50,7 +53,7 @@ program RamboIII {
     }
 
     random_92()
-    scratch = int(random_state * 10000)
+    scratch = int(random_state * REINFORCEMENT_CAP)
     cells[event_target] += scratch
   }
 

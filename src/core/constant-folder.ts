@@ -109,6 +109,10 @@ class ConstantFolder {
     return expr;
   }
 
+  foldExpressionPublic(expr: ExpressionAst): ExpressionAst {
+    return this.foldExpression(expr);
+  }
+
   private foldExpression(expr: ExpressionAst): ExpressionAst {
     switch (expr.kind) {
       case "number":
@@ -203,6 +207,11 @@ class ConstantFolder {
 
 export function foldProgramConstants(ast: ProgramAst): number {
   return new ConstantFolder().foldProgram(ast);
+}
+
+/** Fold pure numeric subexpressions on one expression tree (no statement walk). */
+export function foldConstExpression(expr: ExpressionAst): ExpressionAst {
+  return new ConstantFolder().foldExpressionPublic(expr);
 }
 
 function foldNumericBinary(

@@ -23,6 +23,21 @@ describe("parser", () => {
     }
   });
 
+  it("parses const declarations inside a program", () => {
+    const ast = parseProgram(`
+program WithConst {
+  const LIMIT = 99
+  state {
+    n: counter 0..99 = 0
+  }
+  loop {
+    halt(n)
+  }
+}
+`);
+    expect(ast.v2?.consts).toEqual([{ kind: "v2_const", name: "LIMIT", expr: "99", line: 3 }]);
+  });
+
   it("rejects extra tokens in expressions", () => {
     expect(() =>
       parseProgram(`

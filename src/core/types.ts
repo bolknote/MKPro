@@ -199,11 +199,19 @@ export interface DisplaySourceItemAst {
 export interface V2ProgramAst {
   kind: "v2_program";
   name: string;
+  consts: V2ConstAst[];
   state: V2StateFieldAst[];
   boards: V2BoardAst[];
   worlds: V2WorldAst[];
   body: V2StatementAst[];
   rules: V2RuleAst[];
+  line: number;
+}
+
+export interface V2ConstAst {
+  kind: "v2_const";
+  name: string;
+  expr: string;
   line: number;
 }
 

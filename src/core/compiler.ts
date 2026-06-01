@@ -1705,6 +1705,12 @@ function compileMKProOnce(
       detail: `Lowered ${ast.v2.state.length} state fields and ${ast.v2.rules.length} rules through the generic intent pipeline.`,
     });
   }
+  if (ast.v2 !== undefined && ast.v2.consts.length > 0) {
+    optimizations.push({
+      name: "const-inline",
+      detail: `Inlined ${ast.v2.consts.length} compile-time const declaration(s) at use sites before code generation.`,
+    });
+  }
   eliminateUnreachableV2Procs(ast, optimizations);
   liftFunctionCallsInExpressions(ast, optimizations);
 
