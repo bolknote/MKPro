@@ -2782,6 +2782,30 @@ export function expressionReferencesIdentifier(expr: ExpressionAst, name: string
   }
 }
 
+// True when `expr` reads an indexed state cell of the given bank/field (any
+// index). Used by stack-resident temp scheduling to confirm an indexed compound
+// consumer `cells[i] op= temp` actually recalls the cell it writes, so that
+// recall is what lifts the held temp into Y.
+export function expressionReferencesIndexedCell(expr: ExpressionAst, base: string, field: string | undefined): boolean {
+  switch (expr.kind) {
+    case "number":
+    case "string":
+    case "identifier":
+      return false;
+    case "indexed":
+      return (expr.base === base && expr.field === field) || expressionReferencesIndexedCell(expr.index, base, field);
+    case "unary":
+      return expressionReferencesIndexedCell(expr.expr, base, field);
+    case "binary":
+      return (
+        expressionReferencesIndexedCell(expr.left, base, field) ||
+        expressionReferencesIndexedCell(expr.right, base, field)
+      );
+    case "call":
+      return expr.args.some((arg) => expressionReferencesIndexedCell(arg, base, field));
+  }
+}
+
 // An expression is pure when evaluating it twice yields the same value with no
 // observable effect. Calls (random, read, macros) may be non-idempotent or have
 // side effects, so they are conservatively impure. Purity makes it sound to

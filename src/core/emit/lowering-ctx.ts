@@ -78,6 +78,7 @@ export type LoweringCtx = Pick<
   | "machineEntryOpen"
   | "machineProfile"
   | "mantissaExponentDisplayTemplate"
+  | "markCurrentX"
   | "mantissaMaskDisplayTemplate"
   | "membershipClearPrefix"
   | "membershipSetPrefix"

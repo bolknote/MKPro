@@ -5,25 +5,30 @@ reference kei_treasure_cave
 
 program CaveHighlevelBaseline {
   state {
-    // This baseline keeps the classic cave contract explicit: the player sees a
-    // packed room display, while walls and caches live as generated hidden masks.
-    player: coord(cave) = stack.X
+    // The article starts at floor 1, rightmost top row. The first visible stop is
+    // still 0; screen holds the previous result that the next read resumes from.
+    player: coord(cave) = 1.0000008
 
-    walls: cells(cave) = random()
+    walls: packed[1..3] = 0
 
-    caches: cells(cave) = random()
+    caches: packed = pi()
 
-    food: counter 0..99 = stack.Y
+    food: counter 0..99 = 20
     dynamite: counter 0..9 = 2
     treasure: counter 0..9 = 0
 
     blocked: coord(cave)
     fight_entry: counter 0..99 = 0
+    screen: packed = 0
   }
 
-  // The vertical wrap makes the cave feel larger than the display: climbing
-  // cycles floors while the room-row presentation stays compact.
+  // Original setup R1..R3: each floor stores a packed wall mask produced by
+  // disjoining the two printed mask literals from the article.
   cave: board(packed_decimal_zero_run)
+
+  walls[1] = bit_or(1.0080808, 1.7062264)
+  walls[2] = bit_or(1.808, 1.6715401)
+  walls[3] = bit_or(1.8088088, 1.2260335)
 
   fn ignored() {
     halt(0)
@@ -34,7 +39,7 @@ program CaveHighlevelBaseline {
   }
 
   loop {
-    show(player)
+    show(screen)
     command = read()
     // Food is the global turn clock. All useful actions spend the same survival
     // counter, which is what keeps the tiny program game-like.
@@ -86,43 +91,61 @@ program CaveHighlevelBaseline {
   }
 
   fn try_move() {
-    if blocked in walls {
-      show(0)
+    if bit_and(walls[blocked.floor], frac(blocked)) != 0 {
+      screen = 0
     }
     else {
       player = blocked
       blocked = 0
-      show(player)
+      screen = player
     }
   }
 
   fn break_wall() {
-    if blocked * dynamite {
-      walls -= blocked
-      blocked = 0
+    if blocked {
       dynamite--
+      if dynamite < 0 {
+        halt("ЕГГ0Г")
+      }
+      walls[blocked.floor] = bit_and(walls[blocked.floor], bit_not(frac(blocked)))
+      blocked = 0
     }
-    show(0)
+    screen = 0
   }
 
   fn search_cache() {
-    if player in caches {
+    if bit_and(caches, frac(player)) != 0 {
       // Searching consumes the cache so repeated probing cannot farm score from
       // one lucky room.
-      caches -= player
+      caches = bit_and(caches, bit_not(frac(player)))
       cache_reward()
     }
     else {
-      show(0)
+      screen = 0
     }
   }
 
   fn cache_reward() {
     match player.floor {
-      1 => food = robber_fight(food + 10)
-      2 => dynamite = robber_fight(dynamite + 1)
-      otherwise => treasure = robber_fight(treasure + 1)
+      1 => water_cache()
+      2 => grenade_cache()
+      otherwise => treasure_cache()
     }
+  }
+
+  fn water_cache() {
+    food = robber_fight(food + 10)
+    screen = food
+  }
+
+  fn grenade_cache() {
+    dynamite = robber_fight(dynamite + 1)
+    screen = dynamite
+  }
+
+  fn treasure_cache() {
+    treasure = robber_fight(treasure + 1)
+    screen = treasure
   }
 
   fn robber_fight(stake) {

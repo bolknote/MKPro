@@ -19,6 +19,7 @@ import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts
 import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileTicTacToeCellMaskReuse } from "./emit/lowering/spatial.ts";
 import { compileCoordListLineCountAssignment, compileCoordListLineCountDashedReport, compileCoordListRemove, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
 import { compileBlockCall, compileDecimalFactorialSeries, compileGuardAssignmentSubstitution, compileInitialState, compileIntFracSharedTail, compileProcedures, compileRawStatement, compileRepeatedAssignmentValue, compileRuntimeHelpers, compileSetupProgramWithPreloads, compileStackUnaryDerivedAssignments, compileUnitDecrement, compileUnitIncrement, compileXParamProcCall } from "./emit/lowering/proc-raw-setup.ts";
+import { compileMultiStackResidentTemps } from "./emit/stack-residency-lowering.ts";
 import {
   BIT_MASK_SCRATCH_PREFIX,
   COORD_LIST_COUNTER,
@@ -70,6 +71,7 @@ import {
   expressionIsDeterministic,
   expressionPureForSubstitution,
   expressionReferencesIdentifier,
+  expressionReferencesIndexedCell,
   expressionToIntentText,
   firstSpliceDisplayLiteralProgram,
   flOpcode,
@@ -421,6 +423,18 @@ interface LoweringOptions {
   // preload loop claim it for an additional constant. Speculative: register
   // allocation is global, so adopted only when the whole program ends up smaller.
   forcedRegisterShares?: ReadonlyArray<{ freeRegister: RegisterName; keepRegister: RegisterName }>;
+  // Keep short-lived single-use temporaries resident on the X/Y/Z/T stack
+  // instead of spilling them to a numbered register. Generalizes the existing
+  // single-use stack-temp fusion two ways: (1) the consumer may be an indexed
+  // compound store `cells[i] op= temp` (the indexed recall auto-lifts the temp
+  // into Y, so no `X->П`/`П->X` pair is needed), and (2) two independent
+  // single-use temps that are both dead after a combining consumer are held in
+  // X and Y across the second temp's evaluation. Each eliminated spill saves the
+  // store plus its matching recall (>=2 cells) and can free a register. Sound on
+  // the same dead-after-consumer basis as the base fusion; speculative because
+  // freeing a register reshuffles global allocation, so it is adopted only when
+  // the whole program ends up smaller.
+  stackResidentTemps?: boolean;
 }
 
 
@@ -673,6 +687,21 @@ export function compileMKPro(
     { unrollCountedLoops: true, freeResidualDispatchScratch: true },
     "counted-loop-unroll-free-scratch",
     "Combined counted-loop unrolling with residual-dispatch scratch freeing",
+  );
+  tryCandidate(
+    { stackResidentTemps: true },
+    "stack-resident-temps",
+    "Kept short-lived single-use temporaries on the X/Y/Z/T stack instead of spilling them to registers",
+  );
+  tryCandidate(
+    { stackResidentTemps: true, hoistSharedHelpers: true },
+    "stack-resident-temps-hoisted",
+    "Kept temporaries stack-resident and hoisted helpers so freed registers unlock single-cell indirect flow",
+  );
+  tryCandidate(
+    { stackResidentTemps: true, hoistSharedHelpers: true, hoistProcs: true },
+    "stack-resident-temps-hoisted-proc",
+    "Kept temporaries stack-resident with hoisted helper and procedure layout",
   );
   // The domain-error-guard rewrite can only fire when the program contains a
   // terminal ЕГГОГ trap, so skip the extra full-recompile candidates entirely
@@ -4961,6 +4990,11 @@ export class EmitContext {
           index += derived - 1;
           continue;
         }
+        const multiStack = compileMultiStackResidentTemps(this, statements, index);
+        if (multiStack > 1) {
+          index += multiStack - 1;
+          continue;
+        }
         const stackTemp = this.compileSingleUseStackTemp(statements, index);
         if (stackTemp > 1) {
           index += stackTemp - 1;
@@ -5275,7 +5309,53 @@ export class EmitContext {
     if (consumer.kind === "return_value") {
       return compileConsumer(consumer.expr, () => this.emitOp(0x52, "В/О", "return value", consumer.line)) ? 2 : 0;
     }
+    if (this.loweringOptions.stackResidentTemps === true && consumer.kind === "indexed_assign") {
+      return this.compileIndexedStackTempConsumer(temp, consumer) ? 2 : 0;
+    }
     return 0;
+  }
+
+  // Stack-resident temp scheduling (LoweringOptions.stackResidentTemps): keep the
+  // value of `temp = e` in X across an indexed compound store
+  // `cells[i] op= temp` instead of spilling it to a register. The indexed recall
+  // of `cells[i]` auto-lifts the temp into Y, so `op` consumes both straight off
+  // the stack and no `X->П temp`/`П->X temp` pair is emitted. The selector is
+  // established BEFORE the temp value is computed (so its setup code, if any,
+  // cannot clobber X), then reused warm by the recall inside the consumer.
+  private compileIndexedStackTempConsumer(
+    temp: Extract<StatementAst, { kind: "assign" }>,
+    consumer: Extract<StatementAst, { kind: "indexed_assign" }>,
+  ): boolean {
+    const expr = consumer.expr;
+    const target = consumer.target;
+    // The consumer must read the temp exactly once and reference the indexed
+    // cell it writes (so the cell's recall is what lifts the temp), and the
+    // index must not depend on the temp (its register is never written here).
+    if (countIdentifierReads(expr, temp.target) !== 1) return false;
+    if (!this.canCompileExpressionWithStackTemp(expr, temp.target)) return false;
+    if (expressionReferencesIdentifier(target.index, temp.target)) return false;
+    if (!expressionReferencesIndexedCell(expr, target.base, target.field)) return false;
+
+    const numeric = numericIndexValue(target.index);
+    if (numeric === undefined) {
+      if (!expressionPureForSubstitution(target.index)) return false;
+      const selector = this.ensureIndexedSelector(target, consumer.line);
+      if (selector === undefined) return false;
+      compileExpression(this, temp.expr);
+      this.markCurrentX(temp.target);
+      this.compileExpressionWithStackTemp(expr, temp.target);
+      this.emitPreparedIndexedStore(target, selector, consumer.line);
+    } else {
+      compileExpression(this, temp.expr);
+      this.markCurrentX(temp.target);
+      this.compileExpressionWithStackTemp(expr, temp.target);
+      this.emitIndexedStore(target, consumer.line);
+    }
+    this.optimizations.push({
+      name: "stack-resident-indexed-temp",
+      detail: `Kept single-use temp ${temp.target} in X for the indexed update ${bankMemberKey(target.base, target.field)} at line ${consumer.line}.`,
+    });
+    return true;
   }
 
   private stackTempSourceIsSafe(expr: ExpressionAst): boolean {
@@ -12344,7 +12424,7 @@ const optimizerCapabilities: Array<{
     source: "mk61-delta",
     requires: ["r0-fractional-sentinel"],
     activeWhen: ["fractional-indirect-addressing", "r0-indirect-counter", "r0-fractional-sentinel"],
-    detail: "Fractional R0 side effects: selecting R3 (active) is sound; the one-cell К БП 0 jump to 99 stays a candidate because it destroys R0 and depends on the fixed hardware address 99, which is unsafe to synthesize automatically.",
+    detail: "Fractional R0 side effects: selecting R3 (active) is sound; the one-cell К БП 0 jump to 99 stays a candidate because it destroys R0 and depends on the fixed hardware address 99, which is not sound to synthesize automatically.",
   },
   {
     id: "raw-display-5f",
@@ -12465,6 +12545,14 @@ const optimizerCapabilities: Array<{
     requires: [],
     activeWhen: ["z-stack-derived-value-reuse"],
     detail: "Computes a shared pure operand once and keeps extra copies in Y/Z (and T for four outputs), restoring them with X↔Y and F reverse for adjacent unary derivations.",
+  },
+  {
+    id: "stack-resident-temps",
+    category: "stack",
+    source: "documented",
+    requires: [],
+    activeWhen: ["stack-resident-temps", "stack-resident-indexed-temp"],
+    detail: "Keeps short-lived single-use temporaries on the X/Y/Z/T stack across the next statement instead of spilling them to numbered registers (including indexed compound stores whose recall auto-lifts the held temp into Y).",
   },
   {
     id: "liveness-analysis",
@@ -12820,6 +12908,12 @@ function buildMachineFeaturesUsed(
   }
   if (optimizations.some((optimization) => optimization.name === "z-stack-derived-value-reuse")) {
     add("z-stack-register", "Optimizer reused saved operands from Y/Z stack levels with X↔Y and F reverse.", "optimizer");
+  }
+  if (optimizations.some((optimization) =>
+    optimization.name === "stack-resident-temps" ||
+    optimization.name === "stack-resident-indexed-temp"
+  )) {
+    add("stack-resident-temps", "Optimizer kept short-lived temporaries on the X/Y/Z/T stack instead of register spills.", "optimizer");
   }
   if (optimizations.some((optimization) =>
     optimization.name === "hex-mantissa-arithmetic" ||

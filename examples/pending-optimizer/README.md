@@ -40,3 +40,17 @@ Prototype notes:
   (`R4..R7`) and updates/scans those lines directly. The current `line_count`
   loop is smaller than the old expansion, but still recomputes line state
   instead of preserving it incrementally.
+
+Stack-resident temp scheduler (2026-06):
+
+- Measurement harness: `node scripts/spill-report.mjs --pending` reports spill
+  counts plus static candidate windows (`s1`/`dual`/`multi`/`idx` columns).
+- Speculative variant `stackResidentTemps` fuses consecutive single-use assign
+  temps and keeps them on X/Y/Z/T instead of `X->П`/`П->X` spills when a
+  straight-line consumer reads each temp exactly once. `selectBest()` adopts it
+  only when the whole program shrinks.
+- Current pending sources expose **zero** dual/multi stack-residency windows at
+  the AST level (straight-line sections hold at most one live assign temp), so
+  these programs do not shrink yet from this pass alone. The machinery is in
+  place for future source shapes and for smaller examples that do contain
+  `t0=e0; t1=e1; out=t0 op t1` chains.

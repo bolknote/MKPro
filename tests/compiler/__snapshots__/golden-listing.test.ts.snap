@@ -507,25 +507,25 @@ sharedBitMaskHelperCalls+hoistSharedHelpers: steps=195 | 51 24 04 13 40 35 04 12
 `;
 
 exports[`golden listing > lowering variants are stable for examples/pending-optimizer/tic-tac-toe-4x4.mkpro 1`] = `
-"primary: steps=246 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 37 8E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 67 0B 50 53 62 8E 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 68 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 51 62 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 C5 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 C4 00 4D 03 03 0B 4B 01 01 53 C2 00 4D 02 07 0B 4B 09 4A 07 BD 53 CC 69 6D 36 49 52 63 6B 10 53 DC 6D 10 4D 6B 6A 10 4B 5D CC 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
-aggressiveTerminalDirect: steps=246 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 37 8E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 67 0B 50 53 62 8E 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 68 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 51 62 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 C5 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 C4 00 4D 03 03 0B 4B 01 01 53 C2 00 4D 02 07 0B 4B 09 4A 07 BD 53 CC 69 6D 36 49 52 63 6B 10 53 DC 6D 10 4D 6B 6A 10 4B 5D CC 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
-invertBranchOrder: steps=246 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 37 8E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 67 0B 50 53 62 8E 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 68 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 51 62 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 C5 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 C4 00 4D 03 03 0B 4B 01 01 53 C2 00 4D 02 07 0B 4B 09 4A 07 BD 53 CC 69 6D 36 49 52 63 6B 10 53 DC 6D 10 4D 6B 6A 10 4B 5D CC 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
-aggressiveTerminalDirect+invertBranchOrder: steps=246 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 37 8E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 67 0B 50 53 62 8E 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 68 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 51 62 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 C5 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 C4 00 4D 03 03 0B 4B 01 01 53 C2 00 4D 02 07 0B 4B 09 4A 07 BD 53 CC 69 6D 36 49 52 63 6B 10 53 DC 6D 10 4D 6B 6A 10 4B 5D CC 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
-hoistSharedHelpers: steps=248 | 51 6A 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 57 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 56 00 4D 03 03 0B 4B 01 01 53 54 00 4D 02 07 0B 4B 09 4A 07 BD 53 64 69 6D 36 49 52 63 6B 10 53 80 6D 10 4D 6B 6A 10 4B 5D 64 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 90 51 6A 65 61 38 45 64 61 38 44 01 66 10 46 65 AE 04 11 59 A5 67 0B 50 53 A9 51 6A 66 01 06 11 59 B1 00 50 3B 04 12 0E 35 11 01 10 68 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E E3 51 A9 62 61 38 42 64 61 38 44 01 66 10 46 62 AE 04 11 59 F7 67 50 52
-hoistSharedHelpers+hoistProcs: steps=248 | 51 B9 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 57 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 56 00 4D 03 03 0B 4B 01 01 53 54 00 4D 02 07 0B 4B 09 4A 07 BD 53 64 69 6D 36 49 52 63 6B 10 53 80 6D 10 4D 6B 6A 10 4B 5D 64 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52 66 01 06 11 59 72 00 50 3B 04 12 0E 35 11 01 10 68 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E A4 51 6A 62 61 38 42 64 61 38 44 01 66 10 46 62 AE 04 11 59 B8 67 50 52 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E DF 51 B9 65 61 38 45 64 61 38 44 01 66 10 46 65 AE 04 11 59 F4 67 0B 50 53 6A 51 B9
-canonicalizeIfChains: steps=246 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 37 8E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 67 0B 50 53 62 8E 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 68 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 51 62 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 C5 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 C4 00 4D 03 03 0B 4B 01 01 53 C2 00 4D 02 07 0B 4B 09 4A 07 BD 53 CC 69 6D 36 49 52 63 6B 10 53 DC 6D 10 4D 6B 6A 10 4B 5D CC 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
-freeResidualDispatchScratch: steps=246 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 37 8E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 67 0B 50 53 62 8E 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 68 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 51 62 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 C5 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 C4 00 4D 03 03 0B 4B 01 01 53 C2 00 4D 02 07 0B 4B 09 4A 07 BD 53 CC 69 6D 36 49 52 63 6B 10 53 DC 6D 10 4D 6B 6A 10 4B 5D CC 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
-aliasXReuse: steps=246 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 37 8E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 67 0B 50 53 62 8E 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 68 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 51 62 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 C5 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 C4 00 4D 03 03 0B 4B 01 01 53 C2 00 4D 02 07 0B 4B 09 4A 07 BD 53 CC 69 6D 36 49 52 63 6B 10 53 DC 6D 10 4D 6B 6A 10 4B 5D CC 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
-coalesceCopies: steps=246 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 37 8E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 67 0B 50 53 62 8E 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 68 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 51 62 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 C5 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 C4 00 4D 03 03 0B 4B 01 01 53 C2 00 4D 02 07 0B 4B 09 4A 07 BD 53 CC 69 6D 36 49 52 63 6B 10 53 DC 6D 10 4D 6B 6A 10 4B 5D CC 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
-freeResidualDispatchScratch+canonicalizeIfChains: steps=246 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 37 8E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 67 0B 50 53 62 8E 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 68 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 51 62 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 C5 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 C4 00 4D 03 03 0B 4B 01 01 53 C2 00 4D 02 07 0B 4B 09 4A 07 BD 53 CC 69 6D 36 49 52 63 6B 10 53 DC 6D 10 4D 6B 6A 10 4B 5D CC 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
-shareRandomCell: steps=243 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 37 8E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8B 04 11 59 59 67 0B 50 53 62 8E 66 01 06 11 59 70 00 50 53 82 68 53 82 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 6C 51 62 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8B 04 11 59 81 67 50 52 3B 04 12 0E 35 11 01 10 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 C2 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 C1 00 4D 03 03 0B 4B 01 01 53 BF 00 4D 02 07 0B 4B 09 4A 07 BD 53 C9 69 6D 36 49 52 63 6B 10 53 D9 6D 10 4D 6B 6A 10 4B 5D C9 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
-shareRandomCell+hoistSharedHelpers: steps=245 | 51 73 3B 04 12 0E 35 11 01 10 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 66 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 65 00 4D 03 03 0B 4B 01 01 53 63 00 4D 02 07 0B 4B 09 4A 07 BD 53 73 69 6D 36 49 52 63 6B 10 53 89 6D 10 4D 6B 6A 10 4B 5D 73 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 99 51 73 65 61 38 45 64 61 38 44 01 66 10 46 65 AE 04 11 59 AE 67 0B 50 53 B2 51 73 66 01 06 11 59 BA 00 50 53 02 68 53 02 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E E0 51 B2 62 61 38 42 64 61 38 44 01 66 10 46 62 AE 04 11 59 F4 67 50 52
-tailBranchInversion: steps=242 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 7E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8A 04 11 59 57 67 0B 50 53 60 8E 66 01 06 11 59 68 00 50 3B 04 12 0E 35 11 01 10 68 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 60 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8A 04 11 59 89 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 C1 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 C0 00 4D 03 03 0B 4B 01 01 53 BE 00 4D 02 07 0B 4B 09 4A 07 BD 53 C8 69 6D 36 49 52 63 6B 10 53 D8 6D 10 4D 6B 6A 10 4B 5D C8 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
-hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion: steps=244 | 51 6A 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 57 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 56 00 4D 03 03 0B 4B 01 01 53 54 00 4D 02 07 0B 4B 09 4A 07 BD 53 64 69 6D 36 49 52 63 6B 10 53 80 6D 10 4D 6B 6A 10 4B 5D 64 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 6A 65 61 38 45 64 61 38 44 01 66 10 46 65 AE 04 11 59 A3 67 0B 50 53 A7 51 6A 66 01 06 11 59 AF 00 50 3B 04 12 0E 35 11 01 10 68 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 A7 62 61 38 42 64 61 38 44 01 66 10 46 62 AE 04 11 59 F3 67 50 52
-guardedPrologueGadgets: steps=246 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 37 8E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 8E 04 11 59 59 67 0B 50 53 62 8E 66 01 06 11 59 70 00 50 3B 04 12 0E 35 11 01 10 68 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E 78 51 62 62 61 38 42 64 61 38 44 01 66 10 46 62 53 8E 04 11 59 8D 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 C5 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 C4 00 4D 03 03 0B 4B 01 01 53 C2 00 4D 02 07 0B 4B 09 4A 07 BD 53 CC 69 6D 36 49 52 63 6B 10 53 DC 6D 10 4D 6B 6A 10 4B 5D CC 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
-guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: steps=248 | 51 B9 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 57 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 56 00 4D 03 03 0B 4B 01 01 53 54 00 4D 02 07 0B 4B 09 4A 07 BD 53 64 69 6D 36 49 52 63 6B 10 53 80 6D 10 4D 6B 6A 10 4B 5D 64 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52 66 01 06 11 59 72 00 50 3B 04 12 0E 35 11 01 10 68 3B 04 12 0E 35 11 01 10 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E A4 51 6A 62 61 38 42 64 61 38 44 01 66 10 46 62 AE 04 11 59 B8 67 50 52 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 5E DF 51 B9 65 61 38 45 64 61 38 44 01 66 10 46 65 AE 04 11 59 F4 67 0B 50 53 6A 51 B9
-sharedBitMaskHelperCalls: steps=213 | 63 68 22 12 66 10 50 43 53 B8 4E 64 6E 37 35 5E 19 51 00 65 6E 38 45 64 6E 38 44 01 66 10 46 65 53 6A 04 11 59 41 67 0B 50 53 45 51 00 66 01 06 11 59 53 00 50 3B 04 12 0E 35 11 01 10 68 3B 04 12 0E 35 11 01 10 12 10 43 53 B8 4E 64 6E 37 35 5E 84 51 45 62 6E 38 42 64 6E 38 44 01 66 10 46 62 53 6A 04 11 59 69 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 A1 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 A0 00 4D 03 03 0B 4B 01 01 53 9E 00 4D 02 07 0B 4B 09 4A 07 BD 53 A8 69 6D 36 49 52 63 6B 10 53 CE 6D 10 4D 6B 6A 10 4B 5D A8 6D 52 04 13 4E 35 04 12 02 24 00 0A 05 10 34 6E 34 01 10 15 13 08 10 52 53 B8 6C 37 35 32 52
-sharedBitMaskHelperCalls+hoistSharedHelpers: steps=215 | 51 6D 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 57 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 56 00 4D 03 03 0B 4B 01 01 53 54 00 4D 02 07 0B 4B 09 4A 07 BD 53 64 69 6D 36 49 52 63 6B 10 53 A2 6D 10 4D 6B 6A 10 4B 5D 64 6D 52 04 13 4E 35 04 12 02 24 00 0A 05 10 34 6E 34 01 10 15 13 08 10 52 53 80 6C 37 35 32 52 63 68 22 12 66 10 50 43 53 80 4E 64 6E 37 35 5E 80 51 6D 65 6E 38 45 64 6E 38 44 01 66 10 46 65 53 02 04 11 59 96 67 0B 50 53 9A 51 6D 66 01 06 11 59 A2 00 50 3B 04 12 0E 35 11 01 10 68 3B 04 12 0E 35 11 01 10 12 10 43 53 80 4E 64 6E 37 35 5E C1 51 9A 62 6E 38 42 64 6E 38 44 01 66 10 46 62 53 02 04 11 59 D6 67 50 52"
+"primary: steps=233 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 7E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 81 04 11 59 57 67 0B 50 53 60 8E 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 60 62 61 38 42 64 61 38 44 01 66 10 46 62 53 81 04 11 59 80 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 B8 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 B7 00 4D 03 03 0B 4B 01 01 53 B5 00 4D 02 07 0B 4B 09 4A 07 BD 53 BF 69 6D 36 49 52 63 6B 10 53 CF 6D 10 4D 6B 6A 10 4B 5D BF 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+aggressiveTerminalDirect: steps=233 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 7E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 81 04 11 59 57 67 0B 50 53 60 8E 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 60 62 61 38 42 64 61 38 44 01 66 10 46 62 53 81 04 11 59 80 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 B8 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 B7 00 4D 03 03 0B 4B 01 01 53 B5 00 4D 02 07 0B 4B 09 4A 07 BD 53 BF 69 6D 36 49 52 63 6B 10 53 CF 6D 10 4D 6B 6A 10 4B 5D BF 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+invertBranchOrder: steps=233 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 7E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 81 04 11 59 57 67 0B 50 53 60 8E 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 60 62 61 38 42 64 61 38 44 01 66 10 46 62 53 81 04 11 59 80 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 B8 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 B7 00 4D 03 03 0B 4B 01 01 53 B5 00 4D 02 07 0B 4B 09 4A 07 BD 53 BF 69 6D 36 49 52 63 6B 10 53 CF 6D 10 4D 6B 6A 10 4B 5D BF 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+aggressiveTerminalDirect+invertBranchOrder: steps=233 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 7E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 81 04 11 59 57 67 0B 50 53 60 8E 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 60 62 61 38 42 64 61 38 44 01 66 10 46 62 53 81 04 11 59 80 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 B8 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 B7 00 4D 03 03 0B 4B 01 01 53 B5 00 4D 02 07 0B 4B 09 4A 07 BD 53 BF 69 6D 36 49 52 63 6B 10 53 CF 6D 10 4D 6B 6A 10 4B 5D BF 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+hoistSharedHelpers: steps=235 | 51 6A 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 57 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 56 00 4D 03 03 0B 4B 01 01 53 54 00 4D 02 07 0B 4B 09 4A 07 BD 53 64 69 6D 36 49 52 63 6B 10 53 80 6D 10 4D 6B 6A 10 4B 5D 64 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 6A 65 61 38 45 64 61 38 44 01 66 10 46 65 AE 04 11 59 A3 67 0B 50 53 A7 51 6A 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 A7 62 61 38 42 64 61 38 44 01 66 10 46 62 AE 04 11 59 EA 67 50 52
+hoistSharedHelpers+hoistProcs: steps=235 | 51 AE 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 57 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 56 00 4D 03 03 0B 4B 01 01 53 54 00 4D 02 07 0B 4B 09 4A 07 BD 53 64 69 6D 36 49 52 63 6B 10 53 80 6D 10 4D 6B 6A 10 4B 5D 64 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 6A 62 61 38 42 64 61 38 44 01 66 10 46 62 AE 04 11 59 AD 67 50 52 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 AE 65 61 38 45 64 61 38 44 01 66 10 46 65 AE 04 11 59 E7 67 0B 50 53 6A 51 AE
+canonicalizeIfChains: steps=233 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 7E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 81 04 11 59 57 67 0B 50 53 60 8E 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 60 62 61 38 42 64 61 38 44 01 66 10 46 62 53 81 04 11 59 80 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 B8 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 B7 00 4D 03 03 0B 4B 01 01 53 B5 00 4D 02 07 0B 4B 09 4A 07 BD 53 BF 69 6D 36 49 52 63 6B 10 53 CF 6D 10 4D 6B 6A 10 4B 5D BF 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+freeResidualDispatchScratch: steps=233 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 7E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 81 04 11 59 57 67 0B 50 53 60 8E 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 60 62 61 38 42 64 61 38 44 01 66 10 46 62 53 81 04 11 59 80 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 B8 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 B7 00 4D 03 03 0B 4B 01 01 53 B5 00 4D 02 07 0B 4B 09 4A 07 BD 53 BF 69 6D 36 49 52 63 6B 10 53 CF 6D 10 4D 6B 6A 10 4B 5D BF 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+aliasXReuse: steps=233 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 7E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 81 04 11 59 57 67 0B 50 53 60 8E 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 60 62 61 38 42 64 61 38 44 01 66 10 46 62 53 81 04 11 59 80 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 B8 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 B7 00 4D 03 03 0B 4B 01 01 53 B5 00 4D 02 07 0B 4B 09 4A 07 BD 53 BF 69 6D 36 49 52 63 6B 10 53 CF 6D 10 4D 6B 6A 10 4B 5D BF 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+coalesceCopies: steps=233 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 7E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 81 04 11 59 57 67 0B 50 53 60 8E 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 60 62 61 38 42 64 61 38 44 01 66 10 46 62 53 81 04 11 59 80 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 B8 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 B7 00 4D 03 03 0B 4B 01 01 53 B5 00 4D 02 07 0B 4B 09 4A 07 BD 53 BF 69 6D 36 49 52 63 6B 10 53 CF 6D 10 4D 6B 6A 10 4B 5D BF 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+freeResidualDispatchScratch+canonicalizeIfChains: steps=233 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 7E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 81 04 11 59 57 67 0B 50 53 60 8E 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 60 62 61 38 42 64 61 38 44 01 66 10 46 62 53 81 04 11 59 80 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 B8 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 B7 00 4D 03 03 0B 4B 01 01 53 B5 00 4D 02 07 0B 4B 09 4A 07 BD 53 BF 69 6D 36 49 52 63 6B 10 53 CF 6D 10 4D 6B 6A 10 4B 5D BF 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+shareRandomCell: steps=233 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 7E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 81 04 11 59 57 67 0B 50 53 60 8E 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 60 62 61 38 42 64 61 38 44 01 66 10 46 62 53 81 04 11 59 80 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 B8 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 B7 00 4D 03 03 0B 4B 01 01 53 B5 00 4D 02 07 0B 4B 09 4A 07 BD 53 BF 69 6D 36 49 52 63 6B 10 53 CF 6D 10 4D 6B 6A 10 4B 5D BF 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+shareRandomCell+hoistSharedHelpers: steps=235 | 51 6A 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 57 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 56 00 4D 03 03 0B 4B 01 01 53 54 00 4D 02 07 0B 4B 09 4A 07 BD 53 64 69 6D 36 49 52 63 6B 10 53 80 6D 10 4D 6B 6A 10 4B 5D 64 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 6A 65 61 38 45 64 61 38 44 01 66 10 46 65 AE 04 11 59 A3 67 0B 50 53 A7 51 6A 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 A7 62 61 38 42 64 61 38 44 01 66 10 46 62 AE 04 11 59 EA 67 50 52
+tailBranchInversion: steps=233 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 7E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 81 04 11 59 57 67 0B 50 53 60 8E 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 60 62 61 38 42 64 61 38 44 01 66 10 46 62 53 81 04 11 59 80 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 B8 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 B7 00 4D 03 03 0B 4B 01 01 53 B5 00 4D 02 07 0B 4B 09 4A 07 BD 53 BF 69 6D 36 49 52 63 6B 10 53 CF 6D 10 4D 6B 6A 10 4B 5D BF 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion: steps=235 | 51 6A 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 57 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 56 00 4D 03 03 0B 4B 01 01 53 54 00 4D 02 07 0B 4B 09 4A 07 BD 53 64 69 6D 36 49 52 63 6B 10 53 80 6D 10 4D 6B 6A 10 4B 5D 64 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 6A 65 61 38 45 64 61 38 44 01 66 10 46 65 AE 04 11 59 A3 67 0B 50 53 A7 51 6A 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 A7 62 61 38 42 64 61 38 44 01 66 10 46 62 AE 04 11 59 EA 67 50 52
+guardedPrologueGadgets: steps=233 | 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 7E 65 61 38 45 64 61 38 44 01 66 10 46 65 53 81 04 11 59 57 67 0B 50 53 60 8E 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 60 62 61 38 42 64 61 38 44 01 66 10 46 62 53 81 04 11 59 80 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 B8 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 B7 00 4D 03 03 0B 4B 01 01 53 B5 00 4D 02 07 0B 4B 09 4A 07 BD 53 BF 69 6D 36 49 52 63 6B 10 53 CF 6D 10 4D 6B 6A 10 4B 5D BF 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52
+guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: steps=235 | 51 AE 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 57 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 56 00 4D 03 03 0B 4B 01 01 53 54 00 4D 02 07 0B 4B 09 4A 07 BD 53 64 69 6D 36 49 52 63 6B 10 53 80 6D 10 4D 6B 6A 10 4B 5D 64 6D 52 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 6C 37 35 32 52 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 6A 62 61 38 42 64 61 38 44 01 66 10 46 62 AE 04 11 59 AD 67 50 52 63 68 22 12 66 10 50 43 04 13 41 35 04 12 02 24 00 0A 05 10 34 61 34 01 10 15 13 08 10 41 64 61 37 35 57 AE 65 61 38 45 64 61 38 44 01 66 10 46 65 AE 04 11 59 E7 67 0B 50 53 6A 51 AE
+sharedBitMaskHelperCalls: steps=200 | 63 68 22 12 66 10 50 43 53 AB 4E 64 6E 37 35 57 00 65 6E 38 45 64 6E 38 44 01 66 10 46 65 53 93 04 11 59 39 67 0B 50 53 43 51 00 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 53 AB 4E 64 6E 37 35 57 43 62 6E 38 42 64 6E 38 44 01 66 10 46 62 53 93 04 11 59 92 67 50 52 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 94 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 93 00 4D 03 03 0B 4B 01 01 53 91 00 4D 02 07 0B 4B 09 4A 07 BD 53 9B 69 6D 36 49 52 63 6B 10 53 C1 6D 10 4D 6B 6A 10 4B 5D 9B 6D 52 04 13 4E 35 04 12 02 24 00 0A 05 10 34 6E 34 01 10 15 13 08 10 52 53 AB 6C 37 35 32 52
+sharedBitMaskHelperCalls+hoistSharedHelpers: steps=202 | 51 6D 4C 00 49 4D 01 63 68 13 35 68 12 11 4B 01 4A 04 B9 53 57 00 4D 68 01 63 68 13 34 11 12 4B 68 4A 04 53 56 00 4D 03 03 0B 4B 01 01 53 54 00 4D 02 07 0B 4B 09 4A 07 BD 53 64 69 6D 36 49 52 63 6B 10 53 A2 6D 10 4D 6B 6A 10 4B 5D 64 6D 52 04 13 4E 35 04 12 02 24 00 0A 05 10 34 6E 34 01 10 15 13 08 10 52 53 80 6C 37 35 32 52 63 68 22 12 66 10 50 43 53 80 4E 64 6E 37 35 57 6D 65 6E 38 45 64 6E 38 44 01 66 10 46 65 53 02 04 11 59 94 67 0B 50 53 98 51 6D 01 01 3B 04 12 0E 35 11 10 68 3B 04 12 0E 35 11 12 10 43 53 80 4E 64 6E 37 35 57 98 62 6E 38 42 64 6E 38 44 01 66 10 46 62 53 02 04 11 59 C9 67 50 52"
 `;
 
 exports[`golden listing > lowering variants are stable for examples/raja-yoga.mkpro 1`] = `
@@ -724,7 +724,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: bolknote_99_bottles; span=53, entries=53, gaps=none, compiled=53, delta=0, parity=equal
 Machine: mk61
-Optimizer rules: automatic=yes; active=4, considered=0, candidates=49, planned=0
+Optimizer rules: automatic=yes; active=4, considered=0, candidates=50, planned=0
 Budget: official=53, extra=0, physical=53
 Intent IR: lowered=yes, v2=yes; intent=9, effects=53, cells=53
 
@@ -1045,7 +1045,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: lordbss_pmk210; span=105, entries=105, gaps=none, compiled=75, delta=-30, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=12, considered=2, candidates=39, planned=0
+Optimizer rules: automatic=yes; active=12, considered=2, candidates=40, planned=0
 Budget: official=75, extra=0, physical=75
 Intent IR: lowered=yes, v2=yes; intent=102, effects=75, cells=75
 
@@ -1237,7 +1237,7 @@ Steps: 8/999999
 Delivery: hex
 Optimizer: exact maximum
 Machine: mk61
-Optimizer rules: automatic=yes; active=4, considered=0, candidates=49, planned=0
+Optimizer rules: automatic=yes; active=4, considered=0, candidates=50, planned=0
 Budget: official=8, extra=0, physical=8
 Intent IR: lowered=yes, v2=yes; intent=16, effects=8, cells=8
 
@@ -1410,7 +1410,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: kei_treasure_cave; span=105, entries=105, gaps=none, compiled=52, delta=-53, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=7, considered=2, candidates=44, planned=0
+Optimizer rules: automatic=yes; active=7, considered=2, candidates=45, planned=0
 Budget: official=52, extra=0, physical=52
 Intent IR: lowered=yes, v2=yes; intent=60, effects=52, cells=52
 
@@ -1648,7 +1648,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: monatkodenis_clock; span=63, entries=63, gaps=none, compiled=43, delta=-20, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=10, considered=1, candidates=42, planned=0
+Optimizer rules: automatic=yes; active=10, considered=1, candidates=43, planned=0
 Budget: official=43, extra=0, physical=43
 Intent IR: lowered=yes, v2=yes; intent=42, effects=43, cells=43
 
@@ -1905,7 +1905,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_dangerous_loading; span=103, entries=101, gaps=34,50, compiled=84, delta=-19, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=11, considered=2, candidates=40, planned=0
+Optimizer rules: automatic=yes; active=11, considered=2, candidates=41, planned=0
 Budget: official=84, extra=0, physical=84
 Intent IR: lowered=yes, v2=yes; intent=92, effects=84, cells=84
 
@@ -2186,7 +2186,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: lordbss_pmk164; span=105, entries=105, gaps=none, compiled=83, delta=-22, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=14, considered=2, candidates=37, planned=0
+Optimizer rules: automatic=yes; active=14, considered=2, candidates=38, planned=0
 Budget: official=83, extra=0, physical=83
 Intent IR: lowered=yes, v2=yes; intent=97, effects=83, cells=83
 
@@ -2432,7 +2432,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_e_94_digits; span=64, entries=61, gaps=29,32,35, compiled=64, delta=0, parity=equal
 Machine: mk61
-Optimizer rules: automatic=yes; active=3, considered=0, candidates=50, planned=0
+Optimizer rules: automatic=yes; active=3, considered=0, candidates=51, planned=0
 Budget: official=64, extra=0, physical=64
 Intent IR: lowered=no, v2=yes; intent=9, effects=64, cells=64
 
@@ -2696,7 +2696,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_fox_hunt_100; span=105, entries=101, gaps=10,88,94,98, compiled=104, delta=-1, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=9, considered=0, candidates=44, planned=0
+Optimizer rules: automatic=yes; active=9, considered=0, candidates=45, planned=0
 Budget: official=104, extra=0, physical=104
 Intent IR: lowered=yes, v2=yes; intent=47, effects=104, cells=104
 
@@ -3041,7 +3041,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: monatkodenis_fox_hunt_mk61; span=92, entries=92, gaps=none, compiled=65, delta=-27, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=7, considered=0, candidates=46, planned=0
+Optimizer rules: automatic=yes; active=7, considered=0, candidates=47, planned=0
 Budget: official=65, extra=0, physical=65
 Intent IR: lowered=yes, v2=yes; intent=40, effects=65, cells=65
 
@@ -3199,7 +3199,7 @@ Steps: 29/999999
 Delivery: hex
 Optimizer: exact maximum
 Machine: mk61
-Optimizer rules: automatic=yes; active=6, considered=0, candidates=47, planned=0
+Optimizer rules: automatic=yes; active=6, considered=0, candidates=48, planned=0
 Budget: official=29, extra=0, physical=29
 Intent IR: lowered=yes, v2=yes; intent=27, effects=29, cells=29
 
@@ -3509,7 +3509,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_game_100_pig; span=103, entries=101, gaps=24,29, compiled=103, delta=0, parity=equal
 Machine: mk61
-Optimizer rules: automatic=yes; active=14, considered=1, candidates=38, planned=0
+Optimizer rules: automatic=yes; active=14, considered=1, candidates=39, planned=0
 Budget: official=103, extra=0, physical=103
 Intent IR: lowered=yes, v2=yes; intent=116, effects=103, cells=103
 
@@ -3763,7 +3763,7 @@ Steps: 24/999999
 Delivery: hex
 Optimizer: exact maximum
 Machine: mk61
-Optimizer rules: automatic=yes; active=8, considered=2, candidates=43, planned=0
+Optimizer rules: automatic=yes; active=8, considered=2, candidates=44, planned=0
 Budget: official=24, extra=0, physical=24
 Intent IR: lowered=yes, v2=yes; intent=34, effects=24, cells=24
 
@@ -4129,7 +4129,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: lordbss_pmk151; span=104, entries=104, gaps=none, compiled=101, delta=-3, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=11, considered=0, candidates=42, planned=0
+Optimizer rules: automatic=yes; active=11, considered=0, candidates=43, planned=0
 Budget: official=101, extra=0, physical=101
 Intent IR: lowered=yes, v2=yes; intent=97, effects=101, cells=101
 
@@ -4406,7 +4406,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: lordbss_pmk38; span=58, entries=58, gaps=none, compiled=47, delta=-11, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=7, considered=2, candidates=44, planned=0
+Optimizer rules: automatic=yes; active=7, considered=2, candidates=45, planned=0
 Budget: official=47, extra=0, physical=47
 Intent IR: lowered=yes, v2=yes; intent=49, effects=47, cells=47
 
@@ -4682,7 +4682,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: lordbss_pmk39; span=104, entries=104, gaps=none, compiled=94, delta=-10, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=8, considered=0, candidates=45, planned=0
+Optimizer rules: automatic=yes; active=8, considered=0, candidates=46, planned=0
 Budget: official=94, extra=0, physical=94
 Intent IR: lowered=yes, v2=yes; intent=34, effects=94, cells=94
 
@@ -4940,7 +4940,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_minesweeper_9x9; span=97, entries=95, gaps=76,78, compiled=90, delta=-7, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=10, considered=0, candidates=43, planned=0
+Optimizer rules: automatic=yes; active=10, considered=0, candidates=44, planned=0
 Budget: official=90, extra=0, physical=90
 Intent IR: lowered=yes, v2=yes; intent=34, effects=90, cells=90
 
@@ -5327,7 +5327,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: kei_treasure_cave; span=105, entries=105, gaps=none, compiled=137, delta=32, parity=larger
 Machine: mk61
-Optimizer rules: automatic=yes; active=15, considered=1, candidates=37, planned=0
+Optimizer rules: automatic=yes; active=15, considered=1, candidates=38, planned=0
 Budget: official=137, extra=0, physical=137
 Intent IR: lowered=yes, v2=yes; intent=136, effects=137, cells=137
 
@@ -5846,7 +5846,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_demo; span=105, entries=105, gaps=none, compiled=165, delta=60, parity=larger
 Machine: mk61
-Optimizer rules: automatic=yes; active=13, considered=0, candidates=40, planned=0
+Optimizer rules: automatic=yes; active=13, considered=0, candidates=41, planned=0
 Budget: official=165, extra=0, physical=165
 Intent IR: lowered=yes, v2=yes; intent=151, effects=165, cells=165
 
@@ -6377,7 +6377,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: lordbss_pmk198; span=105, entries=105, gaps=none, compiled=170, delta=65, parity=larger
 Machine: mk61
-Optimizer rules: automatic=yes; active=13, considered=1, candidates=39, planned=0
+Optimizer rules: automatic=yes; active=13, considered=1, candidates=40, planned=0
 Budget: official=170, extra=0, physical=170
 Intent IR: lowered=yes, v2=yes; intent=137, effects=170, cells=170
 
@@ -6976,7 +6976,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_labyrinth777; span=105, entries=104, gaps=35, compiled=206, delta=101, parity=larger
 Machine: mk61
-Optimizer rules: automatic=yes; active=15, considered=2, candidates=36, planned=0
+Optimizer rules: automatic=yes; active=15, considered=2, candidates=37, planned=0
 Budget: official=206, extra=0, physical=206
 Intent IR: lowered=yes, v2=yes; intent=182, effects=206, cells=206
 
@@ -7396,7 +7396,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: lordbss_pmk53; span=105, entries=105, gaps=none, compiled=133, delta=28, parity=larger
 Machine: mk61
-Optimizer rules: automatic=yes; active=10, considered=0, candidates=43, planned=0
+Optimizer rules: automatic=yes; active=10, considered=0, candidates=44, planned=0
 Budget: official=133, extra=0, physical=133
 Intent IR: lowered=yes, v2=yes; intent=133, effects=133, cells=133
 
@@ -7885,7 +7885,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_teleport; span=105, entries=105, gaps=none, compiled=195, delta=90, parity=larger
 Machine: mk61
-Optimizer rules: automatic=yes; active=17, considered=1, candidates=35, planned=0
+Optimizer rules: automatic=yes; active=17, considered=1, candidates=36, planned=0
 Budget: official=195, extra=0, physical=195
 Intent IR: lowered=yes, v2=yes; intent=121, effects=195, cells=195
 
@@ -8079,259 +8079,244 @@ Setup Block:
 # Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  63  | П→X 3                   | display __inline_show_32_0 source
+   00 |  63  | П→X 3                   | display __inline_show_28_0 source
    01 |  68  | П→X 8                   | constant 100 base 10
    02 |  22  | F x²                    | constant 100
    03 |  12  | ×                       | packed display field shift
-   04 |  66  | П→X 6                   | display __inline_show_32_0 source
+   04 |  66  | П→X 6                   | display __inline_show_28_0 source
    05 |  10  | +                       | packed display field append
-   06 |  50  | С/П                     | show __inline_show_32_0
+   06 |  50  | С/П                     | show __inline_show_28_0
    07 |  43  | X→П 3                   | read cell
    08 |  53  | ПП                      | bit_mask helper
-   09 |  B8  | >B8                     | bit_mask helper
+   09 |  AB  | >AB                     | bit_mask helper
    10 |  4E  | X→П e                   | cell bit mask scratch
    11 |  64  | П→X 4                   | recall occupied
    12 |  6E  | П→X e                   | reuse cell bit mask
    13 |  37  | К ∧                     | membership test with reused mask
    14 |  35  | К {x}                   | membership fraction
-   15 |  5E  | F x=0                   | false branch for !=
-   16 |  19  | 19                      | false branch for !=
-   17 |  51  | БП                      | if end
-   18 |  00  | 00                      | if end
-   19 |  65  | П→X 5                   | recall player_marks
-   20 |  6E  | П→X e                   | reuse cell bit mask
-   21 |  38  | К ∨                     | bit_set with reused mask
-   22 |  45  | X→П 5                   | set player_marks
-   23 |  64  | П→X 4                   | recall occupied
-   24 |  6E  | П→X e                   | reuse cell bit mask
-   25 |  38  | К ∨                     | bit_set with reused mask
-   26 |  44  | X→П 4                   | set occupied
-   27 |  01  | 1                       |
-   28 |  66  | П→X 6                   | recall turn_count
-   29 |  10  | +                       | expr +
-   30 |  46  | X→П 6                   | set turn_count
-   31 |  65  | П→X 5                   | recall player_marks
-   32 |  53  | ПП                      | line_count player_marks
-   33 |  6A  | >6A                     | line_count player_marks
-   34 |  04  | 4                       |
-   35 |  11  | −                       | condition compare
-   36 |  59  | F x≥0                   | false branch for >=
-   37 |  40  | 40                      | false branch for >=
-   38 |  67  | П→X 7                   | preload const 4444
-   39 |  50  | С/П                     | halt
-   40 |  53  | ПП                      | proc call calculator_reply
-   41 |  44  | 44                      | proc call calculator_reply
-   42 |  51  | БП                      | loop back
-   43 |  00  | 00                      | loop back
-   44 |  66  | П→X 6                   | recall turn_count
-   45 |  01  | 1                       |
-   46 |  06  | 6                       |
-   47 |  11  | −                       | condition compare
-   48 |  59  | F x≥0                   | false branch for >=
-   49 |  52  | 52                      | false branch for >=
-   50 |  00  | 0                       | halt
-   51 |  50  | С/П                     | halt
+   15 |  57  | F x≠0                   | false branch for ==
+   16 |  00  | 00                      | false branch for ==
+   17 |  65  | П→X 5                   | recall player_marks
+   18 |  6E  | П→X e                   | reuse cell bit mask
+   19 |  38  | К ∨                     | bit_set with reused mask
+   20 |  45  | X→П 5                   | set player_marks
+   21 |  64  | П→X 4                   | recall occupied
+   22 |  6E  | П→X e                   | reuse cell bit mask
+   23 |  38  | К ∨                     | bit_set with reused mask
+   24 |  44  | X→П 4                   | set occupied
+   25 |  01  | 1                       |
+   26 |  66  | П→X 6                   | recall turn_count
+   27 |  10  | +                       | expr +
+   28 |  46  | X→П 6                   | set turn_count
+   29 |  65  | П→X 5                   | recall player_marks
+   30 |  53  | ПП                      | line_count player_marks
+   31 |  93  | 93                      | line_count player_marks
+   32 |  04  | 4                       |
+   33 |  11  | −                       | condition compare
+   34 |  59  | F x≥0                   | false branch for >=
+   35 |  38  | 38                      | false branch for >=
+   36 |  67  | П→X 7                   | preload const 4444
+   37 |  50  | С/П                     | halt
+   38 |  53  | ПП                      | proc call calculator_reply
+   39 |  42  | 42                      | proc call calculator_reply
+   40 |  51  | БП                      | loop back
+   41 |  00  | 00                      | loop back
+   42 |  01  | 1                       |
+   43 |  01  | 1                       |
+   44 |  3B  | К СЧ                    | random()
+   45 |  04  | 4                       |
+   46 |  12  | ×                       | expr *
+   47 |  0E  | В↑                      | random int keep scaled draw
+   48 |  35  | К {x}                   | random int fractional part
+   49 |  11  | −                       | random int floor
+   50 |  10  | +                       | expr +
+   51 |  68  | П→X 8                   | preload const 10
    52 |  3B  | К СЧ                    | random()
    53 |  04  | 4                       |
    54 |  12  | ×                       | expr *
    55 |  0E  | В↑                      | random int keep scaled draw
    56 |  35  | К {x}                   | random int fractional part
    57 |  11  | −                       | random int floor
-   58 |  01  | 1                       |
+   58 |  12  | ×                       | expr *
    59 |  10  | +                       | expr +
-   60 |  68  | П→X 8                   | preload const 10
-   61 |  3B  | К СЧ                    | random()
-   62 |  04  | 4                       |
-   63 |  12  | ×                       | expr *
-   64 |  0E  | В↑                      | random int keep scaled draw
-   65 |  35  | К {x}                   | random int fractional part
-   66 |  11  | −                       | random int floor
-   67 |  01  | 1                       |
-   68 |  10  | +                       | expr +
-   69 |  12  | ×                       | expr *
-   70 |  10  | +                       | expr +
-   71 |  43  | X→П 3                   | set cell
-   72 |  53  | ПП                      | bit_mask helper
-   73 |  B8  | >B8                     | bit_mask helper
-   74 |  4E  | X→П e                   | cell bit mask scratch
-   75 |  64  | П→X 4                   | recall occupied
-   76 |  6E  | П→X e                   | reuse cell bit mask
-   77 |  37  | К ∧                     | membership test with reused mask
-   78 |  35  | К {x}                   | membership fraction
-   79 |  5E  | F x=0                   | false branch for !=
-   80 |  83  | 83                      | false branch for !=
-   81 |  51  | БП                      | tail call calculator_reply
-   82 |  44  | 44                      | proc call calculator_reply
-   83 |  62  | П→X 2                   | recall calculator_marks
-   84 |  6E  | П→X e                   | reuse cell bit mask
-   85 |  38  | К ∨                     | bit_set with reused mask
-   86 |  42  | X→П 2                   | set calculator_marks
-   87 |  64  | П→X 4                   | recall occupied
-   88 |  6E  | П→X e                   | reuse cell bit mask
-   89 |  38  | К ∨                     | bit_set with reused mask
-   90 |  44  | X→П 4                   | set occupied
-   91 |  01  | 1                       |
-   92 |  66  | П→X 6                   | recall turn_count
-   93 |  10  | +                       | expr +
-   94 |  46  | X→П 6                   | set turn_count
-   95 |  62  | П→X 2                   | recall calculator_marks
-   96 |  53  | ПП                      | line_count calculator_marks
-   97 |  6A  | >6A                     | line_count calculator_marks
-   98 |  04  | 4                       |
-   99 |  11  | −                       | condition compare
-   A0 |  59  | F x≥0                   | false branch for >=
-   A1 |  69  | >69                     | false branch for >=
-   A2 |  67  | П→X 7                   | constant -4444 base 4444
-   A3 |  0B  | /-/                     | constant -4444
-   A4 |  50  | С/П                     | halt
-  >69 |  52  | В/О                     | implicit return from proc
-  >6A |  4C  | X→П c                   | line count mask
-  >6B |  00  | 0                       | line_count total
-  >6C |  49  | X→П 9                   | line_count total
-  >6D |  4D  | X→П d                   | line_count current line
-  >6E |  01  | 1                       |
-  >6F |  63  | П→X 3                   | recall cell
-  >70 |  68  | П→X 8                   | preload const 10
-  >71 |  13  | ÷                       | expr /
-  >72 |  35  | К {x}                   | frac()
-  >73 |  68  | П→X 8                   | preload const 10
-  >74 |  12  | ×                       | expr *
-  >75 |  11  | −                       | expr -
-  >76 |  4B  | X→П b                   | line_count offset
-  >77 |  01  | 1                       |
-  >78 |  4A  | X→П a                   | line_count step
-  >79 |  04  | 4                       |
-  >7A |  B9  | К X→П 9                 | line_count counter; indirect memory table indirect-memory-target=0
-  >7B |  53  | ПП                      | proc call return suffix gadget
-  >7C |  A1  | >A1                     | return suffix gadget target
-  >7D |  00  | 0                       | line_count current line
-  >7E |  4D  | X→П d                   | line_count current line
-  >7F |  68  | П→X 8                   | preload const 10
-  >80 |  01  | 1                       |
-  >81 |  63  | П→X 3                   | recall cell
-  >82 |  68  | П→X 8                   | preload const 10
-  >83 |  13  | ÷                       | expr /
-  >84 |  34  | К [x]                   | int()
-  >85 |  11  | −                       | expr -
-  >86 |  12  | ×                       | expr *
-  >87 |  4B  | X→П b                   | line_count offset
-  >88 |  68  | П→X 8                   | preload const 10
-  >89 |  4A  | X→П a                   | line_count step
-  >8A |  04  | 4                       |
-  >8B |  53  | ПП                      | proc call return suffix gadget
-  >8C |  A0  | >A0                     | return suffix gadget target
-  >8D |  00  | 0                       | line_count current line
-  >8E |  4D  | X→П d                   | line_count current line
-  >8F |  03  | 3                       |
-  >90 |  03  | 3                       |
-  >91 |  0B  | /-/                     | negative number
-  >92 |  4B  | X→П b                   | line_count offset
-  >93 |  01  | 1                       |
-  >94 |  01  | 1                       |
-  >95 |  53  | ПП                      | proc call return suffix gadget
-  >96 |  9E  | >9E                     | return suffix gadget target
-  >97 |  00  | 0                       | line_count current line
-  >98 |  4D  | X→П d                   | line_count current line
-  >99 |  02  | 2                       |
-  >9A |  07  | 7                       |
-  >9B |  0B  | /-/                     | negative number
-  >9C |  4B  | X→П b                   | line_count offset
-  >9D |  09  | 9                       |
-  >9E |  4A  | X→П a                   | line_count step
-  >9F |  07  | 7                       |
-  >A0 |  BD  | К X→П d                 | line_count counter; indirect memory table indirect-memory-target=0
-  >A1 |  53  | ПП                      | line_count line progression
-  >A2 |  A8  | >A8                     | line_count line progression
-  >A3 |  69  | П→X 9                   | line_count total
-  >A4 |  6D  | П→X d                   | line_count current line
-  >A5 |  36  | К max                   | line_count best line
-  >A6 |  49  | X→П 9                   | line_count total
-  >A7 |  52  | В/О                     | line_count return
-  >A8 |  63  | П→X 3                   | recall cell
-  >A9 |  6B  | П→X b                   | recall __spatial_count_offset
-  >AA |  10  | +                       | expr +
-  >AB |  53  | ПП                      | spatial hit __spatial_count_mask
-  >AC |  CE  | >CE                     | spatial hit __spatial_count_mask
-  >AD |  6D  | П→X d                   | line_count line accumulator
-  >AE |  10  | +                       | line_count add hit
-  >AF |  4D  | X→П d                   | line_count line accumulator
-  >B0 |  6B  | П→X b                   | line_count offset
-  >B1 |  6A  | П→X a                   | line_count step
-  >B2 |  10  | +                       | line_count next offset
-  >B3 |  4B  | X→П b                   | line_count offset
-  >B4 |  5D  | F L0                    | line_count line loop
-  >B5 |  A8  | >A8                     | line_count line loop
-  >B6 |  6D  | П→X d                   | line_count current line
-  >B7 |  52  | В/О                     | line_count line progression return
-  >B8 |  04  | 4                       |
-  >B9 |  13  | ÷                       | bit mask quotient
-  >BA |  4E  | X→П e                   | bit mask quotient
-  >BB |  35  | К {x}                   | bit mask remainder fraction
-  >BC |  04  | 4                       |
-  >BD |  12  | ×                       | bit mask remainder scale
-  >BE |  02  | 2                       |
-  >BF |  24  | F xʸ                    | bit mask power
-  >C0 |  00  | 0                       |
-  >C1 |  0A  | .                       |
-  >C2 |  05  | 5                       |
-  >C3 |  10  | +                       | bit mask round bias
-  >C4 |  34  | К [x]                   | bit mask round
-  >C5 |  6E  | П→X e                   | bit mask quotient
-  >C6 |  34  | К [x]                   | bit mask digit index
-  >C7 |  01  | 1                       |
-  >C8 |  10  | +                       | bit mask decade index
-  >C9 |  15  | F 10ˣ                   | bit mask decade
-  >CA |  13  | ÷                       | bit mask fractional place
-  >CB |  08  | 8                       |
-  >CC |  10  | +                       | bit mask anchor
-  >CD |  52  | В/О                     | bit_mask return
-  >CE |  53  | ПП                      | spatial hit bit_mask
-  >CF |  B8  | >B8                     | spatial hit bit_mask
-  >D0 |  6C  | П→X c                   | spatial hit mask
-  >D1 |  37  | К ∧                     | spatial hit test
-  >D2 |  35  | К {x}                   | spatial hit membership fraction
-  >D3 |  32  | К ЗН                    | spatial hit to count
-  >D4 |  52  | В/О                     | spatial hit return
+   60 |  43  | X→П 3                   | set cell
+   61 |  53  | ПП                      | bit_mask helper
+   62 |  AB  | >AB                     | bit_mask helper
+   63 |  4E  | X→П e                   | cell bit mask scratch
+   64 |  64  | П→X 4                   | recall occupied
+   65 |  6E  | П→X e                   | reuse cell bit mask
+   66 |  37  | К ∧                     | membership test with reused mask
+   67 |  35  | К {x}                   | membership fraction
+   68 |  57  | F x≠0                   | false branch for ==
+   69 |  42  | 42                      | false branch for ==
+   70 |  62  | П→X 2                   | recall calculator_marks
+   71 |  6E  | П→X e                   | reuse cell bit mask
+   72 |  38  | К ∨                     | bit_set with reused mask
+   73 |  42  | X→П 2                   | set calculator_marks
+   74 |  64  | П→X 4                   | recall occupied
+   75 |  6E  | П→X e                   | reuse cell bit mask
+   76 |  38  | К ∨                     | bit_set with reused mask
+   77 |  44  | X→П 4                   | set occupied
+   78 |  01  | 1                       |
+   79 |  66  | П→X 6                   | recall turn_count
+   80 |  10  | +                       | expr +
+   81 |  46  | X→П 6                   | set turn_count
+   82 |  62  | П→X 2                   | recall calculator_marks
+   83 |  53  | ПП                      | line_count calculator_marks
+   84 |  93  | 93                      | line_count calculator_marks
+   85 |  04  | 4                       |
+   86 |  11  | −                       | condition compare
+   87 |  59  | F x≥0                   | false branch for >=
+   88 |  92  | 92                      | false branch for >=
+   89 |  67  | П→X 7                   | constant -4444 base 4444
+   90 |  0B  | /-/                     | constant -4444
+   91 |  50  | С/П                     | halt
+   92 |  52  | В/О                     | implicit return from proc
+   93 |  4C  | X→П c                   | line count mask
+   94 |  00  | 0                       | line_count total
+   95 |  49  | X→П 9                   | line_count total
+   96 |  4D  | X→П d                   | line_count current line
+   97 |  01  | 1                       |
+   98 |  63  | П→X 3                   | recall cell
+   99 |  68  | П→X 8                   | preload const 10
+   A0 |  13  | ÷                       | expr /
+   A1 |  35  | К {x}                   | frac()
+   A2 |  68  | П→X 8                   | preload const 10
+   A3 |  12  | ×                       | expr *
+   A4 |  11  | −                       | expr -
+  >69 |  4B  | X→П b                   | line_count offset
+  >6A |  01  | 1                       |
+  >6B |  4A  | X→П a                   | line_count step
+  >6C |  04  | 4                       |
+  >6D |  B9  | К X→П 9                 | line_count counter; indirect memory table indirect-memory-target=0
+  >6E |  53  | ПП                      | proc call return suffix gadget
+  >6F |  94  | >94                     | return suffix gadget target
+  >70 |  00  | 0                       | line_count current line
+  >71 |  4D  | X→П d                   | line_count current line
+  >72 |  68  | П→X 8                   | preload const 10
+  >73 |  01  | 1                       |
+  >74 |  63  | П→X 3                   | recall cell
+  >75 |  68  | П→X 8                   | preload const 10
+  >76 |  13  | ÷                       | expr /
+  >77 |  34  | К [x]                   | int()
+  >78 |  11  | −                       | expr -
+  >79 |  12  | ×                       | expr *
+  >7A |  4B  | X→П b                   | line_count offset
+  >7B |  68  | П→X 8                   | preload const 10
+  >7C |  4A  | X→П a                   | line_count step
+  >7D |  04  | 4                       |
+  >7E |  53  | ПП                      | proc call return suffix gadget
+  >7F |  93  | >93                     | return suffix gadget target
+  >80 |  00  | 0                       | line_count current line
+  >81 |  4D  | X→П d                   | line_count current line
+  >82 |  03  | 3                       |
+  >83 |  03  | 3                       |
+  >84 |  0B  | /-/                     | negative number
+  >85 |  4B  | X→П b                   | line_count offset
+  >86 |  01  | 1                       |
+  >87 |  01  | 1                       |
+  >88 |  53  | ПП                      | proc call return suffix gadget
+  >89 |  91  | >91                     | return suffix gadget target
+  >8A |  00  | 0                       | line_count current line
+  >8B |  4D  | X→П d                   | line_count current line
+  >8C |  02  | 2                       |
+  >8D |  07  | 7                       |
+  >8E |  0B  | /-/                     | negative number
+  >8F |  4B  | X→П b                   | line_count offset
+  >90 |  09  | 9                       |
+  >91 |  4A  | X→П a                   | line_count step
+  >92 |  07  | 7                       |
+  >93 |  BD  | К X→П d                 | line_count counter; indirect memory table indirect-memory-target=0
+  >94 |  53  | ПП                      | line_count line progression
+  >95 |  9B  | >9B                     | line_count line progression
+  >96 |  69  | П→X 9                   | line_count total
+  >97 |  6D  | П→X d                   | line_count current line
+  >98 |  36  | К max                   | line_count best line
+  >99 |  49  | X→П 9                   | line_count total
+  >9A |  52  | В/О                     | line_count return
+  >9B |  63  | П→X 3                   | recall cell
+  >9C |  6B  | П→X b                   | recall __spatial_count_offset
+  >9D |  10  | +                       | expr +
+  >9E |  53  | ПП                      | spatial hit __spatial_count_mask
+  >9F |  C1  | >C1                     | spatial hit __spatial_count_mask
+  >A0 |  6D  | П→X d                   | line_count line accumulator
+  >A1 |  10  | +                       | line_count add hit
+  >A2 |  4D  | X→П d                   | line_count line accumulator
+  >A3 |  6B  | П→X b                   | line_count offset
+  >A4 |  6A  | П→X a                   | line_count step
+  >A5 |  10  | +                       | line_count next offset
+  >A6 |  4B  | X→П b                   | line_count offset
+  >A7 |  5D  | F L0                    | line_count line loop
+  >A8 |  9B  | >9B                     | line_count line loop
+  >A9 |  6D  | П→X d                   | line_count current line
+  >AA |  52  | В/О                     | line_count line progression return
+  >AB |  04  | 4                       |
+  >AC |  13  | ÷                       | bit mask quotient
+  >AD |  4E  | X→П e                   | bit mask quotient
+  >AE |  35  | К {x}                   | bit mask remainder fraction
+  >AF |  04  | 4                       |
+  >B0 |  12  | ×                       | bit mask remainder scale
+  >B1 |  02  | 2                       |
+  >B2 |  24  | F xʸ                    | bit mask power
+  >B3 |  00  | 0                       |
+  >B4 |  0A  | .                       |
+  >B5 |  05  | 5                       |
+  >B6 |  10  | +                       | bit mask round bias
+  >B7 |  34  | К [x]                   | bit mask round
+  >B8 |  6E  | П→X e                   | bit mask quotient
+  >B9 |  34  | К [x]                   | bit mask digit index
+  >BA |  01  | 1                       |
+  >BB |  10  | +                       | bit mask decade index
+  >BC |  15  | F 10ˣ                   | bit mask decade
+  >BD |  13  | ÷                       | bit mask fractional place
+  >BE |  08  | 8                       |
+  >BF |  10  | +                       | bit mask anchor
+  >C0 |  52  | В/О                     | bit_mask return
+  >C1 |  53  | ПП                      | spatial hit bit_mask
+  >C2 |  AB  | >AB                     | spatial hit bit_mask
+  >C3 |  6C  | П→X c                   | spatial hit mask
+  >C4 |  37  | К ∧                     | spatial hit test
+  >C5 |  35  | К {x}                   | spatial hit membership fraction
+  >C6 |  32  | К ЗН                    | spatial hit to count
+  >C7 |  52  | В/О                     | spatial hit return
 
 ## Hex
 00: 63 68 22 12 66 10 50 43
-08: 53 B8 4E 64 6E 37 35 5E
-16: 19 51 00 65 6E 38 45 64
-24: 6E 38 44 01 66 10 46 65
-32: 53 6A 04 11 59 40 67 50
-40: 53 44 51 00 66 01 06 11
-48: 59 52 00 50 3B 04 12 0E
-56: 35 11 01 10 68 3B 04 12
-64: 0E 35 11 01 10 12 10 43
-72: 53 B8 4E 64 6E 37 35 5E
-80: 83 51 44 62 6E 38 42 64
-88: 6E 38 44 01 66 10 46 62
-96: 53 6A 04 11 59 69 67 0B
-A4: 50 52 4C 00 49 4D 01 63
->70: 68 13 35 68 12 11 4B 01
->78: 4A 04 B9 53 A1 00 4D 68
->80: 01 63 68 13 34 11 12 4B
->88: 68 4A 04 53 A0 00 4D 03
->90: 03 0B 4B 01 01 53 9E 00
->98: 4D 02 07 0B 4B 09 4A 07
->A0: BD 53 A8 69 6D 36 49 52
->A8: 63 6B 10 53 CE 6D 10 4D
->B0: 6B 6A 10 4B 5D A8 6D 52
->B8: 04 13 4E 35 04 12 02 24
->C0: 00 0A 05 10 34 6E 34 01
->C8: 10 15 13 08 10 52 53 B8
->D0: 6C 37 35 32 52
+08: 53 AB 4E 64 6E 37 35 57
+16: 00 65 6E 38 45 64 6E 38
+24: 44 01 66 10 46 65 53 93
+32: 04 11 59 38 67 50 53 42
+40: 51 00 01 01 3B 04 12 0E
+48: 35 11 10 68 3B 04 12 0E
+56: 35 11 12 10 43 53 AB 4E
+64: 64 6E 37 35 57 42 62 6E
+72: 38 42 64 6E 38 44 01 66
+80: 10 46 62 53 93 04 11 59
+88: 92 67 0B 50 52 4C 00 49
+96: 4D 01 63 68 13 35 68 12
+A4: 11 4B 01 4A 04 B9 53 94
+>70: 00 4D 68 01 63 68 13 34
+>78: 11 12 4B 68 4A 04 53 93
+>80: 00 4D 03 03 0B 4B 01 01
+>88: 53 91 00 4D 02 07 0B 4B
+>90: 09 4A 07 BD 53 9B 69 6D
+>98: 36 49 52 63 6B 10 53 C1
+>A0: 6D 10 4D 6B 6A 10 4B 5D
+>A8: 9B 6D 52 04 13 4E 35 04
+>B0: 12 02 24 00 0A 05 10 34
+>B8: 6E 34 01 10 15 13 08 10
+>C0: 52 53 AB 6C 37 35 32 52
 
 ## Explain
 MK-Pro compile report
-Steps: 213/999999
+Steps: 200/999999
 Delivery: hex
 Optimizer: exact maximum
-Reference: anvarov_tic_tac_toe_4x4; span=105, entries=105, gaps=none, compiled=213, delta=108, parity=larger
+Reference: anvarov_tic_tac_toe_4x4; span=105, entries=105, gaps=none, compiled=200, delta=95, parity=larger
 Machine: mk61
-Optimizer rules: automatic=yes; active=9, considered=1, candidates=43, planned=0
-Budget: official=213, extra=0, physical=213
-Intent IR: lowered=yes, v2=yes; intent=76, effects=213, cells=213
+Optimizer rules: automatic=yes; active=11, considered=0, candidates=43, planned=0
+Budget: official=200, extra=0, physical=200
+Intent IR: lowered=yes, v2=yes; intent=68, effects=200, cells=200
 
 Preloads:
   turn_count -> R6: 0 (outside program cells)
@@ -8351,53 +8336,49 @@ Registers:
 Labels:
    main: 00
   __loop_0: 00
-  __if_false_1: 19
-  __if_false_3: 40
-  __if_end_2: 42
-  calculator_reply: 44
-  __if_false_4: 52
-  __if_false_5: 83
-  __if_false_7: >69
-  __if_end_6: >69
-  __line_count_0: >6A
-  __return_suffix_gadget_0: >9E
-  __return_suffix_gadget_1: >A0
-  __return_suffix_gadget_2: >A1
-  __line_count_line_progression_0: >A8
-  __line_count_line_loop_8: >A8
-  __bit_mask_0: >B8
-  __spatial_hit___spatial_count_mask: >CE
+  __if_false_2: 38
+  __if_false_1: 40
+  calculator_reply: 42
+  __if_false_5: 92
+  __if_false_3: 92
+  __if_end_4: 92
+  __line_count_0: 93
+  __return_suffix_gadget_0: >91
+  __return_suffix_gadget_1: >93
+  __return_suffix_gadget_2: >94
+  __line_count_line_progression_0: >9B
+  __line_count_line_loop_6: >9B
+  __bit_mask_0: >AB
+  __spatial_hit___spatial_count_mask: >C1
 
 Optimizations:
   - expression-constant-folder: Folded 3 constant expression node(s) before code generation.
-  - terminal-loop-screen-elision: Elided 2 terminal shows already provided by the next loop header.
-  - intent-domain-lowering: Lowered 5 state fields and 4 rules through the generic intent pipeline.
+  - terminal-loop-screen-elision: Elided 1 terminal show already provided by the next loop header.
+  - intent-domain-lowering: Lowered 5 state fields and 3 rules through the generic intent pipeline.
   - auto-preload-initial-state: Moved initial state into setup/preload values so official program cells stay focused on turn logic.
-  - display-strategy-selection: Selected decimal-pack for screen __inline_show_32_0.
+  - display-strategy-selection: Selected decimal-pack for screen __inline_show_28_0.
   - constant-synthesis: Built constant 100 by squared preloaded R8 (10) (2 cells instead of direct 3).
-  - packed-display-lowering: Display __inline_show_32_0 may use display-byte encodings in later layout passes.
-  - show-read-fusion: Fused show __inline_show_32_0 and read cell into one calculator stop.
+  - packed-display-lowering: Display __inline_show_28_0 may use display-byte encodings in later layout passes.
+  - show-read-fusion: Fused show __inline_show_28_0 and read cell into one calculator stop.
   - bit-mask-helper-call: Shared bit_mask(cell) through __bit_mask_0.
   - spatial-line-count-helper-call: Reused shared line_count helper for player_marks.
   - preloaded-constant: Used preloaded R7 for constant 4444.
-  - single-use-rule-inline: Inlined single-use rule player_wins at line 43.
+  - single-use-rule-inline: Inlined single-use rule player_wins at line 36.
   - proc-call-lowering: Compiled call to rule calculator_reply as ПП/В/О subroutine.
-  - terminal-branch-end-elision: Omitted unreachable if-end jump after terminal then branch at line 42.
-  - cell-membership-mask-run-reuse: Reused the failed membership mask when setting player_marks, occupied after line 35.
-  - single-use-rule-inline: Inlined single-use rule draw at line 53.
+  - terminal-branch-end-elision: Omitted unreachable if-end jump after terminal then branch at line 35.
+  - cell-membership-mask-run-reuse: Reused the failed membership mask when setting player_marks, occupied after line 31.
   - random-range-lowering: Lowered random(4) as random() * max.
   - int-random-range-lowering: Lowered int(random(4)) without К [x] so the MK-61 random sequence keeps moving.
   - preloaded-constant: Used preloaded R8 for constant 10.
   - random-range-lowering: Lowered random(4) as random() * max.
   - int-random-range-lowering: Lowered int(random(4)) without К [x] so the MK-61 random sequence keeps moving.
   - bit-mask-helper-call: Shared bit_mask(cell) through __bit_mask_0.
-  - proc-call-lowering: Compiled call to rule calculator_reply as ПП/В/О subroutine.
   - spatial-line-count-helper-call: Reused shared line_count helper for calculator_marks.
   - constant-synthesis: Built constant -4444 by changed the sign of preloaded R7 (4444) (2 cells instead of direct 5).
-  - single-use-rule-inline: Inlined single-use rule calculator_wins at line 65.
-  - terminal-branch-end-elision: Omitted unreachable if-end jump after terminal then branch at line 64.
-  - cell-membership-mask-run-reuse: Reused the failed membership mask when setting calculator_marks, occupied after line 57.
-  - terminal-branch-end-elision: Omitted unreachable if-end jump after terminal then branch at line 52.
+  - single-use-rule-inline: Inlined single-use rule calculator_wins at line 51.
+  - terminal-branch-end-elision: Omitted unreachable if-end jump after terminal then branch at line 50.
+  - proc-call-lowering: Compiled call to rule calculator_reply as ПП/В/О subroutine.
+  - cell-membership-mask-run-reuse: Reused the failed membership mask when setting calculator_marks, occupied after line 46.
   - known-zero-reuse: Reused known zero in X for line_count current line.
   - preloaded-constant: Used preloaded R8 for constant 10.
   - preloaded-constant: Used preloaded R8 for constant 10.
@@ -8412,18 +8393,19 @@ Optimizations:
   - spatial-hit-bit-mask-helper-reuse: Reused shared bit_mask helper __bit_mask_0 inside spatial hit __spatial_hit___spatial_count_mask.
   - tail-call-lowering: Replaced 1 subroutine tail call with direct jump(s).
   - store-recall-peephole: Dropped 3 redundant П->X immediately after X->П to the same register.
-  - jump-thread: Threaded 1 jump(s) through trampoline labels to the final target.
+  - jump-thread: Threaded 3 jump(s) through trampoline labels to the final target.
   - indirect-memory-table: Rewrote 4 direct memory access(es) through an existing stable selector.
+  - dead-code-after-halt: Removed 1 unreachable op(s) from the entry CFG.
   - return-suffix-gadget: Shared 1 return/tail-call gadget (0 jump, 1 call; 7 cells saved). (+Shared 1 return/tail-call gadget (0 jump, 1 call; 5 cells saved).) (+Shared 1 return/tail-call gadget (0 jump, 1 call; 4 cells saved).)
-  - demote-constant-indirect-flow: Inlined single-use constant -4444 to free a register for post-layout indirect flow (213 vs 246 cells).
+  - jump-to-next-threading: Removed 1 unconditional branch to the immediately following label.
+  - demote-constant-indirect-flow: Inlined single-use constant -4444 to free a register for post-layout indirect flow (200 vs 233 cells).
 
 Candidates:
-  * display __inline_show_32_0/decimal-pack: 8 steps; selected decimal-pack for screen __inline_show_32_0
-  - display __inline_show_32_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
-  - display __inline_show_32_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
-  - display __inline_show_32_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
-  - display __inline_show_32_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-  - if@52/negative-zero-threshold-flow: 10 steps; Negative-zero threshold flow estimated at 10 cells; ordinary condition was shorter (6).
+  * display __inline_show_28_0/decimal-pack: 8 steps; selected decimal-pack for screen __inline_show_28_0
+  - display __inline_show_28_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_28_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_28_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_28_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
   * ir-pass/indirect-memory-table: 0 steps; stable selector reused for indirect memory access
 
 Optimizer Capabilities:
@@ -8454,25 +8436,24 @@ Proofs:
   - display-byte-observable-boundary: assumed; Display-byte candidates are bounded by display output and the exact mk61 profile.
 
 Rejected Candidates:
-  - display __inline_show_32_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
-  - display __inline_show_32_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
-  - display __inline_show_32_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
-  - display __inline_show_32_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-  - if@52/negative-zero-threshold-flow: 10 steps; Negative-zero threshold flow estimated at 10 cells; ordinary condition was shorter (6).
+  - display __inline_show_28_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_28_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_28_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_28_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
 
 Cell Roles:
   00: 63 exec, display-byte - display byte role allowed
   03: 12 exec, display-byte - display byte role allowed
   04: 66 exec, display-byte - display byte role allowed
   05: 10 exec, display-byte - display byte role allowed
-  09: B8 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  16: 19 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  18: 00 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  33: 6A address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  37: 40 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  41: 44 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  43: 00 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  49: 52 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
+  09: AB address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  16: 00 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  31: 93 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  35: 38 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  39: 42 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  41: 00 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  62: AB address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  69: 42 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
 `;
 
 exports[`golden listing > selected output is stable for examples/raja-yoga.mkpro 1`] = `
@@ -8681,7 +8662,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_raja_yoga; span=98, entries=96, gaps=33,34, compiled=88, delta=-10, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=10, considered=1, candidates=42, planned=0
+Optimizer rules: automatic=yes; active=10, considered=1, candidates=43, planned=0
 Budget: official=88, extra=0, physical=88
 Intent IR: lowered=yes, v2=yes; intent=83, effects=88, cells=88
 
@@ -9030,7 +9011,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_sea_battle; span=102, entries=99, gaps=14,19,78, compiled=82, delta=-20, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=8, considered=0, candidates=45, planned=0
+Optimizer rules: automatic=yes; active=8, considered=0, candidates=46, planned=0
 Budget: official=82, extra=0, physical=82
 Intent IR: lowered=yes, v2=yes; intent=74, effects=82, cells=82
 
@@ -9234,7 +9215,7 @@ Steps: 23/999999
 Delivery: hex
 Optimizer: exact maximum
 Machine: mk61
-Optimizer rules: automatic=yes; active=7, considered=2, candidates=44, planned=0
+Optimizer rules: automatic=yes; active=7, considered=2, candidates=45, planned=0
 Budget: official=23, extra=0, physical=23
 Intent IR: lowered=yes, v2=yes; intent=33, effects=23, cells=23
 
@@ -9573,7 +9554,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_treasure_hunter_2; span=105, entries=102, gaps=91,94,95, compiled=103, delta=-2, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=12, considered=1, candidates=40, planned=0
+Optimizer rules: automatic=yes; active=12, considered=1, candidates=41, planned=0
 Budget: official=103, extra=0, physical=103
 Intent IR: lowered=yes, v2=yes; intent=116, effects=103, cells=103
 
@@ -9996,7 +9977,7 @@ Steps: 103/999999
 Delivery: hex
 Optimizer: exact maximum
 Machine: mk61
-Optimizer rules: automatic=yes; active=13, considered=0, candidates=40, planned=0
+Optimizer rules: automatic=yes; active=13, considered=0, candidates=41, planned=0
 Budget: official=103, extra=0, physical=103
 Intent IR: lowered=yes, v2=yes; intent=107, effects=103, cells=103
 

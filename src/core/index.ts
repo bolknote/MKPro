@@ -1,4 +1,10 @@
 export { compileMKPro, CompileError, setReferenceMetricsResolver } from "./compiler.ts";
+export {
+  analyzeProgramStackResidency,
+  analyzeSourceStackResidency,
+  analyzeStackResidencyWindows,
+  summarizeStackResidencyCandidates,
+} from "./emit/stack-residency-analysis.ts";
 export { parseProgram, parseExpression, ParseError } from "./parser.ts";
 export {
   opcodeCatalog,
