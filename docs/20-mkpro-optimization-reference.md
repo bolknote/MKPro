@@ -44,6 +44,7 @@ Below are the public capability IDs from `report.optimizer.capabilities`.
 - `indirect-flow` — enables indirect jumps/dispatch when preconditions are proven.
 - `indirect-memory-table` — reads the next-cell address through an indirect table instead of long absolute labels.
 - `tail-call-lowering` — lowers tail calls to a shorter jump-based form instead of a full call frame.
+- `vo-return-body-reorder` — candidate to move a subroutine return body so a `ПП/В/О` pair can collapse when layout allows.
 - `return-zero-jump` — rewrites `return` as a short jump via cell `0`.
 - `fl-decrement-branch` — compresses “decrement-and-jump” pattern into one block.
 - `super-dark-dispatch` — uses FA..FF routing mode where a valid layout exists.
@@ -78,7 +79,9 @@ Below are the public capability IDs from `report.optimizer.capabilities`.
 - `redundant-prologue-elimination` — removes repeated identical prologues.
 - `step-vs-run-verification` — chooses the more compact step/run verification form.
 - `coord-list-scaled-decimal` — uses scaled coordinate lists for cheaper decimal handling.
+- `dual-constant-sign-digit` — exposes dual-constant sign-digit intent coverage behind negative-zero threshold assumptions.
 - `raw-display-5f` — selects a low-level rendering path using opcode `0x5F`.
+- `super-number-deferred-normalization` — keeps extended super-number form when canonicalized normalization is not yet considered provably safe.
 - `stack-resident-temps` — keeps short-lived temporaries on the X/Y/Z/T stack instead of spilling them to numbered registers when the stack-residency path is active.
 
 Capabilities can be `considered` and not active if no matching shape is found.
@@ -188,12 +191,14 @@ The `report.candidates` array in `report` shows lowerings that were recompiled a
 - `late-layout-if-variant` — re-runs lowering with an aggressive terminal-if lowering variant after full layout.
 - `late-layout-branch-order` — re-runs with swapped terminal-if branch order after full layout.
 - `late-layout-if-branch-order` — combines aggressive terminal-if and branch-order re-runs after full layout.
+- `break-even-indirect-call` — hoists procs/shared helpers and evaluates a guarded indirect-call candidate to collapse repeated direct calls into one-cell indirect flow.
 - `hoisted-helper-indirect-layout` — hoists shared helpers before re-layout and recompiles for better preloaded indirect flow.
 - `hoisted-proc-indirect-layout` — additionally hoists ordinary procedures before re-layout for tighter call/jump sequences.
 - `if-chain-dispatch-canonicalization` — rechecks constant if/else-if dispatch shape under a full-layout candidate pass.
 - `free-residual-dispatch-scratch` — frees residual dispatch scratch in a candidate pass.
 - `alias-x-reuse` — tests value reuse of X at scalar sites for cleaner candidate control-flow.
 - `coalesce-copies` — enables copy coalescing candidate before final layout scoring.
+- `parametric-sibling-proc` — synthesizes one-parameter sibling helpers and reruns full layout around them.
 - `free-residual-dispatch-scratch-with-if-chain` — combines scratch-freeing and if-chain canonicalization as one candidate.
 - `share-random-cell-helper` — candidates around shared random-cell helper extraction.
 - `share-random-cell-helper-hoisted` — same random-cell-sharing candidate with front-hoisted helpers enabled.
@@ -457,9 +462,10 @@ These are not independent optimizations; they gate whether the lowering strategy
 The optimizer does not blindly apply undocumented behavior. Several proofs are explicitly logged and checked:
 
 - `value-ranges`, `observability`, and `formal-address-operands` when source bounds are known.
-- branch equivalence proof for `branch-removal` and arithmetic-if variants.
+- `branch-equivalence` — records that conditional rewriting (`branch-removal` and arithmetic-if-family rewrites) was proven equivalent for the rewritten branch shapes.
 - `negative-zero-threshold-selector` proof for threshold selectors.
 - `indirect-addressing-ranges` proof when selector stability is required.
+- `display-byte-observable-boundary` proof for display-byte candidates when only display-observable boundaries allow the optimization.
 - `super-dark-suffix-layout` proof when FA..FF dispatch is selected.
 - `return-stack-empty` proof for `I/O` as `JP 01` behavior.
 
