@@ -101,6 +101,7 @@ These transformations run on source constructs before machine lowering:
 - `show-read-fusion` — merges `show(...)` with a following `read`-based assignment/input path into one calculator `С/П`: `show(...); x = read()` or `show(...); x = int(read())` / `frac(int(read()))` forms share the same input stop and avoid emitting a second `С/П`.
 - `show-read-decrement-underflow-fusion` — merges `show -> input -> decrement -> if (counter < 0) ...` into one compact sequence, keeping input in `Y` across the decrement-underflow check.
 - `show-read-stake-sin-lowering` — transforms `x = int(stake * (1 + sin(input)))` patterns (with `stake` coming from a single plain `show` source) into stack-direct form: keep `stake` in `Y`, read `input`, and compute the risk expression directly.
+- `show-read-debit-credit-guard` — rewrites `show; x=input; debitTarget -= x; if debitTarget < 0 { halt } ; creditTarget += x; if creditTarget < 0 { halt }` into one stack-based sequence that keeps the read value on the stack across both guarded updates.
 - `counted-loop-unroll` — replaces small constant-trip counted `while` loops with explicit per-iteration copies when the induction variable updates are simple linear steps and entry values are known constants; this removes the loop machinery and registers update logic.
 - `counted-loop-unroll-free-scratch` — runs counted-loop unrolling together with residual-dispatch scratch freeing (`freeResidualDispatchScratch`) as one candidate.
 - `state-init-counted-loop` — recovers the compact one-cell `F Lx` counted-loop lowering for countdown loops whose counter carries its initial value on the state field (`time: counter 0..N = N` + `while time >= 1 { …; time-- }`). When that counter is used solely by the loop in the top-level entry body, the state initializer is rewritten into an explicit `time = N` immediately before the loop, matching the already-supported explicit-init form byte-for-byte while staying re-runnable (the inline store re-arms the counter on every `С/П`, unlike a setup-only preload).
@@ -124,6 +125,7 @@ These transformations run on source constructs before machine lowering:
 - `expression-helper` — builds a shared helper for a pure, expensive expression when repeated use count makes it profitable after cost gating.
 - `expression-helper-call` — replaces repeated inline compilation of the same pure expression with a helper call (`ПП`) when that helper already exists.
 - `near-any-helper` — emits a shared helper for `near_any`-style checks that computes absolute deltas and compares against a precomputed radius.
+- `repeated-x-param-self-assignment` — for consecutive `x = f(x)` / `x = f(x)` (or indexed equivalents) on the same target, emits two x-param calls in one X-based chain and stores once.
 - `single-use-guard-substitution` — removes a one-shot assignment if it can be substituted directly into a following condition and the lowered cost is strictly lower.
 - `compact-dispatch-simplification` — compresses small dispatches to a minimal jump tree.
 - `one-shot-loop-init-hoist` — hoists loop initialization that runs once out of repeated body.
@@ -224,8 +226,16 @@ The `report.candidates` array in `report` shows lowerings that were recompiled a
 - `stack-resident-temps` — recompiles with stack-temporary fusion enabled (`<=4` temps lifted with `В↑`) to avoid `X->П`/`П->X` spills.
 - `stack-resident-temps-hoisted` — same stack-temp fusion candidate with shared helper hoisting enabled.
 - `stack-resident-temps-hoisted-proc` — same stack-temp fusion candidate with helper and procedure hoisting enabled.
+- `stack-resident-temps-setup-counted-loop` — combined stack-temp fusion with setup-only counted-loop initializers.
 - `domain-error-guards` — candidate that rewrites terminal `halt("ЕГГОГ")` style checks to self-trapping domain opcodes.
 - `domain-error-guards-unroll` — combines domain-error candidate with counted-loop unrolling.
+- `domain-error-guards-setup-counted-loop` — combines domain-error rewriting with setup-only counted-loop initializers.
+- `domain-error-guards-unroll-setup-counted-loop` — combines domain-error rewriting with counted-loop unrolling and setup-only counted-loop initializers.
+- `domain-error-guards-setup-counted-loop-stack-temps` — combines domain-error rewriting with setup-only counted-loop initializers and stack-temporary residency.
+- `show-read-debit-credit-guard` — candidate that tries stack-resident read/debit/credit guarded update fusion.
+- `show-read-debit-credit-guard-unroll` — combines stack read/debit/credit guarding with counted-loop unrolling.
+- `show-read-debit-credit-guard-setup-counted-loop` — combines read/debit/credit guarded transfer with setup-only counted-loop initializers.
+- `show-read-debit-credit-guard-unroll-setup-counted-loop` — combines guarded read/debit/credit transfer with counted-loop unrolling and setup-only counted-loop initializers.
 - `call-count-proc-layout` — procedure reordering by descending call count.
 - `size-asc-proc-layout` — procedure reordering from smallest to largest.
 - `size-desc-proc-layout` — procedure reordering from largest to smallest.
@@ -234,10 +244,14 @@ The `report.candidates` array in `report` shows lowerings that were recompiled a
 - `size-asc-proc-layout-hoisted` — size-ascending procedure order with front-hoisted procs/shared helpers.
 - `size-desc-proc-layout-hoisted` — size-descending procedure order with front-hoisted procs/shared helpers.
 - `reverse-proc-layout-hoisted` — reverse procedure order with front-hoisted procs/shared helpers.
+- `domain-error-guards-unroll-<layout>` — generated for each proc-layout candidate (`call-count`, `size-*`, `reverse`) combining domain-error rewrite and counted-loop unroll under full layout.
+- `domain-error-guards-unroll-setup-counted-loop-<layout>` — generated for each proc-layout candidate (`call-count`, `size-*`, `reverse`) combining domain-error rewrite, counted-loop unroll, and setup-only counted-loop initializers.
+- `show-read-debit-credit-guard-<layout>` — generated for each proc-layout candidate (`call-count`, `size-*`, `reverse`) combining guarded read/debit/credit fusion with that proc ordering.
 - `inline-floor-packed-row-expression` — computes floor-packed display rows inline to reduce hidden display pressure.
 - `inline-floor-hoisted-proc-tail-layout` — combines inline floor-row lowering with helper/proc hoisting and tail-branch inversion.
 - `reclaim-coalesced-preloads` — compiles with forced coalesce-induced register sharing to free constants for preload allocation.
 - `demote-constant-indirect-flow` — recompiles with selective integer constant inlining to free registers for post-layout indirect-flow rescue.
+- `demote-constant-chain-indirect-flow` — repeatedly suppresses integer preloads (depth-limited) and recompiles to keep a non-dynamic register free for post-layout indirect-flow rescue.
 
 ## 6) Function and call lowering
 
@@ -432,6 +446,7 @@ Setup generation is separate from main program layout when needed:
 
 - `generated-setup-program` indicates that a setup routine was emitted.
 - `preloaded-constant` and `constant-synthesis` entries describe synthetic constants.
+- `duplicate-preload-store-reuse` — setup preload planning computed one numeric literal once and emitted `X->П` into multiple registers when values were identical in the same preload action.
 - `intent-state-lowering` — moves declared state initialization into generated setup by emitting setup `store` operations and records that state-related initialization was lowered out of the main path.
 - `auto-preload-initial-state` and `intent-state-lowering` can push selected state to setup only.
 - `raw-block-contract` — records and applies the input/output/clobber/preserve contract for raw `core` blocks in helper emission.
