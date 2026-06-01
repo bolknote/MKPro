@@ -1158,9 +1158,9 @@ program Truthy {
   }
 }
 `);
-    const loop = ast.entries[0]?.body[0];
-    expect(loop?.kind).toBe("loop");
-    if (loop?.kind !== "loop") throw new Error("expected loop");
+    const loop = ast.v2?.body[0];
+    expect(loop?.kind).toBe("v2_loop");
+    if (loop?.kind !== "v2_loop") throw new Error("expected v2_loop");
 
     const ifStatement = loop.body[0];
     const unlessStatement = loop.body[1];
@@ -1194,9 +1194,9 @@ program ExplicitUnless {
   }
 }
 `);
-    const loop = ast.entries[0]?.body[0];
-    expect(loop?.kind).toBe("loop");
-    if (loop?.kind !== "loop") throw new Error("expected loop");
+    const loop = ast.v2?.body[0];
+    expect(loop?.kind).toBe("v2_loop");
+    if (loop?.kind !== "v2_loop") throw new Error("expected v2_loop");
     const unlessStatement = loop.body[0];
 
     expect(unlessStatement).toMatchObject({

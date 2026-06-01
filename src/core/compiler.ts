@@ -8676,10 +8676,6 @@ function preincrementIndexedStoreShape(
     findStateBankMember(ast, store.target) !== undefined;
 }
 
-function isPreviousRandomSum(expr: ExpressionAst, previous: string, seed: string): boolean {
-  return previousRandomAdditiveRest(expr, previous, seed)?.length === 0;
-}
-
 function previousRandomAdditiveRest(expr: ExpressionAst, previous: string, seed: string): ExpressionAst[] | undefined {
   const terms = additiveTerms(expr);
   let sawPrevious = false;
