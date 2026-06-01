@@ -43,19 +43,30 @@ program CaveHighlevelBaseline {
       halt("ЕГГ0Г")
     }
 
-    if command == pi() {
-      break_wall()
+    // Original steps 06..11 route zero to cache search, then use sin(command)
+    // to route F pi to wall blasting before the movement decoder runs.
+    if command == 0 {
+      search_cache()
+    }
+    else {
+      if sin(command) == 0 {
+        break_wall()
+      }
+      else {
+        decode_move()
+      }
+    }
+  }
+
+  fn decode_move() {
+    if frac(command / 5) == 0 {
+      go(sign(command))
     }
     else {
       match command {
-        2 => go(0.0000002)
         4 => move_west()
         6 => go(-0.000001)
-        8 => go(-0.0000002)
-        5 => go(1)
-        -5 => go(-1)
-        0 => search_cache()
-        otherwise => ignored()
+        otherwise => go(sign(5 - command) * 0.0000002)
       }
     }
   }
@@ -86,22 +97,12 @@ program CaveHighlevelBaseline {
   }
 
   fn break_wall() {
-    // Blasting only commits when the remembered wall and enough dynamite exist;
-    // the display response is the feedback, not a separate error language.
-    if blocked {
-      if dynamite >= 1 {
-        walls -= blocked
-        blocked = 0
-        dynamite--
-        show(0)
-      }
-      else {
-        show(0)
-      }
+    if blocked * dynamite {
+      walls -= blocked
+      blocked = 0
+      dynamite--
     }
-    else {
-      show(0)
-    }
+    show(0)
   }
 
   fn search_cache() {
@@ -117,19 +118,10 @@ program CaveHighlevelBaseline {
   }
 
   fn cache_reward() {
-    if player.floor == 1 {
-      food += 10
-      food = robber_fight(food)
-    }
-    else {
-      if player.floor == 2 {
-        dynamite++
-        dynamite = robber_fight(dynamite)
-      }
-      else {
-        treasure++
-        treasure = robber_fight(treasure)
-      }
+    match player.floor {
+      1 => food = robber_fight(food + 10)
+      2 => dynamite = robber_fight(dynamite + 1)
+      otherwise => treasure = robber_fight(treasure + 1)
     }
   }
 

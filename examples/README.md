@@ -37,7 +37,7 @@ Generated with `npm run examples:size`.
 | `tiny-game.mkpro` | 23 | - | - | ok: no reference | load ok |
 | `treasure-hunter-2.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |
 | `wumpus.mkpro` | 103 | - | - | ok: no reference | main+setup load ok |
-| `pending-optimizer/cave-highlevel-baseline.mkpro` | 157 | 105 | +52 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/cave-highlevel-baseline.mkpro` | 137 | 105 | +32 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/cave-treasure.mkpro` | 165 | 105 | +60 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/giants-country.mkpro` | 170 | 105 | +65 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/labyrinth777.mkpro` | 206 | 105 | +101 | pending optimizer | setup load ok; main >105 |
