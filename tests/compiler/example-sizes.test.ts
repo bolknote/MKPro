@@ -20,7 +20,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   dungeon: 85,
   "e-94-digits": 64,
   "functions-demo": 29,
-  "fox-hunt-100": 105,
+  "fox-hunt-100": 104,
   "fox-hunt-mk61": 65,
   "game-100-pig": 103,
   human: 24,

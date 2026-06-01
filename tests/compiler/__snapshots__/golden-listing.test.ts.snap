@@ -2494,43 +2494,46 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-100.mk
 ------+------+-------------------------+----------------
    -- |   -  | enter remaining_foxes   | enter any value 1..100 in Y
    00 |  00  | 0                       |
-   01 |  43  | X→П 3                   | setup R3
+   01 |  41  | X→П 1                   | setup R1
    02 |  01  | 1                       |
    03 |  00  | 0                       |
    04 |  4A  | X→П a                   | setup Ra
    05 |  01  | 1                       |
-   06 |  09  | 9                       |
+   06 |  01  | 1                       |
    07 |  46  | X→П 6                   | setup R6
-   08 |  09  | 9                       |
+   08 |  01  | 1                       |
    09 |  09  | 9                       |
-   10 |  0B  | /-/                     | negative number
-   11 |  49  | X→П 9                   | setup R9
-   12 |  08  | 8                       |
-   13 |  01  | 1                       |
-   14 |  0B  | /-/                     | negative number
-   15 |  48  | X→П 8                   | setup R8
-   16 |  00  | 0                       |
-   17 |  0A  | .                       |
-   18 |  05  | 5                       |
-   19 |  47  | X→П 7                   | setup R7
-   20 |  00  | 0                       |
-   21 |  47  | X→П 7                   | setup R7
-   22 |  06  | 6                       |
-   23 |  01  | 1                       |
-   24 |  4E  | X→П e                   | setup Re
-   25 |  14  | X↔Y                     | setup remaining_foxes from stack.Y
-   26 |  42  | X→П 2                   | setup remaining_foxes
-   27 |  14  | X↔Y                     | restore stack.X after remaining_foxes
-   28 |  3B  | К СЧ                    | random()
-   29 |  09  | 9                       |
-   30 |  09  | 9                       |
-   31 |  09  | 9                       |
-   32 |  12  | ×                       | expr *
-   33 |  0E  | В↑                      | random int keep scaled draw
-   34 |  35  | К {x}                   | random int fractional part
-   35 |  11  | −                       | random int floor
-   36 |  45  | X→П 5                   | setup foxes
-   37 |  50  | С/П                     | setup complete
+   10 |  43  | X→П 3                   | setup R3
+   11 |  09  | 9                       |
+   12 |  09  | 9                       |
+   13 |  0B  | /-/                     | negative number
+   14 |  49  | X→П 9                   | setup R9
+   15 |  08  | 8                       |
+   16 |  01  | 1                       |
+   17 |  0B  | /-/                     | negative number
+   18 |  48  | X→П 8                   | setup R8
+   19 |  00  | 0                       |
+   20 |  0A  | .                       |
+   21 |  05  | 5                       |
+   22 |  47  | X→П 7                   | setup R7
+   23 |  00  | 0                       |
+   24 |  47  | X→П 7                   | setup R7
+   25 |  06  | 6                       |
+   26 |  00  | 0                       |
+   27 |  4E  | X→П e                   | setup Re
+   28 |  14  | X↔Y                     | setup remaining_foxes from stack.Y
+   29 |  42  | X→П 2                   | setup remaining_foxes
+   30 |  14  | X↔Y                     | restore stack.X after remaining_foxes
+   31 |  3B  | К СЧ                    | random()
+   32 |  09  | 9                       |
+   33 |  09  | 9                       |
+   34 |  09  | 9                       |
+   35 |  12  | ×                       | expr *
+   36 |  0E  | В↑                      | random int keep scaled draw
+   37 |  35  | К {x}                   | random int fractional part
+   38 |  11  | −                       | random int floor
+   39 |  45  | X→П 5                   | setup foxes
+   40 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
@@ -2538,7 +2541,7 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-100.mk
    00 |  50  | С/П                     | read cell
    01 |  44  | X→П 4                   | read cell
    02 |  53  | ПП                      | bit_mask helper
-   03 |  83  | 83                      | bit_mask helper
+   03 |  82  | 82                      | bit_mask helper
    04 |  65  | П→X 5                   | recall foxes
    05 |  37  | К ∧                     | bit membership test
    06 |  35  | К {x}                   | bit membership fraction
@@ -2556,7 +2559,7 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-100.mk
    18 |  62  | П→X 2                   | recall remaining_foxes
    19 |  0B  | /-/                     | unary minus
    20 |  51  | БП                      | if end
-   21 |  59  | 59                      | if end
+   21 |  58  | 58                      | if end
    22 |  4B  | X→П b                   | line_count total
    23 |  64  | П→X 4                   | recall cell
    24 |  6A  | П→X a                   | preload const 10
@@ -2569,7 +2572,7 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-100.mk
    31 |  01  | 1                       |
    32 |  4D  | X→П d                   | line_count step
    33 |  6A  | П→X a                   | preload const 10
-   34 |  AE  | К ПП e                  | line_count progression; preloaded Re=61 indirect-target=61 shifted-forward indirect flow
+   34 |  AE  | К ПП e                  | line_count progression; preloaded Re=60 indirect-target=60 shifted-forward indirect flow
    35 |  6A  | П→X a                   | preload const 10
    36 |  64  | П→X 4                   | recall cell
    37 |  6A  | П→X a                   | preload const 10
@@ -2580,92 +2583,93 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-100.mk
    42 |  4C  | X→П c                   | line_count offset
    43 |  6A  | П→X a                   | preload const 10
    44 |  4D  | X→П d                   | line_count step
-   45 |  AE  | К ПП e                  | line_count progression; preloaded Re=61 indirect-target=61 shifted-forward indirect flow
+   45 |  AE  | К ПП e                  | line_count progression; preloaded Re=60 indirect-target=60 shifted-forward indirect flow
    46 |  69  | П→X 9                   | preload const -99
    47 |  4C  | X→П c                   | line_count offset
-   48 |  01  | 1                       |
-   49 |  01  | 1                       |
-   50 |  4D  | X→П d                   | line_count step
-   51 |  66  | П→X 6                   | preload const 19
-   52 |  AE  | К ПП e                  | line_count progression; preloaded Re=61 indirect-target=61 shifted-forward indirect flow
-   53 |  68  | П→X 8                   | preload const -81
-   54 |  4C  | X→П c                   | line_count offset
-   55 |  09  | 9                       |
-   56 |  4D  | X→П d                   | line_count step
-   57 |  66  | П→X 6                   | preload const 19
-   58 |  AE  | К ПП e                  | line_count progression; preloaded Re=61 indirect-target=61 shifted-forward indirect flow
-   59 |  50  | С/П                     | show __inline_show_33_0
-   60 |  87  | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow
-   61 |  40  | X→П 0                   | line_count counter
-   62 |  64  | П→X 4                   | recall cell
-   63 |  6C  | П→X c                   | recall __spatial_count_offset
-   64 |  10  | +                       | expr +
-   65 |  41  | X→П 1                   | spatial hit index
-   66 |  6C  | П→X c                   | line_count offset
-   67 |  6D  | П→X d                   | line_count step
-   68 |  10  | +                       | line_count next offset
-   69 |  4C  | X→П c                   | line_count offset
-   70 |  61  | П→X 1                   | spatial hit index
-   71 |  53  | ПП                      | bit_mask helper
-   72 |  83  | 83                      | bit_mask helper
-   73 |  65  | П→X 5                   | spatial hit mask
-   74 |  37  | К ∧                     | spatial hit test
-   75 |  35  | К {x}                   | spatial hit membership fraction
-   76 |  32  | К ЗН                    | spatial hit to count
-   77 |  6B  | П→X b                   | line_count accumulator
-   78 |  10  | +                       | line_count add hit
-   79 |  4B  | X→П b                   | line_count accumulator
-   80 |  5D  | F L0                    | line_count loop
-   81 |  62  | 62                      | line_count loop
-   82 |  52  | В/О                     | line_count progression return
-   83 |  04  | 4                       |
-   84 |  13  | ÷                       | bit mask quotient
-   85 |  41  | X→П 1                   | bit mask quotient
-   86 |  35  | К {x}                   | bit mask remainder fraction
-   87 |  04  | 4                       |
-   88 |  12  | ×                       | bit mask remainder scale
-   89 |  02  | 2                       |
-   90 |  24  | F xʸ                    | bit mask power
-   91 |  00  | 0                       |
-   92 |  0A  | .                       |
-   93 |  05  | 5                       |
-   94 |  10  | +                       | bit mask round bias
-   95 |  34  | К [x]                   | bit mask round
-   96 |  61  | П→X 1                   | bit mask quotient
-   97 |  34  | К [x]                   | bit mask digit index
-   98 |  01  | 1                       |
-   99 |  10  | +                       | bit mask decade index
-   A0 |  15  | F 10ˣ                   | bit mask decade
-   A1 |  13  | ÷                       | bit mask fractional place
-   A2 |  08  | 8                       |
-   A3 |  10  | +                       | bit mask anchor
-   A4 |  52  | В/О                     | bit_mask return
+   48 |  66  | П→X 6                   | preload const 11
+   49 |  4D  | X→П d                   | line_count step
+   50 |  63  | П→X 3                   | preload const 19
+   51 |  AE  | К ПП e                  | line_count progression; preloaded Re=60 indirect-target=60 shifted-forward indirect flow
+   52 |  68  | П→X 8                   | preload const -81
+   53 |  4C  | X→П c                   | line_count offset
+   54 |  09  | 9                       |
+   55 |  4D  | X→П d                   | line_count step
+   56 |  63  | П→X 3                   | preload const 19
+   57 |  AE  | К ПП e                  | line_count progression; preloaded Re=60 indirect-target=60 shifted-forward indirect flow
+   58 |  50  | С/П                     | show __inline_show_33_0
+   59 |  87  | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow
+   60 |  40  | X→П 0                   | line_count counter
+   61 |  64  | П→X 4                   | recall cell
+   62 |  6C  | П→X c                   | recall __spatial_count_offset
+   63 |  10  | +                       | expr +
+   64 |  41  | X→П 1                   | spatial hit index
+   65 |  6C  | П→X c                   | line_count offset
+   66 |  6D  | П→X d                   | line_count step
+   67 |  10  | +                       | line_count next offset
+   68 |  4C  | X→П c                   | line_count offset
+   69 |  61  | П→X 1                   | spatial hit index
+   70 |  53  | ПП                      | bit_mask helper
+   71 |  82  | 82                      | bit_mask helper
+   72 |  65  | П→X 5                   | spatial hit mask
+   73 |  37  | К ∧                     | spatial hit test
+   74 |  35  | К {x}                   | spatial hit membership fraction
+   75 |  32  | К ЗН                    | spatial hit to count
+   76 |  6B  | П→X b                   | line_count accumulator
+   77 |  10  | +                       | line_count add hit
+   78 |  4B  | X→П b                   | line_count accumulator
+   79 |  5D  | F L0                    | line_count loop
+   80 |  61  | 61                      | line_count loop
+   81 |  52  | В/О                     | line_count progression return
+   82 |  04  | 4                       |
+   83 |  13  | ÷                       | bit mask quotient
+   84 |  41  | X→П 1                   | bit mask quotient
+   85 |  35  | К {x}                   | bit mask remainder fraction
+   86 |  04  | 4                       |
+   87 |  12  | ×                       | bit mask remainder scale
+   88 |  02  | 2                       |
+   89 |  24  | F xʸ                    | bit mask power
+   90 |  00  | 0                       |
+   91 |  0A  | .                       |
+   92 |  05  | 5                       |
+   93 |  10  | +                       | bit mask round bias
+   94 |  34  | К [x]                   | bit mask round
+   95 |  61  | П→X 1                   | bit mask quotient
+   96 |  34  | К [x]                   | bit mask digit index
+   97 |  01  | 1                       |
+   98 |  10  | +                       | bit mask decade index
+   99 |  15  | F 10ˣ                   | bit mask decade
+   A0 |  13  | ÷                       | bit mask fractional place
+   A1 |  08  | 8                       |
+   A2 |  10  | +                       | bit mask anchor
+   A3 |  52  | В/О                     | bit_mask return
 
 ## Hex
-00: 50 44 53 83 65 37 35 57
+00: 50 44 53 82 65 37 35 57
 08: 22 3A 65 37 45 58 18 08
-16: 0B 50 62 0B 51 59 4B 64
+16: 0B 50 62 0B 51 58 4B 64
 24: 6A 13 35 6A 12 0B 4C 01
 32: 4D 6A AE 6A 64 6A 13 34
 40: 0B 12 4C 6A 4D AE 69 4C
-48: 01 01 4D 66 AE 68 4C 09
-56: 4D 66 AE 50 87 40 64 6C
-64: 10 41 6C 6D 10 4C 61 53
-72: 83 65 37 35 32 6B 10 4B
-80: 5D 62 52 04 13 41 35 04
-88: 12 02 24 00 0A 05 10 34
-96: 61 34 01 10 15 13 08 10
-A4: 52
+48: 66 4D 63 AE 68 4C 09 4D
+56: 63 AE 50 87 40 64 6C 10
+64: 41 6C 6D 10 4C 61 53 82
+72: 65 37 35 32 6B 10 4B 5D
+80: 61 52 04 13 41 35 04 12
+88: 02 24 00 0A 05 10 34 61
+96: 34 01 10 15 13 08 10 52
 
 ## Setup Program
 00
-43
+41
 01
 00
 4A
 01
-09
+01
 46
+01
+09
+43
 09
 09
 0B
@@ -2681,7 +2685,7 @@ A4: 52
 00
 47
 06
-01
+00
 4E
 14
 42
@@ -2699,40 +2703,42 @@ A4: 52
 
 ## Explain
 MK-Pro compile report
-Steps: 105/999999
+Steps: 104/999999
 Delivery: hex
 Optimizer: exact maximum
-Reference: anvarov_fox_hunt_100; span=105, entries=101, gaps=10,88,94,98, compiled=105, delta=0, parity=equal
+Reference: anvarov_fox_hunt_100; span=105, entries=101, gaps=10,88,94,98, compiled=104, delta=-1, parity=smaller
 Machine: mk61
 Optimizer rules: automatic=yes; active=9, considered=0, candidates=44, planned=0
-Budget: official=105, extra=0, physical=105
-Intent IR: lowered=yes, v2=yes; intent=47, effects=105, cells=105
+Budget: official=104, extra=0, physical=104
+Intent IR: lowered=yes, v2=yes; intent=47, effects=104, cells=104
 
 Preloads:
   foxes -> R5: random() (outside program cells)
   remaining_foxes -> R2: stack.Y (outside program cells)
-  bearing -> R3: 0 (outside program cells)
+  bearing -> R1: 0 (outside program cells)
   Ra: 10 (outside program cells)
-  R6: 19 (outside program cells)
+  R6: 11 (outside program cells)
+  R3: 19 (outside program cells)
   R9: -99 (outside program cells)
   R8: -81 (outside program cells)
   R7: 0.5 (outside program cells)
   R7: B2 (outside program cells)
-  Re: 61 (outside program cells)
+  Re: 60 (outside program cells)
 
 Setup Block:
-  \`R3=0; Ra=10; R6=19; R9=-99; R8=-81; R7=0.5; R7=L2; Re=61\`
+  \`R1=0; Ra=10; R6=11; R3=19; R9=-99; R8=-81; R7=0.5; R7=L2; Re=60\`
 
 Setup Program:
   Reason: initializes foxes, remaining_foxes
-  00: 00 43 01 00 4A 01 09 46
-  08: 09 09 0B 49 08 01 0B 48
-  16: 00 0A 05 47 00 47 06 01
-  24: 4E 14 42 14 3B 09 09 09
-  32: 12 0E 35 11 45 50
+  00: 00 41 01 00 4A 01 01 46
+  08: 01 09 43 09 09 0B 49 08
+  16: 01 0B 48 00 0A 05 47 00
+  24: 47 06 00 4E 14 42 14 3B
+  32: 09 09 09 12 0E 35 11 45
+  40: 50
 
 Registers:
-  bearing: R3
+  bearing: R1
   cell: R4
   foxes: R5
   remaining_foxes: R2
@@ -2742,10 +2748,10 @@ Labels:
   __loop_0: 00
   __decrement_nonzero_3: 18
   __if_false_1: 22
-  __if_end_2: 59
-  __line_count_progression_0: 61
-  __line_count_loop_4: 62
-  __bit_mask_0: 83
+  __if_end_2: 58
+  __line_count_progression_0: 60
+  __line_count_loop_4: 61
+  __bit_mask_0: 82
 
 Optimizations:
   - expression-constant-folder: Folded 1 constant expression node(s) before code generation.
@@ -2763,9 +2769,10 @@ Optimizations:
   - preloaded-constant: Used preloaded Ra for constant 10.
   - preloaded-constant: Used preloaded Ra for constant 10.
   - preloaded-constant: Used preloaded R9 for constant -99.
-  - preloaded-constant: Used preloaded R6 for constant 19.
+  - preloaded-constant: Used preloaded R6 for constant 11.
+  - preloaded-constant: Used preloaded R3 for constant 19.
   - preloaded-constant: Used preloaded R8 for constant -81.
-  - preloaded-constant: Used preloaded R6 for constant 19.
+  - preloaded-constant: Used preloaded R3 for constant 19.
   - spatial-sum-loop-helper-call: Reused shared line_count progression helper for foxes.
   - single-use-rule-inline: Inlined single-use rule scan_from_cell at line 30.
   - cell-membership-clear-reuse: Reused the successful membership mask when clearing foxes at line 39.
@@ -2782,7 +2789,7 @@ Optimizations:
   - dark-entry-layout: Pointed 1 branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window).
   - generated-setup-program: Generated optimized setup program for foxes, remaining_foxes.
   - setup-int-random-range-lowering: Lowered int(random() * 999) without К [x] so the MK-61 random sequence keeps moving.
-  - demote-constant-indirect-flow: Inlined single-use constant 11 to free a register for post-layout indirect flow (105 vs 106 cells).
+  - reclaim-coalesced-preloads: Pinned coalesce-freed registers before allocation to reclaim them for preloaded constants (104 vs 106 cells).
 
 Candidates:
   * display __inline_show_33_0/decimal-pack: 1 steps; selected decimal-pack for screen __inline_show_33_0
@@ -2825,12 +2832,12 @@ Rejected Candidates:
   - display __inline_show_33_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
 
 Cell Roles:
-  03: 83 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  03: 82 address, constant, overlay - address can be reused as constant; code/data overlay allowed
   08: 22 address, constant, overlay - address can be reused as constant; code/data overlay allowed
   14: 18 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  21: 59 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  72: 83 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  81: 62 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
+  21: 58 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  71: 82 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  80: 61 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
 `;
 
 exports[`golden listing > selected output is stable for examples/fox-hunt-mk61.mkpro 1`] = `

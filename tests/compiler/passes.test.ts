@@ -11,7 +11,7 @@ import { computeLiveness } from "../../src/core/passes/liveness-analysis.ts";
 import { preloadedIndirectFlow } from "../../src/core/passes/preloaded-indirect-flow.ts";
 import { r0FractionalSentinel } from "../../src/core/passes/r0-fractional-sentinel.ts";
 import { redundantPrologueElimination } from "../../src/core/passes/redundant-prologue.ts";
-import { registerCoalesce } from "../../src/core/passes/register-coalesce.ts";
+import { computeNonOverlappingRegisterMapping, registerCoalesce } from "../../src/core/passes/register-coalesce.ts";
 import { returnSuffixGadget } from "../../src/core/passes/return-suffix-gadget.ts";
 import { storeRecallPeephole } from "../../src/core/passes/store-recall-peephole.ts";
 import { tailBranchInversion } from "../../src/core/passes/tail-branch-inversion.ts";
@@ -733,6 +733,25 @@ describe("ir passes on synthetic programs", () => {
     const result = registerCoalesce.run(program, ctx);
     expect(result.applied).toBe(1);
     expect(result.ops.some((op) => (op.kind === "store" || op.kind === "recall") && op.register === "2")).toBe(false);
+  });
+
+  it("def-aware mapping refuses a merge that a dead store would clobber", () => {
+    // R1 = read; R2 = R1; R1 = 0 (dead store, R1 never read again) while R2 is
+    // still live; halt reads R2. Plain liveness misses that the dead store still
+    // physically overwrites R1, so R1 and R2 look non-overlapping. Def-aware mode
+    // counts the store as occupying R1, exposing the interference. This is the
+    // soundness guard for reclaiming coalesce-freed registers through allocation,
+    // where the dead source statement is re-lowered rather than removed.
+    const program: IrOp[] = [
+      store("1"),
+      recall("1"),
+      store("2"),
+      store("1"),
+      recall("2"),
+      halt(),
+    ];
+    expect(computeNonOverlappingRegisterMapping(program).size).toBe(1);
+    expect(computeNonOverlappingRegisterMapping(program, { defAware: true }).size).toBe(0);
   });
 
   it("register-coalesce refuses registers live at entry", () => {

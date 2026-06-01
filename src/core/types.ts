@@ -960,4 +960,9 @@ export interface CompileResult {
   steps: ResolvedStep[];
   report: CompileReport;
   diagnostics: Diagnostic[];
+  // Probe-only side channel: register pairs that non-overlapping coalescing can
+  // merge (freeRegister -> keepRegister). Populated only when a trial compile
+  // requests it, so the reclaim-coalesced-preloads candidate can pin the freed
+  // register before preload allocation. Not part of the serialized report.
+  coalesceShares?: ReadonlyArray<{ freeRegister: RegisterName; keepRegister: RegisterName }>;
 }

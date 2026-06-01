@@ -42,6 +42,7 @@ function gatherUsedRegisters(ops: readonly IrOp[]): Set<RegisterName> {
 function liveRangePerRegister(
   ops: readonly IrOp[],
   registers: ReadonlySet<RegisterName>,
+  defAware = false,
 ): Map<RegisterName, Set<number>> {
   const liveness = computeLiveness(ops);
   const ranges = new Map<RegisterName, Set<number>>();
@@ -52,6 +53,20 @@ function liveRangePerRegister(
     }
     for (const reg of liveness.liveOut[i]!) {
       ranges.get(reg)?.add(i);
+    }
+    // A store physically clobbers its register even when the stored value is
+    // never read again (a dead store). Liveness alone does not mark such a def
+    // as occupying the register, so two registers can look non-overlapping while
+    // one's dead def would still overwrite the other if they shared a register.
+    // The in-pipeline pass is safe because dead-store-elimination removes dead
+    // defs before it runs; def-aware mode makes the analysis sound even on
+    // pre-cleanup IR, which is required when the mapping drives register sharing
+    // through allocation (where the dead source statement is re-lowered).
+    if (defAware) {
+      const op = ops[i]!;
+      if (op.kind === "store" || op.kind === "indirect-store") {
+        ranges.get(op.register)?.add(i);
+      }
     }
   }
   return ranges;
@@ -131,14 +146,22 @@ function excludedRegisters(ops: readonly IrOp[], registers: ReadonlySet<Register
   return excluded;
 }
 
-function coalesceNonOverlapping(ops: readonly IrOp[]): { ops: IrOp[]; applied: number } {
+// Compute the non-overlapping register coalescing mapping (source register -> the
+// earlier register it can share, because their live ranges never intersect and
+// neither participates in placement-constrained access). Exposed so the compiler
+// can, before lowering's preload allocation, learn which physical registers will
+// later be freed and reclaim them for additional preloaded constants.
+export function computeNonOverlappingRegisterMapping(
+  ops: readonly IrOp[],
+  { defAware = false }: { defAware?: boolean } = {},
+): Map<RegisterName, RegisterName> {
   const registers = gatherUsedRegisters(ops);
-  if (registers.size <= 1) return { ops: [...ops], applied: 0 };
+  const mapping = new Map<RegisterName, RegisterName>();
+  if (registers.size <= 1) return mapping;
   const liveness = computeLiveness(ops);
   const liveAtEntry = liveness.liveIn[0] ?? new Set<RegisterName>();
-  const ranges = liveRangePerRegister(ops, registers);
+  const ranges = liveRangePerRegister(ops, registers, defAware);
   const ordered = [...registers].sort();
-  const mapping = new Map<RegisterName, RegisterName>();
   for (let i = 0; i < ordered.length; i += 1) {
     const a = ordered[i]!;
     if (mapping.has(a)) continue;
@@ -161,6 +184,11 @@ function coalesceNonOverlapping(ops: readonly IrOp[]): { ops: IrOp[]; applied: n
       break;
     }
   }
+  return mapping;
+}
+
+function coalesceNonOverlapping(ops: readonly IrOp[]): { ops: IrOp[]; applied: number } {
+  const mapping = computeNonOverlappingRegisterMapping(ops);
   if (mapping.size === 0) return { ops: [...ops], applied: 0 };
   const result = ops.map((op) => {
     if (op.kind !== "store" && op.kind !== "recall") return op;

@@ -5,6 +5,8 @@ import { eliminateInterproceduralDeadStores } from "./interprocedural-dse.ts";
 import { propagateValuesInterprocedurally } from "./value-propagation.ts";
 import { normalizeV2ExpressionText, parseExpression, parseProgram } from "./parser.ts";
 import { runIrPasses } from "./passes/index.ts";
+import { computeNonOverlappingRegisterMapping } from "./passes/register-coalesce.ts";
+import { raiseMachineToIr } from "./ir.ts";
 import { optimizePostLayoutIndirectFlow } from "./post-layout-indirect-flow.ts";
 import { buildProgramPatchReport } from "./program-patch.ts";
 import { verifySuperDarkSuffixLayout } from "./super-dark-layout.ts";
@@ -353,6 +355,16 @@ interface LoweringOptions {
   // loop counter/compare/branch overhead and lets the constants preload, but
   // duplicates the body, so it is adopted only when the program ends up smaller.
   unrollCountedLoops?: boolean;
+  // Probe hook: surface the non-overlapping register coalescing pairs on
+  // CompileResult.coalesceShares so a follow-up compile can reclaim the freed
+  // registers for preloaded constants. Set only on the internal trial compile.
+  collectCoalesceShares?: boolean;
+  // Pin each freed register onto its coalesce target BEFORE preload allocation,
+  // reproducing the non-overlapping coalescing the IR pass would otherwise do
+  // only after lowering. Freeing the register at allocation time lets the
+  // preload loop claim it for an additional constant. Speculative: register
+  // allocation is global, so adopted only when the whole program ends up smaller.
+  forcedRegisterShares?: ReadonlyArray<{ freeRegister: RegisterName; keepRegister: RegisterName }>;
 }
 
 
@@ -593,6 +605,38 @@ export function compileMKPro(
     "inline-floor-hoisted-proc-tail-layout",
     "Combined inline floor-row display expressions with front-hoisted procs and tail-branch inversion",
   );
+
+  // Reclaim-coalesced-preloads: non-overlapping register coalescing only runs
+  // after lowering, too late to feed preload allocation. Probe a few likely
+  // bases to learn which registers it will free, then recompile pinning each
+  // freed register onto its coalesce target before allocation so the preload
+  // loop can spend the freed register on another constant. Smallest wins, so a
+  // base whose freed register has nothing worth preloading simply loses.
+  const reclaimBases: LoweringOptions[] = [
+    {},
+    { unrollCountedLoops: true },
+    { freeResidualDispatchScratch: true },
+    { hoistSharedHelpers: true, hoistProcs: true },
+  ];
+  const triedReclaims = new Set<string>();
+  for (const base of reclaimBases) {
+    let probe: CompileResult;
+    try {
+      probe = compileMKProOnce(source, { ...options, analysis: true }, { ...base, collectCoalesceShares: true });
+    } catch {
+      continue;
+    }
+    const shares = probe.coalesceShares;
+    if (shares === undefined || shares.length === 0) continue;
+    const key = `${JSON.stringify(base)}|${shares.map((s) => `${s.freeRegister}>${s.keepRegister}`).sort().join(",")}`;
+    if (triedReclaims.has(key)) continue;
+    triedReclaims.add(key);
+    tryCandidate(
+      { ...base, forcedRegisterShares: shares },
+      "reclaim-coalesced-preloads",
+      "Pinned coalesce-freed registers before allocation to reclaim them for preloaded constants",
+    );
+  }
 
   const OFFICIAL_PROGRAM_LIMIT = 105;
   const selectBest = (): { best: CompileResult | undefined; selected: (typeof candidates)[number] | undefined } => {
@@ -1512,6 +1556,7 @@ function compileMKProOnce(
     loweringOptions.suppressConstantPreloads,
     loweringOptions.sharedBitMaskHelperCalls === true,
     loweringOptions.startupAwareConstantPreloads === true,
+    loweringOptions.forcedRegisterShares ?? [],
   );
   const context = new EmitContext(
     ast,
@@ -1526,6 +1571,14 @@ function compileMKProOnce(
   );
 
   context.compileProgram();
+  // Probe: surface which registers non-overlapping coalescing can free on the
+  // freshly lowered main program, so the reclaim-coalesced-preloads candidate can
+  // pin them before a follow-up compile's preload allocation.
+  const coalesceShares = loweringOptions.collectCoalesceShares === true
+    ? [...computeNonOverlappingRegisterMapping(raiseMachineToIr(context.items), { defAware: true })].map(
+      ([freeRegister, keepRegister]) => ({ freeRegister, keepRegister }),
+    )
+    : undefined;
   const passOptions = loweringOptions.tailBranchInversion === true
     ? { ...opts, tailBranchInversion: true }
     : opts;
@@ -1618,7 +1671,7 @@ function compileMKProOnce(
     ...(programPatch === undefined ? {} : { programPatch }),
   };
 
-  return { ast, items: optimized, steps, report, diagnostics };
+  return { ast, items: optimized, steps, report, diagnostics, ...(coalesceShares === undefined ? {} : { coalesceShares }) };
 }
 
 function visiblePublicRegisters(
@@ -8032,6 +8085,7 @@ function allocateRegisters(
   suppressConstantPreloads: ReadonlySet<string> = new Set(),
   sharedBitMaskHelperCalls = false,
   startupAwareConstantPreloads = false,
+  forcedRegisterShares: ReadonlyArray<{ freeRegister: RegisterName; keepRegister: RegisterName }> = [],
 ): RegisterAllocation {
   const declared = new Set<string>();
   const hints = new Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>();
@@ -8144,6 +8198,24 @@ function allocateRegisters(
     registers[variable] = candidate;
     used.add(candidate);
     if (reusableScratch !== undefined) reusableScratchRegisters.set(reusableScratch, candidate);
+  }
+
+  // Reclaim registers that non-overlapping coalescing proved free: pin every
+  // variable on a freed register onto its coalesce target (their live ranges are
+  // disjoint, so they can share), then release the freed register so the preload
+  // loop below can claim it for an additional constant. The shares come from a
+  // trial compile of the identical lowering, so the pre-share variable->register
+  // assignment matches and the register identities line up.
+  for (const { freeRegister, keepRegister } of forcedRegisterShares) {
+    if (freeRegister === keepRegister || !used.has(keepRegister)) continue;
+    let movedAny = false;
+    for (const variable of Object.keys(registers)) {
+      if (registers[variable] === freeRegister) {
+        registers[variable] = keepRegister;
+        movedAny = true;
+      }
+    }
+    if (movedAny) used.delete(freeRegister);
   }
 
   const constants: Record<string, RegisterName> = {};
