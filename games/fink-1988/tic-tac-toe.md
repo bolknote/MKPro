@@ -34,6 +34,7 @@ When loaded, the program makes its first move automatically as cross.
 The printed listing marks unused program steps with dots. The book explicitly says these
 positions may be entered as `0` or simply left as zeros; this cleaned listing expands each
 printed dot into a separate `0` placeholder line.
+The listing is normalized to one command per addressed program step.
 
 The strategy is tuned for play-by-play response and is intended to be robust against
 suboptimal replies.
