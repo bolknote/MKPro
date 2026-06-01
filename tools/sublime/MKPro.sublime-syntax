@@ -106,7 +106,7 @@ contexts:
       scope: variable.parameter.function.mkpro
 
   control-keywords:
-    - match: '\b(if|else|while|loop|match|otherwise|raw|takes|returns|clobbers|preserves|code)\b'
+    - match: '\b(if|unless|else|while|loop|match|otherwise|raw|takes|returns|clobbers|preserves|code)\b'
       scope: keyword.control.mkpro
 
   state-types:
