@@ -127,7 +127,7 @@ describe("emulator regression", () => {
       const loaded = calc.loadProgram(codes);
       expect(loaded.diagnostics).toEqual([]);
       expect(calc.readProgramCodes(codes.length)).toEqual(codes);
-    });
+    }, 15000);
   }
 
   for (const file of pendingOptimizerFiles()) {

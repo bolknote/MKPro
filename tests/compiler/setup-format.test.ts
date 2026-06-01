@@ -55,7 +55,7 @@ describe("setup formatting", () => {
   });
 
   it("shows setup-block preload keys in over-budget analysis listings", () => {
-    const source = readFileSync(resolve("examples/pending-optimizer/rambo-iii.mkpro"), "utf8");
+    const source = readFileSync(resolve("examples/rambo-iii.mkpro"), "utf8");
     const listing = formatListing(compileMKPro(source, { analysis: true }));
 
     expect(listing).toContain("Setup Block:");

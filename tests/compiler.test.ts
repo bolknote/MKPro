@@ -52,6 +52,7 @@ describe("MK-Pro compiler", () => {
     expect(RUNNABLE_EXAMPLES).toContain("examples/minesweeper-9x7.mkpro");
     expect(RUNNABLE_EXAMPLES).toContain("examples/minesweeper-9x9.mkpro");
     expect(RUNNABLE_EXAMPLES).toContain("examples/raja-yoga.mkpro");
+    expect(RUNNABLE_EXAMPLES).toContain("examples/rambo-iii.mkpro");
     expect(RUNNABLE_EXAMPLES).toContain("examples/sea-battle.mkpro");
     expect(PENDING_LOWERER_EXAMPLES).toEqual([]);
     expect(PENDING_OPTIMIZER_EXAMPLES.length).toBeGreaterThan(0);
@@ -95,6 +96,7 @@ describe("MK-Pro compiler", () => {
     expect(checked).toContain("examples/minesweeper-9x7.mkpro");
     expect(checked).toContain("examples/minesweeper-9x9.mkpro");
     expect(checked).toContain("examples/raja-yoga.mkpro");
+    expect(checked).toContain("examples/rambo-iii.mkpro");
     expect(checked).toContain("examples/sea-battle.mkpro");
   }, 20_000);
 

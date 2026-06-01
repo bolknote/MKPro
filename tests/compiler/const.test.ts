@@ -101,7 +101,7 @@ program Bank {
 
   it("keeps rambo-iii at the locked size with named consts", () => {
     const result = compileMKPro(
-      readFileSync(resolve("examples/pending-optimizer/rambo-iii.mkpro"), "utf8"),
+      readFileSync(resolve("examples/rambo-iii.mkpro"), "utf8"),
       { budget: 999999, analysis: true },
     );
     expect(result.steps.length).toBe(105);

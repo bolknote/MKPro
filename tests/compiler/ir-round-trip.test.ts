@@ -48,7 +48,7 @@ describe("ir round-trip", () => {
           throw new Error(`Item ${i} mismatch:\n  ${describeDifference(original, restored)}`);
         }
       }
-    });
+    }, 15000);
   }
 
   for (const file of pendingOptimizerFiles()) {

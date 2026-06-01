@@ -513,28 +513,6 @@ sharedBitMaskHelperCalls: steps=234 | 63 69 12 67 10 69 12 64 10 50 04 11 5E 33 
 sharedBitMaskHelperCalls+hoistSharedHelpers: steps=236 | 51 16 65 63 69 13 35 69 12 15 13 35 69 12 34 52 63 69 12 67 10 69 12 64 10 50 04 11 5E 49 53 AA 00 64 11 5C A8 01 62 11 5C C8 D2 63 69 11 43 51 C8 02 11 5E 74 53 AA 00 64 11 5C A8 62 07 11 5C C8 08 10 42 69 63 10 43 51 C8 02 11 5E 99 53 AA 00 64 11 5C A8 61 07 11 5C C8 08 10 41 63 01 11 43 51 C8 06 10 5E 7A 53 AA 00 64 11 5C A8 01 61 11 5C C8 D1 01 63 10 43 51 C8 03 11 EE 53 AA 00 64 11 5C A8 53 02 02 11 5E 98 60 07 11 5C C8 08 10 40 6B 63 10 43 51 C8 01 11 5E C8 01 60 11 5C C8 D0 63 6B 11 43 51 C8 6C 50 53 02 48 D4 68 01 11 5E B5 00 44 68 02 11 5E BE 64 06 11 44 68 03 11 5E C7 64 07 11 44 52 53 02 47 66 08 63 04 13 35 04 12 02 24 6A 10 34 63 04 13 34 01 10 15 13 10 37 35 32 7E 3A 66 37 46 6D 50 8E || setup 04 04 04 43 00 47 48 09 44 04 40 41 42 01 00 49 01 00 00 4B 07 07 07 07 07 07 07 4D 07 07 07 0B 4C 00 0A 05 4A 01 06 4E 3B 09 09 09 12 0E 35 11 46 3B 09 09 09 09 09 09 09 09 09 12 0E 35 11 01 10 45 50"
 `;
 
-exports[`golden listing > lowering variants are stable for examples/pending-optimizer/rambo-iii.mkpro 1`] = `
-"primary: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-aggressiveTerminalDirect: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-invertBranchOrder: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-aggressiveTerminalDirect+invertBranchOrder: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-hoistSharedHelpers: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-hoistSharedHelpers+hoistProcs: steps=114 | 51 74 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 31 DC AA BC 51 34 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52 02 05 40 60 50 3B 01 03 12 03 13 34 5E 89 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 02 05 53 02 06 53 02 5D 77 6E 50
-canonicalizeIfChains: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-freeResidualDispatchScratch: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-aliasXReuse: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-coalesceCopies: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-freeResidualDispatchScratch+canonicalizeIfChains: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-shareRandomCell: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-shareRandomCell+hoistSharedHelpers: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-tailBranchInversion: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-guardedPrologueGadgets: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: steps=114 | 51 74 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 31 DC AA BC 51 34 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52 02 05 40 60 50 3B 01 03 12 03 13 34 5E 89 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 02 05 53 02 06 53 02 5D 77 6E 50
-sharedBitMaskHelperCalls: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-sharedBitMaskHelperCalls+hoistSharedHelpers: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52"
-`;
-
 exports[`golden listing > lowering variants are stable for examples/pending-optimizer/teleport.mkpro 1`] = `
 "primary: steps=237 | 53 86 50 40 62 01 11 42 60 5E 38 62 6C 11 59 43 42 3B 07 12 0E 35 11 01 10 6C 3B 04 12 0E 35 11 01 10 12 10 47 88 60 67 10 47 88 29 66 08 67 04 13 35 04 12 02 24 6D 10 34 67 04 13 34 01 10 15 13 10 37 35 32 EE 6A 08 67 04 13 35 04 12 02 24 6D 10 34 67 04 13 34 01 10 15 13 10 37 35 32 57 86 67 04 13 40 35 04 12 02 24 00 0A 05 10 34 60 34 01 10 15 13 08 10 40 6B 60 37 35 57 86 6B 60 38 4B 6C 62 10 42 67 6C 13 34 45 67 6C 65 12 11 40 63 49 01 44 07 64 11 59 DD 6A 64 15 65 15 00 0A 02 02 06 00 00 00 02 09 12 34 10 37 35 32 57 BA 69 01 64 15 13 08 10 39 49 66 64 15 65 15 00 0A 02 02 06 00 00 00 02 09 12 34 10 37 35 32 57 DA 69 04 64 15 13 08 10 39 49 D4 51 95 69 02 60 15 13 08 10 39 49 65 69 14 25 0C 50 52 || setup 01 07 47 05 42 07 48 01 45 44 00 49 01 00 4C 00 0A 05 4D 04 04 48 04 03 4E 3B 09 09 09 12 0E 35 11 46 3B 09 09 09 12 0E 35 11 4A 05 0E 09 13 3A 43 50
 aggressiveTerminalDirect: steps=237 | 53 86 50 40 62 01 11 42 60 5E 38 62 6C 11 59 43 42 3B 07 12 0E 35 11 01 10 6C 3B 04 12 0E 35 11 01 10 12 10 47 88 60 67 10 47 88 29 66 08 67 04 13 35 04 12 02 24 6D 10 34 67 04 13 34 01 10 15 13 10 37 35 32 EE 6A 08 67 04 13 35 04 12 02 24 6D 10 34 67 04 13 34 01 10 15 13 10 37 35 32 57 86 67 04 13 40 35 04 12 02 24 00 0A 05 10 34 60 34 01 10 15 13 08 10 40 6B 60 37 35 57 86 6B 60 38 4B 6C 62 10 42 67 6C 13 34 45 67 6C 65 12 11 40 63 49 01 44 07 64 11 59 DD 6A 64 15 65 15 00 0A 02 02 06 00 00 00 02 09 12 34 10 37 35 32 57 BA 69 01 64 15 13 08 10 39 49 66 64 15 65 15 00 0A 02 02 06 00 00 00 02 09 12 34 10 37 35 32 57 DA 69 04 64 15 13 08 10 39 49 D4 51 95 69 02 60 15 13 08 10 39 49 65 69 14 25 0C 50 52 || setup 01 07 47 05 42 07 48 01 45 44 00 49 01 00 4C 00 0A 05 4D 04 04 48 04 03 4E 3B 09 09 09 12 0E 35 11 46 3B 09 09 09 12 0E 35 11 4A 05 0E 09 13 3A 43 50
@@ -599,6 +577,28 @@ guardedPrologueGadgets: steps=91 | 53 06 51 00 6E 50 64 6C 12 60 10 6C 12 62 10 
 guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: steps=93 | 51 89 6E 50 64 6C 12 60 10 6C 12 62 10 6C 12 65 10 50 41 01 66 10 46 6B 11 5C 02 03 61 31 11 5C 35 51 04 60 61 10 40 01 65 10 45 63 3B 07 12 0E 35 11 01 10 15 38 43 60 15 37 5E 02 07 65 11 59 02 60 62 11 5E 04 D4 08 64 11 5C 78 6D 50 3B 07 12 0E 35 11 01 10 42 51 04 53 04 51 89 || setup 04 40 01 45 44 00 41 46 01 00 4C 09 09 4B 08 08 08 4D 09 09 09 0B 4E 3B 07 12 0E 35 11 01 10 42 3B 6E 0B 12 0E 35 11 43 50
 sharedBitMaskHelperCalls: steps=91 | 53 06 51 00 6E 50 64 6C 12 60 10 6C 12 62 10 6C 12 65 10 50 41 01 66 10 46 6B 11 5C 04 03 61 31 11 5C 37 51 06 60 61 10 40 01 65 10 45 63 3B 07 12 0E 35 11 01 10 15 38 43 60 15 37 5E 04 07 65 11 59 04 60 62 11 5E 06 D4 08 64 11 5C 80 6D 50 3B 07 12 0E 35 11 01 10 42 51 06 || setup 04 40 01 45 44 00 41 46 01 00 4C 09 09 4B 08 08 08 4D 09 09 09 0B 4E 3B 07 12 0E 35 11 01 10 42 3B 6E 0B 12 0E 35 11 43 50
 sharedBitMaskHelperCalls+hoistSharedHelpers: steps=91 | 53 06 51 00 6E 50 64 6C 12 60 10 6C 12 62 10 6C 12 65 10 50 41 01 66 10 46 6B 11 5C 04 03 61 31 11 5C 37 51 06 60 61 10 40 01 65 10 45 63 3B 07 12 0E 35 11 01 10 15 38 43 60 15 37 5E 04 07 65 11 59 04 60 62 11 5E 06 D4 08 64 11 5C 80 6D 50 3B 07 12 0E 35 11 01 10 42 51 06 || setup 04 40 01 45 44 00 41 46 01 00 4C 09 09 4B 08 08 08 4D 09 09 09 0B 4E 3B 07 12 0E 35 11 01 10 42 3B 6E 0B 12 0E 35 11 43 50"
+`;
+
+exports[`golden listing > lowering variants are stable for examples/rambo-iii.mkpro 1`] = `
+"primary: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
+aggressiveTerminalDirect: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
+invertBranchOrder: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
+aggressiveTerminalDirect+invertBranchOrder: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
+hoistSharedHelpers: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
+hoistSharedHelpers+hoistProcs: steps=114 | 51 74 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 31 DC AA BC 51 34 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52 02 05 40 60 50 3B 01 03 12 03 13 34 5E 89 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 02 05 53 02 06 53 02 5D 77 6E 50
+canonicalizeIfChains: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
+freeResidualDispatchScratch: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
+aliasXReuse: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
+coalesceCopies: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
+freeResidualDispatchScratch+canonicalizeIfChains: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
+shareRandomCell: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
+shareRandomCell+hoistSharedHelpers: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
+tailBranchInversion: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
+hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
+guardedPrologueGadgets: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
+guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: steps=114 | 51 74 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 31 DC AA BC 51 34 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52 02 05 40 60 50 3B 01 03 12 03 13 34 5E 89 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 02 05 53 02 06 53 02 5D 77 6E 50
+sharedBitMaskHelperCalls: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
+sharedBitMaskHelperCalls+hoistSharedHelpers: steps=112 | 02 05 40 60 50 3B 01 03 12 03 13 34 5E 15 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 40 05 53 40 06 53 40 5D 03 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC AA BC 51 72 DD AA BD DD AA BD DC AA BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52"
 `;
 
 exports[`golden listing > lowering variants are stable for examples/sea-battle.mkpro 1`] = `
@@ -7195,319 +7195,6 @@ Cell Roles:
   85: 99 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
 `;
 
-exports[`golden listing > selected output is stable for examples/pending-optimizer/rambo-iii.mkpro 1`] = `
-"## Listing
-Setup Block:
-  \`R0=25; R8=0.5; R1=5000.999; R2=5000.999; R3=5000.999; R4=0; R5=0; R6=0; R7=25000; Re=8.1020088E14; Ra=97; Rb=Е4\`
-
-# Setup Listing
- Step | Code | Command                 | Comment
-------+------+-------------------------+----------------
-   00 |   -  | 25                      |
-   01 |  40  | X→П 0                   | setup R0
-   02 |   -  | 0.5                     |
-   03 |  48  | X→П 8                   | setup R8
-   04 |   -  | 5000.999                |
-   05 |  41  | X→П 1                   | setup R1
-   06 |  42  | X→П 2                   | setup R2
-   07 |  43  | X→П 3                   | setup R3
-   08 |   -  | 0                       |
-   09 |  44  | X→П 4                   | setup R4
-   10 |  45  | X→П 5                   | setup R5
-   11 |  46  | X→П 6                   | setup R6
-   12 |   -  | 25000                   |
-   13 |  47  | X→П 7                   | setup R7
-   14 |   -  | 8.1020088E14            |
-   15 |  4E  | X→П e                   | setup Re
-   16 |   -  | 97                      |
-   17 |  4A  | X→П a                   | setup Ra
-   18 |   -  | 32                      |
-   19 |  4B  | X→П b                   | setup Rb
-
-# Main Listing
- Step | Code  | Command                 | Comment
-------+-------+-------------------------+----------------
-   00 | 60    | П→X 0                   | display __inline_show_32_0 source
-   01 | 50    | С/П                     | show __inline_show_32_0
-   02 | 3B    | К СЧ                    | random()
-   03 | 01 03 | 13                      |
-   05 | 12    | ×                       | expr *
-   06 | 03    | 3                       |
-   07 | 13    | ÷                       | expr /
-   08 | 34    | К [x]                   | int()
-   09 | 5E    | F x=0                   | zero fallback event_target
-   10 | 12    | 12                      | zero fallback event_target
-   11 | 07    | 7                       |
-   12 | 4D    | X→П d                   | set event_target
-   13 | 3B    | К СЧ                    | random()
-   14 | 48    | X→П 8                   | set random_state
-   15 | 04    | 4                       |
-   16 | 15    | F 10ˣ                   | constant 10000
-   17 | 12    | ×                       | expr *
-   18 | 34    | К [x]                   | int()
-   19 | DD    | К П→X d                 | indexed recall cells
-   20 | 10    | +                       | expr +
-   21 | BD    | К X→П d                 | indexed set cells
-   22 | 04    | 4                       |
-   23 | AB    | К ПП b                  | proc call front_stop; preloaded Rb=E4 indirect-target=32 shifted-forward indirect flow
-   24 | 05    | 5                       |
-   25 | AB    | К ПП b                  | proc call front_stop; preloaded Rb=E4 indirect-target=32 shifted-forward indirect flow
-   26 | 06    | 6                       |
-   27 | AB    | К ПП b                  | proc call front_stop; preloaded Rb=E4 indirect-target=32 shifted-forward indirect flow
-   28 | 5D    | F L0                    | setup-counted while time
-   29 | 00    | 00                      | setup-counted while time
-   30 | 6E    | П→X e                   | preload const 810200880000000
-   31 | 50    | С/П                     | halt
-   32 | 4D    | X→П d                   | set event_target from X parameter
-   33 | 03    | 3                       |
-   34 | 11    | −                       | expr -
-   35 | 4C    | X→П c                   | set slot
-   36 | 50    | С/П                     | show __inline_show_57_1
-   37 | 34    | К [x]                   | int()
-   38 | 49    | X→П 9                   | set scratch
-   39 | 67    | П→X 7                   | recall cells_7
-   40 | 69    | П→X 9                   | recall scratch
-   41 | 11    | −                       | expr -
-   42 | 47    | X→П 7                   | set cells_7
-   43 | 21    | F √                     | domain-error guard trap
-   44 | DD    | К П→X d                 | indexed recall cells
-   45 | 69    | П→X 9                   | recall scratch
-   46 | 10    | +                       | expr +
-   47 | BD    | К X→П d                 | indexed set cells
-   48 | 21    | F √                     | indexed assign domain-error guard trap
-   49 | 68    | П→X 8                   | previous random random_state
-   50 | 0E    | В↑                      | previous random keep random_state
-   51 | 3B    | К СЧ                    | random()
-   52 | 48    | X→П 8                   | set random_state
-   53 | 11    | −                       | previous random compare
-   54 | 5C    | F x<0                   | false branch for previous random <
-   55 | 61    | 61                      | false branch for previous random <
-   56 | DC    | К П→X c                 | indexed recall cells
-   57 | AA    | К ПП a                  | call function decay; preloaded Ra=97 indirect-target=97 shifted-forward indirect flow
-   58 | BC    | К X→П c                 | indexed set cells
-   59 | 51    | БП                      | if end
-   60 | 64    | 64                      | if end
-   61 | DD    | К П→X d                 | indexed recall cells
-   62 | AA    | К ПП a                  | call function decay; preloaded Ra=97 indirect-target=97 shifted-forward indirect flow
-   63 | BD    | К X→П d                 | indexed set cells
-   64 | DD    | К П→X d                 | indexed recall cells
-   65 | AA    | К ПП a                  | call function decay; preloaded Ra=97 indirect-target=97 shifted-forward indirect flow
-   66 | BD    | К X→П d                 | indexed set cells
-   67 | DC    | К П→X c                 | indexed recall cells
-   68 | AA    | К ПП a                  | call function decay; preloaded Ra=97 indirect-target=97 shifted-forward indirect flow
-   69 | BC    | К X→П c                 | indexed set cells
-   70 | 35    | К {x}                   | fractional debit distance frac
-   71 | 68    | П→X 8                   | previous random random_state
-   72 | 0E    | В↑                      | previous random keep random_state
-   73 | 3B    | К СЧ                    | random()
-   74 | 48    | X→П 8                   | set random_state
-   75 | 10    | +                       | previous random + random()
-   76 | 01    | 1                       |
-   77 | 10    | +                       | previous random additive term
-   78 | 02 00 | 20                      |
-   80 | 12    | ×                       | fractional debit factor
-   81 | DD    | К П→X d                 | indexed recall cells
-   82 | DC    | К П→X c                 | indexed recall cells
-   83 | 13    | ÷                       | fractional debit distance ratio
-   84 | 13    | ÷                       | fractional debit scaled step
-   85 | 34    | К [x]                   | fractional debit int step
-   86 | 03    | 3                       |
-   87 | 15    | F 10ˣ                   | constant 1000
-   88 | 13    | ÷                       | fractional debit scale
-   89 | 11    | −                       | fractional debit remaining distance
-   90 | 17    | F lg                    | fractional debit domain-error guard trap
-   91 | 0F    | F Вx                    | fractional debit restore remaining distance
-   92 | DC    | К П→X c                 | indexed recall cells
-   93 | 34    | К [x]                   | fractional debit integer part
-   94 | 10    | +                       | fractional debit rebuild value
-   95 | BC    | К X→П c                 | indexed set cells
-   96 | 52    | В/О                     | implicit return from proc
-   97 | 0E    | В↑                      | x-param decay keep base
-   98 | 68    | П→X 8                   | recall random_state
-   99 | 12    | ×                       | x-param decay scale
-   A0 | 04    | 4                       |
-   A1 | 13    | ÷                       | x-param decay divide
-   A2 | 34    | К [x]                   | x-param decay int
-   A3 | 11    | −                       | x-param decay subtract
-   A4 | 52    | В/О                     | x-param decay return
-
-## Hex
-00: 60 50 3B 01 03 12 03 13
-08: 34 5E 12 07 4D 3B 48 04
-16: 15 12 34 DD 10 BD 04 AB
-24: 05 AB 06 AB 5D 00 6E 50
-32: 4D 03 11 4C 50 34 49 67
-40: 69 11 47 21 DD 69 10 BD
-48: 21 68 0E 3B 48 11 5C 61
-56: DC AA BC 51 64 DD AA BD
-64: DD AA BD DC AA BC 35 68
-72: 0E 3B 48 10 01 10 02 00
-80: 12 DD DC 13 13 34 03 15
-88: 13 11 17 0F DC 34 10 BC
-96: 52 0E 68 12 04 13 34 11
-A4: 52
-
-## Explain
-MK-Pro compile report
-Steps: 105/999999
-Delivery: hex
-Optimizer: exact maximum
-Reference: lordbss_pmk53; span=105, entries=105, gaps=none, compiled=105, delta=0, parity=equal
-Machine: mk61
-Optimizer rules: automatic=yes; active=12, considered=0, candidates=42, planned=0
-Budget: official=105, extra=0, physical=105
-Intent IR: lowered=yes, v2=yes; intent=116, effects=105, cells=105
-
-Preloads:
-  time -> R0: 25 (outside program cells)
-  random_state -> R8: 0.5 (outside program cells)
-  R1: 5000.999 (outside program cells)
-  R2: 5000.999 (outside program cells)
-  R3: 5000.999 (outside program cells)
-  R4: 0 (outside program cells)
-  R5: 0 (outside program cells)
-  R6: 0 (outside program cells)
-  R7: 25000 (outside program cells)
-  Re: 810200880000000 (outside program cells)
-  Ra: 97 (outside program cells)
-  Rb: E4 (outside program cells)
-
-Setup Block:
-  \`R0=25; R8=0.5; R1=5000.999; R2=5000.999; R3=5000.999; R4=0; R5=0; R6=0; R7=25000; Re=8.1020088E14; Ra=97; Rb=Е4\`
-
-Registers:
-  cells_1: R1
-  cells_2: R2
-  cells_3: R3
-  cells_4: R4
-  cells_5: R5
-  cells_6: R6
-  cells_7: R7
-  event_target: Rd
-  random_state: R8
-  scratch: R9
-  slot: Rc
-  target: Ra
-  time: R0
-
-Labels:
-   main: 00
-  __setup_counted_while_0: 00
-  __zero_fallback_store_1: 12
-  front_stop: 32
-  __previous_random_false_2: 61
-  __previous_random_end_3: 64
-  decay: 97
-
-Optimizations:
-  - constant-indexed-state-resolution: Resolved 3 constant indexed state accesses before pattern matching.
-  - x-param-state-elision: Removed 1 register-backed parameter field consumed directly from X.
-  - expression-constant-folder: Folded 3 constant expression node(s) before code generation.
-  - intent-domain-lowering: Lowered 6 state fields and 6 rules through the generic intent pipeline.
-  - const-inline: Inlined 2 compile-time const declaration(s) at use sites before code generation.
-  - auto-preload-initial-state: Moved initial state into setup/preload values so official program cells stay focused on turn logic.
-  - display-strategy-selection: Selected decimal-pack for screen __inline_show_32_0.
-  - packed-display-lowering: Display __inline_show_32_0 may use display-byte encodings in later layout passes.
-  - size-model-rule-inline: Inlined 2-use rule random_92 because it is smaller than a ПП/В/О subroutine.
-  - stack-current-x-scheduling: Reused random_state already in X for commutative *.
-  - assign-zero-fallback-store: Deferred storing event_target until after its zero fallback at lines 34/35.
-  - size-model-rule-inline: Inlined 2-use rule random_92 because it is smaller than a ПП/В/О subroutine.
-  - constant-synthesis: Built constant 10000 by loaded exponent 4 and applied F 10^x (2 cells instead of direct 5).
-  - stack-current-x-scheduling: Reused random_state already in X for commutative *.
-  - stack-resident-indexed-temp: Kept single-use temp scratch in X for the indexed update cells at line 41.
-  - proc-call-lowering: Compiled call to rule front_stop as ПП/В/О subroutine.
-  - x-param-proc-call: Passed target to rule front_stop through X at line 43.
-  - proc-call-lowering: Compiled call to rule front_stop as ПП/В/О subroutine.
-  - x-param-proc-call: Passed target to rule front_stop through X at line 44.
-  - proc-call-lowering: Compiled call to rule front_stop as ПП/В/О subroutine.
-  - x-param-proc-call: Passed target to rule front_stop through X at line 45.
-  - setup-only-counted-loop-init: Used setup initializer for time and lowered while time >= 1 through F L0 at line 31.
-  - preloaded-constant: Used preloaded Re for constant 810200880000000.
-  - single-use-rule-inline: Inlined single-use rule won at line 48.
-  - error-stop: Used one-cell error opcode for literal ЕГГ0Г stop at line 24.
-  - display-strategy-selection: Selected decimal-pack for screen __inline_show_57_1.
-  - display-current-x-reuse: Reused slot already in X as the first field of screen __inline_show_57_1.
-  - packed-display-lowering: Display __inline_show_57_1 may use display-byte encodings in later layout passes.
-  - show-read-fusion: Fused show __inline_show_57_1 and the read in scratch = int(read()) into one calculator stop at line 58.
-  - x-param-return-decay-call: Passed value to decay through X.
-  - x-param-return-decay-call: Passed value to decay through X.
-  - previous-random-branch-stack-reuse: Kept previous random_state in Y while updating random_state for a following branch at line 79.
-  - x-param-return-decay-call: Passed value to decay through X.
-  - x-param-return-decay-call: Passed value to decay through X.
-  - constant-synthesis: Built constant 1000 by loaded exponent 3 and applied F 10^x (2 cells instead of direct 4).
-  - previous-random-fractional-debit: Kept previous random_state and frac(cells[slot]) on the stack while applying guarded fractional debit and reused the just-stored distance in X.
-  - single-use-rule-inline: Inlined single-use rule resolve_front at line 70.
-  - indexed-assign-zero-domain-guard: Fused indexed store and "< 0" terminal-error branch through F sqrt.
-  - assign-zero-domain-guard: Fused cells_7 store and "< 0" terminal-error branch through F sqrt.
-  - x-param-proc-entry: Compiled rule front_stop to copy target directly from X.
-  - x-param-return-decay: Compiled decay to consume value directly from X.
-  - store-recall-peephole: Dropped 1 redundant П->X immediately after X->П to the same register.
-  - dead-store-elimination: Removed 1 store(s) to register(s) never read before the next assignment.
-  - dead-proc-elimination: Removed 1 unreferenced emitted rule proc(s) after IR optimization.
-  - preloaded-indirect-flow: Activated post-layout: replaced 7 direct branch/call(s) with proven preloaded indirect flow.
-  - dark-entry-layout: Pointed 1 branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window).
-  - demote-constant-chain-indirect-flow: Inlined constants 0, 25, 99, 1000, 20 to keep a register free for post-layout indirect flow (105 vs 112 cells).
-
-Candidates:
-  * display __inline_show_32_0/decimal-pack: 2 steps; selected decimal-pack for screen __inline_show_32_0
-  - display __inline_show_32_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
-  - display __inline_show_32_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
-  - display __inline_show_32_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
-  - display __inline_show_32_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-  * display __inline_show_57_1/decimal-pack: 1 steps; selected decimal-pack for screen __inline_show_57_1
-  - display __inline_show_57_1/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
-  - display __inline_show_57_1/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
-  - display __inline_show_57_1/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
-  - display __inline_show_57_1/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-  * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
-
-Optimizer Capabilities:
-  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
-  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
-  - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
-  - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
-  - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
-  - super-number-deferred-normalization: candidate; Candidate: keep an un-normalized super-number (extra hidden mantissa digits) to defer a range/error check. The reference emulator models only the 8 visible mantissa digits, so the hidden-digit behavior the idiom relies on cannot be reproduced or safely proven, and no language construct produces it.
-  - packed-position-type: candidate; Candidate: a language-level packed position type N.0000H carrying an integer position plus packed (hex) fractional sub-coordinates. The dual-use round-trip (К [x] recovers the position, К {x} recovers the packed fraction) is already exploited by constants-dual-use; a dedicated type would only add language surface that no current program consumes.
-  - coord-list-scaled-decimal: candidate; Stores 10x10 board coordinates as y.x decimal values when all visible uses allow it, so row/column/diagonal scans avoid repeated /10 digit extraction.
-  - dual-constant-sign-digit: candidate; Candidate: a language intent for a dual constant 1.|-00 plus compact sign-digits (2N..9N) and their comparison semantics. The negative-zero comparison behavior is already active through the negative-zero-threshold family; no current program needs the additional sign-digit literal surface.
-  - branch-removal: candidate; Umbrella rule for replacing provably equivalent conditionals with branchless arithmetic, sign, extrema, or masked updates.
-  - zero-condition-test: candidate; Uses direct F x?0 tests when one side of a condition is a proved zero, avoiding a zero literal and subtraction.
-  - dispatch-compare-chain: candidate; Lowers high-level command dispatch automatically; small proven dispatches may use indirect or super-dark dispatch.
-
-Machine Features Used:
-  - indirect-flow: Optimizer selected register-held branch addresses for one-cell indirect flow.; К БП/К ПП/К x?0 indirect flow commands are available to the optimizer.
-  - stack-resident-temps: Optimizer kept short-lived temporaries on the X/Y/Z/T stack instead of register spills.
-  - error-stops: Compiler emitted a domain-error pause or explicit trap.; Domain-error stops are available only when the source semantics permits trap-like termination.
-  - code-data-overlay: Layout marked address cells as reusable code/data overlay candidates.; Address operands, constants, opcodes, and display bytes may share cells after conflict checks.
-  - display-bytes: Display lowering marked cells as packed display-byte candidates.; Packed display bytes, hexadecimal mantissa digits, and sign-digit forms are available.
-  - address-constants: Layout marked address cells as reusable constants.; Address cells may double as constants for indirect flow and data transforms.
-
-Proofs:
-  - return-stack-empty: proved; No ПП opcodes were emitted; empty return stack precondition holds for В/О-as-БП01 rewrites.
-  - indirect-addressing-ranges: proved; Indirect selectors are rewritten only after local data-flow proves a stable target, a compiler-owned address preload, or the fractional R0 sentinel shape.
-  - value-ranges: proved; Collected source ranges for time, slot, event_target.
-  - observability: proved; Visible state is limited by display output: time, slot.
-  - display-byte-observable-boundary: assumed; Display-byte candidates are bounded by display output and the exact mk61 profile.
-
-Rejected Candidates:
-  - display __inline_show_32_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
-  - display __inline_show_32_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
-  - display __inline_show_32_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
-  - display __inline_show_32_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-  - display __inline_show_57_1/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
-  - display __inline_show_57_1/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
-  - display __inline_show_57_1/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
-  - display __inline_show_57_1/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
-
-Cell Roles:
-  00: 60 exec, display-byte - display byte role allowed
-  10: 12 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  29: 00 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  55: 61 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  60: 64 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
-`;
-
 exports[`golden listing > selected output is stable for examples/pending-optimizer/teleport.mkpro 1`] = `
 "## Listing
 # Setup Listing
@@ -8741,6 +8428,319 @@ Cell Roles:
   16: 12 exec, display-byte - display byte role allowed
   17: 65 exec, display-byte - display byte role allowed
   18: 10 exec, display-byte - display byte role allowed"
+`;
+
+exports[`golden listing > selected output is stable for examples/rambo-iii.mkpro 1`] = `
+"## Listing
+Setup Block:
+  \`R0=25; R8=0.5; R1=5000.999; R2=5000.999; R3=5000.999; R4=0; R5=0; R6=0; R7=25000; Re=8.1020088E14; Ra=97; Rb=Е4\`
+
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |   -  | 25                      |
+   01 |  40  | X→П 0                   | setup R0
+   02 |   -  | 0.5                     |
+   03 |  48  | X→П 8                   | setup R8
+   04 |   -  | 5000.999                |
+   05 |  41  | X→П 1                   | setup R1
+   06 |  42  | X→П 2                   | setup R2
+   07 |  43  | X→П 3                   | setup R3
+   08 |   -  | 0                       |
+   09 |  44  | X→П 4                   | setup R4
+   10 |  45  | X→П 5                   | setup R5
+   11 |  46  | X→П 6                   | setup R6
+   12 |   -  | 25000                   |
+   13 |  47  | X→П 7                   | setup R7
+   14 |   -  | 8.1020088E14            |
+   15 |  4E  | X→П e                   | setup Re
+   16 |   -  | 97                      |
+   17 |  4A  | X→П a                   | setup Ra
+   18 |   -  | 32                      |
+   19 |  4B  | X→П b                   | setup Rb
+
+# Main Listing
+ Step | Code  | Command                 | Comment
+------+-------+-------------------------+----------------
+   00 | 60    | П→X 0                   | display __inline_show_32_0 source
+   01 | 50    | С/П                     | show __inline_show_32_0
+   02 | 3B    | К СЧ                    | random()
+   03 | 01 03 | 13                      |
+   05 | 12    | ×                       | expr *
+   06 | 03    | 3                       |
+   07 | 13    | ÷                       | expr /
+   08 | 34    | К [x]                   | int()
+   09 | 5E    | F x=0                   | zero fallback event_target
+   10 | 12    | 12                      | zero fallback event_target
+   11 | 07    | 7                       |
+   12 | 4D    | X→П d                   | set event_target
+   13 | 3B    | К СЧ                    | random()
+   14 | 48    | X→П 8                   | set random_state
+   15 | 04    | 4                       |
+   16 | 15    | F 10ˣ                   | constant 10000
+   17 | 12    | ×                       | expr *
+   18 | 34    | К [x]                   | int()
+   19 | DD    | К П→X d                 | indexed recall cells
+   20 | 10    | +                       | expr +
+   21 | BD    | К X→П d                 | indexed set cells
+   22 | 04    | 4                       |
+   23 | AB    | К ПП b                  | proc call front_stop; preloaded Rb=E4 indirect-target=32 shifted-forward indirect flow
+   24 | 05    | 5                       |
+   25 | AB    | К ПП b                  | proc call front_stop; preloaded Rb=E4 indirect-target=32 shifted-forward indirect flow
+   26 | 06    | 6                       |
+   27 | AB    | К ПП b                  | proc call front_stop; preloaded Rb=E4 indirect-target=32 shifted-forward indirect flow
+   28 | 5D    | F L0                    | setup-counted while time
+   29 | 00    | 00                      | setup-counted while time
+   30 | 6E    | П→X e                   | preload const 810200880000000
+   31 | 50    | С/П                     | halt
+   32 | 4D    | X→П d                   | set event_target from X parameter
+   33 | 03    | 3                       |
+   34 | 11    | −                       | expr -
+   35 | 4C    | X→П c                   | set slot
+   36 | 50    | С/П                     | show __inline_show_57_1
+   37 | 34    | К [x]                   | int()
+   38 | 49    | X→П 9                   | set scratch
+   39 | 67    | П→X 7                   | recall cells_7
+   40 | 69    | П→X 9                   | recall scratch
+   41 | 11    | −                       | expr -
+   42 | 47    | X→П 7                   | set cells_7
+   43 | 21    | F √                     | domain-error guard trap
+   44 | DD    | К П→X d                 | indexed recall cells
+   45 | 69    | П→X 9                   | recall scratch
+   46 | 10    | +                       | expr +
+   47 | BD    | К X→П d                 | indexed set cells
+   48 | 21    | F √                     | indexed assign domain-error guard trap
+   49 | 68    | П→X 8                   | previous random random_state
+   50 | 0E    | В↑                      | previous random keep random_state
+   51 | 3B    | К СЧ                    | random()
+   52 | 48    | X→П 8                   | set random_state
+   53 | 11    | −                       | previous random compare
+   54 | 5C    | F x<0                   | false branch for previous random <
+   55 | 61    | 61                      | false branch for previous random <
+   56 | DC    | К П→X c                 | indexed recall cells
+   57 | AA    | К ПП a                  | call function decay; preloaded Ra=97 indirect-target=97 shifted-forward indirect flow
+   58 | BC    | К X→П c                 | indexed set cells
+   59 | 51    | БП                      | if end
+   60 | 64    | 64                      | if end
+   61 | DD    | К П→X d                 | indexed recall cells
+   62 | AA    | К ПП a                  | call function decay; preloaded Ra=97 indirect-target=97 shifted-forward indirect flow
+   63 | BD    | К X→П d                 | indexed set cells
+   64 | DD    | К П→X d                 | indexed recall cells
+   65 | AA    | К ПП a                  | call function decay; preloaded Ra=97 indirect-target=97 shifted-forward indirect flow
+   66 | BD    | К X→П d                 | indexed set cells
+   67 | DC    | К П→X c                 | indexed recall cells
+   68 | AA    | К ПП a                  | call function decay; preloaded Ra=97 indirect-target=97 shifted-forward indirect flow
+   69 | BC    | К X→П c                 | indexed set cells
+   70 | 35    | К {x}                   | fractional debit distance frac
+   71 | 68    | П→X 8                   | previous random random_state
+   72 | 0E    | В↑                      | previous random keep random_state
+   73 | 3B    | К СЧ                    | random()
+   74 | 48    | X→П 8                   | set random_state
+   75 | 10    | +                       | previous random + random()
+   76 | 01    | 1                       |
+   77 | 10    | +                       | previous random additive term
+   78 | 02 00 | 20                      |
+   80 | 12    | ×                       | fractional debit factor
+   81 | DD    | К П→X d                 | indexed recall cells
+   82 | DC    | К П→X c                 | indexed recall cells
+   83 | 13    | ÷                       | fractional debit distance ratio
+   84 | 13    | ÷                       | fractional debit scaled step
+   85 | 34    | К [x]                   | fractional debit int step
+   86 | 03    | 3                       |
+   87 | 15    | F 10ˣ                   | constant 1000
+   88 | 13    | ÷                       | fractional debit scale
+   89 | 11    | −                       | fractional debit remaining distance
+   90 | 17    | F lg                    | fractional debit domain-error guard trap
+   91 | 0F    | F Вx                    | fractional debit restore remaining distance
+   92 | DC    | К П→X c                 | indexed recall cells
+   93 | 34    | К [x]                   | fractional debit integer part
+   94 | 10    | +                       | fractional debit rebuild value
+   95 | BC    | К X→П c                 | indexed set cells
+   96 | 52    | В/О                     | implicit return from proc
+   97 | 0E    | В↑                      | x-param decay keep base
+   98 | 68    | П→X 8                   | recall random_state
+   99 | 12    | ×                       | x-param decay scale
+   A0 | 04    | 4                       |
+   A1 | 13    | ÷                       | x-param decay divide
+   A2 | 34    | К [x]                   | x-param decay int
+   A3 | 11    | −                       | x-param decay subtract
+   A4 | 52    | В/О                     | x-param decay return
+
+## Hex
+00: 60 50 3B 01 03 12 03 13
+08: 34 5E 12 07 4D 3B 48 04
+16: 15 12 34 DD 10 BD 04 AB
+24: 05 AB 06 AB 5D 00 6E 50
+32: 4D 03 11 4C 50 34 49 67
+40: 69 11 47 21 DD 69 10 BD
+48: 21 68 0E 3B 48 11 5C 61
+56: DC AA BC 51 64 DD AA BD
+64: DD AA BD DC AA BC 35 68
+72: 0E 3B 48 10 01 10 02 00
+80: 12 DD DC 13 13 34 03 15
+88: 13 11 17 0F DC 34 10 BC
+96: 52 0E 68 12 04 13 34 11
+A4: 52
+
+## Explain
+MK-Pro compile report
+Steps: 105/999999
+Delivery: hex
+Optimizer: exact maximum
+Reference: lordbss_pmk53; span=105, entries=105, gaps=none, compiled=105, delta=0, parity=equal
+Machine: mk61
+Optimizer rules: automatic=yes; active=12, considered=0, candidates=42, planned=0
+Budget: official=105, extra=0, physical=105
+Intent IR: lowered=yes, v2=yes; intent=116, effects=105, cells=105
+
+Preloads:
+  time -> R0: 25 (outside program cells)
+  random_state -> R8: 0.5 (outside program cells)
+  R1: 5000.999 (outside program cells)
+  R2: 5000.999 (outside program cells)
+  R3: 5000.999 (outside program cells)
+  R4: 0 (outside program cells)
+  R5: 0 (outside program cells)
+  R6: 0 (outside program cells)
+  R7: 25000 (outside program cells)
+  Re: 810200880000000 (outside program cells)
+  Ra: 97 (outside program cells)
+  Rb: E4 (outside program cells)
+
+Setup Block:
+  \`R0=25; R8=0.5; R1=5000.999; R2=5000.999; R3=5000.999; R4=0; R5=0; R6=0; R7=25000; Re=8.1020088E14; Ra=97; Rb=Е4\`
+
+Registers:
+  cells_1: R1
+  cells_2: R2
+  cells_3: R3
+  cells_4: R4
+  cells_5: R5
+  cells_6: R6
+  cells_7: R7
+  event_target: Rd
+  random_state: R8
+  scratch: R9
+  slot: Rc
+  target: Ra
+  time: R0
+
+Labels:
+   main: 00
+  __setup_counted_while_0: 00
+  __zero_fallback_store_1: 12
+  front_stop: 32
+  __previous_random_false_2: 61
+  __previous_random_end_3: 64
+  decay: 97
+
+Optimizations:
+  - constant-indexed-state-resolution: Resolved 3 constant indexed state accesses before pattern matching.
+  - x-param-state-elision: Removed 1 register-backed parameter field consumed directly from X.
+  - expression-constant-folder: Folded 3 constant expression node(s) before code generation.
+  - intent-domain-lowering: Lowered 6 state fields and 6 rules through the generic intent pipeline.
+  - const-inline: Inlined 2 compile-time const declaration(s) at use sites before code generation.
+  - auto-preload-initial-state: Moved initial state into setup/preload values so official program cells stay focused on turn logic.
+  - display-strategy-selection: Selected decimal-pack for screen __inline_show_32_0.
+  - packed-display-lowering: Display __inline_show_32_0 may use display-byte encodings in later layout passes.
+  - size-model-rule-inline: Inlined 2-use rule random_92 because it is smaller than a ПП/В/О subroutine.
+  - stack-current-x-scheduling: Reused random_state already in X for commutative *.
+  - assign-zero-fallback-store: Deferred storing event_target until after its zero fallback at lines 34/35.
+  - size-model-rule-inline: Inlined 2-use rule random_92 because it is smaller than a ПП/В/О subroutine.
+  - constant-synthesis: Built constant 10000 by loaded exponent 4 and applied F 10^x (2 cells instead of direct 5).
+  - stack-current-x-scheduling: Reused random_state already in X for commutative *.
+  - stack-resident-indexed-temp: Kept single-use temp scratch in X for the indexed update cells at line 41.
+  - proc-call-lowering: Compiled call to rule front_stop as ПП/В/О subroutine.
+  - x-param-proc-call: Passed target to rule front_stop through X at line 43.
+  - proc-call-lowering: Compiled call to rule front_stop as ПП/В/О subroutine.
+  - x-param-proc-call: Passed target to rule front_stop through X at line 44.
+  - proc-call-lowering: Compiled call to rule front_stop as ПП/В/О subroutine.
+  - x-param-proc-call: Passed target to rule front_stop through X at line 45.
+  - setup-only-counted-loop-init: Used setup initializer for time and lowered while time >= 1 through F L0 at line 31.
+  - preloaded-constant: Used preloaded Re for constant 810200880000000.
+  - single-use-rule-inline: Inlined single-use rule won at line 48.
+  - error-stop: Used one-cell error opcode for literal ЕГГ0Г stop at line 24.
+  - display-strategy-selection: Selected decimal-pack for screen __inline_show_57_1.
+  - display-current-x-reuse: Reused slot already in X as the first field of screen __inline_show_57_1.
+  - packed-display-lowering: Display __inline_show_57_1 may use display-byte encodings in later layout passes.
+  - show-read-fusion: Fused show __inline_show_57_1 and the read in scratch = int(read()) into one calculator stop at line 58.
+  - x-param-return-decay-call: Passed value to decay through X.
+  - x-param-return-decay-call: Passed value to decay through X.
+  - previous-random-branch-stack-reuse: Kept previous random_state in Y while updating random_state for a following branch at line 79.
+  - x-param-return-decay-call: Passed value to decay through X.
+  - x-param-return-decay-call: Passed value to decay through X.
+  - constant-synthesis: Built constant 1000 by loaded exponent 3 and applied F 10^x (2 cells instead of direct 4).
+  - previous-random-fractional-debit: Kept previous random_state and frac(cells[slot]) on the stack while applying guarded fractional debit and reused the just-stored distance in X.
+  - single-use-rule-inline: Inlined single-use rule resolve_front at line 70.
+  - indexed-assign-zero-domain-guard: Fused indexed store and "< 0" terminal-error branch through F sqrt.
+  - assign-zero-domain-guard: Fused cells_7 store and "< 0" terminal-error branch through F sqrt.
+  - x-param-proc-entry: Compiled rule front_stop to copy target directly from X.
+  - x-param-return-decay: Compiled decay to consume value directly from X.
+  - store-recall-peephole: Dropped 1 redundant П->X immediately after X->П to the same register.
+  - dead-store-elimination: Removed 1 store(s) to register(s) never read before the next assignment.
+  - dead-proc-elimination: Removed 1 unreferenced emitted rule proc(s) after IR optimization.
+  - preloaded-indirect-flow: Activated post-layout: replaced 7 direct branch/call(s) with proven preloaded indirect flow.
+  - dark-entry-layout: Pointed 1 branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window).
+  - demote-constant-chain-indirect-flow: Inlined constants 0, 25, 99, 1000, 20 to keep a register free for post-layout indirect flow (105 vs 112 cells).
+
+Candidates:
+  * display __inline_show_32_0/decimal-pack: 2 steps; selected decimal-pack for screen __inline_show_32_0
+  - display __inline_show_32_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_32_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_32_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_32_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
+  * display __inline_show_57_1/decimal-pack: 1 steps; selected decimal-pack for screen __inline_show_57_1
+  - display __inline_show_57_1/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_57_1/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_57_1/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_57_1/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
+  * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
+
+Optimizer Capabilities:
+  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when no exact-machine effect is crossed.
+  - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
+  - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
+  - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
+  - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
+  - super-number-deferred-normalization: candidate; Candidate: keep an un-normalized super-number (extra hidden mantissa digits) to defer a range/error check. The reference emulator models only the 8 visible mantissa digits, so the hidden-digit behavior the idiom relies on cannot be reproduced or safely proven, and no language construct produces it.
+  - packed-position-type: candidate; Candidate: a language-level packed position type N.0000H carrying an integer position plus packed (hex) fractional sub-coordinates. The dual-use round-trip (К [x] recovers the position, К {x} recovers the packed fraction) is already exploited by constants-dual-use; a dedicated type would only add language surface that no current program consumes.
+  - coord-list-scaled-decimal: candidate; Stores 10x10 board coordinates as y.x decimal values when all visible uses allow it, so row/column/diagonal scans avoid repeated /10 digit extraction.
+  - dual-constant-sign-digit: candidate; Candidate: a language intent for a dual constant 1.|-00 plus compact sign-digits (2N..9N) and their comparison semantics. The negative-zero comparison behavior is already active through the negative-zero-threshold family; no current program needs the additional sign-digit literal surface.
+  - branch-removal: candidate; Umbrella rule for replacing provably equivalent conditionals with branchless arithmetic, sign, extrema, or masked updates.
+  - zero-condition-test: candidate; Uses direct F x?0 tests when one side of a condition is a proved zero, avoiding a zero literal and subtraction.
+  - dispatch-compare-chain: candidate; Lowers high-level command dispatch automatically; small proven dispatches may use indirect or super-dark dispatch.
+
+Machine Features Used:
+  - indirect-flow: Optimizer selected register-held branch addresses for one-cell indirect flow.; К БП/К ПП/К x?0 indirect flow commands are available to the optimizer.
+  - stack-resident-temps: Optimizer kept short-lived temporaries on the X/Y/Z/T stack instead of register spills.
+  - error-stops: Compiler emitted a domain-error pause or explicit trap.; Domain-error stops are available only when the source semantics permits trap-like termination.
+  - code-data-overlay: Layout marked address cells as reusable code/data overlay candidates.; Address operands, constants, opcodes, and display bytes may share cells after conflict checks.
+  - display-bytes: Display lowering marked cells as packed display-byte candidates.; Packed display bytes, hexadecimal mantissa digits, and sign-digit forms are available.
+  - address-constants: Layout marked address cells as reusable constants.; Address cells may double as constants for indirect flow and data transforms.
+
+Proofs:
+  - return-stack-empty: proved; No ПП opcodes were emitted; empty return stack precondition holds for В/О-as-БП01 rewrites.
+  - indirect-addressing-ranges: proved; Indirect selectors are rewritten only after local data-flow proves a stable target, a compiler-owned address preload, or the fractional R0 sentinel shape.
+  - value-ranges: proved; Collected source ranges for time, slot, event_target.
+  - observability: proved; Visible state is limited by display output: time, slot.
+  - display-byte-observable-boundary: assumed; Display-byte candidates are bounded by display output and the exact mk61 profile.
+
+Rejected Candidates:
+  - display __inline_show_32_0/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_32_0/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_32_0/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_32_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
+  - display __inline_show_57_1/packed-storage-reuse: 999999 steps; display fields are not proved to already occupy their decimal positions
+  - display __inline_show_57_1/packed-display-helper: 2 steps; display is not repeated often enough for a shared packed display helper
+  - display __inline_show_57_1/display-byte-helper: 999999 steps; display is not repeated often enough for a shared display-byte helper
+  - display __inline_show_57_1/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
+
+Cell Roles:
+  00: 60 exec, display-byte - display byte role allowed
+  10: 12 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  29: 00 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  55: 61 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  60: 64 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
 `;
 
 exports[`golden listing > selected output is stable for examples/sea-battle.mkpro 1`] = `

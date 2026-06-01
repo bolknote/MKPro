@@ -136,6 +136,8 @@ All top-level `examples/*.mkpro` programs are runnable MK-Pro programs. They cov
   board-hit helpers and fitting the original.
 - `examples/raja-yoga.mkpro`: Anvarov one-dimensional mask game port that fits
   the original.
+- `examples/rambo-iii.mkpro`: Lord_BSS Rambo-III three-front defense port that
+  now fits the original 105-cell MK-61 budget without raw code.
 - `examples/sea-battle.mkpro`: board/cell-set game port that fits the original.
 - `examples/treasure-hunter-2.mkpro`: Anvarov Treasure Hunter 2 port with nine
   generated floors, ladders, holes, and exit behavior.
