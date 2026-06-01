@@ -56,7 +56,7 @@ state, reads, display output, loops, and functions. The compiler decides
 whether that becomes registers, stack scheduling, address constants, dark
 entries, overlays, X2/display bytes, or other MK-61 tricks.
 
-```mkpro
+```rust
 program TinyGame {
   field: board(0..9, 0..9)
 
