@@ -617,6 +617,9 @@ export type MachineItem = MachineLabel | MachineOp | MachineAddressRef;
 export interface MachineLabel {
   kind: "label";
   name: string;
+  procedureBoundary?: "start" | "end";
+  procedureName?: string;
+  hidden?: boolean;
 }
 
 export interface MachineOp {
@@ -661,6 +664,9 @@ export type IrStopSemantic = "halt" | "pause" | "show" | "ask" | "input" | "unkn
 export interface IrLabel {
   kind: "label";
   name: string;
+  procedureBoundary?: "start" | "end";
+  procedureName?: string;
+  hidden?: boolean;
 }
 
 export interface IrStore {

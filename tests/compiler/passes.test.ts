@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { lowerIrToMachine } from "../../src/core/ir.ts";
 import { arithmeticIfPass } from "../../src/core/passes/arithmetic-if.ts";
 import { deadCodeAfterHalt } from "../../src/core/passes/dead-code-after-halt.ts";
+import { deadProcElimination } from "../../src/core/passes/dead-proc-elimination.ts";
 import { deadStoreElimination } from "../../src/core/passes/dead-store-elimination.ts";
 import { indirectMemoryTable, stableIndirectFlow } from "../../src/core/passes/indirect-addressing.ts";
 import { jumpThread } from "../../src/core/passes/jump-thread.ts";
@@ -144,6 +145,20 @@ function indirectStore(register: RegisterName): IrOp {
 
 function label(name: string): IrOp {
   return { kind: "label", name };
+}
+
+function procStart(name: string): IrOp {
+  return { kind: "label", name, procedureBoundary: "start", procedureName: name };
+}
+
+function procEnd(name: string): IrOp {
+  return {
+    kind: "label",
+    name: `\0proc_end_${name}`,
+    procedureBoundary: "end",
+    procedureName: name,
+    hidden: true,
+  };
 }
 
 function halt(): IrOp {
@@ -726,6 +741,61 @@ describe("ir passes on synthetic programs", () => {
 
     expect(result.ops.some((op) => op.kind === "stop")).toBe(true);
     expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x09)).toBe(false);
+  });
+
+  it("dead-proc-elimination removes emitted procedures with no remaining references", () => {
+    const program: IrOp[] = [
+      { kind: "jump", target: "live", opcode: 0x51, meta: { mnemonic: "БП" }, targetMeta: {} },
+      procStart("dead"),
+      plain(0x09, "9"),
+      ret(),
+      procEnd("dead"),
+      procStart("live"),
+      halt(),
+      procEnd("live"),
+    ];
+    const result = deadProcElimination.run(program, ctx);
+
+    expect(result.optimizations.some((item) => item.name === "dead-proc-elimination")).toBe(true);
+    expect(result.ops.some((op) => op.kind === "label" && op.name === "dead")).toBe(false);
+    expect(result.ops.some((op) => op.kind === "label" && op.name === "live")).toBe(true);
+  });
+
+  it("dead-proc-elimination keeps procedures reached through proven indirect calls", () => {
+    const program: IrOp[] = [
+      {
+        kind: "indirect-call",
+        register: "7",
+        opcode: 0xa7,
+        meta: { mnemonic: "К ПП 7", comment: "preloaded R7=2 indirect-target=2 indirect flow" },
+      },
+      halt(),
+      procStart("helper"),
+      plain(0x09, "9"),
+      ret(),
+      procEnd("helper"),
+    ];
+    const result = deadProcElimination.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops.some((op) => op.kind === "label" && op.name === "helper")).toBe(true);
+  });
+
+  it("dead-proc-elimination preserves procedure fallthrough tail calls", () => {
+    const program: IrOp[] = [
+      { kind: "call", target: "wait", opcode: 0x53, meta: { mnemonic: "ПП" }, targetMeta: {} },
+      halt(),
+      procStart("wait"),
+      procEnd("wait"),
+      procStart("resolve"),
+      plain(0x09, "9"),
+      ret(),
+      procEnd("resolve"),
+    ];
+    const result = deadProcElimination.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops.some((op) => op.kind === "label" && op.name === "resolve")).toBe(true);
   });
 
   it("store-recall-peephole drops the П->X immediately after X->П to the same register", () => {

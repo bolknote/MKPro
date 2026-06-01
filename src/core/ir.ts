@@ -114,7 +114,13 @@ export function raiseMachineToIr(items: readonly MachineItem[]): IrOp[] {
   for (let i = 0; i < items.length; i += 1) {
     const item = items[i]!;
     if (item.kind === "label") {
-      result.push({ kind: "label", name: item.name });
+      result.push({
+        kind: "label",
+        name: item.name,
+        ...(item.procedureBoundary === undefined ? {} : { procedureBoundary: item.procedureBoundary }),
+        ...(item.procedureName === undefined ? {} : { procedureName: item.procedureName }),
+        ...(item.hidden === true ? { hidden: true } : {}),
+      });
       continue;
     }
     if (item.kind === "address") {
@@ -267,7 +273,13 @@ export function lowerIrToMachine(ops: readonly IrOp[]): MachineItem[] {
   for (const op of ops) {
     switch (op.kind) {
       case "label":
-        result.push({ kind: "label", name: op.name });
+        result.push({
+          kind: "label",
+          name: op.name,
+          ...(op.procedureBoundary === undefined ? {} : { procedureBoundary: op.procedureBoundary }),
+          ...(op.procedureName === undefined ? {} : { procedureName: op.procedureName }),
+          ...(op.hidden === true ? { hidden: true } : {}),
+        });
         break;
       case "orphan-address":
         result.push(machineAddressFromMeta(op.target, op.meta));
@@ -493,7 +505,12 @@ export function lowerIrToLayout(
 
 export function machineItemsEqual(a: MachineItem, b: MachineItem): boolean {
   if (a.kind !== b.kind) return false;
-  if (a.kind === "label" && b.kind === "label") return a.name === b.name;
+  if (a.kind === "label" && b.kind === "label") {
+    return a.name === b.name &&
+      (a.procedureBoundary ?? undefined) === (b.procedureBoundary ?? undefined) &&
+      (a.procedureName ?? undefined) === (b.procedureName ?? undefined) &&
+      (a.hidden ?? false) === (b.hidden ?? false);
+  }
   if (a.kind === "op" && b.kind === "op") {
     return (
       a.opcode === b.opcode &&

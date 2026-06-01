@@ -7095,11 +7095,6 @@ Labels:
   inspect_room: 01
   __if_false_0: 37
   __if_end_1: 37
-  __guarded_prologue_0: 37
-  __if_false_2: 37
-  __if_false_4: 37
-  __if_false_6: 37
-  __if_false_8: 37
    main: 37
   __loop_9: 37
   __if_false_12: 64
@@ -7190,6 +7185,7 @@ Optimizations:
   - runtime-indirect-call-flow: Borrowed dead stable register(s) for 5 repeated direct helper call(s).
   - dead-store-elimination: Removed 2 store(s) to register(s) never read before the next assignment.
   - dead-code-after-halt: Removed 33 unreachable op(s) from the entry CFG.
+  - dead-proc-elimination: Removed 1 unreferenced emitted rule proc(s) after IR optimization.
   - preloaded-indirect-flow: Activated post-layout: replaced 15 direct branch/call(s) with proven preloaded indirect flow.
   - dark-entry-layout: Pointed 3 branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window).
   - constants-dual-use: Shared 1 duplicate selector register(s): one stored constant now drives several dispatch sites, freeing the rest.
@@ -7538,9 +7534,9 @@ Optimizations:
   - single-use-rule-inline: Inlined single-use rule resolve_front at line 68.
   - assign-zero-domain-guard: Fused cells_7 store and "< 0" terminal-error branch through F sqrt.
   - x-param-return-decay: Compiled decay to consume value directly from X.
-  - dead-proc-elimination: Removed 1 unreferenced emitted rule proc(s) after lowering.
   - return-suffix-gadget: Shared 1 return/tail-call gadget (0 jump, 1 call; 2 cells saved).
   - dead-store-elimination: Removed 1 store(s) to register(s) never read before the next assignment.
+  - dead-proc-elimination: Removed 1 unreferenced emitted rule proc(s) after IR optimization.
   - domain-error-guards-unroll: Combined domain-error guards with counted-loop unrolling (125 vs 131 cells).
 
 Candidates:
@@ -9646,7 +9642,6 @@ Labels:
   inspect_cell: 18
   __dispatch_next_2: 32
   __dispatch_end_0: 32
-  draw: 32
    main: 32
   __loop_3: 32
   __if_false_4: 56
@@ -9710,6 +9705,7 @@ Optimizations:
   - jump-to-next-threading: Removed 2 unconditional branch to the immediately following label. (+Removed 1 unconditional branch to the immediately following label.) (+Removed 1 unconditional branch to the immediately following label.)
   - jump-thread: Threaded 10 jump(s) through trampoline labels to the final target. (+Threaded 2 jump(s) through trampoline labels to the final target.)
   - dead-code-after-halt: Removed 2 unreachable op(s) from the entry CFG. (+Removed 3 unreachable op(s) from the entry CFG.)
+  - dead-proc-elimination: Removed 1 unreferenced emitted rule proc(s) after IR optimization.
   - preloaded-indirect-flow: Activated post-layout: replaced 14 direct branch/call(s) with proven preloaded indirect flow.
   - dark-entry-layout: Pointed 4 branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window).
   - generated-setup-program: Generated optimized setup program for rows_row_1, rows_row_2, rows_row_3, rows_row_4, rows_row_5, rows_row_6, rows_row_7, rows_row_8, rows_row_9.
@@ -10116,12 +10112,12 @@ Optimizations:
   - single-use-rule-inline: Inlined single-use rule bat_jump at line 106.
   - domain-error-guard: Replaced a "==" terminal-error guard with a self-trapping F 1/x at line 101.
   - domain-error-guard: Replaced a "==" terminal-error guard with a self-trapping F 1/x at line 97.
-  - dead-proc-elimination: Removed 1 unreferenced emitted rule proc(s) after lowering.
   - near-any-helper: Emitted shared near_any helper for room / 1.
   - tail-call-lowering: Replaced 1 subroutine tail call with direct jump(s). (+Replaced 2 subroutine tail operations with direct jump continuation.)
   - return-suffix-gadget: Shared 1 return/tail-call gadget (0 jump, 1 call; 1 cell saved).
   - jump-thread: Threaded 2 jump(s) through trampoline labels to the final target. (+Threaded 1 jump(s) through trampoline labels to the final target.)
-  - dead-code-after-halt: Removed 2 unreachable op(s) from the entry CFG.
+  - dead-code-after-halt: Removed 1 unreachable op(s) from the entry CFG. (+Removed 2 unreachable op(s) from the entry CFG.)
+  - dead-proc-elimination: Removed 1 unreferenced emitted rule proc(s) after IR optimization.
   - preloaded-indirect-flow: Activated post-layout: replaced 10 direct branch/call(s) with proven preloaded indirect flow.
   - dark-entry-layout: Pointed 1 branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window).
   - generated-setup-program: Generated optimized setup program for wumpus, hazard_pit_1, hazard_pit_2, hazard_bat_1, hazard_bat_2.

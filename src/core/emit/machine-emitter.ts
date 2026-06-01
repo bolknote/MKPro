@@ -143,10 +143,13 @@ export class MachineEmitter<TDashed = unknown> {
     }
   }
 
-  emitLabel(name: string): void {
+  emitLabel(
+    name: string,
+    metadata: { procedureBoundary?: "start" | "end"; procedureName?: string; hidden?: boolean } = {},
+  ): void {
     if (this.items.every((item) => item.kind === "label")) this.zeroAddressLabels.add(name);
     this.coordListCounterKnownOne = false;
-    this.items.push({ kind: "label", name });
+    this.items.push({ kind: "label", name, ...metadata });
     // A label is a control-flow merge point. The "current X" fact tracked
     // textually only reflects the fall-through edge; reusing it across a join
     // is sound only if every incoming branch/jump edge agrees on the same

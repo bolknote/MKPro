@@ -11,6 +11,7 @@ import { arithmeticIfPass } from "./arithmetic-if.ts";
 import { constantFolding } from "./constant-folding.ts";
 import { cseDisplayBlock } from "./cse-display-block.ts";
 import { deadCodeAfterHalt } from "./dead-code-after-halt.ts";
+import { deadProcElimination } from "./dead-proc-elimination.ts";
 import { deadStoreBeforeCommutative } from "./dead-store-before-commutative.ts";
 import { deadStoreElimination } from "./dead-store-elimination.ts";
 import { duplicateFailureTail } from "./duplicate-failure-tail.ts";
@@ -58,6 +59,7 @@ const PASS_PIPELINE: ReadonlyArray<IrPass> = [
   deadCodeAfterHalt,
   registerCoalesce,
   arithmeticIfPass,
+  deadProcElimination,
 ];
 
 const MAX_FIXPOINT_ITERATIONS = 8;
