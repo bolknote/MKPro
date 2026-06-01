@@ -110,7 +110,7 @@ describe("setup formatting", () => {
 
     expect(listing).toContain("# Patch Listing");
     expect(listing).toContain("placeholder for F7; apply Patch Listing");
-    expect(listing).toContain("F АВТ ; 5 ; 0 ; F 10^x ; F x^2 ; ВП ; 3 ; 7 ; . ; 0");
+    expect(listing).toContain("F АВТ ; 5 ; 0 ; F 10ˣ ; F x² ; ВП ; 3 ; 7 ; . ; 0");
     expect(formatProgramPatch(result)).toContain("F7");
     expect(keys).toContain("<patch F7 at 53: egg-f-prefix>");
     expect(keys.split(/\r?\n/u).slice(52, 56)).toEqual([
@@ -164,8 +164,8 @@ F2
       "F АВТ",
       "5",
       "0",
-      "F 10^x",
-      "F x^2",
+      "F 10ˣ",
+      "F x²",
       "ВП",
       "0",
       "2",

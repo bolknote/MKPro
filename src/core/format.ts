@@ -100,7 +100,7 @@ function formatProgramPatchReport(patch: ProgramPatchReport): string {
   ];
   for (const step of patch.steps) {
     lines.push(
-      ` ${formatPatchAddress(step.address).padStart(4, " ")} |  ${step.hex}  | ${formatPatchMethod(step.method).padEnd(15, " ")} | ${step.keys.join(" ; ")} (${step.note})`,
+      ` ${formatPatchAddress(step.address).padStart(4, " ")} |  ${step.hex}  | ${formatPatchMethod(step.method).padEnd(15, " ")} | ${step.keys.map(toKeycaps).join(" ; ")} (${step.note})`,
     );
   }
   for (const warning of patch.warnings) {
@@ -248,6 +248,7 @@ function formatStepKeys(
 const KEYCAP_LABELS: Record<string, string> = {
   "*": "×",
   "/": "÷",
+  "-": "−",
   "<->": "↔",
   "F pi": "F π",
   "F sqrt": "F √",
@@ -284,7 +285,7 @@ function formatSetupPreloadKeys(preloads: readonly PreloadReport[]): string[] {
 function formatProgramPatchKeys(patch: ProgramPatchReport): string[] {
   const lines = patch.steps.flatMap((step) => [
     `<patch ${step.hex} at ${formatPatchAddress(step.address)}: ${step.method}>`,
-    ...step.keys,
+    ...step.keys.map(toKeycaps),
   ]);
   lines.push(...patch.warnings.map((warning) => `<warning: ${warning}>`));
   return lines;
@@ -493,7 +494,7 @@ export function formatExplain(result: CompileResult): string {
     lines.push(`  Reason: ${result.report.programPatch.reason}`);
     for (const step of result.report.programPatch.steps) {
       lines.push(
-        `  - ${formatPatchAddress(step.address)}: ${step.placeholderMnemonic} placeholder, then ${step.keys.join(" ; ")} => ${step.hex}`,
+        `  - ${formatPatchAddress(step.address)}: ${toKeycaps(step.placeholderMnemonic)} placeholder, then ${step.keys.map(toKeycaps).join(" ; ")} => ${step.hex}`,
       );
     }
     for (const warning of result.report.programPatch.warnings) lines.push(`  - warning: ${warning}`);
