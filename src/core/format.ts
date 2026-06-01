@@ -249,6 +249,8 @@ const KEYCAP_LABELS: Record<string, string> = {
   "*": "×",
   "/": "÷",
   "<->": "↔",
+  "F pi": "F π",
+  "F sqrt": "F √",
 };
 
 // Superscript exponents printed on the keyboard (10ˣ, eˣ, x², xʸ, sin⁻¹, ...).
@@ -267,6 +269,8 @@ function toKeycaps(mnemonic: string): string {
   for (const [ascii, glyph] of SUPERSCRIPT_EXPONENTS) label = label.replaceAll(ascii, glyph);
   // Register-transfer and conversion keys print real arrows (X→П, П→X, К °←′).
   label = label.replaceAll("->", "→").replaceAll("<-", "←");
+  // Conditional-branch keys print real relational glyphs (x≥0, x≠0).
+  label = label.replaceAll(">=", "≥").replaceAll("!=", "≠");
   return label;
 }
 

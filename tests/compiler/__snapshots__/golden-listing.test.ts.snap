@@ -884,7 +884,7 @@ exports[`golden listing > selected output is stable for examples/alaram.mkpro 1`
    08 |  62  | П→X 2                   | recall angle
    09 |  31  | К |x|                   | abs()
    10 |  11  | -                       | condition compare
-   11 |  59  | F x>=0                  | false branch for <=
+   11 |  59  | F x≥0                   | false branch for <=
    12 |  61  | 61                      | false branch for <=
    13 |  6E  | П→X e                   | preload const 13251587
    14 |  3A  | К ИНВ                   | display literal video bytes
@@ -902,7 +902,7 @@ exports[`golden listing > selected output is stable for examples/alaram.mkpro 1`
    26 |  00  | 0                       |
    27 |  61  | П→X 1                   | recall altitude
    28 |  11  | -                       | condition compare
-   29 |  59  | F x>=0                  | false branch for <=
+   29 |  59  | F x≥0                   | false branch for <=
    30 |  61  | 61                      | false branch for <=
    31 |  29  | К ÷                     | halt literal ЕГГ0Г
    32 |  51  | БП                      | shared call tail close_range
@@ -947,7 +947,7 @@ exports[`golden listing > selected output is stable for examples/alaram.mkpro 1`
    71 |  01  | 1                       |
    72 |  10  | +                       | expr +
    73 |  67  | П→X 7                   | recall range
-   74 |  59  | F x>=0                  | false branch for >=
+   74 |  59  | F x≥0                   | false branch for >=
    75 |  00  | 00                      | false branch for >=
    76 |  6C  | П→X c                   | display __halt_literal_32 literal
    77 |  50  | С/П                     | show __halt_literal_32
@@ -1330,7 +1330,7 @@ exports[`golden listing > selected output is stable for examples/cave-sketch.mkp
 ------+------+-------------------------+----------------
    00 |  61  | П→X 1                   | display __inline_show_25_0 source
    01 |  50  | С/П                     | show __inline_show_25_0
-   02 |  57  | F x!=0                  | case mismatch
+   02 |  57  | F x≠0                   | case mismatch
    03 |  00  | 00                      | dispatch end
    04 |  02  | 2                       |
    05 |  11  | -                       | dispatch residual compare
@@ -1374,7 +1374,7 @@ exports[`golden listing > selected output is stable for examples/cave-sketch.mkp
    43 |  00  | 00                      | dispatch end
    44 |  02  | 2                       |
    45 |  11  | -                       | dispatch residual compare
-   46 |  57  | F x!=0                  | case mismatch
+   46 |  57  | F x≠0                   | case mismatch
    47 |  00  | 00                      | dispatch end
    48 |  00  | 0                       | halt
    49 |  50  | С/П                     | halt
@@ -1581,14 +1581,14 @@ exports[`golden listing > selected output is stable for examples/clock.mkpro 1`]
    06 |  6B  | П→X b                   | preload const 10
    07 |  42  | X→П 2                   | set outer_delay
    08 |  62  | П→X 2                   | recall outer_delay
-   09 |  57  | F x!=0                  | false branch for !=
+   09 |  57  | F x≠0                   | false branch for !=
    10 |  21  | 21                      | false branch for !=
    11 |  D2  | К П→X 2                 | decrement outer_delay
    12 |  01  | 1                       |
    13 |  01  | 1                       |
    14 |  43  | X→П 3                   | set inner_delay
    15 |  63  | П→X 3                   | recall inner_delay
-   16 |  57  | F x!=0                  | false branch for !=
+   16 |  57  | F x≠0                   | false branch for !=
    17 |  08  | 08                      | false branch for !=
    18 |  D3  | К П→X 3                 | decrement inner_delay
    19 |  51  | БП                      | while loop back
@@ -1599,7 +1599,7 @@ exports[`golden listing > selected output is stable for examples/clock.mkpro 1`]
    24 |  41  | X→П 1                   | set minute
    25 |  6D  | П→X d                   | preload const 60
    26 |  11  | -                       | condition compare
-   27 |  59  | F x>=0                  | false branch for >=
+   27 |  59  | F x≥0                   | false branch for >=
    28 |  00  | 00                      | false branch for >=
    29 |  00  | 0                       | set minute
    30 |  41  | X→П 1                   | set minute
@@ -1609,7 +1609,7 @@ exports[`golden listing > selected output is stable for examples/clock.mkpro 1`]
    34 |  40  | X→П 0                   | set hour
    35 |  6C  | П→X c                   | preload const 24
    36 |  11  | -                       | condition compare
-   37 |  59  | F x>=0                  | false branch for >=
+   37 |  59  | F x≥0                   | false branch for >=
    38 |  00  | 00                      | false branch for >=
    39 |  00  | 0                       | set hour
    40 |  40  | X→П 0                   | set hour
@@ -1850,7 +1850,7 @@ Setup Block:
    39 |  00  | 0                       |
    40 |  63  | П→X 3                   | recall boats_left
    41 |  11  | -                       | condition compare
-   42 |  59  | F x>=0                  | false branch for <=
+   42 |  59  | F x≥0                   | false branch for <=
    43 |  75  | 75                      | false branch for <=
    44 |  6E  | П→X e                   | preload const -999
    45 |  50  | С/П                     | halt
@@ -1879,7 +1879,7 @@ Setup Block:
    68 |  00  | 0                       |
    69 |  62  | П→X 2                   | recall cargo_left
    70 |  11  | -                       | condition compare
-   71 |  59  | F x>=0                  | false branch for <=
+   71 |  59  | F x≥0                   | false branch for <=
    72 |  75  | 75                      | false branch for <=
    73 |  6D  | П→X d                   | preload const 777
    74 |  50  | С/П                     | halt
@@ -2118,7 +2118,7 @@ Setup Block:
    25 |  42  | X→П 2                   | set pos
    26 |  07  | 7                       |
    27 |  11  | -                       | condition compare
-   28 |  59  | F x>=0                  | false branch for >=
+   28 |  59  | F x≥0                   | false branch for >=
    29 |  58  | 58                      | false branch for >=
    30 |  02  | 2                       |
    31 |  42  | X→П 2                   | set pos
@@ -2151,7 +2151,7 @@ Setup Block:
    58 |  00  | 0                       |
    59 |  62  | П→X 2                   | recall pos
    60 |  11  | -                       | condition compare
-   61 |  59  | F x>=0                  | false branch for <=
+   61 |  59  | F x≥0                   | false branch for <=
    62 |  65  | 65                      | false branch for <=
    63 |  53  | ПП                      | proc call bump
    64 |  77  | 77                      | proc call bump
@@ -2171,7 +2171,7 @@ Setup Block:
    78 |  64  | П→X 4                   | recall mistakes
    79 |  03  | 3                       |
    80 |  11  | -                       | condition compare
-   81 |  59  | F x>=0                  | false branch for >=
+   81 |  59  | F x≥0                   | false branch for >=
    82 |  84  | 84                      | false branch for >=
    83 |  29  | К ÷                     | halt literal ЕГГ0Г
    84 |  52  | В/О                     | implicit return from proc
@@ -2542,7 +2542,7 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-100.mk
    04 |  65  | П→X 5                   | recall foxes
    05 |  37  | К ∧                     | bit membership test
    06 |  35  | К {x}                   | bit membership fraction
-   07 |  57  | F x!=0                  | false branch for !=
+   07 |  57  | F x≠0                   | false branch for !=
    08 |  22  | 22                      | false branch for !=
    09 |  3A  | К ИНВ                   | reuse membership mask for clear
    10 |  65  | П→X 5                   | recall foxes
@@ -2865,12 +2865,12 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-mk61.m
    24 |  05  | 5                       |
    25 |  45  | X→П 5                   | random coord pointer
    26 |  61  | П→X 1                   | random coord previous count
-   27 |  57  | F x!=0                  | random coord first item
+   27 |  57  | F x≠0                   | random coord first item
    28 |  36  | 36                      | random coord first item
    29 |  60  | П→X 0                   | random coord candidate
    30 |  D5  | К П→X 5                 | random coord previous
    31 |  11  | -                       | random coord uniqueness
-   32 |  57  | F x!=0                  | random coord collision
+   32 |  57  | F x≠0                   | random coord collision
    33 |  06  | 06                      | random coord collision
    34 |  5B  | F L1                    | random coord previous loop
    35 |  29  | 29                      | random coord previous loop
@@ -2920,14 +2920,14 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-mk61.m
    16 |  63  | П→X 3                   | recall cell
    17 |  60  | П→X 0                   | coord_list fused current
    18 |  11  | -                       | coord_list fused hit compare
-   19 |  57  | F x!=0                  | coord_list fused hit
+   19 |  57  | F x≠0                   | coord_list fused hit
    20 |  46  | 46                      | coord_list fused hit
    21 |  60  | П→X 0                   | recall __coord_list_current
    22 |  35  | К {x}                   | coord_list fused current x
    23 |  63  | П→X 3                   | recall cell
    24 |  35  | К {x}                   | coord_list fused cell x
    25 |  11  | -                       | coord_list fused dx
-   26 |  57  | F x!=0                  | coord_list fused same column
+   26 |  57  | F x≠0                   | coord_list fused same column
    27 |  50  | 50                      | coord_list fused same column
    28 |  01  | 1                       |
    29 |  00  | 0                       |
@@ -2937,13 +2937,13 @@ exports[`golden listing > selected output is stable for examples/fox-hunt-mk61.m
    33 |  63  | П→X 3                   | recall cell
    34 |  34  | К [x]                   | coord_list fused cell y
    35 |  11  | -                       | coord_list fused dy
-   36 |  57  | F x!=0                  | coord_list fused same row
+   36 |  57  | F x≠0                   | coord_list fused same row
    37 |  50  | 50                      | coord_list fused same row
    38 |  31  | К |x|                   | coord_list fused |dy|
    39 |  14  | ↔                       | coord_list fused dx
    40 |  31  | К |x|                   | coord_list fused |dx|
    41 |  11  | -                       | coord_list fused diagonal compare
-   42 |  57  | F x!=0                  | coord_list fused same diagonal
+   42 |  57  | F x≠0                   | coord_list fused same diagonal
    43 |  50  | 50                      | coord_list fused same diagonal
    44 |  51  | БП                      | coord_list fused not visible
    45 |  51  | 51                      | coord_list fused not visible
@@ -3355,7 +3355,7 @@ exports[`golden listing > selected output is stable for examples/game-100-pig.mk
    18 |  A8  | К ПП 8                  | proc call roll_die; preloaded R8=B6 indirect-target=4 indirect flow
    19 |  01  | 1                       |
    20 |  11  | -                       | condition compare
-   21 |  57  | F x!=0                  | false branch for !=
+   21 |  57  | F x≠0                   | false branch for !=
    22 |  41  | 41                      | false branch for !=
    23 |  67  | П→X 7                   | recall turn_score
    24 |  63  | П→X 3                   | recall die
@@ -3371,7 +3371,7 @@ exports[`golden listing > selected output is stable for examples/game-100-pig.mk
    34 |  44  | X→П 4                   | set player_total
    35 |  6B  | П→X b                   | preload const 100
    36 |  11  | -                       | condition compare
-   37 |  59  | F x>=0                  | false branch for >=
+   37 |  59  | F x≥0                   | false branch for >=
    38 |  41  | 41                      | false branch for >=
    39 |  6B  | П→X b                   | preload const 100
    40 |  50  | С/П                     | halt
@@ -3381,7 +3381,7 @@ exports[`golden listing > selected output is stable for examples/game-100-pig.mk
    44 |  A8  | К ПП 8                  | proc call roll_die; preloaded R8=B6 indirect-target=4 indirect flow
    45 |  01  | 1                       |
    46 |  11  | -                       | condition compare
-   47 |  57  | F x!=0                  | false branch for !=
+   47 |  57  | F x≠0                   | false branch for !=
    48 |  71  | 71                      | false branch for !=
    49 |  67  | П→X 7                   | recall turn_score
    50 |  63  | П→X 3                   | recall die
@@ -3395,13 +3395,13 @@ exports[`golden listing > selected output is stable for examples/game-100-pig.mk
    58 |  67  | П→X 7                   | recall turn_score
    59 |  6A  | П→X a                   | preload const 20
    60 |  11  | -                       | condition compare
-   61 |  59  | F x>=0                  | false branch for >=
+   61 |  59  | F x≥0                   | false branch for >=
    62 |  44  | 44                      | false branch for >=
    63 |  65  | П→X 5                   | recall preview_total
    64 |  40  | X→П 0                   | set calculator_total
    65 |  6B  | П→X b                   | preload const 100
    66 |  11  | -                       | condition compare
-   67 |  59  | F x>=0                  | false branch for >=
+   67 |  59  | F x≥0                   | false branch for >=
    68 |  71  | 71                      | false branch for >=
    69 |  60  | П→X 0                   | recall calculator_total
    70 |  50  | С/П                     | halt
@@ -4034,7 +4034,7 @@ exports[`golden listing > selected output is stable for examples/jack-pot.mkpro 
    89 |  6C  | П→X c                   | preload const 100
    90 |  1D  | F cos                   | cos()
    91 |  46  | X→П 6                   | set angle_cos
-   92 |  97  | К x>=0 7                | false branch for >=; preloaded R7=B2 indirect-target=0 indirect flow
+   92 |  97  | К x≥0 7                 | false branch for >=; preloaded R7=B2 indirect-target=0 indirect flow
    93 |  66  | П→X 6                   | recall angle_cos
    94 |  5E  | F x=0                   | false branch for ==
    95 |  98  | 98                      | false branch for ==
@@ -4387,7 +4387,7 @@ Setup Block:
    36 |  64  | П→X 4                   | recall speed
    37 |  31  | К |x|                   | abs()
    38 |  11  | -                       | condition compare
-   39 |  59  | F x>=0                  | false branch for <=
+   39 |  59  | F x≥0                   | false branch for <=
    40 |  43  | 43                      | false branch for <=
    41 |  6D  | П→X d                   | preload const 777
    42 |  50  | С/П                     | halt
@@ -4557,7 +4557,7 @@ exports[`golden listing > selected output is stable for examples/minesweeper-9x7
    01 |  43  | X→П 3                   | read probe
    02 |  53  | ПП                      | spatial hit mines
    03 |  74  | 74                      | spatial hit mines
-   04 |  57  | F x!=0                  | false branch for !=
+   04 |  57  | F x≠0                   | false branch for !=
    05 |  07  | 07                      | false branch for !=
    06 |  29  | К ÷                     | halt literal ЕГГ0Г
    07 |  63  | П→X 3                   | recall probe
@@ -4826,7 +4826,7 @@ exports[`golden listing > selected output is stable for examples/minesweeper-9x9
    00 |  50  | С/П                     | read probe
    01 |  43  | X→П 3                   | read probe
    02 |  A8  | К ПП 8                  | spatial hit mines; preloaded R8=64 indirect-target=64 shifted-forward indirect flow
-   03 |  57  | F x!=0                  | false branch for !=
+   03 |  57  | F x≠0                   | false branch for !=
    04 |  06  | 06                      | false branch for !=
    05 |  29  | К ÷                     | halt literal ЕГГ0Г
    06 |  63  | П→X 3                   | recall probe
@@ -5134,17 +5134,17 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    08 |  29  | К ÷                     | halt literal ЕГГ0Г
    09 |  42  | X→П 2                   | set food
    10 |  64  | П→X 4                   | recall command
-   11 |  20  | F pi                    | pi()
+   11 |  20  | F π                     | pi()
    12 |  11  | -                       | condition compare
    13 |  5E  | F x=0                   | false branch for ==
    14 |  36  | 36                      | false branch for ==
    15 |  60  | П→X 0                   | recall blocked
-   16 |  57  | F x!=0                  | false branch for !=
+   16 |  57  | F x≠0                   | false branch for !=
    17 |  32  | 32                      | false branch for !=
    18 |  63  | П→X 3                   | recall dynamite
    19 |  01  | 1                       |
    20 |  11  | -                       | condition compare
-   21 |  59  | F x>=0                  | false branch for >=
+   21 |  59  | F x≥0                   | false branch for >=
    22 |  32  | 32                      | false branch for >=
    23 |  43  | X→П 3                   | set dynamite
    24 |  69  | П→X 9                   | recall walls
@@ -5167,7 +5167,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    41 |  61  | П→X 1                   | recall caches
    42 |  37  | К ∧                     | bit membership test
    43 |  35  | К {x}                   | bit membership fraction
-   44 |  57  | F x!=0                  | false branch for !=
+   44 |  57  | F x≠0                   | false branch for !=
    45 |  81  | 81                      | false branch for !=
    46 |  3A  | К ИНВ                   | reuse membership mask for clear
    47 |  61  | П→X 1                   | recall caches
@@ -5257,7 +5257,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
   >83 |  35  | К {x}                   | current-X frac
   >84 |  69  | П→X 9                   | recall walls
   >85 |  37  | К ∧                     | bit_and()
-  >86 |  57  | F x!=0                  | false branch for !=
+  >86 |  57  | F x≠0                   | false branch for !=
   >87 |  8C  | >8C                     | false branch for !=
   >88 |  00  | 0                       | pause
   >89 |  50  | С/П                     | pause
@@ -5644,12 +5644,12 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    11 |  5E  | F x=0                   | case mismatch
    12 |  41  | 41                      | case mismatch
    13 |  61  | П→X 1                   | recall blocked
-   14 |  57  | F x!=0                  | false branch for !=
+   14 |  57  | F x≠0                   | false branch for !=
    15 |  38  | 38                      | false branch for !=
    16 |  65  | П→X 5                   | recall dynamite
    17 |  02  | 2                       |
    18 |  11  | -                       | condition compare
-   19 |  59  | F x>=0                  | false branch for >=
+   19 |  59  | F x≥0                   | false branch for >=
    20 |  33  | 33                      | false branch for >=
    21 |  45  | X→П 5                   | set dynamite
    22 |  6A  | П→X a                   | recall walls
@@ -5716,7 +5716,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    83 |  63  | П→X 3                   | recall caches
    84 |  37  | К ∧                     | bit membership test
    85 |  35  | К {x}                   | bit membership fraction
-   86 |  57  | F x!=0                  | false branch for !=
+   86 |  57  | F x≠0                   | false branch for !=
    87 |  77  | >77                     | false branch for !=
    88 |  3A  | К ИНВ                   | reuse membership mask for clear
    89 |  63  | П→X 3                   | recall caches
@@ -5776,7 +5776,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
   >8F |  35  | К {x}                   | current-X frac
   >90 |  6A  | П→X a                   | recall walls
   >91 |  37  | К ∧                     | bit_and()
-  >92 |  57  | F x!=0                  | false branch for !=
+  >92 |  57  | F x≠0                   | false branch for !=
   >93 |  97  | >97                     | false branch for !=
   >94 |  00  | 0                       | pause
   >95 |  50  | С/П                     | pause
@@ -6217,7 +6217,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    60 |  51  | БП                      | if end
    61 |  95  | >95                     | if end
    62 |  AA  | К ПП a                  | expr digit_at(plans, pos - 10 * int(pos / 10)); preloaded Ra=B8 indirect-target=6 indirect flow
-   63 |  57  | F x!=0                  | false branch for !=
+   63 |  57  | F x≠0                   | false branch for !=
    64 |  90  | >90                     | false branch for !=
    65 |  67  | П→X 7                   | recall tile
    66 |  41  | X→П 1                   | set encounter_tile
@@ -6306,7 +6306,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
   >95 |  00  | 0                       |
   >96 |  62  | П→X 2                   | recall strength
   >97 |  11  | -                       | condition compare
-  >98 |  9C  | К x>=0 c                | false branch for <=; preloaded Rc=E6 indirect-target=34 indirect flow
+  >98 |  9C  | К x≥0 c                 | false branch for <=; preloaded Rc=E6 indirect-target=34 indirect flow
   >99 |  29  | К ÷                     | halt literal ЕГГ0Г
   >9A |  8C  | К БП c                  | loop back; preloaded Rc=E6 indirect-target=34 indirect flow
   >9B |  D4  | К П→X 4                 | increment floor
@@ -6745,7 +6745,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    41 |  37  | К ∧                     | bit_and()
    42 |  35  | К {x}                   | frac()
    43 |  32  | К ЗН                    | sign()
-   44 |  57  | F x!=0                  | false branch for !=
+   44 |  57  | F x≠0                   | false branch for !=
    45 |  91  | 91                      | false branch for !=
    46 |  3A  | К ИНВ                   | reuse membership mask for clear
    47 |  66  | П→X 6                   | recall jumper
@@ -6787,7 +6787,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    83 |  00  | 0                       |
    84 |  64  | П→X 4                   | recall energy
    85 |  11  | -                       | condition compare
-   86 |  59  | F x>=0                  | false branch for <=
+   86 |  59  | F x≥0                   | false branch for <=
    87 |  90  | 90                      | false branch for <=
    88 |  6C  | П→X c                   | preload const -777
    89 |  50  | С/П                     | halt
@@ -7338,7 +7338,7 @@ Setup Block:
    61 |  69  | П→X 9                   | recall scratch
    62 |  11  | -                       | expr -
    63 |  47  | X→П 7                   | set cells_7
-   64 |  59  | F x>=0                  | false branch for >=
+   64 |  59  | F x≥0                   | false branch for >=
    65 |  31  | 31                      | false branch for >=
    66 |  53  | ПП                      | proc call return suffix gadget
    67 |  51  | 51                      | return suffix gadget target
@@ -7691,7 +7691,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    35 |  62  | П→X 2                   | recall charges
    36 |  6D  | П→X d                   | preload const 10
    37 |  11  | -                       | condition compare
-   38 |  59  | F x>=0                  | false branch for >=
+   38 |  59  | F x≥0                   | false branch for >=
    39 |  6E  | >6E                     | false branch for >=
    40 |  42  | X→П 2                   | set charges
    41 |  3B  | К СЧ                    | random()
@@ -7779,7 +7779,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
   >7B |  6A  | П→X a                   | recall vaults
   >7C |  37  | К ∧                     | bit membership test
   >7D |  35  | К {x}                   | bit membership fraction
-  >7E |  57  | F x!=0                  | false branch for !=
+  >7E |  57  | F x≠0                   | false branch for !=
   >7F |  91  | >91                     | false branch for !=
   >80 |  67  | П→X 7                   | recall pos
   >81 |  AC  | К ПП c                  | bit_mask helper; preloaded Rc=B4 indirect-target=2 indirect flow
@@ -7788,7 +7788,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
   >84 |  60  | П→X 0                   | reuse cell bit mask
   >85 |  37  | К ∧                     | membership test with reused mask
   >86 |  35  | К {x}                   | membership fraction
-  >87 |  57  | F x!=0                  | false branch for ==
+  >87 |  57  | F x≠0                   | false branch for ==
   >88 |  91  | >91                     | false branch for ==
   >89 |  6B  | П→X b                   | recall visited_vaults
   >8A |  60  | П→X 0                   | reuse cell bit mask
@@ -7816,7 +7816,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
   >A0 |  07  | 7                       |
   >A1 |  64  | П→X 4                   | recall scan
   >A2 |  11  | -                       | condition compare
-  >A3 |  59  | F x>=0                  | false branch for <=
+  >A3 |  59  | F x≥0                   | false branch for <=
   >A4 |  E2  | >E2                     | false branch for <=
   >A5 |  6A  | П→X a                   | recall vaults
   >A6 |  64  | П→X 4                   | recall scan
@@ -7839,7 +7839,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
   >B7 |  37  | К ∧                     | bit_and()
   >B8 |  35  | К {x}                   | frac()
   >B9 |  32  | К ЗН                    | sign()
-  >BA |  57  | F x!=0                  | false branch for !=
+  >BA |  57  | F x≠0                   | false branch for !=
   >BB |  C2  | >C2                     | false branch for !=
   >BC |  69  | П→X 9                   | recall row
   >BD |  01  | 1                       |
@@ -7868,7 +7868,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
   >D4 |  37  | К ∧                     | bit_and()
   >D5 |  35  | К {x}                   | frac()
   >D6 |  32  | К ЗН                    | sign()
-  >D7 |  57  | F x!=0                  | false branch for !=
+  >D7 |  57  | F x≠0                   | false branch for !=
   >D8 |  DF  | >DF                     | false branch for !=
   >D9 |  69  | П→X 9                   | recall row
   >DA |  04  | 4                       |
@@ -8236,7 +8236,7 @@ Setup Block:
    33 |  6A  | >6A                     | line_count player_marks
    34 |  04  | 4                       |
    35 |  11  | -                       | condition compare
-   36 |  59  | F x>=0                  | false branch for >=
+   36 |  59  | F x≥0                   | false branch for >=
    37 |  40  | 40                      | false branch for >=
    38 |  67  | П→X 7                   | preload const 4444
    39 |  50  | С/П                     | halt
@@ -8248,7 +8248,7 @@ Setup Block:
    45 |  01  | 1                       |
    46 |  06  | 6                       |
    47 |  11  | -                       | condition compare
-   48 |  59  | F x>=0                  | false branch for >=
+   48 |  59  | F x≥0                   | false branch for >=
    49 |  52  | 52                      | false branch for >=
    50 |  00  | 0                       | halt
    51 |  50  | С/П                     | halt
@@ -8300,7 +8300,7 @@ Setup Block:
    97 |  6A  | >6A                     | line_count calculator_marks
    98 |  04  | 4                       |
    99 |  11  | -                       | condition compare
-   A0 |  59  | F x>=0                  | false branch for >=
+   A0 |  59  | F x≥0                   | false branch for >=
    A1 |  69  | >69                     | false branch for >=
    A2 |  67  | П→X 7                   | constant -4444 base 4444
    A3 |  0B  | /-/                     | constant -4444
@@ -8707,7 +8707,7 @@ exports[`golden listing > selected output is stable for examples/raja-yoga.mkpro
    56 |  07  | 7                       |
    57 |  65  | П→X 5                   | recall old_age
    58 |  11  | -                       | condition compare
-   59 |  59  | F x>=0                  | false branch for <=
+   59 |  59  | F x≥0                   | false branch for <=
    60 |  04  | 04                      | false branch for <=
    61 |  60  | П→X 0                   | recall adept
    62 |  62  | П→X 2                   | recall goal
@@ -9018,7 +9018,7 @@ exports[`golden listing > selected output is stable for examples/sea-battle.mkpr
    10 |  00  | 0                       |
    11 |  62  | П→X 2                   | recall own_ships
    12 |  11  | -                       | condition compare
-   13 |  59  | F x>=0                  | false branch for <=
+   13 |  59  | F x≥0                   | false branch for <=
    14 |  17  | 17                      | false branch for <=
    15 |  6C  | П→X c                   | preload const 33333331
    16 |  50  | С/П                     | halt
@@ -9053,7 +9053,7 @@ exports[`golden listing > selected output is stable for examples/sea-battle.mkpr
    45 |  37  | К ∧                     | bit_and()
    46 |  35  | К {x}                   | frac()
    47 |  32  | К ЗН                    | sign()
-   48 |  57  | F x!=0                  | false branch for !=
+   48 |  57  | F x≠0                   | false branch for !=
    49 |  00  | 00                      | false branch for !=
    50 |  3A  | К ИНВ                   | reuse membership mask for clear
    51 |  61  | П→X 1                   | recall enemy_fleet
@@ -9066,7 +9066,7 @@ exports[`golden listing > selected output is stable for examples/sea-battle.mkpr
    58 |  00  | 0                       |
    59 |  63  | П→X 3                   | recall enemy_ships
    60 |  11  | -                       | condition compare
-   61 |  59  | F x>=0                  | false branch for <=
+   61 |  59  | F x≥0                   | false branch for <=
    62 |  69  | 69                      | false branch for <=
    63 |  6D  | П→X d                   | preload const 13139545
    64 |  3A  | К ИНВ                   | display literal video bytes
@@ -9538,7 +9538,7 @@ exports[`golden listing > selected output is stable for examples/treasure-hunter
    18 |  20  | 20                      | false branch for ==
    19 |  29  | К ÷                     | halt literal ЕГГ0Г
    20 |  A8  | К ПП 8                  | expr frac(bit_and(rows[floor].row, 5 * pos + 5)) / pos; preloaded R8=B4 indirect-target=2 indirect flow
-   21 |  79  | К x!=0 9                | case mismatch; preloaded R9=C5 indirect-target=13 indirect flow
+   21 |  79  | К x≠0 9                 | case mismatch; preloaded R9=C5 indirect-target=13 indirect flow
    22 |  04  | 4                       |
    23 |  11  | -                       | dispatch residual compare
    24 |  5E  | F x=0                   | case mismatch
@@ -9970,7 +9970,7 @@ exports[`golden listing > selected output is stable for examples/wumpus.mkpro 1`
    22 |  64  | П→X 4                   | recall hazard_bat_2
    23 |  A9  | К ПП 9                  | near_any candidate; preloaded R9=C3 indirect-target=11 indirect flow
    24 |  36  | К max                   | near_any max margin
-   25 |  59  | F x>=0                  | false branch for >=
+   25 |  59  | F x≥0                   | false branch for >=
    26 |  29  | 29                      | false branch for >=
    27 |  08  | 8                       |
    28 |  45  | X→П 5                   | set clue
@@ -9979,13 +9979,13 @@ exports[`golden listing > selected output is stable for examples/wumpus.mkpro 1`
    31 |  62  | П→X 2                   | recall hazard_pit_2
    32 |  A9  | К ПП 9                  | near_any candidate; preloaded R9=C3 indirect-target=11 indirect flow
    33 |  36  | К max                   | near_any max margin
-   34 |  59  | F x>=0                  | false branch for >=
+   34 |  59  | F x≥0                   | false branch for >=
    35 |  38  | 38                      | false branch for >=
    36 |  00  | 0                       | set clue
    37 |  45  | X→П 5                   | set clue
    38 |  68  | П→X 8                   | recall wumpus
    39 |  A9  | К ПП 9                  | near_any candidate; preloaded R9=C3 indirect-target=11 indirect flow
-   40 |  59  | F x>=0                  | false branch for >=
+   40 |  59  | F x≥0                   | false branch for >=
    41 |  44  | 44                      | false branch for >=
    42 |  03  | 3                       |
    43 |  45  | X→П 5                   | set clue
@@ -9998,10 +9998,10 @@ exports[`golden listing > selected output is stable for examples/wumpus.mkpro 1`
    50 |  65  | П→X 5                   | display __inline_show_39_1 source
    51 |  50  | С/П                     | show __inline_show_39_1
    52 |  47  | X→П 7                   | read target
-   53 |  59  | F x>=0                  | false branch for >=
+   53 |  59  | F x≥0                   | false branch for >=
    54 |  60  | 60                      | false branch for >=
    55 |  A9  | К ПП 9                  | near_any candidate; preloaded R9=C3 indirect-target=11 indirect flow
-   56 |  9A  | К x>=0 a                | false branch for >=; preloaded Ra=D0 indirect-target=18 indirect flow
+   56 |  9A  | К x≥0 a                 | false branch for >=; preloaded Ra=D0 indirect-target=18 indirect flow
    57 |  67  | П→X 7                   | recall target
    58 |  51  | БП                      | tail jump return suffix gadget
    59 |  A2  | A2                      | return suffix gadget target
@@ -10014,7 +10014,7 @@ exports[`golden listing > selected output is stable for examples/wumpus.mkpro 1`
    66 |  6E  | П→X e                   | preload const 777
    67 |  50  | С/П                     | halt
    68 |  60  | П→X 0                   | recall arrows
-   69 |  57  | F x!=0                  | false branch for !=
+   69 |  57  | F x≠0                   | false branch for !=
    70 |  77  | 77                      | false branch for !=
    71 |  53  | ПП                      | random cell int(random(20)) + 1
    72 |  02  | 02                      | random cell int(random(20)) + 1
@@ -10026,7 +10026,7 @@ exports[`golden listing > selected output is stable for examples/wumpus.mkpro 1`
    78 |  66  | П→X 6                   | recall room
    79 |  68  | П→X 8                   | recall wumpus
    80 |  11  | -                       | condition compare
-   81 |  57  | F x!=0                  | false branch for !=
+   81 |  57  | F x≠0                   | false branch for !=
    82 |  77  | 77                      | false branch for !=
    83 |  66  | П→X 6                   | recall room
    84 |  61  | П→X 1                   | recall hazard_pit_1
@@ -10035,7 +10035,7 @@ exports[`golden listing > selected output is stable for examples/wumpus.mkpro 1`
    87 |  62  | П→X 2                   | recall hazard_pit_2
    88 |  11  | -                       | expr -
    89 |  12  | ×                       | expr *
-   90 |  57  | F x!=0                  | false branch for !=
+   90 |  57  | F x≠0                   | false branch for !=
    91 |  77  | 77                      | false branch for !=
    92 |  66  | П→X 6                   | recall room
    93 |  63  | П→X 3                   | recall hazard_bat_1
