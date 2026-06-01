@@ -106,6 +106,7 @@ import {
   numberExpression,
   numericLiteralValue,
   optimizeDispatchDefaultCases,
+  parseRawInstruction,
   positiveIntegerPowerOfTenExponent,
   programUsesDashedCoordReport,
   randomCoordListItemPlacement,
@@ -1654,6 +1655,7 @@ function compileMKProOnce(
   validateV2Intent(ast, diagnostics);
   validateReservedInternalNames(ast, diagnostics);
   validateFunctionTailRecursion(ast, diagnostics);
+  validateRawMachineHazards(ast, warnings);
   if (diagnostics.some((diagnostic) => diagnostic.level === "error")) {
     throw new CompileError(diagnostics);
   }
@@ -4455,6 +4457,106 @@ function validateReservedInternalNames(ast: ProgramAst, diagnostics: Diagnostic[
   }
 }
 
+// Danilov MK-61 delta lint (docs/12): warn when a `raw { code { ... } }` block
+// relies on firmware quirks that diverge between step mode and continuous run.
+// Two hazard classes are detected, both warning-only so they never block a
+// build, and both scoped to source raw blocks (generated setup/patch programs
+// are not linted):
+//   * sign-on-exponent: `/-/` applied while the calculator is still in
+//     exponent-entry state after `ВП` may flip the exponent sign in continuous
+//     run instead of the mantissa (the `+/-` bug class).
+//   * stack-lift contradiction: `Cx`/`В↑` immediately followed by `П->X` lifts
+//     the stack differently from the keyboard digit-entry path.
+function validateRawMachineHazards(ast: ProgramAst, warnings: string[]): void {
+  const seen = new Set<string>();
+  const warn = (message: string, line: number): void => {
+    const key = `${line}:${message}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    warnings.push(`${message} (raw block, line ${line})`);
+  };
+
+  const VP = 0x0c;
+  const SIGN_CHANGE = 0x0b;
+  const CLEAR_X = 0x0d;
+  const PUSH = 0x0e;
+  const isDigitEntry = (opcode: number): boolean => opcode >= 0x00 && opcode <= 0x0a;
+  const isRecall = (opcode: number): boolean => opcode >= 0x60 && opcode <= 0x6e;
+
+  const lintRawBlock = (statement: Extract<StatementAst, { kind: "core" }>): void => {
+    const ops: Array<{ opcode: number; line: number } | "label"> = [];
+    for (const rawLine of statement.lines) {
+      if (rawLine.text.endsWith(":")) {
+        ops.push("label");
+        continue;
+      }
+      const parsed = parseRawInstruction(rawLine.text);
+      if (parsed === undefined) continue;
+      ops.push({ opcode: parsed.opcode, line: rawLine.line });
+    }
+    let inExponentEntry = false;
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i]!;
+      if (op === "label") {
+        inExponentEntry = false;
+        continue;
+      }
+      if (op.opcode === VP) {
+        inExponentEntry = true;
+        continue;
+      }
+      if (isDigitEntry(op.opcode)) continue;
+      if (op.opcode === SIGN_CHANGE) {
+        if (inExponentEntry) {
+          warn(
+            "Sign change (/-/) after ВП exponent entry: continuous run may flip the exponent sign instead of the mantissa; test exponential inputs and verify against step mode",
+            op.line,
+          );
+        }
+        inExponentEntry = false;
+        continue;
+      }
+      if (op.opcode === CLEAR_X || op.opcode === PUSH) {
+        const next = ops[i + 1];
+        if (next !== undefined && next !== "label" && isRecall(next.opcode)) {
+          const lead = op.opcode === CLEAR_X ? "Cx" : "В↑";
+          warn(
+            `${lead} immediately followed by П->X lifts the stack differently from the keyboard digit-entry path; confirm Y/Z/T after this sequence`,
+            op.line,
+          );
+        }
+      }
+      inExponentEntry = false;
+    }
+  };
+
+  const visit = (statements: readonly StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "core") {
+        lintRawBlock(statement);
+        continue;
+      }
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+        continue;
+      }
+      if (statement.kind === "loop") {
+        visit(statement.body);
+        continue;
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+        continue;
+      }
+    }
+  };
+
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+}
+
 function collectUnsupportedV2Statements(ast: NonNullable<ProgramAst["v2"]>): Array<{ text: string; line: number }> {
   const unsupported: Array<{ text: string; line: number }> = [];
   const visit = (statements: V2StatementAst[]): void => {
@@ -5979,19 +6081,24 @@ export class EmitContext {
     membership: BitMembershipCondition,
   ): {
     set: Extract<StatementAst, { kind: "assign" }>;
+    collection: ExpressionAst;
     tail: StatementAst[];
   } | undefined {
     const first = statements[0];
-    if (first?.kind === "assign" && isBitSetAssignment(first, membership)) {
-      return { set: first, tail: statements.slice(1) };
+    if (first?.kind === "assign") {
+      const matched = matchAnyBitSetAssignment(first, membership);
+      if (matched !== undefined) return { set: first, collection: matched.collection, tail: statements.slice(1) };
     }
     if (first?.kind !== "call" || !this.inlineProcNames.has(first.block)) return undefined;
     const proc = this.ast.procs.find((candidate) => candidate.name === first.block);
     if (proc === undefined) return undefined;
     const set = proc.body[0];
-    if (set?.kind !== "assign" || !isBitSetAssignment(set, membership)) return undefined;
+    if (set?.kind !== "assign") return undefined;
+    const matched = matchAnyBitSetAssignment(set, membership);
+    if (matched === undefined) return undefined;
     return {
       set,
+      collection: matched.collection,
       tail: [...proc.body.slice(1), ...statements.slice(1)],
     };
   }
@@ -12237,15 +12344,15 @@ const optimizerCapabilities: Array<{
     source: "mk61-delta",
     requires: ["r0-fractional-sentinel"],
     activeWhen: ["fractional-indirect-addressing", "r0-indirect-counter", "r0-fractional-sentinel"],
-    detail: "Computed-dispatch candidate for fractional R0 selecting R3 or jumping to 99 while creating the -99999999 sentinel.",
+    detail: "Fractional R0 side effects: selecting R3 (active) is sound; the one-cell К БП 0 jump to 99 stays a candidate because it destroys R0 and depends on the fixed hardware address 99, which is unsafe to synthesize automatically.",
   },
   {
     id: "raw-display-5f",
     category: "display",
     source: "undocumented",
     requires: ["raw-display-5f"],
-    activeWhen: [],
-    detail: "Display lowering candidate for opcode 5F; selected only when the raw display mutation is the intended observable effect.",
+    activeWhen: ["raw-display-5f"],
+    detail: "Raw display-state transform opcode 5F; active when a raw block emits 5F as an intended display mutation (X is left intact).",
   },
   {
     id: "x2-display-register",
@@ -12732,6 +12839,9 @@ function buildMachineFeaturesUsed(
     optimization.name === "domain-error-guard"
   )) {
     add("error-stops", "Compiler emitted a domain-error pause or explicit trap.", "optimizer");
+  }
+  if (optimizations.some((optimization) => optimization.name === "raw-display-5f")) {
+    add("raw-display-5f", "Raw block emitted opcode 5F as a display-state transform that leaves X intact.", "optimizer");
   }
   if (cellRoles.some((cell) => cell.roles.includes("overlay"))) {
     add("code-data-overlay", "Layout marked address cells as reusable code/data overlay candidates.", "layout");

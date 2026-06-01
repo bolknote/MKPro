@@ -1651,6 +1651,100 @@ program RawRule {
     expect(result.report.cellRoles.some((cell) => cell.note?.includes("raw opcode"))).toBe(true);
   });
 
+  it("marks raw opcode 5F as a used display-state transform feature", () => {
+    const result = compileOk(`
+program RawDisplay5F {
+  state {
+    out: packed = 0
+  }
+  loop {
+    raw {
+      clobbers X
+      preserves state
+      code {
+        5F
+      }
+    }
+    halt(out)
+  }
+}
+`);
+    expect(result.steps.map((step) => step.hex)).toContain("5F");
+    expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "raw-display-5f")).toBe(true);
+    const capability = result.report.optimizer.capabilities?.find((entry) => entry.id === "raw-display-5f");
+    expect(capability?.status).toBe("active");
+  });
+
+  it("warns when raw code flips the exponent sign after ВП", () => {
+    const result = compileOk(`
+program SignExponent {
+  state {
+    out: packed = 0
+  }
+  loop {
+    raw {
+      clobbers X
+      preserves state
+      code {
+        1
+        ВП
+        3
+        /-/
+      }
+    }
+    halt(out)
+  }
+}
+`);
+    expect(result.report.warnings.some((warning) => warning.includes("exponent sign"))).toBe(true);
+  });
+
+  it("does not warn on a sign change that is not in exponent entry", () => {
+    const result = compileOk(`
+program SignMantissa {
+  state {
+    out: packed = 0
+  }
+  loop {
+    raw {
+      clobbers X
+      preserves state
+      code {
+        ВП
+        3
+        +
+        /-/
+      }
+    }
+    halt(out)
+  }
+}
+`);
+    expect(result.report.warnings.some((warning) => warning.includes("exponent sign"))).toBe(false);
+  });
+
+  it("warns when Cx is immediately followed by a recall", () => {
+    const result = compileOk(`
+program StackLiftCx {
+  state {
+    out: packed = 0
+  }
+  loop {
+    raw {
+      clobbers X
+      preserves state
+      code {
+        Cx
+        П->X R7
+      }
+    }
+    halt(out)
+  }
+}
+`);
+    expect(result.report.warnings.some((warning) => warning.includes("lifts the stack differently"))).toBe(true);
+  });
+
   it("keeps raw numeric branches behind the optimizer barrier", () => {
     const result = compileOk(`
 program StableIndirectFlow {
@@ -2733,6 +2827,33 @@ program MembershipMaskRun {
 `, { budget: 999, analysis: true });
 
     expect(result.report.optimizations.some((item) => item.name === "cell-membership-mask-run-reuse")).toBe(true);
+  });
+
+  it("reuses a failed membership mask without changing the set collection", () => {
+    const result = compileOk(`
+program MembershipSingleSetCollection {
+  grid: board(1..4, 1..4)
+
+  state {
+    cell: coord(grid)
+    occupied: cells(grid)
+    player_marks: cells(grid)
+  }
+
+  loop {
+    cell = read()
+    unless cell in occupied {
+      player_marks += cell
+      halt(player_marks)
+    }
+    halt(0)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "cell-membership-set-reuse")).toBe(true);
+    const setIndex = result.steps.findIndex((step) => step.comment === "bit_set with reused mask");
+    expect(result.steps[setIndex - 2]?.comment).toBe("recall player_marks");
   });
 
   it("reuses a precomputed mask membership result when clearing the same mask", () => {

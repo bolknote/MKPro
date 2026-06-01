@@ -1321,6 +1321,12 @@ export function compileRawLines(ctx: LoweringCtx,
         continue;
       }
       ctx.emitOp(parsed.opcode, parsed.mnemonic, parsed.comment, line.line, true);
+      if (parsed.opcode === 0x5f) {
+        ctx.optimizations.push({
+          name: "raw-display-5f",
+          detail: `Raw block uses opcode 5F as a display-state transform at line ${line.line}.`,
+        });
+      }
       if (parsed.formalTargetOpcode !== undefined) {
         ctx.emitFormalAddress(parsed.formalTargetOpcode, parsed.comment ?? parsed.mnemonic, line.line);
       } else if (parsed.target !== undefined) {
