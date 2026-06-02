@@ -14,7 +14,6 @@ Files are stored in [`lordbss/`](./lordbss/):
   title, author, and source URL.
 
 Cleaned game programs: 254.
-
 ## Tekhnika Molodyzhi / KEI + early issue
 
 Source:
@@ -35,6 +34,20 @@ The demo in [`anvarov/`](./anvarov/) reimplements *Treasure Cave* as a modified
 variant.
 
 Programs: **5**.
+
+## mk61.narod.ru
+
+Source: [mk61.narod.ru](https://mk61.narod.ru)
+
+Files are stored in [`mk61-narod/`](./mk61-narod/):
+
+- `lamer-andrew-meets-america.txt` — plain listing for *Lamer Andrew Meets America*.
+- `lamer-andrew-meets-america.md` — description and setup notes.
+- `tamagotchi.txt` — plain listing for *Tamagotchi*.
+- `tamagotchi.md` — description and setup notes.
+- `manifest.tsv` — tab-separated index with `program`, `description`, `title`, `author`, and `source_url`.
+
+Programs: **2**.
 
 ## Serge Anvarov Collection
 
