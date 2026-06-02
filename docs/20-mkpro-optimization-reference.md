@@ -84,6 +84,10 @@ Below are the public capability IDs from `report.optimizer.capabilities`.
 - `super-number-deferred-normalization` — keeps extended super-number form when canonicalized normalization is not yet considered provably safe.
 - `stack-resident-temps` — keeps short-lived temporaries on the X/Y/Z/T stack instead of spilling them to numbered registers when the stack-residency path is active.
 
+Note:
+- Internal compiler artifacts such as `#display-anchor`, `#display-literal-gap`, `neighbor_count`, and `line_count` are intentionally not listed as optimization IDs in this document.
+- The method IDs listed in this reference are the ones emitted into `report.optimizations` / `report.optimizer`, while the values above are structural field/call labels used during lowering.
+
 Capabilities can be `considered` and not active if no matching shape is found.
 
 ## 4) AST and source-level rewrites
