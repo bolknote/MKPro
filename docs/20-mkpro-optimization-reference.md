@@ -112,7 +112,9 @@ These transformations run on source constructs before machine lowering:
 - `show-read-decrement-underflow-fusion` — merges `show -> input -> decrement -> if (counter < 0) ...` into one compact sequence, keeping input in `Y` across the decrement-underflow check.
 - `show-read-stack-stop-risk-lowering` — a generalized "stack-stop fusion": when a single plain `show` source value (`stake`) is combined with a freshly read input across the stop, it keeps `stake` in `Y`, transforms the input in `X`, and computes the result directly on the stack with no input register. It recognizes any pure shape `wrap*( stake (op) g(input) )` where `op` is `+`/`-`/`*`/`/` (non-commutative ops keep `stake` on the left so they map to the machine's `Y op X` order), `g(input)` is a chain of single-argument X-transform intrinsics over the input (e.g. `sin`, `cos`, `tg`, `sqrt`) optionally fused with one single-digit additive/scaling constant, and `wrap*` is an outer chain of X-transform intrinsics (e.g. `int`, `frac`). The input leaf may be a direct `sin(read())` or a stored input field, avoiding a source-visible throwaway field. The classic `int(stake * (1 + sin(read())))` robber-fight idiom is the canonical case and lowers byte-for-byte identically; the generalization never grows a program because every accepted form reuses the same kept-in-`Y` stack sequence.
 - `loop-carried-prompt-x` — for loops shaped as `show(screen); key = read()` where every non-terminal branch assigns the next `screen`, removes the register-backed prompt state and leaves the next visible value in `X` for the loop-back stop. If the prompt starts from `stack.X` / `stack.Y`, an allocated sibling field initialized from the same stack slot can seed the first prompt.
-- `loop-carried-prompt-input-branch` / `loop-carried-prompt-input-dispatch` / `loop-carried-prompt-decrement-underflow` — after a loop-carried prompt stop, branches or dispatches directly on the read key; the decrement-underflow form keeps the key in `Y` while checking `resource--; if resource < 0 { ...terminal... }`.
+- `loop-carried-prompt-input-branch` — after a loop-carried prompt stop, branches directly on the read key with no extra store when the branch condition consumes only that input.
+- `loop-carried-prompt-input-dispatch` — after a loop-carried prompt stop, dispatches directly on the read key with no intermediate variable, while preserving the prompt flow across loop back-edge.
+- `loop-carried-prompt-decrement-underflow` — after a loop-carried prompt stop, handles `resource--; if resource < 0 ...` patterns by checking underflow in-line. It keeps the input value in `Y`, emits `F x<0` branch flow, and restores `X/Y` state only where required for the next prompt consumer.
 - `show-read-guarded-transfer` — rewrites `show; x=input; decrementTarget -= x; if decrementTarget < 0 { halt } ; incrementTarget += x; if incrementTarget < 0 { halt }` into one stack-based sequence that keeps the read value on the stack across both guarded updates.
 - `counted-loop-unroll` — replaces small constant-trip counted `while` loops with explicit per-iteration copies when the induction variable updates are simple linear steps and entry values are known constants; this removes the loop machinery and registers update logic.
 - `counted-loop-unroll-free-scratch` — runs counted-loop unrolling together with residual-dispatch scratch freeing (`freeResidualDispatchScratch`) as one candidate.
@@ -172,7 +174,8 @@ The control-flow family is where the largest byte savings are found.
 - `dead-proc-elimination` — removes unreachable lowered procedures after `match/effect` pass by collecting reachability from entries and call sites.
 - `ephemeral-input-branch` — shortens one-off input paths into compact branches.
 - `ephemeral-input-dispatch` — chooses input-based dispatch through denser tables.
-- `decrement-underflow-branch` / `decrement-underflow-domain-guard` — decrements and immediately handles underflow in one step; terminal `ЕГГ0Г` underflows use `F sqrt` as a one-cell self-trap after storing the decremented value.
+- `decrement-underflow-branch` — decrements and immediately handles underflow in one step.
+- `decrement-underflow-domain-guard` — fuses unit decrement and terminal `halt("ЕГГОГ")` underflow paths through `F sqrt` when the branch target is exactly a one-cell domain-error stop.
 - `fl-decrement-zero-branch` — a dedicated “decrement and test zero” sequence in one short block.
 - `if-branch-order-inversion` — reorders branches so downstream lowering is shorter.
 - `x-preserving-false-branch` — preserves current X value in the false branch.
@@ -470,14 +473,15 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 17. `dead-store-elimination` — removes stores whose target register is not live after the write and does not affect number-entry/input finalization.
 18. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding `X->П`.
 19. `r0-fractional-sentinel` — drops redundant immediate `П->X 3` after fractional-R0 indirect access when `R0` is already known to be non-live.
-20. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` in `report.optimizations` when one or more cells are removed.
-21. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a display-aware `ВП`/X2 marker and reports `vp-fraction-restore` when one or more restores are removed.
-22. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
-23. `duplicate-failure-tail-merge` — removes duplicated `(label -> 0 -> pause)` failure tails by redirecting the first tail to the second.
-24. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.
-25. `dead-code-after-halt` — removes unreachable IR ops by CFG reachability from entry.
-26. `register-coalesce` — merges non-overlapping register live ranges and, when enabled, performs copy coalescing for safe `recall/store` aliases.
-27. `arithmetic-if-pass` — merges two branch paths that lower to byte-identical pure linear blocks (same side effects and same single-pass behavior).
+20. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` when one or more cells are removed.
+21. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/`КНОП` redundancy optimization pass removes cells.
+22. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a display-aware `ВП`/X2 marker and reports `vp-fraction-restore` when one or more restores are removed.
+23. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
+24. `duplicate-failure-tail-merge` — removes duplicated `(label -> 0 -> pause)` failure tails by redirecting the first tail to the second.
+25. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.
+26. `dead-code-after-halt` — removes unreachable IR ops by CFG reachability from entry.
+27. `register-coalesce` — merges non-overlapping register live ranges and, when enabled, performs copy coalescing for safe `recall/store` aliases.
+28. `arithmetic-if-pass` — merges two branch paths that lower to byte-identical pure linear blocks (same side effects and same single-pass behavior).
 
 A fixed-point loop repeats while transformations continue, up to internal iteration limits.
 
