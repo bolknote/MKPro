@@ -712,6 +712,25 @@ powers such as `pow10(4)` and literal `10000` are materialized through MK-61
 `inv(x)`.
 `max(a, b)` is the two-argument comparator helper (`К max`). `min(a, b)` is
 available as the matching `min-via-max` helper.
+
+> **`К max` zero quirk.** `max`/`min` map directly onto the hardware `К max`
+> opcode, which treats `0` as the **greatest** value: whenever either operand is
+> exactly `0` the result is `0`. So `max(5, 0)` is `0`, not `5`, and the
+> negation-based `min(-5, 0)` is `0`, not `-5`. This is faithful to real MK-61
+> behaviour (it is what the original game listings rely on), and the
+> constant-folder mirrors it. Avoid `max`/`min` for clamps such as
+> `max(coord, 1)` or `max(value, 0.0000001)` whenever the variable operand can be
+> exactly `0`.
+>
+> When you need a mathematically correct result, use `safe_max(a, b)` and
+> `safe_min(a, b)`. They avoid `К max` entirely by lowering through the
+> arithmetic identities `(a + b + |a - b|) / 2` and `(a + b - |a - b|) / 2`, so
+> `safe_max(5, 0)` is `5`. Because the identity references each operand twice,
+> both arguments must be **duplicable (pure) expressions** — identifiers,
+> literals, or arithmetic over them. Passing a call with side effects (such as
+> `random()` or `read()`) is rejected with a diagnostic; bind it to a variable
+> first. The safe helpers cost several extra cells over `К max`, so they are
+> opt-in rather than the default.
 `pi()` is a zero-argument helper (`F pi`). `e()` emits `1; F e^x`, the shortest
 dedicated MK-61 path for Euler's number.
 
