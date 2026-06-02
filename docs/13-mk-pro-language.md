@@ -1013,11 +1013,14 @@ candidates:
   idiom from cave games;
 - loop-carried prompt values: a `loop` shaped as `show(screen); key = read()`
   can keep `screen` in `X` instead of a register when every non-terminal path
-  assigns the next prompt value before looping back;
+  assigns the next prompt value before looping back; stack-initial prompts can
+  use a sibling state field initialized from the same `stack.X` / `stack.Y` as
+  their first visible value;
 - resource-underflow guards: `resource--; if resource < 0 { ...terminal... }`
   lowers as one fused sequence; terminal error underflows use a self-trapping
   `F sqrt` domain guard, and `show; read; resource--; if resource < 0 { ... };
-  match key` can keep the read key in `Y` while the resource is checked;
+  match key` can keep the read key in `Y` while the resource is checked,
+  including loop-carried prompt headers;
 - pure expression helpers: repeated expensive pure expressions such as
   generated `digit_at(...)` bodies are shared as ordinary subroutines;
 - remainder fraction lowering: `x - n * int(x / n)` lowers as `frac(x / n) * n`

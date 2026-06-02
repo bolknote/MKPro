@@ -39,7 +39,7 @@ Generated with `npm run examples:size`.
 | `treasure-hunter-2.mkpro` | 102 | 105 | -3 | ok: <= reference | main+setup load ok |
 | `wumpus.mkpro` | 101 | - | - | ok: no reference | main+setup load ok |
 | `pending-optimizer/cave-highlevel-baseline.mkpro` | 150 | 105 | +45 | pending optimizer | not loaded: main >105 |
-| `pending-optimizer/cave-treasure.mkpro` | 165 | 105 | +60 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/cave-treasure.mkpro` | 151 | 105 | +46 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/giants-country.mkpro` | 170 | 105 | +65 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/labyrinth777.mkpro` | 163 | 105 | +58 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/teleport.mkpro` | 194 | 105 | +89 | pending optimizer | setup load ok; main >105 |

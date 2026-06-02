@@ -548,6 +548,10 @@ interface LoopCarriedPrompt {
   inputLine: number;
 }
 
+function promptInputStatement(prompt: LoopCarriedPrompt): Extract<StatementAst, { kind: "input" }> {
+  return { kind: "input", target: prompt.input, line: prompt.inputLine };
+}
+
 const loopCarriedPromptInitials = new WeakMap<ProgramAst, Map<string, ExpressionAst>>();
 
 
@@ -2954,7 +2958,7 @@ function loopCarriedPromptCandidate(
   if (show?.kind !== "show" || input?.kind !== "input") return undefined;
   const name = singlePlainDisplaySourceFromAst(ast, show.display);
   if (name === undefined) return undefined;
-  const initial = findStateFieldInAst(ast, name)?.initial ?? loopCarriedPromptInitials.get(ast)?.get(name);
+  const initial = loopCarriedPromptInitialExpression(ast, name);
   if (initial === undefined) return undefined;
   if (loopPromptHasReadsOutsideHeader(ast, name, show)) return undefined;
   if (!statementsAssignLoopPrompt(ast, loop.body.slice(2), name)) return undefined;
@@ -2969,6 +2973,18 @@ function loopCarriedPromptCandidate(
     showLine: show.line,
     inputLine: input.line,
   };
+}
+
+function loopCarriedPromptInitialExpression(ast: ProgramAst, name: string): ExpressionAst | undefined {
+  const field = findStateFieldInAst(ast, name);
+  if (field?.initial !== undefined) return field.initial;
+  if (field?.initialStack !== undefined) {
+    const mirror = ast.states
+      .flatMap((state) => state.fields)
+      .find((candidate) => candidate.name !== name && candidate.initialStack === field.initialStack);
+    if (mirror !== undefined) return { kind: "identifier", name: mirror.name };
+  }
+  return loopCarriedPromptInitials.get(ast)?.get(name);
 }
 
 function singlePlainDisplaySourceFromAst(ast: ProgramAst, displayName: string): string | undefined {
@@ -5867,8 +5883,11 @@ export class EmitContext {
     this.currentXAliases = new Set([prompt.name]);
     this.emitOp(0x50, "С/П", `show ${prompt.display}`, prompt.showLine);
     this.markCurrentX(prompt.input);
-    this.emitStore(prompt.input, `read ${prompt.input}`, prompt.inputLine);
-    this.compileStatements(statement.body.slice(2));
+    const body = statement.body.slice(2);
+    if (!this.compileLoopCarriedPromptReadTail(prompt, body)) {
+      this.emitStore(prompt.input, `read ${prompt.input}`, prompt.inputLine);
+      this.compileStatements(body);
+    }
     if (!this.statementsEndMachineFlow(statement.body)) {
       if (!emitKnownOneIndirectLoopBack(this, start, statement.line)) {
         this.emitJump(0x51, "БП", start, "loop-carried prompt back", statement.line);
@@ -5877,6 +5896,76 @@ export class EmitContext {
     this.optimizations.push({
       name: "loop-carried-prompt-x",
       detail: `Used X as the carried display/input prompt ${prompt.name} for loop at line ${statement.line}.`,
+    });
+    return true;
+  }
+
+  compileLoopCarriedPromptReadTail(
+    prompt: LoopCarriedPrompt,
+    body: readonly StatementAst[],
+  ): boolean {
+    const first = body[0];
+    if (first === undefined) return false;
+    if (first.kind === "if" && this.inputFeedsOnlyFollowingCondition(promptInputStatement(prompt), first)) {
+      compileIf(this, first, first.line);
+      this.compileStatements(body.slice(1));
+      this.optimizations.push({
+        name: "loop-carried-prompt-input-branch",
+        detail: `Branched directly on loop prompt input ${prompt.input} at line ${prompt.inputLine} without storing it.`,
+      });
+      return true;
+    }
+    if (first.kind === "dispatch" && this.inputFeedsOnlyFollowingDispatch(promptInputStatement(prompt), first)) {
+      this.compileStatement(first);
+      this.compileStatements(body.slice(1));
+      this.optimizations.push({
+        name: "loop-carried-prompt-input-dispatch",
+        detail: `Dispatched directly on loop prompt input ${prompt.input} at line ${prompt.inputLine} without storing it.`,
+      });
+      return true;
+    }
+
+    const decrement = body[0];
+    const branch = body[1];
+    const consumer = body[2];
+    if (
+      decrement?.kind === "assign" &&
+      branch?.kind === "if" &&
+      (consumer?.kind === "dispatch" || consumer?.kind === "if") &&
+      this.compileLoopPromptReadDecrementUnderflow(prompt, decrement, branch, consumer)
+    ) {
+      this.compileStatement(consumer);
+      this.compileStatements(body.slice(3));
+      return true;
+    }
+    return false;
+  }
+
+  compileLoopPromptReadDecrementUnderflow(
+    prompt: LoopCarriedPrompt,
+    decrement: Extract<StatementAst, { kind: "assign" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+    consumer: Extract<StatementAst, { kind: "dispatch" | "if" }>,
+  ): boolean {
+    const input = promptInputStatement(prompt);
+    if (!this.inputFeedsGuardedDecrementConsumer(input, decrement, branch, consumer)) return false;
+
+    const okLabel = this.freshLabel("decrement_ok");
+    this.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
+    this.emitNumberOrPreload("1");
+    this.emitOp(0x11, "-", `decrement/test ${decrement.target}`, decrement.line);
+    this.emitJump(0x5c, "F x<0", okLabel, `decrement underflow ${decrement.target}`, branch.line);
+    this.compileStatements(branch.thenBody);
+    this.emitLabel(okLabel);
+    this.currentXVariable = undefined;
+    this.currentXAliases.clear();
+    this.currentXKnownZero = false;
+    this.emitStore(decrement.target, `set ${decrement.target}`, decrement.line);
+    this.emitOp(0x14, "X↔Y", `restore read ${prompt.input}`, prompt.inputLine);
+    this.markCurrentX(prompt.input);
+    this.optimizations.push({
+      name: "loop-carried-prompt-decrement-underflow",
+      detail: `Kept loop prompt input ${prompt.input} in Y while checking ${decrement.target} at lines ${prompt.inputLine}/${branch.line}.`,
     });
     return true;
   }
@@ -6567,6 +6656,22 @@ export class EmitContext {
     return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
   }
 
+  inputFeedsGuardedDecrementConsumer(
+    input: Extract<StatementAst, { kind: "input" }>,
+    decrement: Extract<StatementAst, { kind: "assign" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+    consumer: Extract<StatementAst, { kind: "dispatch" | "if" }>,
+  ): boolean {
+    if (!isUnitDecrementExpression(decrement.target, decrement.expr)) return false;
+    if (branch.elseBody !== undefined) return false;
+    if (!decrementUnderflowCondition(branch.condition, decrement.target)) return false;
+    if (!this.statementsTerminate(branch.thenBody)) return false;
+    if (this.allocation.registers[decrement.target] === undefined) return false;
+    return consumer.kind === "dispatch"
+      ? this.inputFeedsOnlyFollowingDispatch(input, consumer)
+      : this.inputFeedsOnlyFollowingCondition(input, consumer);
+  }
+
   compileShowReadDebitCreditGuard(
     show: Extract<StatementAst, { kind: "show" }>,
     input: Extract<StatementAst, { kind: "assign" }>,
@@ -6747,18 +6852,8 @@ export class EmitContext {
     branch: Extract<StatementAst, { kind: "if" }>,
     consumer: StatementAst | undefined,
   ): boolean {
-    if (!isUnitDecrementExpression(decrement.target, decrement.expr)) return false;
-    if (branch.elseBody !== undefined) return false;
-    if (!decrementUnderflowCondition(branch.condition, decrement.target)) return false;
-    if (!this.statementsTerminate(branch.thenBody)) return false;
-    if (this.allocation.registers[decrement.target] === undefined) return false;
-    if (consumer?.kind === "dispatch") {
-      if (!this.inputFeedsOnlyFollowingDispatch(input, consumer)) return false;
-    } else if (consumer?.kind === "if") {
-      if (!this.inputFeedsOnlyFollowingCondition(input, consumer)) return false;
-    } else {
-      return false;
-    }
+    if (consumer?.kind !== "dispatch" && consumer?.kind !== "if") return false;
+    if (!this.inputFeedsGuardedDecrementConsumer(input, decrement, branch, consumer)) return false;
 
     compileShow(this, show.display, show.line);
     const okLabel = this.freshLabel("decrement_ok");

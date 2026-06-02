@@ -23,7 +23,6 @@ program CaveTreasure {
     treasure: counter 0..9 = 0
 
     blocked: coord(cave)
-    fight_entry: counter 0..99 = 0
   }
 
   // Doors tax food on ordinary movement, while walls require an explicit
@@ -111,24 +110,20 @@ program CaveTreasure {
 
   fn cache_reward() {
     if pos.floor == 1 {
-      food += 9
-      food = robber_fight(food)
+      food = robber_fight(food + 9)
     }
     else {
       if pos.floor == 2 {
-        dynamite += 4
-        dynamite = robber_fight(dynamite)
+        dynamite = robber_fight(dynamite + 4)
       }
       else {
-        treasure++
-        treasure = robber_fight(treasure)
+        treasure = robber_fight(treasure + 1)
       }
     }
   }
 
   fn robber_fight(stake) {
     show(stake)
-    fight_entry = read()
-    return int(stake * (1 + sin(fight_entry)))
+    return int(stake * (1 + sin(read())))
   }
 }

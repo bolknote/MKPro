@@ -1620,6 +1620,68 @@ program LoopPromptAssignedBeforeLoop {
     expect(result.steps.some((step) => step.comment === "set screen")).toBe(true);
   });
 
+  it("keeps stack-initialized loop prompt state in X through a mirror state", () => {
+    const result = compileOk(`
+program LoopPromptStackMirror {
+  state {
+    pos: packed = stack.X
+    screen: packed = stack.X
+    key: counter 0..9 = 0
+  }
+
+  loop {
+    show(screen)
+    key = read()
+    if key == 0 {
+      screen = 0
+    }
+    else {
+      screen = pos
+    }
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "loop-carried-prompt-x")).toBe(true);
+    expect(result.report.registers.screen).toBeUndefined();
+  });
+
+  it("keeps loop prompt input across a decrement guard before dispatch", () => {
+    const result = compileOk(`
+program LoopPromptGuardDispatch {
+  state {
+    screen: packed = 0
+    key: counter 0..9 = 0
+    food: counter 0..9 = 3
+    pos: packed = 1
+  }
+
+  loop {
+    show(screen)
+    key = read()
+    food--
+    if food < 0 {
+      loop {
+      }
+    }
+    match key {
+      1 => move()
+      otherwise => halt(0)
+    }
+  }
+
+  fn move() {
+    pos += 1
+    screen = pos
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "loop-carried-prompt-decrement-underflow")).toBe(true);
+    expect(result.report.registers.screen).toBeUndefined();
+    expect(result.steps.some((step) => step.comment === "read key")).toBe(false);
+  });
+
   it("shares repeated packed display bodies through a normal helper", () => {
     const result = compileOk(`
 program RepeatedPackedDisplay {
