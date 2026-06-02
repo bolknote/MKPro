@@ -1231,8 +1231,16 @@ The pipeline currently contains:
   a single-cell op after `БП target` or a proved-terminal `ПП target` onto that
   branch's address byte when the byte is itself the same executable opcode, then
   remove the duplicated cell. The overlaid executable cell may be an ordinary op
-  or an existing address byte; if its opcode itself takes an address, its
-  operand remains in the next cell.
+  or an existing numeric/formal address byte; if its opcode itself takes an
+  address, its operand remains in the next cell. Fixed numeric/formal branch
+  operands are accepted only when their real target is before the removed cell,
+  so shrinking cannot retarget them.
+- **x2 opcode profile** — the opcode catalog models the reference split between
+  X2-preserving commands, X2-syncing commands that copy X into X2 and then
+  normalize/check X, and X2-restoring commands (`0`..`9`, `.`, `/-/`, `ВП`) that
+  modify X2, copy X2 back into X, and normalize X. Direct conditionals are
+  marked `unknown` because their X2 synchronization depends on the branch
+  outcome.
 - **vp-x2-peephole** — drops a `К {x}` immediately after a proved display
   `ВП`/X2 boundary when `ВП` already supplies the fractional transform.
 - **packed-counter-stripes** — tries every compatible subset of fixed-width

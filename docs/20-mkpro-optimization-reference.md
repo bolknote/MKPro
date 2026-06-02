@@ -492,9 +492,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     single-cell op immediately after `БП target` or a proved-terminal
     `ПП target` onto the branch address byte when removing that op proves the
     address byte will be the same opcode. The overlaid executable cell may be
-    an ordinary op or an existing address byte; if the overlaid opcode itself
-    takes an address, the following operand byte is kept as that command's
-    operand.
+    an ordinary op or an existing numeric/formal address byte; if the overlaid
+    opcode itself takes an address, the following operand byte is kept as that
+    command's operand. Fixed numeric/formal branch operands are rejected when
+    shrinking would move their real target.
 21. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` when one or more cells are removed.
 22. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/`КНОП` redundancy optimization pass removes cells.
 23. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a display-aware `ВП`/X2 marker and reports `vp-fraction-restore` when one or more restores are removed.
@@ -531,7 +532,7 @@ Feature flags are added only after successful candidate/optimization evidence:
 - `indirect-memory` — added when indirect-memory selectors are used (`indirect-memory-table`, `indexed-packed-row-table`).
 - `dark-entries` — added from cyclic formal dark-entry selection and related layout features.
 - `address-constants` — added when constants are reused as arithmetic/address-like data.
-- `x2-register` — added when X2/Xп/дисплей-byte scheduling relies on X2 boundaries across display-byte paths.
+- `x2-register` — added when X2/Xп/дисплей-byte scheduling relies on X2 boundaries across display-byte paths; opcode metadata follows the reference distinction between X2-preserving, X2-syncing/normalizing, and X2-restoring commands.
 - `negative-zero-degree` — added when `negative-zero-threshold-selector` proof uses the `1|-00` preload trick.
 - `x2-restore-boundaries` — added when `vp-fraction-restore` is active.
 - `z-stack-register` — added when `z-stack-derived-value-reuse` uses deeper stack-derived storage.

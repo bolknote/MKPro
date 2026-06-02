@@ -253,6 +253,59 @@ describe("post-layout indirect flow", () => {
     expect(result.items[2]).toMatchObject({ kind: "address", target: "target" });
   });
 
+  it("overlays a labeled formal address byte as executable code", () => {
+    const program: MachineItem[] = [
+      ...jump("target"),
+      { kind: "label", name: "entry" },
+      { kind: "address", target: 55, formalOpcode: 0x55, comment: "formal K1 byte" },
+      ...Array.from({ length: 53 }, () => digit()),
+      { kind: "label", name: "target" },
+      halt(),
+    ];
+    const result = optimizePostLayoutAddressCodeOverlay(program);
+
+    expect(result.applied).toBe(1);
+    expect(cellCount(result.items)).toBe(cellCount(program) - 1);
+    expect(result.items[0]).toMatchObject({ kind: "op", opcode: 0x51 });
+    expect(result.items[1]).toMatchObject({ kind: "label", name: "entry" });
+    expect(result.items[2]).toMatchObject({ kind: "address", target: "target" });
+    expect(result.items.some((item) => item.kind === "address" && item.formalOpcode === 0x55)).toBe(false);
+  });
+
+  it("overlays a formal branch address byte when its actual target is before the removed cell", () => {
+    const program: MachineItem[] = [
+      { kind: "label", name: "top" },
+      { kind: "op", opcode: 0x51, mnemonic: "БП" },
+      { kind: "address", target: 105, formalOpcode: 0xa5, comment: "short-side formal address to 00" },
+      { kind: "label", name: "entry" },
+      op(0xa5, "К ПП 5"),
+      halt(),
+    ];
+    const result = optimizePostLayoutAddressCodeOverlay(program);
+
+    expect(result.applied).toBe(1);
+    expect(cellCount(result.items)).toBe(cellCount(program) - 1);
+    expect(result.items[1]).toMatchObject({ kind: "op", opcode: 0x51 });
+    expect(result.items[2]).toMatchObject({ kind: "label", name: "entry" });
+    expect(result.items[3]).toMatchObject({ kind: "address", target: 105, formalOpcode: 0xa5 });
+    expect(result.items.some((item) => item.kind === "op" && item.opcode === 0xa5)).toBe(false);
+  });
+
+  it("refuses fixed numeric branch address overlays whose target would shift", () => {
+    const program: MachineItem[] = [
+      { kind: "op", opcode: 0x51, mnemonic: "БП" },
+      { kind: "address", target: 7 },
+      { kind: "label", name: "entry" },
+      op(0x07, "7"),
+      ...Array.from({ length: 5 }, () => digit()),
+      halt(),
+    ];
+    const result = optimizePostLayoutAddressCodeOverlay(program);
+
+    expect(result.applied).toBe(0);
+    expect(result.items).toEqual(program);
+  });
+
   it("keeps a labeled op when the jump address byte would not match after removal", () => {
     const program: MachineItem[] = [
       ...jump("target"),

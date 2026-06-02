@@ -71,7 +71,7 @@ export const MK61_PROFILE: MachineProfile = {
     {
       id: "x2-register",
       source: "machine",
-      detail: "The hidden X2 display register can be scheduled when observable display semantics are preserved.",
+      detail: "The hidden X2 display register can be scheduled when observable display semantics are preserved; opcode metadata distinguishes X2-preserving, X2-syncing/normalizing, and X2-restoring commands.",
     },
     {
       id: "negative-zero-degree",

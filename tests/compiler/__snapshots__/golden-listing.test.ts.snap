@@ -3591,7 +3591,7 @@ Optimizer Capabilities:
 
 Machine Features Used:
   - indirect-flow: Optimizer selected register-held branch addresses for one-cell indirect flow.; К БП/К ПП/К x?0 indirect flow commands are available to the optimizer.
-  - x2-register: Optimizer scheduled hidden X2 values across display-byte boundaries.; The hidden X2 display register can be scheduled when observable display semantics are preserved.
+  - x2-register: Optimizer scheduled hidden X2 values across display-byte boundaries.; The hidden X2 display register can be scheduled when observable display semantics are preserved; opcode metadata distinguishes X2-preserving, X2-syncing/normalizing, and X2-restoring commands.
   - display-bytes: Display lowering marked cells as packed display-byte candidates.; Packed display bytes, hexadecimal mantissa digits, and sign-digit forms are available.
   - code-data-overlay: Layout marked address cells as reusable code/data overlay candidates.; Address operands, constants, opcodes, and display bytes may share cells after conflict checks.
   - address-constants: Layout marked address cells as reusable constants.; Address cells may double as constants for indirect flow and data transforms.
@@ -9325,7 +9325,7 @@ Optimizer Capabilities:
 Machine Features Used:
   - indirect-flow: Optimizer selected register-held branch addresses for one-cell indirect flow.; К БП/К ПП/К x?0 indirect flow commands are available to the optimizer.
   - address-constants: Layout marked address cells as reusable constants.; Address cells may double as constants for indirect flow and data transforms.
-  - x2-register: Optimizer scheduled hidden X2 values across display-byte boundaries.; The hidden X2 display register can be scheduled when observable display semantics are preserved.
+  - x2-register: Optimizer scheduled hidden X2 values across display-byte boundaries.; The hidden X2 display register can be scheduled when observable display semantics are preserved; opcode metadata distinguishes X2-preserving, X2-syncing/normalizing, and X2-restoring commands.
   - code-data-overlay: Layout marked address cells as reusable code/data overlay candidates.; Address operands, constants, opcodes, and display bytes may share cells after conflict checks.
   - display-bytes: Display lowering marked cells as packed display-byte candidates.; Packed display bytes, hexadecimal mantissa digits, and sign-digit forms are available.
 

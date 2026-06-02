@@ -40,7 +40,7 @@ function info(
     keys,
     enterable: extra.enterable ?? ["manual", "loader", "hex"],
     takesAddress: extra.takesAddress ?? false,
-    x2Effect: extra.x2Effect ?? "affects",
+    x2Effect: extra.x2Effect ?? "preserves",
     risk: extra.risk ?? "documented",
   };
 }
@@ -135,7 +135,7 @@ function buildOpcodeCatalog(): OpcodeInfo[] {
   set(info(0x0a, ".", ".", { x2Effect: "restores" }));
   set(info(0x0b, "/-/", "/-/", { x2Effect: "restores" }));
   set(info(0x0c, "ВП", "ВП", { x2Effect: "restores" }));
-  set(info(0x0d, "Cx", "Cx", { x2Effect: "preserves" }));
+  set(info(0x0d, "Cx", "Cx", { x2Effect: "affects" }));
   set(info(0x0e, "В↑", "В↑", { x2Effect: "affects" }));
   set(info(0x0f, "F Вx", "F Вx", { x2Effect: "affects" }));
 
@@ -163,12 +163,12 @@ function buildOpcodeCatalog(): OpcodeInfo[] {
   set(info(0x24, "F x^y"));
   set(info(0x25, "F reverse"));
   set(info(0x26, "К °->′"));
-  set(info(0x27, "К -", "К -", { risk: "dangerous" }));
-  set(info(0x28, "К *", "К *", { risk: "dangerous" }));
-  set(info(0x29, "К /", "К /", { risk: "dangerous" }));
+  set(info(0x27, "К -", "К -", { risk: "dangerous", x2Effect: "affects" }));
+  set(info(0x28, "К *", "К *", { risk: "dangerous", x2Effect: "affects" }));
+  set(info(0x29, "К /", "К /", { risk: "dangerous", x2Effect: "affects" }));
   set(info(0x2a, "К °->′\""));
   for (let code = 0x2b; code <= 0x2e; code += 1) {
-    set(info(code, `error ${hex(code)}`, hex(code), { enterable: loaderOrHex(), risk: "dangerous" }));
+    set(info(code, `error ${hex(code)}`, hex(code), { enterable: loaderOrHex(), risk: "dangerous", x2Effect: "affects" }));
   }
   set(info(0x2f, "empty 2F", "2F", { enterable: loaderOrHex(), risk: "undocumented" }));
 
@@ -184,7 +184,7 @@ function buildOpcodeCatalog(): OpcodeInfo[] {
   set(info(0x39, "К ⊕"));
   set(info(0x3a, "К ИНВ"));
   set(info(0x3b, "К СЧ"));
-  set(info(0x3c, "error 3C", "3C", { enterable: loaderOrHex(), risk: "dangerous" }));
+  set(info(0x3c, "error 3C", "3C", { enterable: loaderOrHex(), risk: "dangerous", x2Effect: "affects" }));
   set(info(0x3d, "alias 3D", "3D", { enterable: loaderOrHex(), risk: "undocumented" }));
   set(info(0x3e, "Y->X", "3E", { enterable: loaderOrHex(), risk: "undocumented", x2Effect: "preserves" }));
   set(info(0x3f, "empty 3F", "3F", { enterable: loaderOrHex(), risk: "undocumented" }));
@@ -195,28 +195,28 @@ function buildOpcodeCatalog(): OpcodeInfo[] {
   }
   set(info(0x4f, "X->П 0 alias", "4F", { enterable: loaderOrHex(), risk: "undocumented" }));
 
-  set(info(0x50, "С/П"));
+  set(info(0x50, "С/П", "С/П", { x2Effect: "affects" }));
   set(info(0x51, "БП", "БП", { takesAddress: true }));
-  set(info(0x52, "В/О"));
+  set(info(0x52, "В/О", "В/О", { x2Effect: "affects" }));
   set(info(0x53, "ПП", "ПП", { takesAddress: true }));
   set(info(0x54, "К НОП"));
   set(info(0x55, "К 1"));
   set(info(0x56, "К 2"));
-  set(info(0x57, "F x!=0", "F x!=0", { takesAddress: true }));
-  set(info(0x58, "F L2", "F L2", { takesAddress: true }));
-  set(info(0x59, "F x>=0", "F x>=0", { takesAddress: true }));
-  set(info(0x5a, "F L3", "F L3", { takesAddress: true }));
-  set(info(0x5b, "F L1", "F L1", { takesAddress: true }));
-  set(info(0x5c, "F x<0", "F x<0", { takesAddress: true }));
-  set(info(0x5d, "F L0", "F L0", { takesAddress: true }));
-  set(info(0x5e, "F x=0", "F x=0", { takesAddress: true }));
+  set(info(0x57, "F x!=0", "F x!=0", { takesAddress: true, x2Effect: "unknown" }));
+  set(info(0x58, "F L2", "F L2", { takesAddress: true, x2Effect: "unknown" }));
+  set(info(0x59, "F x>=0", "F x>=0", { takesAddress: true, x2Effect: "unknown" }));
+  set(info(0x5a, "F L3", "F L3", { takesAddress: true, x2Effect: "unknown" }));
+  set(info(0x5b, "F L1", "F L1", { takesAddress: true, x2Effect: "unknown" }));
+  set(info(0x5c, "F x<0", "F x<0", { takesAddress: true, x2Effect: "unknown" }));
+  set(info(0x5d, "F L0", "F L0", { takesAddress: true, x2Effect: "unknown" }));
+  set(info(0x5e, "F x=0", "F x=0", { takesAddress: true, x2Effect: "unknown" }));
   set(info(0x5f, "raw display 5F", "5F", { enterable: loaderOrHex(), risk: "undocumented" }));
 
   for (let i = 0; i <= 0xe; i += 1) {
     const r = REGISTERS[i]!;
-    set(info(0x60 + i, `П->X ${r}`));
+    set(info(0x60 + i, `П->X ${r}`, `П->X ${r}`, { x2Effect: "affects" }));
   }
-  set(info(0x6f, "П->X 0 alias", "6F", { enterable: loaderOrHex(), risk: "undocumented" }));
+  set(info(0x6f, "П->X 0 alias", "6F", { enterable: loaderOrHex(), risk: "undocumented", x2Effect: "affects" }));
 
   const indirectBlocks: Array<[number, string]> = [
     [0x70, "К x!=0"],
@@ -231,11 +231,14 @@ function buildOpcodeCatalog(): OpcodeInfo[] {
   for (const [base, name] of indirectBlocks) {
     for (let i = 0; i <= 0xe; i += 1) {
       const r = REGISTERS[i]!;
-      set(info(base + i, `${name} ${r}`));
+      set(info(base + i, `${name} ${r}`, `${name} ${r}`, {
+        x2Effect: base === 0xd0 ? "affects" : "preserves",
+      }));
     }
     set(info(base + 0xf, `${name} 0 alias`, hex(base + 0xf), {
       enterable: loaderOrHex(),
       risk: "undocumented",
+      x2Effect: base === 0xd0 ? "affects" : "preserves",
     }));
   }
 

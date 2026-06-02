@@ -13754,7 +13754,7 @@ const optimizerCapabilities: Array<{
     source: "undocumented",
     requires: ["address-constants", "code-data-overlay"],
     activeWhen: ["code-data-overlay", "address-code-overlay"],
-    detail: "Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role; БП overlays and ПП overlays with proved terminal targets are rewritten only after final address proof, including existing address bytes used as executable cells and address-taking executable bytes whose operand remains next.",
+    detail: "Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role; БП overlays and ПП overlays with proved terminal targets are rewritten only after final address proof, including existing formal/numeric address bytes used as executable cells, address-taking executable bytes whose operand remains next, and fixed-address guards that reject overlays whose real target would shift.",
   },
   {
     id: "cyclic-address-layout",
@@ -13818,7 +13818,7 @@ const optimizerCapabilities: Array<{
     source: "mk61-delta",
     requires: ["x2-register", "display-bytes"],
     activeWhen: ["x2-display-byte-scheduling", "display-byte-layout", "floor-packed-row-expression-display"],
-    detail: "Display/data candidate for scheduling X2, ВП, '.', sign digits, and display bytes without extra storage.",
+    detail: "Display/data candidate for scheduling X2, ВП, '.', sign digits, and display bytes without extra storage; opcode metadata follows the X2 reference split between preserving, X2-syncing/normalizing, and X2-restoring commands.",
   },
   {
     id: "vp-fraction-restore",

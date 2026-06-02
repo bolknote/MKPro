@@ -82,4 +82,27 @@ describe("opcode catalog", () => {
     expect(opcode?.name).toBe("raw display 5F");
     expect(opcode?.risk).toBe("undocumented");
   });
+
+  it("models program-mode X2 effects from the reference notes", () => {
+    expect(opcodeByCode.get(0x00)?.x2Effect).toBe("restores");
+    expect(opcodeByCode.get(0x0a)?.x2Effect).toBe("restores");
+    expect(opcodeByCode.get(0x0b)?.x2Effect).toBe("restores");
+    expect(opcodeByCode.get(0x0c)?.x2Effect).toBe("restores");
+
+    expect(opcodeByCode.get(0x10)?.x2Effect).toBe("preserves");
+    expect(opcodeByCode.get(0x22)?.x2Effect).toBe("preserves");
+    expect(opcodeByCode.get(0x40)?.x2Effect).toBe("preserves");
+    expect(opcodeByCode.get(0xb0)?.x2Effect).toBe("preserves");
+    expect(opcodeByCode.get(0xe0)?.x2Effect).toBe("preserves");
+
+    expect(opcodeByCode.get(0x0d)?.x2Effect).toBe("affects");
+    expect(opcodeByCode.get(0x52)?.x2Effect).toBe("affects");
+    expect(opcodeByCode.get(0x60)?.x2Effect).toBe("affects");
+    expect(opcodeByCode.get(0xd0)?.x2Effect).toBe("affects");
+    expect(opcodeByCode.get(0xf0)?.x2Effect).toBe("affects");
+    expect(opcodeByCode.get(0x27)?.x2Effect).toBe("affects");
+
+    expect(opcodeByCode.get(0x57)?.x2Effect).toBe("unknown");
+    expect(opcodeByCode.get(0x5d)?.x2Effect).toBe("unknown");
+  });
 });

@@ -1,3 +1,4 @@
+import { formalAddressInfo } from "./formal-address.ts";
 import { evaluateIndirectAddress } from "./indirect-addressing.ts";
 import { lowerIrToMachine, raiseMachineToIr } from "./ir.ts";
 import { addressToOpcode } from "./opcodes.ts";
@@ -141,7 +142,7 @@ function officialLabel(target: number): string {
 }
 
 function addressOpcodeForItem(items: readonly MachineItem[], item: Extract<MachineItem, { kind: "address" }>): number | undefined {
-  if (item.formalOpcode !== undefined) return undefined;
+  if (item.formalOpcode !== undefined) return item.formalOpcode;
   const target = typeof item.target === "number" ? item.target : machineLabelAddresses(items).get(item.target);
   if (target === undefined) return undefined;
   try {
@@ -154,11 +155,13 @@ function addressOpcodeForItem(items: readonly MachineItem[], item: Extract<Machi
 interface MachineLayout {
   labels: Map<string, number>;
   itemIndexByAddress: Map<number, number>;
+  addressByItemIndex: Map<number, number>;
 }
 
 function machineLayout(items: readonly MachineItem[]): MachineLayout {
   const labels = new Map<string, number>();
   const itemIndexByAddress = new Map<number, number>();
+  const addressByItemIndex = new Map<number, number>();
   let address = 0;
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index]!;
@@ -166,10 +169,11 @@ function machineLayout(items: readonly MachineItem[]): MachineLayout {
       labels.set(item.name, address);
     } else {
       itemIndexByAddress.set(address, index);
+      addressByItemIndex.set(index, address);
       address += 1;
     }
   }
-  return { labels, itemIndexByAddress };
+  return { labels, itemIndexByAddress, addressByItemIndex };
 }
 
 function resolvedMachineTarget(
@@ -492,7 +496,13 @@ function canOverlayAddressContinuation(
   return false;
 }
 
+function fixedAddressActualTarget(address: Extract<MachineItem, { kind: "address" }>): number | undefined {
+  if (address.formalOpcode !== undefined) return formalAddressInfo(address.formalOpcode).actual;
+  return typeof address.target === "number" ? address.target : undefined;
+}
+
 function applyAddressCodeOverlay(items: readonly MachineItem[]): { items: MachineItem[]; applied: number } {
+  const layout = machineLayout(items);
   const targetMayReturn = createMachineReturnAnalyzer(items);
   for (let index = 0; index < items.length - 2; index += 1) {
     const branch = items[index];
@@ -514,6 +524,10 @@ function applyAddressCodeOverlay(items: readonly MachineItem[]): { items: Machin
     if (!canOverlayExecutableCellAt(items, labelsEnd)) continue;
     const executableOpcode = overlaidOpcode(items, labelsEnd);
     if (executableOpcode === undefined) continue;
+    const addressCellAddress = layout.addressByItemIndex.get(index + 1);
+    if (addressCellAddress === undefined) continue;
+    const fixedTarget = fixedAddressActualTarget(address);
+    if (fixedTarget !== undefined && fixedTarget > addressCellAddress) continue;
 
     const candidateAddress = overlayAddressItem(address, overlaidMnemonic(items, labelsEnd));
     const candidate = [
