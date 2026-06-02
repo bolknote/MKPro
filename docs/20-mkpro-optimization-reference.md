@@ -115,6 +115,7 @@ These transformations run on source constructs before machine lowering:
 - `previous-random-fractional-debit` — recognizes guarded fractional-distance debits of the form `old=random_state; random_state=random(); step=int((old+random_state+1)*factor*distance/defense)/scale; if frac(distance)-step <= 0 trap else distance -= step`. It keeps `frac(distance)` and the old random on the stack, and reuses a just-stored distance in X when the source flow leaves one there.
 - `decrement-zero-domain-guard` — when a unit decrement is followed by a terminal `x == 0` error guard and no compact `F Lx` counter opcode is available, stores the decremented value and uses `F 1/x` as the zero trap.
 - `startup-aware-constant-preloads` — tries a variant that leaves setup-expensive synthesized constants inline, such as decimal powers built with `F 10^x`, when that lowers estimated startup+program cost without increasing the main program size.
+- `intent-read-lowering` — inlines direct `read()`-driven arguments when they are used to initialize x-param stake/sin procs and related intent states.
 - `intent-domain-lowering` — normalizes special intent types into a base form for later compilation.
 - `packed-counter-stripes` — packs dense counters into a shorter representation.
 - `x-param-state-elision` — removes redundant transition states when rule/function parameters are consumed directly from `X`.
@@ -262,6 +263,7 @@ The `report.candidates` array in `report` shows lowerings that were recompiled a
 - `x-param-proc-call` — passes parameters through X with fewer instructions.
 - `x-param-return-decay` — prepares a return path through X for safe reuse afterward.
 - `x-param-return-decay-call` — applies the same X-return pattern at call sites.
+- `x-param-stake-sin-read` — compiles a single-argument x-param helper proc that consumes its argument from X and returns through direct `В/О`, reusing the same read-driven stack source prepared by `show-read-stake-sin-lowering`.
 - `proc-call-lowering` — builds procedure calls with return strategy and state handling.
 - `proc-return-x-reuse` — avoids rewriting X if it already holds the needed value on return.
 - `local-terminal-tail` — shares a tail block for local calls.
