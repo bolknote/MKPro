@@ -68,6 +68,8 @@ Below are the public capability IDs from `report.optimizer.capabilities`.
 - `interprocedural-dead-store` — removes writes that are never read even after call expansion.
 - `dead-store-elimination` — removes unnecessary `store`/`recall` when not used.
 - `last-x-reuse` — avoids rewriting X when the needed value is already there.
+- `flow-x-reuse` — avoids recalls when all CFG predecessors already carry the same register value in X.
+- `branch-target-x-reuse` — avoids the first recall in a branch target when the tested value is still in X and the target has no other entry.
 - `constant-folding` — precomputes constant parts before code generation.
 - `cse-display-block` — merges identical display logic blocks.
 - `jump-thread` — rewires jump chains into one direct jump path.
@@ -75,6 +77,7 @@ Below are the public capability IDs from `report.optimizer.capabilities`.
 - `dead-code-after-halt` — removes code unreachable after `HALT`.
 - `register-coalesce` — merges separate temporary cells when lifetime ranges do not overlap.
 - `duplicate-failure-tail-merge` — merges identical error/failure tail sequences.
+- `shared-terminal-tail` — jumps into an existing identical straight-line suffix that already ends in unconditional terminal flow.
 - `arithmetic-if-pass` — a dedicated pass collecting all `arithmetic-if` opportunities.
 - `redundant-prologue-elimination` — removes repeated identical prologues.
 - `step-vs-run-verification` — chooses the more compact step/run verification form.
@@ -442,25 +445,28 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 3. `tail-branch-inversion` — flips `cjump` condition when the then-path is only a single tail jump and the target label is uniquely referenced.
 4. `shared-call-tail` — groups repeated `call` + `jump` tails (three or more occurrences), emits one shared helper tail, and replaces duplicates with `БП` to that helper.
 5. `return-suffix-gadget` — finds repeated return-ending blocks ending in `return`, extracts one shared suffix, and redirects additional copies to it.
-6. `return-zero-jump` — when no procedure calls are used, replaces a backward jump to `01` with `В/О` and tags it as an empty-stack optimization.
-7. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r` to the same register.
-8. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
-9. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.
-10. `stable-indirect-flow` — rewrites direct `jump/call/cjump` to indirect forms (`К БП`, `К ПП`, `К <cond>`) when a stable selector is already live in a register.
-11. `preloaded-indirect-flow` — preloads a selector value into a spare stable register and rewrites repeated backward-direct numeric jumps/calls through that preloaded value; after rescue starts, subsequent proved shrinking rewrites are still accepted below the official window.
-12. `indirect-memory-table` — rewrites direct `store/recall` into `К X->П`/`К П->X` when a stable selector maps to the indexed target cell.
-13. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.
-14. `dead-store-elimination` — removes stores whose target register is not live after the write and does not affect number-entry/input finalization.
-15. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding `X->П`.
-16. `r0-fractional-sentinel` — drops redundant immediate `П->X 3` after fractional-R0 indirect access when `R0` is already known to be non-live.
-17. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` in `report.optimizations` when one or more cells are removed.
-18. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a display-aware `ВП`/X2 marker and reports `vp-fraction-restore` when one or more restores are removed.
-19. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
-20. `duplicate-failure-tail-merge` — removes duplicated `(label -> 0 -> pause)` failure tails by redirecting the first tail to the second.
-21. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.
-22. `dead-code-after-halt` — removes unreachable IR ops by CFG reachability from entry.
-23. `register-coalesce` — merges non-overlapping register live ranges and, when enabled, performs copy coalescing for safe `recall/store` aliases.
-24. `arithmetic-if-pass` — merges two branch paths that lower to byte-identical pure linear blocks (same side effects and same single-pass behavior).
+6. `shared-terminal-tail` — finds repeated straight-line suffixes that already end in unconditional flow (`БП`, `К БП r`, or `В/О`) and replaces extra copies with a jump into the canonical suffix; it refuses programs with absolute numeric flow targets.
+7. `return-zero-jump` — when no procedure calls are used, replaces a backward jump to `01` with `В/О` and tags it as an empty-stack optimization.
+8. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r` to the same register.
+9. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
+10. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.
+11. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes `П->X r` when every predecessor reaches that point with `r` still in X; it refuses absolute numeric and indirect flow targets.
+12. `branch-target-x-reuse` — removes the first `П->X r` in a unique branch target when the source `cjump` tested the same recalled `r` and no fallthrough path can enter the target.
+13. `stable-indirect-flow` — rewrites direct `jump/call/cjump` to indirect forms (`К БП`, `К ПП`, `К <cond>`) when a stable selector is already live in a register.
+14. `preloaded-indirect-flow` — preloads a selector value into a spare stable register and rewrites repeated backward-direct numeric jumps/calls through that preloaded value; after rescue starts, subsequent proved shrinking rewrites are still accepted below the official window.
+15. `indirect-memory-table` — rewrites direct `store/recall` into `К X->П`/`К П->X` when a stable selector maps to the indexed target cell.
+16. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.
+17. `dead-store-elimination` — removes stores whose target register is not live after the write and does not affect number-entry/input finalization.
+18. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding `X->П`.
+19. `r0-fractional-sentinel` — drops redundant immediate `П->X 3` after fractional-R0 indirect access when `R0` is already known to be non-live.
+20. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` in `report.optimizations` when one or more cells are removed.
+21. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a display-aware `ВП`/X2 marker and reports `vp-fraction-restore` when one or more restores are removed.
+22. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
+23. `duplicate-failure-tail-merge` — removes duplicated `(label -> 0 -> pause)` failure tails by redirecting the first tail to the second.
+24. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.
+25. `dead-code-after-halt` — removes unreachable IR ops by CFG reachability from entry.
+26. `register-coalesce` — merges non-overlapping register live ranges and, when enabled, performs copy coalescing for safe `recall/store` aliases.
+27. `arithmetic-if-pass` — merges two branch paths that lower to byte-identical pure linear blocks (same side effects and same single-pass behavior).
 
 A fixed-point loop repeats while transformations continue, up to internal iteration limits.
 

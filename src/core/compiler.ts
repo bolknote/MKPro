@@ -13886,6 +13886,14 @@ const optimizerCapabilities: Array<{
     detail: "Shares identical straight-line suffixes ending in В/О, and calls into existing straight-line body plus БП tail-call gadgets when the extra return frame is proven to land on the original continuation.",
   },
   {
+    id: "shared-terminal-tail",
+    category: "flow",
+    source: "documented",
+    requires: [],
+    activeWhen: ["shared-terminal-tail"],
+    detail: "Shares identical straight-line suffixes that already end in unconditional terminal flow, replacing duplicates with a jump into the canonical suffix.",
+  },
+  {
     id: "subroutine-part-shared-tail",
     category: "flow",
     source: "undocumented",
@@ -13948,6 +13956,22 @@ const optimizerCapabilities: Array<{
     requires: [],
     activeWhen: ["last-x-reuse"],
     detail: "Drops П->X r when the IR pass can prove X already holds the value just stored to r and no intervening op clobbers X (including С/П, jumps, ALU).",
+  },
+  {
+    id: "flow-x-reuse",
+    category: "stack",
+    source: "documented",
+    requires: [],
+    activeWhen: ["flow-x-reuse"],
+    detail: "Uses forward CFG data-flow to drop П->X r when every predecessor reaches the point with the same register value already in X, including across direct jumps and both sides of conditional branches.",
+  },
+  {
+    id: "branch-target-x-reuse",
+    category: "stack",
+    source: "documented",
+    requires: [],
+    activeWhen: ["branch-target-x-reuse"],
+    detail: "Drops the first recall in a unique branch target when the incoming condition already carries the tested register value in X.",
   },
   {
     id: "constant-folding",

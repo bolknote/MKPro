@@ -1891,7 +1891,7 @@ program LoopPromptX {
     expect(result.steps.some((step) => step.comment === "set screen")).toBe(false);
   });
 
-  it("keeps prompt state when the prompt is assigned before the loop", () => {
+  it("keeps prompt state without the specialized loop prompt rewrite when assigned before the loop", () => {
     const result = compileOk(`
 program LoopPromptAssignedBeforeLoop {
   state {
@@ -1913,8 +1913,8 @@ program LoopPromptAssignedBeforeLoop {
 `, { budget: 999, analysis: true });
 
     expect(result.report.optimizations.some((item) => item.name === "loop-carried-prompt-x")).toBe(false);
-    expect(result.report.registers.screen).toBeDefined();
-    expect(result.steps.some((step) => step.comment === "set screen")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "flow-x-reuse")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "set screen")).toBe(false);
   });
 
   it("keeps stack-initialized loop prompt state in X through a mirror state", () => {

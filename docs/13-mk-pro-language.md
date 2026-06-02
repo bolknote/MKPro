@@ -1177,6 +1177,12 @@ The pipeline currently contains:
 - **last-x-reuse** — drops `П->X r` when the IR proves X already holds the
   value last stored to `r` and no intervening op (С/П, jump, ALU, …) clobbers
   X. С/П acts as a barrier because the user may overwrite X during pause.
+- **flow-x-reuse** — runs forward CFG dataflow for values already in X and
+  drops `П->X r` when every direct predecessor reaches that point with `r`
+  still in X; absolute numeric and indirect flow targets are left untouched.
+- **branch-target-x-reuse** — drops the first `П->X r` inside a unique branch
+  target when the incoming condition just tested the same recalled `r`, so the
+  branch path already carries that value in X.
 - **liveness-analysis** — foundational dataflow used by DSE, register
   coalescing, and dead-code analysis; `F L0`..`F L3` loop counters are modeled
   as both read and written registers.
@@ -1250,6 +1256,9 @@ The pipeline currently contains:
   tails into a shared exit.
 - **shared-call-tail** — coalesces repeated `ПП helper; БП continuation`
   pairs into one shared call tail when that is smaller.
+- **shared-terminal-tail** — coalesces identical straight-line suffixes that
+  already end in terminal flow (`БП`, `К БП r`, or `В/О`) by jumping into the
+  canonical copy.
 - **function-tail-recursion** — lowers `return f(...)` tail calls between
   value-returning functions to direct `БП` jumps, including mutual tail
   recursion, after rejecting any recursive cycle that needs another return frame.

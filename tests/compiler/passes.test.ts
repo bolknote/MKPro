@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { lowerIrToMachine } from "../../src/core/ir.ts";
 import { arithmeticIfPass } from "../../src/core/passes/arithmetic-if.ts";
+import { branchTargetXReuse } from "../../src/core/passes/branch-target-x-reuse.ts";
 import { deadCodeAfterHalt } from "../../src/core/passes/dead-code-after-halt.ts";
 import { deadProcElimination } from "../../src/core/passes/dead-proc-elimination.ts";
 import { deadStoreElimination } from "../../src/core/passes/dead-store-elimination.ts";
+import { flowXReuse } from "../../src/core/passes/flow-x-reuse.ts";
 import { indirectMemoryTable, stableIndirectFlow } from "../../src/core/passes/indirect-addressing.ts";
 import { jumpThread } from "../../src/core/passes/jump-thread.ts";
 import { jumpToNextThreading } from "../../src/core/passes/jump-to-next.ts";
@@ -14,6 +16,7 @@ import { r0FractionalSentinel } from "../../src/core/passes/r0-fractional-sentin
 import { redundantPrologueElimination } from "../../src/core/passes/redundant-prologue.ts";
 import { computeNonOverlappingRegisterMapping, registerCoalesce } from "../../src/core/passes/register-coalesce.ts";
 import { returnSuffixGadget } from "../../src/core/passes/return-suffix-gadget.ts";
+import { sharedTerminalTail } from "../../src/core/passes/shared-terminal-tail.ts";
 import { storeRecallPeephole } from "../../src/core/passes/store-recall-peephole.ts";
 import { tailBranchInversion } from "../../src/core/passes/tail-branch-inversion.ts";
 import { tailCallLowering } from "../../src/core/passes/tail-call.ts";
@@ -84,6 +87,17 @@ function cjump(target: string): IrOp {
   };
 }
 
+function loop(target: string): IrOp {
+  return {
+    kind: "loop",
+    counter: "L0",
+    target,
+    opcode: 0x5d,
+    meta: { mnemonic: "F L0" },
+    targetMeta: {},
+  };
+}
+
 function numericCjump(target: number): IrOp {
   return {
     kind: "cjump",
@@ -140,6 +154,15 @@ function indirectStore(register: RegisterName): IrOp {
     register,
     opcode: 0xb0 + REGISTER_INDEX[register],
     meta: { mnemonic: `К X->П ${register}` },
+  };
+}
+
+function indirectJump(register: RegisterName): IrOp {
+  return {
+    kind: "indirect-jump",
+    register,
+    opcode: 0x80 + REGISTER_INDEX[register],
+    meta: { mnemonic: `К БП ${register}` },
   };
 }
 
@@ -267,6 +290,113 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = lastXReuse.run(program, ctx);
     expect(result.applied).toBe(0);
+  });
+
+  it("flow-x-reuse drops recall reached through a direct jump with X preserved", () => {
+    const program: IrOp[] = [
+      recall("4"),
+      jump("tail"),
+      plain(0x00, "0"),
+      label("tail"),
+      recall("4"),
+      store("5"),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.optimizations[0]?.name).toBe("flow-x-reuse");
+    expect(result.ops.filter((op) => op.kind === "recall" && op.register === "4")).toHaveLength(1);
+  });
+
+  it("flow-x-reuse drops recalls on both condition paths when the tested X value is preserved", () => {
+    const program: IrOp[] = [
+      recall("2"),
+      cjump("false"),
+      recall("2"),
+      store("3"),
+      jump("end"),
+      label("false"),
+      recall("2"),
+      store("4"),
+      label("end"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops.filter((op) => op.kind === "recall" && op.register === "2")).toHaveLength(1);
+  });
+
+  it("flow-x-reuse keeps recall at a merge when predecessors disagree about X", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      cjump("right"),
+      recall("2"),
+      jump("join"),
+      label("right"),
+      recall("3"),
+      label("join"),
+      recall("2"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+    expect(result.ops.at(-2)).toMatchObject({ kind: "recall", register: "2" });
+  });
+
+  it("flow-x-reuse treats counted loop backedges as unknown X predecessors", () => {
+    const program: IrOp[] = [
+      recall("2"),
+      label("body"),
+      recall("2"),
+      loop("body"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("flow-x-reuse avoids programs with absolute or indirect flow targets", () => {
+    const absolute: IrOp[] = [recall("1"), numericJump(4), recall("1"), halt()];
+    const indirect: IrOp[] = [recall("1"), indirectJump("7"), recall("1"), halt()];
+
+    expect(flowXReuse.run(absolute, ctx).applied).toBe(0);
+    expect(flowXReuse.run(indirect, ctx).applied).toBe(0);
+  });
+
+  it("branch-target-x-reuse drops recall when a condition target preserves X", () => {
+    const program: IrOp[] = [
+      recall("6"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      recall("6"),
+      plain(0x32, "К ЗН"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.optimizations[0]?.name).toBe("branch-target-x-reuse");
+    expect(result.ops.filter((op) => op.kind === "recall" && op.register === "6")).toHaveLength(1);
+    const target = result.ops.findIndex((op) => op.kind === "label" && op.name === "target");
+    expect(result.ops[target + 1]).toMatchObject({ kind: "plain", opcode: 0x32 });
+  });
+
+  it("branch-target-x-reuse keeps recall when the target has a fallthrough predecessor", () => {
+    const program: IrOp[] = [
+      recall("6"),
+      cjump("target"),
+      plain(0x01, "1"),
+      label("target"),
+      recall("6"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("jump-thread chases jump-to-jump trampolines to the final target", () => {
@@ -488,6 +618,54 @@ describe("ir passes on synthetic programs", () => {
       numericCall(34),
     ];
     const result = returnSuffixGadget.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("shared-terminal-tail jumps into matching straight-line tails before terminal flow", () => {
+    const program: IrOp[] = [
+      label("first"),
+      recall("1"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      store("1"),
+      indirectJump("e"),
+      label("second"),
+      recall("1"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      store("1"),
+      indirectJump("e"),
+    ];
+    const result = sharedTerminalTail.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.optimizations[0]?.name).toBe("shared-terminal-tail");
+    expect(result.ops).toContainEqual({ kind: "label", name: "__shared_terminal_tail_0" });
+    const second = result.ops.findIndex((op) => op.kind === "label" && op.name === "second");
+    expect(result.ops[second + 1]).toMatchObject({
+      kind: "jump",
+      target: "__shared_terminal_tail_0",
+    });
+    expect(machineCellCount(result.ops)).toBe(machineCellCount(program) - 3);
+  });
+
+  it("shared-terminal-tail avoids programs with absolute numeric flow targets", () => {
+    const program: IrOp[] = [
+      label("first"),
+      recall("1"),
+      store("2"),
+      jump("done"),
+      label("second"),
+      recall("1"),
+      store("2"),
+      jump("done"),
+      numericJump(20),
+      label("done"),
+      halt(),
+    ];
+    const result = sharedTerminalTail.run(program, ctx);
 
     expect(result.applied).toBe(0);
     expect(result.ops).toEqual(program);

@@ -12,16 +12,16 @@ high-level source fit.
 `wumpus.mkpro` is no longer pending: it moved back to the top-level examples at
 105 cells and passes the main+setup load check.
 
-`jack-pot.mkpro` moved back to the top-level examples at 101 cells and passes the
+`jack-pot.mkpro` moved back to the top-level examples at 99 cells and passes the
 main+setup load check.
 
-`treasure-hunter-2.mkpro` moved back to the top-level examples at 105 cells and
+`treasure-hunter-2.mkpro` moved back to the top-level examples at 100 cells and
 passes the main+setup load check.
 
 `rambo-iii.mkpro` moved back to the top-level examples at 105 cells and passes
 the main+setup load check.
 
-`teleport.mkpro` moved back to the top-level examples at 105 cells and passes
+`teleport.mkpro` moved back to the top-level examples at 97 cells and passes
 the main+setup load check.
 
 `labyrinth777.mkpro` moved back to the top-level examples at 105 cells and
@@ -35,10 +35,10 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
-| `cave-highlevel-baseline.mkpro` | 137 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
-| `cave-treasure.mkpro` | 144 | 105 | source-shaped command decoder is in place; remaining blockers are resource pressure, wall breaking, cache reward flow, and dispatch overhead |
+| `cave-highlevel-baseline.mkpro` | 136 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
+| `cave-treasure.mkpro` | 143 | 105 | source-shaped command decoder is in place; remaining blockers are resource pressure, wall breaking, cache reward flow, and dispatch overhead |
 | `giants-country.mkpro` | 105 | 105 | fits after restoring the source-style direct R5 position counter; pending only for exact cave-picture/warning display audit |
-| `tic-tac-toe-4x4.mkpro` | 269 | 105 | source-shaped line update/score pass is in place; remaining packed 4x4 scan lowering |
+| `tic-tac-toe-4x4.mkpro` | 267 | 105 | source-shaped line update/score pass is in place; remaining packed 4x4 scan lowering |
 
 Prototype notes:
 
@@ -54,6 +54,19 @@ Prototype notes:
   directly as the indirect selector because MK-61 indirect memory addressing
   ignores the fractional coordinate tail. This is the source-listing trick in a
   general indexed-bank form, not a cave-only special case.
+- Shared terminal tails now cover source-listing style "tail of one procedure as
+  the tail of another" when two identical straight-line suffixes already end in
+  unconditional flow. This is intentionally generic: it can jump into a matching
+  `...; БП` / `...; К БП r` / `...; В/О` suffix, but it refuses programs with
+  absolute numeric flow targets.
+- Branch-target X reuse is the flow-sensitive sibling of last-X reuse: if a
+  `П->X r; F x?0 label` condition is the only way to enter `label`, and `label`
+  immediately recalls the same `r`, the recall is removed because the condition
+  path preserves X.
+- Flow X reuse generalizes that idea to direct jumps and both sides of a
+  conditional: the IR pass intersects all CFG predecessors and drops `П->X r`
+  when every known incoming path already carries `r` in X. It refuses absolute
+  numeric and indirect flow targets, so address-shifting remains conservative.
 
 Stack-resident temp scheduler (2026-06):
 

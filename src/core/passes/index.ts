@@ -8,6 +8,7 @@ import type {
   PreloadReport,
 } from "../types.ts";
 import { arithmeticIfPass } from "./arithmetic-if.ts";
+import { branchTargetXReuse } from "./branch-target-x-reuse.ts";
 import { constantFolding } from "./constant-folding.ts";
 import { cseDisplayBlock } from "./cse-display-block.ts";
 import { deadCodeAfterHalt } from "./dead-code-after-halt.ts";
@@ -15,6 +16,7 @@ import { deadProcElimination } from "./dead-proc-elimination.ts";
 import { deadStoreBeforeCommutative } from "./dead-store-before-commutative.ts";
 import { deadStoreElimination } from "./dead-store-elimination.ts";
 import { duplicateFailureTail } from "./duplicate-failure-tail.ts";
+import { flowXReuse } from "./flow-x-reuse.ts";
 import type { IrPass } from "./helpers.ts";
 import { indirectMemoryTable, stableIndirectFlow } from "./indirect-addressing.ts";
 import { jumpThread } from "./jump-thread.ts";
@@ -27,6 +29,7 @@ import { returnZeroJump } from "./return-zero-jump.ts";
 import { returnSuffixGadget } from "./return-suffix-gadget.ts";
 import { r0FractionalSentinel } from "./r0-fractional-sentinel.ts";
 import { sharedCallTail } from "./shared-call-tail.ts";
+import { sharedTerminalTail } from "./shared-terminal-tail.ts";
 import { storeRecallPeephole } from "./store-recall-peephole.ts";
 import { tailBranchInversion } from "./tail-branch-inversion.ts";
 import { tailCallLowering } from "./tail-call.ts";
@@ -39,10 +42,13 @@ const PASS_PIPELINE: ReadonlyArray<IrPass> = [
   tailBranchInversion,
   sharedCallTail,
   returnSuffixGadget,
+  sharedTerminalTail,
   returnZeroJump,
   storeRecallPeephole,
   jumpToNextThreading,
   jumpThread,
+  flowXReuse,
+  branchTargetXReuse,
   stableIndirectFlow,
   preloadedIndirectFlow,
   runtimeIndirectCallFlow,

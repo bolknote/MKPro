@@ -14,7 +14,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "99-bottles": 53,
   alaram: 75,
   basic: 8,
-  "cave-sketch": 52,
+  "cave-sketch": 47,
   clock: 43,
   "dangerous-loading": 84,
   dungeon: 83,
@@ -24,17 +24,17 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "fox-hunt-mk61": 65,
   "game-100-pig": 103,
   human: 24,
-  "jack-pot": 101,
+  "jack-pot": 99,
   labyrinth777: 105,
   lunar: 47,
   "minesweeper-9x7": 94,
   "minesweeper-9x9": 89,
   "raja-yoga": 88,
   "rambo-iii": 105,
-  "sea-battle": 82,
-  teleport: 105,
+  "sea-battle": 80,
+  teleport: 97,
   "tiny-game": 23,
-  "treasure-hunter-2": 102,
+  "treasure-hunter-2": 100,
   wumpus: 101,
 };
 
@@ -46,10 +46,10 @@ const EXAMPLE_COMPILE_ERRORS: Record<string, RegExp> = {};
 // shrink these toward 105; intentional shrinkage should update these exact
 // baselines just like top-level examples.
 const PENDING_BASELINE: Record<string, number> = {
-  "cave-highlevel-baseline": 137,
-  "cave-treasure": 144,
+  "cave-highlevel-baseline": 136,
+  "cave-treasure": 143,
   "giants-country": 105,
-  "tic-tac-toe-4x4": 269,
+  "tic-tac-toe-4x4": 267,
 };
 
 const PENDING_COMPILE_ERRORS: Record<string, RegExp> = {};
