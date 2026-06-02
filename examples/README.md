@@ -43,4 +43,4 @@ Generated with `npm run examples:size`.
 | `pending-optimizer/cave-treasure.mkpro` | 151 | 105 | +46 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/giants-country.mkpro` | 129 | 105 | +24 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/labyrinth777.mkpro` | 122 | 105 | +17 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/tic-tac-toe-4x4.mkpro` | 281 | 105 | +176 | pending optimizer | not loaded: main >105 |
+| `pending-optimizer/tic-tac-toe-4x4.mkpro` | 273 | 105 | +168 | pending optimizer | not loaded: main >105 |

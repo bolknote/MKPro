@@ -5604,6 +5604,11 @@ export class EmitContext {
         }
       }
       if (statement.kind === "assign") {
+        const countedWhile = this.compileInitializedUnitDecrementWhileRun(statements, index);
+        if (countedWhile > 1) {
+          index += countedWhile - 1;
+          continue;
+        }
         const reused = compileRepeatedAssignmentValue(this, statements, index);
         if (reused > 1) {
           index += reused - 1;
@@ -5648,13 +5653,6 @@ export class EmitContext {
       if (statement.kind === "indexed_assign" && next?.kind === "assign" && this.compilePreincrementIndexedStore(statement, next)) {
         index += 1;
         continue;
-      }
-      if (statement.kind === "assign") {
-        const countedWhile = this.compileInitializedUnitDecrementWhileRun(statements, index);
-        if (countedWhile > 1) {
-          index += countedWhile - 1;
-          continue;
-        }
       }
       if (statement.kind === "assign" && next?.kind === "while" && this.compileInitializedUnitDecrementWhile(statement, next)) {
         index += 1;

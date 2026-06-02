@@ -36,7 +36,7 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | `cave-treasure.mkpro` | 151 | 105 | resource pressure, wall breaking, cache miss flow, and remaining dispatch overhead |
 | `giants-country.mkpro` | 129 | 105 | packed room-map display/flow and remaining event flow lowerers |
 | `labyrinth777.mkpro` | 122 | 105 | source-shaped row generation, energy accounting, and local-jumper flow are restored; remaining gap is compact source-style command algebra plus full player/floor row overlay |
-| `tic-tac-toe-4x4.mkpro` | 281 | 105 | source-shaped packed 4x4 line scan/update lowering |
+| `tic-tac-toe-4x4.mkpro` | 273 | 105 | source-shaped packed 4x4 line scan/update lowering |
 
 Prototype notes:
 

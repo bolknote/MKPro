@@ -3062,6 +3062,32 @@ program CountedWhile {
     expect(result.steps.some((step) => step.comment === "counted while ticks")).toBe(true);
   });
 
+  it("does not hide a counted-loop initializer behind repeated literal stores", () => {
+    const result = compileOk(`
+program RepeatedInitDoesNotHideCounted {
+  state {
+    score: counter 0..9 = 0
+    x: counter 0..4 = 0
+    total: counter 0..99 = 0
+  }
+
+  loop {
+    score = 4
+    x = 4
+    while x >= 1 {
+      total += score
+      x--
+    }
+    halt(total)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "initialized-counted-while-loop")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "repeated-assignment-value-reuse")).toBe(false);
+    expect(result.steps.some((step) => step.comment === "counted while x")).toBe(true);
+  });
+
   // All counted-loop init strategies now share one recognizer
   // (`recognizeCountedWhileLoop` / `unitDecrementCountedWhileTarget`), so the
   // equivalent loop-condition spellings the recognizer accepts (`> 0`, and the

@@ -54,6 +54,7 @@ import {
   expressionReferencesIdentifier,
   expressionToIntentText,
   firstSpliceDisplayLiteralProgram,
+  flOpcode,
   formatRawContractDetail,
   isPredecrementIndirectRegister,
   isPreincrementIndirectRegister,
@@ -894,6 +895,7 @@ export function compileRepeatedAssignmentValue(ctx: LoweringCtx, statements: Sta
     while (end < statements.length) {
       const candidate = statements[end]!;
       if (candidate.kind !== "assign" || !expressionEquals(candidate.expr, first.expr)) break;
+      if (assignmentFeedsLaterUnitDecrementLoop(ctx, statements, end)) break;
       end += 1;
     }
     const count = end - start;
@@ -908,6 +910,65 @@ export function compileRepeatedAssignmentValue(ctx: LoweringCtx, statements: Sta
       detail: `Stored one computed value into ${count} consecutive assignment targets at line ${first.line}.`,
     });
     return count;
+}
+
+function assignmentFeedsLaterUnitDecrementLoop(
+  ctx: LoweringCtx,
+  statements: readonly StatementAst[],
+  index: number,
+): boolean {
+    const initializer = statements[index];
+    if (initializer?.kind !== "assign") return false;
+    const initialValue = initializer.expr.kind === "number" ? Number(initializer.expr.raw) : undefined;
+    if (initialValue === undefined || !Number.isInteger(initialValue) || initialValue < 1) return false;
+    const register = ctx.allocation.registers[initializer.target];
+    if (register === undefined || flOpcode(register) === undefined) return false;
+
+    for (let cursor = index + 1; cursor < statements.length; cursor += 1) {
+      const statement = statements[cursor]!;
+      if (statement.kind === "while") {
+        return unitDecrementLoopTarget(statement) === initializer.target;
+      }
+      if (!statementSafeBetweenCounterInitializerAndLoop(statement, initializer.target)) return false;
+    }
+    return false;
+}
+
+function unitDecrementLoopTarget(loop: Extract<StatementAst, { kind: "while" }>): string | undefined {
+    const condition = loop.condition;
+    const target = condition.left.kind === "identifier"
+      ? condition.left.name
+      : condition.right.kind === "identifier"
+        ? condition.right.name
+        : undefined;
+    if (target === undefined) return undefined;
+    if (!unitPositiveLoopCondition(condition, target)) return undefined;
+    const final = loop.body.at(-1);
+    if (final?.kind !== "assign" || final.target !== target) return undefined;
+    return isUnitDecrementExpression(target, final.expr) ? target : undefined;
+}
+
+function unitPositiveLoopCondition(condition: ConditionAst, target: string): boolean {
+    const leftIdentifier = condition.left.kind === "identifier" && condition.left.name === target;
+    const rightIdentifier = condition.right.kind === "identifier" && condition.right.name === target;
+    const leftValue = condition.left.kind === "number" ? Number(condition.left.raw) : undefined;
+    const rightValue = condition.right.kind === "number" ? Number(condition.right.raw) : undefined;
+
+    if (leftIdentifier) {
+      if (condition.op === ">=" && rightValue === 1) return true;
+      if (condition.op === ">" && rightValue === 0) return true;
+    }
+    if (rightIdentifier) {
+      if (condition.op === "<=" && leftValue === 1) return true;
+      if (condition.op === "<" && leftValue === 0) return true;
+    }
+    return false;
+}
+
+function statementSafeBetweenCounterInitializerAndLoop(statement: StatementAst, target: string): boolean {
+    return statement.kind === "assign" &&
+      statement.target !== target &&
+      !expressionReferencesIdentifier(statement.expr, target);
 }
 
 export function compileXParamProcCall(ctx: LoweringCtx, 

@@ -418,7 +418,7 @@ Display rewrites are separated into strategy selection + body lowering.
 - `dead-temp-store` — removes temporary stores after their last read when no longer needed.
 - `store-recall-peephole` — collapses `store` then immediate `recall` of same cell.
 - `dead-store-elimination` — full pass removing pointless stores and empty branches.
-- `repeated-assignment-value-reuse` — reuses the same computed value across multiple assignments.
+- `repeated-assignment-value-reuse` — reuses the same computed value across multiple assignments, but yields to `initialized-counted-while-loop` when one of the repeated stores is the initializer for a following countdown loop. A one-cell literal reuse must not hide the much shorter `F Lx` loop shape.
 - `int-frac-shared-tail` — a shared int/frac return tail reduces duplication.
 - `z-stack-derived-value-reuse` — lowers Z-stack pressure by moving values through warm locations.
 
