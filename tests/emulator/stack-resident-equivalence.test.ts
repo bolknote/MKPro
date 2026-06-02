@@ -144,7 +144,6 @@ const PENDING_PROGRAMS = [
   "examples/pending-optimizer/cave-treasure.mkpro",
   "examples/pending-optimizer/giants-country.mkpro",
   "examples/pending-optimizer/labyrinth777.mkpro",
-  "examples/pending-optimizer/teleport.mkpro",
   "examples/pending-optimizer/tic-tac-toe-4x4.mkpro",
 ] as const;
 
