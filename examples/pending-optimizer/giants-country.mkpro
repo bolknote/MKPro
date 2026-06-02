@@ -5,9 +5,9 @@ reference lordbss_pmk198
 
 program GiantsCountry {
   state {
-    // The visible cave is a one-dimensional hall on each floor; the danger comes
-    // from what the generated room table says is waiting there.
-    pos: coord(giant_country) = 1
+    // The original keeps the player's hall position in R5 and advances that
+    // position directly; there is no separate turn counter modulo 10.
+    slot: counter 1..99 = 1
     strength: counter 0..99 = 40
 
     // Score values are deliberately uneven: larger monsters are not just harder
@@ -20,7 +20,6 @@ program GiantsCountry {
     plans: cells(giant_country) = random()
 
     tile: counter 0..9 = 0
-    slot: counter 0..9 = 0
     warning_pattern: packed = 70000008
   }
 
@@ -46,7 +45,6 @@ program GiantsCountry {
     // Advancing spends strength before the room is understood, which makes even
     // empty rooms part of the attrition game.
     strength--
-    slot = pos - 10 * int(pos / 10)
     tile = digit_at(plans, slot)
 
     if tile == 8 {
@@ -54,7 +52,7 @@ program GiantsCountry {
     }
     else {
       encounter()
-      pos++
+      slot++
     }
 
     if strength <= 0 {

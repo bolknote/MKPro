@@ -129,6 +129,8 @@ All top-level `examples/*.mkpro` programs are runnable MK-Pro programs. They cov
 - `examples/human.mkpro`: small counter game used as syntax smoke test.
 - `examples/jack-pot.mkpro`: converted Lord_BSS pmk151 "Jack Pot" game with
   angle-mode dependent jackpot flow.
+- `examples/labyrinth777.mkpro`: Anvarov Labyrinth777 port with source-style
+  row/floor display, centered command algebra, and negative-energy loss stop.
 - `examples/lunar.mkpro`: numeric landing game with counters and touchdown rules.
 - `examples/minesweeper-9x7.mkpro`: Lord_BSS Sapper port whose 9x7 paper-board
   probes match the original 104-cell listing.
