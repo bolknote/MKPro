@@ -1228,8 +1228,11 @@ The pipeline currently contains:
   `R0`; label targets use a final post-layout proof so the fixed `99` address
   cannot be invalidated by later shrinking.
 - **address-code-overlay** — final post-layout proof that can move a label from
-  a single-cell op after `БП target` onto that jump's address byte when the
-  byte is itself the same executable opcode, then remove the duplicated op.
+  a single-cell op after `БП target` or a proved-terminal `ПП target` onto that
+  branch's address byte when the byte is itself the same executable opcode, then
+  remove the duplicated cell. The overlaid executable cell may be an ordinary op
+  or an existing address byte; if its opcode itself takes an address, its
+  operand remains in the next cell.
 - **vp-x2-peephole** — drops a `К {x}` immediately after a proved display
   `ВП`/X2 boundary when `ВП` already supplies the fractional transform.
 - **packed-counter-stripes** — tries every compatible subset of fixed-width

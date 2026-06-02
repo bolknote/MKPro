@@ -13755,7 +13755,7 @@ const optimizerCapabilities: Array<{
     source: "undocumented",
     requires: ["address-constants", "code-data-overlay"],
     activeWhen: ["code-data-overlay", "address-code-overlay"],
-    detail: "Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role; direct БП address-byte/code-byte overlays are rewritten only after final address proof.",
+    detail: "Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role; БП overlays and ПП overlays with proved terminal targets are rewritten only after final address proof, including existing address bytes used as executable cells and address-taking executable bytes whose operand remains next.",
   },
   {
     id: "cyclic-address-layout",

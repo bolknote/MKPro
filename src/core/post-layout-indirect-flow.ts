@@ -151,6 +151,34 @@ function addressOpcodeForItem(items: readonly MachineItem[], item: Extract<Machi
   }
 }
 
+interface MachineLayout {
+  labels: Map<string, number>;
+  itemIndexByAddress: Map<number, number>;
+}
+
+function machineLayout(items: readonly MachineItem[]): MachineLayout {
+  const labels = new Map<string, number>();
+  const itemIndexByAddress = new Map<number, number>();
+  let address = 0;
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index]!;
+    if (item.kind === "label") {
+      labels.set(item.name, address);
+    } else {
+      itemIndexByAddress.set(address, index);
+      address += 1;
+    }
+  }
+  return { labels, itemIndexByAddress };
+}
+
+function resolvedMachineTarget(
+  target: string | number,
+  labels: ReadonlyMap<string, number>,
+): number | undefined {
+  return typeof target === "number" ? target : labels.get(target);
+}
+
 function selectorForActualTarget(target: number): string | undefined {
   if (!Number.isInteger(target) || target < 0 || target > 104) return undefined;
   if (target <= 47) return formalLabelFromOrdinal(target + 112);
@@ -356,27 +384,123 @@ export function optimizePostLayoutFractionalR0Flow(
   };
 }
 
-function isOverlayExecutableOp(item: MachineItem | undefined): item is Extract<MachineItem, { kind: "op" }> {
-  return item?.kind === "op" && !ADDRESS_TAKING_OPCODES.has(item.opcode);
+function overlayExecutableAt(items: readonly MachineItem[], index: number): { opcode: number; mnemonic: string } | undefined {
+  const item = items[index];
+  if (item?.kind === "op") return { opcode: item.opcode, mnemonic: item.mnemonic };
+  if (item?.kind === "address") {
+    const opcode = addressOpcodeForItem(items, item);
+    return opcode === undefined ? undefined : { opcode, mnemonic: `address byte ${opcode.toString(16).toUpperCase().padStart(2, "0")}` };
+  }
+  return undefined;
+}
+
+function canOverlayExecutableCellAt(
+  items: readonly MachineItem[],
+  index: number,
+): boolean {
+  const executable = overlayExecutableAt(items, index);
+  if (executable === undefined) return false;
+  if (!ADDRESS_TAKING_OPCODES.has(executable.opcode)) return true;
+  return items[index + 1]?.kind === "address";
+}
+
+function overlaidMnemonic(items: readonly MachineItem[], index: number): string {
+  return overlayExecutableAt(items, index)?.mnemonic ?? "unknown";
+}
+
+function overlaidOpcode(items: readonly MachineItem[], index: number): number | undefined {
+  return overlayExecutableAt(items, index)?.opcode;
 }
 
 function overlayAddressItem(
   address: Extract<MachineItem, { kind: "address" }>,
-  overlaid: Extract<MachineItem, { kind: "op" }>,
+  overlaid: string,
 ): Extract<MachineItem, { kind: "address" }> {
   return {
     ...address,
-    comment: [address.comment, `address/code overlay for ${overlaid.mnemonic}`].filter(Boolean).join("; "),
+    comment: [address.comment, `address/code overlay for ${overlaid}`].filter(Boolean).join("; "),
   };
 }
 
+function directAddressTarget(
+  items: readonly MachineItem[],
+  itemIndex: number,
+): string | number | undefined {
+  const address = items[itemIndex + 1];
+  return address?.kind === "address" ? address.target : undefined;
+}
+
+function createMachineReturnAnalyzer(items: readonly MachineItem[]): (target: string | number) => boolean {
+  const layout = machineLayout(items);
+  const visiting = new Set<number>();
+  const memo = new Map<number, boolean>();
+
+  const mayReturnFrom = (address: number): boolean => {
+    if (memo.has(address)) return memo.get(address)!;
+    if (visiting.has(address)) return false;
+    const itemIndex = layout.itemIndexByAddress.get(address);
+    if (itemIndex === undefined) return false;
+    const item = items[itemIndex]!;
+    const opcode = item.kind === "op"
+      ? item.opcode
+      : item.kind === "address"
+        ? addressOpcodeForItem(items, item)
+        : undefined;
+    if (opcode === undefined) return true;
+
+    visiting.add(address);
+    let result: boolean;
+    if (opcode === 0x52) {
+      result = true;
+    } else if (opcode === 0x50) {
+      result = false;
+    } else if (opcode === 0x51) {
+      const branchTarget = directAddressTarget(items, itemIndex);
+      const branchAddress = branchTarget === undefined ? undefined : resolvedMachineTarget(branchTarget, layout.labels);
+      result = branchAddress === undefined ? true : mayReturnFrom(branchAddress);
+    } else if (opcode === 0x53) {
+      const branchTarget = directAddressTarget(items, itemIndex);
+      const branchAddress = branchTarget === undefined ? undefined : resolvedMachineTarget(branchTarget, layout.labels);
+      result = branchAddress === undefined ? true : mayReturnFrom(branchAddress) ? mayReturnFrom(address + 2) : false;
+    } else if (ADDRESS_TAKING_OPCODES.has(opcode)) {
+      const branchTarget = directAddressTarget(items, itemIndex);
+      const branchAddress = branchTarget === undefined ? undefined : resolvedMachineTarget(branchTarget, layout.labels);
+      result = branchAddress === undefined ? true : mayReturnFrom(branchAddress) || mayReturnFrom(address + 2);
+    } else if (opcode >= 0x80 && opcode <= 0xee) {
+      result = true;
+    } else {
+      result = mayReturnFrom(address + 1);
+    }
+    visiting.delete(address);
+    memo.set(address, result);
+    return result;
+  };
+
+  return (target: string | number): boolean => {
+    const targetAddress = resolvedMachineTarget(target, layout.labels);
+    return targetAddress === undefined ? true : mayReturnFrom(targetAddress);
+  };
+}
+
+function canOverlayAddressContinuation(
+  targetMayReturn: (target: string | number) => boolean,
+  branch: Extract<MachineItem, { kind: "op" }>,
+  address: Extract<MachineItem, { kind: "address" }>,
+): boolean {
+  if (branch.opcode === 0x51) return true;
+  if (branch.opcode === 0x53) return !targetMayReturn(address.target);
+  return false;
+}
+
 function applyAddressCodeOverlay(items: readonly MachineItem[]): { items: MachineItem[]; applied: number } {
+  const targetMayReturn = createMachineReturnAnalyzer(items);
   for (let index = 0; index < items.length - 2; index += 1) {
-    const jump = items[index];
+    const branch = items[index];
     const address = items[index + 1];
-    // Only unconditional БП has no live continuation after the address byte.
-    // ПП and conditionals may return/fall through to the original op cell.
-    if (jump?.kind !== "op" || jump.opcode !== 0x51 || address?.kind !== "address") continue;
+    if (branch?.kind !== "op" || address?.kind !== "address") continue;
+    // БП has no live continuation after the address byte. ПП is accepted only
+    // when its target is proved terminal; conditionals keep a fall-through path.
+    if (!canOverlayAddressContinuation(targetMayReturn, branch, address)) continue;
 
     let labelsEnd = index + 2;
     const labels: Extract<MachineItem, { kind: "label" }>[] = [];
@@ -387,17 +511,18 @@ function applyAddressCodeOverlay(items: readonly MachineItem[]): { items: Machin
     if (labels.length === 0) continue;
     if (typeof address.target === "string" && labels.some((label) => label.name === address.target)) continue;
 
-    const overlaid = items[labelsEnd];
-    if (!isOverlayExecutableOp(overlaid)) continue;
+    if (!canOverlayExecutableCellAt(items, labelsEnd)) continue;
+    const executableOpcode = overlaidOpcode(items, labelsEnd);
+    if (executableOpcode === undefined) continue;
 
-    const candidateAddress = overlayAddressItem(address, overlaid);
+    const candidateAddress = overlayAddressItem(address, overlaidMnemonic(items, labelsEnd));
     const candidate = [
       ...items.slice(0, index + 1),
       ...labels,
       candidateAddress,
       ...items.slice(labelsEnd + 1),
     ];
-    if (addressOpcodeForItem(candidate, candidateAddress) !== overlaid.opcode) continue;
+    if (addressOpcodeForItem(candidate, candidateAddress) !== executableOpcode) continue;
     if (cellCount(candidate) >= cellCount(items)) continue;
     return { items: candidate, applied: 1 };
   }

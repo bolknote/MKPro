@@ -489,8 +489,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     the same rewrite for label targets only after replacing the two-cell branch
     proves that the label will land exactly at hardware address `99`.
 20. `address-code-overlay` — a final post-layout verifier moves labels from a
-    single-cell op immediately after `БП target` onto the jump's address byte
-    when removing that op proves the address byte will be the same opcode.
+    single-cell op immediately after `БП target` or a proved-terminal
+    `ПП target` onto the branch address byte when removing that op proves the
+    address byte will be the same opcode. The overlaid executable cell may be
+    an ordinary op or an existing address byte; if the overlaid opcode itself
+    takes an address, the following operand byte is kept as that command's
+    operand.
 21. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` when one or more cells are removed.
 22. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/`КНОП` redundancy optimization pass removes cells.
 23. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a display-aware `ВП`/X2 marker and reports `vp-fraction-restore` when one or more restores are removed.
