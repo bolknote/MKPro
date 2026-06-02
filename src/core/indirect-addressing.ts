@@ -6,7 +6,7 @@ import {
 } from "./formal-address.ts";
 import type { RegisterName } from "./types.ts";
 
-const REGISTERS_BY_INDEX: RegisterName[] = [
+const MEMORY_TARGET_WITH_ZERO_TENS: RegisterName[] = [
   "0",
   "1",
   "2",
@@ -22,6 +22,26 @@ const REGISTERS_BY_INDEX: RegisterName[] = [
   "c",
   "d",
   "e",
+  "0",
+];
+
+const MEMORY_TARGET_WITH_NONZERO_TENS: RegisterName[] = [
+  "a",
+  "b",
+  "c",
+  "d",
+  "e",
+  "0",
+  "0",
+  "1",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+  "7",
+  "8",
+  "9",
 ];
 
 export type IndirectSelectorMutation = "pre-decrement" | "pre-increment" | "stable";
@@ -113,16 +133,10 @@ export function evaluateIndirectAddress(
 }
 
 export function memoryTargetFromTransformed(transformed: string): RegisterName | undefined {
-  const normalized = transformed.trim().toLowerCase();
-  if (/^-?\d+$/u.test(normalized)) {
-    return REGISTERS_BY_INDEX[positiveModulo(Number(normalized), 15)];
-  }
-  const last = normalized.at(-1);
-  if (last === undefined) return undefined;
-  const nibble = Number.parseInt(last, 16);
-  if (!Number.isFinite(nibble) || nibble < 0 || nibble > 0xf) return undefined;
-  if (nibble === 0xf) return "0";
-  return REGISTERS_BY_INDEX[nibble];
+  const tail = transformedTailPair(transformed);
+  if (tail === undefined) return undefined;
+  const targetTable = tail.tens === 0 ? MEMORY_TARGET_WITH_ZERO_TENS : MEMORY_TARGET_WITH_NONZERO_TENS;
+  return targetTable[tail.ones];
 }
 
 export function superDarkTarget(formalTarget: number): SuperDarkIndirectTarget | undefined {
@@ -141,16 +155,15 @@ function transformSelectorValue(
 ): string | undefined {
   if (typeof value === "number") {
     if (!Number.isFinite(value)) return undefined;
-    const integer = Math.trunc(value) + mutationDelta(mutation);
-    return String(integer);
+    return transformDecimalSelectorValue(value, mutation);
   }
 
-  const normalized = value.trim().replace(/^0x/iu, "").toLowerCase();
-  if (!/^[0-9a-f]+$/iu.test(normalized)) return undefined;
-  if (mutation === "stable" && /[a-f]/iu.test(normalized)) return normalized;
+  const normalized = value.trim().replace(/^0x/iu, "").replace(",", ".").toLowerCase();
+  if (!/^-?[0-9a-f]+(?:\.\d+)?$/iu.test(normalized)) return undefined;
+  if (mutation === "stable" && !normalized.startsWith("-") && /[a-f]/iu.test(normalized)) return normalized;
   const decimal = Number(normalized);
   if (!Number.isFinite(decimal)) return undefined;
-  return String(Math.trunc(decimal) + mutationDelta(mutation));
+  return transformDecimalSelectorValue(decimal, mutation);
 }
 
 function isPositiveFractional(value: number | string): boolean {
@@ -165,25 +178,58 @@ function mutationDelta(mutation: IndirectSelectorMutation): number {
 }
 
 function flowTargetFromTransformed(transformed: string): number {
-  const normalized = transformed.trim().toLowerCase();
-  if (/^[0-9a-f]+$/iu.test(normalized) && /[a-f]/iu.test(normalized)) {
-    return Number.parseInt(normalized.slice(-2), 16);
-  }
-  const numeric = Number(normalized);
-  if (!Number.isFinite(numeric)) return 0;
-  return positiveModulo(Math.trunc(numeric), 100);
+  const tail = transformedTailPair(transformed);
+  if (tail === undefined) return 0;
+  return tail.hex ? tail.tens * 16 + tail.ones : tail.tens * 10 + tail.ones;
 }
 
 function formalOpcodeForFlowTarget(transformed: string, flowTarget: number): number {
   const normalized = transformed.trim().toLowerCase();
-  if (/^[0-9a-f]+$/iu.test(normalized) && /[a-f]/iu.test(normalized)) {
+  if (/^-?[0-9a-f]+$/iu.test(normalized) && /[a-f]/iu.test(normalized)) {
     return flowTarget;
   }
   return officialAddressToOpcode(flowTarget);
 }
 
-function positiveModulo(value: number, modulus: number): number {
-  return ((value % modulus) + modulus) % modulus;
+function transformDecimalSelectorValue(
+  value: number,
+  mutation: IndirectSelectorMutation,
+): string | undefined {
+  const integer = Math.trunc(value);
+  const delta = mutationDelta(mutation);
+  if (integer >= 0) {
+    if (integer === 0 && delta < 0) return "-99999999";
+    return String(integer + delta);
+  }
+
+  const transformed = negativeIntegerMantissa(integer);
+  if (delta === 0) return `-${transformed}`;
+  const next = transformed + delta;
+  if (next <= 0) return "0";
+  if (next >= 100000000) return "0";
+  return `-${String(next).padStart(8, "0")}`;
+}
+
+function negativeIntegerMantissa(value: number): number {
+  const digits = String(Math.abs(Math.trunc(value))).slice(-8);
+  const padded = digits.padStart(8, "9");
+  return Number(padded);
+}
+
+function transformedTailPair(transformed: string): { tens: number; ones: number; hex: boolean } | undefined {
+  const normalized = transformed.trim().toLowerCase();
+  if (!/^-?[0-9a-f]+$/iu.test(normalized)) return undefined;
+  const negative = normalized.startsWith("-");
+  const digits = negative ? normalized.slice(1) : normalized;
+  if (digits.length === 0) return undefined;
+  const fill = negative ? "9" : "0";
+  const pair = digits.length === 1 ? `${fill}${digits}` : digits.slice(-2);
+  const tens = Number.parseInt(pair[0]!, 16);
+  const ones = Number.parseInt(pair[1]!, 16);
+  if (!Number.isFinite(tens) || !Number.isFinite(ones) || tens < 0 || tens > 0xf || ones < 0 || ones > 0xf) {
+    return undefined;
+  }
+  return { tens, ones, hex: /[a-f]/iu.test(pair) };
 }
 
 export const IndirectAddressModel = {

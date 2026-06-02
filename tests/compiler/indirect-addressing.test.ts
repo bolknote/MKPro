@@ -19,14 +19,28 @@ describe("indirect address model", () => {
     expect(isStableIndirectSelector("2")).toBe(false);
   });
 
-  it("uses ordinary integer flow targets and modulo-15 memory targets", () => {
+  it("uses ordinary integer flow targets and two-digit memory targets", () => {
     expect(evaluateIndirectAddress("7", 4, "flow")?.flowTarget).toBe(4);
     expect(evaluateIndirectAddress("7", 123, "flow")?.flowTarget).toBe(23);
-    expect(evaluateIndirectAddress("7", 123, "memory")?.memoryTarget).toBe("3");
+    expect(evaluateIndirectAddress("7", 9, "memory")?.memoryTarget).toBe("9");
     expect(evaluateIndirectAddress("7", 10, "memory")?.memoryTarget).toBe("a");
     expect(evaluateIndirectAddress("7", 12, "memory")?.memoryTarget).toBe("c");
     expect(evaluateIndirectAddress("7", 14, "memory")?.memoryTarget).toBe("e");
     expect(evaluateIndirectAddress("7", 15, "memory")?.memoryTarget).toBe("0");
+    expect(evaluateIndirectAddress("7", 16, "memory")?.memoryTarget).toBe("0");
+    expect(evaluateIndirectAddress("7", 17, "memory")?.memoryTarget).toBe("1");
+    expect(evaluateIndirectAddress("7", 23, "memory")?.memoryTarget).toBe("d");
+    expect(evaluateIndirectAddress("7", 99, "memory")?.memoryTarget).toBe("3");
+    expect(evaluateIndirectAddress("7", 123, "memory")?.memoryTarget).toBe("d");
+    expect(evaluateIndirectAddress("7", -1, "memory")?.memoryTarget).toBe("b");
+    expect(evaluateIndirectAddress("7", -123, "memory")?.memoryTarget).toBe("d");
+  });
+
+  it("uses the same two-digit memory target table for hex-like values", () => {
+    expect(evaluateIndirectAddress("7", "0a", "memory")?.memoryTarget).toBe("a");
+    expect(evaluateIndirectAddress("7", "0f", "memory")?.memoryTarget).toBe("0");
+    expect(evaluateIndirectAddress("7", "1a", "memory")?.memoryTarget).toBe("4");
+    expect(evaluateIndirectAddress("7", "ff", "memory")?.memoryTarget).toBe("9");
   });
 
   it("applies R0..R3 pre-decrement before selecting a target", () => {
@@ -37,7 +51,8 @@ describe("indirect address model", () => {
     expect(one?.resultValue).toBe("1");
     expect(nine?.flowTarget).toBe(9);
     expect(evaluateIndirectAddress("0", 0, "flow")?.flowTarget).toBe(99);
-    expect(evaluateIndirectAddress("0", 0, "memory")?.memoryTarget).toBe("e");
+    expect(evaluateIndirectAddress("0", 0, "memory")?.memoryTarget).toBe("3");
+    expect(evaluateIndirectAddress("0", 0, "memory")?.resultValue).toBe("-99999999");
   });
 
   it("applies R4..R6 pre-increment before selecting a target", () => {
@@ -87,7 +102,7 @@ describe("indirect address model", () => {
     expect(IndirectAddressModel.evaluate("7", 12, "flow")?.flowTarget).toBe(12);
     expect(IndirectAddressModel.evaluate("7", "C5", "flow")?.actualFlowTarget).toBe(13);
     expect(IndirectAddressModel.memoryTargetFromTransformed("12")).toBe("c");
-    expect(IndirectAddressModel.memoryTargetFromTransformed("ff")).toBe("0");
+    expect(IndirectAddressModel.memoryTargetFromTransformed("ff")).toBe("9");
     expect(IndirectAddressModel.superDarkTarget(0xfa)?.entryAddress).toBe(48);
   });
 });
