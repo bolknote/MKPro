@@ -1,10 +1,12 @@
 import { evaluateIndirectAddress } from "./indirect-addressing.ts";
 import { lowerIrToMachine, raiseMachineToIr } from "./ir.ts";
 import { cellsPerOp, hasRewriteBarrier } from "./passes/helpers.ts";
+import { computeLiveness } from "./passes/liveness-analysis.ts";
 import { runPreloadedIndirectFlow } from "./passes/preloaded-indirect-flow.ts";
 import type {
   AppliedOptimization,
   CompileOptions,
+  IrMeta,
   IrOp,
   MachineItem,
   PreloadReport,
@@ -20,6 +22,7 @@ export interface PostLayoutIndirectFlowResult {
 
 type DirectBranch = Extract<IrOp, { kind: "jump" | "call" | "cjump" }>;
 type IndirectBranch = Extract<IrOp, { kind: "indirect-jump" | "indirect-call" | "indirect-cjump" }>;
+type R0FlowBranch = Extract<IrOp, { kind: "jump" | "call" | "cjump" }>;
 
 const STABLE_REGISTERS: RegisterName[] = ["7", "8", "9", "a", "b", "c", "d", "e"];
 
@@ -36,6 +39,10 @@ function isDirectBranch(op: IrOp): op is DirectBranch {
 
 function isIndirectBranch(op: IrOp): op is IndirectBranch {
   return op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump";
+}
+
+function isR0FlowBranch(op: IrOp): op is R0FlowBranch {
+  return op.kind === "jump" || op.kind === "call" || op.kind === "cjump";
 }
 
 // MK-61 register operand encoding: R0..R9 -> 0..9, RA..RE -> 10..14.
@@ -148,6 +155,166 @@ function indirectFlowOp(
     register,
     opcode,
     meta: { ...op.meta, mnemonic: `К ${name} ${register}`, comment: [op.meta.comment, suffix].filter(Boolean).join("; ") },
+  };
+}
+
+function cloneMeta(meta: IrMeta, comment: string): IrMeta {
+  return {
+    ...meta,
+    comment: [meta.comment, comment].filter(Boolean).join("; "),
+  };
+}
+
+function fractionalR0FlowOp(op: R0FlowBranch): IndirectBranch {
+  if (op.kind === "jump") {
+    return {
+      kind: "indirect-jump",
+      register: "0",
+      opcode: 0x80,
+      meta: cloneMeta({ ...op.meta, mnemonic: "К БП 0" }, "post-layout fractional R0 flow to 99"),
+    };
+  }
+  if (op.kind === "call") {
+    return {
+      kind: "indirect-call",
+      register: "0",
+      opcode: 0xa0,
+      meta: cloneMeta({ ...op.meta, mnemonic: "К ПП 0" }, "post-layout fractional R0 call to 99"),
+    };
+  }
+  const opcode = INDIRECT_COND_BASES[op.condition];
+  const name = op.condition === "==0"
+    ? "x=0"
+    : op.condition === "!=0"
+      ? "x!=0"
+      : `x${op.condition}`;
+  return {
+    kind: "indirect-cjump",
+    condition: op.condition,
+    register: "0",
+    opcode,
+    meta: cloneMeta({ ...op.meta, mnemonic: `К ${name} 0` }, "post-layout fractional R0 conditional flow to 99"),
+  };
+}
+
+function isFractionalR0LiteralBeforeStore(ops: readonly IrOp[], storeIndex: number): boolean {
+  let index = storeIndex - 1;
+  let hasNonZeroFractionDigit = false;
+  while (index >= 0) {
+    const digit = ops[index];
+    if (digit?.kind !== "plain" || digit.opcode < 0x00 || digit.opcode > 0x09) break;
+    if (digit.opcode > 0) hasNonZeroFractionDigit = true;
+    index -= 1;
+  }
+  const dot = ops[index];
+  const zero = ops[index - 1];
+  if (!hasNonZeroFractionDigit || dot?.kind !== "plain" || dot.opcode !== 0x0a) return false;
+  if (zero === undefined) return true;
+  return zero.kind === "plain" && zero.opcode === 0x00;
+}
+
+function preservesFractionalR0Fact(op: IrOp): boolean {
+  return op.kind === "plain" || op.kind === "recall" || op.kind === "label" || (op.kind === "store" && op.register !== "0");
+}
+
+function targetAddressAfterReplacingOp(
+  ops: readonly IrOp[],
+  replaceIndex: number,
+  targetLabel: string,
+): number | undefined {
+  let address = 0;
+  for (let index = 0; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") {
+      if (op.name === targetLabel) return address;
+      continue;
+    }
+    address += index === replaceIndex ? 1 : cellsPerOp(op);
+  }
+  return undefined;
+}
+
+function findFractionalR0FlowRewrite(ops: readonly IrOp[]): { index: number; op: IndirectBranch } | undefined {
+  const liveness = computeLiveness(ops);
+  let r0Fractional = false;
+
+  for (let index = 0; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (hasRewriteBarrier(op)) {
+      r0Fractional = false;
+      continue;
+    }
+    if (op.kind === "store" && op.register === "0") {
+      r0Fractional = isFractionalR0LiteralBeforeStore(ops, index);
+      continue;
+    }
+    if (preservesFractionalR0Fact(op)) continue;
+
+    if (r0Fractional && isR0FlowBranch(op) && !liveness.liveOut[index]!.has("0")) {
+      const finalTarget = typeof op.target === "string"
+        ? targetAddressAfterReplacingOp(ops, index, op.target)
+        : op.target;
+      if (finalTarget === 99) {
+        return { index, op: fractionalR0FlowOp(op) };
+      }
+    }
+    r0Fractional = false;
+  }
+
+  return undefined;
+}
+
+function applyFractionalR0FlowRewrite(items: readonly MachineItem[]): PostLayoutIndirectFlowResult {
+  const ir = raiseMachineToIr(items);
+  const rewrite = findFractionalR0FlowRewrite(ir);
+  if (rewrite === undefined) return { items: [...items], preloads: [], optimizations: [], applied: 0 };
+
+  const candidate = ir.map((op, index) => index === rewrite.index ? rewrite.op : op);
+  const candidateItems = lowerIrToMachine(candidate);
+  if (cellCount(candidateItems) >= cellCount(items)) {
+    return { items: [...items], preloads: [], optimizations: [], applied: 0 };
+  }
+
+  return {
+    items: candidateItems,
+    preloads: [],
+    optimizations: [{
+      name: "r0-fractional-sentinel",
+      detail: "Activated post-layout: replaced direct flow whose target resolves to address 99 with fractional R0 indirect flow.",
+    }],
+    applied: 1,
+  };
+}
+
+export function optimizePostLayoutFractionalR0Flow(
+  items: readonly MachineItem[],
+  existingFlowPreloads: readonly PreloadReport[] = [],
+): PostLayoutIndirectFlowResult {
+  // Existing flow selector preloads encode concrete addresses. A fractional-R0
+  // rewrite shrinks the program by one cell and cannot be retargeted like an
+  // ordinary selector preload, so keep this final verifier conservative.
+  if (existingFlowPreloads.length > 0) {
+    return { items: [...items], preloads: [], optimizations: [], applied: 0 };
+  }
+
+  let current: MachineItem[] = [...items];
+  let applied = 0;
+  for (let round = 0; round < 8; round += 1) {
+    const result = applyFractionalR0FlowRewrite(current);
+    if (result.applied === 0) break;
+    current = result.items;
+    applied += result.applied;
+  }
+
+  if (applied === 0) return { items: [...items], preloads: [], optimizations: [], applied: 0 };
+  return {
+    items: current,
+    preloads: [],
+    optimizations: [{
+      name: "r0-fractional-sentinel",
+      detail: `Activated post-layout: replaced ${applied} direct flow op(s) whose target resolves to address 99 with fractional R0 indirect flow.`,
+    }],
+    applied,
   };
 }
 

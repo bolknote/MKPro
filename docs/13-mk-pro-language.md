@@ -1223,7 +1223,10 @@ The pipeline currently contains:
 - **r0-fractional-sentinel** — removes redundant direct `R3` accesses after
   fractional `R0` indirect access when liveness proves `R0` is dead afterward,
   and removes repeated straight-line stores/recalls of the already-produced
-  `-99999999` sentinel when `R0` and `X` are both known to hold it.
+  `-99999999` sentinel when `R0` and `X` are both known to hold it. It also
+  rewrites proved direct flow to hardware address `99` through fractional
+  `R0`; label targets use a final post-layout proof so the fixed `99` address
+  cannot be invalidated by later shrinking.
 - **vp-x2-peephole** — drops a `К {x}` immediately after a proved display
   `ВП`/X2 boundary when `ВП` already supplies the fractional transform.
 - **packed-counter-stripes** — tries every compatible subset of fixed-width

@@ -51,6 +51,24 @@ describe("ROM fact: fractional R0 indirect addressing", () => {
     expect(calc.readRegister("0").trim()).toBe("-99999999,");
   });
 
+  it("К ПП 0 with fractional R0 calls address 99, returns, and leaves the -99999999 sentinel in R0", () => {
+    const program = Array.from({ length: 105 }, () => 0x50);
+    program[0] = 0xa0; // К ПП 0
+    program[1] = 0x01; // marker reached after the subroutine returns
+    program[2] = 0x50;
+    program[99] = 0x07; // marker reached by calling 99
+    program[100] = 0x52; // В/О
+    const calc = new MK61();
+    calc.loadProgram(program);
+    calc.setRegister("0", "0.5");
+    calc.press("В/О");
+    calc.press("С/П");
+    const run = calc.runUntilStable({ maxFrames: 500, stableFrames: 5 });
+    expect(run.stopped).toBe(true);
+    expect(calc.displayText().trim()).toContain("1");
+    expect(calc.readRegister("0").trim()).toBe("-99999999,");
+  });
+
   it("fractional R0 indirect conditionals jump to address 99 only on the false branch", () => {
     const cases = [
       { opcode: 0xe0, fallthroughX: "0", jumpX: "5" }, // К x=0 0

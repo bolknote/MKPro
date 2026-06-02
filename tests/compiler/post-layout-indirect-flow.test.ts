@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { evaluateIndirectAddress } from "../../src/core/indirect-addressing.ts";
-import { optimizePostLayoutIndirectFlow } from "../../src/core/post-layout-indirect-flow.ts";
+import {
+  optimizePostLayoutFractionalR0Flow,
+  optimizePostLayoutIndirectFlow,
+} from "../../src/core/post-layout-indirect-flow.ts";
 import type { MachineItem, RegisterName } from "../../src/core/types.ts";
 
 const options = { delivery: "manual" as const, budget: 999999, analysis: true };
@@ -13,6 +16,10 @@ function halt(): MachineItem {
   return { kind: "op", opcode: 0x50, mnemonic: "С/П" };
 }
 
+function op(opcode: number, mnemonic: string): MachineItem {
+  return { kind: "op", opcode, mnemonic };
+}
+
 function jump(target: string): MachineItem[] {
   return [
     { kind: "op", opcode: 0x51, mnemonic: "БП" },
@@ -23,6 +30,13 @@ function jump(target: string): MachineItem[] {
 function cjump(target: string): MachineItem[] {
   return [
     { kind: "op", opcode: 0x5e, mnemonic: "F x=0" },
+    { kind: "address", target },
+  ];
+}
+
+function call(target: string): MachineItem[] {
+  return [
+    { kind: "op", opcode: 0x53, mnemonic: "ПП" },
     { kind: "address", target },
   ];
 }
@@ -122,5 +136,59 @@ describe("post-layout indirect flow", () => {
     );
     expect(indirectConditions).toHaveLength(2);
     expect(evaluateIndirectAddress("7", "B6", "flow")?.actualFlowTarget).toBe(4);
+  });
+
+  it("rewrites fractional R0 flow when replacing the branch puts its label target at address 99", () => {
+    const program: MachineItem[] = [
+      op(0x00, "0"),
+      op(0x0a, "."),
+      op(0x05, "5"),
+      op(0x40, "X->П 0"),
+      ...jump("target"),
+      ...Array.from({ length: 94 }, () => digit()),
+      { kind: "label", name: "target" },
+      halt(),
+    ];
+    const result = optimizePostLayoutFractionalR0Flow(program);
+
+    expect(result.applied).toBe(1);
+    expect(cellCount(result.items)).toBe(cellCount(program) - 1);
+    expect(result.items.some((item) => item.kind === "op" && item.opcode === 0x80)).toBe(true);
+    expect(result.items.some((item) => item.kind === "address")).toBe(false);
+  });
+
+  it("keeps fractional R0 label flow when the target would not land at address 99", () => {
+    const program: MachineItem[] = [
+      op(0x00, "0"),
+      op(0x0a, "."),
+      op(0x05, "5"),
+      op(0x40, "X->П 0"),
+      ...jump("target"),
+      ...Array.from({ length: 93 }, () => digit()),
+      { kind: "label", name: "target" },
+      halt(),
+    ];
+    const result = optimizePostLayoutFractionalR0Flow(program);
+
+    expect(result.applied).toBe(0);
+    expect(result.items).toEqual(program);
+  });
+
+  it("rewrites fractional R0 calls when the resolved label target lands at address 99", () => {
+    const program: MachineItem[] = [
+      op(0x00, "0"),
+      op(0x0a, "."),
+      op(0x05, "5"),
+      op(0x40, "X->П 0"),
+      ...call("target"),
+      ...Array.from({ length: 94 }, () => digit()),
+      { kind: "label", name: "target" },
+      { kind: "op", opcode: 0x52, mnemonic: "В/О" },
+    ];
+    const result = optimizePostLayoutFractionalR0Flow(program);
+
+    expect(result.applied).toBe(1);
+    expect(cellCount(result.items)).toBe(cellCount(program) - 1);
+    expect(result.items.some((item) => item.kind === "op" && item.opcode === 0xa0)).toBe(true);
   });
 });

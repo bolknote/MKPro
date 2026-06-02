@@ -319,7 +319,7 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `coord-list-scaled-read` — reads coordinates via scaled index, removing runtime decode work.
 - `coord-list-scaled-decimal-storage` — same as above but decimal form, using fewer cells.
 - `fractional-indirect-addressing` — allows indirect access through fractional address arithmetic when proofs are available, including direct `bank[int(selector)]` memory selectors.
-- `r0-fractional-sentinel` — uses a fractional-state sentinel in R0 to steer tables and to replace proved direct flow to 99 (`БП` or `F x?0`) with one-cell `К БП/К x?0 0` when the R0 mutation is dead.
+- `r0-fractional-sentinel` — uses a fractional-state sentinel in R0 to steer tables and to replace proved direct flow to address 99 (`БП`, `ПП`, or `F x?0`, numeric or post-layout label-resolved) with one-cell `К БП/К ПП/К x?0 0` when the R0 mutation is dead.
 - `super-dark-dispatch` — enables FA..FF range routing for shorter jumps with strictly valid address neighborhoods.
 
 ## 8) Spatial and coordinate-list optimization family
@@ -481,9 +481,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     direct access only repeats the hardware-selected `R3`; it also removes
     later `X->П 0`/`П->X 0` repetitions when the same straight-line path has
     already left the hardware `-99999999` sentinel in `R0` and `X` is proved to
-    hold the same value, and rewrites direct `БП 99` / `F x?0 99` flow to
-    `К БП 0` / `К x?0 0` when `R0` is already proved fractional and the
-    resulting sentinel write is dead.
+    hold the same value, and rewrites direct `БП 99` / `ПП 99` / `F x?0 99`
+    flow to `К БП 0` / `К ПП 0` / `К x?0 0` when `R0` is already proved fractional and the
+    resulting sentinel write is dead. A final post-layout verifier can perform
+    the same rewrite for label targets only after replacing the two-cell branch
+    proves that the label will land exactly at hardware address `99`.
 20. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` when one or more cells are removed.
 21. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/`КНОП` redundancy optimization pass removes cells.
 22. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a display-aware `ВП`/X2 marker and reports `vp-fraction-restore` when one or more restores are removed.

@@ -81,6 +81,15 @@ function fractionalR0Jump(op: Extract<IrOp, { kind: "jump" }>): IrOp {
   };
 }
 
+function fractionalR0Call(op: Extract<IrOp, { kind: "call" }>): IrOp {
+  return {
+    kind: "indirect-call",
+    register: "0",
+    opcode: 0xa0,
+    meta: cloneMeta({ ...op.meta, mnemonic: "К ПП 0" }, "fractional R0 call to 99"),
+  };
+}
+
 function fractionalR0CondJump(op: Extract<IrOp, { kind: "cjump" }>): IrOp {
   const name = op.condition === "==0"
     ? "x=0"
@@ -130,7 +139,7 @@ const run: IrPassFn = (ops) => {
       continue;
     }
     if (op.kind === "store" && op.register === "0") {
-      const storesSentinel = xFact === "sentinel" || isSentinelMaterializedBeforeStore(ops, i);
+      const storesSentinel: boolean = xFact === "sentinel" || isSentinelMaterializedBeforeStore(ops, i);
       if (r0Fact === "sentinel" && storesSentinel) {
         remove.add(i);
         sentinelStores += 1;
@@ -197,8 +206,15 @@ const run: IrPassFn = (ops) => {
       continue;
     }
 
-    if ((op.kind === "jump" || op.kind === "cjump") && op.target === 99 && !liveness.liveOut[i]!.has("0")) {
-      replace.set(i, op.kind === "jump" ? fractionalR0Jump(op) : fractionalR0CondJump(op));
+    if (
+      (op.kind === "jump" || op.kind === "call" || op.kind === "cjump") &&
+      op.target === 99 &&
+      !liveness.liveOut[i]!.has("0")
+    ) {
+      replace.set(
+        i,
+        op.kind === "jump" ? fractionalR0Jump(op) : op.kind === "call" ? fractionalR0Call(op) : fractionalR0CondJump(op),
+      );
       fractionalJumps += 1;
       r0Fact = "unknown";
       xFact = "unknown";

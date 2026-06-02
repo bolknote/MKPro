@@ -7,7 +7,7 @@ import { normalizeV2ExpressionText, parseExpression, parseProgram } from "./pars
 import { runIrPasses } from "./passes/index.ts";
 import { computeNonOverlappingRegisterMapping } from "./passes/register-coalesce.ts";
 import { raiseMachineToIr } from "./ir.ts";
-import { optimizePostLayoutIndirectFlow } from "./post-layout-indirect-flow.ts";
+import { optimizePostLayoutFractionalR0Flow, optimizePostLayoutIndirectFlow } from "./post-layout-indirect-flow.ts";
 import { buildProgramPatchReport } from "./program-patch.ts";
 import { verifySuperDarkSuffixLayout } from "./super-dark-layout.ts";
 import { MachineEmitter } from "./emit/machine-emitter.ts";
@@ -1941,8 +1941,14 @@ function compileMKProOnce(
       passOptions,
       indirectFlowRescueAbove,
     );
-  const optimized = postLayoutFlow.items;
-  optimizations.push(...postLayoutFlow.optimizations);
+  const postLayoutR0Flow = exactDecimalSeries
+    ? { items: postLayoutFlow.items, optimizations: [], preloads: [] }
+    : optimizePostLayoutFractionalR0Flow(
+      postLayoutFlow.items,
+      [...optimizedResult.preloads, ...postLayoutFlow.preloads],
+    );
+  const optimized = postLayoutR0Flow.items;
+  optimizations.push(...postLayoutFlow.optimizations, ...postLayoutR0Flow.optimizations);
   const preloads = [
     ...buildPreloadReport(ast, allocation),
     ...buildNegativeZeroDegreePreloadReport(allocation, optimizations),
@@ -13790,7 +13796,7 @@ const optimizerCapabilities: Array<{
     source: "mk61-delta",
     requires: ["r0-fractional-sentinel"],
     activeWhen: ["fractional-indirect-addressing", "r0-indirect-counter", "r0-fractional-sentinel"],
-    detail: "Fractional R0 side effects: selecting R3, preserving the resulting -99999999 sentinel, and replacing proved direct flow to 99 with one-cell К БП/К x?0 0 are sound only when liveness proves the R0 mutation is unobservable.",
+    detail: "Fractional R0 side effects: selecting R3, preserving the resulting -99999999 sentinel, and replacing proved direct flow to address 99 with one-cell К БП/К ПП/К x?0 0 are sound only when liveness and final layout prove the R0 mutation and fixed 99 target are valid.",
   },
   {
     id: "raw-display-5f",

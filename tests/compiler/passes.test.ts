@@ -1439,6 +1439,28 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("r0-fractional-sentinel rewrites a direct call to 99 through fractional R0 when R0 is dead", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      store("0"),
+      numericCall(99),
+      halt(),
+      ...Array.from({ length: 92 }, () => plain(0x54, "КНОП")),
+      ret(),
+    ];
+    const result = r0FractionalSentinel.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops[4]).toMatchObject({
+      kind: "indirect-call",
+      register: "0",
+      opcode: 0xa0,
+    });
+    expect(machineCellCount(result.ops)).toBe(machineCellCount(program) - 1);
+  });
+
   it("r0-fractional-sentinel refuses non-sentinel R0 stores", () => {
     const otherRecall: IrOp = {
       ...recall("e"),
