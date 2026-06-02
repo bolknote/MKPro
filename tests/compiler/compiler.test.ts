@@ -3026,6 +3026,36 @@ program CountedWhile {
     expect(result.steps.some((step) => step.comment === "counted while ticks")).toBe(true);
   });
 
+  // All counted-loop init strategies now share one recognizer
+  // (`recognizeCountedWhileLoop` / `unitDecrementCountedWhileTarget`), so the
+  // equivalent loop-condition spellings the recognizer accepts (`> 0`, and the
+  // identifier on the right) reach the same one-cell F Lx counter as `>= 1`.
+  for (const condition of ["ticks > 0", "1 <= ticks", "0 < ticks"]) {
+    it(`lowers an initialized countdown written as 'while ${condition}' through the shared F Lx recognizer`, () => {
+      const result = compileOk(`
+program CountedWhileAlt {
+  state {
+    ticks: counter 0..3 = 0
+    total: counter 0..9 = 0
+  }
+
+  loop {
+    ticks = 3
+    total = 0
+    while ${condition} {
+      total += 1
+      ticks -= 1
+    }
+    halt(total)
+  }
+}
+`, { budget: 999, analysis: true });
+
+      expect(result.report.optimizations.some((item) => item.name === "initialized-counted-while-loop")).toBe(true);
+      expect(result.steps.some((step) => step.comment === "counted while ticks")).toBe(true);
+    });
+  }
+
   it("fuses resource decrement and underflow terminal branch", () => {
     const result = compileOk(`
 program ResourceUnderflow {

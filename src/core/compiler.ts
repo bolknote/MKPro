@@ -5991,38 +5991,62 @@ export class EmitContext {
     return true;
   }
 
-  compileInitializedUnitDecrementWhile(
-    initializer: Extract<StatementAst, { kind: "assign" }>,
+  // Shared recognizer for every counted-loop init strategy: a `while target >= 1
+  // { ...; target-- }` loop whose counter is allocated to a register carrying an
+  // F Lx counter opcode and whose body (minus the trailing decrement) does not
+  // itself end machine flow. The returned descriptor drives one emit tail, so the
+  // initialized / setup-only / state-init strategies differ only in how the
+  // counter's starting value is supplied, not in how the loop is recognized or
+  // emitted.
+  recognizeCountedWhileLoop(
     loop: Extract<StatementAst, { kind: "while" }>,
-    intervening: readonly StatementAst[] = [],
-  ): boolean {
-    if (!unitPositiveWhileCondition(loop.condition, initializer.target)) return false;
-    const initialValue = numericLiteralValue(initializer.expr);
-    if (initialValue === undefined || !Number.isInteger(initialValue) || initialValue < 1) return false;
-    const final = loop.body.at(-1);
-    if (final?.kind !== "assign" || !isUnitDecrementExpression(initializer.target, final.expr)) return false;
-    if (final.target !== initializer.target) return false;
-    const register = this.allocation.registers[initializer.target];
-    if (register === undefined) return false;
+  ): { target: string; flOpcode: number; bodyTail: readonly StatementAst[] } | undefined {
+    const target = unitDecrementCountedWhileTarget(loop);
+    if (target === undefined) return undefined;
+    const register = this.allocation.registers[target];
+    if (register === undefined) return undefined;
     const opcode = flOpcode(register);
-    if (opcode === undefined) return false;
+    if (opcode === undefined) return undefined;
+    const bodyTail = loop.body.slice(0, -1);
+    if (this.statementsEndMachineFlow(bodyTail)) return undefined;
+    return { target, flOpcode: opcode, bodyTail };
+  }
 
-    const body = loop.body.slice(0, -1);
-    if (this.statementsEndMachineFlow(body)) return false;
-
-    this.compileStatement(initializer);
-    for (const statement of intervening) this.compileStatement(statement);
-    const start = this.freshLabel("counted_while");
+  // Emit the loop body + one-cell F Lx back-edge for a recognized counted loop.
+  // The counter's starting value is established separately by the caller (an
+  // inline store, a setup preload, etc.).
+  private emitCountedWhileBody(
+    lowering: { target: string; flOpcode: number; bodyTail: readonly StatementAst[] },
+    loop: Extract<StatementAst, { kind: "while" }>,
+    labelPrefix: string,
+    jumpComment: string,
+  ): void {
+    const start = this.freshLabel(labelPrefix);
     this.emitLabel(start);
     this.currentXVariable = undefined;
     this.currentXAliases.clear();
     this.currentXKnownZero = false;
     this.scaledCoordVariables.clear();
-    this.compileStatements(body);
-    this.emitJump(opcode, getOpcode(opcode).name, start, `counted while ${initializer.target}`, loop.line);
+    this.compileStatements(lowering.bodyTail);
+    this.emitJump(lowering.flOpcode, getOpcode(lowering.flOpcode).name, start, jumpComment, loop.line);
+  }
+
+  compileInitializedUnitDecrementWhile(
+    initializer: Extract<StatementAst, { kind: "assign" }>,
+    loop: Extract<StatementAst, { kind: "while" }>,
+    intervening: readonly StatementAst[] = [],
+  ): boolean {
+    const initialValue = numericLiteralValue(initializer.expr);
+    if (initialValue === undefined || !Number.isInteger(initialValue) || initialValue < 1) return false;
+    const lowering = this.recognizeCountedWhileLoop(loop);
+    if (lowering === undefined || lowering.target !== initializer.target) return false;
+
+    this.compileStatement(initializer);
+    for (const statement of intervening) this.compileStatement(statement);
+    this.emitCountedWhileBody(lowering, loop, "counted_while", `counted while ${initializer.target}`);
     this.optimizations.push({
       name: "initialized-counted-while-loop",
-      detail: `Lowered initialized while ${initializer.target} >= 1 through ${getOpcode(opcode).name} at line ${loop.line}.`,
+      detail: `Lowered initialized while ${initializer.target} >= 1 through ${getOpcode(lowering.flOpcode).name} at line ${loop.line}.`,
     });
     return true;
   }
@@ -6031,32 +6055,18 @@ export class EmitContext {
     if (this.loweringOptions.setupOnlyCountedLoopInit !== true) return false;
     if (this.currentProcedure !== undefined) return false;
     if (!this.ast.entries[0]?.body.includes(loop)) return false;
-    const target = unitDecrementCountedWhileTarget(loop);
-    if (target === undefined) return false;
-    const field = findStateFieldInAst(this.ast, target);
+    const lowering = this.recognizeCountedWhileLoop(loop);
+    if (lowering === undefined) return false;
+    const field = findStateFieldInAst(this.ast, lowering.target);
     if (field?.initial === undefined) return false;
     const initialValue = numericLiteralValue(field.initial);
     if (initialValue === undefined || !Number.isInteger(initialValue) || initialValue < 1) return false;
-    if (scalarReferencedOutsideLoop(this.ast, target, loop)) return false;
-    const register = this.allocation.registers[target];
-    if (register === undefined) return false;
-    const opcode = flOpcode(register);
-    if (opcode === undefined) return false;
+    if (scalarReferencedOutsideLoop(this.ast, lowering.target, loop)) return false;
 
-    const body = loop.body.slice(0, -1);
-    if (this.statementsEndMachineFlow(body)) return false;
-
-    const start = this.freshLabel("setup_counted_while");
-    this.emitLabel(start);
-    this.currentXVariable = undefined;
-    this.currentXAliases.clear();
-    this.currentXKnownZero = false;
-    this.scaledCoordVariables.clear();
-    this.compileStatements(body);
-    this.emitJump(opcode, getOpcode(opcode).name, start, `setup-counted while ${target}`, loop.line);
+    this.emitCountedWhileBody(lowering, loop, "setup_counted_while", `setup-counted while ${lowering.target}`);
     this.optimizations.push({
       name: "setup-only-counted-loop-init",
-      detail: `Used setup initializer for ${target} and lowered while ${target} >= 1 through ${getOpcode(opcode).name} at line ${loop.line}.`,
+      detail: `Used setup initializer for ${lowering.target} and lowered while ${lowering.target} >= 1 through ${getOpcode(lowering.flOpcode).name} at line ${loop.line}.`,
     });
     return true;
   }
