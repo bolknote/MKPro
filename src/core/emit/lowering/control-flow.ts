@@ -143,11 +143,7 @@ function compileDecrementZeroDomainGuard(
     ctx.emitNumberOrPreload("1");
     ctx.emitOp(0x11, "-", `decrement/test ${decrement.target}`, decrement.line);
     ctx.emitStore(decrement.target, `set ${decrement.target}`, decrement.line);
-    ctx.emitOp(0x23, "F 1/x", "decrement zero domain guard trap", branch.line);
-    ctx.currentXVariable = undefined;
-    ctx.currentXAliases.clear();
-    ctx.currentXKnownZero = false;
-    ctx.scaledCoordVariables.clear();
+    emitDomainTrapOnX(ctx, 0x23, "F 1/x", "decrement zero domain guard trap", branch.line);
     if (branch.elseBody !== undefined) ctx.compileStatements(branch.elseBody);
     ctx.optimizations.push({
       name: "decrement-zero-domain-guard",
@@ -171,11 +167,7 @@ export function compileDecrementUnderflowBranch(ctx: LoweringCtx,
       ctx.emitNumberOrPreload("1");
       ctx.emitOp(0x11, "-", `decrement/test ${decrement.target}`, decrement.line);
       ctx.emitStore(decrement.target, `set ${decrement.target}`, decrement.line);
-      ctx.emitOp(0x21, "F sqrt", "decrement underflow domain guard trap", branch.line);
-      ctx.currentXVariable = undefined;
-      ctx.currentXAliases.clear();
-      ctx.currentXKnownZero = false;
-      ctx.scaledCoordVariables.clear();
+      emitDomainTrapOnX(ctx, 0x21, "F sqrt", "decrement underflow domain guard trap", branch.line);
       ctx.optimizations.push({
         name: "decrement-underflow-domain-guard",
         detail: `Fused ${decrement.target} decrement and negative terminal-error branch through F sqrt at lines ${decrement.line}/${branch.line}.`,
@@ -235,14 +227,33 @@ export function statementsAreDomainErrorTrap(ctx: LoweringCtx, statements: reado
 //   a >  b  <=>  b - a <  0   (√)
 //   a >= b  <=>  b - a <= 0   (lg)
 //   a == b  <=>  a - b == 0   (1/x; symmetric, so either zero side collapses)
-interface DomainErrorGuardPlan {
+export interface DomainErrorGuardPlan {
   first: ExpressionAst;
   second?: ExpressionAst;
   trapOpcode: number;
   trapMnemonic: string;
 }
 
-function planDomainErrorGuard(condition: ConditionAst): DomainErrorGuardPlan | undefined {
+// Shared tail for every store-then-domain-trap fusion: emit the self-trapping
+// opcode (F sqrt / F lg / F 1/x) on the value already in X and then invalidate
+// tracked X state, because the trap consumed the taken branch and X holds
+// garbage on the fall-through (false) path. Every domain-guard site funnels its
+// opcode through here so the "emit trap + reset" mechanic lives in one place.
+export function emitDomainTrapOnX(
+    ctx: LoweringCtx,
+    trapOpcode: number,
+    trapMnemonic: string,
+    comment: string,
+    line: number,
+  ): void {
+    ctx.emitOp(trapOpcode, trapMnemonic, comment, line);
+    ctx.currentXVariable = undefined;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
+    ctx.scaledCoordVariables.clear();
+}
+
+export function planDomainErrorGuard(condition: ConditionAst): DomainErrorGuardPlan | undefined {
     const SQRT_OPCODE = 0x21;
     const SQRT_MNEMONIC = "F sqrt";
     const LG_OPCODE = 0x17;
@@ -307,13 +318,7 @@ export function compileDomainErrorGuard(ctx: LoweringCtx,
       compileExpression(ctx, plan.second);
       ctx.emitOp(0x11, "-", "domain guard difference", line);
     }
-    ctx.emitOp(plan.trapOpcode, plan.trapMnemonic, "domain-error guard trap", line);
-    // The trap consumed the taken (true) branch; X now holds garbage on the
-    // fall-through (false) path, so reset the tracked X state before the else.
-    ctx.currentXVariable = undefined;
-    ctx.currentXAliases.clear();
-    ctx.currentXKnownZero = false;
-    ctx.scaledCoordVariables.clear();
+    emitDomainTrapOnX(ctx, plan.trapOpcode, plan.trapMnemonic, "domain-error guard trap", line);
     if (statement.elseBody !== undefined) ctx.compileStatements(statement.elseBody);
     ctx.optimizations.push({
       name: "domain-error-guard",
@@ -351,11 +356,7 @@ export function compileAssignThenDomainTrap(ctx: LoweringCtx,
     if (!ctx.xHolds(assign.target)) {
       ctx.emitRecall(assign.target, `trap-test ${assign.target}`, branch.line);
     }
-    ctx.emitOp(plan.trapOpcode, plan.trapMnemonic, "domain-error guard trap", branch.line);
-    ctx.currentXVariable = undefined;
-    ctx.currentXAliases.clear();
-    ctx.currentXKnownZero = false;
-    ctx.scaledCoordVariables.clear();
+    emitDomainTrapOnX(ctx, plan.trapOpcode, plan.trapMnemonic, "domain-error guard trap", branch.line);
     if (branch.elseBody !== undefined) ctx.compileStatements(branch.elseBody);
     ctx.optimizations.push({
       name: "assign-zero-domain-guard",

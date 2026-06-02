@@ -1648,6 +1648,33 @@ program IndexedStoreGuard {
     expect(result.report.optimizations.some((item) => item.name === "indexed-assign-zero-domain-guard")).toBe(true);
   });
 
+  // After unifying the indexed guard onto the shared planDomainErrorGuard table,
+  // an indexed `== 0` guard fuses through the equality trap `F 1/x` (0x23) — a
+  // capability the old bespoke indexed table (only `<`/`<=`) could not express.
+  it("fuses an indexed `== 0` guard through the equality trap F 1/x", () => {
+    const result = compileOk(`
+program IndexedEqualityGuard {
+  state {
+    cells: packed[1..2] = [5, 0]
+    index: counter 1..2 = 1
+    scratch: packed = 6
+  }
+
+  cells[index] -= scratch
+  if cells[index] == 0 {
+    halt("ЕГГОГ")
+  }
+  else {
+    halt(cells[index])
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "indexed-assign-zero-domain-guard")).toBe(true);
+    // F 1/x is the equality (division-by-zero) trap; no compare+branch emitted.
+    expect(result.steps.some((step) => step.opcode === 0x23)).toBe(true);
+  });
+
   it("branches on a previous random value without spilling it", () => {
     const result = compileOk(`
 program PreviousRandomBranch {

@@ -14,7 +14,7 @@ import { MachineEmitter } from "./emit/machine-emitter.ts";
 import type { ProgramAnalysis } from "./emit/program-analysis.ts";
 import { RuntimeHelperRegistry } from "./emit/runtime-helpers.ts";
 import { compileExpression, compileStackStopRiskTail, expressionLeadsWithRead } from "./emit/lowering/expr.ts";
-import { compileAssignThenDomainTrap, compileCondition, compileDecrementUnderflowBranch, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitKnownOneIndirectLoopBack, statementsAreDomainErrorTrap } from "./emit/lowering/control-flow.ts";
+import { compileAssignThenDomainTrap, compileCondition, compileDecrementUnderflowBranch, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitDomainTrapOnX, emitKnownOneIndirectLoopBack, planDomainErrorGuard, statementsAreDomainErrorTrap } from "./emit/lowering/control-flow.ts";
 import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts";
 import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileGridCellMaskReuse } from "./emit/lowering/spatial.ts";
 import { compileCoordListLineCountAssignment, compileCoordListLineCountDashedReport, compileCoordListRemove, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
@@ -4452,16 +4452,6 @@ function conditionTestsIdentifierAgainstZero(condition: ConditionAst, name: stri
       (condition.right.kind === "identifier" && condition.right.name === name && isZeroExpression(condition.left)));
 }
 
-function indexedZeroDomainTrap(
-  condition: ConditionAst,
-  target: Extract<ExpressionAst, { kind: "indexed" }>,
-): { opcode: number; mnemonic: string } | undefined {
-  if (!expressionEquals(condition.left, target) || !isZeroExpression(condition.right)) return undefined;
-  if (condition.op === "<") return { opcode: 0x21, mnemonic: "F sqrt" };
-  if (condition.op === "<=") return { opcode: 0x17, mnemonic: "F lg" };
-  return undefined;
-}
-
 // Teach the counted-loop lowering the `time: counter 0..N = N` form. The compiler
 // already lowers `time = N; while time >= 1 { ...; time-- }` through a one-cell
 // F Lx counter, but only when an explicit initializer precedes the loop; the same
@@ -6615,19 +6605,20 @@ export class EmitContext {
     branch: Extract<StatementAst, { kind: "if" }>,
   ): boolean {
     if (!statementsAreDomainErrorTrap(this, branch.thenBody)) return false;
-    const trap = indexedZeroDomainTrap(branch.condition, assign.target);
-    if (trap === undefined) return false;
+    // Route through the same opcode table as scalar guards: a single operand
+    // (compare-to-zero) that is exactly the indexed target, which `К X->П i`
+    // leaves in X. Sharing `planDomainErrorGuard` also gives indexed stores the
+    // `== 0` equality trap (`F 1/x`) the bespoke table used to omit.
+    const plan = planDomainErrorGuard(branch.condition);
+    if (plan === undefined || plan.second !== undefined) return false;
+    if (!expressionEquals(plan.first, assign.target)) return false;
 
     this.compileStatement(assign);
-    this.emitOp(trap.opcode, trap.mnemonic, "indexed assign domain-error guard trap", branch.line);
-    this.currentXVariable = undefined;
-    this.currentXAliases.clear();
-    this.currentXKnownZero = false;
-    this.scaledCoordVariables.clear();
+    emitDomainTrapOnX(this, plan.trapOpcode, plan.trapMnemonic, "indexed assign domain-error guard trap", branch.line);
     if (branch.elseBody !== undefined) this.compileStatements(branch.elseBody);
     this.optimizations.push({
       name: "indexed-assign-zero-domain-guard",
-      detail: `Fused indexed store and "${branch.condition.op} 0" terminal-error branch through ${trap.mnemonic}.`,
+      detail: `Fused indexed store and "${branch.condition.op} 0" terminal-error branch through ${plan.trapMnemonic}.`,
     });
     return true;
   }
