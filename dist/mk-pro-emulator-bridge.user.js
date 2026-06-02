@@ -2049,7 +2049,7 @@ var MKProEmulatorBundle = (() => {
   var COORD_LIST_COUNTER = "__coord_list_counter";
   var COORD_LIST_CURRENT = "__coord_list_current";
   var COORD_LIST_DX = "__coord_list_dx";
-  var VERIFIED_DASHED_COORD_REPORT_FORMATS = [
+  var VERIFIED_COORD_REPORT_FORMATS = [
     { prefix: "--", cellWidth: 2, separator: "--", bearingWidth: 1, mask: "8,-00--_", cellScaleExp: 4, videoAnchorExp: 7 }
   ];
   var NEGATIVE_ZERO_DEGREE_SELECTOR_GE = "__mkpro_negative_zero_ge";
@@ -2194,17 +2194,17 @@ var MKProEmulatorBundle = (() => {
     for (const proc of ast.procs) visitStatements(proc.body);
     return found;
   }
-  function programUsesDashedCoordReport(ast) {
-    return dashedCoordReportFormatForProgram(ast) !== void 0;
+  function programUsesFormattedCoordReport(ast) {
+    return formattedCoordReportFormatForProgram(ast) !== void 0;
   }
-  function dashedCoordReportFormatForProgram(ast) {
+  function formattedCoordReportFormatForProgram(ast) {
     for (const display of ast.displays) {
-      const template = dashedCoordReportDisplayTemplate(display);
+      const template = formattedCoordReportDisplayTemplate(display);
       if (template !== void 0) return template.format;
     }
     return void 0;
   }
-  function dashedCoordReportDisplayTemplate(display) {
+  function formattedCoordReportDisplayTemplate(display) {
     const [prefix, cell, separator, bearing] = display.items;
     if (display.items.length !== 4 || prefix?.kind !== "literal" || cell?.kind !== "source" || separator?.kind !== "literal" || bearing?.kind !== "source") {
       return void 0;
@@ -2213,7 +2213,7 @@ var MKProEmulatorBundle = (() => {
     const separatorText = normalizeDisplayTemplateLiteral(separator.text);
     const cellWidth = cell.width ?? 2;
     const bearingWidth = bearing.width ?? 1;
-    const format = VERIFIED_DASHED_COORD_REPORT_FORMATS.find(
+    const format = VERIFIED_COORD_REPORT_FORMATS.find(
       (candidate) => candidate.prefix === prefixText && candidate.separator === separatorText && candidate.cellWidth === cellWidth && candidate.bearingWidth === bearingWidth
     );
     if (format === void 0) return void 0;
@@ -3299,8 +3299,8 @@ var MKProEmulatorBundle = (() => {
   }
   function packedGridMacroArity(name) {
     const arities = {
-      norm4: 1,
-      grid4_norm: 1,
+      grid_norm: 1,
+      grid_wrap: 1,
       bit_mask: 1,
       bit_has: 2,
       bit_set: 2,
@@ -3318,17 +3318,17 @@ var MKProEmulatorBundle = (() => {
       digit_at: 2,
       digit_add: 3,
       digit_set: 3,
-      packed4_add: 3,
-      packed4_digit: 2,
-      packed4_score: 2
+      packed_add: 3,
+      packed_digit: 2,
+      packed_score: 2
     };
     return arities[name];
   }
   function packedGridExpressionMacro(name, args) {
     switch (name) {
-      case "norm4":
-      case "grid4_norm":
-        return norm4Expression(args[0]);
+      case "grid_norm":
+      case "grid_wrap":
+        return gridNormExpression(args[0]);
       case "bit_mask":
         return bitMaskExpression(args[0]);
       case "bit_has":
@@ -3340,9 +3340,9 @@ var MKProEmulatorBundle = (() => {
       case "bit_toggle":
         return bitXorExpression(args[0], bitMaskExpression(args[1]));
       case "diag_left_index":
-        return positiveNorm4Expression(addExpressions2(args[0], args[1]));
+        return positiveGridNormExpression(addExpressions2(args[0], args[1]));
       case "diag_right_index":
-        return positiveNorm4Expression(addExpressions2(subtractExpressions2(args[0], args[1]), numberExpression2(DEFAULT_BOARD_WIDTH)));
+        return positiveGridNormExpression(addExpressions2(subtractExpressions2(args[0], args[1]), numberExpression2(DEFAULT_BOARD_WIDTH)));
       case "cell_mask":
         return cellMaskExpression(args[0], args[1]);
       case "cell_has":
@@ -3364,22 +3364,22 @@ var MKProEmulatorBundle = (() => {
       case "cell_toggle":
         return bitXorExpression(args[0], cellMaskExpression(args[1], args[2]));
       case "digit_at":
-        return packed4DigitExpression(args[0], args[1]);
+        return packedDigitExpression(args[0], args[1]);
       case "digit_add":
         return addExpressions2(
           args[0],
           multiplyExpressions2(args[2], digitPlaceExpression(args[1]))
         );
-      case "packed4_add":
+      case "packed_add":
         return addExpressions2(
           args[0],
           multiplyExpressions2(args[2], pow10Expression(args[1]))
         );
       case "digit_set":
         return digitSetExpression(args[0], args[1], args[2]);
-      case "packed4_digit":
-        return packed4DigitExpression(args[0], args[1]);
-      case "packed4_score":
+      case "packed_digit":
+        return packedDigitExpression(args[0], args[1]);
+      case "packed_score":
         return {
           kind: "call",
           callee: "sqr",
@@ -3688,7 +3688,7 @@ var MKProEmulatorBundle = (() => {
     }
     return constant;
   }
-  function norm4Expression(expr, width = DEFAULT_BOARD_WIDTH) {
+  function gridNormExpression(expr, width = DEFAULT_BOARD_WIDTH) {
     const rem = multiplyExpressions2(
       { kind: "call", callee: "frac", args: [divideExpressions({ kind: "call", callee: "int", args: [expr] }, numberExpression2(width))] },
       numberExpression2(width)
@@ -3698,7 +3698,7 @@ var MKProEmulatorBundle = (() => {
       multiplyExpressions2(numberExpression2(width), oneMinus(signExpression(maxExpression(rem, numberExpression2(0)))))
     );
   }
-  function positiveNorm4Expression(expr, width = DEFAULT_BOARD_WIDTH) {
+  function positiveGridNormExpression(expr, width = DEFAULT_BOARD_WIDTH) {
     const rem = multiplyExpressions2(
       fracExpression(divideExpressions(intExpression(expr), numberExpression2(width))),
       numberExpression2(width)
@@ -3758,7 +3758,7 @@ var MKProEmulatorBundle = (() => {
       }]
     };
   }
-  function packed4DigitExpression(lines, index) {
+  function packedDigitExpression(lines, index) {
     return {
       kind: "call",
       callee: "int",
@@ -3773,7 +3773,7 @@ var MKProEmulatorBundle = (() => {
   function digitSetExpression(value, index, digit) {
     const place = digitPlaceExpression(index);
     return addExpressions2(
-      subtractExpressions2(value, multiplyExpressions2(packed4DigitExpression(value, index), place)),
+      subtractExpressions2(value, multiplyExpressions2(packedDigitExpression(value, index), place)),
       multiplyExpressions2(digit, place)
     );
   }
@@ -4175,7 +4175,7 @@ var MKProEmulatorBundle = (() => {
     if (!expressionPureForSubstitution(factor) || !expressionPureForSubstitution(scaled.right)) return void 0;
     return { param, factor, divisor: scaled.right, line: only.line };
   }
-  function matchXParamStakeSinRead(program, proc) {
+  function matchXParamStackStopRiskRead(program, proc) {
     const params = proc.params ?? [];
     const [param] = params;
     if (param === void 0 || params.length !== 1 || proc.body.length !== 2) return void 0;
@@ -5876,7 +5876,7 @@ var MKProEmulatorBundle = (() => {
     return void 0;
   }
   function lowerV2Program(v2, options = {}) {
-    const decimalSeries = tryLowerV2DecimalFactorialSeries(v2);
+    const decimalSeries = tryLowerV2DecimalSeries(v2);
     if (decimalSeries !== void 0) return decimalSeries;
     const ruleParams = collectV2RuleParams(v2);
     const rules = collectV2Rules(v2);
@@ -5922,7 +5922,7 @@ var MKProEmulatorBundle = (() => {
   }
   function rewriteV2DisplayExpressions(_v2, _context) {
   }
-  function tryLowerV2DecimalFactorialSeries(v2) {
+  function tryLowerV2DecimalSeries(v2) {
     if (v2.body.length !== 5 || v2.consts.length > 0 || v2.state.length > 0 || v2.boards.length > 0 || v2.worlds.length > 0 || v2.rules.length > 0) {
       return void 0;
     }
@@ -13100,7 +13100,7 @@ var MKProEmulatorBundle = (() => {
     // label (undefined value = edges disagree / unknown). Used by emitLabel to
     // keep stack-reuse facts sound across control-flow joins.
     labelEdgeX = /* @__PURE__ */ new Map();
-    currentXDashedCoordReportBody;
+    currentXFormattedCoordReportBody;
     // True when the machine is mid number-entry, so the next number literal would
     // concatenate digits (e.g. 1 then 3 -> 13) instead of starting a new value.
     machineEntryOpen = false;
@@ -13108,7 +13108,7 @@ var MKProEmulatorBundle = (() => {
       this.currentXVariable = void 0;
       this.currentXAliases.clear();
       this.currentXKnownZero = false;
-      this.currentXDashedCoordReportBody = void 0;
+      this.currentXFormattedCoordReportBody = void 0;
       if (this.machineEntryOpen) {
         this.emitOp(14, "\u0412\u2191", "separate adjacent number entry");
       }
@@ -13165,7 +13165,7 @@ var MKProEmulatorBundle = (() => {
       this.currentXVariable = void 0;
       this.currentXAliases.clear();
       this.currentXKnownZero = false;
-      this.currentXDashedCoordReportBody = void 0;
+      this.currentXFormattedCoordReportBody = void 0;
       this.machineEntryOpen = opcode <= 12;
     }
     recordLabelEdge(label, fact) {
@@ -13185,7 +13185,7 @@ var MKProEmulatorBundle = (() => {
         this.currentXKnownZero = false;
       }
       this.currentXAliases = this.currentXVariable !== void 0 ? /* @__PURE__ */ new Set([this.currentXVariable]) : /* @__PURE__ */ new Set();
-      this.currentXDashedCoordReportBody = void 0;
+      this.currentXFormattedCoordReportBody = void 0;
     }
     freshLabel(prefix) {
       const label = `__${prefix}_${this.labelCounter}`;
@@ -13245,7 +13245,7 @@ var MKProEmulatorBundle = (() => {
     }
     if (compileLiteralDisplay(ctx, display, line)) return;
     if (compileTextDisplay(ctx, display, line)) return;
-    if (compileDashedCoordReportDisplay(ctx, display, line)) return;
+    if (compileFormattedCoordReportDisplay(ctx, display, line)) return;
     if (compileFloorPackedRowDisplay(ctx, display, line)) return;
     if (compileDecimalPointDisplay(ctx, display, line)) return;
     const strategy = ctx.selectDisplayStrategy(display);
@@ -13407,22 +13407,22 @@ var MKProEmulatorBundle = (() => {
       (field) => field.name === name && (field.type === "coord" || field.type === "coord_list")
     ) ?? false;
   }
-  function compileDashedCoordReportDisplay(ctx, display, line) {
-    const template = dashedCoordReportDisplayTemplate(display);
+  function compileFormattedCoordReportDisplay(ctx, display, line) {
+    const template = formattedCoordReportDisplayTemplate(display);
     if (template === void 0) return false;
     const maskRegister = ctx.allocation.registers[COORD_LIST_DX];
     if (maskRegister === void 0) return false;
     if (!ctx.displayFieldFitsUnsignedWidth(template.cell) || !ctx.displayFieldFitsUnsignedWidth(template.bearing)) {
       return false;
     }
-    if (ctx.currentXDashedCoordReportBodyMatches(template)) {
-      emitDashedCoordReportPackedBodyDisplay(ctx, display.name, maskRegister, line, template.format.videoAnchorExp);
+    if (ctx.currentXFormattedCoordReportBodyMatches(template)) {
+      emitFormattedCoordReportPackedBodyDisplay(ctx, display.name, maskRegister, line, template.format.videoAnchorExp);
       ctx.optimizations.push({
-        name: "dashed-coord-report-packed-body",
+        name: "formatted-coord-report-packed-body",
         detail: `Reused packed --CC-- N body already in X for screen ${display.name}.`
       });
       ctx.optimizations.push({
-        name: "dashed-coord-report-lowering",
+        name: "formatted-coord-report-lowering",
         detail: `Lowered screen ${display.name} as --CC-- N calculator video output.`
       });
       return true;
@@ -13433,38 +13433,38 @@ var MKProEmulatorBundle = (() => {
     ctx.emitRecall(template.cell.name, `display ${display.name} cell`, line);
     if (ctx.scaledCoordVariables.has(template.cell.name)) {
       ctx.emitNumberOrPreload("10");
-      ctx.emitOp(18, "*", "display dashed scaled cell restore", line);
+      ctx.emitOp(18, "*", "display formatted scaled cell restore", line);
     }
     ctx.emitNumber(String(template.format.cellScaleExp));
-    ctx.emitOp(21, "F 10^x", "display dashed cell scale", line);
-    ctx.emitOp(18, "*", "display dashed cell shift", line);
-    ctx.emitOp(16, "+", "display dashed bearing append", line);
+    ctx.emitOp(21, "F 10^x", "display formatted cell scale", line);
+    ctx.emitOp(18, "*", "display formatted cell shift", line);
+    ctx.emitOp(16, "+", "display formatted bearing append", line);
     ctx.emitNumber(String(template.format.videoAnchorExp));
-    ctx.emitOp(21, "F 10^x", "display dashed video anchor", line);
-    ctx.emitOp(16, "+", "display dashed video body", line);
-    ctx.emitOp(96 + registerIndex(maskRegister), `\u041F->X ${maskRegister}`, `display ${display.name} dashed mask`, line);
-    ctx.emitOp(57, "\u041A \u2295", "display dashed mask merge", line);
-    ctx.emitOp(53, "\u041A {x}", "display dashed video fraction", line);
-    ctx.emitOp(11, "/-/", "display dashed sign", line);
-    ctx.emitOp(12, "\u0412\u041F", "display dashed exponent entry", line);
-    ctx.emitOp(0 + template.format.videoAnchorExp, String(template.format.videoAnchorExp), "display dashed exponent", line);
+    ctx.emitOp(21, "F 10^x", "display formatted video anchor", line);
+    ctx.emitOp(16, "+", "display formatted video body", line);
+    ctx.emitOp(96 + registerIndex(maskRegister), `\u041F->X ${maskRegister}`, `display ${display.name} formatted mask`, line);
+    ctx.emitOp(57, "\u041A \u2295", "display formatted mask merge", line);
+    ctx.emitOp(53, "\u041A {x}", "display formatted video fraction", line);
+    ctx.emitOp(11, "/-/", "display formatted sign", line);
+    ctx.emitOp(12, "\u0412\u041F", "display formatted exponent entry", line);
+    ctx.emitOp(0 + template.format.videoAnchorExp, String(template.format.videoAnchorExp), "display formatted exponent", line);
     ctx.emitOp(80, "\u0421/\u041F", `show ${display.name}`, line);
     ctx.optimizations.push({
-      name: "dashed-coord-report-lowering",
+      name: "formatted-coord-report-lowering",
       detail: `Lowered screen ${display.name} as --CC-- N calculator video output.`
     });
     return true;
   }
-  function emitDashedCoordReportPackedBodyDisplay(ctx, displayName, maskRegister, line, videoAnchorExp) {
+  function emitFormattedCoordReportPackedBodyDisplay(ctx, displayName, maskRegister, line, videoAnchorExp) {
     ctx.emitNumber(String(videoAnchorExp));
-    ctx.emitOp(21, "F 10^x", "display dashed video anchor", line);
-    ctx.emitOp(16, "+", "display dashed video body", line);
-    ctx.emitOp(96 + registerIndex(maskRegister), `\u041F->X ${maskRegister}`, `display ${displayName} dashed mask`, line);
-    ctx.emitOp(57, "\u041A \u2295", "display dashed mask merge", line);
-    ctx.emitOp(53, "\u041A {x}", "display dashed video fraction", line);
-    ctx.emitOp(11, "/-/", "display dashed sign", line);
-    ctx.emitOp(12, "\u0412\u041F", "display dashed exponent entry", line);
-    ctx.emitOp(0 + videoAnchorExp, String(videoAnchorExp), "display dashed exponent", line);
+    ctx.emitOp(21, "F 10^x", "display formatted video anchor", line);
+    ctx.emitOp(16, "+", "display formatted video body", line);
+    ctx.emitOp(96 + registerIndex(maskRegister), `\u041F->X ${maskRegister}`, `display ${displayName} formatted mask`, line);
+    ctx.emitOp(57, "\u041A \u2295", "display formatted mask merge", line);
+    ctx.emitOp(53, "\u041A {x}", "display formatted video fraction", line);
+    ctx.emitOp(11, "/-/", "display formatted sign", line);
+    ctx.emitOp(12, "\u0412\u041F", "display formatted exponent entry", line);
+    ctx.emitOp(0 + videoAnchorExp, String(videoAnchorExp), "display formatted exponent", line);
     ctx.emitOp(80, "\u0421/\u041F", `show ${displayName}`, line);
   }
   function compilePackedDisplayBody(ctx, display, line, reuseCurrentX) {
@@ -14119,18 +14119,18 @@ var MKProEmulatorBundle = (() => {
     compileExpression(ctx, addExpressions2(x, multiplyExpressions2(numberExpression2(10), y)));
     ctx.emitStore(COORD_LIST_CURRENT, "random coord candidate", line, true);
   }
-  function compileCoordListLineCountDashedReport(ctx, assignment, show) {
-    const template = ctx.dashedCoordReportTemplateAfterLineCount(assignment, show);
+  function compileCoordListLineCountFormattedReport(ctx, assignment, show) {
+    const template = ctx.formattedCoordReportTemplateAfterLineCount(assignment, show);
     if (template === void 0) return false;
     if (!compileCoordListLineCountAssignment(ctx, assignment, template)) return false;
     compileShow(ctx, show.display, show.line);
     ctx.optimizations.push({
-      name: "coord-list-line-count-dashed-report-fusion",
-      detail: `Packed coord_list line_count() directly for dashed report ${show.display} at line ${assignment.line}.`
+      name: "coord-list-line-count-formatted-report-fusion",
+      detail: `Packed coord_list line_count() directly for formatted report ${show.display} at line ${assignment.line}.`
     });
     return true;
   }
-  function compileCoordListLineCountAssignment(ctx, statement, dashedReport) {
+  function compileCoordListLineCountAssignment(ctx, statement, formattedReport) {
     const call = coordListLineCountCall(statement.expr);
     if (call === void 0) return false;
     const context = ctx.coordListIndirectContext(call);
@@ -14139,7 +14139,7 @@ var MKProEmulatorBundle = (() => {
     if (current === void 0) return false;
     const scaled = ctx.coordListUsesScaledDecimalStorage(call);
     if (scaled && !ctx.scaleCoordListCellInPlace(context.cell, statement.line)) return false;
-    emitCoordListLineCountInitialTotal(ctx, statement.target, statement.line, dashedReport);
+    emitCoordListLineCountInitialTotal(ctx, statement.target, statement.line, formattedReport);
     emitCoordListLoopSetup(ctx, context, statement.line);
     const start = ctx.freshLabel("coord_list_line_loop");
     const visible = ctx.freshLabel("coord_list_visible");
@@ -14175,37 +14175,37 @@ var MKProEmulatorBundle = (() => {
     }
     ctx.emitLabel(countNext);
     emitCoordListCounterLoop(ctx, context.counterRegister, start, statement.line, "coord_list line_count loop");
-    emitCoordListLineCountResult(ctx, statement.target, statement.line, dashedReport);
+    emitCoordListLineCountResult(ctx, statement.target, statement.line, formattedReport);
     ctx.optimizations.push({
       name: scaled ? "coord-list-scaled-line-count" : "coord-list-line-count-indirect-loop",
       detail: scaled ? `Lowered coord_list_line_count() through scaled decimal coordinates at line ${statement.line}.` : `Lowered coord_list_line_count() through a compact indirect register loop at line ${statement.line}.`
     });
-    if (dashedReport !== void 0) {
+    if (formattedReport !== void 0) {
       ctx.optimizations.push({
-        name: "coord-list-line-count-dashed-report-body",
-        detail: `Accumulated ${statement.target} as a packed dashed report body at line ${statement.line}.`
+        name: "coord-list-line-count-formatted-report-body",
+        detail: `Accumulated ${statement.target} as a packed formatted report body at line ${statement.line}.`
       });
     }
     return true;
   }
-  function emitCoordListLineCountInitialTotal(ctx, target, line, dashedReport, commentPrefix = "coord_list line_count") {
-    if (dashedReport === void 0) {
+  function emitCoordListLineCountInitialTotal(ctx, target, line, formattedReport, commentPrefix = "coord_list line_count") {
+    if (formattedReport === void 0) {
       ctx.emitZero(`${commentPrefix} total`, line);
       ctx.emitStore(target, `${commentPrefix} total`, line);
       return;
     }
-    emitDashedCoordReportCellBody(ctx, dashedReport, line, `${commentPrefix} dashed report`);
-    ctx.emitStore(target, `${commentPrefix} dashed report body`, line);
+    emitFormattedCoordReportCellBody(ctx, formattedReport, line, `${commentPrefix} formatted report`);
+    ctx.emitStore(target, `${commentPrefix} formatted report body`, line);
   }
-  function emitCoordListLineCountResult(ctx, target, line, dashedReport, commentPrefix = "coord_list line_count") {
+  function emitCoordListLineCountResult(ctx, target, line, formattedReport, commentPrefix = "coord_list line_count") {
     ctx.emitRecall(
       target,
-      dashedReport === void 0 ? `${commentPrefix} result` : `${commentPrefix} dashed report body`,
+      formattedReport === void 0 ? `${commentPrefix} result` : `${commentPrefix} formatted report body`,
       line
     );
-    if (dashedReport !== void 0) ctx.currentXDashedCoordReportBody = dashedReport;
+    if (formattedReport !== void 0) ctx.currentXFormattedCoordReportBody = formattedReport;
   }
-  function emitDashedCoordReportCellBody(ctx, template, line, commentPrefix) {
+  function emitFormattedCoordReportCellBody(ctx, template, line, commentPrefix) {
     if (!ctx.xHolds(template.cell.name)) ctx.emitRecall(template.cell.name, `${commentPrefix} cell`, line);
     if (ctx.scaledCoordVariables.has(template.cell.name)) {
       ctx.emitNumber(String(template.format.cellScaleExp + 1));
@@ -14257,9 +14257,9 @@ var MKProEmulatorBundle = (() => {
     const scaled = ctx.coordListUsesScaledDecimalStorage(lineCountCall);
     const target = lineCount.target;
     const line = branch.line;
-    const dashedReport = index + 3 === statements.length ? ctx.dashedCoordReportTemplateAfterLineCount(lineCount, statements[index + 2]) : void 0;
+    const formattedReport = index + 3 === statements.length ? ctx.formattedCoordReportTemplateAfterLineCount(lineCount, statements[index + 2]) : void 0;
     if (scaled && !ctx.scaleCoordListCellInPlace(context.cell, line)) return 0;
-    emitCoordListLineCountInitialTotal(ctx, target, line, dashedReport, "coord_list fused");
+    emitCoordListLineCountInitialTotal(ctx, target, line, formattedReport, "coord_list fused");
     emitCoordListLoopSetup(ctx, context, line);
     const start = ctx.freshLabel("coord_list_fused_loop");
     const hit = ctx.freshLabel("coord_list_fused_hit");
@@ -14302,15 +14302,15 @@ var MKProEmulatorBundle = (() => {
     }
     ctx.emitLabel(countNext);
     emitCoordListCounterLoop(ctx, context.counterRegister, start, line, "coord_list fused loop");
-    emitCoordListLineCountResult(ctx, target, line, dashedReport, "coord_list fused");
+    emitCoordListLineCountResult(ctx, target, line, formattedReport, "coord_list fused");
     ctx.optimizations.push({
       name: scaled ? "coord-list-scaled-fused-hit-line-count" : "coord-list-fused-hit-line-count",
       detail: scaled ? `Fused coord_list membership and line_count through scaled decimal coordinates at line ${branch.line}.` : `Fused coord_list membership and line_count into one indirect scan at line ${branch.line}.`
     });
-    if (dashedReport !== void 0) {
+    if (formattedReport !== void 0) {
       ctx.optimizations.push({
-        name: "coord-list-fused-dashed-report-body",
-        detail: `Accumulated ${target} as a packed dashed report body during the fused scan at line ${branch.line}.`
+        name: "coord-list-fused-formatted-report-body",
+        detail: `Accumulated ${target} as a packed formatted report body during the fused scan at line ${branch.line}.`
       });
     }
     return 2;
@@ -15582,13 +15582,13 @@ var MKProEmulatorBundle = (() => {
       compileExpression(ctx, field.initial);
       ctx.emitStore(field.name, `setup ${field.name}`, field.line, true);
     }
-    const dashedReportFormat = dashedCoordReportFormatForProgram(ctx.ast);
-    if (dashedReportFormat !== void 0) {
+    const formattedReportFormat = formattedCoordReportFormatForProgram(ctx.ast);
+    if (formattedReportFormat !== void 0) {
       const register = ctx.allocation.registers[COORD_LIST_DX];
-      const program = displayLiteralProgram(dashedReportFormat.mask);
+      const program = displayLiteralProgram(formattedReportFormat.mask);
       if (register !== void 0 && program !== void 0 && program.kind !== "error") {
-        emitDisplayLiteralProgram(ctx, program, void 0, "setup dashed report mask");
-        ctx.emitOp(64 + registerIndex(register), `X->\u041F ${register}`, "setup dashed report mask", void 0, true);
+        emitDisplayLiteralProgram(ctx, program, void 0, "setup formatted report mask");
+        ctx.emitOp(64 + registerIndex(register), `X->\u041F ${register}`, "setup formatted report mask", void 0, true);
       }
     }
     if (fields.some((field) => field.initial !== void 0 && randomCoordListItemPlacement(field.name, field.initial) !== void 0)) {
@@ -15923,7 +15923,7 @@ var MKProEmulatorBundle = (() => {
       ctx.compileWithinProcedure(proc, () => {
         const xParam = ctx.xParamProcs.get(proc.name);
         const xParamDecay = matchXParamReturnDecay(proc);
-        const xParamStakeSin = matchXParamStakeSinRead(ctx.ast, proc);
+        const xParamStackStopRisk = matchXParamStackStopRiskRead(ctx.ast, proc);
         if (xParamDecay !== void 0) {
           compileXParamReturnDecayBody(ctx, xParamDecay);
           ctx.emitOp(82, "\u0412/\u041E", "x-param decay return", xParamDecay.line);
@@ -15931,16 +15931,16 @@ var MKProEmulatorBundle = (() => {
             name: "x-param-return-decay",
             detail: `Compiled ${proc.name} to consume ${xParamDecay.param} directly from X.`
           });
-        } else if (xParamStakeSin !== void 0) {
-          compileXParamStakeSinReadBody(ctx, xParamStakeSin);
-          ctx.emitOp(82, "\u0412/\u041E", "x-param stake-sin return", xParamStakeSin.line);
+        } else if (xParamStackStopRisk !== void 0) {
+          compileXParamStackStopRiskReadBody(ctx, xParamStackStopRisk);
+          ctx.emitOp(82, "\u0412/\u041E", "x-param stack-stop-risk return", xParamStackStopRisk.line);
           ctx.optimizations.push({
-            name: "x-param-stake-sin-read",
-            detail: `Compiled ${proc.name} to consume ${xParamStakeSin.param} directly from X.`
+            name: "x-param-stack-stop-risk-read",
+            detail: `Compiled ${proc.name} to consume ${xParamStackStopRisk.param} directly from X.`
           });
           ctx.optimizations.push({
-            name: "show-read-stake-sin-lowering",
-            detail: `Reused displayed ${xParamStakeSin.param} as the stack stake for ${proc.name}.`
+            name: "show-read-stack-stop-risk-lowering",
+            detail: `Reused displayed ${xParamStackStopRisk.param} as the parked Y value for ${proc.name}.`
           });
         } else if (xParam !== void 0) {
           compileXParamProcBody(ctx, proc, xParam);
@@ -15991,14 +15991,14 @@ var MKProEmulatorBundle = (() => {
     ctx.emitOp(52, "\u041A [x]", "x-param decay int", decay.line);
     ctx.emitOp(17, "-", "x-param decay subtract", decay.line);
   }
-  function compileXParamStakeSinReadBody(ctx, stakeSin) {
-    ctx.emitOp(14, "\u0412\u2191", "x-param stake keep displayed stake", stakeSin.showLine);
-    ctx.emitOp(80, "\u0421/\u041F", `show ${stakeSin.display}`, stakeSin.showLine);
-    ctx.armValueInY(stakeSin.param);
-    compileStackStopRiskTail(ctx, stakeSin.risk, {
+  function compileXParamStackStopRiskReadBody(ctx, risk) {
+    ctx.emitOp(14, "\u0412\u2191", "x-param keep displayed value", risk.showLine);
+    ctx.emitOp(80, "\u0421/\u041F", `show ${risk.display}`, risk.showLine);
+    ctx.armValueInY(risk.param);
+    compileStackStopRiskTail(ctx, risk.risk, {
       inputComment: "risk input read()",
-      inputLine: stakeSin.line,
-      consumerLine: stakeSin.line
+      inputLine: risk.line,
+      consumerLine: risk.line
     });
     ctx.clearArmedValueInY();
   }
@@ -16392,7 +16392,7 @@ var MKProEmulatorBundle = (() => {
       (listing) => listing.digits === digits && listing.counterStart === counterStart
     );
   }
-  function compileDecimalFactorialSeries(ctx, statement) {
+  function compileDecimalSeries(ctx, statement) {
     const line = statement.line;
     const listing = verifiedDecimalSeriesListing(statement.digits, statement.counterStart);
     if (listing === void 0) {
@@ -16413,7 +16413,7 @@ var MKProEmulatorBundle = (() => {
       }
     }
     ctx.optimizations.push({
-      name: "decimal-factorial-series-lowering",
+      name: "decimal-series-lowering",
       detail: `Lowered decimal recurrence to ${statement.digits}-digit MK-61 program.`
     });
   }
@@ -17273,15 +17273,15 @@ var MKProEmulatorBundle = (() => {
       });
       return true;
     }
-    const xParamStakeSin = matchXParamStakeSinRead(ctx.ast, proc);
-    if (xParamStakeSin !== void 0 && expr.args.length === 1) {
+    const xParamStackStopRisk = matchXParamStackStopRiskRead(ctx.ast, proc);
+    if (xParamStackStopRisk !== void 0 && expr.args.length === 1) {
       compileExpression(ctx, expr.args[0]);
       const bankSelectors2 = ctx.snapshotBankSelectorCache();
       ctx.emitJump(83, "\u041F\u041F", proc.name, `call function ${proc.name}`, proc.line);
       ctx.restoreBankSelectorCacheAfterCall(proc.name, bankSelectors2);
       ctx.optimizations.push({
-        name: "x-param-stake-sin-call",
-        detail: `Passed ${xParamStakeSin.param} to ${proc.name} through X.`
+        name: "x-param-stack-stop-risk-call",
+        detail: `Passed ${xParamStackStopRisk.param} to ${proc.name} through X.`
       });
       return true;
     }
@@ -17320,7 +17320,7 @@ var MKProEmulatorBundle = (() => {
       ctx.emitOp(match.additive.digit, String(match.additive.digit), "risk multiplier", labels.consumerLine);
       ctx.emitOp(binaryOpcode(match.additive.op), match.additive.op, "risk multiplier", labels.consumerLine);
     }
-    ctx.emitOp(binaryOpcode(match.yOp), match.yOp, "risk stake", labels.consumerLine);
+    ctx.emitOp(binaryOpcode(match.yOp), match.yOp, "risk combine", labels.consumerLine);
     for (let index = match.wraps.length - 1; index >= 0; index -= 1) {
       const [code, mnemonic] = match.wraps[index];
       ctx.emitOp(code, mnemonic, "risk integer result", labels.consumerLine);
@@ -18345,24 +18345,24 @@ var MKProEmulatorBundle = (() => {
         "Combined domain-error guards, setup-only counted loops, and stack-resident temporaries"
       );
       tryCandidate(
-        { domainErrorGuards: true, showReadDebitCreditGuard: true },
-        "show-read-debit-credit-guard",
-        "Kept read/debit/credit guarded transfers on the calculator stack"
+        { domainErrorGuards: true, showReadGuardedTransfer: true },
+        "show-read-guarded-transfer",
+        "Kept read/decrement/increment guarded transfers on the calculator stack"
       );
       tryCandidate(
-        { domainErrorGuards: true, unrollCountedLoops: true, showReadDebitCreditGuard: true },
-        "show-read-debit-credit-guard-unroll",
-        "Combined stack-resident read/debit/credit transfers with counted-loop unrolling"
+        { domainErrorGuards: true, unrollCountedLoops: true, showReadGuardedTransfer: true },
+        "show-read-guarded-transfer-unroll",
+        "Combined stack-resident read/decrement/increment transfers with counted-loop unrolling"
       );
       trySizeRescueCandidate(
-        { domainErrorGuards: true, setupOnlyCountedLoopInit: true, showReadDebitCreditGuard: true },
-        "show-read-debit-credit-guard-setup-counted-loop",
-        "Combined stack-resident read/debit/credit transfers with setup-only counted loops"
+        { domainErrorGuards: true, setupOnlyCountedLoopInit: true, showReadGuardedTransfer: true },
+        "show-read-guarded-transfer-setup-counted-loop",
+        "Combined stack-resident read/decrement/increment transfers with setup-only counted loops"
       );
       trySizeRescueCandidate(
-        { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, showReadDebitCreditGuard: true },
-        "show-read-debit-credit-guard-unroll-setup-counted-loop",
-        "Combined stack-resident read/debit/credit transfers, counted-loop unrolling, and setup-only counted loops"
+        { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, showReadGuardedTransfer: true },
+        "show-read-guarded-transfer-unroll-setup-counted-loop",
+        "Combined stack-resident read/decrement/increment transfers, counted-loop unrolling, and setup-only counted loops"
       );
     }
     const primaryOverflows = primary === void 0 || primary.steps.length > 105;
@@ -18392,9 +18392,9 @@ var MKProEmulatorBundle = (() => {
             `Combined domain-error guards, counted-loop unrolling, setup-only counted loops, and ${layout.detail}`
           );
           tryCandidate(
-            { domainErrorGuards: true, unrollCountedLoops: true, showReadDebitCreditGuard: true, ...layout.options },
-            `show-read-debit-credit-guard-${layout.name}`,
-            `Combined stack-resident read/debit/credit transfers with ${layout.detail}`
+            { domainErrorGuards: true, unrollCountedLoops: true, showReadGuardedTransfer: true, ...layout.options },
+            `show-read-guarded-transfer-${layout.name}`,
+            `Combined stack-resident read/decrement/increment transfers with ${layout.detail}`
           );
         }
       }
@@ -18464,7 +18464,7 @@ var MKProEmulatorBundle = (() => {
           ...needsSizeRescue ? [
             { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true },
             { domainErrorGuards: true, setupOnlyCountedLoopInit: true, stackResidentTemps: true },
-            { domainErrorGuards: true, setupOnlyCountedLoopInit: true, showReadDebitCreditGuard: true }
+            { domainErrorGuards: true, setupOnlyCountedLoopInit: true, showReadGuardedTransfer: true }
           ] : [],
           { domainErrorGuards: true, unrollCountedLoops: true, orderProcsByCallCount: true },
           ...needsSizeRescue ? [
@@ -20007,7 +20007,7 @@ var MKProEmulatorBundle = (() => {
     const params = /* @__PURE__ */ new Set();
     for (const param of xParamProcParamNames(ast)) params.add(param);
     for (const proc of ast.procs) {
-      const match = matchXParamReturnDecay(proc) ?? matchXParamStakeSinRead(ast, proc);
+      const match = matchXParamReturnDecay(proc) ?? matchXParamStackStopRiskRead(ast, proc);
       if (match === void 0) continue;
       if (!identifierReadOutsideProc(ast, proc.name, match.param)) params.add(match.param);
     }
@@ -21329,7 +21329,7 @@ var MKProEmulatorBundle = (() => {
     for (const proc of ast.procs) walk(proc.body);
     return found;
   }
-  function previousRandomLessThanCurrentCondition(condition, temp, seed) {
+  function priorRandomLessThanCurrentCondition(condition, temp, seed) {
     if (condition.op !== "<" || !isZeroExpression(condition.right)) return false;
     const left = condition.left;
     return left.kind === "binary" && left.op === "-" && left.left.kind === "identifier" && left.left.name === temp && left.right.kind === "identifier" && left.right.name === seed;
@@ -22126,11 +22126,11 @@ var MKProEmulatorBundle = (() => {
     get zeroAddressLabels() {
       return this.emitter.zeroAddressLabels;
     }
-    get currentXDashedCoordReportBody() {
-      return this.emitter.currentXDashedCoordReportBody;
+    get currentXFormattedCoordReportBody() {
+      return this.emitter.currentXFormattedCoordReportBody;
     }
-    set currentXDashedCoordReportBody(value) {
-      this.emitter.currentXDashedCoordReportBody = value;
+    set currentXFormattedCoordReportBody(value) {
+      this.emitter.currentXFormattedCoordReportBody = value;
     }
     get machineEntryOpen() {
       return this.emitter.machineEntryOpen;
@@ -22225,19 +22225,19 @@ var MKProEmulatorBundle = (() => {
         const statement = statements[index];
         const next = statements[index + 1];
         if (statement.kind === "assign") {
-          const fractionalDebit = this.compilePreviousRandomFractionalDebitRun(statements, index);
-          if (fractionalDebit > 1) {
-            index += fractionalDebit - 1;
+          const fractionalDecrement = this.compilePriorRandomFractionalDecrementRun(statements, index);
+          if (fractionalDecrement > 1) {
+            index += fractionalDecrement - 1;
             continue;
           }
-          const previousRandom = this.compilePreviousRandomStateRun(statements, index);
-          if (previousRandom > 1) {
-            index += previousRandom - 1;
+          const priorRandom = this.compilePriorRandomStateRun(statements, index);
+          if (priorRandom > 1) {
+            index += priorRandom - 1;
             continue;
           }
-          const previousRandomBranch = this.compilePreviousRandomBranchRun(statements, index);
-          if (previousRandomBranch > 1) {
-            index += previousRandomBranch - 1;
+          const priorRandomBranch = this.compilePriorRandomBranchRun(statements, index);
+          if (priorRandomBranch > 1) {
+            index += priorRandomBranch - 1;
             continue;
           }
         }
@@ -22324,7 +22324,7 @@ var MKProEmulatorBundle = (() => {
           index += 1;
           continue;
         }
-        if (statement.kind === "assign" && next?.kind === "show" && index + 2 === statements.length && compileCoordListLineCountDashedReport(this, statement, next)) {
+        if (statement.kind === "assign" && next?.kind === "show" && index + 2 === statements.length && compileCoordListLineCountFormattedReport(this, statement, next)) {
           index += 1;
           continue;
         }
@@ -22372,7 +22372,7 @@ var MKProEmulatorBundle = (() => {
             continue;
           }
         }
-        if (statement.kind === "show" && next?.kind === "assign" && (statements[index + 2]?.kind === "assign" || statements[index + 2]?.kind === "indexed_assign") && statements[index + 3]?.kind === "if" && this.compileShowReadDebitCreditGuard(
+        if (statement.kind === "show" && next?.kind === "assign" && (statements[index + 2]?.kind === "assign" || statements[index + 2]?.kind === "indexed_assign") && statements[index + 3]?.kind === "if" && this.compileShowReadGuardedTransfer(
           statement,
           next,
           statements[index + 2],
@@ -22394,12 +22394,12 @@ var MKProEmulatorBundle = (() => {
         }
         if (statement.kind === "show" && next?.kind === "input") {
           const consumer = statements[index + 2];
-          if ((consumer?.kind === "return_value" || consumer?.kind === "assign") && this.compileShowReadStakeSinResult(statement, next, consumer)) {
+          if ((consumer?.kind === "return_value" || consumer?.kind === "assign") && this.compileShowReadStackStopRiskResult(statement, next, consumer)) {
             index += 2;
             continue;
           }
         }
-        if (statement.kind === "show" && (next?.kind === "return_value" || next?.kind === "assign") && this.compileShowReadStakeSinResult(statement, void 0, next)) {
+        if (statement.kind === "show" && (next?.kind === "return_value" || next?.kind === "assign") && this.compileShowReadStackStopRiskResult(statement, void 0, next)) {
           index += 1;
           continue;
         }
@@ -22634,67 +22634,67 @@ var MKProEmulatorBundle = (() => {
       });
       return true;
     }
-    // Shared recognizer for the "previous random" idioms: a `temp = seed` copy
+    // Shared recognizer for the "prior random" idioms: a `temp = seed` copy
     // immediately followed by a `seed = random()` update (directly or through a
     // single-statement random proc). Returns the parked-in-Y previous value name
     // (`temp`) and the `seed` being refreshed, or undefined when the two-statement
-    // preamble does not match. The three previous-random runs (stack reuse, branch,
-    // and fractional debit) share this preamble plus the kept-in-Y head below; they
+    // preamble does not match. The three prior-random runs (stack reuse, branch,
+    // and fractional decrement) share this preamble plus the kept-in-Y head below; they
     // differ only in how they consume `temp` (parked in Y) and the new `seed` (X).
-    matchPreviousRandomSeedUpdate(previous, randomUpdate) {
+    matchPriorRandomSeedUpdate(previous, randomUpdate) {
       if (previous?.kind !== "assign" || previous.expr.kind !== "identifier") return void 0;
       if (randomUpdate === void 0) return void 0;
       const seed = previous.expr.name;
       if (this.randomUpdateTarget(randomUpdate) !== seed) return void 0;
       return { temp: previous.target, seed };
     }
-    // Emit the kept-in-Y head shared by every previous-random idiom: recall the
+    // Emit the kept-in-Y head shared by every prior-random idiom: recall the
     // current seed, duplicate it into Y with В↑, draw the next random() into X, and
     // store it back as the new seed. The old seed stays parked in Y for the
     // following stack-direct consumer, so it is never spilled and recomputed.
-    emitPreviousRandomSeedUpdate(seed, recallLine, updateLine) {
-      this.emitRecall(seed, `previous random ${seed}`, recallLine);
-      this.emitOp(14, "\u0412\u2191", `previous random keep ${seed}`, updateLine);
+    emitPriorRandomSeedUpdate(seed, recallLine, updateLine) {
+      this.emitRecall(seed, `prior random ${seed}`, recallLine);
+      this.emitOp(14, "\u0412\u2191", `prior random keep ${seed}`, updateLine);
       this.emitOp(59, "\u041A \u0421\u0427", "random()", updateLine);
       this.currentXVariable = void 0;
       this.currentXAliases.clear();
       this.currentXKnownZero = false;
       this.emitStore(seed, `set ${seed}`, updateLine);
     }
-    compilePreviousRandomStateRun(statements, index) {
+    compilePriorRandomStateRun(statements, index) {
       const previous = statements[index];
       const randomUpdate = statements[index + 1];
       const consumer = statements[index + 2];
-      const seedUpdate = this.matchPreviousRandomSeedUpdate(previous, randomUpdate);
+      const seedUpdate = this.matchPriorRandomSeedUpdate(previous, randomUpdate);
       if (seedUpdate === void 0 || consumer?.kind !== "assign") return 0;
       const { temp, seed } = seedUpdate;
       if (consumer.target !== temp) return 0;
       if (!expressionReferencesIdentifier(consumer.expr, temp)) return 0;
       if (!expressionReferencesIdentifier(consumer.expr, seed)) return 0;
-      if (!expressionCanUsePreviousRandomPrefix(consumer.expr, temp, seed)) return 0;
-      if (!this.compileExpressionFromPreviousRandom(consumer.expr, temp, seed, consumer.line)) return 0;
+      if (!expressionCanUsePriorRandomPrefix(consumer.expr, temp, seed)) return 0;
+      if (!this.compileExpressionFromPriorRandom(consumer.expr, temp, seed, consumer.line)) return 0;
       this.emitStore(consumer.target, `set ${consumer.target}`, consumer.line);
       this.optimizations.push({
-        name: "previous-random-stack-reuse",
+        name: "prior-random-stack-reuse",
         detail: `Kept previous ${seed} in Y while updating ${seed} with random() for ${consumer.target} at line ${consumer.line}.`
       });
       return 3;
     }
-    compilePreviousRandomBranchRun(statements, index) {
+    compilePriorRandomBranchRun(statements, index) {
       const previous = statements[index];
       const randomUpdate = statements[index + 1];
       const branch = statements[index + 2];
-      const seedUpdate = this.matchPreviousRandomSeedUpdate(previous, randomUpdate);
+      const seedUpdate = this.matchPriorRandomSeedUpdate(previous, randomUpdate);
       if (seedUpdate === void 0 || branch?.kind !== "if") return 0;
       const { temp, seed } = seedUpdate;
       if (statementsReadIdentifierBeforeWrite(statements.slice(index + 3), temp)) return 0;
-      if (!previousRandomLessThanCurrentCondition(branch.condition, temp, seed)) return 0;
-      this.emitPreviousRandomSeedUpdate(seed, previous.line, randomUpdate.line);
-      this.emitOp(17, "-", "previous random compare", branch.line);
-      const falseLabel = this.freshLabel("previous_random_false");
+      if (!priorRandomLessThanCurrentCondition(branch.condition, temp, seed)) return 0;
+      this.emitPriorRandomSeedUpdate(seed, previous.line, randomUpdate.line);
+      this.emitOp(17, "-", "prior random compare", branch.line);
+      const falseLabel = this.freshLabel("prior_random_false");
       const thenTerminates = this.statementsTerminate(branch.thenBody);
-      const endLabel = branch.elseBody !== void 0 && !thenTerminates ? this.freshLabel("previous_random_end") : void 0;
-      this.emitJump(92, "F x<0", falseLabel, "false branch for previous random <", branch.line);
+      const endLabel = branch.elseBody !== void 0 && !thenTerminates ? this.freshLabel("prior_random_end") : void 0;
+      this.emitJump(92, "F x<0", falseLabel, "false branch for prior random <", branch.line);
       this.compileStatements(branch.thenBody);
       if (branch.elseBody !== void 0) {
         if (endLabel !== void 0) this.emitJump(81, "\u0411\u041F", endLabel, "if end", branch.line);
@@ -22705,83 +22705,83 @@ var MKProEmulatorBundle = (() => {
         this.emitLabel(falseLabel);
       }
       this.optimizations.push({
-        name: "previous-random-branch-stack-reuse",
+        name: "prior-random-branch-stack-reuse",
         detail: `Kept previous ${seed} in Y while updating ${seed} for a following branch at line ${branch.line}.`
       });
       return 3;
     }
-    compilePreviousRandomFractionalDebitRun(statements, index) {
+    compilePriorRandomFractionalDecrementRun(statements, index) {
       const previous = statements[index];
       const randomUpdate = statements[index + 1];
       const consumer = statements[index + 2];
       const guarded = statements[index + 3];
-      const seedUpdate = this.matchPreviousRandomSeedUpdate(previous, randomUpdate);
+      const seedUpdate = this.matchPriorRandomSeedUpdate(previous, randomUpdate);
       if (seedUpdate === void 0 || consumer?.kind !== "assign" || guarded?.kind !== "if") return 0;
       const { temp, seed } = seedUpdate;
       if (consumer.target !== temp) return 0;
       if (statementsReadIdentifierBeforeWrite(statements.slice(index + 4), temp)) return 0;
-      const plan = this.matchPreviousRandomFractionalDebit(consumer.expr, temp, seed, guarded);
+      const plan = this.matchPriorRandomFractionalDecrement(consumer.expr, temp, seed, guarded);
       if (plan === void 0) return 0;
-      const distanceAlreadyInX = index > 0 && statements[index - 1]?.kind === "indexed_assign" && expressionEquals(statements[index - 1].target, plan.distance);
-      if (!distanceAlreadyInX) {
-        this.emitAssignableRecall(plan.distance, `fractional debit ${this.assignableTargetText(plan.distance)}`, previous.line);
+      const amountAlreadyInX = index > 0 && statements[index - 1]?.kind === "indexed_assign" && expressionEquals(statements[index - 1].target, plan.amount);
+      if (!amountAlreadyInX) {
+        this.emitAssignableRecall(plan.amount, `fractional decrement ${this.assignableTargetText(plan.amount)}`, previous.line);
       }
-      this.emitOp(53, "\u041A {x}", "fractional debit distance frac", previous.line);
-      this.emitPreviousRandomSeedUpdate(seed, previous.line, randomUpdate.line);
-      this.emitOp(16, "+", "previous random + random()", consumer.line);
+      this.emitOp(53, "\u041A {x}", "fractional decrement amount frac", previous.line);
+      this.emitPriorRandomSeedUpdate(seed, previous.line, randomUpdate.line);
+      this.emitOp(16, "+", "prior random + random()", consumer.line);
       this.emitNumberOrPreload("1");
-      this.emitOp(16, "+", "previous random additive term", consumer.line);
+      this.emitOp(16, "+", "prior random additive term", consumer.line);
       this.emitNumberOrPreload(plan.factor);
-      this.emitOp(18, "*", "fractional debit factor", consumer.line);
-      this.emitAssignableRecall(plan.defense, `fractional debit divisor ${this.assignableTargetText(plan.defense)}`, consumer.line);
-      this.emitAssignableRecall(plan.distance, `fractional debit numerator ${this.assignableTargetText(plan.distance)}`, consumer.line);
-      this.emitOp(19, "/", "fractional debit distance ratio", consumer.line);
-      this.emitOp(19, "/", "fractional debit scaled step", consumer.line);
-      this.emitOp(52, "\u041A [x]", "fractional debit int step", consumer.line);
+      this.emitOp(18, "*", "fractional decrement factor", consumer.line);
+      this.emitAssignableRecall(plan.divisor, `fractional decrement divisor ${this.assignableTargetText(plan.divisor)}`, consumer.line);
+      this.emitAssignableRecall(plan.amount, `fractional decrement numerator ${this.assignableTargetText(plan.amount)}`, consumer.line);
+      this.emitOp(19, "/", "fractional decrement amount ratio", consumer.line);
+      this.emitOp(19, "/", "fractional decrement scaled step", consumer.line);
+      this.emitOp(52, "\u041A [x]", "fractional decrement int step", consumer.line);
       this.emitNumberOrPreload(plan.scale);
-      this.emitOp(19, "/", "fractional debit scale", consumer.line);
-      this.emitOp(17, "-", "fractional debit remaining distance", guarded.line);
-      this.emitOp(23, "F lg", "fractional debit domain-error guard trap", guarded.line);
-      this.emitOp(15, "F \u0412x", "fractional debit restore remaining distance", guarded.line);
-      this.emitAssignableRecall(plan.distance, `fractional debit integer ${this.assignableTargetText(plan.distance)}`, guarded.line);
-      this.emitOp(52, "\u041A [x]", "fractional debit integer part", guarded.line);
-      this.emitOp(16, "+", "fractional debit rebuild value", guarded.line);
-      this.emitAssignableStore(plan.distance, guarded.line);
+      this.emitOp(19, "/", "fractional decrement scale", consumer.line);
+      this.emitOp(17, "-", "fractional decrement remaining amount", guarded.line);
+      this.emitOp(23, "F lg", "fractional decrement domain-error guard trap", guarded.line);
+      this.emitOp(15, "F \u0412x", "fractional decrement restore remaining amount", guarded.line);
+      this.emitAssignableRecall(plan.amount, `fractional decrement integer ${this.assignableTargetText(plan.amount)}`, guarded.line);
+      this.emitOp(52, "\u041A [x]", "fractional decrement integer part", guarded.line);
+      this.emitOp(16, "+", "fractional decrement rebuild value", guarded.line);
+      this.emitAssignableStore(plan.amount, guarded.line);
       this.optimizations.push({
-        name: "previous-random-fractional-debit",
-        detail: `Kept previous ${seed} and frac(${this.assignableTargetText(plan.distance)}) on the stack while applying guarded fractional debit${distanceAlreadyInX ? " and reused the just-stored distance in X" : ""}.`
+        name: "prior-random-fractional-decrement",
+        detail: `Kept previous ${seed} and frac(${this.assignableTargetText(plan.amount)}) on the stack while applying guarded fractional decrement${amountAlreadyInX ? " and reused the just-stored amount in X" : ""}.`
       });
       return 4;
     }
-    matchPreviousRandomFractionalDebit(expr, temp, seed, guarded) {
+    matchPriorRandomFractionalDecrement(expr, temp, seed, guarded) {
       if (expr.kind !== "binary" || expr.op !== "/" || expr.right.kind !== "number") return void 0;
       const scale = expr.right.raw;
       const intCall = expr.left;
       if (intCall.kind !== "call" || intCall.callee.toLowerCase() !== "int" || intCall.args.length !== 1) return void 0;
       const ratio = intCall.args[0];
       if (ratio.kind !== "binary" || ratio.op !== "/" || ratio.right.kind !== "indexed") return void 0;
-      const defense = ratio.right;
+      const divisor = ratio.right;
       const withDistance = ratio.left;
       if (withDistance.kind !== "binary" || withDistance.op !== "*" || withDistance.right.kind !== "indexed") return void 0;
-      const distance = withDistance.right;
+      const amount = withDistance.right;
       const withFactor = withDistance.left;
       if (withFactor.kind !== "binary" || withFactor.op !== "*" || withFactor.right.kind !== "number") return void 0;
       const factor = withFactor.right.raw;
       const additiveTerms2 = flattenAdditionTerms(withFactor.left);
       if (additiveTerms2.length !== 3 || !additiveTerms2.some((term) => term.kind === "identifier" && term.name === temp) || !additiveTerms2.some((term) => term.kind === "identifier" && term.name === seed) || !additiveTerms2.some((term) => isNumericValue2(term, 1))) return void 0;
-      if (!this.fractionalDebitGuardMatches(guarded, distance, temp)) return void 0;
-      return { distance, defense, factor, scale };
+      if (!this.fractionalDecrementGuardMatches(guarded, amount, temp)) return void 0;
+      return { amount, divisor, factor, scale };
     }
-    fractionalDebitGuardMatches(guarded, distance, temp) {
+    fractionalDecrementGuardMatches(guarded, amount, temp) {
       if (guarded.condition.op !== "<=" || !isZeroExpression(guarded.condition.right)) return false;
       const left = guarded.condition.left;
       if (left.kind !== "binary" || left.op !== "-") return false;
       const frac = left.left;
-      if (frac.kind !== "call" || frac.callee.toLowerCase() !== "frac" || frac.args.length !== 1 || !expressionEquals(frac.args[0], distance)) return false;
+      if (frac.kind !== "call" || frac.callee.toLowerCase() !== "frac" || frac.args.length !== 1 || !expressionEquals(frac.args[0], amount)) return false;
       if (left.right.kind !== "identifier" || left.right.name !== temp) return false;
       if (!statementsAreDomainErrorTrap(this, guarded.thenBody)) return false;
       const update = guarded.elseBody?.[0];
-      return guarded.elseBody?.length === 1 && update?.kind === "indexed_assign" && expressionEquals(update.target, distance) && update.expr.kind === "binary" && update.expr.op === "-" && expressionEquals(update.expr.left, distance) && update.expr.right.kind === "identifier" && update.expr.right.name === temp;
+      return guarded.elseBody?.length === 1 && update?.kind === "indexed_assign" && expressionEquals(update.target, amount) && update.expr.kind === "binary" && update.expr.op === "-" && expressionEquals(update.expr.left, amount) && update.expr.right.kind === "identifier" && update.expr.right.name === temp;
     }
     compileSingleUseStackTemp(statements, index) {
       const temp = statements[index];
@@ -22980,20 +22980,20 @@ var MKProEmulatorBundle = (() => {
       }
       return statement.target;
     }
-    compileExpressionFromPreviousRandom(expr, previous, seed, line) {
-      this.emitPreviousRandomSeedUpdate(seed, line, line);
-      return this.compileExpressionWithPreviousRandomPrefix(expr, previous, seed, line);
+    compileExpressionFromPriorRandom(expr, previous, seed, line) {
+      this.emitPriorRandomSeedUpdate(seed, line, line);
+      return this.compileExpressionWithPriorRandomPrefix(expr, previous, seed, line);
     }
-    compileExpressionWithPreviousRandomPrefix(expr, previous, seed, line) {
-      const additiveTerms2 = previousRandomAdditiveRest(expr, previous, seed);
+    compileExpressionWithPriorRandomPrefix(expr, previous, seed, line) {
+      const additiveTerms2 = priorRandomAdditiveRest(expr, previous, seed);
       if (additiveTerms2 !== void 0) {
-        this.emitOp(16, "+", "previous random + random()", line);
+        this.emitOp(16, "+", "prior random + random()", line);
         this.currentXVariable = void 0;
         this.currentXAliases.clear();
         this.currentXKnownZero = false;
         for (const term of additiveTerms2) {
           compileExpression(this, term);
-          this.emitOp(16, "+", "previous random additive term", line);
+          this.emitOp(16, "+", "prior random additive term", line);
           this.currentXVariable = void 0;
           this.currentXAliases.clear();
           this.currentXKnownZero = false;
@@ -23001,7 +23001,7 @@ var MKProEmulatorBundle = (() => {
         return true;
       }
       if (expr.kind === "binary") {
-        if (this.compileExpressionWithPreviousRandomPrefix(expr.left, previous, seed, line)) {
+        if (this.compileExpressionWithPriorRandomPrefix(expr.left, previous, seed, line)) {
           compileExpression(this, expr.right);
           this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`, line);
           this.currentXVariable = void 0;
@@ -23009,7 +23009,7 @@ var MKProEmulatorBundle = (() => {
           this.currentXKnownZero = false;
           return true;
         }
-        if ((expr.op === "+" || expr.op === "*") && this.compileExpressionWithPreviousRandomPrefix(expr.right, previous, seed, line)) {
+        if ((expr.op === "+" || expr.op === "*") && this.compileExpressionWithPriorRandomPrefix(expr.right, previous, seed, line)) {
           compileExpression(this, expr.left);
           this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`, line);
           this.currentXVariable = void 0;
@@ -23019,7 +23019,7 @@ var MKProEmulatorBundle = (() => {
         }
         return false;
       }
-      if (expr.kind === "call" && expr.callee.toLowerCase() === "int" && expr.args.length === 1 && this.compileExpressionWithPreviousRandomPrefix(expr.args[0], previous, seed, line)) {
+      if (expr.kind === "call" && expr.callee.toLowerCase() === "int" && expr.args.length === 1 && this.compileExpressionWithPriorRandomPrefix(expr.args[0], previous, seed, line)) {
         this.emitOp(52, "\u041A [x]", "int()", line);
         this.currentXVariable = void 0;
         this.currentXAliases.clear();
@@ -23143,54 +23143,54 @@ var MKProEmulatorBundle = (() => {
       if (this.allocation.registers[decrement.target] === void 0) return false;
       return consumer.kind === "dispatch" ? this.inputFeedsOnlyFollowingDispatch(input, consumer) : this.inputFeedsOnlyFollowingCondition(input, consumer);
     }
-    compileShowReadDebitCreditGuard(show, input, debit, branch, tail) {
-      if (this.loweringOptions.domainErrorGuards !== true || this.loweringOptions.showReadDebitCreditGuard !== true) return false;
+    compileShowReadGuardedTransfer(show, input, decrement, branch, tail) {
+      if (this.loweringOptions.domainErrorGuards !== true || this.loweringOptions.showReadGuardedTransfer !== true) return false;
       const temp = input.target;
-      if (!this.readTransformIsStackDebitSafe(input.expr)) return false;
+      if (!this.readTransformIsStackDecrementSafe(input.expr)) return false;
       if (statementsReadIdentifier2(tail, temp)) return false;
-      if (!this.assignmentIsSelfUpdate(debit, "-", temp)) return false;
-      if (!this.conditionIsNegativeTargetGuard(branch.condition, debit.target)) return false;
+      if (!this.assignmentIsSelfUpdate(decrement, "-", temp)) return false;
+      if (!this.conditionIsNegativeTargetGuard(branch.condition, decrement.target)) return false;
       if (!statementsAreDomainErrorTrap(this, branch.thenBody)) return false;
       const elseBody = branch.elseBody;
       if (elseBody === void 0 || elseBody.length < 2) return false;
-      const credit = elseBody[0];
-      const creditGuard = elseBody[1];
-      if (credit?.kind !== "assign" && credit?.kind !== "indexed_assign") return false;
-      if (!this.assignmentIsSelfUpdate(credit, "+", temp)) return false;
-      if (creditGuard?.kind !== "if") return false;
-      if (!this.conditionIsNegativeTargetGuard(creditGuard.condition, credit.target)) return false;
-      if (!statementsAreDomainErrorTrap(this, creditGuard.thenBody)) return false;
-      const continuation = creditGuard.elseBody ?? elseBody.slice(2);
-      if (creditGuard.elseBody !== void 0 && elseBody.length !== 2) return false;
+      const increment = elseBody[0];
+      const incrementGuard = elseBody[1];
+      if (increment?.kind !== "assign" && increment?.kind !== "indexed_assign") return false;
+      if (!this.assignmentIsSelfUpdate(increment, "+", temp)) return false;
+      if (incrementGuard?.kind !== "if") return false;
+      if (!this.conditionIsNegativeTargetGuard(incrementGuard.condition, increment.target)) return false;
+      if (!statementsAreDomainErrorTrap(this, incrementGuard.thenBody)) return false;
+      const continuation = incrementGuard.elseBody ?? elseBody.slice(2);
+      if (incrementGuard.elseBody !== void 0 && elseBody.length !== 2) return false;
       if (statementsReadIdentifier2(continuation, temp)) return false;
       compileShow(this, show.display, show.line);
       this.armInputInX();
       compileExpression(this, input.expr);
       this.clearArmedInputInX();
-      this.emitAssignableRecall(debit.target, `debit ${this.assignableTargetText(debit.target)}`, debit.line);
-      this.emitOp(20, "X\u2194Y", "debit input order", debit.line);
-      this.emitOp(17, "-", "debit input", debit.line);
-      this.emitAssignableStore(debit.target, debit.line);
-      const trap = this.freshLabel("debit_credit_trap");
-      this.emitJump(89, "F x>=0", trap, "debit negative trap", branch.line);
-      this.emitOp(15, "F \u0412x", "restore debited input", input.line);
-      this.emitAssignableRecall(credit.target, `credit ${this.assignableTargetText(credit.target)}`, credit.line);
-      this.emitOp(16, "+", "credit input", credit.line);
-      this.emitAssignableStore(credit.target, credit.line);
+      this.emitAssignableRecall(decrement.target, `decrement ${this.assignableTargetText(decrement.target)}`, decrement.line);
+      this.emitOp(20, "X\u2194Y", "decrement input order", decrement.line);
+      this.emitOp(17, "-", "decrement input", decrement.line);
+      this.emitAssignableStore(decrement.target, decrement.line);
+      const trap = this.freshLabel("decrement_increment_trap");
+      this.emitJump(89, "F x>=0", trap, "decrement negative trap", branch.line);
+      this.emitOp(15, "F \u0412x", "restore decremented input", input.line);
+      this.emitAssignableRecall(increment.target, `increment ${this.assignableTargetText(increment.target)}`, increment.line);
+      this.emitOp(16, "+", "increment input", increment.line);
+      this.emitAssignableStore(increment.target, increment.line);
       this.emitLabel(trap);
-      emitDomainTrapOnX(this, 33, "F \u221A", "debit/credit domain-error guard trap", creditGuard.line);
+      emitDomainTrapOnX(this, 33, "F \u221A", "decrement/increment domain-error guard trap", incrementGuard.line);
       this.compileStatements(continuation);
       this.optimizations.push({
-        name: "show-read-debit-credit-guard",
-        detail: `Kept read ${temp} on the stack while debiting ${this.assignableTargetText(debit.target)} and crediting ${this.assignableTargetText(credit.target)}.`
+        name: "show-read-guarded-transfer",
+        detail: `Kept read ${temp} on the stack while decrementing ${this.assignableTargetText(decrement.target)} and incrementing ${this.assignableTargetText(increment.target)}.`
       });
       return true;
     }
-    readTransformIsStackDebitSafe(expr) {
+    readTransformIsStackDecrementSafe(expr) {
       if (expr.kind === "call" && expr.callee.toLowerCase() === "read") return expr.args.length === 0;
       if (expr.kind !== "call" || expr.args.length !== 1) return false;
       const callee = expr.callee.toLowerCase();
-      return (callee === "int" || callee === "frac") && this.readTransformIsStackDebitSafe(expr.args[0]);
+      return (callee === "int" || callee === "frac") && this.readTransformIsStackDecrementSafe(expr.args[0]);
     }
     assignmentIsSelfUpdate(statement, op2, temp) {
       const expr = statement.expr;
@@ -23290,22 +23290,22 @@ var MKProEmulatorBundle = (() => {
       });
       return true;
     }
-    compileShowReadStakeSinResult(show, input, consumer) {
-      const stake = this.singlePlainDisplaySource(show.display);
-      if (stake === void 0) return false;
+    compileShowReadStackStopRiskResult(show, input, consumer) {
+      const parked = this.singlePlainDisplaySource(show.display);
+      if (parked === void 0) return false;
       let match;
       if (input !== void 0) {
         const inputReads = countIdentifierReads(consumer.expr, input.target);
         if (inputReads === 0 || (this.readCounts.get(input.target) ?? 0) !== inputReads) return false;
-        match = matchStackStopRisk(consumer.expr, stake, input.target);
+        match = matchStackStopRisk(consumer.expr, parked, input.target);
       } else {
-        match = matchStackStopRisk(consumer.expr, stake);
+        match = matchStackStopRisk(consumer.expr, parked);
       }
       if (match === void 0) return false;
-      this.emitRecall(stake, `display ${show.display} source`, show.line);
-      this.emitOp(14, "\u0412\u2191", "keep displayed stake in Y", show.line);
+      this.emitRecall(parked, `display ${show.display} source`, show.line);
+      this.emitOp(14, "\u0412\u2191", "keep displayed value in Y", show.line);
       this.emitOp(80, "\u0421/\u041F", `show ${show.display}`, show.line);
-      this.armValueInY(stake);
+      this.armValueInY(parked);
       compileStackStopRiskTail(this, match, {
         inputComment: input === void 0 ? "risk input read()" : `risk input ${input.target}`,
         inputLine: input?.line ?? consumer.line,
@@ -23318,8 +23318,8 @@ var MKProEmulatorBundle = (() => {
         this.emitStore(consumer.target, `set ${consumer.target}`, consumer.line);
       }
       this.optimizations.push({
-        name: "show-read-stake-sin-lowering",
-        detail: `Reused displayed ${stake} as the stack stake for ${expressionToIntentText(consumer.expr)}.`
+        name: "show-read-stack-stop-risk-lowering",
+        detail: `Reused displayed ${parked} as the parked Y value for ${expressionToIntentText(consumer.expr)}.`
       });
       return true;
     }
@@ -23334,7 +23334,7 @@ var MKProEmulatorBundle = (() => {
       this.currentXVariable = name;
       this.currentXAliases = /* @__PURE__ */ new Set([name]);
       this.currentXKnownZero = false;
-      this.currentXDashedCoordReportBody = void 0;
+      this.currentXFormattedCoordReportBody = void 0;
     }
     armInputInX() {
       this.inputArmedInX = true;
@@ -23526,7 +23526,7 @@ var MKProEmulatorBundle = (() => {
           this.emitOp(82, "\u0412/\u041E", "return value", statement.line);
           return;
         case "decimal_series":
-          compileDecimalFactorialSeries(this, statement);
+          compileDecimalSeries(this, statement);
           return;
       }
     }
@@ -23773,8 +23773,8 @@ var MKProEmulatorBundle = (() => {
       seenProcs.add(proc.name);
       return this.statementListEndsMachineFlow(proc.body, seenProcs);
     }
-    currentXDashedCoordReportBodyMatches(template) {
-      const body = this.currentXDashedCoordReportBody;
+    currentXFormattedCoordReportBodyMatches(template) {
+      const body = this.currentXFormattedCoordReportBody;
       return body !== void 0 && body.cell.name === template.cell.name && body.cell.width === template.cell.width && body.bearing.name === template.bearing.name && body.bearing.width === template.bearing.width;
     }
     selectDisplayStrategy(display) {
@@ -24181,13 +24181,13 @@ var MKProEmulatorBundle = (() => {
       const last = proc.body.at(-1);
       return last?.kind === "assign" ? last.target : void 0;
     }
-    dashedCoordReportTemplateAfterLineCount(assignment, statement) {
+    formattedCoordReportTemplateAfterLineCount(assignment, statement) {
       if (statement?.kind !== "show") return void 0;
       const call = coordListLineCountCall(assignment.expr);
       if (call === void 0) return void 0;
       const display = this.ast.displays.find((candidate) => candidate.name === statement.display);
       if (display === void 0) return void 0;
-      const template = dashedCoordReportDisplayTemplate(display);
+      const template = formattedCoordReportDisplayTemplate(display);
       if (template === void 0) return void 0;
       if (assignment.target !== template.bearing.name) return void 0;
       if (!expressionEquals(call.cell, { kind: "identifier", name: template.cell.name })) return void 0;
@@ -25135,7 +25135,7 @@ var MKProEmulatorBundle = (() => {
       if (call === void 0) return;
       const display = ast.displays.find((candidate) => candidate.name === statement.display);
       if (display === void 0) return;
-      const template = dashedCoordReportDisplayTemplate(display);
+      const template = formattedCoordReportDisplayTemplate(display);
       if (template === void 0) return;
       if (assignment.target !== template.bearing.name) return;
       if (!expressionEquals(call.cell, { kind: "identifier", name: template.cell.name })) return;
@@ -25232,7 +25232,7 @@ var MKProEmulatorBundle = (() => {
     };
     for (const display of ast.displays) {
       if (!display.items.some((item) => item.kind === "source" && item.name === cellName)) continue;
-      const template = dashedCoordReportDisplayTemplate(display);
+      const template = formattedCoordReportDisplayTemplate(display);
       if (template?.cell.name !== cellName) return false;
     }
     return ast.entries.every((entry) => statementsSafe(entry.body)) && ast.procs.every((proc) => statementsSafe(proc.body));
@@ -25853,9 +25853,9 @@ var MKProEmulatorBundle = (() => {
     }
     for (const proc of ast.procs) {
       const xParamReturn = matchXParamReturnDecay(proc);
-      const xParamStakeSin = matchXParamStakeSinRead(ast, proc);
+      const xParamStackStopRisk = matchXParamStackStopRiskRead(ast, proc);
       for (const param of proc.params ?? []) {
-        if (xParamReturn?.param === param || xParamStakeSin?.param === param || xParamNames.has(param)) continue;
+        if (xParamReturn?.param === param || xParamStackStopRisk?.param === param || xParamNames.has(param)) continue;
         declared.add(param);
         variables.add(param);
       }
@@ -26045,7 +26045,7 @@ var MKProEmulatorBundle = (() => {
     if (name === "pow10" && expr.args.length === 1) return true;
     return name === "pow" && expr.args.length === 2 && isNumericValue2(expr.args[0], 10);
   }
-  function previousRandomAdditiveRest(expr, previous, seed) {
+  function priorRandomAdditiveRest(expr, previous, seed) {
     const terms = additiveTerms(expr);
     let sawPrevious = false;
     let sawSeed = false;
@@ -26075,12 +26075,12 @@ var MKProEmulatorBundle = (() => {
   function isIdentifierNamed(expr, name) {
     return expr.kind === "identifier" && expr.name === name;
   }
-  function expressionCanUsePreviousRandomPrefix(expr, previous, seed) {
-    if (previousRandomAdditiveRest(expr, previous, seed) !== void 0) return true;
+  function expressionCanUsePriorRandomPrefix(expr, previous, seed) {
+    if (priorRandomAdditiveRest(expr, previous, seed) !== void 0) return true;
     if (expr.kind === "binary") {
-      return expressionCanUsePreviousRandomPrefix(expr.left, previous, seed) || (expr.op === "+" || expr.op === "*") && expressionCanUsePreviousRandomPrefix(expr.right, previous, seed);
+      return expressionCanUsePriorRandomPrefix(expr.left, previous, seed) || (expr.op === "+" || expr.op === "*") && expressionCanUsePriorRandomPrefix(expr.right, previous, seed);
     }
-    return expr.kind === "call" && expr.callee.toLowerCase() === "int" && expr.args.length === 1 && expressionCanUsePreviousRandomPrefix(expr.args[0], previous, seed);
+    return expr.kind === "call" && expr.callee.toLowerCase() === "int" && expr.args.length === 1 && expressionCanUsePriorRandomPrefix(expr.args[0], previous, seed);
   }
   function collectPreincrementIndexedStorePointers(ast) {
     const pointers = /* @__PURE__ */ new Set();
@@ -27250,7 +27250,7 @@ var MKProEmulatorBundle = (() => {
     return display.items.length === 7 && leader?.kind === "source" && firstLiteral?.kind === "literal" && normalizeDisplayTemplateLiteral(firstLiteral.text) === ".-" && score?.kind === "source" && secondLiteral?.kind === "literal" && normalizeDisplayTemplateLiteral(secondLiteral.text) === "-" && total?.kind === "source" && thirdLiteral?.kind === "literal" && normalizeDisplayTemplateLiteral(thirdLiteral.text) === "-" && exponent?.kind === "source";
   }
   function displayMantissaMaskTextForAst(ast, display) {
-    if (dashedCoordReportDisplayTemplate(display) !== void 0) return void 0;
+    if (formattedCoordReportDisplayTemplate(display) !== void 0) return void 0;
     const template = planDisplayForAst(ast, display).find((plan) => plan.kind === "fixed-cells")?.template;
     if (template === void 0) return void 0;
     const hasVideoLiteral = template.cells.some((cell) => cell.kind === "literal" && cell.cell > 9);
@@ -27429,7 +27429,7 @@ var MKProEmulatorBundle = (() => {
       for (const statement of statements) {
         if (statement.kind === "return_value" && statement.expr.kind === "call") {
           const target = functionProcs.get(statement.expr.callee);
-          if (target !== void 0 && matchXParamReturnDecay(target) === void 0 && matchXParamStakeSinRead(ast, target) === void 0) {
+          if (target !== void 0 && matchXParamReturnDecay(target) === void 0 && matchXParamStackStopRiskRead(ast, target) === void 0) {
             for (let index = 0; index < statement.expr.args.length; index += 1) {
               variables.add(functionTailArgScratchName(target.name, index));
             }
@@ -27640,7 +27640,7 @@ var MKProEmulatorBundle = (() => {
         }
       }
     }
-    if (programUsesDashedCoordReport(ast)) {
+    if (programUsesFormattedCoordReport(ast)) {
       variables.add(COORD_LIST_DX);
     }
     const visitExpr = (expr) => {
@@ -28997,7 +28997,7 @@ var MKProEmulatorBundle = (() => {
   function buildGeneratedSetupProgram(ast, allocation, preloads, options, machineProfile, diagnostics, optimizations, warnings, candidates) {
     const fields = setupProgramFields(ast);
     const executablePreloads = preloads.flatMap((preload) => executableSetupPreload(preload));
-    const needsSetupProgram = fields.length > 0 || executablePreloads.some((preload) => preload.kind === "display-literal") || programUsesDashedCoordReport(ast);
+    const needsSetupProgram = fields.length > 0 || executablePreloads.some((preload) => preload.kind === "display-literal") || programUsesFormattedCoordReport(ast);
     if (!needsSetupProgram) return void 0;
     const setupOptimizations = [];
     const setupContext = new EmitContext(

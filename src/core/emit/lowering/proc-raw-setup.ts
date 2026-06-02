@@ -30,11 +30,11 @@ import type {
   ExecutableSetupPreload,
   StackUnaryDerivationCall,
   XParamProcLowering,
-  XParamStakeSinRead,
+  XParamStackStopRiskRead,
 } from "../lowering-helpers.ts";
 import {
   COORD_LIST_DX,
-  dashedCoordReportFormatForProgram,
+  formattedCoordReportFormatForProgram,
   NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE,
   PACKED_COUNTER_PREFIX,
   buildDiagnostic,
@@ -65,7 +65,7 @@ import {
   matchNegativeZeroThresholdCondition,
   matchStackUnaryDerivationCall,
   matchXParamReturnDecay,
-  matchXParamStakeSinRead,
+  matchXParamStackStopRiskRead,
   normalizeConstantLiteral,
   numberExpression,
   orderRawInputs,
@@ -224,13 +224,13 @@ export function compileSetupProgramWithPreloads(ctx: LoweringCtx,
       compileExpression(ctx, field.initial);
       ctx.emitStore(field.name, `setup ${field.name}`, field.line, true);
     }
-    const dashedReportFormat = dashedCoordReportFormatForProgram(ctx.ast);
-    if (dashedReportFormat !== undefined) {
+    const formattedReportFormat = formattedCoordReportFormatForProgram(ctx.ast);
+    if (formattedReportFormat !== undefined) {
       const register = ctx.allocation.registers[COORD_LIST_DX];
-      const program = displayLiteralProgram(dashedReportFormat.mask);
+      const program = displayLiteralProgram(formattedReportFormat.mask);
       if (register !== undefined && program !== undefined && program.kind !== "error") {
-        emitDisplayLiteralProgram(ctx, program, undefined, "setup dashed report mask");
-        ctx.emitOp(0x40 + registerIndex(register), `X->П ${register}`, "setup dashed report mask", undefined, true);
+        emitDisplayLiteralProgram(ctx, program, undefined, "setup formatted report mask");
+        ctx.emitOp(0x40 + registerIndex(register), `X->П ${register}`, "setup formatted report mask", undefined, true);
       }
     }
     if (fields.some((field) => field.initial !== undefined && randomCoordListItemPlacement(field.name, field.initial) !== undefined)) {
@@ -599,7 +599,7 @@ export function compileProcedures(ctx: LoweringCtx): void {
       ctx.compileWithinProcedure(proc, () => {
         const xParam = ctx.xParamProcs.get(proc.name);
         const xParamDecay = matchXParamReturnDecay(proc);
-        const xParamStakeSin = matchXParamStakeSinRead(ctx.ast, proc);
+        const xParamStackStopRisk = matchXParamStackStopRiskRead(ctx.ast, proc);
         if (xParamDecay !== undefined) {
           compileXParamReturnDecayBody(ctx, xParamDecay);
           ctx.emitOp(0x52, "В/О", "x-param decay return", xParamDecay.line);
@@ -607,16 +607,16 @@ export function compileProcedures(ctx: LoweringCtx): void {
             name: "x-param-return-decay",
             detail: `Compiled ${proc.name} to consume ${xParamDecay.param} directly from X.`,
           });
-        } else if (xParamStakeSin !== undefined) {
-          compileXParamStakeSinReadBody(ctx, xParamStakeSin);
-          ctx.emitOp(0x52, "В/О", "x-param stake-sin return", xParamStakeSin.line);
+        } else if (xParamStackStopRisk !== undefined) {
+          compileXParamStackStopRiskReadBody(ctx, xParamStackStopRisk);
+          ctx.emitOp(0x52, "В/О", "x-param stack-stop-risk return", xParamStackStopRisk.line);
           ctx.optimizations.push({
-            name: "x-param-stake-sin-read",
-            detail: `Compiled ${proc.name} to consume ${xParamStakeSin.param} directly from X.`,
+            name: "x-param-stack-stop-risk-read",
+            detail: `Compiled ${proc.name} to consume ${xParamStackStopRisk.param} directly from X.`,
           });
           ctx.optimizations.push({
-            name: "show-read-stake-sin-lowering",
-            detail: `Reused displayed ${xParamStakeSin.param} as the stack stake for ${proc.name}.`,
+            name: "show-read-stack-stop-risk-lowering",
+            detail: `Reused displayed ${xParamStackStopRisk.param} as the parked Y value for ${proc.name}.`,
           });
         } else if (xParam !== undefined) {
           compileXParamProcBody(ctx, proc, xParam);
@@ -684,17 +684,17 @@ function compileXParamReturnDecayBody(
     ctx.emitOp(0x11, "-", "x-param decay subtract", decay.line);
 }
 
-function compileXParamStakeSinReadBody(
+function compileXParamStackStopRiskReadBody(
   ctx: LoweringCtx,
-  stakeSin: XParamStakeSinRead,
+  risk: XParamStackStopRiskRead,
 ): void {
-    ctx.emitOp(0x0e, "В↑", "x-param stake keep displayed stake", stakeSin.showLine);
-    ctx.emitOp(0x50, "С/П", `show ${stakeSin.display}`, stakeSin.showLine);
-    ctx.armValueInY(stakeSin.param);
-    compileStackStopRiskTail(ctx, stakeSin.risk, {
+    ctx.emitOp(0x0e, "В↑", "x-param keep displayed value", risk.showLine);
+    ctx.emitOp(0x50, "С/П", `show ${risk.display}`, risk.showLine);
+    ctx.armValueInY(risk.param);
+    compileStackStopRiskTail(ctx, risk.risk, {
       inputComment: "risk input read()",
-      inputLine: stakeSin.line,
-      consumerLine: stakeSin.line,
+      inputLine: risk.line,
+      consumerLine: risk.line,
     });
     ctx.clearArmedValueInY();
 }
@@ -1196,7 +1196,7 @@ function verifiedDecimalSeriesListing(digits: number, counterStart: number): Ver
   );
 }
 
-export function compileDecimalFactorialSeries(ctx: LoweringCtx, statement: Extract<StatementAst, { kind: "decimal_series" }>): void {
+export function compileDecimalSeries(ctx: LoweringCtx, statement: Extract<StatementAst, { kind: "decimal_series" }>): void {
     const line = statement.line;
     const listing = verifiedDecimalSeriesListing(statement.digits, statement.counterStart);
     if (listing === undefined) {
@@ -1221,7 +1221,7 @@ export function compileDecimalFactorialSeries(ctx: LoweringCtx, statement: Extra
     }
 
     ctx.optimizations.push({
-      name: "decimal-factorial-series-lowering",
+      name: "decimal-series-lowering",
       detail: `Lowered decimal recurrence to ${statement.digits}-digit MK-61 program.`,
     });
 }

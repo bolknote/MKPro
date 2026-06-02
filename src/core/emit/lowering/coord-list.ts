@@ -12,7 +12,7 @@ import {
 } from "./proc-raw-setup.ts";
 import type {
   CoordListIndirectContext,
-  DashedCoordReportTemplate,
+  FormattedCoordReportTemplate,
   RandomCoordListPlacement,
 } from "../lowering-helpers.ts";
 import {
@@ -132,24 +132,24 @@ export function emitRandomCoordListCandidate(ctx: LoweringCtx,
     ctx.emitStore(COORD_LIST_CURRENT, "random coord candidate", line, true);
 }
 
-export function compileCoordListLineCountDashedReport(ctx: LoweringCtx, 
+export function compileCoordListLineCountFormattedReport(ctx: LoweringCtx, 
     assignment: Extract<StatementAst, { kind: "assign" }>,
     show: Extract<StatementAst, { kind: "show" }>,
   ): boolean {
-    const template = ctx.dashedCoordReportTemplateAfterLineCount(assignment, show);
+    const template = ctx.formattedCoordReportTemplateAfterLineCount(assignment, show);
     if (template === undefined) return false;
     if (!compileCoordListLineCountAssignment(ctx, assignment, template)) return false;
     compileShow(ctx, show.display, show.line);
     ctx.optimizations.push({
-      name: "coord-list-line-count-dashed-report-fusion",
-      detail: `Packed coord_list line_count() directly for dashed report ${show.display} at line ${assignment.line}.`,
+      name: "coord-list-line-count-formatted-report-fusion",
+      detail: `Packed coord_list line_count() directly for formatted report ${show.display} at line ${assignment.line}.`,
     });
     return true;
 }
 
 export function compileCoordListLineCountAssignment(ctx: LoweringCtx, 
     statement: Extract<StatementAst, { kind: "assign" }>,
-    dashedReport?: DashedCoordReportTemplate,
+    formattedReport?: FormattedCoordReportTemplate,
   ): boolean {
     const call = coordListLineCountCall(statement.expr);
     if (call === undefined) return false;
@@ -160,7 +160,7 @@ export function compileCoordListLineCountAssignment(ctx: LoweringCtx,
     const scaled = ctx.coordListUsesScaledDecimalStorage(call);
     if (scaled && !ctx.scaleCoordListCellInPlace(context.cell, statement.line)) return false;
 
-    emitCoordListLineCountInitialTotal(ctx, statement.target, statement.line, dashedReport);
+    emitCoordListLineCountInitialTotal(ctx, statement.target, statement.line, formattedReport);
     emitCoordListLoopSetup(ctx, context, statement.line);
 
     const start = ctx.freshLabel("coord_list_line_loop");
@@ -201,17 +201,17 @@ export function compileCoordListLineCountAssignment(ctx: LoweringCtx,
 
     ctx.emitLabel(countNext);
     emitCoordListCounterLoop(ctx, context.counterRegister, start, statement.line, "coord_list line_count loop");
-    emitCoordListLineCountResult(ctx, statement.target, statement.line, dashedReport);
+    emitCoordListLineCountResult(ctx, statement.target, statement.line, formattedReport);
     ctx.optimizations.push({
       name: scaled ? "coord-list-scaled-line-count" : "coord-list-line-count-indirect-loop",
       detail: scaled
         ? `Lowered coord_list_line_count() through scaled decimal coordinates at line ${statement.line}.`
         : `Lowered coord_list_line_count() through a compact indirect register loop at line ${statement.line}.`,
     });
-    if (dashedReport !== undefined) {
+    if (formattedReport !== undefined) {
       ctx.optimizations.push({
-        name: "coord-list-line-count-dashed-report-body",
-        detail: `Accumulated ${statement.target} as a packed dashed report body at line ${statement.line}.`,
+        name: "coord-list-line-count-formatted-report-body",
+        detail: `Accumulated ${statement.target} as a packed formatted report body at line ${statement.line}.`,
       });
     }
     return true;
@@ -220,34 +220,34 @@ export function compileCoordListLineCountAssignment(ctx: LoweringCtx,
 export function emitCoordListLineCountInitialTotal(ctx: LoweringCtx, 
     target: string,
     line: number,
-    dashedReport?: DashedCoordReportTemplate,
+    formattedReport?: FormattedCoordReportTemplate,
     commentPrefix = "coord_list line_count",
   ): void {
-    if (dashedReport === undefined) {
+    if (formattedReport === undefined) {
       ctx.emitZero(`${commentPrefix} total`, line);
       ctx.emitStore(target, `${commentPrefix} total`, line);
       return;
     }
-    emitDashedCoordReportCellBody(ctx, dashedReport, line, `${commentPrefix} dashed report`);
-    ctx.emitStore(target, `${commentPrefix} dashed report body`, line);
+    emitFormattedCoordReportCellBody(ctx, formattedReport, line, `${commentPrefix} formatted report`);
+    ctx.emitStore(target, `${commentPrefix} formatted report body`, line);
 }
 
 export function emitCoordListLineCountResult(ctx: LoweringCtx, 
     target: string,
     line: number,
-    dashedReport?: DashedCoordReportTemplate,
+    formattedReport?: FormattedCoordReportTemplate,
     commentPrefix = "coord_list line_count",
   ): void {
     ctx.emitRecall(
       target,
-      dashedReport === undefined ? `${commentPrefix} result` : `${commentPrefix} dashed report body`,
+      formattedReport === undefined ? `${commentPrefix} result` : `${commentPrefix} formatted report body`,
       line,
     );
-    if (dashedReport !== undefined) ctx.currentXDashedCoordReportBody = dashedReport;
+    if (formattedReport !== undefined) ctx.currentXFormattedCoordReportBody = formattedReport;
 }
 
-export function emitDashedCoordReportCellBody(ctx: LoweringCtx, 
-    template: DashedCoordReportTemplate,
+export function emitFormattedCoordReportCellBody(ctx: LoweringCtx, 
+    template: FormattedCoordReportTemplate,
     line: number,
     commentPrefix: string,
   ): void {
@@ -318,11 +318,11 @@ export function compileFusedCoordListScan(ctx: LoweringCtx, statements: Statemen
 
     const target = lineCount.target;
     const line = branch.line;
-    const dashedReport = index + 3 === statements.length
-      ? ctx.dashedCoordReportTemplateAfterLineCount(lineCount, statements[index + 2])
+    const formattedReport = index + 3 === statements.length
+      ? ctx.formattedCoordReportTemplateAfterLineCount(lineCount, statements[index + 2])
       : undefined;
     if (scaled && !ctx.scaleCoordListCellInPlace(context.cell, line)) return 0;
-    emitCoordListLineCountInitialTotal(ctx, target, line, dashedReport, "coord_list fused");
+    emitCoordListLineCountInitialTotal(ctx, target, line, formattedReport, "coord_list fused");
     emitCoordListLoopSetup(ctx, context, line);
 
     const start = ctx.freshLabel("coord_list_fused_loop");
@@ -371,17 +371,17 @@ export function compileFusedCoordListScan(ctx: LoweringCtx, statements: Statemen
 
     ctx.emitLabel(countNext);
     emitCoordListCounterLoop(ctx, context.counterRegister, start, line, "coord_list fused loop");
-    emitCoordListLineCountResult(ctx, target, line, dashedReport, "coord_list fused");
+    emitCoordListLineCountResult(ctx, target, line, formattedReport, "coord_list fused");
     ctx.optimizations.push({
       name: scaled ? "coord-list-scaled-fused-hit-line-count" : "coord-list-fused-hit-line-count",
       detail: scaled
         ? `Fused coord_list membership and line_count through scaled decimal coordinates at line ${branch.line}.`
         : `Fused coord_list membership and line_count into one indirect scan at line ${branch.line}.`,
     });
-    if (dashedReport !== undefined) {
+    if (formattedReport !== undefined) {
       ctx.optimizations.push({
-        name: "coord-list-fused-dashed-report-body",
-        detail: `Accumulated ${target} as a packed dashed report body during the fused scan at line ${branch.line}.`,
+        name: "coord-list-fused-formatted-report-body",
+        detail: `Accumulated ${target} as a packed formatted report body during the fused scan at line ${branch.line}.`,
       });
     }
     return 2;

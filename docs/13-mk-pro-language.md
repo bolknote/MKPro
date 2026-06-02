@@ -720,9 +720,9 @@ is the units digit, `digit_at(value, 2)` is the tens digit. `digit_add` adds a
 digit at that position, while `digit_set` first removes the old digit at that
 position and then inserts the new one.
 For source-shaped four-line registers whose units digit is reserved and line
-digits begin at `10^1`, `packed4_digit(value, index)` reads through
-`frac(value / pow10(index))`, `packed4_add(value, index, delta)` adds
-`delta * pow10(index)`, and `packed4_score(value, index)` applies the
+digits begin at `10^1`, `packed_digit(value, index)` reads through
+`frac(value / pow10(index))`, `packed_add(value, index, delta)` adds
+`delta * pow10(index)`, and `packed_score(value, index)` applies the
 source-style squared deviation used by compact packed-line games.
 
 Small coordinate-set helpers are ordinary expression macros. `near_any(value,
@@ -936,7 +936,7 @@ The parser keeps these high-level statements as typed source nodes:
   `cell_at`, `cell_clear`, `cell_has`, `cell_mask`, `cell_set`, `cell_toggle`,
   `cos`, `digit_add`, `digit_at`, `digit_set`, `entered`, `eq_any`, `exp`,
   `frac`, `from_min`, `from_sec`, `inv`, `int`, `lg`, `ln`, `line_count`, `max`,
-  `neighbor_count`, `near_any`, `packed4_add`, `packed4_digit`, `packed4_score`,
+  `neighbor_count`, `near_any`, `packed_add`, `packed_digit`, `packed_score`,
   `pi`, `pow`, `pow10`, `random`, `sign`, `sin`, `sqr`, `sqrt`, `tg`, `to_min`,
   `to_sec`.
 - contracted `raw { ... }` blocks for explicit MK-61 command sequences
@@ -1090,8 +1090,8 @@ candidates:
   still using `F Lx`;
 - zero-fallback stores: `x = expr; unless x { x = fallback }` can branch on the
   freshly computed X value and store only once after the fallback path rejoins;
-- previous-random stack reuse: `old = random_state; random_state = random()`
-  followed by a branch or fractional debit can keep `old` on the calculator
+- prior-random stack reuse: `old = random_state; random_state = random()`
+  followed by a branch or fractional decrement can keep `old` on the calculator
   stack instead of assigning a scratch register;
 - indexed store/domain guards: an immediate terminal negative guard after
   `cells[i] = ...` can test the just-stored X value directly;
@@ -1175,7 +1175,7 @@ The pipeline currently contains:
   legal numeric target but no globally spare stable selector register, borrows a
   stable register that is dead across the helper and call sites, initializes it
   once at runtime, and emits one-cell `К ПП r` calls.
-- **previous-random-stack-reuse** — recognizes the semantic pattern “previous
+- **prior-random-stack-reuse** — recognizes the semantic pattern “previous
   seed, update same seed with `random()`, consume previous + current seed” and
   keeps the previous seed in the calculator stack.
 - **dead-code-after-halt** — CFG reachability from the entry removes ops

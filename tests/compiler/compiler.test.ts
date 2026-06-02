@@ -542,7 +542,7 @@ program InputDispatch {
 
   it("lowers stake sine read expressions without a stored input field", () => {
     const result = compileOk(`
-program StakeSinReadExpression {
+program StackStopRiskReadExpression {
   state {
     stake_value: counter 0..99 = 2
     result: counter 0..99 = 0
@@ -560,16 +560,16 @@ program StakeSinReadExpression {
 }
 `, { budget: 999, analysis: true });
 
-    expect(result.report.optimizations.some((item) => item.name === "show-read-stake-sin-lowering")).toBe(true);
-    expect(result.report.optimizations.some((item) => item.name === "x-param-stake-sin-call")).toBe(true);
-    expect(result.report.optimizations.some((item) => item.name === "x-param-stake-sin-read")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "show-read-stack-stop-risk-lowering")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-call")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-read")).toBe(true);
     expect(result.report.registers.stake).toBeUndefined();
     expect(result.steps.some((step) => step.comment === "read()")).toBe(false);
     expect(result.steps.some((step) => step.comment === "risk input read()")).toBe(true);
     expect(result.steps.some((step) => step.comment === "arg stake for robber_fight")).toBe(false);
   });
 
-  // The stake-sin lowering generalizes to a stack-stop fusion over any pure
+  // The stack-stop-risk lowering generalizes to a stack-stop fusion over any pure
   // `wrap*( stake (op) g(read()) )` shape. These lock that the generalized forms
   // fuse through the same path (no input register, no second С/П) and never grow
   // past the canonical 14-cell sin form.
@@ -602,9 +602,9 @@ program StackStopRiskGeneral {
   ]) {
     it(`generalizes stack-stop risk fusion for ${label}`, () => {
       const result = compileOk(stackStopProgram(formula), { budget: 999, analysis: true });
-      expect(result.report.optimizations.some((item) => item.name === "x-param-stake-sin-read")).toBe(true);
-      expect(result.report.optimizations.some((item) => item.name === "x-param-stake-sin-call")).toBe(true);
-      expect(result.report.optimizations.some((item) => item.name === "show-read-stake-sin-lowering")).toBe(true);
+      expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-read")).toBe(true);
+      expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-call")).toBe(true);
+      expect(result.report.optimizations.some((item) => item.name === "show-read-stack-stop-risk-lowering")).toBe(true);
       // The parameter is consumed straight from X: no input register, no arg store.
       expect(result.report.registers.stake).toBeUndefined();
       expect(result.steps.some((step) => step.comment === "read()")).toBe(false);
@@ -621,7 +621,7 @@ program StackStopRiskGeneral {
       budget: 999,
       analysis: true,
     });
-    expect(result.report.optimizations.some((item) => item.name === "x-param-stake-sin-read")).toBe(false);
+    expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-read")).toBe(false);
   });
 
   it("shares return suffix gadgets across compiled rule procedures", () => {
@@ -1153,9 +1153,9 @@ program FractionalRandomRangeSugar {
     expect(result.steps.map((step) => step.hex)).not.toContain("34");
   });
 
-  it("keeps the previous random seed on stack across a semantic seed update", () => {
+  it("keeps the prior random seed on stack across a semantic seed update", () => {
     const result = compileOk(`
-program PreviousRandomStackReuse {
+program PriorRandomStackReuse {
   state {
     seed: packed = 0.5
     scratch: packed = 0
@@ -1174,9 +1174,9 @@ program PreviousRandomStackReuse {
 }
 `, { budget: 999, analysis: true });
 
-    expect(result.report.optimizations.some((item) => item.name === "previous-random-stack-reuse")).toBe(true);
-    expect(result.steps.some((step) => step.comment === "previous random keep seed")).toBe(true);
-    expect(result.steps.some((step) => step.comment === "previous random additive term")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "prior-random-stack-reuse")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "prior random keep seed")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "prior random additive term")).toBe(true);
   });
 
   it("lowers one-argument random calls as zero-based ranges", () => {
@@ -1349,7 +1349,7 @@ program Packed4ScoreShape {
     value: packed = 0
   }
   loop {
-    value = packed4_score(44444.4, 1)
+    value = packed_score(44444.4, 1)
     halt(value)
   }
 }
@@ -1365,7 +1365,7 @@ program Packed4AddShape {
     value: packed = 0
   }
   loop {
-    value = packed4_add(44444.4, 1, -1)
+    value = packed_add(44444.4, 1, -1)
     halt(value)
   }
 }
@@ -1675,9 +1675,9 @@ program IndexedEqualityGuard {
     expect(result.steps.some((step) => step.opcode === 0x23)).toBe(true);
   });
 
-  it("branches on a previous random value without spilling it", () => {
+  it("branches on a prior random value without spilling it", () => {
     const result = compileOk(`
-program PreviousRandomBranch {
+program PriorRandomBranch {
   state {
     random_state: packed = 0.5
     scratch: packed = 0
@@ -1696,18 +1696,18 @@ program PreviousRandomBranch {
 }
 `);
 
-    expect(result.report.optimizations.some((item) => item.name === "previous-random-branch-stack-reuse")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "prior-random-branch-stack-reuse")).toBe(true);
     expect(result.steps.some((step) => step.comment === "set scratch")).toBe(false);
   });
 
-  // The previous-random trio now share one recognizer preamble
-  // (matchPreviousRandomSeedUpdate / randomUpdateTarget), so the seed refresh is
+  // The prior-random trio now share one recognizer preamble
+  // (matchPriorRandomSeedUpdate / randomUpdateTarget), so the seed refresh is
   // accepted whether written inline as `seed = random()` or as a call to a
   // one-statement random proc. The shared kept-in-Y head inlines the К СЧ draw
   // either way, so the branch idiom still parks the previous value in Y.
-  it("branches on a previous random value refreshed through a random proc", () => {
+  it("branches on a prior random value refreshed through a random proc", () => {
     const result = compileOk(`
-program PreviousRandomBranchProc {
+program PriorRandomBranchProc {
   state {
     random_state: packed = 0.5
     scratch: packed = 0
@@ -1730,7 +1730,7 @@ program PreviousRandomBranchProc {
 }
 `);
 
-    expect(result.report.optimizations.some((item) => item.name === "previous-random-branch-stack-reuse")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "prior-random-branch-stack-reuse")).toBe(true);
     // К СЧ (0x3b) is inlined from the proc; the previous value is never spilled.
     expect(result.steps.some((step) => step.opcode === 0x3b)).toBe(true);
     expect(result.steps.some((step) => step.comment === "set scratch")).toBe(false);
@@ -3815,7 +3815,7 @@ program E94Digits {
 }
 `);
     expect(
-      result.report.optimizations.some((opt) => opt.name === "decimal-factorial-series-lowering"),
+      result.report.optimizations.some((opt) => opt.name === "decimal-series-lowering"),
     ).toBe(true);
   });
 

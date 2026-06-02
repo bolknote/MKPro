@@ -20,7 +20,7 @@ import {
   matchStackUnaryDerivationCall,
   minExpression,
   matchXParamReturnDecay,
-  matchXParamStakeSinRead,
+  matchXParamStackStopRiskRead,
   matchRemainderByConstant,
   X_TRANSFORM_UNARY_OPCODES,
   X_TRANSFORM_UNARY_FUNCTIONS,
@@ -225,15 +225,15 @@ export function compileFunctionCall(ctx: LoweringCtx, expr: Extract<ExpressionAs
       });
       return true;
     }
-    const xParamStakeSin = matchXParamStakeSinRead(ctx.ast, proc);
-    if (xParamStakeSin !== undefined && expr.args.length === 1) {
+    const xParamStackStopRisk = matchXParamStackStopRiskRead(ctx.ast, proc);
+    if (xParamStackStopRisk !== undefined && expr.args.length === 1) {
       compileExpression(ctx, expr.args[0]!);
       const bankSelectors = ctx.snapshotBankSelectorCache();
       ctx.emitJump(0x53, "ПП", proc.name, `call function ${proc.name}`, proc.line);
       ctx.restoreBankSelectorCacheAfterCall(proc.name, bankSelectors);
       ctx.optimizations.push({
-        name: "x-param-stake-sin-call",
-        detail: `Passed ${xParamStakeSin.param} to ${proc.name} through X.`,
+        name: "x-param-stack-stop-risk-call",
+        detail: `Passed ${xParamStackStopRisk.param} to ${proc.name} through X.`,
       });
       return true;
     }
@@ -269,8 +269,8 @@ export function expressionLeadsWithRead(expr: ExpressionAst): boolean {
 // Precondition (established by the caller's head): the input value is in X and
 // the parked `match.yName` value is in Y. The tail transforms the input on the
 // stack, combines it with the parked Y value, and applies the outer wraps,
-// leaving the result in X. The `labels` reproduce the historical robber-fight
-// listing comments so the canonical `sin` form stays byte-for-byte identical.
+// leaving the result in X. The emitted opcodes are identical to the canonical
+// hand-written form; the `labels` only supply neutral listing annotations.
 export function compileStackStopRiskTail(
   ctx: LoweringCtx,
   match: StackStopRiskMatch,
@@ -288,7 +288,7 @@ export function compileStackStopRiskTail(
     ctx.emitOp(match.additive.digit, String(match.additive.digit), "risk multiplier", labels.consumerLine);
     ctx.emitOp(binaryOpcode(match.additive.op), match.additive.op, "risk multiplier", labels.consumerLine);
   }
-  ctx.emitOp(binaryOpcode(match.yOp), match.yOp, "risk stake", labels.consumerLine);
+  ctx.emitOp(binaryOpcode(match.yOp), match.yOp, "risk combine", labels.consumerLine);
   for (let index = match.wraps.length - 1; index >= 0; index -= 1) {
     const [code, mnemonic] = match.wraps[index]!;
     ctx.emitOp(code, mnemonic, "risk integer result", labels.consumerLine);

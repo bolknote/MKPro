@@ -44,14 +44,14 @@ export const COORD_LIST_CURRENT = "__coord_list_current";
 
 export const COORD_LIST_DX = "__coord_list_dx";
 
-// A dashed coordinate report renders a `<prefix> CC <separator> N` screen as one
+// A formatted coordinate report renders a `<prefix> CC <separator> N` screen as one
 // MK-61 video-format word. The video mask (the literal separator/anchor segments)
 // together with the cell scale and video-anchor exponents are jointly
 // hardware-fitted to the exact screen layout — field widths and separators — so
 // each supported layout is one verified descriptor rather than a free constant.
 // Only on-hardware-verified layouts appear here; any other 4-item report shape
 // falls back to the generic per-item display lowering.
-export interface DashedCoordReportFormat {
+export interface FormattedCoordReportFormat {
   prefix: string;
   cellWidth: number;
   separator: string;
@@ -61,7 +61,7 @@ export interface DashedCoordReportFormat {
   videoAnchorExp: number;
 }
 
-export const VERIFIED_DASHED_COORD_REPORT_FORMATS: readonly DashedCoordReportFormat[] = [
+export const VERIFIED_COORD_REPORT_FORMATS: readonly FormattedCoordReportFormat[] = [
   { prefix: "--", cellWidth: 2, separator: "--", bearingWidth: 1, mask: "8,-00--_", cellScaleExp: 4, videoAnchorExp: 7 },
 ];
 
@@ -106,7 +106,7 @@ export interface XParamReturnDecay {
   line: number;
 }
 
-export interface XParamStakeSinRead {
+export interface XParamStackStopRiskRead {
   param: string;
   display: string;
   showLine: number;
@@ -124,10 +124,10 @@ export interface DisplayField {
   value?: string;
 }
 
-export interface DashedCoordReportTemplate {
+export interface FormattedCoordReportTemplate {
   cell: DisplayField;
   bearing: DisplayField;
-  format: DashedCoordReportFormat;
+  format: FormattedCoordReportFormat;
 }
 
 export function matchEqualityConstantCondition(
@@ -306,24 +306,24 @@ export function programHasLineCountForMask(ast: ProgramAst, maskName: string): b
   return found;
 }
 
-export function programUsesDashedCoordReport(ast: ProgramAst): boolean {
-  return dashedCoordReportFormatForProgram(ast) !== undefined;
+export function programUsesFormattedCoordReport(ast: ProgramAst): boolean {
+  return formattedCoordReportFormatForProgram(ast) !== undefined;
 }
 
 // The mask preload register is shared across the whole program, so the setup
 // emitter needs the report format actually in use; return the format of the
-// first dashed-report screen, if any.
-export function dashedCoordReportFormatForProgram(ast: ProgramAst): DashedCoordReportFormat | undefined {
+// first formatted-report screen, if any.
+export function formattedCoordReportFormatForProgram(ast: ProgramAst): FormattedCoordReportFormat | undefined {
   for (const display of ast.displays) {
-    const template = dashedCoordReportDisplayTemplate(display);
+    const template = formattedCoordReportDisplayTemplate(display);
     if (template !== undefined) return template.format;
   }
   return undefined;
 }
 
-export function dashedCoordReportDisplayTemplate(
+export function formattedCoordReportDisplayTemplate(
   display: ProgramAst["displays"][number],
-): DashedCoordReportTemplate | undefined {
+): FormattedCoordReportTemplate | undefined {
   const [prefix, cell, separator, bearing] = display.items;
   if (
     display.items.length !== 4 ||
@@ -342,7 +342,7 @@ export function dashedCoordReportDisplayTemplate(
   const separatorText = normalizeDisplayTemplateLiteral(separator.text);
   const cellWidth = cell.width ?? 2;
   const bearingWidth = bearing.width ?? 1;
-  const format = VERIFIED_DASHED_COORD_REPORT_FORMATS.find((candidate) =>
+  const format = VERIFIED_COORD_REPORT_FORMATS.find((candidate) =>
     candidate.prefix === prefixText &&
     candidate.separator === separatorText &&
     candidate.cellWidth === cellWidth &&
@@ -1785,8 +1785,8 @@ export function isPackedGridMacroName(name: string): boolean {
 
 export function packedGridMacroArity(name: string): number | undefined {
   const arities: Record<string, number> = {
-    norm4: 1,
-    grid4_norm: 1,
+    grid_norm: 1,
+    grid_wrap: 1,
     bit_mask: 1,
     bit_has: 2,
     bit_set: 2,
@@ -1804,18 +1804,18 @@ export function packedGridMacroArity(name: string): number | undefined {
     digit_at: 2,
     digit_add: 3,
     digit_set: 3,
-    packed4_add: 3,
-    packed4_digit: 2,
-    packed4_score: 2,
+    packed_add: 3,
+    packed_digit: 2,
+    packed_score: 2,
   };
   return arities[name];
 }
 
 export function packedGridExpressionMacro(name: string, args: ExpressionAst[]): ExpressionAst | undefined {
   switch (name) {
-    case "norm4":
-    case "grid4_norm":
-      return norm4Expression(args[0]!);
+    case "grid_norm":
+    case "grid_wrap":
+      return gridNormExpression(args[0]!);
     case "bit_mask":
       return bitMaskExpression(args[0]!);
     case "bit_has":
@@ -1827,9 +1827,9 @@ export function packedGridExpressionMacro(name: string, args: ExpressionAst[]): 
     case "bit_toggle":
       return bitXorExpression(args[0]!, bitMaskExpression(args[1]!));
     case "diag_left_index":
-      return positiveNorm4Expression(addExpressions(args[0]!, args[1]!));
+      return positiveGridNormExpression(addExpressions(args[0]!, args[1]!));
     case "diag_right_index":
-      return positiveNorm4Expression(addExpressions(subtractExpressions(args[0]!, args[1]!), numberExpression(DEFAULT_BOARD_WIDTH)));
+      return positiveGridNormExpression(addExpressions(subtractExpressions(args[0]!, args[1]!), numberExpression(DEFAULT_BOARD_WIDTH)));
     case "cell_mask":
       return cellMaskExpression(args[0]!, args[1]!);
     case "cell_has":
@@ -1851,22 +1851,22 @@ export function packedGridExpressionMacro(name: string, args: ExpressionAst[]): 
     case "cell_toggle":
       return bitXorExpression(args[0]!, cellMaskExpression(args[1]!, args[2]!));
     case "digit_at":
-      return packed4DigitExpression(args[0]!, args[1]!);
+      return packedDigitExpression(args[0]!, args[1]!);
     case "digit_add":
       return addExpressions(
         args[0]!,
         multiplyExpressions(args[2]!, digitPlaceExpression(args[1]!)),
       );
-    case "packed4_add":
+    case "packed_add":
       return addExpressions(
         args[0]!,
         multiplyExpressions(args[2]!, pow10Expression(args[1]!)),
       );
     case "digit_set":
       return digitSetExpression(args[0]!, args[1]!, args[2]!);
-    case "packed4_digit":
-      return packed4DigitExpression(args[0]!, args[1]!);
-    case "packed4_score":
+    case "packed_digit":
+      return packedDigitExpression(args[0]!, args[1]!);
+    case "packed_score":
       return {
         kind: "call",
         callee: "sqr",
@@ -2277,7 +2277,7 @@ export function matchSingleBitMaskOpAssignment(
   };
 }
 
-// The square-board macros (`norm4`, `diag_*_index`, `cell_*`) historically baked
+// The square-board macros (`grid_norm`, `diag_*_index`, `cell_*`) historically baked
 // in a fixed 4-wide grid. The coordinate-wrap (`% width`) and diagonal fold
 // (`+ width`) are exactly derivable from the board width, so they take a `width`
 // parameter; the default keeps the original 4-wide lowering byte-for-byte.
@@ -2305,7 +2305,7 @@ export function cellMaskRowConstant(width: number): number {
   return constant;
 }
 
-export function norm4Expression(expr: ExpressionAst, width: number = DEFAULT_BOARD_WIDTH): ExpressionAst {
+export function gridNormExpression(expr: ExpressionAst, width: number = DEFAULT_BOARD_WIDTH): ExpressionAst {
   const rem = multiplyExpressions(
     { kind: "call", callee: "frac", args: [divideExpressions({ kind: "call", callee: "int", args: [expr] }, numberExpression(width))] },
     numberExpression(width),
@@ -2316,7 +2316,7 @@ export function norm4Expression(expr: ExpressionAst, width: number = DEFAULT_BOA
   );
 }
 
-export function positiveNorm4Expression(expr: ExpressionAst, width: number = DEFAULT_BOARD_WIDTH): ExpressionAst {
+export function positiveGridNormExpression(expr: ExpressionAst, width: number = DEFAULT_BOARD_WIDTH): ExpressionAst {
   const rem = multiplyExpressions(
     fracExpression(divideExpressions(intExpression(expr), numberExpression(width))),
     numberExpression(width),
@@ -2421,7 +2421,7 @@ export function bitMembershipExpression(mask: ExpressionAst, index: ExpressionAs
   };
 }
 
-export function packed4DigitExpression(lines: ExpressionAst, index: ExpressionAst): ExpressionAst {
+export function packedDigitExpression(lines: ExpressionAst, index: ExpressionAst): ExpressionAst {
   return {
     kind: "call",
     callee: "int",
@@ -2437,7 +2437,7 @@ export function packed4DigitExpression(lines: ExpressionAst, index: ExpressionAs
 export function digitSetExpression(value: ExpressionAst, index: ExpressionAst, digit: ExpressionAst): ExpressionAst {
   const place = digitPlaceExpression(index);
   return addExpressions(
-    subtractExpressions(value, multiplyExpressions(packed4DigitExpression(value, index), place)),
+    subtractExpressions(value, multiplyExpressions(packedDigitExpression(value, index), place)),
     multiplyExpressions(digit, place),
   );
 }
@@ -2967,7 +2967,7 @@ export function matchXParamReturnDecay(proc: ProcAst): XParamReturnDecay | undef
   return { param, factor, divisor: scaled.right, line: only.line };
 }
 
-export function matchXParamStakeSinRead(program: ProgramAst, proc: ProcAst): XParamStakeSinRead | undefined {
+export function matchXParamStackStopRiskRead(program: ProgramAst, proc: ProcAst): XParamStackStopRiskRead | undefined {
   const params = proc.params ?? [];
   const [param] = params;
   if (param === undefined || params.length !== 1 || proc.body.length !== 2) return undefined;
@@ -2984,11 +2984,11 @@ export function matchXParamStakeSinRead(program: ProgramAst, proc: ProcAst): XPa
   return { param, display: show.display, showLine: show.line, line: ret.line, risk };
 }
 
-// --- Stack-stop risk fusion (generalized "stake-sin") -----------------------
+// --- Stack-stop risk fusion (generalized "stack-stop-risk") -----------------------
 //
-// The classic robber-fight idiom shows a stake, stops for a player input, and
-// returns `int(stake * (1 + sin(read())))`. The compact machine form keeps the
-// stake in Y across the С/П stop and transforms the entered value in X, so the
+// The classic idiom shows a value, stops for a player input, and returns
+// `int(value * (1 + sin(read())))`. The compact machine form keeps the value
+// in Y across the С/П stop and transforms the entered value in X, so the
 // whole result computes on the stack with no input register.
 //
 // This recognizer generalizes that single hardcoded formula to any pure

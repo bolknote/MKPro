@@ -13,10 +13,10 @@ import type { MachineAddressRef, MachineItem, MachineOp } from "../types.ts";
  * Behaviour is intentionally byte-for-byte identical to the previous in-class
  * implementation; this is a structural extraction only.
  *
- * The dashed-coord report body is carried opaquely (the emitter only stores and
+ * The formatted-coord report body is carried opaquely (the emitter only stores and
  * clears it), so its concrete shape is a type parameter supplied by the caller.
  */
-export class MachineEmitter<TDashed = unknown> {
+export class MachineEmitter<TBody = unknown> {
   readonly items: MachineItem[] = [];
   private labelCounter = 0;
 
@@ -33,7 +33,7 @@ export class MachineEmitter<TDashed = unknown> {
   // label (undefined value = edges disagree / unknown). Used by emitLabel to
   // keep stack-reuse facts sound across control-flow joins.
   readonly labelEdgeX = new Map<string, string | undefined>();
-  currentXDashedCoordReportBody: TDashed | undefined;
+  currentXFormattedCoordReportBody: TBody | undefined;
   // True when the machine is mid number-entry, so the next number literal would
   // concatenate digits (e.g. 1 then 3 -> 13) instead of starting a new value.
   machineEntryOpen = false;
@@ -42,7 +42,7 @@ export class MachineEmitter<TDashed = unknown> {
     this.currentXVariable = undefined;
     this.currentXAliases.clear();
     this.currentXKnownZero = false;
-    this.currentXDashedCoordReportBody = undefined;
+    this.currentXFormattedCoordReportBody = undefined;
     // If the machine is still in number-entry mode, a fresh literal would
     // concatenate onto the previous value (1 then 3 -> 13) or onto a just-read
     // input. Push the previous value with В↑ so the new number starts clean.
@@ -129,7 +129,7 @@ export class MachineEmitter<TDashed = unknown> {
     this.currentXVariable = undefined;
     this.currentXAliases.clear();
     this.currentXKnownZero = false;
-    this.currentXDashedCoordReportBody = undefined;
+    this.currentXFormattedCoordReportBody = undefined;
     // Digit / '.' / sign / ВП opcodes (0x00..0x0c) keep the machine in
     // number-entry mode; every other op finalizes it.
     this.machineEntryOpen = opcode <= 0x0c;
@@ -164,7 +164,7 @@ export class MachineEmitter<TDashed = unknown> {
     // Copy-equivalence aliases never survive a merge: other predecessors reach
     // this label with X clobbered, so only the proven single fact may remain.
     this.currentXAliases = this.currentXVariable !== undefined ? new Set([this.currentXVariable]) : new Set();
-    this.currentXDashedCoordReportBody = undefined;
+    this.currentXFormattedCoordReportBody = undefined;
   }
 
   freshLabel(prefix: string): string {

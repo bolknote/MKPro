@@ -3,9 +3,9 @@ import {
   DEFAULT_BOARD_WIDTH,
   cellMaskExpression,
   cellMaskRowConstant,
-  norm4Expression,
+  gridNormExpression,
   numberExpression,
-  positiveNorm4Expression,
+  positiveGridNormExpression,
 } from "../../src/core/emit/lowering-helpers.ts";
 
 // Group 3 generalization: the square-board macros are width-parametric. The
@@ -21,8 +21,8 @@ describe("square-board macros are width-parametric", () => {
     expect(DEFAULT_BOARD_WIDTH).toBe(4);
     // The default lowering is identical to explicitly passing width 4, so no
     // existing 4x4 board moves.
-    expect(norm4Expression(operand)).toEqual(norm4Expression(operand, 4));
-    expect(positiveNorm4Expression(operand)).toEqual(positiveNorm4Expression(operand, 4));
+    expect(gridNormExpression(operand)).toEqual(gridNormExpression(operand, 4));
+    expect(positiveGridNormExpression(operand)).toEqual(positiveGridNormExpression(operand, 4));
     expect(cellMaskExpression(operand, operand)).toEqual(cellMaskExpression(operand, operand, 4));
   });
 
@@ -30,14 +30,14 @@ describe("square-board macros are width-parametric", () => {
     // width 3 must thread `3` through the int/frac wrap divisor and the
     // out-of-range fold; width 4 must thread `4`. Differing widths produce
     // structurally different expressions.
-    const wrap3 = JSON.stringify(norm4Expression(operand, 3));
-    const wrap4 = JSON.stringify(norm4Expression(operand, 4));
+    const wrap3 = JSON.stringify(gridNormExpression(operand, 3));
+    const wrap4 = JSON.stringify(gridNormExpression(operand, 4));
     expect(wrap3).toContain('"raw":"3"');
     expect(wrap3).not.toContain('"raw":"4"');
     expect(wrap4).toContain('"raw":"4"');
     expect(wrap3).not.toBe(wrap4);
 
-    const diag3 = JSON.stringify(positiveNorm4Expression(operand, 3));
+    const diag3 = JSON.stringify(positiveGridNormExpression(operand, 3));
     expect(diag3).toContain('"raw":"3"');
     expect(diag3).not.toContain('"raw":"4"');
   });

@@ -952,7 +952,7 @@ interface LoweredV2Program {
 }
 
 function lowerV2Program(v2: V2ProgramAst, options: ParseOptions = {}): LoweredV2Program {
-  const decimalSeries = tryLowerV2DecimalFactorialSeries(v2);
+  const decimalSeries = tryLowerV2DecimalSeries(v2);
   if (decimalSeries !== undefined) return decimalSeries;
 
   const ruleParams = collectV2RuleParams(v2);
@@ -1004,7 +1004,7 @@ function rewriteV2DisplayExpressions(_v2: V2ProgramAst, _context: V2LoweringCont
   // Hook for expression-display rewrites before inline screens are collected.
 }
 
-function tryLowerV2DecimalFactorialSeries(v2: V2ProgramAst): LoweredV2Program | undefined {
+function tryLowerV2DecimalSeries(v2: V2ProgramAst): LoweredV2Program | undefined {
   if (
     v2.body.length !== 5 ||
     v2.consts.length > 0 ||

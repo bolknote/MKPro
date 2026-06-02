@@ -914,7 +914,7 @@ program LiteralSeparatedScoreboardRun {
     expect(calc.displayText()).toBe("5,-15-042-03");
   });
 
-  it("renders dashed coordinate reports through the calculator video mask", () => {
+  it("renders formatted coordinate reports through the calculator video mask", () => {
     const { MK61 } = require("../emulator/mk61.cjs") as {
       MK61: new (options?: { extended?: boolean }) => {
         loadProgram: (codes: number[]) => { diagnostics: string[] };
@@ -924,7 +924,7 @@ program LiteralSeparatedScoreboardRun {
       };
     };
     const result = compileMKPro(`
-program DashedCoordReportRun {
+program FormattedCoordReportRun {
   field: board(0..9, 0..9)
 
   state {
@@ -941,10 +941,10 @@ program DashedCoordReportRun {
   }
 }
 `);
-    expect(hasOptimization(result, "dashed-coord-report-lowering")).toBe(true);
-    expect(hasOptimization(result, "coord-list-line-count-dashed-report-body")).toBe(true);
-    expect(hasOptimization(result, "dashed-coord-report-packed-body")).toBe(true);
-    expect(stepComments(result)).not.toContain("display dashed cell scale");
+    expect(hasOptimization(result, "formatted-coord-report-lowering")).toBe(true);
+    expect(hasOptimization(result, "coord-list-line-count-formatted-report-body")).toBe(true);
+    expect(hasOptimization(result, "formatted-coord-report-packed-body")).toBe(true);
+    expect(stepComments(result)).not.toContain("display formatted cell scale");
     expect(result.report.setupProgram).toBeDefined();
     const calc = new MK61({ extended: true });
     const setup = result.report.setupProgram?.steps.map((step) => step.opcode) ?? [];
@@ -957,7 +957,7 @@ program DashedCoordReportRun {
     expect(calc.displayText()).toBe("--58-- 0,");
   });
 
-  // The dashed-report recognizer now captures any `<literal> cell:width
+  // The formatted-report recognizer now captures any `<literal> cell:width
   // <literal> bearing:width` shape and gates it on a verified layout descriptor
   // (the video mask/scale are hardware-fitted to the exact field widths). A
   // report whose field widths do not match a verified layout must not take the
@@ -979,7 +979,7 @@ program UnverifiedCoordReport {
   }
 }
 `);
-    expect(hasOptimization(result, "dashed-coord-report-lowering")).toBe(false);
+    expect(hasOptimization(result, "formatted-coord-report-lowering")).toBe(false);
   });
 
   it("fuses coord_list hit checks with the following line_count scan", () => {
@@ -1012,8 +1012,8 @@ program FusedFoxScan {
       hasOptimization(result, "coord-list-fused-hit-line-count") ||
         hasOptimization(result, "coord-list-scaled-fused-hit-line-count"),
     ).toBe(true);
-    expect(hasOptimization(result, "coord-list-fused-dashed-report-body")).toBe(true);
-    expect(hasOptimization(result, "dashed-coord-report-packed-body")).toBe(true);
+    expect(hasOptimization(result, "coord-list-fused-formatted-report-body")).toBe(true);
+    expect(hasOptimization(result, "formatted-coord-report-packed-body")).toBe(true);
     expect(hasOptimization(result, "coord-list-indirect-membership")).toBe(false);
   });
 

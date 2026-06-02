@@ -172,7 +172,7 @@ describe("emulator regression", () => {
 
   it("runs the original cave robber stake flow without a fresh random draw", () => {
     const source = `
-program StakeSinProbe {
+program StackStopRiskProbe {
   state {
     stake_value: counter 0..99 = 2
     fight_entry: counter 0..99 = 0
@@ -192,7 +192,7 @@ program StakeSinProbe {
 }
 `;
     const result = compileMKPro(source, { budget: 999, analysis: true });
-    expect(result.report.optimizations.some((item) => item.name === "show-read-stake-sin-lowering")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "show-read-stack-stop-risk-lowering")).toBe(true);
 
     const runChoice = (keys: string[]): string => {
       const calc = new MK61();
@@ -237,7 +237,7 @@ program StakeCosProbe {
 }
 `;
     const result = compileMKPro(source, { budget: 999, analysis: true });
-    expect(result.report.optimizations.some((item) => item.name === "x-param-stake-sin-read")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-read")).toBe(true);
 
     const runChoice = (keys: string[]): string => {
       const calc = new MK61();

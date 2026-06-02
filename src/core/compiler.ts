@@ -17,8 +17,8 @@ import { compileExpression, compileStackStopRiskTail, expressionLeadsWithRead } 
 import { compileAssignThenDomainTrap, compileCondition, compileDecrementUnderflowBranch, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitDomainTrapOnX, emitKnownOneIndirectLoopBack, planDomainErrorGuard, statementsAreDomainErrorTrap } from "./emit/lowering/control-flow.ts";
 import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts";
 import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileGridCellMaskReuse } from "./emit/lowering/spatial.ts";
-import { compileCoordListLineCountAssignment, compileCoordListLineCountDashedReport, compileCoordListRemove, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
-import { compileBlockCall, compileDecimalFactorialSeries, compileGuardAssignmentSubstitution, compileInitialState, compileIntFracSharedTail, compileProcedures, compileRawStatement, compileRepeatedAssignmentValue, compileRuntimeHelpers, compileSetupProgramWithPreloads, compileStackUnaryDerivedAssignments, compileUnitDecrement, compileUnitIncrement, compileXParamProcCall } from "./emit/lowering/proc-raw-setup.ts";
+import { compileCoordListLineCountAssignment, compileCoordListLineCountFormattedReport, compileCoordListRemove, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
+import { compileBlockCall, compileDecimalSeries, compileGuardAssignmentSubstitution, compileInitialState, compileIntFracSharedTail, compileProcedures, compileRawStatement, compileRepeatedAssignmentValue, compileRuntimeHelpers, compileSetupProgramWithPreloads, compileStackUnaryDerivedAssignments, compileUnitDecrement, compileUnitIncrement, compileXParamProcCall } from "./emit/lowering/proc-raw-setup.ts";
 import { compileMultiStackResidentTemps } from "./emit/stack-residency-lowering.ts";
 import {
   BIT_MASK_SCRATCH_PREFIX,
@@ -52,7 +52,7 @@ import {
   countIdentifierReads,
   countIdentifierReadsInCondition,
   countStatements,
-  dashedCoordReportDisplayTemplate,
+  formattedCoordReportDisplayTemplate,
   decimalDisplayLiteralNumber,
   dispatchUsesNumericResidualChain,
   displayLiteralCells,
@@ -97,7 +97,7 @@ import {
   matchNegativeZeroThresholdCondition,
   matchStackStopRisk,
   matchXParamReturnDecay,
-  matchXParamStakeSinRead,
+  matchXParamStackStopRiskRead,
   matchSingleBitMaskOpAssignment,
   matchTargetMinusDelta,
   matchTargetPlusDelta,
@@ -112,7 +112,7 @@ import {
   optimizeDispatchDefaultCases,
   parseRawInstruction,
   positiveIntegerPowerOfTenExponent,
-  programUsesDashedCoordReport,
+  programUsesFormattedCoordReport,
   randomCoordListItemPlacement,
   sameCoordListCall,
   selectCheaperEquivalentCondition,
@@ -148,7 +148,7 @@ import type {
   BitSetAssignment,
   CoordListCall,
   CoordListIndirectContext,
-  DashedCoordReportTemplate,
+  FormattedCoordReportTemplate,
   DisplayField,
   DisplaySourceItem,
   ExecutableSetupPreload,
@@ -412,13 +412,13 @@ interface LoweringOptions {
   // trap into one cell, and when all callers of a shared trap proc are converted
   // that proc becomes dead. Speculative: adopted only when the program shrinks.
   domainErrorGuards?: boolean;
-  // Keep a just-read value on the stack across a debit/credit pair whose
+  // Keep a just-read value on the stack across a decrement/increment pair whose
   // negative outcomes both trap through ЕГГОГ:
   // `tmp=int(read()); a-=tmp; if a<0 trap else { b+=tmp; if b<0 trap else ... }`.
   // This reproduces the classic `П->X; X↔Y; -; F x>=0; F Вx` calculator idiom.
   // It is speculative because an existing shared tail can be cheaper than
   // keeping the input stack-resident.
-  showReadDebitCreditGuard?: boolean;
+  showReadGuardedTransfer?: boolean;
   // Probe hook: surface the non-overlapping register coalescing pairs on
   // CompileResult.coalesceShares so a follow-up compile can reclaim the freed
   // registers for preloaded constants. Set only on the internal trial compile.
@@ -797,24 +797,24 @@ export function compileMKPro(
       "Combined domain-error guards, setup-only counted loops, and stack-resident temporaries",
     );
     tryCandidate(
-      { domainErrorGuards: true, showReadDebitCreditGuard: true },
-      "show-read-debit-credit-guard",
-      "Kept read/debit/credit guarded transfers on the calculator stack",
+      { domainErrorGuards: true, showReadGuardedTransfer: true },
+      "show-read-guarded-transfer",
+      "Kept read/decrement/increment guarded transfers on the calculator stack",
     );
     tryCandidate(
-      { domainErrorGuards: true, unrollCountedLoops: true, showReadDebitCreditGuard: true },
-      "show-read-debit-credit-guard-unroll",
-      "Combined stack-resident read/debit/credit transfers with counted-loop unrolling",
+      { domainErrorGuards: true, unrollCountedLoops: true, showReadGuardedTransfer: true },
+      "show-read-guarded-transfer-unroll",
+      "Combined stack-resident read/decrement/increment transfers with counted-loop unrolling",
     );
     trySizeRescueCandidate(
-      { domainErrorGuards: true, setupOnlyCountedLoopInit: true, showReadDebitCreditGuard: true },
-      "show-read-debit-credit-guard-setup-counted-loop",
-      "Combined stack-resident read/debit/credit transfers with setup-only counted loops",
+      { domainErrorGuards: true, setupOnlyCountedLoopInit: true, showReadGuardedTransfer: true },
+      "show-read-guarded-transfer-setup-counted-loop",
+      "Combined stack-resident read/decrement/increment transfers with setup-only counted loops",
     );
     trySizeRescueCandidate(
-      { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, showReadDebitCreditGuard: true },
-      "show-read-debit-credit-guard-unroll-setup-counted-loop",
-      "Combined stack-resident read/debit/credit transfers, counted-loop unrolling, and setup-only counted loops",
+      { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, showReadGuardedTransfer: true },
+      "show-read-guarded-transfer-unroll-setup-counted-loop",
+      "Combined stack-resident read/decrement/increment transfers, counted-loop unrolling, and setup-only counted loops",
     );
   }
   // The proc-layout search can only change call/jump encoding cost once some
@@ -850,9 +850,9 @@ export function compileMKPro(
           `Combined domain-error guards, counted-loop unrolling, setup-only counted loops, and ${layout.detail}`,
         );
         tryCandidate(
-          { domainErrorGuards: true, unrollCountedLoops: true, showReadDebitCreditGuard: true, ...layout.options },
-          `show-read-debit-credit-guard-${layout.name}`,
-          `Combined stack-resident read/debit/credit transfers with ${layout.detail}`,
+          { domainErrorGuards: true, unrollCountedLoops: true, showReadGuardedTransfer: true, ...layout.options },
+          `show-read-guarded-transfer-${layout.name}`,
+          `Combined stack-resident read/decrement/increment transfers with ${layout.detail}`,
         );
       }
     }
@@ -951,7 +951,7 @@ export function compileMKPro(
               ? [
                   { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true },
                   { domainErrorGuards: true, setupOnlyCountedLoopInit: true, stackResidentTemps: true },
-                  { domainErrorGuards: true, setupOnlyCountedLoopInit: true, showReadDebitCreditGuard: true },
+                  { domainErrorGuards: true, setupOnlyCountedLoopInit: true, showReadGuardedTransfer: true },
                 ]
               : []),
             { domainErrorGuards: true, unrollCountedLoops: true, orderProcsByCallCount: true },
@@ -2875,7 +2875,7 @@ function elideXParamReturnStateFields(ast: ProgramAst, optimizations: AppliedOpt
   const params = new Set<string>();
   for (const param of xParamProcParamNames(ast)) params.add(param);
   for (const proc of ast.procs) {
-    const match = matchXParamReturnDecay(proc) ?? matchXParamStakeSinRead(ast, proc);
+    const match = matchXParamReturnDecay(proc) ?? matchXParamStackStopRiskRead(ast, proc);
     if (match === undefined) continue;
     if (!identifierReadOutsideProc(ast, proc.name, match.param)) params.add(match.param);
   }
@@ -4435,7 +4435,7 @@ function scalarReferencedOutsideLoop(ast: ProgramAst, name: string, loop: WhileS
   return found;
 }
 
-function previousRandomLessThanCurrentCondition(condition: ConditionAst, temp: string, seed: string): boolean {
+function priorRandomLessThanCurrentCondition(condition: ConditionAst, temp: string, seed: string): boolean {
   if (condition.op !== "<" || !isZeroExpression(condition.right)) return false;
   const left = condition.left;
   return left.kind === "binary" &&
@@ -5284,7 +5284,7 @@ export class EmitContext {
   // Machine-code emission + X-tracking live in a dedicated collaborator; this
   // class delegates the low-level primitives to it and routes the X-state
   // fields through getters/setters so the lowering code reads unchanged.
-  readonly emitter = new MachineEmitter<DashedCoordReportTemplate>();
+  readonly emitter = new MachineEmitter<FormattedCoordReportTemplate>();
   get items(): MachineItem[] {
     return this.emitter.items;
   }
@@ -5434,11 +5434,11 @@ export class EmitContext {
   get zeroAddressLabels(): Set<string> {
     return this.emitter.zeroAddressLabels;
   }
-  get currentXDashedCoordReportBody(): DashedCoordReportTemplate | undefined {
-    return this.emitter.currentXDashedCoordReportBody;
+  get currentXFormattedCoordReportBody(): FormattedCoordReportTemplate | undefined {
+    return this.emitter.currentXFormattedCoordReportBody;
   }
-  set currentXDashedCoordReportBody(value: DashedCoordReportTemplate | undefined) {
-    this.emitter.currentXDashedCoordReportBody = value;
+  set currentXFormattedCoordReportBody(value: FormattedCoordReportTemplate | undefined) {
+    this.emitter.currentXFormattedCoordReportBody = value;
   }
   get machineEntryOpen(): boolean {
     return this.emitter.machineEntryOpen;
@@ -5576,19 +5576,19 @@ export class EmitContext {
       const statement = statements[index]!;
       const next = statements[index + 1];
       if (statement.kind === "assign") {
-        const fractionalDebit = this.compilePreviousRandomFractionalDebitRun(statements, index);
-        if (fractionalDebit > 1) {
-          index += fractionalDebit - 1;
+        const fractionalDecrement = this.compilePriorRandomFractionalDecrementRun(statements, index);
+        if (fractionalDecrement > 1) {
+          index += fractionalDecrement - 1;
           continue;
         }
-        const previousRandom = this.compilePreviousRandomStateRun(statements, index);
-        if (previousRandom > 1) {
-          index += previousRandom - 1;
+        const priorRandom = this.compilePriorRandomStateRun(statements, index);
+        if (priorRandom > 1) {
+          index += priorRandom - 1;
           continue;
         }
-        const previousRandomBranch = this.compilePreviousRandomBranchRun(statements, index);
-        if (previousRandomBranch > 1) {
-          index += previousRandomBranch - 1;
+        const priorRandomBranch = this.compilePriorRandomBranchRun(statements, index);
+        if (priorRandomBranch > 1) {
+          index += priorRandomBranch - 1;
           continue;
         }
       }
@@ -5677,7 +5677,7 @@ export class EmitContext {
         statement.kind === "assign" &&
         next?.kind === "show" &&
         index + 2 === statements.length &&
-        compileCoordListLineCountDashedReport(this, statement, next)
+        compileCoordListLineCountFormattedReport(this, statement, next)
       ) {
         index += 1;
         continue;
@@ -5731,7 +5731,7 @@ export class EmitContext {
         next?.kind === "assign" &&
         (statements[index + 2]?.kind === "assign" || statements[index + 2]?.kind === "indexed_assign") &&
         statements[index + 3]?.kind === "if" &&
-        this.compileShowReadDebitCreditGuard(
+        this.compileShowReadGuardedTransfer(
           statement,
           next,
           statements[index + 2] as Extract<StatementAst, { kind: "assign" | "indexed_assign" }>,
@@ -5762,7 +5762,7 @@ export class EmitContext {
         const consumer = statements[index + 2];
         if (
           (consumer?.kind === "return_value" || consumer?.kind === "assign") &&
-          this.compileShowReadStakeSinResult(statement, next, consumer)
+          this.compileShowReadStackStopRiskResult(statement, next, consumer)
         ) {
           index += 2;
           continue;
@@ -5771,7 +5771,7 @@ export class EmitContext {
       if (
         statement.kind === "show" &&
         (next?.kind === "return_value" || next?.kind === "assign") &&
-        this.compileShowReadStakeSinResult(statement, undefined, next)
+        this.compileShowReadStackStopRiskResult(statement, undefined, next)
       ) {
         index += 1;
         continue;
@@ -6069,14 +6069,14 @@ export class EmitContext {
     return true;
   }
 
-  // Shared recognizer for the "previous random" idioms: a `temp = seed` copy
+  // Shared recognizer for the "prior random" idioms: a `temp = seed` copy
   // immediately followed by a `seed = random()` update (directly or through a
   // single-statement random proc). Returns the parked-in-Y previous value name
   // (`temp`) and the `seed` being refreshed, or undefined when the two-statement
-  // preamble does not match. The three previous-random runs (stack reuse, branch,
-  // and fractional debit) share this preamble plus the kept-in-Y head below; they
+  // preamble does not match. The three prior-random runs (stack reuse, branch,
+  // and fractional decrement) share this preamble plus the kept-in-Y head below; they
   // differ only in how they consume `temp` (parked in Y) and the new `seed` (X).
-  private matchPreviousRandomSeedUpdate(
+  private matchPriorRandomSeedUpdate(
     previous: StatementAst | undefined,
     randomUpdate: StatementAst | undefined,
   ): { temp: string; seed: string } | undefined {
@@ -6087,13 +6087,13 @@ export class EmitContext {
     return { temp: previous.target, seed };
   }
 
-  // Emit the kept-in-Y head shared by every previous-random idiom: recall the
+  // Emit the kept-in-Y head shared by every prior-random idiom: recall the
   // current seed, duplicate it into Y with В↑, draw the next random() into X, and
   // store it back as the new seed. The old seed stays parked in Y for the
   // following stack-direct consumer, so it is never spilled and recomputed.
-  private emitPreviousRandomSeedUpdate(seed: string, recallLine: number, updateLine: number): void {
-    this.emitRecall(seed, `previous random ${seed}`, recallLine);
-    this.emitOp(0x0e, "В↑", `previous random keep ${seed}`, updateLine);
+  private emitPriorRandomSeedUpdate(seed: string, recallLine: number, updateLine: number): void {
+    this.emitRecall(seed, `prior random ${seed}`, recallLine);
+    this.emitOp(0x0e, "В↑", `prior random keep ${seed}`, updateLine);
     this.emitOp(0x3b, "К СЧ", "random()", updateLine);
     this.currentXVariable = undefined;
     this.currentXAliases.clear();
@@ -6101,44 +6101,44 @@ export class EmitContext {
     this.emitStore(seed, `set ${seed}`, updateLine);
   }
 
-  compilePreviousRandomStateRun(statements: readonly StatementAst[], index: number): number {
+  compilePriorRandomStateRun(statements: readonly StatementAst[], index: number): number {
     const previous = statements[index];
     const randomUpdate = statements[index + 1];
     const consumer = statements[index + 2];
-    const seedUpdate = this.matchPreviousRandomSeedUpdate(previous, randomUpdate);
+    const seedUpdate = this.matchPriorRandomSeedUpdate(previous, randomUpdate);
     if (seedUpdate === undefined || consumer?.kind !== "assign") return 0;
     const { temp, seed } = seedUpdate;
     if (consumer.target !== temp) return 0;
     if (!expressionReferencesIdentifier(consumer.expr, temp)) return 0;
     if (!expressionReferencesIdentifier(consumer.expr, seed)) return 0;
-    if (!expressionCanUsePreviousRandomPrefix(consumer.expr, temp, seed)) return 0;
-    if (!this.compileExpressionFromPreviousRandom(consumer.expr, temp, seed, consumer.line)) return 0;
+    if (!expressionCanUsePriorRandomPrefix(consumer.expr, temp, seed)) return 0;
+    if (!this.compileExpressionFromPriorRandom(consumer.expr, temp, seed, consumer.line)) return 0;
 
     this.emitStore(consumer.target, `set ${consumer.target}`, consumer.line);
     this.optimizations.push({
-      name: "previous-random-stack-reuse",
+      name: "prior-random-stack-reuse",
       detail: `Kept previous ${seed} in Y while updating ${seed} with random() for ${consumer.target} at line ${consumer.line}.`,
     });
     return 3;
   }
 
-  compilePreviousRandomBranchRun(statements: readonly StatementAst[], index: number): number {
+  compilePriorRandomBranchRun(statements: readonly StatementAst[], index: number): number {
     const previous = statements[index];
     const randomUpdate = statements[index + 1];
     const branch = statements[index + 2];
-    const seedUpdate = this.matchPreviousRandomSeedUpdate(previous, randomUpdate);
+    const seedUpdate = this.matchPriorRandomSeedUpdate(previous, randomUpdate);
     if (seedUpdate === undefined || branch?.kind !== "if") return 0;
     const { temp, seed } = seedUpdate;
     if (statementsReadIdentifierBeforeWrite(statements.slice(index + 3), temp)) return 0;
-    if (!previousRandomLessThanCurrentCondition(branch.condition, temp, seed)) return 0;
+    if (!priorRandomLessThanCurrentCondition(branch.condition, temp, seed)) return 0;
 
-    this.emitPreviousRandomSeedUpdate(seed, previous!.line, randomUpdate!.line);
-    this.emitOp(0x11, "-", "previous random compare", branch.line);
+    this.emitPriorRandomSeedUpdate(seed, previous!.line, randomUpdate!.line);
+    this.emitOp(0x11, "-", "prior random compare", branch.line);
 
-    const falseLabel = this.freshLabel("previous_random_false");
+    const falseLabel = this.freshLabel("prior_random_false");
     const thenTerminates = this.statementsTerminate(branch.thenBody);
-    const endLabel = branch.elseBody !== undefined && !thenTerminates ? this.freshLabel("previous_random_end") : undefined;
-    this.emitJump(0x5c, "F x<0", falseLabel, "false branch for previous random <", branch.line);
+    const endLabel = branch.elseBody !== undefined && !thenTerminates ? this.freshLabel("prior_random_end") : undefined;
+    this.emitJump(0x5c, "F x<0", falseLabel, "false branch for prior random <", branch.line);
     this.compileStatements(branch.thenBody);
     if (branch.elseBody !== undefined) {
       if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", branch.line);
@@ -6150,76 +6150,76 @@ export class EmitContext {
     }
 
     this.optimizations.push({
-      name: "previous-random-branch-stack-reuse",
+      name: "prior-random-branch-stack-reuse",
       detail: `Kept previous ${seed} in Y while updating ${seed} for a following branch at line ${branch.line}.`,
     });
     return 3;
   }
 
-  compilePreviousRandomFractionalDebitRun(statements: readonly StatementAst[], index: number): number {
+  compilePriorRandomFractionalDecrementRun(statements: readonly StatementAst[], index: number): number {
     const previous = statements[index];
     const randomUpdate = statements[index + 1];
     const consumer = statements[index + 2];
     const guarded = statements[index + 3];
-    const seedUpdate = this.matchPreviousRandomSeedUpdate(previous, randomUpdate);
+    const seedUpdate = this.matchPriorRandomSeedUpdate(previous, randomUpdate);
     if (seedUpdate === undefined || consumer?.kind !== "assign" || guarded?.kind !== "if") return 0;
     const { temp, seed } = seedUpdate;
     if (consumer.target !== temp) return 0;
     if (statementsReadIdentifierBeforeWrite(statements.slice(index + 4), temp)) return 0;
-    const plan = this.matchPreviousRandomFractionalDebit(consumer.expr, temp, seed, guarded);
+    const plan = this.matchPriorRandomFractionalDecrement(consumer.expr, temp, seed, guarded);
     if (plan === undefined) return 0;
 
-    const distanceAlreadyInX =
+    const amountAlreadyInX =
       index > 0 &&
       statements[index - 1]?.kind === "indexed_assign" &&
-      expressionEquals((statements[index - 1] as Extract<StatementAst, { kind: "indexed_assign" }>).target, plan.distance);
-    if (!distanceAlreadyInX) {
-      this.emitAssignableRecall(plan.distance, `fractional debit ${this.assignableTargetText(plan.distance)}`, previous!.line);
+      expressionEquals((statements[index - 1] as Extract<StatementAst, { kind: "indexed_assign" }>).target, plan.amount);
+    if (!amountAlreadyInX) {
+      this.emitAssignableRecall(plan.amount, `fractional decrement ${this.assignableTargetText(plan.amount)}`, previous!.line);
     }
-    this.emitOp(0x35, "К {x}", "fractional debit distance frac", previous!.line);
-    this.emitPreviousRandomSeedUpdate(seed, previous!.line, randomUpdate!.line);
-    this.emitOp(0x10, "+", "previous random + random()", consumer.line);
+    this.emitOp(0x35, "К {x}", "fractional decrement amount frac", previous!.line);
+    this.emitPriorRandomSeedUpdate(seed, previous!.line, randomUpdate!.line);
+    this.emitOp(0x10, "+", "prior random + random()", consumer.line);
     this.emitNumberOrPreload("1");
-    this.emitOp(0x10, "+", "previous random additive term", consumer.line);
+    this.emitOp(0x10, "+", "prior random additive term", consumer.line);
     this.emitNumberOrPreload(plan.factor);
-    this.emitOp(0x12, "*", "fractional debit factor", consumer.line);
-    this.emitAssignableRecall(plan.defense, `fractional debit divisor ${this.assignableTargetText(plan.defense)}`, consumer.line);
-    this.emitAssignableRecall(plan.distance, `fractional debit numerator ${this.assignableTargetText(plan.distance)}`, consumer.line);
-    this.emitOp(0x13, "/", "fractional debit distance ratio", consumer.line);
-    this.emitOp(0x13, "/", "fractional debit scaled step", consumer.line);
-    this.emitOp(0x34, "К [x]", "fractional debit int step", consumer.line);
+    this.emitOp(0x12, "*", "fractional decrement factor", consumer.line);
+    this.emitAssignableRecall(plan.divisor, `fractional decrement divisor ${this.assignableTargetText(plan.divisor)}`, consumer.line);
+    this.emitAssignableRecall(plan.amount, `fractional decrement numerator ${this.assignableTargetText(plan.amount)}`, consumer.line);
+    this.emitOp(0x13, "/", "fractional decrement amount ratio", consumer.line);
+    this.emitOp(0x13, "/", "fractional decrement scaled step", consumer.line);
+    this.emitOp(0x34, "К [x]", "fractional decrement int step", consumer.line);
     this.emitNumberOrPreload(plan.scale);
-    this.emitOp(0x13, "/", "fractional debit scale", consumer.line);
-    this.emitOp(0x11, "-", "fractional debit remaining distance", guarded.line);
-    this.emitOp(0x17, "F lg", "fractional debit domain-error guard trap", guarded.line);
-    this.emitOp(0x0f, "F Вx", "fractional debit restore remaining distance", guarded.line);
-    this.emitAssignableRecall(plan.distance, `fractional debit integer ${this.assignableTargetText(plan.distance)}`, guarded.line);
-    this.emitOp(0x34, "К [x]", "fractional debit integer part", guarded.line);
-    this.emitOp(0x10, "+", "fractional debit rebuild value", guarded.line);
-    this.emitAssignableStore(plan.distance, guarded.line);
+    this.emitOp(0x13, "/", "fractional decrement scale", consumer.line);
+    this.emitOp(0x11, "-", "fractional decrement remaining amount", guarded.line);
+    this.emitOp(0x17, "F lg", "fractional decrement domain-error guard trap", guarded.line);
+    this.emitOp(0x0f, "F Вx", "fractional decrement restore remaining amount", guarded.line);
+    this.emitAssignableRecall(plan.amount, `fractional decrement integer ${this.assignableTargetText(plan.amount)}`, guarded.line);
+    this.emitOp(0x34, "К [x]", "fractional decrement integer part", guarded.line);
+    this.emitOp(0x10, "+", "fractional decrement rebuild value", guarded.line);
+    this.emitAssignableStore(plan.amount, guarded.line);
     this.optimizations.push({
-      name: "previous-random-fractional-debit",
-      detail: `Kept previous ${seed} and frac(${this.assignableTargetText(plan.distance)}) on the stack while applying guarded fractional debit${distanceAlreadyInX ? " and reused the just-stored distance in X" : ""}.`,
+      name: "prior-random-fractional-decrement",
+      detail: `Kept previous ${seed} and frac(${this.assignableTargetText(plan.amount)}) on the stack while applying guarded fractional decrement${amountAlreadyInX ? " and reused the just-stored amount in X" : ""}.`,
     });
     return 4;
   }
 
-  private matchPreviousRandomFractionalDebit(
+  private matchPriorRandomFractionalDecrement(
     expr: ExpressionAst,
     temp: string,
     seed: string,
     guarded: Extract<StatementAst, { kind: "if" }>,
-  ): { distance: Extract<ExpressionAst, { kind: "indexed" }>; defense: Extract<ExpressionAst, { kind: "indexed" }>; factor: string; scale: string } | undefined {
+  ): { amount: Extract<ExpressionAst, { kind: "indexed" }>; divisor: Extract<ExpressionAst, { kind: "indexed" }>; factor: string; scale: string } | undefined {
     if (expr.kind !== "binary" || expr.op !== "/" || expr.right.kind !== "number") return undefined;
     const scale = expr.right.raw;
     const intCall = expr.left;
     if (intCall.kind !== "call" || intCall.callee.toLowerCase() !== "int" || intCall.args.length !== 1) return undefined;
     const ratio = intCall.args[0]!;
     if (ratio.kind !== "binary" || ratio.op !== "/" || ratio.right.kind !== "indexed") return undefined;
-    const defense = ratio.right;
+    const divisor = ratio.right;
     const withDistance = ratio.left;
     if (withDistance.kind !== "binary" || withDistance.op !== "*" || withDistance.right.kind !== "indexed") return undefined;
-    const distance = withDistance.right;
+    const amount = withDistance.right;
     const withFactor = withDistance.left;
     if (withFactor.kind !== "binary" || withFactor.op !== "*" || withFactor.right.kind !== "number") return undefined;
     const factor = withFactor.right.raw;
@@ -6230,13 +6230,13 @@ export class EmitContext {
       !additiveTerms.some((term) => term.kind === "identifier" && term.name === seed) ||
       !additiveTerms.some((term) => isNumericValue(term, 1))
     ) return undefined;
-    if (!this.fractionalDebitGuardMatches(guarded, distance, temp)) return undefined;
-    return { distance, defense, factor, scale };
+    if (!this.fractionalDecrementGuardMatches(guarded, amount, temp)) return undefined;
+    return { amount, divisor, factor, scale };
   }
 
-  private fractionalDebitGuardMatches(
+  private fractionalDecrementGuardMatches(
     guarded: Extract<StatementAst, { kind: "if" }>,
-    distance: Extract<ExpressionAst, { kind: "indexed" }>,
+    amount: Extract<ExpressionAst, { kind: "indexed" }>,
     temp: string,
   ): boolean {
     if (guarded.condition.op !== "<=" || !isZeroExpression(guarded.condition.right)) return false;
@@ -6247,17 +6247,17 @@ export class EmitContext {
       frac.kind !== "call" ||
       frac.callee.toLowerCase() !== "frac" ||
       frac.args.length !== 1 ||
-      !expressionEquals(frac.args[0]!, distance)
+      !expressionEquals(frac.args[0]!, amount)
     ) return false;
     if (left.right.kind !== "identifier" || left.right.name !== temp) return false;
     if (!statementsAreDomainErrorTrap(this, guarded.thenBody)) return false;
     const update = guarded.elseBody?.[0];
     return guarded.elseBody?.length === 1 &&
       update?.kind === "indexed_assign" &&
-      expressionEquals(update.target, distance) &&
+      expressionEquals(update.target, amount) &&
       update.expr.kind === "binary" &&
       update.expr.op === "-" &&
-      expressionEquals(update.expr.left, distance) &&
+      expressionEquals(update.expr.left, amount) &&
       update.expr.right.kind === "identifier" &&
       update.expr.right.name === temp;
   }
@@ -6499,31 +6499,31 @@ export class EmitContext {
     return statement.target;
   }
 
-  private compileExpressionFromPreviousRandom(
+  private compileExpressionFromPriorRandom(
     expr: ExpressionAst,
     previous: string,
     seed: string,
     line: number,
   ): boolean {
-    this.emitPreviousRandomSeedUpdate(seed, line, line);
-    return this.compileExpressionWithPreviousRandomPrefix(expr, previous, seed, line);
+    this.emitPriorRandomSeedUpdate(seed, line, line);
+    return this.compileExpressionWithPriorRandomPrefix(expr, previous, seed, line);
   }
 
-  private compileExpressionWithPreviousRandomPrefix(
+  private compileExpressionWithPriorRandomPrefix(
     expr: ExpressionAst,
     previous: string,
     seed: string,
     line: number,
   ): boolean {
-    const additiveTerms = previousRandomAdditiveRest(expr, previous, seed);
+    const additiveTerms = priorRandomAdditiveRest(expr, previous, seed);
     if (additiveTerms !== undefined) {
-      this.emitOp(0x10, "+", "previous random + random()", line);
+      this.emitOp(0x10, "+", "prior random + random()", line);
       this.currentXVariable = undefined;
       this.currentXAliases.clear();
       this.currentXKnownZero = false;
       for (const term of additiveTerms) {
         compileExpression(this, term);
-        this.emitOp(0x10, "+", "previous random additive term", line);
+        this.emitOp(0x10, "+", "prior random additive term", line);
         this.currentXVariable = undefined;
         this.currentXAliases.clear();
         this.currentXKnownZero = false;
@@ -6531,7 +6531,7 @@ export class EmitContext {
       return true;
     }
     if (expr.kind === "binary") {
-      if (this.compileExpressionWithPreviousRandomPrefix(expr.left, previous, seed, line)) {
+      if (this.compileExpressionWithPriorRandomPrefix(expr.left, previous, seed, line)) {
         compileExpression(this, expr.right);
         this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`, line);
         this.currentXVariable = undefined;
@@ -6541,7 +6541,7 @@ export class EmitContext {
       }
       if (
         (expr.op === "+" || expr.op === "*") &&
-        this.compileExpressionWithPreviousRandomPrefix(expr.right, previous, seed, line)
+        this.compileExpressionWithPriorRandomPrefix(expr.right, previous, seed, line)
       ) {
         compileExpression(this, expr.left);
         this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`, line);
@@ -6556,7 +6556,7 @@ export class EmitContext {
       expr.kind === "call" &&
       expr.callee.toLowerCase() === "int" &&
       expr.args.length === 1 &&
-      this.compileExpressionWithPreviousRandomPrefix(expr.args[0]!, previous, seed, line)
+      this.compileExpressionWithPriorRandomPrefix(expr.args[0]!, previous, seed, line)
     ) {
       this.emitOp(0x34, "К [x]", "int()", line);
       this.currentXVariable = undefined;
@@ -6723,63 +6723,63 @@ export class EmitContext {
       : this.inputFeedsOnlyFollowingCondition(input, consumer);
   }
 
-  compileShowReadDebitCreditGuard(
+  compileShowReadGuardedTransfer(
     show: Extract<StatementAst, { kind: "show" }>,
     input: Extract<StatementAst, { kind: "assign" }>,
-    debit: Extract<StatementAst, { kind: "assign" | "indexed_assign" }>,
+    decrement: Extract<StatementAst, { kind: "assign" | "indexed_assign" }>,
     branch: Extract<StatementAst, { kind: "if" }>,
     tail: readonly StatementAst[],
   ): boolean {
-    if (this.loweringOptions.domainErrorGuards !== true || this.loweringOptions.showReadDebitCreditGuard !== true) return false;
+    if (this.loweringOptions.domainErrorGuards !== true || this.loweringOptions.showReadGuardedTransfer !== true) return false;
     const temp = input.target;
-    if (!this.readTransformIsStackDebitSafe(input.expr)) return false;
+    if (!this.readTransformIsStackDecrementSafe(input.expr)) return false;
     if (statementsReadIdentifier(tail, temp)) return false;
-    if (!this.assignmentIsSelfUpdate(debit, "-", temp)) return false;
-    if (!this.conditionIsNegativeTargetGuard(branch.condition, debit.target)) return false;
+    if (!this.assignmentIsSelfUpdate(decrement, "-", temp)) return false;
+    if (!this.conditionIsNegativeTargetGuard(branch.condition, decrement.target)) return false;
     if (!statementsAreDomainErrorTrap(this, branch.thenBody)) return false;
     const elseBody = branch.elseBody;
     if (elseBody === undefined || elseBody.length < 2) return false;
 
-    const credit = elseBody[0];
-    const creditGuard = elseBody[1];
-    if (credit?.kind !== "assign" && credit?.kind !== "indexed_assign") return false;
-    if (!this.assignmentIsSelfUpdate(credit, "+", temp)) return false;
-    if (creditGuard?.kind !== "if") return false;
-    if (!this.conditionIsNegativeTargetGuard(creditGuard.condition, credit.target)) return false;
-    if (!statementsAreDomainErrorTrap(this, creditGuard.thenBody)) return false;
-    const continuation = creditGuard.elseBody ?? elseBody.slice(2);
-    if (creditGuard.elseBody !== undefined && elseBody.length !== 2) return false;
+    const increment = elseBody[0];
+    const incrementGuard = elseBody[1];
+    if (increment?.kind !== "assign" && increment?.kind !== "indexed_assign") return false;
+    if (!this.assignmentIsSelfUpdate(increment, "+", temp)) return false;
+    if (incrementGuard?.kind !== "if") return false;
+    if (!this.conditionIsNegativeTargetGuard(incrementGuard.condition, increment.target)) return false;
+    if (!statementsAreDomainErrorTrap(this, incrementGuard.thenBody)) return false;
+    const continuation = incrementGuard.elseBody ?? elseBody.slice(2);
+    if (incrementGuard.elseBody !== undefined && elseBody.length !== 2) return false;
     if (statementsReadIdentifier(continuation, temp)) return false;
 
     compileShow(this, show.display, show.line);
     this.armInputInX();
     compileExpression(this, input.expr);
     this.clearArmedInputInX();
-    this.emitAssignableRecall(debit.target, `debit ${this.assignableTargetText(debit.target)}`, debit.line);
-    this.emitOp(0x14, "X↔Y", "debit input order", debit.line);
-    this.emitOp(0x11, "-", "debit input", debit.line);
-    this.emitAssignableStore(debit.target, debit.line);
-    const trap = this.freshLabel("debit_credit_trap");
-    this.emitJump(0x59, "F x>=0", trap, "debit negative trap", branch.line);
-    this.emitOp(0x0f, "F Вx", "restore debited input", input.line);
-    this.emitAssignableRecall(credit.target, `credit ${this.assignableTargetText(credit.target)}`, credit.line);
-    this.emitOp(0x10, "+", "credit input", credit.line);
-    this.emitAssignableStore(credit.target, credit.line);
+    this.emitAssignableRecall(decrement.target, `decrement ${this.assignableTargetText(decrement.target)}`, decrement.line);
+    this.emitOp(0x14, "X↔Y", "decrement input order", decrement.line);
+    this.emitOp(0x11, "-", "decrement input", decrement.line);
+    this.emitAssignableStore(decrement.target, decrement.line);
+    const trap = this.freshLabel("decrement_increment_trap");
+    this.emitJump(0x59, "F x>=0", trap, "decrement negative trap", branch.line);
+    this.emitOp(0x0f, "F Вx", "restore decremented input", input.line);
+    this.emitAssignableRecall(increment.target, `increment ${this.assignableTargetText(increment.target)}`, increment.line);
+    this.emitOp(0x10, "+", "increment input", increment.line);
+    this.emitAssignableStore(increment.target, increment.line);
     this.emitLabel(trap);
-    emitDomainTrapOnX(this, 0x21, "F √", "debit/credit domain-error guard trap", creditGuard.line);
+    emitDomainTrapOnX(this, 0x21, "F √", "decrement/increment domain-error guard trap", incrementGuard.line);
     this.compileStatements(continuation);
     this.optimizations.push({
-      name: "show-read-debit-credit-guard",
-      detail: `Kept read ${temp} on the stack while debiting ${this.assignableTargetText(debit.target)} and crediting ${this.assignableTargetText(credit.target)}.`,
+      name: "show-read-guarded-transfer",
+      detail: `Kept read ${temp} on the stack while decrementing ${this.assignableTargetText(decrement.target)} and incrementing ${this.assignableTargetText(increment.target)}.`,
     });
     return true;
   }
 
-  private readTransformIsStackDebitSafe(expr: ExpressionAst): boolean {
+  private readTransformIsStackDecrementSafe(expr: ExpressionAst): boolean {
     if (expr.kind === "call" && expr.callee.toLowerCase() === "read") return expr.args.length === 0;
     if (expr.kind !== "call" || expr.args.length !== 1) return false;
     const callee = expr.callee.toLowerCase();
-    return (callee === "int" || callee === "frac") && this.readTransformIsStackDebitSafe(expr.args[0]!);
+    return (callee === "int" || callee === "frac") && this.readTransformIsStackDecrementSafe(expr.args[0]!);
   }
 
   private assignmentIsSelfUpdate(
@@ -6923,27 +6923,27 @@ export class EmitContext {
     return true;
   }
 
-  compileShowReadStakeSinResult(
+  compileShowReadStackStopRiskResult(
     show: Extract<StatementAst, { kind: "show" }>,
     input: Extract<StatementAst, { kind: "input" }> | undefined,
     consumer: Extract<StatementAst, { kind: "assign" | "return_value" }>,
   ): boolean {
-    const stake = this.singlePlainDisplaySource(show.display);
-    if (stake === undefined) return false;
+    const parked = this.singlePlainDisplaySource(show.display);
+    if (parked === undefined) return false;
     let match: StackStopRiskMatch | undefined;
     if (input !== undefined) {
       const inputReads = countIdentifierReads(consumer.expr, input.target);
       if (inputReads === 0 || (this.readCounts.get(input.target) ?? 0) !== inputReads) return false;
-      match = matchStackStopRisk(consumer.expr, stake, input.target);
+      match = matchStackStopRisk(consumer.expr, parked, input.target);
     } else {
-      match = matchStackStopRisk(consumer.expr, stake);
+      match = matchStackStopRisk(consumer.expr, parked);
     }
     if (match === undefined) return false;
 
-    this.emitRecall(stake, `display ${show.display} source`, show.line);
-    this.emitOp(0x0e, "В↑", "keep displayed stake in Y", show.line);
+    this.emitRecall(parked, `display ${show.display} source`, show.line);
+    this.emitOp(0x0e, "В↑", "keep displayed value in Y", show.line);
     this.emitOp(0x50, "С/П", `show ${show.display}`, show.line);
-    this.armValueInY(stake);
+    this.armValueInY(parked);
     compileStackStopRiskTail(this, match, {
       inputComment: input === undefined ? "risk input read()" : `risk input ${input.target}`,
       inputLine: input?.line ?? consumer.line,
@@ -6956,8 +6956,8 @@ export class EmitContext {
       this.emitStore(consumer.target, `set ${consumer.target}`, consumer.line);
     }
     this.optimizations.push({
-      name: "show-read-stake-sin-lowering",
-      detail: `Reused displayed ${stake} as the stack stake for ${expressionToIntentText(consumer.expr)}.`,
+      name: "show-read-stack-stop-risk-lowering",
+      detail: `Reused displayed ${parked} as the parked Y value for ${expressionToIntentText(consumer.expr)}.`,
     });
     return true;
   }
@@ -6975,7 +6975,7 @@ export class EmitContext {
     this.currentXVariable = name;
     this.currentXAliases = new Set([name]);
     this.currentXKnownZero = false;
-    this.currentXDashedCoordReportBody = undefined;
+    this.currentXFormattedCoordReportBody = undefined;
   }
 
   armInputInX(): void {
@@ -7197,7 +7197,7 @@ export class EmitContext {
         this.emitOp(0x52, "В/О", "return value", statement.line);
         return;
       case "decimal_series":
-        compileDecimalFactorialSeries(this, statement);
+        compileDecimalSeries(this, statement);
         return;
     }
   }
@@ -7590,8 +7590,8 @@ export class EmitContext {
 
 
 
-  currentXDashedCoordReportBodyMatches(template: DashedCoordReportTemplate): boolean {
-    const body = this.currentXDashedCoordReportBody;
+  currentXFormattedCoordReportBodyMatches(template: FormattedCoordReportTemplate): boolean {
+    const body = this.currentXFormattedCoordReportBody;
     return body !== undefined &&
       body.cell.name === template.cell.name &&
       body.cell.width === template.cell.width &&
@@ -8176,16 +8176,16 @@ export class EmitContext {
 
 
 
-  dashedCoordReportTemplateAfterLineCount(
+  formattedCoordReportTemplateAfterLineCount(
     assignment: Extract<StatementAst, { kind: "assign" }>,
     statement: StatementAst | undefined,
-  ): DashedCoordReportTemplate | undefined {
+  ): FormattedCoordReportTemplate | undefined {
     if (statement?.kind !== "show") return undefined;
     const call = coordListLineCountCall(assignment.expr);
     if (call === undefined) return undefined;
     const display = this.ast.displays.find((candidate) => candidate.name === statement.display);
     if (display === undefined) return undefined;
-    const template = dashedCoordReportDisplayTemplate(display);
+    const template = formattedCoordReportDisplayTemplate(display);
     if (template === undefined) return undefined;
     if (assignment.target !== template.bearing.name) return undefined;
     if (!expressionEquals(call.cell, { kind: "identifier", name: template.cell.name })) return undefined;
@@ -9327,7 +9327,7 @@ function collectCoordListPackedReportTargets(ast: ProgramAst): Set<string> {
     if (call === undefined) return;
     const display = ast.displays.find((candidate) => candidate.name === statement.display);
     if (display === undefined) return;
-    const template = dashedCoordReportDisplayTemplate(display);
+    const template = formattedCoordReportDisplayTemplate(display);
     if (template === undefined) return;
     if (assignment.target !== template.bearing.name) return;
     if (!expressionEquals(call.cell, { kind: "identifier", name: template.cell.name })) return;
@@ -9449,7 +9449,7 @@ function coordVariableHasOnlyScaledSafeReads(
 
   for (const display of ast.displays) {
     if (!display.items.some((item) => item.kind === "source" && item.name === cellName)) continue;
-    const template = dashedCoordReportDisplayTemplate(display);
+    const template = formattedCoordReportDisplayTemplate(display);
     if (template?.cell.name !== cellName) return false;
   }
   return ast.entries.every((entry) => statementsSafe(entry.body)) &&
@@ -10215,9 +10215,9 @@ function allocateRegisters(
   }
   for (const proc of ast.procs) {
     const xParamReturn = matchXParamReturnDecay(proc);
-    const xParamStakeSin = matchXParamStakeSinRead(ast, proc);
+    const xParamStackStopRisk = matchXParamStackStopRiskRead(ast, proc);
     for (const param of proc.params ?? []) {
-      if (xParamReturn?.param === param || xParamStakeSin?.param === param || xParamNames.has(param)) continue;
+      if (xParamReturn?.param === param || xParamStackStopRisk?.param === param || xParamNames.has(param)) continue;
       declared.add(param);
       variables.add(param);
     }
@@ -10450,7 +10450,7 @@ function isPow10Term(expr: ExpressionAst): boolean {
   return name === "pow" && expr.args.length === 2 && isNumericValue(expr.args[0]!, 10);
 }
 
-function previousRandomAdditiveRest(expr: ExpressionAst, previous: string, seed: string): ExpressionAst[] | undefined {
+function priorRandomAdditiveRest(expr: ExpressionAst, previous: string, seed: string): ExpressionAst[] | undefined {
   const terms = additiveTerms(expr);
   let sawPrevious = false;
   let sawSeed = false;
@@ -10483,16 +10483,16 @@ function isIdentifierNamed(expr: ExpressionAst, name: string): boolean {
   return expr.kind === "identifier" && expr.name === name;
 }
 
-function expressionCanUsePreviousRandomPrefix(expr: ExpressionAst, previous: string, seed: string): boolean {
-  if (previousRandomAdditiveRest(expr, previous, seed) !== undefined) return true;
+function expressionCanUsePriorRandomPrefix(expr: ExpressionAst, previous: string, seed: string): boolean {
+  if (priorRandomAdditiveRest(expr, previous, seed) !== undefined) return true;
   if (expr.kind === "binary") {
-    return expressionCanUsePreviousRandomPrefix(expr.left, previous, seed) ||
-      ((expr.op === "+" || expr.op === "*") && expressionCanUsePreviousRandomPrefix(expr.right, previous, seed));
+    return expressionCanUsePriorRandomPrefix(expr.left, previous, seed) ||
+      ((expr.op === "+" || expr.op === "*") && expressionCanUsePriorRandomPrefix(expr.right, previous, seed));
   }
   return expr.kind === "call" &&
     expr.callee.toLowerCase() === "int" &&
     expr.args.length === 1 &&
-    expressionCanUsePreviousRandomPrefix(expr.args[0]!, previous, seed);
+    expressionCanUsePriorRandomPrefix(expr.args[0]!, previous, seed);
 }
 
 function collectPreincrementIndexedStorePointers(ast: ProgramAst): Set<string> {
@@ -11876,7 +11876,7 @@ function displayMantissaMaskTextForAst(
   ast: ProgramAst,
   display: ProgramAst["displays"][number],
 ): string | undefined {
-  if (dashedCoordReportDisplayTemplate(display) !== undefined) return undefined;
+  if (formattedCoordReportDisplayTemplate(display) !== undefined) return undefined;
   const template = planDisplayForAst(ast, display)
     .find((plan): plan is Extract<DisplayPlan, { kind: "fixed-cells" }> => plan.kind === "fixed-cells")
     ?.template;
@@ -12114,7 +12114,7 @@ function collectFunctionTailCallScratchVariables(ast: ProgramAst, variables: Set
         if (
           target !== undefined &&
           matchXParamReturnDecay(target) === undefined &&
-          matchXParamStakeSinRead(ast, target) === undefined
+          matchXParamStackStopRiskRead(ast, target) === undefined
         ) {
           for (let index = 0; index < statement.expr.args.length; index += 1) {
             variables.add(functionTailArgScratchName(target.name, index));
@@ -12345,7 +12345,7 @@ function collectCoordListScratchVariables(ast: ProgramAst, variables: Set<string
       }
     }
   }
-  if (programUsesDashedCoordReport(ast)) {
+  if (programUsesFormattedCoordReport(ast)) {
     variables.add(COORD_LIST_DX);
   }
   const visitExpr = (expr: ExpressionAst): void => {
@@ -14079,7 +14079,7 @@ function buildGeneratedSetupProgram(
   const executablePreloads = preloads.flatMap((preload) => executableSetupPreload(preload));
   const needsSetupProgram = fields.length > 0 ||
     executablePreloads.some((preload) => preload.kind === "display-literal") ||
-    programUsesDashedCoordReport(ast);
+    programUsesFormattedCoordReport(ast);
   if (!needsSetupProgram) return undefined;
 
   const setupOptimizations: AppliedOptimization[] = [];
