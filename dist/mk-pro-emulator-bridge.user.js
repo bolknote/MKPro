@@ -468,21 +468,21 @@ var MKProEmulatorBundle = (() => {
         }
       }
     }
-    foldBinary(op, left, right) {
-      const numeric = foldNumericBinary(op, left, right);
+    foldBinary(op2, left, right) {
+      const numeric = foldNumericBinary(op2, left, right);
       if (numeric !== void 0 && estimateNumberCost(numeric.raw) <= estimateBinaryCost(left, right)) {
         return numeric;
       }
-      switch (op) {
+      switch (op2) {
         case "+":
           if (isNumericValue(left, 0)) return right;
           if (isNumericValue(right, 0)) return left;
           {
-            const signed = foldSignedAddSubExpression({ kind: "binary", op, left, right });
+            const signed = foldSignedAddSubExpression({ kind: "binary", op: op2, left, right });
             if (signed !== void 0 && estimateExpressionCost(signed) < estimateBinaryCost(left, right)) return signed;
           }
           {
-            const linear = foldLinearExpression({ kind: "binary", op, left, right });
+            const linear = foldLinearExpression({ kind: "binary", op: op2, left, right });
             if (linear !== void 0 && estimateExpressionCost(linear) <= estimateBinaryCost(left, right)) return linear;
           }
           return void 0;
@@ -490,11 +490,11 @@ var MKProEmulatorBundle = (() => {
           if (isNumericValue(right, 0)) return left;
           if (isNumericValue(left, 0)) return { kind: "unary", op: "-", expr: right };
           {
-            const signed = foldSignedAddSubExpression({ kind: "binary", op, left, right });
+            const signed = foldSignedAddSubExpression({ kind: "binary", op: op2, left, right });
             if (signed !== void 0 && estimateExpressionCost(signed) < estimateBinaryCost(left, right)) return signed;
           }
           {
-            const linear = foldLinearExpression({ kind: "binary", op, left, right });
+            const linear = foldLinearExpression({ kind: "binary", op: op2, left, right });
             if (linear !== void 0 && estimateExpressionCost(linear) <= estimateBinaryCost(left, right)) return linear;
           }
           return void 0;
@@ -503,14 +503,14 @@ var MKProEmulatorBundle = (() => {
           if (isNumericValue(right, 1)) return left;
           if (isNumericValue(left, 0) && expressionSafeToDrop(right)) return numberExpression(0);
           if (isNumericValue(right, 0) && expressionSafeToDrop(left)) return numberExpression(0);
-          const linear = foldLinearExpression({ kind: "binary", op, left, right });
+          const linear = foldLinearExpression({ kind: "binary", op: op2, left, right });
           if (linear !== void 0 && estimateExpressionCost(linear) <= estimateBinaryCost(left, right)) return linear;
           return void 0;
         }
         case "/":
           if (isNumericValue(right, 1)) return left;
           {
-            const linear = foldLinearExpression({ kind: "binary", op, left, right });
+            const linear = foldLinearExpression({ kind: "binary", op: op2, left, right });
             if (linear !== void 0 && estimateExpressionCost(linear) <= estimateBinaryCost(left, right)) return linear;
           }
           return void 0;
@@ -523,13 +523,13 @@ var MKProEmulatorBundle = (() => {
   function foldConstExpression(expr) {
     return new ConstantFolder().foldExpressionPublic(expr);
   }
-  function foldNumericBinary(op, left, right) {
+  function foldNumericBinary(op2, left, right) {
     if (left.kind !== "number" || right.kind !== "number") return void 0;
     const lhs = parseDecimalLiteral(left.raw);
     const rhs = parseDecimalLiteral(right.raw);
     if (lhs === void 0 || rhs === void 0) return void 0;
     const result = (() => {
-      switch (op) {
+      switch (op2) {
         case "+":
           return addDecimal(lhs, rhs);
         case "-":
@@ -993,13 +993,13 @@ var MKProEmulatorBundle = (() => {
     if (isDecimalZero(left) || isDecimalZero(right)) return decimal(0);
     return compareDecimal(left, right) <= 0 ? left : right;
   }
-  function foldBitwise(left, right, op) {
+  function foldBitwise(left, right, op2) {
     const lhs = decimalMantissaDigits(left);
     const rhs = decimalMantissaDigits(right);
     if (lhs === void 0 || rhs === void 0) return void 0;
     const digits = [8];
     for (let index = 1; index < 8; index += 1) {
-      const digit = bitwiseNibble(lhs[index], rhs[index], op);
+      const digit = bitwiseNibble(lhs[index], rhs[index], op2);
       if (digit > 9) return void 0;
       digits.push(digit);
     }
@@ -1016,8 +1016,8 @@ var MKProEmulatorBundle = (() => {
     }
     return decimalFromDigits(result, 7);
   }
-  function bitwiseNibble(left, right, op) {
-    switch (op) {
+  function bitwiseNibble(left, right, op2) {
+    switch (op2) {
       case "and":
         return left & right;
       case "or":
@@ -2037,7 +2037,7 @@ var MKProEmulatorBundle = (() => {
 
   // src/core/emit/lowering-helpers.ts
   var DISPATCH_SCRATCH_PREFIX = "__dispatch_";
-  var TICTACTOE_MASK_SCRATCH_PREFIX = "__ttt_mask_";
+  var GRID4_MASK_SCRATCH_PREFIX = "__grid4_mask_";
   var BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
   var IF_SELECTOR_SCRATCH_PREFIX = "__if_selector_";
   var DISPLAY_EXPR_PREFIX = "__display_expr_";
@@ -2049,7 +2049,9 @@ var MKProEmulatorBundle = (() => {
   var COORD_LIST_COUNTER = "__coord_list_counter";
   var COORD_LIST_CURRENT = "__coord_list_current";
   var COORD_LIST_DX = "__coord_list_dx";
-  var DASHED_COORD_REPORT_MASK = "8,-00--_";
+  var VERIFIED_DASHED_COORD_REPORT_FORMATS = [
+    { prefix: "--", cellWidth: 2, separator: "--", bearingWidth: 1, mask: "8,-00--_", cellScaleExp: 4, videoAnchorExp: 7 }
+  ];
   var NEGATIVE_ZERO_DEGREE_SELECTOR_GE = "__mkpro_negative_zero_ge";
   var NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE = "1|-00";
   var STACK_UNARY_DERIVATION_OPCODES = {
@@ -2085,7 +2087,7 @@ var MKProEmulatorBundle = (() => {
         return expressionIsDeterministic(expr.left) && expressionIsDeterministic(expr.right);
       case "call": {
         const name = expr.callee.toLowerCase();
-        if (name === "random") return false;
+        if (name === "random" || name === "entered") return false;
         return expr.args.every(expressionIsDeterministic);
       }
     }
@@ -2096,8 +2098,8 @@ var MKProEmulatorBundle = (() => {
       op: invertComparisonOp(condition.op)
     };
   }
-  function invertComparisonOp(op) {
-    switch (op) {
+  function invertComparisonOp(op2) {
+    switch (op2) {
       case "==":
         return "!=";
       case "!=":
@@ -2193,21 +2195,33 @@ var MKProEmulatorBundle = (() => {
     return found;
   }
   function programUsesDashedCoordReport(ast) {
-    return ast.displays.some((display) => dashedCoordReportDisplayTemplate(display) !== void 0);
+    return dashedCoordReportFormatForProgram(ast) !== void 0;
+  }
+  function dashedCoordReportFormatForProgram(ast) {
+    for (const display of ast.displays) {
+      const template = dashedCoordReportDisplayTemplate(display);
+      if (template !== void 0) return template.format;
+    }
+    return void 0;
   }
   function dashedCoordReportDisplayTemplate(display) {
     const [prefix, cell, separator, bearing] = display.items;
     if (display.items.length !== 4 || prefix?.kind !== "literal" || cell?.kind !== "source" || separator?.kind !== "literal" || bearing?.kind !== "source") {
       return void 0;
     }
-    if (normalizeDisplayTemplateLiteral(prefix.text) !== "--") return void 0;
-    if (normalizeDisplayTemplateLiteral(separator.text) !== "--") return void 0;
-    const result = {
-      cell: { kind: "source", item: cell, name: cell.name, width: cell.width ?? 2 },
-      bearing: { kind: "source", item: bearing, name: bearing.name, width: bearing.width ?? 1 }
+    const prefixText = normalizeDisplayTemplateLiteral(prefix.text);
+    const separatorText = normalizeDisplayTemplateLiteral(separator.text);
+    const cellWidth = cell.width ?? 2;
+    const bearingWidth = bearing.width ?? 1;
+    const format = VERIFIED_DASHED_COORD_REPORT_FORMATS.find(
+      (candidate) => candidate.prefix === prefixText && candidate.separator === separatorText && candidate.cellWidth === cellWidth && candidate.bearingWidth === bearingWidth
+    );
+    if (format === void 0) return void 0;
+    return {
+      cell: { kind: "source", item: cell, name: cell.name, width: cellWidth },
+      bearing: { kind: "source", item: bearing, name: bearing.name, width: bearingWidth },
+      format
     };
-    if (result.cell.width !== 2 || result.bearing.width !== 1) return void 0;
-    return result;
   }
   function normalizeDisplayTemplateLiteral(text) {
     return text.replace(/\s/gu, "");
@@ -2445,8 +2459,8 @@ var MKProEmulatorBundle = (() => {
     const normalized = raw.trim();
     return normalized.startsWith("-") ? normalized.slice(1) : `-${normalized}`;
   }
-  function ticTacToeMaskScratchName(statement) {
-    return `${TICTACTOE_MASK_SCRATCH_PREFIX}${statement.line}`;
+  function grid4MaskScratchName(statement) {
+    return `${GRID4_MASK_SCRATCH_PREFIX}${statement.line}`;
   }
   function dispatchExpressionRegister(statement, allocation) {
     if (statement.expr.kind !== "identifier") return void 0;
@@ -2554,11 +2568,11 @@ var MKProEmulatorBundle = (() => {
   function isSimpleStackLoad(expr) {
     return expr.kind === "identifier" || expr.kind === "number";
   }
-  function canTestAgainstZeroDirectly(op) {
-    return op === "==" || op === "!=" || op === ">=" || op === "<";
+  function canTestAgainstZeroDirectly(op2) {
+    return op2 === "==" || op2 === "!=" || op2 === ">=" || op2 === "<";
   }
-  function directTestOpcode(op) {
-    switch (op) {
+  function directTestOpcode(op2) {
+    switch (op2) {
       case "==":
         return 94;
       case "!=":
@@ -2568,7 +2582,7 @@ var MKProEmulatorBundle = (() => {
       case "<":
         return 92;
       default:
-        throw new Error(`No direct zero-test opcode for ${op}`);
+        throw new Error(`No direct zero-test opcode for ${op2}`);
     }
   }
   function selectCheaperEquivalentCondition(condition, ast, preloadedConstants) {
@@ -2608,8 +2622,8 @@ var MKProEmulatorBundle = (() => {
       right: condition.left
     };
   }
-  function flipComparisonOp(op) {
-    switch (op) {
+  function flipComparisonOp(op2) {
+    switch (op2) {
       case "<":
         return ">";
       case "<=":
@@ -2620,7 +2634,7 @@ var MKProEmulatorBundle = (() => {
         return "<=";
       case "==":
       case "!=":
-        return op;
+        return op2;
     }
   }
   function negateZeroDifferenceCondition(condition) {
@@ -2652,8 +2666,8 @@ var MKProEmulatorBundle = (() => {
       right: numberExpression2(shifted.value)
     }];
   }
-  function shiftedIntegerBoundary(op, value) {
-    switch (op) {
+  function shiftedIntegerBoundary(op2, value) {
+    switch (op2) {
       case "<":
         return Number.isSafeInteger(value - 1) ? { op: "<=", value: value - 1 } : void 0;
       case "<=":
@@ -2769,8 +2783,8 @@ var MKProEmulatorBundle = (() => {
         return binaryPrecedence(expr.op);
     }
   }
-  function binaryPrecedence(op) {
-    return op === "*" || op === "/" ? 2 : 1;
+  function binaryPrecedence(op2) {
+    return op2 === "*" || op2 === "/" ? 2 : 1;
   }
   function buildDiagnostic(level, message, line, code) {
     const diagnostic = { level, message };
@@ -2841,10 +2855,10 @@ var MKProEmulatorBundle = (() => {
     const assign = singleEffectiveAssign(statement);
     if (!assign) return void 0;
     const targetExpr = { kind: "identifier", name: assign.target };
-    const { left, right, op } = statement.condition;
+    const { left, right, op: op2 } = statement.condition;
     if (!expressionEquals(left, targetExpr) || !expressionEquals(assign.expr, right)) return void 0;
-    if (direction === "lower" && (op === "<" || op === "<=")) return { target: assign.target, bound: right };
-    if (direction === "upper" && (op === ">" || op === ">=")) return { target: assign.target, bound: right };
+    if (direction === "lower" && (op2 === "<" || op2 === "<=")) return { target: assign.target, bound: right };
+    if (direction === "upper" && (op2 === ">" || op2 === ">=")) return { target: assign.target, bound: right };
     return void 0;
   }
   function buildTerminalSelectCandidate(statement, ast, options = {}) {
@@ -2891,8 +2905,8 @@ var MKProEmulatorBundle = (() => {
     );
   }
   function comparisonSelectorExpression(condition) {
-    const { left, right, op } = condition;
-    switch (op) {
+    const { left, right, op: op2 } = condition;
+    switch (op2) {
       case "==":
         return oneMinus(signExpression(absExpression(subtractExpressions2(left, right))));
       case "!=":
@@ -3104,14 +3118,14 @@ var MKProEmulatorBundle = (() => {
     const range3 = integerRangeFor(assign.target, ast);
     if (!range3) return void 0;
     const targetExpr = { kind: "identifier", name: assign.target };
-    const { left, right, op } = statement.condition;
+    const { left, right, op: op2 } = statement.condition;
     if (!expressionEquals(left, targetExpr)) return void 0;
     const decrement = matchTargetMinusDelta(assign.expr, assign.target);
-    if (decrement && op === ">" && isNumericValue2(decrement, 1) && range3.min !== void 0 && isNumericValue2(right, range3.min)) {
+    if (decrement && op2 === ">" && isNumericValue2(decrement, 1) && range3.min !== void 0 && isNumericValue2(right, range3.min)) {
       return maxCandidate(assign.target, assign.expr, right, "Replaced saturating decrement branch with max()");
     }
     const increment = matchTargetPlusDelta(assign.expr, assign.target);
-    if (increment && op === "<" && isNumericValue2(increment, 1) && range3.max !== void 0 && isNumericValue2(right, range3.max)) {
+    if (increment && op2 === "<" && isNumericValue2(increment, 1) && range3.max !== void 0 && isNumericValue2(right, range3.max)) {
       return minCandidate(assign.target, assign.expr, right, "Replaced saturating increment branch with min-via-max()");
     }
     return void 0;
@@ -3122,18 +3136,18 @@ var MKProEmulatorBundle = (() => {
     const elseAssign = statement.elseBody[0];
     if (thenAssign?.kind !== "assign" || elseAssign?.kind !== "assign") return void 0;
     if (thenAssign.target !== elseAssign.target) return void 0;
-    const { left, right, op } = statement.condition;
-    if (["<", "<=", ">", ">="].includes(op)) {
-      if ((op === ">" || op === ">=") && expressionEquals(thenAssign.expr, left) && expressionEquals(elseAssign.expr, right)) {
+    const { left, right, op: op2 } = statement.condition;
+    if (["<", "<=", ">", ">="].includes(op2)) {
+      if ((op2 === ">" || op2 === ">=") && expressionEquals(thenAssign.expr, left) && expressionEquals(elseAssign.expr, right)) {
         return maxCandidate(thenAssign.target, left, right);
       }
-      if ((op === "<" || op === "<=") && expressionEquals(thenAssign.expr, right) && expressionEquals(elseAssign.expr, left)) {
+      if ((op2 === "<" || op2 === "<=") && expressionEquals(thenAssign.expr, right) && expressionEquals(elseAssign.expr, left)) {
         return maxCandidate(thenAssign.target, left, right);
       }
-      if ((op === "<" || op === "<=") && expressionEquals(thenAssign.expr, left) && expressionEquals(elseAssign.expr, right)) {
+      if ((op2 === "<" || op2 === "<=") && expressionEquals(thenAssign.expr, left) && expressionEquals(elseAssign.expr, right)) {
         return minCandidate(thenAssign.target, left, right);
       }
-      if ((op === ">" || op === ">=") && expressionEquals(thenAssign.expr, right) && expressionEquals(elseAssign.expr, left)) {
+      if ((op2 === ">" || op2 === ">=") && expressionEquals(thenAssign.expr, right) && expressionEquals(elseAssign.expr, left)) {
         return minCandidate(thenAssign.target, left, right);
       }
     }
@@ -3143,12 +3157,12 @@ var MKProEmulatorBundle = (() => {
     const assign = singleEffectiveAssign(statement);
     if (!assign) return void 0;
     const targetExpr = { kind: "identifier", name: assign.target };
-    const { left, right, op } = statement.condition;
+    const { left, right, op: op2 } = statement.condition;
     if (!expressionEquals(left, targetExpr)) return void 0;
-    if ((op === "<" || op === "<=") && expressionEquals(assign.expr, right)) {
+    if ((op2 === "<" || op2 === "<=") && expressionEquals(assign.expr, right)) {
       return maxCandidate(assign.target, targetExpr, right, "Replaced lower clamp branch with max()");
     }
-    if ((op === ">" || op === ">=") && expressionEquals(assign.expr, right)) {
+    if ((op2 === ">" || op2 === ">=") && expressionEquals(assign.expr, right)) {
       return minCandidate(assign.target, targetExpr, right, "Replaced upper clamp branch with min-via-max()");
     }
     return void 0;
@@ -3157,13 +3171,13 @@ var MKProEmulatorBundle = (() => {
     if (statement.thenBody.length !== 1) return void 0;
     const thenAssign = statement.thenBody[0];
     if (thenAssign?.kind !== "assign") return void 0;
-    const { left, right, op } = statement.condition;
+    const { left, right, op: op2 } = statement.condition;
     if (!isNumericValue2(right, 0)) return void 0;
     const negativeLeft = negateExpression(left);
     if (!statement.elseBody) {
       const targetExpr = { kind: "identifier", name: thenAssign.target };
       if (!expressionEquals(targetExpr, left)) return void 0;
-      if ((op === "<" || op === "<=") && expressionEquals(thenAssign.expr, negativeLeft)) {
+      if ((op2 === "<" || op2 === "<=") && expressionEquals(thenAssign.expr, negativeLeft)) {
         return absCandidate(thenAssign.target, left);
       }
       return void 0;
@@ -3171,10 +3185,10 @@ var MKProEmulatorBundle = (() => {
     if (statement.elseBody.length !== 1) return void 0;
     const elseAssign = statement.elseBody[0];
     if (elseAssign?.kind !== "assign" || thenAssign.target !== elseAssign.target) return void 0;
-    if ((op === "<" || op === "<=") && expressionEquals(thenAssign.expr, negativeLeft) && expressionEquals(elseAssign.expr, left)) {
+    if ((op2 === "<" || op2 === "<=") && expressionEquals(thenAssign.expr, negativeLeft) && expressionEquals(elseAssign.expr, left)) {
       return absCandidate(thenAssign.target, left);
     }
-    if ((op === ">" || op === ">=") && expressionEquals(thenAssign.expr, left) && expressionEquals(elseAssign.expr, negativeLeft)) {
+    if ((op2 === ">" || op2 === ">=") && expressionEquals(thenAssign.expr, left) && expressionEquals(elseAssign.expr, negativeLeft)) {
       return absCandidate(thenAssign.target, left);
     }
     return void 0;
@@ -3280,10 +3294,10 @@ var MKProEmulatorBundle = (() => {
     const notEqual = signExpression(absExpression(subtractExpressions2(condition.left, condition.right)));
     return condition.op === "==" ? oneMinus(notEqual) : notEqual;
   }
-  function isTicTacToeMacroName(name) {
-    return ticTacToeMacroArity(name) !== void 0;
+  function isPackedGridMacroName(name) {
+    return packedGridMacroArity(name) !== void 0;
   }
-  function ticTacToeMacroArity(name) {
+  function packedGridMacroArity(name) {
     const arities = {
       norm4: 1,
       grid4_norm: 1,
@@ -3310,7 +3324,7 @@ var MKProEmulatorBundle = (() => {
     };
     return arities[name];
   }
-  function ticTacToeExpressionMacro(name, args) {
+  function packedGridExpressionMacro(name, args) {
     switch (name) {
       case "norm4":
       case "grid4_norm":
@@ -3328,7 +3342,7 @@ var MKProEmulatorBundle = (() => {
       case "diag_left_index":
         return positiveNorm4Expression(addExpressions2(args[0], args[1]));
       case "diag_right_index":
-        return positiveNorm4Expression(addExpressions2(subtractExpressions2(args[0], args[1]), numberExpression2(4)));
+        return positiveNorm4Expression(addExpressions2(subtractExpressions2(args[0], args[1]), numberExpression2(DEFAULT_BOARD_WIDTH)));
       case "cell_mask":
         return cellMaskExpression(args[0], args[1]);
       case "cell_has":
@@ -3352,10 +3366,14 @@ var MKProEmulatorBundle = (() => {
       case "digit_at":
         return packed4DigitExpression(args[0], args[1]);
       case "digit_add":
-      case "packed4_add":
         return addExpressions2(
           args[0],
           multiplyExpressions2(args[2], digitPlaceExpression(args[1]))
+        );
+      case "packed4_add":
+        return addExpressions2(
+          args[0],
+          multiplyExpressions2(args[2], pow10Expression(args[1]))
         );
       case "digit_set":
         return digitSetExpression(args[0], args[1], args[2]);
@@ -3365,7 +3383,10 @@ var MKProEmulatorBundle = (() => {
         return {
           kind: "call",
           callee: "sqr",
-          args: [subtractExpressions2(packed4DigitExpression(args[0], args[1]), numberExpression2(0.41200076))]
+          args: [subtractExpressions2(
+            fracExpression(divideExpressions(args[0], pow10Expression(args[1]))),
+            numberExpression2(0.41200076)
+          )]
         };
       default:
         return void 0;
@@ -3634,8 +3655,8 @@ var MKProEmulatorBundle = (() => {
       bit_and: [55, "\u041A \u2227"],
       bit_xor: [57, "\u041A \u2295"]
     };
-    const op = maskOps[name];
-    if (op === void 0) return void 0;
+    const op2 = maskOps[name];
+    if (op2 === void 0) return void 0;
     let maskArg = expr.args[1];
     let negate = false;
     if (maskArg.kind === "call" && maskArg.callee.toLowerCase() === "bit_not" && maskArg.args.length === 1) {
@@ -3646,37 +3667,51 @@ var MKProEmulatorBundle = (() => {
       return void 0;
     }
     return {
-      opcode: op[0],
-      mnemonic: op[1],
+      opcode: op2[0],
+      mnemonic: op2[1],
       collection: expr.args[0],
       index: maskArg.args[0],
       negate
     };
   }
-  function norm4Expression(expr) {
+  var DEFAULT_BOARD_WIDTH = 4;
+  var CELL_MASK_ROW_CONSTANT = {
+    4: 0.22600029
+  };
+  function cellMaskRowConstant(width) {
+    const constant = CELL_MASK_ROW_CONSTANT[width];
+    if (constant === void 0) {
+      const verified = Object.keys(CELL_MASK_ROW_CONSTANT).join(", ");
+      throw new Error(
+        `cell_mask is only hardware-verified for board width(s) ${verified}; width ${width} needs a verified fractional constant`
+      );
+    }
+    return constant;
+  }
+  function norm4Expression(expr, width = DEFAULT_BOARD_WIDTH) {
     const rem = multiplyExpressions2(
-      { kind: "call", callee: "frac", args: [divideExpressions({ kind: "call", callee: "int", args: [expr] }, numberExpression2(4))] },
-      numberExpression2(4)
+      { kind: "call", callee: "frac", args: [divideExpressions({ kind: "call", callee: "int", args: [expr] }, numberExpression2(width))] },
+      numberExpression2(width)
     );
     return addExpressions2(
       rem,
-      multiplyExpressions2(numberExpression2(4), oneMinus(signExpression(maxExpression(rem, numberExpression2(0)))))
+      multiplyExpressions2(numberExpression2(width), oneMinus(signExpression(maxExpression(rem, numberExpression2(0)))))
     );
   }
-  function positiveNorm4Expression(expr) {
+  function positiveNorm4Expression(expr, width = DEFAULT_BOARD_WIDTH) {
     const rem = multiplyExpressions2(
-      fracExpression(divideExpressions(intExpression(expr), numberExpression2(4))),
-      numberExpression2(4)
+      fracExpression(divideExpressions(intExpression(expr), numberExpression2(width))),
+      numberExpression2(width)
     );
     return addExpressions2(
       rem,
-      multiplyExpressions2(numberExpression2(4), oneMinus(signExpression(rem)))
+      multiplyExpressions2(numberExpression2(width), oneMinus(signExpression(rem)))
     );
   }
-  function cellMaskExpression(x, y) {
+  function cellMaskExpression(x, y, width = DEFAULT_BOARD_WIDTH) {
     return addExpressions2(
       pow10Expression(x),
-      { kind: "call", callee: "int", args: [multiplyExpressions2(pow10Expression(y), numberExpression2(0.22600029))] }
+      { kind: "call", callee: "int", args: [pow10Expression(multiplyExpressions2(y, numberExpression2(cellMaskRowConstant(width))))] }
     );
   }
   function isZeroOriginTenByTenPlacement(placement) {
@@ -4488,7 +4523,7 @@ var MKProEmulatorBundle = (() => {
         return expressionPureForSubstitution(expr.left) && expressionPureForSubstitution(expr.right);
       case "call": {
         const name = expr.callee.toLowerCase();
-        if (name === "random") return false;
+        if (name === "random" || name === "entered") return false;
         return expr.args.every(expressionPureForSubstitution);
       }
     }
@@ -4599,7 +4634,7 @@ var MKProEmulatorBundle = (() => {
     }
     const smallSetMacro = smallSetExpressionMacro(name, expr.args);
     if (smallSetMacro !== void 0) return estimateExpressionCostForCondition(smallSetMacro, preloadedConstants);
-    const macro = ticTacToeExpressionMacro(name, expr.args);
+    const macro = packedGridExpressionMacro(name, expr.args);
     if (macro !== void 0) return estimateExpressionCostForCondition(macro, preloadedConstants);
     if (name === "random") {
       if (expr.args.length === 1) {
@@ -4672,7 +4707,7 @@ var MKProEmulatorBundle = (() => {
     }
     const smallSetMacro = smallSetExpressionMacro(name, expr.args);
     if (smallSetMacro !== void 0) return estimateExpressionCost2(smallSetMacro);
-    const macro = ticTacToeExpressionMacro(name, expr.args);
+    const macro = packedGridExpressionMacro(name, expr.args);
     if (macro !== void 0) return estimateExpressionCost2(macro);
     if (name === "random") {
       if (expr.args.length === 1) return estimateExpressionCost2(randomRangeExpression(numberExpression2(0), expr.args[0]));
@@ -4827,11 +4862,11 @@ var MKProEmulatorBundle = (() => {
     const directMemory = /^(X(?:->|→)П|П(?:->|→)X)\s+R?([0-9a-eавсде])$/iu.exec(text);
     if (directMemory) {
       const register = registerFromText(directMemory[2]);
-      const op = directMemory[1].replaceAll("\u2192", "->");
-      const base = op.startsWith("X") ? 64 : 96;
+      const op2 = directMemory[1].replaceAll("\u2192", "->");
+      const base = op2.startsWith("X") ? 64 : 96;
       return {
         opcode: base + registerIndex(register),
-        mnemonic: `${op} ${register}`
+        mnemonic: `${op2} ${register}`
       };
     }
     const indirect = /^(К\s*)?(БП|ПП|X(?:->|→)П|П(?:->|→)X|x(?:!=|≠)0|x(?:>=|≥)0|x<0|x=0)\s*R?([0-9a-eавсде])$/iu.exec(text);
@@ -4845,10 +4880,10 @@ var MKProEmulatorBundle = (() => {
     const compactIndirect = /^К(БП|ПП|Пх|хП)([0-9a-eавсде])$/iu.exec(text);
     if (compactIndirect) {
       const register = registerFromText(compactIndirect[2]);
-      const op = compactIndirect[1] === "\u041F\u0445" ? "\u041F->X" : compactIndirect[1] === "\u0445\u041F" ? "X->\u041F" : compactIndirect[1];
+      const op2 = compactIndirect[1] === "\u041F\u0445" ? "\u041F->X" : compactIndirect[1] === "\u0445\u041F" ? "X->\u041F" : compactIndirect[1];
       return {
-        opcode: indirectBase(op) + registerIndex(register),
-        mnemonic: `\u041A ${op} ${register}`
+        opcode: indirectBase(op2) + registerIndex(register),
+        mnemonic: `\u041A ${op2} ${register}`
       };
     }
     const found = findOpcodeName(text);
@@ -4887,8 +4922,8 @@ var MKProEmulatorBundle = (() => {
     if (normalized === "x=0") return 224;
     throw new Error(`Unknown indirect opcode ${text}`);
   }
-  function binaryOpcode(op) {
-    return op === "+" ? 16 : op === "-" ? 17 : op === "*" ? 18 : 19;
+  function binaryOpcode(op2) {
+    return op2 === "+" ? 16 : op2 === "-" ? 17 : op2 === "*" ? 18 : 19;
   }
 
   // src/core/v2-const.ts
@@ -5894,10 +5929,10 @@ var MKProEmulatorBundle = (() => {
     const [precision, counterInit, valueInit, loop, stop] = v2.body;
     if (precision?.kind !== "v2_assign" || precision.target !== "digits") return void 0;
     const digits = Number(normalizedV2Text(precision.expr));
-    if (digits !== 94) return void 0;
-    if (counterInit?.kind !== "v2_assign" || normalizedV2Text(counterInit.expr) !== "65") {
-      return void 0;
-    }
+    if (!Number.isInteger(digits)) return void 0;
+    if (counterInit?.kind !== "v2_assign") return void 0;
+    const counterStart = Number(normalizedV2Text(counterInit.expr));
+    if (!Number.isInteger(counterStart)) return void 0;
     if (valueInit?.kind !== "v2_assign" || normalizedV2Text(valueInit.expr) !== "1") {
       return void 0;
     }
@@ -5920,7 +5955,7 @@ var MKProEmulatorBundle = (() => {
         body: [{
           kind: "decimal_series",
           digits,
-          counterStart: 65,
+          counterStart,
           line: v2.line
         }],
         line: v2.line
@@ -7365,12 +7400,12 @@ var MKProEmulatorBundle = (() => {
       right: lowerV2Expression(predicate.right, line, context)
     };
   }
-  function cellSetUpdateExpression(collection, item, op, context) {
+  function cellSetUpdateExpression(collection, item, op2, context) {
     const digitIndex = decimalPlayerPackedCellsIndex(collection, item, context);
-    if (digitIndex !== void 0) return `digit_set(${collection}, ${digitIndex}, ${op === "+=" ? "1" : "0"})`;
+    if (digitIndex !== void 0) return `digit_set(${collection}, ${digitIndex}, ${op2 === "+=" ? "1" : "0"})`;
     const mask = cellMaskExpressionForCollection(collection, item, context);
-    if (mask === void 0) return `${op === "+=" ? "bit_set" : "bit_clear"}(${collection}, ${item})`;
-    return op === "+=" ? `bit_or(${collection}, ${mask})` : `bit_and(${collection}, bit_not(${mask}))`;
+    if (mask === void 0) return `${op2 === "+=" ? "bit_set" : "bit_clear"}(${collection}, ${item})`;
+    return op2 === "+=" ? `bit_or(${collection}, ${mask})` : `bit_and(${collection}, bit_not(${mask}))`;
   }
   function cellMembershipExpression(collection, item, context) {
     const list = context.coordLists.get(collection.trim());
@@ -7846,8 +7881,8 @@ var MKProEmulatorBundle = (() => {
       op: invertLoweredComparisonOp(condition.op)
     };
   }
-  function invertLoweredComparisonOp(op) {
-    switch (op) {
+  function invertLoweredComparisonOp(op2) {
+    switch (op2) {
       case "==":
         return "!=";
       case "!=":
@@ -8430,16 +8465,16 @@ var MKProEmulatorBundle = (() => {
     parseAdditive() {
       let left = this.parseMultiplicative();
       while (this.peekOptional() === "+" || this.peekOptional() === "-") {
-        const op = this.next();
-        left = { kind: "binary", op, left, right: this.parseMultiplicative() };
+        const op2 = this.next();
+        left = { kind: "binary", op: op2, left, right: this.parseMultiplicative() };
       }
       return left;
     }
     parseMultiplicative() {
       let left = this.parseUnary();
       while (this.peekOptional() === "*" || this.peekOptional() === "/") {
-        const op = this.next();
-        left = { kind: "binary", op, left, right: this.parseUnary() };
+        const op2 = this.next();
+        left = { kind: "binary", op: op2, left, right: this.parseUnary() };
       }
       return left;
     }
@@ -8755,11 +8790,11 @@ var MKProEmulatorBundle = (() => {
     93,
     94
   ]);
-  function metaFromOp(op) {
-    const meta = { mnemonic: op.mnemonic };
-    if (op.comment !== void 0) meta.comment = op.comment;
-    if (op.sourceLine !== void 0) meta.sourceLine = op.sourceLine;
-    if (op.raw === true) meta.raw = true;
+  function metaFromOp(op2) {
+    const meta = { mnemonic: op2.mnemonic };
+    if (op2.comment !== void 0) meta.comment = op2.comment;
+    if (op2.sourceLine !== void 0) meta.sourceLine = op2.sourceLine;
+    if (op2.raw === true) meta.raw = true;
     return meta;
   }
   function targetMetaFromAddress(item) {
@@ -8924,15 +8959,15 @@ var MKProEmulatorBundle = (() => {
     return result;
   }
   function machineOpFromMeta(opcode, meta) {
-    const op = {
+    const op2 = {
       kind: "op",
       opcode,
       mnemonic: meta.mnemonic
     };
-    if (meta.comment !== void 0) op.comment = meta.comment;
-    if (meta.sourceLine !== void 0) op.sourceLine = meta.sourceLine;
-    if (meta.raw === true) op.raw = true;
-    return op;
+    if (meta.comment !== void 0) op2.comment = meta.comment;
+    if (meta.sourceLine !== void 0) op2.sourceLine = meta.sourceLine;
+    if (meta.raw === true) op2.raw = true;
+    return op2;
   }
   function machineAddressFromMeta(target, meta) {
     const ref = { kind: "address", target };
@@ -8943,19 +8978,19 @@ var MKProEmulatorBundle = (() => {
   }
   function lowerIrToMachine(ops) {
     const result = [];
-    for (const op of ops) {
-      switch (op.kind) {
+    for (const op2 of ops) {
+      switch (op2.kind) {
         case "label":
           result.push({
             kind: "label",
-            name: op.name,
-            ...op.procedureBoundary === void 0 ? {} : { procedureBoundary: op.procedureBoundary },
-            ...op.procedureName === void 0 ? {} : { procedureName: op.procedureName },
-            ...op.hidden === true ? { hidden: true } : {}
+            name: op2.name,
+            ...op2.procedureBoundary === void 0 ? {} : { procedureBoundary: op2.procedureBoundary },
+            ...op2.procedureName === void 0 ? {} : { procedureName: op2.procedureName },
+            ...op2.hidden === true ? { hidden: true } : {}
           });
           break;
         case "orphan-address":
-          result.push(machineAddressFromMeta(op.target, op.meta));
+          result.push(machineAddressFromMeta(op2.target, op2.meta));
           break;
         case "store":
         case "recall":
@@ -8967,14 +9002,14 @@ var MKProEmulatorBundle = (() => {
         case "return":
         case "stop":
         case "plain":
-          result.push(machineOpFromMeta(op.opcode, op.meta));
+          result.push(machineOpFromMeta(op2.opcode, op2.meta));
           break;
         case "jump":
         case "cjump":
         case "call":
         case "loop":
-          result.push(machineOpFromMeta(op.opcode, op.meta));
-          result.push(machineAddressFromMeta(op.target, op.targetMeta));
+          result.push(machineOpFromMeta(op2.opcode, op2.meta));
+          result.push(machineAddressFromMeta(op2.target, op2.targetMeta));
           break;
       }
     }
@@ -8985,8 +9020,8 @@ var MKProEmulatorBundle = (() => {
   function emptyResult(ops) {
     return { ops: [...ops], applied: 0, optimizations: [] };
   }
-  function cellsPerOp(op) {
-    switch (op.kind) {
+  function cellsPerOp(op2) {
+    switch (op2.kind) {
       case "label":
         return 0;
       case "jump":
@@ -9003,12 +9038,12 @@ var MKProEmulatorBundle = (() => {
   function calculateLabelAddresses(ops) {
     const map = /* @__PURE__ */ new Map();
     let address = 0;
-    for (const op of ops) {
-      if (op.kind === "label") {
-        map.set(op.name, address);
+    for (const op2 of ops) {
+      if (op2.kind === "label") {
+        map.set(op2.name, address);
         continue;
       }
-      address += cellsPerOp(op);
+      address += cellsPerOp(op2);
     }
     return map;
   }
@@ -9016,15 +9051,15 @@ var MKProEmulatorBundle = (() => {
     if (typeof target === "number") return target;
     return labels.get(target);
   }
-  function hasRewriteBarrier(op) {
-    return "meta" in op && "raw" in op.meta && op.meta.raw === true;
+  function hasRewriteBarrier(op2) {
+    return "meta" in op2 && "raw" in op2.meta && op2.meta.raw === true;
   }
-  function isDisplayFocusSensitive(op) {
-    return "meta" in op && (op.meta.roles?.includes("display-byte") === true || /\b(display|screen|show|x2|вп)\b/iu.test(op.meta.comment ?? ""));
+  function isDisplayFocusSensitive(op2) {
+    return "meta" in op2 && (op2.meta.roles?.includes("display-byte") === true || /\b(display|screen|show|x2|вп)\b/iu.test(op2.meta.comment ?? ""));
   }
-  function knownIndirectMemoryTarget(op) {
-    if (op.kind !== "indirect-recall" && op.kind !== "indirect-store") return void 0;
-    const match = /\bindirect-memory-target=([0-9a-e])\b/iu.exec(op.meta.comment ?? "");
+  function knownIndirectMemoryTarget(op2) {
+    if (op2.kind !== "indirect-recall" && op2.kind !== "indirect-store") return void 0;
+    const match = /\bindirect-memory-target=([0-9a-e])\b/iu.exec(op2.meta.comment ?? "");
     if (!match) return void 0;
     return match[1].toLowerCase();
   }
@@ -9035,36 +9070,36 @@ var MKProEmulatorBundle = (() => {
     const result = [];
     let applied = 0;
     for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind !== "cjump" || typeof op.target !== "string" || hasRewriteBarrier(op)) {
-        result.push(op);
+      const op2 = ops[i];
+      if (op2.kind !== "cjump" || typeof op2.target !== "string" || hasRewriteBarrier(op2)) {
+        result.push(op2);
         continue;
       }
       const thenJumpIndex = findNextFlowOp(ops, i + 1);
       if (thenJumpIndex === void 0) {
-        result.push(op);
+        result.push(op2);
         continue;
       }
       const thenJump = ops[thenJumpIndex];
       if (thenJump.kind !== "jump" || typeof thenJump.target !== "string") {
-        result.push(op);
+        result.push(op2);
         continue;
       }
       const falseLabelIndex = thenJumpIndex + 1;
       const falseLabel = ops[falseLabelIndex];
-      if (falseLabel?.kind !== "label" || falseLabel.name !== op.target) {
-        result.push(op);
+      if (falseLabel?.kind !== "label" || falseLabel.name !== op2.target) {
+        result.push(op2);
         continue;
       }
       const endLabelIndex = findLabel(ops, thenJump.target, falseLabelIndex + 1);
-      if (endLabelIndex === void 0 || (labelRefs.get(op.target) ?? 0) !== 1) {
-        result.push(op);
+      if (endLabelIndex === void 0 || (labelRefs.get(op2.target) ?? 0) !== 1) {
+        result.push(op2);
         continue;
       }
       const thenOps = ops.slice(i + 1, thenJumpIndex);
       const elseOps = ops.slice(falseLabelIndex + 1, endLabelIndex);
       if (!isPureLinearBlock(thenOps) || !isPureLinearBlock(elseOps) || !opsEquivalent(thenOps, elseOps)) {
-        result.push(op);
+        result.push(op2);
         continue;
       }
       result.push(...thenOps);
@@ -9085,31 +9120,31 @@ var MKProEmulatorBundle = (() => {
   };
   function countLabelRefs(ops) {
     const refs = /* @__PURE__ */ new Map();
-    for (const op of ops) {
-      if ((op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") && typeof op.target === "string") {
-        refs.set(op.target, (refs.get(op.target) ?? 0) + 1);
+    for (const op2 of ops) {
+      if ((op2.kind === "jump" || op2.kind === "cjump" || op2.kind === "call" || op2.kind === "loop") && typeof op2.target === "string") {
+        refs.set(op2.target, (refs.get(op2.target) ?? 0) + 1);
       }
     }
     return refs;
   }
   function findNextFlowOp(ops, start) {
     for (let i = start; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "label") return void 0;
-      if (op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") return i;
+      const op2 = ops[i];
+      if (op2.kind === "label") return void 0;
+      if (op2.kind === "jump" || op2.kind === "cjump" || op2.kind === "call" || op2.kind === "loop") return i;
     }
     return void 0;
   }
   function findLabel(ops, name, start) {
     for (let i = start; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "label" && op.name === name) return i;
+      const op2 = ops[i];
+      if (op2.kind === "label" && op2.name === name) return i;
     }
     return void 0;
   }
   function isPureLinearBlock(ops) {
     return ops.length > 0 && ops.every(
-      (op) => !hasRewriteBarrier(op) && (op.kind === "plain" || op.kind === "store" || op.kind === "recall" || op.kind === "stop")
+      (op2) => !hasRewriteBarrier(op2) && (op2.kind === "plain" || op2.kind === "store" || op2.kind === "recall" || op2.kind === "stop")
     );
   }
   function opsEquivalent(a, b) {
@@ -9132,42 +9167,42 @@ var MKProEmulatorBundle = (() => {
   };
 
   // src/core/passes/constant-folding.ts
-  function digitOf(op) {
-    if (op.kind === "plain" && op.opcode <= 9) return op.opcode;
+  function digitOf(op2) {
+    if (op2.kind === "plain" && op2.opcode <= 9) return op2.opcode;
     return void 0;
   }
-  function aluOpcode(op) {
-    if (op.kind !== "plain") return void 0;
-    if (op.opcode === 16) return "+";
-    if (op.opcode === 17) return "-";
-    if (op.opcode === 18) return "*";
-    if (op.opcode === 19) return "/";
+  function aluOpcode(op2) {
+    if (op2.kind !== "plain") return void 0;
+    if (op2.opcode === 16) return "+";
+    if (op2.opcode === 17) return "-";
+    if (op2.opcode === 18) return "*";
+    if (op2.opcode === 19) return "/";
     return void 0;
   }
-  function isIdentityPlus(op, prev) {
+  function isIdentityPlus(op2, prev) {
     if (prev === void 0) return false;
     const digit = digitOf(prev);
     if (digit !== 0) return false;
-    return aluOpcode(op) === "+";
+    return aluOpcode(op2) === "+";
   }
-  function isIdentityMul(op, prev) {
+  function isIdentityMul(op2, prev) {
     if (prev === void 0) return false;
     const digit = digitOf(prev);
     if (digit !== 1) return false;
-    return aluOpcode(op) === "*";
+    return aluOpcode(op2) === "*";
   }
   var run2 = (ops) => {
     const result = [];
     let applied = 0;
     for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
+      const op2 = ops[i];
       const prev = result[result.length - 1];
-      if ((isIdentityPlus(op, prev) || isIdentityMul(op, prev)) && prev !== void 0 && prev.kind === "plain" && prev.meta.raw !== true && op.kind === "plain" && op.meta.raw !== true) {
+      if ((isIdentityPlus(op2, prev) || isIdentityMul(op2, prev)) && prev !== void 0 && prev.kind === "plain" && prev.meta.raw !== true && op2.kind === "plain" && op2.meta.raw !== true) {
         result.pop();
         applied += 1;
         continue;
       }
-      result.push(op);
+      result.push(op2);
     }
     if (applied === 0) {
       return { ops: result, applied: 0, optimizations: [] };
@@ -9191,53 +9226,53 @@ var MKProEmulatorBundle = (() => {
   };
 
   // src/core/passes/cse-display-block.ts
-  function isPureDataOp(op) {
-    if (hasRewriteBarrier(op)) return false;
-    if (op.kind === "recall") return true;
-    if (op.kind === "plain") {
-      if (op.opcode === 16 || op.opcode === 18) return true;
-      if (op.opcode <= 9 || op.opcode === 10) return true;
+  function isPureDataOp(op2) {
+    if (hasRewriteBarrier(op2)) return false;
+    if (op2.kind === "recall") return true;
+    if (op2.kind === "plain") {
+      if (op2.opcode === 16 || op2.opcode === 18) return true;
+      if (op2.opcode <= 9 || op2.opcode === 10) return true;
     }
     return false;
   }
-  function isBlockTerminator(op) {
-    if (hasRewriteBarrier(op)) return false;
-    return op.kind === "stop" || op.kind === "store" || op.kind === "indirect-store";
+  function isBlockTerminator(op2) {
+    if (hasRewriteBarrier(op2)) return false;
+    return op2.kind === "stop" || op2.kind === "store" || op2.kind === "indirect-store";
   }
   function collectCseCandidates(ops) {
     const blocks = [];
     let start = -1;
     let buffer = [];
     for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "label") {
+      const op2 = ops[i];
+      if (op2.kind === "label") {
         start = -1;
         buffer = [];
         continue;
       }
-      if (isPureDataOp(op)) {
+      if (isPureDataOp(op2)) {
         if (start === -1) start = i;
-        buffer.push(op);
+        buffer.push(op2);
         continue;
       }
-      if (buffer.length >= 3 && op.kind === "return") {
-        blocks.push({ startIndex: start, ops: [...buffer, op] });
-      } else if (buffer.length >= 3 && op.kind === "stop" && ops[i + 1]?.kind === "return") {
-        blocks.push({ startIndex: start, ops: [...buffer, op, ops[i + 1]] });
+      if (buffer.length >= 3 && op2.kind === "return") {
+        blocks.push({ startIndex: start, ops: [...buffer, op2] });
+      } else if (buffer.length >= 3 && op2.kind === "stop" && ops[i + 1]?.kind === "return") {
+        blocks.push({ startIndex: start, ops: [...buffer, op2, ops[i + 1]] });
       }
       start = -1;
       buffer = [];
-      if (isBlockTerminator(op)) continue;
+      if (isBlockTerminator(op2)) continue;
     }
     return blocks;
   }
   function blockSignature(block) {
-    return block.ops.map((op) => {
-      if (op.kind === "recall") return `r:${op.register}`;
-      if (op.kind === "plain") return `p:${op.opcode.toString(16)}`;
-      if (op.kind === "stop") return `stop:${op.semantic}`;
-      if (op.kind === "return") return "return";
-      return `o:${op.kind}`;
+    return block.ops.map((op2) => {
+      if (op2.kind === "recall") return `r:${op2.register}`;
+      if (op2.kind === "plain") return `p:${op2.opcode.toString(16)}`;
+      if (op2.kind === "stop") return `stop:${op2.semantic}`;
+      if (op2.kind === "return") return "return";
+      return `o:${op2.kind}`;
     }).join("|");
   }
   var cseLabelCounter = 0;
@@ -9326,13 +9361,13 @@ var MKProEmulatorBundle = (() => {
     const addressIndex = /* @__PURE__ */ new Map();
     let address = 0;
     for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "label") {
-        labelIndex.set(op.name, i);
+      const op2 = ops[i];
+      if (op2.kind === "label") {
+        labelIndex.set(op2.name, i);
         continue;
       }
       addressIndex.set(address, i);
-      address += cellsPerOp(op);
+      address += cellsPerOp(op2);
     }
     return { labelIndex, addressIndex };
   }
@@ -9341,14 +9376,14 @@ var MKProEmulatorBundle = (() => {
     const successors = Array.from({ length: ops.length }, () => []);
     const callReturns = [];
     for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
+      const op2 = ops[i];
       const next = i + 1;
-      if ((op.kind === "call" || op.kind === "indirect-call") && next < ops.length) {
+      if ((op2.kind === "call" || op2.kind === "indirect-call") && next < ops.length) {
         callReturns.push(next);
       }
     }
     for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
+      const op2 = ops[i];
       const next = i + 1;
       const fallthrough = () => {
         if (next < ops.length) successors[i].push(next);
@@ -9362,7 +9397,7 @@ var MKProEmulatorBundle = (() => {
           if (idx !== void 0) successors[i].push(idx);
         }
       };
-      switch (op.kind) {
+      switch (op2.kind) {
         case "label":
         case "store":
         case "recall":
@@ -9379,15 +9414,15 @@ var MKProEmulatorBundle = (() => {
           successors[i].push(...callReturns);
           break;
         case "jump":
-          jumpTo(op.target);
+          jumpTo(op2.target);
           break;
         case "cjump":
         case "loop":
-          jumpTo(op.target);
+          jumpTo(op2.target);
           fallthrough();
           break;
         case "call":
-          jumpTo(op.target);
+          jumpTo(op2.target);
           fallthrough();
           break;
         case "indirect-jump":
@@ -9402,32 +9437,32 @@ var MKProEmulatorBundle = (() => {
     }
     return { successors };
   }
-  function defsAndUses(op) {
-    switch (op.kind) {
+  function defsAndUses(op2) {
+    switch (op2.kind) {
       case "store":
-        return { defs: [op.register], uses: [] };
+        return { defs: [op2.register], uses: [] };
       case "recall":
-        return { defs: [], uses: [op.register] };
+        return { defs: [], uses: [op2.register] };
       case "indirect-recall": {
-        const target = knownIndirectMemoryTarget(op);
+        const target = knownIndirectMemoryTarget(op2);
         return {
           defs: [],
-          uses: target === void 0 ? [op.register] : [op.register, target]
+          uses: target === void 0 ? [op2.register] : [op2.register, target]
         };
       }
       case "indirect-store": {
-        const target = knownIndirectMemoryTarget(op);
+        const target = knownIndirectMemoryTarget(op2);
         return {
           defs: target === void 0 ? [] : [target],
-          uses: [op.register]
+          uses: [op2.register]
         };
       }
       case "indirect-jump":
       case "indirect-call":
       case "indirect-cjump":
-        return { defs: [], uses: [op.register] };
+        return { defs: [], uses: [op2.register] };
       case "loop": {
-        const register = loopCounterRegister(op.counter);
+        const register = loopCounterRegister(op2.counter);
         return { defs: [register], uses: [register] };
       }
       default:
@@ -9457,13 +9492,13 @@ var MKProEmulatorBundle = (() => {
       changed = false;
       iterations += 1;
       for (let i = n - 1; i >= 0; i -= 1) {
-        const op = ops[i];
+        const op2 = ops[i];
         const succ = successors[i];
         const newOut = /* @__PURE__ */ new Set();
         for (const s of succ) {
           for (const reg of liveIn[s]) newOut.add(reg);
         }
-        const { defs, uses } = defsAndUses(op);
+        const { defs, uses } = defsAndUses(op2);
         const newIn = new Set(uses);
         for (const reg of newOut) {
           if (!defs.includes(reg)) newIn.add(reg);
@@ -9491,11 +9526,11 @@ var MKProEmulatorBundle = (() => {
     const addressIndex = /* @__PURE__ */ new Map();
     let address = 0;
     for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "label") labelIndex.set(op.name, i);
+      const op2 = ops[i];
+      if (op2.kind === "label") labelIndex.set(op2.name, i);
       else {
         addressIndex.set(address, i);
-        address += cellsPerOp(op);
+        address += cellsPerOp(op2);
       }
     }
     const visited = /* @__PURE__ */ new Set();
@@ -9505,7 +9540,7 @@ var MKProEmulatorBundle = (() => {
       const i = stack.pop();
       if (visited.has(i)) continue;
       visited.add(i);
-      const op = ops[i];
+      const op2 = ops[i];
       const fallthrough = () => {
         if (i + 1 < ops.length) stack.push(i + 1);
       };
@@ -9518,7 +9553,7 @@ var MKProEmulatorBundle = (() => {
           if (idx !== void 0) stack.push(idx);
         }
       };
-      switch (op.kind) {
+      switch (op2.kind) {
         case "label":
         case "store":
         case "recall":
@@ -9534,30 +9569,30 @@ var MKProEmulatorBundle = (() => {
         case "return":
           break;
         case "jump":
-          target(op.target);
+          target(op2.target);
           break;
         case "cjump":
         case "loop":
-          target(op.target);
+          target(op2.target);
           fallthrough();
           break;
         case "call":
-          target(op.target);
+          target(op2.target);
           fallthrough();
           break;
         case "indirect-jump": {
-          const knownTarget = knownIndirectTarget(op);
+          const knownTarget = knownIndirectTarget(op2);
           if (knownTarget !== void 0) target(knownTarget);
           break;
         }
         case "indirect-call": {
-          const knownTarget = knownIndirectTarget(op);
+          const knownTarget = knownIndirectTarget(op2);
           if (knownTarget !== void 0) target(knownTarget);
           fallthrough();
           break;
         }
         case "indirect-cjump": {
-          const knownTarget = knownIndirectTarget(op);
+          const knownTarget = knownIndirectTarget(op2);
           if (knownTarget !== void 0) target(knownTarget);
           fallthrough();
           break;
@@ -9566,11 +9601,11 @@ var MKProEmulatorBundle = (() => {
     }
     return visited;
   }
-  function knownIndirectTarget(op) {
-    if (op.kind !== "indirect-jump" && op.kind !== "indirect-call" && op.kind !== "indirect-cjump") {
+  function knownIndirectTarget(op2) {
+    if (op2.kind !== "indirect-jump" && op2.kind !== "indirect-call" && op2.kind !== "indirect-cjump") {
       return void 0;
     }
-    const match = /\bindirect-target=(\d+)\b/u.exec(op.meta.comment ?? "");
+    const match = /\bindirect-target=(\d+)\b/u.exec(op2.meta.comment ?? "");
     if (!match) return void 0;
     const target = Number(match[1]);
     if (!Number.isInteger(target) || target < 0 || target > 104) return void 0;
@@ -9622,36 +9657,36 @@ var MKProEmulatorBundle = (() => {
     const blocks = [];
     let active;
     for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (op.kind !== "label") continue;
-      if (op.procedureBoundary === "start") {
-        active = { name: op.procedureName ?? op.name, start: index };
+      const op2 = ops[index];
+      if (op2.kind !== "label") continue;
+      if (op2.procedureBoundary === "start") {
+        active = { name: op2.procedureName ?? op2.name, start: index };
         continue;
       }
-      if (op.procedureBoundary === "end" && active !== void 0) {
-        const name = op.procedureName ?? active.name;
+      if (op2.procedureBoundary === "end" && active !== void 0) {
+        const name = op2.procedureName ?? active.name;
         if (name === active.name) blocks.push({ name, start: active.start, end: index + 1 });
         active = void 0;
       }
     }
     return blocks;
   }
-  function knownIndirectTarget2(op) {
-    if (op.kind !== "indirect-jump" && op.kind !== "indirect-call" && op.kind !== "indirect-cjump") {
+  function knownIndirectTarget2(op2) {
+    if (op2.kind !== "indirect-jump" && op2.kind !== "indirect-call" && op2.kind !== "indirect-cjump") {
       return void 0;
     }
-    const match = /\bindirect-target=(\d+)\b/u.exec(op.meta.comment ?? "");
+    const match = /\bindirect-target=(\d+)\b/u.exec(op2.meta.comment ?? "");
     if (!match) return void 0;
     const target = Number(match[1]);
     return Number.isInteger(target) && target >= 0 ? target : void 0;
   }
   function canFallThroughPastBlock(ops, block) {
     for (let index = block.end - 1; index >= block.start; index -= 1) {
-      const op = ops[index];
-      if (op.kind === "label") continue;
-      if (op.kind === "jump" || op.kind === "return" || op.kind === "indirect-jump") return false;
-      if (op.kind === "stop" && op.semantic === "halt") return false;
-      if (op.kind === "plain" && op.meta.comment?.startsWith("halt")) return false;
+      const op2 = ops[index];
+      if (op2.kind === "label") continue;
+      if (op2.kind === "jump" || op2.kind === "return" || op2.kind === "indirect-jump") return false;
+      if (op2.kind === "stop" && op2.semantic === "halt") return false;
+      if (op2.kind === "plain" && op2.meta.comment?.startsWith("halt")) return false;
       return true;
     }
     return true;
@@ -9660,7 +9695,7 @@ var MKProEmulatorBundle = (() => {
     if (context.options.disableInterproceduralOpts === true) {
       return { ops: [...ops], applied: 0, optimizations: [] };
     }
-    if (ops.some((op) => "meta" in op && op.meta.raw === true)) {
+    if (ops.some((op2) => "meta" in op2 && op2.meta.raw === true)) {
       return { ops: [...ops], applied: 0, optimizations: [] };
     }
     const blocks = collectProcedureBlocks(ops);
@@ -9670,22 +9705,22 @@ var MKProEmulatorBundle = (() => {
     for (const block of blocks) {
       for (let index = block.start; index < block.end; index += 1) {
         ownerByIndex.set(index, block.name);
-        const op = ops[index];
-        if (op.kind === "label") labelOwner.set(op.name, block.name);
+        const op2 = ops[index];
+        if (op2.kind === "label") labelOwner.set(op2.name, block.name);
       }
     }
     const addressOwner = /* @__PURE__ */ new Map();
     let address = 0;
     for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (op.kind === "label") continue;
+      const op2 = ops[index];
+      if (op2.kind === "label") continue;
       const owner = ownerByIndex.get(index);
       if (owner !== void 0) {
-        for (let offset = 0; offset < cellsPerOp(op); offset += 1) {
+        for (let offset = 0; offset < cellsPerOp(op2); offset += 1) {
           addressOwner.set(address + offset, owner);
         }
       }
-      address += cellsPerOp(op);
+      address += cellsPerOp(op2);
     }
     const rootTargets = /* @__PURE__ */ new Set();
     const edges = /* @__PURE__ */ new Map();
@@ -9709,19 +9744,19 @@ var MKProEmulatorBundle = (() => {
       if (targetOwner !== void 0 && targetOwner !== block.name) addEdge(block.name, targetOwner);
     }
     for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (op.kind !== "jump" && op.kind !== "cjump" && op.kind !== "call" && op.kind !== "loop" && op.kind !== "orphan-address" && op.kind !== "indirect-jump" && op.kind !== "indirect-call" && op.kind !== "indirect-cjump") {
+      const op2 = ops[index];
+      if (op2.kind !== "jump" && op2.kind !== "cjump" && op2.kind !== "call" && op2.kind !== "loop" && op2.kind !== "orphan-address" && op2.kind !== "indirect-jump" && op2.kind !== "indirect-call" && op2.kind !== "indirect-cjump") {
         continue;
       }
-      if (op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
-        const target = knownIndirectTarget2(op);
+      if (op2.kind === "indirect-jump" || op2.kind === "indirect-call" || op2.kind === "indirect-cjump") {
+        const target = knownIndirectTarget2(op2);
         if (target === void 0) return { ops: [...ops], applied: 0, optimizations: [] };
         markReference(index, addressOwner.get(target));
         continue;
       }
       markReference(
         index,
-        typeof op.target === "string" ? labelOwner.get(op.target) : addressOwner.get(op.target)
+        typeof op2.target === "string" ? labelOwner.get(op2.target) : addressOwner.get(op2.target)
       );
     }
     const reachable = /* @__PURE__ */ new Set();
@@ -9757,16 +9792,16 @@ var MKProEmulatorBundle = (() => {
   // src/core/passes/dead-store-before-commutative.ts
   function registerReadBeforeNextWrite(ops, start, register) {
     for (let i = start; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "recall" && op.register === register) return true;
-      if (op.kind === "store" && op.register === register) return false;
-      if (op.kind !== "label" && op.kind !== "plain" && op.kind !== "orphan-address") return true;
+      const op2 = ops[i];
+      if (op2.kind === "recall" && op2.register === register) return true;
+      if (op2.kind === "store" && op2.register === register) return false;
+      if (op2.kind !== "label" && op2.kind !== "plain" && op2.kind !== "orphan-address") return true;
     }
     return false;
   }
-  function isCommutativeAlu(op) {
-    if (op.kind !== "plain") return false;
-    return op.opcode === 16 || op.opcode === 18;
+  function isCommutativeAlu(op2) {
+    if (op2.kind !== "plain") return false;
+    return op2.opcode === 16 || op2.opcode === 18;
   }
   var run6 = (ops) => {
     const result = [];
@@ -9800,12 +9835,12 @@ var MKProEmulatorBundle = (() => {
   };
 
   // src/core/passes/dead-store-elimination.ts
-  function isNumberEntry(op) {
-    return op.kind === "plain" && op.opcode <= 12;
+  function isNumberEntry(op2) {
+    return op2.kind === "plain" && op2.opcode <= 12;
   }
-  function leavesEntryOpen(op) {
-    if (isNumberEntry(op)) return true;
-    return op.kind === "stop" && op.semantic === "input";
+  function leavesEntryOpen(op2) {
+    if (isNumberEntry(op2)) return true;
+    return op2.kind === "stop" && op2.semantic === "input";
   }
   function previousEffectiveOp(ops, index) {
     for (let i = index - 1; i >= 0; i -= 1) {
@@ -9829,10 +9864,10 @@ var MKProEmulatorBundle = (() => {
     const liveness = computeLiveness(ops);
     const removed = /* @__PURE__ */ new Set();
     for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind !== "store") continue;
-      if (hasRewriteBarrier(op)) continue;
-      if (liveness.liveOut[i].has(op.register)) continue;
+      const op2 = ops[i];
+      if (op2.kind !== "store") continue;
+      if (hasRewriteBarrier(op2)) continue;
+      if (liveness.liveOut[i].has(op2.register)) continue;
       if (finalizesNumberEntry(ops, i)) continue;
       removed.add(i);
     }
@@ -9862,14 +9897,14 @@ var MKProEmulatorBundle = (() => {
   };
 
   // src/core/passes/duplicate-failure-tail.ts
-  function isZeroDigit(op) {
-    return op.kind === "plain" && op.opcode === 0;
+  function isZeroDigit(op2) {
+    return op2.kind === "plain" && op2.opcode === 0;
   }
-  function isPauseLike(op) {
-    return op.kind === "stop";
+  function isPauseLike(op2) {
+    return op2.kind === "stop";
   }
-  function isUnconditionalJump(op) {
-    return op.kind === "jump";
+  function isUnconditionalJump(op2) {
+    return op2.kind === "jump";
   }
   var run8 = (ops) => {
     const rewrite = /* @__PURE__ */ new Map();
@@ -9899,20 +9934,20 @@ var MKProEmulatorBundle = (() => {
     const result = [];
     for (let index = 0; index < ops.length; index += 1) {
       if (remove.has(index)) continue;
-      const op = ops[index];
-      if ((op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") && typeof op.target === "string") {
-        const replacement = rewrite.get(op.target);
+      const op2 = ops[index];
+      if ((op2.kind === "jump" || op2.kind === "cjump" || op2.kind === "call" || op2.kind === "loop") && typeof op2.target === "string") {
+        const replacement = rewrite.get(op2.target);
         if (replacement !== void 0) {
           const targetMeta = {};
-          if (op.targetMeta.comment !== void 0) targetMeta.comment = op.targetMeta.comment;
-          if (op.targetMeta.sourceLine !== void 0) targetMeta.sourceLine = op.targetMeta.sourceLine;
-          if (op.targetMeta.roles !== void 0) targetMeta.roles = [...op.targetMeta.roles];
-          if (op.targetMeta.formalOpcode !== void 0) targetMeta.formalOpcode = op.targetMeta.formalOpcode;
-          result.push({ ...op, target: replacement, targetMeta });
+          if (op2.targetMeta.comment !== void 0) targetMeta.comment = op2.targetMeta.comment;
+          if (op2.targetMeta.sourceLine !== void 0) targetMeta.sourceLine = op2.targetMeta.sourceLine;
+          if (op2.targetMeta.roles !== void 0) targetMeta.roles = [...op2.targetMeta.roles];
+          if (op2.targetMeta.formalOpcode !== void 0) targetMeta.formalOpcode = op2.targetMeta.formalOpcode;
+          result.push({ ...op2, target: replacement, targetMeta });
           continue;
         }
       }
-      result.push(op);
+      result.push(op2);
     }
     const passResult = {
       ops: result,
@@ -10083,9 +10118,9 @@ var MKProEmulatorBundle = (() => {
       comment: [meta.comment, comment].filter(Boolean).join("; ")
     };
   }
-  function digitForPlain(op) {
-    if (op.kind !== "plain" || op.opcode < 0 || op.opcode > 9) return void 0;
-    return String(op.opcode);
+  function digitForPlain(op2) {
+    if (op2.kind !== "plain" || op2.opcode < 0 || op2.opcode > 9) return void 0;
+    return String(op2.opcode);
   }
   function literalNumber(text) {
     if (text === void 0 || !/^\d+$/u.test(text)) return void 0;
@@ -10117,22 +10152,22 @@ var MKProEmulatorBundle = (() => {
     }
     return void 0;
   }
-  function updateKnownAfterOp(state, op) {
-    if (hasRewriteBarrier(op)) {
+  function updateKnownAfterOp(state, op2) {
+    if (hasRewriteBarrier(op2)) {
       clearKnownState(state);
       return;
     }
-    const digit = digitForPlain(op);
+    const digit = digitForPlain(op2);
     if (digit !== void 0) {
       state.currentLiteral = `${state.currentLiteral ?? ""}${digit}`;
       return;
     }
-    switch (op.kind) {
+    switch (op2.kind) {
       case "store":
-        rememberStore(state, op.register);
+        rememberStore(state, op2.register);
         return;
       case "recall": {
-        state.currentLiteral = state.stableRegisters.get(op.register);
+        state.currentLiteral = state.stableRegisters.get(op2.register);
         return;
       }
       case "label":
@@ -10156,52 +10191,52 @@ var MKProEmulatorBundle = (() => {
         return;
     }
   }
-  function indirectFlowOp(op, register, target) {
+  function indirectFlowOp(op2, register, target) {
     const offset = registerIndex(register);
     const suffix = `stable indirect flow indirect-target=${target}`;
-    if (op.kind === "jump") {
+    if (op2.kind === "jump") {
       return {
         kind: "indirect-jump",
         register,
         opcode: 128 + offset,
-        meta: cloneMeta({ ...op.meta, mnemonic: `\u041A \u0411\u041F ${register}` }, suffix)
+        meta: cloneMeta({ ...op2.meta, mnemonic: `\u041A \u0411\u041F ${register}` }, suffix)
       };
     }
-    if (op.kind === "call") {
+    if (op2.kind === "call") {
       return {
         kind: "indirect-call",
         register,
         opcode: 160 + offset,
-        meta: cloneMeta({ ...op.meta, mnemonic: `\u041A \u041F\u041F ${register}` }, suffix)
+        meta: cloneMeta({ ...op2.meta, mnemonic: `\u041A \u041F\u041F ${register}` }, suffix)
       };
     }
-    const opcode = INDIRECT_COND_BASES2[op.condition] + offset;
-    const name = op.condition === "==0" ? "x=0" : op.condition === "!=0" ? "x!=0" : `x${op.condition}`;
+    const opcode = INDIRECT_COND_BASES2[op2.condition] + offset;
+    const name = op2.condition === "==0" ? "x=0" : op2.condition === "!=0" ? "x!=0" : `x${op2.condition}`;
     return {
       kind: "indirect-cjump",
-      condition: op.condition,
+      condition: op2.condition,
       register,
       opcode,
-      meta: cloneMeta({ ...op.meta, mnemonic: `\u041A ${name} ${register}` }, suffix)
+      meta: cloneMeta({ ...op2.meta, mnemonic: `\u041A ${name} ${register}` }, suffix)
     };
   }
   var stableFlowRun = (ops) => {
     const result = [];
     const state = { currentLiteral: void 0, stableRegisters: /* @__PURE__ */ new Map() };
     let applied = 0;
-    for (const op of ops) {
-      if (!hasRewriteBarrier(op) && (op.kind === "jump" || op.kind === "call" || op.kind === "cjump")) {
-        const register = findFlowSelector(state, op.target);
-        if (register !== void 0 && typeof op.target === "number") {
-          const rewritten = indirectFlowOp(op, register, op.target);
+    for (const op2 of ops) {
+      if (!hasRewriteBarrier(op2) && (op2.kind === "jump" || op2.kind === "call" || op2.kind === "cjump")) {
+        const register = findFlowSelector(state, op2.target);
+        if (register !== void 0 && typeof op2.target === "number") {
+          const rewritten = indirectFlowOp(op2, register, op2.target);
           result.push(rewritten);
           updateKnownAfterOp(state, rewritten);
           applied += 1;
           continue;
         }
       }
-      result.push(op);
-      updateKnownAfterOp(state, op);
+      result.push(op2);
+      updateKnownAfterOp(state, op2);
     }
     if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
     return {
@@ -10219,17 +10254,17 @@ var MKProEmulatorBundle = (() => {
     const result = [];
     const state = { currentLiteral: void 0, stableRegisters: /* @__PURE__ */ new Map() };
     let applied = 0;
-    for (const op of ops) {
-      if ((op.kind === "recall" || op.kind === "store") && !hasRewriteBarrier(op) && !isDisplayFocusSensitive(op)) {
-        const selector = findMemorySelector(state, op.register);
+    for (const op2 of ops) {
+      if ((op2.kind === "recall" || op2.kind === "store") && !hasRewriteBarrier(op2) && !isDisplayFocusSensitive(op2)) {
+        const selector = findMemorySelector(state, op2.register);
         if (selector !== void 0) {
-          const opcodeBase = op.kind === "recall" ? 208 : 176;
-          const mnemonic = op.kind === "recall" ? `\u041A \u041F->X ${selector}` : `\u041A X->\u041F ${selector}`;
+          const opcodeBase = op2.kind === "recall" ? 208 : 176;
+          const mnemonic = op2.kind === "recall" ? `\u041A \u041F->X ${selector}` : `\u041A X->\u041F ${selector}`;
           const rewritten = {
-            kind: op.kind === "recall" ? "indirect-recall" : "indirect-store",
+            kind: op2.kind === "recall" ? "indirect-recall" : "indirect-store",
             register: selector,
             opcode: opcodeBase + registerIndex(selector),
-            meta: cloneMeta({ ...op.meta, mnemonic }, `indirect memory table indirect-memory-target=${op.register}`)
+            meta: cloneMeta({ ...op2.meta, mnemonic }, `indirect memory table indirect-memory-target=${op2.register}`)
           };
           result.push(rewritten);
           updateKnownAfterOp(state, rewritten);
@@ -10237,8 +10272,8 @@ var MKProEmulatorBundle = (() => {
           continue;
         }
       }
-      result.push(op);
-      updateKnownAfterOp(state, op);
+      result.push(op2);
+      updateKnownAfterOp(state, op2);
     }
     if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
     return {
@@ -10267,8 +10302,8 @@ var MKProEmulatorBundle = (() => {
   function labelTargets(ops) {
     const map = /* @__PURE__ */ new Map();
     for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "label") map.set(op.name, i);
+      const op2 = ops[i];
+      if (op2.kind === "label") map.set(op2.name, i);
     }
     return map;
   }
@@ -10292,16 +10327,16 @@ var MKProEmulatorBundle = (() => {
     const labels = labelTargets(ops);
     const result = [];
     let applied = 0;
-    for (const op of ops) {
-      if ((op.kind === "jump" || op.kind === "cjump") && typeof op.target === "string" && !hasRewriteBarrier(op)) {
-        const final = followLabel(ops, labels, op.target, /* @__PURE__ */ new Set());
-        if (final !== void 0 && final !== op.target) {
+    for (const op2 of ops) {
+      if ((op2.kind === "jump" || op2.kind === "cjump") && typeof op2.target === "string" && !hasRewriteBarrier(op2)) {
+        const final = followLabel(ops, labels, op2.target, /* @__PURE__ */ new Set());
+        if (final !== void 0 && final !== op2.target) {
           applied += 1;
-          result.push({ ...op, target: final });
+          result.push({ ...op2, target: final });
           continue;
         }
       }
-      result.push(op);
+      result.push(op2);
     }
     if (applied === 0) {
       return { ops: result, applied: 0, optimizations: [] };
@@ -10367,8 +10402,8 @@ var MKProEmulatorBundle = (() => {
   };
 
   // src/core/passes/last-x-reuse.ts
-  function clobbersX(op) {
-    switch (op.kind) {
+  function clobbersX(op2) {
+    switch (op2.kind) {
       case "label":
       case "orphan-address":
         return false;
@@ -10398,25 +10433,25 @@ var MKProEmulatorBundle = (() => {
     const removed = /* @__PURE__ */ new Set();
     let xHolds;
     for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "label") {
+      const op2 = ops[i];
+      if (op2.kind === "label") {
         xHolds = void 0;
         continue;
       }
-      if (op.kind === "store") {
-        if (!hasRewriteBarrier(op)) xHolds = op.register;
+      if (op2.kind === "store") {
+        if (!hasRewriteBarrier(op2)) xHolds = op2.register;
         else xHolds = void 0;
         continue;
       }
-      if (op.kind === "recall" && !hasRewriteBarrier(op) && xHolds === op.register) {
+      if (op2.kind === "recall" && !hasRewriteBarrier(op2) && xHolds === op2.register) {
         removed.add(i);
         continue;
       }
-      if (op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump" || op.kind === "return" || op.kind === "stop") {
+      if (op2.kind === "jump" || op2.kind === "cjump" || op2.kind === "call" || op2.kind === "loop" || op2.kind === "indirect-jump" || op2.kind === "indirect-call" || op2.kind === "indirect-cjump" || op2.kind === "return" || op2.kind === "stop") {
         xHolds = void 0;
         continue;
       }
-      if (clobbersX(op)) xHolds = void 0;
+      if (clobbersX(op2)) xHolds = void 0;
     }
     if (removed.size === 0) {
       return { ops: [...ops], applied: 0, optimizations: [] };
@@ -10459,9 +10494,9 @@ var MKProEmulatorBundle = (() => {
   }
   function usedRegisters(ops) {
     const used = /* @__PURE__ */ new Set();
-    for (const op of ops) {
-      if (op.kind === "store" || op.kind === "recall" || op.kind === "indirect-store" || op.kind === "indirect-recall" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
-        used.add(op.register);
+    for (const op2 of ops) {
+      if (op2.kind === "store" || op2.kind === "recall" || op2.kind === "indirect-store" || op2.kind === "indirect-recall" || op2.kind === "indirect-jump" || op2.kind === "indirect-call" || op2.kind === "indirect-cjump") {
+        used.add(op2.register);
       }
     }
     return used;
@@ -10470,21 +10505,21 @@ var MKProEmulatorBundle = (() => {
     const used = usedRegisters(ops);
     return STABLE_REGISTERS.filter((register) => !used.has(register));
   }
-  function numericFlowTarget(op) {
-    if (op.kind !== "jump" && op.kind !== "call" && op.kind !== "cjump" && op.kind !== "loop") return void 0;
-    if (typeof op.target !== "number") return void 0;
-    if (!Number.isInteger(op.target) || op.target < 0 || op.target > 104) return void 0;
-    return op.target;
+  function numericFlowTarget(op2) {
+    if (op2.kind !== "jump" && op2.kind !== "call" && op2.kind !== "cjump" && op2.kind !== "loop") return void 0;
+    if (typeof op2.target !== "number") return void 0;
+    if (!Number.isInteger(op2.target) || op2.target < 0 || op2.target > 104) return void 0;
+    return op2.target;
   }
-  function branchTarget(op) {
-    if (op.kind !== "jump" && op.kind !== "call" && op.kind !== "cjump") return void 0;
-    if (op.targetMeta.formalOpcode !== void 0 || op.targetMeta.roles?.includes("formal-address")) return void 0;
-    return numericFlowTarget(op);
+  function branchTarget(op2) {
+    if (op2.kind !== "jump" && op2.kind !== "call" && op2.kind !== "cjump") return void 0;
+    if (op2.targetMeta.formalOpcode !== void 0 || op2.targetMeta.roles?.includes("formal-address")) return void 0;
+    return numericFlowTarget(op2);
   }
   function maxNumericFlowTarget(ops) {
     let max = -1;
-    for (const op of ops) {
-      const target = numericFlowTarget(op);
+    for (const op2 of ops) {
+      const target = numericFlowTarget(op2);
       if (target !== void 0 && target > max) max = target;
     }
     return max;
@@ -10492,23 +10527,23 @@ var MKProEmulatorBundle = (() => {
   function addressByIndex(ops) {
     const addresses = [];
     let address = 0;
-    for (const op of ops) {
+    for (const op2 of ops) {
       addresses.push(address);
-      address += cellsPerOp(op);
+      address += cellsPerOp(op2);
     }
     return addresses;
   }
   function opAtAddress(ops, addresses, address) {
     for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (cellsPerOp(op) === 0) continue;
-      if (addresses[i] === address) return op;
+      const op2 = ops[i];
+      if (cellsPerOp(op2) === 0) continue;
+      if (addresses[i] === address) return op2;
     }
     return void 0;
   }
-  function hasSingleCellFallthrough(op) {
-    if (op === void 0 || cellsPerOp(op) !== 1) return false;
-    switch (op.kind) {
+  function hasSingleCellFallthrough(op2) {
+    if (op2 === void 0 || cellsPerOp(op2) !== 1) return false;
+    switch (op2.kind) {
       case "plain":
       case "store":
       case "recall":
@@ -10555,33 +10590,33 @@ var MKProEmulatorBundle = (() => {
     }
     return `A${target - 100}`;
   }
-  function indirectFlowOp2(op, register, selectorValue, target, superDark) {
+  function indirectFlowOp2(op2, register, selectorValue, target, superDark) {
     const offset = registerIndex(register);
     const suffix = `preloaded R${register}=${selectorValue} indirect-target=${target}${superDark ? " super-dark" : ""} indirect flow`;
-    if (op.kind === "jump") {
+    if (op2.kind === "jump") {
       return {
         kind: "indirect-jump",
         register,
         opcode: 128 + offset,
-        meta: cloneMeta2({ ...op.meta, mnemonic: `\u041A \u0411\u041F ${register}` }, suffix)
+        meta: cloneMeta2({ ...op2.meta, mnemonic: `\u041A \u0411\u041F ${register}` }, suffix)
       };
     }
-    if (op.kind === "call") {
+    if (op2.kind === "call") {
       return {
         kind: "indirect-call",
         register,
         opcode: 160 + offset,
-        meta: cloneMeta2({ ...op.meta, mnemonic: `\u041A \u041F\u041F ${register}` }, suffix)
+        meta: cloneMeta2({ ...op2.meta, mnemonic: `\u041A \u041F\u041F ${register}` }, suffix)
       };
     }
-    const opcode = INDIRECT_COND_BASES3[op.condition] + offset;
-    const name = op.condition === "==0" ? "x=0" : op.condition === "!=0" ? "x!=0" : `x${op.condition}`;
+    const opcode = INDIRECT_COND_BASES3[op2.condition] + offset;
+    const name = op2.condition === "==0" ? "x=0" : op2.condition === "!=0" ? "x!=0" : `x${op2.condition}`;
     return {
       kind: "indirect-cjump",
-      condition: op.condition,
+      condition: op2.condition,
       register,
       opcode,
-      meta: cloneMeta2({ ...op.meta, mnemonic: `\u041A ${name} ${register}` }, suffix)
+      meta: cloneMeta2({ ...op2.meta, mnemonic: `\u041A ${name} ${register}` }, suffix)
     };
   }
   function runtimeSelectorLiteralOps(target, register) {
@@ -10600,8 +10635,8 @@ var MKProEmulatorBundle = (() => {
       }
     ];
   }
-  function opReferencesRegister(op, register) {
-    switch (op.kind) {
+  function opReferencesRegister(op2, register) {
+    switch (op2.kind) {
       case "store":
       case "recall":
       case "indirect-store":
@@ -10609,7 +10644,7 @@ var MKProEmulatorBundle = (() => {
       case "indirect-jump":
       case "indirect-call":
       case "indirect-cjump":
-        return op.register === register;
+        return op2.register === register;
       default:
         return false;
     }
@@ -10623,11 +10658,11 @@ var MKProEmulatorBundle = (() => {
   }
   function canBorrowRegisterForRuntimeSelector(ops, register, targetIndex, insertIndex, selected) {
     for (let index = targetIndex; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (hasRewriteBarrier(op)) return false;
+      const op2 = ops[index];
+      if (hasRewriteBarrier(op2)) return false;
       if (selected.has(index)) continue;
-      if (index >= insertIndex && opReferencesRegister(op, register)) return false;
-      if (index < insertIndex && opReferencesRegister(op, register)) return false;
+      if (index >= insertIndex && opReferencesRegister(op2, register)) return false;
+      if (index < insertIndex && opReferencesRegister(op2, register)) return false;
     }
     return true;
   }
@@ -10636,10 +10671,10 @@ var MKProEmulatorBundle = (() => {
     const labels = calculateLabelAddresses(ops);
     const targets = /* @__PURE__ */ new Map();
     for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (hasRewriteBarrier(op) || op.kind !== "call") continue;
-      if (op.targetMeta.formalOpcode !== void 0 || op.targetMeta.roles?.includes("formal-address")) continue;
-      const target = targetAddress(op.target, labels);
+      const op2 = ops[index];
+      if (hasRewriteBarrier(op2) || op2.kind !== "call") continue;
+      if (op2.targetMeta.formalOpcode !== void 0 || op2.targetMeta.roles?.includes("formal-address")) continue;
+      const target = targetAddress(op2.target, labels);
       const siteAddress = addresses[index];
       if (target === void 0 || !Number.isInteger(target) || target < 0 || target > 99 || target >= siteAddress) {
         continue;
@@ -10700,13 +10735,13 @@ var MKProEmulatorBundle = (() => {
         result.push(...runtimeSelectorLiteralOps(plan2.target, plan2.register));
       }
       const plan = byIndex.get(index);
-      const op = ops[index];
-      if (plan !== void 0 && op.kind === "call") {
-        result.push(indirectFlowOp2(op, plan.register, String(plan.target), plan.target, false));
+      const op2 = ops[index];
+      if (plan !== void 0 && op2.kind === "call") {
+        result.push(indirectFlowOp2(op2, plan.register, String(plan.target), plan.target, false));
         rewritten += 1;
         continue;
       }
-      result.push(op);
+      result.push(op2);
     }
     return {
       ops: result,
@@ -10727,9 +10762,9 @@ var MKProEmulatorBundle = (() => {
     const maxTarget = maxNumericFlowTarget(ops);
     const eligibleTargets = /* @__PURE__ */ new Map();
     for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (hasRewriteBarrier(op) || op.kind !== "jump" && op.kind !== "call" && op.kind !== "cjump") continue;
-      const target = branchTarget(op);
+      const op2 = ops[index];
+      if (hasRewriteBarrier(op2) || op2.kind !== "jump" && op2.kind !== "call" && op2.kind !== "cjump") continue;
+      const target = branchTarget(op2);
       const siteAddress = addresses[index];
       if (target === void 0 || target > siteAddress || !flowOptions.relaxMaxTargetGuard && maxTarget > siteAddress) {
         continue;
@@ -10767,32 +10802,32 @@ var MKProEmulatorBundle = (() => {
     let applied = 0;
     let superDarkApplied = 0;
     for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (hasRewriteBarrier(op) || op.kind !== "jump" && op.kind !== "call" && op.kind !== "cjump") {
-        result.push(op);
+      const op2 = ops[index];
+      if (hasRewriteBarrier(op2) || op2.kind !== "jump" && op2.kind !== "call" && op2.kind !== "cjump") {
+        result.push(op2);
         continue;
       }
-      const target = branchTarget(op);
+      const target = branchTarget(op2);
       const siteAddress = addresses[index];
       if (target === void 0 || target > siteAddress || !flowOptions.relaxMaxTargetGuard && maxTarget > siteAddress) {
-        result.push(op);
+        result.push(op2);
         continue;
       }
       const selected = targets.get(target);
       if (selected === void 0) {
-        result.push(op);
+        result.push(op2);
         continue;
       }
-      result.push(indirectFlowOp2(op, selected.register, selected.selectorValue, target, selected.superDark));
+      result.push(indirectFlowOp2(op2, selected.register, selected.selectorValue, target, selected.superDark));
       applied += 1;
       if (selected.superDark) superDarkApplied += 1;
     }
     if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
-    const formal = preloads.filter((preload) => /[B-F]/iu.test(preload.value)).length;
+    const formal2 = preloads.filter((preload) => /[B-F]/iu.test(preload.value)).length;
     const optimizations = [
       {
         name: "preloaded-indirect-flow",
-        detail: `Replaced ${applied} numeric direct branch/call(s) with compiler-owned preloaded indirect flow (${formal} formal alias selector${formal === 1 ? "" : "s"}).`
+        detail: `Replaced ${applied} numeric direct branch/call(s) with compiler-owned preloaded indirect flow (${formal2} formal alias selector${formal2 === 1 ? "" : "s"}).`
       }
     ];
     if (superDarkApplied > 0) {
@@ -10821,35 +10856,35 @@ var MKProEmulatorBundle = (() => {
   };
 
   // src/core/passes/redundant-prologue.ts
-  function isShowDisplayOp(op) {
-    if (op.kind === "recall") return true;
-    if (op.kind === "plain") {
-      if (op.opcode === 16 || op.opcode === 18) return true;
-      if (op.opcode <= 10) return true;
-      if (op.opcode === 14) return true;
+  function isShowDisplayOp(op2) {
+    if (op2.kind === "recall") return true;
+    if (op2.kind === "plain") {
+      if (op2.opcode === 16 || op2.opcode === 18) return true;
+      if (op2.opcode <= 10) return true;
+      if (op2.opcode === 14) return true;
     }
     return false;
   }
-  function isShowStop(op) {
-    return op.kind === "stop" && (op.semantic === "show" || op.semantic === "halt");
+  function isShowStop(op2) {
+    return op2.kind === "stop" && (op2.semantic === "show" || op2.semantic === "halt");
   }
   function collectForwardPrologue(ops, from) {
     const collected = [];
     let i = from;
     while (i < ops.length && ops[i].kind === "label") i += 1;
     while (i < ops.length) {
-      const op = ops[i];
-      if (op.kind === "label") {
+      const op2 = ops[i];
+      if (op2.kind === "label") {
         i += 1;
         continue;
       }
-      if (isShowDisplayOp(op) && !hasRewriteBarrier(op)) {
-        collected.push(op);
+      if (isShowDisplayOp(op2) && !hasRewriteBarrier(op2)) {
+        collected.push(op2);
         i += 1;
         continue;
       }
-      if (isShowStop(op) && !hasRewriteBarrier(op)) {
-        collected.push(op);
+      if (isShowStop(op2) && !hasRewriteBarrier(op2)) {
+        collected.push(op2);
         return { ops: collected };
       }
       return { ops: [] };
@@ -10861,22 +10896,22 @@ var MKProEmulatorBundle = (() => {
     let i = beforeIndex - 1;
     let sawStop = false;
     while (i >= 0) {
-      const op = ops[i];
-      if (op.kind === "label") {
+      const op2 = ops[i];
+      if (op2.kind === "label") {
         i -= 1;
         continue;
       }
       if (!sawStop) {
-        if (isShowStop(op) && !hasRewriteBarrier(op)) {
-          collected.push(op);
+        if (isShowStop(op2) && !hasRewriteBarrier(op2)) {
+          collected.push(op2);
           sawStop = true;
           i -= 1;
           continue;
         }
         return { ops: [], startIndex: -1 };
       }
-      if (isShowDisplayOp(op) && !hasRewriteBarrier(op)) {
-        collected.push(op);
+      if (isShowDisplayOp(op2) && !hasRewriteBarrier(op2)) {
+        collected.push(op2);
         i -= 1;
         continue;
       }
@@ -10918,17 +10953,17 @@ var MKProEmulatorBundle = (() => {
   var run13 = (ops) => {
     const labelIndex = /* @__PURE__ */ new Map();
     for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "label") labelIndex.set(op.name, i);
+      const op2 = ops[i];
+      if (op2.kind === "label") labelIndex.set(op2.name, i);
     }
     const removeRanges = [];
     let applied = 0;
     for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind !== "jump") continue;
-      if (typeof op.target !== "string") continue;
-      if (hasRewriteBarrier(op)) continue;
-      const labelAt = labelIndex.get(op.target);
+      const op2 = ops[i];
+      if (op2.kind !== "jump") continue;
+      if (typeof op2.target !== "string") continue;
+      if (hasRewriteBarrier(op2)) continue;
+      const labelAt = labelIndex.get(op2.target);
       if (labelAt === void 0) continue;
       const headForward = collectForwardPrologue(ops, labelAt);
       if (headForward.ops.length === 0) continue;
@@ -10974,8 +11009,8 @@ var MKProEmulatorBundle = (() => {
     }
     const result = [];
     for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (!shouldRemove[i] || op.kind === "label") result.push(op);
+      const op2 = ops[i];
+      if (!shouldRemove[i] || op2.kind === "label") result.push(op2);
     }
     const totalCells = removeRanges.reduce((acc, range3) => acc + (range3.end - range3.start), 0);
     return {
@@ -11006,14 +11041,14 @@ var MKProEmulatorBundle = (() => {
   };
   function gatherUsedRegisters(ops) {
     const set = /* @__PURE__ */ new Set();
-    for (const op of ops) {
-      if (op.kind === "store" || op.kind === "recall") set.add(op.register);
-      if (op.kind === "indirect-store" || op.kind === "indirect-recall" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
-        set.add(op.register);
-        const memoryTarget = knownIndirectMemoryTarget(op);
+    for (const op2 of ops) {
+      if (op2.kind === "store" || op2.kind === "recall") set.add(op2.register);
+      if (op2.kind === "indirect-store" || op2.kind === "indirect-recall" || op2.kind === "indirect-jump" || op2.kind === "indirect-call" || op2.kind === "indirect-cjump") {
+        set.add(op2.register);
+        const memoryTarget = knownIndirectMemoryTarget(op2);
         if (memoryTarget !== void 0) set.add(memoryTarget);
       }
-      if (op.kind === "loop") set.add(LOOP_COUNTER_REGISTER[op.counter]);
+      if (op2.kind === "loop") set.add(LOOP_COUNTER_REGISTER[op2.counter]);
     }
     return set;
   }
@@ -11029,9 +11064,9 @@ var MKProEmulatorBundle = (() => {
         ranges.get(reg)?.add(i);
       }
       if (defAware) {
-        const op = ops[i];
-        if (op.kind === "store" || op.kind === "indirect-store") {
-          ranges.get(op.register)?.add(i);
+        const op2 = ops[i];
+        if (op2.kind === "store" || op2.kind === "indirect-store") {
+          ranges.get(op2.register)?.add(i);
         }
       }
     }
@@ -11046,21 +11081,21 @@ var MKProEmulatorBundle = (() => {
     return false;
   }
   function usesIndirectAccess(ops, register) {
-    for (const op of ops) {
-      if (op.kind === "indirect-store" || op.kind === "indirect-recall" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
-        if (op.register === register) return true;
-        if (knownIndirectMemoryTarget(op) === register) return true;
+    for (const op2 of ops) {
+      if (op2.kind === "indirect-store" || op2.kind === "indirect-recall" || op2.kind === "indirect-jump" || op2.kind === "indirect-call" || op2.kind === "indirect-cjump") {
+        if (op2.register === register) return true;
+        if (knownIndirectMemoryTarget(op2) === register) return true;
       }
     }
     return false;
   }
   function usesDisplayFocusSensitiveAccess(ops, register) {
     return ops.some(
-      (op) => (op.kind === "store" || op.kind === "recall") && op.register === register && isDisplayFocusSensitive(op)
+      (op2) => (op2.kind === "store" || op2.kind === "recall") && op2.register === register && isDisplayFocusSensitive(op2)
     );
   }
   function usesLoopCounter(ops, register) {
-    return ops.some((op) => op.kind === "loop" && LOOP_COUNTER_REGISTER[op.counter] === register);
+    return ops.some((op2) => op2.kind === "loop" && LOOP_COUNTER_REGISTER[op2.counter] === register);
   }
   function unionInto(target, source) {
     for (const value of source) target.add(value);
@@ -11069,15 +11104,15 @@ var MKProEmulatorBundle = (() => {
     const base = kind === "store" ? DIRECT_STORE_BASE2 : DIRECT_RECALL_BASE2;
     return base + registerIndex(register);
   }
-  function rewriteRegisterOp(op, register) {
-    if (op.kind !== "store" && op.kind !== "recall") return op;
-    const opcode = coalescedOpcode(op.kind, register);
+  function rewriteRegisterOp(op2, register) {
+    if (op2.kind !== "store" && op2.kind !== "recall") return op2;
+    const opcode = coalescedOpcode(op2.kind, register);
     return {
-      ...op,
+      ...op2,
       register,
       opcode,
       meta: {
-        ...op.meta,
+        ...op2.meta,
         mnemonic: getOpcode(opcode).name
       }
     };
@@ -11126,10 +11161,10 @@ var MKProEmulatorBundle = (() => {
   function coalesceNonOverlapping(ops) {
     const mapping = computeNonOverlappingRegisterMapping(ops);
     if (mapping.size === 0) return { ops: [...ops], applied: 0 };
-    const result = ops.map((op) => {
-      if (op.kind !== "store" && op.kind !== "recall") return op;
-      const replacement = mapping.get(op.register);
-      return replacement === void 0 ? op : rewriteRegisterOp(op, replacement);
+    const result = ops.map((op2) => {
+      if (op2.kind !== "store" && op2.kind !== "recall") return op2;
+      const replacement = mapping.get(op2.register);
+      return replacement === void 0 ? op2 : rewriteRegisterOp(op2, replacement);
     });
     return { ops: result, applied: mapping.size };
   }
@@ -11140,10 +11175,10 @@ var MKProEmulatorBundle = (() => {
     const excluded = excludedRegisters(ops, registers);
     const storeIndices = /* @__PURE__ */ new Map();
     for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "store") {
-        if (!storeIndices.has(op.register)) storeIndices.set(op.register, []);
-        storeIndices.get(op.register).push(i);
+      const op2 = ops[i];
+      if (op2.kind === "store") {
+        if (!storeIndices.has(op2.register)) storeIndices.set(op2.register, []);
+        storeIndices.get(op2.register).push(i);
       }
     }
     const mapping = /* @__PURE__ */ new Map();
@@ -11174,19 +11209,19 @@ var MKProEmulatorBundle = (() => {
     const result = [];
     for (let i = 0; i < ops.length; i += 1) {
       if (dropIndices.has(i)) continue;
-      const op = ops[i];
-      if (op.kind === "store" || op.kind === "recall") {
-        const replacement = mapping.get(op.register);
-        result.push(replacement === void 0 ? op : rewriteRegisterOp(op, replacement));
+      const op2 = ops[i];
+      if (op2.kind === "store" || op2.kind === "recall") {
+        const replacement = mapping.get(op2.register);
+        result.push(replacement === void 0 ? op2 : rewriteRegisterOp(op2, replacement));
       } else {
-        result.push(op);
+        result.push(op2);
       }
     }
     return { ops: result, applied: mapping.size };
   }
   var run14 = (ops, context) => {
     if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
-    if (ops.some((op) => hasRewriteBarrier(op))) {
+    if (ops.some((op2) => hasRewriteBarrier(op2))) {
       return { ops: [...ops], applied: 0, optimizations: [] };
     }
     const optimizations = [];
@@ -11223,20 +11258,20 @@ var MKProEmulatorBundle = (() => {
 
   // src/core/passes/return-zero-jump.ts
   var run15 = (ops) => {
-    const usesCall = ops.some((op) => op.kind === "call" || op.kind === "indirect-call");
+    const usesCall = ops.some((op2) => op2.kind === "call" || op2.kind === "indirect-call");
     if (usesCall) return { ops: [...ops], applied: 0, optimizations: [] };
     const labels = calculateLabelAddresses(ops);
     const result = [];
     let applied = 0;
     let currentAddress = 0;
-    for (const op of ops) {
-      if (op.kind === "label") {
-        result.push(op);
+    for (const op2 of ops) {
+      if (op2.kind === "label") {
+        result.push(op2);
         continue;
       }
-      if (op.kind === "jump" && !hasRewriteBarrier(op)) {
-        const resolved = targetAddress(op.target, labels);
-        const targetsBackward = typeof op.target === "number" ? true : resolved !== void 0 && resolved < currentAddress;
+      if (op2.kind === "jump" && !hasRewriteBarrier(op2)) {
+        const resolved = targetAddress(op2.target, labels);
+        const targetsBackward = typeof op2.target === "number" ? true : resolved !== void 0 && resolved < currentAddress;
         if (resolved === 1 && targetsBackward) {
           result.push({
             kind: "return",
@@ -11251,8 +11286,8 @@ var MKProEmulatorBundle = (() => {
           continue;
         }
       }
-      result.push(op);
-      currentAddress += cellsPerOp(op);
+      result.push(op2);
+      currentAddress += cellsPerOp(op2);
     }
     const passResult = {
       ops: result,
@@ -11339,9 +11374,9 @@ var MKProEmulatorBundle = (() => {
     if (final.kind === "indirect-store") return { kind: "indirect-store", register: final.register };
     return void 0;
   }
-  function recallMatchesStore(op, store) {
-    if (op === void 0 || hasRewriteBarrier(op)) return false;
-    return store.kind === "store" && op.kind === "recall" && op.register === store.register || store.kind === "indirect-store" && op.kind === "indirect-recall" && op.register === store.register;
+  function recallMatchesStore(op2, store) {
+    if (op2 === void 0 || hasRewriteBarrier(op2)) return false;
+    return store.kind === "store" && op2.kind === "recall" && op2.register === store.register || store.kind === "indirect-store" && op2.kind === "indirect-recall" && op2.register === store.register;
   }
   var returnSuffixGadget = {
     name: "return-suffix-gadget",
@@ -11356,10 +11391,10 @@ var MKProEmulatorBundle = (() => {
       const parts = [opKey(final)];
       let cells = cellsPerOp(final);
       for (let start = end - 1; start >= 0; start -= 1) {
-        const op = ops[start];
-        if (!isShareableBodyOp(op)) break;
-        parts.unshift(opKey(op));
-        cells += cellsPerOp(op);
+        const op2 = ops[start];
+        if (!isShareableBodyOp(op2)) break;
+        parts.unshift(opKey(op2));
+        cells += cellsPerOp(op2);
         if (cells <= 2) continue;
         const key = parts.join("\n");
         const bodyKey = parts.slice(0, -1).join("\n");
@@ -11371,7 +11406,7 @@ var MKProEmulatorBundle = (() => {
     return [...byKey.entries()].map(([key, occurrences]) => ({ key, occurrences, cells: occurrences[0].cells }));
   }
   function selectGadgets(candidates, ops) {
-    const existingLabels = new Set(ops.flatMap((op) => op.kind === "label" ? [op.name] : []));
+    const existingLabels = new Set(ops.flatMap((op2) => op2.kind === "label" ? [op2.name] : []));
     const protectedIndexes = /* @__PURE__ */ new Set();
     const selected = [];
     let labelIndex = 0;
@@ -11439,12 +11474,12 @@ var MKProEmulatorBundle = (() => {
       targetMeta: { comment: "return suffix gadget target" }
     };
   }
-  function isShareableReturn(op) {
-    return op.kind === "return" && !hasRewriteBarrier(op);
+  function isShareableReturn(op2) {
+    return op2.kind === "return" && !hasRewriteBarrier(op2);
   }
-  function isShareableBodyOp(op) {
-    if (hasRewriteBarrier(op)) return false;
-    switch (op.kind) {
+  function isShareableBodyOp(op2) {
+    if (hasRewriteBarrier(op2)) return false;
+    switch (op2.kind) {
       case "store":
       case "recall":
       case "indirect-store":
@@ -11465,12 +11500,12 @@ var MKProEmulatorBundle = (() => {
         return false;
     }
   }
-  function isCallableBodyOp(op) {
-    return isShareableBodyOp(op) && op.kind !== "stop";
+  function isCallableBodyOp(op2) {
+    return isShareableBodyOp(op2) && op2.kind !== "stop";
   }
-  function isTailCallGadgetBodyOp(op) {
-    if (hasRewriteBarrier(op)) return false;
-    switch (op.kind) {
+  function isTailCallGadgetBodyOp(op2) {
+    if (hasRewriteBarrier(op2)) return false;
+    switch (op2.kind) {
       case "store":
       case "recall":
       case "indirect-store":
@@ -11492,38 +11527,38 @@ var MKProEmulatorBundle = (() => {
     }
   }
   function hasNumericFlowTarget(ops) {
-    return ops.some((op) => {
-      switch (op.kind) {
+    return ops.some((op2) => {
+      switch (op2.kind) {
         case "jump":
         case "cjump":
         case "call":
         case "loop":
-          return typeof op.target === "number";
+          return typeof op2.target === "number";
         default:
           return false;
       }
     });
   }
-  function opKey(op) {
-    switch (op.kind) {
+  function opKey(op2) {
+    switch (op2.kind) {
       case "store":
-        return `store:${op.opcode}:${op.register}`;
+        return `store:${op2.opcode}:${op2.register}`;
       case "recall":
-        return `recall:${op.opcode}:${op.register}`;
+        return `recall:${op2.opcode}:${op2.register}`;
       case "indirect-store":
-        return `indirect-store:${op.opcode}:${op.register}`;
+        return `indirect-store:${op2.opcode}:${op2.register}`;
       case "indirect-recall":
-        return `indirect-recall:${op.opcode}:${op.register}`;
+        return `indirect-recall:${op2.opcode}:${op2.register}`;
       case "call":
-        return `call:${op.opcode}:${targetKey(op.target)}:${op.targetMeta.formalOpcode ?? ""}`;
+        return `call:${op2.opcode}:${targetKey(op2.target)}:${op2.targetMeta.formalOpcode ?? ""}`;
       case "indirect-call":
-        return `indirect-call:${op.opcode}:${op.register}`;
+        return `indirect-call:${op2.opcode}:${op2.register}`;
       case "stop":
-        return `stop:${op.opcode}`;
+        return `stop:${op2.opcode}`;
       case "plain":
-        return `plain:${op.opcode}`;
+        return `plain:${op2.opcode}`;
       case "return":
-        return `return:${op.opcode}`;
+        return `return:${op2.opcode}`;
       case "label":
       case "jump":
       case "cjump":
@@ -11531,7 +11566,7 @@ var MKProEmulatorBundle = (() => {
       case "indirect-jump":
       case "indirect-cjump":
       case "orphan-address":
-        return op.kind;
+        return op2.kind;
     }
   }
   function collectBodyTargets(candidates) {
@@ -11559,10 +11594,10 @@ var MKProEmulatorBundle = (() => {
       const parts = [];
       let cells = 0;
       for (let end = start; end < ops.length; end += 1) {
-        const op = ops[end];
-        if (!isCallableBodyOp(op)) break;
-        parts.push(opKey(op));
-        cells += cellsPerOp(op);
+        const op2 = ops[end];
+        if (!isCallableBodyOp(op2)) break;
+        parts.push(opKey(op2));
+        cells += cellsPerOp(op2);
         if (cells <= 2) continue;
         const key = parts.join("\n");
         if (!wantedKeys.has(key)) continue;
@@ -11576,16 +11611,16 @@ var MKProEmulatorBundle = (() => {
   function collectTailCallTargets(ops) {
     const result = /* @__PURE__ */ new Map();
     for (let jumpIndex = 0; jumpIndex < ops.length; jumpIndex += 1) {
-      const jump = ops[jumpIndex];
-      if (jump.kind !== "jump" || typeof jump.target !== "string" || hasRewriteBarrier(jump)) continue;
-      const parts = [`target:${targetKey(jump.target)}`];
-      let cells = cellsPerOp(jump);
+      const jump2 = ops[jumpIndex];
+      if (jump2.kind !== "jump" || typeof jump2.target !== "string" || hasRewriteBarrier(jump2)) continue;
+      const parts = [`target:${targetKey(jump2.target)}`];
+      let cells = cellsPerOp(jump2);
       for (let start = jumpIndex - 1; start >= 0; start -= 1) {
-        const op = ops[start];
-        if (!isTailCallGadgetBodyOp(op)) break;
-        parts.unshift(opKey(op));
-        cells += cellsPerOp(op);
-        const bodyCells = cells - cellsPerOp(jump);
+        const op2 = ops[start];
+        if (!isTailCallGadgetBodyOp(op2)) break;
+        parts.unshift(opKey(op2));
+        cells += cellsPerOp(op2);
+        const bodyCells = cells - cellsPerOp(jump2);
         if (bodyCells <= 0) continue;
         const key = parts.join("\n");
         const targets = result.get(key) ?? [];
@@ -11608,19 +11643,19 @@ var MKProEmulatorBundle = (() => {
       const parts = [];
       let cells = 0;
       for (let callIndex = start; callIndex < ops.length; callIndex += 1) {
-        const op = ops[callIndex];
-        if (op.kind === "call" && typeof op.target === "string" && !hasRewriteBarrier(op)) {
-          const key = [...parts, `target:${targetKey(op.target)}`].join("\n");
+        const op2 = ops[callIndex];
+        if (op2.kind === "call" && typeof op2.target === "string" && !hasRewriteBarrier(op2)) {
+          const key = [...parts, `target:${targetKey(op2.target)}`].join("\n");
           if (cells > 0 && wantedKeys.has(key)) {
             const occurrences = result.get(key) ?? [];
-            occurrences.push({ key, start, end: callIndex, cells: cells + cellsPerOp(op) });
+            occurrences.push({ key, start, end: callIndex, cells: cells + cellsPerOp(op2) });
             result.set(key, occurrences);
           }
           break;
         }
-        if (!isTailCallGadgetBodyOp(op)) break;
-        parts.push(opKey(op));
-        cells += cellsPerOp(op);
+        if (!isTailCallGadgetBodyOp(op2)) break;
+        parts.push(opKey(op2));
+        cells += cellsPerOp(op2);
       }
     }
     return result;
@@ -11700,20 +11735,20 @@ var MKProEmulatorBundle = (() => {
     const remove = /* @__PURE__ */ new Set();
     let r0Fractional = false;
     for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (hasRewriteBarrier(op)) {
+      const op2 = ops[i];
+      if (hasRewriteBarrier(op2)) {
         r0Fractional = false;
         continue;
       }
-      if (op.kind === "store" && op.register === "0") {
+      if (op2.kind === "store" && op2.register === "0") {
         r0Fractional = isFractionalR0LiteralBeforeStore(ops, i);
         continue;
       }
-      if (op.kind === "plain" || op.kind === "recall" || op.kind === "label") {
+      if (op2.kind === "plain" || op2.kind === "recall" || op2.kind === "label") {
         continue;
       }
       if (!r0Fractional) continue;
-      if (op.kind === "indirect-recall" && op.register === "0") {
+      if (op2.kind === "indirect-recall" && op2.register === "0") {
         const next = ops[i + 1];
         if (next?.kind === "recall" && next.register === "3" && !liveness.liveOut[i].has("0")) {
           remove.add(i + 1);
@@ -11721,7 +11756,7 @@ var MKProEmulatorBundle = (() => {
         r0Fractional = false;
         continue;
       }
-      if (op.kind === "indirect-store" && op.register === "0") {
+      if (op2.kind === "indirect-store" && op2.register === "0") {
         const next = ops[i + 1];
         if (next?.kind === "store" && next.register === "3" && !liveness.liveOut[i].has("0")) {
           remove.add(i + 1);
@@ -11729,7 +11764,7 @@ var MKProEmulatorBundle = (() => {
         r0Fractional = false;
         continue;
       }
-      if (op.kind !== "store" || op.register !== "0") r0Fractional = false;
+      if (op2.kind !== "store" || op2.register !== "0") r0Fractional = false;
     }
     if (remove.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
     return {
@@ -11757,10 +11792,10 @@ var MKProEmulatorBundle = (() => {
     const result = [];
     let applied = 0;
     for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
+      const op2 = ops[index];
       const next = ops[index + 1];
-      if (op.kind === "call" && next?.kind === "jump") {
-        const key = callTailKey(op, next, normalizeContinuation);
+      if (op2.kind === "call" && next?.kind === "jump") {
+        const key = callTailKey(op2, next, normalizeContinuation);
         const candidate = candidates.get(key);
         if (candidate !== void 0) {
           result.push({
@@ -11768,9 +11803,9 @@ var MKProEmulatorBundle = (() => {
             target: candidate.label,
             opcode: 81,
             meta: {
-              ...op.meta,
+              ...op2.meta,
               mnemonic: "\u0411\u041F",
-              comment: op.meta.comment?.replace(/^proc call/u, "shared call tail") ?? "shared call tail"
+              comment: op2.meta.comment?.replace(/^proc call/u, "shared call tail") ?? "shared call tail"
             },
             targetMeta: { comment: "shared call tail" }
           });
@@ -11779,7 +11814,7 @@ var MKProEmulatorBundle = (() => {
           continue;
         }
       }
-      result.push(op);
+      result.push(op2);
     }
     for (const candidate of candidates.values()) {
       result.push({ kind: "label", name: candidate.label });
@@ -11816,19 +11851,19 @@ var MKProEmulatorBundle = (() => {
     const normalizeContinuation = buildContinuationNormalizer(ops);
     const counts = /* @__PURE__ */ new Map();
     for (let index2 = 0; index2 < ops.length - 1; index2 += 1) {
-      const op = ops[index2];
+      const op2 = ops[index2];
       const next = ops[index2 + 1];
-      if (op.kind !== "call" || next.kind !== "jump") continue;
-      if (hasRewriteBarrier(op) || hasRewriteBarrier(next)) continue;
+      if (op2.kind !== "call" || next.kind !== "jump") continue;
+      if (hasRewriteBarrier(op2) || hasRewriteBarrier(next)) continue;
       const normalizedTarget = normalizeContinuation(next.target);
       const continuation = {
         ...next,
         target: normalizedTarget
       };
-      const key = callTailKey(op, continuation, normalizeContinuation);
+      const key = callTailKey(op2, continuation, normalizeContinuation);
       const existing = counts.get(key);
       if (existing === void 0) {
-        counts.set(key, { call: op, continuation, count: 1 });
+        counts.set(key, { call: op2, continuation, count: 1 });
       } else {
         existing.count += 1;
       }
@@ -11857,8 +11892,8 @@ var MKProEmulatorBundle = (() => {
   function buildContinuationNormalizer(ops) {
     const labelIndexes = /* @__PURE__ */ new Map();
     for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (op.kind === "label") labelIndexes.set(op.name, index);
+      const op2 = ops[index];
+      if (op2.kind === "label") labelIndexes.set(op2.name, index);
     }
     const normalize = (target, seen = /* @__PURE__ */ new Set()) => {
       if (typeof target !== "string") return target;
@@ -11928,39 +11963,39 @@ var MKProEmulatorBundle = (() => {
     const result = [];
     let applied = 0;
     for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (op.kind !== "cjump" || typeof op.target !== "string" || hasRewriteBarrier(op)) {
-        result.push(op);
+      const op2 = ops[index];
+      if (op2.kind !== "cjump" || typeof op2.target !== "string" || hasRewriteBarrier(op2)) {
+        result.push(op2);
         continue;
       }
       const jumpIndex = nextExecutableIndex2(ops, index + 1);
       if (jumpIndex === void 0) {
-        result.push(op);
+        result.push(op2);
         continue;
       }
-      const jump = ops[jumpIndex];
-      if (jump.kind !== "jump" || hasRewriteBarrier(jump)) {
-        result.push(op);
+      const jump2 = ops[jumpIndex];
+      if (jump2.kind !== "jump" || hasRewriteBarrier(jump2)) {
+        result.push(op2);
         continue;
       }
       const labelIndex = jumpIndex + 1;
       const label = ops[labelIndex];
-      if (label?.kind !== "label" || label.name !== op.target || (refs.get(label.name) ?? 0) !== 1) {
-        result.push(op);
+      if (label?.kind !== "label" || label.name !== op2.target || (refs.get(label.name) ?? 0) !== 1) {
+        result.push(op2);
         continue;
       }
-      const inverted = INVERTED_CONDITIONS[op.condition];
+      const inverted = INVERTED_CONDITIONS[op2.condition];
       result.push({
-        ...op,
+        ...op2,
         condition: inverted.condition,
-        target: jump.target,
+        target: jump2.target,
         opcode: inverted.opcode,
         meta: {
-          ...op.meta,
+          ...op2.meta,
           mnemonic: getOpcode(inverted.opcode).name,
-          comment: op.meta.comment?.replace(/^false branch/u, "direct tail branch") ?? "direct tail branch"
+          comment: op2.meta.comment?.replace(/^false branch/u, "direct tail branch") ?? "direct tail branch"
         },
-        targetMeta: { ...jump.targetMeta }
+        targetMeta: { ...jump2.targetMeta }
       });
       index = labelIndex;
       applied += 1;
@@ -11977,9 +12012,9 @@ var MKProEmulatorBundle = (() => {
   };
   function countLabelRefs2(ops) {
     const refs = /* @__PURE__ */ new Map();
-    for (const op of ops) {
-      if ((op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") && typeof op.target === "string") {
-        refs.set(op.target, (refs.get(op.target) ?? 0) + 1);
+    for (const op2 of ops) {
+      if ((op2.kind === "jump" || op2.kind === "cjump" || op2.kind === "call" || op2.kind === "loop") && typeof op2.target === "string") {
+        refs.set(op2.target, (refs.get(op2.target) ?? 0) + 1);
       }
     }
     return refs;
@@ -12005,20 +12040,20 @@ var MKProEmulatorBundle = (() => {
     const result = [];
     let applied = 0;
     for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (op.kind === "label") {
-        result.push(op);
+      const op2 = ops[index];
+      if (op2.kind === "label") {
+        result.push(op2);
         continue;
       }
       const next = ops[index + 1];
-      if (op.kind === "return") {
+      if (op2.kind === "return") {
         const continuation = returnContinuations.get(index);
         if (continuation !== void 0) {
           const meta = {
             mnemonic: "\u0411\u041F",
-            comment: op.meta.comment?.replace(/^implicit return from proc/u, "tail continuation") ?? "tail continuation"
+            comment: op2.meta.comment?.replace(/^implicit return from proc/u, "tail continuation") ?? "tail continuation"
           };
-          if (op.meta.sourceLine !== void 0) meta.sourceLine = op.meta.sourceLine;
+          if (op2.meta.sourceLine !== void 0) meta.sourceLine = op2.meta.sourceLine;
           result.push({
             kind: "jump",
             target: continuation,
@@ -12030,21 +12065,21 @@ var MKProEmulatorBundle = (() => {
           continue;
         }
       }
-      if (op.kind === "call") {
+      if (op2.kind === "call") {
         const continuationIndex = nextExecutableIndex3(ops, index + 1);
         const continuation = continuationIndex === void 0 ? void 0 : ops[continuationIndex];
         const continuationIsImmediate = continuationIndex === index + 1;
         if (continuation?.kind === "jump" && isReturnLabel(continuation.target, returnLabels)) {
           result.push({
             kind: "jump",
-            target: op.target,
+            target: op2.target,
             opcode: 81,
             meta: {
-              ...op.meta,
+              ...op2.meta,
               mnemonic: "\u0411\u041F",
-              comment: op.meta.comment?.replace(/^proc call/u, "tail call") ?? "tail call"
+              comment: op2.meta.comment?.replace(/^proc call/u, "tail call") ?? "tail call"
             },
-            targetMeta: { ...op.targetMeta }
+            targetMeta: { ...op2.targetMeta }
           });
           if (continuationIsImmediate) index += 1;
           applied += 1;
@@ -12053,31 +12088,31 @@ var MKProEmulatorBundle = (() => {
         if (continuation?.kind === "return") {
           result.push({
             kind: "jump",
-            target: op.target,
+            target: op2.target,
             opcode: 81,
             meta: {
-              ...op.meta,
+              ...op2.meta,
               mnemonic: "\u0411\u041F",
-              comment: op.meta.comment?.replace(/^proc call/u, "tail call") ?? "tail call"
+              comment: op2.meta.comment?.replace(/^proc call/u, "tail call") ?? "tail call"
             },
-            targetMeta: { ...op.targetMeta }
+            targetMeta: { ...op2.targetMeta }
           });
           if (continuationIsImmediate) index += 1;
           applied += 1;
           continue;
         }
-        const target = typeof op.target === "string" ? tailJumpTargets.get(op.target) : void 0;
+        const target = typeof op2.target === "string" ? tailJumpTargets.get(op2.target) : void 0;
         if (target !== void 0 && next?.kind === "jump" && sameTarget(normalizeContinuation(next.target), target.continuation)) {
           result.push({
             kind: "jump",
-            target: op.target,
+            target: op2.target,
             opcode: 81,
             meta: {
-              ...op.meta,
+              ...op2.meta,
               mnemonic: "\u0411\u041F",
-              comment: op.meta.comment?.replace(/^proc call/u, "tail jump") ?? "tail jump"
+              comment: op2.meta.comment?.replace(/^proc call/u, "tail jump") ?? "tail jump"
             },
-            targetMeta: { ...op.targetMeta }
+            targetMeta: { ...op2.targetMeta }
           });
           index += 1;
           applied += 1;
@@ -12086,20 +12121,20 @@ var MKProEmulatorBundle = (() => {
         if (target !== void 0 && next?.kind === "label" && sameTarget(normalizeContinuation(next.name), target.continuation)) {
           result.push({
             kind: "jump",
-            target: op.target,
+            target: op2.target,
             opcode: 81,
             meta: {
-              ...op.meta,
+              ...op2.meta,
               mnemonic: "\u0411\u041F",
-              comment: op.meta.comment?.replace(/^proc call/u, "tail jump") ?? "tail jump"
+              comment: op2.meta.comment?.replace(/^proc call/u, "tail jump") ?? "tail jump"
             },
-            targetMeta: { ...op.targetMeta }
+            targetMeta: { ...op2.targetMeta }
           });
           applied += 1;
           continue;
         }
       }
-      result.push(op);
+      result.push(op2);
     }
     if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
     const tailJumpCount = tailJumpTargets.size;
@@ -12122,16 +12157,16 @@ var MKProEmulatorBundle = (() => {
     const nonCallFlowTargets = /* @__PURE__ */ new Set();
     const normalizeContinuation = buildContinuationNormalizer2(ops);
     for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (op.kind === "call" && typeof op.target === "string") {
+      const op2 = ops[index];
+      if (op2.kind === "call" && typeof op2.target === "string") {
         const continuation = callContinuation(ops, index);
-        const existing = calls.get(op.target) ?? [];
+        const existing = calls.get(op2.target) ?? [];
         existing.push(continuation === void 0 ? void 0 : normalizeContinuation(continuation));
-        calls.set(op.target, existing);
+        calls.set(op2.target, existing);
         continue;
       }
-      if ((op.kind === "jump" || op.kind === "cjump" || op.kind === "loop") && typeof op.target === "string") {
-        nonCallFlowTargets.add(op.target);
+      if ((op2.kind === "jump" || op2.kind === "cjump" || op2.kind === "loop") && typeof op2.target === "string") {
+        nonCallFlowTargets.add(op2.target);
       }
     }
     const regions = collectCallableRegions(ops, new Set(calls.keys()));
@@ -12152,11 +12187,11 @@ var MKProEmulatorBundle = (() => {
     const result = /* @__PURE__ */ new Map();
     let current;
     for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (op.kind !== "label") continue;
-      if (!callTargets.has(op.name)) continue;
+      const op2 = ops[index];
+      if (op2.kind !== "label") continue;
+      if (!callTargets.has(op2.name)) continue;
       if (current !== void 0) result.set(current.name, { start: current.start, end: index });
-      current = { name: op.name, start: index + 1 };
+      current = { name: op2.name, start: index + 1 };
     }
     if (current !== void 0) result.set(current.name, { start: current.start, end: ops.length });
     return result;
@@ -12173,10 +12208,10 @@ var MKProEmulatorBundle = (() => {
   function collectReturnLabels(ops) {
     const result = /* @__PURE__ */ new Set();
     for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (op.kind !== "label") continue;
+      const op2 = ops[index];
+      if (op2.kind !== "label") continue;
       const next = nextExecutableIndex3(ops, index + 1);
-      if (next !== void 0 && ops[next]?.kind === "return") result.add(op.name);
+      if (next !== void 0 && ops[next]?.kind === "return") result.add(op2.name);
     }
     return result;
   }
@@ -12207,8 +12242,8 @@ var MKProEmulatorBundle = (() => {
   function buildContinuationNormalizer2(ops) {
     const labelIndexes = /* @__PURE__ */ new Map();
     for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (op.kind === "label") labelIndexes.set(op.name, index);
+      const op2 = ops[index];
+      if (op2.kind === "label") labelIndexes.set(op2.name, index);
     }
     const normalize = (target, seen = /* @__PURE__ */ new Set()) => {
       if (typeof target !== "string") return target;
@@ -12227,16 +12262,16 @@ var MKProEmulatorBundle = (() => {
   // src/core/passes/vp-splice.ts
   var VP = 12;
   var KNOP = 84;
-  function isPlainOpcode(op, opcode) {
-    return op.kind === "plain" && op.opcode === opcode && !hasRewriteBarrier(op);
+  function isPlainOpcode(op2, opcode) {
+    return op2.kind === "plain" && op2.opcode === opcode && !hasRewriteBarrier(op2);
   }
-  function isFreeStandingVp(op) {
-    if (!isPlainOpcode(op, VP)) return false;
-    return !("meta" in op && op.meta.roles !== void 0 && op.meta.roles.length > 0);
+  function isFreeStandingVp(op2) {
+    if (!isPlainOpcode(op2, VP)) return false;
+    return !("meta" in op2 && op2.meta.roles !== void 0 && op2.meta.roles.length > 0);
   }
-  function isFreeStandingKnop(op) {
-    if (!isPlainOpcode(op, KNOP)) return false;
-    return !("meta" in op && op.meta.roles !== void 0 && op.meta.roles.length > 0);
+  function isFreeStandingKnop(op2) {
+    if (!isPlainOpcode(op2, KNOP)) return false;
+    return !("meta" in op2 && op2.meta.roles !== void 0 && op2.meta.roles.length > 0);
   }
   var run22 = (ops) => {
     const remove = /* @__PURE__ */ new Set();
@@ -12271,20 +12306,20 @@ var MKProEmulatorBundle = (() => {
   };
 
   // src/core/passes/vp-x2-peephole.ts
-  function displayBoundaryText(op) {
-    if (!("meta" in op)) return "";
+  function displayBoundaryText(op2) {
+    if (!("meta" in op2)) return "";
     return [
-      op.meta.comment,
-      "tactic" in op.meta ? op.meta.tactic : void 0
+      op2.meta.comment,
+      "tactic" in op2.meta ? op2.meta.tactic : void 0
     ].filter(Boolean).join(" ").toLowerCase();
   }
-  function isDisplayVp(op) {
-    if (hasRewriteBarrier(op)) return false;
-    return op.kind === "plain" && op.opcode === 12 && /display|x2|вп/u.test(displayBoundaryText(op));
+  function isDisplayVp(op2) {
+    if (hasRewriteBarrier(op2)) return false;
+    return op2.kind === "plain" && op2.opcode === 12 && /display|x2|вп/u.test(displayBoundaryText(op2));
   }
-  function isFractionAfterDisplayBoundary(op) {
-    if (hasRewriteBarrier(op)) return false;
-    return op.kind === "plain" && op.opcode === 53 && /display|x2|frac/u.test(displayBoundaryText(op));
+  function isFractionAfterDisplayBoundary(op2) {
+    if (hasRewriteBarrier(op2)) return false;
+    return op2.kind === "plain" && op2.opcode === 53 && /display|x2|frac/u.test(displayBoundaryText(op2));
   }
   var run23 = (ops) => {
     const remove = /* @__PURE__ */ new Set();
@@ -12394,11 +12429,11 @@ var MKProEmulatorBundle = (() => {
     "<0": 192,
     "==0": 224
   };
-  function isDirectBranch(op) {
-    return op.kind === "jump" || op.kind === "call" || op.kind === "cjump";
+  function isDirectBranch(op2) {
+    return op2.kind === "jump" || op2.kind === "call" || op2.kind === "cjump";
   }
-  function isIndirectBranch(op) {
-    return op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump";
+  function isIndirectBranch(op2) {
+    return op2.kind === "indirect-jump" || op2.kind === "indirect-call" || op2.kind === "indirect-cjump";
   }
   function registerIndex2(register) {
     return /^[0-9]$/u.test(register) ? Number(register) : register.toLowerCase().charCodeAt(0) - 87;
@@ -12406,12 +12441,12 @@ var MKProEmulatorBundle = (() => {
   function labelAddresses(ops) {
     const map = /* @__PURE__ */ new Map();
     let address = 0;
-    for (const op of ops) {
-      if (op.kind === "label") {
-        map.set(op.name, address);
+    for (const op2 of ops) {
+      if (op2.kind === "label") {
+        map.set(op2.name, address);
         continue;
       }
-      address += cellsPerOp(op);
+      address += cellsPerOp(op2);
     }
     return map;
   }
@@ -12421,17 +12456,17 @@ var MKProEmulatorBundle = (() => {
   function opAddresses(ops) {
     const addresses = [];
     let address = 0;
-    for (const op of ops) {
+    for (const op2 of ops) {
       addresses.push(address);
-      address += cellsPerOp(op);
+      address += cellsPerOp(op2);
     }
     return addresses;
   }
   function usedRegisters2(ops) {
     const used = /* @__PURE__ */ new Set();
-    for (const op of ops) {
-      if (op.kind === "store" || op.kind === "recall" || op.kind === "indirect-store" || op.kind === "indirect-recall" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
-        used.add(op.register);
+    for (const op2 of ops) {
+      if (op2.kind === "store" || op2.kind === "recall" || op2.kind === "indirect-store" || op2.kind === "indirect-recall" || op2.kind === "indirect-jump" || op2.kind === "indirect-call" || op2.kind === "indirect-cjump") {
+        used.add(op2.register);
       }
     }
     return used;
@@ -12456,33 +12491,33 @@ var MKProEmulatorBundle = (() => {
     if (target <= 47) return formalLabelFromOrdinal2(target + 112);
     return officialLabel2(target);
   }
-  function indirectFlowOp3(op, register, selectorValue, target) {
+  function indirectFlowOp3(op2, register, selectorValue, target) {
     const offset = registerIndex2(register);
     const suffix = `preloaded R${register}=${selectorValue} indirect-target=${target} shifted-forward indirect flow`;
-    if (op.kind === "jump") {
+    if (op2.kind === "jump") {
       return {
         kind: "indirect-jump",
         register,
         opcode: 128 + offset,
-        meta: { ...op.meta, mnemonic: `\u041A \u0411\u041F ${register}`, comment: [op.meta.comment, suffix].filter(Boolean).join("; ") }
+        meta: { ...op2.meta, mnemonic: `\u041A \u0411\u041F ${register}`, comment: [op2.meta.comment, suffix].filter(Boolean).join("; ") }
       };
     }
-    if (op.kind === "call") {
+    if (op2.kind === "call") {
       return {
         kind: "indirect-call",
         register,
         opcode: 160 + offset,
-        meta: { ...op.meta, mnemonic: `\u041A \u041F\u041F ${register}`, comment: [op.meta.comment, suffix].filter(Boolean).join("; ") }
+        meta: { ...op2.meta, mnemonic: `\u041A \u041F\u041F ${register}`, comment: [op2.meta.comment, suffix].filter(Boolean).join("; ") }
       };
     }
-    const opcode = INDIRECT_COND_BASES4[op.condition] + offset;
-    const name = op.condition === "==0" ? "x=0" : op.condition === "!=0" ? "x!=0" : `x${op.condition}`;
+    const opcode = INDIRECT_COND_BASES4[op2.condition] + offset;
+    const name = op2.condition === "==0" ? "x=0" : op2.condition === "!=0" ? "x!=0" : `x${op2.condition}`;
     return {
       kind: "indirect-cjump",
-      condition: op.condition,
+      condition: op2.condition,
       register,
       opcode,
-      meta: { ...op.meta, mnemonic: `\u041A ${name} ${register}`, comment: [op.meta.comment, suffix].filter(Boolean).join("; ") }
+      meta: { ...op2.meta, mnemonic: `\u041A ${name} ${register}`, comment: [op2.meta.comment, suffix].filter(Boolean).join("; ") }
     };
   }
   function mergeDuplicateSelectors(items, preloads) {
@@ -12500,11 +12535,11 @@ var MKProEmulatorBundle = (() => {
       }
     }
     if (remap.size === 0) return { items: [...items], preloads: [...preloads], merged: 0 };
-    const ir = raiseMachineToIr(items).map((op) => {
-      if (!isIndirectBranch(op) || !remap.has(op.register)) return op;
-      const target = remap.get(op.register);
-      const opcode = op.opcode - registerIndex2(op.register) + registerIndex2(target);
-      return { ...op, register: target, opcode };
+    const ir = raiseMachineToIr(items).map((op2) => {
+      if (!isIndirectBranch(op2) || !remap.has(op2.register)) return op2;
+      const target = remap.get(op2.register);
+      const opcode = op2.opcode - registerIndex2(op2.register) + registerIndex2(target);
+      return { ...op2, register: target, opcode };
     });
     return { items: lowerIrToMachine(ir), preloads: kept, merged: remap.size };
   }
@@ -12551,17 +12586,17 @@ var MKProEmulatorBundle = (() => {
       nextPreloads.push({ ...preload, value: selectorValue });
       nextByRegister.set(register, selectorValue);
     }
-    const retargeted = after.map((op) => {
-      if (!isIndirectBranch(op)) return op;
-      const selectorValue = nextByRegister.get(op.register);
-      if (selectorValue === void 0) return op;
-      const target = evaluateIndirectAddress(op.register, selectorValue, "flow")?.actualFlowTarget;
-      if (target === void 0) return op;
-      const comment = replaceIndirectTargetComment(op.meta.comment, op.register, selectorValue, target);
-      const meta = comment === void 0 ? { ...op.meta } : { ...op.meta, comment };
+    const retargeted = after.map((op2) => {
+      if (!isIndirectBranch(op2)) return op2;
+      const selectorValue = nextByRegister.get(op2.register);
+      if (selectorValue === void 0) return op2;
+      const target = evaluateIndirectAddress(op2.register, selectorValue, "flow")?.actualFlowTarget;
+      if (target === void 0) return op2;
+      const comment = replaceIndirectTargetComment(op2.meta.comment, op2.register, selectorValue, target);
+      const meta = comment === void 0 ? { ...op2.meta } : { ...op2.meta, comment };
       if (comment === void 0) delete meta.comment;
       return {
-        ...op,
+        ...op2,
         meta
       };
     });
@@ -12570,22 +12605,22 @@ var MKProEmulatorBundle = (() => {
   function numericTargetView(ir, labels) {
     const numeric = [];
     const targetLabel = [];
-    for (const op of ir) {
-      if (isDirectBranch(op) && typeof op.target === "string") {
-        const address = labels.get(op.target);
+    for (const op2 of ir) {
+      if (isDirectBranch(op2) && typeof op2.target === "string") {
+        const address = labels.get(op2.target);
         if (address !== void 0) {
-          numeric.push({ ...op, target: address });
-          targetLabel.push(op.target);
+          numeric.push({ ...op2, target: address });
+          targetLabel.push(op2.target);
           continue;
         }
       }
-      numeric.push(op);
+      numeric.push(op2);
       targetLabel.push(void 0);
     }
     return { numeric, targetLabel };
   }
-  function isSuperDarkRewrite(op) {
-    return /\bsuper-dark\b/iu.test(op.meta.comment ?? "");
+  function isSuperDarkRewrite(op2) {
+    return /\bsuper-dark\b/iu.test(op2.meta.comment ?? "");
   }
   function validateRewriteAt(index, ir, numeric, targetLabel, result, items) {
     const rewritten = result.ops[index];
@@ -12595,7 +12630,7 @@ var MKProEmulatorBundle = (() => {
     if (label === void 0) return void 0;
     const selectorValue = selectorValueForRegister(result.preloads ?? [], rewritten.register);
     if (selectorValue === void 0) return void 0;
-    const candidate = ir.map((op, i) => i === index ? rewritten : op);
+    const candidate = ir.map((op2, i) => i === index ? rewritten : op2);
     const finalLabels = labelAddresses(candidate);
     const targetFinalAddress = finalLabels.get(label);
     if (targetFinalAddress === void 0) return void 0;
@@ -12627,7 +12662,7 @@ var MKProEmulatorBundle = (() => {
     const selectorValue = selectorValueForRegister(result.preloads ?? [], register);
     if (selectorValue === void 0) return void 0;
     const indexSet = new Set(indices);
-    const candidate = ir.map((op, i) => indexSet.has(i) ? result.ops[i] : op);
+    const candidate = ir.map((op2, i) => indexSet.has(i) ? result.ops[i] : op2);
     const finalLabels = labelAddresses(candidate);
     const decoded = evaluateIndirectAddress(register, selectorValue, "flow");
     if (decoded === void 0) return void 0;
@@ -12660,10 +12695,10 @@ var MKProEmulatorBundle = (() => {
   function validateForwardRewriteGroup(indices, ir, targetLabel, register, items) {
     if (indices.length === 0) return void 0;
     const indexSet = new Set(indices);
-    const provisional = ir.map((op, index) => {
-      if (!indexSet.has(index)) return op;
-      if (!isDirectBranch(op)) return op;
-      return indirectFlowOp3(op, register, "00", 0);
+    const provisional = ir.map((op2, index) => {
+      if (!indexSet.has(index)) return op2;
+      if (!isDirectBranch(op2)) return op2;
+      return indirectFlowOp3(op2, register, "00", 0);
     });
     const finalLabels = labelAddresses(provisional);
     let finalTarget;
@@ -12685,10 +12720,10 @@ var MKProEmulatorBundle = (() => {
     if (selectorValue === void 0) return void 0;
     const decoded = evaluateIndirectAddress(register, selectorValue, "flow");
     if (decoded?.actualFlowTarget !== finalTarget) return void 0;
-    const candidate = ir.map((op, index) => {
-      if (!indexSet.has(index)) return op;
-      if (!isDirectBranch(op)) return op;
-      return indirectFlowOp3(op, register, selectorValue, finalTarget);
+    const candidate = ir.map((op2, index) => {
+      if (!indexSet.has(index)) return op2;
+      if (!isDirectBranch(op2)) return op2;
+      return indirectFlowOp3(op2, register, selectorValue, finalTarget);
     });
     const candidateItems = lowerIrToMachine(candidate);
     if (cellCount(candidateItems) >= cellCount(items)) return void 0;
@@ -12716,8 +12751,8 @@ var MKProEmulatorBundle = (() => {
     const addresses = opAddresses(ir);
     const groups = /* @__PURE__ */ new Map();
     for (let index = 0; index < ir.length; index += 1) {
-      const op = ir[index];
-      if (hasRewriteBarrier(op) || !isDirectBranch(op)) continue;
+      const op2 = ir[index];
+      if (hasRewriteBarrier(op2) || !isDirectBranch(op2)) continue;
       const label = targetLabel[index];
       if (label === void 0) continue;
       const target = labels.get(label);
@@ -12745,12 +12780,12 @@ var MKProEmulatorBundle = (() => {
     if (result.applied > 0) {
       const groups = /* @__PURE__ */ new Map();
       for (let index = 0; index < result.ops.length; index += 1) {
-        const op = result.ops[index];
+        const op2 = result.ops[index];
         const original = numeric[index];
-        if (!isIndirectBranch(op) || !isDirectBranch(original) || targetLabel[index] === void 0) continue;
-        const list = groups.get(op.register) ?? [];
+        if (!isIndirectBranch(op2) || !isDirectBranch(original) || targetLabel[index] === void 0) continue;
+        const list = groups.get(op2.register) ?? [];
         list.push(index);
-        groups.set(op.register, list);
+        groups.set(op2.register, list);
       }
       for (const indices of groups.values()) {
         const group = validateRewriteGroup(indices, ir, numeric, targetLabel, result, items);
@@ -12950,33 +12985,33 @@ var MKProEmulatorBundle = (() => {
       reasons.push("no super-dark dispatch register has a proved FA..FF selector value");
     }
     for (const offset of requiredOffsets) {
-      const formal = 250 + offset;
+      const formal2 = 250 + offset;
       const entryAddress = 48 + offset;
       const continuationAddress = 1 + offset;
       const entry = byAddress.get(entryAddress);
       const continuation = byAddress.get(continuationAddress);
       if (entry === void 0) {
-        reasons.push(`${hex2(formal)} has no physical entry cell at ${entryAddress}`);
+        reasons.push(`${hex2(formal2)} has no physical entry cell at ${entryAddress}`);
         continue;
       }
       if (continuation === void 0) {
-        reasons.push(`${hex2(formal)} has no continuation cell at ${continuationAddress}`);
+        reasons.push(`${hex2(formal2)} has no continuation cell at ${continuationAddress}`);
         continue;
       }
       if (!entry.roles.includes("exec")) {
-        reasons.push(`${hex2(formal)} entry ${entryAddress} is not executable`);
+        reasons.push(`${hex2(formal2)} entry ${entryAddress} is not executable`);
         continue;
       }
       if (getOpcode(entry.opcode).takesAddress) {
-        reasons.push(`${hex2(formal)} entry ${entryAddress} is a two-cell address-taking command`);
+        reasons.push(`${hex2(formal2)} entry ${entryAddress} is a two-cell address-taking command`);
         continue;
       }
       if (!continuation.roles.includes("exec")) {
-        reasons.push(`${hex2(formal)} continuation ${continuationAddress} is not executable`);
+        reasons.push(`${hex2(formal2)} continuation ${continuationAddress} is not executable`);
         continue;
       }
       pairs.push({
-        formal,
+        formal: formal2,
         entryAddress,
         continuationAddress,
         entryOpcode: entry.opcode,
@@ -12997,9 +13032,9 @@ var MKProEmulatorBundle = (() => {
     const offsets = /* @__PURE__ */ new Set();
     for (const cell of dispatchCells) {
       const value = cell.selectorValue?.trim().toUpperCase().replace(/\s+/gu, "");
-      const formal = value === void 0 ? void 0 : /^F([A-F])$/u.exec(value);
-      if (formal) {
-        offsets.add(Number.parseInt(formal[1], 16) - 10);
+      const formal2 = value === void 0 ? void 0 : /^F([A-F])$/u.exec(value);
+      if (formal2) {
+        offsets.add(Number.parseInt(formal2[1], 16) - 10);
       } else if (isSuperDarkSelectorValue(value)) {
         for (let offset = 0; offset <= 5; offset += 1) offsets.add(offset);
       }
@@ -13117,15 +13152,15 @@ var MKProEmulatorBundle = (() => {
     }
     emitOp(opcode, mnemonic, comment, sourceLine, raw = false) {
       const info2 = getOpcode(opcode);
-      const op = {
+      const op2 = {
         kind: "op",
         opcode,
         mnemonic: mnemonic ?? info2.name
       };
-      if (comment !== void 0) op.comment = comment;
-      if (sourceLine !== void 0) op.sourceLine = sourceLine;
-      if (raw) op.raw = true;
-      this.items.push(op);
+      if (comment !== void 0) op2.comment = comment;
+      if (sourceLine !== void 0) op2.sourceLine = sourceLine;
+      if (raw) op2.raw = true;
+      this.items.push(op2);
       if (opcode >= 128 && opcode <= 254) this.coordListCounterKnownOne = false;
       this.currentXVariable = void 0;
       this.currentXAliases.clear();
@@ -13381,7 +13416,7 @@ var MKProEmulatorBundle = (() => {
       return false;
     }
     if (ctx.currentXDashedCoordReportBodyMatches(template)) {
-      emitDashedCoordReportPackedBodyDisplay(ctx, display.name, maskRegister, line);
+      emitDashedCoordReportPackedBodyDisplay(ctx, display.name, maskRegister, line, template.format.videoAnchorExp);
       ctx.optimizations.push({
         name: "dashed-coord-report-packed-body",
         detail: `Reused packed --CC-- N body already in X for screen ${display.name}.`
@@ -13400,11 +13435,11 @@ var MKProEmulatorBundle = (() => {
       ctx.emitNumberOrPreload("10");
       ctx.emitOp(18, "*", "display dashed scaled cell restore", line);
     }
-    ctx.emitNumber("4");
+    ctx.emitNumber(String(template.format.cellScaleExp));
     ctx.emitOp(21, "F 10^x", "display dashed cell scale", line);
     ctx.emitOp(18, "*", "display dashed cell shift", line);
     ctx.emitOp(16, "+", "display dashed bearing append", line);
-    ctx.emitNumber("7");
+    ctx.emitNumber(String(template.format.videoAnchorExp));
     ctx.emitOp(21, "F 10^x", "display dashed video anchor", line);
     ctx.emitOp(16, "+", "display dashed video body", line);
     ctx.emitOp(96 + registerIndex(maskRegister), `\u041F->X ${maskRegister}`, `display ${display.name} dashed mask`, line);
@@ -13412,7 +13447,7 @@ var MKProEmulatorBundle = (() => {
     ctx.emitOp(53, "\u041A {x}", "display dashed video fraction", line);
     ctx.emitOp(11, "/-/", "display dashed sign", line);
     ctx.emitOp(12, "\u0412\u041F", "display dashed exponent entry", line);
-    ctx.emitOp(7, "7", "display dashed exponent", line);
+    ctx.emitOp(0 + template.format.videoAnchorExp, String(template.format.videoAnchorExp), "display dashed exponent", line);
     ctx.emitOp(80, "\u0421/\u041F", `show ${display.name}`, line);
     ctx.optimizations.push({
       name: "dashed-coord-report-lowering",
@@ -13420,8 +13455,8 @@ var MKProEmulatorBundle = (() => {
     });
     return true;
   }
-  function emitDashedCoordReportPackedBodyDisplay(ctx, displayName, maskRegister, line) {
-    ctx.emitNumber("7");
+  function emitDashedCoordReportPackedBodyDisplay(ctx, displayName, maskRegister, line, videoAnchorExp) {
+    ctx.emitNumber(String(videoAnchorExp));
     ctx.emitOp(21, "F 10^x", "display dashed video anchor", line);
     ctx.emitOp(16, "+", "display dashed video body", line);
     ctx.emitOp(96 + registerIndex(maskRegister), `\u041F->X ${maskRegister}`, `display ${displayName} dashed mask`, line);
@@ -13429,7 +13464,7 @@ var MKProEmulatorBundle = (() => {
     ctx.emitOp(53, "\u041A {x}", "display dashed video fraction", line);
     ctx.emitOp(11, "/-/", "display dashed sign", line);
     ctx.emitOp(12, "\u0412\u041F", "display dashed exponent entry", line);
-    ctx.emitOp(7, "7", "display dashed exponent", line);
+    ctx.emitOp(0 + videoAnchorExp, String(videoAnchorExp), "display dashed exponent", line);
     ctx.emitOp(80, "\u0421/\u041F", `show ${displayName}`, line);
   }
   function compilePackedDisplayBody(ctx, display, line, reuseCurrentX) {
@@ -14173,9 +14208,9 @@ var MKProEmulatorBundle = (() => {
   function emitDashedCoordReportCellBody(ctx, template, line, commentPrefix) {
     if (!ctx.xHolds(template.cell.name)) ctx.emitRecall(template.cell.name, `${commentPrefix} cell`, line);
     if (ctx.scaledCoordVariables.has(template.cell.name)) {
-      ctx.emitNumber("5");
+      ctx.emitNumber(String(template.format.cellScaleExp + 1));
     } else {
-      ctx.emitNumber("4");
+      ctx.emitNumber(String(template.format.cellScaleExp));
     }
     ctx.emitOp(21, "F 10^x", `${commentPrefix} cell scale`, line);
     ctx.emitOp(18, "*", `${commentPrefix} cell shift`, line);
@@ -14452,11 +14487,7 @@ var MKProEmulatorBundle = (() => {
     ctx.emitNumberOrPreload("1");
     ctx.emitOp(17, "-", `decrement/test ${decrement.target}`, decrement.line);
     ctx.emitStore(decrement.target, `set ${decrement.target}`, decrement.line);
-    ctx.emitOp(35, "F 1/x", "decrement zero domain guard trap", branch.line);
-    ctx.currentXVariable = void 0;
-    ctx.currentXAliases.clear();
-    ctx.currentXKnownZero = false;
-    ctx.scaledCoordVariables.clear();
+    emitDomainTrapOnX(ctx, 35, "F 1/x", "decrement zero domain guard trap", branch.line);
     if (branch.elseBody !== void 0) ctx.compileStatements(branch.elseBody);
     ctx.optimizations.push({
       name: "decrement-zero-domain-guard",
@@ -14475,11 +14506,7 @@ var MKProEmulatorBundle = (() => {
       ctx.emitNumberOrPreload("1");
       ctx.emitOp(17, "-", `decrement/test ${decrement.target}`, decrement.line);
       ctx.emitStore(decrement.target, `set ${decrement.target}`, decrement.line);
-      ctx.emitOp(33, "F sqrt", "decrement underflow domain guard trap", branch.line);
-      ctx.currentXVariable = void 0;
-      ctx.currentXAliases.clear();
-      ctx.currentXKnownZero = false;
-      ctx.scaledCoordVariables.clear();
+      emitDomainTrapOnX(ctx, 33, "F sqrt", "decrement underflow domain guard trap", branch.line);
       ctx.optimizations.push({
         name: "decrement-underflow-domain-guard",
         detail: `Fused ${decrement.target} decrement and negative terminal-error branch through F sqrt at lines ${decrement.line}/${branch.line}.`
@@ -14517,6 +14544,13 @@ var MKProEmulatorBundle = (() => {
       return statementsAreDomainErrorTrap(ctx, proc.body, seen);
     }
     return false;
+  }
+  function emitDomainTrapOnX(ctx, trapOpcode, trapMnemonic, comment, line) {
+    ctx.emitOp(trapOpcode, trapMnemonic, comment, line);
+    ctx.currentXVariable = void 0;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
+    ctx.scaledCoordVariables.clear();
   }
   function planDomainErrorGuard(condition) {
     const SQRT_OPCODE = 33;
@@ -14585,11 +14619,7 @@ var MKProEmulatorBundle = (() => {
       compileExpression(ctx, plan.second);
       ctx.emitOp(17, "-", "domain guard difference", line);
     }
-    ctx.emitOp(plan.trapOpcode, plan.trapMnemonic, "domain-error guard trap", line);
-    ctx.currentXVariable = void 0;
-    ctx.currentXAliases.clear();
-    ctx.currentXKnownZero = false;
-    ctx.scaledCoordVariables.clear();
+    emitDomainTrapOnX(ctx, plan.trapOpcode, plan.trapMnemonic, "domain-error guard trap", line);
     if (statement.elseBody !== void 0) ctx.compileStatements(statement.elseBody);
     ctx.optimizations.push({
       name: "domain-error-guard",
@@ -14607,11 +14637,7 @@ var MKProEmulatorBundle = (() => {
     if (!ctx.xHolds(assign.target)) {
       ctx.emitRecall(assign.target, `trap-test ${assign.target}`, branch.line);
     }
-    ctx.emitOp(plan.trapOpcode, plan.trapMnemonic, "domain-error guard trap", branch.line);
-    ctx.currentXVariable = void 0;
-    ctx.currentXAliases.clear();
-    ctx.currentXKnownZero = false;
-    ctx.scaledCoordVariables.clear();
+    emitDomainTrapOnX(ctx, plan.trapOpcode, plan.trapMnemonic, "domain-error guard trap", branch.line);
     if (branch.elseBody !== void 0) ctx.compileStatements(branch.elseBody);
     ctx.optimizations.push({
       name: "assign-zero-domain-guard",
@@ -15556,9 +15582,10 @@ var MKProEmulatorBundle = (() => {
       compileExpression(ctx, field.initial);
       ctx.emitStore(field.name, `setup ${field.name}`, field.line, true);
     }
-    if (programUsesDashedCoordReport(ctx.ast)) {
+    const dashedReportFormat = dashedCoordReportFormatForProgram(ctx.ast);
+    if (dashedReportFormat !== void 0) {
       const register = ctx.allocation.registers[COORD_LIST_DX];
-      const program = displayLiteralProgram(DASHED_COORD_REPORT_MASK);
+      const program = displayLiteralProgram(dashedReportFormat.mask);
       if (register !== void 0 && program !== void 0 && program.kind !== "error") {
         emitDisplayLiteralProgram(ctx, program, void 0, "setup dashed report mask");
         ctx.emitOp(64 + registerIndex(register), `X->\u041F ${register}`, "setup dashed report mask", void 0, true);
@@ -15870,9 +15897,9 @@ var MKProEmulatorBundle = (() => {
     } else if (action.kind === "unary-sequence") {
       const source = preloads[action.sourceIndex];
       ctx.emitOp(96 + registerIndex(source.register), `\u041F->X ${source.register}`, `setup constant ${targetValue} base ${normalizeConstantLiteral(source.value)}`);
-      for (const op of action.ops) {
-        const comment = op.comment === "" ? `setup constant ${targetValue}` : `setup constant ${targetValue} ${op.comment}`;
-        ctx.emitOp(op.opcode, op.mnemonic, comment);
+      for (const op2 of action.ops) {
+        const comment = op2.comment === "" ? `setup constant ${targetValue}` : `setup constant ${targetValue} ${op2.comment}`;
+        ctx.emitOp(op2.opcode, op2.mnemonic, comment);
       }
     } else {
       const left = preloads[action.leftIndex];
@@ -16282,77 +16309,109 @@ var MKProEmulatorBundle = (() => {
     });
     return true;
   }
+  function op(opcode, mnemonic, comment) {
+    return { kind: "op", opcode, mnemonic, comment };
+  }
+  function jump(opcode, mnemonic, target, comment) {
+    return { kind: "jump", opcode, mnemonic, target, comment };
+  }
+  function formal(opcode, comment) {
+    return { kind: "formal", opcode, comment };
+  }
+  var VERIFIED_DECIMAL_SERIES_LISTINGS = [
+    {
+      digits: 94,
+      counterStart: 65,
+      ops: [
+        op(82, "\u0412/\u041E", "decimal recurrence setup"),
+        op(6, "6", "decimal recurrence setup"),
+        op(5, "5", "decimal recurrence setup"),
+        op(35, "F 1/x", "decimal recurrence setup"),
+        op(64, "\u0445\u041F0", "decimal recurrence setup"),
+        op(13, "Cx", "decimal recurrence loop entry"),
+        op(176, "\u041A \u0445\u041F0", "decimal recurrence loop entry"),
+        op(96, "\u041F\u04450", "decimal recurrence loop entry"),
+        jump(94, "F x=0", 5, "decimal recurrence loop guard"),
+        op(15, "F \u0412x", "decimal recurrence scale"),
+        op(7, "7", "decimal recurrence scale"),
+        op(21, "F 10^x", "decimal recurrence scale"),
+        op(32, "F \u03C0", "decimal recurrence scale"),
+        op(222, "\u041A \u041F\u0445e", "decimal recurrence helper selector"),
+        op(83, "\u041F\u041F", "decimal recurrence helper call"),
+        formal(225, "decimal recurrence helper call"),
+        op(1, "1", "decimal recurrence term"),
+        op(16, "+", "decimal recurrence term"),
+        op(78, "\u0445\u041Fe", "decimal recurrence accumulator"),
+        op(222, "\u041A \u041F\u0445e", "decimal recurrence accumulator"),
+        op(17, "-", "decimal recurrence accumulator"),
+        jump(94, "F x=0", 14, "decimal recurrence carry guard"),
+        op(110, "\u041F\u0445e", "decimal recurrence carry"),
+        op(12, "\u0412\u041F", "decimal recurrence carry"),
+        op(11, "/-/", "decimal recurrence carry"),
+        op(2, "2", "decimal recurrence carry"),
+        op(52, "\u041A [x]", "decimal recurrence carry"),
+        op(0, "0", "decimal recurrence reference gap"),
+        op(37, "F \u21BB", "decimal recurrence carry"),
+        op(16, "+", "decimal recurrence carry"),
+        op(0, "0", "decimal recurrence reference gap"),
+        op(14, "\u0412\u2191", "decimal recurrence carry"),
+        op(15, "F \u0412x", "decimal recurrence carry"),
+        op(0, "0", "decimal recurrence reference gap"),
+        op(19, "/", "decimal recurrence division"),
+        op(15, "F \u0412x", "decimal recurrence division"),
+        op(37, "F \u21BB", "decimal recurrence division"),
+        op(52, "\u041A [x]", "decimal recurrence division"),
+        op(190, "\u041A \u0445\u041Fe", "decimal recurrence division"),
+        op(18, "\xD7", "decimal recurrence division"),
+        op(17, "-", "decimal recurrence division"),
+        op(6, "6", "decimal recurrence normalization"),
+        op(21, "F 10^x", "decimal recurrence normalization"),
+        op(18, "\xD7", "decimal recurrence normalization"),
+        op(110, "\u041F\u0445e", "decimal recurrence accumulator update"),
+        op(12, "\u0412\u041F", "decimal recurrence accumulator update"),
+        op(2, "2", "decimal recurrence accumulator update"),
+        op(78, "\u0445\u041Fe", "decimal recurrence accumulator update"),
+        op(16, "+", "decimal recurrence accumulator update"),
+        op(50, "\u041A \u0417\u041D", "decimal recurrence accumulator update"),
+        op(17, "-", "decimal recurrence accumulator update"),
+        jump(94, "F x=0", 11, "decimal recurrence next term"),
+        op(110, "\u041F\u0445e", "decimal recurrence final mantissa"),
+        op(2, "2", "decimal recurrence final mantissa"),
+        op(5, "5", "decimal recurrence final mantissa"),
+        op(16, "+", "decimal recurrence final mantissa"),
+        op(78, "\u0445\u041Fe", "decimal recurrence final mantissa"),
+        op(1, "1", "decimal recurrence exponent"),
+        op(22, "F e^x", "decimal recurrence exponent"),
+        op(64, "\u0445\u041F0", "decimal recurrence result"),
+        op(80, "\u0421/\u041F", "decimal recurrence stop")
+      ]
+    }
+  ];
+  function verifiedDecimalSeriesListing(digits, counterStart) {
+    return VERIFIED_DECIMAL_SERIES_LISTINGS.find(
+      (listing) => listing.digits === digits && listing.counterStart === counterStart
+    );
+  }
   function compileDecimalFactorialSeries(ctx, statement) {
     const line = statement.line;
-    if (statement.digits !== 94 || statement.counterStart !== 65) {
+    const listing = verifiedDecimalSeriesListing(statement.digits, statement.counterStart);
+    if (listing === void 0) {
       ctx.diagnostics.push(buildDiagnostic(
         "error",
-        `Unsupported ${statement.digits}-digit recurrence with counter ${statement.counterStart}.`,
+        `No verified decimal recurrence listing for ${statement.digits}-digit precision with counter ${statement.counterStart}. Verified pairs: ${VERIFIED_DECIMAL_SERIES_LISTINGS.map((l) => `(${l.digits}, ${l.counterStart})`).join(", ")}. The hand-tuned recurrence byte sequence must be validated on hardware before a new pair can be added.`,
         line
       ));
       return;
     }
-    ctx.emitOp(82, "\u0412/\u041E", "decimal recurrence setup", line);
-    ctx.emitOp(6, "6", "decimal recurrence setup", line);
-    ctx.emitOp(5, "5", "decimal recurrence setup", line);
-    ctx.emitOp(35, "F 1/x", "decimal recurrence setup", line);
-    ctx.emitOp(64, "\u0445\u041F0", "decimal recurrence setup", line);
-    ctx.emitOp(13, "Cx", "decimal recurrence loop entry", line);
-    ctx.emitOp(176, "\u041A \u0445\u041F0", "decimal recurrence loop entry", line);
-    ctx.emitOp(96, "\u041F\u04450", "decimal recurrence loop entry", line);
-    ctx.emitJump(94, "F x=0", 5, "decimal recurrence loop guard", line);
-    ctx.emitOp(15, "F \u0412x", "decimal recurrence scale", line);
-    ctx.emitOp(7, "7", "decimal recurrence scale", line);
-    ctx.emitOp(21, "F 10^x", "decimal recurrence scale", line);
-    ctx.emitOp(32, "F \u03C0", "decimal recurrence scale", line);
-    ctx.emitOp(222, "\u041A \u041F\u0445e", "decimal recurrence helper selector", line);
-    ctx.emitOp(83, "\u041F\u041F", "decimal recurrence helper call", line);
-    ctx.emitFormalAddress(225, "decimal recurrence helper call", line);
-    ctx.emitOp(1, "1", "decimal recurrence term", line);
-    ctx.emitOp(16, "+", "decimal recurrence term", line);
-    ctx.emitOp(78, "\u0445\u041Fe", "decimal recurrence accumulator", line);
-    ctx.emitOp(222, "\u041A \u041F\u0445e", "decimal recurrence accumulator", line);
-    ctx.emitOp(17, "-", "decimal recurrence accumulator", line);
-    ctx.emitJump(94, "F x=0", 14, "decimal recurrence carry guard", line);
-    ctx.emitOp(110, "\u041F\u0445e", "decimal recurrence carry", line);
-    ctx.emitOp(12, "\u0412\u041F", "decimal recurrence carry", line);
-    ctx.emitOp(11, "/-/", "decimal recurrence carry", line);
-    ctx.emitOp(2, "2", "decimal recurrence carry", line);
-    ctx.emitOp(52, "\u041A [x]", "decimal recurrence carry", line);
-    ctx.emitOp(0, "0", "decimal recurrence reference gap", line);
-    ctx.emitOp(37, "F \u21BB", "decimal recurrence carry", line);
-    ctx.emitOp(16, "+", "decimal recurrence carry", line);
-    ctx.emitOp(0, "0", "decimal recurrence reference gap", line);
-    ctx.emitOp(14, "\u0412\u2191", "decimal recurrence carry", line);
-    ctx.emitOp(15, "F \u0412x", "decimal recurrence carry", line);
-    ctx.emitOp(0, "0", "decimal recurrence reference gap", line);
-    ctx.emitOp(19, "/", "decimal recurrence division", line);
-    ctx.emitOp(15, "F \u0412x", "decimal recurrence division", line);
-    ctx.emitOp(37, "F \u21BB", "decimal recurrence division", line);
-    ctx.emitOp(52, "\u041A [x]", "decimal recurrence division", line);
-    ctx.emitOp(190, "\u041A \u0445\u041Fe", "decimal recurrence division", line);
-    ctx.emitOp(18, "\xD7", "decimal recurrence division", line);
-    ctx.emitOp(17, "-", "decimal recurrence division", line);
-    ctx.emitOp(6, "6", "decimal recurrence normalization", line);
-    ctx.emitOp(21, "F 10^x", "decimal recurrence normalization", line);
-    ctx.emitOp(18, "\xD7", "decimal recurrence normalization", line);
-    ctx.emitOp(110, "\u041F\u0445e", "decimal recurrence accumulator update", line);
-    ctx.emitOp(12, "\u0412\u041F", "decimal recurrence accumulator update", line);
-    ctx.emitOp(2, "2", "decimal recurrence accumulator update", line);
-    ctx.emitOp(78, "\u0445\u041Fe", "decimal recurrence accumulator update", line);
-    ctx.emitOp(16, "+", "decimal recurrence accumulator update", line);
-    ctx.emitOp(50, "\u041A \u0417\u041D", "decimal recurrence accumulator update", line);
-    ctx.emitOp(17, "-", "decimal recurrence accumulator update", line);
-    ctx.emitJump(94, "F x=0", 11, "decimal recurrence next term", line);
-    ctx.emitOp(110, "\u041F\u0445e", "decimal recurrence final mantissa", line);
-    ctx.emitOp(2, "2", "decimal recurrence final mantissa", line);
-    ctx.emitOp(5, "5", "decimal recurrence final mantissa", line);
-    ctx.emitOp(16, "+", "decimal recurrence final mantissa", line);
-    ctx.emitOp(78, "\u0445\u041Fe", "decimal recurrence final mantissa", line);
-    ctx.emitOp(1, "1", "decimal recurrence exponent", line);
-    ctx.emitOp(22, "F e^x", "decimal recurrence exponent", line);
-    ctx.emitOp(64, "\u0445\u041F0", "decimal recurrence result", line);
-    ctx.emitOp(80, "\u0421/\u041F", "decimal recurrence stop", line);
+    for (const instruction of listing.ops) {
+      if (instruction.kind === "op") {
+        ctx.emitOp(instruction.opcode, instruction.mnemonic, instruction.comment, line);
+      } else if (instruction.kind === "jump") {
+        ctx.emitJump(instruction.opcode, instruction.mnemonic, instruction.target, instruction.comment, line);
+      } else {
+        ctx.emitFormalAddress(instruction.opcode, instruction.comment, line);
+      }
+    }
     ctx.optimizations.push({
       name: "decimal-factorial-series-lowering",
       detail: `Lowered decimal recurrence to ${statement.digits}-digit MK-61 program.`
@@ -16593,7 +16652,7 @@ var MKProEmulatorBundle = (() => {
   }
 
   // src/core/emit/lowering/spatial.ts
-  function compileTicTacToeCellMaskReuse(ctx, first, second) {
+  function compileGridCellMaskReuse(ctx, first, second) {
     const used = matchCellHelperCall(first.expr, ["cell_used", "cell_has"]);
     const mark = matchCellHelperCall(second.expr, ["cell_mark", "cell_set"]);
     if (!used || !mark) return false;
@@ -16601,22 +16660,22 @@ var MKProEmulatorBundle = (() => {
       return false;
     }
     if (used.mask.kind !== "identifier" || second.target !== used.mask.name) return false;
-    const scratch = ticTacToeMaskScratchName(first);
+    const scratch = grid4MaskScratchName(first);
     if (!ctx.allocation.registers[scratch]) return false;
     compileExpression(ctx, cellMaskExpression(used.x, used.y));
-    ctx.emitStore(scratch, "4x4 cell mask scratch", first.line);
+    ctx.emitStore(scratch, "grid cell mask scratch", first.line);
     compileExpression(ctx, used.mask);
-    ctx.emitRecall(scratch, "reuse 4x4 cell mask", first.line);
+    ctx.emitRecall(scratch, "reuse grid cell mask", first.line);
     ctx.emitOp(55, "\u041A \u2227", "cell_has with reused mask", first.line);
     ctx.emitOp(53, "\u041A {x}", "cell_has membership fraction", first.line);
     ctx.emitOp(50, "\u041A \u0417\u041D", "cell_has to 0/1", first.line);
     ctx.emitStore(first.target, `set ${first.target}`, first.line);
     compileExpression(ctx, mark.mask);
-    ctx.emitRecall(scratch, "reuse 4x4 cell mask", second.line);
+    ctx.emitRecall(scratch, "reuse grid cell mask", second.line);
     ctx.emitOp(56, "\u041A \u2228", "cell_set with reused mask", second.line);
     ctx.emitStore(second.target, `set ${second.target}`, second.line);
     ctx.optimizations.push({
-      name: "tic-tac-toe-cell-mask-cse",
+      name: "grid-cell-mask-cse",
       detail: `Computed cell_mask once for adjacent cell_has/cell_set at lines ${first.line}/${second.line}.`
     });
     return true;
@@ -17279,10 +17338,10 @@ var MKProEmulatorBundle = (() => {
     if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
       if (compileNegativeZeroDegreeSelectorCall(ctx, expr)) return;
     }
-    if (isTicTacToeMacroName(name) && ticTacToeMacroArity(name) !== expr.args.length) {
+    if (isPackedGridMacroName(name) && packedGridMacroArity(name) !== expr.args.length) {
       ctx.diagnostics.push({
         level: "error",
-        message: `${expr.callee}() expects ${ticTacToeMacroArity(name)} arguments, got ${expr.args.length}.`
+        message: `${expr.callee}() expects ${packedGridMacroArity(name)} arguments, got ${expr.args.length}.`
       });
       return;
     }
@@ -17302,11 +17361,11 @@ var MKProEmulatorBundle = (() => {
       });
       return;
     }
-    const macro = ticTacToeExpressionMacro(name, expr.args);
+    const macro = packedGridExpressionMacro(name, expr.args);
     if (macro !== void 0) {
       compileExpression(ctx, macro);
       ctx.optimizations.push({
-        name: "tic-tac-toe-primitive-lowering",
+        name: "packed-grid-primitive-lowering",
         detail: `Lowered ${expr.callee}() to reusable 4x4 grid/packed-line arithmetic.`
       });
       return;
@@ -17355,6 +17414,23 @@ var MKProEmulatorBundle = (() => {
       }
       ctx.emitNumber("1");
       ctx.emitOp(22, "F e^x", `${expr.callee}()`);
+      return;
+    }
+    if (name === "entered") {
+      if (expr.args.length !== 0) {
+        ctx.diagnostics.push({
+          level: "error",
+          message: `${expr.callee}() takes no arguments, got ${expr.args.length}.`
+        });
+        return;
+      }
+      ctx.currentXVariable = void 0;
+      ctx.currentXAliases.clear();
+      ctx.currentXKnownZero = false;
+      ctx.optimizations.push({
+        name: "entered-current-x",
+        detail: "Consumed the current keyboard-entered X value without emitting another stop."
+      });
       return;
     }
     if (name === "pow") {
@@ -17770,27 +17846,27 @@ var MKProEmulatorBundle = (() => {
     bit_xor: [57, "\u041A \u2295"]
   };
   function emitRestoreStackTemp(ctx, tempIndex, tempCount, line) {
-    for (const op of stackResidentRestoreOps(tempIndex, tempCount)) {
-      if (op === "reverse") ctx.emitOp(37, "F reverse", "stack-resident temp restore", line);
+    for (const op2 of stackResidentRestoreOps(tempIndex, tempCount)) {
+      if (op2 === "reverse") ctx.emitOp(37, "F reverse", "stack-resident temp restore", line);
       else ctx.emitOp(20, "X\u2194Y", "stack-resident temp restore", line);
     }
   }
-  function emitSwapIfNonCommutativeLeft(ctx, op, line) {
-    if (op !== "+" && op !== "*") ctx.emitOp(20, "X\u2194Y", "stack-resident operand order", line);
+  function emitSwapIfNonCommutativeLeft(ctx, op2, line) {
+    if (op2 !== "+" && op2 !== "*") ctx.emitOp(20, "X\u2194Y", "stack-resident operand order", line);
   }
-  function emitStackBinaryOnTemps(ctx, leftName, rightName, op, temps, line) {
+  function emitStackBinaryOnTemps(ctx, leftName, rightName, op2, temps, line) {
     const leftIndex = temps.indexOf(leftName);
     const rightIndex = temps.indexOf(rightName);
     if (leftIndex < 0 || rightIndex < 0) return;
     if (temps.length === 2) {
       if (leftIndex === 1 && rightIndex === 0) ctx.emitOp(20, "X\u2194Y", "stack-resident operand order", line);
-      ctx.emitOp(binaryOpcode(op), op, `expr ${op}`, line);
+      ctx.emitOp(binaryOpcode(op2), op2, `expr ${op2}`, line);
       return;
     }
     emitRestoreStackTemp(ctx, rightIndex, temps.length, line);
     emitRestoreStackTemp(ctx, leftIndex, temps.length, line);
     ctx.emitOp(20, "X\u2194Y", "stack-resident operand order", line);
-    ctx.emitOp(binaryOpcode(op), op, `expr ${op}`, line);
+    ctx.emitOp(binaryOpcode(op2), op2, `expr ${op2}`, line);
   }
   function referencesAnyTemp(expr, temps) {
     return temps.some((temp) => countIdentifierReads(expr, temp) > 0);
@@ -19272,7 +19348,7 @@ var MKProEmulatorBundle = (() => {
   function visiblePublicRegisters(all) {
     const result = {};
     for (const [name, register] of Object.entries(all)) {
-      if (!name.startsWith(DISPATCH_SCRATCH_PREFIX) && !name.startsWith(TICTACTOE_MASK_SCRATCH_PREFIX) && !name.startsWith(BIT_MASK_SCRATCH_PREFIX) && !name.startsWith(IF_SELECTOR_SCRATCH_PREFIX) && !name.startsWith(DISPLAY_EXPR_PREFIX) && !name.startsWith(CELL_MAP_PREFIX) && !name.startsWith(PARAMETRIC_SIBLING_PREFIX) && !name.startsWith(FUNCTION_TAIL_ARG_PREFIX) && !name.startsWith(SPATIAL_HIT_SCRATCH_PREFIX) && !name.startsWith(SPATIAL_COUNT_SCRATCH_PREFIX)) {
+      if (!name.startsWith(DISPATCH_SCRATCH_PREFIX) && !name.startsWith(GRID4_MASK_SCRATCH_PREFIX) && !name.startsWith(BIT_MASK_SCRATCH_PREFIX) && !name.startsWith(IF_SELECTOR_SCRATCH_PREFIX) && !name.startsWith(DISPLAY_EXPR_PREFIX) && !name.startsWith(CELL_MAP_PREFIX) && !name.startsWith(PARAMETRIC_SIBLING_PREFIX) && !name.startsWith(FUNCTION_TAIL_ARG_PREFIX) && !name.startsWith(SPATIAL_HIT_SCRATCH_PREFIX) && !name.startsWith(SPATIAL_COUNT_SCRATCH_PREFIX)) {
         result[name] = register;
       }
     }
@@ -19315,15 +19391,15 @@ var MKProEmulatorBundle = (() => {
           return expr;
       }
     };
-    const swappedConditionOp = (op) => {
-      if (op === "<") return ">";
-      if (op === "<=") return ">=";
-      if (op === ">") return "<";
-      if (op === ">=") return "<=";
-      return op;
+    const swappedConditionOp = (op2) => {
+      if (op2 === "<") return ">";
+      if (op2 === "<=") return ">=";
+      if (op2 === ">") return "<";
+      if (op2 === ">=") return "<=";
+      return op2;
     };
     const packedThreshold = (value) => numberExpression2(Math.round(value * 1e12) / 1e12);
-    const rewritePackedCounterComparison = (source, op, comparand) => {
+    const rewritePackedCounterComparison = (source, op2, comparand) => {
       if (source.kind !== "identifier") return void 0;
       const stripe = byName.get(source.name);
       if (stripe === void 0) return void 0;
@@ -19337,7 +19413,7 @@ var MKProEmulatorBundle = (() => {
       const divisor = 10 ** stripe.width;
       const lowerBound = (candidate) => stripe.kind === "major" ? candidate * scale : candidate / divisor;
       const upperBound = (candidate) => stripe.kind === "major" ? (candidate + 1) * scale : (candidate + 1) / divisor;
-      switch (op) {
+      switch (op2) {
         case "<":
           return { left: sourceExpr, op: "<", right: packedThreshold(lowerBound(value)) };
         case "<=":
@@ -21063,8 +21139,8 @@ var MKProEmulatorBundle = (() => {
     const MAX_TRIP_COUNT = 8;
     const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
     let unrolled = 0;
-    const conditionHolds = (op, value, bound) => {
-      switch (op) {
+    const conditionHolds = (op2, value, bound) => {
+      switch (op2) {
         case "<":
           return value < bound;
         case "<=":
@@ -21258,14 +21334,8 @@ var MKProEmulatorBundle = (() => {
     const left = condition.left;
     return left.kind === "binary" && left.op === "-" && left.left.kind === "identifier" && left.left.name === temp && left.right.kind === "identifier" && left.right.name === seed;
   }
-  function conditionTestsIdentifierAgainstZero(condition, name, op) {
-    return condition.op === op && (condition.left.kind === "identifier" && condition.left.name === name && isZeroExpression(condition.right) || condition.right.kind === "identifier" && condition.right.name === name && isZeroExpression(condition.left));
-  }
-  function indexedZeroDomainTrap(condition, target) {
-    if (!expressionEquals(condition.left, target) || !isZeroExpression(condition.right)) return void 0;
-    if (condition.op === "<") return { opcode: 33, mnemonic: "F sqrt" };
-    if (condition.op === "<=") return { opcode: 23, mnemonic: "F lg" };
-    return void 0;
+  function conditionTestsIdentifierAgainstZero(condition, name, op2) {
+    return condition.op === op2 && (condition.left.kind === "identifier" && condition.left.name === name && isZeroExpression(condition.right) || condition.right.kind === "identifier" && condition.right.name === name && isZeroExpression(condition.left));
   }
   function normalizeStateInitCountedLoops(ast, optimizations) {
     let normalized = 0;
@@ -21786,33 +21856,33 @@ var MKProEmulatorBundle = (() => {
       }
       let inExponentEntry = false;
       for (let i = 0; i < ops.length; i += 1) {
-        const op = ops[i];
-        if (op === "label") {
+        const op2 = ops[i];
+        if (op2 === "label") {
           inExponentEntry = false;
           continue;
         }
-        if (op.opcode === VP2) {
+        if (op2.opcode === VP2) {
           inExponentEntry = true;
           continue;
         }
-        if (isDigitEntry(op.opcode)) continue;
-        if (op.opcode === SIGN_CHANGE) {
+        if (isDigitEntry(op2.opcode)) continue;
+        if (op2.opcode === SIGN_CHANGE) {
           if (inExponentEntry) {
             warn(
               "Sign change (/-/) after \u0412\u041F exponent entry: continuous run may flip the exponent sign instead of the mantissa; test exponential inputs and verify against step mode",
-              op.line
+              op2.line
             );
           }
           inExponentEntry = false;
           continue;
         }
-        if (op.opcode === CLEAR_X || op.opcode === PUSH) {
+        if (op2.opcode === CLEAR_X || op2.opcode === PUSH) {
           const next = ops[i + 1];
           if (next !== void 0 && next !== "label" && isRecall(next.opcode)) {
-            const lead = op.opcode === CLEAR_X ? "Cx" : "\u0412\u2191";
+            const lead = op2.opcode === CLEAR_X ? "Cx" : "\u0412\u2191";
             warn(
               `${lead} immediately followed by \u041F->X lifts the stack differently from the keyboard digit-entry path; confirm Y/Z/T after this sequence`,
-              op.line
+              op2.line
             );
           }
         }
@@ -22242,7 +22312,7 @@ var MKProEmulatorBundle = (() => {
         if (statement.kind === "while" && this.compileSetupInitializedUnitDecrementWhile(statement)) {
           continue;
         }
-        if (statement.kind === "assign" && next?.kind === "assign" && compileTicTacToeCellMaskReuse(this, statement, next)) {
+        if (statement.kind === "assign" && next?.kind === "assign" && compileGridCellMaskReuse(this, statement, next)) {
           index += 1;
           continue;
         }
@@ -22501,32 +22571,48 @@ var MKProEmulatorBundle = (() => {
       });
       return true;
     }
-    compileInitializedUnitDecrementWhile(initializer, loop, intervening = []) {
-      if (!unitPositiveWhileCondition(loop.condition, initializer.target)) return false;
-      const initialValue = numericLiteralValue2(initializer.expr);
-      if (initialValue === void 0 || !Number.isInteger(initialValue) || initialValue < 1) return false;
-      const final = loop.body.at(-1);
-      if (final?.kind !== "assign" || !isUnitDecrementExpression(initializer.target, final.expr)) return false;
-      if (final.target !== initializer.target) return false;
-      const register = this.allocation.registers[initializer.target];
-      if (register === void 0) return false;
+    // Shared recognizer for every counted-loop init strategy: a `while target >= 1
+    // { ...; target-- }` loop whose counter is allocated to a register carrying an
+    // F Lx counter opcode and whose body (minus the trailing decrement) does not
+    // itself end machine flow. The returned descriptor drives one emit tail, so the
+    // initialized / setup-only / state-init strategies differ only in how the
+    // counter's starting value is supplied, not in how the loop is recognized or
+    // emitted.
+    recognizeCountedWhileLoop(loop) {
+      const target = unitDecrementCountedWhileTarget(loop);
+      if (target === void 0) return void 0;
+      const register = this.allocation.registers[target];
+      if (register === void 0) return void 0;
       const opcode = flOpcode(register);
-      if (opcode === void 0) return false;
-      const body = loop.body.slice(0, -1);
-      if (this.statementsEndMachineFlow(body)) return false;
-      this.compileStatement(initializer);
-      for (const statement of intervening) this.compileStatement(statement);
-      const start = this.freshLabel("counted_while");
+      if (opcode === void 0) return void 0;
+      const bodyTail = loop.body.slice(0, -1);
+      if (this.statementsEndMachineFlow(bodyTail)) return void 0;
+      return { target, flOpcode: opcode, bodyTail };
+    }
+    // Emit the loop body + one-cell F Lx back-edge for a recognized counted loop.
+    // The counter's starting value is established separately by the caller (an
+    // inline store, a setup preload, etc.).
+    emitCountedWhileBody(lowering, loop, labelPrefix, jumpComment) {
+      const start = this.freshLabel(labelPrefix);
       this.emitLabel(start);
       this.currentXVariable = void 0;
       this.currentXAliases.clear();
       this.currentXKnownZero = false;
       this.scaledCoordVariables.clear();
-      this.compileStatements(body);
-      this.emitJump(opcode, getOpcode(opcode).name, start, `counted while ${initializer.target}`, loop.line);
+      this.compileStatements(lowering.bodyTail);
+      this.emitJump(lowering.flOpcode, getOpcode(lowering.flOpcode).name, start, jumpComment, loop.line);
+    }
+    compileInitializedUnitDecrementWhile(initializer, loop, intervening = []) {
+      const initialValue = numericLiteralValue2(initializer.expr);
+      if (initialValue === void 0 || !Number.isInteger(initialValue) || initialValue < 1) return false;
+      const lowering = this.recognizeCountedWhileLoop(loop);
+      if (lowering === void 0 || lowering.target !== initializer.target) return false;
+      this.compileStatement(initializer);
+      for (const statement of intervening) this.compileStatement(statement);
+      this.emitCountedWhileBody(lowering, loop, "counted_while", `counted while ${initializer.target}`);
       this.optimizations.push({
         name: "initialized-counted-while-loop",
-        detail: `Lowered initialized while ${initializer.target} >= 1 through ${getOpcode(opcode).name} at line ${loop.line}.`
+        detail: `Lowered initialized while ${initializer.target} >= 1 through ${getOpcode(lowering.flOpcode).name} at line ${loop.line}.`
       });
       return true;
     }
@@ -22534,46 +22620,59 @@ var MKProEmulatorBundle = (() => {
       if (this.loweringOptions.setupOnlyCountedLoopInit !== true) return false;
       if (this.currentProcedure !== void 0) return false;
       if (!this.ast.entries[0]?.body.includes(loop)) return false;
-      const target = unitDecrementCountedWhileTarget(loop);
-      if (target === void 0) return false;
-      const field = findStateFieldInAst(this.ast, target);
+      const lowering = this.recognizeCountedWhileLoop(loop);
+      if (lowering === void 0) return false;
+      const field = findStateFieldInAst(this.ast, lowering.target);
       if (field?.initial === void 0) return false;
       const initialValue = numericLiteralValue2(field.initial);
       if (initialValue === void 0 || !Number.isInteger(initialValue) || initialValue < 1) return false;
-      if (scalarReferencedOutsideLoop(this.ast, target, loop)) return false;
-      const register = this.allocation.registers[target];
-      if (register === void 0) return false;
-      const opcode = flOpcode(register);
-      if (opcode === void 0) return false;
-      const body = loop.body.slice(0, -1);
-      if (this.statementsEndMachineFlow(body)) return false;
-      const start = this.freshLabel("setup_counted_while");
-      this.emitLabel(start);
+      if (scalarReferencedOutsideLoop(this.ast, lowering.target, loop)) return false;
+      this.emitCountedWhileBody(lowering, loop, "setup_counted_while", `setup-counted while ${lowering.target}`);
+      this.optimizations.push({
+        name: "setup-only-counted-loop-init",
+        detail: `Used setup initializer for ${lowering.target} and lowered while ${lowering.target} >= 1 through ${getOpcode(lowering.flOpcode).name} at line ${loop.line}.`
+      });
+      return true;
+    }
+    // Shared recognizer for the "previous random" idioms: a `temp = seed` copy
+    // immediately followed by a `seed = random()` update (directly or through a
+    // single-statement random proc). Returns the parked-in-Y previous value name
+    // (`temp`) and the `seed` being refreshed, or undefined when the two-statement
+    // preamble does not match. The three previous-random runs (stack reuse, branch,
+    // and fractional debit) share this preamble plus the kept-in-Y head below; they
+    // differ only in how they consume `temp` (parked in Y) and the new `seed` (X).
+    matchPreviousRandomSeedUpdate(previous, randomUpdate) {
+      if (previous?.kind !== "assign" || previous.expr.kind !== "identifier") return void 0;
+      if (randomUpdate === void 0) return void 0;
+      const seed = previous.expr.name;
+      if (this.randomUpdateTarget(randomUpdate) !== seed) return void 0;
+      return { temp: previous.target, seed };
+    }
+    // Emit the kept-in-Y head shared by every previous-random idiom: recall the
+    // current seed, duplicate it into Y with В↑, draw the next random() into X, and
+    // store it back as the new seed. The old seed stays parked in Y for the
+    // following stack-direct consumer, so it is never spilled and recomputed.
+    emitPreviousRandomSeedUpdate(seed, recallLine, updateLine) {
+      this.emitRecall(seed, `previous random ${seed}`, recallLine);
+      this.emitOp(14, "\u0412\u2191", `previous random keep ${seed}`, updateLine);
+      this.emitOp(59, "\u041A \u0421\u0427", "random()", updateLine);
       this.currentXVariable = void 0;
       this.currentXAliases.clear();
       this.currentXKnownZero = false;
-      this.scaledCoordVariables.clear();
-      this.compileStatements(body);
-      this.emitJump(opcode, getOpcode(opcode).name, start, `setup-counted while ${target}`, loop.line);
-      this.optimizations.push({
-        name: "setup-only-counted-loop-init",
-        detail: `Used setup initializer for ${target} and lowered while ${target} >= 1 through ${getOpcode(opcode).name} at line ${loop.line}.`
-      });
-      return true;
+      this.emitStore(seed, `set ${seed}`, updateLine);
     }
     compilePreviousRandomStateRun(statements, index) {
       const previous = statements[index];
       const randomUpdate = statements[index + 1];
       const consumer = statements[index + 2];
-      if (previous?.kind !== "assign" || randomUpdate === void 0 || consumer?.kind !== "assign") return 0;
-      if (consumer.target !== previous.target) return 0;
-      if (previous.expr.kind !== "identifier") return 0;
-      const seed = previous.expr.name;
-      if (this.randomUpdateTarget(randomUpdate) !== seed) return 0;
-      if (!expressionReferencesIdentifier(consumer.expr, previous.target)) return 0;
+      const seedUpdate = this.matchPreviousRandomSeedUpdate(previous, randomUpdate);
+      if (seedUpdate === void 0 || consumer?.kind !== "assign") return 0;
+      const { temp, seed } = seedUpdate;
+      if (consumer.target !== temp) return 0;
+      if (!expressionReferencesIdentifier(consumer.expr, temp)) return 0;
       if (!expressionReferencesIdentifier(consumer.expr, seed)) return 0;
-      if (!expressionCanUsePreviousRandomPrefix(consumer.expr, previous.target, seed)) return 0;
-      if (!this.compileExpressionFromPreviousRandom(consumer.expr, previous.target, seed, consumer.line)) return 0;
+      if (!expressionCanUsePreviousRandomPrefix(consumer.expr, temp, seed)) return 0;
+      if (!this.compileExpressionFromPreviousRandom(consumer.expr, temp, seed, consumer.line)) return 0;
       this.emitStore(consumer.target, `set ${consumer.target}`, consumer.line);
       this.optimizations.push({
         name: "previous-random-stack-reuse",
@@ -22585,17 +22684,12 @@ var MKProEmulatorBundle = (() => {
       const previous = statements[index];
       const randomUpdate = statements[index + 1];
       const branch = statements[index + 2];
-      if (previous?.kind !== "assign" || randomUpdate === void 0 || branch?.kind !== "if") return 0;
-      if (previous.expr.kind !== "identifier") return 0;
-      const temp = previous.target;
-      const seed = previous.expr.name;
-      if (this.randomUpdateTarget(randomUpdate) !== seed) return 0;
+      const seedUpdate = this.matchPreviousRandomSeedUpdate(previous, randomUpdate);
+      if (seedUpdate === void 0 || branch?.kind !== "if") return 0;
+      const { temp, seed } = seedUpdate;
       if (statementsReadIdentifierBeforeWrite(statements.slice(index + 3), temp)) return 0;
       if (!previousRandomLessThanCurrentCondition(branch.condition, temp, seed)) return 0;
-      this.emitRecall(seed, `previous random ${seed}`, previous.line);
-      this.emitOp(14, "\u0412\u2191", `previous random keep ${seed}`, randomUpdate.line);
-      this.emitOp(59, "\u041A \u0421\u0427", "random()", randomUpdate.line);
-      this.emitStore(seed, `set ${seed}`, randomUpdate.line);
+      this.emitPreviousRandomSeedUpdate(seed, previous.line, randomUpdate.line);
       this.emitOp(17, "-", "previous random compare", branch.line);
       const falseLabel = this.freshLabel("previous_random_false");
       const thenTerminates = this.statementsTerminate(branch.thenBody);
@@ -22621,12 +22715,10 @@ var MKProEmulatorBundle = (() => {
       const randomUpdate = statements[index + 1];
       const consumer = statements[index + 2];
       const guarded = statements[index + 3];
-      if (previous?.kind !== "assign" || consumer?.kind !== "assign" || guarded?.kind !== "if") return 0;
-      const temp = previous.target;
+      const seedUpdate = this.matchPreviousRandomSeedUpdate(previous, randomUpdate);
+      if (seedUpdate === void 0 || consumer?.kind !== "assign" || guarded?.kind !== "if") return 0;
+      const { temp, seed } = seedUpdate;
       if (consumer.target !== temp) return 0;
-      if (previous.expr.kind !== "identifier") return 0;
-      const seed = previous.expr.name;
-      if (this.randomUpdateTarget(randomUpdate) !== seed) return 0;
       if (statementsReadIdentifierBeforeWrite(statements.slice(index + 4), temp)) return 0;
       const plan = this.matchPreviousRandomFractionalDebit(consumer.expr, temp, seed, guarded);
       if (plan === void 0) return 0;
@@ -22635,10 +22727,7 @@ var MKProEmulatorBundle = (() => {
         this.emitAssignableRecall(plan.distance, `fractional debit ${this.assignableTargetText(plan.distance)}`, previous.line);
       }
       this.emitOp(53, "\u041A {x}", "fractional debit distance frac", previous.line);
-      this.emitRecall(seed, `previous random ${seed}`, previous.line);
-      this.emitOp(14, "\u0412\u2191", `previous random keep ${seed}`, randomUpdate.line);
-      this.emitOp(59, "\u041A \u0421\u0427", "random()", randomUpdate.line);
-      this.emitStore(seed, `set ${seed}`, randomUpdate.line);
+      this.emitPreviousRandomSeedUpdate(seed, previous.line, randomUpdate.line);
       this.emitOp(16, "+", "previous random + random()", consumer.line);
       this.emitNumberOrPreload("1");
       this.emitOp(16, "+", "previous random additive term", consumer.line);
@@ -22892,13 +22981,7 @@ var MKProEmulatorBundle = (() => {
       return statement.target;
     }
     compileExpressionFromPreviousRandom(expr, previous, seed, line) {
-      this.emitRecall(seed, `previous random ${seed}`, line);
-      this.emitOp(14, "\u0412\u2191", `previous random keep ${seed}`, line);
-      this.emitOp(59, "\u041A \u0421\u0427", "random()", line);
-      this.currentXVariable = void 0;
-      this.currentXAliases.clear();
-      this.currentXKnownZero = false;
-      this.emitStore(seed, `set ${seed}`, line);
+      this.emitPreviousRandomSeedUpdate(seed, line, line);
       return this.compileExpressionWithPreviousRandomPrefix(expr, previous, seed, line);
     }
     compileExpressionWithPreviousRandomPrefix(expr, previous, seed, line) {
@@ -22993,18 +23076,37 @@ var MKProEmulatorBundle = (() => {
     }
     compileIndexedAssignThenDomainTrap(assign, branch) {
       if (!statementsAreDomainErrorTrap(this, branch.thenBody)) return false;
-      const trap = indexedZeroDomainTrap(branch.condition, assign.target);
-      if (trap === void 0) return false;
+      const plan = planDomainErrorGuard(branch.condition);
+      if (plan === void 0 || plan.second !== void 0) return false;
+      if (!expressionEquals(plan.first, assign.target)) return false;
       this.compileStatement(assign);
-      this.emitOp(trap.opcode, trap.mnemonic, "indexed assign domain-error guard trap", branch.line);
-      this.currentXVariable = void 0;
-      this.currentXAliases.clear();
-      this.currentXKnownZero = false;
-      this.scaledCoordVariables.clear();
+      emitDomainTrapOnX(this, plan.trapOpcode, plan.trapMnemonic, "indexed assign domain-error guard trap", branch.line);
       if (branch.elseBody !== void 0) this.compileStatements(branch.elseBody);
       this.optimizations.push({
         name: "indexed-assign-zero-domain-guard",
-        detail: `Fused indexed store and "${branch.condition.op} 0" terminal-error branch through ${trap.mnemonic}.`
+        detail: `Fused indexed store and "${branch.condition.op} 0" terminal-error branch through ${plan.trapMnemonic}.`
+      });
+      return true;
+    }
+    compileIndexedPow10Delta(statement) {
+      const delta = indexedPow10DeltaUpdate(statement);
+      if (delta === void 0) return false;
+      if (numericIndexValue(statement.target.index) !== void 0) return false;
+      if (!expressionPureForSubstitution(statement.target.index)) return false;
+      const selector = this.ensureIndexedSelector(statement.target, statement.line);
+      if (selector === void 0) return false;
+      this.emitOp(
+        208 + registerIndex(selector),
+        `\u041A \u041F->X ${selector}`,
+        "indexed packed digit update base",
+        statement.line
+      );
+      compileExpression(this, delta.term);
+      this.emitOp(binaryOpcode(delta.op), delta.op, "indexed packed digit update", statement.line);
+      this.emitPreparedIndexedStore(statement.target, selector, statement.line);
+      this.optimizations.push({
+        name: "indexed-packed-pow10-delta",
+        detail: `Updated ${bankMemberKey(statement.target.base, statement.target.field)}[${expressionToIntentText(statement.target.index)}] by ${delta.op} pow10-shaped term at line ${statement.line}.`
       });
       return true;
     }
@@ -23076,11 +23178,7 @@ var MKProEmulatorBundle = (() => {
       this.emitOp(16, "+", "credit input", credit.line);
       this.emitAssignableStore(credit.target, credit.line);
       this.emitLabel(trap);
-      this.emitOp(33, "F \u221A", "debit/credit domain-error guard trap", creditGuard.line);
-      this.currentXVariable = void 0;
-      this.currentXAliases.clear();
-      this.currentXKnownZero = false;
-      this.scaledCoordVariables.clear();
+      emitDomainTrapOnX(this, 33, "F \u221A", "debit/credit domain-error guard trap", creditGuard.line);
       this.compileStatements(continuation);
       this.optimizations.push({
         name: "show-read-debit-credit-guard",
@@ -23094,9 +23192,9 @@ var MKProEmulatorBundle = (() => {
       const callee = expr.callee.toLowerCase();
       return (callee === "int" || callee === "frac") && this.readTransformIsStackDebitSafe(expr.args[0]);
     }
-    assignmentIsSelfUpdate(statement, op, temp) {
+    assignmentIsSelfUpdate(statement, op2, temp) {
       const expr = statement.expr;
-      if (expr.kind !== "binary" || expr.op !== op) return false;
+      if (expr.kind !== "binary" || expr.op !== op2) return false;
       if (!expressionEquals(expr.left, this.assignableTargetExpression(statement.target))) return false;
       return expr.right.kind === "identifier" && expr.right.name === temp;
     }
@@ -23359,6 +23457,7 @@ var MKProEmulatorBundle = (() => {
           this.diagnostics.push(buildDiagnostic("error", `Cannot lower removable coord_list '${statement.list}'.`, statement.line));
           return;
         case "indexed_assign":
+          if (this.compileIndexedPow10Delta(statement)) return;
           if (numericIndexValue(statement.target.index) === void 0) {
             if (!expressionPureForSubstitution(statement.target.index)) {
               this.diagnostics.push(buildDiagnostic("error", "Dynamic indexed assignment targets must use a deterministic index expression", statement.line));
@@ -24481,9 +24580,9 @@ var MKProEmulatorBundle = (() => {
         this.emitOp(plan.opcode, plan.mnemonic, `constant ${target}`);
       } else if (plan.kind === "unary-sequence") {
         this.emitOp(96 + registerIndex(plan.sourceRegister), `\u041F->X ${plan.sourceRegister}`, `constant ${target} base ${plan.sourceValue}`);
-        for (const op of plan.ops) {
-          const comment = op.comment === "" ? `constant ${target}` : `constant ${target} ${op.comment}`;
-          this.emitOp(op.opcode, op.mnemonic, comment);
+        for (const op2 of plan.ops) {
+          const comment = op2.comment === "" ? `constant ${target}` : `constant ${target} ${op2.comment}`;
+          this.emitOp(op2.opcode, op2.mnemonic, comment);
         }
       } else {
         this.emitOp(96 + registerIndex(plan.leftRegister), `\u041F->X ${plan.leftRegister}`, `constant ${target} left ${plan.leftValue}`);
@@ -25763,7 +25862,7 @@ var MKProEmulatorBundle = (() => {
     }
     applyStateBankRegisterHints(ast, variables, hints);
     collectStateBankSelectorVariables(ast, variables, hints);
-    applyTicTacToeRegisterHints(ast, variables, hints);
+    applyPackedGridRegisterHints(ast, variables, hints);
     applyCoordListRegisterHints(variables, hints);
     const flPreferenceOrder = ["2", "3", "1", "0"];
     let flPreferenceIndex = 0;
@@ -25788,7 +25887,7 @@ var MKProEmulatorBundle = (() => {
     collectAssignedVariables(ast, variables);
     collectFunctionTailCallScratchVariables(ast, variables);
     collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch);
-    collectTicTacToeScratchVariables(ast, variables);
+    collectGridCellScratchVariables(ast, variables);
     collectBitMaskScratchVariables(ast, variables);
     collectCoordListScratchVariables(ast, variables);
     collectSpatialHitScratchVariables(ast, variables, sharedBitMaskHelperCalls);
@@ -25932,6 +26031,19 @@ var MKProEmulatorBundle = (() => {
   function preincrementIndexedStoreShape(ast, store, increment) {
     const pointer = increment.target;
     return isUnitIncrementExpression(pointer, increment.expr) && isUnitIncrementExpression(pointer, store.target.index) && findStateBankMember(ast, store.target) !== void 0;
+  }
+  function indexedPow10DeltaUpdate(statement) {
+    const expr = statement.expr;
+    if (expr.kind !== "binary" || expr.op !== "+" && expr.op !== "-") return void 0;
+    if (!expressionEquals(expr.left, statement.target)) return void 0;
+    if (!isPow10Term(expr.right)) return void 0;
+    return { op: expr.op, term: expr.right };
+  }
+  function isPow10Term(expr) {
+    if (expr.kind !== "call") return false;
+    const name = expr.callee.toLowerCase();
+    if (name === "pow10" && expr.args.length === 1) return true;
+    return name === "pow" && expr.args.length === 2 && isNumericValue2(expr.args[0], 10);
   }
   function previousRandomAdditiveRest(expr, previous, seed) {
     const terms = additiveTerms(expr);
@@ -26114,8 +26226,8 @@ var MKProEmulatorBundle = (() => {
     }
     return void 0;
   }
-  function applyTicTacToeRegisterHints(ast, variables, hints) {
-    if (!programUsesTicTacToeHelpers(ast)) return;
+  function applyPackedGridRegisterHints(ast, variables, hints) {
+    if (!programUsesPackedGridHelpers(ast)) return;
     const preferences = [
       ["x", "1"],
       ["y", "2"],
@@ -26176,7 +26288,7 @@ var MKProEmulatorBundle = (() => {
       }
       return void 0;
     }
-    if (variable.startsWith(TICTACTOE_MASK_SCRATCH_PREFIX)) {
+    if (variable.startsWith(GRID4_MASK_SCRATCH_PREFIX)) {
       for (let i = REGISTER_ORDER.length - 1; i >= 0; i -= 1) {
         const candidate = REGISTER_ORDER[i];
         if (!used.has(candidate)) return candidate;
@@ -26313,7 +26425,7 @@ var MKProEmulatorBundle = (() => {
         visitExpr(expr.right);
       }
       if (expr.kind === "call") {
-        const macro = ticTacToeExpressionMacro(expr.callee.toLowerCase(), expr.args);
+        const macro = packedGridExpressionMacro(expr.callee.toLowerCase(), expr.args);
         if (macro !== void 0) {
           visitExpr(macro);
           return;
@@ -27207,11 +27319,11 @@ var MKProEmulatorBundle = (() => {
       }
     }).join("");
   }
-  function programUsesTicTacToeHelpers(ast) {
+  function programUsesPackedGridHelpers(ast) {
     let found = false;
     const visitExpr = (expr) => {
       if (found) return;
-      if (expr.kind === "call" && isTicTacToeMacroName(expr.callee.toLowerCase())) {
+      if (expr.kind === "call" && isPackedGridMacroName(expr.callee.toLowerCase())) {
         found = true;
         return;
       }
@@ -27459,13 +27571,13 @@ var MKProEmulatorBundle = (() => {
     for (const entry of ast.entries) visit(entry.body);
     for (const proc of ast.procs) visit(proc.body);
   }
-  function collectTicTacToeScratchVariables(ast, variables) {
+  function collectGridCellScratchVariables(ast, variables) {
     const visit = (statements) => {
       for (let index = 0; index < statements.length; index += 1) {
         const statement = statements[index];
         const next = statements[index + 1];
         if (statement.kind === "assign" && next?.kind === "assign" && isReusableCellMaskPair(statement, next)) {
-          variables.add(ticTacToeMaskScratchName(statement));
+          variables.add(grid4MaskScratchName(statement));
         }
         if (statement.kind === "loop") visit(statement.body);
         if (statement.kind === "if") {
@@ -28991,8 +29103,8 @@ var MKProEmulatorBundle = (() => {
     if (digits.length === 0) return new Array(8).fill(0);
     return [...digits.slice(0, 8).padEnd(8, "0")].map((digit) => Number(digit));
   }
-  function mk61BitwiseNibble(left, right, op) {
-    switch (op) {
+  function mk61BitwiseNibble(left, right, op2) {
+    switch (op2) {
       case "bit_and":
         return left & right;
       case "bit_or":
@@ -29149,10 +29261,10 @@ var MKProEmulatorBundle = (() => {
       add("code-data-overlay", "Layout marked address cells as reusable code/data overlay candidates.", "layout");
     }
     if (cellRoles.some((cell) => cell.roles.includes("dark-entry"))) {
-      const formal = cellRoles.some((cell) => cell.roles.includes("formal-address"));
+      const formal2 = cellRoles.some((cell) => cell.roles.includes("formal-address"));
       add(
         "dark-entries",
-        formal ? "Layout emitted formal/dark MK-61 address operand(s)." : "Layout exposed shared tails as dark-entry candidates.",
+        formal2 ? "Layout emitted formal/dark MK-61 address operand(s)." : "Layout exposed shared tails as dark-entry candidates.",
         "layout"
       );
     }
