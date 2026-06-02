@@ -13621,6 +13621,7 @@ const optimizerCapabilities: Array<{
       "bit-mask-condition-helper",
       "spatial-hit-condition-helper",
       "fractional-indirect-addressing",
+      "inequality-zero-false-branch",
       "kor-digit-test",
     ],
     detail: "Uses direct F x?0 tests when one side of a condition is a proved zero, avoiding a zero literal and subtraction.",

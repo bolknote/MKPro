@@ -1191,6 +1191,9 @@ The pipeline currently contains:
 - **x-preserving-fallthrough-branch** — after a direct zero-test such as
   `if x < 0`, keeps the tested scalar in X for the true branch when its first
   statement immediately consumes that value, including `halt(x)` and `pause(x)`.
+- **inequality-zero-false-branch** — after a proved `if expr != 0` test, treats
+  the false branch as already carrying zero in X so immediate `halt(0)`,
+  `pause(0)`, and `x = 0` consumers do not reload it.
 - **jump-to-next-threading** — drops `БП label` immediately before `label`.
 - **jump-thread** — chases jump-to-jump trampolines to the final target.
 - **decrement-zero-domain-guard** — when `x--` is immediately followed by a

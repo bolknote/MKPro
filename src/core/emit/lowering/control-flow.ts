@@ -65,6 +65,7 @@ import {
   matchResidualGuardedUpdate,
   matchSmallSetCondition,
   nearAnyHelperKey,
+  normalizeZeroComparison,
   numericLiteralValue,
   optimizeDispatchDefaultCases,
   programHasLineCountForMask,
@@ -390,6 +391,9 @@ export function compileIf(ctx: LoweringCtx,
     const falseBranchIdentifier = selected.elseBody === undefined
       ? undefined
       : ctx.falseBranchCurrentXCandidate(selected.condition, selected.elseBody);
+    const falseBranchKnownZero = selected.elseBody === undefined
+      ? false
+      : inequalityFalseBranchLeavesZero(ctx, selected.condition);
     compileCondition(ctx, selected.condition, falseLabel, line);
     if (fallthroughIdentifier !== undefined) {
       ctx.currentXVariable = fallthroughIdentifier;
@@ -415,10 +419,16 @@ export function compileIf(ctx: LoweringCtx,
       if (falseBranchIdentifier !== undefined) {
         ctx.currentXVariable = falseBranchIdentifier;
         ctx.currentXAliases = new Set([falseBranchIdentifier]);
-        ctx.currentXKnownZero = false;
+        ctx.currentXKnownZero = falseBranchKnownZero;
         ctx.optimizations.push({
           name: "x-preserving-false-branch",
           detail: `Preserved ${falseBranchIdentifier} in X across the false branch of the zero-test at line ${line}.`,
+        });
+      } else if (falseBranchKnownZero) {
+        ctx.currentXKnownZero = true;
+        ctx.optimizations.push({
+          name: "inequality-zero-false-branch",
+          detail: `Reused the zero left in X by false branch of inequality comparison at line ${line}.`,
         });
       }
       ctx.compileStatements(selected.elseBody);
@@ -432,6 +442,24 @@ export function compileIf(ctx: LoweringCtx,
     } else {
       ctx.emitLabel(falseLabel);
     }
+}
+
+function inequalityFalseBranchLeavesZero(ctx: LoweringCtx, condition: ConditionAst): boolean {
+    const compiled = selectCheaperEquivalentCondition(
+      condition,
+      ctx.ast,
+      new Set(Object.keys(ctx.allocation.constants)),
+    ).condition;
+    if (matchSmallSetCondition(compiled) !== undefined) return false;
+    if (matchNearAnyHelperCondition(compiled) !== undefined) return false;
+
+    const normalized = normalizeZeroComparison(compiled);
+    if (normalized?.op !== "!=") return false;
+    if (normalized.expr.kind === "call") {
+      const callee = normalized.expr.callee.toLowerCase();
+      if (callee === "coord_list_has" || callee === "__mkpro_negative_zero_ge") return false;
+    }
+    return true;
 }
 
 function equalityTrueFallthroughLeavesZero(condition: ConditionAst): boolean {

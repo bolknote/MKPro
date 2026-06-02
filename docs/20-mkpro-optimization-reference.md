@@ -181,6 +181,9 @@ The control-flow family is where the largest byte savings are found.
 - `equality-zero-fallthrough` — marks the true branch of a simple `a == b`
   comparison as having zero already in X, so `halt(0)`, `pause(0)`, and similar
   immediate zero consumers do not materialize a fresh zero.
+- `inequality-zero-false-branch` — marks the false branch of a proved `expr != 0`
+  test as having zero already in X, covering the same immediate zero consumers on
+  the branch target.
 - `small-set-condition-lowering` — lowers small `set` conditions to compact code.
 - `cell-membership-clear-reuse` — reuses a computed membership mask when clearing a bit and eliminates duplicate `bit_mask` construction.
 - `cell-membership-set-reuse` — reuses a computed membership mask when setting one cell in an `if` suffix.
@@ -428,6 +431,8 @@ Display rewrites are separated into strategy selection + body lowering.
 - `copy-coalesce` — removes redundant copy writes between registers.
 - `last-x-reuse` — avoids `P->X` when X already holds the needed value.
 - `known-zero-reuse` — reuses a known zero source instead of reloading.
+- `inequality-zero-false-branch` — feeds `known-zero-reuse` after a false
+  `!= 0` branch, avoiding a fresh zero literal or `Cx`.
 - `zero-reuse` — similarly reuses zero in multiple places when liveness is confirmed.
 - `stack-current-x-scheduling` — reorders current-X operations to avoid extra push/pop-like steps.
 - `stack-resident-temps` — keeps up to four consecutive single-use temps on the stack, using `В↑` lifts and restore sequences (`X↔Y` / `F reverse`) before direct stack-based consumers.

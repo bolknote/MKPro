@@ -3664,6 +3664,38 @@ program FallthroughXReuse {
     expect(result.steps[firstHalt - 1]?.hex).toBe("09");
   });
 
+  it("reuses the zero left by the false branch of an inequality test", () => {
+    const result = compileOk(`
+program FalseBranchZeroReuse {
+  state {
+    value: counter 0..9 = 0
+    out: counter 0..9 = 1
+    sink: counter 0..99 = 0
+  }
+
+  loop {
+    if value != 0 {
+      sink = value + out
+    }
+    else {
+      out = 0
+    }
+    halt(out + sink)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    const optimizationNames = result.report.optimizations.map((item) => item.name);
+    const falseBranch = result.steps.findIndex((step) => step.comment === "false branch for !=");
+    const falseStore = result.steps.findIndex((step, index) => index > falseBranch && step.comment === "set out");
+    const materializedZero = result.steps
+      .slice(falseBranch + 1, falseStore)
+      .some((step) => step.comment === "set out" && (step.opcode === 0x00 || step.opcode === 0x0d));
+    expect(optimizationNames).toContain("inequality-zero-false-branch");
+    expect(optimizationNames).toContain("known-zero-reuse");
+    expect(materializedZero).toBe(false);
+  });
+
   it("lowers bounded R4..R6 unit increments through indirect pre-increment", () => {
     const result = compileOk(`
 program IndirectUnitIncrement {
