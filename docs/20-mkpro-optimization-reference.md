@@ -169,6 +169,9 @@ The control-flow family is where the largest byte savings are found.
 - `x-preserving-fallthrough-branch` — preserves current X value in the true
   fallthrough branch after a direct zero-test when the first branch statement
   immediately consumes the same scalar (for example `halt(x)`/`pause(x)`).
+- `equality-zero-fallthrough` — marks the true branch of a simple `a == b`
+  comparison as having zero already in X, so `halt(0)`, `pause(0)`, and similar
+  immediate zero consumers do not materialize a fresh zero.
 - `small-set-condition-lowering` — lowers small `set` conditions to compact code.
 - `cell-membership-clear-reuse` — reuses a computed membership mask when clearing a bit and eliminates duplicate `bit_mask` construction.
 - `cell-membership-set-reuse` — reuses a computed membership mask when setting one cell in an `if` suffix.

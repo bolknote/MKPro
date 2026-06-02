@@ -1376,6 +1376,32 @@ program LiteralErrorStop {
     expect(calc.displayText().toUpperCase()).toContain("ЕГГ");
   });
 
+  it("reuses equality zero fallthrough for terminal zero stops", () => {
+    const result = compileOk(`
+program EqualityZeroTerminalStop {
+  state {
+    a: counter 0..9 = 1
+    b: counter 0..9 = 1
+  }
+
+  loop {
+    if a == b {
+      halt(0)
+    }
+    else {
+      halt(a)
+    }
+  }
+}
+`);
+
+    expect(hasOptimization(result, "equality-zero-fallthrough")).toBe(true);
+    expect(hasOptimization(result, "known-zero-reuse")).toBe(true);
+    expect(result.steps.map((step) => step.opcode)).toEqual([
+      0x60, 0x61, 0x11, 0x5e, 0x06, 0x50, 0x60, 0x50, 0x51, 0x00,
+    ]);
+  });
+
   it("lowers literal terminal video strings as one visible stop", () => {
     const result = compileOk(`
 program LiteralTerminalVideoStop {

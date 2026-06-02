@@ -394,13 +394,19 @@ export function compileIf(ctx: LoweringCtx,
     if (fallthroughIdentifier !== undefined) {
       ctx.currentXVariable = fallthroughIdentifier;
       ctx.currentXAliases = new Set([fallthroughIdentifier]);
-      ctx.currentXKnownZero = false;
+      ctx.currentXKnownZero = equalityTrueFallthroughLeavesZero(selected.condition);
       if (directFallthroughIdentifier !== undefined) {
         ctx.optimizations.push({
           name: "x-preserving-fallthrough-branch",
           detail: `Preserved ${directFallthroughIdentifier} in X across the true branch of the zero-test at line ${line}.`,
         });
       }
+    } else if (equalityTrueFallthroughLeavesZero(selected.condition)) {
+      ctx.currentXKnownZero = true;
+      ctx.optimizations.push({
+        name: "equality-zero-fallthrough",
+        detail: `Reused the zero left in X by equality comparison at line ${line}.`,
+      });
     }
     ctx.compileStatements(selected.thenBody);
     if (selected.elseBody) {
@@ -426,6 +432,15 @@ export function compileIf(ctx: LoweringCtx,
     } else {
       ctx.emitLabel(falseLabel);
     }
+}
+
+function equalityTrueFallthroughLeavesZero(condition: ConditionAst): boolean {
+    if (condition.op !== "==") return false;
+    return simpleEqualityOperand(condition.left) && simpleEqualityOperand(condition.right);
+}
+
+function simpleEqualityOperand(expr: ExpressionAst): boolean {
+    return expr.kind === "identifier" || expr.kind === "number";
 }
 
 export function compileResidualEqualityElseIf(ctx: LoweringCtx, 

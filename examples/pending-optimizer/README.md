@@ -35,8 +35,8 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | `cave-highlevel-baseline.mkpro` | 150 | 105 | source-faithful fixed wall/cache setup, resource pressure, movement decoder, and remaining cave flow lowerers |
 | `cave-treasure.mkpro` | 151 | 105 | resource pressure, wall breaking, cache miss flow, and remaining dispatch overhead |
 | `giants-country.mkpro` | 112 | 105 | source-shaped single cave prompt restored; remaining gap is compact memory-code/warning display flow and event arithmetic |
-| `labyrinth777.mkpro` | 120 | 105 | source-shaped row generation, compact energy accounting, and local-jumper flow are restored; remaining gap is compact source-style command algebra plus full player/floor row overlay |
-| `tic-tac-toe-4x4.mkpro` | 273 | 105 | source-shaped packed 4x4 line scan/update lowering |
+| `labyrinth777.mkpro` | 105 | 105 | fits after source-style centered command algebra and equality-zero fallthrough; pending only for exact player/floor row overlay audit |
+| `tic-tac-toe-4x4.mkpro` | 272 | 105 | source-shaped packed 4x4 line scan/update lowering |
 
 Prototype notes:
 

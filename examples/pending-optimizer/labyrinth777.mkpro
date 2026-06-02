@@ -33,89 +33,38 @@ program Labyrinth777 {
   loop {
     show(row, ".", row_view)
     action = read()
+    action -= 5
 
-    match action {
-      4 => move_left()
-      6 => move_right()
-      8 => move_forward()
-      2 => move_back()
-      5 => use_local_jumper()
-      otherwise => show(row, ".", row_view)
-    }
-  }
-
-  fn move_left() {
     apply_exit_cost()
 
-    if energy >= 0 {
-      if room > 1 {
-        room--
-      }
-
-      inspect_room()
-    }
-    else {
+    if energy < 0 {
       drained()
     }
-  }
-
-  fn move_right() {
-    apply_exit_cost()
-
-    if energy >= 0 {
-      if room < 7 {
-        room++
-      }
-
-      inspect_room()
-    }
     else {
-      drained()
-    }
-  }
-
-  fn move_forward() {
-    apply_exit_cost()
-
-    if energy >= 0 {
-      if row < 7 {
-        row++
-      }
-
-      inspect_room()
-    }
-    else {
-      drained()
-    }
-  }
-
-  fn move_back() {
-    apply_exit_cost()
-
-    if energy >= 0 {
-      if row > 1 {
-        row--
-      }
-
-      inspect_room()
-    }
-    else {
-      drained()
-    }
-  }
-
-  fn use_local_jumper() {
-    apply_exit_cost()
-
-    if energy >= 0 {
-      match digit_at(row_view, room) {
-        4 => climb()
-        5 => descend()
+      match abs(action) {
+        1 => move_room(sign(action))
+        3 => move_row(sign(action))
+        0 => use_local_jumper()
         otherwise => inspect_room()
       }
     }
-    else {
-      drained()
+  }
+
+  fn move_room(delta) {
+    room = min(max(room + delta, 1), 7)
+    inspect_room()
+  }
+
+  fn move_row(delta) {
+    row = min(max(row + delta, 1), 7)
+    inspect_room()
+  }
+
+  fn use_local_jumper() {
+    match digit_at(row_view, room) {
+      4 => climb()
+      5 => descend()
+      otherwise => inspect_room()
     }
   }
 
