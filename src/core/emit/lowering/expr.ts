@@ -16,7 +16,7 @@ import {
   isPureExpression,
   isSimpleStackLoad,
   isSmallSetMacroName,
-  isTicTacToeMacroName,
+  isPackedGridMacroName,
   matchStackUnaryDerivationCall,
   minExpression,
   matchXParamReturnDecay,
@@ -30,8 +30,8 @@ import {
   smallSetExpressionMacro,
   smallSetMacroArityOk,
   smallSetMacroArityText,
-  ticTacToeExpressionMacro,
-  ticTacToeMacroArity,
+  packedGridExpressionMacro,
+  packedGridMacroArity,
 } from "../lowering-helpers.ts";
 import type { StackStopRiskMatch } from "../lowering-helpers.ts";
 
@@ -307,10 +307,10 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
     if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
       if (compileNegativeZeroDegreeSelectorCall(ctx, expr)) return;
     }
-    if (isTicTacToeMacroName(name) && ticTacToeMacroArity(name) !== expr.args.length) {
+    if (isPackedGridMacroName(name) && packedGridMacroArity(name) !== expr.args.length) {
       ctx.diagnostics.push({
         level: "error",
-        message: `${expr.callee}() expects ${ticTacToeMacroArity(name)} arguments, got ${expr.args.length}.`,
+        message: `${expr.callee}() expects ${packedGridMacroArity(name)} arguments, got ${expr.args.length}.`,
       });
       return;
     }
@@ -330,11 +330,11 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
       });
       return;
     }
-    const macro = ticTacToeExpressionMacro(name, expr.args);
+    const macro = packedGridExpressionMacro(name, expr.args);
     if (macro !== undefined) {
       compileExpression(ctx, macro);
       ctx.optimizations.push({
-        name: "tic-tac-toe-primitive-lowering",
+        name: "packed-grid-primitive-lowering",
         detail: `Lowered ${expr.callee}() to reusable 4x4 grid/packed-line arithmetic.`,
       });
       return;
@@ -387,6 +387,23 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
       }
       ctx.emitNumber("1");
       ctx.emitOp(0x16, "F e^x", `${expr.callee}()`);
+      return;
+    }
+    if (name === "entered") {
+      if (expr.args.length !== 0) {
+        ctx.diagnostics.push({
+          level: "error",
+          message: `${expr.callee}() takes no arguments, got ${expr.args.length}.`,
+        });
+        return;
+      }
+      ctx.currentXVariable = undefined;
+      ctx.currentXAliases.clear();
+      ctx.currentXKnownZero = false;
+      ctx.optimizations.push({
+        name: "entered-current-x",
+        detail: "Consumed the current keyboard-entered X value without emitting another stop.",
+      });
       return;
     }
 

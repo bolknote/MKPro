@@ -1,10 +1,33 @@
 import { describe, expect, it } from "vitest";
+import { createRequire } from "node:module";
 import { CompileError, compileMKPro } from "../../src/core/index.ts";
 import { compileLoweringVariantForTest } from "../../src/core/compiler.ts";
 import type { CompileOptions } from "../../src/core/index.ts";
 
+const require = createRequire(import.meta.url);
+
 function compileOk(source: string, options: Partial<CompileOptions> = { budget: 999 }) {
   return compileMKPro(source, options);
+}
+
+function runCompiledDisplay(result: ReturnType<typeof compileOk>): string {
+  const { MK61 } = require("../emulator/mk61.cjs") as {
+    MK61: new (options?: { extended?: boolean }) => {
+      loadProgram: (codes: number[]) => { diagnostics: string[] };
+      setRegister: (register: string, value: string) => void;
+      pressSequence: (keys: string[]) => void;
+      runUntilStable: (options: { maxFrames: number; stableFrames: number }) => { stopped: boolean };
+      displayText: () => string;
+    };
+  };
+  const calc = new MK61({ extended: true });
+  for (const preload of result.report.preloads) {
+    calc.setRegister(preload.register, preload.value);
+  }
+  expect(calc.loadProgram(result.steps.map((step) => step.opcode)).diagnostics).toEqual([]);
+  calc.pressSequence(["В/О", "С/П"]);
+  expect(calc.runUntilStable({ maxFrames: 1200, stableFrames: 8 }).stopped).toBe(true);
+  return calc.displayText();
 }
 
 describe("compiler semantics", () => {
@@ -1301,6 +1324,98 @@ program FormulaHelpers {
     for (const opcode of ["15", "24", "34", "35", "37", "38", "39", "3A"]) {
       expect(opcodes).toContain(opcode);
     }
+  });
+
+  it("computes 4x4 cell masks with the source packed-bit shape", () => {
+    const result = compileOk(`
+program CellMaskShape {
+  state {
+    value: packed = 0
+  }
+  loop {
+    value = cell_mask(1, 2)
+    halt(value)
+  }
+}
+`);
+
+    expect(runCompiledDisplay(result)).toBe("12,");
+  });
+
+  it("scores packed 4-line tails without extracting the integer digit", () => {
+    const result = compileOk(`
+program Packed4ScoreShape {
+  state {
+    value: packed = 0
+  }
+  loop {
+    value = packed4_score(44444.4, 1)
+    halt(value)
+  }
+}
+`);
+
+    expect(runCompiledDisplay(result)).toBe("7,839608 -04");
+  });
+
+  it("adds packed 4-line digits at the reserved-source position", () => {
+    const result = compileOk(`
+program Packed4AddShape {
+  state {
+    value: packed = 0
+  }
+  loop {
+    value = packed4_add(44444.4, 1, -1)
+    halt(value)
+  }
+}
+`);
+
+    expect(runCompiledDisplay(result)).toBe("44434,4");
+  });
+
+  it("keeps entered() values volatile across manual continuation keys", () => {
+    const result = compileOk(`
+program EnteredPair {
+  state {
+    x: packed = 0
+    y: packed = 0
+  }
+  loop {
+    show(0)
+    x = entered()
+    y = entered()
+    halt(x * 10 + y)
+  }
+}
+`);
+    const { MK61 } = require("../emulator/mk61.cjs") as {
+      MK61: new (options?: { extended?: boolean }) => {
+        inputNumber: (value: string, options?: { clear?: boolean }) => void;
+        loadProgram: (codes: number[]) => { diagnostics: string[] };
+        press: (key: string) => void;
+        pressSequence: (keys: string[]) => void;
+        runUntilStable: (options: { maxFrames: number; stableFrames: number }) => { stopped: boolean };
+        setRegister: (register: string, value: string) => void;
+        displayText: () => string;
+      };
+    };
+    const calc = new MK61({ extended: true });
+    for (const preload of result.report.preloads) {
+      calc.setRegister(preload.register, preload.value);
+    }
+    expect(calc.loadProgram(result.steps.map((step) => step.opcode)).diagnostics).toEqual([]);
+
+    calc.pressSequence(["В/О", "С/П"]);
+    expect(calc.runUntilStable({ maxFrames: 1200, stableFrames: 8 }).stopped).toBe(true);
+    calc.inputNumber("2", { clear: true });
+    calc.press("ПП");
+    expect(calc.runUntilStable({ maxFrames: 200, stableFrames: 4 }).stopped).toBe(true);
+    calc.inputNumber("3", { clear: true });
+    calc.press("С/П");
+    expect(calc.runUntilStable({ maxFrames: 1200, stableFrames: 8 }).stopped).toBe(true);
+
+    expect(calc.displayText()).toBe("23,");
   });
 
   it("reuses a successful cell membership mask when clearing that cell", () => {

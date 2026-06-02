@@ -33,7 +33,7 @@ import {
   spatialHitScratchName,
   spatialLineProgressions,
   spatialNeighborProgressions,
-  ticTacToeMaskScratchName,
+  grid4MaskScratchName,
 } from "../lowering-helpers.ts";
 import {
   getOpcode,
@@ -42,7 +42,7 @@ import type {
   V2BoardAst,
 } from "../../types.ts";
 
-export function compileTicTacToeCellMaskReuse(ctx: LoweringCtx, 
+export function compileGridCellMaskReuse(ctx: LoweringCtx,
     first: Extract<StatementAst, { kind: "assign" }>,
     second: Extract<StatementAst, { kind: "assign" }>,
   ): boolean {
@@ -54,23 +54,23 @@ export function compileTicTacToeCellMaskReuse(ctx: LoweringCtx,
     }
     if (used.mask.kind !== "identifier" || second.target !== used.mask.name) return false;
 
-    const scratch = ticTacToeMaskScratchName(first);
+    const scratch = grid4MaskScratchName(first);
     if (!ctx.allocation.registers[scratch]) return false;
 
     compileExpression(ctx, cellMaskExpression(used.x, used.y));
-    ctx.emitStore(scratch, "4x4 cell mask scratch", first.line);
+    ctx.emitStore(scratch, "grid cell mask scratch", first.line);
     compileExpression(ctx, used.mask);
-    ctx.emitRecall(scratch, "reuse 4x4 cell mask", first.line);
+    ctx.emitRecall(scratch, "reuse grid cell mask", first.line);
     ctx.emitOp(0x37, "К ∧", "cell_has with reused mask", first.line);
     ctx.emitOp(0x35, "К {x}", "cell_has membership fraction", first.line);
     ctx.emitOp(0x32, "К ЗН", "cell_has to 0/1", first.line);
     ctx.emitStore(first.target, `set ${first.target}`, first.line);
     compileExpression(ctx, mark.mask);
-    ctx.emitRecall(scratch, "reuse 4x4 cell mask", second.line);
+    ctx.emitRecall(scratch, "reuse grid cell mask", second.line);
     ctx.emitOp(0x38, "К ∨", "cell_set with reused mask", second.line);
     ctx.emitStore(second.target, `set ${second.target}`, second.line);
     ctx.optimizations.push({
-      name: "tic-tac-toe-cell-mask-cse",
+      name: "grid-cell-mask-cse",
       detail: `Computed cell_mask once for adjacent cell_has/cell_set at lines ${first.line}/${second.line}.`,
     });
     return true;

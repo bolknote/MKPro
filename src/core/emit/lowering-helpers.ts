@@ -20,7 +20,7 @@ import type {
 
 export const DISPATCH_SCRATCH_PREFIX = "__dispatch_";
 
-export const TICTACTOE_MASK_SCRATCH_PREFIX = "__ttt_mask_";
+export const GRID4_MASK_SCRATCH_PREFIX = "__grid4_mask_";
 
 export const BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
 
@@ -139,7 +139,7 @@ export function expressionIsDeterministic(expr: ExpressionAst): boolean {
       return expressionIsDeterministic(expr.left) && expressionIsDeterministic(expr.right);
     case "call": {
       const name = expr.callee.toLowerCase();
-      if (name === "random") return false;
+      if (name === "random" || name === "entered") return false;
       return expr.args.every(expressionIsDeterministic);
     }
   }
@@ -630,8 +630,8 @@ export function negatedNumberLiteral(raw: string): string {
   return normalized.startsWith("-") ? normalized.slice(1) : `-${normalized}`;
 }
 
-export function ticTacToeMaskScratchName(statement: StatementAst): string {
-  return `${TICTACTOE_MASK_SCRATCH_PREFIX}${statement.line}`;
+export function grid4MaskScratchName(statement: StatementAst): string {
+  return `${GRID4_MASK_SCRATCH_PREFIX}${statement.line}`;
 }
 
 export function dispatchExpressionRegister(
@@ -1736,11 +1736,11 @@ export function comparisonMask(condition: ConditionAst): ExpressionAst | undefin
   return condition.op === "==" ? oneMinus(notEqual) : notEqual;
 }
 
-export function isTicTacToeMacroName(name: string): boolean {
-  return ticTacToeMacroArity(name) !== undefined;
+export function isPackedGridMacroName(name: string): boolean {
+  return packedGridMacroArity(name) !== undefined;
 }
 
-export function ticTacToeMacroArity(name: string): number | undefined {
+export function packedGridMacroArity(name: string): number | undefined {
   const arities: Record<string, number> = {
     norm4: 1,
     grid4_norm: 1,
@@ -1768,7 +1768,7 @@ export function ticTacToeMacroArity(name: string): number | undefined {
   return arities[name];
 }
 
-export function ticTacToeExpressionMacro(name: string, args: ExpressionAst[]): ExpressionAst | undefined {
+export function packedGridExpressionMacro(name: string, args: ExpressionAst[]): ExpressionAst | undefined {
   switch (name) {
     case "norm4":
     case "grid4_norm":
@@ -1810,10 +1810,14 @@ export function ticTacToeExpressionMacro(name: string, args: ExpressionAst[]): E
     case "digit_at":
       return packed4DigitExpression(args[0]!, args[1]!);
     case "digit_add":
-    case "packed4_add":
       return addExpressions(
         args[0]!,
         multiplyExpressions(args[2]!, digitPlaceExpression(args[1]!)),
+      );
+    case "packed4_add":
+      return addExpressions(
+        args[0]!,
+        multiplyExpressions(args[2]!, pow10Expression(args[1]!)),
       );
     case "digit_set":
       return digitSetExpression(args[0]!, args[1]!, args[2]!);
@@ -1823,7 +1827,10 @@ export function ticTacToeExpressionMacro(name: string, args: ExpressionAst[]): E
       return {
         kind: "call",
         callee: "sqr",
-        args: [subtractExpressions(packed4DigitExpression(args[0]!, args[1]!), numberExpression(0.41200076))],
+        args: [subtractExpressions(
+          fracExpression(divideExpressions(args[0]!, pow10Expression(args[1]!))),
+          numberExpression(0.41200076),
+        )],
       };
     default:
       return undefined;
@@ -2252,7 +2259,7 @@ export function positiveNorm4Expression(expr: ExpressionAst): ExpressionAst {
 export function cellMaskExpression(x: ExpressionAst, y: ExpressionAst): ExpressionAst {
   return addExpressions(
     pow10Expression(x),
-    { kind: "call", callee: "int", args: [multiplyExpressions(pow10Expression(y), numberExpression(0.22600029))] },
+    { kind: "call", callee: "int", args: [pow10Expression(multiplyExpressions(y, numberExpression(0.22600029)))] },
   );
 }
 
@@ -3364,7 +3371,7 @@ export function expressionPureForSubstitution(expr: ExpressionAst): boolean {
       return expressionPureForSubstitution(expr.left) && expressionPureForSubstitution(expr.right);
     case "call": {
       const name = expr.callee.toLowerCase();
-      if (name === "random") return false;
+      if (name === "random" || name === "entered") return false;
       return expr.args.every(expressionPureForSubstitution);
     }
   }
@@ -3504,7 +3511,7 @@ export function estimateCallCostForCondition(
   }
   const smallSetMacro = smallSetExpressionMacro(name, expr.args);
   if (smallSetMacro !== undefined) return estimateExpressionCostForCondition(smallSetMacro, preloadedConstants);
-  const macro = ticTacToeExpressionMacro(name, expr.args);
+  const macro = packedGridExpressionMacro(name, expr.args);
   if (macro !== undefined) return estimateExpressionCostForCondition(macro, preloadedConstants);
   if (name === "random") {
     if (expr.args.length === 1) {
@@ -3596,7 +3603,7 @@ export function estimateCallCost(expr: Extract<ExpressionAst, { kind: "call" }>)
   }
   const smallSetMacro = smallSetExpressionMacro(name, expr.args);
   if (smallSetMacro !== undefined) return estimateExpressionCost(smallSetMacro);
-  const macro = ticTacToeExpressionMacro(name, expr.args);
+  const macro = packedGridExpressionMacro(name, expr.args);
   if (macro !== undefined) return estimateExpressionCost(macro);
   if (name === "random") {
     if (expr.args.length === 1) return estimateExpressionCost(randomRangeExpression(numberExpression(0), expr.args[0]!));

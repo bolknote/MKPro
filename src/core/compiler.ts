@@ -16,7 +16,7 @@ import { RuntimeHelperRegistry } from "./emit/runtime-helpers.ts";
 import { compileExpression, compileStackStopRiskTail, expressionLeadsWithRead } from "./emit/lowering/expr.ts";
 import { compileAssignThenDomainTrap, compileCondition, compileDecrementUnderflowBranch, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitKnownOneIndirectLoopBack, statementsAreDomainErrorTrap } from "./emit/lowering/control-flow.ts";
 import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts";
-import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileTicTacToeCellMaskReuse } from "./emit/lowering/spatial.ts";
+import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileGridCellMaskReuse } from "./emit/lowering/spatial.ts";
 import { compileCoordListLineCountAssignment, compileCoordListLineCountDashedReport, compileCoordListRemove, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
 import { compileBlockCall, compileDecimalFactorialSeries, compileGuardAssignmentSubstitution, compileInitialState, compileIntFracSharedTail, compileProcedures, compileRawStatement, compileRepeatedAssignmentValue, compileRuntimeHelpers, compileSetupProgramWithPreloads, compileStackUnaryDerivedAssignments, compileUnitDecrement, compileUnitIncrement, compileXParamProcCall } from "./emit/lowering/proc-raw-setup.ts";
 import { compileMultiStackResidentTemps } from "./emit/stack-residency-lowering.ts";
@@ -33,7 +33,7 @@ import {
   PACKED_COUNTER_PREFIX,
   SPATIAL_COUNT_SCRATCH_PREFIX,
   SPATIAL_HIT_SCRATCH_PREFIX,
-  TICTACTOE_MASK_SCRATCH_PREFIX,
+  GRID4_MASK_SCRATCH_PREFIX,
   addExpressions,
   binaryOpcode,
   bitMaskExpression,
@@ -84,7 +84,7 @@ import {
   isNumericValue,
   isPreincrementIndirectRegister,
   isSimpleStackLoad,
-  isTicTacToeMacroName,
+  isPackedGridMacroName,
   isUnitDecrementExpression,
   isUnitIncrementExpression,
   isZeroExpression,
@@ -129,8 +129,8 @@ import {
   subtractExpressions,
   multiplyExpressions,
   fracExpression,
-  ticTacToeExpressionMacro,
-  ticTacToeMaskScratchName,
+  packedGridExpressionMacro,
+  grid4MaskScratchName,
   zeroDigitTailDisplayProgram,
 } from "./emit/lowering-helpers.ts";
 import {
@@ -2016,7 +2016,7 @@ function visiblePublicRegisters(
   for (const [name, register] of Object.entries(all)) {
     if (
       !name.startsWith(DISPATCH_SCRATCH_PREFIX) &&
-      !name.startsWith(TICTACTOE_MASK_SCRATCH_PREFIX) &&
+      !name.startsWith(GRID4_MASK_SCRATCH_PREFIX) &&
       !name.startsWith(BIT_MASK_SCRATCH_PREFIX) &&
       !name.startsWith(IF_SELECTOR_SCRATCH_PREFIX) &&
       !name.startsWith(DISPLAY_EXPR_PREFIX) &&
@@ -5673,7 +5673,7 @@ export class EmitContext {
       if (statement.kind === "while" && this.compileSetupInitializedUnitDecrementWhile(statement)) {
         continue;
       }
-      if (statement.kind === "assign" && next?.kind === "assign" && compileTicTacToeCellMaskReuse(this, statement, next)) {
+      if (statement.kind === "assign" && next?.kind === "assign" && compileGridCellMaskReuse(this, statement, next)) {
         index += 1;
         continue;
       }
@@ -6632,6 +6632,30 @@ export class EmitContext {
     return true;
   }
 
+  compileIndexedPow10Delta(statement: Extract<StatementAst, { kind: "indexed_assign" }>): boolean {
+    const delta = indexedPow10DeltaUpdate(statement);
+    if (delta === undefined) return false;
+    if (numericIndexValue(statement.target.index) !== undefined) return false;
+    if (!expressionPureForSubstitution(statement.target.index)) return false;
+    const selector = this.ensureIndexedSelector(statement.target, statement.line);
+    if (selector === undefined) return false;
+
+    this.emitOp(
+      0xd0 + registerIndex(selector),
+      `К П->X ${selector}`,
+      "indexed packed digit update base",
+      statement.line,
+    );
+    compileExpression(this, delta.term);
+    this.emitOp(binaryOpcode(delta.op), delta.op, "indexed packed digit update", statement.line);
+    this.emitPreparedIndexedStore(statement.target, selector, statement.line);
+    this.optimizations.push({
+      name: "indexed-packed-pow10-delta",
+      detail: `Updated ${bankMemberKey(statement.target.base, statement.target.field)}[${expressionToIntentText(statement.target.index)}] by ${delta.op} pow10-shaped term at line ${statement.line}.`,
+    });
+    return true;
+  }
+
   compileInitializedUnitDecrementWhileRun(statements: readonly StatementAst[], index: number): number {
     const initializer = statements[index];
     if (initializer?.kind !== "assign") return 0;
@@ -7087,6 +7111,7 @@ export class EmitContext {
         this.diagnostics.push(buildDiagnostic("error", `Cannot lower removable coord_list '${statement.list}'.`, statement.line));
         return;
       case "indexed_assign":
+        if (this.compileIndexedPow10Delta(statement)) return;
         if (numericIndexValue(statement.target.index) === undefined) {
           if (!expressionPureForSubstitution(statement.target.index)) {
             this.diagnostics.push(buildDiagnostic("error", "Dynamic indexed assignment targets must use a deterministic index expression", statement.line));
@@ -10166,7 +10191,7 @@ function allocateRegisters(
   }
   applyStateBankRegisterHints(ast, variables, hints);
   collectStateBankSelectorVariables(ast, variables, hints);
-  applyTicTacToeRegisterHints(ast, variables, hints);
+  applyPackedGridRegisterHints(ast, variables, hints);
   applyCoordListRegisterHints(variables, hints);
   const flPreferenceOrder: RegisterName[] = ["2", "3", "1", "0"];
   let flPreferenceIndex = 0;
@@ -10194,7 +10219,7 @@ function allocateRegisters(
   collectAssignedVariables(ast, variables);
   collectFunctionTailCallScratchVariables(ast, variables);
   collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch);
-  collectTicTacToeScratchVariables(ast, variables);
+  collectGridCellScratchVariables(ast, variables);
   collectBitMaskScratchVariables(ast, variables);
   collectCoordListScratchVariables(ast, variables);
   collectSpatialHitScratchVariables(ast, variables, sharedBitMaskHelperCalls);
@@ -10373,6 +10398,23 @@ function preincrementIndexedStoreShape(
   return isUnitIncrementExpression(pointer, increment.expr) &&
     isUnitIncrementExpression(pointer, store.target.index) &&
     findStateBankMember(ast, store.target) !== undefined;
+}
+
+function indexedPow10DeltaUpdate(
+  statement: Extract<StatementAst, { kind: "indexed_assign" }>,
+): { op: "+" | "-"; term: ExpressionAst } | undefined {
+  const expr = statement.expr;
+  if (expr.kind !== "binary" || (expr.op !== "+" && expr.op !== "-")) return undefined;
+  if (!expressionEquals(expr.left, statement.target)) return undefined;
+  if (!isPow10Term(expr.right)) return undefined;
+  return { op: expr.op, term: expr.right };
+}
+
+function isPow10Term(expr: ExpressionAst): boolean {
+  if (expr.kind !== "call") return false;
+  const name = expr.callee.toLowerCase();
+  if (name === "pow10" && expr.args.length === 1) return true;
+  return name === "pow" && expr.args.length === 2 && isNumericValue(expr.args[0]!, 10);
 }
 
 function previousRandomAdditiveRest(expr: ExpressionAst, previous: string, seed: string): ExpressionAst[] | undefined {
@@ -10590,12 +10632,12 @@ function domainRegisterHint(domain: ProgramAst["domains"][number]): RegisterName
   return undefined;
 }
 
-function applyTicTacToeRegisterHints(
+function applyPackedGridRegisterHints(
   ast: ProgramAst,
   variables: Set<string>,
   hints: Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>,
 ): void {
-  if (!programUsesTicTacToeHelpers(ast)) return;
+  if (!programUsesPackedGridHelpers(ast)) return;
   const preferences: Array<[string, RegisterName]> = [
     ["x", "1"],
     ["y", "2"],
@@ -10675,7 +10717,7 @@ function pickRegister(
     }
     return undefined;
   }
-  if (variable.startsWith(TICTACTOE_MASK_SCRATCH_PREFIX)) {
+  if (variable.startsWith(GRID4_MASK_SCRATCH_PREFIX)) {
     for (let i = REGISTER_ORDER.length - 1; i >= 0; i -= 1) {
       const candidate = REGISTER_ORDER[i]!;
       if (!used.has(candidate)) return candidate;
@@ -10820,7 +10862,7 @@ function collectPreloadConstantValues(ast: ProgramAst, startupAwareConstantPrelo
       visitExpr(expr.right);
     }
     if (expr.kind === "call") {
-      const macro = ticTacToeExpressionMacro(expr.callee.toLowerCase(), expr.args);
+      const macro = packedGridExpressionMacro(expr.callee.toLowerCase(), expr.args);
       if (macro !== undefined) {
         visitExpr(macro);
         return;
@@ -11916,11 +11958,11 @@ function displayCellsLiteral(cells: readonly number[]): string {
 
 
 
-function programUsesTicTacToeHelpers(ast: ProgramAst): boolean {
+function programUsesPackedGridHelpers(ast: ProgramAst): boolean {
   let found = false;
   const visitExpr = (expr: ExpressionAst): void => {
     if (found) return;
-    if (expr.kind === "call" && isTicTacToeMacroName(expr.callee.toLowerCase())) {
+    if (expr.kind === "call" && isPackedGridMacroName(expr.callee.toLowerCase())) {
       found = true;
       return;
     }
@@ -12199,13 +12241,13 @@ function collectDispatchScratchVariables(
   for (const proc of ast.procs) visit(proc.body);
 }
 
-function collectTicTacToeScratchVariables(ast: ProgramAst, variables: Set<string>): void {
+function collectGridCellScratchVariables(ast: ProgramAst, variables: Set<string>): void {
   const visit = (statements: StatementAst[]): void => {
     for (let index = 0; index < statements.length; index += 1) {
       const statement = statements[index]!;
       const next = statements[index + 1];
       if (statement.kind === "assign" && next?.kind === "assign" && isReusableCellMaskPair(statement, next)) {
-        variables.add(ticTacToeMaskScratchName(statement));
+        variables.add(grid4MaskScratchName(statement));
       }
       if (statement.kind === "loop") visit(statement.body);
       if (statement.kind === "if") {

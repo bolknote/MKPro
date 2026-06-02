@@ -676,6 +676,12 @@ continuous draw is intended, for example `int(random(0.5, 2.5))`.
 The compiler floors integer random draws with `x - frac(x)`, so these forms
 avoid the MK-61 `К [x]` opcode immediately after `К СЧ`.
 
+`entered()` consumes the current keyboard-entered X value without emitting a new
+`С/П`. Use it only immediately after an existing stop when a published MK-61 UI
+expects the player to continue with calculator control keys and the program then
+stores the value already sitting in X. Ordinary turn input should still use
+`read()`, which emits or fuses the visible input stop.
+
 If source saves a random seed, updates the same seed with `random()`, and then
 uses both the previous and new seed in one pure expression, the compiler may keep
 the previous seed on the stack instead of storing and recalling it. This matches
@@ -713,6 +719,11 @@ Packed digit helpers use one-based indexes from the right: `digit_at(value, 1)`
 is the units digit, `digit_at(value, 2)` is the tens digit. `digit_add` adds a
 digit at that position, while `digit_set` first removes the old digit at that
 position and then inserts the new one.
+For source-shaped four-line registers whose units digit is reserved and line
+digits begin at `10^1`, `packed4_digit(value, index)` reads through
+`frac(value / pow10(index))`, `packed4_add(value, index, delta)` adds
+`delta * pow10(index)`, and `packed4_score(value, index)` applies the
+source-style squared deviation used by compact packed-line games.
 
 Small coordinate-set helpers are ordinary expression macros. `near_any(value,
 radius, a, b, ...) >= 0` means at least one candidate is within `radius`;
@@ -923,10 +934,11 @@ The parser keeps these high-level statements as typed source nodes:
 - formula helpers: `abs`, `acos`, `asin`, `atg`, `bit_and`, `bit_clear`,
   `bit_has`, `bit_mask`, `bit_not`, `bit_or`, `bit_set`, `bit_toggle`, `bit_xor`,
   `cell_at`, `cell_clear`, `cell_has`, `cell_mask`, `cell_set`, `cell_toggle`,
-  `cos`, `digit_add`, `digit_at`, `digit_set`, `eq_any`, `exp`,
+  `cos`, `digit_add`, `digit_at`, `digit_set`, `entered`, `eq_any`, `exp`,
   `frac`, `from_min`, `from_sec`, `inv`, `int`, `lg`, `ln`, `line_count`, `max`,
-  `neighbor_count`, `near_any`, `pi`, `pow`, `pow10`, `random`, `sign`, `sin`,
-  `sqr`, `sqrt`, `tg`, `to_min`, `to_sec`.
+  `neighbor_count`, `near_any`, `packed4_add`, `packed4_digit`, `packed4_score`,
+  `pi`, `pow`, `pow10`, `random`, `sign`, `sin`, `sqr`, `sqrt`, `tg`, `to_min`,
+  `to_sec`.
 - contracted `raw { ... }` blocks for explicit MK-61 command sequences
 
 Assignments, updates, comparison predicates, function parameters, loops, and

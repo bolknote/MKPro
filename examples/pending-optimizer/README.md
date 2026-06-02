@@ -36,14 +36,16 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | `cave-treasure.mkpro` | 151 | 105 | resource pressure, wall breaking, cache miss flow, and remaining dispatch overhead |
 | `giants-country.mkpro` | 129 | 105 | packed room-map display/flow and remaining event flow lowerers |
 | `labyrinth777.mkpro` | 122 | 105 | source-shaped row generation, energy accounting, and local-jumper flow are restored; remaining gap is compact source-style command algebra plus full player/floor row overlay |
-| `tic-tac-toe-4x4.mkpro` | 200 | 105 | 4x4 line-count state representation |
+| `tic-tac-toe-4x4.mkpro` | 281 | 105 | source-shaped packed 4x4 line scan/update lowering |
 
 Prototype notes:
 
 - `tic-tac-toe-4x4.txt` keeps 4x4 line state in packed line registers
-  (`R4..R7`) and updates/scans those lines directly. The current `line_count`
-  loop is smaller than the old expansion, but still recomputes line state
-  instead of preserving it incrementally.
+  (`R4..R7`) and updates/scans those lines directly. The MK-Pro source now uses
+  the same occupied mask, packed line weights, `X ПП Y С/П` input shape, and
+  squared-deviation scan. The remaining gap is compiler lowering: it still emits
+  ordinary calls/loops for the packed-line update and full-board scan instead of
+  the source listing's stack-resident indirect-address subroutine shape.
 
 Stack-resident temp scheduler (2026-06):
 

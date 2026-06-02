@@ -317,7 +317,8 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `bit-mask-helper` — emits shared helper routines that build bit masks from indices once per scratch register.
 - `bit-mask-helper-call` — routes repeated `bit_mask` construction through existing helper labels instead of recompiling.
 - `bit-mask-quotient-reuse` — reuses previously computed quotients/parts for mask generation.
-- `tic-tac-toe-cell-mask-cse` — a dedicated CSE optimization for tic-tac-toe cell-mask patterns.
+- `grid-cell-mask-cse` — removes repeated 4x4 packed grid cell-mask calculations for adjacent membership/set operations.
+- `indexed-packed-pow10-delta` — updates a dynamically indexed packed digit bank by a `pow10(...)` term without recompiling the whole self-update expression.
 
 ## 9) Display lowering strategy (largest semantic-sensitive area)
 
@@ -372,7 +373,7 @@ Display rewrites are separated into strategy selection + body lowering.
 ## 11) Arithmetic and operator normalization
 
 - `small-set-primitive-lowering` — replaces small multi-way boolean/state sets with dense arithmetic chains.
-- `tic-tac-toe-primitive-lowering` — maps tic-tac-toe operations into bit masks and add/sub-style forms.
+- `packed-grid-primitive-lowering` — maps packed grid and digit helper operations into bit masks and add/sub-style forms.
 - `reciprocal-division-lowering` — lowers `1 / x`-form divisions into `F 1/x` after evaluating the right side once.
 - `arithmetic-if-update` — turns conditional updates into arithmetic form instead of branching.
 - `arithmetic-if-conditional-move` — replaces conditional `move`/copy with arithmetic form.
