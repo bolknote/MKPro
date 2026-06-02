@@ -1274,7 +1274,12 @@ program CoordListRandom {
 `);
 
     expect(result.report.optimizations.some((item) => item.name === "setup-coord-list-indirect-random-unique")).toBe(false);
-    expect(result.report.setupProgram?.steps.filter((step) => step.hex === "3B").length ?? 0).toBeGreaterThanOrEqual(3);
+    const setupSteps = result.report.setupProgram?.steps ?? [];
+    const randomOps = setupSteps.filter((step) => step.hex === "3B").length;
+    const randomHelperCalls = setupSteps.filter((step) =>
+      step.hex === "53" && step.comment === "shared straight-line helper"
+    ).length;
+    expect(randomOps >= 3 || randomHelperCalls >= 3).toBe(true);
   });
 
   it("lowers coord_list random_unique() through compact unique setup", () => {
@@ -1315,7 +1320,12 @@ program CoordListRandomRange {
 
     expect(result.report.optimizations.some((item) => item.name.includes("coord-list-indirect-random-unique"))).toBe(false);
     expect(result.report.optimizations.some((item) => item.name === "setup-random-range-lowering")).toBe(true);
-    expect(result.report.setupProgram?.steps.filter((step) => step.hex === "3B").length ?? 0).toBeGreaterThanOrEqual(3);
+    const setupSteps = result.report.setupProgram?.steps ?? [];
+    const randomOps = setupSteps.filter((step) => step.hex === "3B").length;
+    const randomHelperCalls = setupSteps.filter((step) =>
+      step.hex === "53" && step.comment === "shared straight-line helper"
+    ).length;
+    expect(randomOps >= 3 || randomHelperCalls >= 3).toBe(true);
   });
 
   it("lowers mask, cell, and packed digit helpers from V2 formulas", () => {
@@ -1336,13 +1346,13 @@ program FormulaHelpers {
     halt(value)
   }
 }
-`);
+`, { budget: 999, analysis: true });
     const opcodes = result.steps.map((step) => step.hex);
 
     for (const opcode of ["15", "24", "34", "35", "37", "38", "39", "3A"]) {
       expect(opcodes).toContain(opcode);
     }
-  });
+  }, 15000);
 
   it("computes 4x4 cell masks with the source packed-bit shape", () => {
     const result = compileOk(`

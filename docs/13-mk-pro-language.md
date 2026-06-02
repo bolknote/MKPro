@@ -1262,6 +1262,9 @@ The pipeline currently contains:
 - **shared-terminal-tail** — coalesces identical straight-line suffixes that
   already end in terminal flow (`БП`, `К БП r`, or `В/О`) by jumping into the
   canonical copy.
+- **shared-straight-line-helper** — extracts repeated non-terminal
+  straight-line opcode bodies into one `ПП`/`В/О` helper when the helper cost is
+  lower than leaving every copy inline.
 - **function-tail-recursion** — lowers `return f(...)` tail calls between
   value-returning functions to direct `БП` jumps, including mutual tail
   recursion, after rejecting any recursive cycle that needs another return frame.

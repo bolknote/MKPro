@@ -59,6 +59,11 @@ Prototype notes:
   unconditional flow. This is intentionally generic: it can jump into a matching
   `...; БП` / `...; К БП r` / `...; В/О` suffix, but it refuses programs with
   absolute numeric flow targets.
+- Shared straight-line helper extraction covers the non-terminal sibling of that
+  trick: repeated straight-line opcode bodies become one `ПП`/`В/О` helper when
+  the call cost is lower than keeping every copy inline. It deliberately does
+  not mix with `return-suffix-gadget` bodies until the layout model can prove
+  both contracts at once.
 - Branch-target X reuse is the flow-sensitive sibling of last-X reuse: if a
   `П->X r; F x?0 label` condition is the only way to enter `label`, and `label`
   immediately recalls the same `r`, the recall is removed because the condition

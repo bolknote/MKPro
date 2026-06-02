@@ -31,8 +31,8 @@ Generated with `npm run examples:size`.
 | `jack-pot.mkpro` | 99 | 104 | -5 | ok: <= reference | main+setup load ok |
 | `labyrinth777.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |
 | `lunar.mkpro` | 47 | 58 | -11 | ok: <= reference | load ok |
-| `minesweeper-9x7.mkpro` | 94 | 104 | -10 | ok: <= reference | main+setup load ok |
-| `minesweeper-9x9.mkpro` | 89 | 97 | -8 | ok: <= reference | main+setup load ok |
+| `minesweeper-9x7.mkpro` | 87 | 104 | -17 | ok: <= reference | main+setup load ok |
+| `minesweeper-9x9.mkpro` | 81 | 97 | -16 | ok: <= reference | main+setup load ok |
 | `raja-yoga.mkpro` | 88 | 98 | -10 | ok: <= reference | main+setup load ok |
 | `rambo-iii.mkpro` | 105 | 105 | 0 | ok: <= reference | load ok |
 | `sea-battle.mkpro` | 80 | 102 | -22 | ok: <= reference | main+setup load ok |

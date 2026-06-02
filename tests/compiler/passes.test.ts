@@ -17,6 +17,7 @@ import { redundantPrologueElimination } from "../../src/core/passes/redundant-pr
 import { computeNonOverlappingRegisterMapping, registerCoalesce } from "../../src/core/passes/register-coalesce.ts";
 import { returnSuffixGadget } from "../../src/core/passes/return-suffix-gadget.ts";
 import { sharedTerminalTail } from "../../src/core/passes/shared-terminal-tail.ts";
+import { sharedStraightLineHelper } from "../../src/core/passes/shared-straight-line-helper.ts";
 import { storeRecallPeephole } from "../../src/core/passes/store-recall-peephole.ts";
 import { tailBranchInversion } from "../../src/core/passes/tail-branch-inversion.ts";
 import { tailCallLowering } from "../../src/core/passes/tail-call.ts";
@@ -666,6 +667,54 @@ describe("ir passes on synthetic programs", () => {
       halt(),
     ];
     const result = sharedTerminalTail.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("shared-straight-line-helper extracts repeated non-terminal bodies", () => {
+    const program: IrOp[] = [
+      label("first"),
+      recall("1"),
+      recall("2"),
+      plain(0x10, "+"),
+      store("3"),
+      recall("4"),
+      store("5"),
+      plain(0x01, "1"),
+      label("second"),
+      recall("1"),
+      recall("2"),
+      plain(0x10, "+"),
+      store("3"),
+      recall("4"),
+      store("5"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const result = sharedStraightLineHelper.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.optimizations[0]?.name).toBe("shared-straight-line-helper");
+    expect(result.ops).toContainEqual({ kind: "label", name: "__shared_straight_line_helper_0" });
+    expect(result.ops.filter((op) => op.kind === "call" && op.target === "__shared_straight_line_helper_0")).toHaveLength(2);
+    expect(result.ops.at(-1)).toMatchObject({ kind: "return" });
+    expect(machineCellCount(result.ops)).toBeLessThan(machineCellCount(program));
+  });
+
+  it("shared-straight-line-helper avoids programs with absolute numeric flow targets", () => {
+    const program: IrOp[] = [
+      numericJump(9),
+      recall("1"),
+      recall("2"),
+      plain(0x10, "+"),
+      store("3"),
+      recall("1"),
+      recall("2"),
+      plain(0x10, "+"),
+      store("3"),
+    ];
+    const result = sharedStraightLineHelper.run(program, ctx);
 
     expect(result.applied).toBe(0);
     expect(result.ops).toEqual(program);

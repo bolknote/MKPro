@@ -78,6 +78,7 @@ Below are the public capability IDs from `report.optimizer.capabilities`.
 - `register-coalesce` — merges separate temporary cells when lifetime ranges do not overlap.
 - `duplicate-failure-tail-merge` — merges identical error/failure tail sequences.
 - `shared-terminal-tail` — jumps into an existing identical straight-line suffix that already ends in unconditional terminal flow.
+- `shared-straight-line-helper` — extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the `ПП`/`В/О` cost is lower than duplicated inline code.
 - `arithmetic-if-pass` — a dedicated pass collecting all `arithmetic-if` opportunities.
 - `redundant-prologue-elimination` — removes repeated identical prologues.
 - `step-vs-run-verification` — chooses the more compact step/run verification form.
@@ -210,6 +211,7 @@ Machine-level variants around branches:
 - `terminal-loop-screen-elision` — removes terminal `show` duplicates already provided by the following loop header and may inline one-screen loop-header helpers before input.
 - `return-suffix-gadget` — shares a common suffix after `return` across similar regions.
 - `shared-call-tail` — keeps one shared tail after calls instead of duplicates.
+- `shared-straight-line-helper` — turns repeated straight-line opcode runs into one helper body with `В/О`, covering the general non-terminal form of "enter a shared body, then continue at the original call site."
 - `jump-thread` — rewires jump chains into a straight flow.
 - `jump-to-next-threading` — removes jumps that only go to the next label.
 - `redundant-prologue-elimination` — merges repeated prologues while preserving side effects.

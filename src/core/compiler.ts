@@ -13895,6 +13895,14 @@ const optimizerCapabilities: Array<{
     detail: "Shares identical straight-line suffixes that already end in unconditional terminal flow, replacing duplicates with a jump into the canonical suffix.",
   },
   {
+    id: "shared-straight-line-helper",
+    category: "flow",
+    source: "documented",
+    requires: [],
+    activeWhen: ["shared-straight-line-helper"],
+    detail: "Extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the call+return cost is provably lower than keeping all copies inline.",
+  },
+  {
     id: "subroutine-part-shared-tail",
     category: "flow",
     source: "undocumented",

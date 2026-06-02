@@ -49,6 +49,9 @@ type SelectedGadget = SelectedSuffix | SelectedBodyCall;
 
 const run: IrPassFn = (ops) => {
   if (hasNumericFlowTarget(ops)) return emptyResult(ops);
+  if (ops.some((op) => op.kind === "label" && op.name.startsWith("__shared_straight_line_helper_"))) {
+    return emptyResult(ops);
+  }
 
   const candidates = collectReturnSuffixCandidates(ops);
   const selected = selectGadgets(candidates, ops);

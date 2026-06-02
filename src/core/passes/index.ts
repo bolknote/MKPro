@@ -29,6 +29,7 @@ import { returnZeroJump } from "./return-zero-jump.ts";
 import { returnSuffixGadget } from "./return-suffix-gadget.ts";
 import { r0FractionalSentinel } from "./r0-fractional-sentinel.ts";
 import { sharedCallTail } from "./shared-call-tail.ts";
+import { sharedStraightLineHelper } from "./shared-straight-line-helper.ts";
 import { sharedTerminalTail } from "./shared-terminal-tail.ts";
 import { storeRecallPeephole } from "./store-recall-peephole.ts";
 import { tailBranchInversion } from "./tail-branch-inversion.ts";
@@ -43,6 +44,7 @@ const PASS_PIPELINE: ReadonlyArray<IrPass> = [
   sharedCallTail,
   returnSuffixGadget,
   sharedTerminalTail,
+  sharedStraightLineHelper,
   returnZeroJump,
   storeRecallPeephole,
   jumpToNextThreading,
