@@ -78,7 +78,7 @@ Below are the public capability IDs from `report.optimizer.capabilities`.
 - `register-coalesce` — merges separate temporary cells when lifetime ranges do not overlap.
 - `duplicate-failure-tail-merge` — merges identical error/failure tail sequences.
 - `shared-terminal-tail` — jumps into an existing identical straight-line suffix that already ends in unconditional terminal flow.
-- `shared-straight-line-helper` — extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the `ПП`/`В/О` cost is lower than duplicated inline code.
+- `shared-straight-line-helper` — extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the `ПП`/`В/О` cost is lower than duplicated inline code; a size-gated candidate extends this to bodies with direct `ПП` calls.
 - `arithmetic-if-pass` — a dedicated pass collecting all `arithmetic-if` opportunities.
 - `redundant-prologue-elimination` — removes repeated identical prologues.
 - `step-vs-run-verification` — chooses the more compact step/run verification form.
@@ -214,7 +214,11 @@ Machine-level variants around branches:
 - `terminal-loop-screen-elision` — removes terminal `show` duplicates already provided by the following loop header and may inline one-screen loop-header helpers before input.
 - `return-suffix-gadget` — shares a common suffix after `return` across similar regions.
 - `shared-call-tail` — keeps one shared tail after calls instead of duplicates.
-- `shared-straight-line-helper` — turns repeated straight-line opcode runs into one helper body with `В/О`, covering the general non-terminal form of "enter a shared body, then continue at the original call site."
+- `shared-straight-line-helper` — turns repeated straight-line opcode runs into
+  one helper body with `В/О`, covering the general non-terminal form of "enter a
+  shared body, then continue at the original call site." The
+  `shared-call-body-helper` whole-program candidate also lets such bodies contain
+  direct `ПП` calls, and is adopted only when the final program shrinks.
 - `jump-thread` — rewires jump chains into a straight flow.
 - `jump-to-next-threading` — removes jumps that only go to the next label.
 - `redundant-prologue-elimination` — merges repeated prologues while preserving side effects.
@@ -315,7 +319,7 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `coord-list-scaled-read` — reads coordinates via scaled index, removing runtime decode work.
 - `coord-list-scaled-decimal-storage` — same as above but decimal form, using fewer cells.
 - `fractional-indirect-addressing` — allows indirect access through fractional address arithmetic when proofs are available, including direct `bank[int(selector)]` memory selectors.
-- `r0-fractional-sentinel` — uses a fractional-state sentinel in R0 to steer jumps and tables.
+- `r0-fractional-sentinel` — uses a fractional-state sentinel in R0 to steer tables and to replace proved direct flow to 99 (`БП` or `F x?0`) with one-cell `К БП/К x?0 0` when the R0 mutation is dead.
 - `super-dark-dispatch` — enables FA..FF range routing for shorter jumps with strictly valid address neighborhoods.
 
 ## 8) Spatial and coordinate-list optimization family
@@ -472,7 +476,14 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 16. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.
 17. `dead-store-elimination` — removes stores whose target register is not live after the write and does not affect number-entry/input finalization.
 18. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding `X->П`.
-19. `r0-fractional-sentinel` — drops redundant immediate `П->X 3` after fractional-R0 indirect access when `R0` is already known to be non-live.
+19. `r0-fractional-sentinel` — drops redundant immediate `П->X 3`/`X->П 3`
+    after fractional-R0 indirect access when `R0` liveness proves that the
+    direct access only repeats the hardware-selected `R3`; it also removes
+    later `X->П 0`/`П->X 0` repetitions when the same straight-line path has
+    already left the hardware `-99999999` sentinel in `R0` and `X` is proved to
+    hold the same value, and rewrites direct `БП 99` / `F x?0 99` flow to
+    `К БП 0` / `К x?0 0` when `R0` is already proved fractional and the
+    resulting sentinel write is dead.
 20. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` when one or more cells are removed.
 21. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/`КНОП` redundancy optimization pass removes cells.
 22. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a display-aware `ВП`/X2 marker and reports `vp-fraction-restore` when one or more restores are removed.

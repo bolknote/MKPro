@@ -461,6 +461,10 @@ interface LoweringOptions {
   // because marginal rewrites can perturb the other layout-sensitive
   // indirect-flow passes; adopted only when the whole program ends up smaller.
   aggressiveIndirectCall?: boolean;
+  // Let the IR shared-straight-line-helper extract repeated straight-line
+  // bodies that contain direct `ПП` calls. Speculative because it can hide
+  // repeated direct call sites from later indirect-call rescue passes.
+  sharedStraightLineCallBodies?: boolean;
 }
 
 
@@ -664,6 +668,11 @@ export function compileMKPro(
     { shareRandomCell: true, hoistSharedHelpers: true },
     "share-random-cell-helper-hoisted",
     "Shared a repeated random-coordinate expression and hoisted helpers so its calls become single-cell indirect flow",
+  );
+  tryCandidate(
+    { sharedStraightLineCallBodies: true },
+    "shared-call-body-helper",
+    "Shared repeated straight-line bodies that contain direct subroutine calls",
   );
   tryCandidate(
     { tailBranchInversion: true },
@@ -1802,6 +1811,7 @@ function compileMKProOnce(
   // IR pass through CompileOptions, since IR passes do not see LoweringOptions.
   if (loweringOptions.coalesceCopies === true) opts.coalesceCopies = true;
   if (loweringOptions.aggressiveIndirectCall === true) opts.aggressiveIndirectCallThreshold = true;
+  if (loweringOptions.sharedStraightLineCallBodies === true) opts.sharedStraightLineCallBodies = true;
   const machineProfile = MK61_PROFILE;
   const diagnostics: Diagnostic[] = [];
   const optimizations: AppliedOptimization[] = [];
@@ -13780,7 +13790,7 @@ const optimizerCapabilities: Array<{
     source: "mk61-delta",
     requires: ["r0-fractional-sentinel"],
     activeWhen: ["fractional-indirect-addressing", "r0-indirect-counter", "r0-fractional-sentinel"],
-    detail: "Fractional R0 side effects: selecting R3 (active) is sound; the one-cell К БП 0 jump to 99 stays a candidate because it destroys R0 and depends on the fixed hardware address 99, which is not sound to synthesize automatically.",
+    detail: "Fractional R0 side effects: selecting R3, preserving the resulting -99999999 sentinel, and replacing proved direct flow to 99 with one-cell К БП/К x?0 0 are sound only when liveness proves the R0 mutation is unobservable.",
   },
   {
     id: "raw-display-5f",
@@ -13899,8 +13909,8 @@ const optimizerCapabilities: Array<{
     category: "flow",
     source: "documented",
     requires: [],
-    activeWhen: ["shared-straight-line-helper"],
-    detail: "Extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the call+return cost is provably lower than keeping all copies inline.",
+    activeWhen: ["shared-straight-line-helper", "shared-call-body-helper"],
+    detail: "Extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the call+return cost is provably lower than keeping all copies inline; direct-call bodies are enabled only as a whole-program candidate.",
   },
   {
     id: "subroutine-part-shared-tail",

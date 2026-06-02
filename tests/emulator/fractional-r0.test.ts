@@ -50,4 +50,47 @@ describe("ROM fact: fractional R0 indirect addressing", () => {
     expect(calc.displayText().trim()).toContain("7");
     expect(calc.readRegister("0").trim()).toBe("-99999999,");
   });
+
+  it("fractional R0 indirect conditionals jump to address 99 only on the false branch", () => {
+    const cases = [
+      { opcode: 0xe0, fallthroughX: "0", jumpX: "5" }, // К x=0 0
+      { opcode: 0x70, fallthroughX: "5", jumpX: "0" }, // К x!=0 0
+      { opcode: 0x90, fallthroughX: "5", jumpX: "-5" }, // К x>=0 0
+      { opcode: 0xc0, fallthroughX: "-5", jumpX: "5" }, // К x<0 0
+    ];
+
+    for (const { opcode, fallthroughX, jumpX } of cases) {
+      const fallthrough = new MK61();
+      const fallthroughProgram = Array.from({ length: 105 }, () => 0x50);
+      fallthroughProgram[0] = opcode;
+      fallthroughProgram[1] = 0x01;
+      fallthroughProgram[2] = 0x02;
+      fallthroughProgram[99] = 0x07;
+      fallthroughProgram[100] = 0x50;
+      fallthrough.loadProgram(fallthroughProgram);
+      fallthrough.setRegister("0", "0.5");
+      fallthrough.setRegister("x", fallthroughX);
+      fallthrough.press("В/О");
+      fallthrough.press("С/П");
+      expect(fallthrough.runUntilStable({ maxFrames: 300, stableFrames: 5 }).stopped).toBe(true);
+      expect(fallthrough.displayText().trim()).toContain("12");
+      expect(fallthrough.readRegister("0").trim()).toBe("0,5");
+
+      const jumping = new MK61();
+      const jumpProgram = Array.from({ length: 105 }, () => 0x50);
+      jumpProgram[0] = opcode;
+      jumpProgram[1] = 0x01;
+      jumpProgram[2] = 0x02;
+      jumpProgram[99] = 0x07;
+      jumpProgram[100] = 0x50;
+      jumping.loadProgram(jumpProgram);
+      jumping.setRegister("0", "0.5");
+      jumping.setRegister("x", jumpX);
+      jumping.press("В/О");
+      jumping.press("С/П");
+      expect(jumping.runUntilStable({ maxFrames: 300, stableFrames: 5 }).stopped).toBe(true);
+      expect(jumping.displayText().trim()).toContain("7");
+      expect(jumping.readRegister("0").trim()).toBe("-99999999,");
+    }
+  });
 });

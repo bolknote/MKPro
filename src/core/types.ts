@@ -50,6 +50,11 @@ export interface CompileOptions {
   // shift addresses; this variant captures the break-even wins and is adopted
   // only when the whole program ends up smaller.
   aggressiveIndirectCallThreshold?: boolean;
+  // Speculative IR pass mode: let shared-straight-line-helper extract bodies
+  // that contain direct subroutine calls. This can save many cells, but it may
+  // hide repeated call sites from later indirect-call rewrites, so the top-level
+  // compiler enables it only as a whole-program candidate.
+  sharedStraightLineCallBodies?: boolean;
 }
 
 export interface Diagnostic {

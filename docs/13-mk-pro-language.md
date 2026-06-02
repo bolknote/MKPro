@@ -1221,7 +1221,9 @@ The pipeline currently contains:
   constant primitive calls, and affine constant/variable expressions before code
   generation, then strips `0 +` and `1 *` identities in later IR.
 - **r0-fractional-sentinel** — removes redundant direct `R3` accesses after
-  fractional `R0` indirect access when liveness proves `R0` is dead afterward.
+  fractional `R0` indirect access when liveness proves `R0` is dead afterward,
+  and removes repeated straight-line stores/recalls of the already-produced
+  `-99999999` sentinel when `R0` and `X` are both known to hold it.
 - **vp-x2-peephole** — drops a `К {x}` immediately after a proved display
   `ВП`/X2 boundary when `ВП` already supplies the fractional transform.
 - **packed-counter-stripes** — tries every compatible subset of fixed-width
@@ -1264,7 +1266,9 @@ The pipeline currently contains:
   canonical copy.
 - **shared-straight-line-helper** — extracts repeated non-terminal
   straight-line opcode bodies into one `ПП`/`В/О` helper when the helper cost is
-  lower than leaving every copy inline.
+  lower than leaving every copy inline. A whole-program candidate also considers
+  such bodies when they contain direct `ПП` calls, and keeps that lowering only
+  if the final program is smaller.
 - **function-tail-recursion** — lowers `return f(...)` tail calls between
   value-returning functions to direct `БП` jumps, including mutual tail
   recursion, after rejecting any recursive cycle that needs another return frame.

@@ -702,6 +702,60 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(result.ops)).toBeLessThan(machineCellCount(program));
   });
 
+  it("shared-straight-line-helper extracts repeated bodies that contain direct calls", () => {
+    const program: IrOp[] = [
+      label("first"),
+      recall("1"),
+      call("normalize"),
+      recall("2"),
+      plain(0x10, "+"),
+      store("3"),
+      plain(0x01, "1"),
+      label("second"),
+      recall("1"),
+      call("normalize"),
+      recall("2"),
+      plain(0x10, "+"),
+      store("3"),
+      plain(0x02, "2"),
+      label("normalize"),
+      plain(0x34, "К [x]"),
+      ret(),
+    ];
+    const result = sharedStraightLineHelper.run(program, {
+      options: { ...noopOptions, sharedStraightLineCallBodies: true },
+    });
+
+    expect(result.applied).toBe(2);
+    expect(result.ops.filter((op) => op.kind === "call" && op.target === "__shared_straight_line_helper_0")).toHaveLength(2);
+    expect(result.ops).toContainEqual(expect.objectContaining({
+      kind: "call",
+      target: "normalize",
+      opcode: 0x53,
+    }));
+    expect(machineCellCount(result.ops)).toBeLessThan(machineCellCount(program));
+  });
+
+  it("shared-straight-line-helper keeps direct-call bodies behind the speculative flag", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      call("normalize"),
+      store("2"),
+      plain(0x01, "1"),
+      recall("1"),
+      call("normalize"),
+      store("2"),
+      plain(0x02, "2"),
+      label("normalize"),
+      plain(0x34, "К [x]"),
+      ret(),
+    ];
+    const result = sharedStraightLineHelper.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("shared-straight-line-helper avoids programs with absolute numeric flow targets", () => {
     const program: IrOp[] = [
       numericJump(9),
@@ -1233,6 +1287,174 @@ describe("ir passes on synthetic programs", () => {
     const result = r0FractionalSentinel.run(program, ctx);
     expect(result.applied).toBe(1);
     expect(result.ops.at(-1)?.kind).toBe("indirect-store");
+  });
+
+  it("r0-fractional-sentinel preserves fractional R0 through stores to other registers", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      store("0"),
+      store("1"),
+      indirectRecall("0"),
+      recall("3"),
+    ];
+    const result = r0FractionalSentinel.run(program, ctx);
+    expect(result.applied).toBe(1);
+    expect(result.ops.at(-1)?.kind).toBe("indirect-recall");
+  });
+
+  it("r0-fractional-sentinel removes redundant R0 sentinel store after fractional R0 indirect recall", () => {
+    const sentinelRecall: IrOp = {
+      ...recall("e"),
+      meta: { mnemonic: "П->X e", comment: "preload const -99999999" },
+    };
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      store("0"),
+      indirectRecall("0"),
+      sentinelRecall,
+      store("0"),
+      recall("0"),
+    ];
+    const result = r0FractionalSentinel.run(program, ctx);
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([program[0], program[1], program[2], program[3], program[4], program[5]]);
+  });
+
+  it("r0-fractional-sentinel recognizes a direct -99999999 sentinel literal", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      store("0"),
+      indirectStore("0"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x0b, "/-/"),
+      store("0"),
+    ];
+    const result = r0FractionalSentinel.run(program, ctx);
+    expect(result.applied).toBe(1);
+    expect(result.ops.at(-1)?.kind).toBe("plain");
+    expect(result.ops.at(-1)).toMatchObject({ opcode: 0x0b });
+  });
+
+  it("r0-fractional-sentinel removes a redundant R0 sentinel recall", () => {
+    const sentinelRecall: IrOp = {
+      ...recall("e"),
+      meta: { mnemonic: "П->X e", comment: "preload const -99999999" },
+    };
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      store("0"),
+      indirectStore("0"),
+      sentinelRecall,
+      recall("0"),
+    ];
+    const result = r0FractionalSentinel.run(program, ctx);
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([program[0], program[1], program[2], program[3], program[4], program[5]]);
+  });
+
+  it("r0-fractional-sentinel rewrites a direct jump to 99 through fractional R0 when R0 is dead", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      store("0"),
+      numericJump(99),
+    ];
+    const result = r0FractionalSentinel.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops.at(-1)).toMatchObject({
+      kind: "indirect-jump",
+      register: "0",
+      opcode: 0x80,
+    });
+    expect(machineCellCount(result.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("r0-fractional-sentinel keeps a direct jump to 99 when R0 is live at the target", () => {
+    const padding = Array.from({ length: 93 }, () => plain(0x54, "КНОП"));
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      store("0"),
+      numericJump(99),
+      ...padding,
+      recall("0"),
+    ];
+    const result = r0FractionalSentinel.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("r0-fractional-sentinel rewrites a direct conditional jump to 99 through fractional R0 when R0 is dead", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      store("0"),
+      numericCjump(99),
+      halt(),
+    ];
+    const result = r0FractionalSentinel.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops[4]).toMatchObject({
+      kind: "indirect-cjump",
+      condition: "==0",
+      register: "0",
+      opcode: 0xe0,
+    });
+    expect(machineCellCount(result.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("r0-fractional-sentinel keeps a direct conditional jump to 99 when R0 is live after it", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      store("0"),
+      numericCjump(99),
+      recall("0"),
+    ];
+    const result = r0FractionalSentinel.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("r0-fractional-sentinel refuses non-sentinel R0 stores", () => {
+    const otherRecall: IrOp = {
+      ...recall("e"),
+      meta: { mnemonic: "П->X e", comment: "preload const -123" },
+    };
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      store("0"),
+      indirectRecall("0"),
+      otherRecall,
+      store("0"),
+    ];
+    const result = r0FractionalSentinel.run(program, ctx);
+    expect(result.applied).toBe(0);
   });
 
   it("indirect-memory-table rewrites direct recall through an existing stable selector", () => {

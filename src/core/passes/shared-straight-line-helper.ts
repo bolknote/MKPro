@@ -36,13 +36,10 @@ const GENERATED_BODY_LABEL_PREFIXES = [
   "__shared_straight_line_helper_",
 ];
 
-const run: IrPassFn = (ops) => {
+const run: IrPassFn = (ops, context) => {
   if (hasNumericFlowTarget(ops)) return emptyResult(ops);
-  if (ops.some((op) => op.kind === "label" && op.name.startsWith("__return_suffix_gadget_"))) {
-    return emptyResult(ops);
-  }
 
-  const selected = selectHelpers(collectCandidates(ops), ops);
+  const selected = selectHelpers(collectCandidates(ops, context.options.sharedStraightLineCallBodies === true), ops);
   if (selected.length === 0) return emptyResult(ops);
 
   const replacementByStart = new Map<number, { end: number; label: string }>();
@@ -91,10 +88,10 @@ export const sharedStraightLineHelper: IrPass = {
   layoutSafe: false,
 };
 
-function collectCandidates(ops: readonly IrOp[]): Candidate[] {
+function collectCandidates(ops: readonly IrOp[], allowDirectCalls: boolean): Candidate[] {
   const byKey = new Map<string, Occurrence[]>();
   const protectedIndexes = new Set([
-    ...generatedBodyIndexes(ops),
+    ...generatedBodyIndexes(ops, allowDirectCalls),
     ...displaySensitiveBlockIndexes(ops),
   ]);
   for (let start = 0; start < ops.length; start += 1) {
@@ -104,7 +101,7 @@ function collectCandidates(ops: readonly IrOp[]): Candidate[] {
     for (let end = start; end < ops.length; end += 1) {
       if (protectedIndexes.has(end)) break;
       const op = ops[end]!;
-      if (!isShareableBodyOp(op)) break;
+      if (!isShareableBodyOp(op, allowDirectCalls)) break;
       parts.push(opKey(op));
       cells += cellsPerOp(op);
       if (cells < MIN_BODY_CELLS) continue;
@@ -120,7 +117,7 @@ function collectCandidates(ops: readonly IrOp[]): Candidate[] {
     .filter((candidate) => candidate.occurrences.length >= 2);
 }
 
-function generatedBodyIndexes(ops: readonly IrOp[]): Set<number> {
+function generatedBodyIndexes(ops: readonly IrOp[], allowDirectCalls: boolean): Set<number> {
   const indexes = new Set<number>();
   let protect = false;
   for (let index = 0; index < ops.length; index += 1) {
@@ -130,7 +127,7 @@ function generatedBodyIndexes(ops: readonly IrOp[]): Set<number> {
       continue;
     }
     if (protect) indexes.add(index);
-    if (!isShareableBodyOp(op)) protect = false;
+    if (!isShareableBodyOp(op, allowDirectCalls)) protect = false;
   }
   return indexes;
 }
@@ -255,7 +252,7 @@ function markHelperBodyOp(op: IrOp): IrOp {
   } as IrOp;
 }
 
-function isShareableBodyOp(op: IrOp): boolean {
+function isShareableBodyOp(op: IrOp, allowDirectCalls = false): boolean {
   if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
   if ("opcode" in op && getOpcode(op.opcode).x2Effect === "restores") return false;
   switch (op.kind) {
@@ -265,10 +262,11 @@ function isShareableBodyOp(op: IrOp): boolean {
     case "indirect-recall":
     case "plain":
       return true;
+    case "call":
+      return allowDirectCalls;
     case "label":
     case "jump":
     case "cjump":
-    case "call":
     case "loop":
     case "indirect-jump":
     case "indirect-call":
@@ -292,10 +290,11 @@ function opKey(op: IrOp): string {
       return `indirect-recall:${op.register}`;
     case "plain":
       return `plain:${op.opcode}`;
+    case "call":
+      return `call:${op.target}`;
     case "label":
     case "jump":
     case "cjump":
-    case "call":
     case "loop":
     case "indirect-jump":
     case "indirect-call":
