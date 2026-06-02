@@ -1471,6 +1471,20 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops[2]).toMatchObject({ kind: "indirect-recall", register: "7", opcode: 0xd7 });
   });
 
+  it("indirect-memory-table uses the two-digit register-target aliases", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x03, "3"),
+      store("7"),
+      recall("d"),
+      halt(),
+    ];
+    const result = indirectMemoryTable.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops[3]).toMatchObject({ kind: "indirect-recall", register: "7", opcode: 0xd7 });
+  });
+
   it("indirect-memory-table rewrites direct store through an existing stable selector", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),

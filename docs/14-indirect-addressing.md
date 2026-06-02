@@ -13,18 +13,26 @@ The same transformation feeds two families:
 - indirect memory: `К X->П R`, `К П->X R`.
 
 For flow commands the last two transformed decimal/hex-like digits select a
-program address. For memory commands the last transformed digit selects
-`R0`..`Re`; values beyond `e` wrap through the same nibble logic rather than
-being rejected cleanly.
+program address. For memory commands the last two transformed digits also
+matter, but they are decoded through the MK-61 register-target table rather
+than through ordinary modulo arithmetic:
+
+| Last two digits | Memory target |
+| --- | --- |
+| `00`..`0E` | `R0`..`Re` |
+| `0F` | `R0` |
+| `#0`..`#4` where `# != 0` | `Ra`..`Re` |
+| `#5`, `#6` where `# != 0` | `R0` |
+| `#7`..`#F` where `# != 0` | `R1`..`R9` |
 
 There is no clean register `F` to land on. A stock MK-61 has exactly 15 data
 registers because the circular memory bus packs registers, stack, and program
 steps into 42-tetrad packets, and a 16th register does not fit that packing (see
-[00-hardware.md](./00-hardware.md#ring-memory-layout)). A selector nibble of `F`
-(`15`) therefore aliases into existing ring memory rather than reaching a
-private register. The standalone "register F" reachable through indirect
-`КП9`/`КИП9` only appears on a *memory-modified* machine that adds 42 extra
-tetrads to the ring; do not treat it as a stock-MK-61 target.
+[00-hardware.md](./00-hardware.md#ring-memory-layout)). A `0F` selector aliases
+to `R0`; a nonzero-tens `#F` selector aliases to `R9`. The standalone "register
+F" reachable through indirect `КП9`/`КИП9` only appears on a *memory-modified*
+machine that adds 42 extra tetrads to the ring; do not treat it as a stock-MK-61
+target.
 
 ## Integer Values
 
@@ -33,9 +41,12 @@ For ordinary non-negative integers, pad on the left and use the trailing digits:
 | Register value | Flow target | Memory target |
 | --- | --- | --- |
 | `4` | `04` | `R4` |
-| `10` | `10` | `R0` |
-| `99` | `99` | `R9` |
-| `123` | `23` | `R3` |
+| `10` | `10` | `Ra` |
+| `15` | `15` | `R0` |
+| `16` | `16` | `R0` |
+| `23` | `23` | `Rd` |
+| `99` | `99` | `R3` |
+| `123` | `23` | `Rd` |
 
 This is the safe subset. It is enough for normal jump tables and register
 tables.
