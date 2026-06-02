@@ -106,7 +106,10 @@ describe("stack-resident temp behavioral equivalence (real emulator)", () => {
     );
     expect(after.display).toBe(before.display);
     expect(after.stopped).toBe(before.stopped);
-    expect(after.registers[stackResident.report.registers.z]).toBe(before.registers[baseline.report.registers.z]);
+    const zRegister = stackResident.report.registers.z;
+    expect(zRegister).toBe(baseline.report.registers.z);
+    if (zRegister === undefined) throw new Error("z register missing");
+    expect(after.registers[zRegister]).toBe(before.registers[zRegister]);
   });
 });
 
@@ -136,7 +139,10 @@ describe("stack-resident control-flow fusion behavioral equivalence (real emulat
     );
     expect(after.display).toBe(before.display);
     expect(after.stopped).toBe(before.stopped);
-    expect(after.registers[stackResident.report.registers.z]).toBe(before.registers[baseline.report.registers.z]);
+    const zRegister = stackResident.report.registers.z;
+    expect(zRegister).toBe(baseline.report.registers.z);
+    if (zRegister === undefined) throw new Error("z register missing");
+    expect(after.registers[zRegister]).toBe(before.registers[zRegister]);
   });
 });
 

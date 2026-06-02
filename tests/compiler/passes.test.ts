@@ -54,7 +54,7 @@ function store(register: RegisterName): IrOp {
   };
 }
 
-function recall(register: RegisterName): IrOp {
+function recall(register: RegisterName): Extract<IrOp, { kind: "recall" }> {
   return {
     kind: "recall",
     register,

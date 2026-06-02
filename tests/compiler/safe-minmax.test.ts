@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createRequire } from "node:module";
-import { CompileError, compileMKPro } from "../../src/core/index.ts";
+import { compileMKPro } from "../../src/core/index.ts";
 import type { CompileOptions } from "../../src/core/index.ts";
 
 const require = createRequire(import.meta.url);

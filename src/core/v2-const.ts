@@ -1,7 +1,7 @@
 import { foldConstExpression } from "./constant-folder.ts";
 import { normalizeConstantLiteral } from "./emit/lowering-helpers.ts";
 import { ParseError, parseExpression } from "./parser.ts";
-import type { ExpressionAst, V2ConstAst, V2ProgramAst, V2StatementAst } from "./types.ts";
+import type { ExpressionAst, NumberExpressionAst, V2ProgramAst, V2StatementAst } from "./types.ts";
 
 export interface V2ConstBinding {
   readonly name: string;
@@ -41,7 +41,7 @@ function evaluateV2ConstExpression(
   text: string,
   line: number,
   earlier: ReadonlyMap<string, V2ConstBinding>,
-): ExpressionAst {
+): NumberExpressionAst {
   let expr = parseExpression(text.trim(), line);
   expr = inlineConstIdentifiers(expr, earlier);
   expr = foldConstExpression(expr);
@@ -51,30 +51,7 @@ function evaluateV2ConstExpression(
       line,
     );
   }
-  if (!expressionAllowedInConst(expr)) {
-    throw new ParseError(
-      `Const value must use only numeric literals and + - * / operators`,
-      line,
-    );
-  }
   return expr;
-}
-
-function expressionAllowedInConst(expr: ExpressionAst): boolean {
-  switch (expr.kind) {
-    case "number":
-      return true;
-    case "unary":
-      return (expr.op === "-" || expr.op === "+") && expressionAllowedInConst(expr.expr);
-    case "binary":
-      return (
-        (expr.op === "+" || expr.op === "-" || expr.op === "*" || expr.op === "/") &&
-        expressionAllowedInConst(expr.left) &&
-        expressionAllowedInConst(expr.right)
-      );
-    default:
-      return false;
-  }
 }
 
 export function inlineConstIdentifiers(

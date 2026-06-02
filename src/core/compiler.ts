@@ -5603,7 +5603,7 @@ export class EmitContext {
 
 
 
-  compileStatements(statements: StatementAst[]): void {
+  compileStatements(statements: readonly StatementAst[]): void {
     for (let index = 0; index < statements.length; index += 1) {
       const statement = statements[index]!;
       const next = statements[index + 1];
@@ -6462,7 +6462,6 @@ export class EmitContext {
         return;
       case "binary": {
         const leftReads = countIdentifierReads(expr.left, temp);
-        const rightReads = countIdentifierReads(expr.right, temp);
         if (leftReads === 1) {
           this.compileExpressionWithStackTemp(expr.left, temp);
           compileExpression(this, expr.right);
@@ -7547,21 +7546,21 @@ export class EmitContext {
 
 
 
-  statementsTerminate(statements: StatementAst[]): boolean {
+  statementsTerminate(statements: readonly StatementAst[]): boolean {
     return this.statementListTerminates(statements, new Set());
   }
 
-  statementsEndMachineFlow(statements: StatementAst[]): boolean {
+  statementsEndMachineFlow(statements: readonly StatementAst[]): boolean {
     return this.statementListEndsMachineFlow(statements, new Set());
   }
 
-  statementListTerminates(statements: StatementAst[], seenProcs: Set<string>): boolean {
+  statementListTerminates(statements: readonly StatementAst[], seenProcs: Set<string>): boolean {
     const last = statements.at(-1);
     if (!last) return false;
     return this.statementTerminates(last, seenProcs);
   }
 
-  statementListEndsMachineFlow(statements: StatementAst[], seenProcs: Set<string>): boolean {
+  statementListEndsMachineFlow(statements: readonly StatementAst[], seenProcs: Set<string>): boolean {
     const last = statements.at(-1);
     if (!last) return false;
     return this.statementEndsMachineFlow(last, seenProcs);

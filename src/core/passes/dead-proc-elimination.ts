@@ -52,7 +52,7 @@ const run: IrPassFn = (ops, context) => {
   if (context.options.disableInterproceduralOpts === true) {
     return { ops: [...ops], applied: 0, optimizations: [] };
   }
-  if (ops.some((op) => "meta" in op && op.meta.raw === true)) {
+  if (ops.some((op) => op.kind !== "label" && op.kind !== "orphan-address" && op.meta.raw === true)) {
     return { ops: [...ops], applied: 0, optimizations: [] };
   }
 

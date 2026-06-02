@@ -7,7 +7,7 @@ import {
   summarizeStackResidencyCandidatesInBlock,
 } from "../../src/core/emit/stack-residency-analysis.ts";
 import { compileLoweringVariantForTest } from "../../src/core/compiler.ts";
-import type { StatementAst } from "../../src/core/types.ts";
+import type { ConditionAst, ExpressionAst, StatementAst } from "../../src/core/types.ts";
 
 function compileOk(source: string, stackResidentTemps = true) {
   const result = compileLoweringVariantForTest(source, { budget: 999999 }, { stackResidentTemps });
@@ -17,13 +17,25 @@ function compileOk(source: string, stackResidentTemps = true) {
   return result;
 }
 
+function id(name: string): ExpressionAst {
+  return { kind: "identifier", name };
+}
+
+function num(raw: string): ExpressionAst {
+  return { kind: "number", raw };
+}
+
+function compare(left: ExpressionAst, op: ConditionAst["op"], right: ExpressionAst): ConditionAst {
+  return { left, op, right };
+}
+
 describe("stack-residency analysis", () => {
   it("detects a straight-line dual-temp fusion site", () => {
     const body: StatementAst[] = [
-      { kind: "assign", target: "a", expr: { kind: "identifier", name: "x" }, line: 1 },
-      { kind: "assign", target: "b", expr: { kind: "identifier", name: "y" }, line: 2 },
-      { kind: "assign", target: "c", expr: { kind: "binary", op: "+", left: { kind: "identifier", name: "a" }, right: { kind: "identifier", name: "b" } }, line: 3 },
-      { kind: "if", condition: { kind: "compare", op: "==", left: { kind: "identifier", name: "c" }, right: { kind: "number", raw: "0" } }, thenBody: [], line: 4 },
+      { kind: "assign", target: "a", expr: id("x"), line: 1 },
+      { kind: "assign", target: "b", expr: id("y"), line: 2 },
+      { kind: "assign", target: "c", expr: { kind: "binary", op: "+", left: id("a"), right: id("b") }, line: 3 },
+      { kind: "if", condition: compare(id("c"), "==", num("0")), thenBody: [], line: 4 },
     ];
     const block = summarizeStackResidencyCandidatesInBlock(body);
     expect(block.fusionSites).toBe(1);
@@ -39,26 +51,26 @@ describe("stack-residency analysis", () => {
   });
 
   it("accepts a binary consumer over two temps", () => {
-    const expr = {
-      kind: "binary" as const,
+    const expr: ExpressionAst = {
+      kind: "binary",
       op: "-",
-      left: { kind: "identifier" as const, name: "a" },
-      right: { kind: "identifier" as const, name: "b" },
+      left: id("a"),
+      right: id("b"),
     };
     expect(canLowerStackResidentExpression(expr, ["a", "b"])).toBe(true);
   });
 
   it("finds fusion sites across stack-preserving if gaps", () => {
     const body: StatementAst[] = [
-      { kind: "assign", target: "a", expr: { kind: "identifier", name: "x" }, line: 1 },
-      { kind: "assign", target: "b", expr: { kind: "identifier", name: "y" }, line: 2 },
+      { kind: "assign", target: "a", expr: id("x"), line: 1 },
+      { kind: "assign", target: "b", expr: id("y"), line: 2 },
       {
         kind: "if",
-        condition: { kind: "compare", op: "==", left: { kind: "identifier", name: "x" }, right: { kind: "number", raw: "0" } },
+        condition: compare(id("x"), "==", num("0")),
         thenBody: [],
         line: 3,
       },
-      { kind: "assign", target: "c", expr: { kind: "binary", op: "+", left: { kind: "identifier", name: "a" }, right: { kind: "identifier", name: "b" } }, line: 4 },
+      { kind: "assign", target: "c", expr: { kind: "binary", op: "+", left: id("a"), right: id("b") }, line: 4 },
     ];
     const site = findStackResidentFusionSite(body, 0);
     expect(site?.crossesControlFlow).toBe(true);
@@ -68,7 +80,7 @@ describe("stack-residency analysis", () => {
   it("treats empty if/else as stack-preserving for unrelated temps", () => {
     const stmt: StatementAst = {
       kind: "if",
-      condition: { kind: "compare", op: "==", left: { kind: "identifier", name: "x" }, right: { kind: "number", raw: "0" } },
+      condition: compare(id("x"), "==", num("0")),
       thenBody: [],
       elseBody: [],
       line: 1,

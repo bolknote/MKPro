@@ -5,10 +5,8 @@ import {
   expressionReferencesIdentifier,
   expressionToIntentText,
   countIdentifierReads,
-  expressionPureForSubstitution,
 } from "./lowering-helpers.ts";
 import {
-  canLowerStackResidentExpression,
   findStackResidentFusionSite,
   stackResidentRestoreOps,
   type StackResidentFusionSite,

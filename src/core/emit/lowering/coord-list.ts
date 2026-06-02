@@ -299,7 +299,7 @@ export function compileScaledCoordInteger(ctx: LoweringCtx, expr: ExpressionAst,
     ctx.emitOp(0x34, "К [x]", comment, line);
 }
 
-export function compileFusedCoordListScan(ctx: LoweringCtx, statements: StatementAst[], index: number): number {
+export function compileFusedCoordListScan(ctx: LoweringCtx, statements: readonly StatementAst[], index: number): number {
     const branch = statements[index];
     const next = statements[index + 1];
     if (branch?.kind !== "if" || next === undefined || branch.elseBody !== undefined) return 0;

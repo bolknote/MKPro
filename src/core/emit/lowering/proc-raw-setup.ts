@@ -888,7 +888,7 @@ export function compileInitialState(ctx: LoweringCtx): void {
     }
 }
 
-export function compileRepeatedAssignmentValue(ctx: LoweringCtx, statements: StatementAst[], start: number): number {
+export function compileRepeatedAssignmentValue(ctx: LoweringCtx, statements: readonly StatementAst[], start: number): number {
     const first = statements[start];
     if (first?.kind !== "assign" || !expressionPureForSubstitution(first.expr)) return 0;
     let end = start + 1;
@@ -1008,7 +1008,7 @@ export function compileXParamProcBody(ctx: LoweringCtx, proc: ProgramAst["procs"
     });
 }
 
-export function compileStackUnaryDerivedAssignments(ctx: LoweringCtx, statements: StatementAst[], start: number): number {
+export function compileStackUnaryDerivedAssignments(ctx: LoweringCtx, statements: readonly StatementAst[], start: number): number {
     const first = statements[start];
     if (first?.kind !== "assign") return 0;
     const firstMatch = matchStackUnaryDerivationCall(first.expr);

@@ -765,7 +765,7 @@ function parseV2ShowCall(argsText: string, line: number): V2StatementAst {
   return { kind: "v2_show", items, line };
 }
 
-function parseV2Predicate(text: string, line: number): V2PredicateAst {
+function parseV2Predicate(text: string, _line: number): V2PredicateAst {
   const trimmed = text.trim();
   const contains = /^(.+?)\s+in\s+([A-Za-z_][\w]*)$/u.exec(trimmed);
   if (contains) {
