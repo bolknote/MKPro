@@ -87,6 +87,13 @@ export interface XParamReturnDecay {
   line: number;
 }
 
+export interface XParamStakeSinRead {
+  param: string;
+  display: string;
+  showLine: number;
+  line: number;
+}
+
 export type DisplaySourceItem = Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }>;
 
 export interface DisplayField {
@@ -2879,6 +2886,51 @@ export function matchXParamReturnDecay(proc: ProcAst): XParamReturnDecay | undef
   if (expressionReferencesIdentifier(factor, param) || expressionReferencesIdentifier(scaled.right, param)) return undefined;
   if (!expressionPureForSubstitution(factor) || !expressionPureForSubstitution(scaled.right)) return undefined;
   return { param, factor, divisor: scaled.right, line: only.line };
+}
+
+export function matchXParamStakeSinRead(program: ProgramAst, proc: ProcAst): XParamStakeSinRead | undefined {
+  const params = proc.params ?? [];
+  const [param] = params;
+  if (param === undefined || params.length !== 1 || proc.body.length !== 2) return undefined;
+  const show = proc.body[0];
+  const ret = proc.body[1];
+  if (show?.kind !== "show" || ret?.kind !== "return_value") return undefined;
+  const display = program.displays.find((candidate) => candidate.name === show.display);
+  const item = display?.items.length === 1 ? display.items[0] : undefined;
+  if (item?.kind !== "source" || item.name !== param || item.expr !== undefined || item.width !== undefined) {
+    return undefined;
+  }
+  if (!matchStakeSinReadExpression(ret.expr, param)) return undefined;
+  return { param, display: show.display, showLine: show.line, line: ret.line };
+}
+
+function matchStakeSinReadExpression(expr: ExpressionAst, stake: string): boolean {
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "int" || expr.args.length !== 1) return false;
+  const body = expr.args[0]!;
+  if (body.kind !== "binary" || body.op !== "*") return false;
+  return (isIdentifierExpression(body.left, stake) && isOnePlusSinRead(body.right)) ||
+    (isIdentifierExpression(body.right, stake) && isOnePlusSinRead(body.left));
+}
+
+function isOnePlusSinRead(expr: ExpressionAst): boolean {
+  if (expr.kind !== "binary" || expr.op !== "+") return false;
+  return (isNumericValue(expr.left, 1) && isSinRead(expr.right)) ||
+    (isNumericValue(expr.right, 1) && isSinRead(expr.left));
+}
+
+function isSinRead(expr: ExpressionAst): boolean {
+  return expr.kind === "call" &&
+    expr.callee.toLowerCase() === "sin" &&
+    expr.args.length === 1 &&
+    isReadCallExpression(expr.args[0]!);
+}
+
+function isReadCallExpression(expr: ExpressionAst): boolean {
+  return expr.kind === "call" && expr.callee.toLowerCase() === "read" && expr.args.length === 0;
+}
+
+function isIdentifierExpression(expr: ExpressionAst, name: string): boolean {
+  return expr.kind === "identifier" && expr.name === name;
 }
 
 export function optimizeDispatchDefaultCases(

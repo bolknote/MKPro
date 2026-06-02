@@ -232,7 +232,7 @@ program ResourceUnderflowProbe {
 }
 `;
     const result = compileMKPro(source, { budget: 999, analysis: true });
-    expect(result.report.optimizations.some((item) => item.name === "decrement-underflow-branch")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "decrement-underflow-domain-guard")).toBe(true);
 
     const runWithFood = (food: string): string => {
       const calc = new MK61();

@@ -100,7 +100,8 @@ These transformations run on source constructs before machine lowering:
 - `expression-constant-folder` — precomputes constant expression subtrees.
 - `show-read-fusion` — merges `show(...)` with a following `read`-based assignment/input path into one calculator `С/П`: `show(...); x = read()` or `show(...); x = int(read())` / `frac(int(read()))` forms share the same input stop and avoid emitting a second `С/П`.
 - `show-read-decrement-underflow-fusion` — merges `show -> input -> decrement -> if (counter < 0) ...` into one compact sequence, keeping input in `Y` across the decrement-underflow check.
-- `show-read-stake-sin-lowering` — transforms `x = int(stake * (1 + sin(input)))` patterns (with `stake` coming from a single plain `show` source) into stack-direct form: keep `stake` in `Y`, read `input`, and compute the risk expression directly.
+- `show-read-stake-sin-lowering` — transforms `x = int(stake * (1 + sin(input)))` patterns (with `stake` coming from a single plain `show` source) into stack-direct form: keep `stake` in `Y`, read `input`, and compute the risk expression directly. The same lowering also accepts direct `sin(read())`, avoiding a source-visible throwaway input field.
+- `loop-carried-prompt-x` — for loops shaped as `show(screen); key = read()` where every non-terminal branch assigns the next `screen`, removes the register-backed prompt state and leaves the next visible value in `X` for the loop-back stop.
 - `show-read-debit-credit-guard` — rewrites `show; x=input; debitTarget -= x; if debitTarget < 0 { halt } ; creditTarget += x; if creditTarget < 0 { halt }` into one stack-based sequence that keeps the read value on the stack across both guarded updates.
 - `counted-loop-unroll` — replaces small constant-trip counted `while` loops with explicit per-iteration copies when the induction variable updates are simple linear steps and entry values are known constants; this removes the loop machinery and registers update logic.
 - `counted-loop-unroll-free-scratch` — runs counted-loop unrolling together with residual-dispatch scratch freeing (`freeResidualDispatchScratch`) as one candidate.
@@ -116,7 +117,7 @@ These transformations run on source constructs before machine lowering:
 - `startup-aware-constant-preloads` — tries a variant that leaves setup-expensive synthesized constants inline, such as decimal powers built with `F 10^x`, when that lowers estimated startup+program cost without increasing the main program size.
 - `intent-domain-lowering` — normalizes special intent types into a base form for later compilation.
 - `packed-counter-stripes` — packs dense counters into a shorter representation.
-- `x-param-state-elision` — removes redundant transition states when returning through X parameters.
+- `x-param-state-elision` — removes redundant transition states when rule/function parameters are consumed directly from `X`.
 - `tail-copy-assignment-fusion` — merges copy assignments in tail blocks into one write pass.
 - `if-chain-dispatch-canonicalization` — turns long `if` / inverted `if !=` chains that test the same deterministic expression against constants into a single dispatch template.
 - `constant-guarded-call-inline` — inlines a guarded call when used once and safe.
@@ -157,7 +158,7 @@ The control-flow family is where the largest byte savings are found.
 - `dead-proc-elimination` — removes unreachable lowered procedures after `match/effect` pass by collecting reachability from entries and call sites.
 - `ephemeral-input-branch` — shortens one-off input paths into compact branches.
 - `ephemeral-input-dispatch` — chooses input-based dispatch through denser tables.
-- `decrement-underflow-branch` — decrements and immediately handles underflow in one step.
+- `decrement-underflow-branch` / `decrement-underflow-domain-guard` — decrements and immediately handles underflow in one step; terminal `ЕГГ0Г` underflows use `F sqrt` as a one-cell self-trap after storing the decremented value.
 - `fl-decrement-zero-branch` — a dedicated “decrement and test zero” sequence in one short block.
 - `if-branch-order-inversion` — reorders branches so downstream lowering is shorter.
 - `x-preserving-false-branch` — preserves current X value in the false branch.

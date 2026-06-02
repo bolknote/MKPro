@@ -517,6 +517,35 @@ program InputDispatch {
     expect(result.steps.map((step) => step.hex)[0]).toBe("50");
   });
 
+  it("lowers stake sine read expressions without a stored input field", () => {
+    const result = compileOk(`
+program StakeSinReadExpression {
+  state {
+    stake_value: counter 0..99 = 2
+    result: counter 0..99 = 0
+  }
+
+  loop {
+    result = robber_fight(stake_value)
+    halt(result)
+  }
+
+  fn robber_fight(stake) {
+    show(stake)
+    return int(stake * (1 + sin(read())))
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "show-read-stake-sin-lowering")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "x-param-stake-sin-call")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "x-param-stake-sin-read")).toBe(true);
+    expect(result.report.registers.stake).toBeUndefined();
+    expect(result.steps.some((step) => step.comment === "read()")).toBe(false);
+    expect(result.steps.some((step) => step.comment === "risk input read()")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "arg stake for robber_fight")).toBe(false);
+  });
+
   it("shares return suffix gadgets across compiled rule procedures", () => {
     const result = compileOk(`
 program ReturnSuffixGadget {
@@ -1533,7 +1562,62 @@ program XParamRule {
 
     expect(result.report.optimizations.some((item) => item.name === "x-param-proc-call")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "x-param-proc-entry")).toBe(true);
+    expect(result.report.registers.delta).toBeUndefined();
     expect(result.steps.some((step) => step.comment === "set delta")).toBe(false);
+  });
+
+  it("keeps loop prompt state in X when every path assigns the next prompt", () => {
+    const result = compileOk(`
+program LoopPromptX {
+  state {
+    screen: packed = 0
+    key: counter 0..9 = 0
+    pos: packed = 1
+  }
+
+  loop {
+    show(screen)
+    key = read()
+    if key == 0 {
+      screen = 0
+    }
+    else {
+      pos += key
+      screen = pos
+    }
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "loop-carried-prompt-x")).toBe(true);
+    expect(result.report.registers.screen).toBeUndefined();
+    expect(result.steps.some((step) => step.comment === "set screen")).toBe(false);
+  });
+
+  it("keeps prompt state when the prompt is assigned before the loop", () => {
+    const result = compileOk(`
+program LoopPromptAssignedBeforeLoop {
+  state {
+    screen: packed = 0
+    key: counter 0..9 = 0
+  }
+
+  init()
+  loop {
+    show(screen)
+    key = read()
+    screen = key
+  }
+
+  fn init() {
+    screen = 5
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "loop-carried-prompt-x")).toBe(false);
+    expect(result.report.registers.screen).toBeDefined();
+    expect(result.steps.some((step) => step.comment === "set screen")).toBe(true);
   });
 
   it("shares repeated packed display bodies through a normal helper", () => {
@@ -2654,8 +2738,8 @@ program ResourceUnderflow {
 }
 `, { budget: 999, analysis: true });
 
-    expect(result.report.optimizations.some((item) => item.name === "decrement-underflow-branch")).toBe(true);
-    expect(result.steps.some((step) => step.comment === "decrement underflow food")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "decrement-underflow-domain-guard")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "decrement underflow domain guard trap")).toBe(true);
   });
 
   it("uses a domain trap for zero terminal branches after non-FL decrements", () => {
@@ -2894,6 +2978,24 @@ program IndexedSelectorSiblingReuse {
 
     expect(result.report.optimizations.some((item) => item.name === "indexed-selector-cache")).toBe(true);
     expect(result.steps.some((step) => step.comment === "indexed selector reuse line.front")).toBe(true);
+  });
+
+  it("reuses indexed selectors with deterministic call expressions", () => {
+    const result = compileOk(`
+program IndexedSelectorPureCallReuse {
+  state {
+    slots: packed[1..3] = [10, 20, 30]
+    index_source: packed = 2.5
+  }
+
+  loop {
+    slots[int(index_source)] = slots[int(index_source)] + 1
+    halt(slots[2])
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.steps.filter((step) => step.comment === "indexed selector slots")).toHaveLength(1);
   });
 
   it("specializes constant indexed rule calls before lowering", () => {

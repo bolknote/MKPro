@@ -44,7 +44,7 @@ const EXAMPLE_COMPILE_ERRORS: Record<string, RegExp> = {};
 // shrink these toward 105; intentional shrinkage should update these exact
 // baselines just like top-level examples.
 const PENDING_BASELINE: Record<string, number> = {
-  "cave-highlevel-baseline": 194,
+  "cave-highlevel-baseline": 150,
   "cave-treasure": 165,
   "giants-country": 170,
   labyrinth777: 163,

@@ -19,6 +19,7 @@ import {
   isTicTacToeMacroName,
   matchStackUnaryDerivationCall,
   matchXParamReturnDecay,
+  matchXParamStakeSinRead,
   matchRemainderByConstant,
   negatedNumberLiteral,
   numberExpression,
@@ -194,6 +195,18 @@ export function compileFunctionCall(ctx: LoweringCtx, expr: Extract<ExpressionAs
       ctx.optimizations.push({
         name: "x-param-return-decay-call",
         detail: `Passed ${xParamDecay.param} to ${proc.name} through X.`,
+      });
+      return true;
+    }
+    const xParamStakeSin = matchXParamStakeSinRead(ctx.ast, proc);
+    if (xParamStakeSin !== undefined && expr.args.length === 1) {
+      compileExpression(ctx, expr.args[0]!);
+      const bankSelectors = ctx.snapshotBankSelectorCache();
+      ctx.emitJump(0x53, "ПП", proc.name, `call function ${proc.name}`, proc.line);
+      ctx.restoreBankSelectorCacheAfterCall(proc.name, bankSelectors);
+      ctx.optimizations.push({
+        name: "x-param-stake-sin-call",
+        detail: `Passed ${xParamStakeSin.param} to ${proc.name} through X.`,
       });
       return true;
     }

@@ -166,6 +166,23 @@ export function compileDecrementUnderflowBranch(ctx: LoweringCtx,
     if (!ctx.statementsTerminate(branch.thenBody)) return false;
     if (ctx.allocation.registers[decrement.target] === undefined) return false;
 
+    if (statementsAreDomainErrorTrap(ctx, branch.thenBody)) {
+      ctx.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
+      ctx.emitNumberOrPreload("1");
+      ctx.emitOp(0x11, "-", `decrement/test ${decrement.target}`, decrement.line);
+      ctx.emitStore(decrement.target, `set ${decrement.target}`, decrement.line);
+      ctx.emitOp(0x21, "F sqrt", "decrement underflow domain guard trap", branch.line);
+      ctx.currentXVariable = undefined;
+      ctx.currentXAliases.clear();
+      ctx.currentXKnownZero = false;
+      ctx.scaledCoordVariables.clear();
+      ctx.optimizations.push({
+        name: "decrement-underflow-domain-guard",
+        detail: `Fused ${decrement.target} decrement and negative terminal-error branch through F sqrt at lines ${decrement.line}/${branch.line}.`,
+      });
+      return true;
+    }
+
     const okLabel = ctx.freshLabel("decrement_ok");
     ctx.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
     ctx.emitNumberOrPreload("1");

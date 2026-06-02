@@ -62,6 +62,7 @@ import {
   matchNegativeZeroThresholdCondition,
   matchStackUnaryDerivationCall,
   matchXParamReturnDecay,
+  matchXParamStakeSinRead,
   normalizeConstantLiteral,
   numberExpression,
   orderRawInputs,
@@ -595,12 +596,24 @@ export function compileProcedures(ctx: LoweringCtx): void {
       ctx.compileWithinProcedure(proc, () => {
         const xParam = ctx.xParamProcs.get(proc.name);
         const xParamDecay = matchXParamReturnDecay(proc);
+        const xParamStakeSin = matchXParamStakeSinRead(ctx.ast, proc);
         if (xParamDecay !== undefined) {
           compileXParamReturnDecayBody(ctx, xParamDecay);
           ctx.emitOp(0x52, "В/О", "x-param decay return", xParamDecay.line);
           ctx.optimizations.push({
             name: "x-param-return-decay",
             detail: `Compiled ${proc.name} to consume ${xParamDecay.param} directly from X.`,
+          });
+        } else if (xParamStakeSin !== undefined) {
+          compileXParamStakeSinReadBody(ctx, xParamStakeSin);
+          ctx.emitOp(0x52, "В/О", "x-param stake-sin return", xParamStakeSin.line);
+          ctx.optimizations.push({
+            name: "x-param-stake-sin-read",
+            detail: `Compiled ${proc.name} to consume ${xParamStakeSin.param} directly from X.`,
+          });
+          ctx.optimizations.push({
+            name: "show-read-stake-sin-lowering",
+            detail: `Reused displayed ${xParamStakeSin.param} as the stack stake for ${proc.name}.`,
           });
         } else if (xParam !== undefined) {
           compileXParamProcBody(ctx, proc, xParam);
@@ -666,6 +679,19 @@ function compileXParamReturnDecayBody(
     ctx.emitOp(0x13, "/", "x-param decay divide", decay.line);
     ctx.emitOp(0x34, "К [x]", "x-param decay int", decay.line);
     ctx.emitOp(0x11, "-", "x-param decay subtract", decay.line);
+}
+
+function compileXParamStakeSinReadBody(
+  ctx: LoweringCtx,
+  stakeSin: { display: string; showLine: number; line: number },
+): void {
+    ctx.emitOp(0x0e, "В↑", "x-param stake keep displayed stake", stakeSin.showLine);
+    ctx.emitOp(0x50, "С/П", `show ${stakeSin.display}`, stakeSin.showLine);
+    ctx.emitOp(0x1c, "F sin", "risk input read()", stakeSin.line);
+    ctx.emitOp(0x01, "1", "risk multiplier", stakeSin.line);
+    ctx.emitOp(0x10, "+", "risk multiplier", stakeSin.line);
+    ctx.emitOp(0x12, "*", "risk stake", stakeSin.line);
+    ctx.emitOp(0x34, "К [x]", "risk integer result", stakeSin.line);
 }
 
 export function compileRuntimeHelpers(ctx: LoweringCtx): void {

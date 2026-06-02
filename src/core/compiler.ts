@@ -96,6 +96,7 @@ import {
   matchNearAnyHelperCondition,
   matchNegativeZeroThresholdCondition,
   matchXParamReturnDecay,
+  matchXParamStakeSinRead,
   matchSingleBitMaskOpAssignment,
   matchTargetMinusDelta,
   matchTargetPlusDelta,
@@ -536,6 +537,18 @@ export interface BankSelectorCacheEntry {
   indexText: string;
   offset: number;
 }
+
+interface LoopCarriedPrompt {
+  name: string;
+  display: string;
+  input: string;
+  initial: ExpressionAst;
+  line: number;
+  showLine: number;
+  inputLine: number;
+}
+
+const loopCarriedPromptInitials = new WeakMap<ProgramAst, Map<string, ExpressionAst>>();
 
 
 // Cheap over-approximate gate for the domain-error-guard candidate: the rewrite
@@ -1863,6 +1876,7 @@ function compileMKProOnce(
   }
   eliminateUnreachableV2Procs(ast, optimizations);
   liftFunctionCallsInExpressions(ast, optimizations);
+  elideLoopCarriedPromptStateFields(ast, optimizations);
 
   const allocation = allocateRegisters(
     ast,
@@ -2853,8 +2867,9 @@ function canInlineFloorPackedRowDisplayExpression(
 
 function elideXParamReturnStateFields(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
   const params = new Set<string>();
+  for (const param of xParamProcParamNames(ast)) params.add(param);
   for (const proc of ast.procs) {
-    const match = matchXParamReturnDecay(proc);
+    const match = matchXParamReturnDecay(proc) ?? matchXParamStakeSinRead(ast, proc);
     if (match === undefined) continue;
     if (!identifierReadOutsideProc(ast, proc.name, match.param)) params.add(match.param);
   }
@@ -2871,6 +2886,383 @@ function elideXParamReturnStateFields(ast: ProgramAst, optimizations: AppliedOpt
       detail: `Removed ${removed} register-backed parameter field${removed === 1 ? "" : "s"} consumed directly from X.`,
     });
   }
+}
+
+function elideLoopCarriedPromptStateFields(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  const prompts = loopCarriedPromptCandidates(ast);
+  if (prompts.length === 0) return;
+  const names = new Set(prompts.map((prompt) => prompt.name));
+  let removed = 0;
+  for (const state of ast.states) {
+    const before = state.fields.length;
+    state.fields = state.fields.filter((field) => !names.has(field.name));
+    removed += before - state.fields.length;
+  }
+  if (removed === 0) return;
+  loopCarriedPromptInitials.set(
+    ast,
+    new Map(prompts.map((prompt) => [prompt.name, prompt.initial])),
+  );
+  optimizations.push({
+    name: "loop-carried-prompt-x",
+    detail: `Kept ${[...names].join(", ")} as loop-carried prompt value(s) in X instead of register-backed state.`,
+  });
+}
+
+function loopCarriedPromptNames(ast: ProgramAst): ReadonlySet<string> {
+  return new Set(loopCarriedPromptInitials.get(ast)?.keys() ?? []);
+}
+
+function xParamProcParamNames(ast: ProgramAst): ReadonlySet<string> {
+  const procCallCounts = collectProcCallCounts(ast);
+  const inlineProcNames = findInlineProcNamesBySize(ast, procCallCounts);
+  const readCounts = collectVariableReadCounts(ast);
+  return new Set([...collectXParamProcLowerings(ast, readCounts, inlineProcNames).values()].map((lowering) => lowering.param));
+}
+
+function loopCarriedPromptCandidates(ast: ProgramAst): LoopCarriedPrompt[] {
+  const candidates: LoopCarriedPrompt[] = [];
+  const visit = (statements: readonly StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "loop") {
+        const candidate = loopCarriedPromptCandidate(ast, statement);
+        if (candidate !== undefined) candidates.push(candidate);
+        visit(statement.body);
+      } else if (statement.kind === "while") {
+        visit(statement.body);
+      } else if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody !== undefined) visit(statement.elseBody);
+      } else if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody !== undefined) visit(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  return candidates.filter((candidate, index) =>
+    candidates.findIndex((other) => other.name === candidate.name) === index
+  );
+}
+
+function loopCarriedPromptCandidate(
+  ast: ProgramAst,
+  loop: Extract<StatementAst, { kind: "loop" }>,
+): LoopCarriedPrompt | undefined {
+  const show = loop.body[0];
+  const input = loop.body[1];
+  if (show?.kind !== "show" || input?.kind !== "input") return undefined;
+  const name = singlePlainDisplaySourceFromAst(ast, show.display);
+  if (name === undefined) return undefined;
+  const initial = findStateFieldInAst(ast, name)?.initial ?? loopCarriedPromptInitials.get(ast)?.get(name);
+  if (initial === undefined) return undefined;
+  if (loopPromptHasReadsOutsideHeader(ast, name, show)) return undefined;
+  if (!statementsAssignLoopPrompt(ast, loop.body.slice(2), name)) return undefined;
+  if (!statementsGuaranteeLoopPrompt(ast, loop.body.slice(2), name)) return undefined;
+  if (!loopPromptAssignmentsConfinedToCandidate(ast, loop, name)) return undefined;
+  return {
+    name,
+    display: show.display,
+    input: input.target,
+    initial,
+    line: loop.line,
+    showLine: show.line,
+    inputLine: input.line,
+  };
+}
+
+function singlePlainDisplaySourceFromAst(ast: ProgramAst, displayName: string): string | undefined {
+  const display = ast.displays.find((candidate) => candidate.name === displayName);
+  if (display === undefined || display.items.length !== 1) return undefined;
+  const [item] = display.items;
+  if (item?.kind !== "source" || item.expr !== undefined || item.width !== undefined) return undefined;
+  return item.name;
+}
+
+function loopPromptHasReadsOutsideHeader(
+  ast: ProgramAst,
+  name: string,
+  headerShow: Extract<StatementAst, { kind: "show" }>,
+): boolean {
+  const exprReads = (expr: ExpressionAst): boolean => expressionReferencesIdentifier(expr, name);
+  const conditionReads = (condition: ConditionAst): boolean =>
+    exprReads(condition.left) || exprReads(condition.right);
+  const showReads = (statement: Extract<StatementAst, { kind: "show" }>): boolean => {
+    if (statement === headerShow) return false;
+    const display = ast.displays.find((candidate) => candidate.name === statement.display);
+    return display?.items.some((item) =>
+      item.kind === "source" &&
+      (item.name === name || item.expr !== undefined && exprReads(item.expr))
+    ) ?? false;
+  };
+  const statementReads = (statement: StatementAst): boolean => {
+    switch (statement.kind) {
+      case "pause":
+      case "halt":
+      case "return_value":
+        return exprReads(statement.expr);
+      case "assign":
+        return exprReads(statement.expr);
+      case "indexed_assign":
+        return exprReads(statement.target.index) || exprReads(statement.expr);
+      case "coord_list_remove":
+        return exprReads(statement.item);
+      case "while":
+        return conditionReads(statement.condition) || statementsRead(statement.body);
+      case "if":
+        return conditionReads(statement.condition) ||
+          statementsRead(statement.thenBody) ||
+          (statement.elseBody !== undefined && statementsRead(statement.elseBody));
+      case "dispatch":
+        return exprReads(statement.expr) ||
+          statement.cases.some((dispatchCase) => exprReads(dispatchCase.value) || statementsRead(dispatchCase.body)) ||
+          (statement.defaultBody !== undefined && statementsRead(statement.defaultBody));
+      case "show":
+        return showReads(statement);
+      case "loop":
+        return statementsRead(statement.body);
+      case "core":
+        return (statement.inputs ?? []).some((input) => exprReads(input.expr));
+      case "input":
+      case "call":
+      case "decimal_series":
+        return false;
+    }
+  };
+  const statementsRead = (statements: readonly StatementAst[]): boolean =>
+    statements.some(statementReads);
+  return ast.entries.some((entry) => statementsRead(entry.body)) ||
+    ast.procs.some((proc) => statementsRead(proc.body));
+}
+
+function statementsGuaranteeLoopPrompt(
+  ast: ProgramAst,
+  statements: readonly StatementAst[],
+  name: string,
+  seenProcs = new Set<string>(),
+): boolean {
+  const last = statements.at(-1);
+  if (last === undefined) return false;
+  return statementGuaranteesLoopPrompt(ast, last, name, seenProcs);
+}
+
+function statementsAssignLoopPrompt(
+  ast: ProgramAst,
+  statements: readonly StatementAst[],
+  name: string,
+  seenProcs = new Set<string>(),
+): boolean {
+  return statements.some((statement) => statementAssignsLoopPrompt(ast, statement, name, seenProcs));
+}
+
+function statementAssignsLoopPrompt(
+  ast: ProgramAst,
+  statement: StatementAst,
+  name: string,
+  seenProcs: Set<string>,
+): boolean {
+  switch (statement.kind) {
+    case "assign":
+      return statement.target === name;
+    case "call": {
+      if (seenProcs.has(statement.block)) return false;
+      const proc = ast.procs.find((candidate) => candidate.name === statement.block);
+      if (proc === undefined) return false;
+      const nextSeen = new Set(seenProcs);
+      nextSeen.add(statement.block);
+      return statementsAssignLoopPrompt(ast, proc.body, name, nextSeen);
+    }
+    case "if":
+      return statementsAssignLoopPrompt(ast, statement.thenBody, name, seenProcs) ||
+        (statement.elseBody !== undefined && statementsAssignLoopPrompt(ast, statement.elseBody, name, seenProcs));
+    case "dispatch":
+      return statement.cases.some((dispatchCase) =>
+        statementsAssignLoopPrompt(ast, dispatchCase.body, name, seenProcs)
+      ) ||
+        (statement.defaultBody !== undefined && statementsAssignLoopPrompt(ast, statement.defaultBody, name, seenProcs));
+    case "loop":
+    case "while":
+      return statementsAssignLoopPrompt(ast, statement.body, name, seenProcs);
+    default:
+      return false;
+  }
+}
+
+function statementGuaranteesLoopPrompt(
+  ast: ProgramAst,
+  statement: StatementAst,
+  name: string,
+  seenProcs: Set<string>,
+): boolean {
+  switch (statement.kind) {
+    case "assign":
+      return statement.target === name;
+    case "halt":
+    case "loop":
+      return true;
+    case "call": {
+      if (seenProcs.has(statement.block)) return false;
+      const proc = ast.procs.find((candidate) => candidate.name === statement.block);
+      if (proc === undefined) return false;
+      const nextSeen = new Set(seenProcs);
+      nextSeen.add(statement.block);
+      return statementsGuaranteeLoopPrompt(ast, proc.body, name, nextSeen);
+    }
+    case "if":
+      return statement.elseBody !== undefined &&
+        statementsGuaranteeLoopPrompt(ast, statement.thenBody, name, seenProcs) &&
+        statementsGuaranteeLoopPrompt(ast, statement.elseBody, name, seenProcs);
+    case "dispatch":
+      return statement.defaultBody !== undefined &&
+        statement.cases.every((dispatchCase) =>
+          statementsGuaranteeLoopPrompt(ast, dispatchCase.body, name, seenProcs)
+        ) &&
+        statementsGuaranteeLoopPrompt(ast, statement.defaultBody, name, seenProcs);
+    default:
+      return false;
+  }
+}
+
+function loopPromptAssignmentsConfinedToCandidate(
+  ast: ProgramAst,
+  loop: Extract<StatementAst, { kind: "loop" }>,
+  name: string,
+): boolean {
+  const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
+  const reachableFromLoop = collectReachableProcNamesFromStatements(ast, loop.body.slice(2));
+  const mutatingProcs = collectPromptMutatingProcNames(ast, name);
+  if ([...mutatingProcs].some((procName) => !reachableFromLoop.has(procName))) return false;
+
+  let ok = true;
+  const visit = (
+    statements: readonly StatementAst[],
+    insideCandidateLoop: boolean,
+    currentProc?: string,
+  ): void => {
+    for (const statement of statements) {
+      if (statement === loop) {
+        visit(statement.body.slice(2), true, currentProc);
+        continue;
+      }
+      if (
+        statement.kind === "assign" &&
+        statement.target === name &&
+        !insideCandidateLoop &&
+        (currentProc === undefined || !mutatingProcs.has(currentProc))
+      ) {
+        ok = false;
+      }
+      if (
+        statement.kind === "call" &&
+        mutatingProcs.has(statement.block) &&
+        !insideCandidateLoop &&
+        (currentProc === undefined || !mutatingProcs.has(currentProc))
+      ) {
+        ok = false;
+      }
+      for (const callee of statementExpressionCallees(statement)) {
+        if (
+          mutatingProcs.has(callee) &&
+          !insideCandidateLoop &&
+          (currentProc === undefined || !mutatingProcs.has(currentProc))
+        ) {
+          ok = false;
+        }
+      }
+      if (statement.kind === "loop") visit(statement.body, insideCandidateLoop, currentProc);
+      if (statement.kind === "while") visit(statement.body, insideCandidateLoop, currentProc);
+      if (statement.kind === "if") {
+        visit(statement.thenBody, insideCandidateLoop, currentProc);
+        if (statement.elseBody !== undefined) visit(statement.elseBody, insideCandidateLoop, currentProc);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body, insideCandidateLoop, currentProc);
+        if (statement.defaultBody !== undefined) visit(statement.defaultBody, insideCandidateLoop, currentProc);
+      }
+    }
+  };
+
+  for (const entry of ast.entries) visit(entry.body, false);
+  for (const proc of procMap.values()) visit(proc.body, false, proc.name);
+  return ok;
+}
+
+function collectReachableProcNamesFromStatements(
+  ast: ProgramAst,
+  roots: readonly StatementAst[],
+): Set<string> {
+  const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
+  const reachable = new Set<string>();
+  const queue: string[] = [];
+  const enqueue = (name: string): void => {
+    if (procMap.has(name) && !reachable.has(name)) {
+      reachable.add(name);
+      queue.push(name);
+    }
+  };
+  const visit = (statements: readonly StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "call") enqueue(statement.block);
+      for (const callee of statementExpressionCallees(statement)) enqueue(callee);
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "while") visit(statement.body);
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody !== undefined) visit(statement.elseBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody !== undefined) visit(statement.defaultBody);
+      }
+    }
+  };
+
+  visit(roots);
+  while (queue.length > 0) {
+    const proc = procMap.get(queue.shift()!);
+    if (proc !== undefined) visit(proc.body);
+  }
+  return reachable;
+}
+
+function collectPromptMutatingProcNames(ast: ProgramAst, name: string): Set<string> {
+  const mutating = new Set<string>();
+  for (const proc of ast.procs) {
+    if (statementsAssignLoopPrompt(ast, proc.body, name)) mutating.add(proc.name);
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const proc of ast.procs) {
+      if (mutating.has(proc.name)) continue;
+      if (statementsCallAnyProc(proc.body, mutating)) {
+        mutating.add(proc.name);
+        changed = true;
+      }
+    }
+  }
+  return mutating;
+}
+
+function statementsCallAnyProc(
+  statements: readonly StatementAst[],
+  names: ReadonlySet<string>,
+): boolean {
+  return statements.some((statement) => {
+    if (statement.kind === "call" && names.has(statement.block)) return true;
+    if (statementExpressionCallees(statement).some((callee) => names.has(callee))) return true;
+    if (statement.kind === "loop" || statement.kind === "while") return statementsCallAnyProc(statement.body, names);
+    if (statement.kind === "if") {
+      return statementsCallAnyProc(statement.thenBody, names) ||
+        (statement.elseBody !== undefined && statementsCallAnyProc(statement.elseBody, names));
+    }
+    if (statement.kind === "dispatch") {
+      return statement.cases.some((dispatchCase) => statementsCallAnyProc(dispatchCase.body, names)) ||
+        (statement.defaultBody !== undefined && statementsCallAnyProc(statement.defaultBody, names));
+    }
+    return false;
+  });
 }
 
 function identifierReadOutsideProc(ast: ProgramAst, procName: string, name: string): boolean {
@@ -4899,6 +5291,7 @@ export class EmitContext {
   readonly warnings: string[];
   readonly candidates: CandidateReport[];
   readonly loweringOptions: LoweringOptions;
+  readonly loopPromptInitials: ReadonlyMap<string, ExpressionAst>;
   private currentProcedure: ProcAst | undefined;
   // Set when a show was fused into a following read so its calculator stop also
   // serves as the input entry; the next read() lowering consumes this instead of
@@ -5067,6 +5460,7 @@ export class EmitContext {
     this.warnings = warnings;
     this.candidates = candidates;
     this.loweringOptions = loweringOptions;
+    this.loopPromptInitials = loopCarriedPromptInitials.get(ast) ?? new Map();
     this.analysis = buildProgramAnalysis(ast, allocation);
   }
 
@@ -5359,6 +5753,14 @@ export class EmitContext {
       }
       if (
         statement.kind === "show" &&
+        (next?.kind === "return_value" || next?.kind === "assign") &&
+        this.compileShowReadStakeSinResult(statement, undefined, next)
+      ) {
+        index += 1;
+        continue;
+      }
+      if (
+        statement.kind === "show" &&
         next?.kind === "input" &&
         statements[index + 2]?.kind === "if" &&
         this.inputFeedsOnlyFollowingCondition(next, statements[index + 2] as Extract<StatementAst, { kind: "if" }>)
@@ -5450,6 +5852,51 @@ export class EmitContext {
       }
       this.compileStatement(statement);
     }
+  }
+
+  compileLoopCarriedPrompt(
+    statement: Extract<StatementAst, { kind: "loop" }>,
+  ): boolean {
+    const prompt = loopCarriedPromptCandidate(this.ast, statement);
+    if (prompt === undefined || !this.loopPromptInitials.has(prompt.name)) return false;
+    if (isZeroExpression(prompt.initial)) this.emitZero(`initial prompt ${prompt.name}`, prompt.showLine);
+    else compileExpression(this, prompt.initial);
+    const start = this.freshLabel("loop_prompt");
+    this.emitLabel(start);
+    this.currentXVariable = prompt.name;
+    this.currentXAliases = new Set([prompt.name]);
+    this.emitOp(0x50, "С/П", `show ${prompt.display}`, prompt.showLine);
+    this.markCurrentX(prompt.input);
+    this.emitStore(prompt.input, `read ${prompt.input}`, prompt.inputLine);
+    this.compileStatements(statement.body.slice(2));
+    if (!this.statementsEndMachineFlow(statement.body)) {
+      if (!emitKnownOneIndirectLoopBack(this, start, statement.line)) {
+        this.emitJump(0x51, "БП", start, "loop-carried prompt back", statement.line);
+      }
+    }
+    this.optimizations.push({
+      name: "loop-carried-prompt-x",
+      detail: `Used X as the carried display/input prompt ${prompt.name} for loop at line ${statement.line}.`,
+    });
+    return true;
+  }
+
+  compileLoopCarriedPromptAssignment(statement: Extract<StatementAst, { kind: "assign" }>): boolean {
+    if (!this.loopPromptInitials.has(statement.target)) return false;
+    if (isZeroExpression(statement.expr)) this.emitZero(`set prompt ${statement.target}`, statement.line);
+    else if (statement.expr.kind === "identifier" && this.currentXAliases.has(statement.expr.name)) {
+      // The requested prompt value is already in X.
+    } else if (this.currentXVariable !== statement.target || !expressionEquals(statement.expr, { kind: "identifier", name: statement.target })) {
+      compileExpression(this, statement.expr);
+    }
+    this.currentXVariable = statement.target;
+    this.currentXAliases = new Set([statement.target]);
+    this.scaledCoordVariables.delete(statement.target);
+    this.optimizations.push({
+      name: "loop-carried-prompt-x",
+      detail: `Left prompt ${statement.target} in X at line ${statement.line} instead of storing it.`,
+    });
+    return true;
   }
 
   compileInitializedUnitDecrementWhile(
@@ -6336,19 +6783,23 @@ export class EmitContext {
 
   compileShowReadStakeSinResult(
     show: Extract<StatementAst, { kind: "show" }>,
-    input: Extract<StatementAst, { kind: "input" }>,
+    input: Extract<StatementAst, { kind: "input" }> | undefined,
     consumer: Extract<StatementAst, { kind: "assign" | "return_value" }>,
   ): boolean {
     const stake = this.singlePlainDisplaySource(show.display);
     if (stake === undefined) return false;
-    const inputReads = countIdentifierReads(consumer.expr, input.target);
-    if (inputReads === 0 || (this.readCounts.get(input.target) ?? 0) !== inputReads) return false;
-    if (!matchStakeSinInputExpression(consumer.expr, stake, input.target)) return false;
+    if (input !== undefined) {
+      const inputReads = countIdentifierReads(consumer.expr, input.target);
+      if (inputReads === 0 || (this.readCounts.get(input.target) ?? 0) !== inputReads) return false;
+      if (!matchStakeSinInputExpression(consumer.expr, stake, input.target)) return false;
+    } else if (!matchStakeSinReadExpression(consumer.expr, stake)) {
+      return false;
+    }
 
     this.emitRecall(stake, `display ${show.display} source`, show.line);
     this.emitOp(0x0e, "В↑", "keep displayed stake in Y", show.line);
     this.emitOp(0x50, "С/П", `show ${show.display}`, show.line);
-    this.emitOp(0x1c, "F sin", `risk input ${input.target}`, input.line);
+    this.emitOp(0x1c, "F sin", input === undefined ? "risk input read()" : `risk input ${input.target}`, input?.line ?? consumer.line);
     this.emitOp(0x01, "1", "risk multiplier", consumer.line);
     this.emitOp(0x10, "+", "risk multiplier", consumer.line);
     this.emitOp(0x12, "*", "risk stake", consumer.line);
@@ -6500,6 +6951,7 @@ export class EmitContext {
         this.emitOp(0x50, "С/П", "halt", statement.line);
         return;
       case "assign":
+        if (this.compileLoopCarriedPromptAssignment(statement)) return;
         if (compileCoordListLineCountAssignment(this, statement)) return;
         if (compileUnitDecrement(this, statement)) return;
         if (compileUnitIncrement(this, statement)) return;
@@ -6530,6 +6982,7 @@ export class EmitContext {
         this.emitIndexedStore(statement.target, statement.line);
         return;
       case "loop": {
+        if (this.compileLoopCarriedPrompt(statement)) return;
         const start = this.freshLabel("loop");
         this.emitLabel(start);
         // The back-edge (БП -> start) is emitted after the body, so its X-fact
@@ -7881,6 +8334,9 @@ export class EmitContext {
       return;
     }
     this.emitNumber("0");
+    this.currentXVariable = undefined;
+    this.currentXAliases.clear();
+    this.currentXKnownZero = true;
     if (comment !== undefined) {
       const last = this.items.at(-1);
       if (last?.kind === "op" && last.comment === undefined) last.comment = comment;
@@ -8201,7 +8657,7 @@ export class EmitContext {
 
     const indexText = expressionToIntentText(expr.index);
     const cacheKey = `${bankMemberKey(expr.base, expr.field)}:${indexText}:${offset}`;
-    const cacheable = expressionCallCallees(expr.index).length === 0;
+    const cacheable = expressionIsDeterministic(expr.index);
     const cached = this.bankSelectorCache.get(selectorName);
     if (cacheable && cached?.key === cacheKey) return selector;
     const sibling = cacheable
@@ -8498,24 +8954,40 @@ function decrementUnderflowCondition(condition: ConditionAst, target: string): b
 }
 
 function matchStakeSinInputExpression(expr: ExpressionAst, stake: string, input: string): boolean {
+  return matchStakeSinExpression(expr, stake, (candidate) => isIdentifierExpression(candidate, input));
+}
+
+function matchStakeSinReadExpression(expr: ExpressionAst, stake: string): boolean {
+  return matchStakeSinExpression(expr, stake, isReadCallExpression);
+}
+
+function matchStakeSinExpression(
+  expr: ExpressionAst,
+  stake: string,
+  inputMatcher: (expr: ExpressionAst) => boolean,
+): boolean {
   if (expr.kind !== "call" || expr.callee.toLowerCase() !== "int" || expr.args.length !== 1) return false;
   const body = expr.args[0]!;
   if (body.kind !== "binary" || body.op !== "*") return false;
-  return (isIdentifierExpression(body.left, stake) && isOnePlusSinInput(body.right, input)) ||
-    (isIdentifierExpression(body.right, stake) && isOnePlusSinInput(body.left, input));
+  return (isIdentifierExpression(body.left, stake) && isOnePlusSinInput(body.right, inputMatcher)) ||
+    (isIdentifierExpression(body.right, stake) && isOnePlusSinInput(body.left, inputMatcher));
 }
 
-function isOnePlusSinInput(expr: ExpressionAst, input: string): boolean {
+function isOnePlusSinInput(expr: ExpressionAst, inputMatcher: (expr: ExpressionAst) => boolean): boolean {
   if (expr.kind !== "binary" || expr.op !== "+") return false;
-  return (isNumericValue(expr.left, 1) && isSinInput(expr.right, input)) ||
-    (isNumericValue(expr.right, 1) && isSinInput(expr.left, input));
+  return (isNumericValue(expr.left, 1) && isSinInput(expr.right, inputMatcher)) ||
+    (isNumericValue(expr.right, 1) && isSinInput(expr.left, inputMatcher));
 }
 
-function isSinInput(expr: ExpressionAst, input: string): boolean {
+function isSinInput(expr: ExpressionAst, inputMatcher: (expr: ExpressionAst) => boolean): boolean {
   return expr.kind === "call" &&
     expr.callee.toLowerCase() === "sin" &&
     expr.args.length === 1 &&
-    isIdentifierExpression(expr.args[0]!, input);
+    inputMatcher(expr.args[0]!);
+}
+
+function isReadCallExpression(expr: ExpressionAst): boolean {
+  return expr.kind === "call" && expr.callee.toLowerCase() === "read" && expr.args.length === 0;
 }
 
 function isIdentifierExpression(expr: ExpressionAst, name: string): boolean {
@@ -9589,6 +10061,7 @@ function allocateRegisters(
   const declared = new Set<string>();
   const hints = new Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>();
   const variables = new Set<string>();
+  const xParamNames = xParamProcParamNames(ast);
 
   for (const state of ast.states) {
     for (const field of state.fields) {
@@ -9603,8 +10076,9 @@ function allocateRegisters(
   }
   for (const proc of ast.procs) {
     const xParamReturn = matchXParamReturnDecay(proc);
+    const xParamStakeSin = matchXParamStakeSinRead(ast, proc);
     for (const param of proc.params ?? []) {
-      if (xParamReturn?.param === param) continue;
+      if (xParamReturn?.param === param || xParamStakeSin?.param === param || xParamNames.has(param)) continue;
       declared.add(param);
       variables.add(param);
     }
@@ -11411,9 +11885,13 @@ function warnUndeclaredAssignments(
 ): void {
   const seen = new Set<string>();
   const ephemeralInputs = collectEphemeralInputTargets(ast);
+  const loopPrompts = loopCarriedPromptNames(ast);
+  const xParamNames = xParamProcParamNames(ast);
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "assign" || statement.kind === "input") {
+        if (loopPrompts.has(statement.target)) continue;
+        if (xParamNames.has(statement.target)) continue;
         if (statement.kind === "input" && ephemeralInputs.has(statement.target)) continue;
         if (statement.target.startsWith(DISPLAY_EXPR_PREFIX)) continue;
         if (!declared.has(statement.target) && !seen.has(statement.target)) {
@@ -11443,10 +11921,12 @@ function warnUndeclaredAssignments(
 
 function collectAssignedVariables(ast: ProgramAst, variables: Set<string>): void {
   const ephemeralInputs = collectEphemeralInputTargets(ast);
+  const loopPrompts = loopCarriedPromptNames(ast);
+  const xParamNames = xParamProcParamNames(ast);
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "assign") {
-        variables.add(statement.target);
+        if (!loopPrompts.has(statement.target) && !xParamNames.has(statement.target)) variables.add(statement.target);
       }
       if (statement.kind === "input" && !ephemeralInputs.has(statement.target)) variables.add(statement.target);
       if (statement.kind === "loop") visit(statement.body);
@@ -11475,7 +11955,11 @@ function collectFunctionTailCallScratchVariables(ast: ProgramAst, variables: Set
     for (const statement of statements) {
       if (statement.kind === "return_value" && statement.expr.kind === "call") {
         const target = functionProcs.get(statement.expr.callee);
-        if (target !== undefined && matchXParamReturnDecay(target) === undefined) {
+        if (
+          target !== undefined &&
+          matchXParamReturnDecay(target) === undefined &&
+          matchXParamStakeSinRead(ast, target) === undefined
+        ) {
           for (let index = 0; index < statement.expr.args.length; index += 1) {
             variables.add(functionTailArgScratchName(target.name, index));
           }

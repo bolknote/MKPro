@@ -29,7 +29,7 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
-| `cave-highlevel-baseline.mkpro` | 194 | 105 | source-faithful fixed wall/cache setup, prompt/result screen state, resource pressure, movement decoder, and remaining cave flow lowerers |
+| `cave-highlevel-baseline.mkpro` | 150 | 105 | source-faithful fixed wall/cache setup, resource pressure, movement decoder, and remaining cave flow lowerers |
 | `cave-treasure.mkpro` | 165 | 105 | resource pressure, wall breaking, cache miss flow, and remaining dispatch overhead |
 | `giants-country.mkpro` | 170 | 105 | packed room-map display/flow and remaining event flow lowerers |
 | `labyrinth777.mkpro` | 163 | 105 | room inspection and local-jumper dispatch; break-even indirect-call guard now collapses the repeated room/jumper helper calls to single-cell `К ПП r` |
