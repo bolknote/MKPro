@@ -252,10 +252,12 @@ export function emitDashedCoordReportCellBody(ctx: LoweringCtx,
     commentPrefix: string,
   ): void {
     if (!ctx.xHolds(template.cell.name)) ctx.emitRecall(template.cell.name, `${commentPrefix} cell`, line);
+    // A scaled-decimal cell already carries one extra decimal place, so it shifts
+    // one exponent higher than the format's plain cell scale.
     if (ctx.scaledCoordVariables.has(template.cell.name)) {
-      ctx.emitNumber("5");
+      ctx.emitNumber(String(template.format.cellScaleExp + 1));
     } else {
-      ctx.emitNumber("4");
+      ctx.emitNumber(String(template.format.cellScaleExp));
     }
     ctx.emitOp(0x15, "F 10^x", `${commentPrefix} cell scale`, line);
     ctx.emitOp(0x12, "*", `${commentPrefix} cell shift`, line);

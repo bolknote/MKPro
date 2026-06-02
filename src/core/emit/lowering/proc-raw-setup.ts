@@ -34,7 +34,7 @@ import type {
 } from "../lowering-helpers.ts";
 import {
   COORD_LIST_DX,
-  DASHED_COORD_REPORT_MASK,
+  dashedCoordReportFormatForProgram,
   NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE,
   PACKED_COUNTER_PREFIX,
   buildDiagnostic,
@@ -70,7 +70,6 @@ import {
   orderRawInputs,
   parseRawInstruction,
   positiveIntegerPowerOfTenExponent,
-  programUsesDashedCoordReport,
   randomCoordListItemPlacement,
   randomCoordListSetupFields,
   selectCheaperEquivalentCondition,
@@ -224,9 +223,10 @@ export function compileSetupProgramWithPreloads(ctx: LoweringCtx,
       compileExpression(ctx, field.initial);
       ctx.emitStore(field.name, `setup ${field.name}`, field.line, true);
     }
-    if (programUsesDashedCoordReport(ctx.ast)) {
+    const dashedReportFormat = dashedCoordReportFormatForProgram(ctx.ast);
+    if (dashedReportFormat !== undefined) {
       const register = ctx.allocation.registers[COORD_LIST_DX];
-      const program = displayLiteralProgram(DASHED_COORD_REPORT_MASK);
+      const program = displayLiteralProgram(dashedReportFormat.mask);
       if (register !== undefined && program !== undefined && program.kind !== "error") {
         emitDisplayLiteralProgram(ctx, program, undefined, "setup dashed report mask");
         ctx.emitOp(0x40 + registerIndex(register), `X->П ${register}`, "setup dashed report mask", undefined, true);

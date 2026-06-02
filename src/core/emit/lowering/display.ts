@@ -289,7 +289,7 @@ export function compileDashedCoordReportDisplay(ctx: LoweringCtx, display: Progr
     }
 
     if (ctx.currentXDashedCoordReportBodyMatches(template)) {
-      emitDashedCoordReportPackedBodyDisplay(ctx, display.name, maskRegister, line);
+      emitDashedCoordReportPackedBodyDisplay(ctx, display.name, maskRegister, line, template.format.videoAnchorExp);
       ctx.optimizations.push({
         name: "dashed-coord-report-packed-body",
         detail: `Reused packed --CC-- N body already in X for screen ${display.name}.`,
@@ -309,11 +309,11 @@ export function compileDashedCoordReportDisplay(ctx: LoweringCtx, display: Progr
       ctx.emitNumberOrPreload("10");
       ctx.emitOp(0x12, "*", "display dashed scaled cell restore", line);
     }
-    ctx.emitNumber("4");
+    ctx.emitNumber(String(template.format.cellScaleExp));
     ctx.emitOp(0x15, "F 10^x", "display dashed cell scale", line);
     ctx.emitOp(0x12, "*", "display dashed cell shift", line);
     ctx.emitOp(0x10, "+", "display dashed bearing append", line);
-    ctx.emitNumber("7");
+    ctx.emitNumber(String(template.format.videoAnchorExp));
     ctx.emitOp(0x15, "F 10^x", "display dashed video anchor", line);
     ctx.emitOp(0x10, "+", "display dashed video body", line);
     ctx.emitOp(0x60 + registerIndex(maskRegister), `П->X ${maskRegister}`, `display ${display.name} dashed mask`, line);
@@ -321,7 +321,7 @@ export function compileDashedCoordReportDisplay(ctx: LoweringCtx, display: Progr
     ctx.emitOp(0x35, "К {x}", "display dashed video fraction", line);
     ctx.emitOp(0x0b, "/-/", "display dashed sign", line);
     ctx.emitOp(0x0c, "ВП", "display dashed exponent entry", line);
-    ctx.emitOp(0x07, "7", "display dashed exponent", line);
+    ctx.emitOp(0x00 + template.format.videoAnchorExp, String(template.format.videoAnchorExp), "display dashed exponent", line);
     ctx.emitOp(0x50, "С/П", `show ${display.name}`, line);
     ctx.optimizations.push({
       name: "dashed-coord-report-lowering",
@@ -330,8 +330,8 @@ export function compileDashedCoordReportDisplay(ctx: LoweringCtx, display: Progr
     return true;
 }
 
-export function emitDashedCoordReportPackedBodyDisplay(ctx: LoweringCtx, displayName: string, maskRegister: RegisterName, line: number): void {
-    ctx.emitNumber("7");
+export function emitDashedCoordReportPackedBodyDisplay(ctx: LoweringCtx, displayName: string, maskRegister: RegisterName, line: number, videoAnchorExp: number): void {
+    ctx.emitNumber(String(videoAnchorExp));
     ctx.emitOp(0x15, "F 10^x", "display dashed video anchor", line);
     ctx.emitOp(0x10, "+", "display dashed video body", line);
     ctx.emitOp(0x60 + registerIndex(maskRegister), `П->X ${maskRegister}`, `display ${displayName} dashed mask`, line);
@@ -339,7 +339,7 @@ export function emitDashedCoordReportPackedBodyDisplay(ctx: LoweringCtx, display
     ctx.emitOp(0x35, "К {x}", "display dashed video fraction", line);
     ctx.emitOp(0x0b, "/-/", "display dashed sign", line);
     ctx.emitOp(0x0c, "ВП", "display dashed exponent entry", line);
-    ctx.emitOp(0x07, "7", "display dashed exponent", line);
+    ctx.emitOp(0x00 + videoAnchorExp, String(videoAnchorExp), "display dashed exponent", line);
     ctx.emitOp(0x50, "С/П", `show ${displayName}`, line);
 }
 

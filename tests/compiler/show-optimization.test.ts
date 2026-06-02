@@ -957,6 +957,31 @@ program DashedCoordReportRun {
     expect(calc.displayText()).toBe("--58-- 0,");
   });
 
+  // The dashed-report recognizer now captures any `<literal> cell:width
+  // <literal> bearing:width` shape and gates it on a verified layout descriptor
+  // (the video mask/scale are hardware-fitted to the exact field widths). A
+  // report whose field widths do not match a verified layout must not take the
+  // video-mask path; it falls back to the generic display lowering.
+  it("does not apply the video-mask report path to an unverified field-width layout", () => {
+    const result = compileOk(`
+program UnverifiedCoordReport {
+  field: board(0..9, 0..9)
+
+  state {
+    cell: coord(field) = 58
+    foxes: coord_list(field, 1) = 0
+    bearing: counter 0..99 = 0
+  }
+
+  loop {
+    bearing = line_count(foxes, cell)
+    show("--", cell:02, "--", bearing:02)
+  }
+}
+`);
+    expect(hasOptimization(result, "dashed-coord-report-lowering")).toBe(false);
+  });
+
   it("fuses coord_list hit checks with the following line_count scan", () => {
     const result = compileOk(`
 program FusedFoxScan {

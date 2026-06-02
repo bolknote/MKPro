@@ -44,7 +44,26 @@ export const COORD_LIST_CURRENT = "__coord_list_current";
 
 export const COORD_LIST_DX = "__coord_list_dx";
 
-export const DASHED_COORD_REPORT_MASK = "8,-00--_";
+// A dashed coordinate report renders a `<prefix> CC <separator> N` screen as one
+// MK-61 video-format word. The video mask (the literal separator/anchor segments)
+// together with the cell scale and video-anchor exponents are jointly
+// hardware-fitted to the exact screen layout — field widths and separators — so
+// each supported layout is one verified descriptor rather than a free constant.
+// Only on-hardware-verified layouts appear here; any other 4-item report shape
+// falls back to the generic per-item display lowering.
+export interface DashedCoordReportFormat {
+  prefix: string;
+  cellWidth: number;
+  separator: string;
+  bearingWidth: number;
+  mask: string;
+  cellScaleExp: number;
+  videoAnchorExp: number;
+}
+
+export const VERIFIED_DASHED_COORD_REPORT_FORMATS: readonly DashedCoordReportFormat[] = [
+  { prefix: "--", cellWidth: 2, separator: "--", bearingWidth: 1, mask: "8,-00--_", cellScaleExp: 4, videoAnchorExp: 7 },
+];
 
 export const NEGATIVE_ZERO_DEGREE_SELECTOR_GE = "__mkpro_negative_zero_ge";
 
@@ -108,6 +127,7 @@ export interface DisplayField {
 export interface DashedCoordReportTemplate {
   cell: DisplayField;
   bearing: DisplayField;
+  format: DashedCoordReportFormat;
 }
 
 export function matchEqualityConstantCondition(
@@ -287,7 +307,18 @@ export function programHasLineCountForMask(ast: ProgramAst, maskName: string): b
 }
 
 export function programUsesDashedCoordReport(ast: ProgramAst): boolean {
-  return ast.displays.some((display) => dashedCoordReportDisplayTemplate(display) !== undefined);
+  return dashedCoordReportFormatForProgram(ast) !== undefined;
+}
+
+// The mask preload register is shared across the whole program, so the setup
+// emitter needs the report format actually in use; return the format of the
+// first dashed-report screen, if any.
+export function dashedCoordReportFormatForProgram(ast: ProgramAst): DashedCoordReportFormat | undefined {
+  for (const display of ast.displays) {
+    const template = dashedCoordReportDisplayTemplate(display);
+    if (template !== undefined) return template.format;
+  }
+  return undefined;
 }
 
 export function dashedCoordReportDisplayTemplate(
@@ -303,14 +334,26 @@ export function dashedCoordReportDisplayTemplate(
   ) {
     return undefined;
   }
-  if (normalizeDisplayTemplateLiteral(prefix.text) !== "--") return undefined;
-  if (normalizeDisplayTemplateLiteral(separator.text) !== "--") return undefined;
-  const result: DashedCoordReportTemplate = {
-    cell: { kind: "source", item: cell, name: cell.name, width: cell.width ?? 2 },
-    bearing: { kind: "source", item: bearing, name: bearing.name, width: bearing.width ?? 1 },
+  // Recognize an arbitrary `<literal> cell:width <literal> bearing:width` report,
+  // then gate it on a verified layout descriptor: the video mask and exponents
+  // are hardware-fitted to the exact separators and field widths, so only
+  // verified layouts lower (others fall through to the generic display path).
+  const prefixText = normalizeDisplayTemplateLiteral(prefix.text);
+  const separatorText = normalizeDisplayTemplateLiteral(separator.text);
+  const cellWidth = cell.width ?? 2;
+  const bearingWidth = bearing.width ?? 1;
+  const format = VERIFIED_DASHED_COORD_REPORT_FORMATS.find((candidate) =>
+    candidate.prefix === prefixText &&
+    candidate.separator === separatorText &&
+    candidate.cellWidth === cellWidth &&
+    candidate.bearingWidth === bearingWidth,
+  );
+  if (format === undefined) return undefined;
+  return {
+    cell: { kind: "source", item: cell, name: cell.name, width: cellWidth },
+    bearing: { kind: "source", item: bearing, name: bearing.name, width: bearingWidth },
+    format,
   };
-  if (result.cell.width !== 2 || result.bearing.width !== 1) return undefined;
-  return result;
 }
 
 export function normalizeDisplayTemplateLiteral(text: string): string {

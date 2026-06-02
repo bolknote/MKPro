@@ -350,7 +350,7 @@ Display rewrites are separated into strategy selection + body lowering.
 - `display-byte-helper-call` — calls `display-byte-helper` when available.
 - `floor-packed-row-display` — merges `floor` + packed-row into one short path.
 - `floor-packed-row-expression-display` — same for expressions where floor comes from an expression.
-- `dashed-coord-report-lowering` — compact output for dashed-coordinate reports.
+- `dashed-coord-report-lowering` — compact output for dashed-coordinate reports. The recognizer now captures any `<literal> cell:width <literal> bearing:width` report shape and gates it on a verified layout descriptor (`VERIFIED_DASHED_COORD_REPORT_FORMATS`): the video mask, the cell-scale exponent, and the video-anchor exponent are all read from that descriptor instead of scattered constants. The mask and exponents are hardware-fitted to the exact separators and field widths, so only on-hardware-verified layouts (currently the `--CC--N` screen: prefix `--`, cell width 2, separator `--`, bearing width 1, mask `8,-00--_`) lower through the video path; any other shape falls back to the generic per-item display lowering. Adding a new report layout is a data-only entry once its mask is verified.
 - `dashed-coord-report-packed-body` — compresses report body into packed format.
 - `display-decimal-literal-field` — prints a single integer field in decimal mode without extra parsing.
 - `display-literal-first-digit-reuse` — reuses the first digit already printed in the template.
