@@ -6071,19 +6071,50 @@ export class EmitContext {
     return true;
   }
 
+  // Shared recognizer for the "previous random" idioms: a `temp = seed` copy
+  // immediately followed by a `seed = random()` update (directly or through a
+  // single-statement random proc). Returns the parked-in-Y previous value name
+  // (`temp`) and the `seed` being refreshed, or undefined when the two-statement
+  // preamble does not match. The three previous-random runs (stack reuse, branch,
+  // and fractional debit) share this preamble plus the kept-in-Y head below; they
+  // differ only in how they consume `temp` (parked in Y) and the new `seed` (X).
+  private matchPreviousRandomSeedUpdate(
+    previous: StatementAst | undefined,
+    randomUpdate: StatementAst | undefined,
+  ): { temp: string; seed: string } | undefined {
+    if (previous?.kind !== "assign" || previous.expr.kind !== "identifier") return undefined;
+    if (randomUpdate === undefined) return undefined;
+    const seed = previous.expr.name;
+    if (this.randomUpdateTarget(randomUpdate) !== seed) return undefined;
+    return { temp: previous.target, seed };
+  }
+
+  // Emit the kept-in-Y head shared by every previous-random idiom: recall the
+  // current seed, duplicate it into Y with В↑, draw the next random() into X, and
+  // store it back as the new seed. The old seed stays parked in Y for the
+  // following stack-direct consumer, so it is never spilled and recomputed.
+  private emitPreviousRandomSeedUpdate(seed: string, recallLine: number, updateLine: number): void {
+    this.emitRecall(seed, `previous random ${seed}`, recallLine);
+    this.emitOp(0x0e, "В↑", `previous random keep ${seed}`, updateLine);
+    this.emitOp(0x3b, "К СЧ", "random()", updateLine);
+    this.currentXVariable = undefined;
+    this.currentXAliases.clear();
+    this.currentXKnownZero = false;
+    this.emitStore(seed, `set ${seed}`, updateLine);
+  }
+
   compilePreviousRandomStateRun(statements: readonly StatementAst[], index: number): number {
     const previous = statements[index];
     const randomUpdate = statements[index + 1];
     const consumer = statements[index + 2];
-    if (previous?.kind !== "assign" || randomUpdate === undefined || consumer?.kind !== "assign") return 0;
-    if (consumer.target !== previous.target) return 0;
-    if (previous.expr.kind !== "identifier") return 0;
-    const seed = previous.expr.name;
-    if (this.randomUpdateTarget(randomUpdate) !== seed) return 0;
-    if (!expressionReferencesIdentifier(consumer.expr, previous.target)) return 0;
+    const seedUpdate = this.matchPreviousRandomSeedUpdate(previous, randomUpdate);
+    if (seedUpdate === undefined || consumer?.kind !== "assign") return 0;
+    const { temp, seed } = seedUpdate;
+    if (consumer.target !== temp) return 0;
+    if (!expressionReferencesIdentifier(consumer.expr, temp)) return 0;
     if (!expressionReferencesIdentifier(consumer.expr, seed)) return 0;
-    if (!expressionCanUsePreviousRandomPrefix(consumer.expr, previous.target, seed)) return 0;
-    if (!this.compileExpressionFromPreviousRandom(consumer.expr, previous.target, seed, consumer.line)) return 0;
+    if (!expressionCanUsePreviousRandomPrefix(consumer.expr, temp, seed)) return 0;
+    if (!this.compileExpressionFromPreviousRandom(consumer.expr, temp, seed, consumer.line)) return 0;
 
     this.emitStore(consumer.target, `set ${consumer.target}`, consumer.line);
     this.optimizations.push({
@@ -6097,18 +6128,13 @@ export class EmitContext {
     const previous = statements[index];
     const randomUpdate = statements[index + 1];
     const branch = statements[index + 2];
-    if (previous?.kind !== "assign" || randomUpdate === undefined || branch?.kind !== "if") return 0;
-    if (previous.expr.kind !== "identifier") return 0;
-    const temp = previous.target;
-    const seed = previous.expr.name;
-    if (this.randomUpdateTarget(randomUpdate) !== seed) return 0;
+    const seedUpdate = this.matchPreviousRandomSeedUpdate(previous, randomUpdate);
+    if (seedUpdate === undefined || branch?.kind !== "if") return 0;
+    const { temp, seed } = seedUpdate;
     if (statementsReadIdentifierBeforeWrite(statements.slice(index + 3), temp)) return 0;
     if (!previousRandomLessThanCurrentCondition(branch.condition, temp, seed)) return 0;
 
-    this.emitRecall(seed, `previous random ${seed}`, previous.line);
-    this.emitOp(0x0e, "В↑", `previous random keep ${seed}`, randomUpdate.line);
-    this.emitOp(0x3b, "К СЧ", "random()", randomUpdate.line);
-    this.emitStore(seed, `set ${seed}`, randomUpdate.line);
+    this.emitPreviousRandomSeedUpdate(seed, previous!.line, randomUpdate!.line);
     this.emitOp(0x11, "-", "previous random compare", branch.line);
 
     const falseLabel = this.freshLabel("previous_random_false");
@@ -6137,12 +6163,10 @@ export class EmitContext {
     const randomUpdate = statements[index + 1];
     const consumer = statements[index + 2];
     const guarded = statements[index + 3];
-    if (previous?.kind !== "assign" || consumer?.kind !== "assign" || guarded?.kind !== "if") return 0;
-    const temp = previous.target;
+    const seedUpdate = this.matchPreviousRandomSeedUpdate(previous, randomUpdate);
+    if (seedUpdate === undefined || consumer?.kind !== "assign" || guarded?.kind !== "if") return 0;
+    const { temp, seed } = seedUpdate;
     if (consumer.target !== temp) return 0;
-    if (previous.expr.kind !== "identifier") return 0;
-    const seed = previous.expr.name;
-    if (this.randomUpdateTarget(randomUpdate) !== seed) return 0;
     if (statementsReadIdentifierBeforeWrite(statements.slice(index + 4), temp)) return 0;
     const plan = this.matchPreviousRandomFractionalDebit(consumer.expr, temp, seed, guarded);
     if (plan === undefined) return 0;
@@ -6152,13 +6176,10 @@ export class EmitContext {
       statements[index - 1]?.kind === "indexed_assign" &&
       expressionEquals((statements[index - 1] as Extract<StatementAst, { kind: "indexed_assign" }>).target, plan.distance);
     if (!distanceAlreadyInX) {
-      this.emitAssignableRecall(plan.distance, `fractional debit ${this.assignableTargetText(plan.distance)}`, previous.line);
+      this.emitAssignableRecall(plan.distance, `fractional debit ${this.assignableTargetText(plan.distance)}`, previous!.line);
     }
-    this.emitOp(0x35, "К {x}", "fractional debit distance frac", previous.line);
-    this.emitRecall(seed, `previous random ${seed}`, previous.line);
-    this.emitOp(0x0e, "В↑", `previous random keep ${seed}`, randomUpdate.line);
-    this.emitOp(0x3b, "К СЧ", "random()", randomUpdate.line);
-    this.emitStore(seed, `set ${seed}`, randomUpdate.line);
+    this.emitOp(0x35, "К {x}", "fractional debit distance frac", previous!.line);
+    this.emitPreviousRandomSeedUpdate(seed, previous!.line, randomUpdate!.line);
     this.emitOp(0x10, "+", "previous random + random()", consumer.line);
     this.emitNumberOrPreload("1");
     this.emitOp(0x10, "+", "previous random additive term", consumer.line);
@@ -6486,13 +6507,7 @@ export class EmitContext {
     seed: string,
     line: number,
   ): boolean {
-    this.emitRecall(seed, `previous random ${seed}`, line);
-    this.emitOp(0x0e, "В↑", `previous random keep ${seed}`, line);
-    this.emitOp(0x3b, "К СЧ", "random()", line);
-    this.currentXVariable = undefined;
-    this.currentXAliases.clear();
-    this.currentXKnownZero = false;
-    this.emitStore(seed, `set ${seed}`, line);
+    this.emitPreviousRandomSeedUpdate(seed, line, line);
     return this.compileExpressionWithPreviousRandomPrefix(expr, previous, seed, line);
   }
 
@@ -6753,11 +6768,7 @@ export class EmitContext {
     this.emitOp(0x10, "+", "credit input", credit.line);
     this.emitAssignableStore(credit.target, credit.line);
     this.emitLabel(trap);
-    this.emitOp(0x21, "F √", "debit/credit domain-error guard trap", creditGuard.line);
-    this.currentXVariable = undefined;
-    this.currentXAliases.clear();
-    this.currentXKnownZero = false;
-    this.scaledCoordVariables.clear();
+    emitDomainTrapOnX(this, 0x21, "F √", "debit/credit domain-error guard trap", creditGuard.line);
     this.compileStatements(continuation);
     this.optimizations.push({
       name: "show-read-debit-credit-guard",

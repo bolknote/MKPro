@@ -1700,6 +1700,42 @@ program PreviousRandomBranch {
     expect(result.steps.some((step) => step.comment === "set scratch")).toBe(false);
   });
 
+  // The previous-random trio now share one recognizer preamble
+  // (matchPreviousRandomSeedUpdate / randomUpdateTarget), so the seed refresh is
+  // accepted whether written inline as `seed = random()` or as a call to a
+  // one-statement random proc. The shared kept-in-Y head inlines the К СЧ draw
+  // either way, so the branch idiom still parks the previous value in Y.
+  it("branches on a previous random value refreshed through a random proc", () => {
+    const result = compileOk(`
+program PreviousRandomBranchProc {
+  state {
+    random_state: packed = 0.5
+    scratch: packed = 0
+    score: packed = 0
+  }
+
+  fn roll() {
+    random_state = random()
+  }
+
+  scratch = random_state
+  roll()
+  if scratch - random_state < 0 {
+    score = 1
+  }
+  else {
+    score = 2
+  }
+  halt(score)
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "previous-random-branch-stack-reuse")).toBe(true);
+    // К СЧ (0x3b) is inlined from the proc; the previous value is never spilled.
+    expect(result.steps.some((step) => step.opcode === 0x3b)).toBe(true);
+    expect(result.steps.some((step) => step.comment === "set scratch")).toBe(false);
+  });
+
   it("keeps residual dispatch deltas positive when subtraction is shorter", () => {
     const result = compileOk(`
 program PositiveResidualDispatch {
