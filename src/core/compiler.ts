@@ -4901,9 +4901,20 @@ function resolveReferenceMetrics(referenceName: string): ReferenceMetrics | unde
 
   if (fs.existsSync(manifestPath)) {
     const rows = fs.readFileSync(manifestPath, "utf8").split(/\r?\n/u).slice(1);
+    const referenceSourceId = slug.toLowerCase();
     const manifestProgram = rows
-      .map((row) => row.split("\t")[0]?.trim())
-      .find((program) => program === programFile);
+      .map((row) => {
+        const cells = row.split("\t");
+        const program = cells[0]?.trim();
+        const source = cells[4]?.trim().toLowerCase() ?? "";
+        const sourceMatch = source.match(/\/(pmk\d+)\.html(?:[#?].*)?$/u);
+        return {
+          program,
+          sourceMatch,
+        };
+      })
+      .find(({ program, sourceMatch }) => program === programFile || (sourceMatch?.[1] === referenceSourceId))
+      ?.program;
     if (manifestProgram !== undefined) programFile = manifestProgram;
   }
 
