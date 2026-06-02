@@ -265,6 +265,7 @@ The `report.candidates` array in `report` shows lowerings that were recompiled a
 - `x-param-return-decay` — prepares a return path through X for safe reuse afterward.
 - `x-param-return-decay-call` — applies the same X-return pattern at call sites.
 - `x-param-stake-sin-read` — compiles a single-argument x-param helper proc that consumes its argument from X and returns through direct `В/О`, reusing the same read-driven stack source prepared by `show-read-stake-sin-lowering`.
+- `x-param-stake-sin-call` — compiles a one-argument call into the matched stake/sin helper procedure by passing its argument in X, based on a strict two-statement body shape (`show` of the argument source, then `return int(arg * (1 + sin(read())))` in equivalent forms).
 - `proc-call-lowering` — builds procedure calls with return strategy and state handling.
 - `proc-return-x-reuse` — avoids rewriting X if it already holds the needed value on return.
 - `local-terminal-tail` — shares a tail block for local calls.
@@ -372,12 +373,17 @@ Display rewrites are separated into strategy selection + body lowering.
 
 - `small-set-primitive-lowering` — replaces small multi-way boolean/state sets with dense arithmetic chains.
 - `tic-tac-toe-primitive-lowering` — maps tic-tac-toe operations into bit masks and add/sub-style forms.
+- `reciprocal-division-lowering` — lowers `1 / x`-form divisions into `F 1/x` after evaluating the right side once.
 - `arithmetic-if-update` — turns conditional updates into arithmetic form instead of branching.
 - `arithmetic-if-conditional-move` — replaces conditional `move`/copy with arithmetic form.
 - `arithmetic-if-sign-toggle` — routes sign handling through arithmetic when it shortens branches.
 - `arithmetic-if-abs` — converts absolute value to branchless arithmetic.
 - `arithmetic-if-max` — computes max using a branchless path.
 - `arithmetic-if-min` — computes min using a branchless path.
+- `min-via-max-lowering` — rewrites source-level `min(a, b)` into a max-based normalized expression that uses the existing `К max` primitive path.
+- `pow-square-lowering` — rewrites `pow(x, 2)` into `F x^2`.
+- `pow10-opcode-lowering` — rewrites `pow(10, n)` into `F 10^x`.
+- `square-expression-lowering` — rewrites pure repeated multiplication `x * x` into `F x^2`.
 - `arithmetic-if-double-clamp` — special double-check clamp in one arithmetic template.
 - `arithmetic-if-comparison-mask` — builds comparison masks without explicit `if`.
 - `arithmetic-if-boolean-algebra` — lowers complex boolean comparisons into masks and arithmetic.
