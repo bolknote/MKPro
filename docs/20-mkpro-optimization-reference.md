@@ -100,7 +100,7 @@ These transformations run on source constructs before machine lowering:
 
 - `constant-indexed-state-resolution` — if array/field index is known at compile time, substitutes the exact cell address directly.
 - `affine-indexed-selector-reuse` — if an affine dynamic index such as `physical - 3` already evaluates to the physical register number for a contiguous bank member, uses that variable as the MK-61 indirect selector instead of allocating and filling a separate selector.
-- `indirect-memory-alias-selector` — chooses the cheapest proved indexed-bank selector offset using the MK-61 two-digit indirect-memory register table, so values such as `17..19` can directly select `R1..R3` and avoid a scratch selector or a larger arithmetic offset.
+- `indirect-memory-alias-selector` — chooses the cheapest proved indexed-bank selector offset using the MK-61 two-digit indirect-memory register table, so values such as `17..19` or proved negative aliases can directly select bank registers and avoid a scratch selector or a larger arithmetic offset.
 - `fractional-indirect-addressing` — if `bank[int(selector)]` targets a physically aligned contiguous bank and `selector` is already in `R7..Re`, uses that register directly as the indirect-memory selector. This relies on MK-61 indirect memory addressing ignoring the fractional tail, so packed coordinates can select by their integer part without an explicit `К [x]`.
 - `indexed-selector-cache` — when repeated dynamic bank accesses share the same index expression, reuses the cached selector directly or derives a sibling field selector by applying only the contiguous offset delta.
 - `display-string-inline` — moves text templates directly into `show`, removing separate temporary definitions.
@@ -318,7 +318,7 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `indirect-incdec-counter` — lowers a unit `x++`/`x--` through the indirect pre-increment (R4..R6) or pre-decrement (R0..R3) side effect of `К П->X r`, a one-cell true `±1` that correctly reaches 0 (used as the standalone unit-decrement form).
 - `r0-indirect-counter` — uses R0 as a readable counter/switch for jump dispatch where provably safe.
 - `indirect-memory-table` — builds a compact address table in memory and jumps by index.
-- `indirect-memory-alias-selector` — lets indexed-bank lowering use non-linear register aliases from the two-digit indirect-memory table when that removes selector arithmetic or an allocated selector scratch.
+- `indirect-memory-alias-selector` — lets indexed-bank lowering use non-linear register aliases from the two-digit indirect-memory table, including negative selector values after a full per-bank-element proof, when that removes selector arithmetic or an allocated selector scratch.
 - `indexed-packed-row-table` — stores packed rows/cells in an addressable table for dense display access.
 - `coord-list-scaled-read` — reads coordinates via scaled index, removing runtime decode work.
 - `coord-list-scaled-decimal-storage` — same as above but decimal form, using fewer cells.
@@ -551,6 +551,7 @@ The optimizer does not blindly apply undocumented behavior. Several proofs are e
 - `branch-equivalence` — records that conditional rewriting (`branch-removal` and arithmetic-if-family rewrites) was proven equivalent for the rewritten branch shapes.
 - `negative-zero-threshold-selector` proof for threshold selectors.
 - `indirect-addressing-ranges` proof when selector stability is required.
+- `indirect-memory-alias-selector` proof when indexed-bank lowering depends on non-linear two-digit memory aliases, including negative selector values.
 - `display-byte-observable-boundary` proof for display-byte candidates when only display-observable boundaries allow the optimization.
 - `super-dark-suffix-layout` proof when FA..FF dispatch is selected.
 - `return-stack-empty` proof for `I/O` as `JP 01` behavior.

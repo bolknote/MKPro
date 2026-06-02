@@ -428,6 +428,17 @@ C6 8
     }
   });
 
+  it("matches the indirect address model for negative integer memory selectors", () => {
+    const model = evaluateIndirectAddress("7", "-7", "memory");
+    expect(model?.memoryTarget).toBe("1");
+
+    const result = runProgramWithRegisters([0xd7, 0x50], { "7": "-7", "1": "8" });
+
+    expect(result.stopped).toBe(true);
+    expect(result.display).toContain("8");
+    expect(result.calc.readRegister("7").trim()).toMatch(/^-99999997,/u);
+  });
+
   it("matches the fractional R0 sentinel model for flow and memory", () => {
     const flowModel = evaluateIndirectAddress("0", "0,5", "flow");
     const recallModel = evaluateIndirectAddress("0", "0,5", "memory");
