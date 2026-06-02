@@ -334,3 +334,15 @@ demo.txt	demo.md	Treasure Cave Demo	Serge Anvarov	https://sergeanvarov.github.io
 clock.txt	clock.md	Программа-часы	С. Конин, А. Шарапов	https://monatkodenis.blogspot.com/2014/01/blog-post.html
 fox-hunt-mk61.txt	fox-hunt-mk61.md	Охота на лис (вариант для МК-61)	автор варианта неизвестен	https://monatkodenis.blogspot.com/2014/01/blog-post.html
 99-bottles.txt	99-bottles.md	99 бутылок	Евгений Степанищев	https://bolknote.ru/all/4418/
+apollo11-launch.txt	apollo11-launch.md	Apollo 11 Launch from Earth (Refined)	darth.righter	https://pmk.arbinada.com/category/01617.html
+easter-date-passover.txt	easter-date-passover.md	Easter Date (Orthodox, Primary)	Русский	https://pmk.arbinada.com/category/00935.html
+easter-date-passover-alt.txt	easter-date-passover-alt.md	Easter Date Helper (Ascension and Pentecost)	Русский	https://pmk.arbinada.com/category/00935.html
+kvur-quadratic-register.txt	kvur-quadratic-register.md	Quadratic Equation Solver with Registers (MK61/52)	st	https://pmk.arbinada.com/category/01167.html
+kvur-quadratic-no-register.txt	kvur-quadratic-no-register.md	Quadratic Equation Solver without Registers (MK61/52)	st	https://pmk.arbinada.com/category/01167.html
+markov-machine.txt	markov-machine.md	Markov Machine	Русский	https://pmk.arbinada.com/category/00960.html
+cooperative-2.txt	cooperative-2.md	Cooperative 2	st	https://pmk.arbinada.com/category/01091.html
+fourteen-pawns.txt	fourteen-pawns.md	Fourteen Pawns	st	https://pmk.arbinada.com/category/01085.html
+saturn5-first-stage.txt	saturn5-first-stage.md	Saturn V First Stage (MK61)	darth.righter	https://pmk.arbinada.com/category/01619.html
+vostok-1-carrier.txt	vostok-1-carrier.md	Vostok-1 Carrier Vehicle	darth.righter	https://pmk.arbinada.com/category/01621.html
+vostok-1-atmosphere.txt	vostok-1-atmosphere.md	Vostok-1 Atmosphere Program	darth.righter	https://pmk.arbinada.com/category/01621.html
+apollo11-launch-kei.txt	apollo11-launch-kei.md	Apollo 11 Launch from Earth (Atmosfera-1 KEI)	darth.righter	https://pmk.arbinada.com/category/01617.html
