@@ -778,21 +778,23 @@ program BadGroupMember {
     ).toThrow(/State group members cannot also be indexed arrays/u);
   });
 
-  it("rejects stack initializers inside indexed state banks", () => {
-    expect(() =>
-      parseProgram(`
-program BadGroupStack {
+  it("parses stack initializers inside indexed state banks", () => {
+    const ast = parseProgram(`
+program GroupStack {
   state {
     line: group(1..2) {
       front: packed = stack.X
     }
   }
   loop {
-    halt(0)
+    halt(line[1].front + line[2].front)
   }
 }
-`),
-    ).toThrow(/Indexed state banks cannot be initialized from stack\.X or stack\.Y/u);
+`);
+
+    const fields = ast.states[0]?.fields ?? [];
+    expect(fields.find((field) => field.name === "line_front_1")?.initialStack).toBe("X");
+    expect(fields.find((field) => field.name === "line_front_2")?.initialStack).toBe("X");
   });
 
   it("parses and lowers coordinate updates and named terminal functions", () => {

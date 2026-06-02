@@ -2162,7 +2162,8 @@ function lowerV2BankStateField(field: V2StateFieldAst, context: V2LoweringContex
     if (initial !== undefined) {
       const stackSource = parseStackSource(initial, field.line);
       if (stackSource !== undefined) {
-        throw new ParseError("Indexed state banks cannot be initialized from stack.X or stack.Y", field.line);
+        lowered.initialStack = stackSource;
+        return lowered;
       }
       lowered.initial = lowerV2InitialExpression({ ...field, initial }, context);
     }

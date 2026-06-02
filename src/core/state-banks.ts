@@ -56,19 +56,33 @@ export function numericIndexValue(expr: ExpressionAst): number | undefined {
   return undefined;
 }
 
-export function affineIndexIdentifierOffset(expr: ExpressionAst): { name: string; offset: number } | undefined {
+export interface AffineIndexIdentifierOffset {
+  name: string;
+  offset: number;
+  integerPart?: boolean;
+}
+
+export function affineIndexIdentifierOffset(expr: ExpressionAst): AffineIndexIdentifierOffset | undefined {
   if (expr.kind === "identifier") return { name: expr.name, offset: 0 };
+  if (
+    expr.kind === "call" &&
+    expr.callee.toLowerCase() === "int" &&
+    expr.args.length === 1 &&
+    expr.args[0]?.kind === "identifier"
+  ) {
+    return { name: expr.args[0].name, offset: 0, integerPart: true };
+  }
   if (expr.kind !== "binary") return undefined;
   const left = affineIndexIdentifierOffset(expr.left);
   const right = numericIndexValue(expr.right);
   if (left !== undefined && right !== undefined) {
-    if (expr.op === "+") return { name: left.name, offset: left.offset + right };
-    if (expr.op === "-") return { name: left.name, offset: left.offset - right };
+    if (expr.op === "+") return { ...left, offset: left.offset + right };
+    if (expr.op === "-") return { ...left, offset: left.offset - right };
   }
   const leftConstant = numericIndexValue(expr.left);
   const rightIdentifier = affineIndexIdentifierOffset(expr.right);
   if (expr.op === "+" && leftConstant !== undefined && rightIdentifier !== undefined) {
-    return { name: rightIdentifier.name, offset: rightIdentifier.offset + leftConstant };
+    return { ...rightIdentifier, offset: rightIdentifier.offset + leftConstant };
   }
   return undefined;
 }

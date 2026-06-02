@@ -54,7 +54,7 @@ Below are the public capability IDs from `report.optimizer.capabilities`.
 - `x2-display-register` — saves cells/instructions in display by enabling X2 mode.
 - `vp-fraction-restore` — restores VP quickly after arithmetic using a short path.
 - `hex-mantissa-arithmetic` — simplifies arithmetic on hexadecimal mantissas.
-- `fractional-indirect-addressing` — enables indirect jumps through fractional addressing.
+- `fractional-indirect-addressing` — enables indirect memory/flow selectors that deliberately rely on MK-61 fractional-address behavior.
 - `error-stop-idiom` — compacts the common `error + stop` path.
 - `kmax-zero-through` — optimizes `kmax` pattern by passing through zero and finishing immediately.
 - `kor-digit-test` — compresses digit-kind testing into a single check.
@@ -96,6 +96,7 @@ These transformations run on source constructs before machine lowering:
 
 - `constant-indexed-state-resolution` — if array/field index is known at compile time, substitutes the exact cell address directly.
 - `affine-indexed-selector-reuse` — if an affine dynamic index such as `physical - 3` already evaluates to the physical register number for a contiguous bank member, uses that variable as the MK-61 indirect selector instead of allocating and filling a separate selector.
+- `fractional-indirect-addressing` — if `bank[int(selector)]` targets a physically aligned contiguous bank and `selector` is already in `R7..Re`, uses that register directly as the indirect-memory selector. This relies on MK-61 indirect memory addressing ignoring the fractional tail, so packed coordinates can select by their integer part without an explicit `К [x]`.
 - `indexed-selector-cache` — when repeated dynamic bank accesses share the same index expression, reuses the cached selector directly or derives a sibling field selector by applying only the contiguous offset delta.
 - `display-string-inline` — moves text templates directly into `show`, removing separate temporary definitions.
 - `display-string-guarded-show` — hoists guarded string value selection into the display path when safe.
@@ -301,7 +302,7 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `indexed-packed-row-table` — stores packed rows/cells in an addressable table for dense display access.
 - `coord-list-scaled-read` — reads coordinates via scaled index, removing runtime decode work.
 - `coord-list-scaled-decimal-storage` — same as above but decimal form, using fewer cells.
-- `fractional-indirect-addressing` — allows indirect access through fractional address arithmetic when proofs are available.
+- `fractional-indirect-addressing` — allows indirect access through fractional address arithmetic when proofs are available, including direct `bank[int(selector)]` memory selectors.
 - `r0-fractional-sentinel` — uses a fractional-state sentinel in R0 to steer jumps and tables.
 - `super-dark-dispatch` — enables FA..FF range routing for shorter jumps with strictly valid address neighborhoods.
 

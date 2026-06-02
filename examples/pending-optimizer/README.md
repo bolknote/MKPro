@@ -35,7 +35,7 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
-| `cave-highlevel-baseline.mkpro` | 150 | 105 | source-faithful fixed wall/cache setup, resource pressure, movement decoder, and remaining cave flow lowerers |
+| `cave-highlevel-baseline.mkpro` | 137 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
 | `cave-treasure.mkpro` | 144 | 105 | source-shaped command decoder is in place; remaining blockers are resource pressure, wall breaking, cache reward flow, and dispatch overhead |
 | `giants-country.mkpro` | 105 | 105 | fits after restoring the source-style direct R5 position counter; pending only for exact cave-picture/warning display audit |
 | `tic-tac-toe-4x4.mkpro` | 269 | 105 | source-shaped line update/score pass is in place; remaining packed 4x4 scan lowering |
@@ -49,6 +49,11 @@ Prototype notes:
   `x`, `y`, `x+y`, `x-y` pass. The remaining gap is compiler lowering: it still
   emits ordinary calls/loops for the full-board scan and win scan instead of the
   source listing's stack-resident indirect-address subroutine shape.
+- `cave-highlevel-baseline.mkpro` now benefits from fractional indirect
+  addressing: `walls[int(blocked)]` can use the `blocked` coordinate register
+  directly as the indirect selector because MK-61 indirect memory addressing
+  ignores the fractional coordinate tail. This is the source-listing trick in a
+  general indexed-bank form, not a cave-only special case.
 
 Stack-resident temp scheduler (2026-06):
 

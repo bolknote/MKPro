@@ -8813,7 +8813,12 @@ export class EmitContext {
     if (affineIndex !== undefined && offset + affineIndex.offset === 0) {
       const indexRegister = this.allocation.registers[affineIndex.name];
       if (indexRegister !== undefined && registerIndex(indexRegister) >= 7) {
-        if (affineIndex.offset !== 0) {
+        if (affineIndex.integerPart === true) {
+          this.optimizations.push({
+            name: "fractional-indirect-addressing",
+            detail: `Used ${affineIndex.name}'s integer part directly as ${bankMemberKey(expr.base, expr.field)} selector at line ${sourceLine}.`,
+          });
+        } else if (affineIndex.offset !== 0) {
           this.optimizations.push({
             name: "affine-indexed-selector-reuse",
             detail: `Used ${affineIndex.name}${affineIndex.offset > 0 ? "+" : ""}${affineIndex.offset} directly as ${bankMemberKey(expr.base, expr.field)} selector at line ${sourceLine}.`,
@@ -8865,12 +8870,12 @@ export class EmitContext {
       return selector;
     }
 
-    if (affineIndex !== undefined) {
+    if (affineIndex !== undefined && affineIndex.integerPart !== true) {
       this.emitRecall(affineIndex.name, `indexed selector ${affineIndex.name}`, sourceLine);
     } else {
       compileExpression(this, expr.index);
     }
-    const effectiveOffset = offset + (affineIndex?.offset ?? 0);
+    const effectiveOffset = offset + (affineIndex?.integerPart === true ? 0 : (affineIndex?.offset ?? 0));
     if (effectiveOffset > 0) {
       this.emitNumberOrPreload(String(effectiveOffset));
       this.emitOp(0x10, "+", "indexed selector offset", sourceLine);

@@ -302,18 +302,24 @@ state {
 
 The list length must match the inclusive bank range. Each item is lowered as the
 initial value for the corresponding bank element, so `walls[1]`, `walls[2]`, and
-`walls[3]` stay ordinary indexed state at runtime.
+`walls[3]` stay ordinary indexed state at runtime. List items may also use
+`stack.X` or `stack.Y` when one bank element is manually entered before the
+setup program runs.
 
 Both forms lower to contiguous calculator registers. A constant index such as
 `front_line[2].front` or `slots[2]` is resolved at compile time. A dynamic index
 such as `front_line[slot].front` lowers through MK-61 indirect memory commands
-(`К X->П` / `К П->X`) with a compiler-owned selector register. Indexed bank
-elements cannot be initialized from `stack.X` or `stack.Y`.
+(`К X->П` / `К П->X`) with a compiler-owned selector register.
 
 When an index expression is an affine form like `physical - 3` and that value
 already names the physical calculator register for the selected contiguous bank
 member, the compiler can use the index variable itself as the indirect selector
 instead of materializing a separate bank selector.
+
+The same direct selector reuse applies to `bank[int(selector)]` when the bank
+is physically aligned with its logical indexes and `selector` is kept in
+`R7..Re`: MK-61 indirect memory addressing ignores the fractional tail, so a
+packed coordinate such as `3.0000008` can select register `R3` directly.
 
 When two dynamic accesses use the same bank and the same index expression, the
 lowerer keeps the first selector live. If a sibling field has a different
@@ -1101,6 +1107,9 @@ candidates:
   single-use temporaries whose first stored value is never needed in memory;
 - indexed selector cache: reuses or derives bank selectors for repeated
   dynamic accesses with the same index expression;
+- fractional indirect addressing: uses `bank[int(selector)]` as a direct
+  indirect-memory access when the selector register already contains a packed
+  value whose integer part names the bank element;
 - `F L0`..`F L3` unit decrement: counters assigned to `R0`..`R3` can lower
   `counter--` to a two-cell decrement-and-continue form;
 - setup-only countdown loops: when a countdown counter is initialized in

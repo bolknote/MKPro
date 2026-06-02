@@ -991,6 +991,24 @@ program IndexedInitializerListPreloads {
     expect(result.report.preloads.some((item) => item.value === "22")).toBe(true);
   });
 
+  it("initializes indexed bank elements from the startup stack", () => {
+    const result = compileOk(`
+program IndexedInitializerStack {
+  state {
+    slots: packed[1..2] = [stack.Y, 22]
+  }
+  loop {
+    halt(slots[1] + slots[2])
+  }
+}
+`, { budget: 999, analysis: true });
+
+    const setup = result.report.setupProgram?.steps ?? [];
+    expect(setup.some((step) => step.comment === "setup slots_1 from stack.Y")).toBe(true);
+    expect(setup.some((step) => step.comment === "restore stack.X after slots_1")).toBe(true);
+    expect(result.report.preloads.some((item) => item.value === "22")).toBe(true);
+  });
+
   it("preloads MK-61 bitwise constants that have display-literal mantissa cells", () => {
     const result = compileOk(`
 program BitwiseDisplayLiteralPreload {
@@ -3392,7 +3410,9 @@ program IndexedSelectorPureCallReuse {
 }
 `, { budget: 999, analysis: true });
 
-    expect(result.steps.filter((step) => step.comment === "indexed selector slots")).toHaveLength(1);
+    expect(result.report.optimizations.some((item) => item.name === "fractional-indirect-addressing")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "indexed selector slots")).toBe(false);
+    expect(result.steps.some((step) => step.mnemonic?.startsWith("К П->X"))).toBe(true);
   });
 
   it("specializes constant indexed rule calls before lowering", () => {
