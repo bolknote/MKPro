@@ -5,40 +5,33 @@ reference anvarov_labyrinth777
 
 program Labyrinth777 {
   state {
-    // Labyrinth777 is about orientation in volume: floor, row, and room all
-    // matter, while the display sketches the current row around the player.
-    pos: coord(maze) = 444
-    row_view: packed = 0
+    energy: counter -9..9 = 9
 
-    energy: counter 0..9 = 9
-
-    // Separate counters make boundary rules readable. The packed coordinate is
-    // for the display and masks; these fields express player intent.
+    // The original register layout keeps the three coordinates separately:
+    // R1 is the position in the visible row, R3 is the row number, and R5 is
+    // the floor. There is no extra packed "current position" register.
     floor: counter 1..7 = 4
     row: counter 1..7 = 4
     room: counter 1..7 = 4
 
-    // The personal jumper is a hidden destination separate from local jumpers,
-    // holes, and other room effects.
-    jumper: cells(maze) = random()
-
-    tile: counter 0..9 = 0
+    // The listing does not store a full labyrinth. It keeps a seed and
+    // regenerates the visible row from floor/row coordinates, while the hidden
+    // personal jumper is stored as the generated view to be matched.
+    seed: packed = random()
+    exit_view: packed = bit_and(seed / sin(int(random(7)) + 1) * (int(random(7)) + 1), 9.5555555)
+    row_view: packed = 0
   }
 
-  // The maze is seven floors of seven-room rows. Local jumpers are room
-  // effects, while ordinary movement stays inside the current row/floor.
-  maze: board(row_scan)
-
   fn escaped() {
-    halt(7777777)
+    halt(0)
   }
 
   fn drained() {
-    halt(-777)
+    halt(energy)
   }
 
   loop {
-    show(pos, row_view, energy)
+    show(row, ".", row_view)
     action = read()
 
     match action {
@@ -47,17 +40,16 @@ program Labyrinth777 {
       8 => move_forward()
       2 => move_back()
       5 => use_local_jumper()
-      otherwise => show(pos, row_view, energy)
+      otherwise => show(row, ".", row_view)
     }
   }
 
   fn move_left() {
     apply_exit_cost()
 
-    if energy > 0 {
+    if energy >= 0 {
       if room > 1 {
         room--
-        pos = pos - 10
       }
 
       inspect_room()
@@ -70,10 +62,9 @@ program Labyrinth777 {
   fn move_right() {
     apply_exit_cost()
 
-    if energy > 0 {
+    if energy >= 0 {
       if room < 7 {
         room++
-        pos = pos + 10
       }
 
       inspect_room()
@@ -86,10 +77,9 @@ program Labyrinth777 {
   fn move_forward() {
     apply_exit_cost()
 
-    if energy > 0 {
+    if energy >= 0 {
       if row < 7 {
         row++
-        pos = pos - 1
       }
 
       inspect_room()
@@ -102,10 +92,9 @@ program Labyrinth777 {
   fn move_back() {
     apply_exit_cost()
 
-    if energy > 0 {
+    if energy >= 0 {
       if row > 1 {
         row--
-        pos = pos + 1
       }
 
       inspect_room()
@@ -116,16 +105,12 @@ program Labyrinth777 {
   }
 
   fn use_local_jumper() {
-    // Key 5 is intentionally contextual: the same command climbs, drops, wins,
-    // or merely inspects depending on the room's generated tile.
     apply_exit_cost()
 
-    if energy > 0 {
-      tile = cell_at(pos)
-
-      match tile {
-        2 => climb()
-        3 => descend()
+    if energy >= 0 {
+      match digit_at(row_view, room) {
+        4 => climb()
+        5 => descend()
         otherwise => inspect_room()
       }
     }
@@ -137,7 +122,6 @@ program Labyrinth777 {
   fn climb() {
     if floor < 7 {
       floor++
-      pos = pos + 100
     }
 
     inspect_room()
@@ -146,57 +130,29 @@ program Labyrinth777 {
   fn descend() {
     if floor > 1 {
       floor--
-      pos = pos - 100
     }
 
     inspect_room()
   }
 
   fn apply_exit_cost() {
-    // Leaving a room is what costs energy. Entering a bad room is survivable;
-    // deciding to move out of it is where the suit pays the price.
-    tile = cell_at(pos)
-
-    match tile {
-      1 => pool_exit()
-      2 => ladder_exit()
-      3 => shaft_exit()
-      otherwise => clear_exit()
-    }
-  }
-
-  fn clear_exit() {
+    generate_row()
     energy++
+    energy -= digit_at(row_view, room)
   }
 
-  fn pool_exit() {
-    energy = 0
-  }
-
-  fn ladder_exit() {
-    energy -= 5
-  }
-
-  fn shaft_exit() {
-    energy -= 6
+  fn generate_row() {
+    row_view = bit_and(seed / sin(floor) * row, 9.5555555)
   }
 
   fn inspect_room() {
-    // Most rooms only update the display. The one special tile that matters
-    // immediately is the lost personal jumper.
-    tile = cell_at(pos)
-    row_view = tile
+    generate_row()
 
-    if pos in jumper {
-      found_jumper()
+    if row_view == exit_view {
+      escaped()
     }
     else {
-      show(pos, row_view, energy)
+      show(row, ".", row_view)
     }
-  }
-
-  fn found_jumper() {
-    jumper -= pos
-    escaped()
   }
 }

@@ -7,7 +7,7 @@ Generated with `npm run examples:size`.
 - Top-level examples: 23/23 fit in the 105-cell MK-61 window; 23/23 pass the headless load check.
 - Referenced top-level examples: 18/18 are no larger than the original MK-61 listing.
 - Tightest runnable examples: `rambo-iii.mkpro` (105), `fox-hunt-100.mkpro` (103), `game-100-pig.mkpro` (103).
-- Pending optimizer: 6 programs still exceed the MK-61 window; nearest is `pending-optimizer/giants-country.mkpro` (129).
+- Pending optimizer: 6 programs still exceed the MK-61 window; nearest is `pending-optimizer/labyrinth777.mkpro` (122).
 
 ## Measurements
 
@@ -41,6 +41,6 @@ Generated with `npm run examples:size`.
 | `pending-optimizer/cave-highlevel-baseline.mkpro` | 150 | 105 | +45 | pending optimizer | not loaded: main >105 |
 | `pending-optimizer/cave-treasure.mkpro` | 151 | 105 | +46 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/giants-country.mkpro` | 129 | 105 | +24 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/labyrinth777.mkpro` | 163 | 105 | +58 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/labyrinth777.mkpro` | 122 | 105 | +17 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/teleport.mkpro` | 195 | 105 | +90 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/tic-tac-toe-4x4.mkpro` | 200 | 105 | +95 | pending optimizer | not loaded: main >105 |
