@@ -29,10 +29,6 @@ program CaveTreasure {
   // break action. That split mirrors how the original cave creates decisions.
   cave: board(packed_decimal_zero_run)
 
-  fn ignored() {
-    halt(0)
-  }
-
   fn exit_found() {
     halt(11)
   }
@@ -46,16 +42,29 @@ program CaveTreasure {
       }
     }
 
-    match key {
-      4 => go_left()
-      2 => go(0.0000002)
-      6 => go(-0.000001)
-      8 => go(-0.0000002)
-      5 => go(1)
-      -5 => go(-1)
-      0 => break_wall()
-      10 => search()
-      otherwise => ignored()
+    if key == 10 {
+      search()
+    }
+    else {
+      if key == 0 {
+        break_wall()
+      }
+      else {
+        decode_move()
+      }
+    }
+  }
+
+  fn decode_move() {
+    if abs(key) == 5 {
+      go(sign(key))
+    }
+    else {
+      match key {
+        4 => go_left()
+        6 => go(-0.000001)
+        otherwise => go(sign(5 - key) * 0.0000002)
+      }
     }
   }
 
@@ -109,16 +118,10 @@ program CaveTreasure {
   }
 
   fn cache_reward() {
-    if pos.floor == 1 {
-      food = robber_fight(food + 9)
-    }
-    else {
-      if pos.floor == 2 {
-        dynamite = robber_fight(dynamite + 4)
-      }
-      else {
-        treasure = robber_fight(treasure + 1)
-      }
+    match pos.floor {
+      1 => food = robber_fight(food + 9)
+      2 => dynamite = robber_fight(dynamite + 4)
+      otherwise => treasure = robber_fight(treasure + 1)
     }
   }
 

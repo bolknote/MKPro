@@ -36,7 +36,7 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
 | `cave-highlevel-baseline.mkpro` | 150 | 105 | source-faithful fixed wall/cache setup, resource pressure, movement decoder, and remaining cave flow lowerers |
-| `cave-treasure.mkpro` | 151 | 105 | resource pressure, wall breaking, cache miss flow, and remaining dispatch overhead |
+| `cave-treasure.mkpro` | 144 | 105 | source-shaped command decoder is in place; remaining blockers are resource pressure, wall breaking, cache reward flow, and dispatch overhead |
 | `giants-country.mkpro` | 105 | 105 | fits after restoring the source-style direct R5 position counter; pending only for exact cave-picture/warning display audit |
 | `tic-tac-toe-4x4.mkpro` | 272 | 105 | source-shaped packed 4x4 line scan/update lowering |
 
