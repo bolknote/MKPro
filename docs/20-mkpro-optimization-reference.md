@@ -57,6 +57,7 @@ Below are the public capability IDs from `report.optimizer.capabilities`.
 - `fractional-indirect-addressing` — enables indirect memory/flow selectors that deliberately rely on MK-61 fractional-address behavior.
 - `error-stop-idiom` — compacts the common `error + stop` path.
 - `kmax-zero-through` — optimizes `kmax` pattern by passing through zero and finishing immediately.
+- `kzn-double` — applies `К ЗН` as a one-cell equivalent in specific doubling/sign-digit cases when the shape is proven safe on the exact MK-61 arithmetic profile.
 - `kor-digit-test` — compresses digit-kind testing into a single check.
 - `constants-dual-use` — reuses one computed constant result in two places.
 - `packed-position-type` — packs position type state, reducing support code.
@@ -456,6 +457,7 @@ Display rewrites are separated into strategy selection + body lowering.
 - `dead-store-elimination` — full pass removing pointless stores and empty branches.
 - `repeated-assignment-value-reuse` — reuses the same computed value across multiple assignments, but yields to `initialized-counted-while-loop` when one of the repeated stores is the initializer for a following countdown loop. A one-cell literal reuse must not hide the much shorter `F Lx` loop shape.
 - `int-frac-shared-tail` — a shared int/frac return tail reduces duplication.
+- `z-stack-derived-tail` — shares a single operand once and uses one stack-tail (`X↔Y`, `X↔Z`, then restore) to derive adjacent `К [x]`/`К {x}`-style results, avoiding duplicated unary math work.
 - `z-stack-derived-value-reuse` — lowers Z-stack pressure by moving values through warm locations.
 
 ## 13) IR pass pipeline (fixed-point)
