@@ -106,6 +106,7 @@ These transformations run on source constructs before machine lowering:
 - `display-string-assignment-elimination` — deletes compile-time removable display-string assignments that only flow into later `show` inputs and are never consumed elsewhere.
 - `display-edge-whitespace-trim` — removes leading/trailing whitespace around templates that does not affect display output.
 - `expression-constant-folder` — precomputes constant expression subtrees.
+- `entered-current-x` — consumes the currently keyboard-entered X value for the `entered()` builtin without emitting a second stop, clearing tracked X aliases because the value is already live in X.
 - `show-read-fusion` — merges `show(...)` with a following `read`-based assignment/input path into one calculator `С/П`: `show(...); x = read()` or `show(...); x = int(read())` / `frac(int(read()))` forms share the same input stop and avoid emitting a second `С/П`.
 - `show-read-decrement-underflow-fusion` — merges `show -> input -> decrement -> if (counter < 0) ...` into one compact sequence, keeping input in `Y` across the decrement-underflow check.
 - `show-read-stack-stop-risk-lowering` — a generalized "stack-stop fusion": when a single plain `show` source value (`stake`) is combined with a freshly read input across the stop, it keeps `stake` in `Y`, transforms the input in `X`, and computes the result directly on the stack with no input register. It recognizes any pure shape `wrap*( stake (op) g(input) )` where `op` is `+`/`-`/`*`/`/` (non-commutative ops keep `stake` on the left so they map to the machine's `Y op X` order), `g(input)` is a chain of single-argument X-transform intrinsics over the input (e.g. `sin`, `cos`, `tg`, `sqrt`) optionally fused with one single-digit additive/scaling constant, and `wrap*` is an outer chain of X-transform intrinsics (e.g. `int`, `frac`). The input leaf may be a direct `sin(read())` or a stored input field, avoiding a source-visible throwaway field. The classic `int(stake * (1 + sin(read())))` robber-fight idiom is the canonical case and lowers byte-for-byte identically; the generalization never grows a program because every accepted form reuses the same kept-in-`Y` stack sequence.
@@ -398,6 +399,9 @@ Display rewrites are separated into strategy selection + body lowering.
 - `arithmetic-if-max` — computes max using a branchless path.
 - `arithmetic-if-min` — computes min using a branchless path.
 - `min-via-max-lowering` — rewrites source-level `min(a, b)` into a max-based normalized expression that uses the existing `К max` primitive path.
+- `quirk-free-minmax-lowering` — rewrites source-level `safe_max(a, b)` and `safe_min(a, b)` into explicit arithmetic forms to avoid the MK-61 `К max` zero-is-greatest quirk:
+  `safe_max = (a + b + abs(a - b)) / 2`, `safe_min = (a + b - abs(a - b)) / 2`.
+  Requires both operands to be pure and duplicable.
 - `pow-square-lowering` — rewrites `pow(x, 2)` into `F x^2`.
 - `pow10-opcode-lowering` — rewrites `pow(10, n)` into `F 10^x`.
 - `square-expression-lowering` — rewrites pure repeated multiplication `x * x` into `F x^2`.
