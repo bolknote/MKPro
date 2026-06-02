@@ -45,9 +45,11 @@ Files are stored in [`mk61-narod/`](./mk61-narod/):
 - `lamer-andrew-meets-america.md` — description and setup notes.
 - `tamagotchi.txt` — plain listing for *Tamagotchi*.
 - `tamagotchi.md` — description and setup notes.
+- `the-land-of-psycho-lamers.md` — translated concept/controls from the map game; source snapshot has no extractable program table.
 - `manifest.tsv` — tab-separated index with `program`, `description`, `title`, `author`, and `source_url`.
 
-Programs: **2**.
+Programs: **2** (one listed source page (`game2.htm`) has no extracted listing in
+this local snapshot).
 
 ## Serge Anvarov Collection
 
