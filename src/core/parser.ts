@@ -1019,10 +1019,10 @@ function tryLowerV2DecimalFactorialSeries(v2: V2ProgramAst): LoweredV2Program | 
   const [precision, counterInit, valueInit, loop, stop] = v2.body;
   if (precision?.kind !== "v2_assign" || precision.target !== "digits") return undefined;
   const digits = Number(normalizedV2Text(precision.expr));
-  if (digits !== 94) return undefined;
-  if (counterInit?.kind !== "v2_assign" || normalizedV2Text(counterInit.expr) !== "65") {
-    return undefined;
-  }
+  if (!Number.isInteger(digits)) return undefined;
+  if (counterInit?.kind !== "v2_assign") return undefined;
+  const counterStart = Number(normalizedV2Text(counterInit.expr));
+  if (!Number.isInteger(counterStart)) return undefined;
   if (valueInit?.kind !== "v2_assign" || normalizedV2Text(valueInit.expr) !== "1") {
     return undefined;
   }
@@ -1065,7 +1065,7 @@ function tryLowerV2DecimalFactorialSeries(v2: V2ProgramAst): LoweredV2Program | 
       body: [{
         kind: "decimal_series",
         digits,
-        counterStart: 65,
+        counterStart,
         line: v2.line,
       }],
       line: v2.line,

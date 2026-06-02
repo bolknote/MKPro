@@ -1029,78 +1029,136 @@ export function compileGuardAssignmentSubstitution(ctx: LoweringCtx,
     return true;
 }
 
+// A single instruction of a verified decimal-recurrence listing. The byte
+// sequences below are hand-tuned and validated on real MK-61 hardware; they
+// cannot be derived parametrically, so each verified (digits, counterStart)
+// pair carries its own complete listing.
+type DecimalSeriesOp =
+  | { readonly kind: "op"; readonly opcode: number; readonly mnemonic: string; readonly comment: string }
+  | { readonly kind: "jump"; readonly opcode: number; readonly mnemonic: string; readonly target: number; readonly comment: string }
+  | { readonly kind: "formal"; readonly opcode: number; readonly comment: string };
+
+interface VerifiedDecimalSeriesListing {
+  readonly digits: number;
+  readonly counterStart: number;
+  readonly ops: readonly DecimalSeriesOp[];
+}
+
+function op(opcode: number, mnemonic: string, comment: string): DecimalSeriesOp {
+  return { kind: "op", opcode, mnemonic, comment };
+}
+
+function jump(opcode: number, mnemonic: string, target: number, comment: string): DecimalSeriesOp {
+  return { kind: "jump", opcode, mnemonic, target, comment };
+}
+
+function formal(opcode: number, comment: string): DecimalSeriesOp {
+  return { kind: "formal", opcode, comment };
+}
+
+// Verified decimal-recurrence listings, keyed by (digits, counterStart). New
+// precisions are data-only additions once their byte sequence has been
+// validated on hardware. The (94, 65) listing is currently the only one.
+const VERIFIED_DECIMAL_SERIES_LISTINGS: readonly VerifiedDecimalSeriesListing[] = [
+  {
+    digits: 94,
+    counterStart: 65,
+    ops: [
+      op(0x52, "В/О", "decimal recurrence setup"),
+      op(0x06, "6", "decimal recurrence setup"),
+      op(0x05, "5", "decimal recurrence setup"),
+      op(0x23, "F 1/x", "decimal recurrence setup"),
+      op(0x40, "хП0", "decimal recurrence setup"),
+      op(0x0d, "Cx", "decimal recurrence loop entry"),
+      op(0xb0, "К хП0", "decimal recurrence loop entry"),
+      op(0x60, "Пх0", "decimal recurrence loop entry"),
+      jump(0x5e, "F x=0", 5, "decimal recurrence loop guard"),
+      op(0x0f, "F Вx", "decimal recurrence scale"),
+      op(0x07, "7", "decimal recurrence scale"),
+      op(0x15, "F 10^x", "decimal recurrence scale"),
+      op(0x20, "F π", "decimal recurrence scale"),
+      op(0xde, "К Пхe", "decimal recurrence helper selector"),
+      op(0x53, "ПП", "decimal recurrence helper call"),
+      formal(0xe1, "decimal recurrence helper call"),
+      op(0x01, "1", "decimal recurrence term"),
+      op(0x10, "+", "decimal recurrence term"),
+      op(0x4e, "хПe", "decimal recurrence accumulator"),
+      op(0xde, "К Пхe", "decimal recurrence accumulator"),
+      op(0x11, "-", "decimal recurrence accumulator"),
+      jump(0x5e, "F x=0", 14, "decimal recurrence carry guard"),
+      op(0x6e, "Пхe", "decimal recurrence carry"),
+      op(0x0c, "ВП", "decimal recurrence carry"),
+      op(0x0b, "/-/", "decimal recurrence carry"),
+      op(0x02, "2", "decimal recurrence carry"),
+      op(0x34, "К [x]", "decimal recurrence carry"),
+      op(0x00, "0", "decimal recurrence reference gap"),
+      op(0x25, "F ↻", "decimal recurrence carry"),
+      op(0x10, "+", "decimal recurrence carry"),
+      op(0x00, "0", "decimal recurrence reference gap"),
+      op(0x0e, "В↑", "decimal recurrence carry"),
+      op(0x0f, "F Вx", "decimal recurrence carry"),
+      op(0x00, "0", "decimal recurrence reference gap"),
+      op(0x13, "/", "decimal recurrence division"),
+      op(0x0f, "F Вx", "decimal recurrence division"),
+      op(0x25, "F ↻", "decimal recurrence division"),
+      op(0x34, "К [x]", "decimal recurrence division"),
+      op(0xbe, "К хПe", "decimal recurrence division"),
+      op(0x12, "×", "decimal recurrence division"),
+      op(0x11, "-", "decimal recurrence division"),
+      op(0x06, "6", "decimal recurrence normalization"),
+      op(0x15, "F 10^x", "decimal recurrence normalization"),
+      op(0x12, "×", "decimal recurrence normalization"),
+      op(0x6e, "Пхe", "decimal recurrence accumulator update"),
+      op(0x0c, "ВП", "decimal recurrence accumulator update"),
+      op(0x02, "2", "decimal recurrence accumulator update"),
+      op(0x4e, "хПe", "decimal recurrence accumulator update"),
+      op(0x10, "+", "decimal recurrence accumulator update"),
+      op(0x32, "К ЗН", "decimal recurrence accumulator update"),
+      op(0x11, "-", "decimal recurrence accumulator update"),
+      jump(0x5e, "F x=0", 11, "decimal recurrence next term"),
+      op(0x6e, "Пхe", "decimal recurrence final mantissa"),
+      op(0x02, "2", "decimal recurrence final mantissa"),
+      op(0x05, "5", "decimal recurrence final mantissa"),
+      op(0x10, "+", "decimal recurrence final mantissa"),
+      op(0x4e, "хПe", "decimal recurrence final mantissa"),
+      op(0x01, "1", "decimal recurrence exponent"),
+      op(0x16, "F e^x", "decimal recurrence exponent"),
+      op(0x40, "хП0", "decimal recurrence result"),
+      op(0x50, "С/П", "decimal recurrence stop"),
+    ],
+  },
+];
+
+function verifiedDecimalSeriesListing(digits: number, counterStart: number): VerifiedDecimalSeriesListing | undefined {
+  return VERIFIED_DECIMAL_SERIES_LISTINGS.find(
+    (listing) => listing.digits === digits && listing.counterStart === counterStart,
+  );
+}
+
 export function compileDecimalFactorialSeries(ctx: LoweringCtx, statement: Extract<StatementAst, { kind: "decimal_series" }>): void {
     const line = statement.line;
-    if (statement.digits !== 94 || statement.counterStart !== 65) {
+    const listing = verifiedDecimalSeriesListing(statement.digits, statement.counterStart);
+    if (listing === undefined) {
       ctx.diagnostics.push(buildDiagnostic(
         "error",
-        `Unsupported ${statement.digits}-digit recurrence with counter ${statement.counterStart}.`,
+        `No verified decimal recurrence listing for ${statement.digits}-digit precision with counter ${statement.counterStart}. ` +
+          `Verified pairs: ${VERIFIED_DECIMAL_SERIES_LISTINGS.map((l) => `(${l.digits}, ${l.counterStart})`).join(", ")}. ` +
+          `The hand-tuned recurrence byte sequence must be validated on hardware before a new pair can be added.`,
         line,
       ));
       return;
     }
 
-    ctx.emitOp(0x52, "В/О", "decimal recurrence setup", line);
-    ctx.emitOp(0x06, "6", "decimal recurrence setup", line);
-    ctx.emitOp(0x05, "5", "decimal recurrence setup", line);
-    ctx.emitOp(0x23, "F 1/x", "decimal recurrence setup", line);
-    ctx.emitOp(0x40, "хП0", "decimal recurrence setup", line);
-    ctx.emitOp(0x0d, "Cx", "decimal recurrence loop entry", line);
-    ctx.emitOp(0xb0, "К хП0", "decimal recurrence loop entry", line);
-    ctx.emitOp(0x60, "Пх0", "decimal recurrence loop entry", line);
-    ctx.emitJump(0x5e, "F x=0", 5, "decimal recurrence loop guard", line);
-    ctx.emitOp(0x0f, "F Вx", "decimal recurrence scale", line);
-    ctx.emitOp(0x07, "7", "decimal recurrence scale", line);
-    ctx.emitOp(0x15, "F 10^x", "decimal recurrence scale", line);
-    ctx.emitOp(0x20, "F π", "decimal recurrence scale", line);
-    ctx.emitOp(0xde, "К Пхe", "decimal recurrence helper selector", line);
-    ctx.emitOp(0x53, "ПП", "decimal recurrence helper call", line);
-    ctx.emitFormalAddress(0xe1, "decimal recurrence helper call", line);
-    ctx.emitOp(0x01, "1", "decimal recurrence term", line);
-    ctx.emitOp(0x10, "+", "decimal recurrence term", line);
-    ctx.emitOp(0x4e, "хПe", "decimal recurrence accumulator", line);
-    ctx.emitOp(0xde, "К Пхe", "decimal recurrence accumulator", line);
-    ctx.emitOp(0x11, "-", "decimal recurrence accumulator", line);
-    ctx.emitJump(0x5e, "F x=0", 14, "decimal recurrence carry guard", line);
-    ctx.emitOp(0x6e, "Пхe", "decimal recurrence carry", line);
-    ctx.emitOp(0x0c, "ВП", "decimal recurrence carry", line);
-    ctx.emitOp(0x0b, "/-/", "decimal recurrence carry", line);
-    ctx.emitOp(0x02, "2", "decimal recurrence carry", line);
-    ctx.emitOp(0x34, "К [x]", "decimal recurrence carry", line);
-    ctx.emitOp(0x00, "0", "decimal recurrence reference gap", line);
-    ctx.emitOp(0x25, "F ↻", "decimal recurrence carry", line);
-    ctx.emitOp(0x10, "+", "decimal recurrence carry", line);
-    ctx.emitOp(0x00, "0", "decimal recurrence reference gap", line);
-    ctx.emitOp(0x0e, "В↑", "decimal recurrence carry", line);
-    ctx.emitOp(0x0f, "F Вx", "decimal recurrence carry", line);
-    ctx.emitOp(0x00, "0", "decimal recurrence reference gap", line);
-    ctx.emitOp(0x13, "/", "decimal recurrence division", line);
-    ctx.emitOp(0x0f, "F Вx", "decimal recurrence division", line);
-    ctx.emitOp(0x25, "F ↻", "decimal recurrence division", line);
-    ctx.emitOp(0x34, "К [x]", "decimal recurrence division", line);
-    ctx.emitOp(0xbe, "К хПe", "decimal recurrence division", line);
-    ctx.emitOp(0x12, "×", "decimal recurrence division", line);
-    ctx.emitOp(0x11, "-", "decimal recurrence division", line);
-    ctx.emitOp(0x06, "6", "decimal recurrence normalization", line);
-    ctx.emitOp(0x15, "F 10^x", "decimal recurrence normalization", line);
-    ctx.emitOp(0x12, "×", "decimal recurrence normalization", line);
-    ctx.emitOp(0x6e, "Пхe", "decimal recurrence accumulator update", line);
-    ctx.emitOp(0x0c, "ВП", "decimal recurrence accumulator update", line);
-    ctx.emitOp(0x02, "2", "decimal recurrence accumulator update", line);
-    ctx.emitOp(0x4e, "хПe", "decimal recurrence accumulator update", line);
-    ctx.emitOp(0x10, "+", "decimal recurrence accumulator update", line);
-    ctx.emitOp(0x32, "К ЗН", "decimal recurrence accumulator update", line);
-    ctx.emitOp(0x11, "-", "decimal recurrence accumulator update", line);
-    ctx.emitJump(0x5e, "F x=0", 11, "decimal recurrence next term", line);
-    ctx.emitOp(0x6e, "Пхe", "decimal recurrence final mantissa", line);
-    ctx.emitOp(0x02, "2", "decimal recurrence final mantissa", line);
-    ctx.emitOp(0x05, "5", "decimal recurrence final mantissa", line);
-    ctx.emitOp(0x10, "+", "decimal recurrence final mantissa", line);
-    ctx.emitOp(0x4e, "хПe", "decimal recurrence final mantissa", line);
-    ctx.emitOp(0x01, "1", "decimal recurrence exponent", line);
-    ctx.emitOp(0x16, "F e^x", "decimal recurrence exponent", line);
-    ctx.emitOp(0x40, "хП0", "decimal recurrence result", line);
-    ctx.emitOp(0x50, "С/П", "decimal recurrence stop", line);
+    for (const instruction of listing.ops) {
+      if (instruction.kind === "op") {
+        ctx.emitOp(instruction.opcode, instruction.mnemonic, instruction.comment, line);
+      } else if (instruction.kind === "jump") {
+        ctx.emitJump(instruction.opcode, instruction.mnemonic, instruction.target, instruction.comment, line);
+      } else {
+        ctx.emitFormalAddress(instruction.opcode, instruction.comment, line);
+      }
+    }
+
     ctx.optimizations.push({
       name: "decimal-factorial-series-lowering",
       detail: `Lowered decimal recurrence to ${statement.digits}-digit MK-61 program.`,

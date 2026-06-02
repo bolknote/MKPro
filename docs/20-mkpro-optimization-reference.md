@@ -392,7 +392,7 @@ Display rewrites are separated into strategy selection + body lowering.
 - `arithmetic-if-boolean-algebra` — lowers complex boolean comparisons into masks and arithmetic.
 - `hex-mantissa-arithmetic` — simplifies hex mantissa operations, lowering instruction count.
 - `negative-zero-threshold-selector` — threshold check for `-0`/`0` when it reduces branches.
-- `decimal-factorial-series-lowering` — emits a fixed 94-digit decimal recurrence variant when encountering supported factorial-like `decimal_series` declarations.
+- `decimal-factorial-series-lowering` — emits a hand-tuned, hardware-verified decimal recurrence listing for a factorial-like `decimal_series` declaration. The parser now reads `digits` and `counterStart` from the source (no longer hardcoding `counterStart = 65`), and the emitter looks the pair up in a `VERIFIED_DECIMAL_SERIES_LISTINGS` table keyed by `(digits, counterStart)`. Each entry carries its full validated byte sequence — these recurrences are hand-tuned for the MK-61 and cannot be derived parametrically, so an unverified pair fails with a clear diagnostic that lists the verified pairs rather than fabricating bytes. The `(94, 65)` listing is currently the sole verified entry; adding another precision is a data-only table addition once its sequence is validated on hardware. **Note:** this is recognition/structure cleanup, not a true byte-level generalization — the recurrence bytes still come from a verified table, by design.
 
 ## 12) Register allocation and liveness-driven memory trims
 

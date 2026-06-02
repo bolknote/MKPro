@@ -3745,4 +3745,47 @@ program ProcCallLayout {
     // hot() is called 3x vs cold() 2x, so it is emitted first (lowest address).
     expect(labelIndex(callCountOrder.items, "hot")).toBeLessThan(labelIndex(callCountOrder.items, "cold"));
   });
+
+  // The decimal-recurrence emitter now reads (digits, counterStart) from source
+  // and looks them up in a verified-listing table. The (94, 65) pair is the only
+  // hardware-validated listing; any other pair must fail with a clear diagnostic
+  // rather than fabricating an unverified byte sequence.
+  it("lowers the verified (94, 65) decimal recurrence", () => {
+    const result = compileOk(`
+program E94Digits {
+  digits = 94
+  n = 65
+  e = 1
+
+  while n >= 1 {
+    e = 1 + e / n
+    n--
+  }
+
+  halt(e)
+}
+`);
+    expect(
+      result.report.optimizations.some((opt) => opt.name === "decimal-factorial-series-lowering"),
+    ).toBe(true);
+  });
+
+  it("rejects an unverified decimal recurrence counter with a diagnostic", () => {
+    expect(() =>
+      compileMKPro(`
+program E64Digits {
+  digits = 94
+  n = 64
+  e = 1
+
+  while n >= 1 {
+    e = 1 + e / n
+    n--
+  }
+
+  halt(e)
+}
+`),
+    ).toThrow(/No verified decimal recurrence listing for 94-digit precision with counter 64/u);
+  });
 });
