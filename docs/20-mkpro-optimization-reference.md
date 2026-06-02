@@ -375,7 +375,7 @@ Display rewrites are separated into strategy selection + body lowering.
 ## 11) Arithmetic and operator normalization
 
 - `small-set-primitive-lowering` — replaces small multi-way boolean/state sets with dense arithmetic chains.
-- `packed-grid-primitive-lowering` — maps packed grid and digit helper operations into bit masks and add/sub-style forms.
+- `packed-grid-primitive-lowering` — maps packed grid and digit helper operations into bit masks and add/sub-style forms. The square-board helpers are width-parametric: the coordinate wrap (`norm4` / `positiveNorm4`, i.e. `% width`) and the right-diagonal fold (`+ width`) derive exactly from the board width and default to the shipped 4-wide grid. The fractional cell-mask packing constant (`10^x + floor(10^(y * K_width))`) is hardware-fitted per width — its digits encode each row's collision-free nibble offsets — so it lives in a verified width-keyed table (`cellMaskRowConstant`) with only the on-hardware-verified `width: 4` entry. Other widths derive their structural macros automatically but require a verified fractional constant before they can lower (`cell_mask` refuses to fabricate one), the same honest limit as the decimal-series emitter.
 - `reciprocal-division-lowering` — lowers `1 / x`-form divisions into `F 1/x` after evaluating the right side once.
 - `arithmetic-if-update` — turns conditional updates into arithmetic form instead of branching.
 - `arithmetic-if-conditional-move` — replaces conditional `move`/copy with arithmetic form.

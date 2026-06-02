@@ -1786,7 +1786,7 @@ export function packedGridExpressionMacro(name: string, args: ExpressionAst[]): 
     case "diag_left_index":
       return positiveNorm4Expression(addExpressions(args[0]!, args[1]!));
     case "diag_right_index":
-      return positiveNorm4Expression(addExpressions(subtractExpressions(args[0]!, args[1]!), numberExpression(4)));
+      return positiveNorm4Expression(addExpressions(subtractExpressions(args[0]!, args[1]!), numberExpression(DEFAULT_BOARD_WIDTH)));
     case "cell_mask":
       return cellMaskExpression(args[0]!, args[1]!);
     case "cell_has":
@@ -2234,32 +2234,60 @@ export function matchSingleBitMaskOpAssignment(
   };
 }
 
-export function norm4Expression(expr: ExpressionAst): ExpressionAst {
+// The square-board macros (`norm4`, `diag_*_index`, `cell_*`) historically baked
+// in a fixed 4-wide grid. The coordinate-wrap (`% width`) and diagonal fold
+// (`+ width`) are exactly derivable from the board width, so they take a `width`
+// parameter; the default keeps the original 4-wide lowering byte-for-byte.
+export const DEFAULT_BOARD_WIDTH = 4;
+
+// The cell-mask packs board cell (x, y) into one MK-61 mantissa as
+// `10^x + floor(10^y * K_width)`. The fractional constant K_width encodes each
+// row's bit-nibble offsets (for width 4 its digits 2,2,6 give the per-row
+// offsets 0, 2, 22, 226) chosen so masks stay collision-free under the
+// calculator's nibble К∧/К∨ ops. K is hardware-fitted per width and cannot be
+// synthesized for an arbitrary width without on-hardware verification, so only
+// verified widths appear in this table (mirrors the decimal-series limit).
+const CELL_MASK_ROW_CONSTANT: Readonly<Record<number, number>> = {
+  4: 0.22600029,
+};
+
+export function cellMaskRowConstant(width: number): number {
+  const constant = CELL_MASK_ROW_CONSTANT[width];
+  if (constant === undefined) {
+    const verified = Object.keys(CELL_MASK_ROW_CONSTANT).join(", ");
+    throw new Error(
+      `cell_mask is only hardware-verified for board width(s) ${verified}; width ${width} needs a verified fractional constant`,
+    );
+  }
+  return constant;
+}
+
+export function norm4Expression(expr: ExpressionAst, width: number = DEFAULT_BOARD_WIDTH): ExpressionAst {
   const rem = multiplyExpressions(
-    { kind: "call", callee: "frac", args: [divideExpressions({ kind: "call", callee: "int", args: [expr] }, numberExpression(4))] },
-    numberExpression(4),
+    { kind: "call", callee: "frac", args: [divideExpressions({ kind: "call", callee: "int", args: [expr] }, numberExpression(width))] },
+    numberExpression(width),
   );
   return addExpressions(
     rem,
-    multiplyExpressions(numberExpression(4), oneMinus(signExpression(maxExpression(rem, numberExpression(0))))),
+    multiplyExpressions(numberExpression(width), oneMinus(signExpression(maxExpression(rem, numberExpression(0))))),
   );
 }
 
-export function positiveNorm4Expression(expr: ExpressionAst): ExpressionAst {
+export function positiveNorm4Expression(expr: ExpressionAst, width: number = DEFAULT_BOARD_WIDTH): ExpressionAst {
   const rem = multiplyExpressions(
-    fracExpression(divideExpressions(intExpression(expr), numberExpression(4))),
-    numberExpression(4),
+    fracExpression(divideExpressions(intExpression(expr), numberExpression(width))),
+    numberExpression(width),
   );
   return addExpressions(
     rem,
-    multiplyExpressions(numberExpression(4), oneMinus(signExpression(rem))),
+    multiplyExpressions(numberExpression(width), oneMinus(signExpression(rem))),
   );
 }
 
-export function cellMaskExpression(x: ExpressionAst, y: ExpressionAst): ExpressionAst {
+export function cellMaskExpression(x: ExpressionAst, y: ExpressionAst, width: number = DEFAULT_BOARD_WIDTH): ExpressionAst {
   return addExpressions(
     pow10Expression(x),
-    { kind: "call", callee: "int", args: [pow10Expression(multiplyExpressions(y, numberExpression(0.22600029)))] },
+    { kind: "call", callee: "int", args: [pow10Expression(multiplyExpressions(y, numberExpression(cellMaskRowConstant(width))))] },
   );
 }
 
