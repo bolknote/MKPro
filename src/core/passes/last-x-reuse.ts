@@ -1,5 +1,12 @@
 import type { IrOp, RegisterName } from "../types.ts";
-import { hasRewriteBarrier, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
+import {
+  hasRewriteBarrier,
+  removingRecallCanExposeStackLift,
+  removingRecallCanExposeX2Restore,
+  type IrPass,
+  type IrPassFn,
+  type PassResult,
+} from "./helpers.ts";
 
 function clobbersX(op: IrOp): boolean {
   switch (op.kind) {
@@ -44,7 +51,13 @@ const run: IrPassFn = (ops) => {
       else xHolds = undefined;
       continue;
     }
-    if (op.kind === "recall" && !hasRewriteBarrier(op) && xHolds === op.register) {
+    if (
+      op.kind === "recall" &&
+      !hasRewriteBarrier(op) &&
+      xHolds === op.register &&
+      !removingRecallCanExposeStackLift(ops, i) &&
+      !removingRecallCanExposeX2Restore(ops, i)
+    ) {
       removed.add(i);
       continue;
     }

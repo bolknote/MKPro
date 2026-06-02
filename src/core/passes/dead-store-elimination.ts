@@ -39,6 +39,18 @@ function finalizesNumberEntry(ops: readonly IrOp[], index: number): boolean {
   return prev !== undefined && next !== undefined && leavesEntryOpen(prev) && isNumberEntry(next);
 }
 
+function isVpOp(op: IrOp): boolean {
+  return op.kind === "plain" && op.opcode === 0x0c;
+}
+
+// In program mode, `ВП` observes the previous command class while restoring X2.
+// `X->П r; ВП` is a documented X2 splice form even when r is dead as a memory
+// cell, so DSE must keep that store.
+function providesVpRestoreContext(ops: readonly IrOp[], index: number): boolean {
+  const next = nextEffectiveOp(ops, index);
+  return next !== undefined && isVpOp(next);
+}
+
 const run: IrPassFn = (ops) => {
   if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
   const liveness = computeLiveness(ops);
@@ -49,6 +61,7 @@ const run: IrPassFn = (ops) => {
     if (hasRewriteBarrier(op)) continue;
     if (liveness.liveOut[i]!.has(op.register)) continue;
     if (finalizesNumberEntry(ops, i)) continue;
+    if (providesVpRestoreContext(ops, i)) continue;
     removed.add(i);
   }
   if (removed.size === 0) {

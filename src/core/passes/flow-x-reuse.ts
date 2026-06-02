@@ -4,6 +4,8 @@ import {
   emptyResult,
   hasRewriteBarrier,
   knownIndirectMemoryTarget,
+  removingRecallCanExposeStackLift,
+  removingRecallCanExposeX2Restore,
   type IrPass,
   type IrPassFn,
 } from "./helpers.ts";
@@ -25,6 +27,8 @@ const run: IrPassFn = (ops) => {
   for (let index = 0; index < ops.length; index += 1) {
     const op = ops[index]!;
     if (op.kind !== "recall" || hasRewriteBarrier(op)) continue;
+    if (removingRecallCanExposeStackLift(ops, index)) continue;
+    if (removingRecallCanExposeX2Restore(ops, index)) continue;
     if (inStates[index]?.has(op.register) === true) remove.add(index);
   }
 

@@ -1168,21 +1168,33 @@ the program.
 
 The pipeline currently contains:
 
-- **store-recall-peephole** — drops adjacent `X->П r ; П->X r`.
+- **store-recall-peephole** — drops adjacent `X->П r ; П->X r` only when
+  the removed recall is not the visible X2 sync before a context-sensitive
+  `.`/`ВП` restoration and is not needed to lift the stack for an immediate
+  binary/stack-consuming op.
 - **stack-current-X / dead-temp-store** — eliminates the temp store when the
   current X value can be consumed directly by a following expression, including
   one-shot temporaries and commutative current-X derivations.
 - **dead-store-elimination** — whole-program liveness-driven DSE: removes
-  `X->П r` when liveOut at that point excludes `r`.
+  `X->П r` when liveOut at that point excludes `r`, unless that store finalizes
+  number entry or supplies the previous-command context consumed by `ВП` while
+  it restores X2.
 - **last-x-reuse** — drops `П->X r` when the IR proves X already holds the
   value last stored to `r` and no intervening op (С/П, jump, ALU, …) clobbers
-  X. С/П acts as a barrier because the user may overwrite X during pause.
+  X. С/П acts as a barrier because the user may overwrite X during pause;
+  context-sensitive `.`/`ВП` restoration also blocks the rewrite when the
+  recall is the last X2 sync, as do immediate binary/stack-consuming ops that
+  need the recall's stack lift.
 - **flow-x-reuse** — runs forward CFG dataflow for values already in X and
   drops `П->X r` when every direct predecessor reaches that point with `r`
-  still in X; absolute numeric and indirect flow targets are left untouched.
+  still in X; absolute numeric and indirect flow targets are left untouched,
+  and the same `.`/`ВП` X2-sync plus immediate stack-consumer guards are applied
+  before removing a recall.
 - **branch-target-x-reuse** — drops the first `П->X r` inside a unique branch
   target when the incoming condition just tested the same recalled `r`, so the
-  branch path already carries that value in X.
+  branch path already carries that value in X, unless that recall is needed as
+  the target-side X2 sync before `.`/`ВП` or as a stack lift before an immediate
+  binary/stack-consuming op.
 - **liveness-analysis** — foundational dataflow used by DSE, register
   coalescing, and dead-code analysis; `F L0`..`F L3` loop counters are modeled
   as both read and written registers.

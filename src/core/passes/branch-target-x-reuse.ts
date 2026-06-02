@@ -1,5 +1,12 @@
 import type { IrOp, RegisterName } from "../types.ts";
-import { emptyResult, hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
+import {
+  emptyResult,
+  hasRewriteBarrier,
+  removingRecallCanExposeStackLift,
+  removingRecallCanExposeX2Restore,
+  type IrPass,
+  type IrPassFn,
+} from "./helpers.ts";
 
 const run: IrPassFn = (ops) => {
   const labels = labelIndexes(ops);
@@ -21,6 +28,8 @@ const run: IrPassFn = (ops) => {
     if (targetIndex === undefined || remove.has(targetIndex)) continue;
     const target = ops[targetIndex]!;
     if (target.kind !== "recall" || target.register !== register || hasRewriteBarrier(target)) continue;
+    if (removingRecallCanExposeStackLift(ops, targetIndex)) continue;
+    if (removingRecallCanExposeX2Restore(ops, targetIndex)) continue;
 
     remove.add(targetIndex);
   }

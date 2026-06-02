@@ -1,5 +1,12 @@
 import type { IrOp } from "../types.ts";
-import { hasRewriteBarrier, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
+import {
+  hasRewriteBarrier,
+  removingRecallCanExposeStackLift,
+  removingRecallCanExposeX2Restore,
+  type IrPass,
+  type IrPassFn,
+  type PassResult,
+} from "./helpers.ts";
 
 const run: IrPassFn = (ops) => {
   const result: IrOp[] = [];
@@ -12,7 +19,9 @@ const run: IrPassFn = (ops) => {
       next?.kind === "recall" &&
       current.register === next.register &&
       !hasRewriteBarrier(current) &&
-      !hasRewriteBarrier(next)
+      !hasRewriteBarrier(next) &&
+      !removingRecallCanExposeStackLift(ops, i + 1) &&
+      !removingRecallCanExposeX2Restore(ops, i + 1)
     ) {
       result.push(current);
       applied += 1;

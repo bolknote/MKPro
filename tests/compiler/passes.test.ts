@@ -262,6 +262,20 @@ describe("ir passes on synthetic programs", () => {
     expect(result.applied).toBe(0);
   });
 
+  it("dead-store-elimination keeps dead stores that provide ВП/X2 restore context", () => {
+    const program: IrOp[] = [
+      plain(0x20, "F pi"),
+      plain(0x35, "К {x}"),
+      store("1"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = deadStoreElimination.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("last-x-reuse drops П->X r when X already holds that register's value", () => {
     const program: IrOp[] = [
       store("1"),
@@ -271,6 +285,32 @@ describe("ir passes on synthetic programs", () => {
     expect(result.applied).toBe(1);
     expect(result.ops.length).toBe(1);
     expect(result.ops[0]!.kind).toBe("store");
+  });
+
+  it("last-x-reuse keeps recall that syncs X2 before ВП restores it", () => {
+    const program: IrOp[] = [
+      store("1"),
+      recall("1"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("last-x-reuse keeps recall that lifts the stack for an immediate binary op", () => {
+    const program: IrOp[] = [
+      store("1"),
+      recall("1"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("last-x-reuse refuses to fire across a stop barrier", () => {
@@ -307,6 +347,33 @@ describe("ir passes on synthetic programs", () => {
     expect(result.applied).toBe(1);
     expect(result.optimizations[0]?.name).toBe("flow-x-reuse");
     expect(result.ops.filter((op) => op.kind === "recall" && op.register === "4")).toHaveLength(1);
+  });
+
+  it("flow-x-reuse keeps recall that syncs X2 before a preserving op and ВП", () => {
+    const program: IrOp[] = [
+      store("4"),
+      recall("4"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("flow-x-reuse keeps recall that lifts the stack for an immediate binary op", () => {
+    const program: IrOp[] = [
+      store("4"),
+      recall("4"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("flow-x-reuse drops recalls on both condition paths when the tested X value is preserved", () => {
@@ -383,6 +450,40 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops.filter((op) => op.kind === "recall" && op.register === "6")).toHaveLength(1);
     const target = result.ops.findIndex((op) => op.kind === "label" && op.name === "target");
     expect(result.ops[target + 1]).toMatchObject({ kind: "plain", opcode: 0x32 });
+  });
+
+  it("branch-target-x-reuse keeps recall that syncs X2 before ВП in the target", () => {
+    const program: IrOp[] = [
+      recall("6"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      recall("6"),
+      plain(0x0c, "ВП"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("branch-target-x-reuse keeps recall that lifts the stack for a target binary op", () => {
+    const program: IrOp[] = [
+      recall("6"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      recall("6"),
+      plain(0x10, "+"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("branch-target-x-reuse keeps recall when the target has a fallthrough predecessor", () => {
@@ -1127,6 +1228,58 @@ describe("ir passes on synthetic programs", () => {
     const result = storeRecallPeephole.run(program, ctx);
     expect(result.applied).toBe(1);
     expect(result.ops.length).toBe(2);
+  });
+
+  it("store-recall-peephole keeps recall that syncs X2 before ВП", () => {
+    const program: IrOp[] = [
+      store("2"),
+      recall("2"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("store-recall-peephole keeps recall through X2-preserving ops before ВП", () => {
+    const program: IrOp[] = [
+      store("2"),
+      recall("2"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("store-recall-peephole keeps recall that lifts the stack for an immediate binary op", () => {
+    const program: IrOp[] = [
+      store("2"),
+      recall("2"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("store-recall-peephole still drops recall before a fresh digit entry", () => {
+    const program: IrOp[] = [
+      store("2"),
+      recall("2"),
+      plain(0x01, "1"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
   });
 
   it("liveness propagates uses backwards through a loop", () => {
