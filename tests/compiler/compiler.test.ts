@@ -3621,6 +3621,29 @@ program FalseBranchXReuse {
     expect(optimizationNames).not.toContain("fl-unit-decrement");
   });
 
+  it("reuses the zero-test X value for terminal fallthrough branches", () => {
+    const result = compileOk(`
+program FallthroughXReuse {
+  state { energy: counter -9..9 = 0 }
+
+  loop {
+    energy = energy + 1 - read()
+    if energy < 0 {
+      halt(energy)
+    }
+    halt(0)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    const optimizationNames = result.report.optimizations.map((item) => item.name);
+    const firstHalt = result.steps.findIndex((step) => step.comment === "halt" && step.hex === "50");
+    expect(optimizationNames).toContain("x-preserving-fallthrough-branch");
+    expect(result.report.steps).toBe(13);
+    expect(result.steps[firstHalt - 1]?.comment).toBe("false branch for <");
+    expect(result.steps[firstHalt - 1]?.hex).toBe("09");
+  });
+
   it("lowers bounded R4..R6 unit increments through indirect pre-increment", () => {
     const result = compileOk(`
 program IndirectUnitIncrement {

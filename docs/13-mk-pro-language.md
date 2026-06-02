@@ -1154,6 +1154,9 @@ The pipeline currently contains:
   as both read and written registers.
 - **dispatch-case-ordering** — moves unique numeric zero cases earlier when a
   high-level `match` can reuse the selector already in X.
+- **x-preserving-fallthrough-branch** — after a direct zero-test such as
+  `if x < 0`, keeps the tested scalar in X for the true branch when its first
+  statement immediately consumes that value, including `halt(x)` and `pause(x)`.
 - **jump-to-next-threading** — drops `БП label` immediately before `label`.
 - **jump-thread** — chases jump-to-jump trampolines to the final target.
 - **decrement-zero-domain-guard** — when `x--` is immediately followed by a

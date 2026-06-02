@@ -137,8 +137,7 @@ program Labyrinth777 {
 
   fn apply_exit_cost() {
     generate_row()
-    energy++
-    energy -= digit_at(row_view, room)
+    energy += 1 - digit_at(row_view, room)
   }
 
   fn generate_row() {

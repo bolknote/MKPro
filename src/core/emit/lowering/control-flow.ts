@@ -384,7 +384,9 @@ export function compileIf(ctx: LoweringCtx,
     const falseLabel = ctx.freshLabel("if_false");
     const thenTerminates = ctx.statementsTerminate(selected.thenBody);
     const endLabel = thenTerminates ? undefined : ctx.freshLabel("if_end");
-    const fallthroughIdentifier = ctx.nearAnyFallthroughCandidate(selected.condition, selected.thenBody);
+    const directFallthroughIdentifier = ctx.fallthroughCurrentXCandidate(selected.condition, selected.thenBody);
+    const fallthroughIdentifier = directFallthroughIdentifier
+      ?? ctx.nearAnyFallthroughCandidate(selected.condition, selected.thenBody);
     const falseBranchIdentifier = selected.elseBody === undefined
       ? undefined
       : ctx.falseBranchCurrentXCandidate(selected.condition, selected.elseBody);
@@ -393,6 +395,12 @@ export function compileIf(ctx: LoweringCtx,
       ctx.currentXVariable = fallthroughIdentifier;
       ctx.currentXAliases = new Set([fallthroughIdentifier]);
       ctx.currentXKnownZero = false;
+      if (directFallthroughIdentifier !== undefined) {
+        ctx.optimizations.push({
+          name: "x-preserving-fallthrough-branch",
+          detail: `Preserved ${directFallthroughIdentifier} in X across the true branch of the zero-test at line ${line}.`,
+        });
+      }
     }
     ctx.compileStatements(selected.thenBody);
     if (selected.elseBody) {

@@ -7074,7 +7074,9 @@ export class EmitContext {
     switch (statement.kind) {
       case "pause":
         if (isZeroExpression(statement.expr)) this.emitZero("pause", statement.line);
-        else compileExpression(this, statement.expr);
+        else if (!(statement.expr.kind === "identifier" && this.xHolds(statement.expr.name))) {
+          compileExpression(this, statement.expr);
+        }
         this.emitOp(0x50, "С/П", "pause", statement.line);
         return;
       case "input":
@@ -7103,7 +7105,9 @@ export class EmitContext {
           return;
         }
         if (isZeroExpression(statement.expr)) this.emitZero("halt", statement.line);
-        else compileExpression(this, statement.expr);
+        else if (!(statement.expr.kind === "identifier" && this.xHolds(statement.expr.name))) {
+          compileExpression(this, statement.expr);
+        }
         this.emitOp(0x50, "С/П", "halt", statement.line);
         return;
       case "assign":
@@ -7247,6 +7251,22 @@ export class EmitContext {
     return normalized.expr.name;
   }
 
+  fallthroughCurrentXCandidate(
+    condition: ConditionAst,
+    thenBody: StatementAst[],
+  ): string | undefined {
+    const normalized = normalizeZeroComparison(condition);
+    if (
+      normalized === undefined ||
+      !canTestAgainstZeroDirectly(normalized.op) ||
+      normalized.expr.kind !== "identifier"
+    ) {
+      return undefined;
+    }
+    const preserved = normalized.expr.name;
+    return this.statementStartsWithCurrentXUse(this.firstInlineStatement(thenBody), preserved) ? preserved : undefined;
+  }
+
   falseBranchCurrentXCandidate(
     condition: ConditionAst,
     elseBody: StatementAst[],
@@ -7300,6 +7320,9 @@ export class EmitContext {
     if (statement === undefined) return false;
     if (statement.kind === "if") return this.conditionCanUseCurrentX(statement.condition, variable);
     if (statement.kind === "assign") return this.expressionCanUseCurrentX(statement.expr, variable);
+    if ((statement.kind === "halt" || statement.kind === "pause") && statement.expr.kind === "identifier") {
+      return statement.expr.name === variable;
+    }
     return false;
   }
 

@@ -166,6 +166,9 @@ The control-flow family is where the largest byte savings are found.
 - `fl-decrement-zero-branch` — a dedicated “decrement and test zero” sequence in one short block.
 - `if-branch-order-inversion` — reorders branches so downstream lowering is shorter.
 - `x-preserving-false-branch` — preserves current X value in the false branch.
+- `x-preserving-fallthrough-branch` — preserves current X value in the true
+  fallthrough branch after a direct zero-test when the first branch statement
+  immediately consumes the same scalar (for example `halt(x)`/`pause(x)`).
 - `small-set-condition-lowering` — lowers small `set` conditions to compact code.
 - `cell-membership-clear-reuse` — reuses a computed membership mask when clearing a bit and eliminates duplicate `bit_mask` construction.
 - `cell-membership-set-reuse` — reuses a computed membership mask when setting one cell in an `if` suffix.

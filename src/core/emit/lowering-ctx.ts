@@ -70,6 +70,7 @@ export type LoweringCtx = Pick<
   | "ensureTerminalTailHelper"
   | "estimateNumberOrPreloadCost"
   | "expressionHelpers"
+  | "fallthroughCurrentXCandidate"
   | "falseBranchCurrentXCandidate"
   | "findStateField"
   | "firstSpliceDisplayScratch"
