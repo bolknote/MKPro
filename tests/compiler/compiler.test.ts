@@ -3354,6 +3354,64 @@ program AffineIndexedGroupState {
     expect(result.steps.some((step) => step.mnemonic === `К X->П ${physical}` && step.comment === "indexed set line.robots")).toBe(true);
   });
 
+  it("uses two-digit indirect-memory aliases as indexed bank selectors", () => {
+    const result = compileOk(`
+program IndirectMemoryAliasIndexedState {
+  state {
+    d0: packed = 0
+    d1: packed = 0
+    d2: packed = 0
+    d3: packed = 0
+    slots: packed[20..22] = [1, 2, 3]
+    physical: counter 17..19 = 17
+  }
+
+  loop {
+    slots[physical + 3] += 1
+    halt(slots[physical + 3] + d0 + d1 + d2 + d3)
+  }
+}
+`, { budget: 999, analysis: true, disableInterproceduralOpts: true });
+
+    const physical = result.report.registers.physical;
+    expect(result.report.optimizations.some((item) => item.name === "indirect-memory-alias-selector")).toBe(true);
+    expect(result.report.optimizer.capabilities.find((item) => item.id === "indirect-memory-table")?.status).toBe("active");
+    expect(result.report.machineFeaturesUsed.some((item) => item.id === "indirect-memory")).toBe(true);
+    expect(result.report.registers.__bank_selector_slots).toBeUndefined();
+    expect(result.steps.some((step) => step.comment === "indexed selector slots")).toBe(false);
+    expect(result.steps.some((step) => step.mnemonic === `К П->X ${physical}` && step.comment === "indexed recall slots")).toBe(true);
+    expect(result.steps.some((step) => step.mnemonic === `К X->П ${physical}` && step.comment === "indexed set slots")).toBe(true);
+    expect(runCompiledDisplay(result)).toBe("2,");
+  });
+
+  it("uses proved negative indirect-memory aliases as indexed bank selectors", () => {
+    const result = compileOk(`
+program NegativeIndirectMemoryAliasIndexedState {
+  state {
+    slots: packed[-99..-99] = [1]
+    pos: counter -99..-97 = -97
+  }
+
+  loop {
+    slots[pos - 2] += 1
+    halt(slots[pos - 2])
+  }
+}
+`, { budget: 999, analysis: true, disableInterproceduralOpts: true });
+
+    const pos = result.report.registers.pos;
+    expect(result.report.optimizations.some((item) =>
+      item.name === "indirect-memory-alias-selector" &&
+      item.detail.includes("negative selector values")
+    )).toBe(true);
+    expect(result.report.proofs.find((item) => item.id === "indirect-memory-alias-selector")?.detail).toMatch(/negative transformed selector values/u);
+    expect(result.report.registers.__bank_selector_slots).toBeUndefined();
+    expect(result.steps.some((step) => step.comment === "indexed selector slots")).toBe(false);
+    expect(result.steps.some((step) => step.mnemonic === `К П->X ${pos}` && step.comment === "indexed recall slots")).toBe(true);
+    expect(result.steps.some((step) => step.mnemonic === `К X->П ${pos}` && step.comment === "indexed set slots")).toBe(true);
+    expect(runCompiledDisplay(result)).toBe("2,");
+  });
+
   it("lowers dynamic indexed group state through MK-61 indirect memory commands", () => {
     const result = compileOk(`
 program IndexedGroupState {

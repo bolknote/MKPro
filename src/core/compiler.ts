@@ -147,6 +147,7 @@ import {
   stateBankElementNames,
   stateBankElementForIndex,
 } from "./state-banks.ts";
+import { memoryTargetFromTransformed } from "./indirect-addressing.ts";
 import type {
   BitMembershipCondition,
   BitSetAssignment,
@@ -191,6 +192,7 @@ import type {
   ResolvedStep,
   SetupProgramReport,
   StateAst,
+  StateBankMemberAst,
   StateFieldAst,
   StateFieldType,
   StatementAst,
@@ -4072,6 +4074,66 @@ function expressionIdentifierDeps(expr: ExpressionAst): ReadonlySet<string> {
 
 function selectorOffsetCost(offset: number): number {
   return offset === 0 ? 0 : estimateNumberCost(String(Math.abs(offset))) + 1;
+}
+
+interface IndirectMemorySelectorOffsetProof {
+  usesNegativeSelectors: boolean;
+}
+
+interface IndirectMemorySelectorOffsetChoice extends IndirectMemorySelectorOffsetProof {
+  offset: number;
+}
+
+function indirectMemorySelectorOffset(
+  member: StateBankMemberAst,
+  registers: Readonly<Record<string, RegisterName>>,
+  fallbackOffset: number,
+  preferredOffset?: number,
+): IndirectMemorySelectorOffsetChoice {
+  const candidates = new Set<number>([fallbackOffset, 0]);
+  if (preferredOffset !== undefined) candidates.add(preferredOffset);
+  for (let offset = -99; offset <= 99; offset += 1) {
+    candidates.add(offset);
+  }
+
+  let best = fallbackOffset;
+  let bestCost = selectorOffsetCost(fallbackOffset);
+  let bestProof = stateBankOffsetMatchesIndirectMemory(member, registers, fallbackOffset) ?? {
+    usesNegativeSelectors: false,
+  };
+  for (const offset of candidates) {
+    const proof = stateBankOffsetMatchesIndirectMemory(member, registers, offset);
+    if (proof === undefined) continue;
+    const cost = selectorOffsetCost(offset);
+    const offsetIsPreferred = preferredOffset !== undefined && offset === preferredOffset;
+    const bestIsPreferred = preferredOffset !== undefined && best === preferredOffset;
+    if (
+      cost < bestCost ||
+      (cost === bestCost && offsetIsPreferred && !bestIsPreferred) ||
+      (cost === bestCost && !offsetIsPreferred && !bestIsPreferred && Math.abs(offset) < Math.abs(best))
+    ) {
+      best = offset;
+      bestCost = cost;
+      bestProof = proof;
+    }
+  }
+  return { offset: best, ...bestProof };
+}
+
+function stateBankOffsetMatchesIndirectMemory(
+  member: StateBankMemberAst,
+  registers: Readonly<Record<string, RegisterName>>,
+  offset: number,
+): IndirectMemorySelectorOffsetProof | undefined {
+  let usesNegativeSelectors = false;
+  for (const element of member.elements) {
+    const register = registers[element.name];
+    if (register === undefined) return undefined;
+    const selectorValue = element.index + offset;
+    usesNegativeSelectors ||= selectorValue < 0;
+    if (memoryTargetFromTransformed(String(selectorValue)) !== register) return undefined;
+  }
+  return { usesNegativeSelectors };
 }
 
 function statementExpressionCallees(statement: StatementAst): string[] {
@@ -8837,12 +8899,20 @@ export class EmitContext {
   ): RegisterName | undefined {
     const resolved = findStateBankMember(this.ast, expr);
     if (resolved === undefined) return undefined;
-    const offset = contiguousRegisterOffset(resolved.member, this.allocation.registers);
-    if (offset === undefined) {
+    const linearOffset = contiguousRegisterOffset(resolved.member, this.allocation.registers);
+    if (linearOffset === undefined) {
       this.diagnostics.push(buildDiagnostic("error", `Indexed state '${bankMemberKey(expr.base, expr.field)}' is not allocated in contiguous registers`, sourceLine));
       return undefined;
     }
     const affineIndex = affineIndexIdentifierOffset(expr.index);
+    const offsetChoice = indirectMemorySelectorOffset(
+      resolved.member,
+      this.allocation.registers,
+      linearOffset,
+      affineIndex === undefined ? undefined : -affineIndex.offset,
+    );
+    const offset = offsetChoice.offset;
+    const aliasSelectorScope = offsetChoice.usesNegativeSelectors ? " including negative selector values" : "";
     if (affineIndex !== undefined && offset + affineIndex.offset === 0) {
       const indexRegister = this.allocation.registers[affineIndex.name];
       if (indexRegister !== undefined && registerIndex(indexRegister) >= 7) {
@@ -8855,6 +8925,12 @@ export class EmitContext {
           this.optimizations.push({
             name: "affine-indexed-selector-reuse",
             detail: `Used ${affineIndex.name}${affineIndex.offset > 0 ? "+" : ""}${affineIndex.offset} directly as ${bankMemberKey(expr.base, expr.field)} selector at line ${sourceLine}.`,
+          });
+        }
+        if (offset !== linearOffset) {
+          this.optimizations.push({
+            name: "indirect-memory-alias-selector",
+            detail: `Used ${bankMemberKey(expr.base, expr.field)} index values directly as indirect-memory register aliases${aliasSelectorScope} at line ${sourceLine}.`,
           });
         }
         return indexRegister;
@@ -8917,6 +8993,12 @@ export class EmitContext {
       this.emitOp(0x11, "-", "indexed selector offset", sourceLine);
     }
     this.emitStore(selectorName, `indexed selector ${bankMemberKey(expr.base, expr.field)}`, sourceLine);
+    if (offset !== linearOffset) {
+      this.optimizations.push({
+        name: "indirect-memory-alias-selector",
+        detail: `Used offset ${offset} instead of ${linearOffset} for ${bankMemberKey(expr.base, expr.field)} indirect-memory aliases${aliasSelectorScope} at line ${sourceLine}.`,
+      });
+    }
     if (cacheable) {
       this.bankSelectorCache.set(selectorName, {
         key: cacheKey,
@@ -10578,8 +10660,7 @@ function collectStateBankSelectorVariables(
         if (numericIndexValue(expr.index) === undefined && findStateBankMember(ast, expr) !== undefined) {
           const directSelector = directIndexSelectorCandidate(ast, expr, hints);
           if (directSelector !== undefined) {
-            preferHighIndexSelectorRegister(directSelector, variables, hints);
-            return;
+            if (preferHighIndexSelectorRegister(directSelector, variables, hints)) return;
           }
           selectors.add(bankSelectorVariableName(expr.base, expr.field));
         }
@@ -10656,29 +10737,29 @@ function directIndexSelectorCandidate(
   if (affineIndex === undefined) return undefined;
   const resolved = findStateBankMember(ast, expr);
   if (resolved === undefined) return undefined;
-  let offset: number | undefined;
+  const offset = -affineIndex.offset;
   for (const element of resolved.member.elements) {
     const register = hints.get(element.name)?.register;
     if (register === undefined) return undefined;
-    const current = registerIndex(register) - element.index;
-    if (offset === undefined) {
-      offset = current;
-      continue;
-    }
-    if (offset !== current) return undefined;
+    const selectorValue = element.index + offset;
+    if (memoryTargetFromTransformed(String(selectorValue)) !== register) return undefined;
   }
-  return offset !== undefined && offset + affineIndex.offset === 0 ? affineIndex.name : undefined;
+  return affineIndex.name;
 }
 
 function preferHighIndexSelectorRegister(
   name: string,
   variables: ReadonlySet<string>,
   hints: Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>,
-): void {
-  if (!variables.has(name) || hints.has(name)) return;
+): boolean {
+  if (!variables.has(name)) return false;
+  const existing = hints.get(name);
+  if (existing !== undefined) return registerIndex(existing.register) >= 7;
   const used = new Set([...hints.values()].map((hint) => hint.register));
   const register = (["d", "c", "b", "a", "9", "8", "7", "e"] as RegisterName[]).find((candidate) => !used.has(candidate));
-  if (register !== undefined) hints.set(name, { mode: "prefer", register });
+  if (register === undefined) return false;
+  hints.set(name, { mode: "prefer", register });
+  return true;
 }
 
 function domainBindingName(domain: ProgramAst["domains"][number]): string | undefined {
@@ -13737,7 +13818,7 @@ const optimizerCapabilities: Array<{
     category: "data",
     source: "documented",
     requires: ["indirect-memory"],
-    activeWhen: ["indirect-memory-table", "indexed-packed-row-table"],
+    activeWhen: ["indirect-memory-table", "indexed-packed-row-table", "indirect-memory-alias-selector"],
     detail: "Uses К П->X/К X->П indirect memory for compact state tables when a stable selector proves the target register.",
   },
   {
@@ -14408,7 +14489,8 @@ function buildMachineFeaturesUsed(
   }
   if (optimizations.some((optimization) =>
     optimization.name === "indirect-memory-table" ||
-    optimization.name === "indexed-packed-row-table"
+    optimization.name === "indexed-packed-row-table" ||
+    optimization.name === "indirect-memory-alias-selector"
   )) {
     add("indirect-memory", "Optimizer reused a stable selector for one-cell indirect memory access.", "optimizer");
   }
@@ -14560,6 +14642,17 @@ function buildProofReport(
       detail: "Selected only for bounded integer nonnegative thresholds; В↑ normalizes the underflowed 1|-00 product before К ЗН turns it into a 0/1 selector.",
     });
   }
+  const aliasSelectorOptimizations = optimizations.filter((optimization) => optimization.name === "indirect-memory-alias-selector");
+  if (aliasSelectorOptimizations.length > 0) {
+    const usesNegativeSelectors = aliasSelectorOptimizations.some((optimization) => optimization.detail.includes("negative selector values"));
+    proofs.push({
+      id: "indirect-memory-alias-selector",
+      status: "proved",
+      detail: usesNegativeSelectors
+        ? "Each emitted indexed-bank alias offset was checked against every declared bank element with the MK-61 indirect-memory target table, including negative transformed selector values; only stable R7..Re selectors are accepted."
+        : "Each emitted indexed-bank alias offset was checked against every declared bank element with the MK-61 indirect-memory target table; only stable R7..Re selectors are accepted.",
+    });
+  }
   if (
     optimizations.some((optimization) =>
       optimization.name === "stable-indirect-flow" ||
@@ -14567,6 +14660,7 @@ function buildProofReport(
       optimization.name === "preloaded-super-dark-flow" ||
       optimization.name === "indirect-memory-table" ||
       optimization.name === "indexed-packed-row-table" ||
+      optimization.name === "indirect-memory-alias-selector" ||
       optimization.name === "r0-fractional-sentinel"
     )
   ) {
