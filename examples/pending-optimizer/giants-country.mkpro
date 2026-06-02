@@ -79,16 +79,12 @@ program GiantsCountry {
 
   fn hit_wall() {
     strength -= 7
-    show("8.Е6-ЕГ C")
   }
 
   fn encounter() {
     // Events all share the same shape: remember a code, then convert
     // success into score or mobility and failure into strength loss.
-    unless tile {
-      show("8.Е6-ЕГ C")
-    }
-    else {
+    if tile {
       show(warning_pattern)
       show(tile)
       answer = read()
@@ -99,7 +95,7 @@ program GiantsCountry {
         else {
           strength += 4 - tile - (1 - sign(abs(tile - 7)))
           score += tile - 2 + (1 - sign(abs(tile - 7)))
-          plans = digit_set(plans, slot, 0)
+          plans = plans - tile * pow10(slot - 1)
         }
       }
       else {
@@ -113,6 +109,6 @@ program GiantsCountry {
     // which floor the player earned them on.
     next_floor()
     strength += floor
-    plans = digit_set(plans, slot, 0)
+    plans = plans - tile * pow10(slot - 1)
   }
 }
