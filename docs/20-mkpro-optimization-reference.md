@@ -60,7 +60,7 @@ Below are the public capability IDs from `report.optimizer.capabilities`.
 - `kor-digit-test` — compresses digit-kind testing into a single check.
 - `constants-dual-use` — reuses one computed constant result in two places.
 - `packed-position-type` — packs position type state, reducing support code.
-- `address-constant-overlay` — overlays one constant address on another without extra cells.
+- `address-constant-overlay` — overlays one constant address on another without extra cells; `address-code-overlay` is the executable-byte form.
 - `cyclic-address-layout` — reorders address layout so jumps become shorter.
 - `dark-entry-layout` — re-layouts entry points to enable dark-entry transitions.
 - `liveness-analysis` — analyzes live values and removes unnecessary storage.
@@ -486,15 +486,18 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     resulting sentinel write is dead. A final post-layout verifier can perform
     the same rewrite for label targets only after replacing the two-cell branch
     proves that the label will land exactly at hardware address `99`.
-20. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` when one or more cells are removed.
-21. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/`КНОП` redundancy optimization pass removes cells.
-22. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a display-aware `ВП`/X2 marker and reports `vp-fraction-restore` when one or more restores are removed.
-23. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
-24. `duplicate-failure-tail-merge` — removes duplicated `(label -> 0 -> pause)` failure tails by redirecting the first tail to the second.
-25. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.
-26. `dead-code-after-halt` — removes unreachable IR ops by CFG reachability from entry.
-27. `register-coalesce` — merges non-overlapping register live ranges and, when enabled, performs copy coalescing for safe `recall/store` aliases.
-28. `arithmetic-if-pass` — merges two branch paths that lower to byte-identical pure linear blocks (same side effects and same single-pass behavior).
+20. `address-code-overlay` — a final post-layout verifier moves labels from a
+    single-cell op immediately after `БП target` onto the jump's address byte
+    when removing that op proves the address byte will be the same opcode.
+21. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` when one or more cells are removed.
+22. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/`КНОП` redundancy optimization pass removes cells.
+23. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a display-aware `ВП`/X2 marker and reports `vp-fraction-restore` when one or more restores are removed.
+24. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
+25. `duplicate-failure-tail-merge` — removes duplicated `(label -> 0 -> pause)` failure tails by redirecting the first tail to the second.
+26. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.
+27. `dead-code-after-halt` — removes unreachable IR ops by CFG reachability from entry.
+28. `register-coalesce` — merges non-overlapping register live ranges and, when enabled, performs copy coalescing for safe `recall/store` aliases.
+29. `arithmetic-if-pass` — merges two branch paths that lower to byte-identical pure linear blocks (same side effects and same single-pass behavior).
 
 A fixed-point loop repeats while transformations continue, up to internal iteration limits.
 

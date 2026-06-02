@@ -1,5 +1,6 @@
 import { evaluateIndirectAddress } from "./indirect-addressing.ts";
 import { lowerIrToMachine, raiseMachineToIr } from "./ir.ts";
+import { addressToOpcode } from "./opcodes.ts";
 import { cellsPerOp, hasRewriteBarrier } from "./passes/helpers.ts";
 import { computeLiveness } from "./passes/liveness-analysis.ts";
 import { runPreloadedIndirectFlow } from "./passes/preloaded-indirect-flow.ts";
@@ -33,6 +34,19 @@ const INDIRECT_COND_BASES = {
   "==0": 0xe0,
 } as const;
 
+const ADDRESS_TAKING_OPCODES = new Set([
+  0x51,
+  0x53,
+  0x57,
+  0x58,
+  0x59,
+  0x5a,
+  0x5b,
+  0x5c,
+  0x5d,
+  0x5e,
+]);
+
 function isDirectBranch(op: IrOp): op is DirectBranch {
   return op.kind === "jump" || op.kind === "call" || op.kind === "cjump";
 }
@@ -65,6 +79,19 @@ function labelAddresses(ops: readonly IrOp[]): Map<string, number> {
 
 function cellCount(items: readonly MachineItem[]): number {
   return items.filter((item) => item.kind !== "label").length;
+}
+
+function machineLabelAddresses(items: readonly MachineItem[]): Map<string, number> {
+  const labels = new Map<string, number>();
+  let address = 0;
+  for (const item of items) {
+    if (item.kind === "label") {
+      labels.set(item.name, address);
+    } else {
+      address += 1;
+    }
+  }
+  return labels;
 }
 
 function opAddresses(ops: readonly IrOp[]): number[] {
@@ -111,6 +138,17 @@ function officialLabel(target: number): string {
     return `${Math.floor(target / 10)}${target % 10}`;
   }
   return `A${target - 100}`;
+}
+
+function addressOpcodeForItem(items: readonly MachineItem[], item: Extract<MachineItem, { kind: "address" }>): number | undefined {
+  if (item.formalOpcode !== undefined) return undefined;
+  const target = typeof item.target === "number" ? item.target : machineLabelAddresses(items).get(item.target);
+  if (target === undefined) return undefined;
+  try {
+    return addressToOpcode(target);
+  } catch {
+    return undefined;
+  }
 }
 
 function selectorForActualTarget(target: number): string | undefined {
@@ -313,6 +351,76 @@ export function optimizePostLayoutFractionalR0Flow(
     optimizations: [{
       name: "r0-fractional-sentinel",
       detail: `Activated post-layout: replaced ${applied} direct flow op(s) whose target resolves to address 99 with fractional R0 indirect flow.`,
+    }],
+    applied,
+  };
+}
+
+function isOverlayExecutableOp(item: MachineItem | undefined): item is Extract<MachineItem, { kind: "op" }> {
+  return item?.kind === "op" && !ADDRESS_TAKING_OPCODES.has(item.opcode);
+}
+
+function overlayAddressItem(
+  address: Extract<MachineItem, { kind: "address" }>,
+  overlaid: Extract<MachineItem, { kind: "op" }>,
+): Extract<MachineItem, { kind: "address" }> {
+  return {
+    ...address,
+    comment: [address.comment, `address/code overlay for ${overlaid.mnemonic}`].filter(Boolean).join("; "),
+  };
+}
+
+function applyAddressCodeOverlay(items: readonly MachineItem[]): { items: MachineItem[]; applied: number } {
+  for (let index = 0; index < items.length - 2; index += 1) {
+    const jump = items[index];
+    const address = items[index + 1];
+    // Only unconditional БП has no live continuation after the address byte.
+    // ПП and conditionals may return/fall through to the original op cell.
+    if (jump?.kind !== "op" || jump.opcode !== 0x51 || address?.kind !== "address") continue;
+
+    let labelsEnd = index + 2;
+    const labels: Extract<MachineItem, { kind: "label" }>[] = [];
+    while (items[labelsEnd]?.kind === "label") {
+      labels.push(items[labelsEnd] as Extract<MachineItem, { kind: "label" }>);
+      labelsEnd += 1;
+    }
+    if (labels.length === 0) continue;
+    if (typeof address.target === "string" && labels.some((label) => label.name === address.target)) continue;
+
+    const overlaid = items[labelsEnd];
+    if (!isOverlayExecutableOp(overlaid)) continue;
+
+    const candidateAddress = overlayAddressItem(address, overlaid);
+    const candidate = [
+      ...items.slice(0, index + 1),
+      ...labels,
+      candidateAddress,
+      ...items.slice(labelsEnd + 1),
+    ];
+    if (addressOpcodeForItem(candidate, candidateAddress) !== overlaid.opcode) continue;
+    if (cellCount(candidate) >= cellCount(items)) continue;
+    return { items: candidate, applied: 1 };
+  }
+
+  return { items: [...items], applied: 0 };
+}
+
+export function optimizePostLayoutAddressCodeOverlay(items: readonly MachineItem[]): PostLayoutIndirectFlowResult {
+  let current: MachineItem[] = [...items];
+  let applied = 0;
+  for (let round = 0; round < 16; round += 1) {
+    const result = applyAddressCodeOverlay(current);
+    if (result.applied === 0) break;
+    current = result.items;
+    applied += result.applied;
+  }
+  if (applied === 0) return { items: [...items], preloads: [], optimizations: [], applied: 0 };
+  return {
+    items: current,
+    preloads: [],
+    optimizations: [{
+      name: "address-code-overlay",
+      detail: `Overlaid ${applied} executable cell${applied === 1 ? "" : "s"} onto direct-jump address byte${applied === 1 ? "" : "s"} after post-layout proof.`,
     }],
     applied,
   };

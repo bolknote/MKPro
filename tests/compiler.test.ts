@@ -115,7 +115,7 @@ describe("MK-Pro compiler", () => {
     expect(result.report.ir.v2).toBe(true);
     expect(result.report.machine).toBe("mk61");
     expect(result.report.steps).toBeLessThanOrEqual(105);
-    expect(result.report.steps).toBe(24);
+    expect(result.report.steps).toBe(23);
     expect(result.report.candidates.some((candidate) => candidate.variant === "dark-indirect-table")).toBe(true);
     expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "code-data-overlay")).toBe(true);
     expect(result.report.proofs.some((proof) => proof.id === "value-ranges")).toBe(true);

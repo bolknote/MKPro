@@ -7,7 +7,11 @@ import { normalizeV2ExpressionText, parseExpression, parseProgram } from "./pars
 import { runIrPasses } from "./passes/index.ts";
 import { computeNonOverlappingRegisterMapping } from "./passes/register-coalesce.ts";
 import { raiseMachineToIr } from "./ir.ts";
-import { optimizePostLayoutFractionalR0Flow, optimizePostLayoutIndirectFlow } from "./post-layout-indirect-flow.ts";
+import {
+  optimizePostLayoutAddressCodeOverlay,
+  optimizePostLayoutFractionalR0Flow,
+  optimizePostLayoutIndirectFlow,
+} from "./post-layout-indirect-flow.ts";
 import { buildProgramPatchReport } from "./program-patch.ts";
 import { verifySuperDarkSuffixLayout } from "./super-dark-layout.ts";
 import { MachineEmitter } from "./emit/machine-emitter.ts";
@@ -1947,8 +1951,11 @@ function compileMKProOnce(
       postLayoutFlow.items,
       [...optimizedResult.preloads, ...postLayoutFlow.preloads],
     );
-  const optimized = postLayoutR0Flow.items;
-  optimizations.push(...postLayoutFlow.optimizations, ...postLayoutR0Flow.optimizations);
+  const postLayoutOverlay = exactDecimalSeries
+    ? { items: postLayoutR0Flow.items, optimizations: [], preloads: [] }
+    : optimizePostLayoutAddressCodeOverlay(postLayoutR0Flow.items);
+  const optimized = postLayoutOverlay.items;
+  optimizations.push(...postLayoutFlow.optimizations, ...postLayoutR0Flow.optimizations, ...postLayoutOverlay.optimizations);
   const preloads = [
     ...buildPreloadReport(ast, allocation),
     ...buildNegativeZeroDegreePreloadReport(allocation, optimizations),
@@ -13747,8 +13754,8 @@ const optimizerCapabilities: Array<{
     category: "layout",
     source: "undocumented",
     requires: ["address-constants", "code-data-overlay"],
-    activeWhen: ["code-data-overlay"],
-    detail: "Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role.",
+    activeWhen: ["code-data-overlay", "address-code-overlay"],
+    detail: "Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role; direct БП address-byte/code-byte overlays are rewritten only after final address proof.",
   },
   {
     id: "cyclic-address-layout",

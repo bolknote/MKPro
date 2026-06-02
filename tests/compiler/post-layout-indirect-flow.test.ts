@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { evaluateIndirectAddress } from "../../src/core/indirect-addressing.ts";
 import {
+  optimizePostLayoutAddressCodeOverlay,
   optimizePostLayoutFractionalR0Flow,
   optimizePostLayoutIndirectFlow,
 } from "../../src/core/post-layout-indirect-flow.ts";
@@ -190,5 +191,60 @@ describe("post-layout indirect flow", () => {
     expect(result.applied).toBe(1);
     expect(cellCount(result.items)).toBe(cellCount(program) - 1);
     expect(result.items.some((item) => item.kind === "op" && item.opcode === 0xa0)).toBe(true);
+  });
+
+  it("overlays a labeled single-cell op onto a direct jump address byte after layout proof", () => {
+    const program: MachineItem[] = [
+      ...jump("target"),
+      { kind: "label", name: "entry" },
+      op(0x07, "7"),
+      ...Array.from({ length: 5 }, () => digit()),
+      { kind: "label", name: "target" },
+      halt(),
+    ];
+    const result = optimizePostLayoutAddressCodeOverlay(program);
+
+    expect(result.applied).toBe(1);
+    expect(cellCount(result.items)).toBe(cellCount(program) - 1);
+    expect(result.items[0]).toMatchObject({ kind: "op", opcode: 0x51 });
+    expect(result.items[1]).toMatchObject({ kind: "label", name: "entry" });
+    expect(result.items[2]).toMatchObject({ kind: "address", target: "target" });
+    expect(result.items.some((item) => item.kind === "op" && item.opcode === 0x07)).toBe(false);
+    expect(result.optimizations[0]?.name).toBe("address-code-overlay");
+  });
+
+  it("keeps a labeled op when the jump address byte would not match after removal", () => {
+    const program: MachineItem[] = [
+      ...jump("target"),
+      { kind: "label", name: "entry" },
+      op(0x07, "7"),
+      ...Array.from({ length: 4 }, () => digit()),
+      { kind: "label", name: "target" },
+      halt(),
+    ];
+    const result = optimizePostLayoutAddressCodeOverlay(program);
+
+    expect(result.applied).toBe(0);
+    expect(result.items).toEqual(program);
+  });
+
+  it("does not overlay call or conditional continuations onto their address bytes", () => {
+    for (const branch of [
+      [{ kind: "op", opcode: 0x53, mnemonic: "ПП" } as MachineItem, { kind: "address", target: "target" } as MachineItem],
+      [{ kind: "op", opcode: 0x57, mnemonic: "F x!=0" } as MachineItem, { kind: "address", target: "target" } as MachineItem],
+    ]) {
+      const program: MachineItem[] = [
+        ...branch,
+        { kind: "label", name: "entry" },
+        op(0x07, "7"),
+        ...Array.from({ length: 5 }, () => digit()),
+        { kind: "label", name: "target" },
+        halt(),
+      ];
+      const result = optimizePostLayoutAddressCodeOverlay(program);
+
+      expect(result.applied).toBe(0);
+      expect(result.items).toEqual(program);
+    }
   });
 });
