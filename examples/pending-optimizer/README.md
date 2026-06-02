@@ -21,6 +21,9 @@ passes the main+setup load check.
 `rambo-iii.mkpro` moved back to the top-level examples at 105 cells and passes
 the main+setup load check.
 
+`teleport.mkpro` moved back to the top-level examples at 105 cells and passes
+the main+setup load check.
+
 Current `--analysis` sizes, measured against the local reference listings:
 
 Strict `mk-pro compile` mode is not guaranteed for every pending file yet.
@@ -33,7 +36,6 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | `cave-treasure.mkpro` | 151 | 105 | resource pressure, wall breaking, cache miss flow, and remaining dispatch overhead |
 | `giants-country.mkpro` | 129 | 105 | packed room-map display/flow and remaining event flow lowerers |
 | `labyrinth777.mkpro` | 122 | 105 | source-shaped row generation, energy accounting, and local-jumper flow are restored; remaining gap is compact source-style command algebra plus full player/floor row overlay |
-| `teleport.mkpro` | 195 | 105 | packed row display, station masks, and vault/guard flow |
 | `tic-tac-toe-4x4.mkpro` | 200 | 105 | 4x4 line-count state representation |
 
 Prototype notes:

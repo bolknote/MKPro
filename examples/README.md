@@ -4,10 +4,10 @@ Generated with `npm run examples:size`.
 
 ## Snapshot
 
-- Top-level examples: 23/23 fit in the 105-cell MK-61 window; 23/23 pass the headless load check.
-- Referenced top-level examples: 18/18 are no larger than the original MK-61 listing.
-- Tightest runnable examples: `rambo-iii.mkpro` (105), `fox-hunt-100.mkpro` (103), `game-100-pig.mkpro` (103).
-- Pending optimizer: 6 programs still exceed the MK-61 window; nearest is `pending-optimizer/labyrinth777.mkpro` (122).
+- Top-level examples: 24/24 fit in the 105-cell MK-61 window; 24/24 pass the headless load check.
+- Referenced top-level examples: 19/19 are no larger than the original MK-61 listing.
+- Tightest runnable examples: `rambo-iii.mkpro` (105), `teleport.mkpro` (105), `fox-hunt-100.mkpro` (103).
+- Pending optimizer: 5 programs still exceed the MK-61 window; nearest is `pending-optimizer/labyrinth777.mkpro` (122).
 
 ## Measurements
 
@@ -35,6 +35,7 @@ Generated with `npm run examples:size`.
 | `raja-yoga.mkpro` | 88 | 98 | -10 | ok: <= reference | main+setup load ok |
 | `rambo-iii.mkpro` | 105 | 105 | 0 | ok: <= reference | load ok |
 | `sea-battle.mkpro` | 82 | 102 | -20 | ok: <= reference | main+setup load ok |
+| `teleport.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |
 | `tiny-game.mkpro` | 23 | - | - | ok: no reference | load ok |
 | `treasure-hunter-2.mkpro` | 102 | 105 | -3 | ok: <= reference | main+setup load ok |
 | `wumpus.mkpro` | 101 | - | - | ok: no reference | main+setup load ok |
@@ -42,5 +43,4 @@ Generated with `npm run examples:size`.
 | `pending-optimizer/cave-treasure.mkpro` | 151 | 105 | +46 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/giants-country.mkpro` | 129 | 105 | +24 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/labyrinth777.mkpro` | 122 | 105 | +17 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/teleport.mkpro` | 195 | 105 | +90 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/tic-tac-toe-4x4.mkpro` | 200 | 105 | +95 | pending optimizer | not loaded: main >105 |

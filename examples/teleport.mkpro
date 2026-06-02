@@ -1,0 +1,119 @@
+reference anvarov_teleport
+
+// Source-shaped port of Serge Anvarov's "Teleport". The MK-61 listing stores
+// one packed plan per floor: the integer digit is that floor's guard room
+// (0..7), and the fractional digits are ladder bits for rooms 1..7. Room 0 is
+// the left storage/vault and is displayed under the floor digit, so player and
+// guard markers there are intentionally absent from the row picture.
+
+program Teleport {
+  const LADDER_MASK = 9.8888888
+
+  state {
+    floors: packed[1..4] = [max(frac(bit_and(random(), LADDER_MASK)) / 8, 0.0000001), max(frac(bit_and(random(), LADDER_MASK)) / 8, 0.0000001), max(frac(bit_and(random(), LADDER_MASK)) / 8, 0.0000001), 0]
+
+    charges: counter -99..99 = 5
+    vault_uses: counter 1..9 = 9
+    floor: counter 1..4 = 1
+    room: counter 0..8 = 7
+
+    command: packed = 0
+    step: packed = 0
+    empty_row: packed = bit_not(5 / 9)
+    row: packed = 0
+  }
+
+  fn caught() {
+    halt("ЕГГОГ")
+  }
+
+  fn escaped() {
+    halt(charges)
+  }
+
+  loop {
+    row = bit_xor(empty_row, bit_or(floors[floor] + 4 / pow10(int(floors[floor])), pow10(room) + 2))
+    show(floor, ".", row)
+    command = read()
+
+    unless frac(command) {
+      if command == 0 {
+        teleport_to_storage()
+      }
+      else {
+        parse_motion()
+      }
+    }
+  }
+
+  fn parse_motion() {
+    step = command - 5
+
+    unless step {
+      move_guard()
+    }
+    else {
+      step = int(1 / step)
+
+      unless step {
+        step = sign(command - 5)
+        move_floor()
+      }
+      else {
+        move_room()
+      }
+    }
+  }
+
+  fn move_floor() {
+    if step < 0 {
+      if floor > 1 {
+        floor--
+      }
+    }
+    else {
+      floor += sign(bit_and(floors[floor], 8 + 1 / pow10(room)))
+    }
+  }
+
+  fn move_room() {
+    room += step
+
+    if room < 0 {
+      room = 0
+    }
+    else {
+      if room == 0 {
+        charge_storage()
+      }
+      else {
+        move_guard()
+      }
+    }
+  }
+
+  fn teleport_to_storage() {
+    charges -= room
+    if charges < 0 {
+      caught()
+    }
+    room = 0
+  }
+
+  fn charge_storage() {
+    if vault_uses > 1 {
+      vault_uses--
+      charges += 10
+    }
+
+    move_guard()
+  }
+
+  fn move_guard() {
+    floors[floor] += 1 / int(atg(room - floors[floor]))
+
+    if room > 7 {
+      escaped()
+    }
+  }
+}
