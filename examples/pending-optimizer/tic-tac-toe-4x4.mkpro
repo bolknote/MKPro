@@ -17,7 +17,7 @@ program TicTacToe4x4 {
     y: packed = 0
     best_x: packed = 0
     best_y: packed = 0
-    bank: packed = 7
+    bank: packed = 0
     line: packed = 1
     score: packed = 0
     best_score: packed = 4
@@ -73,34 +73,30 @@ program TicTacToe4x4 {
     mask = pow10(x) + int(pow10(y * BIT_SHAPE))
   }
 
-  fn current_line() {
-    match bank {
-      7 => line = x
-      6 => line = y
-      5 => line = x + y
-      4 => line = x - y
-    }
-    if bank <= 5 {
-      normalize_line()
-    }
-  }
-
   fn subtract_lines() {
-    bank = 7
-    while bank >= 4 {
-      current_line()
-      weights[bank] -= pow10(line)
-      bank--
-    }
+    line = x
+    weights[7] -= pow10(line)
+    line = y
+    weights[6] -= pow10(line)
+    line = x + y
+    normalize_line()
+    weights[5] -= pow10(line)
+    line = x - y
+    normalize_line()
+    weights[4] -= pow10(line)
   }
 
   fn add_lines() {
-    bank = 7
-    while bank >= 4 {
-      current_line()
-      weights[bank] += pow10(line)
-      bank--
-    }
+    line = x
+    weights[7] += pow10(line)
+    line = y
+    weights[6] += pow10(line)
+    line = x + y
+    normalize_line()
+    weights[5] += pow10(line)
+    line = x - y
+    normalize_line()
+    weights[4] += pow10(line)
   }
 
   fn choose_reply() {
@@ -129,12 +125,16 @@ program TicTacToe4x4 {
 
   fn score_cell() {
     score = 98
-    bank = 7
-    while bank >= 4 {
-      current_line()
-      score += sqr(frac(weights[bank] / pow10(line)) - SCORE_CENTER)
-      bank--
-    }
+    line = x
+    score += sqr(frac(weights[7] / pow10(line)) - SCORE_CENTER)
+    line = y
+    score += sqr(frac(weights[6] / pow10(line)) - SCORE_CENTER)
+    line = x + y
+    normalize_line()
+    score += sqr(frac(weights[5] / pow10(line)) - SCORE_CENTER)
+    line = x - y
+    normalize_line()
+    score += sqr(frac(weights[4] / pow10(line)) - SCORE_CENTER)
   }
 
   fn calculator_win_check() {

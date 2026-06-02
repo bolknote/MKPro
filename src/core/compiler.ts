@@ -4878,7 +4878,7 @@ function buildReferenceReport(
     parity: compiledSteps < referenceSteps ? "smaller" : compiledSteps === referenceSteps ? "equal" : "larger",
   } satisfies CompileReport["reference"];
   const warning = metrics === undefined
-    ? `Reference '${referenceName}' was not found under games/*; using budget ${fallbackBudget} as reference size.`
+    ? `Reference '${referenceName}' was not found under games; using budget ${fallbackBudget} as reference size.`
     : undefined;
   return warning === undefined ? { report } : { report, warning };
 }
@@ -4894,10 +4894,8 @@ function resolveReferenceMetrics(referenceName: string): ReferenceMetrics | unde
 
   const reference = /^([A-Za-z0-9]+)_(.+)$/u.exec(referenceName);
   if (!reference) return undefined;
-  const collection = reference[1]!;
-  const collectionDirectory = collection === "kei" ? "tehnika-molodyzhi" : collection;
   const slug = reference[2]!.replace(/_/gu, "-");
-  const directory = path.resolve(repoRoot, "games", collectionDirectory);
+  const directory = path.resolve(repoRoot, "games");
   const manifestPath = path.resolve(directory, "manifest.tsv");
   let programFile = `${slug}.txt`;
 

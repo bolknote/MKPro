@@ -13,7 +13,7 @@ interface Mk61Instance {
 type Mk61Constructor = new (options?: { extended?: boolean }) => Mk61Instance;
 const { MK61 } = require("./mk61.cjs") as { MK61: Mk61Constructor };
 
-const SOURCE = `program SquareSum {
+const SOURCE = `program RepeatedQuotient {
   state {
     result: counter 0..99 = 0
   }
@@ -21,7 +21,7 @@ const SOURCE = `program SquareSum {
   loop {
     x = read()
     y = read()
-    result = (x + y) * (x + y)
+    result = (x + y) / (x + y)
     halt(result)
   }
 }
@@ -40,7 +40,7 @@ describe("stack duplication (В↑) of a repeated pure operand", () => {
     expect(codes.filter((opcode) => opcode === 0x10).length).toBe(1);
   });
 
-  it("computes (3 + 4)^2 = 49 on the emulator", () => {
+  it("computes (3 + 4) / (3 + 4) = 1 on the emulator", () => {
     const calc = new MK61();
     calc.loadProgram(compiled.steps.map((step) => step.opcode));
     // Drive the read/stop cycle the way a user would: run to each С/П stop
@@ -51,6 +51,6 @@ describe("stack duplication (В↑) of a repeated pure operand", () => {
       run = calc.runUntilStable({ maxFrames: 400, stableFrames: 3 });
     }
     expect(run.stopped).toBe(true);
-    expect(calc.displayText().replace(/\s/gu, "")).toContain("49");
+    expect(calc.displayText().replace(/\s/gu, "")).toContain("1");
   });
 });

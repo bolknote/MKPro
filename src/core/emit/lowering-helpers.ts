@@ -2537,6 +2537,21 @@ export function minExpression(left: ExpressionAst, right: ExpressionAst): Expres
   return negateExpression(maxExpression(negateExpression(left), negateExpression(right)));
 }
 
+// Quirk-free maximum that avoids the К max (0x36) "zero is the greatest value"
+// hardware behaviour by computing (a + b + |a - b|) / 2 with ordinary arithmetic.
+// Both operands are referenced twice, so callers must pass duplicable (pure)
+// expressions.
+export function safeMaxExpression(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
+  const span = absExpression(subtractExpressions(left, right));
+  return divideExpressions(addExpressions(addExpressions(left, right), span), numberExpression(2));
+}
+
+// Quirk-free minimum: (a + b - |a - b|) / 2. Same duplicable-operand requirement.
+export function safeMinExpression(left: ExpressionAst, right: ExpressionAst): ExpressionAst {
+  const span = absExpression(subtractExpressions(left, right));
+  return divideExpressions(subtractExpressions(addExpressions(left, right), span), numberExpression(2));
+}
+
 export function absExpression(expr: ExpressionAst): ExpressionAst {
   return { kind: "call", callee: "abs", args: [expr] };
 }
@@ -3683,6 +3698,8 @@ export function estimateCallCost(expr: Extract<ExpressionAst, { kind: "call" }>)
   if (name === "pi") return 1;
   if (name === "e") return 2;
   if (name === "min" && expr.args.length === 2) return estimateExpressionCost(minExpression(expr.args[0]!, expr.args[1]!));
+  if (name === "safe_max" && expr.args.length === 2) return estimateExpressionCost(safeMaxExpression(expr.args[0]!, expr.args[1]!));
+  if (name === "safe_min" && expr.args.length === 2) return estimateExpressionCost(safeMinExpression(expr.args[0]!, expr.args[1]!));
   if (name === "pow") {
     if (expr.args[1] !== undefined && isNumericValue(expr.args[1], 2)) {
       return (expr.args[0] ? estimateExpressionCost(expr.args[0]) : 0) + 1;

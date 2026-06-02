@@ -19,6 +19,8 @@ import {
   isPackedGridMacroName,
   matchStackUnaryDerivationCall,
   minExpression,
+  safeMaxExpression,
+  safeMinExpression,
   matchXParamReturnDecay,
   matchXParamStackStopRiskRead,
   matchRemainderByConstant,
@@ -451,6 +453,39 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
       ctx.optimizations.push({
         name: "min-via-max-lowering",
         detail: `Lowered ${expressionToIntentText(expr)} through min-via-max().`,
+      });
+      return;
+    }
+
+    if (name === "safe_max" || name === "safe_min") {
+      if (expr.args.length !== 2) {
+        ctx.diagnostics.push({
+          level: "error",
+          message: `Function ${expr.callee} expects two arguments.`,
+        });
+        return;
+      }
+      const left = expr.args[0]!;
+      const right = expr.args[1]!;
+      // The arithmetic identity references both operands twice, so impure
+      // operands (calls such as random()/read()) cannot be duplicated safely.
+      if (!isPureExpression(left) || !isPureExpression(right)) {
+        ctx.diagnostics.push({
+          level: "error",
+          message: `${expr.callee}() requires duplicable operands; bind ${
+            isPureExpression(left) ? "the second" : "the first"
+          } argument to a variable first.`,
+        });
+        return;
+      }
+      const lowered =
+        name === "safe_max"
+          ? safeMaxExpression(left, right)
+          : safeMinExpression(left, right);
+      compileExpression(ctx, lowered);
+      ctx.optimizations.push({
+        name: "quirk-free-minmax-lowering",
+        detail: `Lowered ${expressionToIntentText(expr)} through quirk-free arithmetic (avoids the К max zero-is-greatest behaviour).`,
       });
       return;
     }

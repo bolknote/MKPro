@@ -5,8 +5,8 @@ const path = require('path');
 const { MK61, parseProgramText } = require('./mk61.cjs');
 const { parseMany } = require('./lordbss.cjs');
 
-const root = path.resolve(__dirname, '../../games/lordbss');
-const games = parseMany(root, ['pmk38.txt', 'pmk00.txt', 'pmk01.txt']);
+const root = path.resolve(__dirname, '../../games');
+const games = parseMany(root, ['posadka-na-lunu.txt', 'boxing.txt', 'kazino.txt']);
 
 for (const game of games) {
   const calc = new MK61();
@@ -46,13 +46,13 @@ lunar.press('С/П');
 const fuelStop = lunar.runUntilStable({ maxFrames: 120, stableFrames: 5 });
 const fuel = lunar.displayText();
 
-console.log('pmk38 run:');
+console.log('lunar run:');
 console.log(`  height stop: ${heightStop.stopped ? 'stable' : 'not stable'} after ${heightStop.frames} frames, display ${JSON.stringify(height)}`);
 console.log(`  speed stop: ${speedStop.stopped ? 'stable' : 'not stable'} after ${speedStop.frames} frames, display ${JSON.stringify(speed)}`);
 console.log(`  fuel stop: ${fuelStop.stopped ? 'stable' : 'not stable'} after ${fuelStop.frames} frames, display ${JSON.stringify(fuel)}`);
 console.log(`  program counter: ${lunar.programCounter()}`);
 
-const demoPath = path.join(root, '../anvarov/demo.txt');
+const demoPath = path.join(root, 'demo.txt');
 const demoText = require('fs').readFileSync(demoPath, 'utf8');
 const demo = new MK61();
 const demoParsed = demo.loadProgram(demoText);

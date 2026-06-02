@@ -278,6 +278,10 @@ function foldPureConstantCall(
         return values.length === 2 ? maxDecimal(values[0]!, values[1]!) : undefined;
       case "min":
         return values.length === 2 ? minDecimal(values[0]!, values[1]!) : undefined;
+      case "safe_max":
+        return values.length === 2 ? safeMaxDecimal(values[0]!, values[1]!) : undefined;
+      case "safe_min":
+        return values.length === 2 ? safeMinDecimal(values[0]!, values[1]!) : undefined;
       case "bit_and":
         return values.length === 2 ? foldBitwise(values[0]!, values[1]!, "and") : undefined;
       case "bit_or":
@@ -770,6 +774,16 @@ function maxDecimal(left: DecimalValue, right: DecimalValue): DecimalValue {
 
 function minDecimal(left: DecimalValue, right: DecimalValue): DecimalValue {
   if (isDecimalZero(left) || isDecimalZero(right)) return decimal(0);
+  return compareDecimal(left, right) <= 0 ? left : right;
+}
+
+// safe_max/safe_min fold with true mathematical semantics: unlike the hardware
+// К max (mirrored above), zero carries no special "greatest value" meaning.
+function safeMaxDecimal(left: DecimalValue, right: DecimalValue): DecimalValue {
+  return compareDecimal(left, right) >= 0 ? left : right;
+}
+
+function safeMinDecimal(left: DecimalValue, right: DecimalValue): DecimalValue {
   return compareDecimal(left, right) <= 0 ? left : right;
 }
 

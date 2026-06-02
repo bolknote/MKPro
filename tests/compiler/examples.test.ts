@@ -92,7 +92,7 @@ describe("examples", () => {
     expect(result.report.steps).toBeLessThanOrEqual(result.report.reference!.referenceSpan);
     expect(result.report.optimizations.some((item) => item.name === "decimal-series-lowering")).toBe(true);
 
-    const reference = parseProgramText(readFileSync(resolve("games/anvarov/e-94-digits.txt"), "utf8"));
+    const reference = parseProgramText(readFileSync(resolve("games/e-94-digits.txt"), "utf8"));
     expect(reference.diagnostics).toEqual([]);
     expect(runE94Observable(result.steps.map((step) => step.opcode))).toEqual(runE94Observable(reference.codes));
   });

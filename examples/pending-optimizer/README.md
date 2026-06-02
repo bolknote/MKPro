@@ -38,16 +38,17 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | `cave-highlevel-baseline.mkpro` | 150 | 105 | source-faithful fixed wall/cache setup, resource pressure, movement decoder, and remaining cave flow lowerers |
 | `cave-treasure.mkpro` | 144 | 105 | source-shaped command decoder is in place; remaining blockers are resource pressure, wall breaking, cache reward flow, and dispatch overhead |
 | `giants-country.mkpro` | 105 | 105 | fits after restoring the source-style direct R5 position counter; pending only for exact cave-picture/warning display audit |
-| `tic-tac-toe-4x4.mkpro` | 272 | 105 | source-shaped packed 4x4 line scan/update lowering |
+| `tic-tac-toe-4x4.mkpro` | 269 | 105 | source-shaped line update/score pass is in place; remaining packed 4x4 scan lowering |
 
 Prototype notes:
 
 - `tic-tac-toe-4x4.txt` keeps 4x4 line state in packed line registers
   (`R4..R7`) and updates/scans those lines directly. The MK-Pro source now uses
   the same occupied mask, packed line weights, `X ПП Y С/П` input shape, and
-  squared-deviation scan. The remaining gap is compiler lowering: it still emits
-  ordinary calls/loops for the packed-line update and full-board scan instead of
-  the source listing's stack-resident indirect-address subroutine shape.
+  squared-deviation scan; line updates and scoring follow the source's explicit
+  `x`, `y`, `x+y`, `x-y` pass. The remaining gap is compiler lowering: it still
+  emits ordinary calls/loops for the full-board scan and win scan instead of the
+  source listing's stack-resident indirect-address subroutine shape.
 
 Stack-resident temp scheduler (2026-06):
 
