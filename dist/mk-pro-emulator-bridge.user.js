@@ -383,6 +383,9 @@ var MKProEmulatorBundle = (() => {
             statement.target.index = this.foldExpression(statement.target.index);
             statement.expr = this.foldExpression(statement.expr);
             break;
+          case "coord_list_remove":
+            statement.item = this.foldExpression(statement.item);
+            break;
           case "loop":
             this.foldStatements(statement.body);
             break;
@@ -425,6 +428,9 @@ var MKProEmulatorBundle = (() => {
     folded(expr) {
       this.applied += 1;
       return expr;
+    }
+    foldExpressionPublic(expr) {
+      return this.foldExpression(expr);
     }
     foldExpression(expr) {
       switch (expr.kind) {
@@ -514,6 +520,9 @@ var MKProEmulatorBundle = (() => {
   function foldProgramConstants(ast) {
     return new ConstantFolder().foldProgram(ast);
   }
+  function foldConstExpression(expr) {
+    return new ConstantFolder().foldExpressionPublic(expr);
+  }
   function foldNumericBinary(op, left, right) {
     if (left.kind !== "number" || right.kind !== "number") return void 0;
     const lhs = parseDecimalLiteral(left.raw);
@@ -562,6 +571,8 @@ var MKProEmulatorBundle = (() => {
           return values.length === 2 ? powDecimalInteger(values[0], values[1]) : void 0;
         case "max":
           return values.length === 2 ? maxDecimal(values[0], values[1]) : void 0;
+        case "min":
+          return values.length === 2 ? minDecimal(values[0], values[1]) : void 0;
         case "bit_and":
           return values.length === 2 ? foldBitwise(values[0], values[1], "and") : void 0;
         case "bit_or":
@@ -978,6 +989,10 @@ var MKProEmulatorBundle = (() => {
     if (isDecimalZero(left) || isDecimalZero(right)) return decimal(0);
     return compareDecimal(left, right) >= 0 ? left : right;
   }
+  function minDecimal(left, right) {
+    if (isDecimalZero(left) || isDecimalZero(right)) return decimal(0);
+    return compareDecimal(left, right) <= 0 ? left : right;
+  }
   function foldBitwise(left, right, op) {
     const lhs = decimalMantissaDigits(left);
     const rhs = decimalMantissaDigits(right);
@@ -1159,6 +1174,22 @@ var MKProEmulatorBundle = (() => {
     }
     return void 0;
   }
+  function affineIndexIdentifierOffset(expr) {
+    if (expr.kind === "identifier") return { name: expr.name, offset: 0 };
+    if (expr.kind !== "binary") return void 0;
+    const left = affineIndexIdentifierOffset(expr.left);
+    const right = numericIndexValue(expr.right);
+    if (left !== void 0 && right !== void 0) {
+      if (expr.op === "+") return { name: left.name, offset: left.offset + right };
+      if (expr.op === "-") return { name: left.name, offset: left.offset - right };
+    }
+    const leftConstant = numericIndexValue(expr.left);
+    const rightIdentifier = affineIndexIdentifierOffset(expr.right);
+    if (expr.op === "+" && leftConstant !== void 0 && rightIdentifier !== void 0) {
+      return { name: rightIdentifier.name, offset: rightIdentifier.offset + leftConstant };
+    }
+    return void 0;
+  }
   function contiguousRegisterOffset(member, registers) {
     let offset;
     for (const element of member.elements) {
@@ -1315,6 +1346,13 @@ var MKProEmulatorBundle = (() => {
           const node = this.add({
             defs: this.indexedTargetDefs(statement.target),
             uses: [.../* @__PURE__ */ new Set([...this.exprUses(statement.expr), ...exprVars(statement.target.index)])]
+          });
+          return { entry: node, exits: [node] };
+        }
+        case "coord_list_remove": {
+          const node = this.add({
+            defs: statement.items,
+            uses: [.../* @__PURE__ */ new Set([...this.exprUses(statement.item), ...statement.items])]
           });
           return { entry: node, exits: [node] };
         }
@@ -1845,7863 +1883,6 @@ var MKProEmulatorBundle = (() => {
     return rewrites;
   }
 
-  // src/core/parser.ts
-  var V2_RESERVED_RULE_NAMES = /* @__PURE__ */ new Set([
-    "challenge",
-    "else",
-    "fn",
-    "halt",
-    "if",
-    "loop",
-    "match",
-    "move",
-    "otherwise",
-    "program",
-    "read",
-    "return",
-    "rule",
-    "screen",
-    "show",
-    "state",
-    "stop",
-    "turn",
-    "world"
-  ]);
-  var ParseError = class extends Error {
-    line;
-    constructor(message, line) {
-      super(`${message} at line ${line}`);
-      this.line = line;
-    }
-  };
-  function parseProgram(source, options = {}) {
-    return new MKProParser(source, options).parseProgram();
-  }
-  var MKProParser = class {
-    lines;
-    options;
-    index = 0;
-    constructor(source, options) {
-      this.options = options;
-      this.lines = source.split(/\r?\n/u).flatMap((text, offset) => normalizeSourceLine(text, offset + 1)).filter((line) => line.text.length > 0);
-    }
-    parseProgram() {
-      let reference;
-      let v2;
-      const domains = [];
-      const states = [];
-      const displays = [];
-      const entries = [];
-      const procs = [];
-      let programBanks;
-      while (!this.done()) {
-        const line = this.peek();
-        if (line.text === "}") {
-          throw new ParseError("Unexpected closing brace", line.line);
-        }
-        if (line.text.startsWith("reference ")) {
-          reference = line.text.slice("reference ".length).trim();
-          this.index += 1;
-        } else if (line.text.startsWith("program ")) {
-          if (v2 !== void 0) {
-            throw new ParseError("Only one program block is supported", line.line);
-          }
-          v2 = this.parseV2Program();
-          if (this.options.synthesizeParametricSiblings === true) {
-            synthesizeV2ParametricSiblingRules(v2);
-          }
-          const lowered = lowerV2Program(v2, this.options);
-          domains.push(...lowered.domains);
-          states.push(...lowered.states);
-          displays.push(...lowered.displays);
-          entries.push(...lowered.entries);
-          procs.push(...lowered.procs);
-          if (lowered.banks !== void 0) {
-            if (programBanks === void 0) programBanks = [];
-            programBanks.push(...lowered.banks);
-          }
-        } else {
-          throw new ParseError(`Unexpected top-level line '${line.text}'`, line.line);
-        }
-      }
-      if (v2 === void 0) throw new ParseError("Program must contain one V2 program block", 1);
-      const program = {
-        domains,
-        states,
-        displays,
-        entries,
-        procs
-      };
-      if (programBanks !== void 0 && programBanks.length > 0) program.banks = programBanks;
-      if (reference !== void 0) program.reference = reference;
-      if (v2 !== void 0) program.v2 = v2;
-      return program;
-    }
-    parseV2Program() {
-      const header = this.next();
-      const match = /^program\s+([A-Za-z_][\w]*)\s*\{$/u.exec(header.text);
-      if (!match) throw new ParseError("Program must look like 'program Name {'", header.line);
-      const state = [];
-      const boards = [];
-      const worlds = [];
-      const body = [];
-      const rules = [];
-      while (!this.done()) {
-        const line = this.peek();
-        if (line.text === "}") {
-          this.index += 1;
-          const program = {
-            kind: "v2_program",
-            name: match[1],
-            state,
-            boards,
-            worlds,
-            body,
-            rules,
-            line: header.line
-          };
-          return program;
-        }
-        if (line.text === "state {") {
-          this.index += 1;
-          state.push(...this.parseV2StateBlock());
-          continue;
-        }
-        const board = parseV2BoardDeclaration(line);
-        if (board !== void 0) {
-          this.index += 1;
-          boards.push(board);
-          continue;
-        }
-        const compactBoard = parseV2CompactBoardDeclaration(line);
-        if (compactBoard !== void 0) {
-          this.index += 1;
-          worlds.push(compactBoard);
-          continue;
-        }
-        if (line.text.startsWith("board ")) throw new ParseError("Board must look like 'name: board(0..9, 0..9)'", line.line);
-        if (line.text.startsWith("fleet ")) throw new ParseError("Fleet blocks were removed; declare cells and counters in state", line.line);
-        if (line.text.startsWith("world ")) {
-          throw new ParseError("Use 'name: board(encoding)' instead of world blocks", line.line);
-        }
-        if (line.text.startsWith("encounters ")) {
-          throw new ParseError("Use match blocks instead of encounters blocks", line.line);
-        }
-        if (line.text.startsWith("screen ")) {
-          throw new ParseError("Use 'fn name() { show(...) }' instead of screen blocks", line.line);
-        }
-        if (line.text === "turn {") {
-          throw new ParseError("Use 'loop {' instead of turn blocks", line.line);
-        }
-        if (line.text.startsWith("fn ")) {
-          rules.push(this.parseV2Rule(line.text));
-          continue;
-        }
-        if (line.text.startsWith("rule ")) {
-          throw new ParseError("Use 'fn name(arg, ...) {' instead of rule blocks", line.line);
-        }
-        const knownStatementBlock = /^(match|if|while|loop)\b/u.test(line.text) || line.text === "raw {";
-        if (line.text.startsWith("input ") || line.text.endsWith("{") && !knownStatementBlock) {
-          throw new ParseError(`Unexpected program line '${line.text}'`, line.line);
-        }
-        body.push(this.parseV2Statement());
-      }
-      throw new ParseError("Unclosed program block", header.line);
-    }
-    parseV2StateBlock() {
-      const fields = [];
-      while (!this.done()) {
-        const line = this.peek();
-        if (line.text === "}") {
-          this.index += 1;
-          return fields;
-        }
-        if (/^[A-Za-z_][\w]*\s*:\s*group\s*\(\s*-?\d+\.\.-?\d+\s*\)\s*\{$/u.test(line.text)) {
-          fields.push(...this.parseV2StateGroup());
-          continue;
-        }
-        this.index += 1;
-        if (line.text === "}") return fields;
-        fields.push(parseV2StateField(line));
-      }
-      throw new ParseError("Unclosed state block", this.lines.at(-1)?.line ?? 1);
-    }
-    parseV2StateGroup() {
-      const header = this.next();
-      const match = /^([A-Za-z_][\w]*)\s*:\s*group\s*\(\s*(-?\d+)\.\.(-?\d+)\s*\)\s*\{$/u.exec(header.text);
-      if (!match) throw new ParseError("State group must look like 'name: group(1..3) {'", header.line);
-      const name = match[1];
-      const min = Number(match[2]);
-      const max = Number(match[3]);
-      if (!Number.isInteger(min) || !Number.isInteger(max) || max < min) {
-        throw new ParseError(`Invalid state group range '${match[2]}..${match[3]}'`, header.line);
-      }
-      const fields = [];
-      while (!this.done()) {
-        const line = this.peek();
-        if (line.text === "}") {
-          this.index += 1;
-          return fields;
-        }
-        if (line.text.includes("group")) {
-          throw new ParseError("Nested state groups are not supported", line.line);
-        }
-        this.index += 1;
-        const field = parseV2StateField(line);
-        if (field.bank !== void 0) {
-          throw new ParseError("State group members cannot also be indexed arrays", line.line);
-        }
-        fields.push({
-          ...field,
-          name: bankFieldStateName(name, field.name),
-          bank: { name, member: field.name, min, max }
-        });
-      }
-      throw new ParseError("Unclosed state group", header.line);
-    }
-    parseV2Rule(text) {
-      const header = this.next();
-      const fn = /^fn\s+([A-Za-z_][\w]*)\s*\(([^)]*)\)\s*\{$/u.exec(text);
-      if (!fn) {
-        throw new ParseError("Function must look like 'fn name(arg, ...) {'", header.line);
-      }
-      const name = fn[1];
-      if (V2_RESERVED_RULE_NAMES.has(name)) {
-        throw new ParseError(`Function name '${name}' is reserved`, header.line);
-      }
-      const params = parseCommaIdentifierList(fn[2] ?? "", header.line);
-      for (const param of params) {
-        if (!/^[A-Za-z_][\w]*$/u.test(param)) {
-          throw new ParseError(`Invalid function parameter '${param}'`, header.line);
-        }
-      }
-      return {
-        kind: "v2_rule",
-        name,
-        params,
-        body: this.parseV2StatementBlock(),
-        line: header.line
-      };
-    }
-    parseV2StatementBlock() {
-      const statements = [];
-      while (!this.done()) {
-        const line = this.peek();
-        if (line.text === "}") {
-          this.index += 1;
-          return statements;
-        }
-        statements.push(this.parseV2Statement());
-      }
-      throw new ParseError("Unclosed statement block", this.lines.at(-1)?.line ?? 1);
-    }
-    parseV2Statement() {
-      const line = this.peek();
-      if (line.text.startsWith("match ") && line.text.endsWith("{")) {
-        this.index += 1;
-        return this.parseV2Match(line.text, line.line);
-      }
-      if (line.text.startsWith("if ") && line.text.endsWith("{")) {
-        this.index += 1;
-        return this.parseV2If(line);
-      }
-      if (line.text === "else {" || line.text.startsWith("else if ")) {
-        throw new ParseError("'else' without matching 'if'", line.line);
-      }
-      if (line.text.startsWith("while ") && line.text.endsWith("{")) {
-        this.index += 1;
-        return {
-          kind: "v2_while",
-          predicate: parseV2Predicate(line.text.slice("while ".length, -1).trim(), line.line),
-          body: this.parseV2StatementBlock(),
-          line: line.line
-        };
-      }
-      if (line.text === "loop {") {
-        this.index += 1;
-        return {
-          kind: "v2_loop",
-          body: this.parseV2StatementBlock(),
-          line: line.line
-        };
-      }
-      if (line.text.startsWith("challenge ") && line.text.endsWith("{")) {
-        throw new ParseError("Use ordinary show/read/if statements instead of challenge blocks", line.line);
-      }
-      if (line.text === "raw {") {
-        this.index += 1;
-        return this.parseV2Raw(line.line);
-      }
-      this.index += 1;
-      return parseV2InlineStatement(line.text, line.line);
-    }
-    parseV2Raw(line) {
-      const inputs = [];
-      const outputs = [];
-      let clobbers;
-      let preserves;
-      let code;
-      while (!this.done()) {
-        const bodyLine = this.peek();
-        if (bodyLine.text === "}") {
-          this.index += 1;
-          if (code === void 0) throw new ParseError("Raw block must contain code { ... }", line);
-          if (clobbers === void 0) throw new ParseError("Raw block must declare clobbers", line);
-          if (preserves === void 0 || !preserves.includes("state")) {
-            throw new ParseError("Raw block must declare preserves state", line);
-          }
-          if (clobbers.includes("state")) {
-            throw new ParseError("Raw block cannot clobber high-level state; return values through returns X -> name", line);
-          }
-          validateV2RawInputs(inputs, line);
-          return {
-            kind: "v2_raw",
-            inputs,
-            outputs,
-            clobbers,
-            preserves,
-            lines: code,
-            line
-          };
-        }
-        if (bodyLine.text.startsWith("takes ")) {
-          this.index += 1;
-          for (const input of parseV2RawInputs(bodyLine.text.slice("takes ".length), bodyLine.line)) {
-            if (inputs.some((existing) => existing.slot === input.slot)) {
-              throw new ParseError(`Raw input for ${input.slot} is declared more than once`, input.line);
-            }
-            inputs.push(input);
-          }
-          continue;
-        }
-        if (bodyLine.text.startsWith("returns ")) {
-          this.index += 1;
-          if (outputs.length > 0) throw new ParseError("Raw block currently supports one return value", bodyLine.line);
-          outputs.push(parseV2RawOutput(bodyLine.text.slice("returns ".length), bodyLine.line));
-          continue;
-        }
-        if (bodyLine.text.startsWith("clobbers ")) {
-          this.index += 1;
-          if (clobbers !== void 0) throw new ParseError("Raw block must declare clobbers only once", bodyLine.line);
-          clobbers = parseV2RawContractList(bodyLine.text.slice("clobbers ".length), bodyLine.line);
-          continue;
-        }
-        if (bodyLine.text.startsWith("preserves ")) {
-          this.index += 1;
-          if (preserves !== void 0) throw new ParseError("Raw block must declare preserves only once", bodyLine.line);
-          preserves = parseV2RawContractList(bodyLine.text.slice("preserves ".length), bodyLine.line);
-          continue;
-        }
-        if (bodyLine.text === "code {") {
-          this.index += 1;
-          if (code !== void 0) throw new ParseError("Raw block must contain only one code block", bodyLine.line);
-          code = this.parseRawCodeBlock(bodyLine.line);
-          continue;
-        }
-        throw new ParseError(`Unexpected raw line '${bodyLine.text}'`, bodyLine.line);
-      }
-      throw new ParseError("Unclosed raw block", line);
-    }
-    parseRawCodeBlock(line) {
-      const lines = [];
-      while (!this.done()) {
-        const rawLine = this.next();
-        if (rawLine.text === "}") return lines;
-        lines.push({ text: rawLine.text, line: rawLine.line });
-      }
-      throw new ParseError("Unclosed raw code block", line);
-    }
-    parseV2If(line) {
-      const match = /^if\s+(.+)\s*\{$/u.exec(line.text);
-      if (!match) throw new ParseError("If must look like 'if predicate {'", line.line);
-      const statement = {
-        kind: "v2_if",
-        predicate: parseV2Predicate(match[1].trim(), line.line),
-        thenBody: this.parseV2StatementBlock(),
-        line: line.line
-      };
-      const elseBody = this.parseV2ElseBody();
-      if (elseBody !== void 0) statement.elseBody = elseBody;
-      return statement;
-    }
-    parseV2ElseBody() {
-      const next = this.peekOptional();
-      if (next?.text === "else {") {
-        this.index += 1;
-        return this.parseV2StatementBlock();
-      }
-      if (next?.text.startsWith("else if ") && next.text.endsWith("{")) {
-        this.index += 1;
-        return [this.parseV2If({ text: next.text.slice("else ".length), line: next.line })];
-      }
-      return void 0;
-    }
-    parseV2Match(text, line) {
-      const match = /^match\s+(.+?)\s*\{$/u.exec(text);
-      if (!match) throw new ParseError("Match must look like 'match expr {'", line);
-      const cases = [];
-      let otherwise;
-      while (!this.done()) {
-        const bodyLine = this.next();
-        if (bodyLine.text === "}") {
-          const statement = {
-            kind: "v2_match",
-            expr: match[1].trim(),
-            cases,
-            line
-          };
-          if (otherwise !== void 0) statement.otherwise = otherwise;
-          return statement;
-        }
-        const arrow = /^(.+?)\s*=>\s*(.+)$/u.exec(bodyLine.text);
-        if (!arrow) throw new ParseError("Match cases must look like 'value => action'", bodyLine.line);
-        const left = arrow[1].trim();
-        const action = parseV2InlineStatement(arrow[2].trim(), bodyLine.line);
-        if (left === "otherwise") {
-          otherwise = action;
-        } else {
-          cases.push({
-            values: left.split(",").map((part) => part.trim()).filter(Boolean),
-            action,
-            line: bodyLine.line
-          });
-        }
-      }
-      throw new ParseError("Unclosed match block", line);
-    }
-    done() {
-      return this.index >= this.lines.length;
-    }
-    peek() {
-      const line = this.lines[this.index];
-      if (!line) throw new ParseError("Unexpected end of file", this.lines.at(-1)?.line ?? 1);
-      return line;
-    }
-    peekOptional() {
-      return this.lines[this.index];
-    }
-    next() {
-      const line = this.peek();
-      this.index += 1;
-      return line;
-    }
-  };
-  function parseV2StateField(line) {
-    const match = /^([A-Za-z_][\w]*)\s*:\s*([A-Za-z_][\w]*)(?:\[\s*(-?\d+)\.\.(-?\d+)\s*\])?(?:\(([^)]*)\))?(.*)$/u.exec(line.text);
-    if (!match) {
-      throw new ParseError("State field must look like 'name: counter 0..9 = 0', 'name: packed[1..3] = 0', or 'name: cells(domain) = random()'", line.line);
-    }
-    const typeText = match[2].toLowerCase();
-    if (!["flag", "counter", "coord", "cells", "coord_list", "packed"].includes(typeText)) {
-      throw new ParseError(`Unknown state type '${match[2]}'`, line.line);
-    }
-    const bankMin = match[3] === void 0 ? void 0 : Number(match[3]);
-    const bankMax = match[4] === void 0 ? void 0 : Number(match[4]);
-    if (bankMin === void 0 !== (bankMax === void 0)) {
-      throw new ParseError("Indexed state range must look like '[1..3]'", line.line);
-    }
-    if (bankMin !== void 0 && (!Number.isInteger(bankMin) || !Number.isInteger(bankMax) || bankMax < bankMin)) {
-      throw new ParseError(`Invalid indexed state range '${match[3]}..${match[4]}'`, line.line);
-    }
-    if (bankMin !== void 0 && typeText === "coord_list") {
-      throw new ParseError("coord_list cannot be declared as an indexed state bank", line.line);
-    }
-    const args = match[5]?.trim();
-    const argList = args === void 0 ? [] : splitArgs(args);
-    if (typeText === "cells" && (!args || argList.length !== 1)) {
-      throw new ParseError("cells state must look like 'name: cells(domain) = random()'", line.line);
-    }
-    if (typeText === "coord" && (!args || argList.length !== 1)) {
-      throw new ParseError("coord state must look like 'name: coord(domain)'", line.line);
-    }
-    if (typeText === "coord_list" && (!args || argList.length !== 2)) {
-      throw new ParseError("coord_list state must look like 'name: coord_list(domain, count)'", line.line);
-    }
-    if (!["cells", "coord", "coord_list"].includes(typeText) && args !== void 0) {
-      throw new ParseError(`State type '${match[2]}' does not take parameters`, line.line);
-    }
-    const tail = match[6].trim();
-    const tailMatch = /^(?:(-?\d+)\.\.(-?\d+))?(?:\s*=\s*(.+))?$/u.exec(tail);
-    if (!tailMatch) {
-      throw new ParseError("State field must look like 'name: counter 0..9 = 0' or 'name: cells(domain) = random()'", line.line);
-    }
-    if (typeText === "counter" && tailMatch[1] === void 0) {
-      throw new ParseError("counter state must look like 'name: counter 0..9 = 0'", line.line);
-    }
-    if (typeText !== "counter" && tailMatch[1] !== void 0) {
-      throw new ParseError(`State type '${match[2]}' does not take a numeric range`, line.line);
-    }
-    const field = {
-      kind: "v2_state_field",
-      name: match[1],
-      type: typeText,
-      line: line.line
-    };
-    if (bankMin !== void 0 && bankMax !== void 0) {
-      field.bank = { name: field.name, min: bankMin, max: bankMax };
-    }
-    if (typeText === "cells" || typeText === "coord") {
-      field.domain = argList[0];
-    }
-    if (typeText === "coord_list") {
-      const count = Number(argList[1]);
-      if (!Number.isInteger(count) || count < 1) {
-        throw new ParseError(`coord_list count must be a positive integer, got '${argList[1]}'`, line.line);
-      }
-      field.domain = argList[0];
-      field.count = count;
-    }
-    if (tailMatch[1] !== void 0) {
-      field.min = Number(tailMatch[1]);
-      field.max = Number(tailMatch[2]);
-    }
-    if (tailMatch[3] !== void 0) field.initial = tailMatch[3].trim();
-    return field;
-  }
-  function bankFieldStateName(bank, member) {
-    return member === void 0 ? bank : `${bank}_${member}`;
-  }
-  function parseV2BoardDeclaration(line) {
-    const match = /^([A-Za-z_][\w]*)\s*:\s*board\(\s*(-?\d+)\.\.(-?\d+)\s*,\s*(-?\d+)\.\.(-?\d+)\s*\)$/u.exec(line.text);
-    if (!match) return void 0;
-    const xMin = Number(match[2]);
-    const xMax = Number(match[3]);
-    const yMin = Number(match[4]);
-    const yMax = Number(match[5]);
-    if (xMin > xMax || yMin > yMax) {
-      throw new ParseError("Board ranges must be ascending", line.line);
-    }
-    return {
-      kind: "v2_board",
-      name: match[1],
-      xMin,
-      xMax,
-      yMin,
-      yMax,
-      width: xMax - xMin + 1,
-      height: yMax - yMin + 1,
-      line: line.line
-    };
-  }
-  function parseV2CompactBoardDeclaration(line) {
-    const match = /^([A-Za-z_][\w]*)\s*:\s*board\(\s*([A-Za-z_][\w]*)\s*\)$/u.exec(line.text);
-    if (!match) return void 0;
-    const name = match[1];
-    const encoding = match[2];
-    if (!isKnownCompactBoardEncoding(encoding)) {
-      throw new ParseError(`Unknown board encoding '${encoding}'.`, line.line);
-    }
-    return {
-      kind: "v2_world",
-      name,
-      position: {
-        name,
-        encoding,
-        line: line.line
-      },
-      line: line.line
-    };
-  }
-  function isKnownCompactBoardEncoding(encoding) {
-    return [
-      "corridor_plan",
-      "decimal_player",
-      "floor_plan",
-      "packed_decimal_zero_run",
-      "pier_to_ship",
-      "row_scan"
-    ].includes(encoding);
-  }
-  function parseV2InlineStatement(text, line) {
-    const showCall = parseNamedCall(text, "show");
-    if (showCall !== void 0) return parseV2ShowCall(showCall.argsText, line);
-    const haltCall = parseNamedCall(text, "halt");
-    if (haltCall !== void 0) {
-      return { kind: "v2_stop", value: haltCall.argsText.trim() === "" ? "0" : haltCall.argsText.trim(), line };
-    }
-    const readAssignment = /^([A-Za-z_][\w]*)\s*=\s*read\s*\(\s*\)$/u.exec(text);
-    if (readAssignment) {
-      return { kind: "v2_read", target: readAssignment[1], line };
-    }
-    if (text.startsWith("show ")) {
-      throw new ParseError("Show must look like 'show(...)'", line);
-    }
-    const read = /^read\s+([A-Za-z_][\w]*)$/u.exec(text);
-    if (read) {
-      throw new ParseError("Read input with 'name = read()'", line);
-    }
-    if (text.startsWith("read ")) {
-      throw new ParseError("Read input with 'name = read()'", line);
-    }
-    if (text.startsWith("stop ")) {
-      throw new ParseError("Use 'halt(...)' instead of stop", line);
-    }
-    if (text === "return" || text.startsWith("return ")) {
-      const expr = text.slice("return".length).trim();
-      if (expr === "") {
-        throw new ParseError("'return' must return a value, e.g. 'return x + 1'", line);
-      }
-      return { kind: "v2_return", expr, line };
-    }
-    const move = /^move\s+([A-Za-z_][\w]*)\s+(north|south|east|west|up|down)$/u.exec(text);
-    if (move) {
-      throw new ParseError("Use assignment with move(...), for example 'pos = move(pos, east)'", line);
-    }
-    if (text.startsWith("move ")) {
-      throw new ParseError("Use assignment with move(...), for example 'pos = move(pos, east)'", line);
-    }
-    const step = /^([A-Za-z_][\w]*)\s*(\+\+|--)$/u.exec(text);
-    if (step) {
-      return {
-        kind: "v2_update",
-        target: step[1],
-        op: step[2] === "++" ? "+=" : "-=",
-        expr: "1",
-        line
-      };
-    }
-    const update = /^(.+?)\s*(\+=|-=)\s*(.+)$/u.exec(text);
-    if (update) {
-      const target = update[1].trim();
-      validateAssignmentTargetText(target, line);
-      return {
-        kind: "v2_update",
-        target,
-        op: update[2],
-        expr: update[3].trim(),
-        line
-      };
-    }
-    const assignment = /^(.+?)\s*(?<![!<>=])=(?!=)\s*(.+)$/u.exec(text);
-    if (assignment) {
-      const target = assignment[1].trim();
-      validateAssignmentTargetText(target, line);
-      return {
-        kind: "v2_assign",
-        target,
-        expr: assignment[2].trim(),
-        line
-      };
-    }
-    const call = parseCall(text);
-    if (call !== void 0) {
-      return {
-        kind: "v2_invoke",
-        name: call.name,
-        args: splitArgs(call.argsText),
-        line
-      };
-    }
-    const command = /^([A-Za-z_][\w]*)(?:\s+(.+))?$/u.exec(text);
-    if (command) {
-      throw new ParseError("Function calls must look like 'name(...)'", line);
-    }
-    throw new ParseError(`Unexpected statement '${text}'`, line);
-  }
-  function validateAssignmentTargetText(target, line) {
-    if (/^[A-Za-z_][\w]*$/u.test(target)) return;
-    const expr = parseExpression(target, line);
-    if (expr.kind === "indexed") return;
-    throw new ParseError(`Invalid assignment target '${target}'`, line);
-  }
-  function parseV2ShowCall(argsText, line) {
-    const trimmed = argsText.trim();
-    if (trimmed.length === 0 || !isNumericLiteralText(trimmed)) {
-      return { kind: "v2_show", items: parseDisplayItemList(trimmed, line), line };
-    }
-    return { kind: "v2_show", target: trimmed, line };
-  }
-  function parseV2Predicate(text, line) {
-    const contains = /^(.+?)\s+in\s+([A-Za-z_][\w]*)$/u.exec(text);
-    if (contains) {
-      return {
-        kind: "v2_contains",
-        collection: contains[2].trim(),
-        item: contains[1].trim()
-      };
-    }
-    const compare = /^(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)$/u.exec(text);
-    if (compare) {
-      return {
-        kind: "v2_compare",
-        left: compare[1].trim(),
-        op: compare[2],
-        right: compare[3].trim()
-      };
-    }
-    throw new ParseError(`Predicate must look like 'left op right'`, line);
-  }
-  function parseV2RawInputs(text, line) {
-    return splitArgs(text).map((part) => {
-      const match = /^(X|Y|Z|T)\s*=\s*(.+)$/iu.exec(part);
-      if (!match) throw new ParseError("Raw input must look like 'takes X = expr'", line);
-      return {
-        slot: match[1].toUpperCase(),
-        expr: match[2].trim(),
-        line
-      };
-    });
-  }
-  function parseV2RawOutput(text, line) {
-    const explicit = /^X\s*->\s*([A-Za-z_][\w]*)$/iu.exec(text.trim());
-    const shorthand = /^([A-Za-z_][\w]*)$/u.exec(text.trim());
-    const target = explicit?.[1] ?? shorthand?.[1];
-    if (target === void 0) throw new ParseError("Raw output must look like 'returns X -> name'", line);
-    return { slot: "X", target, line };
-  }
-  function parseV2RawContractList(text, line) {
-    const values = parseIdentifierList(text).map((item) => normalizeV2RawContractItem(item, line));
-    if (values.length === 0) throw new ParseError("Raw contract list must not be empty", line);
-    if (values.includes("none") && values.length > 1) {
-      throw new ParseError("Raw contract item 'none' cannot be combined with other items", line);
-    }
-    return [...new Set(values)];
-  }
-  function normalizeV2RawContractItem(text, line) {
-    const trimmed = text.trim();
-    if (/^(none|state|stack|display|flags|memory)$/iu.test(trimmed)) return trimmed.toLowerCase();
-    if (/^(X|Y|Z|T|X1)$/iu.test(trimmed)) return trimmed.toUpperCase();
-    const register = /^R?([0-9a-eавсде])$/iu.exec(trimmed);
-    if (register) return `R${register[1].toLowerCase()}`;
-    throw new ParseError(`Unknown raw contract item '${text}'`, line);
-  }
-  function validateV2RawInputs(inputs, line) {
-    const slots = new Set(inputs.map((input) => input.slot));
-    if (slots.has("T") && (!slots.has("Z") || !slots.has("Y") || !slots.has("X"))) {
-      throw new ParseError("Raw input T requires Z, Y, and X inputs", line);
-    }
-    if (slots.has("Z") && (!slots.has("Y") || !slots.has("X"))) {
-      throw new ParseError("Raw input Z requires Y and X inputs", line);
-    }
-    if (slots.has("Y") && !slots.has("X")) {
-      throw new ParseError("Raw input Y requires an X input", line);
-    }
-  }
-  function splitArgs(text) {
-    const args = [];
-    let start = 0;
-    let depth = 0;
-    let quote = false;
-    let escaped = false;
-    for (let index = 0; index < text.length; index += 1) {
-      const char = text[index];
-      if (quote) {
-        if (escaped) {
-          escaped = false;
-        } else if (char === "\\") {
-          escaped = true;
-        } else if (char === '"') {
-          quote = false;
-        }
-        continue;
-      }
-      if (char === '"') {
-        quote = true;
-        continue;
-      }
-      if (char === "(") depth += 1;
-      if (char === ")") depth = Math.max(0, depth - 1);
-      if (char === "," && depth === 0) {
-        args.push(text.slice(start, index).trim());
-        start = index + 1;
-      }
-    }
-    args.push(text.slice(start).trim());
-    return args.filter(Boolean);
-  }
-  function parseNamedCall(text, name) {
-    const call = parseCall(text);
-    return call?.name === name ? call : void 0;
-  }
-  function parseCall(text) {
-    const header = /^([A-Za-z_][\w]*)\s*\(/u.exec(text);
-    if (!header) return void 0;
-    const open = header[0].lastIndexOf("(");
-    let depth = 0;
-    let quote = false;
-    let escaped = false;
-    for (let index = open; index < text.length; index += 1) {
-      const char = text[index];
-      if (quote) {
-        if (escaped) {
-          escaped = false;
-        } else if (char === "\\") {
-          escaped = true;
-        } else if (char === '"') {
-          quote = false;
-        }
-        continue;
-      }
-      if (char === '"') {
-        quote = true;
-        continue;
-      }
-      if (char === "(") {
-        depth += 1;
-        continue;
-      }
-      if (char !== ")") continue;
-      depth -= 1;
-      if (depth === 0) {
-        if (text.slice(index + 1).trim().length > 0) return void 0;
-        return { name: header[1], argsText: text.slice(open + 1, index) };
-      }
-      if (depth < 0) return void 0;
-    }
-    return void 0;
-  }
-  function lowerV2Program(v2, options = {}) {
-    const decimalSeries = tryLowerV2DecimalFactorialSeries(v2);
-    if (decimalSeries !== void 0) return decimalSeries;
-    const inlineScreens = collectV2InlineScreens(v2);
-    const ruleParams = collectV2RuleParams(v2);
-    const rules = collectV2Rules(v2);
-    const functionRules = collectV2FunctionRules(v2);
-    const specializedRules = selectV2RuleSpecializations(v2, rules);
-    const stateDomains = new Map(
-      v2.state.filter((field) => field.domain !== void 0).map((field) => [field.name, field.domain])
-    );
-    const coordLists = collectV2CoordLists(v2);
-    const cellMapNames = collectV2CellMapNames(v2, stateDomains);
-    validateV2Domains(v2);
-    validateV2References(v2, { ruleParams });
-    validateV2Functions(v2, functionRules);
-    const context = {
-      signedAbsMatchPairs: options.signedAbsMatchPairs === true,
-      ruleParams,
-      rules,
-      functionRules,
-      specializedRules,
-      moveDeltas: collectV2MoveDeltas(v2),
-      stateTypes: new Map(v2.state.map((field) => [field.name, field.type])),
-      stateDomains,
-      stateRanges: collectV2StateRanges(v2),
-      coordLists,
-      cellMapNames,
-      boards: new Map(v2.boards.map((board) => [board.name, board])),
-      worlds: new Map(v2.worlds.map((world) => [world.name, world]))
-    };
-    const banks = lowerV2StateBanks(v2);
-    return {
-      domains: lowerV2Domains(v2),
-      ...banks === void 0 ? {} : { banks },
-      states: lowerV2State(v2, specializedRules, cellMapNames, context),
-      displays: inlineScreens.map(lowerV2Screen),
-      entries: [lowerV2Entry(v2, context)],
-      procs: [
-        ...v2.rules.filter((rule) => !specializedRules.has(rule.name)).map((rule) => lowerV2Rule(rule, context))
-      ]
-    };
-  }
-  function tryLowerV2DecimalFactorialSeries(v2) {
-    if (v2.body.length !== 5 || v2.state.length > 0 || v2.boards.length > 0 || v2.worlds.length > 0 || v2.rules.length > 0) {
-      return void 0;
-    }
-    const [precision, counterInit, valueInit, loop, stop] = v2.body;
-    if (precision?.kind !== "v2_assign" || precision.target !== "digits") return void 0;
-    const digits = Number(normalizedV2Text(precision.expr));
-    if (digits !== 94) return void 0;
-    if (counterInit?.kind !== "v2_assign" || normalizedV2Text(counterInit.expr) !== "65") {
-      return void 0;
-    }
-    if (valueInit?.kind !== "v2_assign" || normalizedV2Text(valueInit.expr) !== "1") {
-      return void 0;
-    }
-    const counterName = counterInit.target;
-    const valueName = valueInit.target;
-    if (loop?.kind !== "v2_while" || loop.predicate.kind !== "v2_compare" || normalizedV2Text(loop.predicate.left) !== counterName || loop.predicate.op !== ">=" || normalizedV2Text(loop.predicate.right) !== "1" || loop.body.length !== 2 || stop?.kind !== "v2_stop" || normalizedV2Text(stop.value) !== valueName) {
-      return void 0;
-    }
-    const [step, decrement] = loop.body;
-    if (step?.kind !== "v2_assign" || step.target !== valueName || normalizedV2Text(step.expr) !== `1+${valueName}/${counterName}` || decrement?.kind !== "v2_update" || decrement.target !== counterName || decrement.op !== "-=" || normalizedV2Text(decrement.expr) !== "1") {
-      return void 0;
-    }
-    return {
-      domains: [],
-      states: [],
-      displays: [],
-      entries: [{
-        kind: "entry",
-        name: "main",
-        body: [{
-          kind: "decimal_series",
-          digits,
-          counterStart: 65,
-          line: v2.line
-        }],
-        line: v2.line
-      }],
-      procs: []
-    };
-  }
-  function normalizedV2Text(text) {
-    return text.replace(/\s+/gu, "");
-  }
-  function collectV2StateRanges(v2) {
-    return new Map(v2.state.map((field) => {
-      const range3 = {};
-      if (field.min !== void 0) range3.min = field.min;
-      if (field.max !== void 0) range3.max = field.max;
-      return [field.name, range3];
-    }));
-  }
-  function collectV2CoordLists(v2) {
-    const lists = /* @__PURE__ */ new Map();
-    for (const field of v2.state) {
-      if (field.type !== "coord_list") continue;
-      if (field.domain === void 0 || field.count === void 0) {
-        throw new ParseError("coord_list state must declare a domain and count", field.line);
-      }
-      lists.set(field.name, {
-        domain: field.domain,
-        count: field.count,
-        items: range(0, field.count - 1).map((index) => coordListItemName(field.name, index))
-      });
-    }
-    return lists;
-  }
-  function collectV2RuleParams(v2) {
-    const ruleParams = /* @__PURE__ */ new Map();
-    for (const rule of v2.rules) {
-      if (ruleParams.has(rule.name)) throw new ParseError(`Duplicate function '${rule.name}'`, rule.line);
-      ruleParams.set(rule.name, rule.params);
-    }
-    return ruleParams;
-  }
-  function collectV2Rules(v2) {
-    return new Map(v2.rules.map((rule) => [rule.name, rule]));
-  }
-  function collectV2FunctionRules(v2) {
-    const functions = /* @__PURE__ */ new Set();
-    for (const rule of v2.rules) {
-      if (v2StatementsContainReturn(rule.body)) functions.add(rule.name);
-    }
-    return functions;
-  }
-  function v2StatementsContainReturn(statements) {
-    return statements.some(v2StatementContainsReturn);
-  }
-  function v2StatementContainsReturn(statement) {
-    switch (statement.kind) {
-      case "v2_return":
-        return true;
-      case "v2_if":
-        return v2StatementsContainReturn(statement.thenBody) || statement.elseBody !== void 0 && v2StatementsContainReturn(statement.elseBody);
-      case "v2_while":
-      case "v2_loop":
-        return v2StatementsContainReturn(statement.body);
-      case "v2_match":
-        return statement.cases.some((matchCase) => v2StatementContainsReturn(matchCase.action)) || statement.otherwise !== void 0 && v2StatementContainsReturn(statement.otherwise);
-      default:
-        return false;
-    }
-  }
-  function v2StatementsAlwaysReturn(statements) {
-    const last = statements.at(-1);
-    if (last === void 0) return false;
-    return v2StatementAlwaysReturns(last);
-  }
-  function v2StatementAlwaysReturns(statement) {
-    switch (statement.kind) {
-      case "v2_return":
-      case "v2_stop":
-        return true;
-      case "v2_if":
-        return statement.elseBody !== void 0 && v2StatementsAlwaysReturn(statement.thenBody) && v2StatementsAlwaysReturn(statement.elseBody);
-      case "v2_match":
-        return statement.otherwise !== void 0 && statement.cases.every((matchCase) => v2StatementAlwaysReturns(matchCase.action)) && v2StatementAlwaysReturns(statement.otherwise);
-      default:
-        return false;
-    }
-  }
-  function validateV2Functions(v2, functionRules) {
-    if (v2StatementsContainReturn(v2.body)) {
-      throw new ParseError("'return' is only allowed inside a function", v2.line);
-    }
-    for (const rule of v2.rules) {
-      if (!functionRules.has(rule.name)) continue;
-      if (!v2StatementsAlwaysReturn(rule.body)) {
-        throw new ParseError(
-          `Function '${rule.name}' must return a value on every path (end each branch with 'return' or 'halt')`,
-          rule.line
-        );
-      }
-    }
-    validateV2FunctionRecursion(v2, functionRules);
-  }
-  function validateV2FunctionRecursion(v2, functionRules) {
-    const edges = /* @__PURE__ */ new Map();
-    for (const rule of v2.rules) {
-      if (!functionRules.has(rule.name)) continue;
-      const callees = /* @__PURE__ */ new Set();
-      for (const text of v2StatementsExprTexts(rule.body)) {
-        for (const callee of expressionCallNames2(text)) {
-          if (functionRules.has(callee)) callees.add(callee);
-        }
-      }
-      edges.set(rule.name, callees);
-    }
-    const visiting = /* @__PURE__ */ new Set();
-    const done = /* @__PURE__ */ new Set();
-    const walk = (name) => {
-      if (done.has(name)) return;
-      if (visiting.has(name)) {
-        throw new ParseError(`Recursive function '${name}' is not supported on MK-61`, 0);
-      }
-      visiting.add(name);
-      for (const callee of edges.get(name) ?? []) walk(callee);
-      visiting.delete(name);
-      done.add(name);
-    };
-    for (const name of edges.keys()) walk(name);
-  }
-  function v2StatementsExprTexts(statements) {
-    return statements.flatMap(v2StatementExprTexts);
-  }
-  function v2StatementExprTexts(statement) {
-    switch (statement.kind) {
-      case "v2_assign":
-      case "v2_update":
-        return [statement.expr];
-      case "v2_return":
-        return [statement.expr];
-      case "v2_stop":
-        return [statement.value];
-      case "v2_invoke":
-        return [...statement.args];
-      case "v2_show":
-      case "v2_read":
-        return [];
-      case "v2_if":
-        return [
-          ...v2PredicateExprTexts(statement.predicate),
-          ...v2StatementsExprTexts(statement.thenBody),
-          ...statement.elseBody ? v2StatementsExprTexts(statement.elseBody) : []
-        ];
-      case "v2_while":
-        return [...v2PredicateExprTexts(statement.predicate), ...v2StatementsExprTexts(statement.body)];
-      case "v2_loop":
-        return v2StatementsExprTexts(statement.body);
-      case "v2_match":
-        return [
-          statement.expr,
-          ...statement.cases.flatMap((matchCase) => [...matchCase.values, ...v2StatementExprTexts(matchCase.action)]),
-          ...statement.otherwise ? v2StatementExprTexts(statement.otherwise) : []
-        ];
-      case "v2_raw":
-        return statement.inputs.map((input) => input.expr);
-      default:
-        return [];
-    }
-  }
-  function v2PredicateExprTexts(predicate) {
-    if (predicate.kind === "v2_contains") return [predicate.collection, predicate.item];
-    return [predicate.left, predicate.right];
-  }
-  function expressionCallNames2(text) {
-    const names = [];
-    const pattern = /([A-Za-z_][\w]*)\s*\(/gu;
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-      names.push(match[1]);
-    }
-    return names;
-  }
-  function selectV2RuleSpecializations(v2, rules) {
-    const invocations = collectV2Invocations(v2);
-    const selected = /* @__PURE__ */ new Set();
-    for (const rule of v2.rules) {
-      if (rule.params.length === 0) continue;
-      const indexedConstantSpecialization = ruleUsesIndexedParam(rule);
-      if (!indexedConstantSpecialization && !isSpecializableRuleBody(rule)) continue;
-      const sites = invocations.filter((site) => site.statement.name === rule.name);
-      if (sites.length < 2) continue;
-      if (sites.some((site) => site.currentRule === rule.name)) continue;
-      if (!sites.every((site) => site.statement.args.length === rule.params.length && site.statement.args.every(isSpecializationArg))) {
-        continue;
-      }
-      if (indexedConstantSpecialization && rules.has(rule.name)) {
-        selected.add(rule.name);
-        continue;
-      }
-      const genericCost = estimateV2Statements(rule.body) + 1 + sites.reduce((sum, site) => sum + estimateV2InvokeSetupCost(site.statement) + 2, 0);
-      const inlineCost = sites.reduce((sum, site) => {
-        const replacements = invokeReplacements(rule, site.statement.args);
-        return sum + estimateV2Statements(rule.body, replacements);
-      }, 0);
-      if (inlineCost < genericCost && rules.has(rule.name)) selected.add(rule.name);
-    }
-    return selected;
-  }
-  function ruleUsesIndexedParam(rule) {
-    return rule.params.some((param) => {
-      const pattern = new RegExp(`\\[\\s*${escapeRegExp(param)}\\s*\\]`, "u");
-      return v2StatementTexts(rule.body).some((text) => pattern.test(text));
-    });
-  }
-  function v2StatementTexts(statements) {
-    const texts = [];
-    const visit = (items) => {
-      for (const statement of items) {
-        switch (statement.kind) {
-          case "v2_assign":
-          case "v2_update":
-            texts.push(statement.target, statement.expr);
-            break;
-          case "v2_if":
-            texts.push(...v2PredicateExprTexts(statement.predicate));
-            visit(statement.thenBody);
-            if (statement.elseBody) visit(statement.elseBody);
-            break;
-          case "v2_while":
-            texts.push(...v2PredicateExprTexts(statement.predicate));
-            visit(statement.body);
-            break;
-          case "v2_loop":
-            visit(statement.body);
-            break;
-          case "v2_match":
-            texts.push(statement.expr, ...statement.cases.flatMap((matchCase) => matchCase.values));
-            for (const matchCase of statement.cases) visit([matchCase.action]);
-            if (statement.otherwise) visit([statement.otherwise]);
-            break;
-          case "v2_invoke":
-            texts.push(...statement.args);
-            break;
-          case "v2_show":
-            if (statement.target !== void 0) texts.push(statement.target);
-            for (const item of statement.items ?? []) {
-              if (item.kind === "source") texts.push(item.name);
-            }
-            break;
-          case "v2_stop":
-            texts.push(statement.value);
-            break;
-          case "v2_return":
-            texts.push(statement.expr);
-            break;
-          case "v2_raw":
-            for (const input of statement.inputs ?? []) texts.push(input.expr);
-            break;
-          default:
-            break;
-        }
-      }
-    };
-    visit(statements);
-    return texts;
-  }
-  function collectV2Invocations(v2) {
-    const sites = [];
-    const visit = (statements, currentRule) => {
-      for (const statement of statements) {
-        if (statement.kind === "v2_invoke") {
-          const site = { statement };
-          if (currentRule !== void 0) site.currentRule = currentRule;
-          sites.push(site);
-        }
-        if (statement.kind === "v2_if") {
-          visit(statement.thenBody, currentRule);
-          if (statement.elseBody) visit(statement.elseBody, currentRule);
-        }
-        if (statement.kind === "v2_while") {
-          visit(statement.body, currentRule);
-        }
-        if (statement.kind === "v2_loop") {
-          visit(statement.body, currentRule);
-        }
-        if (statement.kind === "v2_match") {
-          for (const matchCase of statement.cases) visit([matchCase.action], currentRule);
-          if (statement.otherwise) visit([statement.otherwise], currentRule);
-        }
-      }
-    };
-    if (v2.body.length > 0) visit(v2.body);
-    for (const rule of v2.rules) visit(rule.body, rule.name);
-    return sites;
-  }
-  var PARAMETRIC_SIBLING_RULE_PREFIX = "__param_sibling_";
-  function synthesizeV2ParametricSiblingRules(v2) {
-    const rules = collectV2Rules(v2);
-    const callCounts = /* @__PURE__ */ new Map();
-    for (const site of collectV2Invocations(v2)) {
-      callCounts.set(site.statement.name, (callCounts.get(site.statement.name) ?? 0) + 1);
-    }
-    const consumed = /* @__PURE__ */ new Set();
-    const rewriteStatements = (statements) => statements.map((statement) => rewriteStatement(statement));
-    const rewriteStatement = (statement) => {
-      switch (statement.kind) {
-        case "v2_if": {
-          const rewritten = {
-            ...statement,
-            thenBody: rewriteStatements(statement.thenBody)
-          };
-          if (statement.elseBody !== void 0) rewritten.elseBody = rewriteStatements(statement.elseBody);
-          return rewritten;
-        }
-        case "v2_while":
-          return { ...statement, body: rewriteStatements(statement.body) };
-        case "v2_loop":
-          return { ...statement, body: rewriteStatements(statement.body) };
-        case "v2_match": {
-          const rewritten = {
-            ...statement,
-            cases: statement.cases.map((matchCase) => ({
-              ...matchCase,
-              action: rewriteStatement(matchCase.action)
-            }))
-          };
-          if (statement.otherwise !== void 0) rewritten.otherwise = rewriteStatement(statement.otherwise);
-          rewritten.cases = synthesizeV2ParametricSiblingMatchCases(v2, rewritten.cases, rules, callCounts, consumed);
-          return rewritten;
-        }
-        default:
-          return statement;
-      }
-    };
-    v2.body = rewriteStatements(v2.body);
-    for (const rule of [...v2.rules]) {
-      if (consumed.has(rule.name) || rule.name.startsWith(PARAMETRIC_SIBLING_RULE_PREFIX)) continue;
-      rule.body = rewriteStatements(rule.body);
-    }
-    if (consumed.size > 0) v2.rules = v2.rules.filter((rule) => !consumed.has(rule.name));
-  }
-  function synthesizeV2ParametricSiblingMatchCases(v2, cases, rules, callCounts, consumed) {
-    const moveDeltas = collectV2MoveDeltas(v2);
-    const usedCases = /* @__PURE__ */ new Set();
-    const rewritten = [...cases];
-    for (let leftIndex = 0; leftIndex < rewritten.length; leftIndex += 1) {
-      if (usedCases.has(leftIndex)) continue;
-      const leftInvoke = v2SingleInvokeAction(rewritten[leftIndex].action);
-      if (leftInvoke === void 0 || consumed.has(leftInvoke.name)) continue;
-      const leftRule = singleUseV2SiblingRule(rules, callCounts, leftInvoke.name);
-      if (leftRule === void 0) continue;
-      for (let rightIndex = leftIndex + 1; rightIndex < rewritten.length; rightIndex += 1) {
-        if (usedCases.has(rightIndex)) continue;
-        const rightInvoke = v2SingleInvokeAction(rewritten[rightIndex].action);
-        if (rightInvoke === void 0 || consumed.has(rightInvoke.name)) continue;
-        const rightRule = singleUseV2SiblingRule(rules, callCounts, rightInvoke.name);
-        if (rightRule === void 0) continue;
-        const param = freshV2ParametricSiblingName(v2, "delta");
-        const plan = v2ParametricSiblingPlan(leftRule, rightRule, param, moveDeltas);
-        if (plan === void 0) continue;
-        const helperName = freshV2ParametricSiblingName(v2, "proc");
-        insertV2ParametricSiblingRule(v2, leftRule, rightRule, {
-          kind: "v2_rule",
-          name: helperName,
-          params: [param],
-          body: plan.body,
-          line: leftRule.line
-        });
-        rewritten[leftIndex] = {
-          ...rewritten[leftIndex],
-          action: {
-            kind: "v2_invoke",
-            name: helperName,
-            args: [formatV2Number(plan.leftDelta)],
-            line: leftInvoke.line
-          }
-        };
-        rewritten[rightIndex] = {
-          ...rewritten[rightIndex],
-          action: {
-            kind: "v2_invoke",
-            name: helperName,
-            args: [formatV2Number(plan.rightDelta)],
-            line: rightInvoke.line
-          }
-        };
-        consumed.add(leftRule.name);
-        consumed.add(rightRule.name);
-        usedCases.add(leftIndex);
-        usedCases.add(rightIndex);
-        break;
-      }
-    }
-    return rewritten;
-  }
-  function insertV2ParametricSiblingRule(v2, left, right, helper) {
-    const leftIndex = v2.rules.indexOf(left);
-    const rightIndex = v2.rules.indexOf(right);
-    const indexes = [leftIndex, rightIndex].filter((index) => index >= 0);
-    const insertAt = indexes.length === 0 ? v2.rules.length : Math.min(...indexes);
-    v2.rules.splice(insertAt, 0, helper);
-  }
-  function v2SingleInvokeAction(statement) {
-    return statement.kind === "v2_invoke" && statement.args.length === 0 ? statement : void 0;
-  }
-  function singleUseV2SiblingRule(rules, callCounts, name) {
-    const rule = rules.get(name);
-    if (rule === void 0 || rule.params.length > 0) return void 0;
-    if ((callCounts.get(name) ?? 0) !== 1) return void 0;
-    if (v2StatementsContainReturn(rule.body) || v2StatementsContainRaw(rule.body)) return void 0;
-    return rule;
-  }
-  function v2ParametricSiblingPlan(left, right, param, moveDeltas) {
-    if (left.body.length !== right.body.length || left.body.length === 0) return void 0;
-    let leftDelta;
-    let rightDelta;
-    let parameterized = 0;
-    const body = [];
-    for (let index = 0; index < left.body.length; index += 1) {
-      const leftStatement = left.body[index];
-      const rightStatement = right.body[index];
-      const leftUpdate = v2AdditiveSelfUpdate(leftStatement, moveDeltas);
-      const rightUpdate = v2AdditiveSelfUpdate(rightStatement, moveDeltas);
-      if (leftUpdate !== void 0 && rightUpdate !== void 0 && leftUpdate.target === rightUpdate.target && leftUpdate.delta !== rightUpdate.delta) {
-        if (leftDelta === void 0) {
-          leftDelta = leftUpdate.delta;
-          rightDelta = rightUpdate.delta;
-        } else if (leftDelta !== leftUpdate.delta || rightDelta !== rightUpdate.delta) {
-          return void 0;
-        }
-        body.push({
-          kind: "v2_update",
-          target: leftUpdate.target,
-          op: "+=",
-          expr: param,
-          line: leftStatement.line
-        });
-        parameterized += 1;
-        continue;
-      }
-      if (!v2StatementsComparable(leftStatement, rightStatement)) return void 0;
-      body.push(structuredClone(leftStatement));
-    }
-    const first = body[0];
-    if (leftDelta === void 0 || rightDelta === void 0 || parameterized === 0 || first?.kind !== "v2_update" || first.expr !== param) {
-      return void 0;
-    }
-    return { body, leftDelta, rightDelta };
-  }
-  function v2AdditiveSelfUpdate(statement, moveDeltas) {
-    if (statement.kind === "v2_update") {
-      if (!isSimpleV2Identifier(statement.target)) return void 0;
-      const value = numericV2LiteralValue(statement.expr);
-      if (value === void 0) return void 0;
-      return { target: statement.target, delta: statement.op === "+=" ? value : -value };
-    }
-    if (statement.kind !== "v2_assign" || !isSimpleV2Identifier(statement.target)) return void 0;
-    const moveDelta = v2MoveAssignmentDelta(statement, moveDeltas);
-    if (moveDelta !== void 0) return { target: statement.target, delta: moveDelta };
-    const selfDelta = v2SelfAssignmentDelta(statement.target, statement.expr);
-    return selfDelta === void 0 ? void 0 : { target: statement.target, delta: selfDelta };
-  }
-  function v2MoveAssignmentDelta(statement, moveDeltas) {
-    const call = parseNamedCall(statement.expr, "move");
-    if (call === void 0) return void 0;
-    const args = splitArgs(call.argsText).map((arg) => arg.trim());
-    const [target, directionText] = args;
-    if (args.length !== 2 || target !== statement.target || directionText === void 0) return void 0;
-    const direction = parseV2MoveDirectionName(directionText);
-    if (direction === void 0) return void 0;
-    const deltaText = moveDeltas.get(statement.target)?.[direction] ?? moveDeltasForEncoding(void 0)[direction];
-    return deltaText === void 0 ? void 0 : numericV2LiteralValue(deltaText);
-  }
-  function v2SelfAssignmentDelta(target, expr) {
-    const escaped = escapeRegExp(target);
-    const numeric = "(-?\\d+(?:\\.\\d+)?(?:e[+-]?\\d+)?)";
-    const targetPlus = new RegExp(`^${escaped}\\s*\\+\\s*${numeric}$`, "iu").exec(expr.trim());
-    if (targetPlus) return numericV2LiteralValue(targetPlus[1]);
-    const plusTarget = new RegExp(`^${numeric}\\s*\\+\\s*${escaped}$`, "iu").exec(expr.trim());
-    if (plusTarget) return numericV2LiteralValue(plusTarget[1]);
-    const targetMinus = new RegExp(`^${escaped}\\s*-\\s*${numeric}$`, "iu").exec(expr.trim());
-    if (targetMinus) {
-      const value = numericV2LiteralValue(targetMinus[1]);
-      return value === void 0 ? void 0 : -value;
-    }
-    return void 0;
-  }
-  function numericV2LiteralValue(text) {
-    if (!isNumericLiteralText(text)) return void 0;
-    const value = Number(text.trim());
-    return Number.isFinite(value) ? value : void 0;
-  }
-  function isSimpleV2Identifier(text) {
-    return /^[A-Za-z_][\w]*$/u.test(text);
-  }
-  function formatV2Number(value) {
-    return Object.is(value, -0) ? "0" : String(value);
-  }
-  function v2StatementsContainRaw(statements) {
-    return statements.some((statement) => {
-      switch (statement.kind) {
-        case "v2_raw":
-          return true;
-        case "v2_if":
-          return v2StatementsContainRaw(statement.thenBody) || statement.elseBody !== void 0 && v2StatementsContainRaw(statement.elseBody);
-        case "v2_while":
-        case "v2_loop":
-          return v2StatementsContainRaw(statement.body);
-        case "v2_match":
-          return statement.cases.some((matchCase) => v2StatementsContainRaw([matchCase.action])) || statement.otherwise !== void 0 && v2StatementsContainRaw([statement.otherwise]);
-        default:
-          return false;
-      }
-    });
-  }
-  function v2StatementsComparable(left, right) {
-    return JSON.stringify(v2ComparableValue(left)) === JSON.stringify(v2ComparableValue(right));
-  }
-  function v2ComparableValue(value) {
-    if (Array.isArray(value)) return value.map(v2ComparableValue);
-    if (value === null || typeof value !== "object") return value;
-    const result = {};
-    const record = value;
-    for (const key of Object.keys(record).sort()) {
-      if (key === "line") continue;
-      const field = record[key];
-      if (field !== void 0) result[key] = v2ComparableValue(field);
-    }
-    return result;
-  }
-  function freshV2ParametricSiblingName(v2, role) {
-    const used = collectV2UsedNames(v2);
-    for (let index = 0; ; index += 1) {
-      const candidate = `${PARAMETRIC_SIBLING_RULE_PREFIX}${role}_${index}`;
-      if (!used.has(candidate)) return candidate;
-    }
-  }
-  function collectV2UsedNames(v2) {
-    const used = /* @__PURE__ */ new Set([v2.name]);
-    const addText = (text) => {
-      const pattern = /\b[A-Za-z_][\w]*\b/gu;
-      let match;
-      while ((match = pattern.exec(text)) !== null) used.add(match[0]);
-    };
-    const visit = (statements) => {
-      for (const statement of statements) {
-        for (const text of v2StatementExprTexts(statement)) addText(text);
-        switch (statement.kind) {
-          case "v2_assign":
-          case "v2_update":
-            addText(statement.target);
-            break;
-          case "v2_read":
-            used.add(statement.target);
-            break;
-          case "v2_show":
-            if (statement.target !== void 0) addText(statement.target);
-            if (statement.inlineName !== void 0) used.add(statement.inlineName);
-            for (const item of statement.items ?? []) {
-              if (item.kind === "source") used.add(item.name);
-            }
-            break;
-          case "v2_if":
-            visit(statement.thenBody);
-            if (statement.elseBody !== void 0) visit(statement.elseBody);
-            break;
-          case "v2_while":
-          case "v2_loop":
-            visit(statement.body);
-            break;
-          case "v2_match":
-            for (const matchCase of statement.cases) visit([matchCase.action]);
-            if (statement.otherwise !== void 0) visit([statement.otherwise]);
-            break;
-          case "v2_invoke":
-            used.add(statement.name);
-            break;
-          case "v2_raw":
-            for (const output of statement.outputs) used.add(output.target);
-            for (const clobber of statement.clobbers) used.add(clobber);
-            for (const preserve of statement.preserves) used.add(preserve);
-            break;
-          default:
-            break;
-        }
-      }
-    };
-    for (const field of v2.state) used.add(field.name);
-    for (const board of v2.boards) used.add(board.name);
-    for (const world of v2.worlds) {
-      used.add(world.name);
-      if (world.position !== void 0) used.add(world.position.name);
-    }
-    visit(v2.body);
-    for (const rule of v2.rules) {
-      used.add(rule.name);
-      for (const param of rule.params) used.add(param);
-      visit(rule.body);
-    }
-    return used;
-  }
-  function isSpecializableRuleBody(rule) {
-    const params = new Set(rule.params);
-    return rule.body.length > 0 && rule.body.every((statement) => {
-      if (statement.kind !== "v2_assign" && statement.kind !== "v2_update") return false;
-      return !params.has(statement.target);
-    });
-  }
-  function isSpecializationArg(arg) {
-    return isNumericLiteralText(arg.trim());
-  }
-  function invokeReplacements(rule, args) {
-    const replacements = /* @__PURE__ */ new Map();
-    for (let index = 0; index < rule.params.length; index += 1) {
-      replacements.set(rule.params[index], args[index].trim());
-    }
-    return replacements;
-  }
-  function estimateV2InvokeSetupCost(statement) {
-    return statement.args.reduce((sum, arg) => sum + estimateV2ExpressionText(arg) + 1, 0);
-  }
-  function estimateV2Statements(statements, replacements = /* @__PURE__ */ new Map()) {
-    return statements.reduce((sum, statement) => sum + estimateV2Statement(statement, replacements), 0);
-  }
-  function estimateV2Statement(statement, replacements) {
-    switch (statement.kind) {
-      case "v2_assign":
-        return estimateV2ExpressionText(substituteV2Text(statement.expr, replacements)) + 1;
-      case "v2_update":
-        return estimateV2ExpressionText(statement.target) + estimateV2ExpressionText(substituteV2Text(statement.expr, replacements)) + 2;
-      default:
-        return 99;
-    }
-  }
-  function estimateV2ExpressionText(text) {
-    const trimmed = text.trim();
-    if (isNumericLiteralText(trimmed) || /^[A-Za-z_][\w]*$/u.test(trimmed)) return 1;
-    const operators = trimmed.match(/[+\-*/]/gu)?.length ?? 0;
-    const calls = trimmed.match(/[A-Za-z_][\w]*\s*\(/gu)?.length ?? 0;
-    return 1 + operators + calls + Math.ceil(trimmed.length / 12);
-  }
-  function collectV2InlineScreens(v2) {
-    const screens = [];
-    const screensByItems = /* @__PURE__ */ new Map();
-    let next = 0;
-    const visit = (statements) => {
-      for (const statement of statements) {
-        if (statement.kind === "v2_show" && statement.items !== void 0) {
-          const key = displayItemKey(statement.items);
-          const existing = screensByItems.get(key);
-          if (existing !== void 0) {
-            statement.inlineName = existing.name;
-          } else {
-            const name = `__inline_show_${statement.line}_${next}`;
-            next += 1;
-            statement.inlineName = name;
-            const screen = {
-              kind: "v2_screen",
-              name,
-              sources: displayItemSources(statement.items),
-              items: statement.items,
-              line: statement.line
-            };
-            screensByItems.set(key, screen);
-            screens.push(screen);
-          }
-        }
-        if (statement.kind === "v2_if") {
-          visit(statement.thenBody);
-          if (statement.elseBody) visit(statement.elseBody);
-        }
-        if (statement.kind === "v2_while") visit(statement.body);
-        if (statement.kind === "v2_loop") visit(statement.body);
-        if (statement.kind === "v2_match") {
-          for (const matchCase of statement.cases) visit([matchCase.action]);
-          if (statement.otherwise) visit([statement.otherwise]);
-        }
-      }
-    };
-    if (v2.body.length > 0) visit(v2.body);
-    for (const rule of v2.rules) visit(rule.body);
-    return screens;
-  }
-  function displayItemKey(items) {
-    return JSON.stringify(items.map((item) => {
-      if (item.kind === "literal") return ["literal", item.text];
-      return ["source", item.name, item.width ?? null, item.pad ?? null];
-    }));
-  }
-  function validateV2Domains(v2) {
-    const domains = /* @__PURE__ */ new Map();
-    for (const board of v2.boards) {
-      if (domains.has(board.name)) throw new ParseError(`Duplicate domain '${board.name}'`, board.line);
-      domains.set(board.name, board.line);
-    }
-    for (const world of v2.worlds) {
-      if (domains.has(world.name)) throw new ParseError(`Duplicate domain '${world.name}'`, world.line);
-      domains.set(world.name, world.line);
-    }
-    for (const field of v2.state) {
-      if ((field.type === "coord" || field.type === "cells" || field.type === "coord_list") && field.domain !== void 0 && !domains.has(field.domain)) {
-        throw new ParseError(`Unknown domain '${field.domain}'`, field.line);
-      }
-    }
-  }
-  function validateV2References(v2, context) {
-    const visit = (statements) => {
-      for (const statement of statements) {
-        validateV2Statement(statement, context, visit);
-      }
-    };
-    if (v2.body.length > 0) visit(v2.body);
-    for (const rule of v2.rules) visit(rule.body);
-  }
-  function validateV2Statement(statement, context, visit) {
-    switch (statement.kind) {
-      case "v2_show":
-        if (statement.items !== void 0) return;
-        if (statement.target === void 0) {
-          throw new ParseError("Show must use a number or display fragments", statement.line);
-        }
-        if (!isNumericLiteralText(statement.target)) {
-          throw new ParseError("Show must use a number or display fragments", statement.line);
-        }
-        return;
-      case "v2_invoke":
-        if (!context.ruleParams.has(statement.name)) {
-          throw new ParseError(`Unknown function '${statement.name}'`, statement.line);
-        }
-        {
-          const expected = context.ruleParams.get(statement.name).length;
-          if (statement.args.length !== expected) {
-            throw new ParseError(
-              `Function '${statement.name}' expects ${expected} argument${expected === 1 ? "" : "s"}, got ${statement.args.length}`,
-              statement.line
-            );
-          }
-        }
-        return;
-      case "v2_if":
-        visit(statement.thenBody);
-        if (statement.elseBody) visit(statement.elseBody);
-        return;
-      case "v2_while":
-        visit(statement.body);
-        return;
-      case "v2_loop":
-        visit(statement.body);
-        return;
-      case "v2_match":
-        for (const matchCase of statement.cases) visit([matchCase.action]);
-        if (statement.otherwise) visit([statement.otherwise]);
-        return;
-      default:
-        return;
-    }
-  }
-  function collectV2MoveDeltas(v2) {
-    const deltas = /* @__PURE__ */ new Map();
-    const worlds = new Map(v2.worlds.map((world) => [world.name, world]));
-    for (const field of v2.state) {
-      if (field.type !== "coord" || field.domain === void 0) continue;
-      const world = worlds.get(field.domain);
-      if (world === void 0) continue;
-      deltas.set(field.name, moveDeltasForEncoding(world.position?.encoding));
-    }
-    return deltas;
-  }
-  function collectV2CellMapNames(v2, stateDomains) {
-    const explicit = v2.state.find((field) => field.type === "packed" && /^(?:plan|map)$/iu.test(field.name));
-    const byDomain = /* @__PURE__ */ new Map();
-    const addDomain = (domain) => {
-      if (byDomain.has(domain)) return;
-      const domainSpecific = v2.state.find(
-        (field) => field.type === "packed" && new RegExp(`^${escapeRegExp(domain)}_(?:plan|map)$`, "iu").test(field.name)
-      );
-      const decimalPlayerCells = singleDecimalPlayerCellsField(v2, domain);
-      byDomain.set(domain, domainSpecific?.name ?? explicit?.name ?? decimalPlayerCells?.name ?? `__cell_map_${domain}`);
-    };
-    for (const text of collectV2ExpressionTexts(v2)) {
-      for (const args of findSpatialCalls(text, "cell_at")) {
-        if (args.length === 2) {
-          addDomain(args[0]);
-          continue;
-        }
-        if (args.length === 1) {
-          const domain = stateDomains.get(args[0]);
-          if (domain !== void 0) addDomain(domain);
-        }
-      }
-    }
-    return byDomain;
-  }
-  function singleDecimalPlayerCellsField(v2, domain) {
-    const world = v2.worlds.find((candidate) => candidate.name === domain);
-    if (world?.position?.encoding !== "decimal_player") return void 0;
-    const fields = v2.state.filter((field) => field.type === "cells" && field.domain === domain);
-    return fields.length === 1 ? fields[0] : void 0;
-  }
-  function collectV2ExpressionTexts(v2) {
-    const texts = [];
-    const visit = (statements) => {
-      for (const statement of statements) {
-        switch (statement.kind) {
-          case "v2_assign":
-            texts.push(statement.expr);
-            break;
-          case "v2_update":
-            texts.push(statement.expr);
-            break;
-          case "v2_stop":
-            texts.push(statement.value);
-            break;
-          case "v2_if":
-            if (statement.predicate.kind === "v2_contains") {
-              texts.push(statement.predicate.collection, statement.predicate.item);
-            } else {
-              texts.push(statement.predicate.left, statement.predicate.right);
-            }
-            visit(statement.thenBody);
-            if (statement.elseBody !== void 0) visit(statement.elseBody);
-            break;
-          case "v2_while":
-            if (statement.predicate.kind === "v2_contains") {
-              texts.push(statement.predicate.collection, statement.predicate.item);
-            } else {
-              texts.push(statement.predicate.left, statement.predicate.right);
-            }
-            visit(statement.body);
-            break;
-          case "v2_loop":
-            visit(statement.body);
-            break;
-          case "v2_match":
-            texts.push(statement.expr);
-            for (const matchCase of statement.cases) {
-              texts.push(...matchCase.values);
-              visit([matchCase.action]);
-            }
-            if (statement.otherwise !== void 0) visit([statement.otherwise]);
-            break;
-          case "v2_invoke":
-            texts.push(...statement.args);
-            break;
-          case "v2_move":
-          case "v2_show":
-          case "v2_read":
-          case "v2_raw":
-            break;
-        }
-      }
-    };
-    if (v2.body.length > 0) visit(v2.body);
-    for (const rule of v2.rules) visit(rule.body);
-    return texts;
-  }
-  function moveDeltasForEncoding(encoding) {
-    if (encoding === "packed_decimal_zero_run") {
-      return {
-        south: "0.0000002",
-        north: "-0.0000002",
-        west: "0.000001",
-        east: "-0.000001",
-        up: "1",
-        down: "-1"
-      };
-    }
-    return {
-      south: "1",
-      north: "-1",
-      east: "10",
-      west: "-10",
-      up: "100",
-      down: "-100"
-    };
-  }
-  function lowerV2Domains(v2) {
-    const domains = [];
-    for (const board of v2.boards) {
-      const lines = [
-        { text: `x ${board.xMin}..${board.xMax}`, line: board.line },
-        { text: `y ${board.yMin}..${board.yMax}`, line: board.line },
-        { text: `columns ${board.width}`, line: board.line },
-        { text: `rows ${board.height}`, line: board.line }
-      ];
-      domains.push({
-        kind: "domain",
-        domainKind: "maze",
-        name: board.name,
-        header: `board ${board.name}`,
-        lines,
-        line: board.line
-      });
-    }
-    for (const world of v2.worlds) {
-      const coordFields = v2.state.filter((field) => field.type === "coord" && field.domain === world.name);
-      for (const field of coordFields) {
-        const lines = [];
-        if (world.position?.encoding !== void 0) lines.push({ text: `encoding ${world.position.encoding}`, line: world.position.line });
-        domains.push({
-          kind: "domain",
-          domainKind: "coord",
-          name: "packed",
-          header: `coord packed ${field.name}`,
-          lines,
-          line: field.line
-        });
-      }
-      const worldLines = [];
-      domains.push({
-        kind: "domain",
-        domainKind: "maze",
-        name: world.name,
-        header: `maze ${world.name}`,
-        lines: worldLines,
-        line: world.line
-      });
-    }
-    for (const field of v2.state) {
-      if (field.type === "cells") {
-        const lines = [];
-        if (field.domain !== void 0) lines.push({ text: `domain ${field.domain}`, line: field.line });
-        domains.push({
-          kind: "domain",
-          domainKind: "bitset",
-          name: field.name,
-          header: `cells ${field.name}`,
-          lines,
-          line: field.line
-        });
-      }
-    }
-    return domains;
-  }
-  function lowerV2State(v2, specializedRules, cellMapNames, context) {
-    const fields = [];
-    for (const field of v2.state) {
-      if (field.bank !== void 0) {
-        fields.push(...lowerV2BankStateField(field, context));
-        continue;
-      }
-      if (field.type === "coord_list") {
-        fields.push(...lowerV2CoordListState(field, context));
-        continue;
-      }
-      const lowered = {
-        name: field.name,
-        type: lowerV2StateFieldType(field.type),
-        line: field.line
-      };
-      if (field.min !== void 0) lowered.min = field.min;
-      if (field.max !== void 0) lowered.max = field.max;
-      if (field.initial !== void 0) {
-        const stackSource = parseStackSource(field.initial, field.line);
-        if (stackSource !== void 0) {
-          lowered.initialStack = stackSource;
-        } else {
-          lowered.initial = lowerV2InitialExpression(field, context);
-        }
-      }
-      fields.push(lowered);
-    }
-    const declared = new Set(fields.map((field) => field.name));
-    for (const scratch of collectV2ScratchFields(v2, specializedRules)) {
-      if (declared.has(scratch.name)) continue;
-      declared.add(scratch.name);
-      fields.push(scratch);
-    }
-    for (const mapName of cellMapNames.values()) {
-      if (!mapName.startsWith("__cell_map_") || declared.has(mapName)) continue;
-      declared.add(mapName);
-      fields.push({
-        name: mapName,
-        type: "packed",
-        initial: lowerV2Expression("int(random() * 999999999) + 1", v2.line),
-        line: v2.line
-      });
-    }
-    return fields.length > 0 ? [{ kind: "state", name: v2.name, fields, line: v2.line }] : [];
-  }
-  function lowerV2StateBanks(v2) {
-    const byBank = /* @__PURE__ */ new Map();
-    for (const field of v2.state) {
-      if (field.bank === void 0) continue;
-      const fields = byBank.get(field.bank.name) ?? [];
-      fields.push(field);
-      byBank.set(field.bank.name, fields);
-    }
-    const banks = [];
-    for (const [name, fields] of byBank) {
-      const first = fields[0];
-      const min = first.bank.min;
-      const max = first.bank.max;
-      if (fields.some((field) => field.bank.min !== min || field.bank.max !== max)) {
-        throw new ParseError(`State bank '${name}' has inconsistent ranges`, first.line);
-      }
-      banks.push({
-        kind: "state_bank",
-        name,
-        min,
-        max,
-        members: fields.map((field) => {
-          const member = {
-            ...field.bank.member === void 0 ? {} : { name: field.bank.member },
-            type: lowerV2StateFieldType(field.type),
-            elements: bankIndexes(field).map((index) => ({ index, name: bankElementStateName(field, index) })),
-            line: field.line
-          };
-          if (field.min !== void 0) member.min = field.min;
-          if (field.max !== void 0) member.max = field.max;
-          return member;
-        }),
-        line: first.line
-      });
-    }
-    return banks.length === 0 ? void 0 : banks;
-  }
-  function lowerV2BankStateField(field, context) {
-    return bankIndexes(field).map((index) => {
-      const lowered = {
-        name: bankElementStateName(field, index),
-        type: lowerV2StateFieldType(field.type),
-        line: field.line
-      };
-      if (field.min !== void 0) lowered.min = field.min;
-      if (field.max !== void 0) lowered.max = field.max;
-      if (field.initial !== void 0) {
-        const stackSource = parseStackSource(field.initial, field.line);
-        if (stackSource !== void 0) {
-          throw new ParseError("Indexed state banks cannot be initialized from stack.X or stack.Y", field.line);
-        }
-        lowered.initial = lowerV2InitialExpression(field, context);
-      }
-      return lowered;
-    });
-  }
-  function randomCoordinateExpression(domain, context) {
-    const board = context.boards.get(domain);
-    if (board !== void 0) return randomBoardCoordinateExpression(board);
-    const world = context.worlds.get(domain);
-    if (world !== void 0) return randomWorldCoordinateExpression(world);
-    return "int(random(9)) + 1";
-  }
-  function randomBoardCoordinateExpression(board) {
-    if (board.height === 1) return addOffsetExpression(`int(random(${board.width}))`, board.xMin);
-    if (board.width === 1) return addOffsetExpression(`int(random(${board.height}))`, board.yMin);
-    const x = addOffsetExpression(`int(random(${board.width}))`, board.xMin);
-    const y = addOffsetExpression(`int(random(${board.height}))`, board.yMin);
-    return `${x} + 10 * (${y})`;
-  }
-  function randomWorldCoordinateExpression(world) {
-    return `int(random(${worldDomainLength(world)})) + ${worldCoordinateOrigin(world)}`;
-  }
-  function worldCoordinateOrigin(world) {
-    switch (world.position?.encoding) {
-      case "pier_to_ship":
-      case "corridor_plan":
-      case "decimal_player":
-      case "floor_plan":
-      case "packed_decimal_zero_run":
-      case "row_scan":
-      case void 0:
-        return 1;
-    }
-    return 1;
-  }
-  function bankIndexes(field) {
-    if (field.bank === void 0) return [];
-    const indexes = [];
-    for (let index = field.bank.min; index <= field.bank.max; index += 1) indexes.push(index);
-    return indexes;
-  }
-  function bankElementStateName(field, index) {
-    const member = field.bank?.member;
-    const base = field.bank?.name ?? field.name;
-    return member === void 0 ? `${base}_${index}` : `${base}_${member}_${index}`;
-  }
-  function lowerV2CoordListState(field, context) {
-    const list = context.coordLists.get(field.name);
-    if (list === void 0) throw new ParseError(`Unknown coord_list '${field.name}'`, field.line);
-    const initial = field.initial?.trim() ?? "0";
-    const randomRange = coordListRandomRangeInitialExpression(initial, field.line, context);
-    if (initial !== "random()" && initial !== "random_unique()" && initial !== "0" && randomRange === void 0) {
-      throw new ParseError("coord_list initial value must be random(), random(max), random(min, max), random_unique(), or 0", field.line);
-    }
-    const board = context.boards.get(list.domain);
-    if ((initial === "random()" || initial === "random_unique()") && board === void 0) {
-      throw new ParseError(`coord_list ${initial} currently needs a board domain`, field.line);
-    }
-    return list.items.map((name, index) => {
-      const lowered = {
-        name,
-        type: "packed",
-        line: field.line
-      };
-      if (initial === "random_unique()") {
-        lowered.initial = coordListRandomItemExpression(board, list.count, index);
-      } else if (initial === "random()") {
-        lowered.initial = lowerV2Expression(randomCoordinateExpression(list.domain, context), field.line, context);
-      } else if (randomRange !== void 0) {
-        lowered.initial = randomRange;
-      }
-      return lowered;
-    });
-  }
-  function collectV2ScratchFields(v2, specializedRules) {
-    const fields = [];
-    const add = (name, line) => {
-      fields.push({ name, type: "packed", line });
-    };
-    for (const rule of v2.rules) {
-      if (!specializedRules.has(rule.name)) {
-        for (const param of rule.params) add(param, rule.line);
-      }
-      visit(rule.body);
-    }
-    if (v2.body.length > 0) visit(v2.body);
-    return fields;
-    function visit(statements) {
-      for (const statement of statements) {
-        if (statement.kind === "v2_if") {
-          visit(statement.thenBody);
-          if (statement.elseBody) visit(statement.elseBody);
-        }
-        if (statement.kind === "v2_while") {
-          visit(statement.body);
-        }
-        if (statement.kind === "v2_loop") {
-          visit(statement.body);
-        }
-        if (statement.kind === "v2_match") {
-          for (const matchCase of statement.cases) visit([matchCase.action]);
-          if (statement.otherwise) visit([statement.otherwise]);
-        }
-        if (statement.kind === "v2_read") add(statement.target, statement.line);
-      }
-    }
-  }
-  function lowerV2InitialExpression(field, context) {
-    const initial = field.initial ?? "0";
-    if (field.type === "cells" && initial.trim() === "random()") {
-      if (decimalPlayerPackedCellsIndex(field.name, "1", context) !== void 0) {
-        return lowerV2Expression("int(random() * 999999999) + 1", field.line);
-      }
-      return lowerV2Expression("int(random() * 999)", field.line);
-    }
-    return lowerV2Expression(initial, field.line, context);
-  }
-  function numberLiteral(value) {
-    return value < 0 ? { kind: "unary", op: "-", expr: { kind: "number", raw: String(Math.abs(value)) } } : { kind: "number", raw: String(value) };
-  }
-  function coordListItemName(listName, index) {
-    return `__coord_list_${listName}_${index}`;
-  }
-  function coordListRandomItemExpression(board, count, index) {
-    return {
-      kind: "call",
-      callee: "__random_coord_list_item",
-      args: [
-        numberLiteral(board.xMin),
-        numberLiteral(board.width),
-        numberLiteral(board.yMin),
-        numberLiteral(board.height),
-        numberLiteral(count),
-        numberLiteral(index)
-      ]
-    };
-  }
-  function coordListRandomRangeInitialExpression(initial, line, context) {
-    const trimmed = initial.trim();
-    if (trimmed === "random()" || trimmed === "random_unique()") return void 0;
-    if (!/\brandom\s*\(/u.test(trimmed)) return void 0;
-    const expr = lowerV2Expression(trimmed, line, context);
-    if (isRandomRangeExpression(expr)) return expr;
-    if (expr.kind === "call" && expr.callee.toLowerCase() === "int" && expr.args.length === 1 && isRandomRangeExpression(expr.args[0])) {
-      return expr;
-    }
-    if (expr.kind === "call" && expr.callee.toLowerCase() === "random") {
-      throw new ParseError(`random() expects zero, one, or two arguments, got ${expr.args.length}.`, line);
-    }
-    throw new ParseError("coord_list random range initial must look like random(max) or random(min, max)", line);
-  }
-  function isRandomRangeExpression(expr) {
-    return expr.kind === "call" && expr.callee.toLowerCase() === "random" && (expr.args.length === 1 || expr.args.length === 2);
-  }
-  function lowerV2StateFieldType(type) {
-    if (type === "counter") return "range";
-    if (type === "coord_list") return "packed";
-    if (type === "coord" || type === "cells") return "packed";
-    return type;
-  }
-  function lowerV2Screen(screen) {
-    return {
-      kind: "display",
-      name: screen.name,
-      format: "packed",
-      sources: screen.sources,
-      items: screen.items,
-      line: screen.line
-    };
-  }
-  var V2_INTERNAL_ENTRY_NAME = "\0main";
-  function lowerV2Entry(v2, context) {
-    if (v2.body.length > 0) {
-      return {
-        kind: "entry",
-        name: V2_INTERNAL_ENTRY_NAME,
-        body: lowerV2Statements(v2.body, context),
-        line: v2.line
-      };
-    }
-    return {
-      kind: "entry",
-      name: V2_INTERNAL_ENTRY_NAME,
-      body: [{ kind: "halt", expr: parseExpression("0"), line: v2.line }],
-      line: v2.line
-    };
-  }
-  function lowerV2Rule(rule, context) {
-    const proc = {
-      kind: "proc",
-      name: rule.name,
-      body: lowerV2Statements(rule.body, context),
-      line: rule.line
-    };
-    if (rule.params.length > 0) proc.params = [...rule.params];
-    return proc;
-  }
-  function lowerEffectPlan(plan, keyName, line, context) {
-    const statements = [];
-    for (const delta of plan.deltas) {
-      const expr = linearDeltaExpressionText(delta, keyName);
-      if (expr !== "0") {
-        statements.push(deltaAssignStatement(delta.target, expr, line, context));
-      }
-    }
-    for (const [key, corrections] of groupedCorrections(plan.deltas)) {
-      statements.push({
-        kind: "if",
-        condition: {
-          left: { kind: "identifier", name: keyName },
-          op: "==",
-          right: { kind: "number", raw: String(key) }
-        },
-        thenBody: corrections.map(
-          (correction) => deltaAssignStatement(correction.target, String(correction.delta), line, context)
-        ),
-        line
-      });
-    }
-    return statements;
-  }
-  function groupedCorrections(plans) {
-    const grouped = /* @__PURE__ */ new Map();
-    for (const plan of plans) {
-      for (const [key, delta] of plan.corrections) {
-        if (delta === 0) continue;
-        const corrections = grouped.get(key) ?? [];
-        corrections.push({ target: plan.target, delta });
-        grouped.set(key, corrections);
-      }
-    }
-    return [...grouped.entries()].sort(([left], [right]) => left - right);
-  }
-  function fitLinearDeltaPlan(target, values) {
-    const entries = [...values.entries()].sort(([left], [right]) => left - right);
-    if (entries.every(([, value]) => value === 0)) {
-      return { target, slope: 0, intercept: 0, corrections: /* @__PURE__ */ new Map() };
-    }
-    const candidates = [];
-    for (const [, value] of entries) {
-      candidates.push(linearPlanFor(target, values, 0, value));
-    }
-    for (let i = 0; i < entries.length; i += 1) {
-      for (let j = i + 1; j < entries.length; j += 1) {
-        const [leftKey, leftValue] = entries[i];
-        const [rightKey, rightValue] = entries[j];
-        const keyDelta = rightKey - leftKey;
-        const valueDelta = rightValue - leftValue;
-        if (keyDelta === 0 || valueDelta % keyDelta !== 0) continue;
-        const slope = valueDelta / keyDelta;
-        const intercept = leftValue - slope * leftKey;
-        candidates.push(linearPlanFor(target, values, slope, intercept));
-      }
-    }
-    return candidates.filter((candidate) => candidate.corrections.size <= Math.max(1, Math.floor(entries.length / 3))).sort((left, right) => linearPlanCost(left) - linearPlanCost(right))[0];
-  }
-  function linearPlanFor(target, values, slope, intercept) {
-    const corrections = /* @__PURE__ */ new Map();
-    for (const [key, value] of values) {
-      const base = slope * key + intercept;
-      if (base !== value) corrections.set(key, value - base);
-    }
-    return { target, slope, intercept, corrections };
-  }
-  function linearPlanCost(plan) {
-    const baseCost = plan.slope === 0 && plan.intercept === 0 ? 0 : Math.abs(plan.slope) <= 1 ? 3 : 5;
-    return baseCost + plan.corrections.size * 6;
-  }
-  function linearDeltaExpressionText(plan, keyName) {
-    const variable = plan.slope === 0 ? "0" : plan.slope === 1 ? keyName : plan.slope === -1 ? `(0 - ${keyName})` : `${plan.slope} * ${keyName}`;
-    if (plan.intercept === 0) return variable;
-    if (plan.slope === 0) return String(plan.intercept);
-    return plan.intercept > 0 ? `${variable} + ${plan.intercept}` : `${variable} - ${Math.abs(plan.intercept)}`;
-  }
-  function deltaAssignStatement(target, deltaText, line, context) {
-    const delta = numericLiteralTextValue(deltaText);
-    const exprText = delta !== void 0 && delta < 0 ? `${target} - ${Math.abs(delta)}` : `${target} + (${deltaText})`;
-    return {
-      kind: "assign",
-      target,
-      expr: lowerV2Expression(exprText, line, context),
-      line
-    };
-  }
-  function numericLiteralTextValue(text) {
-    if (!isNumericLiteralText(text.trim())) return void 0;
-    const value = Number(text.trim());
-    return Number.isInteger(value) ? value : void 0;
-  }
-  function lowerV2Statements(statements, context) {
-    const lowered = [];
-    for (let index = 0; index < statements.length; index += 1) {
-      const statement = statements[index];
-      const literalHalt = lowerV2InlineLiteralShowHalt(statement, statements[index + 1]);
-      if (literalHalt !== void 0) {
-        lowered.push(literalHalt);
-        index += 1;
-        continue;
-      }
-      lowered.push(...lowerV2Statement(statement, context));
-    }
-    return lowered;
-  }
-  function lowerV2InlineLiteralShowHalt(statement, next) {
-    if (statement.kind !== "v2_show" || next?.kind !== "v2_stop") return void 0;
-    if (normalizedV2Text(next.value) !== "0") return void 0;
-    const literal = statement.items === void 0 ? void 0 : collapseV2LiteralItems(statement.items);
-    if (literal !== "\u0415\u0413\u0413\u041E\u0413") return void 0;
-    return { kind: "halt", expr: parseExpression("0"), literal, line: statement.line };
-  }
-  function collapseV2LiteralItems(items) {
-    if (items.some((item) => item.kind !== "literal")) return void 0;
-    return items.map((item) => item.kind === "literal" ? item.text : "").join("");
-  }
-  function lowerV2Statement(statement, context) {
-    switch (statement.kind) {
-      case "v2_show":
-        if (statement.items !== void 0) {
-          if (statement.inlineName === void 0) {
-            throw new ParseError("Inline show display was not collected before lowering", statement.line);
-          }
-          return [{ kind: "show", display: statement.inlineName, line: statement.line }];
-        }
-        if (statement.target === void 0) {
-          throw new ParseError("Show must use a number or display fragments", statement.line);
-        }
-        if (isNumericLiteralText(statement.target)) {
-          return [{ kind: "pause", expr: parseExpression(statement.target, statement.line), line: statement.line }];
-        }
-        return [{ kind: "show", display: statement.target, line: statement.line }];
-      case "v2_read":
-        return [{
-          kind: "input",
-          target: statement.target,
-          line: statement.line
-        }];
-      case "v2_stop": {
-        const literal = parseV2StopLiteral(statement.value, statement.line);
-        if (literal !== void 0) {
-          return [{ kind: "halt", expr: parseExpression("0"), literal, line: statement.line }];
-        }
-        return [{ kind: "halt", expr: lowerV2Expression(statement.value, statement.line, context), line: statement.line }];
-      }
-      case "v2_invoke":
-        return lowerV2Invoke(statement, context);
-      case "v2_if": {
-        const condition = lowerV2Predicate(statement.predicate, statement.line, context);
-        const lowered = {
-          kind: "if",
-          condition,
-          thenBody: lowerV2Statements(statement.thenBody, context),
-          line: statement.line
-        };
-        if (statement.elseBody !== void 0) lowered.elseBody = lowerV2Statements(statement.elseBody, context);
-        return [lowered];
-      }
-      case "v2_while":
-        return [{
-          kind: "while",
-          condition: lowerV2Predicate(statement.predicate, statement.line, context),
-          body: lowerV2Statements(statement.body, context),
-          line: statement.line
-        }];
-      case "v2_loop":
-        return [{
-          kind: "loop",
-          body: lowerV2Statements(statement.body, context),
-          line: statement.line
-        }];
-      case "v2_move":
-        return lowerV2Move(statement, context);
-      case "v2_assign":
-        if (isIndexedTargetText(statement.target)) {
-          return [{
-            kind: "indexed_assign",
-            target: indexedTargetExpression(statement.target, statement.line),
-            expr: lowerV2Expression(statement.expr, statement.line, context),
-            line: statement.line
-          }];
-        }
-        return [{ kind: "assign", target: statement.target, expr: lowerV2Expression(statement.expr, statement.line, context), line: statement.line }];
-      case "v2_update": {
-        if (isIndexedTargetText(statement.target)) {
-          const target = indexedTargetExpression(statement.target, statement.line);
-          return [{
-            kind: "indexed_assign",
-            target,
-            expr: {
-              kind: "binary",
-              op: statement.op === "+=" ? "+" : "-",
-              left: target,
-              right: lowerV2Expression(statement.expr, statement.line, context)
-            },
-            line: statement.line
-          }];
-        }
-        if (context.stateTypes.get(statement.target) === "cells") {
-          return [{
-            kind: "assign",
-            target: statement.target,
-            expr: lowerV2Expression(cellSetUpdateExpression(statement.target, statement.expr, statement.op, context), statement.line, context),
-            line: statement.line
-          }];
-        }
-        return [{
-          kind: "assign",
-          target: statement.target,
-          expr: {
-            kind: "binary",
-            op: statement.op === "+=" ? "+" : "-",
-            left: { kind: "identifier", name: statement.target },
-            right: lowerV2Expression(statement.expr, statement.line, context)
-          },
-          line: statement.line
-        }];
-      }
-      case "v2_raw":
-        return [{
-          kind: "core",
-          inputs: statement.inputs.map((input) => ({
-            slot: input.slot,
-            expr: lowerV2Expression(input.expr, input.line, context),
-            line: input.line
-          })),
-          outputs: statement.outputs.map((output) => ({
-            slot: output.slot,
-            target: output.target,
-            line: output.line
-          })),
-          clobbers: statement.clobbers,
-          preserves: statement.preserves,
-          lines: statement.lines,
-          strict: true,
-          line: statement.line
-        }];
-      case "v2_match":
-        return lowerV2MatchStatements(statement, context);
-      case "v2_return":
-        return [{
-          kind: "return_value",
-          expr: lowerV2Expression(statement.expr, statement.line, context),
-          line: statement.line
-        }];
-    }
-  }
-  function isIndexedTargetText(target) {
-    return target.includes("[");
-  }
-  function indexedTargetExpression(target, line) {
-    const expr = parseExpression(target, line);
-    if (expr.kind !== "indexed") throw new ParseError(`Invalid indexed assignment target '${target}'`, line);
-    return expr;
-  }
-  function lowerV2Predicate(predicate, line, context) {
-    if (predicate.kind === "v2_contains") {
-      return {
-        left: lowerV2Expression(cellMembershipExpression(predicate.collection, predicate.item, context), line, context),
-        op: "!=",
-        right: lowerV2Expression("0", line, context)
-      };
-    }
-    return {
-      left: lowerV2Expression(predicate.left, line, context),
-      op: predicate.op,
-      right: lowerV2Expression(predicate.right, line, context)
-    };
-  }
-  function cellSetUpdateExpression(collection, item, op, context) {
-    const digitIndex = decimalPlayerPackedCellsIndex(collection, item, context);
-    if (digitIndex !== void 0) return `digit_set(${collection}, ${digitIndex}, ${op === "+=" ? "1" : "0"})`;
-    const mask = cellMaskExpressionForCollection(collection, item, context);
-    if (mask === void 0) return `${op === "+=" ? "bit_set" : "bit_clear"}(${collection}, ${item})`;
-    return op === "+=" ? `bit_or(${collection}, ${mask})` : `bit_and(${collection}, bit_not(${mask}))`;
-  }
-  function cellMembershipExpression(collection, item, context) {
-    const list = context.coordLists.get(collection.trim());
-    if (list !== void 0) return `coord_list_has(${item}, ${list.items.join(", ")})`;
-    const digitIndex = decimalPlayerPackedCellsIndex(collection, item, context);
-    if (digitIndex !== void 0) return `digit_at(${collection}, ${digitIndex})`;
-    const mask = cellMaskExpressionForCollection(collection, item, context);
-    return mask === void 0 ? `bit_has(${collection}, ${item})` : `bit_and(${collection}, ${mask})`;
-  }
-  function lowerV2Move(statement, context) {
-    const delta = namedMoveDelta(statement.target, statement.direction, statement.line, context);
-    const move = {
-      kind: "assign",
-      target: statement.target,
-      expr: {
-        kind: "binary",
-        op: "+",
-        left: { kind: "identifier", name: statement.target },
-        right: lowerV2Expression(delta, statement.line, context)
-      },
-      line: statement.line
-    };
-    return [move];
-  }
-  function namedMoveDelta(target, direction, line, context) {
-    if (direction === void 0) throw new ParseError("Move must specify a direction", line);
-    return context.moveDeltas.get(target)?.[direction] ?? moveDeltasForEncoding(void 0)[direction] ?? "0";
-  }
-  function parseV2MoveDirectionName(text) {
-    switch (text) {
-      case "north":
-      case "south":
-      case "east":
-      case "west":
-      case "up":
-      case "down":
-        return text;
-      default:
-        return void 0;
-    }
-  }
-  function lowerV2MatchStatements(statement, context) {
-    const cyclic = lowerCyclicCounterMatch(statement, context);
-    if (cyclic !== void 0) return cyclic;
-    const effects = lowerSimpleEffectMatch(statement, context);
-    if (effects !== void 0) return effects;
-    if (context.signedAbsMatchPairs) {
-      const signedPair = lowerSignedAbsPairMatch(statement, context);
-      if (signedPair !== void 0) return signedPair;
-    }
-    return lowerV2MatchStatementsAfterSignedAbs(statement, context);
-  }
-  function lowerV2MatchStatementsAfterSignedAbs(statement, context) {
-    if (statement.cases.length === 0) {
-      return statement.otherwise === void 0 ? [] : lowerV2Statement(statement.otherwise, context);
-    }
-    const guardedDirection = lowerGuardedDirectionMatch(statement, context);
-    if (guardedDirection !== void 0) return guardedDirection;
-    const smallCase = lowerSmallCaseMatch(statement, context);
-    if (smallCase !== void 0) return [smallCase];
-    const singleCase = lowerSingleCaseMatch(statement, context);
-    if (singleCase !== void 0) return [singleCase];
-    return [lowerV2Match(statement, context)];
-  }
-  function lowerSignedAbsPairMatch(statement, context) {
-    const pair = signedAbsMatchPair(statement);
-    if (pair === void 0) return void 0;
-    const positiveKey = signedAbsRowKey(pair.positive);
-    const negativeKey = signedAbsRowKey(pair.negative);
-    const cases = statement.cases.map((matchCase, caseIndex) => ({
-      ...matchCase,
-      values: matchCase.values.filter((_, valueIndex) => {
-        const key = signedAbsRowKey({ caseIndex, valueIndex });
-        return key !== positiveKey && key !== negativeKey;
-      })
-    })).filter((matchCase) => matchCase.values.length > 0);
-    const guard = {
-      kind: "v2_if",
-      predicate: {
-        kind: "v2_compare",
-        left: `abs(${statement.expr})`,
-        op: "==",
-        right: String(pair.positive.value)
-      },
-      thenBody: [pair.action],
-      line: Math.min(pair.positive.line, pair.negative.line)
-    };
-    if (statement.otherwise !== void 0) guard.elseBody = [statement.otherwise];
-    const rewritten = {
-      ...statement,
-      cases,
-      otherwise: guard
-    };
-    const originalLowered = lowerV2MatchStatementsAfterSignedAbs(statement, context);
-    const rewrittenLowered = lowerV2MatchStatements(rewritten, context);
-    return estimateLoweredStatementsCost(rewrittenLowered) < estimateLoweredStatementsCost(originalLowered) ? rewrittenLowered : void 0;
-  }
-  function signedAbsRowKey(row) {
-    return `${row.caseIndex}:${row.valueIndex}`;
-  }
-  function signedAbsMatchPair(statement) {
-    if (!/^[A-Za-z_][\w]*$/u.test(statement.expr.trim())) return void 0;
-    const rows = [];
-    for (let caseIndex = 0; caseIndex < statement.cases.length; caseIndex += 1) {
-      const matchCase = statement.cases[caseIndex];
-      for (let valueIndex = 0; valueIndex < matchCase.values.length; valueIndex += 1) {
-        const value = numericLiteralTextValue(matchCase.values[valueIndex]);
-        if (value === void 0 || value === 0) continue;
-        rows.push({ caseIndex, valueIndex, value, action: matchCase.action, line: matchCase.line });
-      }
-    }
-    for (const positive of rows.filter((row) => row.value > 0)) {
-      const negative = rows.find((row) => row.value === -positive.value);
-      if (negative === void 0) continue;
-      const action = signedAbsAction(positive.action, negative.action, statement.expr);
-      if (action !== void 0) return { positive, negative, action };
-    }
-    return void 0;
-  }
-  function signedAbsAction(positiveAction, negativeAction, matchExpr) {
-    if (positiveAction.kind !== "v2_invoke" || negativeAction.kind !== "v2_invoke") return void 0;
-    if (positiveAction.name !== negativeAction.name || positiveAction.args.length !== negativeAction.args.length) return void 0;
-    const args = [];
-    let signedArg = false;
-    for (let index = 0; index < positiveAction.args.length; index += 1) {
-      const positiveArg = positiveAction.args[index].trim();
-      const negativeArg = negativeAction.args[index].trim();
-      if (positiveArg === negativeArg) {
-        args.push(positiveAction.args[index]);
-        continue;
-      }
-      const positiveValue = numericLiteralTextValue(positiveArg);
-      const negativeValue = numericLiteralTextValue(negativeArg);
-      if (signedArg || positiveValue === void 0 || negativeValue === void 0) return void 0;
-      if (positiveValue === 1 && negativeValue === -1) {
-        args.push(`sign(${matchExpr})`);
-        signedArg = true;
-        continue;
-      }
-      if (positiveValue === -1 && negativeValue === 1) {
-        args.push(`-sign(${matchExpr})`);
-        signedArg = true;
-        continue;
-      }
-      return void 0;
-    }
-    return signedArg ? { ...positiveAction, args } : void 0;
-  }
-  function lowerSmallCaseMatch(statement, context) {
-    if (statement.otherwise === void 0) return void 0;
-    const rows = statement.cases.flatMap(
-      (matchCase) => matchCase.values.map((value) => ({ value, action: matchCase.action, line: matchCase.line }))
-    );
-    if (rows.length !== 1) return void 0;
-    if (statement.cases.some((matchCase) => matchCase.values.length !== 1)) return void 0;
-    if (rows.length > 1 && !/^[A-Za-z_][\w]*$/u.test(statement.expr.trim())) return void 0;
-    const build = (index) => {
-      const row = rows[index];
-      const elseBody = index + 1 < rows.length ? [build(index + 1)] : lowerV2Statement(statement.otherwise, context);
-      return {
-        kind: "if",
-        condition: {
-          left: lowerV2Expression(statement.expr, statement.line, context),
-          op: "==",
-          right: lowerV2Expression(row.value, row.line, context)
-        },
-        thenBody: lowerV2MatchAction(row.action, context, statement.expr, row.value, row.line),
-        elseBody,
-        line: index === 0 ? statement.line : row.line
-      };
-    };
-    return build(0);
-  }
-  function lowerSingleCaseMatch(statement, context) {
-    const lowered = lowerSmallCaseMatch(statement, context);
-    if (lowered !== void 0) return lowered;
-    if (statement.otherwise !== void 0 || statement.cases.length !== 1) return void 0;
-    const matchCase = statement.cases[0];
-    if (matchCase.values.length !== 1) return void 0;
-    const value = matchCase.values[0];
-    return {
-      kind: "if",
-      condition: {
-        left: lowerV2Expression(statement.expr, statement.line, context),
-        op: "==",
-        right: lowerV2Expression(value, matchCase.line, context)
-      },
-      thenBody: lowerV2MatchAction(matchCase.action, context, statement.expr, value, matchCase.line),
-      ...statement.otherwise === void 0 ? {} : { elseBody: lowerV2Statement(statement.otherwise, context) },
-      line: statement.line
-    };
-  }
-  function lowerV2Match(statement, context) {
-    const compact = lowerCompactDirectionDispatch(statement, context);
-    if (compact !== void 0) return compact;
-    const cases = [];
-    for (const matchCase of statement.cases) {
-      for (const value of matchCase.values) {
-        cases.push({
-          value: lowerV2Expression(value, matchCase.line, context),
-          body: lowerV2MatchAction(matchCase.action, context, statement.expr, value, matchCase.line),
-          line: matchCase.line
-        });
-      }
-    }
-    const lowered = {
-      kind: "dispatch",
-      expr: lowerV2Expression(statement.expr, statement.line, context),
-      cases,
-      line: statement.line,
-      scratchId: statement.line
-    };
-    if (statement.otherwise !== void 0) lowered.defaultBody = lowerV2Statement(statement.otherwise, context);
-    return lowered;
-  }
-  function lowerSimpleEffectMatch(statement, context) {
-    const keyName = statement.expr.trim();
-    if (!/^[A-Za-z_][\w]*$/u.test(keyName)) return void 0;
-    const defaultEffects = statement.otherwise === void 0 ? { effects: /* @__PURE__ */ new Map() } : analyzeSimpleNumericEffects(resolveV2ActionBody(statement.otherwise, context, statement.expr), context);
-    if (defaultEffects === void 0) return void 0;
-    const rows = [];
-    const seen = /* @__PURE__ */ new Set();
-    for (const matchCase of statement.cases) {
-      for (const valueText of matchCase.values) {
-        const value = numericLiteralTextValue(valueText);
-        if (value === void 0 || seen.has(value)) return void 0;
-        seen.add(value);
-        const body = resolveV2ActionBody(matchCase.action, context, statement.expr, valueText);
-        if (body === void 0) return void 0;
-        const effects = analyzeSimpleNumericEffects(body, context);
-        if (effects === void 0) return void 0;
-        rows.push({ value, effects, line: matchCase.line });
-      }
-    }
-    if (rows.length < 3) return void 0;
-    const lowered = [
-      ...lowerNumericEffects(defaultEffects, statement.line, context)
-    ];
-    for (const row of rows.sort((left, right) => left.value - right.value)) {
-      const correction = correctionEffects(defaultEffects, row.effects);
-      if (correction === void 0) return void 0;
-      const body = lowerNumericEffects(correction, row.line, context);
-      if (body.length === 0) continue;
-      lowered.push({
-        kind: "if",
-        condition: {
-          left: { kind: "identifier", name: keyName },
-          op: "==",
-          right: { kind: "number", raw: String(row.value) }
-        },
-        thenBody: body,
-        line: row.line
-      });
-    }
-    if (lowered.length <= 1) return void 0;
-    const dispatch = lowerV2Match(statement, context);
-    return estimateStatementCount(lowered) < estimateDispatchStatementCount(dispatch) ? lowered : void 0;
-  }
-  function analyzeSimpleNumericEffects(statements, context) {
-    if (statements === void 0) return void 0;
-    const effects = /* @__PURE__ */ new Map();
-    for (const statement of statements) {
-      if (statement.kind === "v2_update" && context.stateTypes.get(statement.target) !== "cells") {
-        if (!context.stateTypes.has(statement.target)) return void 0;
-        const value = numericLiteralTextValue(statement.expr);
-        if (value === void 0) return void 0;
-        applyNumericDelta(effects, statement.target, statement.op === "+=" ? value : -value);
-        continue;
-      }
-      if (statement.kind === "v2_assign" && context.stateTypes.get(statement.target) !== "cells") {
-        if (!context.stateTypes.has(statement.target)) return void 0;
-        const value = numericLiteralTextValue(statement.expr);
-        if (value === void 0) return void 0;
-        effects.set(statement.target, { kind: "assign", value });
-        continue;
-      }
-      return void 0;
-    }
-    return { effects };
-  }
-  function applyNumericDelta(effects, target, delta) {
-    const current = effects.get(target);
-    if (current?.kind === "assign") {
-      effects.set(target, { kind: "assign", value: current.value + delta });
-      return;
-    }
-    effects.set(target, { kind: "delta", value: (current?.value ?? 0) + delta });
-  }
-  function correctionEffects(base, desired) {
-    const effects = /* @__PURE__ */ new Map();
-    const targets = /* @__PURE__ */ new Set([...base.effects.keys(), ...desired.effects.keys()]);
-    for (const target of [...targets].sort()) {
-      const correction = correctionEffect(
-        base.effects.get(target) ?? { kind: "delta", value: 0 },
-        desired.effects.get(target) ?? { kind: "delta", value: 0 }
-      );
-      if (correction === void 0) return void 0;
-      if (correction.kind === "delta" && correction.value === 0) continue;
-      effects.set(target, correction);
-    }
-    return { effects };
-  }
-  function correctionEffect(base, desired) {
-    if (base.kind === "delta") {
-      if (desired.kind === "delta") return { kind: "delta", value: desired.value - base.value };
-      return desired;
-    }
-    if (desired.kind === "assign") {
-      return desired.value === base.value ? { kind: "delta", value: 0 } : desired;
-    }
-    return void 0;
-  }
-  function lowerNumericEffects(effects, line, context) {
-    return [...effects.effects.entries()].sort(([left], [right]) => left.localeCompare(right)).flatMap(
-      ([target, effect]) => {
-        if (effect.kind === "delta") {
-          return effect.value === 0 ? [] : [deltaAssignStatement(target, String(effect.value), line, context)];
-        }
-        return [{
-          kind: "assign",
-          target,
-          expr: lowerV2Expression(String(effect.value), line, context),
-          line
-        }];
-      }
-    );
-  }
-  function estimateStatementCount(statements) {
-    let count = 0;
-    for (const statement of statements) {
-      count += 1;
-      if (statement.kind === "if") {
-        count += estimateStatementCount(statement.thenBody);
-        if (statement.elseBody !== void 0) count += estimateStatementCount(statement.elseBody);
-      }
-      if (statement.kind === "dispatch") {
-        count += statement.cases.reduce((sum, item) => sum + estimateStatementCount(item.body), 0);
-        if (statement.defaultBody !== void 0) count += estimateStatementCount(statement.defaultBody);
-      }
-      if (statement.kind === "loop") count += estimateStatementCount(statement.body);
-    }
-    return count;
-  }
-  function estimateDispatchStatementCount(statement) {
-    const bodyCost = statement.cases.reduce((sum, item) => sum + estimateStatementCount(item.body), 0);
-    const defaultCost = statement.defaultBody === void 0 ? 0 : estimateStatementCount(statement.defaultBody);
-    const jumpsAfterCases = Math.max(0, statement.cases.length - (statement.defaultBody === void 0 ? 1 : 0));
-    return 2 + statement.cases.length * 5 + jumpsAfterCases * 2 + bodyCost + defaultCost;
-  }
-  function estimateLoweredStatementsCost(statements) {
-    return statements.reduce((sum, statement) => sum + estimateLoweredStatementCost(statement), 0);
-  }
-  function estimateLoweredStatementCost(statement) {
-    switch (statement.kind) {
-      case "assign":
-        return 1 + estimateLoweredExpressionCost(statement.expr);
-      case "indexed_assign":
-        return 2 + estimateLoweredExpressionCost(statement.target.index) + estimateLoweredExpressionCost(statement.expr);
-      case "pause":
-      case "halt":
-      case "return_value":
-        return 1 + estimateLoweredExpressionCost(statement.expr);
-      case "if":
-        return 2 + estimateLoweredConditionCost(statement.condition) + estimateLoweredStatementsCost(statement.thenBody) + (statement.elseBody === void 0 ? 0 : estimateLoweredStatementsCost(statement.elseBody));
-      case "while":
-        return 3 + estimateLoweredConditionCost(statement.condition) + estimateLoweredStatementsCost(statement.body);
-      case "loop":
-        return 1 + estimateLoweredStatementsCost(statement.body);
-      case "dispatch":
-        return estimateDispatchStatementCost(statement);
-      case "core":
-        return statement.lines.length + (statement.inputs ?? []).reduce((sum, input) => sum + estimateLoweredExpressionCost(input.expr), 0);
-      case "decimal_series":
-        return statement.digits;
-      case "input":
-      case "show":
-      case "call":
-        return 1;
-    }
-  }
-  function estimateDispatchStatementCost(statement) {
-    const bodyCost = statement.cases.reduce((sum, item) => sum + estimateLoweredStatementsCost(item.body), 0);
-    const defaultCost = statement.defaultBody === void 0 ? 0 : estimateLoweredStatementsCost(statement.defaultBody);
-    const jumpsAfterCases = Math.max(0, statement.cases.length - (statement.defaultBody === void 0 ? 1 : 0));
-    return 2 + estimateLoweredExpressionCost(statement.expr) + statement.cases.length * 5 + jumpsAfterCases * 2 + bodyCost + defaultCost;
-  }
-  function estimateLoweredConditionCost(condition) {
-    return 1 + estimateLoweredExpressionCost(condition.left) + estimateLoweredExpressionCost(condition.right);
-  }
-  function estimateLoweredExpressionCost(expr) {
-    switch (expr.kind) {
-      case "number":
-      case "string":
-      case "identifier":
-        return 1;
-      case "indexed":
-        return 2 + estimateLoweredExpressionCost(expr.index);
-      case "unary":
-        return 1 + estimateLoweredExpressionCost(expr.expr);
-      case "binary":
-        return 1 + estimateLoweredExpressionCost(expr.left) + estimateLoweredExpressionCost(expr.right);
-      case "call":
-        return 1 + expr.args.reduce((sum, arg) => sum + estimateLoweredExpressionCost(arg), 0);
-    }
-  }
-  function lowerCyclicCounterMatch(statement, context) {
-    const variable = statement.expr.trim();
-    if (!/^[A-Za-z_][\w]*$/u.test(variable)) return void 0;
-    const range3 = context.stateRanges.get(variable);
-    if (range3?.min === void 0 || range3.max === void 0) return void 0;
-    if (!Number.isInteger(range3.min) || !Number.isInteger(range3.max)) return void 0;
-    if (range3.max <= range3.min || range3.max - range3.min > 12) return void 0;
-    const rows = [];
-    for (const matchCase of statement.cases) {
-      for (const valueText of matchCase.values) {
-        const value = numericLiteralTextValue(valueText);
-        if (value === void 0) return void 0;
-        const body = resolveV2ActionBody(matchCase.action, context, statement.expr, valueText);
-        if (body === void 0) return void 0;
-        const analyzed = analyzeCyclicMatchBody(body, variable, context);
-        if (analyzed === void 0) return void 0;
-        rows.push({ value, ...analyzed });
-      }
-    }
-    if (rows.length < 3) return void 0;
-    const sorted = rows.sort((left, right) => left.value - right.value);
-    if (sorted.length !== range3.max - range3.min + 1) return void 0;
-    const seen = /* @__PURE__ */ new Set();
-    for (let index = 0; index < sorted.length; index += 1) {
-      const row = sorted[index];
-      const value = range3.min + index;
-      if (row.value !== value || seen.has(value)) return void 0;
-      seen.add(value);
-      const expectedNext = value === range3.max ? range3.min : value + 1;
-      if (row.next !== expectedNext) return void 0;
-    }
-    const targets = /* @__PURE__ */ new Set();
-    for (const row of sorted) {
-      for (const target of row.deltas.keys()) targets.add(target);
-    }
-    if (targets.size === 0) return void 0;
-    const plans = [];
-    for (const target of [...targets].sort()) {
-      const values = new Map(sorted.map((row) => [row.next, row.deltas.get(target) ?? 0]));
-      const plan = fitLinearDeltaPlan(target, values);
-      if (plan === void 0) return void 0;
-      if (plan.slope !== 0 || plan.intercept !== 0 || plan.corrections.size > 0) plans.push(plan);
-    }
-    if (plans.length === 0) return void 0;
-    return [
-      {
-        kind: "assign",
-        target: variable,
-        expr: lowerV2Expression(`${variable} + 1`, statement.line, context),
-        line: statement.line
-      },
-      {
-        kind: "if",
-        condition: {
-          left: { kind: "identifier", name: variable },
-          op: ">",
-          right: { kind: "number", raw: String(range3.max) }
-        },
-        thenBody: [{
-          kind: "assign",
-          target: variable,
-          expr: { kind: "number", raw: String(range3.min) },
-          line: statement.line
-        }],
-        line: statement.line
-      },
-      ...lowerEffectPlan({ deltas: plans }, variable, statement.line, context)
-    ];
-  }
-  function resolveV2ActionBody(action, context, matchExpr, matchValue) {
-    if (action.kind !== "v2_invoke") return [action];
-    const rule = context.rules.get(action.name);
-    if (rule === void 0) return void 0;
-    if (rule.params.length === 0) return rule.body;
-    if (rule.params.length !== action.args.length) return void 0;
-    const args = [];
-    for (const arg of action.args) {
-      const resolved = resolveV2InvokeArg(arg, matchExpr, matchValue);
-      if (resolved === void 0) return void 0;
-      args.push(resolved);
-    }
-    return substituteV2Statements(rule.body, invokeReplacements(rule, args));
-  }
-  function analyzeCyclicMatchBody(statements, variable, context) {
-    let next;
-    const deltas = /* @__PURE__ */ new Map();
-    for (const statement of statements) {
-      if (statement.kind === "v2_assign" && statement.target === variable) {
-        const value = numericLiteralTextValue(statement.expr);
-        if (value === void 0 || next !== void 0) return void 0;
-        next = value;
-        continue;
-      }
-      if (statement.kind === "v2_update" && context.stateTypes.get(statement.target) !== "cells") {
-        const value = numericLiteralTextValue(statement.expr);
-        if (value === void 0 || statement.target === variable) return void 0;
-        const delta = statement.op === "+=" ? value : -value;
-        deltas.set(statement.target, (deltas.get(statement.target) ?? 0) + delta);
-        continue;
-      }
-      return void 0;
-    }
-    return next === void 0 ? void 0 : { next, deltas };
-  }
-  function lowerCompactDirectionDispatch(statement, context) {
-    const directionalCases = statement.cases.filter((matchCase) => isDirectionInvoke(matchCase.action, statement.expr));
-    const directionalValueCount = directionalCases.reduce((sum, matchCase) => sum + matchCase.values.length, 0);
-    if (directionalValueCount < 3) return void 0;
-    const directionalValues = directionCaseValues(directionalCases);
-    if (directionalValues === void 0) return void 0;
-    const hasAllCardinalDirections = [2, 4, 6, 8].every((value) => directionalValues.has(value));
-    const action = directionalCases[0].action;
-    if (action.kind !== "v2_invoke") return void 0;
-    if (!directionalCases.every((matchCase) => sameInvoke(matchCase.action, action))) return void 0;
-    const params = context.ruleParams.get(action.name) ?? [];
-    if (params.length === 0) return void 0;
-    const needsGuard = statement.otherwise === void 0 || !isDirectionInvoke(statement.otherwise, statement.expr);
-    if (needsGuard && !hasAllCardinalDirections) return void 0;
-    const cases = [];
-    for (const matchCase of statement.cases) {
-      if (directionalCases.includes(matchCase)) continue;
-      for (const value of matchCase.values) {
-        cases.push({
-          value: lowerV2Expression(value, matchCase.line, context),
-          body: lowerV2MatchAction(matchCase.action, context, statement.expr, value, matchCase.line),
-          line: matchCase.line
-        });
-      }
-    }
-    const directionFunction = needsGuard && hasAllCardinalDirections && !directionalValues.has(5) && !directionalValues.has(-5) ? "__direction_cardinal" : "direction";
-    const directionBody = [
-      {
-        kind: "assign",
-        target: params[0],
-        expr: lowerV2Expression(`${directionFunction}(${statement.expr})`, statement.line, context),
-        line: statement.line
-      },
-      { kind: "call", block: action.name, line: action.line }
-    ];
-    const defaultBody = needsGuard ? [{
-      kind: "if",
-      condition: {
-        left: lowerV2Expression(directionKeyGuardExpression(statement.expr, directionalValues), statement.line, context),
-        op: "==",
-        right: lowerV2Expression("0", statement.line, context)
-      },
-      thenBody: directionBody,
-      ...statement.otherwise === void 0 ? {} : { elseBody: lowerV2Statement(statement.otherwise, context) },
-      line: statement.line
-    }] : directionBody;
-    return {
-      kind: "dispatch",
-      expr: lowerV2Expression(statement.expr, statement.line, context),
-      name: "direction_dispatch",
-      cases,
-      defaultBody,
-      line: statement.line,
-      scratchId: statement.line
-    };
-  }
-  function lowerGuardedDirectionMatch(statement, context) {
-    const directionalCases = statement.cases.filter((matchCase) => isDirectionInvoke(matchCase.action, statement.expr));
-    const directionalValueCount = directionalCases.reduce((sum, matchCase) => sum + matchCase.values.length, 0);
-    if (directionalValueCount < 3) return void 0;
-    const action = directionalCases[0]?.action;
-    if (action?.kind !== "v2_invoke") return void 0;
-    if (!directionalCases.every((matchCase) => sameInvoke(matchCase.action, action))) return void 0;
-    const guardedCases = [];
-    for (const matchCase of statement.cases) {
-      if (directionalCases.includes(matchCase)) continue;
-      const guarded = analyzeGuardedDirectionCase(matchCase, action, statement.expr, context);
-      if (guarded !== void 0) guardedCases.push(guarded);
-    }
-    if (guardedCases.length === 0) return void 0;
-    const rewritten = {
-      ...statement,
-      cases: statement.cases.map(
-        (matchCase) => guardedCases.some((guarded) => guarded.matchCase === matchCase) ? { ...matchCase, action } : matchCase
-      )
-    };
-    const dispatch = lowerCompactDirectionDispatch(rewritten, context);
-    if (dispatch === void 0) return void 0;
-    return [
-      ...guardedCases.flatMap((guarded) => lowerGuardedDirectionCasePrelude(statement, guarded, context)),
-      dispatch
-    ];
-  }
-  function analyzeGuardedDirectionCase(matchCase, sharedAction, matchExpr, context) {
-    const body = resolveV2ActionBody(matchCase.action, context, matchExpr);
-    if (body?.length !== 1) return void 0;
-    const guarded = body[0];
-    if (guarded?.kind !== "v2_if" || guarded.elseBody === void 0) return void 0;
-    const thenShared = isSharedDirectionBranch(guarded.thenBody, sharedAction);
-    const elseShared = isSharedDirectionBranch(guarded.elseBody, sharedAction);
-    if (thenShared === elseShared) return void 0;
-    if (elseShared && v2StatementsTerminate(guarded.thenBody, context)) {
-      return {
-        matchCase,
-        predicate: guarded.predicate,
-        terminalBody: guarded.thenBody,
-        invertPredicate: false
-      };
-    }
-    if (thenShared && v2StatementsTerminate(guarded.elseBody, context)) {
-      return {
-        matchCase,
-        predicate: guarded.predicate,
-        terminalBody: guarded.elseBody,
-        invertPredicate: true
-      };
-    }
-    return void 0;
-  }
-  function isSharedDirectionBranch(statements, sharedAction) {
-    return statements.length === 1 && sameInvoke(statements[0], sharedAction);
-  }
-  function lowerGuardedDirectionCasePrelude(statement, guarded, context) {
-    return guarded.matchCase.values.map((value) => {
-      const condition = lowerV2Predicate(guarded.predicate, guarded.matchCase.line, context);
-      const innerCondition = guarded.invertPredicate ? invertLoweredCondition(condition) : condition;
-      return {
-        kind: "if",
-        condition: {
-          left: lowerV2Expression(statement.expr, statement.line, context),
-          op: "==",
-          right: lowerV2Expression(value, guarded.matchCase.line, context)
-        },
-        thenBody: [{
-          kind: "if",
-          condition: innerCondition,
-          thenBody: lowerV2Statements(guarded.terminalBody, context),
-          line: guarded.matchCase.line
-        }],
-        line: guarded.matchCase.line
-      };
-    });
-  }
-  function v2StatementsTerminate(statements, context, seenRules = /* @__PURE__ */ new Set()) {
-    for (const statement of statements) {
-      if (v2StatementTerminates(statement, context, seenRules)) return true;
-    }
-    return false;
-  }
-  function v2StatementTerminates(statement, context, seenRules) {
-    switch (statement.kind) {
-      case "v2_stop":
-        return true;
-      case "v2_invoke": {
-        if (seenRules.has(statement.name)) return false;
-        const rule = context.rules.get(statement.name);
-        if (rule === void 0) return false;
-        seenRules.add(statement.name);
-        const terminates = v2StatementsTerminate(rule.body, context, seenRules);
-        seenRules.delete(statement.name);
-        return terminates;
-      }
-      case "v2_if":
-        return statement.elseBody !== void 0 && v2StatementsTerminate(statement.thenBody, context, new Set(seenRules)) && v2StatementsTerminate(statement.elseBody, context, new Set(seenRules));
-      case "v2_while":
-        return false;
-      case "v2_loop":
-        return false;
-      case "v2_match":
-        return statement.otherwise !== void 0 && statement.cases.every((matchCase) => v2StatementTerminates(matchCase.action, context, new Set(seenRules))) && v2StatementTerminates(statement.otherwise, context, new Set(seenRules));
-      default:
-        return false;
-    }
-  }
-  function invertLoweredCondition(condition) {
-    return {
-      ...condition,
-      op: invertLoweredComparisonOp(condition.op)
-    };
-  }
-  function invertLoweredComparisonOp(op) {
-    switch (op) {
-      case "==":
-        return "!=";
-      case "!=":
-        return "==";
-      case "<":
-        return ">=";
-      case "<=":
-        return ">";
-      case ">":
-        return "<=";
-      case ">=":
-        return "<";
-    }
-  }
-  function directionCaseValues(cases) {
-    const values = /* @__PURE__ */ new Set();
-    for (const matchCase of cases) {
-      for (const valueText of matchCase.values) {
-        const value = numericLiteralTextValue(valueText);
-        if (value === void 0) return void 0;
-        values.add(value);
-      }
-    }
-    return values;
-  }
-  function directionKeyGuardExpression(expr, values) {
-    const key = `(${expr})`;
-    const cardinal = `abs(abs(${key} - 5) - 2) - 1`;
-    if (values === void 0 || values.has(5) && values.has(-5)) {
-      const vertical = `abs(${key}) - 5`;
-      return `(${cardinal}) * (${vertical})`;
-    }
-    if (values.has(5)) return `(${cardinal}) * (${key} - 5)`;
-    if (values.has(-5)) return `(${cardinal}) * (${key} + 5)`;
-    return cardinal;
-  }
-  function isDirectionInvoke(action, matchExpr) {
-    if (action.kind !== "v2_invoke") return false;
-    return action.args.some((arg) => {
-      const direction = /^direction\((.+)\)$/u.exec(arg.trim());
-      return direction?.[1]?.trim() === matchExpr.trim();
-    });
-  }
-  function sameInvoke(action, expected) {
-    return action.kind === "v2_invoke" && action.name === expected.name && action.args.join(",") === expected.args.join(",");
-  }
-  function lowerV2MatchAction(action, context, matchExpr, matchValue, line) {
-    if (action.kind !== "v2_invoke") return lowerV2Statement(action, context);
-    const rule = context.rules.get(action.name);
-    if (rule !== void 0 && context.specializedRules.has(rule.name)) {
-      const args = action.args.map((arg) => resolveV2InvokeArg(arg, matchExpr, matchValue));
-      return lowerV2Statements(substituteV2Statements(rule.body, invokeReplacements(rule, args)), context);
-    }
-    const params = context.ruleParams.get(action.name) ?? [];
-    const statements = [];
-    for (let index = 0; index < Math.min(params.length, action.args.length); index += 1) {
-      const arg = resolveV2InvokeArg(action.args[index], matchExpr, matchValue);
-      statements.push({
-        kind: "assign",
-        target: params[index],
-        expr: lowerV2Expression(arg, line, context),
-        line
-      });
-    }
-    statements.push({ kind: "call", block: action.name, line: action.line });
-    return statements;
-  }
-  function lowerV2Invoke(statement, context) {
-    const rule = context.rules.get(statement.name);
-    if (rule !== void 0 && context.specializedRules.has(rule.name)) {
-      return lowerV2Statements(substituteV2Statements(rule.body, invokeReplacements(rule, statement.args)), context);
-    }
-    const params = context.ruleParams.get(statement.name) ?? [];
-    const statements = [];
-    for (let index = 0; index < Math.min(params.length, statement.args.length); index += 1) {
-      statements.push({
-        kind: "assign",
-        target: params[index],
-        expr: lowerV2Expression(statement.args[index], statement.line, context),
-        line: statement.line
-      });
-    }
-    statements.push({ kind: "call", block: statement.name, line: statement.line });
-    return statements;
-  }
-  function substituteV2Statements(statements, replacements) {
-    return statements.map((statement) => substituteV2Statement(statement, replacements));
-  }
-  function substituteV2Statement(statement, replacements) {
-    switch (statement.kind) {
-      case "v2_assign":
-        return {
-          ...statement,
-          target: substituteV2Text(statement.target, replacements),
-          expr: substituteV2Text(statement.expr, replacements)
-        };
-      case "v2_update":
-        return {
-          ...statement,
-          target: substituteV2Text(statement.target, replacements),
-          expr: substituteV2Text(statement.expr, replacements)
-        };
-      case "v2_show":
-        return substituteV2ShowStatement(statement, replacements);
-      case "v2_if": {
-        const substituted = {
-          ...statement,
-          predicate: substituteV2Predicate(statement.predicate, replacements),
-          thenBody: substituteV2Statements(statement.thenBody, replacements)
-        };
-        if (statement.elseBody !== void 0) {
-          substituted.elseBody = substituteV2Statements(statement.elseBody, replacements);
-        }
-        return substituted;
-      }
-      case "v2_while": {
-        const substituted = {
-          ...statement,
-          predicate: substituteV2Predicate(statement.predicate, replacements),
-          body: substituteV2Statements(statement.body, replacements)
-        };
-        return substituted;
-      }
-      case "v2_loop": {
-        const substituted = {
-          ...statement,
-          body: substituteV2Statements(statement.body, replacements)
-        };
-        return substituted;
-      }
-      case "v2_move":
-        return statement;
-      case "v2_match": {
-        const substituted = {
-          ...statement,
-          expr: substituteV2Text(statement.expr, replacements),
-          cases: statement.cases.map((matchCase) => ({
-            ...matchCase,
-            values: matchCase.values.map((value) => substituteV2Text(value, replacements)),
-            action: substituteV2Statement(matchCase.action, replacements)
-          }))
-        };
-        if (statement.otherwise !== void 0) {
-          substituted.otherwise = substituteV2Statement(statement.otherwise, replacements);
-        }
-        return substituted;
-      }
-      case "v2_invoke":
-        return { ...statement, args: statement.args.map((arg) => substituteV2Text(arg, replacements)) };
-      case "v2_stop":
-        return { ...statement, value: substituteV2Text(statement.value, replacements) };
-      case "v2_return":
-        return { ...statement, expr: substituteV2Text(statement.expr, replacements) };
-      default:
-        return statement;
-    }
-  }
-  function substituteV2ShowStatement(statement, replacements) {
-    if (statement.target !== void 0) {
-      return { ...statement, target: substituteV2Text(statement.target, replacements) };
-    }
-    if (statement.items === void 0) return statement;
-    let changed = false;
-    const items = statement.items.map((item) => {
-      if (item.kind !== "source") return item;
-      const replacement = replacements.get(item.name);
-      if (replacement === void 0) return item;
-      changed = true;
-      if (isNumericLiteralText(replacement) && item.width === void 0 && item.pad === void 0) {
-        return { kind: "literal", text: replacement, line: item.line };
-      }
-      if (/^[A-Za-z_][\w]*$/u.test(replacement)) return { ...item, name: replacement };
-      return item;
-    });
-    if (!changed) return statement;
-    const literal = displayLiteralText(items);
-    if (literal !== void 0 && isNumericLiteralText(literal)) {
-      return { kind: "v2_show", target: literal, line: statement.line };
-    }
-    const substituted = { ...statement, items };
-    delete substituted.inlineName;
-    return substituted;
-  }
-  function displayLiteralText(items) {
-    if (items.some((item) => item.kind !== "literal")) return void 0;
-    return items.map((item) => item.kind === "literal" ? item.text : "").join("");
-  }
-  function substituteV2Predicate(predicate, replacements) {
-    if (predicate.kind === "v2_contains") {
-      return {
-        ...predicate,
-        collection: substituteV2Text(predicate.collection, replacements),
-        item: substituteV2Text(predicate.item, replacements)
-      };
-    }
-    return {
-      ...predicate,
-      left: substituteV2Text(predicate.left, replacements),
-      right: substituteV2Text(predicate.right, replacements)
-    };
-  }
-  function substituteV2Text(text, replacements) {
-    let result = text;
-    for (const [name, value] of replacements) {
-      const escaped = escapeRegExp(name);
-      const replacement = isSimpleSubstitutionAtom(value) ? value : `(${value})`;
-      result = result.replace(new RegExp(`\\b${escaped}\\b`, "gu"), replacement);
-    }
-    return result;
-  }
-  function isSimpleSubstitutionAtom(value) {
-    const trimmed = value.trim();
-    if (isNumericLiteralText(trimmed) || /^[A-Za-z_][\w]*$/u.test(trimmed)) return true;
-    try {
-      return parseExpression(trimmed).kind === "indexed";
-    } catch {
-      return false;
-    }
-  }
-  function escapeRegExp(text) {
-    return text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  }
-  function resolveV2InvokeArg(arg, matchExpr, matchValue) {
-    const direction = /^direction\((.+)\)$/u.exec(arg.trim());
-    if (direction && direction[1].trim() === matchExpr.trim()) {
-      if (matchValue === void 0) return void 0;
-      const delta = directionDelta(matchValue);
-      if (delta !== void 0) return String(delta);
-    }
-    return arg;
-  }
-  function lowerV2Expression(text, line, context) {
-    const rewritten = rewriteSpatialExpressionText(text, context);
-    const contextual = context === void 0 ? rewritten : normalizeContextualFloorAccessText(rewritten, context);
-    const normalized = normalizeV2ExpressionText(contextual);
-    const expr = parseExpression(normalized, line);
-    return context === void 0 ? expr : lowerDomainRandomCalls(expr, context, line);
-  }
-  function rewriteSpatialExpressionText(text, context) {
-    if (context === void 0) return text;
-    let rewritten = replaceSpatialCall(text, "cell_at", (args) => cellAtExpression(args, context));
-    rewritten = replaceSpatialCall(rewritten, "line_count", (args) => coordListLineCountExpression(args, context));
-    rewritten = replaceSpatialCall(rewritten, "move", (args) => moveExpression(args, context));
-    return rewritten;
-  }
-  function lowerDomainRandomCalls(expr, context, line) {
-    switch (expr.kind) {
-      case "number":
-      case "string":
-      case "identifier":
-        return expr;
-      case "indexed":
-        return { ...expr, index: lowerDomainRandomCalls(expr.index, context, line) };
-      case "unary":
-        return { ...expr, expr: lowerDomainRandomCalls(expr.expr, context, line) };
-      case "binary":
-        return {
-          ...expr,
-          left: lowerDomainRandomCalls(expr.left, context, line),
-          right: lowerDomainRandomCalls(expr.right, context, line)
-        };
-      case "call": {
-        const callee = expr.callee.toLowerCase();
-        const firstArg = expr.args[0];
-        if (callee === "random" && expr.args.length === 1 && firstArg?.kind === "identifier") {
-          if (domainLength(firstArg.name, context) !== void 0) {
-            return lowerV2Expression(randomCoordinateExpression(firstArg.name, context), line, context);
-          }
-        }
-        return {
-          ...expr,
-          args: expr.args.map((arg) => lowerDomainRandomCalls(arg, context, line))
-        };
-      }
-    }
-  }
-  function replaceSpatialCall(text, name, replacer) {
-    const pattern = new RegExp(`\\b${name}\\s*\\(([^()]*)\\)`, "gu");
-    return text.replace(pattern, (match, rawArgs) => replacer(splitArgs(rawArgs)) ?? match);
-  }
-  function findSpatialCalls(text, name) {
-    const pattern = new RegExp(`\\b${name}\\s*\\(([^()]*)\\)`, "gu");
-    return [...text.matchAll(pattern)].map((match) => splitArgs(match[1]));
-  }
-  function cellAtExpression(args, context) {
-    const [domain, pos] = cellAtDomainAndPosition(args, context);
-    if (domain === void 0 || pos === void 0) return void 0;
-    const map = context.cellMapNames.get(domain) ?? `__cell_map_${domain}`;
-    return `digit_at(${map}, ${cellAtIndexExpression(pos, domain, context)})`;
-  }
-  function coordListLineCountExpression(args, context) {
-    if (args.length !== 2) return void 0;
-    const [collection, item] = args;
-    if (collection === void 0 || item === void 0) return void 0;
-    const list = context.coordLists.get(collection.trim());
-    if (list === void 0) return void 0;
-    return `coord_list_line_count(${item}, ${list.items.join(", ")})`;
-  }
-  function moveExpression(args, context) {
-    if (args.length !== 2) return void 0;
-    const [target, direction] = args.map((arg) => arg.trim());
-    if (target === void 0 || direction === void 0 || target.length === 0 || direction.length === 0) return void 0;
-    if (/^direction\s*\(/u.test(direction)) return `${target} + ${direction}`;
-    const namedDirection = parseV2MoveDirectionName(direction);
-    if (namedDirection === void 0) return void 0;
-    return `${target} + ${namedMoveDelta(target, namedDirection, 0, context)}`;
-  }
-  function cellAtDomainAndPosition(args, context) {
-    if (args.length === 2) return [args[0], args[1]];
-    if (args.length !== 1) return [void 0, void 0];
-    return [context.stateDomains.get(args[0]), args[0]];
-  }
-  function cellAtIndexExpression(pos, domain, context) {
-    const world = context.worlds.get(domain);
-    switch (world?.position?.encoding) {
-      case "row_scan":
-      case "floor_plan":
-      case "decimal_player":
-      case "pier_to_ship":
-        if (isSingleDecimalDigitExpression(pos, context)) return pos;
-        return decimalOnesExpression(pos);
-      case "corridor_plan":
-      case "packed_decimal_zero_run":
-      case void 0:
-        return pos;
-    }
-    return pos;
-  }
-  function isSingleDecimalDigitExpression(expr, context) {
-    const range3 = context.stateRanges.get(expr.trim());
-    return range3?.min !== void 0 && range3.max !== void 0 && range3.min >= 0 && range3.max <= 9;
-  }
-  function boardForCells(mask, context) {
-    const domain = context.stateDomains.get(mask.trim());
-    return domain === void 0 ? void 0 : context.boards.get(domain);
-  }
-  function oneDimensionalCellMaskExpression(mask, cell, context) {
-    const board = boardForCells(mask, context);
-    if (board === void 0) return void 0;
-    if (board.height === 1 && board.xMin >= 0 && board.xMax <= 7) return `pow10(${cell})`;
-    if (board.width === 1 && board.yMin >= 0 && board.yMax <= 7) return `pow10(${cell})`;
-    return void 0;
-  }
-  function cellMaskExpressionForCollection(mask, cell, context) {
-    const oneDimensional = oneDimensionalCellMaskExpression(mask, cell, context);
-    if (oneDimensional !== void 0) return oneDimensional;
-    const domain = context.stateDomains.get(mask.trim());
-    const world = domain === void 0 ? void 0 : context.worlds.get(domain);
-    if (world?.position?.encoding === "packed_decimal_zero_run") return `frac(${cell})`;
-    return void 0;
-  }
-  function decimalPlayerPackedCellsIndex(collection, cell, context) {
-    const name = collection.trim();
-    if (context.stateTypes.get(name) !== "cells") return void 0;
-    const domain = context.stateDomains.get(name);
-    if (domain === void 0) return void 0;
-    const world = context.worlds.get(domain);
-    if (world?.position?.encoding !== "decimal_player") return void 0;
-    const mapName = context.cellMapNames.get(domain) ?? singleCellsFieldNameForDomain(context, domain);
-    if (mapName !== name) return void 0;
-    return cellAtIndexExpression(cell, domain, context);
-  }
-  function singleCellsFieldNameForDomain(context, domain) {
-    const names = [...context.stateDomains.entries()].filter(([name, fieldDomain]) => fieldDomain === domain && context.stateTypes.get(name) === "cells").map(([name]) => name);
-    return names.length === 1 ? names[0] : void 0;
-  }
-  function decimalOnesExpression(expr) {
-    return `(${expr}) - 10 * int((${expr}) / 10)`;
-  }
-  function range(start, end) {
-    const values = [];
-    for (let value = start; value <= end; value += 1) values.push(value);
-    return values;
-  }
-  function domainLength(domain, context) {
-    const name = domain.trim();
-    const board = context.boards.get(name);
-    if (board !== void 0) return board.width * board.height;
-    const world = context.worlds.get(name);
-    if (world !== void 0) return worldDomainLength(world);
-    return void 0;
-  }
-  function worldDomainLength(world) {
-    switch (world.position?.encoding) {
-      case "pier_to_ship":
-        return 8;
-      case "corridor_plan":
-      case "decimal_player":
-      case "floor_plan":
-      case "packed_decimal_zero_run":
-      case "row_scan":
-      case void 0:
-        return 9;
-    }
-    return 9;
-  }
-  function addOffsetExpression(expr, offset) {
-    if (offset === 0) return expr;
-    if (offset > 0) return `${expr} + ${offset}`;
-    return `${expr} - ${Math.abs(offset)}`;
-  }
-  function normalizeV2ExpressionText(text) {
-    return text.trim().replace(/\b([A-Za-z_][\w]*)\.floor\b/gu, "int($1 / 100)");
-  }
-  function normalizeContextualFloorAccessText(text, context) {
-    return text.replace(/\b([A-Za-z_][\w]*)\.floor\b/gu, (match, name) => {
-      const domain = context.stateDomains.get(name);
-      const world = domain === void 0 ? void 0 : context.worlds.get(domain);
-      return world?.position?.encoding === "packed_decimal_zero_run" ? `int(${name})` : match;
-    });
-  }
-  function parseStackSource(text, line) {
-    const trimmed = text.trim();
-    if (/^input\.(X|Y)$/u.test(trimmed)) {
-      throw new ParseError(`Use '${trimmed.replace("input.", "stack.")}' for startup stack values`, line);
-    }
-    const match = /^stack\.(X|Y)$/u.exec(trimmed);
-    return match?.[1];
-  }
-  function directionDelta(text) {
-    const value = Number(text.trim());
-    if (!Number.isFinite(value)) return void 0;
-    const mapping = /* @__PURE__ */ new Map([
-      [2, 1],
-      [8, -1],
-      [4, -10],
-      [6, 10],
-      [5, 100],
-      [-5, -100]
-    ]);
-    return mapping.get(value);
-  }
-  function isNumericLiteralText(text) {
-    return /^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/iu.test(text.trim());
-  }
-  function parseIdentifierList(text) {
-    return text.split(",").map((part) => part.trim()).filter((part) => part.length > 0);
-  }
-  function parseCommaIdentifierList(text, line) {
-    const trimmed = text.trim();
-    if (trimmed.length === 0) return [];
-    const parts = text.split(",").map((part) => part.trim());
-    if (parts.some((part) => part.length === 0)) {
-      throw new ParseError("Function parameters must be comma-separated identifiers", line);
-    }
-    return parts;
-  }
-  function displayItemSources(items) {
-    return items.filter((item) => item.kind === "source").map((item) => item.name);
-  }
-  function parseDisplayItemList(text, line) {
-    const tokens = tokenizeDisplayItems(text, line);
-    const items = [];
-    let pendingComma = false;
-    let justReadItem = false;
-    for (const token of tokens) {
-      if (token.kind === "comma") {
-        if (!justReadItem || pendingComma) throw new ParseError("Display comma must separate two fragments", line);
-        pendingComma = true;
-        justReadItem = false;
-        continue;
-      }
-      const item = parseDisplayItem(token.text, line);
-      if (pendingComma) {
-        pendingComma = false;
-      } else if (justReadItem) {
-        throw new ParseError("Display fragments must be separated by commas", line);
-      }
-      pushDisplayItem(items, item);
-      justReadItem = true;
-    }
-    if (pendingComma) throw new ParseError("Display comma must separate two fragments", line);
-    return items;
-  }
-  function pushDisplayItem(items, item) {
-    const previous = items.at(-1);
-    if (previous?.kind === "literal" && item.kind === "literal") {
-      previous.text += item.text;
-      return;
-    }
-    items.push(item);
-  }
-  function parseDisplayItem(text, line) {
-    const trimmed = text.trim();
-    if (trimmed.startsWith('"')) {
-      return {
-        kind: "literal",
-        text: parseQuotedDisplayText(trimmed, line),
-        line
-      };
-    }
-    if (/^\d+$/u.test(trimmed)) {
-      return {
-        kind: "literal",
-        text: trimmed,
-        line
-      };
-    }
-    const source = /^([A-Za-z_][\w]*)(?::(0?)(\d+))?$/u.exec(trimmed);
-    if (source) {
-      const [, name, zero, widthText] = source;
-      const item = { kind: "source", name, line };
-      if (widthText !== void 0) {
-        const width = Number(widthText);
-        if (!Number.isInteger(width) || width <= 0 || width > 8) {
-          throw new ParseError(`Display width must be 1..8, got '${widthText}'`, line);
-        }
-        item.width = width;
-        item.pad = zero === "0" ? "zero" : "space";
-      }
-      return item;
-    }
-    if (trimmed.includes('"')) {
-      throw new ParseError("Display fragments must be separated by commas", line);
-    }
-    const exprSource = /^(.*?)(?::(0?)(\d+))?$/u.exec(trimmed);
-    if (exprSource) {
-      const [, exprText, zero, widthText] = exprSource;
-      const expr = parseExpression(exprText.trim(), line);
-      const item = { kind: "source", name: exprText.trim(), expr, line };
-      if (widthText !== void 0) {
-        const width = Number(widthText);
-        if (!Number.isInteger(width) || width <= 0 || width > 8) {
-          throw new ParseError(`Display width must be 1..8, got '${widthText}'`, line);
-        }
-        item.width = width;
-        item.pad = zero === "0" ? "zero" : "space";
-      }
-      return item;
-    }
-    throw new ParseError(`Display item must be a string literal, decimal literal, state name, or expression, got '${trimmed}'`, line);
-  }
-  function parseV2StopLiteral(text, line) {
-    const trimmed = text.trim();
-    return trimmed.startsWith('"') ? parseQuotedDisplayText(trimmed, line) : void 0;
-  }
-  function parseQuotedDisplayText(text, line) {
-    try {
-      const value = JSON.parse(text);
-      if (typeof value === "string") return value;
-    } catch {
-    }
-    throw new ParseError(`Invalid display string literal '${text}'`, line);
-  }
-  function tokenizeDisplayItems(text, line) {
-    const tokens = [];
-    let index = 0;
-    while (index < text.length) {
-      const char = text[index];
-      if (/\s/u.test(char)) {
-        index += 1;
-        continue;
-      }
-      if (char === ",") {
-        tokens.push({ kind: "comma" });
-        index += 1;
-        continue;
-      }
-      if (char === '"') {
-        const start2 = index;
-        index += 1;
-        let escaped = false;
-        let closed = false;
-        while (index < text.length) {
-          const current = text[index];
-          if (escaped) {
-            escaped = false;
-            index += 1;
-            continue;
-          }
-          if (current === "\\") {
-            escaped = true;
-            index += 1;
-            continue;
-          }
-          if (current === '"') {
-            index += 1;
-            closed = true;
-            break;
-          }
-          index += 1;
-        }
-        if (!closed) throw new ParseError("Unclosed display string literal", line);
-        tokens.push({ kind: "item", text: text.slice(start2, index) });
-        continue;
-      }
-      const start = index;
-      while (index < text.length && text[index] !== ",") index += 1;
-      tokens.push({ kind: "item", text: text.slice(start, index).trim() });
-    }
-    return tokens;
-  }
-  function parseExpression(text, line = 0) {
-    return new ExpressionParser(text, line).parse();
-  }
-  var ExpressionParser = class {
-    tokens;
-    index = 0;
-    source;
-    line;
-    constructor(source, line) {
-      this.source = source;
-      this.line = line;
-      this.tokens = tokenizeExpression(source, line);
-    }
-    parse() {
-      const expr = this.parseAdditive();
-      if (!this.done()) {
-        throw new ParseError(
-          `Unexpected token '${this.peek()}' in expression '${this.source}'`,
-          this.line
-        );
-      }
-      return expr;
-    }
-    parseAdditive() {
-      let left = this.parseMultiplicative();
-      while (this.peekOptional() === "+" || this.peekOptional() === "-") {
-        const op = this.next();
-        left = { kind: "binary", op, left, right: this.parseMultiplicative() };
-      }
-      return left;
-    }
-    parseMultiplicative() {
-      let left = this.parseUnary();
-      while (this.peekOptional() === "*" || this.peekOptional() === "/") {
-        const op = this.next();
-        left = { kind: "binary", op, left, right: this.parseUnary() };
-      }
-      return left;
-    }
-    parseUnary() {
-      if (this.peekOptional() === "-") {
-        this.next();
-        return { kind: "unary", op: "-", expr: this.parseUnary() };
-      }
-      return this.parsePrimary();
-    }
-    parsePrimary() {
-      const token = this.next();
-      if (token === "(") {
-        const expr = this.parseAdditive();
-        this.expect(")");
-        return expr;
-      }
-      if (token.startsWith('"')) {
-        return { kind: "string", text: parseQuotedDisplayText(token, this.line) };
-      }
-      if (/^\d+(?:\.\d+)?(?:e[+-]?\d+)?$/iu.test(token)) {
-        return { kind: "number", raw: token };
-      }
-      if (/^[A-Za-z_А-Яа-я][\wА-Яа-я]*$/u.test(token)) {
-        if (this.peekOptional() === "(") {
-          this.next();
-          const args = [];
-          if (this.peekOptional() !== ")") {
-            do {
-              args.push(this.parseAdditive());
-              if (this.peekOptional() !== ",") break;
-              this.next();
-            } while (!this.done());
-          }
-          this.expect(")");
-          return { kind: "call", callee: token, args };
-        }
-        if (this.peekOptional() === "[") {
-          this.next();
-          const index = this.parseAdditive();
-          this.expect("]");
-          let field;
-          if (this.peekOptional() === ".") {
-            this.next();
-            const member = this.next();
-            if (!/^[A-Za-z_А-Яа-я][\wА-Яа-я]*$/u.test(member)) {
-              throw new ParseError(
-                `Expected indexed field name, got '${member}' in expression '${this.source}'`,
-                this.line
-              );
-            }
-            field = member;
-          }
-          return field === void 0 ? { kind: "indexed", base: token, index } : { kind: "indexed", base: token, field, index };
-        }
-        return { kind: "identifier", name: token };
-      }
-      throw new ParseError(
-        `Unexpected token '${token}' in expression '${this.source}'`,
-        this.line
-      );
-    }
-    expect(token) {
-      const actual = this.next();
-      if (actual !== token) {
-        throw new ParseError(
-          `Expected '${token}', got '${actual}' in expression '${this.source}'`,
-          this.line
-        );
-      }
-    }
-    done() {
-      return this.index >= this.tokens.length;
-    }
-    peek() {
-      const token = this.tokens[this.index];
-      if (!token) {
-        throw new ParseError(`Unexpected end of expression '${this.source}'`, this.line);
-      }
-      return token;
-    }
-    peekOptional() {
-      return this.tokens[this.index];
-    }
-    next() {
-      const token = this.peek();
-      this.index += 1;
-      return token;
-    }
-  };
-  function tokenizeExpression(source, line) {
-    const tokens = [];
-    const regex = /\s*([A-Za-z_А-Яа-я][\wА-Яа-я]*|\d+(?:\.\d+)?(?:e[+-]?\d+)?|==|!=|<=|>=|[()[\].+\-*/,])\s*/giy;
-    let index = 0;
-    while (index < source.length) {
-      while (index < source.length && /\s/u.test(source[index])) index += 1;
-      if (index >= source.length) break;
-      if (source[index] === '"') {
-        const start = index;
-        index += 1;
-        let escaped = false;
-        let closed = false;
-        while (index < source.length) {
-          const current = source[index];
-          if (escaped) {
-            escaped = false;
-            index += 1;
-            continue;
-          }
-          if (current === "\\") {
-            escaped = true;
-            index += 1;
-            continue;
-          }
-          if (current === '"') {
-            index += 1;
-            closed = true;
-            break;
-          }
-          index += 1;
-        }
-        if (!closed) throw new ParseError("Unclosed expression string literal", line);
-        tokens.push(source.slice(start, index));
-        continue;
-      }
-      regex.lastIndex = index;
-      const match = regex.exec(source);
-      if (!match) {
-        throw new ParseError(
-          `Cannot tokenize expression near '${source.slice(index)}'`,
-          line
-        );
-      }
-      tokens.push(match[1]);
-      index = regex.lastIndex;
-    }
-    return tokens;
-  }
-  function stripComment(text) {
-    let quoted = false;
-    let escaped = false;
-    for (let index = 0; index < text.length; index += 1) {
-      const char = text[index];
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (quoted && char === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (char === '"') {
-        quoted = !quoted;
-        continue;
-      }
-      if (!quoted && char === "#") return text.slice(0, index);
-      if (!quoted && char === "/" && text[index + 1] === "/") return text.slice(0, index);
-    }
-    return text;
-  }
-  function normalizeSourceLine(text, line) {
-    const stripped = stripComment(text).trim();
-    if (stripped.length === 0) return [];
-    const attachedElse = /^[}]\s*(else(?:\s+if\b.*|\s*[{]))$/u.exec(stripped);
-    if (attachedElse) {
-      return [
-        { text: "}", line },
-        { text: attachedElse[1].trim(), line }
-      ];
-    }
-    return [{ text: stripped, line }];
-  }
-
-  // src/core/ir.ts
-  var REGISTERS_BY_INDEX = [
-    "0",
-    "1",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7",
-    "8",
-    "9",
-    "a",
-    "b",
-    "c",
-    "d",
-    "e"
-  ];
-  var DIRECT_STORE_BASE = 64;
-  var DIRECT_RECALL_BASE = 96;
-  var INDIRECT_JUMP_BASE = 128;
-  var INDIRECT_CALL_BASE = 160;
-  var INDIRECT_STORE_BASE = 176;
-  var INDIRECT_RECALL_BASE = 208;
-  var INDIRECT_COND_BASES = {
-    112: "!=0",
-    144: ">=0",
-    192: "<0",
-    224: "==0"
-  };
-  var COND_OPCODES = {
-    87: "!=0",
-    89: ">=0",
-    92: "<0",
-    94: "==0"
-  };
-  var LOOP_OPCODES = {
-    93: "L0",
-    91: "L1",
-    88: "L2",
-    90: "L3"
-  };
-  var TAKES_ADDRESS = /* @__PURE__ */ new Set([
-    81,
-    83,
-    87,
-    88,
-    89,
-    90,
-    91,
-    92,
-    93,
-    94
-  ]);
-  function metaFromOp(op) {
-    const meta = { mnemonic: op.mnemonic };
-    if (op.comment !== void 0) meta.comment = op.comment;
-    if (op.sourceLine !== void 0) meta.sourceLine = op.sourceLine;
-    if (op.raw === true) meta.raw = true;
-    return meta;
-  }
-  function targetMetaFromAddress(item) {
-    const meta = {};
-    if (item.comment !== void 0) meta.comment = item.comment;
-    if (item.sourceLine !== void 0) meta.sourceLine = item.sourceLine;
-    if (item.formalOpcode !== void 0) meta.formalOpcode = item.formalOpcode;
-    return meta;
-  }
-  function isInRange(opcode, base) {
-    return opcode >= base && opcode <= base + 14;
-  }
-  function registerForOffset(opcode, base) {
-    return REGISTERS_BY_INDEX[opcode - base];
-  }
-  function stopSemanticFromComment(comment) {
-    if (comment === void 0) return "unknown";
-    const lower = comment.toLowerCase();
-    if (lower.startsWith("halt")) return "halt";
-    if (lower.startsWith("pause")) return "pause";
-    if (lower.startsWith("show")) return "show";
-    if (lower.startsWith("ask")) return "ask";
-    if (lower.startsWith("input") || lower.startsWith("read")) return "input";
-    if (lower.startsWith("implicit final stop")) return "halt";
-    if (lower.includes("implicit stop")) return "halt";
-    return "unknown";
-  }
-  function raiseMachineToIr(items) {
-    const result = [];
-    for (let i = 0; i < items.length; i += 1) {
-      const item = items[i];
-      if (item.kind === "label") {
-        result.push({ kind: "label", name: item.name });
-        continue;
-      }
-      if (item.kind === "address") {
-        result.push({
-          kind: "orphan-address",
-          target: item.target,
-          meta: targetMetaFromAddress(item)
-        });
-        continue;
-      }
-      const meta = metaFromOp(item);
-      const opcode = item.opcode;
-      if (TAKES_ADDRESS.has(opcode)) {
-        const next = items[i + 1];
-        if (next?.kind !== "address") {
-          result.push({ kind: "plain", opcode, meta });
-          continue;
-        }
-        const target = next.target;
-        const tmeta = targetMetaFromAddress(next);
-        i += 1;
-        if (opcode === 81) {
-          result.push({ kind: "jump", target, opcode, meta, targetMeta: tmeta });
-          continue;
-        }
-        if (opcode === 83) {
-          result.push({ kind: "call", target, opcode, meta, targetMeta: tmeta });
-          continue;
-        }
-        const condition = COND_OPCODES[opcode];
-        if (condition !== void 0) {
-          result.push({ kind: "cjump", condition, target, opcode, meta, targetMeta: tmeta });
-          continue;
-        }
-        const loop = LOOP_OPCODES[opcode];
-        if (loop !== void 0) {
-          result.push({ kind: "loop", counter: loop, target, opcode, meta, targetMeta: tmeta });
-          continue;
-        }
-        result.push({ kind: "plain", opcode, meta });
-        continue;
-      }
-      if (isInRange(opcode, DIRECT_STORE_BASE)) {
-        result.push({
-          kind: "store",
-          register: registerForOffset(opcode, DIRECT_STORE_BASE),
-          opcode,
-          meta
-        });
-        continue;
-      }
-      if (isInRange(opcode, DIRECT_RECALL_BASE)) {
-        result.push({
-          kind: "recall",
-          register: registerForOffset(opcode, DIRECT_RECALL_BASE),
-          opcode,
-          meta
-        });
-        continue;
-      }
-      if (isInRange(opcode, INDIRECT_STORE_BASE)) {
-        result.push({
-          kind: "indirect-store",
-          register: registerForOffset(opcode, INDIRECT_STORE_BASE),
-          opcode,
-          meta
-        });
-        continue;
-      }
-      if (isInRange(opcode, INDIRECT_RECALL_BASE)) {
-        result.push({
-          kind: "indirect-recall",
-          register: registerForOffset(opcode, INDIRECT_RECALL_BASE),
-          opcode,
-          meta
-        });
-        continue;
-      }
-      if (isInRange(opcode, INDIRECT_JUMP_BASE)) {
-        result.push({
-          kind: "indirect-jump",
-          register: registerForOffset(opcode, INDIRECT_JUMP_BASE),
-          opcode,
-          meta
-        });
-        continue;
-      }
-      if (isInRange(opcode, INDIRECT_CALL_BASE)) {
-        result.push({
-          kind: "indirect-call",
-          register: registerForOffset(opcode, INDIRECT_CALL_BASE),
-          opcode,
-          meta
-        });
-        continue;
-      }
-      const indirectCondBase = Object.keys(INDIRECT_COND_BASES).map((value) => Number(value)).find((base) => isInRange(opcode, base));
-      if (indirectCondBase !== void 0) {
-        result.push({
-          kind: "indirect-cjump",
-          condition: INDIRECT_COND_BASES[indirectCondBase],
-          register: registerForOffset(opcode, indirectCondBase),
-          opcode,
-          meta
-        });
-        continue;
-      }
-      if (opcode === 82) {
-        result.push({ kind: "return", opcode, meta });
-        continue;
-      }
-      if (opcode === 80) {
-        result.push({
-          kind: "stop",
-          opcode,
-          semantic: stopSemanticFromComment(item.comment),
-          meta
-        });
-        continue;
-      }
-      result.push({ kind: "plain", opcode, meta });
-    }
-    return result;
-  }
-  function machineOpFromMeta(opcode, meta) {
-    const op = {
-      kind: "op",
-      opcode,
-      mnemonic: meta.mnemonic
-    };
-    if (meta.comment !== void 0) op.comment = meta.comment;
-    if (meta.sourceLine !== void 0) op.sourceLine = meta.sourceLine;
-    if (meta.raw === true) op.raw = true;
-    return op;
-  }
-  function machineAddressFromMeta(target, meta) {
-    const ref = { kind: "address", target };
-    if (meta.comment !== void 0) ref.comment = meta.comment;
-    if (meta.sourceLine !== void 0) ref.sourceLine = meta.sourceLine;
-    if (meta.formalOpcode !== void 0) ref.formalOpcode = meta.formalOpcode;
-    return ref;
-  }
-  function lowerIrToMachine(ops) {
-    const result = [];
-    for (const op of ops) {
-      switch (op.kind) {
-        case "label":
-          result.push({ kind: "label", name: op.name });
-          break;
-        case "orphan-address":
-          result.push(machineAddressFromMeta(op.target, op.meta));
-          break;
-        case "store":
-        case "recall":
-        case "indirect-store":
-        case "indirect-recall":
-        case "indirect-jump":
-        case "indirect-call":
-        case "indirect-cjump":
-        case "return":
-        case "stop":
-        case "plain":
-          result.push(machineOpFromMeta(op.opcode, op.meta));
-          break;
-        case "jump":
-        case "cjump":
-        case "call":
-        case "loop":
-          result.push(machineOpFromMeta(op.opcode, op.meta));
-          result.push(machineAddressFromMeta(op.target, op.targetMeta));
-          break;
-      }
-    }
-    return result;
-  }
-
-  // src/core/passes/helpers.ts
-  function emptyResult(ops) {
-    return { ops: [...ops], applied: 0, optimizations: [] };
-  }
-  function cellsPerOp(op) {
-    switch (op.kind) {
-      case "label":
-        return 0;
-      case "jump":
-      case "cjump":
-      case "call":
-      case "loop":
-        return 2;
-      case "orphan-address":
-        return 1;
-      default:
-        return 1;
-    }
-  }
-  function calculateLabelAddresses(ops) {
-    const map = /* @__PURE__ */ new Map();
-    let address = 0;
-    for (const op of ops) {
-      if (op.kind === "label") {
-        map.set(op.name, address);
-        continue;
-      }
-      address += cellsPerOp(op);
-    }
-    return map;
-  }
-  function targetAddress(target, labels) {
-    if (typeof target === "number") return target;
-    return labels.get(target);
-  }
-  function hasRewriteBarrier(op) {
-    return "meta" in op && "raw" in op.meta && op.meta.raw === true;
-  }
-  function isDisplayFocusSensitive(op) {
-    return "meta" in op && (op.meta.roles?.includes("display-byte") === true || /\b(display|screen|show|x2|вп)\b/iu.test(op.meta.comment ?? ""));
-  }
-  function knownIndirectMemoryTarget(op) {
-    if (op.kind !== "indirect-recall" && op.kind !== "indirect-store") return void 0;
-    const match = /\bindirect-memory-target=([0-9a-e])\b/iu.exec(op.meta.comment ?? "");
-    if (!match) return void 0;
-    return match[1].toLowerCase();
-  }
-
-  // src/core/passes/arithmetic-if.ts
-  var run = (ops) => {
-    const labelRefs = countLabelRefs(ops);
-    const result = [];
-    let applied = 0;
-    for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind !== "cjump" || typeof op.target !== "string" || hasRewriteBarrier(op)) {
-        result.push(op);
-        continue;
-      }
-      const thenJumpIndex = findNextFlowOp(ops, i + 1);
-      if (thenJumpIndex === void 0) {
-        result.push(op);
-        continue;
-      }
-      const thenJump = ops[thenJumpIndex];
-      if (thenJump.kind !== "jump" || typeof thenJump.target !== "string") {
-        result.push(op);
-        continue;
-      }
-      const falseLabelIndex = thenJumpIndex + 1;
-      const falseLabel = ops[falseLabelIndex];
-      if (falseLabel?.kind !== "label" || falseLabel.name !== op.target) {
-        result.push(op);
-        continue;
-      }
-      const endLabelIndex = findLabel(ops, thenJump.target, falseLabelIndex + 1);
-      if (endLabelIndex === void 0 || (labelRefs.get(op.target) ?? 0) !== 1) {
-        result.push(op);
-        continue;
-      }
-      const thenOps = ops.slice(i + 1, thenJumpIndex);
-      const elseOps = ops.slice(falseLabelIndex + 1, endLabelIndex);
-      if (!isPureLinearBlock(thenOps) || !isPureLinearBlock(elseOps) || !opsEquivalent(thenOps, elseOps)) {
-        result.push(op);
-        continue;
-      }
-      result.push(...thenOps);
-      i = endLabelIndex - 1;
-      applied += 1;
-    }
-    if (applied === 0) return { ops: result, applied: 0, optimizations: [] };
-    return {
-      ops: result,
-      applied,
-      optimizations: [
-        {
-          name: "arithmetic-if-pass",
-          detail: `Collapsed ${applied} conditional block(s) whose simplified branches were byte-identical.`
-        }
-      ]
-    };
-  };
-  function countLabelRefs(ops) {
-    const refs = /* @__PURE__ */ new Map();
-    for (const op of ops) {
-      if ((op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") && typeof op.target === "string") {
-        refs.set(op.target, (refs.get(op.target) ?? 0) + 1);
-      }
-    }
-    return refs;
-  }
-  function findNextFlowOp(ops, start) {
-    for (let i = start; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "label") return void 0;
-      if (op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") return i;
-    }
-    return void 0;
-  }
-  function findLabel(ops, name, start) {
-    for (let i = start; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "label" && op.name === name) return i;
-    }
-    return void 0;
-  }
-  function isPureLinearBlock(ops) {
-    return ops.length > 0 && ops.every(
-      (op) => !hasRewriteBarrier(op) && (op.kind === "plain" || op.kind === "store" || op.kind === "recall" || op.kind === "stop")
-    );
-  }
-  function opsEquivalent(a, b) {
-    if (a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i += 1) {
-      const left = a[i];
-      const right = b[i];
-      if (left.kind !== right.kind) return false;
-      if ("opcode" in left && "opcode" in right && left.opcode !== right.opcode) return false;
-      if (left.kind === "store" && right.kind === "store" && left.register !== right.register) return false;
-      if (left.kind === "recall" && right.kind === "recall" && left.register !== right.register) return false;
-      if (left.kind === "stop" && right.kind === "stop" && left.semantic !== right.semantic) return false;
-    }
-    return true;
-  }
-  var arithmeticIfPass = {
-    name: "arithmetic-if-pass",
-    run,
-    layoutSafe: false
-  };
-
-  // src/core/passes/constant-folding.ts
-  function digitOf(op) {
-    if (op.kind === "plain" && op.opcode <= 9) return op.opcode;
-    return void 0;
-  }
-  function aluOpcode(op) {
-    if (op.kind !== "plain") return void 0;
-    if (op.opcode === 16) return "+";
-    if (op.opcode === 17) return "-";
-    if (op.opcode === 18) return "*";
-    if (op.opcode === 19) return "/";
-    return void 0;
-  }
-  function isIdentityPlus(op, prev) {
-    if (prev === void 0) return false;
-    const digit = digitOf(prev);
-    if (digit !== 0) return false;
-    return aluOpcode(op) === "+";
-  }
-  function isIdentityMul(op, prev) {
-    if (prev === void 0) return false;
-    const digit = digitOf(prev);
-    if (digit !== 1) return false;
-    return aluOpcode(op) === "*";
-  }
-  var run2 = (ops) => {
-    const result = [];
-    let applied = 0;
-    for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      const prev = result[result.length - 1];
-      if ((isIdentityPlus(op, prev) || isIdentityMul(op, prev)) && prev !== void 0 && prev.kind === "plain" && prev.meta.raw !== true && op.kind === "plain" && op.meta.raw !== true) {
-        result.pop();
-        applied += 1;
-        continue;
-      }
-      result.push(op);
-    }
-    if (applied === 0) {
-      return { ops: result, applied: 0, optimizations: [] };
-    }
-    const passResult = {
-      ops: result,
-      applied,
-      optimizations: [
-        {
-          name: "constant-folding",
-          detail: `Dropped ${applied} identity arithmetic operation(s) (0+ or 1*).`
-        }
-      ]
-    };
-    return passResult;
-  };
-  var constantFolding = {
-    name: "constant-folding",
-    run: run2,
-    layoutSafe: false
-  };
-
-  // src/core/passes/cse-display-block.ts
-  function isPureDataOp(op) {
-    if (hasRewriteBarrier(op)) return false;
-    if (op.kind === "recall") return true;
-    if (op.kind === "plain") {
-      if (op.opcode === 16 || op.opcode === 18) return true;
-      if (op.opcode <= 9 || op.opcode === 10) return true;
-    }
-    return false;
-  }
-  function isBlockTerminator(op) {
-    if (hasRewriteBarrier(op)) return false;
-    return op.kind === "stop" || op.kind === "store" || op.kind === "indirect-store";
-  }
-  function collectCseCandidates(ops) {
-    const blocks = [];
-    let start = -1;
-    let buffer = [];
-    for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "label") {
-        start = -1;
-        buffer = [];
-        continue;
-      }
-      if (isPureDataOp(op)) {
-        if (start === -1) start = i;
-        buffer.push(op);
-        continue;
-      }
-      if (buffer.length >= 3 && op.kind === "return") {
-        blocks.push({ startIndex: start, ops: [...buffer, op] });
-      } else if (buffer.length >= 3 && op.kind === "stop" && ops[i + 1]?.kind === "return") {
-        blocks.push({ startIndex: start, ops: [...buffer, op, ops[i + 1]] });
-      }
-      start = -1;
-      buffer = [];
-      if (isBlockTerminator(op)) continue;
-    }
-    return blocks;
-  }
-  function blockSignature(block) {
-    return block.ops.map((op) => {
-      if (op.kind === "recall") return `r:${op.register}`;
-      if (op.kind === "plain") return `p:${op.opcode.toString(16)}`;
-      if (op.kind === "stop") return `stop:${op.semantic}`;
-      if (op.kind === "return") return "return";
-      return `o:${op.kind}`;
-    }).join("|");
-  }
-  var cseLabelCounter = 0;
-  function freshLabel() {
-    cseLabelCounter += 1;
-    return `__cse_block_${cseLabelCounter}`;
-  }
-  var run3 = (ops) => {
-    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
-    const blocks = collectCseCandidates(ops);
-    if (blocks.length < 2) return { ops: [...ops], applied: 0, optimizations: [] };
-    const bySignature = /* @__PURE__ */ new Map();
-    for (const block of blocks) {
-      const sig = blockSignature(block);
-      if (!bySignature.has(sig)) bySignature.set(sig, []);
-      bySignature.get(sig).push(block);
-    }
-    let applied = 0;
-    const replaceWith = /* @__PURE__ */ new Map();
-    const labelsToInsert = /* @__PURE__ */ new Map();
-    for (const [, group] of bySignature) {
-      if (group.length < 2) continue;
-      const blockSize = group[0].ops.length;
-      const savedPerSite = blockSize - 2;
-      if (savedPerSite < 1) continue;
-      const totalSavings = savedPerSite * (group.length - 1);
-      if (totalSavings <= 0) continue;
-      const canonical = group[0];
-      const label = freshLabel();
-      labelsToInsert.set(canonical.startIndex, label);
-      for (let i2 = 1; i2 < group.length; i2 += 1) {
-        const dup = group[i2];
-        replaceWith.set(dup.startIndex, {
-          count: dup.ops.length,
-          label,
-          targetMeta: { comment: "cse jump" },
-          jumpMeta: { mnemonic: "\u0411\u041F", comment: "cse" }
-        });
-        applied += 1;
-      }
-    }
-    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
-    const result = [];
-    let i = 0;
-    while (i < ops.length) {
-      const labelHere = labelsToInsert.get(i);
-      if (labelHere !== void 0) {
-        result.push({ kind: "label", name: labelHere });
-      }
-      const replacement = replaceWith.get(i);
-      if (replacement !== void 0) {
-        result.push({
-          kind: "jump",
-          target: replacement.label,
-          opcode: 81,
-          meta: replacement.jumpMeta,
-          targetMeta: replacement.targetMeta
-        });
-        i += replacement.count;
-        continue;
-      }
-      result.push(ops[i]);
-      i += 1;
-    }
-    const passResult = {
-      ops: result,
-      applied,
-      optimizations: [
-        {
-          name: "cse-display-block",
-          detail: `Deduplicated ${applied} display block(s) by redirecting to a shared exit.`
-        }
-      ]
-    };
-    return passResult;
-  };
-  var cseDisplayBlock = {
-    name: "cse-display-block",
-    run: run3,
-    layoutSafe: false
-  };
-
-  // src/core/passes/liveness-analysis.ts
-  function buildTargetIndexes(ops) {
-    const labelIndex = /* @__PURE__ */ new Map();
-    const addressIndex = /* @__PURE__ */ new Map();
-    let address = 0;
-    for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "label") {
-        labelIndex.set(op.name, i);
-        continue;
-      }
-      addressIndex.set(address, i);
-      address += cellsPerOp(op);
-    }
-    return { labelIndex, addressIndex };
-  }
-  function buildSuccessors(ops) {
-    const { labelIndex, addressIndex } = buildTargetIndexes(ops);
-    const successors = Array.from({ length: ops.length }, () => []);
-    const callReturns = [];
-    for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      const next = i + 1;
-      if ((op.kind === "call" || op.kind === "indirect-call") && next < ops.length) {
-        callReturns.push(next);
-      }
-    }
-    for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      const next = i + 1;
-      const fallthrough = () => {
-        if (next < ops.length) successors[i].push(next);
-      };
-      const jumpTo = (target) => {
-        if (typeof target === "string") {
-          const idx = labelIndex.get(target);
-          if (idx !== void 0) successors[i].push(idx);
-        } else {
-          const idx = addressIndex.get(target);
-          if (idx !== void 0) successors[i].push(idx);
-        }
-      };
-      switch (op.kind) {
-        case "label":
-        case "store":
-        case "recall":
-        case "indirect-store":
-        case "indirect-recall":
-        case "plain":
-        case "orphan-address":
-          fallthrough();
-          break;
-        case "stop":
-          fallthrough();
-          break;
-        case "return":
-          successors[i].push(...callReturns);
-          break;
-        case "jump":
-          jumpTo(op.target);
-          break;
-        case "cjump":
-        case "loop":
-          jumpTo(op.target);
-          fallthrough();
-          break;
-        case "call":
-          jumpTo(op.target);
-          fallthrough();
-          break;
-        case "indirect-jump":
-          break;
-        case "indirect-call":
-          fallthrough();
-          break;
-        case "indirect-cjump":
-          fallthrough();
-          break;
-      }
-    }
-    return { successors };
-  }
-  function defsAndUses(op) {
-    switch (op.kind) {
-      case "store":
-        return { defs: [op.register], uses: [] };
-      case "recall":
-        return { defs: [], uses: [op.register] };
-      case "indirect-recall": {
-        const target = knownIndirectMemoryTarget(op);
-        return {
-          defs: [],
-          uses: target === void 0 ? [op.register] : [op.register, target]
-        };
-      }
-      case "indirect-store": {
-        const target = knownIndirectMemoryTarget(op);
-        return {
-          defs: target === void 0 ? [] : [target],
-          uses: [op.register]
-        };
-      }
-      case "indirect-jump":
-      case "indirect-call":
-      case "indirect-cjump":
-        return { defs: [], uses: [op.register] };
-      case "loop": {
-        const register = loopCounterRegister(op.counter);
-        return { defs: [register], uses: [register] };
-      }
-      default:
-        return { defs: [], uses: [] };
-    }
-  }
-  function loopCounterRegister(counter) {
-    switch (counter) {
-      case "L0":
-        return "0";
-      case "L1":
-        return "1";
-      case "L2":
-        return "2";
-      case "L3":
-        return "3";
-    }
-  }
-  function computeLiveness(ops) {
-    const { successors } = buildSuccessors(ops);
-    const n = ops.length;
-    const liveIn = Array.from({ length: n }, () => /* @__PURE__ */ new Set());
-    const liveOut = Array.from({ length: n }, () => /* @__PURE__ */ new Set());
-    let changed = true;
-    let iterations = 0;
-    while (changed && iterations < 200) {
-      changed = false;
-      iterations += 1;
-      for (let i = n - 1; i >= 0; i -= 1) {
-        const op = ops[i];
-        const succ = successors[i];
-        const newOut = /* @__PURE__ */ new Set();
-        for (const s of succ) {
-          for (const reg of liveIn[s]) newOut.add(reg);
-        }
-        const { defs, uses } = defsAndUses(op);
-        const newIn = new Set(uses);
-        for (const reg of newOut) {
-          if (!defs.includes(reg)) newIn.add(reg);
-        }
-        if (!setsEqual2(newIn, liveIn[i]) || !setsEqual2(newOut, liveOut[i])) {
-          liveIn[i] = newIn;
-          liveOut[i] = newOut;
-          changed = true;
-        }
-      }
-    }
-    return { liveIn, liveOut };
-  }
-  function setsEqual2(a, b) {
-    if (a.size !== b.size) return false;
-    for (const value of a) {
-      if (!b.has(value)) return false;
-    }
-    return true;
-  }
-
-  // src/core/passes/dead-code-after-halt.ts
-  function reachableFromEntry(ops) {
-    const labelIndex = /* @__PURE__ */ new Map();
-    const addressIndex = /* @__PURE__ */ new Map();
-    let address = 0;
-    for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "label") labelIndex.set(op.name, i);
-      else {
-        addressIndex.set(address, i);
-        address += cellsPerOp(op);
-      }
-    }
-    const visited = /* @__PURE__ */ new Set();
-    const stack = [];
-    if (ops.length > 0) stack.push(0);
-    while (stack.length > 0) {
-      const i = stack.pop();
-      if (visited.has(i)) continue;
-      visited.add(i);
-      const op = ops[i];
-      const fallthrough = () => {
-        if (i + 1 < ops.length) stack.push(i + 1);
-      };
-      const target = (label) => {
-        if (typeof label === "string") {
-          const idx = labelIndex.get(label);
-          if (idx !== void 0) stack.push(idx);
-        } else {
-          const idx = addressIndex.get(label);
-          if (idx !== void 0) stack.push(idx);
-        }
-      };
-      switch (op.kind) {
-        case "label":
-        case "store":
-        case "recall":
-        case "indirect-store":
-        case "indirect-recall":
-        case "plain":
-        case "orphan-address":
-          fallthrough();
-          break;
-        case "stop":
-          fallthrough();
-          break;
-        case "return":
-          break;
-        case "jump":
-          target(op.target);
-          break;
-        case "cjump":
-        case "loop":
-          target(op.target);
-          fallthrough();
-          break;
-        case "call":
-          target(op.target);
-          fallthrough();
-          break;
-        case "indirect-jump": {
-          const knownTarget = knownIndirectTarget(op);
-          if (knownTarget !== void 0) target(knownTarget);
-          break;
-        }
-        case "indirect-call": {
-          const knownTarget = knownIndirectTarget(op);
-          if (knownTarget !== void 0) target(knownTarget);
-          fallthrough();
-          break;
-        }
-        case "indirect-cjump": {
-          const knownTarget = knownIndirectTarget(op);
-          if (knownTarget !== void 0) target(knownTarget);
-          fallthrough();
-          break;
-        }
-      }
-    }
-    return visited;
-  }
-  function knownIndirectTarget(op) {
-    if (op.kind !== "indirect-jump" && op.kind !== "indirect-call" && op.kind !== "indirect-cjump") {
-      return void 0;
-    }
-    const match = /\bindirect-target=(\d+)\b/u.exec(op.meta.comment ?? "");
-    if (!match) return void 0;
-    const target = Number(match[1]);
-    if (!Number.isInteger(target) || target < 0 || target > 104) return void 0;
-    return target;
-  }
-  var run4 = (ops) => {
-    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
-    const reachable = reachableFromEntry(ops);
-    if (reachable.size === ops.length) {
-      return { ops: [...ops], applied: 0, optimizations: [] };
-    }
-    computeLiveness(ops);
-    const result = [];
-    let applied = 0;
-    for (let i = 0; i < ops.length; i += 1) {
-      if (reachable.has(i)) {
-        result.push(ops[i]);
-        continue;
-      }
-      if (ops[i].kind === "label") {
-        result.push(ops[i]);
-        continue;
-      }
-      applied += 1;
-    }
-    if (applied === 0) {
-      return { ops: result, applied: 0, optimizations: [] };
-    }
-    const passResult = {
-      ops: result,
-      applied,
-      optimizations: [
-        {
-          name: "dead-code-after-halt",
-          detail: `Removed ${applied} unreachable op(s) from the entry CFG.`
-        }
-      ]
-    };
-    return passResult;
-  };
-  var deadCodeAfterHalt = {
-    name: "dead-code-after-halt",
-    run: run4,
-    layoutSafe: false
-  };
-
-  // src/core/passes/dead-store-before-commutative.ts
-  function registerReadBeforeNextWrite(ops, start, register) {
-    for (let i = start; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "recall" && op.register === register) return true;
-      if (op.kind === "store" && op.register === register) return false;
-      if (op.kind !== "label" && op.kind !== "plain" && op.kind !== "orphan-address") return true;
-    }
-    return false;
-  }
-  function isCommutativeAlu(op) {
-    if (op.kind !== "plain") return false;
-    return op.opcode === 16 || op.opcode === 18;
-  }
-  var run5 = (ops) => {
-    const result = [];
-    let applied = 0;
-    for (let i = 0; i < ops.length; i += 1) {
-      const current = ops[i];
-      const next = ops[i + 1];
-      const after = ops[i + 2];
-      if (current.kind === "store" && next?.kind === "recall" && after !== void 0 && isCommutativeAlu(after) && !hasRewriteBarrier(current) && !hasRewriteBarrier(next) && !hasRewriteBarrier(after) && !registerReadBeforeNextWrite(ops, i + 3, current.register)) {
-        applied += 1;
-        continue;
-      }
-      result.push(current);
-    }
-    const passResult = {
-      ops: result,
-      applied,
-      optimizations: applied > 0 ? [
-        {
-          name: "dead-temp-store",
-          detail: `Removed ${applied} temp store(s) whose X value was consumed directly by stack scheduling.`
-        }
-      ] : []
-    };
-    return passResult;
-  };
-  var deadStoreBeforeCommutative = {
-    name: "dead-temp-store",
-    run: run5,
-    layoutSafe: false
-  };
-
-  // src/core/passes/dead-store-elimination.ts
-  function isNumberEntry(op) {
-    return op.kind === "plain" && op.opcode <= 12;
-  }
-  function leavesEntryOpen(op) {
-    if (isNumberEntry(op)) return true;
-    return op.kind === "stop" && op.semantic === "input";
-  }
-  function previousEffectiveOp(ops, index) {
-    for (let i = index - 1; i >= 0; i -= 1) {
-      if (ops[i].kind !== "label") return ops[i];
-    }
-    return void 0;
-  }
-  function nextEffectiveOp(ops, index) {
-    for (let i = index + 1; i < ops.length; i += 1) {
-      if (ops[i].kind !== "label") return ops[i];
-    }
-    return void 0;
-  }
-  function finalizesNumberEntry(ops, index) {
-    const prev = previousEffectiveOp(ops, index);
-    const next = nextEffectiveOp(ops, index);
-    return prev !== void 0 && next !== void 0 && leavesEntryOpen(prev) && isNumberEntry(next);
-  }
-  var run6 = (ops) => {
-    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
-    const liveness = computeLiveness(ops);
-    const removed = /* @__PURE__ */ new Set();
-    for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind !== "store") continue;
-      if (hasRewriteBarrier(op)) continue;
-      if (liveness.liveOut[i].has(op.register)) continue;
-      if (finalizesNumberEntry(ops, i)) continue;
-      removed.add(i);
-    }
-    if (removed.size === 0) {
-      return { ops: [...ops], applied: 0, optimizations: [] };
-    }
-    const result = [];
-    for (let i = 0; i < ops.length; i += 1) {
-      if (!removed.has(i)) result.push(ops[i]);
-    }
-    const passResult = {
-      ops: result,
-      applied: removed.size,
-      optimizations: [
-        {
-          name: "dead-store-elimination",
-          detail: `Removed ${removed.size} store(s) to register(s) never read before the next assignment.`
-        }
-      ]
-    };
-    return passResult;
-  };
-  var deadStoreElimination = {
-    name: "dead-store-elimination",
-    run: run6,
-    layoutSafe: false
-  };
-
-  // src/core/passes/duplicate-failure-tail.ts
-  function isZeroDigit(op) {
-    return op.kind === "plain" && op.opcode === 0;
-  }
-  function isPauseLike(op) {
-    return op.kind === "stop";
-  }
-  function isUnconditionalJump(op) {
-    return op.kind === "jump";
-  }
-  var run7 = (ops) => {
-    const rewrite = /* @__PURE__ */ new Map();
-    const remove = /* @__PURE__ */ new Set();
-    let applied = 0;
-    for (let i = 0; i + 8 < ops.length; i += 1) {
-      const firstLabel = ops[i];
-      const firstZero = ops[i + 1];
-      const firstPause = ops[i + 2];
-      const trampolineLabel = ops[i + 3];
-      const trampolineJump = ops[i + 4];
-      const secondLabel = ops[i + 5];
-      const secondZero = ops[i + 6];
-      const secondPause = ops[i + 7];
-      const endLabel = ops[i + 8];
-      if (firstLabel?.kind === "label" && firstZero !== void 0 && isZeroDigit(firstZero) && firstPause !== void 0 && isPauseLike(firstPause) && trampolineLabel?.kind === "label" && trampolineJump !== void 0 && isUnconditionalJump(trampolineJump) && typeof trampolineJump.target === "string" && secondLabel?.kind === "label" && secondZero !== void 0 && isZeroDigit(secondZero) && secondPause !== void 0 && isPauseLike(secondPause) && endLabel?.kind === "label" && trampolineJump.target === endLabel.name && !hasRewriteBarrier(firstZero) && !hasRewriteBarrier(firstPause) && !hasRewriteBarrier(trampolineJump) && !hasRewriteBarrier(secondZero) && !hasRewriteBarrier(secondPause)) {
-        rewrite.set(firstLabel.name, secondLabel.name);
-        rewrite.set(trampolineLabel.name, endLabel.name);
-        for (let index = i; index <= i + 4; index += 1) remove.add(index);
-        applied += 1;
-        i += 4;
-      }
-    }
-    if (applied === 0) {
-      return { ops: [...ops], applied: 0, optimizations: [] };
-    }
-    const result = [];
-    for (let index = 0; index < ops.length; index += 1) {
-      if (remove.has(index)) continue;
-      const op = ops[index];
-      if ((op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") && typeof op.target === "string") {
-        const replacement = rewrite.get(op.target);
-        if (replacement !== void 0) {
-          const targetMeta = {};
-          if (op.targetMeta.comment !== void 0) targetMeta.comment = op.targetMeta.comment;
-          if (op.targetMeta.sourceLine !== void 0) targetMeta.sourceLine = op.targetMeta.sourceLine;
-          if (op.targetMeta.roles !== void 0) targetMeta.roles = [...op.targetMeta.roles];
-          if (op.targetMeta.formalOpcode !== void 0) targetMeta.formalOpcode = op.targetMeta.formalOpcode;
-          result.push({ ...op, target: replacement, targetMeta });
-          continue;
-        }
-      }
-      result.push(op);
-    }
-    const passResult = {
-      ops: result,
-      applied,
-      optimizations: [
-        {
-          name: "duplicate-failure-tail-merge",
-          detail: `Merged ${applied} duplicate pause-0 failure tail(s).`
-        }
-      ]
-    };
-    return passResult;
-  };
-  var duplicateFailureTail = {
-    name: "duplicate-failure-tail-merge",
-    run: run7,
-    layoutSafe: false
-  };
-
-  // src/core/indirect-addressing.ts
-  var REGISTERS_BY_INDEX2 = [
-    "0",
-    "1",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7",
-    "8",
-    "9",
-    "a",
-    "b",
-    "c",
-    "d",
-    "e"
-  ];
-  function indirectSelectorMutation(register) {
-    const index = registerIndex(register);
-    if (index <= 3) return "pre-decrement";
-    if (index <= 6) return "pre-increment";
-    return "stable";
-  }
-  function isStableIndirectSelector(register) {
-    return indirectSelectorMutation(register) === "stable";
-  }
-  function evaluateIndirectAddress(selector, value, operation) {
-    const mutation = indirectSelectorMutation(selector);
-    const fractional = isPositiveFractional(value);
-    if (selector === "0" && fractional) {
-      const formalAddress = formalAddressInfo(153);
-      return {
-        selector,
-        mutation,
-        operation,
-        transformed: "99",
-        ...operation === "flow" ? { flowTarget: 99, actualFlowTarget: formalAddress.actual, formalAddress } : { memoryTarget: "3" },
-        resultValue: "-99999999"
-      };
-    }
-    const transformed = transformSelectorValue(value, mutation);
-    if (transformed === void 0) return void 0;
-    if (operation === "flow") {
-      const flowTarget = flowTargetFromTransformed(transformed);
-      const formalAddress = formalAddressInfo(formalOpcodeForFlowTarget(transformed, flowTarget));
-      const result = {
-        selector,
-        mutation,
-        operation,
-        transformed,
-        formalAddress,
-        flowTarget,
-        actualFlowTarget: formalAddress.actual,
-        resultValue: transformed
-      };
-      const superDark = superDarkTarget(formalAddress.opcode);
-      if (superDark !== void 0) result.superDark = superDark;
-      return result;
-    }
-    const memoryTarget = memoryTargetFromTransformed(transformed);
-    if (memoryTarget === void 0) return void 0;
-    return {
-      selector,
-      mutation,
-      operation,
-      transformed,
-      memoryTarget,
-      resultValue: transformed
-    };
-  }
-  function memoryTargetFromTransformed(transformed) {
-    const normalized = transformed.trim().toLowerCase();
-    if (/^-?\d+$/u.test(normalized)) {
-      return REGISTERS_BY_INDEX2[positiveModulo(Number(normalized), 15)];
-    }
-    const last = normalized.at(-1);
-    if (last === void 0) return void 0;
-    const nibble = Number.parseInt(last, 16);
-    if (!Number.isFinite(nibble) || nibble < 0 || nibble > 15) return void 0;
-    if (nibble === 15) return "0";
-    return REGISTERS_BY_INDEX2[nibble];
-  }
-  function superDarkTarget(formalTarget) {
-    const info2 = formalAddressInfo(formalTarget);
-    if (info2.kind !== "super-dark" || info2.extra === void 0) return void 0;
-    return {
-      formal: info2.opcode,
-      entryAddress: info2.actual,
-      continuationAddress: info2.extra
-    };
-  }
-  function transformSelectorValue(value, mutation) {
-    if (typeof value === "number") {
-      if (!Number.isFinite(value)) return void 0;
-      const integer = Math.trunc(value) + mutationDelta(mutation);
-      return String(integer);
-    }
-    const normalized = value.trim().replace(/^0x/iu, "").toLowerCase();
-    if (!/^[0-9a-f]+$/iu.test(normalized)) return void 0;
-    if (mutation === "stable" && /[a-f]/iu.test(normalized)) return normalized;
-    const decimal2 = Number(normalized);
-    if (!Number.isFinite(decimal2)) return void 0;
-    return String(Math.trunc(decimal2) + mutationDelta(mutation));
-  }
-  function isPositiveFractional(value) {
-    const numeric = typeof value === "number" ? value : Number(value.trim().replace(",", "."));
-    return numeric !== void 0 && numeric > 0 && numeric < 1;
-  }
-  function mutationDelta(mutation) {
-    if (mutation === "pre-decrement") return -1;
-    if (mutation === "pre-increment") return 1;
-    return 0;
-  }
-  function flowTargetFromTransformed(transformed) {
-    const normalized = transformed.trim().toLowerCase();
-    if (/^[0-9a-f]+$/iu.test(normalized) && /[a-f]/iu.test(normalized)) {
-      return Number.parseInt(normalized.slice(-2), 16);
-    }
-    const numeric = Number(normalized);
-    if (!Number.isFinite(numeric)) return 0;
-    return positiveModulo(Math.trunc(numeric), 100);
-  }
-  function formalOpcodeForFlowTarget(transformed, flowTarget) {
-    const normalized = transformed.trim().toLowerCase();
-    if (/^[0-9a-f]+$/iu.test(normalized) && /[a-f]/iu.test(normalized)) {
-      return flowTarget;
-    }
-    return officialAddressToOpcode(flowTarget);
-  }
-  function positiveModulo(value, modulus) {
-    return (value % modulus + modulus) % modulus;
-  }
-
-  // src/core/passes/indirect-addressing.ts
-  var INDIRECT_COND_BASES2 = {
-    "!=0": 112,
-    ">=0": 144,
-    "<0": 192,
-    "==0": 224
-  };
-  function clearKnownState(state) {
-    state.currentLiteral = void 0;
-    state.stableRegisters.clear();
-  }
-  function cloneMeta(meta, comment) {
-    return {
-      ...meta,
-      comment: [meta.comment, comment].filter(Boolean).join("; ")
-    };
-  }
-  function digitForPlain(op) {
-    if (op.kind !== "plain" || op.opcode < 0 || op.opcode > 9) return void 0;
-    return String(op.opcode);
-  }
-  function literalNumber(text) {
-    if (text === void 0 || !/^\d+$/u.test(text)) return void 0;
-    const value = Number(text);
-    if (!Number.isSafeInteger(value)) return void 0;
-    return value;
-  }
-  function rememberStore(state, register) {
-    if (!isStableIndirectSelector(register)) return;
-    const value = literalNumber(state.currentLiteral);
-    if (value === void 0) {
-      state.stableRegisters.delete(register);
-    } else {
-      state.stableRegisters.set(register, String(value));
-    }
-  }
-  function findFlowSelector(state, target) {
-    if (typeof target !== "number") return void 0;
-    for (const [register, value] of state.stableRegisters) {
-      const evaluated = evaluateIndirectAddress(register, value, "flow");
-      if (evaluated?.flowTarget === target) return register;
-    }
-    return void 0;
-  }
-  function findMemorySelector(state, target) {
-    for (const [register, value] of state.stableRegisters) {
-      const evaluated = evaluateIndirectAddress(register, value, "memory");
-      if (evaluated?.memoryTarget === target) return register;
-    }
-    return void 0;
-  }
-  function updateKnownAfterOp(state, op) {
-    if (hasRewriteBarrier(op)) {
-      clearKnownState(state);
-      return;
-    }
-    const digit = digitForPlain(op);
-    if (digit !== void 0) {
-      state.currentLiteral = `${state.currentLiteral ?? ""}${digit}`;
-      return;
-    }
-    switch (op.kind) {
-      case "store":
-        rememberStore(state, op.register);
-        return;
-      case "recall": {
-        state.currentLiteral = state.stableRegisters.get(op.register);
-        return;
-      }
-      case "label":
-        clearKnownState(state);
-        return;
-      case "indirect-store":
-        clearKnownState(state);
-        return;
-      case "call":
-      case "indirect-call":
-      case "cjump":
-      case "indirect-cjump":
-      case "stop":
-      case "jump":
-      case "indirect-jump":
-      case "return":
-        clearKnownState(state);
-        return;
-      default:
-        state.currentLiteral = void 0;
-        return;
-    }
-  }
-  function indirectFlowOp(op, register, target) {
-    const offset = registerIndex(register);
-    const suffix = `stable indirect flow indirect-target=${target}`;
-    if (op.kind === "jump") {
-      return {
-        kind: "indirect-jump",
-        register,
-        opcode: 128 + offset,
-        meta: cloneMeta({ ...op.meta, mnemonic: `\u041A \u0411\u041F ${register}` }, suffix)
-      };
-    }
-    if (op.kind === "call") {
-      return {
-        kind: "indirect-call",
-        register,
-        opcode: 160 + offset,
-        meta: cloneMeta({ ...op.meta, mnemonic: `\u041A \u041F\u041F ${register}` }, suffix)
-      };
-    }
-    const opcode = INDIRECT_COND_BASES2[op.condition] + offset;
-    const name = op.condition === "==0" ? "x=0" : op.condition === "!=0" ? "x!=0" : `x${op.condition}`;
-    return {
-      kind: "indirect-cjump",
-      condition: op.condition,
-      register,
-      opcode,
-      meta: cloneMeta({ ...op.meta, mnemonic: `\u041A ${name} ${register}` }, suffix)
-    };
-  }
-  var stableFlowRun = (ops) => {
-    const result = [];
-    const state = { currentLiteral: void 0, stableRegisters: /* @__PURE__ */ new Map() };
-    let applied = 0;
-    for (const op of ops) {
-      if (!hasRewriteBarrier(op) && (op.kind === "jump" || op.kind === "call" || op.kind === "cjump")) {
-        const register = findFlowSelector(state, op.target);
-        if (register !== void 0 && typeof op.target === "number") {
-          const rewritten = indirectFlowOp(op, register, op.target);
-          result.push(rewritten);
-          updateKnownAfterOp(state, rewritten);
-          applied += 1;
-          continue;
-        }
-      }
-      result.push(op);
-      updateKnownAfterOp(state, op);
-    }
-    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
-    return {
-      ops: result,
-      applied,
-      optimizations: [
-        {
-          name: "stable-indirect-flow",
-          detail: `Replaced ${applied} direct branch/call(s) with stable-register indirect flow.`
-        }
-      ]
-    };
-  };
-  var memoryTableRun = (ops) => {
-    const result = [];
-    const state = { currentLiteral: void 0, stableRegisters: /* @__PURE__ */ new Map() };
-    let applied = 0;
-    for (const op of ops) {
-      if ((op.kind === "recall" || op.kind === "store") && !hasRewriteBarrier(op) && !isDisplayFocusSensitive(op)) {
-        const selector = findMemorySelector(state, op.register);
-        if (selector !== void 0) {
-          const opcodeBase = op.kind === "recall" ? 208 : 176;
-          const mnemonic = op.kind === "recall" ? `\u041A \u041F->X ${selector}` : `\u041A X->\u041F ${selector}`;
-          const rewritten = {
-            kind: op.kind === "recall" ? "indirect-recall" : "indirect-store",
-            register: selector,
-            opcode: opcodeBase + registerIndex(selector),
-            meta: cloneMeta({ ...op.meta, mnemonic }, `indirect memory table indirect-memory-target=${op.register}`)
-          };
-          result.push(rewritten);
-          updateKnownAfterOp(state, rewritten);
-          applied += 1;
-          continue;
-        }
-      }
-      result.push(op);
-      updateKnownAfterOp(state, op);
-    }
-    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
-    return {
-      ops: result,
-      applied,
-      optimizations: [
-        {
-          name: "indirect-memory-table",
-          detail: `Rewrote ${applied} direct memory access(es) through an existing stable selector.`
-        }
-      ]
-    };
-  };
-  var stableIndirectFlow = {
-    name: "stable-indirect-flow",
-    run: stableFlowRun,
-    layoutSafe: false
-  };
-  var indirectMemoryTable = {
-    name: "indirect-memory-table",
-    run: memoryTableRun,
-    layoutSafe: false
-  };
-
-  // src/core/passes/jump-thread.ts
-  function labelTargets(ops) {
-    const map = /* @__PURE__ */ new Map();
-    for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "label") map.set(op.name, i);
-    }
-    return map;
-  }
-  function followLabel(ops, labels, start, seen) {
-    let current = start;
-    while (!seen.has(current)) {
-      seen.add(current);
-      const index = labels.get(current);
-      if (index === void 0) return current;
-      let cursor = index + 1;
-      while (cursor < ops.length && ops[cursor].kind === "label") cursor += 1;
-      const next = ops[cursor];
-      if (next?.kind !== "jump") return current;
-      if (typeof next.target !== "string") return current;
-      if (hasRewriteBarrier(next)) return current;
-      current = next.target;
-    }
-    return current;
-  }
-  var run8 = (ops) => {
-    const labels = labelTargets(ops);
-    const result = [];
-    let applied = 0;
-    for (const op of ops) {
-      if ((op.kind === "jump" || op.kind === "cjump") && typeof op.target === "string" && !hasRewriteBarrier(op)) {
-        const final = followLabel(ops, labels, op.target, /* @__PURE__ */ new Set());
-        if (final !== void 0 && final !== op.target) {
-          applied += 1;
-          result.push({ ...op, target: final });
-          continue;
-        }
-      }
-      result.push(op);
-    }
-    if (applied === 0) {
-      return { ops: result, applied: 0, optimizations: [] };
-    }
-    const passResult = {
-      ops: result,
-      applied,
-      optimizations: [
-        {
-          name: "jump-thread",
-          detail: `Threaded ${applied} jump(s) through trampoline labels to the final target.`
-        }
-      ]
-    };
-    return passResult;
-  };
-  var jumpThread = {
-    name: "jump-thread",
-    run: run8,
-    layoutSafe: false
-  };
-
-  // src/core/passes/jump-to-next.ts
-  var run9 = (ops) => {
-    const result = [];
-    let applied = 0;
-    for (let i = 0; i < ops.length; i += 1) {
-      const current = ops[i];
-      if (current.kind === "jump" && typeof current.target === "string" && !hasRewriteBarrier(current)) {
-        let cursor = i + 1;
-        let threaded = false;
-        while (cursor < ops.length && ops[cursor].kind === "label") {
-          const label = ops[cursor];
-          if (label.kind === "label" && label.name === current.target) {
-            threaded = true;
-            break;
-          }
-          cursor += 1;
-        }
-        if (threaded) {
-          applied += 1;
-          continue;
-        }
-      }
-      result.push(current);
-    }
-    const passResult = {
-      ops: result,
-      applied,
-      optimizations: applied > 0 ? [
-        {
-          name: "jump-to-next-threading",
-          detail: `Removed ${applied} unconditional branch to the immediately following label.`
-        }
-      ] : []
-    };
-    return passResult;
-  };
-  var jumpToNextThreading = {
-    name: "jump-to-next-threading",
-    run: run9,
-    layoutSafe: false
-  };
-
-  // src/core/passes/last-x-reuse.ts
-  function clobbersX(op) {
-    switch (op.kind) {
-      case "label":
-      case "orphan-address":
-        return false;
-      case "store":
-        return false;
-      case "recall":
-      case "indirect-recall":
-        return true;
-      case "indirect-store":
-        return false;
-      case "plain":
-        return true;
-      case "stop":
-        return false;
-      case "jump":
-      case "cjump":
-      case "call":
-      case "loop":
-      case "indirect-jump":
-      case "indirect-call":
-      case "indirect-cjump":
-      case "return":
-        return false;
-    }
-  }
-  var run10 = (ops) => {
-    const removed = /* @__PURE__ */ new Set();
-    let xHolds;
-    for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "label") {
-        xHolds = void 0;
-        continue;
-      }
-      if (op.kind === "store") {
-        if (!hasRewriteBarrier(op)) xHolds = op.register;
-        else xHolds = void 0;
-        continue;
-      }
-      if (op.kind === "recall" && !hasRewriteBarrier(op) && xHolds === op.register) {
-        removed.add(i);
-        continue;
-      }
-      if (op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump" || op.kind === "return" || op.kind === "stop") {
-        xHolds = void 0;
-        continue;
-      }
-      if (clobbersX(op)) xHolds = void 0;
-    }
-    if (removed.size === 0) {
-      return { ops: [...ops], applied: 0, optimizations: [] };
-    }
-    const result = [];
-    for (let i = 0; i < ops.length; i += 1) {
-      if (!removed.has(i)) result.push(ops[i]);
-    }
-    const passResult = {
-      ops: result,
-      applied: removed.size,
-      optimizations: [
-        {
-          name: "last-x-reuse",
-          detail: `Dropped ${removed.size} recall(s) whose register value was already in X.`
-        }
-      ]
-    };
-    return passResult;
-  };
-  var lastXReuse = {
-    name: "last-x-reuse",
-    run: run10,
-    layoutSafe: false
-  };
-
-  // src/core/passes/preloaded-indirect-flow.ts
-  var INDIRECT_COND_BASES3 = {
-    "!=0": 112,
-    ">=0": 144,
-    "<0": 192,
-    "==0": 224
-  };
-  var STABLE_REGISTERS = ["7", "8", "9", "a", "b", "c", "d", "e"];
-  function cloneMeta2(meta, comment) {
-    return {
-      ...meta,
-      comment: [meta.comment, comment].filter(Boolean).join("; ")
-    };
-  }
-  function usedRegisters(ops) {
-    const used = /* @__PURE__ */ new Set();
-    for (const op of ops) {
-      if (op.kind === "store" || op.kind === "recall" || op.kind === "indirect-store" || op.kind === "indirect-recall" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
-        used.add(op.register);
-      }
-    }
-    return used;
-  }
-  function spareStableRegisters(ops) {
-    const used = usedRegisters(ops);
-    return STABLE_REGISTERS.filter((register) => !used.has(register));
-  }
-  function numericFlowTarget(op) {
-    if (op.kind !== "jump" && op.kind !== "call" && op.kind !== "cjump" && op.kind !== "loop") return void 0;
-    if (typeof op.target !== "number") return void 0;
-    if (!Number.isInteger(op.target) || op.target < 0 || op.target > 104) return void 0;
-    return op.target;
-  }
-  function branchTarget(op) {
-    if (op.kind !== "jump" && op.kind !== "call" && op.kind !== "cjump") return void 0;
-    if (op.targetMeta.formalOpcode !== void 0 || op.targetMeta.roles?.includes("formal-address")) return void 0;
-    return numericFlowTarget(op);
-  }
-  function maxNumericFlowTarget(ops) {
-    let max = -1;
-    for (const op of ops) {
-      const target = numericFlowTarget(op);
-      if (target !== void 0 && target > max) max = target;
-    }
-    return max;
-  }
-  function addressByIndex(ops) {
-    const addresses = [];
-    let address = 0;
-    for (const op of ops) {
-      addresses.push(address);
-      address += cellsPerOp(op);
-    }
-    return addresses;
-  }
-  function opAtAddress(ops, addresses, address) {
-    for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (cellsPerOp(op) === 0) continue;
-      if (addresses[i] === address) return op;
-    }
-    return void 0;
-  }
-  function hasSingleCellFallthrough(op) {
-    if (op === void 0 || cellsPerOp(op) !== 1) return false;
-    switch (op.kind) {
-      case "plain":
-      case "store":
-      case "recall":
-      case "indirect-store":
-      case "indirect-recall":
-      case "stop":
-        return true;
-      default:
-        return false;
-    }
-  }
-  function isSuperDarkCompatibleTarget(ops, addresses, labels, target) {
-    if (target < 48 || target > 53) return false;
-    const entry = opAtAddress(ops, addresses, target);
-    if (!hasSingleCellFallthrough(entry)) return false;
-    const continuationAddress = target - 47;
-    const afterEntry = opAtAddress(ops, addresses, target + 1);
-    if (afterEntry?.kind !== "jump") return false;
-    return targetAddress(afterEntry.target, labels) === continuationAddress;
-  }
-  function selectorForTarget(ops, addresses, labels, target) {
-    if (isSuperDarkCompatibleTarget(ops, addresses, labels, target)) {
-      return {
-        selectorValue: formalLabelFromOpcode(250 + (target - 48)),
-        superDark: true
-      };
-    }
-    if (target <= 47) return { selectorValue: formalLabelFromOrdinal(target + 112), superDark: false };
-    return { selectorValue: officialLabel(target), superDark: false };
-  }
-  function formalLabelFromOrdinal(ordinal) {
-    const high = Math.floor(ordinal / 10);
-    const low = ordinal % 10;
-    return `${high.toString(16).toUpperCase()}${low.toString(16).toUpperCase()}`;
-  }
-  function formalLabelFromOpcode(opcode) {
-    const high = Math.floor(opcode / 16);
-    const low = opcode % 16;
-    return `${high.toString(16).toUpperCase()}${low.toString(16).toUpperCase()}`;
-  }
-  function officialLabel(target) {
-    if (target <= 99) {
-      return `${Math.floor(target / 10)}${target % 10}`;
-    }
-    return `A${target - 100}`;
-  }
-  function indirectFlowOp2(op, register, selectorValue, target, superDark) {
-    const offset = registerIndex(register);
-    const suffix = `preloaded R${register}=${selectorValue} indirect-target=${target}${superDark ? " super-dark" : ""} indirect flow`;
-    if (op.kind === "jump") {
-      return {
-        kind: "indirect-jump",
-        register,
-        opcode: 128 + offset,
-        meta: cloneMeta2({ ...op.meta, mnemonic: `\u041A \u0411\u041F ${register}` }, suffix)
-      };
-    }
-    if (op.kind === "call") {
-      return {
-        kind: "indirect-call",
-        register,
-        opcode: 160 + offset,
-        meta: cloneMeta2({ ...op.meta, mnemonic: `\u041A \u041F\u041F ${register}` }, suffix)
-      };
-    }
-    const opcode = INDIRECT_COND_BASES3[op.condition] + offset;
-    const name = op.condition === "==0" ? "x=0" : op.condition === "!=0" ? "x!=0" : `x${op.condition}`;
-    return {
-      kind: "indirect-cjump",
-      condition: op.condition,
-      register,
-      opcode,
-      meta: cloneMeta2({ ...op.meta, mnemonic: `\u041A ${name} ${register}` }, suffix)
-    };
-  }
-  function runPreloadedIndirectFlow(ops, _context, flowOptions = {}) {
-    const registers = spareStableRegisters(ops);
-    if (registers.length === 0) return { ops: [...ops], applied: 0, optimizations: [] };
-    const addresses = addressByIndex(ops);
-    const labels = calculateLabelAddresses(ops);
-    const maxTarget = maxNumericFlowTarget(ops);
-    const eligibleTargets = /* @__PURE__ */ new Map();
-    for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (hasRewriteBarrier(op) || op.kind !== "jump" && op.kind !== "call" && op.kind !== "cjump") continue;
-      const target = branchTarget(op);
-      const siteAddress = addresses[index];
-      if (target === void 0 || target > siteAddress || !flowOptions.relaxMaxTargetGuard && maxTarget > siteAddress) {
-        continue;
-      }
-      const { selectorValue, superDark } = selectorForTarget(ops, addresses, labels, target);
-      const evaluated = evaluateIndirectAddress(registers[0], selectorValue, "flow");
-      const selectedSuperDark = evaluated?.superDark?.entryAddress === target;
-      if (evaluated?.actualFlowTarget !== target || selectedSuperDark !== superDark) {
-        continue;
-      }
-      const existing = eligibleTargets.get(target);
-      if (existing !== void 0) {
-        existing.indices.push(index);
-      } else {
-        eligibleTargets.set(target, { target, selectorValue, superDark, indices: [index] });
-      }
-    }
-    const targets = /* @__PURE__ */ new Map();
-    const preloads = [];
-    const sortedTargets = [...eligibleTargets.values()].sort(
-      (left, right) => right.indices.length - left.indices.length || left.indices[0] - right.indices[0]
-    );
-    for (const target of sortedTargets) {
-      const register = registers.shift();
-      if (register === void 0) break;
-      if (!isStableIndirectSelector(register)) continue;
-      targets.set(target.target, {
-        register,
-        selectorValue: target.selectorValue,
-        superDark: target.superDark
-      });
-      preloads.push({ register, value: target.selectorValue, countsAgainstProgram: false });
-    }
-    const result = [];
-    let applied = 0;
-    let superDarkApplied = 0;
-    for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (hasRewriteBarrier(op) || op.kind !== "jump" && op.kind !== "call" && op.kind !== "cjump") {
-        result.push(op);
-        continue;
-      }
-      const target = branchTarget(op);
-      const siteAddress = addresses[index];
-      if (target === void 0 || target > siteAddress || !flowOptions.relaxMaxTargetGuard && maxTarget > siteAddress) {
-        result.push(op);
-        continue;
-      }
-      const selected = targets.get(target);
-      if (selected === void 0) {
-        result.push(op);
-        continue;
-      }
-      result.push(indirectFlowOp2(op, selected.register, selected.selectorValue, target, selected.superDark));
-      applied += 1;
-      if (selected.superDark) superDarkApplied += 1;
-    }
-    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
-    const formal = preloads.filter((preload) => /[B-F]/iu.test(preload.value)).length;
-    const optimizations = [
-      {
-        name: "preloaded-indirect-flow",
-        detail: `Replaced ${applied} numeric direct branch/call(s) with compiler-owned preloaded indirect flow (${formal} formal alias selector${formal === 1 ? "" : "s"}).`
-      }
-    ];
-    if (superDarkApplied > 0) {
-      optimizations.push({
-        name: "preloaded-super-dark-flow",
-        detail: `Selected ${superDarkApplied} FA..FF one-command indirect dispatch(es) after proving the entry cell falls through to the matching 01..06 continuation jump.`
-      });
-    }
-    return {
-      ops: result,
-      applied,
-      preloads,
-      optimizations
-    };
-  }
-  var run11 = (ops, context) => runPreloadedIndirectFlow(ops, context, {});
-  var preloadedIndirectFlow = {
-    name: "preloaded-indirect-flow",
-    run: run11,
-    layoutSafe: false
-  };
-
-  // src/core/passes/redundant-prologue.ts
-  function isShowDisplayOp(op) {
-    if (op.kind === "recall") return true;
-    if (op.kind === "plain") {
-      if (op.opcode === 16 || op.opcode === 18) return true;
-      if (op.opcode <= 10) return true;
-      if (op.opcode === 14) return true;
-    }
-    return false;
-  }
-  function isShowStop(op) {
-    return op.kind === "stop" && (op.semantic === "show" || op.semantic === "halt");
-  }
-  function collectForwardPrologue(ops, from) {
-    const collected = [];
-    let i = from;
-    while (i < ops.length && ops[i].kind === "label") i += 1;
-    while (i < ops.length) {
-      const op = ops[i];
-      if (op.kind === "label") {
-        i += 1;
-        continue;
-      }
-      if (isShowDisplayOp(op) && !hasRewriteBarrier(op)) {
-        collected.push(op);
-        i += 1;
-        continue;
-      }
-      if (isShowStop(op) && !hasRewriteBarrier(op)) {
-        collected.push(op);
-        return { ops: collected };
-      }
-      return { ops: [] };
-    }
-    return { ops: [] };
-  }
-  function collectBackwardPrologue(ops, beforeIndex) {
-    const collected = [];
-    let i = beforeIndex - 1;
-    let sawStop = false;
-    while (i >= 0) {
-      const op = ops[i];
-      if (op.kind === "label") {
-        i -= 1;
-        continue;
-      }
-      if (!sawStop) {
-        if (isShowStop(op) && !hasRewriteBarrier(op)) {
-          collected.push(op);
-          sawStop = true;
-          i -= 1;
-          continue;
-        }
-        return { ops: [], startIndex: -1 };
-      }
-      if (isShowDisplayOp(op) && !hasRewriteBarrier(op)) {
-        collected.push(op);
-        i -= 1;
-        continue;
-      }
-      break;
-    }
-    if (!sawStop) return { ops: [], startIndex: -1 };
-    let startIndex = i + 1;
-    while (startIndex < beforeIndex && ops[startIndex].kind === "label") startIndex += 1;
-    let virtualHeadRegister;
-    let scan = i;
-    while (scan >= 0 && ops[scan].kind === "label") scan -= 1;
-    if (scan >= 0) {
-      const prior = ops[scan];
-      if (prior.kind === "store" && !hasRewriteBarrier(prior)) {
-        virtualHeadRegister = prior.register;
-      }
-    }
-    const segment = {
-      ops: collected.slice().reverse(),
-      startIndex
-    };
-    if (virtualHeadRegister !== void 0) return { ...segment, virtualHeadRegister };
-    return segment;
-  }
-  function opsEquivalent2(a, b) {
-    if (a.kind !== b.kind) return false;
-    if (a.kind === "recall" && b.kind === "recall") return a.register === b.register;
-    if (a.kind === "plain" && b.kind === "plain") return a.opcode === b.opcode;
-    if (a.kind === "stop" && b.kind === "stop") return a.semantic === b.semantic;
-    return false;
-  }
-  function segmentsMatch(a, b) {
-    if (a.length === 0 || a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i += 1) {
-      if (!opsEquivalent2(a[i], b[i])) return false;
-    }
-    return true;
-  }
-  var run12 = (ops) => {
-    const labelIndex = /* @__PURE__ */ new Map();
-    for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "label") labelIndex.set(op.name, i);
-    }
-    const removeRanges = [];
-    let applied = 0;
-    for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind !== "jump") continue;
-      if (typeof op.target !== "string") continue;
-      if (hasRewriteBarrier(op)) continue;
-      const labelAt = labelIndex.get(op.target);
-      if (labelAt === void 0) continue;
-      const headForward = collectForwardPrologue(ops, labelAt);
-      if (headForward.ops.length === 0) continue;
-      const headBackward = collectBackwardPrologue(ops, i);
-      if (headBackward.ops.length === 0) continue;
-      const backwardOps = headBackward.ops;
-      let matched = segmentsMatch(backwardOps, headForward.ops);
-      if (!matched && headBackward.virtualHeadRegister !== void 0) {
-        const firstForward = headForward.ops[0];
-        if (firstForward !== void 0 && firstForward.kind === "recall" && firstForward.register === headBackward.virtualHeadRegister) {
-          const suffix = headForward.ops.slice(1);
-          if (segmentsMatch(backwardOps, suffix)) {
-            matched = true;
-          }
-        }
-      }
-      if (!matched) continue;
-      const start = headBackward.startIndex;
-      const end = i;
-      const forwardEnd = labelAt + headForward.ops.length;
-      if (start <= forwardEnd) continue;
-      let hasIntermediateContent = false;
-      for (let k = forwardEnd + 1; k < start; k += 1) {
-        const intermediate = ops[k];
-        if (intermediate.kind === "label") continue;
-        hasIntermediateContent = true;
-        break;
-      }
-      if (!hasIntermediateContent) continue;
-      const overlaps = removeRanges.some(
-        (range3) => !(end <= range3.start || start >= range3.end)
-      );
-      if (overlaps) continue;
-      removeRanges.push({ start, end });
-      applied += 1;
-    }
-    if (applied === 0) {
-      return { ops: [...ops], applied: 0, optimizations: [] };
-    }
-    const shouldRemove = new Array(ops.length).fill(false);
-    for (const range3 of removeRanges) {
-      for (let i = range3.start; i < range3.end; i += 1) shouldRemove[i] = true;
-    }
-    const result = [];
-    for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (!shouldRemove[i] || op.kind === "label") result.push(op);
-    }
-    const totalCells = removeRanges.reduce((acc, range3) => acc + (range3.end - range3.start), 0);
-    return {
-      ops: result,
-      applied,
-      optimizations: [
-        {
-          name: "redundant-prologue-elimination",
-          detail: `Removed ${applied} display/halt prologue(s) immediately before a jump to their identical loop head (${totalCells} cells).`
-        }
-      ]
-    };
-  };
-  var redundantPrologueElimination = {
-    name: "redundant-prologue-elimination",
-    run: run12,
-    layoutSafe: false
-  };
-
-  // src/core/passes/register-coalesce.ts
-  var DIRECT_STORE_BASE2 = 64;
-  var DIRECT_RECALL_BASE2 = 96;
-  var LOOP_COUNTER_REGISTER = {
-    L0: "0",
-    L1: "1",
-    L2: "2",
-    L3: "3"
-  };
-  function gatherUsedRegisters(ops) {
-    const set = /* @__PURE__ */ new Set();
-    for (const op of ops) {
-      if (op.kind === "store" || op.kind === "recall") set.add(op.register);
-      if (op.kind === "indirect-store" || op.kind === "indirect-recall" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
-        set.add(op.register);
-        const memoryTarget = knownIndirectMemoryTarget(op);
-        if (memoryTarget !== void 0) set.add(memoryTarget);
-      }
-      if (op.kind === "loop") set.add(LOOP_COUNTER_REGISTER[op.counter]);
-    }
-    return set;
-  }
-  function liveRangePerRegister(ops, registers) {
-    const liveness = computeLiveness(ops);
-    const ranges = /* @__PURE__ */ new Map();
-    for (const reg of registers) ranges.set(reg, /* @__PURE__ */ new Set());
-    for (let i = 0; i < ops.length; i += 1) {
-      for (const reg of liveness.liveIn[i]) {
-        ranges.get(reg)?.add(i);
-      }
-      for (const reg of liveness.liveOut[i]) {
-        ranges.get(reg)?.add(i);
-      }
-    }
-    return ranges;
-  }
-  function intersects(a, b) {
-    const smaller = a.size < b.size ? a : b;
-    const larger = a.size < b.size ? b : a;
-    for (const value of smaller) {
-      if (larger.has(value)) return true;
-    }
-    return false;
-  }
-  function usesIndirectAccess(ops, register) {
-    for (const op of ops) {
-      if (op.kind === "indirect-store" || op.kind === "indirect-recall" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
-        if (op.register === register) return true;
-        if (knownIndirectMemoryTarget(op) === register) return true;
-      }
-    }
-    return false;
-  }
-  function usesDisplayFocusSensitiveAccess(ops, register) {
-    return ops.some(
-      (op) => (op.kind === "store" || op.kind === "recall") && op.register === register && isDisplayFocusSensitive(op)
-    );
-  }
-  function usesLoopCounter(ops, register) {
-    return ops.some((op) => op.kind === "loop" && LOOP_COUNTER_REGISTER[op.counter] === register);
-  }
-  function unionInto(target, source) {
-    for (const value of source) target.add(value);
-  }
-  function coalescedOpcode(kind, register) {
-    const base = kind === "store" ? DIRECT_STORE_BASE2 : DIRECT_RECALL_BASE2;
-    return base + registerIndex(register);
-  }
-  function rewriteRegisterOp(op, register) {
-    if (op.kind !== "store" && op.kind !== "recall") return op;
-    const opcode = coalescedOpcode(op.kind, register);
-    return {
-      ...op,
-      register,
-      opcode,
-      meta: {
-        ...op.meta,
-        mnemonic: getOpcode(opcode).name
-      }
-    };
-  }
-  function excludedRegisters(ops, registers) {
-    const excluded = /* @__PURE__ */ new Set();
-    for (const reg of registers) {
-      if (usesIndirectAccess(ops, reg) || usesDisplayFocusSensitiveAccess(ops, reg) || usesLoopCounter(ops, reg)) {
-        excluded.add(reg);
-      }
-    }
-    return excluded;
-  }
-  function coalesceNonOverlapping(ops) {
-    const registers = gatherUsedRegisters(ops);
-    if (registers.size <= 1) return { ops: [...ops], applied: 0 };
-    const liveness = computeLiveness(ops);
-    const liveAtEntry = liveness.liveIn[0] ?? /* @__PURE__ */ new Set();
-    const ranges = liveRangePerRegister(ops, registers);
-    const ordered = [...registers].sort();
-    const mapping = /* @__PURE__ */ new Map();
-    for (let i = 0; i < ordered.length; i += 1) {
-      const a = ordered[i];
-      if (mapping.has(a)) continue;
-      if (liveAtEntry.has(a)) continue;
-      if (usesIndirectAccess(ops, a)) continue;
-      if (usesDisplayFocusSensitiveAccess(ops, a)) continue;
-      if (usesLoopCounter(ops, a)) continue;
-      for (let j = i + 1; j < ordered.length; j += 1) {
-        const b = ordered[j];
-        if (mapping.has(b)) continue;
-        if (liveAtEntry.has(b)) continue;
-        if (usesIndirectAccess(ops, b)) continue;
-        if (usesDisplayFocusSensitiveAccess(ops, b)) continue;
-        if (usesLoopCounter(ops, b)) continue;
-        const rangeA = ranges.get(a);
-        const rangeB = ranges.get(b);
-        if (intersects(rangeA, rangeB)) continue;
-        mapping.set(b, a);
-        unionInto(rangeA, rangeB);
-        break;
-      }
-    }
-    if (mapping.size === 0) return { ops: [...ops], applied: 0 };
-    const result = ops.map((op) => {
-      if (op.kind !== "store" && op.kind !== "recall") return op;
-      const replacement = mapping.get(op.register);
-      return replacement === void 0 ? op : rewriteRegisterOp(op, replacement);
-    });
-    return { ops: result, applied: mapping.size };
-  }
-  function coalesceCopies(ops) {
-    const registers = gatherUsedRegisters(ops);
-    if (registers.size <= 1) return { ops: [...ops], applied: 0 };
-    const liveness = computeLiveness(ops);
-    const excluded = excludedRegisters(ops, registers);
-    const storeIndices = /* @__PURE__ */ new Map();
-    for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (op.kind === "store") {
-        if (!storeIndices.has(op.register)) storeIndices.set(op.register, []);
-        storeIndices.get(op.register).push(i);
-      }
-    }
-    const mapping = /* @__PURE__ */ new Map();
-    const dropIndices = /* @__PURE__ */ new Set();
-    for (let i = 0; i + 1 < ops.length; i += 1) {
-      const rec = ops[i];
-      const st = ops[i + 1];
-      if (rec.kind !== "recall" || st.kind !== "store") continue;
-      const source = rec.register;
-      const dest = st.register;
-      if (source === dest || mapping.has(dest) || mapping.has(source)) continue;
-      if (excluded.has(source) || excluded.has(dest)) continue;
-      const destStores = storeIndices.get(dest) ?? [];
-      if (destStores.length !== 1 || destStores[0] !== i + 1) continue;
-      if (liveness.liveIn[i].has(dest)) continue;
-      let diverges = false;
-      for (const j of storeIndices.get(source) ?? []) {
-        if (liveness.liveOut[j].has(dest)) {
-          diverges = true;
-          break;
-        }
-      }
-      if (diverges) continue;
-      mapping.set(dest, source);
-      dropIndices.add(i + 1);
-    }
-    if (mapping.size === 0) return { ops: [...ops], applied: 0 };
-    const result = [];
-    for (let i = 0; i < ops.length; i += 1) {
-      if (dropIndices.has(i)) continue;
-      const op = ops[i];
-      if (op.kind === "store" || op.kind === "recall") {
-        const replacement = mapping.get(op.register);
-        result.push(replacement === void 0 ? op : rewriteRegisterOp(op, replacement));
-      } else {
-        result.push(op);
-      }
-    }
-    return { ops: result, applied: mapping.size };
-  }
-  var run13 = (ops, context) => {
-    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
-    if (ops.some((op) => hasRewriteBarrier(op))) {
-      return { ops: [...ops], applied: 0, optimizations: [] };
-    }
-    const optimizations = [];
-    let current = [...ops];
-    let applied = 0;
-    const nonOverlap = coalesceNonOverlapping(current);
-    current = nonOverlap.ops;
-    applied += nonOverlap.applied;
-    if (nonOverlap.applied > 0) {
-      optimizations.push({
-        name: "register-coalesce",
-        detail: `Coalesced ${nonOverlap.applied} non-overlapping register live range(s).`
-      });
-    }
-    if (context.options.coalesceCopies === true) {
-      const copies = coalesceCopies(current);
-      current = copies.ops;
-      applied += copies.applied;
-      if (copies.applied > 0) {
-        optimizations.push({
-          name: "copy-coalesce",
-          detail: `Coalesced ${copies.applied} non-diverging copy assignment(s), dropping the copy and freeing a register.`
-        });
-      }
-    }
-    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
-    return { ops: current, applied, optimizations };
-  };
-  var registerCoalesce = {
-    name: "register-coalesce",
-    run: run13,
-    layoutSafe: true
-  };
-
-  // src/core/passes/return-zero-jump.ts
-  var run14 = (ops) => {
-    const usesCall = ops.some((op) => op.kind === "call" || op.kind === "indirect-call");
-    if (usesCall) return { ops: [...ops], applied: 0, optimizations: [] };
-    const labels = calculateLabelAddresses(ops);
-    const result = [];
-    let applied = 0;
-    let currentAddress = 0;
-    for (const op of ops) {
-      if (op.kind === "label") {
-        result.push(op);
-        continue;
-      }
-      if (op.kind === "jump" && !hasRewriteBarrier(op)) {
-        const resolved = targetAddress(op.target, labels);
-        const targetsBackward = typeof op.target === "number" ? true : resolved !== void 0 && resolved < currentAddress;
-        if (resolved === 1 && targetsBackward) {
-          result.push({
-            kind: "return",
-            opcode: 82,
-            meta: {
-              mnemonic: "\u0412/\u041E",
-              comment: "optimized \u0411\u041F 01"
-            }
-          });
-          applied += 1;
-          currentAddress += 1;
-          continue;
-        }
-      }
-      result.push(op);
-      currentAddress += cellsPerOp(op);
-    }
-    const passResult = {
-      ops: result,
-      applied,
-      optimizations: applied > 0 ? [
-        {
-          name: "return-zero-jump",
-          detail: `Replaced ${applied} \u0411\u041F 01 sequence with \u0412/\u041E under empty-return-stack assumption.`
-        }
-      ] : []
-    };
-    return passResult;
-  };
-  var returnZeroJump = {
-    name: "return-zero-jump",
-    run: run14,
-    layoutSafe: false
-  };
-
-  // src/core/passes/return-suffix-gadget.ts
-  var run15 = (ops) => {
-    if (hasNumericFlowTarget(ops)) return emptyResult(ops);
-    const candidates = collectReturnSuffixCandidates(ops);
-    const selected = selectGadgets(candidates, ops);
-    if (selected.length === 0) return emptyResult(ops);
-    const targetLabels = /* @__PURE__ */ new Map();
-    const replacementByStart = /* @__PURE__ */ new Map();
-    let applied = 0;
-    let savedCells = 0;
-    let jumps = 0;
-    let calls = 0;
-    for (const gadget of selected) {
-      const labels = targetLabels.get(gadget.target.start) ?? [];
-      labels.push(gadget.label);
-      targetLabels.set(gadget.target.start, labels);
-      for (const replacement of gadget.replacements) {
-        replacementByStart.set(replacement.start, {
-          kind: gadget.kind,
-          end: replacement.end,
-          label: gadget.label
-        });
-        applied += 1;
-        savedCells += replacement.cells - 2;
-        if (gadget.kind === "jump") jumps += 1;
-        else calls += 1;
-      }
-    }
-    const result = [];
-    for (let index = 0; index < ops.length; index += 1) {
-      for (const label of targetLabels.get(index) ?? []) {
-        result.push({ kind: "label", name: label });
-      }
-      const replacement = replacementByStart.get(index);
-      if (replacement !== void 0) {
-        result.push(
-          replacement.kind === "jump" ? gadgetJump(replacement.label, ops[index]) : gadgetCall(replacement.label, ops[index])
-        );
-        index = replacement.end;
-        continue;
-      }
-      result.push(ops[index]);
-    }
-    return {
-      ops: result,
-      applied,
-      optimizations: [{
-        name: "return-suffix-gadget",
-        detail: `Shared ${applied} return/tail-call gadget${applied === 1 ? "" : "s"} (${jumps} jump, ${calls} call; ${savedCells} cell${savedCells === 1 ? "" : "s"} saved).`
-      }]
-    };
-  };
-  var returnSuffixGadget = {
-    name: "return-suffix-gadget",
-    run: run15,
-    layoutSafe: false
-  };
-  function collectReturnSuffixCandidates(ops) {
-    const byKey = /* @__PURE__ */ new Map();
-    for (let end = 0; end < ops.length; end += 1) {
-      const final = ops[end];
-      if (!isShareableReturn(final)) continue;
-      const parts = [opKey(final)];
-      let cells = cellsPerOp(final);
-      for (let start = end - 1; start >= 0; start -= 1) {
-        const op = ops[start];
-        if (!isShareableBodyOp(op)) break;
-        parts.unshift(opKey(op));
-        cells += cellsPerOp(op);
-        if (cells <= 2) continue;
-        const key = parts.join("\n");
-        const bodyKey = parts.slice(0, -1).join("\n");
-        const occurrences = byKey.get(key) ?? [];
-        occurrences.push({ key, bodyKey, start, end, cells, bodyCells: cells - cellsPerOp(final) });
-        byKey.set(key, occurrences);
-      }
-    }
-    return [...byKey.entries()].map(([key, occurrences]) => ({ key, occurrences, cells: occurrences[0].cells }));
-  }
-  function selectGadgets(candidates, ops) {
-    const existingLabels = new Set(ops.flatMap((op) => op.kind === "label" ? [op.name] : []));
-    const protectedIndexes = /* @__PURE__ */ new Set();
-    const selected = [];
-    let labelIndex = 0;
-    const ordered = [...candidates].sort((left, right) => {
-      const leftSavings = (left.occurrences.length - 1) * (left.cells - 2);
-      const rightSavings = (right.occurrences.length - 1) * (right.cells - 2);
-      return rightSavings - leftSavings || right.cells - left.cells || left.key.localeCompare(right.key);
-    });
-    for (const candidate of ordered) {
-      const available = candidate.occurrences.filter(
-        (occurrence) => !rangeIntersects(protectedIndexes, occurrence.start, occurrence.end)
-      );
-      if (available.length < 2) continue;
-      const [target, ...replacements] = available;
-      if (target === void 0 || replacements.length === 0) continue;
-      const savedCells = replacements.reduce((sum, occurrence) => sum + occurrence.cells - 2, 0);
-      if (savedCells <= 0) continue;
-      const label = freshLabel2(existingLabels, labelIndex);
-      labelIndex += 1;
-      existingLabels.add(label);
-      selected.push({ kind: "jump", label, target, replacements });
-      for (const occurrence of [target, ...replacements]) {
-        markRange(protectedIndexes, occurrence.start, occurrence.end);
-      }
-    }
-    const bodyTargets = collectBodyTargets(candidates);
-    const bodyOccurrences = collectBodyOccurrences(ops, new Set(bodyTargets.keys()));
-    const bodyCalls = selectBodyCalls(bodyTargets, bodyOccurrences, existingLabels, protectedIndexes, labelIndex);
-    selected.push(...bodyCalls);
-    const tailCallTargets = collectTailCallTargets(ops);
-    const tailCallOccurrences = collectTailCallOccurrences(ops, new Set(tailCallTargets.keys()));
-    const tailCalls = selectBodyCalls(tailCallTargets, tailCallOccurrences, existingLabels, protectedIndexes, labelIndex);
-    selected.push(...tailCalls);
-    return selected;
-  }
-  function gadgetJump(label, source) {
-    const meta = {
-      mnemonic: "\u0411\u041F",
-      comment: "return suffix gadget"
-    };
-    if ("meta" in source && source.meta.sourceLine !== void 0) {
-      meta.sourceLine = source.meta.sourceLine;
-    }
-    return {
-      kind: "jump",
-      target: label,
-      opcode: 81,
-      meta,
-      targetMeta: { comment: "return suffix gadget" }
-    };
-  }
-  function gadgetCall(label, source) {
-    const meta = {
-      mnemonic: "\u041F\u041F",
-      comment: "proc call return suffix gadget"
-    };
-    if ("meta" in source && source.meta.sourceLine !== void 0) {
-      meta.sourceLine = source.meta.sourceLine;
-    }
-    return {
-      kind: "call",
-      target: label,
-      opcode: 83,
-      meta,
-      targetMeta: { comment: "return suffix gadget target" }
-    };
-  }
-  function isShareableReturn(op) {
-    return op.kind === "return" && !hasRewriteBarrier(op);
-  }
-  function isShareableBodyOp(op) {
-    if (hasRewriteBarrier(op)) return false;
-    switch (op.kind) {
-      case "store":
-      case "recall":
-      case "indirect-store":
-      case "indirect-recall":
-      case "call":
-      case "indirect-call":
-      case "stop":
-      case "plain":
-        return true;
-      case "label":
-      case "jump":
-      case "cjump":
-      case "loop":
-      case "indirect-jump":
-      case "indirect-cjump":
-      case "return":
-      case "orphan-address":
-        return false;
-    }
-  }
-  function isCallableBodyOp(op) {
-    return isShareableBodyOp(op) && op.kind !== "stop";
-  }
-  function isTailCallGadgetBodyOp(op) {
-    if (hasRewriteBarrier(op)) return false;
-    switch (op.kind) {
-      case "store":
-      case "recall":
-      case "indirect-store":
-      case "indirect-recall":
-      case "plain":
-        return true;
-      case "label":
-      case "jump":
-      case "cjump":
-      case "call":
-      case "loop":
-      case "indirect-jump":
-      case "indirect-call":
-      case "indirect-cjump":
-      case "return":
-      case "stop":
-      case "orphan-address":
-        return false;
-    }
-  }
-  function hasNumericFlowTarget(ops) {
-    return ops.some((op) => {
-      switch (op.kind) {
-        case "jump":
-        case "cjump":
-        case "call":
-        case "loop":
-          return typeof op.target === "number";
-        default:
-          return false;
-      }
-    });
-  }
-  function opKey(op) {
-    switch (op.kind) {
-      case "store":
-        return `store:${op.opcode}:${op.register}`;
-      case "recall":
-        return `recall:${op.opcode}:${op.register}`;
-      case "indirect-store":
-        return `indirect-store:${op.opcode}:${op.register}`;
-      case "indirect-recall":
-        return `indirect-recall:${op.opcode}:${op.register}`;
-      case "call":
-        return `call:${op.opcode}:${targetKey(op.target)}:${op.targetMeta.formalOpcode ?? ""}`;
-      case "indirect-call":
-        return `indirect-call:${op.opcode}:${op.register}`;
-      case "stop":
-        return `stop:${op.opcode}`;
-      case "plain":
-        return `plain:${op.opcode}`;
-      case "return":
-        return `return:${op.opcode}`;
-      case "label":
-      case "jump":
-      case "cjump":
-      case "loop":
-      case "indirect-jump":
-      case "indirect-cjump":
-      case "orphan-address":
-        return op.kind;
-    }
-  }
-  function collectBodyTargets(candidates) {
-    const result = /* @__PURE__ */ new Map();
-    for (const candidate of candidates) {
-      for (const occurrence of candidate.occurrences) {
-        if (occurrence.bodyKey.length === 0 || occurrence.bodyCells <= 2) continue;
-        const targets = result.get(occurrence.bodyKey) ?? [];
-        targets.push({
-          key: occurrence.bodyKey,
-          start: occurrence.start,
-          bodyEnd: occurrence.end - 1,
-          end: occurrence.end,
-          cells: occurrence.bodyCells
-        });
-        result.set(occurrence.bodyKey, targets);
-      }
-    }
-    return result;
-  }
-  function collectBodyOccurrences(ops, wantedKeys) {
-    const result = /* @__PURE__ */ new Map();
-    if (wantedKeys.size === 0) return result;
-    for (let start = 0; start < ops.length; start += 1) {
-      const parts = [];
-      let cells = 0;
-      for (let end = start; end < ops.length; end += 1) {
-        const op = ops[end];
-        if (!isCallableBodyOp(op)) break;
-        parts.push(opKey(op));
-        cells += cellsPerOp(op);
-        if (cells <= 2) continue;
-        const key = parts.join("\n");
-        if (!wantedKeys.has(key)) continue;
-        const occurrences = result.get(key) ?? [];
-        occurrences.push({ key, start, end, cells });
-        result.set(key, occurrences);
-      }
-    }
-    return result;
-  }
-  function collectTailCallTargets(ops) {
-    const result = /* @__PURE__ */ new Map();
-    for (let jumpIndex = 0; jumpIndex < ops.length; jumpIndex += 1) {
-      const jump = ops[jumpIndex];
-      if (jump.kind !== "jump" || typeof jump.target !== "string" || hasRewriteBarrier(jump)) continue;
-      const parts = [`target:${targetKey(jump.target)}`];
-      let cells = cellsPerOp(jump);
-      for (let start = jumpIndex - 1; start >= 0; start -= 1) {
-        const op = ops[start];
-        if (!isTailCallGadgetBodyOp(op)) break;
-        parts.unshift(opKey(op));
-        cells += cellsPerOp(op);
-        const bodyCells = cells - cellsPerOp(jump);
-        if (bodyCells <= 0) continue;
-        const key = parts.join("\n");
-        const targets = result.get(key) ?? [];
-        targets.push({
-          key,
-          start,
-          bodyEnd: jumpIndex - 1,
-          end: jumpIndex,
-          cells: bodyCells
-        });
-        result.set(key, targets);
-      }
-    }
-    return result;
-  }
-  function collectTailCallOccurrences(ops, wantedKeys) {
-    const result = /* @__PURE__ */ new Map();
-    if (wantedKeys.size === 0) return result;
-    for (let start = 0; start < ops.length; start += 1) {
-      const parts = [];
-      let cells = 0;
-      for (let callIndex = start; callIndex < ops.length; callIndex += 1) {
-        const op = ops[callIndex];
-        if (op.kind === "call" && typeof op.target === "string" && !hasRewriteBarrier(op)) {
-          const key = [...parts, `target:${targetKey(op.target)}`].join("\n");
-          if (cells > 0 && wantedKeys.has(key)) {
-            const occurrences = result.get(key) ?? [];
-            occurrences.push({ key, start, end: callIndex, cells: cells + cellsPerOp(op) });
-            result.set(key, occurrences);
-          }
-          break;
-        }
-        if (!isTailCallGadgetBodyOp(op)) break;
-        parts.push(opKey(op));
-        cells += cellsPerOp(op);
-      }
-    }
-    return result;
-  }
-  function selectBodyCalls(targets, occurrences, existingLabels, protectedIndexes, initialLabelIndex) {
-    const selected = [];
-    let labelIndex = initialLabelIndex;
-    const keys = [...targets.keys()].sort((left, right) => {
-      const leftCells = targets.get(left)?.[0]?.cells ?? 0;
-      const rightCells = targets.get(right)?.[0]?.cells ?? 0;
-      return rightCells - leftCells || left.localeCompare(right);
-    });
-    for (const key of keys) {
-      const availableTargets = (targets.get(key) ?? []).filter((target2) => !rangeIntersects(protectedIndexes, target2.start, target2.end));
-      if (availableTargets.length === 0) continue;
-      const target = availableTargets[0];
-      const replacements = (occurrences.get(key) ?? []).filter((occurrence) => !sameTargetBody(occurrence, target)).filter((occurrence) => !rangeIntersects(protectedIndexes, occurrence.start, occurrence.end));
-      if (replacements.length === 0) continue;
-      const savedCells = replacements.reduce((sum, occurrence) => sum + occurrence.cells - 2, 0);
-      if (savedCells <= 0) continue;
-      const label = freshLabel2(existingLabels, labelIndex);
-      labelIndex += 1;
-      existingLabels.add(label);
-      selected.push({ kind: "call", label, target, replacements: [...replacements] });
-      markRange(protectedIndexes, target.start, target.end);
-      for (const occurrence of replacements) {
-        markRange(protectedIndexes, occurrence.start, occurrence.end);
-      }
-    }
-    return selected;
-  }
-  function targetKey(target) {
-    return typeof target === "number" ? `#${target}` : target;
-  }
-  function sameTargetBody(occurrence, target) {
-    return occurrence.start === target.start && occurrence.end === target.bodyEnd;
-  }
-  function rangeIntersects(indexes, start, end) {
-    for (let index = start; index <= end; index += 1) {
-      if (indexes.has(index)) return true;
-    }
-    return false;
-  }
-  function markRange(indexes, start, end) {
-    for (let index = start; index <= end; index += 1) {
-      indexes.add(index);
-    }
-  }
-  function freshLabel2(existingLabels, index) {
-    let suffix = index;
-    while (true) {
-      const label = `__return_suffix_gadget_${suffix}`;
-      if (!existingLabels.has(label)) return label;
-      suffix += 1;
-    }
-  }
-
-  // src/core/passes/r0-fractional-sentinel.ts
-  function isFractionalR0LiteralBeforeStore(ops, storeIndex) {
-    let index = storeIndex - 1;
-    let hasNonZeroFractionDigit = false;
-    while (index >= 0) {
-      const digit = ops[index];
-      if (digit?.kind !== "plain" || digit.opcode < 0 || digit.opcode > 9) break;
-      if (digit.opcode > 0) hasNonZeroFractionDigit = true;
-      index -= 1;
-    }
-    const dot = ops[index];
-    const zero = ops[index - 1];
-    if (!hasNonZeroFractionDigit || dot?.kind !== "plain" || dot.opcode !== 10) return false;
-    if (zero === void 0) return true;
-    return zero.kind === "plain" && zero.opcode === 0;
-  }
-  var run16 = (ops) => {
-    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
-    const liveness = computeLiveness(ops);
-    const remove = /* @__PURE__ */ new Set();
-    let r0Fractional = false;
-    for (let i = 0; i < ops.length; i += 1) {
-      const op = ops[i];
-      if (hasRewriteBarrier(op)) {
-        r0Fractional = false;
-        continue;
-      }
-      if (op.kind === "store" && op.register === "0") {
-        r0Fractional = isFractionalR0LiteralBeforeStore(ops, i);
-        continue;
-      }
-      if (op.kind === "plain" || op.kind === "recall" || op.kind === "label") {
-        continue;
-      }
-      if (!r0Fractional) continue;
-      if (op.kind === "indirect-recall" && op.register === "0") {
-        const next = ops[i + 1];
-        if (next?.kind === "recall" && next.register === "3" && !liveness.liveOut[i].has("0")) {
-          remove.add(i + 1);
-        }
-        r0Fractional = false;
-        continue;
-      }
-      if (op.kind === "indirect-store" && op.register === "0") {
-        const next = ops[i + 1];
-        if (next?.kind === "store" && next.register === "3" && !liveness.liveOut[i].has("0")) {
-          remove.add(i + 1);
-        }
-        r0Fractional = false;
-        continue;
-      }
-      if (op.kind !== "store" || op.register !== "0") r0Fractional = false;
-    }
-    if (remove.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
-    return {
-      ops: ops.filter((_, index) => !remove.has(index)),
-      applied: remove.size,
-      optimizations: [
-        {
-          name: "r0-fractional-sentinel",
-          detail: `Removed ${remove.size} redundant direct R3 access(es) after fractional-R0 indirect access.`
-        }
-      ]
-    };
-  };
-  var r0FractionalSentinel = {
-    name: "r0-fractional-sentinel",
-    run: run16,
-    layoutSafe: false
-  };
-
-  // src/core/passes/shared-call-tail.ts
-  var run17 = (ops) => {
-    const candidates = collectSharedCallTails(ops);
-    const normalizeContinuation = buildContinuationNormalizer(ops);
-    if (candidates.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
-    const result = [];
-    let applied = 0;
-    for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      const next = ops[index + 1];
-      if (op.kind === "call" && next?.kind === "jump") {
-        const key = callTailKey(op, next, normalizeContinuation);
-        const candidate = candidates.get(key);
-        if (candidate !== void 0) {
-          result.push({
-            kind: "jump",
-            target: candidate.label,
-            opcode: 81,
-            meta: {
-              ...op.meta,
-              mnemonic: "\u0411\u041F",
-              comment: op.meta.comment?.replace(/^proc call/u, "shared call tail") ?? "shared call tail"
-            },
-            targetMeta: { comment: "shared call tail" }
-          });
-          index += 1;
-          applied += 1;
-          continue;
-        }
-      }
-      result.push(op);
-    }
-    for (const candidate of candidates.values()) {
-      result.push({ kind: "label", name: candidate.label });
-      result.push({
-        ...candidate.call,
-        meta: {
-          ...candidate.call.meta,
-          comment: candidate.call.meta.comment ?? "shared call tail helper"
-        }
-      });
-      result.push({
-        ...candidate.continuation,
-        meta: {
-          ...candidate.continuation.meta,
-          comment: candidate.continuation.meta.comment ?? "shared call tail continuation"
-        }
-      });
-    }
-    return {
-      ops: result,
-      applied,
-      optimizations: [{
-        name: "shared-call-tail",
-        detail: `Shared ${applied} call+jump tail sequence${applied === 1 ? "" : "s"}.`
-      }]
-    };
-  };
-  var sharedCallTail = {
-    name: "shared-call-tail",
-    run: run17,
-    layoutSafe: false
-  };
-  function collectSharedCallTails(ops) {
-    const normalizeContinuation = buildContinuationNormalizer(ops);
-    const counts = /* @__PURE__ */ new Map();
-    for (let index2 = 0; index2 < ops.length - 1; index2 += 1) {
-      const op = ops[index2];
-      const next = ops[index2 + 1];
-      if (op.kind !== "call" || next.kind !== "jump") continue;
-      if (hasRewriteBarrier(op) || hasRewriteBarrier(next)) continue;
-      const normalizedTarget = normalizeContinuation(next.target);
-      const continuation = {
-        ...next,
-        target: normalizedTarget
-      };
-      const key = callTailKey(op, continuation, normalizeContinuation);
-      const existing = counts.get(key);
-      if (existing === void 0) {
-        counts.set(key, { call: op, continuation, count: 1 });
-      } else {
-        existing.count += 1;
-      }
-    }
-    const result = /* @__PURE__ */ new Map();
-    let index = 0;
-    for (const [key, candidate] of counts) {
-      if (candidate.count < 3) continue;
-      result.set(key, {
-        key,
-        label: `__shared_call_tail_${index}`,
-        call: candidate.call,
-        continuation: candidate.continuation,
-        count: candidate.count
-      });
-      index += 1;
-    }
-    return result;
-  }
-  function callTailKey(call, continuation, normalizeContinuation) {
-    return `${targetKey2(call.target)}|${targetKey2(normalizeContinuation(continuation.target))}`;
-  }
-  function targetKey2(target) {
-    return typeof target === "number" ? `#${target}` : target;
-  }
-  function buildContinuationNormalizer(ops) {
-    const labelIndexes = /* @__PURE__ */ new Map();
-    for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (op.kind === "label") labelIndexes.set(op.name, index);
-    }
-    const normalize = (target, seen = /* @__PURE__ */ new Set()) => {
-      if (typeof target !== "string") return target;
-      if (seen.has(target)) return target;
-      seen.add(target);
-      const labelIndex = labelIndexes.get(target);
-      if (labelIndex === void 0) return target;
-      const executableIndex = nextExecutableIndex(ops, labelIndex + 1);
-      const executable = executableIndex === void 0 ? void 0 : ops[executableIndex];
-      if (executable?.kind !== "jump" || hasRewriteBarrier(executable)) return target;
-      return normalize(executable.target, seen);
-    };
-    return (target) => normalize(target);
-  }
-  function nextExecutableIndex(ops, start) {
-    for (let index = start; index < ops.length; index += 1) {
-      if (ops[index]?.kind !== "label") return index;
-    }
-    return void 0;
-  }
-
-  // src/core/passes/store-recall-peephole.ts
-  var run18 = (ops) => {
-    const result = [];
-    let applied = 0;
-    for (let i = 0; i < ops.length; i += 1) {
-      const current = ops[i];
-      const next = ops[i + 1];
-      if (current.kind === "store" && next?.kind === "recall" && current.register === next.register && !hasRewriteBarrier(current) && !hasRewriteBarrier(next)) {
-        result.push(current);
-        applied += 1;
-        i += 1;
-        continue;
-      }
-      result.push(current);
-    }
-    const passResult = {
-      ops: result,
-      applied,
-      optimizations: applied > 0 ? [
-        {
-          name: "store-recall-peephole",
-          detail: `Dropped ${applied} redundant \u041F->X immediately after X->\u041F to the same register.`
-        }
-      ] : []
-    };
-    return passResult;
-  };
-  var storeRecallPeephole = {
-    name: "store-recall-peephole",
-    run: run18,
-    layoutSafe: false
-  };
-
-  // src/core/passes/tail-branch-inversion.ts
-  var INVERTED_CONDITIONS = {
-    "==0": { condition: "!=0", opcode: 87 },
-    "!=0": { condition: "==0", opcode: 94 },
-    "<0": { condition: ">=0", opcode: 89 },
-    ">=0": { condition: "<0", opcode: 92 }
-  };
-  var run19 = (ops, context) => {
-    if (context.options.tailBranchInversion !== true) {
-      return { ops: [...ops], applied: 0, optimizations: [] };
-    }
-    const refs = countLabelRefs2(ops);
-    const result = [];
-    let applied = 0;
-    for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (op.kind !== "cjump" || typeof op.target !== "string" || hasRewriteBarrier(op)) {
-        result.push(op);
-        continue;
-      }
-      const jumpIndex = nextExecutableIndex2(ops, index + 1);
-      if (jumpIndex === void 0) {
-        result.push(op);
-        continue;
-      }
-      const jump = ops[jumpIndex];
-      if (jump.kind !== "jump" || hasRewriteBarrier(jump)) {
-        result.push(op);
-        continue;
-      }
-      const labelIndex = jumpIndex + 1;
-      const label = ops[labelIndex];
-      if (label?.kind !== "label" || label.name !== op.target || (refs.get(label.name) ?? 0) !== 1) {
-        result.push(op);
-        continue;
-      }
-      const inverted = INVERTED_CONDITIONS[op.condition];
-      result.push({
-        ...op,
-        condition: inverted.condition,
-        target: jump.target,
-        opcode: inverted.opcode,
-        meta: {
-          ...op.meta,
-          mnemonic: getOpcode(inverted.opcode).name,
-          comment: op.meta.comment?.replace(/^false branch/u, "direct tail branch") ?? "direct tail branch"
-        },
-        targetMeta: { ...jump.targetMeta }
-      });
-      index = labelIndex;
-      applied += 1;
-    }
-    if (applied === 0) return { ops: result, applied: 0, optimizations: [] };
-    return {
-      ops: result,
-      applied,
-      optimizations: [{
-        name: "tail-branch-inversion",
-        detail: `Inverted ${applied} branch${applied === 1 ? "" : "es"} whose then-path was only a tail jump.`
-      }]
-    };
-  };
-  function countLabelRefs2(ops) {
-    const refs = /* @__PURE__ */ new Map();
-    for (const op of ops) {
-      if ((op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") && typeof op.target === "string") {
-        refs.set(op.target, (refs.get(op.target) ?? 0) + 1);
-      }
-    }
-    return refs;
-  }
-  function nextExecutableIndex2(ops, start) {
-    for (let index = start; index < ops.length; index += 1) {
-      if (ops[index].kind !== "label") return index;
-    }
-    return void 0;
-  }
-  var tailBranchInversion = {
-    name: "tail-branch-inversion",
-    run: run19,
-    layoutSafe: false
-  };
-
-  // src/core/passes/tail-call.ts
-  var run20 = (ops) => {
-    const tailJumpTargets = findTailJumpTargets(ops);
-    const returnContinuations = collectReturnContinuations(ops, tailJumpTargets);
-    const returnLabels = collectReturnLabels(ops);
-    const normalizeContinuation = buildContinuationNormalizer2(ops);
-    const result = [];
-    let applied = 0;
-    for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (op.kind === "label") {
-        result.push(op);
-        continue;
-      }
-      const next = ops[index + 1];
-      if (op.kind === "return") {
-        const continuation = returnContinuations.get(index);
-        if (continuation !== void 0) {
-          const meta = {
-            mnemonic: "\u0411\u041F",
-            comment: op.meta.comment?.replace(/^implicit return from proc/u, "tail continuation") ?? "tail continuation"
-          };
-          if (op.meta.sourceLine !== void 0) meta.sourceLine = op.meta.sourceLine;
-          result.push({
-            kind: "jump",
-            target: continuation,
-            opcode: 81,
-            meta,
-            targetMeta: { comment: "tail continuation" }
-          });
-          applied += 1;
-          continue;
-        }
-      }
-      if (op.kind === "call") {
-        const continuationIndex = nextExecutableIndex3(ops, index + 1);
-        const continuation = continuationIndex === void 0 ? void 0 : ops[continuationIndex];
-        const continuationIsImmediate = continuationIndex === index + 1;
-        if (continuation?.kind === "jump" && isReturnLabel(continuation.target, returnLabels)) {
-          result.push({
-            kind: "jump",
-            target: op.target,
-            opcode: 81,
-            meta: {
-              ...op.meta,
-              mnemonic: "\u0411\u041F",
-              comment: op.meta.comment?.replace(/^proc call/u, "tail call") ?? "tail call"
-            },
-            targetMeta: { ...op.targetMeta }
-          });
-          if (continuationIsImmediate) index += 1;
-          applied += 1;
-          continue;
-        }
-        if (continuation?.kind === "return") {
-          result.push({
-            kind: "jump",
-            target: op.target,
-            opcode: 81,
-            meta: {
-              ...op.meta,
-              mnemonic: "\u0411\u041F",
-              comment: op.meta.comment?.replace(/^proc call/u, "tail call") ?? "tail call"
-            },
-            targetMeta: { ...op.targetMeta }
-          });
-          if (continuationIsImmediate) index += 1;
-          applied += 1;
-          continue;
-        }
-        const target = typeof op.target === "string" ? tailJumpTargets.get(op.target) : void 0;
-        if (target !== void 0 && next?.kind === "jump" && sameTarget(normalizeContinuation(next.target), target.continuation)) {
-          result.push({
-            kind: "jump",
-            target: op.target,
-            opcode: 81,
-            meta: {
-              ...op.meta,
-              mnemonic: "\u0411\u041F",
-              comment: op.meta.comment?.replace(/^proc call/u, "tail jump") ?? "tail jump"
-            },
-            targetMeta: { ...op.targetMeta }
-          });
-          index += 1;
-          applied += 1;
-          continue;
-        }
-        if (target !== void 0 && next?.kind === "label" && sameTarget(normalizeContinuation(next.name), target.continuation)) {
-          result.push({
-            kind: "jump",
-            target: op.target,
-            opcode: 81,
-            meta: {
-              ...op.meta,
-              mnemonic: "\u0411\u041F",
-              comment: op.meta.comment?.replace(/^proc call/u, "tail jump") ?? "tail jump"
-            },
-            targetMeta: { ...op.targetMeta }
-          });
-          applied += 1;
-          continue;
-        }
-      }
-      result.push(op);
-    }
-    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
-    const tailJumpCount = tailJumpTargets.size;
-    return {
-      ops: result,
-      applied,
-      optimizations: [{
-        name: "tail-call-lowering",
-        detail: tailJumpCount === 0 ? `Replaced ${applied} subroutine tail call${applied === 1 ? "" : "s"} with direct jump(s).` : `Replaced ${applied} subroutine tail operation${applied === 1 ? "" : "s"} with direct jump continuation${tailJumpCount === 1 ? "" : "s"}.`
-      }]
-    };
-  };
-  var tailCallLowering = {
-    name: "tail-call-lowering",
-    run: run20,
-    layoutSafe: false
-  };
-  function findTailJumpTargets(ops) {
-    const calls = /* @__PURE__ */ new Map();
-    const nonCallFlowTargets = /* @__PURE__ */ new Set();
-    const normalizeContinuation = buildContinuationNormalizer2(ops);
-    for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (op.kind === "call" && typeof op.target === "string") {
-        const continuation = callContinuation(ops, index);
-        const existing = calls.get(op.target) ?? [];
-        existing.push(continuation === void 0 ? void 0 : normalizeContinuation(continuation));
-        calls.set(op.target, existing);
-        continue;
-      }
-      if ((op.kind === "jump" || op.kind === "cjump" || op.kind === "loop") && typeof op.target === "string") {
-        nonCallFlowTargets.add(op.target);
-      }
-    }
-    const regions = collectCallableRegions(ops, new Set(calls.keys()));
-    const result = /* @__PURE__ */ new Map();
-    for (const [target, continuations] of calls) {
-      if (nonCallFlowTargets.has(target)) continue;
-      const region = regions.get(target);
-      if (region === void 0 || !blockHasReturn(ops, region.start, region.end)) continue;
-      const first = continuations[0];
-      if (first === void 0) continue;
-      if (continuations.every((continuation) => continuation !== void 0 && sameTarget(continuation, first))) {
-        result.set(target, { continuation: first, start: region.start, end: region.end });
-      }
-    }
-    return result;
-  }
-  function collectCallableRegions(ops, callTargets) {
-    const result = /* @__PURE__ */ new Map();
-    let current;
-    for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (op.kind !== "label") continue;
-      if (!callTargets.has(op.name)) continue;
-      if (current !== void 0) result.set(current.name, { start: current.start, end: index });
-      current = { name: op.name, start: index + 1 };
-    }
-    if (current !== void 0) result.set(current.name, { start: current.start, end: ops.length });
-    return result;
-  }
-  function collectReturnContinuations(ops, targets) {
-    const result = /* @__PURE__ */ new Map();
-    for (const target of targets.values()) {
-      for (let index = target.start; index < target.end; index += 1) {
-        if (ops[index]?.kind === "return") result.set(index, target.continuation);
-      }
-    }
-    return result;
-  }
-  function collectReturnLabels(ops) {
-    const result = /* @__PURE__ */ new Set();
-    for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (op.kind !== "label") continue;
-      const next = nextExecutableIndex3(ops, index + 1);
-      if (next !== void 0 && ops[next]?.kind === "return") result.add(op.name);
-    }
-    return result;
-  }
-  function nextExecutableIndex3(ops, start) {
-    for (let index = start; index < ops.length; index += 1) {
-      if (ops[index]?.kind !== "label") return index;
-    }
-    return void 0;
-  }
-  function isReturnLabel(target, returnLabels) {
-    return typeof target === "string" && returnLabels.has(target);
-  }
-  function blockHasReturn(ops, start, end) {
-    for (let index = start; index < end; index += 1) {
-      if (ops[index]?.kind === "return") return true;
-    }
-    return false;
-  }
-  function callContinuation(ops, index) {
-    const next = ops[index + 1];
-    if (next?.kind === "jump") return next.target;
-    if (next?.kind === "label") return next.name;
-    return void 0;
-  }
-  function sameTarget(left, right) {
-    return left === right;
-  }
-  function buildContinuationNormalizer2(ops) {
-    const labelIndexes = /* @__PURE__ */ new Map();
-    for (let index = 0; index < ops.length; index += 1) {
-      const op = ops[index];
-      if (op.kind === "label") labelIndexes.set(op.name, index);
-    }
-    const normalize = (target, seen = /* @__PURE__ */ new Set()) => {
-      if (typeof target !== "string") return target;
-      if (seen.has(target)) return target;
-      seen.add(target);
-      const labelIndex = labelIndexes.get(target);
-      if (labelIndex === void 0) return target;
-      const executableIndex = nextExecutableIndex3(ops, labelIndex + 1);
-      const executable = executableIndex === void 0 ? void 0 : ops[executableIndex];
-      if (executable?.kind !== "jump" || hasRewriteBarrier(executable)) return target;
-      return normalize(executable.target, seen);
-    };
-    return (target) => normalize(target);
-  }
-
-  // src/core/passes/vp-splice.ts
-  var VP = 12;
-  var KNOP = 84;
-  function isPlainOpcode(op, opcode) {
-    return op.kind === "plain" && op.opcode === opcode && !hasRewriteBarrier(op);
-  }
-  function isFreeStandingVp(op) {
-    if (!isPlainOpcode(op, VP)) return false;
-    return !("meta" in op && op.meta.roles !== void 0 && op.meta.roles.length > 0);
-  }
-  function isFreeStandingKnop(op) {
-    if (!isPlainOpcode(op, KNOP)) return false;
-    return !("meta" in op && op.meta.roles !== void 0 && op.meta.roles.length > 0);
-  }
-  var run21 = (ops) => {
-    const remove = /* @__PURE__ */ new Set();
-    for (let i = 1; i < ops.length; i += 1) {
-      const prev = ops[i - 1];
-      const cur = ops[i];
-      if (remove.has(i - 1)) continue;
-      if (isFreeStandingVp(prev) && isFreeStandingVp(cur)) {
-        remove.add(i);
-        continue;
-      }
-      if (isFreeStandingKnop(prev) && isFreeStandingVp(cur)) {
-        remove.add(i - 1);
-      }
-    }
-    if (remove.size === 0) return emptyResult(ops);
-    return {
-      ops: ops.filter((_, index) => !remove.has(index)),
-      applied: remove.size,
-      optimizations: [
-        {
-          name: "vp-exponent-splice",
-          detail: `Collapsed ${remove.size} redundant \u0412\u041F/\u041A\u041D\u041E\u041F cell(s) around an exponent-entry boundary (\u0412\u041F \u0412\u041F -> \u0412\u041F, \u041A\u041D\u041E\u041F \u0412\u041F -> \u0412\u041F).`
-        }
-      ]
-    };
-  };
-  var vpSplice = {
-    name: "vp-splice",
-    run: run21,
-    layoutSafe: false
-  };
-
-  // src/core/passes/vp-x2-peephole.ts
-  function displayBoundaryText(op) {
-    if (!("meta" in op)) return "";
-    return [
-      op.meta.comment,
-      "tactic" in op.meta ? op.meta.tactic : void 0
-    ].filter(Boolean).join(" ").toLowerCase();
-  }
-  function isDisplayVp(op) {
-    if (hasRewriteBarrier(op)) return false;
-    return op.kind === "plain" && op.opcode === 12 && /display|x2|вп/u.test(displayBoundaryText(op));
-  }
-  function isFractionAfterDisplayBoundary(op) {
-    if (hasRewriteBarrier(op)) return false;
-    return op.kind === "plain" && op.opcode === 53 && /display|x2|frac/u.test(displayBoundaryText(op));
-  }
-  var run22 = (ops) => {
-    const remove = /* @__PURE__ */ new Set();
-    for (let i = 1; i < ops.length; i += 1) {
-      if (isDisplayVp(ops[i - 1]) && isFractionAfterDisplayBoundary(ops[i])) {
-        remove.add(i);
-      }
-    }
-    if (remove.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
-    return {
-      ops: ops.filter((_, index) => !remove.has(index)),
-      applied: remove.size,
-      optimizations: [
-        {
-          name: "vp-fraction-restore",
-          detail: `Removed ${remove.size} \u041A {x} op(s) already supplied by a \u0412\u041F/X2 display boundary.`
-        }
-      ]
-    };
-  };
-  var vpX2Peephole = {
-    name: "vp-x2-peephole",
-    run: run22,
-    layoutSafe: false
-  };
-
-  // src/core/passes/index.ts
-  var PASS_PIPELINE = [
-    redundantPrologueElimination,
-    tailCallLowering,
-    tailBranchInversion,
-    sharedCallTail,
-    returnSuffixGadget,
-    returnZeroJump,
-    storeRecallPeephole,
-    jumpToNextThreading,
-    jumpThread,
-    stableIndirectFlow,
-    preloadedIndirectFlow,
-    indirectMemoryTable,
-    deadStoreBeforeCommutative,
-    deadStoreElimination,
-    lastXReuse,
-    r0FractionalSentinel,
-    vpSplice,
-    vpX2Peephole,
-    constantFolding,
-    duplicateFailureTail,
-    cseDisplayBlock,
-    deadCodeAfterHalt,
-    registerCoalesce,
-    arithmeticIfPass
-  ];
-  var MAX_FIXPOINT_ITERATIONS = 8;
-  function runPassesOnIr(initial, options, { layoutOnly }) {
-    let current = initial;
-    let totalApplied = 0;
-    const optimizations = [];
-    const preloads = [];
-    const passCounts = {};
-    let changedInIteration = true;
-    let iteration = 0;
-    while (changedInIteration && iteration < MAX_FIXPOINT_ITERATIONS) {
-      changedInIteration = false;
-      iteration += 1;
-      for (const pass of PASS_PIPELINE) {
-        if (layoutOnly && !pass.layoutSafe) continue;
-        const result = pass.run(current, { options });
-        passCounts[pass.name] = (passCounts[pass.name] ?? 0) + result.applied;
-        if (result.applied > 0) {
-          changedInIteration = true;
-          totalApplied += result.applied;
-          for (const opt of result.optimizations) {
-            const existing = optimizations.find((entry) => entry.name === opt.name);
-            if (existing !== void 0) {
-              existing.detail = `${existing.detail} (+${opt.detail})`;
-            } else {
-              optimizations.push({ ...opt });
-            }
-          }
-          if (result.preloads !== void 0) preloads.push(...result.preloads);
-        }
-        current = result.ops;
-      }
-    }
-    return { ops: current, applied: totalApplied, optimizations, passCounts, preloads };
-  }
-  function runIrPasses(items, options) {
-    const ir = raiseMachineToIr(items);
-    const result = runPassesOnIr(ir, options, { layoutOnly: false });
-    return {
-      items: lowerIrToMachine(result.ops),
-      applied: result.applied,
-      optimizations: result.optimizations,
-      passCounts: result.passCounts,
-      preloads: result.preloads
-    };
-  }
-
-  // src/core/post-layout-indirect-flow.ts
-  var STABLE_REGISTERS2 = ["7", "8", "9", "a", "b", "c", "d", "e"];
-  var INDIRECT_COND_BASES4 = {
-    "!=0": 112,
-    ">=0": 144,
-    "<0": 192,
-    "==0": 224
-  };
-  function isDirectBranch(op) {
-    return op.kind === "jump" || op.kind === "call" || op.kind === "cjump";
-  }
-  function isIndirectBranch(op) {
-    return op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump";
-  }
-  function registerIndex2(register) {
-    return /^[0-9]$/u.test(register) ? Number(register) : register.toLowerCase().charCodeAt(0) - 87;
-  }
-  function labelAddresses(ops) {
-    const map = /* @__PURE__ */ new Map();
-    let address = 0;
-    for (const op of ops) {
-      if (op.kind === "label") {
-        map.set(op.name, address);
-        continue;
-      }
-      address += cellsPerOp(op);
-    }
-    return map;
-  }
-  function cellCount(items) {
-    return items.filter((item) => item.kind !== "label").length;
-  }
-  function opAddresses(ops) {
-    const addresses = [];
-    let address = 0;
-    for (const op of ops) {
-      addresses.push(address);
-      address += cellsPerOp(op);
-    }
-    return addresses;
-  }
-  function usedRegisters2(ops) {
-    const used = /* @__PURE__ */ new Set();
-    for (const op of ops) {
-      if (op.kind === "store" || op.kind === "recall" || op.kind === "indirect-store" || op.kind === "indirect-recall" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
-        used.add(op.register);
-      }
-    }
-    return used;
-  }
-  function spareStableRegister(ops) {
-    const used = usedRegisters2(ops);
-    return STABLE_REGISTERS2.find((register) => !used.has(register));
-  }
-  function formalLabelFromOrdinal2(ordinal) {
-    const high = Math.floor(ordinal / 10);
-    const low = ordinal % 10;
-    return `${high.toString(16).toUpperCase()}${low.toString(16).toUpperCase()}`;
-  }
-  function officialLabel2(target) {
-    if (target <= 99) {
-      return `${Math.floor(target / 10)}${target % 10}`;
-    }
-    return `A${target - 100}`;
-  }
-  function selectorForActualTarget(target) {
-    if (!Number.isInteger(target) || target < 0 || target > 104) return void 0;
-    if (target <= 47) return formalLabelFromOrdinal2(target + 112);
-    return officialLabel2(target);
-  }
-  function indirectFlowOp3(op, register, selectorValue, target) {
-    const offset = registerIndex2(register);
-    const suffix = `preloaded R${register}=${selectorValue} indirect-target=${target} shifted-forward indirect flow`;
-    if (op.kind === "jump") {
-      return {
-        kind: "indirect-jump",
-        register,
-        opcode: 128 + offset,
-        meta: { ...op.meta, mnemonic: `\u041A \u0411\u041F ${register}`, comment: [op.meta.comment, suffix].filter(Boolean).join("; ") }
-      };
-    }
-    if (op.kind === "call") {
-      return {
-        kind: "indirect-call",
-        register,
-        opcode: 160 + offset,
-        meta: { ...op.meta, mnemonic: `\u041A \u041F\u041F ${register}`, comment: [op.meta.comment, suffix].filter(Boolean).join("; ") }
-      };
-    }
-    const opcode = INDIRECT_COND_BASES4[op.condition] + offset;
-    const name = op.condition === "==0" ? "x=0" : op.condition === "!=0" ? "x!=0" : `x${op.condition}`;
-    return {
-      kind: "indirect-cjump",
-      condition: op.condition,
-      register,
-      opcode,
-      meta: { ...op.meta, mnemonic: `\u041A ${name} ${register}`, comment: [op.meta.comment, suffix].filter(Boolean).join("; ") }
-    };
-  }
-  function mergeDuplicateSelectors(items, preloads) {
-    const canonicalByValue = /* @__PURE__ */ new Map();
-    const remap = /* @__PURE__ */ new Map();
-    const kept = [];
-    for (const preload of preloads) {
-      const register = preload.register;
-      const canonical = canonicalByValue.get(preload.value);
-      if (canonical === void 0) {
-        canonicalByValue.set(preload.value, register);
-        kept.push(preload);
-      } else if (register !== canonical) {
-        remap.set(register, canonical);
-      }
-    }
-    if (remap.size === 0) return { items: [...items], preloads: [...preloads], merged: 0 };
-    const ir = raiseMachineToIr(items).map((op) => {
-      if (!isIndirectBranch(op) || !remap.has(op.register)) return op;
-      const target = remap.get(op.register);
-      const opcode = op.opcode - registerIndex2(op.register) + registerIndex2(target);
-      return { ...op, register: target, opcode };
-    });
-    return { items: lowerIrToMachine(ir), preloads: kept, merged: remap.size };
-  }
-  function selectorValueForRegister(preloads, register) {
-    for (const preload of preloads) {
-      if (preload.register === register) return preload.value;
-    }
-    return void 0;
-  }
-  function numericTargetView(ir, labels) {
-    const numeric = [];
-    const targetLabel = [];
-    for (const op of ir) {
-      if (isDirectBranch(op) && typeof op.target === "string") {
-        const address = labels.get(op.target);
-        if (address !== void 0) {
-          numeric.push({ ...op, target: address });
-          targetLabel.push(op.target);
-          continue;
-        }
-      }
-      numeric.push(op);
-      targetLabel.push(void 0);
-    }
-    return { numeric, targetLabel };
-  }
-  function isSuperDarkRewrite(op) {
-    return /\bsuper-dark\b/iu.test(op.meta.comment ?? "");
-  }
-  function validateRewriteAt(index, ir, numeric, targetLabel, result, items) {
-    const rewritten = result.ops[index];
-    const original = numeric[index];
-    if (!isIndirectBranch(rewritten) || !isDirectBranch(original)) return void 0;
-    const label = targetLabel[index];
-    if (label === void 0) return void 0;
-    const selectorValue = selectorValueForRegister(result.preloads ?? [], rewritten.register);
-    if (selectorValue === void 0) return void 0;
-    const candidate = ir.map((op, i) => i === index ? rewritten : op);
-    const finalLabels = labelAddresses(candidate);
-    const targetFinalAddress = finalLabels.get(label);
-    if (targetFinalAddress === void 0) return void 0;
-    const decoded = evaluateIndirectAddress(rewritten.register, selectorValue, "flow");
-    if (decoded?.actualFlowTarget !== targetFinalAddress) return void 0;
-    const candidateItems = lowerIrToMachine(candidate);
-    if (cellCount(candidateItems) >= cellCount(items)) return void 0;
-    const addresses = opAddresses(ir);
-    return {
-      items: candidateItems,
-      preload: { register: rewritten.register, value: selectorValue, countsAgainstProgram: false },
-      optimizations: result.optimizations,
-      superDark: isSuperDarkRewrite(rewritten),
-      // A target reached through a formal address beyond the official 104-cell
-      // window is a dark entry pointing at the executable suffix. The dark region
-      // spans several formal kinds (dark / long-side / short-side, e.g. B2 -> 0,
-      // C5 -> 13); FA..FF super-dark is reported separately.
-      darkEntry: decoded.formalAddress !== void 0 && decoded.formalAddress.kind !== "official" && decoded.formalAddress.kind !== "super-dark",
-      convertedAddresses: [addresses[index]],
-      protectedTargets: [targetFinalAddress],
-      converted: 1
-    };
-  }
-  function validateRewriteGroup(indices, ir, numeric, targetLabel, result, items) {
-    if (indices.length === 0) return void 0;
-    const first = result.ops[indices[0]];
-    if (!isIndirectBranch(first)) return void 0;
-    const register = first.register;
-    const selectorValue = selectorValueForRegister(result.preloads ?? [], register);
-    if (selectorValue === void 0) return void 0;
-    const indexSet = new Set(indices);
-    const candidate = ir.map((op, i) => indexSet.has(i) ? result.ops[i] : op);
-    const finalLabels = labelAddresses(candidate);
-    const decoded = evaluateIndirectAddress(register, selectorValue, "flow");
-    if (decoded === void 0) return void 0;
-    let superDark = false;
-    for (const index of indices) {
-      const rewritten = result.ops[index];
-      const original = numeric[index];
-      if (!isIndirectBranch(rewritten) || !isDirectBranch(original)) return void 0;
-      if (rewritten.register !== register) return void 0;
-      const label = targetLabel[index];
-      if (label === void 0) return void 0;
-      const targetFinalAddress = finalLabels.get(label);
-      if (decoded.actualFlowTarget !== targetFinalAddress) return void 0;
-      if (isSuperDarkRewrite(rewritten)) superDark = true;
-    }
-    const candidateItems = lowerIrToMachine(candidate);
-    if (cellCount(candidateItems) >= cellCount(items)) return void 0;
-    const addresses = opAddresses(ir);
-    return {
-      items: candidateItems,
-      preload: { register, value: selectorValue, countsAgainstProgram: false },
-      optimizations: result.optimizations,
-      superDark,
-      darkEntry: decoded.formalAddress !== void 0 && decoded.formalAddress.kind !== "official" && decoded.formalAddress.kind !== "super-dark",
-      convertedAddresses: indices.map((index) => addresses[index]),
-      protectedTargets: indices.map((index) => targetLabel[index]).map((label) => label === void 0 ? void 0 : finalLabels.get(label)).filter((target) => target !== void 0),
-      converted: indices.length
-    };
-  }
-  function validateForwardRewriteGroup(indices, ir, targetLabel, register, items) {
-    if (indices.length === 0) return void 0;
-    const indexSet = new Set(indices);
-    const provisional = ir.map((op, index) => {
-      if (!indexSet.has(index)) return op;
-      if (!isDirectBranch(op)) return op;
-      return indirectFlowOp3(op, register, "00", 0);
-    });
-    const finalLabels = labelAddresses(provisional);
-    let finalTarget;
-    for (const index of indices) {
-      const original = ir[index];
-      if (!isDirectBranch(original)) return void 0;
-      const label = targetLabel[index];
-      if (label === void 0) return void 0;
-      const target = finalLabels.get(label);
-      if (target === void 0) return void 0;
-      if (finalTarget === void 0) {
-        finalTarget = target;
-      } else if (finalTarget !== target) {
-        return void 0;
-      }
-    }
-    if (finalTarget === void 0) return void 0;
-    const selectorValue = selectorForActualTarget(finalTarget);
-    if (selectorValue === void 0) return void 0;
-    const decoded = evaluateIndirectAddress(register, selectorValue, "flow");
-    if (decoded?.actualFlowTarget !== finalTarget) return void 0;
-    const candidate = ir.map((op, index) => {
-      if (!indexSet.has(index)) return op;
-      if (!isDirectBranch(op)) return op;
-      return indirectFlowOp3(op, register, selectorValue, finalTarget);
-    });
-    const candidateItems = lowerIrToMachine(candidate);
-    if (cellCount(candidateItems) >= cellCount(items)) return void 0;
-    const addresses = opAddresses(ir);
-    return {
-      items: candidateItems,
-      preload: { register, value: selectorValue, countsAgainstProgram: false },
-      optimizations: [
-        {
-          name: "preloaded-indirect-flow",
-          detail: `Replaced ${indices.length} forward branch/call(s) with compiler-owned preloaded indirect flow after re-layout proof.`
-        }
-      ],
-      superDark: false,
-      darkEntry: decoded.formalAddress !== void 0 && decoded.formalAddress.kind !== "official" && decoded.formalAddress.kind !== "super-dark",
-      convertedAddresses: indices.map((index) => addresses[index]),
-      protectedTargets: [finalTarget],
-      converted: indices.length
-    };
-  }
-  function applyForwardRewrite(ir, targetLabel, items) {
-    const register = spareStableRegister(ir);
-    if (register === void 0) return void 0;
-    const labels = labelAddresses(ir);
-    const addresses = opAddresses(ir);
-    const groups = /* @__PURE__ */ new Map();
-    for (let index = 0; index < ir.length; index += 1) {
-      const op = ir[index];
-      if (hasRewriteBarrier(op) || !isDirectBranch(op)) continue;
-      const label = targetLabel[index];
-      if (label === void 0) continue;
-      const target = labels.get(label);
-      if (target === void 0 || target <= addresses[index]) continue;
-      const group = groups.get(label) ?? [];
-      group.push(index);
-      groups.set(label, group);
-    }
-    let best;
-    for (const indices of groups.values()) {
-      const candidate = validateForwardRewriteGroup(indices, ir, targetLabel, register, items);
-      if (candidate === void 0) continue;
-      if (best === void 0 || candidate.converted > best.converted || candidate.converted === best.converted && candidate.darkEntry && !best.darkEntry) {
-        best = candidate;
-      }
-    }
-    return best;
-  }
-  function applyOneRewrite(items, options) {
-    const ir = raiseMachineToIr(items);
-    const labels = labelAddresses(ir);
-    const { numeric, targetLabel } = numericTargetView(ir, labels);
-    const result = runPreloadedIndirectFlow(numeric, { options }, { relaxMaxTargetGuard: true });
-    if (result.applied > 0) {
-      const groups = /* @__PURE__ */ new Map();
-      for (let index = 0; index < result.ops.length; index += 1) {
-        const op = result.ops[index];
-        const original = numeric[index];
-        if (!isIndirectBranch(op) || !isDirectBranch(original) || targetLabel[index] === void 0) continue;
-        const list = groups.get(op.register) ?? [];
-        list.push(index);
-        groups.set(op.register, list);
-      }
-      let best;
-      for (const indices of groups.values()) {
-        const group = validateRewriteGroup(indices, ir, numeric, targetLabel, result, items);
-        const candidate = group ?? validateRewriteAt(indices[0], ir, numeric, targetLabel, result, items);
-        if (candidate === void 0) continue;
-        if (candidate.superDark) return candidate;
-        if (best === void 0 || candidate.converted > best.converted) best = candidate;
-      }
-      if (best !== void 0) return best;
-    }
-    return applyForwardRewrite(ir, targetLabel, items);
-  }
-  var MAX_REWRITES = 64;
-  var OFFICIAL_PROGRAM_LIMIT = 105;
-  function optimizePostLayoutIndirectFlow(items, options, rescueAbove = OFFICIAL_PROGRAM_LIMIT) {
-    let current = [...items];
-    const preloads = [];
-    let applied = 0;
-    let superDarkApplied = 0;
-    let darkEntryApplied = 0;
-    const protectedTargets = [];
-    for (let round = 0; round < MAX_REWRITES; round += 1) {
-      if (cellCount(current) <= rescueAbove) break;
-      const step = applyOneRewrite(current, options);
-      if (step === void 0) break;
-      if (step.convertedAddresses.some((address) => protectedTargets.some((target) => address < target))) break;
-      current = step.items;
-      preloads.push(step.preload);
-      protectedTargets.push(...step.protectedTargets);
-      applied += step.converted;
-      if (step.superDark) superDarkApplied += 1;
-      if (step.darkEntry) darkEntryApplied += 1;
-    }
-    if (applied === 0) {
-      return { items: [...items], preloads: [], optimizations: [], applied: 0 };
-    }
-    const merge = mergeDuplicateSelectors(current, preloads);
-    current = merge.items;
-    const finalPreloads = merge.preloads;
-    const optimizations = [
-      {
-        name: "preloaded-indirect-flow",
-        detail: `Activated post-layout: replaced ${applied} direct branch/call(s) with proven preloaded indirect flow.`
-      }
-    ];
-    if (superDarkApplied > 0) {
-      optimizations.push({
-        name: "preloaded-super-dark-flow",
-        detail: `Selected ${superDarkApplied} FA..FF one-command super-dark dispatch(es), each proven to fall through to its 01..06 continuation.`
-      });
-    }
-    if (darkEntryApplied > 0) {
-      optimizations.push({
-        name: "dark-entry-layout",
-        detail: `Pointed ${darkEntryApplied} branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window).`
-      });
-    }
-    if (merge.merged > 0) {
-      optimizations.push({
-        name: "constants-dual-use",
-        detail: `Shared ${merge.merged} duplicate selector register(s): one stored constant now drives several dispatch sites, freeing the rest.`
-      });
-    }
-    return { items: current, preloads: finalPreloads, optimizations, applied };
-  }
-
-  // src/core/super-dark-layout.ts
-  function hex2(value) {
-    return value.toString(16).toUpperCase().padStart(2, "0");
-  }
-  function verifySuperDarkSuffixLayout(layout, options = {}) {
-    const byAddress = new Map(layout.map((cell) => [cell.address, cell]));
-    const pairs = [];
-    const dispatchCells = collectSuperDarkDispatchCells(layout, options.selectorValues ?? {});
-    const provedDispatchCells = dispatchCells.filter((cell) => isSuperDarkSelectorValue(cell.selectorValue));
-    const requiredOffsets = requiredSuperDarkOffsets(provedDispatchCells);
-    const reasons = [];
-    if (dispatchCells.length === 0) {
-      reasons.push("no super-dark \u041A \u0411\u041F R dispatch cell is marked in the layout");
-    } else if (provedDispatchCells.length === 0) {
-      reasons.push("no super-dark dispatch register has a proved FA..FF selector value");
-    }
-    for (const offset of requiredOffsets) {
-      const formal = 250 + offset;
-      const entryAddress = 48 + offset;
-      const continuationAddress = 1 + offset;
-      const entry = byAddress.get(entryAddress);
-      const continuation = byAddress.get(continuationAddress);
-      if (entry === void 0) {
-        reasons.push(`${hex2(formal)} has no physical entry cell at ${entryAddress}`);
-        continue;
-      }
-      if (continuation === void 0) {
-        reasons.push(`${hex2(formal)} has no continuation cell at ${continuationAddress}`);
-        continue;
-      }
-      if (!entry.roles.includes("exec")) {
-        reasons.push(`${hex2(formal)} entry ${entryAddress} is not executable`);
-        continue;
-      }
-      if (getOpcode(entry.opcode).takesAddress) {
-        reasons.push(`${hex2(formal)} entry ${entryAddress} is a two-cell address-taking command`);
-        continue;
-      }
-      if (!continuation.roles.includes("exec")) {
-        reasons.push(`${hex2(formal)} continuation ${continuationAddress} is not executable`);
-        continue;
-      }
-      pairs.push({
-        formal,
-        entryAddress,
-        continuationAddress,
-        entryOpcode: entry.opcode,
-        continuationOpcode: continuation.opcode
-      });
-    }
-    if (pairs.length !== requiredOffsets.length && reasons.length === 0) {
-      reasons.push("FA..FF did not produce the required super-dark entry/continuation pairs");
-    }
-    return {
-      proved: provedDispatchCells.length > 0 && pairs.length === requiredOffsets.length && reasons.length === 0,
-      pairs,
-      dispatchCells,
-      reasons
-    };
-  }
-  function requiredSuperDarkOffsets(dispatchCells) {
-    const offsets = /* @__PURE__ */ new Set();
-    for (const cell of dispatchCells) {
-      const value = cell.selectorValue?.trim().toUpperCase().replace(/\s+/gu, "");
-      const formal = value === void 0 ? void 0 : /^F([A-F])$/u.exec(value);
-      if (formal) {
-        offsets.add(Number.parseInt(formal[1], 16) - 10);
-      } else if (isSuperDarkSelectorValue(value)) {
-        for (let offset = 0; offset <= 5; offset += 1) offsets.add(offset);
-      }
-    }
-    return [...offsets].sort((a, b) => a - b);
-  }
-  function collectSuperDarkDispatchCells(layout, selectorValues) {
-    const cells = [];
-    for (const cell of layout) {
-      if (cell.opcode < 135 || cell.opcode > 142) continue;
-      if (!/\bsuper[- ]dark\b/iu.test(cell.tactic)) continue;
-      const register = registerForIndirectJumpOpcode(cell.opcode);
-      const selectorValue = selectorValueForRegister2(selectorValues, register);
-      cells.push({
-        address: cell.address,
-        opcode: cell.opcode,
-        register,
-        tactic: cell.tactic,
-        ...selectorValue === void 0 ? {} : { selectorValue }
-      });
-    }
-    return cells;
-  }
-  function registerForIndirectJumpOpcode(opcode) {
-    const registers = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e"];
-    return registers[opcode - 128] ?? "?";
-  }
-  function selectorValueForRegister2(selectorValues, register) {
-    const aliases = [
-      register,
-      register.toUpperCase(),
-      `R${register}`,
-      `R${register.toUpperCase()}`,
-      `r${register}`
-    ];
-    for (const alias of aliases) {
-      const value = selectorValues[alias];
-      if (value !== void 0) return value;
-    }
-    return void 0;
-  }
-  function isSuperDarkSelectorValue(value) {
-    if (value === void 0) return false;
-    const normalized = value.trim().toUpperCase().replace(/\s+/gu, "");
-    if (/^F[A-F]$/u.test(normalized)) return true;
-    return normalized === "FA..FF" || normalized === "FA-FF" || normalized === "FA\u2026FF" || normalized === "SUPER-DARK" || normalized === "SUPER_DARK";
-  }
-
-  // src/core/emit/machine-emitter.ts
-  var MachineEmitter = class {
-    items = [];
-    labelCounter = 0;
-    currentXVariable;
-    // Every variable known to hold the value currently in X (a copy-equivalence
-    // class for the straight-line region). After `A = B`, X equals both A and B,
-    // so a read of either can reuse X. Reset by any X-clobbering op and at
-    // control-flow boundaries; grown only by stores that copy X into a name.
-    currentXAliases = /* @__PURE__ */ new Set();
-    currentXKnownZero = false;
-    coordListCounterKnownOne = false;
-    zeroAddressLabels = /* @__PURE__ */ new Set();
-    // Meet of the X-variable carried by every recorded branch/jump edge into a
-    // label (undefined value = edges disagree / unknown). Used by emitLabel to
-    // keep stack-reuse facts sound across control-flow joins.
-    labelEdgeX = /* @__PURE__ */ new Map();
-    currentXDashedCoordReportBody;
-    // True when the machine is mid number-entry, so the next number literal would
-    // concatenate digits (e.g. 1 then 3 -> 13) instead of starting a new value.
-    machineEntryOpen = false;
-    emitNumber(raw) {
-      this.currentXVariable = void 0;
-      this.currentXAliases.clear();
-      this.currentXKnownZero = false;
-      this.currentXDashedCoordReportBody = void 0;
-      if (this.machineEntryOpen) {
-        this.emitOp(14, "\u0412\u2191", "separate adjacent number entry");
-      }
-      const normalized = raw.trim().toLowerCase();
-      const negative = normalized.startsWith("-");
-      const unsigned = negative ? normalized.slice(1) : normalized;
-      const [mantissa, exponent] = unsigned.split("e");
-      for (const char of mantissa ?? "0") {
-        if (char === ".") this.emitOp(10, ".");
-        else if (/\d/u.test(char)) this.emitOp(Number(char), char);
-      }
-      if (exponent !== void 0) {
-        this.emitOp(12, "\u0412\u041F", "exponent");
-        const expNegative = exponent.startsWith("-");
-        const expDigits = expNegative || exponent.startsWith("+") ? exponent.slice(1) : exponent;
-        for (const char of expDigits) {
-          if (/\d/u.test(char)) this.emitOp(Number(char), char);
-        }
-        if (expNegative) this.emitOp(11, "/-/", "negative exponent");
-      }
-      if (negative) this.emitOp(11, "/-/", "negative number");
-      this.currentXKnownZero = Number(raw) === 0;
-    }
-    emitJump(opcode, mnemonic, target, comment, sourceLine) {
-      if (typeof target === "string") this.recordLabelEdge(target, this.currentXVariable);
-      this.emitOp(opcode, mnemonic, comment, sourceLine);
-      this.emitAddress(target, comment ?? mnemonic, sourceLine);
-    }
-    emitAddress(target, comment, sourceLine) {
-      const item = { kind: "address", target };
-      if (comment !== void 0) item.comment = comment;
-      if (sourceLine !== void 0) item.sourceLine = sourceLine;
-      this.items.push(item);
-    }
-    emitFormalAddress(opcode, comment, sourceLine) {
-      const info2 = formalAddressInfo(opcode);
-      const item = { kind: "address", target: info2.ordinal, formalOpcode: opcode };
-      if (comment !== void 0) item.comment = `${comment}; formal ${info2.label}->${formatAddress(info2.actual)}`;
-      if (sourceLine !== void 0) item.sourceLine = sourceLine;
-      this.items.push(item);
-    }
-    emitOp(opcode, mnemonic, comment, sourceLine, raw = false) {
-      const info2 = getOpcode(opcode);
-      const op = {
-        kind: "op",
-        opcode,
-        mnemonic: mnemonic ?? info2.name
-      };
-      if (comment !== void 0) op.comment = comment;
-      if (sourceLine !== void 0) op.sourceLine = sourceLine;
-      if (raw) op.raw = true;
-      this.items.push(op);
-      if (opcode >= 128 && opcode <= 254) this.coordListCounterKnownOne = false;
-      this.currentXVariable = void 0;
-      this.currentXAliases.clear();
-      this.currentXKnownZero = false;
-      this.currentXDashedCoordReportBody = void 0;
-      this.machineEntryOpen = opcode <= 12;
-    }
-    recordLabelEdge(label, fact) {
-      if (this.labelEdgeX.has(label)) {
-        if (this.labelEdgeX.get(label) !== fact) this.labelEdgeX.set(label, void 0);
-      } else {
-        this.labelEdgeX.set(label, fact);
-      }
-    }
-    emitLabel(name) {
-      if (this.items.every((item) => item.kind === "label")) this.zeroAddressLabels.add(name);
-      this.coordListCounterKnownOne = false;
-      this.items.push({ kind: "label", name });
-      if (this.labelEdgeX.has(name)) {
-        const edgeFact = this.labelEdgeX.get(name);
-        this.currentXVariable = this.currentXVariable === edgeFact ? this.currentXVariable : void 0;
-        this.currentXKnownZero = false;
-      }
-      this.currentXAliases = this.currentXVariable !== void 0 ? /* @__PURE__ */ new Set([this.currentXVariable]) : /* @__PURE__ */ new Set();
-      this.currentXDashedCoordReportBody = void 0;
-    }
-    freshLabel(prefix) {
-      const label = `__${prefix}_${this.labelCounter}`;
-      this.labelCounter += 1;
-      return label;
-    }
-  };
-
-  // src/core/emit/runtime-helpers.ts
-  var RuntimeHelperRegistry = class {
-    spatialHitHelpers = /* @__PURE__ */ new Map();
-    displayHelpers = /* @__PURE__ */ new Map();
-    displayByteHelpers = /* @__PURE__ */ new Map();
-    literalDisplayHelpers = /* @__PURE__ */ new Map();
-    showSequenceHelpers = /* @__PURE__ */ new Map();
-    expressionHelpers = /* @__PURE__ */ new Map();
-    randomCellHelpers = /* @__PURE__ */ new Map();
-    nearAnyHelpers = /* @__PURE__ */ new Map();
-    lineCountHelpers = /* @__PURE__ */ new Map();
-    spatialBitMaskHelpers = /* @__PURE__ */ new Map();
-    spatialLineProgressionHelpers = /* @__PURE__ */ new Map();
-    spatialSumLoopHelpers = /* @__PURE__ */ new Map();
-    terminalTailHelpers = [];
-    // True while the body of an expression / random-coordinate helper is being emitted,
-    // so the lowering does not recursively route that same expression back
-    // through its own helper.
-    emittingExpressionHelper = false;
-    emittingRandomCellHelper = false;
-  };
-
   // src/core/machineProfile.ts
   var MK61_PROFILE = {
     id: "mk61",
@@ -9859,8 +2040,10 @@ var MKProEmulatorBundle = (() => {
   var TICTACTOE_MASK_SCRATCH_PREFIX = "__ttt_mask_";
   var BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
   var IF_SELECTOR_SCRATCH_PREFIX = "__if_selector_";
+  var DISPLAY_EXPR_PREFIX = "__display_expr_";
   var SPATIAL_HIT_SCRATCH_PREFIX = "__spatial_hit_";
   var SPATIAL_COUNT_SCRATCH_PREFIX = "__spatial_count_";
+  var PACKED_COUNTER_PREFIX = "__packed_counter_";
   var COORD_LIST_ITEM_PREFIX = "__coord_list_";
   var COORD_LIST_POINTER = "__coord_list_pointer";
   var COORD_LIST_COUNTER = "__coord_list_counter";
@@ -9963,6 +2146,9 @@ var MKProEmulatorBundle = (() => {
   function isPreincrementIndirectRegister(register) {
     return register === "4" || register === "5" || register === "6";
   }
+  function isPredecrementIndirectRegister(register) {
+    return register === "0" || register === "1" || register === "2" || register === "3";
+  }
   function programHasLineCountForMask(ast, maskName) {
     let found = false;
     const visitExpr = (expr) => {
@@ -10038,6 +2224,36 @@ var MKProEmulatorBundle = (() => {
         return 90;
     }
   }
+  var LEADING_ZERO_HEX_PRODUCT_ROWS = [
+    ["-", 10, "00"],
+    ["-", 12, "04"],
+    ["-", 14, "08"],
+    ["-", 16, "000"],
+    ["-", 17, "010"],
+    ["-", 18, "020"],
+    ["-", 19, "030"],
+    ["-", 35, "030"],
+    ["-", 36, "040"],
+    ["-", 37, "050"],
+    ["L", 15, "021"],
+    ["L", 16, "032"],
+    ["L", 17, "043"],
+    ["L", 18, "054"],
+    ["L", 29, "015"],
+    ["\u0421", 15, "052"],
+    ["\u0421", 26, "024"],
+    ["\u0421", 27, "020"],
+    ["\u0421", 28, "032"],
+    ["\u0421", 29, "044"],
+    ["\u0413", 25, "053"],
+    ["\u0413", 26, "050"],
+    ["\u0413", 37, "033"],
+    ["\u0413", 38, "030"],
+    ["\u0413", 39, "043"],
+    ["\u0415", 35, "042"],
+    ["\u0415", 36, "040"],
+    ["\u0415", 37, "054"]
+  ];
   function displayLiteralProgram(text) {
     const normalized = normalizeDisplayLiteralText(text);
     const errorCells = displayLiteralCells(normalized);
@@ -10133,6 +2349,12 @@ var MKProEmulatorBundle = (() => {
     if (!/^-?(?:0|[1-9][0-9]{0,7})$/u.test(normalized)) return void 0;
     return normalized;
   }
+  function leadingZeroHexProductDisplayProgram(text) {
+    const normalized = normalizeDisplayLiteralText(text);
+    const match = LEADING_ZERO_HEX_PRODUCT_ROWS.find(([, , output]) => output === normalized);
+    if (match === void 0) return void 0;
+    return { sourceLiteral: match[0], factor: String(match[1]) };
+  }
   function zeroDigitTailDisplayProgram(text) {
     const cells = displayLiteralCells(text);
     if (cells === void 0 || cells.length !== 2) return void 0;
@@ -10213,6 +2435,11 @@ var MKProEmulatorBundle = (() => {
   function normalizeConstantLiteral(raw) {
     const value = Number(raw);
     return Number.isFinite(value) ? String(value) : raw.trim();
+  }
+  function positiveIntegerPowerOfTenExponent(normalized) {
+    const trimmed = normalized.trim();
+    if (!/^10+$/u.test(trimmed)) return void 0;
+    return trimmed.length - 1;
   }
   function negatedNumberLiteral(raw) {
     const normalized = raw.trim();
@@ -11641,13 +3868,13 @@ var MKProEmulatorBundle = (() => {
     const y = decimalTensExpressionAst(cell);
     switch (kind) {
       case "row":
-        return range2(board.xMin, board.xMax).map((candidateX) => boardCellExpressionAst(numberExpression2(candidateX), y));
+        return range(board.xMin, board.xMax).map((candidateX) => boardCellExpressionAst(numberExpression2(candidateX), y));
       case "column":
-        return range2(board.yMin, board.yMax).map((candidateY) => boardCellExpressionAst(x, numberExpression2(candidateY)));
+        return range(board.yMin, board.yMax).map((candidateY) => boardCellExpressionAst(x, numberExpression2(candidateY)));
       case "diag-left":
-        return range2(-Math.max(board.width, board.height) + 1, Math.max(board.width, board.height) - 1).map((delta) => offsetExpressionAst(cell, delta * 11));
+        return range(-Math.max(board.width, board.height) + 1, Math.max(board.width, board.height) - 1).map((delta) => offsetExpressionAst(cell, delta * 11));
       case "diag-right":
-        return range2(-Math.max(board.width, board.height) + 1, Math.max(board.width, board.height) - 1).map((delta) => offsetExpressionAst(cell, delta * 9));
+        return range(-Math.max(board.width, board.height) + 1, Math.max(board.width, board.height) - 1).map((delta) => offsetExpressionAst(cell, delta * 9));
     }
   }
   function spatialLineProgressions(board, cell) {
@@ -11729,7 +3956,7 @@ var MKProEmulatorBundle = (() => {
   function spatialCountStepScratchName() {
     return `${SPATIAL_COUNT_SCRATCH_PREFIX}step`;
   }
-  function range2(start, end) {
+  function range(start, end) {
     const values = [];
     for (let value = start; value <= end; value += 1) values.push(value);
     return values;
@@ -11838,6 +4065,22 @@ var MKProEmulatorBundle = (() => {
         return expr.args.some((arg) => expressionReferencesIdentifier(arg, name));
     }
   }
+  function expressionReferencesIndexedCell(expr, base, field) {
+    switch (expr.kind) {
+      case "number":
+      case "string":
+      case "identifier":
+        return false;
+      case "indexed":
+        return expr.base === base && expr.field === field || expressionReferencesIndexedCell(expr.index, base, field);
+      case "unary":
+        return expressionReferencesIndexedCell(expr.expr, base, field);
+      case "binary":
+        return expressionReferencesIndexedCell(expr.left, base, field) || expressionReferencesIndexedCell(expr.right, base, field);
+      case "call":
+        return expr.args.some((arg) => expressionReferencesIndexedCell(arg, base, field));
+    }
+  }
   function isPureExpression(expr) {
     switch (expr.kind) {
       case "number":
@@ -11896,6 +4139,151 @@ var MKProEmulatorBundle = (() => {
     if (expressionReferencesIdentifier(factor, param) || expressionReferencesIdentifier(scaled.right, param)) return void 0;
     if (!expressionPureForSubstitution(factor) || !expressionPureForSubstitution(scaled.right)) return void 0;
     return { param, factor, divisor: scaled.right, line: only.line };
+  }
+  function matchXParamStakeSinRead(program, proc) {
+    const params = proc.params ?? [];
+    const [param] = params;
+    if (param === void 0 || params.length !== 1 || proc.body.length !== 2) return void 0;
+    const show = proc.body[0];
+    const ret = proc.body[1];
+    if (show?.kind !== "show" || ret?.kind !== "return_value") return void 0;
+    const display = program.displays.find((candidate) => candidate.name === show.display);
+    const item = display?.items.length === 1 ? display.items[0] : void 0;
+    if (item?.kind !== "source" || item.name !== param || item.expr !== void 0 || item.width !== void 0) {
+      return void 0;
+    }
+    const risk = matchStackStopRisk(ret.expr, param);
+    if (risk === void 0) return void 0;
+    return { param, display: show.display, showLine: show.line, line: ret.line, risk };
+  }
+  var X_TRANSFORM_UNARY_OPCODES = {
+    abs: [49, "\u041A |x|"],
+    sign: [50, "\u041A \u0417\u041D"],
+    int: [52, "\u041A [x]"],
+    frac: [53, "\u041A {x}"],
+    sqr: [34, "F x^2"],
+    inv: [35, "F 1/x"],
+    sqrt: [33, "F sqrt"],
+    lg: [23, "F lg"],
+    ln: [24, "F ln"],
+    sin: [28, "F sin"],
+    cos: [29, "F cos"],
+    tg: [30, "F tg"],
+    asin: [25, "F sin^-1"],
+    acos: [26, "F cos^-1"],
+    atg: [27, "F tg^-1"],
+    exp: [22, "F e^x"],
+    pow10: [21, "F 10^x"],
+    bit_not: [58, "\u041A \u0418\u041D\u0412"],
+    to_min: [38, "\u041A \xB0->\u2032"],
+    to_sec: [42, '\u041A \xB0->\u2032"'],
+    from_sec: [48, '\u041A \xB0<-\u2032"'],
+    from_min: [51, "\u041A \xB0<-\u2032"]
+  };
+  var X_TRANSFORM_UNARY_FUNCTIONS = new Set(Object.keys(X_TRANSFORM_UNARY_OPCODES));
+  function isReadCallExpression(expr) {
+    return expr.kind === "call" && expr.callee.toLowerCase() === "read" && expr.args.length === 0;
+  }
+  function isIdentifierExpression(expr, name) {
+    return expr.kind === "identifier" && expr.name === name;
+  }
+  function countMatchingNodes(expr, pred) {
+    const self = pred(expr) ? 1 : 0;
+    switch (expr.kind) {
+      case "call":
+        return self + expr.args.reduce((sum, arg) => sum + countMatchingNodes(arg, pred), 0);
+      case "binary":
+        return self + countMatchingNodes(expr.left, pred) + countMatchingNodes(expr.right, pred);
+      case "unary":
+        return self + countMatchingNodes(expr.expr, pred);
+      case "indexed":
+        return self + countMatchingNodes(expr.index, pred);
+      default:
+        return self;
+    }
+  }
+  function expressionReferencesName(expr, name) {
+    switch (expr.kind) {
+      case "identifier":
+        return expr.name === name;
+      case "indexed":
+        return expr.base === name || expressionReferencesName(expr.index, name);
+      case "unary":
+        return expressionReferencesName(expr.expr, name);
+      case "binary":
+        return expressionReferencesName(expr.left, name) || expressionReferencesName(expr.right, name);
+      case "call":
+        return expr.args.some((arg) => expressionReferencesName(arg, name));
+      default:
+        return false;
+    }
+  }
+  function singleDigitLiteral(expr) {
+    if (expr.kind !== "number") return void 0;
+    const trimmed = expr.raw.trim();
+    if (!/^[0-9]$/u.test(trimmed)) return void 0;
+    return Number(trimmed);
+  }
+  function collectInputUnaryChain(expr, isLeaf) {
+    if (isLeaf(expr)) return [];
+    if (expr.kind === "call" && expr.args.length === 1) {
+      const opcode = X_TRANSFORM_UNARY_OPCODES[expr.callee.toLowerCase()];
+      if (opcode === void 0) return void 0;
+      const inner = collectInputUnaryChain(expr.args[0], isLeaf);
+      if (inner === void 0) return void 0;
+      return [...inner, opcode];
+    }
+    return void 0;
+  }
+  function matchStackStopRisk(expr, yName, inputName) {
+    const isLeaf = (candidate) => inputName !== void 0 ? isIdentifierExpression(candidate, inputName) : isReadCallExpression(candidate);
+    if (countMatchingNodes(expr, isLeaf) !== 1) return void 0;
+    const wraps = [];
+    let core = expr;
+    while (core.kind === "call" && core.args.length === 1 && X_TRANSFORM_UNARY_OPCODES[core.callee.toLowerCase()] !== void 0 && expressionReferencesName(core.args[0], yName)) {
+      wraps.push(X_TRANSFORM_UNARY_OPCODES[core.callee.toLowerCase()]);
+      core = core.args[0];
+    }
+    if (core.kind !== "binary") return void 0;
+    const yOp = core.op;
+    let xExpr;
+    let yOnLeft;
+    if (isIdentifierExpression(core.left, yName)) {
+      yOnLeft = true;
+      xExpr = core.right;
+    } else if (isIdentifierExpression(core.right, yName)) {
+      yOnLeft = false;
+      xExpr = core.left;
+    } else {
+      return void 0;
+    }
+    if ((yOp === "-" || yOp === "/") && !yOnLeft) return void 0;
+    if (expressionReferencesName(xExpr, yName)) return void 0;
+    let additive;
+    let chainExpr = xExpr;
+    if (xExpr.kind === "binary") {
+      const leftHasLeaf = countMatchingNodes(xExpr.left, isLeaf) > 0;
+      const rightHasLeaf = countMatchingNodes(xExpr.right, isLeaf) > 0;
+      if (leftHasLeaf && !rightHasLeaf) {
+        const digit = singleDigitLiteral(xExpr.right);
+        if (digit === void 0) return void 0;
+        additive = { digit, op: xExpr.op };
+        chainExpr = xExpr.left;
+      } else if (rightHasLeaf && !leftHasLeaf) {
+        if (xExpr.op === "-" || xExpr.op === "/") return void 0;
+        const digit = singleDigitLiteral(xExpr.left);
+        if (digit === void 0) return void 0;
+        additive = { digit, op: xExpr.op };
+        chainExpr = xExpr.right;
+      } else {
+        return void 0;
+      }
+    }
+    const inputUnary = collectInputUnaryChain(chainExpr, isLeaf);
+    if (inputUnary === void 0) return void 0;
+    const match = { yName, yOp, yOnLeft, inputUnary, wraps };
+    if (additive !== void 0) match.additive = additive;
+    return match;
   }
   function optimizeDispatchDefaultCases(statement) {
     if (statement.cases.length === 0) return { statement, removed: 0, reordered: 0 };
@@ -12007,6 +4395,8 @@ var MKProEmulatorBundle = (() => {
         return left.target === right.target && expressionEquals(left.expr, right.expr);
       case "indexed_assign":
         return expressionEquals(left.target, right.target) && expressionEquals(left.expr, right.expr);
+      case "coord_list_remove":
+        return left.list === right.list && expressionEquals(left.item, right.item) && JSON.stringify(left.items) === JSON.stringify(right.items);
       case "loop":
         return statementListsEqual(left.body, right.body);
       case "while":
@@ -12186,6 +4576,12 @@ var MKProEmulatorBundle = (() => {
       case "unary":
         return estimateExpressionCostForCondition(expr.expr, preloadedConstants) + 1;
       case "binary": {
+        if (expr.op === "*" && expressionEquals(expr.left, expr.right) && isPureExpression(expr.left)) {
+          return estimateExpressionCostForCondition(expr.left, preloadedConstants) + 1;
+        }
+        if (expr.op === "/" && isNumericValue2(expr.left, 1)) {
+          return estimateExpressionCostForCondition(expr.right, preloadedConstants) + 1;
+        }
         const remainder = matchRemainderByConstant(expr);
         if (remainder !== void 0) {
           return estimateExpressionCostForCondition(remainder.value, preloadedConstants) + estimateExpressionCostForCondition(remainder.divisor, preloadedConstants) * 2 + 3;
@@ -12212,7 +4608,17 @@ var MKProEmulatorBundle = (() => {
       return expr.args.length === 2 ? estimateExpressionCostForCondition(randomRangeExpression(expr.args[0], expr.args[1]), preloadedConstants) : 1;
     }
     if (name === "pi") return 1;
+    if (name === "e") return 2;
+    if (name === "min" && expr.args.length === 2) {
+      return estimateExpressionCostForCondition(minExpression(expr.args[0], expr.args[1]), preloadedConstants);
+    }
     if (name === "pow" || ["max", "bit_and", "bit_or", "bit_xor"].includes(name)) {
+      if (name === "pow" && expr.args[1] !== void 0 && isNumericValue2(expr.args[1], 2)) {
+        return (expr.args[0] ? estimateExpressionCostForCondition(expr.args[0], preloadedConstants) : 0) + 1;
+      }
+      if (name === "pow" && expr.args[0] !== void 0 && isNumericValue2(expr.args[0], 10)) {
+        return (expr.args[1] ? estimateExpressionCostForCondition(expr.args[1], preloadedConstants) : 0) + 1;
+      }
       return (expr.args[0] ? estimateExpressionCostForCondition(expr.args[0], preloadedConstants) : 0) + (expr.args[1] ? estimateExpressionCostForCondition(expr.args[1], preloadedConstants) : 0) + 1;
     }
     return (expr.args[0] ? estimateExpressionCostForCondition(expr.args[0], preloadedConstants) : 0) + 1;
@@ -12243,6 +4649,12 @@ var MKProEmulatorBundle = (() => {
       case "unary":
         return estimateExpressionCost2(expr.expr) + 1;
       case "binary": {
+        if (expr.op === "*" && expressionEquals(expr.left, expr.right) && isPureExpression(expr.left)) {
+          return estimateExpressionCost2(expr.left) + 1;
+        }
+        if (expr.op === "/" && isNumericValue2(expr.left, 1)) {
+          return estimateExpressionCost2(expr.right) + 1;
+        }
         const remainder = matchRemainderByConstant(expr);
         if (remainder !== void 0) {
           return estimateExpressionCost2(remainder.value) + estimateExpressionCost2(remainder.divisor) * 2 + 3;
@@ -12267,7 +4679,15 @@ var MKProEmulatorBundle = (() => {
       return expr.args.length === 2 ? estimateExpressionCost2(randomRangeExpression(expr.args[0], expr.args[1])) : 1;
     }
     if (name === "pi") return 1;
+    if (name === "e") return 2;
+    if (name === "min" && expr.args.length === 2) return estimateExpressionCost2(minExpression(expr.args[0], expr.args[1]));
     if (name === "pow") {
+      if (expr.args[1] !== void 0 && isNumericValue2(expr.args[1], 2)) {
+        return (expr.args[0] ? estimateExpressionCost2(expr.args[0]) : 0) + 1;
+      }
+      if (expr.args[0] !== void 0 && isNumericValue2(expr.args[0], 10)) {
+        return (expr.args[1] ? estimateExpressionCost2(expr.args[1]) : 0) + 1;
+      }
       return (expr.args[0] ? estimateExpressionCost2(expr.args[0]) : 0) + (expr.args[1] ? estimateExpressionCost2(expr.args[1]) : 0) + 1;
     }
     if (["max", "bit_and", "bit_or", "bit_xor"].includes(name)) {
@@ -12471,6 +4891,8296 @@ var MKProEmulatorBundle = (() => {
     return op === "+" ? 16 : op === "-" ? 17 : op === "*" ? 18 : 19;
   }
 
+  // src/core/v2-const.ts
+  function buildV2ConstContext(v2) {
+    const bindings = /* @__PURE__ */ new Map();
+    const reserved = collectV2StateNames(v2);
+    for (const decl of v2.consts) {
+      if (reserved.has(decl.name)) {
+        throw new ParseError(`Const '${decl.name}' shadows state field '${decl.name}'`, decl.line);
+      }
+      if (bindings.has(decl.name)) {
+        throw new ParseError(`Duplicate const '${decl.name}'`, decl.line);
+      }
+      const partial = /* @__PURE__ */ new Map();
+      for (const [name, binding2] of bindings) partial.set(name, binding2);
+      const value = evaluateV2ConstExpression(decl.expr, decl.line, partial);
+      const normalized = normalizeConstantLiteral(value.raw);
+      const binding = { name: decl.name, value, normalized, line: decl.line };
+      bindings.set(decl.name, binding);
+    }
+    assertNoConstAssignment(v2, bindings);
+    return { bindings };
+  }
+  function evaluateV2ConstExpression(text, line, earlier) {
+    let expr = parseExpression(text.trim(), line);
+    expr = inlineConstIdentifiers(expr, earlier);
+    expr = foldConstExpression(expr);
+    if (expr.kind !== "number") {
+      throw new ParseError(
+        `Const value must be a compile-time number expression, got '${text.trim()}'`,
+        line
+      );
+    }
+    if (!expressionAllowedInConst(expr)) {
+      throw new ParseError(
+        `Const value must use only numeric literals and + - * / operators`,
+        line
+      );
+    }
+    return expr;
+  }
+  function expressionAllowedInConst(expr) {
+    switch (expr.kind) {
+      case "number":
+        return true;
+      case "unary":
+        return (expr.op === "-" || expr.op === "+") && expressionAllowedInConst(expr.expr);
+      case "binary":
+        return (expr.op === "+" || expr.op === "-" || expr.op === "*" || expr.op === "/") && expressionAllowedInConst(expr.left) && expressionAllowedInConst(expr.right);
+      default:
+        return false;
+    }
+  }
+  function inlineConstIdentifiers(expr, consts) {
+    switch (expr.kind) {
+      case "number":
+      case "string":
+        return expr;
+      case "identifier": {
+        const binding = consts.get(expr.name);
+        return binding === void 0 ? expr : { ...binding.value };
+      }
+      case "indexed":
+        return { ...expr, index: inlineConstIdentifiers(expr.index, consts) };
+      case "unary":
+        return { ...expr, expr: inlineConstIdentifiers(expr.expr, consts) };
+      case "binary":
+        return {
+          ...expr,
+          left: inlineConstIdentifiers(expr.left, consts),
+          right: inlineConstIdentifiers(expr.right, consts)
+        };
+      case "call":
+        return {
+          ...expr,
+          args: expr.args.map((arg) => inlineConstIdentifiers(arg, consts))
+        };
+    }
+  }
+  function collectV2StateNames(v2) {
+    return new Set(v2.state.map((field) => field.name));
+  }
+  function assertNoConstAssignment(v2, consts) {
+    const visit = (statements) => {
+      for (const statement of statements) {
+        checkV2StatementConstAssignment(statement, consts);
+        visitV2StatementChildren(statement, visit);
+      }
+    };
+    visit(v2.body);
+    for (const rule of v2.rules) visit(rule.body);
+  }
+  function checkV2StatementConstAssignment(statement, consts) {
+    if (statement.kind === "v2_assign" || statement.kind === "v2_update") {
+      const root = assignmentRootIdentifier(statement.target);
+      if (root !== void 0 && consts.has(root)) {
+        throw new ParseError(`Cannot assign to const '${root}'`, statement.line);
+      }
+    }
+  }
+  function assignmentRootIdentifier(target) {
+    const trimmed = target.trim();
+    if (/^[A-Za-z_][\w]*$/u.test(trimmed)) return trimmed;
+    const bracket = /^([A-Za-z_][\w]*)\s*\[/u.exec(trimmed);
+    return bracket?.[1];
+  }
+  function visitV2StatementChildren(statement, visit) {
+    switch (statement.kind) {
+      case "v2_if":
+        visit(statement.thenBody);
+        if (statement.elseBody !== void 0) visit(statement.elseBody);
+        return;
+      case "v2_while":
+      case "v2_loop":
+        visit(statement.body);
+        return;
+      case "v2_match":
+        for (const matchCase of statement.cases) visit([matchCase.action]);
+        if (statement.otherwise !== void 0) visit([statement.otherwise]);
+        return;
+      default:
+        return;
+    }
+  }
+
+  // src/core/parser.ts
+  var V2_RESERVED_RULE_NAMES = /* @__PURE__ */ new Set([
+    "challenge",
+    "else",
+    "fn",
+    "halt",
+    "if",
+    "loop",
+    "match",
+    "otherwise",
+    "program",
+    "read",
+    "return",
+    "rule",
+    "screen",
+    "show",
+    "state",
+    "stop",
+    "turn",
+    "world"
+  ]);
+  var ParseError = class extends Error {
+    line;
+    constructor(message, line) {
+      super(`${message} at line ${line}`);
+      this.line = line;
+    }
+  };
+  function parseProgram(source, options = {}) {
+    return new MKProParser(source, options).parseProgram();
+  }
+  var MKProParser = class {
+    lines;
+    options;
+    index = 0;
+    constructor(source, options) {
+      this.options = options;
+      this.lines = source.split(/\r?\n/u).flatMap((text, offset) => normalizeSourceLine(text, offset + 1)).filter((line) => line.text.length > 0);
+    }
+    parseProgram() {
+      let reference;
+      let v2;
+      const domains = [];
+      const states = [];
+      const displays = [];
+      const entries = [];
+      const procs = [];
+      let programBanks;
+      while (!this.done()) {
+        const line = this.peek();
+        if (line.text === "}") {
+          throw new ParseError("Unexpected closing brace", line.line);
+        }
+        if (line.text.startsWith("reference ")) {
+          reference = line.text.slice("reference ".length).trim();
+          this.index += 1;
+        } else if (line.text.startsWith("program ")) {
+          if (v2 !== void 0) {
+            throw new ParseError("Only one program block is supported", line.line);
+          }
+          v2 = this.parseV2Program();
+          if (this.options.synthesizeParametricSiblings === true) {
+            synthesizeV2ParametricSiblingRules(v2);
+          }
+          const lowered = lowerV2Program(v2, this.options);
+          domains.push(...lowered.domains);
+          states.push(...lowered.states);
+          displays.push(...lowered.displays);
+          entries.push(...lowered.entries);
+          procs.push(...lowered.procs);
+          if (lowered.banks !== void 0) {
+            if (programBanks === void 0) programBanks = [];
+            programBanks.push(...lowered.banks);
+          }
+        } else {
+          throw new ParseError(`Unexpected top-level line '${line.text}'`, line.line);
+        }
+      }
+      if (v2 === void 0) throw new ParseError("Program must contain one V2 program block", 1);
+      const program = {
+        domains,
+        states,
+        displays,
+        entries,
+        procs
+      };
+      if (programBanks !== void 0 && programBanks.length > 0) program.banks = programBanks;
+      if (reference !== void 0) program.reference = reference;
+      if (v2 !== void 0) program.v2 = v2;
+      return program;
+    }
+    parseV2Program() {
+      const header = this.next();
+      const match = /^program\s+([A-Za-z_][\w]*)\s*\{$/u.exec(header.text);
+      if (!match) throw new ParseError("Program must look like 'program Name {'", header.line);
+      const consts = [];
+      const state = [];
+      const boards = [];
+      const worlds = [];
+      const body = [];
+      const rules = [];
+      while (!this.done()) {
+        const line = this.peek();
+        if (line.text === "}") {
+          this.index += 1;
+          const program = {
+            kind: "v2_program",
+            name: match[1],
+            consts,
+            state,
+            boards,
+            worlds,
+            body,
+            rules,
+            line: header.line
+          };
+          return program;
+        }
+        if (line.text.startsWith("const ")) {
+          this.index += 1;
+          consts.push(parseV2ConstLine(line));
+          continue;
+        }
+        if (line.text === "state {") {
+          this.index += 1;
+          state.push(...this.parseV2StateBlock());
+          continue;
+        }
+        const board = parseV2BoardDeclaration(line);
+        if (board !== void 0) {
+          this.index += 1;
+          boards.push(board);
+          continue;
+        }
+        const compactBoard = parseV2CompactBoardDeclaration(line);
+        if (compactBoard !== void 0) {
+          this.index += 1;
+          worlds.push(compactBoard);
+          continue;
+        }
+        if (line.text.startsWith("board ")) throw new ParseError("Board must look like 'name: board(0..9, 0..9)'", line.line);
+        if (line.text.startsWith("fleet ")) throw new ParseError("Fleet blocks were removed; declare cells and counters in state", line.line);
+        if (line.text.startsWith("world ")) {
+          throw new ParseError("Use 'name: board(encoding)' instead of world blocks", line.line);
+        }
+        if (line.text.startsWith("encounters ")) {
+          throw new ParseError("Use match blocks instead of encounters blocks", line.line);
+        }
+        if (line.text.startsWith("screen ")) {
+          throw new ParseError("Use 'fn name() { show(...) }' instead of screen blocks", line.line);
+        }
+        if (line.text === "turn {") {
+          throw new ParseError("Use 'loop {' instead of turn blocks", line.line);
+        }
+        if (line.text.startsWith("fn ")) {
+          rules.push(this.parseV2Rule(line.text));
+          continue;
+        }
+        if (line.text.startsWith("rule ")) {
+          throw new ParseError("Use 'fn name(arg, ...) {' instead of rule blocks", line.line);
+        }
+        const knownStatementBlock = /^(match|if|while|loop)\b/u.test(line.text) || line.text === "raw {";
+        if (line.text.startsWith("input ") || line.text.endsWith("{") && !knownStatementBlock) {
+          throw new ParseError(`Unexpected program line '${line.text}'`, line.line);
+        }
+        body.push(this.parseV2Statement());
+      }
+      throw new ParseError("Unclosed program block", header.line);
+    }
+    parseV2StateBlock() {
+      const fields = [];
+      while (!this.done()) {
+        const line = this.peek();
+        if (line.text === "}") {
+          this.index += 1;
+          return fields;
+        }
+        if (/^[A-Za-z_][\w]*\s*:\s*group\s*\(\s*-?\d+\.\.-?\d+\s*\)\s*\{$/u.test(line.text)) {
+          fields.push(...this.parseV2StateGroup());
+          continue;
+        }
+        this.index += 1;
+        if (line.text === "}") return fields;
+        fields.push(parseV2StateField(line));
+      }
+      throw new ParseError("Unclosed state block", this.lines.at(-1)?.line ?? 1);
+    }
+    parseV2StateGroup() {
+      const header = this.next();
+      const match = /^([A-Za-z_][\w]*)\s*:\s*group\s*\(\s*(-?\d+)\.\.(-?\d+)\s*\)\s*\{$/u.exec(header.text);
+      if (!match) throw new ParseError("State group must look like 'name: group(1..3) {'", header.line);
+      const name = match[1];
+      const min = Number(match[2]);
+      const max = Number(match[3]);
+      if (!Number.isInteger(min) || !Number.isInteger(max) || max < min) {
+        throw new ParseError(`Invalid state group range '${match[2]}..${match[3]}'`, header.line);
+      }
+      const fields = [];
+      while (!this.done()) {
+        const line = this.peek();
+        if (line.text === "}") {
+          this.index += 1;
+          return fields;
+        }
+        if (line.text.includes("group")) {
+          throw new ParseError("Nested state groups are not supported", line.line);
+        }
+        this.index += 1;
+        const field = parseV2StateField(line);
+        if (field.bank !== void 0) {
+          throw new ParseError("State group members cannot also be indexed arrays", line.line);
+        }
+        fields.push({
+          ...field,
+          name: bankFieldStateName(name, field.name),
+          bank: { name, member: field.name, min, max }
+        });
+      }
+      throw new ParseError("Unclosed state group", header.line);
+    }
+    parseV2Rule(text) {
+      const header = this.next();
+      const fn = /^fn\s+([A-Za-z_][\w]*)\s*\(([^)]*)\)\s*\{$/u.exec(text);
+      if (!fn) {
+        throw new ParseError("Function must look like 'fn name(arg, ...) {'", header.line);
+      }
+      const name = fn[1];
+      if (V2_RESERVED_RULE_NAMES.has(name)) {
+        throw new ParseError(`Function name '${name}' is reserved`, header.line);
+      }
+      const params = parseCommaIdentifierList(fn[2] ?? "", header.line);
+      for (const param of params) {
+        if (!/^[A-Za-z_][\w]*$/u.test(param)) {
+          throw new ParseError(`Invalid function parameter '${param}'`, header.line);
+        }
+      }
+      return {
+        kind: "v2_rule",
+        name,
+        params,
+        body: this.parseV2StatementBlock(),
+        line: header.line
+      };
+    }
+    parseV2StatementBlock() {
+      const statements = [];
+      while (!this.done()) {
+        const line = this.peek();
+        if (line.text === "}") {
+          this.index += 1;
+          return statements;
+        }
+        statements.push(this.parseV2Statement());
+      }
+      throw new ParseError("Unclosed statement block", this.lines.at(-1)?.line ?? 1);
+    }
+    parseV2Statement() {
+      const line = this.peek();
+      if (line.text.startsWith("match ") && line.text.endsWith("{")) {
+        this.index += 1;
+        return this.parseV2Match(line.text, line.line);
+      }
+      if (line.text.startsWith("unless ") && line.text.endsWith("{")) {
+        this.index += 1;
+        return this.parseV2If({ text: `if ${line.text.slice("unless ".length)}`, line: line.line }, true);
+      }
+      if (line.text.startsWith("if ") && line.text.endsWith("{")) {
+        this.index += 1;
+        return this.parseV2If(line);
+      }
+      if (line.text === "else {" || line.text.startsWith("else if ")) {
+        throw new ParseError("'else' without matching 'if'", line.line);
+      }
+      if (line.text.startsWith("while ") && line.text.endsWith("{")) {
+        this.index += 1;
+        return {
+          kind: "v2_while",
+          predicate: parseV2Predicate(line.text.slice("while ".length, -1).trim(), line.line),
+          body: this.parseV2StatementBlock(),
+          line: line.line
+        };
+      }
+      if (line.text === "loop {") {
+        this.index += 1;
+        return {
+          kind: "v2_loop",
+          body: this.parseV2StatementBlock(),
+          line: line.line
+        };
+      }
+      if (line.text.startsWith("challenge ") && line.text.endsWith("{")) {
+        throw new ParseError("Use ordinary show/read/if statements instead of challenge blocks", line.line);
+      }
+      if (line.text === "raw {") {
+        this.index += 1;
+        return this.parseV2Raw(line.line);
+      }
+      this.index += 1;
+      return parseV2InlineStatement(line.text, line.line);
+    }
+    parseV2Raw(line) {
+      const inputs = [];
+      const outputs = [];
+      let clobbers;
+      let preserves;
+      let code;
+      while (!this.done()) {
+        const bodyLine = this.peek();
+        if (bodyLine.text === "}") {
+          this.index += 1;
+          if (code === void 0) throw new ParseError("Raw block must contain code { ... }", line);
+          if (clobbers === void 0) throw new ParseError("Raw block must declare clobbers", line);
+          if (preserves === void 0 || !preserves.includes("state")) {
+            throw new ParseError("Raw block must declare preserves state", line);
+          }
+          if (clobbers.includes("state")) {
+            throw new ParseError("Raw block cannot clobber high-level state; return values through returns X -> name", line);
+          }
+          validateV2RawInputs(inputs, line);
+          return {
+            kind: "v2_raw",
+            inputs,
+            outputs,
+            clobbers,
+            preserves,
+            lines: code,
+            line
+          };
+        }
+        if (bodyLine.text.startsWith("takes ")) {
+          this.index += 1;
+          for (const input of parseV2RawInputs(bodyLine.text.slice("takes ".length), bodyLine.line)) {
+            if (inputs.some((existing) => existing.slot === input.slot)) {
+              throw new ParseError(`Raw input for ${input.slot} is declared more than once`, input.line);
+            }
+            inputs.push(input);
+          }
+          continue;
+        }
+        if (bodyLine.text.startsWith("returns ")) {
+          this.index += 1;
+          if (outputs.length > 0) throw new ParseError("Raw block currently supports one return value", bodyLine.line);
+          outputs.push(parseV2RawOutput(bodyLine.text.slice("returns ".length), bodyLine.line));
+          continue;
+        }
+        if (bodyLine.text.startsWith("clobbers ")) {
+          this.index += 1;
+          if (clobbers !== void 0) throw new ParseError("Raw block must declare clobbers only once", bodyLine.line);
+          clobbers = parseV2RawContractList(bodyLine.text.slice("clobbers ".length), bodyLine.line);
+          continue;
+        }
+        if (bodyLine.text.startsWith("preserves ")) {
+          this.index += 1;
+          if (preserves !== void 0) throw new ParseError("Raw block must declare preserves only once", bodyLine.line);
+          preserves = parseV2RawContractList(bodyLine.text.slice("preserves ".length), bodyLine.line);
+          continue;
+        }
+        if (bodyLine.text === "code {") {
+          this.index += 1;
+          if (code !== void 0) throw new ParseError("Raw block must contain only one code block", bodyLine.line);
+          code = this.parseRawCodeBlock(bodyLine.line);
+          continue;
+        }
+        throw new ParseError(`Unexpected raw line '${bodyLine.text}'`, bodyLine.line);
+      }
+      throw new ParseError("Unclosed raw block", line);
+    }
+    parseRawCodeBlock(line) {
+      const lines = [];
+      while (!this.done()) {
+        const rawLine = this.next();
+        if (rawLine.text === "}") return lines;
+        lines.push({ text: rawLine.text, line: rawLine.line });
+      }
+      throw new ParseError("Unclosed raw code block", line);
+    }
+    parseV2If(line, negated = false) {
+      const match = /^if\s+(.+)\s*\{$/u.exec(line.text);
+      if (!match) throw new ParseError("If must look like 'if predicate {'", line.line);
+      const statement = {
+        kind: "v2_if",
+        predicate: parseV2Predicate(match[1].trim(), line.line),
+        thenBody: this.parseV2StatementBlock(),
+        line: line.line
+      };
+      if (negated === true) statement.negated = true;
+      const elseBody = this.parseV2ElseBody();
+      if (elseBody !== void 0) statement.elseBody = elseBody;
+      return statement;
+    }
+    parseV2ElseBody() {
+      const next = this.peekOptional();
+      if (next?.text === "else {") {
+        this.index += 1;
+        return this.parseV2StatementBlock();
+      }
+      if (next?.text.startsWith("else if ") && next.text.endsWith("{")) {
+        this.index += 1;
+        return [this.parseV2If({ text: next.text.slice("else ".length), line: next.line })];
+      }
+      return void 0;
+    }
+    parseV2Match(text, line) {
+      const match = /^match\s+(.+?)\s*\{$/u.exec(text);
+      if (!match) throw new ParseError("Match must look like 'match expr {'", line);
+      const cases = [];
+      let otherwise;
+      while (!this.done()) {
+        const bodyLine = this.next();
+        if (bodyLine.text === "}") {
+          const statement = {
+            kind: "v2_match",
+            expr: match[1].trim(),
+            cases,
+            line
+          };
+          if (otherwise !== void 0) statement.otherwise = otherwise;
+          return statement;
+        }
+        const arrow = /^(.+?)\s*=>\s*(.+)$/u.exec(bodyLine.text);
+        if (!arrow) throw new ParseError("Match cases must look like 'value => action'", bodyLine.line);
+        const left = arrow[1].trim();
+        const action = parseV2InlineStatement(arrow[2].trim(), bodyLine.line);
+        if (left === "otherwise") {
+          otherwise = action;
+        } else {
+          cases.push({
+            values: left.split(",").map((part) => part.trim()).filter(Boolean),
+            action,
+            line: bodyLine.line
+          });
+        }
+      }
+      throw new ParseError("Unclosed match block", line);
+    }
+    done() {
+      return this.index >= this.lines.length;
+    }
+    peek() {
+      const line = this.lines[this.index];
+      if (!line) throw new ParseError("Unexpected end of file", this.lines.at(-1)?.line ?? 1);
+      return line;
+    }
+    peekOptional() {
+      return this.lines[this.index];
+    }
+    next() {
+      const line = this.peek();
+      this.index += 1;
+      return line;
+    }
+  };
+  function parseV2StateField(line) {
+    const match = /^([A-Za-z_][\w]*)\s*:\s*([A-Za-z_][\w]*)(?:\[\s*(-?\d+)\.\.(-?\d+)\s*\])?(?:\(([^)]*)\))?(.*)$/u.exec(line.text);
+    if (!match) {
+      throw new ParseError("State field must look like 'name: counter 0..9 = 0', 'name: packed[1..3] = 0', or 'name: cells(domain) = random()'", line.line);
+    }
+    const typeText = match[2].toLowerCase();
+    if (!["flag", "counter", "coord", "cells", "coord_list", "packed"].includes(typeText)) {
+      throw new ParseError(`Unknown state type '${match[2]}'`, line.line);
+    }
+    const bankMin = match[3] === void 0 ? void 0 : Number(match[3]);
+    const bankMax = match[4] === void 0 ? void 0 : Number(match[4]);
+    if (bankMin === void 0 !== (bankMax === void 0)) {
+      throw new ParseError("Indexed state range must look like '[1..3]'", line.line);
+    }
+    if (bankMin !== void 0 && (!Number.isInteger(bankMin) || !Number.isInteger(bankMax) || bankMax < bankMin)) {
+      throw new ParseError(`Invalid indexed state range '${match[3]}..${match[4]}'`, line.line);
+    }
+    if (bankMin !== void 0 && typeText === "coord_list") {
+      throw new ParseError("coord_list cannot be declared as an indexed state bank", line.line);
+    }
+    const args = match[5]?.trim();
+    const argList = args === void 0 ? [] : splitArgs(args);
+    if (typeText === "cells" && (!args || argList.length !== 1)) {
+      throw new ParseError("cells state must look like 'name: cells(domain) = random()'", line.line);
+    }
+    if (typeText === "coord" && (!args || argList.length !== 1)) {
+      throw new ParseError("coord state must look like 'name: coord(domain)'", line.line);
+    }
+    if (typeText === "coord_list" && (!args || argList.length !== 2)) {
+      throw new ParseError("coord_list state must look like 'name: coord_list(domain, count)'", line.line);
+    }
+    if (!["cells", "coord", "coord_list"].includes(typeText) && args !== void 0) {
+      throw new ParseError(`State type '${match[2]}' does not take parameters`, line.line);
+    }
+    const tail = match[6].trim();
+    const tailMatch = /^(?:(-?\d+)\.\.(-?\d+))?(?:\s*=\s*(.+))?$/u.exec(tail);
+    if (!tailMatch) {
+      throw new ParseError("State field must look like 'name: counter 0..9 = 0' or 'name: cells(domain) = random()'", line.line);
+    }
+    if (typeText === "counter" && tailMatch[1] === void 0) {
+      throw new ParseError("counter state must look like 'name: counter 0..9 = 0'", line.line);
+    }
+    if (typeText !== "counter" && tailMatch[1] !== void 0) {
+      throw new ParseError(`State type '${match[2]}' does not take a numeric range`, line.line);
+    }
+    const field = {
+      kind: "v2_state_field",
+      name: match[1],
+      type: typeText,
+      line: line.line
+    };
+    if (bankMin !== void 0 && bankMax !== void 0) {
+      field.bank = { name: field.name, min: bankMin, max: bankMax };
+    }
+    if (typeText === "cells" || typeText === "coord") {
+      field.domain = argList[0];
+    }
+    if (typeText === "coord_list") {
+      const count = Number(argList[1]);
+      if (!Number.isInteger(count) || count < 1) {
+        throw new ParseError(`coord_list count must be a positive integer, got '${argList[1]}'`, line.line);
+      }
+      field.domain = argList[0];
+      field.count = count;
+    }
+    if (tailMatch[1] !== void 0) {
+      field.min = Number(tailMatch[1]);
+      field.max = Number(tailMatch[2]);
+    }
+    if (tailMatch[3] !== void 0) field.initial = tailMatch[3].trim();
+    return field;
+  }
+  function bankFieldStateName(bank, member) {
+    return member === void 0 ? bank : `${bank}_${member}`;
+  }
+  function parseV2BoardDeclaration(line) {
+    const match = /^([A-Za-z_][\w]*)\s*:\s*board\(\s*(-?\d+)\.\.(-?\d+)\s*,\s*(-?\d+)\.\.(-?\d+)\s*\)$/u.exec(line.text);
+    if (!match) return void 0;
+    const xMin = Number(match[2]);
+    const xMax = Number(match[3]);
+    const yMin = Number(match[4]);
+    const yMax = Number(match[5]);
+    if (xMin > xMax || yMin > yMax) {
+      throw new ParseError("Board ranges must be ascending", line.line);
+    }
+    const width = xMax - xMin + 1;
+    const height = yMax - yMin + 1;
+    return {
+      kind: "v2_board",
+      name: match[1],
+      xMin,
+      xMax,
+      yMin,
+      yMax,
+      width,
+      height,
+      line: line.line
+    };
+  }
+  function parseV2CompactBoardDeclaration(line) {
+    const match = /^([A-Za-z_][\w]*)\s*:\s*board\(\s*([A-Za-z_][\w]*)\s*\)$/u.exec(line.text);
+    if (!match) return void 0;
+    const name = match[1];
+    const encoding = match[2];
+    if (!isKnownCompactBoardEncoding(encoding)) {
+      throw new ParseError(`Unknown board encoding '${encoding}'.`, line.line);
+    }
+    return {
+      kind: "v2_world",
+      name,
+      position: {
+        name,
+        encoding,
+        line: line.line
+      },
+      line: line.line
+    };
+  }
+  function isKnownCompactBoardEncoding(encoding) {
+    return [
+      "corridor_plan",
+      "decimal_player",
+      "floor_plan",
+      "packed_decimal_zero_run",
+      "pier_to_ship",
+      "row_scan"
+    ].includes(encoding);
+  }
+  function parseV2InlineStatement(text, line) {
+    const showCall = parseNamedCall(text, "show");
+    if (showCall !== void 0) return parseV2ShowCall(showCall.argsText, line);
+    const haltCall = parseNamedCall(text, "halt");
+    if (haltCall !== void 0) {
+      return { kind: "v2_stop", value: haltCall.argsText.trim() === "" ? "0" : haltCall.argsText.trim(), line };
+    }
+    const readAssignment = /^([A-Za-z_][\w]*)\s*=\s*read\s*\(\s*\)$/u.exec(text);
+    if (readAssignment) {
+      return { kind: "v2_read", target: readAssignment[1], line };
+    }
+    if (text.startsWith("show ")) {
+      throw new ParseError("Show must look like 'show(...)'", line);
+    }
+    const read = /^read\s+([A-Za-z_][\w]*)$/u.exec(text);
+    if (read) {
+      throw new ParseError("Read input with 'name = read()'", line);
+    }
+    if (text.startsWith("read ")) {
+      throw new ParseError("Read input with 'name = read()'", line);
+    }
+    if (text.startsWith("stop ")) {
+      throw new ParseError("Use 'halt(...)' instead of stop", line);
+    }
+    if (text === "return" || text.startsWith("return ")) {
+      const expr = text.slice("return".length).trim();
+      if (expr === "") {
+        throw new ParseError("'return' must return a value, e.g. 'return x + 1'", line);
+      }
+      return { kind: "v2_return", expr, line };
+    }
+    const step = /^([A-Za-z_][\w]*)\s*(\+\+|--)$/u.exec(text);
+    if (step) {
+      return {
+        kind: "v2_update",
+        target: step[1],
+        op: step[2] === "++" ? "+=" : "-=",
+        expr: "1",
+        line
+      };
+    }
+    const update = /^(.+?)\s*(\+=|-=)\s*(.+)$/u.exec(text);
+    if (update) {
+      const target = update[1].trim();
+      validateAssignmentTargetText(target, line);
+      return {
+        kind: "v2_update",
+        target,
+        op: update[2],
+        expr: update[3].trim(),
+        line
+      };
+    }
+    const assignment = /^(.+?)\s*(?<![!<>=])=(?!=)\s*(.+)$/u.exec(text);
+    if (assignment) {
+      const target = assignment[1].trim();
+      validateAssignmentTargetText(target, line);
+      return {
+        kind: "v2_assign",
+        target,
+        expr: assignment[2].trim(),
+        line
+      };
+    }
+    const call = parseCall(text);
+    if (call !== void 0) {
+      return {
+        kind: "v2_invoke",
+        name: call.name,
+        args: splitArgs(call.argsText),
+        line
+      };
+    }
+    const command = /^([A-Za-z_][\w]*)(?:\s+(.+))?$/u.exec(text);
+    if (command) {
+      throw new ParseError("Function calls must look like 'name(...)'", line);
+    }
+    throw new ParseError(`Unexpected statement '${text}'`, line);
+  }
+  function validateAssignmentTargetText(target, line) {
+    if (/^[A-Za-z_][\w]*$/u.test(target)) return;
+    const expr = parseExpression(target, line);
+    if (expr.kind === "indexed") return;
+    throw new ParseError(`Invalid assignment target '${target}'`, line);
+  }
+  function parseV2ShowCall(argsText, line) {
+    const trimmed = argsText.trim();
+    if (trimmed.length === 0) {
+      return { kind: "v2_show", items: parseDisplayItemList(trimmed, line), line };
+    }
+    if (isNumericLiteralText(trimmed)) {
+      return { kind: "v2_show", target: trimmed, line };
+    }
+    const items = parseDisplayItemList(trimmed, line);
+    const literal = displayLiteralText(items);
+    const numericLiteral = literal === void 0 ? void 0 : canonicalNumericDisplayLiteralText(literal);
+    if (numericLiteral !== void 0) {
+      return { kind: "v2_show", target: numericLiteral, line };
+    }
+    return { kind: "v2_show", items, line };
+  }
+  function parseV2Predicate(text, line) {
+    const trimmed = text.trim();
+    const contains = /^(.+?)\s+in\s+([A-Za-z_][\w]*)$/u.exec(trimmed);
+    if (contains) {
+      return {
+        kind: "v2_contains",
+        collection: contains[2].trim(),
+        item: contains[1].trim()
+      };
+    }
+    const compare = /^(.+?)\s*(==|!=|<=|>=|<|>)\s*(.+)$/u.exec(trimmed);
+    if (compare) {
+      return {
+        kind: "v2_compare",
+        left: compare[1].trim(),
+        op: compare[2],
+        right: compare[3].trim()
+      };
+    }
+    return {
+      kind: "v2_compare",
+      left: trimmed,
+      op: "!=",
+      right: "0"
+    };
+  }
+  function parseV2RawInputs(text, line) {
+    return splitArgs(text).map((part) => {
+      const match = /^(X|Y|Z|T)\s*=\s*(.+)$/iu.exec(part);
+      if (!match) throw new ParseError("Raw input must look like 'takes X = expr'", line);
+      return {
+        slot: match[1].toUpperCase(),
+        expr: match[2].trim(),
+        line
+      };
+    });
+  }
+  function parseV2RawOutput(text, line) {
+    const explicit = /^X\s*->\s*([A-Za-z_][\w]*)$/iu.exec(text.trim());
+    const shorthand = /^([A-Za-z_][\w]*)$/u.exec(text.trim());
+    const target = explicit?.[1] ?? shorthand?.[1];
+    if (target === void 0) throw new ParseError("Raw output must look like 'returns X -> name'", line);
+    return { slot: "X", target, line };
+  }
+  function parseV2RawContractList(text, line) {
+    const values = parseIdentifierList(text).map((item) => normalizeV2RawContractItem(item, line));
+    if (values.length === 0) throw new ParseError("Raw contract list must not be empty", line);
+    if (values.includes("none") && values.length > 1) {
+      throw new ParseError("Raw contract item 'none' cannot be combined with other items", line);
+    }
+    return [...new Set(values)];
+  }
+  function normalizeV2RawContractItem(text, line) {
+    const trimmed = text.trim();
+    if (/^(none|state|stack|display|flags|memory)$/iu.test(trimmed)) return trimmed.toLowerCase();
+    if (/^(X|Y|Z|T|X1)$/iu.test(trimmed)) return trimmed.toUpperCase();
+    const register = /^R?([0-9a-eавсде])$/iu.exec(trimmed);
+    if (register) return `R${register[1].toLowerCase()}`;
+    throw new ParseError(`Unknown raw contract item '${text}'`, line);
+  }
+  function validateV2RawInputs(inputs, line) {
+    const slots = new Set(inputs.map((input) => input.slot));
+    if (slots.has("T") && (!slots.has("Z") || !slots.has("Y") || !slots.has("X"))) {
+      throw new ParseError("Raw input T requires Z, Y, and X inputs", line);
+    }
+    if (slots.has("Z") && (!slots.has("Y") || !slots.has("X"))) {
+      throw new ParseError("Raw input Z requires Y and X inputs", line);
+    }
+    if (slots.has("Y") && !slots.has("X")) {
+      throw new ParseError("Raw input Y requires an X input", line);
+    }
+  }
+  function splitArgs(text) {
+    const args = [];
+    let start = 0;
+    let depth = 0;
+    let quote = false;
+    let escaped = false;
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index];
+      if (quote) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === "\\") {
+          escaped = true;
+        } else if (char === '"') {
+          quote = false;
+        }
+        continue;
+      }
+      if (char === '"') {
+        quote = true;
+        continue;
+      }
+      if (char === "(") depth += 1;
+      if (char === ")") depth = Math.max(0, depth - 1);
+      if (char === "," && depth === 0) {
+        args.push(text.slice(start, index).trim());
+        start = index + 1;
+      }
+    }
+    args.push(text.slice(start).trim());
+    return args.filter(Boolean);
+  }
+  function parseNamedCall(text, name) {
+    const call = parseCall(text);
+    return call?.name === name ? call : void 0;
+  }
+  function parseCall(text) {
+    const header = /^([A-Za-z_][\w]*)\s*\(/u.exec(text);
+    if (!header) return void 0;
+    const open = header[0].lastIndexOf("(");
+    let depth = 0;
+    let quote = false;
+    let escaped = false;
+    for (let index = open; index < text.length; index += 1) {
+      const char = text[index];
+      if (quote) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === "\\") {
+          escaped = true;
+        } else if (char === '"') {
+          quote = false;
+        }
+        continue;
+      }
+      if (char === '"') {
+        quote = true;
+        continue;
+      }
+      if (char === "(") {
+        depth += 1;
+        continue;
+      }
+      if (char !== ")") continue;
+      depth -= 1;
+      if (depth === 0) {
+        if (text.slice(index + 1).trim().length > 0) return void 0;
+        return { name: header[1], argsText: text.slice(open + 1, index) };
+      }
+      if (depth < 0) return void 0;
+    }
+    return void 0;
+  }
+  function lowerV2Program(v2, options = {}) {
+    const decimalSeries = tryLowerV2DecimalFactorialSeries(v2);
+    if (decimalSeries !== void 0) return decimalSeries;
+    const ruleParams = collectV2RuleParams(v2);
+    const rules = collectV2Rules(v2);
+    const functionRules = collectV2FunctionRules(v2);
+    const specializedRules = selectV2RuleSpecializations(v2, rules);
+    const stateDomains = new Map(
+      v2.state.filter((field) => field.domain !== void 0).map((field) => [field.name, field.domain])
+    );
+    const coordLists = collectV2CoordLists(v2);
+    const cellMapNames = collectV2CellMapNames(v2, stateDomains);
+    validateV2Domains(v2);
+    validateV2References(v2, { ruleParams });
+    validateV2Functions(v2, functionRules);
+    const constContext = buildV2ConstContext(v2);
+    const context = {
+      signedAbsMatchPairs: options.signedAbsMatchPairs === true,
+      consts: constContext.bindings,
+      ruleParams,
+      rules,
+      functionRules,
+      specializedRules,
+      stateTypes: new Map(v2.state.map((field) => [field.name, field.type])),
+      stateDomains,
+      stateRanges: collectV2StateRanges(v2),
+      coordLists,
+      cellMapNames,
+      boards: new Map(v2.boards.map((board) => [board.name, board])),
+      worlds: new Map(v2.worlds.map((world) => [world.name, world]))
+    };
+    rewriteV2DisplayExpressions(v2, context);
+    const inlineScreens = collectV2InlineScreens(v2);
+    const banks = lowerV2StateBanks(v2);
+    return {
+      domains: lowerV2Domains(v2),
+      ...banks === void 0 ? {} : { banks },
+      states: lowerV2State(v2, specializedRules, cellMapNames, context),
+      displays: inlineScreens.map(lowerV2Screen),
+      entries: [lowerV2Entry(v2, context)],
+      procs: [
+        ...v2.rules.filter((rule) => !specializedRules.has(rule.name)).map((rule) => lowerV2Rule(rule, context))
+      ]
+    };
+  }
+  function rewriteV2DisplayExpressions(_v2, _context) {
+  }
+  function tryLowerV2DecimalFactorialSeries(v2) {
+    if (v2.body.length !== 5 || v2.consts.length > 0 || v2.state.length > 0 || v2.boards.length > 0 || v2.worlds.length > 0 || v2.rules.length > 0) {
+      return void 0;
+    }
+    const [precision, counterInit, valueInit, loop, stop] = v2.body;
+    if (precision?.kind !== "v2_assign" || precision.target !== "digits") return void 0;
+    const digits = Number(normalizedV2Text(precision.expr));
+    if (digits !== 94) return void 0;
+    if (counterInit?.kind !== "v2_assign" || normalizedV2Text(counterInit.expr) !== "65") {
+      return void 0;
+    }
+    if (valueInit?.kind !== "v2_assign" || normalizedV2Text(valueInit.expr) !== "1") {
+      return void 0;
+    }
+    const counterName = counterInit.target;
+    const valueName = valueInit.target;
+    if (loop?.kind !== "v2_while" || loop.predicate.kind !== "v2_compare" || normalizedV2Text(loop.predicate.left) !== counterName || loop.predicate.op !== ">=" || normalizedV2Text(loop.predicate.right) !== "1" || loop.body.length !== 2 || stop?.kind !== "v2_stop" || normalizedV2Text(stop.value) !== valueName) {
+      return void 0;
+    }
+    const [step, decrement] = loop.body;
+    if (step?.kind !== "v2_assign" || step.target !== valueName || normalizedV2Text(step.expr) !== `1+${valueName}/${counterName}` || decrement?.kind !== "v2_update" || decrement.target !== counterName || decrement.op !== "-=" || normalizedV2Text(decrement.expr) !== "1") {
+      return void 0;
+    }
+    return {
+      domains: [],
+      states: [],
+      displays: [],
+      entries: [{
+        kind: "entry",
+        name: "main",
+        body: [{
+          kind: "decimal_series",
+          digits,
+          counterStart: 65,
+          line: v2.line
+        }],
+        line: v2.line
+      }],
+      procs: []
+    };
+  }
+  function normalizedV2Text(text) {
+    return text.replace(/\s+/gu, "");
+  }
+  function collectV2StateRanges(v2) {
+    return new Map(v2.state.map((field) => {
+      const range3 = {};
+      if (field.min !== void 0) range3.min = field.min;
+      if (field.max !== void 0) range3.max = field.max;
+      return [field.name, range3];
+    }));
+  }
+  function collectV2CoordLists(v2) {
+    const lists = /* @__PURE__ */ new Map();
+    for (const field of v2.state) {
+      if (field.type !== "coord_list") continue;
+      if (field.domain === void 0 || field.count === void 0) {
+        throw new ParseError("coord_list state must declare a domain and count", field.line);
+      }
+      lists.set(field.name, {
+        domain: field.domain,
+        count: field.count,
+        items: range2(0, field.count - 1).map((index) => coordListItemName(field.name, index))
+      });
+    }
+    return lists;
+  }
+  function collectV2RuleParams(v2) {
+    const ruleParams = /* @__PURE__ */ new Map();
+    for (const rule of v2.rules) {
+      if (ruleParams.has(rule.name)) throw new ParseError(`Duplicate function '${rule.name}'`, rule.line);
+      ruleParams.set(rule.name, rule.params);
+    }
+    return ruleParams;
+  }
+  function collectV2Rules(v2) {
+    return new Map(v2.rules.map((rule) => [rule.name, rule]));
+  }
+  function collectV2FunctionRules(v2) {
+    const functions = /* @__PURE__ */ new Set();
+    for (const rule of v2.rules) {
+      if (v2StatementsContainReturn(rule.body)) functions.add(rule.name);
+    }
+    return functions;
+  }
+  function v2StatementsContainReturn(statements) {
+    return statements.some(v2StatementContainsReturn);
+  }
+  function v2StatementContainsReturn(statement) {
+    switch (statement.kind) {
+      case "v2_return":
+        return true;
+      case "v2_if":
+        return v2StatementsContainReturn(statement.thenBody) || statement.elseBody !== void 0 && v2StatementsContainReturn(statement.elseBody);
+      case "v2_while":
+      case "v2_loop":
+        return v2StatementsContainReturn(statement.body);
+      case "v2_match":
+        return statement.cases.some((matchCase) => v2StatementContainsReturn(matchCase.action)) || statement.otherwise !== void 0 && v2StatementContainsReturn(statement.otherwise);
+      default:
+        return false;
+    }
+  }
+  function v2StatementsAlwaysReturn(statements) {
+    const last = statements.at(-1);
+    if (last === void 0) return false;
+    return v2StatementAlwaysReturns(last);
+  }
+  function v2StatementAlwaysReturns(statement) {
+    switch (statement.kind) {
+      case "v2_return":
+      case "v2_stop":
+        return true;
+      case "v2_if":
+        return statement.elseBody !== void 0 && v2StatementsAlwaysReturn(statement.thenBody) && v2StatementsAlwaysReturn(statement.elseBody);
+      case "v2_match":
+        return statement.otherwise !== void 0 && statement.cases.every((matchCase) => v2StatementAlwaysReturns(matchCase.action)) && v2StatementAlwaysReturns(statement.otherwise);
+      default:
+        return false;
+    }
+  }
+  function validateV2Functions(v2, functionRules) {
+    if (v2StatementsContainReturn(v2.body)) {
+      throw new ParseError("'return' is only allowed inside a function", v2.line);
+    }
+    for (const rule of v2.rules) {
+      if (!functionRules.has(rule.name)) continue;
+      if (!v2StatementsAlwaysReturn(rule.body)) {
+        throw new ParseError(
+          `Function '${rule.name}' must return a value on every path (end each branch with 'return' or 'halt')`,
+          rule.line
+        );
+      }
+    }
+  }
+  function v2StatementExprTexts(statement) {
+    switch (statement.kind) {
+      case "v2_assign":
+      case "v2_update":
+        return [statement.expr];
+      case "v2_return":
+        return [statement.expr];
+      case "v2_stop":
+        return [statement.value];
+      case "v2_invoke":
+        return [...statement.args];
+      case "v2_show":
+      case "v2_read":
+        return [];
+      case "v2_if":
+        return [
+          ...v2PredicateExprTexts(statement.predicate),
+          ...statement.thenBody.flatMap(v2StatementExprTexts),
+          ...statement.elseBody ? statement.elseBody.flatMap(v2StatementExprTexts) : []
+        ];
+      case "v2_while":
+        return [...v2PredicateExprTexts(statement.predicate), ...statement.body.flatMap(v2StatementExprTexts)];
+      case "v2_loop":
+        return statement.body.flatMap(v2StatementExprTexts);
+      case "v2_match":
+        return [
+          statement.expr,
+          ...statement.cases.flatMap((matchCase) => [...matchCase.values, ...v2StatementExprTexts(matchCase.action)]),
+          ...statement.otherwise ? v2StatementExprTexts(statement.otherwise) : []
+        ];
+      case "v2_raw":
+        return statement.inputs.map((input) => input.expr);
+      default:
+        return [];
+    }
+  }
+  function v2PredicateExprTexts(predicate) {
+    if (predicate.kind === "v2_contains") return [predicate.collection, predicate.item];
+    return [predicate.left, predicate.right];
+  }
+  function selectV2RuleSpecializations(v2, rules) {
+    const invocations = collectV2Invocations(v2);
+    const selected = /* @__PURE__ */ new Set();
+    for (const rule of v2.rules) {
+      if (rule.params.length === 0) continue;
+      const indexedConstantSpecialization = ruleUsesIndexedParam(rule);
+      if (!indexedConstantSpecialization && !isSpecializableRuleBody(rule)) continue;
+      const sites = invocations.filter((site) => site.statement.name === rule.name);
+      if (sites.length < 2) continue;
+      if (sites.some((site) => site.currentRule === rule.name)) continue;
+      if (!sites.every((site) => site.statement.args.length === rule.params.length && site.statement.args.every(isSpecializationArg))) {
+        continue;
+      }
+      if (indexedConstantSpecialization && rules.has(rule.name)) {
+        selected.add(rule.name);
+        continue;
+      }
+      const genericCost = estimateV2Statements(rule.body) + 1 + sites.reduce((sum, site) => sum + estimateV2InvokeSetupCost(site.statement) + 2, 0);
+      const inlineCost = sites.reduce((sum, site) => {
+        const replacements = invokeReplacements(rule, site.statement.args);
+        return sum + estimateV2Statements(rule.body, replacements);
+      }, 0);
+      if (inlineCost < genericCost && rules.has(rule.name)) selected.add(rule.name);
+    }
+    return selected;
+  }
+  function ruleUsesIndexedParam(rule) {
+    return rule.params.some((param) => {
+      const pattern = new RegExp(`\\[\\s*${escapeRegExp(param)}\\s*\\]`, "u");
+      return v2StatementTexts(rule.body).some((text) => pattern.test(text));
+    });
+  }
+  function v2StatementTexts(statements) {
+    const texts = [];
+    const visit = (items) => {
+      for (const statement of items) {
+        switch (statement.kind) {
+          case "v2_assign":
+          case "v2_update":
+            texts.push(statement.target, statement.expr);
+            break;
+          case "v2_if":
+            texts.push(...v2PredicateExprTexts(statement.predicate));
+            visit(statement.thenBody);
+            if (statement.elseBody) visit(statement.elseBody);
+            break;
+          case "v2_while":
+            texts.push(...v2PredicateExprTexts(statement.predicate));
+            visit(statement.body);
+            break;
+          case "v2_loop":
+            visit(statement.body);
+            break;
+          case "v2_match":
+            texts.push(statement.expr, ...statement.cases.flatMap((matchCase) => matchCase.values));
+            for (const matchCase of statement.cases) visit([matchCase.action]);
+            if (statement.otherwise) visit([statement.otherwise]);
+            break;
+          case "v2_invoke":
+            texts.push(...statement.args);
+            break;
+          case "v2_show":
+            if (statement.target !== void 0) texts.push(statement.target);
+            for (const item of statement.items ?? []) {
+              if (item.kind === "source") texts.push(item.name);
+            }
+            break;
+          case "v2_stop":
+            texts.push(statement.value);
+            break;
+          case "v2_return":
+            texts.push(statement.expr);
+            break;
+          case "v2_raw":
+            for (const input of statement.inputs ?? []) texts.push(input.expr);
+            break;
+          default:
+            break;
+        }
+      }
+    };
+    visit(statements);
+    return texts;
+  }
+  function collectV2Invocations(v2) {
+    const sites = [];
+    const visit = (statements, currentRule) => {
+      for (const statement of statements) {
+        if (statement.kind === "v2_invoke") {
+          const site = { statement };
+          if (currentRule !== void 0) site.currentRule = currentRule;
+          sites.push(site);
+        }
+        if (statement.kind === "v2_if") {
+          visit(statement.thenBody, currentRule);
+          if (statement.elseBody) visit(statement.elseBody, currentRule);
+        }
+        if (statement.kind === "v2_while") {
+          visit(statement.body, currentRule);
+        }
+        if (statement.kind === "v2_loop") {
+          visit(statement.body, currentRule);
+        }
+        if (statement.kind === "v2_match") {
+          for (const matchCase of statement.cases) visit([matchCase.action], currentRule);
+          if (statement.otherwise) visit([statement.otherwise], currentRule);
+        }
+      }
+    };
+    if (v2.body.length > 0) visit(v2.body);
+    for (const rule of v2.rules) visit(rule.body, rule.name);
+    return sites;
+  }
+  var PARAMETRIC_SIBLING_RULE_PREFIX = "__param_sibling_";
+  function synthesizeV2ParametricSiblingRules(v2) {
+    const rules = collectV2Rules(v2);
+    const callCounts = /* @__PURE__ */ new Map();
+    for (const site of collectV2Invocations(v2)) {
+      callCounts.set(site.statement.name, (callCounts.get(site.statement.name) ?? 0) + 1);
+    }
+    const consumed = /* @__PURE__ */ new Set();
+    const rewriteStatements = (statements) => statements.map((statement) => rewriteStatement(statement));
+    const rewriteStatement = (statement) => {
+      switch (statement.kind) {
+        case "v2_if": {
+          const rewritten = {
+            ...statement,
+            thenBody: rewriteStatements(statement.thenBody)
+          };
+          if (statement.elseBody !== void 0) rewritten.elseBody = rewriteStatements(statement.elseBody);
+          return rewritten;
+        }
+        case "v2_while":
+          return { ...statement, body: rewriteStatements(statement.body) };
+        case "v2_loop":
+          return { ...statement, body: rewriteStatements(statement.body) };
+        case "v2_match": {
+          const rewritten = {
+            ...statement,
+            cases: statement.cases.map((matchCase) => ({
+              ...matchCase,
+              action: rewriteStatement(matchCase.action)
+            }))
+          };
+          if (statement.otherwise !== void 0) rewritten.otherwise = rewriteStatement(statement.otherwise);
+          rewritten.cases = synthesizeV2ParametricSiblingMatchCases(v2, rewritten.cases, rules, callCounts, consumed);
+          return rewritten;
+        }
+        default:
+          return statement;
+      }
+    };
+    v2.body = rewriteStatements(v2.body);
+    for (const rule of [...v2.rules]) {
+      if (consumed.has(rule.name) || rule.name.startsWith(PARAMETRIC_SIBLING_RULE_PREFIX)) continue;
+      rule.body = rewriteStatements(rule.body);
+    }
+    if (consumed.size > 0) v2.rules = v2.rules.filter((rule) => !consumed.has(rule.name));
+  }
+  function synthesizeV2ParametricSiblingMatchCases(v2, cases, rules, callCounts, consumed) {
+    const usedCases = /* @__PURE__ */ new Set();
+    const rewritten = [...cases];
+    for (let leftIndex = 0; leftIndex < rewritten.length; leftIndex += 1) {
+      if (usedCases.has(leftIndex)) continue;
+      const leftInvoke = v2SingleInvokeAction(rewritten[leftIndex].action);
+      if (leftInvoke === void 0 || consumed.has(leftInvoke.name)) continue;
+      const leftRule = singleUseV2SiblingRule(rules, callCounts, leftInvoke.name);
+      if (leftRule === void 0) continue;
+      for (let rightIndex = leftIndex + 1; rightIndex < rewritten.length; rightIndex += 1) {
+        if (usedCases.has(rightIndex)) continue;
+        const rightInvoke = v2SingleInvokeAction(rewritten[rightIndex].action);
+        if (rightInvoke === void 0 || consumed.has(rightInvoke.name)) continue;
+        const rightRule = singleUseV2SiblingRule(rules, callCounts, rightInvoke.name);
+        if (rightRule === void 0) continue;
+        const param = freshV2ParametricSiblingName(v2, "delta");
+        const plan = v2ParametricSiblingPlan(leftRule, rightRule, param);
+        if (plan === void 0) continue;
+        const helperName = freshV2ParametricSiblingName(v2, "proc");
+        insertV2ParametricSiblingRule(v2, leftRule, rightRule, {
+          kind: "v2_rule",
+          name: helperName,
+          params: [param],
+          body: plan.body,
+          line: leftRule.line
+        });
+        rewritten[leftIndex] = {
+          ...rewritten[leftIndex],
+          action: {
+            kind: "v2_invoke",
+            name: helperName,
+            args: [formatV2Number(plan.leftDelta)],
+            line: leftInvoke.line
+          }
+        };
+        rewritten[rightIndex] = {
+          ...rewritten[rightIndex],
+          action: {
+            kind: "v2_invoke",
+            name: helperName,
+            args: [formatV2Number(plan.rightDelta)],
+            line: rightInvoke.line
+          }
+        };
+        consumed.add(leftRule.name);
+        consumed.add(rightRule.name);
+        usedCases.add(leftIndex);
+        usedCases.add(rightIndex);
+        break;
+      }
+    }
+    return rewritten;
+  }
+  function insertV2ParametricSiblingRule(v2, left, right, helper) {
+    const leftIndex = v2.rules.indexOf(left);
+    const rightIndex = v2.rules.indexOf(right);
+    const indexes = [leftIndex, rightIndex].filter((index) => index >= 0);
+    const insertAt = indexes.length === 0 ? v2.rules.length : Math.min(...indexes);
+    v2.rules.splice(insertAt, 0, helper);
+  }
+  function v2SingleInvokeAction(statement) {
+    return statement.kind === "v2_invoke" && statement.args.length === 0 ? statement : void 0;
+  }
+  function singleUseV2SiblingRule(rules, callCounts, name) {
+    const rule = rules.get(name);
+    if (rule === void 0 || rule.params.length > 0) return void 0;
+    if ((callCounts.get(name) ?? 0) !== 1) return void 0;
+    if (v2StatementsContainReturn(rule.body) || v2StatementsContainRaw(rule.body)) return void 0;
+    return rule;
+  }
+  function v2ParametricSiblingPlan(left, right, param) {
+    if (left.body.length !== right.body.length || left.body.length === 0) return void 0;
+    let leftDelta;
+    let rightDelta;
+    let parameterized = 0;
+    const body = [];
+    for (let index = 0; index < left.body.length; index += 1) {
+      const leftStatement = left.body[index];
+      const rightStatement = right.body[index];
+      const leftUpdate = v2AdditiveSelfUpdate(leftStatement);
+      const rightUpdate = v2AdditiveSelfUpdate(rightStatement);
+      if (leftUpdate !== void 0 && rightUpdate !== void 0 && leftUpdate.target === rightUpdate.target && leftUpdate.delta !== rightUpdate.delta) {
+        if (leftDelta === void 0) {
+          leftDelta = leftUpdate.delta;
+          rightDelta = rightUpdate.delta;
+        } else if (leftDelta !== leftUpdate.delta || rightDelta !== rightUpdate.delta) {
+          return void 0;
+        }
+        body.push({
+          kind: "v2_update",
+          target: leftUpdate.target,
+          op: "+=",
+          expr: param,
+          line: leftStatement.line
+        });
+        parameterized += 1;
+        continue;
+      }
+      if (!v2StatementsComparable(leftStatement, rightStatement)) return void 0;
+      body.push(structuredClone(leftStatement));
+    }
+    const first = body[0];
+    if (leftDelta === void 0 || rightDelta === void 0 || parameterized === 0 || first?.kind !== "v2_update" || first.expr !== param) {
+      return void 0;
+    }
+    return { body, leftDelta, rightDelta };
+  }
+  function v2AdditiveSelfUpdate(statement) {
+    if (statement.kind === "v2_update") {
+      if (!isSimpleV2Identifier(statement.target)) return void 0;
+      const value = numericV2LiteralValue(statement.expr);
+      if (value === void 0) return void 0;
+      return { target: statement.target, delta: statement.op === "+=" ? value : -value };
+    }
+    if (statement.kind !== "v2_assign" || !isSimpleV2Identifier(statement.target)) return void 0;
+    const selfDelta = v2SelfAssignmentDelta(statement.target, statement.expr);
+    return selfDelta === void 0 ? void 0 : { target: statement.target, delta: selfDelta };
+  }
+  function v2SelfAssignmentDelta(target, expr) {
+    const escaped = escapeRegExp(target);
+    const numeric = "(-?\\d+(?:\\.\\d+)?(?:e[+-]?\\d+)?)";
+    const targetPlus = new RegExp(`^${escaped}\\s*\\+\\s*${numeric}$`, "iu").exec(expr.trim());
+    if (targetPlus) return numericV2LiteralValue(targetPlus[1]);
+    const plusTarget = new RegExp(`^${numeric}\\s*\\+\\s*${escaped}$`, "iu").exec(expr.trim());
+    if (plusTarget) return numericV2LiteralValue(plusTarget[1]);
+    const targetMinus = new RegExp(`^${escaped}\\s*-\\s*${numeric}$`, "iu").exec(expr.trim());
+    if (targetMinus) {
+      const value = numericV2LiteralValue(targetMinus[1]);
+      return value === void 0 ? void 0 : -value;
+    }
+    return void 0;
+  }
+  function numericV2LiteralValue(text) {
+    if (!isNumericLiteralText(text)) return void 0;
+    const value = Number(text.trim());
+    return Number.isFinite(value) ? value : void 0;
+  }
+  function isSimpleV2Identifier(text) {
+    return /^[A-Za-z_][\w]*$/u.test(text);
+  }
+  function formatV2Number(value) {
+    return Object.is(value, -0) ? "0" : String(value);
+  }
+  function v2StatementsContainRaw(statements) {
+    return statements.some((statement) => {
+      switch (statement.kind) {
+        case "v2_raw":
+          return true;
+        case "v2_if":
+          return v2StatementsContainRaw(statement.thenBody) || statement.elseBody !== void 0 && v2StatementsContainRaw(statement.elseBody);
+        case "v2_while":
+        case "v2_loop":
+          return v2StatementsContainRaw(statement.body);
+        case "v2_match":
+          return statement.cases.some((matchCase) => v2StatementsContainRaw([matchCase.action])) || statement.otherwise !== void 0 && v2StatementsContainRaw([statement.otherwise]);
+        default:
+          return false;
+      }
+    });
+  }
+  function v2StatementsComparable(left, right) {
+    return JSON.stringify(v2ComparableValue(left)) === JSON.stringify(v2ComparableValue(right));
+  }
+  function v2ComparableValue(value) {
+    if (Array.isArray(value)) return value.map(v2ComparableValue);
+    if (value === null || typeof value !== "object") return value;
+    const result = {};
+    const record = value;
+    for (const key of Object.keys(record).sort()) {
+      if (key === "line") continue;
+      const field = record[key];
+      if (field !== void 0) result[key] = v2ComparableValue(field);
+    }
+    return result;
+  }
+  function freshV2ParametricSiblingName(v2, role) {
+    const used = collectV2UsedNames(v2);
+    for (let index = 0; ; index += 1) {
+      const candidate = `${PARAMETRIC_SIBLING_RULE_PREFIX}${role}_${index}`;
+      if (!used.has(candidate)) return candidate;
+    }
+  }
+  function collectV2UsedNames(v2) {
+    const used = /* @__PURE__ */ new Set([v2.name]);
+    const addText = (text) => {
+      const pattern = /\b[A-Za-z_][\w]*\b/gu;
+      let match;
+      while ((match = pattern.exec(text)) !== null) used.add(match[0]);
+    };
+    const visit = (statements) => {
+      for (const statement of statements) {
+        for (const text of v2StatementExprTexts(statement)) addText(text);
+        switch (statement.kind) {
+          case "v2_assign":
+          case "v2_update":
+            addText(statement.target);
+            break;
+          case "v2_read":
+            used.add(statement.target);
+            break;
+          case "v2_show":
+            if (statement.target !== void 0) addText(statement.target);
+            if (statement.inlineName !== void 0) used.add(statement.inlineName);
+            for (const item of statement.items ?? []) {
+              if (item.kind === "source") used.add(item.name);
+            }
+            break;
+          case "v2_if":
+            visit(statement.thenBody);
+            if (statement.elseBody !== void 0) visit(statement.elseBody);
+            break;
+          case "v2_while":
+          case "v2_loop":
+            visit(statement.body);
+            break;
+          case "v2_match":
+            for (const matchCase of statement.cases) visit([matchCase.action]);
+            if (statement.otherwise !== void 0) visit([statement.otherwise]);
+            break;
+          case "v2_invoke":
+            used.add(statement.name);
+            break;
+          case "v2_raw":
+            for (const output of statement.outputs) used.add(output.target);
+            for (const clobber of statement.clobbers) used.add(clobber);
+            for (const preserve of statement.preserves) used.add(preserve);
+            break;
+          default:
+            break;
+        }
+      }
+    };
+    for (const field of v2.state) used.add(field.name);
+    for (const board of v2.boards) used.add(board.name);
+    for (const world of v2.worlds) {
+      used.add(world.name);
+      if (world.position !== void 0) used.add(world.position.name);
+    }
+    visit(v2.body);
+    for (const rule of v2.rules) {
+      used.add(rule.name);
+      for (const param of rule.params) used.add(param);
+      visit(rule.body);
+    }
+    return used;
+  }
+  function isSpecializableRuleBody(rule) {
+    const params = new Set(rule.params);
+    return rule.body.length > 0 && rule.body.every((statement) => {
+      if (statement.kind !== "v2_assign" && statement.kind !== "v2_update") return false;
+      return !params.has(statement.target);
+    });
+  }
+  function isSpecializationArg(arg) {
+    return isNumericLiteralText(arg.trim());
+  }
+  function invokeReplacements(rule, args) {
+    const replacements = /* @__PURE__ */ new Map();
+    for (let index = 0; index < rule.params.length; index += 1) {
+      replacements.set(rule.params[index], args[index].trim());
+    }
+    return replacements;
+  }
+  function estimateV2InvokeSetupCost(statement) {
+    return statement.args.reduce((sum, arg) => sum + estimateV2ExpressionText(arg) + 1, 0);
+  }
+  function estimateV2Statements(statements, replacements = /* @__PURE__ */ new Map()) {
+    return statements.reduce((sum, statement) => sum + estimateV2Statement(statement, replacements), 0);
+  }
+  function estimateV2Statement(statement, replacements) {
+    switch (statement.kind) {
+      case "v2_assign":
+        return estimateV2ExpressionText(substituteV2Text(statement.expr, replacements)) + 1;
+      case "v2_update":
+        return estimateV2ExpressionText(statement.target) + estimateV2ExpressionText(substituteV2Text(statement.expr, replacements)) + 2;
+      default:
+        return 99;
+    }
+  }
+  function estimateV2ExpressionText(text) {
+    const trimmed = text.trim();
+    if (isNumericLiteralText(trimmed) || /^[A-Za-z_][\w]*$/u.test(trimmed)) return 1;
+    const operators = trimmed.match(/[+\-*/]/gu)?.length ?? 0;
+    const calls = trimmed.match(/[A-Za-z_][\w]*\s*\(/gu)?.length ?? 0;
+    return 1 + operators + calls + Math.ceil(trimmed.length / 12);
+  }
+  function collectV2InlineScreens(v2) {
+    const screens = [];
+    const screensByItems = /* @__PURE__ */ new Map();
+    let next = 0;
+    const visit = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "v2_show" && statement.items !== void 0) {
+          const key = displayItemKey(statement.items);
+          const existing = screensByItems.get(key);
+          if (existing !== void 0) {
+            statement.inlineName = existing.name;
+          } else {
+            const name = `__inline_show_${statement.line}_${next}`;
+            next += 1;
+            statement.inlineName = name;
+            const screen = {
+              kind: "v2_screen",
+              name,
+              sources: displayItemSources(statement.items),
+              items: statement.items,
+              line: statement.line
+            };
+            screensByItems.set(key, screen);
+            screens.push(screen);
+          }
+        }
+        if (statement.kind === "v2_if") {
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "v2_while") visit(statement.body);
+        if (statement.kind === "v2_loop") visit(statement.body);
+        if (statement.kind === "v2_match") {
+          for (const matchCase of statement.cases) visit([matchCase.action]);
+          if (statement.otherwise) visit([statement.otherwise]);
+        }
+      }
+    };
+    if (v2.body.length > 0) visit(v2.body);
+    for (const rule of v2.rules) visit(rule.body);
+    return screens;
+  }
+  function displayItemKey(items) {
+    return JSON.stringify(items.map((item) => {
+      if (item.kind === "literal") return ["literal", item.text];
+      return ["source", item.name, item.width ?? null, item.pad ?? null];
+    }));
+  }
+  function validateV2Domains(v2) {
+    const domains = /* @__PURE__ */ new Map();
+    for (const board of v2.boards) {
+      if (domains.has(board.name)) throw new ParseError(`Duplicate domain '${board.name}'`, board.line);
+      domains.set(board.name, board.line);
+    }
+    for (const world of v2.worlds) {
+      if (domains.has(world.name)) throw new ParseError(`Duplicate domain '${world.name}'`, world.line);
+      domains.set(world.name, world.line);
+    }
+    for (const field of v2.state) {
+      if ((field.type === "coord" || field.type === "cells" || field.type === "coord_list") && field.domain !== void 0 && !domains.has(field.domain)) {
+        throw new ParseError(`Unknown domain '${field.domain}'`, field.line);
+      }
+    }
+  }
+  function validateV2References(v2, context) {
+    const visit = (statements) => {
+      for (const statement of statements) {
+        validateV2Statement(statement, context, visit);
+      }
+    };
+    if (v2.body.length > 0) visit(v2.body);
+    for (const rule of v2.rules) visit(rule.body);
+  }
+  function validateV2Statement(statement, context, visit) {
+    switch (statement.kind) {
+      case "v2_show":
+        if (statement.items !== void 0) return;
+        if (statement.target === void 0) {
+          throw new ParseError("Show must use a number or display fragments", statement.line);
+        }
+        if (!isNumericLiteralText(statement.target)) {
+          throw new ParseError("Show must use a number or display fragments", statement.line);
+        }
+        return;
+      case "v2_invoke":
+        if (!context.ruleParams.has(statement.name)) {
+          throw new ParseError(`Unknown function '${statement.name}'`, statement.line);
+        }
+        {
+          const expected = context.ruleParams.get(statement.name).length;
+          if (statement.args.length !== expected) {
+            throw new ParseError(
+              `Function '${statement.name}' expects ${expected} argument${expected === 1 ? "" : "s"}, got ${statement.args.length}`,
+              statement.line
+            );
+          }
+        }
+        return;
+      case "v2_if":
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+        return;
+      case "v2_while":
+        visit(statement.body);
+        return;
+      case "v2_loop":
+        visit(statement.body);
+        return;
+      case "v2_match":
+        for (const matchCase of statement.cases) visit([matchCase.action]);
+        if (statement.otherwise) visit([statement.otherwise]);
+        return;
+      default:
+        return;
+    }
+  }
+  function collectV2CellMapNames(v2, stateDomains) {
+    const explicit = v2.state.find((field) => field.type === "packed" && /^(?:plan|map)$/iu.test(field.name));
+    const byDomain = /* @__PURE__ */ new Map();
+    const addDomain = (domain) => {
+      if (byDomain.has(domain)) return;
+      const domainSpecific = v2.state.find(
+        (field) => field.type === "packed" && new RegExp(`^${escapeRegExp(domain)}_(?:plan|map)$`, "iu").test(field.name)
+      );
+      const decimalPlayerCells = singleDecimalPlayerCellsField(v2, domain);
+      byDomain.set(domain, domainSpecific?.name ?? explicit?.name ?? decimalPlayerCells?.name ?? `__cell_map_${domain}`);
+    };
+    for (const text of collectV2ExpressionTexts(v2)) {
+      for (const args of findSpatialCalls(text, "cell_at")) {
+        if (args.length === 2) {
+          addDomain(args[0]);
+          continue;
+        }
+        if (args.length === 1) {
+          const domain = stateDomains.get(args[0]);
+          if (domain !== void 0) addDomain(domain);
+        }
+      }
+    }
+    return byDomain;
+  }
+  function singleDecimalPlayerCellsField(v2, domain) {
+    const world = v2.worlds.find((candidate) => candidate.name === domain);
+    if (world?.position?.encoding !== "decimal_player") return void 0;
+    const fields = v2.state.filter((field) => field.type === "cells" && field.domain === domain);
+    return fields.length === 1 ? fields[0] : void 0;
+  }
+  function collectV2ExpressionTexts(v2) {
+    const texts = [];
+    const visit = (statements) => {
+      for (const statement of statements) {
+        switch (statement.kind) {
+          case "v2_assign":
+            texts.push(statement.expr);
+            break;
+          case "v2_update":
+            texts.push(statement.expr);
+            break;
+          case "v2_stop":
+            texts.push(statement.value);
+            break;
+          case "v2_if":
+            if (statement.predicate.kind === "v2_contains") {
+              texts.push(statement.predicate.collection, statement.predicate.item);
+            } else {
+              texts.push(statement.predicate.left, statement.predicate.right);
+            }
+            visit(statement.thenBody);
+            if (statement.elseBody !== void 0) visit(statement.elseBody);
+            break;
+          case "v2_while":
+            if (statement.predicate.kind === "v2_contains") {
+              texts.push(statement.predicate.collection, statement.predicate.item);
+            } else {
+              texts.push(statement.predicate.left, statement.predicate.right);
+            }
+            visit(statement.body);
+            break;
+          case "v2_loop":
+            visit(statement.body);
+            break;
+          case "v2_match":
+            texts.push(statement.expr);
+            for (const matchCase of statement.cases) {
+              texts.push(...matchCase.values);
+              visit([matchCase.action]);
+            }
+            if (statement.otherwise !== void 0) visit([statement.otherwise]);
+            break;
+          case "v2_invoke":
+            texts.push(...statement.args);
+            break;
+          case "v2_show":
+          case "v2_read":
+          case "v2_raw":
+            break;
+        }
+      }
+    };
+    if (v2.body.length > 0) visit(v2.body);
+    for (const rule of v2.rules) visit(rule.body);
+    return texts;
+  }
+  function lowerV2Domains(v2) {
+    const domains = [];
+    for (const board of v2.boards) {
+      const lines = [
+        { text: `x ${board.xMin}..${board.xMax}`, line: board.line },
+        { text: `y ${board.yMin}..${board.yMax}`, line: board.line },
+        { text: `columns ${board.width}`, line: board.line },
+        { text: `rows ${board.height}`, line: board.line }
+      ];
+      domains.push({
+        kind: "domain",
+        domainKind: "maze",
+        name: board.name,
+        header: `board ${board.name}`,
+        lines,
+        line: board.line
+      });
+    }
+    for (const world of v2.worlds) {
+      const coordFields = v2.state.filter((field) => field.type === "coord" && field.domain === world.name);
+      for (const field of coordFields) {
+        const lines = [];
+        if (world.position?.encoding !== void 0) lines.push({ text: `encoding ${world.position.encoding}`, line: world.position.line });
+        domains.push({
+          kind: "domain",
+          domainKind: "coord",
+          name: "packed",
+          header: `coord packed ${field.name}`,
+          lines,
+          line: field.line
+        });
+      }
+      const worldLines = [];
+      domains.push({
+        kind: "domain",
+        domainKind: "maze",
+        name: world.name,
+        header: `maze ${world.name}`,
+        lines: worldLines,
+        line: world.line
+      });
+    }
+    for (const field of v2.state) {
+      if (field.type === "cells") {
+        const lines = [];
+        if (field.domain !== void 0) lines.push({ text: `domain ${field.domain}`, line: field.line });
+        domains.push({
+          kind: "domain",
+          domainKind: "bitset",
+          name: field.name,
+          header: `cells ${field.name}`,
+          lines,
+          line: field.line
+        });
+      }
+    }
+    return domains;
+  }
+  function lowerV2State(v2, specializedRules, cellMapNames, context) {
+    const fields = [];
+    for (const field of v2.state) {
+      if (field.bank !== void 0) {
+        fields.push(...lowerV2BankStateField(field, context));
+        continue;
+      }
+      if (field.type === "coord_list") {
+        fields.push(...lowerV2CoordListState(field, context));
+        continue;
+      }
+      const lowered = {
+        name: field.name,
+        type: lowerV2StateFieldType(field.type),
+        line: field.line
+      };
+      if (field.min !== void 0) lowered.min = field.min;
+      if (field.max !== void 0) lowered.max = field.max;
+      if (field.initial !== void 0) {
+        if (isIndexedInitializerList(field.initial)) {
+          throw new ParseError("Indexed initializer lists require an indexed state bank", field.line);
+        }
+        const stackSource = parseStackSource(field.initial, field.line);
+        if (stackSource !== void 0) {
+          lowered.initialStack = stackSource;
+        } else {
+          lowered.initial = lowerV2InitialExpression(field, context);
+        }
+      }
+      fields.push(lowered);
+    }
+    const declared = new Set(fields.map((field) => field.name));
+    for (const scratch of collectV2ScratchFields(v2, specializedRules)) {
+      if (declared.has(scratch.name)) continue;
+      declared.add(scratch.name);
+      fields.push(scratch);
+    }
+    for (const mapName of cellMapNames.values()) {
+      if (!mapName.startsWith("__cell_map_") || declared.has(mapName)) continue;
+      declared.add(mapName);
+      fields.push({
+        name: mapName,
+        type: "packed",
+        initial: lowerV2Expression("int(random() * 999999999) + 1", v2.line),
+        line: v2.line
+      });
+    }
+    return fields.length > 0 ? [{ kind: "state", name: v2.name, fields, line: v2.line }] : [];
+  }
+  function lowerV2StateBanks(v2) {
+    const byBank = /* @__PURE__ */ new Map();
+    for (const field of v2.state) {
+      if (field.bank === void 0) continue;
+      const fields = byBank.get(field.bank.name) ?? [];
+      fields.push(field);
+      byBank.set(field.bank.name, fields);
+    }
+    const banks = [];
+    for (const [name, fields] of byBank) {
+      const first = fields[0];
+      const min = first.bank.min;
+      const max = first.bank.max;
+      if (fields.some((field) => field.bank.min !== min || field.bank.max !== max)) {
+        throw new ParseError(`State bank '${name}' has inconsistent ranges`, first.line);
+      }
+      banks.push({
+        kind: "state_bank",
+        name,
+        min,
+        max,
+        members: fields.map((field) => {
+          const member = {
+            ...field.bank.member === void 0 ? {} : { name: field.bank.member },
+            type: lowerV2StateFieldType(field.type),
+            elements: bankIndexes(field).map((index) => ({ index, name: bankElementStateName(field, index) })),
+            line: field.line
+          };
+          if (field.min !== void 0) member.min = field.min;
+          if (field.max !== void 0) member.max = field.max;
+          return member;
+        }),
+        line: first.line
+      });
+    }
+    return banks.length === 0 ? void 0 : banks;
+  }
+  function lowerV2BankStateField(field, context) {
+    const indexes = bankIndexes(field);
+    const initializers = indexedInitializerList(field, indexes.length);
+    return indexes.map((index, offset) => {
+      const lowered = {
+        name: bankElementStateName(field, index),
+        type: lowerV2StateFieldType(field.type),
+        line: field.line
+      };
+      if (field.min !== void 0) lowered.min = field.min;
+      if (field.max !== void 0) lowered.max = field.max;
+      const initial = initializers?.[offset] ?? field.initial;
+      if (initial !== void 0) {
+        const stackSource = parseStackSource(initial, field.line);
+        if (stackSource !== void 0) {
+          throw new ParseError("Indexed state banks cannot be initialized from stack.X or stack.Y", field.line);
+        }
+        lowered.initial = lowerV2InitialExpression({ ...field, initial }, context);
+      }
+      return lowered;
+    });
+  }
+  function isIndexedInitializerList(initial) {
+    const trimmed = initial.trim();
+    return trimmed.startsWith("[") || trimmed.endsWith("]");
+  }
+  function indexedInitializerList(field, expected) {
+    if (field.initial === void 0) return void 0;
+    const trimmed = field.initial.trim();
+    if (!isIndexedInitializerList(trimmed)) return void 0;
+    if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+      throw new ParseError("Indexed initializer list must look like '[a, b, c]'", field.line);
+    }
+    const values = splitArgs(trimmed.slice(1, -1));
+    if (values.length !== expected) {
+      throw new ParseError(`Indexed initializer list has ${values.length} values for ${expected} elements`, field.line);
+    }
+    return values;
+  }
+  function randomCoordinateExpression(domain, context) {
+    const board = context.boards.get(domain);
+    if (board !== void 0) return randomBoardCoordinateExpression(board);
+    const world = context.worlds.get(domain);
+    if (world !== void 0) return randomWorldCoordinateExpression(world);
+    return "int(random(9)) + 1";
+  }
+  function randomBoardCoordinateExpression(board) {
+    if (board.height === 1) return addOffsetExpression(`int(random(${board.width}))`, board.xMin);
+    if (board.width === 1) return addOffsetExpression(`int(random(${board.height}))`, board.yMin);
+    const x = addOffsetExpression(`int(random(${board.width}))`, board.xMin);
+    const y = addOffsetExpression(`int(random(${board.height}))`, board.yMin);
+    return `${x} + 10 * (${y})`;
+  }
+  function randomWorldCoordinateExpression(world) {
+    return `int(random(${worldDomainLength(world)})) + ${worldCoordinateOrigin(world)}`;
+  }
+  function worldCoordinateOrigin(world) {
+    switch (world.position?.encoding) {
+      case "pier_to_ship":
+      case "corridor_plan":
+      case "decimal_player":
+      case "floor_plan":
+      case "packed_decimal_zero_run":
+      case "row_scan":
+      case void 0:
+        return 1;
+    }
+    return 1;
+  }
+  function bankIndexes(field) {
+    if (field.bank === void 0) return [];
+    const indexes = [];
+    for (let index = field.bank.min; index <= field.bank.max; index += 1) indexes.push(index);
+    return indexes;
+  }
+  function bankElementStateName(field, index) {
+    const member = field.bank?.member;
+    const base = field.bank?.name ?? field.name;
+    return member === void 0 ? `${base}_${index}` : `${base}_${member}_${index}`;
+  }
+  function lowerV2CoordListState(field, context) {
+    const list = context.coordLists.get(field.name);
+    if (list === void 0) throw new ParseError(`Unknown coord_list '${field.name}'`, field.line);
+    const initial = field.initial?.trim() ?? "0";
+    const randomRange = coordListRandomRangeInitialExpression(initial, field.line, context);
+    if (initial !== "random()" && initial !== "random_unique()" && initial !== "0" && randomRange === void 0) {
+      throw new ParseError("coord_list initial value must be random(), random(max), random(min, max), random_unique(), or 0", field.line);
+    }
+    const board = context.boards.get(list.domain);
+    if ((initial === "random()" || initial === "random_unique()") && board === void 0) {
+      throw new ParseError(`coord_list ${initial} currently needs a board domain`, field.line);
+    }
+    return list.items.map((name, index) => {
+      const lowered = {
+        name,
+        type: "packed",
+        line: field.line
+      };
+      if (initial === "random_unique()") {
+        lowered.initial = coordListRandomItemExpression(board, list.count, index);
+      } else if (initial === "random()") {
+        lowered.initial = lowerV2Expression(randomCoordinateExpression(list.domain, context), field.line, context);
+      } else if (randomRange !== void 0) {
+        lowered.initial = randomRange;
+      }
+      return lowered;
+    });
+  }
+  function collectV2ScratchFields(v2, specializedRules) {
+    const fields = [];
+    const add = (name, line) => {
+      fields.push({ name, type: "packed", line });
+    };
+    for (const rule of v2.rules) {
+      if (!specializedRules.has(rule.name)) {
+        for (const param of rule.params) add(param, rule.line);
+      }
+      visit(rule.body);
+    }
+    if (v2.body.length > 0) visit(v2.body);
+    return fields;
+    function visit(statements) {
+      for (const statement of statements) {
+        if (statement.kind === "v2_if") {
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "v2_while") {
+          visit(statement.body);
+        }
+        if (statement.kind === "v2_loop") {
+          visit(statement.body);
+        }
+        if (statement.kind === "v2_match") {
+          for (const matchCase of statement.cases) visit([matchCase.action]);
+          if (statement.otherwise) visit([statement.otherwise]);
+        }
+        if (statement.kind === "v2_read") add(statement.target, statement.line);
+      }
+    }
+  }
+  function lowerV2InitialExpression(field, context) {
+    const initial = field.initial ?? "0";
+    if (field.type === "cells" && initial.trim() === "random()") {
+      if (decimalPlayerPackedCellsIndex(field.name, "1", context) !== void 0) {
+        return lowerV2Expression("int(random() * 999999999) + 1", field.line);
+      }
+      return lowerV2Expression("int(random() * 999)", field.line);
+    }
+    return lowerV2Expression(initial, field.line, context);
+  }
+  function numberLiteral(value) {
+    return value < 0 ? { kind: "unary", op: "-", expr: { kind: "number", raw: String(Math.abs(value)) } } : { kind: "number", raw: String(value) };
+  }
+  function coordListItemName(listName, index) {
+    return `__coord_list_${listName}_${index}`;
+  }
+  function coordListRandomItemExpression(board, count, index) {
+    return {
+      kind: "call",
+      callee: "__random_coord_list_item",
+      args: [
+        numberLiteral(board.xMin),
+        numberLiteral(board.width),
+        numberLiteral(board.yMin),
+        numberLiteral(board.height),
+        numberLiteral(count),
+        numberLiteral(index)
+      ]
+    };
+  }
+  function coordListRandomRangeInitialExpression(initial, line, context) {
+    const trimmed = initial.trim();
+    if (trimmed === "random()" || trimmed === "random_unique()") return void 0;
+    if (!/\brandom\s*\(/u.test(trimmed)) return void 0;
+    const expr = lowerV2Expression(trimmed, line, context);
+    if (isRandomRangeExpression(expr)) return expr;
+    if (expr.kind === "call" && expr.callee.toLowerCase() === "int" && expr.args.length === 1 && isRandomRangeExpression(expr.args[0])) {
+      return expr;
+    }
+    if (expr.kind === "call" && expr.callee.toLowerCase() === "random") {
+      throw new ParseError(`random() expects zero, one, or two arguments, got ${expr.args.length}.`, line);
+    }
+    throw new ParseError("coord_list random range initial must look like random(max) or random(min, max)", line);
+  }
+  function isRandomRangeExpression(expr) {
+    return expr.kind === "call" && expr.callee.toLowerCase() === "random" && (expr.args.length === 1 || expr.args.length === 2);
+  }
+  function lowerV2StateFieldType(type) {
+    if (type === "counter") return "range";
+    if (type === "coord_list") return "packed";
+    if (type === "coord" || type === "cells") return "packed";
+    return type;
+  }
+  function lowerV2Screen(screen) {
+    return {
+      kind: "display",
+      name: screen.name,
+      format: "packed",
+      sources: screen.sources,
+      items: screen.items,
+      line: screen.line
+    };
+  }
+  var V2_INTERNAL_ENTRY_NAME = "\0main";
+  function lowerV2Entry(v2, context) {
+    if (v2.body.length > 0) {
+      return {
+        kind: "entry",
+        name: V2_INTERNAL_ENTRY_NAME,
+        body: lowerV2Statements(v2.body, context),
+        line: v2.line
+      };
+    }
+    return {
+      kind: "entry",
+      name: V2_INTERNAL_ENTRY_NAME,
+      body: [{ kind: "halt", expr: parseExpression("0"), line: v2.line }],
+      line: v2.line
+    };
+  }
+  function lowerV2Rule(rule, context) {
+    const proc = {
+      kind: "proc",
+      name: rule.name,
+      body: lowerV2Statements(rule.body, context),
+      line: rule.line
+    };
+    if (rule.params.length > 0) proc.params = [...rule.params];
+    return proc;
+  }
+  function lowerEffectPlan(plan, keyName, line, context) {
+    const statements = [];
+    for (const delta of plan.deltas) {
+      const expr = linearDeltaExpressionText(delta, keyName);
+      if (expr !== "0") {
+        statements.push(deltaAssignStatement(delta.target, expr, line, context));
+      }
+    }
+    for (const [key, corrections] of groupedCorrections(plan.deltas)) {
+      statements.push({
+        kind: "if",
+        condition: {
+          left: { kind: "identifier", name: keyName },
+          op: "==",
+          right: { kind: "number", raw: String(key) }
+        },
+        thenBody: corrections.map(
+          (correction) => deltaAssignStatement(correction.target, String(correction.delta), line, context)
+        ),
+        line
+      });
+    }
+    return statements;
+  }
+  function groupedCorrections(plans) {
+    const grouped = /* @__PURE__ */ new Map();
+    for (const plan of plans) {
+      for (const [key, delta] of plan.corrections) {
+        if (delta === 0) continue;
+        const corrections = grouped.get(key) ?? [];
+        corrections.push({ target: plan.target, delta });
+        grouped.set(key, corrections);
+      }
+    }
+    return [...grouped.entries()].sort(([left], [right]) => left - right);
+  }
+  function fitLinearDeltaPlan(target, values) {
+    const entries = [...values.entries()].sort(([left], [right]) => left - right);
+    if (entries.every(([, value]) => value === 0)) {
+      return { target, slope: 0, intercept: 0, corrections: /* @__PURE__ */ new Map() };
+    }
+    const candidates = [];
+    for (const [, value] of entries) {
+      candidates.push(linearPlanFor(target, values, 0, value));
+    }
+    for (let i = 0; i < entries.length; i += 1) {
+      for (let j = i + 1; j < entries.length; j += 1) {
+        const [leftKey, leftValue] = entries[i];
+        const [rightKey, rightValue] = entries[j];
+        const keyDelta = rightKey - leftKey;
+        const valueDelta = rightValue - leftValue;
+        if (keyDelta === 0 || valueDelta % keyDelta !== 0) continue;
+        const slope = valueDelta / keyDelta;
+        const intercept = leftValue - slope * leftKey;
+        candidates.push(linearPlanFor(target, values, slope, intercept));
+      }
+    }
+    return candidates.filter((candidate) => candidate.corrections.size <= Math.max(1, Math.floor(entries.length / 3))).sort((left, right) => linearPlanCost(left) - linearPlanCost(right))[0];
+  }
+  function linearPlanFor(target, values, slope, intercept) {
+    const corrections = /* @__PURE__ */ new Map();
+    for (const [key, value] of values) {
+      const base = slope * key + intercept;
+      if (base !== value) corrections.set(key, value - base);
+    }
+    return { target, slope, intercept, corrections };
+  }
+  function linearPlanCost(plan) {
+    const baseCost = plan.slope === 0 && plan.intercept === 0 ? 0 : Math.abs(plan.slope) <= 1 ? 3 : 5;
+    return baseCost + plan.corrections.size * 6;
+  }
+  function linearDeltaExpressionText(plan, keyName) {
+    const variable = plan.slope === 0 ? "0" : plan.slope === 1 ? keyName : plan.slope === -1 ? `(0 - ${keyName})` : `${plan.slope} * ${keyName}`;
+    if (plan.intercept === 0) return variable;
+    if (plan.slope === 0) return String(plan.intercept);
+    return plan.intercept > 0 ? `${variable} + ${plan.intercept}` : `${variable} - ${Math.abs(plan.intercept)}`;
+  }
+  function deltaAssignStatement(target, deltaText, line, context) {
+    const delta = numericLiteralTextValue(deltaText);
+    const exprText = delta !== void 0 && delta < 0 ? `${target} - ${Math.abs(delta)}` : `${target} + (${deltaText})`;
+    return {
+      kind: "assign",
+      target,
+      expr: lowerV2Expression(exprText, line, context),
+      line
+    };
+  }
+  function numericLiteralTextValue(text) {
+    if (!isNumericLiteralText(text.trim())) return void 0;
+    const value = Number(text.trim());
+    return Number.isInteger(value) ? value : void 0;
+  }
+  function lowerV2Statements(statements, context) {
+    const lowered = [];
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index];
+      const literalHalt = lowerV2InlineLiteralShowHalt(statement, statements[index + 1]);
+      if (literalHalt !== void 0) {
+        lowered.push(literalHalt);
+        index += 1;
+        continue;
+      }
+      lowered.push(...lowerV2Statement(statement, context));
+    }
+    return lowered;
+  }
+  function lowerV2InlineLiteralShowHalt(statement, next) {
+    if (statement.kind !== "v2_show" || next?.kind !== "v2_stop") return void 0;
+    if (normalizedV2Text(next.value) !== "0") return void 0;
+    const literal = statement.items === void 0 ? void 0 : collapseV2LiteralItems(statement.items);
+    if (literal !== "\u0415\u0413\u0413\u041E\u0413") return void 0;
+    return { kind: "halt", expr: parseExpression("0"), literal, line: statement.line };
+  }
+  function collapseV2LiteralItems(items) {
+    if (items.some((item) => item.kind !== "literal")) return void 0;
+    return items.map((item) => item.kind === "literal" ? item.text : "").join("");
+  }
+  function lowerV2Statement(statement, context) {
+    switch (statement.kind) {
+      case "v2_show":
+        if (statement.items !== void 0) {
+          if (statement.inlineName === void 0) {
+            throw new ParseError("Inline show display was not collected before lowering", statement.line);
+          }
+          return [{ kind: "show", display: statement.inlineName, line: statement.line }];
+        }
+        if (statement.target === void 0) {
+          throw new ParseError("Show must use a number or display fragments", statement.line);
+        }
+        if (isNumericLiteralText(statement.target)) {
+          return [{ kind: "pause", expr: parseExpression(statement.target, statement.line), line: statement.line }];
+        }
+        return [{ kind: "show", display: statement.target, line: statement.line }];
+      case "v2_read":
+        return [{
+          kind: "input",
+          target: statement.target,
+          line: statement.line
+        }];
+      case "v2_stop": {
+        const literal = parseV2StopLiteral(statement.value, statement.line);
+        if (literal !== void 0) {
+          return [{ kind: "halt", expr: parseExpression("0"), literal, line: statement.line }];
+        }
+        return [{ kind: "halt", expr: lowerV2Expression(statement.value, statement.line, context), line: statement.line }];
+      }
+      case "v2_invoke":
+        return lowerV2Invoke(statement, context);
+      case "v2_if": {
+        const condition = lowerV2Predicate(statement.predicate, statement.line, context);
+        const lowered = {
+          kind: "if",
+          condition: statement.negated === true ? invertLoweredCondition(condition) : condition,
+          thenBody: lowerV2Statements(statement.thenBody, context),
+          line: statement.line
+        };
+        if (statement.elseBody !== void 0) lowered.elseBody = lowerV2Statements(statement.elseBody, context);
+        return [lowered];
+      }
+      case "v2_while":
+        return [{
+          kind: "while",
+          condition: lowerV2Predicate(statement.predicate, statement.line, context),
+          body: lowerV2Statements(statement.body, context),
+          line: statement.line
+        }];
+      case "v2_loop":
+        return [{
+          kind: "loop",
+          body: lowerV2Statements(statement.body, context),
+          line: statement.line
+        }];
+      case "v2_assign":
+        if (isIndexedTargetText(statement.target)) {
+          return [{
+            kind: "indexed_assign",
+            target: indexedTargetExpression(statement.target, statement.line),
+            expr: lowerV2Expression(statement.expr, statement.line, context),
+            line: statement.line
+          }];
+        }
+        return [{ kind: "assign", target: statement.target, expr: lowerV2Expression(statement.expr, statement.line, context), line: statement.line }];
+      case "v2_update": {
+        if (isIndexedTargetText(statement.target)) {
+          const target = indexedTargetExpression(statement.target, statement.line);
+          return [{
+            kind: "indexed_assign",
+            target,
+            expr: {
+              kind: "binary",
+              op: statement.op === "+=" ? "+" : "-",
+              left: target,
+              right: lowerV2Expression(statement.expr, statement.line, context)
+            },
+            line: statement.line
+          }];
+        }
+        if (context.stateTypes.get(statement.target) === "cells") {
+          return [{
+            kind: "assign",
+            target: statement.target,
+            expr: lowerV2Expression(cellSetUpdateExpression(statement.target, statement.expr, statement.op, context), statement.line, context),
+            line: statement.line
+          }];
+        }
+        if (statement.op === "-=") {
+          const list = context.coordLists.get(statement.target);
+          if (list !== void 0) {
+            return [{
+              kind: "coord_list_remove",
+              list: statement.target,
+              item: lowerV2Expression(statement.expr, statement.line, context),
+              items: list.items,
+              line: statement.line
+            }];
+          }
+        }
+        return [{
+          kind: "assign",
+          target: statement.target,
+          expr: {
+            kind: "binary",
+            op: statement.op === "+=" ? "+" : "-",
+            left: { kind: "identifier", name: statement.target },
+            right: lowerV2Expression(statement.expr, statement.line, context)
+          },
+          line: statement.line
+        }];
+      }
+      case "v2_raw":
+        return [{
+          kind: "core",
+          inputs: statement.inputs.map((input) => ({
+            slot: input.slot,
+            expr: lowerV2Expression(input.expr, input.line, context),
+            line: input.line
+          })),
+          outputs: statement.outputs.map((output) => ({
+            slot: output.slot,
+            target: output.target,
+            line: output.line
+          })),
+          clobbers: statement.clobbers,
+          preserves: statement.preserves,
+          lines: statement.lines,
+          strict: true,
+          line: statement.line
+        }];
+      case "v2_match":
+        return lowerV2MatchStatements(statement, context);
+      case "v2_return":
+        return [{
+          kind: "return_value",
+          expr: lowerV2Expression(statement.expr, statement.line, context),
+          line: statement.line
+        }];
+    }
+  }
+  function isIndexedTargetText(target) {
+    return target.includes("[");
+  }
+  function indexedTargetExpression(target, line) {
+    const expr = parseExpression(target, line);
+    if (expr.kind !== "indexed") throw new ParseError(`Invalid indexed assignment target '${target}'`, line);
+    return expr;
+  }
+  function lowerV2Predicate(predicate, line, context) {
+    if (predicate.kind === "v2_contains") {
+      return {
+        left: lowerV2Expression(cellMembershipExpression(predicate.collection, predicate.item, context), line, context),
+        op: "!=",
+        right: lowerV2Expression("0", line, context)
+      };
+    }
+    return {
+      left: lowerV2Expression(predicate.left, line, context),
+      op: predicate.op,
+      right: lowerV2Expression(predicate.right, line, context)
+    };
+  }
+  function cellSetUpdateExpression(collection, item, op, context) {
+    const digitIndex = decimalPlayerPackedCellsIndex(collection, item, context);
+    if (digitIndex !== void 0) return `digit_set(${collection}, ${digitIndex}, ${op === "+=" ? "1" : "0"})`;
+    const mask = cellMaskExpressionForCollection(collection, item, context);
+    if (mask === void 0) return `${op === "+=" ? "bit_set" : "bit_clear"}(${collection}, ${item})`;
+    return op === "+=" ? `bit_or(${collection}, ${mask})` : `bit_and(${collection}, bit_not(${mask}))`;
+  }
+  function cellMembershipExpression(collection, item, context) {
+    const list = context.coordLists.get(collection.trim());
+    if (list !== void 0) return `coord_list_has(${item}, ${list.items.join(", ")})`;
+    const digitIndex = decimalPlayerPackedCellsIndex(collection, item, context);
+    if (digitIndex !== void 0) return `digit_at(${collection}, ${digitIndex})`;
+    const mask = cellMaskExpressionForCollection(collection, item, context);
+    return mask === void 0 ? `bit_has(${collection}, ${item})` : `bit_and(${collection}, ${mask})`;
+  }
+  function lowerV2MatchStatements(statement, context) {
+    const cyclic = lowerCyclicCounterMatch(statement, context);
+    if (cyclic !== void 0) return cyclic;
+    const effects = lowerSimpleEffectMatch(statement, context);
+    if (effects !== void 0) return effects;
+    if (context.signedAbsMatchPairs) {
+      const signedPair = lowerSignedAbsPairMatch(statement, context);
+      if (signedPair !== void 0) return signedPair;
+    }
+    return lowerV2MatchStatementsAfterSignedAbs(statement, context);
+  }
+  function lowerV2MatchStatementsAfterSignedAbs(statement, context) {
+    if (statement.cases.length === 0) {
+      return statement.otherwise === void 0 ? [] : lowerV2Statement(statement.otherwise, context);
+    }
+    const smallCase = lowerSmallCaseMatch(statement, context);
+    if (smallCase !== void 0) return [smallCase];
+    const singleCase = lowerSingleCaseMatch(statement, context);
+    if (singleCase !== void 0) return [singleCase];
+    return [lowerV2Match(statement, context)];
+  }
+  function lowerSignedAbsPairMatch(statement, context) {
+    const pair = signedAbsMatchPair(statement);
+    if (pair === void 0) return void 0;
+    const positiveKey = signedAbsRowKey(pair.positive);
+    const negativeKey = signedAbsRowKey(pair.negative);
+    const cases = statement.cases.map((matchCase, caseIndex) => ({
+      ...matchCase,
+      values: matchCase.values.filter((_, valueIndex) => {
+        const key = signedAbsRowKey({ caseIndex, valueIndex });
+        return key !== positiveKey && key !== negativeKey;
+      })
+    })).filter((matchCase) => matchCase.values.length > 0);
+    const guard = {
+      kind: "v2_if",
+      predicate: {
+        kind: "v2_compare",
+        left: `abs(${statement.expr})`,
+        op: "==",
+        right: String(pair.positive.value)
+      },
+      thenBody: [pair.action],
+      line: Math.min(pair.positive.line, pair.negative.line)
+    };
+    if (statement.otherwise !== void 0) guard.elseBody = [statement.otherwise];
+    const rewritten = {
+      ...statement,
+      cases,
+      otherwise: guard
+    };
+    const originalLowered = lowerV2MatchStatementsAfterSignedAbs(statement, context);
+    const rewrittenLowered = lowerV2MatchStatements(rewritten, context);
+    return estimateLoweredStatementsCost(rewrittenLowered) < estimateLoweredStatementsCost(originalLowered) ? rewrittenLowered : void 0;
+  }
+  function signedAbsRowKey(row) {
+    return `${row.caseIndex}:${row.valueIndex}`;
+  }
+  function signedAbsMatchPair(statement) {
+    if (!/^[A-Za-z_][\w]*$/u.test(statement.expr.trim())) return void 0;
+    const rows = [];
+    for (let caseIndex = 0; caseIndex < statement.cases.length; caseIndex += 1) {
+      const matchCase = statement.cases[caseIndex];
+      for (let valueIndex = 0; valueIndex < matchCase.values.length; valueIndex += 1) {
+        const value = numericLiteralTextValue(matchCase.values[valueIndex]);
+        if (value === void 0 || value === 0) continue;
+        rows.push({ caseIndex, valueIndex, value, action: matchCase.action, line: matchCase.line });
+      }
+    }
+    for (const positive of rows.filter((row) => row.value > 0)) {
+      const negative = rows.find((row) => row.value === -positive.value);
+      if (negative === void 0) continue;
+      const action = signedAbsAction(positive.action, negative.action, statement.expr);
+      if (action !== void 0) return { positive, negative, action };
+    }
+    return void 0;
+  }
+  function signedAbsAction(positiveAction, negativeAction, matchExpr) {
+    if (positiveAction.kind !== "v2_invoke" || negativeAction.kind !== "v2_invoke") return void 0;
+    if (positiveAction.name !== negativeAction.name || positiveAction.args.length !== negativeAction.args.length) return void 0;
+    const args = [];
+    let signedArg = false;
+    for (let index = 0; index < positiveAction.args.length; index += 1) {
+      const positiveArg = positiveAction.args[index].trim();
+      const negativeArg = negativeAction.args[index].trim();
+      if (positiveArg === negativeArg) {
+        args.push(positiveAction.args[index]);
+        continue;
+      }
+      const positiveValue = numericLiteralTextValue(positiveArg);
+      const negativeValue = numericLiteralTextValue(negativeArg);
+      if (signedArg || positiveValue === void 0 || negativeValue === void 0) return void 0;
+      if (positiveValue === 1 && negativeValue === -1) {
+        args.push(`sign(${matchExpr})`);
+        signedArg = true;
+        continue;
+      }
+      if (positiveValue === -1 && negativeValue === 1) {
+        args.push(`-sign(${matchExpr})`);
+        signedArg = true;
+        continue;
+      }
+      return void 0;
+    }
+    return signedArg ? { ...positiveAction, args } : void 0;
+  }
+  function lowerSmallCaseMatch(statement, context) {
+    if (statement.otherwise === void 0) return void 0;
+    const rows = statement.cases.flatMap(
+      (matchCase) => matchCase.values.map((value) => ({ value, action: matchCase.action, line: matchCase.line }))
+    );
+    if (rows.length !== 1) return void 0;
+    if (statement.cases.some((matchCase) => matchCase.values.length !== 1)) return void 0;
+    if (rows.length > 1 && !/^[A-Za-z_][\w]*$/u.test(statement.expr.trim())) return void 0;
+    const build = (index) => {
+      const row = rows[index];
+      const elseBody = index + 1 < rows.length ? [build(index + 1)] : lowerV2Statement(statement.otherwise, context);
+      return {
+        kind: "if",
+        condition: {
+          left: lowerV2Expression(statement.expr, statement.line, context),
+          op: "==",
+          right: lowerV2Expression(row.value, row.line, context)
+        },
+        thenBody: lowerV2MatchAction(row.action, context, row.line),
+        elseBody,
+        line: index === 0 ? statement.line : row.line
+      };
+    };
+    return build(0);
+  }
+  function lowerSingleCaseMatch(statement, context) {
+    const lowered = lowerSmallCaseMatch(statement, context);
+    if (lowered !== void 0) return lowered;
+    if (statement.otherwise !== void 0 || statement.cases.length !== 1) return void 0;
+    const matchCase = statement.cases[0];
+    if (matchCase.values.length !== 1) return void 0;
+    const value = matchCase.values[0];
+    return {
+      kind: "if",
+      condition: {
+        left: lowerV2Expression(statement.expr, statement.line, context),
+        op: "==",
+        right: lowerV2Expression(value, matchCase.line, context)
+      },
+      thenBody: lowerV2MatchAction(matchCase.action, context, matchCase.line),
+      ...statement.otherwise === void 0 ? {} : { elseBody: lowerV2Statement(statement.otherwise, context) },
+      line: statement.line
+    };
+  }
+  function lowerV2Match(statement, context) {
+    const cases = [];
+    for (const matchCase of statement.cases) {
+      for (const value of matchCase.values) {
+        cases.push({
+          value: lowerV2Expression(value, matchCase.line, context),
+          body: lowerV2MatchAction(matchCase.action, context, matchCase.line),
+          line: matchCase.line
+        });
+      }
+    }
+    const lowered = {
+      kind: "dispatch",
+      expr: lowerV2Expression(statement.expr, statement.line, context),
+      cases,
+      line: statement.line,
+      scratchId: statement.line
+    };
+    if (statement.otherwise !== void 0) lowered.defaultBody = lowerV2Statement(statement.otherwise, context);
+    return lowered;
+  }
+  function lowerSimpleEffectMatch(statement, context) {
+    const keyName = statement.expr.trim();
+    if (!/^[A-Za-z_][\w]*$/u.test(keyName)) return void 0;
+    const defaultEffects = statement.otherwise === void 0 ? { effects: /* @__PURE__ */ new Map() } : analyzeSimpleNumericEffects(resolveV2ActionBody(statement.otherwise, context), context);
+    if (defaultEffects === void 0) return void 0;
+    const rows = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const matchCase of statement.cases) {
+      for (const valueText of matchCase.values) {
+        const value = numericLiteralTextValue(valueText);
+        if (value === void 0 || seen.has(value)) return void 0;
+        seen.add(value);
+        const body = resolveV2ActionBody(matchCase.action, context);
+        if (body === void 0) return void 0;
+        const effects = analyzeSimpleNumericEffects(body, context);
+        if (effects === void 0) return void 0;
+        rows.push({ value, effects, line: matchCase.line });
+      }
+    }
+    if (rows.length < 3) return void 0;
+    const lowered = [
+      ...lowerNumericEffects(defaultEffects, statement.line, context)
+    ];
+    for (const row of rows.sort((left, right) => left.value - right.value)) {
+      const correction = correctionEffects(defaultEffects, row.effects);
+      if (correction === void 0) return void 0;
+      const body = lowerNumericEffects(correction, row.line, context);
+      if (body.length === 0) continue;
+      lowered.push({
+        kind: "if",
+        condition: {
+          left: { kind: "identifier", name: keyName },
+          op: "==",
+          right: { kind: "number", raw: String(row.value) }
+        },
+        thenBody: body,
+        line: row.line
+      });
+    }
+    if (lowered.length <= 1) return void 0;
+    const dispatch = lowerV2Match(statement, context);
+    return estimateStatementCount(lowered) < estimateDispatchStatementCount(dispatch) ? lowered : void 0;
+  }
+  function analyzeSimpleNumericEffects(statements, context) {
+    if (statements === void 0) return void 0;
+    const effects = /* @__PURE__ */ new Map();
+    for (const statement of statements) {
+      if (statement.kind === "v2_update" && context.stateTypes.get(statement.target) !== "cells") {
+        if (!context.stateTypes.has(statement.target)) return void 0;
+        const value = numericLiteralTextValue(statement.expr);
+        if (value === void 0) return void 0;
+        applyNumericDelta(effects, statement.target, statement.op === "+=" ? value : -value);
+        continue;
+      }
+      if (statement.kind === "v2_assign" && context.stateTypes.get(statement.target) !== "cells") {
+        if (!context.stateTypes.has(statement.target)) return void 0;
+        const value = numericLiteralTextValue(statement.expr);
+        if (value === void 0) return void 0;
+        effects.set(statement.target, { kind: "assign", value });
+        continue;
+      }
+      return void 0;
+    }
+    return { effects };
+  }
+  function applyNumericDelta(effects, target, delta) {
+    const current = effects.get(target);
+    if (current?.kind === "assign") {
+      effects.set(target, { kind: "assign", value: current.value + delta });
+      return;
+    }
+    effects.set(target, { kind: "delta", value: (current?.value ?? 0) + delta });
+  }
+  function correctionEffects(base, desired) {
+    const effects = /* @__PURE__ */ new Map();
+    const targets = /* @__PURE__ */ new Set([...base.effects.keys(), ...desired.effects.keys()]);
+    for (const target of [...targets].sort()) {
+      const correction = correctionEffect(
+        base.effects.get(target) ?? { kind: "delta", value: 0 },
+        desired.effects.get(target) ?? { kind: "delta", value: 0 }
+      );
+      if (correction === void 0) return void 0;
+      if (correction.kind === "delta" && correction.value === 0) continue;
+      effects.set(target, correction);
+    }
+    return { effects };
+  }
+  function correctionEffect(base, desired) {
+    if (base.kind === "delta") {
+      if (desired.kind === "delta") return { kind: "delta", value: desired.value - base.value };
+      return desired;
+    }
+    if (desired.kind === "assign") {
+      return desired.value === base.value ? { kind: "delta", value: 0 } : desired;
+    }
+    return void 0;
+  }
+  function lowerNumericEffects(effects, line, context) {
+    return [...effects.effects.entries()].sort(([left], [right]) => left.localeCompare(right)).flatMap(
+      ([target, effect]) => {
+        if (effect.kind === "delta") {
+          return effect.value === 0 ? [] : [deltaAssignStatement(target, String(effect.value), line, context)];
+        }
+        return [{
+          kind: "assign",
+          target,
+          expr: lowerV2Expression(String(effect.value), line, context),
+          line
+        }];
+      }
+    );
+  }
+  function estimateStatementCount(statements) {
+    let count = 0;
+    for (const statement of statements) {
+      count += 1;
+      if (statement.kind === "if") {
+        count += estimateStatementCount(statement.thenBody);
+        if (statement.elseBody !== void 0) count += estimateStatementCount(statement.elseBody);
+      }
+      if (statement.kind === "dispatch") {
+        count += statement.cases.reduce((sum, item) => sum + estimateStatementCount(item.body), 0);
+        if (statement.defaultBody !== void 0) count += estimateStatementCount(statement.defaultBody);
+      }
+      if (statement.kind === "loop") count += estimateStatementCount(statement.body);
+    }
+    return count;
+  }
+  function estimateDispatchStatementCount(statement) {
+    const bodyCost = statement.cases.reduce((sum, item) => sum + estimateStatementCount(item.body), 0);
+    const defaultCost = statement.defaultBody === void 0 ? 0 : estimateStatementCount(statement.defaultBody);
+    const jumpsAfterCases = Math.max(0, statement.cases.length - (statement.defaultBody === void 0 ? 1 : 0));
+    return 2 + statement.cases.length * 5 + jumpsAfterCases * 2 + bodyCost + defaultCost;
+  }
+  function estimateLoweredStatementsCost(statements) {
+    return statements.reduce((sum, statement) => sum + estimateLoweredStatementCost(statement), 0);
+  }
+  function estimateLoweredStatementCost(statement) {
+    switch (statement.kind) {
+      case "assign":
+        return 1 + estimateLoweredExpressionCost(statement.expr);
+      case "indexed_assign":
+        return 2 + estimateLoweredExpressionCost(statement.target.index) + estimateLoweredExpressionCost(statement.expr);
+      case "coord_list_remove":
+        return 4 + estimateLoweredExpressionCost(statement.item);
+      case "pause":
+      case "halt":
+      case "return_value":
+        return 1 + estimateLoweredExpressionCost(statement.expr);
+      case "if":
+        return 2 + estimateLoweredConditionCost(statement.condition) + estimateLoweredStatementsCost(statement.thenBody) + (statement.elseBody === void 0 ? 0 : estimateLoweredStatementsCost(statement.elseBody));
+      case "while":
+        return 3 + estimateLoweredConditionCost(statement.condition) + estimateLoweredStatementsCost(statement.body);
+      case "loop":
+        return 1 + estimateLoweredStatementsCost(statement.body);
+      case "dispatch":
+        return estimateDispatchStatementCost(statement);
+      case "core":
+        return statement.lines.length + (statement.inputs ?? []).reduce((sum, input) => sum + estimateLoweredExpressionCost(input.expr), 0);
+      case "decimal_series":
+        return statement.digits;
+      case "input":
+      case "show":
+      case "call":
+        return 1;
+    }
+  }
+  function estimateDispatchStatementCost(statement) {
+    const bodyCost = statement.cases.reduce((sum, item) => sum + estimateLoweredStatementsCost(item.body), 0);
+    const defaultCost = statement.defaultBody === void 0 ? 0 : estimateLoweredStatementsCost(statement.defaultBody);
+    const jumpsAfterCases = Math.max(0, statement.cases.length - (statement.defaultBody === void 0 ? 1 : 0));
+    return 2 + estimateLoweredExpressionCost(statement.expr) + statement.cases.length * 5 + jumpsAfterCases * 2 + bodyCost + defaultCost;
+  }
+  function estimateLoweredConditionCost(condition) {
+    return 1 + estimateLoweredExpressionCost(condition.left) + estimateLoweredExpressionCost(condition.right);
+  }
+  function estimateLoweredExpressionCost(expr) {
+    switch (expr.kind) {
+      case "number":
+      case "string":
+      case "identifier":
+        return 1;
+      case "indexed":
+        return 2 + estimateLoweredExpressionCost(expr.index);
+      case "unary":
+        return 1 + estimateLoweredExpressionCost(expr.expr);
+      case "binary":
+        return 1 + estimateLoweredExpressionCost(expr.left) + estimateLoweredExpressionCost(expr.right);
+      case "call":
+        return 1 + expr.args.reduce((sum, arg) => sum + estimateLoweredExpressionCost(arg), 0);
+    }
+  }
+  function lowerCyclicCounterMatch(statement, context) {
+    const variable = statement.expr.trim();
+    if (!/^[A-Za-z_][\w]*$/u.test(variable)) return void 0;
+    const range3 = context.stateRanges.get(variable);
+    if (range3?.min === void 0 || range3.max === void 0) return void 0;
+    if (!Number.isInteger(range3.min) || !Number.isInteger(range3.max)) return void 0;
+    if (range3.max <= range3.min || range3.max - range3.min > 12) return void 0;
+    const rows = [];
+    for (const matchCase of statement.cases) {
+      for (const valueText of matchCase.values) {
+        const value = numericLiteralTextValue(valueText);
+        if (value === void 0) return void 0;
+        const body = resolveV2ActionBody(matchCase.action, context);
+        if (body === void 0) return void 0;
+        const analyzed = analyzeCyclicMatchBody(body, variable, context);
+        if (analyzed === void 0) return void 0;
+        rows.push({ value, ...analyzed });
+      }
+    }
+    if (rows.length < 3) return void 0;
+    const sorted = rows.sort((left, right) => left.value - right.value);
+    if (sorted.length !== range3.max - range3.min + 1) return void 0;
+    const seen = /* @__PURE__ */ new Set();
+    for (let index = 0; index < sorted.length; index += 1) {
+      const row = sorted[index];
+      const value = range3.min + index;
+      if (row.value !== value || seen.has(value)) return void 0;
+      seen.add(value);
+      const expectedNext = value === range3.max ? range3.min : value + 1;
+      if (row.next !== expectedNext) return void 0;
+    }
+    const targets = /* @__PURE__ */ new Set();
+    for (const row of sorted) {
+      for (const target of row.deltas.keys()) targets.add(target);
+    }
+    if (targets.size === 0) return void 0;
+    const plans = [];
+    for (const target of [...targets].sort()) {
+      const values = new Map(sorted.map((row) => [row.next, row.deltas.get(target) ?? 0]));
+      const plan = fitLinearDeltaPlan(target, values);
+      if (plan === void 0) return void 0;
+      if (plan.slope !== 0 || plan.intercept !== 0 || plan.corrections.size > 0) plans.push(plan);
+    }
+    if (plans.length === 0) return void 0;
+    return [
+      {
+        kind: "assign",
+        target: variable,
+        expr: lowerV2Expression(`${variable} + 1`, statement.line, context),
+        line: statement.line
+      },
+      {
+        kind: "if",
+        condition: {
+          left: { kind: "identifier", name: variable },
+          op: ">",
+          right: { kind: "number", raw: String(range3.max) }
+        },
+        thenBody: [{
+          kind: "assign",
+          target: variable,
+          expr: { kind: "number", raw: String(range3.min) },
+          line: statement.line
+        }],
+        line: statement.line
+      },
+      ...lowerEffectPlan({ deltas: plans }, variable, statement.line, context)
+    ];
+  }
+  function resolveV2ActionBody(action, context) {
+    if (action.kind !== "v2_invoke") return [action];
+    const rule = context.rules.get(action.name);
+    if (rule === void 0) return void 0;
+    if (rule.params.length === 0) return rule.body;
+    if (rule.params.length !== action.args.length) return void 0;
+    return substituteV2Statements(rule.body, invokeReplacements(rule, action.args));
+  }
+  function analyzeCyclicMatchBody(statements, variable, context) {
+    let next;
+    const deltas = /* @__PURE__ */ new Map();
+    for (const statement of statements) {
+      if (statement.kind === "v2_assign" && statement.target === variable) {
+        const value = numericLiteralTextValue(statement.expr);
+        if (value === void 0 || next !== void 0) return void 0;
+        next = value;
+        continue;
+      }
+      if (statement.kind === "v2_update" && context.stateTypes.get(statement.target) !== "cells") {
+        const value = numericLiteralTextValue(statement.expr);
+        if (value === void 0 || statement.target === variable) return void 0;
+        const delta = statement.op === "+=" ? value : -value;
+        deltas.set(statement.target, (deltas.get(statement.target) ?? 0) + delta);
+        continue;
+      }
+      return void 0;
+    }
+    return next === void 0 ? void 0 : { next, deltas };
+  }
+  function invertLoweredCondition(condition) {
+    return {
+      ...condition,
+      op: invertLoweredComparisonOp(condition.op)
+    };
+  }
+  function invertLoweredComparisonOp(op) {
+    switch (op) {
+      case "==":
+        return "!=";
+      case "!=":
+        return "==";
+      case "<":
+        return ">=";
+      case "<=":
+        return ">";
+      case ">":
+        return "<=";
+      case ">=":
+        return "<";
+    }
+  }
+  function lowerV2MatchAction(action, context, line) {
+    if (action.kind !== "v2_invoke") return lowerV2Statement(action, context);
+    const rule = context.rules.get(action.name);
+    if (rule !== void 0 && context.specializedRules.has(rule.name)) {
+      return lowerV2Statements(substituteV2Statements(rule.body, invokeReplacements(rule, action.args)), context);
+    }
+    const params = context.ruleParams.get(action.name) ?? [];
+    const statements = [];
+    for (let index = 0; index < Math.min(params.length, action.args.length); index += 1) {
+      const arg = action.args[index];
+      statements.push({
+        kind: "assign",
+        target: params[index],
+        expr: lowerV2Expression(arg, line, context),
+        line
+      });
+    }
+    statements.push({ kind: "call", block: action.name, line: action.line });
+    return statements;
+  }
+  function lowerV2Invoke(statement, context) {
+    const rule = context.rules.get(statement.name);
+    if (rule !== void 0 && context.specializedRules.has(rule.name)) {
+      return lowerV2Statements(substituteV2Statements(rule.body, invokeReplacements(rule, statement.args)), context);
+    }
+    const params = context.ruleParams.get(statement.name) ?? [];
+    const statements = [];
+    for (let index = 0; index < Math.min(params.length, statement.args.length); index += 1) {
+      statements.push({
+        kind: "assign",
+        target: params[index],
+        expr: lowerV2Expression(statement.args[index], statement.line, context),
+        line: statement.line
+      });
+    }
+    statements.push({ kind: "call", block: statement.name, line: statement.line });
+    return statements;
+  }
+  function substituteV2Statements(statements, replacements) {
+    return statements.map((statement) => substituteV2Statement(statement, replacements));
+  }
+  function substituteV2Statement(statement, replacements) {
+    switch (statement.kind) {
+      case "v2_assign":
+        return {
+          ...statement,
+          target: substituteV2Text(statement.target, replacements),
+          expr: substituteV2Text(statement.expr, replacements)
+        };
+      case "v2_update":
+        return {
+          ...statement,
+          target: substituteV2Text(statement.target, replacements),
+          expr: substituteV2Text(statement.expr, replacements)
+        };
+      case "v2_show":
+        return substituteV2ShowStatement(statement, replacements);
+      case "v2_if": {
+        const substituted = {
+          ...statement,
+          predicate: substituteV2Predicate(statement.predicate, replacements),
+          thenBody: substituteV2Statements(statement.thenBody, replacements)
+        };
+        if (statement.elseBody !== void 0) {
+          substituted.elseBody = substituteV2Statements(statement.elseBody, replacements);
+        }
+        return substituted;
+      }
+      case "v2_while": {
+        const substituted = {
+          ...statement,
+          predicate: substituteV2Predicate(statement.predicate, replacements),
+          body: substituteV2Statements(statement.body, replacements)
+        };
+        return substituted;
+      }
+      case "v2_loop": {
+        const substituted = {
+          ...statement,
+          body: substituteV2Statements(statement.body, replacements)
+        };
+        return substituted;
+      }
+      case "v2_match": {
+        const substituted = {
+          ...statement,
+          expr: substituteV2Text(statement.expr, replacements),
+          cases: statement.cases.map((matchCase) => ({
+            ...matchCase,
+            values: matchCase.values.map((value) => substituteV2Text(value, replacements)),
+            action: substituteV2Statement(matchCase.action, replacements)
+          }))
+        };
+        if (statement.otherwise !== void 0) {
+          substituted.otherwise = substituteV2Statement(statement.otherwise, replacements);
+        }
+        return substituted;
+      }
+      case "v2_invoke":
+        return { ...statement, args: statement.args.map((arg) => substituteV2Text(arg, replacements)) };
+      case "v2_stop":
+        return { ...statement, value: substituteV2Text(statement.value, replacements) };
+      case "v2_return":
+        return { ...statement, expr: substituteV2Text(statement.expr, replacements) };
+      default:
+        return statement;
+    }
+  }
+  function substituteV2ShowStatement(statement, replacements) {
+    if (statement.target !== void 0) {
+      return { ...statement, target: substituteV2Text(statement.target, replacements) };
+    }
+    if (statement.items === void 0) return statement;
+    let changed = false;
+    const items = statement.items.map((item) => {
+      if (item.kind !== "source") return item;
+      const replacement = replacements.get(item.name);
+      if (replacement === void 0) return item;
+      changed = true;
+      if (isNumericLiteralText(replacement) && item.width === void 0 && item.pad === void 0) {
+        return { kind: "literal", text: replacement, line: item.line };
+      }
+      if (/^[A-Za-z_][\w]*$/u.test(replacement)) return { ...item, name: replacement };
+      return item;
+    });
+    if (!changed) return statement;
+    const literal = displayLiteralText(items);
+    const numericLiteral = literal === void 0 ? void 0 : canonicalNumericDisplayLiteralText(literal);
+    if (numericLiteral !== void 0) {
+      return { kind: "v2_show", target: numericLiteral, line: statement.line };
+    }
+    const substituted = { ...statement, items };
+    delete substituted.inlineName;
+    return substituted;
+  }
+  function displayLiteralText(items) {
+    if (items.some((item) => item.kind !== "literal")) return void 0;
+    return items.map((item) => item.kind === "literal" ? item.text : "").join("");
+  }
+  function canonicalNumericDisplayLiteralText(text) {
+    if (text !== text.trim()) return void 0;
+    if (!isNumericLiteralText(text)) return void 0;
+    const value = Number(text);
+    if (!Number.isFinite(value)) return void 0;
+    const canonical = String(value);
+    return canonical === text ? canonical : void 0;
+  }
+  function substituteV2Predicate(predicate, replacements) {
+    if (predicate.kind === "v2_contains") {
+      return {
+        ...predicate,
+        collection: substituteV2Text(predicate.collection, replacements),
+        item: substituteV2Text(predicate.item, replacements)
+      };
+    }
+    return {
+      ...predicate,
+      left: substituteV2Text(predicate.left, replacements),
+      right: substituteV2Text(predicate.right, replacements)
+    };
+  }
+  function substituteV2Text(text, replacements) {
+    let result = text;
+    for (const [name, value] of replacements) {
+      const escaped = escapeRegExp(name);
+      const replacement = isSimpleSubstitutionAtom(value) ? value : `(${value})`;
+      result = result.replace(new RegExp(`\\b${escaped}\\b`, "gu"), replacement);
+    }
+    return result;
+  }
+  function isSimpleSubstitutionAtom(value) {
+    const trimmed = value.trim();
+    if (isNumericLiteralText(trimmed) || /^[A-Za-z_][\w]*$/u.test(trimmed)) return true;
+    try {
+      return parseExpression(trimmed).kind === "indexed";
+    } catch {
+      return false;
+    }
+  }
+  function escapeRegExp(text) {
+    return text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  }
+  function lowerV2Expression(text, line, context) {
+    const rewritten = rewriteSpatialExpressionText(text, context);
+    const contextual = context === void 0 ? rewritten : normalizeContextualFloorAccessText(rewritten, context);
+    const normalized = normalizeV2ExpressionText(contextual);
+    let expr = parseExpression(normalized, line);
+    if (context !== void 0 && context.consts.size > 0) {
+      expr = inlineConstIdentifiers(expr, context.consts);
+    }
+    return context === void 0 ? expr : lowerDomainRandomCalls(expr, context, line);
+  }
+  function parseV2ConstLine(line) {
+    const match = /^const\s+([A-Za-z_][\w]*)\s*=\s*(.+)$/u.exec(line.text);
+    if (!match) {
+      throw new ParseError("Const must look like 'const name = <expr>'", line.line);
+    }
+    return {
+      kind: "v2_const",
+      name: match[1],
+      expr: match[2].trim(),
+      line: line.line
+    };
+  }
+  function rewriteSpatialExpressionText(text, context) {
+    if (context === void 0) return text;
+    let rewritten = replaceSpatialCall(text, "cell_at", (args) => cellAtExpression(args, context));
+    rewritten = replaceSpatialCall(rewritten, "line_count", (args) => coordListLineCountExpression(args, context));
+    return rewritten;
+  }
+  function lowerDomainRandomCalls(expr, context, line) {
+    switch (expr.kind) {
+      case "number":
+      case "string":
+      case "identifier":
+        return expr;
+      case "indexed":
+        return { ...expr, index: lowerDomainRandomCalls(expr.index, context, line) };
+      case "unary":
+        return { ...expr, expr: lowerDomainRandomCalls(expr.expr, context, line) };
+      case "binary":
+        return {
+          ...expr,
+          left: lowerDomainRandomCalls(expr.left, context, line),
+          right: lowerDomainRandomCalls(expr.right, context, line)
+        };
+      case "call": {
+        const callee = expr.callee.toLowerCase();
+        const firstArg = expr.args[0];
+        if (callee === "random" && expr.args.length === 1 && firstArg?.kind === "identifier") {
+          if (domainLength(firstArg.name, context) !== void 0) {
+            return lowerV2Expression(randomCoordinateExpression(firstArg.name, context), line, context);
+          }
+        }
+        return {
+          ...expr,
+          args: expr.args.map((arg) => lowerDomainRandomCalls(arg, context, line))
+        };
+      }
+    }
+  }
+  function replaceSpatialCall(text, name, replacer) {
+    const pattern = new RegExp(`\\b${name}\\s*\\(([^()]*)\\)`, "gu");
+    return text.replace(pattern, (match, rawArgs) => replacer(splitArgs(rawArgs)) ?? match);
+  }
+  function findSpatialCalls(text, name) {
+    const pattern = new RegExp(`\\b${name}\\s*\\(([^()]*)\\)`, "gu");
+    return [...text.matchAll(pattern)].map((match) => splitArgs(match[1]));
+  }
+  function cellAtExpression(args, context) {
+    const [domain, pos] = cellAtDomainAndPosition(args, context);
+    if (domain === void 0 || pos === void 0) return void 0;
+    const map = context.cellMapNames.get(domain) ?? `__cell_map_${domain}`;
+    return `digit_at(${map}, ${cellAtIndexExpression(pos, domain, context)})`;
+  }
+  function coordListLineCountExpression(args, context) {
+    if (args.length !== 2) return void 0;
+    const [collection, item] = args;
+    if (collection === void 0 || item === void 0) return void 0;
+    const list = context.coordLists.get(collection.trim());
+    if (list === void 0) return void 0;
+    return `coord_list_line_count(${item}, ${list.items.join(", ")})`;
+  }
+  function cellAtDomainAndPosition(args, context) {
+    if (args.length === 2) return [args[0], args[1]];
+    if (args.length !== 1) return [void 0, void 0];
+    return [context.stateDomains.get(args[0]), args[0]];
+  }
+  function cellAtIndexExpression(pos, domain, context) {
+    const world = context.worlds.get(domain);
+    switch (world?.position?.encoding) {
+      case "row_scan":
+      case "floor_plan":
+      case "decimal_player":
+      case "pier_to_ship":
+        if (isSingleDecimalDigitExpression(pos, context)) return pos;
+        return decimalOnesExpression(pos);
+      case "corridor_plan":
+      case "packed_decimal_zero_run":
+      case void 0:
+        return pos;
+    }
+    return pos;
+  }
+  function isSingleDecimalDigitExpression(expr, context) {
+    const range3 = context.stateRanges.get(expr.trim());
+    return range3?.min !== void 0 && range3.max !== void 0 && range3.min >= 0 && range3.max <= 9;
+  }
+  function boardForCells(mask, context) {
+    const domain = context.stateDomains.get(mask.trim());
+    return domain === void 0 ? void 0 : context.boards.get(domain);
+  }
+  function oneDimensionalCellMaskExpression(mask, cell, context) {
+    const board = boardForCells(mask, context);
+    if (board === void 0) return void 0;
+    if (board.height === 1 && board.xMin >= 0 && board.xMax <= 7) return `pow10(${cell})`;
+    if (board.width === 1 && board.yMin >= 0 && board.yMax <= 7) return `pow10(${cell})`;
+    return void 0;
+  }
+  function cellMaskExpressionForCollection(mask, cell, context) {
+    const oneDimensional = oneDimensionalCellMaskExpression(mask, cell, context);
+    if (oneDimensional !== void 0) return oneDimensional;
+    const domain = context.stateDomains.get(mask.trim());
+    const world = domain === void 0 ? void 0 : context.worlds.get(domain);
+    if (world?.position?.encoding === "packed_decimal_zero_run") return `frac(${cell})`;
+    return void 0;
+  }
+  function decimalPlayerPackedCellsIndex(collection, cell, context) {
+    const name = collection.trim();
+    if (context.stateTypes.get(name) !== "cells") return void 0;
+    const domain = context.stateDomains.get(name);
+    if (domain === void 0) return void 0;
+    const world = context.worlds.get(domain);
+    if (world?.position?.encoding !== "decimal_player") return void 0;
+    const mapName = context.cellMapNames.get(domain) ?? singleCellsFieldNameForDomain(context, domain);
+    if (mapName !== name) return void 0;
+    return cellAtIndexExpression(cell, domain, context);
+  }
+  function singleCellsFieldNameForDomain(context, domain) {
+    const names = [...context.stateDomains.entries()].filter(([name, fieldDomain]) => fieldDomain === domain && context.stateTypes.get(name) === "cells").map(([name]) => name);
+    return names.length === 1 ? names[0] : void 0;
+  }
+  function decimalOnesExpression(expr) {
+    return `(${expr}) - 10 * int((${expr}) / 10)`;
+  }
+  function range2(start, end) {
+    const values = [];
+    for (let value = start; value <= end; value += 1) values.push(value);
+    return values;
+  }
+  function domainLength(domain, context) {
+    const name = domain.trim();
+    const board = context.boards.get(name);
+    if (board !== void 0) return board.width * board.height;
+    const world = context.worlds.get(name);
+    if (world !== void 0) return worldDomainLength(world);
+    return void 0;
+  }
+  function worldDomainLength(world) {
+    switch (world.position?.encoding) {
+      case "pier_to_ship":
+        return 8;
+      case "corridor_plan":
+      case "decimal_player":
+      case "floor_plan":
+      case "packed_decimal_zero_run":
+      case "row_scan":
+      case void 0:
+        return 9;
+    }
+    return 9;
+  }
+  function addOffsetExpression(expr, offset) {
+    if (offset === 0) return expr;
+    if (offset > 0) return `${expr} + ${offset}`;
+    return `${expr} - ${Math.abs(offset)}`;
+  }
+  function normalizeV2ExpressionText(text) {
+    return text.trim().replace(/\b([A-Za-z_][\w]*)\.floor\b/gu, "int($1 / 100)");
+  }
+  function normalizeContextualFloorAccessText(text, context) {
+    return text.replace(/\b([A-Za-z_][\w]*)\.floor\b/gu, (match, name) => {
+      const domain = context.stateDomains.get(name);
+      const world = domain === void 0 ? void 0 : context.worlds.get(domain);
+      return world?.position?.encoding === "packed_decimal_zero_run" ? `int(${name})` : match;
+    });
+  }
+  function parseStackSource(text, line) {
+    const trimmed = text.trim();
+    if (/^input\.(X|Y)$/u.test(trimmed)) {
+      throw new ParseError(`Use '${trimmed.replace("input.", "stack.")}' for startup stack values`, line);
+    }
+    const match = /^stack\.(X|Y)$/u.exec(trimmed);
+    return match?.[1];
+  }
+  function isNumericLiteralText(text) {
+    return /^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/iu.test(text.trim());
+  }
+  function parseIdentifierList(text) {
+    return text.split(",").map((part) => part.trim()).filter((part) => part.length > 0);
+  }
+  function parseCommaIdentifierList(text, line) {
+    const trimmed = text.trim();
+    if (trimmed.length === 0) return [];
+    const parts = text.split(",").map((part) => part.trim());
+    if (parts.some((part) => part.length === 0)) {
+      throw new ParseError("Function parameters must be comma-separated identifiers", line);
+    }
+    return parts;
+  }
+  function displayItemSources(items) {
+    return items.filter((item) => item.kind === "source").map((item) => item.name);
+  }
+  function parseDisplayItemList(text, line) {
+    const tokens = tokenizeDisplayItems(text, line);
+    const items = [];
+    let pendingComma = false;
+    let justReadItem = false;
+    for (const token of tokens) {
+      if (token.kind === "comma") {
+        if (!justReadItem || pendingComma) throw new ParseError("Display comma must separate two fragments", line);
+        pendingComma = true;
+        justReadItem = false;
+        continue;
+      }
+      const item = parseDisplayItem(token.text, line);
+      if (pendingComma) {
+        pendingComma = false;
+      } else if (justReadItem) {
+        throw new ParseError("Display fragments must be separated by commas", line);
+      }
+      pushDisplayItem(items, item);
+      justReadItem = true;
+    }
+    if (pendingComma) throw new ParseError("Display comma must separate two fragments", line);
+    return items;
+  }
+  function pushDisplayItem(items, item) {
+    const previous = items.at(-1);
+    if (previous?.kind === "literal" && item.kind === "literal") {
+      previous.text += item.text;
+      return;
+    }
+    items.push(item);
+  }
+  function parseDisplayItem(text, line) {
+    const trimmed = text.trim();
+    if (trimmed.startsWith('"')) {
+      return {
+        kind: "literal",
+        text: parseQuotedDisplayText(trimmed, line),
+        line
+      };
+    }
+    if (/^\d+$/u.test(trimmed)) {
+      return {
+        kind: "literal",
+        text: trimmed,
+        line
+      };
+    }
+    const source = /^([A-Za-z_][\w]*)(?::(0?)(\d+))?$/u.exec(trimmed);
+    if (source) {
+      const [, name, zero, widthText] = source;
+      const item = { kind: "source", name, line };
+      if (widthText !== void 0) {
+        const width = Number(widthText);
+        if (!Number.isInteger(width) || width <= 0 || width > 8) {
+          throw new ParseError(`Display width must be 1..8, got '${widthText}'`, line);
+        }
+        item.width = width;
+        item.pad = zero === "0" ? "zero" : "space";
+      }
+      return item;
+    }
+    if (trimmed.includes('"')) {
+      throw new ParseError("Display fragments must be separated by commas", line);
+    }
+    const exprSource = /^(.*?)(?::(0?)(\d+))?$/u.exec(trimmed);
+    if (exprSource) {
+      const [, exprText, zero, widthText] = exprSource;
+      const expr = parseExpression(exprText.trim(), line);
+      const item = { kind: "source", name: exprText.trim(), expr, line };
+      if (widthText !== void 0) {
+        const width = Number(widthText);
+        if (!Number.isInteger(width) || width <= 0 || width > 8) {
+          throw new ParseError(`Display width must be 1..8, got '${widthText}'`, line);
+        }
+        item.width = width;
+        item.pad = zero === "0" ? "zero" : "space";
+      }
+      return item;
+    }
+    throw new ParseError(`Display item must be a string literal, decimal literal, state name, or expression, got '${trimmed}'`, line);
+  }
+  function parseV2StopLiteral(text, line) {
+    const trimmed = text.trim();
+    return trimmed.startsWith('"') ? parseQuotedDisplayText(trimmed, line) : void 0;
+  }
+  function parseQuotedDisplayText(text, line) {
+    try {
+      const value = JSON.parse(text);
+      if (typeof value === "string") return value;
+    } catch {
+    }
+    throw new ParseError(`Invalid display string literal '${text}'`, line);
+  }
+  function tokenizeDisplayItems(text, line) {
+    const tokens = [];
+    let index = 0;
+    while (index < text.length) {
+      const char = text[index];
+      if (/\s/u.test(char)) {
+        index += 1;
+        continue;
+      }
+      if (char === ",") {
+        tokens.push({ kind: "comma" });
+        index += 1;
+        continue;
+      }
+      if (char === '"') {
+        const start2 = index;
+        index += 1;
+        let escaped = false;
+        let closed = false;
+        while (index < text.length) {
+          const current = text[index];
+          if (escaped) {
+            escaped = false;
+            index += 1;
+            continue;
+          }
+          if (current === "\\") {
+            escaped = true;
+            index += 1;
+            continue;
+          }
+          if (current === '"') {
+            index += 1;
+            closed = true;
+            break;
+          }
+          index += 1;
+        }
+        if (!closed) throw new ParseError("Unclosed display string literal", line);
+        tokens.push({ kind: "item", text: text.slice(start2, index) });
+        continue;
+      }
+      const start = index;
+      let depth = 0;
+      while (index < text.length) {
+        const current = text[index];
+        if (current === "(") depth += 1;
+        else if (current === ")") depth = Math.max(0, depth - 1);
+        else if (current === "," && depth === 0) break;
+        index += 1;
+      }
+      tokens.push({ kind: "item", text: text.slice(start, index).trim() });
+    }
+    return tokens;
+  }
+  function parseExpression(text, line = 0) {
+    return new ExpressionParser(text, line).parse();
+  }
+  var ExpressionParser = class {
+    tokens;
+    index = 0;
+    source;
+    line;
+    constructor(source, line) {
+      this.source = source;
+      this.line = line;
+      this.tokens = tokenizeExpression(source, line);
+    }
+    parse() {
+      const expr = this.parseAdditive();
+      if (!this.done()) {
+        throw new ParseError(
+          `Unexpected token '${this.peek()}' in expression '${this.source}'`,
+          this.line
+        );
+      }
+      return expr;
+    }
+    parseAdditive() {
+      let left = this.parseMultiplicative();
+      while (this.peekOptional() === "+" || this.peekOptional() === "-") {
+        const op = this.next();
+        left = { kind: "binary", op, left, right: this.parseMultiplicative() };
+      }
+      return left;
+    }
+    parseMultiplicative() {
+      let left = this.parseUnary();
+      while (this.peekOptional() === "*" || this.peekOptional() === "/") {
+        const op = this.next();
+        left = { kind: "binary", op, left, right: this.parseUnary() };
+      }
+      return left;
+    }
+    parseUnary() {
+      if (this.peekOptional() === "-") {
+        this.next();
+        return { kind: "unary", op: "-", expr: this.parseUnary() };
+      }
+      return this.parsePrimary();
+    }
+    parsePrimary() {
+      const token = this.next();
+      if (token === "(") {
+        const expr = this.parseAdditive();
+        this.expect(")");
+        return expr;
+      }
+      if (token.startsWith('"')) {
+        return { kind: "string", text: parseQuotedDisplayText(token, this.line) };
+      }
+      if (/^\d+(?:\.\d+)?(?:e[+-]?\d+)?$/iu.test(token)) {
+        return { kind: "number", raw: token };
+      }
+      if (/^[A-Za-z_А-Яа-я][\wА-Яа-я]*$/u.test(token)) {
+        if (this.peekOptional() === "(") {
+          this.next();
+          const args = [];
+          if (this.peekOptional() !== ")") {
+            do {
+              args.push(this.parseAdditive());
+              if (this.peekOptional() !== ",") break;
+              this.next();
+            } while (!this.done());
+          }
+          this.expect(")");
+          return { kind: "call", callee: token, args };
+        }
+        if (this.peekOptional() === "[") {
+          this.next();
+          const index = this.parseAdditive();
+          this.expect("]");
+          let field;
+          if (this.peekOptional() === ".") {
+            this.next();
+            const member = this.next();
+            if (!/^[A-Za-z_А-Яа-я][\wА-Яа-я]*$/u.test(member)) {
+              throw new ParseError(
+                `Expected indexed field name, got '${member}' in expression '${this.source}'`,
+                this.line
+              );
+            }
+            field = member;
+          }
+          return field === void 0 ? { kind: "indexed", base: token, index } : { kind: "indexed", base: token, field, index };
+        }
+        return { kind: "identifier", name: token };
+      }
+      throw new ParseError(
+        `Unexpected token '${token}' in expression '${this.source}'`,
+        this.line
+      );
+    }
+    expect(token) {
+      const actual = this.next();
+      if (actual !== token) {
+        throw new ParseError(
+          `Expected '${token}', got '${actual}' in expression '${this.source}'`,
+          this.line
+        );
+      }
+    }
+    done() {
+      return this.index >= this.tokens.length;
+    }
+    peek() {
+      const token = this.tokens[this.index];
+      if (!token) {
+        throw new ParseError(`Unexpected end of expression '${this.source}'`, this.line);
+      }
+      return token;
+    }
+    peekOptional() {
+      return this.tokens[this.index];
+    }
+    next() {
+      const token = this.peek();
+      this.index += 1;
+      return token;
+    }
+  };
+  function tokenizeExpression(source, line) {
+    const tokens = [];
+    const regex = /\s*([A-Za-z_А-Яа-я][\wА-Яа-я]*|\d+(?:\.\d+)?(?:e[+-]?\d+)?|==|!=|<=|>=|[()[\].+\-*/,])\s*/giy;
+    let index = 0;
+    while (index < source.length) {
+      while (index < source.length && /\s/u.test(source[index])) index += 1;
+      if (index >= source.length) break;
+      if (source[index] === '"') {
+        const start = index;
+        index += 1;
+        let escaped = false;
+        let closed = false;
+        while (index < source.length) {
+          const current = source[index];
+          if (escaped) {
+            escaped = false;
+            index += 1;
+            continue;
+          }
+          if (current === "\\") {
+            escaped = true;
+            index += 1;
+            continue;
+          }
+          if (current === '"') {
+            index += 1;
+            closed = true;
+            break;
+          }
+          index += 1;
+        }
+        if (!closed) throw new ParseError("Unclosed expression string literal", line);
+        tokens.push(source.slice(start, index));
+        continue;
+      }
+      regex.lastIndex = index;
+      const match = regex.exec(source);
+      if (!match) {
+        throw new ParseError(
+          `Cannot tokenize expression near '${source.slice(index)}'`,
+          line
+        );
+      }
+      tokens.push(match[1]);
+      index = regex.lastIndex;
+    }
+    return tokens;
+  }
+  function stripComment(text) {
+    let quoted = false;
+    let escaped = false;
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quoted && char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        quoted = !quoted;
+        continue;
+      }
+      if (!quoted && char === "#") return text.slice(0, index);
+      if (!quoted && char === "/" && text[index + 1] === "/") return text.slice(0, index);
+    }
+    return text;
+  }
+  function normalizeSourceLine(text, line) {
+    const stripped = stripComment(text).trim();
+    if (stripped.length === 0) return [];
+    return tokenizeInlineBlocks(stripped).map((lineText) => ({ text: lineText, line }));
+  }
+  function tokenizeInlineBlocks(text) {
+    const rawTokens = tokenizeInlineGrammar(text);
+    const lines = [];
+    let pending = "";
+    for (const token of rawTokens) {
+      if (token === "{") {
+        if (pending.trim().length > 0) {
+          lines.push(`${pending.trim()} {`);
+        } else {
+          lines.push("{");
+        }
+        pending = "";
+        continue;
+      }
+      if (token === "}") {
+        const body = pending.trim();
+        if (body.length > 0) lines.push(body);
+        lines.push("}");
+        pending = "";
+        continue;
+      }
+      if (pending.length > 0) pending += " ";
+      pending += token;
+    }
+    if (pending.trim().length > 0) lines.push(pending.trim());
+    return lines;
+  }
+  function tokenizeInlineGrammar(text) {
+    const tokens = [];
+    let token = "";
+    let parenDepth = 0;
+    let bracketDepth = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index];
+      if (escaped) {
+        token += char;
+        escaped = false;
+        continue;
+      }
+      if (quoted) {
+        token += char;
+        if (char === "\\") {
+          escaped = true;
+        } else if (char === '"') {
+          quoted = false;
+        }
+        continue;
+      }
+      if (char === '"') {
+        quoted = true;
+        token += char;
+        continue;
+      }
+      if (char === "(") {
+        parenDepth += 1;
+        token += char;
+        continue;
+      }
+      if (char === ")" && parenDepth > 0) {
+        parenDepth -= 1;
+        token += char;
+        continue;
+      }
+      if (char === "[") {
+        bracketDepth += 1;
+        token += char;
+        continue;
+      }
+      if (char === "]" && bracketDepth > 0) {
+        bracketDepth -= 1;
+        token += char;
+        continue;
+      }
+      if (char === ";" && parenDepth === 0 && bracketDepth === 0) {
+        if (token.trim().length > 0) {
+          tokens.push(token.trim());
+        }
+        token = "";
+        continue;
+      }
+      if ((char === "{" || char === "}") && parenDepth === 0 && bracketDepth === 0) {
+        if (token.trim().length > 0) {
+          tokens.push(token.trim());
+        }
+        token = "";
+        tokens.push(char);
+        continue;
+      }
+      token += char;
+    }
+    if (token.trim().length > 0) tokens.push(token.trim());
+    return tokens;
+  }
+
+  // src/core/ir.ts
+  var REGISTERS_BY_INDEX = [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "a",
+    "b",
+    "c",
+    "d",
+    "e"
+  ];
+  var DIRECT_STORE_BASE = 64;
+  var DIRECT_RECALL_BASE = 96;
+  var INDIRECT_JUMP_BASE = 128;
+  var INDIRECT_CALL_BASE = 160;
+  var INDIRECT_STORE_BASE = 176;
+  var INDIRECT_RECALL_BASE = 208;
+  var INDIRECT_COND_BASES = {
+    112: "!=0",
+    144: ">=0",
+    192: "<0",
+    224: "==0"
+  };
+  var COND_OPCODES = {
+    87: "!=0",
+    89: ">=0",
+    92: "<0",
+    94: "==0"
+  };
+  var LOOP_OPCODES = {
+    93: "L0",
+    91: "L1",
+    88: "L2",
+    90: "L3"
+  };
+  var TAKES_ADDRESS = /* @__PURE__ */ new Set([
+    81,
+    83,
+    87,
+    88,
+    89,
+    90,
+    91,
+    92,
+    93,
+    94
+  ]);
+  function metaFromOp(op) {
+    const meta = { mnemonic: op.mnemonic };
+    if (op.comment !== void 0) meta.comment = op.comment;
+    if (op.sourceLine !== void 0) meta.sourceLine = op.sourceLine;
+    if (op.raw === true) meta.raw = true;
+    return meta;
+  }
+  function targetMetaFromAddress(item) {
+    const meta = {};
+    if (item.comment !== void 0) meta.comment = item.comment;
+    if (item.sourceLine !== void 0) meta.sourceLine = item.sourceLine;
+    if (item.formalOpcode !== void 0) meta.formalOpcode = item.formalOpcode;
+    return meta;
+  }
+  function isInRange(opcode, base) {
+    return opcode >= base && opcode <= base + 14;
+  }
+  function registerForOffset(opcode, base) {
+    return REGISTERS_BY_INDEX[opcode - base];
+  }
+  function stopSemanticFromComment(comment) {
+    if (comment === void 0) return "unknown";
+    const lower = comment.toLowerCase();
+    if (lower.startsWith("halt")) return "halt";
+    if (lower.startsWith("pause")) return "pause";
+    if (lower.startsWith("show")) return "show";
+    if (lower.startsWith("ask")) return "ask";
+    if (lower.startsWith("input") || lower.startsWith("read")) return "input";
+    if (lower.startsWith("implicit final stop")) return "halt";
+    if (lower.includes("implicit stop")) return "halt";
+    return "unknown";
+  }
+  function raiseMachineToIr(items) {
+    const result = [];
+    for (let i = 0; i < items.length; i += 1) {
+      const item = items[i];
+      if (item.kind === "label") {
+        result.push({
+          kind: "label",
+          name: item.name,
+          ...item.procedureBoundary === void 0 ? {} : { procedureBoundary: item.procedureBoundary },
+          ...item.procedureName === void 0 ? {} : { procedureName: item.procedureName },
+          ...item.hidden === true ? { hidden: true } : {}
+        });
+        continue;
+      }
+      if (item.kind === "address") {
+        result.push({
+          kind: "orphan-address",
+          target: item.target,
+          meta: targetMetaFromAddress(item)
+        });
+        continue;
+      }
+      const meta = metaFromOp(item);
+      const opcode = item.opcode;
+      if (TAKES_ADDRESS.has(opcode)) {
+        const next = items[i + 1];
+        if (next?.kind !== "address") {
+          result.push({ kind: "plain", opcode, meta });
+          continue;
+        }
+        const target = next.target;
+        const tmeta = targetMetaFromAddress(next);
+        i += 1;
+        if (opcode === 81) {
+          result.push({ kind: "jump", target, opcode, meta, targetMeta: tmeta });
+          continue;
+        }
+        if (opcode === 83) {
+          result.push({ kind: "call", target, opcode, meta, targetMeta: tmeta });
+          continue;
+        }
+        const condition = COND_OPCODES[opcode];
+        if (condition !== void 0) {
+          result.push({ kind: "cjump", condition, target, opcode, meta, targetMeta: tmeta });
+          continue;
+        }
+        const loop = LOOP_OPCODES[opcode];
+        if (loop !== void 0) {
+          result.push({ kind: "loop", counter: loop, target, opcode, meta, targetMeta: tmeta });
+          continue;
+        }
+        result.push({ kind: "plain", opcode, meta });
+        continue;
+      }
+      if (isInRange(opcode, DIRECT_STORE_BASE)) {
+        result.push({
+          kind: "store",
+          register: registerForOffset(opcode, DIRECT_STORE_BASE),
+          opcode,
+          meta
+        });
+        continue;
+      }
+      if (isInRange(opcode, DIRECT_RECALL_BASE)) {
+        result.push({
+          kind: "recall",
+          register: registerForOffset(opcode, DIRECT_RECALL_BASE),
+          opcode,
+          meta
+        });
+        continue;
+      }
+      if (isInRange(opcode, INDIRECT_STORE_BASE)) {
+        result.push({
+          kind: "indirect-store",
+          register: registerForOffset(opcode, INDIRECT_STORE_BASE),
+          opcode,
+          meta
+        });
+        continue;
+      }
+      if (isInRange(opcode, INDIRECT_RECALL_BASE)) {
+        result.push({
+          kind: "indirect-recall",
+          register: registerForOffset(opcode, INDIRECT_RECALL_BASE),
+          opcode,
+          meta
+        });
+        continue;
+      }
+      if (isInRange(opcode, INDIRECT_JUMP_BASE)) {
+        result.push({
+          kind: "indirect-jump",
+          register: registerForOffset(opcode, INDIRECT_JUMP_BASE),
+          opcode,
+          meta
+        });
+        continue;
+      }
+      if (isInRange(opcode, INDIRECT_CALL_BASE)) {
+        result.push({
+          kind: "indirect-call",
+          register: registerForOffset(opcode, INDIRECT_CALL_BASE),
+          opcode,
+          meta
+        });
+        continue;
+      }
+      const indirectCondBase = Object.keys(INDIRECT_COND_BASES).map((value) => Number(value)).find((base) => isInRange(opcode, base));
+      if (indirectCondBase !== void 0) {
+        result.push({
+          kind: "indirect-cjump",
+          condition: INDIRECT_COND_BASES[indirectCondBase],
+          register: registerForOffset(opcode, indirectCondBase),
+          opcode,
+          meta
+        });
+        continue;
+      }
+      if (opcode === 82) {
+        result.push({ kind: "return", opcode, meta });
+        continue;
+      }
+      if (opcode === 80) {
+        result.push({
+          kind: "stop",
+          opcode,
+          semantic: stopSemanticFromComment(item.comment),
+          meta
+        });
+        continue;
+      }
+      result.push({ kind: "plain", opcode, meta });
+    }
+    return result;
+  }
+  function machineOpFromMeta(opcode, meta) {
+    const op = {
+      kind: "op",
+      opcode,
+      mnemonic: meta.mnemonic
+    };
+    if (meta.comment !== void 0) op.comment = meta.comment;
+    if (meta.sourceLine !== void 0) op.sourceLine = meta.sourceLine;
+    if (meta.raw === true) op.raw = true;
+    return op;
+  }
+  function machineAddressFromMeta(target, meta) {
+    const ref = { kind: "address", target };
+    if (meta.comment !== void 0) ref.comment = meta.comment;
+    if (meta.sourceLine !== void 0) ref.sourceLine = meta.sourceLine;
+    if (meta.formalOpcode !== void 0) ref.formalOpcode = meta.formalOpcode;
+    return ref;
+  }
+  function lowerIrToMachine(ops) {
+    const result = [];
+    for (const op of ops) {
+      switch (op.kind) {
+        case "label":
+          result.push({
+            kind: "label",
+            name: op.name,
+            ...op.procedureBoundary === void 0 ? {} : { procedureBoundary: op.procedureBoundary },
+            ...op.procedureName === void 0 ? {} : { procedureName: op.procedureName },
+            ...op.hidden === true ? { hidden: true } : {}
+          });
+          break;
+        case "orphan-address":
+          result.push(machineAddressFromMeta(op.target, op.meta));
+          break;
+        case "store":
+        case "recall":
+        case "indirect-store":
+        case "indirect-recall":
+        case "indirect-jump":
+        case "indirect-call":
+        case "indirect-cjump":
+        case "return":
+        case "stop":
+        case "plain":
+          result.push(machineOpFromMeta(op.opcode, op.meta));
+          break;
+        case "jump":
+        case "cjump":
+        case "call":
+        case "loop":
+          result.push(machineOpFromMeta(op.opcode, op.meta));
+          result.push(machineAddressFromMeta(op.target, op.targetMeta));
+          break;
+      }
+    }
+    return result;
+  }
+
+  // src/core/passes/helpers.ts
+  function emptyResult(ops) {
+    return { ops: [...ops], applied: 0, optimizations: [] };
+  }
+  function cellsPerOp(op) {
+    switch (op.kind) {
+      case "label":
+        return 0;
+      case "jump":
+      case "cjump":
+      case "call":
+      case "loop":
+        return 2;
+      case "orphan-address":
+        return 1;
+      default:
+        return 1;
+    }
+  }
+  function calculateLabelAddresses(ops) {
+    const map = /* @__PURE__ */ new Map();
+    let address = 0;
+    for (const op of ops) {
+      if (op.kind === "label") {
+        map.set(op.name, address);
+        continue;
+      }
+      address += cellsPerOp(op);
+    }
+    return map;
+  }
+  function targetAddress(target, labels) {
+    if (typeof target === "number") return target;
+    return labels.get(target);
+  }
+  function hasRewriteBarrier(op) {
+    return "meta" in op && "raw" in op.meta && op.meta.raw === true;
+  }
+  function isDisplayFocusSensitive(op) {
+    return "meta" in op && (op.meta.roles?.includes("display-byte") === true || /\b(display|screen|show|x2|вп)\b/iu.test(op.meta.comment ?? ""));
+  }
+  function knownIndirectMemoryTarget(op) {
+    if (op.kind !== "indirect-recall" && op.kind !== "indirect-store") return void 0;
+    const match = /\bindirect-memory-target=([0-9a-e])\b/iu.exec(op.meta.comment ?? "");
+    if (!match) return void 0;
+    return match[1].toLowerCase();
+  }
+
+  // src/core/passes/arithmetic-if.ts
+  var run = (ops) => {
+    const labelRefs = countLabelRefs(ops);
+    const result = [];
+    let applied = 0;
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind !== "cjump" || typeof op.target !== "string" || hasRewriteBarrier(op)) {
+        result.push(op);
+        continue;
+      }
+      const thenJumpIndex = findNextFlowOp(ops, i + 1);
+      if (thenJumpIndex === void 0) {
+        result.push(op);
+        continue;
+      }
+      const thenJump = ops[thenJumpIndex];
+      if (thenJump.kind !== "jump" || typeof thenJump.target !== "string") {
+        result.push(op);
+        continue;
+      }
+      const falseLabelIndex = thenJumpIndex + 1;
+      const falseLabel = ops[falseLabelIndex];
+      if (falseLabel?.kind !== "label" || falseLabel.name !== op.target) {
+        result.push(op);
+        continue;
+      }
+      const endLabelIndex = findLabel(ops, thenJump.target, falseLabelIndex + 1);
+      if (endLabelIndex === void 0 || (labelRefs.get(op.target) ?? 0) !== 1) {
+        result.push(op);
+        continue;
+      }
+      const thenOps = ops.slice(i + 1, thenJumpIndex);
+      const elseOps = ops.slice(falseLabelIndex + 1, endLabelIndex);
+      if (!isPureLinearBlock(thenOps) || !isPureLinearBlock(elseOps) || !opsEquivalent(thenOps, elseOps)) {
+        result.push(op);
+        continue;
+      }
+      result.push(...thenOps);
+      i = endLabelIndex - 1;
+      applied += 1;
+    }
+    if (applied === 0) return { ops: result, applied: 0, optimizations: [] };
+    return {
+      ops: result,
+      applied,
+      optimizations: [
+        {
+          name: "arithmetic-if-pass",
+          detail: `Collapsed ${applied} conditional block(s) whose simplified branches were byte-identical.`
+        }
+      ]
+    };
+  };
+  function countLabelRefs(ops) {
+    const refs = /* @__PURE__ */ new Map();
+    for (const op of ops) {
+      if ((op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") && typeof op.target === "string") {
+        refs.set(op.target, (refs.get(op.target) ?? 0) + 1);
+      }
+    }
+    return refs;
+  }
+  function findNextFlowOp(ops, start) {
+    for (let i = start; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind === "label") return void 0;
+      if (op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") return i;
+    }
+    return void 0;
+  }
+  function findLabel(ops, name, start) {
+    for (let i = start; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind === "label" && op.name === name) return i;
+    }
+    return void 0;
+  }
+  function isPureLinearBlock(ops) {
+    return ops.length > 0 && ops.every(
+      (op) => !hasRewriteBarrier(op) && (op.kind === "plain" || op.kind === "store" || op.kind === "recall" || op.kind === "stop")
+    );
+  }
+  function opsEquivalent(a, b) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+      const left = a[i];
+      const right = b[i];
+      if (left.kind !== right.kind) return false;
+      if ("opcode" in left && "opcode" in right && left.opcode !== right.opcode) return false;
+      if (left.kind === "store" && right.kind === "store" && left.register !== right.register) return false;
+      if (left.kind === "recall" && right.kind === "recall" && left.register !== right.register) return false;
+      if (left.kind === "stop" && right.kind === "stop" && left.semantic !== right.semantic) return false;
+    }
+    return true;
+  }
+  var arithmeticIfPass = {
+    name: "arithmetic-if-pass",
+    run,
+    layoutSafe: false
+  };
+
+  // src/core/passes/constant-folding.ts
+  function digitOf(op) {
+    if (op.kind === "plain" && op.opcode <= 9) return op.opcode;
+    return void 0;
+  }
+  function aluOpcode(op) {
+    if (op.kind !== "plain") return void 0;
+    if (op.opcode === 16) return "+";
+    if (op.opcode === 17) return "-";
+    if (op.opcode === 18) return "*";
+    if (op.opcode === 19) return "/";
+    return void 0;
+  }
+  function isIdentityPlus(op, prev) {
+    if (prev === void 0) return false;
+    const digit = digitOf(prev);
+    if (digit !== 0) return false;
+    return aluOpcode(op) === "+";
+  }
+  function isIdentityMul(op, prev) {
+    if (prev === void 0) return false;
+    const digit = digitOf(prev);
+    if (digit !== 1) return false;
+    return aluOpcode(op) === "*";
+  }
+  var run2 = (ops) => {
+    const result = [];
+    let applied = 0;
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      const prev = result[result.length - 1];
+      if ((isIdentityPlus(op, prev) || isIdentityMul(op, prev)) && prev !== void 0 && prev.kind === "plain" && prev.meta.raw !== true && op.kind === "plain" && op.meta.raw !== true) {
+        result.pop();
+        applied += 1;
+        continue;
+      }
+      result.push(op);
+    }
+    if (applied === 0) {
+      return { ops: result, applied: 0, optimizations: [] };
+    }
+    const passResult = {
+      ops: result,
+      applied,
+      optimizations: [
+        {
+          name: "constant-folding",
+          detail: `Dropped ${applied} identity arithmetic operation(s) (0+ or 1*).`
+        }
+      ]
+    };
+    return passResult;
+  };
+  var constantFolding = {
+    name: "constant-folding",
+    run: run2,
+    layoutSafe: false
+  };
+
+  // src/core/passes/cse-display-block.ts
+  function isPureDataOp(op) {
+    if (hasRewriteBarrier(op)) return false;
+    if (op.kind === "recall") return true;
+    if (op.kind === "plain") {
+      if (op.opcode === 16 || op.opcode === 18) return true;
+      if (op.opcode <= 9 || op.opcode === 10) return true;
+    }
+    return false;
+  }
+  function isBlockTerminator(op) {
+    if (hasRewriteBarrier(op)) return false;
+    return op.kind === "stop" || op.kind === "store" || op.kind === "indirect-store";
+  }
+  function collectCseCandidates(ops) {
+    const blocks = [];
+    let start = -1;
+    let buffer = [];
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind === "label") {
+        start = -1;
+        buffer = [];
+        continue;
+      }
+      if (isPureDataOp(op)) {
+        if (start === -1) start = i;
+        buffer.push(op);
+        continue;
+      }
+      if (buffer.length >= 3 && op.kind === "return") {
+        blocks.push({ startIndex: start, ops: [...buffer, op] });
+      } else if (buffer.length >= 3 && op.kind === "stop" && ops[i + 1]?.kind === "return") {
+        blocks.push({ startIndex: start, ops: [...buffer, op, ops[i + 1]] });
+      }
+      start = -1;
+      buffer = [];
+      if (isBlockTerminator(op)) continue;
+    }
+    return blocks;
+  }
+  function blockSignature(block) {
+    return block.ops.map((op) => {
+      if (op.kind === "recall") return `r:${op.register}`;
+      if (op.kind === "plain") return `p:${op.opcode.toString(16)}`;
+      if (op.kind === "stop") return `stop:${op.semantic}`;
+      if (op.kind === "return") return "return";
+      return `o:${op.kind}`;
+    }).join("|");
+  }
+  var cseLabelCounter = 0;
+  function freshLabel() {
+    cseLabelCounter += 1;
+    return `__cse_block_${cseLabelCounter}`;
+  }
+  var run3 = (ops) => {
+    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
+    const blocks = collectCseCandidates(ops);
+    if (blocks.length < 2) return { ops: [...ops], applied: 0, optimizations: [] };
+    const bySignature = /* @__PURE__ */ new Map();
+    for (const block of blocks) {
+      const sig = blockSignature(block);
+      if (!bySignature.has(sig)) bySignature.set(sig, []);
+      bySignature.get(sig).push(block);
+    }
+    let applied = 0;
+    const replaceWith = /* @__PURE__ */ new Map();
+    const labelsToInsert = /* @__PURE__ */ new Map();
+    for (const [, group] of bySignature) {
+      if (group.length < 2) continue;
+      const blockSize = group[0].ops.length;
+      const savedPerSite = blockSize - 2;
+      if (savedPerSite < 1) continue;
+      const totalSavings = savedPerSite * (group.length - 1);
+      if (totalSavings <= 0) continue;
+      const canonical = group[0];
+      const label = freshLabel();
+      labelsToInsert.set(canonical.startIndex, label);
+      for (let i2 = 1; i2 < group.length; i2 += 1) {
+        const dup = group[i2];
+        replaceWith.set(dup.startIndex, {
+          count: dup.ops.length,
+          label,
+          targetMeta: { comment: "cse jump" },
+          jumpMeta: { mnemonic: "\u0411\u041F", comment: "cse" }
+        });
+        applied += 1;
+      }
+    }
+    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    const result = [];
+    let i = 0;
+    while (i < ops.length) {
+      const labelHere = labelsToInsert.get(i);
+      if (labelHere !== void 0) {
+        result.push({ kind: "label", name: labelHere });
+      }
+      const replacement = replaceWith.get(i);
+      if (replacement !== void 0) {
+        result.push({
+          kind: "jump",
+          target: replacement.label,
+          opcode: 81,
+          meta: replacement.jumpMeta,
+          targetMeta: replacement.targetMeta
+        });
+        i += replacement.count;
+        continue;
+      }
+      result.push(ops[i]);
+      i += 1;
+    }
+    const passResult = {
+      ops: result,
+      applied,
+      optimizations: [
+        {
+          name: "cse-display-block",
+          detail: `Deduplicated ${applied} display block(s) by redirecting to a shared exit.`
+        }
+      ]
+    };
+    return passResult;
+  };
+  var cseDisplayBlock = {
+    name: "cse-display-block",
+    run: run3,
+    layoutSafe: false
+  };
+
+  // src/core/passes/liveness-analysis.ts
+  function buildTargetIndexes(ops) {
+    const labelIndex = /* @__PURE__ */ new Map();
+    const addressIndex = /* @__PURE__ */ new Map();
+    let address = 0;
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind === "label") {
+        labelIndex.set(op.name, i);
+        continue;
+      }
+      addressIndex.set(address, i);
+      address += cellsPerOp(op);
+    }
+    return { labelIndex, addressIndex };
+  }
+  function buildSuccessors(ops) {
+    const { labelIndex, addressIndex } = buildTargetIndexes(ops);
+    const successors = Array.from({ length: ops.length }, () => []);
+    const callReturns = [];
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      const next = i + 1;
+      if ((op.kind === "call" || op.kind === "indirect-call") && next < ops.length) {
+        callReturns.push(next);
+      }
+    }
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      const next = i + 1;
+      const fallthrough = () => {
+        if (next < ops.length) successors[i].push(next);
+      };
+      const jumpTo = (target) => {
+        if (typeof target === "string") {
+          const idx = labelIndex.get(target);
+          if (idx !== void 0) successors[i].push(idx);
+        } else {
+          const idx = addressIndex.get(target);
+          if (idx !== void 0) successors[i].push(idx);
+        }
+      };
+      switch (op.kind) {
+        case "label":
+        case "store":
+        case "recall":
+        case "indirect-store":
+        case "indirect-recall":
+        case "plain":
+        case "orphan-address":
+          fallthrough();
+          break;
+        case "stop":
+          fallthrough();
+          break;
+        case "return":
+          successors[i].push(...callReturns);
+          break;
+        case "jump":
+          jumpTo(op.target);
+          break;
+        case "cjump":
+        case "loop":
+          jumpTo(op.target);
+          fallthrough();
+          break;
+        case "call":
+          jumpTo(op.target);
+          fallthrough();
+          break;
+        case "indirect-jump":
+          break;
+        case "indirect-call":
+          fallthrough();
+          break;
+        case "indirect-cjump":
+          fallthrough();
+          break;
+      }
+    }
+    return { successors };
+  }
+  function defsAndUses(op) {
+    switch (op.kind) {
+      case "store":
+        return { defs: [op.register], uses: [] };
+      case "recall":
+        return { defs: [], uses: [op.register] };
+      case "indirect-recall": {
+        const target = knownIndirectMemoryTarget(op);
+        return {
+          defs: [],
+          uses: target === void 0 ? [op.register] : [op.register, target]
+        };
+      }
+      case "indirect-store": {
+        const target = knownIndirectMemoryTarget(op);
+        return {
+          defs: target === void 0 ? [] : [target],
+          uses: [op.register]
+        };
+      }
+      case "indirect-jump":
+      case "indirect-call":
+      case "indirect-cjump":
+        return { defs: [], uses: [op.register] };
+      case "loop": {
+        const register = loopCounterRegister(op.counter);
+        return { defs: [register], uses: [register] };
+      }
+      default:
+        return { defs: [], uses: [] };
+    }
+  }
+  function loopCounterRegister(counter) {
+    switch (counter) {
+      case "L0":
+        return "0";
+      case "L1":
+        return "1";
+      case "L2":
+        return "2";
+      case "L3":
+        return "3";
+    }
+  }
+  function computeLiveness(ops) {
+    const { successors } = buildSuccessors(ops);
+    const n = ops.length;
+    const liveIn = Array.from({ length: n }, () => /* @__PURE__ */ new Set());
+    const liveOut = Array.from({ length: n }, () => /* @__PURE__ */ new Set());
+    let changed = true;
+    let iterations = 0;
+    while (changed && iterations < 200) {
+      changed = false;
+      iterations += 1;
+      for (let i = n - 1; i >= 0; i -= 1) {
+        const op = ops[i];
+        const succ = successors[i];
+        const newOut = /* @__PURE__ */ new Set();
+        for (const s of succ) {
+          for (const reg of liveIn[s]) newOut.add(reg);
+        }
+        const { defs, uses } = defsAndUses(op);
+        const newIn = new Set(uses);
+        for (const reg of newOut) {
+          if (!defs.includes(reg)) newIn.add(reg);
+        }
+        if (!setsEqual2(newIn, liveIn[i]) || !setsEqual2(newOut, liveOut[i])) {
+          liveIn[i] = newIn;
+          liveOut[i] = newOut;
+          changed = true;
+        }
+      }
+    }
+    return { liveIn, liveOut };
+  }
+  function setsEqual2(a, b) {
+    if (a.size !== b.size) return false;
+    for (const value of a) {
+      if (!b.has(value)) return false;
+    }
+    return true;
+  }
+
+  // src/core/passes/dead-code-after-halt.ts
+  function reachableFromEntry(ops) {
+    const labelIndex = /* @__PURE__ */ new Map();
+    const addressIndex = /* @__PURE__ */ new Map();
+    let address = 0;
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind === "label") labelIndex.set(op.name, i);
+      else {
+        addressIndex.set(address, i);
+        address += cellsPerOp(op);
+      }
+    }
+    const visited = /* @__PURE__ */ new Set();
+    const stack = [];
+    if (ops.length > 0) stack.push(0);
+    while (stack.length > 0) {
+      const i = stack.pop();
+      if (visited.has(i)) continue;
+      visited.add(i);
+      const op = ops[i];
+      const fallthrough = () => {
+        if (i + 1 < ops.length) stack.push(i + 1);
+      };
+      const target = (label) => {
+        if (typeof label === "string") {
+          const idx = labelIndex.get(label);
+          if (idx !== void 0) stack.push(idx);
+        } else {
+          const idx = addressIndex.get(label);
+          if (idx !== void 0) stack.push(idx);
+        }
+      };
+      switch (op.kind) {
+        case "label":
+        case "store":
+        case "recall":
+        case "indirect-store":
+        case "indirect-recall":
+        case "plain":
+        case "orphan-address":
+          fallthrough();
+          break;
+        case "stop":
+          fallthrough();
+          break;
+        case "return":
+          break;
+        case "jump":
+          target(op.target);
+          break;
+        case "cjump":
+        case "loop":
+          target(op.target);
+          fallthrough();
+          break;
+        case "call":
+          target(op.target);
+          fallthrough();
+          break;
+        case "indirect-jump": {
+          const knownTarget = knownIndirectTarget(op);
+          if (knownTarget !== void 0) target(knownTarget);
+          break;
+        }
+        case "indirect-call": {
+          const knownTarget = knownIndirectTarget(op);
+          if (knownTarget !== void 0) target(knownTarget);
+          fallthrough();
+          break;
+        }
+        case "indirect-cjump": {
+          const knownTarget = knownIndirectTarget(op);
+          if (knownTarget !== void 0) target(knownTarget);
+          fallthrough();
+          break;
+        }
+      }
+    }
+    return visited;
+  }
+  function knownIndirectTarget(op) {
+    if (op.kind !== "indirect-jump" && op.kind !== "indirect-call" && op.kind !== "indirect-cjump") {
+      return void 0;
+    }
+    const match = /\bindirect-target=(\d+)\b/u.exec(op.meta.comment ?? "");
+    if (!match) return void 0;
+    const target = Number(match[1]);
+    if (!Number.isInteger(target) || target < 0 || target > 104) return void 0;
+    return target;
+  }
+  var run4 = (ops) => {
+    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
+    const reachable = reachableFromEntry(ops);
+    if (reachable.size === ops.length) {
+      return { ops: [...ops], applied: 0, optimizations: [] };
+    }
+    computeLiveness(ops);
+    const result = [];
+    let applied = 0;
+    for (let i = 0; i < ops.length; i += 1) {
+      if (reachable.has(i)) {
+        result.push(ops[i]);
+        continue;
+      }
+      if (ops[i].kind === "label") {
+        result.push(ops[i]);
+        continue;
+      }
+      applied += 1;
+    }
+    if (applied === 0) {
+      return { ops: result, applied: 0, optimizations: [] };
+    }
+    const passResult = {
+      ops: result,
+      applied,
+      optimizations: [
+        {
+          name: "dead-code-after-halt",
+          detail: `Removed ${applied} unreachable op(s) from the entry CFG.`
+        }
+      ]
+    };
+    return passResult;
+  };
+  var deadCodeAfterHalt = {
+    name: "dead-code-after-halt",
+    run: run4,
+    layoutSafe: false
+  };
+
+  // src/core/passes/dead-proc-elimination.ts
+  function collectProcedureBlocks(ops) {
+    const blocks = [];
+    let active;
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (op.kind !== "label") continue;
+      if (op.procedureBoundary === "start") {
+        active = { name: op.procedureName ?? op.name, start: index };
+        continue;
+      }
+      if (op.procedureBoundary === "end" && active !== void 0) {
+        const name = op.procedureName ?? active.name;
+        if (name === active.name) blocks.push({ name, start: active.start, end: index + 1 });
+        active = void 0;
+      }
+    }
+    return blocks;
+  }
+  function knownIndirectTarget2(op) {
+    if (op.kind !== "indirect-jump" && op.kind !== "indirect-call" && op.kind !== "indirect-cjump") {
+      return void 0;
+    }
+    const match = /\bindirect-target=(\d+)\b/u.exec(op.meta.comment ?? "");
+    if (!match) return void 0;
+    const target = Number(match[1]);
+    return Number.isInteger(target) && target >= 0 ? target : void 0;
+  }
+  function canFallThroughPastBlock(ops, block) {
+    for (let index = block.end - 1; index >= block.start; index -= 1) {
+      const op = ops[index];
+      if (op.kind === "label") continue;
+      if (op.kind === "jump" || op.kind === "return" || op.kind === "indirect-jump") return false;
+      if (op.kind === "stop" && op.semantic === "halt") return false;
+      if (op.kind === "plain" && op.meta.comment?.startsWith("halt")) return false;
+      return true;
+    }
+    return true;
+  }
+  var run5 = (ops, context) => {
+    if (context.options.disableInterproceduralOpts === true) {
+      return { ops: [...ops], applied: 0, optimizations: [] };
+    }
+    if (ops.some((op) => "meta" in op && op.meta.raw === true)) {
+      return { ops: [...ops], applied: 0, optimizations: [] };
+    }
+    const blocks = collectProcedureBlocks(ops);
+    if (blocks.length === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    const ownerByIndex = /* @__PURE__ */ new Map();
+    const labelOwner = /* @__PURE__ */ new Map();
+    for (const block of blocks) {
+      for (let index = block.start; index < block.end; index += 1) {
+        ownerByIndex.set(index, block.name);
+        const op = ops[index];
+        if (op.kind === "label") labelOwner.set(op.name, block.name);
+      }
+    }
+    const addressOwner = /* @__PURE__ */ new Map();
+    let address = 0;
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (op.kind === "label") continue;
+      const owner = ownerByIndex.get(index);
+      if (owner !== void 0) {
+        for (let offset = 0; offset < cellsPerOp(op); offset += 1) {
+          addressOwner.set(address + offset, owner);
+        }
+      }
+      address += cellsPerOp(op);
+    }
+    const rootTargets = /* @__PURE__ */ new Set();
+    const edges = /* @__PURE__ */ new Map();
+    const addEdge = (sourceOwner, targetOwner) => {
+      const targets = edges.get(sourceOwner) ?? /* @__PURE__ */ new Set();
+      targets.add(targetOwner);
+      edges.set(sourceOwner, targets);
+    };
+    const markReference = (index, targetOwner) => {
+      if (targetOwner === void 0) return;
+      const sourceOwner = ownerByIndex.get(index);
+      if (sourceOwner === void 0) {
+        rootTargets.add(targetOwner);
+      } else {
+        addEdge(sourceOwner, targetOwner);
+      }
+    };
+    for (const block of blocks) {
+      if (!canFallThroughPastBlock(ops, block)) continue;
+      const targetOwner = ownerByIndex.get(block.end);
+      if (targetOwner !== void 0 && targetOwner !== block.name) addEdge(block.name, targetOwner);
+    }
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (op.kind !== "jump" && op.kind !== "cjump" && op.kind !== "call" && op.kind !== "loop" && op.kind !== "orphan-address" && op.kind !== "indirect-jump" && op.kind !== "indirect-call" && op.kind !== "indirect-cjump") {
+        continue;
+      }
+      if (op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
+        const target = knownIndirectTarget2(op);
+        if (target === void 0) return { ops: [...ops], applied: 0, optimizations: [] };
+        markReference(index, addressOwner.get(target));
+        continue;
+      }
+      markReference(
+        index,
+        typeof op.target === "string" ? labelOwner.get(op.target) : addressOwner.get(op.target)
+      );
+    }
+    const reachable = /* @__PURE__ */ new Set();
+    const stack = [...rootTargets];
+    while (stack.length > 0) {
+      const name = stack.pop();
+      if (reachable.has(name)) continue;
+      reachable.add(name);
+      for (const target of edges.get(name) ?? []) stack.push(target);
+    }
+    const dead = blocks.filter((block) => !reachable.has(block.name));
+    if (dead.length === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    const remove = /* @__PURE__ */ new Set();
+    for (const block of dead) {
+      for (let index = block.start; index < block.end; index += 1) remove.add(index);
+    }
+    const result = ops.filter((_, index) => !remove.has(index));
+    return {
+      ops: result,
+      applied: remove.size,
+      optimizations: [{
+        name: "dead-proc-elimination",
+        detail: `Removed ${dead.length} unreferenced emitted rule proc(s) after IR optimization.`
+      }]
+    };
+  };
+  var deadProcElimination = {
+    name: "dead-proc-elimination",
+    run: run5,
+    layoutSafe: false
+  };
+
+  // src/core/passes/dead-store-before-commutative.ts
+  function registerReadBeforeNextWrite(ops, start, register) {
+    for (let i = start; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind === "recall" && op.register === register) return true;
+      if (op.kind === "store" && op.register === register) return false;
+      if (op.kind !== "label" && op.kind !== "plain" && op.kind !== "orphan-address") return true;
+    }
+    return false;
+  }
+  function isCommutativeAlu(op) {
+    if (op.kind !== "plain") return false;
+    return op.opcode === 16 || op.opcode === 18;
+  }
+  var run6 = (ops) => {
+    const result = [];
+    let applied = 0;
+    for (let i = 0; i < ops.length; i += 1) {
+      const current = ops[i];
+      const next = ops[i + 1];
+      const after = ops[i + 2];
+      if (current.kind === "store" && next?.kind === "recall" && after !== void 0 && isCommutativeAlu(after) && !hasRewriteBarrier(current) && !hasRewriteBarrier(next) && !hasRewriteBarrier(after) && !registerReadBeforeNextWrite(ops, i + 3, current.register)) {
+        applied += 1;
+        continue;
+      }
+      result.push(current);
+    }
+    const passResult = {
+      ops: result,
+      applied,
+      optimizations: applied > 0 ? [
+        {
+          name: "dead-temp-store",
+          detail: `Removed ${applied} temp store(s) whose X value was consumed directly by stack scheduling.`
+        }
+      ] : []
+    };
+    return passResult;
+  };
+  var deadStoreBeforeCommutative = {
+    name: "dead-temp-store",
+    run: run6,
+    layoutSafe: false
+  };
+
+  // src/core/passes/dead-store-elimination.ts
+  function isNumberEntry(op) {
+    return op.kind === "plain" && op.opcode <= 12;
+  }
+  function leavesEntryOpen(op) {
+    if (isNumberEntry(op)) return true;
+    return op.kind === "stop" && op.semantic === "input";
+  }
+  function previousEffectiveOp(ops, index) {
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (ops[i].kind !== "label") return ops[i];
+    }
+    return void 0;
+  }
+  function nextEffectiveOp(ops, index) {
+    for (let i = index + 1; i < ops.length; i += 1) {
+      if (ops[i].kind !== "label") return ops[i];
+    }
+    return void 0;
+  }
+  function finalizesNumberEntry(ops, index) {
+    const prev = previousEffectiveOp(ops, index);
+    const next = nextEffectiveOp(ops, index);
+    return prev !== void 0 && next !== void 0 && leavesEntryOpen(prev) && isNumberEntry(next);
+  }
+  var run7 = (ops) => {
+    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
+    const liveness = computeLiveness(ops);
+    const removed = /* @__PURE__ */ new Set();
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind !== "store") continue;
+      if (hasRewriteBarrier(op)) continue;
+      if (liveness.liveOut[i].has(op.register)) continue;
+      if (finalizesNumberEntry(ops, i)) continue;
+      removed.add(i);
+    }
+    if (removed.size === 0) {
+      return { ops: [...ops], applied: 0, optimizations: [] };
+    }
+    const result = [];
+    for (let i = 0; i < ops.length; i += 1) {
+      if (!removed.has(i)) result.push(ops[i]);
+    }
+    const passResult = {
+      ops: result,
+      applied: removed.size,
+      optimizations: [
+        {
+          name: "dead-store-elimination",
+          detail: `Removed ${removed.size} store(s) to register(s) never read before the next assignment.`
+        }
+      ]
+    };
+    return passResult;
+  };
+  var deadStoreElimination = {
+    name: "dead-store-elimination",
+    run: run7,
+    layoutSafe: false
+  };
+
+  // src/core/passes/duplicate-failure-tail.ts
+  function isZeroDigit(op) {
+    return op.kind === "plain" && op.opcode === 0;
+  }
+  function isPauseLike(op) {
+    return op.kind === "stop";
+  }
+  function isUnconditionalJump(op) {
+    return op.kind === "jump";
+  }
+  var run8 = (ops) => {
+    const rewrite = /* @__PURE__ */ new Map();
+    const remove = /* @__PURE__ */ new Set();
+    let applied = 0;
+    for (let i = 0; i + 8 < ops.length; i += 1) {
+      const firstLabel = ops[i];
+      const firstZero = ops[i + 1];
+      const firstPause = ops[i + 2];
+      const trampolineLabel = ops[i + 3];
+      const trampolineJump = ops[i + 4];
+      const secondLabel = ops[i + 5];
+      const secondZero = ops[i + 6];
+      const secondPause = ops[i + 7];
+      const endLabel = ops[i + 8];
+      if (firstLabel?.kind === "label" && firstZero !== void 0 && isZeroDigit(firstZero) && firstPause !== void 0 && isPauseLike(firstPause) && trampolineLabel?.kind === "label" && trampolineJump !== void 0 && isUnconditionalJump(trampolineJump) && typeof trampolineJump.target === "string" && secondLabel?.kind === "label" && secondZero !== void 0 && isZeroDigit(secondZero) && secondPause !== void 0 && isPauseLike(secondPause) && endLabel?.kind === "label" && trampolineJump.target === endLabel.name && !hasRewriteBarrier(firstZero) && !hasRewriteBarrier(firstPause) && !hasRewriteBarrier(trampolineJump) && !hasRewriteBarrier(secondZero) && !hasRewriteBarrier(secondPause)) {
+        rewrite.set(firstLabel.name, secondLabel.name);
+        rewrite.set(trampolineLabel.name, endLabel.name);
+        for (let index = i; index <= i + 4; index += 1) remove.add(index);
+        applied += 1;
+        i += 4;
+      }
+    }
+    if (applied === 0) {
+      return { ops: [...ops], applied: 0, optimizations: [] };
+    }
+    const result = [];
+    for (let index = 0; index < ops.length; index += 1) {
+      if (remove.has(index)) continue;
+      const op = ops[index];
+      if ((op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") && typeof op.target === "string") {
+        const replacement = rewrite.get(op.target);
+        if (replacement !== void 0) {
+          const targetMeta = {};
+          if (op.targetMeta.comment !== void 0) targetMeta.comment = op.targetMeta.comment;
+          if (op.targetMeta.sourceLine !== void 0) targetMeta.sourceLine = op.targetMeta.sourceLine;
+          if (op.targetMeta.roles !== void 0) targetMeta.roles = [...op.targetMeta.roles];
+          if (op.targetMeta.formalOpcode !== void 0) targetMeta.formalOpcode = op.targetMeta.formalOpcode;
+          result.push({ ...op, target: replacement, targetMeta });
+          continue;
+        }
+      }
+      result.push(op);
+    }
+    const passResult = {
+      ops: result,
+      applied,
+      optimizations: [
+        {
+          name: "duplicate-failure-tail-merge",
+          detail: `Merged ${applied} duplicate pause-0 failure tail(s).`
+        }
+      ]
+    };
+    return passResult;
+  };
+  var duplicateFailureTail = {
+    name: "duplicate-failure-tail-merge",
+    run: run8,
+    layoutSafe: false
+  };
+
+  // src/core/indirect-addressing.ts
+  var REGISTERS_BY_INDEX2 = [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "a",
+    "b",
+    "c",
+    "d",
+    "e"
+  ];
+  function indirectSelectorMutation(register) {
+    const index = registerIndex(register);
+    if (index <= 3) return "pre-decrement";
+    if (index <= 6) return "pre-increment";
+    return "stable";
+  }
+  function isStableIndirectSelector(register) {
+    return indirectSelectorMutation(register) === "stable";
+  }
+  function evaluateIndirectAddress(selector, value, operation) {
+    const mutation = indirectSelectorMutation(selector);
+    const fractional = isPositiveFractional(value);
+    if (selector === "0" && fractional) {
+      const formalAddress = formalAddressInfo(153);
+      return {
+        selector,
+        mutation,
+        operation,
+        transformed: "99",
+        ...operation === "flow" ? { flowTarget: 99, actualFlowTarget: formalAddress.actual, formalAddress } : { memoryTarget: "3" },
+        resultValue: "-99999999"
+      };
+    }
+    const transformed = transformSelectorValue(value, mutation);
+    if (transformed === void 0) return void 0;
+    if (operation === "flow") {
+      const flowTarget = flowTargetFromTransformed(transformed);
+      const formalAddress = formalAddressInfo(formalOpcodeForFlowTarget(transformed, flowTarget));
+      const result = {
+        selector,
+        mutation,
+        operation,
+        transformed,
+        formalAddress,
+        flowTarget,
+        actualFlowTarget: formalAddress.actual,
+        resultValue: transformed
+      };
+      const superDark = superDarkTarget(formalAddress.opcode);
+      if (superDark !== void 0) result.superDark = superDark;
+      return result;
+    }
+    const memoryTarget = memoryTargetFromTransformed(transformed);
+    if (memoryTarget === void 0) return void 0;
+    return {
+      selector,
+      mutation,
+      operation,
+      transformed,
+      memoryTarget,
+      resultValue: transformed
+    };
+  }
+  function memoryTargetFromTransformed(transformed) {
+    const normalized = transformed.trim().toLowerCase();
+    if (/^-?\d+$/u.test(normalized)) {
+      return REGISTERS_BY_INDEX2[positiveModulo(Number(normalized), 15)];
+    }
+    const last = normalized.at(-1);
+    if (last === void 0) return void 0;
+    const nibble = Number.parseInt(last, 16);
+    if (!Number.isFinite(nibble) || nibble < 0 || nibble > 15) return void 0;
+    if (nibble === 15) return "0";
+    return REGISTERS_BY_INDEX2[nibble];
+  }
+  function superDarkTarget(formalTarget) {
+    const info2 = formalAddressInfo(formalTarget);
+    if (info2.kind !== "super-dark" || info2.extra === void 0) return void 0;
+    return {
+      formal: info2.opcode,
+      entryAddress: info2.actual,
+      continuationAddress: info2.extra
+    };
+  }
+  function transformSelectorValue(value, mutation) {
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) return void 0;
+      const integer = Math.trunc(value) + mutationDelta(mutation);
+      return String(integer);
+    }
+    const normalized = value.trim().replace(/^0x/iu, "").toLowerCase();
+    if (!/^[0-9a-f]+$/iu.test(normalized)) return void 0;
+    if (mutation === "stable" && /[a-f]/iu.test(normalized)) return normalized;
+    const decimal2 = Number(normalized);
+    if (!Number.isFinite(decimal2)) return void 0;
+    return String(Math.trunc(decimal2) + mutationDelta(mutation));
+  }
+  function isPositiveFractional(value) {
+    const numeric = typeof value === "number" ? value : Number(value.trim().replace(",", "."));
+    return numeric !== void 0 && numeric > 0 && numeric < 1;
+  }
+  function mutationDelta(mutation) {
+    if (mutation === "pre-decrement") return -1;
+    if (mutation === "pre-increment") return 1;
+    return 0;
+  }
+  function flowTargetFromTransformed(transformed) {
+    const normalized = transformed.trim().toLowerCase();
+    if (/^[0-9a-f]+$/iu.test(normalized) && /[a-f]/iu.test(normalized)) {
+      return Number.parseInt(normalized.slice(-2), 16);
+    }
+    const numeric = Number(normalized);
+    if (!Number.isFinite(numeric)) return 0;
+    return positiveModulo(Math.trunc(numeric), 100);
+  }
+  function formalOpcodeForFlowTarget(transformed, flowTarget) {
+    const normalized = transformed.trim().toLowerCase();
+    if (/^[0-9a-f]+$/iu.test(normalized) && /[a-f]/iu.test(normalized)) {
+      return flowTarget;
+    }
+    return officialAddressToOpcode(flowTarget);
+  }
+  function positiveModulo(value, modulus) {
+    return (value % modulus + modulus) % modulus;
+  }
+
+  // src/core/passes/indirect-addressing.ts
+  var INDIRECT_COND_BASES2 = {
+    "!=0": 112,
+    ">=0": 144,
+    "<0": 192,
+    "==0": 224
+  };
+  function clearKnownState(state) {
+    state.currentLiteral = void 0;
+    state.stableRegisters.clear();
+  }
+  function cloneMeta(meta, comment) {
+    return {
+      ...meta,
+      comment: [meta.comment, comment].filter(Boolean).join("; ")
+    };
+  }
+  function digitForPlain(op) {
+    if (op.kind !== "plain" || op.opcode < 0 || op.opcode > 9) return void 0;
+    return String(op.opcode);
+  }
+  function literalNumber(text) {
+    if (text === void 0 || !/^\d+$/u.test(text)) return void 0;
+    const value = Number(text);
+    if (!Number.isSafeInteger(value)) return void 0;
+    return value;
+  }
+  function rememberStore(state, register) {
+    if (!isStableIndirectSelector(register)) return;
+    const value = literalNumber(state.currentLiteral);
+    if (value === void 0) {
+      state.stableRegisters.delete(register);
+    } else {
+      state.stableRegisters.set(register, String(value));
+    }
+  }
+  function findFlowSelector(state, target) {
+    if (typeof target !== "number") return void 0;
+    for (const [register, value] of state.stableRegisters) {
+      const evaluated = evaluateIndirectAddress(register, value, "flow");
+      if (evaluated?.flowTarget === target) return register;
+    }
+    return void 0;
+  }
+  function findMemorySelector(state, target) {
+    for (const [register, value] of state.stableRegisters) {
+      const evaluated = evaluateIndirectAddress(register, value, "memory");
+      if (evaluated?.memoryTarget === target) return register;
+    }
+    return void 0;
+  }
+  function updateKnownAfterOp(state, op) {
+    if (hasRewriteBarrier(op)) {
+      clearKnownState(state);
+      return;
+    }
+    const digit = digitForPlain(op);
+    if (digit !== void 0) {
+      state.currentLiteral = `${state.currentLiteral ?? ""}${digit}`;
+      return;
+    }
+    switch (op.kind) {
+      case "store":
+        rememberStore(state, op.register);
+        return;
+      case "recall": {
+        state.currentLiteral = state.stableRegisters.get(op.register);
+        return;
+      }
+      case "label":
+        clearKnownState(state);
+        return;
+      case "indirect-store":
+        clearKnownState(state);
+        return;
+      case "call":
+      case "indirect-call":
+      case "cjump":
+      case "indirect-cjump":
+      case "stop":
+      case "jump":
+      case "indirect-jump":
+      case "return":
+        clearKnownState(state);
+        return;
+      default:
+        state.currentLiteral = void 0;
+        return;
+    }
+  }
+  function indirectFlowOp(op, register, target) {
+    const offset = registerIndex(register);
+    const suffix = `stable indirect flow indirect-target=${target}`;
+    if (op.kind === "jump") {
+      return {
+        kind: "indirect-jump",
+        register,
+        opcode: 128 + offset,
+        meta: cloneMeta({ ...op.meta, mnemonic: `\u041A \u0411\u041F ${register}` }, suffix)
+      };
+    }
+    if (op.kind === "call") {
+      return {
+        kind: "indirect-call",
+        register,
+        opcode: 160 + offset,
+        meta: cloneMeta({ ...op.meta, mnemonic: `\u041A \u041F\u041F ${register}` }, suffix)
+      };
+    }
+    const opcode = INDIRECT_COND_BASES2[op.condition] + offset;
+    const name = op.condition === "==0" ? "x=0" : op.condition === "!=0" ? "x!=0" : `x${op.condition}`;
+    return {
+      kind: "indirect-cjump",
+      condition: op.condition,
+      register,
+      opcode,
+      meta: cloneMeta({ ...op.meta, mnemonic: `\u041A ${name} ${register}` }, suffix)
+    };
+  }
+  var stableFlowRun = (ops) => {
+    const result = [];
+    const state = { currentLiteral: void 0, stableRegisters: /* @__PURE__ */ new Map() };
+    let applied = 0;
+    for (const op of ops) {
+      if (!hasRewriteBarrier(op) && (op.kind === "jump" || op.kind === "call" || op.kind === "cjump")) {
+        const register = findFlowSelector(state, op.target);
+        if (register !== void 0 && typeof op.target === "number") {
+          const rewritten = indirectFlowOp(op, register, op.target);
+          result.push(rewritten);
+          updateKnownAfterOp(state, rewritten);
+          applied += 1;
+          continue;
+        }
+      }
+      result.push(op);
+      updateKnownAfterOp(state, op);
+    }
+    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    return {
+      ops: result,
+      applied,
+      optimizations: [
+        {
+          name: "stable-indirect-flow",
+          detail: `Replaced ${applied} direct branch/call(s) with stable-register indirect flow.`
+        }
+      ]
+    };
+  };
+  var memoryTableRun = (ops) => {
+    const result = [];
+    const state = { currentLiteral: void 0, stableRegisters: /* @__PURE__ */ new Map() };
+    let applied = 0;
+    for (const op of ops) {
+      if ((op.kind === "recall" || op.kind === "store") && !hasRewriteBarrier(op) && !isDisplayFocusSensitive(op)) {
+        const selector = findMemorySelector(state, op.register);
+        if (selector !== void 0) {
+          const opcodeBase = op.kind === "recall" ? 208 : 176;
+          const mnemonic = op.kind === "recall" ? `\u041A \u041F->X ${selector}` : `\u041A X->\u041F ${selector}`;
+          const rewritten = {
+            kind: op.kind === "recall" ? "indirect-recall" : "indirect-store",
+            register: selector,
+            opcode: opcodeBase + registerIndex(selector),
+            meta: cloneMeta({ ...op.meta, mnemonic }, `indirect memory table indirect-memory-target=${op.register}`)
+          };
+          result.push(rewritten);
+          updateKnownAfterOp(state, rewritten);
+          applied += 1;
+          continue;
+        }
+      }
+      result.push(op);
+      updateKnownAfterOp(state, op);
+    }
+    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    return {
+      ops: result,
+      applied,
+      optimizations: [
+        {
+          name: "indirect-memory-table",
+          detail: `Rewrote ${applied} direct memory access(es) through an existing stable selector.`
+        }
+      ]
+    };
+  };
+  var stableIndirectFlow = {
+    name: "stable-indirect-flow",
+    run: stableFlowRun,
+    layoutSafe: false
+  };
+  var indirectMemoryTable = {
+    name: "indirect-memory-table",
+    run: memoryTableRun,
+    layoutSafe: false
+  };
+
+  // src/core/passes/jump-thread.ts
+  function labelTargets(ops) {
+    const map = /* @__PURE__ */ new Map();
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind === "label") map.set(op.name, i);
+    }
+    return map;
+  }
+  function followLabel(ops, labels, start, seen) {
+    let current = start;
+    while (!seen.has(current)) {
+      seen.add(current);
+      const index = labels.get(current);
+      if (index === void 0) return current;
+      let cursor = index + 1;
+      while (cursor < ops.length && ops[cursor].kind === "label") cursor += 1;
+      const next = ops[cursor];
+      if (next?.kind !== "jump") return current;
+      if (typeof next.target !== "string") return current;
+      if (hasRewriteBarrier(next)) return current;
+      current = next.target;
+    }
+    return current;
+  }
+  var run9 = (ops) => {
+    const labels = labelTargets(ops);
+    const result = [];
+    let applied = 0;
+    for (const op of ops) {
+      if ((op.kind === "jump" || op.kind === "cjump") && typeof op.target === "string" && !hasRewriteBarrier(op)) {
+        const final = followLabel(ops, labels, op.target, /* @__PURE__ */ new Set());
+        if (final !== void 0 && final !== op.target) {
+          applied += 1;
+          result.push({ ...op, target: final });
+          continue;
+        }
+      }
+      result.push(op);
+    }
+    if (applied === 0) {
+      return { ops: result, applied: 0, optimizations: [] };
+    }
+    const passResult = {
+      ops: result,
+      applied,
+      optimizations: [
+        {
+          name: "jump-thread",
+          detail: `Threaded ${applied} jump(s) through trampoline labels to the final target.`
+        }
+      ]
+    };
+    return passResult;
+  };
+  var jumpThread = {
+    name: "jump-thread",
+    run: run9,
+    layoutSafe: false
+  };
+
+  // src/core/passes/jump-to-next.ts
+  var run10 = (ops) => {
+    const result = [];
+    let applied = 0;
+    for (let i = 0; i < ops.length; i += 1) {
+      const current = ops[i];
+      if (current.kind === "jump" && typeof current.target === "string" && !hasRewriteBarrier(current)) {
+        let cursor = i + 1;
+        let threaded = false;
+        while (cursor < ops.length && ops[cursor].kind === "label") {
+          const label = ops[cursor];
+          if (label.kind === "label" && label.name === current.target) {
+            threaded = true;
+            break;
+          }
+          cursor += 1;
+        }
+        if (threaded) {
+          applied += 1;
+          continue;
+        }
+      }
+      result.push(current);
+    }
+    const passResult = {
+      ops: result,
+      applied,
+      optimizations: applied > 0 ? [
+        {
+          name: "jump-to-next-threading",
+          detail: `Removed ${applied} unconditional branch to the immediately following label.`
+        }
+      ] : []
+    };
+    return passResult;
+  };
+  var jumpToNextThreading = {
+    name: "jump-to-next-threading",
+    run: run10,
+    layoutSafe: false
+  };
+
+  // src/core/passes/last-x-reuse.ts
+  function clobbersX(op) {
+    switch (op.kind) {
+      case "label":
+      case "orphan-address":
+        return false;
+      case "store":
+        return false;
+      case "recall":
+      case "indirect-recall":
+        return true;
+      case "indirect-store":
+        return false;
+      case "plain":
+        return true;
+      case "stop":
+        return false;
+      case "jump":
+      case "cjump":
+      case "call":
+      case "loop":
+      case "indirect-jump":
+      case "indirect-call":
+      case "indirect-cjump":
+      case "return":
+        return false;
+    }
+  }
+  var run11 = (ops) => {
+    const removed = /* @__PURE__ */ new Set();
+    let xHolds;
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind === "label") {
+        xHolds = void 0;
+        continue;
+      }
+      if (op.kind === "store") {
+        if (!hasRewriteBarrier(op)) xHolds = op.register;
+        else xHolds = void 0;
+        continue;
+      }
+      if (op.kind === "recall" && !hasRewriteBarrier(op) && xHolds === op.register) {
+        removed.add(i);
+        continue;
+      }
+      if (op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump" || op.kind === "return" || op.kind === "stop") {
+        xHolds = void 0;
+        continue;
+      }
+      if (clobbersX(op)) xHolds = void 0;
+    }
+    if (removed.size === 0) {
+      return { ops: [...ops], applied: 0, optimizations: [] };
+    }
+    const result = [];
+    for (let i = 0; i < ops.length; i += 1) {
+      if (!removed.has(i)) result.push(ops[i]);
+    }
+    const passResult = {
+      ops: result,
+      applied: removed.size,
+      optimizations: [
+        {
+          name: "last-x-reuse",
+          detail: `Dropped ${removed.size} recall(s) whose register value was already in X.`
+        }
+      ]
+    };
+    return passResult;
+  };
+  var lastXReuse = {
+    name: "last-x-reuse",
+    run: run11,
+    layoutSafe: false
+  };
+
+  // src/core/passes/preloaded-indirect-flow.ts
+  var INDIRECT_COND_BASES3 = {
+    "!=0": 112,
+    ">=0": 144,
+    "<0": 192,
+    "==0": 224
+  };
+  var STABLE_REGISTERS = ["7", "8", "9", "a", "b", "c", "d", "e"];
+  function cloneMeta2(meta, comment) {
+    return {
+      ...meta,
+      comment: [meta.comment, comment].filter(Boolean).join("; ")
+    };
+  }
+  function usedRegisters(ops) {
+    const used = /* @__PURE__ */ new Set();
+    for (const op of ops) {
+      if (op.kind === "store" || op.kind === "recall" || op.kind === "indirect-store" || op.kind === "indirect-recall" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
+        used.add(op.register);
+      }
+    }
+    return used;
+  }
+  function spareStableRegisters(ops) {
+    const used = usedRegisters(ops);
+    return STABLE_REGISTERS.filter((register) => !used.has(register));
+  }
+  function numericFlowTarget(op) {
+    if (op.kind !== "jump" && op.kind !== "call" && op.kind !== "cjump" && op.kind !== "loop") return void 0;
+    if (typeof op.target !== "number") return void 0;
+    if (!Number.isInteger(op.target) || op.target < 0 || op.target > 104) return void 0;
+    return op.target;
+  }
+  function branchTarget(op) {
+    if (op.kind !== "jump" && op.kind !== "call" && op.kind !== "cjump") return void 0;
+    if (op.targetMeta.formalOpcode !== void 0 || op.targetMeta.roles?.includes("formal-address")) return void 0;
+    return numericFlowTarget(op);
+  }
+  function maxNumericFlowTarget(ops) {
+    let max = -1;
+    for (const op of ops) {
+      const target = numericFlowTarget(op);
+      if (target !== void 0 && target > max) max = target;
+    }
+    return max;
+  }
+  function addressByIndex(ops) {
+    const addresses = [];
+    let address = 0;
+    for (const op of ops) {
+      addresses.push(address);
+      address += cellsPerOp(op);
+    }
+    return addresses;
+  }
+  function opAtAddress(ops, addresses, address) {
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (cellsPerOp(op) === 0) continue;
+      if (addresses[i] === address) return op;
+    }
+    return void 0;
+  }
+  function hasSingleCellFallthrough(op) {
+    if (op === void 0 || cellsPerOp(op) !== 1) return false;
+    switch (op.kind) {
+      case "plain":
+      case "store":
+      case "recall":
+      case "indirect-store":
+      case "indirect-recall":
+      case "stop":
+        return true;
+      default:
+        return false;
+    }
+  }
+  function isSuperDarkCompatibleTarget(ops, addresses, labels, target) {
+    if (target < 48 || target > 53) return false;
+    const entry = opAtAddress(ops, addresses, target);
+    if (!hasSingleCellFallthrough(entry)) return false;
+    const continuationAddress = target - 47;
+    const afterEntry = opAtAddress(ops, addresses, target + 1);
+    if (afterEntry?.kind !== "jump") return false;
+    return targetAddress(afterEntry.target, labels) === continuationAddress;
+  }
+  function selectorForTarget(ops, addresses, labels, target) {
+    if (isSuperDarkCompatibleTarget(ops, addresses, labels, target)) {
+      return {
+        selectorValue: formalLabelFromOpcode(250 + (target - 48)),
+        superDark: true
+      };
+    }
+    if (target <= 47) return { selectorValue: formalLabelFromOrdinal(target + 112), superDark: false };
+    return { selectorValue: officialLabel(target), superDark: false };
+  }
+  function formalLabelFromOrdinal(ordinal) {
+    const high = Math.floor(ordinal / 10);
+    const low = ordinal % 10;
+    return `${high.toString(16).toUpperCase()}${low.toString(16).toUpperCase()}`;
+  }
+  function formalLabelFromOpcode(opcode) {
+    const high = Math.floor(opcode / 16);
+    const low = opcode % 16;
+    return `${high.toString(16).toUpperCase()}${low.toString(16).toUpperCase()}`;
+  }
+  function officialLabel(target) {
+    if (target <= 99) {
+      return `${Math.floor(target / 10)}${target % 10}`;
+    }
+    return `A${target - 100}`;
+  }
+  function indirectFlowOp2(op, register, selectorValue, target, superDark) {
+    const offset = registerIndex(register);
+    const suffix = `preloaded R${register}=${selectorValue} indirect-target=${target}${superDark ? " super-dark" : ""} indirect flow`;
+    if (op.kind === "jump") {
+      return {
+        kind: "indirect-jump",
+        register,
+        opcode: 128 + offset,
+        meta: cloneMeta2({ ...op.meta, mnemonic: `\u041A \u0411\u041F ${register}` }, suffix)
+      };
+    }
+    if (op.kind === "call") {
+      return {
+        kind: "indirect-call",
+        register,
+        opcode: 160 + offset,
+        meta: cloneMeta2({ ...op.meta, mnemonic: `\u041A \u041F\u041F ${register}` }, suffix)
+      };
+    }
+    const opcode = INDIRECT_COND_BASES3[op.condition] + offset;
+    const name = op.condition === "==0" ? "x=0" : op.condition === "!=0" ? "x!=0" : `x${op.condition}`;
+    return {
+      kind: "indirect-cjump",
+      condition: op.condition,
+      register,
+      opcode,
+      meta: cloneMeta2({ ...op.meta, mnemonic: `\u041A ${name} ${register}` }, suffix)
+    };
+  }
+  function runtimeSelectorLiteralOps(target, register) {
+    const digits = String(target).split("").map((digit) => ({
+      kind: "plain",
+      opcode: Number(digit),
+      meta: { mnemonic: digit, comment: `runtime indirect call selector ${target}` }
+    }));
+    return [
+      ...digits,
+      {
+        kind: "store",
+        register,
+        opcode: 64 + registerIndex(register),
+        meta: { mnemonic: `X->\u041F ${register}`, comment: `runtime indirect call selector ${target}` }
+      }
+    ];
+  }
+  function opReferencesRegister(op, register) {
+    switch (op.kind) {
+      case "store":
+      case "recall":
+      case "indirect-store":
+      case "indirect-recall":
+      case "indirect-jump":
+      case "indirect-call":
+      case "indirect-cjump":
+        return op.register === register;
+      default:
+        return false;
+    }
+  }
+  function firstOpIndexAtAddress(ops, addresses, address) {
+    for (let index = 0; index < ops.length; index += 1) {
+      if (cellsPerOp(ops[index]) === 0) continue;
+      if (addresses[index] === address) return index;
+    }
+    return void 0;
+  }
+  function canBorrowRegisterForRuntimeSelector(ops, register, targetIndex, insertIndex, selected) {
+    for (let index = targetIndex; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (hasRewriteBarrier(op)) return false;
+      if (selected.has(index)) continue;
+      if (index >= insertIndex && opReferencesRegister(op, register)) return false;
+      if (index < insertIndex && opReferencesRegister(op, register)) return false;
+    }
+    return true;
+  }
+  function runtimeIndirectCallPlans(ops, breakEven = false) {
+    const addresses = addressByIndex(ops);
+    const labels = calculateLabelAddresses(ops);
+    const targets = /* @__PURE__ */ new Map();
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (hasRewriteBarrier(op) || op.kind !== "call") continue;
+      if (op.targetMeta.formalOpcode !== void 0 || op.targetMeta.roles?.includes("formal-address")) continue;
+      const target = targetAddress(op.target, labels);
+      const siteAddress = addresses[index];
+      if (target === void 0 || !Number.isInteger(target) || target < 0 || target > 99 || target >= siteAddress) {
+        continue;
+      }
+      const existing = targets.get(target);
+      if (existing === void 0) {
+        targets.set(target, {
+          target,
+          indices: [index],
+          insertIndex: index,
+          insertAddress: siteAddress
+        });
+        continue;
+      }
+      existing.indices.push(index);
+    }
+    const plans = [];
+    const usedRegisters3 = /* @__PURE__ */ new Set();
+    const sorted = [...targets.values()].sort(
+      (left, right) => right.indices.length - left.indices.length || left.insertAddress - right.insertAddress
+    );
+    for (const candidate of sorted) {
+      const preloadCost = String(candidate.target).length + 1;
+      const margin = breakEven ? 0 : 2;
+      if (candidate.indices.length <= preloadCost + margin) continue;
+      const selected = new Set(candidate.indices);
+      const targetIndex = firstOpIndexAtAddress(ops, addresses, candidate.target);
+      if (targetIndex === void 0) continue;
+      const register = STABLE_REGISTERS.find(
+        (item) => !usedRegisters3.has(item) && canBorrowRegisterForRuntimeSelector(ops, item, targetIndex, candidate.insertIndex, selected)
+      );
+      if (register === void 0) continue;
+      usedRegisters3.add(register);
+      plans.push({
+        target: candidate.target,
+        register,
+        indices: selected,
+        insertIndex: candidate.insertIndex
+      });
+    }
+    return plans;
+  }
+  var runtimeIndirectCallRun = (ops, context) => {
+    const plans = runtimeIndirectCallPlans(ops, context.options.aggressiveIndirectCallThreshold === true);
+    if (plans.length === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    const byInsert = /* @__PURE__ */ new Map();
+    const byIndex = /* @__PURE__ */ new Map();
+    for (const plan of plans) {
+      const existing = byInsert.get(plan.insertIndex);
+      if (existing === void 0) byInsert.set(plan.insertIndex, [plan]);
+      else existing.push(plan);
+      for (const index of plan.indices) byIndex.set(index, plan);
+    }
+    const result = [];
+    let rewritten = 0;
+    for (let index = 0; index < ops.length; index += 1) {
+      for (const plan2 of byInsert.get(index) ?? []) {
+        result.push(...runtimeSelectorLiteralOps(plan2.target, plan2.register));
+      }
+      const plan = byIndex.get(index);
+      const op = ops[index];
+      if (plan !== void 0 && op.kind === "call") {
+        result.push(indirectFlowOp2(op, plan.register, String(plan.target), plan.target, false));
+        rewritten += 1;
+        continue;
+      }
+      result.push(op);
+    }
+    return {
+      ops: result,
+      applied: rewritten,
+      optimizations: [
+        {
+          name: "runtime-indirect-call-flow",
+          detail: `Borrowed dead stable register(s) for ${rewritten} repeated direct helper call(s).`
+        }
+      ]
+    };
+  };
+  function runPreloadedIndirectFlow(ops, _context, flowOptions = {}) {
+    const registers = spareStableRegisters(ops);
+    if (registers.length === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    const addresses = addressByIndex(ops);
+    const labels = calculateLabelAddresses(ops);
+    const maxTarget = maxNumericFlowTarget(ops);
+    const eligibleTargets = /* @__PURE__ */ new Map();
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (hasRewriteBarrier(op) || op.kind !== "jump" && op.kind !== "call" && op.kind !== "cjump") continue;
+      const target = branchTarget(op);
+      const siteAddress = addresses[index];
+      if (target === void 0 || target > siteAddress || !flowOptions.relaxMaxTargetGuard && maxTarget > siteAddress) {
+        continue;
+      }
+      const { selectorValue, superDark } = selectorForTarget(ops, addresses, labels, target);
+      const evaluated = evaluateIndirectAddress(registers[0], selectorValue, "flow");
+      const selectedSuperDark = evaluated?.superDark?.entryAddress === target;
+      if (evaluated?.actualFlowTarget !== target || selectedSuperDark !== superDark) {
+        continue;
+      }
+      const existing = eligibleTargets.get(target);
+      if (existing !== void 0) {
+        existing.indices.push(index);
+      } else {
+        eligibleTargets.set(target, { target, selectorValue, superDark, indices: [index] });
+      }
+    }
+    const targets = /* @__PURE__ */ new Map();
+    const preloads = [];
+    const sortedTargets = [...eligibleTargets.values()].sort(
+      (left, right) => right.indices.length - left.indices.length || left.indices[0] - right.indices[0]
+    );
+    for (const target of sortedTargets) {
+      const register = registers.shift();
+      if (register === void 0) break;
+      if (!isStableIndirectSelector(register)) continue;
+      targets.set(target.target, {
+        register,
+        selectorValue: target.selectorValue,
+        superDark: target.superDark
+      });
+      preloads.push({ register, value: target.selectorValue, countsAgainstProgram: false });
+    }
+    const result = [];
+    let applied = 0;
+    let superDarkApplied = 0;
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (hasRewriteBarrier(op) || op.kind !== "jump" && op.kind !== "call" && op.kind !== "cjump") {
+        result.push(op);
+        continue;
+      }
+      const target = branchTarget(op);
+      const siteAddress = addresses[index];
+      if (target === void 0 || target > siteAddress || !flowOptions.relaxMaxTargetGuard && maxTarget > siteAddress) {
+        result.push(op);
+        continue;
+      }
+      const selected = targets.get(target);
+      if (selected === void 0) {
+        result.push(op);
+        continue;
+      }
+      result.push(indirectFlowOp2(op, selected.register, selected.selectorValue, target, selected.superDark));
+      applied += 1;
+      if (selected.superDark) superDarkApplied += 1;
+    }
+    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    const formal = preloads.filter((preload) => /[B-F]/iu.test(preload.value)).length;
+    const optimizations = [
+      {
+        name: "preloaded-indirect-flow",
+        detail: `Replaced ${applied} numeric direct branch/call(s) with compiler-owned preloaded indirect flow (${formal} formal alias selector${formal === 1 ? "" : "s"}).`
+      }
+    ];
+    if (superDarkApplied > 0) {
+      optimizations.push({
+        name: "preloaded-super-dark-flow",
+        detail: `Selected ${superDarkApplied} FA..FF one-command indirect dispatch(es) after proving the entry cell falls through to the matching 01..06 continuation jump.`
+      });
+    }
+    return {
+      ops: result,
+      applied,
+      preloads,
+      optimizations
+    };
+  }
+  var run12 = (ops, context) => runPreloadedIndirectFlow(ops, context, {});
+  var preloadedIndirectFlow = {
+    name: "preloaded-indirect-flow",
+    run: run12,
+    layoutSafe: false
+  };
+  var runtimeIndirectCallFlow = {
+    name: "runtime-indirect-call-flow",
+    run: runtimeIndirectCallRun,
+    layoutSafe: false
+  };
+
+  // src/core/passes/redundant-prologue.ts
+  function isShowDisplayOp(op) {
+    if (op.kind === "recall") return true;
+    if (op.kind === "plain") {
+      if (op.opcode === 16 || op.opcode === 18) return true;
+      if (op.opcode <= 10) return true;
+      if (op.opcode === 14) return true;
+    }
+    return false;
+  }
+  function isShowStop(op) {
+    return op.kind === "stop" && (op.semantic === "show" || op.semantic === "halt");
+  }
+  function collectForwardPrologue(ops, from) {
+    const collected = [];
+    let i = from;
+    while (i < ops.length && ops[i].kind === "label") i += 1;
+    while (i < ops.length) {
+      const op = ops[i];
+      if (op.kind === "label") {
+        i += 1;
+        continue;
+      }
+      if (isShowDisplayOp(op) && !hasRewriteBarrier(op)) {
+        collected.push(op);
+        i += 1;
+        continue;
+      }
+      if (isShowStop(op) && !hasRewriteBarrier(op)) {
+        collected.push(op);
+        return { ops: collected };
+      }
+      return { ops: [] };
+    }
+    return { ops: [] };
+  }
+  function collectBackwardPrologue(ops, beforeIndex) {
+    const collected = [];
+    let i = beforeIndex - 1;
+    let sawStop = false;
+    while (i >= 0) {
+      const op = ops[i];
+      if (op.kind === "label") {
+        i -= 1;
+        continue;
+      }
+      if (!sawStop) {
+        if (isShowStop(op) && !hasRewriteBarrier(op)) {
+          collected.push(op);
+          sawStop = true;
+          i -= 1;
+          continue;
+        }
+        return { ops: [], startIndex: -1 };
+      }
+      if (isShowDisplayOp(op) && !hasRewriteBarrier(op)) {
+        collected.push(op);
+        i -= 1;
+        continue;
+      }
+      break;
+    }
+    if (!sawStop) return { ops: [], startIndex: -1 };
+    let startIndex = i + 1;
+    while (startIndex < beforeIndex && ops[startIndex].kind === "label") startIndex += 1;
+    let virtualHeadRegister;
+    let scan = i;
+    while (scan >= 0 && ops[scan].kind === "label") scan -= 1;
+    if (scan >= 0) {
+      const prior = ops[scan];
+      if (prior.kind === "store" && !hasRewriteBarrier(prior)) {
+        virtualHeadRegister = prior.register;
+      }
+    }
+    const segment = {
+      ops: collected.slice().reverse(),
+      startIndex
+    };
+    if (virtualHeadRegister !== void 0) return { ...segment, virtualHeadRegister };
+    return segment;
+  }
+  function opsEquivalent2(a, b) {
+    if (a.kind !== b.kind) return false;
+    if (a.kind === "recall" && b.kind === "recall") return a.register === b.register;
+    if (a.kind === "plain" && b.kind === "plain") return a.opcode === b.opcode;
+    if (a.kind === "stop" && b.kind === "stop") return a.semantic === b.semantic;
+    return false;
+  }
+  function segmentsMatch(a, b) {
+    if (a.length === 0 || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i += 1) {
+      if (!opsEquivalent2(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  var run13 = (ops) => {
+    const labelIndex = /* @__PURE__ */ new Map();
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind === "label") labelIndex.set(op.name, i);
+    }
+    const removeRanges = [];
+    let applied = 0;
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind !== "jump") continue;
+      if (typeof op.target !== "string") continue;
+      if (hasRewriteBarrier(op)) continue;
+      const labelAt = labelIndex.get(op.target);
+      if (labelAt === void 0) continue;
+      const headForward = collectForwardPrologue(ops, labelAt);
+      if (headForward.ops.length === 0) continue;
+      const headBackward = collectBackwardPrologue(ops, i);
+      if (headBackward.ops.length === 0) continue;
+      const backwardOps = headBackward.ops;
+      let matched = segmentsMatch(backwardOps, headForward.ops);
+      if (!matched && headBackward.virtualHeadRegister !== void 0) {
+        const firstForward = headForward.ops[0];
+        if (firstForward !== void 0 && firstForward.kind === "recall" && firstForward.register === headBackward.virtualHeadRegister) {
+          const suffix = headForward.ops.slice(1);
+          if (segmentsMatch(backwardOps, suffix)) {
+            matched = true;
+          }
+        }
+      }
+      if (!matched) continue;
+      const start = headBackward.startIndex;
+      const end = i;
+      const forwardEnd = labelAt + headForward.ops.length;
+      if (start <= forwardEnd) continue;
+      let hasIntermediateContent = false;
+      for (let k = forwardEnd + 1; k < start; k += 1) {
+        const intermediate = ops[k];
+        if (intermediate.kind === "label") continue;
+        hasIntermediateContent = true;
+        break;
+      }
+      if (!hasIntermediateContent) continue;
+      const overlaps = removeRanges.some(
+        (range3) => !(end <= range3.start || start >= range3.end)
+      );
+      if (overlaps) continue;
+      removeRanges.push({ start, end });
+      applied += 1;
+    }
+    if (applied === 0) {
+      return { ops: [...ops], applied: 0, optimizations: [] };
+    }
+    const shouldRemove = new Array(ops.length).fill(false);
+    for (const range3 of removeRanges) {
+      for (let i = range3.start; i < range3.end; i += 1) shouldRemove[i] = true;
+    }
+    const result = [];
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (!shouldRemove[i] || op.kind === "label") result.push(op);
+    }
+    const totalCells = removeRanges.reduce((acc, range3) => acc + (range3.end - range3.start), 0);
+    return {
+      ops: result,
+      applied,
+      optimizations: [
+        {
+          name: "redundant-prologue-elimination",
+          detail: `Removed ${applied} display/halt prologue(s) immediately before a jump to their identical loop head (${totalCells} cells).`
+        }
+      ]
+    };
+  };
+  var redundantPrologueElimination = {
+    name: "redundant-prologue-elimination",
+    run: run13,
+    layoutSafe: false
+  };
+
+  // src/core/passes/register-coalesce.ts
+  var DIRECT_STORE_BASE2 = 64;
+  var DIRECT_RECALL_BASE2 = 96;
+  var LOOP_COUNTER_REGISTER = {
+    L0: "0",
+    L1: "1",
+    L2: "2",
+    L3: "3"
+  };
+  function gatherUsedRegisters(ops) {
+    const set = /* @__PURE__ */ new Set();
+    for (const op of ops) {
+      if (op.kind === "store" || op.kind === "recall") set.add(op.register);
+      if (op.kind === "indirect-store" || op.kind === "indirect-recall" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
+        set.add(op.register);
+        const memoryTarget = knownIndirectMemoryTarget(op);
+        if (memoryTarget !== void 0) set.add(memoryTarget);
+      }
+      if (op.kind === "loop") set.add(LOOP_COUNTER_REGISTER[op.counter]);
+    }
+    return set;
+  }
+  function liveRangePerRegister(ops, registers, defAware = false) {
+    const liveness = computeLiveness(ops);
+    const ranges = /* @__PURE__ */ new Map();
+    for (const reg of registers) ranges.set(reg, /* @__PURE__ */ new Set());
+    for (let i = 0; i < ops.length; i += 1) {
+      for (const reg of liveness.liveIn[i]) {
+        ranges.get(reg)?.add(i);
+      }
+      for (const reg of liveness.liveOut[i]) {
+        ranges.get(reg)?.add(i);
+      }
+      if (defAware) {
+        const op = ops[i];
+        if (op.kind === "store" || op.kind === "indirect-store") {
+          ranges.get(op.register)?.add(i);
+        }
+      }
+    }
+    return ranges;
+  }
+  function intersects(a, b) {
+    const smaller = a.size < b.size ? a : b;
+    const larger = a.size < b.size ? b : a;
+    for (const value of smaller) {
+      if (larger.has(value)) return true;
+    }
+    return false;
+  }
+  function usesIndirectAccess(ops, register) {
+    for (const op of ops) {
+      if (op.kind === "indirect-store" || op.kind === "indirect-recall" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
+        if (op.register === register) return true;
+        if (knownIndirectMemoryTarget(op) === register) return true;
+      }
+    }
+    return false;
+  }
+  function usesDisplayFocusSensitiveAccess(ops, register) {
+    return ops.some(
+      (op) => (op.kind === "store" || op.kind === "recall") && op.register === register && isDisplayFocusSensitive(op)
+    );
+  }
+  function usesLoopCounter(ops, register) {
+    return ops.some((op) => op.kind === "loop" && LOOP_COUNTER_REGISTER[op.counter] === register);
+  }
+  function unionInto(target, source) {
+    for (const value of source) target.add(value);
+  }
+  function coalescedOpcode(kind, register) {
+    const base = kind === "store" ? DIRECT_STORE_BASE2 : DIRECT_RECALL_BASE2;
+    return base + registerIndex(register);
+  }
+  function rewriteRegisterOp(op, register) {
+    if (op.kind !== "store" && op.kind !== "recall") return op;
+    const opcode = coalescedOpcode(op.kind, register);
+    return {
+      ...op,
+      register,
+      opcode,
+      meta: {
+        ...op.meta,
+        mnemonic: getOpcode(opcode).name
+      }
+    };
+  }
+  function excludedRegisters(ops, registers) {
+    const excluded = /* @__PURE__ */ new Set();
+    for (const reg of registers) {
+      if (usesIndirectAccess(ops, reg) || usesDisplayFocusSensitiveAccess(ops, reg) || usesLoopCounter(ops, reg)) {
+        excluded.add(reg);
+      }
+    }
+    return excluded;
+  }
+  function computeNonOverlappingRegisterMapping(ops, { defAware = false } = {}) {
+    const registers = gatherUsedRegisters(ops);
+    const mapping = /* @__PURE__ */ new Map();
+    if (registers.size <= 1) return mapping;
+    const liveness = computeLiveness(ops);
+    const liveAtEntry = liveness.liveIn[0] ?? /* @__PURE__ */ new Set();
+    const ranges = liveRangePerRegister(ops, registers, defAware);
+    const ordered = [...registers].sort();
+    for (let i = 0; i < ordered.length; i += 1) {
+      const a = ordered[i];
+      if (mapping.has(a)) continue;
+      if (liveAtEntry.has(a)) continue;
+      if (usesIndirectAccess(ops, a)) continue;
+      if (usesDisplayFocusSensitiveAccess(ops, a)) continue;
+      if (usesLoopCounter(ops, a)) continue;
+      for (let j = i + 1; j < ordered.length; j += 1) {
+        const b = ordered[j];
+        if (mapping.has(b)) continue;
+        if (liveAtEntry.has(b)) continue;
+        if (usesIndirectAccess(ops, b)) continue;
+        if (usesDisplayFocusSensitiveAccess(ops, b)) continue;
+        if (usesLoopCounter(ops, b)) continue;
+        const rangeA = ranges.get(a);
+        const rangeB = ranges.get(b);
+        if (intersects(rangeA, rangeB)) continue;
+        mapping.set(b, a);
+        unionInto(rangeA, rangeB);
+        break;
+      }
+    }
+    return mapping;
+  }
+  function coalesceNonOverlapping(ops) {
+    const mapping = computeNonOverlappingRegisterMapping(ops);
+    if (mapping.size === 0) return { ops: [...ops], applied: 0 };
+    const result = ops.map((op) => {
+      if (op.kind !== "store" && op.kind !== "recall") return op;
+      const replacement = mapping.get(op.register);
+      return replacement === void 0 ? op : rewriteRegisterOp(op, replacement);
+    });
+    return { ops: result, applied: mapping.size };
+  }
+  function coalesceCopies(ops) {
+    const registers = gatherUsedRegisters(ops);
+    if (registers.size <= 1) return { ops: [...ops], applied: 0 };
+    const liveness = computeLiveness(ops);
+    const excluded = excludedRegisters(ops, registers);
+    const storeIndices = /* @__PURE__ */ new Map();
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (op.kind === "store") {
+        if (!storeIndices.has(op.register)) storeIndices.set(op.register, []);
+        storeIndices.get(op.register).push(i);
+      }
+    }
+    const mapping = /* @__PURE__ */ new Map();
+    const dropIndices = /* @__PURE__ */ new Set();
+    for (let i = 0; i + 1 < ops.length; i += 1) {
+      const rec = ops[i];
+      const st = ops[i + 1];
+      if (rec.kind !== "recall" || st.kind !== "store") continue;
+      const source = rec.register;
+      const dest = st.register;
+      if (source === dest || mapping.has(dest) || mapping.has(source)) continue;
+      if (excluded.has(source) || excluded.has(dest)) continue;
+      const destStores = storeIndices.get(dest) ?? [];
+      if (destStores.length !== 1 || destStores[0] !== i + 1) continue;
+      if (liveness.liveIn[i].has(dest)) continue;
+      let diverges = false;
+      for (const j of storeIndices.get(source) ?? []) {
+        if (liveness.liveOut[j].has(dest)) {
+          diverges = true;
+          break;
+        }
+      }
+      if (diverges) continue;
+      mapping.set(dest, source);
+      dropIndices.add(i + 1);
+    }
+    if (mapping.size === 0) return { ops: [...ops], applied: 0 };
+    const result = [];
+    for (let i = 0; i < ops.length; i += 1) {
+      if (dropIndices.has(i)) continue;
+      const op = ops[i];
+      if (op.kind === "store" || op.kind === "recall") {
+        const replacement = mapping.get(op.register);
+        result.push(replacement === void 0 ? op : rewriteRegisterOp(op, replacement));
+      } else {
+        result.push(op);
+      }
+    }
+    return { ops: result, applied: mapping.size };
+  }
+  var run14 = (ops, context) => {
+    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
+    if (ops.some((op) => hasRewriteBarrier(op))) {
+      return { ops: [...ops], applied: 0, optimizations: [] };
+    }
+    const optimizations = [];
+    let current = [...ops];
+    let applied = 0;
+    const nonOverlap = coalesceNonOverlapping(current);
+    current = nonOverlap.ops;
+    applied += nonOverlap.applied;
+    if (nonOverlap.applied > 0) {
+      optimizations.push({
+        name: "register-coalesce",
+        detail: `Coalesced ${nonOverlap.applied} non-overlapping register live range(s).`
+      });
+    }
+    if (context.options.coalesceCopies === true) {
+      const copies = coalesceCopies(current);
+      current = copies.ops;
+      applied += copies.applied;
+      if (copies.applied > 0) {
+        optimizations.push({
+          name: "copy-coalesce",
+          detail: `Coalesced ${copies.applied} non-diverging copy assignment(s), dropping the copy and freeing a register.`
+        });
+      }
+    }
+    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    return { ops: current, applied, optimizations };
+  };
+  var registerCoalesce = {
+    name: "register-coalesce",
+    run: run14,
+    layoutSafe: true
+  };
+
+  // src/core/passes/return-zero-jump.ts
+  var run15 = (ops) => {
+    const usesCall = ops.some((op) => op.kind === "call" || op.kind === "indirect-call");
+    if (usesCall) return { ops: [...ops], applied: 0, optimizations: [] };
+    const labels = calculateLabelAddresses(ops);
+    const result = [];
+    let applied = 0;
+    let currentAddress = 0;
+    for (const op of ops) {
+      if (op.kind === "label") {
+        result.push(op);
+        continue;
+      }
+      if (op.kind === "jump" && !hasRewriteBarrier(op)) {
+        const resolved = targetAddress(op.target, labels);
+        const targetsBackward = typeof op.target === "number" ? true : resolved !== void 0 && resolved < currentAddress;
+        if (resolved === 1 && targetsBackward) {
+          result.push({
+            kind: "return",
+            opcode: 82,
+            meta: {
+              mnemonic: "\u0412/\u041E",
+              comment: "optimized \u0411\u041F 01"
+            }
+          });
+          applied += 1;
+          currentAddress += 1;
+          continue;
+        }
+      }
+      result.push(op);
+      currentAddress += cellsPerOp(op);
+    }
+    const passResult = {
+      ops: result,
+      applied,
+      optimizations: applied > 0 ? [
+        {
+          name: "return-zero-jump",
+          detail: `Replaced ${applied} \u0411\u041F 01 sequence with \u0412/\u041E under empty-return-stack assumption.`
+        }
+      ] : []
+    };
+    return passResult;
+  };
+  var returnZeroJump = {
+    name: "return-zero-jump",
+    run: run15,
+    layoutSafe: false
+  };
+
+  // src/core/passes/return-suffix-gadget.ts
+  var run16 = (ops) => {
+    if (hasNumericFlowTarget(ops)) return emptyResult(ops);
+    const candidates = collectReturnSuffixCandidates(ops);
+    const selected = selectGadgets(candidates, ops);
+    if (selected.length === 0) return emptyResult(ops);
+    const targetLabels = /* @__PURE__ */ new Map();
+    const replacementByStart = /* @__PURE__ */ new Map();
+    let applied = 0;
+    let savedCells = 0;
+    let jumps = 0;
+    let calls = 0;
+    let reusedReturnX = 0;
+    for (const gadget of selected) {
+      const labels = targetLabels.get(gadget.target.start) ?? [];
+      labels.push(gadget.label);
+      targetLabels.set(gadget.target.start, labels);
+      for (const replacement of gadget.replacements) {
+        const returnX = gadget.kind === "call" ? bodyReturnX(ops, gadget.target) : void 0;
+        const skipNextRecall = returnX !== void 0 && recallMatchesStore(ops[replacement.end + 1], returnX);
+        replacementByStart.set(replacement.start, {
+          kind: gadget.kind,
+          end: replacement.end,
+          label: gadget.label,
+          ...skipNextRecall ? { skipNextRecall } : {}
+        });
+        applied += 1;
+        savedCells += replacement.cells - 2;
+        if (skipNextRecall) {
+          savedCells += 1;
+          reusedReturnX += 1;
+        }
+        if (gadget.kind === "jump") jumps += 1;
+        else calls += 1;
+      }
+    }
+    const result = [];
+    for (let index = 0; index < ops.length; index += 1) {
+      for (const label of targetLabels.get(index) ?? []) {
+        result.push({ kind: "label", name: label });
+      }
+      const replacement = replacementByStart.get(index);
+      if (replacement !== void 0) {
+        result.push(
+          replacement.kind === "jump" ? gadgetJump(replacement.label, ops[index]) : gadgetCall(replacement.label, ops[index])
+        );
+        index = replacement.skipNextRecall === true ? replacement.end + 1 : replacement.end;
+        continue;
+      }
+      result.push(ops[index]);
+    }
+    return {
+      ops: result,
+      applied,
+      optimizations: [{
+        name: "return-suffix-gadget",
+        detail: `Shared ${applied} return/tail-call gadget${applied === 1 ? "" : "s"} (${jumps} jump, ${calls} call; ${savedCells} cell${savedCells === 1 ? "" : "s"} saved${reusedReturnX === 0 ? "" : `, ${reusedReturnX} returned-X recall${reusedReturnX === 1 ? "" : "s"} reused`}).`
+      }]
+    };
+  };
+  function bodyReturnX(ops, target) {
+    const final = ops[target.bodyEnd];
+    if (final === void 0 || hasRewriteBarrier(final)) return void 0;
+    if (final.kind === "store") return { kind: "store", register: final.register };
+    if (final.kind === "indirect-store") return { kind: "indirect-store", register: final.register };
+    return void 0;
+  }
+  function recallMatchesStore(op, store) {
+    if (op === void 0 || hasRewriteBarrier(op)) return false;
+    return store.kind === "store" && op.kind === "recall" && op.register === store.register || store.kind === "indirect-store" && op.kind === "indirect-recall" && op.register === store.register;
+  }
+  var returnSuffixGadget = {
+    name: "return-suffix-gadget",
+    run: run16,
+    layoutSafe: false
+  };
+  function collectReturnSuffixCandidates(ops) {
+    const byKey = /* @__PURE__ */ new Map();
+    for (let end = 0; end < ops.length; end += 1) {
+      const final = ops[end];
+      if (!isShareableReturn(final)) continue;
+      const parts = [opKey(final)];
+      let cells = cellsPerOp(final);
+      for (let start = end - 1; start >= 0; start -= 1) {
+        const op = ops[start];
+        if (!isShareableBodyOp(op)) break;
+        parts.unshift(opKey(op));
+        cells += cellsPerOp(op);
+        if (cells <= 2) continue;
+        const key = parts.join("\n");
+        const bodyKey = parts.slice(0, -1).join("\n");
+        const occurrences = byKey.get(key) ?? [];
+        occurrences.push({ key, bodyKey, start, end, cells, bodyCells: cells - cellsPerOp(final) });
+        byKey.set(key, occurrences);
+      }
+    }
+    return [...byKey.entries()].map(([key, occurrences]) => ({ key, occurrences, cells: occurrences[0].cells }));
+  }
+  function selectGadgets(candidates, ops) {
+    const existingLabels = new Set(ops.flatMap((op) => op.kind === "label" ? [op.name] : []));
+    const protectedIndexes = /* @__PURE__ */ new Set();
+    const selected = [];
+    let labelIndex = 0;
+    const ordered = [...candidates].sort((left, right) => {
+      const leftSavings = (left.occurrences.length - 1) * (left.cells - 2);
+      const rightSavings = (right.occurrences.length - 1) * (right.cells - 2);
+      return rightSavings - leftSavings || right.cells - left.cells || left.key.localeCompare(right.key);
+    });
+    for (const candidate of ordered) {
+      const available = candidate.occurrences.filter(
+        (occurrence) => !rangeIntersects(protectedIndexes, occurrence.start, occurrence.end)
+      );
+      if (available.length < 2) continue;
+      const [target, ...replacements] = available;
+      if (target === void 0 || replacements.length === 0) continue;
+      const savedCells = replacements.reduce((sum, occurrence) => sum + occurrence.cells - 2, 0);
+      if (savedCells <= 0) continue;
+      const label = freshLabel2(existingLabels, labelIndex);
+      labelIndex += 1;
+      existingLabels.add(label);
+      selected.push({ kind: "jump", label, target, replacements });
+      for (const occurrence of [target, ...replacements]) {
+        markRange(protectedIndexes, occurrence.start, occurrence.end);
+      }
+    }
+    const bodyTargets = collectBodyTargets(candidates);
+    const bodyOccurrences = collectBodyOccurrences(ops, new Set(bodyTargets.keys()));
+    const bodyCalls = selectBodyCalls(bodyTargets, bodyOccurrences, existingLabels, protectedIndexes, labelIndex);
+    selected.push(...bodyCalls);
+    const tailCallTargets = collectTailCallTargets(ops);
+    const tailCallOccurrences = collectTailCallOccurrences(ops, new Set(tailCallTargets.keys()));
+    const tailCalls = selectBodyCalls(tailCallTargets, tailCallOccurrences, existingLabels, protectedIndexes, labelIndex);
+    selected.push(...tailCalls);
+    return selected;
+  }
+  function gadgetJump(label, source) {
+    const meta = {
+      mnemonic: "\u0411\u041F",
+      comment: "return suffix gadget"
+    };
+    if ("meta" in source && source.meta.sourceLine !== void 0) {
+      meta.sourceLine = source.meta.sourceLine;
+    }
+    return {
+      kind: "jump",
+      target: label,
+      opcode: 81,
+      meta,
+      targetMeta: { comment: "return suffix gadget" }
+    };
+  }
+  function gadgetCall(label, source) {
+    const meta = {
+      mnemonic: "\u041F\u041F",
+      comment: "proc call return suffix gadget"
+    };
+    if ("meta" in source && source.meta.sourceLine !== void 0) {
+      meta.sourceLine = source.meta.sourceLine;
+    }
+    return {
+      kind: "call",
+      target: label,
+      opcode: 83,
+      meta,
+      targetMeta: { comment: "return suffix gadget target" }
+    };
+  }
+  function isShareableReturn(op) {
+    return op.kind === "return" && !hasRewriteBarrier(op);
+  }
+  function isShareableBodyOp(op) {
+    if (hasRewriteBarrier(op)) return false;
+    switch (op.kind) {
+      case "store":
+      case "recall":
+      case "indirect-store":
+      case "indirect-recall":
+      case "call":
+      case "indirect-call":
+      case "stop":
+      case "plain":
+        return true;
+      case "label":
+      case "jump":
+      case "cjump":
+      case "loop":
+      case "indirect-jump":
+      case "indirect-cjump":
+      case "return":
+      case "orphan-address":
+        return false;
+    }
+  }
+  function isCallableBodyOp(op) {
+    return isShareableBodyOp(op) && op.kind !== "stop";
+  }
+  function isTailCallGadgetBodyOp(op) {
+    if (hasRewriteBarrier(op)) return false;
+    switch (op.kind) {
+      case "store":
+      case "recall":
+      case "indirect-store":
+      case "indirect-recall":
+      case "plain":
+        return true;
+      case "label":
+      case "jump":
+      case "cjump":
+      case "call":
+      case "loop":
+      case "indirect-jump":
+      case "indirect-call":
+      case "indirect-cjump":
+      case "return":
+      case "stop":
+      case "orphan-address":
+        return false;
+    }
+  }
+  function hasNumericFlowTarget(ops) {
+    return ops.some((op) => {
+      switch (op.kind) {
+        case "jump":
+        case "cjump":
+        case "call":
+        case "loop":
+          return typeof op.target === "number";
+        default:
+          return false;
+      }
+    });
+  }
+  function opKey(op) {
+    switch (op.kind) {
+      case "store":
+        return `store:${op.opcode}:${op.register}`;
+      case "recall":
+        return `recall:${op.opcode}:${op.register}`;
+      case "indirect-store":
+        return `indirect-store:${op.opcode}:${op.register}`;
+      case "indirect-recall":
+        return `indirect-recall:${op.opcode}:${op.register}`;
+      case "call":
+        return `call:${op.opcode}:${targetKey(op.target)}:${op.targetMeta.formalOpcode ?? ""}`;
+      case "indirect-call":
+        return `indirect-call:${op.opcode}:${op.register}`;
+      case "stop":
+        return `stop:${op.opcode}`;
+      case "plain":
+        return `plain:${op.opcode}`;
+      case "return":
+        return `return:${op.opcode}`;
+      case "label":
+      case "jump":
+      case "cjump":
+      case "loop":
+      case "indirect-jump":
+      case "indirect-cjump":
+      case "orphan-address":
+        return op.kind;
+    }
+  }
+  function collectBodyTargets(candidates) {
+    const result = /* @__PURE__ */ new Map();
+    for (const candidate of candidates) {
+      for (const occurrence of candidate.occurrences) {
+        if (occurrence.bodyKey.length === 0 || occurrence.bodyCells <= 2) continue;
+        const targets = result.get(occurrence.bodyKey) ?? [];
+        targets.push({
+          key: occurrence.bodyKey,
+          start: occurrence.start,
+          bodyEnd: occurrence.end - 1,
+          end: occurrence.end,
+          cells: occurrence.bodyCells
+        });
+        result.set(occurrence.bodyKey, targets);
+      }
+    }
+    return result;
+  }
+  function collectBodyOccurrences(ops, wantedKeys) {
+    const result = /* @__PURE__ */ new Map();
+    if (wantedKeys.size === 0) return result;
+    for (let start = 0; start < ops.length; start += 1) {
+      const parts = [];
+      let cells = 0;
+      for (let end = start; end < ops.length; end += 1) {
+        const op = ops[end];
+        if (!isCallableBodyOp(op)) break;
+        parts.push(opKey(op));
+        cells += cellsPerOp(op);
+        if (cells <= 2) continue;
+        const key = parts.join("\n");
+        if (!wantedKeys.has(key)) continue;
+        const occurrences = result.get(key) ?? [];
+        occurrences.push({ key, start, end, cells });
+        result.set(key, occurrences);
+      }
+    }
+    return result;
+  }
+  function collectTailCallTargets(ops) {
+    const result = /* @__PURE__ */ new Map();
+    for (let jumpIndex = 0; jumpIndex < ops.length; jumpIndex += 1) {
+      const jump = ops[jumpIndex];
+      if (jump.kind !== "jump" || typeof jump.target !== "string" || hasRewriteBarrier(jump)) continue;
+      const parts = [`target:${targetKey(jump.target)}`];
+      let cells = cellsPerOp(jump);
+      for (let start = jumpIndex - 1; start >= 0; start -= 1) {
+        const op = ops[start];
+        if (!isTailCallGadgetBodyOp(op)) break;
+        parts.unshift(opKey(op));
+        cells += cellsPerOp(op);
+        const bodyCells = cells - cellsPerOp(jump);
+        if (bodyCells <= 0) continue;
+        const key = parts.join("\n");
+        const targets = result.get(key) ?? [];
+        targets.push({
+          key,
+          start,
+          bodyEnd: jumpIndex - 1,
+          end: jumpIndex,
+          cells: bodyCells
+        });
+        result.set(key, targets);
+      }
+    }
+    return result;
+  }
+  function collectTailCallOccurrences(ops, wantedKeys) {
+    const result = /* @__PURE__ */ new Map();
+    if (wantedKeys.size === 0) return result;
+    for (let start = 0; start < ops.length; start += 1) {
+      const parts = [];
+      let cells = 0;
+      for (let callIndex = start; callIndex < ops.length; callIndex += 1) {
+        const op = ops[callIndex];
+        if (op.kind === "call" && typeof op.target === "string" && !hasRewriteBarrier(op)) {
+          const key = [...parts, `target:${targetKey(op.target)}`].join("\n");
+          if (cells > 0 && wantedKeys.has(key)) {
+            const occurrences = result.get(key) ?? [];
+            occurrences.push({ key, start, end: callIndex, cells: cells + cellsPerOp(op) });
+            result.set(key, occurrences);
+          }
+          break;
+        }
+        if (!isTailCallGadgetBodyOp(op)) break;
+        parts.push(opKey(op));
+        cells += cellsPerOp(op);
+      }
+    }
+    return result;
+  }
+  function selectBodyCalls(targets, occurrences, existingLabels, protectedIndexes, initialLabelIndex) {
+    const selected = [];
+    let labelIndex = initialLabelIndex;
+    const keys = [...targets.keys()].sort((left, right) => {
+      const leftCells = targets.get(left)?.[0]?.cells ?? 0;
+      const rightCells = targets.get(right)?.[0]?.cells ?? 0;
+      return rightCells - leftCells || left.localeCompare(right);
+    });
+    for (const key of keys) {
+      const availableTargets = (targets.get(key) ?? []).filter((target2) => !rangeIntersects(protectedIndexes, target2.start, target2.end));
+      if (availableTargets.length === 0) continue;
+      const target = availableTargets[0];
+      const replacements = (occurrences.get(key) ?? []).filter((occurrence) => !sameTargetBody(occurrence, target)).filter((occurrence) => !rangeIntersects(protectedIndexes, occurrence.start, occurrence.end));
+      if (replacements.length === 0) continue;
+      const savedCells = replacements.reduce((sum, occurrence) => sum + occurrence.cells - 2, 0);
+      if (savedCells <= 0) continue;
+      const label = freshLabel2(existingLabels, labelIndex);
+      labelIndex += 1;
+      existingLabels.add(label);
+      selected.push({ kind: "call", label, target, replacements: [...replacements] });
+      markRange(protectedIndexes, target.start, target.end);
+      for (const occurrence of replacements) {
+        markRange(protectedIndexes, occurrence.start, occurrence.end);
+      }
+    }
+    return selected;
+  }
+  function targetKey(target) {
+    return typeof target === "number" ? `#${target}` : target;
+  }
+  function sameTargetBody(occurrence, target) {
+    return occurrence.start === target.start && occurrence.end === target.bodyEnd;
+  }
+  function rangeIntersects(indexes, start, end) {
+    for (let index = start; index <= end; index += 1) {
+      if (indexes.has(index)) return true;
+    }
+    return false;
+  }
+  function markRange(indexes, start, end) {
+    for (let index = start; index <= end; index += 1) {
+      indexes.add(index);
+    }
+  }
+  function freshLabel2(existingLabels, index) {
+    let suffix = index;
+    while (true) {
+      const label = `__return_suffix_gadget_${suffix}`;
+      if (!existingLabels.has(label)) return label;
+      suffix += 1;
+    }
+  }
+
+  // src/core/passes/r0-fractional-sentinel.ts
+  function isFractionalR0LiteralBeforeStore(ops, storeIndex) {
+    let index = storeIndex - 1;
+    let hasNonZeroFractionDigit = false;
+    while (index >= 0) {
+      const digit = ops[index];
+      if (digit?.kind !== "plain" || digit.opcode < 0 || digit.opcode > 9) break;
+      if (digit.opcode > 0) hasNonZeroFractionDigit = true;
+      index -= 1;
+    }
+    const dot = ops[index];
+    const zero = ops[index - 1];
+    if (!hasNonZeroFractionDigit || dot?.kind !== "plain" || dot.opcode !== 10) return false;
+    if (zero === void 0) return true;
+    return zero.kind === "plain" && zero.opcode === 0;
+  }
+  var run17 = (ops) => {
+    if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
+    const liveness = computeLiveness(ops);
+    const remove = /* @__PURE__ */ new Set();
+    let r0Fractional = false;
+    for (let i = 0; i < ops.length; i += 1) {
+      const op = ops[i];
+      if (hasRewriteBarrier(op)) {
+        r0Fractional = false;
+        continue;
+      }
+      if (op.kind === "store" && op.register === "0") {
+        r0Fractional = isFractionalR0LiteralBeforeStore(ops, i);
+        continue;
+      }
+      if (op.kind === "plain" || op.kind === "recall" || op.kind === "label") {
+        continue;
+      }
+      if (!r0Fractional) continue;
+      if (op.kind === "indirect-recall" && op.register === "0") {
+        const next = ops[i + 1];
+        if (next?.kind === "recall" && next.register === "3" && !liveness.liveOut[i].has("0")) {
+          remove.add(i + 1);
+        }
+        r0Fractional = false;
+        continue;
+      }
+      if (op.kind === "indirect-store" && op.register === "0") {
+        const next = ops[i + 1];
+        if (next?.kind === "store" && next.register === "3" && !liveness.liveOut[i].has("0")) {
+          remove.add(i + 1);
+        }
+        r0Fractional = false;
+        continue;
+      }
+      if (op.kind !== "store" || op.register !== "0") r0Fractional = false;
+    }
+    if (remove.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    return {
+      ops: ops.filter((_, index) => !remove.has(index)),
+      applied: remove.size,
+      optimizations: [
+        {
+          name: "r0-fractional-sentinel",
+          detail: `Removed ${remove.size} redundant direct R3 access(es) after fractional-R0 indirect access.`
+        }
+      ]
+    };
+  };
+  var r0FractionalSentinel = {
+    name: "r0-fractional-sentinel",
+    run: run17,
+    layoutSafe: false
+  };
+
+  // src/core/passes/shared-call-tail.ts
+  var run18 = (ops) => {
+    const candidates = collectSharedCallTails(ops);
+    const normalizeContinuation = buildContinuationNormalizer(ops);
+    if (candidates.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    const result = [];
+    let applied = 0;
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      const next = ops[index + 1];
+      if (op.kind === "call" && next?.kind === "jump") {
+        const key = callTailKey(op, next, normalizeContinuation);
+        const candidate = candidates.get(key);
+        if (candidate !== void 0) {
+          result.push({
+            kind: "jump",
+            target: candidate.label,
+            opcode: 81,
+            meta: {
+              ...op.meta,
+              mnemonic: "\u0411\u041F",
+              comment: op.meta.comment?.replace(/^proc call/u, "shared call tail") ?? "shared call tail"
+            },
+            targetMeta: { comment: "shared call tail" }
+          });
+          index += 1;
+          applied += 1;
+          continue;
+        }
+      }
+      result.push(op);
+    }
+    for (const candidate of candidates.values()) {
+      result.push({ kind: "label", name: candidate.label });
+      result.push({
+        ...candidate.call,
+        meta: {
+          ...candidate.call.meta,
+          comment: candidate.call.meta.comment ?? "shared call tail helper"
+        }
+      });
+      result.push({
+        ...candidate.continuation,
+        meta: {
+          ...candidate.continuation.meta,
+          comment: candidate.continuation.meta.comment ?? "shared call tail continuation"
+        }
+      });
+    }
+    return {
+      ops: result,
+      applied,
+      optimizations: [{
+        name: "shared-call-tail",
+        detail: `Shared ${applied} call+jump tail sequence${applied === 1 ? "" : "s"}.`
+      }]
+    };
+  };
+  var sharedCallTail = {
+    name: "shared-call-tail",
+    run: run18,
+    layoutSafe: false
+  };
+  function collectSharedCallTails(ops) {
+    const normalizeContinuation = buildContinuationNormalizer(ops);
+    const counts = /* @__PURE__ */ new Map();
+    for (let index2 = 0; index2 < ops.length - 1; index2 += 1) {
+      const op = ops[index2];
+      const next = ops[index2 + 1];
+      if (op.kind !== "call" || next.kind !== "jump") continue;
+      if (hasRewriteBarrier(op) || hasRewriteBarrier(next)) continue;
+      const normalizedTarget = normalizeContinuation(next.target);
+      const continuation = {
+        ...next,
+        target: normalizedTarget
+      };
+      const key = callTailKey(op, continuation, normalizeContinuation);
+      const existing = counts.get(key);
+      if (existing === void 0) {
+        counts.set(key, { call: op, continuation, count: 1 });
+      } else {
+        existing.count += 1;
+      }
+    }
+    const result = /* @__PURE__ */ new Map();
+    let index = 0;
+    for (const [key, candidate] of counts) {
+      if (candidate.count < 3) continue;
+      result.set(key, {
+        key,
+        label: `__shared_call_tail_${index}`,
+        call: candidate.call,
+        continuation: candidate.continuation,
+        count: candidate.count
+      });
+      index += 1;
+    }
+    return result;
+  }
+  function callTailKey(call, continuation, normalizeContinuation) {
+    return `${targetKey2(call.target)}|${targetKey2(normalizeContinuation(continuation.target))}`;
+  }
+  function targetKey2(target) {
+    return typeof target === "number" ? `#${target}` : target;
+  }
+  function buildContinuationNormalizer(ops) {
+    const labelIndexes = /* @__PURE__ */ new Map();
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (op.kind === "label") labelIndexes.set(op.name, index);
+    }
+    const normalize = (target, seen = /* @__PURE__ */ new Set()) => {
+      if (typeof target !== "string") return target;
+      if (seen.has(target)) return target;
+      seen.add(target);
+      const labelIndex = labelIndexes.get(target);
+      if (labelIndex === void 0) return target;
+      const executableIndex = nextExecutableIndex(ops, labelIndex + 1);
+      const executable = executableIndex === void 0 ? void 0 : ops[executableIndex];
+      if (executable?.kind !== "jump" || hasRewriteBarrier(executable)) return target;
+      return normalize(executable.target, seen);
+    };
+    return (target) => normalize(target);
+  }
+  function nextExecutableIndex(ops, start) {
+    for (let index = start; index < ops.length; index += 1) {
+      if (ops[index]?.kind !== "label") return index;
+    }
+    return void 0;
+  }
+
+  // src/core/passes/store-recall-peephole.ts
+  var run19 = (ops) => {
+    const result = [];
+    let applied = 0;
+    for (let i = 0; i < ops.length; i += 1) {
+      const current = ops[i];
+      const next = ops[i + 1];
+      if (current.kind === "store" && next?.kind === "recall" && current.register === next.register && !hasRewriteBarrier(current) && !hasRewriteBarrier(next)) {
+        result.push(current);
+        applied += 1;
+        i += 1;
+        continue;
+      }
+      result.push(current);
+    }
+    const passResult = {
+      ops: result,
+      applied,
+      optimizations: applied > 0 ? [
+        {
+          name: "store-recall-peephole",
+          detail: `Dropped ${applied} redundant \u041F->X immediately after X->\u041F to the same register.`
+        }
+      ] : []
+    };
+    return passResult;
+  };
+  var storeRecallPeephole = {
+    name: "store-recall-peephole",
+    run: run19,
+    layoutSafe: false
+  };
+
+  // src/core/passes/tail-branch-inversion.ts
+  var INVERTED_CONDITIONS = {
+    "==0": { condition: "!=0", opcode: 87 },
+    "!=0": { condition: "==0", opcode: 94 },
+    "<0": { condition: ">=0", opcode: 89 },
+    ">=0": { condition: "<0", opcode: 92 }
+  };
+  var run20 = (ops, context) => {
+    if (context.options.tailBranchInversion !== true) {
+      return { ops: [...ops], applied: 0, optimizations: [] };
+    }
+    const refs = countLabelRefs2(ops);
+    const result = [];
+    let applied = 0;
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (op.kind !== "cjump" || typeof op.target !== "string" || hasRewriteBarrier(op)) {
+        result.push(op);
+        continue;
+      }
+      const jumpIndex = nextExecutableIndex2(ops, index + 1);
+      if (jumpIndex === void 0) {
+        result.push(op);
+        continue;
+      }
+      const jump = ops[jumpIndex];
+      if (jump.kind !== "jump" || hasRewriteBarrier(jump)) {
+        result.push(op);
+        continue;
+      }
+      const labelIndex = jumpIndex + 1;
+      const label = ops[labelIndex];
+      if (label?.kind !== "label" || label.name !== op.target || (refs.get(label.name) ?? 0) !== 1) {
+        result.push(op);
+        continue;
+      }
+      const inverted = INVERTED_CONDITIONS[op.condition];
+      result.push({
+        ...op,
+        condition: inverted.condition,
+        target: jump.target,
+        opcode: inverted.opcode,
+        meta: {
+          ...op.meta,
+          mnemonic: getOpcode(inverted.opcode).name,
+          comment: op.meta.comment?.replace(/^false branch/u, "direct tail branch") ?? "direct tail branch"
+        },
+        targetMeta: { ...jump.targetMeta }
+      });
+      index = labelIndex;
+      applied += 1;
+    }
+    if (applied === 0) return { ops: result, applied: 0, optimizations: [] };
+    return {
+      ops: result,
+      applied,
+      optimizations: [{
+        name: "tail-branch-inversion",
+        detail: `Inverted ${applied} branch${applied === 1 ? "" : "es"} whose then-path was only a tail jump.`
+      }]
+    };
+  };
+  function countLabelRefs2(ops) {
+    const refs = /* @__PURE__ */ new Map();
+    for (const op of ops) {
+      if ((op.kind === "jump" || op.kind === "cjump" || op.kind === "call" || op.kind === "loop") && typeof op.target === "string") {
+        refs.set(op.target, (refs.get(op.target) ?? 0) + 1);
+      }
+    }
+    return refs;
+  }
+  function nextExecutableIndex2(ops, start) {
+    for (let index = start; index < ops.length; index += 1) {
+      if (ops[index].kind !== "label") return index;
+    }
+    return void 0;
+  }
+  var tailBranchInversion = {
+    name: "tail-branch-inversion",
+    run: run20,
+    layoutSafe: false
+  };
+
+  // src/core/passes/tail-call.ts
+  var run21 = (ops) => {
+    const tailJumpTargets = findTailJumpTargets(ops);
+    const returnContinuations = collectReturnContinuations(ops, tailJumpTargets);
+    const returnLabels = collectReturnLabels(ops);
+    const normalizeContinuation = buildContinuationNormalizer2(ops);
+    const result = [];
+    let applied = 0;
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (op.kind === "label") {
+        result.push(op);
+        continue;
+      }
+      const next = ops[index + 1];
+      if (op.kind === "return") {
+        const continuation = returnContinuations.get(index);
+        if (continuation !== void 0) {
+          const meta = {
+            mnemonic: "\u0411\u041F",
+            comment: op.meta.comment?.replace(/^implicit return from proc/u, "tail continuation") ?? "tail continuation"
+          };
+          if (op.meta.sourceLine !== void 0) meta.sourceLine = op.meta.sourceLine;
+          result.push({
+            kind: "jump",
+            target: continuation,
+            opcode: 81,
+            meta,
+            targetMeta: { comment: "tail continuation" }
+          });
+          applied += 1;
+          continue;
+        }
+      }
+      if (op.kind === "call") {
+        const continuationIndex = nextExecutableIndex3(ops, index + 1);
+        const continuation = continuationIndex === void 0 ? void 0 : ops[continuationIndex];
+        const continuationIsImmediate = continuationIndex === index + 1;
+        if (continuation?.kind === "jump" && isReturnLabel(continuation.target, returnLabels)) {
+          result.push({
+            kind: "jump",
+            target: op.target,
+            opcode: 81,
+            meta: {
+              ...op.meta,
+              mnemonic: "\u0411\u041F",
+              comment: op.meta.comment?.replace(/^proc call/u, "tail call") ?? "tail call"
+            },
+            targetMeta: { ...op.targetMeta }
+          });
+          if (continuationIsImmediate) index += 1;
+          applied += 1;
+          continue;
+        }
+        if (continuation?.kind === "return") {
+          result.push({
+            kind: "jump",
+            target: op.target,
+            opcode: 81,
+            meta: {
+              ...op.meta,
+              mnemonic: "\u0411\u041F",
+              comment: op.meta.comment?.replace(/^proc call/u, "tail call") ?? "tail call"
+            },
+            targetMeta: { ...op.targetMeta }
+          });
+          if (continuationIsImmediate) index += 1;
+          applied += 1;
+          continue;
+        }
+        const target = typeof op.target === "string" ? tailJumpTargets.get(op.target) : void 0;
+        if (target !== void 0 && next?.kind === "jump" && sameTarget(normalizeContinuation(next.target), target.continuation)) {
+          result.push({
+            kind: "jump",
+            target: op.target,
+            opcode: 81,
+            meta: {
+              ...op.meta,
+              mnemonic: "\u0411\u041F",
+              comment: op.meta.comment?.replace(/^proc call/u, "tail jump") ?? "tail jump"
+            },
+            targetMeta: { ...op.targetMeta }
+          });
+          index += 1;
+          applied += 1;
+          continue;
+        }
+        if (target !== void 0 && next?.kind === "label" && sameTarget(normalizeContinuation(next.name), target.continuation)) {
+          result.push({
+            kind: "jump",
+            target: op.target,
+            opcode: 81,
+            meta: {
+              ...op.meta,
+              mnemonic: "\u0411\u041F",
+              comment: op.meta.comment?.replace(/^proc call/u, "tail jump") ?? "tail jump"
+            },
+            targetMeta: { ...op.targetMeta }
+          });
+          applied += 1;
+          continue;
+        }
+      }
+      result.push(op);
+    }
+    if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    const tailJumpCount = tailJumpTargets.size;
+    return {
+      ops: result,
+      applied,
+      optimizations: [{
+        name: "tail-call-lowering",
+        detail: tailJumpCount === 0 ? `Replaced ${applied} subroutine tail call${applied === 1 ? "" : "s"} with direct jump(s).` : `Replaced ${applied} subroutine tail operation${applied === 1 ? "" : "s"} with direct jump continuation${tailJumpCount === 1 ? "" : "s"}.`
+      }]
+    };
+  };
+  var tailCallLowering = {
+    name: "tail-call-lowering",
+    run: run21,
+    layoutSafe: false
+  };
+  function findTailJumpTargets(ops) {
+    const calls = /* @__PURE__ */ new Map();
+    const nonCallFlowTargets = /* @__PURE__ */ new Set();
+    const normalizeContinuation = buildContinuationNormalizer2(ops);
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (op.kind === "call" && typeof op.target === "string") {
+        const continuation = callContinuation(ops, index);
+        const existing = calls.get(op.target) ?? [];
+        existing.push(continuation === void 0 ? void 0 : normalizeContinuation(continuation));
+        calls.set(op.target, existing);
+        continue;
+      }
+      if ((op.kind === "jump" || op.kind === "cjump" || op.kind === "loop") && typeof op.target === "string") {
+        nonCallFlowTargets.add(op.target);
+      }
+    }
+    const regions = collectCallableRegions(ops, new Set(calls.keys()));
+    const result = /* @__PURE__ */ new Map();
+    for (const [target, continuations] of calls) {
+      if (nonCallFlowTargets.has(target)) continue;
+      const region = regions.get(target);
+      if (region === void 0 || !blockHasReturn(ops, region.start, region.end)) continue;
+      const first = continuations[0];
+      if (first === void 0) continue;
+      if (continuations.every((continuation) => continuation !== void 0 && sameTarget(continuation, first))) {
+        result.set(target, { continuation: first, start: region.start, end: region.end });
+      }
+    }
+    return result;
+  }
+  function collectCallableRegions(ops, callTargets) {
+    const result = /* @__PURE__ */ new Map();
+    let current;
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (op.kind !== "label") continue;
+      if (!callTargets.has(op.name)) continue;
+      if (current !== void 0) result.set(current.name, { start: current.start, end: index });
+      current = { name: op.name, start: index + 1 };
+    }
+    if (current !== void 0) result.set(current.name, { start: current.start, end: ops.length });
+    return result;
+  }
+  function collectReturnContinuations(ops, targets) {
+    const result = /* @__PURE__ */ new Map();
+    for (const target of targets.values()) {
+      for (let index = target.start; index < target.end; index += 1) {
+        if (ops[index]?.kind === "return") result.set(index, target.continuation);
+      }
+    }
+    return result;
+  }
+  function collectReturnLabels(ops) {
+    const result = /* @__PURE__ */ new Set();
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (op.kind !== "label") continue;
+      const next = nextExecutableIndex3(ops, index + 1);
+      if (next !== void 0 && ops[next]?.kind === "return") result.add(op.name);
+    }
+    return result;
+  }
+  function nextExecutableIndex3(ops, start) {
+    for (let index = start; index < ops.length; index += 1) {
+      if (ops[index]?.kind !== "label") return index;
+    }
+    return void 0;
+  }
+  function isReturnLabel(target, returnLabels) {
+    return typeof target === "string" && returnLabels.has(target);
+  }
+  function blockHasReturn(ops, start, end) {
+    for (let index = start; index < end; index += 1) {
+      if (ops[index]?.kind === "return") return true;
+    }
+    return false;
+  }
+  function callContinuation(ops, index) {
+    const next = ops[index + 1];
+    if (next?.kind === "jump") return next.target;
+    if (next?.kind === "label") return next.name;
+    return void 0;
+  }
+  function sameTarget(left, right) {
+    return left === right;
+  }
+  function buildContinuationNormalizer2(ops) {
+    const labelIndexes = /* @__PURE__ */ new Map();
+    for (let index = 0; index < ops.length; index += 1) {
+      const op = ops[index];
+      if (op.kind === "label") labelIndexes.set(op.name, index);
+    }
+    const normalize = (target, seen = /* @__PURE__ */ new Set()) => {
+      if (typeof target !== "string") return target;
+      if (seen.has(target)) return target;
+      seen.add(target);
+      const labelIndex = labelIndexes.get(target);
+      if (labelIndex === void 0) return target;
+      const executableIndex = nextExecutableIndex3(ops, labelIndex + 1);
+      const executable = executableIndex === void 0 ? void 0 : ops[executableIndex];
+      if (executable?.kind !== "jump" || hasRewriteBarrier(executable)) return target;
+      return normalize(executable.target, seen);
+    };
+    return (target) => normalize(target);
+  }
+
+  // src/core/passes/vp-splice.ts
+  var VP = 12;
+  var KNOP = 84;
+  function isPlainOpcode(op, opcode) {
+    return op.kind === "plain" && op.opcode === opcode && !hasRewriteBarrier(op);
+  }
+  function isFreeStandingVp(op) {
+    if (!isPlainOpcode(op, VP)) return false;
+    return !("meta" in op && op.meta.roles !== void 0 && op.meta.roles.length > 0);
+  }
+  function isFreeStandingKnop(op) {
+    if (!isPlainOpcode(op, KNOP)) return false;
+    return !("meta" in op && op.meta.roles !== void 0 && op.meta.roles.length > 0);
+  }
+  var run22 = (ops) => {
+    const remove = /* @__PURE__ */ new Set();
+    for (let i = 1; i < ops.length; i += 1) {
+      const prev = ops[i - 1];
+      const cur = ops[i];
+      if (remove.has(i - 1)) continue;
+      if (isFreeStandingVp(prev) && isFreeStandingVp(cur)) {
+        remove.add(i);
+        continue;
+      }
+      if (isFreeStandingKnop(prev) && isFreeStandingVp(cur)) {
+        remove.add(i - 1);
+      }
+    }
+    if (remove.size === 0) return emptyResult(ops);
+    return {
+      ops: ops.filter((_, index) => !remove.has(index)),
+      applied: remove.size,
+      optimizations: [
+        {
+          name: "vp-exponent-splice",
+          detail: `Collapsed ${remove.size} redundant \u0412\u041F/\u041A\u041D\u041E\u041F cell(s) around an exponent-entry boundary (\u0412\u041F \u0412\u041F -> \u0412\u041F, \u041A\u041D\u041E\u041F \u0412\u041F -> \u0412\u041F).`
+        }
+      ]
+    };
+  };
+  var vpSplice = {
+    name: "vp-splice",
+    run: run22,
+    layoutSafe: false
+  };
+
+  // src/core/passes/vp-x2-peephole.ts
+  function displayBoundaryText(op) {
+    if (!("meta" in op)) return "";
+    return [
+      op.meta.comment,
+      "tactic" in op.meta ? op.meta.tactic : void 0
+    ].filter(Boolean).join(" ").toLowerCase();
+  }
+  function isDisplayVp(op) {
+    if (hasRewriteBarrier(op)) return false;
+    return op.kind === "plain" && op.opcode === 12 && /display|x2|вп/u.test(displayBoundaryText(op));
+  }
+  function isFractionAfterDisplayBoundary(op) {
+    if (hasRewriteBarrier(op)) return false;
+    return op.kind === "plain" && op.opcode === 53 && /display|x2|frac/u.test(displayBoundaryText(op));
+  }
+  var run23 = (ops) => {
+    const remove = /* @__PURE__ */ new Set();
+    for (let i = 1; i < ops.length; i += 1) {
+      if (isDisplayVp(ops[i - 1]) && isFractionAfterDisplayBoundary(ops[i])) {
+        remove.add(i);
+      }
+    }
+    if (remove.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    return {
+      ops: ops.filter((_, index) => !remove.has(index)),
+      applied: remove.size,
+      optimizations: [
+        {
+          name: "vp-fraction-restore",
+          detail: `Removed ${remove.size} \u041A {x} op(s) already supplied by a \u0412\u041F/X2 display boundary.`
+        }
+      ]
+    };
+  };
+  var vpX2Peephole = {
+    name: "vp-x2-peephole",
+    run: run23,
+    layoutSafe: false
+  };
+
+  // src/core/passes/index.ts
+  var PASS_PIPELINE = [
+    redundantPrologueElimination,
+    tailCallLowering,
+    tailBranchInversion,
+    sharedCallTail,
+    returnSuffixGadget,
+    returnZeroJump,
+    storeRecallPeephole,
+    jumpToNextThreading,
+    jumpThread,
+    stableIndirectFlow,
+    preloadedIndirectFlow,
+    runtimeIndirectCallFlow,
+    indirectMemoryTable,
+    deadStoreBeforeCommutative,
+    deadStoreElimination,
+    lastXReuse,
+    r0FractionalSentinel,
+    vpSplice,
+    vpX2Peephole,
+    constantFolding,
+    duplicateFailureTail,
+    cseDisplayBlock,
+    deadCodeAfterHalt,
+    registerCoalesce,
+    arithmeticIfPass,
+    deadProcElimination
+  ];
+  var MAX_FIXPOINT_ITERATIONS = 8;
+  function runPassesOnIr(initial, options, { layoutOnly }) {
+    let current = initial;
+    let totalApplied = 0;
+    const optimizations = [];
+    const preloads = [];
+    const passCounts = {};
+    let changedInIteration = true;
+    let iteration = 0;
+    while (changedInIteration && iteration < MAX_FIXPOINT_ITERATIONS) {
+      changedInIteration = false;
+      iteration += 1;
+      for (const pass of PASS_PIPELINE) {
+        if (layoutOnly && !pass.layoutSafe) continue;
+        const result = pass.run(current, { options });
+        passCounts[pass.name] = (passCounts[pass.name] ?? 0) + result.applied;
+        if (result.applied > 0) {
+          changedInIteration = true;
+          totalApplied += result.applied;
+          for (const opt of result.optimizations) {
+            const existing = optimizations.find((entry) => entry.name === opt.name);
+            if (existing !== void 0) {
+              existing.detail = `${existing.detail} (+${opt.detail})`;
+            } else {
+              optimizations.push({ ...opt });
+            }
+          }
+          if (result.preloads !== void 0) preloads.push(...result.preloads);
+        }
+        current = result.ops;
+      }
+    }
+    return { ops: current, applied: totalApplied, optimizations, passCounts, preloads };
+  }
+  function runIrPasses(items, options) {
+    const ir = raiseMachineToIr(items);
+    const result = runPassesOnIr(ir, options, { layoutOnly: false });
+    return {
+      items: lowerIrToMachine(result.ops),
+      applied: result.applied,
+      optimizations: result.optimizations,
+      passCounts: result.passCounts,
+      preloads: result.preloads
+    };
+  }
+
+  // src/core/post-layout-indirect-flow.ts
+  var STABLE_REGISTERS2 = ["7", "8", "9", "a", "b", "c", "d", "e"];
+  var INDIRECT_COND_BASES4 = {
+    "!=0": 112,
+    ">=0": 144,
+    "<0": 192,
+    "==0": 224
+  };
+  function isDirectBranch(op) {
+    return op.kind === "jump" || op.kind === "call" || op.kind === "cjump";
+  }
+  function isIndirectBranch(op) {
+    return op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump";
+  }
+  function registerIndex2(register) {
+    return /^[0-9]$/u.test(register) ? Number(register) : register.toLowerCase().charCodeAt(0) - 87;
+  }
+  function labelAddresses(ops) {
+    const map = /* @__PURE__ */ new Map();
+    let address = 0;
+    for (const op of ops) {
+      if (op.kind === "label") {
+        map.set(op.name, address);
+        continue;
+      }
+      address += cellsPerOp(op);
+    }
+    return map;
+  }
+  function cellCount(items) {
+    return items.filter((item) => item.kind !== "label").length;
+  }
+  function opAddresses(ops) {
+    const addresses = [];
+    let address = 0;
+    for (const op of ops) {
+      addresses.push(address);
+      address += cellsPerOp(op);
+    }
+    return addresses;
+  }
+  function usedRegisters2(ops) {
+    const used = /* @__PURE__ */ new Set();
+    for (const op of ops) {
+      if (op.kind === "store" || op.kind === "recall" || op.kind === "indirect-store" || op.kind === "indirect-recall" || op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
+        used.add(op.register);
+      }
+    }
+    return used;
+  }
+  function spareStableRegister(ops) {
+    const used = usedRegisters2(ops);
+    return STABLE_REGISTERS2.find((register) => !used.has(register));
+  }
+  function formalLabelFromOrdinal2(ordinal) {
+    const high = Math.floor(ordinal / 10);
+    const low = ordinal % 10;
+    return `${high.toString(16).toUpperCase()}${low.toString(16).toUpperCase()}`;
+  }
+  function officialLabel2(target) {
+    if (target <= 99) {
+      return `${Math.floor(target / 10)}${target % 10}`;
+    }
+    return `A${target - 100}`;
+  }
+  function selectorForActualTarget(target) {
+    if (!Number.isInteger(target) || target < 0 || target > 104) return void 0;
+    if (target <= 47) return formalLabelFromOrdinal2(target + 112);
+    return officialLabel2(target);
+  }
+  function indirectFlowOp3(op, register, selectorValue, target) {
+    const offset = registerIndex2(register);
+    const suffix = `preloaded R${register}=${selectorValue} indirect-target=${target} shifted-forward indirect flow`;
+    if (op.kind === "jump") {
+      return {
+        kind: "indirect-jump",
+        register,
+        opcode: 128 + offset,
+        meta: { ...op.meta, mnemonic: `\u041A \u0411\u041F ${register}`, comment: [op.meta.comment, suffix].filter(Boolean).join("; ") }
+      };
+    }
+    if (op.kind === "call") {
+      return {
+        kind: "indirect-call",
+        register,
+        opcode: 160 + offset,
+        meta: { ...op.meta, mnemonic: `\u041A \u041F\u041F ${register}`, comment: [op.meta.comment, suffix].filter(Boolean).join("; ") }
+      };
+    }
+    const opcode = INDIRECT_COND_BASES4[op.condition] + offset;
+    const name = op.condition === "==0" ? "x=0" : op.condition === "!=0" ? "x!=0" : `x${op.condition}`;
+    return {
+      kind: "indirect-cjump",
+      condition: op.condition,
+      register,
+      opcode,
+      meta: { ...op.meta, mnemonic: `\u041A ${name} ${register}`, comment: [op.meta.comment, suffix].filter(Boolean).join("; ") }
+    };
+  }
+  function mergeDuplicateSelectors(items, preloads) {
+    const canonicalByValue = /* @__PURE__ */ new Map();
+    const remap = /* @__PURE__ */ new Map();
+    const kept = [];
+    for (const preload of preloads) {
+      const register = preload.register;
+      const canonical = canonicalByValue.get(preload.value);
+      if (canonical === void 0) {
+        canonicalByValue.set(preload.value, register);
+        kept.push(preload);
+      } else if (register !== canonical) {
+        remap.set(register, canonical);
+      }
+    }
+    if (remap.size === 0) return { items: [...items], preloads: [...preloads], merged: 0 };
+    const ir = raiseMachineToIr(items).map((op) => {
+      if (!isIndirectBranch(op) || !remap.has(op.register)) return op;
+      const target = remap.get(op.register);
+      const opcode = op.opcode - registerIndex2(op.register) + registerIndex2(target);
+      return { ...op, register: target, opcode };
+    });
+    return { items: lowerIrToMachine(ir), preloads: kept, merged: remap.size };
+  }
+  function selectorValueForRegister(preloads, register) {
+    for (const preload of preloads) {
+      if (preload.register === register) return preload.value;
+    }
+    return void 0;
+  }
+  function firstExecutableOpIndexAtAddress(ops, addresses, target) {
+    for (let index = 0; index < ops.length; index += 1) {
+      if (addresses[index] !== target) continue;
+      if (cellsPerOp(ops[index]) > 0) return index;
+    }
+    return void 0;
+  }
+  function replaceIndirectTargetComment(comment, register, selectorValue, target) {
+    if (comment === void 0) return void 0;
+    const escaped = register.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const pattern = new RegExp(`preloaded R${escaped}=[^\\s;]+ indirect-target=\\d+`, "iu");
+    if (!pattern.test(comment)) return comment;
+    return comment.replace(pattern, `preloaded R${register}=${selectorValue} indirect-target=${target}`);
+  }
+  function retargetExistingSelectorsAfterShift(beforeItems, afterItems, preloads) {
+    if (preloads.length === 0) return { items: [...afterItems], preloads: [] };
+    const before = raiseMachineToIr(beforeItems);
+    const beforeAddresses = opAddresses(before);
+    const after = raiseMachineToIr(afterItems);
+    const afterAddresses = opAddresses(after);
+    const nextPreloads = [];
+    const nextByRegister = /* @__PURE__ */ new Map();
+    for (const preload of preloads) {
+      const register = preload.register;
+      const decoded = evaluateIndirectAddress(register, preload.value, "flow");
+      if (decoded?.actualFlowTarget === void 0) return void 0;
+      const targetIndex = firstExecutableOpIndexAtAddress(before, beforeAddresses, decoded.actualFlowTarget);
+      if (targetIndex === void 0) return void 0;
+      const shiftedTarget = afterAddresses[targetIndex];
+      if (shiftedTarget === void 0) return void 0;
+      const selectorValue = selectorForActualTarget(shiftedTarget);
+      if (selectorValue === void 0) return void 0;
+      const shiftedDecoded = evaluateIndirectAddress(register, selectorValue, "flow");
+      if (shiftedDecoded?.actualFlowTarget !== shiftedTarget) return void 0;
+      nextPreloads.push({ ...preload, value: selectorValue });
+      nextByRegister.set(register, selectorValue);
+    }
+    const retargeted = after.map((op) => {
+      if (!isIndirectBranch(op)) return op;
+      const selectorValue = nextByRegister.get(op.register);
+      if (selectorValue === void 0) return op;
+      const target = evaluateIndirectAddress(op.register, selectorValue, "flow")?.actualFlowTarget;
+      if (target === void 0) return op;
+      const comment = replaceIndirectTargetComment(op.meta.comment, op.register, selectorValue, target);
+      const meta = comment === void 0 ? { ...op.meta } : { ...op.meta, comment };
+      if (comment === void 0) delete meta.comment;
+      return {
+        ...op,
+        meta
+      };
+    });
+    return { items: lowerIrToMachine(retargeted), preloads: nextPreloads };
+  }
+  function numericTargetView(ir, labels) {
+    const numeric = [];
+    const targetLabel = [];
+    for (const op of ir) {
+      if (isDirectBranch(op) && typeof op.target === "string") {
+        const address = labels.get(op.target);
+        if (address !== void 0) {
+          numeric.push({ ...op, target: address });
+          targetLabel.push(op.target);
+          continue;
+        }
+      }
+      numeric.push(op);
+      targetLabel.push(void 0);
+    }
+    return { numeric, targetLabel };
+  }
+  function isSuperDarkRewrite(op) {
+    return /\bsuper-dark\b/iu.test(op.meta.comment ?? "");
+  }
+  function validateRewriteAt(index, ir, numeric, targetLabel, result, items) {
+    const rewritten = result.ops[index];
+    const original = numeric[index];
+    if (!isIndirectBranch(rewritten) || !isDirectBranch(original)) return void 0;
+    const label = targetLabel[index];
+    if (label === void 0) return void 0;
+    const selectorValue = selectorValueForRegister(result.preloads ?? [], rewritten.register);
+    if (selectorValue === void 0) return void 0;
+    const candidate = ir.map((op, i) => i === index ? rewritten : op);
+    const finalLabels = labelAddresses(candidate);
+    const targetFinalAddress = finalLabels.get(label);
+    if (targetFinalAddress === void 0) return void 0;
+    const decoded = evaluateIndirectAddress(rewritten.register, selectorValue, "flow");
+    if (decoded?.actualFlowTarget !== targetFinalAddress) return void 0;
+    const candidateItems = lowerIrToMachine(candidate);
+    if (cellCount(candidateItems) >= cellCount(items)) return void 0;
+    const addresses = opAddresses(ir);
+    return {
+      items: candidateItems,
+      preload: { register: rewritten.register, value: selectorValue, countsAgainstProgram: false },
+      optimizations: result.optimizations,
+      superDark: isSuperDarkRewrite(rewritten),
+      // A target reached through a formal address beyond the official 104-cell
+      // window is a dark entry pointing at the executable suffix. The dark region
+      // spans several formal kinds (dark / long-side / short-side, e.g. B2 -> 0,
+      // C5 -> 13); FA..FF super-dark is reported separately.
+      darkEntry: decoded.formalAddress !== void 0 && decoded.formalAddress.kind !== "official" && decoded.formalAddress.kind !== "super-dark",
+      convertedAddresses: [addresses[index]],
+      protectedTargets: [targetFinalAddress],
+      converted: 1
+    };
+  }
+  function validateRewriteGroup(indices, ir, numeric, targetLabel, result, items) {
+    if (indices.length === 0) return void 0;
+    const first = result.ops[indices[0]];
+    if (!isIndirectBranch(first)) return void 0;
+    const register = first.register;
+    const selectorValue = selectorValueForRegister(result.preloads ?? [], register);
+    if (selectorValue === void 0) return void 0;
+    const indexSet = new Set(indices);
+    const candidate = ir.map((op, i) => indexSet.has(i) ? result.ops[i] : op);
+    const finalLabels = labelAddresses(candidate);
+    const decoded = evaluateIndirectAddress(register, selectorValue, "flow");
+    if (decoded === void 0) return void 0;
+    let superDark = false;
+    for (const index of indices) {
+      const rewritten = result.ops[index];
+      const original = numeric[index];
+      if (!isIndirectBranch(rewritten) || !isDirectBranch(original)) return void 0;
+      if (rewritten.register !== register) return void 0;
+      const label = targetLabel[index];
+      if (label === void 0) return void 0;
+      const targetFinalAddress = finalLabels.get(label);
+      if (decoded.actualFlowTarget !== targetFinalAddress) return void 0;
+      if (isSuperDarkRewrite(rewritten)) superDark = true;
+    }
+    const candidateItems = lowerIrToMachine(candidate);
+    if (cellCount(candidateItems) >= cellCount(items)) return void 0;
+    const addresses = opAddresses(ir);
+    return {
+      items: candidateItems,
+      preload: { register, value: selectorValue, countsAgainstProgram: false },
+      optimizations: result.optimizations,
+      superDark,
+      darkEntry: decoded.formalAddress !== void 0 && decoded.formalAddress.kind !== "official" && decoded.formalAddress.kind !== "super-dark",
+      convertedAddresses: indices.map((index) => addresses[index]),
+      protectedTargets: indices.map((index) => targetLabel[index]).map((label) => label === void 0 ? void 0 : finalLabels.get(label)).filter((target) => target !== void 0),
+      converted: indices.length
+    };
+  }
+  function validateForwardRewriteGroup(indices, ir, targetLabel, register, items) {
+    if (indices.length === 0) return void 0;
+    const indexSet = new Set(indices);
+    const provisional = ir.map((op, index) => {
+      if (!indexSet.has(index)) return op;
+      if (!isDirectBranch(op)) return op;
+      return indirectFlowOp3(op, register, "00", 0);
+    });
+    const finalLabels = labelAddresses(provisional);
+    let finalTarget;
+    for (const index of indices) {
+      const original = ir[index];
+      if (!isDirectBranch(original)) return void 0;
+      const label = targetLabel[index];
+      if (label === void 0) return void 0;
+      const target = finalLabels.get(label);
+      if (target === void 0) return void 0;
+      if (finalTarget === void 0) {
+        finalTarget = target;
+      } else if (finalTarget !== target) {
+        return void 0;
+      }
+    }
+    if (finalTarget === void 0) return void 0;
+    const selectorValue = selectorForActualTarget(finalTarget);
+    if (selectorValue === void 0) return void 0;
+    const decoded = evaluateIndirectAddress(register, selectorValue, "flow");
+    if (decoded?.actualFlowTarget !== finalTarget) return void 0;
+    const candidate = ir.map((op, index) => {
+      if (!indexSet.has(index)) return op;
+      if (!isDirectBranch(op)) return op;
+      return indirectFlowOp3(op, register, selectorValue, finalTarget);
+    });
+    const candidateItems = lowerIrToMachine(candidate);
+    if (cellCount(candidateItems) >= cellCount(items)) return void 0;
+    const addresses = opAddresses(ir);
+    return {
+      items: candidateItems,
+      preload: { register, value: selectorValue, countsAgainstProgram: false },
+      optimizations: [
+        {
+          name: "preloaded-indirect-flow",
+          detail: `Replaced ${indices.length} forward branch/call(s) with compiler-owned preloaded indirect flow after re-layout proof.`
+        }
+      ],
+      superDark: false,
+      darkEntry: decoded.formalAddress !== void 0 && decoded.formalAddress.kind !== "official" && decoded.formalAddress.kind !== "super-dark",
+      convertedAddresses: indices.map((index) => addresses[index]),
+      protectedTargets: [finalTarget],
+      converted: indices.length
+    };
+  }
+  function applyForwardRewrite(ir, targetLabel, items) {
+    const register = spareStableRegister(ir);
+    if (register === void 0) return void 0;
+    const labels = labelAddresses(ir);
+    const addresses = opAddresses(ir);
+    const groups = /* @__PURE__ */ new Map();
+    for (let index = 0; index < ir.length; index += 1) {
+      const op = ir[index];
+      if (hasRewriteBarrier(op) || !isDirectBranch(op)) continue;
+      const label = targetLabel[index];
+      if (label === void 0) continue;
+      const target = labels.get(label);
+      if (target === void 0 || target <= addresses[index]) continue;
+      const group = groups.get(label) ?? [];
+      group.push(index);
+      groups.set(label, group);
+    }
+    let best;
+    for (const indices of groups.values()) {
+      const candidate = validateForwardRewriteGroup(indices, ir, targetLabel, register, items);
+      if (candidate === void 0) continue;
+      if (best === void 0 || candidate.converted > best.converted || candidate.converted === best.converted && candidate.darkEntry && !best.darkEntry) {
+        best = candidate;
+      }
+    }
+    return best;
+  }
+  function applyOneRewrite(items, options) {
+    const ir = raiseMachineToIr(items);
+    const labels = labelAddresses(ir);
+    const { numeric, targetLabel } = numericTargetView(ir, labels);
+    let best;
+    const result = runPreloadedIndirectFlow(numeric, { options }, { relaxMaxTargetGuard: true });
+    if (result.applied > 0) {
+      const groups = /* @__PURE__ */ new Map();
+      for (let index = 0; index < result.ops.length; index += 1) {
+        const op = result.ops[index];
+        const original = numeric[index];
+        if (!isIndirectBranch(op) || !isDirectBranch(original) || targetLabel[index] === void 0) continue;
+        const list = groups.get(op.register) ?? [];
+        list.push(index);
+        groups.set(op.register, list);
+      }
+      for (const indices of groups.values()) {
+        const group = validateRewriteGroup(indices, ir, numeric, targetLabel, result, items);
+        const candidate = group ?? validateRewriteAt(indices[0], ir, numeric, targetLabel, result, items);
+        if (candidate === void 0) continue;
+        best = betterRewrite(best, candidate);
+      }
+    }
+    return betterRewrite(best, applyForwardRewrite(ir, targetLabel, items));
+  }
+  function betterRewrite(current, candidate) {
+    if (candidate === void 0) return current;
+    if (current === void 0) return candidate;
+    if (candidate.converted !== current.converted) return candidate.converted > current.converted ? candidate : current;
+    if (candidate.superDark !== current.superDark) return candidate.superDark ? candidate : current;
+    if (candidate.darkEntry !== current.darkEntry) return candidate.darkEntry ? candidate : current;
+    return current;
+  }
+  var MAX_REWRITES = 64;
+  var OFFICIAL_PROGRAM_LIMIT = 105;
+  function optimizePostLayoutIndirectFlow(items, options, rescueAbove = OFFICIAL_PROGRAM_LIMIT) {
+    let current = [...items];
+    const preloads = [];
+    let applied = 0;
+    let superDarkApplied = 0;
+    let darkEntryApplied = 0;
+    if (cellCount(current) <= rescueAbove) {
+      return { items: [...items], preloads: [], optimizations: [], applied: 0 };
+    }
+    for (let round = 0; round < MAX_REWRITES; round += 1) {
+      const step = applyOneRewrite(current, options);
+      if (step === void 0) break;
+      const retargeted = retargetExistingSelectorsAfterShift(current, step.items, preloads);
+      if (retargeted === void 0) break;
+      current = retargeted.items;
+      preloads.splice(0, preloads.length, ...retargeted.preloads);
+      preloads.push(step.preload);
+      applied += step.converted;
+      if (step.superDark) superDarkApplied += 1;
+      if (step.darkEntry) darkEntryApplied += 1;
+    }
+    if (applied === 0) {
+      return { items: [...items], preloads: [], optimizations: [], applied: 0 };
+    }
+    const merge = mergeDuplicateSelectors(current, preloads);
+    current = merge.items;
+    const finalPreloads = merge.preloads;
+    const optimizations = [
+      {
+        name: "preloaded-indirect-flow",
+        detail: `Activated post-layout: replaced ${applied} direct branch/call(s) with proven preloaded indirect flow.`
+      }
+    ];
+    if (superDarkApplied > 0) {
+      optimizations.push({
+        name: "preloaded-super-dark-flow",
+        detail: `Selected ${superDarkApplied} FA..FF one-command super-dark dispatch(es), each proven to fall through to its 01..06 continuation.`
+      });
+    }
+    if (darkEntryApplied > 0) {
+      optimizations.push({
+        name: "dark-entry-layout",
+        detail: `Pointed ${darkEntryApplied} branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window).`
+      });
+    }
+    if (merge.merged > 0) {
+      optimizations.push({
+        name: "constants-dual-use",
+        detail: `Shared ${merge.merged} duplicate selector register(s): one stored constant now drives several dispatch sites, freeing the rest.`
+      });
+    }
+    return { items: current, preloads: finalPreloads, optimizations, applied };
+  }
+
+  // src/core/program-patch.ts
+  var PLACEHOLDER_OPCODE = 84;
+  var F_PREFIX_REGISTERS = [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "a",
+    "b",
+    "c",
+    "d",
+    "e"
+  ];
+  function buildProgramPatchReport(steps, delivery) {
+    if (delivery !== "manual") return void 0;
+    return buildManualProgramPatchReport(steps);
+  }
+  function buildManualProgramPatchReport(steps) {
+    const patchSteps = [];
+    const warnings = [];
+    for (const step of steps) {
+      if (getOpcode(step.opcode).enterable.includes("manual")) continue;
+      const patch = patchStep(step);
+      if (patch !== void 0) {
+        patchSteps.push(patch);
+        continue;
+      }
+      warnings.push(`No supported manual patch sequence for ${step.hex} at ${formatPatchAddress(step.address)}.`);
+    }
+    if (patchSteps.length === 0 && warnings.length === 0) return void 0;
+    return {
+      steps: patchSteps,
+      warnings,
+      reason: "manual delivery needs service-mode patching for not-normally-entered opcodes"
+    };
+  }
+  function patchStep(step) {
+    return eggFPrefixPatch(step) ?? returnFPrefixPatch(step);
+  }
+  function eggFPrefixPatch(step) {
+    if (step.address < 50 || step.address > 59) return void 0;
+    if (step.opcode < 240 || step.opcode > 249) return void 0;
+    const addressDigit = step.address - 50;
+    const opcodeDigit = step.opcode - 240;
+    return makePatchStep(
+      step,
+      "egg-f-prefix",
+      [
+        "F \u0410\u0412\u0422",
+        "5",
+        "0",
+        "F 10^x",
+        "F x^2",
+        "\u0412\u041F",
+        String(addressDigit),
+        String(opcodeDigit),
+        ".",
+        "0"
+      ],
+      `make \u0415\u0413\u04130\u0413, then \u0412\u041F ${addressDigit} ${opcodeDigit} . 0 writes ${step.hex} at ${formatPatchAddress(step.address)}`
+    );
+  }
+  function returnFPrefixPatch(step) {
+    if (step.address < 34 || step.address > 44) return void 0;
+    const suffix = step.address - 30;
+    if (step.opcode !== 240 + suffix || suffix > 14) return void 0;
+    const register = F_PREFIX_REGISTERS[suffix];
+    if (register === void 0) return void 0;
+    return makePatchStep(
+      step,
+      "return-f-prefix",
+      [
+        "F \u0410\u0412\u0422",
+        "\u0412/\u041E",
+        `\u041A \u041F\u041F ${register}`
+      ],
+      `\u0412/\u041E \u041A \u041F\u041F ${register} writes ${step.hex} at ${formatPatchAddress(step.address)}`
+    );
+  }
+  function makePatchStep(step, method, keys, note) {
+    const placeholder = getOpcode(PLACEHOLDER_OPCODE);
+    return {
+      address: step.address,
+      opcode: step.opcode,
+      hex: step.hex,
+      mnemonic: step.mnemonic,
+      placeholderOpcode: PLACEHOLDER_OPCODE,
+      placeholderHex: placeholder.hex,
+      placeholderMnemonic: placeholder.name,
+      method,
+      keys,
+      note
+    };
+  }
+  function formatPatchAddress(address) {
+    try {
+      return formatAddress(address);
+    } catch {
+      return `>${address.toString(16).toUpperCase()}`;
+    }
+  }
+
+  // src/core/super-dark-layout.ts
+  function hex2(value) {
+    return value.toString(16).toUpperCase().padStart(2, "0");
+  }
+  function verifySuperDarkSuffixLayout(layout, options = {}) {
+    const byAddress = new Map(layout.map((cell) => [cell.address, cell]));
+    const pairs = [];
+    const dispatchCells = collectSuperDarkDispatchCells(layout, options.selectorValues ?? {});
+    const provedDispatchCells = dispatchCells.filter((cell) => isSuperDarkSelectorValue(cell.selectorValue));
+    const requiredOffsets = requiredSuperDarkOffsets(provedDispatchCells);
+    const reasons = [];
+    if (dispatchCells.length === 0) {
+      reasons.push("no super-dark \u041A \u0411\u041F R dispatch cell is marked in the layout");
+    } else if (provedDispatchCells.length === 0) {
+      reasons.push("no super-dark dispatch register has a proved FA..FF selector value");
+    }
+    for (const offset of requiredOffsets) {
+      const formal = 250 + offset;
+      const entryAddress = 48 + offset;
+      const continuationAddress = 1 + offset;
+      const entry = byAddress.get(entryAddress);
+      const continuation = byAddress.get(continuationAddress);
+      if (entry === void 0) {
+        reasons.push(`${hex2(formal)} has no physical entry cell at ${entryAddress}`);
+        continue;
+      }
+      if (continuation === void 0) {
+        reasons.push(`${hex2(formal)} has no continuation cell at ${continuationAddress}`);
+        continue;
+      }
+      if (!entry.roles.includes("exec")) {
+        reasons.push(`${hex2(formal)} entry ${entryAddress} is not executable`);
+        continue;
+      }
+      if (getOpcode(entry.opcode).takesAddress) {
+        reasons.push(`${hex2(formal)} entry ${entryAddress} is a two-cell address-taking command`);
+        continue;
+      }
+      if (!continuation.roles.includes("exec")) {
+        reasons.push(`${hex2(formal)} continuation ${continuationAddress} is not executable`);
+        continue;
+      }
+      pairs.push({
+        formal,
+        entryAddress,
+        continuationAddress,
+        entryOpcode: entry.opcode,
+        continuationOpcode: continuation.opcode
+      });
+    }
+    if (pairs.length !== requiredOffsets.length && reasons.length === 0) {
+      reasons.push("FA..FF did not produce the required super-dark entry/continuation pairs");
+    }
+    return {
+      proved: provedDispatchCells.length > 0 && pairs.length === requiredOffsets.length && reasons.length === 0,
+      pairs,
+      dispatchCells,
+      reasons
+    };
+  }
+  function requiredSuperDarkOffsets(dispatchCells) {
+    const offsets = /* @__PURE__ */ new Set();
+    for (const cell of dispatchCells) {
+      const value = cell.selectorValue?.trim().toUpperCase().replace(/\s+/gu, "");
+      const formal = value === void 0 ? void 0 : /^F([A-F])$/u.exec(value);
+      if (formal) {
+        offsets.add(Number.parseInt(formal[1], 16) - 10);
+      } else if (isSuperDarkSelectorValue(value)) {
+        for (let offset = 0; offset <= 5; offset += 1) offsets.add(offset);
+      }
+    }
+    return [...offsets].sort((a, b) => a - b);
+  }
+  function collectSuperDarkDispatchCells(layout, selectorValues) {
+    const cells = [];
+    for (const cell of layout) {
+      if (cell.opcode < 135 || cell.opcode > 142) continue;
+      if (!/\bsuper[- ]dark\b/iu.test(cell.tactic)) continue;
+      const register = registerForIndirectJumpOpcode(cell.opcode);
+      const selectorValue = selectorValueForRegister2(selectorValues, register);
+      cells.push({
+        address: cell.address,
+        opcode: cell.opcode,
+        register,
+        tactic: cell.tactic,
+        ...selectorValue === void 0 ? {} : { selectorValue }
+      });
+    }
+    return cells;
+  }
+  function registerForIndirectJumpOpcode(opcode) {
+    const registers = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e"];
+    return registers[opcode - 128] ?? "?";
+  }
+  function selectorValueForRegister2(selectorValues, register) {
+    const aliases = [
+      register,
+      register.toUpperCase(),
+      `R${register}`,
+      `R${register.toUpperCase()}`,
+      `r${register}`
+    ];
+    for (const alias of aliases) {
+      const value = selectorValues[alias];
+      if (value !== void 0) return value;
+    }
+    return void 0;
+  }
+  function isSuperDarkSelectorValue(value) {
+    if (value === void 0) return false;
+    const normalized = value.trim().toUpperCase().replace(/\s+/gu, "");
+    if (/^F[A-F]$/u.test(normalized)) return true;
+    return normalized === "FA..FF" || normalized === "FA-FF" || normalized === "FA\u2026FF" || normalized === "SUPER-DARK" || normalized === "SUPER_DARK";
+  }
+
+  // src/core/emit/machine-emitter.ts
+  var MachineEmitter = class {
+    items = [];
+    labelCounter = 0;
+    currentXVariable;
+    // Every variable known to hold the value currently in X (a copy-equivalence
+    // class for the straight-line region). After `A = B`, X equals both A and B,
+    // so a read of either can reuse X. Reset by any X-clobbering op and at
+    // control-flow boundaries; grown only by stores that copy X into a name.
+    currentXAliases = /* @__PURE__ */ new Set();
+    currentXKnownZero = false;
+    coordListCounterKnownOne = false;
+    zeroAddressLabels = /* @__PURE__ */ new Set();
+    // Meet of the X-variable carried by every recorded branch/jump edge into a
+    // label (undefined value = edges disagree / unknown). Used by emitLabel to
+    // keep stack-reuse facts sound across control-flow joins.
+    labelEdgeX = /* @__PURE__ */ new Map();
+    currentXDashedCoordReportBody;
+    // True when the machine is mid number-entry, so the next number literal would
+    // concatenate digits (e.g. 1 then 3 -> 13) instead of starting a new value.
+    machineEntryOpen = false;
+    emitNumber(raw) {
+      this.currentXVariable = void 0;
+      this.currentXAliases.clear();
+      this.currentXKnownZero = false;
+      this.currentXDashedCoordReportBody = void 0;
+      if (this.machineEntryOpen) {
+        this.emitOp(14, "\u0412\u2191", "separate adjacent number entry");
+      }
+      const normalized = raw.trim().toLowerCase();
+      const negative = normalized.startsWith("-");
+      const unsigned = negative ? normalized.slice(1) : normalized;
+      const [mantissa, exponent] = unsigned.split("e");
+      for (const char of mantissa ?? "0") {
+        if (char === ".") this.emitOp(10, ".");
+        else if (/\d/u.test(char)) this.emitOp(Number(char), char);
+      }
+      if (exponent !== void 0) {
+        this.emitOp(12, "\u0412\u041F", "exponent");
+        const expNegative = exponent.startsWith("-");
+        const expDigits = expNegative || exponent.startsWith("+") ? exponent.slice(1) : exponent;
+        for (const char of expDigits) {
+          if (/\d/u.test(char)) this.emitOp(Number(char), char);
+        }
+        if (expNegative) this.emitOp(11, "/-/", "negative exponent");
+      }
+      if (negative) this.emitOp(11, "/-/", "negative number");
+      this.currentXKnownZero = Number(raw) === 0;
+    }
+    emitJump(opcode, mnemonic, target, comment, sourceLine) {
+      if (typeof target === "string") this.recordLabelEdge(target, this.currentXVariable);
+      this.emitOp(opcode, mnemonic, comment, sourceLine);
+      this.emitAddress(target, comment ?? mnemonic, sourceLine);
+    }
+    emitAddress(target, comment, sourceLine) {
+      const item = { kind: "address", target };
+      if (comment !== void 0) item.comment = comment;
+      if (sourceLine !== void 0) item.sourceLine = sourceLine;
+      this.items.push(item);
+    }
+    emitFormalAddress(opcode, comment, sourceLine) {
+      const info2 = formalAddressInfo(opcode);
+      const item = { kind: "address", target: info2.ordinal, formalOpcode: opcode };
+      if (comment !== void 0) item.comment = `${comment}; formal ${info2.label}->${formatAddress(info2.actual)}`;
+      if (sourceLine !== void 0) item.sourceLine = sourceLine;
+      this.items.push(item);
+    }
+    emitOp(opcode, mnemonic, comment, sourceLine, raw = false) {
+      const info2 = getOpcode(opcode);
+      const op = {
+        kind: "op",
+        opcode,
+        mnemonic: mnemonic ?? info2.name
+      };
+      if (comment !== void 0) op.comment = comment;
+      if (sourceLine !== void 0) op.sourceLine = sourceLine;
+      if (raw) op.raw = true;
+      this.items.push(op);
+      if (opcode >= 128 && opcode <= 254) this.coordListCounterKnownOne = false;
+      this.currentXVariable = void 0;
+      this.currentXAliases.clear();
+      this.currentXKnownZero = false;
+      this.currentXDashedCoordReportBody = void 0;
+      this.machineEntryOpen = opcode <= 12;
+    }
+    recordLabelEdge(label, fact) {
+      if (this.labelEdgeX.has(label)) {
+        if (this.labelEdgeX.get(label) !== fact) this.labelEdgeX.set(label, void 0);
+      } else {
+        this.labelEdgeX.set(label, fact);
+      }
+    }
+    emitLabel(name, metadata = {}) {
+      if (this.items.every((item) => item.kind === "label")) this.zeroAddressLabels.add(name);
+      this.coordListCounterKnownOne = false;
+      this.items.push({ kind: "label", name, ...metadata });
+      if (this.labelEdgeX.has(name)) {
+        const edgeFact = this.labelEdgeX.get(name);
+        this.currentXVariable = this.currentXVariable === edgeFact ? this.currentXVariable : void 0;
+        this.currentXKnownZero = false;
+      }
+      this.currentXAliases = this.currentXVariable !== void 0 ? /* @__PURE__ */ new Set([this.currentXVariable]) : /* @__PURE__ */ new Set();
+      this.currentXDashedCoordReportBody = void 0;
+    }
+    freshLabel(prefix) {
+      const label = `__${prefix}_${this.labelCounter}`;
+      this.labelCounter += 1;
+      return label;
+    }
+  };
+
+  // src/core/emit/runtime-helpers.ts
+  var RuntimeHelperRegistry = class {
+    spatialHitHelpers = /* @__PURE__ */ new Map();
+    displayHelpers = /* @__PURE__ */ new Map();
+    displayByteHelpers = /* @__PURE__ */ new Map();
+    literalDisplayHelpers = /* @__PURE__ */ new Map();
+    showSequenceHelpers = /* @__PURE__ */ new Map();
+    expressionHelpers = /* @__PURE__ */ new Map();
+    randomCellHelpers = /* @__PURE__ */ new Map();
+    nearAnyHelpers = /* @__PURE__ */ new Map();
+    lineCountHelpers = /* @__PURE__ */ new Map();
+    spatialBitMaskHelpers = /* @__PURE__ */ new Map();
+    spatialLineProgressionHelpers = /* @__PURE__ */ new Map();
+    spatialSumLoopHelpers = /* @__PURE__ */ new Map();
+    terminalTailHelpers = [];
+    // True while the body of an expression / random-coordinate helper is being emitted,
+    // so the lowering does not recursively route that same expression back
+    // through its own helper.
+    emittingExpressionHelper = false;
+    emittingRandomCellHelper = false;
+  };
+
   // src/core/emit/lowering/display.ts
   function compileShowSequenceRead(ctx, firstShow, secondShow, input) {
     const helper = ctx.sharedShowSequenceHelper(firstShow.display, secondShow.display, firstShow.line);
@@ -12502,6 +13212,7 @@ var MKProEmulatorBundle = (() => {
     if (compileTextDisplay(ctx, display, line)) return;
     if (compileDashedCoordReportDisplay(ctx, display, line)) return;
     if (compileFloorPackedRowDisplay(ctx, display, line)) return;
+    if (compileDecimalPointDisplay(ctx, display, line)) return;
     const strategy = ctx.selectDisplayStrategy(display);
     if (strategy === "packed-display-helper") {
       const helper = ctx.sharedDisplayHelper(display, line);
@@ -12537,16 +13248,38 @@ var MKProEmulatorBundle = (() => {
       return false;
     }
     const floorState = ctx.findStateField(floor.name);
-    const rowState = ctx.findStateField(row.name);
+    const rowState = row.expr === void 0 ? ctx.findStateField(row.name) : void 0;
+    const rowIsPacked = rowState?.type === "packed" && !isCoordVariable(ctx, row.name) || row.name.startsWith(DISPLAY_EXPR_PREFIX) || row.expr !== void 0;
     const floorMin = floorState?.min ?? 0;
     const floorMax = floorState?.max ?? floorMin;
     const floorWidth = floor.width ?? Math.max(1, String(Math.trunc(Math.max(Math.abs(floorMin), Math.abs(floorMax)))).length);
-    if (floorState === void 0 || rowState?.type !== "packed" || floorWidth !== 1 || floorMin < 0 || floorMax > 9 || row.width !== void 0) {
+    if (floorState === void 0 || !rowIsPacked || floorWidth !== 1 || floorMin < 0 || floorMax > 9 || row.width !== void 0) {
       return false;
     }
-    ctx.emitRecall(floor.name, `display ${display.name} floor`, line);
-    ctx.emitRecall(row.name, `display ${display.name} packed row`, line);
-    ctx.emitOp(20, "<->", "display packed row floor merge", line);
+    if (row.expr !== void 0) {
+      const indexedRowExpr = row.expr.kind === "indexed" ? row.expr : void 0;
+      const indexedRow = indexedRowExpr === void 0 ? void 0 : findStateBankMember(ctx.ast, indexedRowExpr);
+      compileExpression(ctx, row.expr);
+      ctx.emitRecall(floor.name, `display ${display.name} floor`, line);
+      ctx.emitOp(20, "<->", "display packed row expression merge", line);
+      ctx.emitOp(14, "\u0412\u2191", "display packed row expression copy", line);
+      ctx.emitOp(37, "F reverse", "display packed row expression rotate", line);
+      ctx.emitOp(20, "<->", "display packed row floor restore", line);
+      if (indexedRow !== void 0 && indexedRowExpr !== void 0) {
+        ctx.optimizations.push({
+          name: "indexed-packed-row-table",
+          detail: `Read ${bankMemberKey(indexedRowExpr.base, indexedRowExpr.field)}[${floor.name}] through indirect memory for screen ${display.name}.`
+        });
+      }
+      ctx.optimizations.push({
+        name: "floor-packed-row-expression-display",
+        detail: `Computed packed row expression inline for screen ${display.name} and spliced the one-digit floor through X2.`
+      });
+    } else {
+      ctx.emitRecall(floor.name, `display ${display.name} floor`, line);
+      ctx.emitRecall(row.name, `display ${display.name} packed row`, line);
+      ctx.emitOp(20, "<->", "display packed row floor merge", line);
+    }
     ctx.emitOp(37, "F reverse", "display packed row preserve", line);
     ctx.emitOp(12, "\u0412\u041F", "display packed row restore", line);
     ctx.emitOp(80, "\u0421/\u041F", `show ${display.name}`, line);
@@ -12555,6 +13288,89 @@ var MKProEmulatorBundle = (() => {
       detail: `Displayed screen ${display.name} by splicing a one-digit floor into a packed video row.`
     });
     return true;
+  }
+  function compileDecimalPointDisplay(ctx, display, line) {
+    const items = display.items;
+    let dotIndex = -1;
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index];
+      if (item.kind === "literal" && item.text.trim() === ".") {
+        if (dotIndex !== -1) return false;
+        dotIndex = index;
+        continue;
+      }
+      if (item.kind !== "source" || item.expr !== void 0) return false;
+    }
+    if (dotIndex <= 0 || dotIndex === items.length - 1) return false;
+    const integerFields = [];
+    const fractionalFields = [];
+    let fractionalWidth = 0;
+    for (let index = 0; index < items.length; index += 1) {
+      if (index === dotIndex) continue;
+      const item = items[index];
+      if (item.kind !== "source") return false;
+      const measured = measureDecimalDisplayField(ctx, item);
+      if (measured === void 0 || measured.min < 0 || measured.max >= 10 ** measured.width) return false;
+      const field = { kind: "source", item, name: item.name, width: measured.width };
+      if (index < dotIndex) {
+        integerFields.push(field);
+      } else {
+        fractionalFields.push(field);
+        fractionalWidth += measured.width;
+      }
+    }
+    if (fractionalWidth === 0) return false;
+    if (integerFields.length === 1) {
+      compilePackedDisplayFieldsInOrder(ctx, display, fractionalFields, line, true);
+      ctx.emitNumberOrPreload(String(10 ** fractionalWidth));
+      ctx.emitOp(19, "/", `display ${display.name} decimal point`, line);
+      ctx.emitRecall(integerFields[0].name, `display ${display.name} integer part`, line);
+      ctx.emitOp(16, "+", `display ${display.name} integer append`, line);
+    } else {
+      compilePackedDisplayFieldsInOrder(ctx, display, [...integerFields, ...fractionalFields], line, true);
+      ctx.emitNumberOrPreload(String(10 ** fractionalWidth));
+      ctx.emitOp(19, "/", `display ${display.name} decimal point`, line);
+    }
+    ctx.emitOp(80, "\u0421/\u041F", `show ${display.name}`, line);
+    ctx.optimizations.push({
+      name: "decimal-point-display",
+      detail: `Displayed screen ${display.name} as a fixed-point number with ${fractionalWidth} fractional digit(s).`
+    });
+    return true;
+  }
+  function measureDecimalDisplayField(ctx, item) {
+    const bounds = decimalDisplayFieldBounds(ctx, item.name);
+    if (bounds === void 0) return void 0;
+    const magnitude = Math.max(Math.abs(bounds.min), Math.abs(bounds.max));
+    const naturalWidth = Math.max(1, String(Math.trunc(magnitude)).length);
+    const width = item.width ?? naturalWidth;
+    return { min: bounds.min, max: bounds.max, width };
+  }
+  function decimalDisplayFieldBounds(ctx, name) {
+    const field = ctx.findStateField(name);
+    if (field?.min !== void 0 && field.max !== void 0) {
+      return { min: field.min, max: field.max };
+    }
+    return coordFieldBounds(ctx, name);
+  }
+  function coordFieldBounds(ctx, name) {
+    const v2 = ctx.ast.v2;
+    if (v2 === void 0) return void 0;
+    const field = v2.state.find((candidate) => candidate.name === name);
+    if (field?.type !== "coord" || field.domain === void 0) return void 0;
+    const board = v2.boards.find((candidate) => candidate.name === field.domain);
+    if (board === void 0) return void 0;
+    if (board.height === 1) return { min: board.xMin, max: board.xMax };
+    if (board.width === 1) return { min: board.yMin, max: board.yMax };
+    if (board.xMin >= 0 && board.xMax <= 9 && board.yMin >= 0 && board.yMax <= 9) {
+      return { min: board.xMin + 10 * board.yMin, max: board.xMax + 10 * board.yMax };
+    }
+    return void 0;
+  }
+  function isCoordVariable(ctx, name) {
+    return ctx.ast.v2?.state.some(
+      (field) => field.name === name && (field.type === "coord" || field.type === "coord_list")
+    ) ?? false;
   }
   function compileDashedCoordReportDisplay(ctx, display, line) {
     const template = dashedCoordReportDisplayTemplate(display);
@@ -12993,6 +13809,7 @@ var MKProEmulatorBundle = (() => {
       return true;
     }
     if (compileDecimalLiteralDisplay(ctx, display, literal, line)) return true;
+    if (compileLeadingZeroHexProductDisplay(ctx, display, literal, line)) return true;
     if (compileZeroDigitTailDisplay(ctx, display, literal, line)) return true;
     if (compileSignDigitLiteralDisplay(ctx, display, literal, line)) return true;
     const firstSplice = signedFirstSpliceDisplayLiteralProgram(literal) ?? exponentTailDisplayLiteralProgram(literal) ?? firstSpliceDisplayLiteralProgram(literal);
@@ -13031,6 +13848,26 @@ var MKProEmulatorBundle = (() => {
     ctx.optimizations.push({
       name: "screen-decimal-literal-lowering",
       detail: `Lowered screen ${display.name} as an ordinary decimal display literal.`
+    });
+    return true;
+  }
+  function compileLeadingZeroHexProductDisplay(ctx, display, literal, line) {
+    const program = leadingZeroHexProductDisplayProgram(literal);
+    if (program === void 0 || !machineSupports(ctx.machineProfile, "display-bytes")) return false;
+    const register = ctx.allocation.constants[normalizeConstantLiteral(program.sourceLiteral)];
+    if (register === void 0) return false;
+    ctx.emitOp(96 + registerIndex(register), `\u041F->X ${register}`, `display ${display.name} hex zero source`, line);
+    ctx.emitOp(52, "\u041A [x]", "display leading-zero hex source", line);
+    ctx.emitNumberOrPreload(program.factor);
+    ctx.emitOp(18, "*", "display leading-zero hex product", line);
+    ctx.emitOp(80, "\u0421/\u041F", `show ${display.name}`, line);
+    ctx.optimizations.push({
+      name: "screen-leading-zero-hex-lowering",
+      detail: `Lowered screen ${display.name} through hex mantissa multiplication to preserve the leading zero.`
+    });
+    ctx.optimizations.push({
+      name: "hex-mantissa-arithmetic",
+      detail: `Used ${program.sourceLiteral} * ${program.factor} to render ${JSON.stringify(literal)} with a non-normal leading zero.`
     });
     return true;
   }
@@ -13275,6 +14112,7 @@ var MKProEmulatorBundle = (() => {
     ctx.emitLabel(start);
     emitCoordListIndirectRecall(ctx, context.pointerRegister, statement.line, "coord_list candidate");
     ctx.emitStore(COORD_LIST_CURRENT, "coord_list current", statement.line);
+    emitRemovedCoordListCandidateSkip(ctx, call.items, countNext, statement.line, "coord_list");
     if (scaled) {
       compileScaledCoordListVisibilityTest(ctx, context.cell, visible, countNext, statement.line, "coord_list");
     } else {
@@ -13395,6 +14233,7 @@ var MKProEmulatorBundle = (() => {
     ctx.emitLabel(start);
     emitCoordListIndirectRecall(ctx, context.pointerRegister, line, "coord_list fused candidate");
     ctx.emitStore(COORD_LIST_CURRENT, "coord_list fused current", line);
+    emitRemovedCoordListCandidateSkip(ctx, lineCountCall.items, countNext, line, "coord_list fused");
     compileExpression(ctx, context.cell);
     ctx.emitRecall(COORD_LIST_CURRENT, "coord_list fused current", line);
     ctx.emitOp(17, "-", "coord_list fused hit compare", line);
@@ -13441,6 +14280,48 @@ var MKProEmulatorBundle = (() => {
     }
     return 2;
   }
+  function compileCoordListRemove(ctx, statement) {
+    const call = {
+      cell: statement.item,
+      items: statement.items.map((name) => ({ name }))
+    };
+    const context = ctx.coordListIndirectContext(call);
+    if (context === void 0) return false;
+    const scaled = ctx.coordListUsesScaledDecimalStorage(statement.list);
+    if (scaled && !ctx.scaleCoordListCellInPlace(context.cell, statement.line)) return false;
+    const found = ctx.freshLabel("coord_list_remove_hit");
+    const done = ctx.freshLabel("coord_list_remove_done");
+    const start = ctx.freshLabel("coord_list_remove_loop");
+    emitCoordListLoopSetup(ctx, context, statement.line);
+    ctx.emitLabel(start);
+    compileExpression(ctx, context.cell);
+    emitCoordListIndirectRecall(ctx, context.pointerRegister, statement.line, "coord_list remove candidate");
+    ctx.emitOp(17, "-", "coord_list remove compare", statement.line);
+    ctx.emitJump(87, "F x!=0", found, "coord_list remove hit", statement.line);
+    emitCoordListCounterLoop(ctx, context.counterRegister, start, statement.line, "coord_list remove loop");
+    ctx.emitJump(81, "\u0411\u041F", done, "coord_list remove miss", statement.line);
+    ctx.emitLabel(found);
+    ctx.emitRecall(COORD_LIST_POINTER, "coord_list remove pointer", statement.line);
+    ctx.emitNumberOrPreload("1");
+    ctx.emitOp(17, "-", "coord_list remove current pointer", statement.line);
+    ctx.emitStore(COORD_LIST_POINTER, "coord_list remove current pointer", statement.line);
+    ctx.emitNumber("-1");
+    ctx.emitOp(
+      176 + registerIndex(context.pointerRegister),
+      `\u041A X->\u041F ${context.pointerRegister}`,
+      "coord_list remove current",
+      statement.line
+    );
+    ctx.emitLabel(done);
+    ctx.currentXVariable = void 0;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
+    ctx.optimizations.push({
+      name: scaled ? "coord-list-scaled-remove" : "coord-list-remove",
+      detail: `Removed the first matching item from coord_list ${statement.list} at line ${statement.line}.`
+    });
+    return true;
+  }
   function compileCoordListHasCondition(ctx, condition, falseLabel, line) {
     const call = coordListHasConditionCall(condition);
     if (call === void 0) return false;
@@ -13464,6 +14345,25 @@ var MKProEmulatorBundle = (() => {
       detail: scaled ? `Lowered coord_list membership through scaled decimal coordinates at line ${line}.` : `Lowered coord_list membership through an indirect register walk at line ${line}.`
     });
     return true;
+  }
+  function emitRemovedCoordListCandidateSkip(ctx, items, countNext, line, commentPrefix) {
+    const listName = coordListNameFromItems(items);
+    if (listName === void 0 || !ctx.removableCoordLists.has(listName)) return;
+    ctx.emitRecall(COORD_LIST_CURRENT, `${commentPrefix} candidate maybe removed`, line);
+    ctx.emitJump(92, "F x<0", countNext, `${commentPrefix} removed candidate`, line);
+  }
+  function coordListNameFromItems(items) {
+    let listName;
+    for (const item of items) {
+      const info2 = coordListItemInfo(item.name);
+      if (info2 === void 0) return void 0;
+      if (listName === void 0) {
+        listName = info2.listName;
+      } else if (listName !== info2.listName) {
+        return void 0;
+      }
+    }
+    return listName;
   }
   function emitCoordListLoopSetup(ctx, context, line) {
     ctx.emitNumberOrPreload(String(context.pointerStart));
@@ -13526,7 +14426,7 @@ var MKProEmulatorBundle = (() => {
     const register = ctx.allocation.registers[decrement.target];
     if (register === void 0) return false;
     const opcode = flOpcode(register);
-    if (opcode === void 0) return false;
+    if (opcode === void 0) return compileDecrementZeroDomainGuard(ctx, decrement, branch);
     const nonZeroLabel = ctx.freshLabel("decrement_nonzero");
     const thenTerminates = ctx.statementsTerminate(branch.thenBody);
     const endLabel = branch.elseBody !== void 0 && !thenTerminates ? ctx.freshLabel("if_end") : void 0;
@@ -13546,12 +14446,46 @@ var MKProEmulatorBundle = (() => {
     });
     return true;
   }
+  function compileDecrementZeroDomainGuard(ctx, decrement, branch) {
+    if (!statementsAreDomainErrorTrap(ctx, branch.thenBody)) return false;
+    ctx.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
+    ctx.emitNumberOrPreload("1");
+    ctx.emitOp(17, "-", `decrement/test ${decrement.target}`, decrement.line);
+    ctx.emitStore(decrement.target, `set ${decrement.target}`, decrement.line);
+    ctx.emitOp(35, "F 1/x", "decrement zero domain guard trap", branch.line);
+    ctx.currentXVariable = void 0;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
+    ctx.scaledCoordVariables.clear();
+    if (branch.elseBody !== void 0) ctx.compileStatements(branch.elseBody);
+    ctx.optimizations.push({
+      name: "decrement-zero-domain-guard",
+      detail: `Fused ${decrement.target} decrement and zero terminal-error branch through F 1/x at lines ${decrement.line}/${branch.line}.`
+    });
+    return true;
+  }
   function compileDecrementUnderflowBranch(ctx, decrement, branch) {
     if (!isUnitDecrementExpression(decrement.target, decrement.expr)) return false;
     if (branch.elseBody !== void 0) return false;
     if (!decrementBranchTestsUnderflow(branch.condition, decrement.target)) return false;
     if (!ctx.statementsTerminate(branch.thenBody)) return false;
     if (ctx.allocation.registers[decrement.target] === void 0) return false;
+    if (statementsAreDomainErrorTrap(ctx, branch.thenBody)) {
+      ctx.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
+      ctx.emitNumberOrPreload("1");
+      ctx.emitOp(17, "-", `decrement/test ${decrement.target}`, decrement.line);
+      ctx.emitStore(decrement.target, `set ${decrement.target}`, decrement.line);
+      ctx.emitOp(33, "F sqrt", "decrement underflow domain guard trap", branch.line);
+      ctx.currentXVariable = void 0;
+      ctx.currentXAliases.clear();
+      ctx.currentXKnownZero = false;
+      ctx.scaledCoordVariables.clear();
+      ctx.optimizations.push({
+        name: "decrement-underflow-domain-guard",
+        detail: `Fused ${decrement.target} decrement and negative terminal-error branch through F sqrt at lines ${decrement.line}/${branch.line}.`
+      });
+      return true;
+    }
     const okLabel = ctx.freshLabel("decrement_ok");
     ctx.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
     ctx.emitNumberOrPreload("1");
@@ -13569,7 +14503,124 @@ var MKProEmulatorBundle = (() => {
     });
     return true;
   }
+  function statementsAreDomainErrorTrap(ctx, statements, seen = /* @__PURE__ */ new Set()) {
+    if (statements.length !== 1) return false;
+    const statement = statements[0];
+    if (statement.kind === "halt") {
+      return statement.literal !== void 0 && displayLiteralProgram(statement.literal)?.kind === "error";
+    }
+    if (statement.kind === "call") {
+      if (seen.has(statement.block)) return false;
+      seen.add(statement.block);
+      const proc = ctx.ast.procs.find((candidate) => candidate.name === statement.block);
+      if (proc === void 0) return false;
+      return statementsAreDomainErrorTrap(ctx, proc.body, seen);
+    }
+    return false;
+  }
+  function planDomainErrorGuard(condition) {
+    const SQRT_OPCODE = 33;
+    const SQRT_MNEMONIC = "F sqrt";
+    const LG_OPCODE = 23;
+    const LG_MNEMONIC = "F lg";
+    const RECIP_OPCODE = 35;
+    const RECIP_MNEMONIC = "F 1/x";
+    let trapOpcode;
+    let trapMnemonic;
+    let a;
+    let b;
+    let symmetric = false;
+    switch (condition.op) {
+      case "<":
+        trapOpcode = SQRT_OPCODE;
+        trapMnemonic = SQRT_MNEMONIC;
+        a = condition.left;
+        b = condition.right;
+        break;
+      case "<=":
+        trapOpcode = LG_OPCODE;
+        trapMnemonic = LG_MNEMONIC;
+        a = condition.left;
+        b = condition.right;
+        break;
+      case ">":
+        trapOpcode = SQRT_OPCODE;
+        trapMnemonic = SQRT_MNEMONIC;
+        a = condition.right;
+        b = condition.left;
+        break;
+      case ">=":
+        trapOpcode = LG_OPCODE;
+        trapMnemonic = LG_MNEMONIC;
+        a = condition.right;
+        b = condition.left;
+        break;
+      case "==":
+        trapOpcode = RECIP_OPCODE;
+        trapMnemonic = RECIP_MNEMONIC;
+        a = condition.left;
+        b = condition.right;
+        symmetric = true;
+        break;
+      default:
+        return void 0;
+    }
+    if (isZeroExpression(b)) return { first: a, trapOpcode, trapMnemonic };
+    if (isZeroExpression(a)) return symmetric ? { first: b, trapOpcode, trapMnemonic } : void 0;
+    return { first: a, second: b, trapOpcode, trapMnemonic };
+  }
+  function compileDomainErrorGuard(ctx, statement, line) {
+    if (ctx.loweringOptions.domainErrorGuards !== true) return false;
+    if (!statementsAreDomainErrorTrap(ctx, statement.thenBody)) return false;
+    const plan = planDomainErrorGuard(statement.condition);
+    if (plan === void 0) return false;
+    const emitOperand = (expr) => {
+      if (expr.kind === "identifier" && ctx.xHolds(expr.name)) return;
+      compileExpression(ctx, expr);
+    };
+    if (plan.second === void 0) {
+      emitOperand(plan.first);
+    } else {
+      compileExpression(ctx, plan.first);
+      compileExpression(ctx, plan.second);
+      ctx.emitOp(17, "-", "domain guard difference", line);
+    }
+    ctx.emitOp(plan.trapOpcode, plan.trapMnemonic, "domain-error guard trap", line);
+    ctx.currentXVariable = void 0;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
+    ctx.scaledCoordVariables.clear();
+    if (statement.elseBody !== void 0) ctx.compileStatements(statement.elseBody);
+    ctx.optimizations.push({
+      name: "domain-error-guard",
+      detail: `Replaced a "${statement.condition.op}" terminal-error guard with a self-trapping ${plan.trapMnemonic} at line ${line}.`
+    });
+    return true;
+  }
+  function compileAssignThenDomainTrap(ctx, assign, branch) {
+    if (!statementsAreDomainErrorTrap(ctx, branch.thenBody)) return false;
+    const plan = planDomainErrorGuard(branch.condition);
+    if (plan === void 0 || plan.second !== void 0) return false;
+    if (plan.first.kind !== "identifier" || plan.first.name !== assign.target) return false;
+    if (ctx.allocation.registers[assign.target] === void 0) return false;
+    ctx.compileStatements([assign]);
+    if (!ctx.xHolds(assign.target)) {
+      ctx.emitRecall(assign.target, `trap-test ${assign.target}`, branch.line);
+    }
+    ctx.emitOp(plan.trapOpcode, plan.trapMnemonic, "domain-error guard trap", branch.line);
+    ctx.currentXVariable = void 0;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
+    ctx.scaledCoordVariables.clear();
+    if (branch.elseBody !== void 0) ctx.compileStatements(branch.elseBody);
+    ctx.optimizations.push({
+      name: "assign-zero-domain-guard",
+      detail: `Fused ${assign.target} store and "${branch.condition.op} 0" terminal-error branch through ${plan.trapMnemonic}.`
+    });
+    return true;
+  }
   function compileIf(ctx, statement, line) {
+    if (compileDomainErrorGuard(ctx, statement, line)) return;
     if (compileArithmeticIfSelect(ctx, statement)) return;
     if (compileGuardedUpdateSelector(ctx, statement)) return;
     if (compileNestedGuardSharedFailure(ctx, statement, line)) return;
@@ -13863,7 +14914,7 @@ var MKProEmulatorBundle = (() => {
   function compileMembershipSetReuseForPresentCondition(ctx, statement, membership, setPrefix, line) {
     const scratch = bitMaskScratchName(statement);
     if (ctx.allocation.registers[scratch] === void 0) return false;
-    const { set, tail } = setPrefix;
+    const { set, collection, tail } = setPrefix;
     const falseLabel = ctx.freshLabel("if_false");
     const thenTerminates = ctx.statementsTerminate(statement.thenBody);
     const endLabel = thenTerminates ? void 0 : ctx.freshLabel("if_end");
@@ -13872,7 +14923,7 @@ var MKProEmulatorBundle = (() => {
     ctx.compileStatements(statement.thenBody);
     if (endLabel !== void 0) ctx.emitJump(81, "\u0411\u041F", endLabel, "if end", line);
     ctx.emitLabel(falseLabel);
-    emitBitSetWithScratch(ctx, membership, set, scratch);
+    emitBitSetCollectionWithScratch(ctx, collection, set, scratch);
     ctx.compileStatements(tail);
     if (endLabel !== void 0) ctx.emitLabel(endLabel);
     ctx.optimizations.push({
@@ -13884,13 +14935,13 @@ var MKProEmulatorBundle = (() => {
   function compileMembershipSetReuseForAbsentCondition(ctx, statement, membership, setPrefix, line) {
     const scratch = bitMaskScratchName(statement);
     if (ctx.allocation.registers[scratch] === void 0) return false;
-    const { set, tail } = setPrefix;
+    const { set, collection, tail } = setPrefix;
     const falseLabel = ctx.freshLabel("if_false");
     const thenTerminates = ctx.statementsTerminate(statement.thenBody);
     const endLabel = statement.elseBody !== void 0 && !thenTerminates ? ctx.freshLabel("if_end") : void 0;
     emitMembershipMaskTest(ctx, membership, scratch, line);
     ctx.emitJump(87, "F x!=0", falseLabel, "false branch for ==", line);
-    emitBitSetWithScratch(ctx, membership, set, scratch);
+    emitBitSetCollectionWithScratch(ctx, collection, set, scratch);
     ctx.compileStatements(tail);
     if (statement.elseBody !== void 0) {
       if (endLabel !== void 0) ctx.emitJump(81, "\u0411\u041F", endLabel, "if end", line);
@@ -14425,10 +15476,44 @@ var MKProEmulatorBundle = (() => {
   }
 
   // src/core/emit/lowering/proc-raw-setup.ts
+  var MAX_EXACT_SETUP_CONSTANT_SYNTHESIS_PRELOADS = 10;
   function compileSetupProgramWithPreloads(ctx, preloads, fields) {
     const dynamicRegisters = new Set(fields.map((field) => ctx.allocation.registers[field.name]).filter(Boolean));
-    for (const preload of preloads) {
-      if (dynamicRegisters.has(preload.register)) continue;
+    const r0StackInitialized = fields.some(
+      (field) => field.initialStack !== void 0 && ctx.allocation.registers[field.name] === "0"
+    );
+    const r0NeedsNonNumericRestore = preloads.some((preload) => preload.register === "0" && preload.kind !== "number");
+    const repeatedIndexedGroups = r0StackInitialized || r0NeedsNonNumericRestore ? [] : repeatedIndexedSetupGroups(ctx, fields);
+    const groupedFieldNames = new Set(repeatedIndexedGroups.flatMap((group) => group.fields.map((field) => field.name)));
+    const usesR0SetupPointer = repeatedIndexedGroups.length > 0;
+    const activePreloads = preloads.filter(
+      (preload) => !dynamicRegisters.has(preload.register) && !(usesR0SetupPointer && preload.register === "0")
+    );
+    let numericSegment = [];
+    const emitNumericSegment = () => {
+      for (const action of setupNumericPreloadActions(numericSegment)) {
+        emitSetupNumericPreloadAction(ctx, numericSegment, action);
+        const targets = setupNumericActionTargetIndexes(action);
+        for (const targetIndex of targets) {
+          const preload = numericSegment[targetIndex];
+          ctx.emitOp(64 + registerIndex(preload.register), `X->\u041F ${preload.register}`, `setup R${preload.register}`, void 0, true);
+        }
+        if (targets.length > 1) {
+          const registers = targets.map((targetIndex) => `R${numericSegment[targetIndex].register}`).join(", ");
+          ctx.optimizations.push({
+            name: "duplicate-preload-store-reuse",
+            detail: `Loaded setup constant ${normalizeConstantLiteral(numericSegment[action.targetIndex].value)} once and stored it into ${registers}.`
+          });
+        }
+      }
+      numericSegment = [];
+    };
+    for (const preload of activePreloads) {
+      if (preload.kind === "number") {
+        numericSegment.push(preload);
+        continue;
+      }
+      emitNumericSegment();
       if (preload.kind === "display-literal") {
         const program = displayLiteralProgram(preload.value);
         const firstSplice = signedFirstSpliceDisplayLiteralProgram(preload.value) ?? exponentTailDisplayLiteralProgram(preload.value) ?? firstSpliceDisplayLiteralProgram(preload.value);
@@ -14444,6 +15529,7 @@ var MKProEmulatorBundle = (() => {
       }
       ctx.emitOp(64 + registerIndex(preload.register), `X->\u041F ${preload.register}`, `setup R${preload.register}`, void 0, true);
     }
+    emitNumericSegment();
     for (const field of fields.filter((candidate) => candidate.initialStack === "Y")) {
       ctx.emitOp(20, "X\u2194Y", `setup ${field.name} from stack.Y`, field.line);
       ctx.emitStore(field.name, `setup ${field.name}`, field.line, true);
@@ -14452,8 +15538,11 @@ var MKProEmulatorBundle = (() => {
     for (const field of fields.filter((candidate) => candidate.initialStack === "X")) {
       ctx.emitStore(field.name, `setup ${field.name}`, field.line, true);
     }
+    for (const group of repeatedIndexedGroups) compileRepeatedIndexedSetupGroup(ctx, group);
+    if (usesR0SetupPointer) restoreSetupPointerR0(ctx, preloads);
     const initializedCoordLists = /* @__PURE__ */ new Set();
     for (const field of fields) {
+      if (groupedFieldNames.has(field.name)) continue;
       if (field.initial === void 0) continue;
       const coordList = randomCoordListItemPlacement(field.name, field.initial);
       if (coordList !== void 0) {
@@ -14481,28 +15570,390 @@ var MKProEmulatorBundle = (() => {
     ctx.emitOp(80, "\u0421/\u041F", "setup complete");
     compileRuntimeHelpers(ctx);
   }
-  function compileProcedures(ctx) {
-    for (const proc of ctx.ast.procs) {
-      if (ctx.inlineProcNames.has(proc.name)) continue;
-      ctx.emitLabel(proc.name);
-      const xParam = ctx.xParamProcs.get(proc.name);
-      const xParamDecay = matchXParamReturnDecay(proc);
-      if (xParamDecay !== void 0) {
-        compileXParamReturnDecayBody(ctx, xParamDecay);
-        ctx.emitOp(82, "\u0412/\u041E", "x-param decay return", xParamDecay.line);
-        ctx.optimizations.push({
-          name: "x-param-return-decay",
-          detail: `Compiled ${proc.name} to consume ${xParamDecay.param} directly from X.`
-        });
-      } else if (xParam !== void 0) {
-        compileXParamProcBody(ctx, proc, xParam);
-      } else {
-        ctx.compileStatements(proc.body);
+  function repeatedIndexedSetupGroups(ctx, fields) {
+    const groups = [];
+    let index = 0;
+    while (index < fields.length) {
+      const first = fields[index];
+      if (first.initial === void 0 || first.initialStack !== void 0 || setupInitialIsLiteralExpression(first.initial)) {
+        index += 1;
+        continue;
       }
-      if (!ctx.statementsTerminate(proc.body)) {
-        ctx.emitOp(82, "\u0412/\u041E", "implicit return from proc");
+      if (coordListItemInfo(first.name) !== void 0 || randomCoordListItemPlacement(first.name, first.initial) !== void 0) {
+        index += 1;
+        continue;
+      }
+      const firstRegister = ctx.allocation.registers[first.name];
+      if (firstRegister === void 0) {
+        index += 1;
+        continue;
+      }
+      const run24 = [first];
+      let previousRegisterIndex = registerIndex(firstRegister);
+      let cursor = index + 1;
+      while (cursor < fields.length) {
+        const candidate = fields[cursor];
+        if (candidate.initial === void 0 || candidate.initialStack !== void 0) break;
+        if (coordListItemInfo(candidate.name) !== void 0) break;
+        if (!expressionEquals(candidate.initial, first.initial)) break;
+        const candidateRegister = ctx.allocation.registers[candidate.name];
+        if (candidateRegister === void 0) break;
+        const candidateRegisterIndex = registerIndex(candidateRegister);
+        if (candidateRegisterIndex !== previousRegisterIndex + 1) break;
+        run24.push(candidate);
+        previousRegisterIndex = candidateRegisterIndex;
+        cursor += 1;
+      }
+      const minRegisterIndex = registerIndex(firstRegister);
+      const maxRegisterIndex = previousRegisterIndex;
+      if (run24.length >= 3 && minRegisterIndex >= 1 && maxRegisterIndex <= 14) {
+        groups.push({
+          fields: run24,
+          initial: first.initial,
+          minRegisterIndex,
+          maxRegisterIndex
+        });
+        index = cursor;
+      } else {
+        index += 1;
       }
     }
+    return groups;
+  }
+  function setupInitialIsLiteralExpression(expr) {
+    if (expr.kind === "number") return true;
+    return expr.kind === "unary" && expr.op === "-" && expr.expr.kind === "number";
+  }
+  function compileRepeatedIndexedSetupGroup(ctx, group) {
+    const first = group.fields[0];
+    const last = group.fields.at(-1);
+    const label = ctx.freshLabel("setup_indexed_bank");
+    ctx.emitNumber(String(group.maxRegisterIndex + 1));
+    ctx.emitOp(64, "X->\u041F 0", `setup indexed pointer ${first.name}..${last.name}`, first.line, true);
+    ctx.emitLabel(label);
+    compileExpression(ctx, group.initial);
+    ctx.emitOp(176, "\u041A X->\u041F 0", `setup indexed ${first.name}..${last.name}`, first.line, true);
+    ctx.emitOp(96, "\u041F->X 0", "setup indexed pointer", first.line, true);
+    ctx.emitNumber(String(group.minRegisterIndex));
+    ctx.emitOp(17, "-", "setup indexed remaining", first.line, true);
+    ctx.emitJump(94, "F x=0", label, `setup indexed loop ${first.name}..${last.name}`, first.line);
+    ctx.currentXVariable = void 0;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
+    ctx.optimizations.push({
+      name: "indexed-bank-loop",
+      detail: `Initialized ${group.fields.length} indexed bank fields (${first.name}..${last.name}) with one indirect setup loop.`
+    });
+  }
+  function restoreSetupPointerR0(ctx, preloads) {
+    const preload = preloads.find((candidate) => candidate.register === "0" && candidate.kind === "number");
+    if (preload === void 0) return;
+    ctx.emitNumber(preload.value);
+    ctx.emitOp(64, "X->\u041F 0", "restore setup R0", void 0, true);
+  }
+  function setupNumericPreloadActions(preloads) {
+    const count = preloads.length;
+    if (count === 0) return [];
+    if (count > MAX_EXACT_SETUP_CONSTANT_SYNTHESIS_PRELOADS) {
+      return directSetupNumericPreloadActions(preloads);
+    }
+    const normalized = preloads.map((preload) => normalizeConstantLiteral(preload.value));
+    const numeric = normalized.map((value) => Number(value));
+    const directCosts = preloads.map((preload) => estimateNumberCost2(preload.value));
+    const fullMask = (1 << count) - 1;
+    const best = new Array(fullMask + 1).fill(Number.POSITIVE_INFINITY);
+    const previous = new Array(fullMask + 1);
+    best[0] = 0;
+    const apply = (mask, action) => {
+      const targets = setupNumericActionTargetIndexes(action);
+      if (targets.some((targetIndex) => (mask & 1 << targetIndex) !== 0)) return;
+      let nextMask = mask;
+      for (const targetIndex of targets) nextMask |= 1 << targetIndex;
+      const nextCost = best[mask] + action.cost;
+      if (nextCost >= best[nextMask]) return;
+      best[nextMask] = nextCost;
+      previous[nextMask] = { mask, action };
+    };
+    for (let mask = 0; mask <= fullMask; mask += 1) {
+      if (!Number.isFinite(best[mask])) continue;
+      for (let targetIndex = 0; targetIndex < count; targetIndex += 1) {
+        if ((mask & 1 << targetIndex) !== 0) continue;
+        apply(mask, withDuplicateSetupTargets(
+          { kind: "direct", targetIndex, cost: directCosts[targetIndex] },
+          normalized,
+          mask
+        ));
+        for (const action of setupConstantSynthesisActions(preloads, normalized, numeric, directCosts, mask, targetIndex)) {
+          apply(mask, withDuplicateSetupTargets(action, normalized, mask));
+        }
+      }
+    }
+    if (!Number.isFinite(best[fullMask])) {
+      return directSetupNumericPreloadActions(preloads);
+    }
+    const actions = [];
+    for (let mask = fullMask; mask !== 0; ) {
+      const step = previous[mask];
+      if (step === void 0) break;
+      actions.push(step.action);
+      mask = step.mask;
+    }
+    return actions.reverse();
+  }
+  function directSetupNumericPreloadActions(preloads) {
+    const normalized = preloads.map((preload) => normalizeConstantLiteral(preload.value));
+    const covered = /* @__PURE__ */ new Set();
+    const actions = [];
+    for (let targetIndex = 0; targetIndex < preloads.length; targetIndex += 1) {
+      if (covered.has(targetIndex)) continue;
+      const value = normalized[targetIndex];
+      const extraTargetIndexes = [];
+      for (let index = targetIndex + 1; index < preloads.length; index += 1) {
+        if (!covered.has(index) && normalized[index] === value) extraTargetIndexes.push(index);
+      }
+      const action = {
+        kind: "direct",
+        targetIndex,
+        cost: estimateNumberCost2(preloads[targetIndex].value),
+        ...extraTargetIndexes.length === 0 ? {} : { extraTargetIndexes }
+      };
+      for (const index of setupNumericActionTargetIndexes(action)) covered.add(index);
+      actions.push(action);
+    }
+    return actions;
+  }
+  function withDuplicateSetupTargets(action, normalized, loadedMask) {
+    const value = normalized[action.targetIndex];
+    const extraTargetIndexes = [];
+    for (let index = action.targetIndex + 1; index < normalized.length; index += 1) {
+      if ((loadedMask & 1 << index) !== 0) continue;
+      if (normalized[index] === value) extraTargetIndexes.push(index);
+    }
+    return extraTargetIndexes.length === 0 ? action : { ...action, extraTargetIndexes };
+  }
+  function setupNumericActionTargetIndexes(action) {
+    return [action.targetIndex, ...action.extraTargetIndexes ?? []];
+  }
+  function setupConstantSynthesisActions(preloads, normalized, numeric, directCosts, loadedMask, targetIndex) {
+    const target = numeric[targetIndex];
+    if (!Number.isFinite(target)) return [];
+    const targetValue = normalized[targetIndex];
+    const directCost = directCosts[targetIndex];
+    const actions = [];
+    const accept = (action) => {
+      if (action.cost < directCost) actions.push(action);
+    };
+    const loadedIndexes = [];
+    for (let index = 0; index < preloads.length; index += 1) {
+      if ((loadedMask & 1 << index) !== 0) loadedIndexes.push(index);
+    }
+    const negated = normalizeConstantLiteral(String(-target));
+    const negatedIndex = loadedIndexes.find((index) => normalized[index] === negated);
+    if (negatedIndex !== void 0) {
+      accept({
+        kind: "unary",
+        targetIndex,
+        cost: 2,
+        sourceIndex: negatedIndex,
+        opcode: 11,
+        mnemonic: "/-/",
+        detail: `changed the sign of setup R${preloads[negatedIndex].register} (${normalized[negatedIndex]})`
+      });
+    }
+    if (Number.isSafeInteger(target) && target >= 0) {
+      for (const sourceIndex of loadedIndexes) {
+        const source = numeric[sourceIndex];
+        if (!Number.isSafeInteger(source)) continue;
+        const squared = source * source;
+        if (!Number.isSafeInteger(squared)) continue;
+        if (normalizeConstantLiteral(String(squared)) !== targetValue) continue;
+        accept({
+          kind: "unary",
+          targetIndex,
+          cost: 2,
+          sourceIndex,
+          opcode: 34,
+          mnemonic: "F x^2",
+          detail: `squared setup R${preloads[sourceIndex].register} (${normalized[sourceIndex]})`
+        });
+      }
+    }
+    for (const sourceIndex of loadedIndexes) {
+      const source = numeric[sourceIndex];
+      if (!Number.isSafeInteger(source)) continue;
+      const doubled = source * 2;
+      if (Number.isSafeInteger(doubled) && normalizeConstantLiteral(String(doubled)) === targetValue) {
+        accept({
+          kind: "unary-sequence",
+          targetIndex,
+          cost: 3,
+          sourceIndex,
+          ops: [
+            { opcode: 14, mnemonic: "\u0412\u2191", comment: "stack" },
+            { opcode: 16, mnemonic: "+", comment: "" }
+          ],
+          detail: `doubled setup R${preloads[sourceIndex].register} (${normalized[sourceIndex]})`
+        });
+      }
+      if (source % 2 === 0) {
+        const half = source / 2;
+        if (Number.isSafeInteger(half) && normalizeConstantLiteral(String(half)) === targetValue) {
+          accept({
+            kind: "unary-sequence",
+            targetIndex,
+            cost: 3,
+            sourceIndex,
+            ops: [
+              { opcode: 2, mnemonic: "2", comment: "divisor" },
+              { opcode: 19, mnemonic: "/", comment: "" }
+            ],
+            detail: `halved setup R${preloads[sourceIndex].register} (${normalized[sourceIndex]})`
+          });
+        }
+      }
+    }
+    for (const leftIndex of loadedIndexes) {
+      const left = numeric[leftIndex];
+      if (!Number.isSafeInteger(left)) continue;
+      for (const rightIndex of loadedIndexes) {
+        const right = numeric[rightIndex];
+        if (!Number.isSafeInteger(right)) continue;
+        const candidates = [
+          { op: "+", value: left + right },
+          { op: "-", value: left - right },
+          { op: "*", value: left * right }
+        ];
+        if (right !== 0 && left % right === 0) candidates.push({ op: "/", value: left / right });
+        if (left > 0 && right >= 0 && right <= 12) candidates.push({ op: "pow", value: left ** right });
+        for (const candidate of candidates) {
+          if (!Number.isSafeInteger(candidate.value)) continue;
+          if (normalizeConstantLiteral(String(candidate.value)) !== targetValue) continue;
+          accept({
+            kind: "binary",
+            targetIndex,
+            cost: 4,
+            leftIndex,
+            rightIndex,
+            op: candidate.op,
+            detail: `combined setup R${preloads[leftIndex].register} (${normalized[leftIndex]}) and R${preloads[rightIndex].register} (${normalized[rightIndex]}) with ${candidate.op === "pow" ? "F x^y" : candidate.op}`
+          });
+        }
+      }
+    }
+    const powerOfTenExponent = positiveIntegerPowerOfTenExponent(targetValue);
+    if (powerOfTenExponent !== void 0) {
+      const exponent = String(powerOfTenExponent);
+      accept({
+        kind: "pow10",
+        targetIndex,
+        cost: estimateNumberCost2(exponent) + 1,
+        exponent,
+        detail: `loaded exponent ${exponent} and applied F 10^x`
+      });
+    }
+    return actions;
+  }
+  function emitSetupNumericPreloadAction(ctx, preloads, action) {
+    const target = preloads[action.targetIndex];
+    const targetValue = normalizeConstantLiteral(target.value);
+    if (action.kind === "direct") {
+      ctx.emitNumber(target.value);
+      return;
+    }
+    if (action.kind === "pow10") {
+      ctx.emitNumber(action.exponent);
+      ctx.emitOp(21, "F 10^x", `setup constant ${targetValue}`);
+    } else if (action.kind === "unary") {
+      const source = preloads[action.sourceIndex];
+      ctx.emitOp(96 + registerIndex(source.register), `\u041F->X ${source.register}`, `setup constant ${targetValue} base ${normalizeConstantLiteral(source.value)}`);
+      ctx.emitOp(action.opcode, action.mnemonic, `setup constant ${targetValue}`);
+    } else if (action.kind === "unary-sequence") {
+      const source = preloads[action.sourceIndex];
+      ctx.emitOp(96 + registerIndex(source.register), `\u041F->X ${source.register}`, `setup constant ${targetValue} base ${normalizeConstantLiteral(source.value)}`);
+      for (const op of action.ops) {
+        const comment = op.comment === "" ? `setup constant ${targetValue}` : `setup constant ${targetValue} ${op.comment}`;
+        ctx.emitOp(op.opcode, op.mnemonic, comment);
+      }
+    } else {
+      const left = preloads[action.leftIndex];
+      const right = preloads[action.rightIndex];
+      ctx.emitOp(96 + registerIndex(left.register), `\u041F->X ${left.register}`, `setup constant ${targetValue} left ${normalizeConstantLiteral(left.value)}`);
+      ctx.emitOp(14, "\u0412\u2191", `setup constant ${targetValue} stack`);
+      ctx.emitOp(96 + registerIndex(right.register), `\u041F->X ${right.register}`, `setup constant ${targetValue} right ${normalizeConstantLiteral(right.value)}`);
+      if (action.op === "pow") ctx.emitOp(36, "F x^y", `setup constant ${targetValue}`);
+      else ctx.emitOp(binaryOpcode(action.op), action.op, `setup constant ${targetValue}`);
+    }
+    ctx.optimizations.push({
+      name: "constant-synthesis",
+      detail: `Built setup constant ${targetValue} by ${action.detail} (${action.cost} cells instead of direct ${estimateNumberCost2(target.value)}).`
+    });
+  }
+  function compileProcedures(ctx) {
+    const order = procEmissionOrder(ctx);
+    for (const proc of order) {
+      if (ctx.inlineProcNames.has(proc.name)) continue;
+      ctx.emitProcedureLabel(proc.name);
+      ctx.compileWithinProcedure(proc, () => {
+        const xParam = ctx.xParamProcs.get(proc.name);
+        const xParamDecay = matchXParamReturnDecay(proc);
+        const xParamStakeSin = matchXParamStakeSinRead(ctx.ast, proc);
+        if (xParamDecay !== void 0) {
+          compileXParamReturnDecayBody(ctx, xParamDecay);
+          ctx.emitOp(82, "\u0412/\u041E", "x-param decay return", xParamDecay.line);
+          ctx.optimizations.push({
+            name: "x-param-return-decay",
+            detail: `Compiled ${proc.name} to consume ${xParamDecay.param} directly from X.`
+          });
+        } else if (xParamStakeSin !== void 0) {
+          compileXParamStakeSinReadBody(ctx, xParamStakeSin);
+          ctx.emitOp(82, "\u0412/\u041E", "x-param stake-sin return", xParamStakeSin.line);
+          ctx.optimizations.push({
+            name: "x-param-stake-sin-read",
+            detail: `Compiled ${proc.name} to consume ${xParamStakeSin.param} directly from X.`
+          });
+          ctx.optimizations.push({
+            name: "show-read-stake-sin-lowering",
+            detail: `Reused displayed ${xParamStakeSin.param} as the stack stake for ${proc.name}.`
+          });
+        } else if (xParam !== void 0) {
+          compileXParamProcBody(ctx, proc, xParam);
+        } else {
+          ctx.compileStatements(proc.body);
+        }
+        if (!ctx.statementsTerminate(proc.body)) {
+          ctx.emitOp(82, "\u0412/\u041E", "implicit return from proc");
+        }
+      });
+      ctx.emitProcedureEndLabel(proc.name);
+    }
+  }
+  function procBodySizeProxy(proc) {
+    return proc.body.length;
+  }
+  function procEmissionOrder(ctx) {
+    const strategy = ctx.loweringOptions.orderProcsByCallCount === true ? "call-count" : ctx.loweringOptions.procLayoutStrategy;
+    if (strategy === void 0) return ctx.ast.procs;
+    const indexed = ctx.ast.procs.map((proc, index) => ({ proc, index }));
+    const callCount = (proc) => ctx.procCallCounts.get(proc.name) ?? 0;
+    indexed.sort((a, b) => {
+      let primary = 0;
+      switch (strategy) {
+        case "call-count":
+          primary = callCount(b.proc) - callCount(a.proc);
+          break;
+        case "size-asc":
+          primary = procBodySizeProxy(a.proc) - procBodySizeProxy(b.proc);
+          break;
+        case "size-desc":
+          primary = procBodySizeProxy(b.proc) - procBodySizeProxy(a.proc);
+          break;
+        case "reverse":
+          primary = b.index - a.index;
+          break;
+      }
+      return primary !== 0 ? primary : a.index - b.index;
+    });
+    return indexed.map((entry) => entry.proc);
   }
   function compileXParamReturnDecayBody(ctx, decay) {
     ctx.emitOp(14, "\u0412\u2191", "x-param decay keep base", decay.line);
@@ -14512,6 +15963,17 @@ var MKProEmulatorBundle = (() => {
     ctx.emitOp(19, "/", "x-param decay divide", decay.line);
     ctx.emitOp(52, "\u041A [x]", "x-param decay int", decay.line);
     ctx.emitOp(17, "-", "x-param decay subtract", decay.line);
+  }
+  function compileXParamStakeSinReadBody(ctx, stakeSin) {
+    ctx.emitOp(14, "\u0412\u2191", "x-param stake keep displayed stake", stakeSin.showLine);
+    ctx.emitOp(80, "\u0421/\u041F", `show ${stakeSin.display}`, stakeSin.showLine);
+    ctx.armValueInY(stakeSin.param);
+    compileStackStopRiskTail(ctx, stakeSin.risk, {
+      inputComment: "risk input read()",
+      inputLine: stakeSin.line,
+      consumerLine: stakeSin.line
+    });
+    ctx.clearArmedValueInY();
   }
   function compileRuntimeHelpers(ctx) {
     for (let index = 0; index < ctx.terminalTailHelpers.length; index += 1) {
@@ -14641,14 +16103,23 @@ var MKProEmulatorBundle = (() => {
     }
     for (const helper of ctx.spatialHitHelpers.values()) {
       ctx.emitLabel(helper.label);
-      ctx.emitStore(helper.scratch, "spatial hit index", helper.line);
-      compileBitMaskWithQuotientScratch(
-        ctx,
-        { kind: "identifier", name: helper.scratch },
-        helper.scratch,
-        helper.line,
-        { forceInline: true }
-      );
+      const bitMaskHelper = ctx.spatialBitMaskHelpers.values().next().value;
+      if (bitMaskHelper !== void 0) {
+        ctx.emitJump(83, "\u041F\u041F", bitMaskHelper.label, "spatial hit bit_mask", helper.line);
+        ctx.optimizations.push({
+          name: "spatial-hit-bit-mask-helper-reuse",
+          detail: `Reused shared bit_mask helper ${bitMaskHelper.label} inside spatial hit ${helper.label}.`
+        });
+      } else {
+        ctx.emitStore(helper.scratch, "spatial hit index", helper.line);
+        compileBitMaskWithQuotientScratch(
+          ctx,
+          { kind: "identifier", name: helper.scratch },
+          helper.scratch,
+          helper.line,
+          { forceInline: true }
+        );
+      }
       ctx.emitRecall(helper.mask, "spatial hit mask", helper.line);
       ctx.emitOp(55, "\u041A \u2227", "spatial hit test", helper.line);
       ctx.emitOp(53, "\u041A {x}", "spatial hit membership fraction", helper.line);
@@ -14725,6 +16196,15 @@ var MKProEmulatorBundle = (() => {
     return true;
   }
   function compileXParamProcBody(ctx, proc, lowering) {
+    if (lowering.kind === "copy") {
+      ctx.emitStore(lowering.first.target, `set ${lowering.first.target} from X parameter`, lowering.first.line);
+      ctx.compileStatements(proc.body.slice(1));
+      ctx.optimizations.push({
+        name: "x-param-proc-entry",
+        detail: `Compiled rule ${proc.name} to copy ${lowering.param} directly from X.`
+      });
+      return;
+    }
     ctx.emitRecall(lowering.other, `${proc.name} ${lowering.first.target} base`, lowering.first.line);
     ctx.emitOp(16, "+", `${proc.name} ${lowering.first.target} from X parameter`, lowering.first.line);
     ctx.emitStore(lowering.first.target, `set ${lowering.first.target}`, lowering.first.line);
@@ -14971,22 +16451,28 @@ var MKProEmulatorBundle = (() => {
   }
   function compileUnitDecrement(ctx, statement) {
     if (!isUnitDecrementExpression(statement.target, statement.expr)) return false;
+    if (statement.target.startsWith(PACKED_COUNTER_PREFIX)) return false;
     const register = ctx.allocation.registers[statement.target];
     if (register === void 0) return false;
-    const opcode = flOpcode(register);
-    if (opcode === void 0) return false;
-    const after = ctx.freshLabel("fl_decrement_done");
-    const preservedXVariable = ctx.currentXVariable === statement.target ? void 0 : ctx.currentXVariable;
-    const preservedXKnownZero = ctx.currentXKnownZero;
-    ctx.emitJump(opcode, getOpcode(opcode).name, after, `decrement ${statement.target}`, statement.line);
-    ctx.currentXVariable = preservedXVariable;
-    ctx.currentXAliases = preservedXVariable !== void 0 ? /* @__PURE__ */ new Set([preservedXVariable]) : /* @__PURE__ */ new Set();
-    ctx.currentXKnownZero = preservedXKnownZero;
-    ctx.machineEntryOpen = false;
-    ctx.emitLabel(after);
+    if (isPredecrementIndirectRegister(register) && targetRangeFitsIndirectDecrement(ctx, statement.target)) {
+      return emitIndirectUnitDecrement(ctx, statement.target, register, `decrement ${statement.target}`, statement.line);
+    }
+    return false;
+  }
+  function targetRangeFitsIndirectDecrement(ctx, target) {
+    const field = ctx.findStateField(target);
+    if (field?.min === void 0 || field.max === void 0) return false;
+    return field.type === "range" && field.min >= 0 && field.max <= 14;
+  }
+  function emitIndirectUnitDecrement(ctx, target, register, comment, line) {
+    if (!isPredecrementIndirectRegister(register)) return false;
+    ctx.emitOp(208 + registerIndex(register), `\u041A \u041F->X ${register}`, comment, line);
+    ctx.currentXVariable = void 0;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
     ctx.optimizations.push({
-      name: "fl-unit-decrement",
-      detail: `Lowered ${statement.target} -= 1 through ${getOpcode(opcode).name}.`
+      name: "indirect-incdec-counter",
+      detail: `Decremented ${target} by using ${getOpcode(208 + registerIndex(register)).name}'s pre-decrement side effect at line ${line}.`
     });
     return true;
   }
@@ -15014,7 +16500,7 @@ var MKProEmulatorBundle = (() => {
     return field.type === "range" && field.min >= 0 && field.max + 1 <= 14;
   }
   function emitErrorStopOpcode(ctx, comment, line, raw = false) {
-    ctx.emitOp(43, "error 2B", comment, line, raw);
+    ctx.emitOp(41, "\u041A \xF7", comment, line, raw);
   }
   function compileBlockCall(ctx, blockName, line) {
     const proc = ctx.ast.procs.find((candidate) => candidate.name === blockName);
@@ -15092,6 +16578,12 @@ var MKProEmulatorBundle = (() => {
         continue;
       }
       ctx.emitOp(parsed.opcode, parsed.mnemonic, parsed.comment, line.line, true);
+      if (parsed.opcode === 95) {
+        ctx.optimizations.push({
+          name: "raw-display-5f",
+          detail: `Raw block uses opcode 5F as a display-state transform at line ${line.line}.`
+        });
+      }
       if (parsed.formalTargetOpcode !== void 0) {
         ctx.emitFormalAddress(parsed.formalTargetOpcode, parsed.comment ?? parsed.mnemonic, line.line);
       } else if (parsed.target !== void 0) {
@@ -15209,9 +16701,6 @@ var MKProEmulatorBundle = (() => {
     ctx.emitOp(19, "/", "bit mask fractional place", line);
     ctx.emitNumber("8");
     ctx.emitOp(16, "+", "bit mask anchor", line);
-  }
-  function emitBitSetWithScratch(ctx, membership, set, scratch) {
-    emitBitSetCollectionWithScratch(ctx, membership.collection, set, scratch);
   }
   function emitBitSetCollectionWithScratch(ctx, collection, set, scratch) {
     compileExpression(ctx, collection);
@@ -15611,10 +17100,22 @@ var MKProEmulatorBundle = (() => {
           ctx.emitOp(11, "/-/", "unary minus");
           return;
         }
+        if (expr.op === "/" && isNumericValue2(expr.left, 1)) {
+          compileExpression(ctx, expr.right);
+          ctx.emitOp(35, "F 1/x", "reciprocal division");
+          ctx.optimizations.push({
+            name: "reciprocal-division-lowering",
+            detail: `Lowered ${expressionToIntentText(expr)} through F 1/x.`
+          });
+          return;
+        }
         if (compileRemainderByConstant(ctx, expr)) {
           return;
         }
         if ((expr.op === "+" || expr.op === "*") && compileCommutativeWithCurrentX(ctx, expr)) {
+          return;
+        }
+        if (compileSquareBinary(ctx, expr)) {
           return;
         }
         if (compileStackDuplicatedBinary(ctx, expr)) {
@@ -15650,6 +17151,16 @@ var MKProEmulatorBundle = (() => {
       return true;
     }
     return false;
+  }
+  function compileSquareBinary(ctx, expr) {
+    if (expr.op !== "*" || !expressionEquals(expr.left, expr.right) || !isPureExpression(expr.left)) return false;
+    compileExpression(ctx, expr.left);
+    ctx.emitOp(34, "F x^2", "square repeated operand");
+    ctx.optimizations.push({
+      name: "square-expression-lowering",
+      detail: `Lowered ${expressionToIntentText(expr)} through F x^2.`
+    });
+    return true;
   }
   function compileStackDuplicatedBinary(ctx, expr) {
     if (!expressionEquals(expr.left, expr.right)) return false;
@@ -15703,6 +17214,18 @@ var MKProEmulatorBundle = (() => {
       });
       return true;
     }
+    const xParamStakeSin = matchXParamStakeSinRead(ctx.ast, proc);
+    if (xParamStakeSin !== void 0 && expr.args.length === 1) {
+      compileExpression(ctx, expr.args[0]);
+      const bankSelectors2 = ctx.snapshotBankSelectorCache();
+      ctx.emitJump(83, "\u041F\u041F", proc.name, `call function ${proc.name}`, proc.line);
+      ctx.restoreBankSelectorCacheAfterCall(proc.name, bankSelectors2);
+      ctx.optimizations.push({
+        name: "x-param-stake-sin-call",
+        detail: `Passed ${xParamStakeSin.param} to ${proc.name} through X.`
+      });
+      return true;
+    }
     for (let index = 0; index < params.length; index += 1) {
       compileExpression(ctx, expr.args[index]);
       ctx.emitStore(params[index], `arg ${params[index]} for ${expr.callee}`, proc.line);
@@ -15716,17 +17239,37 @@ var MKProEmulatorBundle = (() => {
     });
     return true;
   }
+  function expressionLeadsWithRead(expr) {
+    if (expr.kind !== "call") return false;
+    const name = expr.callee.toLowerCase();
+    if (name === "read") return expr.args.length === 0;
+    if (expr.args.length === 1 && X_TRANSFORM_UNARY_FUNCTIONS.has(name)) {
+      return expressionLeadsWithRead(expr.args[0]);
+    }
+    return false;
+  }
+  function compileStackStopRiskTail(ctx, match, labels) {
+    if (ctx.currentYVariable !== match.yName) {
+      throw new Error(
+        `stack-stop risk tail expected ${match.yName} parked in Y, found ${String(ctx.currentYVariable)}`
+      );
+    }
+    for (const [code, mnemonic] of match.inputUnary) {
+      ctx.emitOp(code, mnemonic, labels.inputComment, labels.inputLine);
+    }
+    if (match.additive !== void 0) {
+      ctx.emitOp(match.additive.digit, String(match.additive.digit), "risk multiplier", labels.consumerLine);
+      ctx.emitOp(binaryOpcode(match.additive.op), match.additive.op, "risk multiplier", labels.consumerLine);
+    }
+    ctx.emitOp(binaryOpcode(match.yOp), match.yOp, "risk stake", labels.consumerLine);
+    for (let index = match.wraps.length - 1; index >= 0; index -= 1) {
+      const [code, mnemonic] = match.wraps[index];
+      ctx.emitOp(code, mnemonic, "risk integer result", labels.consumerLine);
+    }
+  }
   function compileCall(ctx, expr) {
     if (compileFunctionCall(ctx, expr)) return;
     const name = expr.callee.toLowerCase();
-    if (name === "direction") {
-      compileDirectionCall(ctx, expr);
-      return;
-    }
-    if (name === "__direction_cardinal") {
-      compileCardinalDirectionCall(ctx, expr);
-      return;
-    }
     if (name === "neighbor_count" || name === "line_count") {
       if (compileSpatialCountCall(ctx, name, expr)) return;
     }
@@ -15775,6 +17318,18 @@ var MKProEmulatorBundle = (() => {
     if (compileRandomIntegerCall(ctx, expr)) {
       return;
     }
+    if (name === "read") {
+      if (expr.args.length !== 0) {
+        ctx.diagnostics.push({
+          level: "error",
+          message: `${expr.callee}() takes no arguments, got ${expr.args.length}.`
+        });
+        return;
+      }
+      if (ctx.consumeArmedInputInX()) return;
+      ctx.emitOp(80, "\u0421/\u041F", `${expr.callee}()`);
+      return;
+    }
     const zeroArgOpcodes = {
       pi: [32, "F pi"]
     };
@@ -15790,6 +17345,18 @@ var MKProEmulatorBundle = (() => {
       ctx.emitOp(zeroArgOpcode[0], zeroArgOpcode[1], `${expr.callee}()`);
       return;
     }
+    if (name === "e") {
+      if (expr.args.length !== 0) {
+        ctx.diagnostics.push({
+          level: "error",
+          message: `${expr.callee}() takes no arguments, got ${expr.args.length}.`
+        });
+        return;
+      }
+      ctx.emitNumber("1");
+      ctx.emitOp(22, "F e^x", `${expr.callee}()`);
+      return;
+    }
     if (name === "pow") {
       if (expr.args.length !== 2) {
         ctx.diagnostics.push({
@@ -15798,9 +17365,42 @@ var MKProEmulatorBundle = (() => {
         });
         return;
       }
+      if (isNumericValue2(expr.args[1], 2)) {
+        compileExpression(ctx, expr.args[0]);
+        ctx.emitOp(34, "F x^2", `${expr.callee}()`);
+        ctx.optimizations.push({
+          name: "pow-square-lowering",
+          detail: `Lowered ${expressionToIntentText(expr)} through F x^2.`
+        });
+        return;
+      }
+      if (isNumericValue2(expr.args[0], 10)) {
+        compileExpression(ctx, expr.args[1]);
+        ctx.emitOp(21, "F 10^x", `${expr.callee}()`);
+        ctx.optimizations.push({
+          name: "pow10-opcode-lowering",
+          detail: `Lowered ${expressionToIntentText(expr)} through F 10^x.`
+        });
+        return;
+      }
       compileExpression(ctx, expr.args[1]);
       compileExpression(ctx, expr.args[0]);
       ctx.emitOp(36, "F x^y", `${expr.callee}()`);
+      return;
+    }
+    if (name === "min") {
+      if (expr.args.length !== 2) {
+        ctx.diagnostics.push({
+          level: "error",
+          message: `Function ${expr.callee} expects two arguments.`
+        });
+        return;
+      }
+      compileExpression(ctx, minExpression(expr.args[0], expr.args[1]));
+      ctx.optimizations.push({
+        name: "min-via-max-lowering",
+        detail: `Lowered ${expressionToIntentText(expr)} through min-via-max().`
+      });
       return;
     }
     const binaryOpcodes = {
@@ -15832,31 +17432,7 @@ var MKProEmulatorBundle = (() => {
       return;
     }
     compileExpression(ctx, expr.args[0]);
-    const opcodes = {
-      abs: [49, "\u041A |x|"],
-      sign: [50, "\u041A \u0417\u041D"],
-      int: [52, "\u041A [x]"],
-      frac: [53, "\u041A {x}"],
-      sqr: [34, "F x^2"],
-      inv: [35, "F 1/x"],
-      sqrt: [33, "F sqrt"],
-      lg: [23, "F lg"],
-      ln: [24, "F ln"],
-      sin: [28, "F sin"],
-      cos: [29, "F cos"],
-      tg: [30, "F tg"],
-      asin: [25, "F sin^-1"],
-      acos: [26, "F cos^-1"],
-      atg: [27, "F tg^-1"],
-      exp: [22, "F e^x"],
-      pow10: [21, "F 10^x"],
-      bit_not: [58, "\u041A \u0418\u041D\u0412"],
-      to_min: [38, "\u041A \xB0->\u2032"],
-      to_sec: [42, '\u041A \xB0->\u2032"'],
-      from_sec: [48, '\u041A \xB0<-\u2032"'],
-      from_min: [51, "\u041A \xB0<-\u2032"]
-    };
-    const opcode = opcodes[name];
+    const opcode = X_TRANSFORM_UNARY_OPCODES[name];
     if (!opcode) {
       ctx.diagnostics.push({
         level: "error",
@@ -15958,124 +17534,433 @@ var MKProEmulatorBundle = (() => {
     ctx.emitOp(derived.opcode, derived.mnemonic, `current-X ${derived.fn}`);
     return true;
   }
-  function compileDirectionCall(ctx, expr) {
-    if (expr.args.length !== 1) {
-      ctx.diagnostics.push({
-        level: "error",
-        message: `direction() expects one keypad argument, got ${expr.args.length}.`
+
+  // src/core/emit/stack-residency-analysis.ts
+  function stackTempSourceIsSafe(expr) {
+    if (!expressionIsDeterministic(expr)) return false;
+    if (expr.kind === "call") return false;
+    return expressionPureForSubstitution(expr);
+  }
+  function statementsReadIdentifier(statements, name) {
+    return statements.some((statement) => statementReadsIdentifier(statement, name));
+  }
+  function statementReadsIdentifier(statement, name) {
+    switch (statement.kind) {
+      case "pause":
+      case "halt":
+        return expressionReferencesIdentifier(statement.expr, name);
+      case "assign":
+        return expressionReferencesIdentifier(statement.expr, name);
+      case "indexed_assign":
+        return expressionReferencesIdentifier(statement.target.index, name) || expressionReferencesIdentifier(statement.expr, name);
+      case "coord_list_remove":
+        return expressionReferencesIdentifier(statement.item, name);
+      case "if":
+        return expressionReferencesIdentifier(statement.condition.left, name) || expressionReferencesIdentifier(statement.condition.right, name) || statementsReadIdentifier(statement.thenBody, name) || statement.elseBody !== void 0 && statementsReadIdentifier(statement.elseBody, name);
+      case "loop":
+        return statementsReadIdentifier(statement.body, name);
+      case "while":
+        return expressionReferencesIdentifier(statement.condition.left, name) || expressionReferencesIdentifier(statement.condition.right, name) || statementsReadIdentifier(statement.body, name);
+      case "dispatch":
+        return expressionReferencesIdentifier(statement.expr, name) || statement.cases.some(
+          (dispatchCase) => expressionReferencesIdentifier(dispatchCase.value, name) || statementsReadIdentifier(dispatchCase.body, name)
+        ) || statement.defaultBody !== void 0 && statementsReadIdentifier(statement.defaultBody, name);
+      case "show":
+      case "input":
+      case "call":
+      case "decimal_series":
+        return false;
+      case "core":
+        return statement.inputs?.some((input) => expressionReferencesIdentifier(input.expr, name)) ?? false;
+      case "return_value":
+        return expressionReferencesIdentifier(statement.expr, name);
+    }
+  }
+  function conditionReferencesProtected(condition, protectedTemps) {
+    for (const temp of protectedTemps) {
+      if (expressionReferencesIdentifier(condition.left, temp) || expressionReferencesIdentifier(condition.right, temp)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  function statementsPreserveStackResidencyBlock(statements, protectedTemps) {
+    return statements.every((statement) => statementPreservesStackResidency(statement, protectedTemps));
+  }
+  function statementPreservesStackResidency(statement, protectedTemps) {
+    for (const temp of protectedTemps) {
+      if (statementReadsIdentifier(statement, temp)) return false;
+    }
+    switch (statement.kind) {
+      case "assign":
+      case "indexed_assign":
+      case "show":
+      case "halt":
+      case "pause":
+      case "input":
+      case "return_value":
+      case "call":
+      case "core":
+      case "decimal_series":
+      case "coord_list_remove":
+        return false;
+      case "if":
+        if (conditionReferencesProtected(statement.condition, protectedTemps)) return false;
+        return statementsPreserveStackResidencyBlock(statement.thenBody, protectedTemps) && (statement.elseBody === void 0 || statementsPreserveStackResidencyBlock(statement.elseBody, protectedTemps));
+      case "loop":
+        return statementsPreserveStackResidencyBlock(statement.body, protectedTemps);
+      case "while":
+        if (conditionReferencesProtected(statement.condition, protectedTemps)) return false;
+        return statementsPreserveStackResidencyBlock(statement.body, protectedTemps);
+      case "dispatch":
+        for (const temp of protectedTemps) {
+          if (expressionReferencesIdentifier(statement.expr, temp)) return false;
+        }
+        return statement.cases.every((dispatchCase) => {
+          for (const temp of protectedTemps) {
+            if (expressionReferencesIdentifier(dispatchCase.value, temp)) return false;
+          }
+          return statementsPreserveStackResidencyBlock(dispatchCase.body, protectedTemps);
+        }) && (statement.defaultBody === void 0 || statementsPreserveStackResidencyBlock(statement.defaultBody, protectedTemps));
+    }
+  }
+  function isStackResidentConsumer(statement) {
+    if (statement === void 0) return false;
+    return statement.kind === "assign" || statement.kind === "halt" || statement.kind === "pause" || statement.kind === "return_value" || statement.kind === "indexed_assign";
+  }
+  function consumerOverwriteTarget(consumer) {
+    return consumer.kind === "assign" ? consumer.target : void 0;
+  }
+  function stackTempValueDeadAfterConsumer(temp, overwrittenByConsumer, tail) {
+    return overwrittenByConsumer === temp || !statementsReadIdentifier(tail, temp);
+  }
+  function stackResidentSlotForTemp(tempIndex, tempCount) {
+    const depthFromX = tempCount - 1 - tempIndex;
+    if (depthFromX === 0) return "X";
+    if (depthFromX === 1) return "Y";
+    if (depthFromX === 2) return "Z";
+    return "T";
+  }
+  function stackResidentRestoreOps(tempIndex, tempCount) {
+    const slot = stackResidentSlotForTemp(tempIndex, tempCount);
+    if (slot === "X") return [];
+    if (slot === "Y") return ["swap"];
+    if (slot === "Z") return ["reverse", "swap"];
+    return ["reverse", "reverse", "swap"];
+  }
+  function stackTempOtherOperandIsSafe(expr) {
+    if (expr.kind === "call") return false;
+    return expressionPureForSubstitution(expr);
+  }
+  function canLowerStackResidentExpression(expr, temps) {
+    for (const temp of temps) {
+      if (countIdentifierReads(expr, temp) !== 1) return false;
+    }
+    return validateStackResidentExpression(expr, temps);
+  }
+  function validateStackResidentExpression(expr, temps) {
+    switch (expr.kind) {
+      case "number":
+      case "string":
+        return true;
+      case "identifier":
+        return temps.includes(expr.name) || isSimpleStackLoad(expr);
+      case "indexed":
+        return isSimpleStackLoad(expr);
+      case "unary":
+        return validateStackResidentExpression(expr.expr, temps);
+      case "binary": {
+        const leftRefsTemp = temps.some((temp) => countIdentifierReads(expr.left, temp) > 0);
+        const rightRefsTemp = temps.some((temp) => countIdentifierReads(expr.right, temp) > 0);
+        if (leftRefsTemp && rightRefsTemp) {
+          return validateStackResidentExpression(expr.left, temps) && validateStackResidentExpression(expr.right, temps);
+        }
+        if (leftRefsTemp) {
+          return validateStackResidentExpression(expr.left, temps) && stackTempOtherOperandIsSafe(expr.right);
+        }
+        if (rightRefsTemp) {
+          return validateStackResidentExpression(expr.right, temps) && stackTempOtherOperandIsSafe(expr.left) && (expr.op === "+" || expr.op === "*" || isSimpleStackLoad(expr.left));
+        }
+        return stackTempOtherOperandIsSafe(expr.left) && stackTempOtherOperandIsSafe(expr.right);
+      }
+      case "call": {
+        if (expr.args.length === 0) return false;
+        return expr.args.every((arg) => validateStackResidentExpression(arg, temps));
+      }
+    }
+  }
+  function assignTempIsSafe(statement, targets) {
+    if (!stackTempSourceIsSafe(statement.expr)) return false;
+    if (targets.has(statement.target)) return false;
+    if (expressionReferencesIdentifier(statement.expr, statement.target)) return false;
+    if ([...targets].some((target) => expressionReferencesIdentifier(statement.expr, target))) return false;
+    return true;
+  }
+  function findStackResidentFusionSite(statements, start) {
+    const segments = [];
+    const targets = /* @__PURE__ */ new Set();
+    let index = start;
+    while (index < statements.length && segments.length < 4) {
+      const statement = statements[index];
+      if (statement?.kind !== "assign" || !assignTempIsSafe(statement, targets)) break;
+      targets.add(statement.target);
+      index += 1;
+      const protectedTemps = new Set(targets);
+      const preserveStart = index;
+      while (index < statements.length && statementPreservesStackResidency(statements[index], protectedTemps)) {
+        index += 1;
+      }
+      segments.push({
+        assign: statement,
+        preserveAfter: statements.slice(preserveStart, index)
       });
+      if (index >= statements.length) return void 0;
+      if (statements[index].kind === "assign" && segments.length < 4) continue;
+      break;
+    }
+    if (segments.length === 0) return void 0;
+    const consumer = statements[index];
+    if (!isStackResidentConsumer(consumer)) return void 0;
+    const tempNames = segments.map((segment) => segment.assign.target);
+    const tail = statements.slice(index + 1);
+    const overwrite = consumerOverwriteTarget(consumer);
+    for (const name of tempNames) {
+      if (!stackTempValueDeadAfterConsumer(name, overwrite, tail)) return void 0;
+    }
+    if (!canLowerStackResidentExpression(consumer.expr, tempNames)) return void 0;
+    const crossesControlFlow = segments.some((segment) => segment.preserveAfter.length > 0);
+    if (segments.length === 1 && !crossesControlFlow) return void 0;
+    return {
+      temps: segments,
+      consumer,
+      consumerIndex: index,
+      crossesControlFlow
+    };
+  }
+
+  // src/core/emit/stack-residency-lowering.ts
+  var STACK_TEMP_UNARY_CALL_OPCODES = {
+    abs: [49, "\u041A |x|"],
+    sign: [50, "\u041A \u0417\u041D"],
+    int: [52, "\u041A [x]"],
+    frac: [53, "\u041A {x}"],
+    sqr: [34, "F x^2"],
+    inv: [35, "F 1/x"],
+    sqrt: [33, "F sqrt"],
+    lg: [23, "F lg"],
+    ln: [24, "F ln"],
+    sin: [28, "F sin"],
+    cos: [29, "F cos"],
+    tg: [30, "F tg"],
+    asin: [25, "F sin^-1"],
+    acos: [26, "F cos^-1"],
+    atg: [27, "F tg^-1"],
+    exp: [22, "F e^x"],
+    pow10: [21, "F 10^x"],
+    bit_not: [58, "\u041A \u0418\u041D\u0412"],
+    to_min: [38, "\u041A \xB0->\u2032"],
+    to_sec: [42, '\u041A \xB0->\u2032"'],
+    from_sec: [48, '\u041A \xB0<-\u2032"'],
+    from_min: [51, "\u041A \xB0<-\u2032"]
+  };
+  var STACK_TEMP_BINARY_CALL_OPCODES = {
+    max: [54, "\u041A max"],
+    bit_and: [55, "\u041A \u2227"],
+    bit_or: [56, "\u041A \u2228"],
+    bit_xor: [57, "\u041A \u2295"]
+  };
+  function emitRestoreStackTemp(ctx, tempIndex, tempCount, line) {
+    for (const op of stackResidentRestoreOps(tempIndex, tempCount)) {
+      if (op === "reverse") ctx.emitOp(37, "F reverse", "stack-resident temp restore", line);
+      else ctx.emitOp(20, "X\u2194Y", "stack-resident temp restore", line);
+    }
+  }
+  function emitSwapIfNonCommutativeLeft(ctx, op, line) {
+    if (op !== "+" && op !== "*") ctx.emitOp(20, "X\u2194Y", "stack-resident operand order", line);
+  }
+  function emitStackBinaryOnTemps(ctx, leftName, rightName, op, temps, line) {
+    const leftIndex = temps.indexOf(leftName);
+    const rightIndex = temps.indexOf(rightName);
+    if (leftIndex < 0 || rightIndex < 0) return;
+    if (temps.length === 2) {
+      if (leftIndex === 1 && rightIndex === 0) ctx.emitOp(20, "X\u2194Y", "stack-resident operand order", line);
+      ctx.emitOp(binaryOpcode(op), op, `expr ${op}`, line);
       return;
     }
-    const arg = expr.args[0];
-    if (arg.kind !== "identifier") {
-      ctx.diagnostics.push({
-        level: "error",
-        message: "direction() currently requires an identifier argument so the optimizer can reuse its register."
-      });
-      return;
+    emitRestoreStackTemp(ctx, rightIndex, temps.length, line);
+    emitRestoreStackTemp(ctx, leftIndex, temps.length, line);
+    ctx.emitOp(20, "X\u2194Y", "stack-resident operand order", line);
+    ctx.emitOp(binaryOpcode(op), op, `expr ${op}`, line);
+  }
+  function referencesAnyTemp(expr, temps) {
+    return temps.some((temp) => countIdentifierReads(expr, temp) > 0);
+  }
+  function compileStackResidentExpression(ctx, expr, temps, line) {
+    switch (expr.kind) {
+      case "identifier": {
+        const index = temps.indexOf(expr.name);
+        if (index >= 0) emitRestoreStackTemp(ctx, index, temps.length, line);
+        else compileExpression(ctx, expr);
+        return;
+      }
+      case "number":
+      case "string":
+      case "indexed":
+        compileExpression(ctx, expr);
+        return;
+      case "unary":
+        compileStackResidentExpression(ctx, expr.expr, temps, line);
+        ctx.emitOp(11, "/-/", "stack-resident unary minus", line);
+        return;
+      case "binary": {
+        const leftTemps = referencesAnyTemp(expr.left, temps);
+        const rightTemps = referencesAnyTemp(expr.right, temps);
+        if (leftTemps && rightTemps && expr.left.kind === "identifier" && expr.right.kind === "identifier" && temps.includes(expr.left.name) && temps.includes(expr.right.name)) {
+          emitStackBinaryOnTemps(ctx, expr.left.name, expr.right.name, expr.op, temps, line);
+          return;
+        }
+        if (leftTemps && rightTemps) {
+          compileStackResidentExpression(ctx, expr.left, temps, line);
+          compileStackResidentExpression(ctx, expr.right, temps, line);
+          emitSwapIfNonCommutativeLeft(ctx, expr.op, line);
+          ctx.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`, line);
+          return;
+        }
+        if (leftTemps) {
+          compileStackResidentExpression(ctx, expr.left, temps, line);
+          compileExpression(ctx, expr.right);
+          ctx.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`, line);
+          return;
+        }
+        compileStackResidentExpression(ctx, expr.right, temps, line);
+        compileExpression(ctx, expr.left);
+        emitSwapIfNonCommutativeLeft(ctx, expr.op, line);
+        ctx.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`, line);
+        return;
+      }
+      case "call": {
+        const name = expr.callee.toLowerCase();
+        const unary = STACK_TEMP_UNARY_CALL_OPCODES[name];
+        if (unary !== void 0 && expr.args.length === 1) {
+          compileStackResidentExpression(ctx, expr.args[0], temps, line);
+          ctx.emitOp(unary[0], unary[1], `${expr.callee}()`, line);
+          return;
+        }
+        const binary = STACK_TEMP_BINARY_CALL_OPCODES[name];
+        if (binary !== void 0 && expr.args.length === 2) {
+          const left = expr.args[0];
+          const right = expr.args[1];
+          const leftTemps = temps.some((temp) => countIdentifierReads(left, temp) > 0);
+          const rightTemps = temps.some((temp) => countIdentifierReads(right, temp) > 0);
+          if (leftTemps && rightTemps) {
+            compileStackResidentExpression(ctx, left, temps, line);
+            compileStackResidentExpression(ctx, right, temps, line);
+          } else if (leftTemps) {
+            compileStackResidentExpression(ctx, left, temps, line);
+            compileExpression(ctx, right);
+          } else {
+            compileStackResidentExpression(ctx, right, temps, line);
+            compileExpression(ctx, left);
+            ctx.emitOp(20, "X\u2194Y", "stack-resident call operand order", line);
+          }
+          ctx.emitOp(binary[0], binary[1], `${expr.callee}()`, line);
+          return;
+        }
+        compileExpression(ctx, expr);
+        return;
+      }
     }
-    const keyRegister = ctx.allocation.registers[arg.name];
-    if (!keyRegister) {
-      ctx.diagnostics.push({
-        level: "error",
-        message: `Unknown direction key '${arg.name}'.`
-      });
-      return;
+  }
+  function emitStackResidentConsumer(ctx, consumer) {
+    switch (consumer.kind) {
+      case "assign":
+        ctx.emitStore(consumer.target, `set ${consumer.target}`, consumer.line);
+        return;
+      case "halt":
+        ctx.emitOp(80, "\u0421/\u041F", "halt", consumer.line);
+        return;
+      case "pause":
+        ctx.emitOp(80, "\u0421/\u041F", "pause", consumer.line);
+        return;
+      case "return_value":
+        ctx.emitOp(82, "\u0412/\u041E", "return value", consumer.line);
+        return;
     }
-    const notFloor = ctx.freshLabel("direction_not_floor");
-    const yAxis = ctx.freshLabel("direction_y_axis");
-    const done = ctx.freshLabel("direction_done");
-    ctx.emitOp(96 + registerIndex(keyRegister), `\u041F->X ${keyRegister}`, "direction key");
-    ctx.emitOp(49, "\u041A |x|", "direction floor test");
-    ctx.emitNumberOrPreload("5");
-    ctx.emitOp(17, "-", "direction abs(key)-5");
-    ctx.emitJump(94, "F x=0", notFloor, "direction not floor");
-    ctx.emitOp(96 + registerIndex(keyRegister), `\u041F->X ${keyRegister}`, "direction floor key");
-    ctx.emitNumberOrPreload("20");
-    ctx.emitOp(18, "*", "direction floor delta");
-    ctx.emitJump(81, "\u0411\u041F", done, "direction done");
-    ctx.emitLabel(notFloor);
-    ctx.emitOp(49, "\u041A |x|", "direction x-axis test");
-    ctx.emitNumberOrPreload("1");
-    ctx.emitOp(17, "-", "direction axis discriminator");
-    ctx.emitJump(94, "F x=0", yAxis, "direction y-axis");
-    ctx.emitOp(96 + registerIndex(keyRegister), `\u041F->X ${keyRegister}`, "direction x key");
-    ctx.emitNumberOrPreload("5");
-    ctx.emitOp(17, "-", "direction key-5");
-    ctx.emitNumberOrPreload("10");
-    ctx.emitOp(18, "*", "direction x delta");
-    ctx.emitJump(81, "\u0411\u041F", done, "direction done");
-    ctx.emitLabel(yAxis);
-    ctx.emitNumberOrPreload("5");
-    ctx.emitOp(96 + registerIndex(keyRegister), `\u041F->X ${keyRegister}`, "direction y key");
-    ctx.emitOp(17, "-", "direction 5-key");
-    ctx.emitNumberOrPreload("3");
-    ctx.emitOp(19, "/", "direction y delta");
-    ctx.emitLabel(done);
+  }
+  function compilePreserveRegion(ctx, statements) {
+    for (const statement of statements) ctx.compileStatement(statement);
+  }
+  function preserveRegionRequiresStackRebuild(statements) {
+    return statements.some((statement) => statementRequiresStackRebuild(statement));
+  }
+  function statementRequiresStackRebuild(statement) {
+    switch (statement.kind) {
+      case "if":
+      case "while":
+      case "dispatch":
+        return true;
+      case "loop":
+        return statement.body.some(statementRequiresStackRebuild);
+      case "assign":
+      case "indexed_assign":
+      case "show":
+      case "halt":
+      case "pause":
+      case "input":
+      case "return_value":
+      case "call":
+      case "core":
+      case "decimal_series":
+      case "coord_list_remove":
+        return true;
+    }
+  }
+  function emitStackResidentFusion(ctx, site) {
+    const tempNames = site.temps.map((segment) => segment.assign.target);
+    for (let index = 0; index < site.temps.length; index += 1) {
+      const segment = site.temps[index];
+      if (index > 0) {
+        ctx.emitOp(14, "\u0412\u2191", `stack-resident lift ${site.temps[index - 1].assign.target}`, segment.assign.line);
+      }
+      compileExpression(ctx, segment.assign.expr);
+      ctx.markCurrentX(segment.assign.target);
+      if (segment.preserveAfter.length > 0) {
+        compilePreserveRegion(ctx, segment.preserveAfter);
+        if (preserveRegionRequiresStackRebuild(segment.preserveAfter)) {
+          for (let rebuild = 0; rebuild <= index; rebuild += 1) {
+            if (rebuild > 0) {
+              ctx.emitOp(14, "\u0412\u2191", `stack-resident rebuild ${site.temps[rebuild - 1].assign.target}`, segment.assign.line);
+            }
+            compileExpression(ctx, site.temps[rebuild].assign.expr);
+            ctx.markCurrentX(site.temps[rebuild].assign.target);
+          }
+        }
+      }
+    }
+    if (site.consumer.kind === "indexed_assign") {
+      compileStackResidentExpression(ctx, site.consumer.expr, tempNames, site.consumer.line);
+      ctx.emitIndexedStore(site.consumer.target, site.consumer.line);
+    } else {
+      compileStackResidentExpression(ctx, site.consumer.expr, tempNames, site.consumer.line);
+      emitStackResidentConsumer(ctx, site.consumer);
+    }
+    const optimizationName = site.crossesControlFlow ? "stack-resident-control-flow" : "stack-resident-temps";
+    const gapText = site.crossesControlFlow ? " across stack-preserving control flow" : "";
     ctx.optimizations.push({
-      name: "direction-keypad-lowering",
-      detail: `Lowered direction(${arg.name}) through a shared keypad geometry formula.`
+      name: optimizationName,
+      detail: `Kept ${tempNames.join(", ")} on the X/Y/Z/T stack${gapText} for ${expressionToIntentText(site.consumer.expr)} at line ${site.consumer.line}.`
     });
   }
-  function compileCardinalDirectionCall(ctx, expr) {
-    const keyRegister = directionKeyRegister(ctx, expr);
-    if (keyRegister === void 0) return;
-    const yAxis = ctx.freshLabel("direction_cardinal_y_axis");
-    const done = ctx.freshLabel("direction_cardinal_done");
-    ctx.emitOp(96 + registerIndex(keyRegister), `\u041F->X ${keyRegister}`, "cardinal direction key");
-    ctx.emitNumberOrPreload("5");
-    ctx.emitOp(17, "-", "cardinal direction key-5");
-    ctx.emitOp(49, "\u041A |x|", "cardinal direction axis test");
-    ctx.emitNumberOrPreload("1");
-    ctx.emitOp(17, "-", "cardinal direction axis discriminator");
-    ctx.emitJump(94, "F x=0", yAxis, "cardinal direction y-axis");
-    ctx.emitOp(96 + registerIndex(keyRegister), `\u041F->X ${keyRegister}`, "cardinal direction x key");
-    ctx.emitNumberOrPreload("5");
-    ctx.emitOp(17, "-", "cardinal direction key-5");
-    ctx.emitNumberOrPreload("10");
-    ctx.emitOp(18, "*", "cardinal direction x delta");
-    ctx.emitJump(81, "\u0411\u041F", done, "cardinal direction done");
-    ctx.emitLabel(yAxis);
-    ctx.emitNumberOrPreload("5");
-    ctx.emitOp(96 + registerIndex(keyRegister), `\u041F->X ${keyRegister}`, "cardinal direction y key");
-    ctx.emitOp(17, "-", "cardinal direction 5-key");
-    ctx.emitNumberOrPreload("3");
-    ctx.emitOp(19, "/", "cardinal direction y delta");
-    ctx.emitLabel(done);
-    ctx.optimizations.push({
-      name: "direction-cardinal-lowering",
-      detail: `Lowered guarded cardinal direction(${directionKeyName(ctx, expr)}) without floor-key cases.`
-    });
-  }
-  function directionKeyRegister(ctx, expr) {
-    if (expr.args.length !== 1) {
-      ctx.diagnostics.push({
-        level: "error",
-        message: `direction() expects one keypad argument, got ${expr.args.length}.`
-      });
-      return void 0;
+  function compileMultiStackResidentTemps(ctx, statements, start) {
+    if (ctx.loweringOptions.stackResidentTemps !== true) return 0;
+    const site = findStackResidentFusionSite(statements, start);
+    if (site === void 0) return 0;
+    const consumer = site.consumer;
+    if (consumer.kind === "indexed_assign" && site.temps.some((segment) => expressionReferencesIdentifier(consumer.target.index, segment.assign.target))) {
+      return 0;
     }
-    const arg = expr.args[0];
-    if (arg.kind !== "identifier") {
-      ctx.diagnostics.push({
-        level: "error",
-        message: "direction() currently requires an identifier argument so the optimizer can reuse its register."
-      });
-      return void 0;
-    }
-    const keyRegister = ctx.allocation.registers[arg.name];
-    if (!keyRegister) {
-      ctx.diagnostics.push({
-        level: "error",
-        message: `Unknown direction key '${arg.name}'.`
-      });
-      return void 0;
-    }
-    return keyRegister;
-  }
-  function directionKeyName(ctx, expr) {
-    const arg = expr.args[0];
-    return arg?.kind === "identifier" ? arg.name : "?";
+    emitStackResidentFusion(ctx, site);
+    return site.consumerIndex - start + 1;
   }
 
   // src/core/compiler.ts
@@ -16102,13 +17987,50 @@ var MKProEmulatorBundle = (() => {
     "e"
   ];
   var SHARED_BIT_MASK_SCRATCH = "__bit_mask_shared";
-  var DISPLAY_EXPR_PREFIX = "__display_expr_";
   var DISPLAY_TEMPLATE_VALUE_PREFIX = "__display_value_";
   var DISPLAY_TEMPLATE_LOOP_PREFIX = "__display_loop_";
   var DISPLAY_TEMPLATE_MASK_PREFIX = "__display_mask_";
   var CELL_MAP_PREFIX = "__cell_map_";
   var PARAMETRIC_SIBLING_PREFIX = "__param_sibling_";
   var INTERNAL_NAME_PREFIX = "__mkpro_";
+  var FUNCTION_TAIL_ARG_PREFIX = `${INTERNAL_NAME_PREFIX}tail_arg_`;
+  var STACK_TEMP_UNARY_CALL_OPCODES2 = {
+    abs: [49, "\u041A |x|"],
+    sign: [50, "\u041A \u0417\u041D"],
+    int: [52, "\u041A [x]"],
+    frac: [53, "\u041A {x}"],
+    sqr: [34, "F x^2"],
+    inv: [35, "F 1/x"],
+    sqrt: [33, "F sqrt"],
+    lg: [23, "F lg"],
+    ln: [24, "F ln"],
+    sin: [28, "F sin"],
+    cos: [29, "F cos"],
+    tg: [30, "F tg"],
+    asin: [25, "F sin^-1"],
+    acos: [26, "F cos^-1"],
+    atg: [27, "F tg^-1"],
+    exp: [22, "F e^x"],
+    pow10: [21, "F 10^x"],
+    bit_not: [58, "\u041A \u0418\u041D\u0412"],
+    to_min: [38, "\u041A \xB0->\u2032"],
+    to_sec: [42, '\u041A \xB0->\u2032"'],
+    from_sec: [48, '\u041A \xB0<-\u2032"'],
+    from_min: [51, "\u041A \xB0<-\u2032"]
+  };
+  var STACK_TEMP_BINARY_CALL_OPCODES2 = {
+    max: [54, "\u041A max"],
+    bit_and: [55, "\u041A \u2227"],
+    bit_or: [56, "\u041A \u2228"],
+    bit_xor: [57, "\u041A \u2295"]
+  };
+  var STACK_TEMP_SAFE_CALLS = /* @__PURE__ */ new Set([
+    ...Object.keys(STACK_TEMP_UNARY_CALL_OPCODES2),
+    ...Object.keys(STACK_TEMP_BINARY_CALL_OPCODES2)
+  ]);
+  function functionTailArgScratchName(functionName, index) {
+    return `${FUNCTION_TAIL_ARG_PREFIX}${functionName}_${index}`;
+  }
   var DISPLAY_HELPER_MIN_SAVINGS = 4;
   var UNAVAILABLE_DISPLAY_STRATEGY_COST = 999999;
   var EXPRESSION_HELPER_MIN_COST = 8;
@@ -16120,14 +18042,38 @@ var MKProEmulatorBundle = (() => {
       this.diagnostics = diagnostics;
     }
   };
+  function promptInputStatement(prompt) {
+    return { kind: "input", target: prompt.input, line: prompt.inputLine };
+  }
+  var loopCarriedPromptInitials = /* @__PURE__ */ new WeakMap();
+  function sourceMayContainErrorTrap(source) {
+    return source.includes("\u0415\u0413\u0413");
+  }
+  function sourceHasMultipleProcs(source) {
+    return (source.match(/\bfn\b/gu) ?? []).length >= 2;
+  }
   function compileMKPro(source, options = {}) {
-    const primary = compileLoweringAttempt(source, options, {});
+    let primary;
+    let primaryError;
+    try {
+      primary = compileLoweringAttempt(source, options, {});
+    } catch (error) {
+      if (!canRetryLoweringAfterPrimaryFailure(error)) throw error;
+      primaryError = error;
+    }
     const candidates = [];
     const tryCandidate = (loweringOptions, name, detail) => {
       try {
         candidates.push({ result: compileLoweringAttempt(source, options, loweringOptions), name, detail });
       } catch {
       }
+    };
+    const requestedBudget = { ...DEFAULT_OPTIONS, ...options }.budget;
+    const rescueThreshold = Math.min(requestedBudget, DEFAULT_OPTIONS.budget);
+    const needsSizeRescue = primary === void 0 || primary.report.steps > rescueThreshold || primary.report.budgetReport.exceeded;
+    const trySizeRescueCandidate = (loweringOptions, name, detail) => {
+      if (!needsSizeRescue) return;
+      tryCandidate(loweringOptions, name, detail);
     };
     tryCandidate(
       { aggressiveTerminalDirect: true },
@@ -16143,6 +18089,11 @@ var MKProEmulatorBundle = (() => {
       { aggressiveTerminalDirect: true, invertBranchOrder: true },
       "late-layout-if-branch-order",
       "Selected aggressive terminal-if plus inverted branch-order lowering after full layout"
+    );
+    tryCandidate(
+      { guardedPrologueGadgets: true, hoistProcs: true, aggressiveIndirectCall: true },
+      "break-even-indirect-call",
+      "Hoisted procs with guarded-prologue gadgets and a break-even indirect-call guard, collapsing many repeated direct calls to single-cell indirect flow"
     );
     tryCandidate(
       { hoistSharedHelpers: true },
@@ -16239,25 +18190,215 @@ var MKProEmulatorBundle = (() => {
       "parametric-sibling-proc",
       "Synthesized a shared one-parameter helper for sibling dispatch procedure arms"
     );
+    tryCandidate(
+      { packCounterStripes: true },
+      "packed-counter-stripes",
+      "Packed compatible fixed-width counters into one hidden decimal-striped register"
+    );
+    for (const names of discoverPackedCounterStripeVariantNames(source)) {
+      tryCandidate(
+        { packCounterStripes: true, packCounterStripeNames: names },
+        `packed-counter-stripes:${names.join("+")}`,
+        `Packed counters ${names.join(", ")} into one hidden decimal-striped register`
+      );
+    }
+    tryCandidate(
+      { unrollCountedLoops: true },
+      "counted-loop-unroll",
+      "Fully unrolled small constant-trip counted loops, replacing induction variables with constants"
+    );
+    trySizeRescueCandidate(
+      { setupOnlyCountedLoopInit: true },
+      "setup-only-counted-loop-init",
+      "Kept eligible countdown-loop initializers in setup while preserving compact F Lx lowering"
+    );
+    tryCandidate(
+      { unrollCountedLoops: true, startupAwareConstantPreloads: true },
+      "startup-aware-constant-preloads",
+      "Kept setup-expensive synthesizable constants inline while preserving the main cell count"
+    );
+    tryCandidate(
+      { unrollCountedLoops: true, freeResidualDispatchScratch: true },
+      "counted-loop-unroll-free-scratch",
+      "Combined counted-loop unrolling with residual-dispatch scratch freeing"
+    );
+    tryCandidate(
+      { stackResidentTemps: true },
+      "stack-resident-temps",
+      "Kept short-lived single-use temporaries on the X/Y/Z/T stack instead of spilling them to registers"
+    );
+    trySizeRescueCandidate(
+      { stackResidentTemps: true, setupOnlyCountedLoopInit: true },
+      "stack-resident-temps-setup-counted-loop",
+      "Combined stack-resident temporaries with setup-only counted-loop initializers"
+    );
+    tryCandidate(
+      { stackResidentTemps: true, hoistSharedHelpers: true },
+      "stack-resident-temps-hoisted",
+      "Kept temporaries stack-resident and hoisted helpers so freed registers unlock single-cell indirect flow"
+    );
+    tryCandidate(
+      { stackResidentTemps: true, hoistSharedHelpers: true, hoistProcs: true },
+      "stack-resident-temps-hoisted-proc",
+      "Kept temporaries stack-resident with hoisted helper and procedure layout"
+    );
+    if (sourceMayContainErrorTrap(source)) {
+      tryCandidate(
+        { domainErrorGuards: true },
+        "domain-error-guards",
+        "Replaced terminal-error guards with self-trapping domain opcodes (F \u221A / F lg)"
+      );
+      tryCandidate(
+        { domainErrorGuards: true, unrollCountedLoops: true },
+        "domain-error-guards-unroll",
+        "Combined domain-error guards with counted-loop unrolling"
+      );
+      trySizeRescueCandidate(
+        { domainErrorGuards: true, setupOnlyCountedLoopInit: true },
+        "domain-error-guards-setup-counted-loop",
+        "Combined domain-error guards with setup-only counted-loop initializers"
+      );
+      trySizeRescueCandidate(
+        { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true },
+        "domain-error-guards-unroll-setup-counted-loop",
+        "Combined domain-error guards, counted-loop unrolling, and setup-only counted-loop initializers"
+      );
+      trySizeRescueCandidate(
+        { domainErrorGuards: true, setupOnlyCountedLoopInit: true, stackResidentTemps: true },
+        "domain-error-guards-setup-counted-loop-stack-temps",
+        "Combined domain-error guards, setup-only counted loops, and stack-resident temporaries"
+      );
+      tryCandidate(
+        { domainErrorGuards: true, showReadDebitCreditGuard: true },
+        "show-read-debit-credit-guard",
+        "Kept read/debit/credit guarded transfers on the calculator stack"
+      );
+      tryCandidate(
+        { domainErrorGuards: true, unrollCountedLoops: true, showReadDebitCreditGuard: true },
+        "show-read-debit-credit-guard-unroll",
+        "Combined stack-resident read/debit/credit transfers with counted-loop unrolling"
+      );
+      trySizeRescueCandidate(
+        { domainErrorGuards: true, setupOnlyCountedLoopInit: true, showReadDebitCreditGuard: true },
+        "show-read-debit-credit-guard-setup-counted-loop",
+        "Combined stack-resident read/debit/credit transfers with setup-only counted loops"
+      );
+      trySizeRescueCandidate(
+        { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, showReadDebitCreditGuard: true },
+        "show-read-debit-credit-guard-unroll-setup-counted-loop",
+        "Combined stack-resident read/debit/credit transfers, counted-loop unrolling, and setup-only counted loops"
+      );
+    }
+    const primaryOverflows = primary === void 0 || primary.steps.length > 105;
+    if (sourceHasMultipleProcs(source) && primaryOverflows) {
+      const procLayouts = [
+        { options: { orderProcsByCallCount: true }, name: "call-count-proc-layout", detail: "Emitted procedures in descending call-count order so hot helpers occupy the cheapest addresses" },
+        { options: { procLayoutStrategy: "size-asc" }, name: "size-asc-proc-layout", detail: "Emitted the smallest procedures first to pack hot helpers into the cheapest addresses" },
+        { options: { procLayoutStrategy: "size-desc" }, name: "size-desc-proc-layout", detail: "Emitted the largest procedures first" },
+        { options: { procLayoutStrategy: "reverse" }, name: "reverse-proc-layout", detail: "Emitted procedures in reverse source order" }
+      ];
+      for (const layout of procLayouts) {
+        tryCandidate(layout.options, layout.name, layout.detail);
+        tryCandidate(
+          { ...layout.options, hoistProcs: true, hoistSharedHelpers: true },
+          `${layout.name}-hoisted`,
+          `${layout.detail}; combined with front-hoisted procs and shared helpers for single-cell indirect flow`
+        );
+        if (sourceMayContainErrorTrap(source)) {
+          tryCandidate(
+            { domainErrorGuards: true, unrollCountedLoops: true, ...layout.options },
+            `domain-error-guards-unroll-${layout.name}`,
+            `Combined domain-error guards and counted-loop unrolling with ${layout.detail}`
+          );
+          trySizeRescueCandidate(
+            { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, ...layout.options },
+            `domain-error-guards-unroll-setup-counted-loop-${layout.name}`,
+            `Combined domain-error guards, counted-loop unrolling, setup-only counted loops, and ${layout.detail}`
+          );
+          tryCandidate(
+            { domainErrorGuards: true, unrollCountedLoops: true, showReadDebitCreditGuard: true, ...layout.options },
+            `show-read-debit-credit-guard-${layout.name}`,
+            `Combined stack-resident read/debit/credit transfers with ${layout.detail}`
+          );
+        }
+      }
+    }
+    tryCandidate(
+      { inlineFloorPackedRowExpressions: true },
+      "inline-floor-packed-row-expression",
+      "Computed floor-packed display row expressions inline to free their hidden display register"
+    );
+    tryCandidate(
+      { inlineFloorPackedRowExpressions: true, hoistSharedHelpers: true, hoistProcs: true, tailBranchInversion: true },
+      "inline-floor-hoisted-proc-tail-layout",
+      "Combined inline floor-row display expressions with front-hoisted procs and tail-branch inversion"
+    );
+    const reclaimBases = [
+      {},
+      { unrollCountedLoops: true },
+      ...needsSizeRescue ? [
+        { setupOnlyCountedLoopInit: true },
+        { unrollCountedLoops: true, setupOnlyCountedLoopInit: true },
+        { stackResidentTemps: true, setupOnlyCountedLoopInit: true }
+      ] : [],
+      { freeResidualDispatchScratch: true },
+      { hoistSharedHelpers: true, hoistProcs: true }
+    ];
+    const triedReclaims = /* @__PURE__ */ new Set();
+    for (const base of reclaimBases) {
+      let probe;
+      try {
+        probe = compileMKProOnce(source, { ...options, analysis: true }, { ...base, collectCoalesceShares: true });
+      } catch {
+        continue;
+      }
+      const shares = probe.coalesceShares;
+      if (shares === void 0 || shares.length === 0) continue;
+      const key = `${JSON.stringify(base)}|${shares.map((s) => `${s.freeRegister}>${s.keepRegister}`).sort().join(",")}`;
+      if (triedReclaims.has(key)) continue;
+      triedReclaims.add(key);
+      tryCandidate(
+        { ...base, forcedRegisterShares: shares },
+        "reclaim-coalesced-preloads",
+        "Pinned coalesce-freed registers before allocation to reclaim them for preloaded constants"
+      );
+    }
+    const OFFICIAL_PROGRAM_LIMIT2 = 105;
     const selectBest = () => {
-      let best = primary;
+      let best2 = primary;
       let selected2;
       for (const candidate of candidates) {
-        if (candidate.result.steps.length < best.steps.length) {
-          best = candidate.result;
+        const sameMainButLowerStartup = best2 !== void 0 && candidate.result.steps.length === best2.steps.length && best2.steps.length > OFFICIAL_PROGRAM_LIMIT2 && estimatedStartupProgramCost(candidate.result) < estimatedStartupProgramCost(best2);
+        if (best2 === void 0 || candidate.result.steps.length < best2.steps.length || sameMainButLowerStartup) {
+          best2 = candidate.result;
           selected2 = candidate;
         }
       }
-      return { best, selected: selected2 };
+      return { best: best2, selected: selected2 };
     };
-    const OFFICIAL_PROGRAM_LIMIT2 = 105;
-    if (selectBest().best.steps.length > OFFICIAL_PROGRAM_LIMIT2) {
+    if ((selectBest().best?.steps.length ?? 0) > OFFICIAL_PROGRAM_LIMIT2) {
       const demoteBases = [
         {},
         { shareRandomCell: true, hoistSharedHelpers: true },
         { freeResidualDispatchScratch: true },
         { sharedBitMaskHelperCalls: true },
-        { sharedBitMaskHelperCalls: true, hoistSharedHelpers: true }
+        { sharedBitMaskHelperCalls: true, hoistSharedHelpers: true },
+        ...sourceMayContainErrorTrap(source) ? [
+          { domainErrorGuards: true, unrollCountedLoops: true },
+          ...needsSizeRescue ? [
+            { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true },
+            { domainErrorGuards: true, setupOnlyCountedLoopInit: true, stackResidentTemps: true },
+            { domainErrorGuards: true, setupOnlyCountedLoopInit: true, showReadDebitCreditGuard: true }
+          ] : [],
+          { domainErrorGuards: true, unrollCountedLoops: true, orderProcsByCallCount: true },
+          ...needsSizeRescue ? [
+            { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, orderProcsByCallCount: true }
+          ] : [],
+          { domainErrorGuards: true, unrollCountedLoops: true, procLayoutStrategy: "size-asc" },
+          ...needsSizeRescue ? [
+            { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, procLayoutStrategy: "size-asc" }
+          ] : []
+        ] : []
       ];
       const triedDemotions = /* @__PURE__ */ new Set();
       for (const base of demoteBases) {
@@ -16278,17 +18419,61 @@ var MKProEmulatorBundle = (() => {
             `Inlined single-use constant ${preload.value} to free a register for post-layout indirect flow`
           );
         }
+        const suppressed = /* @__PURE__ */ new Set();
+        for (let depth = 0; depth < 6; depth += 1) {
+          let chainProbe;
+          try {
+            chainProbe = compileMKProOnce(source, { ...options, analysis: true }, {
+              ...base,
+              suppressConstantPreloads: new Set(suppressed)
+            });
+          } catch {
+            break;
+          }
+          const next = (chainProbe.report.preloads ?? []).filter((preload) => !preload.countsAgainstProgram && /^-?\d+$/u.test(preload.value) && !suppressed.has(preload.value)).sort(
+            (left, right) => estimateNumberCost2(left.value) - estimateNumberCost2(right.value) || left.value.length - right.value.length || left.value.localeCompare(right.value)
+          )[0];
+          if (next === void 0) break;
+          suppressed.add(next.value);
+          const values = [...suppressed];
+          const key = `${JSON.stringify(base)}|chain:${values.join(",")}`;
+          if (triedDemotions.has(key)) continue;
+          triedDemotions.add(key);
+          tryCandidate(
+            { ...base, suppressConstantPreloads: new Set(values) },
+            "demote-constant-chain-indirect-flow",
+            `Inlined constants ${values.join(", ")} to keep a register free for post-layout indirect flow`
+          );
+        }
       }
     }
-    const { selected } = selectBest();
+    const { best, selected } = selectBest();
+    if (best === void 0) {
+      if (primaryError instanceof Error) throw primaryError;
+      if (primaryError !== void 0) throw new Error(primaryFailureSummary(primaryError));
+      throw new CompileError([{ level: "error", message: "No lowering candidate succeeded." }]);
+    }
     if (selected !== void 0) {
+      const comparison = primary === void 0 ? `primary lowering failed: ${primaryFailureSummary(primaryError)}` : `${selected.result.steps.length} vs ${primary.steps.length} cells`;
       selected.result.report.optimizations.push({
         name: selected.name,
-        detail: `${selected.detail} (${selected.result.steps.length} vs ${primary.steps.length} cells).`
+        detail: `${selected.detail} (${comparison}).`
       });
       return finishCompileAttempt(selected.result, options.analysis === true);
     }
-    return finishCompileAttempt(primary, options.analysis === true);
+    return finishCompileAttempt(best, options.analysis === true);
+  }
+  function estimatedStartupProgramCost(result) {
+    return result.steps.length + estimatedStartupCost(result);
+  }
+  function estimatedStartupCost(result) {
+    if (result.report.setupProgram !== void 0) return result.report.setupProgram.steps.length;
+    let total = 0;
+    for (const preload of result.report.preloads) {
+      const value = executableSetupValue(preload.value);
+      if (value !== void 0) total += estimateNumberCost2(value) + 1;
+    }
+    return total;
   }
   function compileLoweringAttempt(source, options, loweringOptions) {
     try {
@@ -16300,6 +18485,19 @@ var MKProEmulatorBundle = (() => {
   }
   function isOnlyBudgetExceeded(error) {
     return error instanceof CompileError && error.diagnostics.some((diagnostic) => diagnostic.level === "error" && diagnostic.code === "BUDGET_EXCEEDED") && error.diagnostics.every((diagnostic) => diagnostic.level !== "error" || diagnostic.code === "BUDGET_EXCEEDED");
+  }
+  function canRetryLoweringAfterPrimaryFailure(error) {
+    if (!(error instanceof CompileError)) return false;
+    return error.diagnostics.some(
+      (diagnostic) => diagnostic.message.startsWith("Out of MK-61 registers while allocating") || diagnostic.code === "BUDGET_EXCEEDED" || diagnostic.message.includes("is outside 00..A4") || diagnostic.message.includes("exceeds formal MK-61 address range")
+    );
+  }
+  function primaryFailureSummary(error) {
+    if (!(error instanceof CompileError)) return "unknown error";
+    const first = error.diagnostics.find(
+      (diagnostic) => diagnostic.message.startsWith("Out of MK-61 registers while allocating")
+    ) ?? error.diagnostics[0];
+    return first?.message ?? "unknown error";
   }
   function finishCompileAttempt(result, analysis) {
     if (analysis || !result.report.budgetReport.exceeded) return result;
@@ -16807,6 +19005,10 @@ var MKProEmulatorBundle = (() => {
           }
           return target === statement.target && expr === statement.expr ? statement : { ...statement, target, expr };
         }
+        case "coord_list_remove": {
+          const item = rewriteExpr(statement.item);
+          return item === statement.item ? statement : { ...statement, item };
+        }
         case "pause":
         case "halt":
         case "return_value": {
@@ -16885,13 +19087,18 @@ var MKProEmulatorBundle = (() => {
     });
     const opts = { ...DEFAULT_OPTIONS, ...options };
     if (loweringOptions.coalesceCopies === true) opts.coalesceCopies = true;
+    if (loweringOptions.aggressiveIndirectCall === true) opts.aggressiveIndirectCallThreshold = true;
     const machineProfile = MK61_PROFILE;
     const diagnostics = [];
     const optimizations = [];
     const warnings = [];
     const candidates = [];
     resolveConstantIndexedState(ast, optimizations);
-    materializeDisplayExpressions(ast, optimizations);
+    packCounterStripes(ast, optimizations, false);
+    if (loweringOptions.packCounterStripes === true) {
+      packCounterStripes(ast, optimizations, true, loweringOptions.packCounterStripeNames);
+    }
+    materializeDisplayExpressions(ast, optimizations, loweringOptions.inlineFloorPackedRowExpressions === true);
     elideXParamReturnStateFields(ast, optimizations);
     const foldedConstants = foldProgramConstants(ast);
     if (foldedConstants > 0) {
@@ -16899,6 +19106,12 @@ var MKProEmulatorBundle = (() => {
         name: "expression-constant-folder",
         detail: `Folded ${foldedConstants} constant expression node(s) before code generation.`
       });
+    }
+    if (loweringOptions.setupOnlyCountedLoopInit !== true) {
+      normalizeStateInitCountedLoops(ast, optimizations);
+    }
+    if (loweringOptions.unrollCountedLoops === true) {
+      unrollCountedLoops(ast, optimizations);
     }
     if (loweringOptions.canonicalizeIfChains === true) {
       canonicalizeConstantIfChains(ast, optimizations);
@@ -16933,6 +19146,8 @@ var MKProEmulatorBundle = (() => {
     validateSemanticDomains(ast, diagnostics);
     validateV2Intent(ast, diagnostics);
     validateReservedInternalNames(ast, diagnostics);
+    validateFunctionTailRecursion(ast, diagnostics);
+    validateRawMachineHazards(ast, warnings);
     if (diagnostics.some((diagnostic) => diagnostic.level === "error")) {
       throw new CompileError(diagnostics);
     }
@@ -16942,14 +19157,23 @@ var MKProEmulatorBundle = (() => {
         detail: `Lowered ${ast.v2.state.length} state fields and ${ast.v2.rules.length} rules through the generic intent pipeline.`
       });
     }
+    if (ast.v2 !== void 0 && ast.v2.consts.length > 0) {
+      optimizations.push({
+        name: "const-inline",
+        detail: `Inlined ${ast.v2.consts.length} compile-time const declaration(s) at use sites before code generation.`
+      });
+    }
     eliminateUnreachableV2Procs(ast, optimizations);
     liftFunctionCallsInExpressions(ast, optimizations);
+    elideLoopCarriedPromptStateFields(ast, optimizations);
     const allocation = allocateRegisters(
       ast,
       diagnostics,
       loweringOptions.freeResidualDispatchScratch === true,
       loweringOptions.suppressConstantPreloads,
-      loweringOptions.sharedBitMaskHelperCalls === true
+      loweringOptions.sharedBitMaskHelperCalls === true,
+      loweringOptions.startupAwareConstantPreloads === true,
+      loweringOptions.forcedRegisterShares ?? []
     );
     const context = new EmitContext(
       ast,
@@ -16963,6 +19187,9 @@ var MKProEmulatorBundle = (() => {
       loweringOptions
     );
     context.compileProgram();
+    const coalesceShares = loweringOptions.collectCoalesceShares === true ? [...computeNonOverlappingRegisterMapping(raiseMachineToIr(context.items), { defAware: true })].map(
+      ([freeRegister, keepRegister]) => ({ freeRegister, keepRegister })
+    ) : void 0;
     const passOptions = loweringOptions.tailBranchInversion === true ? { ...opts, tailBranchInversion: true } : opts;
     const exactDecimalSeries = programContainsDecimalSeries(ast);
     const optimizedResult = exactDecimalSeries ? { items: context.items, preloads: [] } : optimizeItems(context.items, passOptions, optimizations);
@@ -16994,6 +19221,10 @@ var MKProEmulatorBundle = (() => {
     );
     appendOptimizationCandidateReports(optimizations, candidates);
     const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, machineProfile);
+    const programPatch = buildProgramPatchReport(steps, opts.delivery);
+    if (programPatch !== void 0) {
+      warnings.push(...programPatch.warnings);
+    }
     const largestBlocks = summarizeBlocks(optimized);
     const referenceResult = ast.reference === void 0 ? void 0 : buildReferenceReport(ast.reference, steps.length, opts.budget);
     if (referenceResult?.warning !== void 0) warnings.push(referenceResult.warning);
@@ -17033,26 +19264,590 @@ var MKProEmulatorBundle = (() => {
         steps: candidate.steps
       })),
       hotBlocks: largestBlocks.map(parseHotBlock),
-      ...setupProgram === void 0 ? {} : { setupProgram }
+      ...setupProgram === void 0 ? {} : { setupProgram },
+      ...programPatch === void 0 ? {} : { programPatch }
     };
-    return { ast, items: optimized, steps, report, diagnostics };
+    return { ast, items: optimized, steps, report, diagnostics, ...coalesceShares === void 0 ? {} : { coalesceShares } };
   }
   function visiblePublicRegisters(all) {
     const result = {};
     for (const [name, register] of Object.entries(all)) {
-      if (!name.startsWith(DISPATCH_SCRATCH_PREFIX) && !name.startsWith(TICTACTOE_MASK_SCRATCH_PREFIX) && !name.startsWith(BIT_MASK_SCRATCH_PREFIX) && !name.startsWith(IF_SELECTOR_SCRATCH_PREFIX) && !name.startsWith(DISPLAY_EXPR_PREFIX) && !name.startsWith(CELL_MAP_PREFIX) && !name.startsWith(PARAMETRIC_SIBLING_PREFIX) && !name.startsWith(SPATIAL_HIT_SCRATCH_PREFIX) && !name.startsWith(SPATIAL_COUNT_SCRATCH_PREFIX)) {
+      if (!name.startsWith(DISPATCH_SCRATCH_PREFIX) && !name.startsWith(TICTACTOE_MASK_SCRATCH_PREFIX) && !name.startsWith(BIT_MASK_SCRATCH_PREFIX) && !name.startsWith(IF_SELECTOR_SCRATCH_PREFIX) && !name.startsWith(DISPLAY_EXPR_PREFIX) && !name.startsWith(CELL_MAP_PREFIX) && !name.startsWith(PARAMETRIC_SIBLING_PREFIX) && !name.startsWith(FUNCTION_TAIL_ARG_PREFIX) && !name.startsWith(SPATIAL_HIT_SCRATCH_PREFIX) && !name.startsWith(SPATIAL_COUNT_SCRATCH_PREFIX)) {
         result[name] = register;
       }
     }
     return result;
   }
-  function materializeDisplayExpressions(ast, optimizations) {
+  function packCounterStripes(ast, optimizations, includeStoragePairs, requestedNames) {
+    const plan = selectPackedCounterStripePlan(ast, includeStoragePairs, requestedNames);
+    if (plan === void 0) return;
+    const byName = new Map(plan.stripes.map((stripe) => [stripe.name, stripe]));
+    const fieldByName = new Map(plan.state.fields.map((field) => [field.name, field]));
+    const packedExpr = () => ({ kind: "identifier", name: plan.packed });
+    const stripeSelectorExpr = (stripe) => {
+      if (stripe.kind === "major") return packedExpr();
+      const nextScale = stripe.scale * 10 ** stripe.width;
+      const shifted = Math.abs(nextScale - 1) < 1e-12 ? packedExpr() : divideExpressions(packedExpr(), numberExpression2(nextScale));
+      return fracExpression(shifted);
+    };
+    const extract = (stripe) => {
+      if (stripe.kind === "major") {
+        return intExpression(divideExpressions(packedExpr(), numberExpression2(stripe.scale)));
+      }
+      return intExpression(multiplyExpressions2(stripeSelectorExpr(stripe), numberExpression2(10 ** stripe.width)));
+    };
+    const rewriteExpr = (expr) => {
+      switch (expr.kind) {
+        case "identifier": {
+          const stripe = byName.get(expr.name);
+          return stripe === void 0 ? expr : extract(stripe);
+        }
+        case "unary":
+          return { ...expr, expr: rewriteExpr(expr.expr) };
+        case "binary":
+          return { ...expr, left: rewriteExpr(expr.left), right: rewriteExpr(expr.right) };
+        case "call":
+          return { ...expr, args: expr.args.map(rewriteExpr) };
+        case "indexed":
+          return { ...expr, index: rewriteExpr(expr.index) };
+        case "number":
+        case "string":
+          return expr;
+      }
+    };
+    const swappedConditionOp = (op) => {
+      if (op === "<") return ">";
+      if (op === "<=") return ">=";
+      if (op === ">") return "<";
+      if (op === ">=") return "<=";
+      return op;
+    };
+    const packedThreshold = (value) => numberExpression2(Math.round(value * 1e12) / 1e12);
+    const rewritePackedCounterComparison = (source, op, comparand) => {
+      if (source.kind !== "identifier") return void 0;
+      const stripe = byName.get(source.name);
+      if (stripe === void 0) return void 0;
+      const field = fieldByName.get(source.name);
+      const value = numericLiteralValue2(comparand);
+      if (field?.min === void 0 || field.max === void 0 || value === void 0 || !Number.isInteger(value)) {
+        return void 0;
+      }
+      const sourceExpr = stripeSelectorExpr(stripe);
+      const scale = stripe.scale;
+      const divisor = 10 ** stripe.width;
+      const lowerBound = (candidate) => stripe.kind === "major" ? candidate * scale : candidate / divisor;
+      const upperBound = (candidate) => stripe.kind === "major" ? (candidate + 1) * scale : (candidate + 1) / divisor;
+      switch (op) {
+        case "<":
+          return { left: sourceExpr, op: "<", right: packedThreshold(lowerBound(value)) };
+        case "<=":
+          return { left: sourceExpr, op: "<", right: packedThreshold(upperBound(value)) };
+        case ">":
+          return { left: sourceExpr, op: ">=", right: packedThreshold(upperBound(value)) };
+        case ">=":
+          return { left: sourceExpr, op: ">=", right: packedThreshold(lowerBound(value)) };
+        case "==":
+          return void 0;
+        case "!=":
+          return void 0;
+      }
+    };
+    const rewriteCondition = (condition) => {
+      const direct = rewritePackedCounterComparison(condition.left, condition.op, condition.right);
+      if (direct !== void 0) return direct;
+      const swapped = rewritePackedCounterComparison(condition.right, swappedConditionOp(condition.op), condition.left);
+      if (swapped !== void 0) return swapped;
+      return {
+        ...condition,
+        left: rewriteExpr(condition.left),
+        right: rewriteExpr(condition.right)
+      };
+    };
+    const rewriteDisplayItems = (items) => {
+      const compact = plan.compactDecimalDisplay;
+      const rewritten = [];
+      for (let index = 0; index < items.length; index += 1) {
+        const left = items[index];
+        const dot = items[index + 1];
+        const right = items[index + 2];
+        if (compact !== void 0 && left?.kind === "source" && left.expr === void 0 && left.name === compact.left && dot?.kind === "literal" && dot.text === "." && right?.kind === "source" && right.expr === void 0 && right.name === compact.right) {
+          rewritten.push({ kind: "source", name: plan.packed, line: left.line });
+          index += 2;
+          continue;
+        }
+        if (compact === void 0 && canRewritePackedRowFloorDisplay(left, dot, right)) {
+          rewritten.push({ kind: "source", name: plan.packed, line: left.line });
+          rewritten.push(dot);
+          rewritten.push(rewriteDisplayItem(right));
+          index += 2;
+          continue;
+        }
+        rewritten.push(rewriteDisplayItem(left));
+      }
+      return rewritten;
+    };
+    function canRewritePackedRowFloorDisplay(left, dot, right) {
+      if (left?.kind !== "source" || left.expr !== void 0 || left.width !== void 0 || dot?.kind !== "literal" || dot.text !== "." || right?.kind !== "source" || right.expr === void 0 || right.width !== void 0) {
+        return false;
+      }
+      return byName.get(left.name)?.kind === "major";
+    }
+    function rewriteDisplayItem(item) {
+      if (item.kind !== "source") return item;
+      const expr = item.expr === void 0 ? byName.has(item.name) ? extract(byName.get(item.name)) : void 0 : rewriteExpr(item.expr);
+      if (expr === void 0 || item.expr !== void 0 && expressionEquals(expr, item.expr)) return item;
+      const rewritten = {
+        kind: "source",
+        name: expressionToIntentText(expr),
+        expr,
+        line: item.line
+      };
+      if (item.width !== void 0) rewritten.width = item.width;
+      if (item.pad !== void 0) rewritten.pad = item.pad;
+      return rewritten;
+    }
+    const packedUpdateExpr = (stripe, delta) => {
+      const scaled = delta * stripe.scale;
+      if (scaled === 0) return packedExpr();
+      return scaled > 0 ? addExpressions2(packedExpr(), numberExpression2(scaled)) : subtractExpressions2(packedExpr(), numberExpression2(Math.abs(scaled)));
+    };
+    const rewriteStatements = (statements) => statements.map((statement) => {
+      switch (statement.kind) {
+        case "assign": {
+          const stripe = byName.get(statement.target);
+          if (stripe !== void 0) {
+            const delta = numericSelfUpdateDelta(statement.target, statement.expr);
+            return {
+              kind: "assign",
+              target: plan.packed,
+              expr: packedUpdateExpr(stripe, delta ?? 0),
+              line: statement.line
+            };
+          }
+          return { ...statement, expr: rewriteExpr(statement.expr) };
+        }
+        case "indexed_assign":
+          return {
+            ...statement,
+            target: { ...statement.target, index: rewriteExpr(statement.target.index) },
+            expr: rewriteExpr(statement.expr)
+          };
+        case "coord_list_remove":
+          return { ...statement, item: rewriteExpr(statement.item) };
+        case "if":
+          return {
+            ...statement,
+            condition: rewriteCondition(statement.condition),
+            thenBody: rewriteStatements(statement.thenBody),
+            ...statement.elseBody === void 0 ? {} : { elseBody: rewriteStatements(statement.elseBody) }
+          };
+        case "while":
+          return {
+            ...statement,
+            condition: rewriteCondition(statement.condition),
+            body: rewriteStatements(statement.body)
+          };
+        case "loop":
+          return { ...statement, body: rewriteStatements(statement.body) };
+        case "dispatch":
+          return {
+            ...statement,
+            expr: rewriteExpr(statement.expr),
+            cases: statement.cases.map((dispatchCase) => ({
+              ...dispatchCase,
+              value: rewriteExpr(dispatchCase.value),
+              body: rewriteStatements(dispatchCase.body)
+            })),
+            ...statement.defaultBody === void 0 ? {} : { defaultBody: rewriteStatements(statement.defaultBody) }
+          };
+        case "pause":
+        case "halt":
+        case "return_value":
+          return { ...statement, expr: rewriteExpr(statement.expr) };
+        case "core":
+          return statement.inputs === void 0 ? statement : {
+            ...statement,
+            inputs: statement.inputs.map((input) => ({ ...input, expr: rewriteExpr(input.expr) }))
+          };
+        case "show":
+        case "input":
+        case "call":
+        case "decimal_series":
+          return statement;
+      }
+    });
+    const packedField = {
+      name: plan.packed,
+      type: "packed",
+      initial: plan.initial,
+      line: plan.state.fields[plan.insertIndex]?.line ?? plan.state.line
+    };
+    const removed = new Set(plan.stripes.map((stripe) => stripe.name));
+    plan.state.fields.splice(plan.insertIndex, 0, packedField);
+    plan.state.fields = plan.state.fields.filter((field) => !removed.has(field.name));
+    for (const display of ast.displays) {
+      display.items = rewriteDisplayItems(display.items);
+      display.sources = sourceNamesForDisplayItems(display.items);
+    }
+    for (const entry of ast.entries) entry.body = rewriteStatements(entry.body);
+    for (const proc of ast.procs) proc.body = rewriteStatements(proc.body);
+    optimizations.push({
+      name: "packed-counter-stripes",
+      detail: `Packed counters ${plan.stripes.map((stripe) => stripe.name).join(", ")} into ${plan.packed}.`
+    });
+  }
+  function selectPackedCounterStripePlan(ast, includeStoragePairs, requestedNames) {
+    if (requestedNames !== void 0) {
+      return selectPackedCounterStorageStripePlans(ast, requestedNames)[0];
+    }
+    const displayPlan = selectPackedCounterDisplayStripePlan(ast);
+    if (displayPlan !== void 0) return displayPlan;
+    if (!includeStoragePairs) return void 0;
+    return selectPackedCounterStorageStripePlans(ast)[0];
+  }
+  var MAX_PACKED_COUNTER_STRIPE_DIGITS = 8;
+  function discoverPackedCounterStripeVariantNames(source) {
+    let ast;
+    try {
+      ast = parseProgram(source);
+    } catch {
+      return [];
+    }
+    const displayPlan = selectPackedCounterDisplayStripePlan(ast);
+    const displayKey = displayPlan === void 0 ? void 0 : packedCounterStripeNameKey(displayPlan.stripes.map((stripe) => stripe.name));
+    const seen = /* @__PURE__ */ new Set();
+    const result = [];
+    for (const plan of selectPackedCounterStorageStripePlans(ast)) {
+      const names = plan.stripes.map((stripe) => stripe.name);
+      const key = packedCounterStripeNameKey(names);
+      if (key === displayKey || seen.has(key)) continue;
+      seen.add(key);
+      result.push(names);
+    }
+    return result;
+  }
+  function selectPackedCounterStorageStripePlans(ast, requestedNames) {
+    const requested = requestedNames === void 0 ? void 0 : new Set(requestedNames);
+    const displaySources = new Set(ast.displays.flatMap((display) => display.sources));
+    const plans = [];
+    for (const state of ast.states) {
+      const candidates = state.fields.map((field, index) => ({ field, index })).filter(
+        ({ field }) => field.type === "range" && field.min !== void 0 && field.max !== void 0 && Number.isInteger(field.min) && Number.isInteger(field.max) && field.min >= 0 && decimalCounterWidth(field) !== void 0 && field.initialStack === void 0 && (!displaySources.has(field.name) || fieldUsedAsPackedRowFloorDisplay(ast, field.name))
+      );
+      if (requested !== void 0) {
+        const selected = requestedNames.map((name) => candidates.find((candidate) => candidate.field.name === name)).filter((candidate) => candidate !== void 0);
+        if (selected.length !== requested.size) continue;
+        const plan = buildPackedCounterStorageStripePlan(ast, state, selected);
+        if (plan !== void 0) plans.push(plan);
+        continue;
+      }
+      const upper = Math.min(candidates.length, MAX_PACKED_COUNTER_STRIPE_DIGITS);
+      for (let size = 2; size <= upper; size += 1) {
+        for (const selected of combinations(candidates, size)) {
+          const plan = buildPackedCounterStorageStripePlan(ast, state, selected);
+          if (plan !== void 0) plans.push(plan);
+        }
+      }
+    }
+    return plans;
+  }
+  function buildPackedCounterStorageStripePlan(ast, state, selected) {
+    if (selected.length < 2 || selected.length > MAX_PACKED_COUNTER_STRIPE_DIGITS) return void 0;
+    const ordered = orderPackedCounterStripeFields(ast, selected);
+    const fields = ordered.map((candidate) => candidate.field);
+    const widths = [];
+    for (const field of fields) {
+      const width = decimalCounterWidth(field);
+      if (width === void 0) return void 0;
+      widths.push(width);
+    }
+    const totalWidth = widths.reduce((sum, width) => sum + width, 0);
+    if (totalWidth > MAX_PACKED_COUNTER_STRIPE_DIGITS) return void 0;
+    const names = fields.map((field) => field.name);
+    if (!packedCounterStripeUsagesOk(ast, names)) return void 0;
+    let remainingWidth = totalWidth;
+    const stripes = fields.map((field, index) => {
+      const width = widths[index];
+      remainingWidth -= width;
+      return {
+        name: field.name,
+        scale: 10 ** remainingWidth,
+        width,
+        kind: index === 0 ? "major" : "digit"
+      };
+    });
+    const initial = packedCounterInitial(fields, stripes);
+    if (initial === void 0) return void 0;
+    return {
+      state,
+      insertIndex: Math.min(...ordered.map((candidate) => candidate.index)),
+      packed: freshPackedCounterName(ast),
+      stripes,
+      initial
+    };
+  }
+  function orderPackedCounterStripeFields(ast, selected) {
+    const floorIndex = selected.findIndex(({ field }) => fieldUsedAsPackedRowFloorDisplay(ast, field.name));
+    if (floorIndex <= 0) return [...selected];
+    const floor = selected[floorIndex];
+    return [floor, ...selected.filter((_, index) => index !== floorIndex)];
+  }
+  function* combinations(items, size, start = 0, prefix = []) {
+    if (prefix.length === size) {
+      yield [...prefix];
+      return;
+    }
+    const remaining = size - prefix.length;
+    for (let index = start; index <= items.length - remaining; index += 1) {
+      prefix.push(items[index]);
+      yield* combinations(items, size, index + 1, prefix);
+      prefix.pop();
+    }
+  }
+  function packedCounterStripeNameKey(names) {
+    return [...names].sort().join("\0");
+  }
+  function fieldUsedAsPackedRowFloorDisplay(ast, name) {
+    return ast.displays.some((display) => {
+      for (let index = 0; index < display.items.length - 2; index += 1) {
+        const left = display.items[index];
+        const dot = display.items[index + 1];
+        const right = display.items[index + 2];
+        if (left?.kind === "source" && left.expr === void 0 && left.width === void 0 && left.name === name && dot?.kind === "literal" && dot.text === "." && right?.kind === "source" && right.expr !== void 0 && right.width === void 0) {
+          return true;
+        }
+      }
+      return false;
+    });
+  }
+  function selectPackedCounterDisplayStripePlan(ast) {
+    const states = /* @__PURE__ */ new Map();
+    for (const state of ast.states) {
+      for (let index = 0; index < state.fields.length; index += 1) {
+        const field = state.fields[index];
+        states.set(field.name, { state, field, index });
+      }
+    }
+    for (const display of ast.displays) {
+      for (let index = 0; index < display.items.length - 2; index += 1) {
+        const leftItem = display.items[index];
+        const dot = display.items[index + 1];
+        const rightItem = display.items[index + 2];
+        if (leftItem?.kind !== "source" || leftItem.expr !== void 0 || leftItem.width !== void 0 || dot?.kind !== "literal" || dot.text !== "." || rightItem?.kind !== "source" || rightItem.expr !== void 0 || rightItem.width !== void 0) {
+          continue;
+        }
+        const left = states.get(leftItem.name);
+        const right = states.get(rightItem.name);
+        if (left === void 0 || right === void 0 || left.state !== right.state || !smallDisplayCounterField(left.field) || !smallDisplayCounterField(right.field)) {
+          continue;
+        }
+        const fields = [left.field, right.field];
+        if (!packedCounterStripeUsagesOk(ast, fields.map((field) => field.name))) continue;
+        const stripes = [
+          { name: left.field.name, scale: 1, width: 1, kind: "major" },
+          { name: right.field.name, scale: 0.1, width: 1, kind: "digit" }
+        ];
+        const initial = packedCounterInitial(fields, stripes);
+        if (initial === void 0) continue;
+        return {
+          state: left.state,
+          insertIndex: Math.min(left.index, right.index),
+          packed: freshPackedCounterName(ast),
+          stripes,
+          initial,
+          compactDecimalDisplay: { left: left.field.name, right: right.field.name }
+        };
+      }
+    }
+    return void 0;
+  }
+  function smallDisplayCounterField(field) {
+    return field.type === "range" && field.min !== void 0 && field.max !== void 0 && Number.isInteger(field.min) && Number.isInteger(field.max) && field.min >= 0 && field.max <= 9 && field.initialStack === void 0;
+  }
+  function decimalCounterWidth(field) {
+    if (field.type !== "range" || field.min === void 0 || field.max === void 0 || !Number.isInteger(field.min) || !Number.isInteger(field.max) || field.min < 0 || field.initialStack !== void 0) {
+      return void 0;
+    }
+    if (field.max <= 9) return 1;
+    if (field.max <= 99) return 2;
+    if (field.max <= 999) return 3;
+    if (field.max <= 9999) return 4;
+    if (field.max <= 99999) return 5;
+    if (field.max <= 999999) return 6;
+    if (field.max <= 9999999) return 7;
+    if (field.max <= 99999999) return 8;
+    return void 0;
+  }
+  function packedCounterInitial(fields, stripes) {
+    const values = fields.map((field) => numericLiteralValue2(field.initial ?? numberExpression2(0)));
+    if (values.some((value) => value === void 0)) return void 0;
+    let initial = 0;
+    for (let index = 0; index < values.length; index += 1) {
+      initial += values[index] * stripes[index].scale;
+    }
+    return numberExpression2(initial);
+  }
+  function packedCounterStripeUsagesOk(ast, names) {
+    const packed = new Set(names);
+    let ok = true;
+    const packedReadCount = (expr) => {
+      switch (expr.kind) {
+        case "identifier":
+          return packed.has(expr.name) ? 1 : 0;
+        case "unary":
+          return packedReadCount(expr.expr);
+        case "binary":
+          return packedReadCount(expr.left) + packedReadCount(expr.right);
+        case "call":
+          return expr.args.reduce((sum, arg) => sum + packedReadCount(arg), 0);
+        case "indexed":
+          return packed.has(expr.base) ? Number.POSITIVE_INFINITY : packedReadCount(expr.index);
+        case "number":
+        case "string":
+          return 0;
+      }
+    };
+    const checkExpr = (expr) => {
+      if (packedReadCount(expr) > 1) ok = false;
+    };
+    const visitStatements = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "assign" && packed.has(statement.target)) {
+          if (numericSelfUpdateDelta(statement.target, statement.expr) === void 0) ok = false;
+        }
+        if (statement.kind === "assign") checkExpr(statement.expr);
+        if (statement.kind === "input" && packed.has(statement.target)) ok = false;
+        if (statement.kind === "core" && statement.outputs?.some((output) => packed.has(output.target))) ok = false;
+        if (statement.kind === "indexed_assign") {
+          checkExpr(statement.target.index);
+          checkExpr(statement.expr);
+        }
+        if (statement.kind === "pause" || statement.kind === "halt" || statement.kind === "return_value") checkExpr(statement.expr);
+        if (statement.kind === "if" || statement.kind === "while") {
+          if (packedReadCount(statement.condition.left) + packedReadCount(statement.condition.right) > 1) ok = false;
+        }
+        if (statement.kind === "dispatch") {
+          checkExpr(statement.expr);
+          for (const dispatchCase of statement.cases) checkExpr(dispatchCase.value);
+        }
+        if (statement.kind === "core" && statement.inputs !== void 0) {
+          for (const input of statement.inputs) checkExpr(input.expr);
+        }
+        if (statement.kind === "loop") visitStatements(statement.body);
+        if (statement.kind === "while") visitStatements(statement.body);
+        if (statement.kind === "if") {
+          visitStatements(statement.thenBody);
+          if (statement.elseBody !== void 0) visitStatements(statement.elseBody);
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visitStatements(dispatchCase.body);
+          if (statement.defaultBody !== void 0) visitStatements(statement.defaultBody);
+        }
+      }
+    };
+    for (const display of ast.displays) {
+      for (const item of display.items) {
+        if (item.kind === "source" && item.expr !== void 0) checkExpr(item.expr);
+      }
+    }
+    for (const entry of ast.entries) visitStatements(entry.body);
+    for (const proc of ast.procs) visitStatements(proc.body);
+    return ok;
+  }
+  function numericSelfUpdateDelta(target, expr) {
+    const targetExpr = { kind: "identifier", name: target };
+    if (expressionEquals(expr, targetExpr)) return 0;
+    const plus = matchTargetPlusDelta(expr, target);
+    if (plus !== void 0) return numericLiteralValue2(plus);
+    const minus = matchTargetMinusDelta(expr, target);
+    const value = minus === void 0 ? void 0 : numericLiteralValue2(minus);
+    return value === void 0 ? void 0 : -value;
+  }
+  function freshPackedCounterName(ast) {
+    const used = /* @__PURE__ */ new Set();
+    const addExpr = (expr) => {
+      if (expr.kind === "identifier") used.add(expr.name);
+      if (expr.kind === "indexed") {
+        used.add(expr.base);
+        addExpr(expr.index);
+      }
+      if (expr.kind === "unary") addExpr(expr.expr);
+      if (expr.kind === "binary") {
+        addExpr(expr.left);
+        addExpr(expr.right);
+      }
+      if (expr.kind === "call") {
+        used.add(expr.callee);
+        for (const arg of expr.args) addExpr(arg);
+      }
+    };
+    const addStatements = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "assign") {
+          used.add(statement.target);
+          addExpr(statement.expr);
+        }
+        if (statement.kind === "indexed_assign") {
+          used.add(statement.target.base);
+          addExpr(statement.target.index);
+          addExpr(statement.expr);
+        }
+        if (statement.kind === "input") used.add(statement.target);
+        if (statement.kind === "call") used.add(statement.block);
+        if (statement.kind === "pause" || statement.kind === "halt" || statement.kind === "return_value") addExpr(statement.expr);
+        if (statement.kind === "if" || statement.kind === "while") {
+          addExpr(statement.condition.left);
+          addExpr(statement.condition.right);
+        }
+        if (statement.kind === "if") {
+          addStatements(statement.thenBody);
+          if (statement.elseBody !== void 0) addStatements(statement.elseBody);
+        }
+        if (statement.kind === "while" || statement.kind === "loop") addStatements(statement.body);
+        if (statement.kind === "dispatch") {
+          addExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            addExpr(dispatchCase.value);
+            addStatements(dispatchCase.body);
+          }
+          if (statement.defaultBody !== void 0) addStatements(statement.defaultBody);
+        }
+      }
+    };
+    for (const state of ast.states) {
+      for (const field of state.fields) {
+        used.add(field.name);
+        if (field.initial !== void 0) addExpr(field.initial);
+      }
+    }
+    for (const display of ast.displays) {
+      used.add(display.name);
+      for (const item of display.items) {
+        if (item.kind === "source") {
+          used.add(item.name);
+          if (item.expr !== void 0) addExpr(item.expr);
+        }
+      }
+    }
+    for (const entry of ast.entries) addStatements(entry.body);
+    for (const proc of ast.procs) {
+      used.add(proc.name);
+      for (const param of proc.params ?? []) used.add(param);
+      addStatements(proc.body);
+    }
+    for (let index = 0; ; index += 1) {
+      const name = `${PACKED_COUNTER_PREFIX}${index}`;
+      if (!used.has(name)) return name;
+    }
+  }
+  function materializeDisplayExpressions(ast, optimizations, inlineFloorPackedRowExpressions) {
     let materialized = 0;
     const plans = /* @__PURE__ */ new Map();
     for (const display of ast.displays) {
       const assignments = [];
       const items = display.items.map((item, index) => {
         if (item.kind !== "source" || item.expr === void 0) return item;
+        if (inlineFloorPackedRowExpressions && canInlineFloorPackedRowDisplayExpression(ast, display, index)) return item;
         const target = `${DISPLAY_EXPR_PREFIX}${display.name}_${index}`;
         assignments.push({
           kind: "assign",
@@ -17120,10 +19915,23 @@ var MKProEmulatorBundle = (() => {
       detail: `Materialized ${materialized} display expression field${materialized === 1 ? "" : "s"} before show().`
     });
   }
+  function canInlineFloorPackedRowDisplayExpression(ast, display, index) {
+    const [floor, separator, row] = display.items;
+    if (index !== 2 || display.items.length !== 3 || floor?.kind !== "source" || floor.expr !== void 0 || separator?.kind !== "literal" || separator.text !== "." || row?.kind !== "source" || row.expr === void 0 || row.width !== void 0) {
+      return false;
+    }
+    const floorState = findStateFieldInAst(ast, floor.name);
+    if (floorState === void 0) return false;
+    const floorMin = floorState.min ?? 0;
+    const floorMax = floorState.max ?? floorMin;
+    const floorWidth = floor.width ?? Math.max(1, String(Math.trunc(Math.max(Math.abs(floorMin), Math.abs(floorMax)))).length);
+    return floorWidth === 1 && floorMin >= 0 && floorMax <= 9;
+  }
   function elideXParamReturnStateFields(ast, optimizations) {
     const params = /* @__PURE__ */ new Set();
+    for (const param of xParamProcParamNames(ast)) params.add(param);
     for (const proc of ast.procs) {
-      const match = matchXParamReturnDecay(proc);
+      const match = matchXParamReturnDecay(proc) ?? matchXParamStakeSinRead(ast, proc);
       if (match === void 0) continue;
       if (!identifierReadOutsideProc(ast, proc.name, match.param)) params.add(match.param);
     }
@@ -17141,6 +19949,302 @@ var MKProEmulatorBundle = (() => {
       });
     }
   }
+  function elideLoopCarriedPromptStateFields(ast, optimizations) {
+    const prompts = loopCarriedPromptCandidates(ast);
+    if (prompts.length === 0) return;
+    const names = new Set(prompts.map((prompt) => prompt.name));
+    let removed = 0;
+    for (const state of ast.states) {
+      const before = state.fields.length;
+      state.fields = state.fields.filter((field) => !names.has(field.name));
+      removed += before - state.fields.length;
+    }
+    if (removed === 0) return;
+    loopCarriedPromptInitials.set(
+      ast,
+      new Map(prompts.map((prompt) => [prompt.name, prompt.initial]))
+    );
+    optimizations.push({
+      name: "loop-carried-prompt-x",
+      detail: `Kept ${[...names].join(", ")} as loop-carried prompt value(s) in X instead of register-backed state.`
+    });
+  }
+  function loopCarriedPromptNames(ast) {
+    return new Set(loopCarriedPromptInitials.get(ast)?.keys() ?? []);
+  }
+  function xParamProcParamNames(ast) {
+    const procCallCounts = collectProcCallCounts(ast);
+    const inlineProcNames = findInlineProcNamesBySize(ast, procCallCounts);
+    const readCounts = collectVariableReadCounts(ast);
+    return new Set([...collectXParamProcLowerings(ast, readCounts, inlineProcNames).values()].map((lowering) => lowering.param));
+  }
+  function loopCarriedPromptCandidates(ast) {
+    const candidates = [];
+    const visit = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "loop") {
+          const candidate = loopCarriedPromptCandidate(ast, statement);
+          if (candidate !== void 0) candidates.push(candidate);
+          visit(statement.body);
+        } else if (statement.kind === "while") {
+          visit(statement.body);
+        } else if (statement.kind === "if") {
+          visit(statement.thenBody);
+          if (statement.elseBody !== void 0) visit(statement.elseBody);
+        } else if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+          if (statement.defaultBody !== void 0) visit(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    return candidates.filter(
+      (candidate, index) => candidates.findIndex((other) => other.name === candidate.name) === index
+    );
+  }
+  function loopCarriedPromptCandidate(ast, loop) {
+    const show = loop.body[0];
+    const input = loop.body[1];
+    if (show?.kind !== "show" || input?.kind !== "input") return void 0;
+    const name = singlePlainDisplaySourceFromAst(ast, show.display);
+    if (name === void 0) return void 0;
+    const initial = loopCarriedPromptInitialExpression(ast, name);
+    if (initial === void 0) return void 0;
+    if (loopPromptHasReadsOutsideHeader(ast, name, show)) return void 0;
+    if (!statementsAssignLoopPrompt(ast, loop.body.slice(2), name)) return void 0;
+    if (!statementsGuaranteeLoopPrompt(ast, loop.body.slice(2), name)) return void 0;
+    if (!loopPromptAssignmentsConfinedToCandidate(ast, loop, name)) return void 0;
+    return {
+      name,
+      display: show.display,
+      input: input.target,
+      initial,
+      line: loop.line,
+      showLine: show.line,
+      inputLine: input.line
+    };
+  }
+  function loopCarriedPromptInitialExpression(ast, name) {
+    const field = findStateFieldInAst(ast, name);
+    if (field?.initial !== void 0) return field.initial;
+    if (field?.initialStack !== void 0) {
+      const mirror = ast.states.flatMap((state) => state.fields).find((candidate) => candidate.name !== name && candidate.initialStack === field.initialStack);
+      if (mirror !== void 0) return { kind: "identifier", name: mirror.name };
+    }
+    return loopCarriedPromptInitials.get(ast)?.get(name);
+  }
+  function singlePlainDisplaySourceFromAst(ast, displayName) {
+    const display = ast.displays.find((candidate) => candidate.name === displayName);
+    if (display === void 0 || display.items.length !== 1) return void 0;
+    const [item] = display.items;
+    if (item?.kind !== "source" || item.expr !== void 0 || item.width !== void 0) return void 0;
+    return item.name;
+  }
+  function loopPromptHasReadsOutsideHeader(ast, name, headerShow) {
+    const exprReads = (expr) => expressionReferencesIdentifier(expr, name);
+    const conditionReads = (condition) => exprReads(condition.left) || exprReads(condition.right);
+    const showReads = (statement) => {
+      if (statement === headerShow) return false;
+      const display = ast.displays.find((candidate) => candidate.name === statement.display);
+      return display?.items.some(
+        (item) => item.kind === "source" && (item.name === name || item.expr !== void 0 && exprReads(item.expr))
+      ) ?? false;
+    };
+    const statementReads = (statement) => {
+      switch (statement.kind) {
+        case "pause":
+        case "halt":
+        case "return_value":
+          return exprReads(statement.expr);
+        case "assign":
+          return exprReads(statement.expr);
+        case "indexed_assign":
+          return exprReads(statement.target.index) || exprReads(statement.expr);
+        case "coord_list_remove":
+          return exprReads(statement.item);
+        case "while":
+          return conditionReads(statement.condition) || statementsRead(statement.body);
+        case "if":
+          return conditionReads(statement.condition) || statementsRead(statement.thenBody) || statement.elseBody !== void 0 && statementsRead(statement.elseBody);
+        case "dispatch":
+          return exprReads(statement.expr) || statement.cases.some((dispatchCase) => exprReads(dispatchCase.value) || statementsRead(dispatchCase.body)) || statement.defaultBody !== void 0 && statementsRead(statement.defaultBody);
+        case "show":
+          return showReads(statement);
+        case "loop":
+          return statementsRead(statement.body);
+        case "core":
+          return (statement.inputs ?? []).some((input) => exprReads(input.expr));
+        case "input":
+        case "call":
+        case "decimal_series":
+          return false;
+      }
+    };
+    const statementsRead = (statements) => statements.some(statementReads);
+    return ast.entries.some((entry) => statementsRead(entry.body)) || ast.procs.some((proc) => statementsRead(proc.body));
+  }
+  function statementsGuaranteeLoopPrompt(ast, statements, name, seenProcs = /* @__PURE__ */ new Set()) {
+    const last = statements.at(-1);
+    if (last === void 0) return false;
+    return statementGuaranteesLoopPrompt(ast, last, name, seenProcs);
+  }
+  function statementsAssignLoopPrompt(ast, statements, name, seenProcs = /* @__PURE__ */ new Set()) {
+    return statements.some((statement) => statementAssignsLoopPrompt(ast, statement, name, seenProcs));
+  }
+  function statementAssignsLoopPrompt(ast, statement, name, seenProcs) {
+    switch (statement.kind) {
+      case "assign":
+        return statement.target === name;
+      case "call": {
+        if (seenProcs.has(statement.block)) return false;
+        const proc = ast.procs.find((candidate) => candidate.name === statement.block);
+        if (proc === void 0) return false;
+        const nextSeen = new Set(seenProcs);
+        nextSeen.add(statement.block);
+        return statementsAssignLoopPrompt(ast, proc.body, name, nextSeen);
+      }
+      case "if":
+        return statementsAssignLoopPrompt(ast, statement.thenBody, name, seenProcs) || statement.elseBody !== void 0 && statementsAssignLoopPrompt(ast, statement.elseBody, name, seenProcs);
+      case "dispatch":
+        return statement.cases.some(
+          (dispatchCase) => statementsAssignLoopPrompt(ast, dispatchCase.body, name, seenProcs)
+        ) || statement.defaultBody !== void 0 && statementsAssignLoopPrompt(ast, statement.defaultBody, name, seenProcs);
+      case "loop":
+      case "while":
+        return statementsAssignLoopPrompt(ast, statement.body, name, seenProcs);
+      default:
+        return false;
+    }
+  }
+  function statementGuaranteesLoopPrompt(ast, statement, name, seenProcs) {
+    switch (statement.kind) {
+      case "assign":
+        return statement.target === name;
+      case "halt":
+      case "loop":
+        return true;
+      case "call": {
+        if (seenProcs.has(statement.block)) return false;
+        const proc = ast.procs.find((candidate) => candidate.name === statement.block);
+        if (proc === void 0) return false;
+        const nextSeen = new Set(seenProcs);
+        nextSeen.add(statement.block);
+        return statementsGuaranteeLoopPrompt(ast, proc.body, name, nextSeen);
+      }
+      case "if":
+        return statement.elseBody !== void 0 && statementsGuaranteeLoopPrompt(ast, statement.thenBody, name, seenProcs) && statementsGuaranteeLoopPrompt(ast, statement.elseBody, name, seenProcs);
+      case "dispatch":
+        return statement.defaultBody !== void 0 && statement.cases.every(
+          (dispatchCase) => statementsGuaranteeLoopPrompt(ast, dispatchCase.body, name, seenProcs)
+        ) && statementsGuaranteeLoopPrompt(ast, statement.defaultBody, name, seenProcs);
+      default:
+        return false;
+    }
+  }
+  function loopPromptAssignmentsConfinedToCandidate(ast, loop, name) {
+    const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
+    const reachableFromLoop = collectReachableProcNamesFromStatements(ast, loop.body.slice(2));
+    const mutatingProcs = collectPromptMutatingProcNames(ast, name);
+    if ([...mutatingProcs].some((procName) => !reachableFromLoop.has(procName))) return false;
+    let ok = true;
+    const visit = (statements, insideCandidateLoop, currentProc) => {
+      for (const statement of statements) {
+        if (statement === loop) {
+          visit(statement.body.slice(2), true, currentProc);
+          continue;
+        }
+        if (statement.kind === "assign" && statement.target === name && !insideCandidateLoop && (currentProc === void 0 || !mutatingProcs.has(currentProc))) {
+          ok = false;
+        }
+        if (statement.kind === "call" && mutatingProcs.has(statement.block) && !insideCandidateLoop && (currentProc === void 0 || !mutatingProcs.has(currentProc))) {
+          ok = false;
+        }
+        for (const callee of statementExpressionCallees(statement)) {
+          if (mutatingProcs.has(callee) && !insideCandidateLoop && (currentProc === void 0 || !mutatingProcs.has(currentProc))) {
+            ok = false;
+          }
+        }
+        if (statement.kind === "loop") visit(statement.body, insideCandidateLoop, currentProc);
+        if (statement.kind === "while") visit(statement.body, insideCandidateLoop, currentProc);
+        if (statement.kind === "if") {
+          visit(statement.thenBody, insideCandidateLoop, currentProc);
+          if (statement.elseBody !== void 0) visit(statement.elseBody, insideCandidateLoop, currentProc);
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body, insideCandidateLoop, currentProc);
+          if (statement.defaultBody !== void 0) visit(statement.defaultBody, insideCandidateLoop, currentProc);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body, false);
+    for (const proc of procMap.values()) visit(proc.body, false, proc.name);
+    return ok;
+  }
+  function collectReachableProcNamesFromStatements(ast, roots) {
+    const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
+    const reachable = /* @__PURE__ */ new Set();
+    const queue = [];
+    const enqueue = (name) => {
+      if (procMap.has(name) && !reachable.has(name)) {
+        reachable.add(name);
+        queue.push(name);
+      }
+    };
+    const visit = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "call") enqueue(statement.block);
+        for (const callee of statementExpressionCallees(statement)) enqueue(callee);
+        if (statement.kind === "loop") visit(statement.body);
+        if (statement.kind === "while") visit(statement.body);
+        if (statement.kind === "if") {
+          visit(statement.thenBody);
+          if (statement.elseBody !== void 0) visit(statement.elseBody);
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+          if (statement.defaultBody !== void 0) visit(statement.defaultBody);
+        }
+      }
+    };
+    visit(roots);
+    while (queue.length > 0) {
+      const proc = procMap.get(queue.shift());
+      if (proc !== void 0) visit(proc.body);
+    }
+    return reachable;
+  }
+  function collectPromptMutatingProcNames(ast, name) {
+    const mutating = /* @__PURE__ */ new Set();
+    for (const proc of ast.procs) {
+      if (statementsAssignLoopPrompt(ast, proc.body, name)) mutating.add(proc.name);
+    }
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const proc of ast.procs) {
+        if (mutating.has(proc.name)) continue;
+        if (statementsCallAnyProc(proc.body, mutating)) {
+          mutating.add(proc.name);
+          changed = true;
+        }
+      }
+    }
+    return mutating;
+  }
+  function statementsCallAnyProc(statements, names) {
+    return statements.some((statement) => {
+      if (statement.kind === "call" && names.has(statement.block)) return true;
+      if (statementExpressionCallees(statement).some((callee) => names.has(callee))) return true;
+      if (statement.kind === "loop" || statement.kind === "while") return statementsCallAnyProc(statement.body, names);
+      if (statement.kind === "if") {
+        return statementsCallAnyProc(statement.thenBody, names) || statement.elseBody !== void 0 && statementsCallAnyProc(statement.elseBody, names);
+      }
+      if (statement.kind === "dispatch") {
+        return statement.cases.some((dispatchCase) => statementsCallAnyProc(dispatchCase.body, names)) || statement.defaultBody !== void 0 && statementsCallAnyProc(statement.defaultBody, names);
+      }
+      return false;
+    });
+  }
   function identifierReadOutsideProc(ast, procName, name) {
     const visitExpr = (expr) => expressionReferencesIdentifier(expr, name);
     const visitCondition = (condition) => visitExpr(condition.left) || visitExpr(condition.right);
@@ -17148,6 +20252,7 @@ var MKProEmulatorBundle = (() => {
       for (const statement of statements) {
         if (statement.kind === "assign" && visitExpr(statement.expr)) return true;
         if (statement.kind === "indexed_assign" && (visitExpr(statement.target.index) || visitExpr(statement.expr))) return true;
+        if (statement.kind === "coord_list_remove" && visitExpr(statement.item)) return true;
         if ((statement.kind === "pause" || statement.kind === "halt" || statement.kind === "return_value") && visitExpr(statement.expr)) return true;
         if ((statement.kind === "if" || statement.kind === "while") && visitCondition(statement.condition)) return true;
         if (statement.kind === "if" && (visitStatements(statement.thenBody) || statement.elseBody !== void 0 && visitStatements(statement.elseBody))) return true;
@@ -17175,7 +20280,7 @@ var MKProEmulatorBundle = (() => {
       const first = proc.body[0];
       if (first?.kind !== "assign" || first.expr.kind !== "identifier" || first.expr.name !== assignment.target) return void 0;
       const tail = proc.body.slice(1);
-      if (statementsReadIdentifier(tail, assignment.target)) return void 0;
+      if (statementsReadIdentifier2(tail, assignment.target)) return void 0;
       if (countIdentifierReadsInProgram(ast, assignment.target) !== 1) return void 0;
       return { target: first.target, tail, procName: proc.name };
     };
@@ -17344,7 +20449,14 @@ var MKProEmulatorBundle = (() => {
         }
         if (statement.kind === "show") {
           const display = ast.displays.find((candidate) => candidate.name === statement.display);
-          for (const source of display?.sources ?? []) addRead(source);
+          for (const item of display?.items ?? []) {
+            if (item.kind !== "source") continue;
+            if (item.expr !== void 0) {
+              visitExpr(item.expr);
+            } else {
+              addRead(item.name);
+            }
+          }
         }
         if (statement.kind === "if") {
           visitExpr(statement.condition.left);
@@ -17497,34 +20609,39 @@ var MKProEmulatorBundle = (() => {
     if (converted === 0) return;
     optimizations.push({
       name: "if-chain-dispatch-canonicalization",
-      detail: `Collapsed ${converted} constant if/else-if chain${converted === 1 ? "" : "s"} into single-evaluation dispatch.`
+      detail: `Collapsed ${converted} constant if/else-if chain${converted === 1 ? "" : "s"} into single-evaluation dispatch, including inverted != arms when present.`
     });
   }
   function buildDispatchFromIfChain(root) {
-    const first = matchEqualityConstantCondition(root.condition);
+    const first = matchConstantDispatchCondition(root.condition);
     if (first === void 0 || !expressionIsDeterministic(first.expr)) return void 0;
     const cases = [];
     const seen = /* @__PURE__ */ new Set();
     let current = root;
     let defaultBody;
     while (current !== void 0) {
-      const matched = matchEqualityConstantCondition(current.condition);
+      const matched = matchConstantDispatchCondition(current.condition);
       if (matched === void 0 || !expressionEquals(matched.expr, first.expr) || seen.has(matched.value)) {
         defaultBody = [current];
         break;
       }
-      seen.add(matched.value);
-      cases.push({ value: numberExpression2(matched.value), body: current.thenBody, line: current.line });
-      const elseBody = current.elseBody;
-      if (elseBody === void 0 || elseBody.length === 0) {
+      const caseBody = matched.inverted ? current.elseBody : current.thenBody;
+      const continuation = matched.inverted ? current.thenBody : current.elseBody;
+      if (caseBody === void 0) {
+        defaultBody = [current];
         break;
       }
-      const onlyElse = elseBody[0];
-      if (elseBody.length === 1 && onlyElse?.kind === "if") {
-        current = onlyElse;
+      seen.add(matched.value);
+      cases.push({ value: numberExpression2(matched.value), body: caseBody, line: current.line });
+      if (continuation === void 0 || continuation.length === 0) {
+        break;
+      }
+      const onlyContinuation = continuation[0];
+      if (continuation.length === 1 && onlyContinuation?.kind === "if") {
+        current = onlyContinuation;
         continue;
       }
-      defaultBody = elseBody;
+      defaultBody = continuation;
       current = void 0;
     }
     if (cases.length < 2) return void 0;
@@ -17536,6 +20653,22 @@ var MKProEmulatorBundle = (() => {
       line: root.line,
       scratchId: root.line
     };
+  }
+  function matchConstantDispatchCondition(condition) {
+    if (condition.op === "==") {
+      const matched = matchEqualityConstantCondition(condition);
+      return matched === void 0 ? void 0 : { ...matched, inverted: false };
+    }
+    if (condition.op !== "!=") return void 0;
+    const rightValue = numericLiteralValue2(condition.right);
+    if (rightValue !== void 0 && Number.isInteger(rightValue) && numericLiteralValue2(condition.left) === void 0) {
+      return { expr: condition.left, value: rightValue, inverted: true };
+    }
+    const leftValue = numericLiteralValue2(condition.left);
+    if (leftValue !== void 0 && Number.isInteger(leftValue) && numericLiteralValue2(condition.right) === void 0) {
+      return { expr: condition.right, value: leftValue, inverted: true };
+    }
+    return void 0;
   }
   function hoistOneShotLoopInitializers(ast, optimizations) {
     let hoisted = 0;
@@ -17801,6 +20934,9 @@ var MKProEmulatorBundle = (() => {
     visit(expr);
     return deps;
   }
+  function selectorOffsetCost(offset) {
+    return offset === 0 ? 0 : estimateNumberCost2(String(Math.abs(offset))) + 1;
+  }
   function statementExpressionCallees(statement) {
     return statementOwnExpressions(statement).flatMap(expressionCallCallees);
   }
@@ -17865,6 +21001,304 @@ var MKProEmulatorBundle = (() => {
   }
   function cloneStatements(statements) {
     return structuredClone(statements);
+  }
+  function integerLiteralValue(expr) {
+    if (expr.kind !== "number") return void 0;
+    const value = Number(expr.raw);
+    return Number.isInteger(value) ? value : void 0;
+  }
+  function matchLinearSelfUpdate(statement) {
+    if (statement.kind !== "assign") return void 0;
+    const expr = statement.expr;
+    if (expr.kind !== "binary" || expr.op !== "+" && expr.op !== "-") return void 0;
+    let stepExpr;
+    if (expr.left.kind === "identifier" && expr.left.name === statement.target) {
+      stepExpr = expr.right;
+    } else if (expr.op === "+" && expr.right.kind === "identifier" && expr.right.name === statement.target) {
+      stepExpr = expr.left;
+    } else {
+      return void 0;
+    }
+    const step = integerLiteralValue(stepExpr);
+    if (step === void 0) return void 0;
+    return { target: statement.target, step: expr.op === "-" ? -step : step };
+  }
+  function collectScalarWrites(statements, procMap, out, seenProcs) {
+    const visit = (list) => {
+      for (const statement of list) {
+        switch (statement.kind) {
+          case "assign":
+            out.add(statement.target);
+            break;
+          case "input":
+            out.add(statement.target);
+            break;
+          case "loop":
+          case "while":
+            visit(statement.body);
+            break;
+          case "if":
+            visit(statement.thenBody);
+            if (statement.elseBody !== void 0) visit(statement.elseBody);
+            break;
+          case "dispatch":
+            for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+            if (statement.defaultBody !== void 0) visit(statement.defaultBody);
+            break;
+          case "call": {
+            if (seenProcs.has(statement.block)) break;
+            seenProcs.add(statement.block);
+            const proc = procMap.get(statement.block);
+            if (proc !== void 0) visit(proc.body);
+            break;
+          }
+          default:
+            break;
+        }
+      }
+    };
+    visit(statements);
+  }
+  function unrollCountedLoops(ast, optimizations) {
+    const MAX_TRIP_COUNT = 8;
+    const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
+    let unrolled = 0;
+    const conditionHolds = (op, value, bound) => {
+      switch (op) {
+        case "<":
+          return value < bound;
+        case "<=":
+          return value <= bound;
+        case ">":
+          return value > bound;
+        case ">=":
+          return value >= bound;
+        default:
+          return false;
+      }
+    };
+    const buildUnroll = (loop, preceding) => {
+      const condition = loop.condition;
+      if (condition.left.kind !== "identifier") return void 0;
+      const conditionVar = condition.left.name;
+      const bound = integerLiteralValue(condition.right);
+      if (bound === void 0) return void 0;
+      if (condition.op !== "<" && condition.op !== "<=") return void 0;
+      const prefixUpdates = [];
+      for (const statement of loop.body) {
+        const update = matchLinearSelfUpdate(statement);
+        if (update === void 0) break;
+        if (prefixUpdates.some((existing) => existing.target === update.target)) break;
+        prefixUpdates.push(update);
+      }
+      if (!prefixUpdates.some((update) => update.target === conditionVar)) return void 0;
+      const prefixLength = prefixUpdates.length;
+      const entryValues = /* @__PURE__ */ new Map();
+      for (let index = preceding.length - 1; index >= 0; index -= 1) {
+        const statement = preceding[index];
+        if (statement.kind !== "assign") break;
+        const value = integerLiteralValue(statement.expr);
+        if (value === void 0) break;
+        if (!entryValues.has(statement.target)) entryValues.set(statement.target, value);
+      }
+      if (prefixUpdates.some((update) => !entryValues.has(update.target))) return void 0;
+      const rest = loop.body.slice(prefixLength);
+      const restWrites = /* @__PURE__ */ new Set();
+      collectScalarWrites(rest, procMap, restWrites, /* @__PURE__ */ new Set());
+      if (prefixUpdates.some((update) => restWrites.has(update.target))) return void 0;
+      const iterations = [];
+      const current = new Map(prefixUpdates.map((update) => [update.target, entryValues.get(update.target)]));
+      while (conditionHolds(condition.op, current.get(conditionVar), bound)) {
+        for (const update of prefixUpdates) current.set(update.target, current.get(update.target) + update.step);
+        iterations.push(new Map(current));
+        if (iterations.length > MAX_TRIP_COUNT) return void 0;
+      }
+      if (iterations.length === 0) return void 0;
+      const result = [];
+      for (const iteration of iterations) {
+        for (let index = 0; index < prefixLength; index += 1) {
+          const update = prefixUpdates[index];
+          result.push({
+            kind: "assign",
+            target: update.target,
+            expr: { kind: "number", raw: String(iteration.get(update.target)) },
+            line: loop.body[index].line
+          });
+        }
+        for (const statement of rest) result.push(structuredClone(statement));
+      }
+      while (preceding.length > 0) {
+        const last = preceding[preceding.length - 1];
+        if (last.kind !== "assign" || integerLiteralValue(last.expr) === void 0) break;
+        if (!prefixUpdates.some((update) => update.target === last.target)) break;
+        preceding.pop();
+      }
+      return result;
+    };
+    const visitList = (statements) => {
+      const result = [];
+      for (const statement of statements) {
+        const visited = visitStatement(statement);
+        if (visited.kind === "while") {
+          const replacement = buildUnroll(visited, result);
+          if (replacement !== void 0) {
+            unrolled += 1;
+            result.push(...replacement);
+            continue;
+          }
+        }
+        result.push(visited);
+      }
+      return result;
+    };
+    const visitStatement = (statement) => {
+      switch (statement.kind) {
+        case "loop":
+          return { ...statement, body: visitList(statement.body) };
+        case "while":
+          return { ...statement, body: visitList(statement.body) };
+        case "if":
+          return {
+            ...statement,
+            thenBody: visitList(statement.thenBody),
+            ...statement.elseBody === void 0 ? {} : { elseBody: visitList(statement.elseBody) }
+          };
+        case "dispatch":
+          return {
+            ...statement,
+            cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: visitList(dispatchCase.body) })),
+            ...statement.defaultBody === void 0 ? {} : { defaultBody: visitList(statement.defaultBody) }
+          };
+        default:
+          return statement;
+      }
+    };
+    for (const entry of ast.entries) entry.body = visitList(entry.body);
+    for (const proc of ast.procs) proc.body = visitList(proc.body);
+    if (unrolled > 0) {
+      optimizations.push({
+        name: "counted-loop-unroll",
+        detail: `Fully unrolled ${unrolled} small constant-trip counted loop${unrolled === 1 ? "" : "s"}, replacing induction variables with per-iteration constants.`
+      });
+    }
+  }
+  function unitDecrementCountedWhileTarget(loop) {
+    const condition = loop.condition;
+    const target = condition.left.kind === "identifier" ? condition.left.name : condition.right.kind === "identifier" ? condition.right.name : void 0;
+    if (target === void 0) return void 0;
+    if (!unitPositiveWhileCondition(condition, target)) return void 0;
+    const final = loop.body.at(-1);
+    if (final?.kind !== "assign" || final.target !== target) return void 0;
+    if (!isUnitDecrementExpression(target, final.expr)) return void 0;
+    return target;
+  }
+  function scalarReferencedOutsideLoop(ast, name, loop) {
+    let found = false;
+    const readExpr = (expr) => {
+      if (countIdentifierReads(expr, name) > 0) found = true;
+    };
+    const walk = (statements) => {
+      for (const statement of statements) {
+        if (found) return;
+        if (statement === loop) continue;
+        switch (statement.kind) {
+          case "assign":
+            if (statement.target === name) found = true;
+            readExpr(statement.expr);
+            break;
+          case "input":
+            if (statement.target === name) found = true;
+            break;
+          case "pause":
+          case "halt":
+          case "return_value":
+            readExpr(statement.expr);
+            break;
+          case "indexed_assign":
+            if (statement.target.base === name) found = true;
+            readExpr(statement.target.index);
+            readExpr(statement.expr);
+            break;
+          case "if":
+            readExpr(statement.condition.left);
+            readExpr(statement.condition.right);
+            walk(statement.thenBody);
+            if (statement.elseBody !== void 0) walk(statement.elseBody);
+            break;
+          case "loop":
+            walk(statement.body);
+            break;
+          case "while":
+            readExpr(statement.condition.left);
+            readExpr(statement.condition.right);
+            walk(statement.body);
+            break;
+          case "dispatch":
+            readExpr(statement.expr);
+            for (const dispatchCase of statement.cases) {
+              readExpr(dispatchCase.value);
+              walk(dispatchCase.body);
+            }
+            if (statement.defaultBody !== void 0) walk(statement.defaultBody);
+            break;
+          case "core":
+            for (const input of statement.inputs ?? []) readExpr(input.expr);
+            break;
+          default:
+            break;
+        }
+      }
+    };
+    for (const entry of ast.entries) walk(entry.body);
+    for (const proc of ast.procs) walk(proc.body);
+    return found;
+  }
+  function previousRandomLessThanCurrentCondition(condition, temp, seed) {
+    if (condition.op !== "<" || !isZeroExpression(condition.right)) return false;
+    const left = condition.left;
+    return left.kind === "binary" && left.op === "-" && left.left.kind === "identifier" && left.left.name === temp && left.right.kind === "identifier" && left.right.name === seed;
+  }
+  function conditionTestsIdentifierAgainstZero(condition, name, op) {
+    return condition.op === op && (condition.left.kind === "identifier" && condition.left.name === name && isZeroExpression(condition.right) || condition.right.kind === "identifier" && condition.right.name === name && isZeroExpression(condition.left));
+  }
+  function indexedZeroDomainTrap(condition, target) {
+    if (!expressionEquals(condition.left, target) || !isZeroExpression(condition.right)) return void 0;
+    if (condition.op === "<") return { opcode: 33, mnemonic: "F sqrt" };
+    if (condition.op === "<=") return { opcode: 23, mnemonic: "F lg" };
+    return void 0;
+  }
+  function normalizeStateInitCountedLoops(ast, optimizations) {
+    let normalized = 0;
+    for (const entry of ast.entries) {
+      const body = entry.body;
+      for (let index = 0; index < body.length; index += 1) {
+        const statement = body[index];
+        if (statement.kind !== "while") continue;
+        const target = unitDecrementCountedWhileTarget(statement);
+        if (target === void 0) continue;
+        const field = findStateFieldInAst(ast, target);
+        if (field?.initial === void 0) continue;
+        const initialValue = numericLiteralValue2(field.initial);
+        if (initialValue === void 0 || !Number.isInteger(initialValue) || initialValue < 1) continue;
+        if (scalarReferencedOutsideLoop(ast, target, statement)) continue;
+        const initializer = {
+          kind: "assign",
+          target,
+          expr: field.initial,
+          line: statement.line
+        };
+        delete field.initial;
+        body.splice(index, 0, initializer);
+        index += 1;
+        normalized += 1;
+      }
+    }
+    if (normalized > 0) {
+      optimizations.push({
+        name: "state-init-counted-loop",
+        detail: `Recovered the compact F Lx counted-loop lowering for ${normalized} state-initialized countdown counter${normalized === 1 ? "" : "s"}.`
+      });
+    }
   }
   function hoistCommonBranchTails(ast, optimizations) {
     let hoisted = 0;
@@ -18129,6 +21563,7 @@ var MKProEmulatorBundle = (() => {
       ["preloaded-indirect-flow", "compiler-owned address preload selected for one-cell indirect branch/call", 1],
       ["preloaded-super-dark-flow", "compiler-owned FA..FF preloaded one-command dispatch selected after layout proof", 1],
       ["indirect-memory-table", "stable selector reused for indirect memory access", 0],
+      ["indexed-packed-row-table", "indexed packed row display selected direct indirect-memory access", 0],
       ["r0-fractional-sentinel", "fractional R0 selector side effect reused after liveness proof", 0]
     ];
     for (const [name, reason, steps] of selectedPassCandidates) {
@@ -18170,8 +21605,9 @@ var MKProEmulatorBundle = (() => {
     const reference = /^([A-Za-z0-9]+)_(.+)$/u.exec(referenceName);
     if (!reference) return void 0;
     const collection = reference[1];
+    const collectionDirectory = collection === "kei" ? "tehnika-molodyzhi" : collection;
     const slug = reference[2].replace(/_/gu, "-");
-    const directory = path.resolve(repoRoot, "games", collection);
+    const directory = path.resolve(repoRoot, "games", collectionDirectory);
     const manifestPath = path.resolve(directory, "manifest.tsv");
     let programFile = `${slug}.txt`;
     if (fs.existsSync(manifestPath)) {
@@ -18323,6 +21759,91 @@ var MKProEmulatorBundle = (() => {
       visitStatements(proc.body);
     }
   }
+  function validateRawMachineHazards(ast, warnings) {
+    const seen = /* @__PURE__ */ new Set();
+    const warn = (message, line) => {
+      const key = `${line}:${message}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      warnings.push(`${message} (raw block, line ${line})`);
+    };
+    const VP2 = 12;
+    const SIGN_CHANGE = 11;
+    const CLEAR_X = 13;
+    const PUSH = 14;
+    const isDigitEntry = (opcode) => opcode >= 0 && opcode <= 10;
+    const isRecall = (opcode) => opcode >= 96 && opcode <= 110;
+    const lintRawBlock = (statement) => {
+      const ops = [];
+      for (const rawLine of statement.lines) {
+        if (rawLine.text.endsWith(":")) {
+          ops.push("label");
+          continue;
+        }
+        const parsed = parseRawInstruction(rawLine.text);
+        if (parsed === void 0) continue;
+        ops.push({ opcode: parsed.opcode, line: rawLine.line });
+      }
+      let inExponentEntry = false;
+      for (let i = 0; i < ops.length; i += 1) {
+        const op = ops[i];
+        if (op === "label") {
+          inExponentEntry = false;
+          continue;
+        }
+        if (op.opcode === VP2) {
+          inExponentEntry = true;
+          continue;
+        }
+        if (isDigitEntry(op.opcode)) continue;
+        if (op.opcode === SIGN_CHANGE) {
+          if (inExponentEntry) {
+            warn(
+              "Sign change (/-/) after \u0412\u041F exponent entry: continuous run may flip the exponent sign instead of the mantissa; test exponential inputs and verify against step mode",
+              op.line
+            );
+          }
+          inExponentEntry = false;
+          continue;
+        }
+        if (op.opcode === CLEAR_X || op.opcode === PUSH) {
+          const next = ops[i + 1];
+          if (next !== void 0 && next !== "label" && isRecall(next.opcode)) {
+            const lead = op.opcode === CLEAR_X ? "Cx" : "\u0412\u2191";
+            warn(
+              `${lead} immediately followed by \u041F->X lifts the stack differently from the keyboard digit-entry path; confirm Y/Z/T after this sequence`,
+              op.line
+            );
+          }
+        }
+        inExponentEntry = false;
+      }
+    };
+    const visit = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "core") {
+          lintRawBlock(statement);
+          continue;
+        }
+        if (statement.kind === "if") {
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+          continue;
+        }
+        if (statement.kind === "loop") {
+          visit(statement.body);
+          continue;
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+          continue;
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) visit(proc.body);
+  }
   function collectUnsupportedV2Statements(ast) {
     const unsupported = [];
     const visit = (statements) => {
@@ -18370,9 +21891,7 @@ var MKProEmulatorBundle = (() => {
     return `${predicate.left} ${predicate.op} ${predicate.right}`;
   }
   function isSimpleCompilerExpression(text) {
-    let normalized = normalizeV2ExpressionText(text);
-    const direction = /^direction\((.+)\)$/u.exec(normalized.trim());
-    if (direction) normalized = direction[1];
+    const normalized = normalizeV2ExpressionText(text);
     try {
       parseExpression(normalized);
       return true;
@@ -18402,6 +21921,17 @@ var MKProEmulatorBundle = (() => {
     warnings;
     candidates;
     loweringOptions;
+    loopPromptInitials;
+    currentProcedure;
+    // Set when a show was fused into a following read so its calculator stop also
+    // serves as the input entry; the next read() lowering consumes this instead of
+    // emitting its own С/П.
+    inputArmedInX = false;
+    // Set while a value has been parked in Y across a calculator stop (the
+    // "stack-stop fusion" head). The post-stop arithmetic reads this through
+    // currentYVariable so the scheduler can keep the parked value in Y instead of
+    // recalling it from a register, and reject expressions that re-reference it.
+    parkedYVariable;
     bankSelectorCache = /* @__PURE__ */ new Map();
     // Read-only program analysis is computed once and injected; the lowering code
     // reads these maps through getters so call sites stay unchanged.
@@ -18444,6 +21974,9 @@ var MKProEmulatorBundle = (() => {
     }
     get scaledCoordCellNames() {
       return this.analysis.scaledCoordCellNames;
+    }
+    get removableCoordLists() {
+      return this.analysis.removableCoordLists;
     }
     scaledCoordVariables = /* @__PURE__ */ new Set();
     // Shared runtime-helper tables live in a dedicated collaborator; lowering
@@ -18495,6 +22028,12 @@ var MKProEmulatorBundle = (() => {
     }
     set currentXVariable(value) {
       this.emitter.currentXVariable = value;
+    }
+    get currentYVariable() {
+      return this.parkedYVariable;
+    }
+    set currentYVariable(value) {
+      this.parkedYVariable = value;
     }
     get currentXAliases() {
       return this.emitter.currentXAliases;
@@ -18551,7 +22090,17 @@ var MKProEmulatorBundle = (() => {
       this.warnings = warnings;
       this.candidates = candidates;
       this.loweringOptions = loweringOptions;
+      this.loopPromptInitials = loopCarriedPromptInitials.get(ast) ?? /* @__PURE__ */ new Map();
       this.analysis = buildProgramAnalysis(ast, allocation);
+    }
+    compileWithinProcedure(proc, compile) {
+      const previous = this.currentProcedure;
+      this.currentProcedure = proc;
+      try {
+        compile();
+      } finally {
+        this.currentProcedure = previous;
+      }
     }
     compileProgram() {
       const main = this.ast.entries[0];
@@ -18605,9 +22154,33 @@ var MKProEmulatorBundle = (() => {
       for (let index = 0; index < statements.length; index += 1) {
         const statement = statements[index];
         const next = statements[index + 1];
+        if (statement.kind === "assign") {
+          const fractionalDebit = this.compilePreviousRandomFractionalDebitRun(statements, index);
+          if (fractionalDebit > 1) {
+            index += fractionalDebit - 1;
+            continue;
+          }
+          const previousRandom = this.compilePreviousRandomStateRun(statements, index);
+          if (previousRandom > 1) {
+            index += previousRandom - 1;
+            continue;
+          }
+          const previousRandomBranch = this.compilePreviousRandomBranchRun(statements, index);
+          if (previousRandomBranch > 1) {
+            index += previousRandomBranch - 1;
+            continue;
+          }
+        }
         if (statement.kind === "assign" && next?.kind === "call" && compileXParamProcCall(this, statement, next)) {
           index += 1;
           continue;
+        }
+        if ((statement.kind === "assign" || statement.kind === "indexed_assign") && (next?.kind === "assign" || next?.kind === "indexed_assign")) {
+          const fused = this.compileRepeatedXParamSelfAssignment(statement, next);
+          if (fused > 1) {
+            index += fused - 1;
+            continue;
+          }
         }
         if (statement.kind === "assign") {
           const reused = compileRepeatedAssignmentValue(this, statements, index);
@@ -18620,12 +22193,34 @@ var MKProEmulatorBundle = (() => {
             index += derived - 1;
             continue;
           }
+          const multiStack = compileMultiStackResidentTemps(this, statements, index);
+          if (multiStack > 1) {
+            index += multiStack - 1;
+            continue;
+          }
+          const stackTemp = this.compileSingleUseStackTemp(statements, index);
+          if (stackTemp > 1) {
+            index += stackTemp - 1;
+            continue;
+          }
         }
         if (statement.kind === "assign" && next?.kind === "if" && compileDecrementUnderflowBranch(this, statement, next)) {
           index += 1;
           continue;
         }
         if (statement.kind === "assign" && next?.kind === "if" && compileDecrementZeroBranch(this, statement, next)) {
+          index += 1;
+          continue;
+        }
+        if (statement.kind === "assign" && next?.kind === "if" && compileAssignThenDomainTrap(this, statement, next)) {
+          index += 1;
+          continue;
+        }
+        if (statement.kind === "assign" && next?.kind === "if" && this.compileAssignZeroFallback(statement, next)) {
+          index += 1;
+          continue;
+        }
+        if (statement.kind === "indexed_assign" && next?.kind === "if" && this.compileIndexedAssignThenDomainTrap(statement, next)) {
           index += 1;
           continue;
         }
@@ -18642,6 +22237,9 @@ var MKProEmulatorBundle = (() => {
         }
         if (statement.kind === "assign" && next?.kind === "while" && this.compileInitializedUnitDecrementWhile(statement, next)) {
           index += 1;
+          continue;
+        }
+        if (statement.kind === "while" && this.compileSetupInitializedUnitDecrementWhile(statement)) {
           continue;
         }
         if (statement.kind === "assign" && next?.kind === "assign" && compileTicTacToeCellMaskReuse(this, statement, next)) {
@@ -18704,6 +22302,16 @@ var MKProEmulatorBundle = (() => {
             continue;
           }
         }
+        if (statement.kind === "show" && next?.kind === "assign" && (statements[index + 2]?.kind === "assign" || statements[index + 2]?.kind === "indexed_assign") && statements[index + 3]?.kind === "if" && this.compileShowReadDebitCreditGuard(
+          statement,
+          next,
+          statements[index + 2],
+          statements[index + 3],
+          statements.slice(index + 4)
+        )) {
+          index += 3;
+          continue;
+        }
         if (statement.kind === "show" && next?.kind === "input" && statements[index + 2]?.kind === "assign" && statements[index + 3]?.kind === "if" && this.compileShowReadDecrementUnderflow(
           statement,
           next,
@@ -18720,6 +22328,10 @@ var MKProEmulatorBundle = (() => {
             index += 2;
             continue;
           }
+        }
+        if (statement.kind === "show" && (next?.kind === "return_value" || next?.kind === "assign") && this.compileShowReadStakeSinResult(statement, void 0, next)) {
+          index += 1;
+          continue;
         }
         if (statement.kind === "show" && next?.kind === "input" && statements[index + 2]?.kind === "if" && this.inputFeedsOnlyFollowingCondition(next, statements[index + 2])) {
           const branch = statements[index + 2];
@@ -18743,6 +22355,19 @@ var MKProEmulatorBundle = (() => {
             detail: `Dispatched directly on input ${next.target} at line ${next.line} without storing it.`
           });
           index += 2;
+          continue;
+        }
+        if (statement.kind === "show" && next?.kind === "assign" && expressionLeadsWithRead(next.expr)) {
+          compileShow(this, statement.display, statement.line);
+          this.armInputInX();
+          compileExpression(this, next.expr);
+          this.clearArmedInputInX();
+          this.emitStore(next.target, `set ${next.target}`, next.line);
+          this.optimizations.push({
+            name: "show-read-fusion",
+            detail: `Fused show ${statement.display} and the read in ${next.target} = ${expressionToIntentText(next.expr)} into one calculator stop at line ${next.line}.`
+          });
+          index += 1;
           continue;
         }
         if (statement.kind === "show" && next?.kind === "input") {
@@ -18780,6 +22405,102 @@ var MKProEmulatorBundle = (() => {
         this.compileStatement(statement);
       }
     }
+    compileLoopCarriedPrompt(statement) {
+      const prompt = loopCarriedPromptCandidate(this.ast, statement);
+      if (prompt === void 0 || !this.loopPromptInitials.has(prompt.name)) return false;
+      if (isZeroExpression(prompt.initial)) this.emitZero(`initial prompt ${prompt.name}`, prompt.showLine);
+      else compileExpression(this, prompt.initial);
+      const start = this.freshLabel("loop_prompt");
+      this.emitLabel(start);
+      this.currentXVariable = prompt.name;
+      this.currentXAliases = /* @__PURE__ */ new Set([prompt.name]);
+      this.emitOp(80, "\u0421/\u041F", `show ${prompt.display}`, prompt.showLine);
+      this.markCurrentX(prompt.input);
+      const body = statement.body.slice(2);
+      if (!this.compileLoopCarriedPromptReadTail(prompt, body)) {
+        this.emitStore(prompt.input, `read ${prompt.input}`, prompt.inputLine);
+        this.compileStatements(body);
+      }
+      if (!this.statementsEndMachineFlow(statement.body)) {
+        if (!emitKnownOneIndirectLoopBack(this, start, statement.line)) {
+          this.emitJump(81, "\u0411\u041F", start, "loop-carried prompt back", statement.line);
+        }
+      }
+      this.optimizations.push({
+        name: "loop-carried-prompt-x",
+        detail: `Used X as the carried display/input prompt ${prompt.name} for loop at line ${statement.line}.`
+      });
+      return true;
+    }
+    compileLoopCarriedPromptReadTail(prompt, body) {
+      const first = body[0];
+      if (first === void 0) return false;
+      if (first.kind === "if" && this.inputFeedsOnlyFollowingCondition(promptInputStatement(prompt), first)) {
+        compileIf(this, first, first.line);
+        this.compileStatements(body.slice(1));
+        this.optimizations.push({
+          name: "loop-carried-prompt-input-branch",
+          detail: `Branched directly on loop prompt input ${prompt.input} at line ${prompt.inputLine} without storing it.`
+        });
+        return true;
+      }
+      if (first.kind === "dispatch" && this.inputFeedsOnlyFollowingDispatch(promptInputStatement(prompt), first)) {
+        this.compileStatement(first);
+        this.compileStatements(body.slice(1));
+        this.optimizations.push({
+          name: "loop-carried-prompt-input-dispatch",
+          detail: `Dispatched directly on loop prompt input ${prompt.input} at line ${prompt.inputLine} without storing it.`
+        });
+        return true;
+      }
+      const decrement = body[0];
+      const branch = body[1];
+      const consumer = body[2];
+      if (decrement?.kind === "assign" && branch?.kind === "if" && (consumer?.kind === "dispatch" || consumer?.kind === "if") && this.compileLoopPromptReadDecrementUnderflow(prompt, decrement, branch, consumer)) {
+        this.compileStatement(consumer);
+        this.compileStatements(body.slice(3));
+        return true;
+      }
+      return false;
+    }
+    compileLoopPromptReadDecrementUnderflow(prompt, decrement, branch, consumer) {
+      const input = promptInputStatement(prompt);
+      if (!this.inputFeedsGuardedDecrementConsumer(input, decrement, branch, consumer)) return false;
+      const okLabel = this.freshLabel("decrement_ok");
+      this.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
+      this.emitNumberOrPreload("1");
+      this.emitOp(17, "-", `decrement/test ${decrement.target}`, decrement.line);
+      this.emitJump(92, "F x<0", okLabel, `decrement underflow ${decrement.target}`, branch.line);
+      this.compileStatements(branch.thenBody);
+      this.emitLabel(okLabel);
+      this.currentXVariable = void 0;
+      this.currentXAliases.clear();
+      this.currentXKnownZero = false;
+      this.emitStore(decrement.target, `set ${decrement.target}`, decrement.line);
+      this.emitOp(20, "X\u2194Y", `restore read ${prompt.input}`, prompt.inputLine);
+      this.markCurrentX(prompt.input);
+      this.optimizations.push({
+        name: "loop-carried-prompt-decrement-underflow",
+        detail: `Kept loop prompt input ${prompt.input} in Y while checking ${decrement.target} at lines ${prompt.inputLine}/${branch.line}.`
+      });
+      return true;
+    }
+    compileLoopCarriedPromptAssignment(statement) {
+      if (!this.loopPromptInitials.has(statement.target)) return false;
+      if (isZeroExpression(statement.expr)) this.emitZero(`set prompt ${statement.target}`, statement.line);
+      else if (statement.expr.kind === "identifier" && this.currentXAliases.has(statement.expr.name)) {
+      } else if (this.currentXVariable !== statement.target || !expressionEquals(statement.expr, { kind: "identifier", name: statement.target })) {
+        compileExpression(this, statement.expr);
+      }
+      this.currentXVariable = statement.target;
+      this.currentXAliases = /* @__PURE__ */ new Set([statement.target]);
+      this.scaledCoordVariables.delete(statement.target);
+      this.optimizations.push({
+        name: "loop-carried-prompt-x",
+        detail: `Left prompt ${statement.target} in X at line ${statement.line} instead of storing it.`
+      });
+      return true;
+    }
     compileInitializedUnitDecrementWhile(initializer, loop, intervening = []) {
       if (!unitPositiveWhileCondition(loop.condition, initializer.target)) return false;
       const initialValue = numericLiteralValue2(initializer.expr);
@@ -18809,6 +22530,421 @@ var MKProEmulatorBundle = (() => {
       });
       return true;
     }
+    compileSetupInitializedUnitDecrementWhile(loop) {
+      if (this.loweringOptions.setupOnlyCountedLoopInit !== true) return false;
+      if (this.currentProcedure !== void 0) return false;
+      if (!this.ast.entries[0]?.body.includes(loop)) return false;
+      const target = unitDecrementCountedWhileTarget(loop);
+      if (target === void 0) return false;
+      const field = findStateFieldInAst(this.ast, target);
+      if (field?.initial === void 0) return false;
+      const initialValue = numericLiteralValue2(field.initial);
+      if (initialValue === void 0 || !Number.isInteger(initialValue) || initialValue < 1) return false;
+      if (scalarReferencedOutsideLoop(this.ast, target, loop)) return false;
+      const register = this.allocation.registers[target];
+      if (register === void 0) return false;
+      const opcode = flOpcode(register);
+      if (opcode === void 0) return false;
+      const body = loop.body.slice(0, -1);
+      if (this.statementsEndMachineFlow(body)) return false;
+      const start = this.freshLabel("setup_counted_while");
+      this.emitLabel(start);
+      this.currentXVariable = void 0;
+      this.currentXAliases.clear();
+      this.currentXKnownZero = false;
+      this.scaledCoordVariables.clear();
+      this.compileStatements(body);
+      this.emitJump(opcode, getOpcode(opcode).name, start, `setup-counted while ${target}`, loop.line);
+      this.optimizations.push({
+        name: "setup-only-counted-loop-init",
+        detail: `Used setup initializer for ${target} and lowered while ${target} >= 1 through ${getOpcode(opcode).name} at line ${loop.line}.`
+      });
+      return true;
+    }
+    compilePreviousRandomStateRun(statements, index) {
+      const previous = statements[index];
+      const randomUpdate = statements[index + 1];
+      const consumer = statements[index + 2];
+      if (previous?.kind !== "assign" || randomUpdate === void 0 || consumer?.kind !== "assign") return 0;
+      if (consumer.target !== previous.target) return 0;
+      if (previous.expr.kind !== "identifier") return 0;
+      const seed = previous.expr.name;
+      if (this.randomUpdateTarget(randomUpdate) !== seed) return 0;
+      if (!expressionReferencesIdentifier(consumer.expr, previous.target)) return 0;
+      if (!expressionReferencesIdentifier(consumer.expr, seed)) return 0;
+      if (!expressionCanUsePreviousRandomPrefix(consumer.expr, previous.target, seed)) return 0;
+      if (!this.compileExpressionFromPreviousRandom(consumer.expr, previous.target, seed, consumer.line)) return 0;
+      this.emitStore(consumer.target, `set ${consumer.target}`, consumer.line);
+      this.optimizations.push({
+        name: "previous-random-stack-reuse",
+        detail: `Kept previous ${seed} in Y while updating ${seed} with random() for ${consumer.target} at line ${consumer.line}.`
+      });
+      return 3;
+    }
+    compilePreviousRandomBranchRun(statements, index) {
+      const previous = statements[index];
+      const randomUpdate = statements[index + 1];
+      const branch = statements[index + 2];
+      if (previous?.kind !== "assign" || randomUpdate === void 0 || branch?.kind !== "if") return 0;
+      if (previous.expr.kind !== "identifier") return 0;
+      const temp = previous.target;
+      const seed = previous.expr.name;
+      if (this.randomUpdateTarget(randomUpdate) !== seed) return 0;
+      if (statementsReadIdentifierBeforeWrite(statements.slice(index + 3), temp)) return 0;
+      if (!previousRandomLessThanCurrentCondition(branch.condition, temp, seed)) return 0;
+      this.emitRecall(seed, `previous random ${seed}`, previous.line);
+      this.emitOp(14, "\u0412\u2191", `previous random keep ${seed}`, randomUpdate.line);
+      this.emitOp(59, "\u041A \u0421\u0427", "random()", randomUpdate.line);
+      this.emitStore(seed, `set ${seed}`, randomUpdate.line);
+      this.emitOp(17, "-", "previous random compare", branch.line);
+      const falseLabel = this.freshLabel("previous_random_false");
+      const thenTerminates = this.statementsTerminate(branch.thenBody);
+      const endLabel = branch.elseBody !== void 0 && !thenTerminates ? this.freshLabel("previous_random_end") : void 0;
+      this.emitJump(92, "F x<0", falseLabel, "false branch for previous random <", branch.line);
+      this.compileStatements(branch.thenBody);
+      if (branch.elseBody !== void 0) {
+        if (endLabel !== void 0) this.emitJump(81, "\u0411\u041F", endLabel, "if end", branch.line);
+        this.emitLabel(falseLabel);
+        this.compileStatements(branch.elseBody);
+        if (endLabel !== void 0) this.emitLabel(endLabel);
+      } else {
+        this.emitLabel(falseLabel);
+      }
+      this.optimizations.push({
+        name: "previous-random-branch-stack-reuse",
+        detail: `Kept previous ${seed} in Y while updating ${seed} for a following branch at line ${branch.line}.`
+      });
+      return 3;
+    }
+    compilePreviousRandomFractionalDebitRun(statements, index) {
+      const previous = statements[index];
+      const randomUpdate = statements[index + 1];
+      const consumer = statements[index + 2];
+      const guarded = statements[index + 3];
+      if (previous?.kind !== "assign" || consumer?.kind !== "assign" || guarded?.kind !== "if") return 0;
+      const temp = previous.target;
+      if (consumer.target !== temp) return 0;
+      if (previous.expr.kind !== "identifier") return 0;
+      const seed = previous.expr.name;
+      if (this.randomUpdateTarget(randomUpdate) !== seed) return 0;
+      if (statementsReadIdentifierBeforeWrite(statements.slice(index + 4), temp)) return 0;
+      const plan = this.matchPreviousRandomFractionalDebit(consumer.expr, temp, seed, guarded);
+      if (plan === void 0) return 0;
+      const distanceAlreadyInX = index > 0 && statements[index - 1]?.kind === "indexed_assign" && expressionEquals(statements[index - 1].target, plan.distance);
+      if (!distanceAlreadyInX) {
+        this.emitAssignableRecall(plan.distance, `fractional debit ${this.assignableTargetText(plan.distance)}`, previous.line);
+      }
+      this.emitOp(53, "\u041A {x}", "fractional debit distance frac", previous.line);
+      this.emitRecall(seed, `previous random ${seed}`, previous.line);
+      this.emitOp(14, "\u0412\u2191", `previous random keep ${seed}`, randomUpdate.line);
+      this.emitOp(59, "\u041A \u0421\u0427", "random()", randomUpdate.line);
+      this.emitStore(seed, `set ${seed}`, randomUpdate.line);
+      this.emitOp(16, "+", "previous random + random()", consumer.line);
+      this.emitNumberOrPreload("1");
+      this.emitOp(16, "+", "previous random additive term", consumer.line);
+      this.emitNumberOrPreload(plan.factor);
+      this.emitOp(18, "*", "fractional debit factor", consumer.line);
+      this.emitAssignableRecall(plan.defense, `fractional debit divisor ${this.assignableTargetText(plan.defense)}`, consumer.line);
+      this.emitAssignableRecall(plan.distance, `fractional debit numerator ${this.assignableTargetText(plan.distance)}`, consumer.line);
+      this.emitOp(19, "/", "fractional debit distance ratio", consumer.line);
+      this.emitOp(19, "/", "fractional debit scaled step", consumer.line);
+      this.emitOp(52, "\u041A [x]", "fractional debit int step", consumer.line);
+      this.emitNumberOrPreload(plan.scale);
+      this.emitOp(19, "/", "fractional debit scale", consumer.line);
+      this.emitOp(17, "-", "fractional debit remaining distance", guarded.line);
+      this.emitOp(23, "F lg", "fractional debit domain-error guard trap", guarded.line);
+      this.emitOp(15, "F \u0412x", "fractional debit restore remaining distance", guarded.line);
+      this.emitAssignableRecall(plan.distance, `fractional debit integer ${this.assignableTargetText(plan.distance)}`, guarded.line);
+      this.emitOp(52, "\u041A [x]", "fractional debit integer part", guarded.line);
+      this.emitOp(16, "+", "fractional debit rebuild value", guarded.line);
+      this.emitAssignableStore(plan.distance, guarded.line);
+      this.optimizations.push({
+        name: "previous-random-fractional-debit",
+        detail: `Kept previous ${seed} and frac(${this.assignableTargetText(plan.distance)}) on the stack while applying guarded fractional debit${distanceAlreadyInX ? " and reused the just-stored distance in X" : ""}.`
+      });
+      return 4;
+    }
+    matchPreviousRandomFractionalDebit(expr, temp, seed, guarded) {
+      if (expr.kind !== "binary" || expr.op !== "/" || expr.right.kind !== "number") return void 0;
+      const scale = expr.right.raw;
+      const intCall = expr.left;
+      if (intCall.kind !== "call" || intCall.callee.toLowerCase() !== "int" || intCall.args.length !== 1) return void 0;
+      const ratio = intCall.args[0];
+      if (ratio.kind !== "binary" || ratio.op !== "/" || ratio.right.kind !== "indexed") return void 0;
+      const defense = ratio.right;
+      const withDistance = ratio.left;
+      if (withDistance.kind !== "binary" || withDistance.op !== "*" || withDistance.right.kind !== "indexed") return void 0;
+      const distance = withDistance.right;
+      const withFactor = withDistance.left;
+      if (withFactor.kind !== "binary" || withFactor.op !== "*" || withFactor.right.kind !== "number") return void 0;
+      const factor = withFactor.right.raw;
+      const additiveTerms2 = flattenAdditionTerms(withFactor.left);
+      if (additiveTerms2.length !== 3 || !additiveTerms2.some((term) => term.kind === "identifier" && term.name === temp) || !additiveTerms2.some((term) => term.kind === "identifier" && term.name === seed) || !additiveTerms2.some((term) => isNumericValue2(term, 1))) return void 0;
+      if (!this.fractionalDebitGuardMatches(guarded, distance, temp)) return void 0;
+      return { distance, defense, factor, scale };
+    }
+    fractionalDebitGuardMatches(guarded, distance, temp) {
+      if (guarded.condition.op !== "<=" || !isZeroExpression(guarded.condition.right)) return false;
+      const left = guarded.condition.left;
+      if (left.kind !== "binary" || left.op !== "-") return false;
+      const frac = left.left;
+      if (frac.kind !== "call" || frac.callee.toLowerCase() !== "frac" || frac.args.length !== 1 || !expressionEquals(frac.args[0], distance)) return false;
+      if (left.right.kind !== "identifier" || left.right.name !== temp) return false;
+      if (!statementsAreDomainErrorTrap(this, guarded.thenBody)) return false;
+      const update = guarded.elseBody?.[0];
+      return guarded.elseBody?.length === 1 && update?.kind === "indexed_assign" && expressionEquals(update.target, distance) && update.expr.kind === "binary" && update.expr.op === "-" && expressionEquals(update.expr.left, distance) && update.expr.right.kind === "identifier" && update.expr.right.name === temp;
+    }
+    compileSingleUseStackTemp(statements, index) {
+      const temp = statements[index];
+      const consumer = statements[index + 1];
+      if (temp?.kind !== "assign" || consumer === void 0) return 0;
+      if (!this.stackTempSourceIsSafe(temp.expr)) return 0;
+      if (expressionReferencesIdentifier(temp.expr, temp.target)) return 0;
+      const compileConsumer = (expr, emitResult) => {
+        if (countIdentifierReads(expr, temp.target) !== 1) return false;
+        if (!this.canCompileExpressionWithStackTemp(expr, temp.target)) return false;
+        compileExpression(this, temp.expr);
+        this.markCurrentX(temp.target);
+        this.compileExpressionWithStackTemp(expr, temp.target);
+        emitResult();
+        this.optimizations.push({
+          name: "stack-current-x-scheduling",
+          detail: `Kept single-use temp ${temp.target} in X for the following ${expressionToIntentText(expr)} at line ${consumer.line}.`
+        });
+        return true;
+      };
+      if (consumer.kind === "assign") {
+        if (!this.stackTempValueDeadAfterConsumer(temp.target, consumer.target, statements.slice(index + 2))) return 0;
+        return compileConsumer(consumer.expr, () => this.emitStore(consumer.target, `set ${consumer.target}`, consumer.line)) ? 2 : 0;
+      }
+      if (!this.stackTempValueDeadAfterConsumer(temp.target, void 0, statements.slice(index + 2))) return 0;
+      if (consumer.kind === "halt" && consumer.literal === void 0) {
+        return compileConsumer(consumer.expr, () => this.emitOp(80, "\u0421/\u041F", "halt", consumer.line)) ? 2 : 0;
+      }
+      if (consumer.kind === "pause") {
+        return compileConsumer(consumer.expr, () => this.emitOp(80, "\u0421/\u041F", "pause", consumer.line)) ? 2 : 0;
+      }
+      if (consumer.kind === "return_value") {
+        return compileConsumer(consumer.expr, () => this.emitOp(82, "\u0412/\u041E", "return value", consumer.line)) ? 2 : 0;
+      }
+      if (this.loweringOptions.stackResidentTemps === true && consumer.kind === "indexed_assign") {
+        return this.compileIndexedStackTempConsumer(temp, consumer) ? 2 : 0;
+      }
+      return 0;
+    }
+    // Stack-resident temp scheduling (LoweringOptions.stackResidentTemps): keep the
+    // value of `temp = e` in X across an indexed compound store
+    // `cells[i] op= temp` instead of spilling it to a register. The indexed recall
+    // of `cells[i]` auto-lifts the temp into Y, so `op` consumes both straight off
+    // the stack and no `X->П temp`/`П->X temp` pair is emitted. The selector is
+    // established BEFORE the temp value is computed (so its setup code, if any,
+    // cannot clobber X), then reused warm by the recall inside the consumer.
+    compileIndexedStackTempConsumer(temp, consumer) {
+      const expr = consumer.expr;
+      const target = consumer.target;
+      if (countIdentifierReads(expr, temp.target) !== 1) return false;
+      if (!this.canCompileExpressionWithStackTemp(expr, temp.target)) return false;
+      if (expressionReferencesIdentifier(target.index, temp.target)) return false;
+      if (!expressionReferencesIndexedCell(expr, target.base, target.field)) return false;
+      const numeric = numericIndexValue(target.index);
+      if (numeric === void 0) {
+        if (!expressionPureForSubstitution(target.index)) return false;
+        const selector = this.ensureIndexedSelector(target, consumer.line);
+        if (selector === void 0) return false;
+        compileExpression(this, temp.expr);
+        this.markCurrentX(temp.target);
+        this.compileExpressionWithStackTemp(expr, temp.target);
+        this.emitPreparedIndexedStore(target, selector, consumer.line);
+      } else {
+        compileExpression(this, temp.expr);
+        this.markCurrentX(temp.target);
+        this.compileExpressionWithStackTemp(expr, temp.target);
+        this.emitIndexedStore(target, consumer.line);
+      }
+      this.optimizations.push({
+        name: "stack-resident-indexed-temp",
+        detail: `Kept single-use temp ${temp.target} in X for the indexed update ${bankMemberKey(target.base, target.field)} at line ${consumer.line}.`
+      });
+      return true;
+    }
+    stackTempSourceIsSafe(expr) {
+      if (!expressionIsDeterministic(expr)) return false;
+      return !this.expressionCallsUserFunction(expr);
+    }
+    stackTempValueDeadAfterConsumer(temp, overwrittenByConsumer, tail) {
+      return overwrittenByConsumer === temp || !statementsReadIdentifier2(tail, temp);
+    }
+    canCompileExpressionWithStackTemp(expr, temp) {
+      if (countIdentifierReads(expr, temp) !== 1) return false;
+      switch (expr.kind) {
+        case "identifier":
+          return expr.name === temp;
+        case "unary":
+          return this.canCompileExpressionWithStackTemp(expr.expr, temp);
+        case "binary": {
+          const leftReads = countIdentifierReads(expr.left, temp);
+          const rightReads = countIdentifierReads(expr.right, temp);
+          if (leftReads === 1 && rightReads === 0) {
+            return this.canCompileExpressionWithStackTemp(expr.left, temp) && this.stackTempOtherOperandIsSafe(expr.right);
+          }
+          if (leftReads === 0 && rightReads === 1) {
+            return this.canCompileExpressionWithStackTemp(expr.right, temp) && this.stackTempOtherOperandIsSafe(expr.left) && (expr.op === "+" || expr.op === "*" || isSimpleStackLoad(expr.left));
+          }
+          return false;
+        }
+        case "call": {
+          const name = expr.callee.toLowerCase();
+          const unary = STACK_TEMP_UNARY_CALL_OPCODES2[name];
+          if (unary !== void 0) {
+            return expr.args.length === 1 && this.canCompileExpressionWithStackTemp(expr.args[0], temp);
+          }
+          const binary = STACK_TEMP_BINARY_CALL_OPCODES2[name];
+          if (binary === void 0 || expr.args.length !== 2) return false;
+          const left = expr.args[0];
+          const right = expr.args[1];
+          const leftReads = countIdentifierReads(left, temp);
+          const rightReads = countIdentifierReads(right, temp);
+          if (leftReads === 1 && rightReads === 0) {
+            return this.canCompileExpressionWithStackTemp(left, temp) && this.stackTempOtherOperandIsSafe(right) && isSimpleStackLoad(right);
+          }
+          if (leftReads === 0 && rightReads === 1) {
+            return this.canCompileExpressionWithStackTemp(right, temp) && this.stackTempOtherOperandIsSafe(left) && isSimpleStackLoad(left);
+          }
+          return false;
+        }
+        case "number":
+        case "string":
+        case "indexed":
+          return false;
+      }
+    }
+    stackTempOtherOperandIsSafe(expr) {
+      return expressionIsDeterministic(expr) && !this.expressionCallsUserFunction(expr);
+    }
+    expressionCallsUserFunction(expr) {
+      return expressionCallCallees(expr).some((callee) => !STACK_TEMP_SAFE_CALLS.has(callee.toLowerCase()));
+    }
+    compileExpressionWithStackTemp(expr, temp) {
+      switch (expr.kind) {
+        case "identifier":
+          return;
+        case "unary":
+          this.compileExpressionWithStackTemp(expr.expr, temp);
+          this.emitOp(11, "/-/", "stack temp unary minus");
+          return;
+        case "binary": {
+          const leftReads = countIdentifierReads(expr.left, temp);
+          const rightReads = countIdentifierReads(expr.right, temp);
+          if (leftReads === 1) {
+            this.compileExpressionWithStackTemp(expr.left, temp);
+            compileExpression(this, expr.right);
+            this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
+            return;
+          }
+          this.compileExpressionWithStackTemp(expr.right, temp);
+          compileExpression(this, expr.left);
+          if (expr.op !== "+" && expr.op !== "*") this.emitOp(20, "X\u2194Y", "stack temp operand order");
+          this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`);
+          return;
+        }
+        case "call": {
+          const name = expr.callee.toLowerCase();
+          const unary = STACK_TEMP_UNARY_CALL_OPCODES2[name];
+          if (unary !== void 0) {
+            this.compileExpressionWithStackTemp(expr.args[0], temp);
+            this.emitOp(unary[0], unary[1], `${expr.callee}()`);
+            return;
+          }
+          const binary = STACK_TEMP_BINARY_CALL_OPCODES2[name];
+          const left = expr.args[0];
+          const right = expr.args[1];
+          if (countIdentifierReads(left, temp) === 1) {
+            this.compileExpressionWithStackTemp(left, temp);
+            compileExpression(this, right);
+          } else {
+            this.compileExpressionWithStackTemp(right, temp);
+            compileExpression(this, left);
+          }
+          this.emitOp(binary[0], binary[1], `${expr.callee}()`);
+          return;
+        }
+        case "number":
+        case "string":
+        case "indexed":
+          return;
+      }
+    }
+    randomUpdateTarget(statement) {
+      if (statement.kind === "call") return this.randomUpdateProcTarget(statement.block);
+      if (statement.kind === "assign" && statement.expr.kind === "call" && statement.expr.callee.toLowerCase() === "random" && statement.expr.args.length === 0) {
+        return statement.target;
+      }
+      return void 0;
+    }
+    randomUpdateProcTarget(name) {
+      const proc = this.ast.procs.find((candidate) => candidate.name === name);
+      if (proc === void 0 || proc.body.length !== 1) return void 0;
+      const statement = proc.body[0];
+      if (statement?.kind !== "assign") return void 0;
+      if (statement.expr.kind !== "call" || statement.expr.callee.toLowerCase() !== "random" || statement.expr.args.length !== 0) {
+        return void 0;
+      }
+      return statement.target;
+    }
+    compileExpressionFromPreviousRandom(expr, previous, seed, line) {
+      this.emitRecall(seed, `previous random ${seed}`, line);
+      this.emitOp(14, "\u0412\u2191", `previous random keep ${seed}`, line);
+      this.emitOp(59, "\u041A \u0421\u0427", "random()", line);
+      this.currentXVariable = void 0;
+      this.currentXAliases.clear();
+      this.currentXKnownZero = false;
+      this.emitStore(seed, `set ${seed}`, line);
+      return this.compileExpressionWithPreviousRandomPrefix(expr, previous, seed, line);
+    }
+    compileExpressionWithPreviousRandomPrefix(expr, previous, seed, line) {
+      const additiveTerms2 = previousRandomAdditiveRest(expr, previous, seed);
+      if (additiveTerms2 !== void 0) {
+        this.emitOp(16, "+", "previous random + random()", line);
+        this.currentXVariable = void 0;
+        this.currentXAliases.clear();
+        this.currentXKnownZero = false;
+        for (const term of additiveTerms2) {
+          compileExpression(this, term);
+          this.emitOp(16, "+", "previous random additive term", line);
+          this.currentXVariable = void 0;
+          this.currentXAliases.clear();
+          this.currentXKnownZero = false;
+        }
+        return true;
+      }
+      if (expr.kind === "binary") {
+        if (this.compileExpressionWithPreviousRandomPrefix(expr.left, previous, seed, line)) {
+          compileExpression(this, expr.right);
+          this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`, line);
+          this.currentXVariable = void 0;
+          this.currentXAliases.clear();
+          this.currentXKnownZero = false;
+          return true;
+        }
+        if ((expr.op === "+" || expr.op === "*") && this.compileExpressionWithPreviousRandomPrefix(expr.right, previous, seed, line)) {
+          compileExpression(this, expr.left);
+          this.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`, line);
+          this.currentXVariable = void 0;
+          this.currentXAliases.clear();
+          this.currentXKnownZero = false;
+          return true;
+        }
+        return false;
+      }
+      if (expr.kind === "call" && expr.callee.toLowerCase() === "int" && expr.args.length === 1 && this.compileExpressionWithPreviousRandomPrefix(expr.args[0], previous, seed, line)) {
+        this.emitOp(52, "\u041A [x]", "int()", line);
+        this.currentXVariable = void 0;
+        this.currentXAliases.clear();
+        this.currentXKnownZero = false;
+        return true;
+      }
+      return false;
+    }
     compilePreincrementIndexedStore(store, increment) {
       const pointer = increment.target;
       if (!isUnitIncrementExpression(pointer, increment.expr)) return false;
@@ -18836,6 +22972,42 @@ var MKProEmulatorBundle = (() => {
       });
       return true;
     }
+    compileAssignZeroFallback(assign, branch) {
+      if (branch.elseBody !== void 0 || branch.thenBody.length !== 1) return false;
+      if (!conditionTestsIdentifierAgainstZero(branch.condition, assign.target, "==")) return false;
+      const fallback = branch.thenBody[0];
+      if (fallback?.kind !== "assign" || fallback.target !== assign.target) return false;
+      if (expressionReferencesIdentifier(fallback.expr, assign.target)) return false;
+      if (!expressionPureForSubstitution(assign.expr) || !expressionPureForSubstitution(fallback.expr)) return false;
+      compileExpression(this, assign.expr);
+      const storeLabel = this.freshLabel("zero_fallback_store");
+      this.emitJump(94, "F x=0", storeLabel, `zero fallback ${assign.target}`, branch.line);
+      compileExpression(this, fallback.expr);
+      this.emitLabel(storeLabel);
+      this.emitStore(assign.target, `set ${assign.target}`, assign.line);
+      this.optimizations.push({
+        name: "assign-zero-fallback-store",
+        detail: `Deferred storing ${assign.target} until after its zero fallback at lines ${assign.line}/${branch.line}.`
+      });
+      return true;
+    }
+    compileIndexedAssignThenDomainTrap(assign, branch) {
+      if (!statementsAreDomainErrorTrap(this, branch.thenBody)) return false;
+      const trap = indexedZeroDomainTrap(branch.condition, assign.target);
+      if (trap === void 0) return false;
+      this.compileStatement(assign);
+      this.emitOp(trap.opcode, trap.mnemonic, "indexed assign domain-error guard trap", branch.line);
+      this.currentXVariable = void 0;
+      this.currentXAliases.clear();
+      this.currentXKnownZero = false;
+      this.scaledCoordVariables.clear();
+      if (branch.elseBody !== void 0) this.compileStatements(branch.elseBody);
+      this.optimizations.push({
+        name: "indexed-assign-zero-domain-guard",
+        detail: `Fused indexed store and "${branch.condition.op} 0" terminal-error branch through ${trap.mnemonic}.`
+      });
+      return true;
+    }
     compileInitializedUnitDecrementWhileRun(statements, index) {
       const initializer = statements[index];
       if (initializer?.kind !== "assign") return 0;
@@ -18856,23 +23028,150 @@ var MKProEmulatorBundle = (() => {
       return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
     }
     inputFeedsOnlyFollowingDispatch(input, dispatch) {
-      if (!dispatchUsesNumericResidualChain(dispatch)) return false;
-      const reads = countIdentifierReads(dispatch.expr, input.target);
+      const optimized = optimizeDispatchDefaultCases(dispatch).statement;
+      if (!dispatchUsesNumericResidualChain(optimized)) return false;
+      const reads = countIdentifierReads(optimized.expr, input.target);
       return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
     }
-    compileShowReadDecrementUnderflow(show, input, decrement, branch, consumer) {
+    inputFeedsGuardedDecrementConsumer(input, decrement, branch, consumer) {
       if (!isUnitDecrementExpression(decrement.target, decrement.expr)) return false;
       if (branch.elseBody !== void 0) return false;
       if (!decrementUnderflowCondition(branch.condition, decrement.target)) return false;
       if (!this.statementsTerminate(branch.thenBody)) return false;
       if (this.allocation.registers[decrement.target] === void 0) return false;
-      if (consumer?.kind === "dispatch") {
-        if (!this.inputFeedsOnlyFollowingDispatch(input, consumer)) return false;
-      } else if (consumer?.kind === "if") {
-        if (!this.inputFeedsOnlyFollowingCondition(input, consumer)) return false;
-      } else {
-        return false;
+      return consumer.kind === "dispatch" ? this.inputFeedsOnlyFollowingDispatch(input, consumer) : this.inputFeedsOnlyFollowingCondition(input, consumer);
+    }
+    compileShowReadDebitCreditGuard(show, input, debit, branch, tail) {
+      if (this.loweringOptions.domainErrorGuards !== true || this.loweringOptions.showReadDebitCreditGuard !== true) return false;
+      const temp = input.target;
+      if (!this.readTransformIsStackDebitSafe(input.expr)) return false;
+      if (statementsReadIdentifier2(tail, temp)) return false;
+      if (!this.assignmentIsSelfUpdate(debit, "-", temp)) return false;
+      if (!this.conditionIsNegativeTargetGuard(branch.condition, debit.target)) return false;
+      if (!statementsAreDomainErrorTrap(this, branch.thenBody)) return false;
+      const elseBody = branch.elseBody;
+      if (elseBody === void 0 || elseBody.length < 2) return false;
+      const credit = elseBody[0];
+      const creditGuard = elseBody[1];
+      if (credit?.kind !== "assign" && credit?.kind !== "indexed_assign") return false;
+      if (!this.assignmentIsSelfUpdate(credit, "+", temp)) return false;
+      if (creditGuard?.kind !== "if") return false;
+      if (!this.conditionIsNegativeTargetGuard(creditGuard.condition, credit.target)) return false;
+      if (!statementsAreDomainErrorTrap(this, creditGuard.thenBody)) return false;
+      const continuation = creditGuard.elseBody ?? elseBody.slice(2);
+      if (creditGuard.elseBody !== void 0 && elseBody.length !== 2) return false;
+      if (statementsReadIdentifier2(continuation, temp)) return false;
+      compileShow(this, show.display, show.line);
+      this.armInputInX();
+      compileExpression(this, input.expr);
+      this.clearArmedInputInX();
+      this.emitAssignableRecall(debit.target, `debit ${this.assignableTargetText(debit.target)}`, debit.line);
+      this.emitOp(20, "X\u2194Y", "debit input order", debit.line);
+      this.emitOp(17, "-", "debit input", debit.line);
+      this.emitAssignableStore(debit.target, debit.line);
+      const trap = this.freshLabel("debit_credit_trap");
+      this.emitJump(89, "F x>=0", trap, "debit negative trap", branch.line);
+      this.emitOp(15, "F \u0412x", "restore debited input", input.line);
+      this.emitAssignableRecall(credit.target, `credit ${this.assignableTargetText(credit.target)}`, credit.line);
+      this.emitOp(16, "+", "credit input", credit.line);
+      this.emitAssignableStore(credit.target, credit.line);
+      this.emitLabel(trap);
+      this.emitOp(33, "F \u221A", "debit/credit domain-error guard trap", creditGuard.line);
+      this.currentXVariable = void 0;
+      this.currentXAliases.clear();
+      this.currentXKnownZero = false;
+      this.scaledCoordVariables.clear();
+      this.compileStatements(continuation);
+      this.optimizations.push({
+        name: "show-read-debit-credit-guard",
+        detail: `Kept read ${temp} on the stack while debiting ${this.assignableTargetText(debit.target)} and crediting ${this.assignableTargetText(credit.target)}.`
+      });
+      return true;
+    }
+    readTransformIsStackDebitSafe(expr) {
+      if (expr.kind === "call" && expr.callee.toLowerCase() === "read") return expr.args.length === 0;
+      if (expr.kind !== "call" || expr.args.length !== 1) return false;
+      const callee = expr.callee.toLowerCase();
+      return (callee === "int" || callee === "frac") && this.readTransformIsStackDebitSafe(expr.args[0]);
+    }
+    assignmentIsSelfUpdate(statement, op, temp) {
+      const expr = statement.expr;
+      if (expr.kind !== "binary" || expr.op !== op) return false;
+      if (!expressionEquals(expr.left, this.assignableTargetExpression(statement.target))) return false;
+      return expr.right.kind === "identifier" && expr.right.name === temp;
+    }
+    compileRepeatedXParamSelfAssignment(first, second) {
+      const firstMatch = this.matchXParamSelfAssignment(first);
+      if (firstMatch === void 0) return 0;
+      const secondMatch = this.matchXParamSelfAssignment(second);
+      if (secondMatch === void 0) return 0;
+      if (firstMatch.callee !== secondMatch.callee) return 0;
+      if (!expressionEquals(
+        this.assignableTargetExpression(first.target),
+        this.assignableTargetExpression(second.target)
+      )) return 0;
+      const proc = this.functionProcs.get(firstMatch.callee);
+      if (proc === void 0 || matchXParamReturnDecay(proc) === void 0) return 0;
+      this.emitAssignableRecall(first.target, `repeated ${firstMatch.callee} base ${this.assignableTargetText(first.target)}`, first.line);
+      this.emitXParamFunctionCall(proc, first.line);
+      this.emitXParamFunctionCall(proc, second.line);
+      this.emitAssignableStore(first.target, second.line);
+      this.optimizations.push({
+        name: "repeated-x-param-self-assignment",
+        detail: `Applied ${firstMatch.callee} twice to ${this.assignableTargetText(first.target)} without an intermediate store/reload.`
+      });
+      return 2;
+    }
+    matchXParamSelfAssignment(statement) {
+      const expr = statement.expr;
+      if (expr.kind !== "call" || expr.args.length !== 1) return void 0;
+      if (!expressionEquals(expr.args[0], this.assignableTargetExpression(statement.target))) return void 0;
+      return { callee: expr.callee };
+    }
+    emitXParamFunctionCall(proc, line) {
+      const bankSelectors = this.snapshotBankSelectorCache();
+      this.emitJump(83, "\u041F\u041F", proc.name, `call function ${proc.name}`, line);
+      this.restoreBankSelectorCacheAfterCall(proc.name, bankSelectors);
+      this.optimizations.push({
+        name: "x-param-return-decay-call",
+        detail: `Passed current X to ${proc.name}.`
+      });
+    }
+    conditionIsNegativeTargetGuard(condition, target) {
+      return condition.op === "<" && expressionEquals(condition.left, this.assignableTargetExpression(target)) && isZeroExpression(condition.right);
+    }
+    emitAssignableRecall(target, comment, line) {
+      if (typeof target === "string") {
+        this.emitRecall(target, comment, line);
+        return;
       }
+      const constantIndex = numericIndexValue(target.index);
+      if (constantIndex !== void 0) {
+        const resolved = findStateBankMember(this.ast, target);
+        const element = resolved === void 0 ? void 0 : stateBankElementForIndex(resolved.member, constantIndex);
+        if (element !== void 0) {
+          this.emitRecall(element.name, comment, line);
+          return;
+        }
+      }
+      this.emitIndexedRecall(target, line);
+    }
+    emitAssignableStore(target, line) {
+      if (typeof target === "string") {
+        this.emitStore(target, `set ${target}`, line);
+        return;
+      }
+      this.emitIndexedStore(target, line);
+    }
+    assignableTargetExpression(target) {
+      return typeof target === "string" ? { kind: "identifier", name: target } : target;
+    }
+    assignableTargetText(target) {
+      return typeof target === "string" ? target : expressionToIntentText(target);
+    }
+    compileShowReadDecrementUnderflow(show, input, decrement, branch, consumer) {
+      if (consumer?.kind !== "dispatch" && consumer?.kind !== "if") return false;
+      if (!this.inputFeedsGuardedDecrementConsumer(input, decrement, branch, consumer)) return false;
       compileShow(this, show.display, show.line);
       const okLabel = this.freshLabel("decrement_ok");
       this.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
@@ -18896,17 +23195,25 @@ var MKProEmulatorBundle = (() => {
     compileShowReadStakeSinResult(show, input, consumer) {
       const stake = this.singlePlainDisplaySource(show.display);
       if (stake === void 0) return false;
-      const inputReads = countIdentifierReads(consumer.expr, input.target);
-      if (inputReads === 0 || (this.readCounts.get(input.target) ?? 0) !== inputReads) return false;
-      if (!matchStakeSinInputExpression(consumer.expr, stake, input.target)) return false;
+      let match;
+      if (input !== void 0) {
+        const inputReads = countIdentifierReads(consumer.expr, input.target);
+        if (inputReads === 0 || (this.readCounts.get(input.target) ?? 0) !== inputReads) return false;
+        match = matchStackStopRisk(consumer.expr, stake, input.target);
+      } else {
+        match = matchStackStopRisk(consumer.expr, stake);
+      }
+      if (match === void 0) return false;
       this.emitRecall(stake, `display ${show.display} source`, show.line);
       this.emitOp(14, "\u0412\u2191", "keep displayed stake in Y", show.line);
       this.emitOp(80, "\u0421/\u041F", `show ${show.display}`, show.line);
-      this.emitOp(28, "F sin", `risk input ${input.target}`, input.line);
-      this.emitOp(1, "1", "risk multiplier", consumer.line);
-      this.emitOp(16, "+", "risk multiplier", consumer.line);
-      this.emitOp(18, "*", "risk stake", consumer.line);
-      this.emitOp(52, "\u041A [x]", "risk integer result", consumer.line);
+      this.armValueInY(stake);
+      compileStackStopRiskTail(this, match, {
+        inputComment: input === void 0 ? "risk input read()" : `risk input ${input.target}`,
+        inputLine: input?.line ?? consumer.line,
+        consumerLine: consumer.line
+      });
+      this.clearArmedValueInY();
       if (consumer.kind === "return_value") {
         this.emitOp(82, "\u0412/\u041E", "return value", consumer.line);
       } else {
@@ -18931,6 +23238,27 @@ var MKProEmulatorBundle = (() => {
       this.currentXKnownZero = false;
       this.currentXDashedCoordReportBody = void 0;
     }
+    armInputInX() {
+      this.inputArmedInX = true;
+    }
+    clearArmedInputInX() {
+      this.inputArmedInX = false;
+    }
+    // Record that `name` is parked in Y across a stop (after a В↑/stop head), so
+    // the stack-stop scheduler can keep it resident for the trailing binary op.
+    armValueInY(name) {
+      this.parkedYVariable = name;
+    }
+    clearArmedValueInY() {
+      this.parkedYVariable = void 0;
+    }
+    consumeArmedInputInX() {
+      if (!this.inputArmedInX) return false;
+      this.inputArmedInX = false;
+      this.currentXVariable = void 0;
+      this.currentXAliases.clear();
+      return true;
+    }
     haltDisplaysSameValue(show, halt) {
       const display = this.ast.displays.find((candidate) => candidate.name === show.display);
       if (display === void 0 || display.items.length !== 1) return false;
@@ -18938,6 +23266,47 @@ var MKProEmulatorBundle = (() => {
       if (item?.kind !== "source") return false;
       const field = this.findStateField(item.name);
       return field?.initial !== void 0 && expressionEquals(field.initial, halt.expr);
+    }
+    compileTailFunctionReturn(statement) {
+      const current = this.currentProcedure;
+      const expr = statement.expr;
+      if (current === void 0 || expr.kind !== "call") return false;
+      const target = this.functionProcs.get(expr.callee);
+      if (target === void 0) return false;
+      const params = target.params ?? [];
+      if (expr.args.length !== params.length) {
+        this.diagnostics.push(buildDiagnostic(
+          "error",
+          `Function ${target.name} expects ${params.length} argument(s), got ${expr.args.length}.`,
+          statement.line
+        ));
+        return true;
+      }
+      const xParamDecay = matchXParamReturnDecay(target);
+      if (xParamDecay !== void 0 && expr.args.length === 1) {
+        compileExpression(this, expr.args[0]);
+        this.emitJump(81, "\u0411\u041F", target.name, `tail call function ${target.name}`, statement.line);
+        this.reportFunctionTailCall(current.name, target.name, statement.line);
+        return true;
+      }
+      for (let index = 0; index < expr.args.length; index += 1) {
+        compileExpression(this, expr.args[index]);
+        this.emitStore(functionTailArgScratchName(target.name, index), `tail arg ${params[index]} for ${target.name}`, statement.line);
+      }
+      for (let index = 0; index < params.length; index += 1) {
+        const param = params[index];
+        this.emitRecall(functionTailArgScratchName(target.name, index), `tail arg ${param} for ${target.name}`, statement.line);
+        this.emitStore(param, `tail param ${param} for ${target.name}`, statement.line);
+      }
+      this.emitJump(81, "\u0411\u041F", target.name, `tail call function ${target.name}`, statement.line);
+      this.reportFunctionTailCall(current.name, target.name, statement.line);
+      return true;
+    }
+    reportFunctionTailCall(source, target, line) {
+      this.optimizations.push({
+        name: source === target ? "function-tail-recursion" : "function-tail-call",
+        detail: source === target ? `Compiled tail-recursive call in ${source} as a direct jump at line ${line}.` : `Compiled tail call from ${source} to ${target} as a direct jump at line ${line}.`
+      });
     }
     compileStatement(statement) {
       switch (statement.kind) {
@@ -18976,6 +23345,7 @@ var MKProEmulatorBundle = (() => {
           this.emitOp(80, "\u0421/\u041F", "halt", statement.line);
           return;
         case "assign":
+          if (this.compileLoopCarriedPromptAssignment(statement)) return;
           if (compileCoordListLineCountAssignment(this, statement)) return;
           if (compileUnitDecrement(this, statement)) return;
           if (compileUnitIncrement(this, statement)) return;
@@ -18983,6 +23353,10 @@ var MKProEmulatorBundle = (() => {
           if (isZeroExpression(statement.expr)) this.emitZero(`set ${statement.target}`, statement.line);
           else compileExpression(this, statement.expr);
           this.emitStore(statement.target, `set ${statement.target}`, statement.line);
+          return;
+        case "coord_list_remove":
+          if (compileCoordListRemove(this, statement)) return;
+          this.diagnostics.push(buildDiagnostic("error", `Cannot lower removable coord_list '${statement.list}'.`, statement.line));
           return;
         case "indexed_assign":
           if (numericIndexValue(statement.target.index) === void 0) {
@@ -19002,6 +23376,7 @@ var MKProEmulatorBundle = (() => {
           this.emitIndexedStore(statement.target, statement.line);
           return;
         case "loop": {
+          if (this.compileLoopCarriedPrompt(statement)) return;
           const start = this.freshLabel("loop");
           this.emitLabel(start);
           this.currentXVariable = void 0;
@@ -19047,6 +23422,7 @@ var MKProEmulatorBundle = (() => {
           compileRawStatement(this, statement);
           return;
         case "return_value":
+          if (this.compileTailFunctionReturn(statement)) return;
           compileExpression(this, statement.expr);
           this.emitOp(82, "\u0412/\u041E", "return value", statement.line);
           return;
@@ -19198,16 +23574,20 @@ var MKProEmulatorBundle = (() => {
     }
     membershipSetPrefix(statements, membership) {
       const first = statements[0];
-      if (first?.kind === "assign" && isBitSetAssignment(first, membership)) {
-        return { set: first, tail: statements.slice(1) };
+      if (first?.kind === "assign") {
+        const matched2 = matchAnyBitSetAssignment(first, membership);
+        if (matched2 !== void 0) return { set: first, collection: matched2.collection, tail: statements.slice(1) };
       }
       if (first?.kind !== "call" || !this.inlineProcNames.has(first.block)) return void 0;
       const proc = this.ast.procs.find((candidate) => candidate.name === first.block);
       if (proc === void 0) return void 0;
       const set = proc.body[0];
-      if (set?.kind !== "assign" || !isBitSetAssignment(set, membership)) return void 0;
+      if (set?.kind !== "assign") return void 0;
+      const matched = matchAnyBitSetAssignment(set, membership);
+      if (matched === void 0) return void 0;
       return {
         set,
+        collection: matched.collection,
         tail: [...proc.body.slice(1), ...statements.slice(1)]
       };
     }
@@ -19488,19 +23868,20 @@ var MKProEmulatorBundle = (() => {
     variableLeadingMantissaMaskDisplayTemplate(display) {
       return this.planDisplay(display).find((plan) => plan.kind === "variable-leading-cells")?.template;
     }
+    displayFieldBounds(source) {
+      return displayFieldBoundsForAst(this.ast, source);
+    }
     displayFieldFitsUnsignedWidth(field) {
-      const state = this.findStateField(field.name);
-      if (state === void 0) return false;
-      const min = state.min ?? 0;
-      const max = state.max ?? min;
-      return min >= 0 && max < 10 ** field.width;
+      const bounds = this.displayFieldBounds(field.name);
+      if (bounds === void 0) return false;
+      return bounds.min >= 0 && bounds.max < 10 ** field.width;
     }
     displayFieldCanBeZero(field) {
-      const state = this.findStateField(field.name);
-      return state === void 0 || (state.min ?? 0) <= 0;
+      const bounds = this.displayFieldBounds(field.name);
+      return bounds === void 0 || bounds.min <= 0;
     }
     displayFieldMin(field) {
-      return this.findStateField(field.name)?.min;
+      return this.displayFieldBounds(field.name)?.min;
     }
     displayTemplateScratchRegisters(display) {
       const value = displayTemplateValueScratchName(display);
@@ -19531,11 +23912,9 @@ var MKProEmulatorBundle = (() => {
       return display.sources.length <= 1 && display.items.every((item) => item.kind === "source" && item.width === void 0);
     }
     naturalDisplayWidth(source) {
-      const field = this.findStateField(source);
-      if (field === void 0) return 1;
-      const min = field.min ?? 0;
-      const max = field.max ?? min;
-      const magnitude = Math.max(Math.abs(min), Math.abs(max));
+      const bounds = this.displayFieldBounds(source);
+      if (bounds === void 0) return 1;
+      const magnitude = Math.max(Math.abs(bounds.min), Math.abs(bounds.max));
       return Math.max(1, String(Math.trunc(magnitude)).length);
     }
     reportPackedDisplayLowering(display) {
@@ -19719,7 +24098,7 @@ var MKProEmulatorBundle = (() => {
       return template;
     }
     coordListUsesScaledDecimalStorage(callOrList) {
-      const listName = typeof callOrList === "string" ? callOrList : coordListNameFromItems(callOrList.items);
+      const listName = typeof callOrList === "string" ? callOrList : coordListNameFromItems2(callOrList.items);
       return listName !== void 0 && this.scaledCoordLists.has(listName);
     }
     scaleCoordListCellInPlace(cell, line) {
@@ -19938,7 +24317,19 @@ var MKProEmulatorBundle = (() => {
         });
         return;
       }
+      if (this.emitter.machineEntryOpen) {
+        this.emitOp(13, "Cx", comment, sourceLine);
+        this.currentXKnownZero = true;
+        this.optimizations.push({
+          name: "constant-synthesis",
+          detail: `Loaded zero with Cx${comment === void 0 ? "" : ` for ${comment}`} instead of opening a separated numeric literal.`
+        });
+        return;
+      }
       this.emitNumber("0");
+      this.currentXVariable = void 0;
+      this.currentXAliases.clear();
+      this.currentXKnownZero = true;
       if (comment !== void 0) {
         const last = this.items.at(-1);
         if (last?.kind === "op" && last.comment === void 0) last.comment = comment;
@@ -19956,7 +24347,156 @@ var MKProEmulatorBundle = (() => {
         });
         return;
       }
+      const directCost = estimateNumberCost2(raw) + (this.emitter.machineEntryOpen ? 1 : 0);
+      const synthesis = this.findConstantSynthesis(normalized, directCost);
+      if (synthesis !== void 0) {
+        this.emitConstantSynthesis(normalized, synthesis, directCost);
+        return;
+      }
       this.emitNumber(raw);
+    }
+    findConstantSynthesis(normalized, directCost) {
+      const target = Number(normalized);
+      if (!Number.isFinite(target)) return void 0;
+      let best;
+      const accept = (plan) => {
+        if (plan.cost >= directCost) return;
+        if (best !== void 0 && best.cost <= plan.cost) return;
+        best = plan;
+      };
+      const entries = Object.entries(this.allocation.constants).map(([value, register]) => ({ value, register, numeric: Number(value) })).filter((entry) => Number.isFinite(entry.numeric));
+      const byValue = new Map(entries.map((entry) => [entry.value, entry]));
+      const negated = normalizeConstantLiteral(String(-target));
+      const negatedEntry = byValue.get(negated);
+      if (negatedEntry !== void 0) {
+        accept({
+          kind: "unary",
+          cost: 2,
+          sourceValue: negatedEntry.value,
+          sourceRegister: negatedEntry.register,
+          opcode: 11,
+          mnemonic: "/-/",
+          detail: `changed the sign of preloaded R${negatedEntry.register} (${negatedEntry.value})`
+        });
+      }
+      if (Number.isSafeInteger(target) && target >= 0) {
+        for (const entry of entries) {
+          if (!Number.isSafeInteger(entry.numeric)) continue;
+          const squared = entry.numeric * entry.numeric;
+          if (!Number.isSafeInteger(squared)) continue;
+          if (normalizeConstantLiteral(String(squared)) !== normalized) continue;
+          accept({
+            kind: "unary",
+            cost: 2,
+            sourceValue: entry.value,
+            sourceRegister: entry.register,
+            opcode: 34,
+            mnemonic: "F x^2",
+            detail: `squared preloaded R${entry.register} (${entry.value})`
+          });
+        }
+      }
+      for (const entry of entries) {
+        if (!Number.isSafeInteger(entry.numeric)) continue;
+        const doubled = entry.numeric * 2;
+        if (Number.isSafeInteger(doubled) && normalizeConstantLiteral(String(doubled)) === normalized) {
+          accept({
+            kind: "unary-sequence",
+            cost: 3,
+            sourceValue: entry.value,
+            sourceRegister: entry.register,
+            ops: [
+              { opcode: 14, mnemonic: "\u0412\u2191", comment: "stack" },
+              { opcode: 16, mnemonic: "+", comment: "" }
+            ],
+            detail: `doubled preloaded R${entry.register} (${entry.value})`
+          });
+        }
+        if (entry.numeric % 2 === 0) {
+          const half = entry.numeric / 2;
+          if (Number.isSafeInteger(half) && normalizeConstantLiteral(String(half)) === normalized) {
+            accept({
+              kind: "unary-sequence",
+              cost: 3,
+              sourceValue: entry.value,
+              sourceRegister: entry.register,
+              ops: [
+                { opcode: 2, mnemonic: "2", comment: "divisor" },
+                { opcode: 19, mnemonic: "/", comment: "" }
+              ],
+              detail: `halved preloaded R${entry.register} (${entry.value})`
+            });
+          }
+        }
+      }
+      for (const left of entries) {
+        if (!Number.isSafeInteger(left.numeric)) continue;
+        for (const right of entries) {
+          if (!Number.isSafeInteger(right.numeric)) continue;
+          const candidates = [
+            { op: "+", value: left.numeric + right.numeric },
+            { op: "-", value: left.numeric - right.numeric },
+            { op: "*", value: left.numeric * right.numeric }
+          ];
+          if (right.numeric !== 0 && left.numeric % right.numeric === 0) {
+            candidates.push({ op: "/", value: left.numeric / right.numeric });
+          }
+          if (left.numeric > 0 && right.numeric >= 0 && right.numeric <= 12) {
+            candidates.push({ op: "pow", value: left.numeric ** right.numeric });
+          }
+          for (const candidate of candidates) {
+            if (!Number.isSafeInteger(candidate.value)) continue;
+            if (normalizeConstantLiteral(String(candidate.value)) !== normalized) continue;
+            accept({
+              kind: "binary",
+              cost: 4,
+              leftValue: left.value,
+              leftRegister: left.register,
+              rightValue: right.value,
+              rightRegister: right.register,
+              op: candidate.op,
+              detail: `combined preloaded R${left.register} (${left.value}) and R${right.register} (${right.value}) with ${candidate.op === "pow" ? "F x^y" : candidate.op}`
+            });
+          }
+        }
+      }
+      const powerOfTenExponent = positiveIntegerPowerOfTenExponent(normalized);
+      if (powerOfTenExponent !== void 0) {
+        const exponent = String(powerOfTenExponent);
+        accept({
+          kind: "pow10",
+          cost: estimateNumberCost2(exponent) + 1 + (this.emitter.machineEntryOpen ? 1 : 0),
+          exponent,
+          detail: `loaded exponent ${exponent} and applied F 10^x`
+        });
+      }
+      return best;
+    }
+    emitConstantSynthesis(target, plan, directCost) {
+      if (plan.kind === "pow10") {
+        this.emitNumber(plan.exponent);
+        this.emitOp(21, "F 10^x", `constant ${target}`);
+      } else if (plan.kind === "unary") {
+        this.emitOp(96 + registerIndex(plan.sourceRegister), `\u041F->X ${plan.sourceRegister}`, `constant ${target} base ${plan.sourceValue}`);
+        this.emitOp(plan.opcode, plan.mnemonic, `constant ${target}`);
+      } else if (plan.kind === "unary-sequence") {
+        this.emitOp(96 + registerIndex(plan.sourceRegister), `\u041F->X ${plan.sourceRegister}`, `constant ${target} base ${plan.sourceValue}`);
+        for (const op of plan.ops) {
+          const comment = op.comment === "" ? `constant ${target}` : `constant ${target} ${op.comment}`;
+          this.emitOp(op.opcode, op.mnemonic, comment);
+        }
+      } else {
+        this.emitOp(96 + registerIndex(plan.leftRegister), `\u041F->X ${plan.leftRegister}`, `constant ${target} left ${plan.leftValue}`);
+        this.emitOp(14, "\u0412\u2191", `constant ${target} stack`);
+        this.emitOp(96 + registerIndex(plan.rightRegister), `\u041F->X ${plan.rightRegister}`, `constant ${target} right ${plan.rightValue}`);
+        if (plan.op === "pow") this.emitOp(36, "F x^y", `constant ${target}`);
+        else this.emitOp(binaryOpcode(plan.op), plan.op, `constant ${target}`);
+      }
+      this.currentXKnownZero = target === "0";
+      this.optimizations.push({
+        name: "constant-synthesis",
+        detail: `Built constant ${target} by ${plan.detail} (${plan.cost} cells instead of direct ${directCost}).`
+      });
     }
     emitStore(name, comment, sourceLine, raw = false) {
       const register = this.allocation.registers[name];
@@ -20058,9 +24598,18 @@ var MKProEmulatorBundle = (() => {
         this.diagnostics.push(buildDiagnostic("error", `Indexed state '${bankMemberKey(expr.base, expr.field)}' is not allocated in contiguous registers`, sourceLine));
         return void 0;
       }
-      if (offset === 0 && expr.index.kind === "identifier") {
-        const indexRegister = this.allocation.registers[expr.index.name];
-        if (indexRegister !== void 0 && registerIndex(indexRegister) >= 7) return indexRegister;
+      const affineIndex = affineIndexIdentifierOffset(expr.index);
+      if (affineIndex !== void 0 && offset + affineIndex.offset === 0) {
+        const indexRegister = this.allocation.registers[affineIndex.name];
+        if (indexRegister !== void 0 && registerIndex(indexRegister) >= 7) {
+          if (affineIndex.offset !== 0) {
+            this.optimizations.push({
+              name: "affine-indexed-selector-reuse",
+              detail: `Used ${affineIndex.name}${affineIndex.offset > 0 ? "+" : ""}${affineIndex.offset} directly as ${bankMemberKey(expr.base, expr.field)} selector at line ${sourceLine}.`
+            });
+          }
+          return indexRegister;
+        }
       }
       const selectorName = bankSelectorVariableName(expr.base, expr.field);
       const selector = this.allocation.registers[selectorName];
@@ -20072,21 +24621,76 @@ var MKProEmulatorBundle = (() => {
         this.diagnostics.push(buildDiagnostic("error", `Indexed state selector '${selectorName}' was allocated to mutating R${selector}; needs R7..Re`, sourceLine));
         return void 0;
       }
-      const cacheKey = `${bankMemberKey(expr.base, expr.field)}:${expressionToIntentText(expr.index)}:${offset}`;
-      const cacheable = expressionCallCallees(expr.index).length === 0;
+      const indexText = expressionToIntentText(expr.index);
+      const cacheKey = `${bankMemberKey(expr.base, expr.field)}:${indexText}:${offset}`;
+      const cacheable = expressionIsDeterministic(expr.index);
       const cached = this.bankSelectorCache.get(selectorName);
       if (cacheable && cached?.key === cacheKey) return selector;
-      compileExpression(this, expr.index);
-      if (offset > 0) {
-        this.emitNumberOrPreload(String(offset));
+      const sibling = cacheable ? this.cachedSiblingBankSelector(selectorName, expr.base, indexText, expr.index, offset) : void 0;
+      if (sibling !== void 0) {
+        this.emitRecall(sibling.selectorName, `indexed selector reuse ${bankMemberKey(expr.base, expr.field)}`, sourceLine);
+        if (sibling.delta > 0) {
+          this.emitNumberOrPreload(String(sibling.delta));
+          this.emitOp(16, "+", "indexed selector sibling offset", sourceLine);
+        } else if (sibling.delta < 0) {
+          this.emitNumberOrPreload(String(Math.abs(sibling.delta)));
+          this.emitOp(17, "-", "indexed selector sibling offset", sourceLine);
+        }
+        this.emitStore(selectorName, `indexed selector ${bankMemberKey(expr.base, expr.field)}`, sourceLine);
+        this.bankSelectorCache.set(selectorName, {
+          key: cacheKey,
+          deps: expressionIdentifierDeps(expr.index),
+          base: expr.base,
+          indexText,
+          offset
+        });
+        this.optimizations.push({
+          name: "indexed-selector-cache",
+          detail: `Derived ${bankMemberKey(expr.base, expr.field)} selector from cached ${sibling.selectorName} at line ${sourceLine}.`
+        });
+        return selector;
+      }
+      if (affineIndex !== void 0) {
+        this.emitRecall(affineIndex.name, `indexed selector ${affineIndex.name}`, sourceLine);
+      } else {
+        compileExpression(this, expr.index);
+      }
+      const effectiveOffset = offset + (affineIndex?.offset ?? 0);
+      if (effectiveOffset > 0) {
+        this.emitNumberOrPreload(String(effectiveOffset));
         this.emitOp(16, "+", "indexed selector offset", sourceLine);
-      } else if (offset < 0) {
-        this.emitNumberOrPreload(String(Math.abs(offset)));
+      } else if (effectiveOffset < 0) {
+        this.emitNumberOrPreload(String(Math.abs(effectiveOffset)));
         this.emitOp(17, "-", "indexed selector offset", sourceLine);
       }
       this.emitStore(selectorName, `indexed selector ${bankMemberKey(expr.base, expr.field)}`, sourceLine);
-      if (cacheable) this.bankSelectorCache.set(selectorName, { key: cacheKey, deps: expressionIdentifierDeps(expr.index) });
+      if (cacheable) {
+        this.bankSelectorCache.set(selectorName, {
+          key: cacheKey,
+          deps: expressionIdentifierDeps(expr.index),
+          base: expr.base,
+          indexText,
+          offset
+        });
+      }
       return selector;
+    }
+    cachedSiblingBankSelector(selectorName, base, indexText, index, offset) {
+      let best;
+      const computeCost = this.indexedSelectorComputeCost(index, offset);
+      for (const [cachedSelectorName, cached] of this.bankSelectorCache.entries()) {
+        if (cachedSelectorName === selectorName) continue;
+        if (cached.base !== base || cached.indexText !== indexText) continue;
+        if (this.allocation.registers[cachedSelectorName] === void 0) continue;
+        const delta = offset - cached.offset;
+        const cost = 1 + selectorOffsetCost(delta) + 1;
+        if (cost >= computeCost) continue;
+        if (best === void 0 || cost < best.cost) best = { selectorName: cachedSelectorName, delta, cost };
+      }
+      return best;
+    }
+    indexedSelectorComputeCost(index, offset) {
+      return estimateExpressionCost2(index) + selectorOffsetCost(offset) + 1;
     }
     invalidateBankSelectorCacheForStore(name, register) {
       for (const [selectorName, cached] of [...this.bankSelectorCache.entries()]) {
@@ -20099,7 +24703,13 @@ var MKProEmulatorBundle = (() => {
       return new Map(
         [...this.bankSelectorCache.entries()].map(([name, cached]) => [
           name,
-          { key: cached.key, deps: new Set(cached.deps) }
+          {
+            key: cached.key,
+            deps: new Set(cached.deps),
+            base: cached.base,
+            indexText: cached.indexText,
+            offset: cached.offset
+          }
         ])
       );
     }
@@ -20225,6 +24835,18 @@ var MKProEmulatorBundle = (() => {
       this.emitter.emitLabel(name);
       this.bankSelectorCache.clear();
     }
+    emitProcedureLabel(name) {
+      this.emitter.emitLabel(name, { procedureBoundary: "start", procedureName: name });
+      this.bankSelectorCache.clear();
+    }
+    emitProcedureEndLabel(name) {
+      this.emitter.emitLabel(`\0proc_end_${name}`, {
+        procedureBoundary: "end",
+        procedureName: name,
+        hidden: true
+      });
+      this.bankSelectorCache.clear();
+    }
     freshLabel(prefix) {
       return this.emitter.freshLabel(prefix);
     }
@@ -20232,23 +24854,7 @@ var MKProEmulatorBundle = (() => {
   function decrementUnderflowCondition(condition, target) {
     return condition.left.kind === "identifier" && condition.left.name === target && condition.op === "<" && isZeroExpression(condition.right);
   }
-  function matchStakeSinInputExpression(expr, stake, input) {
-    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "int" || expr.args.length !== 1) return false;
-    const body = expr.args[0];
-    if (body.kind !== "binary" || body.op !== "*") return false;
-    return isIdentifierExpression(body.left, stake) && isOnePlusSinInput(body.right, input) || isIdentifierExpression(body.right, stake) && isOnePlusSinInput(body.left, input);
-  }
-  function isOnePlusSinInput(expr, input) {
-    if (expr.kind !== "binary" || expr.op !== "+") return false;
-    return isNumericValue2(expr.left, 1) && isSinInput(expr.right, input) || isNumericValue2(expr.right, 1) && isSinInput(expr.left, input);
-  }
-  function isSinInput(expr, input) {
-    return expr.kind === "call" && expr.callee.toLowerCase() === "sin" && expr.args.length === 1 && isIdentifierExpression(expr.args[0], input);
-  }
-  function isIdentifierExpression(expr, name) {
-    return expr.kind === "identifier" && expr.name === name;
-  }
-  function coordListNameFromItems(items) {
+  function coordListNameFromItems2(items) {
     let listName;
     for (const item of items) {
       const info2 = coordListItemInfo(item.name);
@@ -20266,7 +24872,7 @@ var MKProEmulatorBundle = (() => {
     const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
     const addCandidate = (call) => {
       if (call.cell.kind !== "identifier") return;
-      const listName = coordListNameFromItems(call.items);
+      const listName = coordListNameFromItems2(call.items);
       if (listName === void 0 || !coordListEligibleForScaledDecimalStorage(ast, listName)) return;
       const cells = candidates.get(listName) ?? /* @__PURE__ */ new Set();
       cells.add(call.cell.name);
@@ -20306,6 +24912,27 @@ var MKProEmulatorBundle = (() => {
       }
     }
     return selected;
+  }
+  function collectRemovableCoordListNames(ast) {
+    const names = /* @__PURE__ */ new Set();
+    const visit = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "coord_list_remove") names.add(statement.list);
+        if (statement.kind === "if") {
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "while") visit(statement.body);
+        if (statement.kind === "loop") visit(statement.body);
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) visit(proc.body);
+    return names;
   }
   function collectCoordListCellNames(ast) {
     const names = /* @__PURE__ */ new Set();
@@ -20357,7 +24984,7 @@ var MKProEmulatorBundle = (() => {
     if (scaledLists.size === 0) return names;
     const add = (call) => {
       if (call?.cell.kind !== "identifier") return;
-      const listName = coordListNameFromItems(call.items);
+      const listName = coordListNameFromItems2(call.items);
       if (listName !== void 0 && scaledLists.has(listName)) names.add(call.cell.name);
     };
     const visitExpr = (expr) => {
@@ -20455,7 +25082,7 @@ var MKProEmulatorBundle = (() => {
     return board?.xMin === 0 && board.xMax === 9 && board.yMin === 0 && board.yMax === 9 && board.width === 10 && board.height === 10;
   }
   function coordVariableHasOnlyScaledSafeReads(ast, cellName, listName, procMap) {
-    const callIsSafe = (call) => call?.cell.kind === "identifier" && call.cell.name === cellName && coordListNameFromItems(call.items) === listName;
+    const callIsSafe = (call) => call?.cell.kind === "identifier" && call.cell.name === cellName && coordListNameFromItems2(call.items) === listName;
     const exprSafe = (expr) => {
       const hasCall = coordListHasCall(expr);
       if (callIsSafe(hasCall)) return true;
@@ -20531,7 +25158,8 @@ var MKProEmulatorBundle = (() => {
       lineCountCallCount: countCalls(ast, "line_count"),
       lineCountGroupCounts: collectLineCountGroupCounts(ast),
       scaledCoordLists,
-      scaledCoordCellNames: collectScaledCoordCellNames(ast, scaledCoordLists)
+      scaledCoordCellNames: collectScaledCoordCellNames(ast, scaledCoordLists),
+      removableCoordLists: collectRemovableCoordListNames(ast)
     };
   }
   function collectProcCallCounts(ast) {
@@ -20593,6 +25221,145 @@ var MKProEmulatorBundle = (() => {
   }
   function collectFunctionProcNames(ast) {
     return new Set(ast.procs.filter((proc) => procContainsReturnValue(proc.body)).map((proc) => proc.name));
+  }
+  function validateFunctionTailRecursion(ast, diagnostics) {
+    const functions = collectFunctionProcNames(ast);
+    if (functions.size === 0) return;
+    const { tail, nonTail } = collectFunctionCallEdges(ast, functions);
+    const allEdges = mergeFunctionEdges(tail, nonTail);
+    const reported = /* @__PURE__ */ new Set();
+    for (const [source, targets] of nonTail) {
+      for (const [target, line] of targets) {
+        if (!functionReaches(allEdges, target, source)) continue;
+        const key = `${source}->${target}`;
+        if (reported.has(key)) continue;
+        reported.add(key);
+        diagnostics.push(buildDiagnostic(
+          "error",
+          `Recursive function '${source}' has a non-tail call to '${target}'; recursive function calls must be the whole return expression.`,
+          line
+        ));
+      }
+    }
+  }
+  function collectFunctionCallEdges(ast, functions) {
+    const tail = /* @__PURE__ */ new Map();
+    const nonTail = /* @__PURE__ */ new Map();
+    const add = (edges, source, target, line) => {
+      if (!functions.has(target)) return;
+      const targets = edges.get(source) ?? /* @__PURE__ */ new Map();
+      if (!targets.has(target)) targets.set(target, line);
+      edges.set(source, targets);
+    };
+    const visitExprNonTail = (expr, source, line) => {
+      switch (expr.kind) {
+        case "number":
+        case "string":
+        case "identifier":
+          return;
+        case "indexed":
+          visitExprNonTail(expr.index, source, line);
+          return;
+        case "unary":
+          visitExprNonTail(expr.expr, source, line);
+          return;
+        case "binary":
+          visitExprNonTail(expr.left, source, line);
+          visitExprNonTail(expr.right, source, line);
+          return;
+        case "call":
+          add(nonTail, source, expr.callee, line);
+          for (const arg of expr.args) visitExprNonTail(arg, source, line);
+          return;
+      }
+    };
+    const visitReturnExpr = (expr, source, line) => {
+      if (expr.kind === "call" && functions.has(expr.callee)) {
+        add(tail, source, expr.callee, line);
+        for (const arg of expr.args) visitExprNonTail(arg, source, line);
+        return;
+      }
+      visitExprNonTail(expr, source, line);
+    };
+    const visitCondition = (condition, source, line) => {
+      visitExprNonTail(condition.left, source, line);
+      visitExprNonTail(condition.right, source, line);
+    };
+    const visitStatements = (statements, source) => {
+      for (const statement of statements) {
+        switch (statement.kind) {
+          case "assign":
+          case "pause":
+          case "halt":
+            visitExprNonTail(statement.expr, source, statement.line);
+            break;
+          case "indexed_assign":
+            visitExprNonTail(statement.target.index, source, statement.line);
+            visitExprNonTail(statement.expr, source, statement.line);
+            break;
+          case "if":
+            visitCondition(statement.condition, source, statement.line);
+            visitStatements(statement.thenBody, source);
+            if (statement.elseBody !== void 0) visitStatements(statement.elseBody, source);
+            break;
+          case "while":
+            visitCondition(statement.condition, source, statement.line);
+            visitStatements(statement.body, source);
+            break;
+          case "loop":
+            visitStatements(statement.body, source);
+            break;
+          case "dispatch":
+            visitExprNonTail(statement.expr, source, statement.line);
+            for (const dispatchCase of statement.cases) {
+              visitExprNonTail(dispatchCase.value, source, dispatchCase.line);
+              visitStatements(dispatchCase.body, source);
+            }
+            if (statement.defaultBody !== void 0) visitStatements(statement.defaultBody, source);
+            break;
+          case "call":
+            add(nonTail, source, statement.block, statement.line);
+            break;
+          case "core":
+            for (const input of statement.inputs ?? []) visitExprNonTail(input.expr, source, input.line);
+            break;
+          case "return_value":
+            visitReturnExpr(statement.expr, source, statement.line);
+            break;
+          case "input":
+          case "show":
+          case "decimal_series":
+            break;
+        }
+      }
+    };
+    for (const proc of ast.procs) {
+      if (!functions.has(proc.name)) continue;
+      visitStatements(proc.body, proc.name);
+    }
+    return { tail, nonTail };
+  }
+  function mergeFunctionEdges(...maps) {
+    const result = /* @__PURE__ */ new Map();
+    for (const edges of maps) {
+      for (const [source, targets] of edges) {
+        const merged = result.get(source) ?? /* @__PURE__ */ new Map();
+        for (const [target, line] of targets) {
+          if (!merged.has(target)) merged.set(target, line);
+        }
+        result.set(source, merged);
+      }
+    }
+    return result;
+  }
+  function functionReaches(edges, start, goal, seen = /* @__PURE__ */ new Set()) {
+    if (start === goal) return true;
+    if (seen.has(start)) return false;
+    seen.add(start);
+    for (const target of edges.get(start)?.keys() ?? []) {
+      if (functionReaches(edges, target, goal, seen)) return true;
+    }
+    return false;
   }
   function findInlineProcNamesBySize(ast, counts = collectProcCallCounts(ast)) {
     const recursive = collectRecursiveProcNames(ast);
@@ -20658,14 +25425,24 @@ var MKProEmulatorBundle = (() => {
   function elideTerminalLoopHeaderShows(ast, optimizations) {
     const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
     if (procMap.size === 0) return;
+    const pureDisplayProcsByDisplay = collectPureDisplayProcsByDisplay(ast);
     const allTerminalCallsByDisplay = /* @__PURE__ */ new Map();
     const nonTerminalCalls = /* @__PURE__ */ new Set();
+    let removed = 0;
+    let inlinedHeaders = 0;
     const visitEveryStatementList = (statements, terminalDisplay) => {
       for (let index = 0; index < statements.length; index += 1) {
         const statement = statements[index];
         const atTail = index === statements.length - 1;
         collectCallsByPosition(statement, atTail ? terminalDisplay : void 0, procMap, allTerminalCallsByDisplay, nonTerminalCalls);
-        if (statement.kind === "loop") visitEveryStatementList(statement.body, loopHeaderDisplay(statement));
+        if (statement.kind === "loop") {
+          const header = loopHeaderScreen(statement, procMap, pureDisplayProcsByDisplay);
+          if (header?.inlinedHeader === true) inlinedHeaders += 1;
+          if (header !== void 0) {
+            removed += elideTailScreenInStatementList(statement.body, header.display, header.pureDisplayProcs);
+          }
+          visitEveryStatementList(statement.body, header?.display);
+        }
         if (statement.kind === "if") {
           visitEveryStatementList(statement.thenBody, atTail ? terminalDisplay : void 0);
           if (statement.elseBody !== void 0) visitEveryStatementList(statement.elseBody, atTail ? terminalDisplay : void 0);
@@ -20680,25 +25457,57 @@ var MKProEmulatorBundle = (() => {
     for (const proc of ast.procs) {
       collectStatementListCallsByPosition(proc.body, "__mkpro_terminal_proc_tail", procMap, /* @__PURE__ */ new Map(), nonTerminalCalls);
     }
-    let removed = 0;
     for (const [display, calls] of allTerminalCallsByDisplay) {
       const terminalProcs = expandTerminalProcClosure(calls, procMap, nonTerminalCalls);
+      const pureDisplayProcs = pureDisplayProcsByDisplay.get(display) ?? EMPTY_STRING_SET;
       for (const name of terminalProcs) {
         const proc = procMap.get(name);
         if (proc === void 0) continue;
-        removed += elideTailShowInStatementList(proc.body, display);
+        removed += elideTailScreenInStatementList(proc.body, display, pureDisplayProcs);
       }
     }
-    if (removed === 0) return;
+    if (removed === 0 && inlinedHeaders === 0) return;
     optimizations.push({
       name: "terminal-loop-screen-elision",
-      detail: `Elided ${removed} terminal show${removed === 1 ? "" : "s"} already provided by the next loop header.`
+      detail: [
+        removed > 0 ? `elided ${removed} terminal show${removed === 1 ? "" : "s"} already provided by the next loop header` : void 0,
+        inlinedHeaders > 0 ? `inlined ${inlinedHeaders} one-screen loop header helper${inlinedHeaders === 1 ? "" : "s"} before input` : void 0
+      ].filter((part) => part !== void 0).join("; ").replace(/^./u, (char) => char.toUpperCase()) + "."
     });
   }
-  function loopHeaderDisplay(statement) {
+  var EMPTY_STRING_SET = /* @__PURE__ */ new Set();
+  function collectPureDisplayProcsByDisplay(ast) {
+    const result = /* @__PURE__ */ new Map();
+    for (const proc of ast.procs) {
+      if (proc.body.length !== 1) continue;
+      const only = proc.body[0];
+      if (only?.kind !== "show") continue;
+      const names = result.get(only.display) ?? /* @__PURE__ */ new Set();
+      names.add(proc.name);
+      result.set(only.display, names);
+    }
+    return result;
+  }
+  function loopHeaderScreen(statement, procMap, pureDisplayProcsByDisplay) {
     const first = statement.body[0];
     const second = statement.body[1];
-    return first?.kind === "show" && second?.kind === "input" ? first.display : void 0;
+    if (second?.kind !== "input") return void 0;
+    if (first?.kind === "show") {
+      return {
+        display: first.display,
+        pureDisplayProcs: pureDisplayProcsByDisplay.get(first.display) ?? EMPTY_STRING_SET
+      };
+    }
+    if (first?.kind !== "call") return void 0;
+    const proc = procMap.get(first.block);
+    const only = proc?.body.length === 1 ? proc.body[0] : void 0;
+    if (only?.kind !== "show") return void 0;
+    statement.body[0] = { kind: "show", display: only.display, line: first.line };
+    return {
+      display: only.display,
+      pureDisplayProcs: pureDisplayProcsByDisplay.get(only.display) ?? EMPTY_STRING_SET,
+      inlinedHeader: true
+    };
   }
   function collectCallsByPosition(statement, terminalDisplay, procMap, terminalCallsByDisplay, nonTerminalCalls) {
     if (statement.kind === "call" && procMap.has(statement.block)) {
@@ -20770,21 +25579,25 @@ var MKProEmulatorBundle = (() => {
       if (last.defaultBody !== void 0) collectStatementListTerminalCalls(last.defaultBody, procMap, terminalCalls);
     }
   }
-  function elideTailShowInStatementList(statements, display) {
+  function elideTailScreenInStatementList(statements, display, pureDisplayProcs) {
     const last = statements.at(-1);
     if (last === void 0) return 0;
     if (last.kind === "show" && last.display === display) {
       statements.pop();
       return 1;
     }
+    if (last.kind === "call" && pureDisplayProcs.has(last.block)) {
+      statements.pop();
+      return 1;
+    }
     let removed = 0;
     if (last.kind === "if") {
-      removed += elideTailShowInStatementList(last.thenBody, display);
-      if (last.elseBody !== void 0) removed += elideTailShowInStatementList(last.elseBody, display);
+      removed += elideTailScreenInStatementList(last.thenBody, display, pureDisplayProcs);
+      if (last.elseBody !== void 0) removed += elideTailScreenInStatementList(last.elseBody, display, pureDisplayProcs);
     }
     if (last.kind === "dispatch") {
-      for (const dispatchCase of last.cases) removed += elideTailShowInStatementList(dispatchCase.body, display);
-      if (last.defaultBody !== void 0) removed += elideTailShowInStatementList(last.defaultBody, display);
+      for (const dispatchCase of last.cases) removed += elideTailScreenInStatementList(dispatchCase.body, display, pureDisplayProcs);
+      if (last.defaultBody !== void 0) removed += elideTailScreenInStatementList(last.defaultBody, display, pureDisplayProcs);
     }
     return removed;
   }
@@ -20923,10 +25736,11 @@ var MKProEmulatorBundle = (() => {
     }
     return reachableProcs;
   }
-  function allocateRegisters(ast, diagnostics, freeResidualDispatchScratch = false, suppressConstantPreloads = /* @__PURE__ */ new Set(), sharedBitMaskHelperCalls = false) {
+  function allocateRegisters(ast, diagnostics, freeResidualDispatchScratch = false, suppressConstantPreloads = /* @__PURE__ */ new Set(), sharedBitMaskHelperCalls = false, startupAwareConstantPreloads = false, forcedRegisterShares = []) {
     const declared = /* @__PURE__ */ new Set();
     const hints = /* @__PURE__ */ new Map();
     const variables = /* @__PURE__ */ new Set();
+    const xParamNames = xParamProcParamNames(ast);
     for (const state of ast.states) {
       for (const field of state.fields) {
         declared.add(field.name);
@@ -20940,8 +25754,9 @@ var MKProEmulatorBundle = (() => {
     }
     for (const proc of ast.procs) {
       const xParamReturn = matchXParamReturnDecay(proc);
+      const xParamStakeSin = matchXParamStakeSinRead(ast, proc);
       for (const param of proc.params ?? []) {
-        if (xParamReturn?.param === param) continue;
+        if (xParamReturn?.param === param || xParamStakeSin?.param === param || xParamNames.has(param)) continue;
         declared.add(param);
         variables.add(param);
       }
@@ -20971,6 +25786,7 @@ var MKProEmulatorBundle = (() => {
     }
     warnUndeclaredAssignments(ast, declared, diagnostics);
     collectAssignedVariables(ast, variables);
+    collectFunctionTailCallScratchVariables(ast, variables);
     collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch);
     collectTicTacToeScratchVariables(ast, variables);
     collectBitMaskScratchVariables(ast, variables);
@@ -21028,8 +25844,19 @@ var MKProEmulatorBundle = (() => {
       used.add(candidate);
       if (reusableScratch !== void 0) reusableScratchRegisters.set(reusableScratch, candidate);
     }
+    for (const { freeRegister, keepRegister } of forcedRegisterShares) {
+      if (freeRegister === keepRegister || !used.has(keepRegister)) continue;
+      let movedAny = false;
+      for (const variable of Object.keys(registers)) {
+        if (registers[variable] === freeRegister) {
+          registers[variable] = keepRegister;
+          movedAny = true;
+        }
+      }
+      if (movedAny) used.delete(freeRegister);
+    }
     const constants = {};
-    for (const value of collectPreloadConstantValues(ast)) {
+    for (const value of collectPreloadConstantValues(ast, startupAwareConstantPreloads)) {
       if (suppressConstantPreloads.has(value)) continue;
       const register = pickConstantRegister(used);
       if (!register) break;
@@ -21042,8 +25869,28 @@ var MKProEmulatorBundle = (() => {
   }
   function reusableScratchFamily(variable) {
     if (variable.startsWith(BIT_MASK_SCRATCH_PREFIX)) return BIT_MASK_SCRATCH_PREFIX;
+    if (variable.startsWith(FUNCTION_TAIL_ARG_PREFIX)) return functionTailArgScratchFamily(variable);
     if (variable.startsWith("__display_first_")) return "__display_first_";
     return void 0;
+  }
+  function functionTailArgScratchFamily(variable) {
+    const index = /_(\d+)$/u.exec(variable)?.[1] ?? "0";
+    return `${FUNCTION_TAIL_ARG_PREFIX}${index}`;
+  }
+  function effectiveRegisterDemand(variables) {
+    const families = /* @__PURE__ */ new Set();
+    let count = 0;
+    for (const variable of variables) {
+      const family = reusableScratchFamily(variable);
+      if (family === void 0) {
+        count += 1;
+        continue;
+      }
+      if (families.has(family)) continue;
+      families.add(family);
+      count += 1;
+    }
+    return count;
   }
   function collectDomainBindings(ast) {
     const bindings = [];
@@ -21085,6 +25932,43 @@ var MKProEmulatorBundle = (() => {
   function preincrementIndexedStoreShape(ast, store, increment) {
     const pointer = increment.target;
     return isUnitIncrementExpression(pointer, increment.expr) && isUnitIncrementExpression(pointer, store.target.index) && findStateBankMember(ast, store.target) !== void 0;
+  }
+  function previousRandomAdditiveRest(expr, previous, seed) {
+    const terms = additiveTerms(expr);
+    let sawPrevious = false;
+    let sawSeed = false;
+    const rest = [];
+    for (const term of terms) {
+      if (isIdentifierNamed(term, previous)) {
+        if (sawPrevious) return void 0;
+        sawPrevious = true;
+        continue;
+      }
+      if (isIdentifierNamed(term, seed)) {
+        if (sawSeed) return void 0;
+        sawSeed = true;
+        continue;
+      }
+      if (!expressionPureForSubstitution(term)) return void 0;
+      rest.push(term);
+    }
+    return sawPrevious && sawSeed ? rest : void 0;
+  }
+  function additiveTerms(expr) {
+    if (expr.kind === "binary" && expr.op === "+") {
+      return [...additiveTerms(expr.left), ...additiveTerms(expr.right)];
+    }
+    return [expr];
+  }
+  function isIdentifierNamed(expr, name) {
+    return expr.kind === "identifier" && expr.name === name;
+  }
+  function expressionCanUsePreviousRandomPrefix(expr, previous, seed) {
+    if (previousRandomAdditiveRest(expr, previous, seed) !== void 0) return true;
+    if (expr.kind === "binary") {
+      return expressionCanUsePreviousRandomPrefix(expr.left, previous, seed) || (expr.op === "+" || expr.op === "*") && expressionCanUsePreviousRandomPrefix(expr.right, previous, seed);
+    }
+    return expr.kind === "call" && expr.callee.toLowerCase() === "int" && expr.args.length === 1 && expressionCanUsePreviousRandomPrefix(expr.args[0], previous, seed);
   }
   function collectPreincrementIndexedStorePointers(ast) {
     const pointers = /* @__PURE__ */ new Set();
@@ -21174,6 +26058,11 @@ var MKProEmulatorBundle = (() => {
     };
     for (const entry of ast.entries) visitStatements(entry.body);
     for (const proc of ast.procs) visitStatements(proc.body);
+    for (const display of ast.displays) {
+      for (const item of display.items) {
+        if (item.kind === "source" && item.expr !== void 0) visitExpr(item.expr);
+      }
+    }
     const selectorPreference = ["b", "a", "9", "8", "7", "c", "d", "e"];
     let index = 0;
     for (const selector of selectors) {
@@ -21184,7 +26073,8 @@ var MKProEmulatorBundle = (() => {
     }
   }
   function directIndexSelectorCandidate(ast, expr, hints) {
-    if (expr.index.kind !== "identifier") return void 0;
+    const affineIndex = affineIndexIdentifierOffset(expr.index);
+    if (affineIndex === void 0) return void 0;
     const resolved = findStateBankMember(ast, expr);
     if (resolved === void 0) return void 0;
     let offset;
@@ -21198,7 +26088,7 @@ var MKProEmulatorBundle = (() => {
       }
       if (offset !== current) return void 0;
     }
-    return offset === 0 ? expr.index.name : void 0;
+    return offset !== void 0 && offset + affineIndex.offset === 0 ? affineIndex.name : void 0;
   }
   function preferHighIndexSelectorRegister(name, variables, hints) {
     if (!variables.has(name) || hints.has(name)) return;
@@ -21365,21 +26255,26 @@ var MKProEmulatorBundle = (() => {
     }
     return void 0;
   }
-  function collectPreloadConstantValues(ast) {
+  function collectPreloadConstantValues(ast, startupAwareConstantPreloads = false) {
     const values = /* @__PURE__ */ new Set();
-    if (programContainsCall(ast, "direction")) {
-      values.add("20");
-      values.add("10");
-    }
-    if (programContainsCall(ast, "__direction_cardinal")) {
-      values.add("10");
-    }
+    const occurrences = /* @__PURE__ */ new Map();
+    const COORD_DECODE_TENS_WEIGHT = 5;
+    const weights = /* @__PURE__ */ new Map();
+    const boost = (value, weight) => {
+      weights.set(value, Math.max(weights.get(value) ?? 0, weight));
+    };
+    const recordLiteralOccurrence = (raw) => {
+      const value = normalizeConstantLiteral(raw);
+      values.add(value);
+      occurrences.set(value, (occurrences.get(value) ?? 0) + 1);
+    };
     if (programContainsCall(ast, "line_count")) {
       values.add("10");
       values.add("11");
       values.add("19");
       values.add("-99");
       values.add("-81");
+      boost("10", COORD_DECODE_TENS_WEIGHT);
     }
     for (const display of ast.displays) {
       if (displayHasMantissaExponentTemplateShape(display)) {
@@ -21405,10 +26300,10 @@ var MKProEmulatorBundle = (() => {
       }
     }
     const visitExpr = (expr) => {
-      if (expr.kind === "number" && estimateNumberCost2(expr.raw) > 1) values.add(normalizeConstantLiteral(expr.raw));
+      if (expr.kind === "number" && estimateNumberCost2(expr.raw) > 1) recordLiteralOccurrence(expr.raw);
       if (expr.kind === "unary") {
         if (expr.op === "-" && expr.expr.kind === "number") {
-          values.add(normalizeConstantLiteral(negatedNumberLiteral(expr.expr.raw)));
+          recordLiteralOccurrence(negatedNumberLiteral(expr.expr.raw));
           return;
         }
         visitExpr(expr.expr);
@@ -21456,10 +26351,32 @@ var MKProEmulatorBundle = (() => {
     };
     for (const entry of ast.entries) visitStatements(entry.body);
     for (const proc of ast.procs) visitStatements(proc.body);
-    return [...values].filter((value) => value !== "0" && value !== "1").sort((a, b) => estimateNumberCost2(b) - estimateNumberCost2(a));
+    const startupUseCount = (value) => Math.max(weights.get(value) ?? 1, occurrences.get(value) ?? 1);
+    const savings = (value) => (weights.get(value) ?? 1) * (estimateNumberCost2(value) - 1);
+    return [...values].filter((value) => value !== "0" && value !== "1").filter(
+      (value) => !startupAwareConstantPreloads || !constantIsCheaperInlineForStartup(value, startupUseCount(value))
+    ).sort((a, b) => savings(b) - savings(a) || estimateNumberCost2(b) - estimateNumberCost2(a));
+  }
+  function constantIsCheaperInlineForStartup(value, useCount) {
+    const inlineCost = standaloneSynthesizedConstantCost(value);
+    if (inlineCost === void 0) return false;
+    const setupValue = executableSetupValue(value);
+    if (setupValue === void 0) return false;
+    const preloadCost = estimateNumberCost2(setupValue) + 1 + useCount;
+    return inlineCost * useCount <= preloadCost;
+  }
+  function standaloneSynthesizedConstantCost(value) {
+    const exponent = positiveIntegerPowerOfTenExponent(value);
+    if (exponent === void 0) return void 0;
+    const cost = estimateNumberCost2(String(exponent)) + 1;
+    return cost < estimateNumberCost2(value) ? cost : void 0;
   }
   function collectDisplayLiteralPreloadValues(literal, values) {
     const literalProgram = displayLiteralProgram(literal);
+    const leadingZeroProgram = leadingZeroHexProductDisplayProgram(literal);
+    if (leadingZeroProgram !== void 0) {
+      values.add(normalizeConstantLiteral(leadingZeroProgram.sourceLiteral));
+    }
     if (shouldUsePreloadedDisplayLiteral(literal)) {
       values.add(normalizeConstantLiteral(literal));
     }
@@ -21472,11 +26389,9 @@ var MKProEmulatorBundle = (() => {
     }
   }
   function naturalDisplayWidthForAst(ast, source) {
-    const field = findStateFieldInAst(ast, source);
-    if (field !== void 0) {
-      const min = field.min ?? 0;
-      const max = field.max ?? min;
-      const magnitude = Math.max(Math.abs(min), Math.abs(max));
+    const bounds = displayFieldBoundsForAst(ast, source);
+    if (bounds !== void 0) {
+      const magnitude = Math.max(Math.abs(bounds.min), Math.abs(bounds.max));
       return Math.max(1, String(Math.trunc(magnitude)).length);
     }
     return 1;
@@ -21488,10 +26403,38 @@ var MKProEmulatorBundle = (() => {
     }
     return void 0;
   }
+  function coordFieldBoundsForAst(ast, name) {
+    const v2 = ast.v2;
+    if (v2 === void 0) return void 0;
+    const field = v2.state.find((candidate) => candidate.name === name);
+    if (field?.type !== "coord" || field.domain === void 0) return void 0;
+    const board = v2.boards.find((candidate) => candidate.name === field.domain);
+    if (board === void 0) return void 0;
+    if (board.height === 1) return { min: board.xMin, max: board.xMax };
+    if (board.width === 1) return { min: board.yMin, max: board.yMax };
+    if (board.xMin >= 0 && board.xMax <= 9 && board.yMin >= 0 && board.yMax <= 9) {
+      return { min: board.xMin + 10 * board.yMin, max: board.xMax + 10 * board.yMax };
+    }
+    return void 0;
+  }
+  function displayFieldBoundsForAst(ast, name) {
+    const field = findStateFieldInAst(ast, name);
+    if (field?.min !== void 0 && field.max !== void 0) {
+      return { min: field.min, max: field.max };
+    }
+    const coord = coordFieldBoundsForAst(ast, name);
+    if (coord !== void 0) return coord;
+    if (field !== void 0) {
+      const min = field.min ?? 0;
+      return { min, max: field.max ?? min };
+    }
+    return void 0;
+  }
   function planDisplayForAst(ast, display) {
     return planDisplay(display, {
       naturalDisplayWidth: (source) => naturalDisplayWidthForAst(ast, source),
-      findStateField: (source) => findStateFieldInAst(ast, source)
+      findStateField: (source) => findStateFieldInAst(ast, source),
+      displayFieldBounds: (source) => displayFieldBoundsForAst(ast, source)
     });
   }
   function programContainsCall(ast, name) {
@@ -21726,20 +26669,21 @@ var MKProEmulatorBundle = (() => {
       if (first?.kind !== "assign") continue;
       const matched = matchXParamFirstAssignment(first, param);
       if (matched === void 0) continue;
-      if (statementsReadIdentifier(proc.body.slice(1), param)) continue;
+      if (statementsReadIdentifier2(proc.body.slice(1), param)) continue;
       if (!allProcCallsHaveImmediateParamAssignment(ast, proc.name, param)) continue;
-      result.set(proc.name, { param, first, other: matched.other });
+      result.set(proc.name, matched.kind === "add" ? { param, first, kind: "add", other: matched.other } : { param, first, kind: "copy" });
     }
     return result;
   }
   function matchXParamFirstAssignment(statement, param) {
     const expr = statement.expr;
+    if (expr.kind === "identifier" && expr.name === param) return { kind: "copy" };
     if (expr.kind !== "binary" || expr.op !== "+") return void 0;
     if (expr.left.kind === "identifier" && expr.left.name === param && expr.right.kind === "identifier") {
-      return { other: expr.right.name };
+      return { kind: "add", other: expr.right.name };
     }
     if (expr.right.kind === "identifier" && expr.right.name === param && expr.left.kind === "identifier") {
-      return { other: expr.left.name };
+      return { kind: "add", other: expr.left.name };
     }
     return void 0;
   }
@@ -21772,10 +26716,23 @@ var MKProEmulatorBundle = (() => {
     }
     return ok && calls > 0;
   }
-  function statementsReadIdentifier(statements, name) {
-    return statements.some((statement) => statementReadsIdentifier(statement, name));
+  function statementsReadIdentifier2(statements, name) {
+    return statements.some((statement) => statementReadsIdentifier2(statement, name));
   }
-  function statementReadsIdentifier(statement, name) {
+  function flattenAdditionTerms(expr) {
+    if (expr.kind === "binary" && expr.op === "+") {
+      return [...flattenAdditionTerms(expr.left), ...flattenAdditionTerms(expr.right)];
+    }
+    return [expr];
+  }
+  function statementsReadIdentifierBeforeWrite(statements, name) {
+    for (const statement of statements) {
+      if (statementReadsIdentifier2(statement, name)) return true;
+      if (statementWritesIdentifier(statement, name)) return false;
+    }
+    return false;
+  }
+  function statementReadsIdentifier2(statement, name) {
     switch (statement.kind) {
       case "pause":
       case "halt":
@@ -21784,16 +26741,18 @@ var MKProEmulatorBundle = (() => {
         return expressionReferencesIdentifier(statement.expr, name);
       case "indexed_assign":
         return expressionReferencesIdentifier(statement.target.index, name) || expressionReferencesIdentifier(statement.expr, name);
+      case "coord_list_remove":
+        return expressionReferencesIdentifier(statement.item, name);
       case "if":
-        return expressionReferencesIdentifier(statement.condition.left, name) || expressionReferencesIdentifier(statement.condition.right, name) || statementsReadIdentifier(statement.thenBody, name) || statement.elseBody !== void 0 && statementsReadIdentifier(statement.elseBody, name);
+        return expressionReferencesIdentifier(statement.condition.left, name) || expressionReferencesIdentifier(statement.condition.right, name) || statementsReadIdentifier2(statement.thenBody, name) || statement.elseBody !== void 0 && statementsReadIdentifier2(statement.elseBody, name);
       case "loop":
-        return statementsReadIdentifier(statement.body, name);
+        return statementsReadIdentifier2(statement.body, name);
       case "while":
-        return expressionReferencesIdentifier(statement.condition.left, name) || expressionReferencesIdentifier(statement.condition.right, name) || statementsReadIdentifier(statement.body, name);
+        return expressionReferencesIdentifier(statement.condition.left, name) || expressionReferencesIdentifier(statement.condition.right, name) || statementsReadIdentifier2(statement.body, name);
       case "dispatch":
         return expressionReferencesIdentifier(statement.expr, name) || statement.cases.some(
-          (dispatchCase) => expressionReferencesIdentifier(dispatchCase.value, name) || statementsReadIdentifier(dispatchCase.body, name)
-        ) || statement.defaultBody !== void 0 && statementsReadIdentifier(statement.defaultBody, name);
+          (dispatchCase) => expressionReferencesIdentifier(dispatchCase.value, name) || statementsReadIdentifier2(dispatchCase.body, name)
+        ) || statement.defaultBody !== void 0 && statementsReadIdentifier2(statement.defaultBody, name);
       case "show":
       case "input":
       case "call":
@@ -21805,8 +26764,26 @@ var MKProEmulatorBundle = (() => {
         return expressionReferencesIdentifier(statement.expr, name);
     }
   }
+  function statementWritesIdentifier(statement, name) {
+    switch (statement.kind) {
+      case "assign":
+      case "input":
+        return statement.target === name;
+      case "indexed_assign":
+        return statement.target.base === name;
+      case "if":
+        return statement.thenBody.some((child) => statementWritesIdentifier(child, name)) && (statement.elseBody?.some((child) => statementWritesIdentifier(child, name)) ?? false);
+      case "loop":
+      case "while":
+        return statement.body.some((child) => statementWritesIdentifier(child, name));
+      case "dispatch":
+        return statement.cases.some((dispatchCase) => dispatchCase.body.some((child) => statementWritesIdentifier(child, name))) && (statement.defaultBody?.some((child) => statementWritesIdentifier(child, name)) ?? false);
+      default:
+        return false;
+    }
+  }
   function statementSafeBetweenInitializedCounterAndLoop(statement, target) {
-    return statement.kind === "assign" && statement.target !== target && !statementReadsIdentifier(statement, target);
+    return statement.kind === "assign" && statement.target !== target && !statementReadsIdentifier2(statement, target);
   }
   function collectDisplayUseCounts(ast) {
     const counts = /* @__PURE__ */ new Map();
@@ -22073,8 +27050,8 @@ var MKProEmulatorBundle = (() => {
     const [first, ...rest] = display.items;
     if (first?.kind !== "source" || rest.length === 0) return void 0;
     const source = displaySourceField(first, context);
-    const state = context.findStateField(source.name);
-    if (source.width !== 2 || state === void 0 || (state.min ?? 0) < 0 || (state.max ?? 0) < 10 || (state.max ?? 0) >= 100 || !displayFieldFitsUnsignedWidthInContext(source, context)) {
+    const bounds = context.displayFieldBounds(source.name);
+    if (source.width !== 2 || bounds === void 0 || bounds.min < 0 || bounds.max < 10 || bounds.max >= 100 || !displayFieldFitsUnsignedWidthInContext(source, context)) {
       return void 0;
     }
     const cells = [];
@@ -22149,14 +27126,12 @@ var MKProEmulatorBundle = (() => {
     }
   }
   function displayFieldFitsUnsignedWidthInContext(field, context) {
-    const state = context.findStateField(field.name);
-    if (state === void 0) return false;
-    const min = state.min ?? 0;
-    const max = state.max ?? min;
-    return min >= 0 && max < 10 ** field.width;
+    const bounds = context.displayFieldBounds(field.name);
+    if (bounds === void 0) return false;
+    return bounds.min >= 0 && bounds.max < 10 ** field.width;
   }
   function displayFieldMinInContext(field, context) {
-    return context.findStateField(field.name)?.min;
+    return context.displayFieldBounds(field.name)?.min;
   }
   function displayHasMantissaExponentTemplateShape(display) {
     const [leader, firstLiteral, score, secondLiteral, total, thirdLiteral, exponent] = display.items;
@@ -22275,9 +27250,13 @@ var MKProEmulatorBundle = (() => {
   function warnUndeclaredAssignments(ast, declared, diagnostics) {
     const seen = /* @__PURE__ */ new Set();
     const ephemeralInputs = collectEphemeralInputTargets(ast);
+    const loopPrompts = loopCarriedPromptNames(ast);
+    const xParamNames = xParamProcParamNames(ast);
     const visit = (statements) => {
       for (const statement of statements) {
         if (statement.kind === "assign" || statement.kind === "input") {
+          if (loopPrompts.has(statement.target)) continue;
+          if (xParamNames.has(statement.target)) continue;
           if (statement.kind === "input" && ephemeralInputs.has(statement.target)) continue;
           if (statement.target.startsWith(DISPLAY_EXPR_PREFIX)) continue;
           if (!declared.has(statement.target) && !seen.has(statement.target)) {
@@ -22306,10 +27285,12 @@ var MKProEmulatorBundle = (() => {
   }
   function collectAssignedVariables(ast, variables) {
     const ephemeralInputs = collectEphemeralInputTargets(ast);
+    const loopPrompts = loopCarriedPromptNames(ast);
+    const xParamNames = xParamProcParamNames(ast);
     const visit = (statements) => {
       for (const statement of statements) {
         if (statement.kind === "assign") {
-          variables.add(statement.target);
+          if (!loopPrompts.has(statement.target) && !xParamNames.has(statement.target)) variables.add(statement.target);
         }
         if (statement.kind === "input" && !ephemeralInputs.has(statement.target)) variables.add(statement.target);
         if (statement.kind === "loop") visit(statement.body);
@@ -22327,6 +27308,36 @@ var MKProEmulatorBundle = (() => {
     for (const entry of ast.entries) visit(entry.body);
     for (const proc of ast.procs) visit(proc.body);
   }
+  function collectFunctionTailCallScratchVariables(ast, variables) {
+    const functionProcs = new Map(
+      ast.procs.filter((proc) => procContainsReturnValue(proc.body)).map((proc) => [proc.name, proc])
+    );
+    if (functionProcs.size === 0) return;
+    const visit = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "return_value" && statement.expr.kind === "call") {
+          const target = functionProcs.get(statement.expr.callee);
+          if (target !== void 0 && matchXParamReturnDecay(target) === void 0 && matchXParamStakeSinRead(ast, target) === void 0) {
+            for (let index = 0; index < statement.expr.args.length; index += 1) {
+              variables.add(functionTailArgScratchName(target.name, index));
+            }
+          }
+        }
+        if (statement.kind === "loop" || statement.kind === "while") visit(statement.body);
+        if (statement.kind === "if") {
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+      }
+    };
+    for (const proc of ast.procs) {
+      if (functionProcs.has(proc.name)) visit(proc.body);
+    }
+  }
   function collectEphemeralInputTargets(ast) {
     const readCounts = collectVariableReadCounts(ast);
     const targets = /* @__PURE__ */ new Set();
@@ -22339,8 +27350,18 @@ var MKProEmulatorBundle = (() => {
           const reads = countIdentifierReadsInCondition(next.condition, statement.target);
           if (reads > 0 && (readCounts.get(statement.target) ?? 0) === reads) targets.add(statement.target);
         }
+        if (statement.kind === "input" && next?.kind === "dispatch") {
+          const dispatch = optimizeDispatchDefaultCases(next).statement;
+          const reads = dispatchUsesNumericResidualChain(dispatch) ? countIdentifierReads(dispatch.expr, statement.target) : 0;
+          if (reads > 0 && (readCounts.get(statement.target) ?? 0) === reads) targets.add(statement.target);
+        }
         if (statement.kind === "show" && next?.kind === "input" && afterNext?.kind === "if") {
           const reads = countIdentifierReadsInCondition(afterNext.condition, next.target);
+          if (reads > 0 && (readCounts.get(next.target) ?? 0) === reads) targets.add(next.target);
+        }
+        if (statement.kind === "show" && next?.kind === "input" && afterNext?.kind === "dispatch") {
+          const dispatch = optimizeDispatchDefaultCases(afterNext).statement;
+          const reads = dispatchUsesNumericResidualChain(dispatch) ? countIdentifierReads(dispatch.expr, next.target) : 0;
           if (reads > 0 && (readCounts.get(next.target) ?? 0) === reads) targets.add(next.target);
         }
         if (statement.kind === "loop") visit(statement.body);
@@ -22498,12 +27519,12 @@ var MKProEmulatorBundle = (() => {
     const addLineCountScratch = () => {
       addHasScratch();
       variables.add(COORD_LIST_CURRENT);
-      variables.add(COORD_LIST_DX);
     };
     for (const state of ast.states) {
       for (const field of state.fields) {
         if (field.initial !== void 0 && randomCoordListItemPlacement(field.name, field.initial) !== void 0) {
           addLineCountScratch();
+          variables.add(COORD_LIST_DX);
         }
       }
     }
@@ -22791,7 +27812,7 @@ var MKProEmulatorBundle = (() => {
       variables.add(spatialCountScratchNames()[0]);
     }
     if (countCalls(ast, "line_count") > 1) variables.add(spatialCountMaskScratchName());
-    if (programNeedsSpatialLineProgressionHelper(ast) && variables.size < REGISTER_ORDER.length) {
+    if (programNeedsSpatialLineProgressionHelper(ast) && effectiveRegisterDemand(variables) < REGISTER_ORDER.length) {
       variables.add(spatialCountStepScratchName());
     }
   }
@@ -22919,10 +27940,12 @@ var MKProEmulatorBundle = (() => {
   }
   function layoutProgram(items, diagnostics, options, ast, machineProfile) {
     const labelAddresses2 = /* @__PURE__ */ new Map();
+    const hiddenLabels = /* @__PURE__ */ new Set();
     let address = 0;
     for (const item of items) {
       if (item.kind === "label") {
         labelAddresses2.set(item.name, address);
+        if (item.hidden === true) hiddenLabels.add(item.name);
       } else {
         address += 1;
       }
@@ -22973,6 +27996,7 @@ var MKProEmulatorBundle = (() => {
       ([, a], [, b]) => a - b
     );
     for (const [label, labelAddress] of sortedLabels) {
+      if (hiddenLabels.has(label)) continue;
       labels[label] = safeFormatAddress(labelAddress);
     }
     markDarkEntryCells(cellRoles, labelAddresses2, options, ast, machineProfile);
@@ -23213,6 +28237,8 @@ var MKProEmulatorBundle = (() => {
         return estimateExpressionCost2(statement.expr) + 1;
       case "indexed_assign":
         return estimateExpressionCost2(statement.target.index) + estimateExpressionCost2(statement.expr) + 1;
+      case "coord_list_remove":
+        return Number.POSITIVE_INFINITY;
       case "pause":
       case "halt":
       case "return_value":
@@ -23306,7 +28332,7 @@ var MKProEmulatorBundle = (() => {
       source: "documented",
       requires: [],
       activeWhen: ["stack-current-x-scheduling", "dead-temp-store"],
-      detail: "Keeps a just-computed value in X for a following commutative use and removes the temporary store after data-flow proof."
+      detail: "Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries."
     },
     {
       id: "tail-call-lowering",
@@ -23318,6 +28344,8 @@ var MKProEmulatorBundle = (() => {
         "tail-branch-inversion",
         "terminal-rule-tail-call",
         "tail-call-layout",
+        "function-tail-call",
+        "function-tail-recursion",
         "terminal-if-direct-branch",
         "terminal-branch-end-elision",
         "local-terminal-tail",
@@ -23497,15 +28525,15 @@ var MKProEmulatorBundle = (() => {
       category: "data",
       source: "documented",
       requires: ["indirect-memory"],
-      activeWhen: ["indirect-memory-table"],
-      detail: "Rewrites direct register memory access through \u041A \u041F->X/\u041A X->\u041F when a stable selector already proves the target register."
+      activeWhen: ["indirect-memory-table", "indexed-packed-row-table"],
+      detail: "Uses \u041A \u041F->X/\u041A X->\u041F indirect memory for compact state tables when a stable selector proves the target register."
     },
     {
       id: "fl-decrement-branch",
       category: "flow",
       source: "documented",
       requires: [],
-      activeWhen: ["fl-unit-decrement", "indirect-incdec-counter", "r0-indirect-counter"],
+      activeWhen: ["fl-decrement-zero-branch", "indirect-incdec-counter", "r0-indirect-counter"],
       detail: "Uses F L0..F L3 as compact decrement-and-continue/decrement-and-branch forms for small counters."
     },
     {
@@ -23562,22 +28590,22 @@ var MKProEmulatorBundle = (() => {
       source: "mk61-delta",
       requires: ["r0-fractional-sentinel"],
       activeWhen: ["fractional-indirect-addressing", "r0-indirect-counter", "r0-fractional-sentinel"],
-      detail: "Computed-dispatch candidate for fractional R0 selecting R3 or jumping to 99 while creating the -99999999 sentinel."
+      detail: "Fractional R0 side effects: selecting R3 (active) is sound; the one-cell \u041A \u0411\u041F 0 jump to 99 stays a candidate because it destroys R0 and depends on the fixed hardware address 99, which is not sound to synthesize automatically."
     },
     {
       id: "raw-display-5f",
       category: "display",
       source: "undocumented",
       requires: ["raw-display-5f"],
-      activeWhen: [],
-      detail: "Display lowering candidate for opcode 5F; selected only when the raw display mutation is the intended observable effect."
+      activeWhen: ["raw-display-5f"],
+      detail: "Raw display-state transform opcode 5F; active when a raw block emits 5F as an intended display mutation (X is left intact)."
     },
     {
       id: "x2-display-register",
       category: "display",
       source: "mk61-delta",
       requires: ["x2-register", "display-bytes"],
-      activeWhen: ["x2-display-byte-scheduling", "display-byte-layout"],
+      activeWhen: ["x2-display-byte-scheduling", "display-byte-layout", "floor-packed-row-expression-display"],
       detail: "Display/data candidate for scheduling X2, \u0412\u041F, '.', sign digits, and display bytes without extra storage."
     },
     {
@@ -23633,7 +28661,7 @@ var MKProEmulatorBundle = (() => {
       category: "trap",
       source: "mk61-delta",
       requires: ["error-stops"],
-      activeWhen: ["error-stop", "screen-error-literal-lowering"],
+      activeWhen: ["error-stop", "screen-error-literal-lowering", "domain-error-guard"],
       detail: "Use domain-error stops only for explicit trap intent or after verifier proves the failure mode is acceptable."
     },
     {
@@ -23683,6 +28711,14 @@ var MKProEmulatorBundle = (() => {
       requires: [],
       activeWhen: ["z-stack-derived-value-reuse"],
       detail: "Computes a shared pure operand once and keeps extra copies in Y/Z (and T for four outputs), restoring them with X\u2194Y and F reverse for adjacent unary derivations."
+    },
+    {
+      id: "stack-resident-temps",
+      category: "stack",
+      source: "documented",
+      requires: [],
+      activeWhen: ["stack-resident-temps", "stack-resident-indexed-temp", "stack-resident-control-flow"],
+      detail: "Keeps short-lived single-use temporaries on the X/Y/Z/T stack across the next statement instead of spilling them to numbered registers, including through stack-preserving if/loop/dispatch regions."
     },
     {
       id: "liveness-analysis",
@@ -23783,11 +28819,33 @@ var MKProEmulatorBundle = (() => {
   ];
   function buildPreloadReport(ast, allocation) {
     const synthetic = [];
+    const v2FieldNames = /* @__PURE__ */ new Set();
+    const loweredInitializerListFields = /* @__PURE__ */ new Set();
     if (ast.v2) {
       for (const field of ast.v2.state) {
+        v2FieldNames.add(field.name);
+        if (field.bank !== void 0 && field.initial !== void 0 && isIndexedInitializerListText(field.initial)) {
+          for (const element of stateBankElementsForV2Field(ast, field)) {
+            loweredInitializerListFields.add(element.name);
+          }
+        }
         const register = allocation.registers[field.name];
         if (!register) continue;
         const value = field.initial;
+        if (value === void 0) continue;
+        synthetic.push({
+          register,
+          value,
+          countsAgainstProgram: false
+        });
+      }
+      for (const field of ast.states.flatMap((state) => state.fields)) {
+        if (v2FieldNames.has(field.name) || !(loweredInitializerListFields.has(field.name) || field.name.startsWith(PACKED_COUNTER_PREFIX))) {
+          continue;
+        }
+        const register = allocation.registers[field.name];
+        if (!register) continue;
+        const value = field.initial === void 0 ? void 0 : setupPreloadValueForExpression(field.initial);
         if (value === void 0) continue;
         synthetic.push({
           register,
@@ -23813,6 +28871,16 @@ var MKProEmulatorBundle = (() => {
       });
     }
     return [...synthetic, ...constants, ...displayTemplateMasks];
+  }
+  function isIndexedInitializerListText(initial) {
+    return initial.trimStart().startsWith("[");
+  }
+  function stateBankElementsForV2Field(ast, field) {
+    const bankRef = field.bank;
+    if (bankRef === void 0) return [];
+    const bank = ast.banks?.find((candidate) => candidate.name === bankRef.name);
+    const member = bank?.members.find((candidate) => candidate.name === bankRef.member);
+    return member?.elements ?? [];
   }
   function buildGeneratedSetupProgram(ast, allocation, preloads, options, machineProfile, diagnostics, optimizations, warnings, candidates) {
     const fields = setupProgramFields(ast);
@@ -23874,6 +28942,89 @@ var MKProEmulatorBundle = (() => {
     if (expr.kind === "number") return true;
     return expr.kind === "unary" && expr.op === "-" && expr.expr.kind === "number";
   }
+  function setupPreloadValueForExpression(expr) {
+    const bitwiseLiteral = mk61BitwiseDisplayLiteralForExpression(expr);
+    if (bitwiseLiteral !== void 0) return bitwiseLiteral;
+    return isSetupLiteralExpression(expr) ? expressionToIntentText(expr) : void 0;
+  }
+  function mk61BitwiseDisplayLiteralForExpression(expr) {
+    if (!isMk61BitwiseExpression(expr)) return void 0;
+    const cells = mk61BitwiseMantissaCells(expr);
+    return cells === void 0 ? void 0 : mk61DisplayLiteralFromCells(cells);
+  }
+  function isMk61BitwiseExpression(expr) {
+    return expr.kind === "call" && (expr.callee === "bit_and" || expr.callee === "bit_or" || expr.callee === "bit_xor" || expr.callee === "bit_not");
+  }
+  function mk61BitwiseMantissaCells(expr) {
+    if (expr.kind === "number") return decimalLiteralMantissaCells(expr.raw);
+    if (expr.kind === "unary" && expr.op === "-") return mk61BitwiseMantissaCells(expr.expr);
+    if (expr.kind !== "call") return void 0;
+    if (expr.callee === "bit_not") {
+      if (expr.args.length !== 1) return void 0;
+      const source = mk61BitwiseMantissaCells(expr.args[0]);
+      if (source === void 0) return void 0;
+      const result2 = [8];
+      for (let index = 1; index < 8; index += 1) result2.push(~source[index] & 15);
+      return result2;
+    }
+    if (expr.callee !== "bit_and" && expr.callee !== "bit_or" && expr.callee !== "bit_xor") return void 0;
+    if (expr.args.length !== 2) return void 0;
+    const left = mk61BitwiseMantissaCells(expr.args[0]);
+    const right = mk61BitwiseMantissaCells(expr.args[1]);
+    if (left === void 0 || right === void 0) return void 0;
+    const result = [8];
+    for (let index = 1; index < 8; index += 1) {
+      result.push(mk61BitwiseNibble(left[index], right[index], expr.callee));
+    }
+    return result;
+  }
+  function decimalLiteralMantissaCells(raw) {
+    const match = /^(-)?(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/iu.exec(raw.trim());
+    if (match === null) return void 0;
+    const exponent = match[4] === void 0 ? 0 : Number(match[4]);
+    if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > 18) return void 0;
+    const integerPart = match[2];
+    const fractionalPart = match[3] ?? "";
+    let digits = `${integerPart}${fractionalPart}`.replace(/^0+/u, "");
+    const scale = fractionalPart.length - exponent;
+    if (scale < 0) digits = `${digits}${"0".repeat(-scale)}`;
+    if (digits.length === 0) return new Array(8).fill(0);
+    return [...digits.slice(0, 8).padEnd(8, "0")].map((digit) => Number(digit));
+  }
+  function mk61BitwiseNibble(left, right, op) {
+    switch (op) {
+      case "bit_and":
+        return left & right;
+      case "bit_or":
+        return left | right;
+      case "bit_xor":
+        return left ^ right;
+    }
+  }
+  function mk61DisplayLiteralFromCells(cells) {
+    if (cells.length !== 8 || cells.some((cell) => cell < 0 || cell > 15)) return void 0;
+    const glyphs = cells.map((cell) => MK61_DISPLAY_LITERAL_CELL_GLYPHS[cell]);
+    if (glyphs.some((glyph) => glyph === void 0)) return void 0;
+    return `${glyphs[0]}.${glyphs.slice(1).join("")}`;
+  }
+  var MK61_DISPLAY_LITERAL_CELL_GLYPHS = [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "-",
+    "L",
+    "\u0421",
+    "\u0413",
+    "\u0415",
+    "_"
+  ];
   function buildNegativeZeroDegreePreloadReport(allocation, optimizations) {
     if (allocation.negativeZeroDegree === void 0) return [];
     if (!optimizations.some((optimization) => optimization.name === "negative-zero-threshold-selector")) return [];
@@ -23937,15 +29088,17 @@ var MKProEmulatorBundle = (() => {
     if (optimizations.some((optimization) => optimization.name === "branch-removal")) {
       add("branch-removal", "Optimizer removed a conditional branch through a proved branchless equivalent.", "optimizer");
     }
-    if (optimizations.some((optimization) => optimization.name === "fl-unit-decrement")) {
-      add("fl-decrement-branch", "Optimizer selected F L0..F L3 for a unit decrement.", "optimizer");
+    if (optimizations.some((optimization) => optimization.name === "fl-decrement-zero-branch")) {
+      add("fl-decrement-branch", "Optimizer fused a decrement and zero test through F L0..F L3.", "optimizer");
     }
     if (optimizations.some(
       (optimization) => optimization.name === "indirect-register-flow" || optimization.name === "stable-indirect-flow" || optimization.name === "preloaded-indirect-flow" || optimization.name === "preloaded-super-dark-flow"
     )) {
       add("indirect-flow", "Optimizer selected register-held branch addresses for one-cell indirect flow.", "optimizer");
     }
-    if (optimizations.some((optimization) => optimization.name === "indirect-memory-table")) {
+    if (optimizations.some(
+      (optimization) => optimization.name === "indirect-memory-table" || optimization.name === "indexed-packed-row-table"
+    )) {
       add("indirect-memory", "Optimizer reused a stable selector for one-cell indirect memory access.", "optimizer");
     }
     if (optimizations.some((optimization) => optimization.name === "cyclic-address-layout")) {
@@ -23955,7 +29108,7 @@ var MKProEmulatorBundle = (() => {
       add("address-constants", "Optimizer reused constants as arithmetic values and address-like data.", "optimizer");
     }
     if (optimizations.some(
-      (optimization) => optimization.name === "x2-display-byte-scheduling" || optimization.name === "display-byte-x2-lowering"
+      (optimization) => optimization.name === "x2-display-byte-scheduling" || optimization.name === "display-byte-x2-lowering" || optimization.name === "floor-packed-row-expression-display"
     )) {
       add("x2-register", "Optimizer scheduled hidden X2 values across display-byte boundaries.", "optimizer");
     }
@@ -23969,6 +29122,11 @@ var MKProEmulatorBundle = (() => {
       add("z-stack-register", "Optimizer reused saved operands from Y/Z stack levels with X\u2194Y and F reverse.", "optimizer");
     }
     if (optimizations.some(
+      (optimization) => optimization.name === "stack-resident-temps" || optimization.name === "stack-resident-indexed-temp" || optimization.name === "stack-resident-control-flow"
+    )) {
+      add("stack-resident-temps", "Optimizer kept short-lived temporaries on the X/Y/Z/T stack instead of register spills.", "optimizer");
+    }
+    if (optimizations.some(
       (optimization) => optimization.name === "hex-mantissa-arithmetic" || optimization.name === "display-byte-x2-lowering"
     )) {
       add("display-bytes", "Optimizer packed state into hexadecimal mantissa/display-byte forms.", "optimizer");
@@ -23980,9 +29138,12 @@ var MKProEmulatorBundle = (() => {
       add("r0-t-alias", "Optimizer used R0 indirect behavior with explicit R0 transformation accounted for.", "optimizer");
     }
     if (optimizations.some(
-      (optimization) => optimization.name === "error-stop" || optimization.name === "screen-error-literal-lowering"
+      (optimization) => optimization.name === "error-stop" || optimization.name === "screen-error-literal-lowering" || optimization.name === "domain-error-guard"
     )) {
       add("error-stops", "Compiler emitted a domain-error pause or explicit trap.", "optimizer");
+    }
+    if (optimizations.some((optimization) => optimization.name === "raw-display-5f")) {
+      add("raw-display-5f", "Raw block emitted opcode 5F as a display-state transform that leaves X intact.", "optimizer");
     }
     if (cellRoles.some((cell) => cell.roles.includes("overlay"))) {
       add("code-data-overlay", "Layout marked address cells as reusable code/data overlay candidates.", "layout");
@@ -24063,7 +29224,7 @@ var MKProEmulatorBundle = (() => {
       });
     }
     if (optimizations.some(
-      (optimization) => optimization.name === "stable-indirect-flow" || optimization.name === "preloaded-indirect-flow" || optimization.name === "preloaded-super-dark-flow" || optimization.name === "indirect-memory-table" || optimization.name === "r0-fractional-sentinel"
+      (optimization) => optimization.name === "stable-indirect-flow" || optimization.name === "preloaded-indirect-flow" || optimization.name === "preloaded-super-dark-flow" || optimization.name === "indirect-memory-table" || optimization.name === "indexed-packed-row-table" || optimization.name === "r0-fractional-sentinel"
     )) {
       proofs.push({
         id: "indirect-addressing-ranges",
@@ -24181,6 +29342,7 @@ var MKProEmulatorBundle = (() => {
     let size = 0;
     for (const item of items) {
       if (item.kind === "label") {
+        if (item.hidden === true) continue;
         if (size > 0) blocks.push({ label: current, size });
         current = item.name;
         size = 0;
@@ -24193,6 +29355,7 @@ var MKProEmulatorBundle = (() => {
   }
 
   // src/core/format.ts
+  var LISTING_INLINE_CODE_TOKENS = 4;
   var MK61_HEX_SETUP_DIGITS = {
     A: "-",
     B: "L",
@@ -24204,33 +29367,45 @@ var MKProEmulatorBundle = (() => {
   function formatListing(result) {
     const setupProgram = result.report.setupProgram;
     const manualRows = formatManualSetupRows(result);
-    if (setupProgram !== void 0 || manualRows.length > 0) {
+    const patch = result.report.programPatch;
+    const setupBlock = setupProgram === void 0 && manualRows.length === 0 ? formatSetupBlock(result) : void 0;
+    const setupRows = [
+      ...manualRows,
+      ...(setupProgram?.steps ?? []).map((step) => stepToListingRow(step)),
+      ...setupBlock === void 0 ? [] : formatSetupPreloadRows(result.report.preloads) ?? []
+    ];
+    if (setupRows.length > 0) {
       return [
+        ...setupBlock === void 0 ? [] : ["Setup Block:", `  ${setupBlock}`, ""],
         "# Setup Listing",
-        formatListingRows([
-          ...manualRows,
-          ...(setupProgram?.steps ?? []).map(stepToListingRow)
-        ]),
+        formatListingRows(setupRows),
         "",
         "# Main Listing",
-        formatListingSteps(result.steps)
+        formatListingSteps(result.steps, patch),
+        ...formatPatchListingSection(patch)
       ].join("\n");
     }
-    const setupBlock = formatSetupBlock(result);
     if (setupBlock !== void 0) {
       return [
         "Setup Block:",
         `  ${setupBlock}`,
         "",
-        formatListingSteps(result.steps)
+        formatListingSteps(result.steps, patch),
+        ...formatPatchListingSection(patch)
       ].join("\n");
     }
-    return formatListingSteps(result.steps);
+    return [
+      formatListingSteps(result.steps, patch),
+      ...formatPatchListingSection(patch)
+    ].join("\n");
   }
-  function formatListingSteps(steps) {
-    return formatListingRows(steps.map(stepToListingRow));
+  function formatListingSteps(steps, patch) {
+    const patches = patchByAddress(patch);
+    return formatListingRows(coalesceNumberEntryRows(steps, patches));
   }
   function formatListingRows(rows) {
+    const codeWidth = Math.max(2, ...rows.map((row) => row.hex.length));
+    if (codeWidth > 2) return formatWideCodeListingRows(rows, codeWidth);
     const lines = [
       " Step | Code | Command                 | Comment",
       "------+------+-------------------------+----------------"
@@ -24238,13 +29413,63 @@ var MKProEmulatorBundle = (() => {
     for (const row of rows) {
       const address = formatListingAddress(row.address).padStart(4, " ");
       const code = row.hex.padStart(2, " ");
-      const command = row.mnemonic.padEnd(23, " ");
+      const command = toKeycaps(row.mnemonic).padEnd(23, " ");
       const comments = [row.comment].filter((value) => Boolean(value)).join("; ");
       lines.push(comments.length > 0 ? ` ${address} |  ${code}  | ${command} | ${comments}` : ` ${address} |  ${code}  | ${command} |`);
     }
     return lines.join("\n");
   }
-  function stepToListingRow(step) {
+  function formatWideCodeListingRows(rows, codeWidth) {
+    const lines = [
+      ` Step | ${"Code".padEnd(codeWidth, " ")} | Command                 | Comment`,
+      `------+${"-".repeat(codeWidth + 2)}+-------------------------+----------------`
+    ];
+    for (const row of rows) {
+      const address = formatListingAddress(row.address).padStart(4, " ");
+      const code = row.hex.padEnd(codeWidth, " ");
+      const command = toKeycaps(row.mnemonic).padEnd(23, " ");
+      const comments = [row.comment].filter((value) => Boolean(value)).join("; ");
+      lines.push(comments.length > 0 ? ` ${address} | ${code} | ${command} | ${comments}` : ` ${address} | ${code} | ${command} |`);
+    }
+    return lines.join("\n");
+  }
+  function formatPatchListingSection(patch) {
+    if (patch === void 0) return [];
+    return ["", "# Patch Listing", formatProgramPatchReport(patch)];
+  }
+  function formatProgramPatchReport(patch) {
+    const lines = [
+      " Step | Code | Method          | Keys",
+      "------+------+-----------------+----------------"
+    ];
+    for (const step of patch.steps) {
+      lines.push(
+        ` ${formatPatchAddress(step.address).padStart(4, " ")} |  ${step.hex}  | ${formatPatchMethod(step.method).padEnd(15, " ")} | ${step.keys.map(toKeycaps).join(" ; ")} (${step.note})`
+      );
+    }
+    for (const warning of patch.warnings) {
+      lines.push(`   -- |   -  | warning         | ${warning}`);
+    }
+    return lines.join("\n");
+  }
+  function formatPatchMethod(method) {
+    if (method === "egg-f-prefix") return "\u0415\u0413\u04130\u0413/\u0412\u041F";
+    return "\u0412/\u041E \u041A \u041F\u041F R";
+  }
+  function patchByAddress(patch) {
+    const result = /* @__PURE__ */ new Map();
+    for (const step of patch?.steps ?? []) result.set(step.address, step);
+    return result;
+  }
+  function stepToListingRow(step, patch) {
+    if (patch !== void 0) {
+      return {
+        address: step.address,
+        hex: patch.placeholderHex,
+        mnemonic: patch.placeholderMnemonic,
+        comment: [step.comment, `placeholder for ${step.hex}; apply Patch Listing`].filter((value) => value !== void 0 && value.length > 0).join("; ")
+      };
+    }
     const row = {
       address: step.address,
       hex: step.hex,
@@ -24252,6 +29477,80 @@ var MKProEmulatorBundle = (() => {
     };
     if (step.comment !== void 0) row.comment = step.comment;
     return row;
+  }
+  function coalesceNumberEntryRows(steps, patches) {
+    const rows = [];
+    for (let index = 0; index < steps.length; index += 1) {
+      const step = steps[index];
+      const patch = patches.get(step.address);
+      if (patch !== void 0 || !isNumberEntryStep(step)) {
+        rows.push(stepToListingRow(step, patch));
+        continue;
+      }
+      const group = [step];
+      while (index + 1 < steps.length) {
+        const next = steps[index + 1];
+        if (patches.has(next.address) || !isNumberEntryStep(next)) break;
+        group.push(next);
+        index += 1;
+      }
+      if (group.length === 1) {
+        rows.push(stepToListingRow(step));
+        continue;
+      }
+      rows.push(numberEntryGroupToListingRow(group));
+    }
+    return rows;
+  }
+  function isNumberEntryStep(step) {
+    return /^\d$/u.test(step.mnemonic) || step.mnemonic === "." || step.mnemonic === "\u0412\u041F" || step.mnemonic === "/-/";
+  }
+  function numberEntryGroupToListingRow(steps) {
+    const hex3 = formatNumberEntryCode(steps);
+    const comment = steps.map((step) => step.comment).find((value) => value !== void 0 && value.length > 0);
+    const row = {
+      address: steps[0].address,
+      hex: hex3,
+      mnemonic: formatNumberEntryMnemonic(steps)
+    };
+    if (comment !== void 0) row.comment = comment;
+    return row;
+  }
+  function formatNumberEntryCode(steps) {
+    const codes = steps.map((step) => step.hex);
+    if (codes.length <= LISTING_INLINE_CODE_TOKENS) return codes.join(" ");
+    return `${codes[0]} ... ${codes.at(-1)}`;
+  }
+  function formatNumberEntryMnemonic(steps) {
+    let mantissa = "";
+    let exponent;
+    let negative = false;
+    let exponentNegative = false;
+    for (const step of steps) {
+      if (/^\d$/u.test(step.mnemonic)) {
+        if (exponent !== void 0) exponent += step.mnemonic;
+        else mantissa += step.mnemonic;
+        continue;
+      }
+      if (step.mnemonic === ".") {
+        if (exponent === void 0) mantissa += ".";
+        continue;
+      }
+      if (step.mnemonic === "\u0412\u041F") {
+        exponent = "";
+        continue;
+      }
+      if (step.mnemonic === "/-/") {
+        if (exponent !== void 0 && exponent.length > 0 && !exponentNegative) {
+          exponentNegative = true;
+        } else {
+          negative = true;
+        }
+      }
+    }
+    const base = mantissa.length === 0 ? "0" : mantissa;
+    const exp = exponent === void 0 ? "" : `E${exponentNegative ? "-" : ""}${exponent}`;
+    return `${negative ? "-" : ""}${base}${exp}`;
   }
   function formatProgramTokens(steps) {
     return steps.map((step) => step.hex).join("\n");
@@ -24275,6 +29574,29 @@ var MKProEmulatorBundle = (() => {
     if (result.report.setupProgram === void 0) return void 0;
     return formatProgramTokens(result.report.setupProgram.steps);
   }
+  var KEYCAP_LABELS = {
+    "*": "\xD7",
+    "/": "\xF7",
+    "-": "\u2212",
+    "<->": "\u2194",
+    "F pi": "F \u03C0",
+    "F sqrt": "F \u221A"
+  };
+  var SUPERSCRIPT_EXPONENTS = [
+    ["^-1", "\u207B\xB9"],
+    ["^x", "\u02E3"],
+    ["^y", "\u02B8"],
+    ["^2", "\xB2"]
+  ];
+  function toKeycaps(mnemonic) {
+    const exact = KEYCAP_LABELS[mnemonic];
+    if (exact !== void 0) return exact;
+    let label = mnemonic;
+    for (const [ascii, glyph] of SUPERSCRIPT_EXPONENTS) label = label.replaceAll(ascii, glyph);
+    label = label.replaceAll("->", "\u2192").replaceAll("<-", "\u2190");
+    label = label.replaceAll(">=", "\u2265").replaceAll("!=", "\u2260");
+    return label;
+  }
   function formatManualSetupRows(result) {
     return manualSetupInputs(result).map((input) => ({
       address: "--",
@@ -24282,6 +29604,59 @@ var MKProEmulatorBundle = (() => {
       mnemonic: `enter ${input.name}`,
       comment: `${formatManualInputRange(input)} in ${input.stack}`
     }));
+  }
+  function formatSetupPreloadRows(preloads) {
+    const setupPreloads = preloads.filter((preload) => formatSetupAssignment(preload) !== void 0);
+    if (setupPreloads.length === 0) return [];
+    if (setupPreloads.some((preload) => executableSetupValue2(preload.value) === void 0)) return void 0;
+    return setupPreloadRows(setupPreloads);
+  }
+  function setupPreloadRows(preloads) {
+    const rows = [];
+    let address = 0;
+    for (const group of groupSetupPreloadsByExecutableValue(executableSetupPreloadEntries(preloads))) {
+      rows.push({ address, hex: "-", mnemonic: group.value });
+      address += 1;
+      for (const preload of group.preloads) {
+        const register = registerFromText(preload.register);
+        const opcode = 64 + registerIndex(register);
+        rows.push({
+          address,
+          hex: getOpcode(opcode).hex,
+          mnemonic: getOpcode(opcode).name,
+          comment: `setup R${preload.register}`
+        });
+        address += 1;
+      }
+    }
+    return rows;
+  }
+  function executableSetupPreloadEntries(preloads) {
+    const entries = [];
+    for (const preload of preloads) {
+      const value = executableSetupValue2(preload.value);
+      if (value !== void 0) entries.push({ preload, value });
+    }
+    return entries;
+  }
+  function groupSetupPreloadsByExecutableValue(entries) {
+    const consumed = /* @__PURE__ */ new Set();
+    const groups = [];
+    for (let index = 0; index < entries.length; index += 1) {
+      if (consumed.has(index)) continue;
+      const entry = entries[index];
+      const preloads = [entry.preload];
+      consumed.add(index);
+      for (let other = index + 1; other < entries.length; other += 1) {
+        if (consumed.has(other)) continue;
+        const candidate = entries[other];
+        if (candidate.value !== entry.value) continue;
+        preloads.push(candidate.preload);
+        consumed.add(other);
+      }
+      groups.push({ value: entry.value, preloads });
+    }
+    return groups;
   }
   function manualSetupInputs(result) {
     const inputs = [];
@@ -24326,12 +29701,42 @@ var MKProEmulatorBundle = (() => {
   }
   function formatSetupValue(value) {
     const normalized = value.toUpperCase();
+    const keyboardDecimal = compactKeyboardDecimal(value);
+    if (keyboardDecimal !== void 0) return keyboardDecimal;
     if (isScientificDecimal(normalized)) return value;
     if (!/^[0-9A-F]+$/iu.test(normalized) || !/[A-F]/iu.test(normalized)) return value;
     return [...normalized].map((digit) => MK61_HEX_SETUP_DIGITS[digit] ?? digit).join("");
   }
+  function executableSetupValue2(value) {
+    const normalized = value.trim().toUpperCase();
+    if (/^-?\d+(?:[,.]\d+)?(?:E-?\d{1,2})?$/iu.test(normalized)) {
+      return compactKeyboardDecimal(normalized) ?? normalized.replace(",", ".");
+    }
+    if (/^[A-F][0-9A-F]$/iu.test(normalized)) return String(formalAddressInfo(Number.parseInt(normalized, 16)).actual);
+    return void 0;
+  }
   function isScientificDecimal(value) {
     return /^-?\d+(?:[,.]\d+)?E-?\d{1,2}$/iu.test(value);
+  }
+  function compactKeyboardDecimal(value) {
+    const normalized = value.trim().replace(",", ".");
+    if (isScientificDecimal(normalized)) return normalized.toUpperCase();
+    const match = /^(-?)(\d+)$/.exec(normalized);
+    if (!match) return void 0;
+    const sign = match[1];
+    const digits = match[2].replace(/^0+(?=\d)/u, "");
+    if (digits === "0") return void 0;
+    const significant = digits.replace(/0+$/u, "");
+    const exponent = digits.length - 1;
+    if (exponent <= 0 || exponent > 99 || significant.length > 8) return void 0;
+    const mantissa = significant.length === 1 ? significant : `${significant[0]}.${significant.slice(1)}`;
+    const candidate = `${sign}${mantissa}E${exponent}`;
+    return numberEntryLength(candidate) < numberEntryLength(normalized) ? candidate : void 0;
+  }
+  function numberEntryLength(value) {
+    const emitter = new MachineEmitter();
+    emitter.emitNumber(value);
+    return emitter.items.filter((item) => item.kind === "op").length;
   }
 
   // src/browser/emulator-bridge.ts

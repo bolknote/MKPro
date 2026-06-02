@@ -215,6 +215,52 @@ program StakeSinProbe {
     expect(runChoice(["В↑", "С/П"])).toMatch(/^3,?$/u);
   });
 
+  it("runs a generalized stack-stop risk (cos) flow keeping the stake in Y", () => {
+    // Same kept-in-Y / transform-in-X machine shape as the sin form, but with a
+    // different intrinsic, proving the generalized fusion stays runtime-correct.
+    const source = `
+program StakeCosProbe {
+  state {
+    stake_value: counter 0..99 = 2
+    result: counter 0..99 = 0
+  }
+
+  loop {
+    result = robber_fight(stake_value)
+    halt(result)
+  }
+
+  fn robber_fight(stake) {
+    show(stake)
+    return int(stake * (1 + cos(read())))
+  }
+}
+`;
+    const result = compileMKPro(source, { budget: 999, analysis: true });
+    expect(result.report.optimizations.some((item) => item.name === "x-param-stake-sin-read")).toBe(true);
+
+    const runChoice = (keys: string[]): string => {
+      const calc = new MK61();
+      const loaded = calc.loadProgram(result.steps.map((step) => step.opcode));
+      expect(loaded.diagnostics).toEqual([]);
+      for (const preload of result.report.preloads) {
+        calc.setRegister(preload.register, preload.value);
+      }
+
+      calc.pressSequence(["В/О", "С/П"]);
+      expect(calc.runUntilStable({ maxFrames: 500, stableFrames: 6 }).stopped).toBe(true);
+      expect(calc.displayText()).toMatch(/^2,?$/u);
+
+      calc.pressSequence(keys);
+      expect(calc.runUntilStable({ maxFrames: 500, stableFrames: 6 }).stopped).toBe(true);
+      return calc.displayText();
+    };
+
+    // cos(0) = 1 -> int(2 * (1 + 1)) = 4 (calculator is in radians/degrees mode
+    // agnostic here because the input is exactly 0).
+    expect(runChoice(["0", "С/П"])).toMatch(/^4,?$/u);
+  });
+
   it("runs fused resource underflow as an error stop only after the counter is exhausted", () => {
     const source = `
 program ResourceUnderflowProbe {

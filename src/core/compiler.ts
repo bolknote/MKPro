@@ -13,7 +13,7 @@ import { verifySuperDarkSuffixLayout } from "./super-dark-layout.ts";
 import { MachineEmitter } from "./emit/machine-emitter.ts";
 import type { ProgramAnalysis } from "./emit/program-analysis.ts";
 import { RuntimeHelperRegistry } from "./emit/runtime-helpers.ts";
-import { compileExpression, expressionLeadsWithRead } from "./emit/lowering/expr.ts";
+import { compileExpression, compileStackStopRiskTail, expressionLeadsWithRead } from "./emit/lowering/expr.ts";
 import { compileAssignThenDomainTrap, compileCondition, compileDecrementUnderflowBranch, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitKnownOneIndirectLoopBack, statementsAreDomainErrorTrap } from "./emit/lowering/control-flow.ts";
 import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts";
 import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileTicTacToeCellMaskReuse } from "./emit/lowering/spatial.ts";
@@ -95,6 +95,7 @@ import {
   matchEqualityConstantCondition,
   matchNearAnyHelperCondition,
   matchNegativeZeroThresholdCondition,
+  matchStackStopRisk,
   matchXParamReturnDecay,
   matchXParamStakeSinRead,
   matchSingleBitMaskOpAssignment,
@@ -152,6 +153,7 @@ import type {
   DisplaySourceItem,
   ExecutableSetupPreload,
   RegisterAllocation,
+  StackStopRiskMatch,
   XParamProcLowering,
 } from "./emit/lowering-helpers.ts";
 import { MK61_PROFILE, machineSupports, type MachineProfile } from "./machineProfile.ts";
@@ -5313,6 +5315,11 @@ export class EmitContext {
   // serves as the input entry; the next read() lowering consumes this instead of
   // emitting its own С/П.
   private inputArmedInX = false;
+  // Set while a value has been parked in Y across a calculator stop (the
+  // "stack-stop fusion" head). The post-stop arithmetic reads this through
+  // currentYVariable so the scheduler can keep the parked value in Y instead of
+  // recalling it from a register, and reject expressions that re-reference it.
+  private parkedYVariable: string | undefined;
   readonly bankSelectorCache = new Map<string, BankSelectorCacheEntry>();
   // Read-only program analysis is computed once and injected; the lowering code
   // reads these maps through getters so call sites stay unchanged.
@@ -5409,6 +5416,12 @@ export class EmitContext {
   }
   set currentXVariable(value: string | undefined) {
     this.emitter.currentXVariable = value;
+  }
+  get currentYVariable(): string | undefined {
+    return this.parkedYVariable;
+  }
+  set currentYVariable(value: string | undefined) {
+    this.parkedYVariable = value;
   }
   get currentXAliases(): Set<string> {
     return this.emitter.currentXAliases;
@@ -6883,22 +6896,26 @@ export class EmitContext {
   ): boolean {
     const stake = this.singlePlainDisplaySource(show.display);
     if (stake === undefined) return false;
+    let match: StackStopRiskMatch | undefined;
     if (input !== undefined) {
       const inputReads = countIdentifierReads(consumer.expr, input.target);
       if (inputReads === 0 || (this.readCounts.get(input.target) ?? 0) !== inputReads) return false;
-      if (!matchStakeSinInputExpression(consumer.expr, stake, input.target)) return false;
-    } else if (!matchStakeSinReadExpression(consumer.expr, stake)) {
-      return false;
+      match = matchStackStopRisk(consumer.expr, stake, input.target);
+    } else {
+      match = matchStackStopRisk(consumer.expr, stake);
     }
+    if (match === undefined) return false;
 
     this.emitRecall(stake, `display ${show.display} source`, show.line);
     this.emitOp(0x0e, "В↑", "keep displayed stake in Y", show.line);
     this.emitOp(0x50, "С/П", `show ${show.display}`, show.line);
-    this.emitOp(0x1c, "F sin", input === undefined ? "risk input read()" : `risk input ${input.target}`, input?.line ?? consumer.line);
-    this.emitOp(0x01, "1", "risk multiplier", consumer.line);
-    this.emitOp(0x10, "+", "risk multiplier", consumer.line);
-    this.emitOp(0x12, "*", "risk stake", consumer.line);
-    this.emitOp(0x34, "К [x]", "risk integer result", consumer.line);
+    this.armValueInY(stake);
+    compileStackStopRiskTail(this, match, {
+      inputComment: input === undefined ? "risk input read()" : `risk input ${input.target}`,
+      inputLine: input?.line ?? consumer.line,
+      consumerLine: consumer.line,
+    });
+    this.clearArmedValueInY();
     if (consumer.kind === "return_value") {
       this.emitOp(0x52, "В/О", "return value", consumer.line);
     } else {
@@ -6933,6 +6950,16 @@ export class EmitContext {
 
   clearArmedInputInX(): void {
     this.inputArmedInX = false;
+  }
+
+  // Record that `name` is parked in Y across a stop (after a В↑/stop head), so
+  // the stack-stop scheduler can keep it resident for the trailing binary op.
+  armValueInY(name: string): void {
+    this.parkedYVariable = name;
+  }
+
+  clearArmedValueInY(): void {
+    this.parkedYVariable = undefined;
   }
 
   consumeArmedInputInX(): boolean {
@@ -9046,47 +9073,6 @@ function decrementUnderflowCondition(condition: ConditionAst, target: string): b
     condition.left.name === target &&
     condition.op === "<" &&
     isZeroExpression(condition.right);
-}
-
-function matchStakeSinInputExpression(expr: ExpressionAst, stake: string, input: string): boolean {
-  return matchStakeSinExpression(expr, stake, (candidate) => isIdentifierExpression(candidate, input));
-}
-
-function matchStakeSinReadExpression(expr: ExpressionAst, stake: string): boolean {
-  return matchStakeSinExpression(expr, stake, isReadCallExpression);
-}
-
-function matchStakeSinExpression(
-  expr: ExpressionAst,
-  stake: string,
-  inputMatcher: (expr: ExpressionAst) => boolean,
-): boolean {
-  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "int" || expr.args.length !== 1) return false;
-  const body = expr.args[0]!;
-  if (body.kind !== "binary" || body.op !== "*") return false;
-  return (isIdentifierExpression(body.left, stake) && isOnePlusSinInput(body.right, inputMatcher)) ||
-    (isIdentifierExpression(body.right, stake) && isOnePlusSinInput(body.left, inputMatcher));
-}
-
-function isOnePlusSinInput(expr: ExpressionAst, inputMatcher: (expr: ExpressionAst) => boolean): boolean {
-  if (expr.kind !== "binary" || expr.op !== "+") return false;
-  return (isNumericValue(expr.left, 1) && isSinInput(expr.right, inputMatcher)) ||
-    (isNumericValue(expr.right, 1) && isSinInput(expr.left, inputMatcher));
-}
-
-function isSinInput(expr: ExpressionAst, inputMatcher: (expr: ExpressionAst) => boolean): boolean {
-  return expr.kind === "call" &&
-    expr.callee.toLowerCase() === "sin" &&
-    expr.args.length === 1 &&
-    inputMatcher(expr.args[0]!);
-}
-
-function isReadCallExpression(expr: ExpressionAst): boolean {
-  return expr.kind === "call" && expr.callee.toLowerCase() === "read" && expr.args.length === 0;
-}
-
-function isIdentifierExpression(expr: ExpressionAst, name: string): boolean {
-  return expr.kind === "identifier" && expr.name === name;
 }
 
 function coordListNameFromItems(items: readonly { name: string }[]): string | undefined {

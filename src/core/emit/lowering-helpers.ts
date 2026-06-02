@@ -92,6 +92,7 @@ export interface XParamStakeSinRead {
   display: string;
   showLine: number;
   line: number;
+  risk: StackStopRiskMatch;
 }
 
 export type DisplaySourceItem = Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }>;
@@ -2900,29 +2901,81 @@ export function matchXParamStakeSinRead(program: ProgramAst, proc: ProcAst): XPa
   if (item?.kind !== "source" || item.name !== param || item.expr !== undefined || item.width !== undefined) {
     return undefined;
   }
-  if (!matchStakeSinReadExpression(ret.expr, param)) return undefined;
-  return { param, display: show.display, showLine: show.line, line: ret.line };
+  const risk = matchStackStopRisk(ret.expr, param);
+  if (risk === undefined) return undefined;
+  return { param, display: show.display, showLine: show.line, line: ret.line, risk };
 }
 
-function matchStakeSinReadExpression(expr: ExpressionAst, stake: string): boolean {
-  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "int" || expr.args.length !== 1) return false;
-  const body = expr.args[0]!;
-  if (body.kind !== "binary" || body.op !== "*") return false;
-  return (isIdentifierExpression(body.left, stake) && isOnePlusSinRead(body.right)) ||
-    (isIdentifierExpression(body.right, stake) && isOnePlusSinRead(body.left));
-}
+// --- Stack-stop risk fusion (generalized "stake-sin") -----------------------
+//
+// The classic robber-fight idiom shows a stake, stops for a player input, and
+// returns `int(stake * (1 + sin(read())))`. The compact machine form keeps the
+// stake in Y across the С/П stop and transforms the entered value in X, so the
+// whole result computes on the stack with no input register.
+//
+// This recognizer generalizes that single hardcoded formula to any pure
+// expression of the shape `wrap*( Y (yOp) g(input) )`, where:
+//   - `Y` is the displayed value parked in Y across the stop;
+//   - `input` is the entered value sitting in X (a bare `read()` or, for the
+//     stored-input variant, a named input field);
+//   - `g(input)` is a chain of single-argument X-transforming intrinsics over
+//     the input, optionally fused with one single-digit additive/scaling
+//     constant (e.g. `1 + sin(read())`, `cos(read())`, `2 * sin(read())`);
+//   - `yOp` is any of `+`, `-`, `*`, `/` (non-commutative ops require Y on the
+//     left so they map directly to the machine's `Y op X` order);
+//   - `wrap*` is an outer chain of X-transforming intrinsics (e.g. `int(...)`).
+//
+// All of these lower to the same kept-in-Y / transform-in-X stack sequence, so
+// the generalization never grows a program; the canonical `sin` form is emitted
+// byte-for-byte identically.
 
-function isOnePlusSinRead(expr: ExpressionAst): boolean {
-  if (expr.kind !== "binary" || expr.op !== "+") return false;
-  return (isNumericValue(expr.left, 1) && isSinRead(expr.right)) ||
-    (isNumericValue(expr.right, 1) && isSinRead(expr.left));
-}
+// Single source of truth for the single-argument intrinsics that lower as
+// "compile the argument, then apply one X-transforming opcode" -- the argument
+// is emitted first and nothing precedes it, so the result stays in X with the
+// rest of the stack untouched. Shared by compileCall (code generation),
+// expressionLeadsWithRead, and the stack-stop scheduler (operand ordering).
+export const X_TRANSFORM_UNARY_OPCODES: Record<string, [number, string]> = {
+  abs: [0x31, "К |x|"],
+  sign: [0x32, "К ЗН"],
+  int: [0x34, "К [x]"],
+  frac: [0x35, "К {x}"],
+  sqr: [0x22, "F x^2"],
+  inv: [0x23, "F 1/x"],
+  sqrt: [0x21, "F sqrt"],
+  lg: [0x17, "F lg"],
+  ln: [0x18, "F ln"],
+  sin: [0x1c, "F sin"],
+  cos: [0x1d, "F cos"],
+  tg: [0x1e, "F tg"],
+  asin: [0x19, "F sin^-1"],
+  acos: [0x1a, "F cos^-1"],
+  atg: [0x1b, "F tg^-1"],
+  exp: [0x16, "F e^x"],
+  pow10: [0x15, "F 10^x"],
+  bit_not: [0x3a, "К ИНВ"],
+  to_min: [0x26, "К °->′"],
+  to_sec: [0x2a, "К °->′\""],
+  from_sec: [0x30, "К °<-′\""],
+  from_min: [0x33, "К °<-′"],
+};
 
-function isSinRead(expr: ExpressionAst): boolean {
-  return expr.kind === "call" &&
-    expr.callee.toLowerCase() === "sin" &&
-    expr.args.length === 1 &&
-    isReadCallExpression(expr.args[0]!);
+export const X_TRANSFORM_UNARY_FUNCTIONS: ReadonlySet<string> = new Set(Object.keys(X_TRANSFORM_UNARY_OPCODES));
+
+export interface StackStopRiskMatch {
+  // Name of the value parked in Y across the stop.
+  yName: string;
+  // Binary operator combining the Y-parked value with the X-computed input.
+  yOp: "+" | "-" | "*" | "/";
+  // True when `yName` is the left operand (`Y op X`); commutative ops also allow
+  // the parked value on the right.
+  yOnLeft: boolean;
+  // Unary X-transform opcodes applied to the input, innermost-first (emit order).
+  inputUnary: ReadonlyArray<readonly [number, string]>;
+  // Optional single-digit constant fused with the input chain.
+  additive?: { digit: number; op: "+" | "-" | "*" | "/" };
+  // Outer X-transform wraps applied to `(Y op X)`, outermost-first (peel order;
+  // emitted in reverse so the innermost wrap is applied first).
+  wraps: ReadonlyArray<readonly [number, string]>;
 }
 
 function isReadCallExpression(expr: ExpressionAst): boolean {
@@ -2931,6 +2984,136 @@ function isReadCallExpression(expr: ExpressionAst): boolean {
 
 function isIdentifierExpression(expr: ExpressionAst, name: string): boolean {
   return expr.kind === "identifier" && expr.name === name;
+}
+
+function countMatchingNodes(expr: ExpressionAst, pred: (e: ExpressionAst) => boolean): number {
+  const self = pred(expr) ? 1 : 0;
+  switch (expr.kind) {
+    case "call":
+      return self + expr.args.reduce((sum, arg) => sum + countMatchingNodes(arg, pred), 0);
+    case "binary":
+      return self + countMatchingNodes(expr.left, pred) + countMatchingNodes(expr.right, pred);
+    case "unary":
+      return self + countMatchingNodes(expr.expr, pred);
+    case "indexed":
+      return self + countMatchingNodes(expr.index, pred);
+    default:
+      return self;
+  }
+}
+
+function expressionReferencesName(expr: ExpressionAst, name: string): boolean {
+  switch (expr.kind) {
+    case "identifier":
+      return expr.name === name;
+    case "indexed":
+      return expr.base === name || expressionReferencesName(expr.index, name);
+    case "unary":
+      return expressionReferencesName(expr.expr, name);
+    case "binary":
+      return expressionReferencesName(expr.left, name) || expressionReferencesName(expr.right, name);
+    case "call":
+      return expr.args.some((arg) => expressionReferencesName(arg, name));
+    default:
+      return false;
+  }
+}
+
+// A non-negative single-digit integer literal (0..9), the only constant the
+// fused tail can push as one opcode without breaking byte-for-byte sizing.
+function singleDigitLiteral(expr: ExpressionAst): number | undefined {
+  if (expr.kind !== "number") return undefined;
+  const trimmed = expr.raw.trim();
+  if (!/^[0-9]$/u.test(trimmed)) return undefined;
+  return Number(trimmed);
+}
+
+// Collect the chain of X-transform unary intrinsics wrapping the input leaf,
+// innermost-first (emit order). Returns undefined when `expr` is not a pure
+// chain bottoming out at the leaf.
+function collectInputUnaryChain(
+  expr: ExpressionAst,
+  isLeaf: (e: ExpressionAst) => boolean,
+): Array<readonly [number, string]> | undefined {
+  if (isLeaf(expr)) return [];
+  if (expr.kind === "call" && expr.args.length === 1) {
+    const opcode = X_TRANSFORM_UNARY_OPCODES[expr.callee.toLowerCase()];
+    if (opcode === undefined) return undefined;
+    const inner = collectInputUnaryChain(expr.args[0]!, isLeaf);
+    if (inner === undefined) return undefined;
+    return [...inner, opcode];
+  }
+  return undefined;
+}
+
+// Recognize `wrap*( yName (yOp) g(input) )` (see header comment). `inputName`
+// selects the stored-input variant (input leaf is that identifier) vs. the
+// direct variant (input leaf is a bare `read()`).
+export function matchStackStopRisk(
+  expr: ExpressionAst,
+  yName: string,
+  inputName?: string,
+): StackStopRiskMatch | undefined {
+  const isLeaf = (candidate: ExpressionAst): boolean =>
+    inputName !== undefined
+      ? isIdentifierExpression(candidate, inputName)
+      : isReadCallExpression(candidate);
+  if (countMatchingNodes(expr, isLeaf) !== 1) return undefined;
+
+  const wraps: Array<readonly [number, string]> = [];
+  let core = expr;
+  while (
+    core.kind === "call" &&
+    core.args.length === 1 &&
+    X_TRANSFORM_UNARY_OPCODES[core.callee.toLowerCase()] !== undefined &&
+    expressionReferencesName(core.args[0]!, yName)
+  ) {
+    wraps.push(X_TRANSFORM_UNARY_OPCODES[core.callee.toLowerCase()]!);
+    core = core.args[0]!;
+  }
+
+  if (core.kind !== "binary") return undefined;
+  const yOp = core.op;
+  let xExpr: ExpressionAst;
+  let yOnLeft: boolean;
+  if (isIdentifierExpression(core.left, yName)) {
+    yOnLeft = true;
+    xExpr = core.right;
+  } else if (isIdentifierExpression(core.right, yName)) {
+    yOnLeft = false;
+    xExpr = core.left;
+  } else {
+    return undefined;
+  }
+  if ((yOp === "-" || yOp === "/") && !yOnLeft) return undefined;
+  if (expressionReferencesName(xExpr, yName)) return undefined;
+
+  let additive: { digit: number; op: "+" | "-" | "*" | "/" } | undefined;
+  let chainExpr = xExpr;
+  if (xExpr.kind === "binary") {
+    const leftHasLeaf = countMatchingNodes(xExpr.left, isLeaf) > 0;
+    const rightHasLeaf = countMatchingNodes(xExpr.right, isLeaf) > 0;
+    if (leftHasLeaf && !rightHasLeaf) {
+      const digit = singleDigitLiteral(xExpr.right);
+      if (digit === undefined) return undefined;
+      additive = { digit, op: xExpr.op };
+      chainExpr = xExpr.left;
+    } else if (rightHasLeaf && !leftHasLeaf) {
+      if (xExpr.op === "-" || xExpr.op === "/") return undefined;
+      const digit = singleDigitLiteral(xExpr.left);
+      if (digit === undefined) return undefined;
+      additive = { digit, op: xExpr.op };
+      chainExpr = xExpr.right;
+    } else {
+      return undefined;
+    }
+  }
+
+  const inputUnary = collectInputUnaryChain(chainExpr, isLeaf);
+  if (inputUnary === undefined) return undefined;
+  const match: StackStopRiskMatch = { yName, yOp, yOnLeft, inputUnary, wraps };
+  if (additive !== undefined) match.additive = additive;
+  return match;
 }
 
 export function optimizeDispatchDefaultCases(

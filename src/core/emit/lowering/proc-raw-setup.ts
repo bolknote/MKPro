@@ -17,6 +17,7 @@ import {
 } from "./display.ts";
 import {
   compileExpression,
+  compileStackStopRiskTail,
 } from "./expr.ts";
 import {
   compileBitMaskWithQuotientScratch,
@@ -29,6 +30,7 @@ import type {
   ExecutableSetupPreload,
   StackUnaryDerivationCall,
   XParamProcLowering,
+  XParamStakeSinRead,
 } from "../lowering-helpers.ts";
 import {
   COORD_LIST_DX,
@@ -683,15 +685,17 @@ function compileXParamReturnDecayBody(
 
 function compileXParamStakeSinReadBody(
   ctx: LoweringCtx,
-  stakeSin: { display: string; showLine: number; line: number },
+  stakeSin: XParamStakeSinRead,
 ): void {
     ctx.emitOp(0x0e, "В↑", "x-param stake keep displayed stake", stakeSin.showLine);
     ctx.emitOp(0x50, "С/П", `show ${stakeSin.display}`, stakeSin.showLine);
-    ctx.emitOp(0x1c, "F sin", "risk input read()", stakeSin.line);
-    ctx.emitOp(0x01, "1", "risk multiplier", stakeSin.line);
-    ctx.emitOp(0x10, "+", "risk multiplier", stakeSin.line);
-    ctx.emitOp(0x12, "*", "risk stake", stakeSin.line);
-    ctx.emitOp(0x34, "К [x]", "risk integer result", stakeSin.line);
+    ctx.armValueInY(stakeSin.param);
+    compileStackStopRiskTail(ctx, stakeSin.risk, {
+      inputComment: "risk input read()",
+      inputLine: stakeSin.line,
+      consumerLine: stakeSin.line,
+    });
+    ctx.clearArmedValueInY();
 }
 
 export function compileRuntimeHelpers(ctx: LoweringCtx): void {

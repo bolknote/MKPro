@@ -546,6 +546,61 @@ program StakeSinReadExpression {
     expect(result.steps.some((step) => step.comment === "arg stake for robber_fight")).toBe(false);
   });
 
+  // The stake-sin lowering generalizes to a stack-stop fusion over any pure
+  // `wrap*( stake (op) g(read()) )` shape. These lock that the generalized forms
+  // fuse through the same path (no input register, no second С/П) and never grow
+  // past the canonical 14-cell sin form.
+  const stackStopProgram = (formula: string): string => `
+program StackStopRiskGeneral {
+  state {
+    stake_value: counter 0..99 = 2
+    result: counter 0..99 = 0
+  }
+
+  loop {
+    result = robber_fight(stake_value)
+    halt(result)
+  }
+
+  fn robber_fight(stake) {
+    show(stake)
+    return ${formula}
+  }
+}
+`;
+
+  for (const { label, formula, cells } of [
+    { label: "cos instead of sin", formula: "int(stake * (1 + cos(read())))", cells: 14 },
+    { label: "a non-unit additive digit", formula: "int(stake * (2 + sin(read())))", cells: 14 },
+    { label: "a scaling multiply", formula: "int(stake * (2 * sin(read())))", cells: 14 },
+    { label: "a plain additive risk", formula: "int(stake + sin(read()))", cells: 12 },
+    { label: "a frac wrap over sqrt", formula: "frac(stake * sqrt(read()))", cells: 12 },
+    { label: "no wrap at all", formula: "stake * read()", cells: 10 },
+  ]) {
+    it(`generalizes stack-stop risk fusion for ${label}`, () => {
+      const result = compileOk(stackStopProgram(formula), { budget: 999, analysis: true });
+      expect(result.report.optimizations.some((item) => item.name === "x-param-stake-sin-read")).toBe(true);
+      expect(result.report.optimizations.some((item) => item.name === "x-param-stake-sin-call")).toBe(true);
+      expect(result.report.optimizations.some((item) => item.name === "show-read-stake-sin-lowering")).toBe(true);
+      // The parameter is consumed straight from X: no input register, no arg store.
+      expect(result.report.registers.stake).toBeUndefined();
+      expect(result.steps.some((step) => step.comment === "read()")).toBe(false);
+      expect(result.steps.some((step) => step.comment === "arg stake for robber_fight")).toBe(false);
+      // Locked size: generalized forms are no larger than the canonical fusion.
+      expect(result.steps.length).toBe(cells);
+    });
+  }
+
+  it("leaves non-fusable risk shapes on the ordinary call path", () => {
+    // Two distinct reads cannot share one fused stop, so this must fall back to
+    // the register-backed call (no stack-stop fusion claimed).
+    const result = compileOk(stackStopProgram("int(stake * (sin(read()) + cos(read())))"), {
+      budget: 999,
+      analysis: true,
+    });
+    expect(result.report.optimizations.some((item) => item.name === "x-param-stake-sin-read")).toBe(false);
+  });
+
   it("shares return suffix gadgets across compiled rule procedures", () => {
     const result = compileOk(`
 program ReturnSuffixGadget {

@@ -22,6 +22,8 @@ import {
   matchXParamReturnDecay,
   matchXParamStakeSinRead,
   matchRemainderByConstant,
+  X_TRANSFORM_UNARY_OPCODES,
+  X_TRANSFORM_UNARY_FUNCTIONS,
   negatedNumberLiteral,
   numberExpression,
   randomRangeExpression,
@@ -31,6 +33,7 @@ import {
   ticTacToeExpressionMacro,
   ticTacToeMacroArity,
 } from "../lowering-helpers.ts";
+import type { StackStopRiskMatch } from "../lowering-helpers.ts";
 
 export function compileExpression(ctx: LoweringCtx, expr: ExpressionAst): void {
     const randomCellHelper = ctx.sharedRandomCellHelper(expr);
@@ -248,16 +251,6 @@ export function compileFunctionCall(ctx: LoweringCtx, expr: Extract<ExpressionAs
     return true;
   }
 
-// Single-argument intrinsics that lower as "compile the argument, then apply
-// one X-transforming opcode" -- i.e. the argument is emitted first and nothing
-// precedes it. These are exactly the entries of the unary `opcodes` table in
-// compileCall, mirrored here so the show/read fusion can reason about ordering.
-const X_TRANSFORM_UNARY_FUNCTIONS = new Set<string>([
-  "abs", "sign", "int", "frac", "sqr", "inv", "sqrt", "lg", "ln", "sin", "cos",
-  "tg", "asin", "acos", "atg", "exp", "pow10", "bit_not", "to_min", "to_sec",
-  "from_sec", "from_min",
-]);
-
 // True when compiling `expr` emits a bare read() stop (С/П) as its very first
 // operation, so a preceding show can supply that stop. Holds for read() itself
 // and for any chain of single-argument X-transforming intrinsics wrapping it
@@ -270,6 +263,36 @@ export function expressionLeadsWithRead(expr: ExpressionAst): boolean {
     return expressionLeadsWithRead(expr.args[0]!);
   }
   return false;
+}
+
+// Emit the post-stop tail of a stack-stop risk fusion (see matchStackStopRisk).
+// Precondition (established by the caller's head): the input value is in X and
+// the parked `match.yName` value is in Y. The tail transforms the input on the
+// stack, combines it with the parked Y value, and applies the outer wraps,
+// leaving the result in X. The `labels` reproduce the historical robber-fight
+// listing comments so the canonical `sin` form stays byte-for-byte identical.
+export function compileStackStopRiskTail(
+  ctx: LoweringCtx,
+  match: StackStopRiskMatch,
+  labels: { inputComment: string; inputLine: number; consumerLine: number },
+): void {
+  if (ctx.currentYVariable !== match.yName) {
+    throw new Error(
+      `stack-stop risk tail expected ${match.yName} parked in Y, found ${String(ctx.currentYVariable)}`,
+    );
+  }
+  for (const [code, mnemonic] of match.inputUnary) {
+    ctx.emitOp(code, mnemonic, labels.inputComment, labels.inputLine);
+  }
+  if (match.additive !== undefined) {
+    ctx.emitOp(match.additive.digit, String(match.additive.digit), "risk multiplier", labels.consumerLine);
+    ctx.emitOp(binaryOpcode(match.additive.op), match.additive.op, "risk multiplier", labels.consumerLine);
+  }
+  ctx.emitOp(binaryOpcode(match.yOp), match.yOp, "risk stake", labels.consumerLine);
+  for (let index = match.wraps.length - 1; index >= 0; index -= 1) {
+    const [code, mnemonic] = match.wraps[index]!;
+    ctx.emitOp(code, mnemonic, "risk integer result", labels.consumerLine);
+  }
 }
 
 export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kind: "call" }>): void {
@@ -445,31 +468,7 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
       return;
     }
     compileExpression(ctx, expr.args[0]!);
-    const opcodes: Record<string, [number, string]> = {
-      abs: [0x31, "К |x|"],
-      sign: [0x32, "К ЗН"],
-      int: [0x34, "К [x]"],
-      frac: [0x35, "К {x}"],
-      sqr: [0x22, "F x^2"],
-      inv: [0x23, "F 1/x"],
-      sqrt: [0x21, "F sqrt"],
-      lg: [0x17, "F lg"],
-      ln: [0x18, "F ln"],
-      sin: [0x1c, "F sin"],
-      cos: [0x1d, "F cos"],
-      tg: [0x1e, "F tg"],
-      asin: [0x19, "F sin^-1"],
-      acos: [0x1a, "F cos^-1"],
-      atg: [0x1b, "F tg^-1"],
-      exp: [0x16, "F e^x"],
-      pow10: [0x15, "F 10^x"],
-      bit_not: [0x3a, "К ИНВ"],
-      to_min: [0x26, "К °->′"],
-      to_sec: [0x2a, "К °->′\""],
-      from_sec: [0x30, "К °<-′\""],
-      from_min: [0x33, "К °<-′"],
-    };
-    const opcode = opcodes[name];
+    const opcode = X_TRANSFORM_UNARY_OPCODES[name];
     if (!opcode) {
       ctx.diagnostics.push({
         level: "error",

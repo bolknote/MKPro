@@ -1014,10 +1014,13 @@ candidates:
   bit mask once and apply it to each collection;
 - repeated packed display helpers: repeated packed screens and repeated
   `show; show; read` prompt sequences are emitted once and called normally;
-- stake/read sine flows: `show(stake); input = read(); int(stake * (1 +
-  sin(input)))`, and the equivalent direct `sin(read())` form, keep the
-  displayed stake in `Y` across the stop, matching the compact robber-choice
-  idiom from cave games;
+- stake/read risk flows (generalized stack-stop fusion): `show(stake); input =
+  read(); int(stake * (1 + sin(input)))`, the equivalent direct `sin(read())`
+  form, and any pure `wrap*( stake op g(read()) )` variant (other intrinsics
+  such as `cos`/`sqrt`, other operators, a single-digit constant, or a different
+  outer wrap) keep the displayed stake in `Y` across the stop and transform the
+  input in `X`, matching the compact robber-choice idiom from cave games without
+  ever growing the program;
 - loop-carried prompt values: a `loop` shaped as `show(screen); key = read()`
   can keep `screen` in `X` instead of a register when every non-terminal path
   assigns the next prompt value before looping back; stack-initial prompts can
