@@ -27,9 +27,18 @@ interface SelectedHelper {
   body: IrOp[];
   occurrences: Occurrence[];
   cells: number;
+  entries: SelectedHelperEntry[];
+}
+
+interface SelectedHelperEntry {
+  label: string;
+  offset: number;
+  replacements: Occurrence[];
+  cells: number;
 }
 
 const MIN_BODY_CELLS = 4;
+const MIN_ENTRY_CELLS = 3;
 const GENERATED_BODY_LABEL_PREFIXES = [
   "__return_suffix_gadget_",
   "__shared_terminal_tail_",
@@ -42,16 +51,28 @@ const run: IrPassFn = (ops, context) => {
   const selected = selectHelpers(collectCandidates(ops, context.options.sharedStraightLineCallBodies === true), ops);
   if (selected.length === 0) return emptyResult(ops);
 
-  const replacementByStart = new Map<number, { end: number; label: string }>();
+  const replacementByStart = new Map<number, { end: number; label: string; entry: boolean }>();
   let applied = 0;
   let savedCells = 0;
+  let entryCalls = 0;
   for (const helper of selected) {
     const helperCost = helper.cells + 1;
     const replacementSavings = helper.occurrences.reduce((sum, occurrence) => sum + occurrence.cells - 2, 0);
-    savedCells += replacementSavings - helperCost;
+    const entrySavings = helper.entries.reduce(
+      (sum, entry) => sum + entry.replacements.length * (entry.cells - 2),
+      0,
+    );
+    savedCells += replacementSavings + entrySavings - helperCost;
     for (const occurrence of helper.occurrences) {
-      replacementByStart.set(occurrence.start, { end: occurrence.end, label: helper.label });
+      replacementByStart.set(occurrence.start, { end: occurrence.end, label: helper.label, entry: false });
       applied += 1;
+    }
+    for (const entry of helper.entries) {
+      for (const occurrence of entry.replacements) {
+        replacementByStart.set(occurrence.start, { end: occurrence.end, label: entry.label, entry: true });
+        applied += 1;
+        entryCalls += 1;
+      }
     }
   }
 
@@ -59,7 +80,7 @@ const run: IrPassFn = (ops, context) => {
   for (let index = 0; index < ops.length; index += 1) {
     const replacement = replacementByStart.get(index);
     if (replacement !== undefined) {
-      result.push(helperCall(replacement.label, ops[index]!));
+      result.push(helperCall(replacement.label, ops[index]!, replacement.entry));
       index = replacement.end;
       continue;
     }
@@ -68,17 +89,36 @@ const run: IrPassFn = (ops, context) => {
 
   for (const helper of selected) {
     result.push({ kind: "label", name: helper.label });
-    result.push(...helper.body.map(markHelperBodyOp));
+    const entriesByOffset = new Map<number, string[]>();
+    for (const entry of helper.entries) {
+      const labels = entriesByOffset.get(entry.offset) ?? [];
+      labels.push(entry.label);
+      entriesByOffset.set(entry.offset, labels);
+    }
+    for (let index = 0; index < helper.body.length; index += 1) {
+      for (const label of entriesByOffset.get(index) ?? []) {
+        result.push({ kind: "label", name: label });
+      }
+      result.push(markHelperBodyOp(helper.body[index]!));
+    }
     result.push({ kind: "return", opcode: 0x52, meta: { mnemonic: "В/О", comment: "shared straight-line helper return" } });
   }
 
   return {
     ops: result,
     applied,
-    optimizations: [{
-      name: "shared-straight-line-helper",
-      detail: `Extracted ${selected.length} straight-line helper${selected.length === 1 ? "" : "s"} from ${applied} repeated body occurrence${applied === 1 ? "" : "s"} (${savedCells} cell${savedCells === 1 ? "" : "s"} saved).`,
-    }],
+    optimizations: [
+      {
+        name: "shared-straight-line-helper",
+        detail: `Extracted ${selected.length} straight-line helper${selected.length === 1 ? "" : "s"} from ${applied} repeated body occurrence${applied === 1 ? "" : "s"} (${savedCells} cell${savedCells === 1 ? "" : "s"} saved).`,
+      },
+      ...(entryCalls === 0
+        ? []
+        : [{
+          name: "multi-entry-straight-line-helper",
+          detail: `Reused ${entryCalls} repeated helper suffix${entryCalls === 1 ? "" : "es"} by adding internal helper entry label${entryCalls === 1 ? "" : "s"}.`,
+        }]),
+    ],
   };
 };
 
@@ -104,7 +144,7 @@ function collectCandidates(ops: readonly IrOp[], allowDirectCalls: boolean): Can
       if (!isShareableBodyOp(op, allowDirectCalls)) break;
       parts.push(opKey(op));
       cells += cellsPerOp(op);
-      if (cells < MIN_BODY_CELLS) continue;
+      if (cells < MIN_ENTRY_CELLS) continue;
       const key = parts.join("\n");
       const occurrences = byKey.get(key) ?? [];
       occurrences.push({ key, start, end, cells });
@@ -189,7 +229,7 @@ function selectHelpers(candidates: readonly Candidate[], ops: readonly IrOp[]): 
   const selected: SelectedHelper[] = [];
   let labelIndex = 0;
 
-  const ordered = [...candidates].sort((left, right) => {
+  const ordered = candidates.filter((candidate) => candidate.cells >= MIN_BODY_CELLS).sort((left, right) => {
     const leftSavings = netSavings(left.occurrences.length, left.cells);
     const rightSavings = netSavings(right.occurrences.length, right.cells);
     return rightSavings - leftSavings || right.cells - left.cells || left.key.localeCompare(right.key);
@@ -210,12 +250,14 @@ function selectHelpers(candidates: readonly Candidate[], ops: readonly IrOp[]): 
       body: ops.slice(occurrences[0]!.start, occurrences[0]!.end + 1),
       occurrences,
       cells: candidate.cells,
+      entries: [],
     });
     for (const occurrence of occurrences) {
       markRange(protectedIndexes, occurrence.start, occurrence.end);
     }
   }
 
+  selectInternalEntries(selected, candidates, existingLabels, protectedIndexes, labelIndex);
   return selected;
 }
 
@@ -223,10 +265,68 @@ function netSavings(occurrences: number, cells: number): number {
   return occurrences * cells - (occurrences * 2 + cells + 1);
 }
 
-function helperCall(label: string, source: IrOp): IrOp {
+interface InternalEntryCandidate {
+  helper: SelectedHelper;
+  offset: number;
+  key: string;
+  cells: number;
+  occurrences: Occurrence[];
+}
+
+function selectInternalEntries(
+  helpers: readonly SelectedHelper[],
+  candidates: readonly Candidate[],
+  existingLabels: Set<string>,
+  protectedIndexes: Set<number>,
+  startLabelIndex: number,
+): void {
+  const candidateByKey = new Map(candidates.map((candidate) => [candidate.key, candidate]));
+  const entryCandidates: InternalEntryCandidate[] = [];
+  for (const helper of helpers) {
+    const parts = helper.body.map(opKey);
+    const suffixCells = helper.body.map(cellsPerOp);
+    for (let offset = 1; offset < helper.body.length; offset += 1) {
+      const cells = suffixCells.slice(offset).reduce((sum, count) => sum + count, 0);
+      if (cells < MIN_ENTRY_CELLS) continue;
+      const key = parts.slice(offset).join("\n");
+      const candidate = candidateByKey.get(key);
+      if (candidate === undefined) continue;
+      entryCandidates.push({ helper, offset, key, cells, occurrences: candidate.occurrences });
+    }
+  }
+
+  let labelIndex = startLabelIndex;
+  const ordered = entryCandidates.sort((left, right) => {
+    const leftSavings = left.occurrences.length * (left.cells - 2);
+    const rightSavings = right.occurrences.length * (right.cells - 2);
+    return rightSavings - leftSavings || right.cells - left.cells || left.key.localeCompare(right.key);
+  });
+  for (const candidate of ordered) {
+    if (candidate.cells <= 2) continue;
+    const replacements = candidate.occurrences.filter((occurrence) =>
+      !rangeIntersects(protectedIndexes, occurrence.start, occurrence.end)
+    );
+    if (replacements.length === 0) continue;
+
+    const label = freshLabel(existingLabels, labelIndex);
+    labelIndex += 1;
+    existingLabels.add(label);
+    candidate.helper.entries.push({
+      label,
+      offset: candidate.offset,
+      replacements,
+      cells: candidate.cells,
+    });
+    for (const replacement of replacements) {
+      markRange(protectedIndexes, replacement.start, replacement.end);
+    }
+  }
+}
+
+function helperCall(label: string, source: IrOp, entry = false): IrOp {
   const meta: IrMeta = {
     mnemonic: "ПП",
-    comment: "shared straight-line helper",
+    comment: entry ? "shared straight-line helper entry" : "shared straight-line helper",
   };
   if ("meta" in source && source.meta.sourceLine !== undefined) {
     meta.sourceLine = source.meta.sourceLine;

@@ -78,7 +78,7 @@ Below are the public capability IDs from `report.optimizer.capabilities`.
 - `register-coalesce` — merges separate temporary cells when lifetime ranges do not overlap.
 - `duplicate-failure-tail-merge` — merges identical error/failure tail sequences.
 - `shared-terminal-tail` — jumps into an existing identical straight-line suffix that already ends in unconditional terminal flow.
-- `shared-straight-line-helper` — extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the `ПП`/`В/О` cost is lower than duplicated inline code; a size-gated candidate extends this to bodies with direct `ПП` calls.
+- `shared-straight-line-helper` — extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the `ПП`/`В/О` cost is lower than duplicated inline code; a size-gated candidate extends this to bodies with direct `ПП` calls, and `multi-entry-straight-line-helper` can add internal entry labels for repeated suffixes of the same helper body.
 - `arithmetic-if-pass` — a dedicated pass collecting all `arithmetic-if` opportunities.
 - `redundant-prologue-elimination` — removes repeated identical prologues.
 - `step-vs-run-verification` — chooses the more compact step/run verification form.
@@ -219,6 +219,8 @@ Machine-level variants around branches:
   shared body, then continue at the original call site." The
   `shared-call-body-helper` whole-program candidate also lets such bodies contain
   direct `ПП` calls, and is adopted only when the final program shrinks.
+  `multi-entry-straight-line-helper` reuses suffixes of an already-selected
+  helper by adding internal entry labels instead of allocating another helper.
 - `jump-thread` — rewires jump chains into a straight flow.
 - `jump-to-next-threading` — removes jumps that only go to the next label.
 - `redundant-prologue-elimination` — merges repeated prologues while preserving side effects.

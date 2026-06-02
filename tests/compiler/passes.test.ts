@@ -756,6 +756,45 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("shared-straight-line-helper adds internal entries for repeated helper suffixes", () => {
+    const program: IrOp[] = [
+      label("first"),
+      recall("1"),
+      recall("2"),
+      plain(0x10, "+"),
+      store("3"),
+      recall("4"),
+      store("5"),
+      plain(0x01, "1"),
+      label("second"),
+      recall("1"),
+      recall("2"),
+      plain(0x10, "+"),
+      store("3"),
+      recall("4"),
+      store("5"),
+      plain(0x02, "2"),
+      label("suffix"),
+      plain(0x10, "+"),
+      store("3"),
+      recall("4"),
+      store("5"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = sharedStraightLineHelper.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.optimizations.some((optimization) => optimization.name === "multi-entry-straight-line-helper")).toBe(true);
+    expect(result.ops.filter((op) => op.kind === "call" && op.target === "__shared_straight_line_helper_0")).toHaveLength(2);
+    expect(result.ops.filter((op) => op.kind === "call" && op.target === "__shared_straight_line_helper_1")).toHaveLength(1);
+    const helper = result.ops.findIndex((op) => op.kind === "label" && op.name === "__shared_straight_line_helper_0");
+    const entry = result.ops.findIndex((op) => op.kind === "label" && op.name === "__shared_straight_line_helper_1");
+    expect(helper).toBeGreaterThanOrEqual(0);
+    expect(entry).toBeGreaterThan(helper);
+    expect(machineCellCount(result.ops)).toBeLessThan(machineCellCount(program));
+  });
+
   it("shared-straight-line-helper avoids programs with absolute numeric flow targets", () => {
     const program: IrOp[] = [
       numericJump(9),

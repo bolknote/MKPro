@@ -13922,8 +13922,8 @@ const optimizerCapabilities: Array<{
     category: "flow",
     source: "documented",
     requires: [],
-    activeWhen: ["shared-straight-line-helper", "shared-call-body-helper"],
-    detail: "Extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the call+return cost is provably lower than keeping all copies inline; direct-call bodies are enabled only as a whole-program candidate.",
+    activeWhen: ["shared-straight-line-helper", "shared-call-body-helper", "multi-entry-straight-line-helper"],
+    detail: "Extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the call+return cost is provably lower than keeping all copies inline; direct-call bodies are enabled only as a whole-program candidate, and repeated suffixes may enter the same helper through internal labels.",
   },
   {
     id: "subroutine-part-shared-tail",

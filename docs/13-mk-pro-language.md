@@ -1274,7 +1274,9 @@ The pipeline currently contains:
   straight-line opcode bodies into one `ПП`/`В/О` helper when the helper cost is
   lower than leaving every copy inline. A whole-program candidate also considers
   such bodies when they contain direct `ПП` calls, and keeps that lowering only
-  if the final program is smaller.
+  if the final program is smaller. The same helper can also gain internal entry
+  labels when another repeated body is a suffix of the helper, so callers enter
+  the middle instead of allocating a second helper body.
 - **function-tail-recursion** — lowers `return f(...)` tail calls between
   value-returning functions to direct `БП` jumps, including mutual tail
   recursion, after rejecting any recursive cycle that needs another return frame.
