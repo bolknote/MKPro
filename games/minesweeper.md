@@ -1,8 +1,8 @@
-# Сапёр
+# Minesweeper
 
 - Автор: Олег Булычёв
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk39.html)
-- Программа: [pmk39.txt](pmk39.txt)
+- Программа: [minesweeper.txt](minesweeper.txt)
 
 ## Описание
 

@@ -1,8 +1,8 @@
-# Страна великанов
+# Giants Country
 
 - Автор: Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk198.html)
-- Программа: [pmk198.txt](pmk198.txt)
+- Программа: [giants-country.txt](giants-country.txt)
 
 ## Описание
 

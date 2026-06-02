@@ -2,7 +2,7 @@
 
 - Автор: Константин Сергеев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk151.html)
-- Программа: [pmk151.txt](pmk151.txt)
+- Программа: [jack-pot.txt](jack-pot.txt)
 
 ## Описание
 

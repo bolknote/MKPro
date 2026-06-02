@@ -2,7 +2,7 @@
 
 - Автор: Евгений Век
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk53.html)
-- Программа: [pmk53.txt](pmk53.txt)
+- Программа: [rambo-iii.txt](rambo-iii.txt)
 
 ## Описание
 

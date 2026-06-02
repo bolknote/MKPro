@@ -1,8 +1,8 @@
-# Посадка на Луну
+# Lunar Landing
 
 - Автор: Ярослав Садовский
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk38.html)
-- Программа: [pmk38.txt](./pmk38.txt)
+- Программа: [lunar-landing.txt](lunar-landing.txt)
 
 ## Описание
 

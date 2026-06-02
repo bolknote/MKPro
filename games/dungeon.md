@@ -2,7 +2,7 @@
 
 - Автор: С. Андрианов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk164.html)
-- Программа: [pmk164.txt](pmk164.txt)
+- Программа: [dungeon.txt](dungeon.txt)
 
 ## Описание
 

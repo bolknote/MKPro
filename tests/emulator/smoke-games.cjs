@@ -6,7 +6,7 @@ const { MK61, parseProgramText } = require('./mk61.cjs');
 const { parseMany } = require('./lordbss.cjs');
 
 const root = path.resolve(__dirname, '../../games');
-const games = parseMany(root, ['posadka-na-lunu.txt', 'boxing.txt', 'kazino.txt']);
+const games = parseMany(root, ['lunar-landing.txt', 'boxing.txt', 'kazino.txt']);
 
 for (const game of games) {
   const calc = new MK61();

@@ -2,7 +2,7 @@
 
 - Автор: Сергей Шинкевич
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk210.html)
-- Программа: [pmk210.txt](pmk210.txt)
+- Программа: [alaram.txt](alaram.txt)
 
 ## Описание
 
