@@ -78,6 +78,35 @@ Each processor ROM is organized as:
 
 A processor command is not the same thing as a user program step. A processor command selects synchronization programs; those select microcommands; microcommand bits drive elementary micro-operations. The Habr article describes one processor command as 42 ticks. A real MK-61 executes roughly 3-4 user program steps per second; one user step involves many lower-level ROM command executions.
 
+## Ring Memory Layout
+
+All MK-61 user-visible memory — program steps, the 15 data registers, and the
+stack — physically lives in one circular bus ("magistral M") that chains the
+processor and register chips. For the MK-61 the chain is
+`IR2.1 -> IR2.2 -> IK1306 -> IK1303 -> IK1302`, closing back onto `IR2.1`. The
+total ring holds `42*3 + 252*2 = 630` tetrads (one byte per tetrad in the
+emulator), which is why the emulator model in
+[`tests/emulator/mk61.cjs`](../tests/emulator/mk61.cjs) addresses memory through
+fixed page/permutation tables rather than a flat register file.
+
+The Sugonyaev MSP430 reverse-engineering write-up pins down the physical packing
+that MK-Pro's code/data overlay and display-byte tricks rely on:
+
+- Program steps are grouped into packets of 42 tetrads, **7 steps per packet**
+  (period `42 / 7 = 6`). Inside a packet the step order is non-linear: `STEP-0`
+  sits at the end, `STEP-1` at the start, then `3, 4, 5, 6` ascending. A step
+  code is one byte; its high nibble is at offset `+6`, its low nibble at `+3`.
+- Only 2 of the 6 tetrads per step hold the step code. The remaining tetrads in
+  each packet hold the data registers `R0..Re` and the stack. Register `R0`
+  lives in the same packet as `STEP-0..STEP-6`, the next register in the next
+  packet, and so on up to `Re`; the stack registers `X1, X, Y, Z, T` sit beside
+  the register digits starting from the `STEP-64..STEP-70` packet.
+- There is **no register F** on a stock MK-61: a 16th register simply does not
+  fit this 42-tetrad packet system. The "register F" reachable only through
+  indirect `КП9`/`КИП9` in the memory-extension experiment exists only on a
+  *modified* ring with 42 extra tetrads added, not on real hardware. See
+  [14-indirect-addressing.md](./14-indirect-addressing.md).
+
 ## Numeric Representation
 
 Numbers are stored as packed decimal-like nibbles. A regular number has:
@@ -95,3 +124,5 @@ Only two sign codes are normally used: positive/zero and negative. Undocumented 
 - [Antowka: Elektronika MK61 hardware overview](https://antowka.ru/calc-electronika-mk61/)
 - [Elektronika MK-61 operating manual scan](https://www.wass.net/manuals/Elektronika%20MK-61.pdf)
 - [Serge Anvarov: undocumented MK-61 features](https://sergeanvarov.github.io/russian/mk61/%D0%9D%D0%B5%D0%B4%D0%BE%D0%BA%D1%83%D0%BC%D0%B5%D0%BD%D1%82%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%BD%D1%8B%D0%B5%20%D0%B2%D0%BE%D0%B7%D0%BC%D0%BE%D0%B6%D0%BD%D0%BE%D1%81%D1%82%D0%B8%20%D0%9F%D0%9C%D0%9A%20%D0%9C%D0%9A-61.html)
+- [Alexey Sugonyaev: porting the MK-61 emulator to MSP430 (K145IK130x ring, microcode, and packet layout)](https://arbinada.com/pmk/category/01305.html)
+- [Alexey Sugonyaev: MK-61 emulator memory-extension experiment ("register F" on a modified ring)](https://arbinada.com/pmk/category/01306.html)

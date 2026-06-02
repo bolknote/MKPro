@@ -17,6 +17,15 @@ program address. For memory commands the last transformed digit selects
 `R0`..`Re`; values beyond `e` wrap through the same nibble logic rather than
 being rejected cleanly.
 
+There is no clean register `F` to land on. A stock MK-61 has exactly 15 data
+registers because the circular memory bus packs registers, stack, and program
+steps into 42-tetrad packets, and a 16th register does not fit that packing (see
+[00-hardware.md](./00-hardware.md#ring-memory-layout)). A selector nibble of `F`
+(`15`) therefore aliases into existing ring memory rather than reaching a
+private register. The standalone "register F" reachable through indirect
+`КП9`/`КИП9` only appears on a *memory-modified* machine that adds 42 extra
+tetrads to the ring; do not treat it as a stock-MK-61 target.
+
 ## Integer Values
 
 For ordinary non-negative integers, pad on the left and use the trailing digits:
@@ -100,3 +109,4 @@ already needed for something else.
 
 - [Program address space](https://sergeanvarov.github.io/russian/mk61/uf/addr_space.html)
 - [Undocumented MK-61 behavior](https://sergeanvarov.github.io/russian/mk61/%D0%9D%D0%B5%D0%B4%D0%BE%D0%BA%D1%83%D0%BC%D0%B5%D0%BD%D1%82%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%BD%D1%8B%D0%B5%20%D0%B2%D0%BE%D0%B7%D0%BC%D0%BE%D0%B6%D0%BD%D0%BE%D1%81%D1%82%D0%B8%20%D0%9F%D0%9C%D0%9A%20%D0%9C%D0%9A-61.html)
+- [Alexey Sugonyaev: why a stock MK-61 ring has no register F (memory-extension experiment)](https://arbinada.com/pmk/category/01306.html)
