@@ -18,6 +18,7 @@ import {
   isSmallSetMacroName,
   isTicTacToeMacroName,
   matchStackUnaryDerivationCall,
+  minExpression,
   matchXParamReturnDecay,
   matchXParamStakeSinRead,
   matchRemainderByConstant,
@@ -100,10 +101,22 @@ export function compileExpression(ctx: LoweringCtx, expr: ExpressionAst): void {
           ctx.emitOp(0x0b, "/-/", "unary minus");
           return;
         }
+        if (expr.op === "/" && isNumericValue(expr.left, 1)) {
+          compileExpression(ctx, expr.right);
+          ctx.emitOp(0x23, "F 1/x", "reciprocal division");
+          ctx.optimizations.push({
+            name: "reciprocal-division-lowering",
+            detail: `Lowered ${expressionToIntentText(expr)} through F 1/x.`,
+          });
+          return;
+        }
         if (compileRemainderByConstant(ctx, expr)) {
           return;
         }
         if ((expr.op === "+" || expr.op === "*") && compileCommutativeWithCurrentX(ctx, expr)) {
+          return;
+        }
+        if (compileSquareBinary(ctx, expr)) {
           return;
         }
         if (compileStackDuplicatedBinary(ctx, expr)) {
@@ -140,6 +153,17 @@ export function compileCommutativeWithCurrentX(ctx: LoweringCtx, expr: Extract<E
       return true;
     }
     return false;
+  }
+
+export function compileSquareBinary(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
+    if (expr.op !== "*" || !expressionEquals(expr.left, expr.right) || !isPureExpression(expr.left)) return false;
+    compileExpression(ctx, expr.left);
+    ctx.emitOp(0x22, "F x^2", "square repeated operand");
+    ctx.optimizations.push({
+      name: "square-expression-lowering",
+      detail: `Lowered ${expressionToIntentText(expr)} through F x^2.`,
+    });
+    return true;
   }
 
 export function compileStackDuplicatedBinary(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kind: "binary" }>): boolean {
@@ -330,6 +354,18 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
       ctx.emitOp(zeroArgOpcode[0], zeroArgOpcode[1], `${expr.callee}()`);
       return;
     }
+    if (name === "e") {
+      if (expr.args.length !== 0) {
+        ctx.diagnostics.push({
+          level: "error",
+          message: `${expr.callee}() takes no arguments, got ${expr.args.length}.`,
+        });
+        return;
+      }
+      ctx.emitNumber("1");
+      ctx.emitOp(0x16, "F e^x", `${expr.callee}()`);
+      return;
+    }
 
     if (name === "pow") {
       if (expr.args.length !== 2) {
@@ -339,9 +375,43 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
         });
         return;
       }
+      if (isNumericValue(expr.args[1]!, 2)) {
+        compileExpression(ctx, expr.args[0]!);
+        ctx.emitOp(0x22, "F x^2", `${expr.callee}()`);
+        ctx.optimizations.push({
+          name: "pow-square-lowering",
+          detail: `Lowered ${expressionToIntentText(expr)} through F x^2.`,
+        });
+        return;
+      }
+      if (isNumericValue(expr.args[0]!, 10)) {
+        compileExpression(ctx, expr.args[1]!);
+        ctx.emitOp(0x15, "F 10^x", `${expr.callee}()`);
+        ctx.optimizations.push({
+          name: "pow10-opcode-lowering",
+          detail: `Lowered ${expressionToIntentText(expr)} through F 10^x.`,
+        });
+        return;
+      }
       compileExpression(ctx, expr.args[1]!);
       compileExpression(ctx, expr.args[0]!);
       ctx.emitOp(0x24, "F x^y", `${expr.callee}()`);
+      return;
+    }
+
+    if (name === "min") {
+      if (expr.args.length !== 2) {
+        ctx.diagnostics.push({
+          level: "error",
+          message: `Function ${expr.callee} expects two arguments.`,
+        });
+        return;
+      }
+      compileExpression(ctx, minExpression(expr.args[0]!, expr.args[1]!));
+      ctx.optimizations.push({
+        name: "min-via-max-lowering",
+        detail: `Lowered ${expressionToIntentText(expr)} through min-via-max().`,
+      });
       return;
     }
 

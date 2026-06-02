@@ -276,6 +276,8 @@ function foldPureConstantCall(
         return values.length === 2 ? powDecimalInteger(values[0]!, values[1]!) : undefined;
       case "max":
         return values.length === 2 ? maxDecimal(values[0]!, values[1]!) : undefined;
+      case "min":
+        return values.length === 2 ? minDecimal(values[0]!, values[1]!) : undefined;
       case "bit_and":
         return values.length === 2 ? foldBitwise(values[0]!, values[1]!, "and") : undefined;
       case "bit_or":
@@ -764,6 +766,11 @@ function powDecimalInteger(base: DecimalValue, exponent: DecimalValue): DecimalV
 function maxDecimal(left: DecimalValue, right: DecimalValue): DecimalValue {
   if (isDecimalZero(left) || isDecimalZero(right)) return decimal(0);
   return compareDecimal(left, right) >= 0 ? left : right;
+}
+
+function minDecimal(left: DecimalValue, right: DecimalValue): DecimalValue {
+  if (isDecimalZero(left) || isDecimalZero(right)) return decimal(0);
+  return compareDecimal(left, right) <= 0 ? left : right;
 }
 
 function foldBitwise(left: DecimalValue, right: DecimalValue, op: "and" | "or" | "xor"): DecimalValue | undefined {

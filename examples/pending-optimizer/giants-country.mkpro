@@ -20,6 +20,7 @@ program GiantsCountry {
     plans: cells(giant_country) = random()
 
     tile: counter 0..9 = 0
+    slot: counter 0..9 = 0
     warning_pattern: packed = 70000008
   }
 
@@ -45,18 +46,14 @@ program GiantsCountry {
     // Advancing spends strength before the room is understood, which makes even
     // empty rooms part of the attrition game.
     strength--
-    tile = cell_at(pos)
+    slot = pos - 10 * int(pos / 10)
+    tile = digit_at(plans, slot)
 
     if tile == 8 {
       hit_wall()
     }
     else {
-      if pos in plans {
-        encounter(tile)
-      }
-      else {
-        show("8.Е6-ЕГ C")
-      }
+      encounter()
       pos++
     }
 
@@ -85,53 +82,28 @@ program GiantsCountry {
     show("8.Е6-ЕГ C")
   }
 
-  fn encounter(encounter_tile) {
+  fn encounter() {
     // Events all share the same shape: remember a code, then convert
     // success into score or mobility and failure into strength loss.
-    unless encounter_tile {
+    unless tile {
       show("8.Е6-ЕГ C")
     }
     else {
-      if encounter_tile == 1 {
-        event_ladder(encounter_tile)
+      show(warning_pattern)
+      show(tile)
+      answer = read()
+      if answer == tile {
+        if tile == 1 {
+          reward_ladder()
+        }
+        else {
+          strength += 4 - tile - (1 - sign(abs(tile - 7)))
+          score += tile - 2 + (1 - sign(abs(tile - 7)))
+          plans = digit_set(plans, slot, 0)
+        }
       }
       else {
-        event_creature(encounter_tile)
-      }
-    }
-  }
-
-  fn ask_code(question) {
-    show(warning_pattern)
-    show(question)
-    answer = read()
-  }
-
-  fn event_ladder(question) {
-    ask_code(question)
-    if answer == question {
-      reward_ladder()
-    }
-    else {
-      strength--
-    }
-  }
-
-  fn event_creature(question) {
-    ask_code(question)
-    if answer == question {
-      strength += 4 - question
-      score += question - 2
-      if question == 7 {
-        strength--
-        score++
-      }
-      plans -= pos
-    }
-    else {
-      strength -= question
-      if question == 7 {
-        strength--
+        strength -= tile + (1 - sign(abs(tile - 7)))
       }
     }
   }
@@ -141,6 +113,6 @@ program GiantsCountry {
     // which floor the player earned them on.
     next_floor()
     strength += floor
-    plans -= pos
+    plans = digit_set(plans, slot, 0)
   }
 }

@@ -3290,6 +3290,12 @@ export function estimateExpressionCostForCondition(
     case "unary":
       return estimateExpressionCostForCondition(expr.expr, preloadedConstants) + 1;
     case "binary": {
+      if (expr.op === "*" && expressionEquals(expr.left, expr.right) && isPureExpression(expr.left)) {
+        return estimateExpressionCostForCondition(expr.left, preloadedConstants) + 1;
+      }
+      if (expr.op === "/" && isNumericValue(expr.left, 1)) {
+        return estimateExpressionCostForCondition(expr.right, preloadedConstants) + 1;
+      }
       const remainder = matchRemainderByConstant(expr);
       if (remainder !== undefined) {
         return estimateExpressionCostForCondition(remainder.value, preloadedConstants) +
@@ -3326,7 +3332,17 @@ export function estimateCallCostForCondition(
       : 1;
   }
   if (name === "pi") return 1;
+  if (name === "e") return 2;
+  if (name === "min" && expr.args.length === 2) {
+    return estimateExpressionCostForCondition(minExpression(expr.args[0]!, expr.args[1]!), preloadedConstants);
+  }
   if (name === "pow" || ["max", "bit_and", "bit_or", "bit_xor"].includes(name)) {
+    if (name === "pow" && expr.args[1] !== undefined && isNumericValue(expr.args[1], 2)) {
+      return (expr.args[0] ? estimateExpressionCostForCondition(expr.args[0], preloadedConstants) : 0) + 1;
+    }
+    if (name === "pow" && expr.args[0] !== undefined && isNumericValue(expr.args[0], 10)) {
+      return (expr.args[1] ? estimateExpressionCostForCondition(expr.args[1], preloadedConstants) : 0) + 1;
+    }
     return (expr.args[0] ? estimateExpressionCostForCondition(expr.args[0], preloadedConstants) : 0) +
       (expr.args[1] ? estimateExpressionCostForCondition(expr.args[1], preloadedConstants) : 0) +
       1;
@@ -3373,6 +3389,12 @@ export function estimateExpressionCost(expr: ExpressionAst): number {
     case "unary":
       return estimateExpressionCost(expr.expr) + 1;
     case "binary": {
+      if (expr.op === "*" && expressionEquals(expr.left, expr.right) && isPureExpression(expr.left)) {
+        return estimateExpressionCost(expr.left) + 1;
+      }
+      if (expr.op === "/" && isNumericValue(expr.left, 1)) {
+        return estimateExpressionCost(expr.right) + 1;
+      }
       const remainder = matchRemainderByConstant(expr);
       if (remainder !== undefined) {
         return estimateExpressionCost(remainder.value) + estimateExpressionCost(remainder.divisor) * 2 + 3;
@@ -3398,7 +3420,15 @@ export function estimateCallCost(expr: Extract<ExpressionAst, { kind: "call" }>)
     return expr.args.length === 2 ? estimateExpressionCost(randomRangeExpression(expr.args[0]!, expr.args[1]!)) : 1;
   }
   if (name === "pi") return 1;
+  if (name === "e") return 2;
+  if (name === "min" && expr.args.length === 2) return estimateExpressionCost(minExpression(expr.args[0]!, expr.args[1]!));
   if (name === "pow") {
+    if (expr.args[1] !== undefined && isNumericValue(expr.args[1], 2)) {
+      return (expr.args[0] ? estimateExpressionCost(expr.args[0]) : 0) + 1;
+    }
+    if (expr.args[0] !== undefined && isNumericValue(expr.args[0], 10)) {
+      return (expr.args[1] ? estimateExpressionCost(expr.args[1]) : 0) + 1;
+    }
     return (expr.args[0] ? estimateExpressionCost(expr.args[0]) : 0) +
       (expr.args[1] ? estimateExpressionCost(expr.args[1]) : 0) +
       1;

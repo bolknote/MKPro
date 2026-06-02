@@ -969,6 +969,52 @@ program FormulaPrimitives {
     }
   });
 
+  it("lowers reciprocal, decimal exponent, min, and e through compact opcodes", () => {
+    const result = compileOk(`
+program CompactMathPrimitives {
+  state {
+    value: packed = 0
+  }
+  loop {
+    x = read()
+    y = read()
+    value = e() + 1 / x + pow(10, y) + min(x, y)
+    halt(value)
+  }
+}
+`);
+    const opcodes = result.steps.map((step) => step.hex);
+
+    expect(result.steps.some((step) => step.hex === "16" && step.comment === "e()")).toBe(true);
+    expect(result.steps.some((step) => step.hex === "23" && step.comment === "reciprocal division")).toBe(true);
+    expect(result.steps.some((step) => step.hex === "15" && step.comment === "pow()")).toBe(true);
+    expect(opcodes).toContain("36");
+    expect(opcodes).not.toContain("24");
+  });
+
+  it("lowers repeated multiplication and square powers through F x^2", () => {
+    const result = compileOk(`
+program SquarePrimitiveLowering {
+  state {
+    value: packed = 0
+  }
+  loop {
+    x = read()
+    y = read()
+    value = x * x + pow(y, 2) + pow(10, y)
+    halt(value)
+  }
+}
+`);
+    const squareSteps = result.steps.filter((step) => step.hex === "22");
+
+    expect(squareSteps).toHaveLength(2);
+    expect(squareSteps.some((step) => step.comment === "square repeated operand")).toBe(true);
+    expect(squareSteps.some((step) => step.comment === "pow()")).toBe(true);
+    expect(result.steps.some((step) => step.hex === "15" && step.comment === "pow()")).toBe(true);
+    expect(result.steps.map((step) => step.hex)).not.toContain("24");
+  });
+
   it("lowers random range integer draws without cycling the MK-61 generator through К [x]", () => {
     const result = compileOk(`
 program RandomRangeSugar {

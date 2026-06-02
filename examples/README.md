@@ -7,7 +7,7 @@ Generated with `npm run examples:size`.
 - Top-level examples: 23/23 fit in the 105-cell MK-61 window; 23/23 pass the headless load check.
 - Referenced top-level examples: 18/18 are no larger than the original MK-61 listing.
 - Tightest runnable examples: `rambo-iii.mkpro` (105), `fox-hunt-100.mkpro` (103), `game-100-pig.mkpro` (103).
-- Pending optimizer: 6 programs still exceed the MK-61 window; nearest is `pending-optimizer/cave-highlevel-baseline.mkpro` (150).
+- Pending optimizer: 6 programs still exceed the MK-61 window; nearest is `pending-optimizer/giants-country.mkpro` (129).
 
 ## Measurements
 
@@ -25,7 +25,7 @@ Generated with `npm run examples:size`.
 | `e-94-digits.mkpro` | 64 | 64 | 0 | ok: <= reference | load ok |
 | `fox-hunt-100.mkpro` | 103 | 105 | -2 | ok: <= reference | main+setup load ok |
 | `fox-hunt-mk61.mkpro` | 65 | 92 | -27 | ok: <= reference | main+setup load ok |
-| `functions-demo.mkpro` | 29 | - | - | ok: no reference | load ok |
+| `functions-demo.mkpro` | 28 | - | - | ok: no reference | load ok |
 | `game-100-pig.mkpro` | 103 | 103 | 0 | ok: <= reference | main+setup load ok |
 | `human.mkpro` | 24 | - | - | ok: no reference | load ok |
 | `jack-pot.mkpro` | 101 | 104 | -3 | ok: <= reference | main+setup load ok |
@@ -40,7 +40,7 @@ Generated with `npm run examples:size`.
 | `wumpus.mkpro` | 101 | - | - | ok: no reference | main+setup load ok |
 | `pending-optimizer/cave-highlevel-baseline.mkpro` | 150 | 105 | +45 | pending optimizer | not loaded: main >105 |
 | `pending-optimizer/cave-treasure.mkpro` | 151 | 105 | +46 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/giants-country.mkpro` | 170 | 105 | +65 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/giants-country.mkpro` | 129 | 105 | +24 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/labyrinth777.mkpro` | 163 | 105 | +58 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/teleport.mkpro` | 194 | 105 | +89 | pending optimizer | setup load ok; main >105 |
+| `pending-optimizer/teleport.mkpro` | 195 | 105 | +90 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/tic-tac-toe-4x4.mkpro` | 200 | 105 | +95 | pending optimizer | not loaded: main >105 |

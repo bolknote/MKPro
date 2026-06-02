@@ -19,7 +19,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "dangerous-loading": 84,
   dungeon: 83,
   "e-94-digits": 64,
-  "functions-demo": 29,
+  "functions-demo": 28,
   "fox-hunt-100": 103,
   "fox-hunt-mk61": 65,
   "game-100-pig": 103,
@@ -46,9 +46,9 @@ const EXAMPLE_COMPILE_ERRORS: Record<string, RegExp> = {};
 const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 150,
   "cave-treasure": 151,
-  "giants-country": 170,
+  "giants-country": 129,
   labyrinth777: 163,
-  teleport: 194,
+  teleport: 195,
   "tic-tac-toe-4x4": 200,
 };
 
