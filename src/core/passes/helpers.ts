@@ -129,14 +129,6 @@ function isContextSensitiveX2Restore(op: IrOp): boolean {
 }
 
 type StackDifferenceDepth = 1 | 2 | 3;
-type PlainStackLiftEffect =
-  | "preserves"
-  | "shifts"
-  | "consume-y-drop"
-  | "consume-y-keep"
-  | "exposes"
-  | "barrier"
-  | "unsafe";
 
 function shiftDifference(depth: StackDifferenceDepth): StackDifferenceDepth | undefined {
   if (depth === 1) return 2;
@@ -150,42 +142,19 @@ function dropDifference(depth: StackDifferenceDepth): StackDifferenceDepth | und
   return 2;
 }
 
-function plainStackLiftEffect(op: IrOp): PlainStackLiftEffect {
-  if (op.kind !== "plain") return "unsafe";
-  const code = op.opcode;
-
-  // Fresh number entry starts a new entry context; X2-specific `.`/`ВП`
-  // exposure is handled by removingRecallCanExposeX2Restore.
-  if (code >= 0x00 && code <= 0x0c) return "barrier";
-  if (code === 0x0d) return "preserves"; // Cx
-  if (code === 0x0e || code === 0x20) return "shifts"; // В↑ / F pi
-  if (code === 0x0f || code === 0x25) return "exposes"; // full stack lift / reverse
-  if (code >= 0x10 && code <= 0x13) return "consume-y-drop";
-  if (code === 0x14 || code === 0x24 || code === 0x3e) return "consume-y-keep";
-  if (code >= 0x15 && code <= 0x1e) return "preserves";
-  if (code >= 0x21 && code <= 0x23) return "preserves";
-  if (code === 0x26 || code === 0x2a) return "preserves";
-  if (code >= 0x30 && code <= 0x35) return "preserves";
-  if (code >= 0x36 && code <= 0x39) return "consume-y-keep";
-  if (code === 0x3a || code === 0x3b) return "preserves";
-  if (code === 0x54 || code === 0x55 || code === 0x56) return "preserves";
-  if (code === 0x1f || code === 0x2f || code === 0x3f) return "preserves";
-  if (code >= 0xf0 && code <= 0xff) return "preserves";
-  if (code === 0x27 || code === 0x28 || code === 0x29 || (code >= 0x2b && code <= 0x2e) || code === 0x3c) {
-    return "barrier";
-  }
-  return "unsafe";
-}
-
 export function removingRecallCanExposeStackLift(ops: readonly IrOp[], recallIndex: number): boolean {
   const labels = labelIndexes(ops);
   const visited = new Set<string>();
-  const visit = (start: number, initialDepth: StackDifferenceDepth): boolean => {
+  const visit = (
+    start: number,
+    initialDepth: StackDifferenceDepth,
+    returnStack: readonly number[] = [],
+  ): boolean => {
     let depth: StackDifferenceDepth | undefined = initialDepth;
 
     for (let i = start; i < ops.length; i += 1) {
       if (depth === undefined) return false;
-      const key = `${i}:${depth}`;
+      const key = `${i}:${depth}:${returnStack.join(",")}`;
       if (visited.has(key)) return false;
       visited.add(key);
 
@@ -203,8 +172,8 @@ export function removingRecallCanExposeStackLift(ops: readonly IrOp[], recallInd
           depth = shiftDifference(depth);
           break;
         case "plain": {
-          const effect = plainStackLiftEffect(op);
-          if (effect === "unsafe" || effect === "exposes") return true;
+          const effect = getOpcode(op.opcode).stackEffect;
+          if (effect === "unknown" || effect === "exposes") return true;
           if (effect === "barrier") return false;
           if (effect === "shifts") {
             depth = shiftDifference(depth);
@@ -224,25 +193,31 @@ export function removingRecallCanExposeStackLift(ops: readonly IrOp[], recallInd
         case "jump": {
           if (typeof op.target !== "string") return true;
           const target = labels.get(op.target);
-          return target === undefined ? true : visit(target + 1, depth);
+          return target === undefined ? true : visit(target + 1, depth, returnStack);
         }
         case "cjump":
         case "loop": {
           if (typeof op.target !== "string") return true;
           const target = labels.get(op.target);
-          return (target === undefined ? true : visit(target + 1, depth)) || visit(i + 1, depth);
+          return (
+            (target === undefined ? true : visit(target + 1, depth, returnStack)) ||
+            visit(i + 1, depth, returnStack)
+          );
         }
         case "call": {
           if (typeof op.target !== "string") return true;
           const target = labels.get(op.target);
-          return (target === undefined ? true : visit(target + 1, depth)) || visit(i + 1, depth);
+          if (target === undefined || returnStack.length >= 5) return true;
+          return visit(target + 1, depth, [i + 1, ...returnStack]);
         }
         case "indirect-jump":
         case "indirect-call":
         case "indirect-cjump":
           return true;
-        case "stop":
         case "return":
+          if (returnStack.length === 0) return false;
+          return visit(returnStack[0]!, depth, returnStack.slice(1));
+        case "stop":
           return false;
       }
     }
@@ -254,11 +229,12 @@ export function removingRecallCanExposeStackLift(ops: readonly IrOp[], recallInd
 
 export function removingRecallCanExposeX2Restore(ops: readonly IrOp[], recallIndex: number): boolean {
   const labels = labelIndexes(ops);
-  const visited = new Set<number>();
-  const visit = (start: number): boolean => {
+  const visited = new Set<string>();
+  const visit = (start: number, returnStack: readonly number[] = []): boolean => {
     for (let i = start; i < ops.length; i += 1) {
-      if (visited.has(i)) return false;
-      visited.add(i);
+      const key = `${i}:${returnStack.join(",")}`;
+      if (visited.has(key)) return false;
+      visited.add(key);
 
       const op = ops[i]!;
       if (hasRewriteBarrier(op)) return true;
@@ -275,12 +251,14 @@ export function removingRecallCanExposeX2Restore(ops: readonly IrOp[], recallInd
         case "recall":
         case "indirect-recall":
         case "stop":
-        case "return":
           return false;
+        case "return":
+          if (returnStack.length === 0) return false;
+          return visit(returnStack[0]!, returnStack.slice(1));
         case "jump": {
           if (typeof op.target !== "string") return true;
           const target = labels.get(op.target);
-          return target === undefined ? true : visit(target + 1);
+          return target === undefined ? true : visit(target + 1, returnStack);
         }
         case "cjump":
         case "loop": {
@@ -288,12 +266,13 @@ export function removingRecallCanExposeX2Restore(ops: readonly IrOp[], recallInd
           const target = labels.get(op.target);
           // Direct conditionals synchronize X2 on the fallthrough path; the
           // jumped path is the one that can still observe the removed recall.
-          return target === undefined ? true : visit(target + 1);
+          return target === undefined ? true : visit(target + 1, returnStack);
         }
         case "call": {
           if (typeof op.target !== "string") return true;
           const target = labels.get(op.target);
-          return target === undefined ? true : visit(target + 1);
+          if (target === undefined || returnStack.length >= 5) return true;
+          return visit(target + 1, [i + 1, ...returnStack]);
         }
         case "indirect-jump":
         case "indirect-call":

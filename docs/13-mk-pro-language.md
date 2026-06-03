@@ -1171,7 +1171,8 @@ The pipeline currently contains:
 - **store-recall-peephole** — drops adjacent `X->П r ; П->X r` only when
   the removed recall is not the visible X2 sync before a context-sensitive
   `.`/`ВП` restoration and its stack lift cannot reach a downstream
-  binary/stack-consuming op through stack-preserving commands.
+  binary/stack-consuming op through stack-preserving commands or direct
+  `ПП`/`В/О` continuations.
 - **stack-current-X / dead-temp-store** — eliminates the temp store when the
   current X value can be consumed directly by a following expression, including
   one-shot temporaries and commutative current-X derivations.
@@ -1184,7 +1185,7 @@ The pipeline currently contains:
   X. С/П acts as a barrier because the user may overwrite X during pause;
   context-sensitive `.`/`ВП` restoration also blocks the rewrite when the
   recall is the last X2 sync, as do downstream binary/stack-consuming ops that
-  can still observe the recall's stack lift.
+  can still observe the recall's stack lift through direct call returns.
 - **flow-x-reuse** — runs forward CFG dataflow for values already in X and
   drops `П->X r` when every direct predecessor reaches that point with `r`
   still in X; absolute numeric and indirect flow targets are left untouched,
@@ -1194,7 +1195,7 @@ The pipeline currently contains:
   target when the incoming condition just tested the same recalled `r`, so the
   branch path already carries that value in X, unless that recall is needed as
   the target-side X2 sync before `.`/`ВП` or as a stack lift that can reach a
-  downstream binary/stack-consuming op.
+  downstream binary/stack-consuming op through direct call returns.
 - **liveness-analysis** — foundational dataflow used by DSE, register
   coalescing, and dead-code analysis; `F L0`..`F L3` loop counters are modeled
   as both read and written registers.
@@ -1253,6 +1254,12 @@ The pipeline currently contains:
   modify X2, copy X2 back into X, and normalize X. Direct conditionals are
   marked `unknown` because their X2 synchronization depends on the branch
   outcome.
+- **stack opcode profile** — the same catalog records whether an opcode
+  preserves the stack, shifts it (`В↑`, `F pi`, `П->X`), consumes `Y`, exposes
+  a deeper stack difference, or acts as a barrier. Recall-removal proofs use
+  this metadata instead of hard-coded opcode lists when deciding whether a
+  removed `П->X` stack lift can reach a downstream consumer, including after a
+  direct `ПП`/`В/О` round trip.
 - **vp-x2-peephole** — drops a `К {x}` immediately after a proved display
   `ВП`/X2 boundary when `ВП` already supplies the fractional transform.
 - **packed-counter-stripes** — tries every compatible subset of fixed-width

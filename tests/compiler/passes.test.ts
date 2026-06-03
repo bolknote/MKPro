@@ -327,6 +327,23 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("last-x-reuse keeps recall whose stack lift reaches a binary op after a direct call returns", () => {
+    const program: IrOp[] = [
+      store("1"),
+      recall("1"),
+      call("frac"),
+      plain(0x10, "+"),
+      halt(),
+      label("frac"),
+      plain(0x35, "К {x}"),
+      ret(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("last-x-reuse refuses to fire across a stop barrier", () => {
     const program: IrOp[] = [
       store("1"),
@@ -370,6 +387,22 @@ describe("ir passes on synthetic programs", () => {
       plain(0x20, "F pi"),
       plain(0x0c, "ВП"),
       halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("flow-x-reuse keeps recall that syncs X2 across a direct call return before ВП", () => {
+    const program: IrOp[] = [
+      store("4"),
+      recall("4"),
+      call("noop"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("noop"),
+      ret(),
     ];
     const result = flowXReuse.run(program, ctx);
 
@@ -1323,6 +1356,39 @@ describe("ir passes on synthetic programs", () => {
       plain(0x35, "К {x}"),
       plain(0x10, "+"),
       halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("store-recall-peephole keeps recall whose stack lift reaches a binary op after a direct call returns", () => {
+    const program: IrOp[] = [
+      store("2"),
+      recall("2"),
+      call("frac"),
+      plain(0x10, "+"),
+      halt(),
+      label("frac"),
+      plain(0x35, "К {x}"),
+      ret(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("store-recall-peephole keeps recall that syncs X2 across a direct call return before ВП", () => {
+    const program: IrOp[] = [
+      store("2"),
+      recall("2"),
+      call("noop"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("noop"),
+      ret(),
     ];
     const result = storeRecallPeephole.run(program, ctx);
 

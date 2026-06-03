@@ -77,6 +77,14 @@ export interface OpcodeInfo {
   enterable: DeliveryMode[];
   takesAddress: boolean;
   x2Effect: "affects" | "restores" | "preserves" | "unknown";
+  stackEffect:
+    | "preserves"
+    | "shifts"
+    | "consume-y-drop"
+    | "consume-y-keep"
+    | "exposes"
+    | "barrier"
+    | "unknown";
   risk: "documented" | "undocumented" | "dangerous";
 }
 

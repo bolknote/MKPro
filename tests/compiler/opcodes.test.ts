@@ -105,4 +105,28 @@ describe("opcode catalog", () => {
     expect(opcodeByCode.get(0x57)?.x2Effect).toBe("unknown");
     expect(opcodeByCode.get(0x5d)?.x2Effect).toBe("unknown");
   });
+
+  it("models stack effects used by optimizer proofs", () => {
+    expect(opcodeByCode.get(0x00)?.stackEffect).toBe("barrier");
+    expect(opcodeByCode.get(0x0a)?.stackEffect).toBe("barrier");
+    expect(opcodeByCode.get(0x0c)?.stackEffect).toBe("barrier");
+
+    expect(opcodeByCode.get(0x0e)?.stackEffect).toBe("shifts");
+    expect(opcodeByCode.get(0x20)?.stackEffect).toBe("shifts");
+    expect(opcodeByCode.get(0x60)?.stackEffect).toBe("shifts");
+    expect(opcodeByCode.get(0xd0)?.stackEffect).toBe("shifts");
+
+    expect(opcodeByCode.get(0x10)?.stackEffect).toBe("consume-y-drop");
+    expect(opcodeByCode.get(0x13)?.stackEffect).toBe("consume-y-drop");
+    expect(opcodeByCode.get(0x14)?.stackEffect).toBe("consume-y-keep");
+    expect(opcodeByCode.get(0x24)?.stackEffect).toBe("consume-y-keep");
+    expect(opcodeByCode.get(0x36)?.stackEffect).toBe("consume-y-keep");
+    expect(opcodeByCode.get(0x3e)?.stackEffect).toBe("consume-y-keep");
+
+    expect(opcodeByCode.get(0x35)?.stackEffect).toBe("preserves");
+    expect(opcodeByCode.get(0x3d)?.stackEffect).toBe("preserves");
+    expect(opcodeByCode.get(0x0f)?.stackEffect).toBe("exposes");
+    expect(opcodeByCode.get(0x25)?.stackEffect).toBe("exposes");
+    expect(opcodeByCode.get(0x5f)?.stackEffect).toBe("unknown");
+  });
 });

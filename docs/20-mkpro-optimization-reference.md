@@ -71,7 +71,7 @@ Below are the public capability IDs from `report.optimizer.capabilities`.
 - `last-x-reuse` — avoids rewriting X when the needed value is already there,
   while respecting `.`/`ВП` X2-sync boundaries and downstream stack consumers.
 - `flow-x-reuse` — avoids recalls when all CFG predecessors already carry the same register value in X, with the same X2-sync and downstream stack-lift guards.
-- `branch-target-x-reuse` — avoids the first recall in a branch target when the tested value is still in X and the target has no other entry, unless that recall supplies the target-side X2 sync or a stack lift that reaches a downstream consumer.
+- `branch-target-x-reuse` — avoids the first recall in a branch target when the tested value is still in X and the target has no other entry, unless that recall supplies the target-side X2 sync or a stack lift that reaches a downstream consumer through direct call returns.
 - `constant-folding` — precomputes constant parts before code generation.
 - `cse-display-block` — merges identical display logic blocks.
 - `jump-thread` — rewires jump chains into one direct jump path.
@@ -446,7 +446,7 @@ Display rewrites are separated into strategy selection + body lowering.
 - `copy-coalesce` — removes redundant copy writes between registers.
 - `last-x-reuse` — avoids `P->X` when X already holds the needed value and the
   recall is not an X2-sync boundary for `.`/`ВП` and its stack lift cannot
-  reach a downstream stack consumer.
+  reach a downstream stack consumer through direct call returns.
 - `known-zero-reuse` — reuses a known zero source instead of reloading.
 - `inequality-zero-false-branch` — feeds `known-zero-reuse` after a false
   `!= 0` branch, avoiding a fresh zero literal or `Cx`.
@@ -458,7 +458,7 @@ Display rewrites are separated into strategy selection + body lowering.
 - `dead-temp-store` — removes temporary stores after their last read when no longer needed.
 - `store-recall-peephole` — collapses `store` then immediate `recall` of same
   cell unless the recall supplies the last X2 sync before `.`/`ВП` or lifts the
-  stack for a downstream consumer.
+  stack for a downstream consumer through direct call returns.
 - `dead-store-elimination` — full pass removing pointless stores while keeping
   stores that are observable through number-entry or the `ВП`/X2 restore
   context.
@@ -478,17 +478,20 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 5. `return-suffix-gadget` — finds repeated return-ending blocks ending in `return`, extracts one shared suffix, and redirects additional copies to it.
 6. `shared-terminal-tail` — finds repeated straight-line suffixes that already end in unconditional flow (`БП`, `К БП r`, or `В/О`) and replaces extra copies with a jump into the canonical suffix; it refuses programs with absolute numeric flow targets.
 7. `return-zero-jump` — when no procedure calls are used, replaces a backward jump to `01` with `В/О` and tags it as an empty-stack optimization.
-8. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r` to the same register only when the recall is not the last X2 sync before a context-sensitive `.`/`ВП` restoration and its stack lift cannot reach a downstream binary/stack-consuming op.
+8. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r` to the same register only when the recall is not the last X2 sync before a context-sensitive `.`/`ВП` restoration and its stack lift cannot reach a downstream binary/stack-consuming op through direct call returns.
 9. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
 10. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.
-11. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes `П->X r` when every predecessor reaches that point with `r` still in X; it refuses absolute numeric and indirect flow targets and keeps recalls that provide the last X2 sync before `.`/`ВП` or a stack lift that can reach a downstream consumer.
-12. `branch-target-x-reuse` — removes the first `П->X r` in a unique branch target when the source `cjump` tested the same recalled `r` and no fallthrough path can enter the target, unless the target recall is needed as a `.`/`ВП` X2-sync boundary or a stack lift that can reach a downstream consumer.
+11. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes `П->X r` when every predecessor reaches that point with `r` still in X; it refuses absolute numeric and indirect flow targets and keeps recalls that provide the last X2 sync before `.`/`ВП` or a stack lift that can reach a downstream consumer through direct call returns.
+12. `branch-target-x-reuse` — removes the first `П->X r` in a unique branch target when the source `cjump` tested the same recalled `r` and no fallthrough path can enter the target, unless the target recall is needed as a `.`/`ВП` X2-sync boundary or a stack lift that can reach a downstream consumer through direct call returns.
+    These recall-removal guards read the shared `OpcodeInfo.stackEffect`
+    profile, so stack-preserving, shifting, Y-consuming, exposing, and barrier
+    opcodes are modeled consistently across passes.
 13. `stable-indirect-flow` — rewrites direct `jump/call/cjump` to indirect forms (`К БП`, `К ПП`, `К <cond>`) when a stable selector is already live in a register.
 14. `preloaded-indirect-flow` — preloads a selector value into a spare stable register and rewrites repeated backward-direct numeric jumps/calls through that preloaded value; after rescue starts, subsequent proved shrinking rewrites are still accepted below the official window.
 15. `indirect-memory-table` — rewrites direct `store/recall` into `К X->П`/`К П->X` when a stable selector maps to the indexed target cell.
 16. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.
 17. `dead-store-elimination` — removes stores whose target register is not live after the write and does not affect number-entry/input finalization or the previous-command context consumed by `ВП` while it restores X2.
-18. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding `X->П`, preserving recalls that serve as the last X2 sync before `.`/`ВП` or as a stack lift that can reach a downstream consumer.
+18. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding `X->П`, preserving recalls that serve as the last X2 sync before `.`/`ВП` or as a stack lift that can reach a downstream consumer through direct call returns.
 19. `r0-fractional-sentinel` — drops redundant immediate `П->X 3`/`X->П 3`
     after fractional-R0 indirect access when `R0` liveness proves that the
     direct access only repeats the hardware-selected `R3`; it also removes
@@ -544,10 +547,10 @@ Feature flags are added only after successful candidate/optimization evidence:
 - `dark-entries` — added from cyclic formal dark-entry selection and related layout features.
 - `address-constants` — added when constants are reused as arithmetic/address-like data.
 - `x2-register` — added when X2/Xп/дисплей-byte scheduling relies on X2 boundaries across display-byte paths; opcode metadata follows the reference distinction between X2-preserving, X2-syncing/normalizing, and X2-restoring commands.
+- `stack-resident-temps` — added when any stack-temporary residency optimization is used (`stack-resident-temps`, `stack-resident-indexed-temp`, or `stack-resident-control-flow`); recall-removal proofs use the shared opcode stack-effect profile to avoid deleting `П->X` lifts that can still be observed downstream.
 - `negative-zero-degree` — added when `negative-zero-threshold-selector` proof uses the `1|-00` preload trick.
 - `x2-restore-boundaries` — added when `vp-fraction-restore` is active.
 - `z-stack-register` — added when `z-stack-derived-value-reuse` uses deeper stack-derived storage.
-- `stack-resident-temps` — added when any stack-temporary residency optimization is used (`stack-resident-temps`, `stack-resident-indexed-temp`, or `stack-resident-control-flow`).
 - `display-bytes` — added when display-byte or packed hex-mantissa lowering is active.
 - `r0-fractional-sentinel` — added when fractional indirect addressing or R0 fractional sentinel flow/path is active.
 - `r0-t-alias` — added when `r0-indirect-counter` path is selected and R0-transforming aliases are proven safe.
