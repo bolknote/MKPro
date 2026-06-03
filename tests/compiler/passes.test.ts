@@ -1243,6 +1243,32 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x09)).toBe(false);
   });
 
+  it("dead-code-after-halt prunes call continuations when the callee never returns", () => {
+    const program: IrOp[] = [
+      { kind: "call", target: "terminal", opcode: 0x53, meta: { mnemonic: "ПП" }, targetMeta: {} },
+      plain(0x09, "9"),
+      label("terminal"),
+      halt(),
+    ];
+    const result = deadCodeAfterHalt.run(program, ctx);
+
+    expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x09)).toBe(false);
+    expect(result.applied).toBeGreaterThanOrEqual(1);
+  });
+
+  it("dead-code-after-halt keeps call continuations reached by return", () => {
+    const program: IrOp[] = [
+      { kind: "call", target: "returns", opcode: 0x53, meta: { mnemonic: "ПП" }, targetMeta: {} },
+      plain(0x09, "9"),
+      halt(),
+      label("returns"),
+      ret(),
+    ];
+    const result = deadCodeAfterHalt.run(program, ctx);
+
+    expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x09)).toBe(true);
+  });
+
   it("dead-proc-elimination removes emitted procedures with no remaining references", () => {
     const program: IrOp[] = [
       { kind: "jump", target: "live", opcode: 0x51, meta: { mnemonic: "БП" }, targetMeta: {} },
@@ -1418,6 +1444,31 @@ describe("ir passes on synthetic programs", () => {
     const info = computeLiveness(program);
     expect(info.liveIn[1]!.has("3")).toBe(true);
     expect(info.liveOut[3]!.has("3")).toBe(true);
+  });
+
+  it("liveness does not propagate through a direct call continuation unless the callee returns", () => {
+    const program: IrOp[] = [
+      call("terminal"),
+      recall("3"),
+      label("terminal"),
+      halt(),
+    ];
+    const info = computeLiveness(program);
+
+    expect(info.liveOut[0]!.has("3")).toBe(false);
+  });
+
+  it("liveness propagates direct call continuations through return", () => {
+    const program: IrOp[] = [
+      call("returns"),
+      recall("3"),
+      halt(),
+      label("returns"),
+      ret(),
+    ];
+    const info = computeLiveness(program);
+
+    expect(info.liveOut[0]!.has("3")).toBe(true);
   });
 
   it("passes round-trip through MachineItem lowering after rewriting", () => {

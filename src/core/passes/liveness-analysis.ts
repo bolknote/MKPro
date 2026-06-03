@@ -83,7 +83,6 @@ function buildSuccessors(ops: readonly IrOp[]): SuccessorMap {
         break;
       case "call":
         jumpTo(op.target);
-        fallthrough();
         break;
       case "indirect-jump":
         break;

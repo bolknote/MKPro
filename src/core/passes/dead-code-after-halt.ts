@@ -16,6 +16,14 @@ function reachableFromEntry(ops: readonly IrOp[]): Set<number> {
   }
   const visited = new Set<number>();
   const stack: number[] = [];
+  const callReturns: number[] = [];
+  for (let i = 0; i < ops.length; i += 1) {
+    const op = ops[i]!;
+    const next = i + 1;
+    if ((op.kind === "call" || op.kind === "indirect-call") && next < ops.length) {
+      callReturns.push(next);
+    }
+  }
   if (ops.length > 0) stack.push(0);
   while (stack.length > 0) {
     const i = stack.pop()!;
@@ -49,6 +57,7 @@ function reachableFromEntry(ops: readonly IrOp[]): Set<number> {
         fallthrough();
         break;
       case "return":
+        for (const callReturn of callReturns) stack.push(callReturn);
         break;
       case "jump":
         target(op.target);
@@ -60,7 +69,6 @@ function reachableFromEntry(ops: readonly IrOp[]): Set<number> {
         break;
       case "call":
         target(op.target);
-        fallthrough();
         break;
       case "indirect-jump": {
         const knownTarget = knownIndirectTarget(op);
