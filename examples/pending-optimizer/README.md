@@ -41,7 +41,7 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | --- | ---: | ---: | --- |
 | `cave-highlevel-baseline.mkpro` | 134 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
 | `cave-treasure.mkpro` | 118 | 105 | floor-indexed resource bank and source-shaped command decoder are in place; remaining blockers are command dispatch, wall breaking, cache reward flow, and loop prompt/input storage |
-| `tic-tac-toe-4x4.mkpro` | 247 | 105 | source-shaped line update/score pass is in place; remaining packed 4x4 scan lowering |
+| `tic-tac-toe-4x4.mkpro` | 240 | 105 | source-shaped line update/score pass is in place; remaining packed 4x4 scan lowering |
 
 Prototype notes:
 
@@ -94,6 +94,11 @@ Prototype notes:
   the call cost is lower than keeping every copy inline. It deliberately does
   not mix with `return-suffix-gadget` bodies until the layout model can prove
   both contracts at once.
+- `tic-tac-toe-4x4.mkpro` now combines X-parameter value functions, repeated
+  unary-call argument canonicalization, shared call-body helper extraction, and
+  front-hoisted helper/procedure layout. That exposes repeated `pow10` line
+  updates and scoring tails as one hoisted helper candidate instead of leaving
+  each call-bearing body inline.
 - Branch-target X reuse is the flow-sensitive sibling of last-X reuse: if a
   `П->X r; F x?0 label` condition is the only way to enter `label`, and `label`
   immediately recalls the same `r`, the recall is removed because the condition

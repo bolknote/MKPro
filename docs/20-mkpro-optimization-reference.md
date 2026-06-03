@@ -283,6 +283,7 @@ The `report.candidates` array in `report` shows lowerings that were recompiled a
 - `x-param-value-function` — candidate that passes simple positive-modulo value-function arguments through `X` instead of allocating a parameter register.
 - `x-param-value-function-with-unary-arg-temp` — combines X-parameter value functions with repeated unary-call scratch canonicalization.
 - `x-param-value-function-unary-arg-temp-coalesce` — additionally enables copy coalescing for the same value-function / unary-call scratch shape.
+- `x-param-unary-arg-shared-call-hoisted-proc` — combines X-parameter value functions, repeated unary-call scratch canonicalization, shared call-body helper extraction, and front-hoisted helper/procedure layout. This lets repeated straight-line bodies that contain direct calls become one hoisted helper after their arguments have been made structurally identical.
 - `packed-counter-stripes:<id+id+…>` — parameterized variant for each packed stripe set combination.
 - `counted-loop-unroll` — candidate that fully unrolls small constant-trip counted loops.
 - `startup-aware-constant-preloads` — candidate balancing main/ setup constant trade-offs.

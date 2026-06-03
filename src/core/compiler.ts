@@ -844,6 +844,17 @@ export function compileMKPro(
     "x-param-value-function-unary-arg-temp-coalesce",
     "Combined X-parameter value functions and repeated unary-call argument canonicalization with copy coalescing",
   );
+  tryUnaryArgCandidate(
+    {
+      xParamValueFunctions: true,
+      canonicalizeRepeatedUnaryUpdateArgs: true,
+      sharedStraightLineCallBodies: true,
+      hoistSharedHelpers: true,
+      hoistProcs: true,
+    },
+    "x-param-unary-arg-shared-call-hoisted-proc",
+    "Combined X-parameter value functions, repeated unary-call argument canonicalization, shared call-body helpers, and front-hoisted helper/procedure layout",
+  );
   for (const names of discoverPackedCounterStripeVariantNames(source)) {
     tryCandidate(
       { packCounterStripes: true, packCounterStripeNames: names },
