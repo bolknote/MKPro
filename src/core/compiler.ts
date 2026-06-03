@@ -35,6 +35,7 @@ import {
   IF_SELECTOR_SCRATCH_PREFIX,
   NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE,
   PACKED_COUNTER_PREFIX,
+  REPEATED_UNARY_UPDATE_ARG_PREFIX,
   SPATIAL_COUNT_SCRATCH_PREFIX,
   SPATIAL_HIT_SCRATCH_PREFIX,
   GRID4_MASK_SCRATCH_PREFIX,
@@ -102,6 +103,7 @@ import {
   matchStackStopRisk,
   matchXParamReturnDecay,
   matchXParamStackStopRiskRead,
+  matchXParamValueFunction,
   matchSingleBitMaskOpAssignment,
   matchTargetMinusDelta,
   matchTargetPlusDelta,
@@ -136,6 +138,9 @@ import {
   packedGridExpressionMacro,
   grid4MaskScratchName,
   zeroDigitTailDisplayProgram,
+  xParamValueFunctionParamNames,
+  xParamValueScratchName,
+  X_TRANSFORM_UNARY_FUNCTIONS,
 } from "./emit/lowering-helpers.ts";
 import {
   affineIndexIdentifierOffset,
@@ -160,6 +165,7 @@ import type {
   RegisterAllocation,
   StackStopRiskMatch,
   XParamProcLowering,
+  XParamValueFunction,
 } from "./emit/lowering-helpers.ts";
 import { MK61_PROFILE, machineSupports, type MachineProfile } from "./machineProfile.ts";
 import type {
@@ -393,6 +399,18 @@ interface LoweringOptions {
   // register. Speculative: cheap unit updates can win a register, but reads need
   // extraction arithmetic and are adopted only when the whole program shrinks.
   packCounterStripes?: boolean;
+  // Canonicalize repeated unary update tails such as
+  // `bank[i] += pow10(expr)` by storing each varying argument into a hidden
+  // compiler scratch and updating from `pow10(scratch)`. This exposes identical
+  // lowering tails to shared-straight-line-helper without forcing source authors
+  // to write low-level temp plumbing by hand. Speculative because the extra
+  // scratch can perturb allocation/layout, so adopted only when smaller.
+  canonicalizeRepeatedUnaryUpdateArgs?: boolean;
+  // Compile simple one-argument value functions whose body normalizes the
+  // parameter modulo a small positive width by passing the argument in X and
+  // using a hidden compiler scratch instead of allocating a user-visible
+  // parameter register. Speculative because it adds/repurposes scratch state.
+  xParamValueFunctions?: boolean;
   // Exact fixed-width counter set for the packed-stripe candidate. Used by the
   // top-level variant search to try every compatible subset independently.
   packCounterStripeNames?: readonly string[];
@@ -582,6 +600,61 @@ function sourceHasMultipleProcs(source: string): boolean {
   return (source.match(/\bfn\b/gu) ?? []).length >= 2;
 }
 
+// Gate for the `repeated-unary-update-arg-temp` candidates: the canonicalization
+// only does anything when some statement list contains two or more statements
+// that share a routable-unary shape (same structure modulo one X-transform
+// call's argument and constant array indices). Programs without such a repeat
+// would recompile three speculative candidates for nothing, so a single parse +
+// structural scan lets us skip them. A parse failure here is harmless: the real
+// lowering attempts re-parse and surface the diagnostics.
+function sourceHasRepeatedRoutableUnaryShape(source: string): boolean {
+  let ast: ProgramAst;
+  try {
+    ast = parseProgram(source);
+  } catch {
+    return false;
+  }
+  const scopes: StatementAst[][] = [];
+  const collect = (statements: StatementAst[]): void => {
+    scopes.push(statements);
+    for (const statement of statements) {
+      switch (statement.kind) {
+        case "if":
+          collect(statement.thenBody);
+          if (statement.elseBody !== undefined) collect(statement.elseBody);
+          break;
+        case "while":
+        case "loop":
+          collect(statement.body);
+          break;
+        case "dispatch":
+          for (const dispatchCase of statement.cases) collect(dispatchCase.body);
+          if (statement.defaultBody !== undefined) collect(statement.defaultBody);
+          break;
+        default:
+          break;
+      }
+    }
+  };
+  for (const entry of ast.entries) collect(entry.body);
+  for (const proc of ast.procs) collect(proc.body);
+
+  for (const scope of scopes) {
+    const firstIndexByShape = new Map<string, number>();
+    for (let index = 0; index < scope.length; index += 1) {
+      const statement = scope[index]!;
+      if (statement.kind !== "assign" && statement.kind !== "indexed_assign") continue;
+      for (const { call } of collectRoutableCalls(statement.expr)) {
+        const key = unaryArgShapeKey(statement, call);
+        const first = firstIndexByShape.get(key);
+        if (first !== undefined && first !== index) return true;
+        if (first === undefined) firstIndexByShape.set(key, index);
+      }
+    }
+  }
+  return false;
+}
+
 export function compileMKPro(
   source: string,
   options: Partial<CompileOptions> = {},
@@ -607,6 +680,11 @@ export function compileMKPro(
   const needsSizeRescue = primary === undefined || primary.report.steps > rescueThreshold || primary.report.budgetReport.exceeded;
   const trySizeRescueCandidate = (loweringOptions: LoweringOptions, name: string, detail: string): void => {
     if (!needsSizeRescue) return;
+    tryCandidate(loweringOptions, name, detail);
+  };
+  const canRouteRepeatedUnaryArgs = sourceHasRepeatedRoutableUnaryShape(source);
+  const tryUnaryArgCandidate = (loweringOptions: LoweringOptions, name: string, detail: string): void => {
+    if (!canRouteRepeatedUnaryArgs) return;
     tryCandidate(loweringOptions, name, detail);
   };
 
@@ -734,6 +812,26 @@ export function compileMKPro(
     { packCounterStripes: true },
     "packed-counter-stripes",
     "Packed compatible fixed-width counters into one hidden decimal-striped register",
+  );
+  tryUnaryArgCandidate(
+    { canonicalizeRepeatedUnaryUpdateArgs: true },
+    "repeated-unary-update-arg-temp",
+    "Canonicalized repeated X-transform unary-call arguments through a hidden scratch to expose shared helper tails",
+  );
+  tryCandidate(
+    { xParamValueFunctions: true },
+    "x-param-value-function",
+    "Passed simple value-function arguments through X instead of allocating a parameter register",
+  );
+  tryUnaryArgCandidate(
+    { xParamValueFunctions: true, canonicalizeRepeatedUnaryUpdateArgs: true },
+    "x-param-value-function-with-unary-arg-temp",
+    "Combined X-parameter value functions with repeated unary-call argument canonicalization",
+  );
+  tryUnaryArgCandidate(
+    { xParamValueFunctions: true, canonicalizeRepeatedUnaryUpdateArgs: true, coalesceCopies: true },
+    "x-param-value-function-unary-arg-temp-coalesce",
+    "Combined X-parameter value functions and repeated unary-call argument canonicalization with copy coalescing",
   );
   for (const names of discoverPackedCounterStripeVariantNames(source)) {
     tryCandidate(
@@ -1897,7 +1995,14 @@ function compileMKProOnce(
     });
   }
   eliminateUnreachableV2Procs(ast, optimizations);
-  liftFunctionCallsInExpressions(ast, optimizations);
+  if (loweringOptions.canonicalizeRepeatedUnaryUpdateArgs === true) {
+    canonicalizeRepeatedUnaryUpdateArgs(ast, optimizations);
+  }
+  if (loweringOptions.xParamValueFunctions === true) {
+    elideXParamValueStateFields(ast, optimizations);
+    materializeXParamValueFunctionScratch(ast, optimizations);
+  }
+  liftFunctionCallsInExpressions(ast, optimizations, loweringOptions.xParamValueFunctions === true);
   elideLoopCarriedPromptStateFields(ast, optimizations);
 
   const allocation = allocateRegisters(
@@ -1908,6 +2013,7 @@ function compileMKProOnce(
     loweringOptions.sharedBitMaskHelperCalls === true,
     loweringOptions.startupAwareConstantPreloads === true,
     loweringOptions.forcedRegisterShares ?? [],
+    loweringOptions.xParamValueFunctions === true,
   );
   const context = new EmitContext(
     ast,
@@ -2351,6 +2457,339 @@ function packCounterStripes(
   optimizations.push({
     name: "packed-counter-stripes",
     detail: `Packed counters ${plan.stripes.map((stripe) => stripe.name).join(", ")} into ${plan.packed}.`,
+  });
+}
+
+type RepeatedUnaryUpdateStatement =
+  | Extract<StatementAst, { kind: "assign" }>
+  | Extract<StatementAst, { kind: "indexed_assign" }>;
+
+type RoutableCallExpr = Extract<ExpressionAst, { kind: "call" }>;
+
+// One canonicalizable call site inside a statement's right-hand side: a pure
+// single-argument call whose argument can be hoisted into the shared scratch.
+interface RoutableCall {
+  readonly call: RoutableCallExpr;
+  readonly depth: number;
+}
+
+// A statement matched for canonicalization together with the chosen call whose
+// argument will be routed through the scratch register.
+interface UnaryArgRouting {
+  readonly index: number;
+  readonly statement: RepeatedUnaryUpdateStatement;
+  readonly call: RoutableCallExpr;
+}
+
+function repeatedUnaryUpdateScratchField(ast: ProgramAst): StateFieldAst | undefined {
+  return ast.states
+    .flatMap((state) => state.fields)
+    .find((field) => field.name.startsWith(REPEATED_UNARY_UPDATE_ARG_PREFIX));
+}
+
+function ensureRepeatedUnaryUpdateScratch(ast: ProgramAst, line: number): string {
+  const existing = repeatedUnaryUpdateScratchField(ast);
+  if (existing !== undefined) return existing.name;
+  const usedNames = new Set<string>();
+  for (const state of ast.states) {
+    for (const field of state.fields) usedNames.add(field.name);
+  }
+  for (const proc of ast.procs) {
+    usedNames.add(proc.name);
+    for (const param of proc.params ?? []) usedNames.add(param);
+  }
+  let index = 1;
+  while (usedNames.has(`${REPEATED_UNARY_UPDATE_ARG_PREFIX}${index}`)) index += 1;
+  const scratch = `${REPEATED_UNARY_UPDATE_ARG_PREFIX}${index}`;
+  const state = ast.states[0] ?? {
+    kind: "state",
+    name: `${INTERNAL_NAME_PREFIX}state`,
+    fields: [],
+    line,
+  };
+  if (ast.states.length === 0) ast.states.push(state);
+  state.fields.push({
+    name: scratch,
+    type: "packed",
+    initial: numberExpression(0),
+    line,
+  });
+  return scratch;
+}
+
+// Routes the argument of repeated single-argument calls through one hidden
+// scratch so that structurally identical statements expose shareable
+// straight-line tails (for `shared-terminal-tail`), uniform value-function
+// arguments (for `x-param-value-function`), and coalesceable copies.
+//
+// This is function-agnostic (not limited to `pow10`): within each statement
+// list it groups statements that are identical after holing one call's argument
+// and any constant array indices, then routes every member of a repeated shape
+// through the scratch — regardless of whether the members are adjacent. The
+// rewrite `f(arg)` -> `scratch = arg; f(scratch)` is value-preserving because
+// only pure arguments are hoisted, so the speculative-candidate size gate is the
+// sole arbiter of whether the canonicalization is kept.
+function canonicalizeRepeatedUnaryUpdateArgs(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  let rewritten = 0;
+  let scratchName: string | undefined;
+
+  const ensureScratch = (line: number): string => {
+    if (scratchName !== undefined) return scratchName;
+    scratchName = ensureRepeatedUnaryUpdateScratch(ast, line);
+    return scratchName;
+  };
+
+  const rewriteStatement = (statement: StatementAst): StatementAst => {
+    switch (statement.kind) {
+      case "if":
+        return {
+          ...statement,
+          thenBody: rewriteStatements(statement.thenBody),
+          ...(statement.elseBody === undefined ? {} : { elseBody: rewriteStatements(statement.elseBody) }),
+        };
+      case "while":
+        return { ...statement, body: rewriteStatements(statement.body) };
+      case "loop":
+        return { ...statement, body: rewriteStatements(statement.body) };
+      case "dispatch":
+        return {
+          ...statement,
+          cases: statement.cases.map((dispatchCase) => ({
+            ...dispatchCase,
+            body: rewriteStatements(dispatchCase.body),
+          })),
+          ...(statement.defaultBody === undefined ? {} : { defaultBody: rewriteStatements(statement.defaultBody) }),
+        };
+      default:
+        return statement;
+    }
+  };
+
+  const rewriteStatements = (statements: StatementAst[]): StatementAst[] => {
+    // Each statement list is its own canonicalization scope. Lower nested
+    // control-flow bodies first; assignments are returned unchanged here.
+    const lowered = statements.map(rewriteStatement);
+    const routings = selectUnaryArgRoutings(lowered);
+    if (routings.size === 0) return lowered;
+
+    const result: StatementAst[] = [];
+    for (let index = 0; index < lowered.length; index += 1) {
+      const routing = routings.get(index);
+      if (routing === undefined) {
+        result.push(lowered[index]!);
+        continue;
+      }
+      const scratch = ensureScratch(routing.statement.line);
+      result.push({
+        kind: "assign",
+        target: scratch,
+        expr: routing.call.args[0]!,
+        line: routing.statement.line,
+      });
+      result.push(routeUnaryArgThroughScratch(routing.statement, routing.call, scratch));
+      rewritten += 1;
+    }
+    return result;
+  };
+
+  for (const entry of ast.entries) entry.body = rewriteStatements(entry.body);
+  for (const proc of ast.procs) proc.body = rewriteStatements(proc.body);
+
+  if (rewritten > 0 && scratchName !== undefined) {
+    optimizations.push({
+      name: "repeated-unary-update-arg-temp",
+      detail: `Canonicalized ${rewritten} repeated unary-call argument${rewritten === 1 ? "" : "s"} through ${scratchName}.`,
+    });
+  }
+}
+
+// Assigns each canonicalizable statement to the routed call that joins it to the
+// largest group of structurally identical statements. Ties break toward the most
+// deeply nested call so the shared tail covers as much repeated work as possible
+// (e.g. routing the inner `pow10` rather than an outer `sqr`), then by key for
+// determinism. Greedy largest-first selection guarantees every statement is
+// routed at most once and lands in the biggest group it belongs to.
+function selectUnaryArgRoutings(statements: readonly StatementAst[]): Map<number, UnaryArgRouting> {
+  const groups = new Map<string, UnaryArgGroupEntry[]>();
+  for (let index = 0; index < statements.length; index += 1) {
+    const statement = statements[index]!;
+    if (statement.kind !== "assign" && statement.kind !== "indexed_assign") continue;
+    for (const { call, depth } of collectRoutableCalls(statement.expr)) {
+      const key = unaryArgShapeKey(statement, call);
+      const entry: UnaryArgGroupEntry = { index, statement, call, depth };
+      const bucket = groups.get(key);
+      if (bucket === undefined) groups.set(key, [entry]);
+      else bucket.push(entry);
+    }
+  }
+
+  const ranked = [...groups.entries()]
+    .map(([key, entries]) => ({ key, entries }))
+    .sort((left, right) => {
+      const sizeDelta = distinctIndexCount(right.entries) - distinctIndexCount(left.entries);
+      if (sizeDelta !== 0) return sizeDelta;
+      const depthDelta = maxEntryDepth(right.entries) - maxEntryDepth(left.entries);
+      if (depthDelta !== 0) return depthDelta;
+      return left.key < right.key ? -1 : left.key > right.key ? 1 : 0;
+    });
+
+  const routings = new Map<number, UnaryArgRouting>();
+  for (const { entries } of ranked) {
+    const perStatement = new Map<number, UnaryArgGroupEntry>();
+    for (const entry of entries) {
+      if (routings.has(entry.index) || perStatement.has(entry.index)) continue;
+      perStatement.set(entry.index, entry);
+    }
+    if (perStatement.size < 2) continue;
+    const members = [...perStatement.values()];
+    if (!shouldCanonicalizeUnaryArgGroup(members.map((entry) => entry.call.args[0]!))) continue;
+    for (const entry of members) {
+      routings.set(entry.index, { index: entry.index, statement: entry.statement, call: entry.call });
+    }
+  }
+  return routings;
+}
+
+interface UnaryArgGroupEntry {
+  readonly index: number;
+  readonly statement: RepeatedUnaryUpdateStatement;
+  readonly call: RoutableCallExpr;
+  readonly depth: number;
+}
+
+function distinctIndexCount(entries: readonly { index: number }[]): number {
+  return new Set(entries.map((entry) => entry.index)).size;
+}
+
+function maxEntryDepth(entries: readonly { depth: number }[]): number {
+  return entries.reduce((max, entry) => Math.max(max, entry.depth), 0);
+}
+
+// Collects every routable call in `expr`, including calls nested inside another
+// routable call's argument, tagged with their nesting depth. A call is routable
+// when it applies a single X-transforming intrinsic opcode (the `pow10`, `sqr`,
+// `int`, `sin`, … family) to one pure argument: routing such an argument through
+// the scratch leaves a uniform `recall scratch; <opcode>; …` tail that downstream
+// sharing can collapse. User-procedure and I/O calls are intentionally excluded
+// so the speculative candidate is not attempted on programs that cannot benefit.
+function collectRoutableCalls(expr: ExpressionAst): RoutableCall[] {
+  const calls: RoutableCall[] = [];
+  const visit = (node: ExpressionAst, depth: number): void => {
+    if (
+      node.kind === "call" &&
+      node.args.length === 1 &&
+      X_TRANSFORM_UNARY_FUNCTIONS.has(node.callee.toLowerCase()) &&
+      expressionPureForSubstitution(node.args[0]!)
+    ) {
+      calls.push({ call: node, depth });
+    }
+    switch (node.kind) {
+      case "number":
+      case "string":
+      case "identifier":
+        return;
+      case "indexed":
+        visit(node.index, depth + 1);
+        return;
+      case "unary":
+        visit(node.expr, depth + 1);
+        return;
+      case "binary":
+        visit(node.left, depth + 1);
+        visit(node.right, depth + 1);
+        return;
+      case "call":
+        for (const arg of node.args) visit(arg, depth + 1);
+        return;
+    }
+  };
+  visit(expr, 0);
+  return calls;
+}
+
+// Two statements share a key (and may therefore be routed through the same
+// scratch) when they are structurally identical after (a) replacing the routed
+// call's single argument with a hole and (b) replacing constant array indices
+// with a hole. Index-holing lets `weights[7] -= f(x)` and `weights[6] -= f(y)`
+// group even though they target different cells.
+function unaryArgShapeKey(statement: RepeatedUnaryUpdateStatement, routedCall: RoutableCallExpr): string {
+  const target = statement.kind === "assign"
+    ? `@${statement.target}`
+    : serializeUnaryArgShape(statement.target, routedCall);
+  return `${statement.kind}|${target}|${serializeUnaryArgShape(statement.expr, routedCall)}`;
+}
+
+function serializeUnaryArgShape(expr: ExpressionAst, routedCall: RoutableCallExpr): string {
+  switch (expr.kind) {
+    case "number":
+      return `#${expr.raw}`;
+    case "string":
+      return `s${JSON.stringify(expr.text)}`;
+    case "identifier":
+      return `@${expr.name}`;
+    case "indexed": {
+      const field = expr.field === undefined ? "" : `.${expr.field}`;
+      const index = numericLiteralValue(expr.index) !== undefined
+        ? "[#IDX]"
+        : `[${serializeUnaryArgShape(expr.index, routedCall)}]`;
+      return `${expr.base}${field}${index}`;
+    }
+    case "unary":
+      return `u(${serializeUnaryArgShape(expr.expr, routedCall)})`;
+    case "binary":
+      return `(${serializeUnaryArgShape(expr.left, routedCall)}${expr.op}${serializeUnaryArgShape(expr.right, routedCall)})`;
+    case "call":
+      return expr === routedCall
+        ? `${expr.callee.toLowerCase()}(#ARG)`
+        : `${expr.callee.toLowerCase()}(${expr.args.map((arg) => serializeUnaryArgShape(arg, routedCall)).join(",")})`;
+  }
+}
+
+function shouldCanonicalizeUnaryArgGroup(args: readonly ExpressionAst[]): boolean {
+  if (args.length < 2) return false;
+  const distinctArgs = new Set(args.map(expressionToIntentText));
+  if (distinctArgs.size < 2 && args.every((arg) => estimateExpressionCost(arg) <= 1)) return false;
+  return true;
+}
+
+function routeUnaryArgThroughScratch(
+  statement: RepeatedUnaryUpdateStatement,
+  routedCall: RoutableCallExpr,
+  scratch: string,
+): RepeatedUnaryUpdateStatement {
+  const scratchExpr: ExpressionAst = { kind: "identifier", name: scratch };
+  return { ...statement, expr: replaceCallArg(statement.expr, routedCall, scratchExpr) };
+}
+
+function replaceCallArg(expr: ExpressionAst, target: RoutableCallExpr, replacement: ExpressionAst): ExpressionAst {
+  if (expr === target) return { ...expr, args: [replacement] };
+  switch (expr.kind) {
+    case "number":
+    case "string":
+    case "identifier":
+      return expr;
+    case "indexed":
+      return { ...expr, index: replaceCallArg(expr.index, target, replacement) };
+    case "unary":
+      return { ...expr, expr: replaceCallArg(expr.expr, target, replacement) };
+    case "binary":
+      return {
+        ...expr,
+        left: replaceCallArg(expr.left, target, replacement),
+        right: replaceCallArg(expr.right, target, replacement),
+      };
+    case "call":
+      return { ...expr, args: expr.args.map((arg) => replaceCallArg(arg, target, replacement)) };
+  }
+}
+
+function materializeXParamValueFunctionScratch(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  const matches = ast.procs.map(matchXParamValueFunction).filter((match): match is XParamValueFunction => match !== undefined);
+  if (matches.length === 0) return;
+  const scratch = ensureRepeatedUnaryUpdateScratch(ast, matches[0]!.line);
+  optimizations.push({
+    name: "x-param-value-function-scratch",
+    detail: `Reserved ${scratch} for ${matches.length} X-parameter value function${matches.length === 1 ? "" : "s"}.`,
   });
 }
 
@@ -2915,6 +3354,28 @@ function elideXParamReturnStateFields(ast: ProgramAst, optimizations: AppliedOpt
     optimizations.push({
       name: "x-param-state-elision",
       detail: `Removed ${removed} register-backed parameter field${removed === 1 ? "" : "s"} consumed directly from X.`,
+    });
+  }
+}
+
+function elideXParamValueStateFields(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  const params = new Set<string>();
+  for (const proc of ast.procs) {
+    const match = matchXParamValueFunction(proc);
+    if (match === undefined) continue;
+    if (!identifierReadOutsideProc(ast, proc.name, match.param)) params.add(match.param);
+  }
+  if (params.size === 0) return;
+  let removed = 0;
+  for (const state of ast.states) {
+    const before = state.fields.length;
+    state.fields = state.fields.filter((field) => !params.has(field.name));
+    removed += before - state.fields.length;
+  }
+  if (removed > 0) {
+    optimizations.push({
+      name: "x-param-value-state-elision",
+      detail: `Removed ${removed} register-backed value-function parameter field${removed === 1 ? "" : "s"} consumed directly from X.`,
     });
   }
 }
@@ -7071,6 +7532,22 @@ export class EmitContext {
     this.currentXFormattedCoordReportBody = undefined;
   }
 
+  compileXParamValueScratchAssignment(statement: Extract<StatementAst, { kind: "assign" }>): boolean {
+    if (this.loweringOptions.xParamValueFunctions !== true) return false;
+    const scratch = xParamValueScratchName(this.ast);
+    if (scratch === undefined || statement.target !== scratch) return false;
+    if (statement.expr.kind !== "call") return false;
+    const proc = this.functionProcs.get(statement.expr.callee);
+    if (proc === undefined || matchXParamValueFunction(proc) === undefined) return false;
+    compileExpression(this, statement.expr);
+    this.markCurrentX(scratch);
+    this.optimizations.push({
+      name: "x-param-value-scratch-store-elision",
+      detail: `Reused ${statement.expr.callee}()'s internal ${scratch} store for assignment at line ${statement.line}.`,
+    });
+    return true;
+  }
+
   armInputInX(): void {
     this.inputArmedInX = true;
   }
@@ -7209,6 +7686,7 @@ export class EmitContext {
         if (compileUnitDecrement(this, statement)) return;
         if (compileUnitIncrement(this, statement)) return;
         if (compileSingleBitMaskOpAssignment(this, statement)) return;
+        if (this.compileXParamValueScratchAssignment(statement)) return;
         if (isZeroExpression(statement.expr)) this.emitZero(`set ${statement.target}`, statement.line);
         else compileExpression(this, statement.expr);
         this.emitStore(statement.target, `set ${statement.target}`, statement.line);
@@ -10152,15 +10630,32 @@ function elideTailScreenInStatementList(
 // nested call would destroy a partially built expression. Hoisting nested calls
 // into preceding temporary assignments keeps the working stack discipline
 // intact; the temporaries are short-lived and the optimizer reclaims them.
-function liftFunctionCallsInExpressions(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+function liftFunctionCallsInExpressions(
+  ast: ProgramAst,
+  optimizations: AppliedOptimization[],
+  reuseXParamValueScratch = false,
+): void {
   const functions = collectFunctionProcNames(ast);
   if (functions.size === 0) return;
+  const xParamValueScratch = reuseXParamValueScratch ? xParamValueScratchName(ast) : undefined;
+  const xParamValueProcNames = new Set<string>();
+  if (xParamValueScratch !== undefined) {
+    for (const proc of ast.procs) {
+      if (matchXParamValueFunction(proc) !== undefined) xParamValueProcNames.add(proc.name);
+    }
+  }
   let lifted = 0;
+  let reusedXParamValueScratch = 0;
   let counter = 0;
   const freshTemp = (): string => {
     counter += 1;
     return `${INTERNAL_NAME_PREFIX}call_${counter}`;
   };
+
+  const canReuseXParamValueScratch = (callee: string, prelude: readonly StatementAst[]): boolean =>
+    xParamValueScratch !== undefined &&
+    xParamValueProcNames.has(callee) &&
+    !prelude.some((statement) => statement.kind === "assign" && statement.target === xParamValueScratch);
 
   // Hoist nested function calls in `expr` into `prelude`. When `allowRootCall`
   // is true a function call at the very root may stay in place (it produces the
@@ -10186,8 +10681,9 @@ function liftFunctionCallsInExpressions(ast: ProgramAst, optimizations: AppliedO
         const loweredCall: ExpressionAst = { ...expr, args: loweredArgs };
         if (!functions.has(expr.callee)) return loweredCall;
         if (allowRootCall) return loweredCall;
-        const temp = freshTemp();
+        const temp = canReuseXParamValueScratch(expr.callee, prelude) ? xParamValueScratch! : freshTemp();
         prelude.push({ kind: "assign", target: temp, expr: loweredCall, line });
+        if (temp === xParamValueScratch) reusedXParamValueScratch += 1;
         lifted += 1;
         return { kind: "identifier", name: temp };
       }
@@ -10260,6 +10756,12 @@ function liftFunctionCallsInExpressions(ast: ProgramAst, optimizations: AppliedO
       detail: `Hoisted ${lifted} nested function call(s) into temporaries to preserve the working stack.`,
     });
   }
+  if (reusedXParamValueScratch > 0) {
+    optimizations.push({
+      name: "x-param-value-call-temp-reuse",
+      detail: `Hoisted ${reusedXParamValueScratch} nested X-parameter value function call${reusedXParamValueScratch === 1 ? "" : "s"} through ${xParamValueScratch}.`,
+    });
+  }
 }
 
 function collectReachableProcNames(ast: ProgramAst): Set<string> {
@@ -10314,11 +10816,13 @@ function allocateRegisters(
   sharedBitMaskHelperCalls = false,
   startupAwareConstantPreloads = false,
   forcedRegisterShares: ReadonlyArray<{ freeRegister: RegisterName; keepRegister: RegisterName }> = [],
+  xParamValueFunctions = false,
 ): RegisterAllocation {
   const declared = new Set<string>();
   const hints = new Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>();
   const variables = new Set<string>();
   const xParamNames = xParamProcParamNames(ast);
+  const xParamValueNames = xParamValueFunctions ? xParamValueFunctionParamNames(ast) : new Set<string>();
 
   for (const state of ast.states) {
     for (const field of state.fields) {
@@ -10335,6 +10839,10 @@ function allocateRegisters(
     const xParamReturn = matchXParamReturnDecay(proc);
     const xParamStackStopRisk = matchXParamStackStopRiskRead(ast, proc);
     for (const param of proc.params ?? []) {
+      if (xParamValueNames.has(param)) {
+        declared.add(param);
+        continue;
+      }
       if (xParamReturn?.param === param || xParamStackStopRisk?.param === param || xParamNames.has(param)) continue;
       declared.add(param);
       variables.add(param);
@@ -10365,9 +10873,8 @@ function allocateRegisters(
     if (register === undefined) break;
     hints.set(variable, { mode: "prefer", register });
   }
-
   warnUndeclaredAssignments(ast, declared, diagnostics);
-  collectAssignedVariables(ast, variables);
+  collectAssignedVariables(ast, variables, xParamValueNames);
   collectFunctionTailCallScratchVariables(ast, variables);
   collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch);
   collectGridCellScratchVariables(ast, variables);
@@ -10380,7 +10887,6 @@ function allocateRegisters(
   applyCoordListRegisterHints(variables, hints);
   applyCoordListPackedReportRegisterHints(ast, variables, hints);
   applyCoordListCellRegisterHints(ast, variables, hints);
-
   const registers: Record<string, RegisterName> = {};
   const used = new Set<RegisterName>();
 
@@ -12167,6 +12673,7 @@ function warnUndeclaredAssignments(
         if (xParamNames.has(statement.target)) continue;
         if (statement.kind === "input" && ephemeralInputs.has(statement.target)) continue;
         if (statement.target.startsWith(DISPLAY_EXPR_PREFIX)) continue;
+        if (statement.target.startsWith(INTERNAL_NAME_PREFIX)) continue;
         if (!declared.has(statement.target) && !seen.has(statement.target)) {
           diagnostics.push({
             level: "warning",
@@ -12192,16 +12699,24 @@ function warnUndeclaredAssignments(
   for (const proc of ast.procs) visit(proc.body);
 }
 
-function collectAssignedVariables(ast: ProgramAst, variables: Set<string>): void {
+function collectAssignedVariables(
+  ast: ProgramAst,
+  variables: Set<string>,
+  ignoredTargets: ReadonlySet<string> = new Set(),
+): void {
   const ephemeralInputs = collectEphemeralInputTargets(ast);
   const loopPrompts = loopCarriedPromptNames(ast);
   const xParamNames = xParamProcParamNames(ast);
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "assign") {
-        if (!loopPrompts.has(statement.target) && !xParamNames.has(statement.target)) variables.add(statement.target);
+        if (!ignoredTargets.has(statement.target) && !loopPrompts.has(statement.target) && !xParamNames.has(statement.target)) {
+          variables.add(statement.target);
+        }
       }
-      if (statement.kind === "input" && !ephemeralInputs.has(statement.target)) variables.add(statement.target);
+      if (statement.kind === "input" && !ignoredTargets.has(statement.target) && !ephemeralInputs.has(statement.target)) {
+        variables.add(statement.target);
+      }
       if (statement.kind === "loop") visit(statement.body);
       if (statement.kind === "while") visit(statement.body);
       if (statement.kind === "if") {

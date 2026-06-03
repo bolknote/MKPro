@@ -1288,6 +1288,15 @@ The pipeline currently contains:
   if the final program is smaller. The same helper can also gain internal entry
   labels when another repeated body is a suffix of the helper, so callers enter
   the middle instead of allocating a second helper body.
+- **repeated-unary-update-arg-temp** — routes the argument of repeated
+  single-argument X-transform intrinsic calls (the `pow10`/`sqr`/`int`/`sin`/…
+  family) through one hidden scratch when that exposes a shorter shared helper
+  tail than spelling each argument inline. Occurrences are grouped by structure
+  modulo the routed argument and constant indices, so they need not be adjacent.
+- **x-param-value-function** — recognizes small positive-modulo value functions
+  such as `normalize(value)` and passes their argument through `X`, eliding the
+  parser-created parameter register and reusing a hidden scratch for nested
+  call lifting.
 - **function-tail-recursion** — lowers `return f(...)` tail calls between
   value-returning functions to direct `БП` jumps, including mutual tail
   recursion, after rejecting any recursive cycle that needs another return frame.

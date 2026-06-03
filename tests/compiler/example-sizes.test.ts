@@ -49,7 +49,7 @@ const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 136,
   "cave-treasure": 142,
   "giants-country": 105,
-  "tic-tac-toe-4x4": 260,
+  "tic-tac-toe-4x4": 255,
 };
 
 const PENDING_COMPILE_ERRORS: Record<string, RegExp> = {};

@@ -226,6 +226,7 @@ Machine-level variants around branches:
 - `jump-thread` — rewires jump chains into a straight flow.
 - `jump-to-next-threading` — removes jumps that only go to the next label.
 - `redundant-prologue-elimination` — merges repeated prologues while preserving side effects.
+- `repeated-unary-update-arg-temp` — routes the argument of repeated single-argument X-transform intrinsic calls (the `pow10`/`sqr`/`int`/`frac`/`sin`/… family, not just `pow10`) through one hidden scratch when that exposes shorter shared straight-line tails than spelling each argument inline. Statements are grouped by their structure modulo the routed argument and constant array indices, so a repeated shape is canonicalized even when its occurrences are not adjacent.
 
 ## 5a) Candidate variants and layout re-trials
 
@@ -255,6 +256,10 @@ The `report.candidates` array in `report` shows lowerings that were recompiled a
 - `signed-abs-shared-bit-helper-hoisted-layout` — combines signed abs/sign candidate with hoisted bit-mask helper calls.
 - `signed-abs-shared-bit-helper-hoisted-proc-layout` — combines signed abs/sign candidate with hoisted helper/procedure layout.
 - `packed-counter-stripes` — candidate that packs compatible fixed-width counters into one striped register.
+- `repeated-unary-update-arg-temp` — candidate that routes repeated X-transform unary-call arguments through one hidden scratch so repeated helper tails can be shared; only attempted when a cheap structural scan finds a routable-unary shape that repeats within some statement list.
+- `x-param-value-function` — candidate that passes simple positive-modulo value-function arguments through `X` instead of allocating a parameter register.
+- `x-param-value-function-with-unary-arg-temp` — combines X-parameter value functions with repeated unary-call scratch canonicalization.
+- `x-param-value-function-unary-arg-temp-coalesce` — additionally enables copy coalescing for the same value-function / unary-call scratch shape.
 - `packed-counter-stripes:<id+id+…>` — parameterized variant for each packed stripe set combination.
 - `counted-loop-unroll` — candidate that fully unrolls small constant-trip counted loops.
 - `startup-aware-constant-preloads` — candidate balancing main/ setup constant trade-offs.
@@ -299,6 +304,9 @@ The `report.candidates` array in `report` shows lowerings that were recompiled a
 - `x-param-return-decay-call` — applies the same X-return pattern at call sites.
 - `x-param-stack-stop-risk-read` — compiles a single-argument x-param helper proc shaped as `show(param); return wrap*( param (op) g(read()) )` so it consumes its argument from X and returns through direct `В/О`, reusing the same generalized stack-stop fusion prepared by `show-read-stack-stop-risk-lowering` (any X-transform intrinsic, binary op, single-digit constant, and outer wrap chain — not only `int(param * (1 + sin(read())))`).
 - `x-param-stack-stop-risk-call` — compiles a one-argument call into the matched stake/sin helper procedure by passing its argument in X, based on a strict two-statement body shape (`show` of the argument source, then `return int(arg * (1 + sin(read())))` in equivalent forms).
+- `x-param-value-function` / `x-param-value-function-call` — compiles a one-argument value function shaped like positive modulo normalization (`value = frac(int(value) / N) * N; if value <= 0 return value + N; return value`) so the argument is consumed from `X` and the result is kept in a hidden scratch plus `X`.
+- `x-param-value-call-temp-reuse` — when a nested value-function call must be lifted to protect the MK-61 stack, reuses the same hidden scratch instead of allocating fresh `__mkpro_call_*` temporaries.
+- `x-param-value-scratch-store-elision` — skips the caller-side `X->П scratch` after `scratch = normalize(...)` because the X-param value function already updated that scratch internally.
 - `proc-call-lowering` — builds procedure calls with return strategy and state handling.
 - `proc-return-x-reuse` — avoids rewriting X if it already holds the needed value on return.
 - `local-terminal-tail` — shares a tail block for local calls.
@@ -434,6 +442,7 @@ Display rewrites are separated into strategy selection + body lowering.
 - `interprocedural-value-propagation` — propagates known constants/values across function calls.
 - `interprocedural-dead-store` — removes writes to cells not read beyond procedure boundaries.
 - `elideXParamReturnStateFields` — removes unused X return-state fields and reduces memory.
+- `x-param-value-state-elision` — removes parser-created parameter state fields for matched X-param value functions when that parameter is not read outside the function body.
 - `elide`-style elimination patterns — remove intermediate bookkeeping artifacts when no longer needed.
 - `constant-synthesis` — synthesizes reusable constants in minimally short ways. Exact positive powers of ten can be built as `exponent; F 10^x` when that beats digit entry, both in main code and setup preloads.
 - `preloaded-constant` — preloads constants when cheaper than recomputing each time.

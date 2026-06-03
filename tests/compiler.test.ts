@@ -63,6 +63,27 @@ describe("MK-Pro compiler", () => {
     }
   }, 60_000);
 
+  it("keeps tic-tac-toe 4x4 value normalization compact without hand-written line plumbing", () => {
+    const game = source("examples/pending-optimizer/tic-tac-toe-4x4.mkpro");
+
+    expect(game).not.toMatch(/\bline:\s/u);
+    expect(game).not.toContain("normalize_line");
+    expect(game).not.toMatch(/\bline\s=/u);
+    expect(game).toContain("fn normalize(value)");
+    expect(game).toContain("pow10(normalize(x + y))");
+
+    const result = compileMKPro(game, { budget: 999, analysis: true });
+    const optimizationNames = result.report.optimizations.map((optimization) => optimization.name);
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.report.steps).toBe(255);
+    expect(result.report.registers.line).toBeUndefined();
+    expect(result.report.registers.value).toBeUndefined();
+    expect(Object.keys(result.report.registers).some((name) => name.startsWith("__mkpro_unary_arg_"))).toBe(true);
+    expect(optimizationNames).toContain("x-param-value-function-unary-arg-temp-coalesce");
+    expect(optimizationNames).toContain("x-param-value-scratch-store-elision");
+  }, 20_000);
+
   it("keeps every runnable example with a real source reference no larger than that source", () => {
     const unresolved: string[] = [];
     const larger: Array<{ path: string; steps: number; reference: number }> = [];

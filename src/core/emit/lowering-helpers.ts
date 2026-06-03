@@ -24,6 +24,14 @@ export const GRID4_MASK_SCRATCH_PREFIX = "__grid4_mask_";
 
 export const BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
 
+export const REPEATED_UNARY_UPDATE_ARG_PREFIX = "__mkpro_unary_arg_";
+
+export interface XParamValueFunction {
+  readonly param: string;
+  readonly width: number;
+  readonly line: number;
+}
+
 export const IF_SELECTOR_SCRATCH_PREFIX = "__if_selector_";
 
 export const DISPLAY_EXPR_PREFIX = "__display_expr_";
@@ -2997,6 +3005,72 @@ export function matchXParamStackStopRiskRead(program: ProgramAst, proc: ProcAst)
   const risk = matchStackStopRisk(ret.expr, param);
   if (risk === undefined) return undefined;
   return { param, display: show.display, showLine: show.line, line: ret.line, risk };
+}
+
+export function matchXParamValueFunction(proc: ProcAst): XParamValueFunction | undefined {
+  const params = proc.params ?? [];
+  const [param] = params;
+  if (param === undefined || params.length !== 1 || proc.body.length !== 3) return undefined;
+  const [assign, branch, ret] = proc.body;
+  if (assign?.kind !== "assign" || assign.target !== param) return undefined;
+  const width = matchPositiveModuloExpression(assign.expr, param);
+  if (width === undefined) return undefined;
+  if (branch?.kind !== "if" || branch.elseBody !== undefined) return undefined;
+  if (!identifierExpressionIs(branch.condition.left, param) || branch.condition.op !== "<=" || !numericExpressionIs(branch.condition.right, 0)) {
+    return undefined;
+  }
+  const [thenReturn] = branch.thenBody;
+  const positiveReturn = addExpressions({ kind: "identifier", name: param }, numberExpression(width));
+  const foldedPositiveReturn = addExpressions(numberExpression(width), { kind: "identifier", name: param });
+  if (
+    thenReturn?.kind !== "return_value" ||
+    (!expressionEquals(thenReturn.expr, positiveReturn) && !expressionEquals(thenReturn.expr, foldedPositiveReturn))
+  ) {
+    return undefined;
+  }
+  if (ret?.kind !== "return_value" || !identifierExpressionIs(ret.expr, param)) return undefined;
+  return { param, width, line: assign.line };
+}
+
+export function xParamValueFunctionParamNames(ast: ProgramAst): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const proc of ast.procs) {
+    const match = matchXParamValueFunction(proc);
+    if (match !== undefined) names.add(match.param);
+  }
+  return names;
+}
+
+export function xParamValueScratchName(ast: ProgramAst): string | undefined {
+  return ast.states
+    .flatMap((state) => state.fields)
+    .find((field) => field.name.startsWith(REPEATED_UNARY_UPDATE_ARG_PREFIX))
+    ?.name;
+}
+
+function matchPositiveModuloExpression(expr: ExpressionAst, param: string): number | undefined {
+  if (expr.kind !== "binary" || expr.op !== "*") return undefined;
+  const leftWidth = numericLiteralValue(expr.left);
+  const rightWidth = numericLiteralValue(expr.right);
+  const width = leftWidth ?? rightWidth;
+  const frac = leftWidth === undefined ? expr.left : expr.right;
+  if (width === undefined || !Number.isInteger(width) || width <= 0) return undefined;
+  if (frac.kind !== "call" || frac.callee.toLowerCase() !== "frac" || frac.args.length !== 1) return undefined;
+  const divided = frac.args[0]!;
+  if (divided.kind !== "binary" || divided.op !== "/") return undefined;
+  if (!numericExpressionIs(divided.right, width)) return undefined;
+  const intCall = divided.left;
+  if (intCall.kind !== "call" || intCall.callee.toLowerCase() !== "int" || intCall.args.length !== 1) return undefined;
+  return identifierExpressionIs(intCall.args[0]!, param) ? width : undefined;
+}
+
+function identifierExpressionIs(expr: ExpressionAst, name: string): boolean {
+  return expr.kind === "identifier" && expr.name === name;
+}
+
+function numericExpressionIs(expr: ExpressionAst, value: number): boolean {
+  const parsed = numericLiteralValue(expr);
+  return parsed !== undefined && parsed === value;
 }
 
 // --- Stack-stop risk fusion (generalized "stack-stop-risk") -----------------------

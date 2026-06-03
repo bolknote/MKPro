@@ -21,6 +21,7 @@ import {
   minExpression,
   safeMaxExpression,
   safeMinExpression,
+  matchXParamValueFunction,
   matchXParamReturnDecay,
   matchXParamStackStopRiskRead,
   matchRemainderByConstant,
@@ -34,6 +35,7 @@ import {
   smallSetMacroArityText,
   packedGridExpressionMacro,
   packedGridMacroArity,
+  xParamValueScratchName,
 } from "../lowering-helpers.ts";
 import type { StackStopRiskMatch } from "../lowering-helpers.ts";
 
@@ -213,6 +215,20 @@ export function compileFunctionCall(ctx: LoweringCtx, expr: Extract<ExpressionAs
         `Function ${expr.callee} expects ${params.length} argument(s), got ${expr.args.length}.`,
         proc.line,
       ));
+      return true;
+    }
+    const xParamValue = ctx.loweringOptions.xParamValueFunctions === true
+      ? matchXParamValueFunction(proc)
+      : undefined;
+    if (xParamValue !== undefined && expr.args.length === 1 && xParamValueScratchName(ctx.ast) !== undefined) {
+      compileExpression(ctx, expr.args[0]!);
+      const bankSelectors = ctx.snapshotBankSelectorCache();
+      ctx.emitJump(0x53, "ПП", proc.name, `call function ${proc.name}`, proc.line);
+      ctx.restoreBankSelectorCacheAfterCall(proc.name, bankSelectors);
+      ctx.optimizations.push({
+        name: "x-param-value-function-call",
+        detail: `Passed ${xParamValue.param} to ${proc.name} through X.`,
+      });
       return true;
     }
     const xParamDecay = matchXParamReturnDecay(proc);

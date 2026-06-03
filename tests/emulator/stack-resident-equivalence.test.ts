@@ -146,17 +146,75 @@ describe("stack-resident control-flow fusion behavioral equivalence (real emulat
   });
 });
 
-const PENDING_PROGRAMS = [
-  "examples/pending-optimizer/cave-treasure.mkpro",
-  "examples/pending-optimizer/giants-country.mkpro",
-  "examples/pending-optimizer/tic-tac-toe-4x4.mkpro",
+// Exercises the generalized repeated-unary-arg canonicalization: the routed call
+// is `sqr` (not `pow10`), and the two matching updates are separated by an
+// unrelated statement, so only the non-adjacent, function-agnostic grouping can
+// canonicalize them. The rewrite must stay behaviorally identical to baseline.
+const REPEATED_UNARY_ARG_SOURCE = `
+program RepeatedUnaryArgEq {
+  state {
+    a: packed = 2
+    b: packed = 5
+    c: packed = 100
+    d: packed = 0
+  }
+  loop {
+    c -= sqr(a)
+    d = a + b
+    c -= sqr(b)
+    halt(c)
+  }
+}
+`;
+
+describe("repeated unary-call argument canonicalization behavioral equivalence (real emulator)", () => {
+  const baseline = compileLoweringVariantForTest(REPEATED_UNARY_ARG_SOURCE, { budget: 999999 }, {});
+  const canonicalized = compileLoweringVariantForTest(
+    REPEATED_UNARY_ARG_SOURCE,
+    { budget: 999999 },
+    { canonicalizeRepeatedUnaryUpdateArgs: true },
+  );
+
+  it("canonicalizes a non-pow10, non-adjacent repeated unary-call run through one hidden scratch", () => {
+    expect(canonicalized.diagnostics.some((diagnostic) => diagnostic.level === "error")).toBe(false);
+    expect(canonicalized.report.optimizations.some((entry) => entry.name === "repeated-unary-update-arg-temp")).toBe(true);
+    expect(Object.keys(canonicalized.report.registers).some((name) => name.startsWith("__mkpro_unary_arg_"))).toBe(true);
+  });
+
+  it("matches baseline emulator output for a short run", () => {
+    const keys = ["В/О", "С/П"];
+    // Each variant allocates fields to registers independently (the scratch
+    // shifts the canonical allocation), so compare each variant's own `c` cell.
+    const baselineC = baseline.report.registers.c;
+    const canonicalizedC = canonicalized.report.registers.c;
+    if (baselineC === undefined || canonicalizedC === undefined) throw new Error("c register missing");
+    const before = observe(baseline.steps.map((step) => step.opcode), keys, baseline.report.preloads, [baselineC]);
+    const after = observe(canonicalized.steps.map((step) => step.opcode), keys, canonicalized.report.preloads, [canonicalizedC]);
+    expect(after.display).toBe(before.display);
+    expect(after.stopped).toBe(before.stopped);
+    expect(after.registers[canonicalizedC]).toBe(before.registers[baselineC]);
+  });
+});
+
+const PENDING_PROGRAMS: ReadonlyArray<{ file: string; options: Record<string, unknown> }> = [
+  { file: "examples/pending-optimizer/cave-treasure.mkpro", options: { stackResidentTemps: true } },
+  { file: "examples/pending-optimizer/giants-country.mkpro", options: { stackResidentTemps: true } },
+  {
+    file: "examples/pending-optimizer/tic-tac-toe-4x4.mkpro",
+    options: {
+      stackResidentTemps: true,
+      xParamValueFunctions: true,
+      canonicalizeRepeatedUnaryUpdateArgs: true,
+      coalesceCopies: true,
+    },
+  },
 ] as const;
 
 describe("stack-resident temp variant compiles pending programs", () => {
-  for (const file of PENDING_PROGRAMS) {
+  for (const { file, options } of PENDING_PROGRAMS) {
     it(`compiles ${file} with stackResidentTemps`, () => {
       const source = readFileSync(file, "utf8");
-      const result = compileLoweringVariantForTest(source, { budget: 999999, analysis: true }, { stackResidentTemps: true });
+      const result = compileLoweringVariantForTest(source, { budget: 999999, analysis: true }, options);
       expect(result.diagnostics.some((diagnostic) => diagnostic.level === "error")).toBe(false);
       expect(result.steps.length).toBeGreaterThan(0);
     });
