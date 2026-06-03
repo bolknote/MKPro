@@ -196,6 +196,93 @@ describe("repeated unary-call argument canonicalization behavioral equivalence (
   });
 });
 
+// The canonicalization may only hoist a *pure* argument. An argument that reads
+// the keyboard or the RNG must never be lifted into the shared scratch, because
+// that scratch is later reused across structurally identical statements and the
+// impure value would be observed at the wrong time. This program would otherwise
+// look like a perfect grouping candidate (two identical `sqr(random(...))`
+// updates), so it is a precise guard on the purity gate.
+const IMPURE_ARG_SOURCE = `
+program ImpureArgGuard {
+  state {
+    c: packed = 100
+    seed: packed = 7
+  }
+  loop {
+    c -= sqr(random(seed))
+    c -= sqr(random(seed))
+    halt(c)
+  }
+}
+`;
+
+describe("repeated unary-call argument canonicalization purity guard", () => {
+  it("never routes an impure (random/entered) argument through the shared scratch", () => {
+    const canonicalized = compileLoweringVariantForTest(
+      IMPURE_ARG_SOURCE,
+      { budget: 999999 },
+      { canonicalizeRepeatedUnaryUpdateArgs: true },
+    );
+    expect(canonicalized.diagnostics.some((diagnostic) => diagnostic.level === "error")).toBe(false);
+    expect(canonicalized.report.optimizations.some((entry) => entry.name === "repeated-unary-update-arg-temp")).toBe(false);
+    expect(Object.keys(canonicalized.report.registers).some((name) => name.startsWith("__mkpro_unary_arg_"))).toBe(false);
+  });
+});
+
+// Two *different* shape groups in one body: a `sqr(...)` group on `c` and an
+// `abs(...)` group on `d`. Each group must canonicalize through the single shared
+// scratch independently, and the result must stay behaviorally identical to the
+// untransformed baseline. This proves the generalization is function-agnostic and
+// handles multiple interleaved groups, not just one homogeneous run.
+const MULTI_GROUP_SOURCE = `
+program MultiGroupUnaryEq {
+  state {
+    a: packed = 3
+    b: packed = 5
+    c: packed = 200
+    d: packed = 50
+  }
+  loop {
+    c -= sqr(a + 1)
+    d -= abs(a - b)
+    c -= sqr(b + 1)
+    d -= abs(b - a)
+    c = c + d
+    halt(c)
+  }
+}
+`;
+
+describe("repeated unary-call argument canonicalization handles multiple interleaved groups", () => {
+  const baseline = compileLoweringVariantForTest(MULTI_GROUP_SOURCE, { budget: 999999 }, {});
+  const canonicalized = compileLoweringVariantForTest(
+    MULTI_GROUP_SOURCE,
+    { budget: 999999 },
+    { canonicalizeRepeatedUnaryUpdateArgs: true },
+  );
+
+  it("canonicalizes two distinct shape groups through one shared scratch", () => {
+    expect(canonicalized.diagnostics.some((diagnostic) => diagnostic.level === "error")).toBe(false);
+    expect(canonicalized.report.optimizations.some((entry) => entry.name === "repeated-unary-update-arg-temp")).toBe(true);
+    // Both the sqr(...) group and the abs(...) group reuse one shared scratch cell.
+    const scratch = Object.keys(canonicalized.report.registers).filter((name) => name.startsWith("__mkpro_unary_arg_"));
+    expect(scratch).toHaveLength(1);
+  });
+
+  it("matches baseline emulator output for a short run", () => {
+    const keys = ["В/О", "С/П"];
+    // `c = c + d` folds both groups into the single observed cell `c`.
+    const baselineC = baseline.report.registers.c;
+    const canonicalizedC = canonicalized.report.registers.c;
+    if (baselineC === undefined || canonicalizedC === undefined) throw new Error("c register missing");
+    const before = observe(baseline.steps.map((step) => step.opcode), keys, baseline.report.preloads, [baselineC]);
+    const after = observe(canonicalized.steps.map((step) => step.opcode), keys, canonicalized.report.preloads, [canonicalizedC]);
+    expect(after.display).toBe(before.display);
+    expect(after.stopped).toBe(before.stopped);
+    expect(after.registers[canonicalizedC]).toBe(before.registers[baselineC]);
+  });
+});
+
 const PENDING_PROGRAMS: ReadonlyArray<{ file: string; options: Record<string, unknown> }> = [
   { file: "examples/pending-optimizer/cave-treasure.mkpro", options: { stackResidentTemps: true } },
   { file: "examples/giants-country.mkpro", options: { stackResidentTemps: true } },
