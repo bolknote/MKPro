@@ -1198,6 +1198,12 @@ The pipeline currently contains:
 - **stack-current-X / dead-temp-store** — eliminates the temp store when the
   current X value can be consumed directly by a following expression, including
   one-shot temporaries and commutative current-X derivations.
+- **membership-collection-x2-restore** — for a membership failure that sets the
+  same packed collection, keeps the mask in Y, lets the collection recall
+  synchronize X2, tests with `К∧; К{x}`, then restores the collection with `.`
+  on the jumped branch before `К∨`. This is the ordinary-code X2 hidden-temp
+  form of the source-listing bit-test/set trick; it is not limited to display
+  lowering.
 - **dead-store-elimination** — whole-program liveness-driven DSE: removes
   `X->П r` when liveOut at that point excludes `r`, unless that store finalizes
   number entry or supplies the previous-command context consumed by `ВП` while
@@ -1292,6 +1298,11 @@ The pipeline currently contains:
   direct `ПП`/`В/О` round trip.
 - **vp-x2-peephole** — drops a `К {x}` immediately after a proved display
   `ВП`/X2 boundary when `ВП` already supplies the fractional transform.
+- **membership X2 restore** — membership set lowering may use `.` as a hidden
+  X2 restore in non-display code. It is accepted only when the set collection is
+  byte-for-byte the tested collection and the path to `.` crosses the safe
+  `К∧; К{x}` pair, so the reference E/D-leading X2 restoration exception is not
+  exposed.
 - **packed-counter-stripes** — tries every compatible subset of fixed-width
   decimal counters that fits into the eight-digit mantissa as stripes of one
   hidden register, then keeps the whole-program candidate only if it is smaller.

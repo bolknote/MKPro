@@ -3762,7 +3762,7 @@ program MembershipSingleSetCollection {
     expect(result.steps[setIndex - 2]?.comment).toBe("recall player_marks");
   });
 
-  it("stores a current-X membership mask scratch without recalling it again", () => {
+  it("restores the tested collection from X2 when setting the same membership collection", () => {
     const result = compileOk(`
 program MembershipMaskCurrentX {
   state {
@@ -3783,8 +3783,40 @@ program MembershipMaskCurrentX {
 }
 `, { budget: 999, analysis: true });
 
+    expect(result.report.optimizations.some((item) => item.name === "membership-collection-x2-restore")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "membership-mask-current-x-scratch")).toBe(false);
+    const comments = result.steps.map((step) => step.comment ?? "");
+    expect(comments).toContain("membership test with X2-restorable collection");
+    expect(comments).toContain("restore membership collection from X2");
+    expect(comments).toContain("bit_set with X2-restored collection");
+    expect(comments).not.toContain("cell bit mask scratch");
+  });
+
+  it("keeps the current-X membership mask scratch when setting a different collection", () => {
+    const result = compileOk(`
+program MembershipMaskCurrentXScratch {
+  state {
+    mask: packed = 0
+    occupied: packed = 0
+    marks: packed = 0
+  }
+
+  loop {
+    mask = occupied + 0.1
+    if bit_and(occupied, mask) != 0 {
+      halt(0)
+    }
+    else {
+      marks = bit_or(marks, mask)
+      halt(marks)
+    }
+  }
+}
+`, { budget: 999, analysis: true });
+
     expect(result.report.optimizations.some((item) => item.name === "membership-mask-current-x-scratch")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "membership-mask-stack-test-reuse")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "membership-collection-x2-restore")).toBe(false);
     const comments = result.steps.map((step) => step.comment ?? "");
     const scratchIndex = comments.indexOf("cell bit mask scratch");
     expect(scratchIndex).toBeGreaterThan(0);

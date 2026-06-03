@@ -489,6 +489,12 @@ Display rewrites are separated into strategy selection + body lowering.
   `!= 0` branch, avoiding a fresh zero literal or `Cx`.
 - `zero-reuse` — similarly reuses zero in multiple places when liveness is confirmed.
 - `stack-current-x-scheduling` — reorders current-X operations to avoid extra push/pop-like steps.
+- `membership-collection-x2-restore` — for a packed membership test followed
+  by setting the same collection, uses X2 as the hidden temporary: the mask
+  remains in Y, the collection recall synchronizes X2, `К∧; К{x}` performs the
+  test, and `.` restores the collection on the jumped set branch before `К∨`.
+  The rewrite is rejected for different set collections and for known-fractional
+  masks where the safe two-command X2-preserving gap before `.` would disappear.
 - `stack-resident-temps` — keeps up to four consecutive single-use temps on the stack, using `В↑` lifts and restore sequences (`X↔Y` / `F reverse`) before direct stack-based consumers.
 - `stack-resident-indexed-temp` — keeps a single-use temp in X across one indexed compound store `cells[i] op= temp` when the temp is consumed exactly once and selector/index setup is not temp-dependent.
 - `stack-resident-control-flow` — marks stack-temp fusion that crosses stack-preserving `if` / `while` / `dispatch` regions; these regions cannot clobber live temps and the lowering rebuilds stack state if the region requires it.
@@ -590,7 +596,7 @@ Feature flags are added only after successful candidate/optimization evidence:
 - `indirect-memory` — added when indirect-memory selectors are used (`indirect-memory-table`, `indirect-memory-alias-selector`, `indexed-packed-row-table`).
 - `dark-entries` — added from cyclic formal dark-entry selection and related layout features.
 - `address-constants` — added when constants are reused as arithmetic/address-like data.
-- `x2-register` — added when X2/Xп/дисплей-byte scheduling relies on X2 boundaries across display-byte paths; opcode metadata follows the reference distinction between X2-preserving, X2-syncing/normalizing, and X2-restoring commands.
+- `x2-register` — added when X2/Xп/дисплей-byte scheduling relies on X2 boundaries across display-byte or ordinary hidden-temp paths; opcode metadata follows the reference distinction between X2-preserving, X2-syncing/normalizing, and X2-restoring commands.
 - `fl-decrement-branch` — added when one-cell `F Lx` decrement/control forms are selected through optimizer-safe flow patterns (`fl-decrement-zero-branch`, `indirect-incdec-counter`, `r0-indirect-counter`).
 - `stack-resident-temps` — added when any stack-temporary residency optimization is used (`stack-resident-temps`, `stack-resident-indexed-temp`, or `stack-resident-control-flow`); recall-removal proofs use the shared opcode stack-effect profile to avoid deleting `П->X` lifts that can still be observed downstream.
 - `negative-zero-degree` — added when `negative-zero-threshold-selector` proof uses the `1|-00` preload trick.

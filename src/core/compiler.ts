@@ -14526,6 +14526,14 @@ const optimizerCapabilities: Array<{
     detail: "Uses ВП where it simultaneously restores X2 and provides the needed fractional/mantissa side effect, and collapses redundant ВП ВП / КНОП ВП exponent-entry splices.",
   },
   {
+    id: "x2-hidden-temp",
+    category: "stack",
+    source: "mk61-delta",
+    requires: ["x2-register"],
+    activeWhen: ["membership-collection-x2-restore"],
+    detail: "Uses the hidden X2 display register as a temporary across ordinary X2-preserving logic: a membership test can keep the mask in Y, restore the tested collection through '.', and perform the following bit-set without a scratch register.",
+  },
+  {
     id: "hex-mantissa-arithmetic",
     category: "data",
     source: "undocumented",
@@ -15119,9 +15127,10 @@ function buildMachineFeaturesUsed(
   if (optimizations.some((optimization) =>
     optimization.name === "x2-display-byte-scheduling" ||
     optimization.name === "display-byte-x2-lowering" ||
-    optimization.name === "floor-packed-row-expression-display"
+    optimization.name === "floor-packed-row-expression-display" ||
+    optimization.name === "membership-collection-x2-restore"
   )) {
-    add("x2-register", "Optimizer scheduled hidden X2 values across display-byte boundaries.", "optimizer");
+    add("x2-register", "Optimizer scheduled hidden X2 values across display-byte or ordinary temporary boundaries.", "optimizer");
   }
   if (optimizations.some((optimization) => optimization.name === "negative-zero-threshold-selector")) {
     add("negative-zero-degree", "Optimizer selected a preloaded negative-zero exponent threshold selector.", "optimizer");

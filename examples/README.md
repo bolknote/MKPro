@@ -43,4 +43,4 @@ Generated with `npm run examples:size`.
 | `wumpus.mkpro` | 100 | - | - | ok: no reference | main+setup load ok |
 | `pending-optimizer/cave-highlevel-baseline.mkpro` | 134 | 105 | +29 | pending optimizer | not loaded: main >105 |
 | `pending-optimizer/cave-treasure.mkpro` | 118 | 105 | +13 | pending optimizer | setup load ok; main >105 |
-| `pending-optimizer/tic-tac-toe-4x4.mkpro` | 249 | 105 | +144 | pending optimizer | not loaded: main >105 |
+| `pending-optimizer/tic-tac-toe-4x4.mkpro` | 247 | 105 | +142 | pending optimizer | not loaded: main >105 |

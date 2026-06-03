@@ -924,20 +924,26 @@ export function compileMembershipSetReuseForPresentCondition(ctx: LoweringCtx,
     },
     line: number,
   ): boolean {
-    const scratch = bitMaskScratchName(statement);
-    if (ctx.allocation.registers[scratch] === undefined) return false;
-
     const { set, collection, tail } = setPrefix;
     const falseLabel = ctx.freshLabel("if_false");
     const thenTerminates = ctx.statementsTerminate(statement.thenBody);
     const endLabel = thenTerminates ? undefined : ctx.freshLabel("if_end");
+    const x2Restore = canRestoreMembershipCollectionFromX2(membership, collection);
 
-    emitMembershipMaskTest(ctx, membership, scratch, line);
+    if (x2Restore) {
+      emitMembershipCollectionX2Test(ctx, membership, line);
+    } else {
+      const scratch = bitMaskScratchName(statement);
+      if (ctx.allocation.registers[scratch] === undefined) return false;
+      emitMembershipMaskTest(ctx, membership, scratch, line);
+    }
+
     ctx.emitJump(0x5e, "F x=0", falseLabel, "false branch for !=", line);
     ctx.compileStatements(statement.thenBody);
     if (endLabel !== undefined) ctx.emitJump(0x51, "БП", endLabel, "if end", line);
     ctx.emitLabel(falseLabel);
-    emitBitSetCollectionWithScratch(ctx, collection, set, scratch);
+    if (x2Restore) emitBitSetWithX2RestoredCollection(ctx, set);
+    else emitBitSetCollectionWithScratch(ctx, collection, set, bitMaskScratchName(statement));
     ctx.compileStatements(tail);
     if (endLabel !== undefined) ctx.emitLabel(endLabel);
 
@@ -998,20 +1004,33 @@ export function compileMembershipSetRunReuseForPresentCondition(ctx: LoweringCtx
     },
     line: number,
   ): boolean {
-    const scratch = bitMaskScratchName(setRun.sets[0]!.set);
-    if (ctx.allocation.registers[scratch] === undefined) return false;
-
     const falseLabel = ctx.freshLabel("if_false");
     const thenTerminates = ctx.statementsTerminate(statement.thenBody);
     const endLabel = thenTerminates ? undefined : ctx.freshLabel("if_end");
+    const onlySet = setRun.sets.length === 1 ? setRun.sets[0]! : undefined;
+    const x2Restore = onlySet === undefined
+      ? false
+      : canRestoreMembershipCollectionFromX2(membership, onlySet.collection);
 
-    emitMembershipMaskTest(ctx, membership, scratch, line);
+    if (x2Restore) {
+      emitMembershipCollectionX2Test(ctx, membership, line);
+    } else {
+      const scratch = bitMaskScratchName(setRun.sets[0]!.set);
+      if (ctx.allocation.registers[scratch] === undefined) return false;
+      emitMembershipMaskTest(ctx, membership, scratch, line);
+    }
+
     ctx.emitJump(0x5e, "F x=0", falseLabel, "false branch for !=", line);
     ctx.compileStatements(statement.thenBody);
     if (endLabel !== undefined) ctx.emitJump(0x51, "БП", endLabel, "if end", line);
     ctx.emitLabel(falseLabel);
-    for (const { set, collection } of setRun.sets) {
-      emitBitSetCollectionWithScratch(ctx, collection, set, scratch);
+    if (x2Restore) {
+      emitBitSetWithX2RestoredCollection(ctx, onlySet!.set);
+    } else {
+      const scratch = bitMaskScratchName(setRun.sets[0]!.set);
+      for (const { set, collection } of setRun.sets) {
+        emitBitSetCollectionWithScratch(ctx, collection, set, scratch);
+      }
     }
     ctx.compileStatements(setRun.tail);
     if (endLabel !== undefined) ctx.emitLabel(endLabel);
@@ -1022,6 +1041,54 @@ export function compileMembershipSetRunReuseForPresentCondition(ctx: LoweringCtx
       detail: `Reused the failed membership mask when setting ${targets} after line ${line}.`,
     });
     return true;
+}
+
+function canRestoreMembershipCollectionFromX2(
+    membership: BitMembershipCondition,
+    setCollection: ExpressionAst,
+  ): membership is BitMembershipCondition & {
+    mode: "mask";
+    collection: Extract<ExpressionAst, { kind: "identifier" }>;
+    mask: Extract<ExpressionAst, { kind: "identifier" }>;
+  } {
+    return membership.mode === "mask" &&
+      membership.collection.kind === "identifier" &&
+      membership.mask.kind === "identifier" &&
+      expressionEquals(setCollection, membership.collection) &&
+      // When К {x} is skipped for a known-fractional mask, `.` may be only one
+      // X2-preserving command after the collection recall. Keep this path to the
+      // two-command `К∧; К{x}` shape so E/D-leading X2 values restore safely.
+      !expressionIsKnownFractional(membership.mask);
+}
+
+function emitMembershipCollectionX2Test(
+    ctx: LoweringCtx,
+    membership: BitMembershipCondition & {
+      mode: "mask";
+      collection: Extract<ExpressionAst, { kind: "identifier" }>;
+      mask: Extract<ExpressionAst, { kind: "identifier" }>;
+    },
+    line: number,
+  ): void {
+    if (!ctx.xHolds(membership.mask.name)) {
+      ctx.emitRecall(membership.mask.name, `membership X2 mask ${membership.mask.name}`, line);
+    }
+    ctx.emitRecall(membership.collection.name, `membership X2 collection ${membership.collection.name}`, line);
+    ctx.emitOp(0x37, "К ∧", "membership test with X2-restorable collection", line);
+    emitMembershipFractionIfNeeded(ctx, membership, "membership fraction", line);
+    ctx.optimizations.push({
+      name: "membership-collection-x2-restore",
+      detail: `Kept ${membership.mask.name} in Y and ${membership.collection.name} in X2 for a membership set at line ${line}.`,
+    });
+}
+
+function emitBitSetWithX2RestoredCollection(
+    ctx: LoweringCtx,
+    set: Extract<StatementAst, { kind: "assign" }>,
+  ): void {
+    ctx.emitOp(0x0a, ".", "restore membership collection from X2", set.line);
+    ctx.emitOp(0x38, "К ∨", "bit_set with X2-restored collection", set.line);
+    ctx.emitStore(set.target, `set ${set.target}`, set.line);
 }
 
 export function compileMembershipSetRunReuseForAbsentCondition(ctx: LoweringCtx, 

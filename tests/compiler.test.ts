@@ -76,13 +76,14 @@ describe("MK-Pro compiler", () => {
     const optimizationNames = result.report.optimizations.map((optimization) => optimization.name);
 
     expect(result.diagnostics).toEqual([]);
-    expect(result.report.steps).toBe(249);
+    expect(result.report.steps).toBe(247);
     expect(result.report.registers.line).toBeUndefined();
     expect(result.report.registers.value).toBeUndefined();
     expect(Object.keys(result.report.registers).some((name) => name.startsWith("__mkpro_unary_arg_"))).toBe(true);
     expect(optimizationNames).toContain("repeated-unary-update-arg-temp");
     expect(optimizationNames).toContain("x-param-value-function-with-unary-arg-temp");
     expect(optimizationNames).toContain("x-param-value-scratch-store-elision");
+    expect(optimizationNames).toContain("membership-collection-x2-restore");
   }, 20_000);
 
   it("keeps every runnable example with a real source reference no larger than that source", () => {
