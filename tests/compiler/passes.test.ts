@@ -315,6 +315,29 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("last-x-reuse drops recall when a direct return syncs X2 before ВП", () => {
+    const program: IrOp[] = [
+      store("1"),
+      recall("1"),
+      call("noop"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("noop"),
+      ret(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      store("1"),
+      call("noop"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("noop"),
+      ret(),
+    ]);
+  });
+
   it("last-x-reuse keeps recall that lifts the stack for an immediate binary op", () => {
     const program: IrOp[] = [
       store("1"),
@@ -409,7 +432,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
-  it("flow-x-reuse keeps recall that syncs X2 across a direct call return before ВП", () => {
+  it("flow-x-reuse drops recall when a direct return syncs X2 before ВП", () => {
     const program: IrOp[] = [
       store("4"),
       recall("4"),
@@ -421,8 +444,15 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = flowXReuse.run(program, ctx);
 
-    expect(result.applied).toBe(0);
-    expect(result.ops).toEqual(program);
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      store("4"),
+      call("noop"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("noop"),
+      ret(),
+    ]);
   });
 
   it("flow-x-reuse keeps recall that lifts the stack for an immediate binary op", () => {
@@ -1527,7 +1557,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
-  it("store-recall-peephole keeps recall that syncs X2 across a direct call return before ВП", () => {
+  it("store-recall-peephole drops recall before a direct call return that syncs X2 before ВП", () => {
     const program: IrOp[] = [
       store("2"),
       recall("2"),
@@ -1539,8 +1569,15 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = storeRecallPeephole.run(program, ctx);
 
-    expect(result.applied).toBe(0);
-    expect(result.ops).toEqual(program);
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      store("2"),
+      call("noop"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("noop"),
+      ret(),
+    ]);
   });
 
   it("store-recall-peephole still drops recall before a fresh digit entry", () => {

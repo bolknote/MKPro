@@ -1192,9 +1192,9 @@ The pipeline currently contains:
 
 - **store-recall-peephole** — drops adjacent `X->П r ; П->X r` only when
   the removed recall is not the visible X2 sync before a context-sensitive
-  `.`/`ВП` restoration and its stack lift cannot reach a downstream
-  binary/stack-consuming op through stack-preserving commands or direct
-  `ПП`/`В/О` continuations.
+  `.`/`ВП` restoration. A direct `В/О` return is an X2 sync boundary, so the
+  X2 hazard stops there; the separate stack-lift guard can still follow direct
+  `ПП`/`В/О` continuations to downstream binary/stack-consuming ops.
 - **stack-current-X / dead-temp-store** — eliminates the temp store when the
   current X value can be consumed directly by a following expression, including
   one-shot temporaries and commutative current-X derivations.
@@ -1219,13 +1219,14 @@ The pipeline currently contains:
 - **flow-x-reuse** — runs forward CFG dataflow for values already in X and
   drops `П->X r` when every direct predecessor reaches that point with `r`
   still in X; absolute numeric and indirect flow targets are left untouched,
-  and the same `.`/`ВП` X2-sync plus downstream stack-consumer guards are
-  applied before removing a recall.
+  and the same `.`/`ВП` X2-sync guard (stopped by direct `В/О` returns) plus
+  downstream stack-consumer guards are applied before removing a recall.
 - **branch-target-x-reuse** — drops the first `П->X r` inside a unique branch
   target when the incoming condition just tested the same recalled `r`, so the
   branch path already carries that value in X, unless that recall is needed as
-  the target-side X2 sync before `.`/`ВП` or as a stack lift that can reach a
-  downstream binary/stack-consuming op through direct call returns.
+  the target-side X2 sync before `.`/`ВП` before a direct `В/О` return syncs
+  X2, or as a stack lift that can reach a downstream binary/stack-consuming op
+  through direct call returns.
 - **liveness-analysis** — foundational dataflow used by DSE, register
   coalescing, and dead-code analysis; `F L0`..`F L3` loop counters are modeled
   as both read and written registers.

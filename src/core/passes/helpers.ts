@@ -253,8 +253,11 @@ export function removingRecallCanExposeX2Restore(ops: readonly IrOp[], recallInd
         case "stop":
           return false;
         case "return":
-          if (returnStack.length === 0) return false;
-          return visit(returnStack[0]!, returnStack.slice(1));
+          // В/О itself is X2-affecting when returning from a subroutine, so a
+          // later `.`/`ВП` in the caller observes the return-time X2 sync rather
+          // than the recall we are considering removing. Stack-lift exposure is
+          // checked by a separate analysis that still follows direct returns.
+          return false;
         case "jump": {
           if (typeof op.target !== "string") return true;
           const target = labels.get(op.target);

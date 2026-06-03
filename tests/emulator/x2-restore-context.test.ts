@@ -36,4 +36,12 @@ describe("X2 restore context", () => {
     expect(runX(withRecall)).toBe("1,415926-1");
     expect(runX(withoutRecall)).toBe("1,");
   });
+
+  it("В/О syncs X2 on a direct subroutine return before a following ВП", () => {
+    const withRecall = [0x20, 0x35, 0x41, 0x61, 0x53, 0x08, 0x0c, 0x50, 0x52]; // ... П->X 1; ПП 08; ВП; С/П; В/О
+    const withoutRecall = [0x20, 0x35, 0x41, 0x53, 0x07, 0x0c, 0x50, 0x52]; // ... ПП 07; ВП; С/П; В/О
+
+    expect(runX(withRecall)).toBe("1,415926-1");
+    expect(runX(withoutRecall)).toBe("1,415926-1");
+  });
 });
