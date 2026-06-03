@@ -491,7 +491,8 @@ Display rewrites are separated into strategy selection + body lowering.
 - `zero-reuse` — similarly reuses zero in multiple places when liveness is confirmed.
 - `stack-current-x-scheduling` — reorders current-X operations to avoid extra push/pop-like steps.
 - `membership-collection-x2-restore` — for a packed membership test followed
-  by setting the same collection, uses X2 as the hidden temporary: the mask
+  by setting the same assignable collection, including an indexed bank cell with
+  a prepared indirect selector, uses X2 as the hidden temporary: the mask
   remains in Y, the collection recall synchronizes X2, `К∧; К{x}` performs the
   test, and `.` restores the collection on the jumped set branch before `К∨`.
   Deterministic known-fractional masks skip the redundant `К{x}` and get a

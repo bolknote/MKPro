@@ -1302,10 +1302,12 @@ The pipeline currently contains:
 - **vp-x2-peephole** — drops a `К {x}` immediately after a proved display
   `ВП`/X2 boundary when `ВП` already supplies the fractional transform.
 - **membership X2 restore** — membership set lowering may use `.` as a hidden
-  X2 restore in non-display code. It is accepted only when the set collection is
-  byte-for-byte the tested collection and the path to `.` crosses the safe
-  `К∧; К{x}` pair, so the reference E/D-leading X2 restoration exception is not
-  exposed.
+  X2 restore in non-display code. It is accepted only when the set collection
+  assignable is byte-for-byte the tested collection, including indexed bank
+  cells with a prepared indirect selector, and the path to `.` crosses the safe
+  `К∧; К{x}` pair, or an explicit `К НОП` gap when a proved fractional mask
+  lets the compiler skip `К{x}`, so the reference E/D-leading X2 restoration
+  exception is not exposed.
 - **packed-counter-stripes** — tries every compatible subset of fixed-width
   decimal counters that fits into the eight-digit mantissa as stripes of one
   hidden register, then keeps the whole-program candidate only if it is smaller.

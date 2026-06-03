@@ -6822,7 +6822,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    64 | 3A    | К ИНВ                   | bit_not()
    65 | DD    | К П→X d                 | indexed recall walls; indirect-selector-integer-part=blocked
    66 | 37    | К ∧                     | bit_and()
-   67 | BD    | К X→П d                 | indexed set walls
+   67 | BD    | К X→П d                 | indexed set walls; indirect-selector-integer-part=blocked
    68 | 00    | 0                       | set blocked
    69 | 4D    | X→П d                   | set blocked
    70 | 8E    | К БП e                  | if end; preloaded Re=B3 indirect-target=1 indirect flow
@@ -7387,7 +7387,7 @@ exports[`golden listing > selected output is stable for examples/pending-optimiz
    78 | 10    | +                       | expr +
    79 | 53    | ПП                      | call function robber_fight
    80 | 6E    | >6E                     | call function robber_fight
-   81 | BD    | К X→П d                 | indexed set resources
+   81 | BD    | К X→П d                 | indexed set resources; indirect-selector-integer-part=pos
    82 | 88    | К БП 8                  | if end; preloaded R8=B2 indirect-target=0 indirect flow
    83 | 50    | С/П                     | pause
    84 | 88    | К БП 8                  | dispatch end; preloaded R8=B2 indirect-target=0 indirect flow

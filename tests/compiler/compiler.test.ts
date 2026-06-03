@@ -3821,6 +3821,36 @@ program FractionalMembershipMaskX2Set {
     expect(comments).not.toContain("reuse cell bit mask");
   });
 
+  it("restores an indexed membership collection from X2 with a prepared selector", () => {
+    const result = compileOk(`
+program IndexedMembershipMaskX2Set {
+  state {
+    pos: packed = 1.0000008
+    rows: packed[1..3] = [0, 0, 0]
+  }
+
+  loop {
+    if bit_and(rows[int(pos)], frac(pos)) != 0 {
+      halt(9)
+    }
+    else {
+      rows[int(pos)] = bit_or(rows[int(pos)], frac(pos))
+    }
+    halt(rows[1])
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "membership-collection-x2-restore")).toBe(true);
+    const comments = result.steps.map((step) => step.comment ?? "");
+    expect(comments).toContain("membership test with X2-restorable collection");
+    expect(comments).toContain("restore membership collection from X2");
+    expect(comments).toContain("bit_set with X2-restored collection");
+    expect(comments.some((comment) => comment.startsWith("indexed recall rows"))).toBe(true);
+    expect(comments.some((comment) => comment.startsWith("indexed set rows"))).toBe(true);
+    expect(comments).not.toContain("cell bit mask scratch");
+  });
+
   it("keeps the current-X membership mask scratch when setting a different collection", () => {
     const result = compileOk(`
 program MembershipMaskCurrentXScratch {

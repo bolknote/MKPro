@@ -81,10 +81,19 @@ import {
 import {
   getOpcode,
 } from "../../opcodes.ts";
+import {
+  numericIndexValue,
+} from "../../state-banks.ts";
 import type {
   ConditionAst,
   ProgramAst,
 } from "../../types.ts";
+
+type MembershipSetStatement =
+  | Extract<StatementAst, { kind: "assign" }>
+  | Extract<StatementAst, { kind: "indexed_assign" }>;
+
+type PreparedIndexedSelector = NonNullable<ReturnType<LoweringCtx["prepareIndexedSelector"]>>;
 
 export function compileLiteralShowHalt(ctx: LoweringCtx, 
     show: Extract<StatementAst, { kind: "show" }>,
@@ -892,10 +901,12 @@ export function compileMembershipSetReuse(ctx: LoweringCtx,
     line: number,
   ): boolean {
     const present = matchBitMembershipCondition(statement.condition);
-    if (present !== undefined && present.collection.kind === "identifier" && statement.elseBody !== undefined) {
-      const setRun = ctx.membershipSetRunPrefix(statement.elseBody, present);
-      if (setRun !== undefined) {
-        return compileMembershipSetRunReuseForPresentCondition(ctx, statement, present, setRun, line);
+    if (present !== undefined && statement.elseBody !== undefined) {
+      if (present.collection.kind === "identifier") {
+        const setRun = ctx.membershipSetRunPrefix(statement.elseBody, present);
+        if (setRun !== undefined) {
+          return compileMembershipSetRunReuseForPresentCondition(ctx, statement, present, setRun, line);
+        }
       }
       const setPrefix = ctx.membershipSetPrefix(statement.elseBody, present);
       if (setPrefix !== undefined) {
@@ -918,7 +929,7 @@ export function compileMembershipSetReuseForPresentCondition(ctx: LoweringCtx,
     statement: Extract<StatementAst, { kind: "if" }>,
     membership: BitMembershipCondition,
     setPrefix: {
-      set: Extract<StatementAst, { kind: "assign" }>;
+      set: MembershipSetStatement;
       collection: ExpressionAst;
       tail: StatementAst[];
     },
@@ -929,10 +940,18 @@ export function compileMembershipSetReuseForPresentCondition(ctx: LoweringCtx,
     const thenTerminates = ctx.statementsTerminate(statement.thenBody);
     const endLabel = thenTerminates ? undefined : ctx.freshLabel("if_end");
     const x2Restore = canRestoreMembershipCollectionFromX2(membership, collection);
+    let preparedSelector: PreparedIndexedSelector | undefined;
+    let scratchSet: Extract<StatementAst, { kind: "assign" }> | undefined;
 
     if (x2Restore) {
-      emitMembershipCollectionX2Test(ctx, membership, line);
+      preparedSelector = prepareMembershipCollectionX2Selector(ctx, membership.collection, line);
+      if (membership.collection.kind === "indexed" && numericIndexValue(membership.collection.index) === undefined && preparedSelector === undefined) {
+        return false;
+      }
+      emitMembershipCollectionX2Test(ctx, membership, line, preparedSelector);
     } else {
+      if (set.kind !== "assign") return false;
+      scratchSet = set;
       const scratch = bitMaskScratchName(statement);
       if (ctx.allocation.registers[scratch] === undefined) return false;
       emitMembershipMaskTest(ctx, membership, scratch, line);
@@ -942,14 +961,14 @@ export function compileMembershipSetReuseForPresentCondition(ctx: LoweringCtx,
     ctx.compileStatements(statement.thenBody);
     if (endLabel !== undefined) ctx.emitJump(0x51, "БП", endLabel, "if end", line);
     ctx.emitLabel(falseLabel);
-    if (x2Restore) emitBitSetWithX2RestoredCollection(ctx, set, membershipCollectionX2RestoreNeedsNop(membership));
-    else emitBitSetCollectionWithScratch(ctx, collection, set, bitMaskScratchName(statement));
+    if (x2Restore) emitBitSetWithX2RestoredCollection(ctx, set, membershipCollectionX2RestoreNeedsNop(membership), preparedSelector);
+    else if (scratchSet !== undefined) emitBitSetCollectionWithScratch(ctx, collection, scratchSet, bitMaskScratchName(statement));
     ctx.compileStatements(tail);
     if (endLabel !== undefined) ctx.emitLabel(endLabel);
 
     ctx.optimizations.push({
       name: "cell-membership-set-reuse",
-      detail: `Reused the failed membership mask when setting ${set.target} at line ${set.line}.`,
+      detail: `Reused the failed membership mask when setting ${membershipSetTargetText(set)} at line ${set.line}.`,
     });
     return true;
 }
@@ -958,7 +977,7 @@ export function compileMembershipSetReuseForAbsentCondition(ctx: LoweringCtx,
     statement: Extract<StatementAst, { kind: "if" }>,
     membership: BitMembershipCondition,
     setPrefix: {
-      set: Extract<StatementAst, { kind: "assign" }>;
+      set: MembershipSetStatement;
       collection: ExpressionAst;
       tail: StatementAst[];
     },
@@ -968,6 +987,7 @@ export function compileMembershipSetReuseForAbsentCondition(ctx: LoweringCtx,
     if (ctx.allocation.registers[scratch] === undefined) return false;
 
     const { set, collection, tail } = setPrefix;
+    if (set.kind !== "assign") return false;
     const falseLabel = ctx.freshLabel("if_false");
     const thenTerminates = ctx.statementsTerminate(statement.thenBody);
     const endLabel = statement.elseBody !== undefined && !thenTerminates ? ctx.freshLabel("if_end") : undefined;
@@ -1048,12 +1068,13 @@ function canRestoreMembershipCollectionFromX2(
     setCollection: ExpressionAst,
   ): membership is BitMembershipCondition & {
     mode: "mask";
-    collection: Extract<ExpressionAst, { kind: "identifier" }>;
+    collection: Extract<ExpressionAst, { kind: "identifier" | "indexed" }>;
     mask: ExpressionAst;
   } {
     return membership.mode === "mask" &&
-      membership.collection.kind === "identifier" &&
+      (membership.collection.kind === "identifier" || membership.collection.kind === "indexed") &&
       expressionIsDeterministic(membership.mask) &&
+      expressionIsDeterministic(membership.collection) &&
       expressionEquals(setCollection, membership.collection);
 }
 
@@ -1073,10 +1094,11 @@ function emitMembershipCollectionX2Test(
     ctx: LoweringCtx,
     membership: BitMembershipCondition & {
       mode: "mask";
-      collection: Extract<ExpressionAst, { kind: "identifier" }>;
-      mask: Extract<ExpressionAst, { kind: "identifier" }>;
+      collection: Extract<ExpressionAst, { kind: "identifier" | "indexed" }>;
+      mask: ExpressionAst;
     },
     line: number,
+    preparedSelector?: PreparedIndexedSelector,
   ): void {
     if (membership.mask.kind === "identifier" && ctx.xHolds(membership.mask.name)) {
       // Keep the current X mask in place; the following collection recall lifts it to Y.
@@ -1085,25 +1107,63 @@ function emitMembershipCollectionX2Test(
     } else {
       compileExpression(ctx, membership.mask);
     }
-    ctx.emitRecall(membership.collection.name, `membership X2 collection ${membership.collection.name}`, line);
+    if (membership.collection.kind === "identifier") {
+      ctx.emitRecall(membership.collection.name, `membership X2 collection ${membership.collection.name}`, line);
+    } else if (preparedSelector !== undefined) {
+      ctx.emitPreparedIndexedRecall(membership.collection, preparedSelector, line);
+    } else {
+      ctx.emitIndexedRecall(membership.collection, line);
+    }
     ctx.emitOp(0x37, "К ∧", "membership test with X2-restorable collection", line);
     emitMembershipFractionIfNeeded(ctx, membership, "membership fraction", line);
     const maskText = expressionToIntentText(membership.mask);
+    const collectionText = expressionToIntentText(membership.collection);
     ctx.optimizations.push({
       name: "membership-collection-x2-restore",
-      detail: `Kept ${maskText} in Y and ${membership.collection.name} in X2 for a membership set at line ${line}.`,
+      detail: `Kept ${maskText} in Y and ${collectionText} in X2 for a membership set at line ${line}.`,
     });
 }
 
 function emitBitSetWithX2RestoredCollection(
     ctx: LoweringCtx,
-    set: Extract<StatementAst, { kind: "assign" }>,
+    set: MembershipSetStatement,
     insertSafetyNop: boolean,
+    preparedSelector?: PreparedIndexedSelector,
   ): void {
     if (insertSafetyNop) ctx.emitOp(0x54, "К НОП", "guard X2 restore gap", set.line);
     ctx.emitOp(0x0a, ".", "restore membership collection from X2", set.line);
     ctx.emitOp(0x38, "К ∨", "bit_set with X2-restored collection", set.line);
-    ctx.emitStore(set.target, `set ${set.target}`, set.line);
+    emitMembershipSetStore(ctx, set, preparedSelector);
+}
+
+function prepareMembershipCollectionX2Selector(
+    ctx: LoweringCtx,
+    collection: Extract<ExpressionAst, { kind: "identifier" | "indexed" }>,
+    line: number,
+  ): PreparedIndexedSelector | undefined {
+    if (collection.kind !== "indexed") return undefined;
+    if (numericIndexValue(collection.index) !== undefined) return undefined;
+    return ctx.prepareIndexedSelector(collection, line);
+}
+
+function emitMembershipSetStore(
+    ctx: LoweringCtx,
+    set: MembershipSetStatement,
+    preparedSelector?: PreparedIndexedSelector,
+  ): void {
+    if (set.kind === "assign") {
+      ctx.emitStore(set.target, `set ${set.target}`, set.line);
+      return;
+    }
+    if (preparedSelector !== undefined) {
+      ctx.emitPreparedIndexedStore(set.target, preparedSelector, set.line);
+      return;
+    }
+    ctx.emitIndexedStore(set.target, set.line);
+}
+
+function membershipSetTargetText(set: MembershipSetStatement): string {
+    return set.kind === "assign" ? set.target : expressionToIntentText(set.target);
 }
 
 export function compileMembershipSetRunReuseForAbsentCondition(ctx: LoweringCtx, 

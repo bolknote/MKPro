@@ -231,6 +231,11 @@ interface NodeProcessLike {
   getBuiltinModule?: (specifier: string) => unknown;
 }
 
+interface PreparedIndexedSelector {
+  selector: RegisterName;
+  integerPart?: string;
+}
+
 const REGISTER_ORDER: RegisterName[] = [
   "0",
   "1",
@@ -257,6 +262,10 @@ const CELL_MAP_PREFIX = "__cell_map_";
 const PARAMETRIC_SIBLING_PREFIX = "__param_sibling_";
 const INTERNAL_NAME_PREFIX = "__mkpro_";
 const FUNCTION_TAIL_ARG_PREFIX = `${INTERNAL_NAME_PREFIX}tail_arg_`;
+
+type MembershipSetStatement =
+  | Extract<StatementAst, { kind: "assign" }>
+  | Extract<StatementAst, { kind: "indexed_assign" }>;
 
 const STACK_TEMP_UNARY_CALL_OPCODES: Readonly<Record<string, readonly [number, string]>> = {
   abs: [0x31, "К |x|"],
@@ -6936,12 +6945,12 @@ export class EmitContext {
     const numeric = numericIndexValue(target.index);
     if (numeric === undefined) {
       if (!expressionPureForSubstitution(target.index)) return false;
-      const selector = this.ensureIndexedSelector(target, consumer.line);
-      if (selector === undefined) return false;
+      const preparedSelector = this.prepareIndexedSelector(target, consumer.line);
+      if (preparedSelector === undefined) return false;
       compileExpression(this, temp.expr);
       this.markCurrentX(temp.target);
       this.compileExpressionWithStackTemp(expr, temp.target);
-      this.emitPreparedIndexedStore(target, selector, consumer.line);
+      this.emitPreparedIndexedStore(target, preparedSelector, consumer.line);
     } else {
       compileExpression(this, temp.expr);
       this.markCurrentX(temp.target);
@@ -7257,18 +7266,18 @@ export class EmitContext {
     if (delta === undefined) return false;
     if (numericIndexValue(statement.target.index) !== undefined) return false;
     if (!expressionPureForSubstitution(statement.target.index)) return false;
-    const selector = this.ensureIndexedSelector(statement.target, statement.line);
-    if (selector === undefined) return false;
+    const preparedSelector = this.prepareIndexedSelector(statement.target, statement.line);
+    if (preparedSelector === undefined) return false;
 
     this.emitOp(
-      0xd0 + registerIndex(selector),
-      `К П->X ${selector}`,
+      0xd0 + registerIndex(preparedSelector.selector),
+      `К П->X ${preparedSelector.selector}`,
       "indexed packed digit update base",
       statement.line,
     );
     compileExpression(this, delta.term);
     this.emitOp(binaryOpcode(delta.op), delta.op, "indexed packed digit update", statement.line);
-    this.emitPreparedIndexedStore(statement.target, selector, statement.line);
+    this.emitPreparedIndexedStore(statement.target, preparedSelector, statement.line);
     this.optimizations.push({
       name: "indexed-packed-pow10-delta",
       detail: `Updated ${bankMemberKey(statement.target.base, statement.target.field)}[${expressionToIntentText(statement.target.index)}] by ${delta.op} pow10-shaped term at line ${statement.line}.`,
@@ -7785,11 +7794,11 @@ export class EmitContext {
             this.diagnostics.push(buildDiagnostic("error", "Dynamic indexed assignment targets must use a deterministic index expression", statement.line));
             return;
           }
-          const selector = this.ensureIndexedSelector(statement.target, statement.line);
-          if (selector === undefined) return;
+          const preparedSelector = this.prepareIndexedSelector(statement.target, statement.line);
+          if (preparedSelector === undefined) return;
           if (isZeroExpression(statement.expr)) this.emitZero(`set ${bankMemberKey(statement.target.base, statement.target.field)}`, statement.line);
           else compileExpression(this, statement.expr);
-          this.emitPreparedIndexedStore(statement.target, selector, statement.line);
+          this.emitPreparedIndexedStore(statement.target, preparedSelector, statement.line);
           return;
         }
         if (isZeroExpression(statement.expr)) this.emitZero(`set ${bankMemberKey(statement.target.base, statement.target.field)}`, statement.line);
@@ -8092,12 +8101,12 @@ export class EmitContext {
     statements: StatementAst[],
     membership: BitMembershipCondition,
   ): {
-    set: Extract<StatementAst, { kind: "assign" }>;
+    set: MembershipSetStatement;
     collection: ExpressionAst;
     tail: StatementAst[];
   } | undefined {
     const first = statements[0];
-    if (first?.kind === "assign") {
+    if (first?.kind === "assign" || first?.kind === "indexed_assign") {
       const matched = matchAnyBitSetAssignment(first, membership);
       if (matched !== undefined) return { set: first, collection: matched.collection, tail: statements.slice(1) };
     }
@@ -8105,7 +8114,7 @@ export class EmitContext {
     const proc = this.ast.procs.find((candidate) => candidate.name === first.block);
     if (proc === undefined) return undefined;
     const set = proc.body[0];
-    if (set?.kind !== "assign") return undefined;
+    if (set?.kind !== "assign" && set?.kind !== "indexed_assign") return undefined;
     const matched = matchAnyBitSetAssignment(set, membership);
     if (matched === undefined) return undefined;
     return {
@@ -9441,15 +9450,45 @@ export class EmitContext {
     this.currentXAliases.clear();
   }
 
-  emitPreparedIndexedStore(
+  prepareIndexedSelector(
     expr: Extract<ExpressionAst, { kind: "indexed" }>,
-    selector: RegisterName,
+    sourceLine?: number,
+  ): PreparedIndexedSelector | undefined {
+    const selector = this.ensureIndexedSelector(expr, sourceLine);
+    if (selector === undefined) return undefined;
+    const integerPart = this.consumePendingIndexedSelectorIntegerPart();
+    return integerPart === undefined ? { selector } : { selector, integerPart };
+  }
+
+  emitPreparedIndexedRecall(
+    expr: Extract<ExpressionAst, { kind: "indexed" }>,
+    prepared: PreparedIndexedSelector | RegisterName,
     sourceLine?: number,
   ): void {
+    const selector = typeof prepared === "string" ? prepared : prepared.selector;
+    const integerPart = typeof prepared === "string" ? undefined : prepared.integerPart;
+    this.emitOp(
+      0xd0 + registerIndex(selector),
+      `К П->X ${selector}`,
+      `indexed recall ${bankMemberKey(expr.base, expr.field)}${integerPart === undefined ? "" : `; indirect-selector-integer-part=${integerPart}`}`,
+      sourceLine,
+    );
+    this.currentXVariable = undefined;
+    this.currentXAliases.clear();
+    this.currentXKnownZero = false;
+  }
+
+  emitPreparedIndexedStore(
+    expr: Extract<ExpressionAst, { kind: "indexed" }>,
+    prepared: PreparedIndexedSelector | RegisterName,
+    sourceLine?: number,
+  ): void {
+    const selector = typeof prepared === "string" ? prepared : prepared.selector;
+    const integerPart = typeof prepared === "string" ? undefined : prepared.integerPart;
     this.emitOp(
       0xb0 + registerIndex(selector),
       `К X->П ${selector}`,
-      `indexed set ${bankMemberKey(expr.base, expr.field)}`,
+      `indexed set ${bankMemberKey(expr.base, expr.field)}${integerPart === undefined ? "" : `; indirect-selector-integer-part=${integerPart}`}`,
       sourceLine,
     );
     this.currentXVariable = undefined;
@@ -13853,13 +13892,13 @@ export interface NearAnyHelperStats {
 
 
 function matchAnyBitSetAssignment(
-  statement: Extract<StatementAst, { kind: "assign" }>,
+  statement: MembershipSetStatement,
   membership: BitMembershipCondition,
 ): BitSetAssignment | undefined {
   const expr = statement.expr;
   if (expr.kind !== "call" || expr.args.length !== 2) return undefined;
   const collection = expr.args[0]!;
-  if (collection.kind !== "identifier" || statement.target !== collection.name) return undefined;
+  if (!expressionEquals(collection, assignableTargetExpression(statement.target))) return undefined;
   const name = expr.callee.toLowerCase();
   if (name === "bit_set") {
     if (membership.mode !== "index" || !expressionEquals(expr.args[1]!, membership.item)) return undefined;
@@ -13872,6 +13911,10 @@ function matchAnyBitSetAssignment(
     collection,
     item: expr.args[1]!,
   };
+}
+
+function assignableTargetExpression(target: string | Extract<ExpressionAst, { kind: "indexed" }>): ExpressionAst {
+  return typeof target === "string" ? { kind: "identifier", name: target } : target;
 }
 
 function isReusableBitSetPair(
