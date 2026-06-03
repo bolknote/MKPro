@@ -41,21 +41,26 @@ import {
   conditionCompileCost,
   conditionToText,
   countIdentifierReadsInCondition,
+  addExpressions,
   binaryOpcode,
   displayLiteralProgram,
   divideExpressions,
   coordListItemInfo,
   estimateExpressionCost,
   estimateNumberCost,
+  estimateOrdinaryIfCost,
   estimateNegativeZeroThresholdFlowCost,
   exponentTailDisplayLiteralProgram,
+  expressionCanConsumeIdentifierFromX,
   expressionEquals,
   expressionPureForSubstitution,
   expressionReferencesIdentifier,
   expressionToIntentText,
   firstSpliceDisplayLiteralProgram,
+  fracExpression,
   flOpcode,
   formatRawContractDetail,
+  intExpression,
   isPredecrementIndirectRegister,
   isPreincrementIndirectRegister,
   isSimpleStackLoad,
@@ -63,11 +68,14 @@ import {
   isUnitIncrementExpression,
   matchIntOrFracCall,
   matchNegativeZeroThresholdCondition,
+  matchNumericSelfUpdate,
   matchStackUnaryDerivationCall,
   matchXParamReturnDecay,
   matchXParamStackStopRiskRead,
+  multiplyExpressions,
   normalizeConstantLiteral,
   numberExpression,
+  numericLiteralValue,
   orderRawInputs,
   parseRawInstruction,
   positiveIntegerPowerOfTenExponent,
@@ -77,6 +85,7 @@ import {
   signedFirstSpliceDisplayLiteralProgram,
   spatialCountMaskScratchName,
   substituteConditionIdentifier,
+  X_TRANSFORM_UNARY_OPCODES,
 } from "../lowering-helpers.ts";
 import {
   getOpcode,
@@ -998,6 +1007,26 @@ export function compileXParamProcBody(ctx: LoweringCtx, proc: ProgramAst["procs"
       });
       return;
     }
+    if (lowering.kind === "expr") {
+      ctx.currentXVariable = lowering.param;
+      ctx.currentXAliases = new Set([lowering.param]);
+      ctx.currentXKnownZero = false;
+      if (!compileXParamFirstExpression(ctx, lowering.first.expr, lowering.param, lowering.first.line)) {
+        ctx.diagnostics.push(buildDiagnostic(
+          "error",
+          `Cannot compile X-parameter expression for ${proc.name}.`,
+          lowering.first.line,
+        ));
+        return;
+      }
+      ctx.emitStore(lowering.first.target, `set ${lowering.first.target} from X parameter expression`, lowering.first.line);
+      ctx.compileStatements(proc.body.slice(1));
+      ctx.optimizations.push({
+        name: "x-param-proc-entry",
+        detail: `Compiled rule ${proc.name} to compute ${lowering.first.target} from ${lowering.param} already in X.`,
+      });
+      return;
+    }
     ctx.emitRecall(lowering.other, `${proc.name} ${lowering.first.target} base`, lowering.first.line);
     ctx.emitOp(0x10, "+", `${proc.name} ${lowering.first.target} from X parameter`, lowering.first.line);
     ctx.emitStore(lowering.first.target, `set ${lowering.first.target}`, lowering.first.line);
@@ -1006,6 +1035,42 @@ export function compileXParamProcBody(ctx: LoweringCtx, proc: ProgramAst["procs"
       name: "x-param-proc-entry",
       detail: `Compiled rule ${proc.name} to consume ${lowering.param} directly from X.`,
     });
+}
+
+function compileXParamFirstExpression(ctx: LoweringCtx, expr: ExpressionAst, param: string, line: number): boolean {
+    if (!expressionCanConsumeIdentifierFromX(expr, param)) return false;
+    switch (expr.kind) {
+      case "identifier":
+        return expr.name === param;
+      case "unary":
+        if (expr.op !== "-" || !compileXParamFirstExpression(ctx, expr.expr, param, line)) return false;
+        ctx.emitOp(0x0b, "/-/", "x-param unary minus", line);
+        return true;
+      case "binary": {
+        const leftUses = expressionReferencesIdentifier(expr.left, param);
+        const rightUses = expressionReferencesIdentifier(expr.right, param);
+        if (leftUses === rightUses) return false;
+        if (leftUses) {
+          if (!compileXParamFirstExpression(ctx, expr.left, param, line)) return false;
+          compileExpression(ctx, expr.right);
+        } else {
+          if (expr.op !== "+" && expr.op !== "*") return false;
+          if (!compileXParamFirstExpression(ctx, expr.right, param, line)) return false;
+          compileExpression(ctx, expr.left);
+        }
+        ctx.emitOp(binaryOpcode(expr.op), expr.op, `x-param expr ${expr.op}`, line);
+        return true;
+      }
+      case "call": {
+        if (expr.args.length !== 1 || !compileXParamFirstExpression(ctx, expr.args[0]!, param, line)) return false;
+        const opcode = X_TRANSFORM_UNARY_OPCODES[expr.callee.toLowerCase()];
+        if (opcode === undefined) return false;
+        ctx.emitOp(opcode[0], opcode[1], `x-param ${expr.callee}()`, line);
+        return true;
+      }
+      default:
+        return false;
+    }
 }
 
 export function compileStackUnaryDerivedAssignments(ctx: LoweringCtx, statements: readonly StatementAst[], start: number): number {
@@ -1356,6 +1421,90 @@ export function compileIntFracSharedTail(ctx: LoweringCtx,
       detail: `Computed ${expressionToIntentText(a.arg)} once and derived int()/frac() through a shared В↑/X↔Y tail.`,
     });
     return true;
+}
+
+export function compileOneBasedModuloNormalization(ctx: LoweringCtx,
+    assign: Extract<StatementAst, { kind: "assign" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+  ): boolean {
+    const match = matchOneBasedModuloNormalization(assign, branch);
+    if (match === undefined) return false;
+    const field = ctx.findStateField(assign.target);
+    if ((field?.min ?? Number.NEGATIVE_INFINITY) < 0) return false;
+    const normalized = oneBasedModuloExpression(
+      { kind: "identifier", name: assign.target },
+      match.width,
+    );
+    const loweredCost = estimateExpressionCost(normalized) + 1;
+    const ordinaryCost = estimateExpressionCost(assign.expr) + 1 + estimateOrdinaryIfCost(branch, ctx.ast);
+    if (loweredCost >= ordinaryCost) return false;
+
+    compileExpression(ctx, normalized);
+    ctx.emitStore(assign.target, `one-based modulo normalize ${assign.target}`, assign.line);
+    ctx.optimizations.push({
+      name: "one-based-modulo-normalization",
+      detail: `Folded ${assign.target} modulo-${match.width} zero-fix branch into one branchless normalization expression.`,
+    });
+    return true;
+}
+
+function matchOneBasedModuloNormalization(
+    assign: Extract<StatementAst, { kind: "assign" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+  ): { width: number } | undefined {
+    if (branch.elseBody !== undefined || branch.thenBody.length !== 1) return undefined;
+    if (
+      branch.condition.op !== "<=" ||
+      branch.condition.left.kind !== "identifier" ||
+      branch.condition.left.name !== assign.target ||
+      numericLiteralValue(branch.condition.right) !== 0
+    ) return undefined;
+    const thenAssign = branch.thenBody[0]!;
+    if (thenAssign.kind !== "assign" || thenAssign.target !== assign.target) return undefined;
+    const width = matchModuloRemainderAssignment(assign.target, assign.expr);
+    if (width === undefined) return undefined;
+    const delta = matchNumericSelfUpdate(assign.target, thenAssign.expr);
+    if (delta !== width) return undefined;
+    return { width };
+}
+
+function matchModuloRemainderAssignment(target: string, expr: ExpressionAst): number | undefined {
+    const product = matchBinaryNumericOperand(expr, "*");
+    if (product === undefined) return undefined;
+    const { other, value: width } = product;
+    if (!validModuloWidth(width)) return undefined;
+    if (other.kind !== "call" || other.callee.toLowerCase() !== "frac" || other.args.length !== 1) return undefined;
+    const divided = other.args[0]!;
+    if (divided.kind !== "binary" || divided.op !== "/") return undefined;
+    if (numericLiteralValue(divided.right) !== width) return undefined;
+    const dividend = divided.left;
+    if (dividend.kind !== "call" || dividend.callee.toLowerCase() !== "int" || dividend.args.length !== 1) return undefined;
+    const source = dividend.args[0]!;
+    return source.kind === "identifier" && source.name === target ? width : undefined;
+}
+
+function matchBinaryNumericOperand(expr: ExpressionAst, op: "*" | "/"): { other: ExpressionAst; value: number } | undefined {
+    if (expr.kind !== "binary" || expr.op !== op) return undefined;
+    const leftValue = numericLiteralValue(expr.left);
+    if (leftValue !== undefined) return { other: expr.right, value: leftValue };
+    const rightValue = numericLiteralValue(expr.right);
+    if (rightValue !== undefined) return { other: expr.left, value: rightValue };
+    return undefined;
+}
+
+function validModuloWidth(width: number): boolean {
+    return Number.isSafeInteger(width) && width > 1;
+}
+
+function oneBasedModuloExpression(expr: ExpressionAst, width: number): ExpressionAst {
+    const shifted = addExpressions(intExpression(expr), numberExpression(width - 1));
+    return addExpressions(
+      multiplyExpressions(
+        fracExpression(divideExpressions(shifted, numberExpression(width))),
+        numberExpression(width),
+      ),
+      numberExpression(1),
+    );
 }
 
 export function compileUnitDecrement(ctx: LoweringCtx, statement: Extract<StatementAst, { kind: "assign" }>): boolean {

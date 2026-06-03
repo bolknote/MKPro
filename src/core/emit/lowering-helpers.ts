@@ -88,15 +88,20 @@ export interface StackUnaryDerivationCall {
 
 export type XParamProcLowering =
   | {
-  param: string;
-  first: Extract<StatementAst, { kind: "assign" }>;
+      param: string;
+      first: Extract<StatementAst, { kind: "assign" }>;
       kind: "add";
-  other: string;
+      other: string;
     }
   | {
       param: string;
       first: Extract<StatementAst, { kind: "assign" }>;
       kind: "copy";
+    }
+  | {
+      param: string;
+      first: Extract<StatementAst, { kind: "assign" }>;
+      kind: "expr";
     };
 
 export interface XParamReturnDecay {
@@ -3053,6 +3058,34 @@ export const X_TRANSFORM_UNARY_OPCODES: Record<string, [number, string]> = {
 };
 
 export const X_TRANSFORM_UNARY_FUNCTIONS: ReadonlySet<string> = new Set(Object.keys(X_TRANSFORM_UNARY_OPCODES));
+
+export function expressionCanConsumeIdentifierFromX(expr: ExpressionAst, name: string): boolean {
+  if (!expressionPureForSubstitution(expr)) return false;
+  switch (expr.kind) {
+    case "identifier":
+      return expr.name === name;
+    case "unary":
+      return expr.op === "-" && expressionCanConsumeIdentifierFromX(expr.expr, name);
+    case "binary": {
+      const leftUses = expressionReferencesIdentifier(expr.left, name);
+      const rightUses = expressionReferencesIdentifier(expr.right, name);
+      if (leftUses === rightUses) return false;
+      if (leftUses) {
+        return expressionCanConsumeIdentifierFromX(expr.left, name) &&
+          expressionPureForSubstitution(expr.right);
+      }
+      return (expr.op === "+" || expr.op === "*") &&
+        expressionCanConsumeIdentifierFromX(expr.right, name) &&
+        expressionPureForSubstitution(expr.left);
+    }
+    case "call":
+      return expr.args.length === 1 &&
+        X_TRANSFORM_UNARY_OPCODES[expr.callee.toLowerCase()] !== undefined &&
+        expressionCanConsumeIdentifierFromX(expr.args[0]!, name);
+    default:
+      return false;
+  }
+}
 
 export interface StackStopRiskMatch {
   // Name of the value parked in Y across the stop.

@@ -51,19 +51,17 @@ program TicTacToe4x4 {
   }
 
   fn normalize_x() {
-    line = x
-    normalize_line()
+    normalize_line(x)
     x = line
   }
 
   fn normalize_y() {
-    line = y
-    normalize_line()
+    normalize_line(y)
     y = line
   }
 
-  fn normalize_line() {
-    line = frac(int(line) / 4) * 4
+  fn normalize_line(value) {
+    line = frac(int(value) / 4) * 4
     if line <= 0 {
       line += 4
     }
@@ -78,11 +76,9 @@ program TicTacToe4x4 {
     weights[7] -= pow10(line)
     line = y
     weights[6] -= pow10(line)
-    line = x + y
-    normalize_line()
+    normalize_line(x + y)
     weights[5] -= pow10(line)
-    line = x - y
-    normalize_line()
+    normalize_line(x - y)
     weights[4] -= pow10(line)
   }
 
@@ -91,11 +87,9 @@ program TicTacToe4x4 {
     weights[7] += pow10(line)
     line = y
     weights[6] += pow10(line)
-    line = x + y
-    normalize_line()
+    normalize_line(x + y)
     weights[5] += pow10(line)
-    line = x - y
-    normalize_line()
+    normalize_line(x - y)
     weights[4] += pow10(line)
   }
 
@@ -129,11 +123,9 @@ program TicTacToe4x4 {
     score += sqr(frac(weights[7] / pow10(line)) - SCORE_CENTER)
     line = y
     score += sqr(frac(weights[6] / pow10(line)) - SCORE_CENTER)
-    line = x + y
-    normalize_line()
+    normalize_line(x + y)
     score += sqr(frac(weights[5] / pow10(line)) - SCORE_CENTER)
-    line = x - y
-    normalize_line()
+    normalize_line(x - y)
     score += sqr(frac(weights[4] / pow10(line)) - SCORE_CENTER)
   }
 

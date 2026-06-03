@@ -181,6 +181,11 @@ The control-flow family is where the largest byte savings are found.
 - `decrement-underflow-branch` — decrements and immediately handles underflow in one step.
 - `decrement-underflow-domain-guard` — fuses unit decrement and terminal `halt("ЕГГОГ")` underflow paths through `F sqrt` when the branch target is exactly a one-cell domain-error stop.
 - `fl-decrement-zero-branch` — a dedicated “decrement and test zero” sequence in one short block.
+- `one-based-modulo-normalization` — for a proved non-negative scalar, folds
+  `x = frac(int(x) / N) * N; if x <= 0 { x += N }` into
+  `frac((int(x) + N - 1) / N) * N + 1`. The non-negative range proof is required:
+  MK-61 `К {x}` keeps a negative fractional sign, so the formula is not sound for
+  signed/unknown packed temporaries.
 - `if-branch-order-inversion` — reorders branches so downstream lowering is shorter.
 - `x-preserving-false-branch` — preserves current X value in the false branch.
 - `x-preserving-fallthrough-branch` — preserves current X value in the true
@@ -295,7 +300,11 @@ The `report.candidates` array in `report` shows lowerings that were recompiled a
 
 - `function-call` — lowers a normal call into a short machine form with shared helper and return handling, removing unnecessary call/return steps.
 - `function-call-lifting` — lifts direct call sites when safe, simplifying straightforward calls.
-- `x-param-proc-entry` — alternative procedure entry through X when cheaper.
+- `x-param-proc-entry` — alternative procedure entry through X when cheaper. The
+  first assignment may be a direct copy, `param + other`, or a pure expression
+  that consumes the single-use parameter from the X register through a
+  left-deep/commutative stack-safe expression shape, so the parameter itself
+  does not need a storage register.
 - `x-param-proc-call` — passes parameters through X with fewer instructions.
 - `x-param-return-decay` — prepares a return path through X for safe reuse afterward.
 - `x-param-return-decay-call` — applies the same X-return pattern at call sites.

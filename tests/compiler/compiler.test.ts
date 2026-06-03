@@ -1873,6 +1873,38 @@ program XParamRule {
     expect(result.steps.some((step) => step.comment === "set delta")).toBe(false);
   });
 
+  it("passes expression-shaped first assignments through X parameters", () => {
+    const result = compileOk(`
+program XParamExpressionRule {
+  state {
+    line: packed = 0
+    pos: packed = 8
+    other: packed = 7
+  }
+
+  loop {
+    normalize(pos)
+    normalize(other)
+    halt(line)
+  }
+
+  fn normalize(value) {
+    line = frac(int(value) / 4) * 4
+    if line <= 0 {
+      line += 4
+    }
+  }
+}
+`);
+    const optimizationNames = result.report.optimizations.map((item) => item.name);
+
+    expect(optimizationNames).toContain("x-param-proc-call");
+    expect(optimizationNames).toContain("x-param-proc-entry");
+    expect(result.report.registers.value).toBeUndefined();
+    expect(result.steps.some((step) => step.comment === "set value")).toBe(false);
+    expect(result.steps.some((step) => step.comment === "set line from X parameter expression")).toBe(true);
+  });
+
   it("keeps loop prompt state in X when every path assigns the next prompt", () => {
     const result = compileOk(`
 program LoopPromptX {
@@ -2092,6 +2124,51 @@ program RemainderZeroTest {
     expect(result.report.optimizations.some((item) => item.name === "remainder-zero-test-lowering")).toBe(true);
     expect(comments).toContain("remainder zero fractional part");
     expect(comments).not.toContain("remainder scale");
+  });
+
+  it("folds modulo remainder zero-fix branches into one-based normalization", () => {
+    const result = compileOk(`
+program OneBasedModuloNormalize {
+  state {
+    line: counter 0..9 = 8
+  }
+  loop {
+    line = frac(int(line) / 4) * 4
+    if line <= 0 {
+      line += 4
+    }
+    halt(line)
+  }
+}
+`);
+    const optimizationNames = result.report.optimizations.map((item) => item.name);
+
+    expect(optimizationNames).toContain("one-based-modulo-normalization");
+    expect(result.steps.some((step) => step.comment === "one-based modulo normalize line")).toBe(true);
+    expect(result.steps.some((step) => step.comment?.startsWith("false branch"))).toBe(false);
+    expect(runCompiledDisplay(result).trim()).toBe("4,");
+  });
+
+  it("keeps the branch for one-based normalization when negative remainders are possible", () => {
+    const result = compileOk(`
+program SignedModuloNormalize {
+  state {
+    line: packed = -8
+  }
+  loop {
+    line = frac(int(line) / 4) * 4
+    if line <= 0 {
+      line += 4
+    }
+    halt(line)
+  }
+}
+`);
+    const optimizationNames = result.report.optimizations.map((item) => item.name);
+
+    expect(optimizationNames).not.toContain("one-based-modulo-normalization");
+    expect(result.steps.some((step) => step.comment?.startsWith("false branch"))).toBe(true);
+    expect(runCompiledDisplay(result).trim()).toBe("4,");
   });
 
   it("reuses one cell bit mask across adjacent set updates", () => {

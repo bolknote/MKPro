@@ -22,7 +22,7 @@ import { compileAssignThenDomainTrap, compileCondition, compileDecrementUnderflo
 import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts";
 import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileGridCellMaskReuse } from "./emit/lowering/spatial.ts";
 import { compileCoordListLineCountAssignment, compileCoordListLineCountFormattedReport, compileCoordListRemove, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
-import { compileBlockCall, compileDecimalSeries, compileGuardAssignmentSubstitution, compileInitialState, compileIntFracSharedTail, compileProcedures, compileRawStatement, compileRepeatedAssignmentValue, compileRuntimeHelpers, compileSetupProgramWithPreloads, compileStackUnaryDerivedAssignments, compileUnitDecrement, compileUnitIncrement, compileXParamProcCall } from "./emit/lowering/proc-raw-setup.ts";
+import { compileBlockCall, compileDecimalSeries, compileGuardAssignmentSubstitution, compileInitialState, compileIntFracSharedTail, compileOneBasedModuloNormalization, compileProcedures, compileRawStatement, compileRepeatedAssignmentValue, compileRuntimeHelpers, compileSetupProgramWithPreloads, compileStackUnaryDerivedAssignments, compileUnitDecrement, compileUnitIncrement, compileXParamProcCall } from "./emit/lowering/proc-raw-setup.ts";
 import { compileMultiStackResidentTemps } from "./emit/stack-residency-lowering.ts";
 import {
   BIT_MASK_SCRATCH_PREFIX,
@@ -71,6 +71,7 @@ import {
   estimateOrdinaryGuardedUpdateCost,
   estimateOrdinaryIfCost,
   exponentTailDisplayLiteralProgram,
+  expressionCanConsumeIdentifierFromX,
   expressionEquals,
   expressionIsDeterministic,
   expressionPureForSubstitution,
@@ -5729,6 +5730,10 @@ export class EmitContext {
         continue;
       }
       if (statement.kind === "assign" && next?.kind === "if" && compileDecrementZeroBranch(this, statement, next)) {
+        index += 1;
+        continue;
+      }
+      if (statement.kind === "assign" && next?.kind === "if" && compileOneBasedModuloNormalization(this, statement, next)) {
         index += 1;
         continue;
       }
@@ -11417,7 +11422,9 @@ function collectXParamProcLowerings(
     if (!allProcCallsHaveImmediateParamAssignment(ast, proc.name, param)) continue;
     result.set(proc.name, matched.kind === "add"
       ? { param, first, kind: "add", other: matched.other }
-      : { param, first, kind: "copy" });
+      : matched.kind === "copy"
+        ? { param, first, kind: "copy" }
+        : { param, first, kind: "expr" });
   }
   return result;
 }
@@ -11425,17 +11432,18 @@ function collectXParamProcLowerings(
 function matchXParamFirstAssignment(
   statement: Extract<StatementAst, { kind: "assign" }>,
   param: string,
-): { kind: "add"; other: string } | { kind: "copy" } | undefined {
+): { kind: "add"; other: string } | { kind: "copy" } | { kind: "expr" } | undefined {
   const expr = statement.expr;
   if (expr.kind === "identifier" && expr.name === param) return { kind: "copy" };
-  if (expr.kind !== "binary" || expr.op !== "+") return undefined;
-  if (expr.left.kind === "identifier" && expr.left.name === param && expr.right.kind === "identifier") {
-    return { kind: "add", other: expr.right.name };
+  if (expr.kind === "binary" && expr.op === "+") {
+    if (expr.left.kind === "identifier" && expr.left.name === param && expr.right.kind === "identifier") {
+      return { kind: "add", other: expr.right.name };
+    }
+    if (expr.right.kind === "identifier" && expr.right.name === param && expr.left.kind === "identifier") {
+      return { kind: "add", other: expr.left.name };
+    }
   }
-  if (expr.right.kind === "identifier" && expr.right.name === param && expr.left.kind === "identifier") {
-    return { kind: "add", other: expr.left.name };
-  }
-  return undefined;
+  return expressionCanConsumeIdentifierFromX(expr, param) ? { kind: "expr" } : undefined;
 }
 
 function allProcCallsHaveImmediateParamAssignment(ast: ProgramAst, procName: string, param: string): boolean {
