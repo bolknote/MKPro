@@ -3260,6 +3260,7 @@ program RepeatedInitDoesNotHideCounted {
 `, { budget: 999, analysis: true });
 
     expect(result.report.optimizations.some((item) => item.name === "initialized-counted-while-loop")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "repeated-assignment-counted-loop-reuse")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "repeated-assignment-value-reuse")).toBe(false);
     expect(result.steps.some((step) => step.comment === "counted while x")).toBe(true);
   });

@@ -76,7 +76,7 @@ describe("MK-Pro compiler", () => {
     const optimizationNames = result.report.optimizations.map((optimization) => optimization.name);
 
     expect(result.diagnostics).toEqual([]);
-    expect(result.report.steps).toBe(250);
+    expect(result.report.steps).toBe(249);
     expect(result.report.registers.line).toBeUndefined();
     expect(result.report.registers.value).toBeUndefined();
     expect(Object.keys(result.report.registers).some((name) => name.startsWith("__mkpro_unary_arg_"))).toBe(true);

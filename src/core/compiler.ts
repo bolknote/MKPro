@@ -6169,6 +6169,11 @@ export class EmitContext {
         }
       }
       if (statement.kind === "assign") {
+        const repeatedCountedWhile = this.compileRepeatedValueInitializedUnitDecrementWhileRun(statements, index);
+        if (repeatedCountedWhile > 1) {
+          index += repeatedCountedWhile - 1;
+          continue;
+        }
         const countedWhile = this.compileInitializedUnitDecrementWhileRun(statements, index);
         if (countedWhile > 1) {
           index += countedWhile - 1;
@@ -6616,6 +6621,39 @@ export class EmitContext {
       detail: `Lowered initialized while ${initializer.target} >= 1 through ${getOpcode(lowering.flOpcode).name} at line ${loop.line}.`,
     });
     return true;
+  }
+
+  private initializedUnitDecrementWhileRunAt(
+    statements: readonly StatementAst[],
+    index: number,
+  ): {
+    initializer: Extract<StatementAst, { kind: "assign" }>;
+    loop: Extract<StatementAst, { kind: "while" }>;
+    loopIndex: number;
+    intervening: readonly StatementAst[];
+    lowering: { target: string; flOpcode: number; bodyTail: readonly StatementAst[] };
+  } | undefined {
+    const initializer = statements[index];
+    if (initializer?.kind !== "assign") return undefined;
+    const initialValue = numericLiteralValue(initializer.expr);
+    if (initialValue === undefined || !Number.isInteger(initialValue) || initialValue < 1) return undefined;
+
+    for (let cursor = index + 1; cursor < statements.length; cursor += 1) {
+      const statement = statements[cursor]!;
+      if (statement.kind === "while") {
+        const lowering = this.recognizeCountedWhileLoop(statement);
+        if (lowering === undefined || lowering.target !== initializer.target) return undefined;
+        return {
+          initializer,
+          loop: statement,
+          loopIndex: cursor,
+          intervening: statements.slice(index + 1, cursor),
+          lowering,
+        };
+      }
+      if (!statementSafeBetweenInitializedCounterAndLoop(statement, initializer.target)) return undefined;
+    }
+    return undefined;
   }
 
   compileSetupInitializedUnitDecrementWhile(loop: Extract<StatementAst, { kind: "while" }>): boolean {
@@ -7239,20 +7277,41 @@ export class EmitContext {
   }
 
   compileInitializedUnitDecrementWhileRun(statements: readonly StatementAst[], index: number): number {
-    const initializer = statements[index];
-    if (initializer?.kind !== "assign") return 0;
-    const initialValue = numericLiteralValue(initializer.expr);
+    const run = this.initializedUnitDecrementWhileRunAt(statements, index);
+    if (run === undefined) return 0;
+    return this.compileInitializedUnitDecrementWhile(run.initializer, run.loop, run.intervening)
+      ? run.loopIndex - index + 1
+      : 0;
+  }
+
+  compileRepeatedValueInitializedUnitDecrementWhileRun(statements: readonly StatementAst[], index: number): number {
+    const first = statements[index];
+    if (first?.kind !== "assign") return 0;
+    const initialValue = numericLiteralValue(first.expr);
     if (initialValue === undefined || !Number.isInteger(initialValue) || initialValue < 1) return 0;
 
     for (let cursor = index + 1; cursor < statements.length; cursor += 1) {
-      const statement = statements[cursor]!;
-      if (statement.kind === "while") {
-        const intervening = statements.slice(index + 1, cursor);
-        return this.compileInitializedUnitDecrementWhile(initializer, statement, intervening)
-          ? cursor - index + 1
-          : 0;
+      const candidate = statements[cursor]!;
+      if (candidate.kind !== "assign" || !expressionEquals(candidate.expr, first.expr)) return 0;
+      const run = this.initializedUnitDecrementWhileRunAt(statements, cursor);
+      if (run === undefined) continue;
+
+      compileExpression(this, first.expr);
+      for (let storeIndex = index; storeIndex <= cursor; storeIndex += 1) {
+        const assignment = statements[storeIndex] as Extract<StatementAst, { kind: "assign" }>;
+        this.emitStore(assignment.target, `set ${assignment.target}`, assignment.line);
       }
-      if (!statementSafeBetweenInitializedCounterAndLoop(statement, initializer.target)) return 0;
+      for (const statement of run.intervening) this.compileStatement(statement);
+      this.emitCountedWhileBody(run.lowering, run.loop, "counted_while", `counted while ${run.initializer.target}`);
+      this.optimizations.push({
+        name: "repeated-assignment-counted-loop-reuse",
+        detail: `Reused ${expressionToIntentText(first.expr)} across ${cursor - index} prefix store(s) and counted loop ${run.initializer.target} at line ${run.loop.line}.`,
+      });
+      this.optimizations.push({
+        name: "initialized-counted-while-loop",
+        detail: `Lowered initialized while ${run.initializer.target} >= 1 through ${getOpcode(run.lowering.flOpcode).name} at line ${run.loop.line}.`,
+      });
+      return run.loopIndex - index + 1;
     }
     return 0;
   }

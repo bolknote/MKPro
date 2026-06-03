@@ -500,6 +500,10 @@ Display rewrites are separated into strategy selection + body lowering.
   stores that are observable through number-entry or the `ВП`/X2 restore
   context.
 - `repeated-assignment-value-reuse` — reuses the same computed value across multiple assignments, but yields to `initialized-counted-while-loop` when one of the repeated stores is the initializer for a following countdown loop. A one-cell literal reuse must not hide the much shorter `F Lx` loop shape.
+- `repeated-assignment-counted-loop-reuse` — bridges that conflict: prefix
+  assignments sharing the counted-loop initializer literal are stored from the
+  same current X, and the loop still lowers through the normal `F Lx` counted
+  tail.
 - `int-frac-shared-tail` — a shared int/frac return tail reduces duplication.
 - `z-stack-derived-tail` — shares a single operand once and uses one stack-tail (`X↔Y`, `X↔Z`, then restore) to derive adjacent `К [x]`/`К {x}`-style results, avoiding duplicated unary math work.
 - `z-stack-derived-value-reuse` — lowers Z-stack pressure by moving values through warm locations.

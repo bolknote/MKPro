@@ -1067,6 +1067,9 @@ candidates:
   simple load;
 - adjacent bit-set reuse: consecutive `cells += cell` updates compute the cell
   bit mask once and apply it to each collection;
+- repeated assignment counted-loop reuse: prefix stores that share a positive
+  literal with a following `while counter >= 1 { ...; counter-- }` initializer
+  reuse current X while preserving the one-cell `F Lx` loop lowering;
 - repeated packed display helpers: repeated packed screens and repeated
   `show; show; read` prompt sequences are emitted once and called normally;
 - stake/read risk flows (generalized stack-stop fusion): `show(stake); input =

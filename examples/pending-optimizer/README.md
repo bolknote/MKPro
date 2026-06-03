@@ -41,7 +41,7 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | --- | ---: | ---: | --- |
 | `cave-highlevel-baseline.mkpro` | 134 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
 | `cave-treasure.mkpro` | 118 | 105 | floor-indexed resource bank and source-shaped command decoder are in place; remaining blockers are command dispatch, wall breaking, cache reward flow, and loop prompt/input storage |
-| `tic-tac-toe-4x4.mkpro` | 250 | 105 | source-shaped line update/score pass is in place; remaining packed 4x4 scan lowering |
+| `tic-tac-toe-4x4.mkpro` | 249 | 105 | source-shaped line update/score pass is in place; remaining packed 4x4 scan lowering |
 
 Prototype notes:
 
@@ -60,6 +60,9 @@ Prototype notes:
   collection load, so the test itself does not have to recall the scratch again
   before `К ∧`; the scratch register is still available for the following
   failed-branch set.
+- Repeated literal stores now have a counted-loop-safe bridge: `best_score = 4`
+  can share the same entered `4` with the following `x = 4` initializer while
+  the `while x >= 1 { ...; x-- }` loop still lowers through `F L3`.
 - `cave-highlevel-baseline.mkpro` now benefits from fractional indirect
   addressing: `walls[int(blocked)]` can use the `blocked` coordinate register
   directly as the indirect selector because MK-61 indirect memory addressing
