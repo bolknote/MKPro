@@ -313,6 +313,20 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("last-x-reuse keeps recall whose stack lift reaches a later binary op", () => {
+    const program: IrOp[] = [
+      store("1"),
+      recall("1"),
+      plain(0x35, "К {x}"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("last-x-reuse refuses to fire across a stop barrier", () => {
     const program: IrOp[] = [
       store("1"),
@@ -367,6 +381,20 @@ describe("ir passes on synthetic programs", () => {
     const program: IrOp[] = [
       store("4"),
       recall("4"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("flow-x-reuse keeps recall whose stack lift survives X-only ops before binary use", () => {
+    const program: IrOp[] = [
+      store("4"),
+      recall("4"),
+      plain(0x35, "К {x}"),
       plain(0x10, "+"),
       halt(),
     ];
@@ -476,6 +504,24 @@ describe("ir passes on synthetic programs", () => {
       jump("end"),
       label("target"),
       recall("6"),
+      plain(0x10, "+"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("branch-target-x-reuse keeps target recall whose stack lift reaches a later binary op", () => {
+    const program: IrOp[] = [
+      recall("6"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      recall("6"),
+      plain(0x35, "К {x}"),
       plain(0x10, "+"),
       label("end"),
       halt(),
@@ -1261,6 +1307,20 @@ describe("ir passes on synthetic programs", () => {
     const program: IrOp[] = [
       store("2"),
       recall("2"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("store-recall-peephole keeps recall whose stack lift reaches a later binary op", () => {
+    const program: IrOp[] = [
+      store("2"),
+      recall("2"),
+      plain(0x35, "К {x}"),
       plain(0x10, "+"),
       halt(),
     ];

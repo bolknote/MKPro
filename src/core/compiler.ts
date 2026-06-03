@@ -13616,7 +13616,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["store-recall-peephole"],
-    detail: "Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.",
+    detail: "Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.",
   },
   {
     id: "stack-current-x-scheduling",
@@ -14067,7 +14067,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["last-x-reuse"],
-    detail: "Drops П->X r when the IR pass can prove X already holds the value just stored to r and no intervening op clobbers X (including С/П, jumps, ALU), while preserving recalls that supply the last X2 sync before . or ВП restoration or the stack lift for an immediate consumer.",
+    detail: "Drops П->X r when the IR pass can prove X already holds the value just stored to r and no intervening op clobbers X (including С/П, jumps, ALU), while preserving recalls that supply the last X2 sync before . or ВП restoration or a stack lift that can reach a downstream consumer.",
   },
   {
     id: "flow-x-reuse",
@@ -14075,7 +14075,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["flow-x-reuse"],
-    detail: "Uses forward CFG data-flow to drop П->X r when every predecessor reaches the point with the same register value already in X, including across direct jumps and both sides of conditional branches, unless the recall is the last X2 sync before . or ВП restoration or the stack lift for an immediate consumer.",
+    detail: "Uses forward CFG data-flow to drop П->X r when every predecessor reaches the point with the same register value already in X, including across direct jumps and both sides of conditional branches, unless the recall is the last X2 sync before . or ВП restoration or a stack lift that can reach a downstream consumer.",
   },
   {
     id: "branch-target-x-reuse",
@@ -14083,7 +14083,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["branch-target-x-reuse"],
-    detail: "Drops the first recall in a unique branch target when the incoming condition already carries the tested register value in X, unless the target recall is needed as a . or ВП X2-sync boundary or immediate stack lift.",
+    detail: "Drops the first recall in a unique branch target when the incoming condition already carries the tested register value in X, unless the target recall is needed as a . or ВП X2-sync boundary or a stack lift that can reach a downstream consumer.",
   },
   {
     id: "constant-folding",

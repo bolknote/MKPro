@@ -744,7 +744,7 @@ Optimizations:
   - generated-setup-program: Generated optimized setup program for bottles.
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: candidate; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -1125,7 +1125,7 @@ Candidates:
   - dispatch@43/super-dark-dispatch: 7 steps; considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06
 
 Optimizer Capabilities:
-  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -1229,7 +1229,7 @@ Optimizations:
   - dead-store-elimination: Removed 1 store(s) to register(s) never read before the next assignment.
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: candidate; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -1443,7 +1443,7 @@ Candidates:
   - dispatch@31/super-dark-dispatch: 8 steps; considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -1675,7 +1675,7 @@ Candidates:
   - if@25/negative-zero-threshold-flow: 9 steps; Negative-zero threshold flow estimated at 9 cells; ordinary condition was shorter (5).
 
 Optimizer Capabilities:
-  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -1956,7 +1956,7 @@ Candidates:
   - dispatch@33/super-dark-dispatch: 4 steps; considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -2242,7 +2242,7 @@ Candidates:
   - display __inline_show_30_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
 
 Optimizer Capabilities:
-  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -2387,7 +2387,7 @@ Optimizations:
   - decimal-series-lowering: Lowered decimal recurrence to 94-digit MK-61 program.
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: candidate; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -2725,7 +2725,7 @@ Candidates:
   * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
 
 Optimizer Capabilities:
-  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -3034,7 +3034,7 @@ Optimizations:
   - setup-setup-coord-list-indirect-random-unique: Generated compact indirect setup for 9 unique coord_list item(s).
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -3169,7 +3169,7 @@ Optimizations:
   - register-coalesce: Coalesced 2 non-overlapping register live range(s).
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: candidate; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -3576,7 +3576,7 @@ Candidates:
   * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
 
 Optimizer Capabilities:
-  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -3736,7 +3736,7 @@ Candidates:
   - dispatch@20/super-dark-dispatch: 4 steps; considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -4159,7 +4159,7 @@ Candidates:
   * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -4602,7 +4602,7 @@ Candidates:
   * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
 
 Optimizer Capabilities:
-  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -4815,7 +4815,7 @@ Candidates:
   - if@44/negative-zero-threshold-flow: 10 steps; Negative-zero threshold flow estimated at 10 cells; ordinary condition was shorter (6).
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -5060,7 +5060,7 @@ Candidates:
   - display __inline_show_38_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
 
 Optimizer Capabilities:
-  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -5342,7 +5342,7 @@ Candidates:
   * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
 
 Optimizer Capabilities:
-  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -5921,7 +5921,7 @@ Candidates:
   * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -6439,7 +6439,7 @@ Candidates:
   * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -6859,7 +6859,7 @@ Candidates:
   * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -7314,7 +7314,7 @@ Candidates:
   - display __inline_show_30_0/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -7666,7 +7666,7 @@ Candidates:
   - if@72/negative-zero-threshold-flow: 9 steps; Negative-zero threshold flow estimated at 9 cells; ordinary condition was shorter (5).
 
 Optimizer Capabilities:
-  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -7980,7 +7980,7 @@ Candidates:
   * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
 
 Optimizer Capabilities:
-  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -8314,7 +8314,7 @@ Candidates:
   - display __inline_show_49_1/display-byte-builder: 999999 steps; display has no literal/X2-sensitive fragments to build
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -8742,7 +8742,7 @@ Candidates:
   * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
 
 Optimizer Capabilities:
-  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: active; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -8890,7 +8890,7 @@ Candidates:
   - dispatch@24/super-dark-dispatch: 4 steps; considered; selector is key-valued, and layout proof did not place one-command cases at 48..53 with tails at 01..06
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -9309,7 +9309,7 @@ Candidates:
   * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
@@ -9720,7 +9720,7 @@ Candidates:
   * ir-pass/preloaded-indirect-flow: 1 steps; compiler-owned address preload selected for one-cell indirect branch/call
 
 Optimizer Capabilities:
-  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and does not lift the stack for an immediate consumer.
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops.
   - stack-current-x-scheduling: active; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
   - tail-call-lowering: active; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
   - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.

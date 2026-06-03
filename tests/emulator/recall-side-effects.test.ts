@@ -28,4 +28,12 @@ describe("recall side effects", () => {
     expect(runX(withRecall)).toBe("2,831852-1");
     expect(runX(withoutRecall)).toBe("1,415926-1");
   });
+
+  it("П->X stack lift can survive X-only ops before a later binary op", () => {
+    const withRecall = [0x20, 0x35, 0x41, 0x61, 0x35, 0x10, 0x50]; // F pi; К {x}; X->П 1; П->X 1; К {x}; +; С/П
+    const withoutRecall = [0x20, 0x35, 0x41, 0x35, 0x10, 0x50]; // F pi; К {x}; X->П 1; К {x}; +; С/П
+
+    expect(runX(withRecall)).toBe("2,831852-1");
+    expect(runX(withoutRecall)).toBe("1,415926-1");
+  });
 });
