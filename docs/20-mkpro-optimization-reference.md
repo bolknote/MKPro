@@ -493,8 +493,8 @@ Display rewrites are separated into strategy selection + body lowering.
   by setting the same collection, uses X2 as the hidden temporary: the mask
   remains in Y, the collection recall synchronizes X2, `К∧; К{x}` performs the
   test, and `.` restores the collection on the jumped set branch before `К∨`.
-  The rewrite is rejected for different set collections and for known-fractional
-  masks where the safe two-command X2-preserving gap before `.` would disappear.
+  Deterministic known-fractional masks skip the redundant `К{x}` and get a
+  preserving `К НОП` before `.` to keep the X2 restore gap safe.
 - `x2-hidden-temp` — uses X2 as a temporary across X2-preserving logic so the
   active mask can stay in Y and the collection is restored on the target branch
   without adding a dedicated scratch register.

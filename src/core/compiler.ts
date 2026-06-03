@@ -14531,7 +14531,7 @@ const optimizerCapabilities: Array<{
     source: "mk61-delta",
     requires: ["x2-register"],
     activeWhen: ["membership-collection-x2-restore"],
-    detail: "Uses the hidden X2 display register as a temporary across ordinary X2-preserving logic: a membership test can keep the mask in Y, restore the tested collection through '.', and perform the following bit-set without a scratch register.",
+    detail: "Uses the hidden X2 display register as a temporary across ordinary X2-preserving logic: a membership test can keep a deterministic mask in Y, restore the tested collection through '.', and perform the following bit-set without a scratch register; known-fractional masks insert a preserving gap before the restore when К{x} is skipped.",
   },
   {
     id: "hex-mantissa-arithmetic",

@@ -942,7 +942,7 @@ export function compileMembershipSetReuseForPresentCondition(ctx: LoweringCtx,
     ctx.compileStatements(statement.thenBody);
     if (endLabel !== undefined) ctx.emitJump(0x51, "БП", endLabel, "if end", line);
     ctx.emitLabel(falseLabel);
-    if (x2Restore) emitBitSetWithX2RestoredCollection(ctx, set);
+    if (x2Restore) emitBitSetWithX2RestoredCollection(ctx, set, membershipCollectionX2RestoreNeedsNop(membership));
     else emitBitSetCollectionWithScratch(ctx, collection, set, bitMaskScratchName(statement));
     ctx.compileStatements(tail);
     if (endLabel !== undefined) ctx.emitLabel(endLabel);
@@ -1025,7 +1025,7 @@ export function compileMembershipSetRunReuseForPresentCondition(ctx: LoweringCtx
     if (endLabel !== undefined) ctx.emitJump(0x51, "БП", endLabel, "if end", line);
     ctx.emitLabel(falseLabel);
     if (x2Restore) {
-      emitBitSetWithX2RestoredCollection(ctx, onlySet.set);
+      emitBitSetWithX2RestoredCollection(ctx, onlySet.set, membershipCollectionX2RestoreNeedsNop(membership));
     } else {
       const scratch = bitMaskScratchName(setRun.sets[0]!.set);
       for (const { set, collection } of setRun.sets) {
@@ -1049,16 +1049,24 @@ function canRestoreMembershipCollectionFromX2(
   ): membership is BitMembershipCondition & {
     mode: "mask";
     collection: Extract<ExpressionAst, { kind: "identifier" }>;
-    mask: Extract<ExpressionAst, { kind: "identifier" }>;
+    mask: ExpressionAst;
   } {
     return membership.mode === "mask" &&
       membership.collection.kind === "identifier" &&
-      membership.mask.kind === "identifier" &&
-      expressionEquals(setCollection, membership.collection) &&
-      // When К {x} is skipped for a known-fractional mask, `.` may be only one
-      // X2-preserving command after the collection recall. Keep this path to the
-      // two-command `К∧; К{x}` shape so E/D-leading X2 values restore safely.
-      !expressionIsKnownFractional(membership.mask);
+      expressionIsDeterministic(membership.mask) &&
+      expressionEquals(setCollection, membership.collection);
+}
+
+function membershipCollectionX2RestoreNeedsNop(
+    membership: BitMembershipCondition & {
+      mode: "mask";
+      mask: ExpressionAst;
+    },
+  ): boolean {
+    // When К {x} is skipped for a known-fractional mask, `.` would be only one
+    // X2-preserving command after the collection recall. Insert one preserving
+    // no-op before `.` so E/D-leading X2 values restore safely.
+    return expressionIsKnownFractional(membership.mask);
 }
 
 function emitMembershipCollectionX2Test(
@@ -1070,22 +1078,29 @@ function emitMembershipCollectionX2Test(
     },
     line: number,
   ): void {
-    if (!ctx.xHolds(membership.mask.name)) {
+    if (membership.mask.kind === "identifier" && ctx.xHolds(membership.mask.name)) {
+      // Keep the current X mask in place; the following collection recall lifts it to Y.
+    } else if (membership.mask.kind === "identifier") {
       ctx.emitRecall(membership.mask.name, `membership X2 mask ${membership.mask.name}`, line);
+    } else {
+      compileExpression(ctx, membership.mask);
     }
     ctx.emitRecall(membership.collection.name, `membership X2 collection ${membership.collection.name}`, line);
     ctx.emitOp(0x37, "К ∧", "membership test with X2-restorable collection", line);
     emitMembershipFractionIfNeeded(ctx, membership, "membership fraction", line);
+    const maskText = expressionToIntentText(membership.mask);
     ctx.optimizations.push({
       name: "membership-collection-x2-restore",
-      detail: `Kept ${membership.mask.name} in Y and ${membership.collection.name} in X2 for a membership set at line ${line}.`,
+      detail: `Kept ${maskText} in Y and ${membership.collection.name} in X2 for a membership set at line ${line}.`,
     });
 }
 
 function emitBitSetWithX2RestoredCollection(
     ctx: LoweringCtx,
     set: Extract<StatementAst, { kind: "assign" }>,
+    insertSafetyNop: boolean,
   ): void {
+    if (insertSafetyNop) ctx.emitOp(0x54, "К НОП", "guard X2 restore gap", set.line);
     ctx.emitOp(0x0a, ".", "restore membership collection from X2", set.line);
     ctx.emitOp(0x38, "К ∨", "bit_set with X2-restored collection", set.line);
     ctx.emitStore(set.target, `set ${set.target}`, set.line);

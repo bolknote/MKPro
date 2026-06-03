@@ -3792,6 +3792,35 @@ program MembershipMaskCurrentX {
     expect(comments).not.toContain("cell bit mask scratch");
   });
 
+  it("guards fractional-mask X2 membership restore with a preserving no-op", () => {
+    const result = compileOk(`
+program FractionalMembershipMaskX2Set {
+  state {
+    pos: packed = 1.0000008
+    marks: packed = 0
+  }
+
+  loop {
+    if bit_and(marks, frac(pos)) != 0 {
+      halt(9)
+    }
+    else {
+      marks = bit_or(marks, frac(pos))
+    }
+    halt(marks)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "membership-collection-x2-restore")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "fractional-membership-mask-test")).toBe(true);
+    const comments = result.steps.map((step) => step.comment ?? "");
+    expect(comments).toContain("guard X2 restore gap");
+    expect(comments).toContain("restore membership collection from X2");
+    expect(comments).not.toContain("cell bit mask scratch");
+    expect(comments).not.toContain("reuse cell bit mask");
+  });
+
   it("keeps the current-X membership mask scratch when setting a different collection", () => {
     const result = compileOk(`
 program MembershipMaskCurrentXScratch {

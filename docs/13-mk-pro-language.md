@@ -1201,9 +1201,11 @@ The pipeline currently contains:
 - **membership-collection-x2-restore** — for a membership failure that sets the
   same packed collection, keeps the mask in Y, lets the collection recall
   synchronize X2, tests with `К∧; К{x}`, then restores the collection with `.`
-  on the jumped branch before `К∨`. This is the ordinary-code X2 hidden-temp
-  form of the source-listing bit-test/set trick; it is not limited to display
-  lowering.
+  on the jumped branch before `К∨`. Deterministic known-fractional masks such
+  as `frac(pos)` skip the redundant `К{x}` and insert a preserving `К НОП`
+  before `.` so the X2 restore has a safe gap. This is the ordinary-code X2
+  hidden-temp form of the source-listing bit-test/set trick; it is not limited
+  to display lowering.
 - **dead-store-elimination** — whole-program liveness-driven DSE: removes
   `X->П r` when liveOut at that point excludes `r`, unless that store finalizes
   number entry or supplies the previous-command context consumed by `ВП` while
