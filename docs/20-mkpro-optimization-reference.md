@@ -495,6 +495,9 @@ Display rewrites are separated into strategy selection + body lowering.
   test, and `.` restores the collection on the jumped set branch before `К∨`.
   The rewrite is rejected for different set collections and for known-fractional
   masks where the safe two-command X2-preserving gap before `.` would disappear.
+- `x2-hidden-temp` — uses X2 as a temporary across X2-preserving logic so the
+  active mask can stay in Y and the collection is restored on the target branch
+  without adding a dedicated scratch register.
 - `stack-resident-temps` — keeps up to four consecutive single-use temps on the stack, using `В↑` lifts and restore sequences (`X↔Y` / `F reverse`) before direct stack-based consumers.
 - `stack-resident-indexed-temp` — keeps a single-use temp in X across one indexed compound store `cells[i] op= temp` when the temp is consumed exactly once and selector/index setup is not temp-dependent.
 - `stack-resident-control-flow` — marks stack-temp fusion that crosses stack-preserving `if` / `while` / `dispatch` regions; these regions cannot clobber live temps and the lowering rebuilds stack state if the region requires it.
@@ -511,6 +514,9 @@ Display rewrites are separated into strategy selection + body lowering.
   same current X, and the loop still lowers through the normal `F Lx` counted
   tail.
 - `int-frac-shared-tail` — a shared int/frac return tail reduces duplication.
+- `subroutine-part-shared-tail` — computes one shared pure operand once and
+  derives both `К [x]` and `К {x}` through one stack-tail, matching the same
+  reduced-unary-return pattern used by `int-frac-shared-tail`.
 - `z-stack-derived-tail` — shares a single operand once and uses one stack-tail (`X↔Y`, `X↔Z`, then restore) to derive adjacent `К [x]`/`К {x}`-style results, avoiding duplicated unary math work.
 - `z-stack-derived-value-reuse` — lowers Z-stack pressure by moving values through warm locations.
 
@@ -611,6 +617,26 @@ Feature flags are added only after successful candidate/optimization evidence:
 - `super-dark-dispatch` — added when `super-dark-dispatch` or `preloaded-super-dark-flow` candidate is selected and FA..FF routing is proven.
 
 These are not independent optimizations; they gate whether the lowering strategy can legally use the corresponding opcode/behavior.
+
+## 15a) Exact-machine profile and emulator facts
+
+- `report.machine` — fixed to `mk61` for this toolchain.
+- `report.machineFeaturesUsed` — feature names set from successful candidate/evidence, as listed above.
+- `report.emulatorFacts` — probe-backed machine truths used by lowering and verified rewrites.
+
+- `undocumented-opcodes` (feature precondition) — source-level pass uses `F0..FF` and undocumented aliases only where exact behavior is proved safe.
+- `extra-cells` (feature precondition) — non-official/extra physical cells are tracked via
+  `report.budgetReport.extraCells` and included in `report.budgetReport.totalPhysicalCells`.
+
+Profile facts in `report.emulatorFacts`:
+- `return-empty-stack-jumps-to-01` (`status: proved`) — `В/О` with an empty return stack behaves as one-cell `БП 01` during continuous execution.
+- `r0-star-f-aliases` (`status: proved`) — `*F` aliases track as matching `*0` entries with explicit `R0` transformation; neither form preserves `R0`.
+- `super-dark-fa-ff-indirect` (`status: proved`) — `К БП R` with `R = FA..FF` executes one command at `48..53`, then continues at `01..06`.
+- `fa-direct-vs-indirect` (`status: proved`) — direct `БП FA` consumes/overwrites the next operand byte, while indirect `К БП R` leaves `01..06` bytes available as continuation space.
+- `r0-fractional-jump-99` (`status: proved`) — `К БП 0` with `0 < R0 < 1` jumps to `99` and leaves `R0 = -99999999`.
+- `r0-fractional-selects-r3` (`status: proved`) — `К П→X 0` and `К X→П 0` with `0 < R0 < 1` can select `R3` and leave `R0 = -99999999`.
+- `negative-zero-degree-threshold` (`status: proved`) — with `1|-00` in `Y`, multiplying by `X` then normalizing through `В↑` produces a binary threshold at `|X| = 1`.
+- `step-vs-run-delta` (`status: proved`) — continuous-run behavior is the default and step-only deviations are explicitly modeled through `mk61` facts and verification.
 
 ## 16) Proof-guided safety model (important)
 
