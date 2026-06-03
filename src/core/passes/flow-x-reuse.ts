@@ -144,6 +144,12 @@ function sameSet(left: XRegisterSet | undefined, right: XRegisterSet | undefined
 function buildGraph(ops: readonly IrOp[]): Graph {
   const { labelIndex, addressIndex } = buildTargetIndexes(ops);
   const successors: number[][] = Array.from({ length: ops.length }, () => []);
+  const callReturns: number[] = [];
+  for (let index = 0; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    const next = index + 1;
+    if (op.kind === "call" && next < ops.length) callReturns.push(next);
+  }
 
   for (let index = 0; index < ops.length; index += 1) {
     const op = ops[index]!;
@@ -174,12 +180,16 @@ function buildGraph(ops: readonly IrOp[]): Graph {
         jumpTo(op.target);
         fallthrough();
         break;
-      case "call":
       case "loop":
         jumpTo(op.target);
         fallthrough();
         break;
+      case "call":
+        jumpTo(op.target);
+        break;
       case "return":
+        successors[index]!.push(...callReturns);
+        break;
       case "indirect-jump":
       case "indirect-call":
       case "indirect-cjump":

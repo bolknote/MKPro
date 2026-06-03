@@ -3609,6 +3609,28 @@ program MaskMembershipClear {
 `, { budget: 999, analysis: true });
 
     expect(result.report.optimizations.some((item) => item.name === "cell-membership-clear-reuse")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "fractional-membership-mask-test")).toBe(true);
+    expect(result.steps.some((step) => step.comment?.includes("membership fraction"))).toBe(false);
+  });
+
+  it("keeps membership fraction extraction for masks with an integer marker", () => {
+    const result = compileOk(`
+program IntegerMembershipMaskClear {
+  state {
+    marks: packed = 8.1
+  }
+
+  loop {
+    if bit_and(marks, 8.1) != 0 {
+      marks = bit_and(marks, bit_not(8.1))
+    }
+    halt(marks)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "cell-membership-clear-reuse")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "bit membership fraction")).toBe(true);
   });
 
   it("orders commutative calls to reuse derivations of the current X", () => {

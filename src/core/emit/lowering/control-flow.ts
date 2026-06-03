@@ -736,12 +736,35 @@ export function compileMembershipClearReuse(ctx: LoweringCtx,
     return true;
 }
 
+function emitMembershipFractionIfNeeded(
+    ctx: LoweringCtx,
+    membership: BitMembershipCondition,
+    comment: string,
+    line: number,
+  ): void {
+    if (membership.mode === "mask" && expressionIsKnownFractional(membership.mask)) {
+      ctx.optimizations.push({
+        name: "fractional-membership-mask-test",
+        detail: `Skipped fractional extraction for ${expressionToIntentText(membership.mask)} membership mask at line ${line}.`,
+      });
+      return;
+    }
+    ctx.emitOp(0x35, "К {x}", comment, line);
+}
+
+function expressionIsKnownFractional(expr: ExpressionAst): boolean {
+    const literal = numericLiteralValue(expr);
+    if (literal !== undefined) return Math.abs(literal) < 1;
+    if (expr.kind === "unary" && expr.op === "-") return expressionIsKnownFractional(expr.expr);
+    return expr.kind === "call" && expr.callee.toLowerCase() === "frac" && expr.args.length === 1;
+}
+
 export function compileBitMembershipMaskValue(ctx: LoweringCtx, membership: BitMembershipCondition, line: number): boolean {
     if (membership.mode === "mask") {
       compileExpression(ctx, membership.mask);
       compileExpression(ctx, membership.collection);
       ctx.emitOp(0x37, "К ∧", "bit membership test", line);
-      ctx.emitOp(0x35, "К {x}", "bit membership fraction", line);
+      emitMembershipFractionIfNeeded(ctx, membership, "bit membership fraction", line);
       return true;
     }
     if (membership.collection.kind !== "identifier") return false;
@@ -752,7 +775,7 @@ export function compileBitMembershipMaskValue(ctx: LoweringCtx, membership: BitM
     ctx.emitJump(0x53, "ПП", helper.label, "bit_mask helper", line);
     compileExpression(ctx, membership.collection);
     ctx.emitOp(0x37, "К ∧", "bit membership test", line);
-    ctx.emitOp(0x35, "К {x}", "bit membership fraction", line);
+    emitMembershipFractionIfNeeded(ctx, membership, "bit membership fraction", line);
     ctx.optimizations.push({
       name: "bit-mask-helper-call",
       detail: `Reused shared bit_mask helper for ${membership.collection.name} at line ${line}.`,
@@ -953,7 +976,7 @@ export function emitMembershipMaskTest(ctx: LoweringCtx,
     compileExpression(ctx, membership.collection);
     ctx.emitRecall(scratch, "reuse cell bit mask", line);
     ctx.emitOp(0x37, "К ∧", "membership test with reused mask", line);
-    ctx.emitOp(0x35, "К {x}", "membership fraction", line);
+    emitMembershipFractionIfNeeded(ctx, membership, "membership fraction", line);
 }
 
 export function compileArithmeticIfSelect(ctx: LoweringCtx, statement: Extract<StatementAst, { kind: "if" }>): boolean {

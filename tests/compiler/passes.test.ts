@@ -472,6 +472,23 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops.at(-2)).toMatchObject({ kind: "recall", register: "2" });
   });
 
+  it("flow-x-reuse ignores direct call continuations unless the callee returns", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      cjump("join"),
+      call("terminal"),
+      label("join"),
+      recall("1"),
+      halt(),
+      label("terminal"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops.filter((op) => op.kind === "recall" && op.register === "1")).toHaveLength(1);
+  });
+
   it("flow-x-reuse treats counted loop backedges as unknown X predecessors", () => {
     const program: IrOp[] = [
       recall("2"),
