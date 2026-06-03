@@ -1,2 +1,0 @@
-; OCR program listing from TM.1987-01.KEI_.pdf
-; This source text is not available in machine-readable form yet.
