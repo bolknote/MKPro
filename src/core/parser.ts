@@ -743,7 +743,7 @@ function parseV2InlineStatement(text: string, line: number): V2StatementAst {
 
 function validateAssignmentTargetText(target: string, line: number): void {
   if (/^[A-Za-z_][\w]*$/u.test(target)) return;
-  const expr = parseExpression(target, line);
+  const expr = parseExpression(normalizeV2ExpressionText(target), line);
   if (expr.kind === "indexed") return;
   throw new ParseError(`Invalid assignment target '${target}'`, line);
 }
@@ -2652,7 +2652,7 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
       if (isIndexedTargetText(statement.target)) {
         return [{
           kind: "indexed_assign",
-          target: indexedTargetExpression(statement.target, statement.line),
+          target: indexedTargetExpression(statement.target, statement.line, context),
           expr: lowerV2Expression(statement.expr, statement.line, context),
           line: statement.line,
         }];
@@ -2660,7 +2660,7 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
       return [{ kind: "assign", target: statement.target, expr: lowerV2Expression(statement.expr, statement.line, context), line: statement.line }];
     case "v2_update": {
       if (isIndexedTargetText(statement.target)) {
-        const target = indexedTargetExpression(statement.target, statement.line);
+        const target = indexedTargetExpression(statement.target, statement.line, context);
         return [{
           kind: "indexed_assign",
           target,
@@ -2739,8 +2739,12 @@ function isIndexedTargetText(target: string): boolean {
   return target.includes("[");
 }
 
-function indexedTargetExpression(target: string, line: number): Extract<ExpressionAst, { kind: "indexed" }> {
-  const expr = parseExpression(target, line);
+function indexedTargetExpression(
+  target: string,
+  line: number,
+  context: V2LoweringContext,
+): Extract<ExpressionAst, { kind: "indexed" }> {
+  const expr = lowerV2Expression(target, line, context);
   if (expr.kind !== "indexed") throw new ParseError(`Invalid indexed assignment target '${target}'`, line);
   return expr;
 }

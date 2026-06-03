@@ -35,10 +35,10 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
-| `cave-highlevel-baseline.mkpro` | 136 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
-| `cave-treasure.mkpro` | 142 | 105 | source-shaped command decoder is in place; remaining blockers are resource pressure, wall breaking, cache reward flow, and dispatch overhead |
+| `cave-highlevel-baseline.mkpro` | 135 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
+| `cave-treasure.mkpro` | 123 | 105 | floor-indexed resource bank and source-shaped command decoder are in place; remaining blockers are command dispatch, wall breaking, cache reward flow, and loop prompt/input storage |
 | `giants-country.mkpro` | 105 | 105 | fits after restoring the source-style direct R5 position counter; pending only for exact cave-picture/warning display audit |
-| `tic-tac-toe-4x4.mkpro` | 267 | 105 | source-shaped line update/score pass is in place; remaining packed 4x4 scan lowering |
+| `tic-tac-toe-4x4.mkpro` | 249 | 105 | source-shaped line update/score pass is in place; remaining packed 4x4 scan lowering |
 
 Prototype notes:
 
@@ -54,6 +54,11 @@ Prototype notes:
   directly as the indirect selector because MK-61 indirect memory addressing
   ignores the fractional coordinate tail. This is the source-listing trick in a
   general indexed-bank form, not a cave-only special case.
+- `cave-treasure.mkpro` now keeps food, dynamite, and treasure in one
+  floor-indexed resource bank. Cache rewards use `resources[pos.floor]` and the
+  source-level `(4 - pos.floor)^2` bonus sequence (`9`, `4`, `1`), relying on
+  the same contextual `.floor` lowering for indexed assignment targets as for
+  ordinary expressions.
 - Shared terminal tails now cover source-listing style "tail of one procedure as
   the tail of another" when two identical straight-line suffixes already end in
   unconditional flow. This is intentionally generic: it can jump into a matching

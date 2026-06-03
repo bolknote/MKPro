@@ -914,6 +914,27 @@ program PackedCaveMask {
     expect(lowered).toMatch(/"callee":"int","args":\[\{"kind":"identifier","name":"pos"\}\]/u);
   });
 
+  it("allows contextual floor access inside indexed assignment targets", () => {
+    const ast = parseProgram(`
+program PackedCaveFloorIndex {
+  state {
+    pos: coord(cave) = 1.0000008
+    resources: packed[1..3] = [1, 2, 3]
+  }
+  cave: board(packed_decimal_zero_run)
+  loop {
+    resources[pos.floor] = resources[pos.floor] + 1
+    halt(resources[1])
+  }
+}
+`);
+    const lowered = JSON.stringify(ast.entries[0]?.body);
+
+    expect(lowered).toMatch(/"kind":"indexed","base":"resources"/u);
+    expect(lowered).toMatch(/"callee":"int","args":\[\{"kind":"identifier","name":"pos"\}\]/u);
+    expect(lowered).not.toMatch(/100/u);
+  });
+
   it("uses a single decimal-player cells field as the packed room map", () => {
     const ast = parseProgram(`
 program DecimalPlayerMap {

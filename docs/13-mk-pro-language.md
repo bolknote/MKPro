@@ -310,6 +310,8 @@ Both forms lower to contiguous calculator registers. A constant index such as
 `front_line[2].front` or `slots[2]` is resolved at compile time. A dynamic index
 such as `front_line[slot].front` lowers through MK-61 indirect memory commands
 (`К X->П` / `К П->X`) with a compiler-owned selector register.
+Indexed assignment targets accept the same index expressions as indexed reads,
+including contextual coordinate helpers such as `resources[pos.floor]`.
 
 When an index expression is an affine form like `physical - 3` and that value
 already names the physical calculator register for the selected contiguous bank
@@ -1003,9 +1005,11 @@ The full parser-reserved function-name list is:
 
 Current scalar lowerings are still deliberately small and auditable:
 
-- `coord` is represented as a packed numeric value; `pos.floor` lowers to
-  `int(pos / 100)`, with `100` automatically placed in setup state when
-  that is cheaper than entering three digits.
+- `coord` is represented as a packed numeric value; `pos.floor` usually lowers
+  to `int(pos / 100)`, with `100` automatically placed in setup state when that
+  is cheaper than entering three digits. For `packed_decimal_zero_run` cave
+  coordinates, the floor is the integer part, so `pos.floor` lowers to
+  `int(pos)`.
 - `random()` is `[0, 1)` via `К СЧ`; `1` never appears, and `0` only in rare
   hexadecimal-`Y` stack cases.
 - `random(max)` is syntax sugar for `random() * max`, `random(min, max)`
