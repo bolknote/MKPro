@@ -1008,9 +1008,9 @@ export function compileMembershipSetRunReuseForPresentCondition(ctx: LoweringCtx
     const thenTerminates = ctx.statementsTerminate(statement.thenBody);
     const endLabel = thenTerminates ? undefined : ctx.freshLabel("if_end");
     const onlySet = setRun.sets.length === 1 ? setRun.sets[0]! : undefined;
-    const x2Restore = onlySet === undefined
-      ? false
-      : canRestoreMembershipCollectionFromX2(membership, onlySet.collection);
+    // Express as an `&&` chain (not a ternary) so the type-guard result narrows
+    // `membership` to its `mode: "mask"` shape inside the `if (x2Restore)` block.
+    const x2Restore = onlySet !== undefined && canRestoreMembershipCollectionFromX2(membership, onlySet.collection);
 
     if (x2Restore) {
       emitMembershipCollectionX2Test(ctx, membership, line);
@@ -1025,7 +1025,7 @@ export function compileMembershipSetRunReuseForPresentCondition(ctx: LoweringCtx
     if (endLabel !== undefined) ctx.emitJump(0x51, "БП", endLabel, "if end", line);
     ctx.emitLabel(falseLabel);
     if (x2Restore) {
-      emitBitSetWithX2RestoredCollection(ctx, onlySet!.set);
+      emitBitSetWithX2RestoredCollection(ctx, onlySet.set);
     } else {
       const scratch = bitMaskScratchName(setRun.sets[0]!.set);
       for (const { set, collection } of setRun.sets) {
