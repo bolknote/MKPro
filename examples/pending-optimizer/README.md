@@ -36,7 +36,7 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
 | `cave-highlevel-baseline.mkpro` | 135 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
-| `cave-treasure.mkpro` | 123 | 105 | floor-indexed resource bank and source-shaped command decoder are in place; remaining blockers are command dispatch, wall breaking, cache reward flow, and loop prompt/input storage |
+| `cave-treasure.mkpro` | 121 | 105 | floor-indexed resource bank and source-shaped command decoder are in place; remaining blockers are command dispatch, wall breaking, cache reward flow, and loop prompt/input storage |
 | `giants-country.mkpro` | 105 | 105 | fits after restoring the source-style direct R5 position counter; pending only for exact cave-picture/warning display audit |
 | `tic-tac-toe-4x4.mkpro` | 249 | 105 | source-shaped line update/score pass is in place; remaining packed 4x4 scan lowering |
 
@@ -59,6 +59,10 @@ Prototype notes:
   source-level `(4 - pos.floor)^2` bonus sequence (`9`, `4`, `1`), relying on
   the same contextual `.floor` lowering for indexed assignment targets as for
   ordinary expressions.
+- `cave-treasure.mkpro` lets the successful movement branch fall through in
+  `go(dir)` (`unless blocked in walls`) while keeping the failed-wall UI exactly
+  as the original `show(0)` stop. This saves two cells before any X2 movement
+  decoder work.
 - Shared terminal tails now cover source-listing style "tail of one procedure as
   the tail of another" when two identical straight-line suffixes already end in
   unconditional flow. This is intentionally generic: it can jump into a matching

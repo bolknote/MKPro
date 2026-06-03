@@ -63,14 +63,14 @@ program CaveTreasure {
 
   fn go(dir) {
     blocked = pos + dir
-    if blocked in walls {
+    unless blocked in walls {
+      pos = blocked
+      blocked = 0
+    }
+    else {
       // Bumping into a wall records intent: the next break_wall command knows
       // which obstacle the player chose to spend dynamite on.
       show(0)
-    }
-    else {
-      pos = blocked
-      blocked = 0
     }
   }
 
