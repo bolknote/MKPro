@@ -578,11 +578,13 @@ Feature flags are added only after successful candidate/optimization evidence:
 - `dark-entries` — added from cyclic formal dark-entry selection and related layout features.
 - `address-constants` — added when constants are reused as arithmetic/address-like data.
 - `x2-register` — added when X2/Xп/дисплей-byte scheduling relies on X2 boundaries across display-byte paths; opcode metadata follows the reference distinction between X2-preserving, X2-syncing/normalizing, and X2-restoring commands.
+- `fl-decrement-branch` — added when one-cell `F Lx` decrement/control forms are selected through optimizer-safe flow patterns (`fl-decrement-zero-branch`, `indirect-incdec-counter`, `r0-indirect-counter`).
 - `stack-resident-temps` — added when any stack-temporary residency optimization is used (`stack-resident-temps`, `stack-resident-indexed-temp`, or `stack-resident-control-flow`); recall-removal proofs use the shared opcode stack-effect profile to avoid deleting `П->X` lifts that can still be observed downstream.
 - `negative-zero-degree` — added when `negative-zero-threshold-selector` proof uses the `1|-00` preload trick.
 - `x2-restore-boundaries` — added when `vp-fraction-restore` is active.
 - `z-stack-register` — added when `z-stack-derived-value-reuse` uses deeper stack-derived storage.
 - `display-bytes` — added when display-byte or packed hex-mantissa lowering is active.
+- `raw-display-5f` — added when the optimizer emits raw-display opcode `5F` as a display-state mutation.
 - `r0-fractional-sentinel` — added when fractional indirect addressing or R0 fractional sentinel flow/path is active.
 - `r0-t-alias` — added when `r0-indirect-counter` path is selected and R0-transforming aliases are proven safe.
 - `error-stops` — added for domain-error stop/trap lowering (`error-stop`, `screen-error-literal-lowering`, `domain-error-guard`).
