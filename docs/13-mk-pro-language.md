@@ -156,6 +156,10 @@ picture first and then insert the current floor with `↔; F↻; ВП`.
 continues the program, often followed by `name = read()`. For terminal screens,
 put the visible value directly in `halt(...)`.
 
+`preview(expr)` computes a numeric expression and leaves it visible without
+emitting `С/П`. Use it for source listings that intentionally flash or prepare a
+running display value before the next real stop.
+
 Do not write setup or storage tactics as top-level implementation blocks:
 
 ```mkpro
@@ -934,6 +938,7 @@ report tied to proof-backed optimizer behavior rather than to template paths.
 The parser keeps these high-level statements as typed source nodes:
 
 - `show(...)`
+- `preview(expr)`
 - `name = read()`
 - `halt()`, `halt(expr)`, or `halt("text")`
 - `name = expr`

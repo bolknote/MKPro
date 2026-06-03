@@ -25,6 +25,7 @@ import type {
   V2MatchCaseAst,
   V2MatchStatementAst,
   V2PredicateAst,
+  V2PreviewStatementAst,
   V2ProgramAst,
   V2RuleAst,
   V2ScreenAst,
@@ -664,6 +665,8 @@ function isKnownCompactBoardEncoding(encoding: string): boolean {
 function parseV2InlineStatement(text: string, line: number): V2StatementAst {
   const showCall = parseNamedCall(text, "show");
   if (showCall !== undefined) return parseV2ShowCall(showCall.argsText, line);
+  const previewCall = parseNamedCall(text, "preview");
+  if (previewCall !== undefined) return parseV2PreviewCall(previewCall.argsText, line);
   const haltCall = parseNamedCall(text, "halt");
   if (haltCall !== undefined) {
     return { kind: "v2_stop", value: haltCall.argsText.trim() === "" ? "0" : haltCall.argsText.trim(), line };
@@ -674,6 +677,9 @@ function parseV2InlineStatement(text: string, line: number): V2StatementAst {
   }
   if (text.startsWith("show ")) {
     throw new ParseError("Show must look like 'show(...)'", line);
+  }
+  if (text.startsWith("preview ")) {
+    throw new ParseError("Preview must look like 'preview(expr)'", line);
   }
   const read = /^read\s+([A-Za-z_][\w]*)$/u.exec(text);
   if (read) {
@@ -763,6 +769,14 @@ function parseV2ShowCall(argsText: string, line: number): V2StatementAst {
     return { kind: "v2_show", target: numericLiteral, line };
   }
   return { kind: "v2_show", items, line };
+}
+
+function parseV2PreviewCall(argsText: string, line: number): V2StatementAst {
+  const expr = argsText.trim();
+  if (expr.length === 0) {
+    throw new ParseError("Preview must look like 'preview(expr)'", line);
+  }
+  return { kind: "v2_preview", expr, line };
 }
 
 function parseV2Predicate(text: string, _line: number): V2PredicateAst {
@@ -1199,6 +1213,8 @@ function v2StatementExprTexts(statement: V2StatementAst): string[] {
       return [statement.expr];
     case "v2_return":
       return [statement.expr];
+    case "v2_preview":
+      return [statement.expr];
     case "v2_stop":
       return [statement.value];
     case "v2_invoke":
@@ -1310,6 +1326,9 @@ function v2StatementTexts(statements: V2StatementAst[]): string[] {
           for (const item of statement.items ?? []) {
             if (item.kind === "source") texts.push(item.name);
           }
+          break;
+        case "v2_preview":
+          texts.push(statement.expr);
           break;
         case "v2_stop":
           texts.push(statement.value);
@@ -1679,6 +1698,9 @@ function collectV2UsedNames(v2: V2ProgramAst): Set<string> {
             if (item.kind === "source") used.add(item.name);
           }
           break;
+        case "v2_preview":
+          addText(statement.expr);
+          break;
         case "v2_if":
           visit(statement.thenBody);
           if (statement.elseBody !== undefined) visit(statement.elseBody);
@@ -1870,6 +1892,8 @@ function validateV2Statement(
       if (!isNumericLiteralText(statement.target)) {
         throw new ParseError("Show must use a number or display fragments", statement.line);
       }
+      return;
+    case "v2_preview":
       return;
     case "v2_invoke":
       if (!context.ruleParams.has(statement.name)) {
@@ -2609,6 +2633,8 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
         return [{ kind: "pause", expr: parseExpression(statement.target, statement.line), line: statement.line }];
       }
       return [{ kind: "show", display: statement.target, line: statement.line }];
+    case "v2_preview":
+      return [{ kind: "preview", expr: lowerV2Expression(statement.expr, statement.line, context), line: statement.line }];
     case "v2_read":
       return [{
         kind: "input",
@@ -3187,6 +3213,8 @@ function estimateLoweredStatementCost(statement: StatementAst): number {
       return 2 + estimateLoweredExpressionCost(statement.target.index) + estimateLoweredExpressionCost(statement.expr);
     case "coord_list_remove":
       return 4 + estimateLoweredExpressionCost(statement.item);
+    case "preview":
+      return estimateLoweredExpressionCost(statement.expr);
     case "pause":
     case "halt":
     case "return_value":
@@ -3442,6 +3470,8 @@ function substituteV2Statement(statement: V2StatementAst, replacements: Map<stri
       };
     case "v2_show":
       return substituteV2ShowStatement(statement, replacements);
+    case "v2_preview":
+      return substituteV2PreviewStatement(statement, replacements);
     case "v2_if": {
       const substituted: V2IfStatementAst = {
         ...statement,
@@ -3492,6 +3522,13 @@ function substituteV2Statement(statement: V2StatementAst, replacements: Map<stri
     default:
       return statement;
   }
+}
+
+function substituteV2PreviewStatement(
+  statement: V2PreviewStatementAst,
+  replacements: Map<string, string>,
+): V2PreviewStatementAst {
+  return { ...statement, expr: substituteV2Text(statement.expr, replacements) };
 }
 
 function substituteV2ShowStatement(

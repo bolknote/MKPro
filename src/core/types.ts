@@ -291,6 +291,7 @@ export interface V2RuleAst {
 
 export type V2StatementAst =
   | V2ShowStatementAst
+  | V2PreviewStatementAst
   | V2ReadStatementAst
   | V2StopStatementAst
   | V2IfStatementAst
@@ -308,6 +309,12 @@ export interface V2ShowStatementAst {
   target?: string;
   items?: DisplayItemAst[];
   inlineName?: string;
+  line: number;
+}
+
+export interface V2PreviewStatementAst {
+  kind: "v2_preview";
+  expr: string;
   line: number;
 }
 
@@ -428,6 +435,7 @@ export interface V2ContainsPredicateAst {
 
 export type StatementAst =
   | PauseStatementAst
+  | PreviewStatementAst
   | InputStatementAst
   | HaltStatementAst
   | AssignStatementAst
@@ -445,6 +453,12 @@ export type StatementAst =
 
 export interface PauseStatementAst {
   kind: "pause";
+  expr: ExpressionAst;
+  line: number;
+}
+
+export interface PreviewStatementAst {
+  kind: "preview";
   expr: ExpressionAst;
   line: number;
 }

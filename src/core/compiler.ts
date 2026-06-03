@@ -1535,7 +1535,7 @@ function remainingDisplayStringReads(ast: ProgramAst, candidates: ReadonlySet<st
 
   const visit = (statements: readonly StatementAst[]): void => {
     for (const statement of statements) {
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "return_value") visitExpr(statement.expr);
       if (statement.kind === "assign" && !removableAssignment(statement)) visitExpr(statement.expr);
       if (statement.kind === "show") {
@@ -1729,6 +1729,7 @@ function resolveConstantIndexedState(ast: ProgramAst, optimizations: AppliedOpti
         return item === statement.item ? statement : { ...statement, item };
       }
       case "pause":
+      case "preview":
       case "halt":
       case "return_value": {
         const expr = rewriteExpr(statement.expr);
@@ -2315,6 +2316,7 @@ function packCounterStripes(
           ...(statement.defaultBody === undefined ? {} : { defaultBody: rewriteStatements(statement.defaultBody) }),
         };
       case "pause":
+      case "preview":
       case "halt":
       case "return_value":
         return { ...statement, expr: rewriteExpr(statement.expr) };
@@ -2665,7 +2667,7 @@ function packedCounterStripeUsagesOk(ast: ProgramAst, names: readonly string[]):
         checkExpr(statement.target.index);
         checkExpr(statement.expr);
       }
-      if (statement.kind === "pause" || statement.kind === "halt" || statement.kind === "return_value") checkExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt" || statement.kind === "return_value") checkExpr(statement.expr);
       if (statement.kind === "if" || statement.kind === "while") {
         if (packedReadCount(statement.condition.left) + packedReadCount(statement.condition.right) > 1) ok = false;
       }
@@ -2739,7 +2741,7 @@ function freshPackedCounterName(ast: ProgramAst): string {
       }
       if (statement.kind === "input") used.add(statement.target);
       if (statement.kind === "call") used.add(statement.block);
-      if (statement.kind === "pause" || statement.kind === "halt" || statement.kind === "return_value") addExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt" || statement.kind === "return_value") addExpr(statement.expr);
       if (statement.kind === "if" || statement.kind === "while") {
         addExpr(statement.condition.left);
         addExpr(statement.condition.right);
@@ -3042,6 +3044,7 @@ function loopPromptHasReadsOutsideHeader(
   const statementReads = (statement: StatementAst): boolean => {
     switch (statement.kind) {
       case "pause":
+      case "preview":
       case "halt":
       case "return_value":
         return exprReads(statement.expr);
@@ -3317,7 +3320,10 @@ function identifierReadOutsideProc(ast: ProgramAst, procName: string, name: stri
       if (statement.kind === "assign" && visitExpr(statement.expr)) return true;
       if (statement.kind === "indexed_assign" && (visitExpr(statement.target.index) || visitExpr(statement.expr))) return true;
       if (statement.kind === "coord_list_remove" && visitExpr(statement.item)) return true;
-      if ((statement.kind === "pause" || statement.kind === "halt" || statement.kind === "return_value") && visitExpr(statement.expr)) return true;
+      if (
+        (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt" || statement.kind === "return_value") &&
+        visitExpr(statement.expr)
+      ) return true;
       if ((statement.kind === "if" || statement.kind === "while") && visitCondition(statement.condition)) return true;
       if (statement.kind === "if" && (visitStatements(statement.thenBody) || (statement.elseBody !== undefined && visitStatements(statement.elseBody)))) return true;
       if (statement.kind === "while" && visitStatements(statement.body)) return true;
@@ -3424,7 +3430,7 @@ function countIdentifierReadsInProgram(ast: ProgramAst, name: string): number {
   };
   const addStatements = (statements: readonly StatementAst[]): void => {
     for (const statement of statements) {
-      if (statement.kind === "pause" || statement.kind === "halt" || statement.kind === "return_value") addExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt" || statement.kind === "return_value") addExpr(statement.expr);
       if (statement.kind === "assign") addExpr(statement.expr);
       if (statement.kind === "indexed_assign") {
         addExpr(statement.target.index);
@@ -3508,7 +3514,7 @@ function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimiz
   };
   const visitStatements = (statements: StatementAst[]): void => {
     for (const statement of statements) {
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "input" && !ephemeralInputTargets.has(statement.target)) inputTargets.add(statement.target);
       if (statement.kind === "assign") {
         if (!assigned.has(statement.target)) assigned.set(statement.target, []);
@@ -3858,7 +3864,7 @@ function countVariableUsage(ast: ProgramAst, name: string): { reads: number; wri
         visitExpr(statement.expr);
       }
       if (
-        statement.kind === "pause" || statement.kind === "halt" ||
+        statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt" ||
         statement.kind === "return_value"
       ) {
         visitExpr(statement.expr);
@@ -4010,6 +4016,7 @@ function constantGuardedProc(proc: ProcAst): ConstantGuardedProc | undefined {
 function statementOwnExpressions(statement: StatementAst): ExpressionAst[] {
   switch (statement.kind) {
     case "assign":
+    case "preview":
     case "pause":
     case "halt":
     case "return_value":
@@ -4477,6 +4484,7 @@ function scalarReferencedOutsideLoop(ast: ProgramAst, name: string, loop: WhileS
           if (statement.target === name) found = true;
           break;
         case "pause":
+        case "preview":
         case "halt":
         case "return_value":
           readExpr(statement.expr);
@@ -5134,7 +5142,7 @@ function validateReservedInternalNames(ast: ProgramAst, diagnostics: Diagnostic[
         report(statement.target, statement.line);
         visitExpr(statement.expr);
       }
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "show") report(statement.display, statement.line);
       if (statement.kind === "call") report(statement.block, statement.line);
       if (statement.kind === "if") {
@@ -7177,6 +7185,16 @@ export class EmitContext {
         }
         this.emitOp(0x50, "С/П", "pause", statement.line);
         return;
+      case "preview":
+        if (isZeroExpression(statement.expr)) this.emitZero("preview", statement.line);
+        else if (!(statement.expr.kind === "identifier" && this.xHolds(statement.expr.name))) {
+          compileExpression(this, statement.expr);
+        }
+        this.optimizations.push({
+          name: "running-display-preview",
+          detail: `Prepared visible value without a calculator stop at line ${statement.line}.`,
+        });
+        return;
       case "input":
         this.emitOp(0x50, "С/П", `read ${statement.target}`, statement.line);
         if (this.scaledCoordCellNames.has(statement.target)) {
@@ -9140,6 +9158,7 @@ export class EmitContext {
             if (!merge(this.procBankSelectorRelevantWrites(statement.block, seen))) return false;
             break;
           case "pause":
+          case "preview":
           case "halt":
           case "return_value":
             if (!visitExpr(statement.expr)) return false;
@@ -9367,7 +9386,7 @@ function collectCoordListCellNames(ast: ProgramAst): Set<string> {
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "assign") visitExpr(statement.expr);
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitCondition(statement.condition);
         visit(statement.thenBody);
@@ -9416,7 +9435,7 @@ function collectScaledCoordCellNames(ast: ProgramAst, scaledLists: ReadonlySet<s
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "assign") visitExpr(statement.expr);
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitCondition(statement.condition);
         visit(statement.thenBody);
@@ -9539,7 +9558,7 @@ function coordVariableHasOnlyScaledSafeReads(
   const statementsSafe = (statements: StatementAst[], seenProcs = new Set<string>()): boolean => {
     for (const statement of statements) {
       if (statement.kind === "assign" && !exprSafe(statement.expr)) return false;
-      if ((statement.kind === "pause" || statement.kind === "halt") && !exprSafe(statement.expr)) return false;
+      if ((statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") && !exprSafe(statement.expr)) return false;
       if (statement.kind === "if") {
         if (!conditionSafe(statement.condition)) return false;
         if (!statementsSafe(statement.thenBody, seenProcs)) return false;
@@ -9760,6 +9779,7 @@ function collectFunctionCallEdges(
     for (const statement of statements) {
       switch (statement.kind) {
         case "assign":
+        case "preview":
         case "pause":
         case "halt":
           visitExprNonTail(statement.expr, source, statement.line);
@@ -10203,6 +10223,7 @@ function liftFunctionCallsInExpressions(ast: ProgramAst, optimizations: AppliedO
     const prelude: StatementAst[] = [];
     switch (statement.kind) {
       case "assign":
+      case "preview":
       case "pause":
       case "halt":
       case "return_value": {
@@ -11030,7 +11051,7 @@ function collectPreloadConstantValues(ast: ProgramAst, startupAwareConstantPrelo
       if (statement.kind === "halt" && statement.literal !== undefined) {
         collectDisplayLiteralPreloadValues(statement.literal, values);
       }
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "indexed_assign") {
         visitExpr(statement.target.index);
@@ -11188,7 +11209,7 @@ function programContainsCall(ast: ProgramAst, name: string): boolean {
   const visitStatements = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (found) return;
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -11278,7 +11299,7 @@ function countCalls(ast: ProgramAst, name: string): number {
   };
   const visitStatements = (statements: StatementAst[]): void => {
     for (const statement of statements) {
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -11327,7 +11348,7 @@ function collectLineCountGroupCounts(ast: ProgramAst): Map<string, number> {
   };
   const visitStatements = (statements: StatementAst[]): void => {
     for (const statement of statements) {
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -11373,7 +11394,7 @@ function collectVariableReadCounts(ast: ProgramAst): Map<string, number> {
   };
   const visitStatements = (statements: StatementAst[]): void => {
     for (const statement of statements) {
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "return_value") visitExpr(statement.expr);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "show") {
@@ -11498,6 +11519,7 @@ function statementsReadIdentifierBeforeWrite(statements: readonly StatementAst[]
 function statementReadsIdentifier(statement: StatementAst, name: string): boolean {
   switch (statement.kind) {
     case "pause":
+    case "preview":
     case "halt":
       return expressionReferencesIdentifier(statement.expr, name);
     case "assign":
@@ -11651,7 +11673,7 @@ function collectExpressionUseCounts(ast: ProgramAst): Map<string, { count: numbe
   };
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitCondition(statement.condition);
@@ -12136,7 +12158,7 @@ function programUsesPackedGridHelpers(ast: ProgramAst): boolean {
   const visitStatements = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (found) return;
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -12495,7 +12517,7 @@ function collectCoordListScratchVariables(ast: ProgramAst, variables: Set<string
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "assign") visitExpr(statement.expr);
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitCondition(statement.condition);
         visit(statement.thenBody);
@@ -12561,7 +12583,7 @@ function collectBitHasConditionStats(ast: ProgramAst): Map<string, BitHasConditi
   };
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         if (!membershipConditionHandledBeforeGenericBitHas(statement)) {
@@ -12636,7 +12658,7 @@ function collectSpatialHitScratchVariables(
   };
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -12685,7 +12707,7 @@ function programUsesBitMaskOrSpatialPrimitives(ast: ProgramAst): boolean {
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (found) return;
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "indexed_assign") {
         visitExpr(statement.target.index);
@@ -12745,7 +12767,7 @@ function collectSpatialCountScratchVariables(ast: ProgramAst, variables: Set<str
   };
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -12804,7 +12826,7 @@ function programNeedsSpatialLineProgressionHelper(ast: ProgramAst): boolean {
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (needed) return;
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -13508,9 +13530,10 @@ function estimateBranchOrderStatementCost(statement: StatementAst, ast: ProgramA
     case "coord_list_remove":
       return Number.POSITIVE_INFINITY;
     case "pause":
+    case "preview":
     case "halt":
     case "return_value":
-      return estimateExpressionCost(statement.expr) + 1;
+      return estimateExpressionCost(statement.expr) + (statement.kind === "preview" ? 0 : 1);
     case "input":
       return 2;
     case "show": {

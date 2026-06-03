@@ -21,7 +21,7 @@ export interface StackResidentFusionSite {
   temps: readonly StackResidentTempSegment[];
   consumer: Extract<
     StatementAst,
-    { kind: "assign" | "halt" | "pause" | "return_value" | "indexed_assign" }
+    { kind: "assign" | "halt" | "pause" | "preview" | "return_value" | "indexed_assign" }
   >;
   consumerIndex: number;
   /** True when any preserveAfter segment is non-empty. */
@@ -41,6 +41,7 @@ export function statementsReadIdentifier(statements: readonly StatementAst[], na
 export function statementReadsIdentifier(statement: StatementAst, name: string): boolean {
   switch (statement.kind) {
     case "pause":
+    case "preview":
     case "halt":
       return expressionReferencesIdentifier(statement.expr, name);
     case "assign":
@@ -125,6 +126,7 @@ export function statementPreservesStackResidency(
     case "show":
     case "halt":
     case "pause":
+    case "preview":
     case "input":
     case "return_value":
     case "call":
@@ -167,6 +169,7 @@ function isStackResidentConsumer(statement: StatementAst | undefined): statement
     statement.kind === "assign" ||
     statement.kind === "halt" ||
     statement.kind === "pause" ||
+    statement.kind === "preview" ||
     statement.kind === "return_value" ||
     statement.kind === "indexed_assign"
   );

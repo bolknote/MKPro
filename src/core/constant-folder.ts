@@ -49,6 +49,7 @@ class ConstantFolder {
     for (const statement of statements) {
       switch (statement.kind) {
         case "pause":
+        case "preview":
         case "halt":
         case "return_value":
           statement.expr = this.foldExpression(statement.expr);

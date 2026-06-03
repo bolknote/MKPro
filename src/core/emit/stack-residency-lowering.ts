@@ -174,7 +174,7 @@ function compileStackResidentExpression(
 
 function emitStackResidentConsumer(
   ctx: LoweringCtx,
-  consumer: Extract<StatementAst, { kind: "assign" | "halt" | "pause" | "return_value" }>,
+  consumer: Extract<StatementAst, { kind: "assign" | "halt" | "pause" | "preview" | "return_value" }>,
 ): void {
   switch (consumer.kind) {
     case "assign":
@@ -185,6 +185,8 @@ function emitStackResidentConsumer(
       return;
     case "pause":
       ctx.emitOp(0x50, "С/П", "pause", consumer.line);
+      return;
+    case "preview":
       return;
     case "return_value":
       ctx.emitOp(0x52, "В/О", "return value", consumer.line);
@@ -221,6 +223,7 @@ function statementRequiresStackRebuild(statement: StatementAst): boolean {
     case "show":
     case "halt":
     case "pause":
+    case "preview":
     case "input":
     case "return_value":
     case "call":

@@ -218,6 +218,7 @@ class Builder {
         return { entry: node, exits: [node] };
       }
       case "pause":
+      case "preview":
       case "halt":
       case "return_value": {
         // Treat stops as falling through: on the MK-61 С/П resumes at the next

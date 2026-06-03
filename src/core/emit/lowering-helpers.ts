@@ -287,7 +287,7 @@ export function programHasLineCountForMask(ast: ProgramAst, maskName: string): b
   const visitStatements = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (found) return;
-      if (statement.kind === "pause" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "assign") visitExpr(statement.expr);
       if (statement.kind === "if") {
         visitExpr(statement.condition.left);
@@ -3363,6 +3363,7 @@ export function statementEquals(left: StatementAst, right: StatementAst): boolea
   if (left.kind !== right.kind) return false;
   switch (left.kind) {
     case "pause":
+    case "preview":
       return expressionEquals(left.expr, (right as typeof left).expr) &&
         left.kind === (right as typeof left).kind;
     case "halt":
@@ -3548,6 +3549,8 @@ export function estimateSimpleStatementCost(statement: StatementAst, ast: Progra
   switch (statement.kind) {
     case "assign":
       return estimateExpressionCost(statement.expr) + 1;
+    case "preview":
+      return estimateExpressionCost(statement.expr);
     case "pause":
     case "halt":
       return estimateExpressionCost(statement.expr) + 1;

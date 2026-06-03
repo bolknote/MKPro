@@ -54,6 +54,25 @@ program Minimal {
     expect(result.steps.some((step) => step.hex === "50")).toBe(true);
   });
 
+  it("previews a value without emitting a calculator stop", () => {
+    const result = compileOk(`
+program Preview {
+  state {
+    warning_value: packed = 7
+    memory_value: packed = 3
+  }
+
+  loop {
+    preview(warning_value)
+    halt(memory_value)
+  }
+}
+`);
+
+    expect(result.steps.filter((step) => step.hex === "50")).toHaveLength(1);
+    expect(result.report.optimizations.some((item) => item.name === "running-display-preview")).toBe(true);
+  });
+
   it("lowers zero-minus expressions through unary sign change", () => {
     const result = compileOk(`
 program ZeroMinus {

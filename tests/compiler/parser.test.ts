@@ -95,6 +95,25 @@ program Demo {
     expect(loop.body.some((statement) => statement.kind === "if")).toBe(true);
   });
 
+  it("parses non-stopping display previews", () => {
+    const ast = parseProgram(`
+program PreviewScreen {
+  state {
+    score: counter 0..9 = 0
+  }
+
+  loop {
+    preview(score + 1)
+    halt(score)
+  }
+}
+`);
+    const loop = ast.entries[0]?.body[0];
+    expect(loop?.kind).toBe("loop");
+    if (loop?.kind !== "loop") throw new Error("expected loop");
+    expect(loop.body[0]).toMatchObject({ kind: "preview" });
+  });
+
   it("parses display text fragments as ordinary show items", () => {
     const ast = parseProgram(`
 program BeerScreen {

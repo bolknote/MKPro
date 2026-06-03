@@ -83,7 +83,7 @@ program GiantsCountry {
     // Events all share the same shape: remember a code, then convert
     // success into score or mobility and failure into strength loss.
     if tile {
-      show(warning_pattern)
+      preview(warning_pattern)
       show(tile)
       answer = read()
       if answer == tile {
