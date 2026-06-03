@@ -4043,6 +4043,32 @@ program SingleUseStackTemp {
     expect(result.steps.some((step) => step.comment === "set tmp")).toBe(false);
   });
 
+  it("does not treat a state field read after a branch as a dead stack temp", () => {
+    const result = compileOk(`
+program BranchStateStackTemp {
+  state {
+    blocked: packed = 1.0000002
+    pos: packed = 0
+    out: packed = 0
+  }
+
+  loop {
+    if blocked != 0 {
+      pos = blocked
+      out = frac(pos)
+    }
+    halt(pos)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.steps.some((step) => step.comment === "set pos")).toBe(true);
+    expect(result.report.optimizations.some((item) =>
+      item.name === "stack-current-x-scheduling" &&
+      item.detail.includes("single-use temp pos")
+    )).toBe(false);
+  });
+
   it("decrements a zero-reachable counter through the indirect pre-decrement, not F Lx", () => {
     // arrows is observed via halt(arrows) and must be able to reach 0. F Lx clamps
     // a positive counter at 1, so the correct compact form is the R0..R3 indirect

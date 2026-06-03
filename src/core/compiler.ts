@@ -6887,7 +6887,9 @@ export class EmitContext {
     if (expressionReferencesIdentifier(temp.expr, temp.target)) return 0;
 
     const compileConsumer = (expr: ExpressionAst, emitResult: () => void): boolean => {
-      if (countIdentifierReads(expr, temp.target) !== 1) return false;
+      const consumerReads = countIdentifierReads(expr, temp.target);
+      if (consumerReads !== 1) return false;
+      if (this.sharedExpressionHelper(expr) !== undefined) return false;
       if (!this.canCompileExpressionWithStackTemp(expr, temp.target)) return false;
       compileExpression(this, temp.expr);
       this.markCurrentX(temp.target);
@@ -6901,12 +6903,12 @@ export class EmitContext {
     };
 
     if (consumer.kind === "assign") {
-      if (!this.stackTempValueDeadAfterConsumer(temp.target, consumer.target, statements.slice(index + 2))) return 0;
+      if (!this.stackTempValueDeadAfterConsumer(temp.target, consumer.target, statements.slice(index + 2), 1)) return 0;
       return compileConsumer(consumer.expr, () => this.emitStore(consumer.target, `set ${consumer.target}`, consumer.line))
         ? 2
         : 0;
     }
-    if (!this.stackTempValueDeadAfterConsumer(temp.target, undefined, statements.slice(index + 2))) return 0;
+    if (!this.stackTempValueDeadAfterConsumer(temp.target, undefined, statements.slice(index + 2), 1)) return 0;
     if (consumer.kind === "halt" && consumer.literal === undefined) {
       return compileConsumer(consumer.expr, () => this.emitOp(0x50, "С/П", "halt", consumer.line)) ? 2 : 0;
     }
@@ -6974,8 +6976,19 @@ export class EmitContext {
     temp: string,
     overwrittenByConsumer: string | undefined,
     tail: readonly StatementAst[],
+    consumerReads: number,
   ): boolean {
-    return overwrittenByConsumer === temp || !statementsReadIdentifier(tail, temp);
+    if (overwrittenByConsumer === temp) return true;
+    if (statementsReadIdentifierBeforeWrite(tail, temp)) return false;
+    if (this.stackTempValueHasVisibleProgramRead(temp) && (this.readCounts.get(temp) ?? 0) !== consumerReads) {
+      return false;
+    }
+    return true;
+  }
+
+  private stackTempValueHasVisibleProgramRead(name: string): boolean {
+    if (name.startsWith(INTERNAL_NAME_PREFIX)) return false;
+    return (this.displayUseCounts.get(name) ?? 0) > 0 || statementsReadIdentifierAsVisibleValue(this.ast, name);
   }
 
   private canCompileExpressionWithStackTemp(expr: ExpressionAst, temp: string): boolean {
@@ -12130,6 +12143,44 @@ function statementsReadIdentifierBeforeWrite(statements: readonly StatementAst[]
     if (statementWritesIdentifier(statement, name)) return false;
   }
   return false;
+}
+
+function statementsReadIdentifierAsVisibleValue(ast: ProgramAst, name: string): boolean {
+  const visit = (statements: readonly StatementAst[]): boolean => {
+    for (const statement of statements) {
+      switch (statement.kind) {
+        case "pause":
+        case "preview":
+        case "halt":
+        case "return_value":
+          if (expressionReferencesIdentifier(statement.expr, name)) return true;
+          break;
+        case "show": {
+          const display = ast.displays.find((candidate) => candidate.name === statement.display);
+          if (display?.sources.includes(name)) return true;
+          break;
+        }
+        case "if":
+          if (visit(statement.thenBody) || (statement.elseBody !== undefined && visit(statement.elseBody))) return true;
+          break;
+        case "loop":
+        case "while":
+          if (visit(statement.body)) return true;
+          break;
+        case "dispatch":
+          if (
+            statement.cases.some((dispatchCase) => visit(dispatchCase.body)) ||
+            (statement.defaultBody !== undefined && visit(statement.defaultBody))
+          ) return true;
+          break;
+        default:
+          break;
+      }
+    }
+    return false;
+  };
+
+  return ast.entries.some((entry) => visit(entry.body)) || ast.procs.some((proc) => visit(proc.body));
 }
 
 function statementReadsIdentifier(statement: StatementAst, name: string): boolean {

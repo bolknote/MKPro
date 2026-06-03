@@ -490,6 +490,11 @@ Display rewrites are separated into strategy selection + body lowering.
   `!= 0` branch, avoiding a fresh zero literal or `Cx`.
 - `zero-reuse` — similarly reuses zero in multiple places when liveness is confirmed.
 - `stack-current-x-scheduling` — reorders current-X operations to avoid extra push/pop-like steps.
+  Single-use stack temps are kept only when the value is not read before a later
+  write on the remaining local path; visible state values (`show`, `halt`,
+  `pause`, `return`) keep their store if they are read elsewhere. When a shared
+  expression helper is already profitable, it wins over the local stack-temp
+  rewrite so repeated tails remain shareable.
 - `membership-collection-x2-restore` — for a packed membership test followed
   by setting the same assignable collection, including an indexed bank cell with
   a prepared indirect selector, uses X2 as the hidden temporary: the mask
