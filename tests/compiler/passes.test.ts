@@ -5,6 +5,7 @@ import { branchTargetXReuse } from "../../src/core/passes/branch-target-x-reuse.
 import { deadCodeAfterHalt } from "../../src/core/passes/dead-code-after-halt.ts";
 import { deadProcElimination } from "../../src/core/passes/dead-proc-elimination.ts";
 import { deadStoreElimination } from "../../src/core/passes/dead-store-elimination.ts";
+import { duplicateFailureTail } from "../../src/core/passes/duplicate-failure-tail.ts";
 import { flowXReuse } from "../../src/core/passes/flow-x-reuse.ts";
 import { indirectMemoryTable, stableIndirectFlow } from "../../src/core/passes/indirect-addressing.ts";
 import { jumpThread } from "../../src/core/passes/jump-thread.ts";
@@ -187,6 +188,10 @@ function procEnd(name: string): IrOp {
 
 function halt(): IrOp {
   return { kind: "stop", opcode: 0x50, semantic: "halt", meta: { mnemonic: "С/П" } };
+}
+
+function pause(): IrOp {
+  return { kind: "stop", opcode: 0x50, semantic: "pause", meta: { mnemonic: "С/П", comment: "pause" } };
 }
 
 function ret(): IrOp {
@@ -867,6 +872,27 @@ describe("ir passes on synthetic programs", () => {
 
     expect(result.applied).toBe(0);
     expect(result.ops).toEqual(program);
+  });
+
+  it("duplicate-failure-tail shares pause-only tails with matching terminal flow", () => {
+    const program: IrOp[] = [
+      label("first_pause"),
+      pause(),
+      label("first_continue"),
+      indirectJump("8"),
+      label("second_pause"),
+      pause(),
+      label("second_continue"),
+      indirectJump("8"),
+    ];
+    const result = duplicateFailureTail.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.optimizations[0]?.name).toBe("duplicate-failure-tail-merge");
+    expect(result.optimizations[0]?.detail).toContain("pause-only");
+    expect(result.ops.some((op) => op.kind === "label" && op.name === "first_pause")).toBe(false);
+    expect(result.ops.some((op) => op.kind === "label" && op.name === "first_continue")).toBe(false);
+    expect(machineCellCount(result.ops)).toBe(machineCellCount(program) - 2);
   });
 
   it("shared-straight-line-helper extracts repeated non-terminal bodies", () => {

@@ -14010,7 +14010,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["duplicate-failure-tail-merge"],
-    detail: "Coalesces structurally identical pause-0 failure tails into a single shared exit, removing the trampoline cells between them.",
+    detail: "Coalesces structurally identical failure tails into a single shared exit, including pause-0 tails and pause-only tails whose displayed value is already in X.",
   },
   {
     id: "return-suffix-gadget",

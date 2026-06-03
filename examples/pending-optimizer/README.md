@@ -36,7 +36,7 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
 | `cave-highlevel-baseline.mkpro` | 135 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
-| `cave-treasure.mkpro` | 121 | 105 | floor-indexed resource bank and source-shaped command decoder are in place; remaining blockers are command dispatch, wall breaking, cache reward flow, and loop prompt/input storage |
+| `cave-treasure.mkpro` | 119 | 105 | floor-indexed resource bank and source-shaped command decoder are in place; remaining blockers are command dispatch, wall breaking, cache reward flow, and loop prompt/input storage |
 | `giants-country.mkpro` | 104 | 105 | fits after `preview(...)` restored the source's non-stopping warning display; pending only for exact cave-picture layout audit |
 | `tic-tac-toe-4x4.mkpro` | 249 | 105 | source-shaped line update/score pass is in place; remaining packed 4x4 scan lowering |
 
@@ -68,6 +68,10 @@ Prototype notes:
   unconditional flow. This is intentionally generic: it can jump into a matching
   `...; БП` / `...; К БП r` / `...; В/О` suffix, but it refuses programs with
   absolute numeric flow targets.
+- Duplicate failure-tail merge also covers adjacent `С/П; terminal-flow` tails
+  where the displayed value is already in X. This keeps source-level `show(0)`
+  and "show the shortage" branches distinct while sharing the identical pause
+  and continuation cells.
 - Shared straight-line helper extraction covers the non-terminal sibling of that
   trick: repeated straight-line opcode bodies become one `ПП`/`В/О` helper when
   the call cost is lower than keeping every copy inline. It deliberately does

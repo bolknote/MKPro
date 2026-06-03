@@ -1132,7 +1132,8 @@ candidates:
   stack instead of assigning a scratch register;
 - indexed store/domain guards: an immediate terminal negative guard after
   `cells[i] = ...` can test the just-stored X value directly;
-- duplicate failure-tail merge: identical `show(0)` failure tails are shared;
+- duplicate failure-tail merge: identical `show(0)` tails and pause-only tails
+  with the value already in X are shared;
 - display stack reuse: packed display sources are reordered when the current
   `X` value is already one of the displayed values;
 - jump threading: `БП label` is removed when `label` is the immediately next
@@ -1302,8 +1303,9 @@ The pipeline currently contains:
 - **arithmetic-if-pass** — removes duplicated branch bodies after earlier
   simplifications prove both sides are byte-identical and the result is
   shorter.
-- **duplicate-failure-tail-merge** — merges duplicate `show(0)` failure
-  tails into a shared exit.
+- **duplicate-failure-tail-merge** — merges duplicate `show(0)` failure tails
+  and pause-only failure tails into a shared exit when the continuation is the
+  same.
 - **shared-call-tail** — coalesces repeated `ПП helper; БП continuation`
   pairs into one shared call tail when that is smaller.
 - **shared-terminal-tail** — coalesces identical straight-line suffixes that

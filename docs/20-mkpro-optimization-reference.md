@@ -78,7 +78,7 @@ Below are the public capability IDs from `report.optimizer.capabilities`.
 - `jump-to-next-threading` — removes intermediate jumps to the next label.
 - `dead-code-after-halt` — removes code unreachable after `HALT`.
 - `register-coalesce` — merges separate temporary cells when lifetime ranges do not overlap.
-- `duplicate-failure-tail-merge` — merges identical error/failure tail sequences.
+- `duplicate-failure-tail-merge` — merges identical error/failure tail sequences, including pause-only tails that display the incoming X value.
 - `shared-terminal-tail` — jumps into an existing identical straight-line suffix that already ends in unconditional terminal flow.
 - `shared-straight-line-helper` — extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the `ПП`/`В/О` cost is lower than duplicated inline code; a size-gated candidate extends this to bodies with direct `ПП` calls, and `multi-entry-straight-line-helper` can add internal entry labels for repeated suffixes of the same helper body.
 - `arithmetic-if-pass` — a dedicated pass collecting all `arithmetic-if` opportunities.
@@ -528,7 +528,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 22. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/`КНОП` redundancy optimization pass removes cells.
 23. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a display-aware `ВП`/X2 marker and reports `vp-fraction-restore` when one or more restores are removed.
 24. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
-25. `duplicate-failure-tail-merge` — removes duplicated `(label -> 0 -> pause)` failure tails by redirecting the first tail to the second.
+25. `duplicate-failure-tail-merge` — removes duplicated failure tails by redirecting the first tail to the second; this covers both `(label -> 0 -> pause)` and `(label -> pause -> same terminal flow)` forms.
 26. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.
 27. `dead-code-after-halt` — removes unreachable IR ops by CFG reachability from entry.
 28. `register-coalesce` — merges non-overlapping register live ranges and, when enabled, performs copy coalescing for safe `recall/store` aliases.

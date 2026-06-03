@@ -13,12 +13,107 @@ function isUnconditionalJump(op: IrOp): op is Extract<IrOp, { kind: "jump" }> {
   return op.kind === "jump";
 }
 
+function isTerminalFlow(op: IrOp): boolean {
+  return op.kind === "jump" || op.kind === "indirect-jump" || op.kind === "return";
+}
+
+function terminalFlowKey(op: IrOp): string | undefined {
+  if (op.kind === "jump") return `jump:${String(op.target)}:${op.opcode}`;
+  if (op.kind === "indirect-jump") return `indirect-jump:${op.register}:${op.opcode}`;
+  if (op.kind === "return") return `return:${op.opcode}`;
+  return undefined;
+}
+
+function canRemoveLabel(op: IrOp): op is Extract<IrOp, { kind: "label" }> {
+  return op.kind === "label" && op.procedureBoundary === undefined;
+}
+
 const run: IrPassFn = (ops) => {
   const rewrite = new Map<string, string>();
   const remove = new Set<number>();
   let applied = 0;
+  let pauseOnlyApplied = 0;
+
+  for (let i = 0; i + 7 < ops.length; i += 1) {
+    const firstLabel = ops[i];
+    const firstPause = ops[i + 1];
+    const firstFlowLabel = ops[i + 2];
+    const firstFlow = ops[i + 3];
+    const secondLabel = ops[i + 4];
+    const secondPause = ops[i + 5];
+    const secondFlowLabel = ops[i + 6];
+    const secondFlow = ops[i + 7];
+
+    if (
+      firstLabel !== undefined &&
+      canRemoveLabel(firstLabel) &&
+      firstPause !== undefined &&
+      isPauseLike(firstPause) &&
+      firstFlowLabel !== undefined &&
+      canRemoveLabel(firstFlowLabel) &&
+      firstFlow !== undefined &&
+      isTerminalFlow(firstFlow) &&
+      secondLabel !== undefined &&
+      canRemoveLabel(secondLabel) &&
+      secondPause !== undefined &&
+      isPauseLike(secondPause) &&
+      secondFlowLabel !== undefined &&
+      canRemoveLabel(secondFlowLabel) &&
+      secondFlow !== undefined &&
+      isTerminalFlow(secondFlow) &&
+      terminalFlowKey(firstFlow) === terminalFlowKey(secondFlow) &&
+      !hasRewriteBarrier(firstPause) &&
+      !hasRewriteBarrier(firstFlow) &&
+      !hasRewriteBarrier(secondPause) &&
+      !hasRewriteBarrier(secondFlow)
+    ) {
+      rewrite.set(firstLabel.name, secondLabel.name);
+      rewrite.set(firstFlowLabel.name, secondFlowLabel.name);
+      for (let index = i; index <= i + 3; index += 1) remove.add(index);
+      applied += 1;
+      pauseOnlyApplied += 1;
+      i += 3;
+    }
+  }
+
+  for (let i = 0; i + 5 < ops.length; i += 1) {
+    if (remove.has(i)) continue;
+    const firstLabel = ops[i];
+    const firstPause = ops[i + 1];
+    const firstFlow = ops[i + 2];
+    const secondLabel = ops[i + 3];
+    const secondPause = ops[i + 4];
+    const secondFlow = ops[i + 5];
+
+    if (
+      firstLabel !== undefined &&
+      canRemoveLabel(firstLabel) &&
+      firstPause !== undefined &&
+      isPauseLike(firstPause) &&
+      firstFlow !== undefined &&
+      isTerminalFlow(firstFlow) &&
+      secondLabel !== undefined &&
+      canRemoveLabel(secondLabel) &&
+      secondPause !== undefined &&
+      isPauseLike(secondPause) &&
+      secondFlow !== undefined &&
+      isTerminalFlow(secondFlow) &&
+      terminalFlowKey(firstFlow) === terminalFlowKey(secondFlow) &&
+      !hasRewriteBarrier(firstPause) &&
+      !hasRewriteBarrier(firstFlow) &&
+      !hasRewriteBarrier(secondPause) &&
+      !hasRewriteBarrier(secondFlow)
+    ) {
+      rewrite.set(firstLabel.name, secondLabel.name);
+      for (let index = i; index <= i + 2; index += 1) remove.add(index);
+      applied += 1;
+      pauseOnlyApplied += 1;
+      i += 2;
+    }
+  }
 
   for (let i = 0; i + 8 < ops.length; i += 1) {
+    if (remove.has(i)) continue;
     const firstLabel = ops[i];
     const firstZero = ops[i + 1];
     const firstPause = ops[i + 2];
@@ -92,7 +187,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "duplicate-failure-tail-merge",
-        detail: `Merged ${applied} duplicate pause-0 failure tail(s).`,
+        detail: `Merged ${applied} duplicate failure tail(s), including ${pauseOnlyApplied} pause-only tail(s).`,
       },
     ],
   };
