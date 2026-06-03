@@ -171,6 +171,7 @@ function isShareableBodyOp(op: IrOp): boolean {
     case "indirect-recall":
     case "call":
     case "indirect-call":
+    case "stop":
     case "plain":
       return true;
     case "label":
@@ -180,7 +181,6 @@ function isShareableBodyOp(op: IrOp): boolean {
     case "indirect-jump":
     case "indirect-cjump":
     case "return":
-    case "stop":
     case "orphan-address":
       return false;
   }
@@ -195,6 +195,8 @@ function opKey(op: IrOp): string {
     case "indirect-jump":
     case "indirect-call":
       return `${op.kind}:${op.register}`;
+    case "stop":
+      return `stop:${op.semantic}`;
     case "jump":
     case "call":
       return `${op.kind}:${targetKey(op.target)}`;
@@ -210,8 +212,6 @@ function opKey(op: IrOp): string {
       return `loop:${op.counter}:${targetKey(op.target)}`;
     case "indirect-cjump":
       return `indirect-cjump:${op.condition}:${op.register}`;
-    case "stop":
-      return `stop:${op.semantic}`;
     case "orphan-address":
       return `address:${targetKey(op.target)}`;
   }

@@ -23,6 +23,7 @@ const EXAMPLE_BASELINE: Record<string, number> = {
   "fox-hunt-100": 103,
   "fox-hunt-mk61": 65,
   "game-100-pig": 103,
+  "giants-country": 104,
   human: 23,
   "jack-pot": 99,
   labyrinth777: 105,
@@ -47,8 +48,7 @@ const EXAMPLE_COMPILE_ERRORS: Record<string, RegExp> = {};
 // baselines just like top-level examples.
 const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 135,
-  "cave-treasure": 119,
-  "giants-country": 104,
+  "cave-treasure": 118,
   "tic-tac-toe-4x4": 254,
 };
 

@@ -198,7 +198,7 @@ describe("repeated unary-call argument canonicalization behavioral equivalence (
 
 const PENDING_PROGRAMS: ReadonlyArray<{ file: string; options: Record<string, unknown> }> = [
   { file: "examples/pending-optimizer/cave-treasure.mkpro", options: { stackResidentTemps: true } },
-  { file: "examples/pending-optimizer/giants-country.mkpro", options: { stackResidentTemps: true } },
+  { file: "examples/giants-country.mkpro", options: { stackResidentTemps: true } },
   {
     file: "examples/pending-optimizer/tic-tac-toe-4x4.mkpro",
     options: {

@@ -55,6 +55,7 @@ Below are the public capability IDs from `report.optimizer.capabilities`.
 - `vp-fraction-restore` — restores VP quickly after arithmetic using a short path.
 - `hex-mantissa-arithmetic` — simplifies arithmetic on hexadecimal mantissas.
 - `fractional-indirect-addressing` — enables indirect memory/flow selectors that deliberately rely on MK-61 fractional-address behavior.
+- `indirect-selector-integer-part-reuse` — reuses the integer-part side effect of a proved fractional indirect-memory selector and removes a redundant `К [x]`.
 - `error-stop-idiom` — compacts the common `error + stop` path.
 - `kmax-zero-through` — optimizes `kmax` pattern by passing through zero and finishing immediately.
 - `kzn-double` — applies `К ЗН` as a one-cell equivalent in specific doubling/sign-digit cases when the shape is proven safe on the exact MK-61 arithmetic profile.
@@ -103,7 +104,7 @@ These transformations run on source constructs before machine lowering:
 - `constant-indexed-state-resolution` — if array/field index is known at compile time, substitutes the exact cell address directly.
 - `affine-indexed-selector-reuse` — if an affine dynamic index such as `physical - 3` already evaluates to the physical register number for a contiguous bank member, uses that variable as the MK-61 indirect selector instead of allocating and filling a separate selector.
 - `indirect-memory-alias-selector` — chooses the cheapest proved indexed-bank selector offset using the MK-61 two-digit indirect-memory register table, so values such as `17..19` or proved negative aliases can directly select bank registers and avoid a scratch selector or a larger arithmetic offset.
-- `fractional-indirect-addressing` — if `bank[int(selector)]` targets a physically aligned contiguous bank and `selector` is already in `R7..Re`, uses that register directly as the indirect-memory selector. This relies on MK-61 indirect memory addressing ignoring the fractional tail, so packed coordinates can select by their integer part without an explicit `К [x]`.
+- `fractional-indirect-addressing` — if `bank[int(selector)]` targets a physically aligned contiguous bank and `selector` is already in `R7..Re`, uses that register directly as the indirect-memory selector. This relies on MK-61 indirect memory addressing ignoring the fractional tail, so packed coordinates can select by their integer part without an explicit `К [x]`. When the lowering proves that exact `int(selector)` form, it marks the indirect op so later IR passes may also reuse the selector register's post-indirect integer-part side effect.
 - `indexed-selector-cache` — when repeated dynamic bank accesses share the same index expression, reuses the cached selector directly or derives a sibling field selector by applying only the contiguous offset delta.
 - `display-string-inline` — moves text templates directly into `show`, removing separate temporary definitions.
 - `display-string-guarded-show` — hoists guarded string value selection into the display path when safe.
@@ -347,6 +348,7 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `coord-list-scaled-read` — reads coordinates via scaled index, removing runtime decode work.
 - `coord-list-scaled-decimal-storage` — same as above but decimal form, using fewer cells.
 - `fractional-indirect-addressing` — allows indirect access through fractional address arithmetic when proofs are available, including direct `bank[int(selector)]` memory selectors.
+- `indirect-selector-integer-part-reuse` — after a proved `bank[int(selector)]` indirect-memory access through a stable `R7..Re` selector, tracks that the selector register now holds the truncated integer part and deletes a later redundant `П->X selector; К [x]` pair's `К [x]` cell. The pass requires the proof marker emitted by fractional indexed lowering; unmarked hex, negative, or otherwise opaque indirect selectors are left alone.
 - `r0-fractional-sentinel` — uses a fractional-state sentinel in R0 to steer tables and to replace proved direct flow to address 99 (`БП`, `ПП`, or `F x?0`, numeric or post-layout label-resolved) with one-cell `К БП/К ПП/К x?0 0` when the R0 mutation is dead.
 - `super-dark-dispatch` — enables FA..FF range routing for shorter jumps with strictly valid address neighborhoods.
 
@@ -525,7 +527,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     resulting sentinel write is dead. A final post-layout verifier can perform
     the same rewrite for label targets only after replacing the two-cell branch
     proves that the label will land exactly at hardware address `99`.
-20. `address-code-overlay` — a final post-layout verifier moves labels from a
+20. `indirect-selector-integer-part` — tracks the proof marker from
+    `fractional-indirect-addressing` and removes a redundant `К [x]` after the
+    same stable selector register is recalled as an already-truncated integer.
+21. `address-code-overlay` — a final post-layout verifier moves labels from a
     single-cell op immediately after `БП target` or a proved-terminal
     `ПП target` onto the branch address byte when removing that op proves the
     address byte will be the same opcode. The overlaid executable cell may be
@@ -533,15 +538,15 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     opcode itself takes an address, the following operand byte is kept as that
     command's operand. Fixed numeric/formal branch operands are rejected when
     shrinking would move their real target.
-21. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` when one or more cells are removed.
-22. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/`КНОП` redundancy optimization pass removes cells.
-23. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a display-aware `ВП`/X2 marker and reports `vp-fraction-restore` when one or more restores are removed.
-24. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
-25. `duplicate-failure-tail-merge` — removes duplicated failure tails by redirecting the first tail to the second; this covers both `(label -> 0 -> pause)` and `(label -> pause -> same terminal flow)` forms.
-26. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.
-27. `dead-code-after-halt` — removes unreachable IR ops by CFG reachability from entry.
-28. `register-coalesce` — merges non-overlapping register live ranges and, when enabled, performs copy coalescing for safe `recall/store` aliases.
-29. `arithmetic-if-pass` — merges two branch paths that lower to byte-identical pure linear blocks (same side effects and same single-pass behavior).
+22. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` when one or more cells are removed.
+23. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/`КНОП` redundancy optimization pass removes cells.
+24. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a display-aware `ВП`/X2 marker and reports `vp-fraction-restore` when one or more restores are removed.
+25. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
+26. `duplicate-failure-tail-merge` — removes duplicated failure tails by redirecting the first tail to the second; this covers both `(label -> 0 -> pause)` and `(label -> pause -> same terminal flow)` forms.
+27. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.
+28. `dead-code-after-halt` — removes unreachable IR ops by CFG reachability from entry.
+29. `register-coalesce` — merges non-overlapping register live ranges and, when enabled, performs copy coalescing for safe `recall/store` aliases.
+30. `arithmetic-if-pass` — merges two branch paths that lower to byte-identical pure linear blocks (same side effects and same single-pass behavior).
 
 A fixed-point loop repeats while transformations continue, up to internal iteration limits.
 

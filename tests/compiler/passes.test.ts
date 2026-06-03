@@ -7,6 +7,7 @@ import { deadProcElimination } from "../../src/core/passes/dead-proc-elimination
 import { deadStoreElimination } from "../../src/core/passes/dead-store-elimination.ts";
 import { duplicateFailureTail } from "../../src/core/passes/duplicate-failure-tail.ts";
 import { flowXReuse } from "../../src/core/passes/flow-x-reuse.ts";
+import { indirectSelectorIntegerPart } from "../../src/core/passes/indirect-selector-integer-part.ts";
 import { indirectMemoryTable, stableIndirectFlow } from "../../src/core/passes/indirect-addressing.ts";
 import { jumpThread } from "../../src/core/passes/jump-thread.ts";
 import { jumpToNextThreading } from "../../src/core/passes/jump-to-next.ts";
@@ -165,6 +166,15 @@ function indirectJump(register: RegisterName): IrOp {
     register,
     opcode: 0x80 + REGISTER_INDEX[register],
     meta: { mnemonic: `К БП ${register}` },
+  };
+}
+
+function markedFractionalIndirectRecall(register: RegisterName, source = "pos"): IrOp {
+  return {
+    kind: "indirect-recall",
+    register,
+    opcode: 0xd0 + REGISTER_INDEX[register],
+    meta: { mnemonic: `К П->X ${register}`, comment: `indexed recall cells; indirect-selector-integer-part=${source}` },
   };
 }
 
@@ -854,6 +864,30 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(result.ops)).toBe(machineCellCount(program) - 3);
   });
 
+  it("shared-terminal-tail jumps into matching stop tails before terminal flow", () => {
+    const program: IrOp[] = [
+      label("first"),
+      plain(0x00, "0"),
+      pause(),
+      indirectJump("8"),
+      label("second"),
+      plain(0x00, "0"),
+      pause(),
+      indirectJump("8"),
+    ];
+    const result = sharedTerminalTail.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.optimizations[0]?.name).toBe("shared-terminal-tail");
+    expect(result.ops).toContainEqual({ kind: "label", name: "__shared_terminal_tail_0" });
+    const second = result.ops.findIndex((op) => op.kind === "label" && op.name === "second");
+    expect(result.ops[second + 1]).toMatchObject({
+      kind: "jump",
+      target: "__shared_terminal_tail_0",
+    });
+    expect(machineCellCount(result.ops)).toBe(machineCellCount(program) - 1);
+  });
+
   it("shared-terminal-tail avoids programs with absolute numeric flow targets", () => {
     const program: IrOp[] = [
       label("first"),
@@ -869,6 +903,50 @@ describe("ir passes on synthetic programs", () => {
       halt(),
     ];
     const result = sharedTerminalTail.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("indirect-selector-integer-part removes a redundant int after a proved fractional selector mutation", () => {
+    const program: IrOp[] = [
+      markedFractionalIndirectRecall("d"),
+      plain(0x04, "4"),
+      recall("d"),
+      plain(0x34, "К [x]"),
+      plain(0x11, "-"),
+    ];
+    const result = indirectSelectorIntegerPart.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.optimizations[0]?.name).toBe("indirect-selector-integer-part-reuse");
+    expect(result.ops.map((op) => op.kind === "plain" ? op.opcode : -1)).not.toContain(0x34);
+    expect(machineCellCount(result.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("indirect-selector-integer-part requires an explicit selector proof marker", () => {
+    const program: IrOp[] = [
+      indirectRecall("d"),
+      plain(0x04, "4"),
+      recall("d"),
+      plain(0x34, "К [x]"),
+      plain(0x11, "-"),
+    ];
+    const result = indirectSelectorIntegerPart.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("indirect-selector-integer-part clears the integer proof after overwriting the selector register", () => {
+    const program: IrOp[] = [
+      markedFractionalIndirectRecall("d"),
+      plain(0x00, "0"),
+      store("d"),
+      recall("d"),
+      plain(0x34, "К [x]"),
+    ];
+    const result = indirectSelectorIntegerPart.run(program, ctx);
 
     expect(result.applied).toBe(0);
     expect(result.ops).toEqual(program);

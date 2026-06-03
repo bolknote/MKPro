@@ -5875,6 +5875,7 @@ export class EmitContext {
   // recalling it from a register, and reject expressions that re-reference it.
   private parkedYVariable: string | undefined;
   readonly bankSelectorCache = new Map<string, BankSelectorCacheEntry>();
+  private pendingIndexedSelectorIntegerPart: string | undefined;
   // Read-only program analysis is computed once and injected; the lowering code
   // reads these maps through getters so call sites stay unchanged.
   readonly analysis: ProgramAnalysis;
@@ -9340,10 +9341,11 @@ export class EmitContext {
     }
     const selector = this.ensureIndexedSelector(expr, sourceLine);
     if (selector === undefined) return;
+    const integerPart = this.consumePendingIndexedSelectorIntegerPart();
     this.emitOp(
       0xd0 + registerIndex(selector),
       `К П->X ${selector}`,
-      `indexed recall ${bankMemberKey(expr.base, expr.field)}`,
+      `indexed recall ${bankMemberKey(expr.base, expr.field)}${integerPart === undefined ? "" : `; indirect-selector-integer-part=${integerPart}`}`,
       sourceLine,
     );
     this.currentXVariable = undefined;
@@ -9369,10 +9371,11 @@ export class EmitContext {
     }
     const selector = this.ensureIndexedSelector(expr, sourceLine);
     if (selector === undefined) return;
+    const integerPart = this.consumePendingIndexedSelectorIntegerPart();
     this.emitOp(
       0xb0 + registerIndex(selector),
       `К X->П ${selector}`,
-      `indexed set ${bankMemberKey(expr.base, expr.field)}`,
+      `indexed set ${bankMemberKey(expr.base, expr.field)}${integerPart === undefined ? "" : `; indirect-selector-integer-part=${integerPart}`}`,
       sourceLine,
     );
     this.currentXVariable = undefined;
@@ -9398,6 +9401,7 @@ export class EmitContext {
     expr: Extract<ExpressionAst, { kind: "indexed" }>,
     sourceLine?: number,
   ): RegisterName | undefined {
+    this.pendingIndexedSelectorIntegerPart = undefined;
     const resolved = findStateBankMember(this.ast, expr);
     if (resolved === undefined) return undefined;
     const linearOffset = contiguousRegisterOffset(resolved.member, this.allocation.registers);
@@ -9418,6 +9422,7 @@ export class EmitContext {
       const indexRegister = this.allocation.registers[affineIndex.name];
       if (indexRegister !== undefined && registerIndex(indexRegister) >= 7) {
         if (affineIndex.integerPart === true) {
+          this.pendingIndexedSelectorIntegerPart = affineIndex.name;
           this.optimizations.push({
             name: "fractional-indirect-addressing",
             detail: `Used ${affineIndex.name}'s integer part directly as ${bankMemberKey(expr.base, expr.field)} selector at line ${sourceLine}.`,
@@ -9510,6 +9515,12 @@ export class EmitContext {
       });
     }
     return selector;
+  }
+
+  private consumePendingIndexedSelectorIntegerPart(): string | undefined {
+    const value = this.pendingIndexedSelectorIntegerPart;
+    this.pendingIndexedSelectorIntegerPart = undefined;
+    return value;
   }
 
   private cachedSiblingBankSelector(

@@ -4,17 +4,46 @@ The Elektronika MK-61 is a Soviet programmable scientific calculator released in
 
 ## User-Visible Architecture
 
-The calculator is an RPN machine. The visible value is the top of the operational stack:
+The calculator is an RPN machine, and its register-like state is easiest to read
+in groups. The official "memory register" count refers only to the 15
+addressable user registers `R0`..`Re`; stack registers and display-side state
+are separate parts of the programming model.
+
+### Operational Stack
 
 | Register | Purpose |
 | --- | --- |
-| `X` | Displayed value and main input register |
-| `Y` | Second operand for binary operations |
-| `Z` | Third stack level |
-| `T` | Fourth stack level |
-| `X1` / `BX` | Previous `X` value saved by many operations |
+| `X` | Top of stack, main input register, visible result in ordinary calculation |
+| `Y` | Second stack level and left operand for binary operations such as `-` and `/` |
+| `Z` | Third stack level for temporary operands |
+| `T` | Fourth stack level for deeper temporary operands |
 
-In addition to the stack, the user has 15 addressable memory registers: `R0`..`R9`, `Ra`, `Rb`, `Rc`, `Rd`, and `Re`. Programs can store and recall them directly or indirectly.
+Stack-lift commands move values upward through `X -> Y -> Z -> T`; most binary
+operations combine `Y` and `X`, put the result in `X`, and drop the lower stack.
+
+### Saved and Display-Side State
+
+| Register-like state | Purpose |
+| --- | --- |
+| `X1` / `BX` | Previous `X` value saved by many operations; used by stack/last-X style behavior |
+| `X2` | Hidden display-side value. In program mode some commands copy `X -> X2`, while digit entry, `.`, `ВП`, and `/-/` can restore `X2 -> X`. This makes `X2` useful as a one-value programming cache, but it is not addressable by `X->П R` / `П->X R` and is not counted among the 15 user memory registers. See [15-x2-display-register.md](./15-x2-display-register.md). |
+
+`X2` is therefore a real part of the programming model, but not a normal
+addressable memory register. It belongs with the display/input machinery rather
+than with `R0`..`Re`.
+
+### Addressable Memory Registers
+
+All addressable memory registers are general-purpose storage: a program decides
+what each one means. Their built-in differences matter mainly for indirect
+addressing and loop-style compact code:
+
+| Registers | Normal purpose | Special programming behavior |
+| --- | --- | --- |
+| `R0`, `R1`, `R2`, `R3` | General data registers; input, state, counters, temporary values | Indirect commands using these registers decrement the transformed selector before use; `F L0`..`F L3` also use them as loop counters |
+| `R4`, `R5`, `R6` | General data registers; input, state, counters, temporary values | Indirect commands using these registers increment the transformed selector before use |
+| `R7`, `R8`, `R9` | General data registers; often convenient for stable computed addresses | Indirect commands use the selector without the `R0`..`R6` counter side effect |
+| `Ra`, `Rb`, `Rc`, `Rd`, `Re` | General data registers; five extra hexadecimal-named storage cells beyond `R9` | Also stable indirect selector registers; there is no stock `Rf` register |
 
 Program memory contains 105 steps. Official addresses are `00`..`99` and `A0`..`A4`; the calculator also has undocumented alias and dark-address behavior described in [02-undocumented-tricks.md](./02-undocumented-tricks.md).
 

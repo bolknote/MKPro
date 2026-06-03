@@ -1250,6 +1250,10 @@ The pipeline currently contains:
   rewrites proved direct flow to hardware address `99` through fractional
   `R0`; label targets use a final post-layout proof so the fixed `99` address
   cannot be invalidated by later shrinking.
+- **indirect-selector-integer-part-reuse** — when indexed-bank lowering has
+  proved that a stable indirect selector is exactly `int(coord)`, the following
+  IR pass tracks the selector register's post-indirect integer-part side effect
+  and removes a later redundant `К [x]` after recalling that same selector.
 - **address-code-overlay** — final post-layout proof that can move a label from
   a single-cell op after `БП target` or a proved-terminal `ПП target` onto that
   branch's address byte when the byte is itself the same executable opcode, then

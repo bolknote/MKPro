@@ -69,6 +69,13 @@ Use:
 
 Registers are the normal way to pass inputs to a program and to keep intermediate values without wasting stack depth.
 
+The stack registers (`X`, `Y`, `Z`, `T`), saved previous-`X` state
+(`X1`/`BX`), and the display-side `X2` state are separate from these 15
+addressable memory registers. `X2` is still important in program mode because
+some commands synchronize `X -> X2` and number-entry commands can restore
+`X2 -> X`; see [00-hardware.md](./00-hardware.md#user-visible-architecture) and
+[15-x2-display-register.md](./15-x2-display-register.md).
+
 ## Entering and Running Programs
 
 Switch to program-entry mode with `F ПРГ`. On many keyboard diagrams, `ПРГ` is the shifted label on the `ВП` key. The display shows the current step address, starting from `00`.

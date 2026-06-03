@@ -17,6 +17,7 @@ import { deadStoreBeforeCommutative } from "./dead-store-before-commutative.ts";
 import { deadStoreElimination } from "./dead-store-elimination.ts";
 import { duplicateFailureTail } from "./duplicate-failure-tail.ts";
 import { flowXReuse } from "./flow-x-reuse.ts";
+import { indirectSelectorIntegerPart } from "./indirect-selector-integer-part.ts";
 import type { IrPass } from "./helpers.ts";
 import { indirectMemoryTable, stableIndirectFlow } from "./indirect-addressing.ts";
 import { jumpThread } from "./jump-thread.ts";
@@ -59,6 +60,7 @@ const PASS_PIPELINE: ReadonlyArray<IrPass> = [
   deadStoreElimination,
   lastXReuse,
   r0FractionalSentinel,
+  indirectSelectorIntegerPart,
   vpSplice,
   vpX2Peephole,
   constantFolding,
