@@ -555,7 +555,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -595,7 +594,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -635,7 +633,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -675,7 +672,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -715,7 +711,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -770,7 +765,6 @@ Unknown variable 'score'
 No register allocated for score
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -795,7 +789,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -835,7 +828,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -875,7 +867,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -915,7 +906,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -955,7 +945,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -996,7 +985,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -1032,9 +1020,9 @@ No register allocated for value
 Unknown variable 'score'
 No register allocated for score
 Unknown variable 'score'
-xParamValueFunction: steps=276 | 63 50 43 42 53 A9 43 62 53 A9 42 53 B9 6A 40 6B 60 37 35 5E 32 09 09 09 09 09 09 09 09 0B 50 8E 6B 60 38 4B 67 63 15 11 47 66 62 15 11 46 63 62 10 53 A9 65 60 15 11 45 63 62 11 53 A9 64 60 15 11 44 04 41 04 43 04 42 53 B9 6B 37 5E 91 53 CC 61 6C 11 5C 91 6C 41 63 48 62 49 58 72 5A 70 61 04 11 5E A1 50 68 43 69 42 53 B9 6B 38 4B 67 63 15 10 47 66 62 15 10 46 63 62 10 53 A9 65 60 15 10 45 63 62 11 53 A9 64 60 15 10 44 07 4D 04 11 9E DD 08 08 08 08 37 57 A3 08 0A 00 00 00 00 00 00 01 50 6D 01 11 4D 51 8E 34 04 13 35 04 12 40 0B 59 B7 60 04 10 40 60 52 63 15 00 0A 02 02 06 00 00 00 02 09 62 12 15 34 10 4A 52 09 08 67 63 15 13 35 00 0A 04 01 02 00 00 00 07 06 53 0F 6C 66 62 15 13 35 00 0A 04 01 02 00 00 00 07 06 53 0F 63 62 10 53 A9 6C 65 53 01 63 62 11 53 A9 6C 64 60 15 13 35 00 0A 04 01 02 00 00 00 07 06 11 22 10 4C 52
-xParamValueFunction+repeatedUnaryUpdateArgTemp: steps=254 | 63 50 43 42 53 A9 43 62 53 A9 42 53 B9 6A 40 6B 60 37 35 5E 32 09 09 09 09 09 09 09 09 0B 50 8E 6B 60 38 4B 67 63 15 11 47 66 62 15 11 46 63 62 10 53 A9 65 60 15 11 45 63 62 11 53 A9 64 60 15 11 44 04 41 04 43 04 42 53 B9 6B 37 5E 91 53 CC 61 6C 11 5C 91 6C 41 63 48 62 49 58 72 5A 70 61 04 11 5E A1 50 68 43 69 42 53 B9 6B 38 4B 67 63 15 10 47 66 62 15 10 46 63 62 10 53 A9 65 60 15 10 45 63 62 11 53 A9 64 60 15 10 44 07 4D 04 11 9E DD 08 08 08 08 37 57 A3 08 0A 00 00 00 00 00 00 01 50 6D 01 11 4D 51 8E 34 04 13 35 04 12 40 0B 59 B7 60 04 10 40 60 52 63 15 00 0A 02 02 06 00 00 00 02 09 62 12 15 34 10 4A 52 09 08 4C 67 63 53 E6 66 62 53 E6 63 62 10 53 A9 65 53 E5 63 62 11 53 A9 64 60 15 13 40 53 ED 4C 52 6C 60 35 00 0A 04 01 02 00 00 00 07 06 11 22 10 52
-xParamValueFunction+repeatedUnaryUpdateArgTemp+coalesceCopies: steps=254 | 63 50 43 42 53 A9 43 62 53 A9 42 53 B9 6A 40 6B 60 37 35 5E 32 09 09 09 09 09 09 09 09 0B 50 8E 6B 60 38 4B 67 63 15 11 47 66 62 15 11 46 63 62 10 53 A9 65 60 15 11 45 63 62 11 53 A9 64 60 15 11 44 04 41 04 43 04 42 53 B9 6B 37 5E 91 53 CC 61 6C 11 5C 91 6C 41 63 48 62 49 58 72 5A 70 61 04 11 5E A1 50 68 43 69 42 53 B9 6B 38 4B 67 63 15 10 47 66 62 15 10 46 63 62 10 53 A9 65 60 15 10 45 63 62 11 53 A9 64 60 15 10 44 07 4D 04 11 9E DD 08 08 08 08 37 57 A3 08 0A 00 00 00 00 00 00 01 50 6D 01 11 4D 51 8E 34 04 13 35 04 12 40 0B 59 B7 60 04 10 40 60 52 63 15 00 0A 02 02 06 00 00 00 02 09 62 12 15 34 10 4A 52 09 08 4C 67 63 53 E6 66 62 53 E6 63 62 10 53 A9 65 53 E5 63 62 11 53 A9 64 60 15 13 40 53 ED 4C 52 6C 60 35 00 0A 04 01 02 00 00 00 07 06 11 22 10 52
+xParamValueFunction: steps=272 | 63 50 43 42 53 A6 43 62 53 A6 42 53 B6 40 6B 37 35 EE 09 09 09 09 09 09 09 09 0B 50 8A 6B 60 38 4B 67 63 15 11 47 66 62 15 11 46 63 62 10 53 A6 65 60 15 11 45 63 62 11 53 A6 64 60 15 11 44 04 41 04 43 04 42 53 B6 6B 37 5E 88 53 C8 61 6C 11 5C 88 6C 41 63 48 62 49 58 69 5A 67 61 04 11 5E 98 50 68 43 69 42 53 B6 6B 38 4B 67 63 15 10 47 66 62 15 10 46 63 62 10 53 A6 65 60 15 10 45 63 62 11 53 A6 64 60 15 10 44 07 4D 04 11 9A DD 08 08 08 08 37 57 A0 08 0A 00 00 00 00 00 00 01 50 6D 01 11 4D 51 8B 34 04 13 35 04 12 40 0B 59 B4 60 04 10 40 60 52 63 15 00 0A 02 02 06 00 00 00 02 09 62 12 15 34 10 52 09 08 67 63 15 13 35 00 0A 04 01 02 00 00 00 07 06 53 0B 6C 66 62 15 13 35 00 0A 04 01 02 00 00 00 07 06 53 0B 63 62 10 53 A6 6C 65 53 FD 63 62 11 53 A6 6C 64 60 15 13 35 00 0A 04 01 02 00 00 00 07 06 11 22 10 4C 52
+xParamValueFunction+repeatedUnaryUpdateArgTemp: steps=250 | 63 50 43 42 53 A6 43 62 53 A6 42 53 B6 40 6B 37 35 EE 09 09 09 09 09 09 09 09 0B 50 8A 6B 60 38 4B 67 63 15 11 47 66 62 15 11 46 63 62 10 53 A6 65 60 15 11 45 63 62 11 53 A6 64 60 15 11 44 04 41 04 43 04 42 53 B6 6B 37 5E 88 53 C8 61 6C 11 5C 88 6C 41 63 48 62 49 58 69 5A 67 61 04 11 5E 98 50 68 43 69 42 53 B6 6B 38 4B 67 63 15 10 47 66 62 15 10 46 63 62 10 53 A6 65 60 15 10 45 63 62 11 53 A6 64 60 15 10 44 07 4D 04 11 9A DD 08 08 08 08 37 57 A0 08 0A 00 00 00 00 00 00 01 50 6D 01 11 4D 51 8B 34 04 13 35 04 12 40 0B 59 B4 60 04 10 40 60 52 63 15 00 0A 02 02 06 00 00 00 02 09 62 12 15 34 10 52 09 08 4C 67 63 53 E2 66 62 53 E2 63 62 10 53 A6 65 53 E1 63 62 11 53 A6 64 60 15 13 40 53 E9 4C 52 6C 60 35 00 0A 04 01 02 00 00 00 07 06 11 22 10 52
+xParamValueFunction+repeatedUnaryUpdateArgTemp+coalesceCopies: steps=250 | 63 50 43 42 53 A6 43 62 53 A6 42 53 B6 40 6B 37 35 EE 09 09 09 09 09 09 09 09 0B 50 8A 6B 60 38 4B 67 63 15 11 47 66 62 15 11 46 63 62 10 53 A6 65 60 15 11 45 63 62 11 53 A6 64 60 15 11 44 04 41 04 43 04 42 53 B6 6B 37 5E 88 53 C8 61 6C 11 5C 88 6C 41 63 48 62 49 58 69 5A 67 61 04 11 5E 98 50 68 43 69 42 53 B6 6B 38 4B 67 63 15 10 47 66 62 15 10 46 63 62 10 53 A6 65 60 15 10 45 63 62 11 53 A6 64 60 15 10 44 07 4D 04 11 9A DD 08 08 08 08 37 57 A0 08 0A 00 00 00 00 00 00 01 50 6D 01 11 4D 51 8B 34 04 13 35 04 12 40 0B 59 B4 60 04 10 40 60 52 63 15 00 0A 02 02 06 00 00 00 02 09 62 12 15 34 10 52 09 08 4C 67 63 53 E2 66 62 53 E2 63 62 10 53 A6 65 53 E1 63 62 11 53 A6 64 60 15 13 40 53 E9 4C 52 6C 60 35 00 0A 04 01 02 00 00 00 07 06 11 22 10 52
 shareRandomCell: throws Out of MK-61 registers while allocating 'best_x'.
 Out of MK-61 registers while allocating 'best_y'.
 Out of MK-61 registers while allocating 'mask'.
@@ -1043,7 +1031,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -1083,7 +1070,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -1123,7 +1109,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -1163,7 +1148,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -1203,7 +1187,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -1258,7 +1241,6 @@ Unknown variable 'score'
 No register allocated for score
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -1283,7 +1265,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -1323,7 +1304,6 @@ Out of MK-61 registers while allocating 'score'.
 Out of MK-61 registers while allocating 'value'.
 No register allocated for value
 No register allocated for value
-Unknown variable 'mask'
 Unknown variable 'occupied'
 Unknown variable 'occupied'
 No register allocated for occupied
@@ -7754,7 +7734,7 @@ Cell Roles:
 exports[`golden listing > selected output is stable for examples/pending-optimizer/tic-tac-toe-4x4.mkpro 1`] = `
 "## Listing
 Setup Block:
-  \`R3=0; R2=0; R8=0; R9=0; Rd=0; Rc=0; R1=4; Ra=0; Rb=0; Re=L2\`
+  \`R3=0; R2=0; R8=0; R9=0; Rd=0; Rc=0; R1=4; Ra=0; Rb=0; Ra=L2; Re=Е1\`
 
 # Setup Listing
  Step | Code | Command                 | Comment
@@ -7768,9 +7748,11 @@ Setup Block:
    06 |  4C  | X→П c                   | setup Rc
    07 |  4A  | X→П a                   | setup Ra
    08 |  4B  | X→П b                   | setup Rb
-   09 |  4E  | X→П e                   | setup Re
+   09 |  4A  | X→П a                   | setup Ra
    10 |   -  | 4                       |
    11 |  41  | X→П 1                   | setup R1
+   12 |   -  | 29                      |
+   13 |  4E  | X→П e                   | setup Re
 
 # Main Listing
  Step | Code        | Command                 | Comment
@@ -7780,262 +7762,258 @@ Setup Block:
    02 | 43          | X→П 3                   | set x
    03 | 42          | X→П 2                   | set y
    04 | 53          | ПП                      | call function normalize
-   05 | A9          | >A9                     | call function normalize
+   05 | A6          | >A6                     | call function normalize
    06 | 43          | X→П 3                   | set x
    07 | 62          | П→X 2                   | recall y
    08 | 53          | ПП                      | call function normalize
-   09 | A9          | >A9                     | call function normalize
+   09 | A6          | >A6                     | call function normalize
    10 | 42          | X→П 2                   | set y
    11 | 53          | ПП                      | proc call cell_mask_calc
-   12 | B9          | >B9                     | proc call cell_mask_calc
-   13 | 6A          | П→X a                   | recall mask
-   14 | 40          | X→П 0                   | cell bit mask scratch
-   15 | 6B          | П→X b                   | recall occupied
-   16 | 60          | П→X 0                   | reuse cell bit mask
-   17 | 37          | К ∧                     | membership test with reused mask
-   18 | 35          | К {x}                   | membership fraction
-   19 | 5E          | F x=0                   | false branch for !=
-   20 | 32          | 32                      | false branch for !=
-   21 | 09 ... 0B   | -99999999               | negative number
-   30 | 50          | С/П                     | pause
-   31 | 8E          | К БП e                  | if end; preloaded Re=B2 indirect-target=0 indirect flow
-   32 | 6B          | П→X b                   | recall occupied
-   33 | 60          | П→X 0                   | reuse cell bit mask
-   34 | 38          | К ∨                     | bit_set with reused mask
-   35 | 4B          | X→П b                   | set occupied
-   36 | 67          | П→X 7                   | recall weights_7
-   37 | 63          | П→X 3                   | recall x
-   38 | 15          | F 10ˣ                   | pow10()
-   39 | 11          | −                       | expr -
-   40 | 47          | X→П 7                   | set weights_7
-   41 | 66          | П→X 6                   | recall weights_6
-   42 | 62          | П→X 2                   | recall y
-   43 | 15          | F 10ˣ                   | pow10()
-   44 | 11          | −                       | expr -
-   45 | 46          | X→П 6                   | set weights_6
-   46 | 63          | П→X 3                   | recall x
-   47 | 62          | П→X 2                   | recall y
-   48 | 10          | +                       | expr +
-   49 | 53          | ПП                      | call function normalize
-   50 | A9          | >A9                     | call function normalize
-   51 | 65          | П→X 5                   | recall weights_5
-   52 | 60          | П→X 0                   | recall __mkpro_unary_arg_1
-   53 | 15          | F 10ˣ                   | pow10()
-   54 | 11          | −                       | expr -
-   55 | 45          | X→П 5                   | set weights_5
-   56 | 63          | П→X 3                   | recall x
-   57 | 62          | П→X 2                   | recall y
-   58 | 11          | −                       | expr -
-   59 | 53          | ПП                      | call function normalize
-   60 | A9          | >A9                     | call function normalize
-   61 | 64          | П→X 4                   | recall weights_4
-   62 | 60          | П→X 0                   | recall __mkpro_unary_arg_1
-   63 | 15          | F 10ˣ                   | pow10()
-   64 | 11          | −                       | expr -
-   65 | 44          | X→П 4                   | set weights_4
-   66 | 04          | 4                       |
-   67 | 41          | X→П 1                   | set best_score
-   68 | 04          | 4                       |
-   69 | 43          | X→П 3                   | set x
-   70 | 04          | 4                       |
-   71 | 42          | X→П 2                   | set y
-   72 | 53          | ПП                      | proc call cell_mask_calc
-   73 | B9          | >B9                     | proc call cell_mask_calc
-   74 | 6B          | П→X b                   | recall occupied
-   75 | 37          | К ∧                     | bit_and()
-   76 | 5E          | F x=0                   | false branch for ==
-   77 | 91          | 91                      | false branch for ==
-   78 | 53          | ПП                      | proc call score_cell
-   79 | CC          | >CC                     | proc call score_cell
-   80 | 61          | П→X 1                   | recall best_score
-   81 | 6C          | П→X c                   | recall score
-   82 | 11          | −                       | condition compare
-   83 | 5C          | F x<0                   | false branch for >
-   84 | 91          | 91                      | false branch for >
-   85 | 6C          | П→X c                   | recall score
-   86 | 41          | X→П 1                   | set best_score
-   87 | 63          | П→X 3                   | recall x
-   88 | 48          | X→П 8                   | set best_x
-   89 | 62          | П→X 2                   | recall y
-   90 | 49          | X→П 9                   | set best_y
-   91 | 58          | F L2                    | counted while y
-   92 | 72          | 72                      | counted while y
-   93 | 5A          | F L3                    | counted while x
-   94 | 70          | 70                      | counted while x
-   95 | 61          | П→X 1                   | recall best_score
-   96 | 04          | 4                       |
-   97 | 11          | −                       | condition compare
-   98 | 5E          | F x=0                   | false branch for ==
-   99 | A1          | A1                      | false branch for ==
-   A0 | 50          | С/П                     | halt
-   A1 | 68          | П→X 8                   | recall best_x
-   A2 | 43          | X→П 3                   | set x
-   A3 | 69          | П→X 9                   | recall best_y
-   A4 | 42          | X→П 2                   | set y
-  >69 | 53          | ПП                      | proc call cell_mask_calc
-  >6A | B9          | >B9                     | proc call cell_mask_calc
-  >6B | 6B          | П→X b                   | recall occupied
-  >6C | 38          | К ∨                     | bit_or()
-  >6D | 4B          | X→П b                   | set occupied
-  >6E | 67          | П→X 7                   | recall weights_7
-  >6F | 63          | П→X 3                   | recall x
-  >70 | 15          | F 10ˣ                   | pow10()
-  >71 | 10          | +                       | expr +
-  >72 | 47          | X→П 7                   | set weights_7
-  >73 | 66          | П→X 6                   | recall weights_6
-  >74 | 62          | П→X 2                   | recall y
-  >75 | 15          | F 10ˣ                   | pow10()
-  >76 | 10          | +                       | expr +
-  >77 | 46          | X→П 6                   | set weights_6
-  >78 | 63          | П→X 3                   | recall x
-  >79 | 62          | П→X 2                   | recall y
-  >7A | 10          | +                       | expr +
-  >7B | 53          | ПП                      | call function normalize
-  >7C | A9          | >A9                     | call function normalize
-  >7D | 65          | П→X 5                   | recall weights_5
-  >7E | 60          | П→X 0                   | recall __mkpro_unary_arg_1
-  >7F | 15          | F 10ˣ                   | pow10()
-  >80 | 10          | +                       | expr +
-  >81 | 45          | X→П 5                   | set weights_5
-  >82 | 63          | П→X 3                   | recall x
-  >83 | 62          | П→X 2                   | recall y
-  >84 | 11          | −                       | expr -
-  >85 | 53          | ПП                      | call function normalize
-  >86 | A9          | >A9                     | call function normalize
-  >87 | 64          | П→X 4                   | recall weights_4
-  >88 | 60          | П→X 0                   | recall __mkpro_unary_arg_1
-  >89 | 15          | F 10ˣ                   | pow10()
-  >8A | 10          | +                       | expr +
-  >8B | 44          | X→П 4                   | set weights_4
-  >8C | 07          | 7                       |
-  >8D | 4D          | X→П d                   | set bank
-  >8E | 04          | 4                       |
-  >8F | 11          | −                       | condition compare
-  >90 | 9E          | К x≥0 e                 | false branch for >=; preloaded Re=B2 indirect-target=0 indirect flow
-  >91 | DD          | К П→X d                 | indexed recall weights
-  >92 | 08 08 08 08 | 8888                    |
-  >96 | 37          | К ∧                     | bit_and()
-  >97 | 57          | F x≠0                   | false branch for !=
-  >98 | A3          | >A3                     | false branch for !=
-  >99 | 08 ... 01   | 8.0000001               |
-  >A2 | 50          | С/П                     | halt
-  >A3 | 6D          | П→X d                   | recall bank
-  >A4 | 01          | 1                       |
-  >A5 | 11          | −                       | expr -
-  >A6 | 4D          | X→П d                   | set bank
-  >A7 | 51          | БП                      | while loop back
-  >A8 | 8E          | >8E                     | while loop back
-  >A9 | 34          | К [x]                   | x-param value integer part
+   12 | B6          | >B6                     | proc call cell_mask_calc
+   13 | 40          | X→П 0                   | cell bit mask scratch
+   14 | 6B          | П→X b                   | recall occupied
+   15 | 37          | К ∧                     | membership test with reused mask
+   16 | 35          | К {x}                   | membership fraction
+   17 | EE          | К x=0 e                 | false branch for !=; preloaded Re=E1 indirect-target=29 shifted-forward indirect flow
+   18 | 09 ... 0B   | -99999999               | negative number
+   27 | 50          | С/П                     | pause
+   28 | 8A          | К БП a                  | if end; preloaded Ra=B2 indirect-target=0 indirect flow
+   29 | 6B          | П→X b                   | recall occupied
+   30 | 60          | П→X 0                   | reuse cell bit mask
+   31 | 38          | К ∨                     | bit_set with reused mask
+   32 | 4B          | X→П b                   | set occupied
+   33 | 67          | П→X 7                   | recall weights_7
+   34 | 63          | П→X 3                   | recall x
+   35 | 15          | F 10ˣ                   | pow10()
+   36 | 11          | −                       | expr -
+   37 | 47          | X→П 7                   | set weights_7
+   38 | 66          | П→X 6                   | recall weights_6
+   39 | 62          | П→X 2                   | recall y
+   40 | 15          | F 10ˣ                   | pow10()
+   41 | 11          | −                       | expr -
+   42 | 46          | X→П 6                   | set weights_6
+   43 | 63          | П→X 3                   | recall x
+   44 | 62          | П→X 2                   | recall y
+   45 | 10          | +                       | expr +
+   46 | 53          | ПП                      | call function normalize
+   47 | A6          | >A6                     | call function normalize
+   48 | 65          | П→X 5                   | recall weights_5
+   49 | 60          | П→X 0                   | recall __mkpro_unary_arg_1
+   50 | 15          | F 10ˣ                   | pow10()
+   51 | 11          | −                       | expr -
+   52 | 45          | X→П 5                   | set weights_5
+   53 | 63          | П→X 3                   | recall x
+   54 | 62          | П→X 2                   | recall y
+   55 | 11          | −                       | expr -
+   56 | 53          | ПП                      | call function normalize
+   57 | A6          | >A6                     | call function normalize
+   58 | 64          | П→X 4                   | recall weights_4
+   59 | 60          | П→X 0                   | recall __mkpro_unary_arg_1
+   60 | 15          | F 10ˣ                   | pow10()
+   61 | 11          | −                       | expr -
+   62 | 44          | X→П 4                   | set weights_4
+   63 | 04          | 4                       |
+   64 | 41          | X→П 1                   | set best_score
+   65 | 04          | 4                       |
+   66 | 43          | X→П 3                   | set x
+   67 | 04          | 4                       |
+   68 | 42          | X→П 2                   | set y
+   69 | 53          | ПП                      | proc call cell_mask_calc
+   70 | B6          | >B6                     | proc call cell_mask_calc
+   71 | 6B          | П→X b                   | recall occupied
+   72 | 37          | К ∧                     | bit_and()
+   73 | 5E          | F x=0                   | false branch for ==
+   74 | 88          | 88                      | false branch for ==
+   75 | 53          | ПП                      | proc call score_cell
+   76 | C8          | >C8                     | proc call score_cell
+   77 | 61          | П→X 1                   | recall best_score
+   78 | 6C          | П→X c                   | recall score
+   79 | 11          | −                       | condition compare
+   80 | 5C          | F x<0                   | false branch for >
+   81 | 88          | 88                      | false branch for >
+   82 | 6C          | П→X c                   | recall score
+   83 | 41          | X→П 1                   | set best_score
+   84 | 63          | П→X 3                   | recall x
+   85 | 48          | X→П 8                   | set best_x
+   86 | 62          | П→X 2                   | recall y
+   87 | 49          | X→П 9                   | set best_y
+   88 | 58          | F L2                    | counted while y
+   89 | 69          | 69                      | counted while y
+   90 | 5A          | F L3                    | counted while x
+   91 | 67          | 67                      | counted while x
+   92 | 61          | П→X 1                   | recall best_score
+   93 | 04          | 4                       |
+   94 | 11          | −                       | condition compare
+   95 | 5E          | F x=0                   | false branch for ==
+   96 | 98          | 98                      | false branch for ==
+   97 | 50          | С/П                     | halt
+   98 | 68          | П→X 8                   | recall best_x
+   99 | 43          | X→П 3                   | set x
+   A0 | 69          | П→X 9                   | recall best_y
+   A1 | 42          | X→П 2                   | set y
+   A2 | 53          | ПП                      | proc call cell_mask_calc
+   A3 | B6          | >B6                     | proc call cell_mask_calc
+   A4 | 6B          | П→X b                   | recall occupied
+  >69 | 38          | К ∨                     | bit_or()
+  >6A | 4B          | X→П b                   | set occupied
+  >6B | 67          | П→X 7                   | recall weights_7
+  >6C | 63          | П→X 3                   | recall x
+  >6D | 15          | F 10ˣ                   | pow10()
+  >6E | 10          | +                       | expr +
+  >6F | 47          | X→П 7                   | set weights_7
+  >70 | 66          | П→X 6                   | recall weights_6
+  >71 | 62          | П→X 2                   | recall y
+  >72 | 15          | F 10ˣ                   | pow10()
+  >73 | 10          | +                       | expr +
+  >74 | 46          | X→П 6                   | set weights_6
+  >75 | 63          | П→X 3                   | recall x
+  >76 | 62          | П→X 2                   | recall y
+  >77 | 10          | +                       | expr +
+  >78 | 53          | ПП                      | call function normalize
+  >79 | A6          | >A6                     | call function normalize
+  >7A | 65          | П→X 5                   | recall weights_5
+  >7B | 60          | П→X 0                   | recall __mkpro_unary_arg_1
+  >7C | 15          | F 10ˣ                   | pow10()
+  >7D | 10          | +                       | expr +
+  >7E | 45          | X→П 5                   | set weights_5
+  >7F | 63          | П→X 3                   | recall x
+  >80 | 62          | П→X 2                   | recall y
+  >81 | 11          | −                       | expr -
+  >82 | 53          | ПП                      | call function normalize
+  >83 | A6          | >A6                     | call function normalize
+  >84 | 64          | П→X 4                   | recall weights_4
+  >85 | 60          | П→X 0                   | recall __mkpro_unary_arg_1
+  >86 | 15          | F 10ˣ                   | pow10()
+  >87 | 10          | +                       | expr +
+  >88 | 44          | X→П 4                   | set weights_4
+  >89 | 07          | 7                       |
+  >8A | 4D          | X→П d                   | set bank
+  >8B | 04          | 4                       |
+  >8C | 11          | −                       | condition compare
+  >8D | 9A          | К x≥0 a                 | false branch for >=; preloaded Ra=B2 indirect-target=0 indirect flow
+  >8E | DD          | К П→X d                 | indexed recall weights
+  >8F | 08 08 08 08 | 8888                    |
+  >93 | 37          | К ∧                     | bit_and()
+  >94 | 57          | F x≠0                   | false branch for !=
+  >95 | A0          | >A0                     | false branch for !=
+  >96 | 08 ... 01   | 8.0000001               |
+  >9F | 50          | С/П                     | halt
+  >A0 | 6D          | П→X d                   | recall bank
+  >A1 | 01          | 1                       |
+  >A2 | 11          | −                       | expr -
+  >A3 | 4D          | X→П d                   | set bank
+  >A4 | 51          | БП                      | while loop back
+  >A5 | 8B          | >8B                     | while loop back
+  >A6 | 34          | К [x]                   | x-param value integer part
+  >A7 | 04          | 4                       |
+  >A8 | 13          | ÷                       | x-param value modulo quotient
+  >A9 | 35          | К {x}                   | x-param value modulo fraction
   >AA | 04          | 4                       |
-  >AB | 13          | ÷                       | x-param value modulo quotient
-  >AC | 35          | К {x}                   | x-param value modulo fraction
-  >AD | 04          | 4                       |
-  >AE | 12          | ×                       | x-param value modulo scale
-  >AF | 40          | X→П 0                   | set __mkpro_unary_arg_1
-  >B0 | 0B          | /-/                     | negate __mkpro_unary_arg_1 for zero test
-  >B1 | 59          | F x≥0                   | false branch for <=
-  >B2 | B7          | >B7                     | false branch for <=
-  >B3 | 60          | П→X 0                   | recall __mkpro_unary_arg_1
-  >B4 | 04          | 4                       |
-  >B5 | 10          | +                       | expr +
-  >B6 | 40          | X→П 0                   | set __mkpro_unary_arg_1
-  >B7 | 60          | П→X 0                   | recall __mkpro_unary_arg_1
-  >B8 | 52          | В/О                     | return value
-  >B9 | 63          | П→X 3                   | recall x
-  >BA | 15          | F 10ˣ                   | pow10()
-  >BB | 00 ... 09   | 0.22600029              |
-  >C5 | 62          | П→X 2                   | recall y
-  >C6 | 12          | ×                       | expr *
-  >C7 | 15          | F 10ˣ                   | pow10()
-  >C8 | 34          | К [x]                   | int()
-  >C9 | 10          | +                       | expr +
-  >CA | 4A          | X→П a                   | set mask
-  >CB | 52          | В/О                     | implicit return from proc
-  >CC | 09 08       | 98                      |
-  >CE | 4C          | X→П c                   | set score
-  >CF | 67          | П→X 7                   | recall weights_7
-  >D0 | 63          | П→X 3                   | recall x
+  >AB | 12          | ×                       | x-param value modulo scale
+  >AC | 40          | X→П 0                   | set __mkpro_unary_arg_1
+  >AD | 0B          | /-/                     | negate __mkpro_unary_arg_1 for zero test
+  >AE | 59          | F x≥0                   | false branch for <=
+  >AF | B4          | >B4                     | false branch for <=
+  >B0 | 60          | П→X 0                   | recall __mkpro_unary_arg_1
+  >B1 | 04          | 4                       |
+  >B2 | 10          | +                       | expr +
+  >B3 | 40          | X→П 0                   | set __mkpro_unary_arg_1
+  >B4 | 60          | П→X 0                   | recall __mkpro_unary_arg_1
+  >B5 | 52          | В/О                     | return value
+  >B6 | 63          | П→X 3                   | recall x
+  >B7 | 15          | F 10ˣ                   | pow10()
+  >B8 | 00 ... 09   | 0.22600029              |
+  >C2 | 62          | П→X 2                   | recall y
+  >C3 | 12          | ×                       | expr *
+  >C4 | 15          | F 10ˣ                   | pow10()
+  >C5 | 34          | К [x]                   | int()
+  >C6 | 10          | +                       | expr +
+  >C7 | 52          | В/О                     | implicit return from proc
+  >C8 | 09 08       | 98                      |
+  >CA | 4C          | X→П c                   | set score
+  >CB | 67          | П→X 7                   | recall weights_7
+  >CC | 63          | П→X 3                   | recall x
+  >CD | 53          | ПП                      | proc call return suffix gadget
+  >CE | E2          | >E2                     | return suffix gadget target
+  >CF | 66          | П→X 6                   | recall weights_6
+  >D0 | 62          | П→X 2                   | recall y
   >D1 | 53          | ПП                      | proc call return suffix gadget
-  >D2 | E6          | >E6                     | return suffix gadget target
-  >D3 | 66          | П→X 6                   | recall weights_6
+  >D2 | E2          | >E2                     | return suffix gadget target
+  >D3 | 63          | П→X 3                   | recall x
   >D4 | 62          | П→X 2                   | recall y
-  >D5 | 53          | ПП                      | proc call return suffix gadget
-  >D6 | E6          | >E6                     | return suffix gadget target
-  >D7 | 63          | П→X 3                   | recall x
-  >D8 | 62          | П→X 2                   | recall y
-  >D9 | 10          | +                       | expr +
-  >DA | 53          | ПП                      | call function normalize
-  >DB | A9          | >A9                     | call function normalize
-  >DC | 65          | П→X 5                   | recall weights_5
-  >DD | 53          | ПП                      | proc call return suffix gadget
-  >DE | E5          | >E5                     | return suffix gadget target
-  >DF | 63          | П→X 3                   | recall x
-  >E0 | 62          | П→X 2                   | recall y
-  >E1 | 11          | −                       | expr -
-  >E2 | 53          | ПП                      | call function normalize
-  >E3 | A9          | >A9                     | call function normalize
-  >E4 | 64          | П→X 4                   | recall weights_4
-  >E5 | 60          | П→X 0                   | recall __mkpro_unary_arg_1
-  >E6 | 15          | F 10ˣ                   | pow10()
-  >E7 | 13          | ÷                       | expr /
-  >E8 | 40          | X→П 0                   | set __mkpro_unary_arg_1
-  >E9 | 53          | ПП                      | expr score + sqr(frac(__mkpro_unary_arg_1) - 0.41200076)
-  >EA | ED          | >ED                     | expr score + sqr(frac(__mkpro_unary_arg_1) - 0.41200076)
-  >EB | 4C          | X→П c                   | set score
-  >EC | 52          | В/О                     | implicit return from proc
-  >ED | 6C          | П→X c                   | recall score
-  >EE | 60          | П→X 0                   | recall __mkpro_unary_arg_1
-  >EF | 35          | К {x}                   | frac()
-  >F0 | 00 ... 06   | 0.41200076              |
-  >FA | 11          | −                       | expr -
-  >FB | 22          | F x²                    | sqr()
-  >FC | 10          | +                       | expr +
-  >FD | 52          | В/О                     | expression helper return
+  >D5 | 10          | +                       | expr +
+  >D6 | 53          | ПП                      | call function normalize
+  >D7 | A6          | >A6                     | call function normalize
+  >D8 | 65          | П→X 5                   | recall weights_5
+  >D9 | 53          | ПП                      | proc call return suffix gadget
+  >DA | E1          | >E1                     | return suffix gadget target
+  >DB | 63          | П→X 3                   | recall x
+  >DC | 62          | П→X 2                   | recall y
+  >DD | 11          | −                       | expr -
+  >DE | 53          | ПП                      | call function normalize
+  >DF | A6          | >A6                     | call function normalize
+  >E0 | 64          | П→X 4                   | recall weights_4
+  >E1 | 60          | П→X 0                   | recall __mkpro_unary_arg_1
+  >E2 | 15          | F 10ˣ                   | pow10()
+  >E3 | 13          | ÷                       | expr /
+  >E4 | 40          | X→П 0                   | set __mkpro_unary_arg_1
+  >E5 | 53          | ПП                      | expr score + sqr(frac(__mkpro_unary_arg_1) - 0.41200076)
+  >E6 | E9          | >E9                     | expr score + sqr(frac(__mkpro_unary_arg_1) - 0.41200076)
+  >E7 | 4C          | X→П c                   | set score
+  >E8 | 52          | В/О                     | implicit return from proc
+  >E9 | 6C          | П→X c                   | recall score
+  >EA | 60          | П→X 0                   | recall __mkpro_unary_arg_1
+  >EB | 35          | К {x}                   | frac()
+  >EC | 00 ... 06   | 0.41200076              |
+  >F6 | 11          | −                       | expr -
+  >F7 | 22          | F x²                    | sqr()
+  >F8 | 10          | +                       | expr +
+  >F9 | 52          | В/О                     | expression helper return
 
 ## Hex
-00: 63 50 43 42 53 A9 43 62
-08: 53 A9 42 53 B9 6A 40 6B
-16: 60 37 35 5E 32 09 09 09
-24: 09 09 09 09 09 0B 50 8E
-32: 6B 60 38 4B 67 63 15 11
-40: 47 66 62 15 11 46 63 62
-48: 10 53 A9 65 60 15 11 45
-56: 63 62 11 53 A9 64 60 15
-64: 11 44 04 41 04 43 04 42
-72: 53 B9 6B 37 5E 91 53 CC
-80: 61 6C 11 5C 91 6C 41 63
-88: 48 62 49 58 72 5A 70 61
-96: 04 11 5E A1 50 68 43 69
-A4: 42 53 B9 6B 38 4B 67 63
->70: 15 10 47 66 62 15 10 46
->78: 63 62 10 53 A9 65 60 15
->80: 10 45 63 62 11 53 A9 64
->88: 60 15 10 44 07 4D 04 11
->90: 9E DD 08 08 08 08 37 57
->98: A3 08 0A 00 00 00 00 00
->A0: 00 01 50 6D 01 11 4D 51
->A8: 8E 34 04 13 35 04 12 40
->B0: 0B 59 B7 60 04 10 40 60
->B8: 52 63 15 00 0A 02 02 06
->C0: 00 00 00 02 09 62 12 15
->C8: 34 10 4A 52 09 08 4C 67
->D0: 63 53 E6 66 62 53 E6 63
->D8: 62 10 53 A9 65 53 E5 63
->E0: 62 11 53 A9 64 60 15 13
->E8: 40 53 ED 4C 52 6C 60 35
->F0: 00 0A 04 01 02 00 00 00
->F8: 07 06 11 22 10 52
+00: 63 50 43 42 53 A6 43 62
+08: 53 A6 42 53 B6 40 6B 37
+16: 35 EE 09 09 09 09 09 09
+24: 09 09 0B 50 8A 6B 60 38
+32: 4B 67 63 15 11 47 66 62
+40: 15 11 46 63 62 10 53 A6
+48: 65 60 15 11 45 63 62 11
+56: 53 A6 64 60 15 11 44 04
+64: 41 04 43 04 42 53 B6 6B
+72: 37 5E 88 53 C8 61 6C 11
+80: 5C 88 6C 41 63 48 62 49
+88: 58 69 5A 67 61 04 11 5E
+96: 98 50 68 43 69 42 53 B6
+A4: 6B 38 4B 67 63 15 10 47
+>70: 66 62 15 10 46 63 62 10
+>78: 53 A6 65 60 15 10 45 63
+>80: 62 11 53 A6 64 60 15 10
+>88: 44 07 4D 04 11 9A DD 08
+>90: 08 08 08 37 57 A0 08 0A
+>98: 00 00 00 00 00 00 01 50
+>A0: 6D 01 11 4D 51 8B 34 04
+>A8: 13 35 04 12 40 0B 59 B4
+>B0: 60 04 10 40 60 52 63 15
+>B8: 00 0A 02 02 06 00 00 00
+>C0: 02 09 62 12 15 34 10 52
+>C8: 09 08 4C 67 63 53 E2 66
+>D0: 62 53 E2 63 62 10 53 A6
+>D8: 65 53 E1 63 62 11 53 A6
+>E0: 64 60 15 13 40 53 E9 4C
+>E8: 52 6C 60 35 00 0A 04 01
+>F0: 02 00 00 00 07 06 11 22
+>F8: 10 52
 
 ## Explain
 MK-Pro compile report
-Steps: 254/999999
+Steps: 250/999999
 Delivery: hex
 Optimizer: exact maximum
-Reference: anvarov_tic_tac_toe_4x4; span=105, entries=105, gaps=none, compiled=254, delta=149, parity=larger
+Reference: anvarov_tic_tac_toe_4x4; span=105, entries=105, gaps=none, compiled=250, delta=145, parity=larger
 Machine: mk61
-Optimizer rules: automatic=yes; active=14, considered=0, candidates=44, planned=0
-Budget: official=254, extra=0, physical=254
-Intent IR: lowered=yes, v2=yes; intent=158, effects=254, cells=254
+Optimizer rules: automatic=yes; active=15, considered=0, candidates=43, planned=0
+Budget: official=250, extra=0, physical=250
+Intent IR: lowered=yes, v2=yes; intent=158, effects=250, cells=250
 
 Preloads:
   x -> R3: 0 (outside program cells)
@@ -8047,10 +8025,11 @@ Preloads:
   best_score -> R1: 4 (outside program cells)
   mask -> Ra: 0 (outside program cells)
   occupied -> Rb: 0 (outside program cells)
-  Re: B2 (outside program cells)
+  Ra: B2 (outside program cells)
+  Re: E1 (outside program cells)
 
 Setup Block:
-  \`R3=0; R2=0; R8=0; R9=0; Rd=0; Rc=0; R1=4; Ra=0; Rb=0; Re=L2\`
+  \`R3=0; R2=0; R8=0; R9=0; Rd=0; Rc=0; R1=4; Ra=0; Rb=0; Ra=L2; Re=Е1\`
 
 Registers:
   __mkpro_unary_arg_1: R0
@@ -8071,23 +8050,23 @@ Registers:
 Labels:
    main: 00
   __loop_0: 00
-  __if_false_1: 32
-  __counted_while_3: 70
-  __counted_while_4: 72
-  __if_false_7: 91
-  __if_false_5: 91
-  __if_false_9: A1
-  __while_10: >8E
-  __if_false_12: >A3
-  __while_end_11: >A9
-  __if_end_2: >A9
-  normalize: >A9
-  __if_false_13: >B7
-  cell_mask_calc: >B9
-  score_cell: >CC
-  __return_suffix_gadget_0: >E5
-  __return_suffix_gadget_1: >E6
-  __expr_0: >ED
+  __if_false_1: 29
+  __counted_while_3: 67
+  __counted_while_4: 69
+  __if_false_7: 88
+  __if_false_5: 88
+  __if_false_9: 98
+  __while_10: >8B
+  __if_false_12: >A0
+  __while_end_11: >A6
+  __if_end_2: >A6
+  normalize: >A6
+  __if_false_13: >B4
+  cell_mask_calc: >B6
+  score_cell: >C8
+  __return_suffix_gadget_0: >E1
+  __return_suffix_gadget_1: >E2
+  __expr_0: >E9
 
 Optimizations:
   - constant-indexed-state-resolution: Resolved 20 constant indexed state accesses before pattern matching.
@@ -8108,6 +8087,8 @@ Optimizations:
   - x-param-value-function-call: Passed value to normalize through X.
   - proc-call-lowering: Compiled call to rule cell_mask_calc as ПП/В/О subroutine.
   - proc-return-x-reuse: Tracked mask in X after returning from rule cell_mask_calc.
+  - membership-mask-current-x-scratch: Stored mask directly from X as a reusable membership mask scratch at line 36.
+  - membership-mask-stack-test-reuse: Kept __bit_mask_36 on the stack for a membership test at line 36.
   - x-param-value-function-call: Passed value to normalize through X.
   - x-param-value-scratch-store-elision: Reused normalize()'s internal __mkpro_unary_arg_1 store for assignment at line 67.
   - x-param-value-function-call: Passed value to normalize through X.
@@ -8149,10 +8130,11 @@ Optimizations:
   - return-suffix-gadget: Shared 1 return/tail-call gadget (0 jump, 1 call; 5 cells saved). (+Shared 2 return/tail-call gadgets (0 jump, 2 call; 8 cells saved).)
   - jump-thread: Threaded 2 jump(s) through trampoline labels to the final target.
   - flow-x-reuse: Dropped 2 recalls whose register value already reaches the point in X on every CFG predecessor.
+  - dead-store-elimination: Removed 1 store(s) to register(s) never read before the next assignment.
   - dead-code-after-halt: Removed 1 unreachable op(s) from the entry CFG.
   - register-coalesce: Coalesced 1 non-overlapping register live range(s).
-  - preloaded-indirect-flow: Activated post-layout: replaced 2 direct branch/call(s) with proven preloaded indirect flow.
-  - dark-entry-layout: Pointed 1 branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window).
+  - preloaded-indirect-flow: Activated post-layout: replaced 3 direct branch/call(s) with proven preloaded indirect flow.
+  - dark-entry-layout: Pointed 2 branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window).
   - x-param-value-function-with-unary-arg-temp: Combined X-parameter value functions with repeated unary-call argument canonicalization (primary lowering failed: Out of MK-61 registers while allocating 'best_x'.).
 
 Candidates:
@@ -8197,17 +8179,17 @@ Rejected Candidates:
 
 Cell Roles:
   00: 63 exec, display-byte - display byte role allowed
-  05: A9 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  09: A9 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  12: B9 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  20: 32 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  50: A9 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  60: A9 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  73: B9 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  77: 91 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  79: CC address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  84: 91 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  92: 72 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
+  05: A6 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  09: A6 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  12: B6 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  47: A6 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  57: A6 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  70: B6 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  74: 88 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  76: C8 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  81: 88 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  89: 69 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  91: 67 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
 `;
 
 exports[`golden listing > selected output is stable for examples/raja-yoga.mkpro 1`] = `

@@ -41,7 +41,7 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | --- | ---: | ---: | --- |
 | `cave-highlevel-baseline.mkpro` | 134 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
 | `cave-treasure.mkpro` | 118 | 105 | floor-indexed resource bank and source-shaped command decoder are in place; remaining blockers are command dispatch, wall breaking, cache reward flow, and loop prompt/input storage |
-| `tic-tac-toe-4x4.mkpro` | 254 | 105 | source-shaped line update/score pass is in place; remaining packed 4x4 scan lowering |
+| `tic-tac-toe-4x4.mkpro` | 250 | 105 | source-shaped line update/score pass is in place; remaining packed 4x4 scan lowering |
 
 Prototype notes:
 
@@ -52,6 +52,14 @@ Prototype notes:
   `x`, `y`, `x+y`, `x-y` pass. The remaining gap is compiler lowering: it still
   emits ordinary calls/loops for the full-board scan and win scan instead of the
   source listing's stack-resident indirect-address subroutine shape.
+- Membership/set reuse now also consumes a freshly returned mask directly from
+  X when the following membership test needs a scratch copy, instead of recalling
+  the same mask register first. This is a general current-X reuse rule and is
+  visible in the first occupied-cell check of `tic-tac-toe-4x4.mkpro`.
+- The same membership test keeps that scratch mask stack-resident for a simple
+  collection load, so the test itself does not have to recall the scratch again
+  before `К ∧`; the scratch register is still available for the following
+  failed-branch set.
 - `cave-highlevel-baseline.mkpro` now benefits from fractional indirect
   addressing: `walls[int(blocked)]` can use the `blocked` coordinate register
   directly as the indirect selector because MK-61 indirect memory addressing

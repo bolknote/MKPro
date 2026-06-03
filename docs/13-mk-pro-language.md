@@ -1056,6 +1056,15 @@ candidates:
   because ordinary branches are usually shorter there;
 - cell membership clear reuse: when `if cell in cells` immediately clears that
   same cell, the compiler reuses the successful mask instead of recomputing it;
+- membership mask current-X scratch: when a computed/returned membership mask is
+  already current X, the compiler can copy it to the reusable scratch register
+  directly instead of recalling the same mask register first;
+- membership mask stack test reuse: after that scratch copy, simple collection
+  loads can consume the mask still resident in the stack for the test and keep
+  the scratch register for the following update;
+- mask stack op reuse: adjacent `bit_set`, single-bit, and grid-mask helpers
+  use the same scratch-mask stack residency when their collection side is a
+  simple load;
 - adjacent bit-set reuse: consecutive `cells += cell` updates compute the cell
   bit mask once and apply it to each collection;
 - repeated packed display helpers: repeated packed screens and repeated

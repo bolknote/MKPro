@@ -3761,6 +3761,38 @@ program MembershipSingleSetCollection {
     expect(result.steps[setIndex - 2]?.comment).toBe("recall player_marks");
   });
 
+  it("stores a current-X membership mask scratch without recalling it again", () => {
+    const result = compileOk(`
+program MembershipMaskCurrentX {
+  state {
+    mask: packed = 0
+    occupied: packed = 0
+  }
+
+  loop {
+    mask = occupied + 0.1
+    if bit_and(occupied, mask) != 0 {
+      halt(0)
+    }
+    else {
+      occupied = bit_or(occupied, mask)
+      halt(occupied)
+    }
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "membership-mask-current-x-scratch")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "membership-mask-stack-test-reuse")).toBe(true);
+    const comments = result.steps.map((step) => step.comment ?? "");
+    const scratchIndex = comments.indexOf("cell bit mask scratch");
+    expect(scratchIndex).toBeGreaterThan(0);
+    expect(comments[scratchIndex - 1]).not.toBe("recall mask");
+    const testIndex = comments.indexOf("membership test with reused mask");
+    expect(testIndex).toBeGreaterThan(scratchIndex);
+    expect(comments.slice(scratchIndex + 1, testIndex)).not.toContain("reuse cell bit mask");
+  });
+
   it("reuses a precomputed mask membership result when clearing the same mask", () => {
     const result = compileOk(`
 program MaskMembershipClear {

@@ -21,6 +21,7 @@ import {
   expressionToIntentText,
   flOpcode,
   isNumericValue,
+  isSimpleStackLoad,
   matchBitSetAssignment,
   matchCellHelperCall,
   matchSingleBitMaskOpAssignment,
@@ -59,9 +60,15 @@ export function compileGridCellMaskReuse(ctx: LoweringCtx,
 
     compileExpression(ctx, cellMaskExpression(used.x, used.y));
     ctx.emitStore(scratch, "grid cell mask scratch", first.line);
-    compileExpression(ctx, used.mask);
-    ctx.emitRecall(scratch, "reuse grid cell mask", first.line);
-    ctx.emitOp(0x37, "К ∧", "cell_has with reused mask", first.line);
+    emitCommutativeMaskOpWithScratch(ctx, used.mask, scratch, {
+      opcode: 0x37,
+      mnemonic: "К ∧",
+      opComment: "cell_has with reused mask",
+      recallComment: "reuse grid cell mask",
+      optimization: "mask-stack-op-reuse",
+      detail: `Kept ${scratch} on the stack for cell_has at line ${first.line}.`,
+      line: first.line,
+    });
     ctx.emitOp(0x35, "К {x}", "cell_has membership fraction", first.line);
     ctx.emitOp(0x32, "К ЗН", "cell_has to 0/1", first.line);
     ctx.emitStore(first.target, `set ${first.target}`, first.line);
@@ -90,9 +97,15 @@ export function compileBitSetMaskReuse(ctx: LoweringCtx,
 
     compileBitMaskWithQuotientScratch(ctx, firstSet.item, scratch, first.line);
     ctx.emitStore(scratch, "cell bit mask scratch", first.line);
-    compileExpression(ctx, firstSet.collection);
-    ctx.emitRecall(scratch, "reuse cell bit mask", first.line);
-    ctx.emitOp(0x38, "К ∨", "bit_set with reused mask", first.line);
+    emitCommutativeMaskOpWithScratch(ctx, firstSet.collection, scratch, {
+      opcode: 0x38,
+      mnemonic: "К ∨",
+      opComment: "bit_set with reused mask",
+      recallComment: "reuse cell bit mask",
+      optimization: "mask-stack-op-reuse",
+      detail: `Kept ${scratch} on the stack for the first bit_set at line ${first.line}.`,
+      line: first.line,
+    });
     ctx.emitStore(first.target, `set ${first.target}`, first.line);
     compileExpression(ctx, secondSet.collection);
     ctx.emitRecall(scratch, "reuse cell bit mask", second.line);
@@ -114,9 +127,15 @@ export function compileSingleBitMaskOpAssignment(ctx: LoweringCtx, statement: Ex
     compileBitMaskWithQuotientScratch(ctx, match.index, scratch, statement.line, { forceInline: true });
     if (match.negate) ctx.emitOp(0x3a, "К ИНВ", "bit_clear mask complement", statement.line);
     ctx.emitStore(scratch, "single bit op mask scratch", statement.line);
-    compileExpression(ctx, match.collection);
-    ctx.emitRecall(scratch, "single bit op mask", statement.line);
-    ctx.emitOp(match.opcode, match.mnemonic, `${statement.target} bit op`, statement.line);
+    emitCommutativeMaskOpWithScratch(ctx, match.collection, scratch, {
+      opcode: match.opcode,
+      mnemonic: match.mnemonic,
+      opComment: `${statement.target} bit op`,
+      recallComment: "single bit op mask",
+      optimization: "mask-stack-op-reuse",
+      detail: `Kept ${scratch} on the stack for a single-bit op at line ${statement.line}.`,
+      line: statement.line,
+    });
     ctx.emitStore(statement.target, `set ${statement.target}`, statement.line);
     ctx.optimizations.push({
       name: "single-bit-mask-op",
@@ -189,6 +208,32 @@ export function emitBitSetCollectionWithScratch(ctx: LoweringCtx,
     ctx.emitRecall(scratch, "reuse cell bit mask", set.line);
     ctx.emitOp(0x38, "К ∨", "bit_set with reused mask", set.line);
     ctx.emitStore(set.target, `set ${set.target}`, set.line);
+}
+
+export function emitCommutativeMaskOpWithScratch(ctx: LoweringCtx,
+    collection: ExpressionAst,
+    scratch: string,
+    options: {
+      opcode: number;
+      mnemonic: string;
+      opComment: string;
+      recallComment: string;
+      optimization: string;
+      detail: string;
+      line: number | undefined;
+    },
+  ): void {
+    if (ctx.xHolds(scratch) && isSimpleStackLoad(collection)) {
+      compileExpression(ctx, collection);
+      ctx.optimizations.push({
+        name: options.optimization,
+        detail: options.detail,
+      });
+    } else {
+      compileExpression(ctx, collection);
+      ctx.emitRecall(scratch, options.recallComment, options.line);
+    }
+    ctx.emitOp(options.opcode, options.mnemonic, options.opComment, options.line);
 }
 
 export function compileSpatialCountCall(ctx: LoweringCtx, name: "neighbor_count" | "line_count", expr: Extract<ExpressionAst, { kind: "call" }>): boolean {

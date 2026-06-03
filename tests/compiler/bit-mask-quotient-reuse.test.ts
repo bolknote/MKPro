@@ -26,9 +26,15 @@ program AdjacentSetUpdates {
     const names = result.report.optimizations.map((item) => item.name);
     expect(names).toContain("bit-set-mask-cse");
     expect(names).toContain("bit-mask-quotient-reuse");
+    expect(names).toContain("mask-stack-op-reuse");
     expect(result.steps.filter((step) => step.opcode === 0x13 && step.comment === "bit mask quotient")).toHaveLength(1);
     expect(result.steps.filter((step) => step.opcode === 0x13 && step.comment === "bit mask fractional place")).toHaveLength(1);
     expect(result.steps.map((step) => step.comment)).toContain("bit mask quotient");
+    const comments = result.steps.map((step) => step.comment ?? "");
+    const scratchIndex = comments.indexOf("cell bit mask scratch");
+    const firstSetIndex = comments.indexOf("bit_set with reused mask");
+    expect(firstSetIndex).toBeGreaterThan(scratchIndex);
+    expect(comments.slice(scratchIndex + 1, firstSetIndex)).not.toContain("reuse cell bit mask");
   });
 
   it("shares one bit_mask helper across independent teleport membership checks", () => {

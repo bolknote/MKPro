@@ -18,6 +18,7 @@ import {
 } from "./proc-raw-setup.ts";
 import {
   compileBitMaskWithQuotientScratch,
+  emitCommutativeMaskOpWithScratch,
   emitBitSetCollectionWithScratch,
 } from "./spatial.ts";
 import type {
@@ -1072,13 +1073,24 @@ export function emitMembershipMaskTest(ctx: LoweringCtx,
   ): void {
     if (membership.mode === "index") {
       compileBitMaskWithQuotientScratch(ctx, membership.item, scratch, line);
+    } else if (membership.mask.kind === "identifier" && ctx.currentXAliases.has(membership.mask.name)) {
+      ctx.optimizations.push({
+        name: "membership-mask-current-x-scratch",
+        detail: `Stored ${membership.mask.name} directly from X as a reusable membership mask scratch at line ${line}.`,
+      });
     } else {
       compileExpression(ctx, membership.mask);
     }
     ctx.emitStore(scratch, "cell bit mask scratch", line);
-    compileExpression(ctx, membership.collection);
-    ctx.emitRecall(scratch, "reuse cell bit mask", line);
-    ctx.emitOp(0x37, "К ∧", "membership test with reused mask", line);
+    emitCommutativeMaskOpWithScratch(ctx, membership.collection, scratch, {
+      opcode: 0x37,
+      mnemonic: "К ∧",
+      opComment: "membership test with reused mask",
+      recallComment: "reuse cell bit mask",
+      optimization: "membership-mask-stack-test-reuse",
+      detail: `Kept ${scratch} on the stack for a membership test at line ${line}.`,
+      line,
+    });
     emitMembershipFractionIfNeeded(ctx, membership, "membership fraction", line);
 }
 

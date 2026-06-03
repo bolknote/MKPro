@@ -208,6 +208,15 @@ The control-flow family is where the largest byte savings are found.
 - `cell-membership-clear-reuse` — reuses a computed membership mask when clearing a bit and eliminates duplicate `bit_mask` construction.
 - `cell-membership-set-reuse` — reuses a computed membership mask when setting one cell in an `if` suffix.
 - `cell-membership-mask-run-reuse` — extends membership mask reuse across a short run of set updates.
+- `membership-mask-current-x-scratch` — when a membership mask expression is
+  already in current X, stores the reusable scratch copy directly from X instead
+  of recalling the mask register first.
+- `membership-mask-stack-test-reuse` — after saving such a reusable mask
+  scratch, keeps the same mask in the stack for a simple collection load and
+  emits the membership `К ∧` without recalling the scratch for the test itself.
+- `mask-stack-op-reuse` — applies the same stack-resident scratch-mask idea to
+  adjacent `bit_set`/single-bit/grid-mask helper paths, skipping the first
+  scratch recall when the collection side is a simple stack load.
 - `bit-mask-condition-helper` — lowers `bit_has(mask, index)` comparisons through a shared bit-mask helper (`ПП` + test opcode).
 - `spatial-hit-condition-helper` — routes `bit_has(...)` conditions through the shared spatial-hit helper path.
 - `near-any-helper-lowering` — replaces near-threshold comparisons with a shared near-any helper when helper statistics show lower total cost.
