@@ -31,6 +31,7 @@ import type {
   StackUnaryDerivationCall,
   XParamProcLowering,
   XParamStackStopRiskRead,
+  XParamValueFunction,
 } from "../lowering-helpers.ts";
 import {
   COORD_LIST_DX,
@@ -70,6 +71,7 @@ import {
   matchNegativeZeroThresholdCondition,
   matchNumericSelfUpdate,
   matchStackUnaryDerivationCall,
+  matchXParamValueFunction,
   matchXParamReturnDecay,
   matchXParamStackStopRiskRead,
   multiplyExpressions,
@@ -86,6 +88,7 @@ import {
   spatialCountMaskScratchName,
   substituteConditionIdentifier,
   X_TRANSFORM_UNARY_OPCODES,
+  xParamValueScratchName,
 } from "../lowering-helpers.ts";
 import {
   getOpcode,
@@ -607,9 +610,14 @@ export function compileProcedures(ctx: LoweringCtx): void {
       ctx.emitProcedureLabel(proc.name);
       ctx.compileWithinProcedure(proc, () => {
         const xParam = ctx.xParamProcs.get(proc.name);
+        const xParamValue = ctx.loweringOptions.xParamValueFunctions === true
+          ? matchXParamValueFunction(proc)
+          : undefined;
         const xParamDecay = matchXParamReturnDecay(proc);
         const xParamStackStopRisk = matchXParamStackStopRiskRead(ctx.ast, proc);
-        if (xParamDecay !== undefined) {
+        if (xParamValue !== undefined && xParamValueScratchName(ctx.ast) !== undefined) {
+          compileXParamValueFunctionBody(ctx, proc, xParamValue, xParamValueScratchName(ctx.ast)!);
+        } else if (xParamDecay !== undefined) {
           compileXParamReturnDecayBody(ctx, xParamDecay);
           ctx.emitOp(0x52, "В/О", "x-param decay return", xParamDecay.line);
           ctx.optimizations.push({
@@ -638,6 +646,53 @@ export function compileProcedures(ctx: LoweringCtx): void {
       });
       ctx.emitProcedureEndLabel(proc.name);
     }
+}
+
+function compileXParamValueFunctionBody(
+  ctx: LoweringCtx,
+  proc: ProcAst,
+  match: XParamValueFunction,
+  scratch: string,
+): void {
+    emitPositiveModuloOfCurrentX(ctx, match.width, match.line);
+    ctx.emitStore(scratch, `set ${scratch}`, match.line);
+    const scratchExpr: ExpressionAst = { kind: "identifier", name: scratch };
+    ctx.compileStatements([
+      {
+        kind: "if",
+        condition: {
+          left: scratchExpr,
+          op: "<=",
+          right: numberExpression(0),
+        },
+        thenBody: [{
+          kind: "assign",
+          target: scratch,
+          expr: {
+            kind: "binary",
+            op: "+",
+            left: scratchExpr,
+            right: numberExpression(match.width),
+          },
+          line: match.line,
+        }],
+        line: match.line,
+      },
+      { kind: "return_value", expr: scratchExpr, line: match.line },
+    ]);
+    ctx.optimizations.push({
+      name: "x-param-value-function",
+      detail: `Compiled ${proc.name} to consume ${match.param} directly from X through ${scratch}.`,
+    });
+}
+
+function emitPositiveModuloOfCurrentX(ctx: LoweringCtx, width: number, line: number): void {
+    ctx.emitOp(0x34, "К [x]", "x-param value integer part", line);
+    ctx.emitNumberOrPreload(String(width));
+    ctx.emitOp(0x13, "/", "x-param value modulo quotient", line);
+    ctx.emitOp(0x35, "К {x}", "x-param value modulo fraction", line);
+    ctx.emitNumberOrPreload(String(width));
+    ctx.emitOp(0x12, "*", "x-param value modulo scale", line);
 }
 
 // Cheap static size proxy for layout ordering: number of statements in a proc

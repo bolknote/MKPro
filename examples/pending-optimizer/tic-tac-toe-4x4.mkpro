@@ -18,7 +18,6 @@ program TicTacToe4x4 {
     best_x: packed = 0
     best_y: packed = 0
     bank: packed = 0
-    line: packed = 1
     score: packed = 0
     best_score: packed = 4
     mask: packed = 0
@@ -30,8 +29,8 @@ program TicTacToe4x4 {
     show(x)
     x = entered()
     y = entered()
-    normalize_x()
-    normalize_y()
+    x = normalize(x)
+    y = normalize(y)
     cell_mask_calc()
 
     if bit_and(occupied, mask) != 0 {
@@ -50,21 +49,12 @@ program TicTacToe4x4 {
     }
   }
 
-  fn normalize_x() {
-    normalize_line(x)
-    x = line
-  }
-
-  fn normalize_y() {
-    normalize_line(y)
-    y = line
-  }
-
-  fn normalize_line(value) {
-    line = frac(int(value) / 4) * 4
-    if line <= 0 {
-      line += 4
+  fn normalize(value) {
+    value = frac(int(value) / 4) * 4
+    if value <= 0 {
+      return value + 4
     }
+    return value
   }
 
   fn cell_mask_calc() {
@@ -72,25 +62,17 @@ program TicTacToe4x4 {
   }
 
   fn subtract_lines() {
-    line = x
-    weights[7] -= pow10(line)
-    line = y
-    weights[6] -= pow10(line)
-    normalize_line(x + y)
-    weights[5] -= pow10(line)
-    normalize_line(x - y)
-    weights[4] -= pow10(line)
+    weights[7] -= pow10(x)
+    weights[6] -= pow10(y)
+    weights[5] -= pow10(normalize(x + y))
+    weights[4] -= pow10(normalize(x - y))
   }
 
   fn add_lines() {
-    line = x
-    weights[7] += pow10(line)
-    line = y
-    weights[6] += pow10(line)
-    normalize_line(x + y)
-    weights[5] += pow10(line)
-    normalize_line(x - y)
-    weights[4] += pow10(line)
+    weights[7] += pow10(x)
+    weights[6] += pow10(y)
+    weights[5] += pow10(normalize(x + y))
+    weights[4] += pow10(normalize(x - y))
   }
 
   fn choose_reply() {
@@ -119,14 +101,10 @@ program TicTacToe4x4 {
 
   fn score_cell() {
     score = 98
-    line = x
-    score += sqr(frac(weights[7] / pow10(line)) - SCORE_CENTER)
-    line = y
-    score += sqr(frac(weights[6] / pow10(line)) - SCORE_CENTER)
-    normalize_line(x + y)
-    score += sqr(frac(weights[5] / pow10(line)) - SCORE_CENTER)
-    normalize_line(x - y)
-    score += sqr(frac(weights[4] / pow10(line)) - SCORE_CENTER)
+    score += sqr(frac(weights[7] / pow10(x)) - SCORE_CENTER)
+    score += sqr(frac(weights[6] / pow10(y)) - SCORE_CENTER)
+    score += sqr(frac(weights[5] / pow10(normalize(x + y))) - SCORE_CENTER)
+    score += sqr(frac(weights[4] / pow10(normalize(x - y))) - SCORE_CENTER)
   }
 
   fn calculator_win_check() {
