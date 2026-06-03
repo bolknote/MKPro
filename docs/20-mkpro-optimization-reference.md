@@ -197,6 +197,9 @@ The control-flow family is where the largest byte savings are found.
 - `inequality-zero-false-branch` — marks the false branch of a proved `expr != 0`
   test as having zero already in X, covering the same immediate zero consumers on
   the branch target.
+- `current-x-negated-zero-test` — for `x <= 0` / `x > 0` shapes where `x` is
+  already in X, emits a single sign flip and the normal direct zero-test instead
+  of materializing `0 - x` through `0; П→X x; -`.
 - `small-set-condition-lowering` — lowers small `set` conditions to compact code.
 - `cell-membership-clear-reuse` — reuses a computed membership mask when clearing a bit and eliminates duplicate `bit_mask` construction.
 - `cell-membership-set-reuse` — reuses a computed membership mask when setting one cell in an `if` suffix.

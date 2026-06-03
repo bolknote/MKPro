@@ -2149,6 +2149,31 @@ program OneBasedModuloNormalize {
     expect(runCompiledDisplay(result).trim()).toBe("4,");
   });
 
+  it("negates the current X value for <= 0 tests after a store", () => {
+    const result = compileOk(`
+program CurrentXNegatedZeroTest {
+  state {
+    line: packed = 0
+  }
+  loop {
+    line = frac(int(read()) / 4) * 4
+    if line <= 0 {
+      line += 4
+    }
+    halt(line)
+  }
+}
+`);
+    const optimizationNames = result.report.optimizations.map((item) => item.name);
+
+    expect(optimizationNames).toContain("current-x-negated-zero-test");
+    expect(result.steps.some((step) => step.comment === "negate line for zero test")).toBe(true);
+    expect(result.steps.some((step, index, steps) =>
+      step.comment === "condition compare" &&
+      steps[index - 1]?.comment === "recall line"
+    )).toBe(false);
+  });
+
   it("keeps the branch for one-based normalization when negative remainders are possible", () => {
     const result = compileOk(`
 program SignedModuloNormalize {

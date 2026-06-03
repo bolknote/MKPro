@@ -1467,6 +1467,7 @@ export function compileCondition(ctx: LoweringCtx,
       return;
     }
     if (compileEqualityWithCurrentX(ctx, compiledCondition, falseLabel, line)) return;
+    if (compileCurrentXNegatedZeroCondition(ctx, compiledCondition, falseLabel, line, condition)) return;
     if (compiledCondition.op === ">" || compiledCondition.op === "<=") {
       compileExpression(ctx, compiledCondition.right);
       compileExpression(ctx, compiledCondition.left);
@@ -1486,6 +1487,47 @@ export function compileCondition(ctx: LoweringCtx,
             : 0x57;
     const mnemonic = getOpcode(opcode).name;
     ctx.emitJump(opcode, mnemonic, falseLabel, `false branch for ${compiledCondition.op}`, line);
+}
+
+function compileCurrentXNegatedZeroCondition(
+    ctx: LoweringCtx,
+    condition: ConditionAst,
+    falseLabel: string,
+    line: number,
+    originalCondition: ConditionAst,
+  ): boolean {
+    let directOp: ConditionAst["op"] | undefined;
+    let name: string | undefined;
+    if (
+      condition.left.kind === "identifier" &&
+      ctx.xHolds(condition.left.name) &&
+      isZeroExpression(condition.right)
+    ) {
+      if (condition.op === "<=") directOp = ">=";
+      else if (condition.op === ">") directOp = "<";
+      name = condition.left.name;
+    } else if (
+      isZeroExpression(condition.left) &&
+      condition.right.kind === "identifier" &&
+      ctx.xHolds(condition.right.name)
+    ) {
+      if (condition.op === ">=") directOp = ">=";
+      else if (condition.op === "<") directOp = "<";
+      name = condition.right.name;
+    }
+    if (directOp === undefined || name === undefined) return false;
+
+    ctx.emitOp(0x0b, "/-/", `negate ${name} for zero test`, line);
+    ctx.currentXVariable = undefined;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
+    const opcode = directTestOpcode(directOp);
+    ctx.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${originalCondition.op}`, line);
+    ctx.optimizations.push({
+      name: "current-x-negated-zero-test",
+      detail: `Reused ${name} already in X and negated it for ${conditionToText(condition)} at line ${line}.`,
+    });
+    return true;
 }
 
 export function compileRemainderZeroCondition(
