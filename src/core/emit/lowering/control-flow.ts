@@ -26,6 +26,7 @@ import type {
 } from "../lowering-helpers.ts";
 import {
   COORD_LIST_COUNTER,
+  DISPLAY_EXPR_PREFIX,
   DISPATCH_SCRATCH_PREFIX,
   bitMaskScratchName,
   buildBranchRemovalCandidate,
@@ -74,6 +75,7 @@ import {
   selectDispatchCandidate,
   spatialHitScratchName,
   statementListsEqual,
+  subtractExpressions,
 } from "../lowering-helpers.ts";
 import {
   getOpcode,
@@ -385,6 +387,7 @@ export function compileIf(ctx: LoweringCtx,
     const falseLabel = ctx.freshLabel("if_false");
     const thenTerminates = ctx.statementsTerminate(selected.thenBody);
     const endLabel = thenTerminates ? undefined : ctx.freshLabel("if_end");
+    const residual = branchResidualExpression(ctx, selected.condition);
     const directFallthroughIdentifier = ctx.fallthroughCurrentXCandidate(selected.condition, selected.thenBody);
     const fallthroughIdentifier = directFallthroughIdentifier
       ?? ctx.nearAnyFallthroughCandidate(selected.condition, selected.thenBody);
@@ -412,7 +415,7 @@ export function compileIf(ctx: LoweringCtx,
         detail: `Reused the zero left in X by equality comparison at line ${line}.`,
       });
     }
-    ctx.compileStatements(selected.thenBody);
+    ctx.compileStatements(compileResidualHeadIfPossible(ctx, selected.thenBody, residual, line, "fallthrough"));
     if (selected.elseBody) {
       if (endLabel !== undefined) ctx.emitJump(0x51, "БП", endLabel, "if end", line);
       ctx.emitLabel(falseLabel);
@@ -431,7 +434,7 @@ export function compileIf(ctx: LoweringCtx,
           detail: `Reused the zero left in X by false branch of inequality comparison at line ${line}.`,
         });
       }
-      ctx.compileStatements(selected.elseBody);
+      ctx.compileStatements(compileResidualHeadIfPossible(ctx, selected.elseBody, residual, line, "false branch"));
       if (endLabel !== undefined) ctx.emitLabel(endLabel);
       if (thenTerminates) {
         ctx.optimizations.push({
@@ -442,6 +445,100 @@ export function compileIf(ctx: LoweringCtx,
     } else {
       ctx.emitLabel(falseLabel);
     }
+}
+
+function branchResidualExpression(ctx: LoweringCtx, condition: ConditionAst): ExpressionAst | undefined {
+    const compiled = selectCheaperEquivalentCondition(
+      condition,
+      ctx.ast,
+      new Set(Object.keys(ctx.allocation.constants)),
+    ).condition;
+    if (matchSmallSetCondition(compiled) !== undefined) return undefined;
+    if (matchNearAnyHelperCondition(compiled) !== undefined) return undefined;
+    if ((compiled.op === "==" || compiled.op === "!=") && isZeroExpression(compiled.right)) return undefined;
+    if (compiled.left.kind === "binary" && matchRemainderByConstant(compiled.left) !== undefined) return undefined;
+    return compiled.op === ">" || compiled.op === "<="
+      ? subtractExpressions(compiled.right, compiled.left)
+      : subtractExpressions(compiled.left, compiled.right);
+}
+
+function compileResidualHeadIfPossible(
+    ctx: LoweringCtx,
+    statements: StatementAst[],
+    residual: ExpressionAst | undefined,
+    line: number,
+    branch: "fallthrough" | "false branch",
+  ): StatementAst[] {
+    if (residual === undefined || statements.length === 0) return statements;
+    const [first, ...tail] = statements;
+    if (first === undefined || !compileResidualHeadStatement(ctx, first, residual, line, branch)) return statements;
+    return tail;
+}
+
+function compileResidualHeadStatement(
+    ctx: LoweringCtx,
+    statement: StatementAst,
+    residual: ExpressionAst,
+    line: number,
+    branch: "fallthrough" | "false branch",
+  ): boolean {
+    if (statement.kind === "show" && displayIsSingleResidualExpression(ctx, statement.display, residual)) {
+      ctx.emitOp(0x50, "С/П", `show ${statement.display}`, statement.line);
+      reportBranchResidualReuse(ctx, residual, line, branch);
+      return true;
+    }
+    if (statement.kind === "pause" && expressionEquals(statement.expr, residual)) {
+      ctx.emitOp(0x50, "С/П", "pause", statement.line);
+      reportBranchResidualReuse(ctx, residual, line, branch);
+      return true;
+    }
+    if (statement.kind === "halt" && statement.literal === undefined && expressionEquals(statement.expr, residual)) {
+      ctx.emitOp(0x50, "С/П", "halt", statement.line);
+      reportBranchResidualReuse(ctx, residual, line, branch);
+      return true;
+    }
+    if (
+      statement.kind === "assign" &&
+      expressionEquals(statement.expr, residual)
+    ) {
+      if (ctx.allocation.registers[statement.target] !== undefined) {
+        ctx.emitStore(statement.target, `set ${statement.target}`, statement.line);
+      } else if (statement.target.startsWith(DISPLAY_EXPR_PREFIX)) {
+        ctx.markCurrentX(statement.target);
+      } else {
+        return false;
+      }
+      reportBranchResidualReuse(ctx, residual, line, branch);
+      return true;
+    }
+    return false;
+}
+
+function displayIsSingleResidualExpression(
+    ctx: LoweringCtx,
+    displayName: string,
+    residual: ExpressionAst,
+  ): boolean {
+    const display = ctx.ast.displays.find((candidate) => candidate.name === displayName);
+    if (display === undefined || display.items.length !== 1) return false;
+    const item = display.items[0];
+    return item?.kind === "source" &&
+      item.expr !== undefined &&
+      item.width === undefined &&
+      item.pad === undefined &&
+      expressionEquals(item.expr, residual);
+}
+
+function reportBranchResidualReuse(
+    ctx: LoweringCtx,
+    residual: ExpressionAst,
+    line: number,
+    branch: "fallthrough" | "false branch",
+  ): void {
+    ctx.optimizations.push({
+      name: "branch-residual-x-reuse",
+      detail: `Reused ${expressionToIntentText(residual)} left in X on the ${branch} of a comparison at line ${line}.`,
+    });
 }
 
 function inequalityFalseBranchLeavesZero(ctx: LoweringCtx, condition: ConditionAst): boolean {
@@ -654,7 +751,13 @@ export function compileResidualGuardedUpdate(ctx: LoweringCtx,
     if (statement.elseBody !== undefined) {
       if (endLabel !== undefined) ctx.emitJump(0x51, "БП", endLabel, "if end", line);
       ctx.emitLabel(falseLabel);
-      ctx.compileStatements(statement.elseBody);
+      ctx.compileStatements(compileResidualHeadIfPossible(
+        ctx,
+        statement.elseBody,
+        subtractExpressions(update.condition.left, update.condition.right),
+        line,
+        "false branch",
+      ));
       if (endLabel !== undefined) ctx.emitLabel(endLabel);
     } else {
       ctx.emitLabel(falseLabel);

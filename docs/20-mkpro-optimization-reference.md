@@ -161,7 +161,8 @@ The control-flow family is where the largest byte savings are found.
 
 - `branch-removal` — removes `if/else` when the target value can be computed arithmetically.
 - `comparison-boundary-normalization` — rewrites comparisons into an equivalent, cheaper form.
-- `residual-guarded-update` — compacts guarded updates to remove extra steps.
+- `residual-guarded-update` — compacts guarded self-updates such as `if x >= N { x -= N }` by reusing the comparison residual already left in X. The same residual is now exposed to the first statement of the opposite branch when that statement consumes the exact `x - N` value.
+- `branch-residual-x-reuse` — after an ordinary comparison branch, reuses the residual left in X for the first branch statement when it is the same expression (`show(expr)`, `pause(expr)`, `halt(expr)`, or `target = expr`). Special condition lowerings with different X contracts, such as small-set helpers and remainder-zero tests, are excluded.
 - `arithmetic-if-select` — performs conditional selection through arithmetic instead of jumps.
 - `arithmetic-if-update` — performs conditional assignment in one path instead of multiple instructions.
 - `arithmetic-if-extrema` — computes `max/min` using shorter conditional forms.

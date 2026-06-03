@@ -2567,6 +2567,33 @@ program DelayedResidualGuardedUpdate {
     expect(result.steps.some((step) => step.comment === "set dynamite")).toBe(true);
   });
 
+  it("reuses guarded self-update residuals on the false branch", () => {
+    const result = compileOk(`
+program ResidualGuardedUpdateFalseBranch {
+  state {
+    dynamite: counter 0..9 = 4
+    walls: packed = 9
+  }
+  loop {
+    if dynamite >= 2 {
+      walls = walls - 1
+      dynamite -= 2
+    }
+    else {
+      show(dynamite - 2)
+    }
+    halt(dynamite)
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) => item.name === "residual-guarded-update")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "branch-residual-x-reuse")).toBe(true);
+    const showStep = result.steps.find((step) => step.comment?.startsWith("show __inline_show_"));
+    expect(showStep).toBeDefined();
+    expect(result.steps.some((step) => step.comment === "expr -" && step.address > (showStep?.address ?? 0))).toBe(false);
+  });
+
   it("reuses delayed guarded update residuals inside nested shared-failure guards", () => {
     const result = compileOk(`
 program NestedDelayedResidualGuardedUpdate {
@@ -3249,6 +3276,28 @@ program ReadKeyResourceUnderflow {
     expect(result.report.optimizations.some((item) => item.name === "show-read-decrement-underflow-fusion")).toBe(true);
     expect(result.steps.some((step) => step.comment === "read key")).toBe(false);
     expect(result.steps.some((step) => step.comment === "restore read key")).toBe(true);
+  });
+
+  it("reuses branch comparison residuals for the first false-branch display", () => {
+    const result = compileOk(`
+program BranchResidualDisplay {
+  state {
+    energy: counter 0..9 = 1
+  }
+
+  loop {
+    if energy >= 2 {
+      halt(9)
+    }
+    else {
+      show(energy - 2)
+    }
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "branch-residual-x-reuse")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "expr -")).toBe(false);
   });
 
   it("keeps stores read by a value-returning function called from an assignment expression", () => {
