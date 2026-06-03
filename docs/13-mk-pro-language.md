@@ -1054,8 +1054,10 @@ candidates:
   apply it to several updates when that beats the branch. Negative-zero
   threshold selectors are costed for the same update path but remain gated
   because ordinary branches are usually shorter there;
-- cell membership clear reuse: when `if cell in cells` immediately clears that
-  same cell, the compiler reuses the successful mask instead of recomputing it;
+- cell membership clear reuse: when a membership test immediately clears the
+  same assignable packed collection, including an indexed bank cell with a
+  prepared indirect selector, the compiler reuses the successful mask instead
+  of recomputing it;
 - membership mask current-X scratch: when a computed/returned membership mask is
   already current X, the compiler can copy it to the reusable scratch register
   directly instead of recalling the same mask register first;

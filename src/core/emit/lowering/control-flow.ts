@@ -822,16 +822,24 @@ export function compileMembershipClearReuse(ctx: LoweringCtx,
     const membership = matchBitMembershipCondition(statement.condition);
     if (membership === undefined) return false;
     if (!isBitClearAssignment(clear, membership)) return false;
+    if (clear.kind === "indexed_assign" && membership.mode !== "mask") return false;
+    const preparedSelector = prepareMembershipClearSelector(ctx, clear, membership, line);
+    if (clear.kind === "indexed_assign" && numericIndexValue(clear.target.index) === undefined && preparedSelector === undefined) {
+      return false;
+    }
 
     const falseLabel = ctx.freshLabel("if_false");
     const endLabel = ctx.freshLabel("if_end");
 
-    if (!compileBitMembershipMaskValue(ctx, membership, line)) compileExpression(ctx, membership.test);
+    if (!compileBitMembershipMaskValue(ctx, membership, line)) {
+      if (clear.kind !== "assign") return false;
+      compileExpression(ctx, membership.test);
+    }
     ctx.emitJump(0x57, "F x!=0", falseLabel, "false branch for !=", line);
     ctx.emitOp(0x3a, "К ИНВ", "reuse membership mask for clear", clear.line);
-    compileExpression(ctx, membership.collection);
+    emitMembershipClearCollectionRecall(ctx, membership.collection, preparedSelector, clear.line);
     ctx.emitOp(0x37, "К ∧", "clear matched cell with reused mask", clear.line);
-    ctx.emitStore(clear.target, `set ${clear.target}`, clear.line);
+    emitMembershipClearStore(ctx, clear, preparedSelector);
     ctx.compileStatements(tail);
     if (statement.elseBody) {
       ctx.emitJump(0x51, "БП", endLabel, "if end", line);
@@ -844,9 +852,48 @@ export function compileMembershipClearReuse(ctx: LoweringCtx,
     }
     ctx.optimizations.push({
       name: "cell-membership-clear-reuse",
-      detail: `Reused the successful membership mask when clearing ${clear.target} at line ${clear.line}.`,
+      detail: `Reused the successful membership mask when clearing ${membershipSetTargetText(clear)} at line ${clear.line}.`,
     });
     return true;
+}
+
+function prepareMembershipClearSelector(
+    ctx: LoweringCtx,
+    clear: MembershipSetStatement,
+    membership: BitMembershipCondition,
+    line: number,
+  ): PreparedIndexedSelector | undefined {
+    if (clear.kind !== "indexed_assign") return undefined;
+    if (numericIndexValue(clear.target.index) !== undefined) return undefined;
+    if (!expressionIsDeterministic(clear.target.index) || !expressionIsDeterministic(membership.mask)) return undefined;
+    return ctx.prepareIndexedSelector(clear.target, line);
+}
+
+function emitMembershipClearCollectionRecall(
+    ctx: LoweringCtx,
+    collection: ExpressionAst,
+    preparedSelector: PreparedIndexedSelector | undefined,
+    line: number,
+  ): void {
+    if (collection.kind === "indexed") {
+      if (preparedSelector !== undefined) ctx.emitPreparedIndexedRecall(collection, preparedSelector, line);
+      else ctx.emitIndexedRecall(collection, line);
+      return;
+    }
+    compileExpression(ctx, collection);
+}
+
+function emitMembershipClearStore(
+    ctx: LoweringCtx,
+    clear: MembershipSetStatement,
+    preparedSelector: PreparedIndexedSelector | undefined,
+  ): void {
+    if (clear.kind === "assign") {
+      ctx.emitStore(clear.target, `set ${clear.target}`, clear.line);
+      return;
+    }
+    if (preparedSelector !== undefined) ctx.emitPreparedIndexedStore(clear.target, preparedSelector, clear.line);
+    else ctx.emitIndexedStore(clear.target, clear.line);
 }
 
 function emitMembershipFractionIfNeeded(

@@ -40,6 +40,7 @@ import {
   SPATIAL_HIT_SCRATCH_PREFIX,
   GRID4_MASK_SCRATCH_PREFIX,
   addExpressions,
+  assignableTargetExpression,
   binaryOpcode,
   bitMaskExpression,
   bitMaskScratchName,
@@ -8079,18 +8080,18 @@ export class EmitContext {
 
 
   membershipClearPrefix(statements: StatementAst[]): {
-    clear: Extract<StatementAst, { kind: "assign" }>;
+    clear: MembershipSetStatement;
     tail: StatementAst[];
   } | undefined {
     const first = statements[0];
-    if (first?.kind === "assign") {
+    if (first?.kind === "assign" || first?.kind === "indexed_assign") {
       return { clear: first, tail: statements.slice(1) };
     }
     if (first?.kind !== "call" || !this.inlineProcNames.has(first.block)) return undefined;
     const proc = this.ast.procs.find((candidate) => candidate.name === first.block);
     if (proc === undefined) return undefined;
     const clear = proc.body[0];
-    if (clear?.kind !== "assign") return undefined;
+    if (clear?.kind !== "assign" && clear?.kind !== "indexed_assign") return undefined;
     return {
       clear,
       tail: [...proc.body.slice(1), ...statements.slice(1)],
@@ -13913,10 +13914,6 @@ function matchAnyBitSetAssignment(
   };
 }
 
-function assignableTargetExpression(target: string | Extract<ExpressionAst, { kind: "indexed" }>): ExpressionAst {
-  return typeof target === "string" ? { kind: "identifier", name: target } : target;
-}
-
 function isReusableBitSetPair(
   first: Extract<StatementAst, { kind: "assign" }>,
   second: Extract<StatementAst, { kind: "assign" }>,
@@ -13948,7 +13945,7 @@ function isReusableMembershipClear(statement: Extract<StatementAst, { kind: "if"
   const present = matchBitMembershipCondition(statement.condition);
   if (present === undefined) return false;
   const first = statement.thenBody[0];
-  return first?.kind === "assign" && isBitClearAssignment(first, present);
+  return (first?.kind === "assign" || first?.kind === "indexed_assign") && isBitClearAssignment(first, present);
 }
 
 function membershipSetRunScratchName(statement: Extract<StatementAst, { kind: "if" }>): string | undefined {

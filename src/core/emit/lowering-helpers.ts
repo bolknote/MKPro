@@ -2201,10 +2201,12 @@ export function matchBitAbsenceCondition(condition: ConditionAst): BitMembership
 }
 
 export function isBitClearAssignment(
-  statement: Extract<StatementAst, { kind: "assign" }>,
+  statement:
+    | Extract<StatementAst, { kind: "assign" }>
+    | Extract<StatementAst, { kind: "indexed_assign" }>,
   membership: BitMembershipCondition,
 ): boolean {
-  if (membership.collection.kind !== "identifier" || statement.target !== membership.collection.name) return false;
+  if (!expressionEquals(assignableTargetExpression(statement.target), membership.collection)) return false;
   const expr = statement.expr;
   if (expr.kind !== "call" || expr.args.length !== 2 || !expressionEquals(expr.args[0]!, membership.collection)) {
     return false;
@@ -2212,6 +2214,10 @@ export function isBitClearAssignment(
   const name = expr.callee.toLowerCase();
   if (name === "bit_clear") return membership.mode === "index" && expressionEquals(expr.args[1]!, membership.item);
   return name === "bit_and" && isBitNotOf(expr.args[1]!, membership.mask);
+}
+
+export function assignableTargetExpression(target: string | Extract<ExpressionAst, { kind: "indexed" }>): ExpressionAst {
+  return typeof target === "string" ? { kind: "identifier", name: target } : target;
 }
 
 export function isBitNotOf(expr: ExpressionAst, inner: ExpressionAst): boolean {

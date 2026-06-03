@@ -3907,6 +3907,38 @@ program MaskMembershipClear {
     expect(result.steps.some((step) => step.comment?.includes("membership fraction"))).toBe(false);
   });
 
+  it("reuses a precomputed indexed membership result when clearing the same cell", () => {
+    const result = compileOk(`
+program IndexedMaskMembershipClear {
+  state {
+    pos: packed = 1.0000008
+    rows: packed[1..3] = [1.1, 2.2, 3.3]
+  }
+
+  loop {
+    if bit_and(rows[int(pos)], frac(pos)) != 0 {
+      rows[int(pos)] = bit_and(rows[int(pos)], bit_not(frac(pos)))
+    }
+    halt(rows[1])
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "cell-membership-clear-reuse")).toBe(true);
+    const comments = result.steps.map((step) => step.comment ?? "");
+    expect(comments).toContain("reuse membership mask for clear");
+    expect(comments).toContain("clear matched cell with reused mask");
+    expect(comments.some((comment) =>
+      comment.startsWith("indexed recall rows") &&
+      comment.includes("indirect-selector-integer-part=pos")
+    )).toBe(true);
+    expect(comments.some((comment) =>
+      comment.startsWith("indexed set rows") &&
+      comment.includes("indirect-selector-integer-part=pos")
+    )).toBe(true);
+    expect(comments).not.toContain("bit_not()");
+  });
+
   it("orders destructive integer-indexed operands after fractional uses of the same selector", () => {
     const result = compileOk(`
 program DestructiveIndexedOperandOrder {
