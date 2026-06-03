@@ -56,6 +56,7 @@ Below are the public capability IDs from `report.optimizer.capabilities`.
 - `hex-mantissa-arithmetic` — simplifies arithmetic on hexadecimal mantissas.
 - `fractional-indirect-addressing` — enables indirect memory/flow selectors that deliberately rely on MK-61 fractional-address behavior.
 - `indirect-selector-integer-part-reuse` — reuses the integer-part side effect of a proved fractional indirect-memory selector and removes a redundant `К [x]`.
+- `destructive-selector-operand-order` — schedules fractional uses of a packed selector before a commutative operand that will indirectly address through `int(selector)`.
 - `error-stop-idiom` — compacts the common `error + stop` path.
 - `kmax-zero-through` — optimizes `kmax` pattern by passing through zero and finishing immediately.
 - `kzn-double` — applies `К ЗН` as a one-cell equivalent in specific doubling/sign-digit cases when the shape is proven safe on the exact MK-61 arithmetic profile.
@@ -105,6 +106,7 @@ These transformations run on source constructs before machine lowering:
 - `affine-indexed-selector-reuse` — if an affine dynamic index such as `physical - 3` already evaluates to the physical register number for a contiguous bank member, uses that variable as the MK-61 indirect selector instead of allocating and filling a separate selector.
 - `indirect-memory-alias-selector` — chooses the cheapest proved indexed-bank selector offset using the MK-61 two-digit indirect-memory register table, so values such as `17..19` or proved negative aliases can directly select bank registers and avoid a scratch selector or a larger arithmetic offset.
 - `fractional-indirect-addressing` — if `bank[int(selector)]` targets a physically aligned contiguous bank and `selector` is already in `R7..Re`, uses that register directly as the indirect-memory selector. This relies on MK-61 indirect memory addressing ignoring the fractional tail, so packed coordinates can select by their integer part without an explicit `К [x]`. When the lowering proves that exact `int(selector)` form, it marks the indirect op so later IR passes may also reuse the selector register's post-indirect integer-part side effect.
+- `destructive-selector-operand-order` — for deterministic commutative primitives such as `bit_and(table[int(coord)], bit_not(frac(coord)))`, evaluates the fractional operand first and leaves the destructive indirect-memory access last. This preserves the packed coordinate tail while still allowing `fractional-indirect-addressing` to use the coordinate register itself as the selector.
 - `indexed-selector-cache` — when repeated dynamic bank accesses share the same index expression, reuses the cached selector directly or derives a sibling field selector by applying only the contiguous offset delta.
 - `display-string-inline` — moves text templates directly into `show`, removing separate temporary definitions.
 - `display-string-guarded-show` — hoists guarded string value selection into the display path when safe.
@@ -349,6 +351,7 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `coord-list-scaled-decimal-storage` — same as above but decimal form, using fewer cells.
 - `fractional-indirect-addressing` — allows indirect access through fractional address arithmetic when proofs are available, including direct `bank[int(selector)]` memory selectors.
 - `indirect-selector-integer-part-reuse` — after a proved `bank[int(selector)]` indirect-memory access through a stable `R7..Re` selector, tracks that the selector register now holds the truncated integer part and deletes a later redundant `П->X selector; К [x]` pair's `К [x]` cell. The pass requires the proof marker emitted by fractional indexed lowering; unmarked hex, negative, or otherwise opaque indirect selectors are left alone.
+- `destructive-selector-operand-order` — when a commutative expression has one operand that can use direct `bank[int(selector)]` indirect addressing and the other operand still needs the same selector's fractional tail, schedules the fractional operand first so the MK-61 selector mutation happens only after that tail is safely on the stack.
 - `r0-fractional-sentinel` — uses a fractional-state sentinel in R0 to steer tables and to replace proved direct flow to address 99 (`БП`, `ПП`, or `F x?0`, numeric or post-layout label-resolved) with one-cell `К БП/К ПП/К x?0 0` when the R0 mutation is dead.
 - `super-dark-dispatch` — enables FA..FF range routing for shorter jumps with strictly valid address neighborhoods.
 

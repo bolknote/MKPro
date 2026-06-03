@@ -39,7 +39,7 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
-| `cave-highlevel-baseline.mkpro` | 135 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
+| `cave-highlevel-baseline.mkpro` | 134 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
 | `cave-treasure.mkpro` | 118 | 105 | floor-indexed resource bank and source-shaped command decoder are in place; remaining blockers are command dispatch, wall breaking, cache reward flow, and loop prompt/input storage |
 | `tic-tac-toe-4x4.mkpro` | 254 | 105 | source-shaped line update/score pass is in place; remaining packed 4x4 scan lowering |
 
@@ -56,7 +56,10 @@ Prototype notes:
   addressing: `walls[int(blocked)]` can use the `blocked` coordinate register
   directly as the indirect selector because MK-61 indirect memory addressing
   ignores the fractional coordinate tail. This is the source-listing trick in a
-  general indexed-bank form, not a cave-only special case.
+  general indexed-bank form, not a cave-only special case. The lowering also
+  schedules fractional uses of the same selector before the destructive indirect
+  access, matching the original listing's reliance on selector side effects
+  without losing the coordinate tail too early.
 - `cave-treasure.mkpro` now keeps food, dynamite, and treasure in one
   floor-indexed resource bank. Cache rewards use `resources[pos.floor]` and the
   source-level `(4 - pos.floor)^2` bonus sequence (`9`, `4`, `1`), relying on

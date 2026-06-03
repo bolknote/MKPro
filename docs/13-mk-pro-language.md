@@ -1254,6 +1254,10 @@ The pipeline currently contains:
   proved that a stable indirect selector is exactly `int(coord)`, the following
   IR pass tracks the selector register's post-indirect integer-part side effect
   and removes a later redundant `К [x]` after recalling that same selector.
+- **destructive-selector-operand-order** — commutative expressions that mix
+  `bank[int(coord)]` with another operand using `frac(coord)` are ordered so the
+  fractional operand is evaluated before the indirect memory command truncates
+  the selector register.
 - **address-code-overlay** — final post-layout proof that can move a label from
   a single-cell op after `БП target` or a proved-terminal `ПП target` onto that
   branch's address byte when the byte is itself the same executable opcode, then

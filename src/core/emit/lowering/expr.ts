@@ -1,4 +1,5 @@
 import type { ExpressionAst } from "../../types.ts";
+import { affineIndexIdentifierOffset } from "../../state-banks.ts";
 import type { LoweringCtx } from "../lowering-ctx.ts";
 import {
   compileNegativeZeroDegreeSelectorCall,
@@ -11,6 +12,8 @@ import {
   buildDiagnostic,
   estimateExpressionCost,
   expressionEquals,
+  expressionIsDeterministic,
+  expressionReferencesIdentifier,
   expressionToIntentText,
   isNumericValue,
   isPureExpression,
@@ -521,6 +524,7 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
         });
         return;
       }
+      if (compileCommutativeCallWithDestructiveSelectorLast(ctx, expr, binaryCall)) return;
       if (compileCommutativeCallWithCurrentX(ctx, expr, binaryCall)) return;
       compileExpression(ctx, expr.args[0]!);
       compileExpression(ctx, expr.args[1]!);
@@ -633,6 +637,35 @@ function compileCommutativeCallWithCurrentX(
     return true;
   }
   return false;
+}
+
+function compileCommutativeCallWithDestructiveSelectorLast(
+  ctx: LoweringCtx,
+  expr: Extract<ExpressionAst, { kind: "call" }>,
+  opcode: [number, string],
+): boolean {
+  const left = expr.args[0]!;
+  const right = expr.args[1]!;
+  if (!expressionIsDeterministic(left) || !expressionIsDeterministic(right)) return false;
+
+  const leftSource = directIntegerIndexedSource(left);
+  if (leftSource !== undefined && expressionReferencesIdentifier(right, leftSource)) {
+    compileExpression(ctx, right);
+    compileExpression(ctx, left);
+    ctx.emitOp(opcode[0], opcode[1], `${expr.callee}()`);
+    ctx.optimizations.push({
+      name: "destructive-selector-operand-order",
+      detail: `Scheduled ${expressionToIntentText(left)} after ${expressionToIntentText(right)} so integer-part indirect addressing cannot destroy ${leftSource} before the other operand uses it.`,
+    });
+    return true;
+  }
+  return false;
+}
+
+function directIntegerIndexedSource(expr: ExpressionAst): string | undefined {
+  if (expr.kind !== "indexed") return undefined;
+  const affineIndex = affineIndexIdentifierOffset(expr.index);
+  return affineIndex?.integerPart === true ? affineIndex.name : undefined;
 }
 
 function compileCurrentXDerivation(ctx: LoweringCtx, expr: ExpressionAst): boolean {

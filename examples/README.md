@@ -41,6 +41,6 @@ Generated with `npm run examples:size`.
 | `tiny-game.mkpro` | 23 | - | - | ok: no reference | load ok |
 | `treasure-hunter-2.mkpro` | 100 | 105 | -5 | ok: <= reference | main+setup load ok |
 | `wumpus.mkpro` | 100 | - | - | ok: no reference | main+setup load ok |
-| `pending-optimizer/cave-highlevel-baseline.mkpro` | 135 | 105 | +30 | pending optimizer | not loaded: main >105 |
+| `pending-optimizer/cave-highlevel-baseline.mkpro` | 134 | 105 | +29 | pending optimizer | not loaded: main >105 |
 | `pending-optimizer/cave-treasure.mkpro` | 118 | 105 | +13 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/tic-tac-toe-4x4.mkpro` | 254 | 105 | +149 | pending optimizer | not loaded: main >105 |

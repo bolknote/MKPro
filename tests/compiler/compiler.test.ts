@@ -3783,6 +3783,33 @@ program MaskMembershipClear {
     expect(result.steps.some((step) => step.comment?.includes("membership fraction"))).toBe(false);
   });
 
+  it("orders destructive integer-indexed operands after fractional uses of the same selector", () => {
+    const result = compileOk(`
+program DestructiveIndexedOperandOrder {
+  state {
+    blocked: packed = 1.0000008
+    walls: packed[1..3] = [1.1, 2.2, 3.3]
+  }
+
+  loop {
+    walls[int(blocked)] = bit_and(walls[int(blocked)], bit_not(frac(blocked)))
+    halt(walls[1])
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "destructive-selector-operand-order")).toBe(true);
+    const comments = result.steps.map((step) => step.comment ?? "");
+    const fracIndex = comments.indexOf("frac()");
+    const indexedRecallIndex = comments.findIndex((comment) =>
+      comment.startsWith("indexed recall walls") &&
+      comment.includes("indirect-selector-integer-part=blocked")
+    );
+    expect(fracIndex).toBeGreaterThanOrEqual(0);
+    expect(indexedRecallIndex).toBeGreaterThanOrEqual(0);
+    expect(fracIndex).toBeLessThan(indexedRecallIndex);
+  });
+
   it("keeps membership fraction extraction for masks with an integer marker", () => {
     const result = compileOk(`
 program IntegerMembershipMaskClear {
