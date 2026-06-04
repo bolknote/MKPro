@@ -1289,10 +1289,10 @@ The pipeline currently contains:
   pretending that a preceding `X->П` or arbitrary preserving command leaves the
   same previous-command context. Proved `/-/` toggles that mantissa fact, but
   zero is carried as a distinct `-0` shape instead of normalized away because
-  `Cx /-/ ВП` has a signed-zero mantissa on the emulator. VP-context sign pairs
-  after X2-preserving gaps are only collapsed when the following command,
-  possibly after free-standing empty ops, starts fresh number entry; otherwise
-  the pair's X2-to-X restore is observable.
+  `Cx /-/ ВП` has a signed-zero mantissa on the emulator. VP-context sign
+  commands after X2-preserving gaps are only collapsed when the following
+  command, possibly after free-standing empty ops, starts fresh number entry;
+  otherwise their X2-to-X restore is observable.
 - **x2-hidden-temp-restore** — replaces a direct scratch `П->X r`, or a
   stable-indirect proved scratch `К П->X R7..Re`, with `.` when X2-register
   dataflow or the stricter X2 value proof shows that hidden X2 already contains

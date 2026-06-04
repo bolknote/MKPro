@@ -99,6 +99,16 @@ function canRemoveVpContextSignPairBeforeFreshDigit(
   return sameExponentContext(state.vpContext, stateAfterPair.vpContext);
 }
 
+function canRemoveVpContextSignBeforeFreshDigit(
+  ops: readonly IrOp[],
+  signIndex: number,
+  state: X2ValueDataflowState | undefined,
+): boolean {
+  if (state?.entry.kind !== "closed" || state.vpContext?.kind !== "exponent") return false;
+  const nextIndex = nextFreshDigitIndex(ops, signIndex + 1);
+  return nextIndex !== undefined && isDecimalDigit(ops[nextIndex]!);
+}
+
 function decimalValueSetsIntersect(left: X2ValueSet | undefined, right: X2ValueSet | undefined): boolean {
   if (left === undefined || right === undefined) return false;
   for (const value of left) {
@@ -234,6 +244,16 @@ const run: IrPassFn = (ops) => {
       remove.add(i - 1);
       remove.add(i);
     }
+    // A single VP-context /-/ also only restores/toggles X2. If fresh number
+    // entry starts next, possibly through empty ops, that restored X is lost.
+    // Active exponent-entry is excluded by requiring a closed entry state.
+    if (
+      !remove.has(i) &&
+      isFreeStandingSignChange(cur) &&
+      canRemoveVpContextSignBeforeFreshDigit(ops, i, x2ValueStates[i])
+    ) {
+      remove.add(i);
+    }
     // In closed context, two sign changes are only removable when value
     // dataflow proves ordinary decimal X and X2 equality and the pair is not
     // acting as a previous-command shield for a later `.`/`/-/`/`ВП`.
@@ -253,7 +273,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "vp-exponent-splice",
-        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an X2 boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent-digit empty separators, VP-context /-/ separators, exponent /-/ /-/ -> empty, mantissa /-/ /-/ before proved ВП/fresh digit -> empty, closed decimal /-/ /-/ -> empty).`,
+        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an X2 boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent-digit empty separators, VP-context /-/ separators/signs before fresh digits, exponent /-/ /-/ -> empty, mantissa /-/ /-/ before proved ВП/fresh digit -> empty, closed decimal /-/ /-/ -> empty).`,
       },
     ],
   };

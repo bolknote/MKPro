@@ -810,10 +810,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `2 F0 ВП /-/ /-/ 3`; a non-zero sign pair before the proved `ВП`
     (`2 F0 /-/ /-/ ВП 3`, `02 /-/ /-/ ВП 3`) can also collapse. The signed-zero
     forms are kept because `0 /-/ /-/ ВП` still differs from `0 ВП`.
-    After an X2-preserving gap, a VP-context sign pair is kept when its X2
-    restore is observable (`5 ВП 3 Fπ /-/ /-/ С/П`), but the same pair can be
-    dropped before a fresh digit, directly or through free-standing empty ops
-    (`5 ВП 3 Fπ /-/ /-/ 4`, `5 ВП 3 Fπ /-/ /-/ КНОП 4`), because that digit
+    After an X2-preserving gap, a VP-context sign or sign pair is kept when its
+    X2 restore is observable (`5 ВП 3 Fπ /-/ С/П`,
+    `5 ВП 3 Fπ /-/ /-/ С/П`), but it can be dropped before a fresh digit,
+    directly or through free-standing empty ops (`5 ВП 3 Fπ /-/ 4`,
+    `5 ВП 3 Fπ /-/ КНОП 4`, `5 ВП 3 Fπ /-/ /-/ КНОП 4`), because that digit
     starts new number entry and discards the restored `X`.
     The after-digit separator
     rewrite is deliberately shape-sensitive: the same empty op before the

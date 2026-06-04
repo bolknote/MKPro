@@ -4285,6 +4285,68 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes a single VP-context sign before fresh digit entry", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x04, "4"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes a single VP-context sign before empty-op fresh digit entry", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x54, "КНОП"),
+      plain(0x04, "4"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice keeps an active exponent sign before an exponent digit", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("vp-splice keeps a VP-context sign pair when its X2 restore is observable", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),
@@ -4301,7 +4363,22 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
-  it("vp-splice keeps an empty separator before VP-context sign-change without an exponent digit", () => {
+  it("vp-splice keeps a single VP-context sign when its X2 restore is observable", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("vp-splice keeps a no-digit VP-context separator but removes a following sign before fresh digit", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
       plain(0x02, "2"),
@@ -4314,8 +4391,16 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = vpSplice.run(program, ctx);
 
-    expect(result.applied).toBe(0);
-    expect(result.ops).toEqual(program);
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
   });
 
   it("vp-splice removes a closed-context decimal sign pair", () => {
