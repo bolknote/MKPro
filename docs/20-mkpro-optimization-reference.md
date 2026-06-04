@@ -624,9 +624,11 @@ Display rewrites are separated into strategy selection + body lowering.
   `R0..R6` indirect stores because the store and its selector side effect are
   kept, by kept direct/stable recalls, and is preserved by documented empty
   operators `К НОП`/`К 1`/`К 2` plus unreferenced compiler marker labels. X2
-  decimal register-memory and decimal `preload const` metadata can also seed the
-  proof when the current X was rebuilt as the same concrete decimal value stored
-  in the recalled register.
+  decimal register-memory, decimal `preload const` metadata, and structural
+  hex/super shape-memory can also seed the proof when the current X was rebuilt
+  as the same concrete decimal value or display shape stored in the recalled
+  register. Structural shapes are used only as visible-X equality evidence; they
+  do not make `.`/`/-/` restores dot-safe.
   Labels targeted by string flow, numeric-address flow, proved indirect flow,
   procedure starts, or any unknown indirect flow are treated as entry barriers.
   The sync guard is X2-register-aware: if dataflow proves X2 already
@@ -698,7 +700,10 @@ Display rewrites are separated into strategy selection + body lowering.
   X2 value dataflow, so a prior closed-context `.` restore keeps the hidden
   `reg:r` fact available for later scratch aliases. It may also come from
   register value-memory when the scratch register and hidden X2 share the same
-  proved decimal fact, even without a live `reg:r` alias. This exposes the scratch
+  proved decimal fact, even without a live `reg:r` alias. Structural hex/super
+  shape-memory remains available to recall-elimination proofs, but is not used
+  as a hidden-temp `.` restore source until a separate dot-safety proof exists.
+  This exposes the scratch
   register store to ordinary DSE instead of
   requiring a membership-specific lowering; repeated reads of loop/state
   registers are left unchanged because `.` and `П->X r` are both one cell and a
@@ -874,7 +879,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     literal-shaped decimal.
 21. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.
 22. `dead-store-elimination` — removes direct stores, plus stable-indirect stores with proved targets, whose target register is not live after the write in a CFG that follows proved indirect flow targets (`indirect-target=NN`) and does not affect number-entry/input finalization or the previous-command context consumed by `ВП` while it restores X2; mutating indirect selectors are kept.
-23. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding direct/proved-indirect `X->П`, a kept direct/stable recall, X2 decimal register-memory, or decimal preload metadata proving that current X was rebuilt as the same concrete value, possibly through documented empty operators `К НОП`/`К 1`/`К 2`, direct conditional fallthroughs, counted-loop `F L0`..`F L3` fallthroughs for non-counter registers, and unreferenced compiler marker labels, preserving recalls that serve as the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or as a stack lift that can reach a downstream consumer through direct or proved-indirect flow; labels targeted by string, numeric, or proved-indirect flow plus procedure starts are entry barriers, and unknown indirect flow makes labels barriers too; mutating indirect stores can seed the X fact because the store remains, while mutating indirect recalls are not removed.
+23. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding direct/proved-indirect `X->П`, a kept direct/stable recall, X2 decimal register-memory, decimal preload metadata, or structural hex/super shape-memory proving that current X was rebuilt as the same concrete value/display shape, possibly through documented empty operators `К НОП`/`К 1`/`К 2`, direct conditional fallthroughs, counted-loop `F L0`..`F L3` fallthroughs for non-counter registers, and unreferenced compiler marker labels, preserving recalls that serve as the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or as a stack lift that can reach a downstream consumer through direct or proved-indirect flow; shape-memory proofs do not make structural `.`/`/-/` restores dot-safe; labels targeted by string, numeric, or proved-indirect flow plus procedure starts are entry barriers, and unknown indirect flow makes labels barriers too; mutating indirect stores can seed the X fact because the store remains, while mutating indirect recalls are not removed.
 24. `r0-fractional-sentinel` — drops redundant immediate `П->X 3`/`X->П 3`
     after fractional-R0 indirect access when `R0` liveness proves that the
     direct access only repeats the hardware-selected `R3`; it also removes

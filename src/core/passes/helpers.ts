@@ -879,6 +879,16 @@ export function recallAlreadyInXPreloadedDecimal(
   return undefined;
 }
 
+export function recallAlreadyInXStructuralShape(
+  op: IrOp,
+  state: X2ValueDataflowState | undefined,
+): RegisterName | undefined {
+  const register = removableRecallValueRegister(op);
+  if (register === undefined || state === undefined) return undefined;
+  const shapes = recallStructuralShapeFacts(op, state, register);
+  return shapeSetsIntersect(state.xShape, shapes) ? register : undefined;
+}
+
 export function recallValueProof(
   op: IrOp,
   state: X2ValueDataflowState | undefined,
@@ -888,7 +898,8 @@ export function recallValueProof(
   const inX =
     x2ValueSetHasRegister(state.x, register) ||
     recallAlreadyInXMemoryValue(op, state) === register ||
-    recallAlreadyInXPreloadedDecimal(op, state) === register;
+    recallAlreadyInXPreloadedDecimal(op, state) === register ||
+    recallAlreadyInXStructuralShape(op, state) === register;
   const x2SyncRegister = recallAlreadySyncedInX2Value(op, state);
   const x2SyncValue =
     (recallAlreadySyncedInX2MemoryValue(op, state) ??
@@ -2266,6 +2277,21 @@ function recallX2ShapeFacts(
   return output;
 }
 
+function recallStructuralShapeFacts(
+  op: IrOp,
+  state: X2ValueDataflowState,
+  register: RegisterName,
+): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const fact of state.shapeMemory?.[register] ?? []) {
+    for (const structural of structuralShapeFacts(new Set([fact]))) output.add(structural);
+  }
+  for (const fact of preloadedConstantShapeFacts(op)) {
+    for (const structural of structuralShapeFacts(new Set([fact]))) output.add(structural);
+  }
+  return output;
+}
+
 function x2ShapesFromValueFacts(values: X2ValueSet): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
   for (const value of values) {
@@ -2282,6 +2308,14 @@ function dotSafeDecimalShapeValues(input: X2ShapeSet | undefined): Set<string> {
     if (model.normalizedDecimal !== undefined && model.normalizedSameAsRaw) output.add(model.normalizedDecimal);
   }
   return output;
+}
+
+function shapeSetsIntersect(left: X2ShapeSet | undefined, right: X2ShapeSet | undefined): boolean {
+  if (left === undefined || right === undefined) return false;
+  for (const fact of right) {
+    if (left.has(fact)) return true;
+  }
+  return false;
 }
 
 function structuralShapeFacts(input: X2ShapeSet): Set<X2ShapeFact> {

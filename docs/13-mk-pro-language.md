@@ -1302,7 +1302,10 @@ The pipeline currently contains:
   register value-memory layer: a direct `X->П r` remembers only concrete
   decimal facts proved for visible `X`, and a later direct or proved indirect
   `П->X r` rehydrates those decimal facts together with the ordinary `reg:r`
-  alias. This makes a recalled decimal register dot-safe for the same rewrites
+  alias. A parallel shape-memory layer remembers structural hex/super shapes
+  from the same stores and preloads; those facts can prove that a later recall
+  would not change visible `X`, but they still do not become dot-safe decimal
+  values. This makes a recalled decimal register dot-safe for the same rewrites
   as an inline literal, while unknown indirect stores clear the remembered
   facts and hex/non-normal preload shapes remain unsafe until separately proved.
   Repeated literal restoration may also consume those recalled/preloaded decimal
@@ -1377,10 +1380,13 @@ The pipeline currently contains:
   Direct conditional fallthroughs preserve visible X for the linear successor;
   counted-loop fallthroughs do the same for non-counter registers while dropping
   the alias to the decremented `R0`..`R3` counter.
-  The proof can also come from X2 decimal value-memory or decimal preload
-  metadata: if a register was stored with a concrete decimal literal, or
-  recalled from `preload const N`, and X was later rebuilt as the same value,
-  the recall is redundant even after the register alias itself was lost.
+  The proof can also come from X2 decimal value-memory, decimal preload
+  metadata, or structural hex/super shape-memory: if a register was stored with
+  a concrete decimal literal or structural display shape, or recalled from
+  matching `preload const N`, and X was later rebuilt as the same value/shape,
+  the recall is redundant even after the register alias itself was lost. Shape
+  proofs only remove recalls whose X2/previous-command side effects are already
+  proven unobservable; they do not make `.`/`/-/` restores dot-safe.
   Compiler marker labels that are not reachable branch/call targets also
   preserve the fact, while string targets, numeric-address targets, proved
   indirect-flow targets, procedure starts, and unknown indirect flow make labels

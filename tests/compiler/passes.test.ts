@@ -1583,6 +1583,23 @@ describe("ir passes on synthetic programs", () => {
     });
   });
 
+  it("recall value proof uses structural shape memory as in-X evidence", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      store("2"),
+      recall("3", "preload const FACE"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(recallValueProof(recall("2"), states[3])).toEqual({
+      register: "2",
+      inX: true,
+      x2SyncRegister: undefined,
+      x2SyncValue: false,
+    });
+  });
+
   it("recall removal analysis combines stack-lift and X2 value-sync safety", () => {
     const program: IrOp[] = [
       plain(0x35, "К {x}"),
@@ -3624,6 +3641,43 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0c, "ВП"),
       halt(),
     ]);
+  });
+
+  it("last-x-reuse drops structural recall when X was rebuilt as the same hex shape", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      recall("3", "preload const FACE"),
+      recall("2"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1", "preload const FACE"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      recall("3", "preload const FACE"),
+      halt(),
+    ]);
+  });
+
+  it("last-x-reuse keeps structural recall before immediate ВП context", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      recall("3", "preload const FACE"),
+      recall("2"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("last-x-reuse keeps redundant X2 sync before immediate ВП context", () => {
