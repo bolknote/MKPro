@@ -19,9 +19,11 @@ const run: IrPassFn = (ops) => {
 
   for (let index = 0; index < ops.length; index += 1) {
     const op = ops[index]!;
-    if (op.kind !== "cjump" || typeof op.target !== "string" || hasRewriteBarrier(op)) continue;
+    if ((op.kind !== "cjump" && op.kind !== "loop") || typeof op.target !== "string" || hasRewriteBarrier(op)) {
+      continue;
+    }
 
-    const register = immediatelyTestedRegister(ops, index);
+    const register = branchPreservedRegister(ops, index, op);
     if (register === undefined) continue;
     if ((references.get(op.target) ?? 0) !== 1) continue;
 
@@ -46,7 +48,7 @@ const run: IrPassFn = (ops) => {
     applied: remove.size,
     optimizations: [{
       name: "branch-target-x-reuse",
-      detail: `Dropped ${remove.size} branch-target recall${remove.size === 1 ? "" : "s"} already preserved in X by the condition path.`,
+      detail: `Dropped ${remove.size} branch-target recall${remove.size === 1 ? "" : "s"} already preserved in X by the branch path.`,
     }],
   };
 };
@@ -57,13 +59,37 @@ export const branchTargetXReuse: IrPass = {
   layoutSafe: false,
 };
 
-function immediatelyTestedRegister(ops: readonly IrOp[], cjumpIndex: number): RegisterName | undefined {
-  for (let index = cjumpIndex - 1; index >= 0; index -= 1) {
+function branchPreservedRegister(
+  ops: readonly IrOp[],
+  branchIndex: number,
+  branch: Extract<IrOp, { kind: "cjump" | "loop" }>,
+): RegisterName | undefined {
+  const register = immediatelyHeldRegister(ops, branchIndex);
+  if (register === undefined) return undefined;
+  if (branch.kind === "loop" && loopCounterRegister(branch.counter) === register) return undefined;
+  return register;
+}
+
+function immediatelyHeldRegister(ops: readonly IrOp[], branchIndex: number): RegisterName | undefined {
+  for (let index = branchIndex - 1; index >= 0; index -= 1) {
     const op = ops[index]!;
     if (op.kind === "label") continue;
     return removableRecallValueRegister(op);
   }
   return undefined;
+}
+
+function loopCounterRegister(counter: Extract<IrOp, { kind: "loop" }>["counter"]): RegisterName {
+  switch (counter) {
+    case "L0":
+      return "0";
+    case "L1":
+      return "1";
+    case "L2":
+      return "2";
+    case "L3":
+      return "3";
+  }
 }
 
 function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
@@ -117,5 +143,5 @@ function nextExecutableIndex(ops: readonly IrOp[], start: number): number | unde
 }
 
 function isNoFallthrough(op: IrOp): boolean {
-  return op.kind === "jump" || op.kind === "indirect-jump" || op.kind === "return";
+  return op.kind === "jump" || op.kind === "indirect-jump" || op.kind === "return" || op.kind === "stop";
 }

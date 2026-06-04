@@ -4843,6 +4843,68 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops[target + 1]).toMatchObject({ kind: "plain", opcode: 0x32 });
   });
 
+  it("branch-target-x-reuse treats stop as a no-fallthrough target separator", () => {
+    const program: IrOp[] = [
+      recall("6"),
+      cjump("target"),
+      halt(),
+      label("target"),
+      recall("6"),
+      plain(0x32, "К ЗН"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("6"),
+      cjump("target"),
+      halt(),
+      label("target"),
+      plain(0x32, "К ЗН"),
+      halt(),
+    ]);
+  });
+
+  it("branch-target-x-reuse drops recall when a counted-loop target preserves non-counter X", () => {
+    const program: IrOp[] = [
+      recall("6"),
+      loop("target"),
+      halt(),
+      label("target"),
+      recall("6"),
+      plain(0x32, "К ЗН"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("6"),
+      loop("target"),
+      halt(),
+      label("target"),
+      plain(0x32, "К ЗН"),
+      halt(),
+    ]);
+  });
+
+  it("branch-target-x-reuse keeps counted-loop counter target recalls", () => {
+    const program: IrOp[] = [
+      recall("0"),
+      loop("target"),
+      halt(),
+      label("target"),
+      recall("0"),
+      plain(0x32, "К ЗН"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("branch-target-x-reuse drops stable indirect recall when the condition already tested its target", () => {
     const program: IrOp[] = [
       knownTargetIndirectRecall("7", "6"),

@@ -1426,11 +1426,14 @@ The pipeline currently contains:
   X2-register-aware `.`/`/-/`/`ВП` sync guard (stopped by direct `В/О` returns) plus
   downstream stack-consumer guards are applied before removing a recall.
 - **branch-target-x-reuse** — drops the first `П->X r` inside a unique branch
-  target when the incoming condition just tested the same direct or
-  stable-indirect recalled value, so the branch path already carries that value
-  in X, unless that recall is needed as the target-side X2 sync before `.`/`/-/`/`ВП`
-  before a direct `В/О` return syncs X2. The shared X2-register proof can now
-  show that the branch path already has the same X2 value, so only immediate
+  target when the incoming branch path already carries that value in X. This
+  covers direct zero-test branches and counted-loop branch targets for
+  non-counter registers; a loop target recall of the decremented counter is
+  kept. `С/П` is treated as a no-fallthrough separator for this uniqueness
+  check, matching the CFG used by the other passes. The rewrite is refused when
+  that recall is needed as the target-side X2 sync before `.`/`/-/`/`ВП` before a
+  direct `В/О` return syncs X2. The shared X2-register proof can now show that
+  the branch path already has the same X2 value, so only immediate
   previous-command context and real stack-lift consumers keep the target recall.
 - **liveness-analysis** — foundational dataflow used by DSE, register
   coalescing, and dead-code analysis. Proved indirect flow targets
