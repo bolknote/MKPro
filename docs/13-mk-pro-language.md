@@ -1223,13 +1223,16 @@ The pipeline currently contains:
 - **X2-register dataflow** — a forward proof tracks states of the form “X2 is
   known to contain register `r`” through X2-preserving ordinary code, stores,
   known indirect memory recalls, direct calls into the proved graph, and
-  path-sensitive direct conditional edges. `В/О`, `С/П`, unknown indirect flow,
-  and opaque X2-affecting commands clear the proof. Recall-removal passes use
-  this to distinguish a required sync from a redundant re-sync before later
-  `.`/`ВП` restoration. The proof also carries register aliases: when X and X2
-  are known to share a register value, a later `X->П s` makes `s` another
-  proven name for the same hidden X2 value; if `s` is overwritten while X no
-  longer matches X2, the alias is removed instead of being kept stale.
+  path-sensitive direct conditional edges. Direct `В/О` continuations are now
+  modeled as an X2 sync from the returned X value: if X is known to contain
+  register `r`, the caller continuation gets `X2 = r`; if returned X is
+  unknown, the X2 proof is cleared. `С/П`, unknown indirect flow, and opaque
+  X2-affecting commands also clear the proof. Recall-removal passes use this to
+  distinguish a required sync from a redundant re-sync before later `.`/`ВП`
+  restoration. The proof also carries register aliases: when X and X2 are known
+  to share a register value, a later `X->П s` makes `s` another proven name for
+  the same hidden X2 value; if `s` is overwritten while X no longer matches X2,
+  the alias is removed instead of being kept stale.
 - **x2-hidden-temp-restore** — replaces a direct scratch `П->X r` with `.`
   when X2-register dataflow proves X2 already contains the same register value,
   a separate `.` restore-gap proof has seen two safe X2-preserving executable

@@ -650,12 +650,14 @@ Display rewrites are separated into strategy selection + body lowering.
 - `x2-register-dataflow` — tracks definite states of the form “X2 currently
   equals register `r`” through X2-preserving code, stores, known indirect memory
   recalls, direct calls into the proved graph, and branch-specific direct
-  conditional effects. Returns, stops, opaque X2-affecting ops, and unknown
-  indirect flow clear the proof. Recall-removal passes use it to remove
-  redundant `П->X r` re-syncs while still preserving immediate `ВП`/`.` context.
-  When X and X2 are proved to share a register value, `X->П s` extends the proof
-  with `s` as another alias for that hidden value; overwriting `s` from a value
-  no longer equal to X2 removes the alias.
+  conditional effects. Direct `В/О` continuations sync X2 from the returned X
+  value when that value is proved; if returned X is unknown, the proof is
+  cleared. Stops, opaque X2-affecting ops, and unknown indirect flow also clear
+  the proof. Recall-removal passes use it to remove redundant `П->X r` re-syncs
+  while still preserving immediate `ВП`/`.` context. When X and X2 are proved to
+  share a register value, `X->П s` extends the proof with `s` as another alias
+  for that hidden value; overwriting `s` from a value no longer equal to X2
+  removes the alias.
 - `stack-resident-temps` — keeps up to four consecutive single-use temps on the stack, using `В↑` lifts and restore sequences (`X↔Y` / `F reverse`) before direct stack-based consumers.
 - `stack-resident-indexed-temp` — keeps a single-use temp in X across one indexed compound store `cells[i] op= temp` when the temp is consumed exactly once and selector/index setup is not temp-dependent.
 - `stack-resident-control-flow` — marks stack-temp fusion that crosses stack-preserving `if` / `while` / `dispatch` regions; these regions cannot clobber live temps and the lowering rebuilds stack state if the region requires it.

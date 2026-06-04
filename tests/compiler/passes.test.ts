@@ -300,6 +300,41 @@ describe("ir passes on synthetic programs", () => {
     expect(registerStateText(states[5])).toEqual(["2"]);
   });
 
+  it("x2 register dataflow syncs X2 through direct subroutine returns", () => {
+    const program: IrOp[] = [
+      label("main"),
+      call("load"),
+      plain(0x20, "F pi"),
+      halt(),
+      label("load"),
+      recall("4"),
+      ret(),
+    ];
+
+    const states = computeX2RegisterStates(program);
+
+    expect(registerStateText(states[2])).toEqual(["4"]);
+    expect(registerStateText(states[3])).toEqual(["4"]);
+  });
+
+  it("x2 register dataflow clears return-time X2 when returned X is unknown", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x35, "К {x}"),
+      call("noop"),
+      plain(0x20, "F pi"),
+      halt(),
+      label("noop"),
+      ret(),
+    ];
+
+    const states = computeX2RegisterStates(program);
+
+    expect(registerStateText(states[2])).toEqual(["1"]);
+    expect(registerStateText(states[3])).toEqual([]);
+    expect(registerStateText(states[4])).toEqual([]);
+  });
+
   it("x2-hidden-temp-restore replaces a safe recall with dot so DSE can remove the scratch store", () => {
     const program: IrOp[] = [
       recall("1"),

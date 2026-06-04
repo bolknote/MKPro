@@ -322,12 +322,13 @@ function transferRegisterDataflowState(
         x2: effect === "preserves" ? new Set(input.x2) : new Set(),
       };
     }
-    case "return":
     case "stop":
     case "indirect-jump":
     case "indirect-call":
     case "indirect-cjump":
       return emptyRegisterDataflowState();
+    case "return":
+      return { x: new Set(input.x), x2: new Set(input.x) };
   }
 }
 
