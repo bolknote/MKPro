@@ -74,6 +74,18 @@ function canRemoveClosedContextSignPair(
   return canRemoveClosedContextSignPairBeforeProvedVp(ops, secondSignIndex, state, stateAfterPair);
 }
 
+function canRemoveOpenMantissaSignPairBeforeProvedVp(
+  ops: readonly IrOp[],
+  secondSignIndex: number,
+  state: X2ValueDataflowState | undefined,
+  stateAfterPair: X2ValueDataflowState | undefined,
+): boolean {
+  if (state?.entry.kind !== "open") return false;
+  const nextIndex = nextNonLabelIndex(ops, secondSignIndex + 1);
+  if (nextIndex === undefined || !isFreeStandingVp(ops[nextIndex]!)) return false;
+  return sameNonEmptyStringSet(state.entry.raw, stateAfterPair?.vpEntryMantissa);
+}
+
 function decimalValueSetsIntersect(left: X2ValueSet | undefined, right: X2ValueSet | undefined): boolean {
   if (left === undefined || right === undefined) return false;
   for (const value of left) {
@@ -164,6 +176,17 @@ const run: IrPassFn = (ops) => {
       isFreeStandingSignChange(prev) &&
       isFreeStandingSignChange(cur) &&
       x2ValueStates[i - 1]?.entry.kind === "exponent"
+    ) {
+      remove.add(i - 1);
+      remove.add(i);
+    }
+    // A mantissa sign pair before ВП also cancels for non-zero digit-entry
+    // shapes. Signed zero is deliberately excluded because `/-/` leaves a
+    // sticky `-0` mantissa shape there.
+    if (
+      isFreeStandingSignChange(prev) &&
+      isFreeStandingSignChange(cur) &&
+      canRemoveOpenMantissaSignPairBeforeProvedVp(ops, i, x2ValueStates[i - 1], x2ValueStates[i + 1])
     ) {
       remove.add(i - 1);
       remove.add(i);

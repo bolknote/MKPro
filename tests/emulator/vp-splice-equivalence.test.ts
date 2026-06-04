@@ -196,8 +196,14 @@ describe("ВП exponent-entry splice collapse (vp-splice)", () => {
     expect(display([0x02, F0, SIGN_CHANGE, SIGN_CHANGE, VP, 0x03, STOP])).toBe(
       display([0x02, F0, VP, 0x03, STOP]),
     );
+    expect(display([0x00, 0x02, SIGN_CHANGE, SIGN_CHANGE, VP, 0x03, STOP])).toBe(
+      display([0x00, 0x02, VP, 0x03, STOP]),
+    );
     expect(display([CLEAR_X, SIGN_CHANGE, SIGN_CHANGE, VP, 0x03, STOP])).not.toBe(
       display([CLEAR_X, VP, 0x03, STOP]),
+    );
+    expect(display([0x00, SIGN_CHANGE, SIGN_CHANGE, VP, 0x03, STOP])).not.toBe(
+      display([0x00, VP, 0x03, STOP]),
     );
     // `X->П` immediately before ВП changes the previous-command context, so
     // the decimal sync proof cannot be inferred just from `X == X2`.
@@ -234,5 +240,21 @@ describe("ВП exponent-entry splice collapse (vp-splice)", () => {
       .map((item) => item.opcode);
     expect(beforeVpCodes).toEqual([0x02, F0, VP, 0x03, STOP]);
     expect(display(beforeVpCodes)).toBe(display([0x02, F0, SIGN_CHANGE, SIGN_CHANGE, VP, 0x03, STOP]));
+
+    const openBeforeVpPair: MachineItem[] = [
+      { kind: "op", opcode: 0x00, mnemonic: "0" },
+      { kind: "op", opcode: 0x02, mnemonic: "2" },
+      { kind: "op", opcode: SIGN_CHANGE, mnemonic: "/-/" },
+      { kind: "op", opcode: SIGN_CHANGE, mnemonic: "/-/" },
+      { kind: "op", opcode: VP, mnemonic: "ВП" },
+      { kind: "op", opcode: 0x03, mnemonic: "3" },
+      { kind: "op", opcode: STOP, mnemonic: "С/П" },
+    ];
+    const openBeforeVpResult = runIrPasses(openBeforeVpPair, { delivery: "hex", budget: 105, analysis: false });
+    const openBeforeVpCodes = openBeforeVpResult.items
+      .filter((item): item is Extract<MachineItem, { opcode: number }> => "opcode" in item)
+      .map((item) => item.opcode);
+    expect(openBeforeVpCodes).toEqual([0x00, 0x02, VP, 0x03, STOP]);
+    expect(display(openBeforeVpCodes)).toBe(display([0x00, 0x02, SIGN_CHANGE, SIGN_CHANGE, VP, 0x03, STOP]));
   });
 });

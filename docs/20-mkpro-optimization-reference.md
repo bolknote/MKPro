@@ -760,9 +760,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `КНОП`/`К1`/`К2`) also becomes a structural exponent-entry state; this
     proof is deliberately not inferred through stores or general X-preserving
     commands because the MK-61 previous-command context changes what `ВП`
-    restores. A proved non-zero closed-context `/-/` carries the same fact with
-    the mantissa sign toggled, while zero is not accepted because the emulator
-    distinguishes signed-zero mantissa shape from normalized decimal `0`.
+    restores. A proved `/-/` carries the same fact with the mantissa sign
+    toggled. Zero is represented as a distinct `-0` mantissa shape rather than
+    normalized away, because the emulator distinguishes `Cx /-/ ВП` from
+    `Cx ВП` even though visible `X` normalizes both decimal values to `0`.
     Ordinary digits after an
     X2-preserving gap start fresh number entry, but `/-/` can still see and
     update that VP context. These hidden exponent forms still do not produce
@@ -806,8 +807,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     VP/exponent context to remove empty separators before `/-/` after
     X2-preserving gaps such as `ВП 3 Fπ КНОП /-/`, and it can remove exponent
     sign toggles after a closed decimal X2-sync-fed `ВП` such as
-    `2 F0 ВП /-/ /-/ 3`; a non-zero closed-context sign pair before the proved
-    `ВП` (`2 F0 /-/ /-/ ВП 3`) can also collapse. The after-digit separator
+    `2 F0 ВП /-/ /-/ 3`; a non-zero sign pair before the proved `ВП`
+    (`2 F0 /-/ /-/ ВП 3`, `02 /-/ /-/ ВП 3`) can also collapse. The signed-zero
+    forms are kept because `0 /-/ /-/ ВП` still differs from `0 ВП`.
+    The after-digit separator
     rewrite is deliberately shape-sensitive: the same empty op before the
     first exponent digit, or before another exponent digit, changes number
     entry and is kept. Closed-context `/-/ /-/` pairs are removed only when

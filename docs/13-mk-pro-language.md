@@ -1287,9 +1287,9 @@ The pipeline currently contains:
   proved closed decimal syncs (`Cx`, `В↑`, `F0..FF`) through only
   `КНОП`/`К1`/`К2`; this lets exponent-entry rewrites use hidden X2 without
   pretending that a preceding `X->П` or arbitrary preserving command leaves the
-  same previous-command context. Proved non-zero closed `/-/` toggles that
-  mantissa fact, while normalized zero is excluded because `Cx /-/ ВП` has a
-  signed-zero mantissa shape on the emulator.
+  same previous-command context. Proved `/-/` toggles that mantissa fact, but
+  zero is carried as a distinct `-0` shape instead of normalized away because
+  `Cx /-/ ВП` has a signed-zero mantissa on the emulator.
 - **x2-hidden-temp-restore** — replaces a direct scratch `П->X r`, or a
   stable-indirect proved scratch `К П->X R7..Re`, with `.` when X2-register
   dataflow or the stricter X2 value proof shows that hidden X2 already contains

@@ -703,7 +703,21 @@ describe("ir passes on synthetic programs", () => {
     expect(x2EntryStateText(states[5])).toBe("exponent:-2:3");
   });
 
-  it("x2 value dataflow models closed zero sign-change as normalized zero", () => {
+  it("x2 value dataflow carries open mantissa sign-change into a following ВП", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[3])).toBe("exponent:-2:");
+    expect(x2EntryStateText(states[4])).toBe("exponent:-2:3");
+  });
+
+  it("x2 value dataflow models closed zero sign-change as normalized X with signed-zero X2", () => {
     const program: IrOp[] = [
       plain(0x0d, "Cx"),
       plain(0x0b, "/-/"),
@@ -712,10 +726,10 @@ describe("ir passes on synthetic programs", () => {
     const states = computeX2ValueStates(program);
 
     expect(x2ValueStateText(states[2]?.x)).toEqual(["decimal:0:normalized"]);
-    expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:0:normalized"]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:-0:unnormalized"]);
   });
 
-  it("x2 value dataflow does not model signed zero as an ordinary ВП mantissa", () => {
+  it("x2 value dataflow models signed zero as a distinct ВП mantissa shape", () => {
     const program: IrOp[] = [
       plain(0x0d, "Cx"),
       plain(0x0b, "/-/"),
@@ -725,7 +739,23 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program);
 
-    expect(x2EntryStateText(states[3])).toBe("unknown");
+    expect(x2EntryStateText(states[3])).toBe("exponent:-0:");
+    expect(x2EntryStateText(states[4])).toBe("exponent:-0:3");
+  });
+
+  it("x2 value dataflow keeps signed zero sticky across repeated sign-change before ВП", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[4])).toBe("exponent:-0:");
+    expect(x2EntryStateText(states[5])).toBe("exponent:-0:3");
   });
 
   it("x2 value dataflow treats dot in open number entry as decimal input", () => {
@@ -4264,12 +4294,49 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes a non-zero open mantissa sign pair before proved ВП", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
   it("vp-splice keeps a closed-context sign pair when it shapes a following ВП", () => {
     const program: IrOp[] = [
       plain(0x0d, "Cx"),
       plain(0x0b, "/-/"),
       plain(0x0b, "/-/"),
       plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("vp-splice keeps a zero mantissa sign pair before ВП because signed zero is sticky", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
       halt(),
     ];
     const result = vpSplice.run(program, ctx);

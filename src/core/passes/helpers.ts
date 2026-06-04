@@ -865,7 +865,13 @@ function transferSignChangeX2ValueState(input: X2ValueDataflowState): X2ValueDat
     const x2Fact = x2DecimalEntryFact(signed);
     if (x2Fact !== undefined) x2.add(x2Fact);
   }
-  return { x, x2, entry: closedX2EntryState(), vpContext: noneX2VpContextState() };
+  return {
+    x,
+    x2,
+    entry: closedX2EntryState(),
+    vpContext: noneX2VpContextState(),
+    vpEntryMantissa: signChangedMantissaShapes(input.entry.raw),
+  };
 }
 
 function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowState {
@@ -1219,6 +1225,9 @@ function signChangedDecimalEntry(raw: string): string {
 }
 
 function signChangeClosedDecimalState(input: X2ValueDataflowState): X2ValueDataflowState | undefined {
+  const shaped = signChangedVpEntryMantissas(input);
+  if (shaped !== undefined) return x2ValueStateFromMantissaShapes(shaped);
+
   const values = new Set<X2ValueFact>();
   for (const fact of input.x2) {
     if (!input.x.has(fact)) continue;
@@ -1232,7 +1241,6 @@ function signChangeClosedDecimalState(input: X2ValueDataflowState): X2ValueDataf
     x2: new Set(values),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
-    vpEntryMantissa: signChangedNonZeroVpEntryMantissas(input),
   };
 }
 
@@ -1250,22 +1258,54 @@ function isEmptyPlainOp(op: Extract<IrOp, { kind: "plain" }>): boolean {
   return op.opcode >= 0x54 && op.opcode <= 0x56;
 }
 
-function signChangedNonZeroVpEntryMantissas(input: X2ValueDataflowState): ReadonlySet<string> | undefined {
+function signChangedVpEntryMantissas(input: X2ValueDataflowState): ReadonlySet<string> | undefined {
+  if (input.vpEntryMantissa !== undefined) return signChangedMantissaShapes(input.vpEntryMantissa);
   const mantissas = new Set<string>();
-  let sawSharedDecimal = false;
   for (const fact of input.x2) {
     if (!input.x.has(fact)) continue;
     const decimal = /^decimal:(-?[0-9]+):normalized$/u.exec(fact);
     if (decimal === null) continue;
-    sawSharedDecimal = true;
-    const signed = signChangedDecimalEntry(decimal[1]!);
-    // `Cx /-/ ВП` produces a negative-zero mantissa shape on the emulator,
-    // while the ordinary decimal value fact still normalizes it to zero.
-    // Keep zero out of this proof until the mantissa model can spell signed 0.
-    if (signed === "0") return undefined;
+    const signed = signChangedMantissaShape(decimal[1]!);
+    if (signed === undefined) return undefined;
     mantissas.add(signed);
   }
-  return sawSharedDecimal && mantissas.size > 0 ? mantissas : undefined;
+  return mantissas.size > 0 ? mantissas : undefined;
+}
+
+function signChangedMantissaShapes(input: ReadonlySet<string>): ReadonlySet<string> | undefined {
+  const mantissas = new Set<string>();
+  for (const raw of input) {
+    const signed = signChangedMantissaShape(raw);
+    if (signed === undefined) return undefined;
+    mantissas.add(signed);
+  }
+  return mantissas.size === 0 ? undefined : mantissas;
+}
+
+function signChangedMantissaShape(raw: string): string | undefined {
+  const normalized = normalizeDecimalEntry(raw);
+  if (normalized === undefined) return undefined;
+  if (normalized === "0") return "-0";
+  return raw.startsWith("-") ? raw.slice(1) : `-${raw}`;
+}
+
+function x2ValueStateFromMantissaShapes(mantissas: ReadonlySet<string>): X2ValueDataflowState | undefined {
+  const x = new Set<X2ValueFact>();
+  const x2 = new Set<X2ValueFact>();
+  for (const raw of mantissas) {
+    const normalized = normalizeDecimalEntry(raw);
+    const x2Fact = x2DecimalEntryFact(raw);
+    if (normalized === undefined || x2Fact === undefined) return undefined;
+    x.add(decimalValueFact(normalized, "normalized"));
+    x2.add(x2Fact);
+  }
+  return {
+    x,
+    x2,
+    entry: closedX2EntryState(),
+    vpContext: noneX2VpContextState(),
+    vpEntryMantissa: mantissas,
+  };
 }
 
 function closedX2EntryState(): X2EntryState {
