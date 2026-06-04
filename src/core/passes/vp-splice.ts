@@ -8,6 +8,7 @@ import {
   removingRecallCanExposeX2Restore,
   sameX2ExponentShapeContext,
   x2StateHasSameDotSafeDecimalInXAndX2,
+  x2StateHasSameStructuralShapeInXAndX2,
   x2StateHasX2RestoreContext,
   x2StateIsClosedPlainContext,
   x2ValueSetHasIntersection,
@@ -55,7 +56,11 @@ function canRemoveClosedContextSignPair(
 ): boolean {
   if (!x2StateIsClosedPlainContext(state)) return false;
   if (state === undefined) return false;
-  if (!x2ValueSetHasIntersection(state.x, state.x2) && !x2StateHasSameDotSafeDecimalInXAndX2(state)) return false;
+  if (
+    !x2ValueSetHasIntersection(state.x, state.x2) &&
+    !x2StateHasSameDotSafeDecimalInXAndX2(state) &&
+    !x2StateHasSameStructuralShapeInXAndX2(state)
+  ) return false;
   if (!removingRecallCanExposeX2Restore(ops, secondSignIndex)) return true;
   return canRemoveClosedContextSignPairBeforeProvedVp(ops, secondSignIndex, state, stateAfterPair);
 }

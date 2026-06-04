@@ -6,6 +6,7 @@ import {
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   x2StateHasDotSafeDecimalX2,
+  x2StateHasStructuralShapeX2,
   x2StateIsClosedPlainContext,
   type IrPass,
   type IrPassFn,
@@ -50,8 +51,12 @@ function isDeadRestoreCandidate(
 ): boolean {
   if (state === undefined || !isFreeStandingPlain(op)) return false;
   if (isDisplayFocusSensitive(op)) return false;
-  if (op.opcode === DOT || op.opcode === SIGN_CHANGE) {
+  if (op.opcode === DOT) {
     return x2StateIsClosedPlainContext(state) && x2StateHasDotSafeDecimalX2(state);
+  }
+  if (op.opcode === SIGN_CHANGE) {
+    return x2StateIsClosedPlainContext(state) &&
+      (x2StateHasDotSafeDecimalX2(state) || x2StateHasStructuralShapeX2(state));
   }
   if (op.opcode === VP) {
     return state.entry.kind === "open" ||

@@ -40,6 +40,7 @@ import {
   recallValueProof,
   x2ShapeDataModelForFact,
   x2ShapeSetsHaveSameDotSafeDecimal,
+  x2ShapeSetsHaveSameStructuralShape,
   x2ShapeSetSafety,
   type X2ShapeSet,
   type X2ValueSet,
@@ -721,6 +722,18 @@ describe("ir passes on synthetic programs", () => {
       x2ShapeSetsHaveSameDotSafeDecimal(
         new Set(["mantissa:2:decimal"]),
         new Set(["hex:FABC:mantissa"]),
+      ),
+    ).toBe(false);
+    expect(
+      x2ShapeSetsHaveSameStructuralShape(
+        new Set(["hex:FABC:mantissa"]),
+        new Set(["hex:FABC:mantissa"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ShapeSetsHaveSameStructuralShape(
+        new Set(["super:FA"]),
+        new Set(["hex:FA:mantissa"]),
       ),
     ).toBe(false);
   });
@@ -2485,6 +2498,23 @@ describe("ir passes on synthetic programs", () => {
 
     expect(result.applied).toBe(0);
     expect(result.ops).toEqual(program);
+  });
+
+  it("x2-dead-restore-before-overwrite removes structural sign restore before hard overwrite", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const 8.70Е2-6С"),
+      plain(0x0b, "/-/"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1", "preload const 8.70Е2-6С"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
   });
 
   it("x2-dead-restore-before-overwrite removes dot after a recalled decimal register", () => {
@@ -6489,6 +6519,29 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual([
       plain(0x35, "К {x}"),
       plain(0x0e, "В↑"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes a closed-context structural shape sign pair", () => {
+    const shapedSign: IrOp = {
+      kind: "plain",
+      opcode: 0x0b,
+      meta: { mnemonic: "/-/", roles: ["display-byte"] },
+    };
+    const program: IrOp[] = [
+      recall("2", "preload const 8.70Е2-6С"),
+      shapedSign,
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      recall("2", "preload const 8.70Е2-6С"),
+      shapedSign,
       halt(),
     ]);
   });

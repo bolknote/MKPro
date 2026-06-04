@@ -590,6 +590,10 @@ export function x2StateHasDotSafeDecimalX2(state: X2ValueDataflowState | undefin
   return x2RestoreSafety(state) === "dotSafeDecimal";
 }
 
+export function x2StateHasStructuralShapeX2(state: X2ValueDataflowState | undefined): boolean {
+  return x2RestoreSafety(state) === "structuralOnly";
+}
+
 export function x2ShapeSetsHaveSameDotSafeDecimal(
   left: X2ShapeSet | undefined,
   right: X2ShapeSet | undefined,
@@ -603,8 +607,24 @@ export function x2ShapeSetsHaveSameDotSafeDecimal(
   return false;
 }
 
+export function x2ShapeSetsHaveSameStructuralShape(
+  left: X2ShapeSet | undefined,
+  right: X2ShapeSet | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return false;
+  const leftShapes = structuralShapeFacts(left);
+  for (const shape of leftShapes) {
+    if (right.has(shape)) return true;
+  }
+  return false;
+}
+
 export function x2StateHasSameDotSafeDecimalInXAndX2(state: X2ValueDataflowState | undefined): boolean {
   return state !== undefined && x2ShapeSetsHaveSameDotSafeDecimal(state.xShape, state.x2Shape);
+}
+
+export function x2StateHasSameStructuralShapeInXAndX2(state: X2ValueDataflowState | undefined): boolean {
+  return state !== undefined && x2ShapeSetsHaveSameStructuralShape(state.xShape, state.x2Shape);
 }
 
 export function x2StateIsClosedPlainContext(state: X2ValueDataflowState | undefined): boolean {
@@ -2172,6 +2192,15 @@ function dotSafeDecimalShapeValues(input: X2ShapeSet | undefined): Set<string> {
   for (const model of x2ShapeDataModels(input)) {
     if (model.kind !== "mantissa" || model.radix !== "decimal" || model.safety !== "dotSafeDecimal") continue;
     if (model.normalizedDecimal !== undefined && model.normalizedSameAsRaw) output.add(model.normalizedDecimal);
+  }
+  return output;
+}
+
+function structuralShapeFacts(input: X2ShapeSet): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const fact of input) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind === "mantissa" && (model.radix === "hex" || model.radix === "super")) output.add(fact);
   }
   return output;
 }
