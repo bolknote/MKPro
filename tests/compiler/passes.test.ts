@@ -26,7 +26,8 @@ import { tailBranchInversion } from "../../src/core/passes/tail-branch-inversion
 import { tailCallLowering } from "../../src/core/passes/tail-call.ts";
 import { vpX2Peephole } from "../../src/core/passes/vp-x2-peephole.ts";
 import { x2HiddenTempRestore } from "../../src/core/passes/x2-hidden-temp-restore.ts";
-import { computeX2RegisterStates } from "../../src/core/passes/helpers.ts";
+import { x2NoopRestore } from "../../src/core/passes/x2-noop-restore.ts";
+import { computeX2RegisterStates, computeX2ValueStates, type X2ValueSet } from "../../src/core/passes/helpers.ts";
 import type { IrOp, RegisterName } from "../../src/core/types.ts";
 
 const noopOptions = { delivery: "manual" as const, budget: 105, analysis: false };
@@ -133,6 +134,10 @@ function numericCall(target: number): IrOp {
     meta: { mnemonic: "ПП" },
     targetMeta: {},
   };
+}
+
+function orphanAddress(target = 0): IrOp {
+  return { kind: "orphan-address", target, meta: { comment: "test address gap" } };
 }
 
 function call(target: string): IrOp {
@@ -262,6 +267,10 @@ function machineCellCount(ops: readonly IrOp[]): number {
 }
 
 function registerStateText(state: ReadonlySet<RegisterName> | undefined): string[] | undefined {
+  return state === undefined ? undefined : [...state].sort();
+}
+
+function x2ValueStateText(state: X2ValueSet | undefined): string[] | undefined {
   return state === undefined ? undefined : [...state].sort();
 }
 
@@ -458,6 +467,153 @@ describe("ir passes on synthetic programs", () => {
     expect(registerStateText(states[2])).toEqual(["1"]);
     expect(registerStateText(states[3])).toEqual([]);
     expect(registerStateText(states[4])).toEqual([]);
+  });
+
+  it("x2 value dataflow tracks const zero through X-preserving gaps", () => {
+    const program: IrOp[] = [
+      plain(0x0d, "Cx"),
+      plain(0x54, "К НОП"),
+      plain(0x55, "К 1"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[1]?.x)).toEqual(["decimal:0:normalized"]);
+    expect(x2ValueStateText(states[1]?.x2)).toEqual(["decimal:0:normalized"]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["decimal:0:normalized"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:0:normalized"]);
+  });
+
+  it("x2-noop-restore removes a safe dot when X already has the X2 register value", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      plain(0x54, "К НОП"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      store("2"),
+      plain(0x54, "К НОП"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore removes dot immediately after a recall X2 sync", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore removes dot immediately after Cx zero sync", () => {
+    const program: IrOp[] = [
+      plain(0x0d, "Cx"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore uses path-sensitive conditional fallthrough X2 sync", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      cjump("done"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      cjump("done"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore removes a safe dot for a proved zero value, not only registers", () => {
+    const program: IrOp[] = [
+      plain(0x0d, "Cx"),
+      orphanAddress(54),
+      orphanAddress(55),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x0d, "Cx"),
+      orphanAddress(54),
+      orphanAddress(55),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore keeps dot when it would change the next ВП context", () => {
+    const program: IrOp[] = [
+      plain(0x0d, "Cx"),
+      plain(0x54, "К НОП"),
+      plain(0x55, "К 1"),
+      plain(0x0a, "."),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-noop-restore keeps immediate post-sync dot when it shapes the next ВП context", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x0a, "."),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-noop-restore keeps dot when X no longer has the hidden X2 value", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      plain(0x35, "К {x}"),
+      plain(0x54, "К НОП"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("x2-hidden-temp-restore replaces a safe recall with dot so DSE can remove the scratch store", () => {

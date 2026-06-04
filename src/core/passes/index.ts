@@ -39,6 +39,7 @@ import { tailCallLowering } from "./tail-call.ts";
 import { vpSplice } from "./vp-splice.ts";
 import { vpX2Peephole } from "./vp-x2-peephole.ts";
 import { x2HiddenTempRestore } from "./x2-hidden-temp-restore.ts";
+import { x2NoopRestore } from "./x2-noop-restore.ts";
 
 const PASS_PIPELINE: ReadonlyArray<IrPass> = [
   redundantPrologueElimination,
@@ -59,6 +60,7 @@ const PASS_PIPELINE: ReadonlyArray<IrPass> = [
   preloadedIndirectFlow,
   runtimeIndirectCallFlow,
   indirectMemoryTable,
+  x2NoopRestore,
   x2HiddenTempRestore,
   deadStoreBeforeCommutative,
   deadStoreElimination,

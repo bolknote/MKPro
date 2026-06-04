@@ -2956,6 +2956,44 @@ program ComparisonMaskUpdate {
     expect(result.steps.some((step) => step.mnemonic === "К ЗН" && step.comment === "sign()")).toBe(true);
   });
 
+  it("folds comparison guarded corrections to the hand-written mask size", () => {
+    const state = `
+  state {
+    tile: counter 0..9 = 7
+    strength: counter -99..99 = 40
+    score: counter 0..99 = 0
+  }
+`;
+    const manual = compileOk(`
+program ManualComparisonMaskCorrections {
+${state}
+  loop {
+    strength += 4 - tile - (1 - sign(abs(tile - 7)))
+    score += tile - 2 + (1 - sign(abs(tile - 7)))
+    halt(score + strength)
+  }
+}
+`);
+    const sourceLevel = compileOk(`
+program SourceComparisonMaskCorrections {
+${state}
+  loop {
+    strength += 4 - tile
+    score += tile - 2
+    if tile == 7 {
+      strength--
+      score++
+    }
+    halt(score + strength)
+  }
+}
+`);
+
+    expect(sourceLevel.report.steps).toBe(manual.report.steps);
+    expect(sourceLevel.report.optimizations.some((item) => item.name === "comparison-guarded-update-correction")).toBe(true);
+    expect(sourceLevel.report.optimizations.some((item) => item.name === "comparison-guarded-update-selector")).toBe(true);
+  });
+
   it("keeps negative-zero guarded updates behind the cost gate", () => {
     const result = compileOk(`
 program NegativeZeroGuardedUpdate {

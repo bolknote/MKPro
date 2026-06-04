@@ -884,6 +884,11 @@ function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): Candid
       "comparison-guarded-update-selector",
       "Tried abs/sign comparison masks for guarded arithmetic updates after full layout",
     );
+    add(
+      { comparisonGuardedUpdateSelectors: true, invertBranchOrder: true },
+      "comparison-guarded-update-branch-order",
+      "Combined comparison guarded update masks with inverted branch-order layout",
+    );
   }
   add(
     { freeResidualDispatchScratch: true, canonicalizeIfChains: true },
@@ -2240,6 +2245,13 @@ function compileMKProOnce(
   }
   if (loweringOptions.comparisonGuardedUpdateSelectors === true) {
     canonicalizeComparisonGuardedUpdateCorrections(ast, optimizations);
+    const refoldedConstants = foldProgramConstants(ast);
+    if (refoldedConstants > 0) {
+      optimizations.push({
+        name: "expression-constant-folder",
+        detail: `Folded ${refoldedConstants} comparison guarded correction expression node${refoldedConstants === 1 ? "" : "s"} before code generation.`,
+      });
+    }
   }
   inlineDisplayStringValues(ast, optimizations);
   hoistOneShotLoopInitializers(ast, optimizations);
@@ -15030,8 +15042,8 @@ const optimizerCapabilities: Array<{
     category: "stack",
     source: "mk61-delta",
     requires: ["x2-register"],
-    activeWhen: ["membership-collection-x2-restore", "x2-hidden-temp-restore"],
-    detail: "Uses the hidden X2 display register as a temporary across ordinary X2-preserving logic: a membership test can keep a deterministic mask in Y, and direct scratch recalls can restore a proved X2-resident value through '.' when a safe restore gap and unused stack lift are both proven; known-fractional masks insert a preserving gap before the restore when К{x} is skipped.",
+    activeWhen: ["membership-collection-x2-restore", "x2-hidden-temp-restore", "x2-noop-restore"],
+    detail: "Uses the hidden X2 display register as a temporary across ordinary X2-preserving logic: a membership test can keep a deterministic mask in Y, direct scratch recalls can restore a proved X2-resident value through '.', and no-op restores are removed when value dataflow proves X already contains the hidden X2 value; known-fractional masks insert a preserving gap before the restore when К{x} is skipped.",
   },
   {
     id: "hex-mantissa-arithmetic",
@@ -15638,6 +15650,7 @@ function buildMachineFeaturesUsed(
     optimization.name === "floor-packed-row-expression-display" ||
     optimization.name === "membership-collection-x2-restore" ||
     optimization.name === "x2-hidden-temp-restore" ||
+    optimization.name === "x2-noop-restore" ||
     optimization.name === "vp-fraction-restore"
   )) {
     add("x2-register", "Optimizer scheduled hidden X2 values across display-byte or ordinary temporary boundaries.", "optimizer");

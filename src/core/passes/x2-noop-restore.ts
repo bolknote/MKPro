@@ -1,0 +1,102 @@
+import { getOpcode } from "../opcodes.ts";
+import type { IrOp } from "../types.ts";
+import {
+  computeX2DotRestoreGapStates,
+  computeX2ValueStates,
+  hasRewriteBarrier,
+  isDisplayFocusSensitive,
+  x2ValueSetHasIntersection,
+  type IrPass,
+  type IrPassFn,
+} from "./helpers.ts";
+
+const DOT = 0x0a;
+const VP = 0x0c;
+
+const run: IrPassFn = (ops) => {
+  const valueStates = computeX2ValueStates(ops);
+  const dotSafeStates = computeX2DotRestoreGapStates(ops);
+  const removed = new Set<number>();
+
+  for (let index = 0; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (!isPlainDot(op)) continue;
+    if (isDisplayFocusSensitive(op)) continue;
+    if (dotSafeStates[index] !== true && !isImmediateAfterX2AffectingSync(ops, index)) continue;
+    const state = valueStates[index];
+    if (!x2ValueSetHasIntersection(state?.x, state?.x2)) continue;
+    if (removingDotCanExposeX2RestoreContext(ops, index)) continue;
+    removed.add(index);
+  }
+
+  if (removed.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+  return {
+    ops: ops.filter((_, index) => !removed.has(index)),
+    applied: removed.size,
+    optimizations: [
+      {
+        name: "x2-noop-restore",
+        detail: `Removed ${removed.size} . restore${removed.size === 1 ? "" : "s"} whose X2 value was already in X.`,
+      },
+    ],
+  };
+};
+
+function isPlainDot(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
+  return op.kind === "plain" && op.opcode === DOT && !hasRewriteBarrier(op);
+}
+
+function isImmediateAfterX2AffectingSync(ops: readonly IrOp[], dotIndex: number): boolean {
+  for (let index = dotIndex - 1; index >= 0; index -= 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") continue;
+    if (hasRewriteBarrier(op)) return false;
+    if (op.kind === "recall" || op.kind === "indirect-recall") return true;
+    if (op.kind === "cjump" || op.kind === "loop" || op.kind === "indirect-cjump") {
+      return getOpcode(op.opcode).conditionalX2Effect?.fallthrough === "affects";
+    }
+    return op.kind === "plain" && getOpcode(op.opcode).x2Effect === "affects";
+  }
+  return false;
+}
+
+function removingDotCanExposeX2RestoreContext(ops: readonly IrOp[], dotIndex: number): boolean {
+  for (let index = dotIndex + 1; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (hasRewriteBarrier(op)) return true;
+    switch (op.kind) {
+      case "label":
+        continue;
+      case "plain": {
+        if (op.opcode === DOT || op.opcode === VP) return true;
+        const effect = getOpcode(op.opcode).x2Effect;
+        if (effect === "preserves") continue;
+        return false;
+      }
+      case "store":
+      case "indirect-store":
+      case "orphan-address":
+        continue;
+      case "jump":
+      case "cjump":
+      case "call":
+      case "loop":
+      case "indirect-jump":
+      case "indirect-call":
+      case "indirect-cjump":
+        return true;
+      case "recall":
+      case "indirect-recall":
+      case "return":
+      case "stop":
+        return false;
+    }
+  }
+  return false;
+}
+
+export const x2NoopRestore: IrPass = {
+  name: "x2-noop-restore",
+  run,
+  layoutSafe: false,
+};

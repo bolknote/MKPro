@@ -1244,6 +1244,28 @@ The pipeline currently contains:
   `X->П s` makes `s` another proven name for the same hidden X2 value; if `s`
   is overwritten while X no longer matches X2, the alias is removed instead of
   being kept stale.
+- **X2 value dataflow** — a stricter companion proof tracks small symbolic
+  value facts in both `X` and `X2`, currently register aliases (`reg:r`) and the
+  normalized decimal zero produced by `Cx` (`decimal:0:normalized`). Unlike
+  display-byte lowering, this proof is ordinary-code dataflow: X-preserving
+  empty operators keep the value live, branch-specific conditional X2 effects
+  participate in joins, and mutating indirect selectors drop only facts tied to
+  the mutated selector. The fact spelling is intentionally normalization-aware
+  so later `hex:...` and unnormalized/leading-zero decimal facts can join the
+  same model. Digit-entry and hexadecimal mantissa concatenation are not inferred
+  here yet; those need the wider normalized/unnormalized domain before they can
+  be proved safely.
+- **x2-noop-restore** — removes `.` when the value proof shows that `X` already
+  contains the same value as hidden `X2` and the separate restore-gap proof says
+  the dot is in a safe X2 context. It also accepts the documented no-op form
+  where `.` immediately follows an X2-affecting sync such as `П->X r`, `Cx`, or
+  the fallthrough side of a direct/proved-indirect conditional and the value
+  proof still shows `X = X2`; this treats recall as a combined
+  stack-lift/value-load/X2-sync operation and turns path-sensitive conditional
+  X2 sync from a guard into an active rewrite. The pass refuses the rewrite
+  before another reachable `.`/`ВП` context-sensitive restore, across opaque
+  control flow, raw cells, and display-focused cells, so it does not erase a dot
+  whose main job is to shape the next X2 restoration rather than to change `X`.
 - **x2-hidden-temp-restore** — replaces a direct scratch `П->X r`, or a
   stable-indirect proved scratch `К П->X R7..Re`, with `.` when X2-register
   dataflow proves X2 already contains the same register value, a separate `.`
