@@ -674,7 +674,10 @@ Display rewrites are separated into strategy selection + body lowering.
   jump edge preserves the previous hidden value. When X itself is proved to
   equal a register on the sync edge, the X2 proof records the same register.
   Indirect conditionals are also path-sensitive for control flow, but both
-  edges preserve the previous X2 value; they do not create an X-to-X2 sync.
+  edges preserve the previous X2 value; they do not create an X-to-X2 sync. The
+  stricter value proof also remembers concrete decimal facts stored by direct
+  `X->П r` and rehydrates them on a later direct or proved indirect `П->X r`,
+  while unknown indirect stores clear that register value-memory.
 - `x2-hidden-temp-restore` — turns a direct scratch `П->X r`, or a
   stable-indirect proved scratch `К П->X R7..Re`, into `.` when X2 already
   contains `r`, and either a `.` restore-gap dataflow has seen two safe
@@ -821,7 +824,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     restored `X` before it can be observed. `.` and `/-/` require a closed,
     non-`ВП` context with a proved decimal X2 value; a bare `reg:r` fact is
     intentionally rejected because a preloaded hex or non-normal register value
-    can make `.` signal `ЕГГ0Г`.
+    can make `.` signal `ЕГГ0Г`. This pass requests the register value-memory
+    layer: direct stores of proved decimal `X` facts seed remembered
+    `decimal:*` facts for later recalls, joins keep only facts common to every
+    path, and unknown indirect stores clear the memory.
 19. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap or a CFG-proven immediate X2 sync is available, while also proving the recall stack lift is unobserved. This lets later DSE remove now-unused scratch stores.
 20. `x2-literal-restore` — replaces a repeated explicit numeric literal with
     `.` when X2 value dataflow proves the same normalized decimal value is

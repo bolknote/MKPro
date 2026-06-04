@@ -17,7 +17,7 @@ const SIGN_CHANGE = 0x0b;
 const VP = 0x0c;
 
 const run: IrPassFn = (ops) => {
-  const states = computeX2ValueStates(ops);
+  const states = computeX2ValueStates(ops, { trackRegisterMemory: true });
   const remove = new Set<number>();
 
   for (let index = 0; index < ops.length; index += 1) {

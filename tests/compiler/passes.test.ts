@@ -1232,6 +1232,74 @@ describe("ir passes on synthetic programs", () => {
     expect(x2VpContextStateText(states[6])).toBe("none");
   });
 
+  it("x2 value dataflow recalls concrete decimal facts stored in registers", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      store("1"),
+      plain(0x0d, "Cx"),
+      recall("1"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[5]?.x)).toEqual(["decimal:2:normalized", "reg:1"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:2:normalized", "reg:1"]);
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["mantissa:2:decimal"]);
+    expect(x2ShapeStateText(states[5]?.x2Shape)).toEqual(["mantissa:2:decimal"]);
+  });
+
+  it("x2 value dataflow recalls concrete decimal facts through proved indirect memory", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      store("1"),
+      plain(0x0d, "Cx"),
+      knownTargetIndirectRecall("7", "1"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:2:normalized", "reg:1"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:2:normalized", "reg:1"]);
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["mantissa:2:decimal"]);
+    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["mantissa:2:decimal"]);
+  });
+
+  it("x2 value dataflow forgets register memory on unknown indirect stores", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      store("1"),
+      plain(0x03, "3"),
+      indirectStore("7"),
+      recall("1"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[5]?.x)).toEqual(["reg:1"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual(["reg:1"]);
+  });
+
+  it("x2 value dataflow intersects register memory at joins", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      cjump("store_path"),
+      jump("join"),
+      label("store_path"),
+      plain(0x02, "2"),
+      store("1"),
+      label("join"),
+      recall("1"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[8]?.x)).toEqual(["reg:1"]);
+    expect(x2ValueStateText(states[8]?.x2)).toEqual(["reg:1"]);
+    expect(x2ShapeStateText(states[8]?.xShape)).toEqual([]);
+    expect(x2ShapeStateText(states[8]?.x2Shape)).toEqual([]);
+  });
+
   it("x2 value dataflow refuses overlong exponent-entry state", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -2054,6 +2122,29 @@ describe("ir passes on synthetic programs", () => {
 
     expect(result.applied).toBe(0);
     expect(result.ops).toEqual(program);
+  });
+
+  it("x2-dead-restore-before-overwrite removes dot after a recalled decimal register", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      store("1"),
+      plain(0x0d, "Cx"),
+      recall("1"),
+      plain(0x0a, "."),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      store("1"),
+      plain(0x0d, "Cx"),
+      recall("1"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
   });
 
   it("x2-dead-restore-before-overwrite removes dead sign and ВП restores before hard overwrite", () => {

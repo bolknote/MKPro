@@ -1283,7 +1283,13 @@ The pipeline currently contains:
   facts back into visible `X`; decimal facts are normalized for `X` during that
   transfer while the hidden X2 representation stays unchanged. If number entry
   is still open, as in `1.`, the same byte is treated as decimal input and the
-  proof is cleared instead of inventing a restore.
+  proof is cleared instead of inventing a restore. The proof now also keeps a
+  register value-memory layer: a direct `X->П r` remembers only concrete
+  decimal facts proved for visible `X`, and a later direct or proved indirect
+  `П->X r` rehydrates those decimal facts together with the ordinary `reg:r`
+  alias. This makes a recalled decimal register dot-safe for the same rewrites
+  as an inline literal, while unknown indirect stores clear the remembered
+  facts and hex/non-normal preloads remain unsafe until separately proved.
 - **x2-noop-restore** — removes `.` when the value proof shows that `X` already
   contains the same value as hidden `X2` and the separate restore-gap proof says
   the dot is in a safe X2 context. It also accepts the documented no-op form
@@ -1314,7 +1320,9 @@ The pipeline currently contains:
   hexadecimal or other non-normal register value may make `.` signal `ЕГГ0Г`
   before the overwrite can run. `ВП` is removed only when the X2 value dataflow
   still knows an open mantissa, active exponent entry, or proved decimal
-  `vpEntryMantissa` source.
+  `vpEntryMantissa` source. This pass requests the register value-memory layer,
+  so a recall of a previously stored literal-shaped decimal can be treated like
+  a proved decimal restore without making arbitrary register contents dot-safe.
 - **x2-hidden-temp-restore** — replaces a direct scratch `П->X r`, or a
   stable-indirect proved scratch `К П->X R7..Re`, with `.` when X2-register
   dataflow or the stricter X2 value proof shows that hidden X2 already contains

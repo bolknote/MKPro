@@ -41,9 +41,27 @@ export type X2ShapeFact =
   | `hex:${string}:mantissa`
   | `super:${string}`;
 export type X2ShapeSet = ReadonlySet<X2ShapeFact>;
+type X2ValueMemory = Partial<Record<RegisterName, X2ValueSet>>;
 
 const NORMALIZED_DECIMAL_ZERO: X2ValueFact = "decimal:0:normalized";
 const SAME_UNKNOWN_VALUE: X2ValueFact = "same:unknown";
+const REGISTER_NAMES: readonly RegisterName[] = [
+  "0",
+  "1",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+  "7",
+  "8",
+  "9",
+  "a",
+  "b",
+  "c",
+  "d",
+  "e",
+];
 
 export interface X2ValueDataflowState {
   readonly x: X2ValueSet;
@@ -53,6 +71,7 @@ export interface X2ValueDataflowState {
   readonly entry: X2EntryState;
   readonly vpContext?: X2VpContextState;
   readonly vpEntryMantissa?: ReadonlySet<string> | undefined;
+  readonly memory?: X2ValueMemory | undefined;
 }
 
 type X2EntryState =
@@ -259,6 +278,10 @@ interface RegisterDataflowState {
   readonly x2: RegisterValueSet;
 }
 
+interface X2ValueDataflowOptions {
+  readonly trackRegisterMemory?: boolean;
+}
+
 export function computeX2RegisterStates(ops: readonly IrOp[]): Array<RegisterValueSet | undefined> {
   if (ops.length === 0) return [];
   const edges = buildRegisterValueGraph(ops);
@@ -288,11 +311,15 @@ export function computeX2RegisterStates(ops: readonly IrOp[]): Array<RegisterVal
   return inStates.map((state) => state?.x2);
 }
 
-export function computeX2ValueStates(ops: readonly IrOp[]): Array<X2ValueDataflowState | undefined> {
+export function computeX2ValueStates(
+  ops: readonly IrOp[],
+  options: X2ValueDataflowOptions = {},
+): Array<X2ValueDataflowState | undefined> {
   if (ops.length === 0) return [];
+  const trackRegisterMemory = options.trackRegisterMemory === true;
   const edges = buildRegisterValueGraph(ops);
   const inStates: Array<X2ValueDataflowState | undefined> = Array.from({ length: ops.length }, () => undefined);
-  inStates[0] = emptyX2ValueDataflowState();
+  inStates[0] = emptyX2ValueDataflowState(trackRegisterMemory);
 
   let changed = true;
   let iterations = 0;
@@ -304,8 +331,8 @@ export function computeX2ValueStates(ops: readonly IrOp[]): Array<X2ValueDataflo
       const input = inStates[index];
       if (input === undefined) continue;
       for (const edge of edges[index] ?? []) {
-        const output = transferX2ValueDataflowState(input, ops[index]!, edge.kind);
-        const joined = joinX2ValueDataflowStates(inStates[edge.target], output);
+        const output = transferX2ValueDataflowState(input, ops[index]!, edge.kind, trackRegisterMemory);
+        const joined = joinX2ValueDataflowStates(inStates[edge.target], output, trackRegisterMemory);
         if (!sameX2ValueDataflowState(joined, inStates[edge.target])) {
           inStates[edge.target] = joined;
           changed = true;
@@ -446,7 +473,7 @@ function emptyRegisterDataflowState(): RegisterDataflowState {
   return { x: new Set(), x2: new Set() };
 }
 
-function emptyX2ValueDataflowState(): X2ValueDataflowState {
+function emptyX2ValueDataflowState(trackRegisterMemory = false): X2ValueDataflowState {
   return {
     x: new Set(),
     x2: new Set(),
@@ -454,6 +481,7 @@ function emptyX2ValueDataflowState(): X2ValueDataflowState {
     x2Shape: new Set(),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
+    memory: trackRegisterMemory ? {} : undefined,
   };
 }
 
@@ -470,6 +498,7 @@ function cloneX2ValueDataflowState(input: X2ValueDataflowState): X2ValueDataflow
     entry: cloneX2EntryState(input.entry),
     vpContext: cloneX2VpContextState(input.vpContext),
     vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    memory: input.memory,
   };
 }
 
@@ -535,8 +564,9 @@ function transferX2ValueDataflowState(
   input: X2ValueDataflowState,
   op: IrOp,
   edge: Edge["kind"],
+  trackRegisterMemory: boolean,
 ): X2ValueDataflowState {
-  if (hasRewriteBarrier(op)) return emptyX2ValueDataflowState();
+  if (hasRewriteBarrier(op)) return emptyX2ValueDataflowState(trackRegisterMemory);
 
   switch (op.kind) {
     case "label":
@@ -554,31 +584,38 @@ function transferX2ValueDataflowState(
         x2Shape: cloneOptionalShapeSet(closed.x2Shape),
         entry: closedX2EntryState(),
         vpContext: cloneX2VpContextState(closed.vpContext),
+        memory: trackRegisterMemory ? storeX2ValueMemory(closed.memory, op.register, closed.x) : undefined,
       };
     }
     case "indirect-store":
-      return transferIndirectStoreX2ValueState(input, op);
+      return transferIndirectStoreX2ValueState(input, op, trackRegisterMemory);
     case "recall": {
-      const value = registerValueFact(op.register);
+      const value = recallX2ValueFacts(input, op.register, trackRegisterMemory);
       return {
-        x: new Set([value]),
-        x2: new Set([value]),
-        xShape: new Set(),
-        x2Shape: new Set(),
+        x: new Set(value),
+        x2: new Set(value),
+        xShape: x2ShapesFromValueFacts(value),
+        x2Shape: x2ShapesFromValueFacts(value),
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
+        vpEntryMantissa: vpEntryMantissasFromValueFacts(value),
+        memory: input.memory,
       };
     }
     case "indirect-recall": {
       const target = knownIndirectMemoryTarget(op);
-      const values = target === undefined ? new Set<X2ValueFact>([SAME_UNKNOWN_VALUE]) : new Set([registerValueFact(target)]);
+      const values = target === undefined
+        ? new Set<X2ValueFact>([SAME_UNKNOWN_VALUE])
+        : recallX2ValueFacts(input, target, trackRegisterMemory);
       return {
         x: values,
         x2: new Set(values),
-        xShape: new Set(),
-        x2Shape: new Set(),
+        xShape: x2ShapesFromValueFacts(values),
+        x2Shape: x2ShapesFromValueFacts(values),
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
+        vpEntryMantissa: vpEntryMantissasFromValueFacts(values),
+        memory: input.memory,
       };
     }
     case "plain":
@@ -596,6 +633,7 @@ function transferX2ValueDataflowState(
         entry: closedX2EntryState(),
         vpContext: transferConditionalX2VpContextState(closed, effect),
         vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, effect),
+        memory: closed.memory,
       };
     }
     case "loop": {
@@ -608,15 +646,16 @@ function transferX2ValueDataflowState(
         x2Shape: effect === "preserves" ? cloneOptionalShapeSet(closed.x2Shape) : new Set(),
         entry: closedX2EntryState(),
         vpContext: transferConditionalX2VpContextState(closed, effect),
+        memory: closed.memory,
       };
     }
     case "indirect-jump":
     case "indirect-call":
-      return transferIndirectFlowX2ValueState(input, op);
+      return transferIndirectFlowX2ValueState(input, op, trackRegisterMemory);
     case "indirect-cjump":
-      return transferIndirectConditionalX2ValueState(input, op, edge);
+      return transferIndirectConditionalX2ValueState(input, op, edge, trackRegisterMemory);
     case "stop":
-      return emptyX2ValueDataflowState();
+      return emptyX2ValueDataflowState(trackRegisterMemory);
     case "return": {
       const closed = closeX2ValueEntry(input);
       const x = syncUnknownSameValue(new Set(closed.x), "affects");
@@ -628,6 +667,8 @@ function transferX2ValueDataflowState(
         x2Shape: cloneOptionalShapeSet(xShape),
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
+        vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, "affects"),
+        memory: closed.memory,
       };
     }
   }
@@ -911,6 +952,7 @@ function transferPlainX2ValueState(
       entry: closedX2EntryState(),
       vpContext: noneX2VpContextState(),
       vpEntryMantissa: new Set(["0"]),
+      memory: input.memory,
     };
   }
   const effect = plainX2Effect(op);
@@ -932,6 +974,7 @@ function transferPlainX2ValueState(
       entry: nextX2EntryStateForPlainEffect(effect),
       vpContext: transferPlainX2VpContextState(input, effect),
       vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, effect),
+      memory: input.memory,
     };
   }
   const closedExponentShapes = closedExponentEntryShapeFacts(input.entry);
@@ -946,6 +989,7 @@ function transferPlainX2ValueState(
       entry: nextX2EntryStateForPlainEffect(effect),
       vpContext: transferPlainX2VpContextState(input, effect),
       vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, new Set(), effect),
+      memory: input.memory,
     };
   }
   const x = syncUnknownSameValue(
@@ -962,13 +1006,14 @@ function transferPlainX2ValueState(
     entry: nextX2EntryStateForPlainEffect(effect),
     vpContext: transferPlainX2VpContextState(input, effect),
     vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, effect),
+    memory: input.memory,
   };
 }
 
 function transferDecimalDigitX2ValueState(input: X2ValueDataflowState, digit: string): X2ValueDataflowState {
   if (input.entry.kind === "exponent") {
     const entry = advanceExponentDigitEntry(input.entry, digit);
-    return x2ValueStateFromExponentEntry(entry);
+    return x2ValueStateFromExponentEntry(entry, input.memory);
   }
   const entry = advanceDecimalDigitEntry(input.entry, digit);
   if (entry.kind !== "open") {
@@ -979,6 +1024,7 @@ function transferDecimalDigitX2ValueState(input: X2ValueDataflowState, digit: st
       x2Shape: new Set(),
       entry,
       vpContext: noneX2VpContextState(),
+      memory: input.memory,
     };
   }
   const x = new Set<X2ValueFact>();
@@ -995,12 +1041,18 @@ function transferDecimalDigitX2ValueState(input: X2ValueDataflowState, digit: st
     if (x2Fact !== undefined) x2.add(x2Fact);
     x2Shape.add(decimalMantissaShapeFact(raw));
   }
-  return { x, x2, xShape, x2Shape, entry, vpContext: noneX2VpContextState() };
+  return { x, x2, xShape, x2Shape, entry, vpContext: noneX2VpContextState(), memory: input.memory };
 }
 
 function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDataflowState {
   if (input.entry.kind !== "closed") {
-    return { x: new Set(), x2: new Set(), entry: { kind: "unknown" }, vpContext: { kind: "unknown" } };
+    return {
+      x: new Set(),
+      x2: new Set(),
+      entry: { kind: "unknown" },
+      vpContext: { kind: "unknown" },
+      memory: input.memory,
+    };
   }
   return {
     x: normalizeX2RestoreFactsForX(input.x2),
@@ -1009,13 +1061,15 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
     x2Shape: cloneOptionalShapeSet(input.x2Shape),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
+    vpEntryMantissa: vpEntryMantissasFromValueFacts(input.x2),
+    memory: input.memory,
   };
 }
 
 function transferSignChangeX2ValueState(input: X2ValueDataflowState): X2ValueDataflowState {
   if (input.entry.kind === "exponent") {
     const entry = signChangeExponentEntry(input.entry) as Extract<X2EntryState, { kind: "exponent" }>;
-    return x2ValueStateFromExponentEntry(entry);
+    return x2ValueStateFromExponentEntry(entry, input.memory);
   }
   if (input.entry.kind === "closed" && input.vpContext?.kind === "exponent") {
     return {
@@ -1025,6 +1079,7 @@ function transferSignChangeX2ValueState(input: X2ValueDataflowState): X2ValueDat
       x2Shape: new Set(),
       entry: closedX2EntryState(),
       vpContext: signChangeVpContext(input.vpContext),
+      memory: input.memory,
     };
   }
   if (input.entry.kind === "closed" && (input.vpContext === undefined || input.vpContext.kind === "none")) {
@@ -1039,6 +1094,7 @@ function transferSignChangeX2ValueState(input: X2ValueDataflowState): X2ValueDat
       x2Shape: new Set(),
       entry: { kind: "unknown" },
       vpContext: { kind: "unknown" },
+      memory: input.memory,
     };
   }
   const x = new Set<X2ValueFact>();
@@ -1064,6 +1120,7 @@ function transferSignChangeX2ValueState(input: X2ValueDataflowState): X2ValueDat
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
     vpEntryMantissa: signChangedMantissaShapes(input.entry.raw),
+    memory: input.memory,
   };
 }
 
@@ -1090,10 +1147,11 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
         mantissa: new Set(input.entry.raw),
         exponent: new Set([""]),
       },
+      memory: input.memory,
     };
   }
   if (input.entry.kind === "exponent") {
-    return x2ValueStateFromExponentEntry(input.entry);
+    return x2ValueStateFromExponentEntry(input.entry, input.memory);
   }
   if (input.entry.kind === "closed" && input.vpEntryMantissa !== undefined) {
     // This is not inferred from plain `X == X2`: the MK-61 previous-command
@@ -1118,6 +1176,7 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
         mantissa: new Set(input.vpEntryMantissa),
         exponent: new Set([""]),
       },
+      memory: input.memory,
     };
   }
   return {
@@ -1127,25 +1186,28 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
     x2Shape: new Set(),
     entry: { kind: "unknown" },
     vpContext: { kind: "unknown" },
+    memory: input.memory,
   };
 }
 
 function transferIndirectFlowX2ValueState(
   input: X2ValueDataflowState,
   op: Extract<IrOp, { kind: "indirect-jump" | "indirect-call" }>,
+  trackRegisterMemory: boolean,
 ): X2ValueDataflowState {
   const closed = closeX2ValueEntry(input);
   if (isStableIndirectSelector(op.register)) return closed;
-  return dropMutatedSelectorX2ValueFact(closed, op.register);
+  return dropMutatedSelectorX2ValueFact(closed, op.register, trackRegisterMemory);
 }
 
 function transferIndirectConditionalX2ValueState(
   input: X2ValueDataflowState,
   op: Extract<IrOp, { kind: "indirect-cjump" }>,
   edge: Edge["kind"],
+  trackRegisterMemory: boolean,
 ): X2ValueDataflowState {
   const effect = indirectConditionalX2EffectForGraphEdge(op, edge);
-  if (effect === "unknown") return emptyX2ValueDataflowState();
+  if (effect === "unknown") return emptyX2ValueDataflowState(trackRegisterMemory);
   const closed = closeX2ValueEntry(input);
   const x = syncUnknownSameValue(new Set(closed.x), effect);
   const xShape = cloneOptionalShapeSet(closed.xShape);
@@ -1157,18 +1219,23 @@ function transferIndirectConditionalX2ValueState(
     entry: closedX2EntryState(),
     vpContext: transferConditionalX2VpContextState(closed, effect),
     vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, effect),
+    memory: closed.memory,
   };
   return edge === "jump" && !isStableIndirectSelector(op.register)
-    ? dropMutatedSelectorX2ValueFact(output, op.register)
+    ? dropMutatedSelectorX2ValueFact(output, op.register, trackRegisterMemory)
     : output;
 }
 
 function transferIndirectStoreX2ValueState(
   input: X2ValueDataflowState,
   op: Extract<IrOp, { kind: "indirect-store" }>,
+  trackRegisterMemory: boolean,
 ): X2ValueDataflowState {
   const target = knownIndirectMemoryTarget(op);
-  if (target === undefined) return closeX2ValueEntry(input);
+  if (target === undefined) {
+    const closed = closeX2ValueEntry(input);
+    return trackRegisterMemory ? clearX2ValueMemory(closed) : closed;
+  }
   const closed = closeX2ValueEntry(input);
   const value = registerValueFact(target);
   return {
@@ -1178,6 +1245,7 @@ function transferIndirectStoreX2ValueState(
     x2Shape: cloneOptionalShapeSet(closed.x2Shape),
     entry: closedX2EntryState(),
     vpContext: cloneX2VpContextState(closed.vpContext),
+    memory: trackRegisterMemory ? storeX2ValueMemory(closed.memory, target, closed.x) : undefined,
   };
 }
 
@@ -1311,6 +1379,7 @@ function joinRegisterDataflowStates(
 function joinX2ValueDataflowStates(
   current: X2ValueDataflowState | undefined,
   incoming: X2ValueDataflowState,
+  trackRegisterMemory = false,
 ): X2ValueDataflowState {
   if (current === undefined) return {
     x: new Set(incoming.x),
@@ -1320,6 +1389,7 @@ function joinX2ValueDataflowStates(
     entry: cloneX2EntryState(incoming.entry),
     vpContext: cloneX2VpContextState(incoming.vpContext),
     vpEntryMantissa: cloneOptionalStringSet(incoming.vpEntryMantissa),
+    memory: trackRegisterMemory ? cloneX2ValueMemory(incoming.memory) : undefined,
   };
   return {
     x: joinX2ValueSets(current.x, incoming.x),
@@ -1329,6 +1399,7 @@ function joinX2ValueDataflowStates(
     entry: joinX2EntryStates(current.entry, incoming.entry),
     vpContext: joinX2VpContextStates(current.vpContext, incoming.vpContext),
     vpEntryMantissa: joinOptionalStringSets(current.vpEntryMantissa, incoming.vpEntryMantissa),
+    memory: trackRegisterMemory ? joinX2ValueMemories(current.memory, incoming.memory) : undefined,
   };
 }
 
@@ -1351,7 +1422,8 @@ function sameX2ValueDataflowState(
     sameOptionalShapeSet(left.x2Shape, right.x2Shape) &&
     sameX2EntryState(left.entry, right.entry) &&
     sameX2VpContextState(left.vpContext, right.vpContext) &&
-    sameOptionalStringSet(left.vpEntryMantissa, right.vpEntryMantissa);
+    sameOptionalStringSet(left.vpEntryMantissa, right.vpEntryMantissa) &&
+    sameX2ValueMemory(left.memory, right.memory);
 }
 
 function joinRegisterValueSets(
@@ -1400,6 +1472,130 @@ function sameX2ValueSet(
     if (!right.has(value)) return false;
   }
   return true;
+}
+
+function cloneX2ValueMemory(input: X2ValueMemory | undefined): X2ValueMemory {
+  const output: X2ValueMemory = {};
+  for (const register of x2ValueMemoryRegisters(input)) {
+    const values = input?.[register];
+    if (values !== undefined && values.size > 0) output[register] = new Set(values);
+  }
+  return output;
+}
+
+function joinX2ValueMemories(
+  current: X2ValueMemory | undefined,
+  incoming: X2ValueMemory | undefined,
+): X2ValueMemory {
+  const output: X2ValueMemory = {};
+  if (current === undefined || incoming === undefined) return output;
+  for (const register of x2ValueMemoryRegisters(current)) {
+    const values = intersectKnownX2ValueSets(current?.[register], incoming?.[register]);
+    if (values.size > 0) output[register] = values;
+  }
+  return output;
+}
+
+function intersectKnownX2ValueSets(
+  current: X2ValueSet | undefined,
+  incoming: X2ValueSet | undefined,
+): Set<X2ValueFact> {
+  if (current === undefined || incoming === undefined) return new Set();
+  const joined = new Set<X2ValueFact>();
+  for (const value of current) {
+    if (incoming.has(value)) joined.add(value);
+  }
+  return joined;
+}
+
+function sameX2ValueMemory(left: X2ValueMemory | undefined, right: X2ValueMemory | undefined): boolean {
+  const leftRegisters = x2ValueMemoryRegisters(left);
+  const rightRegisters = x2ValueMemoryRegisters(right);
+  if (leftRegisters.length !== rightRegisters.length) return false;
+  for (const register of leftRegisters) {
+    if (!rightRegisters.includes(register)) return false;
+    if (!sameX2ValueSet(left?.[register], right?.[register])) return false;
+  }
+  return true;
+}
+
+function x2ValueMemoryRegisters(input: X2ValueMemory | undefined): RegisterName[] {
+  if (input === undefined) return [];
+  return Object.keys(input).filter((key): key is RegisterName =>
+    (REGISTER_NAMES as readonly string[]).includes(key) && input[key as RegisterName] !== undefined
+  );
+}
+
+function storeX2ValueMemory(
+  input: X2ValueMemory | undefined,
+  register: RegisterName,
+  values: X2ValueSet,
+): X2ValueMemory {
+  const output = cloneX2ValueMemory(input);
+  const stored = concreteStoredX2ValueFacts(values);
+  if (stored.size === 0) delete output[register];
+  else output[register] = stored;
+  return output;
+}
+
+function deleteX2ValueMemory(input: X2ValueMemory | undefined, register: RegisterName): X2ValueMemory {
+  const output = cloneX2ValueMemory(input);
+  delete output[register];
+  return output;
+}
+
+function clearX2ValueMemory(input: X2ValueDataflowState): X2ValueDataflowState {
+  return {
+    x: new Set(input.x),
+    x2: new Set(input.x2),
+    xShape: cloneOptionalShapeSet(input.xShape),
+    x2Shape: cloneOptionalShapeSet(input.x2Shape),
+    entry: cloneX2EntryState(input.entry),
+    vpContext: cloneX2VpContextState(input.vpContext),
+    vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    memory: {},
+  };
+}
+
+function concreteStoredX2ValueFacts(values: X2ValueSet): Set<X2ValueFact> {
+  const output = new Set<X2ValueFact>();
+  for (const value of values) {
+    if (isConcreteDecimalX2ValueFact(value)) output.add(value);
+  }
+  return output;
+}
+
+function isConcreteDecimalX2ValueFact(value: X2ValueFact): boolean {
+  return /^decimal:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+):(normalized|unnormalized)$/u.test(value);
+}
+
+function recallX2ValueFacts(
+  input: X2ValueDataflowState,
+  register: RegisterName,
+  trackRegisterMemory: boolean,
+): Set<X2ValueFact> {
+  const value = registerValueFact(register);
+  const output = new Set<X2ValueFact>(trackRegisterMemory ? input.memory?.[register] ?? [] : []);
+  output.add(value);
+  return output;
+}
+
+function x2ShapesFromValueFacts(values: X2ValueSet): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const value of values) {
+    const decimal = /^decimal:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):(normalized|unnormalized)$/u.exec(value);
+    if (decimal !== null) output.add(decimalMantissaShapeFact(decimal[1]!));
+  }
+  return output;
+}
+
+function vpEntryMantissasFromValueFacts(values: X2ValueSet): ReadonlySet<string> | undefined {
+  const mantissas = new Set<string>();
+  for (const value of values) {
+    const decimal = /^decimal:(-?[0-9]+):normalized$/u.exec(value);
+    if (decimal !== null) mantissas.add(decimal[1]!);
+  }
+  return mantissas.size === 0 ? undefined : mantissas;
 }
 
 function cloneOptionalShapeSet(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
@@ -1618,9 +1814,9 @@ function signChangedDecimalEntry(raw: string): string {
 
 function signChangeClosedDecimalState(input: X2ValueDataflowState): X2ValueDataflowState | undefined {
   const shaped = signChangedVpEntryMantissas(input);
-  if (shaped !== undefined) return x2ValueStateFromMantissaShapes(shaped);
+  if (shaped !== undefined) return x2ValueStateFromMantissaShapes(shaped, input.memory);
   const shapeBacked = signChangedClosedShapeMantissas(input);
-  if (shapeBacked !== undefined) return x2ValueStateFromMantissaShapes(shapeBacked);
+  if (shapeBacked !== undefined) return x2ValueStateFromMantissaShapes(shapeBacked, input.memory);
 
   const values = new Set<X2ValueFact>();
   if (input.x.has(SAME_UNKNOWN_VALUE) && input.x2.has(SAME_UNKNOWN_VALUE)) {
@@ -1645,6 +1841,8 @@ function signChangeClosedDecimalState(input: X2ValueDataflowState): X2ValueDataf
     x2Shape: new Set(shapes),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
+    vpEntryMantissa: vpEntryMantissasFromValueFacts(values),
+    memory: input.memory,
   };
 }
 
@@ -1715,7 +1913,10 @@ function signChangedMantissaShape(raw: string): string | undefined {
   return raw.startsWith("-") ? raw.slice(1) : `-${raw}`;
 }
 
-function x2ValueStateFromMantissaShapes(mantissas: ReadonlySet<string>): X2ValueDataflowState | undefined {
+function x2ValueStateFromMantissaShapes(
+  mantissas: ReadonlySet<string>,
+  memory: X2ValueMemory | undefined = undefined,
+): X2ValueDataflowState | undefined {
   const x = new Set<X2ValueFact>();
   const x2 = new Set<X2ValueFact>();
   const xShape = new Set<X2ShapeFact>();
@@ -1737,10 +1938,14 @@ function x2ValueStateFromMantissaShapes(mantissas: ReadonlySet<string>): X2Value
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
     vpEntryMantissa: mantissas,
+    memory,
   };
 }
 
-function x2ValueStateFromExponentEntry(input: X2EntryState): X2ValueDataflowState {
+function x2ValueStateFromExponentEntry(
+  input: X2EntryState,
+  memory: X2ValueMemory | undefined = undefined,
+): X2ValueDataflowState {
   if (input.kind !== "exponent") {
     return {
       x: new Set(),
@@ -1749,6 +1954,7 @@ function x2ValueStateFromExponentEntry(input: X2EntryState): X2ValueDataflowStat
       x2Shape: new Set(),
       entry: cloneX2EntryState(input),
       vpContext: { kind: "unknown" },
+      memory,
     };
   }
   const values = closedExponentEntryDecimalFacts(input);
@@ -1763,6 +1969,7 @@ function x2ValueStateFromExponentEntry(input: X2EntryState): X2ValueDataflowStat
     x2Shape: new Set(shapes),
     entry: cloneX2EntryState(input),
     vpContext: x2VpContextFromExponentEntry(input),
+    memory,
   };
 }
 
@@ -1814,6 +2021,8 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
       x2Shape: new Set(closedExponentShapes),
       entry: closedX2EntryState(),
       vpContext: cloneX2VpContextState(input.vpContext),
+      vpEntryMantissa: vpEntryMantissasFromValueFacts(closedExponentValues),
+      memory: input.memory,
     };
   }
   return {
@@ -1823,6 +2032,8 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
     x2Shape: cloneOptionalShapeSet(input.x2Shape),
     entry: closedX2EntryState(),
     vpContext: cloneX2VpContextState(input.vpContext),
+    vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    memory: input.memory,
   };
 }
 
@@ -1951,13 +2162,21 @@ function removeX2Value(input: X2ValueSet, value: X2ValueFact): Set<X2ValueFact> 
   return output;
 }
 
-function dropMutatedSelectorX2ValueFact(input: X2ValueDataflowState, register: RegisterName): X2ValueDataflowState {
+function dropMutatedSelectorX2ValueFact(
+  input: X2ValueDataflowState,
+  register: RegisterName,
+  trackRegisterMemory: boolean,
+): X2ValueDataflowState {
   const value = registerValueFact(register);
   return {
     x: removeX2Value(input.x, value),
     x2: removeX2Value(input.x2, value),
+    xShape: cloneOptionalShapeSet(input.xShape),
+    x2Shape: cloneOptionalShapeSet(input.x2Shape),
     entry: cloneX2EntryState(input.entry),
     vpContext: cloneX2VpContextState(input.vpContext),
+    vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    memory: trackRegisterMemory ? deleteX2ValueMemory(input.memory, register) : undefined,
   };
 }
 
