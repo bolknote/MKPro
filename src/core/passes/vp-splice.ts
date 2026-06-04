@@ -11,10 +11,10 @@ import {
   x2StateHasSameStructuralShapeInXAndX2,
   x2StateHasX2RestoreContext,
   x2StateIsClosedPlainContext,
+  x2StatesHaveSameVpEntrySource,
   x2ValueSetHasIntersection,
   type IrPass,
   type IrPassFn,
-  type X2ShapeSet,
   type X2ValueDataflowState,
 } from "./helpers.ts";
 
@@ -135,8 +135,7 @@ function canRemoveClosedContextSignPairBeforeProvedVp(
 ): boolean {
   const nextIndex = nextNonLabelIndex(ops, secondSignIndex + 1);
   if (nextIndex === undefined || !isFreeStandingVp(ops[nextIndex]!)) return false;
-  return sameNonEmptyStringSet(state.vpEntryMantissa, stateAfterPair?.vpEntryMantissa) ||
-    sameNonEmptyShapeSet(state.vpEntryShape, stateAfterPair?.vpEntryShape);
+  return x2StatesHaveSameVpEntrySource(state, stateAfterPair);
 }
 
 function nextNonLabelIndex(ops: readonly IrOp[], start: number): number | undefined {
@@ -157,14 +156,6 @@ function nextFreshDigitIndex(ops: readonly IrOp[], start: number): number | unde
 }
 
 function sameNonEmptyStringSet(left: ReadonlySet<string> | undefined, right: ReadonlySet<string> | undefined): boolean {
-  if (left === undefined || right === undefined || left.size === 0 || left.size !== right.size) return false;
-  for (const value of left) {
-    if (!right.has(value)) return false;
-  }
-  return true;
-}
-
-function sameNonEmptyShapeSet(left: X2ShapeSet | undefined, right: X2ShapeSet | undefined): boolean {
   if (left === undefined || right === undefined || left.size === 0 || left.size !== right.size) return false;
   for (const value of left) {
     if (!right.has(value)) return false;

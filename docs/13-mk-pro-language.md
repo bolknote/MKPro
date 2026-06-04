@@ -1284,9 +1284,10 @@ The pipeline currently contains:
   mantissas and `FA`..`FF` super forms are tracked as shape-only `hex:*` /
   `super:*` facts until a later proof makes them dot-safe. Hexadecimal
   concatenation itself is not inferred here yet. Those structural forms also
-  seed a separate shape-only `ВП`-entry source after direct/proved recalls and
-  path-sensitive direct-conditional fallthrough X2 syncs; the jump edge keeps
-  the previous X2 state and does not invent a new source. A closed-context `.` now
+  seed a separate shape-only `ВП`-entry source after direct/proved recalls,
+  direct `В/О` return continuations, and path-sensitive direct-conditional
+  fallthrough X2 syncs; the jump edge keeps the previous X2 state and does not
+  invent a new source. A closed-context `.` now
   transfers the hidden X2 facts back into visible `X`; decimal facts are
   normalized for `X` during that transfer while the hidden X2 representation
   stays unchanged. If number entry
@@ -1317,8 +1318,9 @@ The pipeline currently contains:
   control flow, raw cells, and display-focused cells, so it does not erase a dot
   whose main job is to shape the next X2 restoration rather than to change `X`.
   The same X2 value dataflow now carries narrow `ВП`-entry facts after proved
-  closed decimal syncs (`Cx`, `В↑`, `F0..FF`), direct/proved recalls, and
-  path-sensitive direct-conditional fallthrough syncs through only
+  closed decimal syncs (`Cx`, `В↑`, `F0..FF`), direct/proved recalls, direct
+  `В/О` return continuations, and path-sensitive direct-conditional fallthrough
+  syncs through only
   `КНОП`/`К1`/`К2`; decimal facts are mantissa values, while hex/super facts
   stay structural-only. This lets exponent-entry rewrites use hidden X2 without
   pretending that a preceding `X->П` or arbitrary preserving command leaves the
@@ -1337,8 +1339,9 @@ The pipeline currently contains:
   hexadecimal or other non-normal register value may make `.` signal `ЕГГ0Г`
   before the overwrite can run. `ВП` is removed only when the X2 value dataflow
   still knows an open mantissa, active exponent entry, proved decimal
-  `vpEntryMantissa` source, or structural hex/super `vpEntryShape` source; that
-  structural source is not reused to make `.` dot-safe. This pass requests the register value-memory layer,
+  `vpEntryMantissa` source, or structural hex/super `vpEntryShape` source from
+  the same general proof used by `vp-splice`; that structural source is not
+  reused to make `.` dot-safe. This pass requests the register value-memory layer,
   so a recall of a previously stored literal-shaped decimal can be treated like
   a proved decimal restore without making arbitrary register contents dot-safe.
 - **x2-hidden-temp-restore** — replaces a direct scratch `П->X r`, or a

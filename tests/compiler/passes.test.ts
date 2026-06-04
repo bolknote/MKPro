@@ -2570,6 +2570,65 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-dead-restore-before-overwrite removes structural ВП after direct return sync", () => {
+    const program: IrOp[] = [
+      label("main"),
+      call("load"),
+      plain(0x0c, "ВП"),
+      plain(0x55, "К1"),
+      plain(0x0d, "Cx"),
+      halt(),
+      label("load"),
+      recall("1", "preload const 8.70Е2-6С"),
+      ret(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      label("main"),
+      call("load"),
+      plain(0x0d, "Cx"),
+      halt(),
+      label("load"),
+      recall("1", "preload const 8.70Е2-6С"),
+      ret(),
+    ]);
+  });
+
+  it("x2-dead-restore-before-overwrite uses only the fallthrough conditional structural ВП source", () => {
+    const fallthroughProgram: IrOp[] = [
+      recall("1", "preload const 8.70Е2-6С"),
+      cjump("done"),
+      plain(0x0c, "ВП"),
+      plain(0x55, "К1"),
+      plain(0x0d, "Cx"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const jumpProgram: IrOp[] = [
+      recall("1", "preload const 8.70Е2-6С"),
+      cjump("target"),
+      halt(),
+      label("target"),
+      plain(0x0c, "ВП"),
+      plain(0x55, "К1"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+
+    expect(x2DeadRestoreBeforeOverwrite.run(fallthroughProgram, ctx).ops).toEqual([
+      recall("1", "preload const 8.70Е2-6С"),
+      cjump("done"),
+      plain(0x0d, "Cx"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+    expect(x2DeadRestoreBeforeOverwrite.run(jumpProgram, ctx).ops).toEqual(jumpProgram);
+  });
+
   it("x2-dead-restore-before-overwrite removes dot after a recalled decimal register", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
@@ -6207,6 +6266,32 @@ describe("ir passes on synthetic programs", () => {
       halt(),
       label("done"),
       halt(),
+    ]);
+  });
+
+  it("vp-splice removes a structural sign pair before ВП after direct return X2 sync", () => {
+    const program: IrOp[] = [
+      label("main"),
+      call("load"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("load"),
+      recall("2", "preload const 8.70Е2-6С"),
+      ret(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      label("main"),
+      call("load"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("load"),
+      recall("2", "preload const 8.70Е2-6С"),
+      ret(),
     ]);
   });
 

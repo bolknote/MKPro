@@ -8,6 +8,7 @@ import {
   x2StateHasDotSafeDecimalX2,
   x2StateHasStructuralShapeX2,
   x2StateIsClosedPlainContext,
+  x2StateHasVpEntrySource,
   type IrPass,
   type IrPassFn,
   type X2ValueDataflowState,
@@ -61,14 +62,9 @@ function isDeadRestoreCandidate(
   if (op.opcode === VP) {
     return state.entry.kind === "open" ||
       state.entry.kind === "exponent" ||
-      (state.entry.kind === "closed" &&
-        (state.vpEntryMantissa !== undefined || hasStructuralVpEntryShape(state)));
+      (state.entry.kind === "closed" && x2StateHasVpEntrySource(state));
   }
   return false;
-}
-
-function hasStructuralVpEntryShape(state: X2ValueDataflowState): boolean {
-  return state.vpEntryShape !== undefined && state.vpEntryShape.size > 0;
 }
 
 function followingHardOverwrite(

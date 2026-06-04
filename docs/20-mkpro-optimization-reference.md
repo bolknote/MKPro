@@ -844,8 +844,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     non-`ВП` context with a proved decimal X2 value; a bare `reg:r` fact is
     intentionally rejected because a preloaded hex or non-normal register value
     can make `.` signal `ЕГГ0Г`. `ВП` may also be removed from a structural
-    hex/super `vpEntryShape` source when the following overwrite destroys its
-    visible result; that does not make structural `.`/`/-/` restores dot-safe.
+    hex/super `vpEntryShape` source, including one produced by a direct `В/О`
+    return continuation or the fallthrough side of a direct conditional, when
+    the following overwrite destroys its visible result; the conditional jump
+    edge does not invent such a source, and none of this makes structural
+    `.`/`/-/` restores dot-safe.
     This pass requests the register value-memory layer and also consumes decimal preload facts from `П->X r` metadata:
     direct stores of proved decimal `X` facts seed remembered `decimal:*` facts
     for later recalls, joins keep only facts common to every path, and unknown
@@ -921,7 +924,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     shield for a later context-sensitive `.`/`/-/`/`ВП` restore. Register
     value-memory and decimal preload metadata can supply the same proved
     mantissa/exponent context after a direct or proved-indirect recall of a
-    previously stored or setup-loaded literal-shaped decimal.
+    previously stored or setup-loaded literal-shaped decimal. The same generic
+    `ВП` source proof is also used for structural hex/super shapes after direct
+    return continuations and path-sensitive direct-conditional fallthrough X2
+    syncs, without promoting those shapes into decimal value facts.
 28. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/empty-op/sign redundancy optimization pass removes cells.
 29. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a proved `ВП`/X2 marker, display or ordinary, and reports `vp-fraction-restore` when one or more restores are removed. The removed `К {x}` is recognized by opcode rather than by a display/frac comment; a marker is not required when CFG dataflow proves an ordinary X2 restoration boundary: an X2 sync, at least one X2-preserving executable command, then `ВП`; direct conditional jump/fallthrough edges use their path-sensitive X2 effects, proved indirect flow targets (`indirect-target=NN`) and X2-preserving indirect conditionals participate in the same CFG, and joins require every incoming path to carry the proof.
 30. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.

@@ -632,6 +632,26 @@ export function x2StateIsClosedPlainContext(state: X2ValueDataflowState | undefi
   return state?.entry.kind === "closed" && (state.vpContext === undefined || state.vpContext.kind === "none");
 }
 
+export function x2StateHasDecimalVpEntrySource(state: X2ValueDataflowState | undefined): boolean {
+  return state?.vpEntryMantissa !== undefined && state.vpEntryMantissa.size > 0;
+}
+
+export function x2StateHasStructuralVpEntrySource(state: X2ValueDataflowState | undefined): boolean {
+  return state?.vpEntryShape !== undefined && state.vpEntryShape.size > 0;
+}
+
+export function x2StateHasVpEntrySource(state: X2ValueDataflowState | undefined): boolean {
+  return x2StateHasDecimalVpEntrySource(state) || x2StateHasStructuralVpEntrySource(state);
+}
+
+export function x2StatesHaveSameVpEntrySource(
+  left: X2ValueDataflowState | undefined,
+  right: X2ValueDataflowState | undefined,
+): boolean {
+  return sameNonEmptyStringSet(left?.vpEntryMantissa, right?.vpEntryMantissa) ||
+    sameNonEmptyShapeSet(left?.vpEntryShape, right?.vpEntryShape);
+}
+
 export function analyzeX2VpShapeContext(
   state: X2ValueDataflowState | undefined,
 ): X2VpShapeContextAnalysis {
@@ -2406,6 +2426,14 @@ function sameOptionalShapeSet(
   if (leftSet.size !== rightSet.size) return false;
   for (const value of leftSet) {
     if (!rightSet.has(value)) return false;
+  }
+  return true;
+}
+
+function sameNonEmptyShapeSet(left: X2ShapeSet | undefined, right: X2ShapeSet | undefined): boolean {
+  if (left === undefined || right === undefined || left.size === 0 || left.size !== right.size) return false;
+  for (const value of left) {
+    if (!right.has(value)) return false;
   }
   return true;
 }
