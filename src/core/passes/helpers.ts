@@ -732,6 +732,9 @@ function transferPlainX2ValueState(
   if (op.opcode === 0x0a) {
     return transferDotRestoreX2ValueState(input);
   }
+  if (op.opcode === 0x0b) {
+    return transferSignChangeX2ValueState(input);
+  }
   if (op.opcode === 0x0d) {
     return { x: new Set([NORMALIZED_DECIMAL_ZERO]), x2: new Set([NORMALIZED_DECIMAL_ZERO]), entry: closedX2EntryState() };
   }
@@ -765,6 +768,22 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
     x2: new Set(input.x2),
     entry: closedX2EntryState(),
   };
+}
+
+function transferSignChangeX2ValueState(input: X2ValueDataflowState): X2ValueDataflowState {
+  if (input.entry.kind !== "open") {
+    return { x: new Set(), x2: new Set(), entry: { kind: "unknown" } };
+  }
+  const x = new Set<X2ValueFact>();
+  const x2 = new Set<X2ValueFact>();
+  for (const raw of input.entry.raw) {
+    const signed = signChangedDecimalEntry(raw);
+    const normalized = normalizeDecimalEntry(signed);
+    if (normalized !== undefined) x.add(decimalValueFact(normalized, "normalized"));
+    const x2Fact = x2DecimalEntryFact(signed);
+    if (x2Fact !== undefined) x2.add(x2Fact);
+  }
+  return { x, x2, entry: closedX2EntryState() };
 }
 
 function transferIndirectFlowX2ValueState(
@@ -972,20 +991,25 @@ function decimalValueFact(value: string, flavor: "normalized" | "unnormalized"):
 }
 
 function normalizeDecimalEntry(raw: string): string | undefined {
-  if (!/^[0-9]{1,8}$/u.test(raw)) return undefined;
-  return raw.replace(/^0+(?=\d)/u, "");
+  const match = /^(-?)([0-9]{1,8})$/u.exec(raw);
+  if (match === null) return undefined;
+  const sign = match[1]!;
+  const digits = match[2]!.replace(/^0+(?=\d)/u, "");
+  if (digits === "0") return "0";
+  return `${sign}${digits}`;
 }
 
 function x2DecimalEntryFact(raw: string): X2ValueFact | undefined {
-  if (!/^[0-9]{1,8}$/u.test(raw)) return undefined;
-  if (raw === "0" || /^[1-9][0-9]*$/u.test(raw)) return decimalValueFact(raw, "normalized");
+  const normalized = normalizeDecimalEntry(raw);
+  if (normalized === undefined) return undefined;
+  if (raw === normalized) return decimalValueFact(raw, "normalized");
   return decimalValueFact(raw, "unnormalized");
 }
 
 function normalizeX2RestoreFactsForX(input: X2ValueSet): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
   for (const fact of input) {
-    const decimal = /^decimal:([0-9]+):(normalized|unnormalized)$/u.exec(fact);
+    const decimal = /^decimal:(-?[0-9]+):(normalized|unnormalized)$/u.exec(fact);
     if (decimal) {
       const normalized = normalizeDecimalEntry(decimal[1]!);
       if (normalized !== undefined) output.add(decimalValueFact(normalized, "normalized"));
@@ -994,6 +1018,12 @@ function normalizeX2RestoreFactsForX(input: X2ValueSet): Set<X2ValueFact> {
     output.add(fact);
   }
   return output;
+}
+
+function signChangedDecimalEntry(raw: string): string {
+  const normalized = normalizeDecimalEntry(raw);
+  if (normalized === undefined || normalized === "0") return "0";
+  return raw.startsWith("-") ? raw.slice(1) : `-${raw}`;
 }
 
 function closedX2EntryState(): X2EntryState {

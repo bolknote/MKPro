@@ -1247,14 +1247,19 @@ The pipeline currently contains:
 - **X2 value dataflow** — a stricter companion proof tracks small symbolic
   value facts in both `X` and `X2`, currently register aliases (`reg:r`),
   normalized decimal zero produced by `Cx` (`decimal:0:normalized`), and plain
-  decimal digit-runs up to the visible mantissa width. Unlike display-byte
-  lowering, this proof is ordinary-code dataflow: X-preserving empty operators
-  keep the value live, branch-specific conditional X2 effects participate in
-  joins, and mutating indirect selectors drop only facts tied to the mutated
-  selector. The fact spelling is normalization-aware: `12` produces the shared
-  fact `decimal:12:normalized`, while `02` produces `decimal:2:normalized` in
-  `X` and `decimal:02:unnormalized` in `X2`, so a restore cannot accidentally
-  treat a leading-zero display value as the same hidden value. The same shape is
+  decimal digit-runs up to the visible mantissa width. It also models `/-/`
+  only while a decimal digit-run is still open: `12 /-/` produces the shared
+  fact `decimal:-12:normalized`, while `02 /-/` produces normalized visible
+  `X=decimal:-2:normalized` and hidden `X2=decimal:-02:unnormalized`.
+  Closed-context `/-/` remains unknown because its MK-61 behavior depends on
+  the previous command/exponent context. Unlike display-byte lowering, this
+  proof is ordinary-code dataflow: X-preserving empty operators keep the value
+  live, branch-specific conditional X2 effects participate in joins, and
+  mutating indirect selectors drop only facts tied to the mutated selector. The
+  fact spelling is normalization-aware: `12` produces the shared fact
+  `decimal:12:normalized`, while `02` produces `decimal:2:normalized` in `X`
+  and `decimal:02:unnormalized` in `X2`, so a restore cannot accidentally treat
+  a leading-zero display value as the same hidden value. The same shape is
   reserved for future `hex:...` mantissa facts; hexadecimal concatenation itself
   is not inferred here yet. A closed-context `.` now transfers the hidden X2
   facts back into visible `X`; decimal facts are normalized for `X` during that
