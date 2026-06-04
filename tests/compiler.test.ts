@@ -80,13 +80,16 @@ describe("MK-Pro compiler", () => {
     expect(result.report.steps).toBeLessThanOrEqual(105);
   }, 20_000);
 
-  it("keeps the 4x4 tic-tac-toe port source-shaped around packed line families", () => {
+  it("keeps the 4x4 tic-tac-toe port high-level around marks and line counts", () => {
     const game = source("examples/pending-optimizer/tic-tac-toe-4x4.mkpro");
 
     expect(game).toContain("reference anvarov_tic_tac_toe_4x4");
-    expect(game).toContain("lines: packed[1..4]");
-    expect(game).toContain("packed_add(lines[3], line");
-    expect(game).toContain("packed_digit(lines[4], line)");
+    expect(game).toContain("occupied: cells(grid)");
+    expect(game).toContain("calculator_marks: cells(grid)");
+    expect(game).toContain("fn add_balance()");
+    expect(game).toContain("fn count_sum_diagonal(axis)");
+    expect(game).not.toContain("packed_add(lines");
+    expect(game).not.toContain("packed_digit(lines");
     expect(game).not.toMatch(/\bcore\s*\{/u);
     expect(game).not.toMatch(/\brow\s+[0-9A-F]{2}\s*:/u);
 
@@ -94,7 +97,7 @@ describe("MK-Pro compiler", () => {
 
     expect(result.diagnostics).toEqual([]);
     expect(result.report.reference?.referenceSpan).toBe(105);
-    expect(result.report.steps).toBe(312);
+    expect(result.report.steps).toBe(615);
   }, 20_000);
 
   it("keeps every runnable example with a real source reference no larger than that source", () => {

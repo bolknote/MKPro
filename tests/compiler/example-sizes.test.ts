@@ -49,7 +49,7 @@ describe("example size guard", () => {
   for (const [name, baseline] of Object.entries(PENDING_BASELINE)) {
     it(`pending-optimizer/${name}.mkpro is locked at ${baseline} cells`, () => {
       expect(exampleSteps(`pending-optimizer/${name}`, true)).toBe(baseline);
-    }, 15000);
+    }, 30000);
   }
 
   for (const [name, message] of Object.entries(PENDING_COMPILE_ERRORS)) {

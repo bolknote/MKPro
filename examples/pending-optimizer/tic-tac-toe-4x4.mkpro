@@ -1,17 +1,17 @@
 reference anvarov_tic_tac_toe_4x4
 
-// Fresh source-shaped port of Serge Anvarov's 4x4 tic-tac-toe listing.
-// The board has sixteen winning lines: four rows, four columns, four x+y
-// diagonals, and four x-y diagonals. As in the original listing, the four line
-// families are packed decimal registers initialized to 44444.4. A player mark
-// subtracts 1 from each touched line digit; a calculator mark adds 1.
+// High-level port of Serge Anvarov's 4x4 tic-tac-toe.
+// The game is played on a 4x4 torus: each move belongs to one row, one column,
+// one x+y diagonal, and one x-y diagonal. The calculator chooses the free cell
+// whose four lines have the largest squared mark imbalance, so it attacks and
+// blocks the most developed lines without spelling the original register dance.
 
 program TicTacToe4x4 {
   grid: board(1..4, 1..4)
 
   state {
     occupied: cells(grid) = 0
-    lines: packed[1..4] = [44444.4, 44444.4, 44444.4, 44444.4]
+    calculator_marks: cells(grid) = 0
 
     x: counter 0..5 = 0
     y: counter 0..5 = 0
@@ -20,7 +20,9 @@ program TicTacToe4x4 {
     best_cell: coord(grid) = 11
     best_score: packed = -1
     score: packed = 0
-    line: packed = 0
+    line: counter -4..8 = 1
+    count: counter -4..4 = 0
+    side: counter 0..1 = 0
   }
 
   fn draw() {
@@ -36,8 +38,9 @@ program TicTacToe4x4 {
   }
 
   fn calculator_won() {
-    // The source uses a packed 8.-0n-style line report. Until MKPro can compose
-    // that dynamic sign-digit display, the terminal 8 keeps the same win signal.
+    // The original reports the winning line with a dynamic 8.-0n display. The
+    // high-level game state is preserved; exact sign-digit display composition
+    // still belongs to a display lowerer.
     halt(8)
   }
 
@@ -54,43 +57,50 @@ program TicTacToe4x4 {
     }
     else {
       occupied += cell
-      mark_lines(-1)
-      check_win(0)
+      check_player_win()
+
       choose_calculator_move()
+      calculator_marks += cell
       occupied += cell
-      mark_lines(1)
-      check_win(8)
+      check_calculator_win()
     }
   }
 
-  fn mark_lines(delta) {
-    lines[1] = packed_add(lines[1], y, delta)
-    lines[2] = packed_add(lines[2], x, delta)
-    normalize_sum()
-    lines[3] = packed_add(lines[3], line, delta)
-    normalize_diff()
-    lines[4] = packed_add(lines[4], line, delta)
+  fn check_player_win() {
+    side = 0
+    check_win()
   }
 
-  fn check_win(target) {
-    if packed_digit(lines[1], y) == target {
-      finish_win(target)
+  fn check_calculator_win() {
+    side = 1
+    check_win()
+  }
+
+  fn check_win() {
+    count_row(y)
+    if count >= 4 {
+      finish_win()
     }
-    if packed_digit(lines[2], x) == target {
-      finish_win(target)
+    count_column(x)
+    if count >= 4 {
+      finish_win()
     }
-    normalize_sum()
-    if packed_digit(lines[3], line) == target {
-      finish_win(target)
+    line = x + y
+    wrap_line()
+    count_sum_diagonal(line)
+    if count >= 4 {
+      finish_win()
     }
-    normalize_diff()
-    if packed_digit(lines[4], line) == target {
-      finish_win(target)
+    line = x - y
+    wrap_line()
+    count_diff_diagonal(line)
+    if count >= 4 {
+      finish_win()
     }
   }
 
-  fn finish_win(target) {
-    if target == 0 {
+  fn finish_win() {
+    if side == 0 {
       human_won()
     }
     else {
@@ -110,7 +120,7 @@ program TicTacToe4x4 {
           candidate_score()
           if score > best_score {
             best_score = score
-            best_cell = cell
+            best_cell = y * 10 + x
           }
         }
         x++
@@ -128,23 +138,177 @@ program TicTacToe4x4 {
   }
 
   fn candidate_score() {
-    score = sqr(packed_digit(lines[1], y) - 4)
-    score += sqr(packed_digit(lines[2], x) - 4)
-    normalize_sum()
-    score += sqr(packed_digit(lines[3], line) - 4)
-    normalize_diff()
-    score += sqr(packed_digit(lines[4], line) - 4)
+    score = 0
+    add_row_score()
+    add_column_score()
+    add_sum_diagonal_score()
+    add_diff_diagonal_score()
   }
 
-  fn normalize_sum() {
-    line = frac(int(x + y) / 4) * 4
-    if line <= 0 {
-      line += 4
+  fn add_row_score() {
+    count = 0
+    cell = y * 10 + 1
+    add_balance()
+    cell = y * 10 + 2
+    add_balance()
+    cell = y * 10 + 3
+    add_balance()
+    cell = y * 10 + 4
+    add_balance()
+    score += sqr(count)
+  }
+
+  fn add_column_score() {
+    count = 0
+    cell = 10 + x
+    add_balance()
+    cell = 20 + x
+    add_balance()
+    cell = 30 + x
+    add_balance()
+    cell = 40 + x
+    add_balance()
+    score += sqr(count)
+  }
+
+  fn add_sum_diagonal_score() {
+    line = x + y
+    wrap_line()
+    count = 0
+    line--
+    wrap_line()
+    cell = 10 + line
+    add_balance()
+    line--
+    wrap_line()
+    cell = 20 + line
+    add_balance()
+    line--
+    wrap_line()
+    cell = 30 + line
+    add_balance()
+    line--
+    wrap_line()
+    cell = 40 + line
+    add_balance()
+    score += sqr(count)
+  }
+
+  fn add_diff_diagonal_score() {
+    line = x - y
+    wrap_line()
+    count = 0
+    line++
+    wrap_line()
+    cell = 10 + line
+    add_balance()
+    line++
+    wrap_line()
+    cell = 20 + line
+    add_balance()
+    line++
+    wrap_line()
+    cell = 30 + line
+    add_balance()
+    line++
+    wrap_line()
+    cell = 40 + line
+    add_balance()
+    score += sqr(count)
+  }
+
+  fn count_row(axis) {
+    count = 0
+    cell = axis * 10 + 1
+    add_if_marked()
+    cell = axis * 10 + 2
+    add_if_marked()
+    cell = axis * 10 + 3
+    add_if_marked()
+    cell = axis * 10 + 4
+    add_if_marked()
+  }
+
+  fn count_column(axis) {
+    count = 0
+    cell = 10 + axis
+    add_if_marked()
+    cell = 20 + axis
+    add_if_marked()
+    cell = 30 + axis
+    add_if_marked()
+    cell = 40 + axis
+    add_if_marked()
+  }
+
+  fn count_sum_diagonal(axis) {
+    count = 0
+    line = axis - 1
+    wrap_line()
+    cell = 10 + line
+    add_if_marked()
+    line = axis - 2
+    wrap_line()
+    cell = 20 + line
+    add_if_marked()
+    line = axis - 3
+    wrap_line()
+    cell = 30 + line
+    add_if_marked()
+    line = axis - 4
+    wrap_line()
+    cell = 40 + line
+    add_if_marked()
+  }
+
+  fn count_diff_diagonal(axis) {
+    count = 0
+    line = axis + 1
+    wrap_line()
+    cell = 10 + line
+    add_if_marked()
+    line = axis + 2
+    wrap_line()
+    cell = 20 + line
+    add_if_marked()
+    line = axis + 3
+    wrap_line()
+    cell = 30 + line
+    add_if_marked()
+    line = axis + 4
+    wrap_line()
+    cell = 40 + line
+    add_if_marked()
+  }
+
+  fn add_if_marked() {
+    if side == 0 {
+      if cell in occupied {
+        unless cell in calculator_marks {
+          count++
+        }
+      }
+    }
+    else {
+      if cell in calculator_marks {
+        count++
+      }
     }
   }
 
-  fn normalize_diff() {
-    line = frac(int(x - y) / 4) * 4
+  fn add_balance() {
+    if cell in calculator_marks {
+      count++
+    }
+    else {
+      if cell in occupied {
+        count--
+      }
+    }
+  }
+
+  fn wrap_line() {
+    line = frac(int(line) / 4) * 4
     if line <= 0 {
       line += 4
     }
