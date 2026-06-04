@@ -49,6 +49,7 @@ import {
   buildDiagnostic,
   buildGuardedUpdateSelectorCandidate,
   canTestAgainstZeroDirectly,
+  comparisonSelectorExpression,
   conditionCompileCost,
   conditionEquals,
   coordListHasCall,
@@ -139,6 +140,7 @@ import {
   fracExpression,
   packedGridExpressionMacro,
   grid4MaskScratchName,
+  guardedUpdates,
   zeroDigitTailDisplayProgram,
   xParamValueFunctionParamNames,
   xParamValueScratchName,
@@ -2079,6 +2081,119 @@ function resolveConstantIndexedState(ast: ProgramAst, optimizations: AppliedOpti
   }
 }
 
+function canonicalizeComparisonGuardedUpdateCorrections(
+  ast: ProgramAst,
+  optimizations: AppliedOptimization[],
+): void {
+  let applied = 0;
+
+  const rewriteStatements = (statements: StatementAst[]): StatementAst[] => {
+    const result: StatementAst[] = [];
+    for (let index = 0; index < statements.length; index += 1) {
+      const replacement = comparisonGuardedUpdateCorrectionRun(statements, index);
+      if (replacement !== undefined) {
+        result.push(...replacement.statements);
+        index += replacement.consumed - 1;
+        applied += 1;
+        continue;
+      }
+      result.push(rewriteStatement(statements[index]!));
+    }
+    return result;
+  };
+
+  const rewriteStatement = (statement: StatementAst): StatementAst => {
+    switch (statement.kind) {
+      case "if":
+        return {
+          ...statement,
+          thenBody: rewriteStatements(statement.thenBody),
+          ...(statement.elseBody === undefined ? {} : { elseBody: rewriteStatements(statement.elseBody) }),
+        };
+      case "while":
+      case "loop":
+        return { ...statement, body: rewriteStatements(statement.body) };
+      case "dispatch":
+        return {
+          ...statement,
+          cases: statement.cases.map((dispatchCase) => ({
+            ...dispatchCase,
+            body: rewriteStatements(dispatchCase.body),
+          })),
+          ...(statement.defaultBody === undefined ? {} : { defaultBody: rewriteStatements(statement.defaultBody) }),
+        };
+      default:
+        return statement;
+    }
+  };
+
+  for (const entry of ast.entries) entry.body = rewriteStatements(entry.body);
+  for (const proc of ast.procs) proc.body = rewriteStatements(proc.body);
+  if (applied > 0) {
+    optimizations.push({
+      name: "comparison-guarded-update-correction",
+      detail: `Folded ${applied} comparison guarded correction run${applied === 1 ? "" : "s"} into arithmetic masks before lowering.`,
+    });
+  }
+}
+
+function comparisonGuardedUpdateCorrectionRun(
+  statements: readonly StatementAst[],
+  start: number,
+): { statements: StatementAst[]; consumed: number } | undefined {
+  const prefix: Array<Extract<StatementAst, { kind: "assign" }>> = [];
+  let branchIndex = start;
+  while (branchIndex < statements.length) {
+    const statement = statements[branchIndex];
+    if (statement?.kind !== "assign") break;
+    prefix.push(statement);
+    branchIndex += 1;
+  }
+  const branch = statements[branchIndex];
+  if (prefix.length === 0 || branch?.kind !== "if") return undefined;
+  const selector = comparisonSelectorExpression(branch.condition);
+  const updates = guardedUpdates(branch);
+  if (selector === undefined || updates === undefined || updates.length === 0) return undefined;
+
+  const prefixByTarget = new Map<string, { index: number; statement: Extract<StatementAst, { kind: "assign" }> }>();
+  for (let index = 0; index < prefix.length; index += 1) {
+    const statement = prefix[index]!;
+    if (prefixByTarget.has(statement.target)) return undefined;
+    prefixByTarget.set(statement.target, { index, statement });
+  }
+  const assignedTargets = new Set(prefix.map((statement) => statement.target));
+  if (
+    expressionReferencesAnyIdentifier(branch.condition.left, assignedTargets) ||
+    expressionReferencesAnyIdentifier(branch.condition.right, assignedTargets)
+  ) {
+    return undefined;
+  }
+
+  const updateByTarget = new Map<string, (typeof updates)[number]>();
+  for (const update of updates) {
+    const prefixEntry = prefixByTarget.get(update.target);
+    if (prefixEntry === undefined || updateByTarget.has(update.target)) return undefined;
+    if (expressionReferencesAnyIdentifier(update.delta, assignedTargets)) return undefined;
+    for (let index = prefixEntry.index + 1; index < prefix.length; index += 1) {
+      if (expressionReferencesIdentifier(prefix[index]!.expr, update.target)) return undefined;
+    }
+    updateByTarget.set(update.target, update);
+  }
+
+  return {
+    statements: prefix.map((statement) => {
+      const update = updateByTarget.get(statement.target);
+      return update === undefined
+        ? statement
+        : {
+            ...statement,
+            expr: mergeGuardedCorrectionExpression(statement, update, selector),
+          };
+    }),
+    consumed: prefix.length + 1,
+  };
+}
+
 function compileMKProOnce(
   source: string,
   options: Partial<CompileOptions>,
@@ -2122,6 +2237,9 @@ function compileMKProOnce(
   }
   if (loweringOptions.canonicalizeIfChains === true) {
     canonicalizeConstantIfChains(ast, optimizations);
+  }
+  if (loweringOptions.comparisonGuardedUpdateSelectors === true) {
+    canonicalizeComparisonGuardedUpdateCorrections(ast, optimizations);
   }
   inlineDisplayStringValues(ast, optimizations);
   hoistOneShotLoopInitializers(ast, optimizations);
@@ -6334,6 +6452,13 @@ export class EmitContext {
           continue;
         }
       }
+      if (statement.kind === "assign") {
+        const correction = this.compileComparisonGuardedUpdateCorrectionRun(statements, index);
+        if (correction > 1) {
+          index += correction - 1;
+          continue;
+        }
+      }
       if (statement.kind === "assign" && next?.kind === "call" && compileXParamProcCall(this, statement, next)) {
         index += 1;
         continue;
@@ -6620,6 +6745,68 @@ export class EmitContext {
       }
       this.compileStatement(statement);
     }
+  }
+
+  compileComparisonGuardedUpdateCorrectionRun(statements: readonly StatementAst[], start: number): number {
+    if (this.loweringOptions.comparisonGuardedUpdateSelectors !== true) return 0;
+    const prefix: Array<Extract<StatementAst, { kind: "assign" }>> = [];
+    let branchIndex = start;
+    while (branchIndex < statements.length) {
+      const statement = statements[branchIndex];
+      if (statement?.kind !== "assign") break;
+      prefix.push(statement);
+      branchIndex += 1;
+    }
+    const branch = statements[branchIndex];
+    if (prefix.length === 0 || branch?.kind !== "if") return 0;
+    const selector = comparisonSelectorExpression(branch.condition);
+    const updates = guardedUpdates(branch);
+    if (selector === undefined || updates === undefined || updates.length === 0) return 0;
+
+    const prefixByTarget = new Map<string, { index: number; statement: Extract<StatementAst, { kind: "assign" }> }>();
+    for (let index = 0; index < prefix.length; index += 1) {
+      const statement = prefix[index]!;
+      if (prefixByTarget.has(statement.target)) return 0;
+      prefixByTarget.set(statement.target, { index, statement });
+    }
+    const assignedTargets = new Set(prefix.map((statement) => statement.target));
+    if (
+      expressionReferencesAnyIdentifier(branch.condition.left, assignedTargets) ||
+      expressionReferencesAnyIdentifier(branch.condition.right, assignedTargets)
+    ) {
+      return 0;
+    }
+
+    const updateByTarget = new Map<string, (typeof updates)[number]>();
+    for (const update of updates) {
+      const prefixEntry = prefixByTarget.get(update.target);
+      if (prefixEntry === undefined || updateByTarget.has(update.target)) return 0;
+      if (expressionReferencesAnyIdentifier(update.delta, assignedTargets)) return 0;
+      for (let index = prefixEntry.index + 1; index < prefix.length; index += 1) {
+        if (expressionReferencesIdentifier(prefix[index]!.expr, update.target)) return 0;
+      }
+      updateByTarget.set(update.target, update);
+    }
+
+    for (const statement of prefix) {
+      const update = updateByTarget.get(statement.target);
+      const expr = update === undefined
+        ? statement.expr
+        : mergeGuardedCorrectionExpression(statement, update, selector);
+      compileExpression(this, expr);
+      this.emitStore(statement.target, update === undefined
+        ? `set ${statement.target}`
+        : `comparison guarded correction ${statement.target}`, statement.line);
+    }
+    this.optimizations.push({
+      name: "branch-removal",
+      detail: `Folded comparison guarded correction after line ${branch.line} into the preceding update run.`,
+    });
+    this.optimizations.push({
+      name: "comparison-guarded-update-correction",
+      detail: `Converted ${updates.length} guarded correction${updates.length === 1 ? "" : "s"} at line ${branch.line} into abs/sign arithmetic masks.`,
+    });
+    return prefix.length + 1;
   }
 
   compileLoopCarriedPrompt(
@@ -14419,6 +14606,43 @@ function estimateBranchOrderStatementCost(statement: StatementAst, ast: ProgramA
   }
 }
 
+function expressionReferencesAnyIdentifier(expr: ExpressionAst, names: ReadonlySet<string>): boolean {
+  for (const name of names) {
+    if (expressionReferencesIdentifier(expr, name)) return true;
+  }
+  return false;
+}
+
+function mergeGuardedCorrectionExpression(
+  statement: Extract<StatementAst, { kind: "assign" }>,
+  update: NonNullable<ReturnType<typeof guardedUpdates>>[number],
+  selector: ExpressionAst,
+): ExpressionAst {
+  const current: ExpressionAst = { kind: "identifier", name: statement.target };
+  const correction = multiplyExpressions(update.delta, selector);
+  const plusBase = matchTargetPlusDelta(statement.expr, statement.target);
+  if (plusBase !== undefined) {
+    return addExpressions(
+      current,
+      update.op === "+"
+        ? addExpressions(plusBase, correction)
+        : subtractExpressions(plusBase, correction),
+    );
+  }
+  const minusBase = matchTargetMinusDelta(statement.expr, statement.target);
+  if (minusBase !== undefined) {
+    return subtractExpressions(
+      current,
+      update.op === "+"
+        ? subtractExpressions(minusBase, correction)
+        : addExpressions(minusBase, correction),
+    );
+  }
+  return update.op === "+"
+    ? addExpressions(statement.expr, correction)
+    : subtractExpressions(statement.expr, correction);
+}
+
 
 
 
@@ -14672,6 +14896,7 @@ const optimizerCapabilities: Array<{
     activeWhen: [
       "arithmetic-if-update",
       "arithmetic-if-comparison-update",
+      "comparison-guarded-update-correction",
       "arithmetic-if-sign-toggle",
       "multi-guarded-update",
       "comparison-guarded-update-selector",

@@ -94,13 +94,20 @@ program GiantsCountry {
           reward_ladder()
         }
         else {
-          strength += 4 - tile - (1 - sign(abs(tile - 7)))
-          score += tile - 2 + (1 - sign(abs(tile - 7)))
+          strength += 4 - tile
+          score += tile - 2
+          if tile == 7 {
+            strength--
+            score++
+          }
           plans = plans - tile * pow10(slot - 1)
         }
       }
       else {
-        strength -= tile + (1 - sign(abs(tile - 7)))
+        strength -= tile
+        if tile == 7 {
+          strength--
+        }
       }
     }
   }

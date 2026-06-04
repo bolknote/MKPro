@@ -1391,13 +1391,15 @@ The pipeline currently contains:
   difference in Z and follows direct calls/returns, so the rewrite is refused if
   a later opcode could expose or consume that deeper stack value.
 - **vp-x2-peephole** — drops a `К {x}` immediately after a proved `ВП`/X2
-  boundary when `ВП` already supplies the fractional transform. The proof is
-  not display-specific: display lowering is just one producer of such
-  boundaries. For ordinary code the pass can also prove a boundary from the
-  opcode context itself: an X2 sync, at least one X2-preserving executable gap,
-  then `ВП`. That proof is path-sensitive for direct CFG edges, so a conditional
-  jump edge may prove the boundary while an immediate fallthrough X2-sync still
-  refuses the rewrite, and joins require every incoming path to carry the proof.
+  boundary when `ВП` already supplies the fractional transform. The `К {x}`
+  itself is recognized by opcode, not by a display/frac comment; only the
+  preceding `ВП`/X2 boundary must be proved. The proof is not display-specific:
+  display lowering is just one producer of such boundaries. For ordinary code
+  the pass can also prove a boundary from the opcode context itself: an X2 sync,
+  at least one X2-preserving executable gap, then `ВП`. That proof is
+  path-sensitive for direct CFG edges, so a conditional jump edge may prove the
+  boundary while an immediate fallthrough X2-sync still refuses the rewrite, and
+  joins require every incoming path to carry the proof.
 - **membership X2 restore** — membership set lowering may use `.` as a hidden
   X2 restore in non-display code. It is accepted only when the set collection
   assignable is byte-for-byte the tested collection, including indexed bank

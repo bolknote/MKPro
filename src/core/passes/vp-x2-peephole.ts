@@ -60,9 +60,7 @@ function isProvedVpX2Boundary(ops: readonly IrOp[], index: number, boundaryState
 
 function isFractionAfterX2Boundary(op: IrOp): boolean {
   if (hasRewriteBarrier(op)) return false;
-  return op.kind === "plain" &&
-    op.opcode === 0x35 &&
-    /display|x2|frac/u.test(x2BoundaryText(op));
+  return op.kind === "plain" && op.opcode === 0x35;
 }
 
 const run: IrPassFn = (ops) => {

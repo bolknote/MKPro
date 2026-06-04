@@ -3351,6 +3351,39 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-x2-peephole removes unmarked К {x} after a proved ВП/X2 boundary", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x20, "F pi"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      plain(0x35, "К {x}"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      plain(0x20, "F pi"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      halt(),
+    ]);
+  });
+
+  it("vp-x2-peephole keeps raw К {x} after a proved ВП/X2 boundary", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x20, "F pi"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", raw: true } },
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("vp-x2-peephole proves a ВП/X2 boundary through a direct conditional jump edge", () => {
     const program: IrOp[] = [
       recall("1"),
