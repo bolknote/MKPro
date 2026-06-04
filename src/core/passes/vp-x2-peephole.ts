@@ -1,6 +1,11 @@
 import type { IrOp } from "../types.ts";
 import { getOpcode } from "../opcodes.ts";
-import { hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
+import {
+  computeX2RestoreBoundaryStates,
+  hasRewriteBarrier,
+  type IrPass,
+  type IrPassFn,
+} from "./helpers.ts";
 
 function x2BoundaryText(op: IrOp): string {
   if (!("meta" in op)) return "";
@@ -38,9 +43,10 @@ function isLinearX2PreservingExecutable(op: IrOp): boolean {
   }
 }
 
-function isProvedVpX2Boundary(ops: readonly IrOp[], index: number): boolean {
+function isProvedVpX2Boundary(ops: readonly IrOp[], index: number, boundaryStates: readonly boolean[]): boolean {
   const op = ops[index];
   if (op === undefined || op.kind !== "plain" || op.opcode !== 0x0c || hasRewriteBarrier(op)) return false;
+  if (boundaryStates[index] === true) return true;
   let sawPreservingGap = false;
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
     const previous = ops[cursor]!;
@@ -61,9 +67,10 @@ function isFractionAfterX2Boundary(op: IrOp): boolean {
 
 const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
+  const boundaryStates = computeX2RestoreBoundaryStates(ops);
   for (let i = 1; i < ops.length; i += 1) {
     if (
-      (isVpX2Boundary(ops[i - 1]!) || isProvedVpX2Boundary(ops, i - 1)) &&
+      (isVpX2Boundary(ops[i - 1]!) || isProvedVpX2Boundary(ops, i - 1, boundaryStates)) &&
       isFractionAfterX2Boundary(ops[i]!)
     ) {
       remove.add(i);

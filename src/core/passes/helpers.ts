@@ -191,6 +191,37 @@ export function computeX2RegisterStates(ops: readonly IrOp[]): Array<RegisterVal
   return inStates.map((state) => state?.x2);
 }
 
+type X2RestoreBoundaryState = "none" | "synced" | "boundary";
+
+export function computeX2RestoreBoundaryStates(ops: readonly IrOp[]): boolean[] {
+  if (ops.length === 0) return [];
+  const edges = buildRegisterValueGraph(ops);
+  const inStates: Array<X2RestoreBoundaryState | undefined> = Array.from({ length: ops.length }, () => undefined);
+  inStates[0] = "none";
+
+  let changed = true;
+  let iterations = 0;
+  while (changed && iterations < 200) {
+    changed = false;
+    iterations += 1;
+
+    for (let index = 0; index < ops.length; index += 1) {
+      const input = inStates[index];
+      if (input === undefined) continue;
+      for (const edge of edges[index] ?? []) {
+        const output = transferX2RestoreBoundaryState(input, ops[index]!, edge.kind);
+        const joined = joinX2RestoreBoundaryStates(inStates[edge.target], output);
+        if (joined !== inStates[edge.target]) {
+          inStates[edge.target] = joined;
+          changed = true;
+        }
+      }
+    }
+  }
+
+  return inStates.map((state) => state === "boundary");
+}
+
 export function recallAlreadySyncedInX2(
   op: IrOp,
   state: RegisterValueSet | undefined,
@@ -268,6 +299,81 @@ function transferRegisterDataflowState(
     case "indirect-cjump":
       return emptyRegisterDataflowState();
   }
+}
+
+function transferX2RestoreBoundaryState(
+  input: X2RestoreBoundaryState,
+  op: IrOp,
+  edge: Edge["kind"],
+): X2RestoreBoundaryState {
+  if (hasRewriteBarrier(op)) return "none";
+
+  switch (op.kind) {
+    case "label":
+      return input;
+    case "jump":
+    case "call":
+    case "orphan-address":
+    case "store":
+    case "indirect-store":
+      return x2PreservingExecutableBoundary(input);
+    case "recall":
+    case "indirect-recall":
+    case "return":
+    case "stop":
+      return "synced";
+    case "plain":
+      return transferPlainX2RestoreBoundaryState(input, plainX2Effect(op));
+    case "cjump":
+    case "loop": {
+      const effect = edge === "fallthrough"
+        ? conditionalX2Effect(op, "fallthrough")
+        : edge === "jump"
+          ? conditionalX2Effect(op, "jump")
+          : "unknown";
+      return transferConditionalX2RestoreBoundaryState(input, effect);
+    }
+    case "indirect-jump":
+    case "indirect-call":
+    case "indirect-cjump":
+      return "none";
+  }
+}
+
+function x2PreservingExecutableBoundary(input: X2RestoreBoundaryState): X2RestoreBoundaryState {
+  return input === "none" ? "none" : "boundary";
+}
+
+function transferPlainX2RestoreBoundaryState(
+  input: X2RestoreBoundaryState,
+  effect: ReturnType<typeof plainX2Effect>,
+): X2RestoreBoundaryState {
+  if (effect === "affects" || effect === "restores") return "synced";
+  if (effect === "preserves") return x2PreservingExecutableBoundary(input);
+  return "none";
+}
+
+function transferConditionalX2RestoreBoundaryState(
+  input: X2RestoreBoundaryState,
+  effect: ReturnType<typeof conditionalX2Effect>,
+): X2RestoreBoundaryState {
+  if (effect === "affects") return "synced";
+  if (effect === "preserves") return x2PreservingExecutableBoundary(input);
+  return "none";
+}
+
+function joinX2RestoreBoundaryStates(
+  current: X2RestoreBoundaryState | undefined,
+  incoming: X2RestoreBoundaryState,
+): X2RestoreBoundaryState {
+  if (current === undefined) return incoming;
+  return x2RestoreBoundaryRank(current) < x2RestoreBoundaryRank(incoming) ? current : incoming;
+}
+
+function x2RestoreBoundaryRank(state: X2RestoreBoundaryState): number {
+  if (state === "none") return 0;
+  if (state === "synced") return 1;
+  return 2;
 }
 
 function addRegisterValue(input: RegisterValueSet, register: RegisterName): Set<RegisterName> {
