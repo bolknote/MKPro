@@ -1033,7 +1033,8 @@ Current scalar lowerings are still deliberately small and auditable:
 The optimizer currently performs these real rewrites, not just report-only
 candidates:
 
-- store/recall peephole: removes immediate `X->П r ; П->X r`;
+- store/recall peephole: removes immediate direct or stable-indirect
+  same-cell `X->П ; П->X` pairs;
 - branch-removal umbrella: replaces matched conditionals with branchless
   arithmetic, `К max`, `К |x|`, sign transforms, or boolean-masked updates;
 - negative-zero threshold selector: for bounded integer nonnegative threshold
@@ -1192,7 +1193,8 @@ the program.
 
 The pipeline currently contains:
 
-- **store-recall-peephole** — drops adjacent `X->П r ; П->X r` only when
+- **store-recall-peephole** — drops adjacent `X->П r ; П->X r`, or a
+  stable-indirect proved same-cell `К X->П R7..Re ; К П->X R7..Re`, only when
   the removed recall is not the visible X2 sync before a context-sensitive
   `.`/`ВП` restoration. If the shared X2-register dataflow proves that X2
   already contains the same register value and at least one executable
@@ -1200,7 +1202,8 @@ The pipeline currently contains:
   recall is treated as a redundant sync and can still be removed. A direct
   `В/О` return is an X2 sync boundary, so the X2 hazard stops there; the
   separate stack-lift guard can still follow direct `ПП`/`В/О` continuations to
-  downstream binary/stack-consuming ops.
+  downstream binary/stack-consuming ops. Mutating `R0..R6` indirect selectors
+  are not folded by this peephole, even if a local target annotation exists.
 - **stack-current-X / dead-temp-store** — eliminates the temp store when the
   current X value can be consumed directly by a following expression, including
   one-shot temporaries and commutative current-X derivations.
@@ -1233,20 +1236,24 @@ The pipeline currently contains:
   to share a register value, a later `X->П s` makes `s` another proven name for
   the same hidden X2 value; if `s` is overwritten while X no longer matches X2,
   the alias is removed instead of being kept stale.
-- **x2-hidden-temp-restore** — replaces a direct scratch `П->X r` with `.`
-  when X2-register dataflow proves X2 already contains the same register value,
-  a separate `.` restore-gap proof has seen two safe X2-preserving executable
-  steps after the last X2 sync, and the normal stack-lift/X2-context guards
-  prove that the recall's stack shift and previous-command class are not
-  observable. The rewrite is intentionally one cell for one cell; the win
-  appears when the following liveness pass removes the scratch `X->П r` whose
+- **x2-hidden-temp-restore** — replaces a direct scratch `П->X r`, or a
+  stable-indirect proved scratch `К П->X R7..Re`, with `.` when X2-register
+  dataflow proves X2 already contains the same register value, a separate `.`
+  restore-gap proof has seen two safe X2-preserving executable steps after the
+  last X2 sync, and the normal stack-lift/X2-context guards prove that the
+  recall's stack shift and previous-command class are not observable. The
+  rewrite is intentionally one cell for one cell; the win appears when the
+  following liveness pass removes the scratch `X->П r`/`К X->П R7..Re` whose
   only remaining purpose was that recall. Repeated reads of loop/state registers
   are left as recalls, because changing them to `.` does not free storage and can
   perturb layout.
 - **dead-store-elimination** — whole-program liveness-driven DSE: removes
-  `X->П r` when liveOut at that point excludes `r`, unless that store finalizes
-  number entry or supplies the previous-command context consumed by `ВП` while
-  it restores X2.
+  `X->П r`, and stable-indirect `К X->П R7..Re` with a proved memory target,
+  when liveOut at that point excludes the written cell, unless that store
+  finalizes number entry or supplies the previous-command context consumed by
+  `ВП` while it restores X2. Mutating `R0..R6` indirect stores are kept even
+  when their memory target is dead, because the selector side effect is
+  observable.
 - **last-x-reuse** — drops `П->X r` when the IR proves X already holds the
   value last stored to `r` and no intervening op (С/П, jump, ALU, …) clobbers
   X. С/П acts as a barrier because the user may overwrite X during pause;

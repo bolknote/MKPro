@@ -1,6 +1,13 @@
-import type { IrOp } from "../types.ts";
+import type { IrOp, RegisterName } from "../types.ts";
+import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import { computeLiveness } from "./liveness-analysis.ts";
-import { hasRewriteBarrier, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
+import {
+  hasRewriteBarrier,
+  knownIndirectMemoryTarget,
+  type IrPass,
+  type IrPassFn,
+  type PassResult,
+} from "./helpers.ts";
 
 // A number-entry op (digit / '.' / sign / ВП) keeps the machine in entry mode.
 function isNumberEntry(op: IrOp): boolean {
@@ -57,9 +64,10 @@ const run: IrPassFn = (ops) => {
   const removed = new Set<number>();
   for (let i = 0; i < ops.length; i += 1) {
     const op = ops[i]!;
-    if (op.kind !== "store") continue;
+    const target = deadStoreTarget(op);
+    if (target === undefined) continue;
     if (hasRewriteBarrier(op)) continue;
-    if (liveness.liveOut[i]!.has(op.register)) continue;
+    if (liveness.liveOut[i]!.has(target)) continue;
     if (finalizesNumberEntry(ops, i)) continue;
     if (providesVpRestoreContext(ops, i)) continue;
     removed.add(i);
@@ -83,6 +91,13 @@ const run: IrPassFn = (ops) => {
   };
   return passResult;
 };
+
+function deadStoreTarget(op: IrOp): RegisterName | undefined {
+  if (op.kind === "store") return op.register;
+  if (op.kind !== "indirect-store") return undefined;
+  if (!isStableIndirectSelector(op.register)) return undefined;
+  return knownIndirectMemoryTarget(op);
+}
 
 export const deadStoreElimination: IrPass = {
   name: "dead-store-elimination",

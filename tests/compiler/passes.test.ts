@@ -172,6 +172,15 @@ function indirectStore(register: RegisterName): IrOp {
   };
 }
 
+function knownTargetIndirectStore(register: RegisterName, target: RegisterName): IrOp {
+  return {
+    kind: "indirect-store",
+    register,
+    opcode: 0xb0 + REGISTER_INDEX[register],
+    meta: { mnemonic: `К X->П ${register}`, comment: `indirect-memory-target=${target}` },
+  };
+}
+
 function indirectJump(register: RegisterName): IrOp {
   return {
     kind: "indirect-jump",
@@ -352,6 +361,23 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
 
+  it("x2-hidden-temp-restore handles stable indirect scratch stores and recalls", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      knownTargetIndirectStore("8", "2"),
+      plain(0x35, "К {x}"),
+      knownTargetIndirectRecall("8", "2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[3]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "indirect-store")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
   it("x2-hidden-temp-restore requires a safe dot restore gap", () => {
     const program: IrOp[] = [
       recall("1"),
@@ -423,6 +449,28 @@ describe("ir passes on synthetic programs", () => {
     const result = deadStoreElimination.run(program, ctx);
     expect(result.applied).toBe(1);
     expect(result.ops.filter((op) => op.kind === "store").length).toBe(1);
+  });
+
+  it("dead-store-elimination removes dead stable indirect stores with proved targets", () => {
+    const program: IrOp[] = [
+      knownTargetIndirectStore("8", "2"),
+      halt(),
+    ];
+    const result = deadStoreElimination.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([halt()]);
+  });
+
+  it("dead-store-elimination keeps mutating indirect stores even when the target is dead", () => {
+    const program: IrOp[] = [
+      knownTargetIndirectStore("4", "2"),
+      halt(),
+    ];
+    const result = deadStoreElimination.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("dead-store-elimination keeps stores that are read before next assignment", () => {
@@ -1997,6 +2045,33 @@ describe("ir passes on synthetic programs", () => {
     const result = storeRecallPeephole.run(program, ctx);
     expect(result.applied).toBe(1);
     expect(result.ops.length).toBe(2);
+  });
+
+  it("store-recall-peephole drops a stable indirect recall after a same-target indirect store", () => {
+    const program: IrOp[] = [
+      knownTargetIndirectStore("8", "2"),
+      knownTargetIndirectRecall("8", "2"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      knownTargetIndirectStore("8", "2"),
+      halt(),
+    ]);
+  });
+
+  it("store-recall-peephole keeps mutating indirect store/recall pairs", () => {
+    const program: IrOp[] = [
+      knownTargetIndirectStore("4", "2"),
+      knownTargetIndirectRecall("4", "2"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("store-recall-peephole keeps recall that syncs X2 before ВП", () => {

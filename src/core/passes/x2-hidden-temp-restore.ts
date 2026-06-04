@@ -1,4 +1,5 @@
 import type { IrOp, RegisterName } from "../types.ts";
+import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import { computeLiveness } from "./liveness-analysis.ts";
 import {
   computeX2DotRestoreGapStates,
@@ -24,7 +25,7 @@ const run: IrPassFn = (ops) => {
   const result = ops.map((op, index): IrOp => {
     const register = removableRecallValueRegister(op);
     if (register === undefined) return op;
-    if (op.kind !== "recall") return op;
+    if (!isSupportedScratchRecall(op)) return op;
     if (isDisplayFocusSensitive(op)) return op;
     if (findDeadScratchStore(ops, index, register) === undefined) return op;
     if (liveness.liveOut[index]?.has(register) === true) return op;
@@ -67,12 +68,26 @@ function dotRestoreOp(register: RegisterName, source: IrOp): IrOp {
   };
 }
 
+function isSupportedScratchRecall(op: IrOp): op is Extract<IrOp, { kind: "recall" | "indirect-recall" }> {
+  if (op.kind === "recall") return true;
+  return op.kind === "indirect-recall" &&
+    isStableIndirectSelector(op.register) &&
+    knownIndirectMemoryTarget(op) !== undefined;
+}
+
 function findDeadScratchStore(ops: readonly IrOp[], recallIndex: number, register: RegisterName): number | undefined {
   for (let index = recallIndex - 1; index >= 0; index -= 1) {
     const op = ops[index]!;
     if (op.kind === "label") return undefined;
     if (hasRewriteBarrier(op)) return undefined;
     if (op.kind === "store" && op.register === register) {
+      return isDisplayFocusSensitive(op) ? undefined : index;
+    }
+    if (
+      op.kind === "indirect-store" &&
+      isStableIndirectSelector(op.register) &&
+      knownIndirectMemoryTarget(op) === register
+    ) {
       return isDisplayFocusSensitive(op) ? undefined : index;
     }
     if (mentionsRegister(op, register) || stopsStraightLineSearch(op)) return undefined;
