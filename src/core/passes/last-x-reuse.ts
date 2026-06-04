@@ -82,9 +82,7 @@ const run: IrPassFn = (ops) => {
     }
     if (
       op.kind === "jump" ||
-      op.kind === "cjump" ||
       op.kind === "call" ||
-      op.kind === "loop" ||
       op.kind === "indirect-jump" ||
       op.kind === "indirect-call" ||
       op.kind === "indirect-cjump" ||
@@ -94,6 +92,14 @@ const run: IrPassFn = (ops) => {
       // Stops let the user resume; X (and possibly Y/Z/T) may have been
       // touched interactively. Drop the X-reuse assumption across stops.
       xHolds = undefined;
+      canTrustValueX = false;
+      continue;
+    }
+    if (op.kind === "cjump") {
+      continue;
+    }
+    if (op.kind === "loop") {
+      if (xHolds === loopCounterRegister(op.counter)) xHolds = undefined;
       canTrustValueX = false;
       continue;
     }
@@ -121,6 +127,19 @@ const run: IrPassFn = (ops) => {
   };
   return passResult;
 };
+
+function loopCounterRegister(counter: Extract<IrOp, { kind: "loop" }>["counter"]): RegisterName {
+  switch (counter) {
+    case "L0":
+      return "0";
+    case "L1":
+      return "1";
+    case "L2":
+      return "2";
+    case "L3":
+      return "3";
+  }
+}
 
 function labelEntryIndexes(ops: readonly IrOp[]): Set<number> {
   const stringTargets = new Set<string>();

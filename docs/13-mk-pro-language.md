@@ -1374,6 +1374,9 @@ The pipeline currently contains:
   register value from a direct store, a proved indirect `К X->П`, or an earlier
   kept direct/stable recall, and no intervening op (С/П, jump, ALU, …) clobbers
   X. Documented empty operators `К НОП`/`К 1`/`К 2` preserve the X fact.
+  Direct conditional fallthroughs preserve visible X for the linear successor;
+  counted-loop fallthroughs do the same for non-counter registers while dropping
+  the alias to the decremented `R0`..`R3` counter.
   The proof can also come from X2 decimal value-memory or decimal preload
   metadata: if a register was stored with a concrete decimal literal, or
   recalled from `preload const N`, and X was later rebuilt as the same value,
@@ -1521,8 +1524,9 @@ The pipeline currently contains:
   the pass can also prove a boundary from the opcode context itself: an X2 sync,
   at least one X2-preserving executable gap, then `ВП`. That proof is
   path-sensitive for direct CFG edges, so a conditional jump edge may prove the
-  boundary while an immediate fallthrough X2-sync still refuses the rewrite, and
-  joins require every incoming path to carry the proof.
+  boundary while an immediate fallthrough X2-sync still refuses the rewrite;
+  `F Lx` loop edges follow the same rule. Joins require every incoming path to
+  carry the proof.
 - **membership X2 restore** — membership set lowering may use `.` as a hidden
   X2 restore in non-display code. It is accepted only when the set collection
   assignable is byte-for-byte the tested collection, including indexed bank
