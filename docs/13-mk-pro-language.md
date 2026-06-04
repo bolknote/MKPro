@@ -1194,9 +1194,13 @@ The pipeline currently contains:
 
 - **store-recall-peephole** — drops adjacent `X->П r ; П->X r` only when
   the removed recall is not the visible X2 sync before a context-sensitive
-  `.`/`ВП` restoration. A direct `В/О` return is an X2 sync boundary, so the
-  X2 hazard stops there; the separate stack-lift guard can still follow direct
-  `ПП`/`В/О` continuations to downstream binary/stack-consuming ops.
+  `.`/`ВП` restoration. If the shared X2-register dataflow proves that X2
+  already contains the same register value and at least one executable
+  X2-preserving command keeps the `ВП`/`.` previous-command context intact, the
+  recall is treated as a redundant sync and can still be removed. A direct
+  `В/О` return is an X2 sync boundary, so the X2 hazard stops there; the
+  separate stack-lift guard can still follow direct `ПП`/`В/О` continuations to
+  downstream binary/stack-consuming ops.
 - **stack-current-X / dead-temp-store** — eliminates the temp store when the
   current X value can be consumed directly by a following expression, including
   one-shot temporaries and commutative current-X derivations.
@@ -1211,8 +1215,20 @@ The pipeline currently contains:
 - **path-sensitive direct-conditional X2 model** — direct conditionals remain
   path-insensitive `unknown`, but the opcode profile records their branch
   effects: fallthrough is X2-affecting, while the jump edge preserves the prior
-  X2. Recall-removal guards use that shared profile instead of a local special
-  case, which lets later ordinary-code X2 tricks reason about branch layout.
+  X2. The register dataflow keeps `X` and `X2` together, so when the fallthrough
+  edge syncs X2 and X is proved to contain register `r`, the proof records
+  `X2 = r` on that edge. Recall-removal guards use that shared profile instead
+  of a local special case, which lets later ordinary-code X2 tricks reason
+  about branch layout.
+- **X2-register dataflow** — a forward proof tracks states of the form “X2 is
+  known to contain register `r`” through X2-preserving ordinary code, stores,
+  known indirect memory recalls, direct calls into the proved graph, and
+  path-sensitive direct conditional edges. `В/О`, `С/П`, unknown indirect flow,
+  and opaque X2-affecting commands clear the proof. Recall-removal passes use
+  this to distinguish a required sync from a redundant re-sync before later
+  `.`/`ВП` restoration. The proof also carries register aliases: when X and X2
+  are known to share a register value, a later `X->П s` makes `s` another
+  proven name for the same hidden X2 value.
 - **dead-store-elimination** — whole-program liveness-driven DSE: removes
   `X->П r` when liveOut at that point excludes `r`, unless that store finalizes
   number entry or supplies the previous-command context consumed by `ВП` while
@@ -1221,19 +1237,26 @@ The pipeline currently contains:
   value last stored to `r` and no intervening op (С/П, jump, ALU, …) clobbers
   X. С/П acts as a barrier because the user may overwrite X during pause;
   context-sensitive `.`/`ВП` restoration also blocks the rewrite when the
-  recall is the last X2 sync, as do downstream binary/stack-consuming ops that
-  can still observe the recall's stack lift through direct call returns.
+  recall is the last X2 sync. If X2-register dataflow proves the same register
+  is already synced and the immediate previous-command context is preserved,
+  the recall can be removed. The same proof accepts stable indirect recalls
+  (`К П->X R7..Re`) when lowering has proved the actual memory target; indirect
+  recalls through `R0..R6` are kept because removing them would skip selector
+  mutation. Downstream binary/stack-consuming ops that can still observe the
+  recall's stack lift through direct call returns also block the rewrite.
 - **flow-x-reuse** — runs forward CFG dataflow for values already in X and
-  drops `П->X r` when every direct predecessor reaches that point with `r`
-  still in X; absolute numeric and indirect flow targets are left untouched,
-  and the same `.`/`ВП` X2-sync guard (stopped by direct `В/О` returns) plus
-  downstream stack-consumer guards are applied before removing a recall.
+  drops a direct or stable-indirect proved recall when every direct predecessor
+  reaches that point with the same register value still in X; absolute numeric
+  and indirect flow targets are left untouched, and the same X2-register-aware
+  `.`/`ВП` sync guard (stopped by direct `В/О` returns) plus downstream
+  stack-consumer guards are applied before removing a recall.
 - **branch-target-x-reuse** — drops the first `П->X r` inside a unique branch
-  target when the incoming condition just tested the same recalled `r`, so the
-  branch path already carries that value in X, unless that recall is needed as
-  the target-side X2 sync before `.`/`ВП` before a direct `В/О` return syncs
-  X2, or as a stack lift that can reach a downstream binary/stack-consuming op
-  through direct call returns.
+  target when the incoming condition just tested the same direct or
+  stable-indirect recalled value, so the branch path already carries that value
+  in X, unless that recall is needed as the target-side X2 sync before `.`/`ВП`
+  before a direct `В/О` return syncs X2. The shared X2-register proof can now
+  show that the branch path already has the same X2 value, so only immediate
+  previous-command context and real stack-lift consumers keep the target recall.
 - **liveness-analysis** — foundational dataflow used by DSE, register
   coalescing, and dead-code analysis; `F L0`..`F L3` loop counters are modeled
   as both read and written registers.
@@ -1277,7 +1300,8 @@ The pipeline currently contains:
   `-99999999` sentinel when `R0` and `X` are both known to hold it. It also
   rewrites proved direct flow to hardware address `99` through fractional
   `R0`; label targets use a final post-layout proof so the fixed `99` address
-  cannot be invalidated by later shrinking.
+  cannot be invalidated by later shrinking. The R0 proof survives unrelated
+  indirect memory through `R1..Re`; indirect flow remains a proof barrier.
 - **indirect-selector-integer-part-reuse** — when indexed-bank lowering has
   proved that a stable indirect selector is exactly `int(coord)`, the following
   IR pass tracks the selector register's post-indirect integer-part side effect
@@ -1293,7 +1317,9 @@ The pipeline currently contains:
   or an existing numeric/formal address byte; if its opcode itself takes an
   address, its operand remains in the next cell. Fixed numeric/formal branch
   operands are accepted only when their real target is before the removed cell,
-  so shrinking cannot retarget them.
+  so shrinking cannot retarget them. The verifier also accepts the self-target
+  form where the branch jumps directly to its own operand byte as executable
+  code, but only after re-layout proves that byte still encodes the removed op.
 - **x2 opcode profile** — the opcode catalog models the reference split between
   X2-preserving commands, X2-syncing commands that copy X into X2 and then
   normalize/check X, and X2-restoring commands (`0`..`9`, `.`, `/-/`, `ВП`) that
@@ -1307,10 +1333,20 @@ The pipeline currently contains:
   this metadata instead of hard-coded opcode lists when deciding whether a
   removed `П->X` stack lift can reach a downstream consumer, including after a
   direct `ПП`/`В/О` round trip.
+- **pre-shift-stack-lift** — removes `В↑` immediately before any proved
+  stack-shifting producer such as direct/indirect `П->X`, `F pi`, or another
+  `В↑` when that following command already keeps the old X in Y for the
+  following consumer. The same stack-difference proof starts with the possible
+  difference in Z and follows direct calls/returns, so the rewrite is refused if
+  a later opcode could expose or consume that deeper stack value.
 - **vp-x2-peephole** — drops a `К {x}` immediately after a proved `ВП`/X2
   boundary when `ВП` already supplies the fractional transform. The proof is
   not display-specific: display lowering is just one producer of such
-  boundaries.
+  boundaries. For ordinary code the pass can also prove a boundary from the
+  opcode context itself: an X2 sync, at least one X2-preserving executable gap,
+  then `ВП`. That proof is path-sensitive for direct CFG edges, so a conditional
+  jump edge may prove the boundary while an immediate fallthrough X2-sync still
+  refuses the rewrite, and joins require every incoming path to carry the proof.
 - **membership X2 restore** — membership set lowering may use `.` as a hidden
   X2 restore in non-display code. It is accepted only when the set collection
   assignable is byte-for-byte the tested collection, including indexed bank

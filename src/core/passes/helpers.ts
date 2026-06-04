@@ -6,6 +6,7 @@ import type {
   PreloadReport,
   RegisterName,
 } from "../types.ts";
+import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import { getOpcode } from "../opcodes.ts";
 
 export interface PassContext {
@@ -25,6 +26,12 @@ export interface IrPass {
   readonly name: string;
   readonly run: IrPassFn;
   readonly layoutSafe: boolean;
+}
+
+export type RegisterValueSet = ReadonlySet<RegisterName>;
+
+export interface X2RestoreExposureOptions {
+  readonly redundantSyncRegister?: RegisterName | undefined;
 }
 
 export function emptyResult(ops: readonly IrOp[]): PassResult {
@@ -109,6 +116,14 @@ export function knownIndirectMemoryTarget(op: IrOp): RegisterName | undefined {
   return match[1]!.toLowerCase() as RegisterName;
 }
 
+export function removableRecallValueRegister(op: IrOp): RegisterName | undefined {
+  if (hasRewriteBarrier(op)) return undefined;
+  if (op.kind === "recall") return op.register;
+  if (op.kind !== "indirect-recall") return undefined;
+  if (!isStableIndirectSelector(op.register)) return undefined;
+  return knownIndirectMemoryTarget(op);
+}
+
 function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
   const result = new Map<string, number>();
   for (let i = 0; i < ops.length; i += 1) {
@@ -137,6 +152,383 @@ function conditionalX2Effect(
   return effect[edge];
 }
 
+interface Edge {
+  readonly target: number;
+  readonly kind: "normal" | "fallthrough" | "jump";
+}
+
+interface RegisterDataflowState {
+  readonly x: RegisterValueSet;
+  readonly x2: RegisterValueSet;
+}
+
+export function computeX2RegisterStates(ops: readonly IrOp[]): Array<RegisterValueSet | undefined> {
+  if (ops.length === 0) return [];
+  const edges = buildRegisterValueGraph(ops);
+  const inStates: Array<RegisterDataflowState | undefined> = Array.from({ length: ops.length }, () => undefined);
+  inStates[0] = emptyRegisterDataflowState();
+
+  let changed = true;
+  let iterations = 0;
+  while (changed && iterations < 200) {
+    changed = false;
+    iterations += 1;
+
+    for (let index = 0; index < ops.length; index += 1) {
+      const input = inStates[index];
+      if (input === undefined) continue;
+      for (const edge of edges[index] ?? []) {
+        const output = transferRegisterDataflowState(input, ops[index]!, edge.kind);
+        const joined = joinRegisterDataflowStates(inStates[edge.target], output);
+        if (!sameRegisterDataflowState(joined, inStates[edge.target])) {
+          inStates[edge.target] = joined;
+          changed = true;
+        }
+      }
+    }
+  }
+
+  return inStates.map((state) => state?.x2);
+}
+
+type X2RestoreBoundaryState = "none" | "synced" | "boundary";
+
+export function computeX2RestoreBoundaryStates(ops: readonly IrOp[]): boolean[] {
+  if (ops.length === 0) return [];
+  const edges = buildRegisterValueGraph(ops);
+  const inStates: Array<X2RestoreBoundaryState | undefined> = Array.from({ length: ops.length }, () => undefined);
+  inStates[0] = "none";
+
+  let changed = true;
+  let iterations = 0;
+  while (changed && iterations < 200) {
+    changed = false;
+    iterations += 1;
+
+    for (let index = 0; index < ops.length; index += 1) {
+      const input = inStates[index];
+      if (input === undefined) continue;
+      for (const edge of edges[index] ?? []) {
+        const output = transferX2RestoreBoundaryState(input, ops[index]!, edge.kind);
+        const joined = joinX2RestoreBoundaryStates(inStates[edge.target], output);
+        if (joined !== inStates[edge.target]) {
+          inStates[edge.target] = joined;
+          changed = true;
+        }
+      }
+    }
+  }
+
+  return inStates.map((state) => state === "boundary");
+}
+
+export function recallAlreadySyncedInX2(
+  op: IrOp,
+  state: RegisterValueSet | undefined,
+): RegisterName | undefined {
+  if (state === undefined) return undefined;
+  if (op.kind === "recall") return state.has(op.register) ? op.register : undefined;
+  if (op.kind !== "indirect-recall") return undefined;
+  const target = knownIndirectMemoryTarget(op);
+  return target !== undefined && state.has(target) ? target : undefined;
+}
+
+function emptyRegisterDataflowState(): RegisterDataflowState {
+  return { x: new Set(), x2: new Set() };
+}
+
+function cloneRegisterDataflowState(input: RegisterDataflowState): RegisterDataflowState {
+  return { x: new Set(input.x), x2: new Set(input.x2) };
+}
+
+function transferRegisterDataflowState(
+  input: RegisterDataflowState,
+  op: IrOp,
+  edge: Edge["kind"],
+): RegisterDataflowState {
+  if (hasRewriteBarrier(op)) return emptyRegisterDataflowState();
+
+  switch (op.kind) {
+    case "label":
+    case "jump":
+    case "call":
+    case "orphan-address":
+      return cloneRegisterDataflowState(input);
+    case "store":
+      return {
+        x: addRegisterValue(input.x, op.register),
+        x2: addStoredX2Alias(input, op.register),
+      };
+    case "indirect-store":
+      return transferIndirectStoreRegisterState(input, op);
+    case "recall":
+      return { x: new Set([op.register]), x2: new Set([op.register]) };
+    case "indirect-recall": {
+      const target = knownIndirectMemoryTarget(op);
+      const registers = target === undefined ? new Set<RegisterName>() : new Set([target]);
+      return { x: registers, x2: new Set(registers) };
+    }
+    case "plain":
+      return { x: new Set(), x2: transferPlainX2RegisterSet(input.x2, plainX2Effect(op)) };
+    case "cjump": {
+      const effect = edge === "fallthrough"
+        ? conditionalX2Effect(op, "fallthrough")
+        : edge === "jump"
+          ? conditionalX2Effect(op, "jump")
+          : "unknown";
+      return {
+        x: new Set(input.x),
+        x2: transferConditionalX2RegisterSet(input, effect),
+      };
+    }
+    case "loop": {
+      const effect = edge === "fallthrough"
+        ? conditionalX2Effect(op, "fallthrough")
+        : edge === "jump"
+          ? conditionalX2Effect(op, "jump")
+          : "unknown";
+      return {
+        x: new Set(),
+        x2: effect === "preserves" ? new Set(input.x2) : new Set(),
+      };
+    }
+    case "return":
+    case "stop":
+    case "indirect-jump":
+    case "indirect-call":
+    case "indirect-cjump":
+      return emptyRegisterDataflowState();
+  }
+}
+
+function transferX2RestoreBoundaryState(
+  input: X2RestoreBoundaryState,
+  op: IrOp,
+  edge: Edge["kind"],
+): X2RestoreBoundaryState {
+  if (hasRewriteBarrier(op)) return "none";
+
+  switch (op.kind) {
+    case "label":
+      return input;
+    case "jump":
+    case "call":
+    case "orphan-address":
+    case "store":
+    case "indirect-store":
+      return x2PreservingExecutableBoundary(input);
+    case "recall":
+    case "indirect-recall":
+    case "return":
+    case "stop":
+      return "synced";
+    case "plain":
+      return transferPlainX2RestoreBoundaryState(input, plainX2Effect(op));
+    case "cjump":
+    case "loop": {
+      const effect = edge === "fallthrough"
+        ? conditionalX2Effect(op, "fallthrough")
+        : edge === "jump"
+          ? conditionalX2Effect(op, "jump")
+          : "unknown";
+      return transferConditionalX2RestoreBoundaryState(input, effect);
+    }
+    case "indirect-jump":
+    case "indirect-call":
+    case "indirect-cjump":
+      return "none";
+  }
+}
+
+function x2PreservingExecutableBoundary(input: X2RestoreBoundaryState): X2RestoreBoundaryState {
+  return input === "none" ? "none" : "boundary";
+}
+
+function transferPlainX2RestoreBoundaryState(
+  input: X2RestoreBoundaryState,
+  effect: ReturnType<typeof plainX2Effect>,
+): X2RestoreBoundaryState {
+  if (effect === "affects" || effect === "restores") return "synced";
+  if (effect === "preserves") return x2PreservingExecutableBoundary(input);
+  return "none";
+}
+
+function transferConditionalX2RestoreBoundaryState(
+  input: X2RestoreBoundaryState,
+  effect: ReturnType<typeof conditionalX2Effect>,
+): X2RestoreBoundaryState {
+  if (effect === "affects") return "synced";
+  if (effect === "preserves") return x2PreservingExecutableBoundary(input);
+  return "none";
+}
+
+function joinX2RestoreBoundaryStates(
+  current: X2RestoreBoundaryState | undefined,
+  incoming: X2RestoreBoundaryState,
+): X2RestoreBoundaryState {
+  if (current === undefined) return incoming;
+  return x2RestoreBoundaryRank(current) < x2RestoreBoundaryRank(incoming) ? current : incoming;
+}
+
+function x2RestoreBoundaryRank(state: X2RestoreBoundaryState): number {
+  if (state === "none") return 0;
+  if (state === "synced") return 1;
+  return 2;
+}
+
+function addRegisterValue(input: RegisterValueSet, register: RegisterName): Set<RegisterName> {
+  const output = new Set(input);
+  output.add(register);
+  return output;
+}
+
+function addStoredX2Alias(input: RegisterDataflowState, register: RegisterName): Set<RegisterName> {
+  const output = new Set(input.x2);
+  if (setsIntersect(input.x, input.x2)) output.add(register);
+  return output;
+}
+
+function transferIndirectStoreRegisterState(
+  input: RegisterDataflowState,
+  op: Extract<IrOp, { kind: "indirect-store" }>,
+): RegisterDataflowState {
+  const target = knownIndirectMemoryTarget(op);
+  if (target === undefined) return { x: new Set(input.x), x2: new Set(input.x2) };
+  return {
+    x: addRegisterValue(input.x, target),
+    x2: addStoredX2Alias(input, target),
+  };
+}
+
+function setsIntersect(left: RegisterValueSet, right: RegisterValueSet): boolean {
+  for (const value of left) {
+    if (right.has(value)) return true;
+  }
+  return false;
+}
+
+function transferPlainX2RegisterSet(
+  input: RegisterValueSet,
+  effect: ReturnType<typeof plainX2Effect>,
+): Set<RegisterName> {
+  return effect === "preserves" ? new Set(input) : new Set();
+}
+
+function transferConditionalX2RegisterSet(
+  input: RegisterDataflowState,
+  effect: ReturnType<typeof conditionalX2Effect>,
+): Set<RegisterName> {
+  if (effect === "preserves") return new Set(input.x2);
+  if (effect === "affects") return new Set(input.x);
+  return new Set();
+}
+
+function joinRegisterDataflowStates(
+  current: RegisterDataflowState | undefined,
+  incoming: RegisterDataflowState,
+): RegisterDataflowState {
+  if (current === undefined) return {
+    x: new Set(incoming.x),
+    x2: new Set(incoming.x2),
+  };
+  return {
+    x: joinRegisterValueSets(current.x, incoming.x),
+    x2: joinRegisterValueSets(current.x2, incoming.x2),
+  };
+}
+
+function sameRegisterDataflowState(
+  left: RegisterDataflowState | undefined,
+  right: RegisterDataflowState | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return sameRegisterValueSet(left.x, right.x) && sameRegisterValueSet(left.x2, right.x2);
+}
+
+function joinRegisterValueSets(
+  current: RegisterValueSet | undefined,
+  incoming: RegisterValueSet,
+): Set<RegisterName> {
+  if (current === undefined) return new Set(incoming);
+  const joined = new Set<RegisterName>();
+  for (const register of current) {
+    if (incoming.has(register)) joined.add(register);
+  }
+  return joined;
+}
+
+function sameRegisterValueSet(
+  left: RegisterValueSet | undefined,
+  right: RegisterValueSet | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  if (left.size !== right.size) return false;
+  for (const register of left) {
+    if (!right.has(register)) return false;
+  }
+  return true;
+}
+
+function buildRegisterValueGraph(ops: readonly IrOp[]): Edge[][] {
+  const labels = labelIndexes(ops);
+  const successors: Edge[][] = Array.from({ length: ops.length }, () => []);
+  const callReturns: number[] = [];
+  for (let index = 0; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    const next = index + 1;
+    if (op.kind === "call" && next < ops.length) callReturns.push(next);
+  }
+
+  for (let index = 0; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    const next = index + 1;
+    const fallthrough = (): void => {
+      if (next < ops.length) successors[index]!.push({ target: next, kind: "fallthrough" });
+    };
+    const normal = (target: number): void => {
+      successors[index]!.push({ target, kind: "normal" });
+    };
+    const jumpTo = (target: string | number): void => {
+      if (typeof target !== "string") return;
+      const targetIndex = labels.get(target);
+      if (targetIndex !== undefined) successors[index]!.push({ target: targetIndex, kind: "jump" });
+    };
+
+    switch (op.kind) {
+      case "label":
+      case "store":
+      case "recall":
+      case "indirect-store":
+      case "indirect-recall":
+      case "plain":
+      case "orphan-address":
+      case "stop":
+        fallthrough();
+        break;
+      case "jump":
+        jumpTo(op.target);
+        break;
+      case "cjump":
+      case "loop":
+        jumpTo(op.target);
+        fallthrough();
+        break;
+      case "call":
+        jumpTo(op.target);
+        break;
+      case "return":
+        for (const target of callReturns) normal(target);
+        break;
+      case "indirect-jump":
+      case "indirect-call":
+      case "indirect-cjump":
+        break;
+    }
+  }
+
+  return successors;
+}
+
 type StackDifferenceDepth = 1 | 2 | 3;
 
 function shiftDifference(depth: StackDifferenceDepth): StackDifferenceDepth | undefined {
@@ -151,7 +543,11 @@ function dropDifference(depth: StackDifferenceDepth): StackDifferenceDepth | und
   return 2;
 }
 
-export function removingRecallCanExposeStackLift(ops: readonly IrOp[], recallIndex: number): boolean {
+function stackDifferenceCanReachConsumer(
+  ops: readonly IrOp[],
+  start: number,
+  initialDepth: StackDifferenceDepth,
+): boolean {
   const labels = labelIndexes(ops);
   const visited = new Set<string>();
   const visit = (
@@ -233,15 +629,31 @@ export function removingRecallCanExposeStackLift(ops: readonly IrOp[], recallInd
     return false;
   };
 
-  return visit(recallIndex + 1, 1);
+  return visit(start, initialDepth);
 }
 
-export function removingRecallCanExposeX2Restore(ops: readonly IrOp[], recallIndex: number): boolean {
+export function removingRecallCanExposeStackLift(ops: readonly IrOp[], recallIndex: number): boolean {
+  return stackDifferenceCanReachConsumer(ops, recallIndex + 1, 1);
+}
+
+export function removingPreShiftLiftCanExposeStack(ops: readonly IrOp[], producerIndex: number): boolean {
+  return stackDifferenceCanReachConsumer(ops, producerIndex + 1, 2);
+}
+
+export function removingRecallCanExposeX2Restore(
+  ops: readonly IrOp[],
+  recallIndex: number,
+  options: X2RestoreExposureOptions = {},
+): boolean {
   const labels = labelIndexes(ops);
   const visited = new Set<string>();
-  const visit = (start: number, returnStack: readonly number[] = []): boolean => {
+  const visit = (
+    start: number,
+    returnStack: readonly number[] = [],
+    sawExecutableAfterRecall = false,
+  ): boolean => {
     for (let i = start; i < ops.length; i += 1) {
-      const key = `${i}:${returnStack.join(",")}`;
+      const key = `${i}:${sawExecutableAfterRecall ? 1 : 0}:${returnStack.join(",")}`;
       if (visited.has(key)) return false;
       visited.add(key);
 
@@ -252,9 +664,12 @@ export function removingRecallCanExposeX2Restore(ops: readonly IrOp[], recallInd
         case "plain": {
           const effect = plainX2Effect(op);
           if (effect === "unknown") return true;
-          if (effect === "restores" && isContextSensitiveX2Restore(op)) return true;
+          if (effect === "restores" && isContextSensitiveX2Restore(op)) {
+            return options.redundantSyncRegister !== undefined && sawExecutableAfterRecall ? false : true;
+          }
           if (effect === "restores") return false;
           if (effect === "affects") return false;
+          sawExecutableAfterRecall = true;
           break;
         }
         case "recall":
@@ -270,7 +685,7 @@ export function removingRecallCanExposeX2Restore(ops: readonly IrOp[], recallInd
         case "jump": {
           if (typeof op.target !== "string") return true;
           const target = labels.get(op.target);
-          return target === undefined ? true : visit(target + 1, returnStack);
+          return target === undefined ? true : visit(target + 1, returnStack, true);
         }
         case "cjump":
         case "loop": {
@@ -280,24 +695,26 @@ export function removingRecallCanExposeX2Restore(ops: readonly IrOp[], recallInd
           const jump = conditionalX2Effect(op, "jump");
           if (fallthrough === "unknown" || jump === "unknown") return true;
           return (
-            (jump === "preserves" && (target === undefined ? true : visit(target + 1, returnStack))) ||
-            (fallthrough === "preserves" && visit(i + 1, returnStack))
+            (jump === "preserves" && (target === undefined ? true : visit(target + 1, returnStack, true))) ||
+            (fallthrough === "preserves" && visit(i + 1, returnStack, true))
           );
         }
         case "call": {
           if (typeof op.target !== "string") return true;
           const target = labels.get(op.target);
           if (target === undefined || returnStack.length >= 5) return true;
-          return visit(target + 1, [i + 1, ...returnStack]);
+          return visit(target + 1, [i + 1, ...returnStack], true);
         }
         case "indirect-jump":
         case "indirect-call":
         case "indirect-cjump":
           return true;
         case "label":
+          break;
         case "store":
         case "indirect-store":
         case "orphan-address":
+          sawExecutableAfterRecall = true;
           break;
       }
     }

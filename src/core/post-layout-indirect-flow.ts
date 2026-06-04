@@ -284,7 +284,12 @@ function isFractionalR0LiteralBeforeStore(ops: readonly IrOp[], storeIndex: numb
 }
 
 function preservesFractionalR0Fact(op: IrOp): boolean {
-  return op.kind === "plain" || op.kind === "recall" || op.kind === "label" || (op.kind === "store" && op.register !== "0");
+  return op.kind === "plain" ||
+    op.kind === "recall" ||
+    op.kind === "label" ||
+    (op.kind === "store" && op.register !== "0") ||
+    (op.kind === "indirect-recall" && op.register !== "0") ||
+    (op.kind === "indirect-store" && op.register !== "0");
 }
 
 function targetAddressAfterReplacingOp(
@@ -519,7 +524,6 @@ function applyAddressCodeOverlay(items: readonly MachineItem[]): { items: Machin
       labelsEnd += 1;
     }
     if (labels.length === 0) continue;
-    if (typeof address.target === "string" && labels.some((label) => label.name === address.target)) continue;
 
     if (!canOverlayExecutableCellAt(items, labelsEnd)) continue;
     const executableOpcode = overlaidOpcode(items, labelsEnd);

@@ -30,7 +30,7 @@ export const EXAMPLE_BASELINE: Record<string, number> = {
   "minesweeper-9x7": 83,
   "minesweeper-9x9": 81,
   "raja-yoga": 87,
-  "rambo-iii": 105,
+  "rambo-iii": 104,
   "sea-battle": 74,
   teleport: 97,
   "tiny-game": 23,

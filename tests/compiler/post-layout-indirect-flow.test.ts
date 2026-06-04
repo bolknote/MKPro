@@ -175,6 +175,25 @@ describe("post-layout indirect flow", () => {
     expect(result.items).toEqual(program);
   });
 
+  it("keeps fractional R0 flow proof through unrelated indirect memory", () => {
+    const program: MachineItem[] = [
+      op(0x00, "0"),
+      op(0x0a, "."),
+      op(0x05, "5"),
+      op(0x40, "X->П 0"),
+      op(0xd7, "К П->X 7"),
+      ...jump("target"),
+      ...Array.from({ length: 93 }, () => digit()),
+      { kind: "label", name: "target" },
+      halt(),
+    ];
+    const result = optimizePostLayoutFractionalR0Flow(program);
+
+    expect(result.applied).toBe(1);
+    expect(cellCount(result.items)).toBe(cellCount(program) - 1);
+    expect(result.items.some((item) => item.kind === "op" && item.opcode === 0x80)).toBe(true);
+  });
+
   it("rewrites fractional R0 calls when the resolved label target lands at address 99", () => {
     const program: MachineItem[] = [
       op(0x00, "0"),
@@ -211,6 +230,23 @@ describe("post-layout indirect flow", () => {
     expect(result.items[2]).toMatchObject({ kind: "address", target: "target" });
     expect(result.items.some((item) => item.kind === "op" && item.opcode === 0x07)).toBe(false);
     expect(result.optimizations[0]?.name).toBe("address-code-overlay");
+  });
+
+  it("overlays a branch target onto its own address byte when that byte is executable", () => {
+    const program: MachineItem[] = [
+      ...jump("target"),
+      { kind: "label", name: "target" },
+      op(0x01, "1"),
+      halt(),
+    ];
+    const result = optimizePostLayoutAddressCodeOverlay(program);
+
+    expect(result.applied).toBe(1);
+    expect(cellCount(result.items)).toBe(cellCount(program) - 1);
+    expect(result.items[0]).toMatchObject({ kind: "op", opcode: 0x51 });
+    expect(result.items[1]).toMatchObject({ kind: "label", name: "target" });
+    expect(result.items[2]).toMatchObject({ kind: "address", target: "target" });
+    expect(result.items.some((item) => item.kind === "op" && item.opcode === 0x01)).toBe(false);
   });
 
   it("overlays a labeled address-taking op while keeping its address operand", () => {

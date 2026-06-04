@@ -1,7 +1,10 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import {
+  computeX2RegisterStates,
   emptyResult,
   hasRewriteBarrier,
+  recallAlreadySyncedInX2,
+  removableRecallValueRegister,
   removingRecallCanExposeStackLift,
   removingRecallCanExposeX2Restore,
   type IrPass,
@@ -11,6 +14,7 @@ import {
 const run: IrPassFn = (ops) => {
   const labels = labelIndexes(ops);
   const references = targetReferenceCounts(ops);
+  const x2States = computeX2RegisterStates(ops);
   const remove = new Set<number>();
 
   for (let index = 0; index < ops.length; index += 1) {
@@ -27,9 +31,13 @@ const run: IrPassFn = (ops) => {
     const targetIndex = nextExecutableIndex(ops, labelIndex + 1);
     if (targetIndex === undefined || remove.has(targetIndex)) continue;
     const target = ops[targetIndex]!;
-    if (target.kind !== "recall" || target.register !== register || hasRewriteBarrier(target)) continue;
+    if (removableRecallValueRegister(target) !== register) continue;
     if (removingRecallCanExposeStackLift(ops, targetIndex)) continue;
-    if (removingRecallCanExposeX2Restore(ops, targetIndex)) continue;
+    if (
+      removingRecallCanExposeX2Restore(ops, targetIndex, {
+        redundantSyncRegister: recallAlreadySyncedInX2(target, x2States[targetIndex]),
+      })
+    ) continue;
 
     remove.add(targetIndex);
   }
@@ -56,8 +64,7 @@ function immediatelyTestedRegister(ops: readonly IrOp[], cjumpIndex: number): Re
   for (let index = cjumpIndex - 1; index >= 0; index -= 1) {
     const op = ops[index]!;
     if (op.kind === "label") continue;
-    if (op.kind === "recall" && !hasRewriteBarrier(op)) return op.register;
-    return undefined;
+    return removableRecallValueRegister(op);
   }
   return undefined;
 }

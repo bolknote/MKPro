@@ -14682,7 +14682,7 @@ const optimizerCapabilities: Array<{
     source: "undocumented",
     requires: ["address-constants", "code-data-overlay"],
     activeWhen: ["code-data-overlay", "address-code-overlay"],
-    detail: "Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role; БП overlays and ПП overlays with proved terminal targets are rewritten only after final address proof, including existing formal/numeric address bytes used as executable cells, address-taking executable bytes whose operand remains next, and fixed-address guards that reject overlays whose real target would shift.",
+    detail: "Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role; БП overlays and ПП overlays with proved terminal targets are rewritten only after final address proof, including self-target operand execution, existing formal/numeric address bytes used as executable cells, address-taking executable bytes whose operand remains next, and fixed-address guards that reject overlays whose real target would shift.",
   },
   {
     id: "cyclic-address-layout",
@@ -14730,7 +14730,7 @@ const optimizerCapabilities: Array<{
     source: "mk61-delta",
     requires: ["r0-fractional-sentinel"],
     activeWhen: ["fractional-indirect-addressing", "r0-indirect-counter", "r0-fractional-sentinel"],
-    detail: "Fractional R0 side effects: selecting R3, preserving the resulting -99999999 sentinel, and replacing proved direct flow to address 99 with one-cell К БП/К ПП/К x?0 0 are sound only when liveness and final layout prove the R0 mutation and fixed 99 target are valid.",
+    detail: "Fractional R0 side effects: selecting R3, preserving the resulting -99999999 sentinel, carrying the fractional proof through unrelated indirect memory, and replacing proved direct flow to address 99 with one-cell К БП/К ПП/К x?0 0 are sound only when liveness and final layout prove the R0 mutation and fixed 99 target are valid.",
   },
   {
     id: "raw-display-5f",
@@ -14754,7 +14754,7 @@ const optimizerCapabilities: Array<{
     source: "mk61-delta",
     requires: ["x2-register"],
     activeWhen: ["vp-fraction-restore", "vp-exponent-splice"],
-    detail: "Uses ВП where it simultaneously restores X2 and provides the needed fractional/mantissa side effect, and collapses redundant ВП ВП / КНОП ВП exponent-entry splices.",
+    detail: "Uses ВП where it simultaneously restores X2 and provides the needed fractional/mantissa side effect, including path-sensitive CFG proofs of X2 sync plus a preserving executable gap; also collapses redundant ВП ВП / КНОП ВП exponent-entry splices.",
   },
   {
     id: "x2-hidden-temp",
@@ -14922,7 +14922,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["last-x-reuse"],
-    detail: "Drops П->X r when the IR pass can prove X already holds the value just stored to r and no intervening op clobbers X (including С/П, jumps, ALU), while preserving recalls that supply the last X2 sync before . or ВП restoration or a stack lift that can reach a downstream consumer through direct call/return continuations.",
+    detail: "Drops direct П->X r, and stable indirect К П->X R7..Re with a proved target, when the IR pass can prove X already holds the same value and no intervening op clobbers X (including С/П, jumps, ALU), while preserving recalls that supply the last X2 sync before . or ВП restoration, mutate an indirect selector, or lift the stack for a downstream consumer through direct call/return continuations.",
   },
   {
     id: "flow-x-reuse",
@@ -14930,7 +14930,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["flow-x-reuse"],
-    detail: "Uses forward CFG data-flow to drop П->X r when every predecessor reaches the point with the same register value already in X, including across direct jumps and both sides of conditional branches, unless the recall is the last X2 sync before . or ВП restoration or a stack lift that can reach a downstream consumer through direct call/return continuations.",
+    detail: "Uses forward CFG data-flow to drop direct or stable-indirect proved recalls when every predecessor reaches the point with the same register value already in X, including across direct jumps and both sides of conditional branches, unless the recall is the last X2 sync before . or ВП restoration, mutates an indirect selector, or lifts the stack for a downstream consumer through direct call/return continuations.",
   },
   {
     id: "branch-target-x-reuse",
@@ -14938,7 +14938,15 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["branch-target-x-reuse"],
-    detail: "Drops the first recall in a unique branch target when the incoming condition already carries the tested register value in X, unless the target recall is needed as a . or ВП X2-sync boundary or a stack lift that can reach a downstream consumer through direct call/return continuations.",
+    detail: "Drops the first direct or stable-indirect proved recall in a unique branch target when the incoming condition already carries the tested register value in X, unless the target recall is needed as a . or ВП X2-sync boundary, mutates an indirect selector, or lifts the stack for a downstream consumer through direct call/return continuations.",
+  },
+  {
+    id: "pre-shift-stack-lift",
+    category: "stack",
+    source: "documented",
+    requires: [],
+    activeWhen: ["pre-shift-stack-lift"],
+    detail: "Removes В↑ immediately before a proved stack-shifting producer (direct/indirect П->X, F pi, or another В↑) when that command already supplies old X in Y and stack-difference analysis proves the extra deeper stack cell cannot be observed.",
   },
   {
     id: "constant-folding",

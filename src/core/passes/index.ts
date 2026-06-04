@@ -23,6 +23,7 @@ import { indirectMemoryTable, stableIndirectFlow } from "./indirect-addressing.t
 import { jumpThread } from "./jump-thread.ts";
 import { jumpToNextThreading } from "./jump-to-next.ts";
 import { lastXReuse } from "./last-x-reuse.ts";
+import { preShiftStackLift } from "./pre-shift-stack-lift.ts";
 import { preloadedIndirectFlow, runtimeIndirectCallFlow } from "./preloaded-indirect-flow.ts";
 import { redundantPrologueElimination } from "./redundant-prologue.ts";
 import { registerCoalesce } from "./register-coalesce.ts";
@@ -48,6 +49,7 @@ const PASS_PIPELINE: ReadonlyArray<IrPass> = [
   sharedStraightLineHelper,
   returnZeroJump,
   storeRecallPeephole,
+  preShiftStackLift,
   jumpToNextThreading,
   jumpThread,
   flowXReuse,
