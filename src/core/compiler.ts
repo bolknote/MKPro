@@ -454,6 +454,10 @@ interface LoweringOptions {
   // It is speculative because an existing shared tail can be cheaper than
   // keeping the input stack-resident.
   showReadGuardedTransfer?: boolean;
+  // Try comparison-to-mask selectors for guarded `+=`/`-=` updates even when the
+  // local model prefers a branch. The whole-program variant is adopted only when
+  // the final layout shrinks, so ordinary comparison branches stay byte-stable.
+  comparisonGuardedUpdateSelectors?: boolean;
   // Probe hook: surface the non-overlapping register coalescing pairs on
   // CompileResult.coalesceShares so a follow-up compile can reclaim the freed
   // registers for preloaded constants. Set only on the internal trial compile.
@@ -666,6 +670,21 @@ function sourceHasRepeatedRoutableUnaryShape(source: string): boolean {
   return false;
 }
 
+function sourceHasComparisonGuardedUpdate(source: string): boolean {
+  let ast: ProgramAst;
+  try {
+    ast = parseProgram(source);
+  } catch {
+    return false;
+  }
+  return programVisitsIf(ast, (statement) => {
+    const branchless = buildBranchRemovalCandidate(statement, ast, { comparisonSelectors: true });
+    if (branchless?.name === "arithmetic-if-comparison-update") return true;
+    const guarded = buildGuardedUpdateSelectorCandidate(statement, ast, { negativeZeroDegree: true });
+    return guarded?.usesComparison === true;
+  });
+}
+
 export function compileMKPro(
   source: string,
   options: Partial<CompileOptions> = {},
@@ -857,6 +876,13 @@ function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): Candid
     "coalesce-copies",
     "Coalesced copy-related registers (A = B) that never diverge, dropping the copy and freeing a register",
   );
+  if (sourceHasComparisonGuardedUpdate(source)) {
+    add(
+      { comparisonGuardedUpdateSelectors: true },
+      "comparison-guarded-update-selector",
+      "Tried abs/sign comparison masks for guarded arithmetic updates after full layout",
+    );
+  }
   add(
     { freeResidualDispatchScratch: true, canonicalizeIfChains: true },
     "free-residual-dispatch-scratch-with-if-chain",
@@ -2166,6 +2192,7 @@ function compileMKProOnce(
     loweringOptions.startupAwareConstantPreloads === true,
     loweringOptions.forcedRegisterShares ?? [],
     loweringOptions.xParamValueFunctions === true,
+    loweringOptions.comparisonGuardedUpdateSelectors === true,
   );
   const context = new EmitContext(
     ast,
@@ -11106,6 +11133,7 @@ function allocateRegisters(
   startupAwareConstantPreloads = false,
   forcedRegisterShares: ReadonlyArray<{ freeRegister: RegisterName; keepRegister: RegisterName }> = [],
   xParamValueFunctions = false,
+  comparisonGuardedUpdateSelectors = false,
 ): RegisterAllocation {
   const declared = new Set<string>();
   const hints = new Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>();
@@ -11171,7 +11199,7 @@ function allocateRegisters(
   collectCoordListScratchVariables(ast, variables);
   collectSpatialHitScratchVariables(ast, variables, sharedBitMaskHelperCalls);
   collectSpatialCountScratchVariables(ast, variables);
-  collectGuardedUpdateScratchVariables(ast, variables);
+  collectGuardedUpdateScratchVariables(ast, variables, comparisonGuardedUpdateSelectors);
   collectDisplayTemplateScratchVariables(ast, variables);
   applyCoordListRegisterHints(variables, hints);
   applyCoordListPackedReportRegisterHints(ast, variables, hints);
@@ -13669,11 +13697,18 @@ function programNeedsSpatialLineProgressionHelper(ast: ProgramAst): boolean {
   return needed;
 }
 
-function collectGuardedUpdateScratchVariables(ast: ProgramAst, variables: Set<string>): void {
+function collectGuardedUpdateScratchVariables(
+  ast: ProgramAst,
+  variables: Set<string>,
+  comparisonGuardedUpdateSelectors = false,
+): void {
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "if") {
-        if (guardedUpdateSelectorProfitable(statement, ast, { negativeZeroDegree: true })) {
+        if (
+          guardedUpdateSelectorProfitable(statement, ast, { negativeZeroDegree: true }) ||
+          (comparisonGuardedUpdateSelectors && guardedUpdateSelectorUsesComparison(statement, ast))
+        ) {
           variables.add(ifSelectorScratchName(statement));
         }
         visit(statement.thenBody);
@@ -13734,6 +13769,13 @@ function guardedUpdateSelectorProfitable(
   if (candidate === undefined) return false;
   return estimateGuardedUpdateSelectorCost(candidate, ifSelectorScratchName(statement)) <
     estimateOrdinaryGuardedUpdateCost(statement, ast);
+}
+
+function guardedUpdateSelectorUsesComparison(
+  statement: Extract<StatementAst, { kind: "if" }>,
+  ast: ProgramAst,
+): boolean {
+  return buildGuardedUpdateSelectorCandidate(statement, ast, { negativeZeroDegree: true })?.usesComparison === true;
 }
 
 function isReusableCellMaskPair(
@@ -14629,8 +14671,10 @@ const optimizerCapabilities: Array<{
     requires: [],
     activeWhen: [
       "arithmetic-if-update",
+      "arithmetic-if-comparison-update",
       "arithmetic-if-sign-toggle",
       "multi-guarded-update",
+      "comparison-guarded-update-selector",
       "negative-zero-threshold-update",
       "hex-mantissa-arithmetic",
     ],

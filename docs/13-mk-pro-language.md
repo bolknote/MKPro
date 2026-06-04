@@ -1054,7 +1054,10 @@ candidates:
   `+=`/`-=` updates may store one selector in a compiler scratch register and
   apply it to several updates when that beats the branch. Negative-zero
   threshold selectors are costed for the same update path but remain gated
-  because ordinary branches are usually shorter there;
+  because ordinary branches are usually shorter there. As a whole-program
+  speculative candidate, the same machinery can force an `abs`/`sign`
+  comparison selector for guarded arithmetic updates and keep it only when the
+  final layout shrinks;
 - cell membership clear reuse: when a membership test immediately clears the
   same assignable packed collection, including an indexed bank cell with a
   prepared indirect selector, the compiler reuses the successful mask instead
@@ -1263,6 +1266,10 @@ The pipeline currently contains:
   register value from a direct store, a proved indirect `К X->П`, or an earlier
   kept direct/stable recall, and no intervening op (С/П, jump, ALU, …) clobbers
   X. Documented empty operators `К НОП`/`К 1`/`К 2` preserve the X fact.
+  Compiler marker labels that are not reachable branch/call targets also
+  preserve the fact, while string targets, numeric-address targets, proved
+  indirect-flow targets, procedure starts, and unknown indirect flow make labels
+  real entry barriers.
   Mutating `R0..R6` indirect stores may seed this fact because the store itself
   is kept; mutating indirect recalls are still kept because removing them would
   skip selector mutation. С/П acts as a barrier because the user may overwrite X during pause;

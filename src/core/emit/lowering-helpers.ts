@@ -1125,6 +1125,7 @@ export interface GuardedUpdateSelectorCandidate {
   name: string;
   detail: string;
   usesNegativeZero: boolean;
+  usesComparison: boolean;
 }
 
 export interface BranchAssignCandidate {
@@ -1145,7 +1146,7 @@ export interface BranchTerminalCandidate {
 export function buildBranchRemovalCandidate(
   statement: Extract<StatementAst, { kind: "if" }>,
   ast: ProgramAst,
-  options: { negativeZeroDegree?: boolean } = {},
+  options: { negativeZeroDegree?: boolean; comparisonSelectors?: boolean } = {},
 ): BranchRemovalCandidate | undefined {
   return buildTerminalSelectCandidate(statement, ast, options) ??
     buildComparisonBooleanCandidate(statement) ??
@@ -1155,7 +1156,7 @@ export function buildBranchRemovalCandidate(
     buildClampCandidate(statement) ??
     buildSaturatingUpdateCandidate(statement, ast) ??
     buildBooleanSignToggleCandidate(statement, ast) ??
-    buildBooleanUpdateCandidate(statement, ast) ??
+    buildBooleanUpdateCandidate(statement, ast, options) ??
     buildArithmeticIfSelect(statement, ast, options);
 }
 
@@ -1175,15 +1176,23 @@ export function buildGuardedUpdateSelectorCandidate(
   if (selector === undefined) return undefined;
 
   const usesNegativeZero = booleanSelector === undefined && negativeZeroSelector !== undefined;
+  const usesComparison = booleanSelector === undefined && negativeZeroSelector === undefined;
   if (!usesNegativeZero && updates.length < 2) return undefined;
   return {
     selector,
     updates,
-    name: usesNegativeZero ? "negative-zero-threshold-update" : "multi-guarded-update",
+    name: usesNegativeZero
+      ? "negative-zero-threshold-update"
+      : usesComparison
+        ? "comparison-guarded-update-selector"
+        : "multi-guarded-update",
     detail: usesNegativeZero
       ? "Replaced threshold guarded update with a negative-zero selector"
+      : usesComparison
+        ? "Replaced comparison guarded updates with one stored arithmetic selector"
       : "Replaced guarded updates with one stored arithmetic selector",
     usesNegativeZero,
+    usesComparison,
   };
 }
 
@@ -1478,13 +1487,19 @@ export function booleanAlgebraCandidate(target: string, expr: ExpressionAst, ope
 export function buildBooleanUpdateCandidate(
   statement: Extract<StatementAst, { kind: "if" }>,
   ast: ProgramAst,
+  options: { comparisonSelectors?: boolean } = {},
 ): BranchRemovalCandidate | undefined {
   if (statement.elseBody || statement.thenBody.length !== 1) return undefined;
   const assign = statement.thenBody[0];
   if (assign?.kind !== "assign") return undefined;
 
-  const selector = booleanSelectorExpression(statement.condition, ast);
+  const booleanSelector = booleanSelectorExpression(statement.condition, ast);
+  const comparisonSelector = booleanSelector === undefined && options.comparisonSelectors === true
+    ? comparisonSelectorExpression(statement.condition)
+    : undefined;
+  const selector = booleanSelector ?? comparisonSelector;
   if (!selector) return undefined;
+  const usesComparison = booleanSelector === undefined && comparisonSelector !== undefined;
 
   const current: ExpressionAst = { kind: "identifier", name: assign.target };
   const plus = matchTargetPlusDelta(assign.expr, assign.target);
@@ -1493,8 +1508,10 @@ export function buildBooleanUpdateCandidate(
       kind: "assign",
       target: assign.target,
       expr: addExpressions(current, multiplyExpressions(plus, selector)),
-      name: "arithmetic-if-update",
-      detail: "Replaced conditional addition with boolean-masked arithmetic",
+      name: usesComparison ? "arithmetic-if-comparison-update" : "arithmetic-if-update",
+      detail: usesComparison
+        ? "Replaced conditional addition with comparison-mask arithmetic"
+        : "Replaced conditional addition with boolean-masked arithmetic",
     };
   }
 
@@ -1504,11 +1521,14 @@ export function buildBooleanUpdateCandidate(
       kind: "assign",
       target: assign.target,
       expr: subtractExpressions(current, multiplyExpressions(minus, selector)),
-      name: "arithmetic-if-update",
-      detail: "Replaced conditional subtraction with boolean-masked arithmetic",
+      name: usesComparison ? "arithmetic-if-comparison-update" : "arithmetic-if-update",
+      detail: usesComparison
+        ? "Replaced conditional subtraction with comparison-mask arithmetic"
+        : "Replaced conditional subtraction with boolean-masked arithmetic",
     };
   }
 
+  if (usesComparison) return undefined;
   if (expressionEquals(assign.expr, negateExpression(current))) {
     return {
       kind: "assign",

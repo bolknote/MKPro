@@ -1,6 +1,8 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import {
+  cellsPerOp,
   computeX2RegisterStates,
+  knownIndirectFlowTarget,
   plainPreservesXValue,
   recallAlreadySyncedInX2,
   removableRecallValueRegister,
@@ -45,11 +47,12 @@ function clobbersX(op: IrOp): boolean {
 const run: IrPassFn = (ops) => {
   const removed = new Set<number>();
   const x2States = computeX2RegisterStates(ops);
+  const labelEntries = labelEntryIndexes(ops);
   let xHolds: RegisterName | undefined;
   for (let i = 0; i < ops.length; i += 1) {
     const op = ops[i]!;
     if (op.kind === "label") {
-      xHolds = undefined;
+      if (labelEntries.has(i)) xHolds = undefined;
       continue;
     }
     const storedRegister = storedCurrentXValueRegister(op);
@@ -110,6 +113,61 @@ const run: IrPassFn = (ops) => {
   };
   return passResult;
 };
+
+function labelEntryIndexes(ops: readonly IrOp[]): Set<number> {
+  const stringTargets = new Set<string>();
+  const numericTargets = new Set<number>();
+  let unknownIndirectFlow = false;
+  for (const op of ops) {
+    const target = flowTarget(op);
+    if (typeof target === "string") stringTargets.add(target);
+    if (typeof target === "number") numericTargets.add(target);
+    const indirectTarget = indirectFlowTarget(op);
+    if (indirectTarget === undefined && isIndirectFlow(op)) unknownIndirectFlow = true;
+    if (indirectTarget !== undefined) numericTargets.add(indirectTarget);
+  }
+
+  const result = new Set<number>();
+  let address = 0;
+  for (let index = 0; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") {
+      if (
+        op.procedureBoundary === "start" ||
+        unknownIndirectFlow ||
+        stringTargets.has(op.name) ||
+        numericTargets.has(address)
+      ) {
+        result.add(index);
+      }
+      continue;
+    }
+    address += cellsPerOp(op);
+  }
+  return result;
+}
+
+function flowTarget(op: IrOp): string | number | undefined {
+  switch (op.kind) {
+    case "jump":
+    case "cjump":
+    case "call":
+    case "loop":
+      return op.target;
+    case "orphan-address":
+      return op.target;
+    default:
+      return undefined;
+  }
+}
+
+function isIndirectFlow(op: IrOp): op is Extract<IrOp, { kind: "indirect-jump" | "indirect-call" | "indirect-cjump" }> {
+  return op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump";
+}
+
+function indirectFlowTarget(op: IrOp): number | undefined {
+  return isIndirectFlow(op) ? knownIndirectFlowTarget(op) : undefined;
+}
 
 export const lastXReuse: IrPass = {
   name: "last-x-reuse",

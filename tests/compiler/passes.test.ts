@@ -902,6 +902,95 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("last-x-reuse preserves X facts through unreferenced labels", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      label("marker"),
+      plain(0x54, "К НОП"),
+      recall("1"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      label("marker"),
+      plain(0x54, "К НОП"),
+      halt(),
+    ]);
+  });
+
+  it("last-x-reuse clears X facts at referenced labels", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      jump("entry"),
+      label("entry"),
+      recall("1"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("last-x-reuse clears X facts at procedure starts", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      procStart("helper"),
+      recall("1"),
+      procEnd("helper"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("last-x-reuse clears X facts at numeric-address labels", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      numericJump(3),
+      label("entry"),
+      recall("1"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("last-x-reuse clears X facts at proved indirect-flow labels", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      knownTargetIndirectJump("8", 2),
+      label("entry"),
+      recall("1"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("last-x-reuse treats unknown indirect flow as a label entry hazard", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      indirectJump("8"),
+      label("entry"),
+      recall("1"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("last-x-reuse keeps recall that lifts the stack for an immediate binary op", () => {
     const program: IrOp[] = [
       store("1"),

@@ -2934,6 +2934,28 @@ program BooleanMultiUpdate {
     expect(result.report.optimizations.some((item) => item.name === "branch-removal")).toBe(true);
   });
 
+  it("can force comparison guarded updates through an abs/sign arithmetic mask", () => {
+    const result = compileLoweringVariantForTest(`
+program ComparisonMaskUpdate {
+  state {
+    tile: counter 0..9 = 7
+    score: counter 0..99 = 0
+  }
+  loop {
+    if tile == 7 {
+      score++
+    }
+    halt(score)
+  }
+}
+`, { budget: 999 }, { comparisonGuardedUpdateSelectors: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "arithmetic-if-comparison-update")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "false branch for ==")).toBe(false);
+    expect(result.steps.some((step) => step.mnemonic === "К |x|" && step.comment === "abs()")).toBe(true);
+    expect(result.steps.some((step) => step.mnemonic === "К ЗН" && step.comment === "sign()")).toBe(true);
+  });
+
   it("keeps negative-zero guarded updates behind the cost gate", () => {
     const result = compileOk(`
 program NegativeZeroGuardedUpdate {
@@ -3429,6 +3451,7 @@ program DseFunctionExpressionCall {
     source: packed = 7
     current: packed = 0
     shown: packed = 0
+    other: packed = 0
   }
 
   fn use_current() {
@@ -3438,8 +3461,9 @@ program DseFunctionExpressionCall {
 
   loop {
     current = source + 1
+    other = source * 2
     source = use_current()
-    show(source)
+    show(source + other)
   }
 }
 `, { budget: 999, analysis: true });

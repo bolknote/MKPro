@@ -74,7 +74,8 @@ the same generalized lowering strategy.
 - `interprocedural-dead-store` — removes writes that are never read even after call expansion.
 - `dead-store-elimination` — removes unnecessary `store`/`recall` when not used.
 - `last-x-reuse` — avoids rewriting X when the needed value is already there,
-  while respecting `.`/`ВП` X2-sync boundaries and downstream stack consumers.
+  while respecting real label entry points, `.`/`ВП` X2-sync boundaries, and
+  downstream stack consumers.
 - `flow-x-reuse` — avoids recalls when all CFG predecessors already carry the same register value in X, with the same X2-sync and downstream stack-lift guards.
 - `branch-target-x-reuse` — avoids the first recall in a branch target when the tested value is still in X and the target has no other entry, unless that recall supplies the target-side X2 sync or a stack lift that reaches a downstream consumer through direct call returns.
 - `constant-folding` — precomputes constant parts before code generation.
@@ -196,6 +197,9 @@ These transformations run on source constructs before machine lowering:
 - `loop-carried-prompt-input-dispatch` — after a loop-carried prompt stop, dispatches directly on the read key with no intermediate variable, while preserving the prompt flow across loop back-edge.
 - `loop-carried-prompt-decrement-underflow` — after a loop-carried prompt stop, handles `resource--; if resource < 0 ...` patterns by checking underflow in-line. It keeps the input value in `Y`, emits `F x<0` branch flow, and restores `X/Y` state only where required for the next prompt consumer.
 - `show-read-guarded-transfer` — rewrites `show; x=input; decrementTarget -= x; if decrementTarget < 0 { halt } ; incrementTarget += x; if incrementTarget < 0 { halt }` into one stack-based sequence that keeps the read value on the stack across both guarded updates.
+- `comparison-guarded-update-selector` — speculative whole-program candidate
+  that forces `abs`/`sign` comparison masks for guarded `+=`/`-=` updates, then
+  keeps the candidate only if the final layout is smaller.
 - `counted-loop-unroll` — replaces small constant-trip counted `while` loops with explicit per-iteration copies when the induction variable updates are simple linear steps and entry values are known constants; this removes the loop machinery and registers update logic.
 - `counted-loop-unroll-free-scratch` — runs counted-loop unrolling together with residual-dispatch scratch freeing (`freeResidualDispatchScratch`) as one candidate.
 - `state-init-counted-loop` — recovers the compact one-cell `F Lx` counted-loop lowering for countdown loops whose counter carries its initial value on the state field (`time: counter 0..N = N` + `while time >= 1 { …; time-- }`). When that counter is used solely by the loop in the top-level entry body, the state initializer is rewritten into an explicit `time = N` immediately before the loop, matching the already-supported explicit-init form byte-for-byte while staying re-runnable (the inline store re-arms the counter on every `С/П`, unlike a setup-only preload).
@@ -241,7 +245,7 @@ The control-flow family is where the largest byte savings are found.
 - `residual-guarded-update` — compacts guarded self-updates such as `if x >= N { x -= N }` by reusing the comparison residual already left in X. The same residual is now exposed to the first statement of the opposite branch when that statement consumes the exact `x - N` value.
 - `branch-residual-x-reuse` — after an ordinary comparison branch, reuses the residual left in X for the first branch statement when it is the same expression (`show(expr)`, `pause(expr)`, `halt(expr)`, or `target = expr`). Special condition lowerings with different X contracts, such as small-set helpers and remainder-zero tests, are excluded.
 - `arithmetic-if-select` — performs conditional selection through arithmetic instead of jumps.
-- `arithmetic-if-update` — performs conditional assignment in one path instead of multiple instructions.
+- `arithmetic-if-update` — performs conditional assignment in one path instead of multiple instructions; the speculative comparison-mask variant can try `if x == c { y += d }` as `y += d * (1 - sign(abs(x - c)))` and keep it only when the whole layout shrinks.
 - `arithmetic-if-extrema` — computes `max/min` using shorter conditional forms.
 - `zero-condition-test` — emits zero tests in the shortest variant instead of expanded `if`.
 - `dispatch-lowering` — converts dispatch nodes to short jump sequences.
@@ -399,6 +403,7 @@ shared baselines in `tests/compiler/example-baselines.ts`.
 - `signed-abs-match-pair` — candidate for signed abs/sign normalization on match-pair patterns.
 - `signed-abs-shared-bit-helper-hoisted-layout` — combines signed abs/sign candidate with hoisted bit-mask helper calls.
 - `signed-abs-shared-bit-helper-hoisted-proc-layout` — combines signed abs/sign candidate with hoisted helper/procedure layout.
+- `comparison-guarded-update-selector` — candidate that tries abs/sign comparison masks for guarded arithmetic updates after full layout, so locally longer branchless forms are adopted only when they pay back globally.
 - `packed-counter-stripes` — candidate that packs compatible fixed-width counters into one striped register.
 - `repeated-unary-update-arg-temp` — candidate that routes repeated X-transform unary-call arguments through one hidden scratch so repeated helper tails can be shared; only attempted when a cheap structural scan finds a routable-unary shape that repeats within some statement list.
 - `x-param-value-function` — candidate that passes simple positive-modulo value-function arguments through `X` instead of allocating a parameter register.
@@ -568,7 +573,7 @@ Display rewrites are separated into strategy selection + body lowering.
 - `small-set-primitive-lowering` — replaces small multi-way boolean/state sets with dense arithmetic chains.
 - `packed-grid-primitive-lowering` — maps packed grid and digit helper operations into bit masks and add/sub-style forms. The square-board helpers are width-parametric: the coordinate wrap (`grid_norm` / `positiveGridNorm`, i.e. `% width`) and the right-diagonal fold (`+ width`) derive exactly from the board width and default to the shipped 4-wide grid. The fractional cell-mask packing constant (`10^x + floor(10^(y * K_width))`) is hardware-fitted per width — its digits encode each row's collision-free nibble offsets — so it lives in a verified width-keyed table (`cellMaskRowConstant`) with only the on-hardware-verified `width: 4` entry. Other widths derive their structural macros automatically but require a verified fractional constant before they can lower (`cell_mask` refuses to fabricate one), the same honest limit as the decimal-series emitter.
 - `reciprocal-division-lowering` — lowers `1 / x`-form divisions into `F 1/x` after evaluating the right side once.
-- `arithmetic-if-update` — turns conditional updates into arithmetic form instead of branching.
+- `arithmetic-if-update` — turns conditional updates into arithmetic form instead of branching, including comparison-mask trial forms such as `1 - sign(abs(x - c))` in the speculative whole-program variant.
 - `arithmetic-if-conditional-move` — replaces conditional `move`/copy with arithmetic form.
 - `arithmetic-if-sign-toggle` — routes sign handling through arithmetic when it shortens branches.
 - `arithmetic-if-abs` — converts absolute value to branchless arithmetic.
@@ -583,6 +588,10 @@ Display rewrites are separated into strategy selection + body lowering.
 - `square-expression-lowering` — rewrites pure repeated multiplication `x * x` into `F x^2`.
 - `arithmetic-if-double-clamp` — special double-check clamp in one arithmetic template.
 - `arithmetic-if-comparison-mask` — builds comparison masks without explicit `if`.
+- `arithmetic-if-comparison-update` — speculative companion for guarded
+  `+=`/`-=` updates: a comparison is converted to an arithmetic mask even when
+  the local estimate prefers a branch, but the candidate is adopted only after
+  whole-layout selection proves a shrink.
 - `arithmetic-if-boolean-algebra` — lowers complex boolean comparisons into masks and arithmetic.
 - `hex-mantissa-arithmetic` — simplifies hex mantissa operations, lowering instruction count.
 - `negative-zero-threshold-selector` — threshold check for `-0`/`0` when it reduces branches.
@@ -610,7 +619,9 @@ Display rewrites are separated into strategy selection + body lowering.
   is seeded by direct stores and by proved indirect stores, including mutating
   `R0..R6` indirect stores because the store and its selector side effect are
   kept, by kept direct/stable recalls, and is preserved by documented empty
-  operators `К НОП`/`К 1`/`К 2`.
+  operators `К НОП`/`К 1`/`К 2` plus unreferenced compiler marker labels.
+  Labels targeted by string flow, numeric-address flow, proved indirect flow,
+  procedure starts, or any unknown indirect flow are treated as entry barriers.
   The sync guard is X2-register-aware: if dataflow proves X2 already
   contains the same register value and the removed recall is not the immediate
   previous-command context consumed by `.`/`ВП`, the recall can be removed as a
@@ -727,7 +738,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 17. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and both the `.` restore gap and missing stack-lift observation are proven, allowing later DSE to remove now-unused scratch stores.
 18. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.
 19. `dead-store-elimination` — removes direct stores, plus stable-indirect stores with proved targets, whose target register is not live after the write in a CFG that follows proved indirect flow targets (`indirect-target=NN`) and does not affect number-entry/input finalization or the previous-command context consumed by `ВП` while it restores X2; mutating indirect selectors are kept.
-20. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding direct/proved-indirect `X->П` or a kept direct/stable recall, possibly through documented empty operators `К НОП`/`К 1`/`К 2`, preserving recalls that serve as the last X2 sync before `.`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or as a stack lift that can reach a downstream consumer through direct or proved-indirect flow; mutating indirect stores can seed the X fact because the store remains, while mutating indirect recalls are not removed.
+20. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding direct/proved-indirect `X->П` or a kept direct/stable recall, possibly through documented empty operators `К НОП`/`К 1`/`К 2` and unreferenced compiler marker labels, preserving recalls that serve as the last X2 sync before `.`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or as a stack lift that can reach a downstream consumer through direct or proved-indirect flow; labels targeted by string, numeric, or proved-indirect flow plus procedure starts are entry barriers, and unknown indirect flow makes labels barriers too; mutating indirect stores can seed the X fact because the store remains, while mutating indirect recalls are not removed.
 21. `r0-fractional-sentinel` — drops redundant immediate `П->X 3`/`X->П 3`
     after fractional-R0 indirect access when `R0` liveness proves that the
     direct access only repeats the hardware-selected `R3`; it also removes

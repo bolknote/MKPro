@@ -1288,7 +1288,10 @@ export function compileArithmeticIfSelect(ctx: LoweringCtx, statement: Extract<S
     const selected = buildBranchRemovalCandidate(
       statement,
       ctx.ast,
-      { negativeZeroDegree: canUseNegativeZero },
+      {
+        negativeZeroDegree: canUseNegativeZero,
+        comparisonSelectors: ctx.loweringOptions.comparisonGuardedUpdateSelectors === true,
+      },
     );
     if (!selected) {
       if (!canUseNegativeZero) ctx.recordRejectedNegativeZeroBranchCandidate(statement);
@@ -1297,7 +1300,10 @@ export function compileArithmeticIfSelect(ctx: LoweringCtx, statement: Extract<S
 
     const ordinaryCost = estimateOrdinaryIfCost(statement, ctx.ast);
     const selectedCost = estimateExpressionCost(selected.expr) + 1;
-    if (selectedCost >= ordinaryCost) {
+    const forceComparisonMask =
+      ctx.loweringOptions.comparisonGuardedUpdateSelectors === true &&
+      selected.name === "arithmetic-if-comparison-update";
+    if (selectedCost >= ordinaryCost && !forceComparisonMask) {
       ctx.candidates.push({
         site: `if@${statement.line}`,
         variant: selected.name,
@@ -1338,7 +1344,10 @@ export function compileGuardedUpdateSelector(ctx: LoweringCtx, statement: Extrac
 
     const ordinaryCost = estimateOrdinaryGuardedUpdateCost(statement, ctx.ast);
     const selectedCost = estimateGuardedUpdateSelectorCost(candidate, scratch);
-    if (selectedCost >= ordinaryCost) {
+    const forceComparisonMask =
+      ctx.loweringOptions.comparisonGuardedUpdateSelectors === true &&
+      candidate.usesComparison;
+    if (selectedCost >= ordinaryCost && !forceComparisonMask) {
       ctx.candidates.push({
         site: `if@${statement.line}`,
         variant: candidate.name,
