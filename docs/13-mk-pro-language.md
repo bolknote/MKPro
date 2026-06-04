@@ -1277,11 +1277,15 @@ The pipeline currently contains:
   dot-safe X2 value facts. The fact spelling is normalization-aware: `12` produces the shared fact
   `decimal:12:normalized`, while `02` produces `decimal:2:normalized` in `X`
   and `decimal:02:unnormalized` in `X2`, so a restore cannot accidentally treat
-  a leading-zero display value as the same hidden value. The same shape is
-  reserved for future `hex:...` mantissa facts; hexadecimal concatenation itself
-  is not inferred here yet. A closed-context `.` now transfers the hidden X2
-  facts back into visible `X`; decimal facts are normalized for `X` during that
-  transfer while the hidden X2 representation stays unchanged. If number entry
+  a leading-zero display value as the same hidden value. Preloaded constants
+  recalled through `П->X r` also feed this proof: ordinary decimal and
+  scientific-notation constants become `decimal:*` facts, while hex-like display
+  mantissas and `FA`..`FF` super forms are tracked as shape-only `hex:*` /
+  `super:*` facts until a later proof makes them dot-safe. Hexadecimal
+  concatenation itself is not inferred here yet. A closed-context `.` now
+  transfers the hidden X2 facts back into visible `X`; decimal facts are
+  normalized for `X` during that transfer while the hidden X2 representation
+  stays unchanged. If number entry
   is still open, as in `1.`, the same byte is treated as decimal input and the
   proof is cleared instead of inventing a restore. The proof now also keeps a
   register value-memory layer: a direct `X->П r` remembers only concrete
@@ -1289,10 +1293,11 @@ The pipeline currently contains:
   `П->X r` rehydrates those decimal facts together with the ordinary `reg:r`
   alias. This makes a recalled decimal register dot-safe for the same rewrites
   as an inline literal, while unknown indirect stores clear the remembered
-  facts and hex/non-normal preloads remain unsafe until separately proved.
-  Repeated literal restoration may also consume those recalled decimal facts
-  instead of requiring the previous occurrence to be inline source digits, and
-  `ВП` splice/sign reductions can use the same recalled mantissa facts.
+  facts and hex/non-normal preload shapes remain unsafe until separately proved.
+  Repeated literal restoration may also consume those recalled/preloaded decimal
+  facts instead of requiring the previous occurrence to be inline source digits,
+  and `ВП` splice/sign reductions can use the same recalled/preloaded mantissa
+  facts.
 - **x2-noop-restore** — removes `.` when the value proof shows that `X` already
   contains the same value as hidden `X2` and the separate restore-gap proof says
   the dot is in a safe X2 context. It also accepts the documented no-op form
@@ -1353,9 +1358,10 @@ The pipeline currently contains:
   register value from a direct store, a proved indirect `К X->П`, or an earlier
   kept direct/stable recall, and no intervening op (С/П, jump, ALU, …) clobbers
   X. Documented empty operators `К НОП`/`К 1`/`К 2` preserve the X fact.
-  The proof can also come from X2 decimal value-memory: if a register was
-  stored with a concrete decimal literal and X was later rebuilt as the same
-  value, the recall is redundant even after the register alias itself was lost.
+  The proof can also come from X2 decimal value-memory or decimal preload
+  metadata: if a register was stored with a concrete decimal literal, or
+  recalled from `preload const N`, and X was later rebuilt as the same value,
+  the recall is redundant even after the register alias itself was lost.
   Compiler marker labels that are not reachable branch/call targets also
   preserve the fact, while string targets, numeric-address targets, proved
   indirect-flow targets, procedure starts, and unknown indirect flow make labels
@@ -1373,9 +1379,9 @@ The pipeline currently contains:
 - **flow-x-reuse** — runs forward CFG dataflow for values already in X and
   drops a direct or stable-indirect proved recall when every direct predecessor
   reaches that point with the same register value still in X. The same
-  intersecting proof can use X2 decimal register-memory when every predecessor
-  proves current X is the same concrete decimal value stored in the recalled
-  register. Proved indirect
+  intersecting proof can use X2 decimal register-memory or decimal preload
+  metadata when every predecessor proves current X is the same concrete decimal
+  value stored in the recalled register. Proved indirect
   flow targets (`indirect-target=NN`) participate in the CFG; stable selectors
   preserve the X fact, while mutating selectors drop only the mutated selector
   register from the proof. Direct and proved-indirect `ПП` edges carry the X

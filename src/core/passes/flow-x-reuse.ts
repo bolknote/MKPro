@@ -10,8 +10,10 @@ import {
   knownIndirectMemoryTarget,
   plainPreservesXValue,
   recallAlreadyInXDecimalMemory,
+  recallAlreadyInXPreloadedDecimal,
   recallAlreadySyncedInX2,
   recallAlreadySyncedInX2DecimalMemory,
+  recallAlreadySyncedInX2PreloadedDecimal,
   recallAlreadySyncedInX2Value,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
@@ -50,11 +52,14 @@ const run: IrPassFn = (ops) => {
     const redundantSyncRegister =
       recallAlreadySyncedInX2(op, x2States[index]) ??
       recallAlreadySyncedInX2Value(op, x2ValueStates[index]);
-    const redundantSyncValue = recallAlreadySyncedInX2DecimalMemory(op, x2ValueStates[index]) !== undefined;
+    const redundantSyncValue =
+      (recallAlreadySyncedInX2DecimalMemory(op, x2ValueStates[index]) ??
+        recallAlreadySyncedInX2PreloadedDecimal(op, x2ValueStates[index])) !== undefined;
     if (removingRecallCanExposeX2Restore(ops, index, { redundantSyncRegister, redundantSyncValue })) continue;
     const alreadyInX =
       inStates[index]?.has(recallRegister) === true ||
-      recallAlreadyInXDecimalMemory(op, x2ValueStates[index]) === recallRegister;
+      recallAlreadyInXDecimalMemory(op, x2ValueStates[index]) === recallRegister ||
+      recallAlreadyInXPreloadedDecimal(op, x2ValueStates[index]) === recallRegister;
     if (alreadyInX) remove.add(index);
   }
 

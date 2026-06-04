@@ -6,8 +6,10 @@ import {
   knownIndirectFlowTarget,
   plainPreservesXValue,
   recallAlreadyInXDecimalMemory,
+  recallAlreadyInXPreloadedDecimal,
   recallAlreadySyncedInX2,
   recallAlreadySyncedInX2DecimalMemory,
+  recallAlreadySyncedInX2PreloadedDecimal,
   recallAlreadySyncedInX2Value,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
@@ -66,11 +68,15 @@ const run: IrPassFn = (ops) => {
       continue;
     }
     const recallRegister = removableRecallValueRegister(op);
-    const xAlreadyHasRecallValue = recallAlreadyInXDecimalMemory(op, x2ValueStates[i]) === recallRegister;
+    const xAlreadyHasRecallValue =
+      recallAlreadyInXDecimalMemory(op, x2ValueStates[i]) === recallRegister ||
+      recallAlreadyInXPreloadedDecimal(op, x2ValueStates[i]) === recallRegister;
     const x2AlreadyHasRecallValue =
       recallAlreadySyncedInX2(op, x2States[i]) ??
       recallAlreadySyncedInX2Value(op, x2ValueStates[i]);
-    const x2AlreadyHasRecallDecimal = recallAlreadySyncedInX2DecimalMemory(op, x2ValueStates[i]);
+    const x2AlreadyHasRecallDecimal =
+      recallAlreadySyncedInX2DecimalMemory(op, x2ValueStates[i]) ??
+      recallAlreadySyncedInX2PreloadedDecimal(op, x2ValueStates[i]);
     if (
       recallRegister !== undefined &&
       (xHolds === recallRegister || xAlreadyHasRecallValue) &&

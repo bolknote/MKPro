@@ -482,6 +482,18 @@ export function recallAlreadySyncedInX2DecimalMemory(
   return undefined;
 }
 
+export function recallAlreadySyncedInX2PreloadedDecimal(
+  op: IrOp,
+  state: X2ValueDataflowState | undefined,
+): RegisterName | undefined {
+  const register = removableRecallValueRegister(op);
+  if (register === undefined || state === undefined) return undefined;
+  for (const fact of preloadedConstantValueFacts(op)) {
+    if (state.x2.has(fact)) return register;
+  }
+  return undefined;
+}
+
 export function recallAlreadyInXDecimalMemory(
   op: IrOp,
   state: X2ValueDataflowState | undefined,
@@ -490,6 +502,18 @@ export function recallAlreadyInXDecimalMemory(
   if (register === undefined || state === undefined) return undefined;
   for (const fact of state.memory?.[register] ?? []) {
     if (isConcreteDecimalX2ValueFact(fact) && state.x.has(fact)) return register;
+  }
+  return undefined;
+}
+
+export function recallAlreadyInXPreloadedDecimal(
+  op: IrOp,
+  state: X2ValueDataflowState | undefined,
+): RegisterName | undefined {
+  const register = removableRecallValueRegister(op);
+  if (register === undefined || state === undefined) return undefined;
+  for (const fact of preloadedConstantValueFacts(op)) {
+    if (state.x.has(fact)) return register;
   }
   return undefined;
 }
@@ -615,12 +639,13 @@ function transferX2ValueDataflowState(
     case "indirect-store":
       return transferIndirectStoreX2ValueState(input, op, trackRegisterMemory);
     case "recall": {
-      const value = recallX2ValueFacts(input, op.register, trackRegisterMemory);
+      const value = recallX2ValueFacts(input, op.register, trackRegisterMemory, op);
+      const shape = recallX2ShapeFacts(value, op);
       return {
         x: new Set(value),
         x2: new Set(value),
-        xShape: x2ShapesFromValueFacts(value),
-        x2Shape: x2ShapesFromValueFacts(value),
+        xShape: new Set(shape),
+        x2Shape: new Set(shape),
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
         vpEntryMantissa: vpEntryMantissasFromValueFacts(value),
@@ -631,12 +656,13 @@ function transferX2ValueDataflowState(
       const target = knownIndirectMemoryTarget(op);
       const values = target === undefined
         ? new Set<X2ValueFact>([SAME_UNKNOWN_VALUE])
-        : recallX2ValueFacts(input, target, trackRegisterMemory);
+        : recallX2ValueFacts(input, target, trackRegisterMemory, op);
+      const shape = recallX2ShapeFacts(values, op);
       return {
         x: values,
         x2: new Set(values),
-        xShape: x2ShapesFromValueFacts(values),
-        x2Shape: x2ShapesFromValueFacts(values),
+        xShape: new Set(shape),
+        x2Shape: new Set(shape),
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
         vpEntryMantissa: vpEntryMantissasFromValueFacts(values),
@@ -1598,10 +1624,18 @@ function recallX2ValueFacts(
   input: X2ValueDataflowState,
   register: RegisterName,
   trackRegisterMemory: boolean,
+  op?: IrOp,
 ): Set<X2ValueFact> {
   const value = registerValueFact(register);
   const output = new Set<X2ValueFact>(trackRegisterMemory ? input.memory?.[register] ?? [] : []);
+  for (const fact of preloadedConstantValueFacts(op)) output.add(fact);
   output.add(value);
+  return output;
+}
+
+function recallX2ShapeFacts(values: X2ValueSet, op?: IrOp): Set<X2ShapeFact> {
+  const output = x2ShapesFromValueFacts(values);
+  for (const fact of preloadedConstantShapeFacts(op)) output.add(fact);
   return output;
 }
 
@@ -1612,6 +1646,63 @@ function x2ShapesFromValueFacts(values: X2ValueSet): Set<X2ShapeFact> {
     if (decimal !== null) output.add(decimalMantissaShapeFact(decimal[1]!));
   }
   return output;
+}
+
+function preloadedConstantValueFacts(op: IrOp | undefined): Set<X2ValueFact> {
+  const value = preloadedConstantLiteral(op);
+  const decimal = value === undefined ? undefined : normalizePreloadedDecimalLiteral(value);
+  return decimal === undefined ? new Set() : new Set([decimalValueFact(decimal, "normalized")]);
+}
+
+function preloadedConstantShapeFacts(op: IrOp | undefined): Set<X2ShapeFact> {
+  const value = preloadedConstantLiteral(op);
+  if (value === undefined) return new Set();
+  const decimal = normalizePreloadedDecimalLiteral(value);
+  if (decimal !== undefined) return new Set([decimalMantissaShapeFact(decimal)]);
+  const shape = normalizePreloadedShapeLiteral(value);
+  if (shape === undefined) return new Set();
+  if (/^F[A-F]$/u.test(shape)) return new Set<X2ShapeFact>([`super:${shape}`]);
+  if (/[A-FА-Я]/u.test(shape)) return new Set<X2ShapeFact>([`hex:${shape}:mantissa`]);
+  return new Set();
+}
+
+function preloadedConstantLiteral(op: IrOp | undefined): string | undefined {
+  if (op === undefined || !("meta" in op)) return undefined;
+  const match = /(?:^|;\s*)preload const\s+([^;]+)/iu.exec(op.meta.comment ?? "");
+  if (match === null) return undefined;
+  const literal = match[1]!
+    .replace(/\s+\b(?:base|left|right|stack)\b.*$/iu, "")
+    .trim();
+  return literal.length === 0 ? undefined : literal;
+}
+
+function normalizePreloadedShapeLiteral(input: string): string | undefined {
+  const normalized = input.trim().replace(/\s+/gu, "").replace(/,/gu, ".").toUpperCase();
+  return normalized.length === 0 || normalized.length > 32 ? undefined : normalized;
+}
+
+function normalizePreloadedDecimalLiteral(input: string): string | undefined {
+  const normalized = input.trim().replace(/,/gu, ".").replace(/[Ее]/gu, "e");
+  const match = /^(-?)(?:(\d+)(?:\.(\d*))?|\.(\d+))(?:e([+-]?\d+))?$/iu.exec(normalized);
+  if (match === null) return undefined;
+  const sign = match[1]!;
+  const integer = match[2] ?? "0";
+  const fraction = match[3] ?? match[4] ?? "";
+  const exponent = match[5] === undefined ? 0 : Number(match[5]);
+  if (!Number.isInteger(exponent) || Math.abs(exponent) > 64) return undefined;
+  const digits = `${integer}${fraction}`.replace(/^0+/u, "") || "0";
+  const scale = fraction.length - exponent;
+  if (digits.length + Math.max(0, -scale) > 80) return undefined;
+  const unsigned = scaledDecimalDigits(digits, scale);
+  return unsigned === undefined ? undefined : normalizePlainDecimal(`${sign}${unsigned}`);
+}
+
+function scaledDecimalDigits(digits: string, scale: number): string | undefined {
+  if (!/^\d+$/u.test(digits)) return undefined;
+  if (scale <= 0) return `${digits}${"0".repeat(-scale)}`;
+  const point = digits.length - scale;
+  if (point > 0) return `${digits.slice(0, point)}.${digits.slice(point)}`;
+  return `0.${"0".repeat(-point)}${digits}`;
 }
 
 function vpEntryMantissasFromValueFacts(values: X2ValueSet): ReadonlySet<string> | undefined {

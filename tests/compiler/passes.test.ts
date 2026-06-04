@@ -69,12 +69,14 @@ function store(register: RegisterName): IrOp {
   };
 }
 
-function recall(register: RegisterName): Extract<IrOp, { kind: "recall" }> {
+function recall(register: RegisterName, comment?: string): Extract<IrOp, { kind: "recall" }> {
   return {
     kind: "recall",
     register,
     opcode: 0x60 + REGISTER_INDEX[register],
-    meta: { mnemonic: `П->X ${register}` },
+    meta: comment === undefined
+      ? { mnemonic: `П->X ${register}` }
+      : { mnemonic: `П->X ${register}`, comment },
   };
 }
 
@@ -563,6 +565,46 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:12:normalized"]);
     expect(x2ValueStateText(states[3]?.x)).toEqual(["decimal:12:normalized", "reg:2"]);
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:12:normalized", "reg:2"]);
+  });
+
+  it("x2 value dataflow reads decimal preload facts from recall metadata", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 8.1020088E14"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[1]?.x)).toEqual([
+      "decimal:810200880000000:normalized",
+      "reg:2",
+    ]);
+    expect(x2ValueStateText(states[1]?.x2)).toEqual([
+      "decimal:810200880000000:normalized",
+      "reg:2",
+    ]);
+    expect(x2ShapeStateText(states[1]?.xShape)).toEqual([
+      "mantissa:810200880000000:decimal",
+    ]);
+    expect(x2ShapeStateText(states[1]?.x2Shape)).toEqual([
+      "mantissa:810200880000000:decimal",
+    ]);
+  });
+
+  it("x2 value dataflow keeps hex-like preload constants as shape-only facts", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 8.70Е2-6С"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[1]?.x)).toEqual(["reg:2"]);
+    expect(x2ValueStateText(states[1]?.x2)).toEqual(["reg:2"]);
+    expect(x2ShapeStateText(states[1]?.xShape)).toEqual([
+      "hex:8.70Е2-6С:mantissa",
+    ]);
+    expect(x2ShapeStateText(states[1]?.x2Shape)).toEqual([
+      "hex:8.70Е2-6С:mantissa",
+    ]);
   });
 
   it("x2 value dataflow keeps leading-zero X2 separate from normalized X", () => {
@@ -1423,6 +1465,36 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore replaces a repeated literal after a preloaded decimal recall", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 12"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("2", "preload const 12"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore keeps repeated literals after hex-like preloaded recalls", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 8.70Е2-6С"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-literal-restore replaces a repeated leading-zero digit run with dot", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
@@ -2159,6 +2231,36 @@ describe("ir passes on synthetic programs", () => {
     const program: IrOp[] = [
       recall("1"),
       plain(0x20, "F pi"),
+      plain(0x0a, "."),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-dead-restore-before-overwrite removes dot after a preloaded decimal recall", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const 8.1020088E14"),
+      plain(0x0a, "."),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1", "preload const 8.1020088E14"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("x2-dead-restore-before-overwrite keeps dot after a hex-like preloaded recall", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const 8.70Е2-6С"),
       plain(0x0a, "."),
       plain(0x0d, "Cx"),
       halt(),
@@ -2965,6 +3067,27 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("last-x-reuse drops preloaded decimal recall when X was rebuilt as the same literal", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      recall("2", "preload const 12"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
+  });
+
   it("last-x-reuse keeps redundant X2 sync before immediate ВП context", () => {
     const program: IrOp[] = [
       recall("1"),
@@ -3425,6 +3548,33 @@ describe("ir passes on synthetic programs", () => {
       plain(0x02, "2"),
       store("4"),
       plain(0x0d, "Cx"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      jump("tail"),
+      plain(0x00, "0"),
+      label("tail"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
+  });
+
+  it("flow-x-reuse drops preloaded decimal recall after X is rebuilt across CFG flow", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      jump("tail"),
+      plain(0x00, "0"),
+      label("tail"),
+      recall("4", "preload const 12"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
       plain(0x01, "1"),
       plain(0x02, "2"),
       jump("tail"),
