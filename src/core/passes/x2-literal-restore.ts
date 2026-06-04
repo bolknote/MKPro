@@ -15,6 +15,7 @@ import {
 
 const DOT = 0x0a;
 const SIGN_CHANGE = 0x0b;
+const VP = 0x0c;
 
 interface DecimalLiteralRun {
   readonly end: number;
@@ -33,6 +34,14 @@ function isPlainSignChange(op: IrOp | undefined): op is Extract<IrOp, { kind: "p
   return op !== undefined &&
     op.kind === "plain" &&
     op.opcode === SIGN_CHANGE &&
+    !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op);
+}
+
+function isPlainVp(op: IrOp | undefined): op is Extract<IrOp, { kind: "plain" }> {
+  return op !== undefined &&
+    op.kind === "plain" &&
+    op.opcode === VP &&
     !hasRewriteBarrier(op) &&
     !isDisplayFocusSensitive(op);
 }
@@ -56,6 +65,44 @@ function decimalLiteralRunAt(ops: readonly IrOp[], start: number): DecimalLitera
   if (isPlainSignChange(ops[end])) return { end, value: `-${value}` };
   if (digits.length < 2) return undefined;
   return { end: end - 1, value };
+}
+
+function exponentIntegerLiteralRunAt(ops: readonly IrOp[], start: number): DecimalLiteralRun | undefined {
+  const mantissaDigits: string[] = [];
+  let cursor = start;
+  while (cursor < ops.length) {
+    const op = ops[cursor]!;
+    if (!isPlainDigit(op)) break;
+    mantissaDigits.push(String(op.opcode));
+    cursor += 1;
+  }
+  if (mantissaDigits.length === 0 || !isPlainVp(ops[cursor])) return undefined;
+  cursor += 1;
+
+  const exponentDigits: string[] = [];
+  while (cursor < ops.length) {
+    const op = ops[cursor]!;
+    if (!isPlainDigit(op)) break;
+    exponentDigits.push(String(op.opcode));
+    cursor += 1;
+  }
+  if (exponentDigits.length === 0 || exponentDigits.length > 2) return undefined;
+
+  const value = normalizedIntegerExponentEntryValue(mantissaDigits.join(""), exponentDigits.join(""));
+  if (value === undefined) return undefined;
+  return { end: cursor - 1, value };
+}
+
+function literalRunAt(ops: readonly IrOp[], start: number): DecimalLiteralRun | undefined {
+  return exponentIntegerLiteralRunAt(ops, start) ?? decimalLiteralRunAt(ops, start);
+}
+
+function normalizedIntegerExponentEntryValue(mantissa: string, exponent: string): string | undefined {
+  if (!/^[1-9][0-9]{0,7}$/u.test(mantissa) || !/^[0-9]{1,2}$/u.test(exponent)) return undefined;
+  const shift = Number(exponent);
+  if (!Number.isInteger(shift) || shift < 0) return undefined;
+  const normalized = `${mantissa}${"0".repeat(shift)}`;
+  return normalized.length <= 8 ? normalized : undefined;
 }
 
 function addingDotCanExposeX2RestoreContext(ops: readonly IrOp[], literalEnd: number): boolean {
@@ -123,7 +170,7 @@ const run: IrPassFn = (ops) => {
 
   for (let index = 0; index < ops.length; index += 1) {
     const state = x2ValueStates[index];
-    const runAtIndex = decimalLiteralRunAt(ops, index);
+    const runAtIndex = literalRunAt(ops, index);
     if (
       runAtIndex !== undefined &&
       isFreshClosedDecimalEntry(state) &&

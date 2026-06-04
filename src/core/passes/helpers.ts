@@ -787,6 +787,22 @@ function transferPlainX2ValueState(
     };
   }
   const effect = plainX2Effect(op);
+  const closedExponentValues = closedExponentEntryDecimalFacts(input.entry);
+  if (closedExponentValues.size > 0) {
+    const x = plainPreservesXValue(op) ? new Set(closedExponentValues) : new Set<X2ValueFact>();
+    const x2 = effect === "preserves"
+      ? new Set(closedExponentValues)
+      : effect === "affects"
+        ? new Set(x)
+        : new Set<X2ValueFact>();
+    return {
+      x,
+      x2,
+      entry: nextX2EntryStateForPlainEffect(effect),
+      vpContext: transferPlainX2VpContextState(input, effect),
+      vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, effect),
+    };
+  }
   const x = plainPreservesXValue(op) ? new Set(input.x) : new Set<X2ValueFact>();
   const x2 = transferPlainX2ValueSet(input, x, effect);
   return {
@@ -1190,6 +1206,31 @@ function registerValueFact(register: RegisterName): X2ValueFact {
 
 function decimalValueFact(value: string, flavor: "normalized" | "unnormalized"): X2ValueFact {
   return `decimal:${value}:${flavor}`;
+}
+
+function closedExponentEntryDecimalFacts(input: X2EntryState): Set<X2ValueFact> {
+  const values = new Set<X2ValueFact>();
+  if (input.kind !== "exponent") return values;
+  for (const mantissa of input.mantissa) {
+    for (const exponent of input.exponent) {
+      const value = normalizedIntegerExponentEntryValue(mantissa, exponent);
+      if (value !== undefined) values.add(decimalValueFact(value, "normalized"));
+    }
+  }
+  return values;
+}
+
+function normalizedIntegerExponentEntryValue(mantissa: string, exponent: string): string | undefined {
+  const mantissaMatch = /^(-?)([1-9][0-9]{0,7})$/u.exec(mantissa);
+  const exponentMatch = /^[0-9]{1,2}$/u.exec(exponent);
+  if (mantissaMatch === null || exponentMatch === null) return undefined;
+  const sign = mantissaMatch[1]!;
+  const digits = mantissaMatch[2]!;
+  const shift = Number(exponent);
+  if (!Number.isInteger(shift) || shift < 0) return undefined;
+  const normalized = `${digits}${"0".repeat(shift)}`;
+  if (normalized.length > 8) return undefined;
+  return `${sign}${normalized}`;
 }
 
 function normalizeDecimalEntry(raw: string): string | undefined {
