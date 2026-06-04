@@ -76,6 +76,8 @@ function exponentLiteralRunAt(ops: readonly IrOp[], start: number): DecimalLiter
     mantissaDigits.push(String(op.opcode));
     cursor += 1;
   }
+  const mantissaSign = isPlainSignChange(ops[cursor]) ? "-" : "";
+  if (mantissaSign === "-") cursor += 1;
   if (mantissaDigits.length === 0 || !isPlainVp(ops[cursor])) return undefined;
   cursor += 1;
 
@@ -90,7 +92,7 @@ function exponentLiteralRunAt(ops: readonly IrOp[], start: number): DecimalLiter
   const exponentSign = isPlainSignChange(ops[cursor]) ? "-" : "";
   if (exponentSign === "-") cursor += 1;
 
-  const value = normalizedExponentEntryValue(mantissaDigits.join(""), `${exponentSign}${exponentDigits.join("")}`);
+  const value = normalizedExponentEntryValue(`${mantissaSign}${mantissaDigits.join("")}`, `${exponentSign}${exponentDigits.join("")}`);
   if (value === undefined) return undefined;
   return { end: cursor - 1, value };
 }
@@ -100,14 +102,17 @@ function literalRunAt(ops: readonly IrOp[], start: number): DecimalLiteralRun | 
 }
 
 function normalizedExponentEntryValue(mantissa: string, exponent: string): string | undefined {
+  const mantissaMatch = /^(-?)([1-9][0-9]{0,7})$/u.exec(mantissa);
   const exponentMatch = /^(-?)([0-9]{1,2})$/u.exec(exponent);
-  if (!/^[1-9][0-9]{0,7}$/u.test(mantissa) || exponentMatch === null) return undefined;
+  if (mantissaMatch === null || exponentMatch === null) return undefined;
+  const sign = mantissaMatch[1]!;
+  const digits = mantissaMatch[2]!;
   const shift = Number(exponentMatch[2]!);
   const normalized = exponentMatch[1] === "-"
-    ? decimalShiftRight(mantissa, shift)
-    : `${mantissa}${"0".repeat(shift)}`;
+    ? decimalShiftRight(digits, shift)
+    : `${digits}${"0".repeat(shift)}`;
   if (normalized === undefined || significantDecimalDigits(normalized) > 8) return undefined;
-  return normalized;
+  return `${sign}${normalized}`;
 }
 
 function decimalShiftRight(digits: string, places: number): string | undefined {

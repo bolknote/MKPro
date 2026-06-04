@@ -904,6 +904,23 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:0.005:normalized"]);
   });
 
+  it("x2 value dataflow proves a closed signed-mantissa exponent-entry after an X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[5])).toBe("closed");
+    expect(x2VpContextStateText(states[5])).toBe("none");
+    expect(x2ValueStateText(states[5]?.x)).toEqual(["decimal:-5000:normalized"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:-5000:normalized"]);
+  });
+
   it("x2 value dataflow clears VP exponent context when a new digit starts", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -1137,6 +1154,33 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0b, "/-/"),
       plain(0xf0, "F* empty F0"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 0.005 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore replaces a repeated signed-mantissa exponent literal with dot", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x05, "5"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal -5000 from hidden X2 temp" } },
       halt(),
     ]);
   });
