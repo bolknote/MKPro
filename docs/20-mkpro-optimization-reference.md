@@ -766,15 +766,16 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `Cx ВП` even though visible `X` normalizes both decimal values to `0`.
     Ordinary digits after an
     X2-preserving gap start fresh number entry, but `/-/` can still see and
-    update that VP context. A non-zero positive-integer exponent-entry form can
-    also become a normalized decimal value fact after an X2-affecting,
-    X-preserving sync closes it (`5 ВП 3 F0` proves
-    `decimal:5000:normalized` and clears the VP context). Hidden exponent
-    forms that remain under observable VP context still do not become
-    dot-safe value aliases; emulator probes show that later `.` can signal
-    `ЕГГ0Г`, and negative/fractional exponent forms stay structural until the
-    mantissa-shape model can prove them. Closed-context `/-/` without a proved
-    decimal or VP context stays
+    update that VP context. A non-zero exponent-entry form can also become a
+    normalized decimal value fact after an X2-affecting, X-preserving sync
+    closes it (`5 ВП 3 F0` proves `decimal:5000:normalized`, and
+    `5 ВП 3 /-/ F0` proves `decimal:0.005:normalized`, clearing the VP
+    context). Hidden exponent forms that remain under observable VP context
+    still do not become dot-safe value aliases; emulator probes show that later
+    `.` can signal `ЕГГ0Г`. Exponent forms that need a wider scientific,
+    hex/super, or display-shape proof stay structural until the mantissa-shape
+    model can prove them. Closed-context `/-/` without a proved decimal or VP
+    context stays
     unknown. The pass accepts either a
     safe dot-restore gap or the documented immediate no-op form after an
     X2-affecting sync such as `П->X r`/`Cx`/conditional fallthrough, and refuses
@@ -785,10 +786,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     already in the hidden X2 register, the dot-restore gap is safe (or the
     literal is immediately after a proved X2 sync), and removing number entry
     cannot expose a consumed stack lift. It recognizes ordinary digit-runs,
-    signed digit-runs, and positive integer exponent-entry literals such as
-    `5 ВП 3` once the prior value has been closed by a safe X2-affecting sync.
-    Leading-zero forms, negative/fractional exponent forms, display/raw bytes,
-    and later context-sensitive `.`/`/-/`/`ВП` observations are kept.
+    signed digit-runs, and normalized exponent-entry literals such as
+    `5 ВП 3` or `5 ВП 3 /-/` once the prior value has been closed by a safe
+    X2-affecting sync. Leading-zero forms, too-wide exponent forms,
+    display/raw bytes, and later context-sensitive `.`/`/-/`/`ВП`
+    observations are kept.
 20. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.
 21. `dead-store-elimination` — removes direct stores, plus stable-indirect stores with proved targets, whose target register is not live after the write in a CFG that follows proved indirect flow targets (`indirect-target=NN`) and does not affect number-entry/input finalization or the previous-command context consumed by `ВП` while it restores X2; mutating indirect selectors are kept.
 22. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding direct/proved-indirect `X->П` or a kept direct/stable recall, possibly through documented empty operators `К НОП`/`К 1`/`К 2` and unreferenced compiler marker labels, preserving recalls that serve as the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or as a stack lift that can reach a downstream consumer through direct or proved-indirect flow; labels targeted by string, numeric, or proved-indirect flow plus procedure starts are entry barriers, and unknown indirect flow makes labels barriers too; mutating indirect stores can seed the X fact because the store remains, while mutating indirect recalls are not removed.

@@ -67,7 +67,7 @@ function decimalLiteralRunAt(ops: readonly IrOp[], start: number): DecimalLitera
   return { end: end - 1, value };
 }
 
-function exponentIntegerLiteralRunAt(ops: readonly IrOp[], start: number): DecimalLiteralRun | undefined {
+function exponentLiteralRunAt(ops: readonly IrOp[], start: number): DecimalLiteralRun | undefined {
   const mantissaDigits: string[] = [];
   let cursor = start;
   while (cursor < ops.length) {
@@ -87,22 +87,48 @@ function exponentIntegerLiteralRunAt(ops: readonly IrOp[], start: number): Decim
     cursor += 1;
   }
   if (exponentDigits.length === 0 || exponentDigits.length > 2) return undefined;
+  const exponentSign = isPlainSignChange(ops[cursor]) ? "-" : "";
+  if (exponentSign === "-") cursor += 1;
 
-  const value = normalizedIntegerExponentEntryValue(mantissaDigits.join(""), exponentDigits.join(""));
+  const value = normalizedExponentEntryValue(mantissaDigits.join(""), `${exponentSign}${exponentDigits.join("")}`);
   if (value === undefined) return undefined;
   return { end: cursor - 1, value };
 }
 
 function literalRunAt(ops: readonly IrOp[], start: number): DecimalLiteralRun | undefined {
-  return exponentIntegerLiteralRunAt(ops, start) ?? decimalLiteralRunAt(ops, start);
+  return exponentLiteralRunAt(ops, start) ?? decimalLiteralRunAt(ops, start);
 }
 
-function normalizedIntegerExponentEntryValue(mantissa: string, exponent: string): string | undefined {
-  if (!/^[1-9][0-9]{0,7}$/u.test(mantissa) || !/^[0-9]{1,2}$/u.test(exponent)) return undefined;
-  const shift = Number(exponent);
-  if (!Number.isInteger(shift) || shift < 0) return undefined;
-  const normalized = `${mantissa}${"0".repeat(shift)}`;
-  return normalized.length <= 8 ? normalized : undefined;
+function normalizedExponentEntryValue(mantissa: string, exponent: string): string | undefined {
+  const exponentMatch = /^(-?)([0-9]{1,2})$/u.exec(exponent);
+  if (!/^[1-9][0-9]{0,7}$/u.test(mantissa) || exponentMatch === null) return undefined;
+  const shift = Number(exponentMatch[2]!);
+  const normalized = exponentMatch[1] === "-"
+    ? decimalShiftRight(mantissa, shift)
+    : `${mantissa}${"0".repeat(shift)}`;
+  if (normalized === undefined || significantDecimalDigits(normalized) > 8) return undefined;
+  return normalized;
+}
+
+function decimalShiftRight(digits: string, places: number): string | undefined {
+  const point = digits.length - places;
+  const raw = point > 0
+    ? `${digits.slice(0, point)}.${digits.slice(point)}`
+    : `0.${"0".repeat(-point)}${digits}`;
+  return normalizePlainDecimal(raw);
+}
+
+function normalizePlainDecimal(raw: string): string | undefined {
+  const match = /^(0|[1-9][0-9]*)(?:\.([0-9]+))?$/u.exec(raw);
+  if (match === null) return undefined;
+  const integer = match[1]!.replace(/^0+(?=\d)/u, "");
+  const fraction = (match[2] ?? "").replace(/0+$/u, "");
+  return fraction.length === 0 ? integer : `${integer}.${fraction}`;
+}
+
+function significantDecimalDigits(input: string): number {
+  const digits = input.replace(".", "").replace(/^0+/u, "");
+  return digits.length === 0 ? 1 : digits.length;
 }
 
 function addingDotCanExposeX2RestoreContext(ops: readonly IrOp[], literalEnd: number): boolean {

@@ -1213,24 +1213,53 @@ function closedExponentEntryDecimalFacts(input: X2EntryState): Set<X2ValueFact> 
   if (input.kind !== "exponent") return values;
   for (const mantissa of input.mantissa) {
     for (const exponent of input.exponent) {
-      const value = normalizedIntegerExponentEntryValue(mantissa, exponent);
+      const value = normalizedExponentEntryValue(mantissa, exponent);
       if (value !== undefined) values.add(decimalValueFact(value, "normalized"));
     }
   }
   return values;
 }
 
-function normalizedIntegerExponentEntryValue(mantissa: string, exponent: string): string | undefined {
+function normalizedExponentEntryValue(mantissa: string, exponent: string): string | undefined {
   const mantissaMatch = /^(-?)([1-9][0-9]{0,7})$/u.exec(mantissa);
-  const exponentMatch = /^[0-9]{1,2}$/u.exec(exponent);
+  const exponentMatch = /^(-?)([0-9]{1,2})$/u.exec(exponent);
   if (mantissaMatch === null || exponentMatch === null) return undefined;
   const sign = mantissaMatch[1]!;
   const digits = mantissaMatch[2]!;
-  const shift = Number(exponent);
-  if (!Number.isInteger(shift) || shift < 0) return undefined;
-  const normalized = `${digits}${"0".repeat(shift)}`;
-  if (normalized.length > 8) return undefined;
+  const exponentSign = exponentMatch[1]!;
+  const shift = Number(exponentMatch[2]!);
+  if (!Number.isInteger(shift)) return undefined;
+  const unsigned = exponentSign === "-"
+    ? decimalShiftRight(digits, shift)
+    : `${digits}${"0".repeat(shift)}`;
+  if (unsigned === undefined || significantDecimalDigits(unsigned) > 8) return undefined;
+  return unsigned === "0" ? "0" : `${sign}${unsigned}`;
+}
+
+function decimalShiftRight(digits: string, places: number): string | undefined {
+  if (places <= 0) return digits;
+  const point = digits.length - places;
+  const raw = point > 0
+    ? `${digits.slice(0, point)}.${digits.slice(point)}`
+    : `0.${"0".repeat(-point)}${digits}`;
+  return normalizePlainDecimal(raw);
+}
+
+function normalizePlainDecimal(raw: string): string | undefined {
+  const match = /^(-?)(?:([0-9]+)(?:\.([0-9]+))?|\.(\d+))$/u.exec(raw);
+  if (match === null) return undefined;
+  const sign = match[1]!;
+  const integer = (match[2] ?? "0").replace(/^0+(?=\d)/u, "");
+  const fraction = (match[3] ?? match[4] ?? "").replace(/0+$/u, "");
+  const normalized = fraction.length === 0 ? integer : `${integer}.${fraction}`;
+  if (normalized === "0") return "0";
   return `${sign}${normalized}`;
+}
+
+function significantDecimalDigits(input: string): number {
+  const unsigned = input.startsWith("-") ? input.slice(1) : input;
+  const digits = unsigned.replace(".", "").replace(/^0+/u, "");
+  return digits.length === 0 ? 1 : digits.length;
 }
 
 function normalizeDecimalEntry(raw: string): string | undefined {
@@ -1252,9 +1281,9 @@ function x2DecimalEntryFact(raw: string): X2ValueFact | undefined {
 function normalizeX2RestoreFactsForX(input: X2ValueSet): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
   for (const fact of input) {
-    const decimal = /^decimal:(-?[0-9]+):(normalized|unnormalized)$/u.exec(fact);
+    const decimal = /^decimal:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):(normalized|unnormalized)$/u.exec(fact);
     if (decimal) {
-      const normalized = normalizeDecimalEntry(decimal[1]!);
+      const normalized = normalizePlainDecimal(decimal[1]!);
       if (normalized !== undefined) output.add(decimalValueFact(normalized, "normalized"));
       continue;
     }
@@ -1276,9 +1305,9 @@ function signChangeClosedDecimalState(input: X2ValueDataflowState): X2ValueDataf
   const values = new Set<X2ValueFact>();
   for (const fact of input.x2) {
     if (!input.x.has(fact)) continue;
-    const decimal = /^decimal:(-?[0-9]+):normalized$/u.exec(fact);
+    const decimal = /^decimal:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):normalized$/u.exec(fact);
     if (decimal === null) continue;
-    values.add(decimalValueFact(signChangedDecimalEntry(decimal[1]!), "normalized"));
+    values.add(decimalValueFact(signChangedNormalizedDecimalValue(decimal[1]!), "normalized"));
   }
   if (values.size === 0) return undefined;
   return {
@@ -1287,6 +1316,12 @@ function signChangeClosedDecimalState(input: X2ValueDataflowState): X2ValueDataf
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
   };
+}
+
+function signChangedNormalizedDecimalValue(raw: string): string {
+  const normalized = normalizePlainDecimal(raw);
+  if (normalized === undefined || normalized === "0") return "0";
+  return normalized.startsWith("-") ? normalized.slice(1) : `-${normalized}`;
 }
 
 function sharedNormalizedDecimalMantissas(input: Pick<X2ValueDataflowState, "x" | "x2">): ReadonlySet<string> | undefined {

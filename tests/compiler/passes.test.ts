@@ -887,7 +887,7 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:5000:normalized"]);
   });
 
-  it("x2 value dataflow keeps negative exponent-entry values structural only", () => {
+  it("x2 value dataflow proves a closed fractional exponent-entry after an X2 sync", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),
       plain(0x0c, "ВП"),
@@ -899,8 +899,9 @@ describe("ir passes on synthetic programs", () => {
     const states = computeX2ValueStates(program);
 
     expect(x2EntryStateText(states[5])).toBe("closed");
-    expect(x2ValueStateText(states[5]?.x)).toEqual([]);
-    expect(x2ValueStateText(states[5]?.x2)).toEqual([]);
+    expect(x2VpContextStateText(states[5])).toBe("none");
+    expect(x2ValueStateText(states[5]?.x)).toEqual(["decimal:0.005:normalized"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:0.005:normalized"]);
   });
 
   it("x2 value dataflow clears VP exponent context when a new digit starts", () => {
@@ -1113,7 +1114,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
-  it("x2-literal-restore keeps negative exponent literals", () => {
+  it("x2-literal-restore replaces a repeated fractional exponent literal with dot", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),
       plain(0x0c, "ВП"),
@@ -1128,8 +1129,16 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2LiteralRestore.run(program, ctx);
 
-    expect(result.applied).toBe(0);
-    expect(result.ops).toEqual(program);
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 0.005 from hidden X2 temp" } },
+      halt(),
+    ]);
   });
 
   it("x2-literal-restore keeps positive single digits because dot would not save a cell", () => {
