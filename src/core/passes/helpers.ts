@@ -176,6 +176,8 @@ export function storedCurrentXValueRegister(op: IrOp): RegisterName | undefined 
 
 export function plainPreservesXValue(op: Extract<IrOp, { kind: "plain" }>): boolean {
   if (hasRewriteBarrier(op)) return false;
+  if (op.opcode === 0x0e) return true;
+  if (op.opcode >= 0xf0 && op.opcode <= 0xff) return true;
   return op.opcode >= 0x54 && op.opcode <= 0x56;
 }
 
@@ -436,8 +438,11 @@ function transferRegisterDataflowState(
       const registers = target === undefined ? new Set<RegisterName>() : new Set([target]);
       return { x: registers, x2: new Set(registers) };
     }
-    case "plain":
-      return { x: new Set(), x2: transferPlainX2RegisterSet(input.x2, plainX2Effect(op)) };
+    case "plain": {
+      const effect = plainX2Effect(op);
+      const x = plainPreservesXValue(op) ? new Set(input.x) : new Set<RegisterName>();
+      return { x, x2: transferPlainX2RegisterSet(input, x, effect) };
+    }
     case "cjump": {
       const effect = conditionalX2EffectForGraphEdge(op, edge);
       return {
@@ -778,7 +783,7 @@ function transferPlainX2ValueState(
   const x = plainPreservesXValue(op) ? new Set(input.x) : new Set<X2ValueFact>();
   return {
     x,
-    x2: transferPlainX2ValueSet(input.x2, effect),
+    x2: transferPlainX2ValueSet(input, x, effect),
     entry: nextX2EntryStateForPlainEffect(effect),
     vpContext: transferPlainX2VpContextState(input, effect),
   };
@@ -934,17 +939,23 @@ function setsIntersect(left: RegisterValueSet, right: RegisterValueSet): boolean
 }
 
 function transferPlainX2RegisterSet(
-  input: RegisterValueSet,
+  input: RegisterDataflowState,
+  x: RegisterValueSet,
   effect: ReturnType<typeof plainX2Effect>,
 ): Set<RegisterName> {
-  return effect === "preserves" ? new Set(input) : new Set();
+  if (effect === "preserves") return new Set(input.x2);
+  if (effect === "affects") return new Set(x);
+  return new Set();
 }
 
 function transferPlainX2ValueSet(
-  input: X2ValueSet,
+  input: X2ValueDataflowState,
+  x: X2ValueSet,
   effect: ReturnType<typeof plainX2Effect>,
 ): Set<X2ValueFact> {
-  return effect === "preserves" ? new Set(input) : new Set();
+  if (effect === "preserves") return new Set(input.x2);
+  if (effect === "affects") return new Set(x);
+  return new Set();
 }
 
 function transferPlainX2VpContextState(

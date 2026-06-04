@@ -44,4 +44,25 @@ describe("X2 restore context", () => {
     expect(runX(withRecall)).toBe("1,415926-1");
     expect(runX(withoutRecall)).toBe("1,415926-1");
   });
+
+  it("F0..FF preserve X but sync the current X into X2", () => {
+    // 2; К {x} leaves X=0 while X2 still holds the old digit-entry 2.
+    // КНОП does not sync X2, so `.` restores 2. F* empty opcodes do sync X2,
+    // so the same `.` keeps the current 0.
+    expect(runX([0x02, 0x35, 0x54, 0x0a, 0x50])).toBe("2,");
+
+    for (let opcode = 0xf0; opcode <= 0xff; opcode += 1) {
+      expect(runX([0x02, 0x35, opcode, 0x50])).toBe("0,");
+      expect(runX([0x02, 0x35, opcode, 0x0a, 0x50])).toBe("0,");
+    }
+  });
+
+  it("В↑ preserves X but syncs the current X into X2", () => {
+    // Same setup as the F* test: after К {x}, X is 0 and X2 is still 2.
+    // В↑ shifts the stack, but X remains 0 and the following `.` observes
+    // the synchronized 0 rather than restoring the old 2.
+    expect(runX([0x02, 0x35, 0x54, 0x0a, 0x50])).toBe("2,");
+    expect(runX([0x02, 0x35, 0x0e, 0x50])).toBe("0,");
+    expect(runX([0x02, 0x35, 0x0e, 0x0a, 0x50])).toBe("0,");
+  });
 });

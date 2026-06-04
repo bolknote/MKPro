@@ -333,6 +333,36 @@ describe("ir passes on synthetic programs", () => {
     expect(registerStateText(states[3])).toEqual(["2", "3"]);
   });
 
+  it("x2 register dataflow syncs known X through F* empty opcodes", () => {
+    const program: IrOp[] = [
+      recall("2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      halt(),
+    ];
+
+    const states = computeX2RegisterStates(program);
+
+    expect(registerStateText(states[1])).toEqual(["2"]);
+    expect(registerStateText(states[2])).toEqual(["2"]);
+    expect(registerStateText(states[3])).toEqual(["2"]);
+  });
+
+  it("x2 register dataflow syncs known X through stack lift", () => {
+    const program: IrOp[] = [
+      recall("2"),
+      plain(0x0e, "В↑"),
+      plain(0x54, "К НОП"),
+      halt(),
+    ];
+
+    const states = computeX2RegisterStates(program);
+
+    expect(registerStateText(states[1])).toEqual(["2"]);
+    expect(registerStateText(states[2])).toEqual(["2"]);
+    expect(registerStateText(states[3])).toEqual(["2"]);
+  });
+
   it("x2 register dataflow drops aliases when a register is overwritten from non-X2 X", () => {
     const program: IrOp[] = [
       recall("2"),
@@ -604,6 +634,42 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:02:unnormalized"]);
   });
 
+  it("x2 value dataflow syncs normalized X into X2 through F* empty opcodes", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:02:unnormalized"]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:2:normalized"]);
+  });
+
+  it("x2 value dataflow syncs normalized X into X2 through stack lift", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x54, "К НОП"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:02:unnormalized"]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:2:normalized"]);
+  });
+
   it("x2 value dataflow treats dot in open number entry as decimal input", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -873,6 +939,44 @@ describe("ir passes on synthetic programs", () => {
 
     expect(result.applied).toBe(0);
     expect(result.ops).toEqual(program);
+  });
+
+  it("x2-noop-restore removes dot after F* syncs a leading-zero literal", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore removes dot after stack lift syncs a leading-zero literal", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      halt(),
+    ]);
   });
 
   it("x2-noop-restore keeps dot after a signed leading-zero X2 literal", () => {

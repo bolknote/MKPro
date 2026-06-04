@@ -748,7 +748,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     vs `-02`) so they do not satisfy the equality proof. The value proof also
     models closed-context `.` as a real X2-to-X restore, normalizing decimal
     facts only for visible `X` and refusing open number-entry dots such as
-    `1.`. `ВП` after an open mantissa creates both a structural exponent-entry
+    `1.`. The value proof also treats `В↑` and `F0..FF` empty opcodes as
+    X-preserving X2-affecting commands: when `X` is already proved, those
+    opcodes sync the same fact into `X2`, including normalized visible values
+    whose old X2 form had leading zeroes. `ВП` after an open mantissa creates both a structural exponent-entry
     state and a separate VP/exponent context. Ordinary digits after an
     X2-preserving gap start fresh number entry, but `/-/` can still see and
     update that VP context. These hidden exponent forms still do not produce
