@@ -17,8 +17,6 @@ program TicTacToe4x4 {
     y: counter 0..5 = 0
     cell: coord(grid)
 
-    scan_x: counter 1..5 = 1
-    scan_y: counter 1..5 = 1
     best_cell: coord(grid) = 11
     best_score: packed = -1
     score: packed = 0
@@ -54,75 +52,58 @@ program TicTacToe4x4 {
     }
     else {
       occupied += cell
-      player_lines()
-      check_player_win()
+      mark_lines(-1)
+      check_win(0)
       choose_calculator_move()
       occupied += cell
-      calculator_lines()
-      check_calculator_win()
+      mark_lines(1)
+      check_win(8)
     }
   }
 
-  fn player_lines() {
-    lines[1] = packed_add(lines[1], y, -1)
-    lines[2] = packed_add(lines[2], x, -1)
+  fn mark_lines(delta) {
+    lines[1] = packed_add(lines[1], y, delta)
+    lines[2] = packed_add(lines[2], x, delta)
     normalize_sum()
-    lines[3] = packed_add(lines[3], line, -1)
+    lines[3] = packed_add(lines[3], line, delta)
     normalize_diff()
-    lines[4] = packed_add(lines[4], line, -1)
+    lines[4] = packed_add(lines[4], line, delta)
   }
 
-  fn calculator_lines() {
-    lines[1] = packed_add(lines[1], y, 1)
-    lines[2] = packed_add(lines[2], x, 1)
-    normalize_sum()
-    lines[3] = packed_add(lines[3], line, 1)
-    normalize_diff()
-    lines[4] = packed_add(lines[4], line, 1)
-  }
-
-  fn check_player_win() {
-    if packed_digit(lines[1], y) == 0 {
-      human_won()
+  fn check_win(target) {
+    if packed_digit(lines[1], y) == target {
+      finish_win(target)
     }
-    if packed_digit(lines[2], x) == 0 {
-      human_won()
+    if packed_digit(lines[2], x) == target {
+      finish_win(target)
     }
     normalize_sum()
-    if packed_digit(lines[3], line) == 0 {
-      human_won()
+    if packed_digit(lines[3], line) == target {
+      finish_win(target)
     }
     normalize_diff()
-    if packed_digit(lines[4], line) == 0 {
-      human_won()
+    if packed_digit(lines[4], line) == target {
+      finish_win(target)
     }
   }
 
-  fn check_calculator_win() {
-    if packed_digit(lines[1], y) == 8 {
-      calculator_won()
+  fn finish_win(target) {
+    if target == 0 {
+      human_won()
     }
-    if packed_digit(lines[2], x) == 8 {
-      calculator_won()
-    }
-    normalize_sum()
-    if packed_digit(lines[3], line) == 8 {
-      calculator_won()
-    }
-    normalize_diff()
-    if packed_digit(lines[4], line) == 8 {
+    else {
       calculator_won()
     }
   }
 
   fn choose_calculator_move() {
     best_score = -1
-    scan_y = 1
+    y = 1
 
-    while scan_y <= 4 {
-      scan_x = 1
-      while scan_x <= 4 {
-        cell = scan_y * 10 + scan_x
+    while y <= 4 {
+      x = 1
+      while x <= 4 {
+        cell = y * 10 + x
         unless cell in occupied {
           candidate_score()
           if score > best_score {
@@ -130,9 +111,9 @@ program TicTacToe4x4 {
             best_cell = cell
           }
         }
-        scan_x++
+        x++
       }
-      scan_y++
+      y++
     }
 
     if best_score < 0 {
@@ -145,11 +126,11 @@ program TicTacToe4x4 {
   }
 
   fn candidate_score() {
-    score = sqr(packed_digit(lines[1], scan_y) - 4)
-    score += sqr(packed_digit(lines[2], scan_x) - 4)
-    normalize_scan_sum()
+    score = sqr(packed_digit(lines[1], y) - 4)
+    score += sqr(packed_digit(lines[2], x) - 4)
+    normalize_sum()
     score += sqr(packed_digit(lines[3], line) - 4)
-    normalize_scan_diff()
+    normalize_diff()
     score += sqr(packed_digit(lines[4], line) - 4)
   }
 
@@ -162,20 +143,6 @@ program TicTacToe4x4 {
 
   fn normalize_diff() {
     line = frac(int(x - y) / 4) * 4
-    if line <= 0 {
-      line += 4
-    }
-  }
-
-  fn normalize_scan_sum() {
-    line = frac(int(scan_x + scan_y) / 4) * 4
-    if line <= 0 {
-      line += 4
-    }
-  }
-
-  fn normalize_scan_diff() {
-    line = frac(int(scan_x - scan_y) / 4) * 4
     if line <= 0 {
       line += 4
     }
