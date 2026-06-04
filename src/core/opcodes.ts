@@ -59,6 +59,10 @@ function directConditionalX2Effect(): NonNullable<OpcodeInfo["conditionalX2Effec
   return { fallthrough: "affects", jump: "preserves" };
 }
 
+function indirectConditionalX2Effect(): NonNullable<OpcodeInfo["conditionalX2Effect"]> {
+  return { fallthrough: "preserves", jump: "preserves" };
+}
+
 export const opcodeCatalog: OpcodeInfo[] = buildOpcodeCatalog();
 
 export const opcodeByCode = new Map<number, OpcodeInfo>(
@@ -267,7 +271,7 @@ function buildOpcodeCatalog(): OpcodeInfo[] {
         x2Effect: base === 0xd0 ? "affects" : "preserves",
         stackEffect: base === 0xd0 ? "shifts" : "preserves",
       };
-      if (conditional) extra.conditionalX2Effect = directConditionalX2Effect();
+      if (conditional) extra.conditionalX2Effect = indirectConditionalX2Effect();
       set(info(base + i, `${name} ${r}`, `${name} ${r}`, extra));
     }
     const aliasExtra: Partial<OpcodeInfo> = {
@@ -276,7 +280,7 @@ function buildOpcodeCatalog(): OpcodeInfo[] {
       x2Effect: base === 0xd0 ? "affects" : "preserves",
       stackEffect: base === 0xd0 ? "shifts" : "preserves",
     };
-    if (conditional) aliasExtra.conditionalX2Effect = directConditionalX2Effect();
+    if (conditional) aliasExtra.conditionalX2Effect = indirectConditionalX2Effect();
     set(info(base + 0xf, `${name} 0 alias`, hex(base + 0xf), aliasExtra));
   }
 

@@ -657,6 +657,8 @@ Display rewrites are separated into strategy selection + body lowering.
   a path-sensitive X2 profile to these proofs: fallthrough syncs X2, while the
   jump edge preserves the previous hidden value. When X itself is proved to
   equal a register on the sync edge, the X2 proof records the same register.
+  Indirect conditionals are also path-sensitive for control flow, but both
+  edges preserve the previous X2 value; they do not create an X-to-X2 sync.
 - `x2-hidden-temp-restore` — turns a direct scratch `П->X r`, or a
   stable-indirect proved scratch `К П->X R7..Re`, into `.` when X2 already
   contains `r`, a `.` restore-gap dataflow has seen two safe X2-preserving
@@ -733,9 +735,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     These recall-removal guards read the shared `OpcodeInfo.stackEffect`
     profile, so stack-preserving, shifting, Y-consuming, exposing, and barrier
     opcodes are modeled consistently across passes.
-    The shared X2 helpers also treat `К x?0 r` as a path-sensitive conditional:
-    the fallthrough edge syncs X into X2, while the proved jump edge preserves
-    X2 and drops only facts about a mutating `R0..R6` selector.
+    The shared X2 helpers also treat `К x?0 r` as a path-sensitive conditional,
+    but unlike direct `F x?0` commands both edges preserve X2. On the proved
+    jump edge they still drop only facts about a mutating `R0..R6` selector.
 14. `stable-indirect-flow` — rewrites direct `jump/call/cjump` to indirect forms (`К БП`, `К ПП`, `К <cond>`) when a stable selector is already live in a register.
 15. `preloaded-indirect-flow` — preloads a selector value into a spare stable register and rewrites repeated backward-direct numeric jumps/calls through that preloaded value; after rescue starts, subsequent proved shrinking rewrites are still accepted below the official window.
 16. `indirect-memory-table` — rewrites direct `store/recall` into `К X->П`/`К П->X` when a stable selector maps to the indexed target cell.
@@ -756,8 +758,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     immediately following `.` be removed unless it would shape a later X2
     restore context. `ВП` after an open mantissa creates both a structural exponent-entry
     state and a separate VP/exponent context. `ВП` after a proved closed
-    decimal X2 sync (`Cx`, `В↑`, or `F0..FF`, possibly through only
-    `КНОП`/`К1`/`К2`) also becomes a structural exponent-entry state; this
+    decimal X2 sync (`Cx`, `В↑`, direct conditional fallthrough, or `F0..FF`,
+    possibly through only `КНОП`/`К1`/`К2`) also becomes a structural
+    exponent-entry state; this
     proof is deliberately not inferred through stores or general X-preserving
     commands because the MK-61 previous-command context changes what `ВП`
     restores. A proved `/-/` carries the same fact with the mantissa sign
@@ -845,7 +848,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     downstream scan proves the pair is not acting as the previous-command
     shield for a later context-sensitive `.`/`/-/`/`ВП` restore.
 27. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/empty-op/sign redundancy optimization pass removes cells.
-28. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a proved `ВП`/X2 marker, display or ordinary, and reports `vp-fraction-restore` when one or more restores are removed. The removed `К {x}` is recognized by opcode rather than by a display/frac comment; a marker is not required when CFG dataflow proves an ordinary X2 restoration boundary: an X2 sync, at least one X2-preserving executable command, then `ВП`; direct conditional jump/fallthrough edges use their path-sensitive X2 effects, proved indirect flow targets (`indirect-target=NN`) participate in the same CFG, and joins require every incoming path to carry the proof.
+28. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a proved `ВП`/X2 marker, display or ordinary, and reports `vp-fraction-restore` when one or more restores are removed. The removed `К {x}` is recognized by opcode rather than by a display/frac comment; a marker is not required when CFG dataflow proves an ordinary X2 restoration boundary: an X2 sync, at least one X2-preserving executable command, then `ВП`; direct conditional jump/fallthrough edges use their path-sensitive X2 effects, proved indirect flow targets (`indirect-target=NN`) and X2-preserving indirect conditionals participate in the same CFG, and joins require every incoming path to carry the proof.
 29. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
 30. `duplicate-failure-tail-merge` — removes duplicated failure tails by redirecting the first tail to the second; this covers both `(label -> 0 -> pause)` and `(label -> pause -> same terminal flow)` forms.
 31. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.

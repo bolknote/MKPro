@@ -417,7 +417,7 @@ describe("ir passes on synthetic programs", () => {
     expect(registerStateText(states[5])).toEqual(["4"]);
   });
 
-  it("x2 register dataflow is path-sensitive for stable indirect conditionals", () => {
+  it("x2 register dataflow preserves X2 across stable indirect conditionals", () => {
     const program: IrOp[] = [
       recall("1"),
       plain(0x35, "К {x}"),
@@ -433,11 +433,11 @@ describe("ir passes on synthetic programs", () => {
 
     const states = computeX2RegisterStates(program);
 
-    expect(registerStateText(states[4])).toEqual(["2"]);
+    expect(registerStateText(states[4])).toEqual(["1"]);
     expect(registerStateText(states[7])).toEqual(["1"]);
   });
 
-  it("x2 register dataflow still syncs indirect conditional fallthrough for mutating selectors", () => {
+  it("x2 register dataflow preserves indirect conditional fallthrough while dropping a mutated jump selector", () => {
     const program: IrOp[] = [
       recall("1"),
       plain(0x35, "К {x}"),
@@ -453,7 +453,7 @@ describe("ir passes on synthetic programs", () => {
 
     const states = computeX2RegisterStates(program);
 
-    expect(registerStateText(states[4])).toEqual(["2"]);
+    expect(registerStateText(states[4])).toEqual(["1"]);
     expect(registerStateText(states[7])).toEqual([]);
   });
 
@@ -822,8 +822,8 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2EntryStateText(states[3])).toBe("exponent:12:");
     expect(x2EntryStateText(states[4])).toBe("exponent:12:3");
-    expect(x2ValueStateText(states[4]?.x)).toEqual([]);
-    expect(x2ValueStateText(states[4]?.x2)).toEqual([]);
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:12000:normalized"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:12000:normalized"]);
     expect(x2EntryStateText(states[5])).toBe("closed");
     expect(x2ValueStateText(states[5]?.x)).toEqual(["decimal:12000:normalized", "reg:2"]);
     expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:12000:normalized", "reg:2"]);
@@ -888,6 +888,61 @@ describe("ir passes on synthetic programs", () => {
     expect(x2EntryStateText(states[5])).toBe("exponent:2:3");
   });
 
+  it("x2 value dataflow models ВП after a conditional fallthrough X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      cjump("done"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[3])).toBe("closed");
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:2:normalized"]);
+    expect(x2EntryStateText(states[4])).toBe("exponent:2:");
+    expect(x2EntryStateText(states[5])).toBe("exponent:2:3");
+  });
+
+  it("x2 value dataflow keeps indirect conditional fallthrough ВП structural-only", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      knownTargetIndirectCjump("8", 5),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+      label("target"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[2])).toBe("closed");
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:2:normalized"]);
+    expect(x2EntryStateText(states[3])).toBe("unknown");
+  });
+
+  it("x2 value dataflow does not infer a ВП entry source on a conditional jump edge", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      cjump("target"),
+      halt(),
+      label("target"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[5])).toBe("closed");
+    expect(x2EntryStateText(states[6])).toBe("unknown");
+  });
+
   it("x2 value dataflow carries a closed decimal ВП sync only through empty op gaps", () => {
     const throughEmpty: IrOp[] = [
       plain(0x02, "2"),
@@ -910,6 +965,21 @@ describe("ir passes on synthetic programs", () => {
     expect(x2EntryStateText(computeX2ValueStates(afterStore)[4])).toBe("unknown");
   });
 
+  it("x2 value dataflow keeps unsafe exponent-entry shapes structural-only", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[4])).toBe("exponent:05:3");
+    expect(x2ValueStateText(states[4]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual([]);
+  });
+
   it("x2 value dataflow keeps sign-change in exponent-entry state", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -924,8 +994,8 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2EntryStateText(states[4])).toBe("exponent:12:-");
     expect(x2EntryStateText(states[5])).toBe("exponent:12:-3");
-    expect(x2ValueStateText(states[5]?.x)).toEqual([]);
-    expect(x2ValueStateText(states[5]?.x2)).toEqual([]);
+    expect(x2ValueStateText(states[5]?.x)).toEqual(["decimal:0.012:normalized"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:0.012:normalized"]);
   });
 
   it("x2 value dataflow preserves VP exponent context through X2-preserving gaps", () => {
@@ -5012,6 +5082,32 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes exponent sign toggles after conditional fallthrough X2-sync ВП", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      cjump("done"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x03, "3"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      cjump("done"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
   it("vp-splice does not infer closed decimal ВП shape through a preceding store", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
@@ -5633,7 +5729,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
-  it("vp-x2-peephole keeps fraction after an indirect conditional fallthrough X2 sync", () => {
+  it("vp-x2-peephole removes fraction after an indirect conditional preserves an X2 boundary", () => {
     const program: IrOp[] = [
       recall("1"),
       knownTargetIndirectCjump("8", 6),
@@ -5647,8 +5743,8 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = vpX2Peephole.run(program, ctx);
 
-    expect(result.applied).toBe(0);
-    expect(result.ops).toEqual(program);
+    expect(result.applied).toBe(1);
+    expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x35)).toBe(false);
   });
 
   it("vp-x2-peephole requires every CFG entry to prove the ВП/X2 boundary", () => {
