@@ -1,0 +1,146 @@
+reference anvarov_tic_tac_toe_4x4
+
+// Compact port of Serge Anvarov's 4x4 torus tic-tac-toe. Four packed line
+// registers (44444.4) track vertical, horizontal, and both diagonal families;
+// the calculator picks the free cell with the largest squared imbalance sum.
+
+program TicTacToe4x4 {
+  grid: board(1..4, 1..4)
+
+  state {
+    occupied: cells(grid) = 0
+    lines: packed[1..4] = [44444.4, 44444.4, 44444.4, 44444.4]
+
+    x: counter 0..5 = 0
+    y: counter 0..5 = 0
+    cell: coord(grid)
+
+    best_cell: coord(grid) = 11
+    best_score: packed = -1
+    score: packed = 0
+    line: packed = 0
+  }
+
+  fn draw() {
+    halt(0)
+  }
+
+  fn occupied_cell() {
+    show(-99999999)
+  }
+
+  fn human_won() {
+    halt(0)
+  }
+
+  fn calculator_won() {
+    halt(8)
+  }
+
+  loop {
+    show(y)
+    x = entered()
+    y = entered()
+    cell = y * 10 + x
+
+    if cell in occupied {
+      occupied_cell()
+    }
+    else {
+      occupied += cell
+      mark_lines(-1)
+      check_win(0)
+      choose_calculator_move()
+      occupied += cell
+      mark_lines(1)
+      check_win(8)
+    }
+  }
+
+  fn mark_lines(delta) {
+    lines[1] = packed_add(lines[1], y, delta)
+    lines[2] = packed_add(lines[2], x, delta)
+    normalize_sum()
+    lines[3] = packed_add(lines[3], line, delta)
+    normalize_diff()
+    lines[4] = packed_add(lines[4], line, delta)
+  }
+
+  fn check_win(target) {
+    if packed_digit(lines[1], y) == target {
+      finish_win(target)
+    }
+    if packed_digit(lines[2], x) == target {
+      finish_win(target)
+    }
+    normalize_sum()
+    if packed_digit(lines[3], line) == target {
+      finish_win(target)
+    }
+    normalize_diff()
+    if packed_digit(lines[4], line) == target {
+      finish_win(target)
+    }
+  }
+
+  fn finish_win(target) {
+    if target == 0 {
+      human_won()
+    }
+    else {
+      calculator_won()
+    }
+  }
+
+  fn choose_calculator_move() {
+    best_score = -1
+    y = 1
+
+    while y <= 4 {
+      x = 1
+      while x <= 4 {
+        cell = y * 10 + x
+        unless cell in occupied {
+          candidate_score()
+          if score > best_score {
+            best_score = score
+            best_cell = cell
+          }
+        }
+        x++
+      }
+      y++
+    }
+
+    if best_score < 0 {
+      draw()
+    }
+
+    cell = best_cell
+    y = int(cell / 10)
+    x = cell - y * 10
+  }
+
+  fn candidate_score() {
+    score = sqr(packed_digit(lines[1], y) - 4)
+    score += sqr(packed_digit(lines[2], x) - 4)
+    normalize_sum()
+    score += sqr(packed_digit(lines[3], line) - 4)
+    normalize_diff()
+    score += sqr(packed_digit(lines[4], line) - 4)
+  }
+
+  fn normalize_sum() {
+    line = frac(int(x + y) / 4) * 4
+    if line <= 0 {
+      line += 4
+    }
+  }
+
+  fn normalize_diff() {
+    line = frac(int(x - y) / 4) * 4
+    if line <= 0 {
+      line += 4
+    }
+  }
+}

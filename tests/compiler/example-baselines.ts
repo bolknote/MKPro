@@ -48,4 +48,5 @@ export const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 134,
   "cave-treasure": 118,
   "giants-country": 116,
+  "tic-tac-toe-4x4": 317,
 };

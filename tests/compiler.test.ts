@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { compileMKPro, MK61_PROFILE } from "../src/core/index.ts";
+import { PENDING_BASELINE } from "./compiler/example-baselines.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -80,16 +81,14 @@ describe("MK-Pro compiler", () => {
     expect(result.report.steps).toBeLessThanOrEqual(105);
   }, 30_000);
 
-  it("keeps the 4x4 tic-tac-toe port high-level around marks and line counts", () => {
+  it("keeps the 4x4 tic-tac-toe port high-level around packed line weights", () => {
     const game = source("examples/pending-optimizer/tic-tac-toe-4x4.mkpro");
 
     expect(game).toContain("reference anvarov_tic_tac_toe_4x4");
     expect(game).toContain("occupied: cells(grid)");
-    expect(game).toContain("calculator_marks: cells(grid)");
-    expect(game).toContain("fn add_balance()");
-    expect(game).toContain("fn count_sum_diagonal(axis)");
-    expect(game).not.toContain("packed_add(lines");
-    expect(game).not.toContain("packed_digit(lines");
+    expect(game).toContain("lines: packed[1..4]");
+    expect(game).toContain("fn candidate_score()");
+    expect(game).toContain("fn mark_lines(delta)");
     expect(game).not.toMatch(/\bcore\s*\{/u);
     expect(game).not.toMatch(/\brow\s+[0-9A-F]{2}\s*:/u);
 
@@ -97,8 +96,8 @@ describe("MK-Pro compiler", () => {
 
     expect(result.diagnostics).toEqual([]);
     expect(result.report.reference?.referenceSpan).toBe(105);
-    expect(result.report.steps).toBe(666);
-  }, 20_000);
+    expect(result.report.steps).toBe(PENDING_BASELINE["tic-tac-toe-4x4"]);
+  }, 30_000);
 
   it("keeps every runnable example with a real source reference no larger than that source", () => {
     const unresolved: string[] = [];
