@@ -1199,9 +1199,9 @@ The pipeline currently contains:
 - **store-recall-peephole** — drops adjacent `X->П r ; П->X r`, or a
   stable-indirect proved same-cell `К X->П R7..Re ; К П->X R7..Re`, only when
   the removed recall is not the visible X2 sync before a context-sensitive
-  `.`/`ВП` restoration. If the shared X2-register dataflow proves that X2
+  `.`/`/-/`/`ВП` restoration. If the shared X2-register dataflow proves that X2
   already contains the same register value and at least one executable
-  X2-preserving command keeps the `ВП`/`.` previous-command context intact, the
+  X2-preserving command keeps the `.`/`/-/`/`ВП` previous-command context intact, the
   recall is treated as a redundant sync and can still be removed. A direct
   `В/О` return is an X2 sync boundary, so the X2 hazard stops there; the
   separate stack-lift guard can still follow direct `ПП`/`В/О` continuations to
@@ -1239,7 +1239,7 @@ The pipeline currently contains:
   `X2 = r`; if returned X is unknown, the X2 proof is cleared. `С/П`, unknown
   indirect flow, and opaque X2-affecting commands also clear the proof.
   Recall-removal passes use this to distinguish a required sync from a
-  redundant re-sync before later `.`/`ВП` restoration. The proof also carries
+  redundant re-sync before later `.`/`/-/`/`ВП` restoration. The proof also carries
   register aliases: when X and X2 are known to share a register value, a later
   `X->П s` makes `s` another proven name for the same hidden X2 value; if `s`
   is overwritten while X no longer matches X2, the alias is removed instead of
@@ -1269,7 +1269,7 @@ The pipeline currently contains:
   proof still shows `X = X2`; this treats recall as a combined
   stack-lift/value-load/X2-sync operation and turns path-sensitive conditional
   X2 sync from a guard into an active rewrite. The pass refuses the rewrite
-  before another reachable `.`/`ВП` context-sensitive restore, across opaque
+  before another reachable `.`/`/-/`/`ВП` context-sensitive restore, across opaque
   control flow, raw cells, and display-focused cells, so it does not erase a dot
   whose main job is to shape the next X2 restoration rather than to change `X`.
 - **x2-hidden-temp-restore** — replaces a direct scratch `П->X r`, or a
@@ -1304,7 +1304,7 @@ The pipeline currently contains:
   Mutating `R0..R6` indirect stores may seed this fact because the store itself
   is kept; mutating indirect recalls are still kept because removing them would
   skip selector mutation. С/П acts as a barrier because the user may overwrite X during pause;
-  context-sensitive `.`/`ВП` restoration also blocks the rewrite when the recall
+  context-sensitive `.`/`/-/`/`ВП` restoration also blocks the rewrite when the recall
   is the last X2 sync. If X2-register dataflow proves the same register is
   already synced and the immediate previous-command context is preserved, the
   recall can be removed. The same proof accepts stable indirect recalls
@@ -1321,12 +1321,12 @@ The pipeline currently contains:
   continuations through the same intersecting CFG proof; documented empty
   operators `К НОП`/`К 1`/`К 2` preserve it inside straight-line or merged CFG
   paths. Unknown indirect flow and absolute numeric direct targets are left untouched. The same
-  X2-register-aware `.`/`ВП` sync guard (stopped by direct `В/О` returns) plus
+  X2-register-aware `.`/`/-/`/`ВП` sync guard (stopped by direct `В/О` returns) plus
   downstream stack-consumer guards are applied before removing a recall.
 - **branch-target-x-reuse** — drops the first `П->X r` inside a unique branch
   target when the incoming condition just tested the same direct or
   stable-indirect recalled value, so the branch path already carries that value
-  in X, unless that recall is needed as the target-side X2 sync before `.`/`ВП`
+  in X, unless that recall is needed as the target-side X2 sync before `.`/`/-/`/`ВП`
   before a direct `В/О` return syncs X2. The shared X2-register proof can now
   show that the branch path already has the same X2 value, so only immediate
   previous-command context and real stack-lift consumers keep the target recall.

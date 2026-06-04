@@ -192,7 +192,7 @@ function plainX2Effect(op: IrOp): "affects" | "restores" | "preserves" | "unknow
 }
 
 function isContextSensitiveX2Restore(op: IrOp): boolean {
-  return op.kind === "plain" && (op.opcode === 0x0a || op.opcode === 0x0c);
+  return op.kind === "plain" && (op.opcode === 0x0a || op.opcode === 0x0b || op.opcode === 0x0c);
 }
 
 type ConditionalX2Op = Extract<IrOp, { kind: "cjump" | "loop" | "indirect-cjump" }>;

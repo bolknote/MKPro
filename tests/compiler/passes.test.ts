@@ -714,6 +714,21 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("x2-noop-restore keeps dot when it would change the next sign-change context", () => {
+    const program: IrOp[] = [
+      plain(0x0d, "Cx"),
+      store("2"),
+      plain(0x54, "К НОП"),
+      plain(0x0a, "."),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-noop-restore keeps dot when X no longer has the hidden X2 value", () => {
     const program: IrOp[] = [
       recall("1"),
@@ -1058,6 +1073,19 @@ describe("ir passes on synthetic programs", () => {
       store("1"),
       recall("1"),
       plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("last-x-reuse keeps recall that syncs X2 before sign-change restores it", () => {
+    const program: IrOp[] = [
+      store("1"),
+      recall("1"),
+      plain(0x0b, "/-/"),
       halt(),
     ];
     const result = lastXReuse.run(program, ctx);
@@ -2940,6 +2968,19 @@ describe("ir passes on synthetic programs", () => {
       store("2"),
       recall("2"),
       plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("store-recall-peephole keeps recall that syncs X2 before sign-change", () => {
+    const program: IrOp[] = [
+      store("2"),
+      recall("2"),
+      plain(0x0b, "/-/"),
       halt(),
     ];
     const result = storeRecallPeephole.run(program, ctx);

@@ -14741,7 +14741,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["store-recall-peephole"],
-    detail: "Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive . or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops or direct call/return continuations.",
+    detail: "Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive ., /-/, or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops or direct call/return continuations.",
   },
   {
     id: "stack-current-x-scheduling",
@@ -15035,7 +15035,7 @@ const optimizerCapabilities: Array<{
     source: "mk61-delta",
     requires: ["x2-register"],
     activeWhen: ["vp-fraction-restore", "vp-exponent-splice"],
-    detail: "Uses ВП where it simultaneously restores X2 and provides the needed fractional/mantissa side effect, including path-sensitive CFG proofs of X2 sync plus a preserving executable gap; also collapses redundant ВП ВП / КНОП ВП exponent-entry splices.",
+    detail: "Uses ВП where it simultaneously restores X2 and provides the needed fractional/mantissa side effect, including path-sensitive CFG proofs of X2 sync plus a preserving executable gap; also collapses redundant ВП ВП / КНОП ВП / К1 ВП / К2 ВП exponent-entry splices.",
   },
   {
     id: "x2-hidden-temp",
@@ -15203,7 +15203,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["last-x-reuse"],
-    detail: "Drops direct П->X r, and stable indirect К П->X R7..Re with a proved target, when the IR pass can prove X already holds the same value and no intervening op clobbers X (including С/П, jumps, ALU), while preserving recalls that supply the last X2 sync before . or ВП restoration, mutate an indirect selector, or lift the stack for a downstream consumer through direct call/return continuations.",
+    detail: "Drops direct П->X r, and stable indirect К П->X R7..Re with a proved target, when the IR pass can prove X already holds the same value and no intervening op clobbers X (including С/П, jumps, ALU), while preserving recalls that supply the last X2 sync before ., /-/, or ВП restoration, mutate an indirect selector, or lift the stack for a downstream consumer through direct call/return continuations.",
   },
   {
     id: "flow-x-reuse",
@@ -15211,7 +15211,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["flow-x-reuse"],
-    detail: "Uses forward CFG data-flow to drop direct or stable-indirect proved recalls when every predecessor reaches the point with the same register value already in X, including across direct jumps and both sides of conditional branches, unless the recall is the last X2 sync before . or ВП restoration, mutates an indirect selector, or lifts the stack for a downstream consumer through direct call/return continuations.",
+    detail: "Uses forward CFG data-flow to drop direct or stable-indirect proved recalls when every predecessor reaches the point with the same register value already in X, including across direct jumps and both sides of conditional branches, unless the recall is the last X2 sync before ., /-/, or ВП restoration, mutates an indirect selector, or lifts the stack for a downstream consumer through direct call/return continuations.",
   },
   {
     id: "branch-target-x-reuse",
@@ -15219,7 +15219,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["branch-target-x-reuse"],
-    detail: "Drops the first direct or stable-indirect proved recall in a unique branch target when the incoming condition already carries the tested register value in X, unless the target recall is needed as a . or ВП X2-sync boundary, mutates an indirect selector, or lifts the stack for a downstream consumer through direct call/return continuations.",
+    detail: "Drops the first direct or stable-indirect proved recall in a unique branch target when the incoming condition already carries the tested register value in X, unless the target recall is needed as a ., /-/, or ВП X2-sync boundary, mutates an indirect selector, or lifts the stack for a downstream consumer through direct call/return continuations.",
   },
   {
     id: "pre-shift-stack-lift",

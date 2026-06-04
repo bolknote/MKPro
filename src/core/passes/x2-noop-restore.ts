@@ -11,6 +11,7 @@ import {
 } from "./helpers.ts";
 
 const DOT = 0x0a;
+const SIGN_CHANGE = 0x0b;
 const VP = 0x0c;
 
 const run: IrPassFn = (ops) => {
@@ -68,7 +69,7 @@ function removingDotCanExposeX2RestoreContext(ops: readonly IrOp[], dotIndex: nu
       case "label":
         continue;
       case "plain": {
-        if (op.opcode === DOT || op.opcode === VP) return true;
+        if (op.opcode === DOT || op.opcode === SIGN_CHANGE || op.opcode === VP) return true;
         const effect = getOpcode(op.opcode).x2Effect;
         if (effect === "preserves") continue;
         return false;

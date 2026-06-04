@@ -3,6 +3,8 @@ import { emptyResult, hasRewriteBarrier, type IrPass, type IrPassFn } from "./he
 
 const VP = 0x0c;
 const KNOP = 0x54;
+const K1 = 0x55;
+const K2 = 0x56;
 
 function isPlainOpcode(op: IrOp, opcode: number): boolean {
   return op.kind === "plain" && op.opcode === opcode && !hasRewriteBarrier(op);
@@ -15,14 +17,14 @@ function isFreeStandingVp(op: IrOp): boolean {
   return !("meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0);
 }
 
-function isFreeStandingKnop(op: IrOp): boolean {
-  if (!isPlainOpcode(op, KNOP)) return false;
+function isFreeStandingEmptyOp(op: IrOp): boolean {
+  if (!isPlainOpcode(op, KNOP) && !isPlainOpcode(op, K1) && !isPlainOpcode(op, K2)) return false;
   return !("meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0);
 }
 
 // Both rewrites are proven behaviorally equivalent on the MK-61 emulator:
 //   ВП ВП  ≡ ВП   (a second exponent-entry while already in exponent mode is inert)
-//   КНОП ВП ≡ ВП  (a no-op immediately before exponent entry is removable)
+//   КНОП/К1/К2 ВП ≡ ВП  (an empty op immediately before exponent entry is removable)
 // Each collapse drops exactly one cell without changing any observable result.
 const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
@@ -35,8 +37,8 @@ const run: IrPassFn = (ops) => {
       remove.add(i);
       continue;
     }
-    // КНОП ВП -> ВП : drop the inert no-op preceding exponent entry.
-    if (isFreeStandingKnop(prev) && isFreeStandingVp(cur)) {
+    // КНОП/К1/К2 ВП -> ВП : drop the inert empty op preceding exponent entry.
+    if (isFreeStandingEmptyOp(prev) && isFreeStandingVp(cur)) {
       remove.add(i - 1);
     }
   }
@@ -47,7 +49,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "vp-exponent-splice",
-        detail: `Collapsed ${remove.size} redundant ВП/КНОП cell(s) around an exponent-entry boundary (ВП ВП -> ВП, КНОП ВП -> ВП).`,
+        detail: `Collapsed ${remove.size} redundant ВП/empty-op cell(s) around an exponent-entry boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП).`,
       },
     ],
   };
