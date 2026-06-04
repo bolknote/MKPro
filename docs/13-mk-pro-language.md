@@ -1282,7 +1282,10 @@ The pipeline currently contains:
   scientific-notation constants become `decimal:*` facts, while hex-like display
   mantissas and `FA`..`FF` super forms are tracked as shape-only `hex:*` /
   `super:*` facts until a later proof makes them dot-safe. Hexadecimal
-  concatenation itself is not inferred here yet. A closed-context `.` now
+  concatenation itself is not inferred here yet. Those structural forms also
+  seed a separate shape-only `ВП`-entry source after direct/proved recalls and
+  path-sensitive direct-conditional fallthrough X2 syncs; the jump edge keeps
+  the previous X2 state and does not invent a new source. A closed-context `.` now
   transfers the hidden X2 facts back into visible `X`; decimal facts are
   normalized for `X` during that transfer while the hidden X2 representation
   stays unchanged. If number entry
@@ -1309,12 +1312,14 @@ The pipeline currently contains:
   before another reachable `.`/`/-/`/`ВП` context-sensitive restore, across opaque
   control flow, raw cells, and display-focused cells, so it does not erase a dot
   whose main job is to shape the next X2 restoration rather than to change `X`.
-  The same X2 value dataflow now carries a narrow `ВП`-entry mantissa fact after
-  proved closed decimal syncs (`Cx`, `В↑`, `F0..FF`) through only
-  `КНОП`/`К1`/`К2`; this lets exponent-entry rewrites use hidden X2 without
+  The same X2 value dataflow now carries narrow `ВП`-entry facts after proved
+  closed decimal syncs (`Cx`, `В↑`, `F0..FF`), direct/proved recalls, and
+  path-sensitive direct-conditional fallthrough syncs through only
+  `КНОП`/`К1`/`К2`; decimal facts are mantissa values, while hex/super facts
+  stay structural-only. This lets exponent-entry rewrites use hidden X2 without
   pretending that a preceding `X->П` or arbitrary preserving command leaves the
-  same previous-command context. Proved `/-/` toggles that mantissa fact, but
-  zero is carried as a distinct `-0` shape instead of normalized away because
+  same previous-command context. Proved `/-/` toggles those facts, but zero is
+  carried as a distinct `-0` shape instead of normalized away because
   `Cx /-/ ВП` has a signed-zero mantissa on the emulator. VP-context sign
   commands after X2-preserving gaps are only collapsed when the following
   command, possibly after free-standing empty ops, starts fresh number entry;

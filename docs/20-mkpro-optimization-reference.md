@@ -684,7 +684,10 @@ Display rewrites are separated into strategy selection + body lowering.
   remembered facts on a later direct or proved indirect `П->X r`, while unknown
   indirect stores clear that register value-memory. Hex-like and super preload
   facts are tracked only as structural shapes until a separate proof makes them
-  safe to restore.
+  safe to restore. Those structural facts can still feed `ВП`-entry splice
+  proofs after direct/proved recalls or the fallthrough side of a direct
+  conditional X2 sync; the jump edge remains conservative and preserves the old
+  hidden state instead of creating a new shape source.
 - `x2-hidden-temp-restore` — turns a direct scratch `П->X r`, or a
   stable-indirect proved scratch `К П->X R7..Re`, into `.` when X2 already
   contains `r`, and either a `.` restore-gap dataflow has seen two safe

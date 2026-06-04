@@ -119,6 +119,7 @@ export interface X2ValueDataflowState {
   readonly entry: X2EntryState;
   readonly vpContext?: X2VpContextState;
   readonly vpEntryMantissa?: ReadonlySet<string> | undefined;
+  readonly vpEntryShape?: X2ShapeSet | undefined;
   readonly memory?: X2ValueMemory | undefined;
   readonly shapeMemory?: X2ShapeMemory | undefined;
 }
@@ -940,6 +941,7 @@ function cloneX2ValueDataflowState(input: X2ValueDataflowState): X2ValueDataflow
     entry: cloneX2EntryState(input.entry),
     vpContext: cloneX2VpContextState(input.vpContext),
     vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
   };
@@ -1045,6 +1047,7 @@ function transferX2ValueDataflowState(
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
         vpEntryMantissa: vpEntryMantissasFromValueFacts(value),
+        vpEntryShape: vpEntryShapesFromShapeFacts(shape),
         memory: input.memory,
         shapeMemory: input.shapeMemory,
       };
@@ -1067,6 +1070,7 @@ function transferX2ValueDataflowState(
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
         vpEntryMantissa: vpEntryMantissasFromValueFacts(values),
+        vpEntryShape: vpEntryShapesFromShapeFacts(shape),
         memory: input.memory,
         shapeMemory: input.shapeMemory,
       };
@@ -1086,6 +1090,7 @@ function transferX2ValueDataflowState(
         entry: closedX2EntryState(),
         vpContext: transferConditionalX2VpContextState(closed, effect),
         vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, effect),
+        vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, effect),
         memory: closed.memory,
         shapeMemory: closed.shapeMemory,
       };
@@ -1123,6 +1128,7 @@ function transferX2ValueDataflowState(
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
         vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, "affects"),
+        vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, "affects"),
         memory: closed.memory,
         shapeMemory: closed.shapeMemory,
       };
@@ -1424,14 +1430,16 @@ function transferPlainX2ValueState(
       : effect === "affects"
         ? new Set(x)
         : new Set<X2ValueFact>();
+    const x2Shape = transferPlainX2ShapeSet(input, xShape, effect, closedExponentShapes);
     return {
       x,
       x2,
       xShape,
-      x2Shape: transferPlainX2ShapeSet(input, xShape, effect, closedExponentShapes),
+      x2Shape,
       entry: nextX2EntryStateForPlainEffect(effect),
       vpContext: transferPlainX2VpContextState(input, effect),
       vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, effect),
+      vpEntryShape: transferPlainX2VpEntryShapeState(input, op, xShape, x2Shape, effect),
       memory: input.memory,
       shapeMemory: input.shapeMemory,
     };
@@ -1440,14 +1448,16 @@ function transferPlainX2ValueState(
   if (closedExponentShapes.size > 0) {
     const x = new Set<X2ValueFact>();
     const xShape = plainPreservesXValue(op) ? new Set(closedExponentShapes) : new Set<X2ShapeFact>();
+    const x2Shape = transferPlainX2ShapeSet(input, xShape, effect, closedExponentShapes);
     return {
       x,
       x2: new Set(),
       xShape,
-      x2Shape: transferPlainX2ShapeSet(input, xShape, effect, closedExponentShapes),
+      x2Shape,
       entry: nextX2EntryStateForPlainEffect(effect),
       vpContext: transferPlainX2VpContextState(input, effect),
       vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, new Set(), effect),
+      vpEntryShape: transferPlainX2VpEntryShapeState(input, op, xShape, x2Shape, effect),
       memory: input.memory,
       shapeMemory: input.shapeMemory,
     };
@@ -1459,14 +1469,16 @@ function transferPlainX2ValueState(
   );
   const x2 = transferPlainX2ValueSet(input, x, effect);
   const xShape = plainPreservesXValue(op) ? cloneOptionalShapeSet(input.xShape) : new Set<X2ShapeFact>();
+  const x2Shape = transferPlainX2ShapeSet(input, xShape, effect);
   return {
     x,
     x2,
     xShape,
-    x2Shape: transferPlainX2ShapeSet(input, xShape, effect),
+    x2Shape,
     entry: nextX2EntryStateForPlainEffect(effect),
     vpContext: transferPlainX2VpContextState(input, effect),
     vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, effect),
+    vpEntryShape: transferPlainX2VpEntryShapeState(input, op, xShape, x2Shape, effect),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
   };
@@ -1691,14 +1703,16 @@ function transferIndirectConditionalX2ValueState(
   const closed = closeX2ValueEntry(input);
   const x = syncUnknownSameValue(new Set(closed.x), effect);
   const xShape = cloneOptionalShapeSet(closed.xShape);
+  const x2Shape = transferConditionalX2ShapeSet(closed, xShape, effect);
   const output: X2ValueDataflowState = {
     x,
     x2: transferConditionalX2ValueSet(closed, x, effect),
     xShape,
-    x2Shape: transferConditionalX2ShapeSet(closed, xShape, effect),
+    x2Shape,
     entry: closedX2EntryState(),
     vpContext: transferConditionalX2VpContextState(closed, effect),
     vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, effect),
+    vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, effect),
     memory: closed.memory,
     shapeMemory: closed.shapeMemory,
   };
@@ -1799,6 +1813,18 @@ function transferPlainX2VpEntryMantissaState(
   return undefined;
 }
 
+function transferPlainX2VpEntryShapeState(
+  input: X2ValueDataflowState,
+  op: Extract<IrOp, { kind: "plain" }>,
+  xShape: X2ShapeSet,
+  x2Shape: X2ShapeSet,
+  effect: ReturnType<typeof plainX2Effect>,
+): X2ShapeSet | undefined {
+  if (effect === "affects") return sharedStructuralShapeFacts({ xShape, x2Shape });
+  if (effect === "preserves" && isEmptyPlainOp(op)) return cloneOptionalShapeSet(input.vpEntryShape);
+  return undefined;
+}
+
 function nextX2EntryStateForPlainEffect(effect: ReturnType<typeof plainX2Effect>): X2EntryState {
   if (effect === "restores") return { kind: "unknown" };
   return closedX2EntryState();
@@ -1847,6 +1873,13 @@ function transferConditionalX2VpEntryMantissaState(
   return effect === "affects" ? sharedNormalizedDecimalMantissas({ x, x2: x }) : undefined;
 }
 
+function transferConditionalX2VpEntryShapeState(
+  xShape: X2ShapeSet,
+  effect: ReturnType<typeof conditionalX2Effect>,
+): X2ShapeSet | undefined {
+  return effect === "affects" ? sharedStructuralShapeFacts({ xShape, x2Shape: xShape }) : undefined;
+}
+
 function joinRegisterDataflowStates(
   current: RegisterDataflowState | undefined,
   incoming: RegisterDataflowState,
@@ -1874,6 +1907,7 @@ function joinX2ValueDataflowStates(
     entry: cloneX2EntryState(incoming.entry),
     vpContext: cloneX2VpContextState(incoming.vpContext),
     vpEntryMantissa: cloneOptionalStringSet(incoming.vpEntryMantissa),
+    vpEntryShape: cloneOptionalShapeSet(incoming.vpEntryShape),
     memory: trackRegisterMemory ? cloneX2ValueMemory(incoming.memory) : undefined,
     shapeMemory: trackRegisterMemory ? cloneX2ShapeMemory(incoming.shapeMemory) : undefined,
   };
@@ -1885,6 +1919,7 @@ function joinX2ValueDataflowStates(
     entry: joinX2EntryStates(current.entry, incoming.entry),
     vpContext: joinX2VpContextStates(current.vpContext, incoming.vpContext),
     vpEntryMantissa: joinOptionalStringSets(current.vpEntryMantissa, incoming.vpEntryMantissa),
+    vpEntryShape: joinOptionalShapeSets(current.vpEntryShape, incoming.vpEntryShape),
     memory: trackRegisterMemory ? joinX2ValueMemories(current.memory, incoming.memory) : undefined,
     shapeMemory: trackRegisterMemory ? joinX2ShapeMemories(current.shapeMemory, incoming.shapeMemory) : undefined,
   };
@@ -1910,6 +1945,7 @@ function sameX2ValueDataflowState(
     sameX2EntryState(left.entry, right.entry) &&
     sameX2VpContextState(left.vpContext, right.vpContext) &&
     sameOptionalStringSet(left.vpEntryMantissa, right.vpEntryMantissa) &&
+    sameOptionalShapeSet(left.vpEntryShape, right.vpEntryShape) &&
     sameX2ValueMemory(left.memory, right.memory) &&
     sameX2ShapeMemory(left.shapeMemory, right.shapeMemory);
 }
@@ -2111,6 +2147,7 @@ function clearX2ValueMemory(input: X2ValueDataflowState): X2ValueDataflowState {
     entry: cloneX2EntryState(input.entry),
     vpContext: cloneX2VpContextState(input.vpContext),
     vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
     memory: {},
     shapeMemory: {},
   };
@@ -2336,6 +2373,12 @@ function vpEntryMantissasFromValueFacts(values: X2ValueSet): ReadonlySet<string>
     if (decimal !== null) mantissas.add(decimal[1]!);
   }
   return mantissas.size === 0 ? undefined : mantissas;
+}
+
+function vpEntryShapesFromShapeFacts(shapes: X2ShapeSet | undefined): X2ShapeSet | undefined {
+  if (shapes === undefined) return undefined;
+  const structural = structuralShapeFacts(shapes);
+  return structural.size === 0 ? undefined : structural;
 }
 
 function cloneOptionalShapeSet(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
@@ -2669,6 +2712,18 @@ function sharedNormalizedDecimalMantissas(input: Pick<X2ValueDataflowState, "x" 
   return mantissas.size === 0 ? undefined : mantissas;
 }
 
+function sharedStructuralShapeFacts(
+  input: Pick<X2ValueDataflowState, "xShape" | "x2Shape">,
+): X2ShapeSet | undefined {
+  const shapes = new Set<X2ShapeFact>();
+  for (const fact of input.x2Shape ?? []) {
+    if (input.xShape?.has(fact) !== true) continue;
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind === "mantissa" && (model.radix === "hex" || model.radix === "super")) shapes.add(fact);
+  }
+  return shapes.size === 0 ? undefined : shapes;
+}
+
 function isEmptyPlainOp(op: Extract<IrOp, { kind: "plain" }>): boolean {
   return op.opcode >= 0x54 && op.opcode <= 0x56;
 }
@@ -2747,6 +2802,7 @@ function x2ValueStateFromStructuralShapes(
     x2Shape: new Set(shapes),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
+    vpEntryShape: new Set(shapes),
     memory,
     shapeMemory,
   };
@@ -2835,6 +2891,7 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
       entry: closedX2EntryState(),
       vpContext: cloneX2VpContextState(input.vpContext),
       vpEntryMantissa: vpEntryMantissasFromValueFacts(closedExponentValues),
+      vpEntryShape: vpEntryShapesFromShapeFacts(closedExponentShapes),
       memory: input.memory,
       shapeMemory: input.shapeMemory,
     };
@@ -2847,6 +2904,7 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
     entry: closedX2EntryState(),
     vpContext: cloneX2VpContextState(input.vpContext),
     vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
   };
@@ -2991,6 +3049,7 @@ function dropMutatedSelectorX2ValueFact(
     entry: cloneX2EntryState(input.entry),
     vpContext: cloneX2VpContextState(input.vpContext),
     vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
     memory: trackRegisterMemory ? deleteX2ValueMemory(input.memory, register) : undefined,
     shapeMemory: trackRegisterMemory ? deleteX2ShapeMemory(input.shapeMemory, register) : undefined,
   };

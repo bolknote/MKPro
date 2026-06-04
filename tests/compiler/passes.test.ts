@@ -320,6 +320,10 @@ function x2VpContextStateText(state: ReturnType<typeof computeX2ValueStates>[num
   return `exponent:${[...context.mantissa].sort().join("|")}:${[...context.exponent].sort().join("|")}`;
 }
 
+function x2VpEntryShapeText(state: ReturnType<typeof computeX2ValueStates>[number]): string[] | undefined {
+  return state === undefined ? undefined : x2ShapeStateText(state.vpEntryShape);
+}
+
 describe("ir passes on synthetic programs", () => {
   it("x2 register dataflow tracks register-valued X2 through preserving operations", () => {
     const program: IrOp[] = [
@@ -674,6 +678,20 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[5]?.x2)).toEqual([]);
     expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex:-8.70Е2-6С:mantissa"]);
     expect(x2ShapeStateText(states[5]?.x2Shape)).toEqual(["hex:-8.70Е2-6С:mantissa"]);
+  });
+
+  it("x2 value dataflow tracks structural VP-entry shape context", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 8.70Е2-6С"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "К НОП"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2VpEntryShapeText(states[1])).toEqual(["hex:8.70Е2-6С:mantissa"]);
+    expect(x2VpEntryShapeText(states[2])).toEqual(["hex:-8.70Е2-6С:mantissa"]);
+    expect(x2VpEntryShapeText(states[3])).toEqual(["hex:-8.70Е2-6С:mantissa"]);
   });
 
   it("x2 shape algebra classifies decimal, exponent, hex, and super facts", () => {
@@ -1143,6 +1161,23 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:2:normalized"]);
     expect(x2EntryStateText(states[4])).toBe("exponent:2:");
     expect(x2EntryStateText(states[5])).toBe("exponent:2:3");
+  });
+
+  it("x2 value dataflow creates structural VP-entry shape on conditional fallthrough X2 sync", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 8.70Е2-6С"),
+      store("1"),
+      cjump("done"),
+      plain(0x54, "К НОП"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2VpEntryShapeText(states[2])).toEqual([]);
+    expect(x2VpEntryShapeText(states[3])).toEqual(["hex:8.70Е2-6С:mantissa"]);
+    expect(x2VpEntryShapeText(states[5])).toEqual([]);
   });
 
   it("x2 value dataflow keeps indirect conditional fallthrough ВП structural-only", () => {
@@ -6131,6 +6166,32 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes a structural sign pair before ВП after conditional fallthrough X2 sync", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 8.70Е2-6С"),
+      store("1"),
+      cjump("done"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      recall("2", "preload const 8.70Е2-6С"),
+      store("1"),
+      cjump("done"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
   it("vp-splice does not infer closed decimal ВП shape through a preceding store", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
@@ -6542,6 +6603,24 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual([
       recall("2", "preload const 8.70Е2-6С"),
       shapedSign,
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes a structural sign pair before proved structural ВП entry", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 8.70Е2-6С"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      recall("2", "preload const 8.70Е2-6С"),
+      plain(0x0c, "ВП"),
       halt(),
     ]);
   });
