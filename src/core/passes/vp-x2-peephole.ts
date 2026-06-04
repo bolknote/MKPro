@@ -1,4 +1,5 @@
 import type { IrOp } from "../types.ts";
+import { getOpcode } from "../opcodes.ts";
 import { hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
 
 function x2BoundaryText(op: IrOp): string {
@@ -16,6 +17,41 @@ function isVpX2Boundary(op: IrOp): boolean {
     /display|x2|вп/u.test(x2BoundaryText(op));
 }
 
+function isX2Sync(op: IrOp): boolean {
+  if (hasRewriteBarrier(op)) return false;
+  if (op.kind === "recall" || op.kind === "indirect-recall") return true;
+  if (op.kind !== "plain") return false;
+  return getOpcode(op.opcode).x2Effect === "affects";
+}
+
+function isLinearX2PreservingExecutable(op: IrOp): boolean {
+  if (hasRewriteBarrier(op)) return false;
+  switch (op.kind) {
+    case "store":
+    case "indirect-store":
+    case "orphan-address":
+      return true;
+    case "plain":
+      return getOpcode(op.opcode).x2Effect === "preserves";
+    default:
+      return false;
+  }
+}
+
+function isProvedVpX2Boundary(ops: readonly IrOp[], index: number): boolean {
+  const op = ops[index];
+  if (op === undefined || op.kind !== "plain" || op.opcode !== 0x0c || hasRewriteBarrier(op)) return false;
+  let sawPreservingGap = false;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const previous = ops[cursor]!;
+    if (previous.kind === "label") continue;
+    if (isX2Sync(previous)) return sawPreservingGap;
+    if (!isLinearX2PreservingExecutable(previous)) return false;
+    sawPreservingGap = true;
+  }
+  return false;
+}
+
 function isFractionAfterX2Boundary(op: IrOp): boolean {
   if (hasRewriteBarrier(op)) return false;
   return op.kind === "plain" &&
@@ -26,7 +62,10 @@ function isFractionAfterX2Boundary(op: IrOp): boolean {
 const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
   for (let i = 1; i < ops.length; i += 1) {
-    if (isVpX2Boundary(ops[i - 1]!) && isFractionAfterX2Boundary(ops[i]!)) {
+    if (
+      (isVpX2Boundary(ops[i - 1]!) || isProvedVpX2Boundary(ops, i - 1)) &&
+      isFractionAfterX2Boundary(ops[i]!)
+    ) {
       remove.add(i);
     }
   }

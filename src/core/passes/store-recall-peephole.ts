@@ -1,6 +1,8 @@
 import type { IrOp } from "../types.ts";
 import {
+  computeX2RegisterStates,
   hasRewriteBarrier,
+  recallAlreadySyncedInX2,
   removingRecallCanExposeStackLift,
   removingRecallCanExposeX2Restore,
   type IrPass,
@@ -10,10 +12,14 @@ import {
 
 const run: IrPassFn = (ops) => {
   const result: IrOp[] = [];
+  const x2States = computeX2RegisterStates(ops);
   let applied = 0;
   for (let i = 0; i < ops.length; i += 1) {
     const current = ops[i]!;
     const next = ops[i + 1];
+    const redundantSyncRegister = next === undefined
+      ? undefined
+      : recallAlreadySyncedInX2(next, x2States[i + 1]);
     if (
       current.kind === "store" &&
       next?.kind === "recall" &&
@@ -21,7 +27,7 @@ const run: IrPassFn = (ops) => {
       !hasRewriteBarrier(current) &&
       !hasRewriteBarrier(next) &&
       !removingRecallCanExposeStackLift(ops, i + 1) &&
-      !removingRecallCanExposeX2Restore(ops, i + 1)
+      !removingRecallCanExposeX2Restore(ops, i + 1, { redundantSyncRegister })
     ) {
       result.push(current);
       applied += 1;

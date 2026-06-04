@@ -24,6 +24,7 @@ import { storeRecallPeephole } from "../../src/core/passes/store-recall-peephole
 import { tailBranchInversion } from "../../src/core/passes/tail-branch-inversion.ts";
 import { tailCallLowering } from "../../src/core/passes/tail-call.ts";
 import { vpX2Peephole } from "../../src/core/passes/vp-x2-peephole.ts";
+import { computeX2RegisterStates } from "../../src/core/passes/helpers.ts";
 import type { IrOp, RegisterName } from "../../src/core/types.ts";
 
 const noopOptions = { delivery: "manual" as const, budget: 105, analysis: false };
@@ -151,6 +152,15 @@ function indirectRecall(register: RegisterName): IrOp {
   };
 }
 
+function knownTargetIndirectRecall(register: RegisterName, target: RegisterName): IrOp {
+  return {
+    kind: "indirect-recall",
+    register,
+    opcode: 0xd0 + REGISTER_INDEX[register],
+    meta: { mnemonic: `К П->X ${register}`, comment: `indirect-memory-target=${target}` },
+  };
+}
+
 function indirectStore(register: RegisterName): IrOp {
   return {
     kind: "indirect-store",
@@ -212,7 +222,64 @@ function machineCellCount(ops: readonly IrOp[]): number {
   return lowerIrToMachine(ops).filter((item) => item.kind !== "label").length;
 }
 
+function registerStateText(state: ReadonlySet<RegisterName> | undefined): string[] | undefined {
+  return state === undefined ? undefined : [...state].sort();
+}
+
 describe("ir passes on synthetic programs", () => {
+  it("x2 register dataflow tracks register-valued X2 through preserving operations", () => {
+    const program: IrOp[] = [
+      recall("2"),
+      plain(0x20, "F pi"),
+      store("3"),
+      knownTargetIndirectRecall("7", "5"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+
+    const states = computeX2RegisterStates(program);
+
+    expect(registerStateText(states[1])).toEqual(["2"]);
+    expect(registerStateText(states[2])).toEqual(["2"]);
+    expect(registerStateText(states[3])).toEqual(["2"]);
+    expect(registerStateText(states[4])).toEqual(["5"]);
+    expect(registerStateText(states[5])).toEqual([]);
+  });
+
+  it("x2 register dataflow creates aliases when storing a value already shared by X and X2", () => {
+    const program: IrOp[] = [
+      recall("2"),
+      store("3"),
+      plain(0x20, "F pi"),
+      halt(),
+    ];
+
+    const states = computeX2RegisterStates(program);
+
+    expect(registerStateText(states[1])).toEqual(["2"]);
+    expect(registerStateText(states[2])).toEqual(["2", "3"]);
+    expect(registerStateText(states[3])).toEqual(["2", "3"]);
+  });
+
+  it("x2 register dataflow is path-sensitive for direct conditionals", () => {
+    const program: IrOp[] = [
+      recall("2"),
+      cjump("jumped"),
+      plain(0x20, "F pi"),
+      jump("done"),
+      label("jumped"),
+      plain(0x20, "F pi"),
+      label("done"),
+      halt(),
+    ];
+
+    const states = computeX2RegisterStates(program);
+
+    expect(registerStateText(states[2])).toEqual(["2"]);
+    expect(registerStateText(states[4])).toEqual(["2"]);
+    expect(registerStateText(states[5])).toEqual(["2"]);
+  });
+
   it("dead-store-elimination removes a store overwritten before any read", () => {
     const program: IrOp[] = [
       store("1"),
@@ -313,6 +380,62 @@ describe("ir passes on synthetic programs", () => {
 
     expect(result.applied).toBe(0);
     expect(result.ops).toEqual(program);
+  });
+
+  it("last-x-reuse drops redundant X2 sync when X2 already holds the same register", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("1"),
+      recall("1"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      store("1"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
+  });
+
+  it("last-x-reuse keeps redundant X2 sync before immediate ВП context", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("1"),
+      recall("1"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("last-x-reuse drops recall when X2 holds an alias written from the same X value", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      recall("2"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      store("2"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
   });
 
   it("last-x-reuse drops recall when a direct return syncs X2 before ВП", () => {
@@ -430,6 +553,66 @@ describe("ir passes on synthetic programs", () => {
 
     expect(result.applied).toBe(0);
     expect(result.ops).toEqual(program);
+  });
+
+  it("flow-x-reuse drops redundant X2 sync before a preserving op and ВП", () => {
+    const program: IrOp[] = [
+      recall("4"),
+      store("5"),
+      recall("4"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("4"),
+      store("5"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
+  });
+
+  it("flow-x-reuse keeps redundant X2 sync before immediate ВП context", () => {
+    const program: IrOp[] = [
+      recall("4"),
+      store("5"),
+      recall("4"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("flow-x-reuse uses a direct conditional fallthrough X2 sync", () => {
+    const program: IrOp[] = [
+      recall("4"),
+      cjump("skip"),
+      recall("4"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("skip"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("4"),
+      cjump("skip"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("skip"),
+      halt(),
+    ]);
   });
 
   it("flow-x-reuse drops recall when a direct return syncs X2 before ВП", () => {
@@ -590,6 +773,33 @@ describe("ir passes on synthetic programs", () => {
 
     expect(result.applied).toBe(0);
     expect(result.ops).toEqual(program);
+  });
+
+  it("branch-target-x-reuse drops redundant target X2 sync before preserving op and ВП", () => {
+    const program: IrOp[] = [
+      recall("6"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      recall("6"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("6"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      label("end"),
+      halt(),
+    ]);
   });
 
   it("branch-target-x-reuse keeps recall that lifts the stack for a target binary op", () => {
@@ -1513,6 +1723,41 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("store-recall-peephole drops redundant X2 sync through preserving ops before ВП", () => {
+    const program: IrOp[] = [
+      recall("2"),
+      store("2"),
+      recall("2"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("2"),
+      store("2"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
+  });
+
+  it("store-recall-peephole keeps redundant X2 sync before immediate ВП context", () => {
+    const program: IrOp[] = [
+      recall("2"),
+      store("2"),
+      recall("2"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("store-recall-peephole drops recall before fallthrough ВП after a direct conditional X2 sync", () => {
     const program: IrOp[] = [
       store("2"),
@@ -2101,6 +2346,51 @@ describe("ir passes on synthetic programs", () => {
     expect(result.applied).toBe(1);
     expect(result.optimizations[0]?.detail).toContain("ВП/X2 boundary");
     expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x35)).toBe(false);
+  });
+
+  it("vp-x2-peephole proves an ordinary ВП/X2 boundary from opcode context", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x20, "F pi"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", comment: "frac after restore" } },
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      plain(0x20, "F pi"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      halt(),
+    ]);
+  });
+
+  it("vp-x2-peephole keeps fraction after immediate ВП context", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", comment: "frac after restore" } },
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("vp-x2-peephole keeps fraction after ВП without a proved X2 source", () => {
+    const program: IrOp[] = [
+      plain(0x20, "F pi"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", comment: "frac after restore" } },
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("vp-x2-peephole refuses ordinary exponent ВП boundaries", () => {

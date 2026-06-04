@@ -1,9 +1,11 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import {
   cellsPerOp,
+  computeX2RegisterStates,
   emptyResult,
   hasRewriteBarrier,
   knownIndirectMemoryTarget,
+  recallAlreadySyncedInX2,
   removingRecallCanExposeStackLift,
   removingRecallCanExposeX2Restore,
   type IrPass,
@@ -22,13 +24,15 @@ const run: IrPassFn = (ops) => {
 
   const graph = buildGraph(ops);
   const inStates = computeXRegisterStates(ops, graph);
+  const x2States = computeX2RegisterStates(ops);
   const remove = new Set<number>();
 
   for (let index = 0; index < ops.length; index += 1) {
     const op = ops[index]!;
     if (op.kind !== "recall" || hasRewriteBarrier(op)) continue;
     if (removingRecallCanExposeStackLift(ops, index)) continue;
-    if (removingRecallCanExposeX2Restore(ops, index)) continue;
+    const redundantSyncRegister = recallAlreadySyncedInX2(op, x2States[index]);
+    if (removingRecallCanExposeX2Restore(ops, index, { redundantSyncRegister })) continue;
     if (inStates[index]?.has(op.register) === true) remove.add(index);
   }
 

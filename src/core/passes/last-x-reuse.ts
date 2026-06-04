@@ -1,6 +1,8 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import {
+  computeX2RegisterStates,
   hasRewriteBarrier,
+  recallAlreadySyncedInX2,
   removingRecallCanExposeStackLift,
   removingRecallCanExposeX2Restore,
   type IrPass,
@@ -39,6 +41,7 @@ function clobbersX(op: IrOp): boolean {
 
 const run: IrPassFn = (ops) => {
   const removed = new Set<number>();
+  const x2States = computeX2RegisterStates(ops);
   let xHolds: RegisterName | undefined;
   for (let i = 0; i < ops.length; i += 1) {
     const op = ops[i]!;
@@ -56,7 +59,9 @@ const run: IrPassFn = (ops) => {
       !hasRewriteBarrier(op) &&
       xHolds === op.register &&
       !removingRecallCanExposeStackLift(ops, i) &&
-      !removingRecallCanExposeX2Restore(ops, i)
+      !removingRecallCanExposeX2Restore(ops, i, {
+        redundantSyncRegister: recallAlreadySyncedInX2(op, x2States[i]),
+      })
     ) {
       removed.add(i);
       continue;

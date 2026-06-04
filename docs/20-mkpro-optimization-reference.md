@@ -580,7 +580,10 @@ Display rewrites are separated into strategy selection + body lowering.
 - `last-x-reuse` — avoids `P->X` when X already holds the needed value and the
   recall is not an X2-sync boundary for `.`/`ВП` before the next X2-affecting
   op, including direct `В/О` returns, and its stack lift cannot reach a
-  downstream stack consumer through direct call returns.
+  downstream stack consumer through direct call returns. The sync guard is
+  X2-register-aware: if dataflow proves X2 already contains the same register
+  value and the removed recall is not the immediate previous-command context
+  consumed by `.`/`ВП`, the recall can be removed as a redundant re-sync.
 - `known-zero-reuse` — reuses a known zero source instead of reloading.
 - `inequality-zero-false-branch` — feeds `known-zero-reuse` after a false
   `!= 0` branch, avoiding a fresh zero literal or `Cx`.
@@ -602,7 +605,16 @@ Display rewrites are separated into strategy selection + body lowering.
   active mask can stay in Y and the collection is restored on the target branch
   without adding a dedicated scratch register. Direct conditional opcodes expose
   a path-sensitive X2 profile to these proofs: fallthrough syncs X2, while the
-  jump edge preserves the previous hidden value.
+  jump edge preserves the previous hidden value. When X itself is proved to
+  equal a register on the sync edge, the X2 proof records the same register.
+- `x2-register-dataflow` — tracks definite states of the form “X2 currently
+  equals register `r`” through X2-preserving code, stores, known indirect memory
+  recalls, direct calls into the proved graph, and branch-specific direct
+  conditional effects. Returns, stops, opaque X2-affecting ops, and unknown
+  indirect flow clear the proof. Recall-removal passes use it to remove
+  redundant `П->X r` re-syncs while still preserving immediate `ВП`/`.` context.
+  When X and X2 are proved to share a register value, `X->П s` extends the proof
+  with `s` as another alias for that hidden value.
 - `stack-resident-temps` — keeps up to four consecutive single-use temps on the stack, using `В↑` lifts and restore sequences (`X↔Y` / `F reverse`) before direct stack-based consumers.
 - `stack-resident-indexed-temp` — keeps a single-use temp in X across one indexed compound store `cells[i] op= temp` when the temp is consumed exactly once and selector/index setup is not temp-dependent.
 - `stack-resident-control-flow` — marks stack-temp fusion that crosses stack-preserving `if` / `while` / `dispatch` regions; these regions cannot clobber live temps and the lowering rebuilds stack state if the region requires it.
@@ -610,7 +622,10 @@ Display rewrites are separated into strategy selection + body lowering.
 - `store-recall-peephole` — collapses `store` then immediate `recall` of same
   cell unless the recall supplies the last X2 sync before `.`/`ВП` before the
   next X2-affecting op, including direct `В/О` returns, or lifts the stack for
-  a downstream consumer through direct call returns.
+  a downstream consumer through direct call returns. If X2-register dataflow
+  proves that X2 already contains the same register and a preserving command
+  remains before the restore, the recall is no longer considered the required
+  sync.
 - `dead-store-elimination` — full pass removing pointless stores while keeping
   stores that are observable through number-entry or the `ВП`/X2 restore
   context.
@@ -674,7 +689,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     shrinking would move their real target.
 22. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` when one or more cells are removed.
 23. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/`КНОП` redundancy optimization pass removes cells.
-24. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a proved `ВП`/X2 marker, display or ordinary, and reports `vp-fraction-restore` when one or more restores are removed.
+24. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a proved `ВП`/X2 marker, display or ordinary, and reports `vp-fraction-restore` when one or more restores are removed. A marker is not required when the local opcode context proves an ordinary X2 restoration boundary: an X2 sync, at least one linear X2-preserving executable command, then `ВП`.
 25. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
 26. `duplicate-failure-tail-merge` — removes duplicated failure tails by redirecting the first tail to the second; this covers both `(label -> 0 -> pause)` and `(label -> pause -> same terminal flow)` forms.
 27. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.
