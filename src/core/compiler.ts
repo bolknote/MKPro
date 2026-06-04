@@ -14793,7 +14793,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["last-x-reuse"],
-    detail: "Drops П->X r when the IR pass can prove X already holds the value just stored to r and no intervening op clobbers X (including С/П, jumps, ALU), while preserving recalls that supply the last X2 sync before . or ВП restoration or a stack lift that can reach a downstream consumer through direct call/return continuations.",
+    detail: "Drops direct П->X r, and stable indirect К П->X R7..Re with a proved target, when the IR pass can prove X already holds the same value and no intervening op clobbers X (including С/П, jumps, ALU), while preserving recalls that supply the last X2 sync before . or ВП restoration, mutate an indirect selector, or lift the stack for a downstream consumer through direct call/return continuations.",
   },
   {
     id: "flow-x-reuse",
@@ -14801,7 +14801,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["flow-x-reuse"],
-    detail: "Uses forward CFG data-flow to drop П->X r when every predecessor reaches the point with the same register value already in X, including across direct jumps and both sides of conditional branches, unless the recall is the last X2 sync before . or ВП restoration or a stack lift that can reach a downstream consumer through direct call/return continuations.",
+    detail: "Uses forward CFG data-flow to drop direct or stable-indirect proved recalls when every predecessor reaches the point with the same register value already in X, including across direct jumps and both sides of conditional branches, unless the recall is the last X2 sync before . or ВП restoration, mutates an indirect selector, or lifts the stack for a downstream consumer through direct call/return continuations.",
   },
   {
     id: "branch-target-x-reuse",
@@ -14809,7 +14809,15 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["branch-target-x-reuse"],
-    detail: "Drops the first recall in a unique branch target when the incoming condition already carries the tested register value in X, unless the target recall is needed as a . or ВП X2-sync boundary or a stack lift that can reach a downstream consumer through direct call/return continuations.",
+    detail: "Drops the first direct or stable-indirect proved recall in a unique branch target when the incoming condition already carries the tested register value in X, unless the target recall is needed as a . or ВП X2-sync boundary, mutates an indirect selector, or lifts the stack for a downstream consumer through direct call/return continuations.",
+  },
+  {
+    id: "pre-shift-stack-lift",
+    category: "stack",
+    source: "documented",
+    requires: [],
+    activeWhen: ["pre-shift-stack-lift"],
+    detail: "Removes В↑ immediately before a proved stack-shifting producer (direct/indirect П->X, F pi, or another В↑) when that command already supplies old X in Y and stack-difference analysis proves the extra deeper stack cell cannot be observed.",
   },
   {
     id: "constant-folding",

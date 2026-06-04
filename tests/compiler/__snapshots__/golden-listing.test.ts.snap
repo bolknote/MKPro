@@ -1343,29 +1343,29 @@ sharedBitMaskHelperCalls+hoistSharedHelpers: steps=89 | 53 04 6E 50 64 6C 12 60 
 `;
 
 exports[`golden listing > lowering variants are stable for examples/rambo-iii.mkpro 1`] = `
-"primary: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-aggressiveTerminalDirect: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-invertBranchOrder: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-aggressiveTerminalDirect+invertBranchOrder: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-hoistSharedHelpers: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-hoistSharedHelpers+hoistProcs: steps=117 | 51 78 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 32 DC 53 70 BC 51 36 DD 53 70 BD DD 53 70 BD DC 53 70 BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52 6A 40 60 50 3B 01 03 12 03 13 34 5E 92 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 02 05 53 02 06 53 02 5D 80 6E 50
-canonicalizeIfChains: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-freeResidualDispatchScratch: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-aliasXReuse: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-coalesceCopies: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-freeResidualDispatchScratch+canonicalizeIfChains: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-repeatedUnaryUpdateArgTemp: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-xParamValueFunction: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-xParamValueFunction+repeatedUnaryUpdateArgTemp: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-xParamValueFunction+repeatedUnaryUpdateArgTemp+coalesceCopies: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-shareRandomCell: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-shareRandomCell+hoistSharedHelpers: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-tailBranchInversion: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-guardedPrologueGadgets: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: steps=117 | 51 78 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 32 DC 53 70 BC 51 36 DD 53 70 BD DD 53 70 BD DC 53 70 BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52 6A 40 60 50 3B 01 03 12 03 13 34 5E 92 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 02 05 53 02 06 53 02 5D 80 6E 50
-sharedBitMaskHelperCalls: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52
-sharedBitMaskHelperCalls+hoistSharedHelpers: steps=115 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 0E 68 12 04 13 34 11 52"
+"primary: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+aggressiveTerminalDirect: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+invertBranchOrder: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+aggressiveTerminalDirect+invertBranchOrder: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+hoistSharedHelpers: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+hoistSharedHelpers+hoistProcs: steps=116 | 51 77 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 32 DC 53 70 BC 51 36 DD 53 70 BD DD 53 70 BD DC 53 70 BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52 6A 40 60 50 3B 01 03 12 03 13 34 5E 91 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 02 05 53 02 06 53 02 5D 79 6E 50
+canonicalizeIfChains: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+freeResidualDispatchScratch: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+aliasXReuse: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+coalesceCopies: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+freeResidualDispatchScratch+canonicalizeIfChains: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+repeatedUnaryUpdateArgTemp: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+xParamValueFunction: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+xParamValueFunction+repeatedUnaryUpdateArgTemp: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+xParamValueFunction+repeatedUnaryUpdateArgTemp+coalesceCopies: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+shareRandomCell: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+shareRandomCell+hoistSharedHelpers: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+tailBranchInversion: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+guardedPrologueGadgets: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: steps=116 | 51 77 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 32 DC 53 70 BC 51 36 DD 53 70 BD DD 53 70 BD DC 53 70 BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52 6A 40 60 50 3B 01 03 12 03 13 34 5E 91 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 02 05 53 02 06 53 02 5D 79 6E 50
+sharedBitMaskHelperCalls: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52
+sharedBitMaskHelperCalls+hoistSharedHelpers: steps=114 | 6A 40 60 50 3B 01 03 12 03 13 34 5E 14 07 4D 3B 48 04 15 12 34 49 DD 69 10 BD 04 53 39 05 53 39 06 53 39 5D 02 6E 50 4D 03 11 4C 50 34 49 67 69 11 47 21 DD 69 10 BD 21 68 0E 3B 48 11 5C 69 DC 53 6B BC 51 73 DD 53 6B BD DD 53 6B BD DC 53 6B BC 35 68 0E 3B 48 10 01 10 02 00 12 DD DC 13 13 34 6B 13 11 17 0F DC 34 10 BC 52 68 12 04 13 34 11 52"
 `;
 
 exports[`golden listing > lowering variants are stable for examples/sea-battle.mkpro 1`] = `
@@ -1578,7 +1578,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: bolknote_99_bottles; span=53, entries=53, gaps=none, compiled=53, delta=0, parity=equal
 Machine: mk61
-Optimizer rules: automatic=yes; active=4, considered=0, candidates=55, planned=0
+Optimizer rules: automatic=yes; active=4, considered=0, candidates=56, planned=0
 Budget: official=53, extra=0, physical=53
 Intent IR: lowered=yes, v2=yes; intent=9, effects=53, cells=53
 
@@ -1883,7 +1883,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: lordbss_pmk210; span=105, entries=105, gaps=none, compiled=75, delta=-30, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=12, considered=2, candidates=45, planned=0
+Optimizer rules: automatic=yes; active=12, considered=2, candidates=46, planned=0
 Budget: official=75, extra=0, physical=75
 Intent IR: lowered=yes, v2=yes; intent=94, effects=75, cells=75
 
@@ -2060,7 +2060,7 @@ Steps: 8/999999
 Delivery: hex
 Optimizer: exact maximum
 Machine: mk61
-Optimizer rules: automatic=yes; active=4, considered=0, candidates=55, planned=0
+Optimizer rules: automatic=yes; active=4, considered=0, candidates=56, planned=0
 Budget: official=8, extra=0, physical=8
 Intent IR: lowered=yes, v2=yes; intent=16, effects=8, cells=8
 
@@ -2227,7 +2227,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: kei_treasure_cave; span=105, entries=105, gaps=none, compiled=47, delta=-58, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=8, considered=2, candidates=49, planned=0
+Optimizer rules: automatic=yes; active=8, considered=2, candidates=50, planned=0
 Budget: official=47, extra=0, physical=47
 Intent IR: lowered=yes, v2=yes; intent=60, effects=47, cells=47
 
@@ -2464,7 +2464,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: monatkodenis_clock; span=63, entries=63, gaps=none, compiled=43, delta=-20, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=10, considered=1, candidates=48, planned=0
+Optimizer rules: automatic=yes; active=10, considered=1, candidates=49, planned=0
 Budget: official=43, extra=0, physical=43
 Intent IR: lowered=yes, v2=yes; intent=42, effects=43, cells=43
 
@@ -2714,7 +2714,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_dangerous_loading; span=103, entries=101, gaps=34,50, compiled=84, delta=-19, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=11, considered=2, candidates=46, planned=0
+Optimizer rules: automatic=yes; active=11, considered=2, candidates=47, planned=0
 Budget: official=84, extra=0, physical=84
 Intent IR: lowered=yes, v2=yes; intent=91, effects=84, cells=84
 
@@ -2990,7 +2990,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: lordbss_pmk164; span=105, entries=105, gaps=none, compiled=82, delta=-23, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=14, considered=2, candidates=43, planned=0
+Optimizer rules: automatic=yes; active=14, considered=2, candidates=44, planned=0
 Budget: official=82, extra=0, physical=82
 Intent IR: lowered=yes, v2=yes; intent=97, effects=82, cells=82
 
@@ -3233,7 +3233,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_e_94_digits; span=64, entries=61, gaps=29,32,35, compiled=64, delta=0, parity=equal
 Machine: mk61
-Optimizer rules: automatic=yes; active=3, considered=0, candidates=56, planned=0
+Optimizer rules: automatic=yes; active=3, considered=0, candidates=57, planned=0
 Budget: official=64, extra=0, physical=64
 Intent IR: lowered=no, v2=yes; intent=9, effects=64, cells=64
 
@@ -3493,7 +3493,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_fox_hunt_100; span=105, entries=101, gaps=10,88,94,98, compiled=103, delta=-2, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=8, considered=0, candidates=51, planned=0
+Optimizer rules: automatic=yes; active=8, considered=0, candidates=52, planned=0
 Budget: official=103, extra=0, physical=103
 Intent IR: lowered=yes, v2=yes; intent=47, effects=103, cells=103
 
@@ -3831,7 +3831,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: monatkodenis_fox_hunt_mk61; span=92, entries=92, gaps=none, compiled=65, delta=-27, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=7, considered=0, candidates=52, planned=0
+Optimizer rules: automatic=yes; active=7, considered=0, candidates=53, planned=0
 Budget: official=65, extra=0, physical=65
 Intent IR: lowered=yes, v2=yes; intent=40, effects=65, cells=65
 
@@ -3988,7 +3988,7 @@ Steps: 28/999999
 Delivery: hex
 Optimizer: exact maximum
 Machine: mk61
-Optimizer rules: automatic=yes; active=5, considered=0, candidates=54, planned=0
+Optimizer rules: automatic=yes; active=5, considered=0, candidates=55, planned=0
 Budget: official=28, extra=0, physical=28
 Intent IR: lowered=yes, v2=yes; intent=27, effects=28, cells=28
 
@@ -4288,7 +4288,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_game_100_pig; span=103, entries=101, gaps=24,29, compiled=103, delta=0, parity=equal
 Machine: mk61
-Optimizer rules: automatic=yes; active=14, considered=1, candidates=44, planned=0
+Optimizer rules: automatic=yes; active=14, considered=1, candidates=45, planned=0
 Budget: official=103, extra=0, physical=103
 Intent IR: lowered=yes, v2=yes; intent=116, effects=103, cells=103
 
@@ -4742,7 +4742,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: lordbss_pmk198; span=105, entries=105, gaps=none, compiled=104, delta=-1, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=11, considered=0, candidates=48, planned=0
+Optimizer rules: automatic=yes; active=11, considered=0, candidates=49, planned=0
 Budget: official=104, extra=0, physical=104
 Intent IR: lowered=yes, v2=yes; intent=95, effects=104, cells=104
 
@@ -4946,7 +4946,7 @@ Steps: 23/999999
 Delivery: hex
 Optimizer: exact maximum
 Machine: mk61
-Optimizer rules: automatic=yes; active=8, considered=2, candidates=49, planned=0
+Optimizer rules: automatic=yes; active=8, considered=2, candidates=50, planned=0
 Budget: official=23, extra=0, physical=23
 Intent IR: lowered=yes, v2=yes; intent=34, effects=23, cells=23
 
@@ -5297,7 +5297,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: lordbss_pmk151; span=104, entries=104, gaps=none, compiled=99, delta=-5, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=11, considered=0, candidates=48, planned=0
+Optimizer rules: automatic=yes; active=11, considered=0, candidates=49, planned=0
 Budget: official=99, extra=0, physical=99
 Intent IR: lowered=yes, v2=yes; intent=97, effects=99, cells=99
 
@@ -5726,7 +5726,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_labyrinth777; span=105, entries=104, gaps=35, compiled=105, delta=0, parity=equal
 Machine: mk61
-Optimizer rules: automatic=yes; active=17, considered=1, candidates=41, planned=0
+Optimizer rules: automatic=yes; active=17, considered=1, candidates=42, planned=0
 Budget: official=105, extra=0, physical=105
 Intent IR: lowered=yes, v2=yes; intent=101, effects=105, cells=105
 
@@ -6006,7 +6006,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: lordbss_pmk38; span=58, entries=58, gaps=none, compiled=47, delta=-11, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=7, considered=2, candidates=50, planned=0
+Optimizer rules: automatic=yes; active=7, considered=2, candidates=51, planned=0
 Budget: official=47, extra=0, physical=47
 Intent IR: lowered=yes, v2=yes; intent=49, effects=47, cells=47
 
@@ -6265,7 +6265,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: lordbss_pmk39; span=104, entries=104, gaps=none, compiled=83, delta=-21, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=9, considered=0, candidates=50, planned=0
+Optimizer rules: automatic=yes; active=9, considered=0, candidates=51, planned=0
 Budget: official=83, extra=0, physical=83
 Intent IR: lowered=yes, v2=yes; intent=34, effects=83, cells=83
 
@@ -6533,7 +6533,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_minesweeper_9x9; span=97, entries=95, gaps=76,78, compiled=81, delta=-16, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=11, considered=0, candidates=48, planned=0
+Optimizer rules: automatic=yes; active=11, considered=0, candidates=49, planned=0
 Budget: official=81, extra=0, physical=81
 Intent IR: lowered=yes, v2=yes; intent=34, effects=81, cells=81
 
@@ -7024,7 +7024,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: kei_treasure_cave; span=105, entries=105, gaps=none, compiled=134, delta=29, parity=larger
 Machine: mk61
-Optimizer rules: automatic=yes; active=16, considered=1, candidates=42, planned=0
+Optimizer rules: automatic=yes; active=16, considered=1, candidates=43, planned=0
 Budget: official=134, extra=0, physical=134
 Intent IR: lowered=yes, v2=yes; intent=151, effects=134, cells=134
 
@@ -7508,7 +7508,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_demo; span=105, entries=105, gaps=none, compiled=118, delta=13, parity=larger
 Machine: mk61
-Optimizer rules: automatic=yes; active=18, considered=1, candidates=40, planned=0
+Optimizer rules: automatic=yes; active=18, considered=1, candidates=41, planned=0
 Budget: official=118, extra=0, physical=118
 Intent IR: lowered=yes, v2=yes; intent=119, effects=118, cells=118
 
@@ -7979,7 +7979,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_tic_tac_toe_4x4; span=105, entries=105, gaps=none, compiled=240, delta=135, parity=larger
 Machine: mk61
-Optimizer rules: automatic=yes; active=17, considered=0, candidates=42, planned=0
+Optimizer rules: automatic=yes; active=17, considered=0, candidates=43, planned=0
 Budget: official=240, extra=0, physical=240
 Intent IR: lowered=yes, v2=yes; intent=158, effects=240, cells=240
 
@@ -8366,7 +8366,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_raja_yoga; span=98, entries=96, gaps=33,34, compiled=87, delta=-11, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=10, considered=1, candidates=48, planned=0
+Optimizer rules: automatic=yes; active=10, considered=1, candidates=49, planned=0
 Budget: official=87, extra=0, physical=87
 Intent IR: lowered=yes, v2=yes; intent=83, effects=87, cells=87
 
@@ -8645,14 +8645,13 @@ Setup Block:
    94 | 10    | +                       | fractional decrement rebuild value
    95 | BC    | К X→П c                 | indexed set cells
    96 | 52    | В/О                     | implicit return from proc
-   97 | 0E    | В↑                      | x-param decay keep base
-   98 | 68    | П→X 8                   | recall random_state
-   99 | 12    | ×                       | x-param decay scale
-   A0 | 04    | 4                       |
-   A1 | 13    | ÷                       | x-param decay divide
-   A2 | 34    | К [x]                   | x-param decay int
-   A3 | 11    | −                       | x-param decay subtract
-   A4 | 52    | В/О                     | x-param decay return
+   97 | 68    | П→X 8                   | recall random_state
+   98 | 12    | ×                       | x-param decay scale
+   99 | 04    | 4                       |
+   A0 | 13    | ÷                       | x-param decay divide
+   A1 | 34    | К [x]                   | x-param decay int
+   A2 | 11    | −                       | x-param decay subtract
+   A3 | 52    | В/О                     | x-param decay return
 
 ## Hex
 00: 60 50 3B 01 03 12 03 13
@@ -8667,19 +8666,18 @@ Setup Block:
 72: 0E 3B 48 10 01 10 02 00
 80: 12 DD DC 13 13 34 03 15
 88: 13 11 17 0F DC 34 10 BC
-96: 52 0E 68 12 04 13 34 11
-A4: 52
+96: 52 68 12 04 13 34 11 52
 
 ## Explain
 MK-Pro compile report
-Steps: 105/999999
+Steps: 104/999999
 Delivery: hex
 Optimizer: exact maximum
-Reference: lordbss_pmk53; span=105, entries=105, gaps=none, compiled=105, delta=0, parity=equal
+Reference: lordbss_pmk53; span=105, entries=105, gaps=none, compiled=104, delta=-1, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=12, considered=0, candidates=47, planned=0
-Budget: official=105, extra=0, physical=105
-Intent IR: lowered=yes, v2=yes; intent=115, effects=105, cells=105
+Optimizer rules: automatic=yes; active=13, considered=0, candidates=47, planned=0
+Budget: official=104, extra=0, physical=104
+Intent IR: lowered=yes, v2=yes; intent=115, effects=104, cells=104
 
 Preloads:
   time -> R0: 25 (outside program cells)
@@ -8764,11 +8762,12 @@ Optimizations:
   - x-param-proc-entry: Compiled rule front_stop to copy target directly from X.
   - x-param-return-decay: Compiled decay to consume value directly from X.
   - store-recall-peephole: Dropped 1 redundant П->X immediately after X->П to the same register.
+  - pre-shift-stack-lift: Removed 1 В↑ lift already supplied by the following stack-shifting command.
   - dead-store-elimination: Removed 1 store(s) to register(s) never read before the next assignment.
   - dead-proc-elimination: Removed 1 unreferenced emitted rule proc(s) after IR optimization.
   - preloaded-indirect-flow: Activated post-layout: replaced 7 direct branch/call(s) with proven preloaded indirect flow.
   - dark-entry-layout: Pointed 1 branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window).
-  - demote-constant-chain-indirect-flow: Inlined constants 0, 20, 25, 99, 1000 to keep a register free for post-layout indirect flow (105 vs 115 cells).
+  - demote-constant-chain-indirect-flow: Inlined constants 0, 20, 25, 99, 1000 to keep a register free for post-layout indirect flow (104 vs 114 cells).
 
 Candidates:
   * display __inline_show_32_0/decimal-pack: 2 steps; selected decimal-pack for screen __inline_show_32_0
@@ -9017,7 +9016,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_sea_battle; span=102, entries=99, gaps=14,19,78, compiled=74, delta=-28, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=8, considered=0, candidates=51, planned=0
+Optimizer rules: automatic=yes; active=8, considered=0, candidates=52, planned=0
 Budget: official=74, extra=0, physical=74
 Intent IR: lowered=yes, v2=yes; intent=74, effects=74, cells=74
 
@@ -9418,7 +9417,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_teleport; span=105, entries=105, gaps=none, compiled=97, delta=-8, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=19, considered=1, candidates=39, planned=0
+Optimizer rules: automatic=yes; active=19, considered=1, candidates=40, planned=0
 Budget: official=97, extra=0, physical=97
 Intent IR: lowered=yes, v2=yes; intent=108, effects=97, cells=97
 
@@ -9639,7 +9638,7 @@ Steps: 23/999999
 Delivery: hex
 Optimizer: exact maximum
 Machine: mk61
-Optimizer rules: automatic=yes; active=7, considered=2, candidates=50, planned=0
+Optimizer rules: automatic=yes; active=7, considered=2, candidates=51, planned=0
 Budget: official=23, extra=0, physical=23
 Intent IR: lowered=yes, v2=yes; intent=33, effects=23, cells=23
 
@@ -9971,7 +9970,7 @@ Delivery: hex
 Optimizer: exact maximum
 Reference: anvarov_treasure_hunter_2; span=105, entries=102, gaps=91,94,95, compiled=100, delta=-5, parity=smaller
 Machine: mk61
-Optimizer rules: automatic=yes; active=14, considered=1, candidates=44, planned=0
+Optimizer rules: automatic=yes; active=14, considered=1, candidates=45, planned=0
 Budget: official=100, extra=0, physical=100
 Intent IR: lowered=yes, v2=yes; intent=116, effects=100, cells=100
 
@@ -10391,7 +10390,7 @@ Steps: 100/999999
 Delivery: hex
 Optimizer: exact maximum
 Machine: mk61
-Optimizer rules: automatic=yes; active=15, considered=0, candidates=44, planned=0
+Optimizer rules: automatic=yes; active=15, considered=0, candidates=45, planned=0
 Budget: official=100, extra=0, physical=100
 Intent IR: lowered=yes, v2=yes; intent=107, effects=100, cells=100
 

@@ -1239,22 +1239,24 @@ The pipeline currently contains:
   context-sensitive `.`/`ВП` restoration also blocks the rewrite when the
   recall is the last X2 sync. If X2-register dataflow proves the same register
   is already synced and the immediate previous-command context is preserved,
-  the recall can be removed. Downstream binary/stack-consuming ops that can
-  still observe the recall's stack lift through direct call returns also block
-  the rewrite.
+  the recall can be removed. The same proof accepts stable indirect recalls
+  (`К П->X R7..Re`) when lowering has proved the actual memory target; indirect
+  recalls through `R0..R6` are kept because removing them would skip selector
+  mutation. Downstream binary/stack-consuming ops that can still observe the
+  recall's stack lift through direct call returns also block the rewrite.
 - **flow-x-reuse** — runs forward CFG dataflow for values already in X and
-  drops `П->X r` when every direct predecessor reaches that point with `r`
-  still in X; absolute numeric and indirect flow targets are left untouched,
-  and the same X2-register-aware `.`/`ВП` sync guard (stopped by direct `В/О`
-  returns) plus downstream stack-consumer guards are applied before removing a
-  recall.
+  drops a direct or stable-indirect proved recall when every direct predecessor
+  reaches that point with the same register value still in X; absolute numeric
+  and indirect flow targets are left untouched, and the same X2-register-aware
+  `.`/`ВП` sync guard (stopped by direct `В/О` returns) plus downstream
+  stack-consumer guards are applied before removing a recall.
 - **branch-target-x-reuse** — drops the first `П->X r` inside a unique branch
-  target when the incoming condition just tested the same recalled `r`, so the
-  branch path already carries that value in X, unless that recall is needed as
-  the target-side X2 sync before `.`/`ВП` before a direct `В/О` return syncs
-  X2. The shared X2-register proof can now show that the branch path already
-  has the same X2 value, so only immediate previous-command context and real
-  stack-lift consumers keep the target recall.
+  target when the incoming condition just tested the same direct or
+  stable-indirect recalled value, so the branch path already carries that value
+  in X, unless that recall is needed as the target-side X2 sync before `.`/`ВП`
+  before a direct `В/О` return syncs X2. The shared X2-register proof can now
+  show that the branch path already has the same X2 value, so only immediate
+  previous-command context and real stack-lift consumers keep the target recall.
 - **liveness-analysis** — foundational dataflow used by DSE, register
   coalescing, and dead-code analysis; `F L0`..`F L3` loop counters are modeled
   as both read and written registers.
@@ -1328,6 +1330,12 @@ The pipeline currently contains:
   this metadata instead of hard-coded opcode lists when deciding whether a
   removed `П->X` stack lift can reach a downstream consumer, including after a
   direct `ПП`/`В/О` round trip.
+- **pre-shift-stack-lift** — removes `В↑` immediately before any proved
+  stack-shifting producer such as direct/indirect `П->X`, `F pi`, or another
+  `В↑` when that following command already keeps the old X in Y for the
+  following consumer. The same stack-difference proof starts with the possible
+  difference in Z and follows direct calls/returns, so the rewrite is refused if
+  a later opcode could expose or consume that deeper stack value.
 - **vp-x2-peephole** — drops a `К {x}` immediately after a proved `ВП`/X2
   boundary when `ВП` already supplies the fractional transform. The proof is
   not display-specific: display lowering is just one producer of such

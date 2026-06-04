@@ -4,6 +4,7 @@ import {
   emptyResult,
   hasRewriteBarrier,
   recallAlreadySyncedInX2,
+  removableRecallValueRegister,
   removingRecallCanExposeStackLift,
   removingRecallCanExposeX2Restore,
   type IrPass,
@@ -30,7 +31,7 @@ const run: IrPassFn = (ops) => {
     const targetIndex = nextExecutableIndex(ops, labelIndex + 1);
     if (targetIndex === undefined || remove.has(targetIndex)) continue;
     const target = ops[targetIndex]!;
-    if (target.kind !== "recall" || target.register !== register || hasRewriteBarrier(target)) continue;
+    if (removableRecallValueRegister(target) !== register) continue;
     if (removingRecallCanExposeStackLift(ops, targetIndex)) continue;
     if (
       removingRecallCanExposeX2Restore(ops, targetIndex, {
@@ -63,8 +64,7 @@ function immediatelyTestedRegister(ops: readonly IrOp[], cjumpIndex: number): Re
   for (let index = cjumpIndex - 1; index >= 0; index -= 1) {
     const op = ops[index]!;
     if (op.kind === "label") continue;
-    if (op.kind === "recall" && !hasRewriteBarrier(op)) return op.register;
-    return undefined;
+    return removableRecallValueRegister(op);
   }
   return undefined;
 }

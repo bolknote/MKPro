@@ -6,6 +6,7 @@ import type {
   PreloadReport,
   RegisterName,
 } from "../types.ts";
+import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import { getOpcode } from "../opcodes.ts";
 
 export interface PassContext {
@@ -113,6 +114,14 @@ export function knownIndirectMemoryTarget(op: IrOp): RegisterName | undefined {
   const match = /\bindirect-memory-target=([0-9a-e])\b/iu.exec(op.meta.comment ?? "");
   if (!match) return undefined;
   return match[1]!.toLowerCase() as RegisterName;
+}
+
+export function removableRecallValueRegister(op: IrOp): RegisterName | undefined {
+  if (hasRewriteBarrier(op)) return undefined;
+  if (op.kind === "recall") return op.register;
+  if (op.kind !== "indirect-recall") return undefined;
+  if (!isStableIndirectSelector(op.register)) return undefined;
+  return knownIndirectMemoryTarget(op);
 }
 
 function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
@@ -428,7 +437,11 @@ function dropDifference(depth: StackDifferenceDepth): StackDifferenceDepth | und
   return 2;
 }
 
-export function removingRecallCanExposeStackLift(ops: readonly IrOp[], recallIndex: number): boolean {
+function stackDifferenceCanReachConsumer(
+  ops: readonly IrOp[],
+  start: number,
+  initialDepth: StackDifferenceDepth,
+): boolean {
   const labels = labelIndexes(ops);
   const visited = new Set<string>();
   const visit = (
@@ -510,7 +523,15 @@ export function removingRecallCanExposeStackLift(ops: readonly IrOp[], recallInd
     return false;
   };
 
-  return visit(recallIndex + 1, 1);
+  return visit(start, initialDepth);
+}
+
+export function removingRecallCanExposeStackLift(ops: readonly IrOp[], recallIndex: number): boolean {
+  return stackDifferenceCanReachConsumer(ops, recallIndex + 1, 1);
+}
+
+export function removingPreShiftLiftCanExposeStack(ops: readonly IrOp[], producerIndex: number): boolean {
+  return stackDifferenceCanReachConsumer(ops, producerIndex + 1, 2);
 }
 
 export function removingRecallCanExposeX2Restore(

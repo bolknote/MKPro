@@ -6,6 +6,7 @@ import {
   hasRewriteBarrier,
   knownIndirectMemoryTarget,
   recallAlreadySyncedInX2,
+  removableRecallValueRegister,
   removingRecallCanExposeStackLift,
   removingRecallCanExposeX2Restore,
   type IrPass,
@@ -29,11 +30,12 @@ const run: IrPassFn = (ops) => {
 
   for (let index = 0; index < ops.length; index += 1) {
     const op = ops[index]!;
-    if (op.kind !== "recall" || hasRewriteBarrier(op)) continue;
+    const recallRegister = removableRecallValueRegister(op);
+    if (recallRegister === undefined) continue;
     if (removingRecallCanExposeStackLift(ops, index)) continue;
     const redundantSyncRegister = recallAlreadySyncedInX2(op, x2States[index]);
     if (removingRecallCanExposeX2Restore(ops, index, { redundantSyncRegister })) continue;
-    if (inStates[index]?.has(op.register) === true) remove.add(index);
+    if (inStates[index]?.has(recallRegister) === true) remove.add(index);
   }
 
   if (remove.size === 0) return emptyResult(ops);

@@ -13,6 +13,7 @@ import { jumpThread } from "../../src/core/passes/jump-thread.ts";
 import { jumpToNextThreading } from "../../src/core/passes/jump-to-next.ts";
 import { lastXReuse } from "../../src/core/passes/last-x-reuse.ts";
 import { computeLiveness } from "../../src/core/passes/liveness-analysis.ts";
+import { preShiftStackLift } from "../../src/core/passes/pre-shift-stack-lift.ts";
 import { preloadedIndirectFlow, runtimeIndirectCallFlow } from "../../src/core/passes/preloaded-indirect-flow.ts";
 import { r0FractionalSentinel } from "../../src/core/passes/r0-fractional-sentinel.ts";
 import { redundantPrologueElimination } from "../../src/core/passes/redundant-prologue.ts";
@@ -369,6 +370,33 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops[0]!.kind).toBe("store");
   });
 
+  it("last-x-reuse drops stable indirect recall when X already holds its proved target", () => {
+    const program: IrOp[] = [
+      store("5"),
+      knownTargetIndirectRecall("7", "5"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      store("5"),
+      halt(),
+    ]);
+  });
+
+  it("last-x-reuse keeps predecrement indirect recall even when its target is proved", () => {
+    const program: IrOp[] = [
+      store("5"),
+      knownTargetIndirectRecall("1", "5"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("last-x-reuse keeps recall that syncs X2 before ВП restores it", () => {
     const program: IrOp[] = [
       store("1"),
@@ -539,6 +567,36 @@ describe("ir passes on synthetic programs", () => {
     expect(result.applied).toBe(1);
     expect(result.optimizations[0]?.name).toBe("flow-x-reuse");
     expect(result.ops.filter((op) => op.kind === "recall" && op.register === "4")).toHaveLength(1);
+  });
+
+  it("flow-x-reuse drops stable indirect recall reached with its proved target already in X", () => {
+    const program: IrOp[] = [
+      recall("5"),
+      jump("tail"),
+      plain(0x00, "0"),
+      label("tail"),
+      knownTargetIndirectRecall("7", "5"),
+      store("6"),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops.some((op) => op.kind === "indirect-recall")).toBe(false);
+  });
+
+  it("flow-x-reuse keeps preincrement indirect recall because removing it would skip selector mutation", () => {
+    const program: IrOp[] = [
+      recall("5"),
+      jump("tail"),
+      plain(0x00, "0"),
+      label("tail"),
+      knownTargetIndirectRecall("4", "5"),
+      store("6"),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("flow-x-reuse keeps recall that syncs X2 before a preserving op and ВП", () => {
@@ -738,6 +796,101 @@ describe("ir passes on synthetic programs", () => {
     expect(flowXReuse.run(indirect, ctx).applied).toBe(0);
   });
 
+  it("pre-shift-stack-lift removes В↑ already supplied by following recall", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift removes В↑ before indirect recall", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      indirectRecall("7"),
+      plain(0x12, "*"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      indirectRecall("7"),
+      plain(0x12, "*"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift removes В↑ before F pi when the following constant push supplies Y", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      plain(0x20, "F pi"),
+      plain(0x12, "*"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x20, "F pi"),
+      plain(0x12, "*"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift collapses adjacent В↑ lifts when the deeper duplicate is unused", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      plain(0x0e, "В↑"),
+      plain(0x12, "*"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x0e, "В↑"),
+      plain(0x12, "*"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift keeps В↑ when the deeper stack difference reaches a later consumer", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      recall("1"),
+      plain(0x12, "*"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("pre-shift-stack-lift keeps В↑ before stack-exposing commands", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      recall("1"),
+      plain(0x25, "F reverse"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("branch-target-x-reuse drops recall when a condition target preserves X", () => {
     const program: IrOp[] = [
       recall("6"),
@@ -754,6 +907,25 @@ describe("ir passes on synthetic programs", () => {
     expect(result.applied).toBe(1);
     expect(result.optimizations[0]?.name).toBe("branch-target-x-reuse");
     expect(result.ops.filter((op) => op.kind === "recall" && op.register === "6")).toHaveLength(1);
+    const target = result.ops.findIndex((op) => op.kind === "label" && op.name === "target");
+    expect(result.ops[target + 1]).toMatchObject({ kind: "plain", opcode: 0x32 });
+  });
+
+  it("branch-target-x-reuse drops stable indirect recall when the condition already tested its target", () => {
+    const program: IrOp[] = [
+      knownTargetIndirectRecall("7", "6"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      knownTargetIndirectRecall("8", "6"),
+      plain(0x32, "К ЗН"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops.filter((op) => op.kind === "indirect-recall")).toHaveLength(1);
     const target = result.ops.findIndex((op) => op.kind === "label" && op.name === "target");
     expect(result.ops[target + 1]).toMatchObject({ kind: "plain", opcode: 0x32 });
   });
