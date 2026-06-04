@@ -14990,7 +14990,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["pre-shift-stack-lift"],
-    detail: "Removes В↑ immediately before a proved stack-shifting producer (direct/indirect П->X, F pi, or another В↑) when that command already supplies old X in Y and stack-difference analysis proves the extra deeper stack cell cannot be observed.",
+    detail: "Removes В↑ before a proved stack-shifting producer (direct/indirect П->X, F pi, or another В↑), possibly through stack-preserving labels/stores/plain ops, when that command already supplies current X in Y and stack-difference analysis proves the extra deeper stack cell cannot be observed.",
   },
   {
     id: "constant-folding",

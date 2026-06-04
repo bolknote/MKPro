@@ -1383,9 +1383,10 @@ The pipeline currently contains:
   this metadata instead of hard-coded opcode lists when deciding whether a
   removed `П->X` stack lift can reach a downstream consumer, including after a
   direct `ПП`/`В/О` round trip.
-- **pre-shift-stack-lift** — removes `В↑` immediately before any proved
-  stack-shifting producer such as direct/indirect `П->X`, `F pi`, or another
-  `В↑` when that following command already keeps the old X in Y for the
+- **pre-shift-stack-lift** — removes `В↑` before any proved stack-shifting
+  producer such as direct/indirect `П->X`, `F pi`, or another `В↑`, even through
+  stack-preserving labels, stores, address bytes, and plain stack-neutral
+  commands, when that producer already keeps the current X in Y for the
   following consumer. The same stack-difference proof starts with the possible
   difference in Z and follows direct calls/returns, so the rewrite is refused if
   a later opcode could expose or consume that deeper stack value.

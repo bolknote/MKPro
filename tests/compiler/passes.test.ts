@@ -1562,6 +1562,42 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("pre-shift-stack-lift skips stack-preserving gap ops before the producer", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      plain(0x54, "К НОП"),
+      label("marker"),
+      store("2"),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x54, "К НОП"),
+      label("marker"),
+      store("2"),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift stops gap scanning at stack-consuming commands", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      plain(0x10, "+"),
+      recall("1"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("pre-shift-stack-lift collapses adjacent В↑ lifts when the deeper duplicate is unused", () => {
     const program: IrOp[] = [
       plain(0x0e, "В↑"),

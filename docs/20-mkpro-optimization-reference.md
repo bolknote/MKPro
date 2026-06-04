@@ -628,11 +628,12 @@ Display rewrites are separated into strategy selection + body lowering.
   redundant re-sync. The same removable-recall proof covers stable indirect
   `К П->X R7..Re` with a proved `indirect-memory-target`, but not mutating
   `R0..R6` selectors.
-- `pre-shift-stack-lift` — removes `В↑` immediately before any proved
-  stack-shifting producer (`П->X`, `К П->X`, `F pi`, or another `В↑`) when the
-  following command already supplies the old X in Y and the shared
-  stack-difference proof shows the extra Z/T difference cannot reach a later
-  consumer.
+- `pre-shift-stack-lift` — removes `В↑` before any proved stack-shifting
+  producer (`П->X`, `К П->X`, `F pi`, or another `В↑`), even through
+  stack-preserving labels, stores, address bytes, and plain stack-neutral
+  commands, when the producer already supplies the current X in Y and the
+  shared stack-difference proof shows the extra Z/T difference cannot reach a
+  later consumer.
 - `known-zero-reuse` — reuses a known zero source instead of reloading.
 - `inequality-zero-false-branch` — feeds `known-zero-reuse` after a false
   `!= 0` branch, avoiding a fresh zero literal or `Cx`.
@@ -721,7 +722,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 6. `shared-terminal-tail` — finds repeated straight-line suffixes that already end in unconditional flow (`БП`, `К БП r`, or `В/О`) and replaces extra copies with a jump into the canonical suffix; it refuses programs with absolute numeric flow targets.
 7. `return-zero-jump` — when no procedure calls are used, replaces a backward jump to `01` with `В/О` and tags it as an empty-stack optimization.
 8. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r`, or stable-indirect proved same-cell `К X->П R7..Re` followed by `К П->X R7..Re`, only when the recall is not the last X2 sync before a context-sensitive `.`/`ВП` restoration before the next X2-affecting op, including direct `В/О` returns, and its stack lift cannot reach a downstream binary/stack-consuming op through direct or proved-indirect flow; mutating `R0..R6` indirect selectors are not folded.
-9. `pre-shift-stack-lift` — removes `В↑` immediately before direct/indirect `П->X`, `F pi`, or another stack-shifting producer when that following command already supplies the old X in Y, unless the deeper stack difference can reach a later consumer.
+9. `pre-shift-stack-lift` — removes `В↑` before direct/indirect `П->X`, `F pi`, or another stack-shifting producer, possibly through stack-preserving labels/stores/plain ops, when that producer already supplies the current X in Y, unless the deeper stack difference can reach a later consumer.
 10. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
 11. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.
 12. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes a direct `П->X r` or stable-indirect `К П->X R7..Re` with a proved memory target when every predecessor reaches that point with the same value still in X; proved indirect flow targets (`indirect-target=NN`) are included in the CFG, direct and proved-indirect `ПП`/`В/О` edges carry X facts into callees and back to continuations, documented empty operators `К НОП`/`К 1`/`К 2` preserve X facts, stable selectors preserve the X fact, mutating selectors drop only the mutated selector register from the proof, and unknown indirect flow plus absolute numeric direct targets are still refused. Recalls that provide the last X2 sync before `.`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow are kept.

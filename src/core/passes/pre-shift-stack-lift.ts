@@ -17,13 +17,38 @@ function isStackShiftingProducer(op: IrOp | undefined): boolean {
   return getOpcode(op.opcode).stackEffect === "shifts";
 }
 
+function isStackPreservingGapOp(op: IrOp): boolean {
+  if (hasRewriteBarrier(op)) return false;
+  switch (op.kind) {
+    case "label":
+    case "store":
+    case "indirect-store":
+    case "orphan-address":
+      return true;
+    case "plain":
+      return getOpcode(op.opcode).stackEffect === "preserves";
+    default:
+      return false;
+  }
+}
+
+function nextStackShiftingProducerIndex(ops: readonly IrOp[], start: number): number | undefined {
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (isStackShiftingProducer(op)) return index;
+    if (!isStackPreservingGapOp(op)) return undefined;
+  }
+  return undefined;
+}
+
 const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
   for (let index = 0; index < ops.length - 1; index += 1) {
     const op = ops[index]!;
-    const next = ops[index + 1];
-    if (!isStackLift(op) || !isStackShiftingProducer(next)) continue;
-    if (removingPreShiftLiftCanExposeStack(ops, index + 1)) continue;
+    if (!isStackLift(op)) continue;
+    const producerIndex = nextStackShiftingProducerIndex(ops, index + 1);
+    if (producerIndex === undefined) continue;
+    if (removingPreShiftLiftCanExposeStack(ops, producerIndex)) continue;
     remove.add(index);
   }
 
