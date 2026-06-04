@@ -38,17 +38,9 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | `cave-highlevel-baseline.mkpro` | 134 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
 | `cave-treasure.mkpro` | 118 | 105 | floor-indexed resource bank and source-shaped command decoder are in place; remaining blockers are command dispatch, wall breaking, cache reward flow, and loop prompt/input storage |
 | `giants-country.mkpro` | 120 | 105 | final score is now live on the death path; source-level `tile == 7` corrections now fold to the same mask shape as the hand-written abs/sign form |
-| `tic-tac-toe-4x4.mkpro` | 615 | 105 | game-level mark sets and line-count helpers; remaining blockers are shared torus-line counting, mark-balance scoring, and dynamic calculator-win display composition |
 
 Prototype notes:
 
-- `tic-tac-toe-4x4.mkpro` is a fresh game-level port from
-  `games/tic-tac-toe-4x4.txt`: it stores occupied cells and calculator marks,
-  derives player marks as occupied-minus-calculator, counts the four torus lines
-  through each move, scores candidate moves by squared mark imbalance, uses
-  `X ПП Y С/П` input via `entered()`, shows `-99999999` on occupied cells,
-  reports draw/player-win as `0`, and keeps the calculator win signal as `8`
-  until dynamic `8.-0n` sign-digit display composition is available.
 - Membership/set reuse now consumes a freshly returned mask directly from X and,
   when the failed branch sets the same packed collection, avoids the scratch
   register entirely: the mask stays in Y, the collection is restored from X2
