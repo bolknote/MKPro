@@ -1300,7 +1300,8 @@ The pipeline currently contains:
   `-99999999` sentinel when `R0` and `X` are both known to hold it. It also
   rewrites proved direct flow to hardware address `99` through fractional
   `R0`; label targets use a final post-layout proof so the fixed `99` address
-  cannot be invalidated by later shrinking.
+  cannot be invalidated by later shrinking. The R0 proof survives unrelated
+  indirect memory through `R1..Re`; indirect flow remains a proof barrier.
 - **indirect-selector-integer-part-reuse** — when indexed-bank lowering has
   proved that a stable indirect selector is exactly `int(coord)`, the following
   IR pass tracks the selector register's post-indirect integer-part side effect
@@ -1316,7 +1317,9 @@ The pipeline currently contains:
   or an existing numeric/formal address byte; if its opcode itself takes an
   address, its operand remains in the next cell. Fixed numeric/formal branch
   operands are accepted only when their real target is before the removed cell,
-  so shrinking cannot retarget them.
+  so shrinking cannot retarget them. The verifier also accepts the self-target
+  form where the branch jumps directly to its own operand byte as executable
+  code, but only after re-layout proves that byte still encodes the removed op.
 - **x2 opcode profile** — the opcode catalog models the reference split between
   X2-preserving commands, X2-syncing commands that copy X into X2 and then
   normalize/check X, and X2-restoring commands (`0`..`9`, `.`, `/-/`, `ВП`) that

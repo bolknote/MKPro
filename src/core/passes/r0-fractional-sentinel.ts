@@ -62,7 +62,10 @@ function isSentinelMaterializedBeforeStore(ops: readonly IrOp[], storeIndex: num
 }
 
 function preservesR0Fact(op: IrOp): boolean {
-  return op.kind === "plain" || op.kind === "recall" || (op.kind === "store" && op.register !== "0");
+  return op.kind === "plain" ||
+    op.kind === "recall" ||
+    (op.kind === "store" && op.register !== "0") ||
+    (op.kind === "indirect-store" && op.register !== "0");
 }
 
 function cloneMeta(meta: IrMeta, comment: string): IrMeta {
@@ -174,6 +177,10 @@ const run: IrPassFn = (ops) => {
     }
     if (op.kind === "plain") {
       xFact = isSentinelDirectLiteralAt(ops, i) ? "sentinel" : "unknown";
+      continue;
+    }
+    if (op.kind === "indirect-recall" && op.register !== "0") {
+      xFact = "unknown";
       continue;
     }
     if (preservesR0Fact(op)) {

@@ -2280,6 +2280,40 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops.at(-1)?.kind).toBe("indirect-recall");
   });
 
+  it("r0-fractional-sentinel preserves fractional R0 through unrelated indirect memory", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      store("0"),
+      indirectRecall("7"),
+      numericJump(99),
+    ];
+    const result = r0FractionalSentinel.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops.at(-1)).toMatchObject({
+      kind: "indirect-jump",
+      register: "0",
+      opcode: 0x80,
+    });
+  });
+
+  it("r0-fractional-sentinel treats unrelated indirect flow as an R0 proof barrier", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      store("0"),
+      indirectJump("7"),
+      numericJump(99),
+    ];
+    const result = r0FractionalSentinel.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("r0-fractional-sentinel removes redundant R0 sentinel store after fractional R0 indirect recall", () => {
     const sentinelRecall: IrOp = {
       ...recall("e"),

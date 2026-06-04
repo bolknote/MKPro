@@ -457,7 +457,7 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `fractional-indirect-addressing` — allows indirect access through fractional address arithmetic when proofs are available, including direct `bank[int(selector)]` memory selectors.
 - `indirect-selector-integer-part-reuse` — after a proved `bank[int(selector)]` indirect-memory access through a stable `R7..Re` selector, tracks that the selector register now holds the truncated integer part and deletes a later redundant `П->X selector; К [x]` pair's `К [x]` cell. The pass requires the proof marker emitted by fractional indexed lowering; unmarked hex, negative, or otherwise opaque indirect selectors are left alone.
 - `destructive-selector-operand-order` — when a commutative expression has one operand that can use direct `bank[int(selector)]` indirect addressing and the other operand still needs the same selector's fractional tail, schedules the fractional operand first so the MK-61 selector mutation happens only after that tail is safely on the stack.
-- `r0-fractional-sentinel` — uses a fractional-state sentinel in R0 to steer tables and to replace proved direct flow to address 99 (`БП`, `ПП`, or `F x?0`, numeric or post-layout label-resolved) with one-cell `К БП/К ПП/К x?0 0` when the R0 mutation is dead.
+- `r0-fractional-sentinel` — uses a fractional-state sentinel in R0 to steer tables and to replace proved direct flow to address 99 (`БП`, `ПП`, or `F x?0`, numeric or post-layout label-resolved) with one-cell `К БП/К ПП/К x?0 0` when the R0 mutation is dead. The R0-fractional proof is preserved through unrelated indirect memory operations, but not through indirect flow.
 - `super-dark-dispatch` — enables FA..FF range routing for shorter jumps with strictly valid address neighborhoods.
 
 ## 8) Spatial and coordinate-list optimization family
@@ -694,7 +694,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     an ordinary op or an existing numeric/formal address byte; if the overlaid
     opcode itself takes an address, the following operand byte is kept as that
     command's operand. Fixed numeric/formal branch operands are rejected when
-    shrinking would move their real target.
+    shrinking would move their real target. The same verifier can move the
+    branch target label onto the branch's own address byte, allowing that
+    operand byte to be the first executed opcode.
 23. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` when one or more cells are removed.
 24. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/`КНОП` redundancy optimization pass removes cells.
 25. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a proved `ВП`/X2 marker, display or ordinary, and reports `vp-fraction-restore` when one or more restores are removed. A marker is not required when the local opcode context proves an ordinary X2 restoration boundary: an X2 sync, at least one linear X2-preserving executable command, then `ВП`.

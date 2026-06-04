@@ -14553,7 +14553,7 @@ const optimizerCapabilities: Array<{
     source: "undocumented",
     requires: ["address-constants", "code-data-overlay"],
     activeWhen: ["code-data-overlay", "address-code-overlay"],
-    detail: "Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role; БП overlays and ПП overlays with proved terminal targets are rewritten only after final address proof, including existing formal/numeric address bytes used as executable cells, address-taking executable bytes whose operand remains next, and fixed-address guards that reject overlays whose real target would shift.",
+    detail: "Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role; БП overlays and ПП overlays with proved terminal targets are rewritten only after final address proof, including self-target operand execution, existing formal/numeric address bytes used as executable cells, address-taking executable bytes whose operand remains next, and fixed-address guards that reject overlays whose real target would shift.",
   },
   {
     id: "cyclic-address-layout",
@@ -14601,7 +14601,7 @@ const optimizerCapabilities: Array<{
     source: "mk61-delta",
     requires: ["r0-fractional-sentinel"],
     activeWhen: ["fractional-indirect-addressing", "r0-indirect-counter", "r0-fractional-sentinel"],
-    detail: "Fractional R0 side effects: selecting R3, preserving the resulting -99999999 sentinel, and replacing proved direct flow to address 99 with one-cell К БП/К ПП/К x?0 0 are sound only when liveness and final layout prove the R0 mutation and fixed 99 target are valid.",
+    detail: "Fractional R0 side effects: selecting R3, preserving the resulting -99999999 sentinel, carrying the fractional proof through unrelated indirect memory, and replacing proved direct flow to address 99 with one-cell К БП/К ПП/К x?0 0 are sound only when liveness and final layout prove the R0 mutation and fixed 99 target are valid.",
   },
   {
     id: "raw-display-5f",
