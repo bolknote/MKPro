@@ -1286,8 +1286,11 @@ The pipeline currently contains:
   show that the branch path already has the same X2 value, so only immediate
   previous-command context and real stack-lift consumers keep the target recall.
 - **liveness-analysis** — foundational dataflow used by DSE, register
-  coalescing, and dead-code analysis; `F L0`..`F L3` loop counters are modeled
-  as both read and written registers.
+  coalescing, and dead-code analysis. Proved indirect flow targets
+  (`indirect-target=NN`) participate in the liveness CFG, so stores are kept
+  when their reads live behind `К БП`/`К ПП`/`К x?0`; unknown indirect flow is
+  still conservative. `F L0`..`F L3` loop counters are modeled as both read and
+  written registers.
 - **dispatch-case-ordering** — moves unique numeric zero cases earlier when a
   high-level `match` can reuse the selector already in X.
 - **x-preserving-fallthrough-branch** — after a direct zero-test such as

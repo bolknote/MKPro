@@ -1,5 +1,5 @@
 import type { IrLoopCounter, IrOp, RegisterName } from "../types.ts";
-import { cellsPerOp, knownIndirectMemoryTarget } from "./helpers.ts";
+import { cellsPerOp, knownIndirectFlowTarget, knownIndirectMemoryTarget } from "./helpers.ts";
 
 export interface LivenessInfo {
   readonly liveIn: ReadonlyArray<ReadonlySet<RegisterName>>;
@@ -84,14 +84,23 @@ function buildSuccessors(ops: readonly IrOp[]): SuccessorMap {
       case "call":
         jumpTo(op.target);
         break;
-      case "indirect-jump":
+      case "indirect-jump": {
+        const target = knownIndirectFlowTarget(op);
+        if (target !== undefined) jumpTo(target);
         break;
-      case "indirect-call":
+      }
+      case "indirect-call": {
+        const target = knownIndirectFlowTarget(op);
+        if (target !== undefined) jumpTo(target);
         fallthrough();
         break;
-      case "indirect-cjump":
+      }
+      case "indirect-cjump": {
+        const target = knownIndirectFlowTarget(op);
+        if (target !== undefined) jumpTo(target);
         fallthrough();
         break;
+      }
     }
   }
   return { successors };

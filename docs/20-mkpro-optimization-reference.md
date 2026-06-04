@@ -679,8 +679,9 @@ Display rewrites are separated into strategy selection + body lowering.
   selectors are kept because their selector side effects are observable.
 - `dead-store-elimination` — full pass removing pointless direct stores and
   stable-indirect `К X->П R7..Re` stores with proved memory targets, while
-  keeping stores that are observable through number-entry, mutating `R0..R6`
-  indirect selector side effects, or the `ВП`/X2 restore context.
+  keeping stores that are observable through number-entry, proved indirect-flow
+  liveness, mutating `R0..R6` indirect selector side effects, or the `ВП`/X2
+  restore context.
 - `repeated-assignment-value-reuse` — reuses the same computed value across multiple assignments, but yields to `initialized-counted-while-loop` when one of the repeated stores is the initializer for a following countdown loop. A one-cell literal reuse must not hide the much shorter `F Lx` loop shape.
 - `repeated-assignment-counted-loop-reuse` — bridges that conflict: prefix
   assignments sharing the counted-loop initializer literal are stored from the
@@ -718,7 +719,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 16. `indirect-memory-table` — rewrites direct `store/recall` into `К X->П`/`К П->X` when a stable selector maps to the indexed target cell.
 17. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and both the `.` restore gap and missing stack-lift observation are proven, allowing later DSE to remove now-unused scratch stores.
 18. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.
-19. `dead-store-elimination` — removes direct stores, plus stable-indirect stores with proved targets, whose target register is not live after the write and does not affect number-entry/input finalization or the previous-command context consumed by `ВП` while it restores X2; mutating indirect selectors are kept.
+19. `dead-store-elimination` — removes direct stores, plus stable-indirect stores with proved targets, whose target register is not live after the write in a CFG that follows proved indirect flow targets (`indirect-target=NN`) and does not affect number-entry/input finalization or the previous-command context consumed by `ВП` while it restores X2; mutating indirect selectors are kept.
 20. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding direct or proved indirect `X->П`, preserving recalls that serve as the last X2 sync before `.`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or as a stack lift that can reach a downstream consumer through direct or proved-indirect flow; mutating indirect stores can seed the X fact because the store remains, while mutating indirect recalls are not removed.
 21. `r0-fractional-sentinel` — drops redundant immediate `П->X 3`/`X->П 3`
     after fractional-R0 indirect access when `R0` liveness proves that the

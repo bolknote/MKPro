@@ -1,6 +1,6 @@
 import type { IrOp } from "../types.ts";
 import { computeLiveness } from "./liveness-analysis.ts";
-import { cellsPerOp, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
+import { cellsPerOp, knownIndirectFlowTarget, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
 
 function reachableFromEntry(ops: readonly IrOp[]): Set<number> {
   const labelIndex = new Map<string, number>();
@@ -71,18 +71,18 @@ function reachableFromEntry(ops: readonly IrOp[]): Set<number> {
         target(op.target);
         break;
       case "indirect-jump": {
-        const knownTarget = knownIndirectTarget(op);
+        const knownTarget = knownIndirectFlowTarget(op);
         if (knownTarget !== undefined) target(knownTarget);
         break;
       }
       case "indirect-call": {
-        const knownTarget = knownIndirectTarget(op);
+        const knownTarget = knownIndirectFlowTarget(op);
         if (knownTarget !== undefined) target(knownTarget);
         fallthrough();
         break;
       }
       case "indirect-cjump": {
-        const knownTarget = knownIndirectTarget(op);
+        const knownTarget = knownIndirectFlowTarget(op);
         if (knownTarget !== undefined) target(knownTarget);
         fallthrough();
         break;
@@ -90,17 +90,6 @@ function reachableFromEntry(ops: readonly IrOp[]): Set<number> {
     }
   }
   return visited;
-}
-
-function knownIndirectTarget(op: IrOp): number | undefined {
-  if (op.kind !== "indirect-jump" && op.kind !== "indirect-call" && op.kind !== "indirect-cjump") {
-    return undefined;
-  }
-  const match = /\bindirect-target=(\d+)\b/u.exec(op.meta.comment ?? "");
-  if (!match) return undefined;
-  const target = Number(match[1]);
-  if (!Number.isInteger(target) || target < 0 || target > 104) return undefined;
-  return target;
 }
 
 const run: IrPassFn = (ops) => {

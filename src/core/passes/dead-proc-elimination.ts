@@ -1,5 +1,5 @@
 import type { IrOp } from "../types.ts";
-import { cellsPerOp, type IrPass, type IrPassFn } from "./helpers.ts";
+import { cellsPerOp, knownIndirectFlowTarget, type IrPass, type IrPassFn } from "./helpers.ts";
 
 interface ProcBlock {
   readonly name: string;
@@ -24,16 +24,6 @@ function collectProcedureBlocks(ops: readonly IrOp[]): ProcBlock[] {
     }
   }
   return blocks;
-}
-
-function knownIndirectTarget(op: IrOp): number | undefined {
-  if (op.kind !== "indirect-jump" && op.kind !== "indirect-call" && op.kind !== "indirect-cjump") {
-    return undefined;
-  }
-  const match = /\bindirect-target=(\d+)\b/u.exec(op.meta.comment ?? "");
-  if (!match) return undefined;
-  const target = Number(match[1]);
-  return Number.isInteger(target) && target >= 0 ? target : undefined;
 }
 
 function canFallThroughPastBlock(ops: readonly IrOp[], block: ProcBlock): boolean {
@@ -118,7 +108,7 @@ const run: IrPassFn = (ops, context) => {
       continue;
     }
     if (op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump") {
-      const target = knownIndirectTarget(op);
+      const target = knownIndirectFlowTarget(op);
       if (target === undefined) return { ops: [...ops], applied: 0, optimizations: [] };
       markReference(index, addressOwner.get(target));
       continue;

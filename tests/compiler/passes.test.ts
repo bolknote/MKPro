@@ -199,6 +199,15 @@ function knownTargetIndirectJump(register: RegisterName, target: number): IrOp {
   };
 }
 
+function knownTargetIndirectCall(register: RegisterName, target: number): IrOp {
+  return {
+    kind: "indirect-call",
+    register,
+    opcode: 0xa0 + REGISTER_INDEX[register],
+    meta: { mnemonic: `К ПП ${register}`, comment: `indirect-target=${target}` },
+  };
+}
+
 function markedFractionalIndirectRecall(register: RegisterName, source = "pos"): IrOp {
   return {
     kind: "indirect-recall",
@@ -548,6 +557,36 @@ describe("ir passes on synthetic programs", () => {
     const result = deadStoreElimination.run(program, ctx);
 
     expect(result.ops[0]).toMatchObject({ kind: "store", register: "8" });
+  });
+
+  it("dead-store-elimination tracks reads behind proved indirect jumps", () => {
+    const program: IrOp[] = [
+      store("1"),
+      knownTargetIndirectJump("8", 3),
+      halt(),
+      label("target"),
+      recall("1"),
+      halt(),
+    ];
+    const result = deadStoreElimination.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("dead-store-elimination tracks reads inside proved indirect subroutine calls", () => {
+    const program: IrOp[] = [
+      store("1"),
+      knownTargetIndirectCall("8", 3),
+      halt(),
+      label("callee"),
+      recall("1"),
+      ret(),
+    ];
+    const result = deadStoreElimination.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("dead-store-elimination keeps subroutine stores that are read after return", () => {
