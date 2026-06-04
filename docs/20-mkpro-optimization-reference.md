@@ -662,7 +662,10 @@ Display rewrites are separated into strategy selection + body lowering.
   contains `r`, a `.` restore-gap dataflow has seen two safe X2-preserving
   executable steps after the last X2 sync, and the normal stack-lift/context
   guards prove that the recall's stack shift and previous-command class are
-  dead. This exposes the scratch register store to ordinary DSE instead of
+  dead. The proof can come from either X2-register dataflow or the stricter X2
+  value dataflow, so a prior closed-context `.` restore keeps the hidden
+  `reg:r` fact available for later scratch aliases. This exposes the scratch
+  register store to ordinary DSE instead of
   requiring a membership-specific lowering; repeated reads of loop/state
   registers are left unchanged because `.` and `П->X r` are both one cell and a
   no-net rewrite can perturb layout.
@@ -736,7 +739,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 14. `stable-indirect-flow` — rewrites direct `jump/call/cjump` to indirect forms (`К БП`, `К ПП`, `К <cond>`) when a stable selector is already live in a register.
 15. `preloaded-indirect-flow` — preloads a selector value into a spare stable register and rewrites repeated backward-direct numeric jumps/calls through that preloaded value; after rescue starts, subsequent proved shrinking rewrites are still accepted below the official window.
 16. `indirect-memory-table` — rewrites direct `store/recall` into `К X->П`/`К П->X` when a stable selector maps to the indexed target cell.
-17. `x2-noop-restore` — removes `.` when X2 value dataflow proves that `X` already contains the same hidden X2 value, including register aliases, normalized decimal digit-runs (`decimal:12:normalized`), and the normalized zero from `Cx`; leading-zero runs are split (`X=decimal:2:normalized`, `X2=decimal:02:unnormalized`) so they do not satisfy the equality proof. The pass accepts either a safe dot-restore gap or the documented immediate no-op form after an X2-affecting sync such as `П->X r`/`Cx`/conditional fallthrough, and refuses display/raw/context-sensitive follow-up `.`/`ВП` cases.
+17. `x2-noop-restore` — removes `.` when X2 value dataflow proves that `X` already contains the same hidden X2 value, including register aliases, normalized decimal digit-runs (`decimal:12:normalized`), and the normalized zero from `Cx`; leading-zero runs are split (`X=decimal:2:normalized`, `X2=decimal:02:unnormalized`) so they do not satisfy the equality proof. The value proof also models closed-context `.` as a real X2-to-X restore, normalizing decimal facts only for visible `X` and refusing open number-entry dots such as `1.`. The pass accepts either a safe dot-restore gap or the documented immediate no-op form after an X2-affecting sync such as `П->X r`/`Cx`/conditional fallthrough, and refuses display/raw/context-sensitive follow-up `.`/`ВП` cases.
 18. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and both the `.` restore gap and missing stack-lift observation are proven, allowing later DSE to remove now-unused scratch stores.
 19. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.
 20. `dead-store-elimination` — removes direct stores, plus stable-indirect stores with proved targets, whose target register is not live after the write in a CFG that follows proved indirect flow targets (`indirect-target=NN`) and does not affect number-entry/input finalization or the previous-command context consumed by `ВП` while it restores X2; mutating indirect selectors are kept.

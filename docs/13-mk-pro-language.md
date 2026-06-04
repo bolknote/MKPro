@@ -1256,7 +1256,11 @@ The pipeline currently contains:
   `X` and `decimal:02:unnormalized` in `X2`, so a restore cannot accidentally
   treat a leading-zero display value as the same hidden value. The same shape is
   reserved for future `hex:...` mantissa facts; hexadecimal concatenation itself
-  is not inferred here yet.
+  is not inferred here yet. A closed-context `.` now transfers the hidden X2
+  facts back into visible `X`; decimal facts are normalized for `X` during that
+  transfer while the hidden X2 representation stays unchanged. If number entry
+  is still open, as in `1.`, the same byte is treated as decimal input and the
+  proof is cleared instead of inventing a restore.
 - **x2-noop-restore** — removes `.` when the value proof shows that `X` already
   contains the same value as hidden `X2` and the separate restore-gap proof says
   the dot is in a safe X2 context. It also accepts the documented no-op form
@@ -1270,10 +1274,13 @@ The pipeline currently contains:
   whose main job is to shape the next X2 restoration rather than to change `X`.
 - **x2-hidden-temp-restore** — replaces a direct scratch `П->X r`, or a
   stable-indirect proved scratch `К П->X R7..Re`, with `.` when X2-register
-  dataflow proves X2 already contains the same register value, a separate `.`
-  restore-gap proof has seen two safe X2-preserving executable steps after the
-  last X2 sync, and the normal stack-lift/X2-context guards prove that the
-  recall's stack shift and previous-command class are not observable. The
+  dataflow or the stricter X2 value proof shows that hidden X2 already contains
+  the same register value. The value proof matters after a closed-context `.`
+  restore: visible `X` was restored, hidden X2 kept the same `reg:r` fact, and
+  a later scratch alias can still be recovered through another `.`. A separate
+  `.` restore-gap proof must have seen two safe X2-preserving executable steps
+  after the last X2 sync, and the normal stack-lift/X2-context guards prove that
+  the recall's stack shift and previous-command class are not observable. The
   rewrite is intentionally one cell for one cell; the win appears when the
   following liveness pass removes the scratch `X->П r`/`К X->П R7..Re` whose
   only remaining purpose was that recall. Repeated reads of loop/state registers

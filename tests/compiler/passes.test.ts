@@ -514,6 +514,53 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:02:unnormalized"]);
   });
 
+  it("x2 value dataflow restores X from hidden X2 through dot", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x35, "К {x}"),
+      plain(0x0a, "."),
+      store("2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[2]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["reg:1"]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["reg:1"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["reg:1"]);
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["reg:1", "reg:2"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["reg:1", "reg:2"]);
+  });
+
+  it("x2 value dataflow normalizes visible X when dot restores leading-zero X2", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x35, "К {x}"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[3]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:02:unnormalized"]);
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:02:unnormalized"]);
+  });
+
+  it("x2 value dataflow treats dot in open number entry as decimal input", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      store("2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[2]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual([]);
+  });
+
   it("x2-noop-restore removes a safe dot when X already has the X2 register value", () => {
     const program: IrOp[] = [
       recall("1"),
@@ -695,6 +742,26 @@ describe("ir passes on synthetic programs", () => {
 
     expect(restored.applied).toBe(1);
     expect(restored.ops[3]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore uses value dataflow after a dot restore", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x35, "К {x}"),
+      plain(0x54, "К НОП"),
+      plain(0x0a, "."),
+      store("2"),
+      plain(0x35, "К {x}"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
     expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });

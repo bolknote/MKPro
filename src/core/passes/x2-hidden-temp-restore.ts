@@ -4,12 +4,14 @@ import { computeLiveness } from "./liveness-analysis.ts";
 import {
   computeX2DotRestoreGapStates,
   computeX2RegisterStates,
+  computeX2ValueStates,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   knownIndirectMemoryTarget,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
   removingRecallCanExposeX2Restore,
+  x2ValueSetHasRegister,
   type IrPass,
   type IrPassFn,
 } from "./helpers.ts";
@@ -18,6 +20,7 @@ const DOT = 0x0a;
 
 const run: IrPassFn = (ops) => {
   const x2States = computeX2RegisterStates(ops);
+  const x2ValueStates = computeX2ValueStates(ops);
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
   const liveness = computeLiveness(ops);
   let applied = 0;
@@ -29,7 +32,10 @@ const run: IrPassFn = (ops) => {
     if (isDisplayFocusSensitive(op)) return op;
     if (findDeadScratchStore(ops, index, register) === undefined) return op;
     if (liveness.liveOut[index]?.has(register) === true) return op;
-    if (x2States[index]?.has(register) !== true) return op;
+    if (
+      x2States[index]?.has(register) !== true &&
+      !x2ValueSetHasRegister(x2ValueStates[index]?.x2, register)
+    ) return op;
     if (dotSafeStates[index] !== true) return op;
     if (removingRecallCanExposeStackLift(ops, index)) return op;
     if (
