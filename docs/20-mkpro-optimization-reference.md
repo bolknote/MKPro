@@ -34,6 +34,9 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
 ## 3) Capability families (what the optimizer is able to report)
 
 Below are the public capability IDs from `report.optimizer.capabilities`.
+Do not read every ID as a separate optimization mechanism: the public names are
+leaf-level report markers, and several markers are different entry points into
+the same generalized lowering strategy.
 
 - `branch-removal` — removes an unnecessary branch when the needed value can be computed without a separate branch path.
 - `arithmetic-if-select` — emits selected values through arithmetic formulas instead of `if/else`.
@@ -97,6 +100,76 @@ Note:
 - The method IDs listed in this reference are the ones emitted into `report.optimizations` / `report.optimizer`, while the values above are structural field/call labels used during lowering.
 
 Capabilities can be `considered` and not active if no matching shape is found.
+
+## 3a) Optimization-family generalization map
+
+The optimizer intentionally keeps fine-grained names in `report.optimizations`
+so explain/json output can be correlated with local source and IR shapes. For
+implementation and tuning, many of those names fall into broader families:
+
+- **Value residency and forwarding** — keeps already-available values in
+  `X`/stack/known-zero locations instead of storing or recalling them again.
+  Includes `last-x-reuse`, `flow-x-reuse`, `branch-target-x-reuse`,
+  `condition-current-x-reuse`, `display-current-x-reuse`, `known-zero-reuse`,
+  `zero-reuse`, `stack-resident-*`, and `z-stack-*`.
+- **Stop/read/prompt fusion** — exploits the calculator stop contract where the
+  shown value and read input are already on the stack. Includes
+  `show-read-fusion`, `show-read-stack-stop-risk-lowering`,
+  `loop-carried-prompt-*`, `show-read-guarded-transfer`,
+  `x-param-stack-stop-risk-*`, and `entered-current-x`.
+- **Domain/error trap lowering** — turns terminal error guards into
+  self-trapping opcodes on the value already in `X`. Includes
+  `domain-error-guard`, `assign-zero-domain-guard`,
+  `indexed-assign-zero-domain-guard`, `decrement-underflow-domain-guard`,
+  `decrement-zero-domain-guard`, `error-stop`, and related literal stop paths.
+- **Counted-loop and decrement-counter lowering** — recognizes safe countdown
+  forms and supplies the counter initial value from inline source, setup, or
+  state normalization. Includes `state-init-counted-loop`,
+  `setup-only-counted-loop-init`, `initialized-counted-while-loop`,
+  `fl-decrement-zero-branch`, `indirect-incdec-counter`, and
+  `r0-indirect-counter`. `counted-loop-unroll` is a separate strategy for
+  small constant-trip loops.
+- **Selector, indirect addressing, and hardware side-effect reuse** — plans
+  selectors once, proves exact-machine behavior, and reuses destructive
+  indirect side effects when legal. Includes `affine-indexed-selector-reuse`,
+  `indexed-selector-cache`, `indirect-memory-alias-selector`,
+  `fractional-indirect-addressing`, `indirect-selector-integer-part-reuse`,
+  `destructive-selector-operand-order`, `stable-indirect-flow`,
+  `preloaded-indirect-flow`, `runtime-indirect-call-flow`,
+  `r0-fractional-sentinel`, and `super-dark-*`.
+- **Helperization, shared bodies, and tail merging** — extracts or jumps into
+  repeated byte sequences when the `ПП`/`В/О` or jump cost is lower than
+  duplication. Includes `shared-terminal-tail`, `shared-straight-line-helper`,
+  `shared-call-tail`, `return-suffix-gadget`, `duplicate-failure-tail-merge`,
+  `expression-helper`, `near-any-helper`, `random-cell-helper`,
+  `bit-mask-helper`, spatial helpers, display helpers, and show-sequence
+  helpers.
+- **Branch, dispatch, and residual normalization** — selects between
+  branchless arithmetic, direct tests, residual reuse, compact dispatch, and
+  branch-order variants. Includes `branch-removal`, `arithmetic-if-*`,
+  `zero-condition-test`, `comparison-boundary-normalization`, `residual-*`,
+  `dispatch-*`, `if-chain-dispatch-canonicalization`,
+  `terminal-if-direct-branch`, and `if-branch-order-inversion`.
+- **Mask, membership, spatial, and packed-grid reuse** — builds masks or
+  coordinate-derived values once, then reuses them through scratch, stack, X2,
+  or shared helpers. Includes `cell-membership-*`, `membership-mask-*`,
+  `mask-stack-op-reuse`, `bit-mask-condition-helper`,
+  `spatial-hit-condition-helper`, `bit-set-mask-cse`, `grid-cell-mask-cse`,
+  and `packed-grid-primitive-lowering`.
+- **Display strategy lowering** — chooses a display representation, prepares
+  display inputs, reuses current stack state where possible, and helperizes
+  repeated output bodies. Includes `screen-*`, `packed-display-*`,
+  `display-byte-*`, `formatted-coord-report-*`, `display-current-x-reuse`,
+  `display-stack-reuse`, and `show-sequence-helper`.
+- **Setup, preloads, constants, and startup trade-offs** — balances shorter
+  main code against setup cost and available registers. Includes
+  `constant-synthesis`, `preloaded-constant`, `auto-preload-initial-state`,
+  `duplicate-preload-store-reuse`, `startup-aware-constant-preloads`, and
+  constant-demotion rescue candidates.
+
+When adding a new reported name, prefer documenting it as a leaf under one of
+these families unless it introduces a new proof model, machine feature, or
+pipeline phase.
 
 ## 4) AST and source-level rewrites
 
@@ -254,6 +327,28 @@ Machine-level variants around branches:
 ## 5a) Candidate variants and layout re-trials
 
 The `report.candidates` array in `report` shows lowerings that were recompiled and scored during best-fit selection, then one entry is marked `selected`. These are distinct from always-on `report.optimizations` entries.
+
+Many candidate IDs are generated from a small set of orthogonal axes rather
+than being independent rewrites. Read names such as
+`domain-error-guards-unroll-setup-counted-loop-<layout>` as "enable the
+domain-error rewrite, enable counted-loop unroll, allow setup-counted-loop
+initialization, then try a specific procedure layout." The common axes are:
+
+- **Feature toggles**: `domain-error-guards`, `show-read-guarded-transfer`,
+  `counted-loop-unroll`, `setup-counted-loop`, `stack-resident-temps`,
+  `x-param-value-function`, `packed-counter-stripes`, and
+  `inline-floor-packed-row-expression`.
+- **Canonicalization/support toggles**: `free-residual-dispatch-scratch`,
+  `if-chain-dispatch-canonicalization`, `repeated-unary-update-arg-temp`,
+  `coalesce-copies`, and constant preload demotion/reclamation.
+- **Layout axes**: late terminal-if variants, branch-order trials, procedure
+  order (`call-count`, `size-asc`, `size-desc`, `reverse`), helper/procedure
+  hoisting, and tail-branch inversion.
+- **Helper-sharing axes**: random-cell, bit-mask, straight-line body, sibling
+  proc, and call-body helper extraction.
+
+The long candidate names are kept because they make the selected compile path
+unambiguous in reports; the generalized model is the axis combination above.
 
 - `late-layout-if-variant` — re-runs lowering with an aggressive terminal-if lowering variant after full layout.
 - `late-layout-branch-order` — re-runs with swapped terminal-if branch order after full layout.
