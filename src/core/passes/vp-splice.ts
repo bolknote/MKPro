@@ -86,6 +86,19 @@ function canRemoveOpenMantissaSignPairBeforeProvedVp(
   return sameNonEmptyStringSet(state.entry.raw, stateAfterPair?.vpEntryMantissa);
 }
 
+function canRemoveVpContextSignPairBeforeFreshDigit(
+  ops: readonly IrOp[],
+  secondSignIndex: number,
+  state: X2ValueDataflowState | undefined,
+  stateAfterPair: X2ValueDataflowState | undefined,
+): boolean {
+  if (state?.entry.kind !== "closed" || state.vpContext?.kind !== "exponent") return false;
+  if (stateAfterPair?.entry.kind !== "closed" || stateAfterPair.vpContext?.kind !== "exponent") return false;
+  const nextIndex = nextNonLabelIndex(ops, secondSignIndex + 1);
+  if (nextIndex === undefined || !isDecimalDigit(ops[nextIndex]!)) return false;
+  return sameExponentContext(state.vpContext, stateAfterPair.vpContext);
+}
+
 function decimalValueSetsIntersect(left: X2ValueSet | undefined, right: X2ValueSet | undefined): boolean {
   if (left === undefined || right === undefined) return false;
   for (const value of left) {
@@ -118,6 +131,14 @@ function sameNonEmptyStringSet(left: ReadonlySet<string> | undefined, right: Rea
     if (!right.has(value)) return false;
   }
   return true;
+}
+
+function sameExponentContext(
+  left: Extract<X2ValueDataflowState["vpContext"], { kind: "exponent" }>,
+  right: Extract<X2ValueDataflowState["vpContext"], { kind: "exponent" }>,
+): boolean {
+  return sameNonEmptyStringSet(left.mantissa, right.mantissa) &&
+    sameNonEmptyStringSet(left.exponent, right.exponent);
 }
 
 // These rewrites are proven behaviorally equivalent on the MK-61 emulator:
@@ -191,6 +212,17 @@ const run: IrPassFn = (ops) => {
       remove.add(i - 1);
       remove.add(i);
     }
+    // After an X2-preserving gap, a VP-context /-/ /-/ pair is observable
+    // because it restores X2 into X even though the exponent sign cancels. A
+    // following digit starts fresh number entry, so that restored X is lost.
+    if (
+      isFreeStandingSignChange(prev) &&
+      isFreeStandingSignChange(cur) &&
+      canRemoveVpContextSignPairBeforeFreshDigit(ops, i, x2ValueStates[i - 1], x2ValueStates[i + 1])
+    ) {
+      remove.add(i - 1);
+      remove.add(i);
+    }
     // In closed context, two sign changes are only removable when value
     // dataflow proves ordinary decimal X and X2 equality and the pair is not
     // acting as a previous-command shield for a later `.`/`/-/`/`ВП`.
@@ -210,7 +242,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "vp-exponent-splice",
-        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an X2 boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent-digit empty separators, VP-context /-/ separators, exponent /-/ /-/ -> empty, closed decimal /-/ /-/ -> empty).`,
+        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an X2 boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent-digit empty separators, VP-context /-/ separators, exponent /-/ /-/ -> empty, mantissa /-/ /-/ before proved ВП/fresh digit -> empty, closed decimal /-/ /-/ -> empty).`,
       },
     ],
   };

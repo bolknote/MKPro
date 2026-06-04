@@ -4235,6 +4235,46 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes a VP-context sign pair before fresh digit entry", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x04, "4"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice keeps a VP-context sign pair when its X2 restore is observable", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("vp-splice keeps an empty separator before VP-context sign-change without an exponent digit", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
