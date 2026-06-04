@@ -46,6 +46,11 @@ export interface X2ValueDataflowState {
 type X2EntryState =
   | { readonly kind: "closed" }
   | { readonly kind: "open"; readonly raw: ReadonlySet<string> }
+  | {
+      readonly kind: "exponent";
+      readonly mantissa: ReadonlySet<string>;
+      readonly exponent: ReadonlySet<string>;
+    }
   | { readonly kind: "unknown" };
 
 export interface X2RestoreExposureOptions {
@@ -735,6 +740,9 @@ function transferPlainX2ValueState(
   if (op.opcode === 0x0b) {
     return transferSignChangeX2ValueState(input);
   }
+  if (op.opcode === 0x0c) {
+    return transferVpX2ValueState(input);
+  }
   if (op.opcode === 0x0d) {
     return { x: new Set([NORMALIZED_DECIMAL_ZERO]), x2: new Set([NORMALIZED_DECIMAL_ZERO]), entry: closedX2EntryState() };
   }
@@ -744,6 +752,10 @@ function transferPlainX2ValueState(
 }
 
 function transferDecimalDigitX2ValueState(input: X2ValueDataflowState, digit: string): X2ValueDataflowState {
+  if (input.entry.kind === "exponent") {
+    const entry = advanceExponentDigitEntry(input.entry, digit);
+    return { x: new Set(), x2: new Set(), entry };
+  }
   const entry = advanceDecimalDigitEntry(input.entry, digit);
   if (entry.kind !== "open") {
     return { x: new Set(), x2: new Set(), entry };
@@ -771,6 +783,13 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
 }
 
 function transferSignChangeX2ValueState(input: X2ValueDataflowState): X2ValueDataflowState {
+  if (input.entry.kind === "exponent") {
+    return {
+      x: new Set(),
+      x2: new Set(),
+      entry: signChangeExponentEntry(input.entry),
+    };
+  }
   if (input.entry.kind !== "open") {
     return { x: new Set(), x2: new Set(), entry: { kind: "unknown" } };
   }
@@ -784,6 +803,26 @@ function transferSignChangeX2ValueState(input: X2ValueDataflowState): X2ValueDat
     if (x2Fact !== undefined) x2.add(x2Fact);
   }
   return { x, x2, entry: closedX2EntryState() };
+}
+
+function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowState {
+  if (input.entry.kind === "open") {
+    // Keep this structural only: exponent-entry hidden X2 shapes can make a
+    // later `.` signal ЕГГ0Г, so they are not safe value-alias facts yet.
+    return {
+      x: new Set(),
+      x2: new Set(),
+      entry: {
+        kind: "exponent",
+        mantissa: new Set(input.entry.raw),
+        exponent: new Set([""]),
+      },
+    };
+  }
+  if (input.entry.kind === "exponent") {
+    return { x: new Set(), x2: new Set(), entry: cloneX2EntryState(input.entry) };
+  }
+  return { x: new Set(), x2: new Set(), entry: { kind: "unknown" } };
 }
 
 function transferIndirectFlowX2ValueState(
@@ -1032,6 +1071,13 @@ function closedX2EntryState(): X2EntryState {
 
 function cloneX2EntryState(input: X2EntryState): X2EntryState {
   if (input.kind === "open") return { kind: "open", raw: new Set(input.raw) };
+  if (input.kind === "exponent") {
+    return {
+      kind: "exponent",
+      mantissa: new Set(input.mantissa),
+      exponent: new Set(input.exponent),
+    };
+  }
   return input;
 }
 
@@ -1041,6 +1087,7 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
 
 function advanceDecimalDigitEntry(input: X2EntryState, digit: string): X2EntryState {
   if (input.kind === "unknown") return { kind: "unknown" };
+  if (input.kind === "exponent") return advanceExponentDigitEntry(input, digit);
   const source = input.kind === "closed" ? new Set([""]) : input.raw;
   const raw = new Set<string>();
   for (const prefix of source) {
@@ -1051,17 +1098,55 @@ function advanceDecimalDigitEntry(input: X2EntryState, digit: string): X2EntrySt
   return { kind: "open", raw };
 }
 
+function advanceExponentDigitEntry(input: Extract<X2EntryState, { kind: "exponent" }>, digit: string): X2EntryState {
+  const exponent = new Set<string>();
+  for (const prefix of input.exponent) {
+    const sign = prefix.startsWith("-") ? "-" : "";
+    const digits = prefix.slice(sign.length);
+    if (digits.length >= 2) return { kind: "unknown" };
+    exponent.add(`${prefix}${digit}`);
+  }
+  return {
+    kind: "exponent",
+    mantissa: new Set(input.mantissa),
+    exponent,
+  };
+}
+
+function signChangeExponentEntry(input: Extract<X2EntryState, { kind: "exponent" }>): X2EntryState {
+  const exponent = new Set<string>();
+  for (const raw of input.exponent) {
+    exponent.add(raw.startsWith("-") ? raw.slice(1) : `-${raw}`);
+  }
+  return {
+    kind: "exponent",
+    mantissa: new Set(input.mantissa),
+    exponent,
+  };
+}
+
 function joinX2EntryStates(current: X2EntryState, incoming: X2EntryState): X2EntryState {
   if (current.kind === "unknown" || incoming.kind === "unknown") return { kind: "unknown" };
-  if (current.kind === "closed" || incoming.kind === "closed") {
+  if (current.kind === "closed" || incoming.kind === "closed" || current.kind !== incoming.kind) {
     return current.kind === incoming.kind ? closedX2EntryState() : { kind: "unknown" };
   }
+  if (current.kind === "exponent" && incoming.kind === "exponent") {
+    const mantissa = joinStringSets(current.mantissa, incoming.mantissa);
+    const exponent = joinStringSets(current.exponent, incoming.exponent);
+    return mantissa.size === 0 || exponent.size === 0
+      ? { kind: "unknown" }
+      : { kind: "exponent", mantissa, exponent };
+  }
+  if (current.kind !== "open" || incoming.kind !== "open") return { kind: "unknown" };
   const joined = joinStringSets(current.raw, incoming.raw);
   return joined.size === 0 ? { kind: "unknown" } : { kind: "open", raw: joined };
 }
 
 function sameX2EntryState(left: X2EntryState, right: X2EntryState): boolean {
   if (left.kind !== right.kind) return false;
+  if (left.kind === "exponent" && right.kind === "exponent") {
+    return sameStringSet(left.mantissa, right.mantissa) && sameStringSet(left.exponent, right.exponent);
+  }
   if (left.kind !== "open" || right.kind !== "open") return true;
   return sameStringSet(left.raw, right.raw);
 }

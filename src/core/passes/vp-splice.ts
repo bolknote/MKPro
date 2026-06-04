@@ -1,7 +1,8 @@
 import type { IrOp } from "../types.ts";
-import { emptyResult, hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
+import { computeX2ValueStates, emptyResult, hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
 
 const VP = 0x0c;
+const SIGN_CHANGE = 0x0b;
 const KNOP = 0x54;
 const K1 = 0x55;
 const K2 = 0x56;
@@ -22,12 +23,19 @@ function isFreeStandingEmptyOp(op: IrOp): boolean {
   return !("meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0);
 }
 
+function isFreeStandingSignChange(op: IrOp): boolean {
+  if (!isPlainOpcode(op, SIGN_CHANGE)) return false;
+  return !("meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0);
+}
+
 // Both rewrites are proven behaviorally equivalent on the MK-61 emulator:
 //   ВП ВП  ≡ ВП   (a second exponent-entry while already in exponent mode is inert)
 //   КНОП/К1/К2 ВП ≡ ВП  (an empty op immediately before exponent entry is removable)
-// Each collapse drops exactly one cell without changing any observable result.
+//   ВП ... /-/ /-/ ... ≡ ВП ... ... while the dataflow proves exponent-entry
+// Each collapse drops one or two cells without changing any observable result.
 const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
+  const x2ValueStates = computeX2ValueStates(ops);
   for (let i = 1; i < ops.length; i += 1) {
     const prev = ops[i - 1]!;
     const cur = ops[i]!;
@@ -40,6 +48,17 @@ const run: IrPassFn = (ops) => {
     // КНОП/К1/К2 ВП -> ВП : drop the inert empty op preceding exponent entry.
     if (isFreeStandingEmptyOp(prev) && isFreeStandingVp(cur)) {
       remove.add(i - 1);
+      continue;
+    }
+    // In exponent-entry mode /-/ only toggles the exponent sign. Adjacent toggles
+    // cancel; outside exponent-entry this is not safe before following digits.
+    if (
+      isFreeStandingSignChange(prev) &&
+      isFreeStandingSignChange(cur) &&
+      x2ValueStates[i - 1]?.entry.kind === "exponent"
+    ) {
+      remove.add(i - 1);
+      remove.add(i);
     }
   }
   if (remove.size === 0) return emptyResult(ops);
@@ -49,7 +68,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "vp-exponent-splice",
-        detail: `Collapsed ${remove.size} redundant ВП/empty-op cell(s) around an exponent-entry boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП).`,
+        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an exponent-entry boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent /-/ /-/ -> empty).`,
       },
     ],
   };

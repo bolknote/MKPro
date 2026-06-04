@@ -24,6 +24,7 @@ import { sharedStraightLineHelper } from "../../src/core/passes/shared-straight-
 import { storeRecallPeephole } from "../../src/core/passes/store-recall-peephole.ts";
 import { tailBranchInversion } from "../../src/core/passes/tail-branch-inversion.ts";
 import { tailCallLowering } from "../../src/core/passes/tail-call.ts";
+import { vpSplice } from "../../src/core/passes/vp-splice.ts";
 import { vpX2Peephole } from "../../src/core/passes/vp-x2-peephole.ts";
 import { x2HiddenTempRestore } from "../../src/core/passes/x2-hidden-temp-restore.ts";
 import { x2NoopRestore } from "../../src/core/passes/x2-noop-restore.ts";
@@ -272,6 +273,21 @@ function registerStateText(state: ReadonlySet<RegisterName> | undefined): string
 
 function x2ValueStateText(state: X2ValueSet | undefined): string[] | undefined {
   return state === undefined ? undefined : [...state].sort();
+}
+
+function x2EntryStateText(state: ReturnType<typeof computeX2ValueStates>[number]): string | undefined {
+  if (state === undefined) return undefined;
+  switch (state.entry.kind) {
+    case "closed":
+    case "unknown":
+      return state.entry.kind;
+    case "open":
+      return `open:${[...state.entry.raw].sort().join("|")}`;
+    case "exponent":
+      return `exponent:${[...state.entry.mantissa].sort().join("|")}:${
+        [...state.entry.exponent].sort().join("|")
+      }`;
+  }
 }
 
 describe("ir passes on synthetic programs", () => {
@@ -591,6 +607,77 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ValueStateText(states[2]?.x)).toEqual([]);
     expect(x2ValueStateText(states[2]?.x2)).toEqual([]);
+  });
+
+  it("x2 value dataflow tracks exponent-entry state after ВП", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      store("2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[3])).toBe("exponent:12:");
+    expect(x2EntryStateText(states[4])).toBe("exponent:12:3");
+    expect(x2ValueStateText(states[4]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual([]);
+    expect(x2EntryStateText(states[5])).toBe("closed");
+    expect(x2ValueStateText(states[5]?.x)).toEqual(["reg:2"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual([]);
+  });
+
+  it("x2 value dataflow keeps sign-change in exponent-entry state", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x03, "3"),
+      store("2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[4])).toBe("exponent:12:-");
+    expect(x2EntryStateText(states[5])).toBe("exponent:12:-3");
+    expect(x2ValueStateText(states[5]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual([]);
+  });
+
+  it("x2 value dataflow refuses overlong exponent-entry state", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      plain(0x03, "3"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[5])).toBe("unknown");
+    expect(x2ValueStateText(states[5]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual([]);
+  });
+
+  it("x2-hidden-temp-restore does not turn exponent-entry scratch recalls into dot restores", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      store("2"),
+      plain(0x35, "К {x}"),
+      recall("2"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("x2-noop-restore removes a safe dot when X already has the X2 register value", () => {
@@ -3708,6 +3795,43 @@ describe("ir passes on synthetic programs", () => {
 
     expect(result.applied).toBe(1);
     expect(result.ops[3]).toMatchObject({ kind: "indirect-store", register: "8", opcode: 0xb8 });
+  });
+
+  it("vp-splice removes adjacent exponent sign toggles", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice keeps adjacent mantissa sign toggles before a following digit", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("vp-x2-peephole removes fractional op already supplied by a display ВП boundary", () => {

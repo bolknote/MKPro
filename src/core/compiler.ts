@@ -15035,7 +15035,7 @@ const optimizerCapabilities: Array<{
     source: "mk61-delta",
     requires: ["x2-register"],
     activeWhen: ["vp-fraction-restore", "vp-exponent-splice"],
-    detail: "Uses ВП where it simultaneously restores X2 and provides the needed fractional/mantissa side effect, including path-sensitive CFG proofs of X2 sync plus a preserving executable gap; also collapses redundant ВП ВП / КНОП ВП / К1 ВП / К2 ВП exponent-entry splices.",
+    detail: "Uses ВП where it simultaneously restores X2 and provides the needed fractional/mantissa side effect, including path-sensitive CFG proofs of X2 sync plus a preserving executable gap; also collapses redundant ВП ВП / КНОП ВП / К1 ВП / К2 ВП exponent-entry splices and proved exponent /-/ /-/ toggles.",
   },
   {
     id: "x2-hidden-temp",
@@ -15043,7 +15043,7 @@ const optimizerCapabilities: Array<{
     source: "mk61-delta",
     requires: ["x2-register"],
     activeWhen: ["membership-collection-x2-restore", "x2-hidden-temp-restore", "x2-noop-restore"],
-    detail: "Uses the hidden X2 display register as a temporary across ordinary X2-preserving logic: a membership test can keep a deterministic mask in Y, direct scratch recalls can restore a proved X2-resident value through '.', restored dots keep hidden reg:r value facts alive for later scratch aliases, and no-op restores are removed when value dataflow proves X already contains the hidden X2 value, including normalized signed/unsigned decimal digit-runs while keeping leading-zero X2 facts distinct; known-fractional masks insert a preserving gap before the restore when К{x} is skipped.",
+    detail: "Uses the hidden X2 display register as a temporary across ordinary X2-preserving logic: a membership test can keep a deterministic mask in Y, direct scratch recalls can restore a proved X2-resident value through '.', restored dots keep hidden reg:r value facts alive for later scratch aliases, and no-op restores are removed when value dataflow proves X already contains the hidden X2 value, including normalized signed/unsigned decimal digit-runs while keeping leading-zero X2 facts distinct; exponent-entry ВП states are tracked structurally without unsafe value aliases; known-fractional masks insert a preserving gap before the restore when К{x} is skipped.",
   },
   {
     id: "hex-mantissa-arithmetic",

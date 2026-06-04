@@ -1256,7 +1256,13 @@ The pipeline currently contains:
   proof is ordinary-code dataflow: X-preserving empty operators keep the value
   live, branch-specific conditional X2 effects participate in joins, and
   mutating indirect selectors drop only facts tied to the mutated selector. The
-  fact spelling is normalization-aware: `12` produces the shared fact
+  number-entry state is split between mantissa entry and exponent entry: `ВП`
+  after an open mantissa starts an exponent-entry state, exponent digits and
+  exponent `/-/` stay in that state, and the proof deliberately does not create
+  `X2` value aliases for the resulting scientific number. Emulator probes show
+  that a later `.` can signal `ЕГГ0Г` for such hidden exponent forms, so these
+  states are modeled structurally until the full `ВП`/mantissa shape proof
+  exists. The fact spelling is normalization-aware: `12` produces the shared fact
   `decimal:12:normalized`, while `02` produces `decimal:2:normalized` in `X`
   and `decimal:02:unnormalized` in `X2`, so a restore cannot accidentally treat
   a leading-zero display value as the same hidden value. The same shape is
