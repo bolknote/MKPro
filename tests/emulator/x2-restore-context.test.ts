@@ -86,4 +86,11 @@ describe("X2 restore context", () => {
     expect(runSignature([0x00, 0x05, 0x0c, 0x03, 0x0a, 0x50])).toContain("ЕГГ0Г");
     expect(runX([0x00, 0x05, 0x0c, 0x03, 0xf0, 0x0a, 0x50])).toBe("5000,");
   });
+
+  it("dot-restored leading-zero X2 changes the following ВП mantissa shape", () => {
+    // `02; К{x}; .` restores the hidden leading-zero form, but a following ВП
+    // is not equivalent to ordinary normalized `2 ВП`.
+    expect(runX([0x00, 0x02, 0x35, 0x0a, 0x0c, 0x03, 0x50])).toBe("22000,");
+    expect(runX([0x02, 0x0c, 0x03, 0x50])).toBe("2000,");
+  });
 });

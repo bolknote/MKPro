@@ -2552,6 +2552,24 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-dead-restore-before-overwrite removes structural ВП restore before hard overwrite", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const 8.70Е2-6С"),
+      plain(0x0c, "ВП"),
+      plain(0x55, "К1"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      recall("1", "preload const 8.70Е2-6С"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
   it("x2-dead-restore-before-overwrite removes dot after a recalled decimal register", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),

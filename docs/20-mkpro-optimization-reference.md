@@ -706,8 +706,9 @@ Display rewrites are separated into strategy selection + body lowering.
 - `x2-dead-restore-before-overwrite` — removes a proved-safe X2 restore whose
   visible `X` result is immediately overwritten by a hard X/X2 replacement
   command. The proof uses decimal X2 value facts for `.`/`/-/` and
-  mantissa/exponent-entry state for `ВП`; unknown register-valued X2 facts are
-  kept because hex/non-normal preloads can make the restore itself observable.
+  mantissa/exponent-entry state for `ВП`; structural hex/super `ВП` sources are
+  accepted only as shape facts, while unknown register-valued X2 facts are kept
+  because hex/non-normal preloads can make the restore itself observable.
 - `x2-register-dataflow` — tracks definite states of the form “X2 currently
   equals register `r`” through X2-preserving code, stores, known indirect memory
   recalls, direct or proved-indirect calls into the graph, proved indirect flow
@@ -793,7 +794,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `1.`. The value proof also treats `В↑` and `F0..FF` empty opcodes as
     X-preserving X2-affecting commands: when `X` is already proved, those
     opcodes sync the same fact into `X2`, including normalized visible values
-    whose old X2 form had leading zeroes. Closed-context `/-/` is modeled for
+    whose old X2 form had leading zeroes. A dot-restored leading-zero X2 form
+    is deliberately not upgraded into an ordinary `ВП` mantissa source:
+    `02; К{x}; .; ВП; 3` yields `22000` on the emulator, not `2 ВП 3`.
+    Closed-context `/-/` is modeled for
     proved normalized decimal `X == X2` facts, including zero; this lets an
     immediately following `.` be removed unless it would shape a later X2
     restore context. `ВП` after an open mantissa creates both a structural exponent-entry
@@ -839,8 +843,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     restored `X` before it can be observed. `.` and `/-/` require a closed,
     non-`ВП` context with a proved decimal X2 value; a bare `reg:r` fact is
     intentionally rejected because a preloaded hex or non-normal register value
-    can make `.` signal `ЕГГ0Г`. This pass requests the register value-memory
-    layer and also consumes decimal preload facts from `П->X r` metadata:
+    can make `.` signal `ЕГГ0Г`. `ВП` may also be removed from a structural
+    hex/super `vpEntryShape` source when the following overwrite destroys its
+    visible result; that does not make structural `.`/`/-/` restores dot-safe.
+    This pass requests the register value-memory layer and also consumes decimal preload facts from `П->X r` metadata:
     direct stores of proved decimal `X` facts seed remembered `decimal:*` facts
     for later recalls, joins keep only facts common to every path, and unknown
     indirect stores clear the memory. Hex-like preload facts remain shape-only,

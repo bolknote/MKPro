@@ -83,4 +83,13 @@ describe("dead X2 restore before overwrite", () => {
     expect(optimized).toEqual(program);
     expect(signature(optimized, { "1": "Г" })).toContain("ЕГГ0Г");
   });
+
+  it("structural ВП before Cx is observationally dead for hex/super register values", () => {
+    const withVp = [RECALL1, VP, K1, CX, STOP];
+    const withoutVp = [RECALL1, CX, STOP];
+
+    for (const value of ["Г", "FA", "-FA"]) {
+      expect(display(withoutVp, { "1": value })).toBe(display(withVp, { "1": value }));
+    }
+  });
 });

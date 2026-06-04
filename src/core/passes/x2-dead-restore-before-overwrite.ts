@@ -61,9 +61,14 @@ function isDeadRestoreCandidate(
   if (op.opcode === VP) {
     return state.entry.kind === "open" ||
       state.entry.kind === "exponent" ||
-      (state.entry.kind === "closed" && state.vpEntryMantissa !== undefined);
+      (state.entry.kind === "closed" &&
+        (state.vpEntryMantissa !== undefined || hasStructuralVpEntryShape(state)));
   }
   return false;
+}
+
+function hasStructuralVpEntryShape(state: X2ValueDataflowState): boolean {
+  return state.vpEntryShape !== undefined && state.vpEntryShape.size > 0;
 }
 
 function followingHardOverwrite(

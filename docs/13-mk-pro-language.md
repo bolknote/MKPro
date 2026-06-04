@@ -1260,8 +1260,9 @@ The pipeline currently contains:
   only while a decimal digit-run is still open: `12 /-/` produces the shared
   fact `decimal:-12:normalized`, while `02 /-/` produces normalized visible
   `X=decimal:-2:normalized` and hidden `X2=decimal:-02:unnormalized`.
-  Closed-context `/-/` remains unknown because its MK-61 behavior depends on
-  the previous command/exponent context. Unlike display-byte lowering, this
+  Closed-context `/-/` is modeled only when the proof has a safe decimal,
+  opaque, or structural shape context; otherwise it remains unknown because its
+  MK-61 behavior depends on the previous command/exponent context. Unlike display-byte lowering, this
   proof is ordinary-code dataflow: X-preserving empty operators keep the value
   live, branch-specific conditional X2 effects participate in joins, and
   mutating indirect selectors drop only facts tied to the mutated selector. The
@@ -1290,7 +1291,10 @@ The pipeline currently contains:
   normalized for `X` during that transfer while the hidden X2 representation
   stays unchanged. If number entry
   is still open, as in `1.`, the same byte is treated as decimal input and the
-  proof is cleared instead of inventing a restore. The proof now also keeps a
+  proof is cleared instead of inventing a restore. A dot-restored leading-zero
+  X2 form is also not promoted to an ordinary `ВП` mantissa: emulator probes
+  show `02; К{x}; .; ВП; 3` produces `22000`, not the normalized `2 ВП 3`
+  result. The proof now also keeps a
   register value-memory layer: a direct `X->П r` remembers only concrete
   decimal facts proved for visible `X`, and a later direct or proved indirect
   `П->X r` rehydrates those decimal facts together with the ordinary `reg:r`
@@ -1332,8 +1336,9 @@ The pipeline currently contains:
   X2 value fact. A plain `reg:r` fact is not enough, because a preloaded
   hexadecimal or other non-normal register value may make `.` signal `ЕГГ0Г`
   before the overwrite can run. `ВП` is removed only when the X2 value dataflow
-  still knows an open mantissa, active exponent entry, or proved decimal
-  `vpEntryMantissa` source. This pass requests the register value-memory layer,
+  still knows an open mantissa, active exponent entry, proved decimal
+  `vpEntryMantissa` source, or structural hex/super `vpEntryShape` source; that
+  structural source is not reused to make `.` dot-safe. This pass requests the register value-memory layer,
   so a recall of a previously stored literal-shaped decimal can be treated like
   a proved decimal restore without making arbitrary register contents dot-safe.
 - **x2-hidden-temp-restore** — replaces a direct scratch `П->X r`, or a
