@@ -1228,7 +1228,18 @@ The pipeline currently contains:
   this to distinguish a required sync from a redundant re-sync before later
   `.`/`ВП` restoration. The proof also carries register aliases: when X and X2
   are known to share a register value, a later `X->П s` makes `s` another
-  proven name for the same hidden X2 value.
+  proven name for the same hidden X2 value; if `s` is overwritten while X no
+  longer matches X2, the alias is removed instead of being kept stale.
+- **x2-hidden-temp-restore** — replaces a direct scratch `П->X r` with `.`
+  when X2-register dataflow proves X2 already contains the same register value,
+  a separate `.` restore-gap proof has seen two safe X2-preserving executable
+  steps after the last X2 sync, and the normal stack-lift/X2-context guards
+  prove that the recall's stack shift and previous-command class are not
+  observable. The rewrite is intentionally one cell for one cell; the win
+  appears when the following liveness pass removes the scratch `X->П r` whose
+  only remaining purpose was that recall. Repeated reads of loop/state registers
+  are left as recalls, because changing them to `.` does not free storage and can
+  perturb layout.
 - **dead-store-elimination** — whole-program liveness-driven DSE: removes
   `X->П r` when liveOut at that point excludes `r`, unless that store finalizes
   number entry or supplies the previous-command context consumed by `ВП` while

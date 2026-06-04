@@ -25,6 +25,7 @@ import { storeRecallPeephole } from "../../src/core/passes/store-recall-peephole
 import { tailBranchInversion } from "../../src/core/passes/tail-branch-inversion.ts";
 import { tailCallLowering } from "../../src/core/passes/tail-call.ts";
 import { vpX2Peephole } from "../../src/core/passes/vp-x2-peephole.ts";
+import { x2HiddenTempRestore } from "../../src/core/passes/x2-hidden-temp-restore.ts";
 import { computeX2RegisterStates } from "../../src/core/passes/helpers.ts";
 import type { IrOp, RegisterName } from "../../src/core/types.ts";
 
@@ -262,6 +263,24 @@ describe("ir passes on synthetic programs", () => {
     expect(registerStateText(states[3])).toEqual(["2", "3"]);
   });
 
+  it("x2 register dataflow drops aliases when a register is overwritten from non-X2 X", () => {
+    const program: IrOp[] = [
+      recall("2"),
+      store("3"),
+      plain(0x35, "К {x}"),
+      store("3"),
+      plain(0x20, "F pi"),
+      halt(),
+    ];
+
+    const states = computeX2RegisterStates(program);
+
+    expect(registerStateText(states[2])).toEqual(["2", "3"]);
+    expect(registerStateText(states[3])).toEqual(["2", "3"]);
+    expect(registerStateText(states[4])).toEqual(["2"]);
+    expect(registerStateText(states[5])).toEqual(["2"]);
+  });
+
   it("x2 register dataflow is path-sensitive for direct conditionals", () => {
     const program: IrOp[] = [
       recall("2"),
@@ -279,6 +298,83 @@ describe("ir passes on synthetic programs", () => {
     expect(registerStateText(states[2])).toEqual(["2"]);
     expect(registerStateText(states[4])).toEqual(["2"]);
     expect(registerStateText(states[5])).toEqual(["2"]);
+  });
+
+  it("x2-hidden-temp-restore replaces a safe recall with dot so DSE can remove the scratch store", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      plain(0x35, "К {x}"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[3]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore requires a safe dot restore gap", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      recall("2"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-hidden-temp-restore ignores repeated state recalls that do not free a scratch store", () => {
+    const program: IrOp[] = [
+      store("2"),
+      recall("2"),
+      plain(0x20, "F pi"),
+      plain(0x35, "К {x}"),
+      recall("2"),
+      store("2"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-hidden-temp-restore does not use stale aliases after an overwrite", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      plain(0x35, "К {x}"),
+      store("2"),
+      plain(0x54, "К НОП"),
+      recall("2"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-hidden-temp-restore keeps recalls whose stack lift is consumed", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      plain(0x35, "К {x}"),
+      recall("2"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("dead-store-elimination removes a store overwritten before any read", () => {

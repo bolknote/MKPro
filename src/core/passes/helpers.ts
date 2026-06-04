@@ -192,6 +192,7 @@ export function computeX2RegisterStates(ops: readonly IrOp[]): Array<RegisterVal
 }
 
 type X2RestoreBoundaryState = "none" | "synced" | "boundary";
+type X2DotRestoreGapState = "none" | "synced" | "one-gap" | "safe";
 
 export function computeX2RestoreBoundaryStates(ops: readonly IrOp[]): boolean[] {
   if (ops.length === 0) return [];
@@ -220,6 +221,35 @@ export function computeX2RestoreBoundaryStates(ops: readonly IrOp[]): boolean[] 
   }
 
   return inStates.map((state) => state === "boundary");
+}
+
+export function computeX2DotRestoreGapStates(ops: readonly IrOp[]): boolean[] {
+  if (ops.length === 0) return [];
+  const edges = buildRegisterValueGraph(ops);
+  const inStates: Array<X2DotRestoreGapState | undefined> = Array.from({ length: ops.length }, () => undefined);
+  inStates[0] = "none";
+
+  let changed = true;
+  let iterations = 0;
+  while (changed && iterations < 200) {
+    changed = false;
+    iterations += 1;
+
+    for (let index = 0; index < ops.length; index += 1) {
+      const input = inStates[index];
+      if (input === undefined) continue;
+      for (const edge of edges[index] ?? []) {
+        const output = transferX2DotRestoreGapState(input, ops[index]!, edge.kind);
+        const joined = joinX2DotRestoreGapStates(inStates[edge.target], output);
+        if (joined !== inStates[edge.target]) {
+          inStates[edge.target] = joined;
+          changed = true;
+        }
+      }
+    }
+  }
+
+  return inStates.map((state) => state === "safe");
 }
 
 export function recallAlreadySyncedInX2(
@@ -340,8 +370,55 @@ function transferX2RestoreBoundaryState(
   }
 }
 
+function transferX2DotRestoreGapState(
+  input: X2DotRestoreGapState,
+  op: IrOp,
+  edge: Edge["kind"],
+): X2DotRestoreGapState {
+  if (hasRewriteBarrier(op)) return "none";
+
+  switch (op.kind) {
+    case "label":
+      return input;
+    case "jump":
+    case "call":
+      return input;
+    case "orphan-address":
+    case "store":
+    case "indirect-store":
+      return advanceX2DotRestoreGap(input, true);
+    case "recall":
+    case "indirect-recall":
+    case "return":
+    case "stop":
+      return "synced";
+    case "plain":
+      return transferPlainX2DotRestoreGapState(input, op);
+    case "cjump":
+    case "loop": {
+      const effect = edge === "fallthrough"
+        ? conditionalX2Effect(op, "fallthrough")
+        : edge === "jump"
+          ? conditionalX2Effect(op, "jump")
+          : "unknown";
+      return transferConditionalX2DotRestoreGapState(input, effect);
+    }
+    case "indirect-jump":
+    case "indirect-call":
+    case "indirect-cjump":
+      return "none";
+  }
+}
+
 function x2PreservingExecutableBoundary(input: X2RestoreBoundaryState): X2RestoreBoundaryState {
   return input === "none" ? "none" : "boundary";
+}
+
+function advanceX2DotRestoreGap(input: X2DotRestoreGapState, countsFromFreshSync: boolean): X2DotRestoreGapState {
+  if (input === "none") return "none";
+  if (input === "safe") return "safe";
+  if (input === "one-gap") return "safe";
+  return countsFromFreshSync ? "one-gap" : "synced";
 }
 
 function transferPlainX2RestoreBoundaryState(
@@ -353,12 +430,28 @@ function transferPlainX2RestoreBoundaryState(
   return "none";
 }
 
+function transferPlainX2DotRestoreGapState(input: X2DotRestoreGapState, op: Extract<IrOp, { kind: "plain" }>): X2DotRestoreGapState {
+  const effect = plainX2Effect(op);
+  if (effect === "affects" || effect === "restores") return "synced";
+  if (effect !== "preserves") return "none";
+  return advanceX2DotRestoreGap(input, !isInitialIgnoredDotGapOp(op));
+}
+
 function transferConditionalX2RestoreBoundaryState(
   input: X2RestoreBoundaryState,
   effect: ReturnType<typeof conditionalX2Effect>,
 ): X2RestoreBoundaryState {
   if (effect === "affects") return "synced";
   if (effect === "preserves") return x2PreservingExecutableBoundary(input);
+  return "none";
+}
+
+function transferConditionalX2DotRestoreGapState(
+  input: X2DotRestoreGapState,
+  effect: ReturnType<typeof conditionalX2Effect>,
+): X2DotRestoreGapState {
+  if (effect === "affects") return "synced";
+  if (effect === "preserves") return input;
   return "none";
 }
 
@@ -376,6 +469,25 @@ function x2RestoreBoundaryRank(state: X2RestoreBoundaryState): number {
   return 2;
 }
 
+function joinX2DotRestoreGapStates(
+  current: X2DotRestoreGapState | undefined,
+  incoming: X2DotRestoreGapState,
+): X2DotRestoreGapState {
+  if (current === undefined) return incoming;
+  return x2DotRestoreGapRank(current) < x2DotRestoreGapRank(incoming) ? current : incoming;
+}
+
+function x2DotRestoreGapRank(state: X2DotRestoreGapState): number {
+  if (state === "none") return 0;
+  if (state === "synced") return 1;
+  if (state === "one-gap") return 2;
+  return 3;
+}
+
+function isInitialIgnoredDotGapOp(op: Extract<IrOp, { kind: "plain" }>): boolean {
+  return op.opcode === 0x54 || op.opcode === 0x55 || op.opcode === 0x56;
+}
+
 function addRegisterValue(input: RegisterValueSet, register: RegisterName): Set<RegisterName> {
   const output = new Set(input);
   output.add(register);
@@ -384,6 +496,7 @@ function addRegisterValue(input: RegisterValueSet, register: RegisterName): Set<
 
 function addStoredX2Alias(input: RegisterDataflowState, register: RegisterName): Set<RegisterName> {
   const output = new Set(input.x2);
+  output.delete(register);
   if (setsIntersect(input.x, input.x2)) output.add(register);
   return output;
 }

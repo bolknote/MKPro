@@ -14761,8 +14761,8 @@ const optimizerCapabilities: Array<{
     category: "stack",
     source: "mk61-delta",
     requires: ["x2-register"],
-    activeWhen: ["membership-collection-x2-restore"],
-    detail: "Uses the hidden X2 display register as a temporary across ordinary X2-preserving logic: a membership test can keep a deterministic mask in Y, restore the tested collection through '.', and perform the following bit-set without a scratch register; known-fractional masks insert a preserving gap before the restore when К{x} is skipped.",
+    activeWhen: ["membership-collection-x2-restore", "x2-hidden-temp-restore"],
+    detail: "Uses the hidden X2 display register as a temporary across ordinary X2-preserving logic: a membership test can keep a deterministic mask in Y, and direct scratch recalls can restore a proved X2-resident value through '.' when a safe restore gap and unused stack lift are both proven; known-fractional masks insert a preserving gap before the restore when К{x} is skipped.",
   },
   {
     id: "hex-mantissa-arithmetic",
@@ -15368,6 +15368,7 @@ function buildMachineFeaturesUsed(
     optimization.name === "display-byte-x2-lowering" ||
     optimization.name === "floor-packed-row-expression-display" ||
     optimization.name === "membership-collection-x2-restore" ||
+    optimization.name === "x2-hidden-temp-restore" ||
     optimization.name === "vp-fraction-restore"
   )) {
     add("x2-register", "Optimizer scheduled hidden X2 values across display-byte or ordinary temporary boundaries.", "optimizer");
