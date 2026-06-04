@@ -69,6 +69,10 @@ const run: IrPassFn = (ops) => {
       removed.add(i);
       continue;
     }
+    if (recallRegister !== undefined) {
+      xHolds = recallRegister;
+      continue;
+    }
     if (
       op.kind === "jump" ||
       op.kind === "cjump" ||

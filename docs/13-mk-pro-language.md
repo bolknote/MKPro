@@ -1260,12 +1260,12 @@ The pipeline currently contains:
   when their memory target is dead, because the selector side effect is
   observable.
 - **last-x-reuse** — drops `П->X r` when the IR proves X already holds the
-  value last stored to `r` by a direct store or by a proved indirect
-  `К X->П`, and no intervening op (С/П, jump, ALU, …) clobbers X. Documented
-  empty operators `К НОП`/`К 1`/`К 2` preserve the X fact. Mutating `R0..R6`
-  indirect stores may seed this fact because the store itself is kept; mutating
-  indirect recalls are still kept because removing them would skip selector
-  mutation. С/П acts as a barrier because the user may overwrite X during pause;
+  register value from a direct store, a proved indirect `К X->П`, or an earlier
+  kept direct/stable recall, and no intervening op (С/П, jump, ALU, …) clobbers
+  X. Documented empty operators `К НОП`/`К 1`/`К 2` preserve the X fact.
+  Mutating `R0..R6` indirect stores may seed this fact because the store itself
+  is kept; mutating indirect recalls are still kept because removing them would
+  skip selector mutation. С/П acts as a barrier because the user may overwrite X during pause;
   context-sensitive `.`/`ВП` restoration also blocks the rewrite when the recall
   is the last X2 sync. If X2-register dataflow proves the same register is
   already synced and the immediate previous-command context is preserved, the
