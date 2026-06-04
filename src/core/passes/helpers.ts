@@ -1336,6 +1336,9 @@ function signChangeClosedDecimalState(input: X2ValueDataflowState): X2ValueDataf
   if (shaped !== undefined) return x2ValueStateFromMantissaShapes(shaped);
 
   const values = new Set<X2ValueFact>();
+  if (input.x.has(SAME_UNKNOWN_VALUE) && input.x2.has(SAME_UNKNOWN_VALUE)) {
+    values.add(SAME_UNKNOWN_VALUE);
+  }
   for (const fact of input.x2) {
     if (!input.x.has(fact)) continue;
     const decimal = /^decimal:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):normalized$/u.exec(fact);

@@ -690,6 +690,24 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["reg:2", "same:unknown"]);
   });
 
+  it("x2 value dataflow keeps opaque X/X2 equality through closed sign-change", () => {
+    const program: IrOp[] = [
+      plain(0x35, "К {x}"),
+      plain(0x0e, "В↑"),
+      plain(0x0b, "/-/"),
+      store("2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["same:unknown"]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["same:unknown"]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["same:unknown"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["same:unknown"]);
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["reg:2", "same:unknown"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["reg:2", "same:unknown"]);
+  });
+
   it("x2 value dataflow models closed decimal sign-change after X2 sync", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
@@ -1748,6 +1766,25 @@ describe("ir passes on synthetic programs", () => {
       plain(0x00, "0"),
       plain(0x02, "2"),
       plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore removes dot after modeled opaque closed sign-change", () => {
+    const program: IrOp[] = [
+      plain(0x35, "К {x}"),
+      plain(0x0e, "В↑"),
+      plain(0x0b, "/-/"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x35, "К {x}"),
+      plain(0x0e, "В↑"),
       plain(0x0b, "/-/"),
       halt(),
     ]);
@@ -5291,6 +5328,44 @@ describe("ir passes on synthetic programs", () => {
       plain(0x00, "0"),
       plain(0x02, "2"),
       plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes a closed-context register-valued sign pair", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      recall("1"),
+      store("2"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes a closed-context opaque sign pair", () => {
+    const program: IrOp[] = [
+      plain(0x35, "К {x}"),
+      plain(0x0e, "В↑"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x35, "К {x}"),
+      plain(0x0e, "В↑"),
       halt(),
     ]);
   });

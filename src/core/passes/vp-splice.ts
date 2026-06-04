@@ -6,10 +6,10 @@ import {
   hasRewriteBarrier,
   plainPreservesXValue,
   removingRecallCanExposeX2Restore,
+  x2ValueSetHasIntersection,
   type IrPass,
   type IrPassFn,
   type X2ValueDataflowState,
-  type X2ValueSet,
 } from "./helpers.ts";
 
 const VP = 0x0c;
@@ -71,7 +71,7 @@ function canRemoveClosedContextSignPair(
 ): boolean {
   if (state?.entry.kind !== "closed") return false;
   if (state.vpContext !== undefined && state.vpContext.kind !== "none") return false;
-  if (!decimalValueSetsIntersect(state.x, state.x2)) return false;
+  if (!x2ValueSetHasIntersection(state.x, state.x2)) return false;
   if (!removingRecallCanExposeX2Restore(ops, secondSignIndex)) return true;
   return canRemoveClosedContextSignPairBeforeProvedVp(ops, secondSignIndex, state, stateAfterPair);
 }
@@ -148,14 +148,6 @@ function isHardX2OverwriteWithoutStackUse(op: IrOp): boolean {
     !plainPreservesXValue(op);
 }
 
-function decimalValueSetsIntersect(left: X2ValueSet | undefined, right: X2ValueSet | undefined): boolean {
-  if (left === undefined || right === undefined) return false;
-  for (const value of left) {
-    if (value.startsWith("decimal:") && right.has(value)) return true;
-  }
-  return false;
-}
-
 function canRemoveClosedContextSignPairBeforeProvedVp(
   ops: readonly IrOp[],
   secondSignIndex: number,
@@ -204,8 +196,8 @@ function sameExponentContext(
 //   ВП ВП  ≡ ВП   (a second exponent-entry while already in exponent mode is inert)
 //   КНОП/К1/К2 ВП ≡ ВП  (an empty op immediately before exponent entry is removable)
 //   ВП ... /-/ /-/ ... ≡ ВП ... ... while the dataflow proves exponent-entry
-//   decimal-safe /-/ /-/ ≡ empty in closed context, unless the pair shields a
-//       downstream context-sensitive X2 restore
+//   value-safe /-/ /-/ ≡ empty in closed context when X and X2 are proven equal,
+//       unless the pair shields a downstream context-sensitive X2 restore
 //   ВП digit КНОП/К1/К2 op ≡ ВП digit op while op is not another digit
 //      (after an exponent digit the empty op is only a separator before a
 //       non-digit command; before the first digit, or before another digit, it
@@ -332,7 +324,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "vp-exponent-splice",
-        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an X2 boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent-digit empty separators, VP-context /-/ separators/signs before fresh digits/dead overwrites, exponent /-/ /-/ -> empty, mantissa /-/ /-/ before proved ВП/fresh digit -> empty, closed decimal /-/ /-/ -> empty).`,
+        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an X2 boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent-digit empty separators, VP-context /-/ separators/signs before fresh digits/dead overwrites, exponent /-/ /-/ -> empty, mantissa /-/ /-/ before proved ВП/fresh digit -> empty, closed value /-/ /-/ -> empty).`,
       },
     ],
   };
