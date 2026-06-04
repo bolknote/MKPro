@@ -101,7 +101,7 @@ function findDeadScratchStore(
       return isDisplayFocusSensitive(op) ? undefined : index;
     }
     if (mentionsRegister(op, register)) return undefined;
-    if (op.kind === "cjump") continue;
+    if (op.kind === "cjump" || op.kind === "loop") continue;
     if (stopsStraightLineSearch(op)) return undefined;
   }
   return undefined;

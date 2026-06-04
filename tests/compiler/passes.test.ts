@@ -3203,6 +3203,41 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
 
+  it("x2-hidden-temp-restore crosses counted-loop fallthrough X2 sync for non-counter scratch", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      loop("done"),
+      recall("2"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[3]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore keeps counted-loop counter scratch recalls", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("0"),
+      loop("done"),
+      recall("0"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-hidden-temp-restore keeps recalls across referenced labels", () => {
     const program: IrOp[] = [
       recall("1"),
@@ -4620,6 +4655,83 @@ describe("ir passes on synthetic programs", () => {
       plain(0x12, "*"),
       halt(),
     ]);
+  });
+
+  it("pre-shift-stack-lift crosses direct conditional fallthrough when the other edge cannot observe stack or X2", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      cjump("done"),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      cjump("done"),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift crosses counted-loop fallthrough before a hard X2 overwrite", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      loop("done"),
+      plain(0x0d, "Cx"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      loop("done"),
+      plain(0x0d, "Cx"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift keeps В↑ across conditionals when the skipped edge observes X2", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      cjump("done"),
+      recall("1"),
+      halt(),
+      label("done"),
+      plain(0x54, "К НОП"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("pre-shift-stack-lift keeps В↑ across conditionals when the skipped edge consumes the stack lift", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      cjump("done"),
+      recall("1"),
+      halt(),
+      label("done"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("pre-shift-stack-lift stops gap scanning at stack-consuming commands", () => {

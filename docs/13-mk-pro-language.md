@@ -1365,10 +1365,11 @@ The pipeline currently contains:
   `.` restore-gap proof must have seen two safe X2-preserving executable steps
   after the last X2 sync, and the normal stack-lift/X2-context guards prove that
   the recall's stack shift and previous-command class are not observable. The
-  scratch-store search can cross a direct conditional when the recall sits on
-  the fallthrough path: the shared path-sensitive X2 proof must show that this
-  edge already synchronized the same value into X2, while the jump edge is left
-  to ordinary liveness/DSE. The
+  scratch-store search can cross a direct conditional or counted-loop test when
+  the recall sits on the fallthrough path: the shared path-sensitive X2 proof
+  must show that this edge already synchronized the same value into X2, while
+  the jump edge is left to ordinary liveness/DSE. Counted-loop crossings are
+  refused when the scratch register is the loop counter being decremented. The
   rewrite is intentionally one cell for one cell; the win appears when the
   following liveness pass removes the scratch `X->П r`/`К X->П R7..Re` whose
   only remaining purpose was that recall. Repeated reads of loop/state registers
@@ -1524,10 +1525,13 @@ The pipeline currently contains:
   producer such as direct/indirect `П->X`, `F pi`, or another `В↑`, even through
   stack-preserving labels, stores, address bytes, and plain stack-neutral
   commands, when that producer already keeps the current X in Y for the
-  following consumer. The same stack-difference proof starts with the possible
-  difference in Z and follows direct calls/returns, so the rewrite is refused if
-  a later opcode could expose or consume that deeper stack value. The same pass
-  also removes a `В↑` before a proved hard X/X2 overwrite such as `Cx` when the
+  following consumer. The gap may include a direct conditional or counted-loop
+  fallthrough only when the full CFG stack-difference proof and the X2-restore
+  exposure proof show that the skipped edge cannot observe the removed
+  sync/lift. The same stack-difference proof starts with the possible difference
+  in Z and follows direct calls/returns, so the rewrite is refused if a later
+  opcode could expose or consume that deeper stack value. The same pass also
+  removes a `В↑` before a proved hard X/X2 overwrite such as `Cx` when the
   ordinary stack-difference proof shows the lift's Y value is dead before any
   consumer can observe it.
 - **vp-x2-peephole** — drops a `К {x}` immediately after a proved `ВП`/X2
