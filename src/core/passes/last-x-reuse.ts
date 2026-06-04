@@ -5,7 +5,9 @@ import {
   computeX2ValueStates,
   knownIndirectFlowTarget,
   plainPreservesXValue,
+  recallAlreadyInXDecimalMemory,
   recallAlreadySyncedInX2,
+  recallAlreadySyncedInX2DecimalMemory,
   recallAlreadySyncedInX2Value,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
@@ -49,7 +51,7 @@ function clobbersX(op: IrOp): boolean {
 const run: IrPassFn = (ops) => {
   const removed = new Set<number>();
   const x2States = computeX2RegisterStates(ops);
-  const x2ValueStates = computeX2ValueStates(ops);
+  const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
   const labelEntries = labelEntryIndexes(ops);
   let xHolds: RegisterName | undefined;
   for (let i = 0; i < ops.length; i += 1) {
@@ -64,14 +66,18 @@ const run: IrPassFn = (ops) => {
       continue;
     }
     const recallRegister = removableRecallValueRegister(op);
+    const xAlreadyHasRecallValue = recallAlreadyInXDecimalMemory(op, x2ValueStates[i]) === recallRegister;
+    const x2AlreadyHasRecallValue =
+      recallAlreadySyncedInX2(op, x2States[i]) ??
+      recallAlreadySyncedInX2Value(op, x2ValueStates[i]);
+    const x2AlreadyHasRecallDecimal = recallAlreadySyncedInX2DecimalMemory(op, x2ValueStates[i]);
     if (
       recallRegister !== undefined &&
-      xHolds === recallRegister &&
+      (xHolds === recallRegister || xAlreadyHasRecallValue) &&
       !removingRecallCanExposeStackLift(ops, i) &&
       !removingRecallCanExposeX2Restore(ops, i, {
-        redundantSyncRegister:
-          recallAlreadySyncedInX2(op, x2States[i]) ??
-          recallAlreadySyncedInX2Value(op, x2ValueStates[i]),
+        redundantSyncRegister: x2AlreadyHasRecallValue,
+        redundantSyncValue: x2AlreadyHasRecallDecimal !== undefined,
       })
     ) {
       removed.add(i);

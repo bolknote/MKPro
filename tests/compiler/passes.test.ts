@@ -2936,6 +2936,35 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("last-x-reuse uses decimal register memory when X was rebuilt as the same literal", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      recall("2"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
+  });
+
   it("last-x-reuse keeps redundant X2 sync before immediate ВП context", () => {
     const program: IrOp[] = [
       recall("1"),
@@ -3363,6 +3392,41 @@ describe("ir passes on synthetic programs", () => {
       plain(0x01, "1"),
       plain(0x02, "2"),
       store("4"),
+      jump("tail"),
+      plain(0x00, "0"),
+      label("tail"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
+  });
+
+  it("flow-x-reuse uses decimal register memory after X is rebuilt across CFG flow", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("4"),
+      plain(0x0d, "Cx"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      jump("tail"),
+      plain(0x00, "0"),
+      label("tail"),
+      recall("4"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("4"),
+      plain(0x0d, "Cx"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
       jump("tail"),
       plain(0x00, "0"),
       label("tail"),

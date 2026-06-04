@@ -95,6 +95,7 @@ type X2VpContextState =
 
 export interface X2RestoreExposureOptions {
   readonly redundantSyncRegister?: RegisterName | undefined;
+  readonly redundantSyncValue?: boolean | undefined;
 }
 
 export function emptyResult(ops: readonly IrOp[]): PassResult {
@@ -477,6 +478,18 @@ export function recallAlreadySyncedInX2DecimalMemory(
   if (register === undefined || state === undefined) return undefined;
   for (const fact of state.memory?.[register] ?? []) {
     if (isConcreteDecimalX2ValueFact(fact) && state.x2.has(fact)) return register;
+  }
+  return undefined;
+}
+
+export function recallAlreadyInXDecimalMemory(
+  op: IrOp,
+  state: X2ValueDataflowState | undefined,
+): RegisterName | undefined {
+  const register = removableRecallValueRegister(op);
+  if (register === undefined || state === undefined) return undefined;
+  for (const fact of state.memory?.[register] ?? []) {
+    if (isConcreteDecimalX2ValueFact(fact) && state.x.has(fact)) return register;
   }
   return undefined;
 }
@@ -2432,7 +2445,10 @@ export function removingRecallCanExposeX2Restore(
           const effect = plainX2Effect(op);
           if (effect === "unknown") return true;
           if (effect === "restores" && isContextSensitiveX2Restore(op)) {
-            return options.redundantSyncRegister !== undefined && sawExecutableAfterRecall ? false : true;
+            const redundantSync =
+              options.redundantSyncRegister !== undefined ||
+              options.redundantSyncValue === true;
+            return redundantSync && sawExecutableAfterRecall ? false : true;
           }
           if (effect === "restores") return false;
           if (effect === "affects") return false;

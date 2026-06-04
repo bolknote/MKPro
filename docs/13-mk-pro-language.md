@@ -1353,6 +1353,9 @@ The pipeline currently contains:
   register value from a direct store, a proved indirect `К X->П`, or an earlier
   kept direct/stable recall, and no intervening op (С/П, jump, ALU, …) clobbers
   X. Documented empty operators `К НОП`/`К 1`/`К 2` preserve the X fact.
+  The proof can also come from X2 decimal value-memory: if a register was
+  stored with a concrete decimal literal and X was later rebuilt as the same
+  value, the recall is redundant even after the register alias itself was lost.
   Compiler marker labels that are not reachable branch/call targets also
   preserve the fact, while string targets, numeric-address targets, proved
   indirect-flow targets, procedure starts, and unknown indirect flow make labels
@@ -1369,7 +1372,10 @@ The pipeline currently contains:
   stack lift through direct or proved-indirect flow also block the rewrite.
 - **flow-x-reuse** — runs forward CFG dataflow for values already in X and
   drops a direct or stable-indirect proved recall when every direct predecessor
-  reaches that point with the same register value still in X. Proved indirect
+  reaches that point with the same register value still in X. The same
+  intersecting proof can use X2 decimal register-memory when every predecessor
+  proves current X is the same concrete decimal value stored in the recalled
+  register. Proved indirect
   flow targets (`indirect-target=NN`) participate in the CFG; stable selectors
   preserve the X fact, while mutating selectors drop only the mutated selector
   register from the proof. Direct and proved-indirect `ПП` edges carry the X

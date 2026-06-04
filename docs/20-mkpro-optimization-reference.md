@@ -76,7 +76,7 @@ the same generalized lowering strategy.
 - `last-x-reuse` — avoids rewriting X when the needed value is already there,
   while respecting real label entry points, `.`/`/-/`/`ВП` X2-sync boundaries, and
   downstream stack consumers.
-- `flow-x-reuse` — avoids recalls when all CFG predecessors already carry the same register value in X, with the same X2-sync and downstream stack-lift guards.
+- `flow-x-reuse` — avoids recalls when all CFG predecessors already carry the same register value in X, or the same concrete decimal value proved through X2 register-memory, with the same X2-sync and downstream stack-lift guards.
 - `branch-target-x-reuse` — avoids the first recall in a branch target when the tested value is still in X and the target has no other entry, unless that recall supplies the target-side X2 sync or a stack lift that reaches a downstream consumer through direct call returns.
 - `constant-folding` — precomputes constant parts before code generation.
 - `cse-display-block` — merges identical display logic blocks.
@@ -623,11 +623,14 @@ Display rewrites are separated into strategy selection + body lowering.
   is seeded by direct stores and by proved indirect stores, including mutating
   `R0..R6` indirect stores because the store and its selector side effect are
   kept, by kept direct/stable recalls, and is preserved by documented empty
-  operators `К НОП`/`К 1`/`К 2` plus unreferenced compiler marker labels.
+  operators `К НОП`/`К 1`/`К 2` plus unreferenced compiler marker labels. X2
+  decimal register-memory can also seed the proof when the current X was rebuilt
+  as the same concrete decimal value stored in the recalled register.
   Labels targeted by string flow, numeric-address flow, proved indirect flow,
   procedure starts, or any unknown indirect flow are treated as entry barriers.
   The sync guard is X2-register-aware: if dataflow proves X2 already
-  contains the same register value and the removed recall is not the immediate
+  contains the same register value, or the same concrete decimal value from
+  register-memory, and the removed recall is not the immediate
   previous-command context consumed by `.`/`/-/`/`ВП`, the recall can be removed as a
   redundant re-sync. The same removable-recall proof covers stable indirect
   `К П->X R7..Re` with a proved `indirect-memory-target`, but not mutating
@@ -760,7 +763,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 9. `pre-shift-stack-lift` — removes `В↑` before direct/indirect `П->X`, `F pi`, or another stack-shifting producer, possibly through stack-preserving labels/stores/plain ops, when that producer already supplies the current X in Y, unless the deeper stack difference can reach a later consumer.
 10. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
 11. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.
-12. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes a direct `П->X r` or stable-indirect `К П->X R7..Re` with a proved memory target when every predecessor reaches that point with the same value still in X; proved indirect flow targets (`indirect-target=NN`) are included in the CFG, direct and proved-indirect `ПП`/`В/О` edges carry X facts into callees and back to continuations, documented empty operators `К НОП`/`К 1`/`К 2` preserve X facts, stable selectors preserve the X fact, mutating selectors drop only the mutated selector register from the proof, and unknown indirect flow plus absolute numeric direct targets are still refused. Recalls that provide the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow are kept.
+12. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes a direct `П->X r` or stable-indirect `К П->X R7..Re` with a proved memory target when every predecessor reaches that point with the same value still in X, including concrete decimal equality proved through X2 register-memory after X was rebuilt; proved indirect flow targets (`indirect-target=NN`) are included in the CFG, direct and proved-indirect `ПП`/`В/О` edges carry X facts into callees and back to continuations, documented empty operators `К НОП`/`К 1`/`К 2` preserve X facts, stable selectors preserve the X fact, mutating selectors drop only the mutated selector register from the proof, and unknown indirect flow plus absolute numeric direct targets are still refused. Recalls that provide the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow are kept.
 13. `branch-target-x-reuse` — removes the first direct or stable-indirect proved recall in a unique branch target when the source `cjump` tested the same recalled value and no fallthrough path can enter the target, unless the target recall is needed as a `.`/`/-/`/`ВП` X2-sync boundary before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow.
     These recall-removal guards read the shared `OpcodeInfo.stackEffect`
     profile, so stack-preserving, shifting, Y-consuming, exposing, and barrier
@@ -850,7 +853,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     literal-shaped decimal.
 21. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.
 22. `dead-store-elimination` — removes direct stores, plus stable-indirect stores with proved targets, whose target register is not live after the write in a CFG that follows proved indirect flow targets (`indirect-target=NN`) and does not affect number-entry/input finalization or the previous-command context consumed by `ВП` while it restores X2; mutating indirect selectors are kept.
-23. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding direct/proved-indirect `X->П` or a kept direct/stable recall, possibly through documented empty operators `К НОП`/`К 1`/`К 2` and unreferenced compiler marker labels, preserving recalls that serve as the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or as a stack lift that can reach a downstream consumer through direct or proved-indirect flow; labels targeted by string, numeric, or proved-indirect flow plus procedure starts are entry barriers, and unknown indirect flow makes labels barriers too; mutating indirect stores can seed the X fact because the store remains, while mutating indirect recalls are not removed.
+23. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding direct/proved-indirect `X->П`, a kept direct/stable recall, or X2 decimal register-memory proving that current X was rebuilt as the same concrete value, possibly through documented empty operators `К НОП`/`К 1`/`К 2` and unreferenced compiler marker labels, preserving recalls that serve as the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or as a stack lift that can reach a downstream consumer through direct or proved-indirect flow; labels targeted by string, numeric, or proved-indirect flow plus procedure starts are entry barriers, and unknown indirect flow makes labels barriers too; mutating indirect stores can seed the X fact because the store remains, while mutating indirect recalls are not removed.
 24. `r0-fractional-sentinel` — drops redundant immediate `П->X 3`/`X->П 3`
     after fractional-R0 indirect access when `R0` liveness proves that the
     direct access only repeats the hardware-selected `R3`; it also removes

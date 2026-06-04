@@ -9,7 +9,9 @@ import {
   knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
   plainPreservesXValue,
+  recallAlreadyInXDecimalMemory,
   recallAlreadySyncedInX2,
+  recallAlreadySyncedInX2DecimalMemory,
   recallAlreadySyncedInX2Value,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
@@ -37,7 +39,7 @@ const run: IrPassFn = (ops) => {
   const graph = buildGraph(ops);
   const inStates = computeXRegisterStates(ops, graph);
   const x2States = computeX2RegisterStates(ops);
-  const x2ValueStates = computeX2ValueStates(ops);
+  const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
   const remove = new Set<number>();
 
   for (let index = 0; index < ops.length; index += 1) {
@@ -48,8 +50,12 @@ const run: IrPassFn = (ops) => {
     const redundantSyncRegister =
       recallAlreadySyncedInX2(op, x2States[index]) ??
       recallAlreadySyncedInX2Value(op, x2ValueStates[index]);
-    if (removingRecallCanExposeX2Restore(ops, index, { redundantSyncRegister })) continue;
-    if (inStates[index]?.has(recallRegister) === true) remove.add(index);
+    const redundantSyncValue = recallAlreadySyncedInX2DecimalMemory(op, x2ValueStates[index]) !== undefined;
+    if (removingRecallCanExposeX2Restore(ops, index, { redundantSyncRegister, redundantSyncValue })) continue;
+    const alreadyInX =
+      inStates[index]?.has(recallRegister) === true ||
+      recallAlreadyInXDecimalMemory(op, x2ValueStates[index]) === recallRegister;
+    if (alreadyInX) remove.add(index);
   }
 
   if (remove.size === 0) return emptyResult(ops);
