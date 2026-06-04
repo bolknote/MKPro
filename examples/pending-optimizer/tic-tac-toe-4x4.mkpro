@@ -43,6 +43,8 @@ program TicTacToe4x4 {
 
   loop {
     show(y)
+    // Source UI is "X, step, Y, run": the first entered() is consumed after
+    // the operator single-steps the store, then Y is entered before continuing.
     x = entered()
     y = entered()
     cell = y * 10 + x
@@ -122,7 +124,7 @@ program TicTacToe4x4 {
 
     cell = best_cell
     y = int(cell / 10)
-    x = frac(cell / 10) * 10
+    x = cell - y * 10
   }
 
   fn candidate_score() {

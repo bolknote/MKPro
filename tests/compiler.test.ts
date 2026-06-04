@@ -94,7 +94,7 @@ describe("MK-Pro compiler", () => {
 
     expect(result.diagnostics).toEqual([]);
     expect(result.report.reference?.referenceSpan).toBe(105);
-    expect(result.report.steps).toBe(313);
+    expect(result.report.steps).toBe(312);
   }, 20_000);
 
   it("keeps every runnable example with a real source reference no larger than that source", () => {
