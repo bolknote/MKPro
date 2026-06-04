@@ -3741,9 +3741,9 @@ export function replacingNumberEntryCanExposeStackLift(ops: readonly IrOp[], num
   return stackDifferenceCanReachConsumer(ops, numberEntryEndIndex + 1, 1);
 }
 
-export function removingRecallCanExposeX2Restore(
+export function x2SyncCanExposeContextSensitiveRestore(
   ops: readonly IrOp[],
-  recallIndex: number,
+  syncIndex: number,
   options: X2RestoreExposureOptions = {},
 ): boolean {
   const labels = labelIndexes(ops);
@@ -3752,10 +3752,10 @@ export function removingRecallCanExposeX2Restore(
   const visit = (
     start: number,
     returnStack: readonly number[] = [],
-    sawExecutableAfterRecall = false,
+    sawExecutableAfterSync = false,
   ): boolean => {
     for (let i = start; i < ops.length; i += 1) {
-      const key = `${i}:${sawExecutableAfterRecall ? 1 : 0}:${returnStack.join(",")}`;
+      const key = `${i}:${sawExecutableAfterSync ? 1 : 0}:${returnStack.join(",")}`;
       if (visited.has(key)) return false;
       visited.add(key);
 
@@ -3770,11 +3770,11 @@ export function removingRecallCanExposeX2Restore(
             const redundantSync =
               options.redundantSyncRegister !== undefined ||
               options.redundantSyncValue === true;
-            return redundantSync && sawExecutableAfterRecall ? false : true;
+            return redundantSync && sawExecutableAfterSync ? false : true;
           }
           if (effect === "restores") return false;
           if (effect === "affects") return false;
-          sawExecutableAfterRecall = true;
+          sawExecutableAfterSync = true;
           break;
         }
         case "recall":
@@ -3837,11 +3837,19 @@ export function removingRecallCanExposeX2Restore(
         case "store":
         case "indirect-store":
         case "orphan-address":
-          sawExecutableAfterRecall = true;
+          sawExecutableAfterSync = true;
           break;
       }
     }
     return false;
   };
-  return visit(recallIndex + 1);
+  return visit(syncIndex + 1);
+}
+
+export function removingRecallCanExposeX2Restore(
+  ops: readonly IrOp[],
+  recallIndex: number,
+  options: X2RestoreExposureOptions = {},
+): boolean {
+  return x2SyncCanExposeContextSensitiveRestore(ops, recallIndex, options);
 }

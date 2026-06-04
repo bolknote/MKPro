@@ -1,5 +1,4 @@
 import type { IrOp } from "../types.ts";
-import { getOpcode } from "../opcodes.ts";
 import {
   computeX2DotRestoreGapStates,
   computeX2ImmediateSyncStates,
@@ -8,6 +7,7 @@ import {
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   replacingNumberEntryCanExposeStackLift,
+  x2SyncCanExposeContextSensitiveRestore,
   type IrPass,
   type IrPassFn,
   type X2ValueDataflowState,
@@ -175,38 +175,6 @@ function x2ValueSetHasFact(input: X2ValueSet | undefined, fact: X2ValueFact): bo
   return input?.has(fact) === true;
 }
 
-function addingDotCanExposeX2RestoreContext(ops: readonly IrOp[], literalEnd: number): boolean {
-  for (let index = literalEnd + 1; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (hasRewriteBarrier(op)) return true;
-    switch (op.kind) {
-      case "label":
-      case "store":
-      case "indirect-store":
-      case "orphan-address":
-        continue;
-      case "plain":
-        if (op.opcode === DOT || op.opcode === SIGN_CHANGE || op.opcode === 0x0c) return true;
-        if (getOpcode(op.opcode).x2Effect === "preserves") continue;
-        return false;
-      case "jump":
-      case "cjump":
-      case "call":
-      case "loop":
-      case "indirect-jump":
-      case "indirect-call":
-      case "indirect-cjump":
-        return true;
-      case "recall":
-      case "indirect-recall":
-      case "return":
-      case "stop":
-        return false;
-    }
-  }
-  return false;
-}
-
 function dotRestoreOp(value: string, source: IrOp): IrOp {
   const sourceComment = "meta" in source ? source.meta.comment : undefined;
   return {
@@ -235,7 +203,7 @@ const run: IrPassFn = (ops) => {
       (dotSafeStates[index] === true || immediateSyncStates[index] === true) &&
       x2ValueSetHasFact(state?.x2, runAtIndex.x2Fact) &&
       !replacingNumberEntryCanExposeStackLift(ops, runAtIndex.end) &&
-      !addingDotCanExposeX2RestoreContext(ops, runAtIndex.end)
+      !x2SyncCanExposeContextSensitiveRestore(ops, runAtIndex.end)
     ) {
       result.push(dotRestoreOp(runAtIndex.displayValue, ops[index]!));
       removed += runAtIndex.end - index;

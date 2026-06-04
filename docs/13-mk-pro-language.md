@@ -1329,6 +1329,10 @@ The pipeline currently contains:
   before another reachable `.`/`/-/`/`ВП` context-sensitive restore, across opaque
   control flow, raw cells, and display-focused cells, so it does not erase a dot
   whose main job is to shape the next X2 restoration rather than to change `X`.
+  That reachability guard is the shared CFG-aware X2 exposure walker: direct and
+  proved-indirect branches are followed path-sensitively instead of being blanket
+  barriers, but any X2-preserving edge that can reach a context-sensitive restore
+  still keeps the dot.
   The same X2 value dataflow now carries narrow `ВП`-entry facts after proved
   closed decimal syncs (`Cx`, `В↑`, `F0..FF`), direct/proved recalls, direct
   `В/О` return continuations, and path-sensitive direct-conditional fallthrough
@@ -1377,6 +1381,13 @@ The pipeline currently contains:
   only remaining purpose was that recall. Repeated reads of loop/state registers
   are left as recalls, because changing them to `.` does not free storage and can
   perturb layout.
+- **x2-literal-restore** — replaces a repeated explicit numeric literal with
+  `.` when X2 value dataflow proves the same normalized decimal value is already
+  hidden in X2, the inserted dot is safe, and removing the literal's stack lift
+  is unobservable. The same shared CFG-aware X2 exposure walker used by
+  `x2-noop-restore` protects the inserted `.`: branch/call edges are not
+  automatic blockers, but a path that preserves X2 into a later
+  context-sensitive `.`/`/-/`/`ВП` restore keeps the literal explicit.
 - **dead-store-elimination** — whole-program liveness-driven DSE: removes
   `X->П r`, and stable-indirect `К X->П R7..Re` with a proved memory target,
   when liveOut at that point excludes the written cell, unless that store

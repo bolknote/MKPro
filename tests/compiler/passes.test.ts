@@ -2390,6 +2390,55 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("x2-literal-restore replaces a repeated literal before a branch with no reachable X2 restore", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      cjump("done"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      cjump("done"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore keeps a repeated literal before a branch target X2 restore", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      cjump("restore"),
+      halt(),
+      label("restore"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-noop-restore removes a safe dot when X already has the X2 register value", () => {
     const program: IrOp[] = [
       recall("1"),
@@ -2458,6 +2507,43 @@ describe("ir passes on synthetic programs", () => {
       label("done"),
       halt(),
     ]);
+  });
+
+  it("x2-noop-restore removes dot before a branch with no reachable X2 restore", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x0a, "."),
+      cjump("done"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      cjump("done"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore keeps dot before a branch target X2 restore", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x0a, "."),
+      cjump("restore"),
+      halt(),
+      label("restore"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("x2-noop-restore uses path-sensitive loop fallthrough X2 sync", () => {

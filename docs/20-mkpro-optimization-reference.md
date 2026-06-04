@@ -852,7 +852,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     safe dot-restore gap or a CFG-proven immediate no-op form after an
     X2-affecting sync such as `П->X r`/`Cx`/conditional fallthrough/direct
     `В/О` return, and refuses display/raw/context-sensitive follow-up
-    `.`/`/-/`/`ВП` cases.
+    `.`/`/-/`/`ВП` cases. The context-sensitive follow-up check uses the shared
+    CFG-aware X2 exposure walker: direct and proved-indirect branches are
+    followed path-sensitively, while opaque flow remains conservative.
 18. `x2-dead-restore-before-overwrite` — removes a safe context-sensitive
     `.`/`/-/`/`ВП` restore, plus adjacent free-standing `КНОП`/`К1`/`К2`
     separators, when a following hard X/X2 overwrite such as `Cx` destroys the
@@ -885,7 +887,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     exponent-entry X2 remains shape-only because an immediate `.` can still
     signal `ЕГГ0Г`. Too-wide exponent forms, display/raw bytes, and later
     context-sensitive `.`/`/-/`/`ВП`
-    observations are kept. Register value-memory can supply the same decimal
+    observations are kept. The same CFG-aware exposure guard is used for the
+    inserted dot, so a branch without a reachable preserving-edge restore is no
+    longer a blanket blocker. Register value-memory can supply the same decimal
     fact after a direct or proved-indirect recall of a previously stored
     literal-shaped decimal.
 21. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.

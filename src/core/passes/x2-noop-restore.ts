@@ -1,4 +1,3 @@
-import { getOpcode } from "../opcodes.ts";
 import type { IrOp } from "../types.ts";
 import {
   computeX2DotRestoreGapStates,
@@ -6,6 +5,7 @@ import {
   computeX2ValueStates,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
+  x2SyncCanExposeContextSensitiveRestore,
   x2StateHasSameDotSafeDecimalInXAndX2,
   x2StateIsClosedPlainContext,
   x2ValueSetHasIntersection,
@@ -15,7 +15,6 @@ import {
 
 const DOT = 0x0a;
 const SIGN_CHANGE = 0x0b;
-const VP = 0x0c;
 
 const run: IrPassFn = (ops) => {
   const valueStates = computeX2ValueStates(ops);
@@ -35,7 +34,7 @@ const run: IrPassFn = (ops) => {
     ) continue;
     if (!isDotSafeValueContext(state)) continue;
     if (!x2ValueSetHasIntersection(state?.x, state?.x2) && !x2StateHasSameDotSafeDecimalInXAndX2(state)) continue;
-    if (removingDotCanExposeX2RestoreContext(ops, index)) continue;
+    if (x2SyncCanExposeContextSensitiveRestore(ops, index)) continue;
     removed.add(index);
   }
 
@@ -75,41 +74,6 @@ function isImmediateAfterModeledSignChange(
       op.opcode === SIGN_CHANGE &&
       x2StateIsClosedPlainContext(state) &&
       (x2ValueSetHasIntersection(state?.x, state?.x2) || x2StateHasSameDotSafeDecimalInXAndX2(state));
-  }
-  return false;
-}
-
-function removingDotCanExposeX2RestoreContext(ops: readonly IrOp[], dotIndex: number): boolean {
-  for (let index = dotIndex + 1; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (hasRewriteBarrier(op)) return true;
-    switch (op.kind) {
-      case "label":
-        continue;
-      case "plain": {
-        if (op.opcode === DOT || op.opcode === SIGN_CHANGE || op.opcode === VP) return true;
-        const effect = getOpcode(op.opcode).x2Effect;
-        if (effect === "preserves") continue;
-        return false;
-      }
-      case "store":
-      case "indirect-store":
-      case "orphan-address":
-        continue;
-      case "jump":
-      case "cjump":
-      case "call":
-      case "loop":
-      case "indirect-jump":
-      case "indirect-call":
-      case "indirect-cjump":
-        return true;
-      case "recall":
-      case "indirect-recall":
-      case "return":
-      case "stop":
-        return false;
-    }
   }
   return false;
 }
