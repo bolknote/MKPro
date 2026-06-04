@@ -656,11 +656,12 @@ Display rewrites are separated into strategy selection + body lowering.
   recalls, direct or proved-indirect calls into the graph, proved indirect flow
   targets (`indirect-target=NN`), and branch-specific direct conditional
   effects. Stable indirect-flow selectors preserve register-valued X/X2 facts;
-  mutating selectors clear them conservatively. Direct `В/О` continuations sync
-  X2 from the returned X value when that value is proved; if returned X is
-  unknown, the proof is cleared. Stops, opaque X2-affecting ops, and unknown
-  indirect flow also clear the proof. Recall-removal passes use it to remove
-  redundant `П->X r` re-syncs
+  mutating selectors drop only facts about the selector register that the
+  hardware address computation changes. Direct `В/О` continuations sync X2 from
+  the returned X value when that value is proved; if returned X is unknown, the
+  proof is cleared. Stops, opaque X2-affecting ops, and unknown indirect flow
+  also clear the proof. Recall-removal passes use it to remove redundant
+  `П->X r` re-syncs
   while still preserving immediate `ВП`/`.` context. When X and X2 are proved to
   share a register value, `X->П s` extends the proof with `s` as another alias
   for that hidden value; overwriting `s` from a value no longer equal to X2
@@ -709,11 +710,14 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 9. `pre-shift-stack-lift` — removes `В↑` immediately before direct/indirect `П->X`, `F pi`, or another stack-shifting producer when that following command already supplies the old X in Y, unless the deeper stack difference can reach a later consumer.
 10. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
 11. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.
-12. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes a direct `П->X r` or stable-indirect `К П->X R7..Re` with a proved memory target when every predecessor reaches that point with the same value still in X; proved indirect flow targets (`indirect-target=NN`) are included in the CFG, stable selectors preserve the X fact, mutating selectors clear it, and unknown indirect flow plus absolute numeric direct targets are still refused. Recalls that provide the last X2 sync before `.`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow are kept.
+12. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes a direct `П->X r` or stable-indirect `К П->X R7..Re` with a proved memory target when every predecessor reaches that point with the same value still in X; proved indirect flow targets (`indirect-target=NN`) are included in the CFG, stable selectors preserve the X fact, mutating selectors drop only the mutated selector register from the proof, and unknown indirect flow plus absolute numeric direct targets are still refused. Recalls that provide the last X2 sync before `.`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow are kept.
 13. `branch-target-x-reuse` — removes the first direct or stable-indirect proved recall in a unique branch target when the source `cjump` tested the same recalled value and no fallthrough path can enter the target, unless the target recall is needed as a `.`/`ВП` X2-sync boundary before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow.
     These recall-removal guards read the shared `OpcodeInfo.stackEffect`
     profile, so stack-preserving, shifting, Y-consuming, exposing, and barrier
     opcodes are modeled consistently across passes.
+    The shared X2 helpers also treat `К x?0 r` as a path-sensitive conditional:
+    the fallthrough edge syncs X into X2, while the proved jump edge preserves
+    X2 and drops only facts about a mutating `R0..R6` selector.
 14. `stable-indirect-flow` — rewrites direct `jump/call/cjump` to indirect forms (`К БП`, `К ПП`, `К <cond>`) when a stable selector is already live in a register.
 15. `preloaded-indirect-flow` — preloads a selector value into a spare stable register and rewrites repeated backward-direct numeric jumps/calls through that preloaded value; after rescue starts, subsequent proved shrinking rewrites are still accepted below the official window.
 16. `indirect-memory-table` — rewrites direct `store/recall` into `К X->П`/`К П->X` when a stable selector maps to the indexed target cell.

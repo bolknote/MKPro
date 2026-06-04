@@ -19,7 +19,12 @@ import {
 type XRegisterSet = ReadonlySet<RegisterName>;
 
 interface Graph {
-  successors: number[][];
+  successors: Edge[][];
+}
+
+interface Edge {
+  readonly target: number;
+  readonly kind: "normal" | "fallthrough" | "jump";
 }
 
 const run: IrPassFn = (ops) => {
@@ -74,16 +79,17 @@ function computeXRegisterStates(ops: readonly IrOp[], graph: Graph): Array<XRegi
       const input = inStates[index];
       if (input === undefined) continue;
 
-      const output = transferXSet(input, ops[index]!);
+      const output = transferXSet(input, ops[index]!, "normal");
       if (!sameSet(output, outStates[index])) {
         outStates[index] = output;
         changed = true;
       }
 
-      for (const successor of graph.successors[index] ?? []) {
-        const joined = joinXSets(inStates[successor], output);
-        if (!sameSet(joined, inStates[successor])) {
-          inStates[successor] = joined;
+      for (const edge of graph.successors[index] ?? []) {
+        const edgeOutput = edge.kind === "normal" ? output : transferXSet(input, ops[index]!, edge.kind);
+        const joined = joinXSets(inStates[edge.target], edgeOutput);
+        if (!sameSet(joined, inStates[edge.target])) {
+          inStates[edge.target] = joined;
           changed = true;
         }
       }
@@ -93,7 +99,7 @@ function computeXRegisterStates(ops: readonly IrOp[], graph: Graph): Array<XRegi
   return inStates;
 }
 
-function transferXSet(input: XRegisterSet, op: IrOp): Set<RegisterName> {
+function transferXSet(input: XRegisterSet, op: IrOp, edge: Edge["kind"]): Set<RegisterName> {
   if (hasRewriteBarrier(op)) return new Set();
 
   switch (op.kind) {
@@ -121,9 +127,16 @@ function transferXSet(input: XRegisterSet, op: IrOp): Set<RegisterName> {
       return new Set();
     case "indirect-jump":
     case "indirect-call":
+      return transferIndirectFlowXSet(input, op.register);
     case "indirect-cjump":
-      return isStableIndirectSelector(op.register) ? new Set(input) : new Set();
+      return edge === "jump" ? transferIndirectFlowXSet(input, op.register) : new Set(input);
   }
+}
+
+function transferIndirectFlowXSet(input: XRegisterSet, register: RegisterName): Set<RegisterName> {
+  const output = new Set(input);
+  if (!isStableIndirectSelector(register)) output.delete(register);
+  return output;
 }
 
 function addRegister(input: XRegisterSet, register: RegisterName): Set<RegisterName> {
@@ -152,7 +165,7 @@ function sameSet(left: XRegisterSet | undefined, right: XRegisterSet | undefined
 
 function buildGraph(ops: readonly IrOp[]): Graph {
   const { labelIndex, addressIndex } = buildTargetIndexes(ops);
-  const successors: number[][] = Array.from({ length: ops.length }, () => []);
+  const successors: Edge[][] = Array.from({ length: ops.length }, () => []);
   const callReturns: number[] = [];
   for (let index = 0; index < ops.length; index += 1) {
     const op = ops[index]!;
@@ -164,11 +177,14 @@ function buildGraph(ops: readonly IrOp[]): Graph {
     const op = ops[index]!;
     const next = index + 1;
     const fallthrough = (): void => {
-      if (next < ops.length) successors[index]!.push(next);
+      if (next < ops.length) successors[index]!.push({ target: next, kind: "fallthrough" });
     };
     const jumpTo = (target: string | number): void => {
       const targetIndex = typeof target === "string" ? labelIndex.get(target) : addressIndex.get(target);
-      if (targetIndex !== undefined) successors[index]!.push(targetIndex);
+      if (targetIndex !== undefined) successors[index]!.push({ target: targetIndex, kind: "jump" });
+    };
+    const normal = (target: number): void => {
+      successors[index]!.push({ target, kind: "normal" });
     };
 
     switch (op.kind) {
@@ -213,7 +229,7 @@ function buildGraph(ops: readonly IrOp[]): Graph {
         break;
       }
       case "return":
-        successors[index]!.push(...callReturns);
+        for (const target of callReturns) normal(target);
         break;
     }
   }

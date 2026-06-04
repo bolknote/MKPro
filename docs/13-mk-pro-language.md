@@ -1228,7 +1228,9 @@ The pipeline currently contains:
   known indirect memory recalls, direct or proved-indirect calls into the graph,
   path-sensitive direct conditional edges, and proved indirect flow targets
   (`indirect-target=NN`). Stable indirect-flow selectors preserve the
-  register-valued X/X2 proof; mutating selectors clear it conservatively.
+  register-valued X/X2 proof; mutating selectors drop only facts about the
+  selector register that the hardware address computation changes, leaving
+  unrelated register facts live.
   Direct `В/О` continuations are now modeled as an X2 sync from the returned X
   value: if X is known to contain register `r`, the caller continuation gets
   `X2 = r`; if returned X is unknown, the X2 proof is cleared. `С/П`, unknown
@@ -1274,10 +1276,11 @@ The pipeline currently contains:
   drops a direct or stable-indirect proved recall when every direct predecessor
   reaches that point with the same register value still in X. Proved indirect
   flow targets (`indirect-target=NN`) participate in the CFG; stable selectors
-  preserve the X fact, while mutating selectors conservatively clear it. Unknown
-  indirect flow and absolute numeric direct targets are left untouched. The same
-  X2-register-aware `.`/`ВП` sync guard (stopped by direct `В/О` returns) plus
-  downstream stack-consumer guards are applied before removing a recall.
+  preserve the X fact, while mutating selectors drop only the mutated selector
+  register from the proof. Unknown indirect flow and absolute numeric direct
+  targets are left untouched. The same X2-register-aware `.`/`ВП` sync guard
+  (stopped by direct `В/О` returns) plus downstream stack-consumer guards are
+  applied before removing a recall.
 - **branch-target-x-reuse** — drops the first `П->X r` inside a unique branch
   target when the incoming condition just tested the same direct or
   stable-indirect recalled value, so the branch path already carries that value
@@ -1291,6 +1294,11 @@ The pipeline currently contains:
   when their reads live behind `К БП`/`К ПП`/`К x?0`; unknown indirect flow is
   still conservative. `F L0`..`F L3` loop counters are modeled as both read and
   written registers.
+- **X2 dataflow helpers** — model direct `F x?0`/`F Lx` and indirect `К x?0 r`
+  as path-sensitive X2 operations: fallthrough syncs X into X2, while the jump
+  edge preserves X2. For mutating indirect selectors (`R0..R6`), the jump edge
+  drops register-valued facts about that selector while keeping unrelated X/X2
+  facts.
 - **dispatch-case-ordering** — moves unique numeric zero cases earlier when a
   high-level `match` can reuse the selector already in X.
 - **x-preserving-fallthrough-branch** — after a direct zero-test such as

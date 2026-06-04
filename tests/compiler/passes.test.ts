@@ -208,6 +208,16 @@ function knownTargetIndirectCall(register: RegisterName, target: number): IrOp {
   };
 }
 
+function knownTargetIndirectCjump(register: RegisterName, target: number): IrOp {
+  return {
+    kind: "indirect-cjump",
+    condition: "==0",
+    register,
+    opcode: 0xe0 + REGISTER_INDEX[register],
+    meta: { mnemonic: `К x=0 ${register}`, comment: `indirect-target=${target}` },
+  };
+}
+
 function markedFractionalIndirectRecall(register: RegisterName, source = "pos"): IrOp {
   return {
     kind: "indirect-recall",
@@ -343,9 +353,65 @@ describe("ir passes on synthetic programs", () => {
     expect(registerStateText(states[5])).toEqual(["4"]);
   });
 
-  it("x2 register dataflow clears register facts across mutating indirect flow", () => {
+  it("x2 register dataflow is path-sensitive for stable indirect conditionals", () => {
     const program: IrOp[] = [
-      recall("4"),
+      recall("1"),
+      plain(0x35, "К {x}"),
+      store("2"),
+      knownTargetIndirectCjump("8", 7),
+      plain(0x20, "F pi"),
+      jump("done"),
+      label("target"),
+      plain(0x20, "F pi"),
+      label("done"),
+      halt(),
+    ];
+
+    const states = computeX2RegisterStates(program);
+
+    expect(registerStateText(states[4])).toEqual(["2"]);
+    expect(registerStateText(states[7])).toEqual(["1"]);
+  });
+
+  it("x2 register dataflow still syncs indirect conditional fallthrough for mutating selectors", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x35, "К {x}"),
+      store("2"),
+      knownTargetIndirectCjump("1", 7),
+      plain(0x20, "F pi"),
+      jump("done"),
+      label("target"),
+      plain(0x20, "F pi"),
+      label("done"),
+      halt(),
+    ];
+
+    const states = computeX2RegisterStates(program);
+
+    expect(registerStateText(states[4])).toEqual(["2"]);
+    expect(registerStateText(states[7])).toEqual([]);
+  });
+
+  it("x2 register dataflow drops only the mutated selector fact on indirect flow", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      knownTargetIndirectJump("1", 4),
+      halt(),
+      label("tail"),
+      plain(0x20, "F pi"),
+      halt(),
+    ];
+
+    const states = computeX2RegisterStates(program);
+
+    expect(registerStateText(states[5])).toEqual(["2"]);
+  });
+
+  it("x2 register dataflow clears the mutated selector fact across indirect flow", () => {
+    const program: IrOp[] = [
+      recall("1"),
       knownTargetIndirectJump("1", 3),
       halt(),
       label("tail"),
@@ -959,13 +1025,28 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
-  it("flow-x-reuse clears X facts across mutating proved indirect flow", () => {
+  it("flow-x-reuse preserves unrelated X facts across mutating proved indirect flow", () => {
     const program: IrOp[] = [
       recall("4"),
       knownTargetIndirectJump("1", 3),
       halt(),
       label("tail"),
       recall("4"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops.filter((op) => op.kind === "recall" && op.register === "4")).toHaveLength(1);
+  });
+
+  it("flow-x-reuse clears the mutated selector X fact across proved indirect flow", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      knownTargetIndirectJump("1", 3),
+      halt(),
+      label("tail"),
+      recall("1"),
       halt(),
     ];
     const result = flowXReuse.run(program, ctx);
@@ -3038,6 +3119,24 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x35)).toBe(false);
   });
 
+  it("vp-x2-peephole proves a ВП/X2 boundary through a proved stable indirect conditional jump edge", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      knownTargetIndirectCjump("8", 4),
+      jump("end"),
+      label("target"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", comment: "frac after restore" } },
+      halt(),
+      label("end"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x35)).toBe(false);
+  });
+
   it("vp-x2-peephole keeps fraction after a direct conditional fallthrough X2 sync", () => {
     const program: IrOp[] = [
       recall("1"),
@@ -3045,6 +3144,24 @@ describe("ir passes on synthetic programs", () => {
       { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
       { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", comment: "frac after restore" } },
       label("target"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("vp-x2-peephole keeps fraction after an indirect conditional fallthrough X2 sync", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      knownTargetIndirectCjump("8", 6),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", comment: "frac after restore" } },
+      jump("end"),
+      label("target"),
+      halt(),
+      label("end"),
       halt(),
     ];
     const result = vpX2Peephole.run(program, ctx);

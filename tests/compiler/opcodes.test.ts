@@ -112,6 +112,14 @@ describe("opcode catalog", () => {
       fallthrough: "affects",
       jump: "preserves",
     });
+    expect(opcodeByCode.get(0x70)?.conditionalX2Effect).toEqual({
+      fallthrough: "affects",
+      jump: "preserves",
+    });
+    expect(opcodeByCode.get(0xe0)?.conditionalX2Effect).toEqual({
+      fallthrough: "affects",
+      jump: "preserves",
+    });
   });
 
   it("models stack effects used by optimizer proofs", () => {

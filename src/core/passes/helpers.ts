@@ -172,13 +172,30 @@ function isContextSensitiveX2Restore(op: IrOp): boolean {
   return op.kind === "plain" && (op.opcode === 0x0a || op.opcode === 0x0c);
 }
 
+type ConditionalX2Op = Extract<IrOp, { kind: "cjump" | "loop" | "indirect-cjump" }>;
+
 function conditionalX2Effect(
-  op: Extract<IrOp, { kind: "cjump" | "loop" }>,
+  op: ConditionalX2Op,
   edge: "fallthrough" | "jump",
 ): "affects" | "preserves" | "unknown" {
   const effect = getOpcode(op.opcode).conditionalX2Effect;
   if (effect === undefined) return "unknown";
   return effect[edge];
+}
+
+function conditionalX2EffectForGraphEdge(
+  op: ConditionalX2Op,
+  edge: Edge["kind"],
+): "affects" | "preserves" | "unknown" {
+  if (edge === "fallthrough" || edge === "jump") return conditionalX2Effect(op, edge);
+  return "unknown";
+}
+
+function indirectConditionalX2EffectForGraphEdge(
+  op: Extract<IrOp, { kind: "indirect-cjump" }>,
+  edge: Edge["kind"],
+): "affects" | "preserves" | "unknown" {
+  return conditionalX2EffectForGraphEdge(op, edge);
 }
 
 interface Edge {
@@ -330,22 +347,14 @@ function transferRegisterDataflowState(
     case "plain":
       return { x: new Set(), x2: transferPlainX2RegisterSet(input.x2, plainX2Effect(op)) };
     case "cjump": {
-      const effect = edge === "fallthrough"
-        ? conditionalX2Effect(op, "fallthrough")
-        : edge === "jump"
-          ? conditionalX2Effect(op, "jump")
-          : "unknown";
+      const effect = conditionalX2EffectForGraphEdge(op, edge);
       return {
         x: new Set(input.x),
         x2: transferConditionalX2RegisterSet(input, effect),
       };
     }
     case "loop": {
-      const effect = edge === "fallthrough"
-        ? conditionalX2Effect(op, "fallthrough")
-        : edge === "jump"
-          ? conditionalX2Effect(op, "jump")
-          : "unknown";
+      const effect = conditionalX2EffectForGraphEdge(op, edge);
       return {
         x: new Set(),
         x2: effect === "preserves" ? new Set(input.x2) : new Set(),
@@ -353,8 +362,9 @@ function transferRegisterDataflowState(
     }
     case "indirect-jump":
     case "indirect-call":
+      return transferIndirectFlowRegisterState(input, op);
     case "indirect-cjump":
-      return isStableIndirectSelector(op.register) ? cloneRegisterDataflowState(input) : emptyRegisterDataflowState();
+      return transferIndirectConditionalRegisterState(input, op, edge);
     case "stop":
       return emptyRegisterDataflowState();
     case "return":
@@ -387,16 +397,15 @@ function transferX2RestoreBoundaryState(
       return transferPlainX2RestoreBoundaryState(input, plainX2Effect(op));
     case "cjump":
     case "loop": {
-      const effect = edge === "fallthrough"
-        ? conditionalX2Effect(op, "fallthrough")
-        : edge === "jump"
-          ? conditionalX2Effect(op, "jump")
-          : "unknown";
+      const effect = conditionalX2EffectForGraphEdge(op, edge);
+      return transferConditionalX2RestoreBoundaryState(input, effect);
+    }
+    case "indirect-cjump": {
+      const effect = indirectConditionalX2EffectForGraphEdge(op, edge);
       return transferConditionalX2RestoreBoundaryState(input, effect);
     }
     case "indirect-jump":
     case "indirect-call":
-    case "indirect-cjump":
       return x2PreservingExecutableBoundary(input);
   }
 }
@@ -427,16 +436,15 @@ function transferX2DotRestoreGapState(
       return transferPlainX2DotRestoreGapState(input, op);
     case "cjump":
     case "loop": {
-      const effect = edge === "fallthrough"
-        ? conditionalX2Effect(op, "fallthrough")
-        : edge === "jump"
-          ? conditionalX2Effect(op, "jump")
-          : "unknown";
+      const effect = conditionalX2EffectForGraphEdge(op, edge);
+      return transferConditionalX2DotRestoreGapState(input, effect);
+    }
+    case "indirect-cjump": {
+      const effect = indirectConditionalX2EffectForGraphEdge(op, edge);
       return transferConditionalX2DotRestoreGapState(input, effect);
     }
     case "indirect-jump":
     case "indirect-call":
-    case "indirect-cjump":
       return advanceX2DotRestoreGap(input, true);
   }
 }
@@ -530,6 +538,43 @@ function addStoredX2Alias(input: RegisterDataflowState, register: RegisterName):
   output.delete(register);
   if (setsIntersect(input.x, input.x2)) output.add(register);
   return output;
+}
+
+function removeRegisterValue(input: RegisterValueSet, register: RegisterName): Set<RegisterName> {
+  const output = new Set(input);
+  output.delete(register);
+  return output;
+}
+
+function dropMutatedSelectorFact(input: RegisterDataflowState, register: RegisterName): RegisterDataflowState {
+  return {
+    x: removeRegisterValue(input.x, register),
+    x2: removeRegisterValue(input.x2, register),
+  };
+}
+
+function transferIndirectFlowRegisterState(
+  input: RegisterDataflowState,
+  op: Extract<IrOp, { kind: "indirect-jump" | "indirect-call" }>,
+): RegisterDataflowState {
+  if (isStableIndirectSelector(op.register)) return cloneRegisterDataflowState(input);
+  return dropMutatedSelectorFact(input, op.register);
+}
+
+function transferIndirectConditionalRegisterState(
+  input: RegisterDataflowState,
+  op: Extract<IrOp, { kind: "indirect-cjump" }>,
+  edge: Edge["kind"],
+): RegisterDataflowState {
+  const effect = indirectConditionalX2EffectForGraphEdge(op, edge);
+  if (effect === "unknown") return emptyRegisterDataflowState();
+  const output: RegisterDataflowState = {
+    x: new Set(input.x),
+    x2: transferConditionalX2RegisterSet(input, effect),
+  };
+  return edge === "jump" && !isStableIndirectSelector(op.register)
+    ? dropMutatedSelectorFact(output, op.register)
+    : output;
 }
 
 function transferIndirectStoreRegisterState(
@@ -899,9 +944,12 @@ export function removingRecallCanExposeX2Restore(
         case "indirect-cjump": {
           const target = knownIndirectFlowTarget(op);
           const targetIndex = target === undefined ? undefined : addresses.get(target);
+          const fallthrough = conditionalX2Effect(op, "fallthrough");
+          const jump = conditionalX2Effect(op, "jump");
+          if (fallthrough === "unknown" || jump === "unknown") return true;
           return (
-            (targetIndex === undefined ? true : visit(targetIndex, returnStack, true)) ||
-            visit(i + 1, returnStack, true)
+            (jump === "preserves" && (targetIndex === undefined ? true : visit(targetIndex, returnStack, true))) ||
+            (fallthrough === "preserves" && visit(i + 1, returnStack, true))
           );
         }
         case "label":

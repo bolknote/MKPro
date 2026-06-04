@@ -260,19 +260,24 @@ function buildOpcodeCatalog(): OpcodeInfo[] {
     [0xe0, "К x=0"],
   ];
   for (const [base, name] of indirectBlocks) {
+    const conditional = base === 0x70 || base === 0x90 || base === 0xc0 || base === 0xe0;
     for (let i = 0; i <= 0xe; i += 1) {
       const r = REGISTERS[i]!;
-      set(info(base + i, `${name} ${r}`, `${name} ${r}`, {
+      const extra: Partial<OpcodeInfo> = {
         x2Effect: base === 0xd0 ? "affects" : "preserves",
         stackEffect: base === 0xd0 ? "shifts" : "preserves",
-      }));
+      };
+      if (conditional) extra.conditionalX2Effect = directConditionalX2Effect();
+      set(info(base + i, `${name} ${r}`, `${name} ${r}`, extra));
     }
-    set(info(base + 0xf, `${name} 0 alias`, hex(base + 0xf), {
+    const aliasExtra: Partial<OpcodeInfo> = {
       enterable: loaderOrHex(),
       risk: "undocumented",
       x2Effect: base === 0xd0 ? "affects" : "preserves",
       stackEffect: base === 0xd0 ? "shifts" : "preserves",
-    }));
+    };
+    if (conditional) aliasExtra.conditionalX2Effect = directConditionalX2Effect();
+    set(info(base + 0xf, `${name} 0 alias`, hex(base + 0xf), aliasExtra));
   }
 
   for (let code = 0xf0; code <= 0xff; code += 1) {
