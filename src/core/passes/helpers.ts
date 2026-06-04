@@ -386,6 +386,35 @@ export function computeX2DotRestoreGapStates(ops: readonly IrOp[]): boolean[] {
   return inStates.map((state) => state === "safe");
 }
 
+export function computeX2ImmediateSyncStates(ops: readonly IrOp[]): boolean[] {
+  if (ops.length === 0) return [];
+  const edges = buildRegisterValueGraph(ops);
+  const inStates: Array<boolean | undefined> = Array.from({ length: ops.length }, () => undefined);
+  inStates[0] = false;
+
+  let changed = true;
+  let iterations = 0;
+  while (changed && iterations < 200) {
+    changed = false;
+    iterations += 1;
+
+    for (let index = 0; index < ops.length; index += 1) {
+      const input = inStates[index];
+      if (input === undefined) continue;
+      for (const edge of edges[index] ?? []) {
+        const output = transferX2ImmediateSyncState(input, ops[index]!, edge.kind);
+        const joined = joinX2ImmediateSyncStates(inStates[edge.target], output);
+        if (joined !== inStates[edge.target]) {
+          inStates[edge.target] = joined;
+          changed = true;
+        }
+      }
+    }
+  }
+
+  return inStates.map((state) => state === true);
+}
+
 export function recallAlreadySyncedInX2(
   op: IrOp,
   state: RegisterValueSet | undefined,
@@ -640,6 +669,38 @@ function transferX2DotRestoreGapState(
   }
 }
 
+function transferX2ImmediateSyncState(input: boolean, op: IrOp, edge: Edge["kind"]): boolean {
+  if (hasRewriteBarrier(op)) return false;
+
+  switch (op.kind) {
+    case "label":
+      return input;
+    case "recall":
+    case "indirect-recall":
+    case "return":
+    case "stop":
+      return true;
+    case "plain": {
+      const effect = plainX2Effect(op);
+      return effect === "affects" || effect === "restores";
+    }
+    case "cjump":
+    case "loop":
+    case "indirect-cjump": {
+      const effect = conditionalX2EffectForGraphEdge(op, edge);
+      return effect === "affects";
+    }
+    case "jump":
+    case "call":
+    case "orphan-address":
+    case "store":
+    case "indirect-store":
+    case "indirect-jump":
+    case "indirect-call":
+      return false;
+  }
+}
+
 function x2PreservingExecutableBoundary(input: X2RestoreBoundaryState): X2RestoreBoundaryState {
   return input === "none" ? "none" : "boundary";
 }
@@ -705,6 +766,10 @@ function joinX2DotRestoreGapStates(
 ): X2DotRestoreGapState {
   if (current === undefined) return incoming;
   return x2DotRestoreGapRank(current) < x2DotRestoreGapRank(incoming) ? current : incoming;
+}
+
+function joinX2ImmediateSyncStates(current: boolean | undefined, incoming: boolean): boolean {
+  return current === undefined ? incoming : current && incoming;
 }
 
 function x2DotRestoreGapRank(state: X2DotRestoreGapState): number {

@@ -29,7 +29,12 @@ import { vpX2Peephole } from "../../src/core/passes/vp-x2-peephole.ts";
 import { x2HiddenTempRestore } from "../../src/core/passes/x2-hidden-temp-restore.ts";
 import { x2LiteralRestore } from "../../src/core/passes/x2-literal-restore.ts";
 import { x2NoopRestore } from "../../src/core/passes/x2-noop-restore.ts";
-import { computeX2RegisterStates, computeX2ValueStates, type X2ValueSet } from "../../src/core/passes/helpers.ts";
+import {
+  computeX2ImmediateSyncStates,
+  computeX2RegisterStates,
+  computeX2ValueStates,
+  type X2ValueSet,
+} from "../../src/core/passes/helpers.ts";
 import type { IrOp, RegisterName } from "../../src/core/types.ts";
 
 const noopOptions = { delivery: "manual" as const, budget: 105, analysis: false };
@@ -870,6 +875,21 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:5000:normalized", "reg:2"]);
   });
 
+  it("x2 immediate-sync dataflow follows direct returns to call continuations", () => {
+    const program: IrOp[] = [
+      label("main"),
+      call("load"),
+      plain(0x0a, "."),
+      halt(),
+      label("load"),
+      recall("1"),
+      ret(),
+    ];
+    const states = computeX2ImmediateSyncStates(program);
+
+    expect(states[2]).toBe(true);
+  });
+
   it("x2 value dataflow models ВП after a proved closed decimal X2 sync", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
@@ -1506,6 +1526,33 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore uses direct return X2 sync", () => {
+    const program: IrOp[] = [
+      label("main"),
+      call("load"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      halt(),
+      label("load"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      ret(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      label("main"),
+      call("load"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      halt(),
+      label("load"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      ret(),
+    ]);
+  });
+
   it("x2-literal-restore keeps conditional fallthrough literals whose stack lift is consumed", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -1700,6 +1747,49 @@ describe("ir passes on synthetic programs", () => {
       cjump("done"),
       halt(),
       label("done"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore removes dot immediately after direct return X2 sync", () => {
+    const program: IrOp[] = [
+      label("main"),
+      call("load"),
+      plain(0x0a, "."),
+      halt(),
+      label("load"),
+      recall("1"),
+      ret(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      label("main"),
+      call("load"),
+      halt(),
+      label("load"),
+      recall("1"),
+      ret(),
+    ]);
+  });
+
+  it("x2-hidden-temp-restore uses immediate sync after an X2-preserving scratch alias", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      store("1"),
+      plain(0x54, "К НОП"),
+      recall("1"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      store("1"),
+      plain(0x54, "К НОП"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore 1 from hidden X2 temp" } },
       halt(),
     ]);
   });

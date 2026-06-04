@@ -4,6 +4,7 @@ import { computeLiveness } from "./liveness-analysis.ts";
 import {
   cellsPerOp,
   computeX2DotRestoreGapStates,
+  computeX2ImmediateSyncStates,
   computeX2RegisterStates,
   computeX2ValueStates,
   hasRewriteBarrier,
@@ -24,6 +25,7 @@ const run: IrPassFn = (ops) => {
   const x2States = computeX2RegisterStates(ops);
   const x2ValueStates = computeX2ValueStates(ops);
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
+  const immediateSyncStates = computeX2ImmediateSyncStates(ops);
   const liveness = computeLiveness(ops);
   const labelEntries = labelEntryIndexes(ops);
   let applied = 0;
@@ -39,7 +41,7 @@ const run: IrPassFn = (ops) => {
       x2States[index]?.has(register) !== true &&
       !x2ValueSetHasRegister(x2ValueStates[index]?.x2, register)
     ) return op;
-    if (dotSafeStates[index] !== true) return op;
+    if (dotSafeStates[index] !== true && immediateSyncStates[index] !== true) return op;
     if (removingRecallCanExposeStackLift(ops, index)) return op;
     if (
       removingRecallCanExposeX2Restore(ops, index, {

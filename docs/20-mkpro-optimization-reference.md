@@ -661,11 +661,12 @@ Display rewrites are separated into strategy selection + body lowering.
   edges preserve the previous X2 value; they do not create an X-to-X2 sync.
 - `x2-hidden-temp-restore` — turns a direct scratch `П->X r`, or a
   stable-indirect proved scratch `К П->X R7..Re`, into `.` when X2 already
-  contains `r`, a `.` restore-gap dataflow has seen two safe X2-preserving
-  executable steps after the last X2 sync, and the normal stack-lift/context
-  guards prove that the recall's stack shift and previous-command class are
-  dead. The proof can come from either X2-register dataflow or the stricter X2
-  value dataflow, so a prior closed-context `.` restore keeps the hidden
+  contains `r`, and either a `.` restore-gap dataflow has seen two safe
+  X2-preserving executable steps after the last X2 sync or CFG proves the
+  recall starts immediately after an X2 sync. The normal stack-lift/context
+  guards still prove that the recall's stack shift and previous-command class
+  are dead. The proof can come from either X2-register dataflow or the stricter
+  X2 value dataflow, so a prior closed-context `.` restore keeps the hidden
   `reg:r` fact available for later scratch aliases. This exposes the scratch
   register store to ordinary DSE instead of
   requiring a membership-specific lowering; repeated reads of loop/state
@@ -685,7 +686,10 @@ Display rewrites are separated into strategy selection + body lowering.
   while still preserving immediate `.`/`/-/`/`ВП` context. When X and X2 are proved to
   share a register value, `X->П s` extends the proof with `s` as another alias
   for that hidden value; overwriting `s` from a value no longer equal to X2
-  removes the alias.
+  removes the alias. A separate CFG fact tracks points reached immediately
+  after an X2 sync on every incoming path, including direct `В/О` call
+  continuations, so restore passes do not have to rely on a purely linear
+  previous-op scan.
 - `stack-resident-temps` — keeps up to four consecutive single-use temps on the stack, using `В↑` lifts and restore sequences (`X↔Y` / `F reverse`) before direct stack-based consumers.
 - `stack-resident-indexed-temp` — keeps a single-use temp in X across one indexed compound store `cells[i] op= temp` when the temp is consumed exactly once and selector/index setup is not temp-dependent.
 - `stack-resident-control-flow` — marks stack-temp fusion that crosses stack-preserving `if` / `while` / `dispatch` regions; these regions cannot clobber live temps and the lowering rebuilds stack state if the region requires it.
@@ -782,15 +786,17 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     model can prove them. Closed-context `/-/` without a proved decimal or VP
     context stays
     unknown. The pass accepts either a
-    safe dot-restore gap or the documented immediate no-op form after an
-    X2-affecting sync such as `П->X r`/`Cx`/conditional fallthrough, and refuses
-    display/raw/context-sensitive follow-up `.`/`/-/`/`ВП` cases.
-18. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and both the `.` restore gap and missing stack-lift observation are proven, allowing later DSE to remove now-unused scratch stores.
+    safe dot-restore gap or a CFG-proven immediate no-op form after an
+    X2-affecting sync such as `П->X r`/`Cx`/conditional fallthrough/direct
+    `В/О` return, and refuses display/raw/context-sensitive follow-up
+    `.`/`/-/`/`ВП` cases.
+18. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap or a CFG-proven immediate X2 sync is available, while also proving the recall stack lift is unobserved. This lets later DSE remove now-unused scratch stores.
 19. `x2-literal-restore` — replaces a repeated explicit numeric literal with
     `.` when X2 value dataflow proves the same normalized decimal value is
-    already in the hidden X2 register, the dot-restore gap is safe (or the
-    literal is immediately after a proved X2 sync), and removing number entry
-    cannot expose a consumed stack lift. It recognizes ordinary digit-runs,
+    already in the hidden X2 register, the dot-restore gap is safe (or CFG
+    proves the literal starts immediately after an X2 sync, including direct
+    `В/О` continuations), and removing number entry cannot expose a consumed
+    stack lift. It recognizes ordinary digit-runs,
     signed digit-runs, and normalized exponent-entry literals such as
     `5 ВП 3`, `5 ВП 3 /-/`, `5 /-/ ВП 3`, or
     `5 /-/ ВП 3 /-/` once the prior value has been closed by a safe

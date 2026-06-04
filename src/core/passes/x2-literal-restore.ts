@@ -2,6 +2,7 @@ import type { IrOp } from "../types.ts";
 import { getOpcode } from "../opcodes.ts";
 import {
   computeX2DotRestoreGapStates,
+  computeX2ImmediateSyncStates,
   computeX2ValueStates,
   emptyResult,
   hasRewriteBarrier,
@@ -200,19 +201,6 @@ function addingDotCanExposeX2RestoreContext(ops: readonly IrOp[], literalEnd: nu
   return false;
 }
 
-function isImmediateAfterX2AffectingSync(ops: readonly IrOp[], index: number): boolean {
-  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    const op = ops[cursor]!;
-    if (op.kind === "label") continue;
-    if (hasRewriteBarrier(op)) return false;
-    if (op.kind === "cjump" || op.kind === "loop" || op.kind === "indirect-cjump") {
-      return getOpcode(op.opcode).conditionalX2Effect?.fallthrough === "affects";
-    }
-    return op.kind === "plain" && getOpcode(op.opcode).x2Effect === "affects";
-  }
-  return false;
-}
-
 function dotRestoreOp(value: string, source: IrOp): IrOp {
   const sourceComment = "meta" in source ? source.meta.comment : undefined;
   return {
@@ -228,6 +216,7 @@ function dotRestoreOp(value: string, source: IrOp): IrOp {
 const run: IrPassFn = (ops) => {
   const x2ValueStates = computeX2ValueStates(ops);
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
+  const immediateSyncStates = computeX2ImmediateSyncStates(ops);
   const result: IrOp[] = [];
   let removed = 0;
 
@@ -237,7 +226,7 @@ const run: IrPassFn = (ops) => {
     if (
       runAtIndex !== undefined &&
       isFreshClosedDecimalEntry(state) &&
-      (dotSafeStates[index] === true || isImmediateAfterX2AffectingSync(ops, index)) &&
+      (dotSafeStates[index] === true || immediateSyncStates[index] === true) &&
       x2ValueSetHasFact(state?.x2, runAtIndex.x2Fact) &&
       !replacingNumberEntryCanExposeStackLift(ops, runAtIndex.end) &&
       !addingDotCanExposeX2RestoreContext(ops, runAtIndex.end)

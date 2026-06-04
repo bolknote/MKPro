@@ -2,6 +2,7 @@ import { getOpcode } from "../opcodes.ts";
 import type { IrOp } from "../types.ts";
 import {
   computeX2DotRestoreGapStates,
+  computeX2ImmediateSyncStates,
   computeX2ValueStates,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
@@ -17,6 +18,7 @@ const VP = 0x0c;
 const run: IrPassFn = (ops) => {
   const valueStates = computeX2ValueStates(ops);
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
+  const immediateSyncStates = computeX2ImmediateSyncStates(ops);
   const removed = new Set<number>();
 
   for (let index = 0; index < ops.length; index += 1) {
@@ -26,7 +28,7 @@ const run: IrPassFn = (ops) => {
     const state = valueStates[index];
     if (
       dotSafeStates[index] !== true &&
-      !isImmediateAfterX2AffectingSync(ops, index) &&
+      immediateSyncStates[index] !== true &&
       !isImmediateAfterModeledSignChange(ops, index, state)
     ) continue;
     if (!x2ValueSetHasIntersection(state?.x, state?.x2)) continue;
@@ -49,20 +51,6 @@ const run: IrPassFn = (ops) => {
 
 function isPlainDot(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
   return op.kind === "plain" && op.opcode === DOT && !hasRewriteBarrier(op);
-}
-
-function isImmediateAfterX2AffectingSync(ops: readonly IrOp[], dotIndex: number): boolean {
-  for (let index = dotIndex - 1; index >= 0; index -= 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") continue;
-    if (hasRewriteBarrier(op)) return false;
-    if (op.kind === "recall" || op.kind === "indirect-recall") return true;
-    if (op.kind === "cjump" || op.kind === "loop" || op.kind === "indirect-cjump") {
-      return getOpcode(op.opcode).conditionalX2Effect?.fallthrough === "affects";
-    }
-    return op.kind === "plain" && getOpcode(op.opcode).x2Effect === "affects";
-  }
-  return false;
 }
 
 function isImmediateAfterModeledSignChange(
