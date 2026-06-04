@@ -73,6 +73,15 @@ describe("X2 restore context", () => {
     expect(runX([0x02, 0x35, 0x0e, 0x0a, 0x50])).toBe("0,");
   });
 
+  it("F L0 fallthrough preserves X but syncs the current X into X2", () => {
+    // R0=1 makes F L0 fall through. After К {x}, X is 0 while X2 is still 2.
+    // КНОП does not sync X2, so `.` restores 2; F L0 fallthrough syncs X2, so
+    // the same `.` keeps the current 0.
+    expect(runX([0x01, 0x40, 0x02, 0x35, 0x54, 0x0a, 0x50])).toBe("2,");
+    expect(runX([0x01, 0x40, 0x02, 0x35, 0x5d, 0x08, 0x50])).toBe("0,");
+    expect(runX([0x01, 0x40, 0x02, 0x35, 0x5d, 0x08, 0x0a, 0x50])).toBe("0,");
+  });
+
   it("closed-context /-/ updates proved decimal X2 and makes a following dot redundant", () => {
     expect(runX([0x00, 0x02, 0xf0, 0x0b, 0x50])).toBe("-2,");
     expect(runX([0x00, 0x02, 0xf0, 0x0b, 0x0a, 0x50])).toBe("-2,");

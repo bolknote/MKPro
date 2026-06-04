@@ -1008,9 +1008,16 @@ function transferRegisterDataflowState(
     }
     case "loop": {
       const effect = conditionalX2EffectForGraphEdge(op, edge);
+      const counter = loopCounterRegister(op.counter);
+      const x = removeRegisterValue(input.x, counter);
+      const x2 = removeRegisterValue(input.x2, counter);
       return {
-        x: new Set(),
-        x2: effect === "preserves" ? new Set(input.x2) : new Set(),
+        x,
+        x2: effect === "preserves"
+          ? x2
+          : effect === "affects"
+            ? new Set(x)
+            : new Set(),
       };
     }
     case "indirect-jump":
@@ -1118,15 +1125,26 @@ function transferX2ValueDataflowState(
     case "loop": {
       const closed = closeX2ValueEntry(input);
       const effect = conditionalX2EffectForGraphEdge(op, edge);
+      const counter = loopCounterRegister(op.counter);
+      const counterFact = registerValueFact(counter);
+      const x = syncUnknownSameValue(removeX2Value(closed.x, counterFact), effect, producerIndex);
+      const xShape = cloneOptionalShapeSet(closed.xShape);
+      const x2 = effect === "preserves"
+        ? removeX2Value(closed.x2, counterFact)
+        : effect === "affects"
+          ? new Set(x)
+          : new Set<X2ValueFact>();
       return {
-        x: new Set(),
-        x2: effect === "preserves" ? new Set(closed.x2) : new Set(),
-        xShape: new Set(),
-        x2Shape: effect === "preserves" ? cloneOptionalShapeSet(closed.x2Shape) : new Set(),
+        x,
+        x2,
+        xShape,
+        x2Shape: transferConditionalX2ShapeSet(closed, xShape, effect),
         entry: closedX2EntryState(),
         vpContext: transferConditionalX2VpContextState(closed, effect),
-        memory: closed.memory,
-        shapeMemory: closed.shapeMemory,
+        vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, effect),
+        vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, effect),
+        memory: trackRegisterMemory ? deleteX2ValueMemory(closed.memory, counter) : undefined,
+        shapeMemory: trackRegisterMemory ? deleteX2ShapeMemory(closed.shapeMemory, counter) : undefined,
       };
     }
     case "indirect-jump":
@@ -1364,6 +1382,19 @@ function removeRegisterValue(input: RegisterValueSet, register: RegisterName): S
   const output = new Set(input);
   output.delete(register);
   return output;
+}
+
+function loopCounterRegister(counter: Extract<IrOp, { kind: "loop" }>["counter"]): RegisterName {
+  switch (counter) {
+    case "L0":
+      return "0";
+    case "L1":
+      return "1";
+    case "L2":
+      return "2";
+    case "L3":
+      return "3";
+  }
 }
 
 function dropMutatedSelectorFact(input: RegisterDataflowState, register: RegisterName): RegisterDataflowState {

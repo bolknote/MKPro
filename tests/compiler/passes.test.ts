@@ -1163,11 +1163,64 @@ describe("ir passes on synthetic programs", () => {
     expect(x2EntryStateText(states[5])).toBe("exponent:2:3");
   });
 
+  it("x2 value dataflow models ВП after a loop fallthrough X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      loop("done"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[3])).toBe("closed");
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:2:normalized"]);
+    expect(x2EntryStateText(states[4])).toBe("exponent:2:");
+    expect(x2EntryStateText(states[5])).toBe("exponent:2:3");
+  });
+
+  it("x2 value dataflow drops only the mutated loop-counter alias", () => {
+    const program: IrOp[] = [
+      recall("0"),
+      loop("done"),
+      plain(0x54, "К НОП"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[1]?.x)).toEqual(["reg:0"]);
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["expr:1"]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["expr:1"]);
+  });
+
   it("x2 value dataflow creates structural VP-entry shape on conditional fallthrough X2 sync", () => {
     const program: IrOp[] = [
       recall("2", "preload const 8.70Е2-6С"),
       store("1"),
       cjump("done"),
+      plain(0x54, "К НОП"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2VpEntryShapeText(states[2])).toEqual([]);
+    expect(x2VpEntryShapeText(states[3])).toEqual(["hex:8.70Е2-6С:mantissa"]);
+    expect(x2VpEntryShapeText(states[5])).toEqual([]);
+  });
+
+  it("x2 value dataflow creates structural VP-entry shape on loop fallthrough X2 sync", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 8.70Е2-6С"),
+      store("1"),
+      loop("done"),
       plain(0x54, "К НОП"),
       halt(),
       label("done"),
@@ -2109,6 +2162,31 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore uses path-sensitive loop fallthrough X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      loop("done"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      loop("done"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
   it("x2-literal-restore uses direct return X2 sync", () => {
     const program: IrOp[] = [
       label("main"),
@@ -2328,6 +2406,27 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual([
       recall("1"),
       cjump("done"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore uses path-sensitive loop fallthrough X2 sync", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      loop("done"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      loop("done"),
       halt(),
       label("done"),
       halt(),
@@ -2627,6 +2726,30 @@ describe("ir passes on synthetic programs", () => {
       halt(),
     ]);
     expect(x2DeadRestoreBeforeOverwrite.run(jumpProgram, ctx).ops).toEqual(jumpProgram);
+  });
+
+  it("x2-dead-restore-before-overwrite uses loop fallthrough structural ВП source", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const 8.70Е2-6С"),
+      loop("done"),
+      plain(0x0c, "ВП"),
+      plain(0x55, "К1"),
+      plain(0x0d, "Cx"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      recall("1", "preload const 8.70Е2-6С"),
+      loop("done"),
+      plain(0x0d, "Cx"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
   });
 
   it("x2-dead-restore-before-overwrite removes dot after a recalled decimal register", () => {
@@ -4204,7 +4327,7 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
-  it("flow-x-reuse treats counted loop backedges as unknown X predecessors", () => {
+  it("flow-x-reuse reuses X across counted loop backedges for non-counter registers", () => {
     const program: IrOp[] = [
       recall("2"),
       label("body"),
@@ -4213,6 +4336,26 @@ describe("ir passes on synthetic programs", () => {
       halt(),
     ];
     const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("2"),
+      label("body"),
+      loop("body"),
+      halt(),
+    ]);
+  });
+
+  it("flow-x-reuse keeps counted-loop counter recalls after the loop mutates the register", () => {
+    const program: IrOp[] = [
+      recall("0"),
+      label("body"),
+      recall("0"),
+      loop("body"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
     expect(result.applied).toBe(0);
     expect(result.ops).toEqual(program);
   });
@@ -6262,6 +6405,32 @@ describe("ir passes on synthetic programs", () => {
       recall("2", "preload const 8.70Е2-6С"),
       store("1"),
       cjump("done"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes a structural sign pair before ВП after loop fallthrough X2 sync", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 8.70Е2-6С"),
+      store("1"),
+      loop("done"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      recall("2", "preload const 8.70Е2-6С"),
+      store("1"),
+      loop("done"),
       plain(0x0c, "ВП"),
       halt(),
       label("done"),

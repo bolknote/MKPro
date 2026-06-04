@@ -771,7 +771,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 9. `pre-shift-stack-lift` — removes `В↑` before direct/indirect `П->X`, `F pi`, or another stack-shifting producer, possibly through stack-preserving labels/stores/plain ops, when that producer already supplies the current X in Y, unless the deeper stack difference can reach a later consumer.
 10. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
 11. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.
-12. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes a direct `П->X r` or stable-indirect `К П->X R7..Re` with a proved memory target when every predecessor reaches that point with the same value still in X, including concrete decimal equality proved through X2 register-memory or decimal preload metadata after X was rebuilt; proved indirect flow targets (`indirect-target=NN`) are included in the CFG, direct and proved-indirect `ПП`/`В/О` edges carry X facts into callees and back to continuations, documented empty operators `К НОП`/`К 1`/`К 2` preserve X facts, stable selectors preserve the X fact, mutating selectors drop only the mutated selector register from the proof, and unknown indirect flow plus absolute numeric direct targets are still refused. Recalls that provide the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow are kept.
+12. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes a direct `П->X r` or stable-indirect `К П->X R7..Re` with a proved memory target when every predecessor reaches that point with the same value still in X, including concrete decimal equality proved through X2 register-memory or decimal preload metadata after X was rebuilt; proved indirect flow targets (`indirect-target=NN`) are included in the CFG, direct and proved-indirect `ПП`/`В/О` edges carry X facts into callees and back to continuations, documented empty operators `К НОП`/`К 1`/`К 2` preserve X facts, stable selectors preserve the X fact, counted-loop `F L0`..`F L3` backedges preserve visible X for non-counter registers while dropping the decremented counter alias, mutating selectors drop only the mutated selector register from the proof, and unknown indirect flow plus absolute numeric direct targets are still refused. Recalls that provide the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow are kept.
 13. `branch-target-x-reuse` — removes the first direct or stable-indirect proved recall in a unique branch target when the source `cjump` tested the same recalled value and no fallthrough path can enter the target, unless the target recall is needed as a `.`/`/-/`/`ВП` X2-sync boundary before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow.
     These recall-removal guards read the shared `OpcodeInfo.stackEffect`
     profile, so stack-preserving, shifting, Y-consuming, exposing, and barrier
@@ -802,7 +802,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     immediately following `.` be removed unless it would shape a later X2
     restore context. `ВП` after an open mantissa creates both a structural exponent-entry
     state and a separate VP/exponent context. `ВП` after a proved closed
-    decimal X2 sync (`Cx`, `В↑`, direct conditional fallthrough, or `F0..FF`,
+    decimal X2 sync (`Cx`, `В↑`, direct conditional/`F Lx` fallthrough, or `F0..FF`,
     possibly through only `КНОП`/`К1`/`К2`) also becomes a structural
     exponent-entry state; this
     proof is deliberately not inferred through stores or general X-preserving
@@ -845,9 +845,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     intentionally rejected because a preloaded hex or non-normal register value
     can make `.` signal `ЕГГ0Г`. `ВП` may also be removed from a structural
     hex/super `vpEntryShape` source, including one produced by a direct `В/О`
-    return continuation or the fallthrough side of a direct conditional, when
-    the following overwrite destroys its visible result; the conditional jump
-    edge does not invent such a source, and none of this makes structural
+    return continuation or the fallthrough side of a direct conditional/`F Lx`
+    loop, when the following overwrite destroys its visible result; the
+    conditional jump edge does not invent such a source, and none of this makes structural
     `.`/`/-/` restores dot-safe.
     This pass requests the register value-memory layer and also consumes decimal preload facts from `П->X r` metadata:
     direct stores of proved decimal `X` facts seed remembered `decimal:*` facts
@@ -926,8 +926,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     mantissa/exponent context after a direct or proved-indirect recall of a
     previously stored or setup-loaded literal-shaped decimal. The same generic
     `ВП` source proof is also used for structural hex/super shapes after direct
-    return continuations and path-sensitive direct-conditional fallthrough X2
-    syncs, without promoting those shapes into decimal value facts.
+    return continuations and path-sensitive direct-conditional/`F Lx`
+    fallthrough X2 syncs, without promoting those shapes into decimal value facts.
 28. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/empty-op/sign redundancy optimization pass removes cells.
 29. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a proved `ВП`/X2 marker, display or ordinary, and reports `vp-fraction-restore` when one or more restores are removed. The removed `К {x}` is recognized by opcode rather than by a display/frac comment; a marker is not required when CFG dataflow proves an ordinary X2 restoration boundary: an X2 sync, at least one X2-preserving executable command, then `ВП`; direct conditional jump/fallthrough edges use their path-sensitive X2 effects, proved indirect flow targets (`indirect-target=NN`) and X2-preserving indirect conditionals participate in the same CFG, and joins require every incoming path to carry the proof.
 30. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.

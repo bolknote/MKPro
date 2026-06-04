@@ -1232,7 +1232,10 @@ The pipeline currently contains:
   edge syncs X2 and X is proved to contain register `r`, the proof records
   `X2 = r` on that edge. Recall-removal guards use that shared profile instead
   of a local special case, which lets later ordinary-code X2 tricks reason
-  about branch layout.
+  about branch layout. `F L0`..`F L3` share this branch-specific X2 model:
+  fallthrough syncs X2 from visible X and preserves visible X facts, while the
+  decremented counter register loses its alias and remembered value/shape
+  facts.
 - **X2-register dataflow** — a forward proof tracks states of the form “X2 is
   known to contain register `r`” through X2-preserving ordinary code, stores,
   known indirect memory recalls, direct or proved-indirect calls into the graph,
@@ -1419,6 +1422,10 @@ The pipeline currently contains:
   written registers.
 - **X2 dataflow helpers** — model direct `F x?0`/`F Lx` as path-sensitive X2
   operations: fallthrough syncs X into X2, while the jump edge preserves X2.
+  For `F Lx`, visible X facts survive the loop command except for the alias to
+  the counter register it decrements, so counted-loop backedges can reuse X for
+  unrelated registers without pretending that `X = R0..R3` survived the
+  decrement.
   Indirect `К x?0 r` conditionals are path-sensitive for control flow but not
   X2-affecting: both edges preserve X2. For mutating indirect selectors
   (`R0..R6`), the jump edge drops register-valued facts about that selector
