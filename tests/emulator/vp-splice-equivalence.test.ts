@@ -27,6 +27,9 @@ const VP = 0x0c;
 const KNOP = 0x54;
 const K1 = 0x55;
 const K2 = 0x56;
+const DOT = 0x0a;
+const SIGN_CHANGE = 0x0b;
+const FPI = 0x20;
 const STOP = 0x50;
 
 describe("ВП exponent-entry splice collapse (vp-splice)", () => {
@@ -74,5 +77,75 @@ describe("ВП exponent-entry splice collapse (vp-splice)", () => {
 
     // The collapsed program still computes 5e3.
     expect(display(codes)).toContain("5000");
+  });
+
+  it("empty ops after an exponent digit are removable before non-digit commands", () => {
+    // The separator is inert once exponent entry already has a digit and the
+    // next command is not another digit.
+    expect(display([0x05, VP, 0x03, KNOP, STOP])).toBe(display([0x05, VP, 0x03, STOP]));
+    expect(display([0x05, VP, 0x03, K1, STOP])).toBe(display([0x05, VP, 0x03, STOP]));
+    expect(display([0x05, VP, 0x03, K2, STOP])).toBe(display([0x05, VP, 0x03, STOP]));
+    expect(display([0x05, VP, 0x03, KNOP, SIGN_CHANGE, STOP])).toBe(
+      display([0x05, VP, 0x03, SIGN_CHANGE, STOP]),
+    );
+    expect(display([0x05, VP, 0x03, KNOP, DOT, STOP])).toBe(display([0x05, VP, 0x03, DOT, STOP]));
+
+    // Before another digit, the same empty op changes the number-entry shape and
+    // must stay.
+    expect(display([0x05, VP, 0x03, KNOP, 0x04, STOP])).not.toBe(display([0x05, VP, 0x03, 0x04, STOP]));
+  });
+
+  it("the pass removes an exponent-digit empty separator but keeps one before another digit", () => {
+    const removable: MachineItem[] = [
+      { kind: "op", opcode: 0x05, mnemonic: "5" },
+      { kind: "op", opcode: VP, mnemonic: "ВП" },
+      { kind: "op", opcode: 0x03, mnemonic: "3" },
+      { kind: "op", opcode: KNOP, mnemonic: "КНОП" },
+      { kind: "op", opcode: SIGN_CHANGE, mnemonic: "/-/" },
+      { kind: "op", opcode: STOP, mnemonic: "С/П" },
+    ];
+    const removedResult = runIrPasses(removable, { delivery: "hex", budget: 105, analysis: false });
+    const removedCodes = removedResult.items
+      .filter((item): item is Extract<MachineItem, { opcode: number }> => "opcode" in item)
+      .map((item) => item.opcode);
+    expect(removedCodes).toEqual([0x05, VP, 0x03, SIGN_CHANGE, STOP]);
+    expect(display(removedCodes)).toBe(display([0x05, VP, 0x03, KNOP, SIGN_CHANGE, STOP]));
+
+    const kept: MachineItem[] = [
+      { kind: "op", opcode: 0x05, mnemonic: "5" },
+      { kind: "op", opcode: VP, mnemonic: "ВП" },
+      { kind: "op", opcode: 0x03, mnemonic: "3" },
+      { kind: "op", opcode: KNOP, mnemonic: "КНОП" },
+      { kind: "op", opcode: 0x04, mnemonic: "4" },
+      { kind: "op", opcode: STOP, mnemonic: "С/П" },
+    ];
+    const keptResult = runIrPasses(kept, { delivery: "hex", budget: 105, analysis: false });
+    const keptCodes = keptResult.items
+      .filter((item): item is Extract<MachineItem, { opcode: number }> => "opcode" in item)
+      .map((item) => item.opcode);
+    expect(keptCodes).toEqual([0x05, VP, 0x03, KNOP, 0x04, STOP]);
+  });
+
+  it("empty ops before VP-context /-/ remain removable after X2-preserving gaps", () => {
+    expect(display([0x01, 0x02, VP, 0x03, FPI, KNOP, SIGN_CHANGE, STOP])).toBe(
+      display([0x01, 0x02, VP, 0x03, FPI, SIGN_CHANGE, STOP]),
+    );
+
+    const program: MachineItem[] = [
+      { kind: "op", opcode: 0x01, mnemonic: "1" },
+      { kind: "op", opcode: 0x02, mnemonic: "2" },
+      { kind: "op", opcode: VP, mnemonic: "ВП" },
+      { kind: "op", opcode: 0x03, mnemonic: "3" },
+      { kind: "op", opcode: FPI, mnemonic: "Fπ" },
+      { kind: "op", opcode: KNOP, mnemonic: "КНОП" },
+      { kind: "op", opcode: SIGN_CHANGE, mnemonic: "/-/" },
+      { kind: "op", opcode: STOP, mnemonic: "С/П" },
+    ];
+    const result = runIrPasses(program, { delivery: "hex", budget: 105, analysis: false });
+    const codes = result.items
+      .filter((item): item is Extract<MachineItem, { opcode: number }> => "opcode" in item)
+      .map((item) => item.opcode);
+    expect(codes).toEqual([0x01, 0x02, VP, 0x03, FPI, SIGN_CHANGE, STOP]);
+    expect(display(codes)).toBe(display([0x01, 0x02, VP, 0x03, FPI, KNOP, SIGN_CHANGE, STOP]));
   });
 });

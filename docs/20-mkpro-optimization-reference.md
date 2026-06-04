@@ -739,7 +739,25 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 14. `stable-indirect-flow` — rewrites direct `jump/call/cjump` to indirect forms (`К БП`, `К ПП`, `К <cond>`) when a stable selector is already live in a register.
 15. `preloaded-indirect-flow` — preloads a selector value into a spare stable register and rewrites repeated backward-direct numeric jumps/calls through that preloaded value; after rescue starts, subsequent proved shrinking rewrites are still accepted below the official window.
 16. `indirect-memory-table` — rewrites direct `store/recall` into `К X->П`/`К П->X` when a stable selector maps to the indexed target cell.
-17. `x2-noop-restore` — removes `.` when X2 value dataflow proves that `X` already contains the same hidden X2 value, including register aliases, normalized decimal digit-runs (`decimal:12:normalized`), signed digit-runs while number entry is still open (`decimal:-12:normalized`), and the normalized zero from `Cx`; leading-zero runs are split (`X=decimal:2:normalized`, `X2=decimal:02:unnormalized`, likewise `-2` vs `-02`) so they do not satisfy the equality proof. The value proof also models closed-context `.` as a real X2-to-X restore, normalizing decimal facts only for visible `X` and refusing open number-entry dots such as `1.`. `ВП` after an open mantissa now creates a structural exponent-entry state, and following exponent digits or exponent `/-/` stay in that state without producing `X2` value aliases; emulator probes show that later `.` can signal `ЕГГ0Г` for these hidden exponent forms. Closed-context `/-/` stays unknown; only digit-entry sign changes are modeled. The pass accepts either a safe dot-restore gap or the documented immediate no-op form after an X2-affecting sync such as `П->X r`/`Cx`/conditional fallthrough, and refuses display/raw/context-sensitive follow-up `.`/`/-/`/`ВП` cases.
+17. `x2-noop-restore` — removes `.` when X2 value dataflow proves that `X`
+    already contains the same hidden X2 value, including register aliases,
+    normalized decimal digit-runs (`decimal:12:normalized`), signed digit-runs
+    while number entry is still open (`decimal:-12:normalized`), and the
+    normalized zero from `Cx`; leading-zero runs are split
+    (`X=decimal:2:normalized`, `X2=decimal:02:unnormalized`, likewise `-2`
+    vs `-02`) so they do not satisfy the equality proof. The value proof also
+    models closed-context `.` as a real X2-to-X restore, normalizing decimal
+    facts only for visible `X` and refusing open number-entry dots such as
+    `1.`. `ВП` after an open mantissa creates both a structural exponent-entry
+    state and a separate VP/exponent context. Ordinary digits after an
+    X2-preserving gap start fresh number entry, but `/-/` can still see and
+    update that VP context. These hidden exponent forms still do not produce
+    `X2` value aliases; emulator probes show that later `.` can signal
+    `ЕГГ0Г`. Closed-context `/-/` without a proved VP context stays unknown;
+    only digit-entry sign changes are value-modeled. The pass accepts either a
+    safe dot-restore gap or the documented immediate no-op form after an
+    X2-affecting sync such as `П->X r`/`Cx`/conditional fallthrough, and refuses
+    display/raw/context-sensitive follow-up `.`/`/-/`/`ВП` cases.
 18. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and both the `.` restore gap and missing stack-lift observation are proven, allowing later DSE to remove now-unused scratch stores.
 19. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.
 20. `dead-store-elimination` — removes direct stores, plus stable-indirect stores with proved targets, whose target register is not live after the write in a CFG that follows proved indirect flow targets (`indirect-target=NN`) and does not affect number-entry/input finalization or the previous-command context consumed by `ВП` while it restores X2; mutating indirect selectors are kept.
@@ -767,8 +785,16 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     shrinking would move their real target. The same verifier can move the
     branch target label onto the branch's own address byte, allowing that
     operand byte to be the first executed opcode.
-25. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`), inert empty-op `КНОП ВП`/`К1 ВП`/`К2 ВП` forms, and adjacent `/-/ /-/` exponent-sign toggles when X2 value dataflow proves the machine is already in exponent-entry state, reporting `vp-exponent-splice` when one or more cells are removed.
-26. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/empty-op redundancy optimization pass removes cells.
+25. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`),
+    inert empty-op `КНОП ВП`/`К1 ВП`/`К2 ВП` forms, adjacent `/-/ /-/`
+    exponent-sign toggles, and shape-proved empty separators after at least
+    one exponent digit before a non-digit command. It also uses the separate
+    VP/exponent context to remove empty separators before `/-/` after
+    X2-preserving gaps such as `ВП 3 Fπ КНОП /-/`. The after-digit separator
+    rewrite is deliberately shape-sensitive: the same empty op before the
+    first exponent digit, or before another exponent digit, changes number
+    entry and is kept.
+26. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/empty-op/sign redundancy optimization pass removes cells.
 27. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a proved `ВП`/X2 marker, display or ordinary, and reports `vp-fraction-restore` when one or more restores are removed. The removed `К {x}` is recognized by opcode rather than by a display/frac comment; a marker is not required when CFG dataflow proves an ordinary X2 restoration boundary: an X2 sync, at least one X2-preserving executable command, then `ВП`; direct conditional jump/fallthrough edges use their path-sensitive X2 effects, proved indirect flow targets (`indirect-target=NN`) participate in the same CFG, and joins require every incoming path to carry the proof.
 28. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
 29. `duplicate-failure-tail-merge` — removes duplicated failure tails by redirecting the first tail to the second; this covers both `(label -> 0 -> pause)` and `(label -> pause -> same terminal flow)` forms.

@@ -41,11 +41,21 @@ export interface X2ValueDataflowState {
   readonly x: X2ValueSet;
   readonly x2: X2ValueSet;
   readonly entry: X2EntryState;
+  readonly vpContext?: X2VpContextState;
 }
 
 type X2EntryState =
   | { readonly kind: "closed" }
   | { readonly kind: "open"; readonly raw: ReadonlySet<string> }
+  | {
+      readonly kind: "exponent";
+      readonly mantissa: ReadonlySet<string>;
+      readonly exponent: ReadonlySet<string>;
+    }
+  | { readonly kind: "unknown" };
+
+type X2VpContextState =
+  | { readonly kind: "none" }
   | {
       readonly kind: "exponent";
       readonly mantissa: ReadonlySet<string>;
@@ -383,7 +393,7 @@ function emptyRegisterDataflowState(): RegisterDataflowState {
 }
 
 function emptyX2ValueDataflowState(): X2ValueDataflowState {
-  return { x: new Set(), x2: new Set(), entry: closedX2EntryState() };
+  return { x: new Set(), x2: new Set(), entry: closedX2EntryState(), vpContext: noneX2VpContextState() };
 }
 
 function cloneRegisterDataflowState(input: RegisterDataflowState): RegisterDataflowState {
@@ -391,7 +401,12 @@ function cloneRegisterDataflowState(input: RegisterDataflowState): RegisterDataf
 }
 
 function cloneX2ValueDataflowState(input: X2ValueDataflowState): X2ValueDataflowState {
-  return { x: new Set(input.x), x2: new Set(input.x2), entry: cloneX2EntryState(input.entry) };
+  return {
+    x: new Set(input.x),
+    x2: new Set(input.x2),
+    entry: cloneX2EntryState(input.entry),
+    vpContext: cloneX2VpContextState(input.vpContext),
+  };
 }
 
 function transferRegisterDataflowState(
@@ -468,17 +483,18 @@ function transferX2ValueDataflowState(
         x: addX2Value(input.x, registerValueFact(op.register)),
         x2: addStoredX2ValueAlias(input, registerValueFact(op.register)),
         entry: closedX2EntryState(),
+        vpContext: cloneX2VpContextState(input.vpContext),
       };
     case "indirect-store":
       return transferIndirectStoreX2ValueState(input, op);
     case "recall": {
       const value = registerValueFact(op.register);
-      return { x: new Set([value]), x2: new Set([value]), entry: closedX2EntryState() };
+      return { x: new Set([value]), x2: new Set([value]), entry: closedX2EntryState(), vpContext: noneX2VpContextState() };
     }
     case "indirect-recall": {
       const target = knownIndirectMemoryTarget(op);
       const values = target === undefined ? new Set<X2ValueFact>() : new Set([registerValueFact(target)]);
-      return { x: values, x2: new Set(values), entry: closedX2EntryState() };
+      return { x: values, x2: new Set(values), entry: closedX2EntryState(), vpContext: noneX2VpContextState() };
     }
     case "plain":
       return transferPlainX2ValueState(input, op);
@@ -488,6 +504,7 @@ function transferX2ValueDataflowState(
         x: new Set(input.x),
         x2: transferConditionalX2ValueSet(input, effect),
         entry: closedX2EntryState(),
+        vpContext: transferConditionalX2VpContextState(input, effect),
       };
     }
     case "loop": {
@@ -496,6 +513,7 @@ function transferX2ValueDataflowState(
         x: new Set(),
         x2: effect === "preserves" ? new Set(input.x2) : new Set(),
         entry: closedX2EntryState(),
+        vpContext: transferConditionalX2VpContextState(input, effect),
       };
     }
     case "indirect-jump":
@@ -506,7 +524,12 @@ function transferX2ValueDataflowState(
     case "stop":
       return emptyX2ValueDataflowState();
     case "return":
-      return { x: new Set(input.x), x2: new Set(input.x), entry: closedX2EntryState() };
+      return {
+        x: new Set(input.x),
+        x2: new Set(input.x),
+        entry: closedX2EntryState(),
+        vpContext: noneX2VpContextState(),
+      };
   }
 }
 
@@ -744,21 +767,36 @@ function transferPlainX2ValueState(
     return transferVpX2ValueState(input);
   }
   if (op.opcode === 0x0d) {
-    return { x: new Set([NORMALIZED_DECIMAL_ZERO]), x2: new Set([NORMALIZED_DECIMAL_ZERO]), entry: closedX2EntryState() };
+    return {
+      x: new Set([NORMALIZED_DECIMAL_ZERO]),
+      x2: new Set([NORMALIZED_DECIMAL_ZERO]),
+      entry: closedX2EntryState(),
+      vpContext: noneX2VpContextState(),
+    };
   }
   const effect = plainX2Effect(op);
   const x = plainPreservesXValue(op) ? new Set(input.x) : new Set<X2ValueFact>();
-  return { x, x2: transferPlainX2ValueSet(input.x2, effect), entry: nextX2EntryStateForPlainEffect(effect) };
+  return {
+    x,
+    x2: transferPlainX2ValueSet(input.x2, effect),
+    entry: nextX2EntryStateForPlainEffect(effect),
+    vpContext: transferPlainX2VpContextState(input, effect),
+  };
 }
 
 function transferDecimalDigitX2ValueState(input: X2ValueDataflowState, digit: string): X2ValueDataflowState {
   if (input.entry.kind === "exponent") {
     const entry = advanceExponentDigitEntry(input.entry, digit);
-    return { x: new Set(), x2: new Set(), entry };
+    return {
+      x: new Set(),
+      x2: new Set(),
+      entry,
+      vpContext: entry.kind === "exponent" ? x2VpContextFromExponentEntry(entry) : { kind: "unknown" },
+    };
   }
   const entry = advanceDecimalDigitEntry(input.entry, digit);
   if (entry.kind !== "open") {
-    return { x: new Set(), x2: new Set(), entry };
+    return { x: new Set(), x2: new Set(), entry, vpContext: noneX2VpContextState() };
   }
   const x = new Set<X2ValueFact>();
   const x2 = new Set<X2ValueFact>();
@@ -768,30 +806,41 @@ function transferDecimalDigitX2ValueState(input: X2ValueDataflowState, digit: st
     const x2Fact = x2DecimalEntryFact(raw);
     if (x2Fact !== undefined) x2.add(x2Fact);
   }
-  return { x, x2, entry };
+  return { x, x2, entry, vpContext: noneX2VpContextState() };
 }
 
 function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDataflowState {
   if (input.entry.kind !== "closed") {
-    return { x: new Set(), x2: new Set(), entry: { kind: "unknown" } };
+    return { x: new Set(), x2: new Set(), entry: { kind: "unknown" }, vpContext: { kind: "unknown" } };
   }
   return {
     x: normalizeX2RestoreFactsForX(input.x2),
     x2: new Set(input.x2),
     entry: closedX2EntryState(),
+    vpContext: noneX2VpContextState(),
   };
 }
 
 function transferSignChangeX2ValueState(input: X2ValueDataflowState): X2ValueDataflowState {
   if (input.entry.kind === "exponent") {
+    const entry = signChangeExponentEntry(input.entry) as Extract<X2EntryState, { kind: "exponent" }>;
     return {
       x: new Set(),
       x2: new Set(),
-      entry: signChangeExponentEntry(input.entry),
+      entry,
+      vpContext: x2VpContextFromExponentEntry(entry),
+    };
+  }
+  if (input.entry.kind === "closed" && input.vpContext?.kind === "exponent") {
+    return {
+      x: new Set(),
+      x2: new Set(),
+      entry: closedX2EntryState(),
+      vpContext: signChangeVpContext(input.vpContext),
     };
   }
   if (input.entry.kind !== "open") {
-    return { x: new Set(), x2: new Set(), entry: { kind: "unknown" } };
+    return { x: new Set(), x2: new Set(), entry: { kind: "unknown" }, vpContext: { kind: "unknown" } };
   }
   const x = new Set<X2ValueFact>();
   const x2 = new Set<X2ValueFact>();
@@ -802,7 +851,7 @@ function transferSignChangeX2ValueState(input: X2ValueDataflowState): X2ValueDat
     const x2Fact = x2DecimalEntryFact(signed);
     if (x2Fact !== undefined) x2.add(x2Fact);
   }
-  return { x, x2, entry: closedX2EntryState() };
+  return { x, x2, entry: closedX2EntryState(), vpContext: noneX2VpContextState() };
 }
 
 function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowState {
@@ -817,12 +866,22 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
         mantissa: new Set(input.entry.raw),
         exponent: new Set([""]),
       },
+      vpContext: {
+        kind: "exponent",
+        mantissa: new Set(input.entry.raw),
+        exponent: new Set([""]),
+      },
     };
   }
   if (input.entry.kind === "exponent") {
-    return { x: new Set(), x2: new Set(), entry: cloneX2EntryState(input.entry) };
+    return {
+      x: new Set(),
+      x2: new Set(),
+      entry: cloneX2EntryState(input.entry),
+      vpContext: x2VpContextFromExponentEntry(input.entry),
+    };
   }
-  return { x: new Set(), x2: new Set(), entry: { kind: "unknown" } };
+  return { x: new Set(), x2: new Set(), entry: { kind: "unknown" }, vpContext: { kind: "unknown" } };
 }
 
 function transferIndirectFlowX2ValueState(
@@ -845,6 +904,7 @@ function transferIndirectConditionalX2ValueState(
     x: new Set(input.x),
     x2: transferConditionalX2ValueSet(input, effect),
     entry: closedX2EntryState(),
+    vpContext: transferConditionalX2VpContextState(input, effect),
   };
   return edge === "jump" && !isStableIndirectSelector(op.register)
     ? dropMutatedSelectorX2ValueFact(output, op.register)
@@ -862,6 +922,7 @@ function transferIndirectStoreX2ValueState(
     x: addX2Value(input.x, value),
     x2: addStoredX2ValueAlias(input, value),
     entry: closedX2EntryState(),
+    vpContext: cloneX2VpContextState(input.vpContext),
   };
 }
 
@@ -884,6 +945,13 @@ function transferPlainX2ValueSet(
   effect: ReturnType<typeof plainX2Effect>,
 ): Set<X2ValueFact> {
   return effect === "preserves" ? new Set(input) : new Set();
+}
+
+function transferPlainX2VpContextState(
+  input: X2ValueDataflowState,
+  effect: ReturnType<typeof plainX2Effect>,
+): X2VpContextState {
+  return effect === "preserves" ? cloneX2VpContextState(input.vpContext) : noneX2VpContextState();
 }
 
 function nextX2EntryStateForPlainEffect(effect: ReturnType<typeof plainX2Effect>): X2EntryState {
@@ -909,6 +977,13 @@ function transferConditionalX2ValueSet(
   return new Set();
 }
 
+function transferConditionalX2VpContextState(
+  input: X2ValueDataflowState,
+  effect: ReturnType<typeof conditionalX2Effect>,
+): X2VpContextState {
+  return effect === "preserves" ? cloneX2VpContextState(input.vpContext) : noneX2VpContextState();
+}
+
 function joinRegisterDataflowStates(
   current: RegisterDataflowState | undefined,
   incoming: RegisterDataflowState,
@@ -931,11 +1006,13 @@ function joinX2ValueDataflowStates(
     x: new Set(incoming.x),
     x2: new Set(incoming.x2),
     entry: cloneX2EntryState(incoming.entry),
+    vpContext: cloneX2VpContextState(incoming.vpContext),
   };
   return {
     x: joinX2ValueSets(current.x, incoming.x),
     x2: joinX2ValueSets(current.x2, incoming.x2),
     entry: joinX2EntryStates(current.entry, incoming.entry),
+    vpContext: joinX2VpContextStates(current.vpContext, incoming.vpContext),
   };
 }
 
@@ -954,7 +1031,8 @@ function sameX2ValueDataflowState(
   if (left === undefined || right === undefined) return left === right;
   return sameX2ValueSet(left.x, right.x) &&
     sameX2ValueSet(left.x2, right.x2) &&
-    sameX2EntryState(left.entry, right.entry);
+    sameX2EntryState(left.entry, right.entry) &&
+    sameX2VpContextState(left.vpContext, right.vpContext);
 }
 
 function joinRegisterValueSets(
@@ -1081,8 +1159,34 @@ function cloneX2EntryState(input: X2EntryState): X2EntryState {
   return input;
 }
 
+function noneX2VpContextState(): X2VpContextState {
+  return { kind: "none" };
+}
+
+function cloneX2VpContextState(input: X2VpContextState | undefined): X2VpContextState {
+  if (input === undefined || input.kind === "none" || input.kind === "unknown") return input ?? noneX2VpContextState();
+  return {
+    kind: "exponent",
+    mantissa: new Set(input.mantissa),
+    exponent: new Set(input.exponent),
+  };
+}
+
+function x2VpContextFromExponentEntry(input: Extract<X2EntryState, { kind: "exponent" }>): X2VpContextState {
+  return {
+    kind: "exponent",
+    mantissa: new Set(input.mantissa),
+    exponent: new Set(input.exponent),
+  };
+}
+
 function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
-  return { x: new Set(input.x), x2: new Set(input.x2), entry: closedX2EntryState() };
+  return {
+    x: new Set(input.x),
+    x2: new Set(input.x2),
+    entry: closedX2EntryState(),
+    vpContext: cloneX2VpContextState(input.vpContext),
+  };
 }
 
 function advanceDecimalDigitEntry(input: X2EntryState, digit: string): X2EntryState {
@@ -1125,6 +1229,18 @@ function signChangeExponentEntry(input: Extract<X2EntryState, { kind: "exponent"
   };
 }
 
+function signChangeVpContext(input: Extract<X2VpContextState, { kind: "exponent" }>): X2VpContextState {
+  const exponent = new Set<string>();
+  for (const raw of input.exponent) {
+    exponent.add(raw.startsWith("-") ? raw.slice(1) : `-${raw}`);
+  }
+  return {
+    kind: "exponent",
+    mantissa: new Set(input.mantissa),
+    exponent,
+  };
+}
+
 function joinX2EntryStates(current: X2EntryState, incoming: X2EntryState): X2EntryState {
   if (current.kind === "unknown" || incoming.kind === "unknown") return { kind: "unknown" };
   if (current.kind === "closed" || incoming.kind === "closed" || current.kind !== incoming.kind) {
@@ -1142,6 +1258,23 @@ function joinX2EntryStates(current: X2EntryState, incoming: X2EntryState): X2Ent
   return joined.size === 0 ? { kind: "unknown" } : { kind: "open", raw: joined };
 }
 
+function joinX2VpContextStates(
+  current: X2VpContextState | undefined,
+  incoming: X2VpContextState | undefined,
+): X2VpContextState {
+  const left = current ?? noneX2VpContextState();
+  const right = incoming ?? noneX2VpContextState();
+  if (left.kind === "unknown" || right.kind === "unknown") return { kind: "unknown" };
+  if (left.kind === "none" || right.kind === "none" || left.kind !== right.kind) {
+    return left.kind === right.kind ? noneX2VpContextState() : { kind: "unknown" };
+  }
+  const mantissa = joinStringSets(left.mantissa, right.mantissa);
+  const exponent = joinStringSets(left.exponent, right.exponent);
+  return mantissa.size === 0 || exponent.size === 0
+    ? { kind: "unknown" }
+    : { kind: "exponent", mantissa, exponent };
+}
+
 function sameX2EntryState(left: X2EntryState, right: X2EntryState): boolean {
   if (left.kind !== right.kind) return false;
   if (left.kind === "exponent" && right.kind === "exponent") {
@@ -1149,6 +1282,17 @@ function sameX2EntryState(left: X2EntryState, right: X2EntryState): boolean {
   }
   if (left.kind !== "open" || right.kind !== "open") return true;
   return sameStringSet(left.raw, right.raw);
+}
+
+function sameX2VpContextState(
+  leftInput: X2VpContextState | undefined,
+  rightInput: X2VpContextState | undefined,
+): boolean {
+  const left = leftInput ?? noneX2VpContextState();
+  const right = rightInput ?? noneX2VpContextState();
+  if (left.kind !== right.kind) return false;
+  if (left.kind !== "exponent" || right.kind !== "exponent") return true;
+  return sameStringSet(left.mantissa, right.mantissa) && sameStringSet(left.exponent, right.exponent);
 }
 
 function addX2Value(input: X2ValueSet, value: X2ValueFact): Set<X2ValueFact> {
@@ -1176,6 +1320,7 @@ function dropMutatedSelectorX2ValueFact(input: X2ValueDataflowState, register: R
     x: removeX2Value(input.x, value),
     x2: removeX2Value(input.x2, value),
     entry: cloneX2EntryState(input.entry),
+    vpContext: cloneX2VpContextState(input.vpContext),
   };
 }
 

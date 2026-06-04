@@ -1,5 +1,12 @@
 import type { IrOp } from "../types.ts";
-import { computeX2ValueStates, emptyResult, hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
+import {
+  computeX2ValueStates,
+  emptyResult,
+  hasRewriteBarrier,
+  type IrPass,
+  type IrPassFn,
+  type X2ValueDataflowState,
+} from "./helpers.ts";
 
 const VP = 0x0c;
 const SIGN_CHANGE = 0x0b;
@@ -9,6 +16,10 @@ const K2 = 0x56;
 
 function isPlainOpcode(op: IrOp, opcode: number): boolean {
   return op.kind === "plain" && op.opcode === opcode && !hasRewriteBarrier(op);
+}
+
+function isDecimalDigit(op: IrOp): boolean {
+  return op.kind === "plain" && op.opcode >= 0 && op.opcode <= 9 && !hasRewriteBarrier(op);
 }
 
 // A ВП (exponent-entry) op that carries no layout/role contract, so removing the
@@ -28,10 +39,34 @@ function isFreeStandingSignChange(op: IrOp): boolean {
   return !("meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0);
 }
 
-// Both rewrites are proven behaviorally equivalent on the MK-61 emulator:
+function exponentEntryHasDigit(state: X2ValueDataflowState | undefined): boolean {
+  const entry = state?.entry;
+  if (entry?.kind !== "exponent") return false;
+  return exponentSetHasDigit(entry.exponent);
+}
+
+function vpContextHasExponentDigit(state: X2ValueDataflowState | undefined): boolean {
+  const context = state?.vpContext;
+  if (context?.kind !== "exponent") return false;
+  return exponentSetHasDigit(context.exponent);
+}
+
+function exponentSetHasDigit(exponents: ReadonlySet<string>): boolean {
+  for (const exponent of exponents) {
+    const digits = exponent.startsWith("-") ? exponent.slice(1) : exponent;
+    if (digits.length === 0) return false;
+  }
+  return exponents.size > 0;
+}
+
+// These rewrites are proven behaviorally equivalent on the MK-61 emulator:
 //   ВП ВП  ≡ ВП   (a second exponent-entry while already in exponent mode is inert)
 //   КНОП/К1/К2 ВП ≡ ВП  (an empty op immediately before exponent entry is removable)
 //   ВП ... /-/ /-/ ... ≡ ВП ... ... while the dataflow proves exponent-entry
+//   ВП digit КНОП/К1/К2 op ≡ ВП digit op while op is not another digit
+//      (after an exponent digit the empty op is only a separator before a
+//       non-digit command; before the first digit, or before another digit, it
+//       changes number-entry shape and must stay)
 // Each collapse drops one or two cells without changing any observable result.
 const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
@@ -47,6 +82,28 @@ const run: IrPassFn = (ops) => {
     }
     // КНОП/К1/К2 ВП -> ВП : drop the inert empty op preceding exponent entry.
     if (isFreeStandingEmptyOp(prev) && isFreeStandingVp(cur)) {
+      remove.add(i - 1);
+      continue;
+    }
+    // After at least one exponent digit, an empty op only separates the number
+    // from the following non-digit command. Removing it leaves that following
+    // command to close exponent entry in the same place.
+    if (
+      isFreeStandingEmptyOp(prev) &&
+      exponentEntryHasDigit(x2ValueStates[i - 1]) &&
+      !isDecimalDigit(cur)
+    ) {
+      remove.add(i - 1);
+      continue;
+    }
+    // The same separator is also inert before /-/ after X2-preserving commands:
+    // the digit entry is closed for ordinary digits, but the VP/X2 exponent
+    // context is still visible to /-/.
+    if (
+      isFreeStandingEmptyOp(prev) &&
+      isFreeStandingSignChange(cur) &&
+      vpContextHasExponentDigit(x2ValueStates[i - 1])
+    ) {
       remove.add(i - 1);
       continue;
     }
@@ -68,7 +125,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "vp-exponent-splice",
-        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an exponent-entry boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent /-/ /-/ -> empty).`,
+        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an exponent-entry boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent-digit empty separators, VP-context /-/ separators, exponent /-/ /-/ -> empty).`,
       },
     ],
   };

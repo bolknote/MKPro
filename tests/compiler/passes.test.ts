@@ -290,6 +290,14 @@ function x2EntryStateText(state: ReturnType<typeof computeX2ValueStates>[number]
   }
 }
 
+function x2VpContextStateText(state: ReturnType<typeof computeX2ValueStates>[number]): string | undefined {
+  if (state === undefined) return undefined;
+  const context = state.vpContext;
+  if (context === undefined || context.kind === "none") return "none";
+  if (context.kind === "unknown") return "unknown";
+  return `exponent:${[...context.mantissa].sort().join("|")}:${[...context.exponent].sort().join("|")}`;
+}
+
 describe("ir passes on synthetic programs", () => {
   it("x2 register dataflow tracks register-valued X2 through preserving operations", () => {
     const program: IrOp[] = [
@@ -645,6 +653,45 @@ describe("ir passes on synthetic programs", () => {
     expect(x2EntryStateText(states[5])).toBe("exponent:12:-3");
     expect(x2ValueStateText(states[5]?.x)).toEqual([]);
     expect(x2ValueStateText(states[5]?.x2)).toEqual([]);
+  });
+
+  it("x2 value dataflow preserves VP exponent context through X2-preserving gaps", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[5])).toBe("closed");
+    expect(x2VpContextStateText(states[5])).toBe("exponent:12:3");
+    expect(x2EntryStateText(states[6])).toBe("closed");
+    expect(x2VpContextStateText(states[6])).toBe("exponent:12:3");
+    expect(x2EntryStateText(states[7])).toBe("closed");
+    expect(x2VpContextStateText(states[7])).toBe("exponent:12:-3");
+  });
+
+  it("x2 value dataflow clears VP exponent context when a new digit starts", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[5])).toBe("closed");
+    expect(x2VpContextStateText(states[5])).toBe("exponent:12:3");
+    expect(x2EntryStateText(states[6])).toBe("open:4");
+    expect(x2VpContextStateText(states[6])).toBe("none");
   });
 
   it("x2 value dataflow refuses overlong exponent-entry state", () => {
@@ -3817,6 +3864,84 @@ describe("ir passes on synthetic programs", () => {
       plain(0x03, "3"),
       halt(),
     ]);
+  });
+
+  it("vp-splice removes an empty separator after an exponent digit before a non-digit command", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice keeps an empty separator before a following exponent digit", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x54, "КНОП"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("vp-splice removes an empty separator before VP-context sign-change after preserving gaps", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice keeps an empty separator before VP-context sign-change without an exponent digit", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("vp-splice keeps adjacent mantissa sign toggles before a following digit", () => {
