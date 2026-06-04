@@ -489,13 +489,15 @@ function transferX2ValueDataflowState(
     case "call":
     case "orphan-address":
       return closeX2ValueEntry(input);
-    case "store":
+    case "store": {
+      const closed = closeX2ValueEntry(input);
       return {
-        x: addX2Value(input.x, registerValueFact(op.register)),
-        x2: addStoredX2ValueAlias(input, registerValueFact(op.register)),
+        x: addX2Value(closed.x, registerValueFact(op.register)),
+        x2: addStoredX2ValueAlias(closed, registerValueFact(op.register)),
         entry: closedX2EntryState(),
-        vpContext: cloneX2VpContextState(input.vpContext),
+        vpContext: cloneX2VpContextState(closed.vpContext),
       };
+    }
     case "indirect-store":
       return transferIndirectStoreX2ValueState(input, op);
     case "recall": {
@@ -510,21 +512,23 @@ function transferX2ValueDataflowState(
     case "plain":
       return transferPlainX2ValueState(input, op);
     case "cjump": {
+      const closed = closeX2ValueEntry(input);
       const effect = conditionalX2EffectForGraphEdge(op, edge);
       return {
-        x: new Set(input.x),
-        x2: transferConditionalX2ValueSet(input, effect),
+        x: new Set(closed.x),
+        x2: transferConditionalX2ValueSet(closed, effect),
         entry: closedX2EntryState(),
-        vpContext: transferConditionalX2VpContextState(input, effect),
+        vpContext: transferConditionalX2VpContextState(closed, effect),
       };
     }
     case "loop": {
+      const closed = closeX2ValueEntry(input);
       const effect = conditionalX2EffectForGraphEdge(op, edge);
       return {
         x: new Set(),
-        x2: effect === "preserves" ? new Set(input.x2) : new Set(),
+        x2: effect === "preserves" ? new Set(closed.x2) : new Set(),
         entry: closedX2EntryState(),
-        vpContext: transferConditionalX2VpContextState(input, effect),
+        vpContext: transferConditionalX2VpContextState(closed, effect),
       };
     }
     case "indirect-jump":
@@ -534,13 +538,15 @@ function transferX2ValueDataflowState(
       return transferIndirectConditionalX2ValueState(input, op, edge);
     case "stop":
       return emptyX2ValueDataflowState();
-    case "return":
+    case "return": {
+      const closed = closeX2ValueEntry(input);
       return {
-        x: new Set(input.x),
-        x2: new Set(input.x),
+        x: new Set(closed.x),
+        x2: new Set(closed.x),
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
       };
+    }
   }
 }
 
@@ -959,11 +965,12 @@ function transferIndirectConditionalX2ValueState(
 ): X2ValueDataflowState {
   const effect = indirectConditionalX2EffectForGraphEdge(op, edge);
   if (effect === "unknown") return emptyX2ValueDataflowState();
+  const closed = closeX2ValueEntry(input);
   const output: X2ValueDataflowState = {
-    x: new Set(input.x),
-    x2: transferConditionalX2ValueSet(input, effect),
+    x: new Set(closed.x),
+    x2: transferConditionalX2ValueSet(closed, effect),
     entry: closedX2EntryState(),
-    vpContext: transferConditionalX2VpContextState(input, effect),
+    vpContext: transferConditionalX2VpContextState(closed, effect),
   };
   return edge === "jump" && !isStableIndirectSelector(op.register)
     ? dropMutatedSelectorX2ValueFact(output, op.register)
@@ -976,12 +983,13 @@ function transferIndirectStoreX2ValueState(
 ): X2ValueDataflowState {
   const target = knownIndirectMemoryTarget(op);
   if (target === undefined) return closeX2ValueEntry(input);
+  const closed = closeX2ValueEntry(input);
   const value = registerValueFact(target);
   return {
-    x: addX2Value(input.x, value),
-    x2: addStoredX2ValueAlias(input, value),
+    x: addX2Value(closed.x, value),
+    x2: addStoredX2ValueAlias(closed, value),
     entry: closedX2EntryState(),
-    vpContext: cloneX2VpContextState(input.vpContext),
+    vpContext: cloneX2VpContextState(closed.vpContext),
   };
 }
 
@@ -1426,6 +1434,15 @@ function x2VpContextFromExponentEntry(input: Extract<X2EntryState, { kind: "expo
 }
 
 function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
+  const closedExponentValues = closedExponentEntryDecimalFacts(input.entry);
+  if (closedExponentValues.size > 0) {
+    return {
+      x: new Set(closedExponentValues),
+      x2: new Set(closedExponentValues),
+      entry: closedX2EntryState(),
+      vpContext: cloneX2VpContextState(input.vpContext),
+    };
+  }
   return {
     x: new Set(input.x),
     x2: new Set(input.x2),

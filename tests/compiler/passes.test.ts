@@ -788,8 +788,49 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x)).toEqual([]);
     expect(x2ValueStateText(states[4]?.x2)).toEqual([]);
     expect(x2EntryStateText(states[5])).toBe("closed");
-    expect(x2ValueStateText(states[5]?.x)).toEqual(["reg:2"]);
-    expect(x2ValueStateText(states[5]?.x2)).toEqual([]);
+    expect(x2ValueStateText(states[5]?.x)).toEqual(["decimal:12000:normalized", "reg:2"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:12000:normalized", "reg:2"]);
+  });
+
+  it("x2 value dataflow closes exponent-entry values through direct conditionals", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      cjump("jumped"),
+      plain(0x20, "F pi"),
+      jump("done"),
+      label("jumped"),
+      plain(0x20, "F pi"),
+      label("done"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:5000:normalized"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:5000:normalized"]);
+    expect(x2ValueStateText(states[7]?.x)).toEqual(["decimal:5000:normalized"]);
+    expect(x2ValueStateText(states[7]?.x2)).toEqual(["decimal:5000:normalized"]);
+  });
+
+  it("x2 value dataflow closes exponent-entry values through direct returns", () => {
+    const program: IrOp[] = [
+      label("main"),
+      call("load"),
+      store("2"),
+      halt(),
+      label("load"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      ret(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["decimal:5000:normalized"]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:5000:normalized"]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["decimal:5000:normalized", "reg:2"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:5000:normalized", "reg:2"]);
   });
 
   it("x2 value dataflow models ВП after a proved closed decimal X2 sync", () => {
@@ -973,7 +1014,7 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[5]?.x2)).toEqual([]);
   });
 
-  it("x2-hidden-temp-restore does not turn exponent-entry scratch recalls into dot restores", () => {
+  it("x2-hidden-temp-restore turns closed exponent-entry scratch recalls into dot restores", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
       plain(0x02, "2"),
@@ -984,10 +1025,13 @@ describe("ir passes on synthetic programs", () => {
       recall("2"),
       halt(),
     ];
-    const result = x2HiddenTempRestore.run(program, ctx);
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
 
-    expect(result.applied).toBe(0);
-    expect(result.ops).toEqual(program);
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
 
   it("x2-literal-restore replaces a repeated normalized digit run with dot", () => {
