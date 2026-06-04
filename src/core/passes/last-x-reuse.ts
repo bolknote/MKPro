@@ -6,9 +6,11 @@ import {
   knownIndirectFlowTarget,
   plainPreservesXValue,
   recallAlreadyInXDecimalMemory,
+  recallAlreadyInXMemoryValue,
   recallAlreadyInXPreloadedDecimal,
   recallAlreadySyncedInX2,
   recallAlreadySyncedInX2DecimalMemory,
+  recallAlreadySyncedInX2MemoryValue,
   recallAlreadySyncedInX2PreloadedDecimal,
   recallAlreadySyncedInX2Value,
   removableRecallValueRegister,
@@ -69,12 +71,14 @@ const run: IrPassFn = (ops) => {
     }
     const recallRegister = removableRecallValueRegister(op);
     const xAlreadyHasRecallValue =
+      recallAlreadyInXMemoryValue(op, x2ValueStates[i]) === recallRegister ||
       recallAlreadyInXDecimalMemory(op, x2ValueStates[i]) === recallRegister ||
       recallAlreadyInXPreloadedDecimal(op, x2ValueStates[i]) === recallRegister;
     const x2AlreadyHasRecallValue =
       recallAlreadySyncedInX2(op, x2States[i]) ??
       recallAlreadySyncedInX2Value(op, x2ValueStates[i]);
-    const x2AlreadyHasRecallDecimal =
+    const x2AlreadyHasRecallMemoryValue =
+      recallAlreadySyncedInX2MemoryValue(op, x2ValueStates[i]) ??
       recallAlreadySyncedInX2DecimalMemory(op, x2ValueStates[i]) ??
       recallAlreadySyncedInX2PreloadedDecimal(op, x2ValueStates[i]);
     if (
@@ -83,7 +87,7 @@ const run: IrPassFn = (ops) => {
       !removingRecallCanExposeStackLift(ops, i) &&
       !removingRecallCanExposeX2Restore(ops, i, {
         redundantSyncRegister: x2AlreadyHasRecallValue,
-        redundantSyncValue: x2AlreadyHasRecallDecimal !== undefined,
+        redundantSyncValue: x2AlreadyHasRecallMemoryValue !== undefined,
       })
     ) {
       removed.add(i);

@@ -12,6 +12,7 @@ import {
   knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
   recallAlreadySyncedInX2DecimalMemory,
+  recallAlreadySyncedInX2MemoryValue,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
   removingRecallCanExposeX2Restore,
@@ -41,6 +42,7 @@ const run: IrPassFn = (ops) => {
     if (
       x2States[index]?.has(register) !== true &&
       !x2ValueSetHasRegister(x2ValueStates[index]?.x2, register) &&
+      recallAlreadySyncedInX2MemoryValue(op, x2ValueStates[index]) === undefined &&
       recallAlreadySyncedInX2DecimalMemory(op, x2ValueStates[index]) === undefined
     ) return op;
     if (dotSafeStates[index] !== true && immediateSyncStates[index] !== true) return op;

@@ -1384,6 +1384,23 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[5]?.x2Shape)).toEqual(["mantissa:2:decimal"]);
   });
 
+  it("x2 value dataflow recalls arbitrary expr facts stored in registers", () => {
+    const program: IrOp[] = [
+      plain(0x35, "К {x}"),
+      plain(0x0e, "В↑"),
+      store("1"),
+      plain(0x0d, "Cx"),
+      recall("1"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["expr:1", "reg:1"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["expr:1", "reg:1"]);
+    expect(x2ValueStateText(states[5]?.x)).toEqual(["expr:1", "reg:1"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual(["expr:1", "reg:1"]);
+  });
+
   it("x2 value dataflow recalls concrete decimal facts through proved indirect memory", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),

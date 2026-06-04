@@ -758,10 +758,18 @@ export function recallAlreadySyncedInX2DecimalMemory(
   op: IrOp,
   state: X2ValueDataflowState | undefined,
 ): RegisterName | undefined {
+  return recallAlreadySyncedInX2MemoryValue(op, state, isConcreteDecimalX2ValueFact);
+}
+
+export function recallAlreadySyncedInX2MemoryValue(
+  op: IrOp,
+  state: X2ValueDataflowState | undefined,
+  predicate: (fact: X2ValueFact) => boolean = isStorableX2MemoryValueFact,
+): RegisterName | undefined {
   const register = removableRecallValueRegister(op);
   if (register === undefined || state === undefined) return undefined;
   for (const fact of state.memory?.[register] ?? []) {
-    if (isConcreteDecimalX2ValueFact(fact) && state.x2.has(fact)) return register;
+    if (predicate(fact) && state.x2.has(fact)) return register;
   }
   return undefined;
 }
@@ -782,10 +790,18 @@ export function recallAlreadyInXDecimalMemory(
   op: IrOp,
   state: X2ValueDataflowState | undefined,
 ): RegisterName | undefined {
+  return recallAlreadyInXMemoryValue(op, state, isConcreteDecimalX2ValueFact);
+}
+
+export function recallAlreadyInXMemoryValue(
+  op: IrOp,
+  state: X2ValueDataflowState | undefined,
+  predicate: (fact: X2ValueFact) => boolean = isStorableX2MemoryValueFact,
+): RegisterName | undefined {
   const register = removableRecallValueRegister(op);
   if (register === undefined || state === undefined) return undefined;
   for (const fact of state.memory?.[register] ?? []) {
-    if (isConcreteDecimalX2ValueFact(fact) && state.x.has(fact)) return register;
+    if (predicate(fact) && state.x.has(fact)) return register;
   }
   return undefined;
 }
@@ -1873,7 +1889,7 @@ function storeX2ValueMemory(
   values: X2ValueSet,
 ): X2ValueMemory {
   const output = cloneX2ValueMemory(input);
-  const stored = concreteStoredX2ValueFacts(values);
+  const stored = storableX2MemoryValueFacts(values);
   if (stored.size === 0) delete output[register];
   else output[register] = stored;
   return output;
@@ -1906,8 +1922,24 @@ function concreteStoredX2ValueFacts(values: X2ValueSet): Set<X2ValueFact> {
   return output;
 }
 
+function storableX2MemoryValueFacts(values: X2ValueSet): Set<X2ValueFact> {
+  const output = concreteStoredX2ValueFacts(values);
+  for (const value of values) {
+    if (isExpressionX2ValueFact(value)) output.add(value);
+  }
+  return output;
+}
+
 function isConcreteDecimalX2ValueFact(value: X2ValueFact): boolean {
   return /^decimal:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+):(normalized|unnormalized)$/u.test(value);
+}
+
+function isExpressionX2ValueFact(value: X2ValueFact): boolean {
+  return /^expr:\d+$/u.test(value);
+}
+
+function isStorableX2MemoryValueFact(value: X2ValueFact): boolean {
+  return isConcreteDecimalX2ValueFact(value) || isExpressionX2ValueFact(value);
 }
 
 function isOpaqueSharedValueFact(value: X2ValueFact): boolean {

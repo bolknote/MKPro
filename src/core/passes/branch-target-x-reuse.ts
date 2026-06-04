@@ -5,6 +5,8 @@ import {
   emptyResult,
   hasRewriteBarrier,
   recallAlreadySyncedInX2,
+  recallAlreadySyncedInX2MemoryValue,
+  recallAlreadySyncedInX2PreloadedDecimal,
   recallAlreadySyncedInX2Value,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
@@ -17,7 +19,7 @@ const run: IrPassFn = (ops) => {
   const labels = labelIndexes(ops);
   const references = targetReferenceCounts(ops);
   const x2States = computeX2RegisterStates(ops);
-  const x2ValueStates = computeX2ValueStates(ops);
+  const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
   const remove = new Set<number>();
 
   for (let index = 0; index < ops.length; index += 1) {
@@ -41,6 +43,9 @@ const run: IrPassFn = (ops) => {
         redundantSyncRegister:
           recallAlreadySyncedInX2(target, x2States[targetIndex]) ??
           recallAlreadySyncedInX2Value(target, x2ValueStates[targetIndex]),
+        redundantSyncValue:
+          (recallAlreadySyncedInX2MemoryValue(target, x2ValueStates[targetIndex]) ??
+            recallAlreadySyncedInX2PreloadedDecimal(target, x2ValueStates[targetIndex])) !== undefined,
       })
     ) continue;
 
