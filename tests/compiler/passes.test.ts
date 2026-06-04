@@ -2001,6 +2001,40 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
 
+  it("x2-hidden-temp-restore crosses unreferenced marker labels", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      label("marker"),
+      plain(0x35, "К {x}"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[4]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore keeps recalls across referenced labels", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      jump("entry"),
+      label("entry"),
+      plain(0x35, "К {x}"),
+      recall("2"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-hidden-temp-restore requires a safe dot restore gap", () => {
     const program: IrOp[] = [
       recall("1"),

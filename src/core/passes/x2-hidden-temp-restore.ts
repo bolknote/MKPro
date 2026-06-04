@@ -2,11 +2,13 @@ import type { IrOp, RegisterName } from "../types.ts";
 import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import { computeLiveness } from "./liveness-analysis.ts";
 import {
+  cellsPerOp,
   computeX2DotRestoreGapStates,
   computeX2RegisterStates,
   computeX2ValueStates,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
+  knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
@@ -23,6 +25,7 @@ const run: IrPassFn = (ops) => {
   const x2ValueStates = computeX2ValueStates(ops);
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
   const liveness = computeLiveness(ops);
+  const labelEntries = labelEntryIndexes(ops);
   let applied = 0;
 
   const result = ops.map((op, index): IrOp => {
@@ -30,7 +33,7 @@ const run: IrPassFn = (ops) => {
     if (register === undefined) return op;
     if (!isSupportedScratchRecall(op)) return op;
     if (isDisplayFocusSensitive(op)) return op;
-    if (findDeadScratchStore(ops, index, register) === undefined) return op;
+    if (findDeadScratchStore(ops, index, register, labelEntries) === undefined) return op;
     if (liveness.liveOut[index]?.has(register) === true) return op;
     if (
       x2States[index]?.has(register) !== true &&
@@ -81,10 +84,18 @@ function isSupportedScratchRecall(op: IrOp): op is Extract<IrOp, { kind: "recall
     knownIndirectMemoryTarget(op) !== undefined;
 }
 
-function findDeadScratchStore(ops: readonly IrOp[], recallIndex: number, register: RegisterName): number | undefined {
+function findDeadScratchStore(
+  ops: readonly IrOp[],
+  recallIndex: number,
+  register: RegisterName,
+  labelEntries: ReadonlySet<number>,
+): number | undefined {
   for (let index = recallIndex - 1; index >= 0; index -= 1) {
     const op = ops[index]!;
-    if (op.kind === "label") return undefined;
+    if (op.kind === "label") {
+      if (labelEntries.has(index)) return undefined;
+      continue;
+    }
     if (hasRewriteBarrier(op)) return undefined;
     if (op.kind === "store" && op.register === register) {
       return isDisplayFocusSensitive(op) ? undefined : index;
@@ -99,6 +110,59 @@ function findDeadScratchStore(ops: readonly IrOp[], recallIndex: number, registe
     if (mentionsRegister(op, register) || stopsStraightLineSearch(op)) return undefined;
   }
   return undefined;
+}
+
+function labelEntryIndexes(ops: readonly IrOp[]): Set<number> {
+  const stringTargets = new Set<string>();
+  const numericTargets = new Set<number>();
+  let unknownIndirectFlow = false;
+  for (const op of ops) {
+    const target = flowTarget(op);
+    if (typeof target === "string") stringTargets.add(target);
+    if (typeof target === "number") numericTargets.add(target);
+    if (isIndirectFlow(op)) {
+      const indirectTarget = knownIndirectFlowTarget(op);
+      if (indirectTarget === undefined) unknownIndirectFlow = true;
+      else numericTargets.add(indirectTarget);
+    }
+  }
+
+  const entries = new Set<number>();
+  let address = 0;
+  for (let index = 0; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") {
+      if (
+        op.procedureBoundary !== undefined ||
+        unknownIndirectFlow ||
+        stringTargets.has(op.name) ||
+        numericTargets.has(address)
+      ) {
+        entries.add(index);
+      }
+      continue;
+    }
+    address += cellsPerOp(op);
+  }
+  return entries;
+}
+
+function flowTarget(op: IrOp): string | number | undefined {
+  switch (op.kind) {
+    case "jump":
+    case "cjump":
+    case "call":
+    case "loop":
+      return op.target;
+    case "orphan-address":
+      return op.target;
+    default:
+      return undefined;
+  }
+}
+
+function isIndirectFlow(op: IrOp): op is Extract<IrOp, { kind: "indirect-jump" | "indirect-call" | "indirect-cjump" }> {
+  return op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump";
 }
 
 function mentionsRegister(op: IrOp, register: RegisterName): boolean {
