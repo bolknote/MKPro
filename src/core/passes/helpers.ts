@@ -61,6 +61,33 @@ export type ParsedX2ShapeFact =
   | { readonly kind: "hex-mantissa"; readonly raw: string; readonly safety: X2ShapeSafety }
   | { readonly kind: "super-mantissa"; readonly raw: string; readonly safety: X2ShapeSafety }
   | { readonly kind: "unknown"; readonly raw: string; readonly safety: "unknown" };
+export type X2MantissaRadix = "decimal" | "hex" | "super" | "unknown";
+export interface X2MantissaDataModel {
+  readonly kind: "mantissa";
+  readonly radix: X2MantissaRadix;
+  readonly raw: string;
+  readonly canonical: string;
+  readonly sign: "" | "-";
+  readonly hasDecimalPoint: boolean;
+  readonly hasLeadingZero: boolean;
+  readonly digits: readonly string[];
+  readonly significantDigits: number;
+  readonly normalizedDecimal?: string | undefined;
+  readonly normalizedSameAsRaw: boolean;
+  readonly safety: X2ShapeSafety;
+}
+export type X2ShapeDataModel =
+  | X2MantissaDataModel
+  | {
+      readonly kind: "exponent-entry";
+      readonly mantissa: X2MantissaDataModel;
+      readonly exponentRaw: string;
+      readonly exponentSign: "" | "-";
+      readonly exponentDigits: readonly string[];
+      readonly normalizedDecimal?: string | undefined;
+      readonly safety: X2ShapeSafety;
+    }
+  | { readonly kind: "unknown"; readonly raw: string; readonly safety: "unknown" };
 type X2ValueMemory = Partial<Record<RegisterName, X2ValueSet>>;
 
 const NORMALIZED_DECIMAL_ZERO: X2ValueFact = "decimal:0:normalized";
@@ -482,8 +509,38 @@ export function parseX2ShapeFact(fact: X2ShapeFact): ParsedX2ShapeFact {
   return { kind: "unknown", raw: fact, safety: "unknown" };
 }
 
+export function x2ShapeDataModelForFact(fact: X2ShapeFact): X2ShapeDataModel {
+  const mantissa = /^mantissa:(.*):decimal$/u.exec(fact);
+  if (mantissa !== null) return decimalMantissaDataModel(mantissa[1]!);
+  const exponent = /^exponent:([^:]*):([^:]*):decimal$/u.exec(fact);
+  if (exponent !== null) {
+    const mantissaModel = decimalMantissaDataModel(exponent[1]!);
+    const exponentRaw = exponent[2]!;
+    return {
+      kind: "exponent-entry",
+      mantissa: mantissaModel,
+      exponentRaw,
+      exponentSign: exponentRaw.startsWith("-") ? "-" : "",
+      exponentDigits: shapeDigits(exponentRaw),
+      normalizedDecimal: normalizedExponentEntryValue(exponent[1]!, exponentRaw),
+      safety: "errorProne",
+    };
+  }
+  const hex = /^hex:(.*):mantissa$/u.exec(fact);
+  if (hex !== null) return structuralMantissaDataModel("hex", hex[1]!, "structuralOnly");
+  const superMantissa = /^super:(.*)$/u.exec(fact);
+  if (superMantissa !== null) return structuralMantissaDataModel("super", superMantissa[1]!, "structuralOnly");
+  return { kind: "unknown", raw: fact, safety: "unknown" };
+}
+
+export function x2ShapeDataModels(input: X2ShapeSet | undefined): X2ShapeDataModel[] {
+  const models: X2ShapeDataModel[] = [];
+  for (const fact of input ?? []) models.push(x2ShapeDataModelForFact(fact));
+  return models;
+}
+
 export function x2ShapeFactSafety(fact: X2ShapeFact): X2ShapeSafety {
-  return parseX2ShapeFact(fact).safety;
+  return x2ShapeDataModelForFact(fact).safety;
 }
 
 export function x2ShapeSetSafety(input: X2ShapeSet | undefined): X2ShapeSafety {
@@ -1887,12 +1944,78 @@ function x2ShapesFromValueFacts(values: X2ValueSet): Set<X2ShapeFact> {
 
 function dotSafeDecimalShapeValues(input: X2ShapeSet | undefined): Set<string> {
   const output = new Set<string>();
-  for (const fact of input ?? []) {
-    const parsed = parseX2ShapeFact(fact);
-    if (parsed.kind !== "decimal-mantissa" || parsed.safety !== "dotSafeDecimal") continue;
-    if (parsed.normalized !== undefined && parsed.raw === parsed.normalized) output.add(parsed.normalized);
+  for (const model of x2ShapeDataModels(input)) {
+    if (model.kind !== "mantissa" || model.radix !== "decimal" || model.safety !== "dotSafeDecimal") continue;
+    if (model.normalizedDecimal !== undefined && model.normalizedSameAsRaw) output.add(model.normalizedDecimal);
   }
   return output;
+}
+
+function decimalMantissaDataModel(raw: string): X2MantissaDataModel {
+  const canonical = canonicalShapeRaw(raw);
+  const normalized = normalizePlainDecimal(canonical);
+  return {
+    kind: "mantissa",
+    radix: "decimal",
+    raw,
+    canonical,
+    sign: canonical.startsWith("-") ? "-" : "",
+    hasDecimalPoint: canonical.includes("."),
+    hasLeadingZero: decimalHasLeadingZero(canonical, normalized),
+    digits: shapeDigits(canonical),
+    significantDigits: normalized === undefined ? 0 : significantDecimalDigits(normalized),
+    normalizedDecimal: normalized,
+    normalizedSameAsRaw: normalized !== undefined && canonical === normalized,
+    safety: normalized === undefined ? "unknown" : "dotSafeDecimal",
+  };
+}
+
+function structuralMantissaDataModel(
+  radix: "hex" | "super",
+  raw: string,
+  safety: X2ShapeSafety,
+): X2MantissaDataModel {
+  const canonical = canonicalShapeRaw(raw);
+  const digits = shapeDigits(canonical);
+  return {
+    kind: "mantissa",
+    radix,
+    raw,
+    canonical,
+    sign: canonical.startsWith("-") ? "-" : "",
+    hasDecimalPoint: canonical.includes("."),
+    hasLeadingZero: shapeHasLeadingZero(canonical),
+    digits,
+    significantDigits: significantShapeDigits(digits),
+    normalizedSameAsRaw: true,
+    safety,
+  };
+}
+
+function canonicalShapeRaw(raw: string): string {
+  return raw.trim().replace(/\s+/gu, "").replace(/,/gu, ".").toUpperCase();
+}
+
+function shapeDigits(raw: string): string[] {
+  const digits: string[] = [];
+  for (const char of raw) {
+    if (/^[0-9A-FА-Я]$/u.test(char)) digits.push(char);
+  }
+  return digits;
+}
+
+function decimalHasLeadingZero(raw: string, normalized: string | undefined): boolean {
+  if (normalized === undefined) return false;
+  return raw !== normalized && /^-?0[0-9]/u.test(raw);
+}
+
+function shapeHasLeadingZero(raw: string): boolean {
+  return /^-?0[0-9A-FА-Я]/u.test(raw);
+}
+
+function significantShapeDigits(digits: readonly string[]): number {
+  const first = digits.findIndex((digit) => digit !== "0");
+  return first < 0 ? 1 : digits.length - first;
 }
 
 function preloadedConstantValueFacts(op: IrOp | undefined): Set<X2ValueFact> {
@@ -2237,11 +2360,11 @@ function signChangedNormalizedDecimalValue(raw: string): string {
 function signChangedClosedShapeMantissas(input: X2ValueDataflowState): ReadonlySet<string> | undefined {
   const mantissas = new Set<string>();
   for (const fact of input.x2Shape ?? []) {
-    const parsed = parseX2ShapeFact(fact);
-    if (parsed.kind !== "decimal-mantissa" || parsed.safety !== "dotSafeDecimal") continue;
-    const raw = parsed.raw;
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind !== "mantissa" || model.radix !== "decimal" || model.safety !== "dotSafeDecimal") continue;
+    const raw = model.canonical;
     const normalized = normalizeDecimalEntry(raw);
-    if (normalized === undefined || parsed.normalized === undefined) continue;
+    if (normalized === undefined || model.normalizedDecimal === undefined) continue;
     if (input.xShape?.has(decimalMantissaShapeFact(normalized)) !== true) continue;
     const signed = signChangedMantissaShape(raw);
     if (signed === undefined) return undefined;
@@ -2690,19 +2813,19 @@ function stackDifferenceCanReachConsumer(
           depth = shiftDifference(depth);
           break;
         case "plain": {
-          const effect = getOpcode(op.opcode).stackEffect;
-          if (effect === "unknown" || effect === "exposes") return true;
-          if (effect === "barrier") return false;
-          if (effect === "shifts") {
+          const effect = analyzeX2StackEffect(op);
+          if (effect.stackEffect === "unknown" || effect.stackExposes) return true;
+          if (effect.stackEffect === "barrier") return false;
+          if (effect.stackShifts) {
             depth = shiftDifference(depth);
             break;
           }
-          if (effect === "consume-y-drop") {
+          if (effect.stackEffect === "consume-y-drop") {
             if (depth === 1) return true;
             depth = dropDifference(depth);
             break;
           }
-          if (effect === "consume-y-keep") {
+          if (effect.stackEffect === "consume-y-keep") {
             if (depth === 1) return true;
             break;
           }

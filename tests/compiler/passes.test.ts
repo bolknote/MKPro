@@ -36,6 +36,7 @@ import {
   computeX2RegisterStates,
   computeX2ValueStates,
   parseX2ShapeFact,
+  x2ShapeDataModelForFact,
   x2ShapeSetsHaveSameDotSafeDecimal,
   x2ShapeSetSafety,
   type X2ShapeSet,
@@ -659,6 +660,44 @@ describe("ir passes on synthetic programs", () => {
         new Set(["hex:FABC:mantissa"]),
       ),
     ).toBe(false);
+  });
+
+  it("x2 shape data model captures normalized decimal, hex, super, and exponent-entry forms", () => {
+    expect(x2ShapeDataModelForFact("mantissa:02:decimal")).toMatchObject({
+      kind: "mantissa",
+      radix: "decimal",
+      raw: "02",
+      canonical: "02",
+      hasLeadingZero: true,
+      normalizedDecimal: "2",
+      normalizedSameAsRaw: false,
+      significantDigits: 1,
+      safety: "dotSafeDecimal",
+    });
+    expect(x2ShapeDataModelForFact("hex:8.70Е2-6С:mantissa")).toMatchObject({
+      kind: "mantissa",
+      radix: "hex",
+      raw: "8.70Е2-6С",
+      canonical: "8.70Е2-6С",
+      hasDecimalPoint: true,
+      digits: ["8", "7", "0", "Е", "2", "6", "С"],
+      significantDigits: 7,
+      safety: "structuralOnly",
+    });
+    expect(x2ShapeDataModelForFact("super:FA")).toMatchObject({
+      kind: "mantissa",
+      radix: "super",
+      raw: "FA",
+      digits: ["F", "A"],
+      safety: "structuralOnly",
+    });
+    expect(x2ShapeDataModelForFact("exponent:5:3:decimal")).toMatchObject({
+      kind: "exponent-entry",
+      exponentRaw: "3",
+      exponentDigits: ["3"],
+      normalizedDecimal: "5000",
+      safety: "errorProne",
+    });
   });
 
   it("x2 value dataflow keeps leading-zero X2 separate from normalized X", () => {
