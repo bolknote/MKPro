@@ -29,7 +29,10 @@ export interface IrPass {
 }
 
 export type RegisterValueSet = ReadonlySet<RegisterName>;
-export type X2ValueFact = `reg:${RegisterName}` | "decimal:0:normalized";
+export type X2ValueFact =
+  | `reg:${RegisterName}`
+  | `decimal:${string}:normalized`
+  | `decimal:${string}:unnormalized`;
 export type X2ValueSet = ReadonlySet<X2ValueFact>;
 
 const NORMALIZED_DECIMAL_ZERO: X2ValueFact = "decimal:0:normalized";
@@ -37,7 +40,13 @@ const NORMALIZED_DECIMAL_ZERO: X2ValueFact = "decimal:0:normalized";
 export interface X2ValueDataflowState {
   readonly x: X2ValueSet;
   readonly x2: X2ValueSet;
+  readonly entry: X2EntryState;
 }
+
+type X2EntryState =
+  | { readonly kind: "closed" }
+  | { readonly kind: "open"; readonly raw: ReadonlySet<string> }
+  | { readonly kind: "unknown" };
 
 export interface X2RestoreExposureOptions {
   readonly redundantSyncRegister?: RegisterName | undefined;
@@ -365,7 +374,7 @@ function emptyRegisterDataflowState(): RegisterDataflowState {
 }
 
 function emptyX2ValueDataflowState(): X2ValueDataflowState {
-  return { x: new Set(), x2: new Set() };
+  return { x: new Set(), x2: new Set(), entry: closedX2EntryState() };
 }
 
 function cloneRegisterDataflowState(input: RegisterDataflowState): RegisterDataflowState {
@@ -373,7 +382,7 @@ function cloneRegisterDataflowState(input: RegisterDataflowState): RegisterDataf
 }
 
 function cloneX2ValueDataflowState(input: X2ValueDataflowState): X2ValueDataflowState {
-  return { x: new Set(input.x), x2: new Set(input.x2) };
+  return { x: new Set(input.x), x2: new Set(input.x2), entry: cloneX2EntryState(input.entry) };
 }
 
 function transferRegisterDataflowState(
@@ -440,25 +449,27 @@ function transferX2ValueDataflowState(
 
   switch (op.kind) {
     case "label":
+      return cloneX2ValueDataflowState(input);
     case "jump":
     case "call":
     case "orphan-address":
-      return cloneX2ValueDataflowState(input);
+      return closeX2ValueEntry(input);
     case "store":
       return {
         x: addX2Value(input.x, registerValueFact(op.register)),
         x2: addStoredX2ValueAlias(input, registerValueFact(op.register)),
+        entry: closedX2EntryState(),
       };
     case "indirect-store":
       return transferIndirectStoreX2ValueState(input, op);
     case "recall": {
       const value = registerValueFact(op.register);
-      return { x: new Set([value]), x2: new Set([value]) };
+      return { x: new Set([value]), x2: new Set([value]), entry: closedX2EntryState() };
     }
     case "indirect-recall": {
       const target = knownIndirectMemoryTarget(op);
       const values = target === undefined ? new Set<X2ValueFact>() : new Set([registerValueFact(target)]);
-      return { x: values, x2: new Set(values) };
+      return { x: values, x2: new Set(values), entry: closedX2EntryState() };
     }
     case "plain":
       return transferPlainX2ValueState(input, op);
@@ -467,6 +478,7 @@ function transferX2ValueDataflowState(
       return {
         x: new Set(input.x),
         x2: transferConditionalX2ValueSet(input, effect),
+        entry: closedX2EntryState(),
       };
     }
     case "loop": {
@@ -474,6 +486,7 @@ function transferX2ValueDataflowState(
       return {
         x: new Set(),
         x2: effect === "preserves" ? new Set(input.x2) : new Set(),
+        entry: closedX2EntryState(),
       };
     }
     case "indirect-jump":
@@ -484,7 +497,7 @@ function transferX2ValueDataflowState(
     case "stop":
       return emptyX2ValueDataflowState();
     case "return":
-      return { x: new Set(input.x), x2: new Set(input.x) };
+      return { x: new Set(input.x), x2: new Set(input.x), entry: closedX2EntryState() };
   }
 }
 
@@ -709,20 +722,40 @@ function transferPlainX2ValueState(
   input: X2ValueDataflowState,
   op: Extract<IrOp, { kind: "plain" }>,
 ): X2ValueDataflowState {
+  if (op.opcode >= 0 && op.opcode <= 9) {
+    return transferDecimalDigitX2ValueState(input, String(op.opcode));
+  }
   if (op.opcode === 0x0d) {
-    return { x: new Set([NORMALIZED_DECIMAL_ZERO]), x2: new Set([NORMALIZED_DECIMAL_ZERO]) };
+    return { x: new Set([NORMALIZED_DECIMAL_ZERO]), x2: new Set([NORMALIZED_DECIMAL_ZERO]), entry: closedX2EntryState() };
   }
   const effect = plainX2Effect(op);
   const x = plainPreservesXValue(op) ? new Set(input.x) : new Set<X2ValueFact>();
-  return { x, x2: transferPlainX2ValueSet(input.x2, effect) };
+  return { x, x2: transferPlainX2ValueSet(input.x2, effect), entry: nextX2EntryStateForPlainEffect(effect) };
+}
+
+function transferDecimalDigitX2ValueState(input: X2ValueDataflowState, digit: string): X2ValueDataflowState {
+  const entry = advanceDecimalDigitEntry(input.entry, digit);
+  if (entry.kind !== "open") {
+    return { x: new Set(), x2: new Set(), entry };
+  }
+  const x = new Set<X2ValueFact>();
+  const x2 = new Set<X2ValueFact>();
+  for (const raw of entry.raw) {
+    const normalized = normalizeDecimalEntry(raw);
+    if (normalized !== undefined) x.add(decimalValueFact(normalized, "normalized"));
+    const x2Fact = x2DecimalEntryFact(raw);
+    if (x2Fact !== undefined) x2.add(x2Fact);
+  }
+  return { x, x2, entry };
 }
 
 function transferIndirectFlowX2ValueState(
   input: X2ValueDataflowState,
   op: Extract<IrOp, { kind: "indirect-jump" | "indirect-call" }>,
 ): X2ValueDataflowState {
-  if (isStableIndirectSelector(op.register)) return cloneX2ValueDataflowState(input);
-  return dropMutatedSelectorX2ValueFact(input, op.register);
+  const closed = closeX2ValueEntry(input);
+  if (isStableIndirectSelector(op.register)) return closed;
+  return dropMutatedSelectorX2ValueFact(closed, op.register);
 }
 
 function transferIndirectConditionalX2ValueState(
@@ -735,6 +768,7 @@ function transferIndirectConditionalX2ValueState(
   const output: X2ValueDataflowState = {
     x: new Set(input.x),
     x2: transferConditionalX2ValueSet(input, effect),
+    entry: closedX2EntryState(),
   };
   return edge === "jump" && !isStableIndirectSelector(op.register)
     ? dropMutatedSelectorX2ValueFact(output, op.register)
@@ -746,11 +780,12 @@ function transferIndirectStoreX2ValueState(
   op: Extract<IrOp, { kind: "indirect-store" }>,
 ): X2ValueDataflowState {
   const target = knownIndirectMemoryTarget(op);
-  if (target === undefined) return { x: new Set(input.x), x2: new Set(input.x2) };
+  if (target === undefined) return closeX2ValueEntry(input);
   const value = registerValueFact(target);
   return {
     x: addX2Value(input.x, value),
     x2: addStoredX2ValueAlias(input, value),
+    entry: closedX2EntryState(),
   };
 }
 
@@ -773,6 +808,11 @@ function transferPlainX2ValueSet(
   effect: ReturnType<typeof plainX2Effect>,
 ): Set<X2ValueFact> {
   return effect === "preserves" ? new Set(input) : new Set();
+}
+
+function nextX2EntryStateForPlainEffect(effect: ReturnType<typeof plainX2Effect>): X2EntryState {
+  if (effect === "restores") return { kind: "unknown" };
+  return closedX2EntryState();
 }
 
 function transferConditionalX2RegisterSet(
@@ -814,10 +854,12 @@ function joinX2ValueDataflowStates(
   if (current === undefined) return {
     x: new Set(incoming.x),
     x2: new Set(incoming.x2),
+    entry: cloneX2EntryState(incoming.entry),
   };
   return {
     x: joinX2ValueSets(current.x, incoming.x),
     x2: joinX2ValueSets(current.x2, incoming.x2),
+    entry: joinX2EntryStates(current.entry, incoming.entry),
   };
 }
 
@@ -834,7 +876,9 @@ function sameX2ValueDataflowState(
   right: X2ValueDataflowState | undefined,
 ): boolean {
   if (left === undefined || right === undefined) return left === right;
-  return sameX2ValueSet(left.x, right.x) && sameX2ValueSet(left.x2, right.x2);
+  return sameX2ValueSet(left.x, right.x) &&
+    sameX2ValueSet(left.x2, right.x2) &&
+    sameX2EntryState(left.entry, right.entry);
 }
 
 function joinRegisterValueSets(
@@ -885,8 +929,79 @@ function sameX2ValueSet(
   return true;
 }
 
+function joinStringSets(current: ReadonlySet<string>, incoming: ReadonlySet<string>): Set<string> {
+  const joined = new Set<string>();
+  for (const value of current) {
+    if (incoming.has(value)) joined.add(value);
+  }
+  return joined;
+}
+
+function sameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  if (left.size !== right.size) return false;
+  for (const value of left) {
+    if (!right.has(value)) return false;
+  }
+  return true;
+}
+
 function registerValueFact(register: RegisterName): X2ValueFact {
   return `reg:${register}`;
+}
+
+function decimalValueFact(value: string, flavor: "normalized" | "unnormalized"): X2ValueFact {
+  return `decimal:${value}:${flavor}`;
+}
+
+function normalizeDecimalEntry(raw: string): string | undefined {
+  if (!/^[0-9]{1,8}$/u.test(raw)) return undefined;
+  return raw.replace(/^0+(?=\d)/u, "");
+}
+
+function x2DecimalEntryFact(raw: string): X2ValueFact | undefined {
+  if (!/^[0-9]{1,8}$/u.test(raw)) return undefined;
+  if (raw === "0" || /^[1-9][0-9]*$/u.test(raw)) return decimalValueFact(raw, "normalized");
+  return decimalValueFact(raw, "unnormalized");
+}
+
+function closedX2EntryState(): X2EntryState {
+  return { kind: "closed" };
+}
+
+function cloneX2EntryState(input: X2EntryState): X2EntryState {
+  if (input.kind === "open") return { kind: "open", raw: new Set(input.raw) };
+  return input;
+}
+
+function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
+  return { x: new Set(input.x), x2: new Set(input.x2), entry: closedX2EntryState() };
+}
+
+function advanceDecimalDigitEntry(input: X2EntryState, digit: string): X2EntryState {
+  if (input.kind === "unknown") return { kind: "unknown" };
+  const source = input.kind === "closed" ? new Set([""]) : input.raw;
+  const raw = new Set<string>();
+  for (const prefix of source) {
+    const next = `${prefix}${digit}`;
+    if (next.length > 8) return { kind: "unknown" };
+    raw.add(next);
+  }
+  return { kind: "open", raw };
+}
+
+function joinX2EntryStates(current: X2EntryState, incoming: X2EntryState): X2EntryState {
+  if (current.kind === "unknown" || incoming.kind === "unknown") return { kind: "unknown" };
+  if (current.kind === "closed" || incoming.kind === "closed") {
+    return current.kind === incoming.kind ? closedX2EntryState() : { kind: "unknown" };
+  }
+  const joined = joinStringSets(current.raw, incoming.raw);
+  return joined.size === 0 ? { kind: "unknown" } : { kind: "open", raw: joined };
+}
+
+function sameX2EntryState(left: X2EntryState, right: X2EntryState): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind !== "open" || right.kind !== "open") return true;
+  return sameStringSet(left.raw, right.raw);
 }
 
 function addX2Value(input: X2ValueSet, value: X2ValueFact): Set<X2ValueFact> {
@@ -913,6 +1028,7 @@ function dropMutatedSelectorX2ValueFact(input: X2ValueDataflowState, register: R
   return {
     x: removeX2Value(input.x, value),
     x2: removeX2Value(input.x2, value),
+    entry: cloneX2EntryState(input.entry),
   };
 }
 

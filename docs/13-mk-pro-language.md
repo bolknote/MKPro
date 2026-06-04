@@ -1245,16 +1245,18 @@ The pipeline currently contains:
   is overwritten while X no longer matches X2, the alias is removed instead of
   being kept stale.
 - **X2 value dataflow** — a stricter companion proof tracks small symbolic
-  value facts in both `X` and `X2`, currently register aliases (`reg:r`) and the
-  normalized decimal zero produced by `Cx` (`decimal:0:normalized`). Unlike
-  display-byte lowering, this proof is ordinary-code dataflow: X-preserving
-  empty operators keep the value live, branch-specific conditional X2 effects
-  participate in joins, and mutating indirect selectors drop only facts tied to
-  the mutated selector. The fact spelling is intentionally normalization-aware
-  so later `hex:...` and unnormalized/leading-zero decimal facts can join the
-  same model. Digit-entry and hexadecimal mantissa concatenation are not inferred
-  here yet; those need the wider normalized/unnormalized domain before they can
-  be proved safely.
+  value facts in both `X` and `X2`, currently register aliases (`reg:r`),
+  normalized decimal zero produced by `Cx` (`decimal:0:normalized`), and plain
+  decimal digit-runs up to the visible mantissa width. Unlike display-byte
+  lowering, this proof is ordinary-code dataflow: X-preserving empty operators
+  keep the value live, branch-specific conditional X2 effects participate in
+  joins, and mutating indirect selectors drop only facts tied to the mutated
+  selector. The fact spelling is normalization-aware: `12` produces the shared
+  fact `decimal:12:normalized`, while `02` produces `decimal:2:normalized` in
+  `X` and `decimal:02:unnormalized` in `X2`, so a restore cannot accidentally
+  treat a leading-zero display value as the same hidden value. The same shape is
+  reserved for future `hex:...` mantissa facts; hexadecimal concatenation itself
+  is not inferred here yet.
 - **x2-noop-restore** — removes `.` when the value proof shows that `X` already
   contains the same value as hidden `X2` and the separate restore-gap proof says
   the dot is in a safe X2 context. It also accepts the documented no-op form
