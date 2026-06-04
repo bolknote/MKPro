@@ -7,6 +7,7 @@ import {
   hasRewriteBarrier,
   knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
+  plainPreservesXValue,
   recallAlreadySyncedInX2,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
@@ -120,11 +121,13 @@ function transferXSet(input: XRegisterSet, op: IrOp, edge: Edge["kind"]): Set<Re
       return target === undefined ? new Set() : new Set([target]);
     }
     case "plain":
+      return plainPreservesXValue(op) ? new Set(input) : new Set();
     case "stop":
-    case "call":
     case "loop":
-    case "return":
       return new Set();
+    case "call":
+    case "return":
+      return new Set(input);
     case "indirect-jump":
     case "indirect-call":
       return transferIndirectFlowXSet(input, op.register);

@@ -881,6 +881,27 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("last-x-reuse preserves X facts through documented empty operators", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x54, "К НОП"),
+      plain(0x55, "К 1"),
+      plain(0x56, "К 2"),
+      recall("1"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      plain(0x54, "К НОП"),
+      plain(0x55, "К 1"),
+      plain(0x56, "К 2"),
+      halt(),
+    ]);
+  });
+
   it("last-x-reuse keeps recall that lifts the stack for an immediate binary op", () => {
     const program: IrOp[] = [
       store("1"),
@@ -1259,6 +1280,125 @@ describe("ir passes on synthetic programs", () => {
 
     expect(result.applied).toBe(1);
     expect(result.ops.filter((op) => op.kind === "recall" && op.register === "1")).toHaveLength(1);
+  });
+
+  it("flow-x-reuse carries X facts into direct callees", () => {
+    const program: IrOp[] = [
+      recall("4"),
+      call("callee"),
+      jump("end"),
+      label("callee"),
+      recall("4"),
+      ret(),
+      label("end"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("4"),
+      call("callee"),
+      jump("end"),
+      label("callee"),
+      ret(),
+      label("end"),
+      halt(),
+    ]);
+  });
+
+  it("flow-x-reuse carries returned X facts back to direct call continuations", () => {
+    const program: IrOp[] = [
+      call("load"),
+      recall("4"),
+      halt(),
+      label("load"),
+      recall("4"),
+      ret(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      call("load"),
+      halt(),
+      label("load"),
+      recall("4"),
+      ret(),
+    ]);
+  });
+
+  it("flow-x-reuse carries X facts through proved indirect calls", () => {
+    const program: IrOp[] = [
+      recall("4"),
+      knownTargetIndirectCall("8", 4),
+      jump("end"),
+      label("callee"),
+      recall("4"),
+      ret(),
+      label("end"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("4"),
+      knownTargetIndirectCall("8", 4),
+      jump("end"),
+      label("callee"),
+      ret(),
+      label("end"),
+      halt(),
+    ]);
+  });
+
+  it("flow-x-reuse intersects disagreeing return-time X facts", () => {
+    const program: IrOp[] = [
+      call("choose"),
+      recall("1"),
+      halt(),
+      label("choose"),
+      cjump("right"),
+      recall("1"),
+      ret(),
+      label("right"),
+      recall("2"),
+      ret(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("flow-x-reuse preserves X facts through documented empty operators", () => {
+    const program: IrOp[] = [
+      recall("2"),
+      cjump("target"),
+      plain(0x54, "К НОП"),
+      jump("join"),
+      label("target"),
+      plain(0x55, "К 1"),
+      label("join"),
+      plain(0x56, "К 2"),
+      recall("2"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("2"),
+      cjump("target"),
+      plain(0x54, "К НОП"),
+      jump("join"),
+      label("target"),
+      plain(0x55, "К 1"),
+      label("join"),
+      plain(0x56, "К 2"),
+      halt(),
+    ]);
   });
 
   it("flow-x-reuse treats counted loop backedges as unknown X predecessors", () => {

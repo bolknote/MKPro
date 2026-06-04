@@ -28,6 +28,9 @@ program GiantsCountry {
   giant_country: board(decimal_player)
 
   fn exhausted() {
+    // The original leaves the final score available in R6 after the death stop.
+    // MK-Pro has no public-register marker yet, so touch it on the terminal path.
+    preview(score)
     halt("ЕГГОГ")
   }
 

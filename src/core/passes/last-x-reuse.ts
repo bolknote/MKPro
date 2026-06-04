@@ -1,6 +1,7 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import {
   computeX2RegisterStates,
+  plainPreservesXValue,
   recallAlreadySyncedInX2,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
@@ -24,8 +25,9 @@ function clobbersX(op: IrOp): boolean {
     case "indirect-store":
       return false;
     case "plain":
-      // ALU, swap, push, digits, K-functions all touch X. Conservatively assume X changes.
-      return true;
+      // Most ALU, swap, push, digit, and K-function commands touch X; documented
+      // empty operators are the exception and keep the current value.
+      return !plainPreservesXValue(op);
     case "stop":
       return false;
     case "jump":

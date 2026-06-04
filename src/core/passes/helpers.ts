@@ -141,6 +141,11 @@ export function storedCurrentXValueRegister(op: IrOp): RegisterName | undefined 
   return knownIndirectMemoryTarget(op);
 }
 
+export function plainPreservesXValue(op: Extract<IrOp, { kind: "plain" }>): boolean {
+  if (hasRewriteBarrier(op)) return false;
+  return op.opcode >= 0x54 && op.opcode <= 0x56;
+}
+
 function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
   const result = new Map<string, number>();
   for (let i = 0; i < ops.length; i += 1) {

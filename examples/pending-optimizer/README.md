@@ -27,10 +27,6 @@ the main+setup load check.
 `labyrinth777.mkpro` moved back to the top-level examples at 105 cells and
 passes the main+setup load check.
 
-`giants-country.mkpro` moved back to the top-level examples at 104 cells and
-passes the main+setup load check; the remaining cave-picture layout audit is
-tracked in the display audit notes rather than blocking the runnable example.
-
 Current `--analysis` sizes, measured against the local reference listings:
 
 Strict `mk-pro compile` mode is not guaranteed for every pending file yet.
@@ -41,6 +37,7 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | --- | ---: | ---: | --- |
 | `cave-highlevel-baseline.mkpro` | 134 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
 | `cave-treasure.mkpro` | 118 | 105 | floor-indexed resource bank and source-shaped command decoder are in place; remaining blockers are command dispatch, wall breaking, cache reward flow, and loop prompt/input storage |
+| `giants-country.mkpro` | 120 | 105 | final score is now live on the death path; remaining blocker is preserving that score without overflowing the official window |
 | `tic-tac-toe-4x4.mkpro` | 240 | 105 | source-shaped line update/score pass is in place; remaining packed 4x4 scan lowering |
 
 Prototype notes:
