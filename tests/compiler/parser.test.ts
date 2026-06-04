@@ -220,6 +220,37 @@ program StatusScreen {
     ]);
   });
 
+  it("parses terminal display fragments inside halt", () => {
+    const ast = parseProgram(`
+program TerminalReport {
+  state {
+    line: counter 0..9 = 3
+  }
+
+  loop {
+    show("8.-0", line)
+    halt("8.-0", line)
+  }
+}
+`);
+
+    expect(ast.displays[0]?.items).toEqual([
+      { kind: "literal", text: "8.-0", line: 8 },
+      { kind: "source", name: "line", line: 8 },
+    ]);
+    const loop = ast.entries[0]?.body[0];
+    expect(loop).toMatchObject({ kind: "loop" });
+    const body = loop?.kind === "loop" ? loop.body : [];
+    expect(body[0]).toMatchObject({
+      kind: "show",
+      display: ast.displays[0]?.name,
+    });
+    expect(body[1]).toMatchObject({
+      kind: "halt",
+      display: ast.displays[0]?.name,
+    });
+  });
+
   it("parses bare decimal display fragments", () => {
     const ast = parseProgram(`
 program NumericFragments {

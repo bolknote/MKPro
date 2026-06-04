@@ -1425,8 +1425,12 @@ function finishCompileAttempt(result: CompileResult, analysis: boolean): Compile
 }
 
 function inlineDisplayStringValues(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
-  let rewrittenShows = 0;
-  let guardedShows = 0;
+  type DisplayConsumerStatement =
+    | Extract<StatementAst, { kind: "show" }>
+    | (Extract<StatementAst, { kind: "halt" }> & { display: string });
+
+  let rewrittenDisplays = 0;
+  let guardedDisplays = 0;
   let inlineCounter = 0;
 
   const stringValue = (expr: ExpressionAst, env: ReadonlyMap<string, string>): string | undefined => {
@@ -1450,8 +1454,16 @@ function inlineDisplayStringValues(ast: ProgramAst, optimizations: AppliedOptimi
       .filter((item): item is Extract<DisplayItemAst, { kind: "source" }> => item.kind === "source")
       .map((item) => item.name);
 
-  const inlineShow = (
-    statement: Extract<StatementAst, { kind: "show" }>,
+  const displayConsumer = (statement: StatementAst | undefined): DisplayConsumerStatement | undefined => {
+    if (statement?.kind === "show") return statement;
+    if (statement?.kind === "halt" && statement.display !== undefined) {
+      return statement as DisplayConsumerStatement;
+    }
+    return undefined;
+  };
+
+  const inlineDisplayConsumer = (
+    statement: DisplayConsumerStatement,
     env: ReadonlyMap<string, string>,
   ): StatementAst => {
     const display = ast.displays.find((candidate) => candidate.name === statement.display);
@@ -1482,11 +1494,12 @@ function inlineDisplayStringValues(ast: ProgramAst, optimizations: AppliedOptimi
       items,
       line: display.line,
     });
-    rewrittenShows += 1;
+    rewrittenDisplays += 1;
+    if (statement.kind === "halt") return { ...statement, display: name, displaySources: sourceNames(items) };
     return { ...statement, display: name };
   };
 
-  const inlineGuardedStringShow = (
+  const inlineGuardedStringDisplay = (
     statements: StatementAst[],
     start: number,
     env: ReadonlyMap<string, string>,
@@ -1524,14 +1537,14 @@ function inlineDisplayStringValues(ast: ProgramAst, optimizations: AppliedOptimi
     }
     if (guards.length === 0) return undefined;
 
-    const show = statements[cursor];
-    if (show?.kind !== "show") return undefined;
-    const display = ast.displays.find((candidate) => candidate.name === show.display);
+    const consumer = displayConsumer(statements[cursor]);
+    if (consumer === undefined) return undefined;
+    const display = ast.displays.find((candidate) => candidate.name === consumer.display);
     if (display === undefined || !display.sources.includes(target)) return undefined;
 
     const literalEnv = new Map(env);
     literalEnv.set(target, text);
-    let nested = inlineShow(show, literalEnv);
+    let nested = inlineDisplayConsumer(consumer, literalEnv);
 
     const numericEnv = new Map(env);
     numericEnv.delete(target);
@@ -1542,50 +1555,52 @@ function inlineDisplayStringValues(ast: ProgramAst, optimizations: AppliedOptimi
         condition: guard.condition,
         thenBody: [
           { ...guard.assignment },
-          inlineShow(show, numericEnv),
+          inlineDisplayConsumer(consumer, numericEnv),
         ],
         elseBody: [nested],
         line: guard.line,
       };
     }
 
-    guardedShows += 1;
+    guardedDisplays += 1;
     return { statement: nested, consumed: cursor - start + 1 };
   };
 
-  const inlineConditionalStringShow = (
+  const inlineConditionalStringDisplay = (
     statement: Extract<StatementAst, { kind: "if" }>,
     next: StatementAst | undefined,
     env: ReadonlyMap<string, string>,
   ): StatementAst | undefined => {
-    if (next?.kind !== "show" || statement.elseBody !== undefined || statement.thenBody.length !== 1) {
+    const consumer = displayConsumer(next);
+    if (consumer === undefined || statement.elseBody !== undefined || statement.thenBody.length !== 1) {
       return undefined;
     }
     const assign = statement.thenBody[0];
     if (assign?.kind !== "assign") return undefined;
     const text = stringValue(assign.expr, env);
     if (text === undefined) return undefined;
-    const display = ast.displays.find((candidate) => candidate.name === next.display);
+    const display = ast.displays.find((candidate) => candidate.name === consumer.display);
     if (display === undefined || !display.sources.includes(assign.target)) return undefined;
 
     const thenEnv = new Map(env);
     thenEnv.set(assign.target, text);
     return {
       ...statement,
-      thenBody: [inlineShow(next, thenEnv)],
-      elseBody: [inlineShow(next, env)],
+      thenBody: [inlineDisplayConsumer(consumer, thenEnv)],
+      elseBody: [inlineDisplayConsumer(consumer, env)],
     };
   };
 
-  const inlineGuardedStringProcShow = (
+  const inlineGuardedStringProcDisplay = (
     statement: Extract<StatementAst, { kind: "call" }>,
     next: StatementAst | undefined,
     env: ReadonlyMap<string, string>,
   ): StatementAst | undefined => {
-    if (next?.kind !== "show") return undefined;
+    const consumer = displayConsumer(next);
+    if (consumer === undefined) return undefined;
     const proc = ast.procs.find((candidate) => candidate.name === statement.block);
     if (proc === undefined || proc.body.length === 0) return undefined;
-    const guarded = inlineGuardedStringShow([...proc.body, next], 0, env);
+    const guarded = inlineGuardedStringDisplay([...proc.body, consumer], 0, env);
     if (guarded === undefined || guarded.consumed !== proc.body.length + 1) return undefined;
     return guarded.statement;
   };
@@ -1609,7 +1624,7 @@ function inlineDisplayStringValues(ast: ProgramAst, optimizations: AppliedOptimi
     const result: StatementAst[] = [];
     for (let index = 0; index < statements.length; index += 1) {
       const statement = statements[index]!;
-      const guarded = inlineGuardedStringShow(statements, index, env);
+      const guarded = inlineGuardedStringDisplay(statements, index, env);
       if (guarded !== undefined) {
         result.push(guarded.statement);
         env.delete((statement as Extract<StatementAst, { kind: "assign" }>).target);
@@ -1617,7 +1632,7 @@ function inlineDisplayStringValues(ast: ProgramAst, optimizations: AppliedOptimi
         continue;
       }
       if (statement.kind === "if") {
-        const inlined = inlineConditionalStringShow(statement, statements[index + 1], env);
+        const inlined = inlineConditionalStringDisplay(statement, statements[index + 1], env);
         if (inlined !== undefined) {
           result.push(inlined);
           index += 1;
@@ -1625,7 +1640,7 @@ function inlineDisplayStringValues(ast: ProgramAst, optimizations: AppliedOptimi
         }
       }
       if (statement.kind === "call") {
-        const inlined = inlineGuardedStringProcShow(statement, statements[index + 1], env);
+        const inlined = inlineGuardedStringProcDisplay(statement, statements[index + 1], env);
         if (inlined !== undefined) {
           result.push(inlined);
           env.clear();
@@ -1642,7 +1657,12 @@ function inlineDisplayStringValues(ast: ProgramAst, optimizations: AppliedOptimi
           break;
         }
         case "show":
-          result.push(inlineShow(statement, env));
+          result.push(inlineDisplayConsumer(statement, env));
+          break;
+        case "halt":
+          result.push(statement.display !== undefined
+            ? inlineDisplayConsumer(statement as DisplayConsumerStatement, env)
+            : statement);
           break;
         case "input":
           env.delete(statement.target);
@@ -1727,16 +1747,16 @@ function inlineDisplayStringValues(ast: ProgramAst, optimizations: AppliedOptimi
   }
   const removedAssignments = removable.size === 0 ? 0 : removeDisplayStringAssignments(ast, removable);
 
-  if (rewrittenShows > 0) {
+  if (rewrittenDisplays > 0) {
     optimizations.push({
       name: "display-string-inline",
-      detail: `Inlined ${rewrittenShows} display string value${rewrittenShows === 1 ? "" : "s"} into show(...) templates.`,
+      detail: `Inlined ${rewrittenDisplays} display string value${rewrittenDisplays === 1 ? "" : "s"} into display templates.`,
     });
   }
-  if (guardedShows > 0) {
+  if (guardedDisplays > 0) {
     optimizations.push({
       name: "display-string-guarded-show",
-      detail: `Moved ${guardedShows} guarded display string value${guardedShows === 1 ? "" : "s"} to show(...) branches.`,
+      detail: `Moved ${guardedDisplays} guarded display string value${guardedDisplays === 1 ? "" : "s"} to display branches.`,
     });
   }
   if (removedAssignments > 0) {
@@ -1820,8 +1840,11 @@ function remainingDisplayStringReads(ast: ProgramAst, candidates: ReadonlySet<st
       if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "return_value") visitExpr(statement.expr);
       if (statement.kind === "assign" && !removableAssignment(statement)) visitExpr(statement.expr);
-      if (statement.kind === "show") {
-        const display = ast.displays.find((candidate) => candidate.name === statement.display);
+      const displayName = statement.kind === "show"
+        ? statement.display
+        : statement.kind === "halt" ? statement.display : undefined;
+      if (displayName !== undefined) {
+        const display = ast.displays.find((candidate) => candidate.name === displayName);
         for (const source of display?.sources ?? []) add(source);
       }
       if (statement.kind === "if") {
@@ -3576,8 +3599,11 @@ function materializeDisplayExpressions(
   const rewrite = (statements: StatementAst[]): StatementAst[] => {
     const result: StatementAst[] = [];
     for (const statement of statements) {
-      if (statement.kind === "show") {
-        const assignments = plans.get(statement.display);
+      const displayName = statement.kind === "show"
+        ? statement.display
+        : statement.kind === "halt" ? statement.display : undefined;
+      if (displayName !== undefined) {
+        const assignments = plans.get(displayName);
         if (assignments !== undefined) result.push(...cloneStatements(assignments));
         result.push(statement);
         continue;
@@ -4298,8 +4324,11 @@ function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimiz
         visitExpr(statement.target.index);
         visitExpr(statement.expr);
       }
-      if (statement.kind === "show") {
-        const display = ast.displays.find((candidate) => candidate.name === statement.display);
+      const displayName = statement.kind === "show"
+        ? statement.display
+        : statement.kind === "halt" ? statement.display : undefined;
+      if (displayName !== undefined) {
+        const display = ast.displays.find((candidate) => candidate.name === displayName);
         for (const item of display?.items ?? []) {
           if (item.kind !== "source") continue;
           if (item.expr !== undefined) {
@@ -4639,8 +4668,11 @@ function countVariableUsage(ast: ProgramAst, name: string): { reads: number; wri
         visitExpr(statement.expr);
       }
       if (statement.kind === "input" && statement.target === name) writes += 1;
-      if (statement.kind === "show") {
-        const display = ast.displays.find((candidate) => candidate.name === statement.display);
+      const displayName = statement.kind === "show"
+        ? statement.display
+        : statement.kind === "halt" ? statement.display : undefined;
+      if (displayName !== undefined) {
+        const display = ast.displays.find((candidate) => candidate.name === displayName);
         if (display?.sources.includes(name)) reads += 1;
       }
       if (statement.kind === "core") {
@@ -5913,6 +5945,7 @@ function validateReservedInternalNames(ast: ProgramAst, diagnostics: Diagnostic[
       }
       if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "show") report(statement.display, statement.line);
+      if (statement.kind === "halt" && statement.display !== undefined) report(statement.display, statement.line);
       if (statement.kind === "call") report(statement.block, statement.line);
       if (statement.kind === "if") {
         visitCondition(statement.condition);
@@ -8046,6 +8079,7 @@ export class EmitContext {
     show: Extract<StatementAst, { kind: "show" }>,
     halt: Extract<StatementAst, { kind: "halt" }>,
   ): boolean {
+    if (halt.display !== undefined) return false;
     const display = this.ast.displays.find((candidate) => candidate.name === show.display);
     if (display === undefined || display.items.length !== 1) return false;
     const [item] = display.items;
@@ -8143,6 +8177,10 @@ export class EmitContext {
         });
         return;
       case "halt":
+        if (statement.display !== undefined) {
+          compileShow(this, statement.display, statement.line);
+          return;
+        }
         if (statement.literal !== undefined) {
           compileLiteralHalt(this, statement.literal, statement.line);
           return;
@@ -12419,8 +12457,11 @@ function collectVariableReadCounts(ast: ProgramAst): Map<string, number> {
       if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
       if (statement.kind === "return_value") visitExpr(statement.expr);
       if (statement.kind === "assign") visitExpr(statement.expr);
-      if (statement.kind === "show") {
-        const display = ast.displays.find((candidate) => candidate.name === statement.display);
+      const displayName = statement.kind === "show"
+        ? statement.display
+        : statement.kind === "halt" ? statement.display : undefined;
+      if (displayName !== undefined) {
+        const display = ast.displays.find((candidate) => candidate.name === displayName);
         for (const source of display?.sources ?? []) add(source);
       }
       if (statement.kind === "if") {
@@ -12580,8 +12621,10 @@ function statementReadsIdentifier(statement: StatementAst, name: string): boolea
   switch (statement.kind) {
     case "pause":
     case "preview":
-    case "halt":
       return expressionReferencesIdentifier(statement.expr, name);
+    case "halt":
+      return expressionReferencesIdentifier(statement.expr, name) ||
+        statement.displaySources?.includes(name) === true;
     case "assign":
       return expressionReferencesIdentifier(statement.expr, name);
     case "indexed_assign":
@@ -12653,6 +12696,7 @@ function collectDisplayUseCounts(ast: ProgramAst): Map<string, number> {
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "show") add(statement.display);
+      if (statement.kind === "halt" && statement.display !== undefined) add(statement.display);
       if (statement.kind === "loop") visit(statement.body);
       if (statement.kind === "while") visit(statement.body);
       if (statement.kind === "if") {
@@ -14614,9 +14658,13 @@ function estimateBranchOrderStatementCost(statement: StatementAst, ast: ProgramA
       return Number.POSITIVE_INFINITY;
     case "pause":
     case "preview":
-    case "halt":
     case "return_value":
       return estimateExpressionCost(statement.expr) + (statement.kind === "preview" ? 0 : 1);
+    case "halt": {
+      if (statement.display === undefined) return estimateExpressionCost(statement.expr) + 1;
+      const display = ast.displays.find((candidate) => candidate.name === statement.display);
+      return display === undefined ? Number.POSITIVE_INFINITY : estimatePackedDisplayBodyCost(display.sources.length);
+    }
     case "input":
       return 2;
     case "show": {

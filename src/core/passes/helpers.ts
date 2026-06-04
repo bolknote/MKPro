@@ -3,6 +3,7 @@ import type {
   CompileOptions,
   IrOp,
   IrTargetMeta,
+  OpcodeInfo,
   PreloadReport,
   RegisterName,
 } from "../types.ts";
@@ -31,6 +32,7 @@ export interface IrPass {
 export type RegisterValueSet = ReadonlySet<RegisterName>;
 export type X2ValueFact =
   | `reg:${RegisterName}`
+  | `expr:${number}`
   | "same:unknown"
   | `decimal:${string}:normalized`
   | `decimal:${string}:unnormalized`;
@@ -41,6 +43,24 @@ export type X2ShapeFact =
   | `hex:${string}:mantissa`
   | `super:${string}`;
 export type X2ShapeSet = ReadonlySet<X2ShapeFact>;
+export type X2ShapeSafety = "dotSafeDecimal" | "structuralOnly" | "errorProne" | "unknown";
+export type ParsedX2ShapeFact =
+  | {
+      readonly kind: "decimal-mantissa";
+      readonly raw: string;
+      readonly normalized: string | undefined;
+      readonly safety: X2ShapeSafety;
+    }
+  | {
+      readonly kind: "decimal-exponent";
+      readonly mantissa: string;
+      readonly exponent: string;
+      readonly normalized: string | undefined;
+      readonly safety: X2ShapeSafety;
+    }
+  | { readonly kind: "hex-mantissa"; readonly raw: string; readonly safety: X2ShapeSafety }
+  | { readonly kind: "super-mantissa"; readonly raw: string; readonly safety: X2ShapeSafety }
+  | { readonly kind: "unknown"; readonly raw: string; readonly safety: "unknown" };
 type X2ValueMemory = Partial<Record<RegisterName, X2ValueSet>>;
 
 const NORMALIZED_DECIMAL_ZERO: X2ValueFact = "decimal:0:normalized";
@@ -96,6 +116,29 @@ type X2VpContextState =
 export interface X2RestoreExposureOptions {
   readonly redundantSyncRegister?: RegisterName | undefined;
   readonly redundantSyncValue?: boolean | undefined;
+}
+
+export interface X2VpShapeContextAnalysis {
+  readonly kind: "none" | "active-exponent" | "vp-exponent-context" | "unknown";
+  readonly mantissa?: ReadonlySet<string> | undefined;
+  readonly exponent?: ReadonlySet<string> | undefined;
+  readonly hasExponentDigit: boolean;
+  readonly restoresX2: boolean;
+}
+
+export interface X2StackEffectAnalysis {
+  readonly x2Effect: OpcodeInfo["x2Effect"];
+  readonly stackEffect: OpcodeInfo["stackEffect"];
+  readonly stackShifts: boolean;
+  readonly stackPreserves: boolean;
+  readonly stackConsumes: boolean;
+  readonly stackExposes: boolean;
+  readonly stackBarrier: boolean;
+  readonly x2Affects: boolean;
+  readonly x2Preserves: boolean;
+  readonly x2Restores: boolean;
+  readonly hardX2OverwriteWithoutStackUse: boolean;
+  readonly stackLiftAndX2Sync: boolean;
 }
 
 export function emptyResult(ops: readonly IrOp[]): PassResult {
@@ -210,6 +253,41 @@ export function plainPreservesXValue(op: Extract<IrOp, { kind: "plain" }>): bool
   if (op.opcode === 0x0e) return true;
   if (op.opcode >= 0xf0 && op.opcode <= 0xff) return true;
   return op.opcode >= 0x54 && op.opcode <= 0x56;
+}
+
+export function analyzeX2StackEffect(op: IrOp | undefined): X2StackEffectAnalysis {
+  const defaultEffect: Pick<X2StackEffectAnalysis, "x2Effect" | "stackEffect"> = {
+    x2Effect: "preserves",
+    stackEffect: "preserves",
+  };
+  const raw = op === undefined || hasRewriteBarrier(op)
+    ? { x2Effect: "unknown" as const, stackEffect: "unknown" as const }
+    : "opcode" in op
+      ? getOpcode(op.opcode)
+      : defaultEffect;
+  const stackConsumes = raw.stackEffect === "consume-y-drop" || raw.stackEffect === "consume-y-keep";
+  const stackBarrier = raw.stackEffect === "barrier" || raw.stackEffect === "unknown";
+  const hardX2OverwriteWithoutStackUse = op?.kind === "plain" &&
+    raw.x2Effect === "affects" &&
+    raw.stackEffect === "preserves" &&
+    !plainPreservesXValue(op);
+  return {
+    x2Effect: raw.x2Effect,
+    stackEffect: raw.stackEffect,
+    stackShifts: raw.stackEffect === "shifts",
+    stackPreserves: raw.stackEffect === "preserves",
+    stackConsumes,
+    stackExposes: raw.stackEffect === "exposes",
+    stackBarrier,
+    x2Affects: raw.x2Effect === "affects",
+    x2Preserves: raw.x2Effect === "preserves",
+    x2Restores: raw.x2Effect === "restores",
+    hardX2OverwriteWithoutStackUse,
+    stackLiftAndX2Sync: op !== undefined &&
+      removableRecallValueRegister(op) !== undefined &&
+      raw.stackEffect === "shifts" &&
+      raw.x2Effect === "affects",
+  };
 }
 
 function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
@@ -332,7 +410,7 @@ export function computeX2ValueStates(
       const input = inStates[index];
       if (input === undefined) continue;
       for (const edge of edges[index] ?? []) {
-        const output = transferX2ValueDataflowState(input, ops[index]!, edge.kind, trackRegisterMemory);
+        const output = transferX2ValueDataflowState(input, ops[index]!, edge.kind, trackRegisterMemory, index);
         const joined = joinX2ValueDataflowStates(inStates[edge.target], output, trackRegisterMemory);
         if (!sameX2ValueDataflowState(joined, inStates[edge.target])) {
           inStates[edge.target] = joined;
@@ -359,6 +437,155 @@ export function x2ValueSetHasRegister(input: X2ValueSet | undefined, register: R
 
 export function x2ValueSetHasNormalizedDecimal(input: X2ValueSet | undefined, value: string): boolean {
   return input?.has(decimalValueFact(value, "normalized")) === true;
+}
+
+export function x2ValueSetHasConcreteDecimal(input: X2ValueSet | undefined): boolean {
+  if (input === undefined) return false;
+  for (const fact of input) {
+    if (isConcreteDecimalX2ValueFact(fact)) return true;
+  }
+  return false;
+}
+
+export function parseX2ShapeFact(fact: X2ShapeFact): ParsedX2ShapeFact {
+  const mantissa = /^mantissa:(.*):decimal$/u.exec(fact);
+  if (mantissa !== null) {
+    const raw = mantissa[1]!;
+    const normalized = normalizePlainDecimal(raw);
+    return {
+      kind: "decimal-mantissa",
+      raw,
+      normalized,
+      safety: normalized === undefined ? "unknown" : "dotSafeDecimal",
+    };
+  }
+  const exponent = /^exponent:([^:]*):([^:]*):decimal$/u.exec(fact);
+  if (exponent !== null) {
+    const mantissaRaw = exponent[1]!;
+    const exponentRaw = exponent[2]!;
+    return {
+      kind: "decimal-exponent",
+      mantissa: mantissaRaw,
+      exponent: exponentRaw,
+      normalized: normalizedExponentEntryValue(mantissaRaw, exponentRaw),
+      safety: "errorProne",
+    };
+  }
+  const hex = /^hex:(.*):mantissa$/u.exec(fact);
+  if (hex !== null) {
+    return { kind: "hex-mantissa", raw: hex[1]!, safety: "structuralOnly" };
+  }
+  const superMantissa = /^super:(.*)$/u.exec(fact);
+  if (superMantissa !== null) {
+    return { kind: "super-mantissa", raw: superMantissa[1]!, safety: "structuralOnly" };
+  }
+  return { kind: "unknown", raw: fact, safety: "unknown" };
+}
+
+export function x2ShapeFactSafety(fact: X2ShapeFact): X2ShapeSafety {
+  return parseX2ShapeFact(fact).safety;
+}
+
+export function x2ShapeSetSafety(input: X2ShapeSet | undefined): X2ShapeSafety {
+  if (input === undefined || input.size === 0) return "unknown";
+  let sawDotSafe = false;
+  let sawStructural = false;
+  let sawUnknown = false;
+  for (const fact of input) {
+    const safety = x2ShapeFactSafety(fact);
+    if (safety === "errorProne") return "errorProne";
+    if (safety === "structuralOnly") sawStructural = true;
+    else if (safety === "dotSafeDecimal") sawDotSafe = true;
+    else sawUnknown = true;
+  }
+  if (sawStructural) return "structuralOnly";
+  if (sawUnknown) return "unknown";
+  return sawDotSafe ? "dotSafeDecimal" : "unknown";
+}
+
+export function x2RestoreSafety(state: X2ValueDataflowState | undefined): X2ShapeSafety {
+  if (state === undefined) return "unknown";
+  if (x2ValueSetHasConcreteDecimal(state.x2)) return "dotSafeDecimal";
+  return x2ShapeSetSafety(state.x2Shape);
+}
+
+export function x2StateHasDotSafeDecimalX2(state: X2ValueDataflowState | undefined): boolean {
+  return x2RestoreSafety(state) === "dotSafeDecimal";
+}
+
+export function x2ShapeSetsHaveSameDotSafeDecimal(
+  left: X2ShapeSet | undefined,
+  right: X2ShapeSet | undefined,
+): boolean {
+  if (x2ShapeSetSafety(left) !== "dotSafeDecimal" || x2ShapeSetSafety(right) !== "dotSafeDecimal") return false;
+  const leftValues = dotSafeDecimalShapeValues(left);
+  const rightValues = dotSafeDecimalShapeValues(right);
+  for (const value of leftValues) {
+    if (rightValues.has(value)) return true;
+  }
+  return false;
+}
+
+export function x2StateHasSameDotSafeDecimalInXAndX2(state: X2ValueDataflowState | undefined): boolean {
+  return state !== undefined && x2ShapeSetsHaveSameDotSafeDecimal(state.xShape, state.x2Shape);
+}
+
+export function x2StateIsClosedPlainContext(state: X2ValueDataflowState | undefined): boolean {
+  return state?.entry.kind === "closed" && (state.vpContext === undefined || state.vpContext.kind === "none");
+}
+
+export function analyzeX2VpShapeContext(
+  state: X2ValueDataflowState | undefined,
+): X2VpShapeContextAnalysis {
+  if (state === undefined) {
+    return { kind: "unknown", hasExponentDigit: false, restoresX2: false };
+  }
+  if (state.entry.kind === "exponent") {
+    return {
+      kind: "active-exponent",
+      mantissa: state.entry.mantissa,
+      exponent: state.entry.exponent,
+      hasExponentDigit: x2ExponentSetHasDigit(state.entry.exponent),
+      restoresX2: true,
+    };
+  }
+  if (state.entry.kind === "closed" && state.vpContext?.kind === "exponent") {
+    return {
+      kind: "vp-exponent-context",
+      mantissa: state.vpContext.mantissa,
+      exponent: state.vpContext.exponent,
+      hasExponentDigit: x2ExponentSetHasDigit(state.vpContext.exponent),
+      restoresX2: true,
+    };
+  }
+  if (state.entry.kind === "closed" && (state.vpContext === undefined || state.vpContext.kind === "none")) {
+    return { kind: "none", hasExponentDigit: false, restoresX2: false };
+  }
+  return { kind: "unknown", hasExponentDigit: false, restoresX2: false };
+}
+
+export function x2ExponentSetHasDigit(exponents: ReadonlySet<string> | undefined): boolean {
+  if (exponents === undefined) return false;
+  for (const exponent of exponents) {
+    const digits = exponent.startsWith("-") ? exponent.slice(1) : exponent;
+    if (digits.length === 0) return false;
+  }
+  return exponents.size > 0;
+}
+
+export function x2StateHasX2RestoreContext(state: X2ValueDataflowState | undefined): boolean {
+  return analyzeX2VpShapeContext(state).restoresX2;
+}
+
+export function sameX2ExponentShapeContext(
+  left: X2VpShapeContextAnalysis,
+  right: X2VpShapeContextAnalysis,
+): boolean {
+  return left.kind !== "none" &&
+    left.kind !== "unknown" &&
+    left.kind === right.kind &&
+    sameNonEmptyStringSet(left.mantissa, right.mantissa) &&
+    sameNonEmptyStringSet(left.exponent, right.exponent);
 }
 
 type X2RestoreBoundaryState = "none" | "synced" | "boundary";
@@ -614,6 +841,7 @@ function transferX2ValueDataflowState(
   op: IrOp,
   edge: Edge["kind"],
   trackRegisterMemory: boolean,
+  producerIndex: number | undefined,
 ): X2ValueDataflowState {
   if (hasRewriteBarrier(op)) return emptyX2ValueDataflowState(trackRegisterMemory);
 
@@ -670,11 +898,11 @@ function transferX2ValueDataflowState(
       };
     }
     case "plain":
-      return transferPlainX2ValueState(input, op);
+      return transferPlainX2ValueState(input, op, producerIndex);
     case "cjump": {
       const closed = closeX2ValueEntry(input);
       const effect = conditionalX2EffectForGraphEdge(op, edge);
-      const x = syncUnknownSameValue(new Set(closed.x), effect);
+      const x = syncUnknownSameValue(new Set(closed.x), effect, producerIndex);
       const xShape = cloneOptionalShapeSet(closed.xShape);
       return {
         x,
@@ -709,7 +937,7 @@ function transferX2ValueDataflowState(
       return emptyX2ValueDataflowState(trackRegisterMemory);
     case "return": {
       const closed = closeX2ValueEntry(input);
-      const x = syncUnknownSameValue(new Set(closed.x), "affects");
+      const x = syncUnknownSameValue(new Set(closed.x), "affects", producerIndex);
       const xShape = cloneOptionalShapeSet(closed.xShape);
       return {
         x,
@@ -981,6 +1209,7 @@ function transferIndirectStoreRegisterState(
 function transferPlainX2ValueState(
   input: X2ValueDataflowState,
   op: Extract<IrOp, { kind: "plain" }>,
+  producerIndex: number | undefined,
 ): X2ValueDataflowState {
   if (op.opcode >= 0 && op.opcode <= 9) {
     return transferDecimalDigitX2ValueState(input, String(op.opcode));
@@ -1046,6 +1275,7 @@ function transferPlainX2ValueState(
   const x = syncUnknownSameValue(
     plainPreservesXValue(op) ? new Set(input.x) : new Set<X2ValueFact>(),
     effect,
+    producerIndex,
   );
   const x2 = transferPlainX2ValueSet(input, x, effect);
   const xShape = plainPreservesXValue(op) ? cloneOptionalShapeSet(input.xShape) : new Set<X2ShapeFact>();
@@ -1341,8 +1571,11 @@ function transferPlainX2ShapeSet(
 function syncUnknownSameValue(
   x: Set<X2ValueFact>,
   effect: "affects" | "preserves" | "restores" | "unknown",
+  producerIndex: number | undefined = undefined,
 ): Set<X2ValueFact> {
-  if (effect === "affects" && x.size === 0) x.add(SAME_UNKNOWN_VALUE);
+  if (effect === "affects" && x.size === 0) {
+    x.add(producerIndex === undefined ? SAME_UNKNOWN_VALUE : expressionValueFact(producerIndex));
+  }
   return x;
 }
 
@@ -1620,6 +1853,10 @@ function isConcreteDecimalX2ValueFact(value: X2ValueFact): boolean {
   return /^decimal:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+):(normalized|unnormalized)$/u.test(value);
 }
 
+function isOpaqueSharedValueFact(value: X2ValueFact): boolean {
+  return value === SAME_UNKNOWN_VALUE || value.startsWith("reg:") || value.startsWith("expr:");
+}
+
 function recallX2ValueFacts(
   input: X2ValueDataflowState,
   register: RegisterName,
@@ -1644,6 +1881,16 @@ function x2ShapesFromValueFacts(values: X2ValueSet): Set<X2ShapeFact> {
   for (const value of values) {
     const decimal = /^decimal:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):(normalized|unnormalized)$/u.exec(value);
     if (decimal !== null) output.add(decimalMantissaShapeFact(decimal[1]!));
+  }
+  return output;
+}
+
+function dotSafeDecimalShapeValues(input: X2ShapeSet | undefined): Set<string> {
+  const output = new Set<string>();
+  for (const fact of input ?? []) {
+    const parsed = parseX2ShapeFact(fact);
+    if (parsed.kind !== "decimal-mantissa" || parsed.safety !== "dotSafeDecimal") continue;
+    if (parsed.normalized !== undefined && parsed.raw === parsed.normalized) output.add(parsed.normalized);
   }
   return output;
 }
@@ -1759,6 +2006,17 @@ function sameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): b
   return true;
 }
 
+function sameNonEmptyStringSet(
+  left: ReadonlySet<string> | undefined,
+  right: ReadonlySet<string> | undefined,
+): boolean {
+  return left !== undefined &&
+    right !== undefined &&
+    left.size > 0 &&
+    left.size === right.size &&
+    sameStringSet(left, right);
+}
+
 function cloneOptionalStringSet(input: ReadonlySet<string> | undefined): ReadonlySet<string> | undefined {
   return input === undefined ? undefined : new Set(input);
 }
@@ -1782,6 +2040,10 @@ function sameOptionalStringSet(
 
 function registerValueFact(register: RegisterName): X2ValueFact {
   return `reg:${register}`;
+}
+
+function expressionValueFact(producerIndex: number): X2ValueFact {
+  return `expr:${producerIndex}`;
 }
 
 function decimalValueFact(value: string, flavor: "normalized" | "unnormalized"): X2ValueFact {
@@ -1941,6 +2203,10 @@ function signChangeClosedDecimalState(input: X2ValueDataflowState): X2ValueDataf
   for (const fact of input.x2) {
     if (!input.x.has(fact)) continue;
     const decimal = /^decimal:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):normalized$/u.exec(fact);
+    if (decimal === null && isOpaqueSharedValueFact(fact)) {
+      values.add(SAME_UNKNOWN_VALUE);
+      continue;
+    }
     if (decimal === null) continue;
     values.add(decimalValueFact(signChangedNormalizedDecimalValue(decimal[1]!), "normalized"));
   }
@@ -1971,11 +2237,11 @@ function signChangedNormalizedDecimalValue(raw: string): string {
 function signChangedClosedShapeMantissas(input: X2ValueDataflowState): ReadonlySet<string> | undefined {
   const mantissas = new Set<string>();
   for (const fact of input.x2Shape ?? []) {
-    const match = /^mantissa:(-?[0-9]+):decimal$/u.exec(fact);
-    if (match === null) continue;
-    const raw = match[1]!;
+    const parsed = parseX2ShapeFact(fact);
+    if (parsed.kind !== "decimal-mantissa" || parsed.safety !== "dotSafeDecimal") continue;
+    const raw = parsed.raw;
     const normalized = normalizeDecimalEntry(raw);
-    if (normalized === undefined) continue;
+    if (normalized === undefined || parsed.normalized === undefined) continue;
     if (input.xShape?.has(decimalMantissaShapeFact(normalized)) !== true) continue;
     const signed = signChangedMantissaShape(raw);
     if (signed === undefined) return undefined;

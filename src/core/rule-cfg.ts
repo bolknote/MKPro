@@ -225,12 +225,16 @@ class Builder {
         // cell, so a value can still be read after the stop. A return reads its
         // expression operands; modeling it as fall-through keeps liveness
         // conservative (it never drops a store that the return value needs).
+        const display = statement.kind === "halt" && statement.display !== undefined
+          ? this.ast.displays.find((candidate) => candidate.name === statement.display)
+          : undefined;
+        const uses = [...new Set([...this.exprUses(statement.expr), ...(display?.sources ?? [])])];
         const callFragment = this.buildExpressionCallFragment(statement.expr, {
           defs: [],
-          uses: [],
+          uses,
         });
         if (callFragment !== undefined) return callFragment;
-        const node = this.add({ defs: [], uses: this.exprUses(statement.expr) });
+        const node = this.add({ defs: [], uses });
         return { entry: node, exits: [node] };
       }
       case "call": {

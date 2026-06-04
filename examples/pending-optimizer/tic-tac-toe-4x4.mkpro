@@ -37,11 +37,16 @@ program TicTacToe4x4 {
     halt(0)
   }
 
-  fn calculator_won() {
-    // The original reports the winning line with a dynamic 8.-0n display. The
-    // high-level game state is preserved; exact sign-digit display composition
-    // still belongs to a display lowerer.
-    halt(8)
+  fn calculator_won_y() {
+    halt("8.-0", y)
+  }
+
+  fn calculator_won_x() {
+    halt("8.-0", x)
+  }
+
+  fn calculator_won_line() {
+    halt("8.-0", line:1)
   }
 
   loop {
@@ -79,32 +84,50 @@ program TicTacToe4x4 {
   fn check_win() {
     count_row(y)
     if count >= 4 {
-      finish_win()
+      finish_win_y()
     }
     count_column(x)
     if count >= 4 {
-      finish_win()
+      finish_win_x()
     }
     line = x + y
     wrap_line()
     count_sum_diagonal(line)
     if count >= 4 {
-      finish_win()
+      finish_win_line()
     }
     line = x - y
     wrap_line()
     count_diff_diagonal(line)
     if count >= 4 {
-      finish_win()
+      finish_win_line()
     }
   }
 
-  fn finish_win() {
+  fn finish_win_y() {
     if side == 0 {
       human_won()
     }
     else {
-      calculator_won()
+      calculator_won_y()
+    }
+  }
+
+  fn finish_win_x() {
+    if side == 0 {
+      human_won()
+    }
+    else {
+      calculator_won_x()
+    }
+  }
+
+  fn finish_win_line() {
+    if side == 0 {
+      human_won()
+    }
+    else {
+      calculator_won_line()
     }
   }
 

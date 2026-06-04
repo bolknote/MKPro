@@ -31,9 +31,13 @@ import { x2HiddenTempRestore } from "../../src/core/passes/x2-hidden-temp-restor
 import { x2LiteralRestore } from "../../src/core/passes/x2-literal-restore.ts";
 import { x2NoopRestore } from "../../src/core/passes/x2-noop-restore.ts";
 import {
+  analyzeX2StackEffect,
   computeX2ImmediateSyncStates,
   computeX2RegisterStates,
   computeX2ValueStates,
+  parseX2ShapeFact,
+  x2ShapeSetsHaveSameDotSafeDecimal,
+  x2ShapeSetSafety,
   type X2ShapeSet,
   type X2ValueSet,
 } from "../../src/core/passes/helpers.ts";
@@ -607,6 +611,56 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2 shape algebra classifies decimal, exponent, hex, and super facts", () => {
+    expect(parseX2ShapeFact("mantissa:02:decimal")).toEqual({
+      kind: "decimal-mantissa",
+      raw: "02",
+      normalized: "2",
+      safety: "dotSafeDecimal",
+    });
+    expect(parseX2ShapeFact("exponent:5::decimal")).toEqual({
+      kind: "decimal-exponent",
+      mantissa: "5",
+      exponent: "",
+      normalized: undefined,
+      safety: "errorProne",
+    });
+    expect(parseX2ShapeFact("hex:FABC:mantissa")).toEqual({
+      kind: "hex-mantissa",
+      raw: "FABC",
+      safety: "structuralOnly",
+    });
+    expect(parseX2ShapeFact("super:FA")).toEqual({
+      kind: "super-mantissa",
+      raw: "FA",
+      safety: "structuralOnly",
+    });
+  });
+
+  it("x2 shape algebra keeps leading-zero and structural shapes out of no-op equality", () => {
+    expect(x2ShapeSetSafety(new Set(["mantissa:2:decimal"]))).toBe("dotSafeDecimal");
+    expect(x2ShapeSetSafety(new Set(["hex:FABC:mantissa"]))).toBe("structuralOnly");
+    expect(x2ShapeSetSafety(new Set(["exponent:5::decimal"]))).toBe("errorProne");
+    expect(
+      x2ShapeSetsHaveSameDotSafeDecimal(
+        new Set(["mantissa:2:decimal"]),
+        new Set(["mantissa:2:decimal"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ShapeSetsHaveSameDotSafeDecimal(
+        new Set(["mantissa:2:decimal"]),
+        new Set(["mantissa:02:decimal"]),
+      ),
+    ).toBe(false);
+    expect(
+      x2ShapeSetsHaveSameDotSafeDecimal(
+        new Set(["mantissa:2:decimal"]),
+        new Set(["hex:FABC:mantissa"]),
+      ),
+    ).toBe(false);
+  });
+
   it("x2 value dataflow keeps leading-zero X2 separate from normalized X", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
@@ -736,11 +790,11 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ValueStateText(states[1]?.x)).toEqual([]);
     expect(x2ValueStateText(states[1]?.x2)).toEqual([]);
-    expect(x2ValueStateText(states[2]?.x)).toEqual(["same:unknown"]);
-    expect(x2ValueStateText(states[2]?.x2)).toEqual(["same:unknown"]);
-    expect(x2ValueStateText(states[3]?.x)).toEqual(["reg:2", "same:unknown"]);
-    expect(x2ValueStateText(states[3]?.x2)).toEqual(["reg:2", "same:unknown"]);
-    expect(x2ValueStateText(states[4]?.x2)).toEqual(["reg:2", "same:unknown"]);
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["expr:1"]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["expr:1"]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["expr:1", "reg:2"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["expr:1", "reg:2"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["expr:1", "reg:2"]);
   });
 
   it("x2 value dataflow keeps opaque X/X2 equality through closed sign-change", () => {
@@ -753,8 +807,8 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program);
 
-    expect(x2ValueStateText(states[2]?.x)).toEqual(["same:unknown"]);
-    expect(x2ValueStateText(states[2]?.x2)).toEqual(["same:unknown"]);
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["expr:1"]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["expr:1"]);
     expect(x2ValueStateText(states[3]?.x)).toEqual(["same:unknown"]);
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["same:unknown"]);
     expect(x2ValueStateText(states[4]?.x)).toEqual(["reg:2", "same:unknown"]);
@@ -3882,6 +3936,25 @@ describe("ir passes on synthetic programs", () => {
       plain(0x12, "*"),
       halt(),
     ]);
+  });
+
+  it("stack/X2 effect analysis classifies recall as combined lift and X2 sync", () => {
+    expect(analyzeX2StackEffect(recall("2"))).toMatchObject({
+      stackShifts: true,
+      x2Affects: true,
+      stackLiftAndX2Sync: true,
+      hardX2OverwriteWithoutStackUse: false,
+    });
+    expect(analyzeX2StackEffect(plain(0x0e, "В↑"))).toMatchObject({
+      stackShifts: true,
+      x2Affects: true,
+      stackLiftAndX2Sync: false,
+    });
+    expect(analyzeX2StackEffect(plain(0x0d, "Cx"))).toMatchObject({
+      stackPreserves: true,
+      x2Affects: true,
+      hardX2OverwriteWithoutStackUse: true,
+    });
   });
 
   it("pre-shift-stack-lift removes В↑ before indirect recall", () => {

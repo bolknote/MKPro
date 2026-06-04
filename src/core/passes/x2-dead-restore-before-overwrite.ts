@@ -1,15 +1,15 @@
-import { getOpcode } from "../opcodes.ts";
 import type { IrOp } from "../types.ts";
 import {
+  analyzeX2StackEffect,
   computeX2ValueStates,
   emptyResult,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
-  plainPreservesXValue,
+  x2StateHasDotSafeDecimalX2,
+  x2StateIsClosedPlainContext,
   type IrPass,
   type IrPassFn,
   type X2ValueDataflowState,
-  type X2ValueFact,
 } from "./helpers.ts";
 
 const DOT = 0x0a;
@@ -51,9 +51,7 @@ function isDeadRestoreCandidate(
   if (state === undefined || !isFreeStandingPlain(op)) return false;
   if (isDisplayFocusSensitive(op)) return false;
   if (op.opcode === DOT || op.opcode === SIGN_CHANGE) {
-    return state.entry.kind === "closed" &&
-      (state.vpContext === undefined || state.vpContext.kind === "none") &&
-      hasDotSafeDecimalX2Value(state);
+    return x2StateIsClosedPlainContext(state) && x2StateHasDotSafeDecimalX2(state);
   }
   if (op.opcode === VP) {
     return state.entry.kind === "open" ||
@@ -61,17 +59,6 @@ function isDeadRestoreCandidate(
       (state.entry.kind === "closed" && state.vpEntryMantissa !== undefined);
   }
   return false;
-}
-
-function hasDotSafeDecimalX2Value(state: X2ValueDataflowState): boolean {
-  for (const fact of state.x2) {
-    if (isDecimalX2ValueFact(fact)) return true;
-  }
-  return false;
-}
-
-function isDecimalX2ValueFact(fact: X2ValueFact): boolean {
-  return /^decimal:-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+):(normalized|unnormalized)$/u.test(fact);
 }
 
 function followingHardOverwrite(
@@ -104,11 +91,7 @@ function hasRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
 }
 
 function isHardX2OverwriteWithoutStackUse(op: IrOp): boolean {
-  if (op.kind !== "plain" || hasRewriteBarrier(op)) return false;
-  const opcode = getOpcode(op.opcode);
-  return opcode.x2Effect === "affects" &&
-    opcode.stackEffect === "preserves" &&
-    !plainPreservesXValue(op);
+  return analyzeX2StackEffect(op).hardX2OverwriteWithoutStackUse;
 }
 
 export const x2DeadRestoreBeforeOverwrite: IrPass = {

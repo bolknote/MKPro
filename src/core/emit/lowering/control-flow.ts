@@ -95,11 +95,11 @@ type MembershipSetStatement =
 
 type PreparedIndexedSelector = NonNullable<ReturnType<LoweringCtx["prepareIndexedSelector"]>>;
 
-export function compileLiteralShowHalt(ctx: LoweringCtx, 
-    show: Extract<StatementAst, { kind: "show" }>,
-    halt: Extract<StatementAst, { kind: "halt" }>,
-  ): boolean {
-    if (halt.literal !== undefined || !isZeroExpression(halt.expr)) return false;
+export function compileLiteralShowHalt(ctx: LoweringCtx,
+  show: Extract<StatementAst, { kind: "show" }>,
+  halt: Extract<StatementAst, { kind: "halt" }>,
+): boolean {
+    if (halt.display !== undefined || halt.literal !== undefined || !isZeroExpression(halt.expr)) return false;
     const display = ctx.ast.displays.find((candidate) => candidate.name === show.display);
     if (display === undefined) return false;
     const literal = ctx.collapseLiteralOnlyDisplay(display);

@@ -1290,12 +1290,19 @@ export function effectiveTerminalStatement(
   ast: ProgramAst,
 ): Extract<StatementAst, { kind: "pause" | "halt" }> | undefined {
   if (statement === undefined) return undefined;
-  if (statement.kind === "pause" || statement.kind === "halt") return statement;
+  if (statement.kind === "pause") return statement;
+  if (statement.kind === "halt") {
+    return statement.literal === undefined && statement.display === undefined ? statement : undefined;
+  }
   if (statement.kind !== "call") return undefined;
   const proc = ast.procs.find((candidate) => candidate.name === statement.block);
   if (proc === undefined || proc.body.length !== 1) return undefined;
   const terminal = proc.body[0];
-  return terminal?.kind === "pause" || terminal?.kind === "halt" ? terminal : undefined;
+  if (terminal?.kind === "pause") return terminal;
+  if (terminal?.kind === "halt") {
+    return terminal.literal === undefined && terminal.display === undefined ? terminal : undefined;
+  }
+  return undefined;
 }
 
 export function terminalSelectExpression(
@@ -3476,7 +3483,8 @@ export function statementEquals(left: StatementAst, right: StatementAst): boolea
         left.kind === (right as typeof left).kind;
     case "halt":
       return expressionEquals(left.expr, (right as typeof left).expr) &&
-        left.literal === (right as typeof left).literal;
+        left.literal === (right as typeof left).literal &&
+        left.display === (right as typeof left).display;
     case "input":
       return left.target === (right as typeof left).target;
     case "assign":

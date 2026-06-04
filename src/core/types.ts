@@ -330,7 +330,9 @@ export interface V2ReadStatementAst {
 
 export interface V2StopStatementAst {
   kind: "v2_stop";
-  value: string;
+  target?: string;
+  items?: DisplayItemAst[];
+  inlineName?: string;
   line: number;
 }
 
@@ -476,6 +478,8 @@ export interface InputStatementAst {
 export interface HaltStatementAst {
   kind: "halt";
   expr: ExpressionAst;
+  display?: string;
+  displaySources?: string[];
   literal?: string;
   line: number;
 }

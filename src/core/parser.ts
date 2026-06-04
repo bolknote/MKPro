@@ -32,6 +32,7 @@ import type {
   V2ShowStatementAst,
   V2StateFieldAst,
   V2StatementAst,
+  V2StopStatementAst,
   V2WhileStatementAst,
   V2WorldAst,
 } from "./types.ts";
@@ -669,7 +670,7 @@ function parseV2InlineStatement(text: string, line: number): V2StatementAst {
   if (previewCall !== undefined) return parseV2PreviewCall(previewCall.argsText, line);
   const haltCall = parseNamedCall(text, "halt");
   if (haltCall !== undefined) {
-    return { kind: "v2_stop", value: haltCall.argsText.trim() === "" ? "0" : haltCall.argsText.trim(), line };
+    return parseV2HaltCall(haltCall.argsText, line);
   }
   const readAssignment = /^([A-Za-z_][\w]*)\s*=\s*read\s*\(\s*\)$/u.exec(text);
   if (readAssignment) {
@@ -754,21 +755,40 @@ function validateAssignmentTargetText(target: string, line: number): void {
   throw new ParseError(`Invalid assignment target '${target}'`, line);
 }
 
+interface V2DisplayCallParts {
+  target?: string;
+  items?: DisplayItemAst[];
+}
+
 function parseV2ShowCall(argsText: string, line: number): V2StatementAst {
+  return { kind: "v2_show", ...parseV2DisplayCall(argsText, line), line };
+}
+
+function parseV2HaltCall(argsText: string, line: number): V2StatementAst {
+  const trimmed = argsText.trim();
+  if (trimmed.length === 0) return { kind: "v2_stop", target: "0", line };
+  if (splitArgs(trimmed).length === 1 && !trimmed.startsWith("\"")) {
+    return { kind: "v2_stop", target: trimmed, line };
+  }
+  const parts = parseV2DisplayCall(argsText, line);
+  return { kind: "v2_stop", ...parts, line };
+}
+
+function parseV2DisplayCall(argsText: string, line: number): V2DisplayCallParts {
   const trimmed = argsText.trim();
   if (trimmed.length === 0) {
-    return { kind: "v2_show", items: parseDisplayItemList(trimmed, line), line };
+    return { items: parseDisplayItemList(trimmed, line) };
   }
   if (isNumericLiteralText(trimmed)) {
-    return { kind: "v2_show", target: trimmed, line };
+    return { target: trimmed };
   }
   const items = parseDisplayItemList(trimmed, line);
   const literal = displayLiteralText(items);
   const numericLiteral = literal === undefined ? undefined : canonicalNumericDisplayLiteralText(literal);
   if (numericLiteral !== undefined) {
-    return { kind: "v2_show", target: numericLiteral, line };
+    return { target: numericLiteral };
   }
-  return { kind: "v2_show", items, line };
+  return { items };
 }
 
 function parseV2PreviewCall(argsText: string, line: number): V2StatementAst {
@@ -1051,7 +1071,8 @@ function tryLowerV2DecimalSeries(v2: V2ProgramAst): LoweredV2Program | undefined
     normalizedV2Text(loop.predicate.right) !== "1" ||
     loop.body.length !== 2 ||
     stop?.kind !== "v2_stop" ||
-    normalizedV2Text(stop.value) !== valueName
+    stop.target === undefined ||
+    normalizedV2Text(stop.target) !== valueName
   ) {
     return undefined;
   }
@@ -1216,7 +1237,7 @@ function v2StatementExprTexts(statement: V2StatementAst): string[] {
     case "v2_preview":
       return [statement.expr];
     case "v2_stop":
-      return [statement.value];
+      return statement.target !== undefined ? [statement.target] : displayItemExpressionTexts(statement.items);
     case "v2_invoke":
       return [...statement.args];
     case "v2_show":
@@ -1285,6 +1306,12 @@ function selectV2RuleSpecializations(v2: V2ProgramAst, rules: Map<string, V2Rule
   return selected;
 }
 
+function displayItemExpressionTexts(items: readonly DisplayItemAst[] | undefined): string[] {
+  return (items ?? [])
+    .filter((item): item is Extract<DisplayItemAst, { kind: "source" }> => item.kind === "source")
+    .map((item) => item.name);
+}
+
 function ruleUsesIndexedParam(rule: V2RuleAst): boolean {
   return rule.params.some((param) => {
     const pattern = new RegExp(`\\[\\s*${escapeRegExp(param)}\\s*\\]`, "u");
@@ -1331,7 +1358,8 @@ function v2StatementTexts(statements: V2StatementAst[]): string[] {
           texts.push(statement.expr);
           break;
         case "v2_stop":
-          texts.push(statement.value);
+          if (statement.target !== undefined) texts.push(statement.target);
+          texts.push(...displayItemExpressionTexts(statement.items));
           break;
         case "v2_return":
           texts.push(statement.expr);
@@ -1698,6 +1726,13 @@ function collectV2UsedNames(v2: V2ProgramAst): Set<string> {
             if (item.kind === "source") used.add(item.name);
           }
           break;
+        case "v2_stop":
+          if (statement.target !== undefined) addText(statement.target);
+          if (statement.inlineName !== undefined) used.add(statement.inlineName);
+          for (const item of statement.items ?? []) {
+            if (item.kind === "source") used.add(item.name);
+          }
+          break;
         case "v2_preview":
           addText(statement.expr);
           break;
@@ -1793,27 +1828,33 @@ function collectV2InlineScreens(v2: V2ProgramAst): V2ScreenAst[] {
   const screens: V2ScreenAst[] = [];
   const screensByItems = new Map<string, V2ScreenAst>();
   let next = 0;
+  const collect = (statement: V2ShowStatementAst | V2StopStatementAst, items: DisplayItemAst[]): void => {
+    const key = displayItemKey(items);
+    const existing = screensByItems.get(key);
+    if (existing !== undefined) {
+      statement.inlineName = existing.name;
+      return;
+    }
+    const name = `__inline_show_${statement.line}_${next}`;
+    next += 1;
+    statement.inlineName = name;
+    const screen = {
+      kind: "v2_screen" as const,
+      name,
+      sources: displayItemSources(items),
+      items,
+      line: statement.line,
+    };
+    screensByItems.set(key, screen);
+    screens.push(screen);
+  };
   const visit = (statements: V2StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "v2_show" && statement.items !== undefined) {
-        const key = displayItemKey(statement.items);
-        const existing = screensByItems.get(key);
-        if (existing !== undefined) {
-          statement.inlineName = existing.name;
-        } else {
-          const name = `__inline_show_${statement.line}_${next}`;
-          next += 1;
-          statement.inlineName = name;
-          const screen = {
-            kind: "v2_screen" as const,
-            name,
-            sources: displayItemSources(statement.items),
-            items: statement.items,
-            line: statement.line,
-          };
-          screensByItems.set(key, screen);
-          screens.push(screen);
-        }
+        collect(statement, statement.items);
+      }
+      if (statement.kind === "v2_stop" && statement.items !== undefined && displayLiteralText(statement.items) === undefined) {
+        collect(statement, statement.items);
       }
       if (statement.kind === "v2_if") {
         visit(statement.thenBody);
@@ -1974,7 +2015,8 @@ function collectV2ExpressionTexts(v2: V2ProgramAst): string[] {
           texts.push(statement.expr);
           break;
         case "v2_stop":
-          texts.push(statement.value);
+          if (statement.target !== undefined) texts.push(statement.target);
+          texts.push(...displayItemExpressionTexts(statement.items));
           break;
         case "v2_if":
           if (statement.predicate.kind === "v2_contains") {
@@ -2606,7 +2648,8 @@ function lowerV2InlineLiteralShowHalt(
   next: V2StatementAst | undefined,
 ): Extract<StatementAst, { kind: "halt" }> | undefined {
   if (statement.kind !== "v2_show" || next?.kind !== "v2_stop") return undefined;
-  if (normalizedV2Text(next.value) !== "0") return undefined;
+  if (next.target === undefined) return undefined;
+  if (normalizedV2Text(next.target) !== "0") return undefined;
   const literal = statement.items === undefined ? undefined : collapseV2LiteralItems(statement.items);
   if (literal !== "ЕГГОГ") return undefined;
   return { kind: "halt", expr: parseExpression("0"), literal, line: statement.line };
@@ -2642,11 +2685,26 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
         line: statement.line,
       }];
     case "v2_stop": {
-      const literal = parseV2StopLiteral(statement.value, statement.line);
-      if (literal !== undefined) {
-        return [{ kind: "halt", expr: parseExpression("0"), literal, line: statement.line }];
+      if (statement.items !== undefined) {
+        const literal = collapseV2LiteralItems(statement.items);
+        if (literal !== undefined) {
+          return [{ kind: "halt", expr: parseExpression("0"), literal, line: statement.line }];
+        }
+        if (statement.inlineName === undefined) {
+          throw new ParseError("Inline halt display was not collected before lowering", statement.line);
+        }
+        return [{
+          kind: "halt",
+          expr: parseExpression("0"),
+          display: statement.inlineName,
+          displaySources: displayItemSources(statement.items),
+          line: statement.line,
+        }];
       }
-      return [{ kind: "halt", expr: lowerV2Expression(statement.value, statement.line, context), line: statement.line }];
+      if (statement.target === undefined) {
+        throw new ParseError("Halt must use a number, text, or display fragments", statement.line);
+      }
+      return [{ kind: "halt", expr: lowerV2Expression(statement.target, statement.line, context), line: statement.line }];
     }
     case "v2_invoke":
       return lowerV2Invoke(statement, context);
@@ -3521,12 +3579,38 @@ function substituteV2Statement(statement: V2StatementAst, replacements: Map<stri
     case "v2_invoke":
       return { ...statement, args: statement.args.map((arg) => substituteV2Text(arg, replacements)) };
     case "v2_stop":
-      return { ...statement, value: substituteV2Text(statement.value, replacements) };
+      return substituteV2StopStatement(statement, replacements);
     case "v2_return":
       return { ...statement, expr: substituteV2Text(statement.expr, replacements) };
     default:
       return statement;
   }
+}
+
+function substituteV2StopStatement(
+  statement: V2StopStatementAst,
+  replacements: Map<string, string>,
+): V2StopStatementAst {
+  if (statement.target !== undefined) {
+    return { ...statement, target: substituteV2Text(statement.target, replacements) };
+  }
+  if (statement.items === undefined) return statement;
+  let changed = false;
+  const items = statement.items.map((item): DisplayItemAst => {
+    if (item.kind !== "source") return item;
+    const replacement = replacements.get(item.name);
+    if (replacement === undefined) return item;
+    changed = true;
+    if (isNumericLiteralText(replacement) && item.width === undefined && item.pad === undefined) {
+      return { kind: "literal", text: replacement, line: item.line };
+    }
+    if (/^[A-Za-z_][\w]*$/u.test(replacement)) return { ...item, name: replacement };
+    return item;
+  });
+  if (!changed) return statement;
+  const substituted: V2StopStatementAst = { ...statement, items };
+  delete substituted.inlineName;
+  return substituted;
 }
 
 function substituteV2PreviewStatement(
@@ -3983,11 +4067,6 @@ function parseDisplayItem(text: string, line: number): DisplayItemAst {
     return item;
   }
   throw new ParseError(`Display item must be a string literal, decimal literal, state name, or expression, got '${trimmed}'`, line);
-}
-
-function parseV2StopLiteral(text: string, line: number): string | undefined {
-  const trimmed = text.trim();
-  return trimmed.startsWith("\"") ? parseQuotedDisplayText(trimmed, line) : undefined;
 }
 
 function parseQuotedDisplayText(text: string, line: number): string {

@@ -64,6 +64,7 @@ export function compileShow(ctx: LoweringCtx, displayName: string, line: number)
     }
     if (compileLiteralDisplay(ctx, display, line)) return;
     if (compileTextDisplay(ctx, display, line)) return;
+    if (compileDynamicLineReportDisplay(ctx, display, line)) return;
     if (compileFormattedCoordReportDisplay(ctx, display, line)) return;
     if (compileFloorPackedRowDisplay(ctx, display, line)) return;
     if (compileDecimalPointDisplay(ctx, display, line)) return;
@@ -783,6 +784,61 @@ export function compileTextDisplay(ctx: LoweringCtx, display: ProgramAst["displa
       detail: `Lowered screen ${display.name} as visible text ${JSON.stringify(text)} plus ${source.name}.`,
     });
     return true;
+}
+
+export function compileDynamicLineReportDisplay(ctx: LoweringCtx, display: ProgramAst["displays"][number], line: number): boolean {
+    if (!machineSupports(ctx.machineProfile, "display-bytes")) return false;
+    const [prefix, source] = display.items;
+    if (
+      display.items.length !== 2 ||
+      prefix?.kind !== "literal" ||
+      source?.kind !== "source" ||
+      prefix.text !== "8.-0" ||
+      !isOneDigitDisplaySource(ctx, source)
+    ) {
+      return false;
+    }
+
+    emitDynamicDisplaySource(ctx, display, source, line);
+    ctx.emitOp(0x0e, "В↑", "display dynamic line report source", line);
+    ctx.emitNumberOrPreload("9800");
+    ctx.emitOp(0x14, "<->", "display dynamic line report digit operand order", line);
+    ctx.emitOp(0x10, "+", "display dynamic line report digit", line);
+    ctx.emitOp(0x0e, "В↑", "display dynamic line report right value", line);
+    ctx.emitNumberOrPreload("1200");
+    ctx.emitOp(0x14, "<->", "display dynamic line report operand order", line);
+    ctx.emitOp(0x39, "К ⊕", "display dynamic line report video bytes", line);
+    ctx.emitOp(0x50, "С/П", `show ${display.name}`, line);
+    ctx.optimizations.push({
+      name: "screen-dynamic-line-report-lowering",
+      detail: `Lowered screen ${display.name} as a dynamic 8.-0n calculator line report.`,
+    });
+    return true;
+}
+
+function isOneDigitDisplaySource(
+  ctx: LoweringCtx,
+  source: Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }>,
+): boolean {
+    if (source.width !== undefined) return source.width === 1;
+    const measured = measureDecimalDisplayField(ctx, source);
+    if (measured === undefined) return true;
+    return measured.min >= 0 && measured.max <= 9 && measured.width === 1;
+}
+
+function emitDynamicDisplaySource(
+  ctx: LoweringCtx,
+  display: ProgramAst["displays"][number],
+  source: Extract<ProgramAst["displays"][number]["items"][number], { kind: "source" }>,
+  line: number,
+): void {
+    if (source.expr !== undefined) {
+      compileExpression(ctx, source.expr);
+      return;
+    }
+    if (!ctx.xHolds(source.name)) {
+      ctx.emitRecall(source.name, `display ${display.name} line report source`, line);
+    }
 }
 
 export function compileLiteralDisplay(ctx: LoweringCtx, display: ProgramAst["displays"][number], line: number): boolean {

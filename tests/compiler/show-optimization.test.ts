@@ -281,6 +281,87 @@ program LeadingZeroLiteralDisplay {
     }
   }, 10000);
 
+  it("lowers dynamic 8.-0n terminal line reports", () => {
+    expect(runCompiledDisplay(`
+program DynamicLineReportShow {
+  state {
+    line: counter 0..9 = 3
+  }
+
+  loop {
+    show("8.-0", line)
+  }
+}
+`)).toBe("8,-03");
+
+    expect(runCompiledDisplay(`
+program DynamicLineReport {
+  state {
+    line: counter 0..9 = 3
+  }
+
+  loop {
+    halt("8.-0", line)
+  }
+}
+`)).toBe("8,-03");
+
+    expect(runCompiledDisplay(`
+program DynamicParameterLineReport {
+  state {
+    line: counter 0..9 = 4
+  }
+
+  loop {
+    done(line)
+  }
+
+  fn done(win_line) {
+    halt("8.-0", win_line:1)
+  }
+}
+`)).toBe("8,-04");
+
+    const inlinedPrefix = `
+program DynamicLineReportHaltPrefix {
+  state {
+    prefix: counter 0..9 = 0
+    line: counter 0..9 = 3
+  }
+
+  loop {
+    prefix = "8.-0"
+    halt(prefix, line)
+  }
+}
+`;
+    const inlined = compileOk(inlinedPrefix);
+    expect(hasOptimization(inlined, "display-string-inline")).toBe(true);
+    expect(hasOptimization(inlined, "screen-dynamic-line-report-lowering")).toBe(true);
+    expect(runCompiledDisplay(inlinedPrefix)).toBe("8,-03");
+
+    const branched = compileOk(`
+program DynamicLineReportBranch {
+  state {
+    target: counter 0..9 = 0
+    line: counter 0..9 = 4
+  }
+
+  loop {
+    target = random(0, 10)
+    if target == 0 {
+      halt(0)
+    }
+    else {
+      halt("8.-0", line)
+    }
+  }
+}
+`);
+    expect(hasOptimization(branched, "arithmetic-if-terminal-select")).toBe(false);
+    expect(hasOptimization(branched, "screen-dynamic-line-report-lowering")).toBe(true);
+  });
+
   it("uses preloaded decimal scale constants for packed display shifts", () => {
     const result = compileOk(`
 program PreloadedDisplayScales {

@@ -1,9 +1,8 @@
 import type { IrOp } from "../types.ts";
-import { getOpcode } from "../opcodes.ts";
 import {
+  analyzeX2StackEffect,
   emptyResult,
   hasRewriteBarrier,
-  plainPreservesXValue,
   removingPreShiftLiftCanExposeStack,
   removingStackLiftCanExposeStack,
   type IrPass,
@@ -15,8 +14,7 @@ function isStackLift(op: IrOp): boolean {
 }
 
 function isStackShiftingProducer(op: IrOp | undefined): boolean {
-  if (op === undefined || hasRewriteBarrier(op) || !("opcode" in op)) return false;
-  return getOpcode(op.opcode).stackEffect === "shifts";
+  return analyzeX2StackEffect(op).stackShifts;
 }
 
 function isStackPreservingGapOp(op: IrOp): boolean {
@@ -28,7 +26,7 @@ function isStackPreservingGapOp(op: IrOp): boolean {
     case "orphan-address":
       return true;
     case "plain":
-      return getOpcode(op.opcode).stackEffect === "preserves";
+      return analyzeX2StackEffect(op).stackPreserves;
     default:
       return false;
   }
@@ -44,11 +42,7 @@ function nextStackShiftingProducerIndex(ops: readonly IrOp[], start: number): nu
 }
 
 function isHardX2Overwrite(op: IrOp | undefined): boolean {
-  if (op === undefined || op.kind !== "plain" || hasRewriteBarrier(op)) return false;
-  const opcode = getOpcode(op.opcode);
-  return opcode.x2Effect === "affects" &&
-    opcode.stackEffect === "preserves" &&
-    !plainPreservesXValue(op);
+  return analyzeX2StackEffect(op).hardX2OverwriteWithoutStackUse;
 }
 
 function nextHardX2OverwriteIndex(ops: readonly IrOp[], start: number): number | undefined {

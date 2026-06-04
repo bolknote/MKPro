@@ -6,6 +6,8 @@ import {
   computeX2ValueStates,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
+  x2StateHasSameDotSafeDecimalInXAndX2,
+  x2StateIsClosedPlainContext,
   x2ValueSetHasIntersection,
   type IrPass,
   type IrPassFn,
@@ -32,7 +34,7 @@ const run: IrPassFn = (ops) => {
       !isImmediateAfterModeledSignChange(ops, index, state)
     ) continue;
     if (!isDotSafeValueContext(state)) continue;
-    if (!x2ValueSetHasIntersection(state?.x, state?.x2)) continue;
+    if (!x2ValueSetHasIntersection(state?.x, state?.x2) && !x2StateHasSameDotSafeDecimalInXAndX2(state)) continue;
     if (removingDotCanExposeX2RestoreContext(ops, index)) continue;
     removed.add(index);
   }
@@ -57,7 +59,7 @@ function isPlainDot(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
 function isDotSafeValueContext(
   state: ReturnType<typeof computeX2ValueStates>[number],
 ): boolean {
-  return state?.entry.kind === "closed" && (state.vpContext === undefined || state.vpContext.kind === "none");
+  return x2StateIsClosedPlainContext(state);
 }
 
 function isImmediateAfterModeledSignChange(
@@ -71,9 +73,8 @@ function isImmediateAfterModeledSignChange(
     if (hasRewriteBarrier(op)) return false;
     return op.kind === "plain" &&
       op.opcode === SIGN_CHANGE &&
-      state?.entry.kind === "closed" &&
-      (state.vpContext === undefined || state.vpContext.kind === "none") &&
-      x2ValueSetHasIntersection(state.x, state.x2);
+      x2StateIsClosedPlainContext(state) &&
+      (x2ValueSetHasIntersection(state?.x, state?.x2) || x2StateHasSameDotSafeDecimalInXAndX2(state));
   }
   return false;
 }

@@ -1,11 +1,15 @@
 import type { IrOp } from "../types.ts";
-import { getOpcode } from "../opcodes.ts";
 import {
+  analyzeX2StackEffect,
+  analyzeX2VpShapeContext,
   computeX2ValueStates,
   emptyResult,
   hasRewriteBarrier,
-  plainPreservesXValue,
   removingRecallCanExposeX2Restore,
+  sameX2ExponentShapeContext,
+  x2StateHasSameDotSafeDecimalInXAndX2,
+  x2StateHasX2RestoreContext,
+  x2StateIsClosedPlainContext,
   x2ValueSetHasIntersection,
   type IrPass,
   type IrPassFn,
@@ -43,35 +47,15 @@ function isFreeStandingSignChange(op: IrOp): boolean {
   return !("meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0);
 }
 
-function exponentEntryHasDigit(state: X2ValueDataflowState | undefined): boolean {
-  const entry = state?.entry;
-  if (entry?.kind !== "exponent") return false;
-  return exponentSetHasDigit(entry.exponent);
-}
-
-function vpContextHasExponentDigit(state: X2ValueDataflowState | undefined): boolean {
-  const context = state?.vpContext;
-  if (context?.kind !== "exponent") return false;
-  return exponentSetHasDigit(context.exponent);
-}
-
-function exponentSetHasDigit(exponents: ReadonlySet<string>): boolean {
-  for (const exponent of exponents) {
-    const digits = exponent.startsWith("-") ? exponent.slice(1) : exponent;
-    if (digits.length === 0) return false;
-  }
-  return exponents.size > 0;
-}
-
 function canRemoveClosedContextSignPair(
   ops: readonly IrOp[],
   secondSignIndex: number,
   state: X2ValueDataflowState | undefined,
   stateAfterPair: X2ValueDataflowState | undefined,
 ): boolean {
-  if (state?.entry.kind !== "closed") return false;
-  if (state.vpContext !== undefined && state.vpContext.kind !== "none") return false;
-  if (!x2ValueSetHasIntersection(state.x, state.x2)) return false;
+  if (!x2StateIsClosedPlainContext(state)) return false;
+  if (state === undefined) return false;
+  if (!x2ValueSetHasIntersection(state.x, state.x2) && !x2StateHasSameDotSafeDecimalInXAndX2(state)) return false;
   if (!removingRecallCanExposeX2Restore(ops, secondSignIndex)) return true;
   return canRemoveClosedContextSignPairBeforeProvedVp(ops, secondSignIndex, state, stateAfterPair);
 }
@@ -94,11 +78,12 @@ function canRemoveVpContextSignPairBeforeFreshDigit(
   state: X2ValueDataflowState | undefined,
   stateAfterPair: X2ValueDataflowState | undefined,
 ): boolean {
-  if (state?.entry.kind !== "closed" || state.vpContext?.kind !== "exponent") return false;
-  if (stateAfterPair?.entry.kind !== "closed" || stateAfterPair.vpContext?.kind !== "exponent") return false;
+  const before = analyzeX2VpShapeContext(state);
+  const after = analyzeX2VpShapeContext(stateAfterPair);
+  if (before.kind !== "vp-exponent-context" || after.kind !== "vp-exponent-context") return false;
   const nextIndex = nextFreshDigitIndex(ops, secondSignIndex + 1);
   if (nextIndex === undefined || !isDecimalDigit(ops[nextIndex]!)) return false;
-  return sameExponentContext(state.vpContext, stateAfterPair.vpContext);
+  return sameX2ExponentShapeContext(before, after);
 }
 
 function canRemoveVpContextSignBeforeFreshDigit(
@@ -106,7 +91,7 @@ function canRemoveVpContextSignBeforeFreshDigit(
   signIndex: number,
   state: X2ValueDataflowState | undefined,
 ): boolean {
-  if (state?.entry.kind !== "closed" || state.vpContext?.kind !== "exponent") return false;
+  if (analyzeX2VpShapeContext(state).kind !== "vp-exponent-context") return false;
   const nextIndex = nextFreshDigitIndex(ops, signIndex + 1);
   return nextIndex !== undefined && isDecimalDigit(ops[nextIndex]!);
 }
@@ -116,7 +101,7 @@ function canRemoveX2RestoreSignBeforeDeadOverwrite(
   signIndex: number,
   state: X2ValueDataflowState | undefined,
 ): boolean {
-  return hasX2RestoreContext(state) && isFollowedByHardX2OverwriteWithoutStackUse(ops, signIndex + 1);
+  return x2StateHasX2RestoreContext(state) && isFollowedByHardX2OverwriteWithoutStackUse(ops, signIndex + 1);
 }
 
 function canRemoveX2ContextEmptyBeforeDeadOverwrite(
@@ -124,15 +109,7 @@ function canRemoveX2ContextEmptyBeforeDeadOverwrite(
   emptyIndex: number,
   state: X2ValueDataflowState | undefined,
 ): boolean {
-  return hasX2RestoreContext(state) && isFollowedByHardX2OverwriteWithoutStackUse(ops, emptyIndex + 1);
-}
-
-function hasX2RestoreContext(state: X2ValueDataflowState | undefined): boolean {
-  if (state === undefined) return false;
-  return !(
-    state.entry.kind !== "exponent" &&
-    (state.entry.kind !== "closed" || state.vpContext?.kind !== "exponent")
-  );
+  return x2StateHasX2RestoreContext(state) && isFollowedByHardX2OverwriteWithoutStackUse(ops, emptyIndex + 1);
 }
 
 function isFollowedByHardX2OverwriteWithoutStackUse(ops: readonly IrOp[], start: number): boolean {
@@ -141,11 +118,7 @@ function isFollowedByHardX2OverwriteWithoutStackUse(ops: readonly IrOp[], start:
 }
 
 function isHardX2OverwriteWithoutStackUse(op: IrOp): boolean {
-  if (op.kind !== "plain" || hasRewriteBarrier(op)) return false;
-  const opcode = getOpcode(op.opcode);
-  return opcode.x2Effect === "affects" &&
-    opcode.stackEffect === "preserves" &&
-    !plainPreservesXValue(op);
+  return analyzeX2StackEffect(op).hardX2OverwriteWithoutStackUse;
 }
 
 function canRemoveClosedContextSignPairBeforeProvedVp(
@@ -184,14 +157,6 @@ function sameNonEmptyStringSet(left: ReadonlySet<string> | undefined, right: Rea
   return true;
 }
 
-function sameExponentContext(
-  left: Extract<X2ValueDataflowState["vpContext"], { kind: "exponent" }>,
-  right: Extract<X2ValueDataflowState["vpContext"], { kind: "exponent" }>,
-): boolean {
-  return sameNonEmptyStringSet(left.mantissa, right.mantissa) &&
-    sameNonEmptyStringSet(left.exponent, right.exponent);
-}
-
 // These rewrites are proven behaviorally equivalent on the MK-61 emulator:
 //   ВП ВП  ≡ ВП   (a second exponent-entry while already in exponent mode is inert)
 //   КНОП/К1/К2 ВП ≡ ВП  (an empty op immediately before exponent entry is removable)
@@ -225,7 +190,8 @@ const run: IrPassFn = (ops) => {
     // command to close exponent entry in the same place.
     if (
       isFreeStandingEmptyOp(prev) &&
-      exponentEntryHasDigit(x2ValueStates[i - 1]) &&
+      analyzeX2VpShapeContext(x2ValueStates[i - 1]).kind === "active-exponent" &&
+      analyzeX2VpShapeContext(x2ValueStates[i - 1]).hasExponentDigit &&
       !isDecimalDigit(cur)
     ) {
       remove.add(i - 1);
@@ -237,7 +203,8 @@ const run: IrPassFn = (ops) => {
     if (
       isFreeStandingEmptyOp(prev) &&
       isFreeStandingSignChange(cur) &&
-      vpContextHasExponentDigit(x2ValueStates[i - 1])
+      analyzeX2VpShapeContext(x2ValueStates[i - 1]).kind === "vp-exponent-context" &&
+      analyzeX2VpShapeContext(x2ValueStates[i - 1]).hasExponentDigit
     ) {
       remove.add(i - 1);
       continue;
@@ -257,7 +224,7 @@ const run: IrPassFn = (ops) => {
     if (
       isFreeStandingSignChange(prev) &&
       isFreeStandingSignChange(cur) &&
-      x2ValueStates[i - 1]?.entry.kind === "exponent"
+      analyzeX2VpShapeContext(x2ValueStates[i - 1]).kind === "active-exponent"
     ) {
       remove.add(i - 1);
       remove.add(i);
