@@ -5600,6 +5600,32 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes exponent sign toggles after a recalled decimal register ВП", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      store("1"),
+      plain(0x0d, "Cx"),
+      recall("1"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      store("1"),
+      plain(0x0d, "Cx"),
+      recall("1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
   it("vp-splice removes exponent sign toggles after conditional fallthrough X2-sync ВП", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),

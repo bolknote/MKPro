@@ -897,7 +897,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     value dataflow proves an ordinary decimal `X == X2` fact, including
     fractional exponent-derived values such as `decimal:0.005:normalized`, and
     downstream scan proves the pair is not acting as the previous-command
-    shield for a later context-sensitive `.`/`/-/`/`ВП` restore.
+    shield for a later context-sensitive `.`/`/-/`/`ВП` restore. Register
+    value-memory can supply the same proved mantissa/exponent context after a
+    direct or proved-indirect recall of a previously stored literal-shaped
+    decimal.
 28. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/empty-op/sign redundancy optimization pass removes cells.
 29. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a proved `ВП`/X2 marker, display or ordinary, and reports `vp-fraction-restore` when one or more restores are removed. The removed `К {x}` is recognized by opcode rather than by a display/frac comment; a marker is not required when CFG dataflow proves an ordinary X2 restoration boundary: an X2 sync, at least one X2-preserving executable command, then `ВП`; direct conditional jump/fallthrough edges use their path-sensitive X2 effects, proved indirect flow targets (`indirect-target=NN`) and X2-preserving indirect conditionals participate in the same CFG, and joins require every incoming path to carry the proof.
 30. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.

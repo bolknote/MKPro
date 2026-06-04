@@ -1291,7 +1291,8 @@ The pipeline currently contains:
   as an inline literal, while unknown indirect stores clear the remembered
   facts and hex/non-normal preloads remain unsafe until separately proved.
   Repeated literal restoration may also consume those recalled decimal facts
-  instead of requiring the previous occurrence to be inline source digits.
+  instead of requiring the previous occurrence to be inline source digits, and
+  `ВП` splice/sign reductions can use the same recalled mantissa facts.
 - **x2-noop-restore** — removes `.` when the value proof shows that `X` already
   contains the same value as hidden `X2` and the separate restore-gap proof says
   the dot is in a safe X2 context. It also accepts the documented no-op form

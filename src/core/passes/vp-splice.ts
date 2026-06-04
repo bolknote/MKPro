@@ -205,7 +205,7 @@ function sameExponentContext(
 // Each collapse drops one or two cells without changing any observable result.
 const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
-  const x2ValueStates = computeX2ValueStates(ops);
+  const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
   for (let i = 1; i < ops.length; i += 1) {
     const prev = ops[i - 1]!;
     const cur = ops[i]!;
