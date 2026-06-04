@@ -31,11 +31,13 @@ export interface IrPass {
 export type RegisterValueSet = ReadonlySet<RegisterName>;
 export type X2ValueFact =
   | `reg:${RegisterName}`
+  | "same:unknown"
   | `decimal:${string}:normalized`
   | `decimal:${string}:unnormalized`;
 export type X2ValueSet = ReadonlySet<X2ValueFact>;
 
 const NORMALIZED_DECIMAL_ZERO: X2ValueFact = "decimal:0:normalized";
+const SAME_UNKNOWN_VALUE: X2ValueFact = "same:unknown";
 
 export interface X2ValueDataflowState {
   readonly x: X2ValueSet;
@@ -514,7 +516,7 @@ function transferX2ValueDataflowState(
     }
     case "indirect-recall": {
       const target = knownIndirectMemoryTarget(op);
-      const values = target === undefined ? new Set<X2ValueFact>() : new Set([registerValueFact(target)]);
+      const values = target === undefined ? new Set<X2ValueFact>([SAME_UNKNOWN_VALUE]) : new Set([registerValueFact(target)]);
       return { x: values, x2: new Set(values), entry: closedX2EntryState(), vpContext: noneX2VpContextState() };
     }
     case "plain":
@@ -522,9 +524,10 @@ function transferX2ValueDataflowState(
     case "cjump": {
       const closed = closeX2ValueEntry(input);
       const effect = conditionalX2EffectForGraphEdge(op, edge);
+      const x = syncUnknownSameValue(new Set(closed.x), effect);
       return {
-        x: new Set(closed.x),
-        x2: transferConditionalX2ValueSet(closed, effect),
+        x,
+        x2: transferConditionalX2ValueSet(closed, x, effect),
         entry: closedX2EntryState(),
         vpContext: transferConditionalX2VpContextState(closed, effect),
       };
@@ -548,9 +551,10 @@ function transferX2ValueDataflowState(
       return emptyX2ValueDataflowState();
     case "return": {
       const closed = closeX2ValueEntry(input);
+      const x = syncUnknownSameValue(new Set(closed.x), "affects");
       return {
-        x: new Set(closed.x),
-        x2: new Set(closed.x),
+        x,
+        x2: new Set(x),
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
       };
@@ -817,7 +821,10 @@ function transferPlainX2ValueState(
       vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, effect),
     };
   }
-  const x = plainPreservesXValue(op) ? new Set(input.x) : new Set<X2ValueFact>();
+  const x = syncUnknownSameValue(
+    plainPreservesXValue(op) ? new Set(input.x) : new Set<X2ValueFact>(),
+    effect,
+  );
   const x2 = transferPlainX2ValueSet(input, x, effect);
   return {
     x,
@@ -974,9 +981,10 @@ function transferIndirectConditionalX2ValueState(
   const effect = indirectConditionalX2EffectForGraphEdge(op, edge);
   if (effect === "unknown") return emptyX2ValueDataflowState();
   const closed = closeX2ValueEntry(input);
+  const x = syncUnknownSameValue(new Set(closed.x), effect);
   const output: X2ValueDataflowState = {
-    x: new Set(closed.x),
-    x2: transferConditionalX2ValueSet(closed, effect),
+    x,
+    x2: transferConditionalX2ValueSet(closed, x, effect),
     entry: closedX2EntryState(),
     vpContext: transferConditionalX2VpContextState(closed, effect),
   };
@@ -1028,6 +1036,14 @@ function transferPlainX2ValueSet(
   return new Set();
 }
 
+function syncUnknownSameValue(
+  x: Set<X2ValueFact>,
+  effect: "affects" | "preserves" | "restores" | "unknown",
+): Set<X2ValueFact> {
+  if (effect === "affects" && x.size === 0) x.add(SAME_UNKNOWN_VALUE);
+  return x;
+}
+
 function transferPlainX2VpContextState(
   input: X2ValueDataflowState,
   effect: ReturnType<typeof plainX2Effect>,
@@ -1063,10 +1079,11 @@ function transferConditionalX2RegisterSet(
 
 function transferConditionalX2ValueSet(
   input: X2ValueDataflowState,
+  x: X2ValueSet,
   effect: ReturnType<typeof conditionalX2Effect>,
 ): Set<X2ValueFact> {
   if (effect === "preserves") return new Set(input.x2);
-  if (effect === "affects") return new Set(input.x);
+  if (effect === "affects") return new Set(x);
   return new Set();
 }
 

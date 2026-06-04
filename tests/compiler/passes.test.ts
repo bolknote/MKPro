@@ -671,6 +671,25 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:2:normalized"]);
   });
 
+  it("x2 value dataflow tracks an opaque X/X2 equality through stack lift", () => {
+    const program: IrOp[] = [
+      plain(0x35, "К {x}"),
+      plain(0x0e, "В↑"),
+      store("2"),
+      plain(0x20, "Fπ"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[1]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[1]?.x2)).toEqual([]);
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["same:unknown"]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["same:unknown"]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["reg:2", "same:unknown"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["reg:2", "same:unknown"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["reg:2", "same:unknown"]);
+  });
+
   it("x2 value dataflow models closed decimal sign-change after X2 sync", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
@@ -1034,6 +1053,25 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
 
+  it("x2-hidden-temp-restore turns opaque scratch recalls into dot restores", () => {
+    const program: IrOp[] = [
+      plain(0x35, "К {x}"),
+      plain(0x0e, "В↑"),
+      store("2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[5]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
   it("x2-literal-restore replaces a repeated normalized digit run with dot", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -1055,6 +1093,70 @@ describe("ir passes on synthetic programs", () => {
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
       halt(),
     ]);
+  });
+
+  it("x2-literal-restore replaces a repeated leading-zero digit run with dot", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 02 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore replaces a repeated signed leading-zero digit run with dot", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal -02 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore keeps leading-zero runs after X2 normalization", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("x2-literal-restore replaces a repeated digit run immediately after an X2 sync", () => {

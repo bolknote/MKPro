@@ -7,10 +7,11 @@ import {
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   replacingNumberEntryCanExposeStackLift,
-  x2ValueSetHasNormalizedDecimal,
   type IrPass,
   type IrPassFn,
   type X2ValueDataflowState,
+  type X2ValueFact,
+  type X2ValueSet,
 } from "./helpers.ts";
 
 const DOT = 0x0a;
@@ -19,7 +20,8 @@ const VP = 0x0c;
 
 interface NumericLiteralRun {
   readonly end: number;
-  readonly value: string;
+  readonly displayValue: string;
+  readonly x2Fact: X2ValueFact;
 }
 
 function isPlainDigit(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
@@ -60,11 +62,18 @@ function decimalLiteralRunAt(ops: readonly IrOp[], start: number): NumericLitera
     end += 1;
   }
   if (digits.length === 0) return undefined;
-  const value = digits.join("");
-  if (!/^[1-9][0-9]{0,7}$/u.test(value)) return undefined;
-  if (isPlainSignChange(ops[end])) return { end, value: `-${value}` };
-  if (digits.length < 2) return undefined;
-  return { end: end - 1, value };
+  if (digits.length > 8) return undefined;
+  const sign = isPlainSignChange(ops[end]) ? "-" : "";
+  const raw = `${sign}${digits.join("")}`;
+  const normalized = normalizeDecimalEntry(raw);
+  if (normalized === undefined) return undefined;
+  const x2Fact = decimalEntryFact(raw);
+  if (x2Fact === undefined) return undefined;
+  if (sign === "") {
+    if (digits.length < 2) return undefined;
+    return { end: end - 1, displayValue: raw, x2Fact };
+  }
+  return { end, displayValue: raw, x2Fact };
 }
 
 function exponentLiteralRunAt(ops: readonly IrOp[], start: number): NumericLiteralRun | undefined {
@@ -94,11 +103,30 @@ function exponentLiteralRunAt(ops: readonly IrOp[], start: number): NumericLiter
 
   const value = normalizedExponentEntryValue(`${mantissaSign}${mantissaDigits.join("")}`, `${exponentSign}${exponentDigits.join("")}`);
   if (value === undefined) return undefined;
-  return { end: cursor - 1, value };
+  return { end: cursor - 1, displayValue: value, x2Fact: decimalValueFact(value, "normalized") };
 }
 
 function literalRunAt(ops: readonly IrOp[], start: number): NumericLiteralRun | undefined {
   return exponentLiteralRunAt(ops, start) ?? decimalLiteralRunAt(ops, start);
+}
+
+function decimalValueFact(value: string, flavor: "normalized" | "unnormalized"): X2ValueFact {
+  return `decimal:${value}:${flavor}`;
+}
+
+function decimalEntryFact(raw: string): X2ValueFact | undefined {
+  const normalized = normalizeDecimalEntry(raw);
+  if (normalized === undefined) return undefined;
+  return decimalValueFact(raw === normalized ? raw : raw, raw === normalized ? "normalized" : "unnormalized");
+}
+
+function normalizeDecimalEntry(raw: string): string | undefined {
+  const match = /^(-?)([0-9]{1,8})$/u.exec(raw);
+  if (match === null) return undefined;
+  const sign = match[1]!;
+  const digits = match[2]!.replace(/^0+(?=\d)/u, "");
+  if (digits === "0") return "0";
+  return `${sign}${digits}`;
 }
 
 function normalizedExponentEntryValue(mantissa: string, exponent: string): string | undefined {
@@ -134,6 +162,10 @@ function normalizePlainDecimal(raw: string): string | undefined {
 function significantDecimalDigits(input: string): number {
   const digits = input.replace(".", "").replace(/^0+/u, "");
   return digits.length === 0 ? 1 : digits.length;
+}
+
+function x2ValueSetHasFact(input: X2ValueSet | undefined, fact: X2ValueFact): boolean {
+  return input?.has(fact) === true;
 }
 
 function addingDotCanExposeX2RestoreContext(ops: readonly IrOp[], literalEnd: number): boolean {
@@ -206,11 +238,11 @@ const run: IrPassFn = (ops) => {
       runAtIndex !== undefined &&
       isFreshClosedDecimalEntry(state) &&
       (dotSafeStates[index] === true || isImmediateAfterX2AffectingSync(ops, index)) &&
-      x2ValueSetHasNormalizedDecimal(state?.x2, runAtIndex.value) &&
+      x2ValueSetHasFact(state?.x2, runAtIndex.x2Fact) &&
       !replacingNumberEntryCanExposeStackLift(ops, runAtIndex.end) &&
       !addingDotCanExposeX2RestoreContext(ops, runAtIndex.end)
     ) {
-      result.push(dotRestoreOp(runAtIndex.value, ops[index]!));
+      result.push(dotRestoreOp(runAtIndex.displayValue, ops[index]!));
       removed += runAtIndex.end - index;
       index = runAtIndex.end;
       continue;
