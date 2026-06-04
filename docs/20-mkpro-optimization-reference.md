@@ -751,13 +751,16 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `1.`. The value proof also treats `В↑` and `F0..FF` empty opcodes as
     X-preserving X2-affecting commands: when `X` is already proved, those
     opcodes sync the same fact into `X2`, including normalized visible values
-    whose old X2 form had leading zeroes. `ВП` after an open mantissa creates both a structural exponent-entry
+    whose old X2 form had leading zeroes. Closed-context `/-/` is modeled for
+    proved normalized decimal `X == X2` facts, including zero; this lets an
+    immediately following `.` be removed unless it would shape a later X2
+    restore context. `ВП` after an open mantissa creates both a structural exponent-entry
     state and a separate VP/exponent context. Ordinary digits after an
     X2-preserving gap start fresh number entry, but `/-/` can still see and
     update that VP context. These hidden exponent forms still do not produce
     `X2` value aliases; emulator probes show that later `.` can signal
-    `ЕГГ0Г`. Closed-context `/-/` without a proved VP context stays unknown;
-    only digit-entry sign changes are value-modeled. The pass accepts either a
+    `ЕГГ0Г`. Closed-context `/-/` without a proved decimal or VP context stays
+    unknown. The pass accepts either a
     safe dot-restore gap or the documented immediate no-op form after an
     X2-affecting sync such as `П->X r`/`Cx`/conditional fallthrough, and refuses
     display/raw/context-sensitive follow-up `.`/`/-/`/`ВП` cases.

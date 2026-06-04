@@ -844,6 +844,10 @@ function transferSignChangeX2ValueState(input: X2ValueDataflowState): X2ValueDat
       vpContext: signChangeVpContext(input.vpContext),
     };
   }
+  if (input.entry.kind === "closed" && (input.vpContext === undefined || input.vpContext.kind === "none")) {
+    const state = signChangeClosedDecimalState(input);
+    if (state !== undefined) return state;
+  }
   if (input.entry.kind !== "open") {
     return { x: new Set(), x2: new Set(), entry: { kind: "unknown" }, vpContext: { kind: "unknown" } };
   }
@@ -1152,6 +1156,23 @@ function signChangedDecimalEntry(raw: string): string {
   const normalized = normalizeDecimalEntry(raw);
   if (normalized === undefined || normalized === "0") return "0";
   return raw.startsWith("-") ? raw.slice(1) : `-${raw}`;
+}
+
+function signChangeClosedDecimalState(input: X2ValueDataflowState): X2ValueDataflowState | undefined {
+  const values = new Set<X2ValueFact>();
+  for (const fact of input.x2) {
+    if (!input.x.has(fact)) continue;
+    const decimal = /^decimal:(-?[0-9]+):normalized$/u.exec(fact);
+    if (decimal === null) continue;
+    values.add(decimalValueFact(signChangedDecimalEntry(decimal[1]!), "normalized"));
+  }
+  if (values.size === 0) return undefined;
+  return {
+    x: values,
+    x2: new Set(values),
+    entry: closedX2EntryState(),
+    vpContext: noneX2VpContextState(),
+  };
 }
 
 function closedX2EntryState(): X2EntryState {

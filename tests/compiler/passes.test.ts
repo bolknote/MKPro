@@ -670,6 +670,34 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:2:normalized"]);
   });
 
+  it("x2 value dataflow models closed decimal sign-change after X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:-2:normalized"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:-2:normalized"]);
+  });
+
+  it("x2 value dataflow models closed zero sign-change as normalized zero", () => {
+    const program: IrOp[] = [
+      plain(0x0d, "Cx"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["decimal:0:normalized"]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:0:normalized"]);
+  });
+
   it("x2 value dataflow treats dot in open number entry as decimal input", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -977,6 +1005,43 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0e, "В↑"),
       halt(),
     ]);
+  });
+
+  it("x2-noop-restore removes dot immediately after modeled closed sign-change", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore keeps dot after closed sign-change when it shapes a following ВП", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x0a, "."),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("x2-noop-restore keeps dot after a signed leading-zero X2 literal", () => {

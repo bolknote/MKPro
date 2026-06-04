@@ -23,8 +23,12 @@ const run: IrPassFn = (ops) => {
     const op = ops[index]!;
     if (!isPlainDot(op)) continue;
     if (isDisplayFocusSensitive(op)) continue;
-    if (dotSafeStates[index] !== true && !isImmediateAfterX2AffectingSync(ops, index)) continue;
     const state = valueStates[index];
+    if (
+      dotSafeStates[index] !== true &&
+      !isImmediateAfterX2AffectingSync(ops, index) &&
+      !isImmediateAfterModeledSignChange(ops, index, state)
+    ) continue;
     if (!x2ValueSetHasIntersection(state?.x, state?.x2)) continue;
     if (removingDotCanExposeX2RestoreContext(ops, index)) continue;
     removed.add(index);
@@ -57,6 +61,24 @@ function isImmediateAfterX2AffectingSync(ops: readonly IrOp[], dotIndex: number)
       return getOpcode(op.opcode).conditionalX2Effect?.fallthrough === "affects";
     }
     return op.kind === "plain" && getOpcode(op.opcode).x2Effect === "affects";
+  }
+  return false;
+}
+
+function isImmediateAfterModeledSignChange(
+  ops: readonly IrOp[],
+  dotIndex: number,
+  state: ReturnType<typeof computeX2ValueStates>[number],
+): boolean {
+  for (let index = dotIndex - 1; index >= 0; index -= 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") continue;
+    if (hasRewriteBarrier(op)) return false;
+    return op.kind === "plain" &&
+      op.opcode === SIGN_CHANGE &&
+      state?.entry.kind === "closed" &&
+      (state.vpContext === undefined || state.vpContext.kind === "none") &&
+      x2ValueSetHasIntersection(state.x, state.x2);
   }
   return false;
 }
