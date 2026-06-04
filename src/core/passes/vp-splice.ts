@@ -1,8 +1,10 @@
 import type { IrOp } from "../types.ts";
+import { getOpcode } from "../opcodes.ts";
 import {
   computeX2ValueStates,
   emptyResult,
   hasRewriteBarrier,
+  plainPreservesXValue,
   removingRecallCanExposeX2Restore,
   type IrPass,
   type IrPassFn,
@@ -109,6 +111,43 @@ function canRemoveVpContextSignBeforeFreshDigit(
   return nextIndex !== undefined && isDecimalDigit(ops[nextIndex]!);
 }
 
+function canRemoveX2RestoreSignBeforeDeadOverwrite(
+  ops: readonly IrOp[],
+  signIndex: number,
+  state: X2ValueDataflowState | undefined,
+): boolean {
+  return hasX2RestoreContext(state) && isFollowedByHardX2OverwriteWithoutStackUse(ops, signIndex + 1);
+}
+
+function canRemoveX2ContextEmptyBeforeDeadOverwrite(
+  ops: readonly IrOp[],
+  emptyIndex: number,
+  state: X2ValueDataflowState | undefined,
+): boolean {
+  return hasX2RestoreContext(state) && isFollowedByHardX2OverwriteWithoutStackUse(ops, emptyIndex + 1);
+}
+
+function hasX2RestoreContext(state: X2ValueDataflowState | undefined): boolean {
+  if (state === undefined) return false;
+  return !(
+    state.entry.kind !== "exponent" &&
+    (state.entry.kind !== "closed" || state.vpContext?.kind !== "exponent")
+  );
+}
+
+function isFollowedByHardX2OverwriteWithoutStackUse(ops: readonly IrOp[], start: number): boolean {
+  const nextIndex = nextFreshDigitIndex(ops, start);
+  return nextIndex !== undefined && isHardX2OverwriteWithoutStackUse(ops[nextIndex]!);
+}
+
+function isHardX2OverwriteWithoutStackUse(op: IrOp): boolean {
+  if (op.kind !== "plain" || hasRewriteBarrier(op)) return false;
+  const opcode = getOpcode(op.opcode);
+  return opcode.x2Effect === "affects" &&
+    opcode.stackEffect === "preserves" &&
+    !plainPreservesXValue(op);
+}
+
 function decimalValueSetsIntersect(left: X2ValueSet | undefined, right: X2ValueSet | undefined): boolean {
   if (left === undefined || right === undefined) return false;
   for (const value of left) {
@@ -211,6 +250,16 @@ const run: IrPassFn = (ops) => {
       remove.add(i - 1);
       continue;
     }
+    // A VP/X2-context empty separator is inert before the same kind of hard
+    // overwrite: its only remaining role would be previous-command context, and
+    // that context is destroyed together with X/X2.
+    if (
+      isFreeStandingEmptyOp(cur) &&
+      canRemoveX2ContextEmptyBeforeDeadOverwrite(ops, i, x2ValueStates[i])
+    ) {
+      remove.add(i);
+      continue;
+    }
     // In exponent-entry mode /-/ only toggles the exponent sign. Adjacent toggles
     // cancel; outside exponent-entry this is not safe before following digits.
     if (
@@ -254,6 +303,16 @@ const run: IrPassFn = (ops) => {
     ) {
       remove.add(i);
     }
+    // If a VP/X2-context sign restore is followed only by inert separators and
+    // then by a command that unconditionally replaces both X and X2 without
+    // stack use, the restored value cannot be observed.
+    if (
+      !remove.has(i) &&
+      isFreeStandingSignChange(cur) &&
+      canRemoveX2RestoreSignBeforeDeadOverwrite(ops, i, x2ValueStates[i])
+    ) {
+      remove.add(i);
+    }
     // In closed context, two sign changes are only removable when value
     // dataflow proves ordinary decimal X and X2 equality and the pair is not
     // acting as a previous-command shield for a later `.`/`/-/`/`ВП`.
@@ -273,7 +332,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "vp-exponent-splice",
-        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an X2 boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent-digit empty separators, VP-context /-/ separators/signs before fresh digits, exponent /-/ /-/ -> empty, mantissa /-/ /-/ before proved ВП/fresh digit -> empty, closed decimal /-/ /-/ -> empty).`,
+        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an X2 boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent-digit empty separators, VP-context /-/ separators/signs before fresh digits/dead overwrites, exponent /-/ /-/ -> empty, mantissa /-/ /-/ before proved ВП/fresh digit -> empty, closed decimal /-/ /-/ -> empty).`,
       },
     ],
   };

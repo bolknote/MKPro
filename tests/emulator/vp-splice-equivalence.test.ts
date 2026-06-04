@@ -225,6 +225,53 @@ describe("ВП exponent-entry splice collapse (vp-splice)", () => {
     expect(display(singleCodes)).toBe(display([0x05, VP, 0x03, FPI, SIGN_CHANGE, KNOP, 0x04, STOP]));
   });
 
+  it("VP-context /-/ before a dead X2 overwrite is removable", () => {
+    expect(display([0x05, VP, 0x03, FPI, SIGN_CHANGE, CLEAR_X, STOP])).toBe(
+      display([0x05, VP, 0x03, FPI, CLEAR_X, STOP]),
+    );
+    expect(display([0x05, VP, SIGN_CHANGE, KNOP, CLEAR_X, STOP])).toBe(
+      display([0x05, VP, KNOP, CLEAR_X, STOP]),
+    );
+    expect(display([0x05, VP, K1, K2, CLEAR_X, 0x10, STOP])).toBe(
+      display([0x05, VP, CLEAR_X, 0x10, STOP]),
+    );
+    // The restored X is still dead even when a later binary op reads Y.
+    expect(display([0x05, VP, 0x03, FPI, SIGN_CHANGE, CLEAR_X, 0x10, STOP])).toBe(
+      display([0x05, VP, 0x03, FPI, CLEAR_X, 0x10, STOP]),
+    );
+
+    const program: MachineItem[] = [
+      { kind: "op", opcode: 0x05, mnemonic: "5" },
+      { kind: "op", opcode: VP, mnemonic: "ВП" },
+      { kind: "op", opcode: 0x03, mnemonic: "3" },
+      { kind: "op", opcode: FPI, mnemonic: "Fπ" },
+      { kind: "op", opcode: SIGN_CHANGE, mnemonic: "/-/" },
+      { kind: "op", opcode: CLEAR_X, mnemonic: "Cx" },
+      { kind: "op", opcode: STOP, mnemonic: "С/П" },
+    ];
+    const result = runIrPasses(program, { delivery: "hex", budget: 105, analysis: false });
+    const codes = result.items
+      .filter((item): item is Extract<MachineItem, { opcode: number }> => "opcode" in item)
+      .map((item) => item.opcode);
+    expect(codes).toEqual([0x05, VP, 0x03, FPI, CLEAR_X, STOP]);
+    expect(display(codes)).toBe(display([0x05, VP, 0x03, FPI, SIGN_CHANGE, CLEAR_X, STOP]));
+
+    const emptyProgram: MachineItem[] = [
+      { kind: "op", opcode: 0x05, mnemonic: "5" },
+      { kind: "op", opcode: VP, mnemonic: "ВП" },
+      { kind: "op", opcode: K1, mnemonic: "К1" },
+      { kind: "op", opcode: K2, mnemonic: "К2" },
+      { kind: "op", opcode: CLEAR_X, mnemonic: "Cx" },
+      { kind: "op", opcode: STOP, mnemonic: "С/П" },
+    ];
+    const emptyResult = runIrPasses(emptyProgram, { delivery: "hex", budget: 105, analysis: false });
+    const emptyCodes = emptyResult.items
+      .filter((item): item is Extract<MachineItem, { opcode: number }> => "opcode" in item)
+      .map((item) => item.opcode);
+    expect(emptyCodes).toEqual([0x05, VP, CLEAR_X, STOP]);
+    expect(display(emptyCodes)).toBe(display([0x05, VP, K1, K2, CLEAR_X, STOP]));
+  });
+
   it("closed decimal /-/ /-/ pairs collapse only away from VP restore context", () => {
     expect(display([0x00, 0x02, F0, SIGN_CHANGE, SIGN_CHANGE, STOP])).toBe(
       display([0x00, 0x02, F0, STOP]),

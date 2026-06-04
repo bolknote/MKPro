@@ -4378,6 +4378,94 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("vp-splice removes a VP-context sign before a dead X2 overwrite", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes an active exponent sign before a dead X2 overwrite", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x54, "КНОП"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes VP-context empty separators before a dead X2 overwrite", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x54, "КНОП"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes an active exponent empty separator before a dead X2 overwrite", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x55, "К1"),
+      plain(0x56, "К2"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x56, "К2"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
   it("vp-splice keeps a no-digit VP-context separator but removes a following sign before fresh digit", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
