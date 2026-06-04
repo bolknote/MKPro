@@ -686,6 +686,23 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:-2:normalized"]);
   });
 
+  it("x2 value dataflow carries non-zero closed sign-change into a following ВП", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["decimal:-2:normalized"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:-2:normalized"]);
+    expect(x2EntryStateText(states[4])).toBe("exponent:-2:");
+    expect(x2EntryStateText(states[5])).toBe("exponent:-2:3");
+  });
+
   it("x2 value dataflow models closed zero sign-change as normalized zero", () => {
     const program: IrOp[] = [
       plain(0x0d, "Cx"),
@@ -696,6 +713,19 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ValueStateText(states[2]?.x)).toEqual(["decimal:0:normalized"]);
     expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:0:normalized"]);
+  });
+
+  it("x2 value dataflow does not model signed zero as an ordinary ВП mantissa", () => {
+    const program: IrOp[] = [
+      plain(0x0d, "Cx"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[3])).toBe("unknown");
   });
 
   it("x2 value dataflow treats dot in open number entry as decimal input", () => {
@@ -729,6 +759,46 @@ describe("ir passes on synthetic programs", () => {
     expect(x2EntryStateText(states[5])).toBe("closed");
     expect(x2ValueStateText(states[5]?.x)).toEqual(["reg:2"]);
     expect(x2ValueStateText(states[5]?.x2)).toEqual([]);
+  });
+
+  it("x2 value dataflow models ВП after a proved closed decimal X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[3])).toBe("closed");
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:2:normalized"]);
+    expect(x2EntryStateText(states[4])).toBe("exponent:2:");
+    expect(x2EntryStateText(states[5])).toBe("exponent:2:3");
+  });
+
+  it("x2 value dataflow carries a closed decimal ВП sync only through empty op gaps", () => {
+    const throughEmpty: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const afterStore: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      store("1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+
+    expect(x2EntryStateText(computeX2ValueStates(throughEmpty)[4])).toBe("exponent:2:");
+    expect(x2EntryStateText(computeX2ValueStates(afterStore)[4])).toBe("unknown");
   });
 
   it("x2 value dataflow keeps sign-change in exponent-entry state", () => {
@@ -4035,6 +4105,45 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes exponent sign toggles after closed decimal X2-sync ВП", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice does not infer closed decimal ВП shape through a preceding store", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      store("1"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("vp-splice removes an empty separator after an exponent digit before a non-digit command", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),
@@ -4129,6 +4238,28 @@ describe("ir passes on synthetic programs", () => {
       plain(0x00, "0"),
       plain(0x02, "2"),
       plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes a non-zero closed-context sign pair before proved ВП", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
       halt(),
     ]);
   });

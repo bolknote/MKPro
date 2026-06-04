@@ -755,7 +755,15 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     proved normalized decimal `X == X2` facts, including zero; this lets an
     immediately following `.` be removed unless it would shape a later X2
     restore context. `ВП` after an open mantissa creates both a structural exponent-entry
-    state and a separate VP/exponent context. Ordinary digits after an
+    state and a separate VP/exponent context. `ВП` after a proved closed
+    decimal X2 sync (`Cx`, `В↑`, or `F0..FF`, possibly through only
+    `КНОП`/`К1`/`К2`) also becomes a structural exponent-entry state; this
+    proof is deliberately not inferred through stores or general X-preserving
+    commands because the MK-61 previous-command context changes what `ВП`
+    restores. A proved non-zero closed-context `/-/` carries the same fact with
+    the mantissa sign toggled, while zero is not accepted because the emulator
+    distinguishes signed-zero mantissa shape from normalized decimal `0`.
+    Ordinary digits after an
     X2-preserving gap start fresh number entry, but `/-/` can still see and
     update that VP context. These hidden exponent forms still do not produce
     `X2` value aliases; emulator probes show that later `.` can signal
@@ -796,7 +804,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     exponent-sign toggles, and shape-proved empty separators after at least
     one exponent digit before a non-digit command. It also uses the separate
     VP/exponent context to remove empty separators before `/-/` after
-    X2-preserving gaps such as `ВП 3 Fπ КНОП /-/`. The after-digit separator
+    X2-preserving gaps such as `ВП 3 Fπ КНОП /-/`, and it can remove exponent
+    sign toggles after a closed decimal X2-sync-fed `ВП` such as
+    `2 F0 ВП /-/ /-/ 3`; a non-zero closed-context sign pair before the proved
+    `ВП` (`2 F0 /-/ /-/ ВП 3`) can also collapse. The after-digit separator
     rewrite is deliberately shape-sensitive: the same empty op before the
     first exponent digit, or before another exponent digit, changes number
     entry and is kept. Closed-context `/-/ /-/` pairs are removed only when

@@ -1283,6 +1283,13 @@ The pipeline currently contains:
   before another reachable `.`/`/-/`/`ВП` context-sensitive restore, across opaque
   control flow, raw cells, and display-focused cells, so it does not erase a dot
   whose main job is to shape the next X2 restoration rather than to change `X`.
+  The same X2 value dataflow now carries a narrow `ВП`-entry mantissa fact after
+  proved closed decimal syncs (`Cx`, `В↑`, `F0..FF`) through only
+  `КНОП`/`К1`/`К2`; this lets exponent-entry rewrites use hidden X2 without
+  pretending that a preceding `X->П` or arbitrary preserving command leaves the
+  same previous-command context. Proved non-zero closed `/-/` toggles that
+  mantissa fact, while normalized zero is excluded because `Cx /-/ ВП` has a
+  signed-zero mantissa shape on the emulator.
 - **x2-hidden-temp-restore** — replaces a direct scratch `П->X r`, or a
   stable-indirect proved scratch `К П->X R7..Re`, with `.` when X2-register
   dataflow or the stricter X2 value proof shows that hidden X2 already contains

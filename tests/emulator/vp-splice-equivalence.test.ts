@@ -31,6 +31,7 @@ const DOT = 0x0a;
 const SIGN_CHANGE = 0x0b;
 const CLEAR_X = 0x0d;
 const FPI = 0x20;
+const STORE1 = 0x41;
 const F0 = 0xf0;
 const STOP = 0x50;
 
@@ -186,5 +187,52 @@ describe("ВП exponent-entry splice collapse (vp-splice)", () => {
       .filter((item): item is Extract<MachineItem, { opcode: number }> => "opcode" in item)
       .map((item) => item.opcode);
     expect(keptCodes).toEqual([CLEAR_X, SIGN_CHANGE, SIGN_CHANGE, VP, STOP]);
+  });
+
+  it("closed decimal X2-sync before ВП exposes exponent-entry sign toggles", () => {
+    expect(display([0x02, F0, VP, SIGN_CHANGE, SIGN_CHANGE, 0x03, STOP])).toBe(
+      display([0x02, F0, VP, 0x03, STOP]),
+    );
+    expect(display([0x02, F0, SIGN_CHANGE, SIGN_CHANGE, VP, 0x03, STOP])).toBe(
+      display([0x02, F0, VP, 0x03, STOP]),
+    );
+    expect(display([CLEAR_X, SIGN_CHANGE, SIGN_CHANGE, VP, 0x03, STOP])).not.toBe(
+      display([CLEAR_X, VP, 0x03, STOP]),
+    );
+    // `X->П` immediately before ВП changes the previous-command context, so
+    // the decimal sync proof cannot be inferred just from `X == X2`.
+    expect(display([0x02, F0, STORE1, VP, 0x03, STOP])).not.toBe(display([0x02, F0, VP, 0x03, STOP]));
+
+    const program: MachineItem[] = [
+      { kind: "op", opcode: 0x02, mnemonic: "2" },
+      { kind: "op", opcode: F0, mnemonic: "F* empty F0" },
+      { kind: "op", opcode: VP, mnemonic: "ВП" },
+      { kind: "op", opcode: SIGN_CHANGE, mnemonic: "/-/" },
+      { kind: "op", opcode: SIGN_CHANGE, mnemonic: "/-/" },
+      { kind: "op", opcode: 0x03, mnemonic: "3" },
+      { kind: "op", opcode: STOP, mnemonic: "С/П" },
+    ];
+    const result = runIrPasses(program, { delivery: "hex", budget: 105, analysis: false });
+    const codes = result.items
+      .filter((item): item is Extract<MachineItem, { opcode: number }> => "opcode" in item)
+      .map((item) => item.opcode);
+    expect(codes).toEqual([0x02, F0, VP, 0x03, STOP]);
+    expect(display(codes)).toBe(display([0x02, F0, VP, SIGN_CHANGE, SIGN_CHANGE, 0x03, STOP]));
+
+    const beforeVpPair: MachineItem[] = [
+      { kind: "op", opcode: 0x02, mnemonic: "2" },
+      { kind: "op", opcode: F0, mnemonic: "F* empty F0" },
+      { kind: "op", opcode: SIGN_CHANGE, mnemonic: "/-/" },
+      { kind: "op", opcode: SIGN_CHANGE, mnemonic: "/-/" },
+      { kind: "op", opcode: VP, mnemonic: "ВП" },
+      { kind: "op", opcode: 0x03, mnemonic: "3" },
+      { kind: "op", opcode: STOP, mnemonic: "С/П" },
+    ];
+    const beforeVpResult = runIrPasses(beforeVpPair, { delivery: "hex", budget: 105, analysis: false });
+    const beforeVpCodes = beforeVpResult.items
+      .filter((item): item is Extract<MachineItem, { opcode: number }> => "opcode" in item)
+      .map((item) => item.opcode);
+    expect(beforeVpCodes).toEqual([0x02, F0, VP, 0x03, STOP]);
+    expect(display(beforeVpCodes)).toBe(display([0x02, F0, SIGN_CHANGE, SIGN_CHANGE, VP, 0x03, STOP]));
   });
 });

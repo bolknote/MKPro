@@ -42,6 +42,7 @@ export interface X2ValueDataflowState {
   readonly x2: X2ValueSet;
   readonly entry: X2EntryState;
   readonly vpContext?: X2VpContextState;
+  readonly vpEntryMantissa?: ReadonlySet<string> | undefined;
 }
 
 type X2EntryState =
@@ -408,6 +409,7 @@ function cloneX2ValueDataflowState(input: X2ValueDataflowState): X2ValueDataflow
     x2: new Set(input.x2),
     entry: cloneX2EntryState(input.entry),
     vpContext: cloneX2VpContextState(input.vpContext),
+    vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
   };
 }
 
@@ -777,15 +779,18 @@ function transferPlainX2ValueState(
       x2: new Set([NORMALIZED_DECIMAL_ZERO]),
       entry: closedX2EntryState(),
       vpContext: noneX2VpContextState(),
+      vpEntryMantissa: new Set(["0"]),
     };
   }
   const effect = plainX2Effect(op);
   const x = plainPreservesXValue(op) ? new Set(input.x) : new Set<X2ValueFact>();
+  const x2 = transferPlainX2ValueSet(input, x, effect);
   return {
     x,
-    x2: transferPlainX2ValueSet(input, x, effect),
+    x2,
     entry: nextX2EntryStateForPlainEffect(effect),
     vpContext: transferPlainX2VpContextState(input, effect),
+    vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, effect),
   };
 }
 
@@ -890,6 +895,25 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
       vpContext: x2VpContextFromExponentEntry(input.entry),
     };
   }
+  if (input.entry.kind === "closed" && input.vpEntryMantissa !== undefined) {
+    // This is not inferred from plain `X == X2`: the MK-61 previous-command
+    // context matters. The fact is set only by proved X2 syncs that can feed
+    // ordinary exponent entry, and is cleared by stores and non-empty gaps.
+    return {
+      x: new Set(),
+      x2: new Set(),
+      entry: {
+        kind: "exponent",
+        mantissa: new Set(input.vpEntryMantissa),
+        exponent: new Set([""]),
+      },
+      vpContext: {
+        kind: "exponent",
+        mantissa: new Set(input.vpEntryMantissa),
+        exponent: new Set([""]),
+      },
+    };
+  }
   return { x: new Set(), x2: new Set(), entry: { kind: "unknown" }, vpContext: { kind: "unknown" } };
 }
 
@@ -969,6 +993,18 @@ function transferPlainX2VpContextState(
   return effect === "preserves" ? cloneX2VpContextState(input.vpContext) : noneX2VpContextState();
 }
 
+function transferPlainX2VpEntryMantissaState(
+  input: X2ValueDataflowState,
+  op: Extract<IrOp, { kind: "plain" }>,
+  x: X2ValueSet,
+  x2: X2ValueSet,
+  effect: ReturnType<typeof plainX2Effect>,
+): ReadonlySet<string> | undefined {
+  if (effect === "affects") return sharedNormalizedDecimalMantissas({ x, x2 });
+  if (effect === "preserves" && isEmptyPlainOp(op)) return cloneOptionalStringSet(input.vpEntryMantissa);
+  return undefined;
+}
+
 function nextX2EntryStateForPlainEffect(effect: ReturnType<typeof plainX2Effect>): X2EntryState {
   if (effect === "restores") return { kind: "unknown" };
   return closedX2EntryState();
@@ -1022,12 +1058,14 @@ function joinX2ValueDataflowStates(
     x2: new Set(incoming.x2),
     entry: cloneX2EntryState(incoming.entry),
     vpContext: cloneX2VpContextState(incoming.vpContext),
+    vpEntryMantissa: cloneOptionalStringSet(incoming.vpEntryMantissa),
   };
   return {
     x: joinX2ValueSets(current.x, incoming.x),
     x2: joinX2ValueSets(current.x2, incoming.x2),
     entry: joinX2EntryStates(current.entry, incoming.entry),
     vpContext: joinX2VpContextStates(current.vpContext, incoming.vpContext),
+    vpEntryMantissa: joinOptionalStringSets(current.vpEntryMantissa, incoming.vpEntryMantissa),
   };
 }
 
@@ -1047,7 +1085,8 @@ function sameX2ValueDataflowState(
   return sameX2ValueSet(left.x, right.x) &&
     sameX2ValueSet(left.x2, right.x2) &&
     sameX2EntryState(left.entry, right.entry) &&
-    sameX2VpContextState(left.vpContext, right.vpContext);
+    sameX2VpContextState(left.vpContext, right.vpContext) &&
+    sameOptionalStringSet(left.vpEntryMantissa, right.vpEntryMantissa);
 }
 
 function joinRegisterValueSets(
@@ -1114,6 +1153,27 @@ function sameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): b
   return true;
 }
 
+function cloneOptionalStringSet(input: ReadonlySet<string> | undefined): ReadonlySet<string> | undefined {
+  return input === undefined ? undefined : new Set(input);
+}
+
+function joinOptionalStringSets(
+  current: ReadonlySet<string> | undefined,
+  incoming: ReadonlySet<string> | undefined,
+): ReadonlySet<string> | undefined {
+  if (current === undefined || incoming === undefined) return undefined;
+  const joined = joinStringSets(current, incoming);
+  return joined.size === 0 ? undefined : joined;
+}
+
+function sameOptionalStringSet(
+  left: ReadonlySet<string> | undefined,
+  right: ReadonlySet<string> | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return sameStringSet(left, right);
+}
+
 function registerValueFact(register: RegisterName): X2ValueFact {
   return `reg:${register}`;
 }
@@ -1172,7 +1232,40 @@ function signChangeClosedDecimalState(input: X2ValueDataflowState): X2ValueDataf
     x2: new Set(values),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
+    vpEntryMantissa: signChangedNonZeroVpEntryMantissas(input),
   };
+}
+
+function sharedNormalizedDecimalMantissas(input: Pick<X2ValueDataflowState, "x" | "x2">): ReadonlySet<string> | undefined {
+  const mantissas = new Set<string>();
+  for (const fact of input.x2) {
+    if (!input.x.has(fact)) continue;
+    const decimal = /^decimal:(-?[0-9]+):normalized$/u.exec(fact);
+    if (decimal !== null) mantissas.add(decimal[1]!);
+  }
+  return mantissas.size === 0 ? undefined : mantissas;
+}
+
+function isEmptyPlainOp(op: Extract<IrOp, { kind: "plain" }>): boolean {
+  return op.opcode >= 0x54 && op.opcode <= 0x56;
+}
+
+function signChangedNonZeroVpEntryMantissas(input: X2ValueDataflowState): ReadonlySet<string> | undefined {
+  const mantissas = new Set<string>();
+  let sawSharedDecimal = false;
+  for (const fact of input.x2) {
+    if (!input.x.has(fact)) continue;
+    const decimal = /^decimal:(-?[0-9]+):normalized$/u.exec(fact);
+    if (decimal === null) continue;
+    sawSharedDecimal = true;
+    const signed = signChangedDecimalEntry(decimal[1]!);
+    // `Cx /-/ ВП` produces a negative-zero mantissa shape on the emulator,
+    // while the ordinary decimal value fact still normalizes it to zero.
+    // Keep zero out of this proof until the mantissa model can spell signed 0.
+    if (signed === "0") return undefined;
+    mantissas.add(signed);
+  }
+  return sawSharedDecimal && mantissas.size > 0 ? mantissas : undefined;
 }
 
 function closedX2EntryState(): X2EntryState {

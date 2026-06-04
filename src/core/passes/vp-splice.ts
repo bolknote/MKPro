@@ -65,11 +65,13 @@ function canRemoveClosedContextSignPair(
   ops: readonly IrOp[],
   secondSignIndex: number,
   state: X2ValueDataflowState | undefined,
+  stateAfterPair: X2ValueDataflowState | undefined,
 ): boolean {
   if (state?.entry.kind !== "closed") return false;
   if (state.vpContext !== undefined && state.vpContext.kind !== "none") return false;
   if (!decimalValueSetsIntersect(state.x, state.x2)) return false;
-  return !removingRecallCanExposeX2Restore(ops, secondSignIndex);
+  if (!removingRecallCanExposeX2Restore(ops, secondSignIndex)) return true;
+  return canRemoveClosedContextSignPairBeforeProvedVp(ops, secondSignIndex, state, stateAfterPair);
 }
 
 function decimalValueSetsIntersect(left: X2ValueSet | undefined, right: X2ValueSet | undefined): boolean {
@@ -78,6 +80,32 @@ function decimalValueSetsIntersect(left: X2ValueSet | undefined, right: X2ValueS
     if (value.startsWith("decimal:") && right.has(value)) return true;
   }
   return false;
+}
+
+function canRemoveClosedContextSignPairBeforeProvedVp(
+  ops: readonly IrOp[],
+  secondSignIndex: number,
+  state: X2ValueDataflowState,
+  stateAfterPair: X2ValueDataflowState | undefined,
+): boolean {
+  const nextIndex = nextNonLabelIndex(ops, secondSignIndex + 1);
+  if (nextIndex === undefined || !isFreeStandingVp(ops[nextIndex]!)) return false;
+  return sameNonEmptyStringSet(state.vpEntryMantissa, stateAfterPair?.vpEntryMantissa);
+}
+
+function nextNonLabelIndex(ops: readonly IrOp[], start: number): number | undefined {
+  for (let index = start; index < ops.length; index += 1) {
+    if (ops[index]!.kind !== "label") return index;
+  }
+  return undefined;
+}
+
+function sameNonEmptyStringSet(left: ReadonlySet<string> | undefined, right: ReadonlySet<string> | undefined): boolean {
+  if (left === undefined || right === undefined || left.size === 0 || left.size !== right.size) return false;
+  for (const value of left) {
+    if (!right.has(value)) return false;
+  }
+  return true;
 }
 
 // These rewrites are proven behaviorally equivalent on the MK-61 emulator:
@@ -146,7 +174,7 @@ const run: IrPassFn = (ops) => {
     if (
       isFreeStandingSignChange(prev) &&
       isFreeStandingSignChange(cur) &&
-      canRemoveClosedContextSignPair(ops, i, x2ValueStates[i - 1])
+      canRemoveClosedContextSignPair(ops, i, x2ValueStates[i - 1], x2ValueStates[i + 1])
     ) {
       remove.add(i - 1);
       remove.add(i);
