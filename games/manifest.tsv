@@ -17,7 +17,10 @@ bash-game.txt	bash-game.md	Bash Game	L. M. Fink	file:///Users/bolk/Downloads/%D0
 biatlon.txt	biatlon.md	biatlon	Владимир Сивицкий	https://lordbss.narod.ru/pmk122.html
 birzha.txt	birzha.md	birzha	Игорь Вершинин	https://lordbss.narod.ru/pmk172.html
 birzha-lordbss.txt	birzha-lordbss.md	birzha	Олег Хажинский	https://lordbss.narod.ru/pmk175.html
+bitva-3.txt	bitva-3.md	Bitva-3	Евгений Темежников	http://arbinada.ddns.net/pmk-files/magazines/%D0%A2%D0%B5%D1%85%D0%BD%D0%B8%D0%BA%D0%B0%20%D0%BC%D0%BE%D0%BB%D0%BE%D0%B4%D0%B5%D0%B6%D0%B8%201985-1988%20%D0%9F%D0%9C%D0%9A.zip
 bitva-4.txt	bitva-4.md	bitva-4	Евгений Век	https://lordbss.narod.ru/pmk44.html
+bitva-kei-1988.txt	bitva-kei-1988.md	Bitva: KEI Variant	Вячеслав Алексеев	http://arbinada.ddns.net/pmk-files/magazines/%D0%A2%D0%B5%D1%85%D0%BD%D0%B8%D0%BA%D0%B0%20%D0%BC%D0%BE%D0%BB%D0%BE%D0%B4%D0%B5%D0%B6%D0%B8%201985-1988%20%D0%9F%D0%9C%D0%9A.zip
+bitva-pshennik.txt	bitva-pshennik.md	Bitva: Pshennik Variant	Юрий Пшенник	http://arbinada.ddns.net/pmk-files/magazines/%D0%A2%D0%B5%D1%85%D0%BD%D0%B8%D0%BA%D0%B0%20%D0%BC%D0%BE%D0%BB%D0%BE%D0%B4%D0%B5%D0%B6%D0%B8%201985-1988%20%D0%9F%D0%9C%D0%9A.zip
 black-lord.txt	black-lord.md	Black Lord	Евгений Век	https://lordbss.narod.ru/pmk67.html
 block-out.txt	block-out.md	Block Out	С. Андрианов	https://lordbss.narod.ru/pmk127.html
 blokada.txt	blokada.md	blokada	Александер Крючков	https://lordbss.narod.ru/pmk135.html
@@ -37,7 +40,10 @@ chellendzher.txt	chellendzher.md	chellendzher	Андрей Ивушкин	https:
 chronos.txt	chronos.md	Chronos	Сергей Чурсанов	https://lordbss.narod.ru/pmk137.html
 chuzhie.txt	chuzhie.md	chuzhie	Сергей Устюгов	https://lordbss.narod.ru/pmk18.html
 chyornyy-yashchik.txt	chyornyy-yashchik.md	chyornyy yashchik	Михаил Лялин	https://lordbss.narod.ru/pmk152.html
+combat-maneuver-turn.txt	combat-maneuver-turn.md	Combat Maneuvering: Unsteady Turn	В. Довбня, В. Теряев	http://arbinada.ddns.net/pmk-files/magazines/%D0%90%D0%B2%D0%B8%D0%B0%D1%86%D0%B8%D1%8F%20%D0%B8%20%D0%BA%D0%BE%D1%81%D0%BC%D0%BE%D0%BD%D0%B0%D0%B2%D1%82%D0%B8%D0%BA%D0%B0%201987%20%D0%9F%D0%9C%D0%9A.zip
+combat-maneuver-vertical.txt	combat-maneuver-vertical.md	Combat Maneuvering: Vertical Flight	В. Довбня, В. Теряев	http://arbinada.ddns.net/pmk-files/magazines/%D0%90%D0%B2%D0%B8%D0%B0%D1%86%D0%B8%D1%8F%20%D0%B8%20%D0%BA%D0%BE%D1%81%D0%BC%D0%BE%D0%BD%D0%B0%D0%B2%D1%82%D0%B8%D0%BA%D0%B0%201987%20%D0%9F%D0%9C%D0%9A.zip
 cooperative-cafe.txt	cooperative-cafe.md	Cooperative Cafe	illi4	https://habr.com/ru/articles/125484/
+correspondence-chess.txt	correspondence-chess.md	Correspondence Chess	Николай Авдеев	http://arbinada.ddns.net/pmk-files/magazines/%D0%A2%D0%B5%D1%85%D0%BD%D0%B8%D0%BA%D0%B0%20%D0%BC%D0%BE%D0%BB%D0%BE%D0%B4%D0%B5%D0%B6%D0%B8%201985-1988%20%D0%9F%D0%9C%D0%9A.zip
 cowboy.txt	cowboy.md	Cowboy	Евгений Век	https://lordbss.narod.ru/pmk37.html
 dispetcher.txt	dispetcher.md	dispetcher	П. Аронович	https://lordbss.narod.ru/pmk201.html
 dispetcher-2.txt	dispetcher-2.md	dispetcher-2	Александр Михолап	https://lordbss.narod.ru/pmk202.html
@@ -140,7 +146,7 @@ morskoy-boy.txt	morskoy-boy.md	morskoy boy		https://sergeanvarov.github.io/russi
 morskoy-boy-lordbss.txt	morskoy-boy-lordbss.md	morskoy boy	Сергей Кузнецов, Виктор Распопов	https://lordbss.narod.ru/pmk235.html
 morskoy-boy-xvadim.txt	morskoy-boy-xvadim.md	morskoy boy	Г. Горовой; Android conversion by А. Лаврик	https://github.com/xvadim/pmk61-programms/blob/master/naval_battle.pmk
 moto.txt	moto.md	moto	Сергей Устюгов	https://lordbss.narod.ru/pmk98.html
-mustang-8x8.txt	mustang-8x8.md	Mustang 8x8	illi4	https://habr.com/ru/articles/125484/
+mustang-8x8.txt	mustang-8x8.md	Mustang 8x8	Н. Ромашов	http://arbinada.ddns.net/pmk-files/magazines/%D0%A2%D0%B5%D1%85%D0%BD%D0%B8%D0%BA%D0%B0%20%D0%BC%D0%BE%D0%BB%D0%BE%D0%B4%D0%B5%D0%B6%D0%B8%201985-1988%20%D0%9F%D0%9C%D0%9A.zip
 myatezhnik.txt	myatezhnik.md	myatezhnik	Сергей Шинкевич	https://lordbss.narod.ru/pmk238.html
 myortvaya-zona-i.txt	myortvaya-zona-i.md	myortvaya zona-I	Сергей Устюгов	https://lordbss.narod.ru/pmk61.html
 myortvaya-zona-ii.txt	myortvaya-zona-ii.md	myortvaya zona-II	Сергей Устюгов	https://lordbss.narod.ru/pmk62.html
@@ -222,7 +228,7 @@ minesweeper.txt	minesweeper.md	Minesweeper	Олег Булычёв	https://lordb
 sapyor-9x9.txt	sapyor-9x9.md	sapyor 9x9		https://sergeanvarov.github.io/russian/mk61/games/%D1%81%D0%B0%D0%BF%D1%91%D1%80%209x9/%D1%81%D0%B0%D0%BF%D1%91%D1%80%209x9.html
 sex-mission.txt	sex-mission.md	Sex-Mission	Евгений Век	https://lordbss.narod.ru/pmk77.html
 shakhmaty.txt	shakhmaty.md	shakhmaty	Станислав Чегодаев	https://lordbss.narod.ru/pmk247.html
-shakhmaty-mat-ladyoy.txt	shakhmaty-mat-ladyoy.md	shakhmaty. mat ladyoy		https://sergeanvarov.github.io/russian/mk61/games/%D1%88%D0%B0%D1%85%D0%BC%D0%B0%D1%82%D1%8B/%D0%BC%D0%B0%D1%82%20%D0%BB%D0%B0%D0%B4%D1%8C%D1%91%D0%B9/%D0%BC%D0%B0%D1%82%20%D0%BB%D0%B0%D0%B4%D1%8C%D1%91%D0%B9.html
+shakhmaty-mat-ladyoy.txt	shakhmaty-mat-ladyoy.md	shakhmaty. mat ladyoy	С. Белонос	https://sergeanvarov.github.io/russian/mk61/games/%D1%88%D0%B0%D1%85%D0%BC%D0%B0%D1%82%D1%8B/%D0%BC%D0%B0%D1%82%20%D0%BB%D0%B0%D0%B4%D1%8C%D1%91%D0%B9/%D0%BC%D0%B0%D1%82%20%D0%BB%D0%B0%D0%B4%D1%8C%D1%91%D0%B9.html
 shashki-13-new.txt	shashki-13-new.md	shashki-13-New	А. Н. Гришин	https://lordbss.narod.ru/pmk248.html
 sherif.txt	sherif.md	sherif	автор неизвестен	https://lordbss.narod.ru/pmk24.html
 shlyukha.txt	shlyukha.md	shlyukha	А. Беликов	https://lordbss.narod.ru/pmk179.html
@@ -295,6 +301,7 @@ virus-lordbss.txt	virus-lordbss.md	virus	Владимир Трофимчук	htt
 vodnaya-zmeya.txt	vodnaya-zmeya.md	vodnaya zmeya	Сергей Шинкевич	https://lordbss.narod.ru/pmk237.html
 volki-i-kozlik-9x9.txt	volki-i-kozlik-9x9.md	volki i kozlik 9x9	Дмитрий Кайков, Борис Греков, KEI; Android conversion by А. Лаврик	https://github.com/xvadim/pmk61-programms/blob/master/wolves_and_goat_9x9.zip
 volki-i-kozlik-8x8.txt	volki-i-kozlik-8x8.md	volki i kozlik 8x8	Дмитрий Кайков, Михаил П. (MK-61 patch)	https://epizodsspace.airbase.ru/bibl/tehnika_-_molodyoji/1986/8/44-47.html
+white-starts-and-loses.txt	white-starts-and-loses.md	White Starts... and Loses	Станислав Чегодаев	http://arbinada.ddns.net/pmk-files/magazines/%D0%A2%D0%B5%D1%85%D0%BD%D0%B8%D0%BA%D0%B0%20%D0%BC%D0%BE%D0%BB%D0%BE%D0%B4%D0%B5%D0%B6%D0%B8%201985-1988%20%D0%9F%D0%9C%D0%9A.zip
 volvo.txt	volvo.md	volvo	Евгений Век	https://lordbss.narod.ru/pmk88.html
 vorishka-video.txt	vorishka-video.md	vorishka-video	Владимир Трофимчук	https://lordbss.narod.ru/pmk162.html
 vozdushnyy-boy.txt	vozdushnyy-boy.md	vozdushnyy boy	М. Семёнов	https://lordbss.narod.ru/pmk214.html
