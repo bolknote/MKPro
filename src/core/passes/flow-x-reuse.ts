@@ -1,6 +1,7 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import {
+  analyzeRecallRemoval,
   cellsPerOp,
   computeX2RegisterStates,
   computeX2ValueStates,
@@ -9,17 +10,7 @@ import {
   knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
   plainPreservesXValue,
-  recallAlreadyInXDecimalMemory,
-  recallAlreadyInXMemoryValue,
-  recallAlreadyInXPreloadedDecimal,
-  recallAlreadySyncedInX2,
-  recallAlreadySyncedInX2DecimalMemory,
-  recallAlreadySyncedInX2MemoryValue,
-  recallAlreadySyncedInX2PreloadedDecimal,
-  recallAlreadySyncedInX2Value,
   removableRecallValueRegister,
-  removingRecallCanExposeStackLift,
-  removingRecallCanExposeX2Restore,
   storedCurrentXValueRegister,
   type IrPass,
   type IrPassFn,
@@ -50,20 +41,11 @@ const run: IrPassFn = (ops) => {
     const op = ops[index]!;
     const recallRegister = removableRecallValueRegister(op);
     if (recallRegister === undefined) continue;
-    if (removingRecallCanExposeStackLift(ops, index)) continue;
-    const redundantSyncRegister =
-      recallAlreadySyncedInX2(op, x2States[index]) ??
-      recallAlreadySyncedInX2Value(op, x2ValueStates[index]);
-    const redundantSyncValue =
-      (recallAlreadySyncedInX2MemoryValue(op, x2ValueStates[index]) ??
-        recallAlreadySyncedInX2DecimalMemory(op, x2ValueStates[index]) ??
-        recallAlreadySyncedInX2PreloadedDecimal(op, x2ValueStates[index])) !== undefined;
-    if (removingRecallCanExposeX2Restore(ops, index, { redundantSyncRegister, redundantSyncValue })) continue;
+    const removal = analyzeRecallRemoval(ops, index, x2States[index], x2ValueStates[index]);
+    if (removal?.removable !== true) continue;
     const alreadyInX =
       inStates[index]?.has(recallRegister) === true ||
-      recallAlreadyInXMemoryValue(op, x2ValueStates[index]) === recallRegister ||
-      recallAlreadyInXDecimalMemory(op, x2ValueStates[index]) === recallRegister ||
-      recallAlreadyInXPreloadedDecimal(op, x2ValueStates[index]) === recallRegister;
+      removal.valueProof?.inX === true;
     if (alreadyInX) remove.add(index);
   }
 

@@ -1,14 +1,9 @@
 import type { IrOp } from "../types.ts";
 import {
+  analyzeRecallRemoval,
   computeX2RegisterStates,
   computeX2ValueStates,
-  recallAlreadySyncedInX2,
-  recallAlreadySyncedInX2MemoryValue,
-  recallAlreadySyncedInX2PreloadedDecimal,
-  recallAlreadySyncedInX2Value,
   removableRecallValueRegister,
-  removingRecallCanExposeStackLift,
-  removingRecallCanExposeX2Restore,
   storedCurrentXValueRegister,
   type IrPass,
   type IrPassFn,
@@ -25,20 +20,14 @@ const run: IrPassFn = (ops) => {
     const next = ops[i + 1];
     const storedRegister = storedCurrentXValueRegister(current);
     const recalledRegister = next === undefined ? undefined : removableRecallValueRegister(next);
-    const redundantSyncRegister = next === undefined
+    const removal = next === undefined
       ? undefined
-      : recallAlreadySyncedInX2(next, x2States[i + 1]) ??
-        recallAlreadySyncedInX2Value(next, x2ValueStates[i + 1]);
-    const redundantSyncValue = next === undefined
-      ? false
-      : (recallAlreadySyncedInX2MemoryValue(next, x2ValueStates[i + 1]) ??
-        recallAlreadySyncedInX2PreloadedDecimal(next, x2ValueStates[i + 1])) !== undefined;
+      : analyzeRecallRemoval(ops, i + 1, x2States[i + 1], x2ValueStates[i + 1]);
     if (
       storedRegister !== undefined &&
       recalledRegister !== undefined &&
       storedRegister === recalledRegister &&
-      !removingRecallCanExposeStackLift(ops, i + 1) &&
-      !removingRecallCanExposeX2Restore(ops, i + 1, { redundantSyncRegister, redundantSyncValue })
+      removal?.removable === true
     ) {
       result.push(current);
       applied += 1;

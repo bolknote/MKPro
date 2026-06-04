@@ -31,11 +31,13 @@ import { x2HiddenTempRestore } from "../../src/core/passes/x2-hidden-temp-restor
 import { x2LiteralRestore } from "../../src/core/passes/x2-literal-restore.ts";
 import { x2NoopRestore } from "../../src/core/passes/x2-noop-restore.ts";
 import {
+  analyzeRecallRemoval,
   analyzeX2StackEffect,
   computeX2ImmediateSyncStates,
   computeX2RegisterStates,
   computeX2ValueStates,
   parseX2ShapeFact,
+  recallValueProof,
   x2ShapeDataModelForFact,
   x2ShapeSetsHaveSameDotSafeDecimal,
   x2ShapeSetSafety,
@@ -610,6 +612,67 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[1]?.x2Shape)).toEqual([
       "hex:8.70Е2-6С:mantissa",
     ]);
+  });
+
+  it("x2 value dataflow keeps closed super sign-change shape-only", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const FA"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[2]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual([]);
+    expect(x2ShapeStateText(states[2]?.xShape)).toEqual(["super:-FA"]);
+    expect(x2ShapeStateText(states[2]?.x2Shape)).toEqual(["super:-FA"]);
+  });
+
+  it("x2 value dataflow keeps closed hex sign-change shape-only", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 8.70Е2-6С"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[2]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual([]);
+    expect(x2ShapeStateText(states[2]?.xShape)).toEqual(["hex:-8.70Е2-6С:mantissa"]);
+    expect(x2ShapeStateText(states[2]?.x2Shape)).toEqual(["hex:-8.70Е2-6С:mantissa"]);
+  });
+
+  it("x2 value dataflow recalls stored super shape facts", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const FA"),
+      store("1"),
+      plain(0x0d, "Cx"),
+      recall("1"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["reg:1"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["reg:1"]);
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["super:FA"]);
+    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["super:FA"]);
+  });
+
+  it("x2 value dataflow keeps recalled stored hex sign-change shape-only", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 8.70Е2-6С"),
+      store("1"),
+      plain(0x0d, "Cx"),
+      recall("1"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[5]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual([]);
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex:-8.70Е2-6С:mantissa"]);
+    expect(x2ShapeStateText(states[5]?.x2Shape)).toEqual(["hex:-8.70Е2-6С:mantissa"]);
   });
 
   it("x2 shape algebra classifies decimal, exponent, hex, and super facts", () => {
@@ -1399,6 +1462,49 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["expr:1", "reg:1"]);
     expect(x2ValueStateText(states[5]?.x)).toEqual(["expr:1", "reg:1"]);
     expect(x2ValueStateText(states[5]?.x2)).toEqual(["expr:1", "reg:1"]);
+  });
+
+  it("recall value proof treats stored expr facts as value syncs", () => {
+    const program: IrOp[] = [
+      plain(0x35, "К {x}"),
+      plain(0x0e, "В↑"),
+      store("1"),
+      plain(0x54, "К НОП"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(recallValueProof(recall("1"), states[4])).toEqual({
+      register: "1",
+      inX: true,
+      x2SyncRegister: "1",
+      x2SyncValue: true,
+    });
+  });
+
+  it("recall removal analysis combines stack-lift and X2 value-sync safety", () => {
+    const program: IrOp[] = [
+      plain(0x35, "К {x}"),
+      plain(0x0e, "В↑"),
+      store("1"),
+      plain(0x54, "К НОП"),
+      recall("1"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const x2RegisterStates = computeX2RegisterStates(program);
+    const x2ValueStates = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(analyzeRecallRemoval(program, 4, x2RegisterStates[4], x2ValueStates[4])).toMatchObject({
+      register: "1",
+      redundantSyncRegister: "1",
+      redundantSyncValue: true,
+      x2SyncRedundant: true,
+      exposesStackLift: false,
+      exposesX2Restore: false,
+      removable: true,
+    });
   });
 
   it("x2 value dataflow recalls concrete decimal facts through proved indirect memory", () => {

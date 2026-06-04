@@ -2,6 +2,7 @@ import type { IrOp, RegisterName } from "../types.ts";
 import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import { computeLiveness } from "./liveness-analysis.ts";
 import {
+  analyzeRecallRemoval,
   cellsPerOp,
   computeX2DotRestoreGapStates,
   computeX2ImmediateSyncStates,
@@ -11,12 +12,7 @@ import {
   isDisplayFocusSensitive,
   knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
-  recallAlreadySyncedInX2DecimalMemory,
-  recallAlreadySyncedInX2MemoryValue,
   removableRecallValueRegister,
-  removingRecallCanExposeStackLift,
-  removingRecallCanExposeX2Restore,
-  x2ValueSetHasRegister,
   type IrPass,
   type IrPassFn,
 } from "./helpers.ts";
@@ -39,19 +35,10 @@ const run: IrPassFn = (ops) => {
     if (isDisplayFocusSensitive(op)) return op;
     if (findDeadScratchStore(ops, index, register, labelEntries) === undefined) return op;
     if (liveness.liveOut[index]?.has(register) === true) return op;
-    if (
-      x2States[index]?.has(register) !== true &&
-      !x2ValueSetHasRegister(x2ValueStates[index]?.x2, register) &&
-      recallAlreadySyncedInX2MemoryValue(op, x2ValueStates[index]) === undefined &&
-      recallAlreadySyncedInX2DecimalMemory(op, x2ValueStates[index]) === undefined
-    ) return op;
+    const removal = analyzeRecallRemoval(ops, index, x2States[index], x2ValueStates[index]);
+    if (removal?.x2SyncRedundant !== true) return op;
     if (dotSafeStates[index] !== true && immediateSyncStates[index] !== true) return op;
-    if (removingRecallCanExposeStackLift(ops, index)) return op;
-    if (
-      removingRecallCanExposeX2Restore(ops, index, {
-        redundantSyncRegister: register,
-      })
-    ) return op;
+    if (removal?.removable !== true) return op;
 
     applied += 1;
     return dotRestoreOp(register, op);

@@ -1,21 +1,12 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import {
+  analyzeRecallRemoval,
   cellsPerOp,
   computeX2RegisterStates,
   computeX2ValueStates,
   knownIndirectFlowTarget,
   plainPreservesXValue,
-  recallAlreadyInXDecimalMemory,
-  recallAlreadyInXMemoryValue,
-  recallAlreadyInXPreloadedDecimal,
-  recallAlreadySyncedInX2,
-  recallAlreadySyncedInX2DecimalMemory,
-  recallAlreadySyncedInX2MemoryValue,
-  recallAlreadySyncedInX2PreloadedDecimal,
-  recallAlreadySyncedInX2Value,
   removableRecallValueRegister,
-  removingRecallCanExposeStackLift,
-  removingRecallCanExposeX2Restore,
   storedCurrentXValueRegister,
   type IrPass,
   type IrPassFn,
@@ -58,43 +49,35 @@ const run: IrPassFn = (ops) => {
   const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
   const labelEntries = labelEntryIndexes(ops);
   let xHolds: RegisterName | undefined;
+  let canTrustValueX = true;
   for (let i = 0; i < ops.length; i += 1) {
     const op = ops[i]!;
     if (op.kind === "label") {
-      if (labelEntries.has(i)) xHolds = undefined;
+      if (labelEntries.has(i)) {
+        xHolds = undefined;
+        canTrustValueX = false;
+      }
       continue;
     }
     const storedRegister = storedCurrentXValueRegister(op);
     if (storedRegister !== undefined) {
       xHolds = storedRegister;
+      canTrustValueX = true;
       continue;
     }
     const recallRegister = removableRecallValueRegister(op);
-    const xAlreadyHasRecallValue =
-      recallAlreadyInXMemoryValue(op, x2ValueStates[i]) === recallRegister ||
-      recallAlreadyInXDecimalMemory(op, x2ValueStates[i]) === recallRegister ||
-      recallAlreadyInXPreloadedDecimal(op, x2ValueStates[i]) === recallRegister;
-    const x2AlreadyHasRecallValue =
-      recallAlreadySyncedInX2(op, x2States[i]) ??
-      recallAlreadySyncedInX2Value(op, x2ValueStates[i]);
-    const x2AlreadyHasRecallMemoryValue =
-      recallAlreadySyncedInX2MemoryValue(op, x2ValueStates[i]) ??
-      recallAlreadySyncedInX2DecimalMemory(op, x2ValueStates[i]) ??
-      recallAlreadySyncedInX2PreloadedDecimal(op, x2ValueStates[i]);
+    const removal = analyzeRecallRemoval(ops, i, x2States[i], x2ValueStates[i]);
     if (
       recallRegister !== undefined &&
-      (xHolds === recallRegister || xAlreadyHasRecallValue) &&
-      !removingRecallCanExposeStackLift(ops, i) &&
-      !removingRecallCanExposeX2Restore(ops, i, {
-        redundantSyncRegister: x2AlreadyHasRecallValue,
-        redundantSyncValue: x2AlreadyHasRecallMemoryValue !== undefined,
-      })
+      (xHolds === recallRegister || (canTrustValueX && removal?.valueProof?.inX === true)) &&
+      removal?.removable === true
     ) {
       removed.add(i);
       continue;
     }
     if (recallRegister !== undefined) {
       xHolds = recallRegister;
+      canTrustValueX = true;
       continue;
     }
     if (
@@ -111,9 +94,13 @@ const run: IrPassFn = (ops) => {
       // Stops let the user resume; X (and possibly Y/Z/T) may have been
       // touched interactively. Drop the X-reuse assumption across stops.
       xHolds = undefined;
+      canTrustValueX = false;
       continue;
     }
-    if (clobbersX(op)) xHolds = undefined;
+    if (clobbersX(op)) {
+      xHolds = undefined;
+      canTrustValueX = true;
+    }
   }
   if (removed.size === 0) {
     return { ops: [...ops], applied: 0, optimizations: [] };

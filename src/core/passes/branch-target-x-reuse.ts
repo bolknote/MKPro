@@ -1,16 +1,11 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import {
+  analyzeRecallRemoval,
   computeX2RegisterStates,
   computeX2ValueStates,
   emptyResult,
   hasRewriteBarrier,
-  recallAlreadySyncedInX2,
-  recallAlreadySyncedInX2MemoryValue,
-  recallAlreadySyncedInX2PreloadedDecimal,
-  recallAlreadySyncedInX2Value,
   removableRecallValueRegister,
-  removingRecallCanExposeStackLift,
-  removingRecallCanExposeX2Restore,
   type IrPass,
   type IrPassFn,
 } from "./helpers.ts";
@@ -37,17 +32,9 @@ const run: IrPassFn = (ops) => {
     if (targetIndex === undefined || remove.has(targetIndex)) continue;
     const target = ops[targetIndex]!;
     if (removableRecallValueRegister(target) !== register) continue;
-    if (removingRecallCanExposeStackLift(ops, targetIndex)) continue;
-    if (
-      removingRecallCanExposeX2Restore(ops, targetIndex, {
-        redundantSyncRegister:
-          recallAlreadySyncedInX2(target, x2States[targetIndex]) ??
-          recallAlreadySyncedInX2Value(target, x2ValueStates[targetIndex]),
-        redundantSyncValue:
-          (recallAlreadySyncedInX2MemoryValue(target, x2ValueStates[targetIndex]) ??
-            recallAlreadySyncedInX2PreloadedDecimal(target, x2ValueStates[targetIndex])) !== undefined,
-      })
-    ) continue;
+    if (analyzeRecallRemoval(ops, targetIndex, x2States[targetIndex], x2ValueStates[targetIndex])?.removable !== true) {
+      continue;
+    }
 
     remove.add(targetIndex);
   }
