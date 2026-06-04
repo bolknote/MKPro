@@ -11,6 +11,7 @@ import {
   isDisplayFocusSensitive,
   knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
+  recallAlreadySyncedInX2DecimalMemory,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
   removingRecallCanExposeX2Restore,
@@ -23,7 +24,7 @@ const DOT = 0x0a;
 
 const run: IrPassFn = (ops) => {
   const x2States = computeX2RegisterStates(ops);
-  const x2ValueStates = computeX2ValueStates(ops);
+  const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
   const immediateSyncStates = computeX2ImmediateSyncStates(ops);
   const liveness = computeLiveness(ops);
@@ -39,7 +40,8 @@ const run: IrPassFn = (ops) => {
     if (liveness.liveOut[index]?.has(register) === true) return op;
     if (
       x2States[index]?.has(register) !== true &&
-      !x2ValueSetHasRegister(x2ValueStates[index]?.x2, register)
+      !x2ValueSetHasRegister(x2ValueStates[index]?.x2, register) &&
+      recallAlreadySyncedInX2DecimalMemory(op, x2ValueStates[index]) === undefined
     ) return op;
     if (dotSafeStates[index] !== true && immediateSyncStates[index] !== true) return op;
     if (removingRecallCanExposeStackLift(ops, index)) return op;

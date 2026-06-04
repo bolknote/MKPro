@@ -220,7 +220,7 @@ function dotRestoreOp(value: string, source: IrOp): IrOp {
 }
 
 const run: IrPassFn = (ops) => {
-  const x2ValueStates = computeX2ValueStates(ops);
+  const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
   const immediateSyncStates = computeX2ImmediateSyncStates(ops);
   const result: IrOp[] = [];

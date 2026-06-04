@@ -469,6 +469,18 @@ export function recallAlreadySyncedInX2Value(
   return register !== undefined && x2ValueSetHasRegister(state?.x2, register) ? register : undefined;
 }
 
+export function recallAlreadySyncedInX2DecimalMemory(
+  op: IrOp,
+  state: X2ValueDataflowState | undefined,
+): RegisterName | undefined {
+  const register = removableRecallValueRegister(op);
+  if (register === undefined || state === undefined) return undefined;
+  for (const fact of state.memory?.[register] ?? []) {
+    if (isConcreteDecimalX2ValueFact(fact) && state.x2.has(fact)) return register;
+  }
+  return undefined;
+}
+
 function emptyRegisterDataflowState(): RegisterDataflowState {
   return { x: new Set(), x2: new Set() };
 }

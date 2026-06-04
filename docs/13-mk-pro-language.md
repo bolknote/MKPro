@@ -1290,6 +1290,8 @@ The pipeline currently contains:
   alias. This makes a recalled decimal register dot-safe for the same rewrites
   as an inline literal, while unknown indirect stores clear the remembered
   facts and hex/non-normal preloads remain unsafe until separately proved.
+  Repeated literal restoration may also consume those recalled decimal facts
+  instead of requiring the previous occurrence to be inline source digits.
 - **x2-noop-restore** — removes `.` when the value proof shows that `X` already
   contains the same value as hidden `X2` and the separate restore-gap proof says
   the dot is in a safe X2 context. It also accepts the documented no-op form
@@ -1328,7 +1330,9 @@ The pipeline currently contains:
   dataflow or the stricter X2 value proof shows that hidden X2 already contains
   the same register value. The value proof matters after a closed-context `.`
   restore: visible `X` was restored, hidden X2 kept the same `reg:r` fact, and
-  a later scratch alias can still be recovered through another `.`. A separate
+  a later scratch alias can still be recovered through another `.`. It can also
+  use register value-memory when X2 already contains the same proved decimal
+  fact as the scratch register, even if there is no live `reg:r` alias. A separate
   `.` restore-gap proof must have seen two safe X2-preserving executable steps
   after the last X2 sync, and the normal stack-lift/X2-context guards prove that
   the recall's stack shift and previous-command class are not observable. The

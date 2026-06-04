@@ -1355,6 +1355,26 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
 
+  it("x2-hidden-temp-restore uses decimal register memory without an X2 register alias", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      store("1"),
+      plain(0x0d, "Cx"),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      recall("1"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "1")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
   it("x2-literal-restore replaces a repeated normalized digit run with dot", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -1373,6 +1393,31 @@ describe("ir passes on synthetic programs", () => {
       plain(0x02, "2"),
       plain(0x20, "Fπ"),
       plain(0x20, "Fπ"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore replaces a repeated literal after a recalled decimal register", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("1"),
+      plain(0x0d, "Cx"),
+      recall("1"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("1"),
+      plain(0x0d, "Cx"),
+      recall("1"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
       halt(),
     ]);
@@ -2131,6 +2176,29 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0d, "Cx"),
       recall("1"),
       plain(0x0a, "."),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      store("1"),
+      plain(0x0d, "Cx"),
+      recall("1"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("x2-dead-restore-before-overwrite removes sign restore after a recalled decimal register", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      store("1"),
+      plain(0x0d, "Cx"),
+      recall("1"),
+      plain(0x0b, "/-/"),
       plain(0x0d, "Cx"),
       halt(),
     ];
