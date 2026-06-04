@@ -1255,22 +1255,26 @@ The pipeline currently contains:
   when their memory target is dead, because the selector side effect is
   observable.
 - **last-x-reuse** — drops `П->X r` when the IR proves X already holds the
-  value last stored to `r` and no intervening op (С/П, jump, ALU, …) clobbers
-  X. С/П acts as a barrier because the user may overwrite X during pause;
-  context-sensitive `.`/`ВП` restoration also blocks the rewrite when the
-  recall is the last X2 sync. If X2-register dataflow proves the same register
-  is already synced and the immediate previous-command context is preserved,
-  the recall can be removed. The same proof accepts stable indirect recalls
-  (`К П->X R7..Re`) when lowering has proved the actual memory target; indirect
-  recalls through `R0..R6` are kept because removing them would skip selector
-  mutation. Downstream binary/stack-consuming ops that can still observe the
-  recall's stack lift through direct call returns also block the rewrite.
+  value last stored to `r` by a direct store or by a proved indirect
+  `К X->П`, and no intervening op (С/П, jump, ALU, …) clobbers X. Mutating
+  `R0..R6` indirect stores may seed this fact because the store itself is kept;
+  mutating indirect recalls are still kept because removing them would skip
+  selector mutation. С/П acts as a barrier because the user may overwrite X
+  during pause; context-sensitive `.`/`ВП` restoration also blocks the rewrite
+  when the recall is the last X2 sync. If X2-register dataflow proves the same
+  register is already synced and the immediate previous-command context is
+  preserved, the recall can be removed. The same proof accepts stable indirect
+  recalls (`К П->X R7..Re`) when lowering has proved the actual memory target.
+  Downstream binary/stack-consuming ops that can still observe the recall's
+  stack lift through direct call returns also block the rewrite.
 - **flow-x-reuse** — runs forward CFG dataflow for values already in X and
   drops a direct or stable-indirect proved recall when every direct predecessor
-  reaches that point with the same register value still in X; absolute numeric
-  and indirect flow targets are left untouched, and the same X2-register-aware
-  `.`/`ВП` sync guard (stopped by direct `В/О` returns) plus downstream
-  stack-consumer guards are applied before removing a recall.
+  reaches that point with the same register value still in X. Proved indirect
+  flow targets (`indirect-target=NN`) participate in the CFG; stable selectors
+  preserve the X fact, while mutating selectors conservatively clear it. Unknown
+  indirect flow and absolute numeric direct targets are left untouched. The same
+  X2-register-aware `.`/`ВП` sync guard (stopped by direct `В/О` returns) plus
+  downstream stack-consumer guards are applied before removing a recall.
 - **branch-target-x-reuse** — drops the first `П->X r` inside a unique branch
   target when the incoming condition just tested the same direct or
   stable-indirect recalled value, so the branch path already carries that value

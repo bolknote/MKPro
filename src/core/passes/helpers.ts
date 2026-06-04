@@ -116,11 +116,28 @@ export function knownIndirectMemoryTarget(op: IrOp): RegisterName | undefined {
   return match[1]!.toLowerCase() as RegisterName;
 }
 
+export function knownIndirectFlowTarget(op: IrOp): number | undefined {
+  if (op.kind !== "indirect-jump" && op.kind !== "indirect-call" && op.kind !== "indirect-cjump") {
+    return undefined;
+  }
+  const match = /\bindirect-target=(\d+)\b/u.exec(op.meta.comment ?? "");
+  if (!match) return undefined;
+  const target = Number(match[1]);
+  return Number.isInteger(target) && target >= 0 && target <= 104 ? target : undefined;
+}
+
 export function removableRecallValueRegister(op: IrOp): RegisterName | undefined {
   if (hasRewriteBarrier(op)) return undefined;
   if (op.kind === "recall") return op.register;
   if (op.kind !== "indirect-recall") return undefined;
   if (!isStableIndirectSelector(op.register)) return undefined;
+  return knownIndirectMemoryTarget(op);
+}
+
+export function storedCurrentXValueRegister(op: IrOp): RegisterName | undefined {
+  if (hasRewriteBarrier(op)) return undefined;
+  if (op.kind === "store") return op.register;
+  if (op.kind !== "indirect-store") return undefined;
   return knownIndirectMemoryTarget(op);
 }
 

@@ -1,11 +1,11 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import {
   computeX2RegisterStates,
-  hasRewriteBarrier,
   recallAlreadySyncedInX2,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
   removingRecallCanExposeX2Restore,
+  storedCurrentXValueRegister,
   type IrPass,
   type IrPassFn,
   type PassResult,
@@ -50,9 +50,9 @@ const run: IrPassFn = (ops) => {
       xHolds = undefined;
       continue;
     }
-    if (op.kind === "store") {
-      if (!hasRewriteBarrier(op)) xHolds = op.register;
-      else xHolds = undefined;
+    const storedRegister = storedCurrentXValueRegister(op);
+    if (storedRegister !== undefined) {
+      xHolds = storedRegister;
       continue;
     }
     const recallRegister = removableRecallValueRegister(op);

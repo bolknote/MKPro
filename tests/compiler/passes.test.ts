@@ -190,6 +190,15 @@ function indirectJump(register: RegisterName): IrOp {
   };
 }
 
+function knownTargetIndirectJump(register: RegisterName, target: number): IrOp {
+  return {
+    kind: "indirect-jump",
+    register,
+    opcode: 0x80 + REGISTER_INDEX[register],
+    meta: { mnemonic: `К БП ${register}`, comment: `indirect-target=${target}` },
+  };
+}
+
 function markedFractionalIndirectRecall(register: RegisterName, source = "pos"): IrOp {
   return {
     kind: "indirect-recall",
@@ -564,6 +573,48 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("last-x-reuse tracks X through a stable indirect store with a proved target", () => {
+    const program: IrOp[] = [
+      knownTargetIndirectStore("8", "5"),
+      recall("5"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      knownTargetIndirectStore("8", "5"),
+      halt(),
+    ]);
+  });
+
+  it("last-x-reuse tracks X through a mutating indirect store without dropping the store side effect", () => {
+    const program: IrOp[] = [
+      knownTargetIndirectStore("4", "5"),
+      recall("5"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      knownTargetIndirectStore("4", "5"),
+      halt(),
+    ]);
+  });
+
+  it("last-x-reuse keeps mutating indirect recalls after indirect stores", () => {
+    const program: IrOp[] = [
+      knownTargetIndirectStore("8", "5"),
+      knownTargetIndirectRecall("4", "5"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("last-x-reuse keeps predecrement indirect recall even when its target is proved", () => {
     const program: IrOp[] = [
       store("5"),
@@ -746,6 +797,51 @@ describe("ir passes on synthetic programs", () => {
     expect(result.applied).toBe(1);
     expect(result.optimizations[0]?.name).toBe("flow-x-reuse");
     expect(result.ops.filter((op) => op.kind === "recall" && op.register === "4")).toHaveLength(1);
+  });
+
+  it("flow-x-reuse follows proved stable indirect flow targets", () => {
+    const program: IrOp[] = [
+      recall("4"),
+      knownTargetIndirectJump("8", 3),
+      halt(),
+      label("tail"),
+      recall("4"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops.filter((op) => op.kind === "recall" && op.register === "4")).toHaveLength(1);
+  });
+
+  it("flow-x-reuse refuses unknown indirect flow targets", () => {
+    const program: IrOp[] = [
+      recall("4"),
+      indirectJump("8"),
+      halt(),
+      label("tail"),
+      recall("4"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("flow-x-reuse clears X facts across mutating proved indirect flow", () => {
+    const program: IrOp[] = [
+      recall("4"),
+      knownTargetIndirectJump("1", 3),
+      halt(),
+      label("tail"),
+      recall("4"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("flow-x-reuse drops stable indirect recall reached with its proved target already in X", () => {

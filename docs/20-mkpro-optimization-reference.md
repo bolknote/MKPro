@@ -606,12 +606,15 @@ Display rewrites are separated into strategy selection + body lowering.
 - `last-x-reuse` — avoids `P->X` when X already holds the needed value and the
   recall is not an X2-sync boundary for `.`/`ВП` before the next X2-affecting
   op, including direct `В/О` returns, and its stack lift cannot reach a
-  downstream stack consumer through direct call returns. The sync guard is
-  X2-register-aware: if dataflow proves X2 already contains the same register
-  value and the removed recall is not the immediate previous-command context
-  consumed by `.`/`ВП`, the recall can be removed as a redundant re-sync. The
-  same removable-recall proof covers stable indirect `К П->X R7..Re` with a
-  proved `indirect-memory-target`, but not mutating `R0..R6` selectors.
+  downstream stack consumer through direct call returns. The X-held-value proof
+  is seeded by direct stores and by proved indirect stores, including mutating
+  `R0..R6` indirect stores because the store and its selector side effect are
+  kept. The sync guard is X2-register-aware: if dataflow proves X2 already
+  contains the same register value and the removed recall is not the immediate
+  previous-command context consumed by `.`/`ВП`, the recall can be removed as a
+  redundant re-sync. The same removable-recall proof covers stable indirect
+  `К П->X R7..Re` with a proved `indirect-memory-target`, but not mutating
+  `R0..R6` selectors.
 - `pre-shift-stack-lift` — removes `В↑` immediately before any proved
   stack-shifting producer (`П->X`, `К П->X`, `F pi`, or another `В↑`) when the
   following command already supplies the old X in Y and the shared
@@ -702,7 +705,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 9. `pre-shift-stack-lift` — removes `В↑` immediately before direct/indirect `П->X`, `F pi`, or another stack-shifting producer when that following command already supplies the old X in Y, unless the deeper stack difference can reach a later consumer.
 10. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
 11. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.
-12. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes a direct `П->X r` or stable-indirect `К П->X R7..Re` with a proved memory target when every predecessor reaches that point with the same value still in X; it refuses absolute numeric and indirect flow targets and keeps recalls that provide the last X2 sync before `.`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct call returns.
+12. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes a direct `П->X r` or stable-indirect `К П->X R7..Re` with a proved memory target when every predecessor reaches that point with the same value still in X; proved indirect flow targets (`indirect-target=NN`) are included in the CFG, stable selectors preserve the X fact, mutating selectors clear it, and unknown indirect flow plus absolute numeric direct targets are still refused. Recalls that provide the last X2 sync before `.`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct call returns are kept.
 13. `branch-target-x-reuse` — removes the first direct or stable-indirect proved recall in a unique branch target when the source `cjump` tested the same recalled value and no fallthrough path can enter the target, unless the target recall is needed as a `.`/`ВП` X2-sync boundary before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct call returns.
     These recall-removal guards read the shared `OpcodeInfo.stackEffect`
     profile, so stack-preserving, shifting, Y-consuming, exposing, and barrier
@@ -713,7 +716,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 17. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and both the `.` restore gap and missing stack-lift observation are proven, allowing later DSE to remove now-unused scratch stores.
 18. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.
 19. `dead-store-elimination` — removes direct stores, plus stable-indirect stores with proved targets, whose target register is not live after the write and does not affect number-entry/input finalization or the previous-command context consumed by `ВП` while it restores X2; mutating indirect selectors are kept.
-20. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding `X->П`, preserving recalls that serve as the last X2 sync before `.`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or as a stack lift that can reach a downstream consumer through direct call returns.
+20. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding direct or proved indirect `X->П`, preserving recalls that serve as the last X2 sync before `.`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or as a stack lift that can reach a downstream consumer through direct call returns; mutating indirect stores can seed the X fact because the store remains, while mutating indirect recalls are not removed.
 21. `r0-fractional-sentinel` — drops redundant immediate `П->X 3`/`X->П 3`
     after fractional-R0 indirect access when `R0` liveness proves that the
     direct access only repeats the hardware-selected `R3`; it also removes

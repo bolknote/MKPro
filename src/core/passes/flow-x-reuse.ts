@@ -1,14 +1,17 @@
 import type { IrOp, RegisterName } from "../types.ts";
+import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import {
   cellsPerOp,
   computeX2RegisterStates,
   emptyResult,
   hasRewriteBarrier,
+  knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
   recallAlreadySyncedInX2,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
   removingRecallCanExposeX2Restore,
+  storedCurrentXValueRegister,
   type IrPass,
   type IrPassFn,
 } from "./helpers.ts";
@@ -21,7 +24,7 @@ interface Graph {
 
 const run: IrPassFn = (ops) => {
   if (ops.length === 0) return emptyResult(ops);
-  if (hasNumericFlowTarget(ops) || hasIndirectFlow(ops)) return emptyResult(ops);
+  if (hasNumericFlowTarget(ops) || hasUnknownIndirectFlow(ops)) return emptyResult(ops);
 
   const graph = buildGraph(ops);
   const inStates = computeXRegisterStates(ops, graph);
@@ -100,13 +103,12 @@ function transferXSet(input: XRegisterSet, op: IrOp): Set<RegisterName> {
     case "orphan-address":
       return new Set(input);
     case "store":
-      return addRegister(input, op.register);
-    case "recall":
-      return new Set([op.register]);
     case "indirect-store": {
-      const target = knownIndirectMemoryTarget(op);
+      const target = storedCurrentXValueRegister(op);
       return target === undefined ? new Set() : addRegister(input, target);
     }
+    case "recall":
+      return new Set([op.register]);
     case "indirect-recall": {
       const target = knownIndirectMemoryTarget(op);
       return target === undefined ? new Set() : new Set([target]);
@@ -115,11 +117,12 @@ function transferXSet(input: XRegisterSet, op: IrOp): Set<RegisterName> {
     case "stop":
     case "call":
     case "loop":
+    case "return":
+      return new Set();
     case "indirect-jump":
     case "indirect-call":
     case "indirect-cjump":
-    case "return":
-      return new Set();
+      return isStableIndirectSelector(op.register) ? new Set(input) : new Set();
   }
 }
 
@@ -154,7 +157,7 @@ function buildGraph(ops: readonly IrOp[]): Graph {
   for (let index = 0; index < ops.length; index += 1) {
     const op = ops[index]!;
     const next = index + 1;
-    if (op.kind === "call" && next < ops.length) callReturns.push(next);
+    if ((op.kind === "call" || op.kind === "indirect-call") && next < ops.length) callReturns.push(next);
   }
 
   for (let index = 0; index < ops.length; index += 1) {
@@ -193,12 +196,24 @@ function buildGraph(ops: readonly IrOp[]): Graph {
       case "call":
         jumpTo(op.target);
         break;
+      case "indirect-jump": {
+        const target = knownIndirectFlowTarget(op);
+        if (target !== undefined) jumpTo(target);
+        break;
+      }
+      case "indirect-call": {
+        const target = knownIndirectFlowTarget(op);
+        if (target !== undefined) jumpTo(target);
+        break;
+      }
+      case "indirect-cjump": {
+        const target = knownIndirectFlowTarget(op);
+        if (target !== undefined) jumpTo(target);
+        fallthrough();
+        break;
+      }
       case "return":
         successors[index]!.push(...callReturns);
-        break;
-      case "indirect-jump":
-      case "indirect-call":
-      case "indirect-cjump":
         break;
     }
   }
@@ -241,10 +256,11 @@ function hasNumericFlowTarget(ops: readonly IrOp[]): boolean {
   });
 }
 
-function hasIndirectFlow(ops: readonly IrOp[]): boolean {
+function hasUnknownIndirectFlow(ops: readonly IrOp[]): boolean {
   return ops.some((op) =>
-    op.kind === "indirect-jump" ||
-    op.kind === "indirect-call" ||
-    op.kind === "indirect-cjump"
+    (op.kind === "indirect-jump" ||
+      op.kind === "indirect-call" ||
+      op.kind === "indirect-cjump") &&
+    knownIndirectFlowTarget(op) === undefined
   );
 }

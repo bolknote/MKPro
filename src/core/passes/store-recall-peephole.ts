@@ -1,13 +1,11 @@
-import type { IrOp, RegisterName } from "../types.ts";
-import { isStableIndirectSelector } from "../indirect-addressing.ts";
+import type { IrOp } from "../types.ts";
 import {
   computeX2RegisterStates,
-  hasRewriteBarrier,
-  knownIndirectMemoryTarget,
   recallAlreadySyncedInX2,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
   removingRecallCanExposeX2Restore,
+  storedCurrentXValueRegister,
   type IrPass,
   type IrPassFn,
   type PassResult,
@@ -20,7 +18,7 @@ const run: IrPassFn = (ops) => {
   for (let i = 0; i < ops.length; i += 1) {
     const current = ops[i]!;
     const next = ops[i + 1];
-    const storedRegister = storedValueRegister(current);
+    const storedRegister = storedCurrentXValueRegister(current);
     const recalledRegister = next === undefined ? undefined : removableRecallValueRegister(next);
     const redundantSyncRegister = next === undefined
       ? undefined
@@ -29,7 +27,6 @@ const run: IrPassFn = (ops) => {
       storedRegister !== undefined &&
       recalledRegister !== undefined &&
       storedRegister === recalledRegister &&
-      !hasRewriteBarrier(current) &&
       !removingRecallCanExposeStackLift(ops, i + 1) &&
       !removingRecallCanExposeX2Restore(ops, i + 1, { redundantSyncRegister })
     ) {
@@ -55,14 +52,6 @@ const run: IrPassFn = (ops) => {
   };
   return passResult;
 };
-
-function storedValueRegister(op: IrOp): RegisterName | undefined {
-  if (hasRewriteBarrier(op)) return undefined;
-  if (op.kind === "store") return op.register;
-  if (op.kind !== "indirect-store") return undefined;
-  if (!isStableIndirectSelector(op.register)) return undefined;
-  return knownIndirectMemoryTarget(op);
-}
 
 export const storeRecallPeephole: IrPass = {
   name: "store-recall-peephole",
