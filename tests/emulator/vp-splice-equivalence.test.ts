@@ -268,7 +268,7 @@ describe("ВП exponent-entry splice collapse (vp-splice)", () => {
     const emptyCodes = emptyResult.items
       .filter((item): item is Extract<MachineItem, { opcode: number }> => "opcode" in item)
       .map((item) => item.opcode);
-    expect(emptyCodes).toEqual([0x05, VP, CLEAR_X, STOP]);
+    expect(emptyCodes).toEqual([0x05, CLEAR_X, STOP]);
     expect(display(emptyCodes)).toBe(display([0x05, VP, K1, K2, CLEAR_X, STOP]));
   });
 

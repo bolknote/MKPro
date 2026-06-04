@@ -26,6 +26,7 @@ import { tailBranchInversion } from "../../src/core/passes/tail-branch-inversion
 import { tailCallLowering } from "../../src/core/passes/tail-call.ts";
 import { vpSplice } from "../../src/core/passes/vp-splice.ts";
 import { vpX2Peephole } from "../../src/core/passes/vp-x2-peephole.ts";
+import { x2DeadRestoreBeforeOverwrite } from "../../src/core/passes/x2-dead-restore-before-overwrite.ts";
 import { x2HiddenTempRestore } from "../../src/core/passes/x2-hidden-temp-restore.ts";
 import { x2LiteralRestore } from "../../src/core/passes/x2-literal-restore.ts";
 import { x2NoopRestore } from "../../src/core/passes/x2-noop-restore.ts";
@@ -2017,6 +2018,73 @@ describe("ir passes on synthetic programs", () => {
 
     expect(result.applied).toBe(0);
     expect(result.ops).toEqual(program);
+  });
+
+  it("x2-dead-restore-before-overwrite removes decimal dot restores before hard X/X2 overwrite", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x35, "К {x}"),
+      plain(0x0a, "."),
+      plain(0x55, "К1"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x35, "К {x}"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("x2-dead-restore-before-overwrite keeps register-only dot restores before overwrite", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x20, "F pi"),
+      plain(0x0a, "."),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-dead-restore-before-overwrite removes dead sign and ВП restores before hard overwrite", () => {
+    const signProgram: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x35, "К {x}"),
+      plain(0x0b, "/-/"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const vpProgram: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x54, "КНОП"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+
+    expect(x2DeadRestoreBeforeOverwrite.run(signProgram, ctx).ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x35, "К {x}"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+    expect(x2DeadRestoreBeforeOverwrite.run(vpProgram, ctx).ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
   });
 
   it("x2-noop-restore removes dot after F* syncs a leading-zero literal", () => {

@@ -1305,6 +1305,16 @@ The pipeline currently contains:
   commands after X2-preserving gaps are only collapsed when the following
   command, possibly after free-standing empty ops, starts fresh number entry;
   otherwise their X2-to-X restore is observable.
+- **x2-dead-restore-before-overwrite** — removes a context-sensitive
+  `.`/`/-/`/`ВП` restore, plus adjacent `КНОП`/`К1`/`К2` separators, when the
+  restored `X` value is immediately destroyed by a proved hard X/X2 overwrite
+  such as `Cx`. This is deliberately narrower than `x2-noop-restore`: `.` and
+  `/-/` are accepted only from a closed, non-`ВП` context with a proved decimal
+  X2 value fact. A plain `reg:r` fact is not enough, because a preloaded
+  hexadecimal or other non-normal register value may make `.` signal `ЕГГ0Г`
+  before the overwrite can run. `ВП` is removed only when the X2 value dataflow
+  still knows an open mantissa, active exponent entry, or proved decimal
+  `vpEntryMantissa` source.
 - **x2-hidden-temp-restore** — replaces a direct scratch `П->X r`, or a
   stable-indirect proved scratch `К П->X R7..Re`, with `.` when X2-register
   dataflow or the stricter X2 value proof shows that hidden X2 already contains

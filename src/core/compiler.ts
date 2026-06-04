@@ -15068,8 +15068,14 @@ const optimizerCapabilities: Array<{
     category: "stack",
     source: "mk61-delta",
     requires: ["x2-register"],
-    activeWhen: ["membership-collection-x2-restore", "x2-hidden-temp-restore", "x2-literal-restore", "x2-noop-restore"],
-    detail: "Uses the hidden X2 display register as a temporary across ordinary X2-preserving logic: a membership test can keep a deterministic mask in Y, direct scratch recalls and repeated literals can restore a proved X2-resident value through '.' after either a safe restore gap or a CFG-proved immediate X2 sync, restored dots keep hidden reg:r value facts alive for later scratch aliases, and no-op restores are removed when value dataflow proves X already contains the hidden X2 value, including normalized signed/unsigned decimal digit-runs while keeping leading-zero X2 facts distinct; a separate mantissa/exponent shape lattice tracks active ВП forms without granting dot-safe value aliases until a closing X2 sync normalizes them; known-fractional masks insert a preserving gap before the restore when К{x} is skipped.",
+    activeWhen: [
+      "membership-collection-x2-restore",
+      "x2-hidden-temp-restore",
+      "x2-literal-restore",
+      "x2-noop-restore",
+      "x2-dead-restore-before-overwrite",
+    ],
+    detail: "Uses the hidden X2 display register as a temporary across ordinary X2-preserving logic: a membership test can keep a deterministic mask in Y, direct scratch recalls and repeated literals can restore a proved X2-resident value through '.' after either a safe restore gap or a CFG-proved immediate X2 sync, restored dots keep hidden reg:r value facts alive for later scratch aliases, no-op restores are removed when value dataflow proves X already contains the hidden X2 value, and safe decimal restore results are removed when a following hard X/X2 overwrite such as Cx makes the restored X dead; a separate mantissa/exponent shape lattice tracks active ВП forms without granting dot-safe value aliases until a closing X2 sync normalizes them; known-fractional masks insert a preserving gap before the restore when К{x} is skipped.",
   },
   {
     id: "hex-mantissa-arithmetic",
@@ -15678,6 +15684,7 @@ function buildMachineFeaturesUsed(
     optimization.name === "x2-hidden-temp-restore" ||
     optimization.name === "x2-literal-restore" ||
     optimization.name === "x2-noop-restore" ||
+    optimization.name === "x2-dead-restore-before-overwrite" ||
     optimization.name === "vp-fraction-restore"
   )) {
     add("x2-register", "Optimizer scheduled hidden X2 values across display-byte or ordinary temporary boundaries.", "optimizer");
