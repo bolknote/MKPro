@@ -14,6 +14,7 @@ import {
 } from "./helpers.ts";
 
 const DOT = 0x0a;
+const SIGN_CHANGE = 0x0b;
 
 interface DecimalLiteralRun {
   readonly end: number;
@@ -24,6 +25,14 @@ function isPlainDigit(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
   return op.kind === "plain" &&
     op.opcode >= 0 &&
     op.opcode <= 9 &&
+    !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op);
+}
+
+function isPlainSignChange(op: IrOp | undefined): op is Extract<IrOp, { kind: "plain" }> {
+  return op !== undefined &&
+    op.kind === "plain" &&
+    op.opcode === SIGN_CHANGE &&
     !hasRewriteBarrier(op) &&
     !isDisplayFocusSensitive(op);
 }
@@ -41,9 +50,11 @@ function decimalLiteralRunAt(ops: readonly IrOp[], start: number): DecimalLitera
     digits.push(String(op.opcode));
     end += 1;
   }
-  if (digits.length < 2) return undefined;
+  if (digits.length === 0) return undefined;
   const value = digits.join("");
-  if (!/^[1-9][0-9]{1,7}$/u.test(value)) return undefined;
+  if (!/^[1-9][0-9]{0,7}$/u.test(value)) return undefined;
+  if (isPlainSignChange(ops[end])) return { end, value: `-${value}` };
+  if (digits.length < 2) return undefined;
   return { end: end - 1, value };
 }
 
@@ -58,7 +69,7 @@ function addingDotCanExposeX2RestoreContext(ops: readonly IrOp[], literalEnd: nu
       case "orphan-address":
         continue;
       case "plain":
-        if (op.opcode === DOT || op.opcode === 0x0b || op.opcode === 0x0c) return true;
+        if (op.opcode === DOT || op.opcode === SIGN_CHANGE || op.opcode === 0x0c) return true;
         if (getOpcode(op.opcode).x2Effect === "preserves") continue;
         return false;
       case "jump":
@@ -84,6 +95,9 @@ function isImmediateAfterX2AffectingSync(ops: readonly IrOp[], index: number): b
     const op = ops[cursor]!;
     if (op.kind === "label") continue;
     if (hasRewriteBarrier(op)) return false;
+    if (op.kind === "cjump" || op.kind === "loop" || op.kind === "indirect-cjump") {
+      return getOpcode(op.opcode).conditionalX2Effect?.fallthrough === "affects";
+    }
     return op.kind === "plain" && getOpcode(op.opcode).x2Effect === "affects";
   }
   return false;
