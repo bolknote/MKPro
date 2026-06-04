@@ -77,6 +77,10 @@ export interface OpcodeInfo {
   enterable: DeliveryMode[];
   takesAddress: boolean;
   x2Effect: "affects" | "restores" | "preserves" | "unknown";
+  conditionalX2Effect?: {
+    fallthrough: "affects" | "preserves" | "unknown";
+    jump: "affects" | "preserves" | "unknown";
+  };
   stackEffect:
     | "preserves"
     | "shifts"

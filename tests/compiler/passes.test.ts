@@ -1513,6 +1513,38 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("store-recall-peephole drops recall before fallthrough ВП after a direct conditional X2 sync", () => {
+    const program: IrOp[] = [
+      store("2"),
+      recall("2"),
+      cjump("skip"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("skip"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).not.toContainEqual(recall("2"));
+  });
+
+  it("store-recall-peephole keeps recall before jump-target ВП after a direct conditional", () => {
+    const program: IrOp[] = [
+      store("2"),
+      recall("2"),
+      cjump("restore"),
+      halt(),
+      label("restore"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("store-recall-peephole keeps recall that lifts the stack for an immediate binary op", () => {
     const program: IrOp[] = [
       store("2"),

@@ -128,6 +128,15 @@ function isContextSensitiveX2Restore(op: IrOp): boolean {
   return op.kind === "plain" && (op.opcode === 0x0a || op.opcode === 0x0c);
 }
 
+function conditionalX2Effect(
+  op: Extract<IrOp, { kind: "cjump" | "loop" }>,
+  edge: "fallthrough" | "jump",
+): "affects" | "preserves" | "unknown" {
+  const effect = getOpcode(op.opcode).conditionalX2Effect;
+  if (effect === undefined) return "unknown";
+  return effect[edge];
+}
+
 type StackDifferenceDepth = 1 | 2 | 3;
 
 function shiftDifference(depth: StackDifferenceDepth): StackDifferenceDepth | undefined {
@@ -267,9 +276,13 @@ export function removingRecallCanExposeX2Restore(ops: readonly IrOp[], recallInd
         case "loop": {
           if (typeof op.target !== "string") return true;
           const target = labels.get(op.target);
-          // Direct conditionals synchronize X2 on the fallthrough path; the
-          // jumped path is the one that can still observe the removed recall.
-          return target === undefined ? true : visit(target + 1, returnStack);
+          const fallthrough = conditionalX2Effect(op, "fallthrough");
+          const jump = conditionalX2Effect(op, "jump");
+          if (fallthrough === "unknown" || jump === "unknown") return true;
+          return (
+            (jump === "preserves" && (target === undefined ? true : visit(target + 1, returnStack))) ||
+            (fallthrough === "preserves" && visit(i + 1, returnStack))
+          );
         }
         case "call": {
           if (typeof op.target !== "string") return true;

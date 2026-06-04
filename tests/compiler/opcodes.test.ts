@@ -104,6 +104,14 @@ describe("opcode catalog", () => {
 
     expect(opcodeByCode.get(0x57)?.x2Effect).toBe("unknown");
     expect(opcodeByCode.get(0x5d)?.x2Effect).toBe("unknown");
+    expect(opcodeByCode.get(0x57)?.conditionalX2Effect).toEqual({
+      fallthrough: "affects",
+      jump: "preserves",
+    });
+    expect(opcodeByCode.get(0x5d)?.conditionalX2Effect).toEqual({
+      fallthrough: "affects",
+      jump: "preserves",
+    });
   });
 
   it("models stack effects used by optimizer proofs", () => {

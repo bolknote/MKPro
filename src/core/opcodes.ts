@@ -41,6 +41,7 @@ function info(
     enterable: extra.enterable ?? ["manual", "loader", "hex"],
     takesAddress: extra.takesAddress ?? false,
     x2Effect: extra.x2Effect ?? "preserves",
+    ...(extra.conditionalX2Effect === undefined ? {} : { conditionalX2Effect: extra.conditionalX2Effect }),
     stackEffect: extra.stackEffect ?? "preserves",
     risk: extra.risk ?? "documented",
   };
@@ -52,6 +53,10 @@ function onlyHex(): DeliveryMode[] {
 
 function loaderOrHex(): DeliveryMode[] {
   return ["loader", "hex"];
+}
+
+function directConditionalX2Effect(): NonNullable<OpcodeInfo["conditionalX2Effect"]> {
+  return { fallthrough: "affects", jump: "preserves" };
 }
 
 export const opcodeCatalog: OpcodeInfo[] = buildOpcodeCatalog();
@@ -219,14 +224,14 @@ function buildOpcodeCatalog(): OpcodeInfo[] {
   set(info(0x54, "К НОП"));
   set(info(0x55, "К 1"));
   set(info(0x56, "К 2"));
-  set(info(0x57, "F x!=0", "F x!=0", { takesAddress: true, x2Effect: "unknown" }));
-  set(info(0x58, "F L2", "F L2", { takesAddress: true, x2Effect: "unknown" }));
-  set(info(0x59, "F x>=0", "F x>=0", { takesAddress: true, x2Effect: "unknown" }));
-  set(info(0x5a, "F L3", "F L3", { takesAddress: true, x2Effect: "unknown" }));
-  set(info(0x5b, "F L1", "F L1", { takesAddress: true, x2Effect: "unknown" }));
-  set(info(0x5c, "F x<0", "F x<0", { takesAddress: true, x2Effect: "unknown" }));
-  set(info(0x5d, "F L0", "F L0", { takesAddress: true, x2Effect: "unknown" }));
-  set(info(0x5e, "F x=0", "F x=0", { takesAddress: true, x2Effect: "unknown" }));
+  set(info(0x57, "F x!=0", "F x!=0", { takesAddress: true, x2Effect: "unknown", conditionalX2Effect: directConditionalX2Effect() }));
+  set(info(0x58, "F L2", "F L2", { takesAddress: true, x2Effect: "unknown", conditionalX2Effect: directConditionalX2Effect() }));
+  set(info(0x59, "F x>=0", "F x>=0", { takesAddress: true, x2Effect: "unknown", conditionalX2Effect: directConditionalX2Effect() }));
+  set(info(0x5a, "F L3", "F L3", { takesAddress: true, x2Effect: "unknown", conditionalX2Effect: directConditionalX2Effect() }));
+  set(info(0x5b, "F L1", "F L1", { takesAddress: true, x2Effect: "unknown", conditionalX2Effect: directConditionalX2Effect() }));
+  set(info(0x5c, "F x<0", "F x<0", { takesAddress: true, x2Effect: "unknown", conditionalX2Effect: directConditionalX2Effect() }));
+  set(info(0x5d, "F L0", "F L0", { takesAddress: true, x2Effect: "unknown", conditionalX2Effect: directConditionalX2Effect() }));
+  set(info(0x5e, "F x=0", "F x=0", { takesAddress: true, x2Effect: "unknown", conditionalX2Effect: directConditionalX2Effect() }));
   set(info(0x5f, "raw display 5F", "5F", {
     enterable: loaderOrHex(),
     risk: "undocumented",
