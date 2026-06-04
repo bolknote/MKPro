@@ -606,7 +606,7 @@ Display rewrites are separated into strategy selection + body lowering.
 - `last-x-reuse` — avoids `P->X` when X already holds the needed value and the
   recall is not an X2-sync boundary for `.`/`ВП` before the next X2-affecting
   op, including direct `В/О` returns, and its stack lift cannot reach a
-  downstream stack consumer through direct call returns. The X-held-value proof
+  downstream stack consumer through direct or proved-indirect flow. The X-held-value proof
   is seeded by direct stores and by proved indirect stores, including mutating
   `R0..R6` indirect stores because the store and its selector side effect are
   kept. The sync guard is X2-register-aware: if dataflow proves X2 already
@@ -653,11 +653,14 @@ Display rewrites are separated into strategy selection + body lowering.
   registers are left unchanged.
 - `x2-register-dataflow` — tracks definite states of the form “X2 currently
   equals register `r`” through X2-preserving code, stores, known indirect memory
-  recalls, direct calls into the proved graph, and branch-specific direct
-  conditional effects. Direct `В/О` continuations sync X2 from the returned X
-  value when that value is proved; if returned X is unknown, the proof is
-  cleared. Stops, opaque X2-affecting ops, and unknown indirect flow also clear
-  the proof. Recall-removal passes use it to remove redundant `П->X r` re-syncs
+  recalls, direct or proved-indirect calls into the graph, proved indirect flow
+  targets (`indirect-target=NN`), and branch-specific direct conditional
+  effects. Stable indirect-flow selectors preserve register-valued X/X2 facts;
+  mutating selectors clear them conservatively. Direct `В/О` continuations sync
+  X2 from the returned X value when that value is proved; if returned X is
+  unknown, the proof is cleared. Stops, opaque X2-affecting ops, and unknown
+  indirect flow also clear the proof. Recall-removal passes use it to remove
+  redundant `П->X r` re-syncs
   while still preserving immediate `ВП`/`.` context. When X and X2 are proved to
   share a register value, `X->П s` extends the proof with `s` as another alias
   for that hidden value; overwriting `s` from a value no longer equal to X2
@@ -670,7 +673,7 @@ Display rewrites are separated into strategy selection + body lowering.
   same-cell `store` then immediate `recall` pairs unless the recall supplies
   the last X2 sync before `.`/`ВП` before the next X2-affecting op, including
   direct `В/О` returns, or lifts the stack for a downstream consumer through
-  direct call returns. If X2-register dataflow proves that X2 already contains
+  direct or proved-indirect flow. If X2-register dataflow proves that X2 already contains
   the same register and a preserving command remains before the restore, the
   recall is no longer considered the required sync. Mutating `R0..R6` indirect
   selectors are kept because their selector side effects are observable.
@@ -701,12 +704,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 5. `return-suffix-gadget` — finds repeated return-ending blocks ending in `return`, extracts one shared suffix, and redirects additional copies to it.
 6. `shared-terminal-tail` — finds repeated straight-line suffixes that already end in unconditional flow (`БП`, `К БП r`, or `В/О`) and replaces extra copies with a jump into the canonical suffix; it refuses programs with absolute numeric flow targets.
 7. `return-zero-jump` — when no procedure calls are used, replaces a backward jump to `01` with `В/О` and tags it as an empty-stack optimization.
-8. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r`, or stable-indirect proved same-cell `К X->П R7..Re` followed by `К П->X R7..Re`, only when the recall is not the last X2 sync before a context-sensitive `.`/`ВП` restoration before the next X2-affecting op, including direct `В/О` returns, and its stack lift cannot reach a downstream binary/stack-consuming op through direct call returns; mutating `R0..R6` indirect selectors are not folded.
+8. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r`, or stable-indirect proved same-cell `К X->П R7..Re` followed by `К П->X R7..Re`, only when the recall is not the last X2 sync before a context-sensitive `.`/`ВП` restoration before the next X2-affecting op, including direct `В/О` returns, and its stack lift cannot reach a downstream binary/stack-consuming op through direct or proved-indirect flow; mutating `R0..R6` indirect selectors are not folded.
 9. `pre-shift-stack-lift` — removes `В↑` immediately before direct/indirect `П->X`, `F pi`, or another stack-shifting producer when that following command already supplies the old X in Y, unless the deeper stack difference can reach a later consumer.
 10. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
 11. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.
-12. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes a direct `П->X r` or stable-indirect `К П->X R7..Re` with a proved memory target when every predecessor reaches that point with the same value still in X; proved indirect flow targets (`indirect-target=NN`) are included in the CFG, stable selectors preserve the X fact, mutating selectors clear it, and unknown indirect flow plus absolute numeric direct targets are still refused. Recalls that provide the last X2 sync before `.`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct call returns are kept.
-13. `branch-target-x-reuse` — removes the first direct or stable-indirect proved recall in a unique branch target when the source `cjump` tested the same recalled value and no fallthrough path can enter the target, unless the target recall is needed as a `.`/`ВП` X2-sync boundary before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct call returns.
+12. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes a direct `П->X r` or stable-indirect `К П->X R7..Re` with a proved memory target when every predecessor reaches that point with the same value still in X; proved indirect flow targets (`indirect-target=NN`) are included in the CFG, stable selectors preserve the X fact, mutating selectors clear it, and unknown indirect flow plus absolute numeric direct targets are still refused. Recalls that provide the last X2 sync before `.`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow are kept.
+13. `branch-target-x-reuse` — removes the first direct or stable-indirect proved recall in a unique branch target when the source `cjump` tested the same recalled value and no fallthrough path can enter the target, unless the target recall is needed as a `.`/`ВП` X2-sync boundary before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow.
     These recall-removal guards read the shared `OpcodeInfo.stackEffect`
     profile, so stack-preserving, shifting, Y-consuming, exposing, and barrier
     opcodes are modeled consistently across passes.
@@ -716,7 +719,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 17. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and both the `.` restore gap and missing stack-lift observation are proven, allowing later DSE to remove now-unused scratch stores.
 18. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.
 19. `dead-store-elimination` — removes direct stores, plus stable-indirect stores with proved targets, whose target register is not live after the write and does not affect number-entry/input finalization or the previous-command context consumed by `ВП` while it restores X2; mutating indirect selectors are kept.
-20. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding direct or proved indirect `X->П`, preserving recalls that serve as the last X2 sync before `.`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or as a stack lift that can reach a downstream consumer through direct call returns; mutating indirect stores can seed the X fact because the store remains, while mutating indirect recalls are not removed.
+20. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding direct or proved indirect `X->П`, preserving recalls that serve as the last X2 sync before `.`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or as a stack lift that can reach a downstream consumer through direct or proved-indirect flow; mutating indirect stores can seed the X fact because the store remains, while mutating indirect recalls are not removed.
 21. `r0-fractional-sentinel` — drops redundant immediate `П->X 3`/`X->П 3`
     after fractional-R0 indirect access when `R0` liveness proves that the
     direct access only repeats the hardware-selected `R3`; it also removes
@@ -742,7 +745,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     operand byte to be the first executed opcode.
 24. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) and inert `КНОП ВП` forms, reporting `vp-exponent-splice` when one or more cells are removed.
 25. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/`КНОП` redundancy optimization pass removes cells.
-26. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a proved `ВП`/X2 marker, display or ordinary, and reports `vp-fraction-restore` when one or more restores are removed. A marker is not required when CFG dataflow proves an ordinary X2 restoration boundary: an X2 sync, at least one X2-preserving executable command, then `ВП`; direct conditional jump/fallthrough edges use their path-sensitive X2 effects, and joins require every incoming path to carry the proof.
+26. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a proved `ВП`/X2 marker, display or ordinary, and reports `vp-fraction-restore` when one or more restores are removed. A marker is not required when CFG dataflow proves an ordinary X2 restoration boundary: an X2 sync, at least one X2-preserving executable command, then `ВП`; direct conditional jump/fallthrough edges use their path-sensitive X2 effects, proved indirect flow targets (`indirect-target=NN`) participate in the same CFG, and joins require every incoming path to carry the proof.
 27. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
 28. `duplicate-failure-tail-merge` — removes duplicated failure tails by redirecting the first tail to the second; this covers both `(label -> 0 -> pause)` and `(label -> pause -> same terminal flow)` forms.
 29. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.

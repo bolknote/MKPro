@@ -1225,17 +1225,20 @@ The pipeline currently contains:
   about branch layout.
 - **X2-register dataflow** — a forward proof tracks states of the form “X2 is
   known to contain register `r`” through X2-preserving ordinary code, stores,
-  known indirect memory recalls, direct calls into the proved graph, and
-  path-sensitive direct conditional edges. Direct `В/О` continuations are now
-  modeled as an X2 sync from the returned X value: if X is known to contain
-  register `r`, the caller continuation gets `X2 = r`; if returned X is
-  unknown, the X2 proof is cleared. `С/П`, unknown indirect flow, and opaque
-  X2-affecting commands also clear the proof. Recall-removal passes use this to
-  distinguish a required sync from a redundant re-sync before later `.`/`ВП`
-  restoration. The proof also carries register aliases: when X and X2 are known
-  to share a register value, a later `X->П s` makes `s` another proven name for
-  the same hidden X2 value; if `s` is overwritten while X no longer matches X2,
-  the alias is removed instead of being kept stale.
+  known indirect memory recalls, direct or proved-indirect calls into the graph,
+  path-sensitive direct conditional edges, and proved indirect flow targets
+  (`indirect-target=NN`). Stable indirect-flow selectors preserve the
+  register-valued X/X2 proof; mutating selectors clear it conservatively.
+  Direct `В/О` continuations are now modeled as an X2 sync from the returned X
+  value: if X is known to contain register `r`, the caller continuation gets
+  `X2 = r`; if returned X is unknown, the X2 proof is cleared. `С/П`, unknown
+  indirect flow, and opaque X2-affecting commands also clear the proof.
+  Recall-removal passes use this to distinguish a required sync from a
+  redundant re-sync before later `.`/`ВП` restoration. The proof also carries
+  register aliases: when X and X2 are known to share a register value, a later
+  `X->П s` makes `s` another proven name for the same hidden X2 value; if `s`
+  is overwritten while X no longer matches X2, the alias is removed instead of
+  being kept stale.
 - **x2-hidden-temp-restore** — replaces a direct scratch `П->X r`, or a
   stable-indirect proved scratch `К П->X R7..Re`, with `.` when X2-register
   dataflow proves X2 already contains the same register value, a separate `.`
@@ -1266,7 +1269,7 @@ The pipeline currently contains:
   preserved, the recall can be removed. The same proof accepts stable indirect
   recalls (`К П->X R7..Re`) when lowering has proved the actual memory target.
   Downstream binary/stack-consuming ops that can still observe the recall's
-  stack lift through direct call returns also block the rewrite.
+  stack lift through direct or proved-indirect flow also block the rewrite.
 - **flow-x-reuse** — runs forward CFG dataflow for values already in X and
   drops a direct or stable-indirect proved recall when every direct predecessor
   reaches that point with the same register value still in X. Proved indirect

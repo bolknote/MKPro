@@ -318,6 +318,38 @@ describe("ir passes on synthetic programs", () => {
     expect(registerStateText(states[5])).toEqual(["2"]);
   });
 
+  it("x2 register dataflow follows proved stable indirect flow targets", () => {
+    const program: IrOp[] = [
+      recall("4"),
+      knownTargetIndirectJump("8", 3),
+      halt(),
+      label("tail"),
+      plain(0x20, "F pi"),
+      halt(),
+    ];
+
+    const states = computeX2RegisterStates(program);
+
+    expect(registerStateText(states[4])).toEqual(["4"]);
+    expect(registerStateText(states[5])).toEqual(["4"]);
+  });
+
+  it("x2 register dataflow clears register facts across mutating indirect flow", () => {
+    const program: IrOp[] = [
+      recall("4"),
+      knownTargetIndirectJump("1", 3),
+      halt(),
+      label("tail"),
+      plain(0x20, "F pi"),
+      halt(),
+    ];
+
+    const states = computeX2RegisterStates(program);
+
+    expect(registerStateText(states[4])).toEqual([]);
+    expect(registerStateText(states[5])).toEqual([]);
+  });
+
   it("x2 register dataflow syncs X2 through direct subroutine returns", () => {
     const program: IrOp[] = [
       label("main"),
@@ -661,6 +693,31 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("last-x-reuse drops redundant X2 sync before ВП through proved indirect flow", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("1"),
+      recall("1"),
+      knownTargetIndirectJump("8", 5),
+      halt(),
+      label("target"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      store("1"),
+      knownTargetIndirectJump("8", 5),
+      halt(),
+      label("target"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
+  });
+
   it("last-x-reuse keeps redundant X2 sync before immediate ВП context", () => {
     const program: IrOp[] = [
       recall("1"),
@@ -737,6 +794,40 @@ describe("ir passes on synthetic programs", () => {
       store("1"),
       recall("1"),
       plain(0x35, "К {x}"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("last-x-reuse drops recall before proved indirect flow when the stack lift is dead", () => {
+    const program: IrOp[] = [
+      store("1"),
+      recall("1"),
+      knownTargetIndirectJump("8", 3),
+      label("target"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      store("1"),
+      knownTargetIndirectJump("8", 3),
+      label("target"),
+      halt(),
+    ]);
+  });
+
+  it("last-x-reuse keeps recall whose stack lift reaches a binary op through proved indirect flow", () => {
+    const program: IrOp[] = [
+      store("1"),
+      recall("1"),
+      knownTargetIndirectJump("8", 3),
+      label("target"),
       plain(0x10, "+"),
       halt(),
     ];
@@ -2884,6 +2975,22 @@ describe("ir passes on synthetic programs", () => {
       { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
       { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", comment: "frac after restore" } },
       label("end"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x35)).toBe(false);
+  });
+
+  it("vp-x2-peephole proves a ВП/X2 boundary through a proved stable indirect jump", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      knownTargetIndirectJump("8", 3),
+      halt(),
+      label("target"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", comment: "frac after restore" } },
       halt(),
     ];
     const result = vpX2Peephole.run(program, ctx);

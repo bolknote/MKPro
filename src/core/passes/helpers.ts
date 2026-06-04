@@ -150,6 +150,18 @@ function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
   return result;
 }
 
+function addressIndexes(ops: readonly IrOp[]): Map<number, number> {
+  const result = new Map<number, number>();
+  let address = 0;
+  for (let i = 0; i < ops.length; i += 1) {
+    const op = ops[i]!;
+    if (op.kind === "label") continue;
+    result.set(address, i);
+    address += cellsPerOp(op);
+  }
+  return result;
+}
+
 function plainX2Effect(op: IrOp): "affects" | "restores" | "preserves" | "unknown" {
   if (op.kind !== "plain") return "unknown";
   if (hasRewriteBarrier(op)) return "unknown";
@@ -339,10 +351,11 @@ function transferRegisterDataflowState(
         x2: effect === "preserves" ? new Set(input.x2) : new Set(),
       };
     }
-    case "stop":
     case "indirect-jump":
     case "indirect-call":
     case "indirect-cjump":
+      return isStableIndirectSelector(op.register) ? cloneRegisterDataflowState(input) : emptyRegisterDataflowState();
+    case "stop":
       return emptyRegisterDataflowState();
     case "return":
       return { x: new Set(input.x), x2: new Set(input.x) };
@@ -384,7 +397,7 @@ function transferX2RestoreBoundaryState(
     case "indirect-jump":
     case "indirect-call":
     case "indirect-cjump":
-      return "none";
+      return x2PreservingExecutableBoundary(input);
   }
 }
 
@@ -424,7 +437,7 @@ function transferX2DotRestoreGapState(
     case "indirect-jump":
     case "indirect-call":
     case "indirect-cjump":
-      return "none";
+      return advanceX2DotRestoreGap(input, true);
   }
 }
 
@@ -602,12 +615,15 @@ function sameRegisterValueSet(
 
 function buildRegisterValueGraph(ops: readonly IrOp[]): Edge[][] {
   const labels = labelIndexes(ops);
+  const addresses = addressIndexes(ops);
   const successors: Edge[][] = Array.from({ length: ops.length }, () => []);
   const callReturns: number[] = [];
   for (let index = 0; index < ops.length; index += 1) {
     const op = ops[index]!;
     const next = index + 1;
-    if (op.kind === "call" && next < ops.length) callReturns.push(next);
+    if ((op.kind === "call" || (op.kind === "indirect-call" && knownIndirectFlowTarget(op) !== undefined)) && next < ops.length) {
+      callReturns.push(next);
+    }
   }
 
   for (let index = 0; index < ops.length; index += 1) {
@@ -622,6 +638,10 @@ function buildRegisterValueGraph(ops: readonly IrOp[]): Edge[][] {
     const jumpTo = (target: string | number): void => {
       if (typeof target !== "string") return;
       const targetIndex = labels.get(target);
+      if (targetIndex !== undefined) successors[index]!.push({ target: targetIndex, kind: "jump" });
+    };
+    const jumpToAddress = (target: number): void => {
+      const targetIndex = addresses.get(target);
       if (targetIndex !== undefined) successors[index]!.push({ target: targetIndex, kind: "jump" });
     };
 
@@ -647,12 +667,24 @@ function buildRegisterValueGraph(ops: readonly IrOp[]): Edge[][] {
       case "call":
         jumpTo(op.target);
         break;
+      case "indirect-jump": {
+        const target = knownIndirectFlowTarget(op);
+        if (target !== undefined) jumpToAddress(target);
+        break;
+      }
+      case "indirect-call": {
+        const target = knownIndirectFlowTarget(op);
+        if (target !== undefined) jumpToAddress(target);
+        break;
+      }
+      case "indirect-cjump": {
+        const target = knownIndirectFlowTarget(op);
+        if (target !== undefined) jumpToAddress(target);
+        fallthrough();
+        break;
+      }
       case "return":
         for (const target of callReturns) normal(target);
-        break;
-      case "indirect-jump":
-      case "indirect-call":
-      case "indirect-cjump":
         break;
     }
   }
@@ -680,6 +712,7 @@ function stackDifferenceCanReachConsumer(
   initialDepth: StackDifferenceDepth,
 ): boolean {
   const labels = labelIndexes(ops);
+  const addresses = addressIndexes(ops);
   const visited = new Set<string>();
   const visit = (
     start: number,
@@ -746,10 +779,25 @@ function stackDifferenceCanReachConsumer(
           if (target === undefined || returnStack.length >= 5) return true;
           return visit(target + 1, depth, [i + 1, ...returnStack]);
         }
-        case "indirect-jump":
-        case "indirect-call":
-        case "indirect-cjump":
-          return true;
+        case "indirect-jump": {
+          const target = knownIndirectFlowTarget(op);
+          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          return targetIndex === undefined ? true : visit(targetIndex, depth, returnStack);
+        }
+        case "indirect-call": {
+          const target = knownIndirectFlowTarget(op);
+          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          if (targetIndex === undefined || returnStack.length >= 5) return true;
+          return visit(targetIndex, depth, [i + 1, ...returnStack]);
+        }
+        case "indirect-cjump": {
+          const target = knownIndirectFlowTarget(op);
+          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          return (
+            (targetIndex === undefined ? true : visit(targetIndex, depth, returnStack)) ||
+            visit(i + 1, depth, returnStack)
+          );
+        }
         case "return":
           if (returnStack.length === 0) return false;
           return visit(returnStack[0]!, depth, returnStack.slice(1));
@@ -777,6 +825,7 @@ export function removingRecallCanExposeX2Restore(
   options: X2RestoreExposureOptions = {},
 ): boolean {
   const labels = labelIndexes(ops);
+  const addresses = addressIndexes(ops);
   const visited = new Set<string>();
   const visit = (
     start: number,
@@ -836,10 +885,25 @@ export function removingRecallCanExposeX2Restore(
           if (target === undefined || returnStack.length >= 5) return true;
           return visit(target + 1, [i + 1, ...returnStack], true);
         }
-        case "indirect-jump":
-        case "indirect-call":
-        case "indirect-cjump":
-          return true;
+        case "indirect-jump": {
+          const target = knownIndirectFlowTarget(op);
+          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          return targetIndex === undefined ? true : visit(targetIndex, returnStack, true);
+        }
+        case "indirect-call": {
+          const target = knownIndirectFlowTarget(op);
+          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          if (targetIndex === undefined || returnStack.length >= 5) return true;
+          return visit(targetIndex, [i + 1, ...returnStack], true);
+        }
+        case "indirect-cjump": {
+          const target = knownIndirectFlowTarget(op);
+          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          return (
+            (targetIndex === undefined ? true : visit(targetIndex, returnStack, true)) ||
+            visit(i + 1, returnStack, true)
+          );
+        }
         case "label":
           break;
         case "store":
