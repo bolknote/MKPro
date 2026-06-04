@@ -94,7 +94,7 @@ function canRemoveVpContextSignPairBeforeFreshDigit(
 ): boolean {
   if (state?.entry.kind !== "closed" || state.vpContext?.kind !== "exponent") return false;
   if (stateAfterPair?.entry.kind !== "closed" || stateAfterPair.vpContext?.kind !== "exponent") return false;
-  const nextIndex = nextNonLabelIndex(ops, secondSignIndex + 1);
+  const nextIndex = nextFreshDigitIndex(ops, secondSignIndex + 1);
   if (nextIndex === undefined || !isDecimalDigit(ops[nextIndex]!)) return false;
   return sameExponentContext(state.vpContext, stateAfterPair.vpContext);
 }
@@ -121,6 +121,16 @@ function canRemoveClosedContextSignPairBeforeProvedVp(
 function nextNonLabelIndex(ops: readonly IrOp[], start: number): number | undefined {
   for (let index = start; index < ops.length; index += 1) {
     if (ops[index]!.kind !== "label") return index;
+  }
+  return undefined;
+}
+
+function nextFreshDigitIndex(ops: readonly IrOp[], start: number): number | undefined {
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") continue;
+    if (isFreeStandingEmptyOp(op)) continue;
+    return index;
   }
   return undefined;
 }
@@ -214,7 +224,8 @@ const run: IrPassFn = (ops) => {
     }
     // After an X2-preserving gap, a VP-context /-/ /-/ pair is observable
     // because it restores X2 into X even though the exponent sign cancels. A
-    // following digit starts fresh number entry, so that restored X is lost.
+    // following digit, possibly after empty ops, starts fresh number entry, so
+    // that restored X is lost.
     if (
       isFreeStandingSignChange(prev) &&
       isFreeStandingSignChange(cur) &&

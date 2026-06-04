@@ -136,6 +136,9 @@ describe("ВП exponent-entry splice collapse (vp-splice)", () => {
     expect(display([0x05, VP, 0x03, FPI, SIGN_CHANGE, SIGN_CHANGE, 0x04, STOP])).toBe(
       display([0x05, VP, 0x03, FPI, 0x04, STOP]),
     );
+    expect(display([0x05, VP, 0x03, FPI, SIGN_CHANGE, SIGN_CHANGE, KNOP, 0x04, STOP])).toBe(
+      display([0x05, VP, 0x03, FPI, KNOP, 0x04, STOP]),
+    );
     expect(display([0x05, VP, 0x03, FPI, SIGN_CHANGE, SIGN_CHANGE, STOP])).not.toBe(
       display([0x05, VP, 0x03, FPI, STOP]),
     );
@@ -173,6 +176,26 @@ describe("ВП exponent-entry splice collapse (vp-splice)", () => {
       .map((item) => item.opcode);
     expect(pairCodes).toEqual([0x05, VP, 0x03, FPI, 0x04, STOP]);
     expect(display(pairCodes)).toBe(display([0x05, VP, 0x03, FPI, SIGN_CHANGE, SIGN_CHANGE, 0x04, STOP]));
+
+    const signPairBeforeEmptyDigit: MachineItem[] = [
+      { kind: "op", opcode: 0x05, mnemonic: "5" },
+      { kind: "op", opcode: VP, mnemonic: "ВП" },
+      { kind: "op", opcode: 0x03, mnemonic: "3" },
+      { kind: "op", opcode: FPI, mnemonic: "Fπ" },
+      { kind: "op", opcode: SIGN_CHANGE, mnemonic: "/-/" },
+      { kind: "op", opcode: SIGN_CHANGE, mnemonic: "/-/" },
+      { kind: "op", opcode: KNOP, mnemonic: "КНОП" },
+      { kind: "op", opcode: 0x04, mnemonic: "4" },
+      { kind: "op", opcode: STOP, mnemonic: "С/П" },
+    ];
+    const emptyDigitResult = runIrPasses(signPairBeforeEmptyDigit, { delivery: "hex", budget: 105, analysis: false });
+    const emptyDigitCodes = emptyDigitResult.items
+      .filter((item): item is Extract<MachineItem, { opcode: number }> => "opcode" in item)
+      .map((item) => item.opcode);
+    expect(emptyDigitCodes).toEqual([0x05, VP, 0x03, FPI, KNOP, 0x04, STOP]);
+    expect(display(emptyDigitCodes)).toBe(
+      display([0x05, VP, 0x03, FPI, SIGN_CHANGE, SIGN_CHANGE, KNOP, 0x04, STOP]),
+    );
   });
 
   it("closed decimal /-/ /-/ pairs collapse only away from VP restore context", () => {
