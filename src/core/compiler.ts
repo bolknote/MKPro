@@ -14621,9 +14621,9 @@ const optimizerCapabilities: Array<{
   },
   {
     id: "vp-fraction-restore",
-    category: "display",
+    category: "stack",
     source: "mk61-delta",
-    requires: ["x2-register", "display-bytes"],
+    requires: ["x2-register"],
     activeWhen: ["vp-fraction-restore", "vp-exponent-splice"],
     detail: "Uses ВП where it simultaneously restores X2 and provides the needed fractional/mantissa side effect, and collapses redundant ВП ВП / КНОП ВП exponent-entry splices.",
   },
@@ -15230,7 +15230,8 @@ function buildMachineFeaturesUsed(
     optimization.name === "x2-display-byte-scheduling" ||
     optimization.name === "display-byte-x2-lowering" ||
     optimization.name === "floor-packed-row-expression-display" ||
-    optimization.name === "membership-collection-x2-restore"
+    optimization.name === "membership-collection-x2-restore" ||
+    optimization.name === "vp-fraction-restore"
   )) {
     add("x2-register", "Optimizer scheduled hidden X2 values across display-byte or ordinary temporary boundaries.", "optimizer");
   }

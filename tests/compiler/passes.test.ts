@@ -2091,6 +2091,18 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x35)).toBe(false);
   });
 
+  it("vp-x2-peephole removes fractional op already supplied by an ordinary X2 ВП boundary", () => {
+    const program: IrOp[] = [
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
+      { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", comment: "frac after X2 restore" } },
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+    expect(result.applied).toBe(1);
+    expect(result.optimizations[0]?.detail).toContain("ВП/X2 boundary");
+    expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x35)).toBe(false);
+  });
+
   it("vp-x2-peephole refuses ordinary exponent ВП boundaries", () => {
     const program: IrOp[] = [
       { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "exponent entry" } },

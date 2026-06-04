@@ -1208,6 +1208,11 @@ The pipeline currently contains:
   before `.` so the X2 restore has a safe gap. This is the ordinary-code X2
   hidden-temp form of the source-listing bit-test/set trick; it is not limited
   to display lowering.
+- **path-sensitive direct-conditional X2 model** — direct conditionals remain
+  path-insensitive `unknown`, but the opcode profile records their branch
+  effects: fallthrough is X2-affecting, while the jump edge preserves the prior
+  X2. Recall-removal guards use that shared profile instead of a local special
+  case, which lets later ordinary-code X2 tricks reason about branch layout.
 - **dead-store-elimination** — whole-program liveness-driven DSE: removes
   `X->П r` when liveOut at that point excludes `r`, unless that store finalizes
   number entry or supplies the previous-command context consumed by `ВП` while
@@ -1293,16 +1298,19 @@ The pipeline currently contains:
   X2-preserving commands, X2-syncing commands that copy X into X2 and then
   normalize/check X, and X2-restoring commands (`0`..`9`, `.`, `/-/`, `ВП`) that
   modify X2, copy X2 back into X, and normalize X. Direct conditionals are
-  marked `unknown` because their X2 synchronization depends on the branch
-  outcome.
+  marked `unknown` for path-insensitive consumers because their X2
+  synchronization depends on the branch outcome; path-sensitive consumers can
+  read the attached profile (`fallthrough: affects`, `jump: preserves`).
 - **stack opcode profile** — the same catalog records whether an opcode
   preserves the stack, shifts it (`В↑`, `F pi`, `П->X`), consumes `Y`, exposes
   a deeper stack difference, or acts as a barrier. Recall-removal proofs use
   this metadata instead of hard-coded opcode lists when deciding whether a
   removed `П->X` stack lift can reach a downstream consumer, including after a
   direct `ПП`/`В/О` round trip.
-- **vp-x2-peephole** — drops a `К {x}` immediately after a proved display
-  `ВП`/X2 boundary when `ВП` already supplies the fractional transform.
+- **vp-x2-peephole** — drops a `К {x}` immediately after a proved `ВП`/X2
+  boundary when `ВП` already supplies the fractional transform. The proof is
+  not display-specific: display lowering is just one producer of such
+  boundaries.
 - **membership X2 restore** — membership set lowering may use `.` as a hidden
   X2 restore in non-display code. It is accepted only when the set collection
   assignable is byte-for-byte the tested collection, including indexed bank

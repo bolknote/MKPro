@@ -1,7 +1,7 @@
 import type { IrOp } from "../types.ts";
 import { hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
 
-function displayBoundaryText(op: IrOp): string {
+function x2BoundaryText(op: IrOp): string {
   if (!("meta" in op)) return "";
   return [
     op.meta.comment,
@@ -9,24 +9,24 @@ function displayBoundaryText(op: IrOp): string {
   ].filter(Boolean).join(" ").toLowerCase();
 }
 
-function isDisplayVp(op: IrOp): boolean {
+function isVpX2Boundary(op: IrOp): boolean {
   if (hasRewriteBarrier(op)) return false;
   return op.kind === "plain" &&
     op.opcode === 0x0c &&
-    /display|x2|вп/u.test(displayBoundaryText(op));
+    /display|x2|вп/u.test(x2BoundaryText(op));
 }
 
-function isFractionAfterDisplayBoundary(op: IrOp): boolean {
+function isFractionAfterX2Boundary(op: IrOp): boolean {
   if (hasRewriteBarrier(op)) return false;
   return op.kind === "plain" &&
     op.opcode === 0x35 &&
-    /display|x2|frac/u.test(displayBoundaryText(op));
+    /display|x2|frac/u.test(x2BoundaryText(op));
 }
 
 const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
   for (let i = 1; i < ops.length; i += 1) {
-    if (isDisplayVp(ops[i - 1]!) && isFractionAfterDisplayBoundary(ops[i]!)) {
+    if (isVpX2Boundary(ops[i - 1]!) && isFractionAfterX2Boundary(ops[i]!)) {
       remove.add(i);
     }
   }
@@ -37,7 +37,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "vp-fraction-restore",
-        detail: `Removed ${remove.size} К {x} op(s) already supplied by a ВП/X2 display boundary.`,
+        detail: `Removed ${remove.size} К {x} op(s) already supplied by a ВП/X2 boundary.`,
       },
     ],
   };
