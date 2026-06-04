@@ -136,6 +136,8 @@ function collectCandidates(ops: readonly IrOp[], allowDirectCalls: boolean): Can
   ]);
   for (let start = 0; start < ops.length; start += 1) {
     if (protectedIndexes.has(start)) continue;
+    if (startsAtX2Restore(ops, start)) continue;
+    if (startsAfterX2Restore(ops, start)) continue;
     const parts: string[] = [];
     let cells = 0;
     for (let end = start; end < ops.length; end += 1) {
@@ -145,6 +147,8 @@ function collectCandidates(ops: readonly IrOp[], allowDirectCalls: boolean): Can
       parts.push(opKey(op));
       cells += cellsPerOp(op);
       if (cells < MIN_ENTRY_CELLS) continue;
+      if (endsBeforeX2Restore(ops, end)) continue;
+      if (!x2RestoreBoundariesAreInternal(ops, start, end)) continue;
       const key = parts.join("\n");
       const occurrences = byKey.get(key) ?? [];
       occurrences.push({ key, start, end, cells });
@@ -354,7 +358,6 @@ function markHelperBodyOp(op: IrOp): IrOp {
 
 function isShareableBodyOp(op: IrOp, allowDirectCalls = false): boolean {
   if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
-  if ("opcode" in op && getOpcode(op.opcode).x2Effect === "restores") return false;
   switch (op.kind) {
     case "store":
     case "recall":
@@ -376,6 +379,54 @@ function isShareableBodyOp(op: IrOp, allowDirectCalls = false): boolean {
     case "orphan-address":
       return false;
   }
+}
+
+function startsAtX2Restore(ops: readonly IrOp[], start: number): boolean {
+  const op = ops[start];
+  return op !== undefined && isX2RestoreOp(op);
+}
+
+function startsAfterX2Restore(ops: readonly IrOp[], start: number): boolean {
+  const previous = ops[start - 1];
+  const current = ops[start];
+  return previous !== undefined &&
+    current !== undefined &&
+    isX2RestoreOp(previous) &&
+    !isX2AffectingOp(current);
+}
+
+function endsBeforeX2Restore(ops: readonly IrOp[], end: number): boolean {
+  const next = nextExecutableOp(ops, end + 1);
+  return next !== undefined && isX2RestoreOp(next);
+}
+
+function nextExecutableOp(ops: readonly IrOp[], start: number): IrOp | undefined {
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind !== "label") return op;
+  }
+  return undefined;
+}
+
+function x2RestoreBoundariesAreInternal(ops: readonly IrOp[], start: number, end: number): boolean {
+  for (let index = start; index <= end; index += 1) {
+    const op = ops[index]!;
+    if (!isX2RestoreOp(op)) continue;
+    if (index === start) return false;
+    const previous = ops[index - 1];
+    if (previous === undefined) return false;
+    const previousEffect = "opcode" in previous ? getOpcode(previous.opcode).x2Effect : "preserves";
+    if (previousEffect !== "affects" && previousEffect !== "restores") return false;
+  }
+  return true;
+}
+
+function isX2AffectingOp(op: IrOp): boolean {
+  return "opcode" in op && getOpcode(op.opcode).x2Effect === "affects";
+}
+
+function isX2RestoreOp(op: IrOp): boolean {
+  return "opcode" in op && getOpcode(op.opcode).x2Effect === "restores";
 }
 
 function opKey(op: IrOp): string {

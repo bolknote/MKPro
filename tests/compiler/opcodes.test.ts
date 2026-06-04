@@ -113,11 +113,11 @@ describe("opcode catalog", () => {
       jump: "preserves",
     });
     expect(opcodeByCode.get(0x70)?.conditionalX2Effect).toEqual({
-      fallthrough: "affects",
+      fallthrough: "preserves",
       jump: "preserves",
     });
     expect(opcodeByCode.get(0xe0)?.conditionalX2Effect).toEqual({
-      fallthrough: "affects",
+      fallthrough: "preserves",
       jump: "preserves",
     });
   });

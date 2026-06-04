@@ -31,6 +31,7 @@ const run: IrPassFn = (ops) => {
       immediateSyncStates[index] !== true &&
       !isImmediateAfterModeledSignChange(ops, index, state)
     ) continue;
+    if (!isDotSafeValueContext(state)) continue;
     if (!x2ValueSetHasIntersection(state?.x, state?.x2)) continue;
     if (removingDotCanExposeX2RestoreContext(ops, index)) continue;
     removed.add(index);
@@ -51,6 +52,12 @@ const run: IrPassFn = (ops) => {
 
 function isPlainDot(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
   return op.kind === "plain" && op.opcode === DOT && !hasRewriteBarrier(op);
+}
+
+function isDotSafeValueContext(
+  state: ReturnType<typeof computeX2ValueStates>[number],
+): boolean {
+  return state?.entry.kind === "closed" && (state.vpContext === undefined || state.vpContext.kind === "none");
 }
 
 function isImmediateAfterModeledSignChange(

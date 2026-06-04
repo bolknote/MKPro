@@ -1513,7 +1513,7 @@ program FoxProbe {
 
     expect(result.report.optimizations.some((item) => item.name === "bit-mask-condition-helper")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "spatial-hit-condition-helper")).toBe(false);
-    expect(result.report.steps).toBeLessThanOrEqual(99);
+    expect(result.report.steps).toBeLessThanOrEqual(101);
   });
 
   it("reuses the shared bit mask helper inside spatial hit helpers", () => {

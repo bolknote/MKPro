@@ -131,17 +131,23 @@ function normalizeDecimalEntry(raw: string): string | undefined {
 }
 
 function normalizedExponentEntryValue(mantissa: string, exponent: string): string | undefined {
-  const mantissaMatch = /^(-?)([1-9][0-9]{0,7})$/u.exec(mantissa);
+  const mantissaMatch = /^(-?)([0-9]{1,8})$/u.exec(mantissa);
   const exponentMatch = /^(-?)([0-9]{1,2})$/u.exec(exponent);
   if (mantissaMatch === null || exponentMatch === null) return undefined;
   const sign = mantissaMatch[1]!;
-  const digits = mantissaMatch[2]!;
+  const digits = effectiveExponentMantissaDigits(mantissaMatch[2]!);
   const shift = Number(exponentMatch[2]!);
   const normalized = exponentMatch[1] === "-"
     ? decimalShiftRight(digits, shift)
     : `${digits}${"0".repeat(shift)}`;
   if (normalized === undefined || significantDecimalDigits(normalized) > 8) return undefined;
   return `${sign}${normalized}`;
+}
+
+function effectiveExponentMantissaDigits(rawDigits: string): string {
+  const stripped = rawDigits.replace(/^0+/u, "");
+  if (stripped.length > 0) return stripped;
+  return `1${"0".repeat(Math.max(0, rawDigits.length - 1))}`;
 }
 
 function decimalShiftRight(digits: string, places: number): string | undefined {

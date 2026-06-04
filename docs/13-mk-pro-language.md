@@ -1099,10 +1099,17 @@ candidates:
   generated `digit_at(...)` bodies are shared as ordinary subroutines;
 - remainder fraction lowering: `x - n * int(x / n)` lowers as `frac(x / n) * n`
   so generated digit/bit indexing does not recompute `x`;
+- fractional bit-mask placement: generated `bit_mask` helpers choose between
+  `10^(int(q) + 1)` and `10^int(q) * 10` according to available preloads. A
+  stack-preloaded `1` makes the first form shorter; a preloaded `10` makes the
+  second form shorter; without either preload the forms are the same length;
 - spatial count hit helpers: `neighbor_count` and `line_count` keep their
   query shape until code generation and share compiled hit-test helpers;
 - spatial line-count loops: large `line_count` queries use compact hit loops
-  and shared geometry helpers when several masks use the same board/cell;
+  and shared geometry helpers when several masks use the same board/cell. Sum
+  loop helpers test the current hit before advancing the offset, then restore
+  the 0/1 hit count from the stack with `X↔Y`; this avoids a scratch
+  store/recall around every shared spatial bit-mask call;
   `arithmetic-if-terminal-select` covers both boolean-flag `==`/`!=` forms
   and full six-operator comparisons (`==`/`!=`/`<`/`<=`/`>`/`>=`) by lowering
   the predicate to a `0..1` selector via `sign`/`max`/`abs`. A cost gate keeps
@@ -1233,7 +1240,9 @@ The pipeline currently contains:
   (`indirect-target=NN`). Stable indirect-flow selectors preserve the
   register-valued X/X2 proof; mutating selectors drop only facts about the
   selector register that the hardware address computation changes, leaving
-  unrelated register facts live.
+  unrelated register facts live. Indirect conditional jumps `К x?0 r` are
+  modeled separately from direct `F x?0`: both their fallthrough and jump edges
+  preserve X2, and only the jump edge can mutate the selector.
   Direct `В/О` continuations are now modeled as an X2 sync from the returned X
   value: if X is known to contain register `r`, the caller continuation gets
   `X2 = r`; if returned X is unknown, the X2 proof is cleared. `С/П`, unknown
@@ -1259,10 +1268,13 @@ The pipeline currently contains:
   number-entry state is split between mantissa entry and exponent entry: `ВП`
   after an open mantissa starts an exponent-entry state, exponent digits and
   exponent `/-/` stay in that state, and the proof deliberately does not create
-  `X2` value aliases for the resulting scientific number. Emulator probes show
-  that a later `.` can signal `ЕГГ0Г` for such hidden exponent forms, so these
-  states are modeled structurally until the full `ВП`/mantissa shape proof
-  exists. The fact spelling is normalization-aware: `12` produces the shared fact
+  `X2` value aliases while the resulting scientific number is still active.
+  Emulator probes show that a later `.` can signal `ЕГГ0Г` for such hidden
+  exponent forms, so active states keep a shape-only X2 proof even when visible
+  `X` already has a normalized decimal value. When a later X2-syncing command
+  closes that exponent-entry form, the proof normalizes leading-zero mantissas
+  too (`05 ВП 3` becomes `5000`, `00 ВП 3` becomes `10000`) and only then emits
+  dot-safe X2 value facts. The fact spelling is normalization-aware: `12` produces the shared fact
   `decimal:12:normalized`, while `02` produces `decimal:2:normalized` in `X`
   and `decimal:02:unnormalized` in `X2`, so a restore cannot accidentally treat
   a leading-zero display value as the same hidden value. The same shape is
@@ -1276,7 +1288,7 @@ The pipeline currently contains:
   contains the same value as hidden `X2` and the separate restore-gap proof says
   the dot is in a safe X2 context. It also accepts the documented no-op form
   where `.` immediately follows an X2-affecting sync such as `П->X r`, `Cx`, or
-  the fallthrough side of a direct/proved-indirect conditional and the value
+  the fallthrough side of a direct conditional and the value
   proof still shows `X = X2`; this treats recall as a combined
   stack-lift/value-load/X2-sync operation and turns path-sensitive conditional
   X2 sync from a guard into an active rewrite. The pass refuses the rewrite
@@ -1357,11 +1369,12 @@ The pipeline currently contains:
   when their reads live behind `К БП`/`К ПП`/`К x?0`; unknown indirect flow is
   still conservative. `F L0`..`F L3` loop counters are modeled as both read and
   written registers.
-- **X2 dataflow helpers** — model direct `F x?0`/`F Lx` and indirect `К x?0 r`
-  as path-sensitive X2 operations: fallthrough syncs X into X2, while the jump
-  edge preserves X2. For mutating indirect selectors (`R0..R6`), the jump edge
-  drops register-valued facts about that selector while keeping unrelated X/X2
-  facts.
+- **X2 dataflow helpers** — model direct `F x?0`/`F Lx` as path-sensitive X2
+  operations: fallthrough syncs X into X2, while the jump edge preserves X2.
+  Indirect `К x?0 r` conditionals are path-sensitive for control flow but not
+  X2-affecting: both edges preserve X2. For mutating indirect selectors
+  (`R0..R6`), the jump edge drops register-valued facts about that selector
+  while keeping unrelated X/X2 facts.
 - **dispatch-case-ordering** — moves unique numeric zero cases earlier when a
   high-level `match` can reuse the selector already in X.
 - **x-preserving-fallthrough-branch** — after a direct zero-test such as
@@ -1441,7 +1454,10 @@ The pipeline currently contains:
   commands, when that producer already keeps the current X in Y for the
   following consumer. The same stack-difference proof starts with the possible
   difference in Z and follows direct calls/returns, so the rewrite is refused if
-  a later opcode could expose or consume that deeper stack value.
+  a later opcode could expose or consume that deeper stack value. The same pass
+  also removes a `В↑` before a proved hard X/X2 overwrite such as `Cx` when the
+  ordinary stack-difference proof shows the lift's Y value is dead before any
+  consumer can observe it.
 - **vp-x2-peephole** — drops a `К {x}` immediately after a proved `ВП`/X2
   boundary when `ВП` already supplies the fractional transform. The `К {x}`
   itself is recognized by opcode, not by a display/frac comment; only the
@@ -1504,7 +1520,11 @@ The pipeline currently contains:
   such bodies when they contain direct `ПП` calls, and keeps that lowering only
   if the final program is smaller. The same helper can also gain internal entry
   labels when another repeated body is a suffix of the helper, so callers enter
-  the middle instead of allocating a second helper body.
+  the middle instead of allocating a second helper body. Helper extraction keeps
+  X2 restore context intact: it may share a body containing digit/`.`/`/-/`/`ВП`
+  operations only when those restores are internal to the shared body, and it
+  refuses helper boundaries that would make a `В/О` return become the previous
+  command observed by the next X2-restore operation.
 - **repeated-unary-update-arg-temp** — routes the argument of repeated
   single-argument X-transform intrinsic calls (the `pow10`/`sqr`/`int`/`sin`/…
   family) through one hidden scratch when that exposes a shorter shared helper
@@ -1520,7 +1540,10 @@ The pipeline currently contains:
 - **return-suffix-gadget** — shares identical straight-line tails ending in
   `В/О` by jumping into one reusable suffix instead of duplicating it.
 - **bit-mask-helper** — shares generated `bit_mask(index)` code when spatial
-  membership and line-count lowering need the same packed-cell mask shape.
+  membership and line-count lowering need the same packed-cell mask shape. Its
+  X2-sensitive stack literals use preloaded stack constants only at positions
+  proved equivalent to the original `В↑; digit` form; ordinary one-digit
+  arithmetic literals do not consume those helper-only preloads.
 - **small-set-primitive-lowering** — lowers `near_any` and `eq_any` to compact
   arithmetic over small coordinate sets.
 - **near-any-helper** — shares repeated `near_any(value, radius, ...)`

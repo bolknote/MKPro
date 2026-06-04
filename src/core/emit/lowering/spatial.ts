@@ -32,6 +32,7 @@ import {
   spatialCountScratchNames,
   spatialCountStepScratchName,
   spatialHitScratchName,
+  spatialBitIndexExpressionForBoard,
   spatialLineProgressions,
   spatialNeighborProgressions,
   grid4MaskScratchName,
@@ -162,6 +163,7 @@ export function compileBitMaskWithQuotientScratch(ctx: LoweringCtx,
       return;
     }
     compileExpression(ctx, index);
+    emitBitMaskIndexLiftIfNeeded(ctx, index, line);
     emitBitMaskFromCurrentXWithQuotientScratch(ctx, scratch, line);
     ctx.optimizations.push({
       name: "bit-mask-quotient-reuse",
@@ -169,25 +171,55 @@ export function compileBitMaskWithQuotientScratch(ctx: LoweringCtx,
     });
 }
 
-export function emitBitMaskFromCurrentXWithQuotientScratch(ctx: LoweringCtx, scratch: string, line: number | undefined): void {
-    ctx.emitNumber("4");
+export function emitBitMaskIndexLiftIfNeeded(ctx: LoweringCtx, index: ExpressionAst, line: number | undefined): void {
+    if (!bitMaskIndexNeedsDigitEntryLift(index)) return;
+    ctx.emitOp(0x0e, "В↑", "bit mask index lift", line);
+}
+
+function bitMaskIndexNeedsDigitEntryLift(index: ExpressionAst): boolean {
+    return index.kind !== "identifier" && index.kind !== "number";
+}
+
+export function emitBitMaskFromCurrentXWithQuotientScratch(
+    ctx: LoweringCtx,
+    scratch: string,
+    line: number | undefined,
+  ): void {
+    ctx.emitStackNumberOrPreload("4");
     ctx.emitOp(0x13, "/", "bit mask quotient", line);
     ctx.emitStore(scratch, "bit mask quotient", line);
     ctx.emitOp(0x35, "К {x}", "bit mask remainder fraction", line);
     ctx.emitNumber("4");
     ctx.emitOp(0x12, "*", "bit mask remainder scale", line);
-    ctx.emitNumber("2");
+    ctx.emitOp(0x0e, "В↑", "bit mask power base lift", line);
+    ctx.emitStackNumberOrPreload("2");
     ctx.emitOp(0x24, "F x^y", "bit mask power", line);
-    ctx.emitNumber("0.5");
+    ctx.emitOp(0x0e, "В↑", "bit mask round bias lift", line);
+    ctx.emitNumberOrPreload("0.5");
     ctx.emitOp(0x10, "+", "bit mask round bias", line);
     ctx.emitOp(0x34, "К [x]", "bit mask round", line);
     ctx.emitRecall(scratch, "bit mask quotient", line);
     ctx.emitOp(0x34, "К [x]", "bit mask digit index", line);
-    ctx.emitNumber("1");
-    ctx.emitOp(0x10, "+", "bit mask decade index", line);
-    ctx.emitOp(0x15, "F 10^x", "bit mask decade", line);
+    if (ctx.allocation.constants["1"] !== undefined && ctx.allocation.constants["10"] === undefined) {
+      ctx.emitStackNumberOrPreload("1");
+      ctx.emitOp(0x10, "+", "bit mask decade index", line);
+      ctx.emitOp(0x15, "F 10^x", "bit mask decade", line);
+      ctx.optimizations.push({
+        name: "bit-mask-decade-index-preload",
+        detail: "Placed fractional-nibble bit masks with a preloaded stack 1 for int(q) + 1 before 10^x.",
+      });
+    } else {
+      ctx.emitOp(0x15, "F 10^x", "bit mask decade", line);
+      ctx.emitNumberOrPreload("10");
+      ctx.emitOp(0x12, "*", "bit mask next decade", line);
+      ctx.optimizations.push({
+        name: "bit-mask-decade-scale",
+        detail: "Placed fractional-nibble bit masks with 10^int(q) * 10 instead of entering int(q) + 1.",
+      });
+    }
     ctx.emitOp(0x13, "/", "bit mask fractional place", line);
-    ctx.emitNumber("8");
+    ctx.emitOp(0x0e, "В↑", "bit mask anchor lift", line);
+    ctx.emitStackNumberOrPreload("8");
     ctx.emitOp(0x10, "+", "bit mask anchor", line);
 }
 
@@ -283,7 +315,7 @@ export function compileSpatialNeighborCountLoop(ctx: LoweringCtx, expr: Extract<
 
     const helper = ctx.ensureSpatialHitHelper(mask.name, spatialHitScratchName(mask.name));
     offsets.forEach((offset, position) => {
-      compileExpression(ctx, offsetExpressionAst(cell, offset));
+      compileExpression(ctx, spatialBitIndexExpressionForBoard(board, offsetExpressionAst(cell, offset)));
       ctx.emitJump(0x53, "ПП", helper.label, `spatial hit ${mask.name}`, undefined);
       if (position === 0) {
         ctx.emitStore(total, "neighbor_count total", undefined);
@@ -529,18 +561,20 @@ export function emitSpatialSumLoopHelperBody(ctx: LoweringCtx,
     const start = ctx.freshLabel(`${operation}_loop`);
     ctx.emitLabel(start);
     compileExpression(ctx, addExpressions(cell, { kind: "identifier", name: offset }));
-    const hitScratch = spatialHitScratchName(hitMask);
-    ctx.emitStore(hitScratch, "spatial hit index", sourceLine);
+    emitInlineSpatialHitFromCurrentX(ctx, hitMask, sourceLine);
 
     ctx.emitRecall(offset, `${operation} offset`);
     ctx.emitRecall(step, `${operation} step`);
     ctx.emitOp(0x10, "+", `${operation} next offset`);
     ctx.emitStore(offset, `${operation} offset`);
-
-    emitInlineSpatialHitFromScratch(ctx, hitMask, hitScratch, sourceLine);
+    ctx.emitOp(0x14, "X↔Y", `${operation} restore hit count`, sourceLine);
     ctx.emitRecall(total, `${operation} accumulator`);
     ctx.emitOp(0x10, "+", `${operation} add hit`);
     ctx.emitStore(total, `${operation} accumulator`);
+    ctx.optimizations.push({
+      name: "spatial-sum-hit-stack-restore",
+      detail: `Preserved the ${operation} hit count on the stack while advancing the spatial offset.`,
+    });
 
     if (flCounterOpcode !== undefined) {
       ctx.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, `${operation} loop`, sourceLine);
@@ -569,8 +603,16 @@ export function emitInlineSpatialHitFromScratch(ctx: LoweringCtx,
     scratch: string,
     sourceLine: number | undefined,
   ): void {
-    const helper = ctx.ensureSpatialBitMaskHelper(scratch, sourceLine);
     ctx.emitRecall(scratch, "spatial hit index", sourceLine);
+    emitInlineSpatialHitFromCurrentX(ctx, hitMask, sourceLine);
+}
+
+export function emitInlineSpatialHitFromCurrentX(ctx: LoweringCtx, 
+    hitMask: string,
+    sourceLine: number | undefined,
+  ): void {
+    const scratch = ctx.sharedBitMaskHelperScratch() ?? spatialHitScratchName(hitMask);
+    const helper = ctx.ensureSpatialBitMaskHelper(scratch, sourceLine);
     ctx.emitJump(0x53, "ПП", helper.label, "bit_mask helper", sourceLine);
     ctx.emitRecall(hitMask, "spatial hit mask", sourceLine);
     ctx.emitOp(0x37, "К ∧", "spatial hit test", sourceLine);

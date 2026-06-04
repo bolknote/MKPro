@@ -57,6 +57,7 @@ export type LoweringCtx = Pick<
   | "emitPreparedIndexedStore"
   | "emitNumber"
   | "emitNumberOrPreload"
+  | "emitStackNumberOrPreload"
   | "emitOp"
   | "emitProcedureEndLabel"
   | "emitProcedureLabel"

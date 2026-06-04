@@ -2637,7 +2637,9 @@ export function spatialCountExpression(
       : board?.width === 1
         ? [-10, 10]
         : [-11, -10, -9, -1, 1, 9, 10, 11];
-    return sumExpressions(offsets.map((offset) => spatialHitExpression(mask, offsetExpressionAst(cell, offset))));
+    return sumExpressions(offsets.map((offset) =>
+      spatialHitExpression(mask, spatialBitIndexExpressionForBoard(board, offsetExpressionAst(cell, offset)))
+    ));
   }
 
   const board = boardForCellMask(mask, ast);
@@ -2659,6 +2661,12 @@ export function spatialCountExpression(
 
 export function spatialHitExpression(mask: ExpressionAst, index: ExpressionAst): ExpressionAst {
   return { kind: "call", callee: "__spatial_hit", args: [mask, index] };
+}
+
+export function spatialBitIndexExpressionForBoard(board: V2BoardAst | undefined, cell: ExpressionAst): ExpressionAst {
+  if (board?.height === 1) return subtractExpressions(cell, numberExpression(board.xMin));
+  if (board?.width === 1) return subtractExpressions(cell, numberExpression(board.yMin));
+  return cell;
 }
 
 export function boardForCellMask(mask: ExpressionAst, ast: ProgramAst): V2BoardAst | undefined {

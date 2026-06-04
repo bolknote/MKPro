@@ -2799,7 +2799,10 @@ function cellSetUpdateExpression(
   const digitIndex = decimalPlayerPackedCellsIndex(collection, item, context);
   if (digitIndex !== undefined) return `digit_set(${collection}, ${digitIndex}, ${op === "+=" ? "1" : "0"})`;
   const mask = cellMaskExpressionForCollection(collection, item, context);
-  if (mask === undefined) return `${op === "+=" ? "bit_set" : "bit_clear"}(${collection}, ${item})`;
+  if (mask === undefined) {
+    const bitIndex = cellBitIndexExpressionForCollection(collection, item, context) ?? item;
+    return `${op === "+=" ? "bit_set" : "bit_clear"}(${collection}, ${bitIndex})`;
+  }
   return op === "+="
     ? `bit_or(${collection}, ${mask})`
     : `bit_and(${collection}, bit_not(${mask}))`;
@@ -2815,7 +2818,9 @@ function cellMembershipExpression(
   const digitIndex = decimalPlayerPackedCellsIndex(collection, item, context);
   if (digitIndex !== undefined) return `digit_at(${collection}, ${digitIndex})`;
   const mask = cellMaskExpressionForCollection(collection, item, context);
-  return mask === undefined ? `bit_has(${collection}, ${item})` : `bit_and(${collection}, ${mask})`;
+  if (mask !== undefined) return `bit_and(${collection}, ${mask})`;
+  const bitIndex = cellBitIndexExpressionForCollection(collection, item, context) ?? item;
+  return `bit_has(${collection}, ${bitIndex})`;
 }
 
 function lowerV2MatchStatements(statement: V2MatchStatementAst, context: V2LoweringContext): StatementAst[] {
@@ -3753,6 +3758,18 @@ function oneDimensionalCellMaskExpression(
   if (board === undefined) return undefined;
   if (board.height === 1 && board.xMin >= 0 && board.xMax <= 7) return `pow10(${cell})`;
   if (board.width === 1 && board.yMin >= 0 && board.yMax <= 7) return `pow10(${cell})`;
+  return undefined;
+}
+
+function cellBitIndexExpressionForCollection(
+  mask: string,
+  cell: string,
+  context: V2LoweringContext,
+): string | undefined {
+  const board = boardForCells(mask, context);
+  if (board === undefined) return undefined;
+  if (board.height === 1) return addOffsetExpression(`(${cell})`, -board.xMin);
+  if (board.width === 1) return addOffsetExpression(`(${cell})`, -board.yMin);
   return undefined;
 }
 

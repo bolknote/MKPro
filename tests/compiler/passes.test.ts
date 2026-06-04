@@ -33,6 +33,7 @@ import {
   computeX2ImmediateSyncStates,
   computeX2RegisterStates,
   computeX2ValueStates,
+  type X2ShapeSet,
   type X2ValueSet,
 } from "../../src/core/passes/helpers.ts";
 import type { IrOp, RegisterName } from "../../src/core/types.ts";
@@ -278,6 +279,10 @@ function registerStateText(state: ReadonlySet<RegisterName> | undefined): string
 }
 
 function x2ValueStateText(state: X2ValueSet | undefined): string[] | undefined {
+  return state === undefined ? undefined : [...state].sort();
+}
+
+function x2ShapeStateText(state: X2ShapeSet | undefined): string[] | undefined {
   return state === undefined ? undefined : [...state].sort();
 }
 
@@ -828,7 +833,7 @@ describe("ir passes on synthetic programs", () => {
     expect(x2EntryStateText(states[3])).toBe("exponent:12:");
     expect(x2EntryStateText(states[4])).toBe("exponent:12:3");
     expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:12000:normalized"]);
-    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:12000:normalized"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual([]);
     expect(x2EntryStateText(states[5])).toBe("closed");
     expect(x2ValueStateText(states[5]?.x)).toEqual(["decimal:12000:normalized", "reg:2"]);
     expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:12000:normalized", "reg:2"]);
@@ -985,7 +990,7 @@ describe("ir passes on synthetic programs", () => {
     expect(x2EntryStateText(computeX2ValueStates(afterStore)[4])).toBe("unknown");
   });
 
-  it("x2 value dataflow keeps unsafe exponent-entry shapes structural-only", () => {
+  it("x2 value dataflow keeps active leading-zero exponent-entry X2 structural-only", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
       plain(0x05, "5"),
@@ -996,8 +1001,73 @@ describe("ir passes on synthetic programs", () => {
     const states = computeX2ValueStates(program);
 
     expect(x2EntryStateText(states[4])).toBe("exponent:05:3");
-    expect(x2ValueStateText(states[4]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:5000:normalized"]);
     expect(x2ValueStateText(states[4]?.x2)).toEqual([]);
+  });
+
+  it("x2 value dataflow records active exponent-entry shape without a dot-safe X2 value fact", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual([
+      "exponent:05:3:decimal",
+      "mantissa:5000:decimal",
+    ]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual([]);
+  });
+
+  it("x2 value dataflow records safe exponent-entry shape and normalized mantissa shape", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ShapeStateText(states[3]?.x2Shape)).toEqual([
+      "exponent:5:3:decimal",
+      "mantissa:5000:decimal",
+    ]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["decimal:5000:normalized"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual([]);
+  });
+
+  it("x2 shape dataflow normalizes visible shape through dot while preserving hidden raw shape", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x35, "К {x}"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["mantissa:2:decimal"]);
+    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["mantissa:02:decimal"]);
+  });
+
+  it("x2 value dataflow models closed sign-change from normalized X and raw X2 shape", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x35, "К {x}"),
+      plain(0x0a, "."),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[5]?.x)).toEqual(["decimal:-2:normalized"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:-02:unnormalized"]);
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["mantissa:-2:decimal"]);
+    expect(x2ShapeStateText(states[5]?.x2Shape)).toEqual(["mantissa:-02:decimal"]);
   });
 
   it("x2 value dataflow keeps sign-change in exponent-entry state", () => {
@@ -1015,7 +1085,7 @@ describe("ir passes on synthetic programs", () => {
     expect(x2EntryStateText(states[4])).toBe("exponent:12:-");
     expect(x2EntryStateText(states[5])).toBe("exponent:12:-3");
     expect(x2ValueStateText(states[5]?.x)).toEqual(["decimal:0.012:normalized"]);
-    expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:0.012:normalized"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual([]);
   });
 
   it("x2 value dataflow preserves VP exponent context through X2-preserving gaps", () => {
@@ -1053,6 +1123,42 @@ describe("ir passes on synthetic programs", () => {
     expect(x2VpContextStateText(states[4])).toBe("none");
     expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:5000:normalized"]);
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:5000:normalized"]);
+  });
+
+  it("x2 value dataflow proves a closed leading-zero exponent-entry after an X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[5])).toBe("closed");
+    expect(x2VpContextStateText(states[5])).toBe("none");
+    expect(x2ValueStateText(states[5]?.x)).toEqual(["decimal:5000:normalized"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:5000:normalized"]);
+  });
+
+  it("x2 value dataflow keeps active all-zero exponent-entry X2 structural-only", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x00, "0"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[4])).toBe("exponent:00:3");
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:10000:normalized"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual([]);
+    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual([
+      "exponent:00:3:decimal",
+      "mantissa:10000:decimal",
+    ]);
   });
 
   it("x2 value dataflow proves a closed fractional exponent-entry after an X2 sync", () => {
@@ -1487,6 +1593,33 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore replaces a repeated leading-zero exponent literal after it is closed", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x00, "0"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 5000 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
   it("x2-literal-restore keeps positive single digits because dot would not save a cell", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),
@@ -1855,6 +1988,20 @@ describe("ir passes on synthetic programs", () => {
       store("3"),
       halt(),
     ]);
+  });
+
+  it("x2-noop-restore keeps dot in active exponent-entry context", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("x2-noop-restore keeps dot after a leading-zero X2 literal", () => {
@@ -3366,6 +3513,38 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("pre-shift-stack-lift removes В↑ made dead before a hard X2 overwrite", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      plain(0x54, "К НОП"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x54, "К НОП"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift keeps В↑ before hard X2 overwrite when the stack lift is consumed", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      plain(0x0d, "Cx"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("pre-shift-stack-lift collapses adjacent В↑ lifts when the deeper duplicate is unused", () => {
     const program: IrOp[] = [
       plain(0x0e, "В↑"),
@@ -3913,7 +4092,7 @@ describe("ir passes on synthetic programs", () => {
       store("3"),
       recall("4"),
       store("5"),
-      plain(0x01, "1"),
+      plain(0x20, "F pi"),
       label("second"),
       recall("1"),
       recall("2"),
@@ -3921,7 +4100,7 @@ describe("ir passes on synthetic programs", () => {
       store("3"),
       recall("4"),
       store("5"),
-      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
       halt(),
     ];
     const result = sharedStraightLineHelper.run(program, ctx);
@@ -3942,14 +4121,14 @@ describe("ir passes on synthetic programs", () => {
       recall("2"),
       plain(0x10, "+"),
       store("3"),
-      plain(0x01, "1"),
+      plain(0x20, "F pi"),
       label("second"),
       recall("1"),
       call("normalize"),
       recall("2"),
       plain(0x10, "+"),
       store("3"),
-      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
       label("normalize"),
       plain(0x34, "К [x]"),
       ret(),
@@ -3988,6 +4167,28 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("shared-straight-line-helper keeps helper returns away from X2 restore boundaries", () => {
+    const program: IrOp[] = [
+      label("first"),
+      recall("1"),
+      recall("2"),
+      plain(0x10, "+"),
+      store("3"),
+      plain(0x01, "1"),
+      label("second"),
+      recall("1"),
+      recall("2"),
+      plain(0x10, "+"),
+      store("3"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const result = sharedStraightLineHelper.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("shared-straight-line-helper adds internal entries for repeated helper suffixes", () => {
     const program: IrOp[] = [
       label("first"),
@@ -3997,7 +4198,7 @@ describe("ir passes on synthetic programs", () => {
       store("3"),
       recall("4"),
       store("5"),
-      plain(0x01, "1"),
+      plain(0x20, "F pi"),
       label("second"),
       recall("1"),
       recall("2"),
@@ -4005,13 +4206,13 @@ describe("ir passes on synthetic programs", () => {
       store("3"),
       recall("4"),
       store("5"),
-      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
       label("suffix"),
       plain(0x10, "+"),
       store("3"),
       recall("4"),
       store("5"),
-      plain(0x03, "3"),
+      plain(0x17, "F lg"),
       halt(),
     ];
     const result = sharedStraightLineHelper.run(program, ctx);

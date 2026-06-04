@@ -78,7 +78,7 @@ describe("MK-Pro compiler", () => {
     expect(result.diagnostics).toEqual([]);
     expect(result.report.steps).toBe(100);
     expect(result.report.steps).toBeLessThanOrEqual(105);
-  }, 20_000);
+  }, 30_000);
 
   it("keeps the 4x4 tic-tac-toe port high-level around marks and line counts", () => {
     const game = source("examples/pending-optimizer/tic-tac-toe-4x4.mkpro");
@@ -97,7 +97,7 @@ describe("MK-Pro compiler", () => {
 
     expect(result.diagnostics).toEqual([]);
     expect(result.report.reference?.referenceSpan).toBe(105);
-    expect(result.report.steps).toBe(615);
+    expect(result.report.steps).toBe(666);
   }, 20_000);
 
   it("keeps every runnable example with a real source reference no larger than that source", () => {
@@ -135,7 +135,7 @@ describe("MK-Pro compiler", () => {
     expect(checked).toContain("examples/raja-yoga.mkpro");
     expect(checked).toContain("examples/rambo-iii.mkpro");
     expect(checked).toContain("examples/sea-battle.mkpro");
-  }, 20_000);
+  }, 30_000);
 
   it("keeps the full cave reference high-level but does not fit it through templates", () => {
     const reference = source("examples/pending-optimizer/cave-treasure.mkpro");

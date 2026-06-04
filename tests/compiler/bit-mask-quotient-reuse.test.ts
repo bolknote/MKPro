@@ -61,7 +61,7 @@ program SharedBitMaskHelper {
 `, { analysis: true, budget: 999999 });
     const names = result.report.optimizations.map((item) => item.name);
 
-    expect(result.report.steps).toBe(45);
+    expect(result.report.steps).toBe(43);
     expect(names).toContain("shared-bit-mask-helper-layout");
     expect(names).toContain("bit-mask-condition-helper");
     expect(names).toContain("bit-mask-helper");

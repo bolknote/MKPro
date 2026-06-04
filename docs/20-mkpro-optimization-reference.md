@@ -86,7 +86,7 @@ the same generalized lowering strategy.
 - `register-coalesce` — merges separate temporary cells when lifetime ranges do not overlap.
 - `duplicate-failure-tail-merge` — merges identical error/failure tail sequences, including pause-only tails that display the incoming X value.
 - `shared-terminal-tail` — jumps into an existing identical straight-line suffix that already ends in unconditional terminal flow.
-- `shared-straight-line-helper` — extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the `ПП`/`В/О` cost is lower than duplicated inline code; a size-gated candidate extends this to bodies with direct `ПП` calls, and `multi-entry-straight-line-helper` can add internal entry labels for repeated suffixes of the same helper body.
+- `shared-straight-line-helper` — extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the `ПП`/`В/О` cost is lower than duplicated inline code; a size-gated candidate extends this to bodies with direct `ПП` calls, and `multi-entry-straight-line-helper` can add internal entry labels for repeated suffixes of the same helper body. X2-restoring numeric-entry commands may be shared only when their restore context is wholly inside the helper body; helper calls/returns are not allowed to become the previous command for an adjacent digit/`.`/`/-/`/`ВП`.
 - `arithmetic-if-pass` — a dedicated pass collecting all `arithmetic-if` opportunities.
 - `redundant-prologue-elimination` — removes repeated identical prologues.
 - `step-vs-run-verification` — chooses the more compact step/run verification form.
@@ -323,6 +323,10 @@ Machine-level variants around branches:
   direct `ПП` calls, and is adopted only when the final program shrinks.
   `multi-entry-straight-line-helper` reuses suffixes of an already-selected
   helper by adding internal entry labels instead of allocating another helper.
+  Candidate boundaries are X2-context aware: a body may contain digit-entry,
+  `.`, `/-/`, or `ВП` only when each restore is preceded by its required
+  context inside the shared body, and extraction refuses starts/ends that would
+  insert a helper call or `В/О` return next to an X2 restore.
 - `jump-thread` — rewires jump chains into a straight flow.
 - `jump-to-next-threading` — removes jumps that only go to the next label.
 - `redundant-prologue-elimination` — merges repeated prologues while preserving side effects.
@@ -512,7 +516,7 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `spatial-neighbor-count-unroll` — unrolls small neighbor counting directly when it is shorter than a call.
 - `bit-set-mask-cse` — removes repeated bit-mask calculations for identical coordinates.
 - `single-bit-mask-op` — materializes a single-bit mask in scratch once, then applies `К ИНВ`, `К ∧`, or `К ∨` style operations.
-- `bit-mask-helper` — emits shared helper routines that build bit masks from indices once per scratch register.
+- `bit-mask-helper` — emits shared helper routines that build bit masks from indices once per scratch register. The helper treats the packed-mask literal steps as X2-sensitive stack literals: helper-only preloaded constants can replace selected `В↑; digit` pairs only where emulator tests prove the stack effect is equivalent, while ordinary one-digit expression literals ignore those preloads.
 - `bit-mask-helper-call` — routes repeated `bit_mask` construction through existing helper labels instead of recompiling.
 - `bit-mask-quotient-reuse` — reuses previously computed quotients/parts for mask generation.
 - `grid-cell-mask-cse` — removes repeated 4x4 packed grid cell-mask calculations for adjacent membership/set operations.
@@ -633,7 +637,9 @@ Display rewrites are separated into strategy selection + body lowering.
   stack-preserving labels, stores, address bytes, and plain stack-neutral
   commands, when the producer already supplies the current X in Y and the
   shared stack-difference proof shows the extra Z/T difference cannot reach a
-  later consumer.
+  later consumer. The same proof also removes `В↑` before a hard X/X2
+  overwrite such as `Cx` when the lift's Y value cannot reach any later stack
+  consumer.
 - `known-zero-reuse` — reuses a known zero source instead of reloading.
 - `inequality-zero-false-branch` — feeds `known-zero-reuse` after a false
   `!= 0` branch, avoiding a fresh zero literal or `Cx`.
@@ -644,6 +650,16 @@ Display rewrites are separated into strategy selection + body lowering.
   `pause`, `return`) keep their store if they are read elsewhere. When a shared
   expression helper is already profitable, it wins over the local stack-temp
   rewrite so repeated tails remain shareable.
+- `bit-mask-decade-scale` / `bit-mask-decade-index-preload` — chooses the
+  cheaper fractional-nibble bit-mask placement form. `10^int(q) * 10` wins when
+  `10` is already preloaded by spatial coordinate code; `10^(int(q) + 1)` wins
+  when a stack-preloaded `1` is available; with direct digit entry the forms are
+  the same length.
+- `spatial-sum-hit-stack-restore` — in shared `line_count`/`neighbor_count`
+  sum loops, calls the bit-mask hit test while the computed index is still in
+  X, advances the offset afterward, and uses `X↔Y` to recover the 0/1 hit
+  count from the stack before accumulating. This removes the scratch
+  store/recall pair formerly needed to survive offset advancement.
 - `membership-collection-x2-restore` — for a packed membership test followed
   by setting the same assignable collection, including an indexed bank cell with
   a prepared indirect selector, uses X2 as the hidden temporary: the mask
@@ -781,10 +797,14 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `decimal:-5000:normalized` / `decimal:-0.005:normalized`, clearing the VP
     context). Hidden exponent forms that remain under observable VP context
     still do not become dot-safe value aliases; emulator probes show that later
-    `.` can signal `ЕГГ0Г`. Exponent forms that need a wider scientific,
-    hex/super, or display-shape proof stay structural until the mantissa-shape
-    model can prove them. Closed-context `/-/` without a proved decimal or VP
-    context stays
+    `.` can signal `ЕГГ0Г`. A separate shape lattice now tracks decimal
+    mantissa and exponent-entry forms independently from value facts: for
+    example unsafe `05 ВП 3` is preserved as `exponent:05:3:decimal` without
+    granting a `decimal:*` equality fact, while safe `5 ВП 3` carries both the
+    exponent shape and `mantissa:5000:decimal`. This shape lattice is the
+    extension point for future `hex:*` and `super:*` facts; until those are
+    proved, hex/super/display shapes remain structural only. Closed-context
+    `/-/` without a proved decimal or VP context stays
     unknown. The pass accepts either a
     safe dot-restore gap or a CFG-proven immediate no-op form after an
     X2-affecting sync such as `П->X r`/`Cx`/conditional fallthrough/direct
@@ -800,8 +820,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     signed digit-runs, and normalized exponent-entry literals such as
     `5 ВП 3`, `5 ВП 3 /-/`, `5 /-/ ВП 3`, or
     `5 /-/ ВП 3 /-/` once the prior value has been closed by a safe
-    X2-affecting sync. Leading-zero forms, too-wide exponent forms,
-    display/raw bytes, and later context-sensitive `.`/`/-/`/`ВП`
+    X2-affecting sync. Leading-zero exponent mantissas are normalized after
+    that closing sync (`05 ВП 3` -> `5000`, `00 ВП 3` -> `10000`), but active
+    exponent-entry X2 remains shape-only because an immediate `.` can still
+    signal `ЕГГ0Г`. Too-wide exponent forms, display/raw bytes, and later
+    context-sensitive `.`/`/-/`/`ВП`
     observations are kept.
 20. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.
 21. `dead-store-elimination` — removes direct stores, plus stable-indirect stores with proved targets, whose target register is not live after the write in a CFG that follows proved indirect flow targets (`indirect-target=NN`) and does not affect number-entry/input finalization or the previous-command context consumed by `ВП` while it restores X2; mutating indirect selectors are kept.

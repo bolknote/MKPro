@@ -3,7 +3,9 @@ import { getOpcode } from "../opcodes.ts";
 import {
   emptyResult,
   hasRewriteBarrier,
+  plainPreservesXValue,
   removingPreShiftLiftCanExposeStack,
+  removingStackLiftCanExposeStack,
   type IrPass,
   type IrPassFn,
 } from "./helpers.ts";
@@ -41,14 +43,36 @@ function nextStackShiftingProducerIndex(ops: readonly IrOp[], start: number): nu
   return undefined;
 }
 
+function isHardX2Overwrite(op: IrOp | undefined): boolean {
+  if (op === undefined || op.kind !== "plain" || hasRewriteBarrier(op)) return false;
+  const opcode = getOpcode(op.opcode);
+  return opcode.x2Effect === "affects" &&
+    opcode.stackEffect === "preserves" &&
+    !plainPreservesXValue(op);
+}
+
+function nextHardX2OverwriteIndex(ops: readonly IrOp[], start: number): number | undefined {
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (isHardX2Overwrite(op)) return index;
+    if (!isStackPreservingGapOp(op)) return undefined;
+  }
+  return undefined;
+}
+
 const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
   for (let index = 0; index < ops.length - 1; index += 1) {
     const op = ops[index]!;
     if (!isStackLift(op)) continue;
     const producerIndex = nextStackShiftingProducerIndex(ops, index + 1);
-    if (producerIndex === undefined) continue;
-    if (removingPreShiftLiftCanExposeStack(ops, producerIndex)) continue;
+    if (producerIndex !== undefined) {
+      if (removingPreShiftLiftCanExposeStack(ops, producerIndex)) continue;
+      remove.add(index);
+      continue;
+    }
+    if (nextHardX2OverwriteIndex(ops, index + 1) === undefined) continue;
+    if (removingStackLiftCanExposeStack(ops, index)) continue;
     remove.add(index);
   }
 
@@ -58,7 +82,7 @@ const run: IrPassFn = (ops) => {
     applied: remove.size,
     optimizations: [{
       name: "pre-shift-stack-lift",
-      detail: `Removed ${remove.size} В↑ lift${remove.size === 1 ? "" : "s"} already supplied by the following stack-shifting command.`,
+      detail: `Removed ${remove.size} В↑ lift${remove.size === 1 ? "" : "s"} already supplied by a following stack-shifting command or made dead before a hard X2 overwrite.`,
     }],
   };
 };

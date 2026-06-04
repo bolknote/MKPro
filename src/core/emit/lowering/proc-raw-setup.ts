@@ -882,6 +882,7 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
     }
     for (const helper of ctx.spatialBitMaskHelpers.values()) {
       ctx.emitLabel(helper.label);
+      ctx.emitOp(0x0e, "В↑", "bit_mask helper argument lift", helper.line);
       emitBitMaskFromCurrentXWithQuotientScratch(ctx, helper.scratch, helper.line);
       ctx.emitOp(0x52, "В/О", "bit_mask return", helper.line);
       ctx.optimizations.push({
@@ -891,7 +892,8 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
     }
     for (const helper of ctx.spatialHitHelpers.values()) {
       ctx.emitLabel(helper.label);
-      const bitMaskHelper = ctx.spatialBitMaskHelpers.values().next().value;
+      const bitMaskHelper = ctx.spatialBitMaskHelpers.get(helper.scratch) ??
+        ctx.spatialBitMaskHelpers.values().next().value;
       if (bitMaskHelper !== undefined) {
         ctx.emitJump(0x53, "ПП", bitMaskHelper.label, "spatial hit bit_mask", helper.line);
         ctx.optimizations.push({

@@ -35,6 +35,12 @@ export type X2ValueFact =
   | `decimal:${string}:normalized`
   | `decimal:${string}:unnormalized`;
 export type X2ValueSet = ReadonlySet<X2ValueFact>;
+export type X2ShapeFact =
+  | `mantissa:${string}:decimal`
+  | `exponent:${string}:${string}:decimal`
+  | `hex:${string}:mantissa`
+  | `super:${string}`;
+export type X2ShapeSet = ReadonlySet<X2ShapeFact>;
 
 const NORMALIZED_DECIMAL_ZERO: X2ValueFact = "decimal:0:normalized";
 const SAME_UNKNOWN_VALUE: X2ValueFact = "same:unknown";
@@ -42,6 +48,8 @@ const SAME_UNKNOWN_VALUE: X2ValueFact = "same:unknown";
 export interface X2ValueDataflowState {
   readonly x: X2ValueSet;
   readonly x2: X2ValueSet;
+  readonly xShape?: X2ShapeSet;
+  readonly x2Shape?: X2ShapeSet;
   readonly entry: X2EntryState;
   readonly vpContext?: X2VpContextState;
   readonly vpEntryMantissa?: ReadonlySet<string> | undefined;
@@ -439,7 +447,14 @@ function emptyRegisterDataflowState(): RegisterDataflowState {
 }
 
 function emptyX2ValueDataflowState(): X2ValueDataflowState {
-  return { x: new Set(), x2: new Set(), entry: closedX2EntryState(), vpContext: noneX2VpContextState() };
+  return {
+    x: new Set(),
+    x2: new Set(),
+    xShape: new Set(),
+    x2Shape: new Set(),
+    entry: closedX2EntryState(),
+    vpContext: noneX2VpContextState(),
+  };
 }
 
 function cloneRegisterDataflowState(input: RegisterDataflowState): RegisterDataflowState {
@@ -450,6 +465,8 @@ function cloneX2ValueDataflowState(input: X2ValueDataflowState): X2ValueDataflow
   return {
     x: new Set(input.x),
     x2: new Set(input.x2),
+    xShape: cloneOptionalShapeSet(input.xShape),
+    x2Shape: cloneOptionalShapeSet(input.x2Shape),
     entry: cloneX2EntryState(input.entry),
     vpContext: cloneX2VpContextState(input.vpContext),
     vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
@@ -533,6 +550,8 @@ function transferX2ValueDataflowState(
       return {
         x: addX2Value(closed.x, registerValueFact(op.register)),
         x2: addStoredX2ValueAlias(closed, registerValueFact(op.register)),
+        xShape: cloneOptionalShapeSet(closed.xShape),
+        x2Shape: cloneOptionalShapeSet(closed.x2Shape),
         entry: closedX2EntryState(),
         vpContext: cloneX2VpContextState(closed.vpContext),
       };
@@ -541,12 +560,26 @@ function transferX2ValueDataflowState(
       return transferIndirectStoreX2ValueState(input, op);
     case "recall": {
       const value = registerValueFact(op.register);
-      return { x: new Set([value]), x2: new Set([value]), entry: closedX2EntryState(), vpContext: noneX2VpContextState() };
+      return {
+        x: new Set([value]),
+        x2: new Set([value]),
+        xShape: new Set(),
+        x2Shape: new Set(),
+        entry: closedX2EntryState(),
+        vpContext: noneX2VpContextState(),
+      };
     }
     case "indirect-recall": {
       const target = knownIndirectMemoryTarget(op);
       const values = target === undefined ? new Set<X2ValueFact>([SAME_UNKNOWN_VALUE]) : new Set([registerValueFact(target)]);
-      return { x: values, x2: new Set(values), entry: closedX2EntryState(), vpContext: noneX2VpContextState() };
+      return {
+        x: values,
+        x2: new Set(values),
+        xShape: new Set(),
+        x2Shape: new Set(),
+        entry: closedX2EntryState(),
+        vpContext: noneX2VpContextState(),
+      };
     }
     case "plain":
       return transferPlainX2ValueState(input, op);
@@ -554,9 +587,12 @@ function transferX2ValueDataflowState(
       const closed = closeX2ValueEntry(input);
       const effect = conditionalX2EffectForGraphEdge(op, edge);
       const x = syncUnknownSameValue(new Set(closed.x), effect);
+      const xShape = cloneOptionalShapeSet(closed.xShape);
       return {
         x,
         x2: transferConditionalX2ValueSet(closed, x, effect),
+        xShape,
+        x2Shape: transferConditionalX2ShapeSet(closed, xShape, effect),
         entry: closedX2EntryState(),
         vpContext: transferConditionalX2VpContextState(closed, effect),
         vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, effect),
@@ -568,6 +604,8 @@ function transferX2ValueDataflowState(
       return {
         x: new Set(),
         x2: effect === "preserves" ? new Set(closed.x2) : new Set(),
+        xShape: new Set(),
+        x2Shape: effect === "preserves" ? cloneOptionalShapeSet(closed.x2Shape) : new Set(),
         entry: closedX2EntryState(),
         vpContext: transferConditionalX2VpContextState(closed, effect),
       };
@@ -582,9 +620,12 @@ function transferX2ValueDataflowState(
     case "return": {
       const closed = closeX2ValueEntry(input);
       const x = syncUnknownSameValue(new Set(closed.x), "affects");
+      const xShape = cloneOptionalShapeSet(closed.xShape);
       return {
         x,
         x2: new Set(x),
+        xShape,
+        x2Shape: cloneOptionalShapeSet(xShape),
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
       };
@@ -865,6 +906,8 @@ function transferPlainX2ValueState(
     return {
       x: new Set([NORMALIZED_DECIMAL_ZERO]),
       x2: new Set([NORMALIZED_DECIMAL_ZERO]),
+      xShape: new Set([decimalMantissaShapeFact("0")]),
+      x2Shape: new Set([decimalMantissaShapeFact("0")]),
       entry: closedX2EntryState(),
       vpContext: noneX2VpContextState(),
       vpEntryMantissa: new Set(["0"]),
@@ -874,6 +917,8 @@ function transferPlainX2ValueState(
   const closedExponentValues = closedExponentEntryDecimalFacts(input.entry);
   if (closedExponentValues.size > 0) {
     const x = plainPreservesXValue(op) ? new Set(closedExponentValues) : new Set<X2ValueFact>();
+    const closedExponentShapes = closedExponentEntryShapeFacts(input.entry);
+    const xShape = plainPreservesXValue(op) ? new Set(closedExponentShapes) : new Set<X2ShapeFact>();
     const x2 = effect === "preserves"
       ? new Set(closedExponentValues)
       : effect === "affects"
@@ -882,9 +927,25 @@ function transferPlainX2ValueState(
     return {
       x,
       x2,
+      xShape,
+      x2Shape: transferPlainX2ShapeSet(input, xShape, effect, closedExponentShapes),
       entry: nextX2EntryStateForPlainEffect(effect),
       vpContext: transferPlainX2VpContextState(input, effect),
       vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, effect),
+    };
+  }
+  const closedExponentShapes = closedExponentEntryShapeFacts(input.entry);
+  if (closedExponentShapes.size > 0) {
+    const x = new Set<X2ValueFact>();
+    const xShape = plainPreservesXValue(op) ? new Set(closedExponentShapes) : new Set<X2ShapeFact>();
+    return {
+      x,
+      x2: new Set(),
+      xShape,
+      x2Shape: transferPlainX2ShapeSet(input, xShape, effect, closedExponentShapes),
+      entry: nextX2EntryStateForPlainEffect(effect),
+      vpContext: transferPlainX2VpContextState(input, effect),
+      vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, new Set(), effect),
     };
   }
   const x = syncUnknownSameValue(
@@ -892,9 +953,12 @@ function transferPlainX2ValueState(
     effect,
   );
   const x2 = transferPlainX2ValueSet(input, x, effect);
+  const xShape = plainPreservesXValue(op) ? cloneOptionalShapeSet(input.xShape) : new Set<X2ShapeFact>();
   return {
     x,
     x2,
+    xShape,
+    x2Shape: transferPlainX2ShapeSet(input, xShape, effect),
     entry: nextX2EntryStateForPlainEffect(effect),
     vpContext: transferPlainX2VpContextState(input, effect),
     vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, effect),
@@ -908,17 +972,30 @@ function transferDecimalDigitX2ValueState(input: X2ValueDataflowState, digit: st
   }
   const entry = advanceDecimalDigitEntry(input.entry, digit);
   if (entry.kind !== "open") {
-    return { x: new Set(), x2: new Set(), entry, vpContext: noneX2VpContextState() };
+    return {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set(),
+      x2Shape: new Set(),
+      entry,
+      vpContext: noneX2VpContextState(),
+    };
   }
   const x = new Set<X2ValueFact>();
   const x2 = new Set<X2ValueFact>();
+  const xShape = new Set<X2ShapeFact>();
+  const x2Shape = new Set<X2ShapeFact>();
   for (const raw of entry.raw) {
     const normalized = normalizeDecimalEntry(raw);
-    if (normalized !== undefined) x.add(decimalValueFact(normalized, "normalized"));
+    if (normalized !== undefined) {
+      x.add(decimalValueFact(normalized, "normalized"));
+      xShape.add(decimalMantissaShapeFact(normalized));
+    }
     const x2Fact = x2DecimalEntryFact(raw);
     if (x2Fact !== undefined) x2.add(x2Fact);
+    x2Shape.add(decimalMantissaShapeFact(raw));
   }
-  return { x, x2, entry, vpContext: noneX2VpContextState() };
+  return { x, x2, xShape, x2Shape, entry, vpContext: noneX2VpContextState() };
 }
 
 function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDataflowState {
@@ -928,6 +1005,8 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
   return {
     x: normalizeX2RestoreFactsForX(input.x2),
     x2: new Set(input.x2),
+    xShape: normalizeX2RestoreShapesForX(input.x2Shape),
+    x2Shape: cloneOptionalShapeSet(input.x2Shape),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
   };
@@ -942,6 +1021,8 @@ function transferSignChangeX2ValueState(input: X2ValueDataflowState): X2ValueDat
     return {
       x: new Set(),
       x2: new Set(),
+      xShape: new Set(),
+      x2Shape: new Set(),
       entry: closedX2EntryState(),
       vpContext: signChangeVpContext(input.vpContext),
     };
@@ -951,20 +1032,35 @@ function transferSignChangeX2ValueState(input: X2ValueDataflowState): X2ValueDat
     if (state !== undefined) return state;
   }
   if (input.entry.kind !== "open") {
-    return { x: new Set(), x2: new Set(), entry: { kind: "unknown" }, vpContext: { kind: "unknown" } };
+    return {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set(),
+      x2Shape: new Set(),
+      entry: { kind: "unknown" },
+      vpContext: { kind: "unknown" },
+    };
   }
   const x = new Set<X2ValueFact>();
   const x2 = new Set<X2ValueFact>();
+  const xShape = new Set<X2ShapeFact>();
+  const x2Shape = new Set<X2ShapeFact>();
   for (const raw of input.entry.raw) {
     const signed = signChangedDecimalEntry(raw);
     const normalized = normalizeDecimalEntry(signed);
-    if (normalized !== undefined) x.add(decimalValueFact(normalized, "normalized"));
+    if (normalized !== undefined) {
+      x.add(decimalValueFact(normalized, "normalized"));
+      xShape.add(decimalMantissaShapeFact(normalized));
+    }
     const x2Fact = x2DecimalEntryFact(signed);
     if (x2Fact !== undefined) x2.add(x2Fact);
+    x2Shape.add(decimalMantissaShapeFact(signed));
   }
   return {
     x,
     x2,
+    xShape,
+    x2Shape,
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
     vpEntryMantissa: signChangedMantissaShapes(input.entry.raw),
@@ -978,6 +1074,12 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
     return {
       x: new Set(),
       x2: new Set(),
+      xShape: new Set(),
+      x2Shape: exponentEntryShapeFacts({
+        kind: "exponent",
+        mantissa: input.entry.raw,
+        exponent: new Set([""]),
+      }),
       entry: {
         kind: "exponent",
         mantissa: new Set(input.entry.raw),
@@ -1000,6 +1102,12 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
     return {
       x: new Set(),
       x2: new Set(),
+      xShape: new Set(),
+      x2Shape: exponentEntryShapeFacts({
+        kind: "exponent",
+        mantissa: input.vpEntryMantissa,
+        exponent: new Set([""]),
+      }),
       entry: {
         kind: "exponent",
         mantissa: new Set(input.vpEntryMantissa),
@@ -1012,7 +1120,14 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
       },
     };
   }
-  return { x: new Set(), x2: new Set(), entry: { kind: "unknown" }, vpContext: { kind: "unknown" } };
+  return {
+    x: new Set(),
+    x2: new Set(),
+    xShape: new Set(),
+    x2Shape: new Set(),
+    entry: { kind: "unknown" },
+    vpContext: { kind: "unknown" },
+  };
 }
 
 function transferIndirectFlowX2ValueState(
@@ -1033,9 +1148,12 @@ function transferIndirectConditionalX2ValueState(
   if (effect === "unknown") return emptyX2ValueDataflowState();
   const closed = closeX2ValueEntry(input);
   const x = syncUnknownSameValue(new Set(closed.x), effect);
+  const xShape = cloneOptionalShapeSet(closed.xShape);
   const output: X2ValueDataflowState = {
     x,
     x2: transferConditionalX2ValueSet(closed, x, effect),
+    xShape,
+    x2Shape: transferConditionalX2ShapeSet(closed, xShape, effect),
     entry: closedX2EntryState(),
     vpContext: transferConditionalX2VpContextState(closed, effect),
     vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, effect),
@@ -1056,6 +1174,8 @@ function transferIndirectStoreX2ValueState(
   return {
     x: addX2Value(closed.x, value),
     x2: addStoredX2ValueAlias(closed, value),
+    xShape: cloneOptionalShapeSet(closed.xShape),
+    x2Shape: cloneOptionalShapeSet(closed.x2Shape),
     entry: closedX2EntryState(),
     vpContext: cloneX2VpContextState(closed.vpContext),
   };
@@ -1085,6 +1205,17 @@ function transferPlainX2ValueSet(
 ): Set<X2ValueFact> {
   if (effect === "preserves") return new Set(input.x2);
   if (effect === "affects") return new Set(x);
+  return new Set();
+}
+
+function transferPlainX2ShapeSet(
+  input: X2ValueDataflowState,
+  xShape: X2ShapeSet,
+  effect: ReturnType<typeof plainX2Effect>,
+  closedEntryShape: X2ShapeSet | undefined = undefined,
+): Set<X2ShapeFact> {
+  if (effect === "preserves") return cloneOptionalShapeSet(closedEntryShape ?? input.x2Shape);
+  if (effect === "affects") return new Set(xShape);
   return new Set();
 }
 
@@ -1139,6 +1270,16 @@ function transferConditionalX2ValueSet(
   return new Set();
 }
 
+function transferConditionalX2ShapeSet(
+  input: X2ValueDataflowState,
+  xShape: X2ShapeSet,
+  effect: ReturnType<typeof conditionalX2Effect>,
+): Set<X2ShapeFact> {
+  if (effect === "preserves") return cloneOptionalShapeSet(input.x2Shape);
+  if (effect === "affects") return new Set(xShape);
+  return new Set();
+}
+
 function transferConditionalX2VpContextState(
   input: X2ValueDataflowState,
   effect: ReturnType<typeof conditionalX2Effect>,
@@ -1174,6 +1315,8 @@ function joinX2ValueDataflowStates(
   if (current === undefined) return {
     x: new Set(incoming.x),
     x2: new Set(incoming.x2),
+    xShape: cloneOptionalShapeSet(incoming.xShape),
+    x2Shape: cloneOptionalShapeSet(incoming.x2Shape),
     entry: cloneX2EntryState(incoming.entry),
     vpContext: cloneX2VpContextState(incoming.vpContext),
     vpEntryMantissa: cloneOptionalStringSet(incoming.vpEntryMantissa),
@@ -1181,6 +1324,8 @@ function joinX2ValueDataflowStates(
   return {
     x: joinX2ValueSets(current.x, incoming.x),
     x2: joinX2ValueSets(current.x2, incoming.x2),
+    xShape: joinOptionalShapeSets(current.xShape, incoming.xShape),
+    x2Shape: joinOptionalShapeSets(current.x2Shape, incoming.x2Shape),
     entry: joinX2EntryStates(current.entry, incoming.entry),
     vpContext: joinX2VpContextStates(current.vpContext, incoming.vpContext),
     vpEntryMantissa: joinOptionalStringSets(current.vpEntryMantissa, incoming.vpEntryMantissa),
@@ -1202,6 +1347,8 @@ function sameX2ValueDataflowState(
   if (left === undefined || right === undefined) return left === right;
   return sameX2ValueSet(left.x, right.x) &&
     sameX2ValueSet(left.x2, right.x2) &&
+    sameOptionalShapeSet(left.xShape, right.xShape) &&
+    sameOptionalShapeSet(left.x2Shape, right.x2Shape) &&
     sameX2EntryState(left.entry, right.entry) &&
     sameX2VpContextState(left.vpContext, right.vpContext) &&
     sameOptionalStringSet(left.vpEntryMantissa, right.vpEntryMantissa);
@@ -1255,6 +1402,35 @@ function sameX2ValueSet(
   return true;
 }
 
+function cloneOptionalShapeSet(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  return input === undefined ? new Set() : new Set(input);
+}
+
+function joinOptionalShapeSets(
+  current: X2ShapeSet | undefined,
+  incoming: X2ShapeSet | undefined,
+): Set<X2ShapeFact> {
+  if (current === undefined || incoming === undefined) return new Set();
+  const joined = new Set<X2ShapeFact>();
+  for (const value of current) {
+    if (incoming.has(value)) joined.add(value);
+  }
+  return joined;
+}
+
+function sameOptionalShapeSet(
+  left: X2ShapeSet | undefined,
+  right: X2ShapeSet | undefined,
+): boolean {
+  const leftSet = left ?? new Set<X2ShapeFact>();
+  const rightSet = right ?? new Set<X2ShapeFact>();
+  if (leftSet.size !== rightSet.size) return false;
+  for (const value of leftSet) {
+    if (!rightSet.has(value)) return false;
+  }
+  return true;
+}
+
 function joinStringSets(current: ReadonlySet<string>, incoming: ReadonlySet<string>): Set<string> {
   const joined = new Set<string>();
   for (const value of current) {
@@ -1300,6 +1476,14 @@ function decimalValueFact(value: string, flavor: "normalized" | "unnormalized"):
   return `decimal:${value}:${flavor}`;
 }
 
+function decimalMantissaShapeFact(value: string): X2ShapeFact {
+  return `mantissa:${value}:decimal`;
+}
+
+function decimalExponentShapeFact(mantissa: string, exponent: string): X2ShapeFact {
+  return `exponent:${mantissa}:${exponent}:decimal`;
+}
+
 function closedExponentEntryDecimalFacts(input: X2EntryState): Set<X2ValueFact> {
   const values = new Set<X2ValueFact>();
   if (input.kind !== "exponent") return values;
@@ -1312,12 +1496,34 @@ function closedExponentEntryDecimalFacts(input: X2EntryState): Set<X2ValueFact> 
   return values;
 }
 
+function closedExponentEntryShapeFacts(input: X2EntryState): Set<X2ShapeFact> {
+  if (input.kind !== "exponent") return new Set();
+  const shapes = exponentEntryShapeFacts(input);
+  for (const mantissa of input.mantissa) {
+    for (const exponent of input.exponent) {
+      const value = normalizedExponentEntryValue(mantissa, exponent);
+      if (value !== undefined) shapes.add(decimalMantissaShapeFact(value));
+    }
+  }
+  return shapes;
+}
+
+function exponentEntryShapeFacts(input: Extract<X2EntryState, { kind: "exponent" }>): Set<X2ShapeFact> {
+  const shapes = new Set<X2ShapeFact>();
+  for (const mantissa of input.mantissa) {
+    for (const exponent of input.exponent) {
+      shapes.add(decimalExponentShapeFact(mantissa, exponent));
+    }
+  }
+  return shapes;
+}
+
 function normalizedExponentEntryValue(mantissa: string, exponent: string): string | undefined {
-  const mantissaMatch = /^(-?)([1-9][0-9]{0,7})$/u.exec(mantissa);
+  const mantissaMatch = /^(-?)([0-9]{1,8})$/u.exec(mantissa);
   const exponentMatch = /^(-?)([0-9]{1,2})$/u.exec(exponent);
   if (mantissaMatch === null || exponentMatch === null) return undefined;
   const sign = mantissaMatch[1]!;
-  const digits = mantissaMatch[2]!;
+  const digits = effectiveExponentMantissaDigits(mantissaMatch[2]!);
   const exponentSign = exponentMatch[1]!;
   const shift = Number(exponentMatch[2]!);
   if (!Number.isInteger(shift)) return undefined;
@@ -1326,6 +1532,12 @@ function normalizedExponentEntryValue(mantissa: string, exponent: string): strin
     : `${digits}${"0".repeat(shift)}`;
   if (unsigned === undefined || significantDecimalDigits(unsigned) > 8) return undefined;
   return unsigned === "0" ? "0" : `${sign}${unsigned}`;
+}
+
+function effectiveExponentMantissaDigits(rawDigits: string): string {
+  const stripped = rawDigits.replace(/^0+/u, "");
+  if (stripped.length > 0) return stripped;
+  return `1${"0".repeat(Math.max(0, rawDigits.length - 1))}`;
 }
 
 function decimalShiftRight(digits: string, places: number): string | undefined {
@@ -1384,6 +1596,20 @@ function normalizeX2RestoreFactsForX(input: X2ValueSet): Set<X2ValueFact> {
   return output;
 }
 
+function normalizeX2RestoreShapesForX(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const fact of input ?? []) {
+    const mantissa = /^mantissa:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):decimal$/u.exec(fact);
+    if (mantissa !== null) {
+      const normalized = normalizePlainDecimal(mantissa[1]!);
+      if (normalized !== undefined) output.add(decimalMantissaShapeFact(normalized));
+      continue;
+    }
+    output.add(fact);
+  }
+  return output;
+}
+
 function signChangedDecimalEntry(raw: string): string {
   const normalized = normalizeDecimalEntry(raw);
   if (normalized === undefined || normalized === "0") return "0";
@@ -1393,6 +1619,8 @@ function signChangedDecimalEntry(raw: string): string {
 function signChangeClosedDecimalState(input: X2ValueDataflowState): X2ValueDataflowState | undefined {
   const shaped = signChangedVpEntryMantissas(input);
   if (shaped !== undefined) return x2ValueStateFromMantissaShapes(shaped);
+  const shapeBacked = signChangedClosedShapeMantissas(input);
+  if (shapeBacked !== undefined) return x2ValueStateFromMantissaShapes(shapeBacked);
 
   const values = new Set<X2ValueFact>();
   if (input.x.has(SAME_UNKNOWN_VALUE) && input.x2.has(SAME_UNKNOWN_VALUE)) {
@@ -1405,9 +1633,16 @@ function signChangeClosedDecimalState(input: X2ValueDataflowState): X2ValueDataf
     values.add(decimalValueFact(signChangedNormalizedDecimalValue(decimal[1]!), "normalized"));
   }
   if (values.size === 0) return undefined;
+  const shapes = new Set<X2ShapeFact>();
+  for (const value of values) {
+    const decimal = /^decimal:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):normalized$/u.exec(value);
+    if (decimal !== null) shapes.add(decimalMantissaShapeFact(decimal[1]!));
+  }
   return {
     x: values,
     x2: new Set(values),
+    xShape: shapes,
+    x2Shape: new Set(shapes),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
   };
@@ -1417,6 +1652,22 @@ function signChangedNormalizedDecimalValue(raw: string): string {
   const normalized = normalizePlainDecimal(raw);
   if (normalized === undefined || normalized === "0") return "0";
   return normalized.startsWith("-") ? normalized.slice(1) : `-${normalized}`;
+}
+
+function signChangedClosedShapeMantissas(input: X2ValueDataflowState): ReadonlySet<string> | undefined {
+  const mantissas = new Set<string>();
+  for (const fact of input.x2Shape ?? []) {
+    const match = /^mantissa:(-?[0-9]+):decimal$/u.exec(fact);
+    if (match === null) continue;
+    const raw = match[1]!;
+    const normalized = normalizeDecimalEntry(raw);
+    if (normalized === undefined) continue;
+    if (input.xShape?.has(decimalMantissaShapeFact(normalized)) !== true) continue;
+    const signed = signChangedMantissaShape(raw);
+    if (signed === undefined) return undefined;
+    mantissas.add(signed);
+  }
+  return mantissas.size === 0 ? undefined : mantissas;
 }
 
 function sharedNormalizedDecimalMantissas(input: Pick<X2ValueDataflowState, "x" | "x2">): ReadonlySet<string> | undefined {
@@ -1467,16 +1718,22 @@ function signChangedMantissaShape(raw: string): string | undefined {
 function x2ValueStateFromMantissaShapes(mantissas: ReadonlySet<string>): X2ValueDataflowState | undefined {
   const x = new Set<X2ValueFact>();
   const x2 = new Set<X2ValueFact>();
+  const xShape = new Set<X2ShapeFact>();
+  const x2Shape = new Set<X2ShapeFact>();
   for (const raw of mantissas) {
     const normalized = normalizeDecimalEntry(raw);
     const x2Fact = x2DecimalEntryFact(raw);
     if (normalized === undefined || x2Fact === undefined) return undefined;
     x.add(decimalValueFact(normalized, "normalized"));
     x2.add(x2Fact);
+    xShape.add(decimalMantissaShapeFact(normalized));
+    x2Shape.add(decimalMantissaShapeFact(raw));
   }
   return {
     x,
     x2,
+    xShape,
+    x2Shape,
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
     vpEntryMantissa: mantissas,
@@ -1488,14 +1745,22 @@ function x2ValueStateFromExponentEntry(input: X2EntryState): X2ValueDataflowStat
     return {
       x: new Set(),
       x2: new Set(),
+      xShape: new Set(),
+      x2Shape: new Set(),
       entry: cloneX2EntryState(input),
       vpContext: { kind: "unknown" },
     };
   }
   const values = closedExponentEntryDecimalFacts(input);
+  const shapes = closedExponentEntryShapeFacts(input);
   return {
     x: new Set(values),
-    x2: new Set(values),
+    // Active exponent entry already has a normalized visible X value, but
+    // hidden X2 is still a ВП-entry shape. A following `.` may signal ЕГГ0Г,
+    // so dot-safe X2 value facts appear only after a closing X2 sync.
+    x2: new Set(),
+    xShape: new Set(shapes),
+    x2Shape: new Set(shapes),
     entry: cloneX2EntryState(input),
     vpContext: x2VpContextFromExponentEntry(input),
   };
@@ -1540,10 +1805,13 @@ function x2VpContextFromExponentEntry(input: Extract<X2EntryState, { kind: "expo
 
 function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
   const closedExponentValues = closedExponentEntryDecimalFacts(input.entry);
-  if (closedExponentValues.size > 0) {
+  const closedExponentShapes = closedExponentEntryShapeFacts(input.entry);
+  if (closedExponentValues.size > 0 || closedExponentShapes.size > 0) {
     return {
       x: new Set(closedExponentValues),
       x2: new Set(closedExponentValues),
+      xShape: new Set(closedExponentShapes),
+      x2Shape: new Set(closedExponentShapes),
       entry: closedX2EntryState(),
       vpContext: cloneX2VpContextState(input.vpContext),
     };
@@ -1551,6 +1819,8 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
   return {
     x: new Set(input.x),
     x2: new Set(input.x2),
+    xShape: cloneOptionalShapeSet(input.xShape),
+    x2Shape: cloneOptionalShapeSet(input.x2Shape),
     entry: closedX2EntryState(),
     vpContext: cloneX2VpContextState(input.vpContext),
   };
@@ -1891,6 +2161,10 @@ function stackDifferenceCanReachConsumer(
 
 export function removingRecallCanExposeStackLift(ops: readonly IrOp[], recallIndex: number): boolean {
   return stackDifferenceCanReachConsumer(ops, recallIndex + 1, 1);
+}
+
+export function removingStackLiftCanExposeStack(ops: readonly IrOp[], liftIndex: number): boolean {
+  return stackDifferenceCanReachConsumer(ops, liftIndex + 1, 1);
 }
 
 export function removingPreShiftLiftCanExposeStack(ops: readonly IrOp[], producerIndex: number): boolean {

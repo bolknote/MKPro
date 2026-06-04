@@ -6,7 +6,7 @@ const require = createRequire(import.meta.url);
 interface Mk61Instance {
   loadProgram(codes: number[] | string): { diagnostics: string[] };
   pressSequence(keys: string[]): void;
-  runUntilStable(options: { maxFrames: number; stableFrames: number }): { stopped: boolean; frames: number };
+  runUntilStable(options: { maxFrames: number; stableFrames: number }): { stopped: boolean; frames: number; signature: string };
   readRegister(register: string): string;
 }
 type Mk61Constructor = new (options?: { extended?: boolean }) => Mk61Instance;
@@ -18,6 +18,13 @@ function runX(codes: number[]): string {
   calc.pressSequence(["В/О", "С/П"]);
   calc.runUntilStable({ maxFrames: 300, stableFrames: 5 });
   return calc.readRegister("x").replace(/\s/gu, "");
+}
+
+function runSignature(codes: number[]): string {
+  const calc = new MK61();
+  calc.loadProgram(codes);
+  calc.pressSequence(["В/О", "С/П"]);
+  return calc.runUntilStable({ maxFrames: 300, stableFrames: 5 }).signature;
 }
 
 describe("X2 restore context", () => {
@@ -72,5 +79,11 @@ describe("X2 restore context", () => {
     expect(runX([0x00, 0x02, 0x0b, 0xf0, 0x0b, 0x50])).toBe("2,");
     expect(runX([0x0d, 0x0b, 0x50])).toBe("0,");
     expect(runX([0x0d, 0x0b, 0x0a, 0x50])).toBe("0,");
+  });
+
+  it("active exponent-entry dot is unsafe until a closing X2 sync normalizes the shape", () => {
+    expect(runSignature([0x05, 0x0c, 0x03, 0x0a, 0x50])).toContain("ЕГГ0Г");
+    expect(runSignature([0x00, 0x05, 0x0c, 0x03, 0x0a, 0x50])).toContain("ЕГГ0Г");
+    expect(runX([0x00, 0x05, 0x0c, 0x03, 0xf0, 0x0a, 0x50])).toBe("5000,");
   });
 });

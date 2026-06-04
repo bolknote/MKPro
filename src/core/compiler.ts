@@ -265,6 +265,7 @@ const CELL_MAP_PREFIX = "__cell_map_";
 const PARAMETRIC_SIBLING_PREFIX = "__param_sibling_";
 const INTERNAL_NAME_PREFIX = "__mkpro_";
 const FUNCTION_TAIL_ARG_PREFIX = `${INTERNAL_NAME_PREFIX}tail_arg_`;
+const STACK_LITERAL_PRELOAD_ONLY_CONSTANTS = new Set(["1", "2", "4", "8"]);
 
 type MembershipSetStatement =
   | Extract<StatementAst, { kind: "assign" }>
@@ -9570,7 +9571,7 @@ export class EmitContext {
   emitNumberOrPreload(raw: string): void {
     const normalized = normalizeConstantLiteral(raw);
     const register = this.allocation.constants[normalized];
-    if (register !== undefined) {
+    if (register !== undefined && !STACK_LITERAL_PRELOAD_ONLY_CONSTANTS.has(normalized)) {
       this.emitOp(0x60 + registerIndex(register), `П->X ${register}`, `preload const ${normalized}`);
       this.optimizations.push({
         name: "preloaded-constant",
@@ -9585,6 +9586,20 @@ export class EmitContext {
       return;
     }
     this.emitNumber(raw);
+  }
+
+  emitStackNumberOrPreload(raw: string): void {
+    const normalized = normalizeConstantLiteral(raw);
+    const register = this.allocation.constants[normalized];
+    if (register !== undefined && STACK_LITERAL_PRELOAD_ONLY_CONSTANTS.has(normalized)) {
+      this.emitOp(0x60 + registerIndex(register), `П->X ${register}`, `preload stack const ${normalized}`);
+      this.optimizations.push({
+        name: "preloaded-stack-constant",
+        detail: `Used preloaded R${register} for stack literal ${normalized}.`,
+      });
+      return;
+    }
+    this.emitNumberOrPreload(raw);
   }
 
   private findConstantSynthesis(normalized: string, directCost: number): ConstantSynthesisPlan | undefined {
@@ -11980,14 +11995,24 @@ function collectPreloadConstantValues(ast: ProgramAst, startupAwareConstantPrelo
   // Weight those so the savings-aware sort below keeps them.
   const COORD_DECODE_TENS_WEIGHT = 5;
   const weights = new Map<string, number>();
+  const bonuses = new Map<string, number>();
   const boost = (value: string, weight: number): void => {
     weights.set(value, Math.max(weights.get(value) ?? 0, weight));
+  };
+  const addBonus = (value: string, bonus: number): void => {
+    bonuses.set(value, (bonuses.get(value) ?? 0) + bonus);
   };
   const recordLiteralOccurrence = (raw: string): void => {
     const value = normalizeConstantLiteral(raw);
     values.add(value);
     occurrences.set(value, (occurrences.get(value) ?? 0) + 1);
   };
+  if (programUsesBitMaskOrSpatialPrimitives(ast)) {
+    for (const value of ["1", "2", "4", "8"]) {
+      values.add(value);
+      addBonus(value, 1);
+    }
+  }
   if (programContainsCall(ast, "line_count")) {
     values.add("10");
     values.add("11");
@@ -12077,9 +12102,10 @@ function collectPreloadConstantValues(ast: ProgramAst, startupAwareConstantPrelo
   // cost-descending ranking; ties keep their insertion order via the stable sort
   // so previously-chosen constants are not silently displaced.
   const startupUseCount = (value: string): number => Math.max(weights.get(value) ?? 1, occurrences.get(value) ?? 1);
-  const savings = (value: string): number => (weights.get(value) ?? 1) * (estimateNumberCost(value) - 1);
+  const savings = (value: string): number =>
+    (weights.get(value) ?? 1) * (estimateNumberCost(value) - 1) + (bonuses.get(value) ?? 0);
   return [...values]
-    .filter((value) => value !== "0" && value !== "1")
+    .filter((value) => value !== "0" && (value !== "1" || bonuses.has(value)))
     .filter((value) =>
       !startupAwareConstantPreloads ||
       !constantIsCheaperInlineForStartup(value, startupUseCount(value))
@@ -15042,8 +15068,8 @@ const optimizerCapabilities: Array<{
     category: "stack",
     source: "mk61-delta",
     requires: ["x2-register"],
-    activeWhen: ["membership-collection-x2-restore", "x2-hidden-temp-restore", "x2-noop-restore"],
-    detail: "Uses the hidden X2 display register as a temporary across ordinary X2-preserving logic: a membership test can keep a deterministic mask in Y, direct scratch recalls can restore a proved X2-resident value through '.' after either a safe restore gap or a CFG-proved immediate X2 sync, restored dots keep hidden reg:r value facts alive for later scratch aliases, and no-op restores are removed when value dataflow proves X already contains the hidden X2 value, including normalized signed/unsigned decimal digit-runs while keeping leading-zero X2 facts distinct; exponent-entry ВП states are tracked structurally without unsafe value aliases; known-fractional masks insert a preserving gap before the restore when К{x} is skipped.",
+    activeWhen: ["membership-collection-x2-restore", "x2-hidden-temp-restore", "x2-literal-restore", "x2-noop-restore"],
+    detail: "Uses the hidden X2 display register as a temporary across ordinary X2-preserving logic: a membership test can keep a deterministic mask in Y, direct scratch recalls and repeated literals can restore a proved X2-resident value through '.' after either a safe restore gap or a CFG-proved immediate X2 sync, restored dots keep hidden reg:r value facts alive for later scratch aliases, and no-op restores are removed when value dataflow proves X already contains the hidden X2 value, including normalized signed/unsigned decimal digit-runs while keeping leading-zero X2 facts distinct; a separate mantissa/exponent shape lattice tracks active ВП forms without granting dot-safe value aliases until a closing X2 sync normalizes them; known-fractional masks insert a preserving gap before the restore when К{x} is skipped.",
   },
   {
     id: "hex-mantissa-arithmetic",
@@ -15139,7 +15165,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["shared-straight-line-helper", "shared-call-body-helper", "multi-entry-straight-line-helper"],
-    detail: "Extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the call+return cost is provably lower than keeping all copies inline; direct-call bodies are enabled only as a whole-program candidate, and repeated suffixes may enter the same helper through internal labels.",
+    detail: "Extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the call+return cost is provably lower than keeping all copies inline; direct-call bodies are enabled only as a whole-program candidate, repeated suffixes may enter the same helper through internal labels, and X2-restoring digit/./sign/ВП contexts are kept internal to helper bodies rather than split across call or return boundaries.",
   },
   {
     id: "subroutine-part-shared-tail",
@@ -15227,7 +15253,7 @@ const optimizerCapabilities: Array<{
     source: "documented",
     requires: [],
     activeWhen: ["pre-shift-stack-lift"],
-    detail: "Removes В↑ before a proved stack-shifting producer (direct/indirect П->X, F pi, or another В↑), possibly through stack-preserving labels/stores/plain ops, when that command already supplies current X in Y and stack-difference analysis proves the extra deeper stack cell cannot be observed.",
+    detail: "Removes В↑ before a proved stack-shifting producer (direct/indirect П->X, F pi, or another В↑), possibly through stack-preserving labels/stores/plain ops, when that command already supplies current X in Y and stack-difference analysis proves the extra deeper stack cell cannot be observed; the same proof removes В↑ before a hard X/X2 overwrite such as Cx when the lift's Y value is dead.",
   },
   {
     id: "constant-folding",
@@ -15650,6 +15676,7 @@ function buildMachineFeaturesUsed(
     optimization.name === "floor-packed-row-expression-display" ||
     optimization.name === "membership-collection-x2-restore" ||
     optimization.name === "x2-hidden-temp-restore" ||
+    optimization.name === "x2-literal-restore" ||
     optimization.name === "x2-noop-restore" ||
     optimization.name === "vp-fraction-restore"
   )) {
