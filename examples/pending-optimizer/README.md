@@ -38,17 +38,16 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | `cave-highlevel-baseline.mkpro` | 134 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
 | `cave-treasure.mkpro` | 118 | 105 | floor-indexed resource bank and source-shaped command decoder are in place; remaining blockers are command dispatch, wall breaking, cache reward flow, and loop prompt/input storage |
 | `giants-country.mkpro` | 120 | 105 | final score is now live on the death path; source-level `tile == 7` corrections now fold to the same mask shape as the hand-written abs/sign form |
-| `tic-tac-toe-4x4.mkpro` | 240 | 105 | source-shaped line update/score pass is in place; remaining packed 4x4 scan lowering |
+| `tic-tac-toe-4x4.mkpro` | 386 | 105 | fresh high-level packed-line port; remaining blockers are scan compaction, shared line updates, and dynamic calculator-win display composition |
 
 Prototype notes:
 
-- `tic-tac-toe-4x4.txt` keeps 4x4 line state in packed line registers
-  (`R4..R7`) and updates/scans those lines directly. The MK-Pro source now uses
-  the same occupied mask, packed line weights, `X ПП Y С/П` input shape, and
-  squared-deviation scan; line updates and scoring follow the source's explicit
-  `x`, `y`, `x+y`, `x-y` pass. The remaining gap is compiler lowering: it still
-  emits ordinary calls/loops for the full-board scan and win scan instead of the
-  source listing's stack-resident indirect-address subroutine shape.
+- `tic-tac-toe-4x4.mkpro` is a fresh source-shaped port from
+  `games/tic-tac-toe-4x4.txt`: it keeps the original sixteen-line model as four
+  packed families (`x`, `y`, `x+y`, `x-y`), uses `X ПП Y С/П` input via
+  `entered()`, shows `-99999999` on occupied cells, reports draw/player-win as
+  `0`, and keeps the calculator win signal as `8` until dynamic `8.-0n`
+  sign-digit display composition is available.
 - Membership/set reuse now consumes a freshly returned mask directly from X and,
   when the failed branch sets the same packed collection, avoids the scratch
   register entirely: the mask stays in Y, the collection is restored from X2
@@ -91,11 +90,6 @@ Prototype notes:
   the call cost is lower than keeping every copy inline. It deliberately does
   not mix with `return-suffix-gadget` bodies until the layout model can prove
   both contracts at once.
-- `tic-tac-toe-4x4.mkpro` now combines X-parameter value functions, repeated
-  unary-call argument canonicalization, shared call-body helper extraction, and
-  front-hoisted helper/procedure layout. That exposes repeated `pow10` line
-  updates and scoring tails as one hoisted helper candidate instead of leaving
-  each call-bearing body inline.
 - Branch-target X reuse is the flow-sensitive sibling of last-X reuse: if a
   `П->X r; F x?0 label` condition is the only way to enter `label`, and `label`
   immediately recalls the same `r`, the recall is removed because the condition

@@ -1,119 +1,183 @@
 reference anvarov_tic_tac_toe_4x4
 
-// Source-shaped Serge Anvarov 4x4 tic-tac-toe port. The original listing keeps
-// four packed line-weight registers, one occupied-cell mask, and chooses the
-// calculator reply by scanning every free cell for the largest packed-line
-// deviation score. Input follows the published `X ПП Y С/П` UI: the display
-// stop is emitted by show(x), then entered() stores the two keyboard values
-// already sitting in X after manual continuation keys.
+// Fresh source-shaped port of Serge Anvarov's 4x4 tic-tac-toe listing.
+// The board has sixteen winning lines: four rows, four columns, four x+y
+// diagonals, and four x-y diagonals. As in the original listing, the four line
+// families are packed decimal registers initialized to 44444.4. A player mark
+// subtracts 1 from each touched line digit; a calculator mark adds 1.
 
 program TicTacToe4x4 {
-  const BIT_SHAPE = 0.22600029
-  const SCORE_CENTER = 0.41200076
-  const WIN_MASK = 8888
+  grid: board(1..4, 1..4)
 
   state {
-    x: packed = 0
-    y: packed = 0
-    best_x: packed = 0
-    best_y: packed = 0
-    bank: packed = 0
+    occupied: cells(grid) = 0
+    lines: packed[1..4] = [44444.4, 44444.4, 44444.4, 44444.4]
+
+    x: counter 0..5 = 0
+    y: counter 0..5 = 0
+    cell: coord(grid)
+
+    scan_x: counter 1..5 = 1
+    scan_y: counter 1..5 = 1
+    best_cell: coord(grid) = 11
+    best_score: packed = -1
     score: packed = 0
-    best_score: packed = 4
-    mask: packed = 0
-    occupied: packed = 0
-    weights: packed[4..7] = 44444.4
+    line: packed = 0
+  }
+
+  fn draw() {
+    halt(0)
+  }
+
+  fn occupied_cell() {
+    show(-99999999)
+  }
+
+  fn human_won() {
+    halt(0)
+  }
+
+  fn calculator_won() {
+    // The source uses a packed 8.-0n-style line report. Until MKPro can compose
+    // that dynamic sign-digit display, the terminal 8 keeps the same win signal.
+    halt(8)
   }
 
   loop {
-    show(x)
+    show(y)
     x = entered()
     y = entered()
-    x = normalize(x)
-    y = normalize(y)
-    cell_mask_calc()
+    cell = y * 10 + x
 
-    if bit_and(occupied, mask) != 0 {
-      show(-99999999)
+    if cell in occupied {
+      occupied_cell()
     }
     else {
-      occupied = bit_or(occupied, mask)
-      subtract_lines()
-      choose_reply()
-      x = best_x
-      y = best_y
-      cell_mask_calc()
-      occupied = bit_or(occupied, mask)
-      add_lines()
-      calculator_win_check()
+      occupied += cell
+      player_lines()
+      check_player_win()
+      choose_calculator_move()
+      occupied += cell
+      calculator_lines()
+      check_calculator_win()
     }
   }
 
-  fn normalize(value) {
-    value = frac(int(value) / 4) * 4
-    if value <= 0 {
-      return value + 4
+  fn player_lines() {
+    lines[1] = packed_add(lines[1], y, -1)
+    lines[2] = packed_add(lines[2], x, -1)
+    normalize_sum()
+    lines[3] = packed_add(lines[3], line, -1)
+    normalize_diff()
+    lines[4] = packed_add(lines[4], line, -1)
+  }
+
+  fn calculator_lines() {
+    lines[1] = packed_add(lines[1], y, 1)
+    lines[2] = packed_add(lines[2], x, 1)
+    normalize_sum()
+    lines[3] = packed_add(lines[3], line, 1)
+    normalize_diff()
+    lines[4] = packed_add(lines[4], line, 1)
+  }
+
+  fn check_player_win() {
+    if packed_digit(lines[1], y) == 0 {
+      human_won()
     }
-    return value
+    if packed_digit(lines[2], x) == 0 {
+      human_won()
+    }
+    normalize_sum()
+    if packed_digit(lines[3], line) == 0 {
+      human_won()
+    }
+    normalize_diff()
+    if packed_digit(lines[4], line) == 0 {
+      human_won()
+    }
   }
 
-  fn cell_mask_calc() {
-    mask = pow10(x) + int(pow10(y * BIT_SHAPE))
+  fn check_calculator_win() {
+    if packed_digit(lines[1], y) == 8 {
+      calculator_won()
+    }
+    if packed_digit(lines[2], x) == 8 {
+      calculator_won()
+    }
+    normalize_sum()
+    if packed_digit(lines[3], line) == 8 {
+      calculator_won()
+    }
+    normalize_diff()
+    if packed_digit(lines[4], line) == 8 {
+      calculator_won()
+    }
   }
 
-  fn subtract_lines() {
-    weights[7] -= pow10(x)
-    weights[6] -= pow10(y)
-    weights[5] -= pow10(normalize(x + y))
-    weights[4] -= pow10(normalize(x - y))
-  }
+  fn choose_calculator_move() {
+    best_score = -1
+    scan_y = 1
 
-  fn add_lines() {
-    weights[7] += pow10(x)
-    weights[6] += pow10(y)
-    weights[5] += pow10(normalize(x + y))
-    weights[4] += pow10(normalize(x - y))
-  }
-
-  fn choose_reply() {
-    best_score = 4
-    x = 4
-    while x >= 1 {
-      y = 4
-      while y >= 1 {
-        cell_mask_calc()
-        unless bit_and(occupied, mask) {
-          score_cell()
+    while scan_y <= 4 {
+      scan_x = 1
+      while scan_x <= 4 {
+        cell = scan_y * 10 + scan_x
+        unless cell in occupied {
+          candidate_score()
           if score > best_score {
             best_score = score
-            best_x = x
-            best_y = y
+            best_cell = cell
           }
         }
-        y--
+        scan_x++
       }
-      x--
+      scan_y++
     }
-    if best_score == 4 {
-      halt(0)
+
+    if best_score < 0 {
+      draw()
+    }
+
+    cell = best_cell
+    y = int(cell / 10)
+    x = frac(cell / 10) * 10
+  }
+
+  fn candidate_score() {
+    score = sqr(packed_digit(lines[1], scan_y) - 4)
+    score += sqr(packed_digit(lines[2], scan_x) - 4)
+    normalize_scan_sum()
+    score += sqr(packed_digit(lines[3], line) - 4)
+    normalize_scan_diff()
+    score += sqr(packed_digit(lines[4], line) - 4)
+  }
+
+  fn normalize_sum() {
+    line = frac(int(x + y) / 4) * 4
+    if line <= 0 {
+      line += 4
     }
   }
 
-  fn score_cell() {
-    score = 98
-    score += sqr(frac(weights[7] / pow10(x)) - SCORE_CENTER)
-    score += sqr(frac(weights[6] / pow10(y)) - SCORE_CENTER)
-    score += sqr(frac(weights[5] / pow10(normalize(x + y))) - SCORE_CENTER)
-    score += sqr(frac(weights[4] / pow10(normalize(x - y))) - SCORE_CENTER)
+  fn normalize_diff() {
+    line = frac(int(x - y) / 4) * 4
+    if line <= 0 {
+      line += 4
+    }
   }
 
-  fn calculator_win_check() {
-    bank = 7
-    while bank >= 4 {
-      if bit_and(weights[bank], WIN_MASK) != 0 {
-        halt(8.0000001)
-      }
-      bank--
+  fn normalize_scan_sum() {
+    line = frac(int(scan_x + scan_y) / 4) * 4
+    if line <= 0 {
+      line += 4
+    }
+  }
+
+  fn normalize_scan_diff() {
+    line = frac(int(scan_x - scan_y) / 4) * 4
+    if line <= 0 {
+      line += 4
     }
   }
 }

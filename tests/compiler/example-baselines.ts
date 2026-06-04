@@ -32,6 +32,7 @@ export const EXAMPLE_BASELINE: Record<string, number> = {
   "rambo-iii": 104,
   "sea-battle": 74,
   teleport: 97,
+  "tic-tac-toe": 100,
   "tiny-game": 23,
   "treasure-hunter-2": 100,
   wumpus: 100,
@@ -46,5 +47,5 @@ export const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 134,
   "cave-treasure": 118,
   "giants-country": 120,
-  "tic-tac-toe-4x4": 240,
+  "tic-tac-toe-4x4": 386,
 };

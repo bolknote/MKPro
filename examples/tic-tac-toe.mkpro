@@ -1,0 +1,118 @@
+// Direct port of games/tic-tac-toe.txt from Fink's "Papa, Mama, Ya i
+// Mikrokalkulyator". The original is an address-dispatch tree: the calculator
+// opens with 5, then each expected human reply either continues the line or
+// stops on the calculator's winning move scaled by 1,000,000.
+
+program TicTacToe {
+  state {
+    screen_1: counter 0..9 = 1
+    screen_2: counter 0..9 = 2
+    screen_5: counter 0..9 = 5
+    screen_6: counter 0..9 = 6
+    screen_7: counter 0..9 = 7
+    screen_8: counter 0..9 = 8
+    screen_9: counter 0..9 = 9
+    offset: counter 0..9 = 0
+  }
+
+  fn win(move) {
+    halt(move * 1000000)
+  }
+
+  fn draw() {
+    halt(0)
+  }
+
+  loop {
+    show(screen_5)
+    offset = abs(screen_5 - read())
+
+    match offset {
+      4 => outer_corner_line()
+      3 => side_line()
+      1 => middle_side_line()
+      2 => inner_corner_line()
+      otherwise => side_line()
+    }
+  }
+
+  fn outer_corner_line() {
+    show(screen_8)
+    reply = read()
+    if reply != 2 {
+      win(2)
+    }
+
+    show(screen_9)
+    reply = read()
+    if reply == 7 {
+      win(1)
+    }
+    else {
+      win(7)
+    }
+  }
+
+  fn side_line() {
+    show(screen_6)
+    reply = read()
+    if reply != 4 {
+      win(4)
+    }
+
+    show(screen_1)
+    reply = read()
+    if reply != 9 {
+      win(9)
+    }
+
+    show(screen_8)
+    reply = read()
+    if reply == 2 {
+      draw()
+    }
+    else {
+      win(2)
+    }
+  }
+
+  fn inner_corner_line() {
+    show(screen_6)
+    reply = read()
+    if reply != 4 {
+      win(4)
+    }
+
+    show(screen_9)
+    reply = read()
+    if reply == 3 {
+      win(1)
+    }
+    else {
+      win(3)
+    }
+  }
+
+  fn middle_side_line() {
+    show(screen_6)
+    reply = read()
+    if reply != 4 {
+      win(4)
+    }
+
+    show(screen_7)
+    reply = read()
+    if reply != 3 {
+      win(3)
+    }
+
+    show(screen_2)
+    reply = read()
+    if reply == 8 {
+      draw()
+    }
+    else {
+      win(8)
+    }
+  }
+}

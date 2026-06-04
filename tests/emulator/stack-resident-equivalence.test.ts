@@ -284,20 +284,13 @@ describe("repeated unary-call argument canonicalization handles multiple interle
 });
 
 const PENDING_PROGRAMS: ReadonlyArray<{ file: string; options: Record<string, unknown> }> = [
+  { file: "examples/tic-tac-toe.mkpro", options: { stackResidentTemps: true } },
   { file: "examples/pending-optimizer/cave-treasure.mkpro", options: { stackResidentTemps: true } },
   { file: "examples/pending-optimizer/giants-country.mkpro", options: { stackResidentTemps: true } },
-  {
-    file: "examples/pending-optimizer/tic-tac-toe-4x4.mkpro",
-    options: {
-      stackResidentTemps: true,
-      xParamValueFunctions: true,
-      canonicalizeRepeatedUnaryUpdateArgs: true,
-      coalesceCopies: true,
-    },
-  },
+  { file: "examples/pending-optimizer/tic-tac-toe-4x4.mkpro", options: { stackResidentTemps: true } },
 ] as const;
 
-describe("stack-resident temp variant compiles pending programs", () => {
+describe("stack-resident temp variant compiles representative programs", () => {
   for (const { file, options } of PENDING_PROGRAMS) {
     it(`compiles ${file} with stackResidentTemps`, () => {
       const source = readFileSync(file, "utf8");

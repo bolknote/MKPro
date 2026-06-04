@@ -54,6 +54,7 @@ describe("MK-Pro compiler", () => {
     expect(RUNNABLE_EXAMPLES).toContain("examples/raja-yoga.mkpro");
     expect(RUNNABLE_EXAMPLES).toContain("examples/rambo-iii.mkpro");
     expect(RUNNABLE_EXAMPLES).toContain("examples/sea-battle.mkpro");
+    expect(RUNNABLE_EXAMPLES).toContain("examples/tic-tac-toe.mkpro");
     expect(PENDING_LOWERER_EXAMPLES).toEqual([]);
     expect(PENDING_OPTIMIZER_EXAMPLES.length).toBeGreaterThan(0);
 
@@ -63,30 +64,37 @@ describe("MK-Pro compiler", () => {
     }
   }, 60_000);
 
-  it("keeps tic-tac-toe 4x4 value normalization compact without hand-written line plumbing", () => {
-    const game = source("examples/pending-optimizer/tic-tac-toe-4x4.mkpro");
+  it("keeps the 3x3 tic-tac-toe port high-level and compact", () => {
+    const game = source("examples/tic-tac-toe.mkpro");
 
-    expect(game).not.toMatch(/\bline:\s/u);
-    expect(game).not.toContain("normalize_line");
-    expect(game).not.toMatch(/\bline\s=/u);
-    expect(game).toContain("fn normalize(value)");
-    expect(game).toContain("pow10(normalize(x + y))");
+    expect(game).toContain("program TicTacToe");
+    expect(game).toContain("fn outer_corner_line()");
+    expect(game).toContain("fn middle_side_line()");
+    expect(game).not.toMatch(/\bcore\s*\{/u);
+    expect(game).not.toMatch(/\brow\s+[0-9A-F]{2}\s*:/u);
 
     const result = compileMKPro(game, { budget: 999, analysis: true });
-    const optimizationNames = result.report.optimizations.map((optimization) => optimization.name);
 
     expect(result.diagnostics).toEqual([]);
-    // The exact cell count is locked in example-sizes.test.ts; here we only guard
-    // against regression so unrelated downstream wins don't have to touch this test.
-    expect(result.report.steps).toBeLessThanOrEqual(247);
-    expect(result.report.registers.line).toBeUndefined();
-    expect(result.report.registers.value).toBeUndefined();
-    // The repeated-unary canonicalization must fire (the behaviour under test).
-    expect(optimizationNames).toContain("repeated-unary-update-arg-temp");
-    // It must route through exactly one shared scratch cell, which the X-parameter
-    // value-function path then reuses (rather than burning an extra register).
-    const scratchRegisters = Object.keys(result.report.registers).filter((name) => name.startsWith("__mkpro_unary_arg_"));
-    expect(scratchRegisters).toHaveLength(1);
+    expect(result.report.steps).toBe(100);
+    expect(result.report.steps).toBeLessThanOrEqual(105);
+  }, 20_000);
+
+  it("keeps the 4x4 tic-tac-toe port source-shaped around packed line families", () => {
+    const game = source("examples/pending-optimizer/tic-tac-toe-4x4.mkpro");
+
+    expect(game).toContain("reference anvarov_tic_tac_toe_4x4");
+    expect(game).toContain("lines: packed[1..4]");
+    expect(game).toContain("packed_add(lines[3], line");
+    expect(game).toContain("packed_digit(lines[4], line)");
+    expect(game).not.toMatch(/\bcore\s*\{/u);
+    expect(game).not.toMatch(/\brow\s+[0-9A-F]{2}\s*:/u);
+
+    const result = compileMKPro(game, { budget: 999999, analysis: true });
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.report.reference?.referenceSpan).toBe(105);
+    expect(result.report.steps).toBe(386);
   }, 20_000);
 
   it("keeps every runnable example with a real source reference no larger than that source", () => {
