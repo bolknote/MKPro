@@ -796,7 +796,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     X2-preserving gaps such as `ВП 3 Fπ КНОП /-/`. The after-digit separator
     rewrite is deliberately shape-sensitive: the same empty op before the
     first exponent digit, or before another exponent digit, changes number
-    entry and is kept.
+    entry and is kept. Closed-context `/-/ /-/` pairs are removed only when
+    value dataflow proves an ordinary decimal `X == X2` fact and downstream
+    scan proves the pair is not acting as the previous-command shield for a
+    later context-sensitive `.`/`/-/`/`ВП` restore.
 26. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/empty-op/sign redundancy optimization pass removes cells.
 27. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a proved `ВП`/X2 marker, display or ordinary, and reports `vp-fraction-restore` when one or more restores are removed. The removed `К {x}` is recognized by opcode rather than by a display/frac comment; a marker is not required when CFG dataflow proves an ordinary X2 restoration boundary: an X2 sync, at least one X2-preserving executable command, then `ВП`; direct conditional jump/fallthrough edges use their path-sensitive X2 effects, proved indirect flow targets (`indirect-target=NN`) participate in the same CFG, and joins require every incoming path to carry the proof.
 28. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.

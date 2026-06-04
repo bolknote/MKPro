@@ -3,9 +3,11 @@ import {
   computeX2ValueStates,
   emptyResult,
   hasRewriteBarrier,
+  removingRecallCanExposeX2Restore,
   type IrPass,
   type IrPassFn,
   type X2ValueDataflowState,
+  type X2ValueSet,
 } from "./helpers.ts";
 
 const VP = 0x0c;
@@ -59,10 +61,31 @@ function exponentSetHasDigit(exponents: ReadonlySet<string>): boolean {
   return exponents.size > 0;
 }
 
+function canRemoveClosedContextSignPair(
+  ops: readonly IrOp[],
+  secondSignIndex: number,
+  state: X2ValueDataflowState | undefined,
+): boolean {
+  if (state?.entry.kind !== "closed") return false;
+  if (state.vpContext !== undefined && state.vpContext.kind !== "none") return false;
+  if (!decimalValueSetsIntersect(state.x, state.x2)) return false;
+  return !removingRecallCanExposeX2Restore(ops, secondSignIndex);
+}
+
+function decimalValueSetsIntersect(left: X2ValueSet | undefined, right: X2ValueSet | undefined): boolean {
+  if (left === undefined || right === undefined) return false;
+  for (const value of left) {
+    if (value.startsWith("decimal:") && right.has(value)) return true;
+  }
+  return false;
+}
+
 // These rewrites are proven behaviorally equivalent on the MK-61 emulator:
 //   ВП ВП  ≡ ВП   (a second exponent-entry while already in exponent mode is inert)
 //   КНОП/К1/К2 ВП ≡ ВП  (an empty op immediately before exponent entry is removable)
 //   ВП ... /-/ /-/ ... ≡ ВП ... ... while the dataflow proves exponent-entry
+//   decimal-safe /-/ /-/ ≡ empty in closed context, unless the pair shields a
+//       downstream context-sensitive X2 restore
 //   ВП digit КНОП/К1/К2 op ≡ ВП digit op while op is not another digit
 //      (after an exponent digit the empty op is only a separator before a
 //       non-digit command; before the first digit, or before another digit, it
@@ -117,6 +140,17 @@ const run: IrPassFn = (ops) => {
       remove.add(i - 1);
       remove.add(i);
     }
+    // In closed context, two sign changes are only removable when value
+    // dataflow proves ordinary decimal X and X2 equality and the pair is not
+    // acting as a previous-command shield for a later `.`/`/-/`/`ВП`.
+    if (
+      isFreeStandingSignChange(prev) &&
+      isFreeStandingSignChange(cur) &&
+      canRemoveClosedContextSignPair(ops, i, x2ValueStates[i - 1])
+    ) {
+      remove.add(i - 1);
+      remove.add(i);
+    }
   }
   if (remove.size === 0) return emptyResult(ops);
   return {
@@ -125,7 +159,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "vp-exponent-splice",
-        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an exponent-entry boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent-digit empty separators, VP-context /-/ separators, exponent /-/ /-/ -> empty).`,
+        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an X2 boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent-digit empty separators, VP-context /-/ separators, exponent /-/ /-/ -> empty, closed decimal /-/ /-/ -> empty).`,
       },
     ],
   };

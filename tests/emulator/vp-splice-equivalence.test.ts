@@ -29,7 +29,9 @@ const K1 = 0x55;
 const K2 = 0x56;
 const DOT = 0x0a;
 const SIGN_CHANGE = 0x0b;
+const CLEAR_X = 0x0d;
 const FPI = 0x20;
+const F0 = 0xf0;
 const STOP = 0x50;
 
 describe("ВП exponent-entry splice collapse (vp-splice)", () => {
@@ -147,5 +149,42 @@ describe("ВП exponent-entry splice collapse (vp-splice)", () => {
       .map((item) => item.opcode);
     expect(codes).toEqual([0x01, 0x02, VP, 0x03, FPI, SIGN_CHANGE, STOP]);
     expect(display(codes)).toBe(display([0x01, 0x02, VP, 0x03, FPI, KNOP, SIGN_CHANGE, STOP]));
+  });
+
+  it("closed decimal /-/ /-/ pairs collapse only away from VP restore context", () => {
+    expect(display([0x00, 0x02, F0, SIGN_CHANGE, SIGN_CHANGE, STOP])).toBe(
+      display([0x00, 0x02, F0, STOP]),
+    );
+
+    const removable: MachineItem[] = [
+      { kind: "op", opcode: 0x00, mnemonic: "0" },
+      { kind: "op", opcode: 0x02, mnemonic: "2" },
+      { kind: "op", opcode: F0, mnemonic: "F* empty F0" },
+      { kind: "op", opcode: SIGN_CHANGE, mnemonic: "/-/" },
+      { kind: "op", opcode: SIGN_CHANGE, mnemonic: "/-/" },
+      { kind: "op", opcode: STOP, mnemonic: "С/П" },
+    ];
+    const removedResult = runIrPasses(removable, { delivery: "hex", budget: 105, analysis: false });
+    const removedCodes = removedResult.items
+      .filter((item): item is Extract<MachineItem, { opcode: number }> => "opcode" in item)
+      .map((item) => item.opcode);
+    expect(removedCodes).toEqual([0x00, 0x02, F0, STOP]);
+    expect(display(removedCodes)).toBe(display([0x00, 0x02, F0, SIGN_CHANGE, SIGN_CHANGE, STOP]));
+
+    // The same-looking pair cannot be dropped before ВП: it changes the
+    // previous-command source used by the X2 restore.
+    expect(display([CLEAR_X, SIGN_CHANGE, SIGN_CHANGE, VP, STOP])).not.toBe(display([CLEAR_X, VP, STOP]));
+    const kept: MachineItem[] = [
+      { kind: "op", opcode: CLEAR_X, mnemonic: "Cx" },
+      { kind: "op", opcode: SIGN_CHANGE, mnemonic: "/-/" },
+      { kind: "op", opcode: SIGN_CHANGE, mnemonic: "/-/" },
+      { kind: "op", opcode: VP, mnemonic: "ВП" },
+      { kind: "op", opcode: STOP, mnemonic: "С/П" },
+    ];
+    const keptResult = runIrPasses(kept, { delivery: "hex", budget: 105, analysis: false });
+    const keptCodes = keptResult.items
+      .filter((item): item is Extract<MachineItem, { opcode: number }> => "opcode" in item)
+      .map((item) => item.opcode);
+    expect(keptCodes).toEqual([CLEAR_X, SIGN_CHANGE, SIGN_CHANGE, VP, STOP]);
   });
 });
