@@ -921,6 +921,24 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:-5000:normalized"]);
   });
 
+  it("x2 value dataflow proves a closed signed fractional exponent-entry after an X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[6])).toBe("closed");
+    expect(x2VpContextStateText(states[6])).toBe("none");
+    expect(x2ValueStateText(states[6]?.x)).toEqual(["decimal:-0.005:normalized"]);
+    expect(x2ValueStateText(states[6]?.x2)).toEqual(["decimal:-0.005:normalized"]);
+  });
+
   it("x2 value dataflow clears VP exponent context when a new digit starts", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -1181,6 +1199,36 @@ describe("ir passes on synthetic programs", () => {
       plain(0x03, "3"),
       plain(0xf0, "F* empty F0"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal -5000 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore replaces a repeated signed fractional exponent literal with dot", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x05, "5"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(4);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal -0.005 from hidden X2 temp" } },
       halt(),
     ]);
   });
@@ -1553,6 +1601,31 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual([
       plain(0x00, "0"),
       plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore removes dot after modeled fractional closed sign-change", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
       plain(0xf0, "F* empty F0"),
       plain(0x0b, "/-/"),
       halt(),

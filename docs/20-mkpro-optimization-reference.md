@@ -770,7 +770,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     normalized decimal value fact after an X2-affecting, X-preserving sync
     closes it (`5 ВП 3 F0` proves `decimal:5000:normalized`,
     `5 ВП 3 /-/ F0` proves `decimal:0.005:normalized`, and
-    `5 /-/ ВП 3 F0` proves `decimal:-5000:normalized`, clearing the VP
+    `5 /-/ ВП 3 F0` / `5 /-/ ВП 3 /-/ F0` prove
+    `decimal:-5000:normalized` / `decimal:-0.005:normalized`, clearing the VP
     context). Hidden exponent forms that remain under observable VP context
     still do not become dot-safe value aliases; emulator probes show that later
     `.` can signal `ЕГГ0Г`. Exponent forms that need a wider scientific,
@@ -788,8 +789,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     literal is immediately after a proved X2 sync), and removing number entry
     cannot expose a consumed stack lift. It recognizes ordinary digit-runs,
     signed digit-runs, and normalized exponent-entry literals such as
-    `5 ВП 3`, `5 ВП 3 /-/`, or `5 /-/ ВП 3` once the prior value has been
-    closed by a safe X2-affecting sync. Leading-zero forms, too-wide exponent forms,
+    `5 ВП 3`, `5 ВП 3 /-/`, `5 /-/ ВП 3`, or
+    `5 /-/ ВП 3 /-/` once the prior value has been closed by a safe
+    X2-affecting sync. Leading-zero forms, too-wide exponent forms,
     display/raw bytes, and later context-sensitive `.`/`/-/`/`ВП`
     observations are kept.
 20. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.

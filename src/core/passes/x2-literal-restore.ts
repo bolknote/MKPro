@@ -17,7 +17,7 @@ const DOT = 0x0a;
 const SIGN_CHANGE = 0x0b;
 const VP = 0x0c;
 
-interface DecimalLiteralRun {
+interface NumericLiteralRun {
   readonly end: number;
   readonly value: string;
 }
@@ -50,7 +50,7 @@ function isFreshClosedDecimalEntry(state: X2ValueDataflowState | undefined): boo
   return state?.entry.kind === "closed" && (state.vpContext === undefined || state.vpContext.kind === "none");
 }
 
-function decimalLiteralRunAt(ops: readonly IrOp[], start: number): DecimalLiteralRun | undefined {
+function decimalLiteralRunAt(ops: readonly IrOp[], start: number): NumericLiteralRun | undefined {
   const digits: string[] = [];
   let end = start;
   while (end < ops.length) {
@@ -67,7 +67,7 @@ function decimalLiteralRunAt(ops: readonly IrOp[], start: number): DecimalLitera
   return { end: end - 1, value };
 }
 
-function exponentLiteralRunAt(ops: readonly IrOp[], start: number): DecimalLiteralRun | undefined {
+function exponentLiteralRunAt(ops: readonly IrOp[], start: number): NumericLiteralRun | undefined {
   const mantissaDigits: string[] = [];
   let cursor = start;
   while (cursor < ops.length) {
@@ -97,7 +97,7 @@ function exponentLiteralRunAt(ops: readonly IrOp[], start: number): DecimalLiter
   return { end: cursor - 1, value };
 }
 
-function literalRunAt(ops: readonly IrOp[], start: number): DecimalLiteralRun | undefined {
+function literalRunAt(ops: readonly IrOp[], start: number): NumericLiteralRun | undefined {
   return exponentLiteralRunAt(ops, start) ?? decimalLiteralRunAt(ops, start);
 }
 
@@ -225,7 +225,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "x2-literal-restore",
-        detail: `Replaced ${removed} repeated decimal literal cell${removed === 1 ? "" : "s"} with hidden X2 . restore(s).`,
+        detail: `Replaced ${removed} repeated numeric literal cell${removed === 1 ? "" : "s"} with hidden X2 . restore(s).`,
       },
     ],
   };
