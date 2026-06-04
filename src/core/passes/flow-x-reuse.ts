@@ -3,12 +3,14 @@ import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import {
   cellsPerOp,
   computeX2RegisterStates,
+  computeX2ValueStates,
   emptyResult,
   hasRewriteBarrier,
   knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
   plainPreservesXValue,
   recallAlreadySyncedInX2,
+  recallAlreadySyncedInX2Value,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
   removingRecallCanExposeX2Restore,
@@ -35,6 +37,7 @@ const run: IrPassFn = (ops) => {
   const graph = buildGraph(ops);
   const inStates = computeXRegisterStates(ops, graph);
   const x2States = computeX2RegisterStates(ops);
+  const x2ValueStates = computeX2ValueStates(ops);
   const remove = new Set<number>();
 
   for (let index = 0; index < ops.length; index += 1) {
@@ -42,7 +45,9 @@ const run: IrPassFn = (ops) => {
     const recallRegister = removableRecallValueRegister(op);
     if (recallRegister === undefined) continue;
     if (removingRecallCanExposeStackLift(ops, index)) continue;
-    const redundantSyncRegister = recallAlreadySyncedInX2(op, x2States[index]);
+    const redundantSyncRegister =
+      recallAlreadySyncedInX2(op, x2States[index]) ??
+      recallAlreadySyncedInX2Value(op, x2ValueStates[index]);
     if (removingRecallCanExposeX2Restore(ops, index, { redundantSyncRegister })) continue;
     if (inStates[index]?.has(recallRegister) === true) remove.add(index);
   }

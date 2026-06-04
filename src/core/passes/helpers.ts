@@ -395,6 +395,14 @@ export function recallAlreadySyncedInX2(
   return target !== undefined && state.has(target) ? target : undefined;
 }
 
+export function recallAlreadySyncedInX2Value(
+  op: IrOp,
+  state: X2ValueDataflowState | undefined,
+): RegisterName | undefined {
+  const register = removableRecallValueRegister(op);
+  return register !== undefined && x2ValueSetHasRegister(state?.x2, register) ? register : undefined;
+}
+
 function emptyRegisterDataflowState(): RegisterDataflowState {
   return { x: new Set(), x2: new Set() };
 }

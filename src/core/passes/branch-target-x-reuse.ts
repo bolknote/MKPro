@@ -1,9 +1,11 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import {
   computeX2RegisterStates,
+  computeX2ValueStates,
   emptyResult,
   hasRewriteBarrier,
   recallAlreadySyncedInX2,
+  recallAlreadySyncedInX2Value,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
   removingRecallCanExposeX2Restore,
@@ -15,6 +17,7 @@ const run: IrPassFn = (ops) => {
   const labels = labelIndexes(ops);
   const references = targetReferenceCounts(ops);
   const x2States = computeX2RegisterStates(ops);
+  const x2ValueStates = computeX2ValueStates(ops);
   const remove = new Set<number>();
 
   for (let index = 0; index < ops.length; index += 1) {
@@ -35,7 +38,9 @@ const run: IrPassFn = (ops) => {
     if (removingRecallCanExposeStackLift(ops, targetIndex)) continue;
     if (
       removingRecallCanExposeX2Restore(ops, targetIndex, {
-        redundantSyncRegister: recallAlreadySyncedInX2(target, x2States[targetIndex]),
+        redundantSyncRegister:
+          recallAlreadySyncedInX2(target, x2States[targetIndex]) ??
+          recallAlreadySyncedInX2Value(target, x2ValueStates[targetIndex]),
       })
     ) continue;
 

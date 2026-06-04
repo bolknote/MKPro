@@ -2,9 +2,11 @@ import type { IrOp, RegisterName } from "../types.ts";
 import {
   cellsPerOp,
   computeX2RegisterStates,
+  computeX2ValueStates,
   knownIndirectFlowTarget,
   plainPreservesXValue,
   recallAlreadySyncedInX2,
+  recallAlreadySyncedInX2Value,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
   removingRecallCanExposeX2Restore,
@@ -47,6 +49,7 @@ function clobbersX(op: IrOp): boolean {
 const run: IrPassFn = (ops) => {
   const removed = new Set<number>();
   const x2States = computeX2RegisterStates(ops);
+  const x2ValueStates = computeX2ValueStates(ops);
   const labelEntries = labelEntryIndexes(ops);
   let xHolds: RegisterName | undefined;
   for (let i = 0; i < ops.length; i += 1) {
@@ -66,7 +69,9 @@ const run: IrPassFn = (ops) => {
       xHolds === recallRegister &&
       !removingRecallCanExposeStackLift(ops, i) &&
       !removingRecallCanExposeX2Restore(ops, i, {
-        redundantSyncRegister: recallAlreadySyncedInX2(op, x2States[i]),
+        redundantSyncRegister:
+          recallAlreadySyncedInX2(op, x2States[i]) ??
+          recallAlreadySyncedInX2Value(op, x2ValueStates[i]),
       })
     ) {
       removed.add(i);

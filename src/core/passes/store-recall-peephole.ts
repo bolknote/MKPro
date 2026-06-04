@@ -1,7 +1,9 @@
 import type { IrOp } from "../types.ts";
 import {
   computeX2RegisterStates,
+  computeX2ValueStates,
   recallAlreadySyncedInX2,
+  recallAlreadySyncedInX2Value,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
   removingRecallCanExposeX2Restore,
@@ -14,6 +16,7 @@ import {
 const run: IrPassFn = (ops) => {
   const result: IrOp[] = [];
   const x2States = computeX2RegisterStates(ops);
+  const x2ValueStates = computeX2ValueStates(ops);
   let applied = 0;
   for (let i = 0; i < ops.length; i += 1) {
     const current = ops[i]!;
@@ -22,7 +25,8 @@ const run: IrPassFn = (ops) => {
     const recalledRegister = next === undefined ? undefined : removableRecallValueRegister(next);
     const redundantSyncRegister = next === undefined
       ? undefined
-      : recallAlreadySyncedInX2(next, x2States[i + 1]);
+      : recallAlreadySyncedInX2(next, x2States[i + 1]) ??
+        recallAlreadySyncedInX2Value(next, x2ValueStates[i + 1]);
     if (
       storedRegister !== undefined &&
       recalledRegister !== undefined &&
