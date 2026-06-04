@@ -319,6 +319,10 @@ export function x2ValueSetHasRegister(input: X2ValueSet | undefined, register: R
   return input?.has(registerValueFact(register)) === true;
 }
 
+export function x2ValueSetHasNormalizedDecimal(input: X2ValueSet | undefined, value: string): boolean {
+  return input?.has(decimalValueFact(value, "normalized")) === true;
+}
+
 type X2RestoreBoundaryState = "none" | "synced" | "boundary";
 type X2DotRestoreGapState = "none" | "synced" | "one-gap" | "safe";
 
@@ -1693,6 +1697,10 @@ export function removingRecallCanExposeStackLift(ops: readonly IrOp[], recallInd
 
 export function removingPreShiftLiftCanExposeStack(ops: readonly IrOp[], producerIndex: number): boolean {
   return stackDifferenceCanReachConsumer(ops, producerIndex + 1, 2);
+}
+
+export function replacingNumberEntryCanExposeStackLift(ops: readonly IrOp[], numberEntryEndIndex: number): boolean {
+  return stackDifferenceCanReachConsumer(ops, numberEntryEndIndex + 1, 1);
 }
 
 export function removingRecallCanExposeX2Restore(
