@@ -86,7 +86,7 @@ function canRemoveVpContextSignPairBeforeFreshDigit(
 ): boolean {
   const before = analyzeX2VpShapeContext(state);
   const after = analyzeX2VpShapeContext(stateAfterPair);
-  if (before.kind !== "vp-exponent-context" || after.kind !== "vp-exponent-context") return false;
+  if (!isVpExponentContext(before.kind) || !isVpExponentContext(after.kind)) return false;
   const nextIndex = nextFreshDigitIndex(ops, secondSignIndex + 1);
   if (nextIndex === undefined || !isDecimalDigit(ops[nextIndex]!)) return false;
   return sameX2ExponentShapeContext(before, after);
@@ -97,9 +97,17 @@ function canRemoveVpContextSignBeforeFreshDigit(
   signIndex: number,
   state: X2ValueDataflowState | undefined,
 ): boolean {
-  if (analyzeX2VpShapeContext(state).kind !== "vp-exponent-context") return false;
+  if (!isVpExponentContext(analyzeX2VpShapeContext(state).kind)) return false;
   const nextIndex = nextFreshDigitIndex(ops, signIndex + 1);
   return nextIndex !== undefined && isDecimalDigit(ops[nextIndex]!);
+}
+
+function isActiveExponentContext(kind: ReturnType<typeof analyzeX2VpShapeContext>["kind"]): boolean {
+  return kind === "active-exponent" || kind === "active-structural-exponent";
+}
+
+function isVpExponentContext(kind: ReturnType<typeof analyzeX2VpShapeContext>["kind"]): boolean {
+  return kind === "vp-exponent-context" || kind === "vp-structural-exponent-context";
 }
 
 function canRemoveX2RestoreSignBeforeDeadOverwrite(
@@ -196,7 +204,7 @@ const run: IrPassFn = (ops) => {
     // command to close exponent entry in the same place.
     if (
       isFreeStandingEmptyOp(prev) &&
-      analyzeX2VpShapeContext(x2ValueStates[i - 1]).kind === "active-exponent" &&
+      isActiveExponentContext(analyzeX2VpShapeContext(x2ValueStates[i - 1]).kind) &&
       analyzeX2VpShapeContext(x2ValueStates[i - 1]).hasExponentDigit &&
       !isDecimalDigit(cur)
     ) {
@@ -209,7 +217,7 @@ const run: IrPassFn = (ops) => {
     if (
       isFreeStandingEmptyOp(prev) &&
       isFreeStandingSignChange(cur) &&
-      analyzeX2VpShapeContext(x2ValueStates[i - 1]).kind === "vp-exponent-context" &&
+      isVpExponentContext(analyzeX2VpShapeContext(x2ValueStates[i - 1]).kind) &&
       analyzeX2VpShapeContext(x2ValueStates[i - 1]).hasExponentDigit
     ) {
       remove.add(i - 1);
@@ -230,7 +238,7 @@ const run: IrPassFn = (ops) => {
     if (
       isFreeStandingSignChange(prev) &&
       isFreeStandingSignChange(cur) &&
-      analyzeX2VpShapeContext(x2ValueStates[i - 1]).kind === "active-exponent"
+      isActiveExponentContext(analyzeX2VpShapeContext(x2ValueStates[i - 1]).kind)
     ) {
       remove.add(i - 1);
       remove.add(i);

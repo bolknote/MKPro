@@ -1290,7 +1290,11 @@ The pipeline currently contains:
   seed a separate shape-only `ВП`-entry source after direct/proved recalls,
   direct `В/О` return continuations, and path-sensitive direct-conditional
   fallthrough X2 syncs; the jump edge keeps the previous X2 state and does not
-  invent a new source. A closed-context `.` now
+  invent a new source. When `ВП` consumes such a source, dataflow now creates
+  structural exponent-entry facts (`hex-exponent:*:*` / `super-exponent:*:*`)
+  and carries exponent digits/sign toggles as shape-only context. That gives
+  splice passes a real model for structural `ВП ... /-/` sequences without
+  promoting hex/super forms into ordinary decimal values. A closed-context `.` now
   transfers the hidden X2 facts back into visible `X`; decimal facts are
   normalized for `X` during that transfer while the hidden X2 representation
   stays unchanged. If number entry
@@ -1311,7 +1315,7 @@ The pipeline currently contains:
   Repeated literal restoration may also consume those recalled/preloaded decimal
   facts instead of requiring the previous occurrence to be inline source digits,
   and `ВП` splice/sign reductions can use the same recalled/preloaded mantissa
-  facts.
+  facts; structural `ВП` reductions use the parallel shape context.
 - **x2-noop-restore** — removes `.` when the value proof shows that `X` already
   contains the same value as hidden `X2` and the separate restore-gap proof says
   the dot is in a safe X2 context. It also accepts the documented no-op form
@@ -1361,6 +1365,10 @@ The pipeline currently contains:
   `.` restore-gap proof must have seen two safe X2-preserving executable steps
   after the last X2 sync, and the normal stack-lift/X2-context guards prove that
   the recall's stack shift and previous-command class are not observable. The
+  scratch-store search can cross a direct conditional when the recall sits on
+  the fallthrough path: the shared path-sensitive X2 proof must show that this
+  edge already synchronized the same value into X2, while the jump edge is left
+  to ordinary liveness/DSE. The
   rewrite is intentionally one cell for one cell; the win appears when the
   following liveness pass removes the scratch `X->П r`/`К X->П R7..Re` whose
   only remaining purpose was that recall. Repeated reads of loop/state registers

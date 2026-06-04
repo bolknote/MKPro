@@ -713,9 +713,21 @@ describe("ir passes on synthetic programs", () => {
       raw: "FABC",
       safety: "structuralOnly",
     });
+    expect(parseX2ShapeFact("hex-exponent:FABC:-3")).toEqual({
+      kind: "hex-exponent",
+      mantissa: "FABC",
+      exponent: "-3",
+      safety: "structuralOnly",
+    });
     expect(parseX2ShapeFact("super:FA")).toEqual({
       kind: "super-mantissa",
       raw: "FA",
+      safety: "structuralOnly",
+    });
+    expect(parseX2ShapeFact("super-exponent:FA:3")).toEqual({
+      kind: "super-exponent",
+      mantissa: "FA",
+      exponent: "3",
       safety: "structuralOnly",
     });
   });
@@ -1231,6 +1243,25 @@ describe("ir passes on synthetic programs", () => {
     expect(x2VpEntryShapeText(states[2])).toEqual([]);
     expect(x2VpEntryShapeText(states[3])).toEqual(["hex:8.70Е2-6С:mantissa"]);
     expect(x2VpEntryShapeText(states[5])).toEqual([]);
+  });
+
+  it("x2 value dataflow keeps structural exponent-entry shape after VP", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[2]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual([]);
+    expect(x2ShapeStateText(states[2]?.xShape)).toEqual(["hex-exponent:FACE:"]);
+    expect(x2ShapeStateText(states[3]?.xShape)).toEqual(["hex-exponent:FACE:-"]);
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["hex-exponent:FACE:"]);
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex-exponent:FACE:3"]);
   });
 
   it("x2 value dataflow keeps indirect conditional fallthrough ВП structural-only", () => {
@@ -3149,6 +3180,25 @@ describe("ir passes on synthetic programs", () => {
 
     expect(restored.applied).toBe(1);
     expect(restored.ops[4]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore crosses direct conditional fallthrough X2 sync", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      cjump("done"),
+      recall("2"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[3]).toMatchObject({ kind: "plain", opcode: 0x0a });
     expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
@@ -6465,6 +6515,26 @@ describe("ir passes on synthetic programs", () => {
       store("1"),
       plain(0x0d, "Cx"),
       recall("1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes exponent sign toggles after structural X2-sync ВП", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      recall("2", "preload const FACE"),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
       halt(),

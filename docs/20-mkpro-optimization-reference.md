@@ -703,6 +703,10 @@ Display rewrites are separated into strategy selection + body lowering.
   proved decimal fact, even without a live `reg:r` alias. Structural hex/super
   shape-memory remains available to recall-elimination proofs, but is not used
   as a hidden-temp `.` restore source until a separate dot-safety proof exists.
+  The scratch-store search may cross a direct conditional fallthrough when the
+  path-sensitive X2 dataflow proves that fallthrough edge already synchronized
+  the same value into X2; the non-fallthrough edge remains governed by ordinary
+  liveness/DSE and does not create an X2 sync proof.
   This exposes the scratch
   register store to ordinary DSE instead of
   requiring a membership-specific lowering; repeated reads of loop/state
@@ -830,7 +834,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     mantissa and exponent-entry forms independently from value facts: for
     example unsafe `05 ВП 3` is preserved as `exponent:05:3:decimal` without
     granting a `decimal:*` equality fact, while safe `5 ВП 3` carries both the
-    exponent shape and `mantissa:5000:decimal`. Preloaded `П->X r` constants
+    exponent shape and `mantissa:5000:decimal`. Structural hex/super mantissas
+    consumed by `ВП` become shape-only `hex-exponent:*:*` /
+    `super-exponent:*:*` forms; exponent digits and exponent `/-/` update that
+    structural context without creating decimal value facts. Preloaded `П->X r` constants
     seed the same lattice: ordinary decimal/scientific constants become
     `decimal:*` facts, while hex-like display mantissas and `FA`..`FF` super
     forms become structural-only `hex:*` / `super:*` shape facts. Until those
@@ -932,7 +939,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     previously stored or setup-loaded literal-shaped decimal. The same generic
     `ВП` source proof is also used for structural hex/super shapes after direct
     return continuations and path-sensitive direct-conditional/`F Lx`
-    fallthrough X2 syncs, without promoting those shapes into decimal value facts.
+    fallthrough X2 syncs. When such a source reaches `ВП`, the same context
+    classifier carries `hex-exponent:*:*` / `super-exponent:*:*` through
+    exponent signs/digits, so structural exponent sign pairs can collapse by the
+    same rule as decimal exponent sign pairs, still without promoting those
+    shapes into decimal value facts.
 28. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/empty-op/sign redundancy optimization pass removes cells.
 29. `vp-x2-peephole` — removes redundant `К {x}` that immediately follows a proved `ВП`/X2 marker, display or ordinary, and reports `vp-fraction-restore` when one or more restores are removed. The removed `К {x}` is recognized by opcode rather than by a display/frac comment; a marker is not required when CFG dataflow proves an ordinary X2 restoration boundary: an X2 sync, at least one X2-preserving executable command, then `ВП`; direct conditional and `F Lx` jump/fallthrough edges use their path-sensitive X2 effects, proved indirect flow targets (`indirect-target=NN`) and X2-preserving indirect conditionals participate in the same CFG, and joins require every incoming path to carry the proof.
 30. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
