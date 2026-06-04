@@ -1632,6 +1632,48 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes a fractional closed-context sign pair", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice keeps a fractional closed-context sign pair when it shields dot", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-noop-restore keeps dot after closed sign-change when it shapes a following ВП", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
