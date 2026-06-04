@@ -689,162 +689,273 @@ export function compileMKPro(
   const requestedBudget = { ...DEFAULT_OPTIONS, ...options }.budget;
   const rescueThreshold = Math.min(requestedBudget, DEFAULT_OPTIONS.budget);
   const needsSizeRescue = primary === undefined || primary.report.steps > rescueThreshold || primary.report.budgetReport.exceeded;
-  const trySizeRescueCandidate = (loweringOptions: LoweringOptions, name: string, detail: string): void => {
-    if (!needsSizeRescue) return;
-    tryCandidate(loweringOptions, name, detail);
-  };
   const canRouteRepeatedUnaryArgs = sourceHasRepeatedRoutableUnaryShape(source);
-  const tryUnaryArgCandidate = (loweringOptions: LoweringOptions, name: string, detail: string): void => {
-    if (!canRouteRepeatedUnaryArgs) return;
-    tryCandidate(loweringOptions, name, detail);
+
+  // Declarative candidate enumeration (docs §5a): every speculative whole-program
+  // variant comes from `enumerateStaticCandidateSpecs` in a fixed order. Gates
+  // mirror the former `trySizeRescueCandidate` / `tryUnaryArgCandidate` helpers,
+  // so the candidate set, order, and names are identical to the previous
+  // hand-written sequence.
+  const primaryOverflows = primary === undefined || primary.steps.length > 105;
+  const enumeratedNames = new Set<string>();
+  const runSpec = (spec: CandidateSpec): void => {
+    if (spec.gate === "sizeRescue" && !needsSizeRescue) return;
+    if (spec.gate === "unaryArg" && !canRouteRepeatedUnaryArgs) return;
+    if (enumeratedNames.has(spec.name)) return;
+    enumeratedNames.add(spec.name);
+    tryCandidate(spec.options, spec.name, spec.detail);
+  };
+  for (const spec of enumerateStaticCandidateSpecs({ source, primaryOverflows })) runSpec(spec);
+
+  reclaimCoalescedPreloadCandidates(source, options, needsSizeRescue, tryCandidate);
+
+  const OFFICIAL_PROGRAM_LIMIT = 105;
+  const selectBest = (): { best: CompileResult | undefined; selected: (typeof candidates)[number] | undefined } => {
+    let best = primary;
+    let selected: (typeof candidates)[number] | undefined;
+    for (const candidate of candidates) {
+      const sameMainButLowerStartup =
+        best !== undefined &&
+        candidate.result.steps.length === best.steps.length &&
+        best.steps.length > OFFICIAL_PROGRAM_LIMIT &&
+        estimatedStartupProgramCost(candidate.result) < estimatedStartupProgramCost(best);
+      if (best === undefined || candidate.result.steps.length < best.steps.length || sameMainButLowerStartup) {
+        best = candidate.result;
+        selected = candidate;
+      }
+    }
+    return { best, selected };
   };
 
-  tryCandidate(
+  // Stage 2 coverage expansion + demote run only in the rescue regime, i.e. when
+  // the standard search still leaves the program over the official window. This
+  // matches the demote gate: programs that already fit (<=105) are byte-locked
+  // and untouched, so only genuinely-overflowing programs pay for the broader
+  // bundle x layout matrix, and min-size selection means it can only shrink them.
+  if ((selectBest().best?.steps.length ?? 0) > OFFICIAL_PROGRAM_LIMIT) {
+    for (const spec of enumerateExpansionCandidateSpecs({ source, primaryOverflows })) runSpec(spec);
+    demoteConstantIndirectFlowCandidates(source, options, needsSizeRescue, tryCandidate);
+  }
+
+  const { best, selected } = selectBest();
+  if (best === undefined) {
+    if (primaryError instanceof Error) throw primaryError;
+    if (primaryError !== undefined) throw new Error(primaryFailureSummary(primaryError));
+    throw new CompileError([{ level: "error", message: "No lowering candidate succeeded." }]);
+  }
+
+  if (selected !== undefined) {
+    const comparison = primary === undefined
+      ? `primary lowering failed: ${primaryFailureSummary(primaryError)}`
+      : `${selected.result.steps.length} vs ${primary.steps.length} cells`;
+    selected.result.report.optimizations.push({
+      name: selected.name,
+      detail: `${selected.detail} (${comparison}).`,
+    });
+    return finishCompileAttempt(selected.result, options.analysis === true);
+  }
+  return finishCompileAttempt(best, options.analysis === true);
+}
+
+// Candidate composition engine (docs §5a).
+//
+// The whole-program lowering search is declarative: every speculative variant is
+// a `CandidateSpec` (a `LoweringOptions` flag bundle + a stable name/detail + a
+// gate). `enumerateStaticCandidateSpecs` yields the source-determined specs in a
+// fixed order; `compileMKPro` applies the gates and feeds each surviving spec to
+// `selectBest` (smallest cell count wins). Two probe-driven providers
+// (`reclaimCoalescedPreloadCandidates`, `demoteConstantIndirectFlowCandidates`)
+// build extra specs from trial compiles and run at fixed positions in the same
+// order. Because selection is min-size, the candidate set can only ever keep a
+// program the same size or shrink it.
+type CandidateGate = "always" | "sizeRescue" | "unaryArg";
+
+interface CandidateSpec {
+  readonly options: LoweringOptions;
+  readonly name: string;
+  readonly detail: string;
+  readonly gate: CandidateGate;
+}
+
+type TryCandidateFn = (loweringOptions: LoweringOptions, name: string, detail: string) => void;
+
+interface CandidateEnumerationContext {
+  readonly source: string;
+  readonly primaryOverflows: boolean;
+}
+
+// Pure proc-placement modifiers used by the proc-layout combinations. Each is a
+// behavior-preserving address reshuffle, so it can be freely composed with the
+// transform bundles below; the composed name is the bundle name plus the layout
+// suffix.
+const PROC_LAYOUT_MODIFIERS: ReadonlyArray<{ options: LoweringOptions; name: string; detail: string }> = [
+  { options: { orderProcsByCallCount: true }, name: "call-count-proc-layout", detail: "Emitted procedures in descending call-count order so hot helpers occupy the cheapest addresses" },
+  { options: { procLayoutStrategy: "size-asc" }, name: "size-asc-proc-layout", detail: "Emitted the smallest procedures first to pack hot helpers into the cheapest addresses" },
+  { options: { procLayoutStrategy: "size-desc" }, name: "size-desc-proc-layout", detail: "Emitted the largest procedures first" },
+  { options: { procLayoutStrategy: "reverse" }, name: "reverse-proc-layout", detail: "Emitted procedures in reverse source order" },
+];
+
+function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): CandidateSpec[] {
+  const { source, primaryOverflows } = ctx;
+  const specs: CandidateSpec[] = [];
+  const add = (
+    options: LoweringOptions,
+    name: string,
+    detail: string,
+    gate: CandidateGate = "always",
+  ): void => {
+    specs.push({ options, name, detail, gate });
+  };
+
+  add(
     { aggressiveTerminalDirect: true },
     "late-layout-if-variant",
     "Selected aggressive terminal-if lowering after full layout",
   );
-  tryCandidate(
+  add(
     { invertBranchOrder: true },
     "late-layout-branch-order",
     "Selected inverted if/else branch order after full layout",
   );
-  tryCandidate(
+  add(
     { aggressiveTerminalDirect: true, invertBranchOrder: true },
     "late-layout-if-branch-order",
     "Selected aggressive terminal-if plus inverted branch-order lowering after full layout",
   );
-  tryCandidate(
+  add(
     { guardedPrologueGadgets: true, hoistProcs: true, aggressiveIndirectCall: true },
     "break-even-indirect-call",
     "Hoisted procs with guarded-prologue gadgets and a break-even indirect-call guard, collapsing many repeated direct calls to single-cell indirect flow",
   );
-  tryCandidate(
+  add(
     { hoistSharedHelpers: true },
     "hoisted-helper-indirect-layout",
     "Hoisted shared helpers to the front so their calls become single-cell preloaded indirect flow",
   );
-  tryCandidate(
+  add(
     { hoistSharedHelpers: true, hoistProcs: true },
     "hoisted-proc-indirect-layout",
     "Hoisted ordinary rule procs to the front so repeated calls become single-cell preloaded indirect flow",
   );
-  tryCandidate(
+  add(
     { canonicalizeIfChains: true },
     "if-chain-dispatch-canonicalization",
     "Selected single-evaluation dispatch for a repeated expensive if/else-if selector",
   );
-  tryCandidate(
+  add(
     { freeResidualDispatchScratch: true },
     "free-residual-dispatch-scratch",
     "Freed the unused residual-dispatch scratch register to unlock more preloaded constants",
   );
-  tryCandidate(
+  add(
     { aliasXReuse: true },
     "alias-x-reuse",
     "Reused X for copy-equivalent variables at scalar sites (conditions, near_any)",
   );
-  tryCandidate(
+  add(
     { coalesceCopies: true },
     "coalesce-copies",
     "Coalesced copy-related registers (A = B) that never diverge, dropping the copy and freeing a register",
   );
-  tryCandidate(
+  add(
     { freeResidualDispatchScratch: true, canonicalizeIfChains: true },
     "free-residual-dispatch-scratch-with-if-chain",
     "Combined residual-dispatch scratch freeing with if/else-if dispatch canonicalization",
   );
-  tryCandidate(
+  add(
     { shareRandomCell: true },
     "share-random-cell-helper",
     "Shared a repeated random-coordinate expression through one helper despite a marginal predicted saving",
   );
-  tryCandidate(
+  add(
     { shareRandomCell: true, hoistSharedHelpers: true },
     "share-random-cell-helper-hoisted",
     "Shared a repeated random-coordinate expression and hoisted helpers so its calls become single-cell indirect flow",
   );
-  tryCandidate(
+  add(
     { sharedStraightLineCallBodies: true },
     "shared-call-body-helper",
     "Shared repeated straight-line bodies that contain direct subroutine calls",
   );
-  tryCandidate(
+  add(
     { tailBranchInversion: true },
     "late-layout-tail-branch-inversion",
     "Selected tail-branch inversion after full layout",
   );
-  tryCandidate(
+  add(
     { hoistSharedHelpers: true, canonicalizeIfChains: true, tailBranchInversion: true },
     "hoisted-helper-if-chain-tail-branch-layout",
     "Combined helper hoisting, if-chain canonicalization, and tail-branch inversion after full layout",
   );
-  tryCandidate(
+  add(
     { guardedPrologueGadgets: true },
     "guarded-prologue-gadget-layout",
     "Selected guarded prologue gadget extraction after full layout",
   );
-  tryCandidate(
+  add(
     { guardedPrologueGadgets: true, hoistSharedHelpers: true, hoistProcs: true },
     "guarded-prologue-hoisted-proc-layout",
     "Selected guarded prologue gadget extraction with hoisted procedure layout",
   );
-  tryCandidate(
+  add(
     { sharedBitMaskHelperCalls: true },
     "shared-bit-mask-helper-layout",
     "Selected shared bit_mask helper calls after full layout",
   );
-  tryCandidate(
+  add(
     { sharedBitMaskHelperCalls: true, hoistSharedHelpers: true },
     "shared-bit-mask-helper-hoisted-layout",
     "Selected shared bit_mask helper calls with hoisted helper layout",
   );
-  tryCandidate(
+  add(
     { signedAbsMatchPairs: true },
     "signed-abs-match-pair",
     "Selected abs/sign lowering for signed match pairs after full layout",
   );
-  tryCandidate(
+  add(
     { signedAbsMatchPairs: true, sharedBitMaskHelperCalls: true, hoistSharedHelpers: true },
     "signed-abs-shared-bit-helper-hoisted-layout",
     "Combined signed match-pair lowering with hoisted shared bit-mask helpers after full layout",
   );
-  tryCandidate(
+  add(
     { signedAbsMatchPairs: true, sharedBitMaskHelperCalls: true, hoistSharedHelpers: true, hoistProcs: true },
     "signed-abs-shared-bit-helper-hoisted-proc-layout",
     "Combined signed match-pair lowering with hoisted shared bit-mask helpers and procedures after full layout",
   );
-  tryCandidate(
+  add(
     { synthesizeParametricSiblings: true },
     "parametric-sibling-proc",
     "Synthesized a shared one-parameter helper for sibling dispatch procedure arms",
   );
-  tryCandidate(
+  add(
     { packCounterStripes: true },
     "packed-counter-stripes",
     "Packed compatible fixed-width counters into one hidden decimal-striped register",
   );
-  tryUnaryArgCandidate(
+  add(
     { canonicalizeRepeatedUnaryUpdateArgs: true },
     "repeated-unary-update-arg-temp",
     "Canonicalized repeated X-transform unary-call arguments through a hidden scratch to expose shared helper tails",
+    "unaryArg",
   );
-  tryCandidate(
+  add(
     { xParamValueFunctions: true },
     "x-param-value-function",
     "Passed simple value-function arguments through X instead of allocating a parameter register",
   );
-  tryUnaryArgCandidate(
+  add(
     { xParamValueFunctions: true, canonicalizeRepeatedUnaryUpdateArgs: true },
     "x-param-value-function-with-unary-arg-temp",
     "Combined X-parameter value functions with repeated unary-call argument canonicalization",
+    "unaryArg",
   );
-  tryUnaryArgCandidate(
+  add(
     { xParamValueFunctions: true, canonicalizeRepeatedUnaryUpdateArgs: true, coalesceCopies: true },
     "x-param-value-function-unary-arg-temp-coalesce",
     "Combined X-parameter value functions and repeated unary-call argument canonicalization with copy coalescing",
+    "unaryArg",
   );
-  tryUnaryArgCandidate(
+  add(
     {
       xParamValueFunctions: true,
       canonicalizeRepeatedUnaryUpdateArgs: true,
@@ -854,50 +965,53 @@ export function compileMKPro(
     },
     "x-param-unary-arg-shared-call-hoisted-proc",
     "Combined X-parameter value functions, repeated unary-call argument canonicalization, shared call-body helpers, and front-hoisted helper/procedure layout",
+    "unaryArg",
   );
   for (const names of discoverPackedCounterStripeVariantNames(source)) {
-    tryCandidate(
+    add(
       { packCounterStripes: true, packCounterStripeNames: names },
       `packed-counter-stripes:${names.join("+")}`,
       `Packed counters ${names.join(", ")} into one hidden decimal-striped register`,
     );
   }
-  tryCandidate(
+  add(
     { unrollCountedLoops: true },
     "counted-loop-unroll",
     "Fully unrolled small constant-trip counted loops, replacing induction variables with constants",
   );
-  trySizeRescueCandidate(
+  add(
     { setupOnlyCountedLoopInit: true },
     "setup-only-counted-loop-init",
     "Kept eligible countdown-loop initializers in setup while preserving compact F Lx lowering",
+    "sizeRescue",
   );
-  tryCandidate(
+  add(
     { unrollCountedLoops: true, startupAwareConstantPreloads: true },
     "startup-aware-constant-preloads",
     "Kept setup-expensive synthesizable constants inline while preserving the main cell count",
   );
-  tryCandidate(
+  add(
     { unrollCountedLoops: true, freeResidualDispatchScratch: true },
     "counted-loop-unroll-free-scratch",
     "Combined counted-loop unrolling with residual-dispatch scratch freeing",
   );
-  tryCandidate(
+  add(
     { stackResidentTemps: true },
     "stack-resident-temps",
     "Kept short-lived single-use temporaries on the X/Y/Z/T stack instead of spilling them to registers",
   );
-  trySizeRescueCandidate(
+  add(
     { stackResidentTemps: true, setupOnlyCountedLoopInit: true },
     "stack-resident-temps-setup-counted-loop",
     "Combined stack-resident temporaries with setup-only counted-loop initializers",
+    "sizeRescue",
   );
-  tryCandidate(
+  add(
     { stackResidentTemps: true, hoistSharedHelpers: true },
     "stack-resident-temps-hoisted",
     "Kept temporaries stack-resident and hoisted helpers so freed registers unlock single-cell indirect flow",
   );
-  tryCandidate(
+  add(
     { stackResidentTemps: true, hoistSharedHelpers: true, hoistProcs: true },
     "stack-resident-temps-hoisted-proc",
     "Kept temporaries stack-resident with hoisted helper and procedure layout",
@@ -906,50 +1020,55 @@ export function compileMKPro(
   // terminal ЕГГОГ trap, so skip the extra full-recompile candidates entirely
   // for the common case of programs that have none.
   if (sourceMayContainErrorTrap(source)) {
-    tryCandidate(
+    add(
       { domainErrorGuards: true },
       "domain-error-guards",
       "Replaced terminal-error guards with self-trapping domain opcodes (F √ / F lg)",
     );
-    tryCandidate(
+    add(
       { domainErrorGuards: true, unrollCountedLoops: true },
       "domain-error-guards-unroll",
       "Combined domain-error guards with counted-loop unrolling",
     );
-    trySizeRescueCandidate(
+    add(
       { domainErrorGuards: true, setupOnlyCountedLoopInit: true },
       "domain-error-guards-setup-counted-loop",
       "Combined domain-error guards with setup-only counted-loop initializers",
+      "sizeRescue",
     );
-    trySizeRescueCandidate(
+    add(
       { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true },
       "domain-error-guards-unroll-setup-counted-loop",
       "Combined domain-error guards, counted-loop unrolling, and setup-only counted-loop initializers",
+      "sizeRescue",
     );
-    trySizeRescueCandidate(
+    add(
       { domainErrorGuards: true, setupOnlyCountedLoopInit: true, stackResidentTemps: true },
       "domain-error-guards-setup-counted-loop-stack-temps",
       "Combined domain-error guards, setup-only counted loops, and stack-resident temporaries",
+      "sizeRescue",
     );
-    tryCandidate(
+    add(
       { domainErrorGuards: true, showReadGuardedTransfer: true },
       "show-read-guarded-transfer",
       "Kept read/decrement/increment guarded transfers on the calculator stack",
     );
-    tryCandidate(
+    add(
       { domainErrorGuards: true, unrollCountedLoops: true, showReadGuardedTransfer: true },
       "show-read-guarded-transfer-unroll",
       "Combined stack-resident read/decrement/increment transfers with counted-loop unrolling",
     );
-    trySizeRescueCandidate(
+    add(
       { domainErrorGuards: true, setupOnlyCountedLoopInit: true, showReadGuardedTransfer: true },
       "show-read-guarded-transfer-setup-counted-loop",
       "Combined stack-resident read/decrement/increment transfers with setup-only counted loops",
+      "sizeRescue",
     );
-    trySizeRescueCandidate(
+    add(
       { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, showReadGuardedTransfer: true },
       "show-read-guarded-transfer-unroll-setup-counted-loop",
       "Combined stack-resident read/decrement/increment transfers, counted-loop unrolling, and setup-only counted loops",
+      "sizeRescue",
     );
   }
   // The proc-layout search can only change call/jump encoding cost once some
@@ -958,33 +1077,27 @@ export function compileMKPro(
   // whole search to programs the primary attempt could not fit (or that failed
   // to fit at all), so it costs nothing on the common case and runs exactly
   // where layout could plausibly recover cells.
-  const primaryOverflows = primary === undefined || primary.steps.length > 105;
   if (sourceHasMultipleProcs(source) && primaryOverflows) {
-    const procLayouts: Array<{ options: LoweringOptions; name: string; detail: string }> = [
-      { options: { orderProcsByCallCount: true }, name: "call-count-proc-layout", detail: "Emitted procedures in descending call-count order so hot helpers occupy the cheapest addresses" },
-      { options: { procLayoutStrategy: "size-asc" }, name: "size-asc-proc-layout", detail: "Emitted the smallest procedures first to pack hot helpers into the cheapest addresses" },
-      { options: { procLayoutStrategy: "size-desc" }, name: "size-desc-proc-layout", detail: "Emitted the largest procedures first" },
-      { options: { procLayoutStrategy: "reverse" }, name: "reverse-proc-layout", detail: "Emitted procedures in reverse source order" },
-    ];
-    for (const layout of procLayouts) {
-      tryCandidate(layout.options, layout.name, layout.detail);
-      tryCandidate(
+    for (const layout of PROC_LAYOUT_MODIFIERS) {
+      add(layout.options, layout.name, layout.detail);
+      add(
         { ...layout.options, hoistProcs: true, hoistSharedHelpers: true },
         `${layout.name}-hoisted`,
         `${layout.detail}; combined with front-hoisted procs and shared helpers for single-cell indirect flow`,
       );
       if (sourceMayContainErrorTrap(source)) {
-        tryCandidate(
+        add(
           { domainErrorGuards: true, unrollCountedLoops: true, ...layout.options },
           `domain-error-guards-unroll-${layout.name}`,
           `Combined domain-error guards and counted-loop unrolling with ${layout.detail}`,
         );
-        trySizeRescueCandidate(
+        add(
           { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, ...layout.options },
           `domain-error-guards-unroll-setup-counted-loop-${layout.name}`,
           `Combined domain-error guards, counted-loop unrolling, setup-only counted loops, and ${layout.detail}`,
+          "sizeRescue",
         );
-        tryCandidate(
+        add(
           { domainErrorGuards: true, unrollCountedLoops: true, showReadGuardedTransfer: true, ...layout.options },
           `show-read-guarded-transfer-${layout.name}`,
           `Combined stack-resident read/decrement/increment transfers with ${layout.detail}`,
@@ -992,23 +1105,71 @@ export function compileMKPro(
       }
     }
   }
-  tryCandidate(
+  add(
     { inlineFloorPackedRowExpressions: true },
     "inline-floor-packed-row-expression",
     "Computed floor-packed display row expressions inline to free their hidden display register",
   );
-  tryCandidate(
+  add(
     { inlineFloorPackedRowExpressions: true, hoistSharedHelpers: true, hoistProcs: true, tailBranchInversion: true },
     "inline-floor-hoisted-proc-tail-layout",
     "Combined inline floor-row display expressions with front-hoisted procs and tail-branch inversion",
   );
 
-  // Reclaim-coalesced-preloads: non-overlapping register coalescing only runs
-  // after lowering, too late to feed preload allocation. Probe a few likely
-  // bases to learn which registers it will free, then recompile pinning each
-  // freed register onto its coalesce target before allocation so the preload
-  // loop can spend the freed register on another constant. Smallest wins, so a
-  // base whose freed register has nothing worth preloading simply loses.
+  return specs;
+}
+
+// Stage 2 coverage expansion: systematically cross the size-reducing transform
+// bundles with the pure layout/placement modifiers. The hand-written static set
+// only crossed a couple of bundles (domain-error, show-read) with the proc
+// layouts; this fills in the rest of the matrix. Every entry here is gated by
+// the caller behind `primaryOverflows`, so in-budget programs (which already fit
+// and are byte-locked) never run these recompiles and stay identical, while
+// overflowing programs get a broader search that — because selection is
+// min-size — can only keep them the same size or shrink them.
+function enumerateExpansionCandidateSpecs(ctx: CandidateEnumerationContext): CandidateSpec[] {
+  const { source } = ctx;
+  const specs: CandidateSpec[] = [];
+
+  // The proc-layout strategies are the only modifiers that can recover cells on
+  // an overflowing program without otherwise changing lowering, so they are the
+  // worthwhile axis to cross. The static set already crosses them with the
+  // domain-error and show-read bundles; the genuine holes are the size-reducing
+  // bundles that were never combined with a placement strategy. Keep the matrix
+  // small (these are full recompiles) and dedupe against the static names.
+  if (!sourceHasMultipleProcs(source)) return specs;
+
+  const semanticBundles: Array<{ options: LoweringOptions; name: string; detail: string }> = [
+    { options: { stackResidentTemps: true }, name: "stack-resident-temps", detail: "stack-resident temporaries" },
+    { options: { sharedBitMaskHelperCalls: true }, name: "shared-bit-mask-helper", detail: "shared bit_mask helper calls" },
+  ];
+
+  for (const bundle of semanticBundles) {
+    for (const layout of PROC_LAYOUT_MODIFIERS) {
+      specs.push({
+        options: { ...bundle.options, ...layout.options },
+        name: `${bundle.name}-${layout.name}`,
+        detail: `Combined ${bundle.detail} with ${layout.detail.toLowerCase()}`,
+        gate: "always",
+      });
+    }
+  }
+
+  return specs;
+}
+
+// Probe-driven provider: non-overlapping register coalescing only runs after
+// lowering, too late to feed preload allocation. Probe a few likely bases to
+// learn which registers it will free, then recompile pinning each freed register
+// onto its coalesce target before allocation so the preload loop can spend the
+// freed register on another constant. Smallest wins, so a base whose freed
+// register has nothing worth preloading simply loses.
+function reclaimCoalescedPreloadCandidates(
+  source: string,
+  options: Partial<CompileOptions>,
+  needsSizeRescue: boolean,
+  tryCandidate: TryCandidateFn,
+): void {
   const reclaimBases: LoweringOptions[] = [
     {},
     { unrollCountedLoops: true },
@@ -1041,139 +1202,107 @@ export function compileMKPro(
       "Pinned coalesce-freed registers before allocation to reclaim them for preloaded constants",
     );
   }
+}
 
-  const OFFICIAL_PROGRAM_LIMIT = 105;
-  const selectBest = (): { best: CompileResult | undefined; selected: (typeof candidates)[number] | undefined } => {
-    let best = primary;
-    let selected: (typeof candidates)[number] | undefined;
-    for (const candidate of candidates) {
-      const sameMainButLowerStartup =
-        best !== undefined &&
-        candidate.result.steps.length === best.steps.length &&
-        best.steps.length > OFFICIAL_PROGRAM_LIMIT &&
-        estimatedStartupProgramCost(candidate.result) < estimatedStartupProgramCost(best);
-      if (best === undefined || candidate.result.steps.length < best.steps.length || sameMainButLowerStartup) {
-        best = candidate.result;
-        selected = candidate;
-      }
+// Probe-driven provider: probe a few likely-winning configs, read back which
+// integer constants they preload, and try a variant that inlines each one to
+// free its register. The freed register lets the register-starved post-layout
+// indirect-flow pass collapse repeated direct branches. Smallest wins, so a
+// constant that is not actually single-use (where inlining costs more than the
+// freed register saves) simply loses.
+//
+// Only overflowing programs benefit: the freed register pays off solely through
+// post-layout indirect-flow, which itself only fires above the official window.
+// For in-budget lowerings, inlining a constant just grows them, so the caller
+// confines this provider to the rescue regime and leaves clean in-budget
+// lowerings untouched (and byte-stable for their structural tests).
+function demoteConstantIndirectFlowCandidates(
+  source: string,
+  options: Partial<CompileOptions>,
+  needsSizeRescue: boolean,
+  tryCandidate: TryCandidateFn,
+): void {
+  const demoteBases: LoweringOptions[] = [
+    {},
+    { shareRandomCell: true, hoistSharedHelpers: true },
+    { freeResidualDispatchScratch: true },
+    { sharedBitMaskHelperCalls: true },
+    { sharedBitMaskHelperCalls: true, hoistSharedHelpers: true },
+    ...(sourceMayContainErrorTrap(source)
+      ? [
+          { domainErrorGuards: true, unrollCountedLoops: true },
+          ...(needsSizeRescue
+            ? [
+                { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true },
+                { domainErrorGuards: true, setupOnlyCountedLoopInit: true, stackResidentTemps: true },
+                { domainErrorGuards: true, setupOnlyCountedLoopInit: true, showReadGuardedTransfer: true },
+              ]
+            : []),
+          { domainErrorGuards: true, unrollCountedLoops: true, orderProcsByCallCount: true },
+          ...(needsSizeRescue
+            ? [
+                { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, orderProcsByCallCount: true },
+              ]
+            : []),
+          { domainErrorGuards: true, unrollCountedLoops: true, procLayoutStrategy: "size-asc" as const },
+          ...(needsSizeRescue
+            ? [
+                { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, procLayoutStrategy: "size-asc" as const },
+              ]
+            : []),
+        ]
+      : []),
+  ];
+  const triedDemotions = new Set<string>();
+  for (const base of demoteBases) {
+    let probe: CompileResult;
+    try {
+      probe = compileMKProOnce(source, { ...options, analysis: true }, base);
+    } catch {
+      continue;
     }
-    return { best, selected };
-  };
-
-  // Demote-constant-for-indirect-flow: probe a few likely-winning configs, read
-  // back which integer constants they preload, and try a variant that inlines
-  // each one to free its register. The freed register lets the register-starved
-  // post-layout indirect-flow pass collapse repeated direct branches. Smallest
-  // wins, so a constant that is not actually single-use (where inlining costs
-  // more than the freed register saves) simply loses.
-  //
-  // Only overflowing programs benefit: the freed register pays off solely
-  // through post-layout indirect-flow, which itself only fires above the
-  // official window. For in-budget lowerings, inlining a constant just grows
-  // them, so confine the probe to the rescue regime and leave clean in-budget
-  // lowerings untouched (and byte-stable for their structural tests).
-  if ((selectBest().best?.steps.length ?? 0) > OFFICIAL_PROGRAM_LIMIT) {
-    const demoteBases: LoweringOptions[] = [
-      {},
-      { shareRandomCell: true, hoistSharedHelpers: true },
-      { freeResidualDispatchScratch: true },
-      { sharedBitMaskHelperCalls: true },
-      { sharedBitMaskHelperCalls: true, hoistSharedHelpers: true },
-      ...(sourceMayContainErrorTrap(source)
-        ? [
-            { domainErrorGuards: true, unrollCountedLoops: true },
-            ...(needsSizeRescue
-              ? [
-                  { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true },
-                  { domainErrorGuards: true, setupOnlyCountedLoopInit: true, stackResidentTemps: true },
-                  { domainErrorGuards: true, setupOnlyCountedLoopInit: true, showReadGuardedTransfer: true },
-                ]
-              : []),
-            { domainErrorGuards: true, unrollCountedLoops: true, orderProcsByCallCount: true },
-            ...(needsSizeRescue
-              ? [
-                  { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, orderProcsByCallCount: true },
-                ]
-              : []),
-            { domainErrorGuards: true, unrollCountedLoops: true, procLayoutStrategy: "size-asc" as const },
-            ...(needsSizeRescue
-              ? [
-                  { domainErrorGuards: true, unrollCountedLoops: true, setupOnlyCountedLoopInit: true, procLayoutStrategy: "size-asc" as const },
-                ]
-              : []),
-          ]
-        : []),
-    ];
-    const triedDemotions = new Set<string>();
-    for (const base of demoteBases) {
-      let probe: CompileResult;
+    for (const preload of probe.report.preloads ?? []) {
+      if (preload.countsAgainstProgram || !/^-?\d+$/u.test(preload.value)) continue;
+      const key = `${JSON.stringify(base)}|${preload.value}`;
+      if (triedDemotions.has(key)) continue;
+      triedDemotions.add(key);
+      tryCandidate(
+        { ...base, suppressConstantPreloads: new Set([preload.value]) },
+        "demote-constant-indirect-flow",
+        `Inlined single-use constant ${preload.value} to free a register for post-layout indirect flow`,
+      );
+    }
+    const suppressed = new Set<string>();
+    for (let depth = 0; depth < 6; depth += 1) {
+      let chainProbe: CompileResult;
       try {
-        probe = compileMKProOnce(source, { ...options, analysis: true }, base);
+        chainProbe = compileMKProOnce(source, { ...options, analysis: true }, {
+          ...base,
+          suppressConstantPreloads: new Set(suppressed),
+        });
       } catch {
-        continue;
+        break;
       }
-      for (const preload of probe.report.preloads ?? []) {
-        if (preload.countsAgainstProgram || !/^-?\d+$/u.test(preload.value)) continue;
-        const key = `${JSON.stringify(base)}|${preload.value}`;
-        if (triedDemotions.has(key)) continue;
-        triedDemotions.add(key);
-        tryCandidate(
-          { ...base, suppressConstantPreloads: new Set([preload.value]) },
-          "demote-constant-indirect-flow",
-          `Inlined single-use constant ${preload.value} to free a register for post-layout indirect flow`,
-        );
-      }
-      const suppressed = new Set<string>();
-      for (let depth = 0; depth < 6; depth += 1) {
-        let chainProbe: CompileResult;
-        try {
-          chainProbe = compileMKProOnce(source, { ...options, analysis: true }, {
-            ...base,
-            suppressConstantPreloads: new Set(suppressed),
-          });
-        } catch {
-          break;
-        }
-        const next = (chainProbe.report.preloads ?? [])
-          .filter((preload) => !preload.countsAgainstProgram && /^-?\d+$/u.test(preload.value) && !suppressed.has(preload.value))
-          .sort((left, right) =>
-            estimateNumberCost(left.value) - estimateNumberCost(right.value) ||
-            left.value.length - right.value.length ||
-            left.value.localeCompare(right.value)
-          )[0];
-        if (next === undefined) break;
-        suppressed.add(next.value);
-        const values = [...suppressed];
-        const key = `${JSON.stringify(base)}|chain:${values.join(",")}`;
-        if (triedDemotions.has(key)) continue;
-        triedDemotions.add(key);
-        tryCandidate(
-          { ...base, suppressConstantPreloads: new Set(values) },
-          "demote-constant-chain-indirect-flow",
-          `Inlined constants ${values.join(", ")} to keep a register free for post-layout indirect flow`,
-        );
-      }
+      const next = (chainProbe.report.preloads ?? [])
+        .filter((preload) => !preload.countsAgainstProgram && /^-?\d+$/u.test(preload.value) && !suppressed.has(preload.value))
+        .sort((left, right) =>
+          estimateNumberCost(left.value) - estimateNumberCost(right.value) ||
+          left.value.length - right.value.length ||
+          left.value.localeCompare(right.value)
+        )[0];
+      if (next === undefined) break;
+      suppressed.add(next.value);
+      const values = [...suppressed];
+      const key = `${JSON.stringify(base)}|chain:${values.join(",")}`;
+      if (triedDemotions.has(key)) continue;
+      triedDemotions.add(key);
+      tryCandidate(
+        { ...base, suppressConstantPreloads: new Set(values) },
+        "demote-constant-chain-indirect-flow",
+        `Inlined constants ${values.join(", ")} to keep a register free for post-layout indirect flow`,
+      );
     }
   }
-
-  const { best, selected } = selectBest();
-  if (best === undefined) {
-    if (primaryError instanceof Error) throw primaryError;
-    if (primaryError !== undefined) throw new Error(primaryFailureSummary(primaryError));
-    throw new CompileError([{ level: "error", message: "No lowering candidate succeeded." }]);
-  }
-
-  if (selected !== undefined) {
-    const comparison = primary === undefined
-      ? `primary lowering failed: ${primaryFailureSummary(primaryError)}`
-      : `${selected.result.steps.length} vs ${primary.steps.length} cells`;
-    selected.result.report.optimizations.push({
-      name: selected.name,
-      detail: `${selected.detail} (${comparison}).`,
-    });
-    return finishCompileAttempt(selected.result, options.analysis === true);
-  }
-  return finishCompileAttempt(best, options.analysis === true);
 }
 
 function estimatedStartupProgramCost(result: CompileResult): number {

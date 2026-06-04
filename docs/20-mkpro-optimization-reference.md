@@ -350,6 +350,32 @@ initialization, then try a specific procedure layout." The common axes are:
 The long candidate names are kept because they make the selected compile path
 unambiguous in reports; the generalized model is the axis combination above.
 
+This axis model is realized by a declarative candidate composition engine in
+`compileMKPro` (`src/core/compiler.ts`):
+
+- Each speculative variant is a `CandidateSpec` — a `LoweringOptions` flag bundle
+  plus a stable name/detail and a gate (`always`, `sizeRescue`, or `unaryArg`).
+- `enumerateStaticCandidateSpecs` yields the source-determined specs (including
+  the proc-layout combinations generated from `PROC_LAYOUT_MODIFIERS`) in a fixed
+  order; the gates reproduce the former `trySizeRescueCandidate` /
+  `tryUnaryArgCandidate` conditions, so the candidate set, order, and names are
+  unchanged from the earlier hand-written sequence.
+- Two probe-driven providers (`reclaimCoalescedPreloadCandidates`,
+  `demoteConstantIndirectFlowCandidates`) build extra specs from trial compiles
+  at fixed positions.
+- `enumerateExpansionCandidateSpecs` fills the remaining matrix holes by crossing
+  the size-reducing bundles that were never combined with a placement strategy
+  (currently `stack-resident-temps` and `shared-bit-mask-helper`) with the
+  proc-layout modifiers. It runs only in the rescue regime — when the standard
+  search still leaves the program over the 105-cell window — so in-budget
+  programs never pay for the broader search and stay byte-identical.
+
+Because selection (`selectBest`) is minimum cell count, broadening the candidate
+set can only keep a program the same size or shrink it, never grow it. A
+no-regression guard (`npm run examples:check`,
+`scripts/assert-no-size-regression.mjs`) enforces `steps <= baseline` against the
+shared baselines in `tests/compiler/example-baselines.ts`.
+
 - `late-layout-if-variant` — re-runs lowering with an aggressive terminal-if lowering variant after full layout.
 - `late-layout-branch-order` — re-runs with swapped terminal-if branch order after full layout.
 - `late-layout-if-branch-order` — combines aggressive terminal-if and branch-order re-runs after full layout.
