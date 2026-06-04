@@ -4302,6 +4302,48 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("flow-x-reuse uses counted-loop fallthrough X proof for non-counter registers", () => {
+    const program: IrOp[] = [
+      recall("4"),
+      loop("skip"),
+      recall("4"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("skip"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("4"),
+      loop("skip"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("skip"),
+      halt(),
+    ]);
+  });
+
+  it("flow-x-reuse keeps counted-loop counter fallthrough recalls", () => {
+    const program: IrOp[] = [
+      recall("0"),
+      loop("skip"),
+      recall("0"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("skip"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("flow-x-reuse drops recall when a direct return syncs X2 before ВП", () => {
     const program: IrOp[] = [
       store("4"),
@@ -6038,6 +6080,38 @@ describe("ir passes on synthetic programs", () => {
 
     expect(result.applied).toBe(1);
     expect(result.ops).not.toContainEqual(recall("2"));
+  });
+
+  it("store-recall-peephole drops recall before fallthrough ВП after a counted-loop X2 sync", () => {
+    const program: IrOp[] = [
+      store("2"),
+      recall("2"),
+      loop("skip"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("skip"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).not.toContainEqual(recall("2"));
+  });
+
+  it("store-recall-peephole keeps loop-counter recalls before counted-loop target ВП", () => {
+    const program: IrOp[] = [
+      store("0"),
+      recall("0"),
+      loop("restore"),
+      halt(),
+      label("restore"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("store-recall-peephole keeps recall before jump-target ВП after a direct conditional", () => {

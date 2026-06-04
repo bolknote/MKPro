@@ -1209,7 +1209,9 @@ The pipeline currently contains:
   `.`/`/-/`/`ВП` restoration. If the shared X2-register dataflow proves that X2
   already contains the same register value and at least one executable
   X2-preserving command keeps the `.`/`/-/`/`ВП` previous-command context intact, the
-  recall is treated as a redundant sync and can still be removed. A direct
+  recall is treated as a redundant sync and can still be removed. The proof also
+  sees path-sensitive direct conditional and counted-loop fallthrough X2 syncs,
+  while loop-counter recalls remain protected by the shared value model. A direct
   `В/О` return is an X2 sync boundary, so the X2 hazard stops there; the
   separate stack-lift guard can still follow direct `ПП`/`В/О` continuations to
   downstream binary/stack-consuming ops. Mutating `R0..R6` indirect selectors

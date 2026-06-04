@@ -125,8 +125,9 @@ function transferXSet(input: XRegisterSet, op: IrOp, edge: Edge["kind"]): Set<Re
     case "plain":
       return plainPreservesXValue(op) ? new Set(input) : new Set();
     case "stop":
-    case "loop":
       return new Set();
+    case "loop":
+      return removeRegister(input, loopCounterRegister(op.counter));
     case "call":
     case "return":
       return new Set(input);
@@ -148,6 +149,25 @@ function addRegister(input: XRegisterSet, register: RegisterName): Set<RegisterN
   const output = new Set(input);
   output.add(register);
   return output;
+}
+
+function removeRegister(input: XRegisterSet, register: RegisterName): Set<RegisterName> {
+  const output = new Set(input);
+  output.delete(register);
+  return output;
+}
+
+function loopCounterRegister(counter: Extract<IrOp, { kind: "loop" }>["counter"]): RegisterName {
+  switch (counter) {
+    case "L0":
+      return "0";
+    case "L1":
+      return "1";
+    case "L2":
+      return "2";
+    case "L3":
+      return "3";
+  }
 }
 
 function joinXSets(current: Set<RegisterName> | undefined, incoming: XRegisterSet): Set<RegisterName> {
