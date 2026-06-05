@@ -676,7 +676,7 @@ export function x2ValueSetHasConcreteDecimal(input: X2ValueSet | undefined): boo
 }
 
 export function x2ValueFactIsNormalizedDecimal(fact: X2ValueFact): boolean {
-  return fact.startsWith("decimal:") && fact.endsWith(":normalized");
+  return normalizedDecimalValueFromFact(fact) !== undefined;
 }
 
 export function x2ValueSetHasNormalizedDecimalFact(
@@ -3116,8 +3116,8 @@ function scaledDecimalDigits(digits: string, scale: number): string | undefined 
 function vpEntryMantissasFromValueFacts(values: X2ValueSet): ReadonlySet<string> | undefined {
   const mantissas = new Set<string>();
   for (const value of values) {
-    const decimal = /^decimal:(-?[0-9]+):normalized$/u.exec(value);
-    if (decimal !== null) mantissas.add(decimal[1]!);
+    const decimal = normalizedDecimalValueFromFact(value);
+    if (decimal !== undefined) mantissas.add(decimal);
   }
   return mantissas.size === 0 ? undefined : mantissas;
 }
@@ -3235,6 +3235,10 @@ function decimalValueFact(value: string, flavor: "normalized" | "unnormalized"):
   return `decimal:${value}:${flavor}`;
 }
 
+function normalizedDecimalValueFromFact(fact: X2ValueFact): string | undefined {
+  return /^decimal:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):normalized$/u.exec(fact)?.[1];
+}
+
 function decimalMantissaShapeFact(value: string): X2ShapeFact {
   return `mantissa:${value}:decimal`;
 }
@@ -3297,34 +3301,45 @@ function structuralExponentEntryShapeFacts(input: Extract<X2StructuralEntryState
 }
 
 function normalizedExponentEntryValue(mantissa: string, exponent: string): string | undefined {
-  const mantissaMatch = /^(-?)([0-9]{1,8})$/u.exec(mantissa);
   const exponentMatch = /^(-?)([0-9]{1,2})$/u.exec(exponent);
-  if (mantissaMatch === null || exponentMatch === null) return undefined;
-  const sign = mantissaMatch[1]!;
-  const digits = effectiveExponentMantissaDigits(mantissaMatch[2]!);
+  const mantissaParts = exponentMantissaDecimalParts(mantissa);
+  if (mantissaParts === undefined || exponentMatch === null) return undefined;
   const exponentSign = exponentMatch[1]!;
   const shift = Number(exponentMatch[2]!);
   if (!Number.isInteger(shift)) return undefined;
-  const unsigned = exponentSign === "-"
-    ? decimalShiftRight(digits, shift)
-    : `${digits}${"0".repeat(shift)}`;
-  if (unsigned === undefined || significantDecimalDigits(unsigned) > 8) return undefined;
-  return unsigned === "0" ? "0" : `${sign}${unsigned}`;
+  const scale = exponentSign === "-"
+    ? mantissaParts.scale + shift
+    : mantissaParts.scale - shift;
+  const unsigned = scaledDecimalDigits(mantissaParts.digits, scale);
+  const normalized = unsigned === undefined ? undefined : normalizePlainDecimal(`${mantissaParts.sign}${unsigned}`);
+  if (normalized === undefined || significantDecimalDigits(normalized) > 8) return undefined;
+  return normalized;
+}
+
+function exponentMantissaDecimalParts(
+  mantissa: string,
+): { readonly sign: "" | "-"; readonly digits: string; readonly scale: number } | undefined {
+  const integer = /^(-?)([0-9]{1,8})$/u.exec(mantissa);
+  if (integer !== null) {
+    const digits = effectiveExponentMantissaDigits(integer[2]!);
+    return { sign: integer[1]! === "-" ? "-" : "", digits, scale: 0 };
+  }
+  const fractional = /^(-?)([0-9]{1,8})\.([0-9]+)$/u.exec(mantissa);
+  if (fractional === null) return undefined;
+  const integerDigits = fractional[2]!;
+  const fractionDigits = fractional[3]!;
+  if (integerDigits.length + fractionDigits.length > 8) return undefined;
+  return {
+    sign: fractional[1]! === "-" ? "-" : "",
+    digits: `${integerDigits}${fractionDigits}`,
+    scale: fractionDigits.length,
+  };
 }
 
 function effectiveExponentMantissaDigits(rawDigits: string): string {
   const stripped = rawDigits.replace(/^0+/u, "");
   if (stripped.length > 0) return stripped;
   return `1${"0".repeat(Math.max(0, rawDigits.length - 1))}`;
-}
-
-function decimalShiftRight(digits: string, places: number): string | undefined {
-  if (places <= 0) return digits;
-  const point = digits.length - places;
-  const raw = point > 0
-    ? `${digits.slice(0, point)}.${digits.slice(point)}`
-    : `0.${"0".repeat(-point)}${digits}`;
-  return normalizePlainDecimal(raw);
 }
 
 function normalizePlainDecimal(raw: string): string | undefined {
@@ -3429,19 +3444,19 @@ function signChangeClosedDecimalState(input: X2ValueDataflowState): X2ValueDataf
   }
   for (const fact of input.x2) {
     if (!input.x.has(fact)) continue;
-    const decimal = /^decimal:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):normalized$/u.exec(fact);
-    if (decimal === null && isOpaqueSharedValueFact(fact)) {
+    const decimal = normalizedDecimalValueFromFact(fact);
+    if (decimal === undefined && isOpaqueSharedValueFact(fact)) {
       values.add(SAME_UNKNOWN_VALUE);
       continue;
     }
-    if (decimal === null) continue;
-    values.add(decimalValueFact(signChangedNormalizedDecimalValue(decimal[1]!), "normalized"));
+    if (decimal === undefined) continue;
+    values.add(decimalValueFact(signChangedNormalizedDecimalValue(decimal), "normalized"));
   }
   if (values.size === 0) return undefined;
   const shapes = new Set<X2ShapeFact>();
   for (const value of values) {
-    const decimal = /^decimal:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):normalized$/u.exec(value);
-    if (decimal !== null) shapes.add(decimalMantissaShapeFact(decimal[1]!));
+    const decimal = normalizedDecimalValueFromFact(value);
+    if (decimal !== undefined) shapes.add(decimalMantissaShapeFact(decimal));
   }
   return {
     x: values,
@@ -3520,8 +3535,8 @@ function sharedNormalizedDecimalMantissas(input: Pick<X2ValueDataflowState, "x" 
   const mantissas = new Set<string>();
   for (const fact of input.x2) {
     if (!input.x.has(fact)) continue;
-    const decimal = /^decimal:(-?[0-9]+):normalized$/u.exec(fact);
-    if (decimal !== null) mantissas.add(decimal[1]!);
+    const decimal = normalizedDecimalValueFromFact(fact);
+    if (decimal !== undefined) mantissas.add(decimal);
   }
   return mantissas.size === 0 ? undefined : mantissas;
 }
@@ -3547,9 +3562,9 @@ function signChangedVpEntryMantissas(input: X2ValueDataflowState): ReadonlySet<s
   const mantissas = new Set<string>();
   for (const fact of input.x2) {
     if (!input.x.has(fact)) continue;
-    const decimal = /^decimal:(-?[0-9]+):normalized$/u.exec(fact);
-    if (decimal === null) continue;
-    const signed = signChangedMantissaShape(decimal[1]!);
+    const decimal = normalizedDecimalValueFromFact(fact);
+    if (decimal === undefined) continue;
+    const signed = signChangedMantissaShape(decimal);
     if (signed === undefined) return undefined;
     mantissas.add(signed);
   }

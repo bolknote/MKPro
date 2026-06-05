@@ -877,6 +877,13 @@ describe("ir passes on synthetic programs", () => {
       normalizedDecimal: "5000",
       safety: "errorProne",
     });
+    expect(x2ShapeDataModelForFact("exponent:1.2:3:decimal")).toMatchObject({
+      kind: "exponent-entry",
+      exponentRaw: "3",
+      exponentDigits: ["3"],
+      normalizedDecimal: "1200",
+      safety: "errorProne",
+    });
   });
 
   it("x2 shape algebra derives exponent-entry facts without decimalizing structural forms", () => {
@@ -1830,6 +1837,72 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[6]?.x2)).toEqual(["decimal:-0.005:normalized"]);
   });
 
+  it("x2 value dataflow uses fractional decimal recalls as VP-entry source", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 1.2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2EntryStateText(states[2])).toBe("exponent:1.2:");
+    expect(x2EntryStateText(states[3])).toBe("exponent:1.2:3");
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["decimal:1200:normalized"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual([]);
+    expect(x2ShapeStateText(states[3]?.x2Shape)).toEqual([
+      "exponent:1.2:3:decimal",
+      "mantissa:1200:decimal",
+    ]);
+  });
+
+  it("x2 value dataflow carries fractional VP-entry source through an X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:1.2:normalized"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:1.2:normalized"]);
+    expect(x2EntryStateText(states[5])).toBe("exponent:1.2:");
+    expect(x2EntryStateText(states[6])).toBe("exponent:1.2:3");
+    expect(x2ValueStateText(states[6]?.x)).toEqual(["decimal:1200:normalized"]);
+    expect(x2ValueStateText(states[6]?.x2)).toEqual([]);
+    expect(x2ShapeStateText(states[6]?.x2Shape)).toEqual([
+      "exponent:1.2:3:decimal",
+      "mantissa:1200:decimal",
+    ]);
+  });
+
+  it("x2 value dataflow proves a closed fractional-mantissa exponent-entry after an X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[7])).toBe("closed");
+    expect(x2VpContextStateText(states[7])).toBe("none");
+    expect(x2ValueStateText(states[7]?.x)).toEqual(["decimal:1200:normalized"]);
+    expect(x2ValueStateText(states[7]?.x2)).toEqual(["decimal:1200:normalized"]);
+    expect(x2ShapeStateText(states[7]?.x2Shape)).toEqual([
+      "exponent:1.2:3:decimal",
+      "mantissa:1200:decimal",
+    ]);
+  });
+
   it("x2 value dataflow clears VP exponent context when a new digit starts", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -2145,6 +2218,68 @@ describe("ir passes on synthetic programs", () => {
     expect(restored.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
     expect(dse.ops.some((op) => op.kind === "store" && op.register === "1")).toBe(false);
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore uses fractional decimal scratch values", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      store("1"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      recall("1"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "1")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore uses closed fractional exponent-entry scratch values", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      store("1"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      recall("1"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[10]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "1")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore keeps raw leading-zero fractional scratch recalls", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      store("1"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      recall("1"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+
+    expect(restored.applied).toBe(0);
+    expect(restored.ops).toEqual(program);
   });
 
   it("x2-literal-restore replaces a repeated normalized digit run with dot", () => {
@@ -2506,6 +2641,36 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore replaces a repeated fractional-mantissa exponent literal with dot", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(4);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 1200 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
   it("x2-literal-restore keeps repeated exponent literals while VP context is still observable", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),
@@ -2547,6 +2712,72 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0b, "/-/"),
       plain(0xf0, "F* empty F0"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 0.005 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore replaces a repeated signed fractional-mantissa exponent literal with dot", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(5);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal -1200 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore replaces a repeated fractional-mantissa negative-exponent literal with dot", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(5);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 0.0012 from hidden X2 temp" } },
       halt(),
     ]);
   });
@@ -4244,6 +4475,54 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0b, "/-/"),
       plain(0xf0, "F* empty F0"),
       plain(0x0b, "/-/"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore removes dot after a synced fractional literal", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore removes dot after a synced fractional exponent-entry", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
       halt(),
     ]);
   });

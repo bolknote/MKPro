@@ -112,9 +112,25 @@ function exponentLiteralRunAt(ops: readonly IrOp[], start: number): NumericLiter
     mantissaDigits.push(String(op.opcode));
     cursor += 1;
   }
+  const fractionDigits: string[] = [];
+  const hasPoint = isPlainDot(ops[cursor]);
+  if (hasPoint) {
+    cursor += 1;
+    while (cursor < ops.length) {
+      const op = ops[cursor]!;
+      if (!isPlainDigit(op)) break;
+      fractionDigits.push(String(op.opcode));
+      cursor += 1;
+    }
+    if (fractionDigits.length === 0) return undefined;
+  }
   const mantissaSign = isPlainSignChange(ops[cursor]) ? "-" : "";
   if (mantissaSign === "-") cursor += 1;
-  if (mantissaDigits.length === 0 || !isPlainVp(ops[cursor])) return undefined;
+  if (
+    mantissaDigits.length === 0 ||
+    mantissaDigits.length + fractionDigits.length > 8 ||
+    !isPlainVp(ops[cursor])
+  ) return undefined;
   cursor += 1;
 
   const exponentDigits: string[] = [];
@@ -128,7 +144,10 @@ function exponentLiteralRunAt(ops: readonly IrOp[], start: number): NumericLiter
   const exponentSign = isPlainSignChange(ops[cursor]) ? "-" : "";
   if (exponentSign === "-") cursor += 1;
 
-  const value = normalizedExponentEntryValue(`${mantissaSign}${mantissaDigits.join("")}`, `${exponentSign}${exponentDigits.join("")}`);
+  const mantissa = hasPoint
+    ? `${mantissaSign}${mantissaDigits.join("")}.${fractionDigits.join("")}`
+    : `${mantissaSign}${mantissaDigits.join("")}`;
+  const value = normalizedExponentEntryValue(mantissa, `${exponentSign}${exponentDigits.join("")}`);
   if (value === undefined) return undefined;
   const dotPreservesVpEntrySource = mantissaDigits[0] !== "0";
   return {
@@ -175,17 +194,42 @@ function normalizeDecimalMantissaEntry(raw: string): string | undefined {
 }
 
 function normalizedExponentEntryValue(mantissa: string, exponent: string): string | undefined {
-  const mantissaMatch = /^(-?)([0-9]{1,8})$/u.exec(mantissa);
   const exponentMatch = /^(-?)([0-9]{1,2})$/u.exec(exponent);
-  if (mantissaMatch === null || exponentMatch === null) return undefined;
-  const sign = mantissaMatch[1]!;
-  const digits = effectiveExponentMantissaDigits(mantissaMatch[2]!);
+  const mantissaParts = exponentMantissaDecimalParts(mantissa);
+  if (mantissaParts === undefined || exponentMatch === null) return undefined;
   const shift = Number(exponentMatch[2]!);
-  const normalized = exponentMatch[1] === "-"
-    ? decimalShiftRight(digits, shift)
-    : `${digits}${"0".repeat(shift)}`;
+  const scale = exponentMatch[1] === "-"
+    ? mantissaParts.scale + shift
+    : mantissaParts.scale - shift;
+  const unsigned = scaledDecimalDigits(mantissaParts.digits, scale);
+  const normalized = unsigned === undefined
+    ? undefined
+    : normalizeSignedPlainDecimal(`${mantissaParts.sign}${unsigned}`);
   if (normalized === undefined || significantDecimalDigits(normalized) > 8) return undefined;
-  return `${sign}${normalized}`;
+  return normalized;
+}
+
+function exponentMantissaDecimalParts(
+  mantissa: string,
+): { readonly sign: "" | "-"; readonly digits: string; readonly scale: number } | undefined {
+  const integer = /^(-?)([0-9]{1,8})$/u.exec(mantissa);
+  if (integer !== null) {
+    return {
+      sign: integer[1]! === "-" ? "-" : "",
+      digits: effectiveExponentMantissaDigits(integer[2]!),
+      scale: 0,
+    };
+  }
+  const fractional = /^(-?)([0-9]{1,8})\.([0-9]+)$/u.exec(mantissa);
+  if (fractional === null) return undefined;
+  const integerDigits = fractional[2]!;
+  const fractionDigits = fractional[3]!;
+  if (integerDigits.length + fractionDigits.length > 8) return undefined;
+  return {
+    sign: fractional[1]! === "-" ? "-" : "",
+    digits: `${integerDigits}${fractionDigits}`,
+    scale: fractionDigits.length,
+  };
 }
 
 function effectiveExponentMantissaDigits(rawDigits: string): string {
@@ -194,20 +238,12 @@ function effectiveExponentMantissaDigits(rawDigits: string): string {
   return `1${"0".repeat(Math.max(0, rawDigits.length - 1))}`;
 }
 
-function decimalShiftRight(digits: string, places: number): string | undefined {
-  const point = digits.length - places;
-  const raw = point > 0
-    ? `${digits.slice(0, point)}.${digits.slice(point)}`
-    : `0.${"0".repeat(-point)}${digits}`;
-  return normalizeUnsignedPlainDecimal(raw);
-}
-
-function normalizeUnsignedPlainDecimal(raw: string): string | undefined {
-  const match = /^(0|[1-9][0-9]*)(?:\.([0-9]+))?$/u.exec(raw);
-  if (match === null) return undefined;
-  const integer = match[1]!.replace(/^0+(?=\d)/u, "");
-  const fraction = (match[2] ?? "").replace(/0+$/u, "");
-  return fraction.length === 0 ? integer : `${integer}.${fraction}`;
+function scaledDecimalDigits(digits: string, scale: number): string | undefined {
+  if (!/^\d+$/u.test(digits)) return undefined;
+  if (scale <= 0) return `${digits}${"0".repeat(-scale)}`;
+  const point = digits.length - scale;
+  if (point > 0) return `${digits.slice(0, point)}.${digits.slice(point)}`;
+  return `0.${"0".repeat(-point)}${digits}`;
 }
 
 function normalizeSignedPlainDecimal(raw: string): string | undefined {

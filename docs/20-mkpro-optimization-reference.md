@@ -872,6 +872,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     update that VP context. A non-zero exponent-entry form can also become a
     normalized decimal value fact after an X2-affecting, X-preserving sync
     closes it (`5 ВП 3 F0` proves `decimal:5000:normalized`,
+    `1.2 ВП 3 F0` proves `decimal:1200:normalized`,
     `5 ВП 3 /-/ F0` proves `decimal:0.005:normalized`, and
     `5 /-/ ВП 3 F0` / `5 /-/ ВП 3 /-/ F0` prove
     `decimal:-5000:normalized` / `decimal:-0.005:normalized`, clearing the VP
@@ -942,7 +943,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     for later recalls, joins keep only facts common to every path, and unknown
     indirect stores clear the memory. Hex-like preload facts remain shape-only,
     so they do not make `.`/`/-/` dead-restore candidates.
-19. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap, a CFG-proven immediate X2 sync, a normalized decimal source fact already synced in X2 through a display-free local gap, or a modeled closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2` empty ops is available, while also proving the recall stack lift is unobserved. The scratch-store proof can cross direct conditional/loop fallthrough syncs, proved stable-indirect conditional fallthroughs that do not mention the scratch register, and simple direct-return calls that do not mention the scratch register; it can also use stable source facts from the dead scratch store when register-memory is too conservative. This lets later DSE remove now-unused scratch stores.
+19. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap, a CFG-proven immediate X2 sync, a normalized decimal source fact already synced in X2 through a display-free local gap, or a modeled closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2` empty ops is available, while also proving the recall stack lift is unobserved. The normalized decimal source includes fractional values such as `1.2`; raw leading-zero fractional X2 forms such as `01.2` stay unnormalized and are not treated as the same hidden-temp restore source. The scratch-store proof can cross direct conditional/loop fallthrough syncs, proved stable-indirect conditional fallthroughs that do not mention the scratch register, and simple direct-return calls that do not mention the scratch register; it can also use stable source facts from the dead scratch store when register-memory is too conservative. This lets later DSE remove now-unused scratch stores.
 20. `x2-literal-restore` — replaces a repeated explicit numeric literal with
     `.` when X2 value dataflow proves the same normalized decimal value is
     already in the hidden X2 register, the dot-restore gap is safe (or CFG
@@ -954,7 +955,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     expose a consumed stack lift. It recognizes ordinary integer or fractional
     digit-runs (`12`, `1.2`), their signed open-entry forms, and normalized
     exponent-entry literals such as
-    `5 ВП 3`, `5 ВП 3 /-/`, `5 /-/ ВП 3`, or
+    `5 ВП 3`, `1.2 ВП 3`, `5 ВП 3 /-/`, `5 /-/ ВП 3`, or
     `5 /-/ ВП 3 /-/` once the prior value has been closed by a safe
     X2-affecting sync. Fractional digit-runs remain explicit before a following
     `ВП` source context; a repeated normalized non-zero integer digit run or

@@ -1281,8 +1281,9 @@ The pipeline currently contains:
   Emulator probes show that a later `.` can signal `ЕГГ0Г` for such hidden
   exponent forms, so active states keep a shape-only X2 proof even when visible
   `X` already has a normalized decimal value. When a later X2-syncing command
-  closes that exponent-entry form, the proof normalizes leading-zero mantissas
-  too (`05 ВП 3` becomes `5000`, `00 ВП 3` becomes `10000`) and only then emits
+  closes that exponent-entry form, the proof normalizes fractional mantissas
+  (`1.2 ВП 3` becomes `1200`) and leading-zero mantissas
+  (`05 ВП 3` becomes `5000`, `00 ВП 3` becomes `10000`) and only then emits
   dot-safe X2 value facts. The fact spelling is normalization-aware: `12` produces the shared fact
   `decimal:12:normalized`, while `02` produces `decimal:2:normalized` in `X`
   and `decimal:02:unnormalized` in `X2`, so a restore cannot accidentally treat
@@ -1345,7 +1346,10 @@ The pipeline currently contains:
   Repeated literal restoration may also consume those recalled/preloaded decimal
   facts instead of requiring the previous occurrence to be inline source digits,
   and `ВП` splice/sign reductions can use the same recalled/preloaded mantissa
-  facts; structural `ВП` reductions use the parallel shape context.
+  facts, including normalized fractional decimals such as `1.2` after a proved
+  X2 sync. Raw fractional forms whose hidden mantissa still carries leading
+  zeros remain distinct (`01.2` is not treated as the same dot-restore source as
+  `1.2`); structural `ВП` reductions use the parallel shape context.
 - **x2-noop-restore** — removes `.` when the value proof shows that `X` already
   contains the same value as hidden `X2` and the separate restore-gap proof says
   the dot is in a safe X2 context. It also accepts the documented no-op form
@@ -1433,6 +1437,8 @@ The pipeline currently contains:
   empty ops, or a normalized decimal source fact already in X2 through a
   display-free local gap. The normal stack-lift/X2-context guards still prove that
   the recall's stack shift and previous-command class are not observable. The
+  normalized decimal path includes fractional facts, while raw leading-zero
+  fractional hidden mantissas are kept as non-equivalent unnormalized X2 facts. The
   scratch-store search can cross a direct conditional or counted-loop test when
   the recall sits on the fallthrough path: the shared path-sensitive X2 proof
   must show that this edge already synchronized the same value into X2, while
@@ -1456,9 +1462,10 @@ The pipeline currently contains:
   immediate X2 sync, a normalized decimal fact preserved through a display-free
   local gap such as a proved stable indirect conditional, or a modeled
   closed-context `/-/` reached through only free-standing `КНОП`/`К1`/`К2` empty
-  ops. It recognizes integer and fractional decimal digit-runs (`12`, `1.2`)
-  plus their open-entry sign-change forms, while refusing fractional runs before
-  a following `ВП` source context until that splice is separately proved.
+  ops. It recognizes integer and fractional decimal digit-runs (`12`, `1.2`),
+  fractional-mantissa exponent literals (`1.2 ВП 3`), and their open-entry
+  sign-change forms, while refusing a standalone fractional digit-run before a
+  following `ВП` source context until that splice is separately proved.
   The same shared CFG-aware X2 exposure walker used by `x2-noop-restore`
   protects the inserted `.`:
   branch/call edges are not
