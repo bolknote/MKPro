@@ -815,14 +815,17 @@ Display rewrites are separated into strategy selection + body lowering.
   on `1`, direct cosine on `0`, and `F x^y` identity cases (`1^y` and positive
   `x^0`). For concrete normalized decimal `X`, `F x^2`, finite `F 1/x`,
   perfect-square `F sqrt`, integer-exponent `F 10^x`, `К |x|`, `К ЗН`, and
-  `К [x]` seed exact decimal results in visible X while preserving the old X2 fact. For
-  non-negative concrete decimal `X`, and for negative non-integer concrete
+  `К [x]` seed exact decimal results in visible X while preserving the old X2
+  fact. For non-negative concrete decimal `X`, and for negative non-integer
+  concrete
   decimal `X`, `К {x}` also seeds the exact normalized fractional decimal value
-  while preserving the old X2 fact; negative integers stay opaque to avoid
-  decimalizing signed-zero behavior. Concrete normalized decimal `Y,X` operands
-  for `+`, `-`, and `*` also seed exact decimal results when the normalized
-  result stays within the dataflow's eight-significant-digit bound; `/` does the
-  same only when the reduced quotient has a finite decimal expansion. `К max`
+  while preserving the old X2 fact; negative integers stay value-opaque but seed
+  an `errorProne` `mantissa:-0:decimal` shape so later X2 analysis can remember
+  the signed-zero display context without treating it as ordinary zero.
+  Concrete normalized decimal `Y,X` operands for `+`, `-`, and `*` also seed
+  exact decimal results when the normalized result stays within the dataflow's
+  eight-significant-digit bound; `/` does the same only when the reduced
+  quotient has a finite decimal expansion. `К max`
   is modeled for concrete normalized decimal operands with the MK-61 zero quirk
   preserved: if either operand is exactly zero, the proved result is zero.
   `К ∧`, `К ∨`, `К ⊕`, and `К ИНВ` share the MK-61 mantissa-nibble model used
@@ -1026,7 +1029,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     hex/super spellings compare as the same shape without becoming decimal
     values. Shape-set joins and equality checks use the same canonical
     spelling, so branch-merged structural `ВП`/restore proofs do not split on
-    formatting. When a true merge sees different structural spellings with the
+    formatting. Signed-zero decimal mantissas (`-0`, `-0.0`, etc.) are kept as
+    `errorProne` shape facts, not dot-safe decimal facts. When a true merge sees
+    different structural spellings with the
     same restored display mantissa (`hex-exponent:Г:2` vs `hex:Г00`), the join
     keeps that restored mantissa as a structural-only fact for `X`, `X2`, `Y`,
     `ВП` sources, and shape memory; identical straight-line facts are not

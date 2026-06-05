@@ -1315,15 +1315,17 @@ The pipeline currently contains:
   while preserving the previous hidden X2 fact. For non-negative concrete
   decimal values and negative non-integer concrete decimal values, `К {x}` is
   also modeled as an exact normalized fractional decimal in visible `X` while
-  preserving the previous hidden X2 fact; negative integers stay opaque to avoid
-  signed-zero decimalization. Concrete normalized decimal `Y,X` operands for
-  `+`, `-`, and `*` are also modeled exactly when the normalized result fits the
-  eight-significant-digit dataflow bound; `/` is modeled exactly only for
-  finite decimal quotients. `К max` is modeled exactly for concrete normalized
-  decimal operands while preserving the hardware zero quirk: if either operand
-  is exactly zero, the result fact is zero. Stack transfers keep the same value
-  and shape lattice: `X↔Y` swaps visible `X`/`Y` facts, while `Y->X` copies the
-  current `Y` value or structural shape into visible `X`, leaves `Y` available,
+  preserving the previous hidden X2 fact; negative integers stay value-opaque
+  but seed an `errorProne` `mantissa:-0:decimal` shape so dataflow remembers
+  signed-zero display context without decimalizing it. Concrete normalized
+  decimal `Y,X` operands for `+`, `-`, and `*` are also modeled exactly when
+  the normalized result fits the eight-significant-digit dataflow bound; `/` is
+  modeled exactly only for finite decimal quotients. `К max` is modeled exactly
+  for concrete normalized decimal operands while preserving the hardware zero
+  quirk: if either operand is exactly zero, the result fact is zero. Stack
+  transfers keep the same value and shape lattice: `X↔Y` swaps visible `X`/`Y`
+  facts, while `Y->X` copies the current `Y` value or structural shape into
+  visible `X`, leaves `Y` available,
   and preserves the previous hidden X2 fact until a later X2-syncing command.
   `К ∧`, `К ∨`, `К ⊕`, and `К ИНВ`
   use the shared MK-61 mantissa-nibble model and seed decimal facts only when
@@ -1346,6 +1348,8 @@ The pipeline currently contains:
   lower-case hex digits or whitespace do not split otherwise identical `hex:*`
   / `super:*` proofs. Negative structural exponents, carry/borrow cases, and
   decimalization stay structural-only and are not treated as dot-safe.
+  Signed-zero decimal mantissas (`-0`, `-0.0`, etc.) are deliberately
+  `errorProne` shape facts rather than dot-safe decimal facts.
   Shape-set joins and equality checks use the same canonical spelling, keeping
   branch-merged `ВП`/restore facts stable without changing their safety class.
   Structural exponent shapes remain equality/restore

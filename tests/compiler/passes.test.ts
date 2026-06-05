@@ -113,7 +113,7 @@ function recall(register: RegisterName, comment?: string): Extract<IrOp, { kind:
   };
 }
 
-function plain(opcode: number, mnemonic: string): IrOp {
+function plain(opcode: number, mnemonic: string): Extract<IrOp, { kind: "plain" }> {
   return { kind: "plain", opcode, meta: { mnemonic } };
 }
 
@@ -947,6 +947,12 @@ describe("ir passes on synthetic programs", () => {
       normalized: "2",
       safety: "dotSafeDecimal",
     });
+    expect(parseX2ShapeFact("mantissa:-0:decimal")).toEqual({
+      kind: "decimal-mantissa",
+      raw: "-0",
+      normalized: "0",
+      safety: "errorProne",
+    });
     expect(parseX2ShapeFact("exponent:5::decimal")).toEqual({
       kind: "decimal-exponent",
       mantissa: "5",
@@ -980,6 +986,7 @@ describe("ir passes on synthetic programs", () => {
 
   it("x2 shape algebra keeps leading-zero and structural shapes out of no-op equality", () => {
     expect(x2ShapeSetSafety(new Set(["mantissa:2:decimal"]))).toBe("dotSafeDecimal");
+    expect(x2ShapeSetSafety(new Set(["mantissa:-0:decimal"]))).toBe("errorProne");
     expect(x2ShapeSetSafety(new Set(["hex:FABC:mantissa"]))).toBe("structuralOnly");
     expect(x2ShapeSetSafety(new Set(["exponent:5::decimal"]))).toBe("errorProne");
     expect(
@@ -2315,7 +2322,7 @@ describe("ir passes on synthetic programs", () => {
     const unaryCases: Array<{
       readonly name: string;
       readonly input: IrOp[];
-      readonly op: IrOp;
+      readonly op: Extract<IrOp, { kind: "plain" }>;
       readonly index: number;
       readonly expected: string;
     }> = [
@@ -2990,6 +2997,9 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ValueStateText(states[4]?.x)).toEqual(["expr-key:35(decimal:-2:normalized)", "expr:3"]);
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:-2:normalized"]);
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["mantissa:-0:decimal"]);
+    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["mantissa:-2:decimal"]);
+    expect(x2ShapeSetSafety(states[4]?.xShape)).toBe("errorProne");
   });
 
   it("x2 value dataflow tracks sign-change during fractional decimal entry", () => {

@@ -1627,6 +1627,7 @@ function compileDispatchResidualDefaultBody(
     comparedValue: number,
   ): boolean {
     const body = statement.defaultBody;
+    if (body === undefined) return false;
     const first = body?.[0];
     if (first?.kind !== "assign") return false;
     if (!compileDispatchResidualSignExpression(ctx, first.expr, statement.expr, comparedValue, first.line)) return false;

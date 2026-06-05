@@ -678,6 +678,22 @@ function plainProducesConcreteDecimalValues(
   return output;
 }
 
+function plainProducesConcreteDecimalShapeFacts(
+  op: Extract<IrOp, { kind: "plain" }>,
+  x: X2ValueSet | undefined,
+): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  if (op.opcode !== 0x35) return output;
+  for (const fact of x ?? []) {
+    const value = normalizedDecimalValueFromFact(fact);
+    const concrete = value === undefined
+      ? undefined
+      : decimalFractionPartShape(value);
+    if (concrete !== undefined) output.add(decimalMantissaShapeFact(concrete));
+  }
+  return output;
+}
+
 function plainProducesConcreteBinaryDecimalValues(
   op: Extract<IrOp, { kind: "plain" }>,
   y: X2ValueSet | undefined,
@@ -1268,6 +1284,15 @@ function decimalFractionPart(value: string): string | undefined {
   return `${sign}0.${fraction}`;
 }
 
+function decimalFractionPartShape(value: string): string | undefined {
+  const match = /^(-?)([0-9]+)(?:\.([0-9]+))?$/u.exec(value);
+  if (match === null) return undefined;
+  const sign = match[1]!;
+  const fraction = (match[3] ?? "").replace(/0+$/u, "");
+  if (fraction.length === 0) return sign === "-" ? "-0" : "0";
+  return `${sign}0.${fraction}`;
+}
+
 function plainProducesStableConstantExpressionValue(
   op: Extract<IrOp, { kind: "plain" }>,
 ): X2ValueFact | undefined {
@@ -1326,6 +1351,13 @@ function plainXValueAfterNonPreservingOp(
   const opaque = plainProducesOpaqueExpressionValue(op, producerIndex);
   if (opaque !== undefined) output.add(opaque);
   return output;
+}
+
+function plainXShapeAfterNonPreservingOp(
+  op: Extract<IrOp, { kind: "plain" }>,
+  x: X2ValueSet | undefined = undefined,
+): Set<X2ShapeFact> {
+  return plainProducesConcreteDecimalShapeFacts(op, x);
 }
 
 export function analyzeX2StackEffect(op: IrOp | undefined): X2StackEffectAnalysis {
@@ -1715,7 +1747,7 @@ export function parseX2ShapeFact(fact: X2ShapeFact): ParsedX2ShapeFact {
       kind: "decimal-mantissa",
       raw,
       normalized,
-      safety: normalized === undefined ? "unknown" : "dotSafeDecimal",
+      safety: decimalMantissaShapeSafety(raw, normalized),
     };
   }
   const exponent = /^exponent:([^:]*):([^:]*):decimal$/u.exec(fact);
@@ -3255,7 +3287,9 @@ function transferPlainX2ValueState(
     const x = plainPreservesXValue(op)
       ? new Set(sourceX)
       : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedExponentShapes, input.yShape);
-    const xShape = plainPreservesXValue(op) ? new Set(closedExponentShapes) : new Set<X2ShapeFact>();
+    const xShape = plainPreservesXValue(op)
+      ? new Set(closedExponentShapes)
+      : plainXShapeAfterNonPreservingOp(op, sourceX);
     const x2 = effect === "preserves"
       ? new Set(closedExponentValues)
       : effect === "affects"
@@ -3285,7 +3319,9 @@ function transferPlainX2ValueState(
     const x = plainPreservesXValue(op)
       ? new Set<X2ValueFact>()
       : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedExponentShapes, input.yShape);
-    const xShape = plainPreservesXValue(op) ? new Set(closedExponentShapes) : new Set<X2ShapeFact>();
+    const xShape = plainPreservesXValue(op)
+      ? new Set(closedExponentShapes)
+      : plainXShapeAfterNonPreservingOp(op, sourceX);
     const x2Shape = transferPlainX2ShapeSet(input, xShape, effect, closedExponentShapes);
     return {
       x,
@@ -3312,7 +3348,9 @@ function transferPlainX2ValueState(
     producerIndex,
   );
   const x2 = transferPlainX2ValueSet(input, x, effect);
-  const xShape = plainPreservesXValue(op) ? cloneOptionalShapeSet(input.xShape) : new Set<X2ShapeFact>();
+  const xShape = plainPreservesXValue(op)
+    ? cloneOptionalShapeSet(input.xShape)
+    : plainXShapeAfterNonPreservingOp(op, input.x);
   const x2Shape = transferPlainX2ShapeSet(input, xShape, effect);
   const structuralEntry = input.structuralEntry ?? noneX2StructuralEntryState();
   if (structuralEntry.kind === "exponent") {
@@ -3321,7 +3359,9 @@ function transferPlainX2ValueState(
     const structuralXValue = plainPreservesXValue(op)
       ? new Set<X2ValueFact>()
       : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedStructuralShapes, input.yShape);
-    const structuralXShape = plainPreservesXValue(op) ? new Set(closedStructuralShapes) : new Set<X2ShapeFact>();
+    const structuralXShape = plainPreservesXValue(op)
+      ? new Set(closedStructuralShapes)
+      : plainXShapeAfterNonPreservingOp(op, sourceX);
     const structuralX2Shape = transferPlainX2ShapeSet(input, structuralXShape, effect, closedStructuralShapes);
     return {
       x: structuralXValue,
@@ -4576,6 +4616,7 @@ function canonicalStructuralShapeFacts(input: X2ShapeSet | undefined): Set<X2Sha
 function decimalMantissaDataModel(raw: string): X2MantissaDataModel {
   const canonical = canonicalShapeRaw(raw);
   const normalized = normalizePlainDecimal(canonical);
+  const safety = decimalMantissaShapeSafety(canonical, normalized);
   return {
     kind: "mantissa",
     radix: "decimal",
@@ -4588,8 +4629,17 @@ function decimalMantissaDataModel(raw: string): X2MantissaDataModel {
     significantDigits: normalized === undefined ? 0 : significantDecimalDigits(normalized),
     normalizedDecimal: normalized,
     normalizedSameAsRaw: normalized !== undefined && canonical === normalized,
-    safety: normalized === undefined ? "unknown" : "dotSafeDecimal",
+    safety,
   };
+}
+
+function decimalMantissaShapeSafety(raw: string, normalized: string | undefined): X2ShapeSafety {
+  if (normalized === undefined) return "unknown";
+  return isSignedZeroDecimalMantissaRaw(raw, normalized) ? "errorProne" : "dotSafeDecimal";
+}
+
+function isSignedZeroDecimalMantissaRaw(raw: string, normalized: string): boolean {
+  return normalized === "0" && canonicalShapeRaw(raw).startsWith("-");
 }
 
 function structuralMantissaDataModel(
