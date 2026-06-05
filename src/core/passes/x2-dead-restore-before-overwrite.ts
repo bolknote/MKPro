@@ -10,6 +10,7 @@ import {
   knownReturnCallReturnsThroughTransparentRange,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
+  removingStackLiftCanExposeStack,
   x2StateHasDotSafeDecimalX2,
   x2StateHasStructuralShapeX2,
   x2StateHasX2RestoreContext,
@@ -34,10 +35,11 @@ const run: IrPassFn = (ops) => {
   for (let index = 0; index < ops.length; index += 1) {
     if (remove.has(index)) continue;
     const op = ops[index]!;
-    if (!isDeadRestoreOrRecallCandidate(op, states[index])) continue;
+    if (!isDeadRestoreRecallOrProducerCandidate(op, states[index])) continue;
     const deadRun = deadRestoreRunBeforeHardOverwrite(ops, states, index, context);
     if (deadRun === undefined) continue;
     if (isDeadRecallCandidate(op) && removingRecallCanExposeStackLift(ops, index)) continue;
+    if (isDeadStackShiftingProducerCandidate(op) && removingStackLiftCanExposeStack(ops, index)) continue;
 
     for (const removeIndex of deadRun) remove.add(removeIndex);
   }
@@ -49,7 +51,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "x2-dead-restore-before-overwrite",
-        detail: `Removed ${remove.size} X2 recall/restore/separator cell(s) whose restored X value is overwritten before it can be observed.`,
+        detail: `Removed ${remove.size} dead X/X2 producer/restore/separator cell(s) overwritten before it can be observed.`,
       },
     ],
   };
@@ -76,16 +78,25 @@ function isDeadRestoreCandidate(
   return false;
 }
 
-function isDeadRestoreOrRecallCandidate(
+function isDeadRestoreRecallOrProducerCandidate(
   op: IrOp,
   state: X2ValueDataflowState | undefined,
 ): boolean {
-  return isDeadRestoreCandidate(op, state) || isDeadRecallCandidate(op);
+  return isDeadRestoreCandidate(op, state) ||
+    isDeadRecallCandidate(op) ||
+    isDeadStackShiftingProducerCandidate(op);
 }
 
 function isDeadRecallCandidate(op: IrOp): boolean {
   if (removableRecallValueRegister(op) === undefined) return false;
   return !isDisplayFocusSensitive(op);
+}
+
+function isDeadStackShiftingProducerCandidate(op: IrOp): boolean {
+  if (!isFreeStandingPlain(op)) return false;
+  if (isDisplayFocusSensitive(op)) return false;
+  const effect = analyzeX2StackEffect(op);
+  return effect.stackShifts && (effect.x2Affects || effect.x2Preserves);
 }
 
 function isDeadSignRestoreCandidate(state: X2ValueDataflowState): boolean {

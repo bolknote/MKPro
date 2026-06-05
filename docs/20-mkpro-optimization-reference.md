@@ -957,7 +957,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     helper is restore-transparent. A direct `П->X r` or proved stable-indirect
     `К П->X R7..Re` is treated as the same kind of dead X/X2 restore before a
     hard overwrite, but only when the shared stack-exposure proof shows that
-    the recall's stack lift cannot reach a later stack consumer. `ВП` may also be removed from a structural
+    the recall's stack lift cannot reach a later stack consumer. Free-standing
+    stack-shifting producers such as `F pi` and X2-affecting lifts are handled
+    by the same rule: they can be deleted before the hard overwrite only when
+    their produced `X` is not observed and their implicit stack lift is dead.
+    `ВП` may also be removed from a structural
     hex/super `vpEntryShape` source, including one produced by a direct or
     proved-indirect `В/О` return continuation or the fallthrough side of a direct conditional/`F Lx`
     loop, or from an already active VP/X2 restore context, when the following

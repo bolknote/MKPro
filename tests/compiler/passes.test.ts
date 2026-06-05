@@ -4246,6 +4246,47 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("x2-dead-restore-before-overwrite removes dead stack-shifting producers before hard overwrite", () => {
+    const program: IrOp[] = [
+      plain(0x20, "F pi"),
+      plain(0x55, "К1"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("x2-dead-restore-before-overwrite keeps stack-shifting producers whose lift is consumed", () => {
+    const program: IrOp[] = [
+      plain(0x20, "F pi"),
+      plain(0x0d, "Cx"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-dead-restore-before-overwrite keeps display-role stack-shifting producers", () => {
+    const program: IrOp[] = [
+      { kind: "plain", opcode: 0x20, meta: { mnemonic: "F pi", roles: ["display-byte"] } },
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-dead-restore-before-overwrite removes dot after a preloaded decimal recall", () => {
     const program: IrOp[] = [
       recall("1", "preload const 8.1020088E14"),
@@ -4413,12 +4454,11 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
 
-    expect(result.applied).toBe(2);
+    expect(result.applied).toBe(3);
     expect(result.ops).toEqual([
       plain(0x05, "5"),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
-      plain(0x20, "Fπ"),
       plain(0x0d, "Cx"),
       halt(),
     ]);
