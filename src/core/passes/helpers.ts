@@ -310,6 +310,66 @@ export function knownIndirectFlowTarget(op: IrOp): number | undefined {
   return Number.isInteger(target) && target >= 0 && target <= 104 ? target : undefined;
 }
 
+export function computeLabelEntryIndexes(
+  ops: readonly IrOp[],
+  options: { readonly procedureBoundary?: "any" | "start" } = {},
+): Set<number> {
+  const stringTargets = new Set<string>();
+  const numericTargets = new Set<number>();
+  let unknownIndirectFlow = false;
+  for (const op of ops) {
+    const target = directFlowTarget(op);
+    if (typeof target === "string") stringTargets.add(target);
+    if (typeof target === "number") numericTargets.add(target);
+    if (isIndirectFlowOp(op)) {
+      const indirectTarget = knownIndirectFlowTarget(op);
+      if (indirectTarget === undefined) unknownIndirectFlow = true;
+      else numericTargets.add(indirectTarget);
+    }
+  }
+
+  const procedureBoundary = options.procedureBoundary ?? "any";
+  const entries = new Set<number>();
+  let address = 0;
+  for (let index = 0; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") {
+      const isProcedureEntry = procedureBoundary === "any"
+        ? op.procedureBoundary !== undefined
+        : op.procedureBoundary === "start";
+      if (
+        isProcedureEntry ||
+        unknownIndirectFlow ||
+        stringTargets.has(op.name) ||
+        numericTargets.has(address)
+      ) {
+        entries.add(index);
+      }
+      continue;
+    }
+    address += cellsPerOp(op);
+  }
+  return entries;
+}
+
+function directFlowTarget(op: IrOp): string | number | undefined {
+  switch (op.kind) {
+    case "jump":
+    case "cjump":
+    case "call":
+    case "loop":
+      return op.target;
+    case "orphan-address":
+      return op.target;
+    default:
+      return undefined;
+  }
+}
+
+function isIndirectFlowOp(op: IrOp): op is Extract<IrOp, { kind: "indirect-jump" | "indirect-call" | "indirect-cjump" }> {
+  return op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump";
+}
+
 export function removableRecallValueRegister(op: IrOp): RegisterName | undefined {
   if (hasRewriteBarrier(op)) return undefined;
   if (op.kind === "recall") return op.register;

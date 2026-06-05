@@ -15109,7 +15109,7 @@ const optimizerCapabilities: Array<{
     source: "mk61-delta",
     requires: ["x2-register"],
     activeWhen: ["vp-fraction-restore", "vp-exponent-splice"],
-    detail: "Uses ВП where it simultaneously restores X2 and provides the needed fractional/mantissa side effect, including path-sensitive CFG proofs of X2 sync plus a preserving executable gap and free-standing empty-op gaps before redundant К {x}; also collapses redundant ВП ВП, empty-op runs before ВП, and proved exponent /-/ /-/ toggles.",
+    detail: "Uses ВП where it simultaneously restores X2 and provides the needed fractional/mantissa side effect, including path-sensitive CFG proofs of X2 sync plus a preserving executable gap and free-standing empty-op/marker-label gaps before redundant К {x}; also collapses redundant ВП ВП, empty-op runs before ВП, and proved exponent /-/ /-/ toggles.",
   },
   {
     id: "x2-hidden-temp",

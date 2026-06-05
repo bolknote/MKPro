@@ -1,10 +1,9 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import {
   analyzeRecallRemoval,
-  cellsPerOp,
+  computeLabelEntryIndexes,
   computeX2RegisterStates,
   computeX2ValueStates,
-  knownIndirectFlowTarget,
   plainPreservesXValue,
   removableRecallValueRegister,
   storedCurrentXValueRegister,
@@ -47,7 +46,7 @@ const run: IrPassFn = (ops) => {
   const removed = new Set<number>();
   const x2States = computeX2RegisterStates(ops);
   const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
-  const labelEntries = labelEntryIndexes(ops);
+  const labelEntries = computeLabelEntryIndexes(ops, { procedureBoundary: "start" });
   let xHolds: RegisterName | undefined;
   let canTrustValueX = true;
   for (let i = 0; i < ops.length; i += 1) {
@@ -139,61 +138,6 @@ function loopCounterRegister(counter: Extract<IrOp, { kind: "loop" }>["counter"]
     case "L3":
       return "3";
   }
-}
-
-function labelEntryIndexes(ops: readonly IrOp[]): Set<number> {
-  const stringTargets = new Set<string>();
-  const numericTargets = new Set<number>();
-  let unknownIndirectFlow = false;
-  for (const op of ops) {
-    const target = flowTarget(op);
-    if (typeof target === "string") stringTargets.add(target);
-    if (typeof target === "number") numericTargets.add(target);
-    const indirectTarget = indirectFlowTarget(op);
-    if (indirectTarget === undefined && isIndirectFlow(op)) unknownIndirectFlow = true;
-    if (indirectTarget !== undefined) numericTargets.add(indirectTarget);
-  }
-
-  const result = new Set<number>();
-  let address = 0;
-  for (let index = 0; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") {
-      if (
-        op.procedureBoundary === "start" ||
-        unknownIndirectFlow ||
-        stringTargets.has(op.name) ||
-        numericTargets.has(address)
-      ) {
-        result.add(index);
-      }
-      continue;
-    }
-    address += cellsPerOp(op);
-  }
-  return result;
-}
-
-function flowTarget(op: IrOp): string | number | undefined {
-  switch (op.kind) {
-    case "jump":
-    case "cjump":
-    case "call":
-    case "loop":
-      return op.target;
-    case "orphan-address":
-      return op.target;
-    default:
-      return undefined;
-  }
-}
-
-function isIndirectFlow(op: IrOp): op is Extract<IrOp, { kind: "indirect-jump" | "indirect-call" | "indirect-cjump" }> {
-  return op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump";
-}
-
-function indirectFlowTarget(op: IrOp): number | undefined {
-  return isIndirectFlow(op) ? knownIndirectFlowTarget(op) : undefined;
 }
 
 export const lastXReuse: IrPass = {

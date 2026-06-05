@@ -1,6 +1,7 @@
 import type { IrOp } from "../types.ts";
 import { getOpcode } from "../opcodes.ts";
 import {
+  computeLabelEntryIndexes,
   computeX2RestoreBoundaryStates,
   hasRewriteBarrier,
   type IrPass,
@@ -75,9 +76,17 @@ function hasRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
   return "meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0;
 }
 
-function fractionAfterBoundaryIndex(ops: readonly IrOp[], boundaryIndex: number): number | undefined {
+function fractionAfterBoundaryIndex(
+  ops: readonly IrOp[],
+  boundaryIndex: number,
+  labelEntries: ReadonlySet<number>,
+): number | undefined {
   for (let index = boundaryIndex + 1; index < ops.length; index += 1) {
     const op = ops[index]!;
+    if (op.kind === "label") {
+      if (labelEntries.has(index)) return undefined;
+      continue;
+    }
     if (isFreeStandingEmptyOp(op)) continue;
     return isFractionAfterX2Boundary(op) ? index : undefined;
   }
@@ -87,9 +96,10 @@ function fractionAfterBoundaryIndex(ops: readonly IrOp[], boundaryIndex: number)
 const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
   const boundaryStates = computeX2RestoreBoundaryStates(ops);
+  const labelEntries = computeLabelEntryIndexes(ops);
   for (let i = 0; i < ops.length; i += 1) {
     if (!isVpX2Boundary(ops[i]!) && !isProvedVpX2Boundary(ops, i, boundaryStates)) continue;
-    const fractionIndex = fractionAfterBoundaryIndex(ops, i);
+    const fractionIndex = fractionAfterBoundaryIndex(ops, i, labelEntries);
     if (fractionIndex !== undefined) remove.add(fractionIndex);
   }
   if (remove.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };

@@ -1570,10 +1570,11 @@ The pipeline currently contains:
   ordinary stack-difference proof shows the lift's Y value is dead before any
   consumer can observe it.
 - **vp-x2-peephole** — drops a `К {x}` after a proved `ВП`/X2 boundary,
-  possibly through free-standing `КНОП`/`К1`/`К2` empty ops, when `ВП`
-  already supplies the fractional transform. The `К {x}` itself is recognized
-  by opcode, not by a display/frac comment; only the preceding `ВП`/X2 boundary
-  must be proved. The proof is not display-specific:
+  possibly through free-standing `КНОП`/`К1`/`К2` empty ops and unreferenced
+  marker labels, when `ВП` already supplies the fractional transform. The
+  `К {x}` itself is recognized by opcode, not by a display/frac comment; only
+  the preceding `ВП`/X2 boundary must be proved. The proof is not
+  display-specific:
   display lowering is just one producer of such boundaries. For ordinary code
   the pass can also prove a boundary from the opcode context itself: an X2 sync,
   at least one X2-preserving executable gap, then `ВП`. That proof is

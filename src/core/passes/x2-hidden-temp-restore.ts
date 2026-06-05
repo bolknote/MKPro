@@ -3,14 +3,13 @@ import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import { computeLiveness } from "./liveness-analysis.ts";
 import {
   analyzeRecallRemoval,
-  cellsPerOp,
+  computeLabelEntryIndexes,
   computeX2DotRestoreGapStates,
   computeX2ImmediateSyncStates,
   computeX2RegisterStates,
   computeX2ValueStates,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
-  knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
   removableRecallValueRegister,
   x2CanUseDotRestoreAt,
@@ -26,7 +25,7 @@ const run: IrPassFn = (ops) => {
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
   const immediateSyncStates = computeX2ImmediateSyncStates(ops);
   const liveness = computeLiveness(ops);
-  const labelEntries = labelEntryIndexes(ops);
+  const labelEntries = computeLabelEntryIndexes(ops);
   let applied = 0;
 
   const result = ops.map((op, index): IrOp => {
@@ -114,59 +113,6 @@ function findDeadScratchStore(
     if (stopsStraightLineSearch(op)) return undefined;
   }
   return undefined;
-}
-
-function labelEntryIndexes(ops: readonly IrOp[]): Set<number> {
-  const stringTargets = new Set<string>();
-  const numericTargets = new Set<number>();
-  let unknownIndirectFlow = false;
-  for (const op of ops) {
-    const target = flowTarget(op);
-    if (typeof target === "string") stringTargets.add(target);
-    if (typeof target === "number") numericTargets.add(target);
-    if (isIndirectFlow(op)) {
-      const indirectTarget = knownIndirectFlowTarget(op);
-      if (indirectTarget === undefined) unknownIndirectFlow = true;
-      else numericTargets.add(indirectTarget);
-    }
-  }
-
-  const entries = new Set<number>();
-  let address = 0;
-  for (let index = 0; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") {
-      if (
-        op.procedureBoundary !== undefined ||
-        unknownIndirectFlow ||
-        stringTargets.has(op.name) ||
-        numericTargets.has(address)
-      ) {
-        entries.add(index);
-      }
-      continue;
-    }
-    address += cellsPerOp(op);
-  }
-  return entries;
-}
-
-function flowTarget(op: IrOp): string | number | undefined {
-  switch (op.kind) {
-    case "jump":
-    case "cjump":
-    case "call":
-    case "loop":
-      return op.target;
-    case "orphan-address":
-      return op.target;
-    default:
-      return undefined;
-  }
-}
-
-function isIndirectFlow(op: IrOp): op is Extract<IrOp, { kind: "indirect-jump" | "indirect-call" | "indirect-cjump" }> {
-  return op.kind === "indirect-jump" || op.kind === "indirect-call" || op.kind === "indirect-cjump";
 }
 
 function mentionsRegister(op: IrOp, register: RegisterName): boolean {
