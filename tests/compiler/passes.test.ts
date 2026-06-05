@@ -5728,6 +5728,101 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("pre-shift-stack-lift crosses simple direct-return callees before a following recall", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("noop"),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      call("noop"),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift crosses simple direct-return callees before hard X2 overwrite", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("noop"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      call("noop"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift keeps В↑ before direct-return callees that consume stack", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("consume"),
+      plain(0x10, "+"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("consume"),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("pre-shift-stack-lift keeps В↑ before direct-return callees that restore X2", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("restore"),
+      plain(0x54, "К НОП"),
+      plain(0x0a, "."),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("restore"),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("pre-shift-stack-lift keeps В↑ across conditionals when the skipped edge observes X2", () => {
     const program: IrOp[] = [
       plain(0x0e, "В↑"),
