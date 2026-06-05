@@ -879,7 +879,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     shared helper code (`x2NextStackShiftingProducerIndex`,
     `x2NextHardX2OverwriteIndex`), so later stack+X2 scheduler rewrites use
     the same fallthrough, direct-return, and stack-preserving-gap rules instead
-    of reimplementing them locally.
+    of reimplementing them locally. Plain context-sensitive X2 restores
+    (`.`, `/-/`, `ВП`) and display-sensitive cells are barriers for those
+    scans even when their stack profile is otherwise preserving.
 10. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
 11. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.
 12. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes a direct `П->X r` or stable-indirect `К П->X R7..Re` with a proved memory target when every predecessor reaches that point with the same value still in X, including concrete decimal equality proved through X2 register-memory or decimal preload metadata after X was rebuilt; proved indirect flow targets (`indirect-target=NN`) are included in the CFG, direct and proved-indirect `ПП`/`В/О` edges carry X facts into callees and back to continuations, documented empty operators `К НОП`/`К 1`/`К 2` preserve X facts, stable selectors preserve the X fact, counted-loop `F L0`..`F L3` backedges preserve visible X for non-counter registers while dropping the decremented counter alias, mutating selectors drop only the mutated selector register from the proof, and unknown indirect flow plus absolute numeric direct targets are still refused. Recalls that provide the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow are kept.

@@ -707,15 +707,17 @@ function x2IsKnownIndirectFallthroughStackPreservingConditional(op: IrOp): boole
 }
 
 function x2IsStackPreservingGapOp(op: IrOp): boolean {
-  if (hasRewriteBarrier(op)) return false;
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
   switch (op.kind) {
     case "label":
     case "store":
     case "indirect-store":
     case "orphan-address":
       return true;
-    case "plain":
-      return analyzeX2StackEffect(op).stackPreserves;
+    case "plain": {
+      const effect = analyzeX2StackEffect(op);
+      return effect.stackPreserves && !effect.x2Restores;
+    }
     default:
       return false;
   }
@@ -730,14 +732,17 @@ function x2SimpleDirectReturnPreservesStack(
 }
 
 function x2IsStrictStackPreservingLinearOp(op: IrOp): boolean {
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
   switch (op.kind) {
     case "label":
     case "store":
     case "indirect-store":
     case "orphan-address":
       return true;
-    case "plain":
-      return analyzeX2StackEffect(op).stackPreserves;
+    case "plain": {
+      const effect = analyzeX2StackEffect(op);
+      return effect.stackPreserves && !effect.x2Restores;
+    }
     default:
       return false;
   }

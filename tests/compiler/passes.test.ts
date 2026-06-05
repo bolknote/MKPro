@@ -8800,6 +8800,53 @@ describe("ir passes on synthetic programs", () => {
     )).toBe(7);
   });
 
+  it("stack/X2 scheduler helpers refuse context-sensitive X2 restore gaps", () => {
+    const restoreGapProgram: IrOp[] = [
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+    ];
+    const directReturnRestoreProgram: IrOp[] = [
+      jump("main"),
+      label("restore"),
+      plain(0x0a, "."),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("restore"),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+    ];
+
+    expect(x2NextStackShiftingProducerIndex(
+      restoreGapProgram,
+      1,
+      directReturnAnalysisContext(restoreGapProgram),
+    )).toBeUndefined();
+    expect(x2NextStackShiftingProducerIndex(
+      directReturnRestoreProgram,
+      6,
+      directReturnAnalysisContext(directReturnRestoreProgram),
+    )).toBeUndefined();
+  });
+
+  it("pre-shift-stack-lift keeps В↑ before context-sensitive X2 restore gaps", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("pre-shift-stack-lift removes В↑ before indirect recall", () => {
     const program: IrOp[] = [
       plain(0x0e, "В↑"),
