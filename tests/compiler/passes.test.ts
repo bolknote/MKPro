@@ -7295,6 +7295,74 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("pre-shift-stack-lift removes post-producer В↑ through transparent stack/X2 gaps", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x54, "К НОП"),
+      label("local_gap"),
+      store("2"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      plain(0x54, "К НОП"),
+      label("local_gap"),
+      store("2"),
+      plain(0x0a, "."),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift keeps post-producer В↑ through gaps when its stack lift is consumed", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x54, "К НОП"),
+      store("2"),
+      plain(0x0e, "В↑"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("pre-shift-stack-lift stops post-producer scanning at stack-consuming gaps", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x10, "+"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("pre-shift-stack-lift stops post-producer scanning at targeted entry labels", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      label("entry"),
+      plain(0x54, "К НОП"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+      jump("entry"),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("stack/X2 effect analysis classifies recall as combined lift and X2 sync", () => {
     expect(analyzeX2StackEffect(recall("2"))).toMatchObject({
       stackShifts: true,

@@ -651,11 +651,14 @@ Display rewrites are separated into strategy selection + body lowering.
   stack-preserving commands; stack consumers, X2 restores, nested flow, and
   other entry labels keep the call as a barrier. The same
   proof also removes `В↑` before a hard X/X2 overwrite such as `Cx` when the
-  lift's Y value cannot reach any later stack consumer. A `В↑` immediately
-  after any proved stack-lift + X2-sync producer (`П->X`, proved stable
-  `К П->X`, or another `В↑`) is also removed when its stack lift is dead: the
-  producer has already supplied both the visible X value and hidden X2 sync, so
-  the extra lift is only a redundant scheduler cell.
+  lift's Y value cannot reach any later stack consumer. A `В↑` after any proved
+  stack-lift + X2-sync producer (`П->X`, proved stable `К П->X`, or another
+  `В↑`) is also removed when only stack/X2-preserving local gap cells stand
+  between them and the lift's deeper stack cell is dead: the producer has
+  already supplied both the visible X value and hidden X2 sync, so the extra
+  lift is only a redundant scheduler cell. Targeted entry labels, display/X2
+  restore context, stack consumers, and flow commands keep the post-producer
+  scan conservative.
 - `known-zero-reuse` — reuses a known zero source instead of reloading.
 - `inequality-zero-false-branch` — feeds `known-zero-reuse` after a false
   `!= 0` branch, avoiding a fresh zero literal or `Cx`.
@@ -824,7 +827,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 6. `shared-terminal-tail` — finds repeated straight-line suffixes that already end in unconditional flow (`БП`, `К БП r`, or `В/О`) and replaces extra copies with a jump into the canonical suffix; it refuses programs with absolute numeric flow targets.
 7. `return-zero-jump` — when no procedure calls are used, replaces a backward jump to `01` with `В/О` and tags it as an empty-stack optimization.
 8. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r`, stable-indirect proved same-cell `К X->П R7..Re` followed by `К П->X R7..Re`, or an adjacent recall to another cell when the shared value/shape proof shows the recalled decimal value or structural hex/super display shape is already visible in X, including non-negative structural exponent shifts such as `hex:Г; ВП 2` matching `hex:Г00`. The rewrite fires only when the recall is not the last X2 sync before a context-sensitive `.`/`/-/`/`ВП` restoration before the next X2-affecting op, including direct conditional/`F Lx` fallthrough syncs and direct `В/О` returns, or when the same shared proof shows X2 already carries the recalled decimal value or structural hex/super shape across an X2-preserving gap. Its stack lift still cannot reach a downstream binary/stack-consuming op through direct or proved-indirect flow; mutating `R0..R6` indirect selectors and loop-counter recalls are not folded when the hardware side effect is observable.
-9. `pre-shift-stack-lift` — removes `В↑` before direct/indirect `П->X`, `F pi`, or another stack-shifting producer, possibly through stack-preserving labels/stores/plain ops, path-safe direct conditional/counted-loop/proved-indirect conditional fallthroughs, and simple stack-preserving direct-return callees, when that producer already supplies the current X in Y, unless the full CFG stack/X2 exposure proofs show that some skipped or downstream edge can observe the removed lift/sync. It also removes a `В↑` immediately after any proved stack-lift + X2-sync producer (`П->X`, proved stable `К П->X`, or another `В↑`) when the added stack lift cannot reach a consumer.
+9. `pre-shift-stack-lift` — removes `В↑` before direct/indirect `П->X`, `F pi`, or another stack-shifting producer, possibly through stack-preserving labels/stores/plain ops, path-safe direct conditional/counted-loop/proved-indirect conditional fallthroughs, and simple stack-preserving direct-return callees, when that producer already supplies the current X in Y, unless the full CFG stack/X2 exposure proofs show that some skipped or downstream edge can observe the removed lift/sync. It also removes a `В↑` after any proved stack-lift + X2-sync producer (`П->X`, proved stable `К П->X`, or another `В↑`) across local stack/X2-preserving gap cells when the added stack lift cannot reach a consumer and no targeted entry label, display/X2 restore context, stack consumer, or flow command interrupts the producer-to-lift proof.
     The scan for the next stack-shifting producer or dead hard X2 overwrite is
     shared helper code (`x2NextStackShiftingProducerIndex`,
     `x2NextHardX2OverwriteIndex`), so later stack+X2 scheduler rewrites use

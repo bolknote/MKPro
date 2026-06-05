@@ -8,6 +8,7 @@ import {
   removingRecallCanExposeX2Restore,
   removingPreShiftLiftCanExposeStack,
   removingStackLiftCanExposeStack,
+  type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
   x2NextHardX2OverwriteIndex,
@@ -24,7 +25,7 @@ const run: IrPassFn = (ops) => {
   for (let index = 0; index < ops.length - 1; index += 1) {
     const op = ops[index]!;
     if (!isStackLift(op)) continue;
-    if (previousProducerAlreadySuppliesLiftX2Sync(ops, index)) {
+    if (previousProducerAlreadySuppliesLiftX2Sync(ops, index, context)) {
       if (removingStackLiftCanExposeStack(ops, index)) continue;
       remove.add(index);
       continue;
@@ -34,7 +35,7 @@ const run: IrPassFn = (ops) => {
       if (
         producerIndex === index + 1 &&
         isStackLift(ops[producerIndex]!) &&
-        previousProducerAlreadySuppliesLiftX2Sync(ops, producerIndex) &&
+        previousProducerAlreadySuppliesLiftX2Sync(ops, producerIndex, context) &&
         !removingStackLiftCanExposeStack(ops, producerIndex)
       ) continue;
       if (removingPreShiftLiftCanExposeStack(ops, producerIndex)) continue;
@@ -60,11 +61,44 @@ const run: IrPassFn = (ops) => {
   };
 };
 
-function previousProducerAlreadySuppliesLiftX2Sync(ops: readonly IrOp[], liftIndex: number): boolean {
-  const previous = ops[liftIndex - 1];
-  return previous !== undefined &&
-    analyzeX2StackEffect(previous).stackLiftAndX2Sync &&
-    !isDisplayFocusSensitive(previous);
+function previousProducerAlreadySuppliesLiftX2Sync(
+  ops: readonly IrOp[],
+  liftIndex: number,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  for (let index = liftIndex - 1; index >= 0; index -= 1) {
+    const previous = ops[index]!;
+    if (producerSuppliesLiftX2Sync(previous)) return true;
+    if (!isBackwardStackLiftX2SyncGap(previous, index, context)) return false;
+  }
+  return false;
+}
+
+function producerSuppliesLiftX2Sync(op: IrOp): boolean {
+  return !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op) &&
+    analyzeX2StackEffect(op).stackLiftAndX2Sync;
+}
+
+function isBackwardStackLiftX2SyncGap(
+  op: IrOp,
+  index: number,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  if (op.kind === "label") return !context.labelEntries.has(index);
+  switch (op.kind) {
+    case "store":
+    case "indirect-store":
+    case "orphan-address":
+      return true;
+    case "plain": {
+      const effect = analyzeX2StackEffect(op);
+      return effect.stackPreserves && effect.x2Preserves;
+    }
+    default:
+      return false;
+  }
 }
 
 export const preShiftStackLift: IrPass = {
