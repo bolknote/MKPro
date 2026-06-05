@@ -689,6 +689,46 @@ export function x2ShapeDataModels(input: X2ShapeSet | undefined): X2ShapeDataMod
   return models;
 }
 
+export function x2MantissaShapeFactFromModel(model: X2MantissaDataModel): X2ShapeFact | undefined {
+  return x2MantissaShapeFactFromParts(model.radix, model.canonical);
+}
+
+export function x2ExponentShapeFactFromMantissaFact(
+  fact: X2ShapeFact,
+  exponentRaw: string,
+): X2ShapeFact | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind !== "mantissa") return undefined;
+  const exponent = canonicalExponentShapeRaw(exponentRaw);
+  if (exponent === undefined) return undefined;
+  if (model.radix === "decimal") return decimalExponentShapeFact(model.canonical, exponent);
+  if (model.radix === "hex") return `hex-exponent:${model.canonical}:${exponent}`;
+  if (model.radix === "super") return `super-exponent:${model.canonical}:${exponent}`;
+  return undefined;
+}
+
+export function x2MantissaSignChangedShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind !== "mantissa") return undefined;
+  if (model.radix === "decimal") {
+    const signed = signChangedMantissaShape(model.canonical);
+    return signed === undefined ? undefined : decimalMantissaShapeFact(signed);
+  }
+  if (model.radix === "hex" || model.radix === "super") {
+    return x2MantissaShapeFactFromParts(model.radix, toggleRawSign(model.canonical));
+  }
+  return undefined;
+}
+
+export function x2ExponentSignChangedShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind !== "exponent-entry") return undefined;
+  return x2ExponentShapeFactFromMantissaFact(
+    x2MantissaShapeFactFromModel(model.mantissa) ?? fact,
+    toggleExponentSign(model.exponentRaw),
+  );
+}
+
 export function x2ShapeFactSafety(fact: X2ShapeFact): X2ShapeSafety {
   return x2ShapeDataModelForFact(fact).safety;
 }
@@ -2691,8 +2731,20 @@ function structuralMantissaDataModel(
   };
 }
 
+function x2MantissaShapeFactFromParts(radix: X2MantissaRadix, raw: string): X2ShapeFact | undefined {
+  if (radix === "decimal") return decimalMantissaShapeFact(raw);
+  if (radix === "hex") return `hex:${raw}:mantissa`;
+  if (radix === "super") return `super:${raw}`;
+  return undefined;
+}
+
 function canonicalShapeRaw(raw: string): string {
   return raw.trim().replace(/\s+/gu, "").replace(/,/gu, ".").toUpperCase();
+}
+
+function canonicalExponentShapeRaw(raw: string): string | undefined {
+  const canonical = canonicalShapeRaw(raw);
+  return /^-?[0-9]{0,2}$/u.test(canonical) ? canonical : undefined;
 }
 
 function shapeDigits(raw: string): string[] {
@@ -2922,7 +2974,8 @@ function exponentEntryShapeFacts(input: Extract<X2EntryState, { kind: "exponent"
   const shapes = new Set<X2ShapeFact>();
   for (const mantissa of input.mantissa) {
     for (const exponent of input.exponent) {
-      shapes.add(decimalExponentShapeFact(mantissa, exponent));
+      const fact = x2ExponentShapeFactFromMantissaFact(decimalMantissaShapeFact(mantissa), exponent);
+      if (fact !== undefined) shapes.add(fact);
     }
   }
   return shapes;
@@ -2938,11 +2991,9 @@ function structuralExponentEntryFromVpEntryShapes(shapes: X2ShapeSet): X2Structu
 function structuralExponentEntryShapeFacts(input: Extract<X2StructuralEntryState, { kind: "exponent" }>): Set<X2ShapeFact> {
   const shapes = new Set<X2ShapeFact>();
   for (const mantissa of input.mantissa) {
-    const model = x2ShapeDataModelForFact(mantissa);
-    if (model.kind !== "mantissa") continue;
     for (const exponent of input.exponent) {
-      if (model.radix === "hex") shapes.add(`hex-exponent:${model.canonical}:${exponent}`);
-      if (model.radix === "super") shapes.add(`super-exponent:${model.canonical}:${exponent}`);
+      const fact = x2ExponentShapeFactFromMantissaFact(mantissa, exponent);
+      if (fact !== undefined && x2ShapeFactSafety(fact) === "structuralOnly") shapes.add(fact);
     }
   }
   return shapes;
@@ -3119,22 +3170,22 @@ function signChangedClosedStructuralShapeFacts(input: X2ValueDataflowState): Rea
     const model = x2ShapeDataModelForFact(fact);
     if (model.kind !== "mantissa" || (model.radix !== "hex" && model.radix !== "super")) continue;
     if (input.xShape?.has(fact) !== true) continue;
-    shapes.add(signChangedStructuralMantissaShapeFact(fact, model));
+    shapes.add(signChangedStructuralMantissaShapeFact(fact));
   }
   return shapes.size === 0 ? undefined : shapes;
 }
 
 function signChangedStructuralMantissaShapeFact(
   fact: X2ShapeFact,
-  model: Extract<X2ShapeDataModel, { kind: "mantissa" }>,
 ): X2ShapeFact {
-  const signed = toggleRawSign(model.canonical);
-  if (model.radix === "hex") return `hex:${signed}:mantissa`;
-  if (model.radix === "super") return `super:${signed}`;
-  return fact;
+  return x2MantissaSignChangedShapeFact(fact) ?? fact;
 }
 
 function toggleRawSign(raw: string): string {
+  return raw.startsWith("-") ? raw.slice(1) : `-${raw}`;
+}
+
+function toggleExponentSign(raw: string): string {
   return raw.startsWith("-") ? raw.slice(1) : `-${raw}`;
 }
 

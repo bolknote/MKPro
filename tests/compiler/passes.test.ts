@@ -38,6 +38,10 @@ import {
   computeX2ValueStates,
   parseX2ShapeFact,
   recallValueProof,
+  x2ExponentShapeFactFromMantissaFact,
+  x2ExponentSignChangedShapeFact,
+  x2MantissaShapeFactFromModel,
+  x2MantissaSignChangedShapeFact,
   x2ShapeDataModelForFact,
   x2ShapeSetsHaveSameDotSafeDecimal,
   x2ShapeSetsHaveSameStructuralShape,
@@ -804,6 +808,38 @@ describe("ir passes on synthetic programs", () => {
       normalizedDecimal: "5000",
       safety: "errorProne",
     });
+  });
+
+  it("x2 shape algebra derives exponent-entry facts without decimalizing structural forms", () => {
+    expect(x2ExponentShapeFactFromMantissaFact("mantissa:05:decimal", "3")).toBe("exponent:05:3:decimal");
+    expect(x2ExponentShapeFactFromMantissaFact("hex:8.70Е2-6С:mantissa", "-2")).toBe(
+      "hex-exponent:8.70Е2-6С:-2",
+    );
+    expect(x2ExponentShapeFactFromMantissaFact("super:FA", "")).toBe("super-exponent:FA:");
+    expect(x2ShapeSetSafety(new Set(["hex-exponent:8.70Е2-6С:-2"]))).toBe("structuralOnly");
+  });
+
+  it("x2 shape algebra toggles mantissa and exponent signs structurally", () => {
+    expect(x2MantissaSignChangedShapeFact("mantissa:02:decimal")).toBe("mantissa:-02:decimal");
+    expect(x2MantissaSignChangedShapeFact("mantissa:0:decimal")).toBe("mantissa:-0:decimal");
+    expect(x2MantissaSignChangedShapeFact("hex:FACE:mantissa")).toBe("hex:-FACE:mantissa");
+    expect(x2MantissaSignChangedShapeFact("super:-FA")).toBe("super:FA");
+    expect(x2ExponentSignChangedShapeFact("exponent:05:3:decimal")).toBe("exponent:05:-3:decimal");
+    expect(x2ExponentSignChangedShapeFact("hex-exponent:FACE:-2")).toBe("hex-exponent:FACE:2");
+    expect(x2ExponentSignChangedShapeFact("super-exponent:FA:")).toBe("super-exponent:FA:-");
+  });
+
+  it("x2 shape algebra rebuilds canonical mantissa facts from data models", () => {
+    const decimalModel = x2ShapeDataModelForFact("mantissa: 02 :decimal");
+    const hexModel = x2ShapeDataModelForFact("hex: fa.ce :mantissa");
+    const superModel = x2ShapeDataModelForFact("super:fa");
+    expect(decimalModel.kind === "mantissa" ? x2MantissaShapeFactFromModel(decimalModel) : undefined).toBe(
+      "mantissa:02:decimal",
+    );
+    expect(hexModel.kind === "mantissa" ? x2MantissaShapeFactFromModel(hexModel) : undefined).toBe(
+      "hex:FA.CE:mantissa",
+    );
+    expect(superModel.kind === "mantissa" ? x2MantissaShapeFactFromModel(superModel) : undefined).toBe("super:FA");
   });
 
   it("x2 value dataflow keeps leading-zero X2 separate from normalized X", () => {

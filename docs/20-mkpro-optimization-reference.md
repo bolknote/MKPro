@@ -846,7 +846,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     exponent shape and `mantissa:5000:decimal`. Structural hex/super mantissas
     consumed by `ВП` become shape-only `hex-exponent:*:*` /
     `super-exponent:*:*` forms; exponent digits and exponent `/-/` update that
-    structural context without creating decimal value facts. Closed-context `.`
+    structural context without creating decimal value facts. The construction is
+    routed through the shared shape algebra, which can rebuild canonical
+    mantissa facts and derive structural mantissa/exponent sign toggles while
+    still refusing hex/super arithmetic, carry, or decimalization proofs.
+    Closed-context `.`
     restores carry structural hex/super hidden X2 shapes forward as structural
     `ВП`-entry sources, while dot-restored leading-zero decimal forms are still
     not promoted to ordinary mantissas. Preloaded `П->X r` constants
