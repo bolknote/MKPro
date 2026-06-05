@@ -864,7 +864,7 @@ export function computeX2ValueStates(
       if (input === undefined) continue;
       for (const edge of edges[index] ?? []) {
         const transferred = transferX2ValueDataflowState(input, ops[index]!, edge.kind, trackRegisterMemory, index);
-        const output = edge.target <= index
+        const output = x2ValueEdgeDropsUnstableOpaqueExpressionFacts(ops[index]!, edge, index)
           ? dropUnstableOpaqueExpressionX2ValueFacts(transferred, trackRegisterMemory)
           : transferred;
         const joined = joinX2ValueDataflowStates(inStates[edge.target], output, trackRegisterMemory);
@@ -3529,6 +3529,10 @@ function invalidateRegisterDependentX2ValueState(
     memory: trackRegisterMemory ? removeRegisterDependentX2ValueMemory(input.memory, register) : undefined,
     shapeMemory: trackRegisterMemory ? cloneX2ShapeMemory(input.shapeMemory) : undefined,
   };
+}
+
+function x2ValueEdgeDropsUnstableOpaqueExpressionFacts(op: IrOp, edge: Edge, sourceIndex: number): boolean {
+  return edge.target <= sourceIndex || op.kind === "call" || op.kind === "indirect-call" || op.kind === "return";
 }
 
 function dropUnstableOpaqueExpressionX2ValueFacts(

@@ -798,9 +798,10 @@ Display rewrites are separated into strategy selection + body lowering.
   visible X while leaving X2 untouched; a later explicit X2 sync (`В↑`, F*
   empty, direct conditional fallthrough, etc.) can then carry that exact
   computed value as a hidden temporary. Producer-local `expr:<step>` facts do
-  not survive CFG backedges or register-memory carried across them; only
-  operand-shaped `expr-key:*` facts are allowed to prove equality through a
-  repeated entry. Documented unary X-only computations
+  not survive CFG backedges, context-mixed `ПП`/`В/О` call-return edges, or
+  register-memory carried across them; only operand-shaped `expr-key:*` facts
+  are allowed to prove equality through a repeated entry. Documented unary
+  X-only computations
   additionally seed a stable `expr-key:<opcode>(<source>)` fact when the source
   is a proved register, normalized decimal, or earlier stable expression key.
   Register-sourced keys are version-sensitive: a later direct/known-indirect

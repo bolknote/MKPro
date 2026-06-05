@@ -1508,6 +1508,26 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[3]?.memory?.["1"]) ?? []).not.toContain("expr:1");
   });
 
+  it("x2 value dataflow drops address-local opaque expr facts across call returns but keeps stable expr keys", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      call("helper"),
+      store("1"),
+      jump("done"),
+      label("helper"),
+      ret(),
+      label("done"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[3]?.x)).toContain("expr-key:21(decimal:2:normalized)");
+    expect(x2ValueStateText(states[3]?.x)).not.toContain("expr:1");
+    expect(x2ValueStateText(states[4]?.memory?.["1"]) ?? []).toContain("expr-key:21(decimal:2:normalized)");
+    expect(x2ValueStateText(states[4]?.memory?.["1"]) ?? []).not.toContain("expr:1");
+  });
+
   it("x2-hidden-temp-restore uses stable expr keys across repeated pure unary computations", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
