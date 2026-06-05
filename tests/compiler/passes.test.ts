@@ -7840,6 +7840,48 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops[target + 1]).toMatchObject({ kind: "plain", opcode: 0x32 });
   });
 
+  it("branch-target-x-reuse follows proved stable indirect conditional targets", () => {
+    const program: IrOp[] = [
+      recall("6"),
+      knownTargetIndirectCjump("8", 4),
+      jump("end"),
+      label("target"),
+      recall("6"),
+      plain(0x32, "К ЗН"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("6"),
+      knownTargetIndirectCjump("8", 4),
+      jump("end"),
+      label("target"),
+      plain(0x32, "К ЗН"),
+      label("end"),
+      halt(),
+    ]);
+  });
+
+  it("branch-target-x-reuse keeps proved indirect target recalls for mutating selectors", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      knownTargetIndirectCjump("1", 4),
+      jump("end"),
+      label("target"),
+      recall("1"),
+      plain(0x32, "К ЗН"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("branch-target-x-reuse keeps recall that syncs X2 before ВП in the target", () => {
     const program: IrOp[] = [
       recall("6"),

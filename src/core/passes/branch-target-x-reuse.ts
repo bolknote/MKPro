@@ -1,10 +1,13 @@
 import type { IrOp, RegisterName } from "../types.ts";
+import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import {
   analyzeRecallRemoval,
+  addressIndexes,
   computeX2RegisterStates,
   computeX2ValueStates,
   emptyResult,
   hasRewriteBarrier,
+  knownIndirectFlowTarget,
   removableRecallValueRegister,
   type IrPass,
   type IrPassFn,
@@ -12,6 +15,7 @@ import {
 
 const run: IrPassFn = (ops) => {
   const labels = labelIndexes(ops);
+  const addresses = addressIndexes(ops);
   const references = targetReferenceCounts(ops);
   const x2States = computeX2RegisterStates(ops);
   const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
@@ -19,22 +23,20 @@ const run: IrPassFn = (ops) => {
 
   for (let index = 0; index < ops.length; index += 1) {
     const op = ops[index]!;
-    if ((op.kind !== "cjump" && op.kind !== "loop") || typeof op.target !== "string" || hasRewriteBarrier(op)) {
-      continue;
-    }
+    if (!isConditionalTargetOp(op) || hasRewriteBarrier(op)) continue;
+    const targetKey = branchTargetKey(op);
+    if (targetKey === undefined) continue;
 
-    if ((references.get(op.target) ?? 0) !== 1) continue;
+    if ((references.get(targetKey) ?? 0) !== 1) continue;
 
-    const labelIndex = labels.get(op.target);
-    if (labelIndex === undefined || hasFallthroughIntoLabel(ops, labelIndex)) continue;
-
-    const targetIndex = nextExecutableIndex(ops, labelIndex + 1);
+    const targetIndex = branchTargetEntryIndex(ops, op, labels, addresses);
     if (targetIndex === undefined || remove.has(targetIndex)) continue;
+    if (hasFallthroughIntoIndex(ops, targetIndex)) continue;
     const target = ops[targetIndex]!;
     const targetRegister = removableRecallValueRegister(target);
     if (targetRegister === undefined) continue;
     if (op.kind === "loop" && loopCounterRegister(op.counter) === targetRegister) continue;
-    const preservedRegister = branchPreservedRegister(ops, index, op);
+    const preservedRegister = branchPreservedRegister(ops, index, op, targetRegister);
     const removal = analyzeRecallRemoval(ops, targetIndex, x2States[targetIndex], x2ValueStates[targetIndex]);
     if (preservedRegister !== targetRegister && removal?.valueProof?.inX !== true) continue;
     if (removal?.removable !== true) {
@@ -65,11 +67,18 @@ export const branchTargetXReuse: IrPass = {
 function branchPreservedRegister(
   ops: readonly IrOp[],
   branchIndex: number,
-  branch: Extract<IrOp, { kind: "cjump" | "loop" }>,
+  branch: Extract<IrOp, { kind: "cjump" | "loop" | "indirect-cjump" }>,
+  targetRegister: RegisterName,
 ): RegisterName | undefined {
   const register = immediatelyHeldRegister(ops, branchIndex);
   if (register === undefined) return undefined;
   if (branch.kind === "loop" && loopCounterRegister(branch.counter) === register) return undefined;
+  if (branch.kind === "indirect-cjump" && branch.register === register && !isStableIndirectSelector(branch.register)) {
+    return undefined;
+  }
+  if (branch.kind === "indirect-cjump" && branch.register === targetRegister && !isStableIndirectSelector(branch.register)) {
+    return undefined;
+  }
   return register;
 }
 
@@ -107,26 +116,55 @@ function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
 function targetReferenceCounts(ops: readonly IrOp[]): Map<string, number> {
   const result = new Map<string, number>();
   for (const op of ops) {
-    const target = stringTarget(op);
+    const target = branchTargetKey(op);
     if (target !== undefined) result.set(target, (result.get(target) ?? 0) + 1);
   }
   return result;
 }
 
-function stringTarget(op: IrOp): string | undefined {
+function branchTargetKey(op: IrOp): string | undefined {
   switch (op.kind) {
     case "jump":
     case "cjump":
     case "call":
     case "loop":
-      return typeof op.target === "string" ? op.target : undefined;
+      return typeof op.target === "string" ? `label:${op.target}` : `address:${op.target}`;
+    case "indirect-jump":
+    case "indirect-call":
+    case "indirect-cjump": {
+      const target = knownIndirectFlowTarget(op);
+      return target === undefined ? undefined : `address:${target}`;
+    }
     default:
       return undefined;
   }
 }
 
-function hasFallthroughIntoLabel(ops: readonly IrOp[], labelIndex: number): boolean {
-  const previous = previousExecutableIndex(ops, labelIndex - 1);
+function isConditionalTargetOp(
+  op: IrOp,
+): op is Extract<IrOp, { kind: "cjump" | "loop" | "indirect-cjump" }> {
+  return op.kind === "cjump" || op.kind === "loop" || op.kind === "indirect-cjump";
+}
+
+function branchTargetEntryIndex(
+  ops: readonly IrOp[],
+  op: IrOp,
+  labels: ReadonlyMap<string, number>,
+  addresses: ReadonlyMap<number, number>,
+): number | undefined {
+  if ((op.kind === "cjump" || op.kind === "loop") && typeof op.target === "string") {
+    const labelIndex = labels.get(op.target);
+    return labelIndex === undefined ? undefined : nextExecutableIndex(ops, labelIndex + 1);
+  }
+  if (op.kind === "indirect-cjump") {
+    const target = knownIndirectFlowTarget(op);
+    return target === undefined ? undefined : addresses.get(target);
+  }
+  return undefined;
+}
+
+function hasFallthroughIntoIndex(ops: readonly IrOp[], targetIndex: number): boolean {
+  const previous = previousExecutableIndex(ops, targetIndex - 1);
   if (previous === undefined) return false;
   return !isNoFallthrough(ops[previous]!);
 }
