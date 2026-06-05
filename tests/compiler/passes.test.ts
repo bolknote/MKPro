@@ -1612,6 +1612,46 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
   });
 
+  it("x2 value dataflow invalidates register-dependent expr keys after source overwrite", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x31, "К |x|"),
+      store("2"),
+      plain(0x05, "5"),
+      store("1"),
+      recall("1"),
+      plain(0x31, "К |x|"),
+      plain(0x0e, "В↑"),
+      recall("2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[3]?.memory?.["2"])).toContain("expr-key:31(reg:1)");
+    expect(x2ValueStateText(states[5]?.memory?.["2"])).not.toContain("expr-key:31(reg:1)");
+    expect(x2ValueStateText(states[8]?.x2)).toContain("expr-key:31(reg:1)");
+  });
+
+  it("x2-hidden-temp-restore keeps expr-key scratch recalls after a source register overwrite", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x31, "К |x|"),
+      store("2"),
+      plain(0x05, "5"),
+      store("1"),
+      recall("1"),
+      plain(0x31, "К |x|"),
+      plain(0x0e, "В↑"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[5]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(restored.ops[8]).toEqual(program[8]);
+  });
+
   it("x2-hidden-temp-restore uses stable register sources after a later X2 sync", () => {
     const program: IrOp[] = [
       recall("1"),

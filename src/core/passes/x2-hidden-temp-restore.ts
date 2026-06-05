@@ -132,7 +132,7 @@ function hiddenTempStoreSourceAlreadySyncedInX2(
   if (storeState === undefined || recallState === undefined) return false;
   for (const fact of storeState.x) {
     if (
-      !isStableStoredSourceFact(fact) &&
+      !isStableStoredSourceFact(ops, storeIndex, recallIndex, fact) &&
       !isStableRegisterStoredSourceFact(ops, storeIndex, recallIndex, fact)
     ) continue;
     if (recallState.x2.has(fact)) return true;
@@ -159,9 +159,19 @@ function hiddenTempStoreSourceRestoresSameVisibleDecimalFromX2(
   return x2ValueSetsHaveSameRestoredVisibleDecimal(storeState?.x, recallState?.x2);
 }
 
-function isStableStoredSourceFact(fact: X2ValueFact): boolean {
-  return fact.startsWith("expr:") || fact.startsWith("expr-key:") ||
-    (fact.startsWith("decimal:") && fact.endsWith(":normalized"));
+function isStableStoredSourceFact(
+  ops: readonly IrOp[],
+  storeIndex: number,
+  recallIndex: number,
+  fact: X2ValueFact,
+): boolean {
+  if (fact.startsWith("expr:")) return true;
+  if (fact.startsWith("expr-key:")) {
+    return [...registerDependenciesInValueFact(fact)].every((register) =>
+      !registerMayBeOverwrittenBetween(ops, storeIndex + 1, recallIndex, register)
+    );
+  }
+  return fact.startsWith("decimal:") && fact.endsWith(":normalized");
 }
 
 function isStableRegisterStoredSourceFact(
@@ -177,6 +187,13 @@ function isStableRegisterStoredSourceFact(
 function registerSourceValueFact(fact: X2ValueFact): RegisterName | undefined {
   const match = /^reg:([0-9a-e])$/u.exec(fact);
   return match?.[1] as RegisterName | undefined;
+}
+
+function registerDependenciesInValueFact(fact: X2ValueFact): Set<RegisterName> {
+  const registers = new Set<RegisterName>();
+  const re = /reg:([0-9a-e])/gu;
+  for (const match of fact.matchAll(re)) registers.add(match[1] as RegisterName);
+  return registers;
 }
 
 function registerMayBeOverwrittenBetween(

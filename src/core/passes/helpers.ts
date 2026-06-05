@@ -2038,19 +2038,22 @@ function transferX2ValueDataflowState(
       return closeX2ValueEntry(input);
     case "store": {
       const closed = closeX2ValueEntry(input);
+      const stable = registerWritePreservesStoredValue(closed, op.register)
+        ? closed
+        : invalidateRegisterDependentX2ValueState(closed, op.register, trackRegisterMemory);
       return {
-        x: addX2Value(closed.x, registerValueFact(op.register)),
-        y: cloneOptionalValueSet(closed.y),
-        x2: addStoredX2ValueAlias(closed, registerValueFact(op.register)),
-        xShape: cloneOptionalShapeSet(closed.xShape),
-        yShape: cloneOptionalShapeSet(closed.yShape),
-        x2Shape: cloneOptionalShapeSet(closed.x2Shape),
+        x: addX2Value(stable.x, registerValueFact(op.register)),
+        y: cloneOptionalValueSet(stable.y),
+        x2: addStoredX2ValueAlias(stable, registerValueFact(op.register)),
+        xShape: cloneOptionalShapeSet(stable.xShape),
+        yShape: cloneOptionalShapeSet(stable.yShape),
+        x2Shape: cloneOptionalShapeSet(stable.x2Shape),
         entry: closedX2EntryState(),
-        vpContext: cloneX2VpContextState(closed.vpContext),
+        vpContext: cloneX2VpContextState(stable.vpContext),
         structuralEntry: noneX2StructuralEntryState(),
-        structuralVpContext: cloneX2StructuralEntryState(closed.structuralVpContext),
-        memory: trackRegisterMemory ? storeX2ValueMemory(closed.memory, op.register, closed.x) : undefined,
-        shapeMemory: trackRegisterMemory ? storeX2ShapeMemory(closed.shapeMemory, op.register, closed.xShape) : undefined,
+        structuralVpContext: cloneX2StructuralEntryState(stable.structuralVpContext),
+        memory: trackRegisterMemory ? storeX2ValueMemory(stable.memory, op.register, stable.x) : undefined,
+        shapeMemory: trackRegisterMemory ? storeX2ShapeMemory(stable.shapeMemory, op.register, stable.xShape) : undefined,
       };
     }
     case "indirect-store":
@@ -2132,29 +2135,30 @@ function transferX2ValueDataflowState(
       const closed = closeX2ValueEntry(input);
       const effect = conditionalX2EffectForGraphEdge(op, edge);
       const counter = loopCounterRegister(op.counter);
+      const stable = invalidateRegisterDependentX2ValueState(closed, counter, trackRegisterMemory);
       const counterFact = registerValueFact(counter);
-      const x = syncUnknownSameValue(removeX2Value(closed.x, counterFact), effect, producerIndex);
-      const xShape = cloneOptionalShapeSet(closed.xShape);
+      const x = syncUnknownSameValue(removeX2Value(stable.x, counterFact), effect, producerIndex);
+      const xShape = cloneOptionalShapeSet(stable.xShape);
       const x2 = effect === "preserves"
-        ? removeX2Value(closed.x2, counterFact)
+        ? removeX2Value(stable.x2, counterFact)
         : effect === "affects"
           ? new Set(x)
           : new Set<X2ValueFact>();
       return {
         x,
-        y: cloneOptionalValueSet(closed.y),
+        y: cloneOptionalValueSet(stable.y),
         x2,
         xShape,
-        yShape: cloneOptionalShapeSet(closed.yShape),
-        x2Shape: transferConditionalX2ShapeSet(closed, xShape, effect),
+        yShape: cloneOptionalShapeSet(stable.yShape),
+        x2Shape: transferConditionalX2ShapeSet(stable, xShape, effect),
         entry: closedX2EntryState(),
-        vpContext: transferConditionalX2VpContextState(closed, effect),
+        vpContext: transferConditionalX2VpContextState(stable, effect),
         structuralEntry: noneX2StructuralEntryState(),
-        structuralVpContext: transferConditionalX2StructuralVpContextState(closed, effect),
+        structuralVpContext: transferConditionalX2StructuralVpContextState(stable, effect),
         vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, effect),
         vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, effect),
-        memory: trackRegisterMemory ? deleteX2ValueMemory(closed.memory, counter) : undefined,
-        shapeMemory: trackRegisterMemory ? deleteX2ShapeMemory(closed.shapeMemory, counter) : undefined,
+        memory: trackRegisterMemory ? deleteX2ValueMemory(stable.memory, counter) : undefined,
+        shapeMemory: trackRegisterMemory ? deleteX2ShapeMemory(stable.shapeMemory, counter) : undefined,
       };
     }
     case "indirect-jump":
@@ -2964,20 +2968,23 @@ function transferIndirectStoreX2ValueState(
     return trackRegisterMemory ? clearX2ValueMemory(closed) : closed;
   }
   const closed = closeX2ValueEntry(input);
+  const stable = registerWritePreservesStoredValue(closed, target)
+    ? closed
+    : invalidateRegisterDependentX2ValueState(closed, target, trackRegisterMemory);
   const value = registerValueFact(target);
   return {
-    x: addX2Value(closed.x, value),
-    y: cloneOptionalValueSet(closed.y),
-    x2: addStoredX2ValueAlias(closed, value),
-    xShape: cloneOptionalShapeSet(closed.xShape),
-    yShape: cloneOptionalShapeSet(closed.yShape),
-    x2Shape: cloneOptionalShapeSet(closed.x2Shape),
+    x: addX2Value(stable.x, value),
+    y: cloneOptionalValueSet(stable.y),
+    x2: addStoredX2ValueAlias(stable, value),
+    xShape: cloneOptionalShapeSet(stable.xShape),
+    yShape: cloneOptionalShapeSet(stable.yShape),
+    x2Shape: cloneOptionalShapeSet(stable.x2Shape),
     entry: closedX2EntryState(),
-    vpContext: cloneX2VpContextState(closed.vpContext),
+    vpContext: cloneX2VpContextState(stable.vpContext),
     structuralEntry: noneX2StructuralEntryState(),
-    structuralVpContext: cloneX2StructuralEntryState(closed.structuralVpContext),
-    memory: trackRegisterMemory ? storeX2ValueMemory(closed.memory, target, closed.x) : undefined,
-    shapeMemory: trackRegisterMemory ? storeX2ShapeMemory(closed.shapeMemory, target, closed.xShape) : undefined,
+    structuralVpContext: cloneX2StructuralEntryState(stable.structuralVpContext),
+    memory: trackRegisterMemory ? storeX2ValueMemory(stable.memory, target, stable.x) : undefined,
+    shapeMemory: trackRegisterMemory ? storeX2ShapeMemory(stable.shapeMemory, target, stable.xShape) : undefined,
   };
 }
 
@@ -3496,6 +3503,66 @@ function storeX2ShapeMemory(
   if (stored.size === 0) delete output[register];
   else output[register] = stored;
   return output;
+}
+
+function invalidateRegisterDependentX2ValueState(
+  input: X2ValueDataflowState,
+  register: RegisterName,
+  trackRegisterMemory: boolean,
+): X2ValueDataflowState {
+  return {
+    x: removeRegisterDependentValueFacts(input.x, register),
+    y: removeRegisterDependentValueFacts(input.y, register),
+    x2: removeRegisterDependentValueFacts(input.x2, register),
+    xShape: cloneOptionalShapeSet(input.xShape),
+    yShape: cloneOptionalShapeSet(input.yShape),
+    x2Shape: cloneOptionalShapeSet(input.x2Shape),
+    entry: cloneX2EntryState(input.entry),
+    vpContext: cloneX2VpContextState(input.vpContext),
+    structuralEntry: cloneX2StructuralEntryState(input.structuralEntry),
+    structuralVpContext: cloneX2StructuralEntryState(input.structuralVpContext),
+    vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
+    memory: trackRegisterMemory ? removeRegisterDependentX2ValueMemory(input.memory, register) : undefined,
+    shapeMemory: trackRegisterMemory ? cloneX2ShapeMemory(input.shapeMemory) : undefined,
+  };
+}
+
+function registerWritePreservesStoredValue(input: X2ValueDataflowState, register: RegisterName): boolean {
+  return input.x.has(registerValueFact(register));
+}
+
+function removeRegisterDependentX2ValueMemory(
+  input: X2ValueMemory | undefined,
+  register: RegisterName,
+): X2ValueMemory {
+  const output: X2ValueMemory = {};
+  for (const key of x2ValueMemoryRegisters(input)) {
+    const values = removeRegisterDependentValueFacts(input?.[key], register);
+    if (values.size > 0) output[key] = values;
+  }
+  return output;
+}
+
+function removeRegisterDependentValueFacts(
+  input: X2ValueSet | undefined,
+  register: RegisterName,
+): Set<X2ValueFact> {
+  const output = new Set<X2ValueFact>();
+  for (const fact of input ?? []) {
+    if (!x2ValueFactDependsOnRegister(fact, register)) output.add(fact);
+  }
+  return output;
+}
+
+function x2ValueFactDependsOnRegister(fact: X2ValueFact, register: RegisterName): boolean {
+  if (fact === registerValueFact(register)) return true;
+  if (!fact.startsWith("expr-key:")) return false;
+  const re = /reg:([0-9a-e])/gu;
+  for (const match of fact.matchAll(re)) {
+    if (match[1] === register) return true;
+  }
+  return false;
 }
 
 function deleteX2ValueMemory(input: X2ValueMemory | undefined, register: RegisterName): X2ValueMemory {
