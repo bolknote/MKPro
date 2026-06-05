@@ -20,7 +20,6 @@ import {
   isSimpleStackLoad,
   isSmallSetMacroName,
   isPackedGridMacroName,
-  matchStackUnaryDerivationCall,
   minExpression,
   safeMaxExpression,
   safeMinExpression,
@@ -682,9 +681,11 @@ function compileCurrentXDerivation(ctx: LoweringCtx, expr: ExpressionAst): boole
     ctx.emitOp(0x0b, "/-/", "current-X unary minus");
     return true;
   }
-  const derived = matchStackUnaryDerivationCall(expr);
-  if (derived === undefined) return false;
-  if (!compileCurrentXDerivation(ctx, derived.arg)) return false;
-  ctx.emitOp(derived.opcode, derived.mnemonic, `current-X ${derived.fn}`);
+  if (expr.kind !== "call" || expr.args.length !== 1) return false;
+  const fn = expr.callee.toLowerCase();
+  const opcode = X_TRANSFORM_UNARY_OPCODES[fn];
+  if (opcode === undefined) return false;
+  if (!compileCurrentXDerivation(ctx, expr.args[0]!)) return false;
+  ctx.emitOp(opcode[0], opcode[1], `current-X ${fn}`);
   return true;
 }

@@ -1884,6 +1884,27 @@ program CurrentXUnaryCall {
     expect(result.steps.some((step) => step.comment === "current-X abs")).toBe(true);
   });
 
+  it("derives extended X-transform unary calls from current X", () => {
+    const result = compileOk(`
+program CurrentXExtendedUnaryCall {
+  state {
+    key: packed = 0
+    result: packed = 0
+  }
+
+  loop {
+    key = read()
+    result = sin(key)
+    halt(result)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "current-x-unary-derivation")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "recall key")).toBe(false);
+    expect(result.steps.some((step) => step.comment === "current-X sin")).toBe(true);
+  });
+
   it("passes single-use rule parameters through X for shared rule entries", () => {
     const result = compileOk(`
 program XParamRule {
