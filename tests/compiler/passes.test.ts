@@ -8620,6 +8620,85 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes VP-context empty separators before transparent direct-return helpers and dead overwrite", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x55, "К1"),
+      call("transparent"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      call("transparent"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice keeps VP-context empty separators before helpers that restore X2", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("restore"),
+      plain(0x0a, "."),
+      ret(),
+      label("main"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x55, "К1"),
+      call("restore"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("vp-splice keeps VP-context empty separators before helpers that store X", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("store_x"),
+      store("2"),
+      ret(),
+      label("main"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x55, "К1"),
+      call("store_x"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("vp-splice removes an active exponent empty separator before a dead X2 overwrite", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),

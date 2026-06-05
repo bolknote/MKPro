@@ -1375,7 +1375,8 @@ The pipeline currently contains:
   structural exponent shape remains non-decimal and non-dot-safe. Marker labels inside the run are
   preserved. Consecutive free-standing `/-/` and empty ops in the same VP/X2
   context are also removed as one restore run before a proved hard X/X2
-  overwrite such as `Cx`.
+  overwrite such as `Cx`, even through a simple direct `ПП` helper that reaches
+  `В/О` through only restore-transparent empty/address cells.
 - **x2-dead-restore-before-overwrite** — removes a context-sensitive
   `.`/`/-/`/`ВП` restore, plus adjacent `КНОП`/`К1`/`К2` separators, when the
   restored `X` value is immediately destroyed by a proved hard X/X2 overwrite

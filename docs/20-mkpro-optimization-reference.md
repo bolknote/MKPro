@@ -996,7 +996,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `5 ВП 3 Fπ /-/ КНОП 4`, `5 ВП 3 Fπ /-/ /-/ КНОП 4`), because that digit
     starts new number entry and discards the restored `X`; labels inside the
     run are preserved. The same kind of restore run is likewise removed before
-    a proved hard X/X2 overwrite such as `Cx`.
+    a proved hard X/X2 overwrite such as `Cx`, including across a simple direct
+    `ПП` helper that reaches `В/О` through only restore-transparent
+    empty/address cells.
     The after-digit separator
     rewrite is deliberately shape-sensitive: the same empty op before the
     first exponent digit, or before another exponent digit, changes number

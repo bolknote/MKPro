@@ -2,6 +2,8 @@ import type { IrOp } from "../types.ts";
 import {
   analyzeX2StackEffect,
   analyzeX2VpShapeContext,
+  cellsPerOp,
+  computeLabelEntryIndexes,
   computeX2ValueStates,
   emptyResult,
   hasRewriteBarrier,
@@ -22,6 +24,12 @@ const SIGN_CHANGE = 0x0b;
 const KNOP = 0x54;
 const K1 = 0x55;
 const K2 = 0x56;
+
+interface DirectReturnGapContext {
+  readonly labelEntries: ReadonlySet<number>;
+  readonly labels: ReadonlyMap<string, number>;
+  readonly addresses: ReadonlyMap<number, number>;
+}
 
 function isPlainOpcode(op: IrOp, opcode: number): boolean {
   return op.kind === "plain" && op.opcode === opcode && !hasRewriteBarrier(op);
@@ -98,9 +106,10 @@ function x2ContextRestoreRunBeforeDeadOverwrite(
   ops: readonly IrOp[],
   startIndex: number,
   state: X2ValueDataflowState | undefined,
+  context: DirectReturnGapContext,
 ): readonly number[] {
   if (!x2StateHasX2RestoreContext(state)) return [];
-  return x2ContextRestoreRunBefore(ops, startIndex, isHardX2OverwriteWithoutStackUse);
+  return x2ContextRestoreRunBeforeHardOverwrite(ops, startIndex, context);
 }
 
 function x2ContextRestoreRunBefore(
@@ -123,6 +132,67 @@ function x2ContextRestoreRunBefore(
 
 function isHardX2OverwriteWithoutStackUse(op: IrOp): boolean {
   return analyzeX2StackEffect(op).hardX2OverwriteWithoutStackUse;
+}
+
+function x2ContextRestoreRunBeforeHardOverwrite(
+  ops: readonly IrOp[],
+  startIndex: number,
+  context: DirectReturnGapContext,
+): readonly number[] {
+  const removableIndexes: number[] = [];
+  for (let index = startIndex; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (isFreeStandingEmptyOp(op) || isFreeStandingSignChange(op)) {
+      removableIndexes.push(index);
+      continue;
+    }
+    if (op.kind === "label") continue;
+    if (op.kind === "call" && simpleDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
+    return removableIndexes.length > 0 && isHardX2OverwriteWithoutStackUse(op) ? removableIndexes : [];
+  }
+  return [];
+}
+
+function simpleDirectReturnDoesNotObserveRestore(
+  ops: readonly IrOp[],
+  call: Extract<IrOp, { kind: "call" }>,
+  context: DirectReturnGapContext,
+): boolean {
+  const targetIndex = targetIndexForCall(call, context);
+  if (targetIndex === undefined) return false;
+  return linearReturnRangeDoesNotObserveRestore(ops, targetIndex, context.labelEntries);
+}
+
+function targetIndexForCall(
+  call: Extract<IrOp, { kind: "call" }>,
+  context: DirectReturnGapContext,
+): number | undefined {
+  return typeof call.target === "string"
+    ? context.labels.get(call.target)
+    : context.addresses.get(call.target);
+}
+
+function linearReturnRangeDoesNotObserveRestore(
+  ops: readonly IrOp[],
+  targetIndex: number,
+  labelEntries: ReadonlySet<number>,
+): boolean {
+  const startIndex = ops[targetIndex]?.kind === "label" ? targetIndex + 1 : targetIndex;
+  for (let index = startIndex; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") {
+      if (labelEntries.has(index)) return false;
+      continue;
+    }
+    if (hasRewriteBarrier(op)) return false;
+    if (op.kind === "return") return true;
+    if (!isRestoreTransparentLinearOp(op)) return false;
+  }
+  return false;
+}
+
+function isRestoreTransparentLinearOp(op: IrOp): boolean {
+  return op.kind === "orphan-address" || isFreeStandingEmptyOp(op);
 }
 
 function canRemoveClosedContextSignPairBeforeProvedVp(
@@ -190,6 +260,11 @@ function sameNonEmptyStringSet(left: ReadonlySet<string> | undefined, right: Rea
 const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
   const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
+  const context: DirectReturnGapContext = {
+    labelEntries: computeLabelEntryIndexes(ops),
+    labels: labelIndexes(ops),
+    addresses: addressIndexes(ops),
+  };
   for (let i = 1; i < ops.length; i += 1) {
     const prev = ops[i - 1]!;
     const cur = ops[i]!;
@@ -239,7 +314,7 @@ const run: IrPassFn = (ops) => {
     // overwrite: its only remaining role would be restored X/previous-command
     // context, and that context is destroyed together with X/X2.
     if (isFreeStandingEmptyOp(cur) || isFreeStandingSignChange(cur)) {
-      const restoreRun = x2ContextRestoreRunBeforeDeadOverwrite(ops, i, x2ValueStates[i]);
+      const restoreRun = x2ContextRestoreRunBeforeDeadOverwrite(ops, i, x2ValueStates[i], context);
       if (restoreRun.length > 0) {
         for (const runIndex of restoreRun) remove.add(runIndex);
         continue;
@@ -307,3 +382,24 @@ export const vpSplice: IrPass = {
   run,
   layoutSafe: false,
 };
+
+function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
+  const result = new Map<string, number>();
+  for (let index = 0; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") result.set(op.name, index);
+  }
+  return result;
+}
+
+function addressIndexes(ops: readonly IrOp[]): Map<number, number> {
+  const result = new Map<number, number>();
+  let address = 0;
+  for (let index = 0; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") continue;
+    result.set(address, index);
+    address += cellsPerOp(op);
+  }
+  return result;
+}
